@@ -71,6 +71,15 @@
         <div id="devices"></div>
       </section>
 
+      <section id="tab-backup" data-tab="backup" hidden>
+        <h2>Backup</h2>
+        <div class="panel">
+          <p>Download a snapshot of the database: conversations, settings and paired devices.</p>
+          <p class="hint">Provider API keys and the admin password are left out. After restoring, enter the keys again on the Providers page and set ASKBAR_ADMIN_PASSWORD.</p>
+          <p><a class="button" id="backup-link" href="/admin/api/backup" download>Download backup</a></p>
+        </div>
+      </section>
+
       <section id="tab-settings" data-tab="settings" hidden>
         <h2>Settings</h2>
         <form id="settings-form" class="panel">

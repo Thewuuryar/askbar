@@ -103,6 +103,7 @@ pub fn admin_router(state: Arc<AppState>) -> Router {
         .route("/admin/api/providers", get(admin_api::list_providers).post(admin_api::create_provider))
         .route("/admin/api/providers/{id}", put(admin_api::update_provider).delete(admin_api::delete_provider))
         .route("/admin/api/providers/{id}/test", post(admin_api::test_provider))
+        .route("/admin/api/backup", get(admin_api::backup))
         .route("/admin/api/devices", get(admin_api::list_devices))
         .route("/admin/api/devices/{id}/revoke", post(admin_api::revoke_device))
         .route("/admin/api/pair", post(admin_api::create_pairing))

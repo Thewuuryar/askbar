@@ -36,6 +36,7 @@
     { id: 'providers', label: 'Providers', load: loadProviders },
     { id: 'devices', label: 'Devices', load: loadDevices },
     { id: 'settings', label: 'Settings', load: loadSettings },
+    { id: 'backup', label: 'Backup' },
   ];
   function registerTab(tab) { tabs.push(tab); renderNav(); }
   window.askbarAdmin = { api, flash, registerTab, show, $ };

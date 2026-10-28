@@ -40,3 +40,5 @@ form#provider-form, form.panel { background: var(--card); border: 1px solid var(
 label.check { display: flex; gap: 8px; align-items: center; color: var(--fg); }
 label.check input { width: auto; margin: 0; }
 textarea { resize: vertical; font-family: ui-monospace, monospace; }
+a.button { display: inline-block; padding: 7px 14px; color: var(--accent-fg); background: var(--accent); border-radius: 8px; text-decoration: none; }
+div.panel { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin: 14px 0; }
