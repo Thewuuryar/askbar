@@ -25,6 +25,65 @@ const MIGRATIONS: &[&str] = &[
      );
      CREATE INDEX idx_messages_conversation ON messages(conversation_id, id);
      CREATE INDEX idx_conversations_updated ON conversations(updated_at DESC);",
+    // v2: server tables. The integer ids stay as internal keys (the desktop app's
+    // local mode still uses them); `public_id` is the ULID the server API exposes.
+    "CREATE TABLE users (
+         id         TEXT PRIMARY KEY,
+         name       TEXT    NOT NULL,
+         created_at INTEGER NOT NULL
+     );
+     CREATE TABLE device_tokens (
+         id         TEXT PRIMARY KEY,
+         user_id    TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+         name       TEXT    NOT NULL,
+         hash       TEXT    NOT NULL UNIQUE,
+         created_at INTEGER NOT NULL,
+         last_seen  INTEGER,
+         revoked    INTEGER NOT NULL DEFAULT 0
+     );
+     CREATE TABLE pair_codes (
+         hash        TEXT PRIMARY KEY,
+         user_id     TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+         device_name TEXT    NOT NULL DEFAULT '',
+         expires_at  INTEGER NOT NULL,
+         used        INTEGER NOT NULL DEFAULT 0
+     );
+     CREATE TABLE providers (
+         id          TEXT PRIMARY KEY,
+         name        TEXT    NOT NULL UNIQUE,
+         type        TEXT    NOT NULL CHECK (type IN ('openai','anthropic')),
+         base_url    TEXT    NOT NULL DEFAULT '',
+         model       TEXT    NOT NULL,
+         api_key_enc BLOB,
+         max_tokens  INTEGER,
+         temperature REAL,
+         headers     TEXT    NOT NULL DEFAULT '{}',
+         created_at  INTEGER NOT NULL
+     );
+     CREATE TABLE settings (
+         key   TEXT PRIMARY KEY,
+         value TEXT NOT NULL
+     );
+     CREATE TABLE projects (
+         id         TEXT PRIMARY KEY,
+         user_id    TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+         name       TEXT    NOT NULL,
+         created_at INTEGER NOT NULL
+     );
+     CREATE TABLE memory (
+         id         TEXT PRIMARY KEY,
+         user_id    TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+         content    TEXT    NOT NULL,
+         created_at INTEGER NOT NULL
+     );
+     ALTER TABLE conversations ADD COLUMN public_id  TEXT;
+     ALTER TABLE conversations ADD COLUMN user_id    TEXT REFERENCES users(id) ON DELETE CASCADE;
+     ALTER TABLE conversations ADD COLUMN project_id TEXT REFERENCES projects(id) ON DELETE SET NULL;
+     ALTER TABLE messages ADD COLUMN public_id TEXT;
+     ALTER TABLE messages ADD COLUMN user_id   TEXT REFERENCES users(id) ON DELETE CASCADE;
+     CREATE UNIQUE INDEX idx_conversations_public ON conversations(public_id);
+     CREATE UNIQUE INDEX idx_messages_public ON messages(public_id);
+     CREATE INDEX idx_conversations_user ON conversations(user_id, updated_at DESC);",
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -112,6 +171,50 @@ impl Db {
             tx.commit()?;
         }
         Ok(())
+    }
+
+    /// Raw connection, for the server's own queries.
+    pub fn conn(&self) -> &Connection {
+        &self.conn
+    }
+
+    /// Server start-up: make sure one user exists and that every conversation
+    /// and message (for example rows from a v0.1.0 history.db) belongs to a
+    /// user and has a ULID. Returns the user's id.
+    pub fn seed_server(&self) -> Result<String, DbError> {
+        let existing: Option<String> = self
+            .conn
+            .query_row("SELECT id FROM users ORDER BY created_at, id LIMIT 1", [], |r| r.get(0))
+            .ok();
+        let user = match existing {
+            Some(u) => u,
+            None => {
+                let id = ulid::Ulid::new().to_string();
+                self.conn.execute(
+                    "INSERT INTO users (id, name, created_at) VALUES (?1, 'owner', ?2)",
+                    params![id, now()],
+                )?;
+                id
+            }
+        };
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute("UPDATE conversations SET user_id = ?1 WHERE user_id IS NULL", [&user])?;
+        tx.execute("UPDATE messages SET user_id = ?1 WHERE user_id IS NULL", [&user])?;
+        // Oldest first, so ULID order matches the original order.
+        let mut gen = ulid::Generator::new();
+        for table in ["conversations", "messages"] {
+            let ids: Vec<i64> = {
+                let mut stmt = tx.prepare(&format!("SELECT id FROM {table} WHERE public_id IS NULL ORDER BY id"))?;
+                let rows = stmt.query_map([], |r| r.get(0))?;
+                rows.collect::<Result<_, _>>()?
+            };
+            for id in ids {
+                let pid = gen.generate().map_err(|_| rusqlite::Error::InvalidQuery)?.to_string();
+                tx.execute(&format!("UPDATE {table} SET public_id = ?1 WHERE id = ?2"), params![pid, id])?;
+            }
+        }
+        tx.commit()?;
+        Ok(user)
     }
 
     pub fn create_conversation(&self, title: &str) -> Result<i64, DbError> {
@@ -266,6 +369,84 @@ mod tests {
         assert_eq!(db.get_messages(list[0].id).unwrap()[0].content, "persist");
         let v: i64 = db.conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
         assert_eq!(v as usize, MIGRATIONS.len());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    const V1: &str = "CREATE TABLE conversations (
+             id INTEGER PRIMARY KEY, title TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+         CREATE TABLE messages (
+             id INTEGER PRIMARY KEY,
+             conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+             role TEXT NOT NULL CHECK (role IN ('user','assistant')),
+             content TEXT NOT NULL, created_at INTEGER NOT NULL);
+         CREATE INDEX idx_messages_conversation ON messages(conversation_id, id);
+         CREATE INDEX idx_conversations_updated ON conversations(updated_at DESC);
+         PRAGMA user_version = 1;";
+
+    fn tables(db: &Db) -> Vec<String> {
+        let mut stmt = db.conn.prepare("SELECT name FROM sqlite_master WHERE type='table'").unwrap();
+        stmt.query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect()
+    }
+
+    #[test]
+    fn v2_on_a_fresh_database() {
+        let db = Db::open_in_memory().unwrap();
+        let t = tables(&db);
+        for name in ["users", "device_tokens", "pair_codes", "providers", "settings", "projects", "memory"] {
+            assert!(t.iter().any(|x| x == name), "missing table {name}");
+        }
+        let v: i64 = db.conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(v, 2);
+        let a = db.create_conversation("c").unwrap();
+        let project: Option<String> =
+            db.conn.query_row("SELECT project_id FROM conversations WHERE id = ?1", [a], |r| r.get(0)).unwrap();
+        assert_eq!(project, None);
+    }
+
+    #[test]
+    fn v2_keeps_a_v0_1_0_history_and_seeding_claims_it() {
+        let dir = std::env::temp_dir().join(format!("askbar-v1-test-{}", std::process::id()));
+        let path = dir.join("history.db");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        {
+            let c = Connection::open(&path).unwrap();
+            c.execute_batch(V1).unwrap();
+            c.execute_batch(
+                "INSERT INTO conversations VALUES (1,'one',100,110),(2,'two',120,130);
+                 INSERT INTO messages (conversation_id, role, content, created_at) VALUES
+                   (1,'user','q1',100),(1,'assistant','a1',101),(1,'user','q2',102),(2,'user','héllo',120);",
+            )
+            .unwrap();
+        }
+        let db = Db::open(&path).unwrap();
+        let before = db.get_messages(1).unwrap();
+        assert_eq!(before.iter().map(|m| m.content.as_str()).collect::<Vec<_>>(), ["q1", "a1", "q2"]);
+        assert_eq!(db.list_conversations().unwrap().len(), 2);
+
+        let user = db.seed_server().unwrap();
+        assert_eq!(db.seed_server().unwrap(), user, "seeding is idempotent");
+        let users: i64 = db.conn.query_row("SELECT COUNT(*) FROM users", [], |r| r.get(0)).unwrap();
+        assert_eq!(users, 1);
+        let orphans: i64 = db
+            .conn
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM conversations WHERE user_id IS NOT ?1 OR public_id IS NULL)
+                      + (SELECT COUNT(*) FROM messages WHERE user_id IS NOT ?1 OR public_id IS NULL)",
+                [&user],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(orphans, 0);
+        // Order and content survive; ULIDs sort in the original order.
+        assert_eq!(db.get_messages(1).unwrap(), before);
+        let mut stmt = db.conn.prepare("SELECT content FROM messages ORDER BY public_id").unwrap();
+        let by_ulid: Vec<String> = stmt.query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
+        assert_eq!(by_ulid, ["q1", "a1", "q2", "héllo"]);
+        let wal: String = db.conn.query_row("PRAGMA journal_mode", [], |r| r.get(0)).unwrap();
+        assert_eq!(wal, "wal");
+        drop(stmt);
+        drop(db);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
