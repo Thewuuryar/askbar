@@ -35,6 +35,37 @@ pub struct Message {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConversationDetail {
+    #[serde(flatten)]
+    pub conversation: Conversation,
+    pub messages: Vec<Message>,
+}
+
+/// Display defaults served to clients; each client may override fields locally.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DisplaySettings {
+    pub theme: String,
+    pub width: u32,
+    pub max_height: u32,
+    pub history_width: u32,
+    pub top_percent: f64,
+    pub hide_on_blur: bool,
+}
+
+impl Default for DisplaySettings {
+    fn default() -> Self {
+        Self { theme: "auto".into(), width: 720, max_height: 640, history_width: 260, top_percent: 0.22, hide_on_blur: true }
+    }
+}
+
+/// `GET /api/v1/settings`. The system prompt is deliberately not part of it.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct Settings {
+    pub display: DisplaySettings,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChatRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conversation_id: Option<String>,

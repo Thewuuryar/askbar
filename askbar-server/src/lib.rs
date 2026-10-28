@@ -1,5 +1,6 @@
 //! Askbar server. Two separate routers: the device API and the admin site.
 
+pub mod api;
 pub mod auth;
 pub mod import;
 pub mod secrets;
@@ -37,6 +38,10 @@ pub fn api_router(state: Arc<AppState>) -> Router {
     let protected: Router<Arc<AppState>> = Router::new()
         // Lets a client check that its token is still accepted.
         .route("/api/v1/whoami", get(|| async { StatusCode::NO_CONTENT }))
+        .route("/api/v1/providers", get(api::providers))
+        .route("/api/v1/conversations", get(api::conversations))
+        .route("/api/v1/conversations/{id}", get(api::conversation).delete(api::delete_conversation))
+        .route("/api/v1/settings", get(api::settings))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_device_token));
     Router::new()
         .route("/api/v1/health", get(health))
