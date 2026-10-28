@@ -90,6 +90,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "askbar-proto"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "askbar-server"
+version = "0.1.0"
+dependencies = [
+ "askbar-core",
+ "askbar-proto",
+]
+
+[[package]]
 name = "async-broadcast"
 version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

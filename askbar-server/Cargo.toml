@@ -1,0 +1,10 @@
+[package]
+name = "askbar-server"
+license = "AGPL-3.0-or-later"
+version = "0.1.0"
+edition = "2021"
+description = "Askbar server: history, providers and settings behind an HTTP API"
+
+[dependencies]
+askbar-core = { path = "../core" }
+askbar-proto = { path = "../askbar-proto" }
