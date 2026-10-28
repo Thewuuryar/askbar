@@ -93,6 +93,18 @@ pub struct PairResponse {
     pub token: String,
 }
 
+/// Header every client sends on API calls other than health.
+pub const CLIENT_VERSION_HEADER: &str = "x-askbar-client-version";
+
+/// Parse "1.2.3" (a leading "v" and any "-suffix" are ignored; missing parts are 0).
+pub fn parse_version(v: &str) -> Option<(u64, u64, u64)> {
+    let core = v.trim().trim_start_matches('v').split(['-', '+']).next()?;
+    let mut parts = core.split('.');
+    let mut next = || -> Option<u64> { parts.next().map_or(Some(0), |p| p.parse().ok()) };
+    let out = (next()?, next()?, next()?);
+    parts.next().is_none().then_some(out)
+}
+
 pub const PAIR_PREFIX: &str = "askbar-pair:";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -119,6 +131,17 @@ pub fn decode_pairing(s: &str) -> Option<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn versions() {
+        assert_eq!(parse_version("0.1.0"), Some((0, 1, 0)));
+        assert_eq!(parse_version("v1.2"), Some((1, 2, 0)));
+        assert_eq!(parse_version("1.2.3-beta+4"), Some((1, 2, 3)));
+        assert!(parse_version("0.9.0") < parse_version("0.10.0"));
+        assert_eq!(parse_version("abc"), None);
+        assert_eq!(parse_version("1.2.3.4"), None);
+        assert_eq!(parse_version(""), None);
+    }
 
     #[test]
     fn pairing_string_round_trip() {

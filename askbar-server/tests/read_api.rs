@@ -42,7 +42,7 @@ async fn start() -> T {
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = l.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
-    T { addr, state, user, token, http: reqwest::Client::new() }
+    T { addr, state, user, token, http: client() }
 }
 
 impl T {
@@ -125,4 +125,10 @@ async fn read_endpoints_require_a_token() {
         let r = t.http.get(format!("http://{}{p}", t.addr)).send().await.unwrap();
         assert_eq!(r.status(), 401, "{p}");
     }
+}
+
+fn client() -> reqwest::Client {
+    let mut h = reqwest::header::HeaderMap::new();
+    h.insert(askbar_proto::CLIENT_VERSION_HEADER, "0.1.0".parse().unwrap());
+    reqwest::Client::builder().default_headers(h).build().unwrap()
 }

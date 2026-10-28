@@ -124,7 +124,7 @@ fn wait_for<T>(what: &str, mut f: impl FnMut() -> Option<T>) -> T {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn complete_reply_is_streamed_and_saved_in_full() {
     let t = start().await;
-    let http = reqwest::Client::new();
+    let http = client();
     let r = t.chat(&http, None, "mock", "Hello there").await;
     assert_eq!(r.status(), 200);
     assert!(r.headers()["content-type"].to_str().unwrap().starts_with("text/event-stream"));
@@ -156,7 +156,7 @@ async fn complete_reply_is_streamed_and_saved_in_full() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn client_disconnect_saves_partial_reply_and_closes_upstream() {
     let t = start().await;
-    let http = reqwest::Client::builder().pool_max_idle_per_host(0).build().unwrap();
+    let http = client_builder().pool_max_idle_per_host(0).build().unwrap();
     let r = t.chat(&http, None, "mock", "please be slow").await;
     assert_eq!(r.status(), 200);
     let mut stream = r.bytes_stream();
@@ -178,7 +178,7 @@ async fn client_disconnect_saves_partial_reply_and_closes_upstream() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn provider_failure_becomes_an_error_event_and_keeps_the_question() {
     let t = start().await;
-    let http = reqwest::Client::new();
+    let http = client();
     let r = t.chat(&http, None, "mock", "please fail").await;
     assert_eq!(r.status(), 200);
     let events = parse_events(&r.text().await.unwrap().replace("\r\n", "\n"));
@@ -192,7 +192,7 @@ async fn provider_failure_becomes_an_error_event_and_keeps_the_question() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn bad_requests_are_plain_http_errors() {
     let t = start().await;
-    let http = reqwest::Client::new();
+    let http = client();
     assert_eq!(t.chat(&http, None, "nope", "hi").await.status(), 404);
     assert_eq!(t.chat(&http, Some("01NOSUCH"), "mock", "hi").await.status(), 404);
     assert_eq!(t.chat(&http, None, "mock", "   ").await.status(), 400);
@@ -204,4 +204,14 @@ async fn bad_requests_are_plain_http_errors() {
         .await
         .unwrap();
     assert_eq!(r.status(), 401);
+}
+
+fn client_builder() -> reqwest::ClientBuilder {
+    let mut h = reqwest::header::HeaderMap::new();
+    h.insert(askbar_proto::CLIENT_VERSION_HEADER, "0.1.0".parse().unwrap());
+    reqwest::Client::builder().default_headers(h)
+}
+
+fn client() -> reqwest::Client {
+    client_builder().build().unwrap()
 }

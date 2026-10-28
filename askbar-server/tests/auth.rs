@@ -18,7 +18,7 @@ async fn start() -> Server {
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = l.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
-    Server { addr, state, user, http: reqwest::Client::new() }
+    Server { addr, state, user, http: client() }
 }
 
 impl Server {
@@ -107,4 +107,10 @@ async fn tokens_are_stored_hashed() {
 async fn health_stays_public() {
     let s = start().await;
     assert_eq!(s.http.get(s.url("/api/v1/health")).send().await.unwrap().status(), 200);
+}
+
+fn client() -> reqwest::Client {
+    let mut h = reqwest::header::HeaderMap::new();
+    h.insert(askbar_proto::CLIENT_VERSION_HEADER, "0.1.0".parse().unwrap());
+    reqwest::Client::builder().default_headers(h).build().unwrap()
 }

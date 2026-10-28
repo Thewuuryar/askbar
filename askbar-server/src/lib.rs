@@ -28,11 +28,22 @@ pub struct AppState {
     pub db: Mutex<Db>,
     pub secrets: Secrets,
     pub http: askbar_core::HttpClient,
+    /// Oldest client version the API still serves.
+    pub min_client: String,
 }
 
 impl AppState {
     pub fn new(db: Db, secrets: Secrets) -> Arc<AppState> {
-        Arc::new(AppState { db: Mutex::new(db), secrets, http: askbar_core::http_client() })
+        AppState::with_min_client(db, secrets, MIN_CLIENT)
+    }
+
+    pub fn with_min_client(db: Db, secrets: Secrets, min_client: &str) -> Arc<AppState> {
+        Arc::new(AppState {
+            db: Mutex::new(db),
+            secrets,
+            http: askbar_core::http_client(),
+            min_client: min_client.to_string(),
+        })
     }
 }
 
@@ -47,20 +58,38 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         .route("/api/v1/settings", get(api::settings))
         .route("/api/v1/chat", post(chat::chat))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_device_token));
-    Router::new()
-        .route("/api/v1/health", get(health))
+    // Everything except health checks the client version first.
+    let gated = Router::new()
         .route("/api/v1/pair", post(pair))
         .merge(protected)
+        .route_layer(middleware::from_fn_with_state(state.clone(), require_client_version));
+    Router::new()
+        .route("/api/v1/health", get(health))
+        .merge(gated)
         .with_state(state)
         .layer(middleware::from_fn(log_requests))
+}
+
+/// 400 if the client sends no usable version header, 426 if it is older than `min_client`.
+async fn require_client_version(State(state): State<Arc<AppState>>, req: Request, next: Next) -> Result<Response, StatusCode> {
+    let sent = req
+        .headers()
+        .get(askbar_proto::CLIENT_VERSION_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .and_then(askbar_proto::parse_version)
+        .ok_or(StatusCode::BAD_REQUEST)?;
+    match askbar_proto::parse_version(&state.min_client) {
+        Some(min) if sent < min => Err(StatusCode::UPGRADE_REQUIRED),
+        _ => Ok(next.run(req).await),
+    }
 }
 
 pub fn admin_router(_state: Arc<AppState>) -> Router {
     Router::new().route("/admin/health", get(admin_health)).layer(middleware::from_fn(log_requests))
 }
 
-async fn health() -> Json<Health> {
-    Json(Health { api_version: API_VERSION, min_client: MIN_CLIENT.into() })
+async fn health(State(state): State<Arc<AppState>>) -> Json<Health> {
+    Json(Health { api_version: API_VERSION, min_client: state.min_client.clone() })
 }
 
 async fn pair(State(state): State<Arc<AppState>>, Json(req): Json<PairRequest>) -> Result<Json<PairResponse>, StatusCode> {
