@@ -590,6 +590,56 @@ mod tests {
         assert!(tokens.get().is_none() && !path.exists());
     }
 
+    /// Pair with a string made by the admin site, revoke the device there, and the client says "rejected".
+    #[tokio::test]
+    async fn revoking_a_device_in_the_admin_site_shows_token_rejected() {
+        use askbar_server::{admin, secrets::Secrets, AppState};
+        let db = askbar_core::Db::open_in_memory().unwrap();
+        db.seed_server().unwrap();
+        admin::init_password(&db, "pw-for-test").unwrap();
+        db.conn()
+            .execute("INSERT INTO providers (id, name, type, base_url, model, created_at) VALUES ('p','alpha','openai','http://x/v1','m',0)", [])
+            .unwrap();
+        let listen = || async {
+            let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}", l.local_addr().unwrap());
+            (l, url)
+        };
+        let (api_l, api_url) = listen().await;
+        let (admin_l, admin_url) = listen().await;
+        let state = AppState::with_config(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), "0.1.0", &api_url);
+        let (a, b) = (askbar_server::api_router(state.clone()), askbar_server::admin_router(state));
+        tokio::spawn(async move { axum::serve(api_l, a).await.unwrap() });
+        tokio::spawn(async move { axum::serve(admin_l, b).await.unwrap() });
+
+        let http = reqwest::Client::new();
+        let login = http.post(format!("{admin_url}/admin/login")).header("x-askbar-admin", "1").json(&serde_json::json!({ "password": "pw-for-test" })).send().await.unwrap();
+        let cookie = login.headers()["set-cookie"].to_str().unwrap().split(';').next().unwrap().to_string();
+        let admin_call = |method: Method, path: String, body: serde_json::Value| {
+            http.request(method, format!("{admin_url}{path}")).header("x-askbar-admin", "1").header("cookie", &cookie).json(&body).send()
+        };
+
+        let out: serde_json::Value = admin_call(Method::POST, "/admin/api/pair".into(), serde_json::json!({ "name": "test client" })).await.unwrap().json().await.unwrap();
+        let dir = std::env::temp_dir().join(format!("askbar-revoke-{}", std::process::id()));
+        let path = dir.join("client.yaml");
+        let tokens = MemoryTokens::default();
+        pair(out["pairing"].as_str().unwrap(), &path, &tokens).await.unwrap();
+
+        let r = Remote::new(ClientConfig::load(&path), path.clone(), Box::new(MemoryTokens::with(&tokens.get().unwrap())));
+        assert_eq!(kind(&r).await, None);
+
+        let devices: serde_json::Value = admin_call(Method::GET, "/admin/api/devices".into(), serde_json::json!({})).await.unwrap().json().await.unwrap();
+        assert_eq!(devices[0]["name"], "test client");
+        let id = devices[0]["id"].as_str().unwrap();
+        let st = admin_call(Method::POST, format!("/admin/api/devices/{id}/revoke"), serde_json::json!({})).await.unwrap().status();
+        assert_eq!(st, 204);
+
+        let status = r.status().await.unwrap();
+        assert_eq!(status.kind, "rejected");
+        assert!(status.message.starts_with("Token rejected"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Manual end-to-end check against a running server, using the real keychain
     /// and the same `client.yaml` path logic as the app. Run with:
     ///   ASKBAR_E2E_PAIRING='askbar-pair:…' ASKBAR_CLIENT_CONFIG=/tmp/profile2/client.yaml \

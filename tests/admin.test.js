@@ -146,10 +146,38 @@ async function waitForPort(port) {
     const r = await fetch(`http://127.0.0.1:${api}/api/v1/providers`, { headers: { 'x-askbar-client-version': '0.1.0' } });
     assert.equal(r.status, 401);
   });
+  await step('devices: generate a pairing string, pair with it, then revoke the device', async () => {
+    await page.click('#nav [data-tab="devices"]');
+    await page.waitForSelector('#pair-form');
+    await page.waitForFunction(() => /No devices are paired yet/.test(document.getElementById('devices').textContent));
+    await page.fill('#d-name', 'Test laptop');
+    await page.click('#pair-form button[type=submit]');
+    await page.waitForSelector('#pairing-out:not([hidden])');
+    const pairing = await page.inputValue('#pairing-string');
+    assert.match(pairing, /^askbar-pair:/);
+    const { url, code } = JSON.parse(Buffer.from(pairing.slice('askbar-pair:'.length), 'base64url').toString());
+    assert.equal(url, 'http://localhost:' + api);
+    const headers = { 'content-type': 'application/json', 'x-askbar-client-version': '0.1.0' };
+    const paired = await fetch(`http://127.0.0.1:${api}/api/v1/pair`, { method: 'POST', headers, body: JSON.stringify({ code }) });
+    assert.equal(paired.status, 200);
+    const { token } = await paired.json();
+    const whoami = () => fetch(`http://127.0.0.1:${api}/api/v1/whoami`, { headers: { ...headers, authorization: 'Bearer ' + token } }).then((r) => r.status);
+    assert.equal(await whoami(), 204);
+
+    await page.click('#nav [data-tab="providers"]');
+    await page.click('#nav [data-tab="devices"]');
+    await page.waitForSelector('#devices .card');
+    assert.match(await page.innerText('#devices .card'), /Test laptop[\s\S]*active[\s\S]*last seen (?!never)/);
+    page.once('dialog', (d) => d.accept());
+    await page.click('#devices [data-action="revoke"]');
+    await page.waitForFunction(() => /revoked/.test(document.querySelector('#devices .card').textContent));
+    assert.equal(await page.locator('#devices [data-action="revoke"]').count(), 0);
+    assert.equal(await whoami(), 401);
+  });
   await step('settings page saves the system prompt and display defaults', async () => {
     await page.click('#nav [data-tab="settings"]');
     await page.waitForSelector('#settings-form');
-    assert.match(await page.inputValue('#s-prompt'), /quick-question popup/);
+    await page.waitForFunction(() => /quick-question popup/.test(document.getElementById('s-prompt').value));
     await page.fill('#s-prompt', 'You are a pirate.');
     await page.selectOption('#s-theme', 'dark');
     await page.fill('#s-width', '900');

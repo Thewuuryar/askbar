@@ -34,6 +34,8 @@ pub struct AppState {
     pub admin: admin::AdminAuth,
     /// Oldest client version the API still serves.
     pub min_client: String,
+    /// Where clients reach the API; goes into pairing strings.
+    pub public_url: String,
 }
 
 impl AppState {
@@ -42,12 +44,17 @@ impl AppState {
     }
 
     pub fn with_min_client(db: Db, secrets: Secrets, min_client: &str) -> Arc<AppState> {
+        AppState::with_config(db, secrets, min_client, "http://localhost:8080")
+    }
+
+    pub fn with_config(db: Db, secrets: Secrets, min_client: &str, public_url: &str) -> Arc<AppState> {
         Arc::new(AppState {
             db: Mutex::new(db),
             secrets,
             http: askbar_core::http_client(),
             admin: admin::AdminAuth::default(),
             min_client: min_client.to_string(),
+            public_url: public_url.trim_end_matches('/').to_string(),
         })
     }
 }
@@ -96,6 +103,9 @@ pub fn admin_router(state: Arc<AppState>) -> Router {
         .route("/admin/api/providers", get(admin_api::list_providers).post(admin_api::create_provider))
         .route("/admin/api/providers/{id}", put(admin_api::update_provider).delete(admin_api::delete_provider))
         .route("/admin/api/providers/{id}/test", post(admin_api::test_provider))
+        .route("/admin/api/devices", get(admin_api::list_devices))
+        .route("/admin/api/devices/{id}/revoke", post(admin_api::revoke_device))
+        .route("/admin/api/pair", post(admin_api::create_pairing))
         .route("/admin/api/settings", get(admin_api::get_settings).put(admin_api::put_settings))
         .route_layer(middleware::from_fn_with_state(state.clone(), admin::require_session));
     Router::new()

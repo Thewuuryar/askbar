@@ -34,6 +34,7 @@
 
   const tabs = [
     { id: 'providers', label: 'Providers', load: loadProviders },
+    { id: 'devices', label: 'Devices', load: loadDevices },
     { id: 'settings', label: 'Settings', load: loadSettings },
   ];
   function registerTab(tab) { tabs.push(tab); renderNav(); }
@@ -227,6 +228,73 @@
       $('provider-error').textContent = ex.message;
       show($('provider-error'), true);
     }
+  });
+
+  // ---------------------------------------------------------- devices
+
+  function when(ts) {
+    return ts ? new Date(ts * 1000).toLocaleString() : 'never';
+  }
+
+  async function loadDevices() {
+    const list = await api('GET', '/admin/api/devices');
+    const box = $('devices');
+    box.textContent = '';
+    if (!list.length) {
+      const p = document.createElement('p');
+      p.className = 'hint';
+      p.textContent = 'No devices are paired yet.';
+      box.appendChild(p);
+    }
+    for (const d of list) {
+      const card = document.createElement('div');
+      card.className = 'card';
+      card.dataset.device = d.id;
+      const head = document.createElement('div');
+      head.className = 'row';
+      const name = document.createElement('span');
+      name.className = 'name';
+      name.textContent = d.name;
+      const badge = document.createElement('span');
+      badge.className = 'badge';
+      badge.textContent = d.revoked ? 'revoked' : 'active';
+      const sp = document.createElement('span');
+      sp.className = 'spacer';
+      head.append(name, badge, sp);
+      if (!d.revoked) {
+        const revoke = button('Revoke', 'danger', async () => {
+          if (!confirm('Revoke "' + d.name + '"? It will be signed out and must be paired again.')) return;
+          try { await api('POST', '/admin/api/devices/' + encodeURIComponent(d.id) + '/revoke'); loadDevices(); } catch (ex) { flash(ex.message); }
+        });
+        revoke.dataset.action = 'revoke';
+        head.appendChild(revoke);
+      }
+      const meta = document.createElement('div');
+      meta.className = 'meta';
+      meta.textContent = 'Paired ' + when(d.created_at) + ' · last seen ' + when(d.last_seen);
+      card.append(head, meta);
+      box.appendChild(card);
+    }
+  }
+
+  $('pair-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const err = $('pair-error');
+    show(err, false);
+    try {
+      const r = await api('POST', '/admin/api/pair', { name: $('d-name').value.trim() });
+      $('pairing-string').value = r.pairing;
+      show($('pairing-out'), true);
+    } catch (ex) {
+      err.textContent = ex.message;
+      show(err, true);
+    }
+  });
+
+  $('pairing-copy').addEventListener('click', async () => {
+    const t = $('pairing-string');
+    t.select();
+    try { await navigator.clipboard.writeText(t.value); flash('Copied.'); } catch (_) { document.execCommand('copy'); flash('Copied.'); }
   });
 
   // --------------------------------------------------------- settings

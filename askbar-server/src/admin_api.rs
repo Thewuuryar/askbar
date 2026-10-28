@@ -281,3 +281,65 @@ pub async fn put_settings(State(state): St, Json(s): Json<AdminSettings>) -> Res
 fn failure(_: &rusqlite::Error) -> Failure {
     (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error: "Could not save the settings.".into() }))
 }
+
+// ----------------------------------------------------------------- devices
+
+/// A paired device. The token itself is never stored, so it can't be shown.
+#[derive(Serialize)]
+pub struct DeviceRow {
+    id: String,
+    name: String,
+    created_at: i64,
+    last_seen: Option<i64>,
+    revoked: bool,
+}
+
+pub async fn list_devices(State(state): St) -> Result<Json<Vec<DeviceRow>>, StatusCode> {
+    let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+    let mut stmt = db
+        .conn()
+        .prepare("SELECT id, name, created_at, last_seen, revoked FROM device_tokens ORDER BY created_at DESC, id DESC")
+        .map_err(internal)?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(DeviceRow { id: r.get(0)?, name: r.get(1)?, created_at: r.get(2)?, last_seen: r.get(3)?, revoked: r.get::<_, i64>(4)? != 0 })
+        })
+        .map_err(internal)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(internal)?;
+    Ok(Json(rows))
+}
+
+pub async fn revoke_device(State(state): St, Path(id): Path<String>) -> StatusCode {
+    let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+    match db.conn().execute("UPDATE device_tokens SET revoked = 1 WHERE id = ?1", [id]) {
+        Ok(0) => StatusCode::NOT_FOUND,
+        Ok(_) => StatusCode::NO_CONTENT,
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
+#[derive(Deserialize)]
+pub struct PairInput {
+    #[serde(default)]
+    name: String,
+}
+
+#[derive(Serialize)]
+pub struct PairingOut {
+    pairing: String,
+    expires_in: i64,
+}
+
+/// A one-time pairing string for a new device, good for ten minutes.
+pub async fn create_pairing(State(state): St, Json(i): Json<PairInput>) -> Result<Json<PairingOut>, Failure> {
+    let name = i.name.trim();
+    if name.chars().count() > 60 {
+        return Err(bad("The device name is too long."));
+    }
+    let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+    let fail = || (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error: "Could not create a pairing code.".into() }));
+    let user: String = db.conn().query_row("SELECT id FROM users ORDER BY created_at, id LIMIT 1", [], |r| r.get(0)).map_err(|_| fail())?;
+    let code = crate::auth::create_pair_code(&db, &user, name, crate::auth::PAIR_CODE_TTL_SECS).map_err(|_| fail())?;
+    Ok(Json(PairingOut { pairing: askbar_proto::encode_pairing(&state.public_url, &code), expires_in: crate::auth::PAIR_CODE_TTL_SECS }))
+}

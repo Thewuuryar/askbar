@@ -110,7 +110,11 @@ async fn main() {
     if db.conn().query_row("SELECT 1 FROM settings WHERE key = 'admin_password_hash'", [], |_| Ok(())).is_err() {
         tracing::warn!("no admin password: set ASKBAR_ADMIN_PASSWORD to enable the admin site");
     }
-    let state = askbar_server::AppState::new(db, secrets);
+    let public_url = std::env::var("ASKBAR_PUBLIC_URL")
+        .ok()
+        .filter(|u| !u.trim().is_empty())
+        .unwrap_or_else(|| format!("http://localhost:{}", api.port()));
+    let state = askbar_server::AppState::with_config(db, secrets, askbar_server::MIN_CLIENT, &public_url);
     let result = tokio::try_join!(
         serve(api, askbar_server::api_router(state.clone())),
         serve(admin, askbar_server::admin_router(state))

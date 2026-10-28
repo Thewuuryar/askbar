@@ -54,6 +54,23 @@
         </form>
       </section>
 
+      <section id="tab-devices" data-tab="devices" hidden>
+        <h2>Devices</h2>
+        <form id="pair-form" class="panel">
+          <h3>Pair a new device</h3>
+          <label>Device name <input id="d-name" placeholder="Work laptop" maxlength="60"></label>
+          <div class="row"><button type="submit">Generate pairing string</button></div>
+          <div id="pairing-out" hidden>
+            <label>Paste this into Askbar on the new device (tray icon, Pair with server). It works once and expires in 10 minutes.
+              <textarea id="pairing-string" rows="3" readonly></textarea>
+            </label>
+            <div class="row"><button type="button" id="pairing-copy" class="secondary">Copy</button></div>
+          </div>
+          <p id="pair-error" class="error" hidden></p>
+        </form>
+        <div id="devices"></div>
+      </section>
+
       <section id="tab-settings" data-tab="settings" hidden>
         <h2>Settings</h2>
         <form id="settings-form" class="panel">
