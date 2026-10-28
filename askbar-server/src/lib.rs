@@ -96,6 +96,7 @@ pub fn admin_router(state: Arc<AppState>) -> Router {
         .route("/admin/api/providers", get(admin_api::list_providers).post(admin_api::create_provider))
         .route("/admin/api/providers/{id}", put(admin_api::update_provider).delete(admin_api::delete_provider))
         .route("/admin/api/providers/{id}/test", post(admin_api::test_provider))
+        .route("/admin/api/settings", get(admin_api::get_settings).put(admin_api::put_settings))
         .route_layer(middleware::from_fn_with_state(state.clone(), admin::require_session));
     Router::new()
         .route("/", get(|| async { Redirect::to("/admin/") }))

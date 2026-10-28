@@ -2,6 +2,7 @@
 
 use crate::{store, AppState};
 use askbar_core::{stream_chat, ChatMessage};
+use askbar_proto::DisplaySettings;
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -227,4 +228,56 @@ mod tests {
         assert_eq!(redact("bad key sk-abcdef123 given", "sk-abcdef123"), "bad key [key hidden] given");
         assert_eq!(redact("nothing here", ""), "nothing here");
     }
+}
+
+// ---------------------------------------------------------------- settings
+
+const MAX_PROMPT_CHARS: usize = 20_000;
+
+#[derive(Serialize, Deserialize)]
+pub struct AdminSettings {
+    system_prompt: String,
+    display: DisplaySettings,
+}
+
+fn check_display(d: &DisplaySettings) -> Result<(), Failure> {
+    if !matches!(d.theme.as_str(), "auto" | "light" | "dark") {
+        return Err(bad("Theme must be auto, light or dark."));
+    }
+    let in_range = |v: u32, lo: u32, hi: u32| (lo..=hi).contains(&v);
+    if !in_range(d.width, 300, 4000) || !in_range(d.max_height, 200, 4000) || !in_range(d.history_width, 120, 1000) {
+        return Err(bad("Width must be 300-4000, max height 200-4000 and history width 120-1000."));
+    }
+    if !(0.0..=0.8).contains(&d.top_percent) {
+        return Err(bad("Top percent must be between 0 and 0.8."));
+    }
+    Ok(())
+}
+
+pub async fn get_settings(State(state): St) -> Result<Json<AdminSettings>, StatusCode> {
+    let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+    Ok(Json(AdminSettings {
+        system_prompt: store::system_prompt(&db).map_err(internal)?,
+        display: crate::api::load_display(&db).map_err(internal)?,
+    }))
+}
+
+pub async fn put_settings(State(state): St, Json(s): Json<AdminSettings>) -> Result<StatusCode, Failure> {
+    if s.system_prompt.chars().count() > MAX_PROMPT_CHARS {
+        return Err(bad("The system prompt is too long."));
+    }
+    check_display(&s.display)?;
+    let display = serde_json::to_string(&s.display).map_err(|_| bad("Invalid display settings."))?;
+    let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+    let tx = db.conn().unchecked_transaction().map_err(|e| failure(&e))?;
+    for (k, v) in [("system_prompt", s.system_prompt.as_str()), ("display", display.as_str())] {
+        tx.execute("INSERT INTO settings (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value", params![k, v])
+            .map_err(|e| failure(&e))?;
+    }
+    tx.commit().map_err(|e| failure(&e))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+fn failure(_: &rusqlite::Error) -> Failure {
+    (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error: "Could not save the settings.".into() }))
 }

@@ -37,3 +37,6 @@ form#provider-form, form.panel { background: var(--card); border: 1px solid var(
 .flash { padding: 8px 12px; border-radius: 8px; background: var(--card); border: 1px solid var(--line); overflow-wrap: anywhere; }
 .test-result { font-size: 13px; margin-top: 6px; overflow-wrap: anywhere; }
 @media (max-width: 560px) { .top { flex-wrap: wrap; } }
+label.check { display: flex; gap: 8px; align-items: center; color: var(--fg); }
+label.check input { width: auto; margin: 0; }
+textarea { resize: vertical; font-family: ui-monospace, monospace; }

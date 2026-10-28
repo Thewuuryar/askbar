@@ -41,8 +41,9 @@ class Handler(BaseHTTPRequestHandler):
         for m in body.get("messages", []):
             if m.get("role") == "user":
                 last = m.get("content", "")
+        system = next((m.get("content", "") for m in body.get("messages", []) if m.get("role") == "system"), "")
         print(f"POST {self.path} model={body.get('model')} msgs={len(body.get('messages', []))} "
-              f"auth={'yes' if self.headers.get('authorization') else 'no'} last={last[:40]!r}", flush=True)
+              f"auth={'yes' if self.headers.get('authorization') else 'no'} last={last[:40]!r} system={system[:60]!r}", flush=True)
 
         if "fail" in last.lower():
             payload = json.dumps({"error": {"message": "Incorrect API key provided (mock)"}}).encode()

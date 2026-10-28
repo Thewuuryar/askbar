@@ -146,6 +146,30 @@ async function waitForPort(port) {
     const r = await fetch(`http://127.0.0.1:${api}/api/v1/providers`, { headers: { 'x-askbar-client-version': '0.1.0' } });
     assert.equal(r.status, 401);
   });
+  await step('settings page saves the system prompt and display defaults', async () => {
+    await page.click('#nav [data-tab="settings"]');
+    await page.waitForSelector('#settings-form');
+    assert.match(await page.inputValue('#s-prompt'), /quick-question popup/);
+    await page.fill('#s-prompt', 'You are a pirate.');
+    await page.selectOption('#s-theme', 'dark');
+    await page.fill('#s-width', '900');
+    await page.click('#settings-form button[type=submit]');
+    await page.waitForSelector('#flash:not([hidden])');
+    assert.match(await page.innerText('#flash'), /Settings saved/);
+    await page.click('#nav [data-tab="providers"]');
+    await page.click('#nav [data-tab="settings"]');
+    await page.waitForFunction(() => document.getElementById('s-width').value === '900');
+    assert.equal(await page.inputValue('#s-prompt'), 'You are a pirate.');
+    assert.equal(await page.inputValue('#s-theme'), 'dark');
+  });
+  await step('an invalid setting shows the server message', async () => {
+    await page.fill('#s-top', '0.5');
+    await page.fill('#s-width', '100');
+    await page.evaluate(() => document.getElementById('settings-form').noValidate = true);
+    await page.click('#settings-form button[type=submit]');
+    await page.waitForSelector('#settings-error:not([hidden])');
+    assert.match(await page.innerText('#settings-error'), /Width must be/);
+  });
   await step('sign out returns to the login form', async () => {
     await page.click('#logout');
     await page.waitForSelector('#login:not([hidden])');

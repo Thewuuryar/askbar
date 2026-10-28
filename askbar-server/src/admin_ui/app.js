@@ -32,13 +32,16 @@
 
   // ------------------------------------------------------------- tabs
 
-  const tabs = [{ id: 'providers', label: 'Providers', load: loadProviders }];
+  const tabs = [
+    { id: 'providers', label: 'Providers', load: loadProviders },
+    { id: 'settings', label: 'Settings', load: loadSettings },
+  ];
   function registerTab(tab) { tabs.push(tab); renderNav(); }
   window.askbarAdmin = { api, flash, registerTab, show, $ };
 
   function openTab(id) {
     for (const t of tabs) {
-      const sec = document.querySelector('[data-tab="' + t.id + '"]');
+      const sec = document.querySelector('section[data-tab="' + t.id + '"]');
       if (sec) show(sec, t.id === id);
     }
     for (const b of $('nav').children) b.setAttribute('aria-current', b.dataset.tab === id ? 'page' : 'false');
@@ -223,6 +226,43 @@
     } catch (ex) {
       $('provider-error').textContent = ex.message;
       show($('provider-error'), true);
+    }
+  });
+
+  // --------------------------------------------------------- settings
+
+  async function loadSettings() {
+    const s = await api('GET', '/admin/api/settings');
+    $('s-prompt').value = s.system_prompt;
+    $('s-theme').value = s.display.theme;
+    $('s-width').value = s.display.width;
+    $('s-max-height').value = s.display.max_height;
+    $('s-history-width').value = s.display.history_width;
+    $('s-top').value = s.display.top_percent;
+    $('s-hide-on-blur').checked = !!s.display.hide_on_blur;
+    show($('settings-error'), false);
+  }
+
+  $('settings-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const err = $('settings-error');
+    show(err, false);
+    try {
+      await api('PUT', '/admin/api/settings', {
+        system_prompt: $('s-prompt').value,
+        display: {
+          theme: $('s-theme').value,
+          width: parseInt($('s-width').value, 10),
+          max_height: parseInt($('s-max-height').value, 10),
+          history_width: parseInt($('s-history-width').value, 10),
+          top_percent: parseFloat($('s-top').value),
+          hide_on_blur: $('s-hide-on-blur').checked,
+        },
+      });
+      flash('Settings saved. Clients pick them up on their next message or when their window opens.');
+    } catch (ex) {
+      err.textContent = ex.message;
+      show(err, true);
     }
   });
 
