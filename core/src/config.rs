@@ -7,7 +7,7 @@ use std::{env, fs};
 
 pub const DEFAULT_CONFIG: &str = include_str!("default_config.yaml");
 
-const DEFAULT_SYSTEM_PROMPT: &str = "You are a fast, concise assistant in a quick-question popup. \
+pub const DEFAULT_SYSTEM_PROMPT: &str = "You are a fast, concise assistant in a quick-question popup. \
 Answer directly. Use Markdown when it helps. You cannot access the user's computer, files, or the internet.";
 
 #[derive(Debug, thiserror::Error)]

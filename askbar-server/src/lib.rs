@@ -2,8 +2,10 @@
 
 pub mod api;
 pub mod auth;
+pub mod chat;
 pub mod import;
 pub mod secrets;
+pub mod store;
 
 use askbar_core::Db;
 use askbar_proto::{Health, PairRequest, PairResponse};
@@ -25,11 +27,12 @@ pub const MIN_CLIENT: &str = "0.1.0";
 pub struct AppState {
     pub db: Mutex<Db>,
     pub secrets: Secrets,
+    pub http: askbar_core::HttpClient,
 }
 
 impl AppState {
     pub fn new(db: Db, secrets: Secrets) -> Arc<AppState> {
-        Arc::new(AppState { db: Mutex::new(db), secrets })
+        Arc::new(AppState { db: Mutex::new(db), secrets, http: askbar_core::http_client() })
     }
 }
 
@@ -42,6 +45,7 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         .route("/api/v1/conversations", get(api::conversations))
         .route("/api/v1/conversations/{id}", get(api::conversation).delete(api::delete_conversation))
         .route("/api/v1/settings", get(api::settings))
+        .route("/api/v1/chat", post(chat::chat))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_device_token));
     Router::new()
         .route("/api/v1/health", get(health))

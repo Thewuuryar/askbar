@@ -9,11 +9,13 @@ description = "Askbar server: history, providers and settings behind an HTTP API
 askbar-core = { path = "../core" }
 askbar-proto = { path = "../askbar-proto" }
 axum = "0.8"
+futures-util = "0.3"
+tokio-stream = "0.1"
 base64 = "0.22"
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde_json = "1"
 ulid = "1"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time"] }
 chacha20poly1305 = "0.10"
 hkdf = "0.12"
 sha2 = "0.10"
@@ -23,4 +25,4 @@ tracing-subscriber = "0.3"
 
 [dev-dependencies]
 serde_json = "1"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
