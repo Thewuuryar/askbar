@@ -120,11 +120,14 @@ dependencies = [
  "chacha20poly1305",
  "hkdf",
  "reqwest 0.12.28",
+ "rusqlite",
+ "serde_json",
  "sha2",
  "thiserror 2.0.21",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "ulid",
 ]
 
 [[package]]

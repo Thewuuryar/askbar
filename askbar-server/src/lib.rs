@@ -1,5 +1,6 @@
 //! Askbar server. Two separate routers: the device API and the admin site.
 
+pub mod import;
 pub mod secrets;
 
 use askbar_proto::Health;
