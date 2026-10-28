@@ -39,9 +39,31 @@ fn run_import(args: &[String]) {
     );
 }
 
+/// `askbar-server healthcheck`: GET the local API health endpoint; exit 0 if it answers 200.
+fn run_healthcheck() -> ! {
+    use std::io::{Read, Write};
+    let port = std::env::var("ASKBAR_API_ADDR")
+        .ok()
+        .and_then(|a| a.parse::<SocketAddr>().ok())
+        .map_or(8080, |a| a.port());
+    let ok = (|| -> std::io::Result<bool> {
+        let timeout = std::time::Duration::from_secs(2);
+        let mut s = std::net::TcpStream::connect_timeout(&SocketAddr::from(([127, 0, 0, 1], port)), timeout)?;
+        s.set_read_timeout(Some(timeout))?;
+        s.write_all(b"GET /api/v1/health HTTP/1.0\r\nHost: localhost\r\n\r\n")?;
+        let mut head = [0u8; 12];
+        s.read_exact(&mut head)?;
+        Ok(&head == b"HTTP/1.1 200" || &head == b"HTTP/1.0 200")
+    })();
+    std::process::exit(if ok.unwrap_or(false) { 0 } else { 1 })
+}
+
 #[tokio::main]
 async fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("healthcheck") {
+        run_healthcheck();
+    }
     if args.first().map(String::as_str) == Some("import") {
         return run_import(&args[1..]);
     }

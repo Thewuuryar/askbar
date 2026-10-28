@@ -1,0 +1,8 @@
+target
+.git
+node_modules
+src-tauri
+ui
+tests
+data
+.env
