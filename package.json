@@ -1,0 +1,17 @@
+{
+  "name": "askbar",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A Spotlight-style, conversation-only AI popup",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "icons": "python3 tests/make_icons.py",
+    "test": "cargo test -p askbar-core && node tests/markdown.test.js && node tests/ui.test.js",
+    "mock": "python3 tests/mock_llm.py 8765"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2",
+    "playwright": "^1"
+  }
+}

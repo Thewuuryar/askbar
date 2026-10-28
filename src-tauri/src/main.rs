@@ -1,0 +1,457 @@
+// Hide the console window on Windows release builds.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+use askbar_core::{
+    config_path, db_path, http_client, make_title, stream_chat, ChatMessage, Config, ConversationSummary, Db,
+    HttpClient, StoredMessage, StreamOutcome, Ui,
+};
+use serde::Serialize;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Mutex, MutexGuard};
+use std::time::{Duration, Instant};
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{ipc::Channel, AppHandle, Emitter, LogicalSize, Manager, Monitor, PhysicalPosition, State, WebviewWindow, WindowEvent};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
+use tokio::sync::oneshot;
+
+/// Ignore focus-loss events this soon after showing; some window managers
+/// send a spurious one while the window is being mapped.
+const BLUR_GRACE: Duration = Duration::from_millis(500);
+
+/// Hide-on-blur waits this long and is cancelled by any show/hide/toggle or
+/// focus regain in between. Without it, X11 breaks the hotkey: activating the
+/// shortcut grab sends the focused window a focus-out, the blur handler hides
+/// the window, and then the toggle sees "hidden" and shows it again.
+const BLUR_DEBOUNCE: Duration = Duration::from_millis(200);
+
+struct Placement {
+    width: f64,
+    height: f64,
+    top_percent: f64,
+}
+
+struct AppState {
+    db: Mutex<Db>,
+    http: HttpClient,
+    cancel: Mutex<Option<oneshot::Sender<()>>>,
+    shown_at: Mutex<Instant>,
+    placement: Mutex<Placement>,
+    hide_on_blur: AtomicBool,
+    visible: AtomicBool,
+    /// Bumped on every show/hide/toggle/focus change; lets a pending blur-hide
+    /// detect that something else happened first.
+    epoch: AtomicU64,
+    hotkey: Mutex<Option<Shortcut>>,
+    notice: Mutex<Option<String>>,
+}
+
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn load_config() -> Result<Config, String> {
+    Config::load_or_create(&config_path()).map(|(c, _)| c).map_err(|e| e.to_string())
+}
+
+// ------------------------------------------------------------- window
+
+fn pick_monitor(w: &WebviewWindow) -> Option<Monitor> {
+    if let (Ok(cur), Ok(monitors)) = (w.cursor_position(), w.available_monitors()) {
+        for m in monitors {
+            let (p, s) = (m.position(), m.size());
+            let inside = cur.x >= p.x as f64
+                && cur.x < p.x as f64 + s.width as f64
+                && cur.y >= p.y as f64
+                && cur.y < p.y as f64 + s.height as f64;
+            if inside {
+                return Some(m);
+            }
+        }
+    }
+    w.current_monitor().ok().flatten().or_else(|| w.primary_monitor().ok().flatten())
+}
+
+/// Size the window and centre it horizontally on the monitor the cursor is on.
+fn apply_layout(w: &WebviewWindow, p: &Placement) {
+    let Some(m) = pick_monitor(w) else {
+        let _ = w.set_size(LogicalSize::new(p.width, p.height));
+        let _ = w.center();
+        return;
+    };
+    let scale = m.scale_factor();
+    let (mw, mh) = (m.size().width as f64, m.size().height as f64);
+    let width = p.width.min(mw / scale);
+    let height = p.height.min(mh / scale * 0.92);
+    let _ = w.set_size(LogicalSize::new(width, height));
+    let x = m.position().x as f64 + (mw - width * scale) / 2.0;
+    let y = m.position().y as f64 + mh * p.top_percent;
+    let _ = w.set_position(PhysicalPosition::new(x.round() as i32, y.round() as i32));
+}
+
+fn show(app: &AppHandle) {
+    let Some(w) = app.get_webview_window("main") else { return };
+    let state = app.state::<AppState>();
+    state.epoch.fetch_add(1, Ordering::SeqCst);
+    *lock(&state.shown_at) = Instant::now();
+    apply_layout(&w, &lock(&state.placement));
+    let _ = w.show();
+    let _ = w.set_focus();
+    state.visible.store(true, Ordering::Relaxed);
+    let _ = app.emit("askbar:shown", ());
+}
+
+fn hide(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    state.epoch.fetch_add(1, Ordering::SeqCst);
+    state.visible.store(false, Ordering::Relaxed);
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.hide();
+    }
+}
+
+fn toggle(app: &AppHandle) {
+    // We track visibility ourselves: the toolkit's `is_visible()` can be stale
+    // when queried from the hotkey thread, and focus reporting is unreliable on
+    // some window managers. The window is always-on-top, so "visible" is enough.
+    let state = app.state::<AppState>();
+    // Cancels any blur-hide that the shortcut grab itself just triggered.
+    state.epoch.fetch_add(1, Ordering::SeqCst);
+    if state.visible.load(Ordering::Relaxed) {
+        hide(app);
+    } else {
+        show(app);
+    }
+}
+
+// ------------------------------------------------------------- config
+
+fn register_hotkey(app: &AppHandle, spec: &str) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let gs = app.global_shortcut();
+    if let Some(old) = lock(&state.hotkey).take() {
+        let _ = gs.unregister(old);
+    }
+    let shortcut: Shortcut = spec.parse().map_err(|_| {
+        format!(
+            "The hotkey \"{spec}\" in config.yaml is not valid. Use modifiers plus one key, such as \"Ctrl+Shift+Space\", \"Alt+Space\" or \"Super+A\"."
+        )
+    })?;
+    gs.register(shortcut).map_err(|e| {
+        let mut msg = format!(
+            "Could not register the hotkey \"{spec}\": {e}. Another app or the system may already use it; change `hotkey` in config.yaml."
+        );
+        if cfg!(target_os = "linux") && std::env::var_os("WAYLAND_DISPLAY").is_some() {
+            msg.push_str(" On Wayland, bind a desktop shortcut to the `askbar` command instead; running it again toggles the window.");
+        }
+        msg
+    })?;
+    *lock(&state.hotkey) = Some(shortcut);
+    Ok(())
+}
+
+/// Re-read config.yaml and apply what can change at runtime.
+fn apply_config(app: &AppHandle) -> Option<String> {
+    let state = app.state::<AppState>();
+    let cfg = match load_config() {
+        Ok(c) => c,
+        Err(e) => return Some(e),
+    };
+    state.hide_on_blur.store(cfg.ui.hide_on_blur, Ordering::Relaxed);
+    lock(&state.placement).top_percent = cfg.ui.top_percent;
+    register_hotkey(app, &cfg.hotkey).err()
+}
+
+// ----------------------------------------------------------- commands
+
+#[derive(Serialize)]
+struct Bootstrap {
+    ui: Ui,
+    hotkey: String,
+    provider: String,
+    model: String,
+    notice: Option<String>,
+}
+
+#[tauri::command]
+fn bootstrap(state: State<'_, AppState>) -> Bootstrap {
+    let (cfg, mut notice) = match load_config() {
+        Ok(c) => (c, None),
+        Err(e) => (Config::builtin(), Some(e)),
+    };
+    if let Some(n) = lock(&state.notice).take() {
+        notice = Some(n);
+    }
+    let (provider, model) = cfg
+        .active()
+        .map(|p| (p.name.clone(), p.model.clone()))
+        .unwrap_or_default();
+    Bootstrap { ui: cfg.ui, hotkey: cfg.hotkey, provider, model, notice }
+}
+
+#[tauri::command]
+fn list_conversations(state: State<'_, AppState>) -> Result<Vec<ConversationSummary>, String> {
+    lock(&state.db).list_conversations().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn load_conversation(state: State<'_, AppState>, id: i64) -> Result<Vec<StoredMessage>, String> {
+    lock(&state.db).get_messages(id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn delete_conversation(state: State<'_, AppState>, id: i64) -> Result<(), String> {
+    lock(&state.db).delete_conversation(id).map(|_| ()).map_err(|e| e.to_string())
+}
+
+#[derive(Serialize, Clone)]
+#[serde(tag = "event", rename_all = "camelCase", rename_all_fields = "camelCase")]
+enum StreamEvent {
+    Started { conversation_id: i64 },
+    Delta { text: String },
+    Done,
+    Cancelled,
+    Error { message: String },
+}
+
+#[tauri::command]
+async fn ask(
+    state: State<'_, AppState>,
+    conversation_id: Option<i64>,
+    text: String,
+    on_event: Channel<StreamEvent>,
+) -> Result<(), String> {
+    let text = text.trim().to_string();
+    if text.is_empty() {
+        return Ok(());
+    }
+    let fail = |message: String| {
+        let _ = on_event.send(StreamEvent::Error { message });
+    };
+
+    let cfg = match load_config() {
+        Ok(c) => c,
+        Err(e) => return Ok(fail(e)),
+    };
+    let provider = match cfg.active() {
+        Ok(p) => p.clone(),
+        Err(e) => return Ok(fail(e.to_string())),
+    };
+
+    // Save the question first so it survives a failed request.
+    let saved = {
+        let db = lock(&state.db);
+        (|| -> Result<(i64, Vec<StoredMessage>), askbar_core::DbError> {
+            let id = match conversation_id {
+                Some(id) if db.conversation_exists(id)? => id,
+                _ => db.create_conversation(&make_title(&text))?,
+            };
+            db.add_message(id, "user", &text)?;
+            Ok((id, db.get_messages(id)?))
+        })()
+    };
+    let (conv_id, stored) = match saved {
+        Ok(v) => v,
+        Err(e) => return Ok(fail(e.to_string())),
+    };
+    let _ = on_event.send(StreamEvent::Started { conversation_id: conv_id });
+
+    let mut context: Vec<ChatMessage> = stored.iter().map(|m| ChatMessage::new(&m.role, &m.content)).collect();
+    if let Some(n) = cfg.history.context_messages.filter(|&n| n > 0) {
+        let start = context.len().saturating_sub(n);
+        context.drain(..start);
+    }
+
+    let (tx, rx) = oneshot::channel();
+    *lock(&state.cancel) = Some(tx);
+
+    let mut reply = String::new();
+    let result = stream_chat(&state.http, &provider, &cfg.system_prompt, &context, rx, |delta| {
+        reply.push_str(delta);
+        let _ = on_event.send(StreamEvent::Delta { text: delta.to_string() });
+    })
+    .await;
+    lock(&state.cancel).take();
+
+    // Keep whatever arrived, even on cancel or error.
+    if !reply.trim().is_empty() {
+        if let Err(e) = lock(&state.db).add_message(conv_id, "assistant", &reply) {
+            return Ok(fail(e.to_string()));
+        }
+    }
+
+    let _ = on_event.send(match result {
+        Ok(StreamOutcome::Completed) => StreamEvent::Done,
+        Ok(StreamOutcome::Cancelled) => StreamEvent::Cancelled,
+        Err(e) => StreamEvent::Error { message: e.to_string() },
+    });
+    Ok(())
+}
+
+#[tauri::command]
+fn cancel_ask(state: State<'_, AppState>) {
+    if let Some(tx) = lock(&state.cancel).take() {
+        let _ = tx.send(());
+    }
+}
+
+#[tauri::command]
+fn resize_window(app: AppHandle, state: State<'_, AppState>, width: f64, height: f64) {
+    let Some(w) = app.get_webview_window("main") else { return };
+    let mut p = lock(&state.placement);
+    p.width = width.clamp(240.0, 4000.0);
+    p.height = height.clamp(60.0, 4000.0);
+    apply_layout(&w, &p);
+}
+
+#[tauri::command]
+fn hide_window(app: AppHandle) {
+    hide(&app);
+}
+
+#[tauri::command]
+fn open_config() -> Result<(), String> {
+    let path = config_path();
+    opener::open(&path)
+        .or_else(|_| opener::reveal(&path))
+        .map_err(|e| format!("Could not open {}: {e}", path.display()))
+}
+
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        return Err("Only http(s) links can be opened.".into());
+    }
+    opener::open_browser(&url).map_err(|e| e.to_string())
+}
+
+// --------------------------------------------------------------- main
+
+fn main() {
+    tauri::Builder::default()
+        // Must be first. A second launch (e.g. a desktop shortcut running
+        // `askbar`) toggles the running instance, which is how Wayland users
+        // get a hotkey.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| toggle(app)))
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, _shortcut, event| {
+                    if event.state() == ShortcutState::Pressed {
+                        toggle(app);
+                    }
+                })
+                .build(),
+        )
+        .on_window_event(|window, event| match event {
+            WindowEvent::Focused(true) => {
+                window.app_handle().state::<AppState>().epoch.fetch_add(1, Ordering::SeqCst);
+            }
+            WindowEvent::Focused(false) => {
+                let app = window.app_handle().clone();
+                let state = app.state::<AppState>();
+                let recent = lock(&state.shown_at).elapsed() < BLUR_GRACE;
+                if !state.hide_on_blur.load(Ordering::Relaxed) || recent {
+                    return;
+                }
+                let epoch = state.epoch.load(Ordering::SeqCst);
+                std::thread::spawn(move || {
+                    std::thread::sleep(BLUR_DEBOUNCE);
+                    let state = app.state::<AppState>();
+                    if state.epoch.load(Ordering::SeqCst) == epoch && state.visible.load(Ordering::Relaxed) {
+                        hide(&app);
+                    }
+                });
+            }
+            _ => {}
+        })
+        .setup(|app| {
+            let (cfg, created, config_error) = match Config::load_or_create(&config_path()) {
+                Ok((c, created)) => (c, created, None),
+                Err(e) => (Config::builtin(), false, Some(e.to_string())),
+            };
+            let db = Db::open(&db_path())?;
+
+            app.manage(AppState {
+                db: Mutex::new(db),
+                http: http_client(),
+                cancel: Mutex::new(None),
+                shown_at: Mutex::new(Instant::now()),
+                placement: Mutex::new(Placement { width: 768.0, height: 140.0, top_percent: cfg.ui.top_percent }),
+                hide_on_blur: AtomicBool::new(cfg.ui.hide_on_blur),
+                visible: AtomicBool::new(false),
+                epoch: AtomicU64::new(0),
+                hotkey: Mutex::new(None),
+                notice: Mutex::new(None),
+            });
+
+            #[cfg(target_os = "macos")]
+            if cfg.ui.macos_hide_dock_icon {
+                app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+            }
+
+            let toggle_item = MenuItem::with_id(app, "toggle", "Show / hide", true, None::<&str>)?;
+            let config_item = MenuItem::with_id(app, "config", "Open config file", true, None::<&str>)?;
+            let reload_item = MenuItem::with_id(app, "reload", "Reload config", true, None::<&str>)?;
+            let quit_item = MenuItem::with_id(app, "quit", "Quit Askbar", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&toggle_item, &config_item, &reload_item, &quit_item])?;
+
+            let mut tray = TrayIconBuilder::with_id("askbar")
+                .tooltip("Askbar")
+                .menu(&menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| match event.id().as_ref() {
+                    "toggle" => toggle(app),
+                    "config" => {
+                        let _ = open_config();
+                    }
+                    "reload" => {
+                        let state = app.state::<AppState>();
+                        *lock(&state.notice) = apply_config(app).or(Some("Config reloaded.".into()));
+                        show(app);
+                    }
+                    "quit" => app.exit(0),
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
+                        toggle(tray.app_handle());
+                    }
+                });
+            if let Some(icon) = app.default_window_icon() {
+                tray = tray.icon(icon.clone());
+            }
+            tray.build(app)?;
+
+            // Hotkey problems and first-run guidance are shown in the window,
+            // since there is no console to read.
+            let handle = app.handle().clone();
+            let hotkey_error = register_hotkey(&handle, &cfg.hotkey).err();
+            let notice = config_error.or(hotkey_error).or_else(|| {
+                created.then(|| {
+                    format!(
+                        "Welcome. Add your API key in {} (tray icon → Open config file), then ask away.",
+                        config_path().display()
+                    )
+                })
+            });
+            if notice.is_some() {
+                *lock(&handle.state::<AppState>().notice) = notice;
+                show(&handle);
+            }
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            bootstrap,
+            list_conversations,
+            load_conversation,
+            delete_conversation,
+            ask,
+            cancel_ask,
+            resize_window,
+            hide_window,
+            open_config,
+            open_url,
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running Askbar");
+}

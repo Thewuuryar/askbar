@@ -1,0 +1,19 @@
+[package]
+name = "askbar-core"
+version = "0.1.0"
+edition = "2021"
+description = "Config, history storage and LLM streaming for Askbar (no GUI dependencies)"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml_ng = "0.10"
+rusqlite = { version = "0.32", features = ["bundled"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json"] }
+futures-util = "0.3"
+tokio = { version = "1", features = ["sync", "macros", "time"] }
+thiserror = "2"
+dirs = "6"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "macros", "time", "sync"] }

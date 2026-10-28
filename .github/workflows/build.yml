@@ -1,0 +1,48 @@
+# Builds and tests Askbar on all three desktop platforms.
+# Not yet run: this repo was developed and verified on Linux only.
+name: build
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Linux system libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Core tests (config, history, streaming)
+        run: cargo test -p askbar-core
+
+      - name: Markdown renderer tests
+        run: node tests/markdown.test.js
+
+      - name: Install JS dependencies
+        run: npm install
+
+      - name: Build the app
+        run: npm run build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: askbar-${{ matrix.os }}
+          path: |
+            target/release/bundle/**/*
