@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Askbar admin</title>
+  <link rel="stylesheet" href="/admin/style.css">
+</head>
+<body>
+  <main id="login" class="narrow" hidden>
+    <h1>Askbar admin</h1>
+    <form id="login-form">
+      <label>Password <input id="password" type="password" autocomplete="current-password" required></label>
+      <button type="submit">Sign in</button>
+      <p id="login-error" class="error" hidden></p>
+    </form>
+  </main>
+
+  <div id="app" hidden>
+    <header class="top">
+      <h1>Askbar admin</h1>
+      <nav id="nav"></nav>
+      <button type="button" id="logout" class="link">Sign out</button>
+    </header>
+    <main>
+      <p id="flash" class="flash" role="status" hidden></p>
+
+      <section id="tab-providers" data-tab="providers">
+        <div class="row">
+          <h2>Providers</h2>
+          <span class="spacer"></span>
+          <button type="button" id="add-provider">Add provider</button>
+          <button type="button" id="add-cpa" class="secondary">Add CLIProxyAPI</button>
+        </div>
+        <p class="hint">API keys are write-only: they are stored encrypted and never shown again. Leave the key empty when editing to keep the current one.</p>
+        <div id="providers"></div>
+
+        <form id="provider-form" hidden>
+          <h3 id="provider-form-title">Add provider</h3>
+          <label>Name <input id="p-name" required></label>
+          <label>Type
+            <select id="p-type"><option value="openai">openai (OpenAI-compatible)</option><option value="anthropic">anthropic</option></select>
+          </label>
+          <label>Base URL <input id="p-base-url" placeholder="https://api.openai.com/v1"></label>
+          <label>Model <input id="p-model" required></label>
+          <label>API key <input id="p-key" type="password" autocomplete="off" placeholder="write-only"></label>
+          <label>Max tokens <input id="p-max-tokens" type="number" min="1"></label>
+          <label>Temperature <input id="p-temperature" type="number" step="0.1" min="0" max="2"></label>
+          <div class="row">
+            <button type="submit">Save</button>
+            <button type="button" id="provider-cancel" class="secondary">Cancel</button>
+          </div>
+          <p id="provider-error" class="error" hidden></p>
+        </form>
+      </section>
+    </main>
+  </div>
+
+  <script src="/admin/app.js"></script>
+</body>
+</html>

@@ -118,6 +118,18 @@ pub async fn require_admin_header(req: Request, next: Next) -> Result<Response, 
     Ok(next.run(req).await)
 }
 
+/// The admin site loads only its own files, and may not be framed.
+pub async fn security_headers(req: Request, next: Next) -> Response {
+    let mut res = next.run(req).await;
+    let h = res.headers_mut();
+    h.insert("content-security-policy", HeaderValue::from_static("default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"));
+    h.insert("x-frame-options", HeaderValue::from_static("DENY"));
+    h.insert("x-content-type-options", HeaderValue::from_static("nosniff"));
+    h.insert("referrer-policy", HeaderValue::from_static("no-referrer"));
+    h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    res
+}
+
 /// Cookie only. `Authorization` is deliberately ignored.
 pub async fn require_session(State(state): State<Arc<AppState>>, req: Request, next: Next) -> Result<Response, StatusCode> {
     let token = session_cookie(req.headers()).ok_or(StatusCode::UNAUTHORIZED)?;

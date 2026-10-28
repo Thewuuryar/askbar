@@ -1,6 +1,7 @@
 //! Askbar server. Two separate routers: the device API and the admin site.
 
 pub mod admin;
+pub mod admin_api;
 pub mod api;
 pub mod auth;
 pub mod chat;
@@ -16,7 +17,8 @@ use axum::{
     middleware,
     middleware::Next,
     response::Response,
-    routing::{get, post},
+    response::Redirect,
+    routing::{get, post, put},
     Json, Router,
 };
 use secrets::Secrets;
@@ -91,12 +93,21 @@ pub fn admin_router(state: Arc<AppState>) -> Router {
     let protected: Router<Arc<AppState>> = Router::new()
         .route("/admin/session", get(|| async { StatusCode::NO_CONTENT }))
         .route("/admin/logout", post(admin::logout))
+        .route("/admin/api/providers", get(admin_api::list_providers).post(admin_api::create_provider))
+        .route("/admin/api/providers/{id}", put(admin_api::update_provider).delete(admin_api::delete_provider))
+        .route("/admin/api/providers/{id}/test", post(admin_api::test_provider))
         .route_layer(middleware::from_fn_with_state(state.clone(), admin::require_session));
     Router::new()
+        .route("/", get(|| async { Redirect::to("/admin/") }))
+        .route("/admin", get(|| async { Redirect::to("/admin/") }))
+        .route("/admin/", get(|| async { admin_asset("text/html; charset=utf-8", include_str!("admin_ui/index.html")) }))
+        .route("/admin/app.js", get(|| async { admin_asset("text/javascript; charset=utf-8", include_str!("admin_ui/app.js")) }))
+        .route("/admin/style.css", get(|| async { admin_asset("text/css; charset=utf-8", include_str!("admin_ui/style.css")) }))
         .route("/admin/health", get(admin_health))
         .route("/admin/login", post(admin::login))
         .merge(protected)
         .layer(middleware::from_fn(admin::require_admin_header))
+        .layer(middleware::from_fn(admin::security_headers))
         .with_state(state)
         .layer(middleware::from_fn(log_requests))
 }
@@ -125,4 +136,8 @@ async fn log_requests(req: Request, next: Next) -> Response {
     let res = next.run(req).await;
     tracing::info!(%method, %path, status = res.status().as_u16(), "request");
     res
+}
+
+fn admin_asset(content_type: &'static str, body: &'static str) -> impl axum::response::IntoResponse {
+    ([(axum::http::header::CONTENT_TYPE, content_type)], body)
 }
