@@ -64,6 +64,8 @@ name = "askbar"
 version = "0.1.0"
 dependencies = [
  "askbar-core",
+ "askbar-proto",
+ "async-trait",
  "opener",
  "serde",
  "serde_json",

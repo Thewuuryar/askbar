@@ -1,10 +1,10 @@
 // Hide the console window on Windows release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use askbar_core::{
-    config_path, db_path, http_client, make_title, stream_chat, ChatMessage, Config, ConversationSummary, Db,
-    HttpClient, StoredMessage, StreamOutcome, Ui,
-};
+mod backend;
+
+use askbar_core::{config_path, db_path, Config, ConversationSummary, StoredMessage, Ui};
+use backend::{Backend, Local, Settings, StreamEvent};
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard};
@@ -32,8 +32,7 @@ struct Placement {
 }
 
 struct AppState {
-    db: Mutex<Db>,
-    http: HttpClient,
+    backend: Box<dyn Backend>,
     cancel: Mutex<Option<oneshot::Sender<()>>>,
     shown_at: Mutex<Instant>,
     placement: Mutex<Placement>,
@@ -48,10 +47,6 @@ struct AppState {
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
-}
-
-fn load_config() -> Result<Config, String> {
-    Config::load_or_create(&config_path()).map(|(c, _)| c).map_err(|e| e.to_string())
 }
 
 // ------------------------------------------------------------- window
@@ -153,7 +148,7 @@ fn register_hotkey(app: &AppHandle, spec: &str) -> Result<(), String> {
 /// Re-read config.yaml and apply what can change at runtime.
 fn apply_config(app: &AppHandle) -> Option<String> {
     let state = app.state::<AppState>();
-    let cfg = match load_config() {
+    let cfg = match state.backend.settings() {
         Ok(c) => c,
         Err(e) => return Some(e),
     };
@@ -175,43 +170,29 @@ struct Bootstrap {
 
 #[tauri::command]
 fn bootstrap(state: State<'_, AppState>) -> Bootstrap {
-    let (cfg, mut notice) = match load_config() {
+    let (cfg, mut notice) = match state.backend.settings() {
         Ok(c) => (c, None),
-        Err(e) => (Config::builtin(), Some(e)),
+        Err(e) => (Settings::builtin(), Some(e)),
     };
     if let Some(n) = lock(&state.notice).take() {
         notice = Some(n);
     }
-    let (provider, model) = cfg
-        .active()
-        .map(|p| (p.name.clone(), p.model.clone()))
-        .unwrap_or_default();
-    Bootstrap { ui: cfg.ui, hotkey: cfg.hotkey, provider, model, notice }
+    Bootstrap { ui: cfg.ui, hotkey: cfg.hotkey, provider: cfg.provider, model: cfg.model, notice }
 }
 
 #[tauri::command]
 fn list_conversations(state: State<'_, AppState>) -> Result<Vec<ConversationSummary>, String> {
-    lock(&state.db).list_conversations().map_err(|e| e.to_string())
+    state.backend.list_conversations()
 }
 
 #[tauri::command]
 fn load_conversation(state: State<'_, AppState>, id: i64) -> Result<Vec<StoredMessage>, String> {
-    lock(&state.db).get_messages(id).map_err(|e| e.to_string())
+    state.backend.load_conversation(id)
 }
 
 #[tauri::command]
 fn delete_conversation(state: State<'_, AppState>, id: i64) -> Result<(), String> {
-    lock(&state.db).delete_conversation(id).map(|_| ()).map_err(|e| e.to_string())
-}
-
-#[derive(Serialize, Clone)]
-#[serde(tag = "event", rename_all = "camelCase", rename_all_fields = "camelCase")]
-enum StreamEvent {
-    Started { conversation_id: i64 },
-    Delta { text: String },
-    Done,
-    Cancelled,
-    Error { message: String },
+    state.backend.delete_conversation(id)
 }
 
 #[tauri::command]
@@ -225,66 +206,15 @@ async fn ask(
     if text.is_empty() {
         return Ok(());
     }
-    let fail = |message: String| {
-        let _ = on_event.send(StreamEvent::Error { message });
-    };
-
-    let cfg = match load_config() {
-        Ok(c) => c,
-        Err(e) => return Ok(fail(e)),
-    };
-    let provider = match cfg.active() {
-        Ok(p) => p.clone(),
-        Err(e) => return Ok(fail(e.to_string())),
-    };
-
-    // Save the question first so it survives a failed request.
-    let saved = {
-        let db = lock(&state.db);
-        (|| -> Result<(i64, Vec<StoredMessage>), askbar_core::DbError> {
-            let id = match conversation_id {
-                Some(id) if db.conversation_exists(id)? => id,
-                _ => db.create_conversation(&make_title(&text))?,
-            };
-            db.add_message(id, "user", &text)?;
-            Ok((id, db.get_messages(id)?))
-        })()
-    };
-    let (conv_id, stored) = match saved {
-        Ok(v) => v,
-        Err(e) => return Ok(fail(e.to_string())),
-    };
-    let _ = on_event.send(StreamEvent::Started { conversation_id: conv_id });
-
-    let mut context: Vec<ChatMessage> = stored.iter().map(|m| ChatMessage::new(&m.role, &m.content)).collect();
-    if let Some(n) = cfg.history.context_messages.filter(|&n| n > 0) {
-        let start = context.len().saturating_sub(n);
-        context.drain(..start);
-    }
-
     let (tx, rx) = oneshot::channel();
     *lock(&state.cancel) = Some(tx);
-
-    let mut reply = String::new();
-    let result = stream_chat(&state.http, &provider, &cfg.system_prompt, &context, rx, |delta| {
-        reply.push_str(delta);
-        let _ = on_event.send(StreamEvent::Delta { text: delta.to_string() });
-    })
-    .await;
+    state
+        .backend
+        .ask(conversation_id, text, rx, &|e| {
+            let _ = on_event.send(e);
+        })
+        .await;
     lock(&state.cancel).take();
-
-    // Keep whatever arrived, even on cancel or error.
-    if !reply.trim().is_empty() {
-        if let Err(e) = lock(&state.db).add_message(conv_id, "assistant", &reply) {
-            return Ok(fail(e.to_string()));
-        }
-    }
-
-    let _ = on_event.send(match result {
-        Ok(StreamOutcome::Completed) => StreamEvent::Done,
-        Ok(StreamOutcome::Cancelled) => StreamEvent::Cancelled,
-        Err(e) => StreamEvent::Error { message: e.to_string() },
-    });
     Ok(())
 }
 
@@ -369,11 +299,10 @@ fn main() {
                 Ok((c, created)) => (c, created, None),
                 Err(e) => (Config::builtin(), false, Some(e.to_string())),
             };
-            let db = Db::open(&db_path())?;
+            let backend: Box<dyn Backend> = Box::new(Local::open(&db_path())?);
 
             app.manage(AppState {
-                db: Mutex::new(db),
-                http: http_client(),
+                backend,
                 cancel: Mutex::new(None),
                 shown_at: Mutex::new(Instant::now()),
                 placement: Mutex::new(Placement { width: 768.0, height: 140.0, top_percent: cfg.ui.top_percent }),
