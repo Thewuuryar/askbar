@@ -15,7 +15,19 @@ tauri-plugin-global-shortcut = "2"
 tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["sync"] }
+tokio = { version = "1", features = ["sync", "time"] }
 async-trait = "0.1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json"] }
+futures-util = "0.3"
+serde_yaml_ng = "0.10"
+dirs = "6"
+url = "2"
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 askbar-proto = { path = "../askbar-proto" }
 opener = { version = "0.8", features = ["reveal"] }
+
+[dev-dependencies]
+askbar-server = { path = "../askbar-server" }
+axum = "0.8"
+rusqlite = { version = "0.32", features = ["bundled"] }
+tokio = { version = "1", features = ["sync", "time", "macros", "rt-multi-thread", "net", "io-util"] }

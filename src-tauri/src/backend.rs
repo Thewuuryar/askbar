@@ -13,6 +13,7 @@ use std::sync::{Mutex, MutexGuard};
 use tokio::sync::oneshot;
 
 /// What the window and the shell need to know about the active setup.
+#[derive(Debug)]
 pub struct Settings {
     pub ui: Ui,
     pub hotkey: String,
@@ -49,12 +50,12 @@ pub type Emit<'a> = &'a (dyn Fn(StreamEvent) + Send + Sync);
 #[async_trait]
 pub trait Backend: Send + Sync {
     /// Current settings, or a message explaining why they could not be read.
-    fn settings(&self) -> Result<Settings, String>;
+    async fn settings(&self) -> Result<Settings, String>;
     #[allow(dead_code)]
-    fn list_providers(&self) -> Result<Vec<ProviderInfo>, String>;
-    fn list_conversations(&self) -> Result<Vec<ConversationSummary>, String>;
-    fn load_conversation(&self, id: i64) -> Result<Vec<StoredMessage>, String>;
-    fn delete_conversation(&self, id: i64) -> Result<(), String>;
+    async fn list_providers(&self) -> Result<Vec<ProviderInfo>, String>;
+    async fn list_conversations(&self) -> Result<Vec<ConversationSummary>, String>;
+    async fn load_conversation(&self, id: i64) -> Result<Vec<StoredMessage>, String>;
+    async fn delete_conversation(&self, id: i64) -> Result<(), String>;
     /// Send a message and stream the reply through `emit`. Failures are
     /// reported as `StreamEvent::Error`, not as a return value.
     async fn ask(&self, conversation_id: Option<i64>, text: String, cancel: oneshot::Receiver<()>, emit: Emit<'_>);
@@ -81,11 +82,11 @@ impl Local {
 
 #[async_trait]
 impl Backend for Local {
-    fn settings(&self) -> Result<Settings, String> {
+    async fn settings(&self) -> Result<Settings, String> {
         load_config().map(|c| Settings::from_config(&c))
     }
 
-    fn list_providers(&self) -> Result<Vec<ProviderInfo>, String> {
+    async fn list_providers(&self) -> Result<Vec<ProviderInfo>, String> {
         let cfg = load_config()?;
         Ok(cfg
             .providers
@@ -98,15 +99,15 @@ impl Backend for Local {
             .collect())
     }
 
-    fn list_conversations(&self) -> Result<Vec<ConversationSummary>, String> {
+    async fn list_conversations(&self) -> Result<Vec<ConversationSummary>, String> {
         lock(&self.db).list_conversations().map_err(|e| e.to_string())
     }
 
-    fn load_conversation(&self, id: i64) -> Result<Vec<StoredMessage>, String> {
+    async fn load_conversation(&self, id: i64) -> Result<Vec<StoredMessage>, String> {
         lock(&self.db).get_messages(id).map_err(|e| e.to_string())
     }
 
-    fn delete_conversation(&self, id: i64) -> Result<(), String> {
+    async fn delete_conversation(&self, id: i64) -> Result<(), String> {
         lock(&self.db).delete_conversation(id).map(|_| ()).map_err(|e| e.to_string())
     }
 

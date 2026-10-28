@@ -2,9 +2,13 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod backend;
+mod client_config;
+mod remote;
+mod tokens;
 
 use askbar_core::{config_path, db_path, Config, ConversationSummary, StoredMessage, Ui};
 use backend::{Backend, Local, Settings, StreamEvent};
+use remote::Remote;
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard};
@@ -148,7 +152,7 @@ fn register_hotkey(app: &AppHandle, spec: &str) -> Result<(), String> {
 /// Re-read config.yaml and apply what can change at runtime.
 fn apply_config(app: &AppHandle) -> Option<String> {
     let state = app.state::<AppState>();
-    let cfg = match state.backend.settings() {
+    let cfg = match tauri::async_runtime::block_on(state.backend.settings()) {
         Ok(c) => c,
         Err(e) => return Some(e),
     };
@@ -169,30 +173,30 @@ struct Bootstrap {
 }
 
 #[tauri::command]
-fn bootstrap(state: State<'_, AppState>) -> Bootstrap {
-    let (cfg, mut notice) = match state.backend.settings() {
+async fn bootstrap(state: State<'_, AppState>) -> Result<Bootstrap, String> {
+    let (cfg, mut notice) = match state.backend.settings().await {
         Ok(c) => (c, None),
         Err(e) => (Settings::builtin(), Some(e)),
     };
     if let Some(n) = lock(&state.notice).take() {
         notice = Some(n);
     }
-    Bootstrap { ui: cfg.ui, hotkey: cfg.hotkey, provider: cfg.provider, model: cfg.model, notice }
+    Ok(Bootstrap { ui: cfg.ui, hotkey: cfg.hotkey, provider: cfg.provider, model: cfg.model, notice })
 }
 
 #[tauri::command]
-fn list_conversations(state: State<'_, AppState>) -> Result<Vec<ConversationSummary>, String> {
-    state.backend.list_conversations()
+async fn list_conversations(state: State<'_, AppState>) -> Result<Vec<ConversationSummary>, String> {
+    state.backend.list_conversations().await
 }
 
 #[tauri::command]
-fn load_conversation(state: State<'_, AppState>, id: i64) -> Result<Vec<StoredMessage>, String> {
-    state.backend.load_conversation(id)
+async fn load_conversation(state: State<'_, AppState>, id: i64) -> Result<Vec<StoredMessage>, String> {
+    state.backend.load_conversation(id).await
 }
 
 #[tauri::command]
-fn delete_conversation(state: State<'_, AppState>, id: i64) -> Result<(), String> {
-    state.backend.delete_conversation(id)
+async fn delete_conversation(state: State<'_, AppState>, id: i64) -> Result<(), String> {
+    state.backend.delete_conversation(id).await
 }
 
 #[tauri::command]
@@ -295,11 +299,23 @@ fn main() {
             _ => {}
         })
         .setup(|app| {
-            let (cfg, created, config_error) = match Config::load_or_create(&config_path()) {
-                Ok((c, created)) => (c, created, None),
-                Err(e) => (Config::builtin(), false, Some(e.to_string())),
+            // A client.yaml means "use the server"; without one the app works on this machine alone.
+            let client_yaml = client_config::path();
+            let (backend, created, config_error): (Box<dyn Backend>, bool, Option<String>) = if client_yaml.exists() {
+                let tokens = Box::new(tokens::Keychain::new(&client_yaml.display().to_string()));
+                (Box::new(Remote::new(client_config::ClientConfig::load(&client_yaml), tokens)), false, None)
+            } else {
+                let (created, err) = match Config::load_or_create(&config_path()) {
+                    Ok((_, created)) => (created, None),
+                    Err(e) => (false, Some(e.to_string())),
+                };
+                (Box::new(Local::open(&db_path())?), created, err)
             };
-            let backend: Box<dyn Backend> = Box::new(Local::open(&db_path())?);
+            let (cfg, settings_error) = match tauri::async_runtime::block_on(backend.settings()) {
+                Ok(s) => (s, None),
+                Err(e) => (Settings::builtin(), Some(e)),
+            };
+            let config_error = config_error.or(settings_error);
 
             app.manage(AppState {
                 backend,
