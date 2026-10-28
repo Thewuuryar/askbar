@@ -23,6 +23,10 @@ async fn main() {
             std::process::exit(2);
         }
     };
+    if let Err(e) = askbar_server::secrets::Secrets::from_env() {
+        eprintln!("error: {e}");
+        std::process::exit(2);
+    }
     let data_dir = std::path::PathBuf::from(std::env::var("ASKBAR_DATA_DIR").unwrap_or_else(|_| "data".into()));
     match askbar_core::Db::open(&data_dir.join("askbar.db")).and_then(|db| db.seed_server()) {
         Ok(user) => tracing::info!(%user, "database ready"),

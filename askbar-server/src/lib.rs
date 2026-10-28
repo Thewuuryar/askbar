@@ -1,5 +1,7 @@
 //! Askbar server. Two separate routers: the device API and the admin site.
 
+pub mod secrets;
+
 use askbar_proto::Health;
 use axum::{extract::Request, middleware, middleware::Next, response::Response, routing::get, Json, Router};
 
