@@ -104,3 +104,7 @@ Not verified: **Windows and macOS** (no machines here; `.github/workflows/build.
 - **Settings UI**: today it is the YAML file only.
 - **Self-improving memory**: after a conversation, a cheap model call proposes add/update/delete operations on a list of durable facts; the top matches are injected into the next system prompt; a periodic pass merges duplicates and drops stale entries; a view lets you edit or delete anything it learned. The schema has a migration slot ready.
 - Conversation search; renaming.
+
+## License
+
+Askbar is licensed under the [GNU Affero General Public License v3.0 or later](LICENSE) (AGPL-3.0-or-later).
