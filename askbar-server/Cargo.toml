@@ -8,7 +8,9 @@ description = "Askbar server: history, providers and settings behind an HTTP API
 [dependencies]
 askbar-core = { path = "../core" }
 askbar-proto = { path = "../askbar-proto" }
+argon2 = "0.5"
 axum = "0.8"
+serde = { version = "1", features = ["derive"] }
 futures-util = "0.3"
 tokio-stream = "0.1"
 base64 = "0.22"

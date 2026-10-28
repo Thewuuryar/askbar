@@ -102,6 +102,14 @@ async fn main() {
         Ok(user) => tracing::info!(%user, "database ready"),
         Err(e) => die(e, 1),
     }
+    match askbar_server::admin::init_password(&db, &std::env::var("ASKBAR_ADMIN_PASSWORD").unwrap_or_default()) {
+        Ok(true) => tracing::info!("admin password set from ASKBAR_ADMIN_PASSWORD"),
+        Ok(false) => {}
+        Err(e) => die(e, 1),
+    }
+    if db.conn().query_row("SELECT 1 FROM settings WHERE key = 'admin_password_hash'", [], |_| Ok(())).is_err() {
+        tracing::warn!("no admin password: set ASKBAR_ADMIN_PASSWORD to enable the admin site");
+    }
     let state = askbar_server::AppState::new(db, secrets);
     let result = tokio::try_join!(
         serve(api, askbar_server::api_router(state.clone())),

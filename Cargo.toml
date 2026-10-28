@@ -7,3 +7,9 @@ lto = true
 codegen-units = 1
 opt-level = "s"
 strip = true
+
+# Password hashing is deliberately slow; keep it usable in debug builds and tests.
+[profile.dev.package.argon2]
+opt-level = 3
+[profile.dev.package.blake2]
+opt-level = 3

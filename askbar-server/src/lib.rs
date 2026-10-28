@@ -1,5 +1,6 @@
 //! Askbar server. Two separate routers: the device API and the admin site.
 
+pub mod admin;
 pub mod api;
 pub mod auth;
 pub mod chat;
@@ -28,6 +29,7 @@ pub struct AppState {
     pub db: Mutex<Db>,
     pub secrets: Secrets,
     pub http: askbar_core::HttpClient,
+    pub admin: admin::AdminAuth,
     /// Oldest client version the API still serves.
     pub min_client: String,
 }
@@ -42,6 +44,7 @@ impl AppState {
             db: Mutex::new(db),
             secrets,
             http: askbar_core::http_client(),
+            admin: admin::AdminAuth::default(),
             min_client: min_client.to_string(),
         })
     }
@@ -84,8 +87,18 @@ async fn require_client_version(State(state): State<Arc<AppState>>, req: Request
     }
 }
 
-pub fn admin_router(_state: Arc<AppState>) -> Router {
-    Router::new().route("/admin/health", get(admin_health)).layer(middleware::from_fn(log_requests))
+pub fn admin_router(state: Arc<AppState>) -> Router {
+    let protected: Router<Arc<AppState>> = Router::new()
+        .route("/admin/session", get(|| async { StatusCode::NO_CONTENT }))
+        .route("/admin/logout", post(admin::logout))
+        .route_layer(middleware::from_fn_with_state(state.clone(), admin::require_session));
+    Router::new()
+        .route("/admin/health", get(admin_health))
+        .route("/admin/login", post(admin::login))
+        .merge(protected)
+        .layer(middleware::from_fn(admin::require_admin_header))
+        .with_state(state)
+        .layer(middleware::from_fn(log_requests))
 }
 
 async fn health(State(state): State<Arc<AppState>>) -> Json<Health> {
