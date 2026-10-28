@@ -28,9 +28,15 @@
         theme: window.__opts.theme || 'auto', width: 720, max_height: 640, history_width: 260,
         top_percent: 0.22, hide_on_blur: true, macos_hide_dock_icon: true,
       },
-      hotkey: 'Ctrl+Shift+Space', provider: 'mock', model: 'mock-model',
+      hotkey: 'Ctrl+Shift+Space', provider: window.__opts.provider || 'mock', model: 'mock-model',
       notice: window.__opts.notice || null,
     }),
+    // opts.status stands for the server's state: { kind, message, providers? } or absent when healthy.
+    server_status: () => (window.__opts.status ? JSON.parse(JSON.stringify(window.__opts.status)) : null),
+    set_active_provider: ({ name }) => {
+      window.__opts.provider = name;
+      if (window.__opts.status && window.__opts.status.kind === 'provider_missing') window.__opts.status = null;
+    },
     list_conversations: () =>
       db.convs.slice().sort((a, b) => b.updated_at - a.updated_at || b.id - a.id)
         .map((c) => ({ id: c.id, title: c.title, updated_at: c.updated_at, message_count: c.messages.length })),
@@ -43,6 +49,11 @@
     open_url: () => {},
     ask: async ({ conversationId, text, onEvent }) => {
       cancelFlag = false;
+      const st = window.__opts.status;
+      if (st && st.kind !== 'provider_missing') {
+        onEvent.onmessage({ event: 'error', message: st.message });
+        return;
+      }
       let conv = db.convs.find((c) => c.id === conversationId);
       if (!conv) {
         conv = { id: db.nextConv++, title: title(text), updated_at: ++db.clock, messages: [] };

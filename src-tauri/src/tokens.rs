@@ -1,5 +1,6 @@
 //! The device token lives in the OS keychain, never in a config file.
 
+#[cfg(test)]
 use std::sync::Mutex;
 
 pub trait TokenStore: Send + Sync {

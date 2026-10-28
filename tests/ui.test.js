@@ -309,6 +309,68 @@ async function waitIdle(page) {
   });
   await page.context().close();
 
+  // ------------------------------------------------- server states
+  const STATES = {
+    offline: { kind: 'offline', message: 'Server offline. Could not reach http://localhost:8080. Check that it is running and that you are on the right network.' },
+    rejected: { kind: 'rejected', message: 'Token rejected. The server no longer accepts this device; it may have been revoked.' },
+    update_needed: { kind: 'update_needed', message: 'Update needed. This version of Askbar is too old for the server.' },
+    provider_missing: { kind: 'provider_missing', message: 'Provider "gone" no longer exists on the server. Pick another.', providers: ['alpha', 'beta'] },
+  };
+
+  page = await open(browser);
+  await step('no banner while the server is healthy', async () => {
+    assert.equal(await page.isHidden('#status'), true);
+  });
+  await page.context().close();
+
+  for (const [kind, status] of Object.entries(STATES)) {
+    page = await open(browser, { status });
+    await step(`${kind}: banner shows the message and a way forward when the window opens`, async () => {
+      await page.waitForSelector('#status:not([hidden])');
+      assert.equal(await page.getAttribute('#status', 'data-kind'), kind);
+      assert.equal(await page.innerText('#status-text'), status.message);
+      assert.equal(await page.isVisible('#status-actions [data-action="retry"]'), true);
+      await shot(page, `09-status-${kind}`);
+    });
+    if (kind !== 'provider_missing') {
+      await step(`${kind}: sending fails visibly, and Retry clears the banner once the server is back`, async () => {
+        await ask(page, 'hello');
+        await waitIdle(page);
+        assert.match(await page.innerText('.msg.error'), new RegExp(status.message.slice(0, 20)));
+        await page.evaluate(() => { window.__opts.status = null; });
+        await page.click('#status-actions [data-action="retry"]');
+        await page.waitForSelector('#status', { state: 'hidden' });
+        await ask(page, 'second try');
+        await waitIdle(page);
+        assert.equal(await page.locator('.msg.assistant').count() >= 1, true);
+      });
+    }
+    await page.context().close();
+  }
+
+  page = await open(browser, { status: STATES.provider_missing });
+  await step('provider_missing: picking another provider fixes it and updates the label', async () => {
+    await page.waitForSelector('#status:not([hidden])');
+    const labels = await page.locator('#status-actions [data-action="provider"]').allInnerTexts();
+    assert.deepEqual(labels, ['Use alpha', 'Use beta']);
+    await page.click('#status-actions [data-action="provider"] >> text=Use beta');
+    await page.waitForSelector('#status', { state: 'hidden' });
+    assert.deepEqual(await calls(page, 'set_active_provider'), [{ name: 'beta' }]);
+    await ask(page, 'works now');
+    await waitIdle(page);
+    assert.match(await page.innerText('#model-label'), /via beta/);
+  });
+  await step('server_status is re-checked when the window is shown again', async () => {
+    await page.evaluate(() => { window.__opts.status = { kind: 'offline', message: 'Server offline.' }; });
+    await page.evaluate(() => window.__listeners['askbar:shown']());
+    await page.waitForSelector('#status:not([hidden])');
+    assert.equal(await page.getAttribute('#status', 'data-kind'), 'offline');
+  });
+  await step('no JavaScript errors in the status screens', async () => {
+    assert.deepEqual(page.errors, []);
+  });
+  await page.context().close();
+
   await browser.close();
   console.log(failures ? `\n${failures} step(s) failed` : '\nall UI steps passed');
   process.exit(failures ? 1 : 0);

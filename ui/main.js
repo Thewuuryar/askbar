@@ -22,6 +22,9 @@
     noticeText: $('notice-text'),
     noticeConfig: $('notice-config'),
     noticeClose: $('notice-close'),
+    status: $('status'),
+    statusText: $('status-text'),
+    statusActions: $('status-actions'),
     modelLabel: $('model-label'),
   };
 
@@ -108,6 +111,50 @@
   }
   function hideNotice() {
     if (!el.notice.hidden) { el.notice.hidden = true; layout(); }
+  }
+
+  // -------------------------------------------------------------- status
+  // The backend reports problems with the server (offline, token rejected,
+  // update needed, provider gone). `null` means all is well.
+
+  function actionButton(label, onClick, name) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'text-btn';
+    b.dataset.action = name;
+    b.textContent = label;
+    b.addEventListener('click', onClick);
+    return b;
+  }
+
+  function showStatus(st) {
+    el.statusActions.textContent = '';
+    if (!st) {
+      if (!el.status.hidden) { el.status.hidden = true; layout(); }
+      return;
+    }
+    el.status.dataset.kind = st.kind;
+    el.statusText.textContent = st.message;
+    for (const name of st.providers || []) {
+      el.statusActions.appendChild(actionButton('Use ' + name, async () => {
+        try { await invoke('set_active_provider', { name }); } catch (e) { showNotice(String(e)); }
+        await refreshBootstrap().catch(() => {});
+        await checkStatus();
+      }, 'provider'));
+    }
+    el.statusActions.appendChild(actionButton('Retry', async () => {
+      await refreshBootstrap().catch(() => {});
+      await checkStatus();
+    }, 'retry'));
+    el.status.hidden = false;
+    layout();
+  }
+
+  async function checkStatus() {
+    let st = null;
+    try { st = await invoke('server_status'); } catch (_) { /* local mode has nothing to report */ }
+    showStatus(st);
+    return st;
   }
 
   // ------------------------------------------------------------ messages
@@ -217,6 +264,7 @@
             scheduleRender(reply);
             break;
           case 'done':
+            showStatus(null);
             finish();
             break;
           case 'cancelled':
@@ -225,6 +273,7 @@
           case 'error':
             if (!reply.content.trim()) removeMessage(reply);
             addError(m.message);
+            checkStatus();
             finish();
             break;
         }
@@ -235,6 +284,7 @@
         .catch((e) => {
           if (!reply.content.trim()) removeMessage(reply);
           addError(String(e));
+          checkStatus();
           finish();
         });
     });
@@ -456,6 +506,7 @@
 
   async function onShown() {
     try { await refreshBootstrap(); } catch (_) { /* keep the previous settings */ }
+    checkStatus();
     if (state.historyOpen) refreshHistory();
     el.input.focus();
     el.input.select();
@@ -466,6 +517,7 @@
 
   (async () => {
     try { await refreshBootstrap(); } catch (e) { showNotice(String(e)); }
+    checkStatus();
     await refreshHistory();
     syncChrome();
     el.input.focus();

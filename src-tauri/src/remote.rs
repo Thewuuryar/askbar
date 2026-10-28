@@ -1,22 +1,26 @@
 //! `Remote`: the backend that talks to an Askbar server over HTTPS.
 
-use crate::backend::{Backend, Emit, Settings, StreamEvent};
+use crate::backend::{Backend, ClientStatus, Emit, Settings, StreamEvent};
 use crate::client_config::{merge_ui, ClientConfig};
 use crate::tokens::TokenStore;
 use askbar_core::{ConversationSummary, SseParser, StoredMessage};
-use askbar_proto::{ChatEvent, ChatRequest, Conversation, ConversationDetail, ProviderInfo};
+use askbar_proto::{ChatEvent, ChatRequest, Conversation, ConversationDetail, DisplaySettings, ProviderInfo};
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use reqwest::{Method, RequestBuilder, StatusCode, Url};
+use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 use tokio::sync::oneshot;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+/// Health and status checks must not make the window feel stuck.
+const CHECK_TIMEOUT: Duration = Duration::from_secs(2);
 
 struct Inner {
-    cfg: ClientConfig,
+    cfg: Mutex<ClientConfig>,
+    path: PathBuf,
     base: Url,
     http: reqwest::Client,
     tokens: Box<dyn TokenStore>,
@@ -35,7 +39,7 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 
 impl Remote {
     /// A bad `client.yaml` doesn't stop the app; every call reports the problem instead.
-    pub fn new(cfg: Result<ClientConfig, String>, tokens: Box<dyn TokenStore>) -> Remote {
+    pub fn new(cfg: Result<ClientConfig, String>, path: PathBuf, tokens: Box<dyn TokenStore>) -> Remote {
         let inner = cfg.and_then(|cfg| {
             let base = cfg.server()?;
             let http = reqwest::Client::builder()
@@ -43,7 +47,7 @@ impl Remote {
                 .user_agent(format!("askbar/{VERSION}"))
                 .build()
                 .map_err(|e| e.to_string())?;
-            Ok(Inner { cfg, base, http, tokens, ids: Mutex::new(Vec::new()) })
+            Ok(Inner { cfg: Mutex::new(cfg), path, base, http, tokens, ids: Mutex::new(Vec::new()) })
         });
         Remote { inner }
     }
@@ -54,6 +58,10 @@ impl Remote {
 }
 
 impl Inner {
+    fn cfg(&self) -> ClientConfig {
+        lock(&self.cfg).clone()
+    }
+
     fn url(&self, path: &str) -> Url {
         let mut u = self.base.clone();
         u.set_path(&format!("{}{path}", self.base.path().trim_end_matches('/')));
@@ -78,6 +86,10 @@ impl Inner {
         Ok(resp)
     }
 
+    async fn http_status(&self, req: RequestBuilder) -> Result<StatusCode, reqwest::Error> {
+        Ok(req.send().await?.status())
+    }
+
     async fn get_json<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T, String> {
         let resp = self.send(self.request(Method::GET, path)?.timeout(REQUEST_TIMEOUT)).await?;
         resp.json().await.map_err(|e| format!("The server sent an unexpected reply: {e}"))
@@ -98,8 +110,9 @@ impl Inner {
     }
 
     async fn active_provider(&self) -> Result<String, String> {
-        if !self.cfg.active_provider.trim().is_empty() {
-            return Ok(self.cfg.active_provider.trim().to_string());
+        let wanted = self.cfg().active_provider;
+        if !wanted.trim().is_empty() {
+            return Ok(wanted.trim().to_string());
         }
         let list: Vec<ProviderInfo> = self.get_json("/api/v1/providers").await?;
         list.into_iter().next().map(|p| p.name).ok_or_else(|| "The server has no providers configured yet.".into())
@@ -119,16 +132,86 @@ fn check_status(status: StatusCode) -> Result<(), String> {
 impl Backend for Remote {
     async fn settings(&self) -> Result<Settings, String> {
         let i = self.inner()?;
-        let server: askbar_proto::Settings = i.get_json("/api/v1/settings").await?;
-        let providers: Vec<ProviderInfo> = i.get_json("/api/v1/providers").await?;
-        let wanted = i.cfg.active_provider.trim();
+        let cfg = i.cfg();
+        // Offline is not an error here: the window still opens with the local
+        // look and feel, and `status` tells the user what is wrong.
+        let quick = |path: &str| i.request(Method::GET, path).map(|r| r.timeout(CHECK_TIMEOUT));
+        let display = match quick("/api/v1/settings") {
+            Ok(req) => match i.send(req).await {
+                Ok(r) => r.json::<askbar_proto::Settings>().await.map(|s| s.display).unwrap_or_default(),
+                Err(_) => DisplaySettings::default(),
+            },
+            Err(_) => DisplaySettings::default(),
+        };
+        let providers: Vec<ProviderInfo> = match quick("/api/v1/providers") {
+            Ok(req) => match i.send(req).await {
+                Ok(r) => r.json().await.unwrap_or_default(),
+                Err(_) => Vec::new(),
+            },
+            Err(_) => Vec::new(),
+        };
+        let wanted = cfg.active_provider.trim();
         let active = providers.iter().find(|p| wanted.is_empty() || p.name == wanted);
         Ok(Settings {
-            ui: merge_ui(&server.display, &i.cfg.ui),
-            hotkey: i.cfg.hotkey.clone(),
+            ui: merge_ui(&display, &cfg.ui),
+            hotkey: cfg.hotkey.clone(),
             provider: active.map(|p| p.name.clone()).unwrap_or_else(|| wanted.to_string()),
             model: active.map(|p| p.model.clone()).unwrap_or_default(),
         })
+    }
+
+    async fn status(&self) -> Option<ClientStatus> {
+        let i = match self.inner() {
+            Ok(i) => i,
+            Err(e) => return Some(ClientStatus::new("problem", e)),
+        };
+        let offline = || {
+            ClientStatus::new(
+                "offline",
+                format!("Server offline. Could not reach {}. Check that it is running and that you are on the right network.", i.base),
+            )
+        };
+        // Reachable at all? The health endpoint needs neither token nor version.
+        match i.http.get(i.url("/api/v1/health")).timeout(CHECK_TIMEOUT).send().await {
+            Ok(r) if r.status().is_success() => {}
+            _ => return Some(offline()),
+        }
+        if i.tokens.get().is_none() {
+            return Some(ClientStatus::new("not_paired", "This device is not paired with the server yet."));
+        }
+        let req = i.request(Method::GET, "/api/v1/whoami").ok()?.timeout(CHECK_TIMEOUT);
+        match i.http_status(req).await {
+            Err(_) => return Some(offline()),
+            Ok(StatusCode::UNAUTHORIZED) => {
+                return Some(ClientStatus::new("rejected", "Token rejected. The server no longer accepts this device; it may have been revoked."))
+            }
+            Ok(StatusCode::UPGRADE_REQUIRED) => {
+                return Some(ClientStatus::new("update_needed", "Update needed. This version of Askbar is too old for the server."))
+            }
+            Ok(s) if s.is_success() => {}
+            Ok(s) => return Some(ClientStatus::new("problem", format!("The server answered {s}."))),
+        }
+        let providers: Vec<ProviderInfo> = i.get_json("/api/v1/providers").await.ok()?;
+        let wanted = i.cfg().active_provider;
+        let wanted = wanted.trim();
+        if providers.is_empty() {
+            return Some(ClientStatus::new("problem", "The server has no providers yet. Add one on its admin page."));
+        }
+        if !wanted.is_empty() && !providers.iter().any(|p| p.name == wanted) {
+            let mut st = ClientStatus::new("provider_missing", format!("Provider \"{wanted}\" no longer exists on the server. Pick another."));
+            st.providers = providers.into_iter().map(|p| p.name).collect();
+            return Some(st);
+        }
+        None
+    }
+
+    async fn set_active_provider(&self, name: String) -> Result<(), String> {
+        let i = self.inner()?;
+        let mut cfg = i.cfg();
+        cfg.active_provider = name;
+        cfg.save(&i.path)?;
+        *lock(&i.cfg) = cfg;
+        Ok(())
     }
 
     async fn list_providers(&self) -> Result<Vec<ProviderInfo>, String> {
@@ -279,7 +362,7 @@ mod tests {
         let (_mock, mock_port) = start_mock();
         let (url, token) = start_server(mock_port).await;
         let cfg = ClientConfig { server_url: url, ..Default::default() };
-        let remote = Remote::new(Ok(cfg), Box::new(MemoryTokens::with(&token)));
+        let remote = Remote::new(Ok(cfg), PathBuf::new(), Box::new(MemoryTokens::with(&token)));
 
         let s = remote.settings().await.unwrap();
         assert_eq!((s.provider.as_str(), s.model.as_str()), ("mock", "mock-model"));
@@ -313,11 +396,100 @@ mod tests {
     #[tokio::test]
     async fn unpaired_or_misconfigured_clients_explain_themselves() {
         let cfg = ClientConfig { server_url: "http://127.0.0.1:1".into(), ..Default::default() };
-        let r = Remote::new(Ok(cfg), Box::new(MemoryTokens::default()));
+        let r = Remote::new(Ok(cfg), PathBuf::new(), Box::new(MemoryTokens::default()));
         assert!(r.list_conversations().await.unwrap_err().contains("not paired"));
 
         let bad = ClientConfig { server_url: "http://192.168.1.5:8080".into(), ..Default::default() };
-        let r = Remote::new(Ok(bad), Box::new(MemoryTokens::default()));
+        let r = Remote::new(Ok(bad), PathBuf::new(), Box::new(MemoryTokens::default()));
         assert!(r.settings().await.unwrap_err().contains("allow_insecure"));
+    }
+
+    /// A real server with a mock-less provider list; `min_client` lets a test make the client too old.
+    async fn status_server(min_client: &str) -> (String, String, Arc<askbar_server::AppState>) {
+        use askbar_server::{auth, secrets::Secrets, AppState};
+        let db = askbar_core::Db::open_in_memory().unwrap();
+        let user = db.seed_server().unwrap();
+        for (n, name) in ["alpha", "beta"].iter().enumerate() {
+            db.conn()
+                .execute(
+                    "INSERT INTO providers (id, name, type, base_url, model, created_at) VALUES (?1,?2,'openai','http://x/v1','m',0)",
+                    rusqlite::params![format!("p{n}"), name],
+                )
+                .unwrap();
+        }
+        let code = auth::create_pair_code(&db, &user, "test", 600).unwrap();
+        let state = AppState::with_min_client(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), min_client);
+        let token = auth::redeem_pair_code(&state.db.lock().unwrap(), &code).unwrap().unwrap();
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", l.local_addr().unwrap());
+        let app = askbar_server::api_router(state.clone());
+        tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
+        (url, token, state)
+    }
+
+    fn remote_for(url: &str, token: Option<&str>, active: &str, path: PathBuf) -> Remote {
+        let cfg = ClientConfig { server_url: url.into(), active_provider: active.into(), ..Default::default() };
+        let tokens: Box<dyn crate::tokens::TokenStore> = match token {
+            Some(t) => Box::new(MemoryTokens::with(t)),
+            None => Box::new(MemoryTokens::default()),
+        };
+        Remote::new(Ok(cfg), path, tokens)
+    }
+
+    async fn kind(r: &Remote) -> Option<String> {
+        r.status().await.map(|s| s.kind)
+    }
+
+    #[tokio::test]
+    async fn status_reports_each_problem_with_its_kind() {
+        let (url, token, state) = status_server("0.1.0").await;
+
+        assert_eq!(kind(&remote_for(&url, Some(&token), "alpha", PathBuf::new())).await, None);
+        assert_eq!(kind(&remote_for(&url, Some(&token), "", PathBuf::new())).await, None, "no active provider means the first one");
+        assert_eq!(kind(&remote_for(&url, None, "alpha", PathBuf::new())).await.as_deref(), Some("not_paired"));
+        assert_eq!(kind(&remote_for(&url, Some("abt_wrong"), "alpha", PathBuf::new())).await.as_deref(), Some("rejected"));
+
+        let missing = remote_for(&url, Some(&token), "gone", PathBuf::new()).status().await.unwrap();
+        assert_eq!(missing.kind, "provider_missing");
+        assert!(missing.message.contains("gone") && missing.message.contains("Pick another"));
+        assert_eq!(missing.providers, ["alpha", "beta"]);
+
+        // Revoking the device turns "ok" into "rejected".
+        let r = remote_for(&url, Some(&token), "alpha", PathBuf::new());
+        assert_eq!(kind(&r).await, None);
+        state.db.lock().unwrap().conn().execute("UPDATE device_tokens SET revoked = 1", []).unwrap();
+        assert_eq!(kind(&r).await.as_deref(), Some("rejected"));
+    }
+
+    #[tokio::test]
+    async fn status_reports_update_needed_and_offline() {
+        let (url, token, _state) = status_server("99.0.0").await;
+        assert_eq!(kind(&remote_for(&url, Some(&token), "alpha", PathBuf::new())).await.as_deref(), Some("update_needed"));
+
+        // Nothing listens here: refused immediately, well inside the 2 second budget.
+        let started = std::time::Instant::now();
+        let st = remote_for("http://127.0.0.1:1", Some("t"), "alpha", PathBuf::new()).status().await.unwrap();
+        assert_eq!(st.kind, "offline");
+        assert!(st.message.starts_with("Server offline"));
+        assert!(started.elapsed() < Duration::from_secs(3));
+
+        // A bad client.yaml is reported, not a crash.
+        let broken = Remote::new(Err("Could not parse client.yaml".into()), PathBuf::new(), Box::new(MemoryTokens::default()));
+        assert_eq!(broken.status().await.unwrap().kind, "problem");
+    }
+
+    #[tokio::test]
+    async fn picking_another_provider_is_saved_and_clears_the_state() {
+        let (url, token, _state) = status_server("0.1.0").await;
+        let dir = std::env::temp_dir().join(format!("askbar-pick-{}", std::process::id()));
+        let path = dir.join("client.yaml");
+        let r = remote_for(&url, Some(&token), "gone", path.clone());
+        assert_eq!(kind(&r).await.as_deref(), Some("provider_missing"));
+        r.set_active_provider("beta".into()).await.unwrap();
+        assert_eq!(kind(&r).await, None);
+        let saved = ClientConfig::load(&path).unwrap();
+        assert_eq!((saved.active_provider.as_str(), saved.server_url.as_str()), ("beta", url.as_str()));
+        assert!(!std::fs::read_to_string(&path).unwrap().contains("token"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

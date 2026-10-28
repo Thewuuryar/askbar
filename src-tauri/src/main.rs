@@ -184,6 +184,17 @@ async fn bootstrap(state: State<'_, AppState>) -> Result<Bootstrap, String> {
     Ok(Bootstrap { ui: cfg.ui, hotkey: cfg.hotkey, provider: cfg.provider, model: cfg.model, notice })
 }
 
+/// `null` when the backend is fine; otherwise what is wrong and (for a missing provider) the alternatives.
+#[tauri::command]
+async fn server_status(state: State<'_, AppState>) -> Result<Option<backend::ClientStatus>, String> {
+    Ok(state.backend.status().await)
+}
+
+#[tauri::command]
+async fn set_active_provider(state: State<'_, AppState>, name: String) -> Result<(), String> {
+    state.backend.set_active_provider(name).await
+}
+
 #[tauri::command]
 async fn list_conversations(state: State<'_, AppState>) -> Result<Vec<ConversationSummary>, String> {
     state.backend.list_conversations().await
@@ -303,7 +314,7 @@ fn main() {
             let client_yaml = client_config::path();
             let (backend, created, config_error): (Box<dyn Backend>, bool, Option<String>) = if client_yaml.exists() {
                 let tokens = Box::new(tokens::Keychain::new(&client_yaml.display().to_string()));
-                (Box::new(Remote::new(client_config::ClientConfig::load(&client_yaml), tokens)), false, None)
+                (Box::new(Remote::new(client_config::ClientConfig::load(&client_yaml), client_yaml.clone(), tokens)), false, None)
             } else {
                 let (created, err) = match Config::load_or_create(&config_path()) {
                     Ok((_, created)) => (created, None),
@@ -387,6 +398,8 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             bootstrap,
+            server_status,
+            set_active_provider,
             list_conversations,
             load_conversation,
             delete_conversation,

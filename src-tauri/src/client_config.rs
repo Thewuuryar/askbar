@@ -4,7 +4,7 @@
 use askbar_core::{Theme, Ui};
 use askbar_proto::DisplaySettings;
 use reqwest::Url;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 /// Where `client.yaml` lives. `ASKBAR_CLIENT_CONFIG` overrides it (used by tests and second profiles).
@@ -18,19 +18,26 @@ pub fn path() -> PathBuf {
 }
 
 /// Display fields a user may override locally; anything left out follows the server.
-#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
 #[serde(default)]
 pub struct UiOverrides {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub theme: Option<Theme>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub width: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub max_height: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub history_width: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub top_percent: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub hide_on_blur: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub macos_hide_dock_icon: Option<bool>,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(default)]
 pub struct ClientConfig {
     pub server_url: String,
@@ -53,6 +60,14 @@ impl Default for ClientConfig {
 }
 
 impl ClientConfig {
+    pub fn save(&self, path: &Path) -> Result<(), String> {
+        let text = serde_yaml_ng::to_string(self).map_err(|e| e.to_string())?;
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
+        }
+        std::fs::write(path, text).map_err(|e| format!("Could not write {}: {e}", path.display()))
+    }
+
     pub fn load(path: &Path) -> Result<ClientConfig, String> {
         let text = std::fs::read_to_string(path).map_err(|e| format!("Could not read {}: {e}", path.display()))?;
         if text.trim().is_empty() {

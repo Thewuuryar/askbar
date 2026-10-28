@@ -45,6 +45,22 @@ pub enum StreamEvent {
     Error { message: String },
 }
 
+/// Something wrong between this client and its backend, with a way forward in the UI.
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct ClientStatus {
+    /// "offline", "rejected", "not_paired", "update_needed", "provider_missing" or "problem".
+    pub kind: String,
+    pub message: String,
+    /// For "provider_missing": the providers the user can pick instead.
+    pub providers: Vec<String>,
+}
+
+impl ClientStatus {
+    pub fn new(kind: &str, message: impl Into<String>) -> ClientStatus {
+        ClientStatus { kind: kind.into(), message: message.into(), providers: Vec::new() }
+    }
+}
+
 pub type Emit<'a> = &'a (dyn Fn(StreamEvent) + Send + Sync);
 
 #[async_trait]
@@ -56,6 +72,13 @@ pub trait Backend: Send + Sync {
     async fn list_conversations(&self) -> Result<Vec<ConversationSummary>, String>;
     async fn load_conversation(&self, id: i64) -> Result<Vec<StoredMessage>, String>;
     async fn delete_conversation(&self, id: i64) -> Result<(), String>;
+    /// `None` when everything works. Checked when the window opens and after a failed send.
+    async fn status(&self) -> Option<ClientStatus> {
+        None
+    }
+    async fn set_active_provider(&self, _name: String) -> Result<(), String> {
+        Err("This setup has no server to pick a provider from; edit `active_provider` in config.yaml.".into())
+    }
     /// Send a message and stream the reply through `emit`. Failures are
     /// reported as `StreamEvent::Error`, not as a return value.
     async fn ask(&self, conversation_id: Option<i64>, text: String, cancel: oneshot::Receiver<()>, emit: Emit<'_>);
