@@ -371,6 +371,54 @@ async function waitIdle(page) {
   });
   await page.context().close();
 
+  // ------------------------------------------------- pairing screen
+  page = await open(browser, { status: { kind: 'not_paired', message: 'This device is not paired with the server yet.' } });
+  await step('not paired: the banner offers the pairing screen', async () => {
+    await page.waitForSelector('#status:not([hidden])');
+    assert.equal(await page.isVisible('#status-actions [data-action="pair"]'), true);
+    assert.equal(await page.isHidden('#pair'), true);
+    await page.click('#status-actions [data-action="pair"]');
+    assert.equal(await page.isVisible('#pair'), true);
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'pair-input');
+    await shot(page, '10-pairing');
+  });
+  await step('a bad pairing string shows the reason and stays on the screen', async () => {
+    await page.fill('#pair-input', 'hello');
+    await page.click('#pair-submit');
+    await page.waitForSelector('#pair-error:not([hidden])');
+    assert.match(await page.innerText('#pair-error'), /not a pairing string/);
+    await page.fill('#pair-input', 'askbar-pair:bad');
+    await page.click('#pair-submit');
+    await page.waitForFunction(() => /wrong, expired/.test(document.getElementById('pair-error').textContent));
+    assert.equal(await page.isVisible('#pair'), true);
+  });
+  await step('Esc closes the pairing screen without hiding the window', async () => {
+    await page.press('#pair-input', 'Escape');
+    assert.equal(await page.isHidden('#pair'), true);
+    assert.equal((await calls(page, 'hide_window')).length, 0);
+    await page.evaluate(() => window.__listeners['askbar:pair']());
+    assert.equal(await page.isVisible('#pair'), true);
+  });
+  await step('a good pairing string pairs, clears the banner and lets you ask', async () => {
+    await page.fill('#pair-input', 'askbar-pair:abc');
+    await page.press('#pair-input', 'Enter');
+    await page.waitForSelector('#pair', { state: 'hidden' });
+    await page.waitForSelector('#status', { state: 'hidden' });
+    assert.deepEqual((await calls(page, 'pair')).pop(), { pairing: 'askbar-pair:abc' });
+    await ask(page, 'hello after pairing');
+    await waitIdle(page);
+    assert.equal(await page.locator('.msg.assistant').count(), 1);
+  });
+  await step('rejected token also offers the pairing screen', async () => {
+    await page.evaluate(() => { window.__opts.status = { kind: 'rejected', message: 'Token rejected.' }; });
+    await page.evaluate(() => window.__listeners['askbar:shown']());
+    await page.waitForSelector('#status-actions [data-action="pair"]');
+  });
+  await step('no JavaScript errors on the pairing screen', async () => {
+    assert.deepEqual(page.errors, []);
+  });
+  await page.context().close();
+
   await browser.close();
   console.log(failures ? `\n${failures} step(s) failed` : '\nall UI steps passed');
   process.exit(failures ? 1 : 0);

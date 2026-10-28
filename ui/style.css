@@ -175,6 +175,27 @@ button { font: inherit; color: inherit; }
 .status span#status-text { flex: 1 1 240px; min-width: 0; overflow-wrap: anywhere; }
 .status-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 
+/* Pairing screen: shown instead of the conversation until this device is paired. */
+.pair {
+  padding: 12px 20px 14px;
+  font-size: 13.5px;
+  border-bottom: 1px solid var(--line);
+}
+.pair p { margin: 0 0 8px; }
+.pair code { font-family: ui-monospace, monospace; font-size: 12.5px; }
+.pair-row { display: flex; gap: 6px; align-items: center; }
+.pair-row input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 7px 9px;
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.pair-error { margin: 8px 0 0; color: #c0392b; overflow-wrap: anywhere; }
+
 /* -------------------------------------------------------------- thread */
 
 .thread {

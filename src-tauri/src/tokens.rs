@@ -5,9 +5,8 @@ use std::sync::Mutex;
 
 pub trait TokenStore: Send + Sync {
     fn get(&self) -> Option<String>;
-    #[allow(dead_code)] // used by the pairing screen
     fn set(&self, token: &str) -> Result<(), String>;
-    #[allow(dead_code)] // used when the server rejects the token
+    #[allow(dead_code)] // for a future "unpair"
     fn clear(&self);
 }
 
@@ -18,8 +17,8 @@ pub struct Keychain {
 }
 
 impl Keychain {
-    pub fn new(profile: &str) -> Keychain {
-        Keychain { profile: profile.to_string() }
+    pub fn new(client_yaml: &std::path::Path) -> Keychain {
+        Keychain { profile: client_yaml.display().to_string() }
     }
 
     fn entry(&self) -> Result<keyring::Entry, keyring::Error> {

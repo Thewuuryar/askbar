@@ -37,6 +37,12 @@
       window.__opts.provider = name;
       if (window.__opts.status && window.__opts.status.kind === 'provider_missing') window.__opts.status = null;
     },
+    // A pairing string is accepted when it starts with the prefix and the code is not "bad".
+    pair: ({ pairing }) => {
+      if (!pairing.startsWith('askbar-pair:')) throw 'That is not a pairing string. It should start with "askbar-pair:".';
+      if (pairing.includes('bad')) throw 'The pairing code is wrong, expired (they last 10 minutes) or already used. Create a new one.';
+      window.__opts.status = null;
+    },
     list_conversations: () =>
       db.convs.slice().sort((a, b) => b.updated_at - a.updated_at || b.id - a.id)
         .map((c) => ({ id: c.id, title: c.title, updated_at: c.updated_at, message_count: c.messages.length })),

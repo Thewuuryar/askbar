@@ -1,14 +1,14 @@
 //! `Remote`: the backend that talks to an Askbar server over HTTPS.
 
 use crate::backend::{Backend, ClientStatus, Emit, Settings, StreamEvent};
-use crate::client_config::{merge_ui, ClientConfig};
+use crate::client_config::{check_server_url, merge_ui, ClientConfig};
 use crate::tokens::TokenStore;
 use askbar_core::{ConversationSummary, SseParser, StoredMessage};
 use askbar_proto::{ChatEvent, ChatRequest, Conversation, ConversationDetail, DisplaySettings, ProviderInfo};
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use reqwest::{Method, RequestBuilder, StatusCode, Url};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 use tokio::sync::oneshot;
@@ -126,6 +126,43 @@ fn check_status(status: StatusCode) -> Result<(), String> {
         StatusCode::UPGRADE_REQUIRED => Err("This version of Askbar is too old for the server. Please update.".into()),
         s => Err(format!("The server answered {s}.")),
     }
+}
+
+/// Redeem a pairing string: exchange its code for a device token, keep the
+/// token in `tokens`, and record the server in `client.yaml` (creating it, or
+/// updating `server_url` and leaving the rest alone).
+pub async fn pair(pairing: &str, client_yaml: &Path, tokens: &dyn TokenStore) -> Result<(), String> {
+    let (url, code) = askbar_proto::decode_pairing(pairing)
+        .ok_or("That is not a pairing string. It should start with \"askbar-pair:\".")?;
+    let mut cfg = if client_yaml.exists() { ClientConfig::load(client_yaml)? } else { ClientConfig::default() };
+    let mut base = check_server_url(&url, cfg.allow_insecure)?;
+    base.set_path(&format!("{}/api/v1/pair", base.path().trim_end_matches('/')));
+
+    let resp = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(5))
+        .build()
+        .map_err(|e| e.to_string())?
+        .post(base)
+        .header(askbar_proto::CLIENT_VERSION_HEADER, VERSION)
+        .json(&askbar_proto::PairRequest { code })
+        .timeout(REQUEST_TIMEOUT)
+        .send()
+        .await
+        .map_err(|_| format!("Could not reach the server at {url}. Check the address and your network."))?;
+    match resp.status() {
+        s if s.is_success() => {}
+        StatusCode::UNAUTHORIZED => return Err("The pairing code is wrong, expired (they last 10 minutes) or already used. Create a new one.".into()),
+        StatusCode::UPGRADE_REQUIRED => return Err("This version of Askbar is too old for the server. Please update.".into()),
+        s => return Err(format!("The server answered {s}.")),
+    }
+    let token = resp
+        .json::<askbar_proto::PairResponse>()
+        .await
+        .map_err(|_| "The server sent an unexpected reply.".to_string())?
+        .token;
+    tokens.set(&token)?;
+    cfg.server_url = url.trim_end_matches('/').to_string();
+    cfg.save(client_yaml)
 }
 
 #[async_trait]
@@ -491,5 +528,89 @@ mod tests {
         assert_eq!((saved.active_provider.as_str(), saved.server_url.as_str()), ("beta", url.as_str()));
         assert!(!std::fs::read_to_string(&path).unwrap().contains("token"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn new_pairing(state: &Arc<askbar_server::AppState>, url: &str) -> String {
+        let db = state.db.lock().unwrap();
+        let user: String = db.conn().query_row("SELECT id FROM users", [], |r| r.get(0)).unwrap();
+        let code = askbar_server::auth::create_pair_code(&db, &user, "second profile", 600).unwrap();
+        askbar_proto::encode_pairing(url, &code)
+    }
+
+    #[tokio::test]
+    async fn pairing_stores_the_token_and_the_server_and_keeps_other_settings() {
+        let (url, _first_token, state) = status_server("0.1.0").await;
+        let dir = std::env::temp_dir().join(format!("askbar-pair-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("profile2").join("client.yaml");
+        let tokens = MemoryTokens::default();
+
+        let s = new_pairing(&state, &url);
+        pair(&s, &path, &tokens).await.unwrap();
+        let token = tokens.get().expect("token stored");
+        let yaml = std::fs::read_to_string(&path).unwrap();
+        assert!(yaml.contains(&url) && !yaml.contains(&token) && !yaml.to_lowercase().contains("token"));
+        let cfg = ClientConfig::load(&path).unwrap();
+        assert_eq!(cfg.server_url, url);
+
+        // The new profile works end to end, and the code can't be used twice.
+        let r = Remote::new(Ok(cfg), path.clone(), Box::new(MemoryTokens::with(&token)));
+        assert_eq!(kind(&r).await, None);
+        assert!(r.list_providers().await.unwrap().len() == 2);
+        assert!(pair(&s, &path, &MemoryTokens::default()).await.unwrap_err().contains("already used"));
+
+        // Re-pairing updates the server but keeps hand-edited settings.
+        std::fs::write(&path, format!("server_url: http://old.invalid\nhotkey: Alt+Space\nactive_provider: beta\nallow_insecure: true\n")).unwrap();
+        pair(&new_pairing(&state, &url), &path, &tokens).await.unwrap();
+        let cfg = ClientConfig::load(&path).unwrap();
+        assert_eq!((cfg.server_url.as_str(), cfg.hotkey.as_str(), cfg.active_provider.as_str(), cfg.allow_insecure), (url.as_str(), "Alt+Space", "beta", true));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn bad_pairing_attempts_explain_themselves_and_store_nothing() {
+        let dir = std::env::temp_dir().join(format!("askbar-pair-bad-{}", std::process::id()));
+        let path = dir.join("client.yaml");
+        let tokens = MemoryTokens::default();
+        let err = |r: Result<(), String>| r.unwrap_err();
+
+        assert!(err(pair("hello", &path, &tokens).await).contains("askbar-pair:"));
+        let lan = askbar_proto::encode_pairing("http://192.168.1.5:8080", "c");
+        assert!(err(pair(&lan, &path, &tokens).await).contains("allow_insecure"));
+        let gone = askbar_proto::encode_pairing("http://127.0.0.1:1", "c");
+        assert!(err(pair(&gone, &path, &tokens).await).contains("Could not reach"));
+
+        let (url, _t, _state) = status_server("0.1.0").await;
+        let wrong = askbar_proto::encode_pairing(&url, "not-a-real-code");
+        assert!(err(pair(&wrong, &path, &tokens).await).contains("wrong, expired"));
+        let (old_url, _t, _state) = status_server("99.0.0").await;
+        let too_old = askbar_proto::encode_pairing(&old_url, "x");
+        assert!(err(pair(&too_old, &path, &tokens).await).contains("too old"));
+
+        assert!(tokens.get().is_none() && !path.exists());
+    }
+
+    /// Manual end-to-end check against a running server, using the real keychain
+    /// and the same `client.yaml` path logic as the app. Run with:
+    ///   ASKBAR_E2E_PAIRING='askbar-pair:…' ASKBAR_CLIENT_CONFIG=/tmp/profile2/client.yaml \
+    ///     cargo test -p askbar e2e -- --ignored --nocapture
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "needs a running server and a keychain"]
+    async fn e2e_pair_and_ask_against_a_running_server() {
+        let pairing = std::env::var("ASKBAR_E2E_PAIRING").expect("set ASKBAR_E2E_PAIRING");
+        let path = crate::client_config::path();
+        pair(&pairing, &path, &crate::tokens::Keychain::new(&path)).await.unwrap();
+
+        // A fresh Remote, as the app builds it at start-up.
+        let remote = Remote::new(ClientConfig::load(&path), path.clone(), Box::new(crate::tokens::Keychain::new(&path)));
+        assert_eq!(remote.status().await, None);
+        let events = Mutex::new(Vec::new());
+        let (_tx, rx) = oneshot::channel();
+        remote.ask(None, "hello from the second profile".into(), rx, &|e| events.lock().unwrap().push(e)).await;
+        let events = events.into_inner().unwrap();
+        assert!(matches!(events.last(), Some(StreamEvent::Done)), "{}", serde_json::to_string(&events.last()).unwrap());
+        let reply: String = events.iter().filter_map(|e| if let StreamEvent::Delta { text } = e { Some(text.as_str()) } else { None }).collect();
+        println!("reply: {}", reply.lines().next().unwrap_or(""));
+        assert!(!reply.is_empty());
     }
 }

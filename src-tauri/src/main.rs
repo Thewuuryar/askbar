@@ -11,7 +11,7 @@ use backend::{Backend, Local, Settings, StreamEvent};
 use remote::Remote;
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 use std::time::{Duration, Instant};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -36,7 +36,8 @@ struct Placement {
 }
 
 struct AppState {
-    backend: Box<dyn Backend>,
+    /// Swapped when the user pairs with a server.
+    backend: RwLock<Arc<dyn Backend>>,
     cancel: Mutex<Option<oneshot::Sender<()>>>,
     shown_at: Mutex<Instant>,
     placement: Mutex<Placement>,
@@ -47,6 +48,12 @@ struct AppState {
     epoch: AtomicU64,
     hotkey: Mutex<Option<Shortcut>>,
     notice: Mutex<Option<String>>,
+}
+
+impl AppState {
+    fn backend(&self) -> Arc<dyn Backend> {
+        self.backend.read().unwrap_or_else(|e| e.into_inner()).clone()
+    }
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -152,7 +159,7 @@ fn register_hotkey(app: &AppHandle, spec: &str) -> Result<(), String> {
 /// Re-read config.yaml and apply what can change at runtime.
 fn apply_config(app: &AppHandle) -> Option<String> {
     let state = app.state::<AppState>();
-    let cfg = match tauri::async_runtime::block_on(state.backend.settings()) {
+    let cfg = match tauri::async_runtime::block_on(state.backend().settings()) {
         Ok(c) => c,
         Err(e) => return Some(e),
     };
@@ -174,7 +181,7 @@ struct Bootstrap {
 
 #[tauri::command]
 async fn bootstrap(state: State<'_, AppState>) -> Result<Bootstrap, String> {
-    let (cfg, mut notice) = match state.backend.settings().await {
+    let (cfg, mut notice) = match state.backend().settings().await {
         Ok(c) => (c, None),
         Err(e) => (Settings::builtin(), Some(e)),
     };
@@ -187,27 +194,40 @@ async fn bootstrap(state: State<'_, AppState>) -> Result<Bootstrap, String> {
 /// `null` when the backend is fine; otherwise what is wrong and (for a missing provider) the alternatives.
 #[tauri::command]
 async fn server_status(state: State<'_, AppState>) -> Result<Option<backend::ClientStatus>, String> {
-    Ok(state.backend.status().await)
+    Ok(state.backend().status().await)
+}
+
+/// Exchange a pairing string for a device token, remember the server, and switch to it.
+#[tauri::command]
+async fn pair(app: AppHandle, state: State<'_, AppState>, pairing: String) -> Result<(), String> {
+    let path = client_config::path();
+    let keychain = tokens::Keychain::new(&path);
+    remote::pair(&pairing, &path, &keychain).await?;
+    let remote = Remote::new(client_config::ClientConfig::load(&path), path, Box::new(keychain));
+    *state.backend.write().unwrap_or_else(|e| e.into_inner()) = Arc::new(remote);
+    // Pick up the new hotkey and look and feel.
+    let _ = apply_config(&app);
+    Ok(())
 }
 
 #[tauri::command]
 async fn set_active_provider(state: State<'_, AppState>, name: String) -> Result<(), String> {
-    state.backend.set_active_provider(name).await
+    state.backend().set_active_provider(name).await
 }
 
 #[tauri::command]
 async fn list_conversations(state: State<'_, AppState>) -> Result<Vec<ConversationSummary>, String> {
-    state.backend.list_conversations().await
+    state.backend().list_conversations().await
 }
 
 #[tauri::command]
 async fn load_conversation(state: State<'_, AppState>, id: i64) -> Result<Vec<StoredMessage>, String> {
-    state.backend.load_conversation(id).await
+    state.backend().load_conversation(id).await
 }
 
 #[tauri::command]
 async fn delete_conversation(state: State<'_, AppState>, id: i64) -> Result<(), String> {
-    state.backend.delete_conversation(id).await
+    state.backend().delete_conversation(id).await
 }
 
 #[tauri::command]
@@ -224,7 +244,7 @@ async fn ask(
     let (tx, rx) = oneshot::channel();
     *lock(&state.cancel) = Some(tx);
     state
-        .backend
+        .backend()
         .ask(conversation_id, text, rx, &|e| {
             let _ = on_event.send(e);
         })
@@ -312,15 +332,15 @@ fn main() {
         .setup(|app| {
             // A client.yaml means "use the server"; without one the app works on this machine alone.
             let client_yaml = client_config::path();
-            let (backend, created, config_error): (Box<dyn Backend>, bool, Option<String>) = if client_yaml.exists() {
-                let tokens = Box::new(tokens::Keychain::new(&client_yaml.display().to_string()));
-                (Box::new(Remote::new(client_config::ClientConfig::load(&client_yaml), client_yaml.clone(), tokens)), false, None)
+            let (backend, created, config_error): (Arc<dyn Backend>, bool, Option<String>) = if client_yaml.exists() {
+                let tokens = Box::new(tokens::Keychain::new(&client_yaml));
+                (Arc::new(Remote::new(client_config::ClientConfig::load(&client_yaml), client_yaml.clone(), tokens)), false, None)
             } else {
                 let (created, err) = match Config::load_or_create(&config_path()) {
                     Ok((_, created)) => (created, None),
                     Err(e) => (false, Some(e.to_string())),
                 };
-                (Box::new(Local::open(&db_path())?), created, err)
+                (Arc::new(Local::open(&db_path())?), created, err)
             };
             let (cfg, settings_error) = match tauri::async_runtime::block_on(backend.settings()) {
                 Ok(s) => (s, None),
@@ -329,7 +349,7 @@ fn main() {
             let config_error = config_error.or(settings_error);
 
             app.manage(AppState {
-                backend,
+                backend: RwLock::new(backend),
                 cancel: Mutex::new(None),
                 shown_at: Mutex::new(Instant::now()),
                 placement: Mutex::new(Placement { width: 768.0, height: 140.0, top_percent: cfg.ui.top_percent }),
@@ -348,8 +368,9 @@ fn main() {
             let toggle_item = MenuItem::with_id(app, "toggle", "Show / hide", true, None::<&str>)?;
             let config_item = MenuItem::with_id(app, "config", "Open config file", true, None::<&str>)?;
             let reload_item = MenuItem::with_id(app, "reload", "Reload config", true, None::<&str>)?;
+            let pair_item = MenuItem::with_id(app, "pair", "Pair with server…", true, None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "quit", "Quit Askbar", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&toggle_item, &config_item, &reload_item, &quit_item])?;
+            let menu = Menu::with_items(app, &[&toggle_item, &config_item, &reload_item, &pair_item, &quit_item])?;
 
             let mut tray = TrayIconBuilder::with_id("askbar")
                 .tooltip("Askbar")
@@ -364,6 +385,10 @@ fn main() {
                         let state = app.state::<AppState>();
                         *lock(&state.notice) = apply_config(app).or(Some("Config reloaded.".into()));
                         show(app);
+                    }
+                    "pair" => {
+                        show(app);
+                        let _ = app.emit("askbar:pair", ());
                     }
                     "quit" => app.exit(0),
                     _ => {}
@@ -400,6 +425,7 @@ fn main() {
             bootstrap,
             server_status,
             set_active_provider,
+            pair,
             list_conversations,
             load_conversation,
             delete_conversation,
