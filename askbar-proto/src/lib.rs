@@ -62,9 +62,42 @@ pub struct PairResponse {
     pub token: String,
 }
 
+pub const PAIR_PREFIX: &str = "askbar-pair:";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct PairPayload {
+    url: String,
+    code: String,
+}
+
+/// `askbar-pair:<base64url(json{url, code})>`
+pub fn encode_pairing(url: &str, code: &str) -> String {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+    let json = serde_json::to_vec(&PairPayload { url: url.into(), code: code.into() }).expect("plain struct serializes");
+    format!("{PAIR_PREFIX}{}", URL_SAFE_NO_PAD.encode(json))
+}
+
+/// Returns `(url, code)`, or `None` if the string is not a pairing string.
+pub fn decode_pairing(s: &str) -> Option<(String, String)> {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+    let body = s.trim().strip_prefix(PAIR_PREFIX)?;
+    let p: PairPayload = serde_json::from_slice(&URL_SAFE_NO_PAD.decode(body).ok()?).ok()?;
+    (!p.url.is_empty() && !p.code.is_empty()).then_some((p.url, p.code))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pairing_string_round_trip() {
+        let s = encode_pairing("https://askbar.example.com:8443", "abc_-123");
+        assert!(s.starts_with("askbar-pair:"));
+        assert_eq!(decode_pairing(&format!("  {s}\n")), Some(("https://askbar.example.com:8443".into(), "abc_-123".into())));
+        assert_eq!(decode_pairing("askbar-pair:!!!"), None);
+        assert_eq!(decode_pairing("hello"), None);
+        assert_eq!(decode_pairing(&encode_pairing("", "x")), None);
+    }
 
     #[test]
     fn provider_info_uses_type_key() {

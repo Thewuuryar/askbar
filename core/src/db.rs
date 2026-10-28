@@ -154,7 +154,7 @@ impl Db {
     }
 
     fn init(conn: Connection) -> Result<Db, DbError> {
-        conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;")?;
+        conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;")?;
         let mut db = Db { conn };
         db.migrate()?;
         Ok(db)

@@ -39,6 +39,22 @@ fn run_import(args: &[String]) {
     );
 }
 
+/// `askbar-server create-pair-code [--name <device>] [--url <public api url>]`
+fn run_create_pair_code(args: &[String]) {
+    let flag = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1));
+    let url = flag("--url")
+        .cloned()
+        .or_else(|| std::env::var("ASKBAR_PUBLIC_URL").ok())
+        .unwrap_or_else(|| "http://localhost:8080".into());
+    let name = flag("--name").map(String::as_str).unwrap_or("");
+    let db = askbar_core::Db::open(&data_dir().join("askbar.db")).unwrap_or_else(|e| die(e, 1));
+    let user = db.seed_server().unwrap_or_else(|e| die(e, 1));
+    let code = askbar_server::auth::create_pair_code(&db, &user, name, askbar_server::auth::PAIR_CODE_TTL_SECS)
+        .unwrap_or_else(|e| die(e, 1));
+    println!("{}", askbar_proto::encode_pairing(url.trim_end_matches('/'), &code));
+    eprintln!("This code works once and expires in 10 minutes.");
+}
+
 /// `askbar-server healthcheck`: GET the local API health endpoint; exit 0 if it answers 200.
 fn run_healthcheck() -> ! {
     use std::io::{Read, Write};
@@ -64,6 +80,9 @@ async fn main() {
     if args.first().map(String::as_str) == Some("healthcheck") {
         run_healthcheck();
     }
+    if args.first().map(String::as_str) == Some("create-pair-code") {
+        return run_create_pair_code(&args[1..]);
+    }
     if args.first().map(String::as_str) == Some("import") {
         return run_import(&args[1..]);
     }
@@ -77,20 +96,16 @@ async fn main() {
             std::process::exit(2);
         }
     };
-    if let Err(e) = askbar_server::secrets::Secrets::from_env() {
-        eprintln!("error: {e}");
-        std::process::exit(2);
-    }
-    match askbar_core::Db::open(&data_dir().join("askbar.db")).and_then(|db| db.seed_server()) {
+    let secrets = askbar_server::secrets::Secrets::from_env().unwrap_or_else(|e| die(e, 2));
+    let db = askbar_core::Db::open(&data_dir().join("askbar.db")).unwrap_or_else(|e| die(e, 1));
+    match db.seed_server() {
         Ok(user) => tracing::info!(%user, "database ready"),
-        Err(e) => {
-            eprintln!("error: {e}");
-            std::process::exit(1);
-        }
+        Err(e) => die(e, 1),
     }
+    let state = askbar_server::AppState::new(db, secrets);
     let result = tokio::try_join!(
-        serve(api, askbar_server::api_router()),
-        serve(admin, askbar_server::admin_router())
+        serve(api, askbar_server::api_router(state.clone())),
+        serve(admin, askbar_server::admin_router(state))
     );
     if let Err(e) = result {
         eprintln!("error: {e}");

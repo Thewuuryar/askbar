@@ -12,6 +12,8 @@ services:
     environment:
       ASKBAR_MASTER_KEY: ${ASKBAR_MASTER_KEY:?set ASKBAR_MASTER_KEY in .env (32+ characters)}
       ASKBAR_ADMIN_PASSWORD: ${ASKBAR_ADMIN_PASSWORD:-}
+      # Put into pairing strings made by `create-pair-code`.
+      ASKBAR_PUBLIC_URL: ${ASKBAR_PUBLIC_URL:-http://localhost:${ASKBAR_API_PORT:-8080}}
     ports:
       - "${ASKBAR_API_PORT:-8080}:8080"
       - "127.0.0.1:${ASKBAR_ADMIN_PORT:-8081}:8081"
