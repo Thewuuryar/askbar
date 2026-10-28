@@ -1,0 +1,31 @@
+# Askbar server. Copy .env.example to .env and edit it first.
+#   docker compose up -d                    server only
+#   docker compose --profile dev up -d      plus the mock LLM (tests/mock_llm.py)
+
+services:
+  server:
+    build: .
+    image: askbar-server:latest
+    restart: unless-stopped
+    # The bind-mounted DATA_DIR must be writable by this user.
+    user: "${ASKBAR_UID:-10001}:${ASKBAR_GID:-10001}"
+    environment:
+      ASKBAR_MASTER_KEY: ${ASKBAR_MASTER_KEY:?set ASKBAR_MASTER_KEY in .env (32+ characters)}
+      ASKBAR_ADMIN_PASSWORD: ${ASKBAR_ADMIN_PASSWORD:-}
+    ports:
+      - "${ASKBAR_API_PORT:-8080}:8080"
+      - "127.0.0.1:${ASKBAR_ADMIN_PORT:-8081}:8081"
+    volumes:
+      - ${DATA_DIR:-./data}:/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  mock-llm:
+    profiles: ["dev"]
+    image: python:3.12-slim
+    restart: unless-stopped
+    environment:
+      MOCK_LLM_HOST: "0.0.0.0"
+    command: ["python", "/app/mock_llm.py", "8765"]
+    volumes:
+      - ./tests/mock_llm.py:/app/mock_llm.py:ro

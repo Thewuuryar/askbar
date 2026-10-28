@@ -7,6 +7,7 @@ message to get a long, slow reply (handy for testing Stop), or "fail" to get
 an HTTP 401 error.
 """
 import json
+import os
 import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -74,4 +75,4 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8765
     print(f"mock LLM on http://127.0.0.1:{port}/v1", flush=True)
-    ThreadingHTTPServer(("127.0.0.1", port), Handler).serve_forever()
+    ThreadingHTTPServer((os.environ.get("MOCK_LLM_HOST", "127.0.0.1"), port), Handler).serve_forever()
