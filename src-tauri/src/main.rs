@@ -1,13 +1,17 @@
 // Hide the console window on Windows release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use askbar_core::{
-    config_path, db_path, http_client, make_title, stream_chat, ChatMessage, Config, ConversationSummary, Db,
-    HttpClient, StoredMessage, StreamOutcome, Ui,
-};
+mod backend;
+mod client_config;
+mod remote;
+mod tokens;
+
+use askbar_core::{config_path, db_path, Config, ConversationSummary, StoredMessage, Ui};
+use backend::{Backend, Local, Settings, StreamEvent};
+use remote::Remote;
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 use std::time::{Duration, Instant};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -32,8 +36,8 @@ struct Placement {
 }
 
 struct AppState {
-    db: Mutex<Db>,
-    http: HttpClient,
+    /// Swapped when the user pairs with a server.
+    backend: RwLock<Arc<dyn Backend>>,
     cancel: Mutex<Option<oneshot::Sender<()>>>,
     shown_at: Mutex<Instant>,
     placement: Mutex<Placement>,
@@ -46,12 +50,14 @@ struct AppState {
     notice: Mutex<Option<String>>,
 }
 
-fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|e| e.into_inner())
+impl AppState {
+    fn backend(&self) -> Arc<dyn Backend> {
+        self.backend.read().unwrap_or_else(|e| e.into_inner()).clone()
+    }
 }
 
-fn load_config() -> Result<Config, String> {
-    Config::load_or_create(&config_path()).map(|(c, _)| c).map_err(|e| e.to_string())
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 // ------------------------------------------------------------- window
@@ -153,7 +159,7 @@ fn register_hotkey(app: &AppHandle, spec: &str) -> Result<(), String> {
 /// Re-read config.yaml and apply what can change at runtime.
 fn apply_config(app: &AppHandle) -> Option<String> {
     let state = app.state::<AppState>();
-    let cfg = match load_config() {
+    let cfg = match tauri::async_runtime::block_on(state.backend().settings()) {
         Ok(c) => c,
         Err(e) => return Some(e),
     };
@@ -174,44 +180,54 @@ struct Bootstrap {
 }
 
 #[tauri::command]
-fn bootstrap(state: State<'_, AppState>) -> Bootstrap {
-    let (cfg, mut notice) = match load_config() {
+async fn bootstrap(state: State<'_, AppState>) -> Result<Bootstrap, String> {
+    let (cfg, mut notice) = match state.backend().settings().await {
         Ok(c) => (c, None),
-        Err(e) => (Config::builtin(), Some(e)),
+        Err(e) => (Settings::builtin(), Some(e)),
     };
     if let Some(n) = lock(&state.notice).take() {
         notice = Some(n);
     }
-    let (provider, model) = cfg
-        .active()
-        .map(|p| (p.name.clone(), p.model.clone()))
-        .unwrap_or_default();
-    Bootstrap { ui: cfg.ui, hotkey: cfg.hotkey, provider, model, notice }
+    Ok(Bootstrap { ui: cfg.ui, hotkey: cfg.hotkey, provider: cfg.provider, model: cfg.model, notice })
+}
+
+/// `null` when the backend is fine; otherwise what is wrong and (for a missing provider) the alternatives.
+#[tauri::command]
+async fn server_status(state: State<'_, AppState>) -> Result<Option<backend::ClientStatus>, String> {
+    Ok(state.backend().status().await)
+}
+
+/// Exchange a pairing string for a device token, remember the server, and switch to it.
+#[tauri::command]
+async fn pair(app: AppHandle, state: State<'_, AppState>, pairing: String) -> Result<(), String> {
+    let path = client_config::path();
+    let keychain = tokens::Keychain::new(&path);
+    remote::pair(&pairing, &path, &keychain).await?;
+    let remote = Remote::new(client_config::ClientConfig::load(&path), path, Box::new(keychain));
+    *state.backend.write().unwrap_or_else(|e| e.into_inner()) = Arc::new(remote);
+    // Pick up the new hotkey and look and feel.
+    let _ = apply_config(&app);
+    Ok(())
 }
 
 #[tauri::command]
-fn list_conversations(state: State<'_, AppState>) -> Result<Vec<ConversationSummary>, String> {
-    lock(&state.db).list_conversations().map_err(|e| e.to_string())
+async fn set_active_provider(state: State<'_, AppState>, name: String) -> Result<(), String> {
+    state.backend().set_active_provider(name).await
 }
 
 #[tauri::command]
-fn load_conversation(state: State<'_, AppState>, id: i64) -> Result<Vec<StoredMessage>, String> {
-    lock(&state.db).get_messages(id).map_err(|e| e.to_string())
+async fn list_conversations(state: State<'_, AppState>) -> Result<Vec<ConversationSummary>, String> {
+    state.backend().list_conversations().await
 }
 
 #[tauri::command]
-fn delete_conversation(state: State<'_, AppState>, id: i64) -> Result<(), String> {
-    lock(&state.db).delete_conversation(id).map(|_| ()).map_err(|e| e.to_string())
+async fn load_conversation(state: State<'_, AppState>, id: i64) -> Result<Vec<StoredMessage>, String> {
+    state.backend().load_conversation(id).await
 }
 
-#[derive(Serialize, Clone)]
-#[serde(tag = "event", rename_all = "camelCase", rename_all_fields = "camelCase")]
-enum StreamEvent {
-    Started { conversation_id: i64 },
-    Delta { text: String },
-    Done,
-    Cancelled,
-    Error { message: String },
+#[tauri::command]
+async fn delete_conversation(state: State<'_, AppState>, id: i64) -> Result<(), String> {
+    state.backend().delete_conversation(id).await
 }
 
 #[tauri::command]
@@ -225,66 +241,15 @@ async fn ask(
     if text.is_empty() {
         return Ok(());
     }
-    let fail = |message: String| {
-        let _ = on_event.send(StreamEvent::Error { message });
-    };
-
-    let cfg = match load_config() {
-        Ok(c) => c,
-        Err(e) => return Ok(fail(e)),
-    };
-    let provider = match cfg.active() {
-        Ok(p) => p.clone(),
-        Err(e) => return Ok(fail(e.to_string())),
-    };
-
-    // Save the question first so it survives a failed request.
-    let saved = {
-        let db = lock(&state.db);
-        (|| -> Result<(i64, Vec<StoredMessage>), askbar_core::DbError> {
-            let id = match conversation_id {
-                Some(id) if db.conversation_exists(id)? => id,
-                _ => db.create_conversation(&make_title(&text))?,
-            };
-            db.add_message(id, "user", &text)?;
-            Ok((id, db.get_messages(id)?))
-        })()
-    };
-    let (conv_id, stored) = match saved {
-        Ok(v) => v,
-        Err(e) => return Ok(fail(e.to_string())),
-    };
-    let _ = on_event.send(StreamEvent::Started { conversation_id: conv_id });
-
-    let mut context: Vec<ChatMessage> = stored.iter().map(|m| ChatMessage::new(&m.role, &m.content)).collect();
-    if let Some(n) = cfg.history.context_messages.filter(|&n| n > 0) {
-        let start = context.len().saturating_sub(n);
-        context.drain(..start);
-    }
-
     let (tx, rx) = oneshot::channel();
     *lock(&state.cancel) = Some(tx);
-
-    let mut reply = String::new();
-    let result = stream_chat(&state.http, &provider, &cfg.system_prompt, &context, rx, |delta| {
-        reply.push_str(delta);
-        let _ = on_event.send(StreamEvent::Delta { text: delta.to_string() });
-    })
-    .await;
+    state
+        .backend()
+        .ask(conversation_id, text, rx, &|e| {
+            let _ = on_event.send(e);
+        })
+        .await;
     lock(&state.cancel).take();
-
-    // Keep whatever arrived, even on cancel or error.
-    if !reply.trim().is_empty() {
-        if let Err(e) = lock(&state.db).add_message(conv_id, "assistant", &reply) {
-            return Ok(fail(e.to_string()));
-        }
-    }
-
-    let _ = on_event.send(match result {
-        Ok(StreamOutcome::Completed) => StreamEvent::Done,
-        Ok(StreamOutcome::Cancelled) => StreamEvent::Cancelled,
-        Err(e) => StreamEvent::Error { message: e.to_string() },
-    });
     Ok(())
 }
 
@@ -365,15 +330,26 @@ fn main() {
             _ => {}
         })
         .setup(|app| {
-            let (cfg, created, config_error) = match Config::load_or_create(&config_path()) {
-                Ok((c, created)) => (c, created, None),
-                Err(e) => (Config::builtin(), false, Some(e.to_string())),
+            // A client.yaml means "use the server"; without one the app works on this machine alone.
+            let client_yaml = client_config::path();
+            let (backend, created, config_error): (Arc<dyn Backend>, bool, Option<String>) = if client_yaml.exists() {
+                let tokens = Box::new(tokens::Keychain::new(&client_yaml));
+                (Arc::new(Remote::new(client_config::ClientConfig::load(&client_yaml), client_yaml.clone(), tokens)), false, None)
+            } else {
+                let (created, err) = match Config::load_or_create(&config_path()) {
+                    Ok((_, created)) => (created, None),
+                    Err(e) => (false, Some(e.to_string())),
+                };
+                (Arc::new(Local::open(&db_path())?), created, err)
             };
-            let db = Db::open(&db_path())?;
+            let (cfg, settings_error) = match tauri::async_runtime::block_on(backend.settings()) {
+                Ok(s) => (s, None),
+                Err(e) => (Settings::builtin(), Some(e)),
+            };
+            let config_error = config_error.or(settings_error);
 
             app.manage(AppState {
-                db: Mutex::new(db),
-                http: http_client(),
+                backend: RwLock::new(backend),
                 cancel: Mutex::new(None),
                 shown_at: Mutex::new(Instant::now()),
                 placement: Mutex::new(Placement { width: 768.0, height: 140.0, top_percent: cfg.ui.top_percent }),
@@ -392,8 +368,9 @@ fn main() {
             let toggle_item = MenuItem::with_id(app, "toggle", "Show / hide", true, None::<&str>)?;
             let config_item = MenuItem::with_id(app, "config", "Open config file", true, None::<&str>)?;
             let reload_item = MenuItem::with_id(app, "reload", "Reload config", true, None::<&str>)?;
+            let pair_item = MenuItem::with_id(app, "pair", "Pair with server…", true, None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "quit", "Quit Askbar", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&toggle_item, &config_item, &reload_item, &quit_item])?;
+            let menu = Menu::with_items(app, &[&toggle_item, &config_item, &reload_item, &pair_item, &quit_item])?;
 
             let mut tray = TrayIconBuilder::with_id("askbar")
                 .tooltip("Askbar")
@@ -408,6 +385,10 @@ fn main() {
                         let state = app.state::<AppState>();
                         *lock(&state.notice) = apply_config(app).or(Some("Config reloaded.".into()));
                         show(app);
+                    }
+                    "pair" => {
+                        show(app);
+                        let _ = app.emit("askbar:pair", ());
                     }
                     "quit" => app.exit(0),
                     _ => {}
@@ -442,6 +423,9 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             bootstrap,
+            server_status,
+            set_active_provider,
+            pair,
             list_conversations,
             load_conversation,
             delete_conversation,

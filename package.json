@@ -8,7 +8,7 @@
     "dev": "tauri dev",
     "build": "tauri build",
     "icons": "python3 tests/make_icons.py",
-    "test": "cargo test -p askbar-core && node tests/markdown.test.js && node tests/ui.test.js",
+    "test": "cargo test --workspace && node tests/markdown.test.js && node tests/ui.test.js && node tests/admin.test.js",
     "mock": "python3 tests/mock_llm.py 8765"
   },
   "devDependencies": {

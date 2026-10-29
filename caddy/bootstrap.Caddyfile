@@ -1,0 +1,7 @@
+# Starting point only. The Askbar server replaces this with the real configuration
+# (from Network settings in the admin page) as soon as it is up.
+{
+	admin 0.0.0.0:2019 {
+		origins caddy:2019
+	}
+}

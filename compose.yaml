@@ -1,0 +1,106 @@
+# Askbar server. Copy .env.example to .env and edit it first.
+#   docker compose up -d                    server only
+#   docker compose --profile dev up -d      plus the mock LLM (tests/mock_llm.py)
+#   docker compose --profile tls up -d      plus the HTTPS front end (Caddy)
+#   docker compose --profile cpa up -d      plus CLIProxyAPI (subscription logins as a provider)
+
+services:
+  server:
+    build: .
+    image: askbar-server:latest
+    restart: unless-stopped
+    # The bind-mounted DATA_DIR must be writable by this user.
+    user: "${ASKBAR_UID:-10001}:${ASKBAR_GID:-10001}"
+    environment:
+      # Put into pairing strings made by `create-pair-code`.
+      # How the server reaches Caddy (only answers when the tls profile is running).
+      ASKBAR_CADDY_ADMIN: http://caddy:2019
+      ASKBAR_CADDY_SECRETS_DIR: /caddy-secrets
+      ASKBAR_TLS_API_PORT: ${ASKBAR_TLS_API_PORT:-8443}
+      ASKBAR_TLS_ADMIN_PORT: ${ASKBAR_TLS_ADMIN_PORT:-9443}
+      ASKBAR_PUBLIC_URL: ${ASKBAR_PUBLIC_URL:-http://localhost:${ASKBAR_API_PORT:-8080}}
+    ports:
+      - "${ASKBAR_API_PORT:-8080}:8080"
+      - "127.0.0.1:${ASKBAR_ADMIN_PORT:-8081}:8081"
+    volumes:
+      - ${DATA_DIR:-./data}:/data
+      # The master key lives here, alone: backups and snapshots of DATA_DIR never contain it.
+      - askbar-secrets:/secrets
+      # Holds only the Cloudflare token, for Caddy.
+      - caddy-secrets:/caddy-secrets
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  mock-llm:
+    profiles: ["dev"]
+    image: python:3.12-slim
+    restart: unless-stopped
+    environment:
+      MOCK_LLM_HOST: "0.0.0.0"
+    command: ["python", "/app/mock_llm.py", "8765"]
+    volumes:
+      - ./tests/mock_llm.py:/app/mock_llm.py:ro
+
+  # HTTPS front end. Configured from the admin page (Network); nothing secret in this file.
+  caddy:
+    profiles: ["tls"]
+    build:
+      context: .
+      dockerfile: Dockerfile.caddy
+    image: askbar-caddy:latest
+    restart: unless-stopped
+    ports:
+      - "${ASKBAR_TLS_API_PORT:-8443}:8443"
+      - "${ASKBAR_TLS_ADMIN_PORT:-9443}:9443"
+    volumes:
+      - caddy-data:/data
+      - caddy-config:/config
+      - caddy-secrets:/caddy-secrets:ro
+
+  # --- CLIProxyAPI: use a ChatGPT/Claude/Gemini subscription as an OpenAI-compatible provider. ---
+  # `docker compose --profile cpa up -d`, then see cpa/README or the main README for the one-time login.
+  # Its API port is NOT published; only containers on this compose network (the server) can reach it.
+  cpa-init:
+    profiles: ["cpa"]
+    image: eceasy/cli-proxy-api:latest
+    # Strips CRs first, so the script still runs if a Windows checkout turned its line endings into CRLF.
+    entrypoint: ["/bin/sh", "-c", "tr -d '\\r' < /init.sh | sh -s -- \"$$@\"", "init"]
+    volumes:
+      - ./cpa/init.sh:/init.sh:ro
+      - cpa-config:/cpa-config
+
+  cpa:
+    profiles: ["cpa"]
+    image: eceasy/cli-proxy-api:latest
+    restart: unless-stopped
+    depends_on:
+      cpa-init:
+        condition: service_completed_successfully
+    command: ["./CLIProxyAPI", "-config", "/cpa-config/config.yaml"]
+    volumes:
+      - cpa-config:/cpa-config
+      - cpa-auth:/root/.cli-proxy-api
+
+  # One-time provider login (run on demand, never started by `up`):
+  #   docker compose --profile cpa run --rm --service-ports cpa-login ./CLIProxyAPI -config /cpa-config/config.yaml -claude-login -no-browser
+  # `--service-ports` publishes the OAuth callback ports on 127.0.0.1 for the duration of that command only.
+  # Other logins: -codex-login (port 1455), -login/-antigravity-login, ... see `./CLIProxyAPI -h`.
+  cpa-login:
+    profiles: ["cpa-login"]
+    image: eceasy/cli-proxy-api:latest
+    volumes:
+      - cpa-config:/cpa-config
+      - cpa-auth:/root/.cli-proxy-api
+    ports:
+      - "127.0.0.1:54545:54545"
+      - "127.0.0.1:1455:1455"
+      - "127.0.0.1:8085:8085"
+      - "127.0.0.1:51121:51121"
+
+volumes:
+  askbar-secrets:
+  cpa-config:
+  cpa-auth:
+  caddy-secrets:
+  caddy-data:
+  caddy-config:

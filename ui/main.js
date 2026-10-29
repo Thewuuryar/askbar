@@ -22,6 +22,14 @@
     noticeText: $('notice-text'),
     noticeConfig: $('notice-config'),
     noticeClose: $('notice-close'),
+    pair: $('pair'),
+    pairInput: $('pair-input'),
+    pairSubmit: $('pair-submit'),
+    pairCancel: $('pair-cancel'),
+    pairError: $('pair-error'),
+    status: $('status'),
+    statusText: $('status-text'),
+    statusActions: $('status-actions'),
     modelLabel: $('model-label'),
   };
 
@@ -108,6 +116,94 @@
   }
   function hideNotice() {
     if (!el.notice.hidden) { el.notice.hidden = true; layout(); }
+  }
+
+  // -------------------------------------------------------------- status
+  // The backend reports problems with the server (offline, token rejected,
+  // update needed, provider gone). `null` means all is well.
+
+  function actionButton(label, onClick, name) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'text-btn';
+    b.dataset.action = name;
+    b.textContent = label;
+    b.addEventListener('click', onClick);
+    return b;
+  }
+
+  function showStatus(st) {
+    el.statusActions.textContent = '';
+    if (!st) {
+      if (!el.status.hidden) { el.status.hidden = true; layout(); }
+      return;
+    }
+    el.status.dataset.kind = st.kind;
+    el.statusText.textContent = st.message;
+    for (const name of st.providers || []) {
+      el.statusActions.appendChild(actionButton('Use ' + name, async () => {
+        try { await invoke('set_active_provider', { name }); } catch (e) { showNotice(String(e)); }
+        await refreshBootstrap().catch(() => {});
+        await checkStatus();
+      }, 'provider'));
+    }
+    if (st.kind === 'rejected' || st.kind === 'not_paired') {
+      el.statusActions.appendChild(actionButton('Pair this device', () => openPairing(), 'pair'));
+    }
+    el.statusActions.appendChild(actionButton('Retry', async () => {
+      await refreshBootstrap().catch(() => {});
+      await checkStatus();
+    }, 'retry'));
+    el.status.hidden = false;
+    layout();
+  }
+
+  async function checkStatus() {
+    let st = null;
+    try { st = await invoke('server_status'); } catch (_) { /* local mode has nothing to report */ }
+    showStatus(st);
+    return st;
+  }
+
+  // ------------------------------------------------------------- pairing
+
+  function openPairing() {
+    el.pairError.hidden = true;
+    el.pairInput.value = '';
+    el.pair.hidden = false;
+    layout();
+    el.pairInput.focus();
+  }
+
+  function closePairing() {
+    if (el.pair.hidden) return false;
+    el.pair.hidden = true;
+    layout();
+    el.input.focus();
+    return true;
+  }
+
+  async function submitPairing(e) {
+    e.preventDefault();
+    const pairing = el.pairInput.value.trim();
+    if (!pairing) return;
+    el.pairSubmit.disabled = true;
+    try {
+      await invoke('pair', { pairing });
+    } catch (err) {
+      el.pairError.textContent = String(err);
+      el.pairError.hidden = false;
+      el.pairSubmit.disabled = false;
+      layout();
+      return;
+    }
+    el.pairSubmit.disabled = false;
+    el.pairInput.value = '';
+    closePairing();
+    newChat();
+    await refreshBootstrap().catch(() => {});
+    await checkStatus();
+    await refreshHistory();
   }
 
   // ------------------------------------------------------------ messages
@@ -217,6 +313,7 @@
             scheduleRender(reply);
             break;
           case 'done':
+            showStatus(null);
             finish();
             break;
           case 'cancelled':
@@ -225,6 +322,7 @@
           case 'error':
             if (!reply.content.trim()) removeMessage(reply);
             addError(m.message);
+            checkStatus();
             finish();
             break;
         }
@@ -235,6 +333,7 @@
         .catch((e) => {
           if (!reply.content.trim()) removeMessage(reply);
           addError(String(e));
+          checkStatus();
           finish();
         });
     });
@@ -381,6 +480,7 @@
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       e.preventDefault();
+      if (closePairing()) return;
       if (state.streaming) cancel(); else invoke('hide_window');
       return;
     }
@@ -440,6 +540,8 @@
   el.newChat.addEventListener('click', newChat);
   el.stop.addEventListener('click', cancel);
   el.noticeClose.addEventListener('click', hideNotice);
+  el.pair.addEventListener('submit', submitPairing);
+  el.pairCancel.addEventListener('click', closePairing);
   el.noticeConfig.addEventListener('click', () => invoke('open_config').catch(() => {}));
 
   new ResizeObserver(layout).observe(el.card);
@@ -456,6 +558,7 @@
 
   async function onShown() {
     try { await refreshBootstrap(); } catch (_) { /* keep the previous settings */ }
+    checkStatus();
     if (state.historyOpen) refreshHistory();
     el.input.focus();
     el.input.select();
@@ -463,9 +566,11 @@
   }
 
   listen('askbar:shown', onShown);
+  listen('askbar:pair', () => openPairing());
 
   (async () => {
     try { await refreshBootstrap(); } catch (e) { showNotice(String(e)); }
+    checkStatus();
     await refreshHistory();
     syncChrome();
     el.input.focus();

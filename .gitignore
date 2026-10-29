@@ -4,3 +4,5 @@ src-tauri/gen
 *.db
 *.db-wal
 *.db-shm
+.env
+data/

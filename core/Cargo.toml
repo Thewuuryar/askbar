@@ -15,6 +15,7 @@ futures-util = "0.3"
 tokio = { version = "1", features = ["sync", "macros", "time"] }
 thiserror = "2"
 dirs = "6"
+ulid = "1"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "macros", "time", "sync"] }

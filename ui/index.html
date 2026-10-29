@@ -38,6 +38,21 @@
         <button type="button" class="text-btn" id="notice-close" aria-label="Dismiss">Dismiss</button>
       </div>
 
+      <div class="status" id="status" role="alert" hidden>
+        <span id="status-text"></span>
+        <span class="status-actions" id="status-actions"></span>
+      </div>
+
+      <form class="pair" id="pair" hidden>
+        <p>Paste the pairing string from the server's admin page, or from <code>askbar-server create-pair-code</code>.</p>
+        <div class="pair-row">
+          <input id="pair-input" type="text" spellcheck="false" autocomplete="off" aria-label="Pairing string" placeholder="askbar-pair:…">
+          <button type="submit" class="text-btn" id="pair-submit">Pair</button>
+          <button type="button" class="text-btn" id="pair-cancel">Cancel</button>
+        </div>
+        <p class="pair-error" id="pair-error" role="alert" hidden></p>
+      </form>
+
       <div class="thread" id="thread" aria-live="polite" hidden></div>
 
       <footer class="foot" id="foot" hidden>
