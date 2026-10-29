@@ -63,7 +63,8 @@ services:
   cpa-init:
     profiles: ["cpa"]
     image: eceasy/cli-proxy-api:latest
-    entrypoint: ["/bin/sh", "/init.sh"]
+    # Strips CRs first, so the script still runs if a Windows checkout turned its line endings into CRLF.
+    entrypoint: ["/bin/sh", "-c", "tr -d '\\r' < /init.sh | sh -s -- \"$$@\"", "init"]
     volumes:
       - ./cpa/init.sh:/init.sh:ro
       - cpa-config:/cpa-config
