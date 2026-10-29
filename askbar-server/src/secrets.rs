@@ -1,9 +1,10 @@
 //! Encryption of provider API keys at rest (ChaCha20-Poly1305).
 //!
-//! The cipher key is derived from `ASKBAR_MASTER_KEY` with HKDF-SHA256.
+//! The master key lives in a file on its own volume (see `key_path`), never in the
+//! database, an env file or the repo. The cipher key is derived from it with HKDF-SHA256.
 //! Stored form: 12-byte random nonce followed by ciphertext and tag.
 
-use chacha20poly1305::aead::{Aead, AeadCore, KeyInit, OsRng};
+use chacha20poly1305::aead::{rand_core::RngCore, Aead, AeadCore, KeyInit, OsRng};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
 use hkdf::Hkdf;
 use sha2::Sha256;
@@ -14,12 +15,61 @@ const HKDF_INFO: &[u8] = b"askbar provider key encryption v1";
 
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum SecretsError {
-    #[error("ASKBAR_MASTER_KEY is not set")]
-    Missing,
-    #[error("ASKBAR_MASTER_KEY must be at least 32 characters")]
+    #[error("the master key must be at least 32 characters")]
     TooShort,
+    #[error("master key file {path}: {message}")]
+    File { path: String, message: String },
     #[error("stored secret could not be decrypted (wrong master key or corrupted data)")]
     Decrypt,
+}
+
+/// Where the master key file is: `ASKBAR_MASTER_KEY_FILE`, else `master.key` inside
+/// `ASKBAR_SECRETS_DIR` (default `secrets`; `/secrets` in the container image).
+pub fn key_path() -> std::path::PathBuf {
+    if let Ok(p) = std::env::var("ASKBAR_MASTER_KEY_FILE") {
+        if !p.trim().is_empty() {
+            return p.into();
+        }
+    }
+    let dir = std::env::var("ASKBAR_SECRETS_DIR").unwrap_or_else(|_| "secrets".into());
+    std::path::Path::new(&dir).join("master.key")
+}
+
+fn file_err(path: &std::path::Path, e: impl std::fmt::Display) -> SecretsError {
+    SecretsError::File { path: path.display().to_string(), message: e.to_string() }
+}
+
+/// `Ok(None)` when there is no key file yet (the server then runs in setup mode).
+pub fn load_key_file(path: &std::path::Path) -> Result<Option<Secrets>, SecretsError> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Secrets::new(text.trim()).map(Some),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(file_err(path, e)),
+    }
+}
+
+/// Create a fresh random master key at `path` (mode 0600) and return the secrets built from it.
+/// Refuses to overwrite an existing file.
+pub fn generate_key_file(path: &std::path::Path) -> Result<Secrets, SecretsError> {
+    use std::io::Write;
+    let mut raw = [0u8; 32];
+    OsRng.fill_bytes(&mut raw);
+    let key = base64_url(&raw);
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| file_err(path, e))?;
+    }
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
+    let mut f = opts.open(path).map_err(|e| file_err(path, e))?;
+    f.write_all(key.as_bytes()).and_then(|_| f.sync_all()).map_err(|e| file_err(path, e))?;
+    Secrets::new(&key)
+}
+
+fn base64_url(bytes: &[u8]) -> String {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+    URL_SAFE_NO_PAD.encode(bytes)
 }
 
 pub struct Secrets {
@@ -36,14 +86,6 @@ impl Secrets {
             .expand(HKDF_INFO, &mut key)
             .expect("32 bytes is a valid HKDF-SHA256 output length");
         Ok(Secrets { cipher: ChaCha20Poly1305::new(Key::from_slice(&key)) })
-    }
-
-    /// Read `ASKBAR_MASTER_KEY`; the server refuses to start without a valid one.
-    pub fn from_env() -> Result<Secrets, SecretsError> {
-        match std::env::var("ASKBAR_MASTER_KEY") {
-            Ok(v) => Secrets::new(&v),
-            Err(_) => Err(SecretsError::Missing),
-        }
     }
 
     pub fn encrypt(&self, plaintext: &str) -> Vec<u8> {
@@ -97,6 +139,27 @@ mod tests {
         }
         assert_eq!(s.decrypt(&ct[..ct.len() - 1]), Err(SecretsError::Decrypt));
         assert_eq!(s.decrypt(&ct[..5]), Err(SecretsError::Decrypt));
+    }
+
+    #[test]
+    fn key_file_lifecycle() {
+        let dir = std::env::temp_dir().join(format!("askbar-keyfile-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("nested").join("master.key");
+        assert!(load_key_file(&path).unwrap().is_none(), "no file means setup mode");
+
+        let made = generate_key_file(&path).unwrap();
+        let loaded = load_key_file(&path).unwrap().expect("key is there now");
+        assert_eq!(loaded.decrypt(&made.encrypt("hello")).unwrap(), "hello", "same key after reload");
+        assert!(matches!(generate_key_file(&path), Err(SecretsError::File { .. })), "never overwrites");
+        #[cfg(unix)]
+        assert_eq!(std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(&path).unwrap().permissions()) & 0o777, 0o600);
+
+        std::fs::write(&path, "too short").unwrap();
+        assert!(matches!(load_key_file(&path), Err(SecretsError::TooShort)));
+        std::fs::write(&path, format!("{}\n", KEY)).unwrap();
+        assert!(load_key_file(&path).unwrap().is_some(), "trailing newline is fine");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

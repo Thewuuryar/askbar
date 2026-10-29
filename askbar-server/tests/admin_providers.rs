@@ -66,7 +66,7 @@ impl T {
     }
     fn stored_key(&self, name: &str) -> String {
         let db = self.state.db.lock().unwrap();
-        store::load_provider(&db, &self.state.secrets, name).unwrap().unwrap().api_key
+        store::load_provider(&db, &self.state.secrets().unwrap(), name).unwrap().unwrap().api_key
     }
 }
 

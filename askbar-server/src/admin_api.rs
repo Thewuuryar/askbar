@@ -112,9 +112,14 @@ fn name_taken(e: &rusqlite::Error) -> bool {
     matches!(e, rusqlite::Error::SqliteFailure(f, _) if f.code == rusqlite::ErrorCode::ConstraintViolation)
 }
 
+fn not_ready() -> Failure {
+    (StatusCode::SERVICE_UNAVAILABLE, Json(ApiError { error: "Setup is not finished: generate the master key first.".into() }))
+}
+
 pub async fn create_provider(State(state): St, Json(i): Json<ProviderInput>) -> Result<(StatusCode, Json<serde_json::Value>), Failure> {
     validate(&i)?;
-    let enc = i.api_key.as_deref().filter(|k| !k.is_empty()).map(|k| state.secrets.encrypt(k));
+    let secrets = state.secrets().ok_or_else(not_ready)?;
+    let enc = i.api_key.as_deref().filter(|k| !k.is_empty()).map(|k| secrets.encrypt(k));
     let id = ulid::Ulid::new().to_string();
     let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
     db.conn()
@@ -135,7 +140,8 @@ pub async fn create_provider(State(state): St, Json(i): Json<ProviderInput>) -> 
 
 pub async fn update_provider(State(state): St, Path(id): Path<String>, Json(i): Json<ProviderInput>) -> Result<StatusCode, Failure> {
     validate(&i)?;
-    let new_key = i.api_key.as_deref().filter(|k| !k.is_empty()).map(|k| state.secrets.encrypt(k));
+    let secrets = state.secrets().ok_or_else(not_ready)?;
+    let new_key = i.api_key.as_deref().filter(|k| !k.is_empty()).map(|k| secrets.encrypt(k));
     let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
     let changed = db
         .conn()
@@ -177,12 +183,13 @@ pub struct TestResult {
 
 /// Send one short message through the provider and report what happened.
 pub async fn test_provider(State(state): St, Path(id): Path<String>) -> Result<Json<TestResult>, StatusCode> {
+    let secrets = state.secrets().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
     let provider = {
         let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
         let name: Option<String> =
             db.conn().query_row("SELECT name FROM providers WHERE id = ?1", [&id], |r| r.get(0)).optional().map_err(internal)?;
         let name = name.ok_or(StatusCode::NOT_FOUND)?;
-        store::load_provider(&db, &state.secrets, &name).map_err(internal)?.ok_or(StatusCode::NOT_FOUND)?
+        store::load_provider(&db, &secrets, &name).map_err(internal)?.ok_or(StatusCode::NOT_FOUND)?
     };
     let key = provider.api_key.clone();
     let (_keep, cancel) = oneshot::channel::<()>();

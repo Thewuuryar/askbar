@@ -22,14 +22,17 @@ use axum::{
     Json, Router,
 };
 use secrets::Secrets;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 pub const API_VERSION: u32 = 1;
 pub const MIN_CLIENT: &str = "0.1.0";
 
 pub struct AppState {
     pub db: Mutex<Db>,
-    pub secrets: Secrets,
+    /// `None` until the master key exists (setup mode).
+    secrets: RwLock<Option<Arc<Secrets>>>,
+    /// Where the master key file is (or will be created).
+    pub key_path: std::path::PathBuf,
     pub http: askbar_core::HttpClient,
     pub admin: admin::AdminAuth,
     /// Oldest client version the API still serves.
@@ -48,15 +51,44 @@ impl AppState {
     }
 
     pub fn with_config(db: Db, secrets: Secrets, min_client: &str, public_url: &str) -> Arc<AppState> {
+        // A throwaway key location, so setup-related code can't touch a real one.
+        let key_path = std::env::temp_dir().join(format!("askbar-test-{}", ulid::Ulid::new())).join("master.key");
+        AppState::build(db, Some(secrets), min_client, public_url, key_path)
+    }
+
+    /// The server as it starts for real: `secrets` is `None` when no master key file exists yet.
+    pub fn build(db: Db, secrets: Option<Secrets>, min_client: &str, public_url: &str, key_path: std::path::PathBuf) -> Arc<AppState> {
         Arc::new(AppState {
             db: Mutex::new(db),
-            secrets,
+            secrets: RwLock::new(secrets.map(Arc::new)),
+            key_path,
             http: askbar_core::http_client(),
             admin: admin::AdminAuth::default(),
             min_client: min_client.to_string(),
             public_url: public_url.trim_end_matches('/').to_string(),
         })
     }
+
+    /// The master key, if setup has created it.
+    pub fn secrets(&self) -> Option<Arc<Secrets>> {
+        self.secrets.read().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    pub fn set_secrets(&self, s: Secrets) {
+        *self.secrets.write().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(s));
+    }
+
+    pub fn setup_complete(&self) -> bool {
+        self.secrets().is_some()
+    }
+}
+
+/// Setup mode: until the master key exists, everything but health answers 503.
+async fn require_ready(State(state): State<Arc<AppState>>, req: Request, next: Next) -> Result<Response, StatusCode> {
+    if !state.setup_complete() {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
+    Ok(next.run(req).await)
 }
 
 pub fn api_router(state: Arc<AppState>) -> Router {
@@ -74,6 +106,7 @@ pub fn api_router(state: Arc<AppState>) -> Router {
     let gated = Router::new()
         .route("/api/v1/pair", post(pair))
         .merge(protected)
+        .route_layer(middleware::from_fn_with_state(state.clone(), require_ready))
         .route_layer(middleware::from_fn_with_state(state.clone(), require_client_version));
     Router::new()
         .route("/api/v1/health", get(health))

@@ -10,7 +10,6 @@ services:
     # The bind-mounted DATA_DIR must be writable by this user.
     user: "${ASKBAR_UID:-10001}:${ASKBAR_GID:-10001}"
     environment:
-      ASKBAR_MASTER_KEY: ${ASKBAR_MASTER_KEY:?set ASKBAR_MASTER_KEY in .env (32+ characters)}
       ASKBAR_ADMIN_PASSWORD: ${ASKBAR_ADMIN_PASSWORD:-}
       # Put into pairing strings made by `create-pair-code`.
       ASKBAR_PUBLIC_URL: ${ASKBAR_PUBLIC_URL:-http://localhost:${ASKBAR_API_PORT:-8080}}
@@ -19,6 +18,8 @@ services:
       - "127.0.0.1:${ASKBAR_ADMIN_PORT:-8081}:8081"
     volumes:
       - ${DATA_DIR:-./data}:/data
+      # The master key lives here, alone: backups and snapshots of DATA_DIR never contain it.
+      - askbar-secrets:/secrets
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
@@ -31,3 +32,6 @@ services:
     command: ["python", "/app/mock_llm.py", "8765"]
     volumes:
       - ./tests/mock_llm.py:/app/mock_llm.py:ro
+
+volumes:
+  askbar-secrets:

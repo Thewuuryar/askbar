@@ -26,7 +26,9 @@ fn run_import(args: &[String]) {
     let (Some(config), Some(db)) = (flag("--config"), flag("--db")) else {
         die("usage: askbar-server import --config <config.yaml> --db <history.db>", 2)
     };
-    let secrets = askbar_server::secrets::Secrets::from_env().unwrap_or_else(|e| die(e, 2));
+    let secrets = askbar_server::secrets::load_key_file(&askbar_server::secrets::key_path())
+        .unwrap_or_else(|e| die(e, 2))
+        .unwrap_or_else(|| die("no master key yet: finish setup on the admin page, or run `askbar-server generate-master-key`", 2));
     let server = askbar_core::Db::open(&data_dir().join("askbar.db")).unwrap_or_else(|e| die(e, 1));
     let report = askbar_server::import::import(&server, &secrets, config.as_ref(), db.as_ref())
         .unwrap_or_else(|e| die(e, 1));
@@ -55,6 +57,15 @@ fn run_create_pair_code(args: &[String]) {
     eprintln!("This code works once and expires in 10 minutes.");
 }
 
+/// `askbar-server generate-master-key`: create the master key file if there is none.
+fn run_generate_master_key() {
+    let path = askbar_server::secrets::key_path();
+    match askbar_server::secrets::generate_key_file(&path) {
+        Ok(_) => println!("created {}", path.display()),
+        Err(e) => die(e, 1),
+    }
+}
+
 /// `askbar-server healthcheck`: GET the local API health endpoint; exit 0 if it answers 200.
 fn run_healthcheck() -> ! {
     use std::io::{Read, Write};
@@ -80,6 +91,9 @@ async fn main() {
     if args.first().map(String::as_str) == Some("healthcheck") {
         run_healthcheck();
     }
+    if args.first().map(String::as_str) == Some("generate-master-key") {
+        return run_generate_master_key();
+    }
     if args.first().map(String::as_str) == Some("create-pair-code") {
         return run_create_pair_code(&args[1..]);
     }
@@ -96,7 +110,11 @@ async fn main() {
             std::process::exit(2);
         }
     };
-    let secrets = askbar_server::secrets::Secrets::from_env().unwrap_or_else(|e| die(e, 2));
+    let key_path = askbar_server::secrets::key_path();
+    let secrets = askbar_server::secrets::load_key_file(&key_path).unwrap_or_else(|e| die(e, 2));
+    if secrets.is_none() {
+        tracing::warn!(path = %key_path.display(), "no master key yet: the server is in setup mode (open the admin page)");
+    }
     let db = askbar_core::Db::open(&data_dir().join("askbar.db")).unwrap_or_else(|e| die(e, 1));
     match db.seed_server() {
         Ok(user) => tracing::info!(%user, "database ready"),
@@ -114,7 +132,7 @@ async fn main() {
         .ok()
         .filter(|u| !u.trim().is_empty())
         .unwrap_or_else(|| format!("http://localhost:{}", api.port()));
-    let state = askbar_server::AppState::with_config(db, secrets, askbar_server::MIN_CLIENT, &public_url);
+    let state = askbar_server::AppState::build(db, secrets, askbar_server::MIN_CLIENT, &public_url, key_path);
     let result = tokio::try_join!(
         serve(api, askbar_server::api_router(state.clone())),
         serve(admin, askbar_server::admin_router(state))

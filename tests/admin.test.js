@@ -39,9 +39,10 @@ async function waitForPort(port) {
   const cleanup = () => { for (const c of children) c.kill(); fs.rmSync(data, { recursive: true, force: true }); };
 
   run('python3', ['-u', path.join(ROOT, 'tests/mock_llm.py'), String(mockPort)], {});
+  require('node:child_process').execFileSync(path.join(ROOT, 'target/debug/askbar-server'), ['generate-master-key'], { env: { ...process.env, ASKBAR_SECRETS_DIR: path.join(data, 'secrets') } });
   run(path.join(ROOT, 'target/debug/askbar-server'), [], {
     ASKBAR_API_ADDR: '127.0.0.1:' + api, ASKBAR_ADMIN_ADDR: '127.0.0.1:' + adminPort, ASKBAR_DATA_DIR: data,
-    ASKBAR_MASTER_KEY: '0123456789abcdef0123456789abcdef', ASKBAR_ADMIN_PASSWORD: PASSWORD,
+    ASKBAR_SECRETS_DIR: path.join(data, 'secrets'), ASKBAR_ADMIN_PASSWORD: PASSWORD,
   });
   await waitForPort(adminPort);
   await waitForPort(mockPort);

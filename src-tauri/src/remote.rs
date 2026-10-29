@@ -124,9 +124,12 @@ fn check_status(status: StatusCode) -> Result<(), String> {
         s if s.is_success() => Ok(()),
         StatusCode::UNAUTHORIZED => Err("The server rejected this device's token.".into()),
         StatusCode::UPGRADE_REQUIRED => Err("This version of Askbar is too old for the server. Please update.".into()),
+        StatusCode::SERVICE_UNAVAILABLE => Err(SETUP_PENDING.into()),
         s => Err(format!("The server answered {s}.")),
     }
 }
+
+const SETUP_PENDING: &str = "The server's setup is not finished. Open its admin page to complete it.";
 
 /// Redeem a pairing string: exchange its code for a device token, keep the
 /// token in `tokens`, and record the server in `client.yaml` (creating it, or
@@ -226,6 +229,7 @@ impl Backend for Remote {
                 return Some(ClientStatus::new("update_needed", "Update needed. This version of Askbar is too old for the server."))
             }
             Ok(s) if s.is_success() => {}
+            Ok(StatusCode::SERVICE_UNAVAILABLE) => return Some(ClientStatus::new("problem", SETUP_PENDING)),
             Ok(s) => return Some(ClientStatus::new("problem", format!("The server answered {s}."))),
         }
         let providers: Vec<ProviderInfo> = i.get_json("/api/v1/providers").await.ok()?;
