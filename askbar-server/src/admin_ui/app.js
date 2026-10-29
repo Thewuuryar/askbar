@@ -36,6 +36,7 @@
     { id: 'providers', label: 'Providers', load: loadProviders },
     { id: 'devices', label: 'Devices', load: loadDevices },
     { id: 'settings', label: 'Settings', load: loadSettings },
+    { id: 'network', label: 'Network', load: loadNetwork },
     { id: 'security', label: 'Security', load: loadSecurity },
     { id: 'backup', label: 'Backup' },
   ];
@@ -338,6 +339,44 @@
       await api('POST', '/admin/api/password', { current: $('pw-current').value, new: $('pw-new').value });
       for (const id of ['pw-current', 'pw-new', 'pw-new2']) $(id).value = '';
       flash('Password changed. Other browsers have been signed out.');
+    } catch (ex) {
+      err.textContent = ex.message;
+      show(err, true);
+    }
+  });
+
+  // ----------------------------------------------------------- network
+
+  async function loadNetwork() {
+    const n = await api('GET', '/admin/api/network');
+    $('n-tls').checked = n.tls_enabled;
+    $('n-host').value = n.hostname;
+    $('n-cidr').value = n.admin_cidr;
+    $('n-staging').checked = n.acme_staging;
+    $('n-token').value = '';
+    $('n-token').placeholder = n.has_token ? 'unchanged (write-only)' : 'write-only';
+    $('n-clear').checked = false;
+    show($('n-clear-row'), n.has_token);
+    $('n-info').textContent = (n.tls_enabled ? 'HTTPS ports on this machine: API ' + n.api_port + ', admin ' + n.admin_port + '. ' : '')
+      + 'New pairing strings point at ' + n.public_url + '.';
+    show($('network-error'), false);
+  }
+
+  $('network-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const err = $('network-error');
+    show(err, false);
+    try {
+      await api('PUT', '/admin/api/network', {
+        tls_enabled: $('n-tls').checked,
+        hostname: $('n-host').value.trim(),
+        admin_cidr: $('n-cidr').value.trim(),
+        acme_staging: $('n-staging').checked,
+        cloudflare_token: $('n-token').value,
+        clear_token: $('n-clear').checked,
+      });
+      await loadNetwork();
+      flash('Network settings saved.');
     } catch (ex) {
       err.textContent = ex.message;
       show(err, true);

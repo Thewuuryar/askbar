@@ -11,6 +11,8 @@ services:
     user: "${ASKBAR_UID:-10001}:${ASKBAR_GID:-10001}"
     environment:
       # Put into pairing strings made by `create-pair-code`.
+      ASKBAR_TLS_API_PORT: ${ASKBAR_TLS_API_PORT:-8443}
+      ASKBAR_TLS_ADMIN_PORT: ${ASKBAR_TLS_ADMIN_PORT:-9443}
       ASKBAR_PUBLIC_URL: ${ASKBAR_PUBLIC_URL:-http://localhost:${ASKBAR_API_PORT:-8080}}
     ports:
       - "${ASKBAR_API_PORT:-8080}:8080"

@@ -236,6 +236,36 @@ async function waitForPort(port) {
     await page.waitForSelector('#settings-error:not([hidden])');
     assert.match(await page.innerText('#settings-error'), /Width must be/);
   });
+  await step('network: hostname, token and networks are saved; the token is write-only', async () => {
+    const CF = 'cf_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    await page.click('#nav [data-tab="network"]');
+    await page.waitForFunction(() => /pairing strings point at/.test(document.getElementById('n-info').textContent));
+    await page.check('#n-tls');
+    await page.fill('#n-host', 'https://askbar.orraitu.com');
+    await page.fill('#n-token', CF);
+    await page.fill('#n-cidr', '192.168.1.0/24');
+    await page.click('#network-form button[type=submit]');
+    await page.waitForSelector('#network-error:not([hidden])');
+    assert.match(await page.innerText('#network-error'), /plain DNS name/);
+    await page.fill('#n-host', 'askbar.orraitu.com');
+    await page.check('#n-staging');
+    await page.click('#network-form button[type=submit]');
+    await page.waitForSelector('#flash:not([hidden])');
+    assert.match(await page.innerText('#flash'), /Network settings saved/);
+    assert.match(await page.innerText('#n-info'), /https:\/\/askbar\.orraitu\.com:8443/);
+    assert.equal(await page.inputValue('#n-token'), '');
+    assert.match(await page.getAttribute('#n-token', 'placeholder'), /unchanged/);
+    assert.equal((await page.content()).includes(CF), false);
+    await page.reload();
+    await page.click('#nav [data-tab="network"]');
+    await page.waitForFunction(() => document.getElementById('n-host').value === 'askbar.orraitu.com');
+    assert.equal(await page.isChecked('#n-staging'), true);
+    assert.equal((await page.content()).includes(CF), false);
+    // Back to plain HTTP so the rest of the run keeps working the same way.
+    await page.uncheck('#n-tls');
+    await page.click('#network-form button[type=submit]');
+    await page.waitForFunction(() => /point at http:\/\/localhost/.test(document.getElementById('n-info').textContent));
+  });
   await step('security: rotating the master key shows the new key once and providers keep working', async () => {
     await page.click('#nav [data-tab="security"]');
     page.once('dialog', (d) => d.accept());

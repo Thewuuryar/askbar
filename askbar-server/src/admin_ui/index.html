@@ -113,6 +113,22 @@
         </div>
       </section>
 
+      <section id="tab-network" data-tab="network" hidden>
+        <h2>Network</h2>
+        <form id="network-form" class="panel">
+          <label class="check"><input id="n-tls" type="checkbox"> Serve over HTTPS (needs the <code>tls</code> compose profile)</label>
+          <label>Hostname <input id="n-host" placeholder="askbar.example.com" autocomplete="off" spellcheck="false"></label>
+          <label>Cloudflare API token <input id="n-token" type="password" autocomplete="off" placeholder="write-only"></label>
+          <p class="hint">Used only to prove ownership of the hostname to Let's Encrypt (permissions Zone:DNS:Edit and Zone:Zone:Read). It is stored encrypted and never shown again.</p>
+          <label class="check" id="n-clear-row" hidden><input id="n-clear" type="checkbox"> Remove the stored token</label>
+          <label>Networks allowed to open this admin site over HTTPS <input id="n-cidr" placeholder="192.168.1.0/24 10.0.0.5" autocomplete="off" spellcheck="false"></label>
+          <label class="check"><input id="n-staging" type="checkbox"> Use the Let's Encrypt staging CA (test certificates; browsers will warn)</label>
+          <div class="row"><button type="submit">Save network settings</button></div>
+          <p class="hint" id="n-info"></p>
+          <p id="network-error" class="error" hidden></p>
+        </form>
+      </section>
+
       <section id="tab-security" data-tab="security" hidden>
         <h2>Security</h2>
         <form id="password-form" class="panel">

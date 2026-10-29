@@ -129,6 +129,8 @@ async fn main() {
         .filter(|u| !u.trim().is_empty())
         .unwrap_or_else(|| format!("http://localhost:{}", api.port()));
     let state = askbar_server::AppState::build(db, secrets, askbar_server::MIN_CLIENT, &public_url, key_path);
+    let port_from = |var: &str, default: u16| std::env::var(var).ok().and_then(|v| v.parse().ok()).unwrap_or(default);
+    state.set_tls_ports(port_from("ASKBAR_TLS_API_PORT", 8443), port_from("ASKBAR_TLS_ADMIN_PORT", 9443));
     let result = tokio::try_join!(
         serve(api, askbar_server::api_router(state.clone())),
         serve(admin, askbar_server::admin_router(state))

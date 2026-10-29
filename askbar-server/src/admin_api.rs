@@ -349,7 +349,7 @@ pub async fn create_pairing(State(state): St, Json(i): Json<PairInput>) -> Resul
     let fail = || (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error: "Could not create a pairing code.".into() }));
     let user: String = db.conn().query_row("SELECT id FROM users ORDER BY created_at, id LIMIT 1", [], |r| r.get(0)).map_err(|_| fail())?;
     let code = crate::auth::create_pair_code(&db, &user, name, crate::auth::PAIR_CODE_TTL_SECS).map_err(|_| fail())?;
-    Ok(Json(PairingOut { pairing: askbar_proto::encode_pairing(&state.public_url, &code), expires_in: crate::auth::PAIR_CODE_TTL_SECS }))
+    Ok(Json(PairingOut { pairing: askbar_proto::encode_pairing(&crate::network::effective_public_url(&db, &state), &code), expires_in: crate::auth::PAIR_CODE_TTL_SECS }))
 }
 
 // ------------------------------------------------------------------ backup
@@ -378,7 +378,7 @@ fn stamp(unix: i64) -> String {
 }
 
 /// A consistent snapshot of the database (`VACUUM INTO`) with everything secret taken out:
-/// provider API keys, the admin password hash and unredeemed pairing codes.
+/// provider API keys, the Cloudflare token, the admin password hash and unredeemed pairing codes.
 /// Conversations, settings and paired-device records (token hashes only) stay.
 fn make_snapshot(state: &AppState, path: &std::path::Path) -> rusqlite::Result<()> {
     {
@@ -388,7 +388,7 @@ fn make_snapshot(state: &AppState, path: &std::path::Path) -> rusqlite::Result<(
     let snap = rusqlite::Connection::open(path)?;
     snap.execute_batch(
         "UPDATE providers SET api_key_enc = NULL;
-         DELETE FROM settings WHERE key = 'admin_password_hash';
+         DELETE FROM settings WHERE key IN ('admin_password_hash', 'cloudflare_token');
          DELETE FROM pair_codes;
          PRAGMA journal_mode = DELETE;
          VACUUM;", // rewrite the file so the removed values don't linger in free pages

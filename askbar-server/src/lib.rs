@@ -6,6 +6,7 @@ pub mod api;
 pub mod auth;
 pub mod chat;
 pub mod import;
+pub mod network;
 pub mod rotate;
 pub mod secrets;
 pub mod store;
@@ -38,8 +39,11 @@ pub struct AppState {
     pub admin: admin::AdminAuth,
     /// Oldest client version the API still serves.
     pub min_client: String,
-    /// Where clients reach the API; goes into pairing strings.
+    /// Where clients reach the API when TLS is off; goes into pairing strings.
     pub public_url: String,
+    /// Host ports of the HTTPS front end (they decide the address in pairing strings).
+    pub tls_api_port: std::sync::atomic::AtomicU16,
+    pub tls_admin_port: std::sync::atomic::AtomicU16,
 }
 
 impl AppState {
@@ -67,6 +71,8 @@ impl AppState {
             admin: admin::AdminAuth::default(),
             min_client: min_client.to_string(),
             public_url: public_url.trim_end_matches('/').to_string(),
+            tls_api_port: 8443.into(),
+            tls_admin_port: 9443.into(),
         })
     }
 
@@ -77,6 +83,11 @@ impl AppState {
 
     pub fn set_secrets(&self, s: Secrets) {
         *self.secrets.write().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(s));
+    }
+
+    pub fn set_tls_ports(&self, api: u16, admin: u16) {
+        self.tls_api_port.store(api, std::sync::atomic::Ordering::Relaxed);
+        self.tls_admin_port.store(admin, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub fn setup_complete(&self) -> bool {
@@ -142,6 +153,7 @@ pub fn admin_router(state: Arc<AppState>) -> Router {
         .route("/admin/api/security", get(admin::security_status))
         .route("/admin/api/security/rotate-key", post(admin::rotate_key))
         .route("/admin/api/security/previous-key", axum::routing::delete(admin::delete_previous_key))
+        .route("/admin/api/network", get(network::get_network).put(network::put_network))
         .route("/admin/api/backup", get(admin_api::backup))
         .route("/admin/api/devices", get(admin_api::list_devices))
         .route("/admin/api/devices/{id}/revoke", post(admin_api::revoke_device))
