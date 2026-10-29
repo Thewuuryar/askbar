@@ -10,7 +10,6 @@ services:
     # The bind-mounted DATA_DIR must be writable by this user.
     user: "${ASKBAR_UID:-10001}:${ASKBAR_GID:-10001}"
     environment:
-      ASKBAR_ADMIN_PASSWORD: ${ASKBAR_ADMIN_PASSWORD:-}
       # Put into pairing strings made by `create-pair-code`.
       ASKBAR_PUBLIC_URL: ${ASKBAR_PUBLIC_URL:-http://localhost:${ASKBAR_API_PORT:-8080}}
     ports:

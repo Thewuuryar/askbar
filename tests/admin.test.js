@@ -39,28 +39,66 @@ async function waitForPort(port) {
   const cleanup = () => { for (const c of children) c.kill(); fs.rmSync(data, { recursive: true, force: true }); };
 
   run('python3', ['-u', path.join(ROOT, 'tests/mock_llm.py'), String(mockPort)], {});
-  require('node:child_process').execFileSync(path.join(ROOT, 'target/debug/askbar-server'), ['generate-master-key'], { env: { ...process.env, ASKBAR_SECRETS_DIR: path.join(data, 'secrets') } });
   run(path.join(ROOT, 'target/debug/askbar-server'), [], {
     ASKBAR_API_ADDR: '127.0.0.1:' + api, ASKBAR_ADMIN_ADDR: '127.0.0.1:' + adminPort, ASKBAR_DATA_DIR: data,
-    ASKBAR_SECRETS_DIR: path.join(data, 'secrets'), ASKBAR_ADMIN_PASSWORD: PASSWORD,
+    ASKBAR_SECRETS_DIR: path.join(data, 'secrets'),
   });
   await waitForPort(adminPort);
   await waitForPort(mockPort);
 
   const base = `http://127.0.0.1:${adminPort}/admin/`;
   const browser = await chromium.launch();
-  const ctx = await browser.newContext({ viewport: { width: 900, height: 800 } });
+  const ctx = await browser.newContext({ viewport: { width: 900, height: 800 }, permissions: ['clipboard-read', 'clipboard-write'] });
   const page = await ctx.newPage();
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
   page.on('console', (m) => { if (m.type() === 'error' && !/status of 4\d\d/.test(m.text())) errors.push(m.text()); });
 
-  await step('shows the login form when signed out', async () => {
+  let masterKey = null;
+  await step('first run shows the setup wizard, not a login form', async () => {
     await page.goto(base);
-    await page.waitForSelector('#login:not([hidden])');
+    await page.waitForSelector('#setup:not([hidden])');
+    assert.equal(await page.isVisible('#setup-password-form'), true);
+    assert.equal(await page.isHidden('#login'), true);
     assert.equal(await page.isHidden('#app'), true);
   });
-  await step('wrong password is refused, right one signs in', async () => {
+  await step('setup step 1: the password must match and be long enough', async () => {
+    await page.fill('#setup-password', PASSWORD);
+    await page.fill('#setup-password2', PASSWORD + 'x');
+    await page.click('#setup-password-form button[type=submit]');
+    await page.waitForSelector('#setup-password-error:not([hidden])');
+    assert.match(await page.innerText('#setup-password-error'), /do not match/);
+    await page.fill('#setup-password2', PASSWORD);
+    await page.click('#setup-password-form button[type=submit]');
+    await page.waitForSelector('#setup-key:not([hidden])');
+    assert.equal(await page.isHidden('#setup-password-form'), true);
+  });
+  await step('setup step 2: the master key is shown once, with a copy button and a password-manager hint', async () => {
+    await page.click('#setup-key-button');
+    await page.waitForSelector('#setup-saved:not([hidden])');
+    masterKey = await page.inputValue('#saved-key');
+    assert.ok(masterKey.length >= 32);
+    assert.match(await page.innerText('#setup-saved'), /password manager/i);
+    assert.equal(await page.isDisabled('#saved-continue'), true);
+    await page.click('#saved-copy');
+    assert.equal(await page.evaluate(() => navigator.clipboard.readText()), masterKey);
+    assert.equal(fs.readFileSync(path.join(data, 'secrets', 'master.key'), 'utf8').trim(), masterKey);
+    await page.check('#saved-confirm');
+    assert.equal(await page.isDisabled('#saved-continue'), false);
+    await page.click('#saved-continue');
+    await page.waitForSelector('#app:not([hidden])');
+    assert.equal(await page.inputValue('#saved-key'), '', 'the key is cleared from the page');
+    assert.match(await page.innerText('#providers'), /No providers yet/);
+  });
+  await step('the key is not shown again after a reload', async () => {
+    await page.reload();
+    await page.waitForSelector('#app:not([hidden])');
+    assert.equal((await page.content()).includes(masterKey), false);
+    assert.equal(await page.isHidden('#setup'), true);
+  });
+  await step('sign out, then a wrong password is refused and the right one signs in', async () => {
+    await page.click('#logout');
+    await page.waitForSelector('#login:not([hidden])');
     await page.fill('#password', 'nope');
     await page.click('#login-form button');
     await page.waitForSelector('#login-error:not([hidden])');
@@ -68,7 +106,6 @@ async function waitForPort(port) {
     await page.fill('#password', PASSWORD);
     await page.click('#login-form button');
     await page.waitForSelector('#app:not([hidden])');
-    assert.match(await page.innerText('#providers'), /No providers yet/);
   });
 
   await step('add the mock provider through the page', async () => {
@@ -199,11 +236,42 @@ async function waitForPort(port) {
     await page.waitForSelector('#settings-error:not([hidden])');
     assert.match(await page.innerText('#settings-error'), /Width must be/);
   });
+  await step('backup downloads a database without provider keys', async () => {
+    await page.click('#nav [data-tab="backup"]');
+    const [download] = await Promise.all([page.waitForEvent('download'), page.click('#backup-link')]);
+    assert.match(download.suggestedFilename(), /^askbar-backup-\d{8}-\d{6}\.db$/);
+    const file = path.join(data, 'downloaded.db');
+    await download.saveAs(file);
+    const bytes = fs.readFileSync(file);
+    assert.equal(bytes.subarray(0, 15).toString(), 'SQLite format 3');
+    assert.equal(bytes.includes(SECRET_KEY), false);
+    assert.equal(bytes.includes(masterKey), false);
+  });
+  await step('security: changing the password needs the current one', async () => {
+    await page.click('#nav [data-tab="security"]');
+    await page.fill('#pw-current', 'wrong');
+    await page.fill('#pw-new', 'brand new password 1');
+    await page.fill('#pw-new2', 'brand new password 1');
+    await page.click('#password-form button[type=submit]');
+    await page.waitForSelector('#pw-error:not([hidden])');
+    assert.match(await page.innerText('#pw-error'), /current password is wrong/);
+    assert.equal(await page.isVisible('#app'), true, 'a wrong current password does not sign you out');
+    await page.fill('#pw-current', PASSWORD);
+    await page.click('#password-form button[type=submit]');
+    await page.waitForSelector('#flash:not([hidden])');
+    assert.match(await page.innerText('#flash'), /Password changed/);
+  });
   await step('sign out returns to the login form', async () => {
     await page.click('#logout');
     await page.waitForSelector('#login:not([hidden])');
     await page.reload();
     await page.waitForSelector('#login:not([hidden])');
+    await page.fill('#password', PASSWORD);
+    await page.click('#login-form button');
+    await page.waitForSelector('#login-error:not([hidden])');
+    await page.fill('#password', 'brand new password 1');
+    await page.click('#login-form button');
+    await page.waitForSelector('#app:not([hidden])');
   });
   await step('no JavaScript errors', async () => { assert.deepEqual(errors, []); });
 

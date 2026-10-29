@@ -51,10 +51,23 @@ pub fn load_key_file(path: &std::path::Path) -> Result<Option<Secrets>, SecretsE
 /// Create a fresh random master key at `path` (mode 0600) and return the secrets built from it.
 /// Refuses to overwrite an existing file.
 pub fn generate_key_file(path: &std::path::Path) -> Result<Secrets, SecretsError> {
-    use std::io::Write;
+    generate_key(path).map(|(s, _)| s)
+}
+
+/// Like `generate_key_file`, but also returns the key text so setup can show it once.
+pub fn generate_key(path: &std::path::Path) -> Result<(Secrets, String), SecretsError> {
     let mut raw = [0u8; 32];
     OsRng.fill_bytes(&mut raw);
     let key = base64_url(&raw);
+    write_key_file(path, &key).map(|s| (s, key))
+}
+
+/// Store a master key the user already has (for example from a password manager, when
+/// restoring onto a fresh secrets volume). Refuses to overwrite an existing file.
+pub fn write_key_file(path: &std::path::Path, key: &str) -> Result<Secrets, SecretsError> {
+    use std::io::Write;
+    let secrets = Secrets::new(key.trim())?;
+    let key = key.trim();
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| file_err(path, e))?;
     }
@@ -64,7 +77,7 @@ pub fn generate_key_file(path: &std::path::Path) -> Result<Secrets, SecretsError
     std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
     let mut f = opts.open(path).map_err(|e| file_err(path, e))?;
     f.write_all(key.as_bytes()).and_then(|_| f.sync_all()).map_err(|e| file_err(path, e))?;
-    Secrets::new(&key)
+    Ok(secrets)
 }
 
 fn base64_url(bytes: &[u8]) -> String {

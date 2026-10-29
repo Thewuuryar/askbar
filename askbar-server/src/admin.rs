@@ -48,8 +48,11 @@ fn hash_password(password: &str) -> Result<String, argon2::password_hash::Error>
     Ok(Argon2::default().hash_password(password.as_bytes(), &salt)?.to_string())
 }
 
-/// First start: store the argon2 hash of `ASKBAR_ADMIN_PASSWORD`. Later starts leave an existing hash alone.
-/// Returns true if a hash was written.
+pub const MIN_PASSWORD_CHARS: usize = 10;
+const MAX_PASSWORD_CHARS: usize = 200;
+
+/// Store the argon2 hash of `password` unless a password already exists (first one wins).
+/// Returns true if a hash was written. The server itself uses the setup endpoints; this is for tests and tools.
 pub fn init_password(db: &askbar_core::Db, password: &str) -> rusqlite::Result<bool> {
     let has: Option<String> =
         db.conn().query_row("SELECT value FROM settings WHERE key = ?1", [HASH_KEY], |r| r.get(0)).optional()?;
@@ -100,6 +103,12 @@ impl AdminAuth {
             *self.locked_until.lock().unwrap_or_else(|e| e.into_inner()) = t + LOCKOUT_SECS;
             f.clear();
         }
+    }
+
+    /// Sign out every session except `keep`.
+    fn keep_only(&self, keep: Option<&str>) {
+        let keep = keep.map(sha);
+        self.sessions.lock().unwrap_or_else(|e| e.into_inner()).retain(|k, _| Some(k) == keep.as_ref());
     }
 
     fn clear_failures(&self) {
@@ -160,22 +169,11 @@ pub async fn login(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(
         r.headers_mut().insert(header::RETRY_AFTER, HeaderValue::from(secs));
         return r;
     }
-    let stored: Option<String> = {
-        let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
-        db.conn().query_row("SELECT value FROM settings WHERE key = ?1", [HASH_KEY], |r| r.get(0)).optional().ok().flatten()
-    };
-    let Some(stored) = stored else {
-        // ASKBAR_ADMIN_PASSWORD was never set, so nobody can log in.
+    let Some(stored) = stored_hash(&state) else {
+        // No password yet: the setup page has to create one first.
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
-    let ok = tokio::task::spawn_blocking(move || {
-        PasswordHash::new(&stored)
-            .map(|h| Argon2::default().verify_password(body.password.as_bytes(), &h).is_ok())
-            .unwrap_or(false)
-    })
-    .await
-    .unwrap_or(false);
-    if !ok {
+    if !verify(stored, body.password).await {
         state.admin.record_failure();
         return StatusCode::UNAUTHORIZED.into_response();
     }
@@ -193,4 +191,141 @@ pub async fn logout(State(state): State<Arc<AppState>>, headers: HeaderMap) -> R
     let mut r = StatusCode::NO_CONTENT.into_response();
     r.headers_mut().insert(header::SET_COOKIE, set_cookie(&headers, "", 0));
     r
+}
+
+fn stored_hash(state: &AppState) -> Option<String> {
+    let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+    db.conn().query_row("SELECT value FROM settings WHERE key = ?1", [HASH_KEY], |r| r.get(0)).optional().ok().flatten()
+}
+
+async fn verify(stored: String, password: String) -> bool {
+    tokio::task::spawn_blocking(move || {
+        PasswordHash::new(&stored)
+            .map(|h| Argon2::default().verify_password(password.as_bytes(), &h).is_ok())
+            .unwrap_or(false)
+    })
+    .await
+    .unwrap_or(false)
+}
+
+fn check_new_password(pw: &str) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    let n = pw.chars().count();
+    let msg = if n < MIN_PASSWORD_CHARS {
+        format!("The password must be at least {MIN_PASSWORD_CHARS} characters.")
+    } else if n > MAX_PASSWORD_CHARS {
+        "The password is too long.".to_string()
+    } else {
+        return Ok(());
+    };
+    Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": msg }))))
+}
+
+type Failure = (StatusCode, Json<serde_json::Value>);
+
+fn err(status: StatusCode, msg: &str) -> Failure {
+    (status, Json(serde_json::json!({ "error": msg })))
+}
+
+/// What the setup page needs to decide which screen to show. Booleans only.
+pub async fn setup_status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "password_set": stored_hash(&state).is_some(), "key_set": state.setup_complete() }))
+}
+
+/// First run: the first visitor chooses the admin password and is signed in. Refused once one exists.
+pub async fn setup_password(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(body): Json<Login>) -> Result<Response, Failure> {
+    check_new_password(&body.password)?;
+    let password = body.password;
+    let hash = tokio::task::spawn_blocking(move || hash_password(&password))
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .ok_or_else(|| err(StatusCode::INTERNAL_SERVER_ERROR, "Could not hash the password."))?;
+    {
+        let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+        // INSERT OR IGNORE: if two visitors race, exactly one row lands.
+        let n = db
+            .conn()
+            .execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?1, ?2)", rusqlite::params![HASH_KEY, hash])
+            .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Could not save the password."))?;
+        if n != 1 {
+            return Err(err(StatusCode::CONFLICT, "An admin password is already set."));
+        }
+    }
+    let token = state.admin.new_session();
+    let mut r = StatusCode::NO_CONTENT.into_response();
+    r.headers_mut().insert(header::SET_COOKIE, set_cookie(&headers, &token, SESSION_TTL_SECS));
+    Ok(r)
+}
+
+#[derive(Deserialize)]
+pub struct MasterKeyInput {
+    /// A key the user already has. Missing means "generate one".
+    #[serde(default)]
+    key: Option<String>,
+}
+
+/// Create the master key file and return the key, once, so it can be saved in a password manager.
+/// Needs a session; refused once a key exists.
+pub async fn setup_master_key(State(state): State<Arc<AppState>>, Json(body): Json<MasterKeyInput>) -> Result<Json<serde_json::Value>, Failure> {
+    if state.setup_complete() {
+        return Err(err(StatusCode::CONFLICT, "A master key already exists."));
+    }
+    let path = state.key_path.clone();
+    let provided = body.key.filter(|k| !k.trim().is_empty());
+    if let Some(k) = &provided {
+        if k.trim().chars().count() < crate::secrets::MIN_MASTER_KEY_LEN {
+            return Err(err(StatusCode::BAD_REQUEST, "A master key must be at least 32 characters."));
+        }
+    }
+    let made = tokio::task::spawn_blocking(move || match provided {
+        Some(k) => crate::secrets::write_key_file(&path, &k).map(|s| (s, k.trim().to_string())),
+        None => crate::secrets::generate_key(&path),
+    })
+    .await;
+    match made {
+        Ok(Ok((secrets, key))) => {
+            state.set_secrets(secrets);
+            Ok(Json(serde_json::json!({ "key": key })))
+        }
+        Ok(Err(e)) => {
+            tracing::error!("could not create the master key: {e}");
+            Err(err(StatusCode::INTERNAL_SERVER_ERROR, "Could not create the master key file. Check that the secrets volume is writable."))
+        }
+        Err(_) => Err(err(StatusCode::INTERNAL_SERVER_ERROR, "Could not create the master key file.")),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct ChangePassword {
+    current: String,
+    new: String,
+}
+
+/// Change the password. The current one is required; every other session is signed out.
+pub async fn change_password(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(body): Json<ChangePassword>) -> Result<StatusCode, Failure> {
+    if state.admin.lockout_remaining().is_some() {
+        return Err(err(StatusCode::TOO_MANY_REQUESTS, "Too many attempts. Try again later."));
+    }
+    let stored = stored_hash(&state).ok_or_else(|| err(StatusCode::CONFLICT, "No password is set."))?;
+    if !verify(stored, body.current).await {
+        state.admin.record_failure();
+        // 403, not 401: the page treats 401 as "signed out".
+        return Err(err(StatusCode::FORBIDDEN, "The current password is wrong."));
+    }
+    state.admin.clear_failures();
+    check_new_password(&body.new)?;
+    let new = body.new;
+    let hash = tokio::task::spawn_blocking(move || hash_password(&new))
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .ok_or_else(|| err(StatusCode::INTERNAL_SERVER_ERROR, "Could not hash the password."))?;
+    {
+        let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+        db.conn()
+            .execute("UPDATE settings SET value = ?1 WHERE key = ?2", rusqlite::params![hash, HASH_KEY])
+            .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Could not save the password."))?;
+    }
+    state.admin.keep_only(session_cookie(&headers).as_deref());
+    Ok(StatusCode::NO_CONTENT)
 }

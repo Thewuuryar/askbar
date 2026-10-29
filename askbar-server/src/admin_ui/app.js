@@ -36,6 +36,7 @@
     { id: 'providers', label: 'Providers', load: loadProviders },
     { id: 'devices', label: 'Devices', load: loadDevices },
     { id: 'settings', label: 'Settings', load: loadSettings },
+    { id: 'security', label: 'Security' },
     { id: 'backup', label: 'Backup' },
   ];
   function registerTab(tab) { tabs.push(tab); renderNav(); }
@@ -67,15 +68,106 @@
 
   // ------------------------------------------------------------ login
 
+  function hideAll() {
+    for (const id of ['app', 'login', 'setup']) show($(id), false);
+  }
+
+  // First run: choose a password, then create the master key. Returns when nothing is left to set up.
+  let pendingKey = null; // the master key, held only until the user confirms they saved it
+
+  function showSetup(status) {
+    hideAll();
+    show($('setup'), true);
+    show($('setup-password-form'), !status.password_set);
+    show($('setup-key'), status.password_set && !status.key_set);
+    show($('setup-saved'), false);
+    if (!status.password_set) $('setup-password').focus();
+  }
+
+  async function route() {
+    let status;
+    try { status = await api('GET', '/admin/api/setup-status'); } catch (_) { status = { password_set: true, key_set: true }; }
+    if (!status.password_set) return showSetup(status);
+    let signedIn = true;
+    try { await api('GET', '/admin/session'); } catch (_) { signedIn = false; }
+    if (!signedIn) return showLogin();
+    if (pendingKey) return showSavedKey();
+    if (!status.key_set) return showSetup(status);
+    showApp();
+  }
+
+  $('setup-password-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const err = $('setup-password-error');
+    show(err, false);
+    if ($('setup-password').value !== $('setup-password2').value) {
+      err.textContent = 'The two passwords do not match.';
+      show(err, true);
+      return;
+    }
+    try {
+      await api('POST', '/admin/api/setup/password', { password: $('setup-password').value });
+      $('setup-password').value = '';
+      $('setup-password2').value = '';
+      route();
+    } catch (ex) {
+      err.textContent = ex.message;
+      show(err, true);
+    }
+  });
+
+  async function createKey(body) {
+    const err = $('setup-key-error');
+    show(err, false);
+    try {
+      const r = await api('POST', '/admin/api/setup/master-key', body);
+      pendingKey = r.key;
+      $('setup-key-input').value = '';
+      route();
+    } catch (ex) {
+      err.textContent = ex.message;
+      show(err, true);
+    }
+  }
+
+  function showSavedKey() {
+    hideAll();
+    show($('setup'), true);
+    for (const id of ['setup-password-form', 'setup-key']) show($(id), false);
+    show($('setup-saved'), true);
+    $('saved-key').value = pendingKey;
+    $('saved-confirm').checked = false;
+    $('saved-continue').disabled = true;
+    $('saved-key').select();
+  }
+
+  $('setup-key-button').addEventListener('click', () => createKey({}));
+  $('setup-key-existing').addEventListener('click', () => { show($('setup-key-form'), true); $('setup-key-input').focus(); });
+  $('setup-key-form').addEventListener('submit', (e) => { e.preventDefault(); createKey({ key: $('setup-key-input').value }); });
+
+  $('saved-copy').addEventListener('click', async () => {
+    const field = $('saved-key');
+    field.select();
+    try { await navigator.clipboard.writeText(field.value); } catch (_) { document.execCommand('copy'); }
+    $('saved-copy').textContent = 'Copied';
+    setTimeout(() => { $('saved-copy').textContent = 'Copy to clipboard'; }, 1500);
+  });
+  $('saved-confirm').addEventListener('change', () => { $('saved-continue').disabled = !$('saved-confirm').checked; });
+  $('saved-continue').addEventListener('click', () => {
+    pendingKey = null;
+    $('saved-key').value = '';
+    route();
+  });
+
   function showLogin() {
-    show($('app'), false);
+    hideAll();
     show($('login'), true);
     $('password').value = '';
     $('password').focus();
   }
 
   function showApp() {
-    show($('login'), false);
+    hideAll();
     show($('app'), true);
     renderNav();
     openTab(tabs[0].id);
@@ -87,10 +179,10 @@
     show(err, false);
     try {
       await api('POST', '/admin/login', { password: $('password').value });
-      showApp();
+      route();
     } catch (ex) {
       err.textContent = ex.status === 429 ? 'Too many attempts. Try again later.'
-        : ex.status === 503 ? 'No admin password is set. Set ASKBAR_ADMIN_PASSWORD and restart the server.'
+        : ex.status === 503 ? 'No admin password is set yet. Reload this page to set one up.'
         : 'Wrong password.';
       show(err, true);
     }
@@ -98,7 +190,7 @@
 
   $('logout').addEventListener('click', async () => {
     try { await api('POST', '/admin/logout'); } catch (_) { /* already signed out */ }
-    showLogin();
+    route();
   });
 
   // -------------------------------------------------------- providers
@@ -231,6 +323,27 @@
     }
   });
 
+  // --------------------------------------------------------- security
+
+  $('password-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const err = $('pw-error');
+    show(err, false);
+    if ($('pw-new').value !== $('pw-new2').value) {
+      err.textContent = 'The two new passwords do not match.';
+      show(err, true);
+      return;
+    }
+    try {
+      await api('POST', '/admin/api/password', { current: $('pw-current').value, new: $('pw-new').value });
+      for (const id of ['pw-current', 'pw-new', 'pw-new2']) $(id).value = '';
+      flash('Password changed. Other browsers have been signed out.');
+    } catch (ex) {
+      err.textContent = ex.message;
+      show(err, true);
+    }
+  });
+
   // ---------------------------------------------------------- devices
 
   function when(ts) {
@@ -338,6 +451,6 @@
   // ------------------------------------------------------------- boot
 
   (async () => {
-    try { await api('GET', '/admin/session'); showApp(); } catch (_) { showLogin(); }
+    route();
   })();
 })();
