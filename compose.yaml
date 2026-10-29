@@ -2,6 +2,7 @@
 #   docker compose up -d                    server only
 #   docker compose --profile dev up -d      plus the mock LLM (tests/mock_llm.py)
 #   docker compose --profile tls up -d      plus the HTTPS front end (Caddy)
+#   docker compose --profile cpa up -d      plus CLIProxyAPI (subscription logins as a provider)
 
 services:
   server:
@@ -56,8 +57,49 @@ services:
       - caddy-config:/config
       - caddy-secrets:/caddy-secrets:ro
 
+  # --- CLIProxyAPI: use a ChatGPT/Claude/Gemini subscription as an OpenAI-compatible provider. ---
+  # `docker compose --profile cpa up -d`, then see cpa/README or the main README for the one-time login.
+  # Its API port is NOT published; only containers on this compose network (the server) can reach it.
+  cpa-init:
+    profiles: ["cpa"]
+    image: eceasy/cli-proxy-api:latest
+    entrypoint: ["/bin/sh", "/init.sh"]
+    volumes:
+      - ./cpa/init.sh:/init.sh:ro
+      - cpa-config:/cpa-config
+
+  cpa:
+    profiles: ["cpa"]
+    image: eceasy/cli-proxy-api:latest
+    restart: unless-stopped
+    depends_on:
+      cpa-init:
+        condition: service_completed_successfully
+    command: ["./CLIProxyAPI", "-config", "/cpa-config/config.yaml"]
+    volumes:
+      - cpa-config:/cpa-config
+      - cpa-auth:/root/.cli-proxy-api
+
+  # One-time provider login (run on demand, never started by `up`):
+  #   docker compose --profile cpa run --rm --service-ports cpa-login ./CLIProxyAPI -config /cpa-config/config.yaml -claude-login -no-browser
+  # `--service-ports` publishes the OAuth callback ports on 127.0.0.1 for the duration of that command only.
+  # Other logins: -codex-login (port 1455), -login/-antigravity-login, ... see `./CLIProxyAPI -h`.
+  cpa-login:
+    profiles: ["cpa-login"]
+    image: eceasy/cli-proxy-api:latest
+    volumes:
+      - cpa-config:/cpa-config
+      - cpa-auth:/root/.cli-proxy-api
+    ports:
+      - "127.0.0.1:54545:54545"
+      - "127.0.0.1:1455:1455"
+      - "127.0.0.1:8085:8085"
+      - "127.0.0.1:51121:51121"
+
 volumes:
   askbar-secrets:
+  cpa-config:
+  cpa-auth:
   caddy-secrets:
   caddy-data:
   caddy-config:

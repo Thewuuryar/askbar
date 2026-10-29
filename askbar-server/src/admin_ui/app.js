@@ -286,6 +286,8 @@
     $('p-max-tokens').value = v.max_tokens || '';
     $('p-temperature').value = v.temperature == null ? '' : v.temperature;
     show($('provider-error'), false);
+    $('p-hint').textContent = preset && preset.hint ? preset.hint : '';
+    show($('p-hint'), !!(preset && preset.hint));
     show($('provider-form'), true);
     $('p-name').focus();
   }
@@ -298,7 +300,7 @@
 
   $('add-provider').addEventListener('click', () => openForm(null));
   // CLIProxyAPI runs next to the server in the compose network (profile `cpa`).
-  $('add-cpa').addEventListener('click', () => openForm(null, { name: 'cpa', type: 'openai', base_url: 'http://cpa:8317/v1', model: '' }));
+  $('add-cpa').addEventListener('click', () => openForm(null, { name: 'cpa', type: 'openai', base_url: 'http://cpa:8317/v1', model: '', hint: 'Run `docker compose run --rm cpa-init show` to print the API key to paste below. For the model, use a name CLIProxyAPI lists (after you have logged in to a provider) such as one from `GET /v1/models`.' }));
   $('provider-cancel').addEventListener('click', closeForm);
 
   $('provider-form').addEventListener('submit', async (e) => {
