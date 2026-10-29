@@ -173,6 +173,7 @@ async fn the_page_is_served_with_a_locked_down_policy() {
     let html = t.http.get(format!("{}/admin/", t.addr)).send().await.unwrap().text().await.unwrap();
     assert!(!html.contains("<style") && !html.contains(" style=") && !html.contains("onclick"), "CSP forbids inline code and styles");
     assert!(html.contains("CLIProxyAPI"));
+    assert!(html.contains("https://github.com/Thewuuryar/askbar"), "AGPL section 13: the page links to the source");
     let js = t.http.get(format!("{}/admin/app.js", t.addr)).send().await.unwrap().text().await.unwrap();
     assert!(js.contains("http://cpa:8317/v1"));
 }
