@@ -359,8 +359,19 @@
     show($('n-clear-row'), n.has_token);
     $('n-info').textContent = (n.tls_enabled ? 'HTTPS ports on this machine: API ' + n.api_port + ', admin ' + n.admin_port + '. ' : '')
       + 'New pairing strings point at ' + n.public_url + '.';
+    showProxy(n.proxy);
     show($('network-error'), false);
   }
+
+  function showProxy(p) {
+    const el = $('n-proxy');
+    el.className = p.ok ? 'ok' : (p.at ? 'error' : 'hint');
+    el.textContent = 'HTTPS front end: ' + p.message + (p.at ? ' (' + new Date(p.at * 1000).toLocaleTimeString() + ')' : '');
+  }
+
+  $('n-apply').addEventListener('click', async () => {
+    try { showProxy(await api('POST', '/admin/api/network/apply')); } catch (ex) { flash(ex.message); }
+  });
 
   $('network-form').addEventListener('submit', async (e) => {
     e.preventDefault();

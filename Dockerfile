@@ -11,7 +11,7 @@ RUN sed -i 's/^members = .*/members = ["core", "askbar-proto", "askbar-server"]/
 
 FROM debian:bookworm-slim
 RUN useradd --system --uid 10001 --home-dir /data --shell /usr/sbin/nologin askbar \
- && mkdir /data /secrets && chown askbar:askbar /data /secrets
+ && mkdir /data /secrets /caddy-secrets && chown askbar:askbar /data /secrets /caddy-secrets
 COPY --from=build /src/target/release/askbar-server /usr/local/bin/askbar-server
 USER askbar
 ENV ASKBAR_DATA_DIR=/data \

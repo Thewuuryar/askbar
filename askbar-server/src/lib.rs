@@ -4,6 +4,7 @@ pub mod admin;
 pub mod admin_api;
 pub mod api;
 pub mod auth;
+pub mod caddy;
 pub mod chat;
 pub mod import;
 pub mod network;
@@ -42,6 +43,9 @@ pub struct AppState {
     /// Where clients reach the API when TLS is off; goes into pairing strings.
     pub public_url: String,
     /// Host ports of the HTTPS front end (they decide the address in pairing strings).
+    pub caddy: Mutex<caddy::CaddyLink>,
+    /// How the last attempt to configure Caddy went.
+    pub proxy: Mutex<caddy::ProxyStatus>,
     pub tls_api_port: std::sync::atomic::AtomicU16,
     pub tls_admin_port: std::sync::atomic::AtomicU16,
 }
@@ -71,6 +75,8 @@ impl AppState {
             admin: admin::AdminAuth::default(),
             min_client: min_client.to_string(),
             public_url: public_url.trim_end_matches('/').to_string(),
+            caddy: Mutex::new(caddy::CaddyLink::default()),
+            proxy: Mutex::new(caddy::ProxyStatus::default()),
             tls_api_port: 8443.into(),
             tls_admin_port: 9443.into(),
         })
@@ -83,6 +89,10 @@ impl AppState {
 
     pub fn set_secrets(&self, s: Secrets) {
         *self.secrets.write().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(s));
+    }
+
+    pub fn set_caddy(&self, link: caddy::CaddyLink) {
+        *self.caddy.lock().unwrap_or_else(|e| e.into_inner()) = link;
     }
 
     pub fn set_tls_ports(&self, api: u16, admin: u16) {
@@ -154,6 +164,7 @@ pub fn admin_router(state: Arc<AppState>) -> Router {
         .route("/admin/api/security/rotate-key", post(admin::rotate_key))
         .route("/admin/api/security/previous-key", axum::routing::delete(admin::delete_previous_key))
         .route("/admin/api/network", get(network::get_network).put(network::put_network))
+        .route("/admin/api/network/apply", post(network::apply_network))
         .route("/admin/api/backup", get(admin_api::backup))
         .route("/admin/api/devices", get(admin_api::list_devices))
         .route("/admin/api/devices/{id}/revoke", post(admin_api::revoke_device))

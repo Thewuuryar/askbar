@@ -33,6 +33,11 @@ pub fn load(db: &askbar_core::Db) -> rusqlite::Result<Network> {
     })
 }
 
+/// The encrypted token as stored (base64), if any.
+pub fn stored_token(db: &askbar_core::Db) -> Option<String> {
+    get(db, TOKEN_KEY).ok().flatten().filter(|v| !v.is_empty())
+}
+
 pub fn has_token(db: &askbar_core::Db) -> bool {
     get(db, TOKEN_KEY).ok().flatten().is_some_and(|v| !v.is_empty())
 }
@@ -95,6 +100,8 @@ pub struct NetworkView {
     admin_port: u16,
     /// What new pairing strings will point at.
     public_url: String,
+    /// How the last attempt to configure the HTTPS front end went.
+    proxy: crate::caddy::ProxyStatus,
 }
 
 fn view(state: &AppState, db: &askbar_core::Db) -> rusqlite::Result<NetworkView> {
@@ -104,6 +111,7 @@ fn view(state: &AppState, db: &askbar_core::Db) -> rusqlite::Result<NetworkView>
         api_port: state.tls_api_port.load(Ordering::Relaxed),
         admin_port: state.tls_admin_port.load(Ordering::Relaxed),
         public_url: effective_public_url(db, state),
+        proxy: state.proxy.lock().unwrap_or_else(|e| e.into_inner()).clone(),
     })
 }
 
@@ -127,7 +135,8 @@ fn bad(msg: &str) -> Failure {
     err(StatusCode::BAD_REQUEST, msg)
 }
 
-pub async fn put_network(State(state): State<Arc<AppState>>, Json(input): Json<NetworkInput>) -> Result<Json<NetworkView>, Failure> {
+/// Validate and store the settings. Synchronous so no database lock is held across an await.
+fn save(state: &AppState, input: NetworkInput) -> Result<(), Failure> {
     let mut n = input.network;
     n.hostname = n.hostname.trim().to_ascii_lowercase();
     if !n.hostname.is_empty() && !valid_hostname(&n.hostname) {
@@ -182,7 +191,20 @@ pub async fn put_network(State(state): State<Arc<AppState>>, Json(input): Json<N
         tx.execute("DELETE FROM settings WHERE key = ?1", [TOKEN_KEY]).map_err(fail)?;
     }
     tx.commit().map_err(fail)?;
+    Ok(())
+}
+
+pub async fn put_network(State(state): State<Arc<AppState>>, Json(input): Json<NetworkInput>) -> Result<Json<NetworkView>, Failure> {
+    save(&state, input)?;
+    // Saved. Now tell Caddy; if that fails the settings stay and the result says why.
+    crate::caddy::apply(&state).await;
+    let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
     view(&state, &db).map(Json).map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Saved, but could not read the settings back."))
+}
+
+/// Push the saved settings to Caddy again (for example after starting the tls profile).
+pub async fn apply_network(State(state): State<Arc<AppState>>) -> Json<crate::caddy::ProxyStatus> {
+    Json(crate::caddy::apply(&state).await)
 }
 
 #[cfg(test)]

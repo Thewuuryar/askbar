@@ -1,6 +1,7 @@
 # Askbar server. Copy .env.example to .env and edit it first.
 #   docker compose up -d                    server only
 #   docker compose --profile dev up -d      plus the mock LLM (tests/mock_llm.py)
+#   docker compose --profile tls up -d      plus the HTTPS front end (Caddy)
 
 services:
   server:
@@ -11,6 +12,9 @@ services:
     user: "${ASKBAR_UID:-10001}:${ASKBAR_GID:-10001}"
     environment:
       # Put into pairing strings made by `create-pair-code`.
+      # How the server reaches Caddy (only answers when the tls profile is running).
+      ASKBAR_CADDY_ADMIN: http://caddy:2019
+      ASKBAR_CADDY_SECRETS_DIR: /caddy-secrets
       ASKBAR_TLS_API_PORT: ${ASKBAR_TLS_API_PORT:-8443}
       ASKBAR_TLS_ADMIN_PORT: ${ASKBAR_TLS_ADMIN_PORT:-9443}
       ASKBAR_PUBLIC_URL: ${ASKBAR_PUBLIC_URL:-http://localhost:${ASKBAR_API_PORT:-8080}}
@@ -21,6 +25,8 @@ services:
       - ${DATA_DIR:-./data}:/data
       # The master key lives here, alone: backups and snapshots of DATA_DIR never contain it.
       - askbar-secrets:/secrets
+      # Holds only the Cloudflare token, for Caddy.
+      - caddy-secrets:/caddy-secrets
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
@@ -34,5 +40,24 @@ services:
     volumes:
       - ./tests/mock_llm.py:/app/mock_llm.py:ro
 
+  # HTTPS front end. Configured from the admin page (Network); nothing secret in this file.
+  caddy:
+    profiles: ["tls"]
+    build:
+      context: .
+      dockerfile: Dockerfile.caddy
+    image: askbar-caddy:latest
+    restart: unless-stopped
+    ports:
+      - "${ASKBAR_TLS_API_PORT:-8443}:8443"
+      - "${ASKBAR_TLS_ADMIN_PORT:-9443}:9443"
+    volumes:
+      - caddy-data:/data
+      - caddy-config:/config
+      - caddy-secrets:/caddy-secrets:ro
+
 volumes:
   askbar-secrets:
+  caddy-secrets:
+  caddy-data:
+  caddy-config:
