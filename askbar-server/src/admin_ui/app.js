@@ -36,7 +36,7 @@
     { id: 'providers', label: 'Providers', load: loadProviders },
     { id: 'devices', label: 'Devices', load: loadDevices },
     { id: 'settings', label: 'Settings', load: loadSettings },
-    { id: 'security', label: 'Security' },
+    { id: 'security', label: 'Security', load: loadSecurity },
     { id: 'backup', label: 'Backup' },
   ];
   function registerTab(tab) { tabs.push(tab); renderNav(); }
@@ -342,6 +342,49 @@
       err.textContent = ex.message;
       show(err, true);
     }
+  });
+
+  async function loadSecurity() {
+    const st = await api('GET', '/admin/api/security');
+    show($('prev-key'), st.previous_key);
+  }
+
+  $('rotate-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const err = $('rotate-error');
+    show(err, false);
+    if (!confirm('Rotate the master key now?')) return;
+    try {
+      const r = await api('POST', '/admin/api/security/rotate-key', { password: $('rotate-password').value });
+      $('rotate-password').value = '';
+      $('rotated-key').value = r.key;
+      show($('rotated'), true);
+      show($('rotate-form'), false);
+      $('rotated-key').select();
+      loadSecurity();
+    } catch (ex) {
+      err.textContent = ex.message;
+      show(err, true);
+    }
+  });
+
+  $('rotated-copy').addEventListener('click', async () => {
+    const field = $('rotated-key');
+    field.select();
+    try { await navigator.clipboard.writeText(field.value); } catch (_) { document.execCommand('copy'); }
+    $('rotated-copy').textContent = 'Copied';
+    setTimeout(() => { $('rotated-copy').textContent = 'Copy to clipboard'; }, 1500);
+  });
+
+  $('rotated-done').addEventListener('click', () => {
+    $('rotated-key').value = '';
+    show($('rotated'), false);
+    show($('rotate-form'), true);
+  });
+
+  $('prev-delete').addEventListener('click', async () => {
+    if (!confirm('Delete the previous key file? Make sure the new key is saved first.')) return;
+    try { await api('DELETE', '/admin/api/security/previous-key'); flash('Previous key file deleted.'); loadSecurity(); } catch (ex) { flash(ex.message); }
   });
 
   // ---------------------------------------------------------- devices

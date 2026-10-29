@@ -111,11 +111,12 @@ async fn main() {
         }
     };
     let key_path = askbar_server::secrets::key_path();
+    let db = askbar_core::Db::open(&data_dir().join("askbar.db")).unwrap_or_else(|e| die(e, 1));
+    askbar_server::rotate::recover(&db, &key_path);
     let secrets = askbar_server::secrets::load_key_file(&key_path).unwrap_or_else(|e| die(e, 2));
     if secrets.is_none() {
         tracing::warn!(path = %key_path.display(), "no master key yet: the server is in setup mode (open the admin page)");
     }
-    let db = askbar_core::Db::open(&data_dir().join("askbar.db")).unwrap_or_else(|e| die(e, 1));
     match db.seed_server() {
         Ok(user) => tracing::info!(%user, "database ready"),
         Err(e) => die(e, 1),

@@ -6,6 +6,7 @@ pub mod api;
 pub mod auth;
 pub mod chat;
 pub mod import;
+pub mod rotate;
 pub mod secrets;
 pub mod store;
 
@@ -138,6 +139,9 @@ pub fn admin_router(state: Arc<AppState>) -> Router {
         .route("/admin/api/providers/{id}/test", post(admin_api::test_provider))
         .route("/admin/api/setup/master-key", post(admin::setup_master_key))
         .route("/admin/api/password", post(admin::change_password))
+        .route("/admin/api/security", get(admin::security_status))
+        .route("/admin/api/security/rotate-key", post(admin::rotate_key))
+        .route("/admin/api/security/previous-key", axum::routing::delete(admin::delete_previous_key))
         .route("/admin/api/backup", get(admin_api::backup))
         .route("/admin/api/devices", get(admin_api::list_devices))
         .route("/admin/api/devices/{id}/revoke", post(admin_api::revoke_device))

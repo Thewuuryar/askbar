@@ -236,6 +236,38 @@ async function waitForPort(port) {
     await page.waitForSelector('#settings-error:not([hidden])');
     assert.match(await page.innerText('#settings-error'), /Width must be/);
   });
+  await step('security: rotating the master key shows the new key once and providers keep working', async () => {
+    await page.click('#nav [data-tab="security"]');
+    page.once('dialog', (d) => d.accept());
+    await page.fill('#rotate-password', 'wrong password');
+    await page.click('#rotate-form button[type=submit]');
+    await page.waitForSelector('#rotate-error:not([hidden])');
+    assert.match(await page.innerText('#rotate-error'), /wrong/);
+    page.once('dialog', (d) => d.accept());
+    await page.fill('#rotate-password', PASSWORD);
+    await page.click('#rotate-form button[type=submit]');
+    await page.waitForSelector('#rotated:not([hidden])');
+    const fresh = await page.inputValue('#rotated-key');
+    assert.notEqual(fresh, masterKey);
+    assert.match(await page.innerText('#rotated'), /password manager/i);
+    await page.click('#rotated-copy');
+    assert.equal(await page.evaluate(() => navigator.clipboard.readText()), fresh);
+    const keyFile = path.join(data, 'secrets', 'master.key');
+    assert.equal(fs.readFileSync(keyFile, 'utf8').trim(), fresh);
+    assert.equal(fs.readFileSync(keyFile + '.prev', 'utf8').trim(), masterKey);
+    await page.waitForSelector('#prev-key:not([hidden])');
+    await page.click('#rotated-done');
+    assert.equal(await page.inputValue('#rotated-key'), '');
+    page.once('dialog', (d) => d.accept());
+    await page.click('#prev-delete');
+    await page.waitForSelector('#prev-key', { state: 'hidden' });
+    assert.equal(fs.existsSync(keyFile + '.prev'), false);
+    masterKey = fresh;
+    await page.click('#nav [data-tab="providers"]');
+    await page.click('.card[data-name="mock"] [data-action="test"]');
+    await page.waitForFunction(() => /Success|Failed/.test(document.querySelector('.card[data-name="mock"] .test-result').textContent));
+    assert.match(await page.innerText('.card[data-name="mock"] .test-result'), /^Success:/);
+  });
   await step('backup downloads a database without provider keys', async () => {
     await page.click('#nav [data-tab="backup"]');
     const [download] = await Promise.all([page.waitForEvent('download'), page.click('#backup-link')]);

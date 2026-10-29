@@ -124,6 +124,25 @@
           <p class="hint">Other signed-in browsers are signed out.</p>
           <p id="pw-error" class="error" hidden></p>
         </form>
+
+        <div class="panel" id="rotate-panel">
+          <h3>Master key</h3>
+          <p>Rotating creates a new master key, re-encrypts every stored provider key (and the Cloudflare token) under it, and shows the new key once. Do this if you think the old key leaked.</p>
+          <form id="rotate-form">
+            <label>Admin password <input id="rotate-password" type="password" autocomplete="current-password" required></label>
+            <button type="submit">Rotate master key</button>
+          </form>
+          <div id="rotated" hidden>
+            <p><strong>Save the new master key in your password manager</strong>, replacing the old entry. It is shown only this once.</p>
+            <label>New master key <input id="rotated-key" readonly spellcheck="false"></label>
+            <div class="row"><button type="button" id="rotated-copy">Copy to clipboard</button><button type="button" id="rotated-done" class="secondary">Done</button></div>
+          </div>
+          <div id="prev-key" hidden>
+            <p class="hint">The server still keeps the previous key as <code>master.key.prev</code> on its secrets volume. Delete it once the new key is saved.</p>
+            <button type="button" id="prev-delete" class="danger">Delete previous key file</button>
+          </div>
+          <p id="rotate-error" class="error" hidden></p>
+        </div>
       </section>
 
       <section id="tab-settings" data-tab="settings" hidden>

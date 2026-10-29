@@ -220,9 +220,9 @@ fn check_new_password(pw: &str) -> Result<(), (StatusCode, Json<serde_json::Valu
     Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": msg }))))
 }
 
-type Failure = (StatusCode, Json<serde_json::Value>);
+pub(crate) type Failure = (StatusCode, Json<serde_json::Value>);
 
-fn err(status: StatusCode, msg: &str) -> Failure {
+pub(crate) fn err(status: StatusCode, msg: &str) -> Failure {
     (status, Json(serde_json::json!({ "error": msg })))
 }
 
@@ -301,6 +301,21 @@ pub struct ChangePassword {
     new: String,
 }
 
+/// Ask for the password again before a sensitive action. Wrong guesses count towards the lockout.
+/// Answers 403 (not 401) so the page doesn't read it as "signed out".
+pub(crate) async fn reauth(state: &AppState, password: String) -> Result<(), Failure> {
+    if state.admin.lockout_remaining().is_some() {
+        return Err(err(StatusCode::TOO_MANY_REQUESTS, "Too many attempts. Try again later."));
+    }
+    let stored = stored_hash(state).ok_or_else(|| err(StatusCode::CONFLICT, "No password is set."))?;
+    if !verify(stored, password).await {
+        state.admin.record_failure();
+        return Err(err(StatusCode::FORBIDDEN, "The password is wrong."));
+    }
+    state.admin.clear_failures();
+    Ok(())
+}
+
 /// Change the password. The current one is required; every other session is signed out.
 pub async fn change_password(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(body): Json<ChangePassword>) -> Result<StatusCode, Failure> {
     if state.admin.lockout_remaining().is_some() {
@@ -328,4 +343,40 @@ pub async fn change_password(State(state): State<Arc<AppState>>, headers: Header
     }
     state.admin.keep_only(session_cookie(&headers).as_deref());
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// What the Security tab shows about the master key. Never the key itself.
+pub async fn security_status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "previous_key": crate::rotate::previous_key_exists(&state.key_path) }))
+}
+
+#[derive(Deserialize)]
+pub struct RotateInput {
+    password: String,
+}
+
+/// Generate a new master key, re-encrypt everything under it, and show it once.
+pub async fn rotate_key(State(state): State<Arc<AppState>>, Json(body): Json<RotateInput>) -> Result<Json<serde_json::Value>, Failure> {
+    reauth(&state, body.password).await?;
+    let st = state.clone();
+    let result = tokio::task::spawn_blocking(move || crate::rotate::rotate(&st))
+        .await
+        .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Rotation failed and nothing was changed."))?;
+    match result {
+        Ok(key) => Ok(Json(serde_json::json!({ "key": key }))),
+        Err(e @ (crate::rotate::RotateError::NoKey | crate::rotate::RotateError::Undecryptable(_))) => Err(err(StatusCode::CONFLICT, &e.to_string())),
+        Err(e) => {
+            tracing::error!("master key rotation failed: {e}");
+            Err(err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))
+        }
+    }
+}
+
+/// Remove `master.key.prev` once the new key is safely stored elsewhere.
+pub async fn delete_previous_key(State(state): State<Arc<AppState>>) -> StatusCode {
+    match crate::rotate::delete_previous_key(&state.key_path) {
+        Ok(true) => StatusCode::NO_CONTENT,
+        Ok(false) => StatusCode::NOT_FOUND,
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    }
 }

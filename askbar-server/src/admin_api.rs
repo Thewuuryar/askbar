@@ -118,10 +118,11 @@ fn not_ready() -> Failure {
 
 pub async fn create_provider(State(state): St, Json(i): Json<ProviderInput>) -> Result<(StatusCode, Json<serde_json::Value>), Failure> {
     validate(&i)?;
-    let secrets = state.secrets().ok_or_else(not_ready)?;
-    let enc = i.api_key.as_deref().filter(|k| !k.is_empty()).map(|k| secrets.encrypt(k));
     let id = ulid::Ulid::new().to_string();
     let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+    // Encrypt under the lock, so a key rotation can't slip in between.
+    let secrets = state.secrets().ok_or_else(not_ready)?;
+    let enc = i.api_key.as_deref().filter(|k| !k.is_empty()).map(|k| secrets.encrypt(k));
     db.conn()
         .execute(
             "INSERT INTO providers (id, name, type, base_url, model, api_key_enc, max_tokens, temperature, created_at)
@@ -140,9 +141,9 @@ pub async fn create_provider(State(state): St, Json(i): Json<ProviderInput>) -> 
 
 pub async fn update_provider(State(state): St, Path(id): Path<String>, Json(i): Json<ProviderInput>) -> Result<StatusCode, Failure> {
     validate(&i)?;
+    let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
     let secrets = state.secrets().ok_or_else(not_ready)?;
     let new_key = i.api_key.as_deref().filter(|k| !k.is_empty()).map(|k| secrets.encrypt(k));
-    let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
     let changed = db
         .conn()
         .execute(
@@ -183,9 +184,9 @@ pub struct TestResult {
 
 /// Send one short message through the provider and report what happened.
 pub async fn test_provider(State(state): St, Path(id): Path<String>) -> Result<Json<TestResult>, StatusCode> {
-    let secrets = state.secrets().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
     let provider = {
         let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+        let secrets = state.secrets().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
         let name: Option<String> =
             db.conn().query_row("SELECT name FROM providers WHERE id = ?1", [&id], |r| r.get(0)).optional().map_err(internal)?;
         let name = name.ok_or(StatusCode::NOT_FOUND)?;

@@ -85,6 +85,27 @@ fn base64_url(bytes: &[u8]) -> String {
     URL_SAFE_NO_PAD.encode(bytes)
 }
 
+/// Sibling files used while rotating the key.
+pub fn new_path(key: &std::path::Path) -> std::path::PathBuf {
+    sibling(key, "new")
+}
+pub fn prev_path(key: &std::path::Path) -> std::path::PathBuf {
+    sibling(key, "prev")
+}
+fn sibling(key: &std::path::Path, ext: &str) -> std::path::PathBuf {
+    let mut name = key.file_name().unwrap_or_default().to_os_string();
+    name.push(".");
+    name.push(ext);
+    key.with_file_name(name)
+}
+
+/// A fresh random key as text (what a user would store in a password manager).
+pub fn random_key() -> String {
+    let mut raw = [0u8; 32];
+    OsRng.fill_bytes(&mut raw);
+    base64_url(&raw)
+}
+
 pub struct Secrets {
     cipher: ChaCha20Poly1305,
 }
@@ -106,6 +127,16 @@ impl Secrets {
         let mut out = nonce.to_vec();
         out.extend(self.cipher.encrypt(&nonce, plaintext.as_bytes()).expect("encryption cannot fail for in-memory input"));
         out
+    }
+
+    /// `encrypt` as base64 text, for values kept in the settings table.
+    pub fn encrypt_b64(&self, plaintext: &str) -> String {
+        base64_url(&self.encrypt(plaintext))
+    }
+
+    pub fn decrypt_b64(&self, stored: &str) -> Result<String, SecretsError> {
+        use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+        self.decrypt(&URL_SAFE_NO_PAD.decode(stored.trim()).map_err(|_| SecretsError::Decrypt)?)
     }
 
     pub fn decrypt(&self, stored: &[u8]) -> Result<String, SecretsError> {
