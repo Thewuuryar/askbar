@@ -142,3 +142,8 @@ Linux passed everything (Rust tests, markdown tests, app build). The other two f
 - Windows: `client_disconnect_saves_partial_reply_and_closes_upstream` never saw the disconnect, because the mock only caught `BrokenPipeError`/`ConnectionResetError` and Windows raises `ConnectionAbortedError` (WinError 10053). The mock now catches `ConnectionError`.
 
 Both are test-infrastructure bugs in `tests/mock_llm.py`. Local run after the fix: Rust 147 passed, smoke 11 passed. The gate needs a new build.yml run.
+
+## Checkpoint R2 gate
+
+- T2 locally (sha ff2fd6e plus the mock fix in 2323caa): clippy no errors; Rust 147 passed; markdown 19, ui 43, admin 23; `scripts/smoke.sh` 11 passed, 1 skipped (the desktop-client check needs a person and is **not** verified).
+- Manual `build.yml` run 41000972542 on sha 2323caa: **success on ubuntu-22.04, windows-latest and macos-latest** (Rust tests, markdown tests, app build). The earlier run 40999611639 failed on macOS and Windows for the mock-LLM reasons logged above. Windows and macOS are build-verified only, not run by hand.
