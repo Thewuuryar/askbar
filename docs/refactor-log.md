@@ -151,3 +151,10 @@ Both are test-infrastructure bugs in `tests/mock_llm.py`. Local run after the fi
 ## R3.1 notes
 
 `secrets::ensure_key_file` is called at startup (replacing the `load_key_file` + "setup mode" warning). It loads an existing key, creates one (0600) on a first start, never overwrites, and refuses with an error naming the `askbar-secrets` volume if the key is missing while `providers.api_key_enc` holds data. The wizard/setup-mode code still exists until R3.2–R3.5, but a started server now always has a key. Two tests added; Rust 149 passed.
+
+## R3.2 notes
+
+- Admin UI: the wizard's master-key step and "save your key" screen are gone; setup is now just the password. The master-key panel (rotate, previous key) is gone.
+- **Deviation:** the task says to remove "the Security tab". That tab also holds the change-admin-password form, which is not part of the deleted master-key feature, so the tab stays with only that form. Say if you want password change removed too.
+- `admin.test.js`: the four steps for the key wizard, "key shown once" and rotation were replaced by two (setup then app opens with no key step; the server's own key exists at 0600 and the page never shows it). Admin steps 23 -> 21; the password-change step is kept. Rust unchanged (149).
+- `/admin/api/setup/master-key`, `/admin/api/security*` still exist server-side until R3.3/R3.4.

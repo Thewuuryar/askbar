@@ -10,34 +10,13 @@
   <main id="setup" class="narrow" hidden>
     <h1>Set up Askbar</h1>
     <form id="setup-password-form" hidden>
-      <h2>1. Choose an admin password</h2>
+      <h2>Choose an admin password</h2>
       <p class="hint">This protects this admin site. At least 10 characters.</p>
       <label>Password <input id="setup-password" type="password" autocomplete="new-password" minlength="10" required></label>
       <label>Repeat password <input id="setup-password2" type="password" autocomplete="new-password" minlength="10" required></label>
       <button type="submit">Set password</button>
       <p id="setup-password-error" class="error" hidden></p>
     </form>
-    <div id="setup-key" hidden>
-      <h2>2. Create the master key</h2>
-      <p>The master key encrypts the provider API keys you store here. The server generates it and keeps a copy in its secrets volume.</p>
-      <p class="hint">You will see it once, on the next screen, so you can save it.</p>
-      <button type="button" id="setup-key-button">Generate master key</button>
-      <p><button type="button" id="setup-key-existing" class="link">I already have a master key</button></p>
-      <form id="setup-key-form" hidden>
-        <label>Existing master key <input id="setup-key-input" type="password" autocomplete="off" spellcheck="false" minlength="32"></label>
-        <button type="submit">Use this key</button>
-      </form>
-      <p id="setup-key-error" class="error" hidden></p>
-    </div>
-    <div id="setup-saved" hidden>
-      <h2>Save your master key</h2>
-      <p><strong>Store it in a password manager</strong> (Bitwarden, 1Password, KeePass or similar) now. It is shown only this once.</p>
-      <label>Master key <input id="saved-key" readonly spellcheck="false"></label>
-      <div class="row"><button type="button" id="saved-copy">Copy to clipboard</button></div>
-      <p class="hint">If the secrets volume is ever lost, this key lets you restore it (choose "I already have a master key" on a fresh install). Without it, stored provider keys must be entered again; conversations are not affected.</p>
-      <label class="check"><input id="saved-confirm" type="checkbox"> I have saved the master key somewhere safe</label>
-      <button type="button" id="saved-continue" disabled>Continue</button>
-    </div>
   </main>
 
   <main id="login" class="narrow" hidden>
@@ -143,25 +122,6 @@
           <p class="hint">Other signed-in browsers are signed out.</p>
           <p id="pw-error" class="error" hidden></p>
         </form>
-
-        <div class="panel" id="rotate-panel">
-          <h3>Master key</h3>
-          <p>Rotating creates a new master key, re-encrypts every stored provider key (and the Cloudflare token) under it, and shows the new key once. Do this if you think the old key leaked.</p>
-          <form id="rotate-form">
-            <label>Admin password <input id="rotate-password" type="password" autocomplete="current-password" required></label>
-            <button type="submit">Rotate master key</button>
-          </form>
-          <div id="rotated" hidden>
-            <p><strong>Save the new master key in your password manager</strong>, replacing the old entry. It is shown only this once.</p>
-            <label>New master key <input id="rotated-key" readonly spellcheck="false"></label>
-            <div class="row"><button type="button" id="rotated-copy">Copy to clipboard</button><button type="button" id="rotated-done" class="secondary">Done</button></div>
-          </div>
-          <div id="prev-key" hidden>
-            <p class="hint">The server still keeps the previous key as <code>master.key.prev</code> on its secrets volume. Delete it once the new key is saved.</p>
-            <button type="button" id="prev-delete" class="danger">Delete previous key file</button>
-          </div>
-          <p id="rotate-error" class="error" hidden></p>
-        </div>
       </section>
 
       <section id="tab-settings" data-tab="settings" hidden>

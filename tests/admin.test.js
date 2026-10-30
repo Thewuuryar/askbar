@@ -62,7 +62,7 @@ async function waitForPort(port) {
     assert.equal(await page.isHidden('#login'), true);
     assert.equal(await page.isHidden('#app'), true);
   });
-  await step('setup step 1: the password must match and be long enough', async () => {
+  await step('setup: the password must match and be long enough, then the app opens (no key step)', async () => {
     await page.fill('#setup-password', PASSWORD);
     await page.fill('#setup-password2', PASSWORD + 'x');
     await page.click('#setup-password-form button[type=submit]');
@@ -70,27 +70,16 @@ async function waitForPort(port) {
     assert.match(await page.innerText('#setup-password-error'), /do not match/);
     await page.fill('#setup-password2', PASSWORD);
     await page.click('#setup-password-form button[type=submit]');
-    await page.waitForSelector('#setup-key:not([hidden])');
-    assert.equal(await page.isHidden('#setup-password-form'), true);
-  });
-  await step('setup step 2: the master key is shown once, with a copy button and a password-manager hint', async () => {
-    await page.click('#setup-key-button');
-    await page.waitForSelector('#setup-saved:not([hidden])');
-    masterKey = await page.inputValue('#saved-key');
-    assert.ok(masterKey.length >= 32);
-    assert.match(await page.innerText('#setup-saved'), /password manager/i);
-    assert.equal(await page.isDisabled('#saved-continue'), true);
-    await page.click('#saved-copy');
-    assert.equal(await page.evaluate(() => navigator.clipboard.readText()), masterKey);
-    assert.equal(fs.readFileSync(path.join(data, 'secrets', 'master.key'), 'utf8').trim(), masterKey);
-    await page.check('#saved-confirm');
-    assert.equal(await page.isDisabled('#saved-continue'), false);
-    await page.click('#saved-continue');
     await page.waitForSelector('#app:not([hidden])');
-    assert.equal(await page.inputValue('#saved-key'), '', 'the key is cleared from the page');
+    assert.equal(await page.isHidden('#setup'), true);
     assert.match(await page.innerText('#providers'), /No providers yet/);
+    assert.equal(await page.locator('#setup-key, #setup-saved').count(), 0, 'the master key screens are gone');
   });
-  await step('the key is not shown again after a reload', async () => {
+  await step('the server made its own master key, and the page never shows it', async () => {
+    const keyFile = path.join(data, 'secrets', 'master.key');
+    masterKey = fs.readFileSync(keyFile, 'utf8').trim();
+    assert.ok(masterKey.length >= 32);
+    assert.equal(fs.statSync(keyFile).mode & 0o777, 0o600);
     await page.reload();
     await page.waitForSelector('#app:not([hidden])');
     assert.equal((await page.content()).includes(masterKey), false);
@@ -265,38 +254,6 @@ async function waitForPort(port) {
     await page.uncheck('#n-tls');
     await page.click('#network-form button[type=submit]');
     await page.waitForFunction(() => /point at http:\/\/localhost/.test(document.getElementById('n-info').textContent));
-  });
-  await step('security: rotating the master key shows the new key once and providers keep working', async () => {
-    await page.click('#nav [data-tab="security"]');
-    page.once('dialog', (d) => d.accept());
-    await page.fill('#rotate-password', 'wrong password');
-    await page.click('#rotate-form button[type=submit]');
-    await page.waitForSelector('#rotate-error:not([hidden])');
-    assert.match(await page.innerText('#rotate-error'), /wrong/);
-    page.once('dialog', (d) => d.accept());
-    await page.fill('#rotate-password', PASSWORD);
-    await page.click('#rotate-form button[type=submit]');
-    await page.waitForSelector('#rotated:not([hidden])');
-    const fresh = await page.inputValue('#rotated-key');
-    assert.notEqual(fresh, masterKey);
-    assert.match(await page.innerText('#rotated'), /password manager/i);
-    await page.click('#rotated-copy');
-    assert.equal(await page.evaluate(() => navigator.clipboard.readText()), fresh);
-    const keyFile = path.join(data, 'secrets', 'master.key');
-    assert.equal(fs.readFileSync(keyFile, 'utf8').trim(), fresh);
-    assert.equal(fs.readFileSync(keyFile + '.prev', 'utf8').trim(), masterKey);
-    await page.waitForSelector('#prev-key:not([hidden])');
-    await page.click('#rotated-done');
-    assert.equal(await page.inputValue('#rotated-key'), '');
-    page.once('dialog', (d) => d.accept());
-    await page.click('#prev-delete');
-    await page.waitForSelector('#prev-key', { state: 'hidden' });
-    assert.equal(fs.existsSync(keyFile + '.prev'), false);
-    masterKey = fresh;
-    await page.click('#nav [data-tab="providers"]');
-    await page.click('.card[data-name="mock"] [data-action="test"]');
-    await page.waitForFunction(() => /Success|Failed/.test(document.querySelector('.card[data-name="mock"] .test-result').textContent));
-    assert.match(await page.innerText('.card[data-name="mock"] .test-result'), /^Success:/);
   });
   await step('backup downloads a database without provider keys', async () => {
     await page.click('#nav [data-tab="backup"]');

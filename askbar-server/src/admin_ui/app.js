@@ -37,7 +37,7 @@
     { id: 'devices', label: 'Devices', load: loadDevices },
     { id: 'settings', label: 'Settings', load: loadSettings },
     { id: 'network', label: 'Network', load: loadNetwork },
-    { id: 'security', label: 'Security', load: loadSecurity },
+    { id: 'security', label: 'Security' },
     { id: 'backup', label: 'Backup' },
   ];
   function registerTab(tab) { tabs.push(tab); renderNav(); }
@@ -73,27 +73,21 @@
     for (const id of ['app', 'login', 'setup']) show($(id), false);
   }
 
-  // First run: choose a password, then create the master key. Returns when nothing is left to set up.
-  let pendingKey = null; // the master key, held only until the user confirms they saved it
-
-  function showSetup(status) {
+  // First run: choose a password.
+  function showSetup() {
     hideAll();
     show($('setup'), true);
-    show($('setup-password-form'), !status.password_set);
-    show($('setup-key'), status.password_set && !status.key_set);
-    show($('setup-saved'), false);
-    if (!status.password_set) $('setup-password').focus();
+    show($('setup-password-form'), true);
+    $('setup-password').focus();
   }
 
   async function route() {
     let status;
-    try { status = await api('GET', '/admin/api/setup-status'); } catch (_) { status = { password_set: true, key_set: true }; }
-    if (!status.password_set) return showSetup(status);
+    try { status = await api('GET', '/admin/api/setup-status'); } catch (_) { status = { password_set: true }; }
+    if (!status.password_set) return showSetup();
     let signedIn = true;
     try { await api('GET', '/admin/session'); } catch (_) { signedIn = false; }
     if (!signedIn) return showLogin();
-    if (pendingKey) return showSavedKey();
-    if (!status.key_set) return showSetup(status);
     showApp();
   }
 
@@ -115,49 +109,6 @@
       err.textContent = ex.message;
       show(err, true);
     }
-  });
-
-  async function createKey(body) {
-    const err = $('setup-key-error');
-    show(err, false);
-    try {
-      const r = await api('POST', '/admin/api/setup/master-key', body);
-      pendingKey = r.key;
-      $('setup-key-input').value = '';
-      route();
-    } catch (ex) {
-      err.textContent = ex.message;
-      show(err, true);
-    }
-  }
-
-  function showSavedKey() {
-    hideAll();
-    show($('setup'), true);
-    for (const id of ['setup-password-form', 'setup-key']) show($(id), false);
-    show($('setup-saved'), true);
-    $('saved-key').value = pendingKey;
-    $('saved-confirm').checked = false;
-    $('saved-continue').disabled = true;
-    $('saved-key').select();
-  }
-
-  $('setup-key-button').addEventListener('click', () => createKey({}));
-  $('setup-key-existing').addEventListener('click', () => { show($('setup-key-form'), true); $('setup-key-input').focus(); });
-  $('setup-key-form').addEventListener('submit', (e) => { e.preventDefault(); createKey({ key: $('setup-key-input').value }); });
-
-  $('saved-copy').addEventListener('click', async () => {
-    const field = $('saved-key');
-    field.select();
-    try { await navigator.clipboard.writeText(field.value); } catch (_) { document.execCommand('copy'); }
-    $('saved-copy').textContent = 'Copied';
-    setTimeout(() => { $('saved-copy').textContent = 'Copy to clipboard'; }, 1500);
-  });
-  $('saved-confirm').addEventListener('change', () => { $('saved-continue').disabled = !$('saved-confirm').checked; });
-  $('saved-continue').addEventListener('click', () => {
-    pendingKey = null;
-    $('saved-key').value = '';
-    route();
   });
 
   function showLogin() {
@@ -326,7 +277,7 @@
     }
   });
 
-  // --------------------------------------------------------- security
+  // --------------------------------------------------------- security (admin password)
 
   $('password-form').addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -394,49 +345,6 @@
       err.textContent = ex.message;
       show(err, true);
     }
-  });
-
-  async function loadSecurity() {
-    const st = await api('GET', '/admin/api/security');
-    show($('prev-key'), st.previous_key);
-  }
-
-  $('rotate-form').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const err = $('rotate-error');
-    show(err, false);
-    if (!confirm('Rotate the master key now?')) return;
-    try {
-      const r = await api('POST', '/admin/api/security/rotate-key', { password: $('rotate-password').value });
-      $('rotate-password').value = '';
-      $('rotated-key').value = r.key;
-      show($('rotated'), true);
-      show($('rotate-form'), false);
-      $('rotated-key').select();
-      loadSecurity();
-    } catch (ex) {
-      err.textContent = ex.message;
-      show(err, true);
-    }
-  });
-
-  $('rotated-copy').addEventListener('click', async () => {
-    const field = $('rotated-key');
-    field.select();
-    try { await navigator.clipboard.writeText(field.value); } catch (_) { document.execCommand('copy'); }
-    $('rotated-copy').textContent = 'Copied';
-    setTimeout(() => { $('rotated-copy').textContent = 'Copy to clipboard'; }, 1500);
-  });
-
-  $('rotated-done').addEventListener('click', () => {
-    $('rotated-key').value = '';
-    show($('rotated'), false);
-    show($('rotate-form'), true);
-  });
-
-  $('prev-delete').addEventListener('click', async () => {
-    if (!confirm('Delete the previous key file? Make sure the new key is saved first.')) return;
-    try { await api('DELETE', '/admin/api/security/previous-key'); flash('Previous key file deleted.'); loadSecurity(); } catch (ex) { flash(ex.message); }
   });
 
   // ---------------------------------------------------------- devices
