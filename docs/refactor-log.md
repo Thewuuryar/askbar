@@ -162,3 +162,7 @@ Both are test-infrastructure bugs in `tests/mock_llm.py`. Local run after the fi
 ## R3.3 notes
 
 Deleted `rotate.rs`, the rotate/previous-key/security-status endpoints and their routes, `rotation.rs` (8 tests), and what only they used (`admin::reauth`, `secrets::new_path`/`prev_path`/`random_key`, the startup `rotate::recover`). Rust 149 -> 141 (the 8 rotation tests); admin 21 and smoke 11 still pass.
+
+## R3.4 notes
+
+Deleted the `generate-master-key` command, `secrets::generate_key` and `write_key_file` (key creation is now the one `generate_key_file`, which still never overwrites and writes 0600), `setup_master_key` and its route. In `admin_setup.rs`, `an_existing_key_can_be_restored_instead` was removed and `first_run_password_then_master_key` became `first_run_password` (its key assertions removed, password assertions kept). Rust 141 -> 140. README text about the wizard/rotation is stale until R3.7/R5.4.

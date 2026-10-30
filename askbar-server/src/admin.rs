@@ -258,44 +258,6 @@ pub async fn setup_password(State(state): State<Arc<AppState>>, headers: HeaderM
 }
 
 #[derive(Deserialize)]
-pub struct MasterKeyInput {
-    /// A key the user already has. Missing means "generate one".
-    #[serde(default)]
-    key: Option<String>,
-}
-
-/// Create the master key file and return the key, once, so it can be saved in a password manager.
-/// Needs a session; refused once a key exists.
-pub async fn setup_master_key(State(state): State<Arc<AppState>>, Json(body): Json<MasterKeyInput>) -> Result<Json<serde_json::Value>, Failure> {
-    if state.setup_complete() {
-        return Err(err(StatusCode::CONFLICT, "A master key already exists."));
-    }
-    let path = state.key_path.clone();
-    let provided = body.key.filter(|k| !k.trim().is_empty());
-    if let Some(k) = &provided {
-        if k.trim().chars().count() < crate::secrets::MIN_MASTER_KEY_LEN {
-            return Err(err(StatusCode::BAD_REQUEST, "A master key must be at least 32 characters."));
-        }
-    }
-    let made = tokio::task::spawn_blocking(move || match provided {
-        Some(k) => crate::secrets::write_key_file(&path, &k).map(|s| (s, k.trim().to_string())),
-        None => crate::secrets::generate_key(&path),
-    })
-    .await;
-    match made {
-        Ok(Ok((secrets, key))) => {
-            state.set_secrets(secrets);
-            Ok(Json(serde_json::json!({ "key": key })))
-        }
-        Ok(Err(e)) => {
-            tracing::error!("could not create the master key: {e}");
-            Err(err(StatusCode::INTERNAL_SERVER_ERROR, "Could not create the master key file. Check that the secrets volume is writable."))
-        }
-        Err(_) => Err(err(StatusCode::INTERNAL_SERVER_ERROR, "Could not create the master key file.")),
-    }
-}
-
-#[derive(Deserialize)]
 pub struct ChangePassword {
     current: String,
     new: String,

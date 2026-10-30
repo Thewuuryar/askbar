@@ -20,15 +20,6 @@ fn die(e: impl std::fmt::Display, code: i32) -> ! {
     std::process::exit(code)
 }
 
-/// `askbar-server generate-master-key`: create the master key file if there is none.
-fn run_generate_master_key() {
-    let path = askbar_server::secrets::key_path();
-    match askbar_server::secrets::generate_key_file(&path) {
-        Ok(_) => println!("created {}", path.display()),
-        Err(e) => die(e, 1),
-    }
-}
-
 /// `askbar-server healthcheck`: GET the local API health endpoint; exit 0 if it answers 200.
 fn run_healthcheck() -> ! {
     use std::io::{Read, Write};
@@ -53,9 +44,6 @@ async fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().map(String::as_str) == Some("healthcheck") {
         run_healthcheck();
-    }
-    if args.first().map(String::as_str) == Some("generate-master-key") {
-        return run_generate_master_key();
     }
     tracing_subscriber::fmt().with_target(false).init();
     let (api, admin) = match (addr_from_env("ASKBAR_API_ADDR"), addr_from_env("ASKBAR_ADMIN_ADDR")) {

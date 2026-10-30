@@ -162,7 +162,6 @@ pub fn admin_router(state: Arc<AppState>) -> Router {
         .route("/admin/api/providers", get(admin_api::list_providers).post(admin_api::create_provider))
         .route("/admin/api/providers/{id}", put(admin_api::update_provider).delete(admin_api::delete_provider))
         .route("/admin/api/providers/{id}/test", post(admin_api::test_provider))
-        .route("/admin/api/setup/master-key", post(admin::setup_master_key))
         .route("/admin/api/password", post(admin::change_password))
         .route("/admin/api/network", get(network::get_network).put(network::put_network))
         .route("/admin/api/network/apply", post(network::apply_network))

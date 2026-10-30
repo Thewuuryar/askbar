@@ -76,23 +76,11 @@ pub fn ensure_key_file(path: &std::path::Path, db: &crate::Db) -> Result<Secrets
 /// Create a fresh random master key at `path` (mode 0600) and return the secrets built from it.
 /// Refuses to overwrite an existing file.
 pub fn generate_key_file(path: &std::path::Path) -> Result<Secrets, SecretsError> {
-    generate_key(path).map(|(s, _)| s)
-}
-
-/// Like `generate_key_file`, but also returns the key text so setup can show it once.
-pub fn generate_key(path: &std::path::Path) -> Result<(Secrets, String), SecretsError> {
+    use std::io::Write;
     let mut raw = [0u8; 32];
     OsRng.fill_bytes(&mut raw);
     let key = base64_url(&raw);
-    write_key_file(path, &key).map(|s| (s, key))
-}
-
-/// Store a master key the user already has (for example from a password manager, when
-/// restoring onto a fresh secrets volume). Refuses to overwrite an existing file.
-pub fn write_key_file(path: &std::path::Path, key: &str) -> Result<Secrets, SecretsError> {
-    use std::io::Write;
-    let secrets = Secrets::new(key.trim())?;
-    let key = key.trim();
+    let secrets = Secrets::new(&key)?;
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| file_err(path, e))?;
     }
