@@ -18,8 +18,6 @@ use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub const PAIR_CODE_TTL_SECS: i64 = 10 * 60;
-
 /// Inserted into request extensions by `require_device_token`.
 #[derive(Clone, Debug)]
 pub struct DeviceAuth {
@@ -39,16 +37,6 @@ fn random_secret(prefix: &str) -> String {
 
 fn hash(secret: &str) -> String {
     Sha256::digest(secret.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
-}
-
-/// Create a one-time pairing code for `user_id`. Returns the plaintext code.
-pub fn create_pair_code(db: &Db, user_id: &str, device_name: &str, ttl_secs: i64) -> rusqlite::Result<String> {
-    let code = random_secret("");
-    db.conn().execute(
-        "INSERT INTO pair_codes (hash, user_id, device_name, expires_at, used) VALUES (?1, ?2, ?3, ?4, 0)",
-        params![hash(&code), user_id, device_name, now() + ttl_secs],
-    )?;
-    Ok(code)
 }
 
 /// Exchange a valid, unexpired, unused code for a new device token.
@@ -93,7 +81,7 @@ pub fn authenticate(db: &Db, token: &str) -> rusqlite::Result<Option<DeviceAuth>
         )
         .optional()?;
     let Some(auth) = found else { return Ok(None) };
-    if crate::snapshot::current(db)?.is_some_and(|s| s.revoked_device_ids.iter().any(|id| *id == auth.device_id)) {
+    if crate::snapshot::current(db)?.is_some_and(|s| s.revoked_device_ids.contains(&auth.device_id)) {
         return Ok(None);
     }
     db.conn().execute("UPDATE devices SET last_seen = ?1 WHERE id = ?2", params![now(), auth.device_id])?;

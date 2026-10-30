@@ -42,7 +42,7 @@ async fn start() -> T {
     std::fs::write(dir.join("token.sha256"), hex(MGMT_TOKEN)).unwrap();
     let db = askbar_server::Db::open_in_memory().unwrap();
     let user = db.seed_server().unwrap();
-    let state = AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), askbar_server::MIN_CLIENT, "http://localhost:8080");
+    let state = AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), askbar_server::MIN_CLIENT);
     T {
         api: serve(askbar_server::api_router(state.clone())).await,
         mgmt: serve(mgmt::router(state.clone(), dir.join("token.sha256"))).await,

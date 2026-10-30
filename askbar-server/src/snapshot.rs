@@ -82,7 +82,7 @@ pub fn current(db: &Db) -> rusqlite::Result<Option<Snapshot>> {
 }
 
 /// Store `s` as the new snapshot and return its version. The caller is the management handler.
-pub(crate) fn save(db: &Db, s: &Snapshot) -> rusqlite::Result<u64> {
+fn save(db: &Db, s: &Snapshot) -> rusqlite::Result<u64> {
     let tx = db.conn().unchecked_transaction()?;
     let previous: Option<i64> = tx.query_row("SELECT version FROM config_snapshot WHERE id = 1", [], |r| r.get(0)).optional()?;
     let version = previous.unwrap_or(0) + 1;
@@ -94,4 +94,29 @@ pub(crate) fn save(db: &Db, s: &Snapshot) -> rusqlite::Result<u64> {
     )?;
     tx.commit()?;
     Ok(version as u64)
+}
+
+#[derive(Debug)]
+pub enum ApplyError {
+    /// The snapshot is not acceptable; the text says why. Nothing was stored.
+    Invalid(String),
+    Store(rusqlite::Error),
+}
+
+/// Validate and store `s` as the new snapshot, and drop the stored keys of providers it no
+/// longer lists. Returns the version the server assigned. This is what `PUT /mgmt/v1/snapshot`
+/// does; tests use it to put the server in a known state.
+pub fn apply(db: &Db, s: &Snapshot) -> Result<u64, ApplyError> {
+    validate(s).map_err(ApplyError::Invalid)?;
+    let version = save(db, s).map_err(ApplyError::Store)?;
+    let keep: std::collections::BTreeSet<&str> = s.providers.iter().map(|p| p.id.as_str()).collect();
+    let stored: Vec<String> = db
+        .conn()
+        .prepare("SELECT id FROM providers")
+        .and_then(|mut st| st.query_map([], |r| r.get(0))?.collect())
+        .unwrap_or_default();
+    for id in stored.iter().filter(|id| !keep.contains(id.as_str())) {
+        let _ = db.conn().execute("DELETE FROM providers WHERE id = ?1", [id]);
+    }
+    Ok(version)
 }

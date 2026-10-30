@@ -29,7 +29,7 @@ async fn start(write_hash: bool) -> T {
     }
     let db = askbar_server::Db::open_in_memory().unwrap();
     db.seed_server().unwrap();
-    let state = AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), askbar_server::MIN_CLIENT, "http://localhost:8080");
+    let state = AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), askbar_server::MIN_CLIENT);
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", l.local_addr().unwrap());
     let app = mgmt::router(state, hash_file.clone());
@@ -150,7 +150,7 @@ async fn start_with_state() -> S {
     std::fs::write(&hash_file, hex(TOKEN)).unwrap();
     let db = askbar_server::Db::open_in_memory().unwrap();
     db.seed_server().unwrap();
-    let state = AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), askbar_server::MIN_CLIENT, "http://localhost:8080");
+    let state = AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), askbar_server::MIN_CLIENT);
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", l.local_addr().unwrap());
     let app = mgmt::router(state.clone(), hash_file.clone());
@@ -287,12 +287,12 @@ async fn a_key_is_stored_encrypted_and_never_returned() {
     assert!(!stored.windows(KEY.len()).any(|w| w == KEY.as_bytes()), "not stored in the clear");
     assert_eq!(s.state.secrets().decrypt(&stored).unwrap(), KEY, "encrypted with the master key");
 
-    // Replacing it replaces; the metadata the row got from the snapshot is intact.
+    // Replacing it replaces. The row holds the id and the key and nothing else.
     let (st, _) = s.call(M::PUT, "/mgmt/v1/providers/p1/key", Some(json!({ "key": "sk-second-key-456" }))).await;
     assert_eq!(st, 204);
     assert_eq!(s.state.secrets().decrypt(&s.stored("p1").unwrap()).unwrap(), "sk-second-key-456");
-    let name: String = s.state.db.lock().unwrap().conn().query_row("SELECT name FROM providers WHERE id = 'p1'", [], |r| r.get(0)).unwrap();
-    assert_eq!(name, "name-p1");
+    let rows: i64 = s.state.db.lock().unwrap().conn().query_row("SELECT COUNT(*) FROM providers WHERE id = 'p1'", [], |r| r.get(0)).unwrap();
+    assert_eq!(rows, 1);
 
     // Errors do not echo the key either.
     for (path, body, want) in [
@@ -355,8 +355,7 @@ async fn devices_and_usage_are_listed_over_the_management_api() {
         let db = s.state.db.lock().unwrap();
         let user: String = db.conn().query_row("SELECT id FROM users", [], |r| r.get(0)).unwrap();
         for name in ["Work laptop", "Phone"] {
-            let code = askbar_server::auth::create_pair_code(&db, &user, name, 600).unwrap();
-            askbar_server::bridge::rebuild(&db).unwrap();
+            let code = askbar_server::testing::add_pair_code_expiring(&db, &user, name, 600);
             askbar_server::auth::redeem_pair_code(&db, &code).unwrap().unwrap();
         }
         let c = db.create_conversation(&user, "chat").unwrap();
@@ -402,7 +401,7 @@ async fn the_backup_has_the_data_and_none_of_the_secrets() {
         let user: String = db.conn().query_row("SELECT id FROM users", [], |r| r.get(0)).unwrap();
         let c = db.create_conversation(&user, "kept conversation").unwrap();
         db.add_message(&user, &c, "user", "question one").unwrap();
-        let code = askbar_server::auth::create_pair_code(&db, &user, "pending", 600).unwrap();
+        let code = askbar_server::testing::add_pair_code(&db, &user, "pending");
         db.conn().execute("INSERT INTO redeemed_codes (hash, device_id, redeemed_at) VALUES ('used-hash-123', NULL, 0)", []).unwrap();
         let _ = code;
     }
@@ -424,7 +423,6 @@ async fn the_backup_has_the_data_and_none_of_the_secrets() {
     let c = rusqlite::Connection::open(&file).unwrap();
     let one = |sql: &str| c.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap();
     assert_eq!(one("SELECT COUNT(*) FROM providers WHERE api_key_enc IS NOT NULL"), 0);
-    assert_eq!(one("SELECT COUNT(*) FROM pair_codes"), 0);
     assert_eq!(one("SELECT COUNT(*) FROM redeemed_codes"), 0);
     assert_eq!(one("SELECT COUNT(*) FROM conversations WHERE title = 'kept conversation'"), 1);
     let doc: String = c.query_row("SELECT body FROM config_snapshot", [], |r| r.get(0)).unwrap();
@@ -433,7 +431,7 @@ async fn the_backup_has_the_data_and_none_of_the_secrets() {
     assert_eq!(doc["providers"].as_array().unwrap().len(), 2, "the rest of the snapshot stays");
     let _ = std::fs::remove_dir_all(&dir);
     // The live database is untouched by taking a backup.
-    assert!(askbar_server::snapshot::current(&s.state.db.lock().unwrap()).unwrap().unwrap().pair_codes.len() == 1);
+    assert_eq!(askbar_server::snapshot::current(&s.state.db.lock().unwrap()).unwrap().unwrap().pair_codes.len(), 2, "both listed codes are still there");
 }
 
 #[tokio::test]
@@ -457,4 +455,26 @@ async fn users_are_listed_and_a_provider_dropped_from_the_snapshot_loses_its_key
     assert_eq!(s.put(&serde_json::to_value(next).unwrap(), Some(TOKEN)).await.0, 200);
     assert!(s.stored("p2").is_none(), "no key left behind for a deleted provider");
     assert!(s.stored("p1").is_some());
+}
+
+#[tokio::test]
+async fn taking_a_backup_leaves_no_temporary_file_behind() {
+    let s = start_with_state().await;
+    let leftovers = || -> usize {
+        std::fs::read_dir(std::env::temp_dir()).unwrap().filter_map(Result::ok).filter(|e| e.file_name().to_string_lossy().starts_with("askbar-backup-")).count()
+    };
+    let before = leftovers();
+    for _ in 0..3 {
+        let r = s.t.http.get(format!("{}/mgmt/v1/backup", s.t.url)).bearer_auth(TOKEN).send().await.unwrap();
+        assert_eq!(r.status(), 200);
+        r.bytes().await.unwrap();
+    }
+    // The file is removed when the download ends; give the stream a moment to drop.
+    for _ in 0..40 {
+        if leftovers() <= before {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(leftovers() <= before, "backup files were left in the temp directory");
 }

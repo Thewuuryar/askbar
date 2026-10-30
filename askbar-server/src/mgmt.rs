@@ -38,10 +38,16 @@ pub fn parse_addr(raw: &str) -> Result<SocketAddr, String> {
         .trim()
         .parse()
         .map_err(|_| format!("ASKBAR_MGMT_ADDR is not a valid socket address: {raw} (example: 172.30.0.2:8082)"))?;
+    check_not_wildcard(&addr)?;
+    Ok(addr)
+}
+
+/// The management address must be one specific address, not `0.0.0.0` or `::`.
+pub fn check_not_wildcard(addr: &SocketAddr) -> Result<(), String> {
     if addr.ip().is_unspecified() {
         return Err(format!("ASKBAR_MGMT_ADDR must be one specific address, not {}: the management API must not listen on every network", addr.ip()));
     }
-    Ok(addr)
+    Ok(())
 }
 
 #[derive(Clone)]
@@ -84,25 +90,11 @@ async fn require_token(State(guard): State<Guard>, req: Request, next: Next) -> 
 /// Replace the configuration snapshot. The version in the body is ignored; the server
 /// assigns the next one and returns it.
 async fn put_snapshot(State(state): State<Arc<AppState>>, Json(s): Json<Snapshot>) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    if let Err(why) = crate::snapshot::validate(&s) {
-        return Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": why }))));
-    }
     let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
-    match crate::snapshot::save(&db, &s) {
-        Ok(version) => {
-            // A provider the admin no longer lists must not keep its encrypted key around.
-            let keep: std::collections::BTreeSet<&str> = s.providers.iter().map(|p| p.id.as_str()).collect();
-            let stored: Vec<String> = db
-                .conn()
-                .prepare("SELECT id FROM providers")
-                .and_then(|mut st| st.query_map([], |r| r.get(0))?.collect())
-                .unwrap_or_default();
-            for id in stored.iter().filter(|id| !keep.contains(id.as_str())) {
-                let _ = db.conn().execute("DELETE FROM providers WHERE id = ?1", [id]);
-            }
-            Ok(Json(serde_json::json!({ "version": version })))
-        }
-        Err(_) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": "could not store the snapshot" })))),
+    match crate::snapshot::apply(&db, &s) {
+        Ok(version) => Ok(Json(serde_json::json!({ "version": version }))),
+        Err(crate::snapshot::ApplyError::Invalid(why)) => Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": why })))),
+        Err(crate::snapshot::ApplyError::Store(_)) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": "could not store the snapshot" })))),
     }
 }
 
@@ -120,8 +112,7 @@ struct KeyInput {
 const MAX_KEY_CHARS: usize = 4096;
 
 /// Store a provider's API key, encrypted with the master key. Write-only: no endpoint
-/// ever returns it, and this one answers `204` with no body. A provider that is in the
-/// current snapshot but has no row yet gets one.
+/// ever returns it, and this one answers `204` with no body.
 async fn put_provider_key(State(state): State<Arc<AppState>>, Path(id): Path<String>, Json(input): Json<KeyInput>) -> Result<StatusCode, Failure> {
     let key = input.key.trim();
     if key.is_empty() || key.chars().count() > MAX_KEY_CHARS {
@@ -130,36 +121,17 @@ async fn put_provider_key(State(state): State<Arc<AppState>>, Path(id): Path<Str
     let enc = state.secrets().encrypt(key);
     let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
     let internal = |_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not store the key.");
-    let updated = db.conn().execute("UPDATE providers SET api_key_enc = ?1 WHERE id = ?2", rusqlite::params![enc, id]).map_err(internal)?;
-    if updated == 0 {
-        let snapshot = crate::snapshot::current(&db).map_err(internal)?;
-        let p = snapshot
-            .and_then(|s| s.providers.into_iter().find(|p| p.id == id))
-            .ok_or_else(|| fail(StatusCode::NOT_FOUND, "No such provider."))?;
-        db.conn()
-            .execute(
-                "INSERT INTO providers (id, name, type, base_url, model, api_key_enc, max_tokens, temperature, headers, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-                rusqlite::params![
-                    p.id,
-                    p.name,
-                    p.kind,
-                    p.base_url,
-                    p.model,
-                    enc,
-                    p.max_tokens,
-                    p.temperature,
-                    serde_json::to_string(&p.headers).unwrap_or_else(|_| "{}".into()),
-                    crate::auth::now()
-                ],
-            )
-            .map_err(|e| match e {
-                rusqlite::Error::SqliteFailure(f, _) if f.code == rusqlite::ErrorCode::ConstraintViolation => {
-                    fail(StatusCode::CONFLICT, "A provider with that name already exists.")
-                }
-                other => internal(other),
-            })?;
+    // Only a provider the snapshot lists can have a key.
+    let listed = crate::snapshot::current(&db).map_err(internal)?.is_some_and(|s| s.providers.iter().any(|p| p.id == id));
+    if !listed {
+        return Err(fail(StatusCode::NOT_FOUND, "No such provider."));
     }
+    db.conn()
+        .execute(
+            "INSERT INTO providers (id, api_key_enc) VALUES (?1, ?2) ON CONFLICT(id) DO UPDATE SET api_key_enc = excluded.api_key_enc",
+            rusqlite::params![id, enc],
+        )
+        .map_err(internal)?;
     Ok(StatusCode::NO_CONTENT)
 }
 

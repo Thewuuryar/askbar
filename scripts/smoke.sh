@@ -65,7 +65,7 @@ if [ -z "$URL" ]; then
   if [ ! -x "$BIN" ]; then cargo build -q -p askbar-server || { fail "build the server"; exit 1; }; fi
   ABIN="${ASKBAR_ADMIN_BIN:-target/debug/askbar-admin}"
   if [ ! -x "$ABIN" ]; then cargo build -q -p askbar-admin || { fail "build the admin"; exit 1; }; fi
-  API_PORT=$(free_port); OLD_ADMIN_PORT=$(free_port); MGMT_PORT=$(free_port); MOCK_PORT=$(free_port)
+  API_PORT=$(free_port); MGMT_PORT=$(free_port); MOCK_PORT=$(free_port)
   URL="http://127.0.0.1:$API_PORT"
   SOCK="$WORK/admin-run/admin.sock"
   mkdir -p "$WORK/data" "$WORK/secrets" "$WORK/admin-run"
@@ -76,7 +76,7 @@ if [ -z "$URL" ]; then
     "$ABIN" >"$WORK/admin.log" 2>&1 & PIDS+=($!)
   for _ in $(seq 100); do [ -S "$SOCK" ] && break; sleep 0.1; done
   # The server: the API, and a management listener that only the admin's token opens.
-  ASKBAR_API_ADDR="127.0.0.1:$API_PORT" ASKBAR_ADMIN_ADDR="127.0.0.1:$OLD_ADMIN_PORT" \
+  ASKBAR_API_ADDR="127.0.0.1:$API_PORT" \
     ASKBAR_MGMT_ADDR="127.0.0.1:$MGMT_PORT" ASKBAR_MGMT_TOKEN_HASH_FILE="$WORK/mgmt/token.sha256" \
     ASKBAR_DATA_DIR="$WORK/data" ASKBAR_SECRETS_DIR="$WORK/secrets" \
     ASKBAR_PUBLIC_URL="$URL" "$BIN" >"$WORK/server.log" 2>&1 & PIDS+=($!)

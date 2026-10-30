@@ -1,4 +1,4 @@
-//! Helpers for reading server-side configuration out of the database.
+//! Helpers for reading server-side configuration: the snapshot, and the provider keys stored beside it.
 
 use crate::secrets::Secrets;
 use crate::llm::{Provider, ProviderKind, DEFAULT_SYSTEM_PROMPT};
@@ -31,10 +31,4 @@ pub fn chat_system_prompt(db: &Db) -> rusqlite::Result<String> {
     Ok(crate::snapshot::current(db)?
         .and_then(|s| s.system_prompt)
         .unwrap_or_else(|| DEFAULT_SYSTEM_PROMPT.to_string()))
-}
-
-pub fn system_prompt(db: &Db) -> rusqlite::Result<String> {
-    let stored: Option<String> =
-        db.conn().query_row("SELECT value FROM settings WHERE key = 'system_prompt'", [], |r| r.get(0)).optional()?;
-    Ok(stored.unwrap_or_else(|| DEFAULT_SYSTEM_PROMPT.to_string()))
 }

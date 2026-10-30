@@ -362,16 +362,9 @@ mod tests {
         use askbar_server::{auth, secrets::Secrets, AppState};
         let db = askbar_server::Db::open_in_memory().unwrap();
         let user = db.seed_server().unwrap();
-        db.conn()
-            .execute(
-                "INSERT INTO providers (id, name, type, base_url, model, created_at) VALUES ('p','mock','openai',?1,'mock-model',0)",
-                [format!("http://127.0.0.1:{mock_port}/v1")],
-            )
-            .unwrap();
-        let code = auth::create_pair_code(&db, &user, "test", 600).unwrap();
-        askbar_server::bridge::rebuild(&db).unwrap();
-        askbar_server::bridge::rebuild(&db).unwrap();
-        let state: Arc<AppState> = AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), "0.1.0", "http://localhost:8080");
+        askbar_server::testing::add_provider(&db, askbar_server::testing::provider("p", "mock", &format!("http://127.0.0.1:{mock_port}/v1"), "mock-model"));
+        let code = askbar_server::testing::add_pair_code(&db, &user, "test");
+        let state: Arc<AppState> = AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), "0.1.0");
         let token = auth::redeem_pair_code(&state.db.lock().unwrap(), &code).unwrap().unwrap();
         let app = askbar_server::api_router(state);
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -433,17 +426,10 @@ mod tests {
         let db = askbar_server::Db::open_in_memory().unwrap();
         let user = db.seed_server().unwrap();
         for (n, name) in ["alpha", "beta"].iter().enumerate() {
-            db.conn()
-                .execute(
-                    "INSERT INTO providers (id, name, type, base_url, model, created_at) VALUES (?1,?2,'openai','http://x/v1','m',0)",
-                    rusqlite::params![format!("p{n}"), name],
-                )
-                .unwrap();
+            askbar_server::testing::add_provider(&db, askbar_server::testing::provider(&format!("p{n}"), name, "http://x/v1", "m"));
         }
-        let code = auth::create_pair_code(&db, &user, "test", 600).unwrap();
-        askbar_server::bridge::rebuild(&db).unwrap();
-        askbar_server::bridge::rebuild(&db).unwrap();
-        let state = AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), min_client, "http://localhost:8080");
+        let code = askbar_server::testing::add_pair_code(&db, &user, "test");
+        let state = AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), min_client);
         let token = auth::redeem_pair_code(&state.db.lock().unwrap(), &code).unwrap().unwrap();
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", l.local_addr().unwrap());
@@ -568,8 +554,7 @@ mod tests {
         let second_token = {
             let db = state.db.lock().unwrap();
             let user: String = db.conn().query_row("SELECT id FROM users", [], |r| r.get(0)).unwrap();
-            let code = askbar_server::auth::create_pair_code(&db, &user, "second", 600).unwrap();
-            askbar_server::bridge::rebuild(&db).unwrap();
+            let code = askbar_server::testing::add_pair_code(&db, &user, "second");
             askbar_server::auth::redeem_pair_code(&db, &code).unwrap().unwrap()
         };
         let (laptop, desktop) = (remote_for(&url, Some(&token), PathBuf::new()), remote_for(&url, Some(&second_token), PathBuf::new()));
@@ -581,17 +566,15 @@ mod tests {
     #[tokio::test]
     async fn display_defaults_come_from_the_server_and_a_local_override_wins() {
         let (url, token, state) = status_server("0.1.0").await;
-        state
-            .db
-            .lock()
-            .unwrap()
-            .conn()
-            .execute(
-                "INSERT INTO display_defaults (user_id, value) SELECT id, ?1 FROM users",
-                [r#"{"theme":"dark","width":900,"max_height":700,"history_width":300,"top_percent":0.3,"hide_on_blur":false}"#],
-            )
-            .unwrap();
-        askbar_server::bridge::rebuild(&state.db.lock().unwrap()).unwrap();
+        {
+            let db = state.db.lock().unwrap();
+            let user: String = db.conn().query_row("SELECT id FROM users", [], |r| r.get(0)).unwrap();
+            let dark: DisplaySettings =
+                serde_json::from_str(r#"{"theme":"dark","width":900,"max_height":700,"history_width":300,"top_percent":0.3,"hide_on_blur":false}"#).unwrap();
+            askbar_server::testing::update_snapshot(&db, |s| {
+                s.user_display_defaults.insert(user, dark);
+            });
+        }
         let dir = std::env::temp_dir().join(format!("askbar-overrides-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("client.yaml");
@@ -615,8 +598,7 @@ mod tests {
     fn new_pairing(state: &Arc<askbar_server::AppState>, url: &str) -> String {
         let db = state.db.lock().unwrap();
         let user: String = db.conn().query_row("SELECT id FROM users", [], |r| r.get(0)).unwrap();
-        let code = askbar_server::auth::create_pair_code(&db, &user, "second profile", 600).unwrap();
-        askbar_server::bridge::rebuild(&db).unwrap();
+        let code = askbar_server::testing::add_pair_code(&db, &user, "second profile");
         askbar_proto::encode_pairing(url, &code)
     }
 
@@ -673,50 +655,31 @@ mod tests {
         assert!(tokens.get().is_none() && !path.exists());
     }
 
-    /// Pair with a string made by the admin site, revoke the device there, and the client says "rejected".
+    /// Pair with a code the admin listed in its snapshot, have the admin revoke the device
+    /// (again through the snapshot), and the client says "rejected".
     #[tokio::test]
-    async fn revoking_a_device_in_the_admin_site_shows_token_rejected() {
-        use askbar_server::{admin, secrets::Secrets, AppState};
+    async fn revoking_a_device_shows_token_rejected() {
+        use askbar_server::{secrets::Secrets, testing, AppState};
         let db = askbar_server::Db::open_in_memory().unwrap();
-        db.seed_server().unwrap();
-        admin::init_password(&db, "pw-for-test").unwrap();
-        db.conn()
-            .execute("INSERT INTO providers (id, name, type, base_url, model, created_at) VALUES ('p','alpha','openai','http://x/v1','m',0)", [])
-            .unwrap();
-        let listen = || async {
-            let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-            let url = format!("http://{}", l.local_addr().unwrap());
-            (l, url)
-        };
-        let (api_l, api_url) = listen().await;
-        let (admin_l, admin_url) = listen().await;
-        askbar_server::bridge::rebuild(&db).unwrap();
-        let state = AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), "0.1.0", &api_url);
-        let (a, b) = (askbar_server::api_router(state.clone()), askbar_server::admin_router(state));
-        tokio::spawn(async move { axum::serve(api_l, a).await.unwrap() });
-        tokio::spawn(async move { axum::serve(admin_l, b).await.unwrap() });
+        let user = db.seed_server().unwrap();
+        testing::add_provider(&db, testing::provider("p", "alpha", "http://x/v1", "m"));
+        let code = testing::add_pair_code(&db, &user, "test client");
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let api_url = format!("http://{}", l.local_addr().unwrap());
+        let state = AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), "0.1.0");
+        let app = askbar_server::api_router(state.clone());
+        tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
 
-        let http = reqwest::Client::new();
-        let login = http.post(format!("{admin_url}/admin/login")).header("x-askbar-admin", "1").json(&serde_json::json!({ "password": "pw-for-test" })).send().await.unwrap();
-        let cookie = login.headers()["set-cookie"].to_str().unwrap().split(';').next().unwrap().to_string();
-        let admin_call = |method: Method, path: String, body: serde_json::Value| {
-            http.request(method, format!("{admin_url}{path}")).header("x-askbar-admin", "1").header("cookie", &cookie).json(&body).send()
-        };
-
-        let out: serde_json::Value = admin_call(Method::POST, "/admin/api/pair".into(), serde_json::json!({ "name": "test client" })).await.unwrap().json().await.unwrap();
         let dir = std::env::temp_dir().join(format!("askbar-revoke-{}", std::process::id()));
         let path = dir.join("client.yaml");
         let tokens = MemoryTokens::default();
-        pair(out["pairing"].as_str().unwrap(), &path, &tokens).await.unwrap();
+        pair(&askbar_proto::encode_pairing(&api_url, &code), &path, &tokens).await.unwrap();
 
         let r = Remote::new(ClientConfig::load(&path), path.clone(), Box::new(MemoryTokens::with(&tokens.get().unwrap())));
         assert_eq!(kind(&r).await, None);
 
-        let devices: serde_json::Value = admin_call(Method::GET, "/admin/api/devices".into(), serde_json::json!({})).await.unwrap().json().await.unwrap();
-        assert_eq!(devices[0]["name"], "test client");
-        let id = devices[0]["id"].as_str().unwrap();
-        let st = admin_call(Method::POST, format!("/admin/api/devices/{id}/revoke"), serde_json::json!({})).await.unwrap().status();
-        assert_eq!(st, 204);
+        let device: String = state.db.lock().unwrap().conn().query_row("SELECT id FROM devices WHERE name = 'test client'", [], |r| r.get(0)).unwrap();
+        testing::update_snapshot(&state.db.lock().unwrap(), |s| s.revoked_device_ids.push(device));
 
         let status = r.status().await.unwrap();
         assert_eq!(status.kind, "rejected");

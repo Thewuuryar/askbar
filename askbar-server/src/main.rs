@@ -46,15 +46,20 @@ async fn main() {
         run_healthcheck();
     }
     tracing_subscriber::fmt().with_target(false).init();
-    let (api, admin) = match (addr_from_env("ASKBAR_API_ADDR"), addr_from_env("ASKBAR_ADMIN_ADDR")) {
-        (Ok(a), Ok(b)) => (a, b),
-        (a, b) => {
-            for e in [a.err(), b.err()].into_iter().flatten() {
+    let (api, mgmt) = match (addr_from_env("ASKBAR_API_ADDR"), addr_from_env("ASKBAR_MGMT_ADDR")) {
+        (Ok(a), Ok(m)) => (a, m),
+        (a, m) => {
+            for e in [a.err(), m.err()].into_iter().flatten() {
                 eprintln!("error: {e}");
             }
             std::process::exit(2);
         }
     };
+    // The management API is for the admin service only: one specific address, never a wildcard.
+    if let Err(e) = askbar_server::mgmt::check_not_wildcard(&mgmt) {
+        eprintln!("error: {e}");
+        std::process::exit(2);
+    }
     let key_path = askbar_server::secrets::key_path();
     let db = askbar_server::Db::open(&data_dir().join("askbar.db")).unwrap_or_else(|e| die(e, 1));
     let secrets = askbar_server::secrets::ensure_key_file(&key_path, &db).unwrap_or_else(|e| die(e, 2));
@@ -62,42 +67,14 @@ async fn main() {
         Ok(user) => tracing::info!(%user, "database ready"),
         Err(e) => die(e, 1),
     }
-    if let Err(e) = askbar_server::bridge::rebuild(&db) {
-        die(format!("could not build the configuration snapshot: {e}"), 1);
+    match askbar_server::snapshot::current(&db) {
+        Ok(Some(s)) => tracing::info!(version = s.version, providers = s.providers.len(), "configuration snapshot loaded"),
+        Ok(None) => tracing::warn!("no configuration yet: the admin service has not pushed one"),
+        Err(e) => die(format!("could not read the configuration snapshot: {e}"), 1),
     }
-    if db.conn().query_row("SELECT 1 FROM settings WHERE key = 'admin_password_hash'", [], |_| Ok(())).is_err() {
-        tracing::warn!("no admin password yet: open the admin page to finish setup");
-    }
-    let public_url = std::env::var("ASKBAR_PUBLIC_URL")
-        .ok()
-        .filter(|u| !u.trim().is_empty())
-        .unwrap_or_else(|| format!("http://localhost:{}", api.port()));
-    let state = askbar_server::AppState::new(db, secrets, askbar_server::MIN_CLIENT, &public_url);
-    let port_from = |var: &str, default: u16| std::env::var(var).ok().and_then(|v| v.parse().ok()).unwrap_or(default);
-    state.set_tls_ports(port_from("ASKBAR_TLS_API_PORT", 8443), port_from("ASKBAR_TLS_ADMIN_PORT", 9443));
-    state.set_caddy(askbar_server::caddy::CaddyLink::from_env());
-    askbar_server::caddy::apply_at_startup(state.clone());
-    // The management API listens only when told where; never on a wildcard address.
-    let mgmt = std::env::var("ASKBAR_MGMT_ADDR").ok().filter(|a| !a.trim().is_empty()).map(|a| {
-        askbar_server::mgmt::parse_addr(&a).unwrap_or_else(|e| {
-            eprintln!("error: {e}");
-            std::process::exit(2)
-        })
-    });
+    let state = askbar_server::AppState::new(db, secrets, askbar_server::MIN_CLIENT);
     let mgmt_app = askbar_server::mgmt::router(state.clone(), askbar_server::mgmt::token_hash_path());
-    let result = tokio::try_join!(
-        serve(api, askbar_server::api_router(state.clone())),
-        serve(admin, askbar_server::admin_router(state)),
-        async {
-            match mgmt {
-                Some(addr) => serve(addr, mgmt_app).await,
-                None => {
-                    tracing::warn!("ASKBAR_MGMT_ADDR is not set: the management API is off");
-                    std::future::pending().await
-                }
-            }
-        }
-    );
+    let result = tokio::try_join!(serve(api, askbar_server::api_router(state)), serve(mgmt, mgmt_app));
     if let Err(e) = result {
         eprintln!("error: {e}");
         std::process::exit(1);

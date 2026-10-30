@@ -58,16 +58,10 @@ async fn start() -> T {
     let db = askbar_server::Db::open_in_memory().unwrap();
     let user = db.seed_server().unwrap();
     let secrets = Secrets::new("0123456789abcdef0123456789abcdef").unwrap();
-    db.conn()
-        .execute(
-            "INSERT INTO providers (id, name, type, base_url, model, api_key_enc, created_at) VALUES ('p1','mock','openai',?1,'m',?2,0)",
-            rusqlite::params![format!("http://127.0.0.1:{}/v1", mock.port), secrets.encrypt("sk-test")],
-        )
-        .unwrap();
-    let code = auth::create_pair_code(&db, &user, "t", 600).unwrap();
-    askbar_server::bridge::rebuild(&db).unwrap();
-    askbar_server::bridge::rebuild(&db).unwrap();
-    let state = AppState::new(db, secrets, askbar_server::MIN_CLIENT, "http://localhost:8080");
+    askbar_server::testing::add_provider(&db, askbar_server::testing::provider("p1", "mock", &format!("http://127.0.0.1:{}/v1", mock.port), "m"));
+    askbar_server::testing::store_key(&db, &secrets, "p1", "sk-test");
+    let code = askbar_server::testing::add_pair_code(&db, &user, "t");
+    let state = AppState::new(db, secrets, askbar_server::MIN_CLIENT);
     let token = auth::redeem_pair_code(&state.db.lock().unwrap(), &code).unwrap().unwrap();
     let app = askbar_server::api_router(state.clone());
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -235,8 +229,7 @@ async fn another_user_cannot_read_or_continue_my_conversation() {
     let token_b = {
         let db = t.state.db.lock().unwrap();
         db.conn().execute("INSERT INTO users (id, name, created_at) VALUES ('B','other',0)", []).unwrap();
-        let code = auth::create_pair_code(&db, "B", "b-laptop", 600).unwrap();
-        askbar_server::bridge::rebuild(&db).unwrap();
+        let code = askbar_server::testing::add_pair_code(&db, "B", "b-laptop");
         auth::redeem_pair_code(&db, &code).unwrap().unwrap()
     };
     let get = |path: String| {
@@ -264,4 +257,40 @@ async fn another_user_cannot_read_or_continue_my_conversation() {
     assert_eq!(r.status(), 404);
     let own = http.get(format!("http://{}/api/v1/conversations/{conversation_id}", t.addr)).bearer_auth(&t.token).send().await.unwrap();
     assert_eq!(own.status(), 200);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_snapshots_system_prompt_is_sent_with_the_next_message_and_never_served() {
+    let t = start().await;
+    let http = client();
+    // Built-in prompt until the admin pushes one.
+    t.chat(&http, None, "p1", "hello").await.text().await.unwrap();
+    wait_for("the first reply", || t.mock.log.lock().unwrap().iter().any(|l| l.contains("last='hello'")).then_some(()));
+    let log = t.mock.log.lock().unwrap().join("\n");
+    assert!(log.contains("quick-question popup"), "{log}");
+
+    askbar_server::testing::update_snapshot(&t.state.db.lock().unwrap(), |s| s.system_prompt = Some("You are a pirate. Say arr.".into()));
+    t.chat(&http, None, "p1", "second").await.text().await.unwrap();
+    wait_for("the second reply", || {
+        t.mock.log.lock().unwrap().iter().any(|l| l.contains("system='You are a pirate. Say arr.'") && l.contains("last='second'")).then_some(())
+    });
+
+    askbar_server::testing::update_snapshot(&t.state.db.lock().unwrap(), |s| s.system_prompt = Some("Answer in French.".into()));
+    t.chat(&http, None, "p1", "third").await.text().await.unwrap();
+    wait_for("the third reply", || {
+        t.mock.log.lock().unwrap().iter().any(|l| l.contains("system='Answer in French.'") && l.contains("last='third'")).then_some(())
+    });
+
+    // Clients can read the display settings, but the prompt is never among them.
+    let settings = http
+        .get(format!("http://{}/api/v1/settings", t.addr))
+        .bearer_auth(&t.token)
+        .header("x-askbar-client-version", "0.3.0")
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(!settings.contains("French") && !settings.contains("pirate"), "{settings}");
 }

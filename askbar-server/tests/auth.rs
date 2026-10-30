@@ -1,4 +1,4 @@
-use askbar_server::{auth, secrets::Secrets, AppState};
+use askbar_server::{secrets::Secrets, AppState};
 use axum::Router;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -13,7 +13,7 @@ struct Server {
 async fn start() -> Server {
     let db = askbar_server::Db::open_in_memory().unwrap();
     let user = db.seed_server().unwrap();
-    let state = AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), askbar_server::MIN_CLIENT, "http://localhost:8080");
+    let state = AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), askbar_server::MIN_CLIENT);
     let app: Router = askbar_server::api_router(state.clone());
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = l.local_addr().unwrap();
@@ -36,10 +36,7 @@ impl Server {
         r.send().await.unwrap().status().as_u16()
     }
     fn code(&self, ttl: i64) -> String {
-        let db = self.state.db.lock().unwrap();
-        let code = auth::create_pair_code(&db, &self.user, "laptop", ttl).unwrap();
-        askbar_server::bridge::rebuild(&db).unwrap();
-        code
+        askbar_server::testing::add_pair_code_expiring(&self.state.db.lock().unwrap(), &self.user, "laptop", ttl)
     }
     async fn token(&self) -> String {
         let r = self.pair(&self.code(600)).await;

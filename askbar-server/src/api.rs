@@ -83,8 +83,8 @@ pub async fn get_prefs(State(state): St, Extension(auth): Extension<DeviceAuth>)
 pub async fn put_prefs(State(state): St, Extension(auth): Extension<DeviceAuth>, Json(p): Json<Prefs>) -> Res<Prefs> {
     let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(id) = &p.active_provider_id {
-        let exists = db.conn().query_row("SELECT 1 FROM providers WHERE id = ?1", [id], |_| Ok(())).optional().map_err(internal)?;
-        if exists.is_none() {
+        let listed = crate::snapshot::current(&db).map_err(internal)?.is_some_and(|s| s.providers.iter().any(|p| &p.id == id));
+        if !listed {
             return Err(StatusCode::NOT_FOUND);
         }
     }
@@ -117,14 +117,6 @@ pub async fn search(State(state): St, Extension(auth): Extension<DeviceAuth>, Qu
         .map(|h| SearchHit { conversation_id: h.conversation_id, message_id: h.message_id, role: h.role, snippet: h.snippet, created_at: h.created_at })
         .collect();
     Ok(Json(hits))
-}
-
-/// Display defaults: the stored `display` setting (a JSON object that may
-/// set only some fields) laid over the built-in defaults.
-pub fn load_display(db: &crate::Db) -> rusqlite::Result<DisplaySettings> {
-    let stored: Option<String> =
-        db.conn().query_row("SELECT value FROM settings WHERE key = 'display'", [], |r| r.get(0)).optional()?;
-    Ok(stored.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default())
 }
 
 /// What clients are served, from the snapshot: the user's own defaults if there are any,

@@ -121,16 +121,6 @@ impl Secrets {
         out
     }
 
-    /// `encrypt` as base64 text, for values kept in the settings table.
-    pub fn encrypt_b64(&self, plaintext: &str) -> String {
-        base64_url(&self.encrypt(plaintext))
-    }
-
-    pub fn decrypt_b64(&self, stored: &str) -> Result<String, SecretsError> {
-        use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-        self.decrypt(&URL_SAFE_NO_PAD.decode(stored.trim()).map_err(|_| SecretsError::Decrypt)?)
-    }
-
     pub fn decrypt(&self, stored: &[u8]) -> Result<String, SecretsError> {
         if stored.len() < NONCE_LEN {
             return Err(SecretsError::Decrypt);
@@ -229,7 +219,7 @@ mod tests {
         let key = Secrets::new(KEY).unwrap();
         db.conn()
             .execute(
-                "INSERT INTO providers (id, name, type, model, api_key_enc, created_at) VALUES ('p','x','openai','m',?1,0)",
+                "INSERT INTO providers (id, api_key_enc) VALUES ('p', ?1)",
                 [key.encrypt("sk-live")],
             )
             .unwrap();

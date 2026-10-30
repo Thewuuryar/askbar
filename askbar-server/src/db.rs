@@ -19,8 +19,7 @@ const MIGRATIONS: &[&str] = &[
     //
     // Live: users, devices, conversations, messages, messages_fts, user_prefs.
     // Reserved, empty: memory (append-only), projects, token_usage.
-    // Interim until the admin moves out of the server: providers, settings,
-    // pair_codes, display_defaults.
+    // Interim until migration 3: providers (full rows), settings, pair_codes, display_defaults.
     "CREATE TABLE users (
          id         TEXT PRIMARY KEY,
          name       TEXT    NOT NULL,
@@ -134,6 +133,19 @@ const MIGRATIONS: &[&str] = &[
          device_id   TEXT,
          redeemed_at INTEGER NOT NULL
      );",
+    // v3: the admin site has left the server. Its tables go, and a provider keeps only what the
+    // server alone must hold: its id and its encrypted key. Everything else about providers,
+    // and settings, display defaults and pairing codes, arrive in the snapshot.
+    "DROP TABLE settings;
+     DROP TABLE pair_codes;
+     DROP TABLE display_defaults;
+     CREATE TABLE providers_new (
+         id          TEXT PRIMARY KEY,
+         api_key_enc BLOB
+     );
+     INSERT INTO providers_new (id, api_key_enc) SELECT id, api_key_enc FROM providers;
+     DROP TABLE providers;
+     ALTER TABLE providers_new RENAME TO providers;",
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -552,11 +564,19 @@ mod tests {
         for name in [
             "users", "devices", "conversations", "messages", "messages_fts", "user_prefs", // live
             "memory", "projects", "token_usage", // reserved
-            "providers", "settings", "pair_codes", "display_defaults", // interim
-            "config_snapshot", "redeemed_codes", // the admin service's snapshot
+            "providers", // only the encrypted API keys, by provider id
+            "config_snapshot", "redeemed_codes", // what the admin service pushes, and codes already used
         ] {
             assert!(t.iter().any(|x| x == name), "missing table {name}");
         }
+        for gone in ["settings", "pair_codes", "display_defaults"] {
+            assert!(!t.iter().any(|x| x == gone), "{gone} belongs to the admin service now");
+        }
+        let cols: Vec<String> = {
+            let mut stmt = db.conn.prepare("SELECT name FROM pragma_table_info('providers') ORDER BY cid").unwrap();
+            stmt.query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect()
+        };
+        assert_eq!(cols, ["id", "api_key_enc"], "a provider keeps only its id and its encrypted key");
         assert!(!t.iter().any(|x| x == "device_tokens"), "devices replaces device_tokens");
         let v: i64 = db.conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
         assert_eq!(v as usize, MIGRATIONS.len());
@@ -588,6 +608,35 @@ mod tests {
         assert_eq!(hits("fox"), 1);
         db.delete_conversation(&u, &c).unwrap();
         assert_eq!(hits("fox"), 0, "deleting the conversation removes its messages from the index");
+    }
+
+    #[test]
+    fn migrating_from_the_version_with_the_admin_tables_keeps_the_provider_keys() {
+        // A database as the previous step of this refactor left it: version 2, with the interim tables.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        for (i, sql) in MIGRATIONS.iter().take(2).enumerate() {
+            conn.execute_batch(sql).unwrap();
+            if i == 0 {
+                conn.execute_batch(&format!("PRAGMA application_id = {APPLICATION_ID}")).unwrap();
+            }
+        }
+        conn.execute_batch("PRAGMA user_version = 2").unwrap();
+        conn.execute_batch(
+            "INSERT INTO providers (id, name, type, model, api_key_enc, created_at) VALUES ('p1','one','openai','m',x'0102',0), ('p2','two','openai','m',NULL,0);
+             INSERT INTO settings VALUES ('system_prompt', 'old');",
+        )
+        .unwrap();
+        let db = Db::init(conn).unwrap();
+        let v: i64 = db.conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(v as usize, MIGRATIONS.len());
+        let keys: Vec<(String, Option<Vec<u8>>)> = {
+            let mut stmt = db.conn.prepare("SELECT id, api_key_enc FROM providers ORDER BY id").unwrap();
+            stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect()
+        };
+        assert_eq!(keys, [("p1".to_string(), Some(vec![1, 2])), ("p2".to_string(), None)], "ids and keys survive");
+        let t = tables(&db);
+        assert!(["settings", "pair_codes", "display_defaults"].iter().all(|gone| !t.iter().any(|x| x == gone)));
     }
 
     #[test]

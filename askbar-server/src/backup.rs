@@ -33,7 +33,7 @@ fn stamp(unix: i64) -> String {
 }
 
 /// A consistent snapshot of the database (`VACUUM INTO`) with everything secret taken out:
-/// provider API keys, the Cloudflare token, the admin password hash and pairing-code hashes (unredeemed or used).
+/// provider API keys and pairing-code hashes (unredeemed or used).
 /// Conversations, settings and paired-device records (token hashes only) stay.
 fn make_snapshot(state: &AppState, path: &std::path::Path) -> rusqlite::Result<()> {
     {
@@ -49,8 +49,6 @@ fn make_snapshot(state: &AppState, path: &std::path::Path) -> rusqlite::Result<(
     }
     snap.execute_batch(
         "UPDATE providers SET api_key_enc = NULL;
-         DELETE FROM settings WHERE key IN ('admin_password_hash', 'cloudflare_token');
-         DELETE FROM pair_codes;
          DELETE FROM redeemed_codes;
          PRAGMA journal_mode = DELETE;
          VACUUM;", // rewrite the file so the removed values don't linger in free pages

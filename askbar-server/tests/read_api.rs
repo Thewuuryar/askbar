@@ -27,17 +27,10 @@ async fn start() -> T {
     let db = askbar_server::Db::open_in_memory().unwrap();
     let user = db.seed_server().unwrap();
     let secrets = Secrets::new(KEY).unwrap();
-    let enc = secrets.encrypt(PROVIDER_SECRET);
-    db.conn()
-        .execute(
-            "INSERT INTO providers (id, name, type, base_url, model, api_key_enc, created_at) VALUES ('p1','mock','openai','http://x/v1','m1',?1,0)",
-            [enc],
-        )
-        .unwrap();
-    let code = auth::create_pair_code(&db, &user, "t", 600).unwrap();
-    askbar_server::bridge::rebuild(&db).unwrap();
-    askbar_server::bridge::rebuild(&db).unwrap();
-    let state = AppState::new(db, secrets, askbar_server::MIN_CLIENT, "http://localhost:8080");
+    askbar_server::testing::add_provider(&db, askbar_server::testing::provider("p1", "mock", "http://x/v1", "m1"));
+    askbar_server::testing::store_key(&db, &secrets, "p1", PROVIDER_SECRET);
+    let code = askbar_server::testing::add_pair_code(&db, &user, "t");
+    let state = AppState::new(db, secrets, askbar_server::MIN_CLIENT);
     let token = auth::redeem_pair_code(&state.db.lock().unwrap(), &code).unwrap().unwrap();
     let app = askbar_server::api_router(state.clone());
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -92,10 +85,11 @@ async fn settings_have_defaults_and_no_system_prompt() {
     assert!(!body.contains("system_prompt") && !body.contains("prompt"));
     let s: Settings = serde_json::from_str(&body).unwrap();
     assert_eq!(s, Settings::default());
-    // A partial stored override is merged over the defaults.
-    t.state.db.lock().unwrap().conn().execute("INSERT INTO settings VALUES ('display', '{\"width\": 900}')", []).unwrap();
-    t.state.db.lock().unwrap().conn().execute("INSERT INTO settings VALUES ('system_prompt', 'TOP SECRET PROMPT')", []).unwrap();
-    askbar_server::bridge::rebuild(&t.state.db.lock().unwrap()).unwrap(); // what the old admin does after a change
+    // What the admin pushed is served; the system prompt in the same snapshot is not.
+    askbar_server::testing::update_snapshot(&t.state.db.lock().unwrap(), |s| {
+        s.display.width = 900;
+        s.system_prompt = Some("TOP SECRET PROMPT".into());
+    });
     let (_, body) = t.get_text("/api/v1/settings").await;
     let s: Settings = serde_json::from_str(&body).unwrap();
     assert_eq!((s.display.width, s.display.max_height), (900, 640));
@@ -169,10 +163,8 @@ async fn prefs_are_shared_by_a_users_devices_and_not_by_other_users() {
     let (second, other) = {
         let db = t.state.db.lock().unwrap();
         db.conn().execute("INSERT INTO users (id, name, created_at) VALUES ('U2','other',0)", []).unwrap();
-        let c1 = auth::create_pair_code(&db, &t.user, "second device", 600).unwrap();
-        askbar_server::bridge::rebuild(&db).unwrap();
-        let c2 = auth::create_pair_code(&db, "U2", "their device", 600).unwrap();
-        askbar_server::bridge::rebuild(&db).unwrap();
+        let c1 = askbar_server::testing::add_pair_code(&db, &t.user, "second device");
+        let c2 = askbar_server::testing::add_pair_code(&db, "U2", "their device");
         (auth::redeem_pair_code(&db, &c1).unwrap().unwrap(), auth::redeem_pair_code(&db, &c2).unwrap().unwrap())
     };
 

@@ -60,7 +60,7 @@ async fn start(reachable: bool) -> T {
 
     let sdb = askbar_server::Db::open_in_memory().unwrap();
     sdb.seed_server().unwrap();
-    let server = AppState::new(sdb, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), askbar_server::MIN_CLIENT, "http://localhost:8080");
+    let server = AppState::new(sdb, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), askbar_server::MIN_CLIENT);
     let api = serve(askbar_server::api_router(server.clone())).await;
     let mgmt_url = if reachable {
         serve(askbar_server::mgmt::router(server.clone(), mgmt_dir.join(mgmt::HASH_FILE))).await

@@ -1,22 +1,19 @@
-//! Askbar server. Two separate routers: the device API and the admin site.
+//! Askbar server: the device API and, on its own listener, the management API the admin service uses.
 
-pub mod admin;
-pub mod admin_api;
 pub mod api;
 pub mod auth;
 pub mod backup;
-pub mod bridge;
-pub mod caddy;
 pub mod chat;
 pub mod db;
 pub mod ids;
 pub mod llm;
 pub mod mgmt;
-pub mod network;
 pub mod provider_test;
 pub mod secrets;
 pub mod snapshot;
 pub mod store;
+#[doc(hidden)]
+pub mod testing;
 
 pub use db::{make_title, ConversationSummary, Db, DbError, SearchHit, StoredMessage};
 use askbar_proto::{Health, PairRequest, PairResponse};
@@ -26,8 +23,7 @@ use axum::{
     middleware,
     middleware::Next,
     response::Response,
-    response::Redirect,
-    routing::{get, post, put},
+    routing::{get, post},
     Json, Router,
 };
 use secrets::Secrets;
@@ -40,46 +36,17 @@ pub struct AppState {
     pub db: Mutex<Db>,
     secrets: Arc<Secrets>,
     pub http: llm::HttpClient,
-    pub admin: admin::AdminAuth,
     /// Oldest client version the API still serves.
     pub min_client: String,
-    /// Where clients reach the API when TLS is off; goes into pairing strings.
-    pub public_url: String,
-    /// Host ports of the HTTPS front end (they decide the address in pairing strings).
-    pub caddy: Mutex<caddy::CaddyLink>,
-    /// How the last attempt to configure Caddy went.
-    pub proxy: Mutex<caddy::ProxyStatus>,
-    pub tls_api_port: std::sync::atomic::AtomicU16,
-    pub tls_admin_port: std::sync::atomic::AtomicU16,
 }
 
 impl AppState {
-    pub fn new(db: Db, secrets: Secrets, min_client: &str, public_url: &str) -> Arc<AppState> {
-        Arc::new(AppState {
-            db: Mutex::new(db),
-            secrets: Arc::new(secrets),
-            http: llm::http_client(),
-            admin: admin::AdminAuth::default(),
-            min_client: min_client.to_string(),
-            public_url: public_url.trim_end_matches('/').to_string(),
-            caddy: Mutex::new(caddy::CaddyLink::default()),
-            proxy: Mutex::new(caddy::ProxyStatus::default()),
-            tls_api_port: 8443.into(),
-            tls_admin_port: 9443.into(),
-        })
+    pub fn new(db: Db, secrets: Secrets, min_client: &str) -> Arc<AppState> {
+        Arc::new(AppState { db: Mutex::new(db), secrets: Arc::new(secrets), http: llm::http_client(), min_client: min_client.to_string() })
     }
 
     pub fn secrets(&self) -> Arc<Secrets> {
         self.secrets.clone()
-    }
-
-    pub fn set_caddy(&self, link: caddy::CaddyLink) {
-        *self.caddy.lock().unwrap_or_else(|e| e.into_inner()) = link;
-    }
-
-    pub fn set_tls_ports(&self, api: u16, admin: u16) {
-        self.tls_api_port.store(api, std::sync::atomic::Ordering::Relaxed);
-        self.tls_admin_port.store(admin, std::sync::atomic::Ordering::Relaxed);
     }
 }
 
@@ -123,41 +90,6 @@ async fn require_client_version(State(state): State<Arc<AppState>>, req: Request
     }
 }
 
-pub fn admin_router(state: Arc<AppState>) -> Router {
-    let protected: Router<Arc<AppState>> = Router::new()
-        .route("/admin/session", get(|| async { StatusCode::NO_CONTENT }))
-        .route("/admin/logout", post(admin::logout))
-        .route("/admin/api/providers", get(admin_api::list_providers).post(admin_api::create_provider))
-        .route("/admin/api/providers/{id}", put(admin_api::update_provider).delete(admin_api::delete_provider))
-        .route("/admin/api/providers/{id}/test", post(admin_api::test_provider))
-        .route("/admin/api/password", post(admin::change_password))
-        .route("/admin/api/network", get(network::get_network).put(network::put_network))
-        .route("/admin/api/network/apply", post(network::apply_network))
-        .route("/admin/api/backup", get(admin_api::backup))
-        .route("/admin/api/devices", get(admin_api::list_devices))
-        .route("/admin/api/devices/{id}/revoke", post(admin_api::revoke_device))
-        .route("/admin/api/pair", post(admin_api::create_pairing))
-        .route("/admin/api/settings", get(admin_api::get_settings).put(admin_api::put_settings))
-        .route("/admin/api/users/{id}/display-defaults", put(admin_api::put_user_display))
-        .route_layer(middleware::from_fn_with_state(state.clone(), admin::require_session));
-    Router::new()
-        .route("/", get(|| async { Redirect::to("/admin/") }))
-        .route("/admin", get(|| async { Redirect::to("/admin/") }))
-        .route("/admin/", get(|| async { admin_asset("text/html; charset=utf-8", include_str!("admin_ui/index.html")) }))
-        .route("/admin/app.js", get(|| async { admin_asset("text/javascript; charset=utf-8", include_str!("admin_ui/app.js")) }))
-        .route("/admin/style.css", get(|| async { admin_asset("text/css; charset=utf-8", include_str!("admin_ui/style.css")) }))
-        .route("/admin/health", get(admin_health))
-        .route("/admin/login", post(admin::login))
-        .route("/admin/api/setup-status", get(admin::setup_status))
-        .route("/admin/api/setup/password", post(admin::setup_password))
-        .merge(protected)
-        .layer(middleware::from_fn_with_state(state.clone(), bridge::after_admin_change))
-        .layer(middleware::from_fn(admin::require_admin_header))
-        .layer(middleware::from_fn(admin::security_headers))
-        .with_state(state)
-        .layer(middleware::from_fn(log_requests))
-}
-
 async fn health(State(state): State<Arc<AppState>>) -> Json<Health> {
     Json(Health { api_version: API_VERSION, min_client: state.min_client.clone() })
 }
@@ -171,10 +103,6 @@ async fn pair(State(state): State<Arc<AppState>>, Json(req): Json<PairRequest>) 
     }
 }
 
-async fn admin_health() -> &'static str {
-    "ok"
-}
-
 /// Logs method, path and status only: no query string, headers or bodies.
 async fn log_requests(req: Request, next: Next) -> Response {
     let method = req.method().clone();
@@ -184,6 +112,3 @@ async fn log_requests(req: Request, next: Next) -> Response {
     res
 }
 
-fn admin_asset(content_type: &'static str, body: &'static str) -> impl axum::response::IntoResponse {
-    ([(axum::http::header::CONTENT_TYPE, content_type)], body)
-}

@@ -80,7 +80,7 @@ fn the_token_is_private_the_server_gets_only_its_hash_and_nothing_is_overwritten
 fn server_state() -> Arc<AppState> {
     let db = askbar_server::Db::open_in_memory().unwrap();
     db.seed_server().unwrap();
-    AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), askbar_server::MIN_CLIENT, "http://localhost:8080")
+    AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), askbar_server::MIN_CLIENT)
 }
 
 async fn serve_on(listener: tokio::net::TcpListener, state: Arc<AppState>, hash_file: PathBuf) {

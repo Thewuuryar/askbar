@@ -33,7 +33,7 @@ async function waitForPort(port) {
 }
 
 (async () => {
-  const [api, adminPort, oldAdminPort, mgmtPort, mockPort] = [await freePort(), await freePort(), await freePort(), await freePort(), await freePort()];
+  const [api, adminPort, mgmtPort, mockPort] = [await freePort(), await freePort(), await freePort(), await freePort()];
   const data = fs.mkdtempSync(path.join(os.tmpdir(), 'askbar-admin-'));
   const dirs = {
     serverData: path.join(data, 'data'), serverSecrets: path.join(data, 'data', 'secrets'),
@@ -48,7 +48,7 @@ async function waitForPort(port) {
   const cleanup = () => { for (const c of children) c.kill(); if (forwarder) forwarder.close(); fs.rmSync(data, { recursive: true, force: true }); };
 
   const startServer = () => run(path.join(ROOT, 'target/debug/askbar-server'), [], {
-    ASKBAR_API_ADDR: '127.0.0.1:' + api, ASKBAR_ADMIN_ADDR: '127.0.0.1:' + oldAdminPort, // the old in-server admin: unused here
+    ASKBAR_API_ADDR: '127.0.0.1:' + api,
     ASKBAR_MGMT_ADDR: '127.0.0.1:' + mgmtPort, ASKBAR_MGMT_TOKEN_HASH_FILE: path.join(dirs.mgmt, 'token.sha256'),
     ASKBAR_DATA_DIR: dirs.serverData, ASKBAR_SECRETS_DIR: dirs.serverSecrets,
   });
