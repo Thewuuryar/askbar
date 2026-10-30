@@ -214,3 +214,11 @@ README (first-run steps, "set on the admin page" list, Backup and recovery, the 
 - "Moving the logic out of `admin_api.rs`": the Test logic now lives in `provider_test.rs` and both the admin site and the management API call it (the old admin keeps working until R4.13). Key storage is new code in `mgmt.rs`, not a move: the old admin stores keys inside create/update provider, which stays as it is.
 - A provider that is in the current snapshot but has no `providers` row gets one when its key is first stored (copied from the snapshot's metadata), so the new admin can create providers without the old admin. An unknown id is 404, a name clash is 409.
 - Tests: key stored encrypted and decryptable, replaced, never in any response or error, no read endpoint, token required; the test endpoint against a fake OpenAI endpoint (ok, and a rejected key that the provider echoes back is shown as `[key hidden]`). Rust: 149 passed; admin Node tests still pass.
+
+## R4.4 notes
+
+- `GET /mgmt/v1/devices`, `GET /mgmt/v1/usage`, `GET /mgmt/v1/backup`, all bearer-authenticated.
+- Moved out of `admin_api.rs`: the backup (to `backup.rs`: `VACUUM INTO`, scrub, temp-file cleanup, filename stamp and its test) and the device list (`auth::list_devices`); the admin site now calls the same code.
+- The backup now also scrubs what R4.2 added: it empties `pair_codes` inside the stored snapshot document and deletes `redeemed_codes` (otherwise pairing-code hashes would leak through the snapshot). Existing admin backup tests still pass.
+- "Usage" was not defined in the task and the admin had no usage logic; the endpoint returns counts (users, conversations, messages, active/revoked devices) and token totals summed from the reserved `token_usage` table (0 until something fills it).
+- Rust 151 passed.

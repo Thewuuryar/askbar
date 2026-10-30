@@ -160,6 +160,39 @@ async fn test_provider(State(state): State<Arc<AppState>>, Path(id): Path<String
         .ok_or_else(|| fail(StatusCode::NOT_FOUND, "No such provider."))
 }
 
+/// Every paired device, newest first.
+async fn list_devices(State(state): State<Arc<AppState>>) -> Result<Json<Vec<crate::auth::DeviceRow>>, Failure> {
+    let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+    crate::auth::list_devices(&db).map(Json).map_err(|_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not read the devices."))
+}
+
+/// Counts for the admin service's overview. Token totals come from `token_usage`, which
+/// nothing fills in yet, so they are 0 for now.
+async fn usage(State(state): State<Arc<AppState>>) -> Result<Json<serde_json::Value>, Failure> {
+    let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+    let count = |sql: &str| db.conn().query_row(sql, [], |r| r.get::<_, i64>(0));
+    let read = || -> rusqlite::Result<serde_json::Value> {
+        Ok(serde_json::json!({
+            "users": count("SELECT COUNT(*) FROM users")?,
+            "conversations": count("SELECT COUNT(*) FROM conversations")?,
+            "messages": count("SELECT COUNT(*) FROM messages")?,
+            "devices": {
+                "active": count("SELECT COUNT(*) FROM devices WHERE revoked_at IS NULL")?,
+                "revoked": count("SELECT COUNT(*) FROM devices WHERE revoked_at IS NOT NULL")?,
+            },
+            "tokens_in": count("SELECT COALESCE(SUM(tokens_in), 0) FROM token_usage")?,
+            "tokens_out": count("SELECT COALESCE(SUM(tokens_out), 0) FROM token_usage")?,
+        }))
+    };
+    read().map(Json).map_err(|_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not read the usage."))
+}
+
+/// The database as a download, with provider keys, the Cloudflare token, the admin password
+/// hash and pairing-code hashes taken out.
+async fn backup(State(state): State<Arc<AppState>>) -> Result<Response, StatusCode> {
+    crate::backup::response(state).await
+}
+
 /// The management routes behind the token check.
 pub fn router(state: Arc<AppState>, hash_file: PathBuf) -> Router {
     Router::new()
@@ -167,6 +200,9 @@ pub fn router(state: Arc<AppState>, hash_file: PathBuf) -> Router {
         .route("/mgmt/v1/snapshot", put(put_snapshot))
         .route("/mgmt/v1/providers/{id}/key", put(put_provider_key))
         .route("/mgmt/v1/providers/{id}/test", post(test_provider))
+        .route("/mgmt/v1/devices", get(list_devices))
+        .route("/mgmt/v1/usage", get(usage))
+        .route("/mgmt/v1/backup", get(backup))
         .layer(middleware::from_fn_with_state(Guard { hash_file }, require_token))
         .with_state(state)
 }

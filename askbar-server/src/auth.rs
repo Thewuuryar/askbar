@@ -111,3 +111,21 @@ pub async fn require_device_token(
     req.extensions_mut().insert(auth);
     Ok(next.run(req).await)
 }
+
+/// A paired device. The token itself is never stored, so it can't be shown.
+#[derive(serde::Serialize)]
+pub struct DeviceRow {
+    pub id: String,
+    pub name: String,
+    pub created_at: i64,
+    pub last_seen: Option<i64>,
+    pub revoked: bool,
+}
+
+/// All devices, newest first.
+pub fn list_devices(db: &Db) -> rusqlite::Result<Vec<DeviceRow>> {
+    let mut stmt =
+        db.conn().prepare("SELECT id, name, created_at, last_seen, revoked_at IS NOT NULL FROM devices ORDER BY created_at DESC, id DESC")?;
+    let rows = stmt.query_map([], |r| Ok(DeviceRow { id: r.get(0)?, name: r.get(1)?, created_at: r.get(2)?, last_seen: r.get(3)?, revoked: r.get(4)? }))?;
+    rows.collect()
+}

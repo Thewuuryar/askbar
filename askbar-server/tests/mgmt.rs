@@ -343,3 +343,93 @@ async fn the_test_endpoint_runs_a_provider_and_hides_the_key() {
 
     assert_eq!(s.call(M::POST, "/mgmt/v1/providers/nope/test", None).await.0, 404);
 }
+
+// ------------------------------------------------------- devices, usage, backup
+
+#[tokio::test]
+async fn devices_and_usage_are_listed_over_the_management_api() {
+    use reqwest::Method as M;
+    let s = start_with_state().await;
+    let user = {
+        let db = s.state.db.lock().unwrap();
+        let user: String = db.conn().query_row("SELECT id FROM users", [], |r| r.get(0)).unwrap();
+        for name in ["Work laptop", "Phone"] {
+            let code = askbar_server::auth::create_pair_code(&db, &user, name, 600).unwrap();
+            askbar_server::auth::redeem_pair_code(&db, &code).unwrap().unwrap();
+        }
+        let c = db.create_conversation(&user, "chat").unwrap();
+        db.add_message(&user, &c, "user", "hi").unwrap();
+        db.add_message(&user, &c, "assistant", "hello").unwrap();
+        db.conn().execute("UPDATE devices SET revoked_at = 5 WHERE name = 'Phone'", []).unwrap();
+        db.conn().execute("INSERT INTO token_usage (id, user_id, tokens_in, tokens_out, created_at) VALUES ('t1', ?1, 10, 20, 0)", [&user]).unwrap();
+        user
+    };
+    let _ = user;
+
+    let (st, body) = s.call(M::GET, "/mgmt/v1/devices", None).await;
+    assert_eq!(st, 200);
+    let devices: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let by_name = |n: &str| devices.as_array().unwrap().iter().find(|d| d["name"] == n).unwrap().clone();
+    assert_eq!((by_name("Work laptop")["revoked"].clone(), by_name("Phone")["revoked"].clone()), (json!(false), json!(true)));
+    assert!(!body.contains("abt_") && !body.contains("hash"), "no token material: {body}");
+
+    let (st, body) = s.call(M::GET, "/mgmt/v1/usage", None).await;
+    let u: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(st, 200);
+    assert_eq!(
+        (&u["conversations"], &u["messages"], &u["devices"]["active"], &u["devices"]["revoked"], &u["tokens_in"], &u["tokens_out"]),
+        (&json!(1), &json!(2), &json!(1), &json!(1), &json!(10), &json!(20))
+    );
+
+    for p in ["/mgmt/v1/devices", "/mgmt/v1/usage", "/mgmt/v1/backup"] {
+        let r = s.t.http.get(format!("{}{p}", s.t.url)).send().await.unwrap();
+        assert_eq!(r.status(), 401, "{p} needs the token");
+    }
+}
+
+#[tokio::test]
+async fn the_backup_has_the_data_and_none_of_the_secrets() {
+    use reqwest::Method as M;
+    let s = start_with_state().await;
+    let llm = "http://x/v1";
+    s.push_provider(llm).await;
+    s.call(M::PUT, "/mgmt/v1/providers/p1/key", Some(json!({ "key": KEY }))).await;
+    let code_hash = "ab".repeat(32); // the snapshot lists this pair-code hash
+    {
+        let db = s.state.db.lock().unwrap();
+        let user: String = db.conn().query_row("SELECT id FROM users", [], |r| r.get(0)).unwrap();
+        let c = db.create_conversation(&user, "kept conversation").unwrap();
+        db.add_message(&user, &c, "user", "question one").unwrap();
+        let code = askbar_server::auth::create_pair_code(&db, &user, "pending", 600).unwrap();
+        db.conn().execute("INSERT INTO redeemed_codes (hash, device_id, redeemed_at) VALUES ('used-hash-123', NULL, 0)", []).unwrap();
+        let _ = code;
+    }
+
+    let r = s.t.http.get(format!("{}/mgmt/v1/backup", s.t.url)).bearer_auth(TOKEN).send().await.unwrap();
+    assert_eq!(r.status(), 200);
+    assert!(r.headers()["content-disposition"].to_str().unwrap().contains("askbar-backup-"));
+    let bytes = r.bytes().await.unwrap();
+    assert_eq!(&bytes[..15], b"SQLite format 3");
+    let has = |needle: &[u8]| bytes.windows(needle.len()).any(|w| w == needle);
+    assert!(!has(KEY.as_bytes()), "no provider key");
+    assert!(!has(code_hash.as_bytes()), "the snapshot's pair-code hashes are gone");
+    assert!(!has(b"used-hash-123"), "so are redeemed-code hashes");
+
+    let dir = std::env::temp_dir().join(format!("askbar-mgmt-backup-{}", ulid::Ulid::new()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("b.db");
+    std::fs::write(&file, &bytes).unwrap();
+    let c = rusqlite::Connection::open(&file).unwrap();
+    let one = |sql: &str| c.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap();
+    assert_eq!(one("SELECT COUNT(*) FROM providers WHERE api_key_enc IS NOT NULL"), 0);
+    assert_eq!(one("SELECT COUNT(*) FROM pair_codes"), 0);
+    assert_eq!(one("SELECT COUNT(*) FROM redeemed_codes"), 0);
+    assert_eq!(one("SELECT COUNT(*) FROM conversations WHERE title = 'kept conversation'"), 1);
+    let doc: String = c.query_row("SELECT body FROM config_snapshot", [], |r| r.get(0)).unwrap();
+    let doc: serde_json::Value = serde_json::from_str(&doc).unwrap();
+    assert_eq!(doc["pair_codes"], json!([]));
+    assert_eq!(doc["providers"].as_array().unwrap().len(), 2, "the rest of the snapshot stays");
+    let _ = std::fs::remove_dir_all(&dir);
+    // The live database is untouched by taking a backup.
+    assert!(askbar_server::snapshot::current(&s.state.db.lock().unwrap()).unwrap().unwrap().pair_codes.len() == 1);
+}

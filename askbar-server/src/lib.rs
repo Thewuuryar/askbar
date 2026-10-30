@@ -4,6 +4,7 @@ pub mod admin;
 pub mod admin_api;
 pub mod api;
 pub mod auth;
+pub mod backup;
 pub mod caddy;
 pub mod chat;
 pub mod db;
