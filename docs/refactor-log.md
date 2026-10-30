@@ -125,3 +125,7 @@ Done in R2.3 as agreed (see "Order change"): `Remote.ids` is gone, Tauri command
 ## Fix after R2.15 / R2.17
 
 `tests/admin.test.js` still sent client version 0.1.0, which `MIN_CLIENT` 0.3.0 (R2.15) refuses with 426, so 2 admin steps failed. R2.15 only ran T0, which does not include the Node tests, and it went unnoticed until R2.17's log step. Fixed by sending 0.3.0; admin steps are 23 again.
+
+## R2.18 notes
+
+`docs/wire-contract.md` written from the code (proto types and the route handlers). It states that chat answers `503` before the master key exists; R3.5 removes setup mode, so that line must be removed then.
