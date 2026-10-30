@@ -7,6 +7,7 @@ pub mod auth;
 pub mod caddy;
 pub mod chat;
 pub mod db;
+pub mod ids;
 pub mod llm;
 pub mod network;
 pub mod rotate;
