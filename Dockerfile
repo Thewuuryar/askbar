@@ -19,7 +19,7 @@ RUN sed -i 's/^members = .*/members = ["askbar-proto", "askbar-server", "askbar-
 # The admin service: the admin site and its own database. No TCP port: it listens on a unix
 # socket that only Caddy is given. Runs as uid 10001.
 FROM debian:bookworm-slim AS admin
-RUN useradd --system --uid 10001 --home-dir /admin-data --shell /usr/sbin/nologin askbar-admin \
+RUN groupadd --system --gid 10001 askbar-admin && useradd --system --uid 10001 --gid 10001 --home-dir /admin-data --shell /usr/sbin/nologin askbar-admin \
  && mkdir /admin-data /admin-secrets /mgmt /caddy-secrets /run/admin /caddy-run \
  && chown askbar-admin:askbar-admin /admin-data /admin-secrets /mgmt /caddy-secrets /run/admin /caddy-run \
  && chmod 700 /admin-secrets
@@ -41,7 +41,7 @@ ENTRYPOINT ["askbar-admin"]
 # The server: the device API on 8080 and the management API on its own address. Runs as uid 10002,
 # so it shares no file ownership with the admin.
 FROM debian:bookworm-slim AS server
-RUN useradd --system --uid 10002 --home-dir /data --shell /usr/sbin/nologin askbar \
+RUN groupadd --system --gid 10002 askbar && useradd --system --uid 10002 --gid 10002 --home-dir /data --shell /usr/sbin/nologin askbar \
  && mkdir /data /secrets && chown askbar:askbar /data /secrets
 COPY --from=build /src/target/release/askbar-server /usr/local/bin/askbar-server
 USER askbar

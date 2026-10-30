@@ -77,6 +77,9 @@ services:
     image: askbar-caddy:latest
     container_name: askbar-caddy
     restart: unless-stopped
+    # Group 10001 is the admin's: Caddy's admin socket (mode 0660) is then owned by root:10001, so the
+    # admin can use it and nothing else can.
+    user: "0:10001"
     depends_on:
       server:
         condition: service_healthy

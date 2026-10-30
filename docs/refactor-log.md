@@ -325,3 +325,11 @@ With the old admin still serving the UI: clippy no errors; Rust 157 passed, 0 fa
 - **Found, for R4.16:** Caddy creates its admin socket as `root:root 0660`, so the admin (uid 10001) cannot connect to it yet.
 - **`scripts/smoke.sh --url` not run for T3:** nothing is reachable from the host until Caddy has a hostname (only 443/80 are published and the admin is on a socket), so the script has nothing to point at. The equivalent steps above were done from inside the compose networks. Needs a decision on first-run access (see the report at the end).
 - Images were built with the scratch Dockerfiles that add the egress proxy CA (the Caddy build included), not with `docker compose build`. The disk filled again during this task; cleared Docker's build cache and `cargo clean -p askbar-admin -p askbar-server`.
+
+## R4.16 notes
+
+- `Dockerfile.caddy` was already the Cloudflare-DNS build (`xcaddy build --with github.com/caddy-dns/cloudflare`); only its comment changed. The bootstrap file (R4.15) puts Caddy's admin API on `unix//run/caddy/admin.sock|0660`; the compose file builds it as the `caddy` service.
+- **Fix found while testing:** the images created the users with `useradd --system --uid N`, which gave them gid 999. Both now get an explicit group with the same number (admin 10001:10001, server 10002:10002). Caddy runs as `user: "0:10001"` so its admin socket is `root:10001 0660`: the admin (uid/gid 10001) connects, nothing else can. (The `|0660` mode suffix works as written.)
+- Verified in the running stack: Caddy's admin API refuses TCP (127.0.0.1:2019 inside the container and askbar-caddy:2019 from another container on `edge`: connection refused); uid 10001 connects through the socket (`GET /config/`); a throwaway container on `edge` as uid 10001 with only `caddy-run` can too; the admin's Network > Apply returned "Caddy is serving the configuration", and Caddy's loaded config has `admin.askbar.test.invalid` -> `unix//run/admin/admin.sock` behind a `not remote_ip 10.0.0.0/8` abort, and `askbar.test.invalid` -> `server:8080`.
+- Certificates were not requested (the test host is not real).
+- `smoke.sh --url` still not run (see R4.15).
