@@ -60,6 +60,11 @@ const MIGRATIONS: &[&str] = &[
      );
      INSERT INTO budgets (id) VALUES (1);
      INSERT INTO network_settings (id) VALUES (1);",
+    // v2 (additive): devices the admin has revoked; they go to the server in the snapshot.
+    "CREATE TABLE revoked_devices (
+         device_id  TEXT PRIMARY KEY,
+         revoked_at INTEGER NOT NULL
+     );",
 ];
 
 #[derive(Debug, thiserror::Error)]

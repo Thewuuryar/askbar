@@ -18,11 +18,11 @@ fn migrations_apply_and_the_defaults_are_safe() {
         let mut stmt = db.conn().prepare("SELECT name FROM sqlite_master WHERE type = 'table'").unwrap();
         stmt.query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect()
     };
-    for t in ["admin_credentials", "providers", "settings", "display_defaults", "pair_codes", "budgets", "network_settings"] {
+    for t in ["admin_credentials", "providers", "settings", "display_defaults", "pair_codes", "budgets", "network_settings", "revoked_devices"] {
         assert!(tables.iter().any(|x| x == t), "missing {t}");
     }
     let v: i64 = db.conn().query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-    assert_eq!(v, 1);
+    assert_eq!(v, 2);
     // No password until setup; no limits; the IP allowlist and HTTPS start switched off.
     let creds: i64 = db.conn().query_row("SELECT COUNT(*) FROM admin_credentials", [], |r| r.get(0)).unwrap();
     assert_eq!(creds, 0);

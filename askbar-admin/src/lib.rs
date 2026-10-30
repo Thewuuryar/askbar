@@ -3,6 +3,7 @@
 
 pub mod auth;
 pub mod db;
+pub mod mgmt;
 
 use axum::{http::StatusCode, routing::get, Router};
 use std::path::PathBuf;
@@ -11,13 +12,24 @@ use std::sync::{Arc, Mutex};
 pub use db::AdminDb;
 
 pub struct AdminState {
-    pub db: Mutex<AdminDb>,
+    pub db: Arc<Mutex<AdminDb>>,
     pub auth: auth::AdminAuth,
+    /// The link to the server; `None` in tests that don't need one.
+    pub server: Option<Arc<mgmt::ServerLink>>,
 }
 
 impl AdminState {
     pub fn new(db: AdminDb) -> Arc<AdminState> {
-        Arc::new(AdminState { db: Mutex::new(db), auth: auth::AdminAuth::default() })
+        Arc::new(AdminState { db: Arc::new(Mutex::new(db)), auth: auth::AdminAuth::default(), server: None })
+    }
+
+    pub fn with_server(db: AdminDb, server: Arc<mgmt::ServerLink>) -> Arc<AdminState> {
+        Arc::new(AdminState { db: Arc::new(Mutex::new(db)), auth: auth::AdminAuth::default(), server: Some(server) })
+    }
+
+    /// Is the server there? (False when there is no link at all.)
+    pub fn server_online(&self) -> bool {
+        self.server.as_ref().is_some_and(|s| s.server_online())
     }
 }
 
