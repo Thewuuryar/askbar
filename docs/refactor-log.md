@@ -158,3 +158,7 @@ Both are test-infrastructure bugs in `tests/mock_llm.py`. Local run after the fi
 - **Deviation:** the task says to remove "the Security tab". That tab also holds the change-admin-password form, which is not part of the deleted master-key feature, so the tab stays with only that form. Say if you want password change removed too.
 - `admin.test.js`: the four steps for the key wizard, "key shown once" and rotation were replaced by two (setup then app opens with no key step; the server's own key exists at 0600 and the page never shows it). Admin steps 23 -> 21; the password-change step is kept. Rust unchanged (149).
 - `/admin/api/setup/master-key`, `/admin/api/security*` still exist server-side until R3.3/R3.4.
+
+## R3.3 notes
+
+Deleted `rotate.rs`, the rotate/previous-key/security-status endpoints and their routes, `rotation.rs` (8 tests), and what only they used (`admin::reauth`, `secrets::new_path`/`prev_path`/`random_key`, the startup `rotate::recover`). Rust 149 -> 141 (the 8 rotation tests); admin 21 and smoke 11 still pass.

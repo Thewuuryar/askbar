@@ -69,7 +69,6 @@ async fn main() {
     };
     let key_path = askbar_server::secrets::key_path();
     let db = askbar_server::Db::open(&data_dir().join("askbar.db")).unwrap_or_else(|e| die(e, 1));
-    askbar_server::rotate::recover(&db, &key_path);
     let secrets = Some(askbar_server::secrets::ensure_key_file(&key_path, &db).unwrap_or_else(|e| die(e, 2)));
     match db.seed_server() {
         Ok(user) => tracing::info!(%user, "database ready"),
