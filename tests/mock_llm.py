@@ -75,5 +75,7 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8765
+    # Bind before announcing: callers wait for this line and then connect straight away.
+    server = ThreadingHTTPServer((os.environ.get("MOCK_LLM_HOST", "127.0.0.1"), port), Handler)
     print(f"mock LLM on http://127.0.0.1:{port}/v1", flush=True)
-    ThreadingHTTPServer((os.environ.get("MOCK_LLM_HOST", "127.0.0.1"), port), Handler).serve_forever()
+    server.serve_forever()

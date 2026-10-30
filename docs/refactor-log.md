@@ -129,3 +129,7 @@ Done in R2.3 as agreed (see "Order change"): `Remote.ids` is gone, Tauri command
 ## R2.18 notes
 
 `docs/wire-contract.md` written from the code (proto types and the route handlers). It states that chat answers `503` before the master key exists; R3.5 removes setup mode, so that line must be removed then.
+
+## Fix: flaky tests that start the mock LLM
+
+Two full test runs (R2.6 and the R2 gate) each reported one failure that did not reproduce. Running the suite with four busy loops reproduced it: `test_button_reports_success_and_failure_without_leaking_the_key` could not reach the mock LLM. Cause: `tests/mock_llm.py` printed its "ready" line before it bound the port, and the Rust tests wait for that line and then connect. The mock now binds first. Six runs under the same load pass.
