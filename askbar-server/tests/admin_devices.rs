@@ -24,7 +24,7 @@ async fn start() -> T {
     let db = askbar_server::Db::open_in_memory().unwrap();
     db.seed_server().unwrap();
     admin::init_password(&db, PASSWORD).unwrap();
-    let state = AppState::with_config(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), "0.1.0", &format!("{PUBLIC}/"));
+    let state = AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), "0.1.0", &format!("{PUBLIC}/"));
     let (api, admin_url) = (serve(askbar_server::api_router(state.clone())).await, serve(askbar_server::admin_router(state)).await);
     let http = reqwest::Client::new();
     let r = http.post(format!("{admin_url}/admin/login")).header("x-askbar-admin", "1").json(&json!({ "password": PASSWORD })).send().await.unwrap();

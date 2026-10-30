@@ -49,20 +49,7 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(db: Db, secrets: Secrets) -> Arc<AppState> {
-        AppState::with_min_client(db, secrets, MIN_CLIENT)
-    }
-
-    pub fn with_min_client(db: Db, secrets: Secrets, min_client: &str) -> Arc<AppState> {
-        AppState::with_config(db, secrets, min_client, "http://localhost:8080")
-    }
-
-    pub fn with_config(db: Db, secrets: Secrets, min_client: &str, public_url: &str) -> Arc<AppState> {
-        AppState::build(db, secrets, min_client, public_url)
-    }
-
-    /// The server as it starts for real.
-    pub fn build(db: Db, secrets: Secrets, min_client: &str, public_url: &str) -> Arc<AppState> {
+    pub fn new(db: Db, secrets: Secrets, min_client: &str, public_url: &str) -> Arc<AppState> {
         Arc::new(AppState {
             db: Mutex::new(db),
             secrets: Arc::new(secrets),

@@ -22,7 +22,7 @@ async fn start(password: &str) -> T {
     let db = askbar_server::Db::open_in_memory().unwrap();
     db.seed_server().unwrap();
     admin::init_password(&db, password).unwrap();
-    let state = AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap());
+    let state = AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), askbar_server::MIN_CLIENT, "http://localhost:8080");
     T {
         api: spawn(askbar_server::api_router(state.clone())).await,
         admin: spawn(askbar_server::admin_router(state.clone())).await,

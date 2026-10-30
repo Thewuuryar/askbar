@@ -28,7 +28,7 @@ async fn fresh() -> T {
     let dir = std::env::temp_dir().join(format!("askbar-setup-{}", ulid::Ulid::new()));
     let db = askbar_server::Db::open_in_memory().unwrap();
     db.seed_server().unwrap();
-    let state = AppState::build(db, askbar_server::secrets::Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), "0.3.0", "http://localhost:8080");
+    let state = AppState::new(db, askbar_server::secrets::Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), "0.3.0", "http://localhost:8080");
     T {
         adm: serve(askbar_server::admin_router(state.clone())).await,
         state,

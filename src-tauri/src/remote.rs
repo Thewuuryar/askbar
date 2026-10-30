@@ -369,7 +369,7 @@ mod tests {
             )
             .unwrap();
         let code = auth::create_pair_code(&db, &user, "test", 600).unwrap();
-        let state: Arc<AppState> = AppState::with_min_client(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), "0.1.0");
+        let state: Arc<AppState> = AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), "0.1.0", "http://localhost:8080");
         let token = auth::redeem_pair_code(&state.db.lock().unwrap(), &code).unwrap().unwrap();
         let app = askbar_server::api_router(state);
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -439,7 +439,7 @@ mod tests {
                 .unwrap();
         }
         let code = auth::create_pair_code(&db, &user, "test", 600).unwrap();
-        let state = AppState::with_min_client(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), min_client);
+        let state = AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), min_client, "http://localhost:8080");
         let token = auth::redeem_pair_code(&state.db.lock().unwrap(), &code).unwrap().unwrap();
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", l.local_addr().unwrap());
@@ -683,7 +683,7 @@ mod tests {
         };
         let (api_l, api_url) = listen().await;
         let (admin_l, admin_url) = listen().await;
-        let state = AppState::with_config(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), "0.1.0", &api_url);
+        let state = AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), "0.1.0", &api_url);
         let (a, b) = (askbar_server::api_router(state.clone()), askbar_server::admin_router(state));
         tokio::spawn(async move { axum::serve(api_l, a).await.unwrap() });
         tokio::spawn(async move { axum::serve(admin_l, b).await.unwrap() });

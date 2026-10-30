@@ -17,7 +17,7 @@ async fn start() -> T {
     let db = askbar_server::Db::open_in_memory().unwrap();
     db.seed_server().unwrap();
     admin::init_password(&db, PW).unwrap();
-    let state = AppState::with_config(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), "0.1.0", "http://localhost:8080");
+    let state = AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), "0.1.0", "http://localhost:8080");
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let adm = format!("http://{}", l.local_addr().unwrap());
     let app = askbar_server::admin_router(state.clone());

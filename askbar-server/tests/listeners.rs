@@ -3,7 +3,7 @@ use std::net::SocketAddr;
 fn state() -> std::sync::Arc<askbar_server::AppState> {
     let db = askbar_server::Db::open_in_memory().unwrap();
     db.seed_server().unwrap();
-    askbar_server::AppState::new(db, askbar_server::secrets::Secrets::new("0123456789abcdef0123456789abcdef").unwrap())
+    askbar_server::AppState::new(db, askbar_server::secrets::Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), askbar_server::MIN_CLIENT, "http://localhost:8080")
 }
 
 async fn spawn(app: axum::Router) -> SocketAddr {

@@ -21,7 +21,7 @@ async fn start() -> (String, String, std::sync::Arc<AppState>, Vec<u8>) {
     db.add_message(&user, &c, "user", "question one").unwrap();
     db.add_message(&user, &c, "assistant", "answer one").unwrap();
     askbar_server::auth::create_pair_code(&db, &user, "pending", 600).unwrap();
-    let state = AppState::new(db, secrets);
+    let state = AppState::new(db, secrets, askbar_server::MIN_CLIENT, "http://localhost:8080");
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = format!("http://{}", l.local_addr().unwrap());
     let app = askbar_server::admin_router(state.clone());

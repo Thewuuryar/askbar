@@ -69,7 +69,7 @@ async fn main() {
         .ok()
         .filter(|u| !u.trim().is_empty())
         .unwrap_or_else(|| format!("http://localhost:{}", api.port()));
-    let state = askbar_server::AppState::build(db, secrets, askbar_server::MIN_CLIENT, &public_url);
+    let state = askbar_server::AppState::new(db, secrets, askbar_server::MIN_CLIENT, &public_url);
     let port_from = |var: &str, default: u16| std::env::var(var).ok().and_then(|v| v.parse().ok()).unwrap_or(default);
     state.set_tls_ports(port_from("ASKBAR_TLS_API_PORT", 8443), port_from("ASKBAR_TLS_ADMIN_PORT", 9443));
     state.set_caddy(askbar_server::caddy::CaddyLink::from_env());

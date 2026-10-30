@@ -35,7 +35,7 @@ async fn start() -> T {
         )
         .unwrap();
     let code = auth::create_pair_code(&db, &user, "t", 600).unwrap();
-    let state = AppState::new(db, secrets);
+    let state = AppState::new(db, secrets, askbar_server::MIN_CLIENT, "http://localhost:8080");
     let token = auth::redeem_pair_code(&state.db.lock().unwrap(), &code).unwrap().unwrap();
     let app = askbar_server::api_router(state.clone());
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

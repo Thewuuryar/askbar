@@ -177,3 +177,7 @@ Setup mode is gone: `require_ready`, `setup_complete`, `set_secrets`, the `key_s
 - Clippy: no errors, 5 pre-existing style warnings.
 - Node: markdown 19, ui 43, admin 21 (-2 with the key wizard and rotation steps), all passing.
 - A fresh start creates the key and the admin setup works without a key step: covered by `ensure_key_file` tests, the admin Node test (setup opens the app with no key screen; `master.key` exists at 0600), and `scripts/smoke.sh` (11 passed, 1 skipped for the person-only check). `smoke.sh` no longer has its master-key branch.
+
+## R3.6 notes
+
+`AppState` has one constructor, `AppState::new(db, secrets, min_client, public_url)`; `with_min_client`, `with_config` and `build` are gone. All 21 call sites (tests, `main.rs`, the client's `remote.rs` tests) updated; tests that used the old default pass `askbar_server::MIN_CLIENT` and `"http://localhost:8080"`. Rust 139 passed.
