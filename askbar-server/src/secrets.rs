@@ -45,7 +45,7 @@ fn file_err(path: &std::path::Path, e: impl std::fmt::Display) -> SecretsError {
     SecretsError::File { path: path.display().to_string(), message: e.to_string() }
 }
 
-/// `Ok(None)` when there is no key file yet (the server then runs in setup mode).
+/// `Ok(None)` when there is no key file yet (a first start).
 pub fn load_key_file(path: &std::path::Path) -> Result<Option<Secrets>, SecretsError> {
     match std::fs::read_to_string(path) {
         Ok(text) => Secrets::new(text.trim()).map(Some),
@@ -182,7 +182,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("askbar-keyfile-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let path = dir.join("nested").join("master.key");
-        assert!(load_key_file(&path).unwrap().is_none(), "no file means setup mode");
+        assert!(load_key_file(&path).unwrap().is_none(), "no file yet");
 
         let made = generate_key_file(&path).unwrap();
         let loaded = load_key_file(&path).unwrap().expect("key is there now");

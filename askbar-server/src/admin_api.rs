@@ -112,16 +112,11 @@ fn name_taken(e: &rusqlite::Error) -> bool {
     matches!(e, rusqlite::Error::SqliteFailure(f, _) if f.code == rusqlite::ErrorCode::ConstraintViolation)
 }
 
-fn not_ready() -> Failure {
-    (StatusCode::SERVICE_UNAVAILABLE, Json(ApiError { error: "Setup is not finished: generate the master key first.".into() }))
-}
-
 pub async fn create_provider(State(state): St, Json(i): Json<ProviderInput>) -> Result<(StatusCode, Json<serde_json::Value>), Failure> {
     validate(&i)?;
     let id = ulid::Ulid::new().to_string();
     let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
-    // Encrypt under the lock, so a key rotation can't slip in between.
-    let secrets = state.secrets().ok_or_else(not_ready)?;
+    let secrets = state.secrets();
     let enc = i.api_key.as_deref().filter(|k| !k.is_empty()).map(|k| secrets.encrypt(k));
     db.conn()
         .execute(
@@ -142,7 +137,7 @@ pub async fn create_provider(State(state): St, Json(i): Json<ProviderInput>) -> 
 pub async fn update_provider(State(state): St, Path(id): Path<String>, Json(i): Json<ProviderInput>) -> Result<StatusCode, Failure> {
     validate(&i)?;
     let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
-    let secrets = state.secrets().ok_or_else(not_ready)?;
+    let secrets = state.secrets();
     let new_key = i.api_key.as_deref().filter(|k| !k.is_empty()).map(|k| secrets.encrypt(k));
     let changed = db
         .conn()
@@ -186,7 +181,7 @@ pub struct TestResult {
 pub async fn test_provider(State(state): St, Path(id): Path<String>) -> Result<Json<TestResult>, StatusCode> {
     let provider = {
         let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
-        let secrets = state.secrets().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+        let secrets = state.secrets();
         store::load_provider(&db, &secrets, &id).map_err(internal)?.ok_or(StatusCode::NOT_FOUND)?
     };
     let key = provider.api_key.clone();

@@ -166,3 +166,7 @@ Deleted `rotate.rs`, the rotate/previous-key/security-status endpoints and their
 ## R3.4 notes
 
 Deleted the `generate-master-key` command, `secrets::generate_key` and `write_key_file` (key creation is now the one `generate_key_file`, which still never overwrites and writes 0600), `setup_master_key` and its route. In `admin_setup.rs`, `an_existing_key_can_be_restored_instead` was removed and `first_run_password_then_master_key` became `first_run_password` (its key assertions removed, password assertions kept). Rust 141 -> 140. README text about the wizard/rotation is stale until R3.7/R5.4.
+
+## R3.5 notes
+
+Setup mode is gone: `require_ready`, `setup_complete`, `set_secrets`, the `key_set` field of `/admin/api/setup-status` and every "setup is not finished" 503 are deleted, and `AppState` holds `Arc<Secrets>` (no `Option`, no `RwLock`, no `key_path`). `build` is now `(db, secrets, min_client, public_url)`. `setup_mode.rs` (1 test) removed. In `admin_network.rs` the second half of `network_needs_a_session_and_a_master_key` (the no-key 503) was removed with the feature and the test renamed `network_needs_a_session`. Login before any admin password is set still answers 503; that is "no password yet", not setup mode, and is kept. `docs/wire-contract.md` updated. Rust: 140 -> 139.

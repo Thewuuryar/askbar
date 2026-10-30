@@ -78,7 +78,7 @@ Both follow the signed-in user, so all of a user's devices see the same values.
 `POST /api/v1/chat` with
 `{"conversation_id": "<id>" (optional), "provider": "<provider id>", "text": "..."}`.
 Empty text is `400`; an unknown provider or a conversation that is not the caller's is
-`404`; before the master key exists it is `503`. Otherwise the answer is
+`404`. Otherwise the answer is
 `200 text/event-stream`. Provider output is never passed through; the server re-emits
 its own events. Each SSE message has `event:` naming the type and `data:` holding a JSON
 object that repeats the type in an `"event"` field:
@@ -98,4 +98,4 @@ keeps whatever part of the reply had arrived.
 
 Plain HTTP status codes with no body the client depends on: `400` bad request or missing
 version header, `401` bad token, `404` not found (or not yours), `426` client too old,
-`503` setup not finished.
+(There is no setup mode: the server creates its master key on first start.)

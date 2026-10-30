@@ -65,7 +65,7 @@ async fn saving_normalises_and_encrypts_the_token() {
     // At rest the token is ciphertext that only the master key opens.
     let stored = t.stored_token().unwrap();
     assert!(!stored.contains(TOKEN));
-    assert_eq!(t.state.secrets().unwrap().decrypt_b64(&stored).unwrap(), TOKEN);
+    assert_eq!(t.state.secrets().decrypt_b64(&stored).unwrap(), TOKEN);
     let (_, again) = t.call(M::GET, "/admin/api/network", json!({})).await;
     assert!(!again.to_string().contains(TOKEN));
 }
@@ -147,22 +147,9 @@ async fn http_mode_saves_without_a_token_and_pairing_follows_the_setting() {
 }
 
 #[tokio::test]
-async fn network_needs_a_session_and_a_master_key() {
+async fn network_needs_a_session() {
     let t = start().await;
     assert_eq!(t.http.get(format!("{}/admin/api/network", t.adm)).send().await.unwrap().status(), 401);
-
-    let db = askbar_server::Db::open_in_memory().unwrap();
-    db.seed_server().unwrap();
-    admin::init_password(&db, PW).unwrap();
-    let state = AppState::build(db, None, "0.1.0", "http://localhost:8080", std::env::temp_dir().join("nope").join("master.key"));
-    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let adm = format!("http://{}", l.local_addr().unwrap());
-    let app = askbar_server::admin_router(state);
-    tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
-    let r = t.http.post(format!("{adm}/admin/login")).header("x-askbar-admin", "1").json(&json!({ "password": PW })).send().await.unwrap();
-    let cookie = r.headers()["set-cookie"].to_str().unwrap().split(';').next().unwrap().to_string();
-    let r = t.http.put(format!("{adm}/admin/api/network")).header("x-askbar-admin", "1").header("cookie", cookie).json(&full()).send().await.unwrap();
-    assert_eq!(r.status(), 503);
 }
 
 #[tokio::test]

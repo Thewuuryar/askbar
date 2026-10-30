@@ -156,7 +156,7 @@ fn save(state: &AppState, input: NetworkInput) -> Result<(), Failure> {
     }
 
     let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
-    let secrets = state.secrets().ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "Setup is not finished: generate the master key first."))?;
+    let secrets = state.secrets();
     let token_after = match (new_token.is_some(), input.clear_token) {
         (true, _) => true,
         (false, true) => false,

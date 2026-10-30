@@ -23,13 +23,12 @@ async fn serve(app: axum::Router) -> String {
     addr
 }
 
-/// A server straight after first start: no password, no master key.
+/// A server straight after first start: no admin password yet.
 async fn fresh() -> T {
     let dir = std::env::temp_dir().join(format!("askbar-setup-{}", ulid::Ulid::new()));
-    let key_path = dir.join("secrets").join("master.key");
     let db = askbar_server::Db::open_in_memory().unwrap();
     db.seed_server().unwrap();
-    let state = AppState::build(db, None, "0.1.0", "http://localhost:8080", key_path);
+    let state = AppState::build(db, askbar_server::secrets::Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), "0.3.0", "http://localhost:8080");
     T {
         adm: serve(askbar_server::admin_router(state.clone())).await,
         state,
@@ -64,8 +63,8 @@ impl T {
 #[tokio::test]
 async fn first_run_password() {
     let t = fresh().await;
-    assert_eq!(t.status().await, json!({ "password_set": false, "key_set": false }));
-    assert_eq!(t.call(M::POST, "/admin/login", None, json!({ "password": "x" })).await.0, 503);
+    assert_eq!(t.status().await, json!({ "password_set": false }));
+    assert_eq!(t.call(M::POST, "/admin/login", None, json!({ "password": "x" })).await.0, 503, "no password set yet, so no login");
 
     // Too short is refused and sets nothing.
     assert_eq!(t.call(M::POST, "/admin/api/setup/password", None, json!({ "password": "short" })).await.0, 400);

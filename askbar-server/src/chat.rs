@@ -62,8 +62,7 @@ pub async fn chat(
     // Everything that can fail with a plain HTTP status happens before the stream starts.
     let (provider, system, conversation, history) = {
         let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
-        // Fetched under the lock, so a key rotation can't slip in between.
-        let secrets = state.secrets().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+        let secrets = state.secrets();
         let provider = store::load_provider(&db, &secrets, &req.provider)
             .map_err(internal)?
             .ok_or(StatusCode::NOT_FOUND)?;

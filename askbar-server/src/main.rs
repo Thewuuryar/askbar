@@ -57,7 +57,7 @@ async fn main() {
     };
     let key_path = askbar_server::secrets::key_path();
     let db = askbar_server::Db::open(&data_dir().join("askbar.db")).unwrap_or_else(|e| die(e, 1));
-    let secrets = Some(askbar_server::secrets::ensure_key_file(&key_path, &db).unwrap_or_else(|e| die(e, 2)));
+    let secrets = askbar_server::secrets::ensure_key_file(&key_path, &db).unwrap_or_else(|e| die(e, 2));
     match db.seed_server() {
         Ok(user) => tracing::info!(%user, "database ready"),
         Err(e) => die(e, 1),
@@ -69,7 +69,7 @@ async fn main() {
         .ok()
         .filter(|u| !u.trim().is_empty())
         .unwrap_or_else(|| format!("http://localhost:{}", api.port()));
-    let state = askbar_server::AppState::build(db, secrets, askbar_server::MIN_CLIENT, &public_url, key_path);
+    let state = askbar_server::AppState::build(db, secrets, askbar_server::MIN_CLIENT, &public_url);
     let port_from = |var: &str, default: u16| std::env::var(var).ok().and_then(|v| v.parse().ok()).unwrap_or(default);
     state.set_tls_ports(port_from("ASKBAR_TLS_API_PORT", 8443), port_from("ASKBAR_TLS_ADMIN_PORT", 9443));
     state.set_caddy(askbar_server::caddy::CaddyLink::from_env());

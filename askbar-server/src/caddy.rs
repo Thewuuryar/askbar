@@ -115,10 +115,7 @@ async fn apply_inner(state: &Arc<AppState>) -> ProxyStatus {
     let (net, token) = {
         let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
         let Ok(net) = network::load(&db) else { return status(false, "Could not read the network settings.") };
-        let token = match (state.secrets(), network::stored_token(&db)) {
-            (Some(s), Some(enc)) => s.decrypt_b64(&enc).ok(),
-            _ => None,
-        };
+        let token = network::stored_token(&db).and_then(|enc| state.secrets().decrypt_b64(&enc).ok());
         (net, token)
     };
     let enabled = net.tls_enabled && !net.hostname.is_empty();
@@ -164,8 +161,7 @@ pub fn apply_at_startup(state: Arc<AppState>) {
     }
     tokio::spawn(async move {
         for attempt in 0..12 {
-            let ready = state.setup_complete();
-            if ready && apply(&state).await.ok {
+            if apply(&state).await.ok {
                 tracing::info!("HTTPS front end configured");
                 return;
             }

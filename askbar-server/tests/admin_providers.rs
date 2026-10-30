@@ -67,7 +67,7 @@ impl T {
     fn stored_key(&self, name: &str) -> String {
         let db = self.state.db.lock().unwrap();
         let id: String = db.conn().query_row("SELECT id FROM providers WHERE name = ?1", [name], |r| r.get(0)).unwrap();
-        store::load_provider(&db, &self.state.secrets().unwrap(), &id).unwrap().unwrap().api_key
+        store::load_provider(&db, &self.state.secrets(), &id).unwrap().unwrap().api_key
     }
 }
 

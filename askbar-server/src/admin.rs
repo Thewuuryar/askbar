@@ -228,7 +228,7 @@ pub(crate) fn err(status: StatusCode, msg: &str) -> Failure {
 
 /// What the setup page needs to decide which screen to show. Booleans only.
 pub async fn setup_status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
-    Json(serde_json::json!({ "password_set": stored_hash(&state).is_some(), "key_set": state.setup_complete() }))
+    Json(serde_json::json!({ "password_set": stored_hash(&state).is_some() }))
 }
 
 /// First run: the first visitor chooses the admin password and is signed in. Refused once one exists.
