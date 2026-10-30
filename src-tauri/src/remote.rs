@@ -1,10 +1,9 @@
-//! `Remote`: the backend that talks to an Askbar server over HTTPS.
+//! `Remote`: the client for an Askbar server over HTTPS.
 
-use crate::backend::{Backend, ClientStatus, Emit, Settings, StreamEvent};
+use crate::types::{ClientStatus, Emit, Settings, StreamEvent};
 use crate::client_config::{check_server_url, merge_ui, ClientConfig};
 use crate::tokens::TokenStore;
 use askbar_proto::{ChatEvent, ChatRequest, Conversation, ConversationDetail, DisplaySettings, Message, ProviderInfo, SseParser};
-use async_trait::async_trait;
 use futures_util::StreamExt;
 use reqwest::{Method, RequestBuilder, StatusCode, Url};
 use std::path::{Path, PathBuf};
@@ -150,9 +149,8 @@ pub async fn pair(pairing: &str, client_yaml: &Path, tokens: &dyn TokenStore) ->
     cfg.save(client_yaml)
 }
 
-#[async_trait]
-impl Backend for Remote {
-    async fn settings(&self) -> Result<Settings, String> {
+impl Remote {
+    pub async fn settings(&self) -> Result<Settings, String> {
         let i = self.inner()?;
         let cfg = i.cfg();
         // Offline is not an error here: the window still opens with the local
@@ -182,7 +180,7 @@ impl Backend for Remote {
         })
     }
 
-    async fn status(&self) -> Option<ClientStatus> {
+    pub async fn status(&self) -> Option<ClientStatus> {
         let i = match self.inner() {
             Ok(i) => i,
             Err(e) => return Some(ClientStatus::new("problem", e)),
@@ -228,7 +226,7 @@ impl Backend for Remote {
         None
     }
 
-    async fn set_active_provider(&self, name: String) -> Result<(), String> {
+    pub async fn set_active_provider(&self, name: String) -> Result<(), String> {
         let i = self.inner()?;
         let mut cfg = i.cfg();
         cfg.active_provider = name;
@@ -237,20 +235,21 @@ impl Backend for Remote {
         Ok(())
     }
 
-    async fn list_providers(&self) -> Result<Vec<ProviderInfo>, String> {
+    #[cfg(test)]
+    pub async fn list_providers(&self) -> Result<Vec<ProviderInfo>, String> {
         self.inner()?.get_json("/api/v1/providers").await
     }
 
-    async fn list_conversations(&self) -> Result<Vec<Conversation>, String> {
+    pub async fn list_conversations(&self) -> Result<Vec<Conversation>, String> {
         self.inner()?.get_json("/api/v1/conversations").await
     }
 
-    async fn load_conversation(&self, id: String) -> Result<Vec<Message>, String> {
+    pub async fn load_conversation(&self, id: String) -> Result<Vec<Message>, String> {
         let d: ConversationDetail = self.inner()?.get_json(&format!("/api/v1/conversations/{id}")).await?;
         Ok(d.messages)
     }
 
-    async fn delete_conversation(&self, id: String) -> Result<(), String> {
+    pub async fn delete_conversation(&self, id: String) -> Result<(), String> {
         let i = self.inner()?;
         let resp = i.request(Method::DELETE, &format!("/api/v1/conversations/{id}"))?.timeout(REQUEST_TIMEOUT);
         match i.send(resp).await {
@@ -260,7 +259,7 @@ impl Backend for Remote {
         }
     }
 
-    async fn ask(&self, conversation_id: Option<String>, text: String, mut cancel: oneshot::Receiver<()>, emit: Emit<'_>) {
+    pub async fn ask(&self, conversation_id: Option<String>, text: String, mut cancel: oneshot::Receiver<()>, emit: Emit<'_>) {
         let fail = |message: String| emit(StreamEvent::Error { message });
         let i = match self.inner() {
             Ok(i) => i,

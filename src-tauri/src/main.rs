@@ -1,16 +1,15 @@
 // Hide the console window on Windows release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod backend;
 mod client_config;
 mod remote;
 mod tokens;
+mod types;
 
-use askbar_core::{config_path, db_path, Config};
 use askbar_proto::{Conversation, Message};
 use client_config::Ui;
-use backend::{Backend, Local, Settings, StreamEvent};
 use remote::Remote;
+use types::{Settings, StreamEvent};
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, RwLock};
@@ -39,7 +38,7 @@ struct Placement {
 
 struct AppState {
     /// Swapped when the user pairs with a server.
-    backend: RwLock<Arc<dyn Backend>>,
+    backend: RwLock<Arc<Remote>>,
     cancel: Mutex<Option<oneshot::Sender<()>>>,
     shown_at: Mutex<Instant>,
     placement: Mutex<Placement>,
@@ -53,7 +52,7 @@ struct AppState {
 }
 
 impl AppState {
-    fn backend(&self) -> Arc<dyn Backend> {
+    fn backend(&self) -> Arc<Remote> {
         self.backend.read().unwrap_or_else(|e| e.into_inner()).clone()
     }
 }
@@ -195,7 +194,7 @@ async fn bootstrap(state: State<'_, AppState>) -> Result<Bootstrap, String> {
 
 /// `null` when the backend is fine; otherwise what is wrong and (for a missing provider) the alternatives.
 #[tauri::command]
-async fn server_status(state: State<'_, AppState>) -> Result<Option<backend::ClientStatus>, String> {
+async fn server_status(state: State<'_, AppState>) -> Result<Option<types::ClientStatus>, String> {
     Ok(state.backend().status().await)
 }
 
@@ -278,7 +277,7 @@ fn hide_window(app: AppHandle) {
 
 #[tauri::command]
 fn open_config() -> Result<(), String> {
-    let path = config_path();
+    let path = client_config::path();
     opener::open(&path)
         .or_else(|_| opener::reveal(&path))
         .map_err(|e| format!("Could not open {}: {e}", path.display()))
@@ -332,23 +331,14 @@ fn main() {
             _ => {}
         })
         .setup(|app| {
-            // A client.yaml means "use the server"; without one the app works on this machine alone.
             let client_yaml = client_config::path();
-            let (backend, created, config_error): (Arc<dyn Backend>, bool, Option<String>) = if client_yaml.exists() {
-                let tokens = Box::new(tokens::Keychain::new(&client_yaml));
-                (Arc::new(Remote::new(client_config::ClientConfig::load(&client_yaml), client_yaml.clone(), tokens)), false, None)
-            } else {
-                let (created, err) = match Config::load_or_create(&config_path()) {
-                    Ok((_, created)) => (created, None),
-                    Err(e) => (false, Some(e.to_string())),
-                };
-                (Arc::new(Local::open(&db_path())?), created, err)
-            };
-            let (cfg, settings_error) = match tauri::async_runtime::block_on(backend.settings()) {
+            let tokens = Box::new(tokens::Keychain::new(&client_yaml));
+            let config = if client_yaml.exists() { client_config::ClientConfig::load(&client_yaml) } else { Ok(Default::default()) };
+            let backend = Arc::new(Remote::new(config, client_yaml, tokens));
+            let (cfg, config_error) = match tauri::async_runtime::block_on(backend.settings()) {
                 Ok(s) => (s, None),
                 Err(e) => (Settings::builtin(), Some(e)),
             };
-            let config_error = config_error.or(settings_error);
 
             app.manage(AppState {
                 backend: RwLock::new(backend),
@@ -405,18 +395,11 @@ fn main() {
             }
             tray.build(app)?;
 
-            // Hotkey problems and first-run guidance are shown in the window,
+            // Hotkey and config problems are shown in the window,
             // since there is no console to read.
             let handle = app.handle().clone();
             let hotkey_error = register_hotkey(&handle, &cfg.hotkey).err();
-            let notice = config_error.or(hotkey_error).or_else(|| {
-                created.then(|| {
-                    format!(
-                        "Welcome. Add your API key in {} (tray icon → Open config file), then ask away.",
-                        config_path().display()
-                    )
-                })
-            });
+            let notice = config_error.or(hotkey_error);
             if notice.is_some() {
                 *lock(&handle.state::<AppState>().notice) = notice;
                 show(&handle);

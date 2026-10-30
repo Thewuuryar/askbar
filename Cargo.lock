@@ -88,7 +88,6 @@ dependencies = [
  "askbar-core",
  "askbar-proto",
  "askbar-server",
- "async-trait",
  "axum",
  "dirs 6.0.0",
  "futures-util",
