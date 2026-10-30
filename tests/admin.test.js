@@ -1,5 +1,6 @@
-// Run: node tests/admin.test.js   (needs `cargo build -p askbar-server` and `playwright` with Chromium)
-// Starts the real server and tests/mock_llm.py, then drives the admin site in a browser.
+// Run: node tests/admin.test.js   (needs `cargo build -p askbar-server -p askbar-admin` and `playwright` with Chromium)
+// Starts the real server, the real admin service and tests/mock_llm.py, then drives the admin site in a browser.
+// The admin listens on a unix socket only, so the test puts a small TCP forwarder in front of it for the browser.
 const { chromium } = require('playwright');
 const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
@@ -32,18 +33,40 @@ async function waitForPort(port) {
 }
 
 (async () => {
-  const [api, adminPort, mockPort] = [await freePort(), await freePort(), await freePort()];
+  const [api, adminPort, oldAdminPort, mgmtPort, mockPort] = [await freePort(), await freePort(), await freePort(), await freePort(), await freePort()];
   const data = fs.mkdtempSync(path.join(os.tmpdir(), 'askbar-admin-'));
+  const dirs = {
+    serverData: path.join(data, 'data'), serverSecrets: path.join(data, 'data', 'secrets'),
+    adminData: path.join(data, 'admin-data'), adminSecrets: path.join(data, 'admin-secrets'),
+    mgmt: path.join(data, 'askbar-mgmt'), run: path.join(data, 'admin-run'),
+  };
+  fs.mkdirSync(dirs.run, { recursive: true });
+  const sock = path.join(dirs.run, 'admin.sock');
   const children = [];
   const run = (cmd, args, env) => { const c = spawn(cmd, args, { env: { ...process.env, ...env }, stdio: 'ignore' }); children.push(c); return c; };
-  const cleanup = () => { for (const c of children) c.kill(); fs.rmSync(data, { recursive: true, force: true }); };
+  let forwarder = null;
+  const cleanup = () => { for (const c of children) c.kill(); if (forwarder) forwarder.close(); fs.rmSync(data, { recursive: true, force: true }); };
 
-  run('python3', ['-u', path.join(ROOT, 'tests/mock_llm.py'), String(mockPort)], {});
-  run(path.join(ROOT, 'target/debug/askbar-server'), [], {
-    ASKBAR_API_ADDR: '127.0.0.1:' + api, ASKBAR_ADMIN_ADDR: '127.0.0.1:' + adminPort, ASKBAR_DATA_DIR: data,
-    ASKBAR_SECRETS_DIR: path.join(data, 'secrets'),
+  const startServer = () => run(path.join(ROOT, 'target/debug/askbar-server'), [], {
+    ASKBAR_API_ADDR: '127.0.0.1:' + api, ASKBAR_ADMIN_ADDR: '127.0.0.1:' + oldAdminPort, // the old in-server admin: unused here
+    ASKBAR_MGMT_ADDR: '127.0.0.1:' + mgmtPort, ASKBAR_MGMT_TOKEN_HASH_FILE: path.join(dirs.mgmt, 'token.sha256'),
+    ASKBAR_DATA_DIR: dirs.serverData, ASKBAR_SECRETS_DIR: dirs.serverSecrets,
   });
+  run('python3', ['-u', path.join(ROOT, 'tests/mock_llm.py'), String(mockPort)], {});
+  run(path.join(ROOT, 'target/debug/askbar-admin'), [], {
+    ASKBAR_ADMIN_SOCKET: sock, ASKBAR_ADMIN_DATA_DIR: dirs.adminData, ASKBAR_ADMIN_SECRETS_DIR: dirs.adminSecrets,
+    ASKBAR_MGMT_DIR: dirs.mgmt, ASKBAR_SERVER_MGMT_URL: 'http://127.0.0.1:' + mgmtPort,
+    ASKBAR_PUBLIC_URL: 'http://localhost:' + api,
+  });
+  for (let i = 0; i < 100 && !fs.existsSync(sock); i++) await new Promise((r) => setTimeout(r, 50));
+  forwarder = net.createServer((c) => {
+    const u = net.connect(sock);
+    c.pipe(u); u.pipe(c);
+    c.on('error', () => u.destroy()); u.on('error', () => c.destroy());
+  }).listen(adminPort, '127.0.0.1');
+  let serverProc = startServer();
   await waitForPort(adminPort);
+  await waitForPort(api);
   await waitForPort(mockPort);
 
   const base = `http://127.0.0.1:${adminPort}/admin/`;
@@ -52,7 +75,7 @@ async function waitForPort(port) {
   const page = await ctx.newPage();
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
-  page.on('console', (m) => { if (m.type() === 'error' && !/status of 4\d\d/.test(m.text())) errors.push(m.text()); });
+  page.on('console', (m) => { if (m.type() === 'error' && !/status of (4\d\d|502)/.test(m.text())) errors.push(m.text()); });
 
   let masterKey = null;
   await step('first run shows the setup wizard, not a login form', async () => {
@@ -75,8 +98,8 @@ async function waitForPort(port) {
     assert.match(await page.innerText('#providers'), /No providers yet/);
     assert.equal(await page.locator('#setup-key, #setup-saved').count(), 0, 'the master key screens are gone');
   });
-  await step('the server made its own master key, and the page never shows it', async () => {
-    const keyFile = path.join(data, 'secrets', 'master.key');
+  await step('the server made its own master key, and the admin page never shows it', async () => {
+    const keyFile = path.join(dirs.serverSecrets, 'master.key');
     masterKey = fs.readFileSync(keyFile, 'utf8').trim();
     assert.ok(masterKey.length >= 32);
     assert.equal(fs.statSync(keyFile).mode & 0o777, 0o600);
@@ -233,6 +256,7 @@ async function waitForPort(port) {
     await page.fill('#n-host', 'https://askbar.orraitu.com');
     await page.fill('#n-token', CF);
     await page.fill('#n-cidr', '192.168.1.0/24');
+    assert.equal(await page.isChecked('#n-allow'), false, 'the allowlist starts off');
     await page.click('#network-form button[type=submit]');
     await page.waitForSelector('#network-error:not([hidden])');
     assert.match(await page.innerText('#network-error'), /plain DNS name/);
@@ -241,7 +265,8 @@ async function waitForPort(port) {
     await page.click('#network-form button[type=submit]');
     await page.waitForSelector('#flash:not([hidden])');
     assert.match(await page.innerText('#flash'), /Network settings saved/);
-    assert.match(await page.innerText('#n-info'), /https:\/\/askbar\.orraitu\.com:8443/);
+    assert.match(await page.innerText('#n-info'), /admin site is at https:\/\/admin\.askbar\.orraitu\.com/);
+    assert.match(await page.innerText('#n-info'), /pairing strings point at https:\/\/askbar\.orraitu\.com\./);
     assert.equal(await page.inputValue('#n-token'), '');
     assert.match(await page.getAttribute('#n-token', 'placeholder'), /unchanged/);
     assert.equal((await page.content()).includes(CF), false);
@@ -249,22 +274,35 @@ async function waitForPort(port) {
     await page.click('#nav [data-tab="network"]');
     await page.waitForFunction(() => document.getElementById('n-host').value === 'askbar.orraitu.com');
     assert.equal(await page.isChecked('#n-staging'), true);
+    assert.equal(await page.isChecked('#n-allow'), false);
+    assert.equal(await page.inputValue('#n-cidr'), '192.168.1.0/24', 'the addresses are kept while the allowlist is off');
     assert.equal((await page.content()).includes(CF), false);
     // Back to plain HTTP so the rest of the run keeps working the same way.
     await page.uncheck('#n-tls');
     await page.click('#network-form button[type=submit]');
     await page.waitForFunction(() => /point at http:\/\/localhost/.test(document.getElementById('n-info').textContent));
   });
-  await step('backup downloads a database without provider keys', async () => {
+  await step('backup downloads the server and admin databases without secrets', async () => {
     await page.click('#nav [data-tab="backup"]');
     const [download] = await Promise.all([page.waitForEvent('download'), page.click('#backup-link')]);
-    assert.match(download.suggestedFilename(), /^askbar-backup-\d{8}-\d{6}\.db$/);
-    const file = path.join(data, 'downloaded.db');
+    assert.match(download.suggestedFilename(), /^askbar-backup-\d+\.tar$/);
+    const file = path.join(data, 'downloaded.tar');
     await download.saveAs(file);
     const bytes = fs.readFileSync(file);
-    assert.equal(bytes.subarray(0, 15).toString(), 'SQLite format 3');
-    assert.equal(bytes.includes(SECRET_KEY), false);
-    assert.equal(bytes.includes(masterKey), false);
+    // A minimal tar reader: 512-byte headers, name at 0, octal size at 124.
+    const files = {};
+    for (let at = 0; at + 512 <= bytes.length && bytes[at] !== 0;) {
+      const name = bytes.subarray(at, at + 100).toString().replace(/\0.*$/, '');
+      const size = parseInt(bytes.subarray(at + 124, at + 135).toString(), 8);
+      files[name] = bytes.subarray(at + 512, at + 512 + size);
+      at += 512 + Math.ceil(size / 512) * 512;
+    }
+    assert.deepEqual(Object.keys(files).sort(), ['admin.db', 'server.db']);
+    for (const [name, data] of Object.entries(files)) {
+      assert.equal(data.subarray(0, 15).toString(), 'SQLite format 3', name);
+      assert.equal(data.includes(SECRET_KEY), false, name + ' has the provider key');
+      assert.equal(data.includes(masterKey), false, name + ' has the master key');
+    }
   });
   await step('security: changing the password needs the current one', async () => {
     await page.click('#nav [data-tab="security"]');
@@ -291,6 +329,44 @@ async function waitForPort(port) {
     await page.fill('#password', 'brand new password 1');
     await page.click('#login-form button');
     await page.waitForSelector('#app:not([hidden])');
+  });
+  await step('with the server stopped the admin still loads and signs in, and says the server is offline', async () => {
+    serverProc.kill();
+    await new Promise((r) => serverProc.once('exit', r));
+    await page.reload();
+    await page.waitForSelector('#app:not([hidden])');
+    await page.waitForSelector('#offline:not([hidden])', { timeout: 15000 });
+    assert.match(await page.innerText('#offline'), /Server offline/);
+    // Sign out and in again with the server away: the admin has its own login.
+    await page.click('#logout');
+    await page.waitForSelector('#login:not([hidden])');
+    await page.fill('#password', 'brand new password 1');
+    await page.click('#login-form button');
+    await page.waitForSelector('#app:not([hidden])');
+    await page.waitForSelector('#offline:not([hidden])');
+  });
+  await step('a change while the server is away is refused with a clear message and saves nothing', async () => {
+    await page.click('#nav [data-tab="providers"]');
+    await page.click('#add-provider');
+    await page.fill('#p-name', 'while-away');
+    await page.fill('#p-model', 'm');
+    await page.click('#provider-form button[type=submit]');
+    await page.waitForSelector('#provider-error:not([hidden])');
+    assert.match(await page.innerText('#provider-error'), /offline/i);
+    await page.click('#provider-cancel');
+    assert.equal(await page.locator('.card[data-name="while-away"]').count(), 0);
+    // What the admin owns can still be read.
+    assert.equal(await page.locator('.card[data-name="mock"]').count(), 1);
+  });
+  await step('when the server is back the banner goes away and changes work again', async () => {
+    serverProc = startServer();
+    await waitForPort(api);
+    await page.waitForSelector('#offline', { state: 'hidden', timeout: 30000 });
+    await page.click('#add-provider');
+    await page.fill('#p-name', 'after-return');
+    await page.fill('#p-model', 'm');
+    await page.click('#provider-form button[type=submit]');
+    await page.waitForSelector('.card[data-name="after-return"]');
   });
   await step('no JavaScript errors', async () => { assert.deepEqual(errors, []); });
 
