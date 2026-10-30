@@ -333,7 +333,7 @@ fn random_code() -> String {
 
 /// The address devices should pair with: the public HTTPS name when HTTPS is on, else the
 /// configured fallback.
-fn public_url(conn: &Connection) -> String {
+pub(crate) fn public_url(conn: &Connection) -> String {
     let net: Option<(i64, String)> = conn.query_row("SELECT tls_enabled, hostname FROM network_settings WHERE id = 1", [], |r| Ok((r.get(0)?, r.get(1)?))).ok();
     match net {
         Some((1, host)) if !host.is_empty() => format!("https://{host}"),

@@ -3,13 +3,17 @@
 
 pub mod api;
 pub mod auth;
+pub mod caddy;
 pub mod db;
 pub mod mgmt;
+pub mod network;
+pub mod secrets;
 pub mod web;
 
 use axum::{
     http::StatusCode,
     middleware,
+    response::Redirect,
     routing::{get, post, put},
     Router,
 };
@@ -25,15 +29,36 @@ pub struct AdminState {
     pub auth: auth::AdminAuth,
     /// The link to the server; `None` in tests that don't need one.
     pub server: Option<Arc<mgmt::ServerLink>>,
+    /// Encrypts the Cloudflare token at rest.
+    pub secrets: secrets::AdminSecrets,
+    /// How to reach Caddy; set at start-up, changed by tests.
+    pub caddy: std::sync::Mutex<caddy::CaddyLink>,
+    /// How the last attempt to configure Caddy went.
+    pub proxy: std::sync::Mutex<caddy::ProxyStatus>,
 }
 
 impl AdminState {
     pub fn new(db: AdminDb) -> Arc<AdminState> {
-        Arc::new(AdminState { db: Arc::new(Mutex::new(db)), auth: auth::AdminAuth::default(), server: None })
+        AdminState::build(db, None, secrets::AdminSecrets::ephemeral())
     }
 
     pub fn with_server(db: AdminDb, server: Arc<mgmt::ServerLink>) -> Arc<AdminState> {
-        Arc::new(AdminState { db: Arc::new(Mutex::new(db)), auth: auth::AdminAuth::default(), server: Some(server) })
+        AdminState::build(db, Some(server), secrets::AdminSecrets::ephemeral())
+    }
+
+    pub fn build(db: AdminDb, server: Option<Arc<mgmt::ServerLink>>, secrets: secrets::AdminSecrets) -> Arc<AdminState> {
+        Arc::new(AdminState {
+            db: Arc::new(Mutex::new(db)),
+            auth: auth::AdminAuth::default(),
+            server,
+            secrets,
+            caddy: std::sync::Mutex::new(caddy::CaddyLink::default()),
+            proxy: std::sync::Mutex::new(caddy::ProxyStatus::default()),
+        })
+    }
+
+    pub fn set_caddy(&self, link: caddy::CaddyLink) {
+        *self.caddy.lock().unwrap_or_else(|e| e.into_inner()) = link;
     }
 
     /// Is the server there? (False when there is no link at all.)
@@ -57,6 +82,10 @@ pub fn db_path() -> PathBuf {
     PathBuf::from(dir).join("admin.db")
 }
 
+fn asset(content_type: &'static str, body: &'static str) -> impl axum::response::IntoResponse {
+    ([(axum::http::header::CONTENT_TYPE, content_type)], body)
+}
+
 pub fn router(state: Arc<AdminState>) -> Router {
     let protected: Router<Arc<AdminState>> = Router::new()
         .route("/admin/session", get(|| async { StatusCode::NO_CONTENT }))
@@ -72,8 +101,15 @@ pub fn router(state: Arc<AdminState>) -> Router {
         .route("/admin/api/settings", get(api::get_settings).put(api::put_settings))
         .route("/admin/api/users/{id}/display-defaults", put(api::put_user_display))
         .route("/admin/api/backup", get(api::backup))
+        .route("/admin/api/network", get(network::get_network).put(network::put_network))
+        .route("/admin/api/network/apply", post(network::apply_network))
         .route_layer(middleware::from_fn_with_state(state.clone(), web::require_session));
     Router::new()
+        .route("/", get(|| async { Redirect::to("/admin/") }))
+        .route("/admin", get(|| async { Redirect::to("/admin/") }))
+        .route("/admin/", get(|| async { asset("text/html; charset=utf-8", include_str!("ui/index.html")) }))
+        .route("/admin/app.js", get(|| async { asset("text/javascript; charset=utf-8", include_str!("ui/app.js")) }))
+        .route("/admin/style.css", get(|| async { asset("text/css; charset=utf-8", include_str!("ui/style.css")) }))
         .route("/health", get(|| async { (StatusCode::OK, "ok") }))
         .route("/admin/login", post(web::login))
         .route("/admin/api/setup-status", get(web::setup_status))
