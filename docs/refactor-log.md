@@ -185,3 +185,12 @@ Setup mode is gone: `require_ready`, `setup_complete`, `set_secrets`, the `key_s
 ## R3.7 notes
 
 README (first-run steps, "set on the admin page" list, Backup and recovery, the verified list) and the `compose.yaml` comment now say: the key is created automatically; back up `askbar-secrets` separately from `data/`; a raw `data/` restore with encrypted keys onto a new secrets volume makes the server refuse to start; no rotation. The full README rewrite is still R5.4.
+
+## Checkpoint R3 gate (T2)
+
+- T2: clippy no errors; Rust 139 passed; markdown 19, ui 43, admin 21; `scripts/smoke.sh` 11 passed, 1 skipped (person-only check, not verified).
+- Manual checks against the real `askbar-server` binary with empty data and secrets directories:
+  - First start created `master.key` (mode 0600); admin setup needed only a password.
+  - A provider key stored before a restart still works after it (the admin Test button against the mock LLM returned ok both times).
+  - The admin Backup file has `api_key_enc` unset on every provider, no `pair_codes`, and does not contain the stored secret.
+  - With `master.key` deleted while a provider key was stored, the server exited with an error naming the `askbar-secrets` volume and did **not** create a new key.
