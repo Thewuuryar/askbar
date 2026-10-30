@@ -350,27 +350,27 @@ With the old admin still serving the UI: clippy no errors; Rust 157 passed, 0 fa
 
 | Suite (baseline -> now) | Baseline | Now | Why it changed |
 | --- | --- | --- | --- |
-| client (`src-tauri` unit) | 14 (+1 ignored) | 19 (+1 ignored) | +5 for the settings/prefs and refresh paths added in R2-R3 |
+| client (`src-tauri` unit) | 14 (+1 ignored) | 19 (+1 ignored) | +5, tests added in the client during R2-R4 (not itemised in the notes) |
 | `askbar-core` unit | 25 | gone | crate folded into `askbar-server` (R2.6); its tests are in the server's lib unit tests |
 | `askbar-core` tests/streaming.rs | 8 | 8 (`askbar-server/tests/streaming.rs`) | moved with the crate |
-| `askbar-proto` unit | 5 | 7 | +2 (snapshot/wire types) |
-| `askbar-server` unit (lib) | 16 | 32 | includes the core unit tests; minus 1 `import` (R1), 6 `caddy.rs` and 3 `network.rs` (moved to the admin in R4.13); plus key-file, snapshot, db migration and mgmt unit tests |
+| `askbar-proto` unit | 5 | 7 | +2, added with the snapshot types in R4.1 (not itemised) |
+| `askbar-server` unit (lib) | 16 | 32 | includes the core unit tests; minus 1 `import` (R1), 6 `caddy.rs` and 3 `network.rs` (moved to the admin in R4.13); plus tests added in R2-R4 (key file, snapshot, migrations, mgmt); not itemised per test |
 | `admin_auth` | 11 | 11 (`askbar-admin`) | moved in R4.9 |
 | `admin_network` | 6 | 6 (`askbar-admin`) | moved in R4.11 |
 | `admin_setup` | 5 | 4 (`askbar-admin`) | the setup-mode test went with setup mode (R3.3) |
-| `caddy_apply` | 6 | 8 (`askbar-admin`) | +2 for the unix-socket transport and the allowlist switch |
+| `caddy_apply` | 6 | 8 (`askbar-admin`) | +2 added in R4.11 (not itemised) |
 | `admin_backup` 2, `admin_devices` 3, `admin_providers` 5, `admin_settings` 3 | 13 | 8 (`askbar-admin` tests/api.rs) | merged; the behaviours the old files covered are in `api.rs` (8) and `askbar-server/tests/mgmt.rs`; see the R4.13 notes for what had no home and was re-covered |
 | `rotation` | 8 | 0 | feature deleted in R3.1 (named in the task) |
 | `setup_mode` | 1 | 0 | feature deleted in R3.3 (named in the task) |
 | `auth` | 7 | 7 | |
-| `chat` | 4 | 6 | +2 (system prompt from the snapshot, per-user scoping) |
+| `chat` | 4 | 6 | +2 added in R2-R4 (the notes mention the system-prompt-from-snapshot test) |
 | `listeners` | 1 | 1 | |
-| `read_api` | 4 | 6 | +2 (search, prefs) |
-| `version_gate` | 4 | 5 | +1 (minimum client 0.3.0) |
+| `read_api` | 4 | 6 | +2 added in R2 (search, prefs) |
+| `version_gate` | 4 | 5 | +1 added in R2.15 (minimum client) |
 | new: `display_defaults` 2, `snapshot_auth` 3, `mgmt` 13, admin `mgmt_link` 5, admin `service` 6, admin lib unit 9 | 0 | 38 | new for the split |
 | **Rust total** | **138** (+1 ignored) | **166** (+1 ignored) | |
 | Node `markdown` | 19 | 19 | |
-| Node `ui` | 39 | 43 | +4 (prefs/default-provider behaviour in the client) |
-| Node `admin` | 23 | 24 | key wizard and rotation steps removed (-4), +3 for the offline banner, +2 for setup/key checks |
+| Node `ui` | 39 | 43 | +4 added in R2 (the notes record 39 -> 43) |
+| Node `admin` | 23 | 24 | key wizard and rotation steps removed (-2, R3), three steps added for the offline banner and recovery (R4.12) |
 
 No test was deleted other than those named above as removed with a deleted feature or moved with its code. The per-file test counts above are from `cargo test --workspace` at this commit. (Earlier notes say `mgmt.rs` has 14 tests; the run shows 13: that was a miscount.) Server+admin+proto unit totals were not reconciled test by test against the baseline names, only by count and by the removals recorded in the earlier notes.
