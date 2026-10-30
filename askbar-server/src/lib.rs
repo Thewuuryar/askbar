@@ -9,6 +9,7 @@ pub mod chat;
 pub mod db;
 pub mod ids;
 pub mod llm;
+pub mod mgmt;
 pub mod network;
 pub mod secrets;
 pub mod store;

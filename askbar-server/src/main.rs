@@ -74,9 +74,26 @@ async fn main() {
     state.set_tls_ports(port_from("ASKBAR_TLS_API_PORT", 8443), port_from("ASKBAR_TLS_ADMIN_PORT", 9443));
     state.set_caddy(askbar_server::caddy::CaddyLink::from_env());
     askbar_server::caddy::apply_at_startup(state.clone());
+    // The management API listens only when told where; never on a wildcard address.
+    let mgmt = std::env::var("ASKBAR_MGMT_ADDR").ok().filter(|a| !a.trim().is_empty()).map(|a| {
+        askbar_server::mgmt::parse_addr(&a).unwrap_or_else(|e| {
+            eprintln!("error: {e}");
+            std::process::exit(2)
+        })
+    });
+    let mgmt_app = askbar_server::mgmt::router(state.clone(), askbar_server::mgmt::token_hash_path());
     let result = tokio::try_join!(
         serve(api, askbar_server::api_router(state.clone())),
-        serve(admin, askbar_server::admin_router(state))
+        serve(admin, askbar_server::admin_router(state)),
+        async {
+            match mgmt {
+                Some(addr) => serve(addr, mgmt_app).await,
+                None => {
+                    tracing::warn!("ASKBAR_MGMT_ADDR is not set: the management API is off");
+                    std::future::pending().await
+                }
+            }
+        }
     );
     if let Err(e) = result {
         eprintln!("error: {e}");

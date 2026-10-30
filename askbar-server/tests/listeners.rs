@@ -26,3 +26,21 @@ async fn routers_are_separate() {
     assert_eq!(status(api, "/admin/health").await, 404);
     assert_eq!(status(admin, "/api/v1/health").await, 404);
 }
+
+#[tokio::test]
+async fn the_management_router_shares_no_routes_with_the_others() {
+    let dir = std::env::temp_dir().join(format!("askbar-listeners-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let hash = dir.join("token.sha256");
+    std::fs::write(&hash, "0".repeat(64)).unwrap();
+    let mgmt = spawn(askbar_server::mgmt::router(state(), hash)).await;
+    let api = spawn(askbar_server::api_router(state())).await;
+    let admin = spawn(askbar_server::admin_router(state())).await;
+    // Management answers 401 (no token) on its own path and on everything else; the others answer 404.
+    assert_eq!(status(mgmt, "/mgmt/v1/health").await, 401);
+    assert_eq!(status(mgmt, "/api/v1/health").await, 401, "the device API is not served here");
+    assert_eq!(status(mgmt, "/admin/health").await, 401, "nor is the admin site");
+    assert_eq!(status(api, "/mgmt/v1/health").await, 404);
+    assert_eq!(status(admin, "/mgmt/v1/health").await, 404);
+    let _ = std::fs::remove_dir_all(&dir);
+}

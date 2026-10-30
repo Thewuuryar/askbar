@@ -22,6 +22,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal
 chacha20poly1305 = "0.10"
 hkdf = "0.12"
 sha2 = "0.10"
+subtle = "2"
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = "0.3"

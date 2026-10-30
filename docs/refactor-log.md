@@ -194,3 +194,9 @@ README (first-run steps, "set on the admin page" list, Backup and recovery, the 
   - A provider key stored before a restart still works after it (the admin Test button against the mock LLM returned ok both times).
   - The admin Backup file has `api_key_enc` unset on every provider, no `pair_codes`, and does not contain the stored secret.
   - With `master.key` deleted while a provider key was stored, the server exited with an error naming the `askbar-secrets` volume and did **not** create a new key.
+
+## R4.1 notes
+
+- `mgmt.rs`: a management router with its own listener on `ASKBAR_MGMT_ADDR` (rejects `0.0.0.0` and `::`; if unset, the listener is off and a warning is logged, until R4.13 makes it required). The bearer token is hashed (SHA-256) and compared in constant time (`subtle`) with the hex hash in the file named by `ASKBAR_MGMT_TOKEN_HASH_FILE` (default `/mgmt/token.sha256`), read on every request. A missing, empty or malformed file refuses everything. Every path (including unknown ones) needs the token, so there are no unauthenticated 404s.
+- Not specified in the task: refusals are all `401` (no distinction between "no token" and "no hash file"), to avoid telling a caller which one it is.
+- Tests (`tests/mgmt.rs`, 4, and one in `listeners.rs`): 401 with no token, a wrong token, or the stored hash used as the token; refused when the file is missing or junk and works again when it appears; a replaced hash revokes the old token at once; 200 on `/mgmt/v1/health` with the right token; the three routers share no routes; the wildcard address is refused. Checked once by hand with the real binary (401 without, 200 with the token). Rust: 144 passed.
