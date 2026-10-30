@@ -248,3 +248,10 @@ Rust 151 passed, 0 failed; clippy no errors (same 4 pre-existing style warnings)
 ## Checkpoint R4b (T2)
 
 With the old admin still serving the UI: clippy no errors; Rust 157 passed, 0 failed; markdown 19, ui 43, admin 21 (the admin Node test drives the old admin UI end to end: setup, provider add/test/edit/delete, devices pair and revoke, network, settings, backup); `scripts/smoke.sh` 11 passed, 1 skipped (the desktop-client check needs a person; not verified).
+
+## R4.7 notes
+
+- New crate `askbar-admin` (in the workspace): `admin.db` with its own migration (`admin_credentials`, `providers` (metadata only, no keys), `settings`, `display_defaults`, `pair_codes`, `budgets`, `network_settings` with the IP allowlist off) and the same version guard as the server's database (application id "ASKA", so the server's database is refused); in-memory sessions and failed-login limiting (5 failures in 15 minutes lock logins for 15 minutes; a success clears the count); a unix-socket listener (`ASKBAR_ADMIN_SOCKET`, default `/run/admin/admin.sock`, mode 0660, replaces a stale socket) with `GET /health`; `askbar-admin healthcheck`.
+- The login and setup handlers that use the sessions and the limiter come in R4.9; for now only `/health` is routed.
+- Tests (6): migrations and safe defaults; persistence and refusal of a foreign/newer database; the limiter (blocked at the 5th failure, a success resets, failures outside the window do not add up); sessions; the socket answers health in-process; and the real binary: its socket answers, `healthcheck` exits 0 while up and non-zero after, `admin.db` is created, and none of its sockets is a TCP/UDP listener (read from `/proc`, Linux only).
+- Rust: 163 passed.
