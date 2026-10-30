@@ -222,3 +222,7 @@ README (first-run steps, "set on the admin page" list, Backup and recovery, the 
 - The backup now also scrubs what R4.2 added: it empties `pair_codes` inside the stored snapshot document and deletes `redeemed_codes` (otherwise pairing-code hashes would leak through the snapshot). Existing admin backup tests still pass.
 - "Usage" was not defined in the task and the admin had no usage logic; the endpoint returns counts (users, conversations, messages, active/revoked devices) and token totals summed from the reserved `token_usage` table (0 until something fills it).
 - Rust 151 passed.
+
+## Checkpoint R4a (T1)
+
+Rust 151 passed, 0 failed; clippy no errors (same 4 pre-existing style warnings); Node: markdown 19, ui 43, admin 21.
