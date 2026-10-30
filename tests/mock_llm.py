@@ -8,6 +8,7 @@ an HTTP 401 error.
 """
 import json
 import os
+import socketserver
 import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -69,13 +70,21 @@ class Handler(BaseHTTPRequestHandler):
                 time.sleep(0.15 if slow else 0.012)
             self.wfile.write(b"data: [DONE]\n\n")
             self.wfile.flush()
-        except (BrokenPipeError, ConnectionResetError):
+        except ConnectionError:  # broken pipe, reset, or (on Windows) aborted
             print("client disconnected", flush=True)
+
+
+class Server(ThreadingHTTPServer):
+    def server_bind(self):
+        # HTTPServer.server_bind also looks up the host's FQDN, which can take
+        # many seconds on some machines, and nothing here needs it.
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
 
 
 if __name__ == "__main__":
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8765
     # Bind before announcing: callers wait for this line and then connect straight away.
-    server = ThreadingHTTPServer((os.environ.get("MOCK_LLM_HOST", "127.0.0.1"), port), Handler)
+    server = Server((os.environ.get("MOCK_LLM_HOST", "127.0.0.1"), port), Handler)
     print(f"mock LLM on http://127.0.0.1:{port}/v1", flush=True)
     server.serve_forever()

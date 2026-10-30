@@ -133,3 +133,12 @@ Done in R2.3 as agreed (see "Order change"): `Remote.ids` is gone, Tauri command
 ## Fix: flaky tests that start the mock LLM
 
 Two full test runs (R2.6 and the R2 gate) each reported one failure that did not reproduce. Running the suite with four busy loops reproduced it: `test_button_reports_success_and_failure_without_leaking_the_key` could not reach the mock LLM. Cause: `tests/mock_llm.py` printed its "ready" line before it bound the port, and the Rust tests wait for that line and then connect. The mock now binds first. Six runs under the same load pass.
+
+## R2 gate: first build.yml run (sha ff2fd6e) failed on macOS and Windows
+
+Linux passed everything (Rust tests, markdown tests, app build). The other two failed at "Rust tests":
+
+- macOS: `mock did not start: Timeout`. My earlier "bind before announcing" fix made `mock_llm.py` print only after `HTTPServer.server_bind`, which calls `socket.getfqdn` and can take many seconds on a macOS runner. The mock now skips that lookup.
+- Windows: `client_disconnect_saves_partial_reply_and_closes_upstream` never saw the disconnect, because the mock only caught `BrokenPipeError`/`ConnectionResetError` and Windows raises `ConnectionAbortedError` (WinError 10053). The mock now catches `ConnectionError`.
+
+Both are test-infrastructure bugs in `tests/mock_llm.py`. Local run after the fix: Rust 147 passed, smoke 11 passed. The gate needs a new build.yml run.
