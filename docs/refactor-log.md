@@ -81,3 +81,11 @@ The proto `Conversation` and `Message` types already carried string ids, and `ap
 ## R2.11: no code change
 
 Done in R2.3 as agreed (see "Order change"): `Remote.ids` is gone, Tauri commands and stream events use string ids, and `ui/main.js:534` (now `row.dataset.id`), `ui.test.js` and `mock-tauri.js` use string ids. Verified with T1: clippy has no errors; Rust 139 passed; markdown 19, ui 39, admin 23 pass.
+
+## R2.11a / Checkpoint R2b (T2)
+
+- `scripts/smoke.sh` added. Against a throwaway server on an empty data directory: 10 PASS, 0 FAIL, 2 SKIP.
+  - SKIP "search history": there is no search endpoint until R2.12. R2.12 must remove this fallback so a missing endpoint fails.
+  - SKIP "does the desktop client show the streamed reply": **needs a person.** It asks y/n on a terminal; this session had none, so it was not checked and is not recorded as passed.
+- The script's setup steps use today's admin API (password, master key if `key_set` is false, provider, pair code). It will need updating when the key step goes (R3) and again when the admin moves (R4).
+- T1: clippy no errors; Rust 139 passed; markdown 19, ui 39, admin 23 pass.
