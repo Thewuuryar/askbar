@@ -333,3 +333,15 @@ With the old admin still serving the UI: clippy no errors; Rust 157 passed, 0 fa
 - Verified in the running stack: Caddy's admin API refuses TCP (127.0.0.1:2019 inside the container and askbar-caddy:2019 from another container on `edge`: connection refused); uid 10001 connects through the socket (`GET /config/`); a throwaway container on `edge` as uid 10001 with only `caddy-run` can too; the admin's Network > Apply returned "Caddy is serving the configuration", and Caddy's loaded config has `admin.askbar.test.invalid` -> `unix//run/admin/admin.sock` behind a `not remote_ip 10.0.0.0/8` abort, and `askbar.test.invalid` -> `server:8080`.
 - Certificates were not requested (the test host is not real).
 - `smoke.sh --url` still not run (see R4.15).
+
+## R4.17 notes
+
+- `scripts/check-isolation.sh` runs against a running Compose stack (container names are fixed) and uses throwaway `python:3.12-slim` containers for network and socket checks. Sections: (1) with the server stopped the admin signs in, loads, and reports `server_online: false`; (2) the management port gives 401 with no token, with the token's *hash*, and with a wrong token; a second server container with no hash file refuses the hash too (401); Caddy and a container on `edge` cannot reach 172.30.0.2:8082, and nothing on the server's edge address answers on 8082; the admin is on one network; (3) the server mounts none of `admin-secrets`, `admin-data`, `admin-run`, `caddy-run`, `caddy-secrets`, cannot list `/admin-secrets`, has no admin socket, cannot write `/mgmt` (mounted read-only), runs as a different user from the admin, and the admin cannot read the server's `master.key`; (4) allowlist on: Caddy's loaded config aborts `not remote_ip <cidr>` on the admin site, off: the admin site has no address rule; Caddy's admin API refuses TCP and uid 10001 reaches it by socket.
+- The allowlist check inspects Caddy's loaded configuration rather than sending requests from an outside address (no certificate can be issued for the test hostname, so the HTTPS port cannot be driven from here). The behaviour of the rules is covered by `askbar-admin/tests/caddy_apply.rs`.
+- It changes the admin's network settings (a made-up hostname) and restarts the server container, so run it on a throwaway stack. Result: all checks pass.
+
+## Checkpoint R4 (T3 gate)
+
+- Compose stack up from the rewritten `compose.yaml` (images built with the scratch CA Dockerfiles): server and admin healthy, Caddy running, only 443 and 80 published; `scripts/check-isolation.sh` passes.
+- T1: build ok, Rust 166 passed, clippy no errors (5 warning lines, none new in files touched here); markdown 19, ui, admin all pass; `scripts/smoke.sh` 11 passed, 1 skipped (desktop-client step needs a person).
+- **Not done as written:** `scripts/smoke.sh --url <Caddy>`. There is no host-reachable URL before a hostname and certificate exist; the smoke steps through the server's real API were run locally (T2) and the equivalent first-run admin and pairing steps were run inside the compose networks (R4.15).
