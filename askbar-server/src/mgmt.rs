@@ -9,11 +9,11 @@
 use crate::AppState;
 use askbar_proto::Snapshot;
 use axum::{
-    extract::{Request, State},
+    extract::{Path, Request, State},
     http::{header, StatusCode},
     middleware::{self, Next},
     response::Response,
-    routing::{get, put},
+    routing::{get, post, put},
     Json, Router,
 };
 use sha2::{Digest, Sha256};
@@ -94,11 +94,79 @@ async fn put_snapshot(State(state): State<Arc<AppState>>, Json(s): Json<Snapshot
     }
 }
 
+type Failure = (StatusCode, Json<serde_json::Value>);
+
+fn fail(status: StatusCode, msg: &str) -> Failure {
+    (status, Json(serde_json::json!({ "error": msg })))
+}
+
+#[derive(serde::Deserialize)]
+struct KeyInput {
+    key: String,
+}
+
+const MAX_KEY_CHARS: usize = 4096;
+
+/// Store a provider's API key, encrypted with the master key. Write-only: no endpoint
+/// ever returns it, and this one answers `204` with no body. A provider that is in the
+/// current snapshot but has no row yet gets one.
+async fn put_provider_key(State(state): State<Arc<AppState>>, Path(id): Path<String>, Json(input): Json<KeyInput>) -> Result<StatusCode, Failure> {
+    let key = input.key.trim();
+    if key.is_empty() || key.chars().count() > MAX_KEY_CHARS {
+        return Err(fail(StatusCode::BAD_REQUEST, "The key must be 1 to 4096 characters."));
+    }
+    let enc = state.secrets().encrypt(key);
+    let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+    let internal = |_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not store the key.");
+    let updated = db.conn().execute("UPDATE providers SET api_key_enc = ?1 WHERE id = ?2", rusqlite::params![enc, id]).map_err(internal)?;
+    if updated == 0 {
+        let snapshot = crate::snapshot::current(&db).map_err(internal)?;
+        let p = snapshot
+            .and_then(|s| s.providers.into_iter().find(|p| p.id == id))
+            .ok_or_else(|| fail(StatusCode::NOT_FOUND, "No such provider."))?;
+        db.conn()
+            .execute(
+                "INSERT INTO providers (id, name, type, base_url, model, api_key_enc, max_tokens, temperature, headers, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                rusqlite::params![
+                    p.id,
+                    p.name,
+                    p.kind,
+                    p.base_url,
+                    p.model,
+                    enc,
+                    p.max_tokens,
+                    p.temperature,
+                    serde_json::to_string(&p.headers).unwrap_or_else(|_| "{}".into()),
+                    crate::auth::now()
+                ],
+            )
+            .map_err(|e| match e {
+                rusqlite::Error::SqliteFailure(f, _) if f.code == rusqlite::ErrorCode::ConstraintViolation => {
+                    fail(StatusCode::CONFLICT, "A provider with that name already exists.")
+                }
+                other => internal(other),
+            })?;
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Send one short message through the provider and report what happened.
+async fn test_provider(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Result<Json<crate::provider_test::TestResult>, Failure> {
+    crate::provider_test::run(&state, &id)
+        .await
+        .map_err(|_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not run the test."))?
+        .map(Json)
+        .ok_or_else(|| fail(StatusCode::NOT_FOUND, "No such provider."))
+}
+
 /// The management routes behind the token check.
 pub fn router(state: Arc<AppState>, hash_file: PathBuf) -> Router {
     Router::new()
         .route("/mgmt/v1/health", get(|| async { StatusCode::OK }))
         .route("/mgmt/v1/snapshot", put(put_snapshot))
+        .route("/mgmt/v1/providers/{id}/key", put(put_provider_key))
+        .route("/mgmt/v1/providers/{id}/test", post(test_provider))
         .layer(middleware::from_fn_with_state(Guard { hash_file }, require_token))
         .with_state(state)
 }

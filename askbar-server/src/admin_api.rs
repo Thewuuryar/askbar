@@ -1,7 +1,6 @@
 //! JSON endpoints behind the admin site. Every route here sits behind the admin session.
 
 use crate::{store, AppState};
-use crate::llm::{stream_chat, ChatMessage};
 use askbar_proto::DisplaySettings;
 use axum::{
     extract::{Path, State},
@@ -11,8 +10,6 @@ use axum::{
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use std::time::Duration;
-use tokio::sync::oneshot;
 
 type St = State<Arc<AppState>>;
 
@@ -170,64 +167,9 @@ pub async fn delete_provider(State(state): St, Path(id): Path<String>) -> Status
     }
 }
 
-#[derive(Serialize)]
-pub struct TestResult {
-    ok: bool,
-    /// The start of the model's reply on success, or the error.
-    message: String,
-}
-
 /// Send one short message through the provider and report what happened.
-pub async fn test_provider(State(state): St, Path(id): Path<String>) -> Result<Json<TestResult>, StatusCode> {
-    let provider = {
-        let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
-        let secrets = state.secrets();
-        store::load_provider(&db, &secrets, &id).map_err(internal)?.ok_or(StatusCode::NOT_FOUND)?
-    };
-    let key = provider.api_key.clone();
-    let (_keep, cancel) = oneshot::channel::<()>();
-    let mut reply = String::new();
-    let prompt = [ChatMessage::new("user", "Reply with the single word: ok")];
-    let run = stream_chat(
-        &state.http,
-        &provider,
-        "",
-        &prompt,
-        cancel,
-        |d| {
-            if reply.len() < 200 {
-                reply.push_str(d);
-            }
-        },
-    );
-    let outcome = tokio::time::timeout(Duration::from_secs(30), run).await;
-    let result = match outcome {
-        Ok(Ok(_)) if !reply.trim().is_empty() => TestResult { ok: true, message: reply.trim().chars().take(120).collect() },
-        Ok(Ok(_)) => TestResult { ok: false, message: "The provider answered but sent no text.".into() },
-        Ok(Err(e)) => TestResult { ok: false, message: redact(&e.to_string(), &key) },
-        Err(_) => TestResult { ok: false, message: "Timed out after 30 seconds.".into() },
-    };
-    Ok(Json(result))
-}
-
-/// Errors sometimes echo the credential back; never pass that on.
-fn redact(msg: &str, key: &str) -> String {
-    if key.len() >= 6 {
-        msg.replace(key, "[key hidden]")
-    } else {
-        msg.to_string()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::redact;
-
-    #[test]
-    fn redaction_hides_the_key() {
-        assert_eq!(redact("bad key sk-abcdef123 given", "sk-abcdef123"), "bad key [key hidden] given");
-        assert_eq!(redact("nothing here", ""), "nothing here");
-    }
+pub async fn test_provider(State(state): St, Path(id): Path<String>) -> Result<Json<crate::provider_test::TestResult>, StatusCode> {
+    crate::provider_test::run(&state, &id).await.map_err(internal)?.map(Json).ok_or(StatusCode::NOT_FOUND)
 }
 
 // ---------------------------------------------------------------- settings

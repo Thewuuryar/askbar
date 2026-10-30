@@ -231,3 +231,115 @@ async fn other_invalid_snapshots_are_rejected_and_the_endpoint_needs_the_token()
     assert_eq!(s.put(&serde_json::to_value(snapshot()).unwrap(), Some("wrong")).await.0, 401);
     assert!(askbar_server::snapshot::current(&s.state.db.lock().unwrap()).unwrap().is_none(), "nothing was stored");
 }
+
+// --------------------------------------------------------------- provider keys
+
+const KEY: &str = "sk-live-VERY-SECRET-123";
+
+/// An OpenAI-style endpoint that answers only to `KEY`, and echoes a rejected key back in its error.
+async fn fake_llm() -> String {
+    use axum::{http::HeaderMap, response::IntoResponse, routing::post};
+    let app = axum::Router::new().route(
+        "/v1/chat/completions",
+        post(|headers: HeaderMap| async move {
+            let auth = headers.get("authorization").and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
+            if auth == format!("Bearer {KEY}") {
+                ([("content-type", "text/event-stream")], "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n").into_response()
+            } else {
+                (axum::http::StatusCode::UNAUTHORIZED, format!("{{\"error\":{{\"message\":\"Incorrect API key provided: {}\"}}}}", auth.trim_start_matches("Bearer "))).into_response()
+            }
+        }),
+    );
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/v1", l.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
+    url
+}
+
+impl S {
+    async fn call(&self, method: reqwest::Method, path: &str, body: Option<serde_json::Value>) -> (u16, String) {
+        let mut r = self.t.http.request(method, format!("{}{path}", self.t.url)).bearer_auth(TOKEN);
+        if let Some(b) = body {
+            r = r.json(&b);
+        }
+        let resp = r.send().await.unwrap();
+        (resp.status().as_u16(), resp.text().await.unwrap())
+    }
+    async fn push_provider(&self, base_url: &str) {
+        let mut snap = snapshot();
+        snap.providers[0].base_url = base_url.into();
+        assert_eq!(self.put(&serde_json::to_value(snap).unwrap(), Some(TOKEN)).await.0, 200);
+    }
+    fn stored(&self, id: &str) -> Option<Vec<u8>> {
+        self.state.db.lock().unwrap().conn().query_row("SELECT api_key_enc FROM providers WHERE id = ?1", [id], |r| r.get(0)).ok()
+    }
+}
+
+#[tokio::test]
+async fn a_key_is_stored_encrypted_and_never_returned() {
+    use reqwest::Method as M;
+    let s = start_with_state().await;
+    s.push_provider("http://x/v1").await;
+
+    let (st, body) = s.call(M::PUT, "/mgmt/v1/providers/p1/key", Some(json!({ "key": KEY }))).await;
+    assert_eq!((st, body.as_str()), (204, ""), "nothing comes back");
+    let stored = s.stored("p1").expect("a row was made from the snapshot");
+    assert!(!stored.windows(KEY.len()).any(|w| w == KEY.as_bytes()), "not stored in the clear");
+    assert_eq!(s.state.secrets().decrypt(&stored).unwrap(), KEY, "encrypted with the master key");
+
+    // Replacing it replaces; the metadata the row got from the snapshot is intact.
+    let (st, _) = s.call(M::PUT, "/mgmt/v1/providers/p1/key", Some(json!({ "key": "sk-second-key-456" }))).await;
+    assert_eq!(st, 204);
+    assert_eq!(s.state.secrets().decrypt(&s.stored("p1").unwrap()).unwrap(), "sk-second-key-456");
+    let name: String = s.state.db.lock().unwrap().conn().query_row("SELECT name FROM providers WHERE id = 'p1'", [], |r| r.get(0)).unwrap();
+    assert_eq!(name, "name-p1");
+
+    // Errors do not echo the key either.
+    for (path, body, want) in [
+        ("/mgmt/v1/providers/unknown/key", json!({ "key": KEY }), 404),
+        ("/mgmt/v1/providers/p2/key", json!({ "key": "   " }), 400),
+        ("/mgmt/v1/providers/p2/key", json!({ "key": "x".repeat(5000) }), 400),
+    ] {
+        let (st, text) = s.call(M::PUT, path, Some(body)).await;
+        assert_eq!(st, want, "{path}");
+        assert!(!text.contains(KEY));
+    }
+    assert!(s.stored("unknown").is_none());
+    // There is no way to read it back.
+    for (m, p) in [(M::GET, "/mgmt/v1/providers/p1/key"), (M::GET, "/mgmt/v1/providers/p1"), (M::GET, "/mgmt/v1/providers")] {
+        let (st, text) = s.call(m, p, None).await;
+        assert!(st == 404 || st == 405, "{p}: {st}");
+        assert!(!text.contains("sk-"));
+    }
+    // Both endpoints need the token.
+    let r = s.t.http.put(format!("{}/mgmt/v1/providers/p1/key", s.t.url)).json(&json!({ "key": KEY })).send().await.unwrap();
+    assert_eq!(r.status(), 401);
+}
+
+#[tokio::test]
+async fn the_test_endpoint_runs_a_provider_and_hides_the_key() {
+    use reqwest::Method as M;
+    let s = start_with_state().await;
+    let llm = fake_llm().await;
+    s.push_provider(&llm).await;
+
+    // No key yet: the provider rejects the (empty) credential.
+    let (st, body) = s.call(M::POST, "/mgmt/v1/providers/p1/test", None).await;
+    assert_eq!(st, 404, "no row until a key is stored: {body}");
+
+    s.call(M::PUT, "/mgmt/v1/providers/p1/key", Some(json!({ "key": KEY }))).await;
+    let (st, body) = s.call(M::POST, "/mgmt/v1/providers/p1/test", None).await;
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!((st, &v["ok"], v["message"].as_str()), (200, &json!(true), Some("ok")));
+    assert!(!body.contains(KEY));
+
+    // A wrong key: the provider's error echoes it, and the response must not.
+    let wrong = "sk-the-wrong-key-999";
+    s.call(M::PUT, "/mgmt/v1/providers/p1/key", Some(json!({ "key": wrong }))).await;
+    let (st, body) = s.call(M::POST, "/mgmt/v1/providers/p1/test", None).await;
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!((st, &v["ok"]), (200, &json!(false)));
+    assert!(!body.contains(wrong) && body.contains("[key hidden]"), "{body}");
+
+    assert_eq!(s.call(M::POST, "/mgmt/v1/providers/nope/test", None).await.0, 404);
+}

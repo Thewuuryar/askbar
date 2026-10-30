@@ -11,6 +11,7 @@ pub mod ids;
 pub mod llm;
 pub mod mgmt;
 pub mod network;
+pub mod provider_test;
 pub mod secrets;
 pub mod snapshot;
 pub mod store;

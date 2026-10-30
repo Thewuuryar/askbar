@@ -207,3 +207,10 @@ README (first-run steps, "set on the admin page" list, Backup and recovery, the 
 - `askbar-proto`: `Snapshot` (providers' metadata only, default provider and fallback order, system prompt, server-wide and per-user display defaults, pair-code hashes, revoked device ids, `Budget` (daily/monthly token limits), `kill_switch`, `audit_retention_days`), `SnapshotProvider`, `SnapshotPairCode`. The task did not fix the exact field set; budget and kill switch are stored but nothing enforces them yet.
 - `PUT /mgmt/v1/snapshot` is the only writer (`snapshot::save` is private to the crate); `snapshot::current` is the read-only accessor for the chat code. The server assigns `version` (1, 2, ...) and ignores any in the body. Rejected with 400 and nothing stored: retention below 7 days, duplicate/blank provider ids, an unknown provider type, a default/fallback id that is not a listed provider, display values out of range.
 - Rust: 147 passed.
+
+## R4.3 notes
+
+- `PUT /mgmt/v1/providers/{id}/key` (write-only, `204` with no body, key encrypted with the master key; 400 for an empty or over-4096-character key, 404 for an unknown provider) and `POST /mgmt/v1/providers/{id}/test`.
+- "Moving the logic out of `admin_api.rs`": the Test logic now lives in `provider_test.rs` and both the admin site and the management API call it (the old admin keeps working until R4.13). Key storage is new code in `mgmt.rs`, not a move: the old admin stores keys inside create/update provider, which stays as it is.
+- A provider that is in the current snapshot but has no `providers` row gets one when its key is first stored (copied from the snapshot's metadata), so the new admin can create providers without the old admin. An unknown id is 404, a name clash is 409.
+- Tests: key stored encrypted and decryptable, replaced, never in any response or error, no read endpoint, token required; the test endpoint against a fake OpenAI endpoint (ok, and a rejected key that the provider echoes back is shown as `[key hidden]`). Rust: 149 passed; admin Node tests still pass.
