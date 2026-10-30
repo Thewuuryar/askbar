@@ -379,3 +379,14 @@ No test was deleted other than those named above as removed with a deleted featu
 
 - `scripts/check-isolation.sh` gained section 5: the server binary contains none of "Askbar admin", "app.js", "style.css", "x-askbar-admin", "Caddyfile", "cloudflare", "admin_password_hash" (`grep -a` inside the image); the server image has no `askbar-admin` binary; the admin container mounts no `askbar-secrets` and has no `/secrets`; `admin.key`, `mgmt.token` (admin) and `master.key` (server), and `cf_token` when present, are mode 600; a backup fetched through the admin holds `admin.db` and `server.db` and none of a fresh provider key (a random marker), the plaintext pair code or `$argon2` (the password hash). All pass on the running stack.
 - `token.sha256` is deliberately 0644: it is a hash, and the server (a different uid) must read it. The raw token (`mgmt.token`) is 0600 in the admin's own secrets volume.
+
+## R5.3 (not done: needs a person)
+
+A fresh install from empty volumes was exercised piecemeal by me (R4.15-R4.17: `docker compose down -v`, `up -d` from empty volumes, healthy, first-run password, provider, pair code, Caddy configured through the admin, isolation script). The manual run the task asks for, with the real browser, a real domain and a paired laptop client, has **not** been done and is left for a person. The first-run access question (below) must be answered first.
+
+## R5.4 notes
+
+- README rewritten for the split: no standalone mode (it is gone from the code), the three programs and the two networks, per-container table, how the management token and keys are kept, HTTPS/allowlist as the admin UI words them, upgrade notes (server uid 10001 -> 10002, removed `.env` variables and `tls` profile), three-part backup, layout, tests, and an honest "verified / not verified" section.
+- **First-run access is written up as an open item, not solved:** the admin has no TCP port and Caddy serves `admin.<hostname>` only after the admin has been given a hostname. Neither the plan nor the task list says how a first-time visitor gets in; I did not invent one.
+- Versions bumped to 0.3.0 in the four Cargo manifests, `package.json`, `tauri.conf.json` and `Cargo.lock`. The client sends 0.3.0 and the server's `MIN_CLIENT` is 0.3.0.
+- T1: build ok; Rust 166 passed; clippy no errors; markdown 19, ui 43, admin 24; smoke 11 passed, 1 skipped.
