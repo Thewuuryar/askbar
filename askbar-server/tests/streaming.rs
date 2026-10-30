@@ -1,7 +1,8 @@
 //! End-to-end streaming tests against a local mock server speaking just enough
 //! HTTP + SSE to stand in for OpenAI-compatible and Anthropic endpoints.
 
-use askbar_core::{http_client, stream_chat, ChatError, ChatMessage, Config, Provider, ProviderKind, StreamOutcome};
+use askbar_server::llm::{http_client, stream_chat, ChatError, ChatMessage, Provider, ProviderKind, StreamOutcome};
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -77,11 +78,17 @@ async fn serve(status: u16, chunks: Vec<String>, gap_ms: u64, hang_after: bool) 
 }
 
 fn provider(kind: ProviderKind, base: &str, key: &str) -> Provider {
-    let mut p = Config::builtin().providers.into_iter().find(|p| p.kind == kind).unwrap();
-    p.base_url = base.to_string();
-    p.api_key = key.to_string();
-    p.api_key_env = String::new();
-    p
+    Provider {
+        name: "test".into(),
+        kind,
+        base_url: base.to_string(),
+        api_key: key.to_string(),
+        api_key_env: String::new(),
+        model: "m".into(),
+        max_tokens: (kind == ProviderKind::Anthropic).then_some(4096),
+        temperature: None,
+        headers: BTreeMap::new(),
+    }
 }
 
 fn msgs() -> Vec<ChatMessage> {

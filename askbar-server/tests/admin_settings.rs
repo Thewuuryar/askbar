@@ -56,7 +56,7 @@ async fn serve(app: axum::Router) -> String {
 
 async fn start() -> T {
     let mock = start_mock();
-    let db = askbar_core::Db::open_in_memory().unwrap();
+    let db = askbar_server::Db::open_in_memory().unwrap();
     let user = db.seed_server().unwrap();
     admin::init_password(&db, PASSWORD).unwrap();
     db.conn()

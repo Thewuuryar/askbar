@@ -1,7 +1,7 @@
 //! JSON endpoints behind the admin site. Every route here sits behind the admin session.
 
 use crate::{store, AppState};
-use askbar_core::{stream_chat, ChatMessage};
+use crate::llm::{stream_chat, ChatMessage};
 use askbar_proto::DisplaySettings;
 use axum::{
     extract::{Path, State},

@@ -53,7 +53,7 @@ const MAX_PASSWORD_CHARS: usize = 200;
 
 /// Store the argon2 hash of `password` unless a password already exists (first one wins).
 /// Returns true if a hash was written. The server itself uses the setup endpoints; this is for tests and tools.
-pub fn init_password(db: &askbar_core::Db, password: &str) -> rusqlite::Result<bool> {
+pub fn init_password(db: &crate::Db, password: &str) -> rusqlite::Result<bool> {
     let has: Option<String> =
         db.conn().query_row("SELECT value FROM settings WHERE key = ?1", [HASH_KEY], |r| r.get(0)).optional()?;
     if has.is_some() || password.is_empty() {

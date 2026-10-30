@@ -1,7 +1,8 @@
 //! Helpers for reading server-side configuration out of the database.
 
 use crate::secrets::Secrets;
-use askbar_core::{Db, Provider, ProviderKind, DEFAULT_SYSTEM_PROMPT};
+use crate::llm::{Provider, ProviderKind, DEFAULT_SYSTEM_PROMPT};
+use crate::Db;
 use rusqlite::OptionalExtension;
 
 /// Load a provider by name with its API key decrypted. The key never leaves this process.

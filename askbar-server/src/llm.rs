@@ -3,12 +3,75 @@
 //! Text in, text out. There is no tool calling anywhere in this module, so a
 //! model can never be handed a way to touch the machine.
 
-use crate::config::{Provider, ProviderKind};
 use askbar_proto::{SseEvent, SseParser};
 use futures_util::StreamExt;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::time::Duration;
 use tokio::sync::oneshot;
+
+pub const DEFAULT_SYSTEM_PROMPT: &str = "You are a fast, concise assistant in a quick-question popup. \
+Answer directly. Use Markdown when it helps. You cannot access the user's computer, files, or the internet.";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProviderKind {
+    /// Any OpenAI-compatible `/chat/completions` endpoint.
+    #[serde(alias = "openai-compatible", alias = "openai_compatible")]
+    OpenAi,
+    /// The Anthropic Messages API.
+    Anthropic,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Provider {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub kind: ProviderKind,
+    #[serde(default)]
+    pub base_url: String,
+    #[serde(default)]
+    pub api_key: String,
+    #[serde(default)]
+    pub api_key_env: String,
+    pub model: String,
+    #[serde(default)]
+    pub max_tokens: Option<u32>,
+    #[serde(default)]
+    pub temperature: Option<f32>,
+    #[serde(default)]
+    pub headers: BTreeMap<String, String>,
+}
+
+impl Provider {
+    pub fn effective_base_url(&self) -> String {
+        let url = self.base_url.trim();
+        if !url.is_empty() {
+            return url.trim_end_matches('/').to_string();
+        }
+        match self.kind {
+            ProviderKind::OpenAi => "https://api.openai.com/v1".into(),
+            ProviderKind::Anthropic => "https://api.anthropic.com".into(),
+        }
+    }
+
+    /// `api_key` wins; otherwise the environment variable named in `api_key_env`.
+    pub fn resolve_key(&self) -> Option<String> {
+        let direct = self.api_key.trim();
+        if !direct.is_empty() {
+            return Some(direct.to_string());
+        }
+        let var = self.api_key_env.trim();
+        if var.is_empty() {
+            return None;
+        }
+        std::env::var(var)
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChatMessage {
@@ -40,7 +103,9 @@ pub enum ChatError {
     Stream(String),
 }
 
-pub fn http_client() -> reqwest::Client {
+pub type HttpClient = reqwest::Client;
+
+pub fn http_client() -> HttpClient {
     reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(15))
         .user_agent(concat!("askbar/", env!("CARGO_PKG_VERSION")))
@@ -302,16 +367,47 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
 
     fn m(role: &str, c: &str) -> ChatMessage {
         ChatMessage::new(role, c)
     }
 
     fn provider(kind: ProviderKind) -> Provider {
-        let mut p = Config::builtin().providers.into_iter().find(|p| p.kind == kind).unwrap();
-        p.base_url = String::new();
-        p
+        Provider {
+            name: "test".into(),
+            kind,
+            base_url: String::new(),
+            api_key: String::new(),
+            api_key_env: match kind {
+                ProviderKind::Anthropic => "ANTHROPIC_API_KEY",
+                ProviderKind::OpenAi => "OPENAI_API_KEY",
+            }
+            .into(),
+            model: "m".into(),
+            max_tokens: (kind == ProviderKind::Anthropic).then_some(4096),
+            temperature: None,
+            headers: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn key_resolution_prefers_inline_then_env() {
+        let mut p = provider(ProviderKind::Anthropic);
+        p.api_key = "  sk-inline ".into();
+        p.api_key_env = "ASKBAR_TEST_KEY_A".into();
+        assert_eq!(p.resolve_key().as_deref(), Some("sk-inline"));
+
+        p.api_key = String::new();
+        assert_eq!(p.resolve_key(), None);
+        std::env::set_var("ASKBAR_TEST_KEY_A", " from-env ");
+        assert_eq!(p.resolve_key().as_deref(), Some("from-env"));
+        std::env::remove_var("ASKBAR_TEST_KEY_A");
+    }
+
+    #[test]
+    fn base_url_defaults_per_kind() {
+        assert_eq!(provider(ProviderKind::OpenAi).effective_base_url(), "https://api.openai.com/v1");
+        assert_eq!(provider(ProviderKind::Anthropic).effective_base_url(), "https://api.anthropic.com");
     }
 
     #[test]

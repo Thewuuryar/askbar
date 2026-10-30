@@ -4,7 +4,7 @@
 //! and re-emitted as `meta`, `delta`, `done` or `error`.
 
 use crate::{auth::DeviceAuth, store, AppState};
-use askbar_core::{stream_chat, ChatMessage};
+use crate::llm::{stream_chat, ChatMessage};
 use askbar_proto::{ChatEvent, ChatRequest};
 use axum::{
     extract::State,
@@ -50,7 +50,7 @@ impl Drop for ReplyGuard {
     }
 }
 
-fn save_message(db: &askbar_core::Db, conversation: i64, user_id: &str, role: &str, text: &str) -> Result<(), askbar_core::DbError> {
+fn save_message(db: &crate::Db, conversation: i64, user_id: &str, role: &str, text: &str) -> Result<(), crate::DbError> {
     let id = db.add_message(conversation, role, text)?;
     db.conn().execute(
         "UPDATE messages SET public_id = ?1, user_id = ?2 WHERE id = ?3",
@@ -92,7 +92,7 @@ pub async fn chat(
                 (found.ok_or(StatusCode::NOT_FOUND)?, pid.clone())
             }
             None => {
-                let id = db.create_conversation(&askbar_core::make_title(&text)).map_err(internal)?;
+                let id = db.create_conversation(&crate::make_title(&text)).map_err(internal)?;
                 let public = ulid::Ulid::new().to_string();
                 db.conn()
                     .execute(

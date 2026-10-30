@@ -24,7 +24,7 @@ async fn start() -> T {
     let dir = std::env::temp_dir().join(format!("askbar-rotate-{}", ulid::Ulid::new()));
     let key_path = dir.join("master.key");
     let (old, _) = secrets::generate_key(&key_path).unwrap();
-    let db = askbar_core::Db::open_in_memory().unwrap();
+    let db = askbar_server::Db::open_in_memory().unwrap();
     db.seed_server().unwrap();
     db.conn().execute("INSERT INTO providers (id,name,type,model,api_key_enc,created_at) VALUES ('p1','mock','openai','m',?1,0)", [old.encrypt("sk-provider-1")]).unwrap();
     db.conn().execute("INSERT INTO providers (id,name,type,model,api_key_enc,created_at) VALUES ('p2','nokey','openai','m',NULL,0)", []).unwrap();
@@ -146,16 +146,16 @@ async fn rotation_needs_a_session() {
 
 // ---- crash recovery: the server was killed part-way through a rotation ----
 
-fn recovery_fixture() -> (askbar_core::Db, std::path::PathBuf, std::path::PathBuf, secrets::Secrets, secrets::Secrets) {
+fn recovery_fixture() -> (askbar_server::Db, std::path::PathBuf, std::path::PathBuf, secrets::Secrets, secrets::Secrets) {
     let dir = std::env::temp_dir().join(format!("askbar-recover-{}", ulid::Ulid::new()));
     let key_path = dir.join("master.key");
     let (old, _) = secrets::generate_key(&key_path).unwrap();
     let (new, _) = secrets::generate_key(&secrets::new_path(&key_path)).unwrap();
-    let db = askbar_core::Db::open_in_memory().unwrap();
+    let db = askbar_server::Db::open_in_memory().unwrap();
     (db, dir, key_path, old, new)
 }
 
-fn insert(db: &askbar_core::Db, blob: Vec<u8>) {
+fn insert(db: &askbar_server::Db, blob: Vec<u8>) {
     db.conn().execute("INSERT INTO providers (id,name,type,model,api_key_enc,created_at) VALUES ('p','x','openai','m',?1,0)", [blob]).unwrap();
 }
 

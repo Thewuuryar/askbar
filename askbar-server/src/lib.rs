@@ -6,12 +6,14 @@ pub mod api;
 pub mod auth;
 pub mod caddy;
 pub mod chat;
+pub mod db;
+pub mod llm;
 pub mod network;
 pub mod rotate;
 pub mod secrets;
 pub mod store;
 
-use askbar_core::Db;
+pub use db::{make_title, ConversationSummary, Db, DbError, StoredMessage};
 use askbar_proto::{Health, PairRequest, PairResponse};
 use axum::{
     extract::{Request, State},
@@ -35,7 +37,7 @@ pub struct AppState {
     secrets: RwLock<Option<Arc<Secrets>>>,
     /// Where the master key file is (or will be created).
     pub key_path: std::path::PathBuf,
-    pub http: askbar_core::HttpClient,
+    pub http: llm::HttpClient,
     pub admin: admin::AdminAuth,
     /// Oldest client version the API still serves.
     pub min_client: String,
@@ -70,7 +72,7 @@ impl AppState {
             db: Mutex::new(db),
             secrets: RwLock::new(secrets.map(Arc::new)),
             key_path,
-            http: askbar_core::http_client(),
+            http: llm::http_client(),
             admin: admin::AdminAuth::default(),
             min_client: min_client.to_string(),
             public_url: public_url.trim_end_matches('/').to_string(),

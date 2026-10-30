@@ -98,7 +98,7 @@ pub async fn delete_conversation(
 
 /// Display defaults: the stored `display` setting (a JSON object that may
 /// set only some fields) laid over the built-in defaults.
-pub fn load_display(db: &askbar_core::Db) -> rusqlite::Result<DisplaySettings> {
+pub fn load_display(db: &crate::Db) -> rusqlite::Result<DisplaySettings> {
     let stored: Option<String> =
         db.conn().query_row("SELECT value FROM settings WHERE key = 'display'", [], |r| r.get(0)).optional()?;
     Ok(stored.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default())

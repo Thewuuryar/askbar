@@ -342,7 +342,7 @@ mod tests {
     /// Server with one mock provider; returns its URL and a fresh device token.
     async fn start_server(mock_port: u16) -> (String, String) {
         use askbar_server::{auth, secrets::Secrets, AppState};
-        let db = askbar_core::Db::open_in_memory().unwrap();
+        let db = askbar_server::Db::open_in_memory().unwrap();
         let user = db.seed_server().unwrap();
         db.conn()
             .execute(
@@ -410,7 +410,7 @@ mod tests {
     /// A real server with a mock-less provider list; `min_client` lets a test make the client too old.
     async fn status_server(min_client: &str) -> (String, String, Arc<askbar_server::AppState>) {
         use askbar_server::{auth, secrets::Secrets, AppState};
-        let db = askbar_core::Db::open_in_memory().unwrap();
+        let db = askbar_server::Db::open_in_memory().unwrap();
         let user = db.seed_server().unwrap();
         for (n, name) in ["alpha", "beta"].iter().enumerate() {
             db.conn()
@@ -580,7 +580,7 @@ mod tests {
     #[tokio::test]
     async fn revoking_a_device_in_the_admin_site_shows_token_rejected() {
         use askbar_server::{admin, secrets::Secrets, AppState};
-        let db = askbar_core::Db::open_in_memory().unwrap();
+        let db = askbar_server::Db::open_in_memory().unwrap();
         db.seed_server().unwrap();
         admin::init_password(&db, "pw-for-test").unwrap();
         db.conn()

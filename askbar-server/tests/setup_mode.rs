@@ -22,7 +22,7 @@ async fn without_a_master_key_only_health_and_admin_work() {
     let _ = std::fs::remove_dir_all(&dir);
     let key_path = dir.join("master.key");
 
-    let db = askbar_core::Db::open_in_memory().unwrap();
+    let db = askbar_server::Db::open_in_memory().unwrap();
     db.seed_server().unwrap();
     admin::init_password(&db, PASSWORD).unwrap();
     let state = AppState::build(db, None, "0.1.0", "http://localhost:8080", key_path.clone());

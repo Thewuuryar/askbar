@@ -20,11 +20,11 @@ pub struct Network {
     pub acme_staging: bool,
 }
 
-fn get(db: &askbar_core::Db, key: &str) -> rusqlite::Result<Option<String>> {
+fn get(db: &crate::Db, key: &str) -> rusqlite::Result<Option<String>> {
     db.conn().query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| r.get(0)).optional()
 }
 
-pub fn load(db: &askbar_core::Db) -> rusqlite::Result<Network> {
+pub fn load(db: &crate::Db) -> rusqlite::Result<Network> {
     Ok(Network {
         tls_enabled: get(db, "net.tls_enabled")?.as_deref() == Some("1"),
         hostname: get(db, "net.hostname")?.unwrap_or_default(),
@@ -34,16 +34,16 @@ pub fn load(db: &askbar_core::Db) -> rusqlite::Result<Network> {
 }
 
 /// The encrypted token as stored (base64), if any.
-pub fn stored_token(db: &askbar_core::Db) -> Option<String> {
+pub fn stored_token(db: &crate::Db) -> Option<String> {
     get(db, TOKEN_KEY).ok().flatten().filter(|v| !v.is_empty())
 }
 
-pub fn has_token(db: &askbar_core::Db) -> bool {
+pub fn has_token(db: &crate::Db) -> bool {
     get(db, TOKEN_KEY).ok().flatten().is_some_and(|v| !v.is_empty())
 }
 
 /// What goes into pairing strings: the HTTPS address when TLS is on, otherwise the configured fallback.
-pub fn effective_public_url(db: &askbar_core::Db, state: &AppState) -> String {
+pub fn effective_public_url(db: &crate::Db, state: &AppState) -> String {
     match load(db) {
         Ok(n) if n.tls_enabled && !n.hostname.is_empty() => {
             format!("https://{}:{}", n.hostname, state.tls_api_port.load(Ordering::Relaxed))
@@ -104,7 +104,7 @@ pub struct NetworkView {
     proxy: crate::caddy::ProxyStatus,
 }
 
-fn view(state: &AppState, db: &askbar_core::Db) -> rusqlite::Result<NetworkView> {
+fn view(state: &AppState, db: &crate::Db) -> rusqlite::Result<NetworkView> {
     Ok(NetworkView {
         network: load(db)?,
         has_token: has_token(db),

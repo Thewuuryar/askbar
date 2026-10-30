@@ -25,7 +25,7 @@ fn add_conversation(state: &AppState, user: &str, pid: &str, title: &str, msgs: 
 }
 
 async fn start() -> T {
-    let db = askbar_core::Db::open_in_memory().unwrap();
+    let db = askbar_server::Db::open_in_memory().unwrap();
     let user = db.seed_server().unwrap();
     let secrets = Secrets::new(KEY).unwrap();
     let enc = secrets.encrypt(PROVIDER_SECRET);

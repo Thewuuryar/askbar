@@ -8,7 +8,7 @@
 
 use crate::secrets::{self, Secrets};
 use crate::AppState;
-use askbar_core::Db;
+use crate::Db;
 use std::path::Path;
 
 /// Settings rows that hold a ciphertext (base64) and must move to the new key too.

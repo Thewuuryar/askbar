@@ -2,11 +2,10 @@
 FROM rust:1-bookworm AS build
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
-COPY core core
 COPY askbar-proto askbar-proto
 COPY askbar-server askbar-server
 # The desktop client (src-tauri) is not part of the server image.
-RUN sed -i 's/^members = .*/members = ["core", "askbar-proto", "askbar-server"]/' Cargo.toml \
+RUN sed -i 's/^members = .*/members = ["askbar-proto", "askbar-server"]/' Cargo.toml \
  && cargo build --release -p askbar-server
 
 FROM debian:bookworm-slim

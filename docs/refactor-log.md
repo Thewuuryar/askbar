@@ -56,3 +56,11 @@ R2.5: the existing offline check was part of another test; a dedicated test was 
 - Rust: 139 passed, 0 failed (baseline 138: -1 `import` test, +1 `ui_defaults`, +1 R2.5 test).
 - Clippy: no errors; the same 5 pre-existing style warnings.
 - Node: markdown 19, ui 39, admin 23, all passing.
+
+## R2.6 notes
+
+- `core` folded into `askbar-server` (`llm.rs`, `db.rs`; `Provider`, `ProviderKind` and `DEFAULT_SYSTEM_PROMPT` now live in `llm.rs`). `config.rs`, `default_config.yaml` and the `core` crate are gone.
+- Tests removed with `config.rs` (they tested YAML `Config` loading, which is deleted): `bundled_default_is_valid_and_complete`, `minimal_yaml_gets_defaults`, `empty_file_falls_back_to_builtin_providers`, `parse_errors_name_the_file`, `unknown_active_provider_lists_options`, `load_or_create_writes_default_once`. `key_resolution_prefers_inline_then_env` moved to `llm.rs`; `base_url_defaults_per_kind` was added to keep the `effective_base_url` check. The streaming and provider tests keep their counts; they build their `Provider` directly instead of from `Config::builtin()`.
+- Rust total after R2.6: 134 passed, 0 failed (139 - 6 removed + 1 added).
+- One `cargo test --workspace` run during R2.6 reported 1 failure (the output was cut off, so the test is unknown); 7 later full runs, including `--no-fail-fast`, were clean. Not reproduced; watch for flakiness.
+- `docker build` of the server image: passed. This container's build needs the egress proxy CA, so it was built from a scratch copy of the Dockerfile that only adds the CA (`CARGO_HTTP_CAINFO`); the repo's Dockerfile is unchanged apart from dropping `COPY core`. The image's `healthcheck` command ran.

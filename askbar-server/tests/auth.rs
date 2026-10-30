@@ -11,7 +11,7 @@ struct Server {
 }
 
 async fn start() -> Server {
-    let db = askbar_core::Db::open_in_memory().unwrap();
+    let db = askbar_server::Db::open_in_memory().unwrap();
     let user = db.seed_server().unwrap();
     let state = AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap());
     let app: Router = askbar_server::api_router(state.clone());

@@ -14,7 +14,7 @@ struct T {
 }
 
 async fn start() -> T {
-    let db = askbar_core::Db::open_in_memory().unwrap();
+    let db = askbar_server::Db::open_in_memory().unwrap();
     db.seed_server().unwrap();
     admin::init_password(&db, PW).unwrap();
     let state = AppState::with_config(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), "0.1.0", "http://localhost:8080");
@@ -151,7 +151,7 @@ async fn network_needs_a_session_and_a_master_key() {
     let t = start().await;
     assert_eq!(t.http.get(format!("{}/admin/api/network", t.adm)).send().await.unwrap().status(), 401);
 
-    let db = askbar_core::Db::open_in_memory().unwrap();
+    let db = askbar_server::Db::open_in_memory().unwrap();
     db.seed_server().unwrap();
     admin::init_password(&db, PW).unwrap();
     let state = AppState::build(db, None, "0.1.0", "http://localhost:8080", std::env::temp_dir().join("nope").join("master.key"));

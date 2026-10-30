@@ -68,7 +68,7 @@ async fn main() {
         }
     };
     let key_path = askbar_server::secrets::key_path();
-    let db = askbar_core::Db::open(&data_dir().join("askbar.db")).unwrap_or_else(|e| die(e, 1));
+    let db = askbar_server::Db::open(&data_dir().join("askbar.db")).unwrap_or_else(|e| die(e, 1));
     askbar_server::rotate::recover(&db, &key_path);
     let secrets = askbar_server::secrets::load_key_file(&key_path).unwrap_or_else(|e| die(e, 2));
     if secrets.is_none() {

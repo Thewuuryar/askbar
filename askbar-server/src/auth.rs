@@ -4,7 +4,7 @@
 //! The API reads `Authorization: Bearer` and nothing else (no cookies).
 
 use crate::AppState;
-use askbar_core::Db;
+use crate::Db;
 use axum::{
     extract::{Request, State},
     http::{header, StatusCode},

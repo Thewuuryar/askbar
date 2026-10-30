@@ -1,7 +1,7 @@
 use askbar_server::{secrets::Secrets, AppState};
 
 async fn start(min: &str) -> String {
-    let db = askbar_core::Db::open_in_memory().unwrap();
+    let db = askbar_server::Db::open_in_memory().unwrap();
     db.seed_server().unwrap();
     let state = AppState::with_min_client(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), min);
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

@@ -29,7 +29,7 @@ async fn serve(app: axum::Router) -> String {
 async fn fresh() -> T {
     let dir = std::env::temp_dir().join(format!("askbar-setup-{}", ulid::Ulid::new()));
     let key_path = dir.join("secrets").join("master.key");
-    let db = askbar_core::Db::open_in_memory().unwrap();
+    let db = askbar_server::Db::open_in_memory().unwrap();
     db.seed_server().unwrap();
     let state = AppState::build(db, None, "0.1.0", "http://localhost:8080", key_path.clone());
     T {

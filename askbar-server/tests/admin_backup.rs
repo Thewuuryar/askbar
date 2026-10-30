@@ -8,7 +8,7 @@ const PASSWORD: &str = "correct horse battery";
 const KEY: &str = "sk-backup-secret-456";
 
 async fn start() -> (String, String, std::sync::Arc<AppState>, Vec<u8>) {
-    let db = askbar_core::Db::open_in_memory().unwrap();
+    let db = askbar_server::Db::open_in_memory().unwrap();
     let user = db.seed_server().unwrap();
     admin::init_password(&db, PASSWORD).unwrap();
     let secrets = Secrets::new("0123456789abcdef0123456789abcdef").unwrap();

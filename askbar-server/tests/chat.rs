@@ -55,7 +55,7 @@ struct T {
 
 async fn start() -> T {
     let mock = start_mock();
-    let db = askbar_core::Db::open_in_memory().unwrap();
+    let db = askbar_server::Db::open_in_memory().unwrap();
     let user = db.seed_server().unwrap();
     let secrets = Secrets::new("0123456789abcdef0123456789abcdef").unwrap();
     db.conn()
