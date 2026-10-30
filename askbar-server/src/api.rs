@@ -129,6 +129,24 @@ pub fn load_display(db: &crate::Db) -> rusqlite::Result<DisplaySettings> {
     Ok(stored.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default())
 }
 
+/// One user's display defaults: their own row if the admin set one, else the server-wide ones.
+pub fn load_user_display(db: &crate::Db, user_id: &str) -> rusqlite::Result<DisplaySettings> {
+    let own: Option<String> = db
+        .conn()
+        .query_row("SELECT value FROM display_defaults WHERE user_id = ?1", [user_id], |r| r.get(0))
+        .optional()?;
+    match own.and_then(|s| serde_json::from_str(&s).ok()) {
+        Some(d) => Ok(d),
+        None => load_display(db),
+    }
+}
+
+/// Read-only: what this user's clients should look like unless the person overrides it locally.
+pub async fn display_defaults(State(state): St, Extension(auth): Extension<DeviceAuth>) -> Res<DisplaySettings> {
+    let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+    Ok(Json(load_user_display(&db, &auth.user_id).map_err(internal)?))
+}
+
 pub async fn settings(State(state): St) -> Res<Settings> {
     let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
     Ok(Json(Settings { display: load_display(&db).map_err(internal)? }))

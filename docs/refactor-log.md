@@ -108,3 +108,7 @@ Done in R2.3 as agreed (see "Order change"): `Remote.ids` is gone, Tauri command
 - `MIN_CLIENT` is 0.3.0; a new `version_gate` test pins it and checks that a 0.2.x client is refused with 426. The other `version_gate` tests now use `MIN_CLIENT` and 0.3.0 versions.
 - Side effect to know about: the desktop client's own version is still 0.1.0 until R5.4, so until then a client built from this branch is refused (426) by a default server. Tests that run a real client against a real server set the server's minimum explicitly (`with_min_client(.., "0.1.0")`); server tests that send a version header now send 0.3.0.
 - Rust: 143 passed.
+
+## R2.16 notes
+
+- `GET /api/v1/me/display-defaults` returns the caller's row from `display_defaults`, falling back to the server-wide `display` setting, then the built-ins. Interim setter: `PUT /admin/api/users/{id}/display-defaults` (validated like the existing display settings; 404 for an unknown user). Tests in `tests/display_defaults.rs`. Rust: 145 passed.

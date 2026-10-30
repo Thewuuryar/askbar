@@ -124,6 +124,7 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         .route("/api/v1/conversations", get(api::conversations))
         .route("/api/v1/conversations/{id}", get(api::conversation).delete(api::delete_conversation))
         .route("/api/v1/me/prefs", get(api::get_prefs).put(api::put_prefs))
+        .route("/api/v1/me/display-defaults", get(api::display_defaults))
         .route("/api/v1/search", get(api::search))
         .route("/api/v1/settings", get(api::settings))
         .route("/api/v1/chat", post(chat::chat))
@@ -174,6 +175,7 @@ pub fn admin_router(state: Arc<AppState>) -> Router {
         .route("/admin/api/devices/{id}/revoke", post(admin_api::revoke_device))
         .route("/admin/api/pair", post(admin_api::create_pairing))
         .route("/admin/api/settings", get(admin_api::get_settings).put(admin_api::put_settings))
+        .route("/admin/api/users/{id}/display-defaults", put(admin_api::put_user_display))
         .route_layer(middleware::from_fn_with_state(state.clone(), admin::require_session));
     Router::new()
         .route("/", get(|| async { Redirect::to("/admin/") }))

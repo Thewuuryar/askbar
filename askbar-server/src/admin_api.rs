@@ -283,6 +283,25 @@ pub async fn put_settings(State(state): St, Json(s): Json<AdminSettings>) -> Res
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Interim: set one user's display defaults until the admin moves out of the server.
+pub async fn put_user_display(State(state): St, Path(user_id): Path<String>, Json(d): Json<DisplaySettings>) -> Result<StatusCode, Failure> {
+    check_display(&d)?;
+    let value = serde_json::to_string(&d).map_err(|_| bad("Invalid display settings."))?;
+    let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+    let known = db.conn().query_row("SELECT 1 FROM users WHERE id = ?1", [&user_id], |_| Ok(())).is_ok();
+    if !known {
+        return Err((StatusCode::NOT_FOUND, Json(ApiError { error: "No such user.".into() })));
+    }
+    db.conn()
+        .execute(
+            "INSERT INTO display_defaults (user_id, value) VALUES (?1, ?2)
+             ON CONFLICT(user_id) DO UPDATE SET value = excluded.value",
+            params![user_id, value],
+        )
+        .map_err(|e| failure(&e))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 fn failure(_: &rusqlite::Error) -> Failure {
     (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error: "Could not save the settings.".into() }))
 }
