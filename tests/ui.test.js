@@ -95,7 +95,7 @@ async function waitIdle(page) {
     await ask(page, 'And with width?');
     await waitIdle(page);
     const asks = await calls(page, 'ask');
-    assert.equal(asks[1].conversationId, 1);
+    assert.equal(asks[1].conversationId, '1');
     assert.equal(await page.locator('.msg.user').count(), 2);
   });
 
@@ -179,7 +179,7 @@ async function waitIdle(page) {
     await ask(page, 'one more');
     await waitIdle(page);
     const asks = await calls(page, 'ask');
-    assert.equal(asks[3].conversationId, 1);
+    assert.equal(asks[3].conversationId, '1');
   });
 
   await step('delete needs a second click and disarms on its own', async () => {
@@ -210,7 +210,7 @@ async function waitIdle(page) {
     assert.equal(await page.isHidden('#thread'), true);
     assert.match(await page.locator('.history-empty').innerText(), /No saved conversations/);
     const del = await calls(page, 'delete_conversation');
-    assert.deepEqual(del.map((d) => d.id).sort(), [1, 2]);
+    assert.deepEqual(del.map((d) => d.id).sort(), ['1', '2']);
     await shot(page, '05-history-empty');
   });
 
@@ -218,7 +218,7 @@ async function waitIdle(page) {
     await page.evaluate(() => {
       const now = Math.floor(Date.now() / 1000);
       const mk = (id, title, ago) => ({ id, title, updated_at: now - ago, messages: [] });
-      window.__db.convs.push(mk(11, 'two days ago', 2 * 86400 + 60), mk(12, 'long ago', 40 * 86400), mk(13, 'yesterday-ish', 86400 + 3600 * 12));
+      window.__db.convs.push(mk('11', 'two days ago', 2 * 86400 + 60), mk('12', 'long ago', 40 * 86400), mk('13', 'yesterday-ish', 86400 + 3600 * 12));
       window.__db.nextConv = 20;
     });
     await page.click('#history-toggle'); // close
@@ -228,7 +228,7 @@ async function waitIdle(page) {
     assert.ok(groups.includes('Previous 7 days'), groups.join());
     const order = await page.locator('.conv .open').allInnerTexts();
     assert.equal(order[order.length - 1], 'long ago', 'oldest last');
-    await page.evaluate(() => { window.__db.convs = window.__db.convs.filter((c) => c.id < 11); });
+    await page.evaluate(() => { window.__db.convs = window.__db.convs.filter((c) => Number(c.id) < 11); });
     await page.click('#history-toggle'); await page.click('#history-toggle');
   });
 

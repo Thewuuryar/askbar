@@ -6,7 +6,8 @@ mod client_config;
 mod remote;
 mod tokens;
 
-use askbar_core::{config_path, db_path, Config, ConversationSummary, StoredMessage};
+use askbar_core::{config_path, db_path, Config};
+use askbar_proto::{Conversation, Message};
 use client_config::Ui;
 use backend::{Backend, Local, Settings, StreamEvent};
 use remote::Remote;
@@ -217,24 +218,24 @@ async fn set_active_provider(state: State<'_, AppState>, name: String) -> Result
 }
 
 #[tauri::command]
-async fn list_conversations(state: State<'_, AppState>) -> Result<Vec<ConversationSummary>, String> {
+async fn list_conversations(state: State<'_, AppState>) -> Result<Vec<Conversation>, String> {
     state.backend().list_conversations().await
 }
 
 #[tauri::command]
-async fn load_conversation(state: State<'_, AppState>, id: i64) -> Result<Vec<StoredMessage>, String> {
+async fn load_conversation(state: State<'_, AppState>, id: String) -> Result<Vec<Message>, String> {
     state.backend().load_conversation(id).await
 }
 
 #[tauri::command]
-async fn delete_conversation(state: State<'_, AppState>, id: i64) -> Result<(), String> {
+async fn delete_conversation(state: State<'_, AppState>, id: String) -> Result<(), String> {
     state.backend().delete_conversation(id).await
 }
 
 #[tauri::command]
 async fn ask(
     state: State<'_, AppState>,
-    conversation_id: Option<i64>,
+    conversation_id: Option<String>,
     text: String,
     on_event: Channel<StreamEvent>,
 ) -> Result<(), String> {

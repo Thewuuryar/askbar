@@ -44,7 +44,7 @@
       window.__opts.status = null;
     },
     list_conversations: () =>
-      db.convs.slice().sort((a, b) => b.updated_at - a.updated_at || b.id - a.id)
+      db.convs.slice().sort((a, b) => b.updated_at - a.updated_at || Number(b.id) - Number(a.id))
         .map((c) => ({ id: c.id, title: c.title, updated_at: c.updated_at, message_count: c.messages.length })),
     load_conversation: ({ id }) => db.convs.find((c) => c.id === id).messages,
     delete_conversation: ({ id }) => { db.convs = db.convs.filter((c) => c.id !== id); },
@@ -62,10 +62,10 @@
       }
       let conv = db.convs.find((c) => c.id === conversationId);
       if (!conv) {
-        conv = { id: db.nextConv++, title: title(text), updated_at: ++db.clock, messages: [] };
+        conv = { id: String(db.nextConv++), title: title(text), updated_at: ++db.clock, messages: [] };
         db.convs.push(conv);
       }
-      conv.messages.push({ id: db.nextMsg++, role: 'user', content: text, created_at: db.clock });
+      conv.messages.push({ id: String(db.nextMsg++), role: 'user', content: text, created_at: db.clock });
       onEvent.onmessage({ event: 'started', conversationId: conv.id });
 
       if (/fail/i.test(text)) {
@@ -82,7 +82,7 @@
         onEvent.onmessage({ event: 'delta', text: piece });
         await sleep(slow ? 40 : 2);
       }
-      if (sent) conv.messages.push({ id: db.nextMsg++, role: 'assistant', content: sent, created_at: db.clock });
+      if (sent) conv.messages.push({ id: String(db.nextMsg++), role: 'assistant', content: sent, created_at: db.clock });
       conv.updated_at = ++db.clock;
       onEvent.onmessage({ event: cancelFlag ? 'cancelled' : 'done' });
     },

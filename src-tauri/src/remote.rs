@@ -3,8 +3,7 @@
 use crate::backend::{Backend, ClientStatus, Emit, Settings, StreamEvent};
 use crate::client_config::{check_server_url, merge_ui, ClientConfig};
 use crate::tokens::TokenStore;
-use askbar_core::{ConversationSummary, StoredMessage};
-use askbar_proto::{ChatEvent, ChatRequest, Conversation, ConversationDetail, DisplaySettings, ProviderInfo, SseParser};
+use askbar_proto::{ChatEvent, ChatRequest, Conversation, ConversationDetail, DisplaySettings, Message, ProviderInfo, SseParser};
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use reqwest::{Method, RequestBuilder, StatusCode, Url};
@@ -24,9 +23,6 @@ struct Inner {
     base: Url,
     http: reqwest::Client,
     tokens: Box<dyn TokenStore>,
-    /// The UI addresses conversations by number; the server uses ULIDs.
-    /// Position + 1 in this list is the number, valid for this run.
-    ids: Mutex<Vec<String>>,
 }
 
 pub struct Remote {
@@ -47,7 +43,7 @@ impl Remote {
                 .user_agent(format!("askbar/{VERSION}"))
                 .build()
                 .map_err(|e| e.to_string())?;
-            Ok(Inner { cfg: Mutex::new(cfg), path, base, http, tokens, ids: Mutex::new(Vec::new()) })
+            Ok(Inner { cfg: Mutex::new(cfg), path, base, http, tokens })
         });
         Remote { inner }
     }
@@ -93,20 +89,6 @@ impl Inner {
     async fn get_json<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T, String> {
         let resp = self.send(self.request(Method::GET, path)?.timeout(REQUEST_TIMEOUT)).await?;
         resp.json().await.map_err(|e| format!("The server sent an unexpected reply: {e}"))
-    }
-
-    fn id_for(&self, ulid: &str) -> i64 {
-        let mut ids = lock(&self.ids);
-        let pos = ids.iter().position(|x| x == ulid).unwrap_or_else(|| {
-            ids.push(ulid.to_string());
-            ids.len() - 1
-        });
-        pos as i64 + 1
-    }
-
-    fn ulid_for(&self, id: i64) -> Option<String> {
-        let ids = lock(&self.ids);
-        usize::try_from(id - 1).ok().and_then(|i| ids.get(i).cloned())
     }
 
     async fn active_provider(&self) -> Result<String, String> {
@@ -259,30 +241,18 @@ impl Backend for Remote {
         self.inner()?.get_json("/api/v1/providers").await
     }
 
-    async fn list_conversations(&self) -> Result<Vec<ConversationSummary>, String> {
-        let i = self.inner()?;
-        let list: Vec<Conversation> = i.get_json("/api/v1/conversations").await?;
-        Ok(list
-            .into_iter()
-            .map(|c| ConversationSummary { id: i.id_for(&c.id), title: c.title, updated_at: c.updated_at, message_count: c.message_count })
-            .collect())
+    async fn list_conversations(&self) -> Result<Vec<Conversation>, String> {
+        self.inner()?.get_json("/api/v1/conversations").await
     }
 
-    async fn load_conversation(&self, id: i64) -> Result<Vec<StoredMessage>, String> {
-        let i = self.inner()?;
-        let ulid = i.ulid_for(id).ok_or("That conversation is no longer available.")?;
-        let d: ConversationDetail = i.get_json(&format!("/api/v1/conversations/{ulid}")).await?;
-        Ok(d.messages
-            .into_iter()
-            .enumerate()
-            .map(|(n, m)| StoredMessage { id: n as i64 + 1, role: m.role, content: m.content, created_at: m.created_at })
-            .collect())
+    async fn load_conversation(&self, id: String) -> Result<Vec<Message>, String> {
+        let d: ConversationDetail = self.inner()?.get_json(&format!("/api/v1/conversations/{id}")).await?;
+        Ok(d.messages)
     }
 
-    async fn delete_conversation(&self, id: i64) -> Result<(), String> {
+    async fn delete_conversation(&self, id: String) -> Result<(), String> {
         let i = self.inner()?;
-        let Some(ulid) = i.ulid_for(id) else { return Ok(()) };
-        let resp = i.request(Method::DELETE, &format!("/api/v1/conversations/{ulid}"))?.timeout(REQUEST_TIMEOUT);
+        let resp = i.request(Method::DELETE, &format!("/api/v1/conversations/{id}"))?.timeout(REQUEST_TIMEOUT);
         match i.send(resp).await {
             Ok(_) => Ok(()),
             Err(e) if e.ends_with("404 Not Found.") => Ok(()),
@@ -290,7 +260,7 @@ impl Backend for Remote {
         }
     }
 
-    async fn ask(&self, conversation_id: Option<i64>, text: String, mut cancel: oneshot::Receiver<()>, emit: Emit<'_>) {
+    async fn ask(&self, conversation_id: Option<String>, text: String, mut cancel: oneshot::Receiver<()>, emit: Emit<'_>) {
         let fail = |message: String| emit(StreamEvent::Error { message });
         let i = match self.inner() {
             Ok(i) => i,
@@ -300,15 +270,8 @@ impl Backend for Remote {
             Ok(p) => p,
             Err(e) => return fail(e),
         };
-        let conv = match conversation_id {
-            Some(id) => match i.ulid_for(id) {
-                Some(u) => Some(u),
-                None => return fail("That conversation is no longer available.".into()),
-            },
-            None => None,
-        };
         let req = match i.request(Method::POST, "/api/v1/chat") {
-            Ok(r) => r.header("accept", "text/event-stream").json(&ChatRequest { conversation_id: conv, provider, text }),
+            Ok(r) => r.header("accept", "text/event-stream").json(&ChatRequest { conversation_id, provider, text }),
             Err(e) => return fail(e),
         };
         let resp = tokio::select! {
@@ -332,7 +295,7 @@ impl Backend for Remote {
             for ev in events {
                 match serde_json::from_str::<ChatEvent>(&ev.data) {
                     Ok(ChatEvent::Meta { conversation_id }) => {
-                        emit(StreamEvent::Started { conversation_id: i.id_for(&conversation_id) })
+                        emit(StreamEvent::Started { conversation_id })
                     }
                     Ok(ChatEvent::Delta { text }) => emit(StreamEvent::Delta { text }),
                     Ok(ChatEvent::Done) => return emit(StreamEvent::Done),
@@ -414,21 +377,21 @@ mod tests {
         let (_tx, rx) = oneshot::channel();
         remote.ask(None, "hello".into(), rx, &|e| events.lock().unwrap().push(e)).await;
         let events = events.into_inner().unwrap();
-        let StreamEvent::Started { conversation_id } = events[0] else { panic!("first event must be Started") };
+        let StreamEvent::Started { conversation_id } = events[0].clone() else { panic!("first event must be Started") };
         assert!(matches!(events.last(), Some(StreamEvent::Done)));
         let reply: String = events.iter().filter_map(|e| if let StreamEvent::Delta { text } = e { Some(text.as_str()) } else { None }).collect();
         assert!(reply.ends_with("Anything else?"));
 
         let list = remote.list_conversations().await.unwrap();
-        assert_eq!((list.len(), list[0].id, list[0].message_count), (1, conversation_id, 2));
-        let msgs = remote.load_conversation(conversation_id).await.unwrap();
+        assert_eq!((list.len(), list[0].id.as_str(), list[0].message_count), (1, conversation_id.as_str(), 2));
+        let msgs = remote.load_conversation(conversation_id.clone()).await.unwrap();
         assert_eq!((msgs[0].role.as_str(), msgs[0].content.as_str()), ("user", "hello"));
         assert_eq!(msgs[1].content, reply);
 
         // A follow-up goes into the same conversation.
         let (_tx, rx) = oneshot::channel();
-        remote.ask(Some(conversation_id), "more".into(), rx, &|_| {}).await;
-        assert_eq!(remote.load_conversation(conversation_id).await.unwrap().len(), 4);
+        remote.ask(Some(conversation_id.clone()), "more".into(), rx, &|_| {}).await;
+        assert_eq!(remote.load_conversation(conversation_id.clone()).await.unwrap().len(), 4);
 
         remote.delete_conversation(conversation_id).await.unwrap();
         assert!(remote.list_conversations().await.unwrap().is_empty());

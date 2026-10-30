@@ -2,11 +2,11 @@
 //! and settings live. `Local` wraps `askbar-core` on this machine.
 
 use askbar_core::{
-    config_path, http_client, make_title, stream_chat, ChatMessage, Config, ConversationSummary, Db, DbError,
-    HttpClient, ProviderKind, StoredMessage, StreamOutcome,
+    config_path, http_client, make_title, stream_chat, ChatMessage, Config, Db, DbError, HttpClient, ProviderKind,
+    StoredMessage, StreamOutcome,
 };
 use crate::client_config::Ui;
-use askbar_proto::ProviderInfo;
+use askbar_proto::{Conversation, Message, ProviderInfo};
 use async_trait::async_trait;
 use serde::Serialize;
 use std::path::Path;
@@ -39,7 +39,7 @@ impl Settings {
 #[derive(Serialize, Clone)]
 #[serde(tag = "event", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum StreamEvent {
-    Started { conversation_id: i64 },
+    Started { conversation_id: String },
     Delta { text: String },
     Done,
     Cancelled,
@@ -70,9 +70,9 @@ pub trait Backend: Send + Sync {
     async fn settings(&self) -> Result<Settings, String>;
     #[allow(dead_code)]
     async fn list_providers(&self) -> Result<Vec<ProviderInfo>, String>;
-    async fn list_conversations(&self) -> Result<Vec<ConversationSummary>, String>;
-    async fn load_conversation(&self, id: i64) -> Result<Vec<StoredMessage>, String>;
-    async fn delete_conversation(&self, id: i64) -> Result<(), String>;
+    async fn list_conversations(&self) -> Result<Vec<Conversation>, String>;
+    async fn load_conversation(&self, id: String) -> Result<Vec<Message>, String>;
+    async fn delete_conversation(&self, id: String) -> Result<(), String>;
     /// `None` when everything works. Checked when the window opens and after a failed send.
     async fn status(&self) -> Option<ClientStatus> {
         None
@@ -82,7 +82,7 @@ pub trait Backend: Send + Sync {
     }
     /// Send a message and stream the reply through `emit`. Failures are
     /// reported as `StreamEvent::Error`, not as a return value.
-    async fn ask(&self, conversation_id: Option<i64>, text: String, cancel: oneshot::Receiver<()>, emit: Emit<'_>);
+    async fn ask(&self, conversation_id: Option<String>, text: String, cancel: oneshot::Receiver<()>, emit: Emit<'_>);
 }
 
 pub struct Local {
@@ -123,19 +123,29 @@ impl Backend for Local {
             .collect())
     }
 
-    async fn list_conversations(&self) -> Result<Vec<ConversationSummary>, String> {
-        lock(&self.db).list_conversations().map_err(|e| e.to_string())
+    async fn list_conversations(&self) -> Result<Vec<Conversation>, String> {
+        let list = lock(&self.db).list_conversations().map_err(|e| e.to_string())?;
+        Ok(list
+            .into_iter()
+            .map(|c| Conversation { id: c.id.to_string(), title: c.title, updated_at: c.updated_at, message_count: c.message_count })
+            .collect())
     }
 
-    async fn load_conversation(&self, id: i64) -> Result<Vec<StoredMessage>, String> {
-        lock(&self.db).get_messages(id).map_err(|e| e.to_string())
+    async fn load_conversation(&self, id: String) -> Result<Vec<Message>, String> {
+        let Ok(id) = id.parse::<i64>() else { return Ok(Vec::new()) };
+        let list = lock(&self.db).get_messages(id).map_err(|e| e.to_string())?;
+        Ok(list
+            .into_iter()
+            .map(|m| Message { id: m.id.to_string(), role: m.role, content: m.content, created_at: m.created_at })
+            .collect())
     }
 
-    async fn delete_conversation(&self, id: i64) -> Result<(), String> {
+    async fn delete_conversation(&self, id: String) -> Result<(), String> {
+        let Ok(id) = id.parse::<i64>() else { return Ok(()) };
         lock(&self.db).delete_conversation(id).map(|_| ()).map_err(|e| e.to_string())
     }
 
-    async fn ask(&self, conversation_id: Option<i64>, text: String, cancel: oneshot::Receiver<()>, emit: Emit<'_>) {
+    async fn ask(&self, conversation_id: Option<String>, text: String, cancel: oneshot::Receiver<()>, emit: Emit<'_>) {
         let fail = |message: String| emit(StreamEvent::Error { message });
 
         let cfg = match load_config() {
@@ -151,7 +161,7 @@ impl Backend for Local {
         let saved = {
             let db = lock(&self.db);
             (|| -> Result<(i64, Vec<StoredMessage>), DbError> {
-                let id = match conversation_id {
+                let id = match conversation_id.and_then(|s| s.parse::<i64>().ok()) {
                     Some(id) if db.conversation_exists(id)? => id,
                     _ => db.create_conversation(&make_title(&text))?,
                 };
@@ -163,7 +173,7 @@ impl Backend for Local {
             Ok(v) => v,
             Err(e) => return fail(e.to_string()),
         };
-        emit(StreamEvent::Started { conversation_id: conv_id });
+        emit(StreamEvent::Started { conversation_id: conv_id.to_string() });
 
         let mut context: Vec<ChatMessage> = stored.iter().map(|m| ChatMessage::new(&m.role, &m.content)).collect();
         if let Some(n) = cfg.history.context_messages.filter(|&n| n > 0) {

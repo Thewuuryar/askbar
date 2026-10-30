@@ -531,7 +531,7 @@
     if (!(t instanceof Element)) return;
     const row = t.closest('.conv');
     if (!row) return;
-    const id = Number(row.dataset.id);
+    const id = row.dataset.id;
     if (t.closest('.del')) onDelete(id);
     else if (t.closest('.open')) openConversation(id);
   });
