@@ -73,3 +73,7 @@ R2.5: the existing offline check was part of another test; a dedicated test was 
 - The schema change forced `chat.rs`, `api.rs`, `auth.rs`, `admin_api.rs` and the tests to move to the new tables in this commit. `Db` methods now take a `user_id` and use ULID text ids. R2.9 builds on this (it adds the cross-user test), so R2.9 is smaller than listed.
 - `messages_fts` is created and kept in sync by triggers here. A history-search query does not exist yet anywhere in the server (the list assumes one); see R2.12.
 - Rust total after R2.8: 137 passed, 0 failed.
+
+## R2.10: no code change
+
+The proto `Conversation` and `Message` types already carried string ids, and `api.rs` and its tests moved to string ULIDs in R2.8 (the schema change forced it). Verified: no `public_id` or integer conversation/message ids remain in `askbar-server` or `askbar-proto`. Rust: 139 passed.
