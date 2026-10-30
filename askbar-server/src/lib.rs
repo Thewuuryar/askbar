@@ -12,6 +12,7 @@ pub mod llm;
 pub mod mgmt;
 pub mod network;
 pub mod secrets;
+pub mod snapshot;
 pub mod store;
 
 pub use db::{make_title, ConversationSummary, Db, DbError, SearchHit, StoredMessage};

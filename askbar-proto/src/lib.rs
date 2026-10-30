@@ -39,6 +39,78 @@ pub struct Message {
     pub created_at: i64,
 }
 
+/// Provider metadata in a snapshot. Never carries a key: those go through their own endpoint.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SnapshotProvider {
+    pub id: String,
+    pub name: String,
+    #[serde(rename = "type")]
+    pub kind: String,
+    #[serde(default)]
+    pub base_url: String,
+    pub model: String,
+    #[serde(default)]
+    pub max_tokens: Option<u32>,
+    #[serde(default)]
+    pub temperature: Option<f32>,
+    #[serde(default)]
+    pub headers: std::collections::BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SnapshotPairCode {
+    /// SHA-256 (hex) of the code; the code itself is never sent.
+    pub hash: String,
+    pub user_id: String,
+    #[serde(default)]
+    pub device_name: String,
+    pub expires_at: i64,
+}
+
+/// Spending limits. `None` means no limit.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Budget {
+    #[serde(default)]
+    pub daily_tokens: Option<u64>,
+    #[serde(default)]
+    pub monthly_tokens: Option<u64>,
+}
+
+/// Everything the server needs from the admin service to run, as one document.
+/// The admin service owns it and pushes the whole thing; the server stores it as-is.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Snapshot {
+    /// Set by the server: 1 for the first snapshot it accepts, then up by one each time.
+    #[serde(default)]
+    pub version: u64,
+    #[serde(default)]
+    pub providers: Vec<SnapshotProvider>,
+    #[serde(default)]
+    pub default_provider_id: Option<String>,
+    /// Provider ids to try, in order, when the first choice fails.
+    #[serde(default)]
+    pub fallback_order: Vec<String>,
+    #[serde(default)]
+    pub system_prompt: Option<String>,
+    /// Server-wide display defaults.
+    #[serde(default)]
+    pub display: DisplaySettings,
+    /// Per-user display defaults, by user id.
+    #[serde(default)]
+    pub user_display_defaults: std::collections::BTreeMap<String, DisplaySettings>,
+    #[serde(default)]
+    pub pair_codes: Vec<SnapshotPairCode>,
+    #[serde(default)]
+    pub revoked_device_ids: Vec<String>,
+    #[serde(default)]
+    pub budget: Budget,
+    /// When true the server refuses new chats.
+    #[serde(default)]
+    pub kill_switch: bool,
+    /// How long audit records are kept. At least 7.
+    pub audit_retention_days: u32,
+}
+
 /// A user's preferences, shared by all of their devices.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Prefs {

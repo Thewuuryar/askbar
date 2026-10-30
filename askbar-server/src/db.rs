@@ -122,6 +122,18 @@ const MIGRATIONS: &[&str] = &[
          user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
          value   TEXT NOT NULL
      );",
+    // v2 (additive): the admin service's snapshot and the pair codes already redeemed.
+    "CREATE TABLE config_snapshot (
+         id         INTEGER PRIMARY KEY CHECK (id = 1),
+         version    INTEGER NOT NULL,
+         body       TEXT    NOT NULL,
+         updated_at INTEGER NOT NULL
+     );
+     CREATE TABLE redeemed_codes (
+         hash        TEXT PRIMARY KEY,
+         device_id   TEXT,
+         redeemed_at INTEGER NOT NULL
+     );",
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -541,12 +553,13 @@ mod tests {
             "users", "devices", "conversations", "messages", "messages_fts", "user_prefs", // live
             "memory", "projects", "token_usage", // reserved
             "providers", "settings", "pair_codes", "display_defaults", // interim
+            "config_snapshot", "redeemed_codes", // the admin service's snapshot
         ] {
             assert!(t.iter().any(|x| x == name), "missing table {name}");
         }
         assert!(!t.iter().any(|x| x == "device_tokens"), "devices replaces device_tokens");
         let v: i64 = db.conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-        assert_eq!(v, 1);
+        assert_eq!(v as usize, MIGRATIONS.len());
         let app: i64 = db.conn.query_row("PRAGMA application_id", [], |r| r.get(0)).unwrap();
         assert_eq!(app, APPLICATION_ID);
         // Foreign keys hold together: nothing dangles in a fresh database.

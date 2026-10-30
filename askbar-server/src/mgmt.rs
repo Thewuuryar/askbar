@@ -7,13 +7,14 @@
 //! and if it is missing or unreadable every request is refused (fail closed).
 
 use crate::AppState;
+use askbar_proto::Snapshot;
 use axum::{
     extract::{Request, State},
     http::{header, StatusCode},
     middleware::{self, Next},
     response::Response,
-    routing::get,
-    Router,
+    routing::{get, put},
+    Json, Router,
 };
 use sha2::{Digest, Sha256};
 use std::net::SocketAddr;
@@ -80,10 +81,24 @@ async fn require_token(State(guard): State<Guard>, req: Request, next: Next) -> 
     }
 }
 
+/// Replace the configuration snapshot. The version in the body is ignored; the server
+/// assigns the next one and returns it.
+async fn put_snapshot(State(state): State<Arc<AppState>>, Json(s): Json<Snapshot>) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    if let Err(why) = crate::snapshot::validate(&s) {
+        return Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": why }))));
+    }
+    let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+    match crate::snapshot::save(&db, &s) {
+        Ok(version) => Ok(Json(serde_json::json!({ "version": version }))),
+        Err(_) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": "could not store the snapshot" })))),
+    }
+}
+
 /// The management routes behind the token check.
 pub fn router(state: Arc<AppState>, hash_file: PathBuf) -> Router {
     Router::new()
         .route("/mgmt/v1/health", get(|| async { StatusCode::OK }))
+        .route("/mgmt/v1/snapshot", put(put_snapshot))
         .layer(middleware::from_fn_with_state(Guard { hash_file }, require_token))
         .with_state(state)
 }
