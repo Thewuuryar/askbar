@@ -351,7 +351,7 @@ mod tests {
             )
             .unwrap();
         let code = auth::create_pair_code(&db, &user, "test", 600).unwrap();
-        let state: Arc<AppState> = AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap());
+        let state: Arc<AppState> = AppState::with_min_client(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), "0.1.0");
         let token = auth::redeem_pair_code(&state.db.lock().unwrap(), &code).unwrap().unwrap();
         let app = askbar_server::api_router(state);
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

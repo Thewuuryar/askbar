@@ -47,14 +47,14 @@ impl T {
         assert_eq!(url, PUBLIC, "trailing slash trimmed, public URL used");
         self.http
             .post(format!("{}/api/v1/pair", self.api))
-            .header("x-askbar-client-version", "0.1.0")
+            .header("x-askbar-client-version", "0.3.0")
             .json(&json!({ "code": code }))
             .send()
             .await
             .unwrap()
     }
     async fn whoami(&self, token: &str) -> u16 {
-        self.http.get(format!("{}/api/v1/whoami", self.api)).bearer_auth(token).header("x-askbar-client-version", "0.1.0").send().await.unwrap().status().as_u16()
+        self.http.get(format!("{}/api/v1/whoami", self.api)).bearer_auth(token).header("x-askbar-client-version", "0.3.0").send().await.unwrap().status().as_u16()
     }
 }
 

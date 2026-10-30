@@ -146,7 +146,7 @@ async fn the_admin_cookie_is_ignored_on_api_routes() {
             .http
             .get(format!("http://{}{path}", t.api))
             .header("cookie", &cookie)
-            .header("x-askbar-client-version", "0.1.0")
+            .header("x-askbar-client-version", "0.3.0")
             .send()
             .await
             .unwrap();

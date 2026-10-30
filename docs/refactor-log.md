@@ -102,3 +102,9 @@ Done in R2.3 as agreed (see "Order change"): `Remote.ids` is gone, Tauri command
 - `ProviderInfo` gained `id`; `GET /api/v1/providers` returns `{id, name, type, model}` (the wire key for the kind stays `type`, as before). `ChatRequest.provider`, `store::load_provider` and the client's `active_provider` take the id; a name is rejected (404 on chat).
 - Client: `ClientStatus.providers` is now a list of `{id, name}`; the "Use <name>" buttons call `set_active_provider` with the id. An old `client.yaml` that holds a name shows "provider no longer exists, pick another".
 - `smoke.sh` picks the provider by id. Rust: 142 passed.
+
+## R2.15 notes
+
+- `MIN_CLIENT` is 0.3.0; a new `version_gate` test pins it and checks that a 0.2.x client is refused with 426. The other `version_gate` tests now use `MIN_CLIENT` and 0.3.0 versions.
+- Side effect to know about: the desktop client's own version is still 0.1.0 until R5.4, so until then a client built from this branch is refused (426) by a default server. Tests that run a real client against a real server set the server's minimum explicitly (`with_min_client(.., "0.1.0")`); server tests that send a version header now send 0.3.0.
+- Rust: 143 passed.

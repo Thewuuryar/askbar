@@ -128,7 +128,7 @@ async fn read_endpoints_require_a_token() {
 
 fn client() -> reqwest::Client {
     let mut h = reqwest::header::HeaderMap::new();
-    h.insert(askbar_proto::CLIENT_VERSION_HEADER, "0.1.0".parse().unwrap());
+    h.insert(askbar_proto::CLIENT_VERSION_HEADER, "0.3.0".parse().unwrap());
     reqwest::Client::builder().default_headers(h).build().unwrap()
 }
 

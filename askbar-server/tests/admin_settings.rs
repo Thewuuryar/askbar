@@ -86,14 +86,14 @@ impl T {
         (st, serde_json::from_str(&resp.text().await.unwrap()).unwrap_or(json!(null)))
     }
     async fn client_settings(&self) -> Settings {
-        self.http.get(format!("{}/api/v1/settings", self.api)).bearer_auth(&self.token).header("x-askbar-client-version", "0.1.0").send().await.unwrap().json().await.unwrap()
+        self.http.get(format!("{}/api/v1/settings", self.api)).bearer_auth(&self.token).header("x-askbar-client-version", "0.3.0").send().await.unwrap().json().await.unwrap()
     }
     async fn chat(&self, text: &str) {
         let r = self
             .http
             .post(format!("{}/api/v1/chat", self.api))
             .bearer_auth(&self.token)
-            .header("x-askbar-client-version", "0.1.0")
+            .header("x-askbar-client-version", "0.3.0")
             .json(&ChatRequest { conversation_id: None, provider: "p".into(), text: text.into() })
             .send()
             .await

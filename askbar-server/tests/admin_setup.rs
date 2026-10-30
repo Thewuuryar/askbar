@@ -102,7 +102,7 @@ async fn first_run_password_then_master_key() {
     let page = t.http.get(format!("{}/admin/api/providers", t.adm)).header("cookie", &cookie).send().await.unwrap().text().await.unwrap();
     assert!(!page.contains(&key));
     // And the API is out of setup mode.
-    let r = t.http.get(format!("{}/api/v1/whoami", t.api)).header("x-askbar-client-version", "0.1.0").send().await.unwrap();
+    let r = t.http.get(format!("{}/api/v1/whoami", t.api)).header("x-askbar-client-version", "0.3.0").send().await.unwrap();
     assert_eq!(r.status(), 401);
 }
 

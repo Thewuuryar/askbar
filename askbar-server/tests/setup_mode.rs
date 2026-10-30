@@ -12,7 +12,7 @@ async fn serve(app: axum::Router) -> String {
 
 fn headers() -> reqwest::header::HeaderMap {
     let mut h = reqwest::header::HeaderMap::new();
-    h.insert(askbar_proto::CLIENT_VERSION_HEADER, "0.1.0".parse().unwrap());
+    h.insert(askbar_proto::CLIENT_VERSION_HEADER, "0.3.0".parse().unwrap());
     h
 }
 
