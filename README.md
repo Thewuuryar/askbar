@@ -162,10 +162,6 @@ Lets a Claude or ChatGPT subscription act as an OpenAI-compatible provider. See 
 
 Admin page > **Backup** downloads a consistent snapshot (`VACUUM INTO`) with conversations, settings and paired devices. It leaves out provider API keys, the Cloudflare token and the admin password, so after restoring you enter those again. Master key: if the `askbar-secrets` volume is lost, choose **I already have a master key** during setup and paste the one from your password manager; without it, stored provider keys must be re-entered (conversations are unaffected). **Security** > *Rotate master key* replaces it and re-encrypts everything.
 
-### Import an existing standalone install
-
-`askbar-server import --config config.yaml --db history.db` copies conversations and providers into the server (API keys named by `api_key_env` are imported only if that variable is set when you run it).
-
 ## Layout
 
 ```

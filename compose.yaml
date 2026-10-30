@@ -12,7 +12,6 @@ services:
     # The bind-mounted DATA_DIR must be writable by this user.
     user: "${ASKBAR_UID:-10001}:${ASKBAR_GID:-10001}"
     environment:
-      # Put into pairing strings made by `create-pair-code`.
       # How the server reaches Caddy (only answers when the tls profile is running).
       ASKBAR_CADDY_ADMIN: http://caddy:2019
       ASKBAR_CADDY_SECRETS_DIR: /caddy-secrets
