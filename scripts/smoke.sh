@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Smoke test: start the server on an empty data directory, pair a device over the
+# Smoke test: start the server and the admin on empty data directories, pair a device over the
 # HTTP API, send a chat and read the streamed reply, then search history.
 # Prints PASS or FAIL per step. Steps it cannot check itself ask a person for y or n.
 #
@@ -63,12 +63,21 @@ if [ -z "$URL" ]; then
   LOCAL=1
   BIN="${ASKBAR_SERVER_BIN:-target/debug/askbar-server}"
   if [ ! -x "$BIN" ]; then cargo build -q -p askbar-server || { fail "build the server"; exit 1; }; fi
-  API_PORT=$(free_port); ADMIN_PORT=$(free_port); MOCK_PORT=$(free_port)
+  ABIN="${ASKBAR_ADMIN_BIN:-target/debug/askbar-admin}"
+  if [ ! -x "$ABIN" ]; then cargo build -q -p askbar-admin || { fail "build the admin"; exit 1; }; fi
+  API_PORT=$(free_port); OLD_ADMIN_PORT=$(free_port); MGMT_PORT=$(free_port); MOCK_PORT=$(free_port)
   URL="http://127.0.0.1:$API_PORT"
-  ADMIN="http://127.0.0.1:$ADMIN_PORT"
-  mkdir -p "$WORK/data" "$WORK/secrets"
+  SOCK="$WORK/admin-run/admin.sock"
+  mkdir -p "$WORK/data" "$WORK/secrets" "$WORK/admin-run"
   python3 -u tests/mock_llm.py "$MOCK_PORT" >/dev/null 2>&1 & PIDS+=($!)
-  ASKBAR_API_ADDR="127.0.0.1:$API_PORT" ASKBAR_ADMIN_ADDR="127.0.0.1:$ADMIN_PORT" \
+  # The admin service: its own database and secrets, a unix socket and no TCP port.
+  ASKBAR_ADMIN_SOCKET="$SOCK" ASKBAR_ADMIN_DATA_DIR="$WORK/admin-data" ASKBAR_ADMIN_SECRETS_DIR="$WORK/admin-secrets" \
+    ASKBAR_MGMT_DIR="$WORK/mgmt" ASKBAR_SERVER_MGMT_URL="http://127.0.0.1:$MGMT_PORT" ASKBAR_PUBLIC_URL="$URL" \
+    "$ABIN" >"$WORK/admin.log" 2>&1 & PIDS+=($!)
+  for _ in $(seq 100); do [ -S "$SOCK" ] && break; sleep 0.1; done
+  # The server: the API, and a management listener that only the admin's token opens.
+  ASKBAR_API_ADDR="127.0.0.1:$API_PORT" ASKBAR_ADMIN_ADDR="127.0.0.1:$OLD_ADMIN_PORT" \
+    ASKBAR_MGMT_ADDR="127.0.0.1:$MGMT_PORT" ASKBAR_MGMT_TOKEN_HASH_FILE="$WORK/mgmt/token.sha256" \
     ASKBAR_DATA_DIR="$WORK/data" ASKBAR_SECRETS_DIR="$WORK/secrets" \
     ASKBAR_PUBLIC_URL="$URL" "$BIN" >"$WORK/server.log" 2>&1 & PIDS+=($!)
 fi
@@ -81,12 +90,12 @@ if wait_for_url "$URL/api/v1/health" 20; then pass "server is up"; else
   fail "server is up" "no answer from $URL/api/v1/health"; [ $LOCAL = 1 ] && tail -5 "$WORK/server.log"; exit 1
 fi
 
-# 2-3. Local only: first-run setup, a provider, a pair code.
+# 2-3. Local only: first-run setup through the admin, a provider, a pair code.
 if [ $LOCAL = 1 ]; then
   PW="smoke test password"
   admin() { # method path [json]
-    curl -fsS -X "$1" -H 'x-askbar-admin: 1' -H 'content-type: application/json' -b "$WORK/jar" -c "$WORK/jar" \
-      ${3:+-d "$3"} "$ADMIN$2"
+    curl -fsS --unix-socket "$SOCK" -X "$1" -H 'x-askbar-admin: 1' -H 'content-type: application/json' -b "$WORK/jar" -c "$WORK/jar" \
+      ${3:+-d "$3"} "http://admin$2"
   }
   if admin POST /admin/api/setup/password "{\"password\":\"$PW\"}" >/dev/null; then
     pass "first-run setup"
