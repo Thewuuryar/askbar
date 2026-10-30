@@ -215,3 +215,48 @@ fn client_builder() -> reqwest::ClientBuilder {
 fn client() -> reqwest::Client {
     client_builder().build().unwrap()
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn another_user_cannot_read_or_continue_my_conversation() {
+    let t = start().await;
+    let http = client();
+    let r = t.chat(&http, None, "mock", "My private question").await;
+    assert_eq!(r.status(), 200);
+    let body = r.text().await.unwrap();
+    let events = parse_events(&body);
+    let ChatEvent::Meta { conversation_id } = events[0].1.clone() else { panic!("first event must be meta") };
+    wait_for("the reply to be saved", || (t.messages().len() == 2).then_some(()));
+
+    // A second user with their own device.
+    let token_b = {
+        let db = t.state.db.lock().unwrap();
+        db.conn().execute("INSERT INTO users (id, name, created_at) VALUES ('B','other',0)", []).unwrap();
+        let code = auth::create_pair_code(&db, "B", "b-laptop", 600).unwrap();
+        auth::redeem_pair_code(&db, &code).unwrap().unwrap()
+    };
+    let get = |path: String| {
+        let (http, token, addr) = (http.clone(), token_b.clone(), t.addr);
+        async move { http.get(format!("http://{addr}{path}")).bearer_auth(token).send().await.unwrap() }
+    };
+    let list = get("/api/v1/conversations".into()).await;
+    assert_eq!(list.status(), 200);
+    assert_eq!(list.text().await.unwrap(), "[]");
+    assert_eq!(get(format!("/api/v1/conversations/{conversation_id}")).await.status(), 404);
+
+    // Continuing it is refused and writes nothing.
+    let r = http
+        .post(format!("http://{}/api/v1/chat", t.addr))
+        .bearer_auth(&token_b)
+        .json(&ChatRequest { conversation_id: Some(conversation_id.clone()), provider: "mock".into(), text: "intrusion".into() })
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 404);
+    assert_eq!(t.messages().len(), 2);
+
+    // Deleting it is refused too.
+    let r = http.delete(format!("http://{}/api/v1/conversations/{conversation_id}", t.addr)).bearer_auth(&token_b).send().await.unwrap();
+    assert_eq!(r.status(), 404);
+    let own = http.get(format!("http://{}/api/v1/conversations/{conversation_id}", t.addr)).bearer_auth(&t.token).send().await.unwrap();
+    assert_eq!(own.status(), 200);
+}

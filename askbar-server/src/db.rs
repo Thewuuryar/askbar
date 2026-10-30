@@ -391,6 +391,24 @@ mod tests {
     }
 
     #[test]
+    fn user_b_cannot_read_or_change_user_as_conversations() {
+        let (db, a) = db_with_user();
+        db.conn.execute("INSERT INTO users (id, name, created_at) VALUES ('B','other',0)", []).unwrap();
+        let conv = db.create_conversation(&a, "private").unwrap();
+        db.add_message(&a, &conv, "user", "secret question").unwrap();
+
+        assert!(db.list_conversations("B").unwrap().is_empty());
+        assert!(db.get_conversation("B", &conv).unwrap().is_none());
+        assert!(db.get_messages("B", &conv).unwrap().is_empty());
+        assert!(matches!(db.add_message("B", &conv, "user", "intrusion"), Err(DbError::NotFound)));
+        assert!(!db.delete_conversation("B", &conv).unwrap());
+
+        // Untouched for its owner.
+        assert_eq!(db.list_conversations(&a).unwrap().len(), 1);
+        assert_eq!(db.get_messages(&a, &conv).unwrap().len(), 1);
+    }
+
+    #[test]
     fn rejects_unknown_roles_and_orphans() {
         let (db, u) = db_with_user();
         let a = db.create_conversation(&u, "a").unwrap();
