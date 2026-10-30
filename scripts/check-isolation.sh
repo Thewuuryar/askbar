@@ -6,7 +6,8 @@
 # Proves the split between the server, the admin and Caddy holds in the real containers:
 # the admin works with the server stopped, the management port needs the token (and
 # fails closed without a hash file), only the admin can reach it, the server cannot touch
-# the admin's files or socket, and the admin allowlist does what its switch says.
+# the admin's files or socket, the admin allowlist does what its switch says, the server image
+# carries no admin code, secret files are mode 600, and a backup holds no secrets.
 #
 # Meant for a throwaway stack: it stops and restarts the server, and it sets the admin's
 # network settings (a made-up hostname, no certificate is requested). Needs docker and the
@@ -173,6 +174,51 @@ refused "Caddy's admin API refuses TCP" docker exec "$CADDY" sh -c 'wget -q -T3 
 check "uid 10001 reaches Caddy's admin API through the socket" py -u 10001:10001 -v "${PROJECT}_caddy-run:/r" -- "
 import socket
 s = socket.socket(socket.AF_UNIX); s.connect('/r/admin.sock')"
+
+echo "== 5. Images, files and backups"
+SERVER_IMG=$(docker inspect -f '{{.Config.Image}}' "$SERVER")
+# The server binary carries nothing of the admin: no admin site, no Caddy or Cloudflare code.
+for needle in "Askbar admin" "app.js" "style.css" "x-askbar-admin" "Caddyfile" "cloudflare" "admin_password_hash"; do
+  docker run --rm --entrypoint grep "$SERVER_IMG" -aq -- "$needle" /usr/local/bin/askbar-server \
+    && fail "the server binary contains \"$needle\"" || pass "the server binary has no \"$needle\""
+done
+docker run --rm --entrypoint sh "$SERVER_IMG" -c 'test -e /usr/local/bin/askbar-admin' \
+  && fail "the server image holds the admin binary" || pass "the server image holds no admin binary"
+case " $(docker inspect -f '{{range .Mounts}}{{.Name}} {{end}}' "$ADMIN")" in
+  *" ${PROJECT}_askbar-secrets "*) fail "the admin mounts askbar-secrets";; *) pass "the admin does not mount askbar-secrets";;
+esac
+refused "the admin has no /secrets" docker exec "$ADMIN" test -e /secrets
+modes_ok=1
+for f in "$ADMIN:/admin-secrets/admin.key" "$ADMIN:/admin-secrets/mgmt.token" "$SERVER:/secrets/master.key"; do
+  m=$(docker exec "${f%%:*}" stat -c %a "${f#*:}" 2>/dev/null)
+  [ "$m" = 600 ] || { fail "${f#*:} has mode ${m:-missing}, expected 600"; modes_ok=0; }
+done
+docker exec "$ADMIN" test -e /caddy-secrets/cf_token \
+  && { [ "$(docker exec "$ADMIN" stat -c %a /caddy-secrets/cf_token)" = 600 ] || { fail "cf_token is not 0600"; modes_ok=0; }; }
+[ "$modes_ok" = 1 ] && pass "token files and the master key are mode 600"
+
+MARK="sk-isolation-$(head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+out=$(admin_script "$(admin_login)
+import tarfile, io, base64, json
+s, body = call('POST', '/admin/api/providers', {'name': 'iso', 'type': 'openai', 'base_url': 'http://mock-llm:8765/v1', 'model': 'm', 'api_key': '$MARK'})
+assert s == 201, (s, body)
+s, body = call('POST', '/admin/api/pair', {'name': 'iso device'})
+assert s == 200, (s, body)
+pairing = json.loads(body)['pairing']
+b = pairing.split(':', 1)[1]
+code = json.loads(base64.urlsafe_b64decode(b + '=' * (-len(b) % 4)))['code']
+c.request('GET', '/admin/api/backup', headers={'x-askbar-admin': '1', 'cookie': cookie})
+r = c.getresponse(); raw = r.read()
+assert r.status == 200, r.status
+names = sorted(m.name for m in tarfile.open(fileobj=io.BytesIO(raw)).getmembers())
+blob = b''.join(tarfile.open(fileobj=io.BytesIO(raw)).extractfile(n).read() for n in names)
+print('names', ','.join(names))
+for label, needle in (('provider key', '$MARK'), ('pair code', code), ('password hash', '\$argon2')):
+    print(label, 'FOUND' if needle.encode() in blob else 'absent')" 2>&1)
+printf '%s\n' "$out" | grep -q '^names .*admin.db.*server.db' && pass "the backup holds admin.db and server.db" || fail "backup contents: $out"
+for what in "provider key" "pair code" "password hash"; do
+  printf '%s\n' "$out" | grep -q "^$what absent" && pass "the backup holds no $what" || fail "the backup holds the $what ($out)"
+done
 
 echo
 if [ "$FAILS" -eq 0 ]; then echo "All isolation checks passed."; else echo "$FAILS isolation check(s) FAILED."; exit 1; fi

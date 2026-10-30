@@ -374,3 +374,8 @@ With the old admin still serving the UI: clippy no errors; Rust 157 passed, 0 fa
 | Node `admin` | 23 | 24 | key wizard and rotation steps removed (-2, R3), three steps added for the offline banner and recovery (R4.12) |
 
 No test was deleted other than those named above as removed with a deleted feature or moved with its code. The per-file test counts above are from `cargo test --workspace` at this commit. (Earlier notes say `mgmt.rs` has 14 tests; the run shows 13: that was a miscount.) Server+admin+proto unit totals were not reconciled test by test against the baseline names, only by count and by the removals recorded in the earlier notes.
+
+## R5.2 notes
+
+- `scripts/check-isolation.sh` gained section 5: the server binary contains none of "Askbar admin", "app.js", "style.css", "x-askbar-admin", "Caddyfile", "cloudflare", "admin_password_hash" (`grep -a` inside the image); the server image has no `askbar-admin` binary; the admin container mounts no `askbar-secrets` and has no `/secrets`; `admin.key`, `mgmt.token` (admin) and `master.key` (server), and `cf_token` when present, are mode 600; a backup fetched through the admin holds `admin.db` and `server.db` and none of a fresh provider key (a random marker), the plaintext pair code or `$argon2` (the password hash). All pass on the running stack.
+- `token.sha256` is deliberately 0644: it is a hash, and the server (a different uid) must read it. The raw token (`mgmt.token`) is 0600 in the admin's own secrets volume.
