@@ -28,7 +28,7 @@
 | Node `ui` | 39 |
 | Node `admin` | 23 |
 
-Rust total: 134 passed (1 ignored).
+Rust total: 138 passed (1 ignored).
 
 Notes:
 - The task list names a standalone `import.rs` test file; at this commit there is none. The `import` tests are 1 unit test inside `askbar-server/src/import.rs`.
