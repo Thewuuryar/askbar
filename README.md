@@ -101,11 +101,12 @@ docker compose up -d --build
 Open <http://localhost:8081/admin/> (the admin site is published on `127.0.0.1` only) and finish **first-run setup**:
 
 1. Choose the admin password (first visitor wins, which is safe because the port is loopback-only).
-2. Generate the master key. It is shown once: **save it in a password manager.** It is kept in a separate Docker volume (`askbar-secrets`), so copies and backups of the data never contain it.
-3. **Providers** > add one (Anthropic, OpenAI-compatible, or the CLIProxyAPI preset) and press **Test**.
-4. **Devices** > generate a pairing string.
+2. **Providers** > add one (Anthropic, OpenAI-compatible, or the CLIProxyAPI preset) and press **Test**.
+3. **Devices** > generate a pairing string.
 
-No secret ever goes in `.env`, so nothing sensitive can be committed by accident. The password, master key and Cloudflare token are all entered on the admin page.
+The server creates its master key by itself on its first start and keeps it in a separate Docker volume (`askbar-secrets`), so copies and backups of the data never contain it. **Back that volume up too, separately from `data/`** (see Backup and recovery).
+
+No secret ever goes in `.env`, so nothing sensitive can be committed by accident. The password and the Cloudflare token are entered on the admin page.
 
 ### Pair a desktop app
 
@@ -152,7 +153,7 @@ Lets a Claude or ChatGPT subscription act as an OpenAI-compatible provider. See 
 | `DATA_DIR` | `./data` | where the database lives on the host |
 | `ASKBAR_UID` / `ASKBAR_GID` | 10001 | user the server runs as; `DATA_DIR` must be writable by it |
 
-**Set on the admin page** instead of in files: admin password, master key, hostname, Cloudflare token, allowed admin networks, the Let's Encrypt staging switch, the system prompt, and display defaults.
+**Set on the admin page** instead of in files: admin password, hostname, Cloudflare token, allowed admin networks, the Let's Encrypt staging switch, the system prompt, and display defaults.
 
 **Compose profiles:** the `server` is always on. `dev` adds a mock LLM (`tests/mock_llm.py`), `tls` adds Caddy, `cpa` adds CLIProxyAPI.
 
@@ -160,7 +161,12 @@ Lets a Claude or ChatGPT subscription act as an OpenAI-compatible provider. See 
 
 ### Backup and recovery
 
-Admin page > **Backup** downloads a consistent snapshot (`VACUUM INTO`) with conversations, settings and paired devices. It leaves out provider API keys, the Cloudflare token and the admin password, so after restoring you enter those again. Master key: if the `askbar-secrets` volume is lost, choose **I already have a master key** during setup and paste the one from your password manager; without it, stored provider keys must be re-entered (conversations are unaffected). **Security** > *Rotate master key* replaces it and re-encrypts everything.
+There are two things to back up, **separately**:
+
+- **`data/`** (the database: conversations, settings, paired devices, and the provider keys *encrypted*). Admin page > **Backup** downloads a consistent snapshot (`VACUUM INTO`) of it that leaves out provider API keys, the Cloudflare token and the admin password, so after restoring that snapshot you enter those again.
+- **The `askbar-secrets` volume** (`master.key`). Keep it somewhere other than your `data/` backups: anyone holding both can read the stored provider keys. For example: `docker run --rm -v askbar-secrets:/s -v "$PWD":/b alpine cp /s/master.key /b/master.key`, then store the copy in a password manager.
+
+If you restore a raw copy of `data/` that still holds encrypted provider keys onto a **new** `askbar-secrets` volume, the server refuses to start rather than create a new key, and names the volume: restore `master.key` into it first. A new, empty `data/` with a new `askbar-secrets` is a normal fresh install. The server never replaces an existing `master.key`, and there is no key rotation.
 
 ## Layout
 
@@ -192,7 +198,7 @@ The UI and admin tests need `npm install && npx playwright install chromium`.
 
 Verified on Linux (X11) by driving the real binary: hotkey show/hide, second-launch toggle, typing, streaming, Esc-to-stop (the server sees the disconnect and the partial reply is saved), deleting through real clicks with the database checked, clipboard copy and paste, first-run config, a bad hotkey, and hide-on-click-away.
 
-Server side, additionally verified: first-run setup, pairing and revocation, chat streaming with client disconnects, master key rotation including crash recovery, the Caddy configuration (validated by Caddy itself, and a staging certificate issued over a Cloudflare DNS challenge), and a CLIProxyAPI-backed provider.
+Server side, additionally verified: first-run setup, pairing and revocation, chat streaming with client disconnects, the Caddy configuration (validated by Caddy itself, and a staging certificate issued over a Cloudflare DNS challenge), and a CLIProxyAPI-backed provider.
 
 Not verified: **Windows and macOS** runtime behaviour (`.github/workflows/build.yml`, run manually with *Run workflow*, builds and tests them), **Wayland**, and the live Anthropic and OpenAI APIs (both protocols are tested against a mock that follows their streaming formats). On macOS the dock icon is hidden by default; if Cmd+C or Cmd+V misbehave, set `ui.macos_hide_dock_icon: false`.
 

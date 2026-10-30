@@ -23,7 +23,9 @@ services:
       - "127.0.0.1:${ASKBAR_ADMIN_PORT:-8081}:8081"
     volumes:
       - ${DATA_DIR:-./data}:/data
-      # The master key lives here, alone: backups and snapshots of DATA_DIR never contain it.
+      # The master key (created on first start) lives here, alone: backups and snapshots of DATA_DIR never
+      # contain it. Back this volume up separately from DATA_DIR; without master.key the server will not
+      # start against a database that holds encrypted provider keys.
       - askbar-secrets:/secrets
       # Holds only the Cloudflare token, for Caddy.
       - caddy-secrets:/caddy-secrets

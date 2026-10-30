@@ -181,3 +181,7 @@ Setup mode is gone: `require_ready`, `setup_complete`, `set_secrets`, the `key_s
 ## R3.6 notes
 
 `AppState` has one constructor, `AppState::new(db, secrets, min_client, public_url)`; `with_min_client`, `with_config` and `build` are gone. All 21 call sites (tests, `main.rs`, the client's `remote.rs` tests) updated; tests that used the old default pass `askbar_server::MIN_CLIENT` and `"http://localhost:8080"`. Rust 139 passed.
+
+## R3.7 notes
+
+README (first-run steps, "set on the admin page" list, Backup and recovery, the verified list) and the `compose.yaml` comment now say: the key is created automatically; back up `askbar-secrets` separately from `data/`; a raw `data/` restore with encrypted keys onto a new secrets volume makes the server refuse to start; no rotation. The full README rewrite is still R5.4.
