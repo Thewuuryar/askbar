@@ -3,8 +3,9 @@
 
 use askbar_core::{
     config_path, http_client, make_title, stream_chat, ChatMessage, Config, ConversationSummary, Db, DbError,
-    HttpClient, ProviderKind, StoredMessage, StreamOutcome, Ui,
+    HttpClient, ProviderKind, StoredMessage, StreamOutcome,
 };
+use crate::client_config::Ui;
 use askbar_proto::ProviderInfo;
 use async_trait::async_trait;
 use serde::Serialize;
@@ -31,7 +32,7 @@ impl Settings {
             .active()
             .map(|p| (p.name.clone(), p.model.clone()))
             .unwrap_or_default();
-        Settings { ui: cfg.ui.clone(), hotkey: cfg.hotkey.clone(), provider, model }
+        Settings { ui: Ui::default(), hotkey: cfg.hotkey.clone(), provider, model }
     }
 }
 

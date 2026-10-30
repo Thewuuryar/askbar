@@ -79,40 +79,6 @@ impl Provider {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Theme {
-    Auto,
-    Light,
-    Dark,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct Ui {
-    pub theme: Theme,
-    pub width: u32,
-    pub max_height: u32,
-    pub history_width: u32,
-    pub top_percent: f64,
-    pub hide_on_blur: bool,
-    pub macos_hide_dock_icon: bool,
-}
-
-impl Default for Ui {
-    fn default() -> Self {
-        Self {
-            theme: Theme::Auto,
-            width: 720,
-            max_height: 640,
-            history_width: 260,
-            top_percent: 0.22,
-            hide_on_blur: true,
-            macos_hide_dock_icon: true,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct HistoryCfg {
@@ -132,8 +98,6 @@ pub struct Config {
     pub providers: Vec<Provider>,
     #[serde(default)]
     pub history: HistoryCfg,
-    #[serde(default)]
-    pub ui: Ui,
 }
 
 fn default_hotkey() -> String {
@@ -165,7 +129,6 @@ impl Config {
         if cfg.active_provider.trim().is_empty() {
             cfg.active_provider = cfg.providers[0].name.clone();
         }
-        cfg.ui.top_percent = cfg.ui.top_percent.clamp(0.0, 0.8);
         Ok(cfg)
     }
 
@@ -260,8 +223,6 @@ mod tests {
         .unwrap();
         assert_eq!(cfg.active_provider, "x");
         assert_eq!(cfg.hotkey, "Ctrl+Shift+Space");
-        assert_eq!(cfg.ui.width, 720);
-        assert!(cfg.ui.hide_on_blur);
         assert!(cfg.system_prompt.contains("concise"));
         assert_eq!(cfg.providers[0].effective_base_url(), "https://api.openai.com/v1");
     }
@@ -299,12 +260,6 @@ mod tests {
         env::set_var("ASKBAR_TEST_KEY_A", " from-env ");
         assert_eq!(p.resolve_key().as_deref(), Some("from-env"));
         env::remove_var("ASKBAR_TEST_KEY_A");
-    }
-
-    #[test]
-    fn top_percent_is_clamped() {
-        let cfg = Config::from_yaml("ui:\n  top_percent: 5.0\n", "t").unwrap();
-        assert_eq!(cfg.ui.top_percent, 0.8);
     }
 
     #[test]

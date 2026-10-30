@@ -6,7 +6,8 @@ mod client_config;
 mod remote;
 mod tokens;
 
-use askbar_core::{config_path, db_path, Config, ConversationSummary, StoredMessage, Ui};
+use askbar_core::{config_path, db_path, Config, ConversationSummary, StoredMessage};
+use client_config::Ui;
 use backend::{Backend, Local, Settings, StreamEvent};
 use remote::Remote;
 use serde::Serialize;
