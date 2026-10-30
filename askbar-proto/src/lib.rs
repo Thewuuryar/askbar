@@ -1,6 +1,9 @@
 //! Wire types shared by the Askbar server and client.
 //! IDs are server-generated ULIDs; timestamps are UTC unix seconds.
 
+mod sse;
+pub use sse::{SseEvent, SseParser};
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

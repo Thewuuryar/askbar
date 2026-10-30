@@ -3,8 +3,8 @@
 use crate::backend::{Backend, ClientStatus, Emit, Settings, StreamEvent};
 use crate::client_config::{check_server_url, merge_ui, ClientConfig};
 use crate::tokens::TokenStore;
-use askbar_core::{ConversationSummary, SseParser, StoredMessage};
-use askbar_proto::{ChatEvent, ChatRequest, Conversation, ConversationDetail, DisplaySettings, ProviderInfo};
+use askbar_core::{ConversationSummary, StoredMessage};
+use askbar_proto::{ChatEvent, ChatRequest, Conversation, ConversationDetail, DisplaySettings, ProviderInfo, SseParser};
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use reqwest::{Method, RequestBuilder, StatusCode, Url};
