@@ -1,36 +1,61 @@
-# Askbar server. Copy .env.example to .env and edit it first.
-#   docker compose up -d                    server only
+# Askbar. Copy .env.example to .env and edit it first.
+#   docker compose up -d                    server, admin and the HTTPS front end (Caddy)
 #   docker compose --profile dev up -d      plus the mock LLM (tests/mock_llm.py)
-#   docker compose --profile tls up -d      plus the HTTPS front end (Caddy)
 #   docker compose --profile cpa up -d      plus CLIProxyAPI (subscription logins as a provider)
+#
+# Three services, two networks:
+#   edge  Caddy and the server (the device API on 8080). Caddy is the only service with published ports.
+#   mgmt  the admin and the server's management API, nothing else. `internal`, so it has no route out.
+# The admin joins no network but mgmt. Caddy reaches it only through its unix socket (volume admin-run),
+# for admin.<hostname>.
 
 services:
   server:
-    build: .
+    build:
+      context: .
+      target: server
     image: askbar-server:latest
+    container_name: askbar-server
     restart: unless-stopped
-    # The bind-mounted DATA_DIR must be writable by this user.
-    user: "${ASKBAR_UID:-10001}:${ASKBAR_GID:-10001}"
     environment:
-      # How the server reaches Caddy (only answers when the tls profile is running).
-      ASKBAR_CADDY_ADMIN: http://caddy:2019
-      ASKBAR_CADDY_SECRETS_DIR: /caddy-secrets
-      ASKBAR_TLS_API_PORT: ${ASKBAR_TLS_API_PORT:-8443}
-      ASKBAR_TLS_ADMIN_PORT: ${ASKBAR_TLS_ADMIN_PORT:-9443}
-      ASKBAR_PUBLIC_URL: ${ASKBAR_PUBLIC_URL:-http://localhost:${ASKBAR_API_PORT:-8080}}
-    ports:
-      - "${ASKBAR_API_PORT:-8080}:8080"
-      - "127.0.0.1:${ASKBAR_ADMIN_PORT:-8081}:8081"
+      # One specific address on the mgmt network; the server refuses a wildcard here.
+      ASKBAR_MGMT_ADDR: 172.30.0.2:8082
+    networks:
+      edge: {}
+      mgmt:
+        ipv4_address: 172.30.0.2
     volumes:
+      # The bind-mounted DATA_DIR must be writable by uid 10002.
       - ${DATA_DIR:-./data}:/data
-      # The master key (created on first start) lives here, alone: backups and snapshots of DATA_DIR never
-      # contain it. Back this volume up separately from DATA_DIR; without master.key the server will not
-      # start against a database that holds encrypted provider keys.
+      # The master key (created on first start) lives here, alone: backups of DATA_DIR never contain it.
+      # Back this volume up separately; without master.key the server will not start against a database
+      # that holds encrypted provider keys.
       - askbar-secrets:/secrets
-      # Holds only the Cloudflare token, for Caddy.
-      - caddy-secrets:/caddy-secrets
+      # The admin's token hash (token.sha256). Read-only: the server can check the token, never mint one.
+      - askbar-mgmt:/mgmt:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
+
+  admin:
+    build:
+      context: .
+      target: admin
+    image: askbar-admin:latest
+    container_name: askbar-admin
+    restart: unless-stopped
+    environment:
+      ASKBAR_SERVER_MGMT_URL: http://172.30.0.2:8082
+      ASKBAR_PUBLIC_URL: ${ASKBAR_PUBLIC_URL:-}
+    networks:
+      mgmt:
+        ipv4_address: 172.30.0.3
+    volumes:
+      - admin-data:/admin-data
+      - admin-secrets:/admin-secrets
+      - askbar-mgmt:/mgmt
+      - admin-run:/run/admin
+      - caddy-run:/caddy-run
+      - caddy-secrets:/caddy-secrets
 
   mock-llm:
     profiles: ["dev"]
@@ -39,23 +64,34 @@ services:
     environment:
       MOCK_LLM_HOST: "0.0.0.0"
     command: ["python", "/app/mock_llm.py", "8765"]
+    networks:
+      - edge
     volumes:
       - ./tests/mock_llm.py:/app/mock_llm.py:ro
 
-  # HTTPS front end. Configured from the admin page (Network); nothing secret in this file.
+  # HTTPS front end. Configured by the admin through Caddy's admin socket; nothing secret in this file.
   caddy:
-    profiles: ["tls"]
     build:
       context: .
       dockerfile: Dockerfile.caddy
     image: askbar-caddy:latest
+    container_name: askbar-caddy
     restart: unless-stopped
+    depends_on:
+      server:
+        condition: service_healthy
+      admin:
+        condition: service_healthy
+    networks:
+      - edge
     ports:
-      - "${ASKBAR_TLS_API_PORT:-8443}:8443"
-      - "${ASKBAR_TLS_ADMIN_PORT:-9443}:9443"
+      - "443:443"
+      - "80:80"
     volumes:
       - caddy-data:/data
       - caddy-config:/config
+      - caddy-run:/run/caddy
+      - admin-run:/run/admin
       - caddy-secrets:/caddy-secrets:ro
 
   # --- CLIProxyAPI: use a ChatGPT/Claude/Gemini subscription as an OpenAI-compatible provider. ---
@@ -78,6 +114,8 @@ services:
       cpa-init:
         condition: service_completed_successfully
     command: ["./CLIProxyAPI", "-config", "/cpa-config/config.yaml"]
+    networks:
+      - edge
     volumes:
       - cpa-config:/cpa-config
       - cpa-auth:/root/.cli-proxy-api
@@ -98,10 +136,23 @@ services:
       - "127.0.0.1:8085:8085"
       - "127.0.0.1:51121:51121"
 
+networks:
+  edge:
+  mgmt:
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+
 volumes:
   askbar-secrets:
-  cpa-config:
-  cpa-auth:
+  askbar-mgmt:
+  admin-data:
+  admin-secrets:
+  admin-run:
+  caddy-run:
   caddy-secrets:
   caddy-data:
   caddy-config:
+  cpa-config:
+  cpa-auth:
