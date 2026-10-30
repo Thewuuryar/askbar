@@ -23,11 +23,18 @@
   const title = (t) => (t.length > 60 ? t.slice(0, 59) + '…' : t);
 
   const handlers = {
+    // The look is the server's default for this user (opts.serverUi) with this client's own
+    // overrides (opts.override) on top; `opts.theme` is shorthand for a theme override.
     bootstrap: () => ({
-      ui: {
-        theme: window.__opts.theme || 'auto', width: 720, max_height: 640, history_width: 260,
-        top_percent: 0.22, hide_on_blur: true, macos_hide_dock_icon: true,
-      },
+      ui: Object.assign(
+        {
+          theme: 'auto', width: 720, max_height: 640, history_width: 260,
+          top_percent: 0.22, hide_on_blur: true, macos_hide_dock_icon: true,
+        },
+        window.__opts.serverUi || {},
+        window.__opts.override || {},
+        window.__opts.theme ? { theme: window.__opts.theme } : {},
+      ),
       hotkey: 'Ctrl+Shift+Space', provider: window.__opts.provider || 'mock', model: 'mock-model',
       notice: window.__opts.notice || null,
     }),

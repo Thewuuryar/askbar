@@ -75,7 +75,6 @@ pub struct UiOverrides {
 pub struct ClientConfig {
     pub server_url: String,
     pub hotkey: String,
-    pub active_provider: String,
     pub ui: UiOverrides,
     pub allow_insecure: bool,
 }
@@ -85,7 +84,6 @@ impl Default for ClientConfig {
         Self {
             server_url: String::new(),
             hotkey: "Ctrl+Shift+Space".into(),
-            active_provider: String::new(),
             ui: UiOverrides::default(),
             allow_insecure: false,
         }
@@ -225,9 +223,9 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("askbar-client-yaml-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("client.yaml");
-        std::fs::write(&p, "server_url: https://x.example.com\nactive_provider: mock\nui:\n  width: 600\n  theme: dark\n").unwrap();
+        std::fs::write(&p, "server_url: https://x.example.com\nactive_provider: old-setting-from-v0.2\nui:\n  width: 600\n  theme: dark\n").unwrap();
         let c = ClientConfig::load(&p).unwrap();
-        assert_eq!((c.server_url.as_str(), c.active_provider.as_str(), c.allow_insecure), ("https://x.example.com", "mock", false));
+        assert_eq!((c.server_url.as_str(), c.allow_insecure), ("https://x.example.com", false));
         assert_eq!(c.hotkey, "Ctrl+Shift+Space");
         assert_eq!((c.ui.width, c.ui.theme), (Some(600), Some(Theme::Dark)));
         std::fs::write(&p, "server_url: [oops").unwrap();

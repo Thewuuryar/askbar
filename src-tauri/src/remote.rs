@@ -3,7 +3,7 @@
 use crate::types::{ClientStatus, Emit, ProviderChoice, Settings, StreamEvent};
 use crate::client_config::{check_server_url, merge_ui, ClientConfig};
 use crate::tokens::TokenStore;
-use askbar_proto::{ChatEvent, ChatRequest, Conversation, ConversationDetail, DisplaySettings, Message, ProviderInfo, SseParser};
+use askbar_proto::{ChatEvent, ChatRequest, Conversation, ConversationDetail, DisplaySettings, Message, Prefs, ProviderInfo, SseParser};
 use futures_util::StreamExt;
 use reqwest::{Method, RequestBuilder, StatusCode, Url};
 use std::path::{Path, PathBuf};
@@ -57,6 +57,17 @@ impl Inner {
         lock(&self.cfg).clone()
     }
 
+    /// Pick up hand edits to the hotkey and the display overrides in client.yaml, so
+    /// removing an override takes effect the next time the window opens. The server
+    /// address stays as it was paired.
+    fn refresh_local(&self) {
+        if let Ok(on_disk) = ClientConfig::load(&self.path) {
+            let mut cfg = lock(&self.cfg);
+            cfg.hotkey = on_disk.hotkey;
+            cfg.ui = on_disk.ui;
+        }
+    }
+
     fn url(&self, path: &str) -> Url {
         let mut u = self.base.clone();
         u.set_path(&format!("{}{path}", self.base.path().trim_end_matches('/')));
@@ -91,9 +102,9 @@ impl Inner {
     }
 
     async fn active_provider(&self) -> Result<String, String> {
-        let wanted = self.cfg().active_provider;
-        if !wanted.trim().is_empty() {
-            return Ok(wanted.trim().to_string());
+        let prefs: Prefs = self.get_json("/api/v1/me/prefs").await?;
+        if let Some(id) = prefs.active_provider_id.filter(|id| !id.trim().is_empty()) {
+            return Ok(id);
         }
         let list: Vec<ProviderInfo> = self.get_json("/api/v1/providers").await?;
         list.into_iter().next().map(|p| p.id).ok_or_else(|| "The server has no providers configured yet.".into())
@@ -152,16 +163,24 @@ pub async fn pair(pairing: &str, client_yaml: &Path, tokens: &dyn TokenStore) ->
 impl Remote {
     pub async fn settings(&self) -> Result<Settings, String> {
         let i = self.inner()?;
+        i.refresh_local();
         let cfg = i.cfg();
         // Offline is not an error here: the window still opens with the local
         // look and feel, and `status` tells the user what is wrong.
         let quick = |path: &str| i.request(Method::GET, path).map(|r| r.timeout(CHECK_TIMEOUT));
-        let display = match quick("/api/v1/settings") {
+        let display: DisplaySettings = match quick("/api/v1/me/display-defaults") {
             Ok(req) => match i.send(req).await {
-                Ok(r) => r.json::<askbar_proto::Settings>().await.map(|s| s.display).unwrap_or_default(),
+                Ok(r) => r.json().await.unwrap_or_default(),
                 Err(_) => DisplaySettings::default(),
             },
             Err(_) => DisplaySettings::default(),
+        };
+        let prefs: Prefs = match quick("/api/v1/me/prefs") {
+            Ok(req) => match i.send(req).await {
+                Ok(r) => r.json().await.unwrap_or_default(),
+                Err(_) => Prefs::default(),
+            },
+            Err(_) => Prefs::default(),
         };
         let providers: Vec<ProviderInfo> = match quick("/api/v1/providers") {
             Ok(req) => match i.send(req).await {
@@ -170,12 +189,12 @@ impl Remote {
             },
             Err(_) => Vec::new(),
         };
-        let wanted = cfg.active_provider.trim();
+        let wanted = prefs.active_provider_id.as_deref().unwrap_or("").trim();
         let active = providers.iter().find(|p| wanted.is_empty() || p.id == wanted);
         Ok(Settings {
             ui: merge_ui(&display, &cfg.ui),
             hotkey: cfg.hotkey.clone(),
-            provider: active.map(|p| p.name.clone()).unwrap_or_else(|| wanted.to_string()),
+            provider: active.map(|p| p.name.clone()).unwrap_or_default(),
             model: active.map(|p| p.model.clone()).unwrap_or_default(),
         })
     }
@@ -213,7 +232,8 @@ impl Remote {
             Ok(s) => return Some(ClientStatus::new("problem", format!("The server answered {s}."))),
         }
         let providers: Vec<ProviderInfo> = i.get_json("/api/v1/providers").await.ok()?;
-        let wanted = i.cfg().active_provider;
+        let prefs: Prefs = i.get_json("/api/v1/me/prefs").await.ok()?;
+        let wanted = prefs.active_provider_id.unwrap_or_default();
         let wanted = wanted.trim();
         if providers.is_empty() {
             return Some(ClientStatus::new("problem", "The server has no providers yet. Add one on its admin page."));
@@ -228,11 +248,8 @@ impl Remote {
 
     pub async fn set_active_provider(&self, id: String) -> Result<(), String> {
         let i = self.inner()?;
-        let mut cfg = i.cfg();
-        cfg.active_provider = id;
-        cfg.save(&i.path)?;
-        *lock(&i.cfg) = cfg;
-        Ok(())
+        let req = i.request(Method::PUT, "/api/v1/me/prefs")?.timeout(REQUEST_TIMEOUT).json(&Prefs { active_provider_id: Some(id) });
+        i.send(req).await.map(|_| ())
     }
 
     #[cfg(test)]
@@ -310,6 +327,7 @@ impl Remote {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::client_config::Theme;
     use crate::tokens::MemoryTokens;
     use std::io::{BufRead, BufReader};
     use std::process::{Child, Command, Stdio};
@@ -430,8 +448,22 @@ mod tests {
         (url, token, state)
     }
 
-    fn remote_for(url: &str, token: Option<&str>, active: &str, path: PathBuf) -> Remote {
-        let cfg = ClientConfig { server_url: url.into(), active_provider: active.into(), ..Default::default() };
+    /// The signed-in user's chosen provider lives on the server, so tests set it there.
+    fn choose_provider(state: &Arc<askbar_server::AppState>, id: &str) {
+        state
+            .db
+            .lock()
+            .unwrap()
+            .conn()
+            .execute(
+                "INSERT OR REPLACE INTO user_prefs (user_id, active_provider_id) SELECT id, ?1 FROM users",
+                [id],
+            )
+            .unwrap();
+    }
+
+    fn remote_for(url: &str, token: Option<&str>, path: PathBuf) -> Remote {
+        let cfg = ClientConfig { server_url: url.into(), ..Default::default() };
         let tokens: Box<dyn crate::tokens::TokenStore> = match token {
             Some(t) => Box::new(MemoryTokens::with(t)),
             None => Box::new(MemoryTokens::default()),
@@ -447,12 +479,14 @@ mod tests {
     async fn status_reports_each_problem_with_its_kind() {
         let (url, token, state) = status_server("0.1.0").await;
 
-        assert_eq!(kind(&remote_for(&url, Some(&token), "p0", PathBuf::new())).await, None);
-        assert_eq!(kind(&remote_for(&url, Some(&token), "", PathBuf::new())).await, None, "no active provider means the first one");
-        assert_eq!(kind(&remote_for(&url, None, "p0", PathBuf::new())).await.as_deref(), Some("not_paired"));
-        assert_eq!(kind(&remote_for(&url, Some("abt_wrong"), "p0", PathBuf::new())).await.as_deref(), Some("rejected"));
+        assert_eq!(kind(&remote_for(&url, Some(&token), PathBuf::new())).await, None);
+        choose_provider(&state, "p0");
+        assert_eq!(kind(&remote_for(&url, Some(&token), PathBuf::new())).await, None, "a provider that exists is fine");
+        assert_eq!(kind(&remote_for(&url, None, PathBuf::new())).await.as_deref(), Some("not_paired"));
+        assert_eq!(kind(&remote_for(&url, Some("abt_wrong"), PathBuf::new())).await.as_deref(), Some("rejected"));
 
-        let missing = remote_for(&url, Some(&token), "gone", PathBuf::new()).status().await.unwrap();
+        choose_provider(&state, "gone");
+        let missing = remote_for(&url, Some(&token), PathBuf::new()).status().await.unwrap();
         assert_eq!(missing.kind, "provider_missing");
         assert!(missing.message.contains("no longer exists") && missing.message.contains("Pick another"));
         assert_eq!(
@@ -461,7 +495,8 @@ mod tests {
         );
 
         // Revoking the device turns "ok" into "rejected".
-        let r = remote_for(&url, Some(&token), "p0", PathBuf::new());
+        choose_provider(&state, "p0");
+        let r = remote_for(&url, Some(&token), PathBuf::new());
         assert_eq!(kind(&r).await, None);
         state.db.lock().unwrap().conn().execute("UPDATE devices SET revoked_at = 1", []).unwrap();
         assert_eq!(kind(&r).await.as_deref(), Some("rejected"));
@@ -470,11 +505,11 @@ mod tests {
     #[tokio::test]
     async fn status_reports_update_needed_and_offline() {
         let (url, token, _state) = status_server("99.0.0").await;
-        assert_eq!(kind(&remote_for(&url, Some(&token), "p0", PathBuf::new())).await.as_deref(), Some("update_needed"));
+        assert_eq!(kind(&remote_for(&url, Some(&token), PathBuf::new())).await.as_deref(), Some("update_needed"));
 
         // Nothing listens here: refused immediately, well inside the 2 second budget.
         let started = std::time::Instant::now();
-        let st = remote_for("http://127.0.0.1:1", Some("t"), "p0", PathBuf::new()).status().await.unwrap();
+        let st = remote_for("http://127.0.0.1:1", Some("t"), PathBuf::new()).status().await.unwrap();
         assert_eq!(st.kind, "offline");
         assert!(st.message.starts_with("Server offline"));
         assert!(started.elapsed() < Duration::from_secs(3));
@@ -488,7 +523,7 @@ mod tests {
     async fn no_reachable_server_shows_server_offline() {
         // Paired or not, an unreachable server is reported as offline before anything else.
         for token in [Some("t"), None] {
-            let r = remote_for("http://127.0.0.1:1", token, "p0", PathBuf::new());
+            let r = remote_for("http://127.0.0.1:1", token, PathBuf::new());
             let st = r.status().await.unwrap();
             assert_eq!(st.kind, "offline", "token: {token:?}");
             assert!(st.message.starts_with("Server offline. Could not reach http://127.0.0.1:1"), "{}", st.message);
@@ -500,22 +535,74 @@ mod tests {
             assert!(settings.model.is_empty());
         }
         // Asking for history fails with a message instead of hanging.
-        let r = remote_for("http://127.0.0.1:1", Some("t"), "p0", PathBuf::new());
+        let r = remote_for("http://127.0.0.1:1", Some("t"), PathBuf::new());
         assert!(r.list_conversations().await.is_err());
     }
 
     #[tokio::test]
-    async fn picking_another_provider_is_saved_and_clears_the_state() {
-        let (url, token, _state) = status_server("0.1.0").await;
+    async fn picking_another_provider_is_saved_on_the_server_and_clears_the_state() {
+        let (url, token, state) = status_server("0.1.0").await;
         let dir = std::env::temp_dir().join(format!("askbar-pick-{}", std::process::id()));
         let path = dir.join("client.yaml");
-        let r = remote_for(&url, Some(&token), "gone", path.clone());
+        choose_provider(&state, "gone");
+        let r = remote_for(&url, Some(&token), path.clone());
         assert_eq!(kind(&r).await.as_deref(), Some("provider_missing"));
         r.set_active_provider("p1".into()).await.unwrap();
         assert_eq!(kind(&r).await, None);
-        let saved = ClientConfig::load(&path).unwrap();
-        assert_eq!((saved.active_provider.as_str(), saved.server_url.as_str()), ("p1", url.as_str()));
-        assert!(!std::fs::read_to_string(&path).unwrap().contains("token"));
+        let stored: String =
+            state.db.lock().unwrap().conn().query_row("SELECT active_provider_id FROM user_prefs", [], |r| r.get(0)).unwrap();
+        assert_eq!(stored, "p1");
+        // Nothing about the choice is written to client.yaml (it isn't even created).
+        assert!(!path.exists());
+        assert!(r.set_active_provider("nope".into()).await.is_err(), "an unknown provider is refused");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn the_active_provider_follows_the_user_across_devices() {
+        let (url, token, state) = status_server("0.1.0").await;
+        let second_token = {
+            let db = state.db.lock().unwrap();
+            let user: String = db.conn().query_row("SELECT id FROM users", [], |r| r.get(0)).unwrap();
+            let code = askbar_server::auth::create_pair_code(&db, &user, "second", 600).unwrap();
+            askbar_server::auth::redeem_pair_code(&db, &code).unwrap().unwrap()
+        };
+        let (laptop, desktop) = (remote_for(&url, Some(&token), PathBuf::new()), remote_for(&url, Some(&second_token), PathBuf::new()));
+        assert_eq!(desktop.settings().await.unwrap().provider, "alpha", "the first provider until one is picked");
+        laptop.set_active_provider("p1".into()).await.unwrap();
+        assert_eq!(desktop.settings().await.unwrap().provider, "beta", "picked on one device, used on the other");
+    }
+
+    #[tokio::test]
+    async fn display_defaults_come_from_the_server_and_a_local_override_wins() {
+        let (url, token, state) = status_server("0.1.0").await;
+        state
+            .db
+            .lock()
+            .unwrap()
+            .conn()
+            .execute(
+                "INSERT INTO display_defaults (user_id, value) SELECT id, ?1 FROM users",
+                [r#"{"theme":"dark","width":900,"max_height":700,"history_width":300,"top_percent":0.3,"hide_on_blur":false}"#],
+            )
+            .unwrap();
+        let dir = std::env::temp_dir().join(format!("askbar-overrides-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("client.yaml");
+        let r = remote_for(&url, Some(&token), path.clone());
+
+        // No override: the server's defaults.
+        let ui = r.settings().await.unwrap().ui;
+        assert_eq!((ui.theme, ui.width, ui.hide_on_blur), (Theme::Dark, 900, false));
+
+        // A local override wins for its field only.
+        std::fs::write(&path, format!("server_url: {url}\nui:\n  theme: light\n")).unwrap();
+        let ui = r.settings().await.unwrap().ui;
+        assert_eq!((ui.theme, ui.width), (Theme::Light, 900));
+
+        // Resetting it (removing it) returns the server's default.
+        std::fs::write(&path, format!("server_url: {url}\n")).unwrap();
+        assert_eq!(r.settings().await.unwrap().ui.theme, Theme::Dark);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -549,10 +636,10 @@ mod tests {
         assert!(pair(&s, &path, &MemoryTokens::default()).await.unwrap_err().contains("already used"));
 
         // Re-pairing updates the server but keeps hand-edited settings.
-        std::fs::write(&path, format!("server_url: http://old.invalid\nhotkey: Alt+Space\nactive_provider: beta\nallow_insecure: true\n")).unwrap();
+        std::fs::write(&path, format!("server_url: http://old.invalid\nhotkey: Alt+Space\nallow_insecure: true\n")).unwrap();
         pair(&new_pairing(&state, &url), &path, &tokens).await.unwrap();
         let cfg = ClientConfig::load(&path).unwrap();
-        assert_eq!((cfg.server_url.as_str(), cfg.hotkey.as_str(), cfg.active_provider.as_str(), cfg.allow_insecure), (url.as_str(), "Alt+Space", "beta", true));
+        assert_eq!((cfg.server_url.as_str(), cfg.hotkey.as_str(), cfg.allow_insecure), (url.as_str(), "Alt+Space", true));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

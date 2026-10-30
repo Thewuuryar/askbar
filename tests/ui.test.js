@@ -279,6 +279,29 @@ async function waitIdle(page) {
   });
   await page.context().close();
 
+  // ------------------------------------------------- server defaults and local overrides
+  page = await open(browser, { serverUi: { theme: 'dark', width: 900 } });
+  await step('the look follows the server default for this user', async () => {
+    assert.equal(await page.getAttribute('html', 'data-theme'), 'dark');
+    assert.equal(await page.evaluate(() => document.documentElement.style.getPropertyValue('--card-w')), '900px');
+  });
+  await step('a local override wins, for its own field only', async () => {
+    await page.evaluate(() => { window.__opts.override = { theme: 'light' }; });
+    await page.evaluate(() => window.__listeners['askbar:shown']());
+    await page.waitForFunction(() => document.documentElement.dataset.theme === 'light');
+    assert.equal(await page.evaluate(() => document.documentElement.style.getPropertyValue('--card-w')), '900px', 'width still follows the server');
+  });
+  await step('resetting the override returns the server default', async () => {
+    await page.evaluate(() => { window.__opts.override = null; });
+    await page.evaluate(() => window.__listeners['askbar:shown']());
+    await page.waitForFunction(() => document.documentElement.dataset.theme === 'dark');
+    assert.equal(await page.evaluate(() => document.documentElement.style.getPropertyValue('--card-w')), '900px');
+  });
+  await step('no JavaScript errors with server defaults and overrides', async () => {
+    assert.deepEqual(page.errors, []);
+  });
+  await page.context().close();
+
   // ------------------------------------------------- notice + dark theme
   page = await open(browser, { notice: 'Welcome. Add your API key in /home/u/.config/askbar/config.yaml, then ask away.', theme: 'dark' });
   await step('first-run notice appears, offers the config, and dismisses', async () => {

@@ -112,3 +112,12 @@ Done in R2.3 as agreed (see "Order change"): `Remote.ids` is gone, Tauri command
 ## R2.16 notes
 
 - `GET /api/v1/me/display-defaults` returns the caller's row from `display_defaults`, falling back to the server-wide `display` setting, then the built-ins. Interim setter: `PUT /admin/api/users/{id}/display-defaults` (validated like the existing display settings; 404 for an unknown user). Tests in `tests/display_defaults.rs`. Rust: 145 passed.
+
+## R2.17 notes
+
+- `client.yaml` now holds only the server address and `allow_insecure` (pairing), the hotkey and the display overrides; `active_provider` is gone (an old key in the file is ignored). The device token stays in the keychain.
+- The active provider is read from and written to `GET`/`PUT /api/v1/me/prefs`; with none chosen the client uses the first provider. Display defaults come from `GET /api/v1/me/display-defaults`.
+- To make "resetting an override returns the default" true, `Remote::settings()` re-reads the hotkey and `ui` overrides from `client.yaml` each time the window opens (the server address is never re-read; it stays as paired). Before this, hand edits to `client.yaml` were only picked up at startup.
+- There is no UI for editing overrides (they are still hand-edited in `client.yaml`). The `ui` Node tests drive the mock bridge: server default applies, an override wins for its own field, removing it returns the default. The behaviour itself is tested in Rust against a real server (`display_defaults_come_from_the_server_and_a_local_override_wins`).
+- `tokio` in `src-tauri` now declares the `macros` feature explicitly. It only worked before through workspace feature unification, so a standalone `cargo build -p askbar` (what `npm run build` does) failed to compile `tokio::select!`.
+- Tests: Rust 147 passed; ui 43 (was 39); markdown 19; admin 23.
