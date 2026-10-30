@@ -170,3 +170,10 @@ Deleted the `generate-master-key` command, `secrets::generate_key` and `write_ke
 ## R3.5 notes
 
 Setup mode is gone: `require_ready`, `setup_complete`, `set_secrets`, the `key_set` field of `/admin/api/setup-status` and every "setup is not finished" 503 are deleted, and `AppState` holds `Arc<Secrets>` (no `Option`, no `RwLock`, no `key_path`). `build` is now `(db, secrets, min_client, public_url)`. `setup_mode.rs` (1 test) removed. In `admin_network.rs` the second half of `network_needs_a_session_and_a_master_key` (the no-key 503) was removed with the feature and the test renamed `network_needs_a_session`. Login before any admin password is set still answers 503; that is "no password yet", not setup mode, and is kept. `docs/wire-contract.md` updated. Rust: 140 -> 139.
+
+## Checkpoint R3a (T1)
+
+- Rust: 139 passed, 0 failed (R2 gate 147; -8 rotation, -1 setup mode, -1 key-restore test, +2 key-file tests).
+- Clippy: no errors, 5 pre-existing style warnings.
+- Node: markdown 19, ui 43, admin 21 (-2 with the key wizard and rotation steps), all passing.
+- A fresh start creates the key and the admin setup works without a key step: covered by `ensure_key_file` tests, the admin Node test (setup opens the app with no key screen; `master.key` exists at 0600), and `scripts/smoke.sh` (11 passed, 1 skipped for the person-only check). `smoke.sh` no longer has its master-key branch.

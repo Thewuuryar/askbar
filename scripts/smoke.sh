@@ -89,10 +89,6 @@ if [ $LOCAL = 1 ]; then
       ${3:+-d "$3"} "$ADMIN$2"
   }
   if admin POST /admin/api/setup/password "{\"password\":\"$PW\"}" >/dev/null; then
-    status=$(admin GET /admin/api/setup-status)
-    if [ "$(py 'import json,sys; print(json.loads(sys.argv[1]).get("key_set"))' "$status")" = "False" ]; then
-      admin POST /admin/api/setup/master-key '{}' >/dev/null || fail "create the master key"
-    fi
     pass "first-run setup"
   else
     fail "first-run setup"
