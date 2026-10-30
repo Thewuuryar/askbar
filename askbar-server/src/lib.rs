@@ -123,6 +123,7 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         .route("/api/v1/providers", get(api::providers))
         .route("/api/v1/conversations", get(api::conversations))
         .route("/api/v1/conversations/{id}", get(api::conversation).delete(api::delete_conversation))
+        .route("/api/v1/me/prefs", get(api::get_prefs).put(api::put_prefs))
         .route("/api/v1/search", get(api::search))
         .route("/api/v1/settings", get(api::settings))
         .route("/api/v1/chat", post(chat::chat))

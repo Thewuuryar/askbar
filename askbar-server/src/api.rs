@@ -1,13 +1,13 @@
 //! Read endpoints for a paired device. Every query is scoped to the token's user.
 
 use crate::{auth::DeviceAuth, AppState};
-use askbar_proto::{Conversation, ConversationDetail, DisplaySettings, Message, ProviderInfo, SearchHit, Settings};
+use askbar_proto::{Conversation, ConversationDetail, DisplaySettings, Message, Prefs, ProviderInfo, SearchHit, Settings};
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     Extension, Json,
 };
-use rusqlite::OptionalExtension;
+use rusqlite::{params, OptionalExtension};
 use std::sync::Arc;
 
 type St = State<Arc<AppState>>;
@@ -69,6 +69,35 @@ pub async fn delete_conversation(
         Ok(true) => StatusCode::NO_CONTENT,
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
     }
+}
+
+pub async fn get_prefs(State(state): St, Extension(auth): Extension<DeviceAuth>) -> Res<Prefs> {
+    let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+    let active: Option<Option<String>> = db
+        .conn()
+        .query_row("SELECT active_provider_id FROM user_prefs WHERE user_id = ?1", [&auth.user_id], |r| r.get(0))
+        .optional()
+        .map_err(internal)?;
+    Ok(Json(Prefs { active_provider_id: active.flatten() }))
+}
+
+/// Replaces the caller's preferences. A provider id must name an existing provider.
+pub async fn put_prefs(State(state): St, Extension(auth): Extension<DeviceAuth>, Json(p): Json<Prefs>) -> Res<Prefs> {
+    let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(id) = &p.active_provider_id {
+        let exists = db.conn().query_row("SELECT 1 FROM providers WHERE id = ?1", [id], |_| Ok(())).optional().map_err(internal)?;
+        if exists.is_none() {
+            return Err(StatusCode::NOT_FOUND);
+        }
+    }
+    db.conn()
+        .execute(
+            "INSERT INTO user_prefs (user_id, active_provider_id) VALUES (?1, ?2)
+             ON CONFLICT(user_id) DO UPDATE SET active_provider_id = excluded.active_provider_id",
+            params![auth.user_id, p.active_provider_id],
+        )
+        .map_err(internal)?;
+    Ok(Json(p))
 }
 
 #[derive(serde::Deserialize)]

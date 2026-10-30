@@ -37,6 +37,13 @@ pub struct Message {
     pub created_at: i64,
 }
 
+/// A user's preferences, shared by all of their devices.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Prefs {
+    /// Id of the provider new chats use; `None` means "the server's default".
+    pub active_provider_id: Option<String>,
+}
+
 /// One message that matched a history search.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SearchHit {
