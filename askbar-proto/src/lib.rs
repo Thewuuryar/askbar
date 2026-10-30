@@ -37,6 +37,17 @@ pub struct Message {
     pub created_at: i64,
 }
 
+/// One message that matched a history search.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SearchHit {
+    pub conversation_id: String,
+    pub message_id: String,
+    pub role: String,
+    /// A short excerpt around the match.
+    pub snippet: String,
+    pub created_at: i64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConversationDetail {
     #[serde(flatten)]

@@ -155,6 +155,15 @@ pub struct StoredMessage {
     pub created_at: i64,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct SearchHit {
+    pub conversation_id: String,
+    pub message_id: String,
+    pub role: String,
+    pub snippet: String,
+    pub created_at: i64,
+}
+
 pub struct Db {
     conn: Connection,
 }
@@ -332,6 +341,34 @@ impl Db {
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
+    /// Full-text search over `user_id`'s own messages, best match first. Every word
+    /// must appear; punctuation in `query` is treated as plain text, never as search syntax.
+    pub fn search_messages(&self, user_id: &str, query: &str, limit: usize) -> Result<Vec<SearchHit>, DbError> {
+        let terms: Vec<String> = query
+            .split_whitespace()
+            .map(|t| format!("\"{}\"", t.replace('"', "\"\"")))
+            .collect();
+        if terms.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut stmt = self.conn.prepare(
+            "SELECT m.conversation_id, m.id, m.role, snippet(messages_fts, 0, '', '', '…', 16), m.created_at
+             FROM messages_fts JOIN messages m ON m.rowid = messages_fts.rowid
+             WHERE messages_fts MATCH ?1 AND m.user_id = ?2
+             ORDER BY messages_fts.rank, m.id DESC LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(params![terms.join(" "), user_id, limit as i64], |r| {
+            Ok(SearchHit {
+                conversation_id: r.get(0)?,
+                message_id: r.get(1)?,
+                role: r.get(2)?,
+                snippet: r.get(3)?,
+                created_at: r.get(4)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
     /// Returns true if a conversation was deleted. Its messages go with it.
     pub fn delete_conversation(&self, user_id: &str, id: &str) -> Result<bool, DbError> {
         Ok(self
@@ -406,6 +443,41 @@ mod tests {
         // Untouched for its owner.
         assert_eq!(db.list_conversations(&a).unwrap().len(), 1);
         assert_eq!(db.get_messages(&a, &conv).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn search_finds_a_message_and_never_returns_another_users() {
+        let (db, a) = db_with_user();
+        db.conn.execute("INSERT INTO users (id, name, created_at) VALUES ('B','other',0)", []).unwrap();
+        let mine = db.create_conversation(&a, "mine").unwrap();
+        let theirs = db.create_conversation("B", "theirs").unwrap();
+        let m = db.add_message(&a, &mine, "user", "How do I tame a zebra?").unwrap();
+        db.add_message(&a, &mine, "assistant", "Slowly.").unwrap();
+        db.add_message("B", &theirs, "user", "My zebra is private").unwrap();
+
+        let hits = db.search_messages(&a, "zebra", 20).unwrap();
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert_eq!((hits[0].conversation_id.as_str(), hits[0].message_id.as_str(), hits[0].role.as_str()), (mine.as_str(), m.as_str(), "user"));
+        assert!(hits[0].snippet.contains("zebra"));
+
+        let theirs_only = db.search_messages("B", "zebra", 20).unwrap();
+        assert_eq!(theirs_only.len(), 1);
+        assert_eq!(theirs_only[0].conversation_id, theirs);
+        assert!(db.search_messages("B", "tame", 20).unwrap().is_empty(), "B cannot find A's words");
+
+        // Several words must all match; syntax characters are plain text.
+        assert_eq!(db.search_messages(&a, "tame zebra", 20).unwrap().len(), 1);
+        assert!(db.search_messages(&a, "tame lion", 20).unwrap().is_empty());
+        for odd in ["\"", "zebra OR", "NEAR(", "*", "  ", "a:b", "-zebra"] {
+            assert!(db.search_messages(&a, odd, 20).is_ok(), "{odd:?} must not be a syntax error");
+        }
+
+        // Edited and deleted messages leave the index.
+        db.conn.execute("UPDATE messages SET content = 'giraffe' WHERE id = ?1", [&m]).unwrap();
+        assert!(db.search_messages(&a, "zebra", 20).unwrap().is_empty());
+        assert_eq!(db.search_messages(&a, "giraffe", 20).unwrap().len(), 1);
+        db.delete_conversation(&a, &mine).unwrap();
+        assert!(db.search_messages(&a, "giraffe", 20).unwrap().is_empty());
     }
 
     #[test]

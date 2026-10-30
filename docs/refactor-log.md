@@ -89,3 +89,9 @@ Done in R2.3 as agreed (see "Order change"): `Remote.ids` is gone, Tauri command
   - SKIP "does the desktop client show the streamed reply": **needs a person.** It asks y/n on a terminal; this session had none, so it was not checked and is not recorded as passed.
 - The script's setup steps use today's admin API (password, master key if `key_set` is false, provider, pair code). It will need updating when the key step goes (R3) and again when the admin moves (R4).
 - T1: clippy no errors; Rust 139 passed; markdown 19, ui 39, admin 23 pass.
+
+## R2.12 notes
+
+- Mismatch with the task list: it says to "move" history search onto `messages_fts`, but the server had no search at all. A minimal user-scoped `GET /api/v1/search?q=` (proto `SearchHit`, top 20, all words must match, query text is never FTS syntax, max 200 characters) was added on top of `messages_fts` so the smoke test and R2.12's own test have something to exercise. No client UI uses it yet. Revert this commit if search was meant to be out of scope.
+- Tests: `search_finds_a_message_and_never_returns_another_users` (db) and `search_returns_only_my_matching_messages` (API). The smoke script no longer skips search when the endpoint is missing.
+- Rust: 141 passed.

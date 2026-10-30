@@ -14,7 +14,7 @@ pub mod rotate;
 pub mod secrets;
 pub mod store;
 
-pub use db::{make_title, ConversationSummary, Db, DbError, StoredMessage};
+pub use db::{make_title, ConversationSummary, Db, DbError, SearchHit, StoredMessage};
 use askbar_proto::{Health, PairRequest, PairResponse};
 use axum::{
     extract::{Request, State},
@@ -123,6 +123,7 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         .route("/api/v1/providers", get(api::providers))
         .route("/api/v1/conversations", get(api::conversations))
         .route("/api/v1/conversations/{id}", get(api::conversation).delete(api::delete_conversation))
+        .route("/api/v1/search", get(api::search))
         .route("/api/v1/settings", get(api::settings))
         .route("/api/v1/chat", post(chat::chat))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_device_token));

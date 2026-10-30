@@ -1,4 +1,4 @@
-use askbar_proto::{Conversation, ConversationDetail, ProviderInfo, Settings};
+use askbar_proto::{Conversation, ConversationDetail, ProviderInfo, SearchHit, Settings};
 use askbar_server::{auth, secrets::Secrets, AppState};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -130,4 +130,24 @@ fn client() -> reqwest::Client {
     let mut h = reqwest::header::HeaderMap::new();
     h.insert(askbar_proto::CLIENT_VERSION_HEADER, "0.1.0".parse().unwrap());
     reqwest::Client::builder().default_headers(h).build().unwrap()
+}
+
+#[tokio::test]
+async fn search_returns_only_my_matching_messages() {
+    let t = start().await;
+    let c1 = add_conversation(&t.state, &t.user, "mine", &[("user", "feed the zebra"), ("assistant", "done")]);
+    t.state.db.lock().unwrap().conn().execute("INSERT INTO users (id, name, created_at) VALUES ('U2','other',0)", []).unwrap();
+    add_conversation(&t.state, "U2", "theirs", &[("user", "zebra secrets")]);
+
+    let (st, body) = t.get_text("/api/v1/search?q=zebra").await;
+    assert_eq!(st, 200);
+    let hits: Vec<SearchHit> = serde_json::from_str(&body).unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!((hits[0].conversation_id.as_str(), hits[0].role.as_str()), (c1.as_str(), "user"));
+    assert!(!body.contains("secrets"));
+
+    assert_eq!(t.get_text("/api/v1/search?q=").await, (200, "[]".to_string()));
+    assert_eq!(t.get_text(&format!("/api/v1/search?q={}", "x".repeat(201))).await.0, 400);
+    let r = t.http.get(format!("http://{}/api/v1/search?q=zebra", t.addr)).send().await.unwrap();
+    assert_eq!(r.status(), 401, "search needs a token");
 }

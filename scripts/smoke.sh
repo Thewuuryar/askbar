@@ -173,9 +173,7 @@ print("ok" if ok else "bad", conv, len(text))' "$WORK/chat.sse" 2>/dev/null)
 
   # 9. Search history.
   code=$(api -o "$WORK/search.json" -w '%{http_code}' --get --data-urlencode "q=zebra" "$URL/api/v1/search")
-  if [ "$code" = "404" ]; then
-    skip "search history" "the search endpoint does not exist yet"
-  elif [ "$code" = "200" ] && [ "$(json "$WORK/search.json" 'len(d)')" -ge 1 ] 2>/dev/null; then
+  if [ "$code" = "200" ] && [ "$(json "$WORK/search.json" 'len(d)')" -ge 1 ] 2>/dev/null; then
     pass "search history finds the question"
   else
     fail "search history finds the question" "HTTP $code"
