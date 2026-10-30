@@ -1,3 +1,4 @@
+#![cfg(unix)]
 use askbar_admin::{AdminDb, AdminState};
 use reqwest::Method as M;
 use serde_json::{json, Value};

@@ -1,3 +1,4 @@
+#![cfg(unix)]
 //! The admin site's API against a real in-process server: changes land in `admin.db` and on
 //! the server together, or not at all.
 

@@ -1,8 +1,10 @@
+#[cfg(unix)]
 fn die(msg: impl std::fmt::Display, code: i32) -> ! {
     eprintln!("error: {msg}");
     std::process::exit(code)
 }
 
+#[cfg(unix)]
 #[tokio::main]
 async fn main() {
     if std::env::args().nth(1).as_deref() == Some("healthcheck") {
@@ -20,4 +22,10 @@ async fn main() {
     if let Err(e) = askbar_admin::serve_unix(&askbar_admin::socket_path(), askbar_admin::router(state)).await {
         die(e, 1);
     }
+}
+
+#[cfg(not(unix))]
+fn main() {
+    eprintln!("askbar-admin runs on Linux and other unix systems only");
+    std::process::exit(1);
 }

@@ -1,3 +1,4 @@
+#![cfg(unix)]
 //! The admin side of the management link, against a real in-process server.
 
 use askbar_admin::mgmt::{self, ServerLink};

@@ -1,3 +1,4 @@
+#![cfg(unix)]
 use askbar_admin::{web, AdminDb, AdminState};
 use std::net::SocketAddr;
 use std::sync::Arc;

@@ -1,4 +1,4 @@
-# Builds and tests Askbar on all three desktop platforms.
+# Builds and tests Askbar on all three desktop platforms, and builds the server and admin images.
 # Not yet run: this repo was developed and verified on Linux only.
 name: build
 
@@ -45,3 +45,28 @@ jobs:
           name: askbar-${{ matrix.os }}
           path: |
             target/release/bundle/**/*
+
+  images:
+    # The server and admin container images build, start and answer their own health checks.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build both images
+        run: |
+          docker build --target server -t askbar-server:ci .
+          docker build --target admin -t askbar-admin:ci .
+
+      - name: Each image answers its health check
+        run: |
+          docker run -d --name server -e ASKBAR_MGMT_ADDR=127.0.0.1:8082 askbar-server:ci
+          docker run -d --name admin askbar-admin:ci
+          for c in server admin; do
+            ok=no
+            for i in $(seq 20); do
+              if docker exec "$c" "askbar-$c" healthcheck; then ok=yes; break; fi
+              sleep 1
+            done
+            echo "$c healthy: $ok"
+            [ "$ok" = yes ] || { docker logs "$c"; exit 1; }
+          done

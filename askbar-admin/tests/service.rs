@@ -1,3 +1,4 @@
+#![cfg(unix)]
 use askbar_admin::{auth, db::DbError, AdminDb, AdminState};
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
