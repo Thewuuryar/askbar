@@ -147,3 +147,7 @@ Both are test-infrastructure bugs in `tests/mock_llm.py`. Local run after the fi
 
 - T2 locally (sha ff2fd6e plus the mock fix in 2323caa): clippy no errors; Rust 147 passed; markdown 19, ui 43, admin 23; `scripts/smoke.sh` 11 passed, 1 skipped (the desktop-client check needs a person and is **not** verified).
 - Manual `build.yml` run 41000972542 on sha 2323caa: **success on ubuntu-22.04, windows-latest and macos-latest** (Rust tests, markdown tests, app build). The earlier run 40999611639 failed on macOS and Windows for the mock-LLM reasons logged above. Windows and macOS are build-verified only, not run by hand.
+
+## R3.1 notes
+
+`secrets::ensure_key_file` is called at startup (replacing the `load_key_file` + "setup mode" warning). It loads an existing key, creates one (0600) on a first start, never overwrites, and refuses with an error naming the `askbar-secrets` volume if the key is missing while `providers.api_key_enc` holds data. The wizard/setup-mode code still exists until R3.2–R3.5, but a started server now always has a key. Two tests added; Rust 149 passed.

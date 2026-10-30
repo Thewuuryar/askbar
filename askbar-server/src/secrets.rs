@@ -19,6 +19,12 @@ pub enum SecretsError {
     TooShort,
     #[error("master key file {path}: {message}")]
     File { path: String, message: String },
+    #[error(
+        "the master key {path} is missing, but the database holds encrypted provider keys. \
+         Restore master.key into the `askbar-secrets` volume (back it up separately from data/); \
+         starting without it would lose access to those keys"
+    )]
+    KeyMissing { path: String },
     #[error("stored secret could not be decrypted (wrong master key or corrupted data)")]
     Decrypt,
 }
@@ -46,6 +52,25 @@ pub fn load_key_file(path: &std::path::Path) -> Result<Option<Secrets>, SecretsE
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(file_err(path, e)),
     }
+}
+
+/// Start-up: load the master key, or create one on the very first start.
+///
+/// An existing key file is never overwritten. If the file is missing but the database
+/// already holds encrypted provider keys, creating a new key would make them unreadable
+/// for good, so this refuses and names the volume that should hold the key.
+pub fn ensure_key_file(path: &std::path::Path, db: &crate::Db) -> Result<Secrets, SecretsError> {
+    if let Some(secrets) = load_key_file(path)? {
+        return Ok(secrets);
+    }
+    let stored: i64 = db
+        .conn()
+        .query_row("SELECT COUNT(*) FROM providers WHERE api_key_enc IS NOT NULL AND length(api_key_enc) > 0", [], |r| r.get(0))
+        .map_err(|e| file_err(path, e))?;
+    if stored > 0 {
+        return Err(SecretsError::KeyMissing { path: path.display().to_string() });
+    }
+    generate_key_file(path)
 }
 
 /// Create a fresh random master key at `path` (mode 0600) and return the secrets built from it.
@@ -203,6 +228,53 @@ mod tests {
         assert!(matches!(load_key_file(&path), Err(SecretsError::TooShort)));
         std::fs::write(&path, format!("{}\n", KEY)).unwrap();
         assert!(load_key_file(&path).unwrap().is_some(), "trailing newline is fine");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn temp_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("askbar-ensure-{tag}-{}", ulid::Ulid::new()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    #[test]
+    fn first_start_creates_a_private_key_and_a_restart_reuses_it() {
+        let dir = temp_dir("first");
+        let path = dir.join("secrets").join("master.key");
+        let db = crate::Db::open_in_memory().unwrap();
+
+        let first = ensure_key_file(&path, &db).unwrap();
+        #[cfg(unix)]
+        assert_eq!(std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(&path).unwrap().permissions()) & 0o777, 0o600);
+        let on_disk = std::fs::read_to_string(&path).unwrap();
+
+        let again = ensure_key_file(&path, &db).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), on_disk, "an existing key is never overwritten");
+        assert_eq!(again.decrypt(&first.encrypt("sk-live")).unwrap(), "sk-live", "same key after a restart");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn startup_is_refused_when_the_key_is_missing_but_encrypted_keys_exist() {
+        let dir = temp_dir("missing");
+        let path = dir.join("master.key");
+        let db = crate::Db::open_in_memory().unwrap();
+        let key = Secrets::new(KEY).unwrap();
+        db.conn()
+            .execute(
+                "INSERT INTO providers (id, name, type, model, api_key_enc, created_at) VALUES ('p','x','openai','m',?1,0)",
+                [key.encrypt("sk-live")],
+            )
+            .unwrap();
+
+        let err = ensure_key_file(&path, &db).err().expect("must refuse");
+        assert!(matches!(err, SecretsError::KeyMissing { .. }));
+        assert!(err.to_string().contains("askbar-secrets"), "{err}");
+        assert!(!path.exists(), "no new key is created behind the stored ones");
+
+        // A provider without a key does not need one.
+        db.conn().execute("UPDATE providers SET api_key_enc = NULL", []).unwrap();
+        assert!(ensure_key_file(&path, &db).is_ok());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
