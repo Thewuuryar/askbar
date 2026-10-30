@@ -77,3 +77,7 @@ R2.5: the existing offline check was part of another test; a dedicated test was 
 ## R2.10: no code change
 
 The proto `Conversation` and `Message` types already carried string ids, and `api.rs` and its tests moved to string ULIDs in R2.8 (the schema change forced it). Verified: no `public_id` or integer conversation/message ids remain in `askbar-server` or `askbar-proto`. Rust: 139 passed.
+
+## R2.11: no code change
+
+Done in R2.3 as agreed (see "Order change"): `Remote.ids` is gone, Tauri commands and stream events use string ids, and `ui/main.js:534` (now `row.dataset.id`), `ui.test.js` and `mock-tauri.js` use string ids. Verified with T1: clippy has no errors; Rust 139 passed; markdown 19, ui 39, admin 23 pass.
