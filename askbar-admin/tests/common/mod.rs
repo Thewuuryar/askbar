@@ -59,7 +59,7 @@ pub async fn serve(app: Router) -> String {
 /// An admin wired to a real in-process server and a fake Caddy. `caddy_up = false` leaves the
 /// Caddy socket path in place with nothing listening on it.
 pub async fn start(caddy_up: bool) -> T {
-    let dir = std::env::temp_dir().join(format!("askbar-admintest-{}", ulid::Ulid::new()));
+    let dir = std::env::temp_dir().join(format!("ab-{}", &ulid::Ulid::new().to_string()[16..]));
     std::fs::create_dir_all(&dir).unwrap();
     let (admin_secrets, mgmt_dir) = (dir.join("admin-secrets"), dir.join("askbar-mgmt"));
     let token = mgmt::ensure_token(&admin_secrets, &mgmt_dir).unwrap();
@@ -70,7 +70,7 @@ pub async fn start(caddy_up: bool) -> T {
     let mgmt_url = serve(askbar_server::mgmt::router(server.clone(), mgmt_dir.join(mgmt::HASH_FILE))).await;
 
     let fake = Arc::new(FakeCaddy::default());
-    let caddy_socket = dir.join("caddy-run").join("admin.sock");
+    let caddy_socket = dir.join("c").join("a.sock");
     std::fs::create_dir_all(caddy_socket.parent().unwrap()).unwrap();
     if caddy_up {
         let app = Router::new().route("/load", post(load)).with_state(fake.clone());

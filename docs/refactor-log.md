@@ -390,3 +390,11 @@ A fresh install from empty volumes was exercised piecemeal by me (R4.15-R4.17: `
 - **First-run access is written up as an open item, not solved:** the admin has no TCP port and Caddy serves `admin.<hostname>` only after the admin has been given a hostname. Neither the plan nor the task list says how a first-time visitor gets in; I did not invent one.
 - Versions bumped to 0.3.0 in the four Cargo manifests, `package.json`, `tauri.conf.json` and `Cargo.lock`. The client sends 0.3.0 and the server's `MIN_CLIENT` is 0.3.0.
 - T1: build ok; Rust 166 passed; clippy no errors; markdown 19, ui 43, admin 24; smoke 11 passed, 1 skipped.
+
+## R5.5 notes (build.yml, run 6 on 6c46ef5)
+
+- Windows: all steps green (Rust tests, markdown, app build). `images` job: green (both images build, both health checks pass). So the unix-only gating of `askbar-admin` works on Windows.
+- Ubuntu and macOS **failed** in `askbar-admin` tests, both problems in the tests, not the product:
+  - macOS: `path must be shorter than SUN_LEN`: the test directories (`$TMPDIR/askbar-admintest-<ulid>/caddy-run/admin.sock`) overflow the ~104-byte unix socket path limit on macOS temp dirs. Test directories and socket names are now short (`ab-<8 chars>`, `c/a.sock`); verified locally with a macOS-length `TMPDIR`.
+  - Ubuntu: `the_binary_serves_a_socket_and_opens_no_tcp_port` never saw its socket, because the binary's secrets and management directories default to the container paths `/admin-secrets` and `/mgmt`, which a non-root runner cannot create (it passed here only because this sandbox runs as root). The test now sets `ASKBAR_ADMIN_SECRETS_DIR` and `ASKBAR_MGMT_DIR`.
+- Rust: 166 passed locally after the fixes. A new `build.yml` run is needed to confirm; the laptop client re-test (R5.5) needs a person.

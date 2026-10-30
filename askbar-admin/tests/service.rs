@@ -5,7 +5,8 @@ use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 
 fn temp(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("askbar-admin-{tag}-{}", ulid::Ulid::new()));
+    // Short: a unix socket path must fit in about 100 bytes, and macOS temp dirs are long.
+    let dir = std::env::temp_dir().join(format!("ab-{tag}-{}", &ulid::Ulid::new().to_string()[18..]));
     std::fs::create_dir_all(&dir).unwrap();
     dir
 }
@@ -151,7 +152,14 @@ fn the_binary_serves_a_socket_and_opens_no_tcp_port() {
     let dir = temp("bin");
     let sock = dir.join("admin.sock");
     let bin = env!("CARGO_BIN_EXE_askbar-admin");
-    let envs = [("ASKBAR_ADMIN_SOCKET", sock.to_str().unwrap()), ("ASKBAR_ADMIN_DATA_DIR", dir.to_str().unwrap())];
+    // The secrets and management directories default to absolute container paths a normal user cannot create.
+    let (secrets, mgmt) = (dir.join("secrets"), dir.join("mgmt"));
+    let envs = [
+        ("ASKBAR_ADMIN_SOCKET", sock.to_str().unwrap()),
+        ("ASKBAR_ADMIN_DATA_DIR", dir.to_str().unwrap()),
+        ("ASKBAR_ADMIN_SECRETS_DIR", secrets.to_str().unwrap()),
+        ("ASKBAR_MGMT_DIR", mgmt.to_str().unwrap()),
+    ];
     let mut child = std::process::Command::new(bin).envs(envs).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn().unwrap();
     for _ in 0..100 {
         if sock.exists() {
