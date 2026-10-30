@@ -435,3 +435,26 @@ async fn the_backup_has_the_data_and_none_of_the_secrets() {
     // The live database is untouched by taking a backup.
     assert!(askbar_server::snapshot::current(&s.state.db.lock().unwrap()).unwrap().unwrap().pair_codes.len() == 1);
 }
+
+#[tokio::test]
+async fn users_are_listed_and_a_provider_dropped_from_the_snapshot_loses_its_key() {
+    use reqwest::Method as M;
+    let s = start_with_state().await;
+    let (st, body) = s.call(M::GET, "/mgmt/v1/users", None).await;
+    let users: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!((st, users.as_array().unwrap().len(), users[0]["name"].as_str()), (200, 1, Some("owner")));
+    assert!(users[0]["id"].as_str().unwrap().len() == 26);
+
+    s.push_provider("http://x/v1").await;
+    s.call(M::PUT, "/mgmt/v1/providers/p1/key", Some(json!({ "key": KEY }))).await;
+    s.call(M::PUT, "/mgmt/v1/providers/p2/key", Some(json!({ "key": "sk-other-key-777" }))).await;
+    assert!(s.stored("p1").is_some() && s.stored("p2").is_some());
+
+    // The admin drops p2: its stored key goes with it, p1's stays.
+    let mut next = snapshot();
+    next.providers.retain(|p| p.id == "p1");
+    next.fallback_order.clear();
+    assert_eq!(s.put(&serde_json::to_value(next).unwrap(), Some(TOKEN)).await.0, 200);
+    assert!(s.stored("p2").is_none(), "no key left behind for a deleted provider");
+    assert!(s.stored("p1").is_some());
+}

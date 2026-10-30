@@ -65,6 +65,9 @@ const MIGRATIONS: &[&str] = &[
          device_id  TEXT PRIMARY KEY,
          revoked_at INTEGER NOT NULL
      );",
+    // v3 (additive): whether the server holds an API key for the provider. The key itself
+    // is never stored here.
+    "ALTER TABLE providers ADD COLUMN has_key INTEGER NOT NULL DEFAULT 0;",
 ];
 
 #[derive(Debug, thiserror::Error)]

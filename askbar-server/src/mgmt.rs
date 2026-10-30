@@ -89,7 +89,19 @@ async fn put_snapshot(State(state): State<Arc<AppState>>, Json(s): Json<Snapshot
     }
     let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
     match crate::snapshot::save(&db, &s) {
-        Ok(version) => Ok(Json(serde_json::json!({ "version": version }))),
+        Ok(version) => {
+            // A provider the admin no longer lists must not keep its encrypted key around.
+            let keep: std::collections::BTreeSet<&str> = s.providers.iter().map(|p| p.id.as_str()).collect();
+            let stored: Vec<String> = db
+                .conn()
+                .prepare("SELECT id FROM providers")
+                .and_then(|mut st| st.query_map([], |r| r.get(0))?.collect())
+                .unwrap_or_default();
+            for id in stored.iter().filter(|id| !keep.contains(id.as_str())) {
+                let _ = db.conn().execute("DELETE FROM providers WHERE id = ?1", [id]);
+            }
+            Ok(Json(serde_json::json!({ "version": version })))
+        }
         Err(_) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": "could not store the snapshot" })))),
     }
 }
@@ -160,6 +172,17 @@ async fn test_provider(State(state): State<Arc<AppState>>, Path(id): Path<String
         .ok_or_else(|| fail(StatusCode::NOT_FOUND, "No such provider."))
 }
 
+/// The users, oldest first: `[{"id", "name"}]`. Pairing codes are made for one of these.
+async fn list_users(State(state): State<Arc<AppState>>) -> Result<Json<serde_json::Value>, Failure> {
+    let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+    let read = || -> rusqlite::Result<Vec<serde_json::Value>> {
+        let mut stmt = db.conn().prepare("SELECT id, name FROM users ORDER BY created_at, id")?;
+        let rows = stmt.query_map([], |r| Ok(serde_json::json!({ "id": r.get::<_, String>(0)?, "name": r.get::<_, String>(1)? })))?.collect();
+        rows
+    };
+    read().map(|v| Json(serde_json::Value::Array(v))).map_err(|_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not read the users."))
+}
+
 /// Every paired device, newest first.
 async fn list_devices(State(state): State<Arc<AppState>>) -> Result<Json<Vec<crate::auth::DeviceRow>>, Failure> {
     let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
@@ -200,6 +223,7 @@ pub fn router(state: Arc<AppState>, hash_file: PathBuf) -> Router {
         .route("/mgmt/v1/snapshot", put(put_snapshot))
         .route("/mgmt/v1/providers/{id}/key", put(put_provider_key))
         .route("/mgmt/v1/providers/{id}/test", post(test_provider))
+        .route("/mgmt/v1/users", get(list_users))
         .route("/mgmt/v1/devices", get(list_devices))
         .route("/mgmt/v1/usage", get(usage))
         .route("/mgmt/v1/backup", get(backup))

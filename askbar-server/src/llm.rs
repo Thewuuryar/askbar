@@ -11,8 +11,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 use tokio::sync::oneshot;
 
-pub const DEFAULT_SYSTEM_PROMPT: &str = "You are a fast, concise assistant in a quick-question popup. \
-Answer directly. Use Markdown when it helps. You cannot access the user's computer, files, or the internet.";
+pub use askbar_proto::DEFAULT_SYSTEM_PROMPT;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

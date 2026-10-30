@@ -56,10 +56,10 @@ impl T {
 #[tokio::test]
 async fn password_is_stored_as_an_argon2_hash_and_set_only_once() {
     let t = start(PASSWORD).await;
-    let stored: String = t.state.db.lock().unwrap().conn().query_row("SELECT password_hash FROM admin_credentials", [], |r| r.get(0)).unwrap();
+    let stored: String = t.state.db.lock().await.conn().query_row("SELECT password_hash FROM admin_credentials", [], |r| r.get(0)).unwrap();
     assert!(stored.starts_with("$argon2") && !stored.contains(PASSWORD));
     // A later start with a different value does not overwrite it.
-    assert!(!web::init_password(&t.state.db.lock().unwrap(), "something else").unwrap());
+    assert!(!web::init_password(&*t.state.db.lock().await, "something else").unwrap());
     assert_eq!(t.login(PASSWORD).await.status(), 204);
 }
 

@@ -1,6 +1,7 @@
 //! The Askbar admin service. It owns `admin.db` and the admin site, and talks to the server
 //! only through the server's management API. It listens on a unix socket, never on a TCP port.
 
+pub mod api;
 pub mod auth;
 pub mod db;
 pub mod mgmt;
@@ -9,15 +10,17 @@ pub mod web;
 use axum::{
     http::StatusCode,
     middleware,
-    routing::{get, post},
+    routing::{get, post, put},
     Router,
 };
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 pub use db::AdminDb;
 
 pub struct AdminState {
+    /// Async lock: a change holds it while it waits for the server to accept the new snapshot.
     pub db: Arc<Mutex<AdminDb>>,
     pub auth: auth::AdminAuth,
     /// The link to the server; `None` in tests that don't need one.
@@ -59,6 +62,16 @@ pub fn router(state: Arc<AdminState>) -> Router {
         .route("/admin/session", get(|| async { StatusCode::NO_CONTENT }))
         .route("/admin/logout", post(web::logout))
         .route("/admin/api/password", post(web::change_password))
+        .route("/admin/api/status", get(api::status))
+        .route("/admin/api/providers", get(api::list_providers).post(api::create_provider))
+        .route("/admin/api/providers/{id}", put(api::update_provider).delete(api::delete_provider))
+        .route("/admin/api/providers/{id}/test", post(api::test_provider))
+        .route("/admin/api/devices", get(api::list_devices))
+        .route("/admin/api/devices/{id}/revoke", post(api::revoke_device))
+        .route("/admin/api/pair", post(api::create_pairing))
+        .route("/admin/api/settings", get(api::get_settings).put(api::put_settings))
+        .route("/admin/api/users/{id}/display-defaults", put(api::put_user_display))
+        .route("/admin/api/backup", get(api::backup))
         .route_layer(middleware::from_fn_with_state(state.clone(), web::require_session));
     Router::new()
         .route("/health", get(|| async { (StatusCode::OK, "ok") }))

@@ -64,8 +64,8 @@ fn set_cookie(headers: &HeaderMap, value: &str, max_age: i64) -> HeaderValue {
     HeaderValue::from_str(&c).expect("cookie is plain ASCII")
 }
 
-fn stored_hash(state: &AdminState) -> Option<String> {
-    let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+async fn stored_hash(state: &AdminState) -> Option<String> {
+    let db = state.db.lock().await;
     db.conn().query_row("SELECT password_hash FROM admin_credentials WHERE id = 1", [], |r| r.get(0)).optional().ok().flatten()
 }
 
@@ -136,7 +136,7 @@ pub async fn login(State(state): State<Arc<AdminState>>, headers: HeaderMap, Jso
         r.headers_mut().insert(header::RETRY_AFTER, HeaderValue::from(secs));
         return r;
     }
-    let Some(stored) = stored_hash(&state) else {
+    let Some(stored) = stored_hash(&state).await else {
         // No password yet: the setup page has to create one first.
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
@@ -162,7 +162,7 @@ pub async fn logout(State(state): State<Arc<AdminState>>, headers: HeaderMap) ->
 
 /// What the setup page needs to decide which screen to show. Booleans only.
 pub async fn setup_status(State(state): State<Arc<AdminState>>) -> Json<serde_json::Value> {
-    Json(serde_json::json!({ "password_set": stored_hash(&state).is_some() }))
+    Json(serde_json::json!({ "password_set": stored_hash(&state).await.is_some() }))
 }
 
 /// First run: the first visitor chooses the admin password and is signed in. Refused once one exists.
@@ -175,7 +175,7 @@ pub async fn setup_password(State(state): State<Arc<AdminState>>, headers: Heade
         .and_then(Result::ok)
         .ok_or_else(|| err(StatusCode::INTERNAL_SERVER_ERROR, "Could not hash the password."))?;
     {
-        let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+        let db = state.db.lock().await;
         // INSERT OR IGNORE: if two visitors race, exactly one row lands.
         let n = db
             .conn()
@@ -205,7 +205,7 @@ pub async fn change_password(State(state): State<Arc<AdminState>>, headers: Head
     if state.auth.lockout_remaining().is_some() {
         return Err(err(StatusCode::TOO_MANY_REQUESTS, "Too many attempts. Try again later."));
     }
-    let stored = stored_hash(&state).ok_or_else(|| err(StatusCode::CONFLICT, "No password is set."))?;
+    let stored = stored_hash(&state).await.ok_or_else(|| err(StatusCode::CONFLICT, "No password is set."))?;
     if !verify(stored, body.current).await {
         state.auth.record_failure();
         // 403, not 401: the page treats 401 as "signed out".
@@ -220,7 +220,7 @@ pub async fn change_password(State(state): State<Arc<AdminState>>, headers: Head
         .and_then(Result::ok)
         .ok_or_else(|| err(StatusCode::INTERNAL_SERVER_ERROR, "Could not hash the password."))?;
     {
-        let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+        let db = state.db.lock().await;
         db.conn()
             .execute("UPDATE admin_credentials SET password_hash = ?1, updated_at = ?2 WHERE id = 1", rusqlite::params![hash, crate::auth::now()])
             .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Could not save the password."))?;

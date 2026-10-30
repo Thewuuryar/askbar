@@ -13,7 +13,8 @@ use rusqlite::OptionalExtension;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex as StdMutex};
+use tokio::sync::Mutex;
 use std::time::Duration;
 use tokio::sync::Notify;
 
@@ -86,16 +87,16 @@ pub fn ensure_token(secrets_dir: &Path, mgmt_dir: &Path) -> std::io::Result<Stri
 
 // ------------------------------------------------------------------ the snapshot
 
-fn setting(db: &AdminDb, key: &str) -> rusqlite::Result<Option<String>> {
-    db.conn().query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| r.get(0)).optional()
+fn setting(conn: &rusqlite::Connection, key: &str) -> rusqlite::Result<Option<String>> {
+    conn.query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| r.get(0)).optional()
 }
 
 /// The snapshot of everything in `admin.db` the server needs. `user_id` is the one user a
 /// pairing code belongs to; the admin keeps codes per user already.
-pub fn build_snapshot(db: &AdminDb) -> rusqlite::Result<Snapshot> {
+pub fn build_snapshot(conn: &rusqlite::Connection) -> rusqlite::Result<Snapshot> {
     let mut providers = Vec::new();
     {
-        let mut stmt = db.conn().prepare("SELECT id, name, type, base_url, model, max_tokens, temperature, headers FROM providers ORDER BY name")?;
+        let mut stmt = conn.prepare("SELECT id, name, type, base_url, model, max_tokens, temperature, headers FROM providers ORDER BY name")?;
         let rows = stmt.query_map([], |r| {
             Ok(SnapshotProvider {
                 id: r.get(0)?,
@@ -113,13 +114,13 @@ pub fn build_snapshot(db: &AdminDb) -> rusqlite::Result<Snapshot> {
         }
     }
     let known = |id: &String| providers.iter().any(|p| &p.id == id);
-    let default_provider_id = setting(db, "default_provider_id")?.filter(known);
+    let default_provider_id = setting(conn, "default_provider_id")?.filter(known);
     let fallback_order: Vec<String> =
-        setting(db, "fallback_order")?.and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok()).unwrap_or_default().into_iter().filter(known).collect();
-    let display: DisplaySettings = setting(db, "display")?.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+        setting(conn, "fallback_order")?.and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok()).unwrap_or_default().into_iter().filter(known).collect();
+    let display: DisplaySettings = setting(conn, "display")?.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
     let mut user_display_defaults = std::collections::BTreeMap::new();
     {
-        let mut stmt = db.conn().prepare("SELECT user_id, value FROM display_defaults")?;
+        let mut stmt = conn.prepare("SELECT user_id, value FROM display_defaults")?;
         for row in stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
             let (user, value) = row?;
             if let Ok(d) = serde_json::from_str(&value) {
@@ -129,7 +130,7 @@ pub fn build_snapshot(db: &AdminDb) -> rusqlite::Result<Snapshot> {
     }
     let mut pair_codes = Vec::new();
     {
-        let mut stmt = db.conn().prepare("SELECT hash, user_id, device_name, expires_at FROM pair_codes WHERE expires_at > ?1 ORDER BY created_at")?;
+        let mut stmt = conn.prepare("SELECT hash, user_id, device_name, expires_at FROM pair_codes WHERE expires_at > ?1 ORDER BY created_at")?;
         for c in stmt.query_map([crate::auth::now()], |r| {
             Ok(SnapshotPairCode { hash: r.get(0)?, user_id: r.get(1)?, device_name: r.get(2)?, expires_at: r.get(3)? })
         })? {
@@ -137,25 +138,25 @@ pub fn build_snapshot(db: &AdminDb) -> rusqlite::Result<Snapshot> {
         }
     }
     let revoked_device_ids = {
-        let mut stmt = db.conn().prepare("SELECT device_id FROM revoked_devices ORDER BY device_id")?;
+        let mut stmt = conn.prepare("SELECT device_id FROM revoked_devices ORDER BY device_id")?;
         let ids = stmt.query_map([], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
         ids
     };
     let (daily, monthly, kill): (Option<i64>, Option<i64>, i64) =
-        db.conn().query_row("SELECT daily_tokens, monthly_tokens, kill_switch FROM budgets WHERE id = 1", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        conn.query_row("SELECT daily_tokens, monthly_tokens, kill_switch FROM budgets WHERE id = 1", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
     Ok(Snapshot {
         version: 0,
         providers,
         default_provider_id,
         fallback_order,
-        system_prompt: setting(db, "system_prompt")?,
+        system_prompt: setting(conn, "system_prompt")?,
         display,
         user_display_defaults,
         pair_codes,
         revoked_device_ids,
         budget: Budget { daily_tokens: daily.map(|v| v as u64), monthly_tokens: monthly.map(|v| v as u64) },
         kill_switch: kill != 0,
-        audit_retention_days: setting(db, "audit_retention_days")?.and_then(|s| s.parse().ok()).unwrap_or(30),
+        audit_retention_days: setting(conn, "audit_retention_days")?.and_then(|s| s.parse().ok()).unwrap_or(30),
     })
 }
 
@@ -178,7 +179,7 @@ pub struct ServerLink {
     token: String,
     online: AtomicBool,
     last_version: AtomicU64,
-    last_error: Mutex<Option<String>>,
+    last_error: StdMutex<Option<String>>,
     dirty: AtomicBool,
     wake: Notify,
 }
@@ -191,7 +192,7 @@ impl ServerLink {
             token,
             online: AtomicBool::new(false),
             last_version: AtomicU64::new(0),
-            last_error: Mutex::new(None),
+            last_error: StdMutex::new(None),
             // A fresh admin has never pushed, so it starts out needing to.
             dirty: AtomicBool::new(true),
             wake: Notify::new(),
@@ -268,6 +269,38 @@ impl ServerLink {
         result
     }
 
+    /// Any management call. Returns the status and body of whatever the server answered, or
+    /// `Unreachable` if it did not answer at all (which also marks it offline).
+    pub async fn request(&self, method: reqwest::Method, path: &str, body: Option<&serde_json::Value>) -> Result<(u16, Vec<u8>), PushError> {
+        let mut req = self.http.request(method, format!("{}{path}", self.base)).bearer_auth(&self.token);
+        if let Some(b) = body {
+            req = req.json(b);
+        }
+        match req.send().await {
+            Ok(resp) => {
+                let status = resp.status().as_u16();
+                let bytes = resp.bytes().await.map_err(|e| PushError::Unreachable(e.to_string()))?;
+                self.online.store(true, Ordering::Relaxed);
+                Ok((status, bytes.to_vec()))
+            }
+            Err(e) => {
+                self.online.store(false, Ordering::Relaxed);
+                *self.last_error.lock().unwrap_or_else(|e| e.into_inner()) = Some(e.to_string());
+                Err(PushError::Unreachable(e.to_string()))
+            }
+        }
+    }
+
+    /// Hand the server a provider's API key. It is encrypted there; this side never keeps it.
+    pub async fn put_key(&self, provider_id: &str, key: &str) -> Result<(), PushError> {
+        let (status, body) = self.request(reqwest::Method::PUT, &format!("/mgmt/v1/providers/{provider_id}/key"), Some(&serde_json::json!({ "key": key }))).await?;
+        if status == 204 {
+            Ok(())
+        } else {
+            Err(PushError::Refused { status, body: String::from_utf8_lossy(&body).into_owned() })
+        }
+    }
+
     /// Is the server there? Updates the online state; a server that is back after being
     /// away is sent the snapshot again.
     pub async fn check(&self) -> bool {
@@ -295,7 +328,7 @@ impl ServerLink {
         let mut pause = Duration::from_secs(1);
         loop {
             if self.dirty.swap(false, Ordering::Relaxed) {
-                let snapshot = { build_snapshot(&db.lock().unwrap_or_else(|e| e.into_inner())) };
+                let snapshot = { build_snapshot(db.lock().await.conn()) };
                 let result = match snapshot {
                     Ok(s) => self.push(&s).await,
                     Err(e) => Err(PushError::Build(e.to_string())),

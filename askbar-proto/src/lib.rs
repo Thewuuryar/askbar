@@ -1,6 +1,10 @@
 //! Wire types shared by the Askbar server and client.
 //! IDs are server-generated ULIDs; timestamps are UTC unix seconds.
 
+/// What the model is told when no system prompt has been set.
+pub const DEFAULT_SYSTEM_PROMPT: &str = "You are a fast, concise assistant in a quick-question popup. \
+Answer directly. Use Markdown when it helps. You cannot access the user's computer, files, or the internet.";
+
 mod sse;
 pub use sse::{SseEvent, SseParser};
 

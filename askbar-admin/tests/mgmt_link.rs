@@ -6,7 +6,8 @@ use askbar_server::{secrets::Secrets, AppState};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use std::time::Duration;
 
 fn temp(tag: &str) -> PathBuf {
@@ -111,7 +112,7 @@ fn the_snapshot_is_built_from_admin_db() {
     let db = admin_db_with_data();
     db.conn().execute("INSERT INTO pair_codes (hash, user_id, device_name, expires_at, created_at) VALUES ('h1','u1','laptop', 4000000000, 0)", []).unwrap();
     db.conn().execute("INSERT INTO pair_codes (hash, user_id, device_name, expires_at, created_at) VALUES ('old','u1','x', 1, 0)", []).unwrap();
-    let s = mgmt::build_snapshot(&db).unwrap();
+    let s = mgmt::build_snapshot(db.conn()).unwrap();
     assert_eq!(s.providers.len(), 1);
     assert_eq!((s.providers[0].id.as_str(), s.providers[0].model.as_str(), s.providers[0].max_tokens), ("p1", "m1", Some(100)));
     assert_eq!((s.default_provider_id.as_deref(), s.system_prompt.as_deref(), s.audit_retention_days), (Some("p1"), Some("Be brief."), 14));
@@ -120,7 +121,7 @@ fn the_snapshot_is_built_from_admin_db() {
     assert_eq!(s.pair_codes.len(), 1, "an expired code is not sent");
     assert_eq!(s.pair_codes[0].hash, "h1");
     // A fresh database gives a valid, empty snapshot.
-    let empty = mgmt::build_snapshot(&AdminDb::open_in_memory().unwrap()).unwrap();
+    let empty = mgmt::build_snapshot(AdminDb::open_in_memory().unwrap().conn()).unwrap();
     assert_eq!((empty.providers.len(), empty.audit_retention_days, empty.kill_switch), (0, 30, false));
 }
 
@@ -136,13 +137,13 @@ async fn a_push_applies_on_the_server() {
     let link = ServerLink::new(&format!("http://{addr}"), token);
     assert!(!link.server_online(), "unknown until it has been in touch");
     let db = admin_db_with_data();
-    let v = link.push(&mgmt::build_snapshot(&db).unwrap()).await.unwrap();
+    let v = link.push(&mgmt::build_snapshot(db.conn()).unwrap()).await.unwrap();
     assert_eq!(v, 1);
     assert!(link.server_online());
     assert_eq!(link.last_version(), 1);
     let stored = askbar_server::snapshot::current(&state.db.lock().unwrap()).unwrap().unwrap();
     assert_eq!((stored.version, stored.providers.len(), stored.audit_retention_days, stored.kill_switch), (1, 1, 14, true));
-    assert_eq!(link.push(&mgmt::build_snapshot(&db).unwrap()).await.unwrap(), 2, "the server numbers each one");
+    assert_eq!(link.push(&mgmt::build_snapshot(db.conn()).unwrap()).await.unwrap(), 2, "the server numbers each one");
 }
 
 #[tokio::test]
@@ -151,7 +152,7 @@ async fn an_unreachable_server_is_reported_as_offline_and_a_wrong_token_as_a_ref
     let token = mgmt::ensure_token(&d.secrets, &d.mgmt).unwrap();
     let dead = free_port().await;
     let link = ServerLink::new(&format!("http://{dead}"), token.clone());
-    let snap = mgmt::build_snapshot(&AdminDb::open_in_memory().unwrap()).unwrap();
+    let snap = mgmt::build_snapshot(AdminDb::open_in_memory().unwrap().conn()).unwrap();
     assert!(matches!(link.push(&snap).await, Err(mgmt::PushError::Unreachable(_))));
     assert!(!link.server_online());
     assert!(link.last_error().is_some());
@@ -198,7 +199,7 @@ async fn pushing_retries_until_the_server_is_up_and_follows_later_changes() {
     assert!(link.server_online() && !link.pending());
 
     // A change in admin.db reaches it after mark_dirty.
-    db.lock().unwrap().conn().execute("INSERT INTO providers (id, name, type, model, created_at) VALUES ('p2','second','anthropic','m2',0)", []).unwrap();
+    db.lock().await.conn().execute("INSERT INTO providers (id, name, type, model, created_at) VALUES ('p2','second','anthropic','m2',0)", []).unwrap();
     link.mark_dirty();
     for _ in 0..50 {
         if applied(2) {
