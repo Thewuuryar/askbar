@@ -36,7 +36,10 @@ impl Server {
         r.send().await.unwrap().status().as_u16()
     }
     fn code(&self, ttl: i64) -> String {
-        auth::create_pair_code(&self.state.db.lock().unwrap(), &self.user, "laptop", ttl).unwrap()
+        let db = self.state.db.lock().unwrap();
+        let code = auth::create_pair_code(&db, &self.user, "laptop", ttl).unwrap();
+        askbar_server::bridge::rebuild(&db).unwrap();
+        code
     }
     async fn token(&self) -> String {
         let r = self.pair(&self.code(600)).await;

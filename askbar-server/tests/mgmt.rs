@@ -356,6 +356,7 @@ async fn devices_and_usage_are_listed_over_the_management_api() {
         let user: String = db.conn().query_row("SELECT id FROM users", [], |r| r.get(0)).unwrap();
         for name in ["Work laptop", "Phone"] {
             let code = askbar_server::auth::create_pair_code(&db, &user, name, 600).unwrap();
+            askbar_server::bridge::rebuild(&db).unwrap();
             askbar_server::auth::redeem_pair_code(&db, &code).unwrap().unwrap();
         }
         let c = db.create_conversation(&user, "chat").unwrap();

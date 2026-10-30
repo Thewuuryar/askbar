@@ -62,6 +62,7 @@ impl T {
         let db = self.state.db.lock().unwrap();
         let user: String = db.conn().query_row("SELECT id FROM users", [], |r| r.get(0)).unwrap();
         let code = auth::create_pair_code(&db, &user, "d", 600).unwrap();
+        askbar_server::bridge::rebuild(&db).unwrap();
         auth::redeem_pair_code(&db, &code).unwrap().unwrap()
     }
 }

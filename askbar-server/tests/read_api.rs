@@ -36,6 +36,7 @@ async fn start() -> T {
         .unwrap();
     let code = auth::create_pair_code(&db, &user, "t", 600).unwrap();
     askbar_server::bridge::rebuild(&db).unwrap();
+    askbar_server::bridge::rebuild(&db).unwrap();
     let state = AppState::new(db, secrets, askbar_server::MIN_CLIENT, "http://localhost:8080");
     let token = auth::redeem_pair_code(&state.db.lock().unwrap(), &code).unwrap().unwrap();
     let app = askbar_server::api_router(state.clone());
@@ -169,7 +170,9 @@ async fn prefs_are_shared_by_a_users_devices_and_not_by_other_users() {
         let db = t.state.db.lock().unwrap();
         db.conn().execute("INSERT INTO users (id, name, created_at) VALUES ('U2','other',0)", []).unwrap();
         let c1 = auth::create_pair_code(&db, &t.user, "second device", 600).unwrap();
+        askbar_server::bridge::rebuild(&db).unwrap();
         let c2 = auth::create_pair_code(&db, "U2", "their device", 600).unwrap();
+        askbar_server::bridge::rebuild(&db).unwrap();
         (auth::redeem_pair_code(&db, &c1).unwrap().unwrap(), auth::redeem_pair_code(&db, &c2).unwrap().unwrap())
     };
 

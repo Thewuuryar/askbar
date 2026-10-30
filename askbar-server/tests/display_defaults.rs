@@ -29,6 +29,7 @@ async fn start() -> T {
     admin::init_password(&db, PASSWORD).unwrap();
     db.conn().execute("INSERT INTO users (id, name, created_at) VALUES ('B','other',0)", []).unwrap();
     let (ca, cb) = (auth::create_pair_code(&db, &user_a, "a", 600).unwrap(), auth::create_pair_code(&db, "B", "b", 600).unwrap());
+    askbar_server::bridge::rebuild(&db).unwrap();
     let state = AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), askbar_server::MIN_CLIENT, "http://localhost:8080");
     let (token_a, token_b) = {
         let db = state.db.lock().unwrap();

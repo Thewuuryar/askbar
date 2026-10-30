@@ -370,6 +370,7 @@ mod tests {
             .unwrap();
         let code = auth::create_pair_code(&db, &user, "test", 600).unwrap();
         askbar_server::bridge::rebuild(&db).unwrap();
+        askbar_server::bridge::rebuild(&db).unwrap();
         let state: Arc<AppState> = AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), "0.1.0", "http://localhost:8080");
         let token = auth::redeem_pair_code(&state.db.lock().unwrap(), &code).unwrap().unwrap();
         let app = askbar_server::api_router(state);
@@ -440,6 +441,7 @@ mod tests {
                 .unwrap();
         }
         let code = auth::create_pair_code(&db, &user, "test", 600).unwrap();
+        askbar_server::bridge::rebuild(&db).unwrap();
         askbar_server::bridge::rebuild(&db).unwrap();
         let state = AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), min_client, "http://localhost:8080");
         let token = auth::redeem_pair_code(&state.db.lock().unwrap(), &code).unwrap().unwrap();
@@ -567,6 +569,7 @@ mod tests {
             let db = state.db.lock().unwrap();
             let user: String = db.conn().query_row("SELECT id FROM users", [], |r| r.get(0)).unwrap();
             let code = askbar_server::auth::create_pair_code(&db, &user, "second", 600).unwrap();
+            askbar_server::bridge::rebuild(&db).unwrap();
             askbar_server::auth::redeem_pair_code(&db, &code).unwrap().unwrap()
         };
         let (laptop, desktop) = (remote_for(&url, Some(&token), PathBuf::new()), remote_for(&url, Some(&second_token), PathBuf::new()));
@@ -613,6 +616,7 @@ mod tests {
         let db = state.db.lock().unwrap();
         let user: String = db.conn().query_row("SELECT id FROM users", [], |r| r.get(0)).unwrap();
         let code = askbar_server::auth::create_pair_code(&db, &user, "second profile", 600).unwrap();
+        askbar_server::bridge::rebuild(&db).unwrap();
         askbar_proto::encode_pairing(url, &code)
     }
 

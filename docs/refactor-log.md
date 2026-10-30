@@ -234,3 +234,13 @@ Rust 151 passed, 0 failed; clippy no errors (same 4 pre-existing style warnings)
 - This changed semantics slightly: a provider that is in the snapshot but has no stored key is now found by the test endpoint (it runs and fails at the provider) instead of 404; the R4.3 test was updated to say so.
 - Tests that seed tables directly (`chat`, `read_api`, the client's `remote.rs` tests) now call `bridge::rebuild` after seeding, as the old admin would. New `tests/bridge.rs` (3): changing a provider in the old admin changes `GET /api/v1/providers` (create, edit, delete, refused change leaves it alone); the snapshot holds no key and is rebuilt at start-up; the client order follows default and fallbacks.
 - T1: clippy no errors; Rust 154 passed; markdown 19, ui 43, admin 21; smoke 11 passed, 1 skipped (person-only).
+
+## R4.6 notes
+
+- `redeem_pair_code` now finds the code's hash in the current snapshot (unexpired), then inserts it into `redeemed_codes` (primary key = at most once, even for racing requests) and creates the device named from the snapshot entry. The old `pair_codes.used` flag is no longer written; the bridge leaves already-redeemed hashes out of the snapshot it builds.
+- `authenticate` refuses a device whose id is in the snapshot's `revoked_device_ids` as well as one with `devices.revoked_at` set (the old admin still sets `revoked_at`; the new admin will push ids; both work).
+- Every test that created a pair code and redeemed it directly now calls `bridge::rebuild` in between, as the old admin does after a change.
+- New `tests/snapshot_auth.rs` (3): a code pairs once and a reused code fails (also after the admin pushes it again); unknown/expired/no-snapshot codes fail and six racing redemptions give exactly one device; a device listed as revoked only in the snapshot gets 401, and works again when the snapshot no longer lists it.
+- **Disk:** the build tree reached 27 GB and filled the disk once mid-task; I removed `target/debug/incremental` and now build with `CARGO_INCREMENTAL=0`.
+- One run of `another_user_cannot_read_or_continue_my_conversation` (chat.rs) timed out waiting for the reply right after the disk-full rebuild; eight reruns and the full suite pass. Unreproduced.
+- T1: clippy no errors; Rust 157 passed; markdown 19, ui 43, admin 21; smoke 11 passed, 1 skipped.

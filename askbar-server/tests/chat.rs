@@ -66,6 +66,7 @@ async fn start() -> T {
         .unwrap();
     let code = auth::create_pair_code(&db, &user, "t", 600).unwrap();
     askbar_server::bridge::rebuild(&db).unwrap();
+    askbar_server::bridge::rebuild(&db).unwrap();
     let state = AppState::new(db, secrets, askbar_server::MIN_CLIENT, "http://localhost:8080");
     let token = auth::redeem_pair_code(&state.db.lock().unwrap(), &code).unwrap().unwrap();
     let app = askbar_server::api_router(state.clone());
@@ -235,6 +236,7 @@ async fn another_user_cannot_read_or_continue_my_conversation() {
         let db = t.state.db.lock().unwrap();
         db.conn().execute("INSERT INTO users (id, name, created_at) VALUES ('B','other',0)", []).unwrap();
         let code = auth::create_pair_code(&db, "B", "b-laptop", 600).unwrap();
+        askbar_server::bridge::rebuild(&db).unwrap();
         auth::redeem_pair_code(&db, &code).unwrap().unwrap()
     };
     let get = |path: String| {

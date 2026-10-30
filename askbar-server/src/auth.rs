@@ -52,30 +52,37 @@ pub fn create_pair_code(db: &Db, user_id: &str, device_name: &str, ttl_secs: i64
 }
 
 /// Exchange a valid, unexpired, unused code for a new device token.
+///
+/// The code must be listed (by its hash) in the current snapshot. Redeeming records the hash
+/// in `redeemed_codes`, whose primary key makes a second redemption impossible even when two
+/// requests race.
 pub fn redeem_pair_code(db: &Db, code: &str) -> rusqlite::Result<Option<String>> {
-    let tx = db.conn().unchecked_transaction()?;
     let h = hash(code);
-    // Marking it used and checking validity is one statement, so a code can't be redeemed twice.
-    let claimed = tx.execute(
-        "UPDATE pair_codes SET used = 1 WHERE hash = ?1 AND used = 0 AND expires_at > ?2",
-        params![h, now()],
-    )?;
+    let Some(entry) = crate::snapshot::current(db)?.and_then(|s| s.pair_codes.into_iter().find(|c| c.hash == h)) else {
+        return Ok(None);
+    };
+    if entry.expires_at <= now() {
+        return Ok(None);
+    }
+    let tx = db.conn().unchecked_transaction()?;
+    let claimed = tx.execute("INSERT OR IGNORE INTO redeemed_codes (hash, device_id, redeemed_at) VALUES (?1, NULL, ?2)", params![h, now()])?;
     if claimed != 1 {
         return Ok(None);
     }
-    let (user_id, name): (String, String) =
-        tx.query_row("SELECT user_id, device_name FROM pair_codes WHERE hash = ?1", [&h], |r| Ok((r.get(0)?, r.get(1)?)))?;
     let token = random_secret("abt_");
-    let name = if name.trim().is_empty() { "device".to_string() } else { name };
+    let name = if entry.device_name.trim().is_empty() { "device".to_string() } else { entry.device_name };
+    let device_id = crate::ids::new_id();
     tx.execute(
         "INSERT INTO devices (id, user_id, name, hash, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![crate::ids::new_id(), user_id, name, hash(&token), now()],
+        params![device_id, entry.user_id, name, hash(&token), now()],
     )?;
+    tx.execute("UPDATE redeemed_codes SET device_id = ?1 WHERE hash = ?2", params![device_id, h])?;
     tx.commit()?;
     Ok(Some(token))
 }
 
-/// Look up a live token and record that it was just used.
+/// Look up a live token and record that it was just used. A device is refused if it is
+/// revoked in the database or listed as revoked in the current snapshot.
 pub fn authenticate(db: &Db, token: &str) -> rusqlite::Result<Option<DeviceAuth>> {
     let found = db
         .conn()
@@ -85,10 +92,12 @@ pub fn authenticate(db: &Db, token: &str) -> rusqlite::Result<Option<DeviceAuth>
             |r| Ok(DeviceAuth { device_id: r.get(0)?, user_id: r.get(1)? }),
         )
         .optional()?;
-    if let Some(a) = &found {
-        db.conn().execute("UPDATE devices SET last_seen = ?1 WHERE id = ?2", params![now(), a.device_id])?;
+    let Some(auth) = found else { return Ok(None) };
+    if crate::snapshot::current(db)?.is_some_and(|s| s.revoked_device_ids.iter().any(|id| *id == auth.device_id)) {
+        return Ok(None);
     }
-    Ok(found)
+    db.conn().execute("UPDATE devices SET last_seen = ?1 WHERE id = ?2", params![now(), auth.device_id])?;
+    Ok(Some(auth))
 }
 
 fn bearer(req: &Request) -> Option<&str> {

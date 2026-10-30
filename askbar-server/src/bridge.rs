@@ -52,7 +52,7 @@ pub fn build(db: &Db) -> rusqlite::Result<Snapshot> {
     }
     let mut pair_codes = Vec::new();
     {
-        let mut stmt = db.conn().prepare("SELECT hash, user_id, device_name, expires_at FROM pair_codes WHERE used = 0 AND expires_at > ?1")?;
+        let mut stmt = db.conn().prepare("SELECT hash, user_id, device_name, expires_at FROM pair_codes WHERE used = 0 AND expires_at > ?1 AND hash NOT IN (SELECT hash FROM redeemed_codes)")?;
         let rows = stmt.query_map([now()], |r| {
             Ok(SnapshotPairCode { hash: r.get(0)?, user_id: r.get(1)?, device_name: r.get(2)?, expires_at: r.get(3)? })
         })?;
