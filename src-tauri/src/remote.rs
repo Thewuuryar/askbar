@@ -482,6 +482,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn no_reachable_server_shows_server_offline() {
+        // Paired or not, an unreachable server is reported as offline before anything else.
+        for token in [Some("t"), None] {
+            let r = remote_for("http://127.0.0.1:1", token, "alpha", PathBuf::new());
+            let st = r.status().await.unwrap();
+            assert_eq!(st.kind, "offline", "token: {token:?}");
+            assert!(st.message.starts_with("Server offline. Could not reach http://127.0.0.1:1"), "{}", st.message);
+
+            // The window still opens with the built-in look and the saved hotkey.
+            let settings = r.settings().await.unwrap();
+            assert_eq!(settings.hotkey, ClientConfig::default().hotkey);
+            assert_eq!(settings.ui.width, crate::client_config::Ui::default().width);
+            assert!(settings.model.is_empty());
+        }
+        // Asking for history fails with a message instead of hanging.
+        let r = remote_for("http://127.0.0.1:1", Some("t"), "alpha", PathBuf::new());
+        assert!(r.list_conversations().await.is_err());
+    }
+
+    #[tokio::test]
     async fn picking_another_provider_is_saved_and_clears_the_state() {
         let (url, token, _state) = status_server("0.1.0").await;
         let dir = std::env::temp_dir().join(format!("askbar-pick-{}", std::process::id()));
