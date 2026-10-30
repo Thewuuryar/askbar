@@ -7,7 +7,7 @@ use axum::{
     http::StatusCode,
     Extension, Json,
 };
-use rusqlite::{params, OptionalExtension};
+use rusqlite::OptionalExtension;
 use std::sync::Arc;
 
 type St = State<Arc<AppState>>;
@@ -30,22 +30,12 @@ pub async fn providers(State(state): St) -> Res<Vec<ProviderInfo>> {
 
 pub async fn conversations(State(state): St, Extension(auth): Extension<DeviceAuth>) -> Res<Vec<Conversation>> {
     let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
-    let mut stmt = db
-        .conn()
-        .prepare(
-            "SELECT c.public_id, c.title, c.updated_at,
-                    (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id)
-             FROM conversations c WHERE c.user_id = ?1
-             ORDER BY c.updated_at DESC, c.id DESC",
-        )
-        .map_err(internal)?;
-    let rows = stmt
-        .query_map([&auth.user_id], |r| {
-            Ok(Conversation { id: r.get(0)?, title: r.get(1)?, updated_at: r.get(2)?, message_count: r.get(3)? })
-        })
+    let rows = db
+        .list_conversations(&auth.user_id)
         .map_err(internal)?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(internal)?;
+        .into_iter()
+        .map(|c| Conversation { id: c.id, title: c.title, updated_at: c.updated_at, message_count: c.message_count })
+        .collect();
     Ok(Json(rows))
 }
 
@@ -55,27 +45,15 @@ pub async fn conversation(
     Path(id): Path<String>,
 ) -> Res<ConversationDetail> {
     let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
-    let found: Option<(i64, String, i64)> = db
-        .conn()
-        .query_row(
-            "SELECT id, title, updated_at FROM conversations WHERE public_id = ?1 AND user_id = ?2",
-            params![id, auth.user_id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-        )
-        .optional()
-        .map_err(internal)?;
-    let (rowid, title, updated_at) = found.ok_or(StatusCode::NOT_FOUND)?;
-    let mut stmt = db
-        .conn()
-        .prepare("SELECT public_id, role, content, created_at FROM messages WHERE conversation_id = ?1 ORDER BY id")
-        .map_err(internal)?;
-    let messages = stmt
-        .query_map([rowid], |r| Ok(Message { id: r.get(0)?, role: r.get(1)?, content: r.get(2)?, created_at: r.get(3)? }))
+    let c = db.get_conversation(&auth.user_id, &id).map_err(internal)?.ok_or(StatusCode::NOT_FOUND)?;
+    let messages = db
+        .get_messages(&auth.user_id, &id)
         .map_err(internal)?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(internal)?;
+        .into_iter()
+        .map(|m| Message { id: m.id, role: m.role, content: m.content, created_at: m.created_at })
+        .collect();
     Ok(Json(ConversationDetail {
-        conversation: Conversation { id, title, updated_at, message_count: messages.len() as i64 },
+        conversation: Conversation { id: c.id, title: c.title, updated_at: c.updated_at, message_count: c.message_count },
         messages,
     }))
 }
@@ -86,12 +64,9 @@ pub async fn delete_conversation(
     Path(id): Path<String>,
 ) -> StatusCode {
     let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
-    match db
-        .conn()
-        .execute("DELETE FROM conversations WHERE public_id = ?1 AND user_id = ?2", params![id, auth.user_id])
-    {
-        Ok(0) => StatusCode::NOT_FOUND,
-        Ok(_) => StatusCode::NO_CONTENT,
+    match db.delete_conversation(&auth.user_id, &id) {
+        Ok(false) => StatusCode::NOT_FOUND,
+        Ok(true) => StatusCode::NO_CONTENT,
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
     }
 }

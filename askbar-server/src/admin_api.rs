@@ -306,11 +306,11 @@ pub async fn list_devices(State(state): St) -> Result<Json<Vec<DeviceRow>>, Stat
     let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
     let mut stmt = db
         .conn()
-        .prepare("SELECT id, name, created_at, last_seen, revoked FROM device_tokens ORDER BY created_at DESC, id DESC")
+        .prepare("SELECT id, name, created_at, last_seen, revoked_at IS NOT NULL FROM devices ORDER BY created_at DESC, id DESC")
         .map_err(internal)?;
     let rows = stmt
         .query_map([], |r| {
-            Ok(DeviceRow { id: r.get(0)?, name: r.get(1)?, created_at: r.get(2)?, last_seen: r.get(3)?, revoked: r.get::<_, i64>(4)? != 0 })
+            Ok(DeviceRow { id: r.get(0)?, name: r.get(1)?, created_at: r.get(2)?, last_seen: r.get(3)?, revoked: r.get(4)? })
         })
         .map_err(internal)?
         .collect::<Result<Vec<_>, _>>()
@@ -320,7 +320,7 @@ pub async fn list_devices(State(state): St) -> Result<Json<Vec<DeviceRow>>, Stat
 
 pub async fn revoke_device(State(state): St, Path(id): Path<String>) -> StatusCode {
     let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
-    match db.conn().execute("UPDATE device_tokens SET revoked = 1 WHERE id = ?1", [id]) {
+    match db.conn().execute("UPDATE devices SET revoked_at = COALESCE(revoked_at, ?2) WHERE id = ?1", rusqlite::params![id, crate::auth::now()]) {
         Ok(0) => StatusCode::NOT_FOUND,
         Ok(_) => StatusCode::NO_CONTENT,
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR,

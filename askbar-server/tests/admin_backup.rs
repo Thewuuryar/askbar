@@ -17,10 +17,9 @@ async fn start() -> (String, String, std::sync::Arc<AppState>, Vec<u8>) {
         .execute("INSERT INTO providers (id, name, type, base_url, model, api_key_enc, created_at) VALUES ('p','mock','openai','http://x/v1','m',?1,0)", [&enc])
         .unwrap();
     db.conn().execute("INSERT INTO settings VALUES ('system_prompt', 'Be brief.')", []).unwrap();
-    let c = db.create_conversation("kept conversation").unwrap();
-    db.add_message(c, "user", "question one").unwrap();
-    db.add_message(c, "assistant", "answer one").unwrap();
-    db.conn().execute("UPDATE conversations SET user_id = ?1, public_id = 'C1'", [&user]).unwrap();
+    let c = db.create_conversation(&user, "kept conversation").unwrap();
+    db.add_message(&user, &c, "user", "question one").unwrap();
+    db.add_message(&user, &c, "assistant", "answer one").unwrap();
     askbar_server::auth::create_pair_code(&db, &user, "pending", 600).unwrap();
     let state = AppState::new(db, secrets);
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

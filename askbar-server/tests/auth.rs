@@ -59,7 +59,7 @@ async fn valid_token_works_and_updates_last_seen() {
     let s = start().await;
     let token = s.token().await;
     let seen = |s: &Server| -> Option<i64> {
-        s.state.db.lock().unwrap().conn().query_row("SELECT last_seen FROM device_tokens", [], |r| r.get(0)).unwrap()
+        s.state.db.lock().unwrap().conn().query_row("SELECT last_seen FROM devices", [], |r| r.get(0)).unwrap()
     };
     assert_eq!(seen(&s), None);
     assert_eq!(s.probe(Some(&token)).await, 204);
@@ -71,7 +71,7 @@ async fn revoked_token_is_401() {
     let s = start().await;
     let token = s.token().await;
     assert_eq!(s.probe(Some(&token)).await, 204);
-    s.state.db.lock().unwrap().conn().execute("UPDATE device_tokens SET revoked = 1", []).unwrap();
+    s.state.db.lock().unwrap().conn().execute("UPDATE devices SET revoked_at = 1", []).unwrap();
     assert_eq!(s.probe(Some(&token)).await, 401);
 }
 
@@ -96,10 +96,10 @@ async fn tokens_are_stored_hashed() {
     let s = start().await;
     let token = s.token().await;
     let db = s.state.db.lock().unwrap();
-    let stored: String = db.conn().query_row("SELECT hash FROM device_tokens", [], |r| r.get(0)).unwrap();
+    let stored: String = db.conn().query_row("SELECT hash FROM devices", [], |r| r.get(0)).unwrap();
     assert_ne!(stored, token);
     assert_eq!(stored.len(), 64);
-    let name: String = db.conn().query_row("SELECT name FROM device_tokens", [], |r| r.get(0)).unwrap();
+    let name: String = db.conn().query_row("SELECT name FROM devices", [], |r| r.get(0)).unwrap();
     assert_eq!(name, "laptop");
 }
 

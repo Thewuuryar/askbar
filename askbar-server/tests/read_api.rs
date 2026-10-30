@@ -14,14 +14,13 @@ struct T {
     http: reqwest::Client,
 }
 
-fn add_conversation(state: &AppState, user: &str, pid: &str, title: &str, msgs: &[(&str, &str)]) {
+fn add_conversation(state: &AppState, user: &str, title: &str, msgs: &[(&str, &str)]) -> String {
     let db = state.db.lock().unwrap();
-    let id = db.create_conversation(title).unwrap();
-    db.conn().execute("UPDATE conversations SET public_id = ?1, user_id = ?2 WHERE id = ?3", rusqlite::params![pid, user, id]).unwrap();
-    for (i, (role, content)) in msgs.iter().enumerate() {
-        let m = db.add_message(id, role, content).unwrap();
-        db.conn().execute("UPDATE messages SET public_id = ?1, user_id = ?2 WHERE id = ?3", rusqlite::params![format!("{pid}-m{i}"), user, m]).unwrap();
+    let id = db.create_conversation(user, title).unwrap();
+    for (role, content) in msgs {
+        db.add_message(user, &id, role, content).unwrap();
     }
+    id
 }
 
 async fn start() -> T {
@@ -58,24 +57,24 @@ impl T {
 #[tokio::test]
 async fn endpoints_return_scoped_data() {
     let t = start().await;
-    add_conversation(&t.state, &t.user, "C1", "mine", &[("user", "hi"), ("assistant", "hello")]);
+    let c1 = add_conversation(&t.state, &t.user, "mine", &[("user", "hi"), ("assistant", "hello")]);
     // Another user's conversation must be invisible.
     t.state.db.lock().unwrap().conn().execute("INSERT INTO users (id, name, created_at) VALUES ('U2','other',0)", []).unwrap();
-    add_conversation(&t.state, "U2", "C2", "theirs", &[("user", "secret chat")]);
+    let c2 = add_conversation(&t.state, "U2", "theirs", &[("user", "secret chat")]);
 
     let list: Vec<Conversation> = serde_json::from_str(&t.get_text("/api/v1/conversations").await.1).unwrap();
     assert_eq!(list.len(), 1);
-    assert_eq!((list[0].id.as_str(), list[0].title.as_str(), list[0].message_count), ("C1", "mine", 2));
+    assert_eq!((list[0].id.as_str(), list[0].title.as_str(), list[0].message_count), (c1.as_str(), "mine", 2));
 
-    let (st, body) = t.get_text("/api/v1/conversations/C1").await;
+    let (st, body) = t.get_text(&format!("/api/v1/conversations/{c1}")).await;
     assert_eq!(st, 200);
     let d: ConversationDetail = serde_json::from_str(&body).unwrap();
     assert_eq!(d.messages.iter().map(|m| m.content.as_str()).collect::<Vec<_>>(), ["hi", "hello"]);
 
-    assert_eq!(t.get_text("/api/v1/conversations/C2").await.0, 404);
-    assert_eq!(t.req(reqwest::Method::DELETE, "/api/v1/conversations/C2").send().await.unwrap().status(), 404);
-    assert_eq!(t.req(reqwest::Method::DELETE, "/api/v1/conversations/C1").send().await.unwrap().status(), 204);
-    assert_eq!(t.get_text("/api/v1/conversations/C1").await.0, 404);
+    assert_eq!(t.get_text(&format!("/api/v1/conversations/{c2}")).await.0, 404);
+    assert_eq!(t.req(reqwest::Method::DELETE, &format!("/api/v1/conversations/{c2}")).send().await.unwrap().status(), 404);
+    assert_eq!(t.req(reqwest::Method::DELETE, &format!("/api/v1/conversations/{c1}")).send().await.unwrap().status(), 204);
+    assert_eq!(t.get_text(&format!("/api/v1/conversations/{c1}")).await.0, 404);
     let n: i64 = t.state.db.lock().unwrap().conn().query_row("SELECT COUNT(*) FROM messages WHERE user_id = 'U2'", [], |r| r.get(0)).unwrap();
     assert_eq!(n, 1, "other user's rows untouched");
 
@@ -103,12 +102,12 @@ async fn settings_have_defaults_and_no_system_prompt() {
 #[tokio::test]
 async fn no_response_contains_provider_key_material() {
     let t = start().await;
-    add_conversation(&t.state, &t.user, "C1", "c", &[("user", "hi")]);
+    let c1 = add_conversation(&t.state, &t.user, "c", &[("user", "hi")]);
     let enc: Vec<u8> = t.state.db.lock().unwrap().conn().query_row("SELECT api_key_enc FROM providers", [], |r| r.get(0)).unwrap();
     use base64::{engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD}, Engine};
     let hex: String = enc.iter().map(|b| format!("{b:02x}")).collect();
     let needles = [PROVIDER_SECRET.to_string(), STANDARD.encode(&enc), URL_SAFE_NO_PAD.encode(&enc), hex, "api_key".to_string()];
-    for p in ["/api/v1/health", "/api/v1/whoami", "/api/v1/providers", "/api/v1/conversations", "/api/v1/conversations/C1", "/api/v1/conversations/nope", "/api/v1/settings"] {
+    for p in ["/api/v1/health", "/api/v1/whoami", "/api/v1/providers", "/api/v1/conversations", &format!("/api/v1/conversations/{c1}"), "/api/v1/conversations/nope", "/api/v1/settings"] {
         let r = t.req(reqwest::Method::GET, p).send().await.unwrap();
         let headers = format!("{:?}", r.headers());
         let body = r.text().await.unwrap();

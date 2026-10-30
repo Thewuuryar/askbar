@@ -64,3 +64,12 @@ R2.5: the existing offline check was part of another test; a dedicated test was 
 - Rust total after R2.6: 134 passed, 0 failed (139 - 6 removed + 1 added).
 - One `cargo test --workspace` run during R2.6 reported 1 failure (the output was cut off, so the test is unknown); 7 later full runs, including `--no-fail-fast`, were clean. Not reproduced; watch for flakiness.
 - `docker build` of the server image: passed. This container's build needs the egress proxy CA, so it was built from a scratch copy of the Dockerfile that only adds the CA (`CARGO_HTTP_CAINFO`); the repo's Dockerfile is unchanged apart from dropping `COPY core`. The image's `healthcheck` command ran.
+
+## R2.8 notes
+
+- One migration now holds the final chat schema (`users`, `devices` with `revoked_at`, `conversations`, `messages`, `messages_fts` with sync triggers, `user_prefs`; reserved `memory` (append-only via triggers), `projects`, `token_usage`; interim `providers`, `settings`, `pair_codes`, `display_defaults`). `conversations.project_id` is nullable.
+- The version check refuses a database whose `user_version` is newer than the migrations, and any non-empty database whose `application_id` is not Askbar's (so a v0.2.0 database, `user_version` 2, is refused even after later migrations are appended). `Db::open` returns an error and the server exits.
+- There is no upgrade path from v0.2.0 databases: the old schema (integer ids plus `public_id`) is gone. The test `v2_keeps_a_v0_1_0_history_and_seeding_claims_it` was removed with the legacy migration it tested; `v2_on_a_fresh_database` became `the_schema_creates_cleanly`. Added: `messages_are_indexed_by_triggers`, `memory_is_append_only`, `an_unexpected_user_version_is_refused`.
+- The schema change forced `chat.rs`, `api.rs`, `auth.rs`, `admin_api.rs` and the tests to move to the new tables in this commit. `Db` methods now take a `user_id` and use ULID text ids. R2.9 builds on this (it adds the cross-user test), so R2.9 is smaller than listed.
+- `messages_fts` is created and kept in sync by triggers here. A history-search query does not exist yet anywhere in the server (the list assumes one); see R2.12.
+- Rust total after R2.8: 137 passed, 0 failed.

@@ -460,7 +460,7 @@ mod tests {
         // Revoking the device turns "ok" into "rejected".
         let r = remote_for(&url, Some(&token), "alpha", PathBuf::new());
         assert_eq!(kind(&r).await, None);
-        state.db.lock().unwrap().conn().execute("UPDATE device_tokens SET revoked = 1", []).unwrap();
+        state.db.lock().unwrap().conn().execute("UPDATE devices SET revoked_at = 1", []).unwrap();
         assert_eq!(kind(&r).await.as_deref(), Some("rejected"));
     }
 

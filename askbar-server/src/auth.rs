@@ -68,8 +68,8 @@ pub fn redeem_pair_code(db: &Db, code: &str) -> rusqlite::Result<Option<String>>
     let token = random_secret("abt_");
     let name = if name.trim().is_empty() { "device".to_string() } else { name };
     tx.execute(
-        "INSERT INTO device_tokens (id, user_id, name, hash, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![ulid::Ulid::new().to_string(), user_id, name, hash(&token), now()],
+        "INSERT INTO devices (id, user_id, name, hash, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![crate::ids::new_id(), user_id, name, hash(&token), now()],
     )?;
     tx.commit()?;
     Ok(Some(token))
@@ -80,13 +80,13 @@ pub fn authenticate(db: &Db, token: &str) -> rusqlite::Result<Option<DeviceAuth>
     let found = db
         .conn()
         .query_row(
-            "SELECT id, user_id FROM device_tokens WHERE hash = ?1 AND revoked = 0",
+            "SELECT id, user_id FROM devices WHERE hash = ?1 AND revoked_at IS NULL",
             [hash(token)],
             |r| Ok(DeviceAuth { device_id: r.get(0)?, user_id: r.get(1)? }),
         )
         .optional()?;
     if let Some(a) = &found {
-        db.conn().execute("UPDATE device_tokens SET last_seen = ?1 WHERE id = ?2", params![now(), a.device_id])?;
+        db.conn().execute("UPDATE devices SET last_seen = ?1 WHERE id = ?2", params![now(), a.device_id])?;
     }
     Ok(found)
 }
