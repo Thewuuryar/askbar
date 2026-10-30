@@ -94,7 +94,7 @@ impl T {
             .post(format!("{}/api/v1/chat", self.api))
             .bearer_auth(&self.token)
             .header("x-askbar-client-version", "0.1.0")
-            .json(&ChatRequest { conversation_id: None, provider: "mock".into(), text: text.into() })
+            .json(&ChatRequest { conversation_id: None, provider: "p".into(), text: text.into() })
             .send()
             .await
             .unwrap();

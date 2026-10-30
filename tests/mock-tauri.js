@@ -33,8 +33,9 @@
     }),
     // opts.status stands for the server's state: { kind, message, providers? } or absent when healthy.
     server_status: () => (window.__opts.status ? JSON.parse(JSON.stringify(window.__opts.status)) : null),
-    set_active_provider: ({ name }) => {
-      window.__opts.provider = name;
+    set_active_provider: ({ id }) => {
+      const chosen = ((window.__opts.status || {}).providers || []).find((p) => p.id === id);
+      window.__opts.provider = chosen ? chosen.name : id;
       if (window.__opts.status && window.__opts.status.kind === 'provider_missing') window.__opts.status = null;
     },
     // A pairing string is accepted when it starts with the prefix and the code is not "bad".

@@ -212,8 +212,8 @@ async fn pair(app: AppHandle, state: State<'_, AppState>, pairing: String) -> Re
 }
 
 #[tauri::command]
-async fn set_active_provider(state: State<'_, AppState>, name: String) -> Result<(), String> {
-    state.backend().set_active_provider(name).await
+async fn set_active_provider(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    state.backend().set_active_provider(id).await
 }
 
 #[tauri::command]

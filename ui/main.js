@@ -140,9 +140,9 @@
     }
     el.status.dataset.kind = st.kind;
     el.statusText.textContent = st.message;
-    for (const name of st.providers || []) {
-      el.statusActions.appendChild(actionButton('Use ' + name, async () => {
-        try { await invoke('set_active_provider', { name }); } catch (e) { showNotice(String(e)); }
+    for (const p of st.providers || []) {
+      el.statusActions.appendChild(actionButton('Use ' + p.name, async () => {
+        try { await invoke('set_active_provider', { id: p.id }); } catch (e) { showNotice(String(e)); }
         await refreshBootstrap().catch(() => {});
         await checkStatus();
       }, 'provider'));

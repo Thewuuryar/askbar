@@ -314,7 +314,7 @@ async function waitIdle(page) {
     offline: { kind: 'offline', message: 'Server offline. Could not reach http://localhost:8080. Check that it is running and that you are on the right network.' },
     rejected: { kind: 'rejected', message: 'Token rejected. The server no longer accepts this device; it may have been revoked.' },
     update_needed: { kind: 'update_needed', message: 'Update needed. This version of Askbar is too old for the server.' },
-    provider_missing: { kind: 'provider_missing', message: 'Provider "gone" no longer exists on the server. Pick another.', providers: ['alpha', 'beta'] },
+    provider_missing: { kind: 'provider_missing', message: 'The provider you picked no longer exists on the server. Pick another.', providers: [{ id: 'p1', name: 'alpha' }, { id: 'p2', name: 'beta' }] },
   };
 
   page = await open(browser);
@@ -355,7 +355,7 @@ async function waitIdle(page) {
     assert.deepEqual(labels, ['Use alpha', 'Use beta']);
     await page.click('#status-actions [data-action="provider"] >> text=Use beta');
     await page.waitForSelector('#status', { state: 'hidden' });
-    assert.deepEqual(await calls(page, 'set_active_provider'), [{ name: 'beta' }]);
+    assert.deepEqual(await calls(page, 'set_active_provider'), [{ id: 'p2' }]);
     await ask(page, 'works now');
     await waitIdle(page);
     assert.match(await page.innerText('#model-label'), /via beta/);

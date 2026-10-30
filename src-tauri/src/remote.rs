@@ -1,6 +1,6 @@
 //! `Remote`: the client for an Askbar server over HTTPS.
 
-use crate::types::{ClientStatus, Emit, Settings, StreamEvent};
+use crate::types::{ClientStatus, Emit, ProviderChoice, Settings, StreamEvent};
 use crate::client_config::{check_server_url, merge_ui, ClientConfig};
 use crate::tokens::TokenStore;
 use askbar_proto::{ChatEvent, ChatRequest, Conversation, ConversationDetail, DisplaySettings, Message, ProviderInfo, SseParser};
@@ -96,7 +96,7 @@ impl Inner {
             return Ok(wanted.trim().to_string());
         }
         let list: Vec<ProviderInfo> = self.get_json("/api/v1/providers").await?;
-        list.into_iter().next().map(|p| p.name).ok_or_else(|| "The server has no providers configured yet.".into())
+        list.into_iter().next().map(|p| p.id).ok_or_else(|| "The server has no providers configured yet.".into())
     }
 }
 
@@ -171,7 +171,7 @@ impl Remote {
             Err(_) => Vec::new(),
         };
         let wanted = cfg.active_provider.trim();
-        let active = providers.iter().find(|p| wanted.is_empty() || p.name == wanted);
+        let active = providers.iter().find(|p| wanted.is_empty() || p.id == wanted);
         Ok(Settings {
             ui: merge_ui(&display, &cfg.ui),
             hotkey: cfg.hotkey.clone(),
@@ -218,18 +218,18 @@ impl Remote {
         if providers.is_empty() {
             return Some(ClientStatus::new("problem", "The server has no providers yet. Add one on its admin page."));
         }
-        if !wanted.is_empty() && !providers.iter().any(|p| p.name == wanted) {
-            let mut st = ClientStatus::new("provider_missing", format!("Provider \"{wanted}\" no longer exists on the server. Pick another."));
-            st.providers = providers.into_iter().map(|p| p.name).collect();
+        if !wanted.is_empty() && !providers.iter().any(|p| p.id == wanted) {
+            let mut st = ClientStatus::new("provider_missing", "The provider you picked no longer exists on the server. Pick another.");
+            st.providers = providers.into_iter().map(|p| ProviderChoice { id: p.id, name: p.name }).collect();
             return Some(st);
         }
         None
     }
 
-    pub async fn set_active_provider(&self, name: String) -> Result<(), String> {
+    pub async fn set_active_provider(&self, id: String) -> Result<(), String> {
         let i = self.inner()?;
         let mut cfg = i.cfg();
-        cfg.active_provider = name;
+        cfg.active_provider = id;
         cfg.save(&i.path)?;
         *lock(&i.cfg) = cfg;
         Ok(())
@@ -447,18 +447,21 @@ mod tests {
     async fn status_reports_each_problem_with_its_kind() {
         let (url, token, state) = status_server("0.1.0").await;
 
-        assert_eq!(kind(&remote_for(&url, Some(&token), "alpha", PathBuf::new())).await, None);
+        assert_eq!(kind(&remote_for(&url, Some(&token), "p0", PathBuf::new())).await, None);
         assert_eq!(kind(&remote_for(&url, Some(&token), "", PathBuf::new())).await, None, "no active provider means the first one");
-        assert_eq!(kind(&remote_for(&url, None, "alpha", PathBuf::new())).await.as_deref(), Some("not_paired"));
-        assert_eq!(kind(&remote_for(&url, Some("abt_wrong"), "alpha", PathBuf::new())).await.as_deref(), Some("rejected"));
+        assert_eq!(kind(&remote_for(&url, None, "p0", PathBuf::new())).await.as_deref(), Some("not_paired"));
+        assert_eq!(kind(&remote_for(&url, Some("abt_wrong"), "p0", PathBuf::new())).await.as_deref(), Some("rejected"));
 
         let missing = remote_for(&url, Some(&token), "gone", PathBuf::new()).status().await.unwrap();
         assert_eq!(missing.kind, "provider_missing");
-        assert!(missing.message.contains("gone") && missing.message.contains("Pick another"));
-        assert_eq!(missing.providers, ["alpha", "beta"]);
+        assert!(missing.message.contains("no longer exists") && missing.message.contains("Pick another"));
+        assert_eq!(
+            missing.providers,
+            [ProviderChoice { id: "p0".into(), name: "alpha".into() }, ProviderChoice { id: "p1".into(), name: "beta".into() }]
+        );
 
         // Revoking the device turns "ok" into "rejected".
-        let r = remote_for(&url, Some(&token), "alpha", PathBuf::new());
+        let r = remote_for(&url, Some(&token), "p0", PathBuf::new());
         assert_eq!(kind(&r).await, None);
         state.db.lock().unwrap().conn().execute("UPDATE devices SET revoked_at = 1", []).unwrap();
         assert_eq!(kind(&r).await.as_deref(), Some("rejected"));
@@ -467,11 +470,11 @@ mod tests {
     #[tokio::test]
     async fn status_reports_update_needed_and_offline() {
         let (url, token, _state) = status_server("99.0.0").await;
-        assert_eq!(kind(&remote_for(&url, Some(&token), "alpha", PathBuf::new())).await.as_deref(), Some("update_needed"));
+        assert_eq!(kind(&remote_for(&url, Some(&token), "p0", PathBuf::new())).await.as_deref(), Some("update_needed"));
 
         // Nothing listens here: refused immediately, well inside the 2 second budget.
         let started = std::time::Instant::now();
-        let st = remote_for("http://127.0.0.1:1", Some("t"), "alpha", PathBuf::new()).status().await.unwrap();
+        let st = remote_for("http://127.0.0.1:1", Some("t"), "p0", PathBuf::new()).status().await.unwrap();
         assert_eq!(st.kind, "offline");
         assert!(st.message.starts_with("Server offline"));
         assert!(started.elapsed() < Duration::from_secs(3));
@@ -485,7 +488,7 @@ mod tests {
     async fn no_reachable_server_shows_server_offline() {
         // Paired or not, an unreachable server is reported as offline before anything else.
         for token in [Some("t"), None] {
-            let r = remote_for("http://127.0.0.1:1", token, "alpha", PathBuf::new());
+            let r = remote_for("http://127.0.0.1:1", token, "p0", PathBuf::new());
             let st = r.status().await.unwrap();
             assert_eq!(st.kind, "offline", "token: {token:?}");
             assert!(st.message.starts_with("Server offline. Could not reach http://127.0.0.1:1"), "{}", st.message);
@@ -497,7 +500,7 @@ mod tests {
             assert!(settings.model.is_empty());
         }
         // Asking for history fails with a message instead of hanging.
-        let r = remote_for("http://127.0.0.1:1", Some("t"), "alpha", PathBuf::new());
+        let r = remote_for("http://127.0.0.1:1", Some("t"), "p0", PathBuf::new());
         assert!(r.list_conversations().await.is_err());
     }
 
@@ -508,10 +511,10 @@ mod tests {
         let path = dir.join("client.yaml");
         let r = remote_for(&url, Some(&token), "gone", path.clone());
         assert_eq!(kind(&r).await.as_deref(), Some("provider_missing"));
-        r.set_active_provider("beta".into()).await.unwrap();
+        r.set_active_provider("p1".into()).await.unwrap();
         assert_eq!(kind(&r).await, None);
         let saved = ClientConfig::load(&path).unwrap();
-        assert_eq!((saved.active_provider.as_str(), saved.server_url.as_str()), ("beta", url.as_str()));
+        assert_eq!((saved.active_provider.as_str(), saved.server_url.as_str()), ("p1", url.as_str()));
         assert!(!std::fs::read_to_string(&path).unwrap().contains("token"));
         let _ = std::fs::remove_dir_all(&dir);
     }

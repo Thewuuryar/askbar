@@ -137,8 +137,8 @@ if [ -n "$TOKEN" ]; then
 
   # 6. Providers.
   api "$URL/api/v1/providers" >"$WORK/providers.json"
-  PROVIDER=$(json "$WORK/providers.json" 'd[0]["name"]')
-  if [ -n "$PROVIDER" ]; then pass "the server lists a provider ($PROVIDER)"; else fail "the server lists a provider"; fi
+  PROVIDER=$(json "$WORK/providers.json" 'd[0]["id"]')
+  if [ -n "$PROVIDER" ]; then pass "the server lists a provider ($(json "$WORK/providers.json" 'd[0]["name"]'))"; else fail "the server lists a provider"; fi
 
   # 7. Chat: read the streamed reply.
   QUESTION="smoke question zebra"

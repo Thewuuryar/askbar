@@ -5,14 +5,14 @@ use crate::llm::{Provider, ProviderKind, DEFAULT_SYSTEM_PROMPT};
 use crate::Db;
 use rusqlite::OptionalExtension;
 
-/// Load a provider by name with its API key decrypted. The key never leaves this process.
-pub fn load_provider(db: &Db, secrets: &Secrets, name: &str) -> rusqlite::Result<Option<Provider>> {
+/// Load a provider by id with its API key decrypted. The key never leaves this process.
+pub fn load_provider(db: &Db, secrets: &Secrets, id: &str) -> rusqlite::Result<Option<Provider>> {
     let row = db
         .conn()
         .query_row(
             "SELECT name, type, base_url, model, api_key_enc, max_tokens, temperature, headers
-             FROM providers WHERE name = ?1",
-            [name],
+             FROM providers WHERE id = ?1",
+            [id],
             |r| {
                 Ok((
                     r.get::<_, String>(0)?,

@@ -19,9 +19,9 @@ fn internal<E>(_: E) -> StatusCode {
 
 pub async fn providers(State(state): St) -> Res<Vec<ProviderInfo>> {
     let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
-    let mut stmt = db.conn().prepare("SELECT name, type, model FROM providers ORDER BY name").map_err(internal)?;
+    let mut stmt = db.conn().prepare("SELECT id, name, type, model FROM providers ORDER BY name").map_err(internal)?;
     let rows = stmt
-        .query_map([], |r| Ok(ProviderInfo { name: r.get(0)?, kind: r.get(1)?, model: r.get(2)? }))
+        .query_map([], |r| Ok(ProviderInfo { id: r.get(0)?, name: r.get(1)?, kind: r.get(2)?, model: r.get(3)? }))
         .map_err(internal)?
         .collect::<Result<Vec<_>, _>>()
         .map_err(internal)?;

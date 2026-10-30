@@ -15,6 +15,8 @@ pub struct Health {
 /// A configured provider as seen by clients. Never carries key material.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderInfo {
+    /// Stable id; chats and preferences refer to a provider by this, never by name.
+    pub id: String,
     pub name: String,
     #[serde(rename = "type")]
     pub kind: String,
@@ -90,6 +92,7 @@ pub struct Settings {
 pub struct ChatRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conversation_id: Option<String>,
+    /// Id of the provider to answer with.
     pub provider: String,
     pub text: String,
 }
@@ -176,8 +179,8 @@ mod tests {
 
     #[test]
     fn provider_info_uses_type_key() {
-        let p = ProviderInfo { name: "a".into(), kind: "openai".into(), model: "m".into() };
-        assert_eq!(serde_json::to_string(&p).unwrap(), r#"{"name":"a","type":"openai","model":"m"}"#);
+        let p = ProviderInfo { id: "p1".into(), name: "a".into(), kind: "openai".into(), model: "m".into() };
+        assert_eq!(serde_json::to_string(&p).unwrap(), r#"{"id":"p1","name":"a","type":"openai","model":"m"}"#);
     }
 
     #[test]

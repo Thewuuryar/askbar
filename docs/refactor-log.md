@@ -95,3 +95,10 @@ Done in R2.3 as agreed (see "Order change"): `Remote.ids` is gone, Tauri command
 - Mismatch with the task list: it says to "move" history search onto `messages_fts`, but the server had no search at all. A minimal user-scoped `GET /api/v1/search?q=` (proto `SearchHit`, top 20, all words must match, query text is never FTS syntax, max 200 characters) was added on top of `messages_fts` so the smoke test and R2.12's own test have something to exercise. No client UI uses it yet. Revert this commit if search was meant to be out of scope.
 - Tests: `search_finds_a_message_and_never_returns_another_users` (db) and `search_returns_only_my_matching_messages` (API). The smoke script no longer skips search when the endpoint is missing.
 - Rust: 141 passed.
+
+## R2.14 notes
+
+- `providers.id` already existed as a ULID column (the list says to add it), so no schema change was needed.
+- `ProviderInfo` gained `id`; `GET /api/v1/providers` returns `{id, name, type, model}` (the wire key for the kind stays `type`, as before). `ChatRequest.provider`, `store::load_provider` and the client's `active_provider` take the id; a name is rejected (404 on chat).
+- Client: `ClientStatus.providers` is now a list of `{id, name}`; the "Use <name>" buttons call `set_active_provider` with the id. An old `client.yaml` that holds a name shows "provider no longer exists, pick another".
+- `smoke.sh` picks the provider by id. Rust: 142 passed.

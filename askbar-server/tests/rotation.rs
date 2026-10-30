@@ -83,7 +83,7 @@ async fn rotation_moves_everything_to_the_new_key() {
     assert!(old.decrypt(&blob).is_err() && old.decrypt_b64(&setting).is_err());
     assert!(old.decrypt_b64(&before_setting).is_ok());
     // The running server already uses it, so providers keep working with no restart.
-    let live = askbar_server::store::load_provider(&t.state.db.lock().unwrap(), &t.state.secrets().unwrap(), "mock").unwrap().unwrap();
+    let live = askbar_server::store::load_provider(&t.state.db.lock().unwrap(), &t.state.secrets().unwrap(), "p1").unwrap().unwrap();
     assert_eq!(live.api_key, "sk-provider-1");
     // A provider without a key stays without one.
     let nokey: Option<Vec<u8>> = t.state.db.lock().unwrap().conn().query_row("SELECT api_key_enc FROM providers WHERE id='p2'", [], |r| r.get(0)).unwrap();
@@ -98,7 +98,7 @@ async fn rotation_moves_everything_to_the_new_key() {
     // And it can be rotated again.
     assert_eq!(t.call(M::POST, "/admin/api/security/rotate-key", json!({ "password": PW })).await.0, 200);
     assert_eq!(new.decrypt(&blob).unwrap(), "sk-provider-1");
-    let live = askbar_server::store::load_provider(&t.state.db.lock().unwrap(), &t.state.secrets().unwrap(), "mock").unwrap().unwrap();
+    let live = askbar_server::store::load_provider(&t.state.db.lock().unwrap(), &t.state.secrets().unwrap(), "p1").unwrap().unwrap();
     assert_eq!(live.api_key, "sk-provider-1");
 }
 

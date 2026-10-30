@@ -125,7 +125,7 @@ fn wait_for<T>(what: &str, mut f: impl FnMut() -> Option<T>) -> T {
 async fn complete_reply_is_streamed_and_saved_in_full() {
     let t = start().await;
     let http = client();
-    let r = t.chat(&http, None, "mock", "Hello there").await;
+    let r = t.chat(&http, None, "p1", "Hello there").await;
     assert_eq!(r.status(), 200);
     assert!(r.headers()["content-type"].to_str().unwrap().starts_with("text/event-stream"));
     let events = parse_events(&r.text().await.unwrap().replace("\r\n", "\n"));
@@ -146,7 +146,7 @@ async fn complete_reply_is_streamed_and_saved_in_full() {
     assert_eq!(saved, [("user".to_string(), "Hello there".to_string()), ("assistant".to_string(), reply.clone())]);
 
     // The new conversation is visible, with a ULID id, and continues with history.
-    let r = t.chat(&http, Some(conversation_id), "mock", "And again").await;
+    let r = t.chat(&http, Some(conversation_id), "p1", "And again").await;
     assert_eq!(r.status(), 200);
     r.text().await.unwrap();
     assert_eq!(t.messages().len(), 4);
@@ -157,7 +157,7 @@ async fn complete_reply_is_streamed_and_saved_in_full() {
 async fn client_disconnect_saves_partial_reply_and_closes_upstream() {
     let t = start().await;
     let http = client_builder().pool_max_idle_per_host(0).build().unwrap();
-    let r = t.chat(&http, None, "mock", "please be slow").await;
+    let r = t.chat(&http, None, "p1", "please be slow").await;
     assert_eq!(r.status(), 200);
     let mut stream = r.bytes_stream();
     let mut got = String::new();
@@ -179,7 +179,7 @@ async fn client_disconnect_saves_partial_reply_and_closes_upstream() {
 async fn provider_failure_becomes_an_error_event_and_keeps_the_question() {
     let t = start().await;
     let http = client();
-    let r = t.chat(&http, None, "mock", "please fail").await;
+    let r = t.chat(&http, None, "p1", "please fail").await;
     assert_eq!(r.status(), 200);
     let events = parse_events(&r.text().await.unwrap().replace("\r\n", "\n"));
     let (name, ChatEvent::Error { message }) = events.last().unwrap() else { panic!("{events:?}") };
@@ -194,12 +194,14 @@ async fn bad_requests_are_plain_http_errors() {
     let t = start().await;
     let http = client();
     assert_eq!(t.chat(&http, None, "nope", "hi").await.status(), 404);
-    assert_eq!(t.chat(&http, Some("01NOSUCH"), "mock", "hi").await.status(), 404);
-    assert_eq!(t.chat(&http, None, "mock", "   ").await.status(), 400);
+    assert_eq!(t.chat(&http, Some("01NOSUCH"), "p1", "hi").await.status(), 404);
+    assert_eq!(t.chat(&http, None, "p1", "   ").await.status(), 400);
+    // Providers are addressed by id; the name "mock" is not accepted as a fallback.
+    assert_eq!(t.chat(&http, None, "mock", "hi").await.status(), 404);
     assert!(t.messages().is_empty());
     let r = http
         .post(format!("http://{}/api/v1/chat", t.addr))
-        .json(&ChatRequest { conversation_id: None, provider: "mock".into(), text: "hi".into() })
+        .json(&ChatRequest { conversation_id: None, provider: "p1".into(), text: "hi".into() })
         .send()
         .await
         .unwrap();
@@ -220,7 +222,7 @@ fn client() -> reqwest::Client {
 async fn another_user_cannot_read_or_continue_my_conversation() {
     let t = start().await;
     let http = client();
-    let r = t.chat(&http, None, "mock", "My private question").await;
+    let r = t.chat(&http, None, "p1", "My private question").await;
     assert_eq!(r.status(), 200);
     let body = r.text().await.unwrap();
     let events = parse_events(&body);
@@ -247,7 +249,7 @@ async fn another_user_cannot_read_or_continue_my_conversation() {
     let r = http
         .post(format!("http://{}/api/v1/chat", t.addr))
         .bearer_auth(&token_b)
-        .json(&ChatRequest { conversation_id: Some(conversation_id.clone()), provider: "mock".into(), text: "intrusion".into() })
+        .json(&ChatRequest { conversation_id: Some(conversation_id.clone()), provider: "p1".into(), text: "intrusion".into() })
         .send()
         .await
         .unwrap();

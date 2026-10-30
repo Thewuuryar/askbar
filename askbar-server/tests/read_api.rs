@@ -79,7 +79,7 @@ async fn endpoints_return_scoped_data() {
     assert_eq!(n, 1, "other user's rows untouched");
 
     let providers: Vec<ProviderInfo> = serde_json::from_str(&t.get_text("/api/v1/providers").await.1).unwrap();
-    assert_eq!(providers, [ProviderInfo { name: "mock".into(), kind: "openai".into(), model: "m1".into() }]);
+    assert_eq!(providers, [ProviderInfo { id: "p1".into(), name: "mock".into(), kind: "openai".into(), model: "m1".into() }]);
 }
 
 #[tokio::test]

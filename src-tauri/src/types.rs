@@ -36,7 +36,13 @@ pub struct ClientStatus {
     pub kind: String,
     pub message: String,
     /// For "provider_missing": the providers the user can pick instead.
-    pub providers: Vec<String>,
+    pub providers: Vec<ProviderChoice>,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct ProviderChoice {
+    pub id: String,
+    pub name: String,
 }
 
 impl ClientStatus {

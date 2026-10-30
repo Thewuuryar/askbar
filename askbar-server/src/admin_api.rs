@@ -8,7 +8,7 @@ use axum::{
     http::StatusCode,
     Json,
 };
-use rusqlite::{params, OptionalExtension};
+use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
@@ -187,10 +187,7 @@ pub async fn test_provider(State(state): St, Path(id): Path<String>) -> Result<J
     let provider = {
         let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
         let secrets = state.secrets().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
-        let name: Option<String> =
-            db.conn().query_row("SELECT name FROM providers WHERE id = ?1", [&id], |r| r.get(0)).optional().map_err(internal)?;
-        let name = name.ok_or(StatusCode::NOT_FOUND)?;
-        store::load_provider(&db, &secrets, &name).map_err(internal)?.ok_or(StatusCode::NOT_FOUND)?
+        store::load_provider(&db, &secrets, &id).map_err(internal)?.ok_or(StatusCode::NOT_FOUND)?
     };
     let key = provider.api_key.clone();
     let (_keep, cancel) = oneshot::channel::<()>();
