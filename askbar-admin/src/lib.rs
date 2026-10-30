@@ -4,8 +4,14 @@
 pub mod auth;
 pub mod db;
 pub mod mgmt;
+pub mod web;
 
-use axum::{http::StatusCode, routing::get, Router};
+use axum::{
+    http::StatusCode,
+    middleware,
+    routing::{get, post},
+    Router,
+};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -49,7 +55,20 @@ pub fn db_path() -> PathBuf {
 }
 
 pub fn router(state: Arc<AdminState>) -> Router {
-    Router::new().route("/health", get(|| async { (StatusCode::OK, "ok") })).with_state(state)
+    let protected: Router<Arc<AdminState>> = Router::new()
+        .route("/admin/session", get(|| async { StatusCode::NO_CONTENT }))
+        .route("/admin/logout", post(web::logout))
+        .route("/admin/api/password", post(web::change_password))
+        .route_layer(middleware::from_fn_with_state(state.clone(), web::require_session));
+    Router::new()
+        .route("/health", get(|| async { (StatusCode::OK, "ok") }))
+        .route("/admin/login", post(web::login))
+        .route("/admin/api/setup-status", get(web::setup_status))
+        .route("/admin/api/setup/password", post(web::setup_password))
+        .merge(protected)
+        .layer(middleware::from_fn(web::require_admin_header))
+        .layer(middleware::from_fn(web::security_headers))
+        .with_state(state)
 }
 
 /// Bind the unix socket at `path` (replacing a stale one), restrict it to its owner and
