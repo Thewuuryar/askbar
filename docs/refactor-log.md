@@ -121,3 +121,7 @@ Done in R2.3 as agreed (see "Order change"): `Remote.ids` is gone, Tauri command
 - There is no UI for editing overrides (they are still hand-edited in `client.yaml`). The `ui` Node tests drive the mock bridge: server default applies, an override wins for its own field, removing it returns the default. The behaviour itself is tested in Rust against a real server (`display_defaults_come_from_the_server_and_a_local_override_wins`).
 - `tokio` in `src-tauri` now declares the `macros` feature explicitly. It only worked before through workspace feature unification, so a standalone `cargo build -p askbar` (what `npm run build` does) failed to compile `tokio::select!`.
 - Tests: Rust 147 passed; ui 43 (was 39); markdown 19; admin 23.
+
+## Fix after R2.15 / R2.17
+
+`tests/admin.test.js` still sent client version 0.1.0, which `MIN_CLIENT` 0.3.0 (R2.15) refuses with 426, so 2 admin steps failed. R2.15 only ran T0, which does not include the Node tests, and it went unnoticed until R2.17's log step. Fixed by sending 0.3.0; admin steps are 23 again.

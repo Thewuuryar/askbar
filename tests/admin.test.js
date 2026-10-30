@@ -181,7 +181,7 @@ async function waitForPort(port) {
   });
   await step('clients see the provider without its key', async () => {
     // The API is the other listener; without a token it must refuse.
-    const r = await fetch(`http://127.0.0.1:${api}/api/v1/providers`, { headers: { 'x-askbar-client-version': '0.1.0' } });
+    const r = await fetch(`http://127.0.0.1:${api}/api/v1/providers`, { headers: { 'x-askbar-client-version': '0.3.0' } });
     assert.equal(r.status, 401);
   });
   await step('devices: generate a pairing string, pair with it, then revoke the device', async () => {
@@ -195,7 +195,7 @@ async function waitForPort(port) {
     assert.match(pairing, /^askbar-pair:/);
     const { url, code } = JSON.parse(Buffer.from(pairing.slice('askbar-pair:'.length), 'base64url').toString());
     assert.equal(url, 'http://localhost:' + api);
-    const headers = { 'content-type': 'application/json', 'x-askbar-client-version': '0.1.0' };
+    const headers = { 'content-type': 'application/json', 'x-askbar-client-version': '0.3.0' };
     const paired = await fetch(`http://127.0.0.1:${api}/api/v1/pair`, { method: 'POST', headers, body: JSON.stringify({ code }) });
     assert.equal(paired.status, 200);
     const { token } = await paired.json();
