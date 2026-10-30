@@ -5,39 +5,32 @@ use crate::llm::{Provider, ProviderKind, DEFAULT_SYSTEM_PROMPT};
 use crate::Db;
 use rusqlite::OptionalExtension;
 
-/// Load a provider by id with its API key decrypted. The key never leaves this process.
+/// Load a provider by id: its settings from the current snapshot, its API key (decrypted)
+/// from the database. The key never leaves this process.
 pub fn load_provider(db: &Db, secrets: &Secrets, id: &str) -> rusqlite::Result<Option<Provider>> {
-    let row = db
-        .conn()
-        .query_row(
-            "SELECT name, type, base_url, model, api_key_enc, max_tokens, temperature, headers
-             FROM providers WHERE id = ?1",
-            [id],
-            |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, String>(2)?,
-                    r.get::<_, String>(3)?,
-                    r.get::<_, Option<Vec<u8>>>(4)?,
-                    r.get::<_, Option<u32>>(5)?,
-                    r.get::<_, Option<f32>>(6)?,
-                    r.get::<_, String>(7)?,
-                ))
-            },
-        )
-        .optional()?;
-    Ok(row.map(|(name, kind, base_url, model, enc, max_tokens, temperature, headers)| Provider {
-        name,
-        kind: if kind == "anthropic" { ProviderKind::Anthropic } else { ProviderKind::OpenAi },
-        base_url,
+    let Some(p) = crate::snapshot::current(db)?.and_then(|s| s.providers.into_iter().find(|p| p.id == id)) else {
+        return Ok(None);
+    };
+    let enc: Option<Vec<u8>> =
+        db.conn().query_row("SELECT api_key_enc FROM providers WHERE id = ?1", [id], |r| r.get(0)).optional()?.flatten();
+    Ok(Some(Provider {
+        name: p.name,
+        kind: if p.kind == "anthropic" { ProviderKind::Anthropic } else { ProviderKind::OpenAi },
+        base_url: p.base_url,
         api_key: enc.and_then(|e| secrets.decrypt(&e).ok()).unwrap_or_default(),
         api_key_env: String::new(),
-        model,
-        max_tokens,
-        temperature,
-        headers: serde_json::from_str(&headers).unwrap_or_default(),
+        model: p.model,
+        max_tokens: p.max_tokens,
+        temperature: p.temperature,
+        headers: p.headers,
     }))
+}
+
+/// The system prompt chats use: the snapshot's, else the built-in one.
+pub fn chat_system_prompt(db: &Db) -> rusqlite::Result<String> {
+    Ok(crate::snapshot::current(db)?
+        .and_then(|s| s.system_prompt)
+        .unwrap_or_else(|| DEFAULT_SYSTEM_PROMPT.to_string()))
 }
 
 pub fn system_prompt(db: &Db) -> rusqlite::Result<String> {

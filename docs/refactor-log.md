@@ -226,3 +226,11 @@ README (first-run steps, "set on the admin page" list, Backup and recovery, the 
 ## Checkpoint R4a (T1)
 
 Rust 151 passed, 0 failed; clippy no errors (same 4 pre-existing style warnings); Node: markdown 19, ui 43, admin 21.
+
+## R4.5 notes
+
+- `bridge.rs` (temporary, deleted in R4.13) rebuilds the snapshot from the old tables (providers, settings, `display_defaults`, unexpired unused pair codes, revoked devices) at start-up and after every successful non-GET `/admin/api/*` request. What the old tables cannot hold (default provider, fallback order, retention, budget, kill switch) is kept from the previous snapshot.
+- Chat and the device API now read only the snapshot: provider settings (the API key is still read from `providers.api_key_enc`), the system prompt, and display defaults (`/settings`, `/me/display-defaults`). `GET /api/v1/providers` lists the snapshot's providers in client order: default provider, then fallbacks, then the rest by name (this is how the "default provider" reaches clients without a wire change; a client with no choice uses the first).
+- This changed semantics slightly: a provider that is in the snapshot but has no stored key is now found by the test endpoint (it runs and fails at the provider) instead of 404; the R4.3 test was updated to say so.
+- Tests that seed tables directly (`chat`, `read_api`, the client's `remote.rs` tests) now call `bridge::rebuild` after seeding, as the old admin would. New `tests/bridge.rs` (3): changing a provider in the old admin changes `GET /api/v1/providers` (create, edit, delete, refused change leaves it alone); the snapshot holds no key and is rebuilt at start-up; the client order follows default and fallbacks.
+- T1: clippy no errors; Rust 154 passed; markdown 19, ui 43, admin 21; smoke 11 passed, 1 skipped (person-only).

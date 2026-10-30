@@ -35,6 +35,7 @@ async fn start() -> T {
         )
         .unwrap();
     let code = auth::create_pair_code(&db, &user, "t", 600).unwrap();
+    askbar_server::bridge::rebuild(&db).unwrap();
     let state = AppState::new(db, secrets, askbar_server::MIN_CLIENT, "http://localhost:8080");
     let token = auth::redeem_pair_code(&state.db.lock().unwrap(), &code).unwrap().unwrap();
     let app = askbar_server::api_router(state.clone());
@@ -93,6 +94,7 @@ async fn settings_have_defaults_and_no_system_prompt() {
     // A partial stored override is merged over the defaults.
     t.state.db.lock().unwrap().conn().execute("INSERT INTO settings VALUES ('display', '{\"width\": 900}')", []).unwrap();
     t.state.db.lock().unwrap().conn().execute("INSERT INTO settings VALUES ('system_prompt', 'TOP SECRET PROMPT')", []).unwrap();
+    askbar_server::bridge::rebuild(&t.state.db.lock().unwrap()).unwrap(); // what the old admin does after a change
     let (_, body) = t.get_text("/api/v1/settings").await;
     let s: Settings = serde_json::from_str(&body).unwrap();
     assert_eq!((s.display.width, s.display.max_height), (900, 640));

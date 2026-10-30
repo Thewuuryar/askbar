@@ -5,6 +5,7 @@ pub mod admin_api;
 pub mod api;
 pub mod auth;
 pub mod backup;
+pub mod bridge;
 pub mod caddy;
 pub mod chat;
 pub mod db;
@@ -150,6 +151,7 @@ pub fn admin_router(state: Arc<AppState>) -> Router {
         .route("/admin/api/setup-status", get(admin::setup_status))
         .route("/admin/api/setup/password", post(admin::setup_password))
         .merge(protected)
+        .layer(middleware::from_fn_with_state(state.clone(), bridge::after_admin_change))
         .layer(middleware::from_fn(admin::require_admin_header))
         .layer(middleware::from_fn(admin::security_headers))
         .with_state(state)

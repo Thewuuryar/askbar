@@ -17,15 +17,13 @@ fn internal<E>(_: E) -> StatusCode {
     StatusCode::INTERNAL_SERVER_ERROR
 }
 
+/// The providers clients may use, from the snapshot: the default first, then the fallbacks
+/// in order, then the rest by name. A client with no choice of its own uses the first one.
 pub async fn providers(State(state): St) -> Res<Vec<ProviderInfo>> {
     let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
-    let mut stmt = db.conn().prepare("SELECT id, name, type, model FROM providers ORDER BY name").map_err(internal)?;
-    let rows = stmt
-        .query_map([], |r| Ok(ProviderInfo { id: r.get(0)?, name: r.get(1)?, kind: r.get(2)?, model: r.get(3)? }))
-        .map_err(internal)?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(internal)?;
-    Ok(Json(rows))
+    let snapshot = crate::snapshot::current(&db).map_err(internal)?;
+    let list = snapshot.map(|s| crate::snapshot::in_client_order(&s)).unwrap_or_default();
+    Ok(Json(list.into_iter().map(|p| ProviderInfo { id: p.id, name: p.name, kind: p.kind, model: p.model }).collect()))
 }
 
 pub async fn conversations(State(state): St, Extension(auth): Extension<DeviceAuth>) -> Res<Vec<Conversation>> {
@@ -129,25 +127,20 @@ pub fn load_display(db: &crate::Db) -> rusqlite::Result<DisplaySettings> {
     Ok(stored.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default())
 }
 
-/// One user's display defaults: their own row if the admin set one, else the server-wide ones.
-pub fn load_user_display(db: &crate::Db, user_id: &str) -> rusqlite::Result<DisplaySettings> {
-    let own: Option<String> = db
-        .conn()
-        .query_row("SELECT value FROM display_defaults WHERE user_id = ?1", [user_id], |r| r.get(0))
-        .optional()?;
-    match own.and_then(|s| serde_json::from_str(&s).ok()) {
-        Some(d) => Ok(d),
-        None => load_display(db),
-    }
+/// What clients are served, from the snapshot: the user's own defaults if there are any,
+/// else the server-wide ones, else the built-ins.
+pub fn served_display(db: &crate::Db, user_id: Option<&str>) -> rusqlite::Result<DisplaySettings> {
+    let Some(s) = crate::snapshot::current(db)? else { return Ok(DisplaySettings::default()) };
+    Ok(user_id.and_then(|u| s.user_display_defaults.get(u).cloned()).unwrap_or(s.display))
 }
 
 /// Read-only: what this user's clients should look like unless the person overrides it locally.
 pub async fn display_defaults(State(state): St, Extension(auth): Extension<DeviceAuth>) -> Res<DisplaySettings> {
     let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
-    Ok(Json(load_user_display(&db, &auth.user_id).map_err(internal)?))
+    Ok(Json(served_display(&db, Some(&auth.user_id)).map_err(internal)?))
 }
 
 pub async fn settings(State(state): St) -> Res<Settings> {
     let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
-    Ok(Json(Settings { display: load_display(&db).map_err(internal)? }))
+    Ok(Json(Settings { display: served_display(&db, None).map_err(internal)? }))
 }

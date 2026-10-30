@@ -62,6 +62,9 @@ async fn main() {
         Ok(user) => tracing::info!(%user, "database ready"),
         Err(e) => die(e, 1),
     }
+    if let Err(e) = askbar_server::bridge::rebuild(&db) {
+        die(format!("could not build the configuration snapshot: {e}"), 1);
+    }
     if db.conn().query_row("SELECT 1 FROM settings WHERE key = 'admin_password_hash'", [], |_| Ok(())).is_err() {
         tracing::warn!("no admin password yet: open the admin page to finish setup");
     }

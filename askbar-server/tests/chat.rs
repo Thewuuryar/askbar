@@ -65,6 +65,7 @@ async fn start() -> T {
         )
         .unwrap();
     let code = auth::create_pair_code(&db, &user, "t", 600).unwrap();
+    askbar_server::bridge::rebuild(&db).unwrap();
     let state = AppState::new(db, secrets, askbar_server::MIN_CLIENT, "http://localhost:8080");
     let token = auth::redeem_pair_code(&state.db.lock().unwrap(), &code).unwrap().unwrap();
     let app = askbar_server::api_router(state.clone());

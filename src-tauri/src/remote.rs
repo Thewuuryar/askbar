@@ -369,6 +369,7 @@ mod tests {
             )
             .unwrap();
         let code = auth::create_pair_code(&db, &user, "test", 600).unwrap();
+        askbar_server::bridge::rebuild(&db).unwrap();
         let state: Arc<AppState> = AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), "0.1.0", "http://localhost:8080");
         let token = auth::redeem_pair_code(&state.db.lock().unwrap(), &code).unwrap().unwrap();
         let app = askbar_server::api_router(state);
@@ -439,6 +440,7 @@ mod tests {
                 .unwrap();
         }
         let code = auth::create_pair_code(&db, &user, "test", 600).unwrap();
+        askbar_server::bridge::rebuild(&db).unwrap();
         let state = AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), min_client, "http://localhost:8080");
         let token = auth::redeem_pair_code(&state.db.lock().unwrap(), &code).unwrap().unwrap();
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -586,6 +588,7 @@ mod tests {
                 [r#"{"theme":"dark","width":900,"max_height":700,"history_width":300,"top_percent":0.3,"hide_on_blur":false}"#],
             )
             .unwrap();
+        askbar_server::bridge::rebuild(&state.db.lock().unwrap()).unwrap();
         let dir = std::env::temp_dir().join(format!("askbar-overrides-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("client.yaml");
@@ -683,6 +686,7 @@ mod tests {
         };
         let (api_l, api_url) = listen().await;
         let (admin_l, admin_url) = listen().await;
+        askbar_server::bridge::rebuild(&db).unwrap();
         let state = AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), "0.1.0", &api_url);
         let (a, b) = (askbar_server::api_router(state.clone()), askbar_server::admin_router(state));
         tokio::spawn(async move { axum::serve(api_l, a).await.unwrap() });

@@ -323,9 +323,10 @@ async fn the_test_endpoint_runs_a_provider_and_hides_the_key() {
     let llm = fake_llm().await;
     s.push_provider(&llm).await;
 
-    // No key yet: the provider rejects the (empty) credential.
+    // No key yet: the provider is known (it is in the snapshot) but rejects the empty credential.
     let (st, body) = s.call(M::POST, "/mgmt/v1/providers/p1/test", None).await;
-    assert_eq!(st, 404, "no row until a key is stored: {body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!((st, &v["ok"]), (200, &json!(false)), "{body}");
 
     s.call(M::PUT, "/mgmt/v1/providers/p1/key", Some(json!({ "key": KEY }))).await;
     let (st, body) = s.call(M::POST, "/mgmt/v1/providers/p1/test", None).await;

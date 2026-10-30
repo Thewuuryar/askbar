@@ -66,7 +66,7 @@ pub async fn chat(
         let provider = store::load_provider(&db, &secrets, &req.provider)
             .map_err(internal)?
             .ok_or(StatusCode::NOT_FOUND)?;
-        let system = store::system_prompt(&db).map_err(internal)?;
+        let system = store::chat_system_prompt(&db).map_err(internal)?;
         let conversation = match &req.conversation_id {
             Some(id) => db.get_conversation(&auth.user_id, id).map_err(internal)?.ok_or(StatusCode::NOT_FOUND)?.id,
             None => db.create_conversation(&auth.user_id, &crate::make_title(&text)).map_err(internal)?,

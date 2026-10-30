@@ -53,7 +53,22 @@ pub fn validate(s: &Snapshot) -> Result<(), String> {
     Ok(())
 }
 
-/// The stored snapshot, or `None` before the admin service has pushed one. Read-only.
+/// The providers in the order clients should offer them: the default, then the fallbacks
+/// in order, then the rest by name.
+pub fn in_client_order(s: &Snapshot) -> Vec<askbar_proto::SnapshotProvider> {
+    let mut rest: Vec<_> = s.providers.clone();
+    rest.sort_by(|a, b| a.name.cmp(&b.name));
+    let mut out = Vec::new();
+    for id in s.default_provider_id.iter().chain(s.fallback_order.iter()) {
+        if let Some(pos) = rest.iter().position(|p| &p.id == id) {
+            out.push(rest.remove(pos));
+        }
+    }
+    out.extend(rest);
+    out
+}
+
+/// The stored snapshot, or `None' before the admin service has pushed one. Read-only.
 pub fn current(db: &Db) -> rusqlite::Result<Option<Snapshot>> {
     let row: Option<(i64, String)> = db
         .conn()
