@@ -244,3 +244,7 @@ Rust 151 passed, 0 failed; clippy no errors (same 4 pre-existing style warnings)
 - **Disk:** the build tree reached 27 GB and filled the disk once mid-task; I removed `target/debug/incremental` and now build with `CARGO_INCREMENTAL=0`.
 - One run of `another_user_cannot_read_or_continue_my_conversation` (chat.rs) timed out waiting for the reply right after the disk-full rebuild; eight reruns and the full suite pass. Unreproduced.
 - T1: clippy no errors; Rust 157 passed; markdown 19, ui 43, admin 21; smoke 11 passed, 1 skipped.
+
+## Checkpoint R4b (T2)
+
+With the old admin still serving the UI: clippy no errors; Rust 157 passed, 0 failed; markdown 19, ui 43, admin 21 (the admin Node test drives the old admin UI end to end: setup, provider add/test/edit/delete, devices pair and revoke, network, settings, backup); `scripts/smoke.sh` 11 passed, 1 skipped (the desktop-client check needs a person; not verified).
