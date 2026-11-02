@@ -6,6 +6,17 @@ this page says what they mean. Everything is JSON over HTTPS except the chat str
 only) and the admin API (`/admin/api/v1`) are described in the sections below and in
 [architecture.md](architecture.md), not here.
 
+## The specs
+
+The machine-readable description of each API is an OpenAPI 3.1 file; this page is the prose that
+goes with them (what the pieces mean and why), and does not repeat them.
+
+- [openapi/client.v1.yaml](openapi/client.v1.yaml): the client API, `/api/client/v1`.
+- [openapi/server.v1.yaml](openapi/server.v1.yaml): the server API, `/api/server/v1` (internal).
+- [openapi/admin.v1.yaml](openapi/admin.v1.yaml): the admin API, `/admin/api/v1`.
+
+Tests check that each file lists exactly the routes the code registers.
+
 ## Ids
 
 - Every id the server hands out is a **ULID** (26 characters, Crockford base32), generated
@@ -89,13 +100,9 @@ Empty text is `400`; an unknown provider or a conversation that is not the calle
 the server cannot take the message it refuses before anything starts, with a problem (see
 *Errors*) whose `error` says why (the typed text is never lost; the client keeps it):
 
-| status | `error` | meaning |
-| --- | --- | --- |
-| `503` | `kill_switch` | the administrator switched generations off |
-| `503` | `audit_key_missing` | no audit key has been made yet (needs a person; no `Retry-After`) |
-| `503` | `audit_backlog` | the audit store cannot keep up; `Retry-After: 5`, try again |
-| `429` | `budget_exceeded` | a token budget is used up; `period` is `daily` or `monthly` |
-| `409` | `queue_full` | five messages are already waiting in the conversation |
+The refusals are 409 `queue_full`, 429 `budget_exceeded` (with `period`), 503 `kill_switch`,
+503 `audit_key_missing` and 503 `audit_backlog` (with `Retry-After`); the OpenAPI file lists them on
+`POST /chat`.
 
 None of these affect replies already running.
 Otherwise the answer is `200 text/event-stream`. Provider output is never passed through;
@@ -312,23 +319,11 @@ Every failure of every Askbar API is `application/problem+json` (RFC 9457):
 sentence for a person; extra members such as `period` ride alongside. Status codes and
 `Retry-After` are part of the contract. The codes (`askbar-proto/src/problem.rs`):
 
-| `error` | status | when |
-| --- | --- | --- |
-| `queue_full` | 409 | five messages already wait in the conversation |
-| `budget_exceeded` | 429 | a token budget is used up (`period`: `daily` or `monthly`) |
-| `kill_switch` | 503 | the administrator switched replies off |
-| `audit_key_missing` | 503 | no audit key has been made yet |
-| `audit_backlog` | 503 | the audit store is behind; `Retry-After: 5` |
-| `client_too_old` | 426 | the app (or the old `/api/v1` prefix) is too old; `min_client` says the version |
-| `client_version_missing` | 400 | no usable `x-askbar-client-version` header |
-| `unauthorized` | 401 | missing, unknown or revoked token (`WWW-Authenticate: Bearer`) |
-| `not_found` | 404 | no such thing, or not yours; also an unknown path |
-| `method_not_allowed` | 405 | the path exists, the method does not |
-| `bad_request` | 400 | the body or a parameter cannot be used |
-| `internal` | 500 | the server failed |
+The full list of codes, with their statuses, is the `error` enum of the `Problem` schema in each
+OpenAPI file below; the source is `askbar-proto/src/problem.rs`. A test keeps the files and the code the
+same.
 
-(The admin and server APIs add `forbidden`, `too_many_attempts`, `conflict`, `setup_required`,
-`server_unavailable`, `payload_too_large` and `api_key_exists`.) A refusal never starts a
+A refusal never starts a
 generation and never loses the typed text. Caddy answers a path nothing serves with the same
 `not_found` problem.
 
