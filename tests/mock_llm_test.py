@@ -53,6 +53,37 @@ class Modes(unittest.TestCase):
         _, r = self.srv.post("please 500")
         self.assertEqual(r.status, 500)
 
+    def test_429once_refuses_the_first_time_and_succeeds_after(self):
+        _, first = self.srv.post("unique 429once marker A")
+        self.assertEqual(first.status, 429)
+        self.assertEqual(first.getheader("retry-after"), "1")
+        first.read()
+        _, second = self.srv.post("unique 429once marker A")
+        self.assertEqual(second.status, 200)
+        self.assertIn("[DONE]", second.read().decode())
+        # A different message is refused on its own first try.
+        _, other = self.srv.post("unique 429once marker B")
+        self.assertEqual(other.status, 429)
+
+    def test_modes_can_be_chosen_by_the_model_name(self):
+        for model, status in (("m-429", 429), ("m-fail", 401), ("m-500", 500), ("m", 200)):
+            _, r = self.srv.post("a perfectly ordinary message", extra={"model": model})
+            self.assertEqual(r.status, status, model)
+            r.read()
+
+    def test_reset_sends_two_deltas_then_aborts_the_connection(self):
+        conn, r = self.srv.post("please reset")
+        self.assertEqual(r.status, 200)
+        got = b""
+        with self.assertRaises((ConnectionError, http.client.IncompleteRead)):
+            while True:
+                chunk = r.read(64)
+                if not chunk:
+                    break
+                got += chunk
+            raise http.client.IncompleteRead(got)  # a clean end would not be a reset
+        self.assertNotIn(b"[DONE]", got)
+
     def test_hang_sends_nothing_until_client_closes(self):
         c = http.client.HTTPConnection("127.0.0.1", self.srv.port, timeout=1)
         c.request("POST", "/v1/chat/completions", json.dumps(

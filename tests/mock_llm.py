@@ -5,14 +5,18 @@
 Then point a provider at http://127.0.0.1:8765/v1 (any key). Say "slow" in a
 message to get a long, slow reply (handy for testing Stop), or "fail" to get
 an HTTP 401 error. "429" answers HTTP 429 with Retry-After: 1 and "500" answers
-HTTP 500. With stream_options.include_usage a final usage chunk is sent
+HTTP 500. The same words in the model name ("m-429", "m-fail", "m-reset") work too. "429once" answers 429 (Retry-After: 1) the first time it sees that exact
+message and succeeds after, and "reset" sends two deltas then resets the connection (a failure
+that comes after text has been delivered). With stream_options.include_usage a final usage chunk is sent
 (cached_tokens is non-zero when the message contains "cached"). POST /v1/messages answers in Anthropic's streaming format with the same modes.
 "hang" accepts the request and sends nothing until the client closes;
 "drop" sends two content deltas and closes the connection without [DONE].
 """
 import json
 import os
+import socket
 import socketserver
+import struct
 import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -41,6 +45,9 @@ def text_of(content):
     if isinstance(content, list):
         return "".join(b.get("text", "") for b in content if isinstance(b, dict))
     return content or ""
+
+
+SEEN_ONCE = set()  # messages "429once" has already refused
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -91,7 +98,10 @@ class Handler(BaseHTTPRequestHandler):
               f"auth={'yes' if self.headers.get('authorization') else 'no'} last={last[:40]!r} system={system[:60]!r} "
               f"stream_options={json.dumps(body.get('stream_options'))}", flush=True)
 
-        if "fail" in last.lower():
+        # The failure modes can also be chosen by the model name ("m-429", "m-fail", "m-reset"),
+        # so two providers pointed at the same mock can behave differently for the same message.
+        probe = last + " " + str(body.get("model") or "")
+        if "fail" in probe.lower():
             payload = json.dumps({"error": {"message": "Incorrect API key provided (mock)"}}).encode()
             self.send_response(401)
             self.send_header("content-type", "application/json")
@@ -100,14 +110,34 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(payload)
             return
 
-        if "429" in last:
+        if "429" in probe and "429once" not in probe:
             self.send_json(429, {"error": {"message": "Rate limited (mock)"}}, {"retry-after": "1"})
             return
-        if "500" in last:
+        if "429once" in probe and probe not in SEEN_ONCE:
+            SEEN_ONCE.add(probe)
+            self.send_json(429, {"error": {"message": "Rate limited once (mock)"}}, {"retry-after": "1"})
+            return
+        if "reset" in probe.lower():
+            self.send_response(200)
+            self.send_header("content-type", "text/event-stream")
+            self.end_headers()
+            try:
+                if anthropic:
+                    self.anthropic_start(body)
+                for piece in ("Reset ", "midway"):
+                    self.delta(anthropic, piece)
+                time.sleep(0.05)
+                # Abort the connection (RST) instead of ending the stream.
+                self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+            except OSError:
+                pass
+            self.close_connection = True
+            return
+        if "500" in probe:
             self.send_json(500, {"error": {"message": "Internal error (mock)"}})
             return
 
-        if "hang" in last.lower():
+        if "hang" in probe.lower():
             # Send nothing; wait for the client to close its side.
             self.connection.settimeout(None)
             try:
@@ -117,7 +147,7 @@ class Handler(BaseHTTPRequestHandler):
                 pass
             print("client disconnected", flush=True)
             return
-        if "drop" in last.lower():
+        if "drop" in probe.lower():
             self.send_response(200)
             self.send_header("content-type", "text/event-stream")
             self.end_headers()
