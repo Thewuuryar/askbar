@@ -455,3 +455,60 @@ async fn all_of_it_needs_a_session() {
         assert_eq!(r.status(), 401, "{path}");
     }
 }
+
+#[tokio::test]
+async fn the_admin_api_key_is_shown_once_listed_by_name_and_revoked() {
+    let t = start(true).await;
+    // None yet.
+    assert_eq!(t.call(M::GET, "/admin/api/v1/keys", None).await, (200, json!([])));
+    // Make it: the key is in this answer and nowhere else.
+    let (st, made) = t.call(M::POST, "/admin/api/v1/keys", Some(json!({ "name": " build server " }))).await;
+    assert_eq!(st, 201, "{made}");
+    let key = made["key"].as_str().unwrap().to_string();
+    assert!(key.starts_with("askbar-admin-"), "{key}");
+    assert_eq!((made["name"].as_str(), made["scope"].as_str()), (Some("build server"), Some("admin")));
+    let id = made["id"].as_str().unwrap().to_string();
+    // Afterwards: a name and times.
+    let (_, listed) = t.call(M::GET, "/admin/api/v1/keys", None).await;
+    assert_eq!(listed.as_array().unwrap().len(), 1);
+    assert_eq!(listed[0]["id"], id.as_str());
+    assert!(listed[0].get("key").is_none() && listed[0].get("hash").is_none(), "{listed}");
+    // The key shows up in no other answer: the keys, the status, the settings, a backup.
+    let mut seen = vec![listed.to_string()];
+    for path in ["/admin/api/v1/status", "/admin/api/v1/settings", "/admin/api/v1/network", "/admin/api/v1/providers", "/admin/api/v1/clients"] {
+        seen.push(t.call(M::GET, path, None).await.1.to_string());
+    }
+    let backup = t.http.get(format!("{}/admin/api/v1/backup", t.adm)).header("cookie", &t.cookie).send().await.unwrap().bytes().await.unwrap();
+    assert!(!backup.windows(key.len()).any(|w| w == key.as_bytes()), "not in a backup");
+    assert!(seen.iter().all(|s| !s.contains(&key)), "not in any later answer");
+    // One at a time.
+    let (st, again) = t.call(M::POST, "/admin/api/v1/keys", Some(json!({ "name": "second" }))).await;
+    assert_eq!((st, again["error"].as_str()), (409, Some("api_key_exists")), "{again}");
+    // A bad name.
+    t.call(M::DELETE, &format!("/admin/api/v1/keys/{id}"), None).await;
+    for bad in ["", "   ", &"x".repeat(61)] {
+        let (st, e) = t.call(M::POST, "/admin/api/v1/keys", Some(json!({ "name": bad }))).await;
+        assert_eq!((st, e["error"].as_str()), (400, Some("bad_request")), "{bad:?}");
+    }
+    // Revoked: it stops working at once, and a new one can be made.
+    assert_eq!(t.call(M::DELETE, &format!("/admin/api/v1/keys/{id}"), None).await.0, 404, "already revoked");
+    let with_key = |k: &str| t.http.get(format!("{}/admin/api/v1/providers", t.adm)).bearer_auth(k).send();
+    assert_eq!(with_key(&key).await.unwrap().status(), 401);
+    let (st, second) = t.call(M::POST, "/admin/api/v1/keys", Some(json!({ "name": "second" }))).await;
+    assert_eq!(st, 201);
+    assert_eq!(with_key(second["key"].as_str().unwrap()).await.unwrap().status(), 200);
+}
+
+#[tokio::test]
+async fn the_key_routes_need_a_session_and_a_key_cannot_make_or_revoke_keys() {
+    let t = start(true).await;
+    let (_, made) = t.call(M::POST, "/admin/api/v1/keys", Some(json!({ "name": "ci" }))).await;
+    let key = made["key"].as_str().unwrap().to_string();
+    for (m, path) in [(reqwest::Method::GET, "/admin/api/v1/keys"), (reqwest::Method::POST, "/admin/api/v1/keys"), (reqwest::Method::DELETE, "/admin/api/v1/keys/x")] {
+        let signed_out = t.http.request(m.clone(), format!("{}{path}", t.adm)).header("x-askbar-admin", "1").send().await.unwrap();
+        assert_eq!(signed_out.status(), 401, "{m} {path} with nothing");
+        let with_key = t.http.request(m.clone(), format!("{}{path}", t.adm)).bearer_auth(&key).json(&json!({ "name": "evil" })).send().await.unwrap();
+        assert_eq!(with_key.status(), 401, "{m} {path} with the key");
+    }
+    assert_eq!(t.call(M::GET, "/admin/api/v1/keys", None).await.1.as_array().unwrap().len(), 1, "the key made no key");
+}

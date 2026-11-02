@@ -352,6 +352,51 @@ pub async fn revoke_client(State(state): St, Path(id): Path<String>) -> Result<S
     Ok(StatusCode::NO_CONTENT)
 }
 
+// ------------------------------------------------------------------ the admin API key
+
+#[derive(Deserialize)]
+pub struct NewKey {
+    #[serde(default)]
+    name: String,
+}
+
+/// The one response that carries the key itself. Nothing returns it again.
+#[derive(Serialize)]
+pub struct CreatedKey {
+    #[serde(flatten)]
+    row: crate::api_key::KeyRow,
+    /// Shown once: copy it now.
+    key: String,
+}
+
+/// `POST /admin/api/v1/keys`: make the admin API key. 409 `api_key_exists` while one is active.
+pub async fn create_key(State(state): St, ApiJson(b): ApiJson<NewKey>) -> Result<(StatusCode, Json<CreatedKey>), Failure> {
+    use crate::api_key::{create, CreateError};
+    let db = state.db.lock().await;
+    match create(db.conn(), &b.name, crate::auth::now()) {
+        Ok((row, key)) => Ok((StatusCode::CREATED, Json(CreatedKey { row, key }))),
+        Err(CreateError::Exists) => Err(askbar_proto::http::ApiError::new(askbar_proto::ErrorCode::ApiKeyExists, "An API key already exists. Revoke it before making another.").no_challenge()),
+        Err(CreateError::BadName) => Err(bad("The name must be 1 to 60 characters.")),
+        Err(CreateError::Db(_)) => Err(internal(())),
+    }
+}
+
+/// `GET /admin/api/v1/keys`: the key that can be used, by name. Never the key or its hash.
+pub async fn list_keys(State(state): St) -> Result<Json<Vec<crate::api_key::KeyRow>>, Failure> {
+    let db = state.db.lock().await;
+    crate::api_key::list(db.conn()).map(Json).map_err(internal)
+}
+
+/// `DELETE /admin/api/v1/keys/{id}`: revoke it. It stops working at once.
+pub async fn revoke_key(State(state): St, Path(id): Path<String>) -> Result<StatusCode, Failure> {
+    let db = state.db.lock().await;
+    match crate::api_key::revoke(db.conn(), &id, crate::auth::now()) {
+        Ok(true) => Ok(StatusCode::NO_CONTENT),
+        Ok(false) => Err(err(StatusCode::NOT_FOUND, "There is no such key.")),
+        Err(e) => Err(internal(e)),
+    }
+}
+
 // ------------------------------------------------------------------ pairing
 
 #[derive(Deserialize)]

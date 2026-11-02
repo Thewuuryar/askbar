@@ -126,11 +126,14 @@ pub fn routes(state: &Arc<AdminState>) -> Routes {
         .put(&v1("/network"), network::put_network)
         .post(&v1("/network/apply"), network::apply_network)
         .signed_in_or_key(state);
-    // What only the person's own session may do: the password, and looking at or ending the session.
+    // What only the person's own session may do: the password, the API key, and looking at or ending the session.
     let session_only = Routes::new()
         .put(&v1("/password"), web::change_password)
         .get(&v1("/session"), || async { StatusCode::NO_CONTENT })
         .delete(&v1("/session"), web::logout)
+        .post(&v1("/keys"), admin_api::create_key)
+        .get(&v1("/keys"), admin_api::list_keys)
+        .delete(&v1("/keys/{id}"), admin_api::revoke_key)
         .signed_in(state);
     // Open, but a change still wants the browser header.
     let open = Routes::new().post(&v1("/session"), web::login).put(&v1("/setup/password"), web::setup_password).browser_header();
