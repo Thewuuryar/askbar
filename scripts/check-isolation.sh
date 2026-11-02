@@ -140,6 +140,28 @@ refused "the server cannot write to /mgmt (read-only)" docker exec "$SERVER" sh 
 refused "the admin's database is not in the server" docker exec -u "$(docker exec "$ADMIN" id -u)" "$SERVER" sh -c 'ls /admin-data/admin.db'
 refused "the admin cannot read the server's master key" docker exec "$ADMIN" sh -c 'cat /secrets/master.key'
 
+echo "== 3b. The audit store"
+# audit.db is the server's alone: its own volume, mounted nowhere else.
+case " $VOLS" in *" ${PROJECT}_audit-data "*) pass "the server mounts audit-data";; *) fail "the server does not mount audit-data";; esac
+case " $(docker inspect -f '{{range .Mounts}}{{.Name}} {{end}}' "$ADMIN")" in
+  *" ${PROJECT}_audit-data "*) fail "the admin mounts audit-data";; *) pass "the admin does not mount audit-data";;
+esac
+refused "the admin container has no /audit" docker exec "$ADMIN" test -e /audit
+refused "no audit.db anywhere in the admin container" docker exec "$ADMIN" sh -c 'find / -xdev -name "audit.db*" 2>/dev/null | grep -q .'
+check "audit.db exists in the server" docker exec "$SERVER" test -s /audit/audit.db
+# The device API (port 8080, reachable from the edge network) has no audit and no management routes.
+http_get() { # network host:port path -> status; 0 = no connection
+  py --network "$1" -- "
+import urllib.request, urllib.error
+try: print(urllib.request.urlopen('http://$2$3', timeout=4).status)
+except urllib.error.HTTPError as e: print(e.code)
+except Exception: print(0)
+"
+}
+for path in /audit /api/v1/audit /api/v1/audit/traces /api/v1/audit/stats /mgmt/v1/health /mgmt/v1/audit/traces /mgmt/v1/audit/stats; do
+  [ "$(http_get "$EDGE" "$EDGE_IP:8080" "$path")" = 404 ] && pass "the device API has no $path (404)" || fail "the device API answers $path"
+done
+
 echo "== 4. The allowlist"
 caddy_config() { # prints the admin site's route from Caddy's loaded config
   py -u 10001:10001 -v "${PROJECT}_caddy-run:/r" -- "
