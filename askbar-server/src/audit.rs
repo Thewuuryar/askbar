@@ -5,6 +5,9 @@
 
 use rusqlite::Connection;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
+use tokio::sync::{mpsc, oneshot};
 
 /// "ADIT": marks the file as an Askbar audit database, so no other SQLite file is taken for one.
 const APPLICATION_ID: i64 = 0x4144_4954;
@@ -120,6 +123,183 @@ impl AuditDb {
     pub fn conn(&self) -> &Connection {
         &self.conn
     }
+}
+
+// --------------------------------------------------------------------- recording
+
+/// A span that has begun. It is written as `running` and finished later by `SpanFinish`.
+#[derive(Debug, Clone, Default)]
+pub struct SpanStart {
+    pub id: String,
+    pub trace_id: String,
+    pub parent_id: Option<String>,
+    /// turn, gate, attempt, tool or agent_step.
+    pub kind: String,
+    pub name: String,
+    pub started_at: i64,
+    pub provider_id: Option<String>,
+    pub model: Option<String>,
+    pub user_id: Option<String>,
+    pub device_id: Option<String>,
+    pub attrs_json: Option<String>,
+}
+
+/// How a span ended. Fields left `None` keep what the start recorded.
+#[derive(Debug, Clone, Default)]
+pub struct SpanFinish {
+    pub id: String,
+    pub status: String,
+    pub ended_at: i64,
+    pub provider_id: Option<String>,
+    pub model: Option<String>,
+    pub tokens_in: Option<u64>,
+    pub tokens_out: Option<u64>,
+    pub tokens_cached: Option<u64>,
+    pub ttft_ms: Option<u64>,
+    pub error_code: Option<String>,
+    pub attrs_json: Option<String>,
+}
+
+enum Event {
+    Start(SpanStart),
+    Finish(SpanFinish),
+    /// Answered once everything sent before it has been written.
+    Flush(oneshot::Sender<()>),
+}
+
+/// Lets a test hold the writer still, to fill the queue.
+#[derive(Default)]
+struct Pause {
+    paused: Mutex<bool>,
+    changed: Condvar,
+}
+
+/// The handle the rest of the server records through. Cheap to clone. Recording never waits:
+/// events go into a bounded queue, one writer thread owns the connection and drains it, and
+/// when the queue is full the event is dropped and `healthy()` says so (new generations are
+/// then refused, see 4.10).
+#[derive(Clone)]
+pub struct Recorder {
+    tx: Option<mpsc::Sender<Event>>,
+    pause: Arc<Pause>,
+    dropped: Arc<AtomicU64>,
+}
+
+impl Recorder {
+    /// Records nothing. The default, so a server without an audit store behaves as before.
+    pub fn noop() -> Recorder {
+        Recorder { tx: None, pause: Arc::default(), dropped: Arc::default() }
+    }
+
+    /// Takes ownership of `db` and writes to it from one thread. `capacity` is the queue length.
+    pub fn spawn(db: AuditDb, capacity: usize) -> Recorder {
+        let (tx, mut rx) = mpsc::channel::<Event>(capacity.max(1));
+        let pause = Arc::new(Pause::default());
+        let writer_pause = pause.clone();
+        std::thread::Builder::new()
+            .name("askbar-audit-writer".into())
+            .spawn(move || {
+                while let Some(event) = rx.blocking_recv() {
+                    let mut paused = writer_pause.paused.lock().unwrap_or_else(|e| e.into_inner());
+                    while *paused {
+                        paused = writer_pause.changed.wait(paused).unwrap_or_else(|e| e.into_inner());
+                    }
+                    drop(paused);
+                    match event {
+                        Event::Start(s) => {
+                            if let Err(e) = write_start(db.conn(), &s) {
+                                tracing::warn!("audit: could not write a span: {e}");
+                            }
+                        }
+                        Event::Finish(f) => {
+                            if let Err(e) = write_finish(db.conn(), &f) {
+                                tracing::warn!("audit: could not finish a span: {e}");
+                            }
+                        }
+                        Event::Flush(done) => {
+                            let _ = done.send(());
+                        }
+                    }
+                }
+            })
+            .expect("audit writer thread");
+        Recorder { tx: Some(tx), pause, dropped: Arc::default() }
+    }
+
+    /// False while the queue is full, i.e. the writer is not keeping up.
+    pub fn healthy(&self) -> bool {
+        self.tx.as_ref().is_none_or(|tx| tx.capacity() > 0)
+    }
+
+    /// How many events were dropped because the queue was full.
+    pub fn dropped(&self) -> u64 {
+        self.dropped.load(Ordering::Relaxed)
+    }
+
+    fn send(&self, event: Event) {
+        let Some(tx) = &self.tx else { return };
+        if tx.try_send(event).is_err() {
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    pub fn start(&self, span: SpanStart) {
+        self.send(Event::Start(span));
+    }
+
+    pub fn finish(&self, span: SpanFinish) {
+        self.send(Event::Finish(span));
+    }
+
+    /// Waits until everything recorded so far has been written. For shutdown and tests.
+    pub async fn flush(&self) {
+        let Some(tx) = &self.tx else { return };
+        let (done, wait) = oneshot::channel();
+        if tx.send(Event::Flush(done)).await.is_ok() {
+            let _ = wait.await;
+        }
+    }
+
+    /// Tests only: hold the writer still (or let it go on), to fill the queue.
+    #[doc(hidden)]
+    pub fn pause_writer(&self, paused: bool) {
+        *self.pause.paused.lock().unwrap_or_else(|e| e.into_inner()) = paused;
+        self.pause.changed.notify_all();
+    }
+}
+
+fn write_start(conn: &Connection, s: &SpanStart) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO spans (id, trace_id, parent_id, kind, name, status, started_at, provider_id, model, user_id, device_id, attrs_json)
+         VALUES (?1, ?2, ?3, ?4, ?5, 'running', ?6, ?7, ?8, ?9, ?10, ?11)",
+        rusqlite::params![s.id, s.trace_id, s.parent_id, s.kind, s.name, s.started_at, s.provider_id, s.model, s.user_id, s.device_id, s.attrs_json],
+    )?;
+    Ok(())
+}
+
+fn write_finish(conn: &Connection, f: &SpanFinish) -> rusqlite::Result<()> {
+    // `AND status = 'running'`: a span finishes once; a second finish changes nothing.
+    conn.execute(
+        "UPDATE spans SET status = ?2, ended_at = ?3,
+             provider_id = COALESCE(?4, provider_id), model = COALESCE(?5, model),
+             tokens_in = ?6, tokens_out = ?7, tokens_cached = ?8, ttft_ms = ?9,
+             error_code = ?10, attrs_json = COALESCE(?11, attrs_json)
+         WHERE id = ?1 AND status = 'running'",
+        rusqlite::params![
+            f.id,
+            f.status,
+            f.ended_at,
+            f.provider_id,
+            f.model,
+            f.tokens_in.map(|n| n as i64),
+            f.tokens_out.map(|n| n as i64),
+            f.tokens_cached.map(|n| n as i64),
+            f.ttft_ms.map(|n| n as i64),
+            f.error_code,
+            f.attrs_json
+        ],
+    )?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -248,5 +428,70 @@ mod tests {
         Connection::open(&foreign).unwrap().execute_batch("CREATE TABLE t (x); PRAGMA user_version = 1;").unwrap();
         assert!(matches!(AuditDb::open(&foreign), Err(AuditError::UnexpectedVersion { found: 1, .. })));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    fn temp_db() -> (std::path::PathBuf, AuditDb) {
+        let dir = std::env::temp_dir().join(format!("askbar-audit-rec-{}", ulid::Ulid::new()));
+        let db = AuditDb::open(&dir.join("audit.db")).unwrap();
+        (dir, db)
+    }
+
+    fn start(id: &str, trace: &str) -> SpanStart {
+        SpanStart { id: id.into(), trace_id: trace.into(), kind: "turn".into(), name: "chat".into(), started_at: 100, ..Default::default() }
+    }
+
+    #[tokio::test]
+    async fn events_are_written_in_the_order_they_were_recorded() {
+        let (dir, db) = temp_db();
+        let rec = Recorder::spawn(db, 1024);
+        for i in 0..200 {
+            rec.start(start(&format!("s{i:03}"), "t"));
+            if i % 2 == 0 {
+                rec.finish(SpanFinish { id: format!("s{i:03}"), status: "done".into(), ended_at: 101, tokens_in: Some(i), ..Default::default() });
+            }
+        }
+        rec.flush().await;
+        let conn = Connection::open(dir.join("audit.db")).unwrap();
+        let ids: Vec<String> = conn.prepare("SELECT id FROM spans ORDER BY rowid").unwrap().query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
+        assert_eq!(ids, (0..200).map(|i| format!("s{i:03}")).collect::<Vec<_>>());
+        let done: i64 = conn.query_row("SELECT COUNT(*) FROM spans WHERE status = 'done' AND tokens_in IS NOT NULL", [], |r| r.get(0)).unwrap();
+        assert_eq!(done, 100);
+        let running: i64 = conn.query_row("SELECT COUNT(*) FROM spans WHERE status = 'running'", [], |r| r.get(0)).unwrap();
+        assert_eq!(running, 100, "odd ones were never finished");
+        assert_eq!(rec.dropped(), 0);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn a_full_queue_makes_it_unhealthy_and_it_recovers_when_the_writer_catches_up() {
+        let (dir, db) = temp_db();
+        let rec = Recorder::spawn(db, 4);
+        assert!(rec.healthy());
+        rec.pause_writer(true);
+        // The writer takes one event and holds it; four more fill the queue.
+        for i in 0..8 {
+            rec.start(start(&format!("s{i}"), "t"));
+            if i == 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await; // let it pick the first up
+            }
+        }
+        assert!(!rec.healthy(), "the queue is full");
+        assert!(rec.dropped() >= 1, "what did not fit was dropped, and counted");
+        rec.pause_writer(false);
+        rec.flush().await;
+        assert!(rec.healthy(), "drained");
+        let conn = Connection::open(dir.join("audit.db")).unwrap();
+        let n: i64 = conn.query_row("SELECT COUNT(*) FROM spans", [], |r| r.get(0)).unwrap();
+        assert_eq!(n as u64 + rec.dropped(), 8, "every event was either written or counted as dropped");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn the_noop_recorder_is_always_healthy_and_records_nothing() {
+        let rec = Recorder::noop();
+        rec.start(start("s", "t"));
+        rec.flush().await;
+        assert!(rec.healthy());
+        assert_eq!(rec.dropped(), 0);
     }
 }
