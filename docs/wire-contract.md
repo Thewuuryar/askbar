@@ -82,10 +82,18 @@ Both follow the signed-in user, so all of a user's devices see the same values.
 `{"conversation_id": "<id>" (optional), "provider": "<provider id>", "text": "...", "client_request_id": "<string>" (optional)}`.
 Empty text is `400`; an unknown provider or a conversation that is not the caller's is
 `404`; a conversation that already has five messages waiting is `409` (see *The queue*); when
-the server's audit store cannot keep up it answers `503` with `Retry-After: 5` and
-`{"error":"audit_backlog"}`, and when the administrator has not made an audit key yet it answers
-`503` with `{"error":"audit_key_missing"}` (no `Retry-After`: it needs a person); neither starts
-anything (replies already running are not affected).
+the server cannot take the message it refuses before anything starts, with a JSON body whose
+`error` says why (the typed text is never lost; the client keeps it):
+
+| status | `error` | meaning |
+| --- | --- | --- |
+| `503` | `kill_switch` | the administrator switched generations off |
+| `503` | `audit_key_missing` | no audit key has been made yet (needs a person; no `Retry-After`) |
+| `503` | `audit_backlog` | the audit store cannot keep up; `Retry-After: 5`, try again |
+| `429` | `budget_exceeded` | a token budget is used up; `period` is `daily` or `monthly` |
+| `409` | (none) | five messages are already waiting in the conversation |
+
+None of these affect replies already running.
 Otherwise the answer is `200 text/event-stream`. Provider output is never passed through;
 the server re-emits its own events. Each SSE message has `event:` naming the type and
 `data:` holding a JSON object that repeats the type in an `"event"` field:
@@ -93,6 +101,7 @@ the server re-emits its own events. Each SSE message has `event:` naming the typ
 | event | data | meaning |
 | --- | --- | --- |
 | `meta` | `{"event":"meta","conversation_id":"<id>","generation_id":"<id>","queued":true}` | always first. The conversation this turn belongs to (new if none was sent) and the generation running it. `queued` appears only when it is true |
+| `provider` | `{"event":"provider","id":"<provider id>","name":"..."}` | which provider is serving the reply; sent before the first delta, and again if a fallback changes it before any text. No SSE `id:` |
 | `delta` | `{"event":"delta","text":"..."}` | the next piece of the reply; zero or more. Carries an SSE `id:` line, see below |
 | `done` | `{"event":"done"}` | the reply is complete (also when it was stopped with cancel: the text so far is kept) |
 | `error` | `{"event":"error","message":"..."}` | the reply failed or was cut short; the question is still saved, and so is any text that had arrived |
@@ -165,6 +174,42 @@ The wire format changed in 0.4.0 (generation ids, delta ids, queued messages, th
 endpoints), and a 0.3.x client would stop a reply when its connection dropped, so
 `min_client` moved to 0.4.0.
 
+## Routing, retries and gates
+
+The server, not the client, decides which provider serves a reply.
+
+- The provider asked for (`ChatRequest.provider`) is tried first, then the snapshot's
+  `fallback_order`. A **metered** provider is used as a fallback only if its snapshot entry has
+  `allow_as_fallback`; a **subscription** provider always may be. Provider entries carry
+  `billing` (`metered` by default, or `subscription`), `allow_as_fallback` (false by default) and
+  per-million prices `price_in`, `price_out`, `price_cached_in` (optional; a missing price is an
+  unknown cost, never zero).
+- Each provider is tried up to three times (once, then twice more) when the failure is worth it: a
+  connection problem, a timeout, `408`, `429`, any `5xx`, or a stream that broke. The waits are
+  250 ms and 1 s, or the provider's `Retry-After` when it is shorter than the time left. `401`,
+  `403` and a missing key are not retried: the next provider is tried and the provider is flagged
+  `auth_failed` until a reply from it succeeds or a new key is saved. Any other `4xx` ends the
+  generation (it would be refused anywhere).
+- **After the first delta the router never retries or switches.** The person has seen text, so a
+  failure then ends the generation with an `error` event and the text so far is kept.
+- Everything above sits inside the generation's timeout (`generation_timeout_secs`).
+- Gates run before anything starts. `kill_switch`: with the snapshot's `kill_switch` on, new
+  generations are refused. When it goes on, queued messages are cleared, and replies already running
+  are stopped (ending `cancelled`, `error_code: kill_switch`) when `kill_switch_aborts_running` is
+  true (the default) or left to finish when false. `budget`: the tokens used since the start of the
+  UTC day and month by metered providers are compared with `budget.daily_tokens` and
+  `budget.monthly_tokens`; subscription providers count as zero. Each gate leaves a `gate` span
+  (`done`, or `blocked` for a refusal, which gets a trace of its own).
+- `GET /mgmt/v1/providers/health` (management token): `{"providers": [{"provider_id", "status":
+  "auth_failed", "since", "error_code"}]}`; only flagged providers are listed, and the reason is a
+  code (e.g. `http_401`), never the provider's own text.
+- Cost is computed whenever it is read, from the provider's prices in the snapshot at that moment:
+  uncached input x `price_in` + cached x `price_cached_in` + output x `price_out`, per million
+  tokens (OpenAI-style input counts include the cached tokens; Anthropic's do not). A subscription
+  provider costs 0. A needed price that is missing gives `null`. The audit endpoints below carry it.
+- Anthropic request bodies mark the system prompt and the older history cacheable; the cached
+  tokens a provider reports are recorded on the attempt.
+
 ## Audit (management API)
 
 The admin service reads what the server recorded through three endpoints on the management
@@ -176,17 +221,23 @@ A server with no audit store answers `503`.
 - `GET /mgmt/v1/audit/traces?status=&provider=&before=&limit=`: one summary per generation,
   newest first: `{"traces": [{"trace_id", "span_id", "status", "started_at", "ended_at", "user_id",
   "device_id", "tokens_in", "tokens_out", "tokens_cached", "error_code", "provider_id", "model",
-  "ttft_ms", "latency_ms"}]}`. `status` filters on the turn's status, `provider` on the provider of
+  "ttft_ms", "latency_ms", "cost"}]}`. `status` filters on the turn's status, `provider` on the provider of
   its last attempt, `before` is a `trace_id` (only older traces, for paging), `limit` is 1 to 200
   (default 50). `trace_id` is the generation id.
-- `GET /mgmt/v1/audit/traces/{id}`: `{"trace_id", "spans": [...]}`, every span of that generation
-  in the order they began (`404` if there is none). A span has `id`, `parent_id`, `kind`, `name`,
-  `status`, `started_at`, `ended_at`, `provider_id`, `model`, `tokens_in|out|cached`, `ttft_ms`,
-  `error_code`, `user_id`, `device_id` and `attrs` (a JSON object).
+- `GET /mgmt/v1/audit/traces/{id}`: `{"trace_id", "cost", "spans": [...]}`, every span of that
+  generation in the order they began (`404` if there is none). A span has `id`, `parent_id`,
+  `kind`, `name`, `status`, `started_at`, `ended_at`, `provider_id`, `model`,
+  `tokens_in|out|cached`, `ttft_ms`, `error_code`, `user_id`, `device_id`, `cost` and `attrs` (a
+  JSON object; an attempt's carries `retry_index`, `fallback_from`, `latency_ms`, `http_status`).
+  `gate` spans (`kill_switch`, `budget`, `queue`) end `done` when they let it through and `blocked`
+  when they refused it.
 - `GET /mgmt/v1/audit/stats?since=<unix seconds>` (default: the last 24 hours):
   `{"since", "requests", "by_status": {...}, "error_rate", "latency_ms": {"p50","p95"},
-  "ttft_ms": {"p50","p95"}, "tokens": {"in","out","cached"}}` over generations that began at or
-  after `since`. `error_rate` counts `error` and `timed_out`.
+  "ttft_ms": {"p50","p95"}, "tokens": {"in","out","cached"}, "cost", "cost_unknown_requests",
+  "by_provider": [...], "by_day": [...]}` over generations that began at or after `since`.
+  `error_rate` counts `error` and `timed_out`. `by_provider` and `by_day` (UTC `YYYY-MM-DD`) rows
+  have `requests`, `tokens` and `cost`. A cost is `null`, and `cost_unknown_requests` says how many
+  requests are the reason, when a price that was needed is missing.
 
 - `GET /mgmt/v1/audit/payloads/{span_id}`: `[{"role", "key_id", "ciphertext_b64"}]`, the sealed
   content of one span exactly as stored (`404` for a span that does not exist, `[]` for one with

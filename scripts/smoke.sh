@@ -189,9 +189,18 @@ print("ok" if ok else "bad", conv, len(text))' "$WORK/chat.sse" 2>/dev/null)
   else
     fail "search history finds the question" "HTTP $code"
   fi
+
+  # 10. Retries: the mock refuses this message with a 429 (Retry-After: 1) the first time; the
+  # server waits and tries again, and the reply still completes.
+  api -N --max-time 60 -X POST -H 'content-type: application/json' \
+    -d "{\"provider\":\"$PROVIDER\",\"text\":\"smoke 429once retry\"}" "$URL/api/v1/chat" >"$WORK/retry.sse" 2>/dev/null
+  RETRY=$(py 'import sys
+text=open(sys.argv[1], encoding="utf-8").read()
+print("ok" if "event: delta" in text and text.rstrip().endswith("data: {\"event\":\"done\"}") and "event: error" not in text else "bad")' "$WORK/retry.sse" 2>/dev/null)
+  if [ "$RETRY" = "ok" ]; then pass "a provider that answers 429 once still completes the reply"; else fail "a provider that answers 429 once still completes the reply" "$(tail -c 200 "$WORK/retry.sse")"; fi
 fi
 
-# 10. What only a person can check.
+# 11. What only a person can check.
 ask_person "Does the desktop client, paired to this server, show the streamed reply?"
 
 echo
