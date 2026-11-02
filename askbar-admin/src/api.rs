@@ -412,6 +412,83 @@ pub async fn setup_audit_key(State(state): St, Json(b): Json<SetupAuditKey>) -> 
     Ok(Json(serde_json::json!({ "key_id": id })))
 }
 
+// ------------------------------------------------------- opening sealed content
+
+#[derive(Deserialize)]
+pub struct OpenRequest {
+    passphrase: String,
+}
+
+/// `POST /admin/api/audit/payloads/{span_id}/open`: fetch the sealed content of one span from the
+/// server, derive the key from the passphrase in the body, open it, and drop the key. The
+/// passphrase is never stored or logged. Before any content is returned an `audit_access` row is
+/// written; a wrong passphrase is recorded too, answers 403, and is rate limited (429).
+pub async fn open_audit_payloads(State(state): St, Path(span_id): Path<String>, Json(b): Json<OpenRequest>) -> Result<Json<serde_json::Value>, Failure> {
+    use crate::audit_key::{derive, key_id, open_sealed, KdfParams};
+    use base64::Engine;
+    let now = crate::auth::now();
+    if let Some(wait) = state.audit_opens.locked_for(now) {
+        return Err(err(StatusCode::TOO_MANY_REQUESTS, &format!("Too many wrong passphrases. Try again in {} minutes.", (wait + 59) / 60)));
+    }
+    let (status, body) = link(&state)?
+        .request(reqwest::Method::GET, &format!("/mgmt/v1/audit/payloads/{span_id}"), None)
+        .await
+        .map_err(from_push)?;
+    match status {
+        200 => {}
+        404 => return Err(err(StatusCode::NOT_FOUND, "No such span.")),
+        s => return Err(err(StatusCode::BAD_GATEWAY, &format!("The server answered {s}."))),
+    }
+    let list: Vec<serde_json::Value> = serde_json::from_slice(&body).map_err(internal)?;
+    if list.is_empty() {
+        return Ok(Json(serde_json::json!({ "span_id": span_id, "payloads": [] })));
+    }
+
+    // One key per key id the payloads name; each is derived once and dropped when this returns.
+    let mut keys: std::collections::BTreeMap<String, Option<crate::audit_key::AuditKeypair>> = std::collections::BTreeMap::new();
+    let passphrase = b.passphrase;
+    let mut all_right = true;
+    for p in &list {
+        let kid = p["key_id"].as_str().unwrap_or("").to_string();
+        if keys.contains_key(&kid) {
+            continue;
+        }
+        let row = state.db.lock().await.audit_key(&kid).map_err(internal)?;
+        let derived = match row {
+            None => None,
+            Some(row) => {
+                let (pass, salt, params) = (passphrase.clone(), row.salt, KdfParams::parse(&row.argon_params).unwrap_or(KdfParams::CURRENT));
+                let kp = tokio::task::spawn_blocking(move || derive(&pass, &salt, params)).await.map_err(internal)?.map_err(internal)?;
+                // Right passphrase only if it gives back the very key the payload names.
+                (key_id(&kp.public_bytes()) == kid).then_some(kp)
+            }
+        };
+        all_right &= derived.is_some();
+        keys.insert(kid, derived);
+    }
+    let first_key = list[0]["key_id"].as_str().unwrap_or("").to_string();
+    // The access is written before anything is returned; if it cannot be written, nothing is.
+    {
+        let db = state.db.lock().await;
+        crate::db::record_audit_access(db.conn(), &span_id, &first_key, now, all_right).map_err(internal)?;
+    }
+    if !all_right {
+        state.audit_opens.record_wrong(now);
+        // 403, not 401: the page treats 401 as "signed out".
+        return Err(err(StatusCode::FORBIDDEN, "That passphrase does not open this content."));
+    }
+    state.audit_opens.record_right();
+    let mut out = Vec::new();
+    for p in &list {
+        let kid = p["key_id"].as_str().unwrap_or("");
+        let ct = base64::engine::general_purpose::STANDARD.decode(p["ciphertext_b64"].as_str().unwrap_or("")).map_err(internal)?;
+        let kp = keys.get(kid).and_then(|k| k.as_ref()).ok_or_else(|| internal(()))?;
+        let text = open_sealed(&kp.secret, &ct).map(|b| String::from_utf8_lossy(&b).into_owned());
+        out.push(serde_json::json!({ "role": p["role"], "key_id": kid, "text": text }));
+    }
+    Ok(Json(serde_json::json!({ "span_id": span_id, "payloads": out })))
+}
+
 // ----------------------------------------------------------------- settings
 
 #[derive(Serialize, Deserialize)]

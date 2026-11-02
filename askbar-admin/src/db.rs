@@ -81,6 +81,16 @@ const MIGRATIONS: &[&str] = &[
          retired_at   INTEGER
      );
      CREATE UNIQUE INDEX audit_keys_one_active ON audit_keys((1)) WHERE retired_at IS NULL;",
+    // v5: who opened what. Every time the administrator opens sealed content (or fails to), a row
+    // is written first, so reading the trail leaves a trail. No content and no passphrase, only
+    // which span, which key, when, and whether the passphrase was right.
+    "CREATE TABLE audit_access (
+         id        INTEGER PRIMARY KEY AUTOINCREMENT,
+         span_id   TEXT    NOT NULL,
+         key_id    TEXT    NOT NULL,
+         opened_at INTEGER NOT NULL,
+         ok        INTEGER NOT NULL CHECK (ok IN (0, 1))
+     );",
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -128,6 +138,15 @@ fn read_key(r: &rusqlite::Row<'_>) -> rusqlite::Result<AuditKeyRow> {
         created_at: r.get(4)?,
         retired_at: r.get(5)?,
     })
+}
+
+/// Records an attempt to open the content of `span_id` (sealed to `key_id`).
+pub fn record_audit_access(conn: &Connection, span_id: &str, key_id: &str, opened_at: i64, ok: bool) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO audit_access (span_id, key_id, opened_at, ok) VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params![span_id, key_id, opened_at, ok as i64],
+    )?;
+    Ok(())
 }
 
 /// The key the server seals with now, if one has been made.

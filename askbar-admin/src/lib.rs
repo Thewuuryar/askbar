@@ -31,6 +31,8 @@ pub struct AdminState {
     /// Async lock: a change holds it while it waits for the server to accept the new snapshot.
     pub db: Arc<Mutex<AdminDb>>,
     pub auth: auth::AdminAuth,
+    /// Limits guesses at the audit passphrase (see `audit_key::Limiter`).
+    pub audit_opens: audit_key::Limiter,
     /// The link to the server; `None` in tests that don't need one.
     pub server: Option<Arc<mgmt::ServerLink>>,
     /// Encrypts the Cloudflare token at rest.
@@ -54,6 +56,7 @@ impl AdminState {
         Arc::new(AdminState {
             db: Arc::new(Mutex::new(db)),
             auth: auth::AdminAuth::default(),
+            audit_opens: audit_key::Limiter::default(),
             server,
             secrets,
             caddy: std::sync::Mutex::new(caddy::CaddyLink::default()),
@@ -103,6 +106,7 @@ pub fn router(state: Arc<AdminState>) -> Router {
         .route("/admin/api/devices/{id}/revoke", post(api::revoke_device))
         .route("/admin/api/pair", post(api::create_pairing))
         .route("/admin/api/setup/audit-key", post(api::setup_audit_key))
+        .route("/admin/api/audit/payloads/{span_id}/open", post(api::open_audit_payloads))
         .route("/admin/api/settings", get(api::get_settings).put(api::put_settings))
         .route("/admin/api/users/{id}/display-defaults", put(api::put_user_display))
         .route("/admin/api/backup", get(api::backup))

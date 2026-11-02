@@ -110,9 +110,89 @@ pub fn new_salt() -> [u8; 16] {
     salt
 }
 
+/// A sealed payload opened with `secret`, or `None` if it does not open (wrong key, damaged).
+pub fn open_sealed(secret: &SecretKey, sealed: &[u8]) -> Option<Vec<u8>> {
+    secret.unseal(sealed).ok()
+}
+
+/// Limits guesses at the passphrase: `MAX_WRONG` wrong ones within `WINDOW_SECS` lock opening out
+/// for `LOCKOUT_SECS`. In memory only, and separate from the login lockout (a wrong passphrase
+/// must not lock the administrator out of the site, nor the reverse).
+#[derive(Default)]
+pub struct Limiter {
+    state: std::sync::Mutex<LimiterState>,
+}
+
+#[derive(Default)]
+struct LimiterState {
+    wrong: Vec<i64>,
+    locked_until: i64,
+}
+
+pub const MAX_WRONG: usize = 5;
+pub const WINDOW_SECS: i64 = 15 * 60;
+pub const LOCKOUT_SECS: i64 = 15 * 60;
+
+impl Limiter {
+    /// Seconds left on a lockout at time `now`, if one is active.
+    pub fn locked_for(&self, now: i64) -> Option<i64> {
+        let until = self.state.lock().unwrap_or_else(|e| e.into_inner()).locked_until;
+        (until > now).then(|| until - now)
+    }
+
+    pub fn record_wrong(&self, now: i64) {
+        let mut st = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        st.wrong.retain(|t| *t > now - WINDOW_SECS);
+        st.wrong.push(now);
+        if st.wrong.len() >= MAX_WRONG {
+            st.locked_until = now + LOCKOUT_SECS;
+            st.wrong.clear();
+        }
+    }
+
+    pub fn record_right(&self) {
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).wrong.clear();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn five_wrong_passphrases_lock_opening_for_fifteen_minutes_and_a_right_one_resets_the_count() {
+        let l = Limiter::default();
+        for i in 0..4 {
+            l.record_wrong(1000 + i);
+            assert_eq!(l.locked_for(1000 + i), None);
+        }
+        l.record_right();
+        for i in 0..4 {
+            l.record_wrong(2000 + i);
+        }
+        assert_eq!(l.locked_for(2004), None, "the right one in between reset the count");
+        l.record_wrong(2004);
+        assert_eq!(l.locked_for(2005), Some(LOCKOUT_SECS - 1));
+        assert_eq!(l.locked_for(2004 + LOCKOUT_SECS), None, "it ends");
+        // Old failures outside the window do not count toward a new lockout.
+        let l = Limiter::default();
+        for i in 0..4 {
+            l.record_wrong(i);
+        }
+        l.record_wrong(WINDOW_SECS + 100);
+        assert_eq!(l.locked_for(WINDOW_SECS + 101), None);
+    }
+
+    #[test]
+    fn a_payload_opens_only_with_the_key_derived_from_the_right_passphrase() {
+        let salt = [4u8; 16];
+        let right = derive_for_setup("the right passphrase, long enough", &salt, FAST).unwrap();
+        let wrong = derive_for_setup("the wrong passphrase, long enough", &salt, FAST).unwrap();
+        let sealed = right.public.seal(&mut crypto_box::aead::OsRng, b"reply text").unwrap();
+        assert_eq!(open_sealed(&right.secret, &sealed).as_deref(), Some(&b"reply text"[..]));
+        assert_eq!(open_sealed(&wrong.secret, &sealed), None);
+        assert_eq!(open_sealed(&right.secret, b"garbage"), None);
+    }
 
     // Cheap parameters keep these tests quick; the point is the wiring, not the cost.
     const FAST: KdfParams = KdfParams { memory_kib: 64, passes: 1, lanes: 1 };
