@@ -88,6 +88,12 @@ async fn the_audit_key_setup_checks_the_passphrase_makes_one_key_and_refuses_a_s
     };
     assert!(!String::from_utf8_lossy(&dump).contains(good));
 
+    // The public half reached the server in the snapshot; nothing else of the key did.
+    let pushed = askbar_server::snapshot::current(&t.server.db.lock().unwrap()).unwrap().unwrap().audit_public_key.expect("the server has the public key");
+    assert_eq!(pushed.key_id, key_id);
+    assert_eq!(pushed.public_key.len(), 64);
+    assert_eq!(pushed.public_key, row.public_key.iter().map(|b| format!("{b:02x}")).collect::<String>());
+
     // A second call is a conflict and changes nothing (rotation is a later step).
     let (st, _) = call(json!({ "passphrase": "another passphrase, long enough", "confirm": "another passphrase, long enough" })).await;
     assert_eq!(st, 409);

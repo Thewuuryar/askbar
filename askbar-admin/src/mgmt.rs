@@ -87,6 +87,10 @@ pub fn ensure_token(secrets_dir: &Path, mgmt_dir: &Path) -> std::io::Result<Stri
 
 // ------------------------------------------------------------------ the snapshot
 
+fn active_audit_key(conn: &rusqlite::Connection) -> rusqlite::Result<Option<crate::db::AuditKeyRow>> {
+    crate::db::active_audit_key(conn)
+}
+
 fn setting(conn: &rusqlite::Connection, key: &str) -> rusqlite::Result<Option<String>> {
     conn.query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| r.get(0)).optional()
 }
@@ -161,6 +165,11 @@ pub fn build_snapshot(conn: &rusqlite::Connection) -> rusqlite::Result<Snapshot>
         generation_timeout_secs: setting(conn, "generation_timeout_secs")?
             .and_then(|s| s.trim().parse().ok())
             .unwrap_or(askbar_proto::DEFAULT_GENERATION_TIMEOUT_SECS),
+        // Public half only; the keyring holds nothing else.
+        audit_public_key: active_audit_key(conn)?.map(|k| askbar_proto::AuditKey {
+            key_id: k.key_id,
+            public_key: k.public_key.iter().map(|b| format!("{b:02x}")).collect(),
+        }),
     })
 }
 

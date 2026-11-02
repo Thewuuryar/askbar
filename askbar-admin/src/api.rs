@@ -402,8 +402,13 @@ pub async fn setup_audit_key(State(state): St, Json(b): Json<SetupAuditKey>) -> 
     let public = kp.public_bytes();
     let id = key_id(&public);
     let row = crate::db::AuditKeyRow { key_id: id.clone(), public_key: public, salt, argon_params: params.to_text(), created_at: crate::auth::now(), retired_at: None };
-    // The unique index on active keys also settles two calls at once: one wins, the other is a 409.
-    state.db.lock().await.insert_audit_key(&row).map_err(|_| err(StatusCode::CONFLICT, "An audit key already exists."))?;
+    // Saved and pushed to the server together: if the server cannot be reached the key is not kept
+    // either (the same rule as every other setting). The unique index on active keys also settles
+    // two calls at once: one wins, the other is a 409.
+    mutate(&state, vec![], move |c| {
+        crate::db::insert_audit_key(c, &row).map_err(|_| err(StatusCode::CONFLICT, "An audit key already exists."))
+    })
+    .await?;
     Ok(Json(serde_json::json!({ "key_id": id })))
 }
 

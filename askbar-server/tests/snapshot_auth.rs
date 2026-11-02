@@ -72,6 +72,7 @@ impl T {
             kill_switch: false,
             audit_retention_days: 30,
             generation_timeout_secs: 300,
+            audit_public_key: None,
         }
     }
     async fn push(&self, s: &Snapshot) {

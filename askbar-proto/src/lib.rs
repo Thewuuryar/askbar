@@ -116,6 +116,19 @@ pub struct Snapshot {
     /// Seconds a generation may run before it is stopped (30 to 3600). Read when it starts.
     #[serde(default = "default_generation_timeout_secs")]
     pub generation_timeout_secs: u32,
+    /// The public key the server seals audit content to. Only ever the public half: the private
+    /// key does not exist anywhere outside the administrator's passphrase. `None` until the admin
+    /// has made one; the server then refuses to start replies.
+    #[serde(default)]
+    pub audit_public_key: Option<AuditKey>,
+}
+
+/// An audit public key and its id (the first 8 bytes of the SHA-256 of the key, in hex).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuditKey {
+    pub key_id: String,
+    /// The 32-byte X25519 public key, as 64 hex characters.
+    pub public_key: String,
 }
 
 /// Five minutes.
@@ -324,6 +337,16 @@ mod tests {
         let s = serde_json::to_string(&d).unwrap();
         assert!(!s.contains("pending"), "{s}");
         assert_eq!(serde_json::from_str::<ConversationDetail>(&s).unwrap(), d);
+    }
+
+    #[test]
+    fn the_audit_public_key_round_trips_and_an_older_snapshot_without_it_still_parses() {
+        let mut s: Snapshot = serde_json::from_str(r#"{"audit_retention_days": 30}"#).unwrap();
+        assert_eq!(s.audit_public_key, None);
+        s.audit_public_key = Some(AuditKey { key_id: "0011223344556677".into(), public_key: "ab".repeat(32) });
+        let json = serde_json::to_string(&s).unwrap();
+        assert_eq!(serde_json::from_str::<Snapshot>(&json).unwrap(), s);
+        assert!(json.contains("audit_public_key") && !json.contains("secret") && !json.contains("passphrase"));
     }
 
     #[test]

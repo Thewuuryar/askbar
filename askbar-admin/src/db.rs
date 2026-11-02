@@ -108,6 +108,39 @@ pub struct AdminDb {
     conn: Connection,
 }
 
+/// Adds a key as the active one; fails if another is active (see `AdminDb::insert_audit_key`).
+pub fn insert_audit_key(conn: &Connection, k: &AuditKeyRow) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO audit_keys (key_id, public_key, salt, argon_params, created_at, retired_at) VALUES (?1,?2,?3,?4,?5,?6)",
+        rusqlite::params![k.key_id, k.public_key.as_slice(), k.salt.as_slice(), k.argon_params, k.created_at, k.retired_at],
+    )?;
+    Ok(())
+}
+
+fn read_key(r: &rusqlite::Row<'_>) -> rusqlite::Result<AuditKeyRow> {
+    let public: Vec<u8> = r.get(1)?;
+    let salt: Vec<u8> = r.get(2)?;
+    Ok(AuditKeyRow {
+        key_id: r.get(0)?,
+        public_key: public.try_into().map_err(|_| rusqlite::Error::InvalidColumnType(1, "public_key".into(), rusqlite::types::Type::Blob))?,
+        salt: salt.try_into().map_err(|_| rusqlite::Error::InvalidColumnType(2, "salt".into(), rusqlite::types::Type::Blob))?,
+        argon_params: r.get(3)?,
+        created_at: r.get(4)?,
+        retired_at: r.get(5)?,
+    })
+}
+
+/// The key the server seals with now, if one has been made.
+pub fn active_audit_key(conn: &Connection) -> rusqlite::Result<Option<AuditKeyRow>> {
+    use rusqlite::OptionalExtension;
+    conn.query_row(
+        "SELECT key_id, public_key, salt, argon_params, created_at, retired_at FROM audit_keys WHERE retired_at IS NULL",
+        [],
+        read_key,
+    )
+    .optional()
+}
+
 impl AdminDb {
     pub fn open(path: &Path) -> Result<AdminDb, DbError> {
         if let Some(dir) = path.parent() {
@@ -154,11 +187,7 @@ impl AdminDb {
     /// Adds a key to the keyring as the active one. Fails if another key is still active:
     /// replacing one is `replace_active_audit_key`.
     pub fn insert_audit_key(&self, k: &AuditKeyRow) -> Result<(), DbError> {
-        self.conn.execute(
-            "INSERT INTO audit_keys (key_id, public_key, salt, argon_params, created_at, retired_at) VALUES (?1,?2,?3,?4,?5,?6)",
-            rusqlite::params![k.key_id, k.public_key.as_slice(), k.salt.as_slice(), k.argon_params, k.created_at, k.retired_at],
-        )?;
-        Ok(())
+        Ok(insert_audit_key(&self.conn, k)?)
     }
 
     /// Retires the active key (if any) and makes `new` the active one, in one transaction, so there
@@ -174,34 +203,22 @@ impl AdminDb {
         Ok(())
     }
 
-    fn audit_key_where(&self, clause: &str, arg: &str) -> Result<Option<AuditKeyRow>, DbError> {
-        use rusqlite::OptionalExtension;
-        let sql = format!("SELECT key_id, public_key, salt, argon_params, created_at, retired_at FROM audit_keys WHERE {clause}");
-        Ok(self
-            .conn
-            .query_row(&sql, rusqlite::params_from_iter((!arg.is_empty()).then_some(arg)), |r| {
-                let public: Vec<u8> = r.get(1)?;
-                let salt: Vec<u8> = r.get(2)?;
-                Ok(AuditKeyRow {
-                    key_id: r.get(0)?,
-                    public_key: public.try_into().map_err(|_| rusqlite::Error::InvalidColumnType(1, "public_key".into(), rusqlite::types::Type::Blob))?,
-                    salt: salt.try_into().map_err(|_| rusqlite::Error::InvalidColumnType(2, "salt".into(), rusqlite::types::Type::Blob))?,
-                    argon_params: r.get(3)?,
-                    created_at: r.get(4)?,
-                    retired_at: r.get(5)?,
-                })
-            })
-            .optional()?)
-    }
-
     /// A key by its id, retired or not.
     pub fn audit_key(&self, key_id: &str) -> Result<Option<AuditKeyRow>, DbError> {
-        self.audit_key_where("key_id = ?1", key_id)
+        use rusqlite::OptionalExtension;
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT key_id, public_key, salt, argon_params, created_at, retired_at FROM audit_keys WHERE key_id = ?1",
+                [key_id],
+                read_key,
+            )
+            .optional()?)
     }
 
     /// The key the server seals with now, if one has been made.
     pub fn active_audit_key(&self) -> Result<Option<AuditKeyRow>, DbError> {
-        self.audit_key_where("retired_at IS NULL", "")
+        Ok(active_audit_key(&self.conn)?)
     }
 }
 

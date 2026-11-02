@@ -28,6 +28,26 @@ fn check_display(d: &DisplaySettings, whose: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// The public key must be 32 bytes in hex, and its id must be the one derived from it, so a
+/// payload's `key_id` can always be trusted to name the key that sealed it.
+fn check_audit_key(k: &askbar_proto::AuditKey) -> Result<(), String> {
+    use sha2::{Digest, Sha256};
+    let bytes = parse_hex(&k.public_key).filter(|b| b.len() == 32).ok_or("audit_public_key.public_key must be 32 bytes in hex")?;
+    let id: String = Sha256::digest(&bytes)[..8].iter().map(|b| format!("{b:02x}")).collect();
+    if id != k.key_id {
+        return Err("audit_public_key.key_id does not match the key".into());
+    }
+    Ok(())
+}
+
+/// Hex to bytes; `None` for odd length or a non-hex character.
+pub fn parse_hex(s: &str) -> Option<Vec<u8>> {
+    if s.len() % 2 != 0 || !s.is_ascii() {
+        return None;
+    }
+    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok()).collect()
+}
+
 /// Why a snapshot can't be accepted, in words for the admin service's log.
 pub fn validate(s: &Snapshot) -> Result<(), String> {
     if s.audit_retention_days < MIN_AUDIT_RETENTION_DAYS {
@@ -37,6 +57,9 @@ pub fn validate(s: &Snapshot) -> Result<(), String> {
         return Err(format!(
             "generation_timeout_secs must be between {MIN_GENERATION_TIMEOUT_SECS} and {MAX_GENERATION_TIMEOUT_SECS}"
         ));
+    }
+    if let Some(k) = &s.audit_public_key {
+        check_audit_key(k)?;
     }
     let mut ids = std::collections::BTreeSet::new();
     for p in &s.providers {
@@ -133,6 +156,25 @@ pub fn apply(db: &Db, s: &Snapshot) -> Result<u64, ApplyError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_audit_public_key_must_be_32_hex_bytes_with_its_own_id() {
+        use sha2::{Digest, Sha256};
+        let public = [5u8; 32];
+        let key = |public_hex: &str, id: &str| askbar_proto::AuditKey { key_id: id.into(), public_key: public_hex.into() };
+        let hex: String = public.iter().map(|b| format!("{b:02x}")).collect();
+        let id: String = Sha256::digest(public)[..8].iter().map(|b| format!("{b:02x}")).collect();
+        let mut s = crate::testing::empty_snapshot();
+        assert_eq!(validate(&s), Ok(()), "no key is fine; the server just refuses to start replies");
+        s.audit_public_key = Some(key(&hex, &id));
+        assert_eq!(validate(&s), Ok(()));
+        for bad in [key(&hex, "0000000000000000"), key(&hex[..62], &id), key("zz".repeat(32).as_str(), &id), key("", &id)] {
+            s.audit_public_key = Some(bad.clone());
+            assert!(validate(&s).is_err(), "{bad:?}");
+        }
+        assert_eq!(parse_hex("00ff"), Some(vec![0, 255]));
+        assert_eq!(parse_hex("0"), None);
+    }
 
     #[test]
     fn the_generation_timeout_must_be_between_30_and_3600_seconds() {

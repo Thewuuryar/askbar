@@ -127,6 +127,26 @@ fn the_snapshot_is_built_from_admin_db() {
 }
 
 #[test]
+fn the_snapshot_carries_the_active_audit_public_key_and_only_that() {
+    let db = AdminDb::open_in_memory().unwrap();
+    assert_eq!(mgmt::build_snapshot(db.conn()).unwrap().audit_public_key, None, "no key made yet");
+    db.insert_audit_key(&askbar_admin::db::AuditKeyRow {
+        key_id: "0011223344556677".into(),
+        public_key: [0xab; 32],
+        salt: [9; 16],
+        argon_params: "m=65536,t=3,p=1".into(),
+        created_at: 1,
+        retired_at: None,
+    })
+    .unwrap();
+    let s = mgmt::build_snapshot(db.conn()).unwrap();
+    let json = serde_json::to_string(&s).unwrap();
+    let k = s.audit_public_key.expect("the active key");
+    assert_eq!((k.key_id.as_str(), k.public_key.as_str()), ("0011223344556677", "ab".repeat(32).as_str()));
+    assert!(!json.contains("salt") && !json.contains("argon"), "the salt and cost stay in the admin: {json}");
+}
+
+#[test]
 fn the_generation_timeout_defaults_to_300_when_never_set_and_follows_the_setting() {
     let db = AdminDb::open_in_memory().unwrap();
     // An install that predates the setting: no key, so the default, with no migration.
