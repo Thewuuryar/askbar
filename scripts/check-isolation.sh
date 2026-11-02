@@ -284,7 +284,7 @@ echo "== 6. The first-run page"
 # Caddy serves the admin over plain HTTP on 127.0.0.1:8081 of the host, on a network only Caddy joins.
 SETUP_CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:8081/admin/ 2>/dev/null || true)
 [ "$SETUP_CODE" = 200 ] && pass "http://127.0.0.1:8081/admin/ opens the admin" || fail "the first-run page answered '$SETUP_CODE'"
-for path in / /api/client/v1/health /api/server/v1/health /health; do
+for path in / /api/client/v1/health /api/server/v1/health /api/v1/health /health; do
   code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1:8081$path" 2>/dev/null || true)
   [ "$code" = 404 ] && pass "the first-run page has nothing at $path (404)" || fail "the first-run page answers $path with '$code'"
 done

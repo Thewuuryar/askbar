@@ -200,6 +200,22 @@ print("ok" if "event: delta" in text and text.rstrip().endswith("data: {\"event\
   if [ "$RETRY" = "ok" ]; then pass "a provider that answers 429 once still completes the reply"; else fail "a provider that answers 429 once still completes the reply" "$(tail -c 200 "$WORK/retry.sse")"; fi
 fi
 
+# 10b. The shapes the APIs promise: the old prefix says "update", a refusal is a problem, and (local) an admin API key works.
+OLD=$(curl -sS -o "$WORK/old.json" -w '%{http_code}' "$URL/api/v1/health" 2>/dev/null || true)
+if [ "$OLD" = "426" ] && [ "$(json "$WORK/old.json" "d['error']")" = "client_too_old" ]; then pass "the old /api/v1 prefix answers 426 client_too_old"; else fail "the old /api/v1 prefix answers 426" "got $OLD"; fi
+NOPE=$(curl -sS -o "$WORK/nope.json" -w '%{http_code}' -H "x-askbar-client-version: $CLIENT_VERSION" "$URL/api/server/v1/health" 2>/dev/null || true)
+if [ "$NOPE" = "404" ] && [ "$(json "$WORK/nope.json" "d['error']")" = "not_found" ]; then pass "the server API is not served on the client listener (404 problem)"; else fail "the server API is not served on the client listener" "got $NOPE"; fi
+if [ $LOCAL = 1 ]; then
+  if admin POST /admin/api/v1/keys '{"name":"smoke test"}' >"$WORK/key.json" 2>/dev/null; then
+    KEY=$(json "$WORK/key.json" "d['key']")
+    CODE_KEY=$(curl -sS -o /dev/null -w '%{http_code}' --unix-socket "$SOCK" -H "authorization: Bearer $KEY" "http://admin/admin/api/v1/providers" 2>/dev/null || true)
+    CODE_SESSION=$(curl -sS -o /dev/null -w '%{http_code}' --unix-socket "$SOCK" -H "authorization: Bearer $KEY" "http://admin/admin/api/v1/keys" 2>/dev/null || true)
+    if [ "$CODE_KEY" = "200" ] && [ "$CODE_SESSION" = "401" ]; then pass "an admin API key reads the API but cannot manage keys"; else fail "admin API key" "api=$CODE_KEY keys=$CODE_SESSION"; fi
+  else
+    fail "make an admin API key"
+  fi
+fi
+
 # 11. What only a person can check.
 ask_person "Does the desktop client, paired to this server, show the streamed reply?"
 
