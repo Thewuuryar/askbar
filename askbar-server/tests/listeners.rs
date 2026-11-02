@@ -37,3 +37,22 @@ async fn the_client_and_server_api_routers_share_no_routes() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[tokio::test]
+async fn even_with_the_server_token_the_server_api_listener_serves_no_client_api_and_the_old_path_is_gone() {
+    use sha2::{Digest, Sha256};
+    let dir = std::env::temp_dir().join(format!("askbar-listeners2-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let token = "mgt_listener-test-token";
+    let hash: String = Sha256::digest(token.as_bytes()).iter().map(|b| format!("{b:02x}")).collect();
+    std::fs::write(dir.join("token.sha256"), hash).unwrap();
+    let server_api = spawn(askbar_server::server_api::router(state(), dir.join("token.sha256"))).await;
+    let get = |path: &'static str| async move {
+        reqwest::Client::new().get(format!("http://{server_api}{path}")).bearer_auth(token).send().await.unwrap().status().as_u16()
+    };
+    assert_eq!(get("/api/server/v1/health").await, 200);
+    for not_here in ["/api/client/v1/health", "/api/client/v1/conversations", "/api/v1/health", "/api/v1/conversations", "/mgmt/v1/health", "/admin/", "/"] {
+        assert_eq!(get(not_here).await, 404, "{not_here}: the server API listener serves only /api/server/v1");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
