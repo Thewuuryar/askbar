@@ -102,6 +102,44 @@ pub enum ChatError {
     Stream(String),
 }
 
+/// Tokens a reply used, as the provider reported them (or estimated, see `estimated`).
+/// A field the provider did not report is `None`, not 0.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Usage {
+    pub input: Option<u64>,
+    pub output: Option<u64>,
+    /// Prompt tokens served from the provider's cache.
+    pub cache_read: Option<u64>,
+    /// Prompt tokens written to the provider's cache.
+    pub cache_write: Option<u64>,
+    /// True when the numbers are our own estimate, not the provider's.
+    pub estimated: bool,
+}
+
+/// What happened during one request to a provider, for audit and cost.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StreamReport {
+    pub outcome: StreamOutcome,
+    pub usage: Option<Usage>,
+    /// From sending the request to the first piece of text.
+    pub time_to_first_token: Option<Duration>,
+    /// From sending the request to the end (or the failure).
+    pub total: Duration,
+    /// The HTTP status of the response, if one arrived.
+    pub http_status: Option<u16>,
+    /// The provider's `Retry-After`, if it sent one (seconds form).
+    pub retry_after: Option<Duration>,
+    /// Why the provider says it stopped (`stop`, `end_turn`, ...), if it said.
+    pub finish_reason: Option<String>,
+}
+
+/// A failed request, with what is known about it up to the failure.
+#[derive(Debug)]
+pub struct ReportedError {
+    pub error: ChatError,
+    pub report: StreamReport,
+}
+
 pub type HttpClient = reqwest::Client;
 
 pub fn http_client() -> HttpClient {
