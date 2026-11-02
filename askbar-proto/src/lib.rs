@@ -8,6 +8,9 @@ Answer directly. Use Markdown when it helps. You cannot access the user's comput
 mod sse;
 pub use sse::{SseEvent, SseParser};
 
+pub mod problem;
+pub use problem::{ErrorCode, Problem};
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
