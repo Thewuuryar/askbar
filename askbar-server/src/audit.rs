@@ -223,6 +223,26 @@ pub fn trace_spans(conn: &Connection, trace_id: &str) -> rusqlite::Result<Vec<se
     rows.collect()
 }
 
+/// The sealed payloads of one span, as stored (ciphertext in base64): `None` if there is no such
+/// span, an empty list if it has none. Nothing here can turn them back into text.
+pub fn span_payloads(conn: &Connection, span_id: &str) -> rusqlite::Result<Option<Vec<serde_json::Value>>> {
+    use base64::Engine;
+    let exists: bool = conn.query_row("SELECT EXISTS (SELECT 1 FROM spans WHERE id = ?1)", [span_id], |r| r.get(0))?;
+    if !exists {
+        return Ok(None);
+    }
+    let mut stmt = conn.prepare("SELECT role, key_id, ciphertext FROM payloads WHERE span_id = ?1 ORDER BY rowid")?;
+    let rows = stmt.query_map([span_id], |r| {
+        let ct: Vec<u8> = r.get(2)?;
+        Ok(serde_json::json!({
+            "role": r.get::<_, String>(0)?,
+            "key_id": r.get::<_, String>(1)?,
+            "ciphertext_b64": base64::engine::general_purpose::STANDARD.encode(ct),
+        }))
+    })?;
+    Ok(Some(rows.collect::<Result<_, _>>()?))
+}
+
 /// The p-th percentile (0 to 100) of a sorted list, by nearest rank.
 fn percentile(sorted: &[i64], p: f64) -> Option<i64> {
     if sorted.is_empty() {

@@ -700,3 +700,38 @@ async fn the_audit_endpoints_need_the_management_token_and_a_recording_store() {
     let (st, _) = s.call(reqwest::Method::GET, "/mgmt/v1/audit/stats", None).await;
     assert_eq!(st, 503);
 }
+
+#[tokio::test]
+async fn sealed_payloads_are_served_as_ciphertext_only_and_unknown_spans_are_404() {
+    use base64::Engine;
+    let a = audit_stack().await;
+    let id = a.chat("SECRET-WORD tell me").await;
+    let (_, body) = a.get(&format!("/mgmt/v1/audit/traces/{id}")).await;
+    let spans: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let span_of = |kind: &str| spans["spans"].as_array().unwrap().iter().find(|s| s["kind"] == kind).unwrap()["id"].as_str().unwrap().to_string();
+
+    let (st, body) = a.get(&format!("/mgmt/v1/audit/payloads/{}", span_of("attempt"))).await;
+    assert_eq!(st, 200);
+    assert!(!body.contains("SECRET-WORD") && !body.contains("Anything else?"), "no plaintext: {body}");
+    let list: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(list.as_array().unwrap().len(), 1);
+    assert_eq!(list[0]["role"], "request");
+    assert_eq!(list[0]["key_id"], askbar_server::testing::test_audit_key().key_id.as_str());
+    let ct = base64::engine::general_purpose::STANDARD.decode(list[0]["ciphertext_b64"].as_str().unwrap()).unwrap();
+    // The caller can open it with the key; the server's endpoint never did.
+    let opened = crypto_box::SecretKey::from(askbar_server::testing::TEST_AUDIT_SECRET).unseal(&ct).unwrap();
+    assert!(String::from_utf8(opened).unwrap().contains("SECRET-WORD tell me"));
+    let keys: Vec<&str> = list[0].as_object().unwrap().keys().map(String::as_str).collect();
+    assert_eq!(keys.len(), 3, "role, key_id, ciphertext_b64 and nothing else: {keys:?}");
+
+    let (_, body) = a.get(&format!("/mgmt/v1/audit/payloads/{}", span_of("turn"))).await;
+    let turn: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(turn[0]["role"], "reply");
+    assert!(!body.contains("Anything else?"));
+
+    // A span that exists but has nothing sealed is an empty list; one that does not exist is 404.
+    let (st, body) = a.get("/mgmt/v1/audit/payloads/01NOSUCHSPAN").await;
+    assert_eq!(st, 404, "{body}");
+    let r = a.http.get(format!("{}/mgmt/v1/audit/payloads/{}", a.url, span_of("turn"))).send().await.unwrap();
+    assert_eq!(r.status(), 401, "needs the token");
+}

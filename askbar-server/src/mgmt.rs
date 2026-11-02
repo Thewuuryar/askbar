@@ -193,6 +193,16 @@ async fn audit_trace(State(state): State<Arc<AppState>>, Path(id): Path<String>)
     Ok(Json(serde_json::json!({ "trace_id": id, "spans": spans })))
 }
 
+/// `GET /mgmt/v1/audit/payloads/{span_id}`: the sealed content of one span, as ciphertext.
+/// Only the admin, with the passphrase, can turn it into text; this endpoint cannot.
+async fn audit_payloads(State(state): State<Arc<AppState>>, Path(span_id): Path<String>) -> Result<Json<serde_json::Value>, Failure> {
+    let conn = state.audit.reader().ok_or_else(no_audit)?;
+    match crate::audit::span_payloads(&conn, &span_id).map_err(|_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not read the audit store."))? {
+        Some(list) => Ok(Json(serde_json::Value::Array(list))),
+        None => Err(fail(StatusCode::NOT_FOUND, "No such span.")),
+    }
+}
+
 #[derive(serde::Deserialize)]
 struct StatsQuery {
     since: Option<i64>,
@@ -247,6 +257,7 @@ pub fn router(state: Arc<AppState>, hash_file: PathBuf) -> Router {
         .route("/mgmt/v1/audit/traces", get(audit_traces))
         .route("/mgmt/v1/audit/traces/{id}", get(audit_trace))
         .route("/mgmt/v1/audit/stats", get(audit_stats))
+        .route("/mgmt/v1/audit/payloads/{span_id}", get(audit_payloads))
         .layer(middleware::from_fn_with_state(Guard { hash_file }, require_token))
         .with_state(state)
 }
