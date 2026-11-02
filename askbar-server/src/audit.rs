@@ -160,6 +160,83 @@ pub struct SpanFinish {
     pub attrs_json: Option<String>,
 }
 
+/// What a span is. The set is fixed (the database checks it too).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    /// A whole generation, from start to finish.
+    Turn,
+    /// A check before it runs, or time spent waiting.
+    Gate,
+    /// One request to one provider.
+    Attempt,
+    Tool,
+    AgentStep,
+}
+
+impl Kind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Kind::Turn => "turn",
+            Kind::Gate => "gate",
+            Kind::Attempt => "attempt",
+            Kind::Tool => "tool",
+            Kind::AgentStep => "agent_step",
+        }
+    }
+}
+
+fn now_secs() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
+}
+
+impl SpanStart {
+    /// A span in trace `trace_id` (the generation id), starting now, with a fresh id.
+    pub fn new(trace_id: &str, kind: Kind, name: &str) -> SpanStart {
+        SpanStart {
+            id: crate::ids::new_id(),
+            trace_id: trace_id.to_string(),
+            kind: kind.as_str().to_string(),
+            name: name.to_string(),
+            started_at: now_secs(),
+            ..Default::default()
+        }
+    }
+
+    pub fn parent(mut self, parent_id: &str) -> SpanStart {
+        self.parent_id = Some(parent_id.to_string());
+        self
+    }
+
+    pub fn provider(mut self, provider_id: &str, model: &str) -> SpanStart {
+        self.provider_id = Some(provider_id.to_string());
+        self.model = Some(model.to_string());
+        self
+    }
+
+    pub fn who(mut self, user_id: &str, device_id: Option<&str>) -> SpanStart {
+        self.user_id = Some(user_id.to_string());
+        self.device_id = device_id.map(str::to_string);
+        self
+    }
+
+    pub fn attrs(mut self, attrs: &serde_json::Value) -> SpanStart {
+        self.attrs_json = Some(attrs.to_string());
+        self
+    }
+}
+
+impl SpanFinish {
+    /// Ends span `id` now with `status`.
+    pub fn new(id: &str, status: &str) -> SpanFinish {
+        SpanFinish { id: id.to_string(), status: status.to_string(), ended_at: now_secs(), ..Default::default() }
+    }
+
+    pub fn error_code(mut self, code: &str) -> SpanFinish {
+        self.error_code = Some(code.to_string());
+        self
+    }
+}
+
 enum Event {
     Start(SpanStart),
     Finish(SpanFinish),
@@ -243,11 +320,15 @@ impl Recorder {
         }
     }
 
-    pub fn start(&self, span: SpanStart) {
+    /// Records that a span has begun and returns its id, for its children and for `finish_span`.
+    pub fn start_span(&self, span: SpanStart) -> String {
+        let id = span.id.clone();
         self.send(Event::Start(span));
+        id
     }
 
-    pub fn finish(&self, span: SpanFinish) {
+    /// Records how a span ended. Only the first finish of a span counts.
+    pub fn finish_span(&self, span: SpanFinish) {
         self.send(Event::Finish(span));
     }
 
@@ -445,9 +526,9 @@ mod tests {
         let (dir, db) = temp_db();
         let rec = Recorder::spawn(db, 1024);
         for i in 0..200 {
-            rec.start(start(&format!("s{i:03}"), "t"));
+            rec.start_span(start(&format!("s{i:03}"), "t"));
             if i % 2 == 0 {
-                rec.finish(SpanFinish { id: format!("s{i:03}"), status: "done".into(), ended_at: 101, tokens_in: Some(i), ..Default::default() });
+                rec.finish_span(SpanFinish { id: format!("s{i:03}"), status: "done".into(), ended_at: 101, tokens_in: Some(i), ..Default::default() });
             }
         }
         rec.flush().await;
@@ -470,7 +551,7 @@ mod tests {
         rec.pause_writer(true);
         // The writer takes one event and holds it; four more fill the queue.
         for i in 0..8 {
-            rec.start(start(&format!("s{i}"), "t"));
+            rec.start_span(start(&format!("s{i}"), "t"));
             if i == 0 {
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await; // let it pick the first up
             }
@@ -487,9 +568,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn spans_link_to_their_parent_share_a_trace_and_a_second_finish_is_ignored() {
+        let (dir, db) = temp_db();
+        let rec = Recorder::spawn(db, 64);
+        let turn = rec.start_span(SpanStart::new("gen-1", Kind::Turn, "chat").who("u1", Some("d1")));
+        let attempt = rec.start_span(SpanStart::new("gen-1", Kind::Attempt, "openai").parent(&turn).provider("p1", "m1"));
+        let gate = rec.start_span(SpanStart::new("gen-1", Kind::Gate, "queue").parent(&turn));
+        assert!(turn < attempt && attempt < gate, "ids come from ids.rs and sort in creation order");
+        rec.finish_span(SpanFinish { tokens_in: Some(5), ..SpanFinish::new(&attempt, "done") });
+        rec.finish_span(SpanFinish::new(&attempt, "error").error_code("late")); // ignored
+        rec.finish_span(SpanFinish::new(&gate, "done"));
+        rec.finish_span(SpanFinish::new(&turn, "done"));
+        rec.flush().await;
+
+        let conn = Connection::open(dir.join("audit.db")).unwrap();
+        let row = |id: &str| -> (String, Option<String>, String, String, Option<i64>, Option<String>) {
+            conn.query_row("SELECT trace_id, parent_id, kind, status, tokens_in, error_code FROM spans WHERE id = ?1", [id], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))
+            })
+            .unwrap()
+        };
+        assert_eq!(row(&turn), ("gen-1".into(), None, "turn".into(), "done".into(), None, None));
+        assert_eq!(row(&attempt), ("gen-1".into(), Some(turn.clone()), "attempt".into(), "done".into(), Some(5), None), "the first finish stands");
+        assert_eq!(row(&gate).1.as_deref(), Some(turn.as_str()));
+        let (user, device, provider, model): (String, String, String, String) = (
+            conn.query_row("SELECT user_id FROM spans WHERE id = ?1", [&turn], |r| r.get(0)).unwrap(),
+            conn.query_row("SELECT device_id FROM spans WHERE id = ?1", [&turn], |r| r.get(0)).unwrap(),
+            conn.query_row("SELECT provider_id FROM spans WHERE id = ?1", [&attempt], |r| r.get(0)).unwrap(),
+            conn.query_row("SELECT model FROM spans WHERE id = ?1", [&attempt], |r| r.get(0)).unwrap(),
+        );
+        assert_eq!((user.as_str(), device.as_str(), provider.as_str(), model.as_str()), ("u1", "d1", "p1", "m1"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn the_five_span_kinds_match_what_the_database_accepts() {
+        let db = AuditDb::open_in_memory().unwrap();
+        for k in [Kind::Turn, Kind::Gate, Kind::Attempt, Kind::Tool, Kind::AgentStep] {
+            db.conn.execute("INSERT INTO spans (id, trace_id, kind, name, status, started_at) VALUES (?1,'t',?2,'n','done',1)", rusqlite::params![k.as_str(), k.as_str()]).unwrap();
+        }
+    }
+
+    #[tokio::test]
     async fn the_noop_recorder_is_always_healthy_and_records_nothing() {
         let rec = Recorder::noop();
-        rec.start(start("s", "t"));
+        rec.start_span(start("s", "t"));
         rec.flush().await;
         assert!(rec.healthy());
         assert_eq!(rec.dropped(), 0);
