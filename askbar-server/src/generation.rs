@@ -286,13 +286,17 @@ enum Outcome {
 
 /// What an attempt span records beyond its columns: the whole latency, the HTTP status, whether
 /// the counts were estimated, and why the provider says it stopped.
-fn attempt_attrs(r: &crate::llm::StreamReport) -> serde_json::Value {
-    serde_json::json!({
+fn attempt_attrs(r: &crate::llm::StreamReport, truncated: bool) -> serde_json::Value {
+    let mut attrs = serde_json::json!({
         "latency_ms": r.total.as_millis() as u64,
         "http_status": r.http_status,
         "usage_estimated": r.usage.map(|u| u.estimated),
         "finish_reason": r.finish_reason,
-    })
+    });
+    if truncated {
+        attrs["truncated"] = true.into();
+    }
+    attrs
 }
 
 /// The public bytes of the key content is sealed to now, from the current snapshot.
@@ -301,6 +305,9 @@ fn current_audit_key(state: &AppState) -> Option<Vec<u8>> {
     let key = crate::snapshot::current(&db).ok().flatten()?.audit_public_key?;
     crate::snapshot::parse_hex(&key.public_key)
 }
+
+/// Sealed payloads (request, reply) are cut at this many bytes; the span is marked `truncated`.
+pub const MAX_PAYLOAD_BYTES: usize = 256 * 1024;
 
 /// Provider error text kept with an attempt is cut here.
 pub const MAX_ERROR_PAYLOAD_BYTES: usize = 4096;
@@ -424,12 +431,19 @@ impl Finisher {
 
     fn finish_turn_span(&self, status: &str) {
         // The reply, sealed, whatever way this ended (an empty reply has nothing to keep).
+        let mut truncated = false;
         if let (Some(key), false) = (&self.audit_key, self.text.is_empty()) {
-            if let Ok(sealed) = crate::seal::seal(key, self.text.as_bytes()) {
+            let kept = cut(&self.text, MAX_PAYLOAD_BYTES);
+            truncated = kept.len() < self.text.len();
+            if let Ok(sealed) = crate::seal::seal(key, kept.as_bytes()) {
                 self.state.audit.payload(&self.turn_span, "reply", sealed);
             }
         }
         let mut f = SpanFinish::new(&self.turn_span, status);
+        if truncated {
+            // Replaces the start attributes, so they are repeated.
+            f.attrs_json = Some(serde_json::json!({ "conversation_id": self.conversation_id, "truncated": true }).to_string());
+        }
         f.error_code = self.error_code.clone();
         if let Some(u) = self.usage {
             f.tokens_in = u.input;
@@ -610,13 +624,17 @@ fn spawn_run(
         let attempt = state.audit.start_span(
             SpanStart::new(&fin.id, Kind::Attempt, &provider.name).parent(&fin.turn_span).provider(&provider_id, &provider.model),
         );
+        let mut request_truncated = false;
         // What was sent, sealed: the system prompt and the history, as the provider will see them.
         if let Some(key) = &fin.audit_key {
             let request = serde_json::json!({
                 "system": system,
                 "messages": history.iter().map(|m| serde_json::json!({ "role": m.role, "content": m.content })).collect::<Vec<_>>(),
             });
-            if let Ok(sealed) = crate::seal::seal(key, request.to_string().as_bytes()) {
+            let request = request.to_string();
+            let kept = cut(&request, MAX_PAYLOAD_BYTES);
+            request_truncated = kept.len() < request.len();
+            if let Ok(sealed) = crate::seal::seal(key, kept.as_bytes()) {
                 state.audit.payload(&attempt, "request", sealed);
             }
         }
@@ -639,7 +657,7 @@ fn spawn_run(
                 }
                 .into();
                 attempt_end.ttft_ms = r.time_to_first_token.map(|d| d.as_millis() as u64);
-                attempt_end.attrs_json = Some(attempt_attrs(r).to_string());
+                attempt_end.attrs_json = Some(attempt_attrs(r, request_truncated).to_string());
             }
             Some(Err(e)) => {
                 // The provider's own words about the failure, sealed, cut at 4 KB.
@@ -652,11 +670,14 @@ fn spawn_run(
                 attempt_end.status = "error".into();
                 attempt_end.error_code = Some(error_code(&e.error));
                 attempt_end.ttft_ms = e.report.time_to_first_token.map(|d| d.as_millis() as u64);
-                attempt_end.attrs_json = Some(attempt_attrs(&e.report).to_string());
+                attempt_end.attrs_json = Some(attempt_attrs(&e.report, request_truncated).to_string());
             }
             None => {
                 attempt_end.status = "timed_out".into();
                 attempt_end.error_code = Some("timeout".into());
+                if request_truncated {
+                    attempt_end.attrs_json = Some(serde_json::json!({ "truncated": true }).to_string());
+                }
             }
         }
         let used = match &result {

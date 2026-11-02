@@ -450,3 +450,32 @@ async fn a_provider_failure_seals_its_error_text_on_the_attempt() {
     let bytes = std::fs::read(dir.join("audit.db")).unwrap();
     assert!(!String::from_utf8_lossy(&bytes).contains("Incorrect API key"));
 }
+
+#[tokio::test]
+async fn an_oversized_prompt_is_cut_at_256_kb_and_the_attempt_is_marked_truncated() {
+    let (_mock, port) = start_mock();
+    let (state, dir) = audit_state(port);
+    let secret = install_audit_key(&state);
+    let prompt = format!("{}{}", "word ".repeat(70_000), "END-OF-PROMPT"); // 350 KB
+    let trace = run_chat(&state, &prompt).await;
+    state.audit.flush().await;
+
+    let opened = open_payloads(&dir, &trace, secret);
+    let request = opened.iter().find(|p| p.1 == "request").unwrap();
+    assert_eq!(request.3.len(), 256 * 1024, "cut to the cap");
+    assert!(!request.3.contains("END-OF-PROMPT"), "the end was cut off");
+    let attrs = |kind: &str| -> serde_json::Value {
+        let a: Option<String> =
+            read(&dir).query_row("SELECT attrs_json FROM spans WHERE trace_id = ?1 AND kind = ?2", [&trace, kind], |r| r.get(0)).unwrap();
+        serde_json::from_str(&a.unwrap()).unwrap()
+    };
+    assert_eq!(attrs("attempt")["truncated"], true);
+    assert_eq!(attrs("attempt")["http_status"], 200, "the other attributes are still there");
+    assert!(attrs("turn").get("truncated").is_none(), "the reply was small");
+
+    // A normal prompt is not marked.
+    let small = run_chat(&state, "short").await;
+    state.audit.flush().await;
+    let a: Option<String> = read(&dir).query_row("SELECT attrs_json FROM spans WHERE trace_id = ?1 AND kind = 'attempt'", [&small], |r| r.get(0)).unwrap();
+    assert!(!a.unwrap().contains("truncated"));
+}
