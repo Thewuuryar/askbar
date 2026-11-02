@@ -339,6 +339,22 @@ pub fn decode_event(kind: ProviderKind, ev: &SseEvent) -> Result<Step, ChatError
                 "content_block_delta" if v["delta"]["type"] == "text_delta" => {
                     Ok(Step::Delta(v["delta"]["text"].as_str().unwrap_or("").to_string()))
                 }
+                // Input and cache counts come first, with the message...
+                "message_start" if v["message"]["usage"].is_object() => {
+                    let u = &v["message"]["usage"];
+                    Ok(Step::Usage(Usage {
+                        input: count(&u["input_tokens"]),
+                        output: None, // the 1 here is a placeholder; message_delta has the real total
+                        cache_read: count(&u["cache_read_input_tokens"]),
+                        cache_write: count(&u["cache_creation_input_tokens"]),
+                        estimated: false,
+                    }))
+                }
+                // ...and the output count follows as a running total, the last one being final.
+                "message_delta" if v["usage"].is_object() => Ok(Step::Usage(Usage {
+                    output: count(&v["usage"]["output_tokens"]),
+                    ..Default::default()
+                })),
                 "message_stop" => Ok(Step::Done),
                 "error" => Err(ChatError::Stream(error_message(&v["error"]))),
                 _ => Ok(Step::Skip),
@@ -684,6 +700,17 @@ mod tests {
             assert_eq!(decode_event(k, &ev(skip)).unwrap(), Step::Skip, "{skip}");
         }
         assert_eq!(decode_event(k, &ev(r#"{"type":"message_stop"}"#)).unwrap(), Step::Done);
+        // Usage: input and cache counts with message_start, the output total with message_delta.
+        let start = r#"{"type":"message_start","message":{"id":"m","usage":{"input_tokens":25,"output_tokens":1,"cache_read_input_tokens":10,"cache_creation_input_tokens":3}}}"#;
+        assert_eq!(
+            decode_event(k, &ev(start)).unwrap(),
+            Step::Usage(Usage { input: Some(25), output: None, cache_read: Some(10), cache_write: Some(3), estimated: false })
+        );
+        let delta = r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":15}}"#;
+        assert_eq!(decode_event(k, &ev(delta)).unwrap(), Step::Usage(Usage { output: Some(15), ..Default::default() }));
+        // Without the cache fields they stay unknown rather than 0.
+        let bare = r#"{"type":"message_start","message":{"usage":{"input_tokens":7}}}"#;
+        assert!(matches!(decode_event(k, &ev(bare)).unwrap(), Step::Usage(u) if u.input == Some(7) && u.cache_read.is_none() && u.cache_write.is_none()));
         let err = decode_event(k, &ev(r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#))
             .unwrap_err();
         assert!(err.to_string().contains("Overloaded"));

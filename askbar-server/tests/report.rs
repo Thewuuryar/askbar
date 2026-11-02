@@ -151,3 +151,24 @@ async fn openai_usage_from_the_final_chunk_reaches_the_report() {
     assert_eq!(r.usage.unwrap().cache_read, Some(64), "cached tokens are reported when the mock says so");
     assert!(mock.log.lock().unwrap().iter().filter(|l| l.starts_with("POST")).all(|l| l.contains(r#"stream_options={"include_usage": true}"#)), "the request asked for usage");
 }
+
+#[tokio::test]
+async fn anthropic_usage_from_message_start_and_message_delta_reaches_the_report() {
+    let mock = start_mock();
+    let run = |text: &'static str| {
+        let p = provider(&mock, ProviderKind::Anthropic);
+        async move {
+            let (_k, cancel) = oneshot::channel::<()>();
+            let mut reply = String::new();
+            let r = stream_chat_report(&http_client(), &p, "sys", &[ChatMessage::new("user", text)], cancel, |d| reply.push_str(d)).await.unwrap();
+            (r, reply)
+        }
+    };
+    let (r, reply) = run("hello").await;
+    assert!(reply.ends_with("Anything else?"), "the Anthropic endpoint streams text: {reply:?}");
+    assert_eq!(r.outcome, StreamOutcome::Completed);
+    assert_eq!(r.usage, Some(Usage { input: Some(100), output: Some(50), cache_read: Some(0), cache_write: Some(0), estimated: false }));
+    let (r, _) = run("a cached prompt").await;
+    assert_eq!(r.usage.unwrap().cache_read, Some(64));
+    assert!(r.time_to_first_token.is_some());
+}
