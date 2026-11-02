@@ -138,9 +138,93 @@
 
   $('audit-window').addEventListener('change', loadOverview);
 
+  // ------------------------------------------------------------- requests
+
+  const PAGE = 25;
+  const requests = { status: '', provider: '', last: null };
+
+  // The query for one page of traces: the filters, a cursor (the id of the last row already shown)
+  // and the page size. Empty filters are left out.
+  function requestsQuery({ status, provider, before }) {
+    const q = new URLSearchParams();
+    if (status) q.set('status', status);
+    if (provider) q.set('provider', provider);
+    if (before) q.set('before', before);
+    q.set('limit', String(PAGE));
+    return q.toString();
+  }
+
+  function requestRow(t) {
+    const tr = el('tr');
+    tr.dataset.trace = t.trace_id;
+    tr.tabIndex = 0;
+    tr.setAttribute('role', 'button');
+    const when = t.started_at ? new Date(t.started_at * 1000).toLocaleString() : '–';
+    const cells = [
+      [when],
+      [t.user_id || '–', 'wrap'],
+      [t.provider_id ? (providerNames[t.provider_id] || t.provider_id) : '–', 'wrap'],
+      [t.model || '–', 'wrap'],
+      [t.status, 'status-' + t.status],
+      [duration(t.latency_ms)],
+      [t.tokens_in == null && t.tokens_out == null ? '–' : number(t.tokens_in || 0) + ' → ' + number(t.tokens_out || 0)],
+      [t.tokens_in == null && t.tokens_out == null ? '–' : money(t.cost)],
+    ];
+    for (const [text, cls] of cells) tr.appendChild(el('td', cls, text));
+    return tr;
+  }
+
+  async function loadRequests(more) {
+    if (!more) {
+      $('audit-rows').textContent = '';
+      requests.last = null;
+    }
+    const list = await read('/admin/api/audit/traces?' + requestsQuery({ status: requests.status, provider: requests.provider, before: more ? requests.last : null }));
+    if (!list) return;
+    const rows = list.traces || [];
+    for (const t of rows) $('audit-rows').appendChild(requestRow(t));
+    if (rows.length) requests.last = rows[rows.length - 1].trace_id;
+    const any = $('audit-rows').children.length > 0;
+    show($('audit-table'), any);
+    show($('audit-requests-empty'), !any);
+    $('audit-requests-empty').textContent = requests.status || requests.provider ? 'No requests match these filters.' : 'No requests recorded yet.';
+    show($('audit-more'), rows.length >= PAGE);
+  }
+
+  function fillProviderFilter() {
+    const sel = $('audit-f-provider');
+    const keep = sel.value;
+    sel.textContent = '';
+    sel.appendChild(Object.assign(el('option', '', 'Any'), { value: '' }));
+    for (const [id, name] of Object.entries(providerNames)) sel.appendChild(Object.assign(el('option', '', name), { value: id }));
+    sel.value = keep;
+  }
+
+  $('audit-f-status').addEventListener('change', () => { requests.status = $('audit-f-status').value; loadRequests(false); });
+  $('audit-f-provider').addEventListener('change', () => { requests.provider = $('audit-f-provider').value; loadRequests(false); });
+  $('audit-more').addEventListener('click', () => loadRequests(true));
+  function openFromRow(e) {
+    const tr = e.target.closest('tr[data-trace]');
+    if (tr) openTrace(tr.dataset.trace);
+  }
+  $('audit-rows').addEventListener('click', openFromRow);
+  $('audit-rows').addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openFromRow(e); } });
+
+  // ---------------------------------------------------------------- trace
+
+  // Opens one request on the Trace view. (The waterfall itself arrives in the next step.)
+  function openTrace(id) {
+    state.traceId = id;
+    setSub('trace');
+    $('audit-trace').textContent = '';
+    $('audit-trace').appendChild(el('p', 'hint', 'Trace ' + id));
+  }
+
   async function load() {
     setSub(state.sub);
     await loadOverview();
+    fillProviderFilter();
+    await loadRequests(false);
   }
 
   $('audit-nav').addEventListener('click', (e) => {
@@ -148,6 +232,6 @@
     if (b) setSub(b.dataset.sub);
   });
 
-  window.askbarAudit = { setSub, read, banner, state, renderOverview };
+  window.askbarAudit = { setSub, read, banner, state, renderOverview, requestsQuery, openTrace };
   registerTab({ id: 'audit', label: 'Audit', load });
 })();

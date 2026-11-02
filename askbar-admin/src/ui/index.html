@@ -138,7 +138,29 @@
           <h3 id="audit-providers-title" hidden>By provider</h3>
           <div id="audit-by-provider" class="bars"></div>
         </div>
-        <div id="audit-requests" data-subview="requests" hidden><p class="hint empty">No requests recorded yet.</p></div>
+        <div id="audit-requests" data-subview="requests" hidden>
+          <div class="row filters">
+            <label>Status
+              <select id="audit-f-status">
+                <option value="">Any</option>
+                <option value="done">done</option>
+                <option value="error">error</option>
+                <option value="cancelled">cancelled</option>
+                <option value="timed_out">timed out</option>
+                <option value="interrupted">interrupted</option>
+              </select>
+            </label>
+            <label>Provider <select id="audit-f-provider"><option value="">Any</option></select></label>
+          </div>
+          <p class="hint empty" id="audit-requests-empty">No requests recorded yet.</p>
+          <div class="table-wrap">
+            <table id="audit-table" hidden>
+              <thead><tr><th>Time</th><th>User</th><th>Provider</th><th>Model</th><th>Status</th><th>Latency</th><th>Tokens (in → out)</th><th>Cost</th></tr></thead>
+              <tbody id="audit-rows"></tbody>
+            </table>
+          </div>
+          <div class="row"><button type="button" id="audit-more" class="secondary" hidden>Load more</button></div>
+        </div>
         <div id="audit-trace" data-subview="trace" hidden><p class="hint empty">Pick a request on the Requests view to see its trace.</p></div>
         <div id="audit-routing" data-subview="routing" hidden><p class="hint empty">Pick a request on the Requests view to see how it was routed.</p></div>
         <div id="audit-content" data-subview="content" hidden><p class="hint empty">Pick a request on the Requests view to see its sealed content.</p></div>

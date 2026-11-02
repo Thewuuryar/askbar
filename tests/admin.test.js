@@ -547,6 +547,66 @@ async function waitForPort(port) {
     await page.unroute('**/admin/api/audit/stats*');
     await page.selectOption('#audit-window', '86400');
   });
+  await step('audit requests: a canned list fills the table, filters and load-more ask for the right pages', async () => {
+    const row = (n, extra = {}) => ({ trace_id: 'T' + String(n).padStart(3, '0'), span_id: 's' + n, status: 'done', started_at: 1793631845 - n, ended_at: 1793631846 - n, user_id: 'user-1', device_id: 'd', tokens_in: 100, tokens_out: 50, tokens_cached: 0, error_code: null, provider_id: 'pA', model: 'model-' + n, ttft_ms: 200, latency_ms: 1500, cost: 0.0007, ...extra });
+    const first = Array.from({ length: 25 }, (_, i) => row(100 - i));
+    const second = Array.from({ length: 15 }, (_, i) => row(75 - i));
+    const asked = [];
+    await page.route('**/admin/api/audit/traces?*', (route) => {
+      const q = new URL(route.request().url()).searchParams;
+      asked.push(Object.fromEntries(q));
+      let traces = first;
+      if (q.get('before') === 'T076') traces = second;
+      if (q.get('status') === 'error') traces = [row(5, { status: 'error', error_code: 'http_401', tokens_in: null, tokens_out: null, cost: null })];
+      if (q.get('provider') === 'pNone') traces = [];
+      route.fulfill({ contentType: 'application/json', body: JSON.stringify({ traces }) });
+    });
+    await page.click('#nav [data-tab="providers"]');
+    await page.click('#nav [data-tab="audit"]');
+    await page.click('#audit-nav [data-sub="requests"]');
+    await page.waitForSelector('#audit-rows tr[data-trace]');
+    assert.deepEqual(asked[asked.length - 1], { limit: '25' }, 'no filters, no cursor');
+    assert.equal(await page.locator('#audit-rows tr').count(), 25);
+    const heads = await page.$$eval('#audit-table th', (h) => h.map((x) => x.textContent));
+    assert.deepEqual(heads, ['Time', 'User', 'Provider', 'Model', 'Status', 'Latency', 'Tokens (in → out)', 'Cost']);
+    const cells = await page.$$eval('#audit-rows tr:first-child td', (c) => c.map((x) => x.textContent));
+    assert.deepEqual(cells.slice(1), ['user-1', 'pA', 'model-100', 'done', '1.5 s', '100 → 50', '0.0007']);
+
+    // Load more asks for the page after the last row shown, and appends; a short page ends it.
+    await page.click('#audit-more');
+    await page.waitForFunction(() => document.querySelectorAll('#audit-rows tr').length === 40);
+    assert.equal(asked[asked.length - 1].before, 'T076');
+    assert.equal(await page.isHidden('#audit-more'), true, 'fewer than a full page means no more');
+    assert.equal(await page.locator('#audit-rows tr:last-child td:nth-child(4)').innerText(), 'model-61');
+
+    // The status filter starts again from the top with the status in the query; a failed request has no cost.
+    await page.selectOption('#audit-f-status', 'error');
+    await page.waitForFunction(() => document.querySelectorAll('#audit-rows tr').length === 1);
+    assert.equal(asked[asked.length - 1].status, 'error');
+    assert.equal(asked[asked.length - 1].before, undefined);
+    const failed = await page.$$eval('#audit-rows tr:first-child td', (c) => c.map((x) => x.textContent));
+    assert.deepEqual(failed.slice(4), ['error', '1.5 s', '–', '–']);
+    // A filter with no matches says so.
+    await page.selectOption('#audit-f-status', '');
+    await page.waitForFunction(() => document.querySelectorAll('#audit-rows tr').length === 25);
+    await page.evaluate(() => { const o = document.createElement('option'); o.value = 'pNone'; o.textContent = 'ghost'; document.getElementById('audit-f-provider').appendChild(o); });
+    await page.selectOption('#audit-f-provider', 'pNone');
+    await page.waitForSelector('#audit-requests-empty:not([hidden])');
+    assert.match(await page.innerText('#audit-requests-empty'), /match these filters/);
+    assert.equal(asked[asked.length - 1].provider, 'pNone');
+    await page.selectOption('#audit-f-provider', '');
+    await page.waitForFunction(() => document.querySelectorAll('#audit-rows tr').length === 25);
+
+    // A row opens its trace (by click or keyboard).
+    await page.click('#audit-rows tr[data-trace="T099"]');
+    assert.equal(await page.getAttribute('#audit-nav [data-sub="trace"]', 'aria-selected'), 'true');
+    assert.match(await page.innerText('#audit-trace'), /T099/);
+    await page.click('#audit-nav [data-sub="requests"]');
+    await page.focus('#audit-rows tr[data-trace="T098"]');
+    await page.keyboard.press('Enter');
+    assert.match(await page.innerText('#audit-trace'), /T098/);
+    await page.unroute('**/admin/api/audit/traces?*');
+  });
   await step('security: changing the password needs the current one', async () => {
     await page.click('#nav [data-tab="security"]');
     await page.fill('#pw-current', 'wrong');
