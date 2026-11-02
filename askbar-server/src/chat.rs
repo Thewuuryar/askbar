@@ -8,6 +8,7 @@ use crate::generation::{self, GenEvent};
 use crate::{auth::DeviceAuth, AppState};
 use askbar_proto::{ChatEvent, ChatRequest};
 use axum::{
+    response::IntoResponse,
     extract::State,
     http::StatusCode,
     response::sse::{Event, KeepAlive, Sse},
@@ -43,10 +44,10 @@ pub async fn chat(
     State(state): State<Arc<AppState>>,
     Extension(auth): Extension<DeviceAuth>,
     Json(req): Json<ChatRequest>,
-) -> Result<impl axum::response::IntoResponse, StatusCode> {
+) -> Result<impl axum::response::IntoResponse, axum::response::Response> {
     let text = req.text.trim().to_string();
     if text.is_empty() {
-        return Err(StatusCode::BAD_REQUEST);
+        return Err(StatusCode::BAD_REQUEST.into_response());
     }
 
     // A repeat of a send this device already made attaches to that generation and starts nothing.
@@ -56,7 +57,7 @@ pub async fn chat(
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .find_by_request_id(&auth.device_id, rid)
-            .map_err(internal)?;
+            .map_err(|e| internal(e).into_response())?;
         if let Some(g) = existing {
             let meta = ChatEvent::Meta {
                 conversation_id: g.conversation_id.clone(),
@@ -78,7 +79,8 @@ pub async fn chat(
             prompt: text,
             client_request_id: req.client_request_id,
         },
-    )?;
+    )
+    .map_err(IntoResponse::into_response)?;
     let meta = ChatEvent::Meta {
         conversation_id: sub.conversation_id,
         generation_id: Some(sub.generation_id),

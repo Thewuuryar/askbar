@@ -271,3 +271,62 @@ async fn a_queued_message_records_a_gate_span_named_queue_from_enqueue_to_start(
         .collect();
     assert_eq!(kinds, ["gate", "turn", "attempt"]);
 }
+
+#[tokio::test]
+async fn a_backed_up_audit_writer_refuses_new_generations_with_503_and_retry_after_but_lets_running_ones_finish() {
+    use askbar_server::audit::{AuditDb, Recorder};
+    use axum::response::IntoResponse;
+    use futures_util::StreamExt;
+    let (_mock, port) = start_mock();
+    let dir = std::env::temp_dir().join(format!("askbar-audit-backlog-{}", ulid::Ulid::new()));
+    let recorder = Recorder::spawn(AuditDb::open(&dir.join("audit.db")).unwrap(), 2); // a tiny queue
+    let db = askbar_server::Db::open_in_memory().unwrap();
+    let user = db.seed_server().unwrap();
+    let secrets = askbar_server::secrets::Secrets::new(askbar_server::testing::TEST_MASTER_KEY).unwrap();
+    askbar_server::testing::add_provider(&db, askbar_server::testing::provider("p1", "mock", &format!("http://127.0.0.1:{port}/v1"), "m"));
+    askbar_server::testing::store_key(&db, &secrets, "p1", "sk-test");
+    let state = askbar_server::AppState::new(db, secrets, askbar_server::MIN_CLIENT).with_audit(recorder.clone());
+    let send = |prompt: &str| {
+        askbar_server::generation::submit(
+            &state,
+            askbar_server::generation::Submit {
+                user_id: user.clone(),
+                device_id: "d1".into(),
+                conversation_id: None,
+                provider_id: "p1".into(),
+                prompt: prompt.into(),
+                client_request_id: None,
+            },
+        )
+    };
+
+    assert!(recorder.healthy());
+    recorder.pause_writer(true); // the writer stalls
+    let running = send("hello").ok().expect("accepted while the queue has room");
+    for _ in 0..50 {
+        if !recorder.healthy() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(!recorder.healthy(), "the stalled writer let the queue fill");
+
+    let refused = send("one more").err().expect("refused");
+    assert_eq!(refused, askbar_server::generation::SubmitError::AuditBacklog);
+    let response = refused.into_response();
+    assert_eq!(response.status(), 503);
+    assert_eq!(response.headers()["retry-after"], askbar_server::generation::AUDIT_BACKLOG_RETRY_SECS.to_string());
+
+    // The one that was running finishes normally, whatever the audit store is doing.
+    let events: Vec<_> = running.live.subscribe(0).collect().await;
+    assert!(matches!(events.last(), Some(askbar_server::generation::GenEvent::Done)));
+    let status: String = state.db.lock().unwrap().conn().query_row("SELECT status FROM generations", [], |r| r.get(0)).unwrap();
+    assert_eq!(status, "done");
+
+    // Once the writer catches up, new generations are accepted again.
+    recorder.pause_writer(false);
+    recorder.flush().await;
+    assert!(recorder.healthy());
+    assert!(send("and now").is_ok());
+    let _ = std::fs::remove_dir_all(dir);
+}

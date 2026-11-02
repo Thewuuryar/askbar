@@ -13,6 +13,7 @@ use crate::AppState;
 use askbar_proto::ChatEvent;
 use axum::{
     extract::{Path, Query, State},
+    response::IntoResponse,
     http::StatusCode,
     response::sse::{Event, KeepAlive, Sse},
     Extension,
@@ -232,15 +233,26 @@ pub enum SubmitError {
     NotFound,
     /// The conversation already has `MAX_QUEUED` messages waiting.
     QueueFull,
+    /// The audit writer is not keeping up: nothing new starts until it catches up.
+    AuditBacklog,
     Internal,
 }
 
-impl From<SubmitError> for StatusCode {
-    fn from(e: SubmitError) -> StatusCode {
-        match e {
-            SubmitError::NotFound => StatusCode::NOT_FOUND,
-            SubmitError::QueueFull => StatusCode::CONFLICT,
-            SubmitError::Internal => StatusCode::INTERNAL_SERVER_ERROR,
+/// How long a client is told to wait before sending again when the audit store is backed up.
+pub const AUDIT_BACKLOG_RETRY_SECS: u64 = 5;
+
+impl IntoResponse for SubmitError {
+    fn into_response(self) -> axum::response::Response {
+        match self {
+            SubmitError::NotFound => StatusCode::NOT_FOUND.into_response(),
+            SubmitError::QueueFull => StatusCode::CONFLICT.into_response(),
+            SubmitError::Internal => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+            SubmitError::AuditBacklog => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                [(axum::http::header::RETRY_AFTER, AUDIT_BACKLOG_RETRY_SECS.to_string())],
+                axum::Json(serde_json::json!({ "error": "audit_backlog" })),
+            )
+                .into_response(),
         }
     }
 }
@@ -449,6 +461,10 @@ fn stamp_deadline(db: &crate::Db, id: &str, timeout: Duration) {
 /// Starts a send: runs it now if its conversation is idle, else queues it. Everything that can
 /// fail with a plain HTTP status happens here, before any stream starts.
 pub fn submit(state: &Arc<AppState>, s: Submit) -> Result<Submitted, SubmitError> {
+    // Generations already running finish; new ones wait until the audit store has caught up.
+    if !state.audit.healthy() {
+        return Err(SubmitError::AuditBacklog);
+    }
     let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
     fn internal<E>(_: E) -> SubmitError {
         SubmitError::Internal
