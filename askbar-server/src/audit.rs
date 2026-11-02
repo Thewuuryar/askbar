@@ -252,6 +252,19 @@ enum Event {
     Finish(SpanFinish),
     /// Answered once everything sent before it has been written.
     Flush(oneshot::Sender<()>),
+    /// Delete spans and payloads that started before `cutoff`; answered with how many of each.
+    Prune { cutoff: i64, done: oneshot::Sender<Result<(usize, usize), String>> },
+}
+
+/// Records are never kept for less than this many days, whatever the setting says.
+pub const MIN_RETENTION_DAYS: u32 = 7;
+
+/// The moment before which records are due to go: `retention_days` before `now`, but never
+/// closer than 7 days to the real clock. The database enforces the same floor with a trigger;
+/// clamping here keeps one young span from making the whole delete fail.
+pub fn retention_cutoff(now: i64, retention_days: u32) -> i64 {
+    let by_setting = now - i64::from(retention_days.max(MIN_RETENTION_DAYS)) * 86_400;
+    by_setting.min(now_secs() - i64::from(MIN_RETENTION_DAYS) * 86_400)
 }
 
 /// Lets a test hold the writer still, to fill the queue.
@@ -306,6 +319,9 @@ impl Recorder {
                         Event::Flush(done) => {
                             let _ = done.send(());
                         }
+                        Event::Prune { cutoff, done } => {
+                            let _ = done.send(prune(db.conn(), cutoff).map_err(|e| e.to_string()));
+                        }
                     }
                 }
             })
@@ -351,12 +367,30 @@ impl Recorder {
         }
     }
 
+    /// Deletes what is older than `retention_days` before `now` (see `retention_cutoff`). `now`
+    /// is passed in so tests can cross the boundary without waiting. Runs on the writer's
+    /// connection, in order with everything else. Returns (spans, payloads) deleted.
+    pub async fn prune(&self, retention_days: u32, now: i64) -> Result<(usize, usize), String> {
+        let Some(tx) = &self.tx else { return Ok((0, 0)) };
+        let (done, wait) = oneshot::channel();
+        tx.send(Event::Prune { cutoff: retention_cutoff(now, retention_days), done }).await.map_err(|_| "the audit writer has stopped".to_string())?;
+        wait.await.map_err(|_| "the audit writer has stopped".to_string())?
+    }
+
     /// Tests only: hold the writer still (or let it go on), to fill the queue.
     #[doc(hidden)]
     pub fn pause_writer(&self, paused: bool) {
         *self.pause.paused.lock().unwrap_or_else(|e| e.into_inner()) = paused;
         self.pause.changed.notify_all();
     }
+}
+
+/// Payloads first (they belong to spans), then the spans. Only finished spans: one still running
+/// is never old enough to matter, and the sweep handles the strays.
+fn prune(conn: &Connection, cutoff: i64) -> rusqlite::Result<(usize, usize)> {
+    let payloads = conn.execute("DELETE FROM payloads WHERE created_at < ?1", [cutoff])?;
+    let spans = conn.execute("DELETE FROM spans WHERE started_at < ?1 AND status <> 'running'", [cutoff])?;
+    Ok((spans, payloads))
 }
 
 fn write_start(conn: &Connection, s: &SpanStart) -> rusqlite::Result<()> {
@@ -634,6 +668,59 @@ mod tests {
         for k in [Kind::Turn, Kind::Gate, Kind::Attempt, Kind::Tool, Kind::AgentStep] {
             db.conn.execute("INSERT INTO spans (id, trace_id, kind, name, status, started_at) VALUES (?1,'t',?2,'n','done',1)", rusqlite::params![k.as_str(), k.as_str()]).unwrap();
         }
+    }
+
+    #[test]
+    fn the_cutoff_follows_the_setting_never_closer_than_a_week_to_the_real_clock() {
+        let real = now_secs();
+        assert_eq!(retention_cutoff(real, 30), real - 30 * 86_400);
+        assert_eq!(retention_cutoff(real, 7), real - 7 * 86_400);
+        assert_eq!(retention_cutoff(real, 1), real - 7 * 86_400, "below the floor, the floor applies");
+        assert_eq!(retention_cutoff(real, 0), real - 7 * 86_400);
+        // A clock far in the future would ask for more than the database allows: clamped.
+        assert_eq!(retention_cutoff(real + 100 * 86_400, 7), real - 7 * 86_400);
+        // A clock in the past is not clamped further.
+        assert_eq!(retention_cutoff(real - 100 * 86_400, 30), real - 130 * 86_400);
+    }
+
+    #[tokio::test]
+    async fn retention_deletes_across_the_boundary_and_the_seven_day_rule_still_holds() {
+        let (dir, db) = temp_db();
+        let rec = Recorder::spawn(db, 64);
+        let real = now_secs();
+        let day = 86_400;
+        // Spans of ages 40, 29.5, 10, 3 and 0 days, each with a payload of the same age.
+        let ages = [("a40", 40 * day), ("a29", 29 * day + day / 2), ("a10", 10 * day), ("a3", 3 * day), ("a0", 0)];
+        {
+            let conn = Connection::open(dir.join("audit.db")).unwrap();
+            for (id, age) in ages {
+                conn.execute("INSERT INTO spans (id, trace_id, kind, name, status, started_at, ended_at) VALUES (?1,'t','turn','c','done',?2,?2)", rusqlite::params![id, real - age]).unwrap();
+                conn.execute("INSERT INTO payloads (span_id, role, key_id, ciphertext, created_at) VALUES (?1,'reply','k',x'00',?2)", rusqlite::params![id, real - age]).unwrap();
+            }
+        }
+        let left = |dir: &std::path::Path| -> Vec<String> {
+            let conn = Connection::open(dir.join("audit.db")).unwrap();
+            let mut stmt = conn.prepare("SELECT id FROM spans ORDER BY started_at").unwrap();
+            let ids = stmt.query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
+            ids
+        };
+
+        // 30 days of retention: only the 40-day-old goes (spans and payloads).
+        assert_eq!(rec.prune(30, real).await.unwrap(), (1, 1));
+        assert_eq!(left(&dir), ["a29", "a10", "a3", "a0"]);
+        // Two days later by the injected clock, the 29.5-day-old is past 30 days too.
+        assert_eq!(rec.prune(30, real + 2 * day).await.unwrap(), (1, 1));
+        assert_eq!(left(&dir), ["a10", "a3", "a0"]);
+        // The shortest setting is 7 days, even if asked for 1: the 3-day-old and the new one stay.
+        assert_eq!(rec.prune(1, real).await.unwrap(), (1, 1));
+        assert_eq!(left(&dir), ["a3", "a0"]);
+        // And a clock jumping far ahead cannot make it delete what is under a week old by the real
+        // clock: the database's own rule holds as well.
+        assert_eq!(rec.prune(7, real + 400 * day).await.unwrap(), (0, 0));
+        assert_eq!(left(&dir), ["a3", "a0"]);
+        let conn = Connection::open(dir.join("audit.db")).unwrap();
+        assert!(conn.execute("DELETE FROM spans WHERE id = 'a3'", []).unwrap_err().to_string().contains("7 days"));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[tokio::test]

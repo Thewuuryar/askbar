@@ -65,6 +65,25 @@ async fn stop_on_signal(state: std::sync::Arc<askbar_server::AppState>) {
     std::process::exit(0);
 }
 
+/// Once a day (and shortly after start-up): delete audit records older than `audit_retention_days`
+/// from the snapshot. The setting is read each time, so a change applies the next day.
+async fn audit_retention_daily(state: std::sync::Arc<askbar_server::AppState>) {
+    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+    let mut tick = tokio::time::interval(std::time::Duration::from_secs(24 * 3600));
+    loop {
+        tick.tick().await;
+        let days = {
+            let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+            askbar_server::snapshot::current(&db).ok().flatten().map(|s| s.audit_retention_days).unwrap_or(30)
+        };
+        match state.audit.prune(days, askbar_server::auth::now()).await {
+            Ok((0, 0)) => {}
+            Ok((spans, payloads)) => tracing::info!(spans, payloads, days, "removed audit records past retention"),
+            Err(e) => tracing::warn!("audit retention failed: {e}"),
+        }
+    }
+}
+
 /// Finished generation rows are only kept for a day; the messages they produced stay.
 async fn prune_generations_hourly(state: std::sync::Arc<askbar_server::AppState>) {
     let mut tick = tokio::time::interval(std::time::Duration::from_secs(3600));
@@ -128,6 +147,7 @@ async fn main() {
     let state = askbar_server::AppState::new(db, secrets, askbar_server::MIN_CLIENT)
         .with_audit(askbar_server::audit::Recorder::spawn(audit_db, 4096));
     tokio::spawn(stop_on_signal(state.clone()));
+    tokio::spawn(audit_retention_daily(state.clone()));
     tokio::spawn(prune_generations_hourly(state.clone()));
     let mgmt_app = askbar_server::mgmt::router(state.clone(), askbar_server::mgmt::token_hash_path());
     let result = tokio::try_join!(serve(api, askbar_server::api_router(state)), serve(mgmt, mgmt_app));
