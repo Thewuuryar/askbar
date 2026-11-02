@@ -8,7 +8,7 @@ use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
 
 pub use askbar_proto::DEFAULT_SYSTEM_PROMPT;
@@ -343,8 +343,62 @@ pub async fn stream_chat<F>(
     provider: &Provider,
     system: &str,
     messages: &[ChatMessage],
+    cancel: oneshot::Receiver<()>,
+    on_delta: F,
+) -> Result<StreamOutcome, ChatError>
+where
+    F: FnMut(&str),
+{
+    stream_chat_report(client, provider, system, messages, cancel, on_delta)
+        .await
+        .map(|r| r.outcome)
+        .map_err(|e| e.error)
+}
+
+/// Like `stream_chat`, and also says how it went: timings, the HTTP status, `Retry-After`. On
+/// failure the error carries the report up to that point.
+pub async fn stream_chat_report<F>(
+    client: &reqwest::Client,
+    provider: &Provider,
+    system: &str,
+    messages: &[ChatMessage],
+    cancel: oneshot::Receiver<()>,
+    on_delta: F,
+) -> Result<StreamReport, ReportedError>
+where
+    F: FnMut(&str),
+{
+    let started = Instant::now();
+    let mut report = StreamReport {
+        outcome: StreamOutcome::Completed,
+        usage: None,
+        time_to_first_token: None,
+        total: Duration::ZERO,
+        http_status: None,
+        retry_after: None,
+        finish_reason: None,
+    };
+    let result = run_request(client, provider, system, messages, cancel, on_delta, started, &mut report).await;
+    report.total = started.elapsed();
+    match result {
+        Ok(outcome) => {
+            report.outcome = outcome;
+            Ok(report)
+        }
+        Err(error) => Err(ReportedError { error, report }),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_request<F>(
+    client: &reqwest::Client,
+    provider: &Provider,
+    system: &str,
+    messages: &[ChatMessage],
     mut cancel: oneshot::Receiver<()>,
     mut on_delta: F,
+    started: Instant,
+    report: &mut StreamReport,
 ) -> Result<StreamOutcome, ChatError>
 where
     F: FnMut(&str),
@@ -362,6 +416,13 @@ where
     };
 
     let status = resp.status();
+    report.http_status = Some(status.as_u16());
+    report.retry_after = resp
+        .headers()
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .map(Duration::from_secs);
     if !status.is_success() {
         let body = resp.text().await.unwrap_or_default();
         return Err(ChatError::Api {
@@ -371,6 +432,12 @@ where
         });
     }
 
+    let mut deliver = |s: &str, report: &mut StreamReport| {
+        if report.time_to_first_token.is_none() {
+            report.time_to_first_token = Some(started.elapsed());
+        }
+        on_delta(s);
+    };
     let mut stream = Box::pin(resp.bytes_stream());
     let mut parser = SseParser::default();
     loop {
@@ -385,7 +452,7 @@ where
         };
         for ev in events {
             match decode_event(provider.kind, &ev)? {
-                Step::Delta(s) => on_delta(&s),
+                Step::Delta(s) => deliver(&s, report),
                 Step::Done => return Ok(StreamOutcome::Completed),
                 Step::Skip => {}
             }
@@ -393,7 +460,7 @@ where
     }
     for ev in parser.finish() {
         match decode_event(provider.kind, &ev)? {
-            Step::Delta(s) => on_delta(&s),
+            Step::Delta(s) => deliver(&s, report),
             Step::Done => break,
             Step::Skip => {}
         }
