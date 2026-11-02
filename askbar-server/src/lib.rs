@@ -7,6 +7,7 @@ pub mod backup;
 pub mod chat;
 pub mod cost;
 pub mod db;
+pub mod error;
 pub mod generation;
 pub mod ids;
 pub mod llm;
@@ -106,6 +107,8 @@ pub fn client_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/api/v1/health", get(health))
         .merge(gated)
+        .fallback(error::not_found)
+        .method_not_allowed_fallback(error::method_not_allowed)
         .with_state(state)
         .layer(middleware::from_fn(log_requests))
 }
