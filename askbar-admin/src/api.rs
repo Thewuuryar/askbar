@@ -452,6 +452,54 @@ pub async fn setup_audit_key(State(state): St, Json(b): Json<SetupAuditKey>) -> 
     Ok(Json(serde_json::json!({ "key_id": id })))
 }
 
+// ------------------------------------------------------------- audit (read)
+
+/// Query keys the audit endpoints understand; anything else is dropped rather than passed on.
+const AUDIT_QUERY_KEYS: [&str; 5] = ["status", "provider", "before", "limit", "since"];
+
+/// Asks the server's management API for `path` (one of its `/mgmt/v1/audit/...` endpoints) with
+/// the allowed query parameters, and hands back what it answered. The admin never reads
+/// `audit.db` itself and never pushes anything about it: it only pulls, and only metadata.
+async fn audit_get(state: &AdminState, path: &str, query: &std::collections::HashMap<String, String>) -> Result<Json<serde_json::Value>, Failure> {
+    let mut url = reqwest::Url::parse("http://x/").map_err(internal)?;
+    url.set_path(path);
+    {
+        let mut pairs = url.query_pairs_mut();
+        for key in AUDIT_QUERY_KEYS {
+            if let Some(v) = query.get(key) {
+                pairs.append_pair(key, v);
+            }
+        }
+    }
+    let target = match url.query() {
+        Some(q) => format!("{}?{q}", url.path()),
+        None => url.path().to_string(),
+    };
+    let (status, body) = link(state)?.request(reqwest::Method::GET, &target, None).await.map_err(from_push)?;
+    match status {
+        200 => serde_json::from_slice(&body).map(Json).map_err(internal),
+        404 => Err(err(StatusCode::NOT_FOUND, "No such trace.")),
+        503 => Err(err(StatusCode::SERVICE_UNAVAILABLE, "The server has no audit store recording.")),
+        s => Err(err(StatusCode::BAD_GATEWAY, &format!("The server answered {s}."))),
+    }
+}
+
+pub async fn audit_traces(State(state): St, axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>) -> Result<Json<serde_json::Value>, Failure> {
+    audit_get(&state, "/mgmt/v1/audit/traces", &q).await
+}
+
+pub async fn audit_trace(State(state): St, Path(id): Path<String>) -> Result<Json<serde_json::Value>, Failure> {
+    // The id becomes part of a path: only the characters of an id (letters and digits, dashes) pass.
+    if id.is_empty() || id.len() > 64 || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        return Err(err(StatusCode::NOT_FOUND, "No such trace."));
+    }
+    audit_get(&state, &format!("/mgmt/v1/audit/traces/{id}"), &Default::default()).await
+}
+
+pub async fn audit_stats(State(state): St, axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>) -> Result<Json<serde_json::Value>, Failure> {
+    audit_get(&state, "/mgmt/v1/audit/stats", &q).await
+}
+
 // ------------------------------------------------------------------ rotation
 
 #[derive(Deserialize)]
