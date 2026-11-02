@@ -199,7 +199,8 @@ pub fn build_body(p: &Provider, system: &str, messages: &[ChatMessage]) -> Value
                 all.push(json!({ "role": "system", "content": system }));
             }
             all.extend(msgs);
-            let mut body = json!({ "model": p.model, "messages": all, "stream": true });
+            // Ask for token counts in a final chunk; OpenAI-compatible servers that support it send it.
+            let mut body = json!({ "model": p.model, "messages": all, "stream": true, "stream_options": { "include_usage": true } });
             if let Some(n) = p.max_tokens {
                 body["max_tokens"] = json!(n);
             }
@@ -549,6 +550,7 @@ mod tests {
         let mut p = provider(ProviderKind::OpenAi);
         let b = build_body(&p, "be brief", &msgs);
         assert_eq!(b["stream"], true);
+        assert_eq!(b["stream_options"], json!({ "include_usage": true }), "OpenAI-style bodies ask for usage");
         assert_eq!(b["messages"][0]["role"], "system");
         assert_eq!(b["messages"][1]["content"], "hi");
         assert!(b.get("max_tokens").is_none(), "unset max_tokens must be omitted");
@@ -559,6 +561,7 @@ mod tests {
         let a = provider(ProviderKind::Anthropic);
         let b = build_body(&a, "be brief", &msgs);
         assert_eq!(b["system"], "be brief");
+        assert!(b.get("stream_options").is_none(), "the Anthropic body is unchanged");
         assert_eq!(b["max_tokens"], 4096);
         assert_eq!(b["messages"][0]["role"], "user");
         assert!(build_body(&a, "  ", &msgs).get("system").is_none());
