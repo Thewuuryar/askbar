@@ -1,0 +1,695 @@
+openapi: 3.1.0
+info:
+  title: Askbar client API
+  version: 1.0.0
+  summary: What an Askbar app (a client) calls on the server.
+  description: |
+    The API under `/api/client/v1`. Every error is a problem (`application/problem+json`, see the
+    `Problem` schema); status codes and `Retry-After` are part of the contract. Within `v1` changes are
+    additive only. The prose companion is [docs/wire-contract.md](../wire-contract.md); the overall layout
+    is [docs/architecture.md](../architecture.md).
+
+    **Version gate.** Every request except `GET /health` carries `X-Askbar-Client-Version`. A missing or
+    unreadable value is 400 `client_version_missing`; one older than `min_client` is 426 `client_too_old`.
+    The gate runs before the token is checked.
+
+    **The old prefix.** Anything under `/api/v1` answers 426 `client_too_old`, whatever the method; nothing
+    else of that API exists. It is not described here.
+
+    **The chat stream.** OpenAPI cannot describe Server-Sent Events well. `POST /chat` and
+    `GET /generations/{id}/stream` answer `text/event-stream`; each message has an `event:` name and a JSON
+    `data:` that repeats the name in `"event"`: `meta` (first), `provider`, `delta` (with an SSE `id:` that
+    counts deltas from 1), `done`, and `error` (with a stable `code`). See `ChatEvent` below and
+    the wire contract.
+servers:
+  - url: https://askbar.example.com
+    description: Your server's host name.
+security:
+  - clientToken: []
+paths:
+  /api/client/v1/health:
+    get:
+      operationId: getHealth
+      summary: The API version and the oldest app accepted.
+      security: []
+      responses:
+        '200':
+          description: The server is up.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+  /api/client/v1/pairings:
+    post:
+      operationId: createPairing
+      summary: Trade a one-time pairing code for a client token.
+      description: The code comes from a pairing string made in the admin site; it works once and expires after 10 minutes. The token is shown once; the server keeps only its hash.
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/ClientVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PairRequest'
+      responses:
+        '200':
+          description: The client token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PairResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          description: The code is wrong, expired or already used (`unauthorized`).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '426':
+          $ref: '#/components/responses/TooOld'
+  /api/client/v1/me:
+    get:
+      operationId: getMe
+      summary: Check that the token is still accepted.
+      parameters:
+        - $ref: '#/components/parameters/ClientVersion'
+      responses:
+        '204':
+          description: The token is accepted.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '426':
+          $ref: '#/components/responses/TooOld'
+  /api/client/v1/providers:
+    get:
+      operationId: listProviders
+      summary: The providers this app may use, the default first. Keys never appear.
+      parameters:
+        - $ref: '#/components/parameters/ClientVersion'
+      responses:
+        '200':
+          description: Providers.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ProviderInfo'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '426':
+          $ref: '#/components/responses/TooOld'
+  /api/client/v1/conversations:
+    get:
+      operationId: listConversations
+      summary: The caller's conversations, newest first.
+      parameters:
+        - $ref: '#/components/parameters/ClientVersion'
+      responses:
+        '200':
+          description: Conversations.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Conversation'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '426':
+          $ref: '#/components/responses/TooOld'
+  /api/client/v1/conversations/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ClientVersion'
+      - $ref: '#/components/parameters/ConversationId'
+    get:
+      operationId: getConversation
+      summary: One conversation with its messages, and any replies still running or waiting.
+      responses:
+        '200':
+          description: The conversation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationDetail'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '426':
+          $ref: '#/components/responses/TooOld'
+    delete:
+      operationId: deleteConversation
+      summary: Delete a conversation. A reply running in it is stopped and waiting messages are dropped first.
+      responses:
+        '204':
+          description: Deleted.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '426':
+          $ref: '#/components/responses/TooOld'
+  /api/client/v1/me/prefs:
+    parameters:
+      - $ref: '#/components/parameters/ClientVersion'
+    get:
+      operationId: getPrefs
+      summary: The signed-in user's preferences (shared by all their clients).
+      responses:
+        '200':
+          description: Preferences.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Prefs'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '426':
+          $ref: '#/components/responses/TooOld'
+    put:
+      operationId: putPrefs
+      summary: Replace the preferences. A provider id must exist.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Prefs'
+      responses:
+        '200':
+          description: The preferences now stored.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Prefs'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '426':
+          $ref: '#/components/responses/TooOld'
+  /api/client/v1/me/display-defaults:
+    get:
+      operationId: getDisplayDefaults
+      summary: How this user's apps should look unless the person overrides it locally.
+      parameters:
+        - $ref: '#/components/parameters/ClientVersion'
+      responses:
+        '200':
+          description: Display defaults.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DisplaySettings'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '426':
+          $ref: '#/components/responses/TooOld'
+  /api/client/v1/settings:
+    get:
+      operationId: getSettings
+      summary: Server-wide display defaults (the system prompt is deliberately not included).
+      parameters:
+        - $ref: '#/components/parameters/ClientVersion'
+      responses:
+        '200':
+          description: Settings.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Settings'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '426':
+          $ref: '#/components/responses/TooOld'
+  /api/client/v1/search:
+    get:
+      operationId: searchMessages
+      summary: Full-text search over the caller's own messages (up to 20 hits, best first).
+      parameters:
+        - $ref: '#/components/parameters/ClientVersion'
+        - name: q
+          in: query
+          description: Words; all must match. Empty gives `[]`; more than 200 characters is 400.
+          schema:
+            type: string
+            maxLength: 200
+      responses:
+        '200':
+          description: Hits.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SearchHit'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '426':
+          $ref: '#/components/responses/TooOld'
+  /api/client/v1/chat:
+    post:
+      operationId: chat
+      summary: Send a message and stream the reply.
+      description: |
+        The one RPC-style endpoint, on purpose: one call creates the conversation if none is given, saves the
+        question, starts a generation and streams it. The reply does not depend on the connection: if it drops,
+        resume with `GET /generations/{id}/stream?after=N`. `client_request_id` makes a repeat
+        send attach to the first instead of starting a second.
+
+        Before anything starts the server may refuse, with a problem: 409 `queue_full` (five messages
+        already wait), 429 `budget_exceeded` (`period`: daily or monthly), 503 `kill_switch`, 503
+        `audit_key_missing`, 503 `audit_backlog` (with `Retry-After: 5`). The typed text is never lost; the app keeps it.
+      parameters:
+        - $ref: '#/components/parameters/ClientVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/EventStream'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Five messages already wait in this conversation (`queue_full`).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '426':
+          $ref: '#/components/responses/TooOld'
+        '429':
+          description: A token budget is used up (`budget_exceeded`, with `period`).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '503':
+          description: Not taken now (`kill_switch`, `audit_key_missing`, or `audit_backlog` with `Retry-After`).
+          headers:
+            Retry-After:
+              description: Seconds to wait (only for `audit_backlog`).
+              schema:
+                type: integer
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+  /api/client/v1/generations:
+    get:
+      operationId: listGenerations
+      summary: The caller's running and queued replies, across conversations, oldest first.
+      parameters:
+        - $ref: '#/components/parameters/ClientVersion'
+        - name: status
+          in: query
+          description: Only `running` is accepted (it includes queued ones); anything else is 400.
+          schema:
+            type: string
+            enum: [running]
+      responses:
+        '200':
+          description: Unfinished replies.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PendingGeneration'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '426':
+          $ref: '#/components/responses/TooOld'
+  /api/client/v1/generations/{id}/stream:
+    get:
+      operationId: streamGeneration
+      summary: The events of one reply after its first N deltas, then live ones.
+      description: |
+        Exact while the reply runs and for five minutes after it ends. After that only the database remembers it:
+        `after=0` gets the whole stored text as one `delta`, `after>0` only the ending, and the app should reload
+        the conversation. `cancelled` ends with `done`; `error`, `timed_out` and `interrupted` end with an `error` event.
+      parameters:
+        - $ref: '#/components/parameters/ClientVersion'
+        - $ref: '#/components/parameters/GenerationId'
+        - name: after
+          in: query
+          description: The number of deltas already seen (the last SSE `id:`).
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        '200':
+          $ref: '#/components/responses/EventStream'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '426':
+          $ref: '#/components/responses/TooOld'
+  /api/client/v1/generations/{id}/cancel:
+    post:
+      operationId: cancelGeneration
+      summary: Stop a reply (the text so far is kept). 204 also when it has already finished.
+      parameters:
+        - $ref: '#/components/parameters/ClientVersion'
+        - $ref: '#/components/parameters/GenerationId'
+      responses:
+        '204':
+          description: Stopped, or already finished.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '426':
+          $ref: '#/components/responses/TooOld'
+components:
+  securitySchemes:
+    clientToken:
+      type: http
+      scheme: bearer
+      description: The token from `POST /pairings`. Revoking the client in the admin site makes it a 401.
+  parameters:
+    ClientVersion:
+      name: X-Askbar-Client-Version
+      in: header
+      required: true
+      description: The sending app's version, `major.minor.patch` (a leading `v` and a `-suffix` are ignored).
+      schema:
+        type: string
+        examples: ["0.5.0"]
+    ConversationId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    GenerationId:
+      name: id
+      in: path
+      required: true
+      description: A generation id, from the `meta` event or the pending list.
+      schema:
+        type: string
+  responses:
+    BadRequest:
+      description: The body, a parameter or a header could not be used (`bad_request`, `client_version_missing`).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Unauthorized:
+      description: Missing, unknown or revoked credentials (`unauthorized`).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    NotFound:
+      description: No such thing, or not yours (`not_found`). Also any unknown path.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Internal:
+      description: The server failed (`internal`).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    TooOld:
+      description: The app is older than the server's `min_client` (`client_too_old`; the problem carries `min_client`).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    EventStream:
+      description: A Server-Sent Events stream. See `ChatEvent`.
+      content:
+        text/event-stream:
+          schema:
+            type: string
+            description: >-
+              Messages of the form `event: <name>` / `data: <json>`. Deltas also carry `id: <n>`. Lines starting
+              with `:` are keep-alives. Ignore events you do not know.
+  schemas:
+    Problem:
+      type: object
+      description: >-
+        An error, as RFC 9457 problem details (application/problem+json). Branch on `error`, never on
+        `detail`. Extension members (for example `period`) may be present.
+      required: [type, title, status, detail, error]
+      additionalProperties: true
+      properties:
+        type:
+          type: string
+          description: A URN, `urn:askbar:problem:<error>`; nothing is hosted at it.
+          examples: ["urn:askbar:problem:not_found"]
+        title:
+          type: string
+          description: Fixed for each code.
+        status:
+          type: integer
+        detail:
+          type: string
+          description: A sentence for a person.
+        error:
+          type: string
+          description: The stable code.
+          enum:
+          - queue_full
+          - budget_exceeded
+          - kill_switch
+          - audit_key_missing
+          - audit_backlog
+          - client_too_old
+          - client_version_missing
+          - unauthorized
+          - forbidden
+          - not_found
+          - method_not_allowed
+          - bad_request
+          - payload_too_large
+          - too_many_attempts
+          - api_key_exists
+          - setup_required
+          - server_unavailable
+          - conflict
+          - internal
+    Health:
+      type: object
+      required: [api_version, min_client]
+      properties:
+        api_version:
+          type: integer
+        min_client:
+          type: string
+          description: The oldest app version this server accepts.
+    PairRequest:
+      type: object
+      required: [code]
+      properties:
+        code:
+          type: string
+    PairResponse:
+      type: object
+      required: [token]
+      properties:
+        token:
+          type: string
+          description: Starts with `abt_`. Shown once.
+    ProviderInfo:
+      type: object
+      required: [id, name, type, model]
+      properties:
+        id:
+          type: string
+          description: Stable. Chats and preferences refer to a provider by this, never by name.
+        name:
+          type: string
+        type:
+          type: string
+          enum: [openai, anthropic]
+        model:
+          type: string
+    Conversation:
+      type: object
+      required: [id, title, updated_at, message_count]
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        updated_at:
+          type: integer
+          description: UTC unix seconds.
+        message_count:
+          type: integer
+    Message:
+      type: object
+      required: [id, role, content, created_at]
+      properties:
+        id:
+          type: string
+        role:
+          type: string
+          enum: [user, assistant]
+        content:
+          type: string
+        created_at:
+          type: integer
+    PendingGeneration:
+      type: object
+      required: [generation_id, conversation_id, status, text, prompt]
+      properties:
+        generation_id:
+          type: string
+        conversation_id:
+          type: string
+        status:
+          type: string
+          enum: [queued, running]
+        text:
+          type: string
+          description: The reply as last saved (it can trail the live stream by about a second).
+        prompt:
+          type: string
+        client_request_id:
+          type: string
+    ConversationDetail:
+      allOf:
+        - $ref: '#/components/schemas/Conversation'
+        - type: object
+          required: [messages]
+          properties:
+            messages:
+              type: array
+              items:
+                $ref: '#/components/schemas/Message'
+            pending:
+              type: array
+              description: Left out when nothing is unfinished.
+              items:
+                $ref: '#/components/schemas/PendingGeneration'
+    Prefs:
+      type: object
+      required: [active_provider_id]
+      properties:
+        active_provider_id:
+          type: [string, 'null']
+          description: The provider new chats use; null means the first one listed.
+    DisplaySettings:
+      type: object
+      properties:
+        theme:
+          type: string
+          enum: [auto, light, dark]
+        width:
+          type: integer
+        max_height:
+          type: integer
+        history_width:
+          type: integer
+        top_percent:
+          type: number
+        hide_on_blur:
+          type: boolean
+    Settings:
+      type: object
+      properties:
+        display:
+          $ref: '#/components/schemas/DisplaySettings'
+    SearchHit:
+      type: object
+      required: [conversation_id, message_id, role, snippet, created_at]
+      properties:
+        conversation_id:
+          type: string
+        message_id:
+          type: string
+        role:
+          type: string
+        snippet:
+          type: string
+        created_at:
+          type: integer
+    ChatRequest:
+      type: object
+      required: [provider, text]
+      properties:
+        conversation_id:
+          type: string
+          description: Omit to start a new conversation.
+        provider:
+          type: string
+          description: A provider id.
+        text:
+          type: string
+          description: Not empty.
+        client_request_id:
+          type: string
+          description: A random id the app chooses for each send (a UUID). A repeat attaches to the first send.
+    ChatEvent:
+      description: The `data:` of each stream message; the SSE `event:` name is the `event` value.
+      oneOf:
+        - type: object
+          required: [event, conversation_id]
+          properties:
+            event:
+              const: meta
+            conversation_id:
+              type: string
+            generation_id:
+              type: string
+            queued:
+              type: boolean
+              description: Present (true) when another reply is still running and this message waits.
+        - type: object
+          required: [event, id, name]
+          properties:
+            event:
+              const: provider
+            id:
+              type: string
+            name:
+              type: string
+        - type: object
+          required: [event, text]
+          properties:
+            event:
+              const: delta
+            text:
+              type: string
+        - type: object
+          required: [event]
+          properties:
+            event:
+              const: done
+        - type: object
+          required: [event, message]
+          properties:
+            event:
+              const: error
+            message:
+              type: string
+            code:
+              type: string
+              enum: [timed_out, interrupted, kill_switch, provider_error, internal]

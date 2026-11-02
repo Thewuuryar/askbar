@@ -1,0 +1,539 @@
+openapi: 3.1.0
+info:
+  title: Askbar server API
+  version: 1.0.0
+  summary: What the admin service calls on the server. Internal.
+  description: |
+    The API under `/api/server/v1`, served only on the server's internal listener (an address on the
+    `server-api` network that only the admin joins). **It is never public**: Caddy has no route to it and
+    answers 404, and the client API's listener does not serve it. It is documented so the admin service and
+    the server can be changed with confidence, not for outside callers.
+
+    Every request carries `Authorization: Bearer <server token>`. The admin holds the token; the server
+    holds only its SHA-256, in a file it mounts read-only, read on every request. A missing or unreadable
+    hash file refuses everything (fail closed).
+
+    Every error is a problem (`application/problem+json`). See [docs/architecture.md](../architecture.md)
+    and, for the audit endpoints, [docs/wire-contract.md](../wire-contract.md).
+servers:
+  - url: http://172.30.0.2:8082
+    description: The server's address on the internal network, as set in compose.yaml.
+security:
+  - serverToken: []
+paths:
+  /api/server/v1/health:
+    get:
+      operationId: getHealth
+      summary: The server API is up and the token is right.
+      responses:
+        '200':
+          description: OK.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/server/v1/snapshot:
+    put:
+      operationId: putSnapshot
+      summary: Replace the configuration snapshot.
+      description: >-
+        Everything the server needs from the admin to run, as one document (providers, system prompt, display
+        defaults, pairing codes, revoked clients, budgets, kill switch, generation timeout, audit retention and
+        the audit public key). The version in the body is ignored; the server assigns the next one. A snapshot
+        with the kill switch on acts at once on what is queued or running.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Snapshot'
+      responses:
+        '200':
+          description: Accepted.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [version]
+                properties:
+                  version:
+                    type: integer
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /api/server/v1/providers/{id}/key:
+    put:
+      operationId: putProviderKey
+      summary: Store a provider's API key, encrypted. Write-only.
+      description: No endpoint ever returns the key.
+      parameters:
+        - $ref: '#/components/parameters/ProviderId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [key]
+              properties:
+                key:
+                  type: string
+                  minLength: 1
+                  maxLength: 4096
+      responses:
+        '204':
+          description: Stored.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /api/server/v1/providers/health:
+    get:
+      operationId: getProvidersHealth
+      summary: Providers the router found unusable (bad credentials).
+      description: Only flagged providers are listed; the reason is a code such as `http_401`, never the provider's own text.
+      responses:
+        '200':
+          description: Flagged providers.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [providers]
+                properties:
+                  providers:
+                    type: array
+                    items:
+                      type: object
+                      required: [provider_id, status, since]
+                      properties:
+                        provider_id:
+                          type: string
+                        status:
+                          type: string
+                          enum: [auth_failed]
+                        since:
+                          type: integer
+                        error_code:
+                          type: [string, 'null']
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/server/v1/providers/{id}/test:
+    post:
+      operationId: testProvider
+      summary: Send a tiny message through the provider and say what came back.
+      parameters:
+        - $ref: '#/components/parameters/ProviderId'
+      responses:
+        '200':
+          description: The result.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, message]
+                properties:
+                  ok:
+                    type: boolean
+                  message:
+                    type: string
+                    description: The start of the reply, or the error. Never contains the key.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /api/server/v1/users:
+    get:
+      operationId: listUsers
+      summary: The users, oldest first. Pairing codes are made for one of these.
+      responses:
+        '200':
+          description: Users.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  required: [id, name]
+                  properties:
+                    id:
+                      type: string
+                    name:
+                      type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/server/v1/clients:
+    get:
+      operationId: listClients
+      summary: Every paired client, newest first. A token is never shown; only its hash is stored.
+      responses:
+        '200':
+          description: Clients.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  required: [id, name, created_at, last_seen, revoked]
+                  properties:
+                    id:
+                      type: string
+                    name:
+                      type: string
+                    created_at:
+                      type: integer
+                    last_seen:
+                      type: [integer, 'null']
+                    revoked:
+                      type: boolean
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/server/v1/usage:
+    get:
+      operationId: getUsage
+      summary: Counts for the admin's overview.
+      responses:
+        '200':
+          description: Counts.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  users:
+                    type: integer
+                  conversations:
+                    type: integer
+                  messages:
+                    type: integer
+                  clients:
+                    type: object
+                    properties:
+                      active:
+                        type: integer
+                      revoked:
+                        type: integer
+                  tokens_in:
+                    type: integer
+                  tokens_out:
+                    type: integer
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/server/v1/backup:
+    get:
+      operationId: getBackup
+      summary: A consistent copy of the server database with everything secret taken out.
+      description: Provider API keys and pairing-code hashes are removed. Conversations, settings and paired-client records (token hashes only) stay.
+      responses:
+        '200':
+          description: A SQLite file.
+          content:
+            application/vnd.sqlite3:
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /api/server/v1/audit/traces:
+    get:
+      operationId: listTraces
+      summary: One summary per generation, newest first. Metadata only.
+      parameters:
+        - name: status
+          in: query
+          description: Filter on the turn's status.
+          schema:
+            type: string
+        - name: provider
+          in: query
+          description: Filter on the provider of the last attempt.
+          schema:
+            type: string
+        - name: before
+          in: query
+          description: A trace id; only older traces (for paging).
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+      responses:
+        '200':
+          description: Traces.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [traces]
+                properties:
+                  traces:
+                    type: array
+                    items:
+                      type: object
+                      description: Trace id, status, times, user and client ids, token counts, error code, provider, model, time to first token, latency and cost (null when a needed price is missing).
+                      additionalProperties: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          $ref: '#/components/responses/NoAudit'
+  /api/server/v1/audit/traces/{id}:
+    get:
+      operationId: getTrace
+      summary: Every span of one generation, in the order they began.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The generation id.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The spans.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [trace_id, spans]
+                properties:
+                  trace_id:
+                    type: string
+                  cost:
+                    type: [number, 'null']
+                  spans:
+                    type: array
+                    items:
+                      type: object
+                      description: Span id, parent, kind (turn, gate, attempt, tool, agent_step), name, status, times, provider, model, token counts, time to first token, error code, user and client ids, cost, and `attrs`.
+                      additionalProperties: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/NoAudit'
+  /api/server/v1/audit/stats:
+    get:
+      operationId: getStats
+      summary: Counts, error rate, latency percentiles, tokens and cost since a time.
+      parameters:
+        - name: since
+          in: query
+          description: Unix seconds. Default is the last 24 hours.
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Statistics.
+          content:
+            application/json:
+              schema:
+                type: object
+                description: since, requests, by_status, error_rate, latency_ms and ttft_ms (p50, p95), tokens, cost, cost_unknown_requests, by_provider, by_day.
+                additionalProperties: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          $ref: '#/components/responses/NoAudit'
+  /api/server/v1/audit/payloads/{span_id}:
+    get:
+      operationId: getPayloads
+      summary: The sealed content of one span, as ciphertext only.
+      description: The server holds only the public half of the audit key and cannot open these. `role` is `request`, `reply` or `error`.
+      parameters:
+        - name: span_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Sealed payloads (empty if nothing is sealed for the span).
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  required: [role, key_id, ciphertext_b64]
+                  properties:
+                    role:
+                      type: string
+                      enum: [request, reply, error]
+                    key_id:
+                      type: string
+                    ciphertext_b64:
+                      type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/NoAudit'
+components:
+  securitySchemes:
+    serverToken:
+      type: http
+      scheme: bearer
+      description: The server token the admin holds. Only its SHA-256 is on the server.
+  parameters:
+    ProviderId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+  responses:
+    BadRequest:
+      description: The body, a parameter or a header could not be used (`bad_request`, `client_version_missing`).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Unauthorized:
+      description: Missing, unknown or revoked credentials (`unauthorized`).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    NotFound:
+      description: No such thing, or not yours (`not_found`). Also any unknown path.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Internal:
+      description: The server failed (`internal`).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    NoAudit:
+      description: No audit store is recording on this server (`setup_required`).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+  schemas:
+    Problem:
+      type: object
+      description: >-
+        An error, as RFC 9457 problem details (application/problem+json). Branch on `error`, never on
+        `detail`. Extension members (for example `period`) may be present.
+      required: [type, title, status, detail, error]
+      additionalProperties: true
+      properties:
+        type:
+          type: string
+          description: A URN, `urn:askbar:problem:<error>`; nothing is hosted at it.
+          examples: ["urn:askbar:problem:not_found"]
+        title:
+          type: string
+          description: Fixed for each code.
+        status:
+          type: integer
+        detail:
+          type: string
+          description: A sentence for a person.
+        error:
+          type: string
+          description: The stable code.
+          enum:
+          - queue_full
+          - budget_exceeded
+          - kill_switch
+          - audit_key_missing
+          - audit_backlog
+          - client_too_old
+          - client_version_missing
+          - unauthorized
+          - forbidden
+          - not_found
+          - method_not_allowed
+          - bad_request
+          - payload_too_large
+          - too_many_attempts
+          - api_key_exists
+          - setup_required
+          - server_unavailable
+          - conflict
+          - internal
+    Snapshot:
+      type: object
+      description: >-
+        The configuration the admin pushes. See `askbar-proto/src/lib.rs` (`Snapshot`) for every field and
+        docs/wire-contract.md for what the server does with them. Unknown fields are ignored.
+      required: [audit_retention_days]
+      additionalProperties: true
+      properties:
+        version:
+          type: integer
+        providers:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        default_provider_id:
+          type: [string, 'null']
+        fallback_order:
+          type: array
+          items:
+            type: string
+        system_prompt:
+          type: [string, 'null']
+        display:
+          type: object
+          additionalProperties: true
+        user_display_defaults:
+          type: object
+          additionalProperties: true
+        pair_codes:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        revoked_client_ids:
+          type: array
+          items:
+            type: string
+        budget:
+          type: object
+          properties:
+            daily_tokens:
+              type: [integer, 'null']
+            monthly_tokens:
+              type: [integer, 'null']
+        kill_switch:
+          type: boolean
+        kill_switch_aborts_running:
+          type: boolean
+        audit_retention_days:
+          type: integer
+          minimum: 7
+        generation_timeout_secs:
+          type: integer
+          minimum: 30
+          maximum: 3600
+        audit_public_key:
+          type: [object, 'null']
+          properties:
+            key_id:
+              type: string
+            public_key:
+              type: string
+              description: 64 hex characters (32 bytes).
