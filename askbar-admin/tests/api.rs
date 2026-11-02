@@ -56,15 +56,15 @@ async fn fake_llm() -> String {
 /// `reachable = false` points the admin at an address where nothing listens.
 async fn start(reachable: bool) -> T {
     let dir = std::env::temp_dir().join(format!("askbar-adminapi-{}", ulid::Ulid::new()));
-    let (secrets, mgmt_dir) = (dir.join("admin-secrets"), dir.join("askbar-mgmt"));
-    let token = server_link::ensure_token(&secrets, &mgmt_dir).unwrap();
+    let (secrets, token_dir) = (dir.join("admin-secrets"), dir.join("server-token"));
+    let token = server_link::ensure_token(&secrets, &token_dir).unwrap();
 
     let sdb = askbar_server::Db::open_in_memory().unwrap();
     sdb.seed_server().unwrap();
     let server = AppState::new(sdb, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), askbar_server::MIN_CLIENT);
     let api = serve(askbar_server::client_router(server.clone())).await;
-    let mgmt_url = if reachable {
-        serve(askbar_server::server_api::router(server.clone(), mgmt_dir.join(server_link::HASH_FILE))).await
+    let server_api_url = if reachable {
+        serve(askbar_server::server_api::router(server.clone(), token_dir.join(server_link::HASH_FILE))).await
     } else {
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         format!("http://{}", l.local_addr().unwrap()) // dropped: nothing listens
@@ -72,7 +72,7 @@ async fn start(reachable: bool) -> T {
 
     let db = AdminDb::open_in_memory().unwrap();
     web::init_password(&db, PW).unwrap();
-    let link = ServerLink::new(&mgmt_url, token);
+    let link = ServerLink::new(&server_api_url, token);
     let admin = AdminState::with_server(db, link);
     let adm = serve(askbar_admin::router(admin.clone())).await;
     let http = reqwest::Client::new();

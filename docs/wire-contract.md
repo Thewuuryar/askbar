@@ -200,7 +200,7 @@ The server, not the client, decides which provider serves a reply.
   UTC day and month by metered providers are compared with `budget.daily_tokens` and
   `budget.monthly_tokens`; subscription providers count as zero. Each gate leaves a `gate` span
   (`done`, or `blocked` for a refusal, which gets a trace of its own).
-- `GET /mgmt/v1/providers/health` (management token): `{"providers": [{"provider_id", "status":
+- `GET /mgmt/v1/providers/health` (server token): `{"providers": [{"provider_id", "status":
   "auth_failed", "since", "error_code"}]}`; only flagged providers are listed, and the reason is a
   code (e.g. `http_401`), never the provider's own text.
 - Cost is computed whenever it is read, from the provider's prices in the snapshot at that moment:
@@ -210,10 +210,10 @@ The server, not the client, decides which provider serves a reply.
 - Anthropic request bodies mark the system prompt and the older history cacheable; the cached
   tokens a provider reports are recorded on the attempt.
 
-## Audit (management API)
+## Audit (server API)
 
 The admin service reads what the server recorded through three endpoints on the management
-listener. They are not part of the device API: they need the management token, the device API
+listener. They are not part of the device API: they need the server token, the device API
 has no such routes (`404`), and the admin never opens `audit.db` itself. Everything they return
 is **metadata** apart from the sealed payloads below, which are ciphertext the server cannot read.
 A server with no audit store answers `503`.

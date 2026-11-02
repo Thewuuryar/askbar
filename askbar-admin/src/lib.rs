@@ -1,6 +1,6 @@
 //! The Askbar admin service. Unix only: it listens on a unix socket, and on other platforms this crate is empty.
 //! It owns `admin.db` and the admin site, and talks to the server
-//! only through the server's management API. It listens on a unix socket, never on a TCP port.
+//! only through the server's server API. It listens on a unix socket, never on a TCP port.
 #![cfg(unix)]
 
 

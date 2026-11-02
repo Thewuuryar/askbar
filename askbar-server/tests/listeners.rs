@@ -18,19 +18,19 @@ async fn status(addr: SocketAddr, path: &str) -> u16 {
 }
 
 #[tokio::test]
-async fn the_api_and_management_routers_share_no_routes() {
+async fn the_client_and_server_api_routers_share_no_routes() {
     let dir = std::env::temp_dir().join(format!("askbar-listeners-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let hash = dir.join("token.sha256");
     std::fs::write(&hash, "0".repeat(64)).unwrap();
-    let mgmt = spawn(askbar_server::server_api::router(state(), hash)).await;
+    let server_api = spawn(askbar_server::server_api::router(state(), hash)).await;
     let api = spawn(askbar_server::client_router(state())).await;
 
     assert_eq!(status(api, "/api/v1/health").await, 200);
-    // Management answers 401 (no token) to everything, including paths that are not its own;
-    // the API answers 404 to management paths and to the admin site that used to live here.
-    assert_eq!(status(mgmt, "/mgmt/v1/health").await, 401);
-    assert_eq!(status(mgmt, "/api/v1/health").await, 401, "the client API is not served here");
+    // The server API answers 401 (no token) to everything, including paths that are not its own;
+    // the client API answers 404 to server API paths and to the admin site that used to live here.
+    assert_eq!(status(server_api, "/mgmt/v1/health").await, 401);
+    assert_eq!(status(server_api, "/api/v1/health").await, 401, "the client API is not served here");
     assert_eq!(status(api, "/mgmt/v1/health").await, 404);
     for gone in ["/admin/", "/admin/health", "/admin/login", "/admin/api/providers", "/"] {
         assert_eq!(status(api, gone).await, 404, "{gone}: the admin site is not part of the server");

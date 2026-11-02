@@ -29,7 +29,7 @@ fn die(e: impl std::fmt::Display, code: i32) -> ! {
 /// `askbar-server healthcheck`: GET the local API health endpoint; exit 0 if it answers 200.
 fn run_healthcheck() -> ! {
     use std::io::{Read, Write};
-    let port = std::env::var("ASKBAR_API_ADDR")
+    let port = std::env::var("ASKBAR_CLIENT_API_ADDR")
         .ok()
         .and_then(|a| a.parse::<SocketAddr>().ok())
         .map_or(8080, |a| a.port());
@@ -106,7 +106,7 @@ async fn main() {
         run_healthcheck();
     }
     tracing_subscriber::fmt().with_target(false).init();
-    let (api, mgmt) = match (addr_from_env("ASKBAR_API_ADDR"), addr_from_env("ASKBAR_MGMT_ADDR")) {
+    let (api, server_api) = match (addr_from_env("ASKBAR_CLIENT_API_ADDR"), addr_from_env("ASKBAR_SERVER_API_ADDR")) {
         (Ok(a), Ok(m)) => (a, m),
         (a, m) => {
             for e in [a.err(), m.err()].into_iter().flatten() {
@@ -115,8 +115,8 @@ async fn main() {
             std::process::exit(2);
         }
     };
-    // The management API is for the admin service only: one specific address, never a wildcard.
-    if let Err(e) = askbar_server::server_api::check_not_wildcard(&mgmt) {
+    // The server API is for the admin service only: one specific address, never a wildcard.
+    if let Err(e) = askbar_server::server_api::check_not_wildcard(&server_api) {
         eprintln!("error: {e}");
         std::process::exit(2);
     }
@@ -149,8 +149,8 @@ async fn main() {
     tokio::spawn(stop_on_signal(state.clone()));
     tokio::spawn(audit_retention_daily(state.clone()));
     tokio::spawn(prune_generations_hourly(state.clone()));
-    let mgmt_app = askbar_server::server_api::router(state.clone(), askbar_server::server_api::token_hash_path());
-    let result = tokio::try_join!(serve(api, askbar_server::client_router(state)), serve(mgmt, mgmt_app));
+    let server_api_app = askbar_server::server_api::router(state.clone(), askbar_server::server_api::token_hash_path());
+    let result = tokio::try_join!(serve(api, askbar_server::client_router(state)), serve(server_api, server_api_app));
     if let Err(e) = result {
         eprintln!("error: {e}");
         std::process::exit(1);

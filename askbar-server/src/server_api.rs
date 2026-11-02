@@ -22,30 +22,30 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use subtle::ConstantTimeEq;
 
-/// Where the SHA-256 (hex) of the management token is.
+/// Where the SHA-256 (hex) of the server token is.
 pub fn token_hash_path() -> PathBuf {
-    std::env::var("ASKBAR_MGMT_TOKEN_HASH_FILE")
+    std::env::var("ASKBAR_SERVER_TOKEN_HASH_FILE")
         .ok()
         .filter(|p| !p.trim().is_empty())
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/mgmt/token.sha256"))
+        .unwrap_or_else(|| PathBuf::from("/server-token/token.sha256"))
 }
 
-/// The management listener's address from `ASKBAR_MGMT_ADDR`: a concrete address,
+/// The server listener's address from `ASKBAR_SERVER_API_ADDR`: a concrete address,
 /// never a wildcard (`0.0.0.0` or `::`), so it can't end up on every network.
 pub fn parse_addr(raw: &str) -> Result<SocketAddr, String> {
     let addr: SocketAddr = raw
         .trim()
         .parse()
-        .map_err(|_| format!("ASKBAR_MGMT_ADDR is not a valid socket address: {raw} (example: 172.30.0.2:8082)"))?;
+        .map_err(|_| format!("ASKBAR_SERVER_API_ADDR is not a valid socket address: {raw} (example: 172.30.0.2:8082)"))?;
     check_not_wildcard(&addr)?;
     Ok(addr)
 }
 
-/// The management address must be one specific address, not `0.0.0.0` or `::`.
+/// The server address must be one specific address, not `0.0.0.0` or `::`.
 pub fn check_not_wildcard(addr: &SocketAddr) -> Result<(), String> {
     if addr.ip().is_unspecified() {
-        return Err(format!("ASKBAR_MGMT_ADDR must be one specific address, not {}: the management API must not listen on every network", addr.ip()));
+        return Err(format!("ASKBAR_SERVER_API_ADDR must be one specific address, not {}: the server API must not listen on every network", addr.ip()));
     }
     Ok(())
 }
@@ -290,7 +290,7 @@ async fn backup(State(state): State<Arc<AppState>>) -> Result<Response, StatusCo
     crate::backup::response(state).await
 }
 
-/// The management routes behind the token check.
+/// The server routes behind the token check.
 pub fn router(state: Arc<AppState>, hash_file: PathBuf) -> Router {
     Router::new()
         .route("/mgmt/v1/health", get(|| async { StatusCode::OK }))

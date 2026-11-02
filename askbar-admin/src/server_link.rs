@@ -18,7 +18,7 @@ use tokio::sync::Mutex;
 use std::time::Duration;
 use tokio::sync::Notify;
 
-pub const TOKEN_FILE: &str = "mgmt.token";
+pub const TOKEN_FILE: &str = "server.token";
 pub const HASH_FILE: &str = "token.sha256";
 
 /// Where the raw token is kept: `ASKBAR_ADMIN_SECRETS_DIR`, default `/admin-secrets`.
@@ -26,14 +26,14 @@ pub fn secrets_dir() -> PathBuf {
     std::env::var("ASKBAR_ADMIN_SECRETS_DIR").ok().filter(|p| !p.trim().is_empty()).map(PathBuf::from).unwrap_or_else(|| "/admin-secrets".into())
 }
 
-/// Where the token's hash is written for the server: `ASKBAR_MGMT_DIR`, default `/mgmt`.
-pub fn mgmt_dir() -> PathBuf {
-    std::env::var("ASKBAR_MGMT_DIR").ok().filter(|p| !p.trim().is_empty()).map(PathBuf::from).unwrap_or_else(|| "/mgmt".into())
+/// Where the token's hash is written for the server: `ASKBAR_SERVER_TOKEN_DIR`, default `/server-token`.
+pub fn token_dir() -> PathBuf {
+    std::env::var("ASKBAR_SERVER_TOKEN_DIR").ok().filter(|p| !p.trim().is_empty()).map(PathBuf::from).unwrap_or_else(|| "/server-token".into())
 }
 
-/// The server's management API: `ASKBAR_SERVER_MGMT_URL`, default `http://server:8082`.
+/// The server's server API: `ASKBAR_SERVER_API_URL`, default `http://server:8082`.
 pub fn server_url() -> String {
-    std::env::var("ASKBAR_SERVER_MGMT_URL").ok().filter(|p| !p.trim().is_empty()).unwrap_or_else(|| "http://server:8082".into())
+    std::env::var("ASKBAR_SERVER_API_URL").ok().filter(|p| !p.trim().is_empty()).unwrap_or_else(|| "http://server:8082".into())
 }
 
 pub fn sha256_hex(s: &str) -> String {
@@ -57,7 +57,7 @@ fn write_atomic(path: &Path, contents: &str, mode: u32) -> std::io::Result<()> {
 
 /// Make sure the token exists (created once, 32 random bytes, mode 0600, never overwritten)
 /// and that the server's hash file matches it. Returns the raw token.
-pub fn ensure_token(secrets_dir: &Path, mgmt_dir: &Path) -> std::io::Result<String> {
+pub fn ensure_token(secrets_dir: &Path, token_dir: &Path) -> std::io::Result<String> {
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     std::fs::create_dir_all(secrets_dir).map_err(|e| io_err(secrets_dir, e))?;
     std::fs::set_permissions(secrets_dir, std::fs::Permissions::from_mode(0o700)).map_err(|e| io_err(secrets_dir, e))?;
@@ -75,8 +75,8 @@ pub fn ensure_token(secrets_dir: &Path, mgmt_dir: &Path) -> std::io::Result<Stri
         }
         Err(e) => return Err(io_err(&path, e)),
     };
-    std::fs::create_dir_all(mgmt_dir).map_err(|e| io_err(mgmt_dir, e))?;
-    let hash_path = mgmt_dir.join(HASH_FILE);
+    std::fs::create_dir_all(token_dir).map_err(|e| io_err(token_dir, e))?;
+    let hash_path = token_dir.join(HASH_FILE);
     let hash = sha256_hex(&token);
     if std::fs::read_to_string(&hash_path).map(|h| h.trim() != hash).unwrap_or(true) {
         // Readable by the server's user, which is not ours.
@@ -192,7 +192,7 @@ pub enum PushError {
     Build(String),
 }
 
-/// Talks to the server's management API and remembers whether it is there.
+/// Talks to the server's server API and remembers whether it is there.
 pub struct ServerLink {
     http: reqwest::Client,
     base: String,
@@ -289,7 +289,7 @@ impl ServerLink {
         result
     }
 
-    /// Any management call. Returns the status and body of whatever the server answered, or
+    /// Any server call. Returns the status and body of whatever the server answered, or
     /// `Unreachable` if it did not answer at all (which also marks it offline).
     pub async fn request(&self, method: reqwest::Method, path: &str, body: Option<&serde_json::Value>) -> Result<(u16, Vec<u8>), PushError> {
         let mut req = self.http.request(method, format!("{}{path}", self.base)).bearer_auth(&self.token);

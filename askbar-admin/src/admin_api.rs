@@ -457,7 +457,7 @@ pub async fn setup_audit_key(State(state): St, Json(b): Json<SetupAuditKey>) -> 
 /// Query keys the audit endpoints understand; anything else is dropped rather than passed on.
 const AUDIT_QUERY_KEYS: [&str; 5] = ["status", "provider", "before", "limit", "since"];
 
-/// Asks the server's management API for `path` (one of its `/mgmt/v1/audit/...` endpoints) with
+/// Asks the server's server API for `path` (one of its `/mgmt/v1/audit/...` endpoints) with
 /// the allowed query parameters, and hands back what it answered. The admin never reads
 /// `audit.db` itself and never pushes anything about it: it only pulls, and only metadata.
 async fn audit_get(state: &AdminState, path: &str, query: &std::collections::HashMap<String, String>) -> Result<Json<serde_json::Value>, Failure> {

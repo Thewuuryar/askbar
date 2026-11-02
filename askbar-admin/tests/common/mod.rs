@@ -61,15 +61,15 @@ pub async fn serve(app: Router) -> String {
 pub async fn start(caddy_up: bool) -> T {
     let dir = std::env::temp_dir().join(format!("ab-{}", &ulid::Ulid::new().to_string()[16..]));
     std::fs::create_dir_all(&dir).unwrap();
-    let (admin_secrets, mgmt_dir) = (dir.join("admin-secrets"), dir.join("askbar-mgmt"));
-    let token = server_link::ensure_token(&admin_secrets, &mgmt_dir).unwrap();
+    let (admin_secrets, token_dir) = (dir.join("admin-secrets"), dir.join("server-token"));
+    let token = server_link::ensure_token(&admin_secrets, &token_dir).unwrap();
 
     let sdb = askbar_server::Db::open_in_memory().unwrap();
     sdb.seed_server().unwrap();
     // The server records to a temp audit.db, so tests can put sealed content there and open it.
     let (recorder, _audit_dir) = askbar_server::testing::audit_recorder();
     let server = AppState::new(sdb, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), askbar_server::MIN_CLIENT).with_audit(recorder);
-    let mgmt_url = serve(askbar_server::server_api::router(server.clone(), mgmt_dir.join(server_link::HASH_FILE))).await;
+    let server_api_url = serve(askbar_server::server_api::router(server.clone(), token_dir.join(server_link::HASH_FILE))).await;
 
     let fake = Arc::new(FakeCaddy::default());
     let caddy_socket = dir.join("c").join("a.sock");
@@ -83,7 +83,7 @@ pub async fn start(caddy_up: bool) -> T {
 
     let db = AdminDb::open_in_memory().unwrap();
     web::init_password(&db, PW).unwrap();
-    let admin = AdminState::build(db, Some(ServerLink::new(&mgmt_url, token)), AdminSecrets::ephemeral());
+    let admin = AdminState::build(db, Some(ServerLink::new(&server_api_url, token)), AdminSecrets::ephemeral());
     admin.set_caddy(CaddyLink { socket: Some(caddy_socket.clone()), secrets_dir: Some(secrets_dir.clone()) });
     let adm = serve(askbar_admin::router(admin.clone())).await;
     let http = reqwest::Client::new();

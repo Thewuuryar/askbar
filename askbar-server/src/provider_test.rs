@@ -1,5 +1,5 @@
 //! "Test" for a provider: send one short message through it and report what happened.
-//! Shared by the admin site and the management API.
+//! Shared by the admin site and the server API.
 
 use crate::llm::{stream_chat, ChatMessage};
 use crate::{store, AppState};

@@ -118,7 +118,7 @@ pub fn current(db: &Db) -> rusqlite::Result<Option<Snapshot>> {
     }))
 }
 
-/// Store `s` as the new snapshot and return its version. The caller is the management handler.
+/// Store `s` as the new snapshot and return its version. The caller is the server handler.
 fn save(db: &Db, s: &Snapshot) -> rusqlite::Result<u64> {
     let tx = db.conn().unchecked_transaction()?;
     let previous: Option<i64> = tx.query_row("SELECT version FROM config_snapshot WHERE id = 1", [], |r| r.get(0)).optional()?;

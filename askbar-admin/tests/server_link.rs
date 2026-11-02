@@ -1,5 +1,5 @@
 #![cfg(unix)]
-//! The admin side of the management link, against a real in-process server.
+//! The admin side of the server link, against a real in-process server.
 
 use askbar_admin::server_link::{self, ServerLink};
 use askbar_admin::AdminDb;
@@ -24,13 +24,13 @@ fn mode(p: &std::path::Path) -> u32 {
 struct Dirs {
     root: PathBuf,
     secrets: PathBuf,
-    mgmt: PathBuf,
+    server_api: PathBuf,
 }
 
 impl Dirs {
     fn new(tag: &str) -> Dirs {
         let root = temp(tag);
-        Dirs { secrets: root.join("admin-secrets"), mgmt: root.join("askbar-mgmt"), root }
+        Dirs { secrets: root.join("admin-secrets"), server_api: root.join("server-token"), root }
     }
 }
 
@@ -45,7 +45,7 @@ impl Drop for Dirs {
 #[test]
 fn the_token_is_private_the_server_gets_only_its_hash_and_nothing_is_overwritten() {
     let d = Dirs::new("token");
-    let token = server_link::ensure_token(&d.secrets, &d.mgmt).unwrap();
+    let token = server_link::ensure_token(&d.secrets, &d.server_api).unwrap();
 
     let token_file = d.secrets.join(server_link::TOKEN_FILE);
     assert_eq!(mode(&token_file), 0o600, "the raw token is private to the admin");
@@ -54,26 +54,26 @@ fn the_token_is_private_the_server_gets_only_its_hash_and_nothing_is_overwritten
     let raw = URL_SAFE_NO_PAD.decode(token.strip_prefix("mgt_").expect("prefixed")).unwrap();
     assert_eq!(raw.len(), 32, "32 random bytes");
 
-    let hash_file = d.mgmt.join(server_link::HASH_FILE);
+    let hash_file = d.server_api.join(server_link::HASH_FILE);
     let hash = std::fs::read_to_string(&hash_file).unwrap();
     assert_eq!(hash.trim(), server_link::sha256_hex(&token));
     assert_eq!(hash.trim().len(), 64);
     assert!(!hash.contains(&token) && !hash.contains(token.trim_start_matches("mgt_")), "the hash file holds no raw token");
-    assert!(std::fs::read_dir(&d.mgmt).unwrap().all(|e| e.unwrap().file_name() == server_link::HASH_FILE), "only the hash is in the server's directory");
+    assert!(std::fs::read_dir(&d.server_api).unwrap().all(|e| e.unwrap().file_name() == server_link::HASH_FILE), "only the hash is in the server's directory");
     assert_ne!(mode(&hash_file) & 0o044, 0, "the server's user can read the hash");
 
     // A restart keeps the token; a damaged hash file is put right; a second token is never made.
-    assert_eq!(server_link::ensure_token(&d.secrets, &d.mgmt).unwrap(), token);
+    assert_eq!(server_link::ensure_token(&d.secrets, &d.server_api).unwrap(), token);
     std::fs::write(&hash_file, "tampered").unwrap();
-    assert_eq!(server_link::ensure_token(&d.secrets, &d.mgmt).unwrap(), token);
+    assert_eq!(server_link::ensure_token(&d.secrets, &d.server_api).unwrap(), token);
     assert_eq!(std::fs::read_to_string(&hash_file).unwrap().trim(), server_link::sha256_hex(&token));
     std::fs::remove_file(&hash_file).unwrap();
-    server_link::ensure_token(&d.secrets, &d.mgmt).unwrap();
+    server_link::ensure_token(&d.secrets, &d.server_api).unwrap();
     assert!(hash_file.exists(), "a lost hash file is written again");
 
     // An empty token file is an error, not a reason to make a new token silently.
     std::fs::write(&token_file, "").unwrap();
-    assert!(server_link::ensure_token(&d.secrets, &d.mgmt).is_err());
+    assert!(server_link::ensure_token(&d.secrets, &d.server_api).is_err());
 }
 
 // ------------------------------------------------------------------ the server
@@ -161,11 +161,11 @@ fn the_generation_timeout_defaults_to_300_when_never_set_and_follows_the_setting
 #[tokio::test]
 async fn a_push_applies_on_the_server() {
     let d = Dirs::new("push");
-    let token = server_link::ensure_token(&d.secrets, &d.mgmt).unwrap();
+    let token = server_link::ensure_token(&d.secrets, &d.server_api).unwrap();
     let state = server_state();
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = l.local_addr().unwrap();
-    serve_on(l, state.clone(), d.mgmt.join(server_link::HASH_FILE)).await;
+    serve_on(l, state.clone(), d.server_api.join(server_link::HASH_FILE)).await;
 
     let link = ServerLink::new(&format!("http://{addr}"), token);
     assert!(!link.server_online(), "unknown until it has been in touch");
@@ -182,7 +182,7 @@ async fn a_push_applies_on_the_server() {
 #[tokio::test]
 async fn an_unreachable_server_is_reported_as_offline_and_a_wrong_token_as_a_refusal() {
     let d = Dirs::new("offline");
-    let token = server_link::ensure_token(&d.secrets, &d.mgmt).unwrap();
+    let token = server_link::ensure_token(&d.secrets, &d.server_api).unwrap();
     let dead = free_port().await;
     let link = ServerLink::new(&format!("http://{dead}"), token.clone());
     let snap = server_link::build_snapshot(AdminDb::open_in_memory().unwrap().conn()).unwrap();
@@ -193,7 +193,7 @@ async fn an_unreachable_server_is_reported_as_offline_and_a_wrong_token_as_a_ref
 
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = l.local_addr().unwrap();
-    serve_on(l, server_state(), d.mgmt.join(server_link::HASH_FILE)).await;
+    serve_on(l, server_state(), d.server_api.join(server_link::HASH_FILE)).await;
     let wrong = ServerLink::new(&format!("http://{addr}"), "mgt_not-the-token".into());
     match wrong.push(&snap).await {
         Err(server_link::PushError::Refused { status, .. }) => assert_eq!(status, 401),
@@ -206,7 +206,7 @@ async fn an_unreachable_server_is_reported_as_offline_and_a_wrong_token_as_a_ref
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn pushing_retries_until_the_server_is_up_and_follows_later_changes() {
     let d = Dirs::new("retry");
-    let token = server_link::ensure_token(&d.secrets, &d.mgmt).unwrap();
+    let token = server_link::ensure_token(&d.secrets, &d.server_api).unwrap();
     let addr = free_port().await; // nothing listens here yet
     let link = ServerLink::new(&format!("http://{addr}"), token);
     let db = Arc::new(Mutex::new(admin_db_with_data()));
@@ -218,7 +218,7 @@ async fn pushing_retries_until_the_server_is_up_and_follows_later_changes() {
     // The server comes up on that address.
     let state = server_state();
     let l = tokio::net::TcpListener::bind(addr).await.unwrap();
-    serve_on(l, state.clone(), d.mgmt.join(server_link::HASH_FILE)).await;
+    serve_on(l, state.clone(), d.server_api.join(server_link::HASH_FILE)).await;
     let applied = |want: usize| {
         askbar_server::snapshot::current(&state.db.lock().unwrap()).ok().flatten().is_some_and(|s| s.providers.len() == want)
     };

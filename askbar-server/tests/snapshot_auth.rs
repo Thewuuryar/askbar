@@ -7,7 +7,7 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 
-const MGMT_TOKEN: &str = "mgt_test-token";
+const SERVER_TOKEN: &str = "mgt_test-token";
 const CODE: &str = "pairing-code-one";
 
 fn hex(s: &str) -> String {
@@ -16,7 +16,7 @@ fn hex(s: &str) -> String {
 
 struct T {
     api: String,
-    mgmt: String,
+    server_api: String,
     user: String,
     state: Arc<AppState>,
     http: reqwest::Client,
@@ -39,13 +39,13 @@ async fn serve(app: axum::Router) -> String {
 async fn start() -> T {
     let dir = std::env::temp_dir().join(format!("askbar-snapauth-{}", ulid::Ulid::new()));
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("token.sha256"), hex(MGMT_TOKEN)).unwrap();
+    std::fs::write(dir.join("token.sha256"), hex(SERVER_TOKEN)).unwrap();
     let db = askbar_server::Db::open_in_memory().unwrap();
     let user = db.seed_server().unwrap();
     let state = AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), askbar_server::MIN_CLIENT);
     T {
         api: serve(askbar_server::client_router(state.clone())).await,
-        mgmt: serve(server_api::router(state.clone(), dir.join("token.sha256"))).await,
+        server_api: serve(server_api::router(state.clone(), dir.join("token.sha256"))).await,
         user,
         state,
         http: reqwest::Client::new(),
@@ -77,7 +77,7 @@ impl T {
         }
     }
     async fn push(&self, s: &Snapshot) {
-        let r = self.http.put(format!("{}/mgmt/v1/snapshot", self.mgmt)).bearer_auth(MGMT_TOKEN).json(s).send().await.unwrap();
+        let r = self.http.put(format!("{}/mgmt/v1/snapshot", self.server_api)).bearer_auth(SERVER_TOKEN).json(s).send().await.unwrap();
         assert_eq!(r.status(), 200);
     }
     async fn pair(&self, code: &str) -> Option<String> {

@@ -648,7 +648,7 @@ impl Recorder {
         self.tx.as_ref().is_none_or(|tx| tx.capacity() > 0)
     }
 
-    /// A read-only connection to the audit file, for the management API. None when nothing is
+    /// A read-only connection to the audit file, for the server API. None when nothing is
     /// recorded to a file. Reading never blocks the writer (the file is in WAL mode).
     pub fn reader(&self) -> Option<Connection> {
         let path = self.path.as_ref()?;

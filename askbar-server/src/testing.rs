@@ -74,7 +74,7 @@ pub fn add_provider(db: &Db, p: SnapshotProvider) {
     });
 }
 
-/// Store an API key for a provider the way the management API would.
+/// Store an API key for a provider the way the server API would.
 pub fn store_key(db: &Db, secrets: &crate::secrets::Secrets, provider_id: &str, key: &str) {
     db.conn()
         .execute(

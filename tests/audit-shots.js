@@ -28,9 +28,9 @@ async function waitForPort(port) {
 
 (async () => {
   fs.mkdirSync(OUT, { recursive: true });
-  const [api, adminPort, mgmtPort, mockPort] = [await freePort(), await freePort(), await freePort(), await freePort()];
+  const [api, adminPort, serverApiPort, mockPort] = [await freePort(), await freePort(), await freePort(), await freePort()];
   const data = fs.mkdtempSync(path.join(os.tmpdir(), 'askbar-shots-'));
-  const d = { serverData: path.join(data, 'data'), serverSecrets: path.join(data, 'data', 'secrets'), adminData: path.join(data, 'admin-data'), adminSecrets: path.join(data, 'admin-secrets'), mgmt: path.join(data, 'mgmt'), run: path.join(data, 'run') };
+  const d = { serverData: path.join(data, 'data'), serverSecrets: path.join(data, 'data', 'secrets'), adminData: path.join(data, 'admin-data'), adminSecrets: path.join(data, 'admin-secrets'), serverToken: path.join(data, 'serverToken'), run: path.join(data, 'run') };
   fs.mkdirSync(d.run, { recursive: true });
   const sock = path.join(d.run, 'admin.sock');
   const children = [];
@@ -40,10 +40,10 @@ async function waitForPort(port) {
   process.on('exit', cleanup);
 
   run('python3', ['-u', path.join(ROOT, 'tests/mock_llm.py'), String(mockPort)], {});
-  run(path.join(ROOT, 'target/debug/askbar-admin'), [], { ASKBAR_ADMIN_SOCKET: sock, ASKBAR_ADMIN_DATA_DIR: d.adminData, ASKBAR_ADMIN_SECRETS_DIR: d.adminSecrets, ASKBAR_MGMT_DIR: d.mgmt, ASKBAR_SERVER_MGMT_URL: 'http://127.0.0.1:' + mgmtPort, ASKBAR_PUBLIC_URL: 'http://localhost:' + api });
+  run(path.join(ROOT, 'target/debug/askbar-admin'), [], { ASKBAR_ADMIN_SOCKET: sock, ASKBAR_ADMIN_DATA_DIR: d.adminData, ASKBAR_ADMIN_SECRETS_DIR: d.adminSecrets, ASKBAR_SERVER_TOKEN_DIR: d.serverToken, ASKBAR_SERVER_API_URL: 'http://127.0.0.1:' + serverApiPort, ASKBAR_PUBLIC_URL: 'http://localhost:' + api });
   for (let i = 0; i < 100 && !fs.existsSync(sock); i++) await new Promise((r) => setTimeout(r, 50));
   forwarder = net.createServer((c) => { const u = net.connect(sock); c.pipe(u); u.pipe(c); c.on('error', () => u.destroy()); u.on('error', () => c.destroy()); }).listen(adminPort, '127.0.0.1');
-  run(path.join(ROOT, 'target/debug/askbar-server'), [], { ASKBAR_API_ADDR: '127.0.0.1:' + api, ASKBAR_MGMT_ADDR: '127.0.0.1:' + mgmtPort, ASKBAR_MGMT_TOKEN_HASH_FILE: path.join(d.mgmt, 'token.sha256'), ASKBAR_DATA_DIR: d.serverData, ASKBAR_SECRETS_DIR: d.serverSecrets, ASKBAR_AUDIT_DIR: path.join(data, 'audit') });
+  run(path.join(ROOT, 'target/debug/askbar-server'), [], { ASKBAR_CLIENT_API_ADDR: '127.0.0.1:' + api, ASKBAR_SERVER_API_ADDR: '127.0.0.1:' + serverApiPort, ASKBAR_SERVER_TOKEN_HASH_FILE: path.join(d.serverToken, 'token.sha256'), ASKBAR_DATA_DIR: d.serverData, ASKBAR_SECRETS_DIR: d.serverSecrets, ASKBAR_AUDIT_DIR: path.join(data, 'audit') });
   await Promise.all([waitForPort(adminPort), waitForPort(api), waitForPort(mockPort)]);
 
   const base = `http://127.0.0.1:${adminPort}`;

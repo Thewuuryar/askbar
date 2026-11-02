@@ -4,7 +4,7 @@
 #   scripts/check-isolation.sh
 #
 # Proves the split between the server, the admin and Caddy holds in the real containers:
-# the admin works with the server stopped, the management port needs the token (and
+# the admin works with the server stopped, the server port needs the token (and
 # fails closed without a hash file), only the admin can reach it, the server cannot touch
 # the admin's files or socket, the admin allowlist does what its switch says, the server image
 # carries no admin code, secret files are mode 600, and a backup holds no secrets.
@@ -16,9 +16,9 @@
 set -u
 
 PROJECT="${COMPOSE_PROJECT_NAME:-askbar}"
-EDGE="${PROJECT}_edge"; MGMT="${PROJECT}_mgmt"
+EDGE="${PROJECT}_edge"; SERVER_API_NET="${PROJECT}_server-api"
 SERVER=askbar-server; ADMIN=askbar-admin; CADDY=askbar-caddy
-SERVER_MGMT=172.30.0.2:8082
+SERVER_API=172.30.0.2:8082
 PYIMG="${ASKBAR_CHECK_IMAGE:-python:3.12-slim}"
 PW="${ASKBAR_ADMIN_PASSWORD:-$(head -c 24 /dev/urandom | base64 | tr -d '/+=')}"
 FAILS=0
@@ -102,29 +102,29 @@ docker start "$SERVER" >/dev/null
 for i in $(seq 1 30); do [ "$(docker inspect -f '{{.State.Health.Status}}' "$SERVER")" = healthy ] && break; sleep 2; done
 [ "$(docker inspect -f '{{.State.Health.Status}}' "$SERVER")" = healthy ] && pass "server healthy again" || fail "server did not come back"
 
-echo "== 2. The management port"
-HASH=$(docker exec "$ADMIN" cat /mgmt/token.sha256 2>/dev/null | tr -d '[:space:]')
-[ -n "$HASH" ] || fail "could not read the token hash from the admin's /mgmt"
-[ "$(http_status "$MGMT" "$SERVER_MGMT")" = 401 ] && pass "401 without a token" || fail "no token should give 401"
-[ "$(http_status "$MGMT" "$SERVER_MGMT" "$HASH")" = 401 ] && pass "401 with the token's hash instead of the token" || fail "the hash must not work as the token"
-[ "$(http_status "$MGMT" "$SERVER_MGMT" wrong)" = 401 ] && pass "401 with a wrong token" || fail "a wrong token should give 401"
+echo "== 2. The server port"
+HASH=$(docker exec "$ADMIN" cat /server-token/token.sha256 2>/dev/null | tr -d '[:space:]')
+[ -n "$HASH" ] || fail "could not read the token hash from the admin's /server-token"
+[ "$(http_status "$SERVER_API_NET" "$SERVER_API")" = 401 ] && pass "401 without a token" || fail "no token should give 401"
+[ "$(http_status "$SERVER_API_NET" "$SERVER_API" "$HASH")" = 401 ] && pass "401 with the token's hash instead of the token" || fail "the hash must not work as the token"
+[ "$(http_status "$SERVER_API_NET" "$SERVER_API" wrong)" = 401 ] && pass "401 with a wrong token" || fail "a wrong token should give 401"
 
 # A second server on its own scratch volumes, with no hash file at all: nothing may be accepted.
 docker rm -f askbar-check-nohash >/dev/null 2>&1
-docker run -d --name askbar-check-nohash --network "$MGMT" --ip 172.30.0.9 \
-  -e ASKBAR_MGMT_ADDR=172.30.0.9:8082 -e ASKBAR_API_ADDR=127.0.0.1:8080 \
-  -e ASKBAR_MGMT_TOKEN_HASH_FILE=/nowhere/token.sha256 "$(docker inspect -f '{{.Config.Image}}' "$SERVER")" >/dev/null
+docker run -d --name askbar-check-nohash --network "$SERVER_API_NET" --ip 172.30.0.9 \
+  -e ASKBAR_SERVER_API_ADDR=172.30.0.9:8082 -e ASKBAR_CLIENT_API_ADDR=127.0.0.1:8080 \
+  -e ASKBAR_SERVER_TOKEN_HASH_FILE=/nowhere/token.sha256 "$(docker inspect -f '{{.Config.Image}}' "$SERVER")" >/dev/null
 sleep 3
-code=$(http_status "$MGMT" 172.30.0.9:8082 "$HASH")
+code=$(http_status "$SERVER_API_NET" 172.30.0.9:8082 "$HASH")
 case "$code" in 401|403|503) pass "fails closed with no hash file ($code)";; *) fail "no hash file: got $code, expected a refusal";; esac
 docker rm -f askbar-check-nohash >/dev/null 2>&1
 
-docker exec "$CADDY" sh -c "wget -q -T3 -O /dev/null http://$SERVER_MGMT/mgmt/v1/health" >/dev/null 2>&1 \
-  && fail "Caddy reached the management port" || pass "Caddy cannot reach the management port"
+docker exec "$CADDY" sh -c "wget -q -T3 -O /dev/null http://$SERVER_API/mgmt/v1/health" >/dev/null 2>&1 \
+  && fail "Caddy reached the server port" || pass "Caddy cannot reach the server port"
 EDGE_IP=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$EDGE\").IPAddress}}" "$SERVER")
-[ "$(http_status "$EDGE" "$EDGE_IP:8082")" = 0 ] && pass "nothing on the edge network answers on 8082" || fail "the management port answers on the edge network"
-[ "$(http_status "$EDGE" "$SERVER_MGMT")" = 0 ] && pass "a container on edge cannot reach the mgmt address" || fail "the mgmt address is reachable from edge"
-[ "$(docker inspect -f '{{len .NetworkSettings.Networks}}' "$ADMIN")" = 1 ] && pass "the admin is on one network only (mgmt)" || fail "the admin joined more than one network"
+[ "$(http_status "$EDGE" "$EDGE_IP:8082")" = 0 ] && pass "nothing on the edge network answers on 8082" || fail "the server port answers on the edge network"
+[ "$(http_status "$EDGE" "$SERVER_API")" = 0 ] && pass "a container on edge cannot reach the server API address" || fail "the server API address is reachable from edge"
+[ "$(docker inspect -f '{{len .NetworkSettings.Networks}}' "$ADMIN")" = 1 ] && pass "the admin is on one network only (server-api)" || fail "the admin joined more than one network"
 
 echo "== 3. What the server can see"
 VOLS=$(docker inspect -f '{{range .Mounts}}{{.Name}} {{end}}' "$SERVER")
@@ -133,8 +133,8 @@ for v in admin-secrets admin-data admin-run caddy-run caddy-secrets; do
 done
 refused "the server cannot list /admin-secrets" docker exec "$SERVER" ls /admin-secrets
 refused "the server cannot reach an admin socket" docker exec "$SERVER" test -e /run/admin/admin.sock
-refused "the server cannot write to /mgmt (read-only)" docker exec "$SERVER" sh -c 'touch /mgmt/x'
-[ "$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/mgmt"}}{{.RW}}{{end}}{{end}}' "$SERVER")" = false ] && pass "/mgmt is mounted read-only in the server" || fail "/mgmt is writable in the server"
+refused "the server cannot write to /server-token (read-only)" docker exec "$SERVER" sh -c 'touch /server-token/x'
+[ "$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/server-token"}}{{.RW}}{{end}}{{end}}' "$SERVER")" = false ] && pass "/server-token is mounted read-only in the server" || fail "/server-token is writable in the server"
 [ "$(docker exec "$SERVER" id -u)" != "$(docker exec "$ADMIN" id -u)" ] && pass "the server and the admin run as different users" || fail "the server and the admin share a user"
 # Even as the admin's own uid, the server container has nothing of the admin's to open.
 refused "the admin's database is not in the server" docker exec -u "$(docker exec "$ADMIN" id -u)" "$SERVER" sh -c 'ls /admin-data/admin.db'
@@ -149,7 +149,7 @@ esac
 refused "the admin container has no /audit" docker exec "$ADMIN" test -e /audit
 refused "no audit.db anywhere in the admin container" docker exec "$ADMIN" sh -c 'find / -xdev -name "audit.db*" 2>/dev/null | grep -q .'
 check "audit.db exists in the server" docker exec "$SERVER" test -s /audit/audit.db
-# The device API (port 8080, reachable from the edge network) has no audit and no management routes.
+# The device API (port 8080, reachable from the edge network) has no audit and no server routes.
 http_get() { # network host:port path -> status; 0 = no connection
   py --network "$1" -- "
 import urllib.request, urllib.error
@@ -246,7 +246,7 @@ case " $(docker inspect -f '{{range .Mounts}}{{.Name}} {{end}}' "$ADMIN")" in
 esac
 refused "the admin has no /secrets" docker exec "$ADMIN" test -e /secrets
 modes_ok=1
-for f in "$ADMIN:/admin-secrets/admin.key" "$ADMIN:/admin-secrets/mgmt.token" "$SERVER:/secrets/master.key"; do
+for f in "$ADMIN:/admin-secrets/admin.key" "$ADMIN:/admin-secrets/server.token" "$SERVER:/secrets/master.key"; do
   m=$(docker exec "${f%%:*}" stat -c %a "${f#*:}" 2>/dev/null)
   [ "$m" = 600 ] || { fail "${f#*:} has mode ${m:-missing}, expected 600"; modes_ok=0; }
 done

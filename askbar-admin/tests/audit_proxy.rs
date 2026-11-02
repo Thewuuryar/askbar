@@ -108,7 +108,7 @@ async fn the_proxy_needs_a_session_like_every_other_admin_route() {
 }
 
 #[tokio::test]
-async fn known_parameters_are_forwarded_with_the_management_token_and_unknown_ones_are_dropped() {
+async fn known_parameters_are_forwarded_with_the_server_token_and_unknown_ones_are_dropped() {
     let (url, seen) = stub().await;
     let a = admin_for(&url).await;
     let (st, body) = a.get("/admin/api/audit/traces?status=error&provider=p1&before=01ABC&limit=25&evil=1&since=5", true, true).await;

@@ -13,14 +13,14 @@ Askbar is three programs:
 
 - **Desktop client** (Tauri): the popup. It pairs with one server and holds only its address, a hotkey and a device token (in the OS keychain).
 - **`askbar-server`**: the device API. It stores conversations, runs the chat against your providers and keeps provider keys encrypted. It has no web UI and no login.
-- **`askbar-admin`**: the admin site. It owns all configuration (providers, system prompt, display defaults, pairing codes, devices, network and HTTPS settings, limits and the kill switch) and pushes it to the server over a private management API. Its **Audit** tab shows what the server recorded about every reply.
+- **`askbar-admin`**: the admin site. It owns all configuration (providers, system prompt, display defaults, pairing codes, devices, network and HTTPS settings, limits and the kill switch) and pushes it to the server over a private server API. Its **Audit** tab shows what the server recorded about every reply.
 
 There is no standalone mode: the client always talks to a server.
 
 ```
  desktop app --HTTPS, bearer token--> Caddy :443 --> askbar-server :8080 --> your providers
  browser     --HTTPS, session cookie-> Caddy :443 --unix socket--> askbar-admin
-                                                                      |  management API (token, own network)
+                                                                      |  server API (token, own network)
                                                                       +--> askbar-server
 ```
 
@@ -99,14 +99,14 @@ That starts three containers on two networks:
 | Container | Runs as | Network | Published |
 |---|---|---|---|
 | `askbar-caddy` | root (group 10001) | `edge` | **443, 80** |
-| `askbar-server` | uid 10002 | `edge`, `mgmt` | nothing |
-| `askbar-admin` | uid 10001 | `mgmt` only | nothing (a unix socket) |
+| `askbar-server` | uid 10002 | `edge`, `server-api` | nothing |
+| `askbar-admin` | uid 10001 | `server-api` only | nothing (a unix socket) |
 
-`mgmt` is an `internal` network shared by the admin and the server's management API (172.30.0.2:8082, fixed in `compose.yaml`). Caddy is the only thing the outside world can reach.
+`server-api` is an `internal` network shared by the admin and the server's server API (172.30.0.2:8082, fixed in `compose.yaml`). Caddy is the only thing the outside world can reach.
 
 - The **server** serves the device API, which accepts only `Authorization: Bearer <device token>`. Chat replies stream as Server-Sent Events (`meta`, `provider`, `delta`, `done`, `error`) and can be resumed after a dropped connection. Device tokens are random, shown once, and stored as SHA-256 hashes. See [docs/wire-contract.md](docs/wire-contract.md).
 - The **admin** listens on a unix socket only. Caddy proxies `admin.<hostname>` to it, and the admin owns `admin.db`. Every change is made in `admin.db` and pushed to the server as one snapshot; if the server is down the change is refused ("The server is offline. Nothing was changed.") rather than half applied. With the server stopped the admin still loads and shows an offline banner.
-- The **management API** requires a bearer token. The admin keeps the token in its own secrets volume (mode 600); the server holds only its SHA-256 (`token.sha256`, read per request, compared in constant time, and the API refuses everything when the file is missing).
+- The **server API** requires a bearer token. The admin keeps the token in its own secrets volume (mode 600); the server holds only its SHA-256 (`token.sha256`, read per request, compared in constant time, and the API refuses everything when the file is missing).
 - **Provider API keys** are encrypted at rest (ChaCha20-Poly1305) with a master key that the server creates on its first start in the `askbar-secrets` volume. They are sent to the server by the admin, stored only in `server.db`, and never returned by any endpoint. The Cloudflare token is encrypted in `admin.db` with the admin's own key (`admin-secrets`), separate from the server's, and written to a file only Caddy reads.
 
 ### First run
@@ -144,7 +144,7 @@ The **content** of messages (prompts, replies, provider errors) is *sealed*: the
 - Records older than **Keep audit records for (days)** (default 30, at least 7) are deleted once a day. Nothing younger than 7 days can be deleted.
 - Until a key exists the server refuses to start replies (`503`), rather than record them unsealed.
 
-The trace lives in `audit.db`, in the `audit-data` volume, which only the server mounts; the admin reads it through the management API.
+The trace lives in `audit.db`, in the `audit-data` volume, which only the server mounts; the admin reads it through the server API.
 
 ### CLIProxyAPI
 
@@ -165,7 +165,7 @@ Lets a Claude or ChatGPT subscription act as an OpenAI-compatible provider. It s
 
 **Compose profiles:** the three services and CLIProxyAPI are always on. `dev` adds a mock LLM (`tests/mock_llm.py`); `cpa-login` is the one-time login helper, started on demand.
 
-**Server environment** (already set in `compose.yaml`; useful without Docker): `ASKBAR_API_ADDR`, `ASKBAR_MGMT_ADDR` (one specific address, never `0.0.0.0`), `ASKBAR_MGMT_TOKEN_HASH_FILE`, `ASKBAR_DATA_DIR`, `ASKBAR_SECRETS_DIR` or `ASKBAR_MASTER_KEY_FILE`. **Admin:** `ASKBAR_ADMIN_SOCKET`, `ASKBAR_ADMIN_DATA_DIR`, `ASKBAR_ADMIN_SECRETS_DIR`, `ASKBAR_MGMT_DIR`, `ASKBAR_SERVER_MGMT_URL`, `ASKBAR_CADDY_SOCKET`, `ASKBAR_CADDY_SECRETS_DIR`, `ASKBAR_PUBLIC_URL`.
+**Server environment** (already set in `compose.yaml`; useful without Docker): `ASKBAR_CLIENT_API_ADDR`, `ASKBAR_SERVER_API_ADDR` (one specific address, never `0.0.0.0`), `ASKBAR_SERVER_TOKEN_HASH_FILE`, `ASKBAR_DATA_DIR`, `ASKBAR_SECRETS_DIR` or `ASKBAR_MASTER_KEY_FILE`. **Admin:** `ASKBAR_ADMIN_SOCKET`, `ASKBAR_ADMIN_DATA_DIR`, `ASKBAR_ADMIN_SECRETS_DIR`, `ASKBAR_SERVER_TOKEN_DIR`, `ASKBAR_SERVER_API_URL`, `ASKBAR_CADDY_SOCKET`, `ASKBAR_CADDY_SECRETS_DIR`, `ASKBAR_PUBLIC_URL`.
 
 ### Backup and recovery
 
@@ -183,7 +183,7 @@ If you restore a raw copy of `data/` that still holds encrypted provider keys on
 
 ```
 askbar-proto/    request/response and snapshot types shared by the server, admin and client
-askbar-server/   the server: device API, management API, database, chat/LLM streaming, secrets
+askbar-server/   the server: device API, server API, database, chat/LLM streaming, secrets
 askbar-admin/    the admin service: admin site (ui/), admin.db, snapshot push, Caddy configuration (unix only)
 src-tauri/       the desktop client: window, hotkey, tray, pairing
 ui/              the popup: index.html, style.css, main.js, markdown.js (no build step)
@@ -213,7 +213,7 @@ The UI and admin tests need `npm install && npx playwright install chromium`.
 
 Verified on Linux (X11) by driving the real binary: hotkey show/hide, second-launch toggle, typing, streaming, Esc-to-stop (the server sees the disconnect and the partial reply is saved), deleting through real clicks, clipboard copy and paste, a bad hotkey, and hide-on-click-away (these were checked before the 0.3.0 split; the 0.3.0 client has been build- and test-verified, not driven by hand).
 
-Verified for 0.3.0 in containers: all three images build and report healthy; `scripts/check-isolation.sh` passes (management port token and fail-closed behaviour, network separation, what each container can read, the allowlist rules in Caddy's loaded configuration, secret file modes, no admin code in the server image, backups free of secrets); the admin applies configuration to Caddy through its unix socket.
+Verified for 0.3.0 in containers: all three images build and report healthy; `scripts/check-isolation.sh` passes (server port token and fail-closed behaviour, network separation, what each container can read, the allowlist rules in Caddy's loaded configuration, secret file modes, no admin code in the server image, backups free of secrets); the admin applies configuration to Caddy through its unix socket.
 
 Not verified: **Windows and macOS** runtime behaviour (`.github/workflows/build.yml`, run manually with *Run workflow*, builds and tests them), **Wayland**, a real certificate issued by this layout (the Let's Encrypt/Cloudflare path worked in 0.2 and the Caddy module is unchanged), a **desktop client paired to a 0.3.0 stack by a person**, and the live Anthropic and OpenAI APIs (both protocols are tested against a mock that follows their streaming formats). On macOS the dock icon is hidden by default; if Cmd+C or Cmd+V misbehave, set `ui.macos_hide_dock_icon: false`.
 

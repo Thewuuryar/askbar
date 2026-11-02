@@ -256,7 +256,7 @@ async fn the_flag_clears_on_the_next_success_and_when_a_new_key_is_saved_and_the
     let s = stack("m-fail", "m", serde_json::json!({ "allow_as_fallback": true })).await;
     assert!(is_done(&s.run("hello there").await));
 
-    // The management endpoint lists it, with a code and no provider text.
+    // The server endpoint lists it, with a code and no provider text.
     let dir = s._dir.clone();
     let hash = dir.join("token.sha256");
     let token = "mgt_health-test-token";
@@ -274,7 +274,7 @@ async fn the_flag_clears_on_the_next_success_and_when_a_new_key_is_saved_and_the
     assert_eq!((v["providers"][0]["provider_id"].as_str(), v["providers"][0]["status"].as_str(), v["providers"][0]["error_code"].as_str()), (Some("p1"), Some("auth_failed"), Some("http_401")));
     assert!(!v.to_string().contains("Incorrect API key"), "the provider's own words are not kept: {v}");
     let r = http.get(format!("{url}/mgmt/v1/providers/health")).send().await.unwrap();
-    assert_eq!(r.status(), 401, "needs the management token");
+    assert_eq!(r.status(), 401, "needs the server token");
 
     // Saving a new key for p1 clears the flag.
     let r = http.put(format!("{url}/mgmt/v1/providers/p1/key")).bearer_auth(token).json(&serde_json::json!({ "key": "sk-new" })).send().await.unwrap();
@@ -365,8 +365,8 @@ async fn the_kill_switch_gate_leaves_a_span_whether_it_lets_a_generation_through
     assert!(is_done(&s.run("works again").await));
 }
 
-/// The management API for `s`, with a token, so a test can push a snapshot the way the admin does.
-async fn mgmt(s: &Stack) -> (String, String) {
+/// The server API for `s`, with a token, so a test can push a snapshot the way the admin does.
+async fn server_api(s: &Stack) -> (String, String) {
     use sha2::Digest;
     let token = "mgt_router-test-token".to_string();
     let hash = s._dir.join("token.sha256");
@@ -380,7 +380,7 @@ async fn mgmt(s: &Stack) -> (String, String) {
 
 /// Pushes the current snapshot back with the kill switch on and `aborts` as given.
 async fn switch_off(s: &Stack, aborts: bool) {
-    let (url, token) = mgmt(s).await;
+    let (url, token) = server_api(s).await;
     let mut snap = askbar_server::snapshot::current(&s.state.db.lock().unwrap()).unwrap().unwrap();
     snap.kill_switch = true;
     snap.kill_switch_aborts_running = aborts;

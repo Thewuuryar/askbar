@@ -59,7 +59,7 @@ jobs:
 
       - name: Each image answers its health check
         run: |
-          docker run -d --name server -e ASKBAR_MGMT_ADDR=127.0.0.1:8082 askbar-server:ci
+          docker run -d --name server -e ASKBAR_SERVER_API_ADDR=127.0.0.1:8082 askbar-server:ci
           docker run -d --name admin askbar-admin:ci
           for c in server admin; do
             ok=no

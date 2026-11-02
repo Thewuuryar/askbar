@@ -21,7 +21,7 @@ impl Drop for T {
 }
 
 async fn start(write_hash: bool) -> T {
-    let dir = std::env::temp_dir().join(format!("askbar-mgmt-{}", ulid::Ulid::new()));
+    let dir = std::env::temp_dir().join(format!("server-token-{}", ulid::Ulid::new()));
     std::fs::create_dir_all(&dir).unwrap();
     let hash_file = dir.join("token.sha256");
     if write_hash {
@@ -97,7 +97,7 @@ async fn it_fails_closed_when_the_hash_file_is_missing_or_unusable() {
 fn the_listen_address_is_never_a_wildcard() {
     assert!(server_api::parse_addr("172.30.0.2:8082").is_ok());
     assert!(server_api::parse_addr("127.0.0.1:8082").is_ok());
-    for bad in ["0.0.0.0:8082", "[::]:8082", "8082", "mgmt:8082", ""] {
+    for bad in ["0.0.0.0:8082", "[::]:8082", "8082", "server-api:8082", ""] {
         assert!(server_api::parse_addr(bad).is_err(), "{bad:?}");
     }
     assert!(server_api::parse_addr("0.0.0.0:8082").unwrap_err().contains("every network"));
@@ -152,7 +152,7 @@ struct S {
 }
 
 async fn start_with_state() -> S {
-    let dir = std::env::temp_dir().join(format!("askbar-mgmt-{}", ulid::Ulid::new()));
+    let dir = std::env::temp_dir().join(format!("server-token-{}", ulid::Ulid::new()));
     std::fs::create_dir_all(&dir).unwrap();
     let hash_file = dir.join("token.sha256");
     std::fs::write(&hash_file, hex(TOKEN)).unwrap();
@@ -356,7 +356,7 @@ async fn the_test_endpoint_runs_a_provider_and_hides_the_key() {
 // ------------------------------------------------------- clients, usage, backup
 
 #[tokio::test]
-async fn clients_and_usage_are_listed_over_the_management_api() {
+async fn clients_and_usage_are_listed_over_the_server_api() {
     use reqwest::Method as M;
     let s = start_with_state().await;
     let user = {
@@ -424,7 +424,7 @@ async fn the_backup_has_the_data_and_none_of_the_secrets() {
     assert!(!has(code_hash.as_bytes()), "the snapshot's pair-code hashes are gone");
     assert!(!has(b"used-hash-123"), "so are redeemed-code hashes");
 
-    let dir = std::env::temp_dir().join(format!("askbar-mgmt-backup-{}", ulid::Ulid::new()));
+    let dir = std::env::temp_dir().join(format!("server-token-backup-{}", ulid::Ulid::new()));
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join("b.db");
     std::fs::write(&file, &bytes).unwrap();
@@ -699,7 +699,7 @@ async fn audit_stats_count_rate_percentiles_and_tokens() {
 }
 
 #[tokio::test]
-async fn the_audit_endpoints_need_the_management_token_and_a_recording_store() {
+async fn the_audit_endpoints_need_the_server_token_and_a_recording_store() {
     let a = audit_stack().await;
     for p in ["/mgmt/v1/audit/traces", "/mgmt/v1/audit/traces/x", "/mgmt/v1/audit/stats"] {
         let r = a.http.get(format!("{}{p}", a.url)).send().await.unwrap();

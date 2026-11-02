@@ -33,12 +33,12 @@ async function waitForPort(port) {
 }
 
 (async () => {
-  const [api, adminPort, mgmtPort, mockPort] = [await freePort(), await freePort(), await freePort(), await freePort()];
+  const [api, adminPort, serverApiPort, mockPort] = [await freePort(), await freePort(), await freePort(), await freePort()];
   const data = fs.mkdtempSync(path.join(os.tmpdir(), 'askbar-admin-'));
   const dirs = {
     serverData: path.join(data, 'data'), serverSecrets: path.join(data, 'data', 'secrets'),
     adminData: path.join(data, 'admin-data'), adminSecrets: path.join(data, 'admin-secrets'),
-    mgmt: path.join(data, 'askbar-mgmt'), run: path.join(data, 'admin-run'),
+    serverToken: path.join(data, 'server-token'), run: path.join(data, 'admin-run'),
   };
   fs.mkdirSync(dirs.run, { recursive: true });
   const sock = path.join(dirs.run, 'admin.sock');
@@ -48,14 +48,14 @@ async function waitForPort(port) {
   const cleanup = () => { for (const c of children) c.kill(); if (forwarder) forwarder.close(); fs.rmSync(data, { recursive: true, force: true }); };
 
   const startServer = () => run(path.join(ROOT, 'target/debug/askbar-server'), [], {
-    ASKBAR_API_ADDR: '127.0.0.1:' + api,
-    ASKBAR_MGMT_ADDR: '127.0.0.1:' + mgmtPort, ASKBAR_MGMT_TOKEN_HASH_FILE: path.join(dirs.mgmt, 'token.sha256'),
+    ASKBAR_CLIENT_API_ADDR: '127.0.0.1:' + api,
+    ASKBAR_SERVER_API_ADDR: '127.0.0.1:' + serverApiPort, ASKBAR_SERVER_TOKEN_HASH_FILE: path.join(dirs.serverToken, 'token.sha256'),
     ASKBAR_DATA_DIR: dirs.serverData, ASKBAR_SECRETS_DIR: dirs.serverSecrets,
   });
   run('python3', ['-u', path.join(ROOT, 'tests/mock_llm.py'), String(mockPort)], {});
   run(path.join(ROOT, 'target/debug/askbar-admin'), [], {
     ASKBAR_ADMIN_SOCKET: sock, ASKBAR_ADMIN_DATA_DIR: dirs.adminData, ASKBAR_ADMIN_SECRETS_DIR: dirs.adminSecrets,
-    ASKBAR_MGMT_DIR: dirs.mgmt, ASKBAR_SERVER_MGMT_URL: 'http://127.0.0.1:' + mgmtPort,
+    ASKBAR_SERVER_TOKEN_DIR: dirs.serverToken, ASKBAR_SERVER_API_URL: 'http://127.0.0.1:' + serverApiPort,
     ASKBAR_PUBLIC_URL: 'http://localhost:' + api,
   });
   for (let i = 0; i < 100 && !fs.existsSync(sock); i++) await new Promise((r) => setTimeout(r, 50));

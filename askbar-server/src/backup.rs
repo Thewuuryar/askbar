@@ -1,5 +1,5 @@
 //! The database backup: a consistent copy with everything secret taken out.
-//! Shared by the admin site and the management API.
+//! Shared by the admin site and the server API.
 
 use crate::AppState;
 use axum::http::StatusCode;
