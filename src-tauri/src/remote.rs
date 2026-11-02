@@ -76,11 +76,21 @@ async fn read_reply(resp: reqwest::Response, reader: &mut ReplyReader, cancel: &
                     return Read::Finished;
                 }
                 Step::Fail(message) => {
-                    emit(StreamEvent::error(message));
+                    emit(server_error(message));
                     return Read::Finished;
                 }
             }
         }
+    }
+}
+
+/// The server's last word on a failed reply. The wire has no separate code for a reply that ran
+/// out of time, only the words "Timed out after N unit"; those become kind `timed_out`, and the
+/// window keeps the text that arrived and offers to try again.
+fn server_error(message: String) -> StreamEvent {
+    match message.strip_prefix("Timed out after ") {
+        Some(took) if !took.trim().is_empty() => StreamEvent::error_kind("timed_out", format!("Stopped after {took}")),
+        _ => StreamEvent::error(message),
     }
 }
 
@@ -896,7 +906,7 @@ mod tests {
     async fn resuming_stops_on_an_error_event_a_404_or_a_401() {
         let err = sse("error", None, r#"{"event":"error","message":"Timed out after 5 minutes"}"#);
         let events = ask_fake(&fake_server(vec![(200, err)]).await).await;
-        assert!(matches!(events.last(), Some(StreamEvent::Error { message, .. }) if message == "Timed out after 5 minutes"), "{events:?}");
+        assert!(matches!(events.last(), Some(StreamEvent::Error { message, .. }) if message == "Stopped after 5 minutes"), "{events:?}");
 
         let events = ask_fake(&fake_server(vec![(404, String::new())]).await).await;
         assert!(matches!(events.last(), Some(StreamEvent::Error { message, .. }) if message.contains("no longer on the server")), "{events:?}");
@@ -1160,7 +1170,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "enabled in 8.4"]
     async fn a_timed_out_reply_keeps_its_text_and_says_how_long_it_ran() {
         // The first stream (the fake's usual one) delivers "a", "b", "c" and drops; the resume brings
         // the server's last word: it ran out of time.
@@ -1176,6 +1185,14 @@ mod tests {
         let (message, kind) = last_error(&events);
         assert_eq!(kind.as_deref(), Some("timed_out"));
         assert_eq!(message, "Stopped after 5 minutes");
+    }
+
+    #[test]
+    fn only_the_servers_timeout_words_become_a_timed_out_error() {
+        assert_eq!(server_error("Timed out after 90 seconds".into()), StreamEvent::error_kind("timed_out", "Stopped after 90 seconds".into()));
+        assert_eq!(server_error("Timed out after 1 minute".into()), StreamEvent::error_kind("timed_out", "Stopped after 1 minute".into()));
+        assert_eq!(server_error("Timed out after ".into()), StreamEvent::error("Timed out after ".into()));
+        assert_eq!(server_error("upstream timed out".into()), StreamEvent::error("upstream timed out".into()));
     }
 
     #[test]

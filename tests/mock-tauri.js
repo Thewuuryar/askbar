@@ -138,7 +138,7 @@
         conv.messages.push({ id: String(db.nextMsg++), role: 'assistant', content: 'Partial answer', created_at: db.clock });
         onEvent.onmessage({ event: 'delta', text: 'Partial ' });
         onEvent.onmessage({ event: 'delta', text: 'answer' });
-        onEvent.onmessage({ event: 'error', message: 'Timed out after 5 minutes' });
+        onEvent.onmessage({ event: 'error', kind: 'timed_out', message: 'Stopped after 5 minutes' });
         return;
       }
       const slow = /slow/i.test(text);

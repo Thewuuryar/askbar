@@ -245,13 +245,25 @@
     return msg;
   }
 
-  function addError(message) {
+  function addError(message, retry) {
     const node = document.createElement('div');
     node.className = 'msg error';
     const body = document.createElement('div');
     body.className = 'body';
     body.textContent = message;
     node.appendChild(body);
+    if (retry) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'text-btn retry-reply';
+      btn.textContent = 'Try again';
+      btn.addEventListener('click', () => {
+        if (state.streaming) return;
+        node.remove();
+        retry();
+      });
+      node.appendChild(btn);
+    }
     if (/config\.yaml|API key/i.test(message)) {
       const btn = document.createElement('button');
       btn.type = 'button';
@@ -331,7 +343,9 @@
             break;
           case 'error':
             if (!reply.content.trim()) removeMessage(reply);
-            addError(m.message);
+            // A reply that ran out of time keeps what it wrote; trying again asks the same question
+            // as a new reply, below this one.
+            addError(m.message, m.kind === 'timed_out' && userMsg ? () => retryAsked(userMsg.content) : undefined);
             checkStatus();
             finish();
             break;
@@ -357,6 +371,12 @@
     el.input.focus();
     syncUnsent();
     syncPending(); // messages that were waiting behind this reply may be running now
+  }
+
+  async function retryAsked(text) {
+    state.pinned = true;
+    const reply = addMessage('assistant', '', { streaming: true });
+    await streamInto(reply, (channel) => invoke('ask', { conversationId: state.convId, text, onEvent: channel }), null);
   }
 
   async function send() {

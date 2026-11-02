@@ -338,9 +338,20 @@ async function waitIdle(page) {
     await page.waitForSelector('.msg.error');
     await waitIdle(page);
     assert.equal(await page.locator('.msg.assistant .body').innerText(), 'Partial answer', 'the reply stays');
-    assert.equal(await page.locator('.msg.error .body').innerText(), 'Timed out after 5 minutes');
+    assert.equal(await page.locator('.msg.error .body').innerText(), 'Stopped after 5 minutes');
     assert.equal(await page.locator('.msg.assistant').count(), 1, 'one reply bubble, not removed');
     assert.equal(await page.isVisible('#input'), true);
+  });
+
+  await step('Try again after a timeout asks the same question as a new reply and keeps the partial one', async () => {
+    const before = (await calls(page, 'ask')).length;
+    await page.locator('.msg.error .retry-reply').click();
+    await waitIdle(page);
+    const asks = await calls(page, 'ask');
+    assert.equal(asks.length, before + 1);
+    assert.equal(asks[asks.length - 1].text, 'this will timeout');
+    assert.equal(await page.locator('.msg.assistant').count(), 2, 'the partial reply stays and a new one begins');
+    assert.equal(await page.locator('.msg.assistant .body').first().innerText(), 'Partial answer');
   });
 
   await step('a reply from another provider than the chosen one says who answered', async () => {
