@@ -724,3 +724,79 @@ async fn sends_during_a_reply_are_queued_up_to_five_and_the_sixth_is_refused() {
     assert_eq!(list.iter().filter(|g| g.status == "queued").map(|g| g.prompt.as_str()).collect::<Vec<_>>(), ["queued 1", "queued 2", "queued 3", "queued 4", "queued 5"]);
     drop(held);
 }
+
+/// Reads until `n` deltas have arrived, returning what was read so far.
+async fn read_deltas<B: AsRef<[u8]>>(s: &mut (impl futures_util::Stream<Item = reqwest::Result<B>> + Unpin), n: usize) -> String {
+    let mut got = String::new();
+    while got.matches("event: delta").count() < n {
+        got.push_str(&String::from_utf8_lossy(s.next().await.unwrap().unwrap().as_ref()));
+    }
+    got
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_queued_message_starts_when_the_reply_ends_and_sees_it_in_its_history() {
+    let t = start().await;
+    let http = client_builder().pool_max_idle_per_host(0).build().unwrap();
+    let mut first = t.chat(&http, None, "p1", "please be slow").await.bytes_stream();
+    let got = read_deltas(&mut first, 2).await;
+    let (conversation, first_id) = (conversation_id_of(&got), generation_id(&got));
+    let second = t.chat(&http, Some(&conversation), "p1", "second").await;
+    let mut second = second.bytes_stream();
+
+    assert_eq!(t.cancel_with(&t.token, &first_id).await.status(), 204); // end the first reply early
+    let mut body = String::new();
+    while let Some(Ok(b)) = second.next().await {
+        body.push_str(&String::from_utf8_lossy(&b));
+    }
+    assert!(body.contains("event: delta") && body.contains("event: done"), "the queued message runs: {body:?}");
+
+    let stored = t.messages();
+    let roles: Vec<&str> = stored.iter().map(|m| m.0.as_str()).collect();
+    assert_eq!(roles, ["user", "assistant", "user", "assistant"], "prompt, reply, prompt, reply");
+    assert_eq!(stored[0].1, "please be slow");
+    assert_eq!(stored[2].1, "second");
+    assert!(stored[3].1.ends_with("Anything else?"));
+    // The second request carried the system prompt, the first question, the first reply and itself.
+    assert!(
+        t.mock.log.lock().unwrap().iter().any(|l| l.contains("last='second'") && l.contains("msgs=4")),
+        "log: {:?}",
+        t.mock.log.lock().unwrap()
+    );
+    let rows = t.generations();
+    assert_eq!(rows.iter().map(|r| r.0.as_str()).collect::<Vec<_>>(), ["cancelled", "done"]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cancelling_a_queued_message_leaves_no_trace_in_the_messages() {
+    let t = start().await;
+    let http = client_builder().pool_max_idle_per_host(0).build().unwrap();
+    let mut first = t.chat(&http, None, "p1", "please be slow").await.bytes_stream();
+    let got = read_deltas(&mut first, 2).await;
+    let (conversation, first_id) = (conversation_id_of(&got), generation_id(&got));
+    let mut queued = t.chat(&http, Some(&conversation), "p1", "never runs").await.bytes_stream();
+    let mut meta = String::new();
+    while !meta.contains("\n\n") && !meta.contains("\r\n\r\n") {
+        meta.push_str(&String::from_utf8_lossy(&queued.next().await.unwrap().unwrap()));
+    }
+    let queued_id = generation_id(&meta);
+
+    assert_eq!(t.cancel_with(&t.token, &queued_id).await.status(), 204);
+    let mut rest = String::new();
+    while let Some(Ok(b)) = queued.next().await {
+        rest.push_str(&String::from_utf8_lossy(&b));
+    }
+    assert!(rest.contains("event: done") && !rest.contains("event: delta"), "got {rest:?}");
+    assert!(t.messages().iter().all(|m| m.1 != "never runs"), "its question was never stored");
+    assert_eq!(t.cancel_with(&t.token, &queued_id).await.status(), 204, "repeatable");
+
+    // Ending the first reply starts nothing: the queue is empty.
+    assert_eq!(t.cancel_with(&t.token, &first_id).await.status(), 204);
+    wait_for("the first reply to end", || (t.generations()[0].0 == "cancelled").then_some(()));
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let rows = t.generations();
+    assert_eq!(rows.iter().map(|r| r.0.as_str()).collect::<Vec<_>>(), ["cancelled", "cancelled"]);
+    assert!(t.messages().iter().all(|m| m.1 != "never runs"));
+    assert_eq!(t.messages().len(), 2, "just the first question and its partial reply");
+    assert!(!t.mock.log.lock().unwrap().iter().any(|l| l.contains("never runs")), "never sent upstream");
+}

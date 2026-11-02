@@ -300,6 +300,8 @@ impl Drop for Finisher {
         self.save("error", Some("The reply stopped unexpectedly."));
         // A no-op if `finish` already ran; otherwise the task died and subscribers must not wait forever.
         self.live.finish(Terminal::Error("The reply stopped unexpectedly.".into()));
+        // The row is final and the reply saved: the next message waiting in this conversation goes.
+        start_next(&self.state, &self.conversation_id);
         // Keep the buffer a while so a client that dropped can still resume exactly where it was.
         let (state, id) = (self.state.clone(), self.id.clone());
         match tokio::runtime::Handle::try_current() {
@@ -402,6 +404,44 @@ fn spawn_run(state: &Arc<AppState>, id: &str, user_id: &str, conversation_id: &s
     });
 }
 
+/// Starts the oldest message waiting in `conversation_id`, if any: its question is stored now, so
+/// the stored order is question, reply, question, reply, and its history includes the replies before it.
+fn start_next(state: &Arc<AppState>, conversation_id: &str) {
+    // Starting spawns a task, which only works inside the runtime.
+    if tokio::runtime::Handle::try_current().is_err() {
+        return;
+    }
+    let started = {
+        let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+        let Ok(Some(next)) = db.next_queued(conversation_id) else { return };
+        match db.add_message(&next.user_id, &next.conversation_id, "user", &next.prompt) {
+            Ok(message_id) => {
+                let _ = db.start_generation(&next.id, &message_id, None);
+                Some(next)
+            }
+            Err(_) => {
+                // The conversation is gone or unwritable: the message cannot run.
+                let _ = db.finalize_generation(&next.id, "error", "", Some("The conversation is no longer available."), None);
+                None
+            }
+        }
+    };
+    match started {
+        Some(next) => {
+            let live = state.generations.get(&next.id).unwrap_or_else(|| {
+                let l = Live::new();
+                state.generations.insert(&next.id, l.clone());
+                l
+            });
+            spawn_run(state, &next.id, &next.user_id, &next.conversation_id, next.provider_id.as_deref().unwrap_or(""), live);
+        }
+        None => {
+            // Try the one after it.
+            start_next(state, conversation_id);
+        }
+    }
+}
+
 /// `POST /api/v1/generations/{id}/cancel`: stop a running reply, keeping the text so far.
 /// 204 also when it has already finished; 404 for anyone else's.
 pub async fn cancel(
@@ -409,16 +449,27 @@ pub async fn cancel(
     Extension(auth): Extension<DeviceAuth>,
     Path(id): Path<String>,
 ) -> StatusCode {
-    {
+    // Under one lock, so a queued message cannot start between the look and the cancel.
+    let queued = {
         let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
         match db.get_generation(&auth.user_id, &id) {
-            Ok(Some(_)) => {}
+            Ok(Some(g)) if g.status == "queued" => {
+                // Never ran: nothing was stored for it, and nothing is written now.
+                let _ = db.finalize_generation(&id, "cancelled", "", None, None);
+                true
+            }
+            Ok(Some(_)) => false,
             Ok(None) => return StatusCode::NOT_FOUND,
             Err(_) => return StatusCode::INTERNAL_SERVER_ERROR,
         }
-    }
+    };
     if let Some(live) = state.generations.get(&id) {
-        live.cancel();
+        if queued {
+            live.finish(Terminal::Done);
+            state.generations.remove(&id);
+        } else {
+            live.cancel();
+        }
     }
     StatusCode::NO_CONTENT
 }
