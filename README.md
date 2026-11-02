@@ -111,7 +111,7 @@ That starts three containers on two networks:
 
 ### First run
 
-> **Open item:** the admin has no TCP port, and Caddy only serves `admin.<hostname>` once a hostname has been set in the admin. How a first-time visitor reaches the admin before HTTPS exists is not settled yet, and this README does not invent a way. `scripts/smoke.sh` and `tests/admin.test.js` drive the admin over its unix socket.
+> **Open item:** the admin has no TCP port, and Caddy only serves `<hostname>/admin` once a hostname has been set in the admin. How a first-time visitor reaches the admin before HTTPS exists is not settled yet, and this README does not invent a way. `scripts/smoke.sh` and `tests/admin.test.js` drive the admin over its unix socket.
 
 Once you can reach the admin site:
 
@@ -129,9 +129,9 @@ Certificates come from Let's Encrypt using a DNS challenge on Cloudflare, so the
 
 1. In Cloudflare, add an `A` record for your hostname (for a private server, its LAN address), and create an API token with **Zone:DNS:Edit** and **Zone:Zone:Read**.
 2. Admin site > **Network**: tick HTTPS, enter the hostname and the Cloudflare token. Leave **staging** on for the first try, then turn it off for a trusted certificate.
-3. The API is at `https://<hostname>` and the admin site at `https://admin.<hostname>`.
+3. The apps reach the server at `https://<hostname>` and the admin site is at `https://<hostname>/admin`. One name, one certificate; every other path is a 404.
 
-The admin allowlist is **off by default**: anyone who can reach `admin.<hostname>` can try to log in (login is rate limited). Tick **Only let these addresses open the admin site over HTTPS** and list addresses or CIDRs (for example `192.168.1.0/24`) to make Caddy drop every other address before it reaches the admin. If you reach the admin from the same machine through Docker, the connection can appear to come from the Docker gateway (for example `172.x`), so include that range.
+The admin allowlist is **off by default**: anyone who can reach `https://<hostname>/admin` can try to log in (login is rate limited). Tick **Only let these addresses open the admin site over HTTPS** and list addresses or CIDRs (for example `192.168.1.0/24`) to make Caddy drop every other address before it reaches the admin. If you reach the admin from the same machine through Docker, the connection can appear to come from the Docker gateway (for example `172.x`), so include that range.
 
 ### The Audit tab
 

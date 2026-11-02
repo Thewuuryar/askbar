@@ -13,7 +13,7 @@ use std::sync::Arc;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct Network {
     pub tls_enabled: bool,
-    /// The API's name, for example `askbar.example.com`. The admin site is `admin.` plus this.
+    /// The API's name, for example `askbar.example.com`. The admin site is at `/admin` on the same name.
     pub hostname: String,
     /// Space- or comma-separated addresses and CIDRs allowed to open the admin site.
     pub admin_cidr: String,

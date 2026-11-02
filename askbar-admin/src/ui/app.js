@@ -374,7 +374,7 @@
     $('n-token').placeholder = n.has_token ? 'unchanged (write-only)' : 'write-only';
     $('n-clear').checked = false;
     show($('n-clear-row'), n.has_token);
-    $('n-info').textContent = (n.tls_enabled && n.hostname ? 'The admin site is at https://admin.' + n.hostname + '. ' : '')
+    $('n-info').textContent = (n.tls_enabled && n.hostname ? 'The admin site is at https://' + n.hostname + '/admin. ' : '')
       + 'New pairing strings point at ' + n.public_url + '.';
     showProxy(n.proxy);
     show($('network-error'), false);

@@ -401,7 +401,7 @@ async function waitForPort(port) {
     await page.click('#network-form button[type=submit]');
     await page.waitForSelector('#flash:not([hidden])');
     assert.match(await page.innerText('#flash'), /Network settings saved/);
-    assert.match(await page.innerText('#n-info'), /admin site is at https:\/\/admin\.askbar\.orraitu\.com/);
+    assert.match(await page.innerText('#n-info'), /admin site is at https:\/\/askbar\.orraitu\.com\/admin/);
     assert.match(await page.innerText('#n-info'), /pairing strings point at https:\/\/askbar\.orraitu\.com\./);
     assert.equal(await page.inputValue('#n-token'), '');
     assert.match(await page.getAttribute('#n-token', 'placeholder'), /unchanged/);
