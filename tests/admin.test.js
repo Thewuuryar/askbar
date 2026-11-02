@@ -662,6 +662,46 @@ async function waitForPort(port) {
     assert.equal(await page.locator('#audit-waterfall .span-bar').count(), 5);
     await page.unroute('**/admin/api/audit/traces/TRACE1');
   });
+  await step('audit routing: a three-try request shows its tries, who stood in, why each failed, and the providers overall', async () => {
+    const attempt = (id, started, provider, retry, status, code, fallbackFrom) => ({ id, parent_id: 'turn', kind: 'attempt', name: 'x', status, started_at: 1000, ended_at: 1001, provider_id: provider, error_code: code, attrs: { started_ms: started, ended_ms: started + 300, latency_ms: 300, retry_index: retry, fallback_from: fallbackFrom || null } });
+    const spans = [
+      { id: 'turn', parent_id: null, kind: 'turn', name: 'chat', status: 'done', started_at: 1000, ended_at: 1002, attrs: { started_ms: 1000000, ended_ms: 1002000 } },
+      attempt('a3', 1001500, 'p2', 0, 'done', null, 'p1'),
+      attempt('a1', 1000100, 'p1', 0, 'error', 'http_429'),
+      attempt('a2', 1000800, 'p1', 1, 'error', 'http_429'),
+    ];
+    const stats = { requests: 1, by_provider: [
+      { provider_id: 'p1', requests: 0, attempts: 2, retries: 1, fallbacks: 0, failed_attempts: 2, tokens: { in: 0, out: 0, cached: 0 }, cost: null },
+      { provider_id: 'p2', requests: 1, attempts: 1, retries: 0, fallbacks: 1, failed_attempts: 0, tokens: { in: 1, out: 1, cached: 0 }, cost: 0 },
+    ], by_day: [], tokens: { in: 1, out: 1, cached: 0 }, latency_ms: {}, ttft_ms: {} };
+    await page.route('**/admin/api/audit/traces/ROUTE1', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ trace_id: 'ROUTE1', cost: 0, spans }) }));
+    await page.route('**/admin/api/audit/stats*', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify(stats) }));
+    await page.route('**/admin/api/audit/provider-health', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ providers: [{ provider_id: 'p1', status: 'auth_failed', since: 1793631845, error_code: 'http_401' }] }) }));
+    await page.click('#nav [data-tab="providers"]');
+    await page.click('#nav [data-tab="audit"]');
+    await page.evaluate(() => window.askbarAudit.openTrace('ROUTE1'));
+    await page.waitForSelector('#audit-waterfall .span-bar');
+    await page.click('#audit-nav [data-sub="routing"]');
+    await page.waitForSelector('#audit-attempt-rows tr');
+    const rows = await page.$$eval('#audit-attempt-rows tr', (r) => r.map((tr) => [...tr.children].map((td) => td.textContent)));
+    assert.deepEqual(rows, [
+      ['p1', '1', '–', 'error', 'worth retrying', 'http_429', '300 ms'],
+      ['p1', '2', '–', 'error', 'worth retrying', 'http_429', '300 ms'],
+      ['p2', '1', 'p1', 'done', '–', '–', '300 ms'],
+    ]);
+    await page.waitForSelector('#audit-routing-rows tr');
+    const overall = await page.$$eval('#audit-routing-rows tr', (r) => r.map((tr) => [...tr.children].map((td) => td.textContent)));
+    assert.equal(overall.length, 2);
+    assert.deepEqual(overall[0].slice(0, 5), ['p1', '2', '1', '0', '2']);
+    assert.match(overall[0][5], /^refused since .* \(http_401\)$/);
+    assert.deepEqual(overall[1], ['p2', '1', '0', '1', '0', 'ok']);
+    // The classes follow the router's own rules.
+    const classes = await page.evaluate(() => ['http_401', 'http_403', 'config', 'http_429', 'http_503', 'connect', 'stream', 'http_400', 'http_404', 'timeout', 'kill_switch', null].map((c) => window.askbarAudit.failureClass(c)));
+    assert.deepEqual(classes, ['bad credentials', 'bad credentials', 'bad credentials', 'worth retrying', 'worth retrying', 'worth retrying', 'worth retrying', 'refused outright', 'refused outright', 'ran out of time', 'switched off', '']);
+    await page.unroute('**/admin/api/audit/traces/ROUTE1');
+    await page.unroute('**/admin/api/audit/stats*');
+    await page.unroute('**/admin/api/audit/provider-health');
+  });
   await step('security: changing the password needs the current one', async () => {
     await page.click('#nav [data-tab="security"]');
     await page.fill('#pw-current', 'wrong');

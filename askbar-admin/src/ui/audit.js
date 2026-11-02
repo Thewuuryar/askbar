@@ -13,6 +13,7 @@
     state.sub = name;
     for (const b of $('audit-nav').children) b.setAttribute('aria-selected', b.dataset.sub === name ? 'true' : 'false');
     for (const s of SUBS) show($('audit-' + s), s === name);
+    if (name === 'routing' && window.askbarAudit) window.askbarAudit.loadRouting();
   }
 
   // One banner for anything that stops the tab reading the audit store: the server away (502), or a
@@ -302,12 +303,91 @@
     show(details, false);
   }
 
+  // ---------------------------------------------------------------- routing
+
+  // What kind of failure an error code stands for, in the router's own terms (see router::classify).
+  function failureClass(code) {
+    if (!code) return '';
+    if (code === 'timeout') return 'ran out of time';
+    if (code === 'kill_switch') return 'switched off';
+    if (code === 'http_401' || code === 'http_403' || code === 'config') return 'bad credentials';
+    const m = /^http_(\d+)$/.exec(code);
+    if (m) {
+      const n = Number(m[1]);
+      return n === 408 || n === 429 || n >= 500 ? 'worth retrying' : 'refused outright';
+    }
+    if (code === 'connect' || code === 'stream') return 'worth retrying';
+    return code;
+  }
+
+  const providerLabel = (id) => (id ? providerNames[id] || id : '–');
+
+  // The tries of the open request, in order: which provider, which try, whom it stood in for, how it ended.
+  function renderAttempts(trace) {
+    const attempts = ((trace && trace.spans) || []).filter((s) => s.kind === 'attempt').sort((a, b) => ((a.attrs && a.attrs.started_ms) || a.started_at * 1000) - ((b.attrs && b.attrs.started_ms) || b.started_at * 1000) || (a.id < b.id ? -1 : 1));
+    const body = $('audit-attempt-rows');
+    body.textContent = '';
+    show($('audit-attempts'), attempts.length > 0);
+    show($('audit-routing-empty'), attempts.length === 0);
+    for (const a of attempts) {
+      const at = a.attrs || {};
+      const tr = el('tr');
+      tr.dataset.attempt = a.id;
+      const cells = [
+        [providerLabel(a.provider_id), 'wrap'],
+        [String((at.retry_index || 0) + 1)],
+        [at.fallback_from ? providerLabel(at.fallback_from) : '–', 'wrap'],
+        [a.status, 'status-' + a.status],
+        [failureClass(a.error_code) || '–'],
+        [a.error_code || '–', 'wrap'],
+        [at.latency_ms != null ? duration(at.latency_ms) : '–'],
+      ];
+      for (const [text, cls] of cells) tr.appendChild(el('td', cls, text));
+      body.appendChild(tr);
+    }
+  }
+
+  // Per provider in the window: tries, retries, fallbacks served, failures, and whether its
+  // credentials are currently refused.
+  async function loadRouting() {
+    renderAttempts(state.trace);
+    const since = Math.floor(Date.now() / 1000) - Number($('audit-window').value);
+    const [stats, health] = await Promise.all([read('/admin/api/audit/stats?since=' + since), read('/admin/api/audit/provider-health')]);
+    const flagged = new Map(((health && health.providers) || []).map((p) => [p.provider_id, p]));
+    const rows = ((stats && stats.by_provider) || []).filter((p) => p.provider_id);
+    // A provider that is flagged but had no tries in the window still deserves a row.
+    for (const id of flagged.keys()) if (!rows.some((r) => r.provider_id === id)) rows.push({ provider_id: id, attempts: 0, retries: 0, fallbacks: 0, failed_attempts: 0 });
+    const body = $('audit-routing-rows');
+    body.textContent = '';
+    show($('audit-routing-table'), rows.length > 0);
+    show($('audit-routing-overall-empty'), rows.length === 0);
+    for (const r of rows) {
+      const tr = el('tr');
+      tr.dataset.provider = r.provider_id;
+      const f = flagged.get(r.provider_id);
+      const cells = [
+        [providerLabel(r.provider_id), 'wrap'],
+        [number(r.attempts || 0)],
+        [number(r.retries || 0)],
+        [number(r.fallbacks || 0)],
+        [number(r.failed_attempts || 0)],
+        [f ? 'refused since ' + new Date(f.since * 1000).toLocaleString() + (f.error_code ? ' (' + f.error_code + ')' : '') : 'ok', f ? 'status-error wrap' : ''],
+      ];
+      for (const [text, cls] of cells) tr.appendChild(el('td', cls, text));
+      body.appendChild(tr);
+    }
+  }
+
   // Opens one request on the Trace view.
   async function openTrace(id) {
     state.traceId = id;
     setSub('trace');
     const trace = await read('/admin/api/audit/traces/' + encodeURIComponent(id));
-    if (trace && state.traceId === id) renderTrace(trace);
+    if (trace && state.traceId === id) {
+      state.trace = trace;
+      renderTrace(trace);
+      renderAttempts(trace);
+    }
   }
 
   async function load() {
@@ -322,6 +402,6 @@
     if (b) setSub(b.dataset.sub);
   });
 
-  window.askbarAudit = { setSub, read, banner, state, renderOverview, requestsQuery, openTrace, layout, renderTrace };
+  window.askbarAudit = { setSub, read, banner, state, renderOverview, requestsQuery, openTrace, layout, renderTrace, loadRouting, failureClass };
   registerTab({ id: 'audit', label: 'Audit', load });
 })();

@@ -496,6 +496,11 @@ pub async fn audit_trace(State(state): St, Path(id): Path<String>) -> Result<Jso
     audit_get(&state, &format!("/mgmt/v1/audit/traces/{id}"), &Default::default()).await
 }
 
+/// Providers the router found unusable (bad credentials), from the server.
+pub async fn audit_provider_health(State(state): St) -> Result<Json<serde_json::Value>, Failure> {
+    audit_get(&state, "/mgmt/v1/providers/health", &Default::default()).await
+}
+
 pub async fn audit_stats(State(state): St, axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>) -> Result<Json<serde_json::Value>, Failure> {
     audit_get(&state, "/mgmt/v1/audit/stats", &q).await
 }

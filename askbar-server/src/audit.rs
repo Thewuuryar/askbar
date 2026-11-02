@@ -360,16 +360,44 @@ pub fn stats(conn: &Connection, since: i64, price_of: PriceOf) -> rusqlite::Resu
             }
         }
     }
+    // How the router treated each provider: every try (attempt span) it served or failed, the retries
+    // among them (retry_index above 0), the ones that stood in for another provider, and the failures.
+    let mut routing: std::collections::BTreeMap<String, (i64, i64, i64, i64)> = Default::default();
+    {
+        let mut stmt = conn.prepare(
+            "SELECT COALESCE(provider_id, ''), COUNT(*),
+                    COALESCE(SUM(CASE WHEN json_extract(attrs_json, '$.retry_index') > 0 THEN 1 ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN json_extract(attrs_json, '$.fallback_from') IS NOT NULL THEN 1 ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END), 0)
+             FROM spans WHERE kind = 'attempt' AND started_at >= ?1 GROUP BY provider_id",
+        )?;
+        for row in stmt.query_map([since], |r| Ok((r.get::<_, String>(0)?, (r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, i64>(3)?, r.get::<_, i64>(4)?))))? {
+            let (k, v) = row?;
+            routing.insert(k, v);
+        }
+    }
+    // A provider that only ever failed (no request ended on it) still has a row, so its failures show.
+    for k in routing.keys() {
+        by_provider.entry(k.clone()).or_insert_with(|| Group { requests: 0, tokens: (0, 0, 0), cost: CostSum::default() });
+    }
     let group_json = |key_name: &str, map: std::collections::BTreeMap<String, Group>| -> Vec<serde_json::Value> {
         map.into_iter()
             .map(|(key, g)| {
-                serde_json::json!({
-                    key_name: if key.is_empty() { serde_json::Value::Null } else { key.into() },
+                let mut v = serde_json::json!({
+                    key_name: if key.is_empty() { serde_json::Value::Null } else { key.clone().into() },
                     "requests": g.requests,
                     "tokens": { "in": g.tokens.0, "out": g.tokens.1, "cached": g.tokens.2 },
                     "cost": g.cost.total(),
                     "cost_unknown_requests": g.cost.unknown,
-                })
+                });
+                if key_name == "provider_id" {
+                    let (attempts, retries, fallbacks, failed) = routing.get(&key).copied().unwrap_or_default();
+                    v["attempts"] = attempts.into();
+                    v["retries"] = retries.into();
+                    v["fallbacks"] = fallbacks.into();
+                    v["failed_attempts"] = failed.into();
+                }
+                v
             })
             .collect()
     };
@@ -971,6 +999,33 @@ mod tests {
         );
         assert_eq!((user.as_str(), device.as_str(), provider.as_str(), model.as_str()), ("u1", "d1", "p1", "m1"));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn stats_count_attempts_retries_and_fallbacks_per_provider() {
+        let db = AuditDb::open_in_memory().unwrap();
+        let now = now_secs();
+        let span = |id: &str, trace: &str, kind: &str, provider: Option<&str>, status: &str, attrs: &str| {
+            db.conn
+                .execute(
+                    "INSERT INTO spans (id, trace_id, kind, name, status, started_at, provider_id, attrs_json) VALUES (?1,?2,?3,'n',?4,?5,?6,?7)",
+                    rusqlite::params![id, trace, kind, status, now, provider, attrs],
+                )
+                .unwrap();
+        };
+        // One request: p1 failed twice (a first try and a retry), then p2 stood in for it.
+        span("t1", "T", "turn", None, "done", "{}");
+        span("a1", "T", "attempt", Some("p1"), "error", r#"{"retry_index":0}"#);
+        span("a2", "T", "attempt", Some("p1"), "error", r#"{"retry_index":1}"#);
+        span("a3", "T", "attempt", Some("p2"), "done", r#"{"retry_index":0,"fallback_from":"p1"}"#);
+        let v = stats(&db.conn, now - 10, &|_| None).unwrap();
+        let by = |p: &str| v["by_provider"].as_array().unwrap().iter().find(|x| x["provider_id"] == p).cloned().unwrap_or_else(|| panic!("no row for {p}"));
+        let nums = |row: &serde_json::Value| ["requests", "attempts", "retries", "fallbacks", "failed_attempts"].map(|k| row[k].as_i64().unwrap());
+        assert_eq!(nums(&by("p1")), [0, 2, 1, 0, 2], "p1 served nothing but had two tries, one a retry, both failed");
+        assert_eq!(nums(&by("p2")), [1, 1, 0, 1, 0], "p2 served the request, standing in for p1");
+        // Outside the window nothing counts.
+        let later = stats(&db.conn, now + 100, &|_| None).unwrap();
+        assert!(later["by_provider"].as_array().unwrap().is_empty());
     }
 
     #[tokio::test]

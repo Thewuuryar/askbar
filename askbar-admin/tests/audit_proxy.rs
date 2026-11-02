@@ -42,6 +42,13 @@ async fn stub() -> (String, Arc<Seen>) {
             }),
         )
         .route(
+            "/mgmt/v1/providers/health",
+            get(move |State(s): State<Arc<Seen>>, uri: axum::http::Uri, h: axum::http::HeaderMap| async move {
+                record(&uri, &h, &s);
+                axum::Json(json!({ "providers": [{ "provider_id": "p1", "status": "auth_failed", "since": 5, "error_code": "http_401" }] }))
+            }),
+        )
+        .route(
             "/mgmt/v1/audit/stats",
             get(move |State(s): State<Arc<Seen>>, uri: axum::http::Uri, h: axum::http::HeaderMap| async move {
                 record(&uri, &h, &s);
@@ -141,6 +148,17 @@ async fn one_trace_is_fetched_by_id_unknown_ones_are_404_and_odd_ids_never_reach
 }
 
 #[tokio::test]
+async fn provider_health_is_proxied_behind_the_session() {
+    let (url, seen) = stub().await;
+    let a = admin_for(&url).await;
+    assert_eq!(a.get("/admin/api/audit/provider-health", false, true).await.0, 401);
+    assert!(seen.requests.lock().unwrap().is_empty());
+    let (st, body) = a.get("/admin/api/audit/provider-health", true, true).await;
+    assert_eq!((st, &body["providers"][0]["status"]), (200, &json!("auth_failed")));
+    assert_eq!(seen.requests.lock().unwrap()[0].0, "/mgmt/v1/providers/health");
+}
+
+#[tokio::test]
 async fn an_unreachable_server_is_a_502_with_a_message() {
     // A port that nothing listens on.
     let dead = {
@@ -148,7 +166,7 @@ async fn an_unreachable_server_is_a_502_with_a_message() {
         format!("http://{}", l.local_addr().unwrap())
     };
     let a = admin_for(&dead).await;
-    for p in ["/admin/api/audit/traces", "/admin/api/audit/traces/t1", "/admin/api/audit/stats"] {
+    for p in ["/admin/api/audit/traces", "/admin/api/audit/traces/t1", "/admin/api/audit/stats", "/admin/api/audit/provider-health"] {
         let (st, body) = a.get(p, true, true).await;
         assert_eq!(st, 502, "{p}");
         assert!(body["error"].as_str().unwrap_or("").contains("offline"), "{body}");
