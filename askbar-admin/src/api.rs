@@ -375,7 +375,15 @@ pub async fn create_pairing(State(state): St, Json(i): Json<PairInput>) -> Resul
 pub struct AdminSettings {
     system_prompt: String,
     display: DisplaySettings,
+    /// Seconds a reply may run (30 to 3600). Always present when read; when a save leaves it out,
+    /// the stored value is kept.
+    #[serde(default)]
+    generation_timeout_secs: Option<u32>,
 }
+
+/// The same bounds the server enforces on the snapshot.
+const MIN_GENERATION_TIMEOUT_SECS: u32 = 30;
+const MAX_GENERATION_TIMEOUT_SECS: u32 = 3600;
 
 fn check_display(d: &DisplaySettings) -> Result<(), Failure> {
     if !matches!(d.theme.as_str(), "auto" | "light" | "dark") {
@@ -401,6 +409,9 @@ pub async fn get_settings(State(state): St) -> Json<AdminSettings> {
     Json(AdminSettings {
         system_prompt: setting(c, "system_prompt").unwrap_or_else(|| askbar_proto::DEFAULT_SYSTEM_PROMPT.to_string()),
         display: setting(c, "display").and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default(),
+        generation_timeout_secs: Some(
+            setting(c, "generation_timeout_secs").and_then(|s| s.trim().parse().ok()).unwrap_or(askbar_proto::DEFAULT_GENERATION_TIMEOUT_SECS),
+        ),
     })
 }
 
@@ -409,9 +420,21 @@ pub async fn put_settings(State(state): St, Json(s): Json<AdminSettings>) -> Res
         return Err(bad("The system prompt is too long."));
     }
     check_display(&s.display)?;
+    if let Some(secs) = s.generation_timeout_secs {
+        if !(MIN_GENERATION_TIMEOUT_SECS..=MAX_GENERATION_TIMEOUT_SECS).contains(&secs) {
+            return Err(bad(&format!(
+                "The generation timeout must be between {MIN_GENERATION_TIMEOUT_SECS} and {MAX_GENERATION_TIMEOUT_SECS} seconds."
+            )));
+        }
+    }
     let display = serde_json::to_string(&s.display).map_err(|_| bad("Invalid display settings."))?;
+    let timeout = s.generation_timeout_secs.map(|n| n.to_string());
     mutate(&state, vec![], move |c| {
-        for (k, v) in [("system_prompt", s.system_prompt.as_str()), ("display", display.as_str())] {
+        let mut pairs = vec![("system_prompt", s.system_prompt.as_str()), ("display", display.as_str())];
+        if let Some(t) = timeout.as_deref() {
+            pairs.push(("generation_timeout_secs", t));
+        }
+        for (k, v) in pairs {
             c.execute("INSERT INTO settings (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value", params![k, v]).map_err(internal)?;
         }
         Ok(())

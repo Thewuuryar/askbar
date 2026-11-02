@@ -235,6 +235,35 @@ async fn the_pairing_string_uses_the_public_https_name_when_https_is_on() {
 }
 
 #[tokio::test]
+async fn the_generation_timeout_round_trips_reaches_the_server_and_is_range_checked() {
+    let t = start(true).await;
+    let disp = serde_json::to_value(askbar_proto::DisplaySettings::default()).unwrap();
+    let (_, s) = t.call(M::GET, "/admin/api/settings", None).await;
+    assert_eq!(s["generation_timeout_secs"], json!(300), "the default until one is set");
+
+    let save = |secs: serde_json::Value| json!({ "system_prompt": "x", "display": disp, "generation_timeout_secs": secs });
+    assert_eq!(t.call(M::PUT, "/admin/api/settings", Some(save(json!(120)))).await.0, 204);
+    assert_eq!(t.call(M::GET, "/admin/api/settings", None).await.1["generation_timeout_secs"], json!(120));
+    assert_eq!(t.snapshot().unwrap().generation_timeout_secs, 120, "pushed to the server");
+
+    // Out of range, either side: refused, and nothing changes.
+    for bad in [29, 3601, 0] {
+        assert_eq!(t.call(M::PUT, "/admin/api/settings", Some(save(json!(bad)))).await.0, 400, "{bad}");
+    }
+    assert_eq!(t.call(M::PUT, "/admin/api/settings", Some(save(json!("soon")))).await.0, 422, "not a number");
+    assert_eq!(t.call(M::GET, "/admin/api/settings", None).await.1["generation_timeout_secs"], json!(120));
+    assert_eq!(t.snapshot().unwrap().generation_timeout_secs, 120);
+
+    // The edges are fine, and a save that leaves the field out keeps the stored value.
+    for ok in [30, 3600] {
+        assert_eq!(t.call(M::PUT, "/admin/api/settings", Some(save(json!(ok)))).await.0, 204, "{ok}");
+    }
+    let without = json!({ "system_prompt": "y", "display": disp });
+    assert_eq!(t.call(M::PUT, "/admin/api/settings", Some(without)).await.0, 204);
+    assert_eq!(t.call(M::GET, "/admin/api/settings", None).await.1["generation_timeout_secs"], json!(3600));
+}
+
+#[tokio::test]
 async fn settings_and_per_user_display_defaults_reach_the_server() {
     let t = start(true).await;
     let (_, s) = t.call(M::GET, "/admin/api/settings", None).await;
