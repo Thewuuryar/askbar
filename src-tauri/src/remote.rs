@@ -4,7 +4,7 @@ use crate::types::{ClientStatus, Emit, ProviderChoice, Settings, StreamEvent};
 use crate::client_config::{check_server_url, merge_ui, ClientConfig};
 use crate::tokens::TokenStore;
 use askbar_proto::{ChatEvent, ChatRequest, Conversation, ConversationDetail, DisplaySettings, Message, Prefs, ProviderInfo, SseParser};
-use futures_util::StreamExt;
+use futures_util::{FutureExt, StreamExt};
 use reqwest::{Method, RequestBuilder, StatusCode, Url};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
@@ -36,22 +36,28 @@ pub struct Remote {
 }
 
 enum Read {
-    /// done, an error event or a cancel was reported to the caller.
+    /// done or an error event was reported to the caller.
     Finished,
+    /// Stop was pressed and the server's generation id is known: ask the server to stop it.
+    Stop,
     /// The stream ended or broke before done; the reason, for when there is nothing to resume.
     Lost(String),
 }
 
+type Cancel = futures_util::future::Fuse<oneshot::Receiver<()>>;
+
 /// Reads one response of a reply until it ends, reporting events as they arrive.
-async fn read_reply(resp: reqwest::Response, reader: &mut ReplyReader, cancel: &mut oneshot::Receiver<()>, emit: Emit<'_>) -> Read {
+async fn read_reply(resp: reqwest::Response, reader: &mut ReplyReader, cancel: &mut Cancel, stop: &mut bool, emit: Emit<'_>) -> Read {
     let mut stream = Box::pin(resp.bytes_stream());
     loop {
+        if *stop && reader.generation_id.is_some() {
+            return Read::Stop;
+        }
         let chunk = tokio::select! {
             c = stream.next() => c,
-            // Dropping the stream closes the connection; the server keeps the partial reply.
             _ = &mut *cancel => {
-                emit(StreamEvent::Cancelled);
-                return Read::Finished;
+                *stop = true;
+                continue;
             }
         };
         let bytes = match chunk {
@@ -93,7 +99,6 @@ struct ReplyReader {
     parser: SseParser,
     /// Deltas received so far; the `after` to resume from.
     last_id: u64,
-    #[allow(dead_code)] // read by cancel (step 1.19)
     generation_id: Option<String>,
 }
 
@@ -192,6 +197,23 @@ impl Inner {
             .map_err(|e| format!("Could not reach the server at {}: {e}", self.base))?;
         check_status(resp.status())?;
         Ok(resp)
+    }
+
+    /// Stop pressed: ask the server to stop generation `id`, then report Cancelled. With no id
+    /// (an older server) the reply cannot be stopped there; the connection is simply let go.
+    async fn stop_reply(&self, id: Option<&str>, emit: Emit<'_>) {
+        if let Some(id) = id {
+            let sent = match self.request(Method::POST, &format!("/api/v1/generations/{id}/cancel")) {
+                Ok(req) => req.timeout(REQUEST_TIMEOUT).send().await.map_err(|e| e.to_string()),
+                Err(e) => Err(e),
+            };
+            match sent {
+                Ok(r) if r.status().is_success() || r.status() == StatusCode::NOT_FOUND => {}
+                Ok(r) => return emit(StreamEvent::Error { message: format!("Could not stop the reply: the server answered {}.", r.status()) }),
+                Err(e) => return emit(StreamEvent::Error { message: format!("Could not reach the server to stop the reply: {e}") }),
+            }
+        }
+        emit(StreamEvent::Cancelled);
     }
 
     async fn http_status(&self, req: RequestBuilder) -> Result<StatusCode, reqwest::Error> {
@@ -378,7 +400,7 @@ impl Remote {
         }
     }
 
-    pub async fn ask(&self, conversation_id: Option<String>, text: String, mut cancel: oneshot::Receiver<()>, emit: Emit<'_>) {
+    pub async fn ask(&self, conversation_id: Option<String>, text: String, cancel: oneshot::Receiver<()>, emit: Emit<'_>) {
         let fail = |message: String| emit(StreamEvent::Error { message });
         let i = match self.inner() {
             Ok(i) => i,
@@ -392,28 +414,40 @@ impl Remote {
             Ok(r) => r.header("accept", "text/event-stream").json(&ChatRequest { conversation_id, provider, text, client_request_id: None }),
             Err(e) => return fail(e),
         };
-        let resp = tokio::select! {
-            r = i.send(req) => match r { Ok(r) => r, Err(e) => return fail(e) },
-            _ = &mut cancel => return emit(StreamEvent::Cancelled),
+        // Stop does not drop the request: it asks the server to stop the reply, which needs the
+        // generation id from `meta`. A Stop that comes sooner waits for it.
+        let mut cancel = cancel.fuse();
+        let mut stop = false;
+        let send = i.send(req);
+        tokio::pin!(send);
+        let resp = loop {
+            tokio::select! {
+                r = &mut send => match r { Ok(r) => break r, Err(e) => return fail(e) },
+                _ = &mut cancel => stop = true,
+            }
         };
 
         let mut reader = ReplyReader::default();
         let mut resp = resp;
         loop {
-            let lost = match read_reply(resp, &mut reader, &mut cancel, emit).await {
+            let lost = match read_reply(resp, &mut reader, &mut cancel, &mut stop, emit).await {
                 Read::Finished => return,
+                Read::Stop => return i.stop_reply(reader.generation_id.as_deref(), emit).await,
                 Read::Lost(why) => why,
             };
             // The stream ended without done. The server keeps generating, so ask for the rest,
             // quietly: the person sees nothing unless the reply can no longer be had.
             let Some(generation_id) = reader.generation_id.clone() else { return fail(lost) };
+            if stop {
+                return i.stop_reply(Some(&generation_id), emit).await;
+            }
             let mut attempt = 0u32;
             resp = loop {
                 let wait = i.backoff_unit * backoff_secs(attempt) as u32;
                 attempt += 1;
                 tokio::select! {
                     _ = tokio::time::sleep(wait) => {}
-                    _ = &mut cancel => return emit(StreamEvent::Cancelled),
+                    _ = &mut cancel => return i.stop_reply(Some(&generation_id), emit).await,
                 }
                 let req = match i.request(Method::GET, &format!("/api/v1/generations/{generation_id}/stream")) {
                     Ok(r) => r.header("accept", "text/event-stream").query(&[("after", reader.last_id)]),
@@ -421,7 +455,7 @@ impl Remote {
                 };
                 let sent = tokio::select! {
                     r = req.send() => r,
-                    _ = &mut cancel => return emit(StreamEvent::Cancelled),
+                    _ = &mut cancel => return i.stop_reply(Some(&generation_id), emit).await,
                 };
                 match sent {
                     Ok(r) if r.status() == StatusCode::NOT_FOUND => {
@@ -531,56 +565,61 @@ mod tests {
         assert_eq!(r.feed(sse("error", None, r#"{"event":"error","message":"boom"}"#).as_bytes()), [Step::Fail("boom".into())]);
     }
 
-    /// A server that drops the first stream after three deltas, with no `done`.
-    /// `resume` answers each resume request in turn with a status and a body.
-    struct Fake {
-        url: String,
+    /// What the fake server saw.
+    #[derive(Default)]
+    struct Seen {
+        plan: Mutex<Vec<(u16, String)>>,
         /// The `after` value of every resume request, in order.
-        resumes: Arc<Mutex<Vec<String>>>,
+        resumes: Mutex<Vec<String>>,
+        /// The id of every cancel request.
+        cancels: Mutex<Vec<String>>,
     }
 
+    struct Fake {
+        url: String,
+        seen: Arc<Seen>,
+    }
+
+    /// A server that drops the first stream after three deltas, with no `done`. `resume` answers
+    /// each resume request in turn with a status and a body (the last one repeats).
     async fn fake_server(resume: Vec<(u16, String)>) -> Fake {
-        use axum::{extract::{Query, State}, http::{header, StatusCode as S}, routing::{get, post}, Router};
-        type Shared = Arc<(Mutex<Vec<(u16, String)>>, Mutex<Vec<String>>)>;
-        let shared: Shared = Arc::new((Mutex::new(resume), Mutex::new(Vec::new())));
-        let stream_body = |chunks: &[(Option<u64>, &str, &str)]| -> String { chunks.iter().map(|(id, name, data)| {
-            let id = id.map(|n| format!("id: {n}\n")).unwrap_or_default();
-            format!("event: {name}\n{id}data: {data}\n\n")
-        }).collect() };
-        let first = stream_body(&[
+        use axum::{extract::{Path as P, Query, State}, http::{header, StatusCode as S}, routing::{get, post}, Router};
+        let seen = Arc::new(Seen { plan: Mutex::new(resume), ..Default::default() });
+        let first: String = [
             (None, "meta", r#"{"event":"meta","conversation_id":"c1","generation_id":"g1"}"#),
             (Some(1), "delta", r#"{"event":"delta","text":"a"}"#),
             (Some(2), "delta", r#"{"event":"delta","text":"b"}"#),
             (Some(3), "delta", r#"{"event":"delta","text":"c"}"#),
-        ]);
+        ]
+        .iter()
+        .map(|(id, name, data)| sse(name, *id, data))
+        .collect();
         let app = Router::new()
             .route("/api/v1/me/prefs", get(|| async { r#"{"active_provider_id":"p"}"# }))
             .route("/api/v1/chat", post(move || { let b = first.clone(); async move { ([(header::CONTENT_TYPE, "text/event-stream")], b) } }))
             .route(
                 "/api/v1/generations/{id}/stream",
-                get(|State(sh): State<Shared>, Query(q): Query<std::collections::HashMap<String, String>>| async move {
-                    sh.1.lock().unwrap().push(q.get("after").cloned().unwrap_or_default());
+                get(|State(seen): State<Arc<Seen>>, Query(q): Query<std::collections::HashMap<String, String>>| async move {
+                    seen.resumes.lock().unwrap().push(q.get("after").cloned().unwrap_or_default());
                     let (status, body) = {
-                        let mut plan = sh.0.lock().unwrap();
+                        let mut plan = seen.plan.lock().unwrap();
                         if plan.len() > 1 { plan.remove(0) } else { plan[0].clone() }
                     };
                     (S::from_u16(status).unwrap(), [(header::CONTENT_TYPE, "text/event-stream")], body)
                 }),
             )
-            .with_state(shared.clone());
+            .route(
+                "/api/v1/generations/{id}/cancel",
+                post(|State(seen): State<Arc<Seen>>, P(id): P<String>| async move {
+                    seen.cancels.lock().unwrap().push(id);
+                    S::NO_CONTENT
+                }),
+            )
+            .with_state(seen.clone());
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", l.local_addr().unwrap());
         tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
-        let resumes = Arc::new(Mutex::new(Vec::new()));
-        // Mirror the shared log into the handle the test reads.
-        let (log, out) = (shared, resumes.clone());
-        tokio::spawn(async move {
-            loop {
-                *out.lock().unwrap() = log.1.lock().unwrap().clone();
-                tokio::time::sleep(Duration::from_millis(5)).await;
-            }
-        });
-        Fake { url, resumes }
+        Fake { url, seen }
     }
 
     async fn ask_fake(fake: &Fake) -> Vec<StreamEvent> {
@@ -605,8 +644,7 @@ mod tests {
         assert!(matches!(events.first(), Some(StreamEvent::Started { generation_id: Some(g), .. }) if g == "g1"));
         assert!(matches!(events.last(), Some(StreamEvent::Done)));
         assert!(!events.iter().any(|e| matches!(e, StreamEvent::Error { .. })), "no error while retrying: {events:?}");
-        tokio::time::sleep(Duration::from_millis(30)).await;
-        assert_eq!(*fake.resumes.lock().unwrap(), ["3", "3"], "both attempts ask for everything after delta 3");
+        assert_eq!(*fake.seen.resumes.lock().unwrap(), ["3", "3"], "both attempts ask for everything after delta 3");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -623,6 +661,42 @@ mod tests {
         for e in [&events[..]] {
             assert_eq!(e.iter().filter(|x| matches!(x, StreamEvent::Delta { .. })).count(), 3, "what arrived stays");
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn stop_posts_to_the_cancel_endpoint_with_the_generation_id_then_reports_cancelled() {
+        let fake = fake_server(vec![(200, sse("done", None, r#"{"event":"done"}"#))]).await;
+        let remote = remote_for(&fake.url, Some("t"), PathBuf::new()).with_backoff_unit(Duration::from_millis(2));
+        let events = Mutex::new(Vec::new());
+        let (tx, rx) = oneshot::channel();
+        let tx = Mutex::new(Some(tx));
+        remote
+            .ask(None, "hi".into(), rx, &|e| {
+                // Stop is pressed as soon as the reply has begun.
+                if matches!(e, StreamEvent::Started { .. }) {
+                    if let Some(tx) = tx.lock().unwrap().take() {
+                        let _ = tx.send(());
+                    }
+                }
+                events.lock().unwrap().push(e)
+            })
+            .await;
+        let events = events.into_inner().unwrap();
+        assert!(matches!(events.last(), Some(StreamEvent::Cancelled)), "{events:?}");
+        assert_eq!(*fake.seen.cancels.lock().unwrap(), ["g1"], "the server was asked to stop that generation");
+        assert!(!events.iter().any(|e| matches!(e, StreamEvent::Done | StreamEvent::Error { .. })), "{events:?}");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn stop_pressed_before_the_reply_begins_still_reaches_the_server() {
+        let fake = fake_server(vec![(200, String::new())]).await;
+        let remote = remote_for(&fake.url, Some("t"), PathBuf::new()).with_backoff_unit(Duration::from_millis(2));
+        let events = Mutex::new(Vec::new());
+        let (tx, rx) = oneshot::channel();
+        tx.send(()).unwrap(); // already pressed
+        remote.ask(None, "hi".into(), rx, &|e| events.lock().unwrap().push(e)).await;
+        assert!(matches!(events.into_inner().unwrap().last(), Some(StreamEvent::Cancelled)));
+        assert_eq!(*fake.seen.cancels.lock().unwrap(), ["g1"], "it waited for the generation id, then cancelled");
     }
 
     #[test]

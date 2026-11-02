@@ -254,6 +254,8 @@ async fn ask(
     Ok(())
 }
 
+/// Stop: tells the running `ask` to ask the server to stop the reply (the reply then ends there
+/// with its text so far kept); the window gets `Cancelled` once the server has been told.
 #[tauri::command]
 fn cancel_ask(state: State<'_, AppState>) {
     if let Some(tx) = lock(&state.cancel).take() {
