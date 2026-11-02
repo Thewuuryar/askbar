@@ -97,24 +97,24 @@ if [ $LOCAL = 1 ]; then
     curl -fsS --unix-socket "$SOCK" -X "$1" -H 'x-askbar-admin: 1' -H 'content-type: application/json' -b "$WORK/jar" -c "$WORK/jar" \
       ${3:+-d "$3"} "http://admin$2"
   }
-  if admin POST /admin/api/setup/password "{\"password\":\"$PW\"}" >/dev/null; then
+  if admin POST /admin/api/v1/setup/password "{\"password\":\"$PW\"}" >/dev/null; then
     pass "first-run setup"
   else
     fail "first-run setup"
   fi
   # The audit passphrase is part of setup; without its key the server refuses to start replies.
-  if admin POST /admin/api/setup/audit-key '{"passphrase":"smoke test audit passphrase","confirm":"smoke test audit passphrase"}' >/dev/null; then
+  if admin POST /admin/api/v1/setup/audit-key '{"passphrase":"smoke test audit passphrase","confirm":"smoke test audit passphrase"}' >/dev/null; then
     pass "audit key setup"
   else
     fail "audit key setup"
   fi
-  if admin POST /admin/api/providers \
+  if admin POST /admin/api/v1/providers \
       "{\"name\":\"mock\",\"type\":\"openai\",\"base_url\":\"http://127.0.0.1:$MOCK_PORT/v1\",\"model\":\"mock-model\",\"api_key\":\"sk-smoke\"}" >/dev/null; then
     pass "add a provider that points at the mock LLM"
   else
     fail "add a provider that points at the mock LLM"
   fi
-  if admin POST /admin/api/pair '{"name":"smoke test client"}' >"$WORK/pair.json"; then
+  if admin POST /admin/api/v1/pair '{"name":"smoke test client"}' >"$WORK/pair.json"; then
     PAIRING=$(json "$WORK/pair.json" 'd["pairing"]'); pass "create a pair code"
   else
     fail "create a pair code"

@@ -111,7 +111,7 @@ fn provider(name: &str, base: &str, key: Option<&str>) -> Value {
 async fn providers_are_saved_here_pushed_to_the_server_and_the_key_goes_only_to_the_server() {
     let t = start(true).await;
     let llm = fake_llm().await;
-    let (st, created) = t.call(M::POST, "/admin/api/providers", Some(provider("mock", &llm, Some(KEY)))).await;
+    let (st, created) = t.call(M::POST, "/admin/api/v1/providers", Some(provider("mock", &llm, Some(KEY)))).await;
     assert_eq!(st, 201);
     let id = created["id"].as_str().unwrap().to_string();
 
@@ -122,7 +122,7 @@ async fn providers_are_saved_here_pushed_to_the_server_and_the_key_goes_only_to_
     assert_eq!(t.server.secrets().decrypt(&enc).unwrap(), KEY);
 
     // This side never holds the key: not in admin.db, not in the list.
-    let (_, list) = t.call(M::GET, "/admin/api/providers", None).await;
+    let (_, list) = t.call(M::GET, "/admin/api/v1/providers", None).await;
     assert_eq!((list[0]["name"].as_str(), list[0]["has_key"].clone()), (Some("mock"), json!(true)));
     assert!(!list.to_string().contains(KEY));
     let dump: String = t.admin.db.lock().await.conn().query_row("SELECT group_concat(name || model || headers || base_url) FROM providers", [], |r| r.get(0)).unwrap();
@@ -131,27 +131,27 @@ async fn providers_are_saved_here_pushed_to_the_server_and_the_key_goes_only_to_
     assert!(!snapshot_text.contains(KEY), "the snapshot carries no key");
 
     // Test goes through the server, which has the key.
-    let (st, res) = t.call(M::POST, &format!("/admin/api/providers/{id}/test"), None).await;
+    let (st, res) = t.call(M::POST, &format!("/admin/api/v1/providers/{id}/test"), None).await;
     assert_eq!((st, res["ok"].clone(), res["message"].as_str()), (200, json!(true), Some("ok")));
     assert!(!res.to_string().contains(KEY));
 
     // Editing keeps the key unless a new one comes; renaming reaches the server.
-    assert_eq!(t.call(M::PUT, &format!("/admin/api/providers/{id}"), Some(provider("renamed", &llm, None))).await.0, 204);
+    assert_eq!(t.call(M::PUT, &format!("/admin/api/v1/providers/{id}"), Some(provider("renamed", &llm, None))).await.0, 204);
     assert_eq!(t.snapshot().unwrap().providers[0].name, "renamed");
-    assert_eq!(t.call(M::POST, &format!("/admin/api/providers/{id}/test"), None).await.1["ok"], json!(true), "the stored key still works");
+    assert_eq!(t.call(M::POST, &format!("/admin/api/v1/providers/{id}/test"), None).await.1["ok"], json!(true), "the stored key still works");
 
     // Validation and name clashes change nothing.
-    assert_eq!(t.call(M::POST, "/admin/api/providers", Some(json!({ "name": "", "type": "openai", "model": "m" }))).await.0, 400);
-    assert_eq!(t.call(M::POST, "/admin/api/providers", Some(provider("renamed", &llm, None))).await.0, 409);
+    assert_eq!(t.call(M::POST, "/admin/api/v1/providers", Some(json!({ "name": "", "type": "openai", "model": "m" }))).await.0, 400);
+    assert_eq!(t.call(M::POST, "/admin/api/v1/providers", Some(provider("renamed", &llm, None))).await.0, 409);
     assert_eq!(t.admin_rows("SELECT COUNT(*) FROM providers").await, 1);
 
     // Delete removes it from both sides, key included.
-    assert_eq!(t.call(M::DELETE, &format!("/admin/api/providers/{id}"), None).await.0, 204);
+    assert_eq!(t.call(M::DELETE, &format!("/admin/api/v1/providers/{id}"), None).await.0, 204);
     assert!(t.snapshot().unwrap().providers.is_empty());
     let left: i64 = t.server.db.lock().unwrap().conn().query_row("SELECT COUNT(*) FROM providers", [], |r| r.get(0)).unwrap();
     assert_eq!(left, 0);
-    assert_eq!(t.call(M::DELETE, &format!("/admin/api/providers/{id}"), None).await.0, 404);
-    assert_eq!(t.call(M::POST, &format!("/admin/api/providers/{id}/test"), None).await.0, 404);
+    assert_eq!(t.call(M::DELETE, &format!("/admin/api/v1/providers/{id}"), None).await.0, 404);
+    assert_eq!(t.call(M::POST, &format!("/admin/api/v1/providers/{id}/test"), None).await.0, 404);
 }
 
 #[tokio::test]
@@ -159,16 +159,16 @@ async fn with_the_server_down_changes_get_502_and_nothing_is_saved() {
     let t = start(false).await;
     let llm = "http://x/v1";
     for (m, path, body) in [
-        (M::POST, "/admin/api/providers", Some(provider("p", llm, Some(KEY)))),
-        (M::GET, "/admin/api/devices", None),
-        (M::POST, "/admin/api/pair", Some(json!({ "name": "laptop" }))),
-        (M::PUT, "/admin/api/settings", Some(json!({ "system_prompt": "x", "display": askbar_proto::DisplaySettings::default() }))),
-        (M::GET, "/admin/api/backup", None),
-        (M::POST, "/admin/api/devices/d1/revoke", None),
+        (M::POST, "/admin/api/v1/providers", Some(provider("p", llm, Some(KEY)))),
+        (M::GET, "/admin/api/v1/devices", None),
+        (M::POST, "/admin/api/v1/pair", Some(json!({ "name": "laptop" }))),
+        (M::PUT, "/admin/api/v1/settings", Some(json!({ "system_prompt": "x", "display": askbar_proto::DisplaySettings::default() }))),
+        (M::GET, "/admin/api/v1/backup", None),
+        (M::POST, "/admin/api/v1/devices/d1/revoke", None),
     ] {
         let (st, res) = t.call(m, path, body).await;
         assert_eq!(st, 502, "{path}");
-        if path != "/admin/api/backup" {
+        if path != "/admin/api/v1/backup" {
             assert!(res["detail"].as_str().unwrap().contains("offline"), "{path}: {res}");
         }
     }
@@ -177,8 +177,8 @@ async fn with_the_server_down_changes_get_502_and_nothing_is_saved() {
     assert_eq!(t.admin_rows("SELECT COUNT(*) FROM settings").await, 0);
 
     // Reading what this side owns still works, and the status says why the rest does not.
-    assert_eq!(t.call(M::GET, "/admin/api/providers", None).await, (200, json!([])));
-    let (st, status) = t.call(M::GET, "/admin/api/status", None).await;
+    assert_eq!(t.call(M::GET, "/admin/api/v1/providers", None).await, (200, json!([])));
+    let (st, status) = t.call(M::GET, "/admin/api/v1/status", None).await;
     assert_eq!((st, status["server_online"].clone()), (200, json!(false)));
     assert!(status["error"].is_string());
 }
@@ -186,14 +186,14 @@ async fn with_the_server_down_changes_get_502_and_nothing_is_saved() {
 #[tokio::test]
 async fn status_reports_a_server_that_is_there() {
     let t = start(true).await;
-    let (_, status) = t.call(M::GET, "/admin/api/status", None).await;
+    let (_, status) = t.call(M::GET, "/admin/api/v1/status", None).await;
     assert_eq!(status["server_online"], json!(true));
 }
 
 #[tokio::test]
 async fn a_pairing_string_pairs_a_client_which_can_then_be_revoked() {
     let t = start(true).await;
-    let (st, out) = t.call(M::POST, "/admin/api/pair", Some(json!({ "name": "Work laptop" }))).await;
+    let (st, out) = t.call(M::POST, "/admin/api/v1/pair", Some(json!({ "name": "Work laptop" }))).await;
     assert_eq!(st, 200);
     let (url, code) = askbar_proto::decode_pairing(out["pairing"].as_str().unwrap()).expect("a pairing string");
     assert_eq!(url, "http://localhost:8080", "no HTTPS configured: the fallback address");
@@ -214,23 +214,23 @@ async fn a_pairing_string_pairs_a_client_which_can_then_be_revoked() {
 
     let whoami = || t.http.get(format!("{}/api/v1/whoami", t.api)).bearer_auth(&token).header("x-askbar-client-version", "0.4.0").send();
     assert_eq!(whoami().await.unwrap().status(), 204);
-    let (_, clients) = t.call(M::GET, "/admin/api/devices", None).await;
+    let (_, clients) = t.call(M::GET, "/admin/api/v1/devices", None).await;
     assert_eq!((clients[0]["name"].as_str(), clients[0]["revoked"].clone()), (Some("Work laptop"), json!(false)));
     let id = clients[0]["id"].as_str().unwrap().to_string();
 
-    assert_eq!(t.call(M::POST, &format!("/admin/api/devices/{id}/revoke"), None).await.0, 204);
+    assert_eq!(t.call(M::POST, &format!("/admin/api/v1/devices/{id}/revoke"), None).await.0, 204);
     assert_eq!(whoami().await.unwrap().status(), 401, "the revoked client is refused");
-    let (_, clients) = t.call(M::GET, "/admin/api/devices", None).await;
+    let (_, clients) = t.call(M::GET, "/admin/api/v1/devices", None).await;
     assert_eq!(clients[0]["revoked"], json!(true));
-    assert_eq!(t.call(M::POST, "/admin/api/devices/nope/revoke", None).await.0, 404);
-    assert_eq!(t.call(M::POST, "/admin/api/pair", Some(json!({ "name": "x".repeat(61) }))).await.0, 400);
+    assert_eq!(t.call(M::POST, "/admin/api/v1/devices/nope/revoke", None).await.0, 404);
+    assert_eq!(t.call(M::POST, "/admin/api/v1/pair", Some(json!({ "name": "x".repeat(61) }))).await.0, 400);
 }
 
 #[tokio::test]
 async fn the_pairing_string_uses_the_public_https_name_when_https_is_on() {
     let t = start(true).await;
     t.admin.db.lock().await.conn().execute("UPDATE network_settings SET tls_enabled = 1, hostname = 'askbar.example.com'", []).unwrap();
-    let (_, out) = t.call(M::POST, "/admin/api/pair", Some(json!({}))).await;
+    let (_, out) = t.call(M::POST, "/admin/api/v1/pair", Some(json!({}))).await;
     assert_eq!(askbar_proto::decode_pairing(out["pairing"].as_str().unwrap()).unwrap().0, "https://askbar.example.com");
 }
 
@@ -239,10 +239,10 @@ async fn provider_billing_fallback_permission_and_prices_round_trip_reach_the_se
     let t = start(true).await;
     let base = json!({ "name": "metered one", "type": "openai", "base_url": "http://x/v1", "model": "m" });
     // Omitted fields mean what the server would assume: metered, no fallback, unknown prices.
-    let (st, body) = t.call(M::POST, "/admin/api/providers", Some(base.clone())).await;
+    let (st, body) = t.call(M::POST, "/admin/api/v1/providers", Some(base.clone())).await;
     assert_eq!(st, 201, "{body}");
     let id = body["id"].as_str().unwrap().to_string();
-    let (_, list) = t.call(M::GET, "/admin/api/providers", None).await;
+    let (_, list) = t.call(M::GET, "/admin/api/v1/providers", None).await;
     assert_eq!((&list[0]["billing"], &list[0]["allow_as_fallback"], &list[0]["price_in"]), (&json!("metered"), &json!(false), &json!(null)));
     let sp = t.snapshot().unwrap().providers.into_iter().find(|p| p.id == id).unwrap();
     assert_eq!((sp.billing, sp.allow_as_fallback, sp.price_in, sp.price_out, sp.price_cached_in), (askbar_proto::Billing::Metered, false, None, None, None));
@@ -254,8 +254,8 @@ async fn provider_billing_fallback_permission_and_prices_round_trip_reach_the_se
     full["price_in"] = json!(2.5);
     full["price_out"] = json!(10.0);
     full["price_cached_in"] = json!(0.0);
-    assert_eq!(t.call(M::PUT, &format!("/admin/api/providers/{id}"), Some(full.clone())).await.0, 204);
-    let (_, list) = t.call(M::GET, "/admin/api/providers", None).await;
+    assert_eq!(t.call(M::PUT, &format!("/admin/api/v1/providers/{id}"), Some(full.clone())).await.0, 204);
+    let (_, list) = t.call(M::GET, "/admin/api/v1/providers", None).await;
     assert_eq!((&list[0]["billing"], &list[0]["allow_as_fallback"], &list[0]["price_in"], &list[0]["price_out"], &list[0]["price_cached_in"]), (&json!("subscription"), &json!(true), &json!(2.5), &json!(10.0), &json!(0.0)));
     let sp = t.snapshot().unwrap().providers.into_iter().find(|p| p.id == id).unwrap();
     assert_eq!((sp.billing, sp.allow_as_fallback, sp.price_in, sp.price_out, sp.price_cached_in), (askbar_proto::Billing::Subscription, true, Some(2.5), Some(10.0), Some(0.0)));
@@ -265,10 +265,10 @@ async fn provider_billing_fallback_permission_and_prices_round_trip_reach_the_se
         let mut bad = base.clone();
         bad["name"] = json!("bad one");
         bad[field] = value;
-        let (st, body) = t.call(M::POST, "/admin/api/providers", Some(bad)).await;
+        let (st, body) = t.call(M::POST, "/admin/api/v1/providers", Some(bad)).await;
         assert_eq!(st, 400, "{field}: {body}");
     }
-    let (_, list) = t.call(M::GET, "/admin/api/providers", None).await;
+    let (_, list) = t.call(M::GET, "/admin/api/v1/providers", None).await;
     assert_eq!(list.as_array().unwrap().len(), 1, "nothing refused was saved");
 }
 
@@ -276,36 +276,36 @@ async fn provider_billing_fallback_permission_and_prices_round_trip_reach_the_se
 async fn the_generation_timeout_round_trips_reaches_the_server_and_is_range_checked() {
     let t = start(true).await;
     let disp = serde_json::to_value(askbar_proto::DisplaySettings::default()).unwrap();
-    let (_, s) = t.call(M::GET, "/admin/api/settings", None).await;
+    let (_, s) = t.call(M::GET, "/admin/api/v1/settings", None).await;
     assert_eq!(s["generation_timeout_secs"], json!(300), "the default until one is set");
 
     let save = |secs: serde_json::Value| json!({ "system_prompt": "x", "display": disp, "generation_timeout_secs": secs });
-    assert_eq!(t.call(M::PUT, "/admin/api/settings", Some(save(json!(120)))).await.0, 204);
-    assert_eq!(t.call(M::GET, "/admin/api/settings", None).await.1["generation_timeout_secs"], json!(120));
+    assert_eq!(t.call(M::PUT, "/admin/api/v1/settings", Some(save(json!(120)))).await.0, 204);
+    assert_eq!(t.call(M::GET, "/admin/api/v1/settings", None).await.1["generation_timeout_secs"], json!(120));
     assert_eq!(t.snapshot().unwrap().generation_timeout_secs, 120, "pushed to the server");
 
     // Out of range, either side: refused, and nothing changes.
     for bad in [29, 3601, 0] {
-        assert_eq!(t.call(M::PUT, "/admin/api/settings", Some(save(json!(bad)))).await.0, 400, "{bad}");
+        assert_eq!(t.call(M::PUT, "/admin/api/v1/settings", Some(save(json!(bad)))).await.0, 400, "{bad}");
     }
-    assert_eq!(t.call(M::PUT, "/admin/api/settings", Some(save(json!("soon")))).await.0, 400, "not a number: a body that does not fit is a bad_request problem (it was a bare 422)");
-    assert_eq!(t.call(M::GET, "/admin/api/settings", None).await.1["generation_timeout_secs"], json!(120));
+    assert_eq!(t.call(M::PUT, "/admin/api/v1/settings", Some(save(json!("soon")))).await.0, 400, "not a number: a body that does not fit is a bad_request problem (it was a bare 422)");
+    assert_eq!(t.call(M::GET, "/admin/api/v1/settings", None).await.1["generation_timeout_secs"], json!(120));
     assert_eq!(t.snapshot().unwrap().generation_timeout_secs, 120);
 
     // The edges are fine, and a save that leaves the field out keeps the stored value.
     for ok in [30, 3600] {
-        assert_eq!(t.call(M::PUT, "/admin/api/settings", Some(save(json!(ok)))).await.0, 204, "{ok}");
+        assert_eq!(t.call(M::PUT, "/admin/api/v1/settings", Some(save(json!(ok)))).await.0, 204, "{ok}");
     }
     let without = json!({ "system_prompt": "y", "display": disp });
-    assert_eq!(t.call(M::PUT, "/admin/api/settings", Some(without)).await.0, 204);
-    assert_eq!(t.call(M::GET, "/admin/api/settings", None).await.1["generation_timeout_secs"], json!(3600));
+    assert_eq!(t.call(M::PUT, "/admin/api/v1/settings", Some(without)).await.0, 204);
+    assert_eq!(t.call(M::GET, "/admin/api/v1/settings", None).await.1["generation_timeout_secs"], json!(3600));
 }
 
 #[tokio::test]
 async fn the_kill_switch_and_its_abort_setting_round_trip_and_reach_the_server() {
     let t = start(true).await;
     let disp = serde_json::to_value(askbar_proto::DisplaySettings::default()).unwrap();
-    let (_, s) = t.call(M::GET, "/admin/api/settings", None).await;
+    let (_, s) = t.call(M::GET, "/admin/api/v1/settings", None).await;
     assert_eq!((&s["kill_switch"], &s["kill_switch_aborts_running"]), (&json!(false), &json!(true)), "off, and aborting by default");
     assert!(t.snapshot().is_none() || !t.snapshot().unwrap().kill_switch);
 
@@ -316,15 +316,15 @@ async fn the_kill_switch_and_its_abort_setting_round_trip_and_reach_the_server()
         b
     };
     for (kill, aborts) in [(true, true), (true, false), (false, false), (false, true)] {
-        assert_eq!(t.call(M::PUT, "/admin/api/settings", Some(save(Some(kill), Some(aborts)))).await.0, 204);
-        let (_, s) = t.call(M::GET, "/admin/api/settings", None).await;
+        assert_eq!(t.call(M::PUT, "/admin/api/v1/settings", Some(save(Some(kill), Some(aborts)))).await.0, 204);
+        let (_, s) = t.call(M::GET, "/admin/api/v1/settings", None).await;
         assert_eq!((&s["kill_switch"], &s["kill_switch_aborts_running"]), (&json!(kill), &json!(aborts)));
         let snap = t.snapshot().unwrap();
         assert_eq!((snap.kill_switch, snap.kill_switch_aborts_running), (kill, aborts), "the server has both");
     }
     // A save that leaves them out keeps what is stored.
-    t.call(M::PUT, "/admin/api/settings", Some(save(Some(true), Some(false)))).await;
-    assert_eq!(t.call(M::PUT, "/admin/api/settings", Some(save(None, None))).await.0, 204);
+    t.call(M::PUT, "/admin/api/v1/settings", Some(save(Some(true), Some(false)))).await;
+    assert_eq!(t.call(M::PUT, "/admin/api/v1/settings", Some(save(None, None))).await.0, 204);
     let snap = t.snapshot().unwrap();
     assert_eq!((snap.kill_switch, snap.kill_switch_aborts_running), (true, false));
 }
@@ -332,27 +332,27 @@ async fn the_kill_switch_and_its_abort_setting_round_trip_and_reach_the_server()
 #[tokio::test]
 async fn settings_and_per_user_display_defaults_reach_the_server() {
     let t = start(true).await;
-    let (_, s) = t.call(M::GET, "/admin/api/settings", None).await;
+    let (_, s) = t.call(M::GET, "/admin/api/v1/settings", None).await;
     assert_eq!(s["system_prompt"].as_str(), Some(askbar_proto::DEFAULT_SYSTEM_PROMPT), "the built-in prompt until one is set");
     assert_eq!(s["display"]["width"], json!(720));
 
     let new = json!({ "system_prompt": "Be terse.", "display": { "theme": "dark", "width": 900, "max_height": 700, "history_width": 300, "top_percent": 0.3, "hide_on_blur": false } });
-    assert_eq!(t.call(M::PUT, "/admin/api/settings", Some(new)).await.0, 204);
+    assert_eq!(t.call(M::PUT, "/admin/api/v1/settings", Some(new)).await.0, 204);
     let snap = t.snapshot().unwrap();
     assert_eq!((snap.system_prompt.as_deref(), snap.display.width, snap.display.theme.as_str()), (Some("Be terse."), 900, "dark"));
-    assert_eq!(t.call(M::GET, "/admin/api/settings", None).await.1["system_prompt"], json!("Be terse."));
-    assert_eq!(t.call(M::PUT, "/admin/api/settings", Some(json!({ "system_prompt": "x", "display": { "theme": "neon" } }))).await.0, 400);
-    assert_eq!(t.call(M::PUT, "/admin/api/settings", Some(json!({ "system_prompt": "x".repeat(20_001), "display": {} }))).await.0, 400);
+    assert_eq!(t.call(M::GET, "/admin/api/v1/settings", None).await.1["system_prompt"], json!("Be terse."));
+    assert_eq!(t.call(M::PUT, "/admin/api/v1/settings", Some(json!({ "system_prompt": "x", "display": { "theme": "neon" } }))).await.0, 400);
+    assert_eq!(t.call(M::PUT, "/admin/api/v1/settings", Some(json!({ "system_prompt": "x".repeat(20_001), "display": {} }))).await.0, 400);
     assert_eq!(t.snapshot().unwrap().system_prompt.as_deref(), Some("Be terse."), "refused changes left it alone");
 
     let user: String = t.server.db.lock().unwrap().conn().query_row("SELECT id FROM users", [], |r| r.get(0)).unwrap();
     let mine = json!({ "theme": "light", "width": 500, "max_height": 400, "history_width": 200, "top_percent": 0.1, "hide_on_blur": true });
-    assert_eq!(t.call(M::PUT, &format!("/admin/api/users/{user}/display-defaults"), Some(mine)).await.0, 204);
+    assert_eq!(t.call(M::PUT, &format!("/admin/api/v1/users/{user}/display-defaults"), Some(mine)).await.0, 204);
     let snap = t.snapshot().unwrap();
     assert_eq!(snap.user_display_defaults[&user].width, 500);
     assert_eq!(snap.display.width, 900, "the server-wide default is unchanged");
-    assert_eq!(t.call(M::PUT, "/admin/api/users/nobody/display-defaults", Some(json!({}))).await.0, 404);
-    assert_eq!(t.call(M::PUT, &format!("/admin/api/users/{user}/display-defaults"), Some(json!({ "width": 5 }))).await.0, 400);
+    assert_eq!(t.call(M::PUT, "/admin/api/v1/users/nobody/display-defaults", Some(json!({}))).await.0, 404);
+    assert_eq!(t.call(M::PUT, &format!("/admin/api/v1/users/{user}/display-defaults"), Some(json!({ "width": 5 }))).await.0, 400);
 }
 
 fn tar_files(bytes: &[u8]) -> Vec<(String, Vec<u8>)> {
@@ -371,8 +371,8 @@ fn tar_files(bytes: &[u8]) -> Vec<(String, Vec<u8>)> {
 async fn the_backup_holds_both_databases_and_none_of_the_secrets() {
     let t = start(true).await;
     let llm = fake_llm().await;
-    t.call(M::POST, "/admin/api/providers", Some(provider("mock", &llm, Some(KEY)))).await;
-    t.call(M::POST, "/admin/api/pair", Some(json!({ "name": "pending" }))).await;
+    t.call(M::POST, "/admin/api/v1/providers", Some(provider("mock", &llm, Some(KEY)))).await;
+    t.call(M::POST, "/admin/api/v1/pair", Some(json!({ "name": "pending" }))).await;
     t.admin.db.lock().await.conn().execute("UPDATE network_settings SET cloudflare_token = x'deadbeefcafe'", []).unwrap();
     {
         let db = t.server.db.lock().unwrap();
@@ -381,7 +381,7 @@ async fn the_backup_holds_both_databases_and_none_of_the_secrets() {
         db.add_message(&user, &c, "user", "question one").unwrap();
     }
 
-    let r = t.http.get(format!("{}/admin/api/backup", t.adm)).header("cookie", &t.cookie).send().await.unwrap();
+    let r = t.http.get(format!("{}/admin/api/v1/backup", t.adm)).header("cookie", &t.cookie).send().await.unwrap();
     assert_eq!(r.status(), 200);
     assert!(r.headers()["content-disposition"].to_str().unwrap().contains(".tar"));
     let bytes = r.bytes().await.unwrap();
@@ -417,7 +417,7 @@ async fn the_backup_holds_both_databases_and_none_of_the_secrets() {
 #[tokio::test]
 async fn the_backup_has_no_audit_store_in_it() {
     let t = start(true).await;
-    let r = t.http.get(format!("{}/admin/api/backup", t.adm)).header("cookie", &t.cookie).send().await.unwrap();
+    let r = t.http.get(format!("{}/admin/api/v1/backup", t.adm)).header("cookie", &t.cookie).send().await.unwrap();
     assert_eq!(r.status(), 200);
     let files = tar_files(&r.bytes().await.unwrap());
     assert!(files.iter().all(|(name, _)| !name.contains("audit")), "no audit.db in the archive: {:?}", files.iter().map(|(n, _)| n).collect::<Vec<_>>());
@@ -437,19 +437,19 @@ async fn the_backup_has_no_audit_store_in_it() {
 async fn all_of_it_needs_a_session() {
     let t = start(true).await;
     for (m, path) in [
-        (M::GET, "/admin/api/status"),
-        (M::GET, "/admin/api/providers"),
-        (M::POST, "/admin/api/providers"),
-        (M::PUT, "/admin/api/providers/x"),
-        (M::DELETE, "/admin/api/providers/x"),
-        (M::POST, "/admin/api/providers/x/test"),
-        (M::GET, "/admin/api/devices"),
-        (M::POST, "/admin/api/devices/x/revoke"),
-        (M::POST, "/admin/api/pair"),
-        (M::GET, "/admin/api/settings"),
-        (M::PUT, "/admin/api/settings"),
-        (M::PUT, "/admin/api/users/x/display-defaults"),
-        (M::GET, "/admin/api/backup"),
+        (M::GET, "/admin/api/v1/status"),
+        (M::GET, "/admin/api/v1/providers"),
+        (M::POST, "/admin/api/v1/providers"),
+        (M::PUT, "/admin/api/v1/providers/x"),
+        (M::DELETE, "/admin/api/v1/providers/x"),
+        (M::POST, "/admin/api/v1/providers/x/test"),
+        (M::GET, "/admin/api/v1/devices"),
+        (M::POST, "/admin/api/v1/devices/x/revoke"),
+        (M::POST, "/admin/api/v1/pair"),
+        (M::GET, "/admin/api/v1/settings"),
+        (M::PUT, "/admin/api/v1/settings"),
+        (M::PUT, "/admin/api/v1/users/x/display-defaults"),
+        (M::GET, "/admin/api/v1/backup"),
     ] {
         let r = t.http.request(m, format!("{}{path}", t.adm)).header("x-askbar-admin", "1").json(&json!({})).send().await.unwrap();
         assert_eq!(r.status(), 401, "{path}");

@@ -194,7 +194,7 @@ async fn every_admin_refusal_is_a_problem_with_a_code_a_sentence_and_no_bearer_c
     }
     let url = |p: &str| format!("http://{}{p}", t.admin);
     // Signed out, and a change without the header.
-    expect(t.http.get(url("/admin/api/providers")).send().await.unwrap(), 401, "unauthorized").await;
+    expect(t.http.get(url("/admin/api/v1/providers")).send().await.unwrap(), 401, "unauthorized").await;
     expect(t.http.post(url("/admin/login")).json(&serde_json::json!({ "password": "x" })).send().await.unwrap(), 403, "forbidden").await;
     // Unknown path, wrong method, a body that is not JSON.
     expect(t.http.get(url("/admin/nope")).send().await.unwrap(), 404, "not_found").await;

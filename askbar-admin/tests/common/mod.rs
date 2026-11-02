@@ -99,7 +99,7 @@ impl T {
         (st, serde_json::from_str(&r.text().await.unwrap()).unwrap_or(Value::Null))
     }
     pub async fn save(&self, body: Value) -> (u16, Value) {
-        self.call(M::PUT, "/admin/api/network", body).await
+        self.call(M::PUT, "/admin/api/v1/network", body).await
     }
     pub async fn stored_token(&self) -> Option<Vec<u8>> {
         let db = self.admin.db.lock().await;

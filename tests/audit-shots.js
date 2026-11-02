@@ -55,17 +55,17 @@ async function waitForPort(port) {
     const t = await r.text();
     return { status: r.status, body: t ? JSON.parse(t) : null };
   };
-  await admin('POST', '/admin/api/setup/password', { password: PASSWORD });
-  await admin('POST', '/admin/api/setup/audit-key', { passphrase: AUDIT_PASS, confirm: AUDIT_PASS });
+  await admin('POST', '/admin/api/v1/setup/password', { password: PASSWORD });
+  await admin('POST', '/admin/api/v1/setup/audit-key', { passphrase: AUDIT_PASS, confirm: AUDIT_PASS });
   const mock = `http://127.0.0.1:${mockPort}/v1`;
-  const mk = (name, extra = {}) => admin('POST', '/admin/api/providers', { name, type: 'openai', base_url: mock, model: 'mock-model', api_key: 'sk-x', ...extra });
+  const mk = (name, extra = {}) => admin('POST', '/admin/api/v1/providers', { name, type: 'openai', base_url: mock, model: 'mock-model', api_key: 'sk-x', ...extra });
   await mk('Primary mock', { price_in: 2.5, price_out: 10, allow_as_fallback: true });
   await mk('Backup provider with a really quite long display name to test wrapping', { model: 'm-fallback-model-with-a-long-name', price_in: 1, price_out: 4, allow_as_fallback: true });
-  const providers = (await admin('GET', '/admin/api/providers')).body;
+  const providers = (await admin('GET', '/admin/api/v1/providers')).body;
   const pid = (n) => providers.find((p) => p.name.startsWith(n)).id;
-  await admin('PUT', '/admin/api/settings', { system_prompt: 'x', display: (await admin('GET', '/admin/api/settings')).body.display });
+  await admin('PUT', '/admin/api/v1/settings', { system_prompt: 'x', display: (await admin('GET', '/admin/api/v1/settings')).body.display });
 
-  const pairing = (await admin('POST', '/admin/api/pair', { name: 'shots' })).body.pairing;
+  const pairing = (await admin('POST', '/admin/api/v1/pair', { name: 'shots' })).body.pairing;
   const { code } = JSON.parse(Buffer.from(pairing.slice('askbar-pair:'.length), 'base64url').toString());
   const h = { 'content-type': 'application/json', 'x-askbar-client-version': '0.4.0' };
   const { token } = await (await fetch(`http://127.0.0.1:${api}/api/v1/pair`, { method: 'POST', headers: h, body: JSON.stringify({ code }) })).json();

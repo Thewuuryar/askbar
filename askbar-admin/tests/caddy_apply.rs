@@ -29,7 +29,7 @@ async fn saving_pushes_the_config_through_the_socket_and_writes_the_token_file()
     assert_eq!(t.token_file().as_deref(), Some(TOKEN));
     assert_eq!(std::fs::metadata(t.secrets_dir.join("cf_token")).unwrap().permissions().mode() & 0o777, 0o600);
     // The status is remembered and served back.
-    assert_eq!(t.call(M::GET, "/admin/api/network", json!({})).await.1["proxy"]["ok"], true);
+    assert_eq!(t.call(M::GET, "/admin/api/v1/network", json!({})).await.1["proxy"]["ok"], true);
 }
 
 #[tokio::test]
@@ -72,7 +72,7 @@ async fn turning_https_off_serves_nothing_and_removes_the_token_file() {
     assert!(!last.contains("askbar.orraitu.com"));
     assert!(last.contains("admin unix//run/caddy/admin.sock"), "Caddy keeps its admin socket");
     // The encrypted copy is still stored, so turning HTTPS back on needs no re-entry.
-    assert_eq!(t.call(M::GET, "/admin/api/network", json!({})).await.1["has_token"], true);
+    assert_eq!(t.call(M::GET, "/admin/api/v1/network", json!({})).await.1["has_token"], true);
 }
 
 #[tokio::test]
@@ -88,7 +88,7 @@ async fn a_refusal_from_caddy_is_reported_but_the_settings_stay_saved() {
 
     // Fixing Caddy and pressing Apply works without re-entering anything.
     *t.fake.refuse.lock().unwrap() = false;
-    let (st, v) = t.call(M::POST, "/admin/api/network/apply", json!({})).await;
+    let (st, v) = t.call(M::POST, "/admin/api/v1/network/apply", json!({})).await;
     assert_eq!((st, v["ok"].as_bool()), (200, Some(true)));
 }
 
@@ -105,7 +105,7 @@ async fn caddy_being_down_is_a_message_not_an_error() {
 async fn without_a_caddy_link_the_status_says_so() {
     let t = start(true).await;
     t.admin.set_caddy(CaddyLink::default());
-    let (_, v) = t.call(M::POST, "/admin/api/network/apply", json!({})).await;
+    let (_, v) = t.call(M::POST, "/admin/api/v1/network/apply", json!({})).await;
     assert_eq!(v["ok"], false);
     assert!(v["message"].as_str().unwrap().contains("not set up"));
     assert!(t.fake.loads.lock().unwrap().is_empty());
@@ -117,7 +117,7 @@ async fn a_token_that_cannot_be_read_is_not_pushed() {
     t.save(settings(true)).await;
     t.admin.db.lock().await.conn().execute("UPDATE network_settings SET cloudflare_token = x'00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff'", []).unwrap();
     t.fake.loads.lock().unwrap().clear();
-    let (_, v) = t.call(M::POST, "/admin/api/network/apply", json!({})).await;
+    let (_, v) = t.call(M::POST, "/admin/api/v1/network/apply", json!({})).await;
     assert_eq!(v["ok"], false);
     assert!(v["message"].as_str().unwrap().contains("Cloudflare token"));
     assert!(t.fake.loads.lock().unwrap().is_empty());

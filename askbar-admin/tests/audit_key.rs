@@ -41,15 +41,15 @@ async fn setup_refuses_a_passphrase_under_twenty_characters() {
     let t: T = common::start(true).await;
     let short = "only nineteen chars";
     assert_eq!(short.chars().count(), 19);
-    let (st, _) = t.call(M::POST, "/admin/api/setup/audit-key", json!({ "passphrase": short, "confirm": short })).await;
+    let (st, _) = t.call(M::POST, "/admin/api/v1/setup/audit-key", json!({ "passphrase": short, "confirm": short })).await;
     assert_eq!(st, 400, "a passphrase under 20 characters is refused");
-    let (_, status) = t.call(M::GET, "/admin/api/setup-status", json!({})).await;
+    let (_, status) = t.call(M::GET, "/admin/api/v1/setup-status", json!({})).await;
     assert_eq!(status["audit_key_set"], false, "and no key was made");
 
     // Exactly twenty is enough.
     let ok = "exactly twenty chars";
     assert_eq!(ok.chars().count(), 20);
-    let (st, body) = t.call(M::POST, "/admin/api/setup/audit-key", json!({ "passphrase": ok, "confirm": ok })).await;
+    let (st, body) = t.call(M::POST, "/admin/api/v1/setup/audit-key", json!({ "passphrase": ok, "confirm": ok })).await;
     assert_eq!(st, 200, "{body}");
     assert!(body["key_id"].as_str().is_some_and(|k| k.len() == 16), "an 8-byte hex key id: {body}");
 }
@@ -57,19 +57,19 @@ async fn setup_refuses_a_passphrase_under_twenty_characters() {
 #[tokio::test]
 async fn the_audit_key_setup_checks_the_passphrase_makes_one_key_and_refuses_a_second() {
     let t: T = common::start(true).await;
-    let call = |body: serde_json::Value| t.call(M::POST, "/admin/api/setup/audit-key", body);
+    let call = |body: serde_json::Value| t.call(M::POST, "/admin/api/v1/setup/audit-key", body);
     let good = "a passphrase long enough to use";
 
     // A mismatch is refused, and so is anything under twenty characters, and nothing is made.
     assert_eq!(call(json!({ "passphrase": good, "confirm": "something else entirely here" })).await.0, 400);
     assert_eq!(call(json!({ "passphrase": "too short", "confirm": "too short" })).await.0, 400);
-    assert_eq!(t.call(M::GET, "/admin/api/setup-status", json!({})).await.1["audit_key_set"], false);
+    assert_eq!(t.call(M::GET, "/admin/api/v1/setup-status", json!({})).await.1["audit_key_set"], false);
     assert!(t.admin.db.lock().await.active_audit_key().unwrap().is_none());
 
     let (st, body) = call(json!({ "passphrase": good, "confirm": good })).await;
     assert_eq!(st, 200, "{body}");
     let key_id = body["key_id"].as_str().unwrap().to_string();
-    assert_eq!(t.call(M::GET, "/admin/api/setup-status", json!({})).await.1["audit_key_set"], true);
+    assert_eq!(t.call(M::GET, "/admin/api/v1/setup-status", json!({})).await.1["audit_key_set"], true);
 
     // What was kept is public: the key id matches the stored public key, and nothing holds the passphrase.
     let row = t.admin.db.lock().await.active_audit_key().unwrap().unwrap();
@@ -97,7 +97,7 @@ async fn the_audit_key_setup_checks_the_passphrase_makes_one_key_and_refuses_a_s
     assert_eq!(t.admin.db.lock().await.active_audit_key().unwrap().unwrap().key_id, key_id);
 
     // It needs a signed-in session like the rest of the admin API.
-    let r = t.http.post(format!("{}/admin/api/setup/audit-key", t.adm)).header("x-askbar-admin", "1").json(&json!({ "passphrase": good, "confirm": good })).send().await.unwrap();
+    let r = t.http.post(format!("{}/admin/api/v1/setup/audit-key", t.adm)).header("x-askbar-admin", "1").json(&json!({ "passphrase": good, "confirm": good })).send().await.unwrap();
     assert_eq!(r.status(), 401);
 }
 
@@ -109,7 +109,7 @@ const PASS: &str = "a passphrase long enough to use";
 /// Returns the span id that holds the payload and the text sealed into it.
 async fn server_with_sealed_reply(t: &T) -> (String, String) {
     use askbar_server::audit::{Kind, SpanFinish, SpanStart};
-    let (st, _) = t.call(M::POST, "/admin/api/setup/audit-key", json!({ "passphrase": PASS, "confirm": PASS })).await;
+    let (st, _) = t.call(M::POST, "/admin/api/v1/setup/audit-key", json!({ "passphrase": PASS, "confirm": PASS })).await;
     assert_eq!(st, 200);
     // The server seals with the public key the admin pushed in the snapshot.
     let key = askbar_server::snapshot::current(&t.server.db.lock().unwrap()).unwrap().unwrap().audit_public_key.unwrap();
@@ -135,7 +135,7 @@ async fn the_right_passphrase_opens_the_content_and_leaves_an_access_record() {
     let (span, text) = server_with_sealed_reply(&t).await;
     assert!(access_rows(&t).await.is_empty());
 
-    let (st, body) = t.call(M::POST, &format!("/admin/api/audit/payloads/{span}/open"), json!({ "passphrase": PASS })).await;
+    let (st, body) = t.call(M::POST, &format!("/admin/api/v1/audit/payloads/{span}/open"), json!({ "passphrase": PASS })).await;
     assert_eq!(st, 200, "{body}");
     assert_eq!(body["payloads"][0]["role"], "reply");
     assert_eq!(body["payloads"][0]["text"], text.as_str());
@@ -166,7 +166,7 @@ async fn a_wrong_passphrase_is_403_is_recorded_and_returns_no_content() {
     let t = common::start(true).await;
     let (span, text) = server_with_sealed_reply(&t).await;
     let wrong = "another passphrase of good length";
-    let r = t.http.post(format!("{}/admin/api/audit/payloads/{span}/open", t.adm)).header("x-askbar-admin", "1").header("cookie", &t.cookie).json(&json!({ "passphrase": wrong })).send().await.unwrap();
+    let r = t.http.post(format!("{}/admin/api/v1/audit/payloads/{span}/open", t.adm)).header("x-askbar-admin", "1").header("cookie", &t.cookie).json(&json!({ "passphrase": wrong })).send().await.unwrap();
     assert_eq!(r.status(), 403);
     let body = r.text().await.unwrap();
     assert!(!body.contains(&text) && !body.contains(wrong) && !body.contains("\"text\""), "{body}");
@@ -180,7 +180,7 @@ async fn five_wrong_passphrases_lock_opening_out_even_for_the_right_one_and_unkn
     let t = common::start(true).await;
     let (span, _) = server_with_sealed_reply(&t).await;
     let open = |pass: &str| {
-        let (path, pass) = (format!("/admin/api/audit/payloads/{span}/open"), pass.to_string());
+        let (path, pass) = (format!("/admin/api/v1/audit/payloads/{span}/open"), pass.to_string());
         let t = &t;
         async move { t.call(M::POST, &path, json!({ "passphrase": pass })).await }
     };
@@ -198,7 +198,7 @@ async fn five_wrong_passphrases_lock_opening_out_even_for_the_right_one_and_unkn
 
     let t2 = common::start(true).await;
     server_with_sealed_reply(&t2).await;
-    assert_eq!(t2.call(M::POST, "/admin/api/audit/payloads/no-such-span/open", json!({ "passphrase": PASS })).await.0, 404);
+    assert_eq!(t2.call(M::POST, "/admin/api/v1/audit/payloads/no-such-span/open", json!({ "passphrase": PASS })).await.0, 404);
 }
 
 #[tokio::test]
@@ -208,7 +208,7 @@ async fn a_span_with_nothing_sealed_opens_to_an_empty_list_without_a_record() {
     server_with_sealed_reply(&t).await;
     let bare = t.server.audit.start_span(SpanStart::new("trace-2", Kind::Gate, "queue"));
     t.server.audit.flush().await;
-    let (st, body) = t.call(M::POST, &format!("/admin/api/audit/payloads/{bare}/open"), json!({ "passphrase": "x" })).await;
+    let (st, body) = t.call(M::POST, &format!("/admin/api/v1/audit/payloads/{bare}/open"), json!({ "passphrase": "x" })).await;
     assert_eq!((st, body["payloads"].as_array().map(Vec::len)), (200, Some(0)));
     assert!(access_rows(&t).await.is_empty());
 }
@@ -225,7 +225,7 @@ async fn rotation_adds_a_key_retires_the_old_one_and_each_payload_opens_with_its
     let rotate = |cur: &str, new: &str, confirm: &str| {
         let body = json!({ "current": cur, "new": new, "confirm": confirm });
         let t = &t;
-        async move { t.call(M::POST, "/admin/api/audit/rotate-key", body).await }
+        async move { t.call(M::POST, "/admin/api/v1/audit/rotate-key", body).await }
     };
     assert_eq!(rotate("not the current one at all!!", new_pass, new_pass).await.0, 403);
     assert_eq!(rotate(PASS, PASS, PASS).await.0, 400, "must differ");
@@ -256,7 +256,7 @@ async fn rotation_adds_a_key_retires_the_old_one_and_each_payload_opens_with_its
     t.server.audit.flush().await;
 
     let open = |span: &str, pass: &str| {
-        let (path, body) = (format!("/admin/api/audit/payloads/{span}/open"), json!({ "passphrase": pass }));
+        let (path, body) = (format!("/admin/api/v1/audit/payloads/{span}/open"), json!({ "passphrase": pass }));
         let t = &t;
         async move { t.call(M::POST, &path, body).await }
     };
@@ -274,7 +274,7 @@ async fn rotation_adds_a_key_retires_the_old_one_and_each_payload_opens_with_its
 #[tokio::test]
 async fn rotation_needs_an_existing_key_and_a_reachable_server() {
     let t = common::start(true).await;
-    let (st, _) = t.call(M::POST, "/admin/api/audit/rotate-key", json!({ "current": PASS, "new": "another long enough passphrase", "confirm": "another long enough passphrase" })).await;
+    let (st, _) = t.call(M::POST, "/admin/api/v1/audit/rotate-key", json!({ "current": PASS, "new": "another long enough passphrase", "confirm": "another long enough passphrase" })).await;
     assert_eq!(st, 409, "no key yet");
 }
 
@@ -308,10 +308,10 @@ async fn no_passphrase_reaches_the_admin_logs_when_opening_content_or_rotating()
     let wrong = "a wrong passphrase that is long enough";
     let new_pass = "the new passphrase after rotating";
     for pass in [PASS, wrong] {
-        t.call(M::POST, &format!("/admin/api/audit/payloads/{span}/open"), json!({ "passphrase": pass })).await;
+        t.call(M::POST, &format!("/admin/api/v1/audit/payloads/{span}/open"), json!({ "passphrase": pass })).await;
     }
-    t.call(M::POST, "/admin/api/audit/rotate-key", json!({ "current": PASS, "new": new_pass, "confirm": new_pass })).await;
-    t.call(M::POST, "/admin/api/audit/rotate-key", json!({ "current": wrong, "new": new_pass, "confirm": new_pass })).await;
+    t.call(M::POST, "/admin/api/v1/audit/rotate-key", json!({ "current": PASS, "new": new_pass, "confirm": new_pass })).await;
+    t.call(M::POST, "/admin/api/v1/audit/rotate-key", json!({ "current": wrong, "new": new_pass, "confirm": new_pass })).await;
     let log = String::from_utf8_lossy(&logs.0.lock().unwrap()).into_owned();
     for p in [PASS, wrong, new_pass] {
         assert!(!log.contains(p), "a passphrase is in the logs");
@@ -322,11 +322,11 @@ async fn no_passphrase_reaches_the_admin_logs_when_opening_content_or_rotating()
 async fn the_access_history_lists_every_open_newest_first_without_content_and_needs_a_session() {
     let t = common::start(true).await;
     let (span, text) = server_with_sealed_reply(&t).await;
-    let (st, empty) = t.call(M::GET, "/admin/api/audit/access", json!({})).await;
+    let (st, empty) = t.call(M::GET, "/admin/api/v1/audit/access", json!({})).await;
     assert_eq!((st, empty["access"].as_array().map(Vec::len)), (200, Some(0)));
 
     let open = |pass: &str| {
-        let (path, body) = (format!("/admin/api/audit/payloads/{span}/open"), json!({ "passphrase": pass }));
+        let (path, body) = (format!("/admin/api/v1/audit/payloads/{span}/open"), json!({ "passphrase": pass }));
         let t = &t;
         async move { t.call(M::POST, &path, body).await }
     };
@@ -334,7 +334,7 @@ async fn the_access_history_lists_every_open_newest_first_without_content_and_ne
     assert_eq!(open(PASS).await.0, 200);
     assert_eq!(open(PASS).await.0, 200);
 
-    let (st, list) = t.call(M::GET, "/admin/api/audit/access", json!({})).await;
+    let (st, list) = t.call(M::GET, "/admin/api/v1/audit/access", json!({})).await;
     assert_eq!(st, 200);
     let rows = list["access"].as_array().unwrap();
     assert_eq!(rows.iter().map(|r| r["ok"].as_bool().unwrap()).collect::<Vec<_>>(), [true, true, false], "newest first; the wrong guess is there too");
@@ -343,40 +343,40 @@ async fn the_access_history_lists_every_open_newest_first_without_content_and_ne
     assert!(!body.contains(&text) && !body.contains(PASS) && !body.contains("passphrase"), "no content, no passphrase: {body}");
     assert!(rows[0]["id"].as_i64().unwrap() > rows[1]["id"].as_i64().unwrap());
     // A limit asks for fewer.
-    let (_, one) = t.call(M::GET, "/admin/api/audit/access?limit=1", json!({})).await;
+    let (_, one) = t.call(M::GET, "/admin/api/v1/audit/access?limit=1", json!({})).await;
     assert_eq!(one["access"].as_array().unwrap().len(), 1);
     // And it is behind the session.
-    let r = t.http.get(format!("{}/admin/api/audit/access", t.adm)).send().await.unwrap();
+    let r = t.http.get(format!("{}/admin/api/v1/audit/access", t.adm)).send().await.unwrap();
     assert_eq!(r.status(), 401);
 }
 
 #[tokio::test]
 async fn the_settings_show_the_active_key_id_and_keep_the_retention_between_7_and_3650_days() {
     let t = common::start(true).await;
-    let (_, s) = t.call(M::GET, "/admin/api/settings", json!({})).await;
+    let (_, s) = t.call(M::GET, "/admin/api/v1/settings", json!({})).await;
     assert_eq!((s["audit_retention_days"].clone(), s["audit_key_id"].clone()), (json!(30), json!(null)), "the default, and no key yet");
     server_with_sealed_reply(&t).await;
     let active = t.admin.db.lock().await.active_audit_key().unwrap().unwrap().key_id;
-    let (_, s) = t.call(M::GET, "/admin/api/settings", json!({})).await;
+    let (_, s) = t.call(M::GET, "/admin/api/v1/settings", json!({})).await;
     assert_eq!(s["audit_key_id"], active.as_str());
 
     let disp = serde_json::to_value(askbar_proto::DisplaySettings::default()).unwrap();
     let save = |days: serde_json::Value| json!({ "system_prompt": "x", "display": disp, "audit_retention_days": days });
     for (days, status) in [(7, 204), (90, 204), (3650, 204), (6, 400), (0, 400), (3651, 400)] {
-        assert_eq!(t.call(M::PUT, "/admin/api/settings", save(json!(days))).await.0, status, "{days}");
+        assert_eq!(t.call(M::PUT, "/admin/api/v1/settings", save(json!(days))).await.0, status, "{days}");
     }
-    let (_, s) = t.call(M::PUT, "/admin/api/settings", save(json!(6))).await;
+    let (_, s) = t.call(M::PUT, "/admin/api/v1/settings", save(json!(6))).await;
     assert!(s["detail"].as_str().unwrap().contains("at least 7 days"), "{s}");
-    let (_, s) = t.call(M::GET, "/admin/api/settings", json!({})).await;
+    let (_, s) = t.call(M::GET, "/admin/api/v1/settings", json!({})).await;
     assert_eq!(s["audit_retention_days"], 3650, "refused values changed nothing; the last accepted one stands");
     assert_eq!(askbar_server::snapshot::current(&t.server.db.lock().unwrap()).unwrap().unwrap().audit_retention_days, 3650, "and the server has it");
     // A save that leaves it out keeps it.
     let without = json!({ "system_prompt": "y", "display": disp });
-    assert_eq!(t.call(M::PUT, "/admin/api/settings", without).await.0, 204);
-    assert_eq!(t.call(M::GET, "/admin/api/settings", json!({})).await.1["audit_retention_days"], 3650);
+    assert_eq!(t.call(M::PUT, "/admin/api/v1/settings", without).await.0, 204);
+    assert_eq!(t.call(M::GET, "/admin/api/v1/settings", json!({})).await.1["audit_retention_days"], 3650);
     // The key id is read-only: sending one changes nothing.
     let mut sneaky = save(json!(30));
     sneaky["audit_key_id"] = json!("ffffffffffffffff");
-    assert_eq!(t.call(M::PUT, "/admin/api/settings", sneaky).await.0, 204);
-    assert_eq!(t.call(M::GET, "/admin/api/settings", json!({})).await.1["audit_key_id"], active.as_str());
+    assert_eq!(t.call(M::PUT, "/admin/api/v1/settings", sneaky).await.0, 204);
+    assert_eq!(t.call(M::GET, "/admin/api/v1/settings", json!({})).await.1["audit_key_id"], active.as_str());
 }

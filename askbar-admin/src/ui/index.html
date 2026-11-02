@@ -221,7 +221,7 @@
         <div class="panel">
           <p>Download a backup: the server's database (conversations, settings and paired clients) and this admin's own settings, as a <code>.tar</code> file with <code>server.db</code> and <code>admin.db</code>.</p>
           <p class="hint">Provider API keys, the Cloudflare token, the admin password and pairing codes are left out. After restoring, enter the keys again on the Providers page. The server's master key is not in this file: back up its <code>askbar-secrets</code> volume separately.</p>
-          <p><a class="button" id="backup-link" href="/admin/api/backup" download>Download backup</a></p>
+          <p><a class="button" id="backup-link" href="/admin/api/v1/backup" download>Download backup</a></p>
         </div>
       </section>
 

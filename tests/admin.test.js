@@ -118,7 +118,7 @@ async function waitForPort(port) {
     await page.click('#setup-audit-form button[type=submit]');
     assert.match(await page.innerText('#setup-audit-error'), /stored the passphrase/);
     assert.equal(await page.isHidden('#app'), true);
-    const st = await (await fetch(`http://127.0.0.1:${adminPort}/admin/api/setup-status`, { headers: { 'x-askbar-admin': '1' } })).json();
+    const st = await (await fetch(`http://127.0.0.1:${adminPort}/admin/api/v1/setup-status`, { headers: { 'x-askbar-admin': '1' } })).json();
     assert.equal(st.audit_key_set, false, 'no key yet');
   });
   await step('setup: saving shows the key id, then Continue opens the app', async () => {
@@ -249,7 +249,7 @@ async function waitForPort(port) {
   });
   await step('a refusal reaches the page as a problem: a stable code and a sentence', async () => {
     const r = await page.evaluate(async () => {
-      const res = await fetch('/admin/api/providers/no-such-provider/test', { method: 'POST', headers: { 'X-Askbar-Admin': '1' } });
+      const res = await fetch('/admin/api/v1/providers/no-such-provider/test', { method: 'POST', headers: { 'X-Askbar-Admin': '1' } });
       return { status: res.status, type: res.headers.get('content-type'), body: await res.json() };
     });
     assert.equal(r.status, 404);
@@ -447,7 +447,7 @@ async function waitForPort(port) {
   // One real chat through the server, so there is something to look at; returns once the reply is done.
   async function auditChat(text, providerName) {
     const pairing = await page.evaluate(async () => {
-      const r = await fetch('/admin/api/pair', { method: 'POST', headers: { 'x-askbar-admin': '1', 'content-type': 'application/json' }, body: JSON.stringify({ name: 'audit test' }) });
+      const r = await fetch('/admin/api/v1/pair', { method: 'POST', headers: { 'x-askbar-admin': '1', 'content-type': 'application/json' }, body: JSON.stringify({ name: 'audit test' }) });
       return (await r.json()).pairing;
     });
     const { code } = JSON.parse(Buffer.from(pairing.slice('askbar-pair:'.length), 'base64url').toString());
@@ -462,7 +462,7 @@ async function waitForPort(port) {
   }
   await step('audit: the tab loads, has its five views and counts a real request', async () => {
     await page.evaluate(async ({ xss, mockUrl }) => {
-      await fetch('/admin/api/providers', { method: 'POST', headers: { 'x-askbar-admin': '1', 'content-type': 'application/json' }, body: JSON.stringify({ name: xss, type: 'openai', base_url: mockUrl, model: xss, api_key: 'sk-audit' }) });
+      await fetch('/admin/api/v1/providers', { method: 'POST', headers: { 'x-askbar-admin': '1', 'content-type': 'application/json' }, body: JSON.stringify({ name: xss, type: 'openai', base_url: mockUrl, model: xss, api_key: 'sk-audit' }) });
     }, { xss: XSS, mockUrl: `http://127.0.0.1:${mockPort}/v1` });
     await auditChat('audit question', XSS);
     await page.click('#nav [data-tab="audit"]');
@@ -535,7 +535,7 @@ async function waitForPort(port) {
       by_day: [{ day: '2026-11-01', requests: 10, tokens: { in: 100, out: 50, cached: 0 }, cost: 0.1 }, { day: '2026-11-02', requests: 30, tokens: { in: 12245, out: 6739, cached: 2000 }, cost: 1.1345 }],
     };
     const asked = [];
-    await page.route('**/admin/api/audit/stats*', (route) => { asked.push(route.request().url()); route.fulfill({ contentType: 'application/json', body: JSON.stringify(canned) }); });
+    await page.route('**/admin/api/v1/audit/stats*', (route) => { asked.push(route.request().url()); route.fulfill({ contentType: 'application/json', body: JSON.stringify(canned) }); });
     await page.click('#nav [data-tab="providers"]');
     await page.click('#nav [data-tab="audit"]');
     await page.click('#audit-nav [data-sub="overview"]'); // the tab remembers the view it was last on
@@ -563,12 +563,12 @@ async function waitForPort(port) {
     await page.waitForTimeout(200);
     assert.ok(Math.abs(now - since(asked.at(-1)) - 30 * 86400) < 120, 'then the last 30 days');
     // An empty window says so instead of showing zeros.
-    await page.unroute('**/admin/api/audit/stats*');
-    await page.route('**/admin/api/audit/stats*', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ requests: 0, by_status: {}, error_rate: 0, latency_ms: { p50: null, p95: null }, tokens: { in: 0, out: 0, cached: 0 }, cost: 0, cost_unknown_requests: 0, by_provider: [], by_day: [] }) }));
+    await page.unroute('**/admin/api/v1/audit/stats*');
+    await page.route('**/admin/api/v1/audit/stats*', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ requests: 0, by_status: {}, error_rate: 0, latency_ms: { p50: null, p95: null }, tokens: { in: 0, out: 0, cached: 0 }, cost: 0, cost_unknown_requests: 0, by_provider: [], by_day: [] }) }));
     await page.selectOption('#audit-window', '86400');
     await page.waitForSelector('#audit-overview-empty:not([hidden])');
     assert.equal(await page.isHidden('#audit-tiles'), true);
-    await page.unroute('**/admin/api/audit/stats*');
+    await page.unroute('**/admin/api/v1/audit/stats*');
     await page.selectOption('#audit-window', '86400');
   });
   await step('audit requests: a canned list fills the table, filters and load-more ask for the right pages', async () => {
@@ -576,7 +576,7 @@ async function waitForPort(port) {
     const first = Array.from({ length: 25 }, (_, i) => row(100 - i));
     const second = Array.from({ length: 15 }, (_, i) => row(75 - i));
     const asked = [];
-    await page.route('**/admin/api/audit/traces?*', (route) => {
+    await page.route('**/admin/api/v1/audit/traces?*', (route) => {
       const q = new URL(route.request().url()).searchParams;
       asked.push(Object.fromEntries(q));
       let traces = first;
@@ -622,7 +622,7 @@ async function waitForPort(port) {
     await page.waitForFunction(() => document.querySelectorAll('#audit-rows tr').length === 25);
 
     // A row opens its trace (by click or keyboard).
-    await page.route('**/admin/api/audit/traces/*', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ trace_id: route.request().url().split('/').pop(), cost: null, spans: [] }) }));
+    await page.route('**/admin/api/v1/audit/traces/*', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ trace_id: route.request().url().split('/').pop(), cost: null, spans: [] }) }));
     await page.click('#audit-rows tr[data-trace="T099"]');
     assert.equal(await page.getAttribute('#audit-nav [data-sub="trace"]', 'aria-selected'), 'true');
     await page.waitForFunction(() => /T099/.test(document.getElementById('audit-trace-head').textContent));
@@ -630,8 +630,8 @@ async function waitForPort(port) {
     await page.focus('#audit-rows tr[data-trace="T098"]');
     await page.keyboard.press('Enter');
     await page.waitForFunction(() => /T098/.test(document.getElementById('audit-trace-head').textContent));
-    await page.unroute('**/admin/api/audit/traces/*');
-    await page.unroute('**/admin/api/audit/traces?*');
+    await page.unroute('**/admin/api/v1/audit/traces/*');
+    await page.unroute('**/admin/api/v1/audit/traces?*');
   });
   await step('audit trace: the waterfall layout is right for fixed numbers, shows the tree, and copes with a running span', async () => {
     const spans = [
@@ -662,7 +662,7 @@ async function waitForPort(port) {
     // Drawn: the tree, the bars, and details on focus. (Without the running span, whose end is the
     // real clock, so the widths below are exact.)
     const finished = spans.filter((x) => x.status !== 'running');
-    await page.route('**/admin/api/audit/traces/TRACE1', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ trace_id: 'TRACE1', cost: 0.0007, spans: finished }) }));
+    await page.route('**/admin/api/v1/audit/traces/TRACE1', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ trace_id: 'TRACE1', cost: 0.0007, spans: finished }) }));
     await page.click('#nav [data-tab="providers"]');
     await page.click('#nav [data-tab="audit"]');
     await page.evaluate(() => window.askbarAudit.openTrace('TRACE1'));
@@ -684,7 +684,7 @@ async function waitForPort(port) {
     await page.evaluate((s) => window.askbarAudit.renderTrace({ trace_id: 'TRACE2', cost: null, spans: s }), spans);
     assert.equal(await page.locator('#audit-waterfall .span-bar.running').count(), 1);
     assert.equal(await page.locator('#audit-waterfall .span-bar').count(), 5);
-    await page.unroute('**/admin/api/audit/traces/TRACE1');
+    await page.unroute('**/admin/api/v1/audit/traces/TRACE1');
   });
   await step('audit routing: a three-try request shows its tries, who stood in, why each failed, and the providers overall', async () => {
     const attempt = (id, started, provider, retry, status, code, fallbackFrom) => ({ id, parent_id: 'turn', kind: 'attempt', name: 'x', status, started_at: 1000, ended_at: 1001, provider_id: provider, error_code: code, attrs: { started_ms: started, ended_ms: started + 300, latency_ms: 300, retry_index: retry, fallback_from: fallbackFrom || null } });
@@ -698,9 +698,9 @@ async function waitForPort(port) {
       { provider_id: 'p1', requests: 0, attempts: 2, retries: 1, fallbacks: 0, failed_attempts: 2, tokens: { in: 0, out: 0, cached: 0 }, cost: null },
       { provider_id: 'p2', requests: 1, attempts: 1, retries: 0, fallbacks: 1, failed_attempts: 0, tokens: { in: 1, out: 1, cached: 0 }, cost: 0 },
     ], by_day: [], tokens: { in: 1, out: 1, cached: 0 }, latency_ms: {}, ttft_ms: {} };
-    await page.route('**/admin/api/audit/traces/ROUTE1', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ trace_id: 'ROUTE1', cost: 0, spans }) }));
-    await page.route('**/admin/api/audit/stats*', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify(stats) }));
-    await page.route('**/admin/api/audit/provider-health', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ providers: [{ provider_id: 'p1', status: 'auth_failed', since: 1793631845, error_code: 'http_401' }] }) }));
+    await page.route('**/admin/api/v1/audit/traces/ROUTE1', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ trace_id: 'ROUTE1', cost: 0, spans }) }));
+    await page.route('**/admin/api/v1/audit/stats*', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify(stats) }));
+    await page.route('**/admin/api/v1/audit/provider-health', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ providers: [{ provider_id: 'p1', status: 'auth_failed', since: 1793631845, error_code: 'http_401' }] }) }));
     await page.click('#nav [data-tab="providers"]');
     await page.click('#nav [data-tab="audit"]');
     await page.evaluate(() => window.askbarAudit.openTrace('ROUTE1'));
@@ -722,9 +722,9 @@ async function waitForPort(port) {
     // The classes follow the router's own rules.
     const classes = await page.evaluate(() => ['http_401', 'http_403', 'config', 'http_429', 'http_503', 'connect', 'stream', 'http_400', 'http_404', 'timeout', 'kill_switch', null].map((c) => window.askbarAudit.failureClass(c)));
     assert.deepEqual(classes, ['bad credentials', 'bad credentials', 'bad credentials', 'worth retrying', 'worth retrying', 'worth retrying', 'worth retrying', 'refused outright', 'refused outright', 'ran out of time', 'switched off', '']);
-    await page.unroute('**/admin/api/audit/traces/ROUTE1');
-    await page.unroute('**/admin/api/audit/stats*');
-    await page.unroute('**/admin/api/audit/provider-health');
+    await page.unroute('**/admin/api/v1/audit/traces/ROUTE1');
+    await page.unroute('**/admin/api/v1/audit/stats*');
+    await page.unroute('**/admin/api/v1/audit/provider-health');
   });
   await step('audit content: sealed until View, a wrong passphrase shows only the error, the right one shows text that is wiped on close', async () => {
     const spans = [
@@ -733,8 +733,8 @@ async function waitForPort(port) {
       { id: 'sp-gate', parent_id: null, kind: 'gate', name: 'kill_switch', status: 'done', started_at: 1000, ended_at: 1000, sealed: 0, attrs: {} },
     ];
     const opened = [];
-    await page.route('**/admin/api/audit/traces/SEAL1', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ trace_id: 'SEAL1', cost: null, spans }) }));
-    await page.route('**/admin/api/audit/payloads/*/open', (route) => {
+    await page.route('**/admin/api/v1/audit/traces/SEAL1', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ trace_id: 'SEAL1', cost: null, spans }) }));
+    await page.route('**/admin/api/v1/audit/payloads/*/open', (route) => {
       const body = JSON.parse(route.request().postData());
       opened.push({ url: route.request().url(), passphrase: body.passphrase });
       if (body.passphrase !== 'the right passphrase here') return route.fulfill({ status: 403, contentType: 'application/json', body: JSON.stringify({ error: 'That passphrase does not open this content.' }) });
@@ -799,15 +799,15 @@ async function waitForPort(port) {
     await page.keyboard.press('Escape');
     assert.equal(await page.isVisible('#audit-pass-dialog'), false);
     assert.equal(await page.evaluate(() => JSON.stringify([...Object.entries(localStorage), ...Object.entries(sessionStorage)]).includes('passphrase')), false, 'never stored');
-    await page.unroute('**/admin/api/audit/traces/SEAL1');
-    await page.unroute('**/admin/api/audit/payloads/*/open');
+    await page.unroute('**/admin/api/v1/audit/traces/SEAL1');
+    await page.unroute('**/admin/api/v1/audit/payloads/*/open');
   });
   await step('audit access history: rows are listed newest first as text, and a new open adds one', async () => {
     let rows = [
       { id: 2, span_id: 'span-<b>x</b>', key_id: '0011223344556677', opened_at: 1793631845, ok: false },
       { id: 1, span_id: 'span-1', key_id: '0011223344556677', opened_at: 1793631800, ok: true },
     ];
-    await page.route('**/admin/api/audit/access*', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ access: rows }) }));
+    await page.route('**/admin/api/v1/audit/access*', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ access: rows }) }));
     await page.click('#nav [data-tab="providers"]');
     await page.click('#nav [data-tab="audit"]');
     await page.click('#audit-nav [data-sub="content"]');
@@ -821,7 +821,7 @@ async function waitForPort(port) {
     await page.click('#audit-nav [data-sub="content"]');
     await page.waitForSelector('#audit-access-empty:not([hidden])');
     assert.equal(await page.isHidden('#audit-access'), true);
-    await page.unroute('**/admin/api/audit/access*');
+    await page.unroute('**/admin/api/v1/audit/access*');
   });
   await step('audit settings: the key id and retention show, bad values give their messages, and rotating works from the page', async () => {
     await page.click('#nav [data-tab="providers"]');

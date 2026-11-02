@@ -83,7 +83,7 @@ admin_login() { # python lines that sign in (or run first-run setup), used befor
   cat <<EOF
 s, _ = call("POST", "/admin/login", {"password": "$PW"})
 if s != 204:
-    call("POST", "/admin/api/setup/password", {"password": "$PW"})
+    call("POST", "/admin/api/v1/setup/password", {"password": "$PW"})
     s, _ = call("POST", "/admin/login", {"password": "$PW"})
 assert s == 204 or s == 200, "cannot sign in to the admin"
 EOF
@@ -92,7 +92,7 @@ EOF
 echo "== 1. The admin works with the server stopped"
 docker stop "$SERVER" >/dev/null
 out=$(admin_script "$(admin_login)
-s, body = call('GET', '/admin/api/status')
+s, body = call('GET', '/admin/api/v1/status')
 print(s, 'offline' if '\"server_online\":false' in body.replace(' ', '') else 'online?')
 s, _ = call('GET', '/admin/')
 print(s)" 2>&1)
@@ -178,8 +178,8 @@ fi
 # failed open, which is the case that would be easiest to log by mistake.
 LOGPASS="isolation-check-passphrase-$(head -c 6 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 admin_script "$(admin_login)
-call('POST', '/admin/api/audit/payloads/no-such-span/open', {'passphrase': '$LOGPASS'})
-call('POST', '/admin/api/audit/rotate-key', {'current': '$LOGPASS', 'new': '$LOGPASS-new', 'confirm': '$LOGPASS-new'})" >/dev/null 2>&1
+call('POST', '/admin/api/v1/audit/payloads/no-such-span/open', {'passphrase': '$LOGPASS'})
+call('POST', '/admin/api/v1/audit/rotate-key', {'current': '$LOGPASS', 'new': '$LOGPASS-new', 'confirm': '$LOGPASS-new'})" >/dev/null 2>&1
 docker logs "$ADMIN" 2>&1 | grep -q "$LOGPASS" && fail "the admin's logs contain a passphrase" || pass "the admin's logs contain no passphrase after open and rotate attempts"
 docker logs "$SERVER" 2>&1 | grep -q "$LOGPASS" && fail "the server's logs contain a passphrase" || pass "the server's logs contain no passphrase"
 
@@ -210,9 +210,9 @@ print(data.decode().split('\r\n\r\n', 1)[1])
 }
 set_network() { # allowlist_enabled(true|false)
   admin_script "$(admin_login)
-s, body = call('PUT', '/admin/api/network', {'tls_enabled': True, 'hostname': 'askbar.isolation.invalid', 'admin_cidr': '10.0.0.0/8', 'acme_staging': True, 'allowlist_enabled': $1, 'cloudflare_token': 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN'})
+s, body = call('PUT', '/admin/api/v1/network', {'tls_enabled': True, 'hostname': 'askbar.isolation.invalid', 'admin_cidr': '10.0.0.0/8', 'acme_staging': True, 'allowlist_enabled': $1, 'cloudflare_token': 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN'})
 assert s == 200, (s, body)
-s, body = call('POST', '/admin/api/network/apply')
+s, body = call('POST', '/admin/api/v1/network/apply')
 print(s, 'ok' if '\"ok\":true' in body.replace(' ', '') else body)"
 }
 out=$(set_network True 2>&1); printf '%s' "$out" | tail -1 | grep -q '^200 ok' && pass "allowlist on: Caddy took the configuration" || fail "allowlist on: $out"
@@ -262,15 +262,15 @@ docker exec "$ADMIN" test -e /caddy-secrets/cf_token \
 MARK="sk-isolation-$(head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 out=$(admin_script "$(admin_login)
 import tarfile, io, base64, json
-s, body = call('POST', '/admin/api/providers', {'name': 'iso-$(head -c 6 /dev/urandom | od -An -tx1 | tr -d ' \n')', 'type': 'openai', 'base_url': 'http://mock-llm:8765/v1', 'model': 'm', 'api_key': '$MARK'})
+s, body = call('POST', '/admin/api/v1/providers', {'name': 'iso-$(head -c 6 /dev/urandom | od -An -tx1 | tr -d ' \n')', 'type': 'openai', 'base_url': 'http://mock-llm:8765/v1', 'model': 'm', 'api_key': '$MARK'})
 assert s == 201, (s, body)
 provider_id = json.loads(body)['id']
-s, body = call('POST', '/admin/api/pair', {'name': 'iso client'})
+s, body = call('POST', '/admin/api/v1/pair', {'name': 'iso client'})
 assert s == 200, (s, body)
 pairing = json.loads(body)['pairing']
 b = pairing.split(':', 1)[1]
 code = json.loads(base64.urlsafe_b64decode(b + '=' * (-len(b) % 4)))['code']
-c.request('GET', '/admin/api/backup', headers={'x-askbar-admin': '1', 'cookie': cookie})
+c.request('GET', '/admin/api/v1/backup', headers={'x-askbar-admin': '1', 'cookie': cookie})
 r = c.getresponse(); raw = r.read()
 assert r.status == 200, r.status
 names = sorted(m.name for m in tarfile.open(fileobj=io.BytesIO(raw)).getmembers())
@@ -278,7 +278,7 @@ blob = b''.join(tarfile.open(fileobj=io.BytesIO(raw)).extractfile(n).read() for 
 print('names', ','.join(names))
 for label, needle in (('provider key', '$MARK'), ('pair code', code), ('password hash', '\$argon2')):
     print(label, 'FOUND' if needle.encode() in blob else 'absent')
-call('DELETE', '/admin/api/providers/' + provider_id)" 2>&1)
+call('DELETE', '/admin/api/v1/providers/' + provider_id)" 2>&1)
 printf '%s\n' "$out" | grep -q '^names .*admin.db.*server.db' && pass "the backup holds admin.db and server.db" || fail "backup contents: $out"
 for what in "provider key" "pair code" "password hash"; do
   printf '%s\n' "$out" | grep -q "^$what absent" && pass "the backup holds no $what" || fail "the backup holds the $what ($out)"
