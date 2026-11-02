@@ -6,6 +6,7 @@
 use crate::llm::{stream_chat_report, ChatMessage, StreamOutcome, Usage};
 use crate::auth::DeviceAuth;
 use crate::chat::{sse_event, sse_event_with_id};
+use crate::audit::{Kind, SpanFinish, SpanStart};
 use crate::db::NewGeneration;
 use crate::store;
 use crate::AppState;
@@ -251,6 +252,17 @@ enum Outcome {
     Error(String),
 }
 
+/// A short stable code for why a request failed, for the audit trail.
+fn error_code(e: &crate::llm::ChatError) -> String {
+    use crate::llm::ChatError;
+    match e {
+        ChatError::Config(_) => "config".into(),
+        ChatError::Connect { .. } => "connect".into(),
+        ChatError::Api { status, .. } => format!("http_{status}"),
+        ChatError::Stream(_) => "stream".into(),
+    }
+}
+
 /// "Timed out after 5 minutes", or in seconds when the limit is not a whole number of minutes.
 fn timed_out_message(timeout: Duration) -> String {
     let secs = timeout.as_secs() + u64::from(timeout.subsec_nanos() > 0);
@@ -275,6 +287,9 @@ struct Finisher {
     text: String,
     /// What the provider (or an estimate) says the reply used; recorded when the row ends.
     usage: Option<Usage>,
+    /// The audit span for this generation as a whole, and why it failed if it did.
+    turn_span: String,
+    error_code: Option<String>,
     saved: bool,
     /// Progress is flushed to the row about once a second, or every 2 KB.
     last_flush: Instant,
@@ -308,7 +323,10 @@ impl Finisher {
         let db = self.state.db.lock().unwrap_or_else(|e| e.into_inner());
         // Something else may have ended this generation already (shutdown, or the conversation
         // was deleted); then the reply has been dealt with and must not be written twice.
-        if !matches!(db.get_generation(&self.user_id, &self.id), Ok(Some(g)) if g.status == "running") {
+        let row_status = db.get_generation(&self.user_id, &self.id).ok().flatten().map(|g| g.status);
+        if row_status.as_deref() != Some("running") {
+            // Its row ended some other way; the audit trail says the same.
+            self.finish_turn_span(row_status.as_deref().unwrap_or("cancelled"));
             return;
         }
         let message_id = if self.text.trim().is_empty() {
@@ -317,6 +335,7 @@ impl Finisher {
             db.add_message(&self.user_id, &self.conversation_id, "assistant", &self.text).ok()
         };
         let _ = db.finalize_generation(&self.id, status, &self.text, error, message_id.as_deref());
+        self.finish_turn_span(status);
         // One usage row per generation that has numbers, whatever way it ended.
         if let Some(u) = self.usage {
             let _ = db.conn().execute(
@@ -333,6 +352,17 @@ impl Finisher {
                 ],
             );
         }
+    }
+
+    fn finish_turn_span(&self, status: &str) {
+        let mut f = SpanFinish::new(&self.turn_span, status);
+        f.error_code = self.error_code.clone();
+        if let Some(u) = self.usage {
+            f.tokens_in = u.input;
+            f.tokens_out = u.output;
+            f.tokens_cached = u.cache_read;
+        }
+        self.state.audit.finish_span(f);
     }
 
     /// Saves the reply, then tells subscribers, so a client that has seen the end can read the message.
@@ -456,9 +486,14 @@ fn spawn_run(
 ) {
     let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
     live.set_cancel(cancel_tx);
+    let turn_span = state.audit.start_span(
+        SpanStart::new(id, Kind::Turn, "chat").who(user_id, device_id).attrs(&serde_json::json!({ "conversation_id": conversation_id })),
+    );
     let mut fin = Finisher {
         state: state.clone(),
         live,
+        turn_span,
+        error_code: None,
         id: id.to_string(),
         user_id: user_id.to_string(),
         device_id: device_id.map(str::to_string),
@@ -504,8 +539,14 @@ fn spawn_run(
                 },
                 report.usage,
             ),
-            Some(Err(e)) => (Outcome::Error(e.error.to_string()), e.report.usage),
-            None => (Outcome::TimedOut(timed_out_message(timeout)), None),
+            Some(Err(e)) => {
+                fin.error_code = Some(error_code(&e.error));
+                (Outcome::Error(e.error.to_string()), e.report.usage)
+            }
+            None => {
+                fin.error_code = Some("timeout".into());
+                (Outcome::TimedOut(timed_out_message(timeout)), None)
+            }
         };
         fin.usage = usage;
         fin.finish(outcome);

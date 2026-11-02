@@ -52,7 +52,16 @@ fn read(dir: &Path) -> Connection {
     Connection::open(dir.join("audit.db")).expect("audit.db exists")
 }
 
-fn start_mock() -> (std::process::Child, u16) {
+/// Kills the mock when dropped, so a failing test cannot leave it running.
+struct Mock(std::process::Child);
+impl Drop for Mock {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+fn start_mock() -> (Mock, u16) {
     use std::io::{BufRead, BufReader};
     use std::process::{Command, Stdio};
     let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
@@ -61,33 +70,71 @@ fn start_mock() -> (std::process::Child, u16) {
     let mut out = BufReader::new(child.stdout.take().unwrap());
     let mut line = String::new();
     out.read_line(&mut line).unwrap();
-    (child, port)
+    // Keep reading: the mock logs every request, and a closed pipe would break it.
+    std::thread::spawn(move || for _ in out.lines() {});
+    (Mock(child), port)
 }
 
 #[tokio::test]
-#[ignore = "enabled in 4.7 and 4.8"]
-async fn a_finished_generation_leaves_one_turn_and_one_attempt_span() {
-    let (mut mock, port) = start_mock();
+async fn a_finished_generation_leaves_one_turn_span_with_its_final_status() {
+    let (_mock, port) = start_mock();
     let (state, dir) = audit_state(port);
     let trace = run_chat(&state, "hello").await;
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await; // the writer is asynchronous
+    state.audit.flush().await;
     let db = read(&dir);
-    let count = |kind: &str| -> i64 {
-        db.query_row("SELECT COUNT(*) FROM spans WHERE trace_id = ?1 AND kind = ?2", [&trace, kind], |r| r.get(0)).unwrap()
-    };
-    assert_eq!((count("turn"), count("attempt")), (1, 1));
-    let status: String = db.query_row("SELECT status FROM spans WHERE trace_id = ?1 AND kind = 'turn'", [&trace], |r| r.get(0)).unwrap();
-    assert_eq!(status, "done");
-    let _ = mock.kill();
+    let (n, status, user, device, error_code): (i64, String, Option<String>, Option<String>, Option<String>) = db
+        .query_row(
+            "SELECT COUNT(*), MAX(status), MAX(user_id), MAX(device_id), MAX(error_code) FROM spans WHERE trace_id = ?1 AND kind = 'turn'",
+            [&trace],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+        )
+        .unwrap();
+    assert_eq!((n, status.as_str(), error_code), (1, "done", None));
+    assert!(user.is_some() && device.is_some(), "who it was for");
+    let (parent, ended): (Option<String>, Option<i64>) =
+        db.query_row("SELECT parent_id, ended_at FROM spans WHERE trace_id = ?1 AND kind = 'turn'", [&trace], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+    assert!(parent.is_none() && ended.is_some());
+}
+
+#[tokio::test]
+async fn a_failed_generation_ends_its_turn_span_with_an_error_code() {
+    let (_mock, port) = start_mock();
+    let (state, dir) = audit_state(port);
+    let trace = run_chat(&state, "please fail").await;
+    state.audit.flush().await;
+    let (status, code): (String, Option<String>) = read(&dir)
+        .query_row("SELECT status, error_code FROM spans WHERE trace_id = ?1 AND kind = 'turn'", [&trace], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap();
+    assert_eq!((status.as_str(), code.as_deref()), ("error", Some("http_401")));
+}
+
+#[tokio::test]
+#[ignore = "enabled in 4.8"]
+async fn a_finished_generation_leaves_one_attempt_span_under_its_turn() {
+    let (_mock, port) = start_mock();
+    let (state, dir) = audit_state(port);
+    let trace = run_chat(&state, "hello").await;
+    state.audit.flush().await;
+    let db = read(&dir);
+    let n: i64 = db.query_row("SELECT COUNT(*) FROM spans WHERE trace_id = ?1 AND kind = 'attempt'", [&trace], |r| r.get(0)).unwrap();
+    assert_eq!(n, 1);
+    let (parent, turn): (String, String) = db
+        .query_row(
+            "SELECT a.parent_id, t.id FROM spans a JOIN spans t ON t.trace_id = a.trace_id AND t.kind = 'turn' WHERE a.trace_id = ?1 AND a.kind = 'attempt'",
+            [&trace],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(parent, turn);
 }
 
 #[tokio::test]
 #[ignore = "enabled in 4.8"]
 async fn audit_db_contains_none_of_the_prompt_or_reply_text() {
-    let (mut mock, port) = start_mock();
+    let (_mock, port) = start_mock();
     let (state, dir) = audit_state(port);
     run_chat(&state, "SECRET-PROMPT-MARKER-7731 please").await;
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    state.audit.flush().await;
     // The database file and its write-ahead log, byte for byte.
     for name in ["audit.db", "audit.db-wal"] {
         let Ok(bytes) = std::fs::read(dir.join(name)) else { continue };
@@ -96,7 +143,6 @@ async fn audit_db_contains_none_of_the_prompt_or_reply_text() {
         assert!(!hay.contains("Anything else?"), "{name} holds the reply (the mock's reply ends with this)");
         assert!(!hay.contains("quick answer with"), "{name} holds the reply");
     }
-    let _ = mock.kill();
 }
 
 #[test]
