@@ -34,6 +34,11 @@ fn now() -> i64 {
 }
 
 impl Outbox {
+    /// An outbox that is never saved to disk (tests, and the default until a path is given).
+    pub fn in_memory() -> Outbox {
+        Outbox { path: PathBuf::new(), entries: Mutex::new(Vec::new()) }
+    }
+
     /// Loads the file at `path`. A missing file is an empty outbox; so is one that cannot be
     /// read as an outbox (it is left alone until the next change replaces it).
     pub fn load(path: PathBuf) -> Outbox {
@@ -84,6 +89,9 @@ impl Outbox {
     /// Writes to a temporary file and renames it over the real one, so a crash cannot leave half a file.
     /// Failing to save is not fatal: the message is still in memory and is being sent.
     fn save(&self, entries: &[OutboxEntry]) {
+        if self.path.as_os_str().is_empty() {
+            return;
+        }
         let write = || -> std::io::Result<()> {
             if let Some(dir) = self.path.parent() {
                 std::fs::create_dir_all(dir)?;

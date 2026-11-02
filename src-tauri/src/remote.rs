@@ -2,8 +2,9 @@
 
 use crate::types::{ClientStatus, Emit, PendingReply, ProviderChoice, Settings, StreamEvent};
 use crate::client_config::{check_server_url, merge_ui, ClientConfig};
+use crate::outbox::{Outbox, OutboxEntry};
 use crate::tokens::TokenStore;
-use askbar_proto::{ChatEvent, ChatRequest, Conversation, ConversationDetail, DisplaySettings, Message, Prefs, ProviderInfo, SseParser};
+use askbar_proto::{ChatEvent, ChatRequest, Conversation, ConversationDetail, DisplaySettings, Message, PendingGeneration, Prefs, ProviderInfo, SseParser};
 use futures_util::{FutureExt, StreamExt};
 use reqwest::{Method, RequestBuilder, StatusCode, Url};
 use std::path::{Path, PathBuf};
@@ -24,6 +25,8 @@ struct Inner {
     tokens: Box<dyn TokenStore>,
     /// One "second" of the resume backoff; tests shrink it.
     backoff_unit: Duration,
+    /// Messages sent and not yet seen by the server.
+    outbox: Outbox,
 }
 
 /// Wait before resume attempt `n` (from 0): 1, 2, 4, 8, 16, then 30 seconds.
@@ -140,9 +143,17 @@ impl Remote {
                 .user_agent(format!("askbar/{VERSION}"))
                 .build()
                 .map_err(|e| e.to_string())?;
-            Ok(Inner { cfg: Mutex::new(cfg), path, base, http, tokens, backoff_unit: Duration::from_secs(1) })
+            Ok(Inner { cfg: Mutex::new(cfg), path, base, http, tokens, backoff_unit: Duration::from_secs(1), outbox: Outbox::in_memory() })
         });
         Remote { inner }
+    }
+
+    /// Keeps the outbox in `outbox` (a file) instead of in memory only.
+    pub fn with_outbox(mut self, outbox: Outbox) -> Remote {
+        if let Ok(i) = self.inner.as_mut() {
+            i.outbox = outbox;
+        }
+        self
     }
 
     /// Tests only: make the resume backoff run in milliseconds.
@@ -486,18 +497,89 @@ impl Remote {
         }
     }
 
+    /// Sends a new message. It goes into the outbox first and leaves it when the server's `meta`
+    /// arrives, so whatever happens before that, the text is not lost.
     pub async fn ask(&self, conversation_id: Option<String>, text: String, cancel: oneshot::Receiver<()>, emit: Emit<'_>) {
-        let fail = |message: String| emit(StreamEvent::Error { message });
         let i = match self.inner() {
             Ok(i) => i,
-            Err(e) => return fail(e),
+            Err(e) => return emit(StreamEvent::Error { message: e }),
         };
-        let provider = match i.active_provider().await {
-            Ok(p) => p,
-            Err(e) => return fail(e),
+        // If the provider cannot be looked up (server unreachable), the entry still keeps the text;
+        // sending it later looks the provider up again.
+        let provider = i.active_provider().await;
+        let entry = i.outbox.add(conversation_id, provider.as_deref().unwrap_or(""), &text);
+        if let Err(e) = provider {
+            return emit(StreamEvent::Error { message: e });
+        }
+        self.send_entry(entry, cancel, emit).await;
+    }
+
+    /// Sends an outbox entry again, with the same `client_request_id`, so the server can tell a
+    /// repeat from a new message.
+    pub async fn resend(&self, client_request_id: String, cancel: oneshot::Receiver<()>, emit: Emit<'_>) {
+        let i = match self.inner() {
+            Ok(i) => i,
+            Err(e) => return emit(StreamEvent::Error { message: e }),
+        };
+        match i.outbox.get(&client_request_id) {
+            Some(entry) => self.send_entry(entry, cancel, emit).await,
+            None => emit(StreamEvent::Error { message: "That message is no longer waiting to be sent.".into() }),
+        }
+    }
+
+    /// The messages still waiting to be sent: the outbox, less those the server already has
+    /// (a running or queued generation carrying the same request id), which are dropped from it.
+    pub async fn unsent(&self) -> Result<Vec<OutboxEntry>, String> {
+        let i = self.inner()?;
+        if i.outbox.list().is_empty() {
+            return Ok(Vec::new());
+        }
+        let req = i.request(Method::GET, "/api/v1/generations")?.query(&[("status", "running")]).timeout(REQUEST_TIMEOUT);
+        let known: Vec<PendingGeneration> =
+            i.send(req).await?.json().await.map_err(|e| format!("The server sent an unexpected reply: {e}"))?;
+        for g in known {
+            if let Some(id) = g.client_request_id {
+                i.outbox.remove(&id);
+            }
+        }
+        Ok(i.outbox.list())
+    }
+
+    /// Throws one waiting message away.
+    pub fn discard_unsent(&self, client_request_id: &str) -> Result<bool, String> {
+        Ok(self.inner()?.outbox.remove(client_request_id))
+    }
+
+    async fn send_entry(&self, entry: OutboxEntry, cancel: oneshot::Receiver<()>, emit: Emit<'_>) {
+        let i = match self.inner() {
+            Ok(i) => i,
+            Err(e) => return emit(StreamEvent::Error { message: e }),
+        };
+        // The server has it once `meta` arrives; from then on it is the server's to keep.
+        let forget = entry.client_request_id.clone();
+        let emit = |e: StreamEvent| {
+            if matches!(e, StreamEvent::Started { .. }) {
+                i.outbox.remove(&forget);
+            }
+            emit(e)
+        };
+        let emit: Emit<'_> = &emit;
+        let fail = |message: String| emit(StreamEvent::Error { message });
+        let provider = if entry.provider.is_empty() {
+            match i.active_provider().await {
+                Ok(p) => p,
+                Err(e) => return fail(e),
+            }
+        } else {
+            entry.provider.clone()
         };
         let req = match i.request(Method::POST, "/api/v1/chat") {
-            Ok(r) => r.header("accept", "text/event-stream").json(&ChatRequest { conversation_id, provider, text, client_request_id: None }),
+            Ok(r) => r.header("accept", "text/event-stream").json(&ChatRequest {
+                conversation_id: entry.conversation_id.clone(),
+                provider,
+                text: entry.text.clone(),
+                client_request_id: Some(entry.client_request_id.clone()),
+            }),
             Err(e) => return fail(e),
         };
         // Stop does not drop the request: it asks the server to stop the reply, which needs the
@@ -619,6 +701,10 @@ mod tests {
         resumes: Mutex<Vec<String>>,
         /// The id of every cancel request.
         cancels: Mutex<Vec<String>>,
+        /// The JSON body of every chat request.
+        chats: Mutex<Vec<serde_json::Value>>,
+        /// What `GET /api/v1/generations?status=running` answers.
+        running: Mutex<String>,
     }
 
     struct Fake {
@@ -630,7 +716,7 @@ mod tests {
     /// each resume request in turn with a status and a body (the last one repeats).
     async fn fake_server(resume: Vec<(u16, String)>) -> Fake {
         use axum::{extract::{Path as P, Query, State}, http::{header, StatusCode as S}, routing::{get, post}, Router};
-        let seen = Arc::new(Seen { plan: Mutex::new(resume), ..Default::default() });
+        let seen = Arc::new(Seen { plan: Mutex::new(resume), running: Mutex::new("[]".into()), ..Default::default() });
         let first: String = [
             (None, "meta", r#"{"event":"meta","conversation_id":"c1","generation_id":"g1"}"#),
             (Some(1), "delta", r#"{"event":"delta","text":"a"}"#),
@@ -642,7 +728,22 @@ mod tests {
         .collect();
         let app = Router::new()
             .route("/api/v1/me/prefs", get(|| async { r#"{"active_provider_id":"p"}"# }))
-            .route("/api/v1/chat", post(move || { let b = first.clone(); async move { ([(header::CONTENT_TYPE, "text/event-stream")], b) } }))
+            .route(
+                "/api/v1/chat",
+                post(move |State(seen): State<Arc<Seen>>, axum::Json(body): axum::Json<serde_json::Value>| {
+                    let b = first.clone();
+                    async move {
+                        seen.chats.lock().unwrap().push(body);
+                        ([(header::CONTENT_TYPE, "text/event-stream")], b)
+                    }
+                }),
+            )
+            .route(
+                "/api/v1/generations",
+                get(|State(seen): State<Arc<Seen>>| async move {
+                    ([(header::CONTENT_TYPE, "application/json")], seen.running.lock().unwrap().clone())
+                }),
+            )
             .route(
                 "/api/v1/generations/{id}/stream",
                 get(|State(seen): State<Arc<Seen>>, Query(q): Query<std::collections::HashMap<String, String>>| async move {
@@ -825,6 +926,65 @@ mod tests {
         assert!(b.load_pending(conversation.clone()).await.unwrap().is_empty());
         let msgs = b.load_conversation(conversation).await.unwrap();
         assert_eq!(msgs.iter().map(|m| m.role.as_str()).collect::<Vec<_>>(), ["user", "assistant"], "the removed message left no trace");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn unsent_messages_the_server_already_has_are_dropped_and_the_rest_resent_with_their_request_id() {
+        let fake = fake_server(vec![(200, sse("done", None, r#"{"event":"done"}"#))]).await;
+        let remote = remote_for(&fake.url, Some("t"), PathBuf::new()).with_backoff_unit(Duration::from_millis(2));
+        let i = remote.inner().unwrap();
+        let had = i.outbox.add(None, "p", "the server has this one");
+        let missing = i.outbox.add(Some("c5".into()), "p", "this one never arrived");
+        *fake.seen.running.lock().unwrap() = format!(
+            r#"[{{"generation_id":"g7","conversation_id":"c1","status":"queued","text":"","prompt":"x","client_request_id":"{}"}},
+                {{"generation_id":"g8","conversation_id":"c1","status":"running","text":"","prompt":"y"}}]"#,
+            had.client_request_id
+        );
+
+        let unsent = remote.unsent().await.unwrap();
+        assert_eq!(unsent, [missing.clone()], "only the message the server lacks is left");
+        assert_eq!(remote.inner().unwrap().outbox.list(), [missing.clone()], "and the other left the outbox for good");
+
+        // Sending it again carries its own request id (and nothing else changes), and it leaves
+        // the outbox once the server says it has it.
+        let events = Mutex::new(Vec::new());
+        let (_tx, rx) = oneshot::channel();
+        remote.resend(missing.client_request_id.clone(), rx, &|e| events.lock().unwrap().push(e)).await;
+        let chats = fake.seen.chats.lock().unwrap().clone();
+        assert_eq!(chats.len(), 1);
+        assert_eq!(chats[0]["client_request_id"], missing.client_request_id.as_str());
+        assert_eq!((chats[0]["text"].as_str(), chats[0]["conversation_id"].as_str(), chats[0]["provider"].as_str()), (Some("this one never arrived"), Some("c5"), Some("p")));
+        assert!(remote.unsent().await.unwrap().is_empty(), "the server took it (meta arrived)");
+
+        // An id that is not in the outbox says so.
+        let events2 = Mutex::new(Vec::new());
+        let (_tx2, rx2) = oneshot::channel();
+        remote.resend("nope".into(), rx2, &|e| events2.lock().unwrap().push(e)).await;
+        assert!(matches!(events2.into_inner().unwrap().last(), Some(StreamEvent::Error { message }) if message.contains("no longer waiting")));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_new_message_is_kept_until_the_server_takes_it() {
+        // A server that is not there at all: the text must stay in the outbox.
+        let remote = remote_for("http://127.0.0.1:9", Some("t"), PathBuf::new());
+        let events = Mutex::new(Vec::new());
+        let (_tx, rx) = oneshot::channel();
+        remote.ask(None, "do not lose me".into(), rx, &|e| events.lock().unwrap().push(e)).await;
+        assert!(matches!(events.into_inner().unwrap().last(), Some(StreamEvent::Error { .. })));
+        let kept = remote.inner().unwrap().outbox.list();
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].text, "do not lose me");
+        assert_eq!(remote.discard_unsent(&kept[0].client_request_id), Ok(true));
+        assert!(remote.inner().unwrap().outbox.list().is_empty());
+
+        // A server that takes it: the entry is gone after meta.
+        let fake = fake_server(vec![(200, sse("done", None, r#"{"event":"done"}"#))]).await;
+        let remote = remote_for(&fake.url, Some("t"), PathBuf::new());
+        let (_tx, rx) = oneshot::channel();
+        remote.ask(None, "take me".into(), rx, &|_| {}).await;
+        assert!(remote.inner().unwrap().outbox.list().is_empty());
+        let chats = fake.seen.chats.lock().unwrap().clone();
+        assert!(chats[0]["client_request_id"].as_str().is_some_and(|id| id.len() == 36), "every send carries a request id");
     }
 
     #[test]

@@ -50,6 +50,22 @@ impl From<askbar_proto::PendingGeneration> for PendingReply {
     }
 }
 
+/// A message this device sent and the server has not taken yet.
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct UnsentMessage {
+    pub client_request_id: String,
+    pub conversation_id: Option<String>,
+    pub text: String,
+    pub created_at: i64,
+}
+
+impl From<crate::outbox::OutboxEntry> for UnsentMessage {
+    fn from(e: crate::outbox::OutboxEntry) -> UnsentMessage {
+        UnsentMessage { client_request_id: e.client_request_id, conversation_id: e.conversation_id, text: e.text, created_at: e.created_at }
+    }
+}
+
 /// Something wrong between this client and its backend, with a way forward in the UI.
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct ClientStatus {
