@@ -23,6 +23,7 @@ url = "2"
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 askbar-proto = { path = "../askbar-proto" }
 opener = { version = "0.8", features = ["reveal"] }
+uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
 askbar-server = { path = "../askbar-server" }

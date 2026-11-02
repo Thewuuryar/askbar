@@ -4,6 +4,8 @@
 mod client_config;
 mod remote;
 mod tokens;
+#[allow(dead_code)] // wired into ask in step 1.22
+mod outbox;
 mod types;
 
 use askbar_proto::{Conversation, Message};
