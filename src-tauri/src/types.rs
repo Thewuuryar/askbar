@@ -31,6 +31,25 @@ pub enum StreamEvent {
     Error { message: String },
 }
 
+/// A reply that has not finished: running, or a message waiting its turn behind one.
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingReply {
+    pub generation_id: String,
+    /// "running" or "queued".
+    pub status: String,
+    /// The reply so far, as last saved by the server.
+    pub text: String,
+    /// The question; for a queued message it is not in the conversation yet.
+    pub prompt: String,
+}
+
+impl From<askbar_proto::PendingGeneration> for PendingReply {
+    fn from(g: askbar_proto::PendingGeneration) -> PendingReply {
+        PendingReply { generation_id: g.generation_id, status: g.status, text: g.text, prompt: g.prompt }
+    }
+}
+
 /// Something wrong between this client and its backend, with a way forward in the UI.
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct ClientStatus {

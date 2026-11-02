@@ -268,6 +268,7 @@
   }
 
   function clearThread() {
+    clearWaiting();
     state.messages = [];
     el.thread.textContent = '';
     state.pinned = true;
@@ -286,18 +287,10 @@
     syncChrome();
   }
 
-  async function send() {
-    const text = el.input.value.trim();
-    if (!text || state.streaming) return;
-    el.input.value = '';
-    autosize();
-    hideNotice();
-    state.pinned = true;
-
-    addMessage('user', text);
-    const reply = addMessage('assistant', '', { streaming: true });
+  // Shows one reply as it streams in. `start(channel)` begins the stream (a new send, or joining
+  // one that is already running on the server) and returns the command's promise.
+  async function streamInto(reply, start) {
     setStreaming(true);
-
     const channel = new Channel();
     await new Promise((resolve) => {
       let finished = false;
@@ -328,7 +321,7 @@
         }
       };
 
-      invoke('ask', { conversationId: state.convId, text, onEvent: channel })
+      start(channel)
         .then(() => setTimeout(finish, 1500)) // terminal event normally arrives first
         .catch((e) => {
           if (!reply.content.trim()) removeMessage(reply);
@@ -343,6 +336,88 @@
     setStreaming(false);
     refreshHistory();
     el.input.focus();
+    syncPending(); // messages that were waiting behind this reply may be running now
+  }
+
+  async function send() {
+    const text = el.input.value.trim();
+    if (!text || state.streaming) return;
+    el.input.value = '';
+    autosize();
+    hideNotice();
+    state.pinned = true;
+
+    addMessage('user', text);
+    const reply = addMessage('assistant', '', { streaming: true });
+    await streamInto(reply, (channel) => invoke('ask', { conversationId: state.convId, text, onEvent: channel }));
+  }
+
+  // ----------------------------------------------- replies still going on the server
+
+  let waiting = [];       // rows for messages queued behind a running reply
+  let pendingTimer = null;
+
+  function clearWaiting() {
+    for (const w of waiting) w.remove();
+    waiting = [];
+    clearTimeout(pendingTimer);
+    pendingTimer = null;
+  }
+
+  function addWaiting(p) {
+    const node = document.createElement('div');
+    node.className = 'msg user waiting';
+    node.dataset.generation = p.generationId;
+    node.style.opacity = '0.6';
+    const body = document.createElement('div');
+    body.className = 'body';
+    body.textContent = p.prompt;
+    const note = document.createElement('div');
+    note.className = 'wait-note';
+    note.textContent = 'Waiting for the reply above to finish';
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'text-btn del-queued';
+    del.textContent = 'Remove';
+    del.setAttribute('aria-label', 'Remove this waiting message');
+    del.addEventListener('click', async () => {
+      del.disabled = true;
+      try { await invoke('cancel_generation', { id: p.generationId }); } catch (e) { showNotice(String(e)); }
+      node.remove();
+      waiting = waiting.filter((w) => w !== node);
+      syncPending();
+    });
+    node.append(body, note, del);
+    el.thread.appendChild(node);
+    waiting.push(node);
+  }
+
+  // Looks at what the server is still doing in the open conversation: joins the reply that is
+  // running, and lists the messages waiting behind it with a way to remove each.
+  async function syncPending() {
+    const id = state.convId;
+    if (!id || state.streaming) return;
+    let pending;
+    try { pending = await invoke('load_pending', { id }); } catch (_) { return; }
+    if (id !== state.convId || state.streaming) return;
+    clearWaiting();
+    const running = pending.find((p) => p.status === 'running');
+    if (running) {
+      state.pinned = true;
+      // A message that waited has just started: its question is stored now, but not shown yet.
+      const last = state.messages[state.messages.length - 1];
+      if (!last || last.role !== 'user') addMessage('user', running.prompt);
+      const reply = addMessage('assistant', '', { streaming: true });
+      for (const p of pending) if (p.status === 'queued') addWaiting(p);
+      el.thread.hidden = false;
+      layout();
+      streamInto(reply, (channel) => invoke('attach', { generationId: running.generationId, onEvent: channel }));
+      return;
+    }
+    const queued = pending.filter((p) => p.status === 'queued');
+    for (const p of queued) addWaiting(p);
+    // A queued message starts a moment after the reply before it ends; look again until it does.
+    if (queued.length) pendingTimer = setTimeout(syncPending, 2000);
   }
 
   function cancel() {
@@ -449,6 +524,7 @@
     el.thread.scrollTop = el.thread.scrollHeight;
     renderHistory();
     el.input.focus();
+    syncPending();
   }
 
   function newChat() {
@@ -560,6 +636,7 @@
     try { await refreshBootstrap(); } catch (_) { /* keep the previous settings */ }
     checkStatus();
     if (state.historyOpen) refreshHistory();
+    syncPending();
     el.input.focus();
     el.input.select();
     layout();

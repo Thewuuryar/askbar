@@ -256,6 +256,70 @@ async function waitIdle(page) {
     assert.equal((await calls(page, 'cancel_ask')).length, 2);
   });
 
+  // ------------------------------------------------- replies still running on the server
+  {
+    const p2 = await open(browser);
+    await p2.evaluate(() => {
+      window.__db.convs.push({
+        id: '7', title: 'Long question', updated_at: 999, messages: [{ id: 'm1', role: 'user', content: 'Long question', created_at: 1 }],
+        pending: [
+          { generationId: 'g1', status: 'running', prompt: 'Long question', replyText: 'Running reply text from the server. '.repeat(3), slow: true },
+          { generationId: 'g2', status: 'queued', prompt: 'Waiting question', replyText: 'Answer to the waiting question.' },
+          { generationId: 'g3', status: 'queued', prompt: 'Unwanted question' },
+        ],
+      });
+      window.__db.nextConv = 8;
+    });
+
+    await step('opening a conversation joins its running reply and lists the waiting messages', async () => {
+      await p2.click('#history-toggle');
+      await p2.locator('.conv .open', { hasText: 'Long question' }).click();
+      await p2.waitForSelector('#stop:not([hidden])');
+      assert.deepEqual((await calls(p2, 'attach')).map((a) => a.generationId), ['g1']);
+      assert.deepEqual(await calls(p2, 'load_pending'), [{ id: '7' }].concat((await calls(p2, 'load_pending')).slice(1)));
+      await p2.waitForFunction(() => document.querySelector('.msg.assistant .body').textContent.includes('Running reply text'));
+      const rows = p2.locator('.msg.waiting');
+      assert.equal(await rows.count(), 2);
+      assert.equal(await rows.nth(0).locator('.body').innerText(), 'Waiting question');
+      assert.match(await rows.nth(0).innerText(), /Waiting/);
+      assert.equal(await p2.locator('.del-queued').count(), 2, 'each waiting message has a way to remove it');
+      await shot(p2, '20-waiting');
+    });
+
+    await step('removing a waiting message cancels it and takes the row away', async () => {
+      await p2.locator('.msg.waiting', { hasText: 'Unwanted question' }).locator('.del-queued').click();
+      await p2.waitForFunction(() => document.querySelectorAll('.msg.waiting').length === 1);
+      assert.deepEqual(await calls(p2, 'cancel_generation'), [{ id: 'g3' }]);
+      assert.equal(await p2.locator('.msg.waiting .body').innerText(), 'Waiting question');
+    });
+
+    await step('when the reply ends, the waiting message starts and its reply is joined', async () => {
+      await p2.waitForFunction(() => (window.__calls.filter((c) => c[0] === 'attach').length === 2), null, { timeout: 15000 });
+      await p2.waitForFunction(() => document.querySelectorAll('.msg.waiting').length === 0);
+      await waitIdle(p2);
+      assert.deepEqual((await calls(p2, 'attach')).map((a) => a.generationId), ['g1', 'g2']);
+      const bodies = await p2.locator('.msg .body').allInnerTexts();
+      assert.ok(bodies.some((b) => b.includes('Answer to the waiting question.')), bodies.join(' | '));
+      assert.ok(bodies.some((b) => b === 'Waiting question'), 'its question is now a normal message');
+    });
+
+    await step('re-showing the window picks up a reply that started elsewhere', async () => {
+      await p2.evaluate(() => {
+        const c = window.__db.convs.find((x) => x.id === '7');
+        c.pending = [{ generationId: 'g9', status: 'running', prompt: 'from elsewhere', replyText: 'Started on another device.' }];
+        window.__listeners['askbar:shown']();
+      });
+      await p2.waitForFunction(() => window.__calls.some((c) => c[0] === 'attach' && c[1].generationId === 'g9'));
+      await waitIdle(p2);
+      assert.ok((await p2.locator('.msg.assistant .body').last().innerText()).includes('Started on another device.'));
+    });
+
+    await step('no JavaScript errors while joining running replies', async () => {
+      assert.deepEqual(p2.errors, []);
+    });
+    await p2.context().close();
+  }
+
   // ------------------------------------------------------------ errors
   await step('errors show inline with a way to open the config', async () => {
     await page.keyboard.press('Control+n');

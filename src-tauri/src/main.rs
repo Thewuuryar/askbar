@@ -254,6 +254,33 @@ async fn ask(
     Ok(())
 }
 
+/// The replies of a conversation that have not finished (running, or waiting behind one).
+#[tauri::command]
+async fn load_pending(state: State<'_, AppState>, id: String) -> Result<Vec<types::PendingReply>, String> {
+    state.backend().load_pending(id).await
+}
+
+/// Removes a message that is waiting its turn (or stops a running reply) by generation id.
+#[tauri::command]
+async fn cancel_generation(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    state.backend().cancel_generation(id).await
+}
+
+/// Joins a reply that is already running on the server. Stop (`cancel_ask`) works on it as on `ask`.
+#[tauri::command]
+async fn attach(state: State<'_, AppState>, generation_id: String, on_event: Channel<StreamEvent>) -> Result<(), String> {
+    let (tx, rx) = oneshot::channel();
+    *lock(&state.cancel) = Some(tx);
+    state
+        .backend()
+        .attach(generation_id, rx, &|e| {
+            let _ = on_event.send(e);
+        })
+        .await;
+    lock(&state.cancel).take();
+    Ok(())
+}
+
 /// Stop: tells the running `ask` to ask the server to stop the reply (the reply then ends there
 /// with its text so far kept); the window gets `Cancelled` once the server has been told.
 #[tauri::command]
@@ -418,6 +445,9 @@ fn main() {
             delete_conversation,
             ask,
             cancel_ask,
+            load_pending,
+            cancel_generation,
+            attach,
             resize_window,
             hide_window,
             open_config,

@@ -55,6 +55,40 @@
       db.convs.slice().sort((a, b) => b.updated_at - a.updated_at || Number(b.id) - Number(a.id))
         .map((c) => ({ id: c.id, title: c.title, updated_at: c.updated_at, message_count: c.messages.length })),
     load_conversation: ({ id }) => db.convs.find((c) => c.id === id).messages,
+    // Replies the server is still working on, per conversation: conv.pending is a list of
+    // { generationId, status: 'running' | 'queued', prompt, text, replyText } set by a test.
+    load_pending: ({ id }) => {
+      const c = db.convs.find((x) => x.id === id);
+      return ((c && c.pending) || []).map(({ generationId, status, prompt, text }) => ({ generationId, status, prompt, text: text || '' }));
+    },
+    cancel_generation: ({ id }) => {
+      for (const c of db.convs) c.pending = (c.pending || []).filter((p) => p.generationId !== id);
+    },
+    // Joins a running reply: replays its text from the start, then it finishes and the next
+    // queued message (if any) starts running.
+    attach: async ({ generationId, onEvent }) => {
+      cancelFlag = false;
+      const conv = db.convs.find((c) => (c.pending || []).some((p) => p.generationId === generationId));
+      const p = conv.pending.find((x) => x.generationId === generationId);
+      const full = p.replyText || 'The reply that was already running.';
+      let sent = '';
+      for (let i = 0; i < full.length; i += 6) {
+        if (cancelFlag) break;
+        const piece = full.slice(i, i + 6);
+        sent += piece;
+        onEvent.onmessage({ event: 'delta', text: piece });
+        await sleep(p.slow ? 40 : 2);
+      }
+      if (sent) conv.messages.push({ id: String(db.nextMsg++), role: 'assistant', content: sent, created_at: db.clock });
+      conv.pending = conv.pending.filter((x) => x !== p);
+      const next = conv.pending.find((x) => x.status === 'queued');
+      if (next) {
+        next.status = 'running';
+        conv.messages.push({ id: String(db.nextMsg++), role: 'user', content: next.prompt, created_at: db.clock });
+      }
+      conv.updated_at = ++db.clock;
+      onEvent.onmessage({ event: cancelFlag ? 'cancelled' : 'done' });
+    },
     delete_conversation: ({ id }) => { db.convs = db.convs.filter((c) => c.id !== id); },
     cancel_ask: () => { cancelFlag = true; },
     resize_window: () => {},

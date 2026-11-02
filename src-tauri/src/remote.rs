@@ -1,6 +1,6 @@
 //! `Remote`: the client for an Askbar server over HTTPS.
 
-use crate::types::{ClientStatus, Emit, ProviderChoice, Settings, StreamEvent};
+use crate::types::{ClientStatus, Emit, PendingReply, ProviderChoice, Settings, StreamEvent};
 use crate::client_config::{check_server_url, merge_ui, ClientConfig};
 use crate::tokens::TokenStore;
 use askbar_proto::{ChatEvent, ChatRequest, Conversation, ConversationDetail, DisplaySettings, Message, Prefs, ProviderInfo, SseParser};
@@ -199,6 +199,62 @@ impl Inner {
         Ok(resp)
     }
 
+    /// Follows a reply to its end: reads `resp` if there is one, and when a stream ends without
+    /// done, asks the server for the rest (see `backoff_secs`). Reports everything through `emit`.
+    async fn drive(&self, resp: Option<reqwest::Response>, reader: &mut ReplyReader, cancel: &mut Cancel, stop: &mut bool, emit: Emit<'_>) {
+        let fail = |message: String| emit(StreamEvent::Error { message });
+        let mut resp = resp;
+        loop {
+            let lost = match resp.take() {
+                Some(r) => match read_reply(r, reader, cancel, stop, emit).await {
+                    Read::Finished => return,
+                    Read::Stop => return self.stop_reply(reader.generation_id.as_deref(), emit).await,
+                    Read::Lost(why) => why,
+                },
+                None => String::new(), // attaching: nothing read yet, ask for the stream straight away
+            };
+            // The stream ended without done. The server keeps generating, so ask for the rest,
+            // quietly: the person sees nothing unless the reply can no longer be had.
+            let Some(generation_id) = reader.generation_id.clone() else { return fail(lost) };
+            if *stop {
+                return self.stop_reply(Some(&generation_id), emit).await;
+            }
+            let mut attempt = 0u32;
+            let mut immediately = lost.is_empty();
+            resp = Some(loop {
+                let wait = if std::mem::take(&mut immediately) {
+                    Duration::ZERO
+                } else {
+                    let w = self.backoff_unit * backoff_secs(attempt) as u32;
+                    attempt += 1;
+                    w
+                };
+                tokio::select! {
+                    _ = tokio::time::sleep(wait) => {}
+                    _ = &mut *cancel => return self.stop_reply(Some(&generation_id), emit).await,
+                }
+                let req = match self.request(Method::GET, &format!("/api/v1/generations/{generation_id}/stream")) {
+                    Ok(r) => r.header("accept", "text/event-stream").query(&[("after", reader.last_id)]),
+                    Err(e) => return fail(e),
+                };
+                let sent = tokio::select! {
+                    r = req.send() => r,
+                    _ = &mut *cancel => return self.stop_reply(Some(&generation_id), emit).await,
+                };
+                match sent {
+                    Ok(r) if r.status() == StatusCode::NOT_FOUND => {
+                        return fail("The reply is no longer on the server.".into());
+                    }
+                    Ok(r) if r.status() == StatusCode::UNAUTHORIZED => {
+                        return fail(check_status(r.status()).unwrap_err());
+                    }
+                    Ok(r) if r.status().is_success() => break r,
+                    _ => {} // unreachable or a server hiccup: try again after the next wait
+                }
+            });
+        }
+    }
+
     /// Stop pressed: ask the server to stop generation `id`, then report Cancelled. With no id
     /// (an older server) the reply cannot be stopped there; the connection is simply let go.
     async fn stop_reply(&self, id: Option<&str>, emit: Emit<'_>) {
@@ -390,6 +446,36 @@ impl Remote {
         Ok(d.messages)
     }
 
+    /// Replies in this conversation that have not finished: the one running, and the messages
+    /// waiting behind it.
+    pub async fn load_pending(&self, id: String) -> Result<Vec<PendingReply>, String> {
+        let d: ConversationDetail = self.inner()?.get_json(&format!("/api/v1/conversations/{id}")).await?;
+        Ok(d.pending.into_iter().map(PendingReply::from).collect())
+    }
+
+    /// Stops (or, for a message still waiting, removes) one generation. Already finished is fine.
+    pub async fn cancel_generation(&self, id: String) -> Result<(), String> {
+        let i = self.inner()?;
+        let req = i.request(Method::POST, &format!("/api/v1/generations/{id}/cancel"))?.timeout(REQUEST_TIMEOUT);
+        match i.send(req).await {
+            Ok(_) => Ok(()),
+            Err(e) if e.ends_with("404 Not Found.") => Ok(()),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Joins a reply that is already running on the server (started here earlier, or elsewhere):
+    /// replays it from the start, then follows it live, reporting through `emit` like `ask`.
+    pub async fn attach(&self, generation_id: String, cancel: oneshot::Receiver<()>, emit: Emit<'_>) {
+        let i = match self.inner() {
+            Ok(i) => i,
+            Err(e) => return emit(StreamEvent::Error { message: e }),
+        };
+        let mut reader = ReplyReader { generation_id: Some(generation_id), ..Default::default() };
+        let (mut cancel, mut stop) = (cancel.fuse(), false);
+        i.drive(None, &mut reader, &mut cancel, &mut stop, emit).await;
+    }
+
     pub async fn delete_conversation(&self, id: String) -> Result<(), String> {
         let i = self.inner()?;
         let resp = i.request(Method::DELETE, &format!("/api/v1/conversations/{id}"))?.timeout(REQUEST_TIMEOUT);
@@ -428,47 +514,7 @@ impl Remote {
         };
 
         let mut reader = ReplyReader::default();
-        let mut resp = resp;
-        loop {
-            let lost = match read_reply(resp, &mut reader, &mut cancel, &mut stop, emit).await {
-                Read::Finished => return,
-                Read::Stop => return i.stop_reply(reader.generation_id.as_deref(), emit).await,
-                Read::Lost(why) => why,
-            };
-            // The stream ended without done. The server keeps generating, so ask for the rest,
-            // quietly: the person sees nothing unless the reply can no longer be had.
-            let Some(generation_id) = reader.generation_id.clone() else { return fail(lost) };
-            if stop {
-                return i.stop_reply(Some(&generation_id), emit).await;
-            }
-            let mut attempt = 0u32;
-            resp = loop {
-                let wait = i.backoff_unit * backoff_secs(attempt) as u32;
-                attempt += 1;
-                tokio::select! {
-                    _ = tokio::time::sleep(wait) => {}
-                    _ = &mut cancel => return i.stop_reply(Some(&generation_id), emit).await,
-                }
-                let req = match i.request(Method::GET, &format!("/api/v1/generations/{generation_id}/stream")) {
-                    Ok(r) => r.header("accept", "text/event-stream").query(&[("after", reader.last_id)]),
-                    Err(e) => return fail(e),
-                };
-                let sent = tokio::select! {
-                    r = req.send() => r,
-                    _ = &mut cancel => return i.stop_reply(Some(&generation_id), emit).await,
-                };
-                match sent {
-                    Ok(r) if r.status() == StatusCode::NOT_FOUND => {
-                        return fail("The reply is no longer on the server.".into());
-                    }
-                    Ok(r) if r.status() == StatusCode::UNAUTHORIZED => {
-                        return fail(check_status(r.status()).unwrap_err());
-                    }
-                    Ok(r) if r.status().is_success() => break r,
-                    _ => {} // unreachable or a server hiccup: try again after the next wait
-                }
-            };
-        }
+        i.drive(Some(resp), &mut reader, &mut cancel, &mut stop, emit).await;
     }
 }
 
@@ -697,6 +743,88 @@ mod tests {
         remote.ask(None, "hi".into(), rx, &|e| events.lock().unwrap().push(e)).await;
         assert!(matches!(events.into_inner().unwrap().last(), Some(StreamEvent::Cancelled)));
         assert_eq!(*fake.seen.cancels.lock().unwrap(), ["g1"], "it waited for the generation id, then cancelled");
+    }
+
+    /// Runs `remote.ask` in the background, returning its events and Stop's sender.
+    fn ask_in_background(remote: Arc<Remote>, conversation: Option<String>, text: &str) -> (Arc<Mutex<Vec<StreamEvent>>>, oneshot::Sender<()>, tokio::task::JoinHandle<()>) {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let (tx, rx) = oneshot::channel();
+        let (ev, text) = (events.clone(), text.to_string());
+        let task = tokio::spawn(async move {
+            remote.ask(conversation, text, rx, &|e| ev.lock().unwrap().push(e)).await;
+        });
+        (events, tx, task)
+    }
+
+    async fn wait_until(what: &str, mut f: impl FnMut() -> bool) {
+        for _ in 0..400 {
+            if f() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        panic!("timed out waiting for {what}");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn another_window_can_attach_to_a_running_reply_and_remove_a_queued_message() {
+        let (_mock, mock_port) = start_mock();
+        let (url, token) = start_server(mock_port).await;
+        let a = Arc::new(remote_for(&url, Some(&token), PathBuf::new()));
+        let b = Arc::new(remote_for(&url, Some(&token), PathBuf::new()));
+
+        // A starts a slow reply; B did not start it.
+        let (a_events, a_stop, a_task) = ask_in_background(a.clone(), None, "please be slow");
+        wait_until("A's reply to begin", || a_events.lock().unwrap().iter().filter(|e| matches!(e, StreamEvent::Delta { .. })).count() >= 3).await;
+        let (conversation, generation) = match a_events.lock().unwrap()[0].clone() {
+            StreamEvent::Started { conversation_id, generation_id: Some(g), .. } => (conversation_id, g),
+            other => panic!("expected Started, got {other:?}"),
+        };
+
+        // B sends into the same conversation: it waits its turn.
+        let (b_events, _b_stop, b_task) = ask_in_background(b.clone(), Some(conversation.clone()), "second question");
+        let queued = {
+            let mut found = None;
+            for _ in 0..200 {
+                let p = b.load_pending(conversation.clone()).await.unwrap();
+                if let Some(q) = p.iter().find(|p| p.status == "queued") {
+                    found = Some(q.clone());
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+            found.expect("the second message shows as queued")
+        };
+        assert_eq!(queued.prompt, "second question");
+        let pending = b.load_pending(conversation.clone()).await.unwrap();
+        assert_eq!(pending.iter().map(|p| (p.status.as_str(), p.prompt.as_str())).collect::<Vec<_>>(), [("running", "please be slow"), ("queued", "second question")]);
+        assert_eq!(pending[0].generation_id, generation);
+
+        // Attaching replays from the start, then follows.
+        let attached = Arc::new(Mutex::new(Vec::new()));
+        let (att_stop, att_rx) = oneshot::channel();
+        let (att, remote_b) = (attached.clone(), b.clone());
+        let att_task = tokio::spawn(async move { remote_b.attach(generation, att_rx, &|e| att.lock().unwrap().push(e)).await });
+        wait_until("the attached stream to catch up", || attached.lock().unwrap().len() >= 6).await;
+        let text: String = attached.lock().unwrap().iter().filter_map(|e| if let StreamEvent::Delta { text } = e { Some(text.clone()) } else { None }).collect();
+        assert!(text.starts_with("Streaming slowly so"), "replayed from the start: {text:?}");
+
+        // Removing the queued message: it never runs and leaves nothing in the conversation.
+        b.cancel_generation(queued.generation_id.clone()).await.unwrap();
+        b.cancel_generation(queued.generation_id).await.unwrap(); // repeat is fine
+        b_task.await.unwrap();
+        assert!(matches!(b_events.lock().unwrap().last(), Some(StreamEvent::Done)), "its waiting connection ends");
+
+        // Stop from the attached window ends the reply for everyone.
+        att_stop.send(()).unwrap();
+        att_task.await.unwrap();
+        assert!(matches!(attached.lock().unwrap().last(), Some(StreamEvent::Cancelled)));
+        a_task.await.unwrap();
+        assert!(matches!(a_events.lock().unwrap().last(), Some(StreamEvent::Done)), "A's stream ends cleanly with the partial text kept");
+        drop(a_stop);
+        assert!(b.load_pending(conversation.clone()).await.unwrap().is_empty());
+        let msgs = b.load_conversation(conversation).await.unwrap();
+        assert_eq!(msgs.iter().map(|m| m.role.as_str()).collect::<Vec<_>>(), ["user", "assistant"], "the removed message left no trace");
     }
 
     #[test]
