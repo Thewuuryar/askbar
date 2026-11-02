@@ -123,6 +123,16 @@ impl AuditDb {
     pub fn conn(&self) -> &Connection {
         &self.conn
     }
+
+    /// At start-up: no task from the previous run exists, so every span still `running` was cut
+    /// off. Marking it `interrupted` is the one change the triggers allow to a running span.
+    /// Returns how many there were.
+    pub fn sweep_running(&self) -> Result<usize, AuditError> {
+        Ok(self.conn.execute(
+            "UPDATE spans SET status = 'interrupted', ended_at = ?1, error_code = COALESCE(error_code, 'interrupted') WHERE status = 'running'",
+            [now_secs()],
+        )?)
+    }
 }
 
 // --------------------------------------------------------------------- recording
@@ -484,6 +494,23 @@ mod tests {
         assert_eq!(db.conn.execute("UPDATE spans SET status = 'interrupted' WHERE status = 'running'", []).unwrap(), 1);
         let status: String = db.conn.query_row("SELECT status FROM spans WHERE id = 's'", [], |r| r.get(0)).unwrap();
         assert_eq!(status, "done");
+    }
+
+    #[test]
+    fn the_sweep_interrupts_only_running_spans_and_only_once() {
+        let db = AuditDb::open_in_memory().unwrap();
+        span(&db, "a", "running", now());
+        span(&db, "b", "running", now());
+        span(&db, "c", "done", now());
+        assert_eq!(db.sweep_running().unwrap(), 2);
+        let status = |id: &str| -> (String, Option<i64>, Option<String>) {
+            db.conn.query_row("SELECT status, ended_at, error_code FROM spans WHERE id = ?1", [id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap()
+        };
+        let (s, ended, code) = status("a");
+        assert_eq!((s.as_str(), code.as_deref()), ("interrupted", Some("interrupted")));
+        assert!(ended.is_some());
+        assert_eq!(status("c"), ("done".into(), None, None), "finished spans are untouched");
+        assert_eq!(db.sweep_running().unwrap(), 0);
     }
 
     #[test]

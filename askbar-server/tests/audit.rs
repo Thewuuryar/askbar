@@ -42,10 +42,10 @@ async fn run_chat(state: &std::sync::Arc<askbar_server::AppState>, prompt: &str)
     sub.generation_id
 }
 
-/// Opens `audit.db` in `dir` the way the server does at start-up (migrations, then the sweep of
-/// spans left `running`, which step 4.11 adds).
+/// Opens `audit.db` in `dir` the way the server does at start-up: migrations, then the sweep of
+/// spans left `running`.
 fn start_up_audit(dir: &Path) {
-    askbar_server::audit::AuditDb::open(&dir.join("audit.db")).unwrap();
+    askbar_server::audit::AuditDb::open(&dir.join("audit.db")).unwrap().sweep_running().unwrap();
 }
 
 fn read(dir: &Path) -> Connection {
@@ -172,7 +172,6 @@ async fn audit_db_contains_none_of_the_prompt_or_reply_text() {
 }
 
 #[test]
-#[ignore = "enabled in 4.11"]
 fn a_span_still_running_at_startup_becomes_interrupted() {
     let dir = std::env::temp_dir().join(format!("askbar-audit-sweep-{}", ulid::Ulid::new()));
     std::fs::create_dir_all(&dir).unwrap();

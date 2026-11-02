@@ -120,6 +120,11 @@ async fn main() {
         Err(e) => die(format!("could not clean up generations: {e}"), 1),
     }
     let audit_db = askbar_server::audit::AuditDb::open(&audit_dir().join("audit.db")).unwrap_or_else(|e| die(e, 1));
+    match audit_db.sweep_running() {
+        Ok(0) => {}
+        Ok(n) => tracing::warn!(spans = n, "marked audit spans from the previous run as interrupted"),
+        Err(e) => die(format!("could not clean up the audit store: {e}"), 1),
+    }
     let state = askbar_server::AppState::new(db, secrets, askbar_server::MIN_CLIENT)
         .with_audit(askbar_server::audit::Recorder::spawn(audit_db, 4096));
     tokio::spawn(stop_on_signal(state.clone()));
