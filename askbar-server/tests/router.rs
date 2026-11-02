@@ -430,7 +430,8 @@ async fn turning_the_kill_switch_on_with_abort_stops_running_replies_and_clears_
     switch_off(&s, true).await;
     let a: Vec<GenEvent> = first.live.subscribe(0).collect().await;
     let b: Vec<GenEvent> = queued.live.subscribe(0).collect().await;
-    assert!(matches!(a.last(), Some(GenEvent::Error { message }) if message.contains("switched off")), "{:?}", a.last());
+    assert!(matches!(a.last(), Some(GenEvent::Error { message, .. }) if message.contains("switched off")), "{:?}", a.last());
+    assert!(matches!(a.last(), Some(GenEvent::Error { code: "kill_switch", .. })), "{:?}", a.last());
     assert!(matches!(b.last(), Some(GenEvent::Error { .. })) && !b.iter().any(|e| matches!(e, GenEvent::Delta { .. })), "the waiting one never ran: {b:?}");
     tokio::time::sleep(Duration::from_millis(300)).await;
 

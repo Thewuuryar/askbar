@@ -132,7 +132,7 @@ impl ReplyReader {
                     steps.push(Step::Emit(StreamEvent::Delta { text }));
                 }
                 Ok(ChatEvent::Done) => steps.push(Step::Done),
-                Ok(ChatEvent::Error { message }) => steps.push(Step::Fail(message)),
+                Ok(ChatEvent::Error { message, .. }) => steps.push(Step::Fail(message)),
                 Err(_) => {} // unknown event from a newer server: ignore
             }
         }

@@ -33,13 +33,14 @@ pub enum GenEvent {
     Provider { id: String, name: String },
     Delta { seq: u64, text: String },
     Done,
-    Error { message: String },
+    /// `code` is the stable reason the stream's `error` event carries.
+    Error { message: String, code: &'static str },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Terminal {
     Done,
-    Error(String),
+    Error { message: String, code: &'static str },
 }
 
 #[derive(Default)]
@@ -214,7 +215,7 @@ impl Live {
                     } else {
                         g.terminal.as_ref().map(|t| match t {
                             Terminal::Done => GenEvent::Done,
-                            Terminal::Error(m) => GenEvent::Error { message: m.clone() },
+                            Terminal::Error { message, code } => GenEvent::Error { message: message.clone(), code },
                         })
                     }
                 };
@@ -549,8 +550,9 @@ impl Finisher {
         }
         self.live.finish(match outcome {
             Outcome::Done | Outcome::Cancelled => Terminal::Done,
-            Outcome::Killed => Terminal::Error(KILLED.into()),
-            Outcome::TimedOut(m) | Outcome::Error(m) => Terminal::Error(m),
+            Outcome::Killed => Terminal::Error { message: KILLED.into(), code: "kill_switch" },
+            Outcome::TimedOut(message) => Terminal::Error { message, code: "timed_out" },
+            Outcome::Error(message) => Terminal::Error { message, code: "provider_error" },
         });
     }
 }
@@ -559,7 +561,7 @@ impl Drop for Finisher {
     fn drop(&mut self) {
         self.save("error", Some("The reply stopped unexpectedly."));
         // A no-op if `finish` already ran; otherwise the task died and subscribers must not wait forever.
-        self.live.finish(Terminal::Error("The reply stopped unexpectedly.".into()));
+        self.live.finish(Terminal::Error { message: "The reply stopped unexpectedly.".into(), code: "internal" });
         // The row is final and the reply saved: the next message waiting in this conversation goes.
         start_next(&self.state, &self.conversation_id);
         // Keep the buffer a while so a client that dropped can still resume exactly where it was.
@@ -1148,7 +1150,7 @@ pub fn shutdown(state: &Arc<AppState>) {
             }
         }
         live.end_queue_span(&state.audit, "interrupted");
-        live.finish(Terminal::Error(INTERRUPTED.into()));
+        live.finish(Terminal::Error { message: INTERRUPTED.into(), code: "interrupted" });
         live.cancel();
     }
 }
@@ -1176,7 +1178,7 @@ pub fn apply_kill_switch(state: &Arc<AppState>, aborts_running: bool) {
     for id in queued {
         if let Some(live) = state.generations.get(&id) {
             live.end_queue_span(&state.audit, "cancelled");
-            live.finish(Terminal::Error(KILLED.into()));
+            live.finish(Terminal::Error { message: KILLED.into(), code: "kill_switch" });
             state.generations.remove(&id);
         }
     }
@@ -1261,7 +1263,7 @@ fn to_sse(e: GenEvent) -> Result<Event, Infallible> {
         GenEvent::Provider { id, name } => sse_event(&ChatEvent::Provider { id, name }),
         GenEvent::Delta { seq, text } => sse_event_with_id(&ChatEvent::Delta { text }, Some(seq)),
         GenEvent::Done => sse_event(&ChatEvent::Done),
-        GenEvent::Error { message } => sse_event(&ChatEvent::Error { message }),
+        GenEvent::Error { message, code } => sse_event(&ChatEvent::Error { message, code: Some(code.into()) }),
     })
 }
 
@@ -1269,8 +1271,9 @@ fn to_sse(e: GenEvent) -> Result<Event, Infallible> {
 fn terminal_of(status: &str, error: Option<&str>) -> GenEvent {
     match status {
         "done" | "cancelled" => GenEvent::Done,
-        "interrupted" => GenEvent::Error { message: error.unwrap_or("The server restarted before the reply finished.").into() },
-        _ => GenEvent::Error { message: error.unwrap_or("The reply failed.").into() },
+        "interrupted" => GenEvent::Error { message: error.unwrap_or("The server restarted before the reply finished.").into(), code: "interrupted" },
+        "timed_out" => GenEvent::Error { message: error.unwrap_or("The reply ran out of time.").into(), code: "timed_out" },
+        _ => GenEvent::Error { message: error.unwrap_or("The reply failed.").into(), code: "provider_error" },
     }
 }
 
@@ -1347,8 +1350,8 @@ mod tests {
         live.push("b");
         tokio::time::sleep(Duration::from_millis(30)).await;
         live.push("c");
-        live.finish(Terminal::Error("boom".into()));
-        assert_eq!(sub.await.unwrap(), [d(1, "a"), d(2, "b"), d(3, "c"), GenEvent::Error { message: "boom".into() }]);
+        live.finish(Terminal::Error { message: "boom".into(), code: "provider_error" });
+        assert_eq!(sub.await.unwrap(), [d(1, "a"), d(2, "b"), d(3, "c"), GenEvent::Error { message: "boom".into(), code: "provider_error" }]);
     }
 
     #[tokio::test]
@@ -1359,7 +1362,7 @@ mod tests {
         }
         live.finish(Terminal::Done);
         live.push("ignored"); // nothing is added after the end
-        live.finish(Terminal::Error("ignored".into())); // and the first ending wins
+        live.finish(Terminal::Error { message: "ignored".into(), code: "internal" }); // and the first ending wins
         assert!(live.is_finished());
         assert_eq!(live.delta_count(), 3);
         assert_eq!(collect(live.subscribe(0)).await, [d(1, "x"), d(2, "y"), d(3, "z"), GenEvent::Done]);

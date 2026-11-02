@@ -277,7 +277,13 @@ pub enum ChatEvent {
     Provider { id: String, name: String },
     Delta { text: String },
     Done,
-    Error { message: String },
+    /// `code` is the stable reason (`timed_out`, `interrupted`, `kill_switch`, `provider_error`, `internal`); clients
+    /// branch on it and show `message`. Absent from servers that predate it.
+    Error {
+        message: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        code: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -364,7 +370,8 @@ mod tests {
             ChatEvent::Provider { id: "p1".into(), name: "OpenAI".into() },
             ChatEvent::Delta { text: "hi".into() },
             ChatEvent::Done,
-            ChatEvent::Error { message: "bad".into() },
+            ChatEvent::Error { message: "bad".into(), code: None },
+            ChatEvent::Error { message: "slow".into(), code: Some("timed_out".into()) },
         ] {
             let s = serde_json::to_string(&e).unwrap();
             assert_eq!(serde_json::from_str::<ChatEvent>(&s).unwrap(), e);

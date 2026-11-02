@@ -94,7 +94,7 @@ pub async fn chat(
             GenEvent::Provider { id, name } => sse_event(&ChatEvent::Provider { id, name }),
             GenEvent::Delta { seq, text } => sse_event_with_id(&ChatEvent::Delta { text }, Some(seq)),
             GenEvent::Done => sse_event(&ChatEvent::Done),
-            GenEvent::Error { message } => sse_event(&ChatEvent::Error { message }),
+            GenEvent::Error { message, code } => sse_event(&ChatEvent::Error { message, code: Some(code.into()) }),
         })
     });
     Ok(Sse::new(Box::pin(meta.chain(events)) as generation::EventStream).keep_alive(KeepAlive::default()))

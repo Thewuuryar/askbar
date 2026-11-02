@@ -218,8 +218,9 @@ async fn provider_failure_becomes_an_error_event_and_keeps_the_question() {
     let r = t.chat(&http, None, "p1", "please fail").await;
     assert_eq!(r.status(), 200);
     let events = parse_events(&r.text().await.unwrap().replace("\r\n", "\n"));
-    let (name, ChatEvent::Error { message }) = events.last().unwrap() else { panic!("{events:?}") };
+    let (name, ChatEvent::Error { message, code }) = events.last().unwrap() else { panic!("{events:?}") };
     assert_eq!(name, "error");
+    assert_eq!(code.as_deref(), Some("provider_error"), "a program branches on the code, not the words");
     assert!(message.contains("401"));
     assert!(!message.contains("sk-test"));
     assert_eq!(t.messages(), [("user".to_string(), "please fail".to_string())]);
@@ -861,6 +862,7 @@ async fn shutdown_saves_the_partial_reply_marks_it_interrupted_and_writes_it_onc
         rest.push_str(&String::from_utf8_lossy(&b));
     }
     assert!(rest.contains("event: error") && rest.contains("restarted"), "got {rest:?}");
+    assert!(rest.contains(r#""code":"interrupted""#), "got {rest:?}");
     tokio::time::sleep(Duration::from_millis(500)).await; // let the stopped task finish
 
     let rows = t.generations();
@@ -944,6 +946,7 @@ async fn a_generation_that_runs_out_of_time_keeps_its_text_reports_it_and_the_qu
         rest.push_str(&String::from_utf8_lossy(&b));
     }
     assert!(rest.contains("event: error") && rest.contains("Timed out after 2 seconds"), "got {rest:?}");
+    assert!(rest.contains(r#""code":"timed_out""#), "the timeout says so in a code: {rest:?}");
 
     // The upstream was closed, the text so far is kept as the assistant message, the row says why.
     wait_for_secs(5, "the upstream to see the stop", || {
