@@ -71,9 +71,22 @@ impl Routes {
         self.add(Method::DELETE, path, move |r| r.route(&p, delete(h)))
     }
 
-    /// Everything registered so far needs a signed-in session; what is added later does not.
+    /// Everything registered so far needs the person's own session (cookie); what is added later does not.
+    /// An API key is not enough here.
     pub fn signed_in(mut self, state: &Arc<AdminState>) -> Routes {
         self.router = self.router.route_layer(middleware::from_fn_with_state(state.clone(), crate::web::require_session));
+        self
+    }
+
+    /// Everything registered so far needs the session or an admin API key.
+    pub fn signed_in_or_key(mut self, state: &Arc<AdminState>) -> Routes {
+        self.router = self.router.route_layer(middleware::from_fn_with_state(state.clone(), crate::web::require_admin_auth));
+        self
+    }
+
+    /// Everything registered so far, being open, still wants the browser header on a change.
+    pub fn browser_header(mut self) -> Routes {
+        self.router = self.router.route_layer(middleware::from_fn(crate::web::require_admin_header));
         self
     }
 

@@ -99,8 +99,8 @@ fn asset(content_type: &'static str, body: &'static str) -> impl axum::response:
 pub fn routes(state: &Arc<AdminState>) -> Routes {
     // Every API route is under `/admin/api/v1` (askbar_proto::paths::ADMIN_V1).
     let v1 = |rest: &str| askbar_proto::paths::join(askbar_proto::paths::ADMIN_V1, rest);
-    let signed_in = Routes::new()
-        .put(&v1("/password"), web::change_password)
+    // What a script with an admin API key may also call.
+    let api = Routes::new()
         .get(&v1("/status"), admin_api::status)
         .get(&v1("/providers"), admin_api::list_providers)
         .post(&v1("/providers"), admin_api::create_provider)
@@ -125,10 +125,15 @@ pub fn routes(state: &Arc<AdminState>) -> Routes {
         .get(&v1("/network"), network::get_network)
         .put(&v1("/network"), network::put_network)
         .post(&v1("/network/apply"), network::apply_network)
-        // Looking at the session and ending it need the session itself.
+        .signed_in_or_key(state);
+    // What only the person's own session may do: the password, and looking at or ending the session.
+    let session_only = Routes::new()
+        .put(&v1("/password"), web::change_password)
         .get(&v1("/session"), || async { StatusCode::NO_CONTENT })
         .delete(&v1("/session"), web::logout)
         .signed_in(state);
+    // Open, but a change still wants the browser header.
+    let open = Routes::new().post(&v1("/session"), web::login).put(&v1("/setup/password"), web::setup_password).browser_header();
     Routes::new()
         .get("/admin", || async { Redirect::to("/admin/") })
         .get("/admin/", || async { asset("text/html; charset=utf-8", include_str!("ui/index.html")) })
@@ -136,11 +141,10 @@ pub fn routes(state: &Arc<AdminState>) -> Routes {
         .get("/admin/audit.js", || async { asset("text/javascript; charset=utf-8", include_str!("ui/audit.js")) })
         .get("/admin/style.css", || async { asset("text/css; charset=utf-8", include_str!("ui/style.css")) })
         .get(&v1("/health"), || async { (StatusCode::OK, "ok") })
-        // Signing in is open.
-        .post(&v1("/session"), web::login)
         .get(&v1("/setup"), web::setup_status)
-        .put(&v1("/setup/password"), web::setup_password)
-        .merge(signed_in)
+        .merge(open)
+        .merge(session_only)
+        .merge(api)
 }
 
 pub fn router(state: Arc<AdminState>) -> Router {
@@ -148,7 +152,6 @@ pub fn router(state: Arc<AdminState>) -> Router {
     router
         .fallback(askbar_proto::http::not_found)
         .method_not_allowed_fallback(askbar_proto::http::method_not_allowed)
-        .layer(middleware::from_fn(web::require_admin_header))
         .layer(middleware::from_fn(web::security_headers))
         .with_state(state)
 }

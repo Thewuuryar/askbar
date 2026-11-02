@@ -95,13 +95,22 @@ fn check_new_password(pw: &str) -> Result<(), Failure> {
 
 // ------------------------------------------------------------------ middleware
 
-/// State-changing requests must carry `X-Askbar-Admin: 1`. A cross-site form or simple
-/// request can't add custom headers, and cross-origin scripts need a CORS preflight we
-/// never approve.
-pub async fn require_admin_header(req: Request, next: Next) -> Result<Response, ApiError> {
+/// A change made from a browser must carry `X-Askbar-Admin: 1`. A cross-site form or simple request
+/// can't add custom headers, and cross-origin scripts need a CORS preflight we never approve. Reads
+/// need nothing. (An API key is not a cookie, so a request made with one skips this: see `require_admin_auth`.)
+fn csrf_missing(req: &Request) -> bool {
     let safe = matches!(*req.method(), Method::GET | Method::HEAD | Method::OPTIONS);
-    if !safe && req.headers().get(CSRF_HEADER).and_then(|v| v.to_str().ok()) != Some("1") {
-        return Err(ApiError::new(ErrorCode::Forbidden, "A change needs the header `X-Askbar-Admin: 1`.").no_challenge());
+    !safe && req.headers().get(CSRF_HEADER).and_then(|v| v.to_str().ok()) != Some("1")
+}
+
+fn csrf_error() -> ApiError {
+    ApiError::new(ErrorCode::Forbidden, "A change needs the header `X-Askbar-Admin: 1`.").no_challenge()
+}
+
+/// For the open routes that change things (signing in, first-run setup).
+pub async fn require_admin_header(req: Request, next: Next) -> Result<Response, ApiError> {
+    if csrf_missing(&req) {
+        return Err(csrf_error());
     }
     Ok(next.run(req).await)
 }
@@ -118,14 +127,59 @@ pub async fn security_headers(req: Request, next: Next) -> Response {
     res
 }
 
-/// Cookie only. `Authorization` is deliberately ignored.
+fn signed_out() -> ApiError {
+    ApiError::new(ErrorCode::Unauthorized, "Sign in first.").no_challenge()
+}
+
+/// The person's own session: the cookie, and the browser header on a change. `Authorization` is
+/// deliberately ignored, so no key or token opens the routes that manage keys, the password or the session.
 pub async fn require_session(State(state): State<Arc<AdminState>>, req: Request, next: Next) -> Result<Response, ApiError> {
-    let signed_out = || ApiError::new(ErrorCode::Unauthorized, "Sign in first.").no_challenge();
     let token = session_cookie(req.headers()).ok_or_else(signed_out)?;
     if !state.auth.valid_session(&token) {
         return Err(signed_out());
     }
+    if csrf_missing(&req) {
+        return Err(csrf_error());
+    }
     Ok(next.run(req).await)
+}
+
+/// Either the person's session (cookie, plus the browser header on a change) or an admin API key
+/// (`Authorization: Bearer askbar-admin-...`). If an `Authorization` header is present it alone is
+/// judged: a wrong key is never rescued by a cookie. Failed keys count toward the same lockout as
+/// wrong passwords.
+pub async fn require_admin_auth(State(state): State<Arc<AdminState>>, req: Request, next: Next) -> Result<Response, ApiError> {
+    use crate::api_key::{self, RouteClass};
+    let Some(value) = req.headers().get(header::AUTHORIZATION) else {
+        return require_session(State(state), req, next).await;
+    };
+    if let Some(secs) = state.auth.lockout_remaining() {
+        return Err(too_many_attempts(secs));
+    }
+    let key = value.to_str().ok().and_then(|v| v.split_once(' ')).filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer")).map(|(_, k)| k.trim().to_string());
+    let scope = match key {
+        Some(k) => {
+            let db = state.db.lock().await;
+            api_key::authenticate(db.conn(), &k, crate::auth::now()).map_err(|_| ApiError::code(ErrorCode::Internal))?
+        }
+        None => None,
+    };
+    match scope {
+        Some(scope) if scope.allows(RouteClass::Api) => Ok(next.run(req).await),
+        _ => {
+            state.auth.record_failure();
+            Err(ApiError::new(ErrorCode::Unauthorized, "That API key is not valid. It may have been revoked.").no_challenge())
+        }
+    }
+}
+
+/// 429 with how long to wait.
+fn too_many_attempts(secs: i64) -> ApiError {
+    let secs = secs.max(1) as u64;
+    let wait = ((secs + 59) / 60).max(1);
+    ApiError::new(ErrorCode::TooManyAttempts, format!("Too many wrong passwords or keys. Try again in {wait} minute{}.", if wait == 1 { "" } else { "s" }))
+        .retry_after(secs)
+        .no_challenge()
 }
 
 // -------------------------------------------------------------------- handlers
@@ -137,12 +191,7 @@ pub struct Login {
 
 pub async fn login(State(state): State<Arc<AdminState>>, headers: HeaderMap, ApiJson(body): ApiJson<Login>) -> Response {
     if let Some(secs) = state.auth.lockout_remaining() {
-        let secs = secs.max(1) as u64;
-        let wait = ((secs + 59) / 60).max(1);
-        return ApiError::new(ErrorCode::TooManyAttempts, format!("Too many wrong passwords. Try again in {wait} minute{}.", if wait == 1 { "" } else { "s" }))
-            .retry_after(secs)
-            .no_challenge()
-            .into_response();
+        return too_many_attempts(secs).into_response();
     }
     let Some(stored) = stored_hash(&state).await else {
         // No password yet: the setup page has to create one first.

@@ -231,3 +231,82 @@ async fn signing_in_before_a_password_exists_says_setup_is_required() {
     assert_eq!(r.status(), 503);
     assert_eq!(r.json::<askbar_proto::Problem>().await.unwrap().error, "setup_required");
 }
+
+// ------------------------------------------------------------------ the admin API key
+
+async fn make_key(t: &T) -> (String, String) {
+    let db = t.state.db.lock().await;
+    let (row, key) = askbar_admin::api_key::create(db.conn(), "ci", askbar_admin::auth::now()).unwrap();
+    (row.id, key)
+}
+
+#[tokio::test]
+async fn a_key_opens_the_api_without_a_cookie_or_the_browser_header() {
+    let t = start(PASSWORD).await;
+    let (_, key) = make_key(&t).await;
+    let url = |p: &str| format!("http://{}{p}", t.admin);
+    // A read.
+    assert_eq!(t.http.get(url("/admin/api/v1/providers")).bearer_auth(&key).send().await.unwrap().status(), 200);
+    // A change, with no X-Askbar-Admin header: it gets past the checks and fails on its own body (400), not on auth (401/403).
+    let r = t.http.put(url("/admin/api/v1/network")).bearer_auth(&key).json(&serde_json::json!({})).send().await.unwrap();
+    assert_eq!(r.status(), 400, "past auth and the browser header");
+    // The key's use is noted.
+    let used: Option<i64> = t.state.db.lock().await.conn().query_row("SELECT last_used_at FROM admin_api_keys", [], |r| r.get(0)).unwrap();
+    assert!(used.is_some());
+}
+
+#[tokio::test]
+async fn a_key_cannot_open_a_session_change_the_password_or_stand_in_for_one() {
+    let t = start(PASSWORD).await;
+    let (_, key) = make_key(&t).await;
+    let url = |p: &str| format!("http://{}{p}", t.admin);
+    for (method, path) in [(reqwest::Method::GET, "/admin/api/v1/session"), (reqwest::Method::DELETE, "/admin/api/v1/session"), (reqwest::Method::PUT, "/admin/api/v1/password")] {
+        let r = t.http.request(method.clone(), url(path)).bearer_auth(&key).header("x-askbar-admin", "1").send().await.unwrap();
+        assert_eq!(r.status(), 401, "{method} {path} needs the person's own session");
+        assert_eq!(r.json::<askbar_proto::Problem>().await.unwrap().error, "unauthorized");
+    }
+    // And the key is not a way to sign in.
+    let r = t.http.post(url("/admin/api/v1/session")).header("x-askbar-admin", "1").bearer_auth(&key).json(&serde_json::json!({ "password": "wrong password here" })).send().await.unwrap();
+    assert_eq!(r.status(), 401);
+    assert!(!r.headers().contains_key(reqwest::header::SET_COOKIE));
+}
+
+#[tokio::test]
+async fn a_wrong_or_revoked_key_is_401_and_is_not_rescued_by_a_cookie() {
+    let t = start(PASSWORD).await;
+    let (id, key) = make_key(&t).await;
+    let cookie = t.session().await;
+    let get = |auth: Option<&str>, cookie: Option<&str>| {
+        let mut r = t.http.get(format!("http://{}/admin/api/v1/providers", t.admin));
+        if let Some(a) = auth {
+            r = r.bearer_auth(a);
+        }
+        if let Some(c) = cookie {
+            r = r.header("cookie", c);
+        }
+        r.send()
+    };
+    assert_eq!(get(Some("askbar-admin-not-a-key"), None).await.unwrap().status(), 401);
+    assert_eq!(get(Some("abt_a-client-token"), None).await.unwrap().status(), 401);
+    assert_eq!(get(Some("askbar-admin-not-a-key"), Some(&cookie)).await.unwrap().status(), 401, "a valid cookie does not rescue a wrong key");
+    assert_eq!(get(None, Some(&cookie)).await.unwrap().status(), 200, "the cookie alone still works");
+    assert_eq!(get(Some(&key), None).await.unwrap().status(), 200);
+    askbar_admin::api_key::revoke(t.state.db.lock().await.conn(), &id, askbar_admin::auth::now()).unwrap();
+    assert_eq!(get(Some(&key), None).await.unwrap().status(), 401, "revoked");
+}
+
+#[tokio::test]
+async fn wrong_keys_count_toward_the_same_lockout_as_wrong_passwords() {
+    let t = start(PASSWORD).await;
+    let (_, key) = make_key(&t).await;
+    let get = |k: &str| t.http.get(format!("http://{}/admin/api/v1/providers", t.admin)).bearer_auth(k).send();
+    for _ in 0..askbar_admin::auth::MAX_FAILURES {
+        assert_eq!(get("askbar-admin-wrong").await.unwrap().status(), 401);
+    }
+    let r = get(&key).await.unwrap();
+    assert_eq!(r.status(), 429, "locked out, even for the right key");
+    assert!(r.headers().contains_key(reqwest::header::RETRY_AFTER));
+    assert_eq!(r.json::<askbar_proto::Problem>().await.unwrap().error, "too_many_attempts");
+    // The same lock stops a wrong password, which is the point of one lock.
+    assert_eq!(t.login(PASSWORD).await.status(), 429);
+}
