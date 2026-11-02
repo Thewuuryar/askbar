@@ -39,6 +39,26 @@ fn run_healthcheck() -> ! {
     std::process::exit(if ok.unwrap_or(false) { 0 } else { 1 })
 }
 
+/// On SIGTERM or Ctrl-C: keep what running replies have so far, then exit.
+async fn stop_on_signal(state: std::sync::Arc<askbar_server::AppState>) {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        let Ok(mut term) = signal(SignalKind::terminate()) else { return };
+        tokio::select! {
+            _ = term.recv() => {}
+            _ = tokio::signal::ctrl_c() => {}
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
+    tracing::info!("stopping: saving running replies");
+    askbar_server::generation::shutdown(&state);
+    std::process::exit(0);
+}
+
 #[tokio::main]
 async fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -72,7 +92,14 @@ async fn main() {
         Ok(None) => tracing::warn!("no configuration yet: the admin service has not pushed one"),
         Err(e) => die(format!("could not read the configuration snapshot: {e}"), 1),
     }
+    // Replies that were running when the last process stopped did not finish.
+    match askbar_server::generation::sweep_on_start(&db) {
+        Ok((0, 0)) => {}
+        Ok((running, queued)) => tracing::warn!(running, queued, "marked generations from the previous run as interrupted"),
+        Err(e) => die(format!("could not clean up generations: {e}"), 1),
+    }
     let state = askbar_server::AppState::new(db, secrets, askbar_server::MIN_CLIENT);
+    tokio::spawn(stop_on_signal(state.clone()));
     let mgmt_app = askbar_server::mgmt::router(state.clone(), askbar_server::mgmt::token_hash_path());
     let result = tokio::try_join!(serve(api, askbar_server::api_router(state)), serve(mgmt, mgmt_app));
     if let Err(e) = result {

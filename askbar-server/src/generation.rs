@@ -101,6 +101,11 @@ impl Live {
         }
     }
 
+    /// Everything pushed so far, joined.
+    pub fn text(&self) -> String {
+        self.lock().deltas.concat()
+    }
+
     pub fn delta_count(&self) -> u64 {
         self.lock().deltas.len() as u64
     }
@@ -158,9 +163,20 @@ impl Live {
 #[derive(Default)]
 pub struct Generations {
     live: Mutex<HashMap<String, Arc<Live>>>,
+    /// Set when the server is shutting down: nothing new starts.
+    stopping: std::sync::atomic::AtomicBool,
 }
 
 impl Generations {
+    pub fn is_stopping(&self) -> bool {
+        self.stopping.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// The generations that have not finished, by id.
+    pub fn unfinished(&self) -> Vec<(String, Arc<Live>)> {
+        self.map().iter().filter(|(_, l)| !l.is_finished()).map(|(k, l)| (k.clone(), l.clone())).collect()
+    }
+
     fn map(&self) -> std::sync::MutexGuard<'_, HashMap<String, Arc<Live>>> {
         self.live.lock().unwrap_or_else(|e| e.into_inner())
     }
@@ -273,6 +289,11 @@ impl Finisher {
         }
         self.saved = true;
         let db = self.state.db.lock().unwrap_or_else(|e| e.into_inner());
+        // Something else may have ended this generation already (shutdown, or the conversation
+        // was deleted); then the reply has been dealt with and must not be written twice.
+        if !matches!(db.get_generation(&self.user_id, &self.id), Ok(Some(g)) if g.status == "running") {
+            return;
+        }
         let message_id = if self.text.trim().is_empty() {
             None
         } else {
@@ -408,7 +429,7 @@ fn spawn_run(state: &Arc<AppState>, id: &str, user_id: &str, conversation_id: &s
 /// the stored order is question, reply, question, reply, and its history includes the replies before it.
 fn start_next(state: &Arc<AppState>, conversation_id: &str) {
     // Starting spawns a task, which only works inside the runtime.
-    if tokio::runtime::Handle::try_current().is_err() {
+    if tokio::runtime::Handle::try_current().is_err() || state.generations.is_stopping() {
         return;
     }
     let started = {
@@ -439,6 +460,73 @@ fn start_next(state: &Arc<AppState>, conversation_id: &str) {
             // Try the one after it.
             start_next(state, conversation_id);
         }
+    }
+}
+
+const INTERRUPTED: &str = "The server restarted before the reply finished.";
+const NOT_RUN: &str = "Not run: the server restarted before this message started.";
+
+/// At start-up: no task from a previous run exists, so any `running` row was cut off. Its partial
+/// text becomes the assistant message; a `queued` row never ran and gets no message. Returns
+/// how many of each it fixed.
+pub fn sweep_on_start(db: &crate::Db) -> Result<(usize, usize), crate::DbError> {
+    let rows: Vec<(String, String, String, String, String)> = {
+        let mut stmt = db
+            .conn()
+            .prepare("SELECT id, user_id, conversation_id, status, text FROM generations WHERE status IN ('running','queued') ORDER BY id")?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?;
+        rows.collect::<Result<_, _>>()?
+    };
+    let (mut running, mut queued) = (0, 0);
+    for (id, user_id, conversation_id, status, text) in rows {
+        if status == "queued" {
+            db.finalize_generation(&id, "interrupted", "", Some(NOT_RUN), None)?;
+            queued += 1;
+        } else {
+            let message_id = if text.trim().is_empty() {
+                None
+            } else {
+                db.add_message(&user_id, &conversation_id, "assistant", &text).ok()
+            };
+            db.finalize_generation(&id, "interrupted", &text, Some(INTERRUPTED), message_id.as_deref())?;
+            running += 1;
+        }
+    }
+    Ok((running, queued))
+}
+
+/// On SIGTERM: save what each running reply has so far and mark it `interrupted`; waiting messages
+/// never run. Upstream requests are stopped, and nothing new starts.
+pub fn shutdown(state: &Arc<AppState>) {
+    state.generations.stopping.store(true, std::sync::atomic::Ordering::SeqCst);
+    for (id, live) in state.generations.unfinished() {
+        let text = live.text();
+        {
+            let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+            use rusqlite::OptionalExtension;
+            let row: Option<(String, String, String)> = db
+                .conn()
+                .query_row("SELECT user_id, conversation_id, status FROM generations WHERE id = ?1", [&id], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+                })
+                .optional()
+                .ok()
+                .flatten();
+            if let Some((user_id, conversation_id, status)) = row {
+                if status == "running" {
+                    let message_id = if text.trim().is_empty() {
+                        None
+                    } else {
+                        db.add_message(&user_id, &conversation_id, "assistant", &text).ok()
+                    };
+                    let _ = db.finalize_generation(&id, "interrupted", &text, Some(INTERRUPTED), message_id.as_deref());
+                } else {
+                    let _ = db.finalize_generation(&id, "interrupted", "", Some(NOT_RUN), None);
+                }
+            }
+        }
+        live.finish(Terminal::Error(INTERRUPTED.into()));
+        live.cancel();
     }
 }
 
@@ -624,6 +712,47 @@ mod tests {
         let want = [d(1, "1"), d(2, "2"), GenEvent::Done];
         assert_eq!(a.await.unwrap(), want);
         assert_eq!(b.await.unwrap(), want);
+    }
+
+    #[test]
+    fn the_start_up_sweep_interrupts_running_and_queued_rows() {
+        let db = crate::Db::open_in_memory().unwrap();
+        let u = db.seed_server().unwrap();
+        let c = db.create_conversation(&u, "c").unwrap();
+        let mk = |status: &str| {
+            db.create_generation(&NewGeneration {
+                user_id: &u,
+                device_id: None,
+                conversation_id: &c,
+                user_message_id: None,
+                client_request_id: None,
+                provider_id: None,
+                status,
+                prompt: "q",
+                deadline_at: None,
+            })
+            .unwrap()
+        };
+        let (with_text, empty, queued, done) = (mk("running"), mk("running"), mk("queued"), mk("running"));
+        db.flush_generation_text(&with_text, "partial answer").unwrap();
+        db.finalize_generation(&done, "done", "all of it", None, None).unwrap();
+
+        assert_eq!(sweep_on_start(&db).unwrap(), (2, 1));
+        let get = |id: &str| db.get_generation(&u, id).unwrap().unwrap();
+        let g = get(&with_text);
+        assert_eq!((g.status.as_str(), g.text.as_str()), ("interrupted", "partial answer"));
+        assert!(g.assistant_message_id.is_some() && g.ended_at.is_some());
+        assert!(g.error.unwrap().contains("restarted"));
+        let g = get(&empty);
+        assert_eq!((g.status.as_str(), g.assistant_message_id), ("interrupted", None), "no text, no message");
+        let g = get(&queued);
+        assert_eq!((g.status.as_str(), g.assistant_message_id), ("interrupted", None));
+        assert!(g.error.unwrap().contains("Not run"));
+        assert_eq!(get(&done).status, "done", "finished rows are left alone");
+        let messages = db.get_messages(&u, &c).unwrap();
+        assert_eq!(messages.len(), 1, "only the partial text became a message");
+        assert_eq!((messages[0].role.as_str(), messages[0].content.as_str()), ("assistant", "partial answer"));
+        assert_eq!(sweep_on_start(&db).unwrap(), (0, 0), "a second sweep finds nothing");
     }
 
     #[tokio::test]

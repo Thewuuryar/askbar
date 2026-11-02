@@ -837,3 +837,33 @@ async fn deleting_a_conversation_mid_reply_stops_it_and_starts_nothing_queued() 
     }
     assert!(rest.contains("event: done"));
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn shutdown_saves_the_partial_reply_marks_it_interrupted_and_writes_it_once() {
+    let t = start().await;
+    let http = client_builder().pool_max_idle_per_host(0).build().unwrap();
+    let mut first = t.chat(&http, None, "p1", "please be slow").await.bytes_stream();
+    let got = read_deltas(&mut first, 3).await;
+    let conversation = conversation_id_of(&got);
+    let mut queued = t.chat(&http, Some(&conversation), "p1", "waiting").await.bytes_stream();
+    let mut meta = String::new();
+    while !meta.contains("\n\n") && !meta.contains("\r\n\r\n") {
+        meta.push_str(&String::from_utf8_lossy(&queued.next().await.unwrap().unwrap()));
+    }
+
+    askbar_server::generation::shutdown(&t.state);
+    let mut rest = String::new();
+    while let Some(Ok(b)) = first.next().await {
+        rest.push_str(&String::from_utf8_lossy(&b));
+    }
+    assert!(rest.contains("event: error") && rest.contains("restarted"), "got {rest:?}");
+    tokio::time::sleep(Duration::from_millis(500)).await; // let the stopped task finish
+
+    let rows = t.generations();
+    assert_eq!(rows.iter().map(|r| r.0.as_str()).collect::<Vec<_>>(), ["interrupted", "interrupted"]);
+    let assistant: Vec<String> = t.messages().into_iter().filter(|m| m.0 == "assistant").map(|m| m.1).collect();
+    assert_eq!(assistant.len(), 1, "the partial reply is written once");
+    assert!(assistant[0].starts_with("Streaming sl"), "got {:?}", assistant[0]);
+    assert!(t.messages().iter().all(|m| m.1 != "waiting"), "the queued message was not run or stored");
+    assert_eq!(t.mock.log.lock().unwrap().iter().filter(|l| l.starts_with("POST")).count(), 1, "nothing new started");
+}
