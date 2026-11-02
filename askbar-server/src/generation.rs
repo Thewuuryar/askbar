@@ -29,6 +29,8 @@ use tokio::sync::{oneshot, Notify};
 /// What a subscriber sees. `seq` counts deltas from 1, and is what SSE `id:` carries.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GenEvent {
+    /// The provider serving the reply; before any delta. Not counted in `seq`.
+    Provider { id: String, name: String },
     Delta { seq: u64, text: String },
     Done,
     Error { message: String },
@@ -43,6 +45,8 @@ pub enum Terminal {
 #[derive(Default)]
 struct Inner {
     deltas: Vec<String>,
+    /// The providers announced before the first delta, in order (more than one after a fallback).
+    providers: Vec<(String, String)>,
     terminal: Option<Terminal>,
 }
 
@@ -78,6 +82,19 @@ impl Live {
                 return;
             }
             g.deltas.push(text.to_string());
+        }
+        self.notify.notify_waiters();
+    }
+
+    /// Announces the provider now serving the reply. Only before the first delta (after text has
+    /// been sent the provider cannot change), and not twice in a row for the same provider.
+    pub fn set_provider(&self, id: &str, name: &str) {
+        {
+            let mut g = self.lock();
+            if g.terminal.is_some() || !g.deltas.is_empty() || g.providers.last().is_some_and(|(last, _)| last == id) {
+                return;
+            }
+            g.providers.push((id.to_string(), name.to_string()));
         }
         self.notify.notify_waiters();
     }
@@ -159,8 +176,12 @@ impl Live {
             live: Arc<Live>,
             next: u64,
             ended: bool,
+            /// How many provider announcements have been passed on. A subscriber that already has
+            /// deltas has seen them and starts past them.
+            providers_sent: usize,
         }
-        futures_util::stream::unfold(State { live: self.clone(), next: after, ended: false }, |mut s| async move {
+        let providers_sent = if after == 0 { 0 } else { usize::MAX };
+        futures_util::stream::unfold(State { live: self.clone(), next: after, ended: false, providers_sent }, |mut s| async move {
             if s.ended {
                 return None;
             }
@@ -172,7 +193,11 @@ impl Live {
                 notified.as_mut().enable();
                 let step = {
                     let g = live.lock();
-                    if (s.next as usize) < g.deltas.len() {
+                    if s.next == 0 && s.providers_sent < g.providers.len() {
+                        let (id, name) = g.providers[s.providers_sent].clone();
+                        s.providers_sent += 1;
+                        Some(GenEvent::Provider { id, name })
+                    } else if (s.next as usize) < g.deltas.len() {
                         Some(GenEvent::Delta { seq: s.next + 1, text: g.deltas[s.next as usize].clone() })
                     } else {
                         g.terminal.as_ref().map(|t| match t {
@@ -182,6 +207,7 @@ impl Live {
                     }
                 };
                 match step {
+                    Some(ev @ GenEvent::Provider { .. }) => return Some((ev, s)),
                     Some(ev @ GenEvent::Delta { .. }) => {
                         s.next += 1;
                         return Some((ev, s));
@@ -753,6 +779,7 @@ async fn attempts(
                 let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
                 let _ = db.conn().execute("UPDATE generations SET provider_id = ?2 WHERE id = ?1", rusqlite::params![fin.id, cand.id]);
             }
+            live.set_provider(&cand.id, &cand.provider.name);
             let span = state.audit.start_span(
                 SpanStart::new(&fin.id, Kind::Attempt, &cand.provider.name)
                     .parent(&fin.turn_span)
@@ -1040,6 +1067,7 @@ pub(crate) type EventStream = std::pin::Pin<Box<dyn Stream<Item = Result<Event, 
 
 fn to_sse(e: GenEvent) -> Result<Event, Infallible> {
     Ok(match e {
+        GenEvent::Provider { id, name } => sse_event(&ChatEvent::Provider { id, name }),
         GenEvent::Delta { seq, text } => sse_event_with_id(&ChatEvent::Delta { text }, Some(seq)),
         GenEvent::Done => sse_event(&ChatEvent::Done),
         GenEvent::Error { message } => sse_event(&ChatEvent::Error { message }),

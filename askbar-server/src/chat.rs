@@ -29,6 +29,7 @@ pub(crate) fn sse_event(e: &ChatEvent) -> Event {
 pub(crate) fn sse_event_with_id(e: &ChatEvent, seq: Option<u64>) -> Event {
     let name = match e {
         ChatEvent::Meta { .. } => "meta",
+        ChatEvent::Provider { .. } => "provider",
         ChatEvent::Delta { .. } => "delta",
         ChatEvent::Done => "done",
         ChatEvent::Error { .. } => "error",
@@ -89,6 +90,7 @@ pub async fn chat(
     let meta = futures_util::stream::once(async move { Ok(sse_event(&meta)) });
     let events = sub.live.subscribe(0).map(|e| {
         Ok(match e {
+            GenEvent::Provider { id, name } => sse_event(&ChatEvent::Provider { id, name }),
             GenEvent::Delta { seq, text } => sse_event_with_id(&ChatEvent::Delta { text }, Some(seq)),
             GenEvent::Done => sse_event(&ChatEvent::Done),
             GenEvent::Error { message } => sse_event(&ChatEvent::Error { message }),

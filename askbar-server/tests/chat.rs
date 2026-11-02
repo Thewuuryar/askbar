@@ -137,11 +137,12 @@ async fn complete_reply_is_streamed_and_saved_in_full() {
     assert!(r.headers()["content-type"].to_str().unwrap().starts_with("text/event-stream"));
     let events = parse_events(&r.text().await.unwrap().replace("\r\n", "\n"));
 
-    // Our own event names and shapes, in order: meta, deltas..., done.
+    // Our own event names and shapes, in order: meta, provider, deltas..., done.
     assert!(matches!(&events[0], (n, ChatEvent::Meta { .. }) if n == "meta"));
+    assert!(matches!(&events[1], (n, ChatEvent::Provider { id, name }) if n == "provider" && id == "p1" && name == "mock"), "{:?}", events[1]);
     assert!(matches!(events.last().unwrap(), (n, ChatEvent::Done) if n == "done"));
     let mut reply = String::new();
-    for (name, e) in &events[1..events.len() - 1] {
+    for (name, e) in &events[2..events.len() - 1] {
         let ChatEvent::Delta { text } = e else { panic!("unexpected {e:?}") };
         assert_eq!(name, "delta");
         reply.push_str(text);

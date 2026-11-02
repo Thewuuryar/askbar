@@ -116,6 +116,9 @@ impl ReplyReader {
                     }
                     steps.push(Step::Emit(StreamEvent::Started { conversation_id, generation_id, queued }));
                 }
+                // Which provider is serving the reply: shown from step 8.3; until then ignored,
+                // like any event this client does not know.
+                Ok(ChatEvent::Provider { .. }) => {}
                 Ok(ChatEvent::Delta { text }) => {
                     self.last_id += 1;
                     steps.push(Step::Emit(StreamEvent::Delta { text }));
@@ -666,7 +669,8 @@ mod tests {
         let stream = [
             sse("meta", None, r#"{"event":"meta","conversation_id":"c1","generation_id":"g1","queued":true}"#),
             sse("delta", Some(1), r#"{"event":"delta","text":"Hel"}"#),
-            sse("provider", None, r#"{"event":"provider","id":"x"}"#), // from a newer server: ignored
+            sse("provider", None, r#"{"event":"provider","id":"p1","name":"OpenAI"}"#), // announced; this client does not show it yet
+            sse("brand_new", None, r#"{"event":"brand_new","x":1}"#), // from a newer server: ignored
             sse("delta", Some(2), r#"{"event":"delta","text":"lo"}"#),
             sse("done", None, r#"{"event":"done"}"#),
         ]

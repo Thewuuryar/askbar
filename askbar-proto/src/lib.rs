@@ -257,6 +257,10 @@ pub enum ChatEvent {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         queued: bool,
     },
+    /// Which provider is serving this reply, sent before the first delta (and again if a fallback
+    /// changes it before any text). Not a delta: it has no SSE `id`. Clients that do not know it
+    /// ignore it.
+    Provider { id: String, name: String },
     Delta { text: String },
     Done,
     Error { message: String },
@@ -343,6 +347,7 @@ mod tests {
         for e in [
             ChatEvent::Meta { conversation_id: "x".into(), generation_id: None, queued: false },
             ChatEvent::Meta { conversation_id: "x".into(), generation_id: Some("g".into()), queued: true },
+            ChatEvent::Provider { id: "p1".into(), name: "OpenAI".into() },
             ChatEvent::Delta { text: "hi".into() },
             ChatEvent::Done,
             ChatEvent::Error { message: "bad".into() },

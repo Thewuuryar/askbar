@@ -300,3 +300,40 @@ async fn the_generation_row_and_its_token_usage_name_the_provider_that_finally_s
     let n: i64 = s.state.db.lock().unwrap().conn().query_row("SELECT COUNT(*) FROM token_usage", [], |r| r.get(0)).unwrap();
     assert_eq!(n, 1, "the failed tries used nothing and recorded nothing");
 }
+
+#[tokio::test]
+async fn the_provider_is_announced_before_the_first_delta_and_again_after_a_fallback() {
+    let s = stack("m", "m", serde_json::json!({})).await;
+    let events = s.run("hello").await;
+    assert_eq!(events[0], GenEvent::Provider { id: "p1".into(), name: "p1".into() }, "first of all");
+    assert!(matches!(events[1], GenEvent::Delta { seq: 1, .. }), "then the text, counted from 1: {:?}", &events[..3]);
+    assert_eq!(events.iter().filter(|e| matches!(e, GenEvent::Provider { .. })).count(), 1);
+
+    // After a fallback both are announced, in order, still before any text.
+    let s = stack("m-500", "m", serde_json::json!({ "allow_as_fallback": true })).await;
+    let events = s.run("please answer").await;
+    assert_eq!(
+        events[..3],
+        [
+            GenEvent::Provider { id: "p1".into(), name: "p1".into() },
+            GenEvent::Provider { id: "p2".into(), name: "p2".into() },
+            events[2].clone()
+        ]
+    );
+    assert!(matches!(events[2], GenEvent::Delta { seq: 1, .. }));
+
+    // No change of provider is ever announced once text has gone out.
+    let s = stack("m-reset", "m", serde_json::json!({ "allow_as_fallback": true })).await;
+    let events = s.run("tell me something").await;
+    assert_eq!(events.iter().filter(|e| matches!(e, GenEvent::Provider { .. })).count(), 1);
+}
+
+#[tokio::test]
+async fn a_subscriber_who_already_has_text_is_not_sent_the_announcements_again() {
+    let s = stack("m", "m", serde_json::json!({})).await;
+    let sub = s.submit("hello").ok().expect("accepted");
+    let all: Vec<GenEvent> = sub.live.subscribe(0).collect().await;
+    let rest: Vec<GenEvent> = sub.live.subscribe(3).collect().await;
+    assert!(rest.iter().all(|e| !matches!(e, GenEvent::Provider { .. })), "{rest:?}");
+    assert_eq!(rest.len(), all.len() - 1 - 3, "everything after delta 3, without the announcement");
+}
