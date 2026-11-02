@@ -57,8 +57,8 @@ div.panel { background: var(--card); border: 1px solid var(--line); border-radiu
 .bars { margin: 8px 0 14px; }
 .bar-row { display: grid; grid-template-columns: minmax(90px, 160px) 1fr minmax(110px, auto); gap: 8px; align-items: center; padding: 3px 0; font-size: 14px; }
 .bar-row .name { overflow-wrap: anywhere; }
-.bar-row .track { background: var(--bg); border-radius: 6px; height: 14px; overflow: hidden; }
-.bar-row .fill { background: var(--fg); opacity: .55; height: 100%; width: 0; border-radius: 6px; }
+.bar-row .track { display: block; background: var(--bg); border-radius: 6px; height: 14px; overflow: hidden; }
+.bar-row .fill { display: block; background: var(--fg); opacity: .55; height: 100%; width: 0; border-radius: 6px; }
 .bar-row .figs { color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
 @media (max-width: 560px) { .bar-row { grid-template-columns: 1fr; } .bar-row .figs { text-align: left; } }
 .filters { gap: 14px; flex-wrap: wrap; }
@@ -86,3 +86,4 @@ pre.plain { max-height: 50vh; overflow: auto; white-space: pre-wrap; overflow-wr
 pre.plain:empty { display: none; }
 .sealed-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 6px 0; border-bottom: 1px solid var(--line); }
 .sealed-row .what { flex: 1; min-width: 160px; overflow-wrap: anywhere; }
+#tab-audit h3 { margin-top: 22px; }
