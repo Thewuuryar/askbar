@@ -6,7 +6,9 @@
 //! read-only. The file is read on every request, so a replaced hash takes effect at once,
 //! and if it is missing or unreadable every request is refused (fail closed).
 
+use crate::error::{ApiError, ApiJson};
 use crate::AppState;
+use askbar_proto::problem::ErrorCode;
 use askbar_proto::Snapshot;
 use axum::{
     extract::{Path, Request, State},
@@ -69,7 +71,7 @@ fn token_matches(hash_file: &std::path::Path, token: &str) -> bool {
     sha256_hex(token).as_bytes().ct_eq(stored.as_bytes()).into()
 }
 
-async fn require_token(State(guard): State<Guard>, req: Request, next: Next) -> Result<Response, StatusCode> {
+async fn require_token(State(guard): State<Guard>, req: Request, next: Next) -> Result<Response, ApiError> {
     let token = req
         .headers()
         .get(header::AUTHORIZATION)
@@ -77,19 +79,19 @@ async fn require_token(State(guard): State<Guard>, req: Request, next: Next) -> 
         .and_then(|v| v.split_once(' '))
         .filter(|(scheme, t)| scheme.eq_ignore_ascii_case("bearer") && !t.trim().is_empty())
         .map(|(_, t)| t.trim().to_string())
-        .ok_or(StatusCode::UNAUTHORIZED)?;
+        .ok_or_else(|| ApiError::new(ErrorCode::Unauthorized, "Send the server token as `Authorization: Bearer <token>`."))?;
     let file = guard.hash_file.clone();
     let ok = tokio::task::spawn_blocking(move || token_matches(&file, &token)).await.unwrap_or(false);
     if ok {
         Ok(next.run(req).await)
     } else {
-        Err(StatusCode::UNAUTHORIZED)
+        Err(ApiError::new(ErrorCode::Unauthorized, "The server does not accept this token."))
     }
 }
 
 /// Replace the configuration snapshot. The version in the body is ignored; the server
 /// assigns the next one and returns it.
-async fn put_snapshot(State(state): State<Arc<AppState>>, Json(s): Json<Snapshot>) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+async fn put_snapshot(State(state): State<Arc<AppState>>, ApiJson(s): ApiJson<Snapshot>) -> Result<Json<serde_json::Value>, ApiError> {
     let applied = {
         let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
         crate::snapshot::apply(&db, &s)
@@ -100,15 +102,16 @@ async fn put_snapshot(State(state): State<Arc<AppState>>, Json(s): Json<Snapshot
     }
     match applied {
         Ok(version) => Ok(Json(serde_json::json!({ "version": version }))),
-        Err(crate::snapshot::ApplyError::Invalid(why)) => Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": why })))),
-        Err(crate::snapshot::ApplyError::Store(_)) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": "could not store the snapshot" })))),
+        Err(crate::snapshot::ApplyError::Invalid(why)) => Err(ApiError::new(ErrorCode::BadRequest, why)),
+        Err(crate::snapshot::ApplyError::Store(_)) => Err(ApiError::new(ErrorCode::Internal, "Could not store the snapshot.")),
     }
 }
 
-type Failure = (StatusCode, Json<serde_json::Value>);
+type Failure = ApiError;
 
+/// An error with the sentence `msg`; the status picks the code.
 fn fail(status: StatusCode, msg: &str) -> Failure {
-    (status, Json(serde_json::json!({ "error": msg })))
+    ApiError::from(status).detail(msg)
 }
 
 #[derive(serde::Deserialize)]
@@ -120,7 +123,7 @@ const MAX_KEY_CHARS: usize = 4096;
 
 /// Store a provider's API key, encrypted with the master key. Write-only: no endpoint
 /// ever returns it, and this one answers `204` with no body.
-async fn put_provider_key(State(state): State<Arc<AppState>>, Path(id): Path<String>, Json(input): Json<KeyInput>) -> Result<StatusCode, Failure> {
+async fn put_provider_key(State(state): State<Arc<AppState>>, Path(id): Path<String>, ApiJson(input): ApiJson<KeyInput>) -> Result<StatusCode, Failure> {
     let key = input.key.trim();
     if key.is_empty() || key.chars().count() > MAX_KEY_CHARS {
         return Err(fail(StatusCode::BAD_REQUEST, "The key must be 1 to 4096 characters."));
@@ -286,7 +289,7 @@ async fn usage(State(state): State<Arc<AppState>>) -> Result<Json<serde_json::Va
 
 /// The database as a download, with provider keys, the Cloudflare token, the admin password
 /// hash and pairing-code hashes taken out.
-async fn backup(State(state): State<Arc<AppState>>) -> Result<Response, StatusCode> {
+async fn backup(State(state): State<Arc<AppState>>) -> Result<Response, ApiError> {
     crate::backup::response(state).await
 }
 
@@ -306,6 +309,8 @@ pub fn router(state: Arc<AppState>, hash_file: PathBuf) -> Router {
         .route("/mgmt/v1/audit/traces/{id}", get(audit_trace))
         .route("/mgmt/v1/audit/stats", get(audit_stats))
         .route("/mgmt/v1/audit/payloads/{span_id}", get(audit_payloads))
+        .fallback(crate::error::not_found)
+        .method_not_allowed_fallback(crate::error::method_not_allowed)
         .layer(middleware::from_fn_with_state(Guard { hash_file }, require_token))
         .with_state(state)
 }

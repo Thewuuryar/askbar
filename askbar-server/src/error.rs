@@ -26,6 +26,12 @@ impl ApiError {
         ApiError::new(code, default_detail(code))
     }
 
+    /// Replaces the sentence for a person.
+    pub fn detail(mut self, detail: impl Into<String>) -> ApiError {
+        self.problem.detail = detail.into();
+        self
+    }
+
     /// Adds an extension member such as `period`.
     pub fn with(mut self, key: &str, value: impl Into<serde_json::Value>) -> ApiError {
         self.problem = self.problem.with(key, value);

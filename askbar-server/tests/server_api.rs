@@ -211,7 +211,8 @@ async fn retention_below_seven_days_is_rejected_and_changes_nothing() {
         bad.kill_switch = true;
         let (st, body) = s.put(&serde_json::to_value(bad).unwrap(), Some(TOKEN)).await;
         assert_eq!(st, 400, "{days} days");
-        assert!(body["error"].as_str().unwrap().contains("at least 7"), "{body}");
+        assert!(body["detail"].as_str().unwrap().contains("at least 7"), "{body}");
+        assert_eq!(body["error"], "bad_request");
     }
     let (st, _) = s.put(&serde_json::to_value(Snapshot { audit_retention_days: 7, ..snapshot() }).unwrap(), Some(TOKEN)).await;
     assert_eq!(st, 200, "7 is the minimum and is accepted");
@@ -823,4 +824,41 @@ async fn stats_total_the_cost_with_a_breakdown_by_provider_and_by_day_and_say_wh
     assert!(v["cost"].is_null() && v["by_provider"][0]["cost"].is_null() && v["by_day"][0]["cost"].is_null());
     assert_eq!(v["cost_unknown_requests"], 3);
     assert_metadata_only(&body);
+}
+
+#[tokio::test]
+async fn server_api_failures_are_problems_with_a_code_and_a_sentence() {
+    let t = start(true).await;
+    let auth = format!("Bearer {TOKEN}");
+    let url = |p: &str| format!("{}{p}", t.url);
+    let check = |r: reqwest::Response, status: u16, code: &'static str| async move {
+        assert_eq!(r.status().as_u16(), status, "{code}");
+        assert_eq!(r.headers()["content-type"], "application/problem+json", "{code}");
+        let p: askbar_proto::Problem = r.json().await.unwrap();
+        assert_eq!((p.error.as_str(), p.status), (code, status));
+        assert!(!p.detail.is_empty(), "{code}: a sentence for a person");
+    };
+    // No token and a wrong token.
+    let r = t.http.get(url("/mgmt/v1/health")).send().await.unwrap();
+    assert_eq!(r.headers()["www-authenticate"], "Bearer");
+    check(r, 401, "unauthorized").await;
+    check(t.http.get(url("/mgmt/v1/health")).header("authorization", "Bearer wrong").send().await.unwrap(), 401, "unauthorized").await;
+    // Unknown route and wrong method (after the token check).
+    check(t.http.get(url("/mgmt/v1/nope")).header("authorization", &auth).send().await.unwrap(), 404, "not_found").await;
+    check(t.http.delete(url("/mgmt/v1/health")).header("authorization", &auth).send().await.unwrap(), 405, "method_not_allowed").await;
+    // A body that is not JSON.
+    check(
+        t.http.put(url("/mgmt/v1/snapshot")).header("authorization", &auth).header("content-type", "application/json").body("nope").send().await.unwrap(),
+        400,
+        "bad_request",
+    )
+    .await;
+    // A snapshot the server refuses says why, in detail.
+    let r = t.http.put(url("/mgmt/v1/snapshot")).header("authorization", &auth).json(&serde_json::json!({ "audit_retention_days": 3 })).send().await.unwrap();
+    assert_eq!(r.status(), 400);
+    let p: askbar_proto::Problem = r.json().await.unwrap();
+    assert_eq!(p.error, "bad_request");
+    assert!(p.detail.contains("at least 7"), "{}", p.detail);
+    // Unknown provider key target, and the audit endpoints with no store recording.
+    check(t.http.put(url("/mgmt/v1/providers/nope/key")).header("authorization", &auth).json(&serde_json::json!({ "key": "k" })).send().await.unwrap(), 404, "not_found").await;
 }

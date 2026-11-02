@@ -2,11 +2,12 @@
 //! Shared by the admin site and the server API.
 
 use crate::AppState;
-use axum::http::StatusCode;
+use crate::error::ApiError;
+use askbar_proto::problem::ErrorCode;
 use std::sync::Arc;
 
-fn internal_error<E>(_: E) -> StatusCode {
-    StatusCode::INTERNAL_SERVER_ERROR
+fn internal_error<E>(_: E) -> ApiError {
+    ApiError::new(ErrorCode::Internal, "Could not make the backup.")
 }
 
 /// Deletes the snapshot file when the download finishes or the client goes away.
@@ -56,7 +57,7 @@ fn make_snapshot(state: &AppState, path: &std::path::Path) -> rusqlite::Result<(
     Ok(())
 }
 
-pub async fn response(state: Arc<AppState>) -> Result<axum::response::Response, StatusCode> {
+pub async fn response(state: Arc<AppState>) -> Result<axum::response::Response, ApiError> {
     use axum::{body::Body, http::header};
     let mut raw = [0u8; 8];
     chacha20poly1305::aead::rand_core::RngCore::fill_bytes(&mut chacha20poly1305::aead::OsRng, &mut raw);

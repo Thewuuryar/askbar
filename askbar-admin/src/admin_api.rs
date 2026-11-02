@@ -40,7 +40,7 @@ fn from_push(e: PushError) -> Failure {
     match e {
         PushError::Unreachable(_) => offline(),
         PushError::Refused { status: 400, body } => {
-            let why = serde_json::from_str::<serde_json::Value>(&body).ok().and_then(|v| v["error"].as_str().map(str::to_string));
+            let why = serde_json::from_str::<serde_json::Value>(&body).ok().and_then(|v| v["detail"].as_str().or(v["error"].as_str()).map(str::to_string));
             bad(&why.unwrap_or_else(|| "The server did not accept that.".into()))
         }
         PushError::Refused { status, .. } => err(StatusCode::BAD_GATEWAY, &format!("The server answered {status}. Nothing was changed.")),
