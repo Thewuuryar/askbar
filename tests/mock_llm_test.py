@@ -91,6 +91,41 @@ class Modes(unittest.TestCase):
         self.assertEqual(self.usage_chunk("hello", None), [])
         self.assertEqual(self.usage_chunk("hello", {"stream_options": {"include_usage": False}}), [])
 
+    def anthropic(self, text, extra=None):
+        body = {"model": "m", "stream": True, "max_tokens": 100, "system": "sys",
+                "messages": [{"role": "user", "content": [{"type": "text", "text": text}]}]}
+        body.update(extra or {})
+        c = http.client.HTTPConnection("127.0.0.1", self.srv.port, timeout=10)
+        c.request("POST", "/v1/messages", json.dumps(body), {"content-type": "application/json"})
+        return c.getresponse()
+
+    def test_anthropic_stream_events(self):
+        r = self.anthropic("a cached prompt")
+        self.assertEqual(r.status, 200)
+        events, data = [], []
+        for line in r.read().decode().splitlines():
+            if line.startswith("event: "):
+                events.append(line[7:])
+            elif line.startswith("data: "):
+                data.append(json.loads(line[6:]))
+        self.assertEqual(events[0], "message_start")
+        self.assertEqual(events[-2:], ["message_delta", "message_stop"])
+        self.assertIn("content_block_delta", events)
+        start = data[0]["message"]["usage"]
+        self.assertEqual(start["input_tokens"], 100)
+        self.assertEqual(start["cache_read_input_tokens"], 64)
+        md = next(d for d in data if d["type"] == "message_delta")
+        self.assertEqual(md["usage"]["output_tokens"], 50)
+
+    def test_anthropic_honors_modes(self):
+        self.assertEqual(self.anthropic("429").status, 429)
+        self.assertEqual(self.anthropic("500").status, 500)
+        self.assertEqual(self.anthropic("fail").status, 401)
+        r = self.anthropic("drop")
+        data = r.read().decode()
+        self.assertEqual(data.count("content_block_delta\ndata"), 2)
+        self.assertNotIn("message_stop", data)
+
 
 if __name__ == "__main__":
     unittest.main()
