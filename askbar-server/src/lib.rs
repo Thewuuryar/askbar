@@ -1,18 +1,21 @@
-//! Askbar server. Two separate routers: the device API and the admin site.
+//! Askbar server: the device API and, on its own listener, the management API the admin service uses.
 
-pub mod admin;
-pub mod admin_api;
 pub mod api;
 pub mod auth;
-pub mod caddy;
+pub mod backup;
 pub mod chat;
-pub mod import;
-pub mod network;
-pub mod rotate;
+pub mod db;
+pub mod ids;
+pub mod llm;
+pub mod mgmt;
+pub mod provider_test;
 pub mod secrets;
+pub mod snapshot;
 pub mod store;
+#[doc(hidden)]
+pub mod testing;
 
-use askbar_core::Db;
+pub use db::{make_title, ConversationSummary, Db, DbError, SearchHit, StoredMessage};
 use askbar_proto::{Health, PairRequest, PairResponse};
 use axum::{
     extract::{Request, State},
@@ -20,97 +23,31 @@ use axum::{
     middleware,
     middleware::Next,
     response::Response,
-    response::Redirect,
-    routing::{get, post, put},
+    routing::{get, post},
     Json, Router,
 };
 use secrets::Secrets;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 
 pub const API_VERSION: u32 = 1;
-pub const MIN_CLIENT: &str = "0.1.0";
+pub const MIN_CLIENT: &str = "0.3.0";
 
 pub struct AppState {
     pub db: Mutex<Db>,
-    /// `None` until the master key exists (setup mode).
-    secrets: RwLock<Option<Arc<Secrets>>>,
-    /// Where the master key file is (or will be created).
-    pub key_path: std::path::PathBuf,
-    pub http: askbar_core::HttpClient,
-    pub admin: admin::AdminAuth,
+    secrets: Arc<Secrets>,
+    pub http: llm::HttpClient,
     /// Oldest client version the API still serves.
     pub min_client: String,
-    /// Where clients reach the API when TLS is off; goes into pairing strings.
-    pub public_url: String,
-    /// Host ports of the HTTPS front end (they decide the address in pairing strings).
-    pub caddy: Mutex<caddy::CaddyLink>,
-    /// How the last attempt to configure Caddy went.
-    pub proxy: Mutex<caddy::ProxyStatus>,
-    pub tls_api_port: std::sync::atomic::AtomicU16,
-    pub tls_admin_port: std::sync::atomic::AtomicU16,
 }
 
 impl AppState {
-    pub fn new(db: Db, secrets: Secrets) -> Arc<AppState> {
-        AppState::with_min_client(db, secrets, MIN_CLIENT)
+    pub fn new(db: Db, secrets: Secrets, min_client: &str) -> Arc<AppState> {
+        Arc::new(AppState { db: Mutex::new(db), secrets: Arc::new(secrets), http: llm::http_client(), min_client: min_client.to_string() })
     }
 
-    pub fn with_min_client(db: Db, secrets: Secrets, min_client: &str) -> Arc<AppState> {
-        AppState::with_config(db, secrets, min_client, "http://localhost:8080")
+    pub fn secrets(&self) -> Arc<Secrets> {
+        self.secrets.clone()
     }
-
-    pub fn with_config(db: Db, secrets: Secrets, min_client: &str, public_url: &str) -> Arc<AppState> {
-        // A throwaway key location, so setup-related code can't touch a real one.
-        let key_path = std::env::temp_dir().join(format!("askbar-test-{}", ulid::Ulid::new())).join("master.key");
-        AppState::build(db, Some(secrets), min_client, public_url, key_path)
-    }
-
-    /// The server as it starts for real: `secrets` is `None` when no master key file exists yet.
-    pub fn build(db: Db, secrets: Option<Secrets>, min_client: &str, public_url: &str, key_path: std::path::PathBuf) -> Arc<AppState> {
-        Arc::new(AppState {
-            db: Mutex::new(db),
-            secrets: RwLock::new(secrets.map(Arc::new)),
-            key_path,
-            http: askbar_core::http_client(),
-            admin: admin::AdminAuth::default(),
-            min_client: min_client.to_string(),
-            public_url: public_url.trim_end_matches('/').to_string(),
-            caddy: Mutex::new(caddy::CaddyLink::default()),
-            proxy: Mutex::new(caddy::ProxyStatus::default()),
-            tls_api_port: 8443.into(),
-            tls_admin_port: 9443.into(),
-        })
-    }
-
-    /// The master key, if setup has created it.
-    pub fn secrets(&self) -> Option<Arc<Secrets>> {
-        self.secrets.read().unwrap_or_else(|e| e.into_inner()).clone()
-    }
-
-    pub fn set_secrets(&self, s: Secrets) {
-        *self.secrets.write().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(s));
-    }
-
-    pub fn set_caddy(&self, link: caddy::CaddyLink) {
-        *self.caddy.lock().unwrap_or_else(|e| e.into_inner()) = link;
-    }
-
-    pub fn set_tls_ports(&self, api: u16, admin: u16) {
-        self.tls_api_port.store(api, std::sync::atomic::Ordering::Relaxed);
-        self.tls_admin_port.store(admin, std::sync::atomic::Ordering::Relaxed);
-    }
-
-    pub fn setup_complete(&self) -> bool {
-        self.secrets().is_some()
-    }
-}
-
-/// Setup mode: until the master key exists, everything but health answers 503.
-async fn require_ready(State(state): State<Arc<AppState>>, req: Request, next: Next) -> Result<Response, StatusCode> {
-    if !state.setup_complete() {
-        return Err(StatusCode::SERVICE_UNAVAILABLE);
-    }
-    Ok(next.run(req).await)
 }
 
 pub fn api_router(state: Arc<AppState>) -> Router {
@@ -121,6 +58,9 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         .route("/api/v1/providers", get(api::providers))
         .route("/api/v1/conversations", get(api::conversations))
         .route("/api/v1/conversations/{id}", get(api::conversation).delete(api::delete_conversation))
+        .route("/api/v1/me/prefs", get(api::get_prefs).put(api::put_prefs))
+        .route("/api/v1/me/display-defaults", get(api::display_defaults))
+        .route("/api/v1/search", get(api::search))
         .route("/api/v1/settings", get(api::settings))
         .route("/api/v1/chat", post(chat::chat))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_device_token));
@@ -128,7 +68,6 @@ pub fn api_router(state: Arc<AppState>) -> Router {
     let gated = Router::new()
         .route("/api/v1/pair", post(pair))
         .merge(protected)
-        .route_layer(middleware::from_fn_with_state(state.clone(), require_ready))
         .route_layer(middleware::from_fn_with_state(state.clone(), require_client_version));
     Router::new()
         .route("/api/v1/health", get(health))
@@ -151,43 +90,6 @@ async fn require_client_version(State(state): State<Arc<AppState>>, req: Request
     }
 }
 
-pub fn admin_router(state: Arc<AppState>) -> Router {
-    let protected: Router<Arc<AppState>> = Router::new()
-        .route("/admin/session", get(|| async { StatusCode::NO_CONTENT }))
-        .route("/admin/logout", post(admin::logout))
-        .route("/admin/api/providers", get(admin_api::list_providers).post(admin_api::create_provider))
-        .route("/admin/api/providers/{id}", put(admin_api::update_provider).delete(admin_api::delete_provider))
-        .route("/admin/api/providers/{id}/test", post(admin_api::test_provider))
-        .route("/admin/api/setup/master-key", post(admin::setup_master_key))
-        .route("/admin/api/password", post(admin::change_password))
-        .route("/admin/api/security", get(admin::security_status))
-        .route("/admin/api/security/rotate-key", post(admin::rotate_key))
-        .route("/admin/api/security/previous-key", axum::routing::delete(admin::delete_previous_key))
-        .route("/admin/api/network", get(network::get_network).put(network::put_network))
-        .route("/admin/api/network/apply", post(network::apply_network))
-        .route("/admin/api/backup", get(admin_api::backup))
-        .route("/admin/api/devices", get(admin_api::list_devices))
-        .route("/admin/api/devices/{id}/revoke", post(admin_api::revoke_device))
-        .route("/admin/api/pair", post(admin_api::create_pairing))
-        .route("/admin/api/settings", get(admin_api::get_settings).put(admin_api::put_settings))
-        .route_layer(middleware::from_fn_with_state(state.clone(), admin::require_session));
-    Router::new()
-        .route("/", get(|| async { Redirect::to("/admin/") }))
-        .route("/admin", get(|| async { Redirect::to("/admin/") }))
-        .route("/admin/", get(|| async { admin_asset("text/html; charset=utf-8", include_str!("admin_ui/index.html")) }))
-        .route("/admin/app.js", get(|| async { admin_asset("text/javascript; charset=utf-8", include_str!("admin_ui/app.js")) }))
-        .route("/admin/style.css", get(|| async { admin_asset("text/css; charset=utf-8", include_str!("admin_ui/style.css")) }))
-        .route("/admin/health", get(admin_health))
-        .route("/admin/login", post(admin::login))
-        .route("/admin/api/setup-status", get(admin::setup_status))
-        .route("/admin/api/setup/password", post(admin::setup_password))
-        .merge(protected)
-        .layer(middleware::from_fn(admin::require_admin_header))
-        .layer(middleware::from_fn(admin::security_headers))
-        .with_state(state)
-        .layer(middleware::from_fn(log_requests))
-}
-
 async fn health(State(state): State<Arc<AppState>>) -> Json<Health> {
     Json(Health { api_version: API_VERSION, min_client: state.min_client.clone() })
 }
@@ -201,10 +103,6 @@ async fn pair(State(state): State<Arc<AppState>>, Json(req): Json<PairRequest>) 
     }
 }
 
-async fn admin_health() -> &'static str {
-    "ok"
-}
-
 /// Logs method, path and status only: no query string, headers or bodies.
 async fn log_requests(req: Request, next: Next) -> Response {
     let method = req.method().clone();
@@ -214,6 +112,3 @@ async fn log_requests(req: Request, next: Next) -> Response {
     res
 }
 
-fn admin_asset(content_type: &'static str, body: &'static str) -> impl axum::response::IntoResponse {
-    ([(axum::http::header::CONTENT_TYPE, content_type)], body)
-}

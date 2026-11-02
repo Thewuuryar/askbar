@@ -95,7 +95,7 @@ async function waitIdle(page) {
     await ask(page, 'And with width?');
     await waitIdle(page);
     const asks = await calls(page, 'ask');
-    assert.equal(asks[1].conversationId, 1);
+    assert.equal(asks[1].conversationId, '1');
     assert.equal(await page.locator('.msg.user').count(), 2);
   });
 
@@ -179,7 +179,7 @@ async function waitIdle(page) {
     await ask(page, 'one more');
     await waitIdle(page);
     const asks = await calls(page, 'ask');
-    assert.equal(asks[3].conversationId, 1);
+    assert.equal(asks[3].conversationId, '1');
   });
 
   await step('delete needs a second click and disarms on its own', async () => {
@@ -210,7 +210,7 @@ async function waitIdle(page) {
     assert.equal(await page.isHidden('#thread'), true);
     assert.match(await page.locator('.history-empty').innerText(), /No saved conversations/);
     const del = await calls(page, 'delete_conversation');
-    assert.deepEqual(del.map((d) => d.id).sort(), [1, 2]);
+    assert.deepEqual(del.map((d) => d.id).sort(), ['1', '2']);
     await shot(page, '05-history-empty');
   });
 
@@ -218,7 +218,7 @@ async function waitIdle(page) {
     await page.evaluate(() => {
       const now = Math.floor(Date.now() / 1000);
       const mk = (id, title, ago) => ({ id, title, updated_at: now - ago, messages: [] });
-      window.__db.convs.push(mk(11, 'two days ago', 2 * 86400 + 60), mk(12, 'long ago', 40 * 86400), mk(13, 'yesterday-ish', 86400 + 3600 * 12));
+      window.__db.convs.push(mk('11', 'two days ago', 2 * 86400 + 60), mk('12', 'long ago', 40 * 86400), mk('13', 'yesterday-ish', 86400 + 3600 * 12));
       window.__db.nextConv = 20;
     });
     await page.click('#history-toggle'); // close
@@ -228,7 +228,7 @@ async function waitIdle(page) {
     assert.ok(groups.includes('Previous 7 days'), groups.join());
     const order = await page.locator('.conv .open').allInnerTexts();
     assert.equal(order[order.length - 1], 'long ago', 'oldest last');
-    await page.evaluate(() => { window.__db.convs = window.__db.convs.filter((c) => c.id < 11); });
+    await page.evaluate(() => { window.__db.convs = window.__db.convs.filter((c) => Number(c.id) < 11); });
     await page.click('#history-toggle'); await page.click('#history-toggle');
   });
 
@@ -279,6 +279,29 @@ async function waitIdle(page) {
   });
   await page.context().close();
 
+  // ------------------------------------------------- server defaults and local overrides
+  page = await open(browser, { serverUi: { theme: 'dark', width: 900 } });
+  await step('the look follows the server default for this user', async () => {
+    assert.equal(await page.getAttribute('html', 'data-theme'), 'dark');
+    assert.equal(await page.evaluate(() => document.documentElement.style.getPropertyValue('--card-w')), '900px');
+  });
+  await step('a local override wins, for its own field only', async () => {
+    await page.evaluate(() => { window.__opts.override = { theme: 'light' }; });
+    await page.evaluate(() => window.__listeners['askbar:shown']());
+    await page.waitForFunction(() => document.documentElement.dataset.theme === 'light');
+    assert.equal(await page.evaluate(() => document.documentElement.style.getPropertyValue('--card-w')), '900px', 'width still follows the server');
+  });
+  await step('resetting the override returns the server default', async () => {
+    await page.evaluate(() => { window.__opts.override = null; });
+    await page.evaluate(() => window.__listeners['askbar:shown']());
+    await page.waitForFunction(() => document.documentElement.dataset.theme === 'dark');
+    assert.equal(await page.evaluate(() => document.documentElement.style.getPropertyValue('--card-w')), '900px');
+  });
+  await step('no JavaScript errors with server defaults and overrides', async () => {
+    assert.deepEqual(page.errors, []);
+  });
+  await page.context().close();
+
   // ------------------------------------------------- notice + dark theme
   page = await open(browser, { notice: 'Welcome. Add your API key in /home/u/.config/askbar/config.yaml, then ask away.', theme: 'dark' });
   await step('first-run notice appears, offers the config, and dismisses', async () => {
@@ -314,7 +337,7 @@ async function waitIdle(page) {
     offline: { kind: 'offline', message: 'Server offline. Could not reach http://localhost:8080. Check that it is running and that you are on the right network.' },
     rejected: { kind: 'rejected', message: 'Token rejected. The server no longer accepts this device; it may have been revoked.' },
     update_needed: { kind: 'update_needed', message: 'Update needed. This version of Askbar is too old for the server.' },
-    provider_missing: { kind: 'provider_missing', message: 'Provider "gone" no longer exists on the server. Pick another.', providers: ['alpha', 'beta'] },
+    provider_missing: { kind: 'provider_missing', message: 'The provider you picked no longer exists on the server. Pick another.', providers: [{ id: 'p1', name: 'alpha' }, { id: 'p2', name: 'beta' }] },
   };
 
   page = await open(browser);
@@ -355,7 +378,7 @@ async function waitIdle(page) {
     assert.deepEqual(labels, ['Use alpha', 'Use beta']);
     await page.click('#status-actions [data-action="provider"] >> text=Use beta');
     await page.waitForSelector('#status', { state: 'hidden' });
-    assert.deepEqual(await calls(page, 'set_active_provider'), [{ name: 'beta' }]);
+    assert.deepEqual(await calls(page, 'set_active_provider'), [{ id: 'p2' }]);
     await ask(page, 'works now');
     await waitIdle(page);
     assert.match(await page.innerText('#model-label'), /via beta/);

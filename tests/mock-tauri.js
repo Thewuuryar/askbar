@@ -23,18 +23,26 @@
   const title = (t) => (t.length > 60 ? t.slice(0, 59) + '…' : t);
 
   const handlers = {
+    // The look is the server's default for this user (opts.serverUi) with this client's own
+    // overrides (opts.override) on top; `opts.theme` is shorthand for a theme override.
     bootstrap: () => ({
-      ui: {
-        theme: window.__opts.theme || 'auto', width: 720, max_height: 640, history_width: 260,
-        top_percent: 0.22, hide_on_blur: true, macos_hide_dock_icon: true,
-      },
+      ui: Object.assign(
+        {
+          theme: 'auto', width: 720, max_height: 640, history_width: 260,
+          top_percent: 0.22, hide_on_blur: true, macos_hide_dock_icon: true,
+        },
+        window.__opts.serverUi || {},
+        window.__opts.override || {},
+        window.__opts.theme ? { theme: window.__opts.theme } : {},
+      ),
       hotkey: 'Ctrl+Shift+Space', provider: window.__opts.provider || 'mock', model: 'mock-model',
       notice: window.__opts.notice || null,
     }),
     // opts.status stands for the server's state: { kind, message, providers? } or absent when healthy.
     server_status: () => (window.__opts.status ? JSON.parse(JSON.stringify(window.__opts.status)) : null),
-    set_active_provider: ({ name }) => {
-      window.__opts.provider = name;
+    set_active_provider: ({ id }) => {
+      const chosen = ((window.__opts.status || {}).providers || []).find((p) => p.id === id);
+      window.__opts.provider = chosen ? chosen.name : id;
       if (window.__opts.status && window.__opts.status.kind === 'provider_missing') window.__opts.status = null;
     },
     // A pairing string is accepted when it starts with the prefix and the code is not "bad".
@@ -44,7 +52,7 @@
       window.__opts.status = null;
     },
     list_conversations: () =>
-      db.convs.slice().sort((a, b) => b.updated_at - a.updated_at || b.id - a.id)
+      db.convs.slice().sort((a, b) => b.updated_at - a.updated_at || Number(b.id) - Number(a.id))
         .map((c) => ({ id: c.id, title: c.title, updated_at: c.updated_at, message_count: c.messages.length })),
     load_conversation: ({ id }) => db.convs.find((c) => c.id === id).messages,
     delete_conversation: ({ id }) => { db.convs = db.convs.filter((c) => c.id !== id); },
@@ -62,10 +70,10 @@
       }
       let conv = db.convs.find((c) => c.id === conversationId);
       if (!conv) {
-        conv = { id: db.nextConv++, title: title(text), updated_at: ++db.clock, messages: [] };
+        conv = { id: String(db.nextConv++), title: title(text), updated_at: ++db.clock, messages: [] };
         db.convs.push(conv);
       }
-      conv.messages.push({ id: db.nextMsg++, role: 'user', content: text, created_at: db.clock });
+      conv.messages.push({ id: String(db.nextMsg++), role: 'user', content: text, created_at: db.clock });
       onEvent.onmessage({ event: 'started', conversationId: conv.id });
 
       if (/fail/i.test(text)) {
@@ -82,7 +90,7 @@
         onEvent.onmessage({ event: 'delta', text: piece });
         await sleep(slow ? 40 : 2);
       }
-      if (sent) conv.messages.push({ id: db.nextMsg++, role: 'assistant', content: sent, created_at: db.clock });
+      if (sent) conv.messages.push({ id: String(db.nextMsg++), role: 'assistant', content: sent, created_at: db.clock });
       conv.updated_at = ++db.clock;
       onEvent.onmessage({ event: cancelFlag ? 'cancelled' : 'done' });
     },

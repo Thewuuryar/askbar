@@ -1,4 +1,4 @@
-use askbar_server::{auth, secrets::Secrets, AppState};
+use askbar_server::{secrets::Secrets, AppState};
 use axum::Router;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -11,9 +11,9 @@ struct Server {
 }
 
 async fn start() -> Server {
-    let db = askbar_core::Db::open_in_memory().unwrap();
+    let db = askbar_server::Db::open_in_memory().unwrap();
     let user = db.seed_server().unwrap();
-    let state = AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap());
+    let state = AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), askbar_server::MIN_CLIENT);
     let app: Router = askbar_server::api_router(state.clone());
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = l.local_addr().unwrap();
@@ -36,7 +36,7 @@ impl Server {
         r.send().await.unwrap().status().as_u16()
     }
     fn code(&self, ttl: i64) -> String {
-        auth::create_pair_code(&self.state.db.lock().unwrap(), &self.user, "laptop", ttl).unwrap()
+        askbar_server::testing::add_pair_code_expiring(&self.state.db.lock().unwrap(), &self.user, "laptop", ttl)
     }
     async fn token(&self) -> String {
         let r = self.pair(&self.code(600)).await;
@@ -59,7 +59,7 @@ async fn valid_token_works_and_updates_last_seen() {
     let s = start().await;
     let token = s.token().await;
     let seen = |s: &Server| -> Option<i64> {
-        s.state.db.lock().unwrap().conn().query_row("SELECT last_seen FROM device_tokens", [], |r| r.get(0)).unwrap()
+        s.state.db.lock().unwrap().conn().query_row("SELECT last_seen FROM devices", [], |r| r.get(0)).unwrap()
     };
     assert_eq!(seen(&s), None);
     assert_eq!(s.probe(Some(&token)).await, 204);
@@ -71,7 +71,7 @@ async fn revoked_token_is_401() {
     let s = start().await;
     let token = s.token().await;
     assert_eq!(s.probe(Some(&token)).await, 204);
-    s.state.db.lock().unwrap().conn().execute("UPDATE device_tokens SET revoked = 1", []).unwrap();
+    s.state.db.lock().unwrap().conn().execute("UPDATE devices SET revoked_at = 1", []).unwrap();
     assert_eq!(s.probe(Some(&token)).await, 401);
 }
 
@@ -96,10 +96,10 @@ async fn tokens_are_stored_hashed() {
     let s = start().await;
     let token = s.token().await;
     let db = s.state.db.lock().unwrap();
-    let stored: String = db.conn().query_row("SELECT hash FROM device_tokens", [], |r| r.get(0)).unwrap();
+    let stored: String = db.conn().query_row("SELECT hash FROM devices", [], |r| r.get(0)).unwrap();
     assert_ne!(stored, token);
     assert_eq!(stored.len(), 64);
-    let name: String = db.conn().query_row("SELECT name FROM device_tokens", [], |r| r.get(0)).unwrap();
+    let name: String = db.conn().query_row("SELECT name FROM devices", [], |r| r.get(0)).unwrap();
     assert_eq!(name, "laptop");
 }
 
@@ -111,6 +111,6 @@ async fn health_stays_public() {
 
 fn client() -> reqwest::Client {
     let mut h = reqwest::header::HeaderMap::new();
-    h.insert(askbar_proto::CLIENT_VERSION_HEADER, "0.1.0".parse().unwrap());
+    h.insert(askbar_proto::CLIENT_VERSION_HEADER, "0.3.0".parse().unwrap());
     reqwest::Client::builder().default_headers(h).build().unwrap()
 }

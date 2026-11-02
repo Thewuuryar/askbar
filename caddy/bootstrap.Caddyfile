@@ -1,7 +1,5 @@
-# Starting point only. The Askbar server replaces this with the real configuration
-# (from Network settings in the admin page) as soon as it is up.
+# Starting point only. The admin replaces this with the real configuration (Network settings)
+# through Caddy's admin socket. The admin API is on a unix socket, never on TCP.
 {
-	admin 0.0.0.0:2019 {
-		origins caddy:2019
-	}
+	admin unix//run/caddy/admin.sock|0660
 }

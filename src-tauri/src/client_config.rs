@@ -1,7 +1,6 @@
 //! `client.yaml`: where the server is and how this client looks. Secrets
 //! (the device token) are not stored here; see `tokens`.
 
-use askbar_core::{Theme, Ui};
 use askbar_proto::DisplaySettings;
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
@@ -15,6 +14,40 @@ pub fn path() -> PathBuf {
         }
     }
     dirs::config_dir().unwrap_or_else(|| PathBuf::from(".")).join("askbar").join("client.yaml")
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Theme {
+    Auto,
+    Light,
+    Dark,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Ui {
+    pub theme: Theme,
+    pub width: u32,
+    pub max_height: u32,
+    pub history_width: u32,
+    pub top_percent: f64,
+    pub hide_on_blur: bool,
+    pub macos_hide_dock_icon: bool,
+}
+
+impl Default for Ui {
+    fn default() -> Self {
+        Self {
+            theme: Theme::Auto,
+            width: 720,
+            max_height: 640,
+            history_width: 260,
+            top_percent: 0.22,
+            hide_on_blur: true,
+            macos_hide_dock_icon: true,
+        }
+    }
 }
 
 /// Display fields a user may override locally; anything left out follows the server.
@@ -42,7 +75,6 @@ pub struct UiOverrides {
 pub struct ClientConfig {
     pub server_url: String,
     pub hotkey: String,
-    pub active_provider: String,
     pub ui: UiOverrides,
     pub allow_insecure: bool,
 }
@@ -52,7 +84,6 @@ impl Default for ClientConfig {
         Self {
             server_url: String::new(),
             hotkey: "Ctrl+Shift+Space".into(),
-            active_provider: String::new(),
             ui: UiOverrides::default(),
             allow_insecure: false,
         }
@@ -132,6 +163,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn ui_defaults() {
+        let ui = Ui::default();
+        assert_eq!(ui.width, 720);
+        assert!(ui.hide_on_blur);
+    }
+
+    #[test]
+    fn top_percent_is_clamped() {
+        let server = DisplaySettings { top_percent: 5.0, ..DisplaySettings::default() };
+        assert_eq!(merge_ui(&server, &UiOverrides::default()).top_percent, 0.8);
+    }
+
+    #[test]
     fn https_is_always_allowed() {
         assert!(check_server_url("https://askbar.example.com:8443", false).is_ok());
         assert!(check_server_url("https://192.168.1.10", false).is_ok());
@@ -179,9 +223,9 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("askbar-client-yaml-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("client.yaml");
-        std::fs::write(&p, "server_url: https://x.example.com\nactive_provider: mock\nui:\n  width: 600\n  theme: dark\n").unwrap();
+        std::fs::write(&p, "server_url: https://x.example.com\nactive_provider: old-setting-from-v0.2\nui:\n  width: 600\n  theme: dark\n").unwrap();
         let c = ClientConfig::load(&p).unwrap();
-        assert_eq!((c.server_url.as_str(), c.active_provider.as_str(), c.allow_insecure), ("https://x.example.com", "mock", false));
+        assert_eq!((c.server_url.as_str(), c.allow_insecure), ("https://x.example.com", false));
         assert_eq!(c.hotkey, "Ctrl+Shift+Space");
         assert_eq!((c.ui.width, c.ui.theme), (Some(600), Some(Theme::Dark)));
         std::fs::write(&p, "server_url: [oops").unwrap();

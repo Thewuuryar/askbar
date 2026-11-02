@@ -55,17 +55,13 @@ struct T {
 
 async fn start() -> T {
     let mock = start_mock();
-    let db = askbar_core::Db::open_in_memory().unwrap();
+    let db = askbar_server::Db::open_in_memory().unwrap();
     let user = db.seed_server().unwrap();
     let secrets = Secrets::new("0123456789abcdef0123456789abcdef").unwrap();
-    db.conn()
-        .execute(
-            "INSERT INTO providers (id, name, type, base_url, model, api_key_enc, created_at) VALUES ('p1','mock','openai',?1,'m',?2,0)",
-            rusqlite::params![format!("http://127.0.0.1:{}/v1", mock.port), secrets.encrypt("sk-test")],
-        )
-        .unwrap();
-    let code = auth::create_pair_code(&db, &user, "t", 600).unwrap();
-    let state = AppState::new(db, secrets);
+    askbar_server::testing::add_provider(&db, askbar_server::testing::provider("p1", "mock", &format!("http://127.0.0.1:{}/v1", mock.port), "m"));
+    askbar_server::testing::store_key(&db, &secrets, "p1", "sk-test");
+    let code = askbar_server::testing::add_pair_code(&db, &user, "t");
+    let state = AppState::new(db, secrets, askbar_server::MIN_CLIENT);
     let token = auth::redeem_pair_code(&state.db.lock().unwrap(), &code).unwrap().unwrap();
     let app = askbar_server::api_router(state.clone());
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -125,7 +121,7 @@ fn wait_for<T>(what: &str, mut f: impl FnMut() -> Option<T>) -> T {
 async fn complete_reply_is_streamed_and_saved_in_full() {
     let t = start().await;
     let http = client();
-    let r = t.chat(&http, None, "mock", "Hello there").await;
+    let r = t.chat(&http, None, "p1", "Hello there").await;
     assert_eq!(r.status(), 200);
     assert!(r.headers()["content-type"].to_str().unwrap().starts_with("text/event-stream"));
     let events = parse_events(&r.text().await.unwrap().replace("\r\n", "\n"));
@@ -146,7 +142,7 @@ async fn complete_reply_is_streamed_and_saved_in_full() {
     assert_eq!(saved, [("user".to_string(), "Hello there".to_string()), ("assistant".to_string(), reply.clone())]);
 
     // The new conversation is visible, with a ULID id, and continues with history.
-    let r = t.chat(&http, Some(conversation_id), "mock", "And again").await;
+    let r = t.chat(&http, Some(conversation_id), "p1", "And again").await;
     assert_eq!(r.status(), 200);
     r.text().await.unwrap();
     assert_eq!(t.messages().len(), 4);
@@ -157,7 +153,7 @@ async fn complete_reply_is_streamed_and_saved_in_full() {
 async fn client_disconnect_saves_partial_reply_and_closes_upstream() {
     let t = start().await;
     let http = client_builder().pool_max_idle_per_host(0).build().unwrap();
-    let r = t.chat(&http, None, "mock", "please be slow").await;
+    let r = t.chat(&http, None, "p1", "please be slow").await;
     assert_eq!(r.status(), 200);
     let mut stream = r.bytes_stream();
     let mut got = String::new();
@@ -179,7 +175,7 @@ async fn client_disconnect_saves_partial_reply_and_closes_upstream() {
 async fn provider_failure_becomes_an_error_event_and_keeps_the_question() {
     let t = start().await;
     let http = client();
-    let r = t.chat(&http, None, "mock", "please fail").await;
+    let r = t.chat(&http, None, "p1", "please fail").await;
     assert_eq!(r.status(), 200);
     let events = parse_events(&r.text().await.unwrap().replace("\r\n", "\n"));
     let (name, ChatEvent::Error { message }) = events.last().unwrap() else { panic!("{events:?}") };
@@ -194,12 +190,14 @@ async fn bad_requests_are_plain_http_errors() {
     let t = start().await;
     let http = client();
     assert_eq!(t.chat(&http, None, "nope", "hi").await.status(), 404);
-    assert_eq!(t.chat(&http, Some("01NOSUCH"), "mock", "hi").await.status(), 404);
-    assert_eq!(t.chat(&http, None, "mock", "   ").await.status(), 400);
+    assert_eq!(t.chat(&http, Some("01NOSUCH"), "p1", "hi").await.status(), 404);
+    assert_eq!(t.chat(&http, None, "p1", "   ").await.status(), 400);
+    // Providers are addressed by id; the name "mock" is not accepted as a fallback.
+    assert_eq!(t.chat(&http, None, "mock", "hi").await.status(), 404);
     assert!(t.messages().is_empty());
     let r = http
         .post(format!("http://{}/api/v1/chat", t.addr))
-        .json(&ChatRequest { conversation_id: None, provider: "mock".into(), text: "hi".into() })
+        .json(&ChatRequest { conversation_id: None, provider: "p1".into(), text: "hi".into() })
         .send()
         .await
         .unwrap();
@@ -208,10 +206,91 @@ async fn bad_requests_are_plain_http_errors() {
 
 fn client_builder() -> reqwest::ClientBuilder {
     let mut h = reqwest::header::HeaderMap::new();
-    h.insert(askbar_proto::CLIENT_VERSION_HEADER, "0.1.0".parse().unwrap());
+    h.insert(askbar_proto::CLIENT_VERSION_HEADER, "0.3.0".parse().unwrap());
     reqwest::Client::builder().default_headers(h)
 }
 
 fn client() -> reqwest::Client {
     client_builder().build().unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn another_user_cannot_read_or_continue_my_conversation() {
+    let t = start().await;
+    let http = client();
+    let r = t.chat(&http, None, "p1", "My private question").await;
+    assert_eq!(r.status(), 200);
+    let body = r.text().await.unwrap();
+    let events = parse_events(&body);
+    let ChatEvent::Meta { conversation_id } = events[0].1.clone() else { panic!("first event must be meta") };
+    wait_for("the reply to be saved", || (t.messages().len() == 2).then_some(()));
+
+    // A second user with their own device.
+    let token_b = {
+        let db = t.state.db.lock().unwrap();
+        db.conn().execute("INSERT INTO users (id, name, created_at) VALUES ('B','other',0)", []).unwrap();
+        let code = askbar_server::testing::add_pair_code(&db, "B", "b-laptop");
+        auth::redeem_pair_code(&db, &code).unwrap().unwrap()
+    };
+    let get = |path: String| {
+        let (http, token, addr) = (http.clone(), token_b.clone(), t.addr);
+        async move { http.get(format!("http://{addr}{path}")).bearer_auth(token).send().await.unwrap() }
+    };
+    let list = get("/api/v1/conversations".into()).await;
+    assert_eq!(list.status(), 200);
+    assert_eq!(list.text().await.unwrap(), "[]");
+    assert_eq!(get(format!("/api/v1/conversations/{conversation_id}")).await.status(), 404);
+
+    // Continuing it is refused and writes nothing.
+    let r = http
+        .post(format!("http://{}/api/v1/chat", t.addr))
+        .bearer_auth(&token_b)
+        .json(&ChatRequest { conversation_id: Some(conversation_id.clone()), provider: "p1".into(), text: "intrusion".into() })
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 404);
+    assert_eq!(t.messages().len(), 2);
+
+    // Deleting it is refused too.
+    let r = http.delete(format!("http://{}/api/v1/conversations/{conversation_id}", t.addr)).bearer_auth(&token_b).send().await.unwrap();
+    assert_eq!(r.status(), 404);
+    let own = http.get(format!("http://{}/api/v1/conversations/{conversation_id}", t.addr)).bearer_auth(&t.token).send().await.unwrap();
+    assert_eq!(own.status(), 200);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_snapshots_system_prompt_is_sent_with_the_next_message_and_never_served() {
+    let t = start().await;
+    let http = client();
+    // Built-in prompt until the admin pushes one.
+    t.chat(&http, None, "p1", "hello").await.text().await.unwrap();
+    wait_for("the first reply", || t.mock.log.lock().unwrap().iter().any(|l| l.contains("last='hello'")).then_some(()));
+    let log = t.mock.log.lock().unwrap().join("\n");
+    assert!(log.contains("quick-question popup"), "{log}");
+
+    askbar_server::testing::update_snapshot(&t.state.db.lock().unwrap(), |s| s.system_prompt = Some("You are a pirate. Say arr.".into()));
+    t.chat(&http, None, "p1", "second").await.text().await.unwrap();
+    wait_for("the second reply", || {
+        t.mock.log.lock().unwrap().iter().any(|l| l.contains("system='You are a pirate. Say arr.'") && l.contains("last='second'")).then_some(())
+    });
+
+    askbar_server::testing::update_snapshot(&t.state.db.lock().unwrap(), |s| s.system_prompt = Some("Answer in French.".into()));
+    t.chat(&http, None, "p1", "third").await.text().await.unwrap();
+    wait_for("the third reply", || {
+        t.mock.log.lock().unwrap().iter().any(|l| l.contains("system='Answer in French.'") && l.contains("last='third'")).then_some(())
+    });
+
+    // Clients can read the display settings, but the prompt is never among them.
+    let settings = http
+        .get(format!("http://{}/api/v1/settings", t.addr))
+        .bearer_auth(&t.token)
+        .header("x-askbar-client-version", "0.3.0")
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(!settings.contains("French") && !settings.contains("pirate"), "{settings}");
 }

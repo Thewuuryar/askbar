@@ -19,6 +19,12 @@ pub enum SecretsError {
     TooShort,
     #[error("master key file {path}: {message}")]
     File { path: String, message: String },
+    #[error(
+        "the master key {path} is missing, but the database holds encrypted provider keys. \
+         Restore master.key into the `askbar-secrets` volume (back it up separately from data/); \
+         starting without it would lose access to those keys"
+    )]
+    KeyMissing { path: String },
     #[error("stored secret could not be decrypted (wrong master key or corrupted data)")]
     Decrypt,
 }
@@ -39,7 +45,7 @@ fn file_err(path: &std::path::Path, e: impl std::fmt::Display) -> SecretsError {
     SecretsError::File { path: path.display().to_string(), message: e.to_string() }
 }
 
-/// `Ok(None)` when there is no key file yet (the server then runs in setup mode).
+/// `Ok(None)` when there is no key file yet (a first start).
 pub fn load_key_file(path: &std::path::Path) -> Result<Option<Secrets>, SecretsError> {
     match std::fs::read_to_string(path) {
         Ok(text) => Secrets::new(text.trim()).map(Some),
@@ -48,26 +54,33 @@ pub fn load_key_file(path: &std::path::Path) -> Result<Option<Secrets>, SecretsE
     }
 }
 
+/// Start-up: load the master key, or create one on the very first start.
+///
+/// An existing key file is never overwritten. If the file is missing but the database
+/// already holds encrypted provider keys, creating a new key would make them unreadable
+/// for good, so this refuses and names the volume that should hold the key.
+pub fn ensure_key_file(path: &std::path::Path, db: &crate::Db) -> Result<Secrets, SecretsError> {
+    if let Some(secrets) = load_key_file(path)? {
+        return Ok(secrets);
+    }
+    let stored: i64 = db
+        .conn()
+        .query_row("SELECT COUNT(*) FROM providers WHERE api_key_enc IS NOT NULL AND length(api_key_enc) > 0", [], |r| r.get(0))
+        .map_err(|e| file_err(path, e))?;
+    if stored > 0 {
+        return Err(SecretsError::KeyMissing { path: path.display().to_string() });
+    }
+    generate_key_file(path)
+}
+
 /// Create a fresh random master key at `path` (mode 0600) and return the secrets built from it.
 /// Refuses to overwrite an existing file.
 pub fn generate_key_file(path: &std::path::Path) -> Result<Secrets, SecretsError> {
-    generate_key(path).map(|(s, _)| s)
-}
-
-/// Like `generate_key_file`, but also returns the key text so setup can show it once.
-pub fn generate_key(path: &std::path::Path) -> Result<(Secrets, String), SecretsError> {
+    use std::io::Write;
     let mut raw = [0u8; 32];
     OsRng.fill_bytes(&mut raw);
     let key = base64_url(&raw);
-    write_key_file(path, &key).map(|s| (s, key))
-}
-
-/// Store a master key the user already has (for example from a password manager, when
-/// restoring onto a fresh secrets volume). Refuses to overwrite an existing file.
-pub fn write_key_file(path: &std::path::Path, key: &str) -> Result<Secrets, SecretsError> {
-    use std::io::Write;
-    let secrets = Secrets::new(key.trim())?;
-    let key = key.trim();
+    let secrets = Secrets::new(&key)?;
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| file_err(path, e))?;
     }
@@ -83,27 +96,6 @@ pub fn write_key_file(path: &std::path::Path, key: &str) -> Result<Secrets, Secr
 fn base64_url(bytes: &[u8]) -> String {
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
     URL_SAFE_NO_PAD.encode(bytes)
-}
-
-/// Sibling files used while rotating the key.
-pub fn new_path(key: &std::path::Path) -> std::path::PathBuf {
-    sibling(key, "new")
-}
-pub fn prev_path(key: &std::path::Path) -> std::path::PathBuf {
-    sibling(key, "prev")
-}
-fn sibling(key: &std::path::Path, ext: &str) -> std::path::PathBuf {
-    let mut name = key.file_name().unwrap_or_default().to_os_string();
-    name.push(".");
-    name.push(ext);
-    key.with_file_name(name)
-}
-
-/// A fresh random key as text (what a user would store in a password manager).
-pub fn random_key() -> String {
-    let mut raw = [0u8; 32];
-    OsRng.fill_bytes(&mut raw);
-    base64_url(&raw)
 }
 
 pub struct Secrets {
@@ -127,16 +119,6 @@ impl Secrets {
         let mut out = nonce.to_vec();
         out.extend(self.cipher.encrypt(&nonce, plaintext.as_bytes()).expect("encryption cannot fail for in-memory input"));
         out
-    }
-
-    /// `encrypt` as base64 text, for values kept in the settings table.
-    pub fn encrypt_b64(&self, plaintext: &str) -> String {
-        base64_url(&self.encrypt(plaintext))
-    }
-
-    pub fn decrypt_b64(&self, stored: &str) -> Result<String, SecretsError> {
-        use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-        self.decrypt(&URL_SAFE_NO_PAD.decode(stored.trim()).map_err(|_| SecretsError::Decrypt)?)
     }
 
     pub fn decrypt(&self, stored: &[u8]) -> Result<String, SecretsError> {
@@ -190,7 +172,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("askbar-keyfile-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let path = dir.join("nested").join("master.key");
-        assert!(load_key_file(&path).unwrap().is_none(), "no file means setup mode");
+        assert!(load_key_file(&path).unwrap().is_none(), "no file yet");
 
         let made = generate_key_file(&path).unwrap();
         let loaded = load_key_file(&path).unwrap().expect("key is there now");
@@ -203,6 +185,53 @@ mod tests {
         assert!(matches!(load_key_file(&path), Err(SecretsError::TooShort)));
         std::fs::write(&path, format!("{}\n", KEY)).unwrap();
         assert!(load_key_file(&path).unwrap().is_some(), "trailing newline is fine");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn temp_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("askbar-ensure-{tag}-{}", ulid::Ulid::new()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    #[test]
+    fn first_start_creates_a_private_key_and_a_restart_reuses_it() {
+        let dir = temp_dir("first");
+        let path = dir.join("secrets").join("master.key");
+        let db = crate::Db::open_in_memory().unwrap();
+
+        let first = ensure_key_file(&path, &db).unwrap();
+        #[cfg(unix)]
+        assert_eq!(std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(&path).unwrap().permissions()) & 0o777, 0o600);
+        let on_disk = std::fs::read_to_string(&path).unwrap();
+
+        let again = ensure_key_file(&path, &db).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), on_disk, "an existing key is never overwritten");
+        assert_eq!(again.decrypt(&first.encrypt("sk-live")).unwrap(), "sk-live", "same key after a restart");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn startup_is_refused_when_the_key_is_missing_but_encrypted_keys_exist() {
+        let dir = temp_dir("missing");
+        let path = dir.join("master.key");
+        let db = crate::Db::open_in_memory().unwrap();
+        let key = Secrets::new(KEY).unwrap();
+        db.conn()
+            .execute(
+                "INSERT INTO providers (id, api_key_enc) VALUES ('p', ?1)",
+                [key.encrypt("sk-live")],
+            )
+            .unwrap();
+
+        let err = ensure_key_file(&path, &db).err().expect("must refuse");
+        assert!(matches!(err, SecretsError::KeyMissing { .. }));
+        assert!(err.to_string().contains("askbar-secrets"), "{err}");
+        assert!(!path.exists(), "no new key is created behind the stored ones");
+
+        // A provider without a key does not need one.
+        db.conn().execute("UPDATE providers SET api_key_enc = NULL", []).unwrap();
+        assert!(ensure_key_file(&path, &db).is_ok());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
