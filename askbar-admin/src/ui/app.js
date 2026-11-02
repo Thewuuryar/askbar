@@ -430,8 +430,22 @@
 
   // --------------------------------------------------------- settings
 
+  // "120 seconds = 2 minutes", "90 seconds = 1.5 minutes".
+  function minutesText(secs) {
+    if (!Number.isFinite(secs) || secs <= 0) return '';
+    const m = secs / 60;
+    const shown = Number.isInteger(m) ? String(m) : String(Math.round(m * 10) / 10);
+    return secs + ' seconds = ' + shown + (shown === '1' ? ' minute' : ' minutes');
+  }
+  function showTimeoutMinutes() {
+    $('s-gen-timeout-min').textContent = minutesText(parseInt($('s-gen-timeout').value, 10));
+  }
+  $('s-gen-timeout').addEventListener('input', showTimeoutMinutes);
+
   async function loadSettings() {
     const s = await api('GET', '/admin/api/settings');
+    $('s-gen-timeout').value = s.generation_timeout_secs == null ? 300 : s.generation_timeout_secs;
+    showTimeoutMinutes();
     $('s-prompt').value = s.system_prompt;
     $('s-theme').value = s.display.theme;
     $('s-width').value = s.display.width;
@@ -449,6 +463,7 @@
     try {
       await api('PUT', '/admin/api/settings', {
         system_prompt: $('s-prompt').value,
+        generation_timeout_secs: parseInt($('s-gen-timeout').value, 10),
         display: {
           theme: $('s-theme').value,
           width: parseInt($('s-width').value, 10),

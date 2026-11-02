@@ -132,6 +132,10 @@
           <h3>System prompt</h3>
           <p class="hint">Sent with every message. It is never shown to clients.</p>
           <label>Prompt <textarea id="s-prompt" rows="8"></textarea></label>
+          <h3>Reply time limit</h3>
+          <p class="hint">A reply still running after this long is stopped and the text so far is kept. The default is 300 seconds (5 minutes); allowed 30 to 3600. A message that waits in the queue is timed from when it starts.</p>
+          <label>Generation timeout (seconds) <input id="s-gen-timeout" type="number" min="30" max="3600" step="1"></label>
+          <p id="s-gen-timeout-min" class="hint"></p>
           <h3>Display defaults</h3>
           <p class="hint">Clients use these unless their own client.yaml overrides them.</p>
           <label>Theme

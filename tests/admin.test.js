@@ -248,6 +248,38 @@ async function waitForPort(port) {
     await page.waitForSelector('#settings-error:not([hidden])');
     assert.match(await page.innerText('#settings-error'), /Width must be/);
   });
+  await step('generation timeout: defaults to 300, saves 120 across a reload, refuses 29', async () => {
+    await page.click('#nav [data-tab="providers"]');
+    await page.click('#nav [data-tab="settings"]');
+    await page.waitForFunction(() => document.getElementById('s-gen-timeout').value === '300');
+    assert.equal(await page.getAttribute('#s-gen-timeout', 'min'), '30');
+    assert.equal(await page.getAttribute('#s-gen-timeout', 'max'), '3600');
+    assert.equal(await page.innerText('#s-gen-timeout-min'), '300 seconds = 5 minutes');
+    await page.fill('#s-width', '900'); // the previous step left an invalid width in the form
+    await page.fill('#s-gen-timeout', '120');
+    assert.equal(await page.innerText('#s-gen-timeout-min'), '120 seconds = 2 minutes');
+    await page.click('#settings-form button[type=submit]');
+    await page.waitForSelector('#flash:not([hidden])');
+    assert.match(await page.innerText('#flash'), /Settings saved/);
+    await page.fill('#s-gen-timeout', '777'); // unsaved: only a reload from the server brings back 120
+    await page.click('#nav [data-tab="providers"]');
+    await page.click('#nav [data-tab="settings"]');
+    await page.waitForFunction(() => document.getElementById('s-gen-timeout').value === '120');
+    assert.equal(await page.inputValue('#s-gen-timeout'), '120');
+    await page.fill('#s-gen-timeout', '90');
+    assert.equal(await page.innerText('#s-gen-timeout-min'), '90 seconds = 1.5 minutes');
+
+    await page.fill('#s-gen-timeout', '29');
+    await page.evaluate(() => document.getElementById('settings-form').noValidate = true);
+    await page.click('#settings-form button[type=submit]');
+    await page.waitForSelector('#settings-error:not([hidden])');
+    assert.match(await page.innerText('#settings-error'), /between 30 and 3600/);
+    await page.fill('#s-gen-timeout', '555'); // so the wait below can only be satisfied by a reload
+    await page.click('#nav [data-tab="providers"]');
+    await page.click('#nav [data-tab="settings"]');
+    await page.waitForFunction(() => document.getElementById('s-gen-timeout').value === '120');
+    assert.equal(await page.inputValue('#s-gen-timeout'), '120', 'the refused value was not saved');
+  });
   await step('network: hostname, token and networks are saved; the token is write-only', async () => {
     const CF = 'cf_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     await page.click('#nav [data-tab="network"]');
