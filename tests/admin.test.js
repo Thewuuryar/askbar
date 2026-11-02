@@ -317,6 +317,29 @@ async function waitForPort(port) {
     await page.waitForFunction(() => document.getElementById('s-gen-timeout').value === '120');
     assert.equal(await page.inputValue('#s-gen-timeout'), '120', 'the refused value was not saved');
   });
+  await step('kill switch: off by default, aborts running replies by default; both save and reload', async () => {
+    await page.click('#nav [data-tab="providers"]');
+    await page.click('#nav [data-tab="settings"]');
+    await page.waitForFunction(() => document.getElementById('s-gen-timeout').value === '120');
+    assert.equal(await page.isChecked('#s-kill-switch'), false);
+    assert.equal(await page.isChecked('#s-kill-aborts'), true);
+    await page.check('#s-kill-switch');
+    await page.uncheck('#s-kill-aborts');
+    await page.click('#settings-form button[type=submit]');
+    await page.waitForSelector('#flash:not([hidden])');
+    await page.uncheck('#s-kill-switch'); // unsaved changes, undone by the reload below
+    await page.check('#s-kill-aborts');
+    await page.click('#nav [data-tab="providers"]');
+    await page.click('#nav [data-tab="settings"]');
+    await page.waitForFunction(() => document.getElementById('s-kill-switch').checked === true);
+    assert.equal(await page.isChecked('#s-kill-switch'), true);
+    assert.equal(await page.isChecked('#s-kill-aborts'), false);
+    // And back, so later steps see an ordinary server.
+    await page.uncheck('#s-kill-switch');
+    await page.check('#s-kill-aborts');
+    await page.click('#settings-form button[type=submit]');
+    await page.waitForSelector('#flash:not([hidden])');
+  });
   await step('network: hostname, token and networks are saved; the token is write-only', async () => {
     const CF = 'cf_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     await page.click('#nav [data-tab="network"]');

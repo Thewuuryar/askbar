@@ -264,6 +264,34 @@ async fn the_generation_timeout_round_trips_reaches_the_server_and_is_range_chec
 }
 
 #[tokio::test]
+async fn the_kill_switch_and_its_abort_setting_round_trip_and_reach_the_server() {
+    let t = start(true).await;
+    let disp = serde_json::to_value(askbar_proto::DisplaySettings::default()).unwrap();
+    let (_, s) = t.call(M::GET, "/admin/api/settings", None).await;
+    assert_eq!((&s["kill_switch"], &s["kill_switch_aborts_running"]), (&json!(false), &json!(true)), "off, and aborting by default");
+    assert!(t.snapshot().is_none() || !t.snapshot().unwrap().kill_switch);
+
+    let save = |kill: Option<bool>, aborts: Option<bool>| {
+        let mut b = json!({ "system_prompt": "x", "display": disp });
+        if let Some(k) = kill { b["kill_switch"] = json!(k); }
+        if let Some(a) = aborts { b["kill_switch_aborts_running"] = json!(a); }
+        b
+    };
+    for (kill, aborts) in [(true, true), (true, false), (false, false), (false, true)] {
+        assert_eq!(t.call(M::PUT, "/admin/api/settings", Some(save(Some(kill), Some(aborts)))).await.0, 204);
+        let (_, s) = t.call(M::GET, "/admin/api/settings", None).await;
+        assert_eq!((&s["kill_switch"], &s["kill_switch_aborts_running"]), (&json!(kill), &json!(aborts)));
+        let snap = t.snapshot().unwrap();
+        assert_eq!((snap.kill_switch, snap.kill_switch_aborts_running), (kill, aborts), "the server has both");
+    }
+    // A save that leaves them out keeps what is stored.
+    t.call(M::PUT, "/admin/api/settings", Some(save(Some(true), Some(false)))).await;
+    assert_eq!(t.call(M::PUT, "/admin/api/settings", Some(save(None, None))).await.0, 204);
+    let snap = t.snapshot().unwrap();
+    assert_eq!((snap.kill_switch, snap.kill_switch_aborts_running), (true, false));
+}
+
+#[tokio::test]
 async fn settings_and_per_user_display_defaults_reach_the_server() {
     let t = start(true).await;
     let (_, s) = t.call(M::GET, "/admin/api/settings", None).await;

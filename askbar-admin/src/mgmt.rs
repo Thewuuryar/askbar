@@ -166,6 +166,8 @@ pub fn build_snapshot(conn: &rusqlite::Connection) -> rusqlite::Result<Snapshot>
         revoked_device_ids,
         budget: Budget { daily_tokens: daily.map(|v| v as u64), monthly_tokens: monthly.map(|v| v as u64) },
         kill_switch: kill != 0,
+        // Absent means the safer default: the switch really stops running replies.
+        kill_switch_aborts_running: setting(conn, "kill_switch_aborts_running")?.map(|v| !matches!(v.trim(), "0" | "false")).unwrap_or(true),
         audit_retention_days: setting(conn, "audit_retention_days")?.and_then(|s| s.parse().ok()).unwrap_or(30),
         // Absent on installs that never set it: the default applies, no migration needed.
         generation_timeout_secs: setting(conn, "generation_timeout_secs")?

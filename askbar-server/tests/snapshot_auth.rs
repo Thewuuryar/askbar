@@ -70,6 +70,7 @@ impl T {
             revoked_device_ids: revoked.iter().map(|s| s.to_string()).collect(),
             budget: Budget::default(),
             kill_switch: false,
+            kill_switch_aborts_running: true,
             audit_retention_days: 30,
             generation_timeout_secs: 300,
             audit_public_key: None,

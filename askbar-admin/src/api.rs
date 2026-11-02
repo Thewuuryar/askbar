@@ -566,6 +566,13 @@ pub struct AdminSettings {
     /// the stored value is kept.
     #[serde(default)]
     generation_timeout_secs: Option<u32>,
+    /// The kill switch: while on, the server starts no replies. Always present when read; when a
+    /// save leaves it out, the stored value is kept.
+    #[serde(default)]
+    kill_switch: Option<bool>,
+    /// When the switch goes on: stop the replies already running (the default), or let them finish.
+    #[serde(default)]
+    kill_switch_aborts_running: Option<bool>,
 }
 
 /// The same bounds the server enforces on the snapshot.
@@ -599,6 +606,8 @@ pub async fn get_settings(State(state): St) -> Json<AdminSettings> {
         generation_timeout_secs: Some(
             setting(c, "generation_timeout_secs").and_then(|s| s.trim().parse().ok()).unwrap_or(askbar_proto::DEFAULT_GENERATION_TIMEOUT_SECS),
         ),
+        kill_switch: Some(c.query_row("SELECT kill_switch FROM budgets WHERE id = 1", [], |r| r.get::<_, i64>(0)).map(|v| v != 0).unwrap_or(false)),
+        kill_switch_aborts_running: Some(setting(c, "kill_switch_aborts_running").map(|v| !matches!(v.trim(), "0" | "false")).unwrap_or(true)),
     })
 }
 
@@ -616,10 +625,18 @@ pub async fn put_settings(State(state): St, Json(s): Json<AdminSettings>) -> Res
     }
     let display = serde_json::to_string(&s.display).map_err(|_| bad("Invalid display settings."))?;
     let timeout = s.generation_timeout_secs.map(|n| n.to_string());
+    let aborts = s.kill_switch_aborts_running.map(|b| if b { "1" } else { "0" });
+    let kill = s.kill_switch;
     mutate(&state, vec![], move |c| {
         let mut pairs = vec![("system_prompt", s.system_prompt.as_str()), ("display", display.as_str())];
         if let Some(t) = timeout.as_deref() {
             pairs.push(("generation_timeout_secs", t));
+        }
+        if let Some(a) = aborts {
+            pairs.push(("kill_switch_aborts_running", a));
+        }
+        if let Some(k) = kill {
+            c.execute("UPDATE budgets SET kill_switch = ?1 WHERE id = 1", [k as i64]).map_err(internal)?;
         }
         for (k, v) in pairs {
             c.execute("INSERT INTO settings (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value", params![k, v]).map_err(internal)?;

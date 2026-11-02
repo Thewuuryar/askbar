@@ -63,6 +63,8 @@ pub struct Live {
     /// attempts (waiting to retry) notices it as well as one with a request in flight.
     cancel_asked: std::sync::atomic::AtomicBool,
     cancel_notify: Notify,
+    /// Why it was cancelled when that was not the person pressing Stop (e.g. `kill_switch`).
+    cancel_reason: Mutex<Option<String>>,
 }
 
 impl Live {
@@ -137,6 +139,16 @@ impl Live {
             let _ = tx.send(());
         }
         true
+    }
+
+    /// Cancels it and records why (the first reason stands).
+    pub fn cancel_because(&self, reason: &str) -> bool {
+        self.cancel_reason.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(|| reason.to_string());
+        self.cancel()
+    }
+
+    pub fn cancel_reason(&self) -> Option<String> {
+        self.cancel_reason.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     pub fn cancel_was_asked(&self) -> bool {
@@ -333,6 +345,8 @@ pub const MAX_QUEUED: i64 = 5;
 enum Outcome {
     Done,
     Cancelled,
+    /// Stopped because the administrator switched generations off.
+    Killed,
     /// Ran out of time; carries the message subscribers see.
     TimedOut(String),
     Error(String),
@@ -515,11 +529,13 @@ impl Finisher {
         match &outcome {
             Outcome::Done => self.save("done", None),
             Outcome::Cancelled => self.save("cancelled", None),
+            Outcome::Killed => self.save("cancelled", Some(KILLED)),
             Outcome::TimedOut(m) => self.save("timed_out", Some(m)),
             Outcome::Error(m) => self.save("error", Some(m)),
         }
         self.live.finish(match outcome {
             Outcome::Done | Outcome::Cancelled => Terminal::Done,
+            Outcome::Killed => Terminal::Error(KILLED.into()),
             Outcome::TimedOut(m) | Outcome::Error(m) => Terminal::Error(m),
         });
     }
@@ -721,7 +737,15 @@ fn spawn_run(
         };
         let (outcome, usage) = match ended {
             Some(Ended::Done(report)) => (Outcome::Done, report.usage),
-            Some(Ended::Cancelled(report)) => (Outcome::Cancelled, report.and_then(|r| r.usage)),
+            Some(Ended::Cancelled(report)) => {
+                let usage = report.and_then(|r| r.usage);
+                if fin.live.cancel_reason().as_deref() == Some("kill_switch") {
+                    fin.error_code = Some("kill_switch".into());
+                    (Outcome::Killed, usage)
+                } else {
+                    (Outcome::Cancelled, usage)
+                }
+            }
             Some(Ended::Failed(e)) => {
                 fin.error_code = Some(error_code(&e.error));
                 (Outcome::Error(e.error.to_string()), e.report.usage)
@@ -841,6 +865,9 @@ async fn attempts(
                         StreamOutcome::Cancelled => "cancelled",
                     }
                     .into();
+                    if r.outcome == StreamOutcome::Cancelled {
+                        end.error_code = live.cancel_reason();
+                    }
                     end.ttft_ms = r.time_to_first_token.map(|d| d.as_millis() as u64);
                     end.attrs_json = Some(attempt_attrs(Some(r), &info).to_string());
                     if let Some(u) = r.usage {
@@ -957,6 +984,7 @@ fn start_next(state: &Arc<AppState>, conversation_id: &str) {
     }
 }
 
+const KILLED: &str = "Generations were switched off by the administrator.";
 const INTERRUPTED: &str = "The server restarted before the reply finished.";
 const NOT_RUN: &str = "Not run: the server restarted before this message started.";
 
@@ -1022,6 +1050,40 @@ pub fn shutdown(state: &Arc<AppState>) {
         live.end_queue_span(&state.audit, "interrupted");
         live.finish(Terminal::Error(INTERRUPTED.into()));
         live.cancel();
+    }
+}
+
+/// The administrator turned the kill switch on. Queued messages never run: they are cleared
+/// whatever the setting. Replies already running are stopped (ending `cancelled`, error code
+/// `kill_switch`) when `aborts_running`, and left to finish when not. Nothing new starts either
+/// way (`submit` refuses). Safe to call again while the switch stays on.
+pub fn apply_kill_switch(state: &Arc<AppState>, aborts_running: bool) {
+    let queued: Vec<String> = {
+        let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+        let ids: Vec<String> = db
+            .conn()
+            .prepare("SELECT id FROM generations WHERE status = 'queued'")
+            .and_then(|mut stmt| stmt.query_map([], |r| r.get(0))?.collect::<Result<_, _>>())
+            .unwrap_or_default();
+        for id in &ids {
+            let _ = db.conn().execute(
+                "UPDATE generations SET status = 'cancelled', error = ?2, ended_at = ?3 WHERE id = ?1 AND status = 'queued'",
+                rusqlite::params![id, KILLED, crate::auth::now()],
+            );
+        }
+        ids
+    };
+    for id in queued {
+        if let Some(live) = state.generations.get(&id) {
+            live.end_queue_span(&state.audit, "cancelled");
+            live.finish(Terminal::Error(KILLED.into()));
+            state.generations.remove(&id);
+        }
+    }
+    if aborts_running {
+        for (_, live) in state.generations.unfinished() {
+            live.cancel_because("kill_switch");
+        }
     }
 }
 

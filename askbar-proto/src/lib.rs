@@ -137,6 +137,11 @@ pub struct Snapshot {
     /// When true the server refuses new chats.
     #[serde(default)]
     pub kill_switch: bool,
+    /// When the kill switch is turned on: true stops the replies already running (they end
+    /// `cancelled`, with error code `kill_switch`), false lets them finish. Queued messages are
+    /// cleared either way, and nothing new starts.
+    #[serde(default = "default_true")]
+    pub kill_switch_aborts_running: bool,
     /// How long audit records are kept. At least 7.
     pub audit_retention_days: u32,
     /// Seconds a generation may run before it is stopped (30 to 3600). Read when it starts.
@@ -155,6 +160,10 @@ pub struct AuditKey {
     pub key_id: String,
     /// The 32-byte X25519 public key, as 64 hex characters.
     pub public_key: String,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Five minutes.
@@ -443,6 +452,14 @@ mod tests {
         let json = serde_json::to_string(&s).unwrap();
         assert_eq!(serde_json::from_str::<Snapshot>(&json).unwrap(), s);
         assert!(json.contains("audit_public_key") && !json.contains("secret") && !json.contains("passphrase"));
+    }
+
+    #[test]
+    fn a_snapshot_without_the_abort_setting_aborts_running_replies() {
+        let s: Snapshot = serde_json::from_str(r#"{"audit_retention_days": 30}"#).unwrap();
+        assert!(s.kill_switch_aborts_running, "the safer default: the switch really stops things");
+        let s: Snapshot = serde_json::from_str(r#"{"audit_retention_days": 30, "kill_switch_aborts_running": false}"#).unwrap();
+        assert!(!s.kill_switch_aborts_running);
     }
 
     #[test]

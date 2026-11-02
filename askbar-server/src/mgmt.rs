@@ -90,8 +90,15 @@ async fn require_token(State(guard): State<Guard>, req: Request, next: Next) -> 
 /// Replace the configuration snapshot. The version in the body is ignored; the server
 /// assigns the next one and returns it.
 async fn put_snapshot(State(state): State<Arc<AppState>>, Json(s): Json<Snapshot>) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
-    match crate::snapshot::apply(&db, &s) {
+    let applied = {
+        let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+        crate::snapshot::apply(&db, &s)
+    };
+    // A snapshot with the kill switch on acts at once, on what is already queued or running.
+    if applied.is_ok() && s.kill_switch {
+        crate::generation::apply_kill_switch(&state, s.kill_switch_aborts_running);
+    }
+    match applied {
         Ok(version) => Ok(Json(serde_json::json!({ "version": version }))),
         Err(crate::snapshot::ApplyError::Invalid(why)) => Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": why })))),
         Err(crate::snapshot::ApplyError::Store(_)) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": "could not store the snapshot" })))),

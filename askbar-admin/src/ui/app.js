@@ -479,6 +479,8 @@
 
   async function loadSettings() {
     const s = await api('GET', '/admin/api/settings');
+    $('s-kill-switch').checked = !!s.kill_switch;
+    $('s-kill-aborts').checked = s.kill_switch_aborts_running !== false;
     $('s-gen-timeout').value = s.generation_timeout_secs == null ? 300 : s.generation_timeout_secs;
     showTimeoutMinutes();
     $('s-prompt').value = s.system_prompt;
@@ -499,6 +501,8 @@
       await api('PUT', '/admin/api/settings', {
         system_prompt: $('s-prompt').value,
         generation_timeout_secs: parseInt($('s-gen-timeout').value, 10),
+        kill_switch: $('s-kill-switch').checked,
+        kill_switch_aborts_running: $('s-kill-aborts').checked,
         display: {
           theme: $('s-theme').value,
           width: parseInt($('s-width').value, 10),

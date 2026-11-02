@@ -365,3 +365,93 @@ async fn the_kill_switch_gate_leaves_a_span_whether_it_lets_a_generation_through
     askbar_server::testing::update_snapshot(&s.state.db.lock().unwrap(), |snap| snap.kill_switch = false);
     assert!(is_done(&s.run("works again").await));
 }
+
+/// The management API for `s`, with a token, so a test can push a snapshot the way the admin does.
+async fn mgmt(s: &Stack) -> (String, String) {
+    use sha2::Digest;
+    let token = "mgt_router-test-token".to_string();
+    let hash = s._dir.join("token.sha256");
+    std::fs::write(&hash, sha2::Sha256::digest(token.as_bytes()).iter().map(|b| format!("{b:02x}")).collect::<String>()).unwrap();
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", l.local_addr().unwrap());
+    let app = askbar_server::mgmt::router(s.state.clone(), hash);
+    tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
+    (url, token)
+}
+
+/// Pushes the current snapshot back with the kill switch on and `aborts` as given.
+async fn switch_off(s: &Stack, aborts: bool) {
+    let (url, token) = mgmt(s).await;
+    let mut snap = askbar_server::snapshot::current(&s.state.db.lock().unwrap()).unwrap().unwrap();
+    snap.kill_switch = true;
+    snap.kill_switch_aborts_running = aborts;
+    let r = reqwest::Client::new().put(format!("{url}/mgmt/v1/snapshot")).bearer_auth(token).json(&snap).send().await.unwrap();
+    assert_eq!(r.status(), 200);
+}
+
+#[tokio::test]
+async fn turning_the_kill_switch_on_with_abort_stops_running_replies_and_clears_the_queue() {
+    let s = stack("m", "m", serde_json::json!({})).await;
+    let first = s.submit("please be slow").ok().expect("accepted");
+    let queued = askbar_server::generation::submit(
+        &s.state,
+        Submit { user_id: s.user.clone(), device_id: "d1".into(), conversation_id: Some(first.conversation_id.clone()), provider_id: "p1".into(), prompt: "waiting".into(), client_request_id: None },
+    )
+    .ok()
+    .expect("queued");
+    assert!(queued.queued);
+    tokio::time::sleep(Duration::from_millis(1200)).await; // it has produced some text
+
+    switch_off(&s, true).await;
+    let a: Vec<GenEvent> = first.live.subscribe(0).collect().await;
+    let b: Vec<GenEvent> = queued.live.subscribe(0).collect().await;
+    assert!(matches!(a.last(), Some(GenEvent::Error { message }) if message.contains("switched off")), "{:?}", a.last());
+    assert!(matches!(b.last(), Some(GenEvent::Error { .. })) && !b.iter().any(|e| matches!(e, GenEvent::Delta { .. })), "the waiting one never ran: {b:?}");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    let rows = s.rows();
+    assert_eq!((rows[0].0.as_str(), rows[1].0.as_str()), ("cancelled", "cancelled"));
+    assert!(rows[0].2.starts_with("Streaming slowly"), "the text so far is kept: {:?}", rows[0].2);
+    let (messages, user_msgs): (i64, i64) = {
+        let db = s.state.db.lock().unwrap();
+        (
+            db.conn().query_row("SELECT COUNT(*) FROM messages WHERE role = 'assistant'", [], |r| r.get(0)).unwrap(),
+            db.conn().query_row("SELECT COUNT(*) FROM messages WHERE role = 'user'", [], |r| r.get(0)).unwrap(),
+        )
+    };
+    assert_eq!((messages, user_msgs), (1, 1), "the partial reply is saved; the queued question never was");
+    assert_eq!(s.m1.requests(), 1, "nothing further went upstream");
+    s.state.audit.flush().await;
+    let db = rusqlite::Connection::open(s._dir.join("audit.db")).unwrap();
+    let code: Option<String> = db.query_row("SELECT error_code FROM spans WHERE trace_id = ?1 AND kind = 'turn'", [&first.generation_id], |r| r.get(0)).unwrap();
+    let status: String = db.query_row("SELECT status FROM spans WHERE trace_id = ?1 AND kind = 'turn'", [&first.generation_id], |r| r.get(0)).unwrap();
+    assert_eq!((status.as_str(), code.as_deref()), ("cancelled", Some("kill_switch")));
+    assert!(matches!(s.submit("and now").err(), Some(SubmitError::KillSwitch)), "and nothing new starts");
+}
+
+#[tokio::test]
+async fn turning_it_on_without_abort_lets_running_replies_finish_but_still_clears_the_queue() {
+    let s = stack("m", "m", serde_json::json!({})).await;
+    let first = s.submit("please be slow").ok().expect("accepted");
+    let queued = askbar_server::generation::submit(
+        &s.state,
+        Submit { user_id: s.user.clone(), device_id: "d1".into(), conversation_id: Some(first.conversation_id.clone()), provider_id: "p1".into(), prompt: "waiting".into(), client_request_id: None },
+    )
+    .ok()
+    .expect("queued");
+    tokio::time::sleep(Duration::from_millis(800)).await;
+
+    switch_off(&s, false).await;
+    let b: Vec<GenEvent> = queued.live.subscribe(0).collect().await;
+    assert!(matches!(b.last(), Some(GenEvent::Error { .. })), "the queue is cleared either way: {b:?}");
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+    assert_eq!(s.rows()[0].0, "running", "the reply already running was left alone");
+    assert!(!first.live.is_finished());
+    assert!(matches!(s.submit("new one").err(), Some(SubmitError::KillSwitch)));
+    // (It would finish on its own in a minute; end it here.)
+    s.state.generations.get(&first.generation_id).unwrap().cancel();
+    let _: Vec<GenEvent> = first.live.subscribe(0).collect().await;
+    assert_eq!(s.rows()[0].0, "cancelled");
+    assert_eq!(s.rows()[1].0, "cancelled", "the queued one stayed cleared and did not start when the first ended");
+    assert_eq!(s.m1.requests(), 1);
+}
