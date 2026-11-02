@@ -479,3 +479,24 @@ async fn an_oversized_prompt_is_cut_at_256_kb_and_the_attempt_is_marked_truncate
     let a: Option<String> = read(&dir).query_row("SELECT attrs_json FROM spans WHERE trace_id = ?1 AND kind = 'attempt'", [&small], |r| r.get(0)).unwrap();
     assert!(!a.unwrap().contains("truncated"));
 }
+
+#[tokio::test]
+async fn each_try_is_an_attempt_span_with_its_retry_index() {
+    let (_mock, port) = start_mock();
+    let (state, dir) = audit_state(port);
+    let trace = run_chat(&state, "hello 429once audit-retry").await;
+    state.audit.flush().await;
+    let db = read(&dir);
+    let mut stmt = db
+        .prepare("SELECT status, error_code, json_extract(attrs_json, '$.retry_index'), json_extract(attrs_json, '$.http_status') FROM spans WHERE trace_id = ?1 AND kind = 'attempt' ORDER BY id")
+        .unwrap();
+    let rows: Vec<(String, Option<String>, i64, i64)> =
+        stmt.query_map([&trace], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).unwrap().map(Result::unwrap).collect();
+    assert_eq!(
+        rows,
+        [("error".to_string(), Some("http_429".to_string()), 0, 429), ("done".to_string(), None, 1, 200)],
+        "the refused try, then the one that served it"
+    );
+    let turn: String = db.query_row("SELECT status FROM spans WHERE trace_id = ?1 AND kind = 'turn'", [&trace], |r| r.get(0)).unwrap();
+    assert_eq!(turn, "done");
+}

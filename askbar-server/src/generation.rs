@@ -55,6 +55,10 @@ pub struct Live {
     cancel: Mutex<Option<oneshot::Sender<()>>>,
     /// The audit span that times a queued message's wait, until it starts (or is removed).
     queue_span: Mutex<Option<String>>,
+    /// Set once Stop (or a delete, or a shutdown) has been asked for, so a generation between two
+    /// attempts (waiting to retry) notices it as well as one with a request in flight.
+    cancel_asked: std::sync::atomic::AtomicBool,
+    cancel_notify: Notify,
 }
 
 impl Live {
@@ -110,9 +114,28 @@ impl Live {
         if self.is_finished() {
             return false;
         }
-        match self.cancel.lock().unwrap_or_else(|e| e.into_inner()).take() {
-            Some(tx) => tx.send(()).is_ok(),
-            None => false,
+        self.cancel_asked.store(true, std::sync::atomic::Ordering::SeqCst);
+        self.cancel_notify.notify_waiters();
+        if let Some(tx) = self.cancel.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            let _ = tx.send(());
+        }
+        true
+    }
+
+    pub fn cancel_was_asked(&self) -> bool {
+        self.cancel_asked.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Resolves when a cancel has been asked for.
+    pub async fn cancel_asked(&self) {
+        loop {
+            let notified = self.cancel_notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.cancel_was_asked() {
+                return;
+            }
+            notified.await;
         }
     }
 
@@ -284,16 +307,19 @@ enum Outcome {
     Error(String),
 }
 
-/// What an attempt span records beyond its columns: the whole latency, the HTTP status, whether
-/// the counts were estimated, and why the provider says it stopped.
-fn attempt_attrs(r: &crate::llm::StreamReport, truncated: bool) -> serde_json::Value {
-    let mut attrs = serde_json::json!({
-        "latency_ms": r.total.as_millis() as u64,
-        "http_status": r.http_status,
-        "usage_estimated": r.usage.map(|u| u.estimated),
-        "finish_reason": r.finish_reason,
-    });
-    if truncated {
+/// What an attempt span records beyond its columns: which try it was (and which provider it stood
+/// in for), the whole latency, the HTTP status, whether the counts were estimated, why the provider
+/// says it stopped, and whether the request was cut. `report` is `None` for an attempt that never
+/// finished (a timeout).
+fn attempt_attrs(r: Option<&crate::llm::StreamReport>, info: &AttemptInfo) -> serde_json::Value {
+    let mut attrs = serde_json::json!({ "retry_index": info.retry_index, "fallback_from": info.fallback_from });
+    if let Some(r) = r {
+        attrs["latency_ms"] = (r.total.as_millis() as u64).into();
+        attrs["http_status"] = serde_json::json!(r.http_status);
+        attrs["usage_estimated"] = serde_json::json!(r.usage.map(|u| u.estimated));
+        attrs["finish_reason"] = serde_json::json!(r.finish_reason);
+    }
+    if info.request_truncated {
         attrs["truncated"] = true.into();
     }
     attrs
@@ -581,8 +607,6 @@ fn spawn_run(
     timeout: Duration,
     live: Arc<Live>,
 ) {
-    let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
-    live.set_cancel(cancel_tx);
     let turn_span = state.audit.start_span(
         SpanStart::new(id, Kind::Turn, "chat").who(user_id, device_id).attrs(&serde_json::json!({ "conversation_id": conversation_id })),
     );
@@ -620,90 +644,35 @@ fn spawn_run(
             fin.finish(Outcome::Error("The provider is no longer available.".into()));
             return;
         };
-        // One attempt span for the request to the provider, under the turn.
-        let attempt = state.audit.start_span(
-            SpanStart::new(&fin.id, Kind::Attempt, &provider.name).parent(&fin.turn_span).provider(&provider_id, &provider.model),
-        );
-        let mut request_truncated = false;
-        // What was sent, sealed: the system prompt and the history, as the provider will see them.
-        if let Some(key) = &fin.audit_key {
-            let request = serde_json::json!({
-                "system": system,
-                "messages": history.iter().map(|m| serde_json::json!({ "role": m.role, "content": m.content })).collect::<Vec<_>>(),
-            });
-            let request = request.to_string();
-            let kept = cut(&request, MAX_PAYLOAD_BYTES);
-            request_truncated = kept.len() < request.len();
-            if let Ok(sealed) = crate::seal::seal(key, kept.as_bytes()) {
-                state.audit.payload(&attempt, "request", sealed);
-            }
-        }
-        // Race the request against the deadline. Dropping the request on expiry closes the
-        // upstream connection; the text that had arrived is already in `fin`.
-        let result = {
-            let run = stream_chat_report(&state.http, &provider, &system, &history, cancel_rx, |delta| fin.push(delta));
+        let candidates = vec![Candidate { id: provider_id.clone(), provider, fallback_from: None }];
+
+        // Race the whole sequence of attempts against the deadline. Dropping it on expiry closes
+        // the request in flight; the text that had arrived is already in `fin`.
+        let started = Instant::now();
+        let open_attempt: Mutex<Option<OpenAttempt>> = Mutex::new(None);
+        let ended = {
+            let run = attempts(&state, &mut fin, &candidates, &system, &history, started, timeout, &open_attempt);
             tokio::pin!(run);
             tokio::select! {
                 r = &mut run => Some(r),
                 _ = tokio::time::sleep(timeout) => None,
             }
         };
-        let mut attempt_end = SpanFinish::new(&attempt, "done");
-        match &result {
-            Some(Ok(r)) => {
-                attempt_end.status = match r.outcome {
-                    StreamOutcome::Completed => "done",
-                    StreamOutcome::Cancelled => "cancelled",
-                }
-                .into();
-                attempt_end.ttft_ms = r.time_to_first_token.map(|d| d.as_millis() as u64);
-                attempt_end.attrs_json = Some(attempt_attrs(r, request_truncated).to_string());
-            }
-            Some(Err(e)) => {
-                // The provider's own words about the failure, sealed, cut at 4 KB.
-                if let Some(key) = &fin.audit_key {
-                    let message = e.error.to_string();
-                    if let Ok(sealed) = crate::seal::seal(key, cut(&message, MAX_ERROR_PAYLOAD_BYTES).as_bytes()) {
-                        state.audit.payload(&attempt, "error", sealed);
-                    }
-                }
-                attempt_end.status = "error".into();
-                attempt_end.error_code = Some(error_code(&e.error));
-                attempt_end.ttft_ms = e.report.time_to_first_token.map(|d| d.as_millis() as u64);
-                attempt_end.attrs_json = Some(attempt_attrs(&e.report, request_truncated).to_string());
-            }
-            None => {
-                attempt_end.status = "timed_out".into();
-                attempt_end.error_code = Some("timeout".into());
-                if request_truncated {
-                    attempt_end.attrs_json = Some(serde_json::json!({ "truncated": true }).to_string());
-                }
-            }
-        }
-        let used = match &result {
-            Some(Ok(r)) => r.usage,
-            Some(Err(e)) => e.report.usage,
-            None => None,
-        };
-        if let Some(u) = used {
-            attempt_end.tokens_in = u.input;
-            attempt_end.tokens_out = u.output;
-            attempt_end.tokens_cached = u.cache_read;
-        }
-        state.audit.finish_span(attempt_end);
-        let (outcome, usage) = match result {
-            Some(Ok(report)) => (
-                match report.outcome {
-                    StreamOutcome::Completed => Outcome::Done,
-                    StreamOutcome::Cancelled => Outcome::Cancelled,
-                },
-                report.usage,
-            ),
-            Some(Err(e)) => {
+        let (outcome, usage) = match ended {
+            Some(Ended::Done(report)) => (Outcome::Done, report.usage),
+            Some(Ended::Cancelled(report)) => (Outcome::Cancelled, report.and_then(|r| r.usage)),
+            Some(Ended::Failed(e)) => {
                 fin.error_code = Some(error_code(&e.error));
                 (Outcome::Error(e.error.to_string()), e.report.usage)
             }
             None => {
+                // The attempt in flight when time ran out never got to say how it ended.
+                if let Some(open) = open_attempt.lock().unwrap_or_else(|e| e.into_inner()).take() {
+                    let mut end = SpanFinish::new(&open.span, "timed_out");
+                    end.error_code = Some("timeout".into());
+                    end.attrs_json = Some(attempt_attrs(None, &open.info).to_string());
+                    state.audit.finish_span(end);
+                }
                 fin.error_code = Some("timeout".into());
                 (Outcome::TimedOut(timed_out_message(timeout)), None)
             }
@@ -711,6 +680,163 @@ fn spawn_run(
         fin.usage = usage;
         fin.finish(outcome);
     });
+}
+
+/// A provider to try, with the provider it stands in for (if it is not the one asked for).
+struct Candidate {
+    id: String,
+    provider: crate::llm::Provider,
+    fallback_from: Option<String>,
+}
+
+/// Retries per provider, and the wait before each (when the provider names none).
+const MAX_RETRIES: u32 = 2;
+const RETRY_BACKOFF: [Duration; 2] = [Duration::from_millis(250), Duration::from_secs(1)];
+
+/// How a run of attempts ended.
+enum Ended {
+    Done(crate::llm::StreamReport),
+    Cancelled(Option<crate::llm::StreamReport>),
+    Failed(crate::llm::ReportedError),
+}
+
+/// What identifies an attempt in the audit trail.
+#[derive(Clone)]
+struct AttemptInfo {
+    retry_index: u32,
+    fallback_from: Option<String>,
+    request_truncated: bool,
+}
+
+/// The attempt span in flight, so a timeout can close it.
+struct OpenAttempt {
+    span: String,
+    info: AttemptInfo,
+}
+
+/// Tries each candidate in order, and each up to `MAX_RETRIES` more times when the failure is
+/// worth it, until one serves the reply. Nothing is retried or switched once a delta has been
+/// sent: the person has seen text, so the failure ends the generation. A cancel ends it at once,
+/// also while it waits to retry.
+#[allow(clippy::too_many_arguments)]
+async fn attempts(
+    state: &Arc<AppState>,
+    fin: &mut Finisher,
+    candidates: &[Candidate],
+    system: &str,
+    history: &[ChatMessage],
+    started: Instant,
+    timeout: Duration,
+    open_attempt: &Mutex<Option<OpenAttempt>>,
+) -> Ended {
+    use crate::router::{classify, Failure};
+    let live = fin.live.clone();
+    let mut last_error = None;
+    for cand in candidates {
+        for retry_index in 0..=MAX_RETRIES {
+            let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
+            live.set_cancel(cancel_tx);
+            if live.cancel_was_asked() {
+                return Ended::Cancelled(None);
+            }
+            fin.provider_id = cand.id.clone();
+            let span = state.audit.start_span(
+                SpanStart::new(&fin.id, Kind::Attempt, &cand.provider.name)
+                    .parent(&fin.turn_span)
+                    .provider(&cand.id, &cand.provider.model)
+                    .attrs(&serde_json::json!({ "retry_index": retry_index, "fallback_from": cand.fallback_from })),
+            );
+            let mut info = AttemptInfo { retry_index, fallback_from: cand.fallback_from.clone(), request_truncated: false };
+            // What was sent, sealed: the system prompt and the history, as the provider will see them.
+            if let Some(key) = &fin.audit_key {
+                let request = serde_json::json!({
+                    "system": system,
+                    "messages": history.iter().map(|m| serde_json::json!({ "role": m.role, "content": m.content })).collect::<Vec<_>>(),
+                })
+                .to_string();
+                let kept = cut(&request, MAX_PAYLOAD_BYTES);
+                info.request_truncated = kept.len() < request.len();
+                if let Ok(sealed) = crate::seal::seal(key, kept.as_bytes()) {
+                    state.audit.payload(&span, "request", sealed);
+                }
+            }
+            *open_attempt.lock().unwrap_or_else(|e| e.into_inner()) = Some(OpenAttempt { span: span.clone(), info: info.clone() });
+
+            let result = stream_chat_report(&state.http, &cand.provider, system, history, cancel_rx, |delta| fin.push(delta)).await;
+
+            // The attempt is over; say how it went.
+            open_attempt.lock().unwrap_or_else(|e| e.into_inner()).take();
+            let mut end = SpanFinish::new(&span, "done");
+            match &result {
+                Ok(r) => {
+                    end.status = match r.outcome {
+                        StreamOutcome::Completed => "done",
+                        StreamOutcome::Cancelled => "cancelled",
+                    }
+                    .into();
+                    end.ttft_ms = r.time_to_first_token.map(|d| d.as_millis() as u64);
+                    end.attrs_json = Some(attempt_attrs(Some(r), &info).to_string());
+                    if let Some(u) = r.usage {
+                        (end.tokens_in, end.tokens_out, end.tokens_cached) = (u.input, u.output, u.cache_read);
+                    }
+                }
+                Err(e) => {
+                    // The provider's own words about the failure, sealed, cut at 4 KB.
+                    if let Some(key) = &fin.audit_key {
+                        let message = e.error.to_string();
+                        if let Ok(sealed) = crate::seal::seal(key, cut(&message, MAX_ERROR_PAYLOAD_BYTES).as_bytes()) {
+                            state.audit.payload(&span, "error", sealed);
+                        }
+                    }
+                    end.status = "error".into();
+                    end.error_code = Some(error_code(&e.error));
+                    end.ttft_ms = e.report.time_to_first_token.map(|d| d.as_millis() as u64);
+                    end.attrs_json = Some(attempt_attrs(Some(&e.report), &info).to_string());
+                }
+            }
+            state.audit.finish_span(end);
+
+            let e = match result {
+                Ok(r) => {
+                    return match r.outcome {
+                        StreamOutcome::Completed => Ended::Done(r),
+                        StreamOutcome::Cancelled => Ended::Cancelled(Some(r)),
+                    }
+                }
+                Err(e) => e,
+            };
+            let class = classify(&e.error);
+            // Text already sent, or a request that no provider would accept: the failure stands.
+            if !fin.text.is_empty() || class == Failure::Fatal {
+                return Ended::Failed(e);
+            }
+            match class {
+                // Bad credentials: another try here cannot help; the next provider may.
+                Failure::AuthFailed => {
+                    last_error = Some(e);
+                    break;
+                }
+                _ if retry_index >= MAX_RETRIES => {
+                    last_error = Some(e);
+                    break;
+                }
+                _ => {
+                    // The provider's Retry-After replaces our backoff when it fits in the time left.
+                    let remaining = timeout.saturating_sub(started.elapsed());
+                    let wait = match e.report.retry_after {
+                        Some(ra) if ra < remaining => ra,
+                        _ => RETRY_BACKOFF[retry_index as usize],
+                    };
+                    last_error = Some(e);
+                    tokio::select! {
+                        _ = tokio::time::sleep(wait) => {}
+                        _ = live.cancel_asked() => return Ended::Cancelled(None),
+                    }
+                }
+            }
+        }
+    }
+    Ended::Failed(last_error.expect("at least one candidate was tried"))
 }
 
 /// Starts the oldest message waiting in `conversation_id`, if any: its question is stored now, so

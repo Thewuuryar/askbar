@@ -117,7 +117,6 @@ fn is_done(events: &[GenEvent]) -> bool {
 }
 
 #[tokio::test]
-#[ignore = "enabled in 6.5"]
 async fn a_429_is_retried_and_the_reply_then_succeeds_on_the_same_provider() {
     let s = stack("m", "m", serde_json::json!({})).await;
     let events = s.run("hello 429once retry-A").await;
@@ -128,7 +127,6 @@ async fn a_429_is_retried_and_the_reply_then_succeeds_on_the_same_provider() {
 }
 
 #[tokio::test]
-#[ignore = "enabled in 6.5"]
 async fn the_wait_before_a_retry_is_the_providers_retry_after_not_the_default_backoff() {
     let s = stack("m", "m", serde_json::json!({})).await;
     let started = Instant::now();
@@ -217,4 +215,18 @@ async fn an_exhausted_token_budget_refuses_new_generations_with_429() {
     assert_eq!(response.status(), 429);
     let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
     assert!(String::from_utf8_lossy(&body).contains("budget_exceeded"), "{body:?}");
+}
+
+#[tokio::test]
+async fn a_stop_while_waiting_to_retry_ends_the_generation_at_once() {
+    let s = stack("m-429", "m", serde_json::json!({})).await;
+    let sub = s.submit("hello").ok().expect("accepted");
+    tokio::time::sleep(Duration::from_millis(300)).await; // the first try was refused; it is now waiting
+    let asked = Instant::now();
+    assert!(s.state.generations.get(&sub.generation_id).unwrap().cancel());
+    let events: Vec<GenEvent> = sub.live.subscribe(0).collect().await;
+    assert!(asked.elapsed() < Duration::from_millis(500), "did not wait out the retry: {:?}", asked.elapsed());
+    assert!(is_done(&events), "a stop ends cleanly: {events:?}");
+    assert_eq!(s.rows()[0].0, "cancelled");
+    assert_eq!(s.m1.requests(), 1, "no further try was made");
 }
