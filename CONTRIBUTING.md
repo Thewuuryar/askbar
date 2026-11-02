@@ -7,7 +7,7 @@ Thanks for looking. This page is how to build, run and change Askbar. How the pa
 
 Everything, from paths to variable names to UI text, says **client** (a paired app and its token), **server**
 (the Askbar server, and its interface for the admin) or **admin** (the admin site and its interface). The old
-words `mgmt`, `management` and `device` are checked for and refused by `scripts/check-names.sh`; a line that has
+words `mgmt`, `management` and `device` are checked for and refused by `scripts/check-names.sh`; a line that has <!-- names-ok: this sentence names them -->
 to use one (a database migration, an old path in a test) carries `names-ok` and a reason.
 
 ## Layout
