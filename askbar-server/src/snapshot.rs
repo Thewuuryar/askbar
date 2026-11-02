@@ -72,6 +72,11 @@ pub fn validate(s: &Snapshot) -> Result<(), String> {
         if p.name.trim().is_empty() || p.model.trim().is_empty() {
             return Err(format!("provider {}: name and model are required", p.id));
         }
+        for (label, price) in [("price_in", p.price_in), ("price_out", p.price_out), ("price_cached_in", p.price_cached_in)] {
+            if price.is_some_and(|v| !v.is_finite() || v < 0.0) {
+                return Err(format!("provider {}: {label} must be zero or more", p.id));
+            }
+        }
     }
     for id in s.default_provider_id.iter().chain(s.fallback_order.iter()) {
         if !ids.contains(id.as_str()) {
@@ -156,6 +161,31 @@ pub fn apply(db: &Db, s: &Snapshot) -> Result<u64, ApplyError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn provider_prices_must_not_be_negative_and_billing_fields_pass_through() {
+        let mut s = crate::testing::empty_snapshot();
+        s.providers.push(crate::testing::provider("p1", "one", "http://x/v1", "m"));
+        assert_eq!(validate(&s), Ok(()), "no prices at all is fine: cost is then unknown");
+        s.providers[0].price_in = Some(0.0);
+        s.providers[0].price_out = Some(15.5);
+        s.providers[0].price_cached_in = Some(0.3);
+        s.providers[0].billing = askbar_proto::Billing::Subscription;
+        s.providers[0].allow_as_fallback = true;
+        assert_eq!(validate(&s), Ok(()), "zero is a price (free)");
+        for set in [
+            (|p: &mut askbar_proto::SnapshotProvider| p.price_in = Some(-0.01)) as fn(&mut askbar_proto::SnapshotProvider),
+            |p| p.price_out = Some(-1.0),
+            |p| p.price_cached_in = Some(-5.0),
+            |p| p.price_in = Some(f64::INFINITY),
+            |p| p.price_out = Some(f64::NAN),
+        ] {
+            let mut bad = s.clone();
+            set(&mut bad.providers[0]);
+            let e = validate(&bad).unwrap_err();
+            assert!(e.contains("zero or more") && e.contains("p1"), "{e}");
+        }
+    }
 
     #[test]
     fn the_audit_public_key_must_be_32_hex_bytes_with_its_own_id() {

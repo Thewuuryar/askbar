@@ -118,6 +118,11 @@ fn provider(id: &str) -> SnapshotProvider {
         max_tokens: Some(100),
         temperature: None,
         headers: Default::default(),
+        billing: Default::default(),
+        allow_as_fallback: false,
+        price_in: None,
+        price_out: None,
+        price_cached_in: None,
     }
 }
 

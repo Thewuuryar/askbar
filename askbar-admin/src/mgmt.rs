@@ -111,6 +111,12 @@ pub fn build_snapshot(conn: &rusqlite::Connection) -> rusqlite::Result<Snapshot>
                 max_tokens: r.get(5)?,
                 temperature: r.get(6)?,
                 headers: serde_json::from_str(&r.get::<_, String>(7)?).unwrap_or_default(),
+                // The admin learns to store these in step 6.16.
+                billing: Default::default(),
+                allow_as_fallback: false,
+                price_in: None,
+                price_out: None,
+                price_cached_in: None,
             })
         })?;
         for p in rows {

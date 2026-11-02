@@ -59,6 +59,32 @@ pub struct SnapshotProvider {
     pub temperature: Option<f32>,
     #[serde(default)]
     pub headers: std::collections::BTreeMap<String, String>,
+    /// How the provider is paid for. A `subscription` costs nothing per token; a `metered` one
+    /// does, so it is not used as a fallback unless `allow_as_fallback` says so.
+    #[serde(default)]
+    pub billing: Billing,
+    /// A metered provider may serve as a fallback for another only when this is true.
+    #[serde(default)]
+    pub allow_as_fallback: bool,
+    /// Price per million tokens, in whatever currency the administrator thinks in. Missing means
+    /// unknown (cost is then reported as unknown, never as 0).
+    #[serde(default)]
+    pub price_in: Option<f64>,
+    #[serde(default)]
+    pub price_out: Option<f64>,
+    #[serde(default)]
+    pub price_cached_in: Option<f64>,
+}
+
+/// How a provider is paid for.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Billing {
+    /// Per token; the safe assumption when nothing is said.
+    #[default]
+    Metered,
+    /// A flat plan; tokens cost nothing extra.
+    Subscription,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -354,6 +380,21 @@ mod tests {
     }
 
     #[test]
+    fn an_older_provider_without_billing_or_prices_parses_as_metered_with_unknown_prices() {
+        let p: SnapshotProvider = serde_json::from_str(r#"{"id":"p","name":"n","type":"openai","model":"m"}"#).unwrap();
+        assert_eq!((p.billing, p.allow_as_fallback), (Billing::Metered, false));
+        assert_eq!((p.price_in, p.price_out, p.price_cached_in), (None, None, None));
+        let p: SnapshotProvider = serde_json::from_str(
+            r#"{"id":"p","name":"n","type":"openai","model":"m","billing":"subscription","allow_as_fallback":true,"price_in":2.5,"price_out":10,"price_cached_in":0.25}"#,
+        )
+        .unwrap();
+        assert_eq!((p.billing, p.allow_as_fallback, p.price_in, p.price_out, p.price_cached_in), (Billing::Subscription, true, Some(2.5), Some(10.0), Some(0.25)));
+        assert!(serde_json::from_str::<SnapshotProvider>(r#"{"id":"p","name":"n","type":"openai","model":"m","billing":"free"}"#).is_err(), "only metered or subscription");
+        // And it serializes back to the same words.
+        assert!(serde_json::to_string(&p).unwrap().contains(r#""billing":"subscription""#));
+    }
+
+    #[test]
     fn the_snapshot_carries_a_public_key_and_nothing_that_could_be_a_secret() {
         // A snapshot with every optional part filled in, so every field name shows up.
         let mut s: Snapshot = serde_json::from_str(r#"{"audit_retention_days": 30}"#).unwrap();
@@ -369,6 +410,11 @@ mod tests {
             max_tokens: Some(1),
             temperature: Some(0.5),
             headers: Default::default(),
+            billing: Billing::Subscription,
+            allow_as_fallback: true,
+            price_in: Some(1.0),
+            price_out: Some(2.0),
+            price_cached_in: Some(0.5),
         });
         let mut keys = Vec::new();
         all_keys(&serde_json::to_value(&s).unwrap(), &mut keys);

@@ -50,6 +50,11 @@ pub fn provider(id: &str, name: &str, base_url: &str, model: &str) -> SnapshotPr
         max_tokens: None,
         temperature: None,
         headers: Default::default(),
+        billing: Default::default(),
+        allow_as_fallback: false,
+        price_in: None,
+        price_out: None,
+        price_cached_in: None,
     }
 }
 
