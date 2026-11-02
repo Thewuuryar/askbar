@@ -742,3 +742,82 @@ async fn sealed_payloads_are_served_as_ciphertext_only_and_unknown_spans_are_404
     let r = a.http.get(format!("{}/mgmt/v1/audit/payloads/{}", a.url, span_of("turn"))).send().await.unwrap();
     assert_eq!(r.status(), 401, "needs the token");
 }
+
+fn set_prices(a: &AuditStack, price_in: Option<f64>, price_out: Option<f64>, price_cached: Option<f64>) {
+    askbar_server::testing::update_snapshot(&a.state.db.lock().unwrap(), |snap| {
+        let p = snap.providers.iter_mut().find(|p| p.id == "p1").unwrap();
+        (p.price_in, p.price_out, p.price_cached_in) = (price_in, price_out, price_cached);
+    });
+}
+
+fn approx(v: &serde_json::Value, want: f64) -> bool {
+    v.as_f64().is_some_and(|got| (got - want).abs() < 1e-9)
+}
+
+#[tokio::test]
+async fn cost_appears_in_traces_and_one_trace_computed_from_the_current_prices() {
+    let a = audit_stack().await;
+    set_prices(&a, Some(2.0), Some(10.0), Some(0.5));
+    let plain = a.chat("hello").await; // 100 in, 50 out
+    let cached = a.chat("a cached prompt").await; // 100 in of which 64 cached, 50 out
+    let failed = a.chat("please fail").await;
+
+    let (_, body) = a.get("/mgmt/v1/audit/traces").await;
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let cost_of = |id: &str| v["traces"].as_array().unwrap().iter().find(|t| t["trace_id"] == id).unwrap()["cost"].clone();
+    assert!(approx(&cost_of(&plain), (100.0 * 2.0 + 50.0 * 10.0) / 1e6), "{}", cost_of(&plain));
+    assert!(approx(&cost_of(&cached), (36.0 * 2.0 + 64.0 * 0.5 + 50.0 * 10.0) / 1e6), "uncached input, cached input and output: {}", cost_of(&cached));
+    assert!(cost_of(&failed).is_null(), "nothing was used, so there is no cost to state");
+
+    let (_, body) = a.get(&format!("/mgmt/v1/audit/traces/{plain}")).await;
+    let t: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert!(approx(&t["cost"], 0.0007), "{}", t["cost"]);
+    let attempt = t["spans"].as_array().unwrap().iter().find(|s| s["kind"] == "attempt").unwrap();
+    assert!(approx(&attempt["cost"], 0.0007), "the attempt is priced by its own provider");
+
+    // A corrected price re-prices history at once: nothing about cost was stored.
+    set_prices(&a, Some(4.0), Some(10.0), Some(0.5));
+    let (_, body) = a.get(&format!("/mgmt/v1/audit/traces/{plain}")).await;
+    assert!(approx(&serde_json::from_str::<serde_json::Value>(&body).unwrap()["cost"], (100.0 * 4.0 + 500.0) / 1e6));
+
+    // A price that is needed and missing gives null, not 0.
+    set_prices(&a, Some(4.0), None, None);
+    let (_, body) = a.get(&format!("/mgmt/v1/audit/traces/{plain}")).await;
+    assert!(serde_json::from_str::<serde_json::Value>(&body).unwrap()["cost"].is_null());
+    let (_, body) = a.get("/mgmt/v1/audit/traces").await;
+    assert!(!body.contains("\"cost\":0.0"), "never a made-up zero: {body}");
+}
+
+#[tokio::test]
+async fn stats_total_the_cost_with_a_breakdown_by_provider_and_by_day_and_say_what_is_unknown() {
+    let a = audit_stack().await;
+    set_prices(&a, Some(2.0), Some(10.0), None);
+    for _ in 0..3 {
+        a.chat("hello").await;
+    }
+    a.chat("please fail").await;
+
+    let (_, body) = a.get("/mgmt/v1/audit/stats").await;
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert!(approx(&v["cost"], 3.0 * 0.0007), "{}", v["cost"]);
+    assert_eq!(v["cost_unknown_requests"], 0);
+    let by_provider = v["by_provider"].as_array().unwrap();
+    assert_eq!(by_provider.len(), 1);
+    assert_eq!((by_provider[0]["provider_id"].as_str(), by_provider[0]["requests"].as_i64()), (Some("p1"), Some(4)));
+    assert_eq!((by_provider[0]["tokens"]["in"].as_i64(), by_provider[0]["tokens"]["out"].as_i64()), (Some(300), Some(150)));
+    assert!(approx(&by_provider[0]["cost"], 0.0021));
+    let by_day = v["by_day"].as_array().unwrap();
+    assert_eq!(by_day.len(), 1);
+    let today = by_day[0]["day"].as_str().unwrap();
+    assert_eq!(today.len(), 10);
+    assert_eq!(&today[4..5], "-");
+    assert!(approx(&by_day[0]["cost"], 0.0021) && by_day[0]["requests"] == 4);
+
+    // With a price missing, the figure is unknown (null) and the response says how many requests are why.
+    set_prices(&a, Some(2.0), None, None);
+    let (_, body) = a.get("/mgmt/v1/audit/stats").await;
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert!(v["cost"].is_null() && v["by_provider"][0]["cost"].is_null() && v["by_day"][0]["cost"].is_null());
+    assert_eq!(v["cost_unknown_requests"], 3);
+    assert_metadata_only(&body);
+}

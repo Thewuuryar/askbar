@@ -194,22 +194,49 @@ struct TracesQuery {
     limit: Option<usize>,
 }
 
+/// Prices as the snapshot has them now, by provider id. Read per request, so a corrected price
+/// changes every figure at once; nothing about cost is stored.
+fn price_lookup(state: &AppState) -> impl Fn(&str) -> Option<crate::cost::Prices> {
+    let providers = {
+        let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+        crate::snapshot::current(&db).ok().flatten().map(|s| s.providers).unwrap_or_default()
+    };
+    move |id: &str| providers.iter().find(|p| p.id == id).map(crate::cost::Prices::of)
+}
+
+fn add_cost(row: &mut serde_json::Value, price_of: crate::audit::PriceOf) {
+    let n = |k: &str| row[k].as_i64();
+    let cost = crate::audit::cost_of(price_of, row["provider_id"].as_str(), n("tokens_in"), n("tokens_out"), n("tokens_cached"));
+    row["cost"] = serde_json::json!(cost);
+}
+
 /// `GET /mgmt/v1/audit/traces`: one summary per generation, newest first. Metadata only.
 async fn audit_traces(State(state): State<Arc<AppState>>, axum::extract::Query(q): axum::extract::Query<TracesQuery>) -> Result<Json<serde_json::Value>, Failure> {
     let conn = state.audit.reader().ok_or_else(no_audit)?;
     let filter = crate::audit::TraceFilter { status: q.status, provider: q.provider, before: q.before, limit: q.limit };
-    let rows = crate::audit::list_traces(&conn, &filter).map_err(|_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not read the audit store."))?;
+    let mut rows = crate::audit::list_traces(&conn, &filter).map_err(|_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not read the audit store."))?;
+    let price_of = price_lookup(&state);
+    rows.iter_mut().for_each(|r| add_cost(r, &price_of));
     Ok(Json(serde_json::json!({ "traces": rows })))
 }
 
 /// `GET /mgmt/v1/audit/traces/{id}`: all spans of one generation.
 async fn audit_trace(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Result<Json<serde_json::Value>, Failure> {
     let conn = state.audit.reader().ok_or_else(no_audit)?;
-    let spans = crate::audit::trace_spans(&conn, &id).map_err(|_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not read the audit store."))?;
+    let mut spans = crate::audit::trace_spans(&conn, &id).map_err(|_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not read the audit store."))?;
     if spans.is_empty() {
         return Err(fail(StatusCode::NOT_FOUND, "No such trace."));
     }
-    Ok(Json(serde_json::json!({ "trace_id": id, "spans": spans })))
+    let price_of = price_lookup(&state);
+    // Each attempt is priced by its own provider; the trace as a whole by the provider that served it.
+    spans.iter_mut().for_each(|s| add_cost(s, &price_of));
+    let final_provider = spans.iter().rev().find(|s| s["kind"] == "attempt").and_then(|s| s["provider_id"].as_str().map(str::to_string));
+    let mut cost = None;
+    if let Some(turn) = spans.iter().find(|s| s["kind"] == "turn") {
+        let n = |k: &str| turn[k].as_i64();
+        cost = crate::audit::cost_of(&price_of, final_provider.as_deref(), n("tokens_in"), n("tokens_out"), n("tokens_cached"));
+    }
+    Ok(Json(serde_json::json!({ "trace_id": id, "cost": cost, "spans": spans })))
 }
 
 /// `GET /mgmt/v1/audit/payloads/{span_id}`: the sealed content of one span, as ciphertext.
@@ -232,7 +259,8 @@ struct StatsQuery {
 async fn audit_stats(State(state): State<Arc<AppState>>, axum::extract::Query(q): axum::extract::Query<StatsQuery>) -> Result<Json<serde_json::Value>, Failure> {
     let conn = state.audit.reader().ok_or_else(no_audit)?;
     let since = q.since.unwrap_or_else(|| crate::auth::now() - 24 * 3600);
-    crate::audit::stats(&conn, since).map(Json).map_err(|_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not read the audit store."))
+    let price_of = price_lookup(&state);
+    crate::audit::stats(&conn, since, &price_of).map(Json).map_err(|_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not read the audit store."))
 }
 
 /// Counts for the admin service's overview. Token totals come from `token_usage`, which

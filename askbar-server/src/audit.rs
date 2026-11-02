@@ -252,9 +252,59 @@ fn percentile(sorted: &[i64], p: f64) -> Option<i64> {
     Some(sorted[rank.min(sorted.len()) - 1])
 }
 
-/// Counts, error rate, latency percentiles and token totals for generations that began at or
-/// after `since` (unix seconds).
-pub fn stats(conn: &Connection, since: i64) -> rusqlite::Result<serde_json::Value> {
+/// Prices by provider id, as the snapshot has them now. `None` for a provider it does not know.
+pub type PriceOf<'a> = &'a dyn Fn(&str) -> Option<crate::cost::Prices>;
+
+/// The cost of a set of tokens reported by `provider_id`, or `None` when it cannot be known: the
+/// provider is gone from the snapshot, or a price that matters is missing.
+pub fn cost_of(price_of: PriceOf, provider_id: Option<&str>, input: Option<i64>, output: Option<i64>, cached: Option<i64>) -> Option<f64> {
+    // No token counts at all (a request that failed before any reply): nothing to put a price on.
+    if input.is_none() && output.is_none() {
+        return None;
+    }
+    let prices = price_of(provider_id?)?;
+    let n = |v: Option<i64>| v.unwrap_or(0).max(0) as u64;
+    crate::cost::cost(crate::cost::Tokens { input: n(input), output: n(output), cached: n(cached) }, prices)
+}
+
+/// A sum of costs that is unknown if any part of it is.
+#[derive(Default)]
+struct CostSum {
+    known: f64,
+    unknown: usize,
+}
+
+impl CostSum {
+    fn add(&mut self, cost: Option<f64>, has_tokens: bool) {
+        match cost {
+            Some(c) => self.known += c,
+            None if has_tokens => self.unknown += 1,
+            None => {}
+        }
+    }
+    fn total(&self) -> Option<f64> {
+        (self.unknown == 0).then_some(self.known)
+    }
+}
+
+/// `YYYY-MM-DD` (UTC) of a unix time.
+fn utc_day(t: i64) -> String {
+    let z = t.div_euclid(86_400) + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!("{year:04}-{month:02}-{day:02}")
+}
+
+/// Counts, error rate, latency percentiles, token totals and cost for generations that began at or
+/// after `since` (unix seconds), with a breakdown by provider and by day. Cost is computed here
+/// from the prices `price_of` gives now (see `cost`): it is null when a needed price is missing.
+pub fn stats(conn: &Connection, since: i64, price_of: PriceOf) -> rusqlite::Result<serde_json::Value> {
     let mut by_status = serde_json::Map::new();
     let mut requests = 0i64;
     {
@@ -279,9 +329,57 @@ pub fn stats(conn: &Connection, since: i64) -> rusqlite::Result<serde_json::Valu
     };
     let latency = series("SELECT json_extract(attrs_json, '$.latency_ms') FROM spans WHERE kind = 'attempt' AND started_at >= ?1 AND json_extract(attrs_json, '$.latency_ms') IS NOT NULL")?;
     let ttft = series("SELECT ttft_ms FROM spans WHERE kind = 'attempt' AND started_at >= ?1 AND ttft_ms IS NOT NULL")?;
+    // Cost, per provider and per day, from each generation's tokens and the provider that served it.
+    struct Group {
+        requests: i64,
+        tokens: (i64, i64, i64),
+        cost: CostSum,
+    }
+    let mut by_provider: std::collections::BTreeMap<String, Group> = Default::default();
+    let mut by_day: std::collections::BTreeMap<String, Group> = Default::default();
+    let mut total = CostSum::default();
+    {
+        let mut stmt = conn.prepare(
+            "SELECT t.started_at, t.tokens_in, t.tokens_out, t.tokens_cached,
+                    (SELECT provider_id FROM spans WHERE trace_id = t.trace_id AND kind = 'attempt' ORDER BY id DESC LIMIT 1)
+             FROM spans t WHERE t.kind = 'turn' AND t.started_at >= ?1",
+        )?;
+        let rows = stmt.query_map([since], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, Option<i64>>(1)?, r.get::<_, Option<i64>>(2)?, r.get::<_, Option<i64>>(3)?, r.get::<_, Option<String>>(4)?))
+        })?;
+        for row in rows {
+            let (started, tin, tout, tcached, provider) = row?;
+            let has_tokens = tin.is_some() || tout.is_some();
+            let cost = cost_of(price_of, provider.as_deref(), tin, tout, tcached);
+            total.add(cost, has_tokens);
+            for (map, key) in [(&mut by_provider, provider.clone().unwrap_or_default()), (&mut by_day, utc_day(started))] {
+                let g = map.entry(key).or_insert_with(|| Group { requests: 0, tokens: (0, 0, 0), cost: CostSum::default() });
+                g.requests += 1;
+                g.tokens = (g.tokens.0 + tin.unwrap_or(0), g.tokens.1 + tout.unwrap_or(0), g.tokens.2 + tcached.unwrap_or(0));
+                g.cost.add(cost, has_tokens);
+            }
+        }
+    }
+    let group_json = |key_name: &str, map: std::collections::BTreeMap<String, Group>| -> Vec<serde_json::Value> {
+        map.into_iter()
+            .map(|(key, g)| {
+                serde_json::json!({
+                    key_name: if key.is_empty() { serde_json::Value::Null } else { key.into() },
+                    "requests": g.requests,
+                    "tokens": { "in": g.tokens.0, "out": g.tokens.1, "cached": g.tokens.2 },
+                    "cost": g.cost.total(),
+                    "cost_unknown_requests": g.cost.unknown,
+                })
+            })
+            .collect()
+    };
     Ok(serde_json::json!({
         "since": since,
         "requests": requests,
+        "cost": total.total(),
+        "cost_unknown_requests": total.unknown,
+        "by_provider": group_json("provider_id", by_provider),
+        "by_day": group_json("day", by_day),
         "by_status": by_status,
         "error_rate": if requests > 0 { errors as f64 / requests as f64 } else { 0.0 },
         "latency_ms": { "p50": percentile(&latency, 50.0), "p95": percentile(&latency, 95.0) },
