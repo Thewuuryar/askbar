@@ -4,21 +4,22 @@
 //! and re-emitted as `meta`, `delta`, `done` or `error`. The generation runs as its own task
 //! (see `generation`), so this stream going away does not stop it.
 
+use crate::error::{ApiError, ApiJson};
 use crate::generation::{self, GenEvent};
+use askbar_proto::problem::ErrorCode;
 use crate::{auth::ClientAuth, AppState};
 use askbar_proto::{ChatEvent, ChatRequest};
 use axum::{
     response::IntoResponse,
     extract::State,
-    http::StatusCode,
     response::sse::{Event, KeepAlive, Sse},
-    Extension, Json,
+    Extension,
 };
 use std::sync::Arc;
 use tokio_stream::StreamExt;
 
-fn internal<E>(_: E) -> StatusCode {
-    StatusCode::INTERNAL_SERVER_ERROR
+fn internal<E>(_: E) -> ApiError {
+    ApiError::code(ErrorCode::Internal)
 }
 
 pub(crate) fn sse_event(e: &ChatEvent) -> Event {
@@ -44,11 +45,11 @@ pub(crate) fn sse_event_with_id(e: &ChatEvent, seq: Option<u64>) -> Event {
 pub async fn chat(
     State(state): State<Arc<AppState>>,
     Extension(auth): Extension<ClientAuth>,
-    Json(req): Json<ChatRequest>,
+    ApiJson(req): ApiJson<ChatRequest>,
 ) -> Result<impl axum::response::IntoResponse, axum::response::Response> {
     let text = req.text.trim().to_string();
     if text.is_empty() {
-        return Err(StatusCode::BAD_REQUEST.into_response());
+        return Err(ApiError::new(ErrorCode::BadRequest, "The message is empty.").into_response());
     }
 
     // A repeat of a send this client already made attaches to that generation and starts nothing.

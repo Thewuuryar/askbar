@@ -714,6 +714,9 @@ async fn sends_during_a_reply_are_queued_up_to_five_and_the_sixth_is_refused() {
     }
     let sixth = t.chat(&http, Some(&conversation), "p1", "queued 6").await;
     assert_eq!(sixth.status(), 409);
+    assert_eq!(sixth.headers()["content-type"], "application/problem+json");
+    let p: askbar_proto::Problem = sixth.json().await.unwrap();
+    assert_eq!(p.error, "queue_full", "the refusal says why, so a client need not guess from the status");
 
     // Queued questions are not messages yet; only the first question is stored.
     let users: Vec<String> = t.messages().into_iter().filter(|(r, _)| r == "user").map(|m| m.1).collect();

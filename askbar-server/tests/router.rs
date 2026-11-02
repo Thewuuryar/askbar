@@ -209,6 +209,32 @@ async fn an_exhausted_token_budget_refuses_new_generations_with_429() {
     assert_eq!(response.status(), 429);
     let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
     assert!(String::from_utf8_lossy(&body).contains("budget_exceeded"), "{body:?}");
+    let p: askbar_proto::Problem = serde_json::from_slice(&body).unwrap();
+    assert_eq!((p.error.as_str(), p.extra["period"].as_str()), ("budget_exceeded", Some("daily")));
+    assert!(p.detail.contains("today"), "{}", p.detail);
+}
+
+#[tokio::test]
+async fn every_chat_refusal_is_a_problem_with_its_code_status_and_retry_after() {
+    use askbar_server::generation::SubmitError as E;
+    let cases: [(E, u16, &str, Option<&str>); 7] = [
+        (E::NotFound, 404, "not_found", None),
+        (E::QueueFull, 409, "queue_full", None),
+        (E::KillSwitch, 503, "kill_switch", None),
+        (E::AuditKeyMissing, 503, "audit_key_missing", None),
+        (E::AuditBacklog, 503, "audit_backlog", Some("5")),
+        (E::BudgetExceeded("monthly"), 429, "budget_exceeded", None),
+        (E::Internal, 500, "internal", None),
+    ];
+    for (err, status, code, retry_after) in cases {
+        let r = err.into_response();
+        assert_eq!(r.status().as_u16(), status, "{code}");
+        assert_eq!(r.headers()["content-type"], "application/problem+json");
+        assert_eq!(r.headers().get("retry-after").map(|v| v.to_str().unwrap()), retry_after, "{code}");
+        let body = axum::body::to_bytes(r.into_body(), 4096).await.unwrap();
+        let p: askbar_proto::Problem = serde_json::from_slice(&body).unwrap();
+        assert_eq!((p.error.as_str(), p.status), (code, status));
+    }
 }
 
 #[tokio::test]

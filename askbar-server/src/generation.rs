@@ -308,32 +308,39 @@ pub enum SubmitError {
 /// How long a client is told to wait before sending again when the audit store is backed up.
 pub const AUDIT_BACKLOG_RETRY_SECS: u64 = 5;
 
+impl From<SubmitError> for crate::error::ApiError {
+    fn from(e: SubmitError) -> crate::error::ApiError {
+        use crate::error::ApiError;
+        use askbar_proto::problem::ErrorCode as C;
+        match e {
+            SubmitError::NotFound => ApiError::new(C::NotFound, "That conversation or provider was not found."),
+            SubmitError::QueueFull => ApiError::new(
+                C::QueueFull,
+                "Five messages are already waiting in this conversation. Wait for one to finish, or remove a waiting message.",
+            ),
+            SubmitError::Internal => ApiError::code(C::Internal),
+            SubmitError::BudgetExceeded(period) => ApiError::new(
+                C::BudgetExceeded,
+                if period == "monthly" {
+                    "The usage limit for this month has been reached. Try again next month, or ask the administrator to raise it."
+                } else {
+                    "The usage limit for today has been reached. Try again tomorrow, or ask the administrator to raise it."
+                },
+            )
+            .with("period", period),
+            SubmitError::KillSwitch => ApiError::new(C::KillSwitch, "Replies have been switched off by the administrator for now."),
+            SubmitError::AuditKeyMissing => ApiError::new(
+                C::AuditKeyMissing,
+                "The administrator has to finish setting up the audit key in the admin site before replies can start.",
+            ),
+            SubmitError::AuditBacklog => ApiError::code(C::AuditBacklog),
+        }
+    }
+}
+
 impl IntoResponse for SubmitError {
     fn into_response(self) -> axum::response::Response {
-        match self {
-            SubmitError::NotFound => StatusCode::NOT_FOUND.into_response(),
-            SubmitError::QueueFull => StatusCode::CONFLICT.into_response(),
-            SubmitError::Internal => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-            SubmitError::BudgetExceeded(period) => (
-                StatusCode::TOO_MANY_REQUESTS,
-                axum::Json(serde_json::json!({ "error": "budget_exceeded", "period": period })),
-            )
-                .into_response(),
-            SubmitError::KillSwitch => {
-                (StatusCode::SERVICE_UNAVAILABLE, axum::Json(serde_json::json!({ "error": "kill_switch" }))).into_response()
-            }
-            SubmitError::AuditKeyMissing => (
-                StatusCode::SERVICE_UNAVAILABLE,
-                axum::Json(serde_json::json!({ "error": "audit_key_missing" })),
-            )
-                .into_response(),
-            SubmitError::AuditBacklog => (
-                StatusCode::SERVICE_UNAVAILABLE,
-                [(axum::http::header::RETRY_AFTER, AUDIT_BACKLOG_RETRY_SECS.to_string())],
-                axum::Json(serde_json::json!({ "error": "audit_backlog" })),
-            )
-                .into_response(),
-        }
+        crate::error::ApiError::from(self).into_response()
     }
 }
 
