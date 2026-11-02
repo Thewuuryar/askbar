@@ -702,6 +702,82 @@ async function waitForPort(port) {
     await page.unroute('**/admin/api/audit/stats*');
     await page.unroute('**/admin/api/audit/provider-health');
   });
+  await step('audit content: sealed until View, a wrong passphrase shows only the error, the right one shows text that is wiped on close', async () => {
+    const spans = [
+      { id: 'sp-turn', parent_id: null, kind: 'turn', name: 'chat', status: 'done', started_at: 1000, ended_at: 1001, sealed: 1, attrs: {} },
+      { id: 'sp-attempt', parent_id: 'sp-turn', kind: 'attempt', name: 'prov', status: 'done', started_at: 1000, ended_at: 1001, sealed: 2, attrs: {} },
+      { id: 'sp-gate', parent_id: null, kind: 'gate', name: 'kill_switch', status: 'done', started_at: 1000, ended_at: 1000, sealed: 0, attrs: {} },
+    ];
+    const opened = [];
+    await page.route('**/admin/api/audit/traces/SEAL1', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ trace_id: 'SEAL1', cost: null, spans }) }));
+    await page.route('**/admin/api/audit/payloads/*/open', (route) => {
+      const body = JSON.parse(route.request().postData());
+      opened.push({ url: route.request().url(), passphrase: body.passphrase });
+      if (body.passphrase !== 'the right passphrase here') return route.fulfill({ status: 403, contentType: 'application/json', body: JSON.stringify({ error: 'That passphrase does not open this content.' }) });
+      route.fulfill({ contentType: 'application/json', body: JSON.stringify({ span_id: 'sp-attempt', payloads: [{ role: 'request', key_id: 'k1', text: 'the <b>question</b> that was asked' }, { role: 'error', key_id: 'k1', text: null }] }) });
+    });
+    await page.click('#nav [data-tab="providers"]');
+    await page.click('#nav [data-tab="audit"]');
+    await page.evaluate(() => window.askbarAudit.openTrace('SEAL1'));
+    await page.waitForSelector('#audit-waterfall .span-bar');
+    await page.click('#audit-nav [data-sub="content"]');
+    // Sealed, with a View button only for spans that have something; nothing fetched yet.
+    assert.equal(await page.locator('#audit-sealed .sealed-row').count(), 2);
+    assert.match(await page.innerText('#audit-sealed'), /Sealed \(1 item\)/);
+    assert.match(await page.innerText('#audit-sealed'), /Sealed \(2 items\)/);
+    assert.equal(opened.length, 0, 'nothing is fetched before View');
+    assert.equal(await page.isVisible('#audit-pass-dialog'), false);
+
+    // View asks for the passphrase in a dialog (a password field).
+    await page.click('#audit-sealed [data-span="sp-attempt"] .view-btn');
+    await page.waitForSelector('#audit-pass-dialog[open]');
+    assert.equal(await page.getAttribute('#audit-pass', 'type'), 'password');
+    assert.equal(opened.length, 0, 'still nothing until the passphrase is sent');
+
+    // Wrong: the error, and nothing else on the page; the field is emptied.
+    await page.fill('#audit-pass', 'a wrong passphrase of length');
+    await page.click('#audit-pass-ok');
+    await page.waitForSelector('#audit-pass-error:not([hidden])');
+    assert.match(await page.innerText('#audit-pass-error'), /does not open this content/);
+    assert.equal((await page.innerText('#audit-plain')).trim(), '');
+    assert.equal(await page.inputValue('#audit-pass'), '', 'the passphrase field is cleared after use');
+    assert.equal(await page.isVisible('#audit-pass-dialog'), true, 'the dialog stays, to try again');
+
+    // Right: the text, as text (never HTML), under the role and key; the dialog turns to Close.
+    await page.fill('#audit-pass', 'the right passphrase here');
+    await page.click('#audit-pass-ok');
+    await page.waitForFunction(() => /that was asked/.test(document.getElementById('audit-plain').textContent));
+    const plain = await page.innerText('#audit-plain');
+    assert.match(plain, /request \(key k1\)/);
+    assert.match(plain, /the <b>question<\/b> that was asked/, 'markup is shown as typed');
+    assert.equal(await page.locator('#audit-plain b').count(), 0);
+    assert.match(plain, /\(could not be opened\)/);
+    assert.equal(await page.inputValue('#audit-pass'), '');
+    assert.equal(await page.innerText('#audit-pass-cancel'), 'Close');
+    assert.ok(opened.every((o) => /sp-attempt\/open$/.test(o.url)));
+
+    // Closing wipes it from the page.
+    await page.click('#audit-pass-cancel');
+    assert.equal(await page.isVisible('#audit-pass-dialog'), false);
+    assert.equal((await page.$eval('#audit-plain', (n) => n.textContent)), '');
+    assert.equal((await page.content()).includes('that was asked'), false);
+
+    // And after a minute on its own (shortened here), and with Escape.
+    await page.evaluate(() => { window.askbarAudit.state.plainMs = 400; });
+    await page.click('#audit-sealed [data-span="sp-attempt"] .view-btn');
+    await page.fill('#audit-pass', 'the right passphrase here');
+    await page.click('#audit-pass-ok');
+    await page.waitForFunction(() => /that was asked/.test(document.getElementById('audit-plain').textContent));
+    await page.waitForFunction(() => !document.getElementById('audit-pass-dialog').open, null, { timeout: 5000 });
+    assert.equal((await page.$eval('#audit-plain', (n) => n.textContent)), '', 'wiped by the timer');
+    await page.evaluate(() => { window.askbarAudit.state.plainMs = 60000; });
+    await page.click('#audit-sealed [data-span="sp-attempt"] .view-btn');
+    await page.keyboard.press('Escape');
+    assert.equal(await page.isVisible('#audit-pass-dialog'), false);
+    assert.equal(await page.evaluate(() => JSON.stringify([...Object.entries(localStorage), ...Object.entries(sessionStorage)]).includes('passphrase')), false, 'never stored');
+    await page.unroute('**/admin/api/audit/traces/SEAL1');
+    await page.unroute('**/admin/api/audit/payloads/*/open');
+  });
   await step('security: changing the password needs the current one', async () => {
     await page.click('#nav [data-tab="security"]');
     await page.fill('#pw-current', 'wrong');

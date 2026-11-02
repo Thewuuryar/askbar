@@ -378,6 +378,89 @@
     }
   }
 
+  // ---------------------------------------------------------------- content
+
+  // The spans of the open request that have sealed content, each with a View button. Nothing is
+  // fetched until View is clicked and a passphrase is typed.
+  function renderSealed(trace) {
+    const box = $('audit-sealed');
+    box.textContent = '';
+    const sealed = ((trace && trace.spans) || []).filter((s) => s.sealed > 0);
+    show($('audit-content-empty'), sealed.length === 0);
+    $('audit-content-empty').textContent = trace ? 'This request has no sealed content.' : 'Pick a request on the Requests view to see its sealed content.';
+    for (const s of sealed) {
+      const row = el('div', 'sealed-row');
+      row.dataset.span = s.id;
+      row.append(el('span', 'what', s.kind + ' · ' + s.name + ' · Sealed (' + s.sealed + (s.sealed === 1 ? ' item)' : ' items)')));
+      const view = el('button', 'secondary view-btn', 'View');
+      view.type = 'button';
+      view.dataset.span = s.id;
+      view.addEventListener('click', () => askPassphrase(s));
+      row.appendChild(view);
+      box.appendChild(row);
+    }
+  }
+
+  const dialog = $('audit-pass-dialog');
+  let plainTimer = null;
+
+  // Wipes whatever was opened, and the passphrase field, from the page.
+  function wipe() {
+    clearTimeout(plainTimer);
+    plainTimer = null;
+    $('audit-plain').textContent = '';
+    $('audit-pass').value = '';
+  }
+
+  function closeDialog() {
+    wipe();
+    if (dialog.open) dialog.close();
+  }
+
+  function askPassphrase(span) {
+    wipe();
+    state.opening = span;
+    $('audit-pass-what').textContent = span.kind + ' · ' + span.name + ' (' + span.sealed + (span.sealed === 1 ? ' sealed item' : ' sealed items') + ')';
+    show($('audit-pass-error'), false);
+    show($('audit-ask'), true);
+    $('audit-pass-ok').hidden = false;
+    $('audit-pass-cancel').textContent = 'Cancel';
+    if (!dialog.open) dialog.showModal();
+    $('audit-pass').focus();
+  }
+
+  $('audit-pass-cancel').addEventListener('click', closeDialog);
+  dialog.addEventListener('close', wipe);
+
+  $('audit-pass-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!state.opening) return;
+    const passphrase = $('audit-pass').value;
+    $('audit-pass').value = ''; // gone from the field the moment it is sent, whatever the answer
+    show($('audit-pass-error'), false);
+    try {
+      const r = await api('POST', '/admin/api/audit/payloads/' + encodeURIComponent(state.opening.id) + '/open', { passphrase });
+      const plain = $('audit-plain');
+      plain.textContent = '';
+      for (const p of r.payloads) {
+        plain.appendChild(el('strong', '', p.role + ' (key ' + p.key_id + ')'));
+        plain.appendChild(document.createTextNode('\n' + (p.text == null ? '(could not be opened)' : p.text) + '\n\n'));
+      }
+      if (!r.payloads.length) plain.textContent = 'Nothing is sealed on this span.';
+      show($('audit-ask'), false);
+      $('audit-pass-ok').hidden = true;
+      $('audit-pass-cancel').textContent = 'Close';
+      // What was opened does not stay on the page: a minute at most.
+      clearTimeout(plainTimer);
+      plainTimer = setTimeout(closeDialog, state.plainMs || 60000);
+    } catch (ex) {
+      if (ex.message === 'Signed out') { closeDialog(); return; }
+      $('audit-pass-error').textContent = ex.message;
+      show($('audit-pass-error'), true);
+      $('audit-pass').focus();
+    }
+  });
+
   // Opens one request on the Trace view.
   async function openTrace(id) {
     state.traceId = id;
@@ -387,6 +470,7 @@
       state.trace = trace;
       renderTrace(trace);
       renderAttempts(trace);
+      renderSealed(trace);
     }
   }
 
@@ -402,6 +486,6 @@
     if (b) setSub(b.dataset.sub);
   });
 
-  window.askbarAudit = { setSub, read, banner, state, renderOverview, requestsQuery, openTrace, layout, renderTrace, loadRouting, failureClass };
+  window.askbarAudit = { setSub, read, banner, state, renderOverview, requestsQuery, openTrace, layout, renderTrace, loadRouting, failureClass, renderSealed };
   registerTab({ id: 'audit', label: 'Audit', load });
 })();

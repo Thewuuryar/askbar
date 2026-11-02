@@ -666,6 +666,9 @@ async fn one_trace_returns_all_its_spans_and_unknown_ones_are_404() {
     assert_eq!(v["spans"][0]["name"], "kill_switch");
     assert_eq!(v["spans"][2]["parent_id"], v["spans"][1]["id"]);
     assert_eq!(v["spans"][2]["attrs"]["http_status"], 200);
+    // How many sealed items each span has: the attempt its request, the turn its reply, a gate none.
+    let sealed: Vec<i64> = v["spans"].as_array().unwrap().iter().map(|s| s["sealed"].as_i64().unwrap()).collect();
+    assert_eq!(sealed, [0, 1, 1]);
     assert_eq!(a.get("/mgmt/v1/audit/traces/no-such-trace").await.0, 404);
 }
 

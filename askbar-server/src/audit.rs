@@ -195,7 +195,8 @@ pub fn list_traces(conn: &Connection, f: &TraceFilter) -> rusqlite::Result<Vec<s
 pub fn trace_spans(conn: &Connection, trace_id: &str) -> rusqlite::Result<Vec<serde_json::Value>> {
     let mut stmt = conn.prepare(
         "SELECT id, parent_id, kind, name, status, started_at, ended_at, provider_id, model, tokens_in, tokens_out,
-                tokens_cached, ttft_ms, error_code, user_id, device_id, attrs_json
+                tokens_cached, ttft_ms, error_code, user_id, device_id, attrs_json,
+                (SELECT COUNT(*) FROM payloads WHERE span_id = spans.id)
          FROM spans WHERE trace_id = ?1 ORDER BY started_at, id",
     )?;
     let rows = stmt.query_map([trace_id], |r| {
@@ -218,6 +219,8 @@ pub fn trace_spans(conn: &Connection, trace_id: &str) -> rusqlite::Result<Vec<se
             "user_id": r.get::<_, Option<String>>(14)?,
             "device_id": r.get::<_, Option<String>>(15)?,
             "attrs": attrs.and_then(|a| serde_json::from_str::<serde_json::Value>(&a).ok()),
+            // How many sealed payloads the span has (their content is not here).
+            "sealed": r.get::<_, i64>(17)?,
         }))
     })?;
     rows.collect()
