@@ -19,12 +19,6 @@ async function step(name, fn) {
   catch (e) { failures++; console.error('FAIL ' + name + '\n     ' + String(e.message).split('\n').join('\n     ')); }
 }
 
-// A step that is written but not yet built: it is listed, not run, and the commit that builds the
-// feature turns it back into a `step` (the Audit tab, steps 7.1 to 7.11).
-async function todo(name) {
-  console.log('todo ' + name);
-}
-
 const freePort = () => new Promise((resolve) => {
   const s = net.createServer().listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => resolve(p)); });
 });
@@ -437,11 +431,8 @@ async function waitForPort(port) {
     }
   });
   // ------------------------------------------------------------------ the Audit tab
-  // Pending until the tab is built (7.3 to 7.10); see 7.11, which makes them `step` again. They
-  // describe the DOM the tab will have: #tab-audit with #audit-nav buttons data-sub=overview,
-  // requests, trace, routing, content; #audit-requests rows tr[data-trace]; #audit-waterfall
-  // .span-bar[data-span]; the Content view's .view-btn, #audit-pass-dialog (#audit-pass, #audit-pass-ok,
-  // #audit-pass-cancel, #audit-pass-error) and the opened text in #audit-plain.
+  // Against the real server: a provider whose name and model are markup, one real chat through it,
+  // then the Audit tab (#tab-audit, #audit-nav, the Requests rows, the waterfall, the Content view).
   const XSS = '<img src=x onerror="window.__pwned=1">';
   // One real chat through the server, so there is something to look at; returns once the reply is done.
   async function auditChat(text, providerName) {
@@ -459,8 +450,7 @@ async function waitForPort(port) {
     assert.match(body, /event: done/);
     return body;
   }
-  await todo('audit: the tab loads, has its five views and counts a real request');
-  const _auditTab = async () => {
+  await step('audit: the tab loads, has its five views and counts a real request', async () => {
     await page.evaluate(async ({ xss, mockUrl }) => {
       await fetch('/admin/api/providers', { method: 'POST', headers: { 'x-askbar-admin': '1', 'content-type': 'application/json' }, body: JSON.stringify({ name: xss, type: 'openai', base_url: mockUrl, model: xss, api_key: 'sk-audit' }) });
     }, { xss: XSS, mockUrl: `http://127.0.0.1:${mockPort}/v1` });
@@ -470,20 +460,35 @@ async function waitForPort(port) {
     const subs = await page.$$eval('#audit-nav button', (b) => b.map((x) => x.dataset.sub));
     assert.deepEqual(subs, ['overview', 'requests', 'trace', 'routing', 'content']);
     await page.waitForFunction(() => Number(document.querySelector('#audit-overview [data-stat="requests"]')?.textContent) >= 1);
-  };
-  await todo('audit: server strings are shown as text, never as HTML, in every table');
-  const _auditXss = async () => {
+    assert.match(await page.innerText('#audit-by-provider'), /<img src=x/, 'the provider name is shown as text in the overview too');
+  });
+  await step('audit: server strings are shown as text, never as HTML, in every table', async () => {
+    const nothingRan = async (where) => {
+      assert.equal(await page.locator('#tab-audit img').count(), 0, where + ': no element was made from a name');
+      assert.equal(await page.evaluate(() => window.__pwned), undefined, where + ': nothing ran');
+    };
+    await nothingRan('overview');
     await page.click('#audit-nav [data-sub="requests"]');
     await page.waitForSelector('#audit-requests tr[data-trace]');
     assert.match(await page.innerText('#audit-requests'), /<img src=x/, 'the provider and model names are visible as text');
-    assert.equal(await page.locator('#audit-requests img').count(), 0);
+    await nothingRan('requests');
     await page.click('#audit-requests tr[data-trace]');
     await page.waitForSelector('#audit-waterfall .span-bar');
-    assert.equal(await page.locator('#tab-audit img').count(), 0);
-    assert.equal(await page.evaluate(() => window.__pwned), undefined, 'nothing ran');
-  };
-  await todo('audit: content stays sealed until View is clicked and the passphrase is typed');
-  const _auditContent = async () => {
+    assert.match(await page.innerText('#audit-waterfall'), /<img src=x/, 'the attempt is named after the provider');
+    await page.focus('#audit-waterfall .span-bar[data-span] >> nth=-1');
+    assert.match(await page.innerText('#audit-span-details'), /<img src=x/, 'the details show the model as text');
+    await nothingRan('trace');
+    await page.click('#audit-nav [data-sub="routing"]');
+    await page.waitForSelector('#audit-attempt-rows tr');
+    assert.match(await page.innerText('#audit-attempts'), /<img src=x/);
+    await page.waitForSelector('#audit-routing-rows tr');
+    assert.match(await page.innerText('#audit-routing-table'), /<img src=x/);
+    await nothingRan('routing');
+    await page.click('#audit-nav [data-sub="content"]');
+    await page.waitForSelector('#audit-sealed .sealed-row');
+    await nothingRan('content');
+  });
+  await step('audit: content stays sealed until View is clicked and the passphrase is typed', async () => {
     const asked = [];
     page.on('request', (r) => { if (/audit\/payloads/.test(r.url())) asked.push(r.url()); });
     await page.click('#audit-nav [data-sub="content"]');
@@ -502,7 +507,15 @@ async function waitForPort(port) {
     await page.waitForFunction(() => /Anything else\?/.test(document.getElementById('audit-plain')?.textContent || ''));
     assert.equal(await page.inputValue('#audit-pass').catch(() => ''), '', 'the passphrase field is cleared after use');
     assert.equal(await page.evaluate(() => JSON.stringify(Object.entries(localStorage)).includes('passphrase')), false);
-  };
+    // The access history shows the failed and the successful try as text, and nothing ran.
+    await page.click('#audit-pass-cancel');
+    await page.waitForSelector('#audit-access-rows tr');
+    const results = await page.$$eval('#audit-access-rows tr td:last-child', (c) => c.map((x) => x.textContent));
+    assert.deepEqual(results, ['opened', 'wrong passphrase'], 'newest first');
+    assert.equal((await page.content()).includes('Anything else?'), false, 'the opened text is gone from the page once closed');
+    assert.equal(await page.locator('#tab-audit img').count(), 0);
+    assert.equal(await page.evaluate(() => window.__pwned), undefined);
+  });
   await step('audit overview: a canned stats payload fills the tiles, the day bars and the provider bars', async () => {
     const canned = {
       since: 0, requests: 40, by_status: { done: 36, error: 3, cancelled: 1 }, error_rate: 0.075,
@@ -515,6 +528,7 @@ async function waitForPort(port) {
     await page.route('**/admin/api/audit/stats*', (route) => { asked.push(route.request().url()); route.fulfill({ contentType: 'application/json', body: JSON.stringify(canned) }); });
     await page.click('#nav [data-tab="providers"]');
     await page.click('#nav [data-tab="audit"]');
+    await page.click('#audit-nav [data-sub="overview"]'); // the tab remembers the view it was last on
     await page.waitForSelector('#audit-overview [data-stat="requests"]');
     const stat = (k) => page.innerText(`#audit-overview [data-stat="${k}"]`);
     assert.deepEqual(
