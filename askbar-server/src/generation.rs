@@ -337,6 +337,27 @@ impl Drop for Finisher {
     }
 }
 
+/// How long a generation that starts now may run: the test override if one is set, else the
+/// current snapshot's setting, else the default (no snapshot yet).
+fn timeout_now(state: &AppState, db: &crate::Db) -> Duration {
+    if let Some(d) = state.generation_timeout_override() {
+        return d;
+    }
+    let secs = crate::snapshot::current(db)
+        .ok()
+        .flatten()
+        .map(|s| s.generation_timeout_secs)
+        .unwrap_or(askbar_proto::DEFAULT_GENERATION_TIMEOUT_SECS);
+    Duration::from_secs(secs as u64)
+}
+
+/// Writes the row's deadline: when it started, plus `timeout` (whole seconds, rounded up). Done
+/// in SQL so `deadline_at - started_at` is exactly the timeout, whatever second it is.
+fn stamp_deadline(db: &crate::Db, id: &str, timeout: Duration) {
+    let secs = timeout.as_secs() + u64::from(timeout.subsec_nanos() > 0);
+    let _ = db.conn().execute("UPDATE generations SET deadline_at = started_at + ?2 WHERE id = ?1", rusqlite::params![id, secs as i64]);
+}
+
 /// Starts a send: runs it now if its conversation is idle, else queues it. Everything that can
 /// fail with a plain HTTP status happens here, before any stream starts.
 pub fn submit(state: &Arc<AppState>, s: Submit) -> Result<Submitted, SubmitError> {
@@ -377,6 +398,7 @@ pub fn submit(state: &Arc<AppState>, s: Submit) -> Result<Submitted, SubmitError
     // Save the question first so it survives a failed request.
     let user_message_id = db.add_message(&s.user_id, &conversation_id, "user", &s.prompt).map_err(internal)?;
     let id = db.create_generation(&new("running", Some(&user_message_id))).map_err(internal)?;
+    stamp_deadline(&db, &id, timeout_now(state, &db));
     let live = Live::new();
     state.generations.insert(&id, live.clone());
     drop(db);
@@ -438,6 +460,8 @@ fn start_next(state: &Arc<AppState>, conversation_id: &str) {
         match db.add_message(&next.user_id, &next.conversation_id, "user", &next.prompt) {
             Ok(message_id) => {
                 let _ = db.start_generation(&next.id, &message_id, None);
+                // A queued message's clock starts now, not when it was queued.
+                stamp_deadline(&db, &next.id, timeout_now(state, &db));
                 Some(next)
             }
             Err(_) => {
@@ -712,6 +736,18 @@ mod tests {
         let want = [d(1, "1"), d(2, "2"), GenEvent::Done];
         assert_eq!(a.await.unwrap(), want);
         assert_eq!(b.await.unwrap(), want);
+    }
+
+    #[test]
+    fn with_no_snapshot_the_timeout_is_300_seconds_and_the_override_wins() {
+        let state = crate::testing::state_for_tests();
+        let db = state.db.lock().unwrap();
+        assert!(crate::snapshot::current(&db).unwrap().is_none());
+        assert_eq!(timeout_now(&state, &db), Duration::from_secs(300));
+        crate::testing::update_snapshot(&db, |s| s.generation_timeout_secs = 45);
+        assert_eq!(timeout_now(&state, &db), Duration::from_secs(45));
+        state.set_generation_timeout_override(Some(Duration::from_millis(1500)));
+        assert_eq!(timeout_now(&state, &db), Duration::from_millis(1500));
     }
 
     #[test]

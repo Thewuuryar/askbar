@@ -867,3 +867,59 @@ async fn shutdown_saves_the_partial_reply_marks_it_interrupted_and_writes_it_onc
     assert!(t.messages().iter().all(|m| m.1 != "waiting"), "the queued message was not run or stored");
     assert_eq!(t.mock.log.lock().unwrap().iter().filter(|l| l.starts_with("POST")).count(), 1, "nothing new started");
 }
+
+impl T {
+    /// (status, started_at, deadline_at) of every generation, oldest first.
+    fn deadlines(&self) -> Vec<(String, Option<i64>, Option<i64>)> {
+        let db = self.state.db.lock().unwrap();
+        let mut stmt = db.conn().prepare("SELECT status, started_at, deadline_at FROM generations ORDER BY id").unwrap();
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap().map(Result::unwrap).collect();
+        rows
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_deadline_is_start_plus_the_configured_timeout_read_when_it_starts() {
+    let t = start().await;
+    let http = client();
+    askbar_server::testing::update_snapshot(&t.state.db.lock().unwrap(), |s| s.generation_timeout_secs = 90);
+    t.chat(&http, None, "p1", "Hello there").await.text().await.unwrap();
+    askbar_server::testing::update_snapshot(&t.state.db.lock().unwrap(), |s| s.generation_timeout_secs = 120);
+    t.chat(&http, None, "p1", "Hello again").await.text().await.unwrap();
+
+    let d = t.deadlines();
+    assert_eq!(d.len(), 2);
+    assert_eq!(d[0].2.unwrap() - d[0].1.unwrap(), 90);
+    assert_eq!(d[1].2.unwrap() - d[1].1.unwrap(), 120, "the change applies to generations started afterwards only");
+
+    // The test override replaces the setting.
+    askbar_server::testing::override_generation_timeout(&t.state, Duration::from_secs(2));
+    t.chat(&http, None, "p1", "Hello once more").await.text().await.unwrap();
+    let d = t.deadlines();
+    assert_eq!(d[2].2.unwrap() - d[2].1.unwrap(), 2);
+    assert_eq!(d[0].2.unwrap() - d[0].1.unwrap(), 90, "earlier rows are untouched");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_queued_message_gets_its_deadline_when_it_starts_not_when_it_was_queued() {
+    let t = start().await;
+    askbar_server::testing::update_snapshot(&t.state.db.lock().unwrap(), |s| s.generation_timeout_secs = 100);
+    let http = client_builder().pool_max_idle_per_host(0).build().unwrap();
+    let mut first = t.chat(&http, None, "p1", "please be slow").await.bytes_stream();
+    let got = read_deltas(&mut first, 2).await;
+    let (conversation, first_id) = (conversation_id_of(&got), generation_id(&got));
+    let mut second = t.chat(&http, Some(&conversation), "p1", "second").await.bytes_stream();
+    let mut meta = String::new();
+    while !meta.contains("\n\n") && !meta.contains("\r\n\r\n") {
+        meta.push_str(&String::from_utf8_lossy(&second.next().await.unwrap().unwrap()));
+    }
+    let d = t.deadlines();
+    assert_eq!((d[1].0.as_str(), d[1].1, d[1].2), ("queued", None, None), "no clock while it waits");
+
+    // The setting changes while it waits; it starts under the new value.
+    askbar_server::testing::update_snapshot(&t.state.db.lock().unwrap(), |s| s.generation_timeout_secs = 60);
+    assert_eq!(t.cancel_with(&t.token, &first_id).await.status(), 204);
+    wait_for("the queued message to start", || (t.deadlines()[1].0 == "running" || t.deadlines()[1].0 == "done").then_some(()));
+    let d = t.deadlines();
+    assert_eq!(d[1].2.unwrap() - d[1].1.unwrap(), 60);
+}

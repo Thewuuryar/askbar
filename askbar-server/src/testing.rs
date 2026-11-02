@@ -82,6 +82,11 @@ pub fn add_pair_code_expiring(db: &Db, user_id: &str, device_name: &str, ttl_sec
     code
 }
 
+/// An `AppState` over an empty in-memory database, for unit tests.
+pub fn state_for_tests() -> std::sync::Arc<crate::AppState> {
+    crate::AppState::new(Db::open_in_memory().unwrap(), crate::secrets::Secrets::new(TEST_MASTER_KEY).unwrap(), crate::MIN_CLIENT)
+}
+
 /// Make generations started from now on time out after `d` instead of the snapshot's value.
 pub fn override_generation_timeout(state: &crate::AppState, d: std::time::Duration) {
     state.set_generation_timeout_override(Some(d));
