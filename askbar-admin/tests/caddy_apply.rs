@@ -22,7 +22,7 @@ async fn saving_pushes_the_config_through_the_socket_and_writes_the_token_file()
     assert_eq!(loads.len(), 1);
     assert_eq!(loads[0].0, "text/caddyfile");
     let body = &loads[0].1;
-    assert!(body.contains("\naskbar.orraitu.com {") && body.contains("\nadmin.askbar.orraitu.com {"), "{body}");
+    assert!(body.contains("\naskbar.orraitu.com {") && body.contains("@admin path /admin /admin/*") && !body.contains("admin.askbar.orraitu.com"), "one host, the admin under /admin: {body}");
     assert!(body.contains("remote_ip 192.168.1.0/24") && body.contains(STAGING_CA));
     assert!(body.contains("admin unix//run/caddy/admin.sock") && !body.contains("origins"));
     assert!(!body.contains(TOKEN), "the token never goes into the config");
@@ -47,7 +47,7 @@ async fn the_remote_ip_matcher_is_in_the_config_only_when_the_allowlist_is_on() 
     assert_eq!((v["proxy"]["ok"].as_bool(), v["admin_cidr"].as_str()), (Some(true), Some("192.168.1.0/24")));
     let off_body = t.fake.loads.lock().unwrap().last().unwrap().1.clone();
     assert!(!off_body.contains("remote_ip") && !off_body.contains("abort"), "{off_body}");
-    assert!(off_body.contains("admin.askbar.orraitu.com"), "the admin site is still served");
+    assert!(off_body.contains("@admin path /admin /admin/*"), "the admin site is still served");
 
     // And on again, with several single addresses and a range.
     let mut again = settings(true);

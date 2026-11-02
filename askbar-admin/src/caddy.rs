@@ -53,12 +53,26 @@ fn status(ok: bool, message: impl Into<String>) -> ProxyStatus {
     ProxyStatus { ok, message: message.into(), at: now() }
 }
 
-/// The full Caddyfile for the current settings. With HTTPS off it is just the admin listener,
-/// which makes Caddy stop serving. The API is served at the hostname and this admin site at
-/// `admin.` plus the hostname. `remote_ip` is added only when the allowlist is on, and then
-/// anyone outside it has the connection dropped. Every interpolated value was validated when it
-/// was saved (hostname, addresses); the token is never interpolated.
+/// The JSON body of Caddy's own 404: the same problem the servers send, so every 404 on the host
+/// reads alike.
+fn not_found_body() -> String {
+    use askbar_proto::{http::default_detail, ErrorCode, Problem};
+    let p = Problem::new(ErrorCode::NotFound, default_detail(ErrorCode::NotFound));
+    String::from_utf8(p.to_json_bytes()).expect("a problem is UTF-8 JSON")
+}
+
+/// The full Caddyfile for the current settings. With HTTPS off it is just Caddy's own admin
+/// listener, which makes it serve nothing. With it on there is one host name and three kinds of path:
+///
+/// - `/admin` and below go to the admin's unix socket (behind the allowlist, when it is on);
+/// - the client API goes to the server's client listener; `/api/server` is excluded from that match
+///   on purpose, because the server API is for the admin only and has no public route;
+/// - anything else gets a 404 problem.
+///
+/// Every interpolated value was validated when it was saved (hostname, addresses); the token is
+/// never interpolated.
 pub fn caddyfile(n: &Network, allowed: &[String]) -> String {
+    use askbar_proto::paths;
     let mut out = format!("{{\n\tadmin {CADDY_ADMIN_LISTEN}\n");
     if n.tls_enabled && !n.hostname.is_empty() {
         out.push_str(&format!("\tacme_dns cloudflare {{file.{CADDY_TOKEN_PATH}}}\n"));
@@ -66,12 +80,17 @@ pub fn caddyfile(n: &Network, allowed: &[String]) -> String {
             out.push_str(&format!("\tacme_ca {STAGING_CA}\n"));
         }
         out.push_str("}\n");
-        out.push_str(&format!("\n{host} {{\n\treverse_proxy server:8080 {{\n\t\tflush_interval -1\n\t}}\n}}\n", host = n.hostname));
-        out.push_str(&format!("\nadmin.{host} {{\n", host = n.hostname));
+        let (admin, server) = (paths::ADMIN, paths::SERVER);
+        out.push_str(&format!("\n{host} {{\n", host = n.hostname));
+        out.push_str(&format!("\t@admin path {admin} {admin}/*\n\thandle @admin {{\n"));
         if n.allowlist_enabled {
-            out.push_str(&format!("\t@outside not remote_ip {}\n\tabort @outside\n", allowed.join(" ")));
+            out.push_str(&format!("\t\t@outside not remote_ip {}\n\t\tabort @outside\n", allowed.join(" ")));
         }
-        out.push_str(&format!("\treverse_proxy {ADMIN_UPSTREAM}\n}}\n"));
+        out.push_str(&format!("\t\treverse_proxy {ADMIN_UPSTREAM}\n\t}}\n"));
+        out.push_str(&format!(
+            "\t@client {{\n\t\tpath /api/*\n\t\tnot path {server} {server}/*\n\t}}\n\thandle @client {{\n\t\treverse_proxy server:8080 {{\n\t\t\tflush_interval -1\n\t\t}}\n\t}}\n"
+        ));
+        out.push_str(&format!("\thandle {{\n\t\theader Content-Type {}\n\t\trespond `{}` 404\n\t}}\n}}\n", askbar_proto::problem::CONTENT_TYPE, not_found_body()));
     } else {
         out.push_str("}\n");
     }
@@ -186,41 +205,6 @@ mod tests {
     }
 
     #[test]
-    fn production_config_without_an_allowlist() {
-        let got = caddyfile(&net(true, false, false), &[]);
-        let want = "{
-\tadmin unix//run/caddy/admin.sock|0660
-\tacme_dns cloudflare {file./caddy-secrets/cf_token}
-}
-
-askbar.orraitu.com {
-\treverse_proxy server:8080 {
-\t\tflush_interval -1
-\t}
-}
-
-admin.askbar.orraitu.com {
-\treverse_proxy unix//run/admin/admin.sock
-}
-";
-        assert_eq!(got, want);
-        assert!(!got.contains("remote_ip") && !got.contains("abort"), "no matcher when the allowlist is off");
-        assert!(!got.contains("origins"), "the admin socket has no origins line");
-    }
-
-    #[test]
-    fn the_allowlist_adds_a_remote_ip_abort_matcher_only_when_on() {
-        let nets = vec!["192.168.1.0/24".to_string(), "10.0.0.5/32".to_string(), "fd00::/8".to_string()];
-        let on = caddyfile(&net(true, false, true), &nets);
-        assert!(on.contains("\t@outside not remote_ip 192.168.1.0/24 10.0.0.5/32 fd00::/8\n\tabort @outside\n"), "{on}");
-        // The matcher guards the admin host only; the API is open to paired clients.
-        let (api, admin) = on.split_once("admin.askbar.orraitu.com").unwrap();
-        assert!(!api.contains("remote_ip") && admin.contains("remote_ip"));
-        // Off: the same addresses are ignored.
-        assert!(!caddyfile(&net(true, false, false), &nets).contains("remote_ip"));
-    }
-
-    #[test]
     fn staging_adds_the_test_ca_and_nothing_else() {
         let prod = caddyfile(&net(true, false, false), &[]);
         let staging = caddyfile(&net(true, true, false), &[]);
@@ -245,7 +229,6 @@ admin.askbar.orraitu.com {
     const NOT_FOUND: &str = r#"{"type":"urn:askbar:problem:not_found","title":"Not found","status":404,"detail":"There is nothing at this address.","error":"not_found"}"#;
 
     #[test]
-    #[ignore = "enabled in 4.3"]
     fn one_host_serves_the_admin_the_client_api_and_a_404_for_everything_else() {
         let got = caddyfile(&net(true, false, false), &[]);
         let want = format!(
@@ -280,7 +263,6 @@ askbar.orraitu.com {{
     }
 
     #[test]
-    #[ignore = "enabled in 4.3"]
     fn the_server_api_is_never_proxied_and_gets_the_404_like_any_other_path() {
         let got = caddyfile(&net(true, false, false), &[]);
         let (_, client) = got.split_once("@client {").unwrap();
@@ -292,14 +274,12 @@ askbar.orraitu.com {{
     }
 
     #[test]
-    #[ignore = "enabled in 4.3"]
     fn the_fixed_404_body_is_the_same_problem_the_servers_send() {
         let p = askbar_proto::Problem::new(askbar_proto::ErrorCode::NotFound, askbar_proto::http::default_detail(askbar_proto::ErrorCode::NotFound));
         assert_eq!(String::from_utf8(p.to_json_bytes()).unwrap(), NOT_FOUND);
     }
 
     #[test]
-    #[ignore = "enabled in 4.3"]
     fn the_allowlist_guards_the_admin_path_only() {
         let nets = vec!["192.168.1.0/24".to_string(), "10.0.0.5/32".to_string(), "fd00::/8".to_string()];
         let on = caddyfile(&net(true, false, true), &nets);
