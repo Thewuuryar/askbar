@@ -110,6 +110,7 @@ pub fn router(state: Arc<AdminState>) -> Router {
         .route("/admin/api/audit/traces/{id}", get(api::audit_trace))
         .route("/admin/api/audit/stats", get(api::audit_stats))
         .route("/admin/api/audit/provider-health", get(api::audit_provider_health))
+        .route("/admin/api/audit/access", get(api::audit_access))
         .route("/admin/api/audit/rotate-key", post(api::rotate_audit_key))
         .route("/admin/api/audit/payloads/{span_id}/open", post(api::open_audit_payloads))
         .route("/admin/api/settings", get(api::get_settings).put(api::put_settings))

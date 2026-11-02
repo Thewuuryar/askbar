@@ -778,6 +778,27 @@ async function waitForPort(port) {
     await page.unroute('**/admin/api/audit/traces/SEAL1');
     await page.unroute('**/admin/api/audit/payloads/*/open');
   });
+  await step('audit access history: rows are listed newest first as text, and a new open adds one', async () => {
+    let rows = [
+      { id: 2, span_id: 'span-<b>x</b>', key_id: '0011223344556677', opened_at: 1793631845, ok: false },
+      { id: 1, span_id: 'span-1', key_id: '0011223344556677', opened_at: 1793631800, ok: true },
+    ];
+    await page.route('**/admin/api/audit/access*', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ access: rows }) }));
+    await page.click('#nav [data-tab="providers"]');
+    await page.click('#nav [data-tab="audit"]');
+    await page.click('#audit-nav [data-sub="content"]');
+    await page.waitForSelector('#audit-access-rows tr');
+    const cells = await page.$$eval('#audit-access-rows tr', (r) => r.map((tr) => [...tr.children].map((td) => td.textContent).slice(1)));
+    assert.deepEqual(cells, [['span-<b>x</b>', '0011223344556677', 'wrong passphrase'], ['span-1', '0011223344556677', 'opened']]);
+    assert.equal(await page.locator('#audit-access b').count(), 0, 'shown as text');
+    assert.equal(await page.isHidden('#audit-access-empty'), true);
+    rows = [];
+    await page.click('#audit-nav [data-sub="requests"]');
+    await page.click('#audit-nav [data-sub="content"]');
+    await page.waitForSelector('#audit-access-empty:not([hidden])');
+    assert.equal(await page.isHidden('#audit-access'), true);
+    await page.unroute('**/admin/api/audit/access*');
+  });
   await step('security: changing the password needs the current one', async () => {
     await page.click('#nav [data-tab="security"]');
     await page.fill('#pw-current', 'wrong');

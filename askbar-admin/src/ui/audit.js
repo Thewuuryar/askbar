@@ -14,6 +14,7 @@
     for (const b of $('audit-nav').children) b.setAttribute('aria-selected', b.dataset.sub === name ? 'true' : 'false');
     for (const s of SUBS) show($('audit-' + s), s === name);
     if (name === 'routing' && window.askbarAudit) window.askbarAudit.loadRouting();
+    if (name === 'content' && window.askbarAudit) window.askbarAudit.loadAccess();
   }
 
   // One banner for anything that stops the tab reading the audit store: the server away (502), or a
@@ -401,6 +402,27 @@
     }
   }
 
+  // Every attempt to open sealed content, newest first, from the admin's own record.
+  async function loadAccess() {
+    const r = await read('/admin/api/audit/access');
+    if (!r) return;
+    const body = $('audit-access-rows');
+    body.textContent = '';
+    show($('audit-access'), r.access.length > 0);
+    show($('audit-access-empty'), r.access.length === 0);
+    for (const a of r.access) {
+      const tr = el('tr');
+      tr.dataset.access = String(a.id);
+      for (const [text, cls] of [
+        [new Date(a.opened_at * 1000).toLocaleString()],
+        [a.span_id, 'wrap'],
+        [a.key_id],
+        [a.ok ? 'opened' : 'wrong passphrase', a.ok ? '' : 'status-error'],
+      ]) tr.appendChild(el('td', cls, text));
+      body.appendChild(tr);
+    }
+  }
+
   const dialog = $('audit-pass-dialog');
   let plainTimer = null;
 
@@ -439,7 +461,7 @@
     $('audit-pass').value = ''; // gone from the field the moment it is sent, whatever the answer
     show($('audit-pass-error'), false);
     try {
-      const r = await api('POST', '/admin/api/audit/payloads/' + encodeURIComponent(state.opening.id) + '/open', { passphrase });
+      const r = await api('POST', '/admin/api/audit/payloads/' + encodeURIComponent(state.opening.id) + '/open', { passphrase }).finally(loadAccess);
       const plain = $('audit-plain');
       plain.textContent = '';
       for (const p of r.payloads) {
@@ -486,6 +508,6 @@
     if (b) setSub(b.dataset.sub);
   });
 
-  window.askbarAudit = { setSub, read, banner, state, renderOverview, requestsQuery, openTrace, layout, renderTrace, loadRouting, failureClass, renderSealed };
+  window.askbarAudit = { setSub, read, banner, state, renderOverview, requestsQuery, openTrace, layout, renderTrace, loadRouting, failureClass, renderSealed, loadAccess };
   registerTab({ id: 'audit', label: 'Audit', load });
 })();

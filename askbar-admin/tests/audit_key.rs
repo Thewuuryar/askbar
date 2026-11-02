@@ -316,3 +316,35 @@ async fn no_passphrase_reaches_the_admin_logs_when_opening_content_or_rotating()
         assert!(!log.contains(p), "a passphrase is in the logs");
     }
 }
+
+#[tokio::test]
+async fn the_access_history_lists_every_open_newest_first_without_content_and_needs_a_session() {
+    let t = common::start(true).await;
+    let (span, text) = server_with_sealed_reply(&t).await;
+    let (st, empty) = t.call(M::GET, "/admin/api/audit/access", json!({})).await;
+    assert_eq!((st, empty["access"].as_array().map(Vec::len)), (200, Some(0)));
+
+    let open = |pass: &str| {
+        let (path, body) = (format!("/admin/api/audit/payloads/{span}/open"), json!({ "passphrase": pass }));
+        let t = &t;
+        async move { t.call(M::POST, &path, body).await }
+    };
+    assert_eq!(open("a wrong passphrase of enough length").await.0, 403);
+    assert_eq!(open(PASS).await.0, 200);
+    assert_eq!(open(PASS).await.0, 200);
+
+    let (st, list) = t.call(M::GET, "/admin/api/audit/access", json!({})).await;
+    assert_eq!(st, 200);
+    let rows = list["access"].as_array().unwrap();
+    assert_eq!(rows.iter().map(|r| r["ok"].as_bool().unwrap()).collect::<Vec<_>>(), [true, true, false], "newest first; the wrong guess is there too");
+    assert!(rows.iter().all(|r| r["span_id"] == span.as_str() && r["key_id"].as_str().unwrap().len() == 16 && r["opened_at"].as_i64().unwrap() > 0));
+    let body = list.to_string();
+    assert!(!body.contains(&text) && !body.contains(PASS) && !body.contains("passphrase"), "no content, no passphrase: {body}");
+    assert!(rows[0]["id"].as_i64().unwrap() > rows[1]["id"].as_i64().unwrap());
+    // A limit asks for fewer.
+    let (_, one) = t.call(M::GET, "/admin/api/audit/access?limit=1", json!({})).await;
+    assert_eq!(one["access"].as_array().unwrap().len(), 1);
+    // And it is behind the session.
+    let r = t.http.get(format!("{}/admin/api/audit/access", t.adm)).send().await.unwrap();
+    assert_eq!(r.status(), 401);
+}

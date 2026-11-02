@@ -501,6 +501,31 @@ pub async fn audit_provider_health(State(state): St) -> Result<Json<serde_json::
     audit_get(&state, "/mgmt/v1/providers/health", &Default::default()).await
 }
 
+#[derive(Deserialize)]
+pub struct AccessQuery {
+    limit: Option<usize>,
+}
+
+/// `GET /admin/api/audit/access`: who opened sealed content and when, newest first (up to 100, at
+/// most 500). Rows are kept in `admin.db`, written before any content is returned (see
+/// `open_audit_payloads`); they hold which span and key, never content or passphrases.
+pub async fn audit_access(State(state): St, axum::extract::Query(q): axum::extract::Query<AccessQuery>) -> Result<Json<serde_json::Value>, Failure> {
+    let limit = q.limit.unwrap_or(100).clamp(1, 500);
+    let db = state.db.lock().await;
+    let mut stmt = db
+        .conn()
+        .prepare("SELECT id, span_id, key_id, opened_at, ok FROM audit_access ORDER BY id DESC LIMIT ?1")
+        .map_err(internal)?;
+    let rows = stmt
+        .query_map([limit as i64], |r| {
+            Ok(serde_json::json!({ "id": r.get::<_, i64>(0)?, "span_id": r.get::<_, String>(1)?, "key_id": r.get::<_, String>(2)?, "opened_at": r.get::<_, i64>(3)?, "ok": r.get::<_, i64>(4)? != 0 }))
+        })
+        .map_err(internal)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(internal)?;
+    Ok(Json(serde_json::json!({ "access": rows })))
+}
+
 pub async fn audit_stats(State(state): St, axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>) -> Result<Json<serde_json::Value>, Failure> {
     audit_get(&state, "/mgmt/v1/audit/stats", &q).await
 }

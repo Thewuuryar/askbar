@@ -63,8 +63,8 @@ div.panel { background: var(--card); border: 1px solid var(--line); border-radiu
 @media (max-width: 560px) { .bar-row { grid-template-columns: 1fr; } .bar-row .figs { text-align: left; } }
 .filters { gap: 14px; flex-wrap: wrap; }
 .table-wrap { overflow-x: auto; }
-table#audit-table, table#audit-attempts, table#audit-routing-table { border-collapse: collapse; width: 100%; font-size: 14px; }
-#audit-table th, #audit-table td, #audit-attempts th, #audit-attempts td, #audit-routing-table th, #audit-routing-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; font-variant-numeric: tabular-nums; }
+table#audit-table, table#audit-attempts, table#audit-routing-table, table#audit-access { border-collapse: collapse; width: 100%; font-size: 14px; }
+#audit-table th, #audit-table td, #audit-attempts th, #audit-attempts td, #audit-routing-table th, #audit-routing-table td, #audit-access th, #audit-access td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; font-variant-numeric: tabular-nums; }
 #audit-table td.wrap, #audit-attempts td.wrap, #audit-routing-table td.wrap { white-space: normal; overflow-wrap: anywhere; }
 #audit-table tbody tr[data-trace] { cursor: pointer; }
 #audit-table tbody tr[data-trace]:hover, #audit-table tbody tr[data-trace]:focus { background: var(--bg); outline: none; }

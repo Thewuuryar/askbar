@@ -188,6 +188,15 @@
         <div id="audit-content" data-subview="content" hidden>
           <p class="hint empty" id="audit-content-empty">Pick a request on the Requests view to see its sealed content.</p>
           <div id="audit-sealed"></div>
+          <h3>Access history</h3>
+          <p class="hint">Every time sealed content was opened, or someone tried the wrong passphrase. It records the request, the key and the time, never the content.</p>
+          <p class="hint empty" id="audit-access-empty">Nothing has been opened yet.</p>
+          <div class="table-wrap">
+            <table id="audit-access" hidden>
+              <thead><tr><th>Time</th><th>Span</th><th>Key</th><th>Result</th></tr></thead>
+              <tbody id="audit-access-rows"></tbody>
+            </table>
+          </div>
           <dialog id="audit-pass-dialog" aria-labelledby="audit-pass-title">
             <form method="dialog" id="audit-pass-form">
               <h3 id="audit-pass-title">Open sealed content</h3>
