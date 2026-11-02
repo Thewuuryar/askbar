@@ -242,6 +242,73 @@ admin.askbar.orraitu.com {
         assert!(!got.contains("cf_ABC") && !got.to_lowercase().contains("bearer"));
     }
 
+    const NOT_FOUND: &str = r#"{"type":"urn:askbar:problem:not_found","title":"Not found","status":404,"detail":"There is nothing at this address.","error":"not_found"}"#;
+
+    #[test]
+    #[ignore = "enabled in 4.3"]
+    fn one_host_serves_the_admin_the_client_api_and_a_404_for_everything_else() {
+        let got = caddyfile(&net(true, false, false), &[]);
+        let want = format!(
+            "{{
+\tadmin unix//run/caddy/admin.sock|0660
+\tacme_dns cloudflare {{file./caddy-secrets/cf_token}}
+}}
+
+askbar.orraitu.com {{
+\t@admin path /admin /admin/*
+\thandle @admin {{
+\t\treverse_proxy unix//run/admin/admin.sock
+\t}}
+\t@client {{
+\t\tpath /api/*
+\t\tnot path /api/server /api/server/*
+\t}}
+\thandle @client {{
+\t\treverse_proxy server:8080 {{
+\t\t\tflush_interval -1
+\t\t}}
+\t}}
+\thandle {{
+\t\theader Content-Type application/problem+json
+\t\trespond `{NOT_FOUND}` 404
+\t}}
+}}
+"
+        );
+        assert_eq!(got, want);
+        assert!(!got.contains("admin.askbar.orraitu.com"), "there is no second host name");
+    }
+
+    #[test]
+    #[ignore = "enabled in 4.3"]
+    fn the_server_api_is_never_proxied_and_gets_the_404_like_any_other_path() {
+        let got = caddyfile(&net(true, false, false), &[]);
+        let (_, client) = got.split_once("@client {").unwrap();
+        let (matcher, _) = client.split_once("handle @client").unwrap();
+        assert!(matcher.contains("not path /api/server /api/server/*"), "{matcher}");
+        let proxied: Vec<&str> = got.lines().filter(|l| l.contains("reverse_proxy")).collect();
+        assert_eq!(proxied.len(), 2, "only the admin socket and the client API are proxied: {proxied:?}");
+        assert!(!got.contains("8082") && !got.contains("172.30"), "the server API's address is not in the config");
+    }
+
+    #[test]
+    #[ignore = "enabled in 4.3"]
+    fn the_fixed_404_body_is_the_same_problem_the_servers_send() {
+        let p = askbar_proto::Problem::new(askbar_proto::ErrorCode::NotFound, askbar_proto::http::default_detail(askbar_proto::ErrorCode::NotFound));
+        assert_eq!(String::from_utf8(p.to_json_bytes()).unwrap(), NOT_FOUND);
+    }
+
+    #[test]
+    #[ignore = "enabled in 4.3"]
+    fn the_allowlist_guards_the_admin_path_only() {
+        let nets = vec!["192.168.1.0/24".to_string(), "10.0.0.5/32".to_string(), "fd00::/8".to_string()];
+        let on = caddyfile(&net(true, false, true), &nets);
+        let (admin, rest) = on.split_once("\t@client {").unwrap();
+        assert!(admin.contains("\t\t@outside not remote_ip 192.168.1.0/24 10.0.0.5/32 fd00::/8\n\t\tabort @outside\n\t\treverse_proxy unix//run/admin/admin.sock"), "{admin}");
+        assert!(!rest.contains("remote_ip"), "the client API is open to paired apps: {rest}");
+        assert!(!caddyfile(&net(true, false, false), &nets).contains("remote_ip"), "off: the same addresses are ignored");
+    }
+
     #[test]
     fn token_file_is_private_and_removed_when_not_needed() {
         let dir = std::env::temp_dir().join(format!("askbar-admin-cf-{}", ulid::Ulid::new()));
