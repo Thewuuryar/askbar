@@ -48,6 +48,7 @@ def text_of(content):
 
 
 SEEN_ONCE = set()  # messages "429once" has already refused
+RST = set()  # connections to abort with a reset instead of closing politely
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -127,8 +128,10 @@ class Handler(BaseHTTPRequestHandler):
                 for piece in ("Reset ", "midway"):
                     self.delta(anthropic, piece)
                 time.sleep(0.05)
-                # Abort the connection (RST) instead of ending the stream.
+                # Abort the connection (RST) instead of ending the stream: with SO_LINGER 0 a plain
+                # close() resets, but the server's shutdown_request would send a polite FIN first.
                 self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+                RST.add(self.connection)
             except OSError:
                 pass
             self.close_connection = True
@@ -191,6 +194,13 @@ class Handler(BaseHTTPRequestHandler):
 
 
 class Server(ThreadingHTTPServer):
+    def shutdown_request(self, request):
+        if request in RST:
+            RST.discard(request)
+            request.close()  # no FIN first: the peer sees a reset
+        else:
+            super().shutdown_request(request)
+
     def server_bind(self):
         # HTTPServer.server_bind also looks up the host's FQDN, which can take
         # many seconds on some machines, and nothing here needs it.

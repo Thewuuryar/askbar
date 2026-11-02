@@ -630,21 +630,29 @@ fn spawn_run(
     };
     let (state, provider_id) = (state.clone(), provider_id.to_string());
     tokio::spawn(async move {
+        // The providers to try, in order: the one asked for, then the fallbacks the administrator
+        // allowed (see router::plan), each loaded with its key.
         let prepared = {
             let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
-            let provider = store::load_provider(&db, &state.secrets(), &provider_id).ok().flatten();
+            let plan = crate::snapshot::current(&db).ok().flatten().map(|s| crate::router::plan(&s, &provider_id)).unwrap_or_default();
+            let candidates: Vec<Candidate> = plan
+                .into_iter()
+                .filter_map(|r| {
+                    let provider = store::load_provider(&db, &state.secrets(), &r.id).ok().flatten()?;
+                    Some(Candidate { id: r.id, provider, fallback_from: r.fallback_from })
+                })
+                .collect();
             let system = store::chat_system_prompt(&db).ok();
             let history: Option<Vec<ChatMessage>> = db
                 .get_messages(&fin.user_id, &fin.conversation_id)
                 .ok()
                 .map(|ms| ms.iter().map(|m| ChatMessage::new(&m.role, &m.content)).collect());
-            provider.zip(system).zip(history)
+            (!candidates.is_empty()).then_some(candidates).zip(system).zip(history)
         };
-        let Some(((provider, system), history)) = prepared else {
+        let Some(((candidates, system), history)) = prepared else {
             fin.finish(Outcome::Error("The provider is no longer available.".into()));
             return;
         };
-        let candidates = vec![Candidate { id: provider_id.clone(), provider, fallback_from: None }];
 
         // Race the whole sequence of attempts against the deadline. Dropping it on expiry closes
         // the request in flight; the text that had arrived is already in `fin`.
@@ -739,7 +747,12 @@ async fn attempts(
             if live.cancel_was_asked() {
                 return Ended::Cancelled(None);
             }
-            fin.provider_id = cand.id.clone();
+            if fin.provider_id != cand.id || retry_index == 0 {
+                // The row says which provider is serving it (finally: the one that did).
+                fin.provider_id = cand.id.clone();
+                let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+                let _ = db.conn().execute("UPDATE generations SET provider_id = ?2 WHERE id = ?1", rusqlite::params![fin.id, cand.id]);
+            }
             let span = state.audit.start_span(
                 SpanStart::new(&fin.id, Kind::Attempt, &cand.provider.name)
                     .parent(&fin.turn_span)

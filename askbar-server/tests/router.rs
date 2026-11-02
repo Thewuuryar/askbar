@@ -138,7 +138,6 @@ async fn the_wait_before_a_retry_is_the_providers_retry_after_not_the_default_ba
 }
 
 #[tokio::test]
-#[ignore = "enabled in 6.6"]
 async fn when_retries_run_out_the_next_provider_serves_it() {
     let s = stack("m-500", "m", serde_json::json!({ "allow_as_fallback": true })).await;
     let events = s.run("please answer").await;
@@ -149,7 +148,6 @@ async fn when_retries_run_out_the_next_provider_serves_it() {
 }
 
 #[tokio::test]
-#[ignore = "enabled in 6.6"]
 async fn once_text_has_been_sent_the_router_never_switches_provider() {
     let s = stack("m-reset", "m", serde_json::json!({ "allow_as_fallback": true })).await;
     let events = s.run("tell me something").await;
@@ -173,7 +171,6 @@ async fn a_401_falls_back_and_flags_the_provider_as_having_bad_credentials() {
 }
 
 #[tokio::test]
-#[ignore = "enabled in 6.6"]
 async fn a_metered_provider_is_skipped_as_a_fallback_unless_it_allows_it() {
     // p2 is metered (the default) and has not said it may be a fallback.
     let s = stack("m-500", "m", serde_json::json!({})).await;
@@ -229,4 +226,29 @@ async fn a_stop_while_waiting_to_retry_ends_the_generation_at_once() {
     assert!(is_done(&events), "a stop ends cleanly: {events:?}");
     assert_eq!(s.rows()[0].0, "cancelled");
     assert_eq!(s.m1.requests(), 1, "no further try was made");
+}
+
+#[tokio::test]
+async fn the_audit_trail_shows_every_try_and_which_provider_the_new_one_stood_in_for() {
+    let s = stack("m-500", "m", serde_json::json!({ "allow_as_fallback": true })).await;
+    let sub = s.submit("please answer").ok().expect("accepted");
+    let trace = sub.generation_id.clone();
+    let _: Vec<GenEvent> = sub.live.subscribe(0).collect().await;
+    s.state.audit.flush().await;
+    let db = rusqlite::Connection::open(s._dir.join("audit.db")).unwrap();
+    let mut stmt = db
+        .prepare("SELECT provider_id, status, json_extract(attrs_json, '$.retry_index'), json_extract(attrs_json, '$.fallback_from') FROM spans WHERE trace_id = ?1 AND kind = 'attempt' ORDER BY id")
+        .unwrap();
+    let rows: Vec<(String, String, i64, Option<String>)> =
+        stmt.query_map([&trace], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).unwrap().map(Result::unwrap).collect();
+    let want = |p: &str, st: &str, i: i64, from: Option<&str>| (p.to_string(), st.to_string(), i, from.map(str::to_string));
+    assert_eq!(
+        rows,
+        [
+            want("p1", "error", 0, None),
+            want("p1", "error", 1, None),
+            want("p1", "error", 2, None),
+            want("p2", "done", 0, Some("p1")),
+        ]
+    );
 }
