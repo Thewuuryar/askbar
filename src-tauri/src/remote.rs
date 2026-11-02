@@ -1187,6 +1187,115 @@ mod tests {
         assert_eq!(message, "Stopped after 5 minutes");
     }
 
+    /// Serves `state` on a fresh port; returns the URL and a task that stops it.
+    async fn serve_state(state: Arc<askbar_server::AppState>) -> (String, tokio::task::JoinHandle<()>) {
+        let app = askbar_server::api_router(state);
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", l.local_addr().unwrap());
+        (url, tokio::spawn(async move { axum::serve(l, app).await.unwrap() }))
+    }
+
+    /// Reads a chat or resume response into `reader` until `until` says enough, or the stream ends.
+    /// Returns the text read and the terminal step, if one arrived.
+    async fn read_some(resp: reqwest::Response, reader: &mut ReplyReader, until: impl Fn(&ReplyReader) -> bool) -> (String, Option<Step>) {
+        let (mut text, mut stream) = (String::new(), resp.bytes_stream());
+        while let Some(chunk) = stream.next().await {
+            for step in reader.feed(&chunk.unwrap()) {
+                match step {
+                    Step::Emit(StreamEvent::Delta { text: t }) => text.push_str(&t),
+                    Step::Emit(_) => {}
+                    end => return (text, Some(end)),
+                }
+            }
+            if until(reader) {
+                break;
+            }
+        }
+        (text, None)
+    }
+
+    async fn stored_reply(http: &reqwest::Client, url: &str, token: &str, conversation_id: &str) -> String {
+        let detail: ConversationDetail = http.get(format!("{url}/api/v1/conversations/{conversation_id}")).bearer_auth(token).send().await.unwrap().json().await.unwrap();
+        detail.messages.iter().rev().find(|m| m.role == "assistant").map(|m| m.content.clone()).unwrap_or_default()
+    }
+
+    /// A reply that is dropped by the client and picked up again with `after=N` arrives whole: no
+    /// delta twice, none missing. With a server restart in between the person gets what was
+    /// written, the reply ends `interrupted`, and the stored text is that same partial text.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_dropped_client_resumes_with_after_and_a_restart_ends_the_reply_interrupted() {
+        use askbar_server::{auth, secrets::Secrets, AppState};
+        let (_mock, mock_port) = start_mock();
+        let dir = std::env::temp_dir().join(format!("askbar-8-5-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db_path = dir.join("server.db");
+        let db = askbar_server::Db::open(&db_path).unwrap();
+        let user = db.seed_server().unwrap();
+        askbar_server::testing::add_provider(&db, askbar_server::testing::provider("p", "mock", &format!("http://127.0.0.1:{mock_port}/v1"), "mock-model"));
+        let code = askbar_server::testing::add_pair_code(&db, &user, "test");
+        let state: Arc<AppState> = AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), "0.1.0");
+        let token = auth::redeem_pair_code(&state.db.lock().unwrap(), &code).unwrap().unwrap();
+        let (url, server) = serve_state(state.clone()).await;
+        let mut version = reqwest::header::HeaderMap::new();
+        version.insert(askbar_proto::CLIENT_VERSION_HEADER, VERSION.parse().unwrap());
+        let http = reqwest::Client::builder().default_headers(version).build().unwrap();
+        let chat = |text: &str| {
+            http.post(format!("{url}/api/v1/chat"))
+                .bearer_auth(&token)
+                .header(askbar_proto::CLIENT_VERSION_HEADER, VERSION)
+                .header("accept", "text/event-stream")
+                .json(&ChatRequest { conversation_id: None, provider: "p".into(), text: text.into(), client_request_id: None })
+        };
+
+        // 1. Drop the client after a few deltas, resume after what was received (twice, to be sure),
+        // then stop the reply: the three pieces joined are the stored reply.
+        let resume = |gid: String, after: u64| {
+            http.get(format!("{url}/api/v1/generations/{gid}/stream")).bearer_auth(&token).header(askbar_proto::CLIENT_VERSION_HEADER, VERSION).header("accept", "text/event-stream").query(&[("after", after)])
+        };
+        let mut reader = ReplyReader::default();
+        let first = chat("slow hello").send().await.unwrap();
+        let (head, end) = read_some(first, &mut reader, |r| r.last_id >= 3).await;
+        assert!(end.is_none() && reader.last_id >= 3, "the reply was still going when the client left: {end:?} {} {head:?}", reader.last_id);
+        let gid = reader.generation_id.clone().expect("meta names the generation");
+        let at_drop = reader.last_id;
+        let second = resume(gid.clone(), at_drop).send().await.unwrap();
+        assert!(second.status().is_success());
+        let (middle, end) = read_some(second, &mut reader, |r| r.last_id >= at_drop + 5).await;
+        assert!(end.is_none() && reader.last_id >= at_drop + 5, "the resume carried on from delta {at_drop}");
+        let stop = http.post(format!("{url}/api/v1/generations/{gid}/cancel")).bearer_auth(&token).send().await.unwrap();
+        assert!(stop.status().is_success());
+        let third = resume(gid.clone(), reader.last_id).send().await.unwrap();
+        let (tail, _) = read_some(third, &mut reader, |_| false).await;
+        let all = format!("{head}{middle}{tail}");
+        let convs: Vec<Conversation> = http.get(format!("{url}/api/v1/conversations")).bearer_auth(&token).send().await.unwrap().json().await.unwrap();
+        assert_eq!(all, stored_reply(&http, &url, &token, &convs[0].id).await, "no delta twice, none missing");
+        assert!(all.starts_with("Streaming slowly"), "{all}");
+
+        // 2. A server restart while a reply is running.
+        let mut reader = ReplyReader::default();
+        let first = chat("slow reply please").send().await.unwrap();
+        let (head, end) = read_some(first, &mut reader, |r| r.last_id >= 3).await;
+        assert!(end.is_none());
+        let gid = reader.generation_id.clone().unwrap();
+        askbar_server::generation::shutdown(&state);
+        server.abort();
+        let restarted_db = askbar_server::Db::open(&db_path).unwrap();
+        askbar_server::generation::sweep_on_start(&restarted_db).unwrap();
+        let state2: Arc<AppState> = AppState::new(restarted_db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), "0.1.0");
+        let (url2, _server2) = serve_state(state2.clone()).await;
+        let resumed = http.get(format!("{url2}/api/v1/generations/{gid}/stream")).bearer_auth(&token).header(askbar_proto::CLIENT_VERSION_HEADER, VERSION).header("accept", "text/event-stream").query(&[("after", reader.last_id)]).send().await.unwrap();
+        assert!(resumed.status().is_success());
+        let (tail, end) = read_some(resumed, &mut reader, |_| false).await;
+        let Some(Step::Fail(why)) = end else { panic!("an interrupted reply ends with an error event, got {end:?}") };
+        assert!(!why.is_empty());
+        let (status, stored_text): (String, String) = state2.db.lock().unwrap().conn().query_row("SELECT status, text FROM generations WHERE id = ?1", [&gid], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        assert_eq!(status, "interrupted");
+        let all = format!("{head}{tail}");
+        assert!(stored_text.starts_with("Streaming sl") && stored_text.len() >= 12, "{stored_text}");
+        assert_eq!(all, stored_text, "the person got exactly the partial text that was kept");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn only_the_servers_timeout_words_become_a_timed_out_error() {
         assert_eq!(server_error("Timed out after 90 seconds".into()), StreamEvent::error_kind("timed_out", "Stopped after 90 seconds".into()));
