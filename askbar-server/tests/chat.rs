@@ -75,7 +75,7 @@ impl T {
         client
             .post(format!("http://{}/api/v1/chat", self.addr))
             .bearer_auth(&self.token)
-            .json(&ChatRequest { conversation_id: conv.map(String::from), provider: provider.into(), text: text.into() })
+            .json(&ChatRequest { conversation_id: conv.map(String::from), provider: provider.into(), text: text.into(), client_request_id: None })
             .send()
             .await
             .unwrap()
@@ -236,7 +236,7 @@ async fn bad_requests_are_plain_http_errors() {
     assert!(t.messages().is_empty());
     let r = http
         .post(format!("http://{}/api/v1/chat", t.addr))
-        .json(&ChatRequest { conversation_id: None, provider: "p1".into(), text: "hi".into() })
+        .json(&ChatRequest { conversation_id: None, provider: "p1".into(), text: "hi".into(), client_request_id: None })
         .send()
         .await
         .unwrap();
@@ -284,7 +284,7 @@ async fn another_user_cannot_read_or_continue_my_conversation() {
     let r = http
         .post(format!("http://{}/api/v1/chat", t.addr))
         .bearer_auth(&token_b)
-        .json(&ChatRequest { conversation_id: Some(conversation_id.clone()), provider: "p1".into(), text: "intrusion".into() })
+        .json(&ChatRequest { conversation_id: Some(conversation_id.clone()), provider: "p1".into(), text: "intrusion".into(), client_request_id: None })
         .send()
         .await
         .unwrap();
@@ -596,4 +596,83 @@ async fn a_running_generation_is_listed_and_a_finished_one_is_not() {
     let body = t.get_with(&t.token, &format!("/api/v1/conversations/{conversation}")).await.text().await.unwrap();
     assert!(!body.contains("pending"), "left out when nothing is pending: {body}");
     assert_eq!(t.get_with(&t.token, "/api/v1/generations?status=bogus").await.status(), 400);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn two_posts_with_one_client_request_id_make_one_generation_and_one_user_message() {
+    let t = start().await;
+    let send = |text: &'static str| {
+        let (addr, token) = (t.addr, t.token.clone());
+        async move {
+            client()
+                .post(format!("http://{addr}/api/v1/chat"))
+                .bearer_auth(token)
+                .json(&ChatRequest {
+                    conversation_id: None,
+                    provider: "p1".into(),
+                    text: text.into(),
+                    client_request_id: Some("req-1".into()),
+                })
+                .send()
+                .await
+                .unwrap()
+                .text()
+                .await
+                .unwrap()
+        }
+    };
+    let first = send("Hello there").await;
+    let second = send("Hello there").await; // a retry, after the first has finished
+    assert_eq!(generation_id(&first), generation_id(&second));
+    assert_eq!(deltas(&first), deltas(&second), "the retry gets the same reply");
+    assert!(second.contains("event: done"));
+    assert_eq!(t.generations().len(), 1);
+    assert_eq!(t.messages().iter().filter(|(r, _)| r == "user").count(), 1);
+    let user = t.user_id();
+    assert_eq!(t.state.db.lock().unwrap().list_conversations(&user).unwrap().len(), 1, "no second conversation");
+    assert_eq!(t.mock.log.lock().unwrap().iter().filter(|l| l.starts_with("POST")).count(), 1, "one upstream request");
+
+    // The same id from another device is a different send.
+    let other = t.second_user_token();
+    let third = client()
+        .post(format!("http://{}/api/v1/chat", t.addr))
+        .bearer_auth(&other)
+        .json(&ChatRequest { conversation_id: None, provider: "p1".into(), text: "Hello there".into(), client_request_id: Some("req-1".into()) })
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(third.status(), 200);
+    assert_ne!(generation_id(&third.text().await.unwrap()), generation_id(&first));
+}
+
+impl T {
+    fn user_id(&self) -> String {
+        self.state.db.lock().unwrap().seed_server().unwrap()
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_repeat_while_the_reply_runs_attaches_to_it() {
+    let t = start().await;
+    let post = || {
+        client_builder().pool_max_idle_per_host(0).build().unwrap()
+            .post(format!("http://{}/api/v1/chat", t.addr))
+            .bearer_auth(&t.token)
+            .json(&ChatRequest { conversation_id: None, provider: "p1".into(), text: "please be slow".into(), client_request_id: Some("r".into()) })
+            .send()
+    };
+    let mut s1 = post().await.unwrap().bytes_stream();
+    let mut got1 = String::new();
+    while got1.matches("event: delta").count() < 2 {
+        got1.push_str(&String::from_utf8_lossy(&s1.next().await.unwrap().unwrap()));
+    }
+    let mut s2 = post().await.unwrap().bytes_stream();
+    let mut got2 = String::new();
+    while got2.matches("event: delta").count() < 3 {
+        got2.push_str(&String::from_utf8_lossy(&s2.next().await.unwrap().unwrap()));
+    }
+    assert_eq!(generation_id(&got1), generation_id(&got2));
+    assert_eq!(deltas(&got2)[0].0, 1, "the attach replays from the start");
+    assert_eq!(t.generations().len(), 1);
+    assert_eq!(t.messages().iter().filter(|(r, _)| r == "user").count(), 1);
 }

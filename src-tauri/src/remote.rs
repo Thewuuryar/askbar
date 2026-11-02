@@ -287,7 +287,7 @@ impl Remote {
             Err(e) => return fail(e),
         };
         let req = match i.request(Method::POST, "/api/v1/chat") {
-            Ok(r) => r.header("accept", "text/event-stream").json(&ChatRequest { conversation_id, provider, text }),
+            Ok(r) => r.header("accept", "text/event-stream").json(&ChatRequest { conversation_id, provider, text, client_request_id: None }),
             Err(e) => return fail(e),
         };
         let resp = tokio::select! {

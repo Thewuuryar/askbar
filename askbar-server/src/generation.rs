@@ -193,6 +193,7 @@ pub struct Start {
     pub user_message_id: Option<String>,
     pub prompt: String,
     pub provider_id: String,
+    pub client_request_id: Option<String>,
     pub provider: Provider,
     pub system: String,
     pub history: Vec<ChatMessage>,
@@ -293,7 +294,7 @@ pub fn start(state: &Arc<AppState>, s: Start) -> Result<(String, Arc<Live>), DbE
         device_id: Some(&s.device_id),
         conversation_id: &s.conversation_id,
         user_message_id: s.user_message_id.as_deref(),
-        client_request_id: None,
+        client_request_id: s.client_request_id.as_deref(),
         provider_id: Some(&s.provider_id),
         status: "running",
         prompt: &s.prompt,
@@ -352,7 +353,7 @@ pub struct StreamQuery {
     after: Option<u64>,
 }
 
-type EventStream = std::pin::Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>;
+pub(crate) type EventStream = std::pin::Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>;
 
 fn to_sse(e: GenEvent) -> Result<Event, Infallible> {
     Ok(match e {
@@ -368,6 +369,21 @@ fn terminal_of(status: &str, error: Option<&str>) -> GenEvent {
         "done" | "cancelled" => GenEvent::Done,
         "interrupted" => GenEvent::Error { message: error.unwrap_or("The server restarted before the reply finished.").into() },
         _ => GenEvent::Error { message: error.unwrap_or("The reply failed.").into() },
+    }
+}
+
+/// The events of `row` after the first `after` deltas: from memory if it is there, else from the row.
+pub(crate) fn events_for(state: &AppState, row: &crate::Generation, after: u64) -> EventStream {
+    match state.generations.get(&row.id) {
+        Some(live) => Box::pin(live.subscribe(after).map(to_sse)),
+        None => {
+            let mut v = Vec::new();
+            if after == 0 && !row.text.is_empty() {
+                v.push(GenEvent::Delta { seq: 1, text: row.text.clone() });
+            }
+            v.push(terminal_of(&row.status, row.error.as_deref()));
+            Box::pin(futures_util::stream::iter(v.into_iter().map(to_sse)))
+        }
     }
 }
 
@@ -388,17 +404,7 @@ pub async fn stream(
         let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
         db.get_generation(&auth.user_id, &id).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?.ok_or(StatusCode::NOT_FOUND)?
     };
-    let events: EventStream = match state.generations.get(&id) {
-        Some(live) => Box::pin(live.subscribe(after).map(to_sse)),
-        None => {
-            let mut v = Vec::new();
-            if after == 0 && !row.text.is_empty() {
-                v.push(GenEvent::Delta { seq: 1, text: row.text.clone() });
-            }
-            v.push(terminal_of(&row.status, row.error.as_deref()));
-            Box::pin(futures_util::stream::iter(v.into_iter().map(to_sse)))
-        }
-    };
+    let events = events_for(&state, &row, after);
     Ok(Sse::new(events).keep_alive(KeepAlive::default()))
 }
 

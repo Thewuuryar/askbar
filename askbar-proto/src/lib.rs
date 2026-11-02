@@ -188,6 +188,10 @@ pub struct ChatRequest {
     /// Id of the provider to answer with.
     pub provider: String,
     pub text: String,
+    /// Chosen by the client for each send. A repeat from the same device attaches to the
+    /// generation it started instead of starting another, so a retry never doubles a message.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_request_id: Option<String>,
 }
 
 /// Server-Sent Event payloads for `POST /api/v1/chat`; the SSE event name is the `event` tag.
@@ -318,5 +322,6 @@ mod tests {
     fn chat_request_conversation_optional() {
         let r: ChatRequest = serde_json::from_str(r#"{"provider":"p","text":"t"}"#).unwrap();
         assert_eq!(r.conversation_id, None);
+        assert_eq!(r.client_request_id, None);
     }
 }

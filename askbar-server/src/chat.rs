@@ -14,7 +14,7 @@ use axum::{
     response::sse::{Event, KeepAlive, Sse},
     Extension, Json,
 };
-use std::{convert::Infallible, sync::Arc};
+use std::sync::Arc;
 use tokio_stream::StreamExt;
 
 fn internal<E>(_: E) -> StatusCode {
@@ -44,10 +44,25 @@ pub async fn chat(
     State(state): State<Arc<AppState>>,
     Extension(auth): Extension<DeviceAuth>,
     Json(req): Json<ChatRequest>,
-) -> Result<Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>>, StatusCode> {
+) -> Result<impl axum::response::IntoResponse, StatusCode> {
     let text = req.text.trim().to_string();
     if text.is_empty() {
         return Err(StatusCode::BAD_REQUEST);
+    }
+
+    // A repeat of a send this device already made attaches to that generation and starts nothing.
+    if let Some(rid) = req.client_request_id.as_deref() {
+        let existing = state
+            .db
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .find_by_request_id(&auth.device_id, rid)
+            .map_err(internal)?;
+        if let Some(g) = existing {
+            let meta = ChatEvent::Meta { conversation_id: g.conversation_id.clone(), generation_id: Some(g.id.clone()) };
+            let events = futures_util::stream::once(async move { Ok(sse_event(&meta)) }).chain(generation::events_for(&state, &g, 0));
+            return Ok(Sse::new(Box::pin(events) as generation::EventStream).keep_alive(KeepAlive::default()));
+        }
     }
 
     // Everything that can fail with a plain HTTP status happens before the stream starts.
@@ -82,13 +97,16 @@ pub async fn chat(
             user_message_id: Some(user_message_id),
             prompt: text,
             provider_id: req.provider,
+            client_request_id: req.client_request_id,
             provider,
             system,
             history,
         },
     )
     .map_err(internal)?;
-    let meta = futures_util::stream::once(async move { Ok(sse_event(&ChatEvent::Meta { conversation_id: conversation, generation_id: Some(generation_id) })) });
+    let meta = futures_util::stream::once(async move {
+        Ok(sse_event(&ChatEvent::Meta { conversation_id: conversation, generation_id: Some(generation_id) }))
+    });
     let events = live.subscribe(0).map(|e| {
         Ok(match e {
             GenEvent::Delta { seq, text } => sse_event_with_id(&ChatEvent::Delta { text }, Some(seq)),
@@ -96,5 +114,5 @@ pub async fn chat(
             GenEvent::Error { message } => sse_event(&ChatEvent::Error { message }),
         })
     });
-    Ok(Sse::new(meta.chain(events)).keep_alive(KeepAlive::default()))
+    Ok(Sse::new(Box::pin(meta.chain(events)) as generation::EventStream).keep_alive(KeepAlive::default()))
 }
