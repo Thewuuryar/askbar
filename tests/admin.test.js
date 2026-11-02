@@ -544,6 +544,19 @@ async function waitForPort(port) {
     await page.waitForSelector('#app:not([hidden])');
     await page.waitForSelector('#offline:not([hidden])');
   });
+  await step('audit: with the server away the tab explains instead of failing, and the views are still there', async () => {
+    await page.click('#nav [data-tab="audit"]');
+    await page.waitForSelector('#audit-error:not([hidden])');
+    assert.match(await page.innerText('#audit-error'), /server is offline/i);
+    for (const sub of ['overview', 'requests', 'trace', 'routing', 'content']) {
+      await page.click(`#audit-nav [data-sub="${sub}"]`);
+      assert.equal(await page.isVisible(`#audit-${sub}`), true, sub);
+      assert.equal(await page.getAttribute(`#audit-nav [data-sub="${sub}"]`, 'aria-selected'), 'true');
+      assert.equal(await page.locator('#audit-nav [aria-selected="true"]').count(), 1);
+      assert.match(await page.innerText(`#audit-${sub}`), /\S/, `${sub} says something even when empty`);
+    }
+    await page.click('#audit-nav [data-sub="overview"]');
+  });
   await step('a change while the server is away is refused with a clear message and saves nothing', async () => {
     await page.click('#nav [data-tab="providers"]');
     await page.click('#add-provider');

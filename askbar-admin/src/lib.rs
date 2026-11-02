@@ -122,6 +122,7 @@ pub fn router(state: Arc<AdminState>) -> Router {
         .route("/admin", get(|| async { Redirect::to("/admin/") }))
         .route("/admin/", get(|| async { asset("text/html; charset=utf-8", include_str!("ui/index.html")) }))
         .route("/admin/app.js", get(|| async { asset("text/javascript; charset=utf-8", include_str!("ui/app.js")) }))
+        .route("/admin/audit.js", get(|| async { asset("text/javascript; charset=utf-8", include_str!("ui/audit.js")) }))
         .route("/admin/style.css", get(|| async { asset("text/css; charset=utf-8", include_str!("ui/style.css")) }))
         .route("/health", get(|| async { (StatusCode::OK, "ok") }))
         .route("/admin/login", post(web::login))

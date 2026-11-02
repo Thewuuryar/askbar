@@ -109,6 +109,24 @@
         <div id="devices"></div>
       </section>
 
+      <section id="tab-audit" data-tab="audit" hidden>
+        <h2>Audit</h2>
+        <p class="hint">What the server recorded about each reply: when, for whom, through which provider, how long it took, what it used and how it ended. Message content is sealed; opening it asks for the audit passphrase and is logged.</p>
+        <p id="audit-error" class="error" hidden></p>
+        <div id="audit-nav" class="subnav" role="tablist" aria-label="Audit views">
+          <button type="button" role="tab" data-sub="overview" aria-selected="true">Overview</button>
+          <button type="button" role="tab" data-sub="requests" aria-selected="false">Requests</button>
+          <button type="button" role="tab" data-sub="trace" aria-selected="false">Trace</button>
+          <button type="button" role="tab" data-sub="routing" aria-selected="false">Routing</button>
+          <button type="button" role="tab" data-sub="content" aria-selected="false">Content</button>
+        </div>
+        <div id="audit-overview" data-subview="overview"><p class="hint empty">Nothing recorded in this window yet.</p></div>
+        <div id="audit-requests" data-subview="requests" hidden><p class="hint empty">No requests recorded yet.</p></div>
+        <div id="audit-trace" data-subview="trace" hidden><p class="hint empty">Pick a request on the Requests view to see its trace.</p></div>
+        <div id="audit-routing" data-subview="routing" hidden><p class="hint empty">Pick a request on the Requests view to see how it was routed.</p></div>
+        <div id="audit-content" data-subview="content" hidden><p class="hint empty">Pick a request on the Requests view to see its sealed content.</p></div>
+      </section>
+
       <section id="tab-backup" data-tab="backup" hidden>
         <h2>Backup</h2>
         <div class="panel">
@@ -184,5 +202,6 @@
   <footer class="footer">Askbar is free software under the AGPL-3.0-or-later. <a href="https://github.com/Thewuuryar/askbar" rel="noreferrer">Source code</a></footer>
 
   <script src="/admin/app.js"></script>
+  <script src="/admin/audit.js"></script>
 </body>
 </html>
