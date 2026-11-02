@@ -5,7 +5,8 @@
 Then point a provider at http://127.0.0.1:8765/v1 (any key). Say "slow" in a
 message to get a long, slow reply (handy for testing Stop), or "fail" to get
 an HTTP 401 error. "429" answers HTTP 429 with Retry-After: 1 and "500" answers
-HTTP 500.
+HTTP 500. "hang" accepts the request and sends nothing until the client closes;
+"drop" sends two content deltas and closes the connection without [DONE].
 """
 import json
 import os
@@ -71,6 +72,30 @@ class Handler(BaseHTTPRequestHandler):
             return
         if "500" in last:
             self.send_json(500, {"error": {"message": "Internal error (mock)"}})
+            return
+
+        if "hang" in last.lower():
+            # Send nothing; wait for the client to close its side.
+            self.connection.settimeout(None)
+            try:
+                while self.connection.recv(4096):
+                    pass
+            except OSError:
+                pass
+            print("client disconnected", flush=True)
+            return
+        if "drop" in last.lower():
+            self.send_response(200)
+            self.send_header("content-type", "text/event-stream")
+            self.end_headers()
+            try:
+                for piece in ("Dropped ", "mid-stream"):
+                    chunk = {"choices": [{"delta": {"content": piece}}]}
+                    self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
+                    self.wfile.flush()
+            except ConnectionError:
+                pass
+            self.close_connection = True
             return
 
         slow = "slow" in last.lower()

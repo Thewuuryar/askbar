@@ -53,6 +53,22 @@ class Modes(unittest.TestCase):
         _, r = self.srv.post("please 500")
         self.assertEqual(r.status, 500)
 
+    def test_hang_sends_nothing_until_client_closes(self):
+        c = http.client.HTTPConnection("127.0.0.1", self.srv.port, timeout=1)
+        c.request("POST", "/v1/chat/completions", json.dumps(
+            {"model": "m", "stream": True, "messages": [{"role": "user", "content": "hang"}]}),
+            {"content-type": "application/json"})
+        with self.assertRaises(TimeoutError):
+            c.getresponse()
+        c.close()
+
+    def test_drop_sends_two_deltas_then_closes_without_done(self):
+        _, r = self.srv.post("drop")
+        self.assertEqual(r.status, 200)
+        data = r.read().decode()
+        self.assertEqual(data.count('"content"'), 2)
+        self.assertNotIn("[DONE]", data)
+
 
 if __name__ == "__main__":
     unittest.main()
