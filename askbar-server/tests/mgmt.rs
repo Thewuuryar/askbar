@@ -532,3 +532,170 @@ async fn a_generation_with_the_mocks_usage_adds_to_the_overview_totals() {
     let _ = child.kill();
     let _ = child.wait();
 }
+
+// ------------------------------------------------------------------ audit endpoints
+
+struct AuditStack {
+    url: String,
+    http: reqwest::Client,
+    state: std::sync::Arc<AppState>,
+    _mock: std::process::Child,
+    _dir: std::path::PathBuf,
+}
+
+impl Drop for AuditStack {
+    fn drop(&mut self) {
+        let _ = self._mock.kill();
+        let _ = self._mock.wait();
+    }
+}
+
+async fn audit_stack() -> AuditStack {
+    use std::io::{BufRead, BufReader};
+    use std::process::{Command, Stdio};
+    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let script = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/mock_llm.py");
+    let mut child = Command::new("python3").args(["-u", script, &port.to_string()]).stdout(Stdio::piped()).spawn().expect("python3 is needed");
+    let mut out = BufReader::new(child.stdout.take().unwrap());
+    let mut line = String::new();
+    out.read_line(&mut line).unwrap();
+    std::thread::spawn(move || for _ in out.lines() {});
+
+    let (state, dir) = askbar_server::testing::state_with_audit(&format!("http://127.0.0.1:{port}/v1"));
+    let hash_file = dir.join("token.sha256");
+    std::fs::write(&hash_file, hex(TOKEN)).unwrap();
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", l.local_addr().unwrap());
+    let app = mgmt::router(state.clone(), hash_file);
+    tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
+    AuditStack { url, http: reqwest::Client::new(), state, _mock: child, _dir: dir }
+}
+
+impl AuditStack {
+    async fn chat(&self, prompt: &str) -> String {
+        use futures_util::StreamExt;
+        let (user, device) = {
+            let db = self.state.db.lock().unwrap();
+            let user = db.seed_server().unwrap();
+            (user, "dev-1".to_string())
+        };
+        let sub = askbar_server::generation::submit(
+            &self.state,
+            askbar_server::generation::Submit {
+                user_id: user,
+                device_id: device,
+                conversation_id: None,
+                provider_id: "p1".into(),
+                prompt: prompt.into(),
+                client_request_id: None,
+            },
+        )
+        .ok()
+        .expect("accepted");
+        let _: Vec<_> = sub.live.subscribe(0).collect().await;
+        sub.generation_id
+    }
+
+    async fn get(&self, path: &str) -> (u16, String) {
+        self.state.audit.flush().await;
+        let r = self.http.get(format!("{}{path}", self.url)).bearer_auth(TOKEN).send().await.unwrap();
+        (r.status().as_u16(), r.text().await.unwrap())
+    }
+}
+
+/// No message content: no field with such a name anywhere in a response, and none of the words
+/// that were typed or answered.
+fn assert_metadata_only(body: &str) {
+    for forbidden in ["content", "\"text\"", "prompt", "reply", "ciphertext", "message\":", "SECRET-WORD", "Anything else?"] {
+        assert!(!body.contains(forbidden), "{forbidden:?} in {body}");
+    }
+}
+
+#[tokio::test]
+async fn audit_traces_are_listed_filtered_and_paged_with_metadata_only() {
+    let a = audit_stack().await;
+    let ok1 = a.chat("SECRET-WORD one").await;
+    let bad = a.chat("please fail").await;
+    let ok2 = a.chat("SECRET-WORD two").await;
+
+    let (st, body) = a.get("/mgmt/v1/audit/traces").await;
+    assert_eq!(st, 200);
+    assert_metadata_only(&body);
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let ids: Vec<&str> = v["traces"].as_array().unwrap().iter().map(|t| t["trace_id"].as_str().unwrap()).collect();
+    assert_eq!(ids, [ok2.as_str(), bad.as_str(), ok1.as_str()], "newest first");
+    let t = &v["traces"][0];
+    assert_eq!((t["status"].as_str(), t["provider_id"].as_str(), t["model"].as_str()), (Some("done"), Some("p1"), Some("m")));
+    assert_eq!((t["tokens_in"].as_i64(), t["tokens_out"].as_i64()), (Some(100), Some(50)));
+    assert!(t["ttft_ms"].is_i64() && t["latency_ms"].is_i64());
+    assert_eq!(v["traces"][1]["error_code"], "http_401");
+
+    // Filters and the cursor.
+    let (_, body) = a.get("/mgmt/v1/audit/traces?status=error").await;
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["traces"].as_array().unwrap().len(), 1);
+    assert_eq!(v["traces"][0]["trace_id"], bad.as_str());
+    let (_, body) = a.get("/mgmt/v1/audit/traces?provider=p1&limit=2").await;
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["traces"].as_array().unwrap().len(), 2);
+    let (_, body) = a.get(&format!("/mgmt/v1/audit/traces?before={bad}")).await;
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["traces"].as_array().unwrap().len(), 1, "only older than the cursor");
+    assert_eq!(v["traces"][0]["trace_id"], ok1.as_str());
+    let (_, body) = a.get("/mgmt/v1/audit/traces?provider=nope").await;
+    assert_eq!(serde_json::from_str::<serde_json::Value>(&body).unwrap()["traces"].as_array().unwrap().len(), 0);
+}
+
+#[tokio::test]
+async fn one_trace_returns_all_its_spans_and_unknown_ones_are_404() {
+    let a = audit_stack().await;
+    let id = a.chat("SECRET-WORD hello").await;
+    let (st, body) = a.get(&format!("/mgmt/v1/audit/traces/{id}")).await;
+    assert_eq!(st, 200);
+    assert_metadata_only(&body);
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let kinds: Vec<&str> = v["spans"].as_array().unwrap().iter().map(|s| s["kind"].as_str().unwrap()).collect();
+    assert_eq!(kinds, ["turn", "attempt"]);
+    assert_eq!(v["spans"][1]["parent_id"], v["spans"][0]["id"]);
+    assert_eq!(v["spans"][1]["attrs"]["http_status"], 200);
+    assert_eq!(a.get("/mgmt/v1/audit/traces/no-such-trace").await.0, 404);
+}
+
+#[tokio::test]
+async fn audit_stats_count_rate_percentiles_and_tokens() {
+    let a = audit_stack().await;
+    for _ in 0..3 {
+        a.chat("SECRET-WORD hi").await;
+    }
+    a.chat("please fail").await;
+    let (st, body) = a.get("/mgmt/v1/audit/stats").await;
+    assert_eq!(st, 200);
+    assert_metadata_only(&body);
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["requests"], 4);
+    assert_eq!((v["by_status"]["done"].as_i64(), v["by_status"]["error"].as_i64()), (Some(3), Some(1)));
+    assert!((v["error_rate"].as_f64().unwrap() - 0.25).abs() < 1e-9);
+    assert_eq!((v["tokens"]["in"].as_i64(), v["tokens"]["out"].as_i64()), (Some(300), Some(150)));
+    let (p50, p95) = (v["latency_ms"]["p50"].as_i64().unwrap(), v["latency_ms"]["p95"].as_i64().unwrap());
+    assert!(p50 > 0 && p95 >= p50, "{p50} {p95}");
+    assert!(v["ttft_ms"]["p50"].is_i64());
+
+    // A window that starts in the future holds nothing.
+    let (_, body) = a.get(&format!("/mgmt/v1/audit/stats?since={}", askbar_server::auth::now() + 3600)).await;
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!((v["requests"].as_i64(), v["error_rate"].as_f64()), (Some(0), Some(0.0)));
+    assert!(v["latency_ms"]["p50"].is_null());
+}
+
+#[tokio::test]
+async fn the_audit_endpoints_need_the_management_token_and_a_recording_store() {
+    let a = audit_stack().await;
+    for p in ["/mgmt/v1/audit/traces", "/mgmt/v1/audit/traces/x", "/mgmt/v1/audit/stats"] {
+        let r = a.http.get(format!("{}{p}", a.url)).send().await.unwrap();
+        assert_eq!(r.status(), 401, "{p}");
+    }
+    // A server with no audit store says so instead of pretending the trail is empty.
+    let s = start_with_state().await;
+    let (st, _) = s.call(reqwest::Method::GET, "/mgmt/v1/audit/stats", None).await;
+    assert_eq!(st, 503);
+}

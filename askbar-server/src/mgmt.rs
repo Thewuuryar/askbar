@@ -161,6 +161,51 @@ async fn list_devices(State(state): State<Arc<AppState>>) -> Result<Json<Vec<cra
     crate::auth::list_devices(&db).map(Json).map_err(|_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not read the devices."))
 }
 
+// ------------------------------------------------------------------------ audit
+
+fn no_audit() -> Failure {
+    fail(StatusCode::SERVICE_UNAVAILABLE, "No audit store is recording on this server.")
+}
+
+#[derive(serde::Deserialize)]
+struct TracesQuery {
+    status: Option<String>,
+    provider: Option<String>,
+    before: Option<String>,
+    limit: Option<usize>,
+}
+
+/// `GET /mgmt/v1/audit/traces`: one summary per generation, newest first. Metadata only.
+async fn audit_traces(State(state): State<Arc<AppState>>, axum::extract::Query(q): axum::extract::Query<TracesQuery>) -> Result<Json<serde_json::Value>, Failure> {
+    let conn = state.audit.reader().ok_or_else(no_audit)?;
+    let filter = crate::audit::TraceFilter { status: q.status, provider: q.provider, before: q.before, limit: q.limit };
+    let rows = crate::audit::list_traces(&conn, &filter).map_err(|_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not read the audit store."))?;
+    Ok(Json(serde_json::json!({ "traces": rows })))
+}
+
+/// `GET /mgmt/v1/audit/traces/{id}`: all spans of one generation.
+async fn audit_trace(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Result<Json<serde_json::Value>, Failure> {
+    let conn = state.audit.reader().ok_or_else(no_audit)?;
+    let spans = crate::audit::trace_spans(&conn, &id).map_err(|_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not read the audit store."))?;
+    if spans.is_empty() {
+        return Err(fail(StatusCode::NOT_FOUND, "No such trace."));
+    }
+    Ok(Json(serde_json::json!({ "trace_id": id, "spans": spans })))
+}
+
+#[derive(serde::Deserialize)]
+struct StatsQuery {
+    since: Option<i64>,
+}
+
+/// `GET /mgmt/v1/audit/stats?since=<unix seconds>`: counts, error rate, latency percentiles
+/// and token totals. `since` defaults to the last 24 hours.
+async fn audit_stats(State(state): State<Arc<AppState>>, axum::extract::Query(q): axum::extract::Query<StatsQuery>) -> Result<Json<serde_json::Value>, Failure> {
+    let conn = state.audit.reader().ok_or_else(no_audit)?;
+    let since = q.since.unwrap_or_else(|| crate::auth::now() - 24 * 3600);
+    crate::audit::stats(&conn, since).map(Json).map_err(|_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not read the audit store."))
+}
+
 /// Counts for the admin service's overview. Token totals come from `token_usage`, which
 /// nothing fills in yet, so they are 0 for now.
 async fn usage(State(state): State<Arc<AppState>>) -> Result<Json<serde_json::Value>, Failure> {
@@ -199,6 +244,9 @@ pub fn router(state: Arc<AppState>, hash_file: PathBuf) -> Router {
         .route("/mgmt/v1/devices", get(list_devices))
         .route("/mgmt/v1/usage", get(usage))
         .route("/mgmt/v1/backup", get(backup))
+        .route("/mgmt/v1/audit/traces", get(audit_traces))
+        .route("/mgmt/v1/audit/traces/{id}", get(audit_trace))
+        .route("/mgmt/v1/audit/stats", get(audit_stats))
         .layer(middleware::from_fn_with_state(Guard { hash_file }, require_token))
         .with_state(state)
 }

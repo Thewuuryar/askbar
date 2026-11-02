@@ -79,6 +79,8 @@ pub enum AuditError {
 
 pub struct AuditDb {
     conn: Connection,
+    /// Where the file is, so readers can open their own connection (None for in-memory).
+    path: Option<std::path::PathBuf>,
 }
 
 impl AuditDb {
@@ -86,16 +88,16 @@ impl AuditDb {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| AuditError::Io { path: dir.display().to_string(), source: e })?;
         }
-        AuditDb::init(Connection::open(path)?)
+        AuditDb::init(Connection::open(path)?, Some(path.to_path_buf()))
     }
 
     pub fn open_in_memory() -> Result<AuditDb, AuditError> {
-        AuditDb::init(Connection::open_in_memory()?)
+        AuditDb::init(Connection::open_in_memory()?, None)
     }
 
-    fn init(conn: Connection) -> Result<AuditDb, AuditError> {
+    fn init(conn: Connection, path: Option<std::path::PathBuf>) -> Result<AuditDb, AuditError> {
         conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;")?;
-        let mut db = AuditDb { conn };
+        let mut db = AuditDb { conn, path };
         db.migrate()?;
         Ok(db)
     }
@@ -133,6 +135,139 @@ impl AuditDb {
             [now_secs()],
         )?)
     }
+}
+
+// ------------------------------------------------------------------------ reading
+
+/// What `list_traces` can filter on. Everything here is metadata: no message content is ever
+/// stored in `spans`, and none of these functions reads `payloads`.
+#[derive(Debug, Default, Clone)]
+pub struct TraceFilter {
+    pub status: Option<String>,
+    pub provider: Option<String>,
+    /// Only traces older than this trace id (ids sort by time): the cursor for "load more".
+    pub before: Option<String>,
+    pub limit: Option<usize>,
+}
+
+pub const DEFAULT_TRACE_LIMIT: usize = 50;
+pub const MAX_TRACE_LIMIT: usize = 200;
+
+/// One row per generation (its turn span), newest first, with the provider and timings of its
+/// last attempt.
+pub fn list_traces(conn: &Connection, f: &TraceFilter) -> rusqlite::Result<Vec<serde_json::Value>> {
+    let limit = f.limit.unwrap_or(DEFAULT_TRACE_LIMIT).clamp(1, MAX_TRACE_LIMIT);
+    let mut stmt = conn.prepare(
+        "SELECT t.trace_id, t.id, t.status, t.started_at, t.ended_at, t.user_id, t.device_id,
+                t.tokens_in, t.tokens_out, t.tokens_cached, t.error_code,
+                a.provider_id, a.model, a.ttft_ms, json_extract(a.attrs_json, '$.latency_ms')
+         FROM spans t
+         LEFT JOIN spans a ON a.id = (SELECT id FROM spans WHERE trace_id = t.trace_id AND kind = 'attempt' ORDER BY id DESC LIMIT 1)
+         WHERE t.kind = 'turn'
+           AND (?1 IS NULL OR t.status = ?1)
+           AND (?2 IS NULL OR a.provider_id = ?2)
+           AND (?3 IS NULL OR t.trace_id < ?3)
+         ORDER BY t.trace_id DESC LIMIT ?4",
+    )?;
+    let rows = stmt.query_map(rusqlite::params![f.status, f.provider, f.before, limit as i64], |r| {
+        Ok(serde_json::json!({
+            "trace_id": r.get::<_, String>(0)?,
+            "span_id": r.get::<_, String>(1)?,
+            "status": r.get::<_, String>(2)?,
+            "started_at": r.get::<_, i64>(3)?,
+            "ended_at": r.get::<_, Option<i64>>(4)?,
+            "user_id": r.get::<_, Option<String>>(5)?,
+            "device_id": r.get::<_, Option<String>>(6)?,
+            "tokens_in": r.get::<_, Option<i64>>(7)?,
+            "tokens_out": r.get::<_, Option<i64>>(8)?,
+            "tokens_cached": r.get::<_, Option<i64>>(9)?,
+            "error_code": r.get::<_, Option<String>>(10)?,
+            "provider_id": r.get::<_, Option<String>>(11)?,
+            "model": r.get::<_, Option<String>>(12)?,
+            "ttft_ms": r.get::<_, Option<i64>>(13)?,
+            "latency_ms": r.get::<_, Option<i64>>(14)?,
+        }))
+    })?;
+    rows.collect()
+}
+
+/// Every span of one generation, in the order they began. Empty if there is no such trace.
+pub fn trace_spans(conn: &Connection, trace_id: &str) -> rusqlite::Result<Vec<serde_json::Value>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, parent_id, kind, name, status, started_at, ended_at, provider_id, model, tokens_in, tokens_out,
+                tokens_cached, ttft_ms, error_code, user_id, device_id, attrs_json
+         FROM spans WHERE trace_id = ?1 ORDER BY started_at, id",
+    )?;
+    let rows = stmt.query_map([trace_id], |r| {
+        let attrs: Option<String> = r.get(16)?;
+        Ok(serde_json::json!({
+            "id": r.get::<_, String>(0)?,
+            "parent_id": r.get::<_, Option<String>>(1)?,
+            "kind": r.get::<_, String>(2)?,
+            "name": r.get::<_, String>(3)?,
+            "status": r.get::<_, String>(4)?,
+            "started_at": r.get::<_, i64>(5)?,
+            "ended_at": r.get::<_, Option<i64>>(6)?,
+            "provider_id": r.get::<_, Option<String>>(7)?,
+            "model": r.get::<_, Option<String>>(8)?,
+            "tokens_in": r.get::<_, Option<i64>>(9)?,
+            "tokens_out": r.get::<_, Option<i64>>(10)?,
+            "tokens_cached": r.get::<_, Option<i64>>(11)?,
+            "ttft_ms": r.get::<_, Option<i64>>(12)?,
+            "error_code": r.get::<_, Option<String>>(13)?,
+            "user_id": r.get::<_, Option<String>>(14)?,
+            "device_id": r.get::<_, Option<String>>(15)?,
+            "attrs": attrs.and_then(|a| serde_json::from_str::<serde_json::Value>(&a).ok()),
+        }))
+    })?;
+    rows.collect()
+}
+
+/// The p-th percentile (0 to 100) of a sorted list, by nearest rank.
+fn percentile(sorted: &[i64], p: f64) -> Option<i64> {
+    if sorted.is_empty() {
+        return None;
+    }
+    let rank = ((p / 100.0) * sorted.len() as f64).ceil().max(1.0) as usize;
+    Some(sorted[rank.min(sorted.len()) - 1])
+}
+
+/// Counts, error rate, latency percentiles and token totals for generations that began at or
+/// after `since` (unix seconds).
+pub fn stats(conn: &Connection, since: i64) -> rusqlite::Result<serde_json::Value> {
+    let mut by_status = serde_json::Map::new();
+    let mut requests = 0i64;
+    {
+        let mut stmt = conn.prepare("SELECT status, COUNT(*) FROM spans WHERE kind = 'turn' AND started_at >= ?1 GROUP BY status ORDER BY status")?;
+        for row in stmt.query_map([since], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))? {
+            let (status, n) = row?;
+            requests += n;
+            by_status.insert(status, n.into());
+        }
+    }
+    let errors: i64 = ["error", "timed_out"].iter().map(|k| by_status.get(*k).and_then(|v| v.as_i64()).unwrap_or(0)).sum();
+    let (tokens_in, tokens_out, tokens_cached): (i64, i64, i64) = conn.query_row(
+        "SELECT COALESCE(SUM(tokens_in),0), COALESCE(SUM(tokens_out),0), COALESCE(SUM(tokens_cached),0) FROM spans WHERE kind = 'turn' AND started_at >= ?1",
+        [since],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )?;
+    let series = |sql: &str| -> rusqlite::Result<Vec<i64>> {
+        let mut stmt = conn.prepare(sql)?;
+        let mut v: Vec<i64> = stmt.query_map([since], |r| r.get::<_, i64>(0))?.collect::<Result<_, _>>()?;
+        v.sort_unstable();
+        Ok(v)
+    };
+    let latency = series("SELECT json_extract(attrs_json, '$.latency_ms') FROM spans WHERE kind = 'attempt' AND started_at >= ?1 AND json_extract(attrs_json, '$.latency_ms') IS NOT NULL")?;
+    let ttft = series("SELECT ttft_ms FROM spans WHERE kind = 'attempt' AND started_at >= ?1 AND ttft_ms IS NOT NULL")?;
+    Ok(serde_json::json!({
+        "since": since,
+        "requests": requests,
+        "by_status": by_status,
+        "error_rate": if requests > 0 { errors as f64 / requests as f64 } else { 0.0 },
+        "latency_ms": { "p50": percentile(&latency, 50.0), "p95": percentile(&latency, 95.0) },
+        "ttft_ms": { "p50": percentile(&ttft, 50.0), "p95": percentile(&ttft, 95.0) },
+        "tokens": { "in": tokens_in, "out": tokens_out, "cached": tokens_cached },
+    }))
 }
 
 // --------------------------------------------------------------------- recording
@@ -281,6 +416,7 @@ struct Pause {
 #[derive(Clone)]
 pub struct Recorder {
     tx: Option<mpsc::Sender<Event>>,
+    path: Option<std::path::PathBuf>,
     pause: Arc<Pause>,
     dropped: Arc<AtomicU64>,
 }
@@ -288,11 +424,12 @@ pub struct Recorder {
 impl Recorder {
     /// Records nothing. The default, so a server without an audit store behaves as before.
     pub fn noop() -> Recorder {
-        Recorder { tx: None, pause: Arc::default(), dropped: Arc::default() }
+        Recorder { tx: None, path: None, pause: Arc::default(), dropped: Arc::default() }
     }
 
     /// Takes ownership of `db` and writes to it from one thread. `capacity` is the queue length.
     pub fn spawn(db: AuditDb, capacity: usize) -> Recorder {
+        let path = db.path.clone();
         let (tx, mut rx) = mpsc::channel::<Event>(capacity.max(1));
         let pause = Arc::new(Pause::default());
         let writer_pause = pause.clone();
@@ -326,12 +463,19 @@ impl Recorder {
                 }
             })
             .expect("audit writer thread");
-        Recorder { tx: Some(tx), pause, dropped: Arc::default() }
+        Recorder { tx: Some(tx), path, pause, dropped: Arc::default() }
     }
 
     /// False while the queue is full, i.e. the writer is not keeping up.
     pub fn healthy(&self) -> bool {
         self.tx.as_ref().is_none_or(|tx| tx.capacity() > 0)
+    }
+
+    /// A read-only connection to the audit file, for the management API. None when nothing is
+    /// recorded to a file. Reading never blocks the writer (the file is in WAL mode).
+    pub fn reader(&self) -> Option<Connection> {
+        let path = self.path.as_ref()?;
+        Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX).ok()
     }
 
     /// How many events were dropped because the queue was full.
