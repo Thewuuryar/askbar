@@ -19,6 +19,12 @@ async function step(name, fn) {
   catch (e) { failures++; console.error('FAIL ' + name + '\n     ' + String(e.message).split('\n').join('\n     ')); }
 }
 
+// A step that is written but not yet built: it is listed, not run, and the commit that builds the
+// feature turns it back into a `step` (the Audit tab, steps 7.1 to 7.11).
+async function todo(name) {
+  console.log('todo ' + name);
+}
+
 const freePort = () => new Promise((resolve) => {
   const s = net.createServer().listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => resolve(p)); });
 });
@@ -430,6 +436,73 @@ async function waitForPort(port) {
       assert.equal(data.includes(masterKey), false, name + ' has the master key');
     }
   });
+  // ------------------------------------------------------------------ the Audit tab
+  // Pending until the tab is built (7.3 to 7.10); see 7.11, which makes them `step` again. They
+  // describe the DOM the tab will have: #tab-audit with #audit-nav buttons data-sub=overview,
+  // requests, trace, routing, content; #audit-requests rows tr[data-trace]; #audit-waterfall
+  // .span-bar[data-span]; the Content view's .view-btn, #audit-pass-dialog (#audit-pass, #audit-pass-ok,
+  // #audit-pass-cancel, #audit-pass-error) and the opened text in #audit-plain.
+  const XSS = '<img src=x onerror="window.__pwned=1">';
+  // One real chat through the server, so there is something to look at; returns once the reply is done.
+  async function auditChat(text, providerName) {
+    const pairing = await page.evaluate(async () => {
+      const r = await fetch('/admin/api/pair', { method: 'POST', headers: { 'x-askbar-admin': '1', 'content-type': 'application/json' }, body: JSON.stringify({ name: 'audit test' }) });
+      return (await r.json()).pairing;
+    });
+    const { code } = JSON.parse(Buffer.from(pairing.slice('askbar-pair:'.length), 'base64url').toString());
+    const h = { 'content-type': 'application/json', 'x-askbar-client-version': '0.4.0' };
+    const { token } = await (await fetch(`http://127.0.0.1:${api}/api/v1/pair`, { method: 'POST', headers: h, body: JSON.stringify({ code }) })).json();
+    const auth = { ...h, authorization: 'Bearer ' + token };
+    const providers = await (await fetch(`http://127.0.0.1:${api}/api/v1/providers`, { headers: auth })).json();
+    const provider = providers.find((p) => p.name === providerName) || providers[0];
+    const body = await (await fetch(`http://127.0.0.1:${api}/api/v1/chat`, { method: 'POST', headers: auth, body: JSON.stringify({ provider: provider.id, text }) })).text();
+    assert.match(body, /event: done/);
+    return body;
+  }
+  await todo('audit: the tab loads, has its five views and counts a real request');
+  const _auditTab = async () => {
+    await page.evaluate(async ({ xss, mockUrl }) => {
+      await fetch('/admin/api/providers', { method: 'POST', headers: { 'x-askbar-admin': '1', 'content-type': 'application/json' }, body: JSON.stringify({ name: xss, type: 'openai', base_url: mockUrl, model: xss, api_key: 'sk-audit' }) });
+    }, { xss: XSS, mockUrl: `http://127.0.0.1:${mockPort}/v1` });
+    await auditChat('audit question', XSS);
+    await page.click('#nav [data-tab="audit"]');
+    await page.waitForSelector('#tab-audit:not([hidden])');
+    const subs = await page.$$eval('#audit-nav button', (b) => b.map((x) => x.dataset.sub));
+    assert.deepEqual(subs, ['overview', 'requests', 'trace', 'routing', 'content']);
+    await page.waitForFunction(() => Number(document.querySelector('#audit-overview [data-stat="requests"]')?.textContent) >= 1);
+  };
+  await todo('audit: server strings are shown as text, never as HTML, in every table');
+  const _auditXss = async () => {
+    await page.click('#audit-nav [data-sub="requests"]');
+    await page.waitForSelector('#audit-requests tr[data-trace]');
+    assert.match(await page.innerText('#audit-requests'), /<img src=x/, 'the provider and model names are visible as text');
+    assert.equal(await page.locator('#audit-requests img').count(), 0);
+    await page.click('#audit-requests tr[data-trace]');
+    await page.waitForSelector('#audit-waterfall .span-bar');
+    assert.equal(await page.locator('#tab-audit img').count(), 0);
+    assert.equal(await page.evaluate(() => window.__pwned), undefined, 'nothing ran');
+  };
+  await todo('audit: content stays sealed until View is clicked and the passphrase is typed');
+  const _auditContent = async () => {
+    const asked = [];
+    page.on('request', (r) => { if (/audit\/payloads/.test(r.url())) asked.push(r.url()); });
+    await page.click('#audit-nav [data-sub="content"]');
+    assert.match(await page.innerText('#audit-content'), /Sealed/);
+    assert.equal(await page.innerText('#audit-plain').catch(() => ''), '');
+    assert.equal(asked.length, 0, 'nothing is fetched until View is clicked');
+    await page.click('#audit-content .view-btn');
+    await page.waitForSelector('#audit-pass-dialog');
+    assert.equal(await page.getAttribute('#audit-pass', 'type'), 'password');
+    await page.fill('#audit-pass', 'not the passphrase at all!!');
+    await page.click('#audit-pass-ok');
+    await page.waitForSelector('#audit-pass-error:not([hidden])');
+    assert.equal((await page.innerText('#audit-plain')).trim(), '', 'a wrong passphrase shows nothing');
+    await page.fill('#audit-pass', AUDIT_PASS);
+    await page.click('#audit-pass-ok');
+    await page.waitForFunction(() => /Anything else\?/.test(document.getElementById('audit-plain')?.textContent || ''));
+    assert.equal(await page.inputValue('#audit-pass').catch(() => ''), '', 'the passphrase field is cleared after use');
+    assert.equal(await page.evaluate(() => JSON.stringify(Object.entries(localStorage)).includes('passphrase')), false);
+  };
   await step('security: changing the password needs the current one', async () => {
     await page.click('#nav [data-tab="security"]');
     await page.fill('#pw-current', 'wrong');
