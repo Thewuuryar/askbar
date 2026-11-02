@@ -81,7 +81,9 @@ Both follow the signed-in user, so all of a user's devices see the same values.
 `POST /api/v1/chat` with
 `{"conversation_id": "<id>" (optional), "provider": "<provider id>", "text": "...", "client_request_id": "<string>" (optional)}`.
 Empty text is `400`; an unknown provider or a conversation that is not the caller's is
-`404`; a conversation that already has five messages waiting is `409` (see *The queue*).
+`404`; a conversation that already has five messages waiting is `409` (see *The queue*); when
+the server's audit store cannot keep up it answers `503` with `Retry-After: 5` and
+`{"error":"audit_backlog"}` and starts nothing (replies already running are not affected).
 Otherwise the answer is `200 text/event-stream`. Provider output is never passed through;
 the server re-emits its own events. Each SSE message has `event:` naming the type and
 `data:` holding a JSON object that repeats the type in an `"event"` field:
@@ -160,6 +162,46 @@ conversation; the sixth gets `409`.
 The wire format changed in 0.4.0 (generation ids, delta ids, queued messages, the new
 endpoints), and a 0.3.x client would stop a reply when its connection dropped, so
 `min_client` moved to 0.4.0.
+
+## Audit (management API)
+
+The admin service reads what the server recorded through three endpoints on the management
+listener. They are not part of the device API: they need the management token, the device API
+has no such routes (`404`), and the admin never opens `audit.db` itself. Everything they return
+is **metadata**; no prompt or reply text is ever in `audit.db` at this stage. A server with no
+audit store answers `503`.
+
+- `GET /mgmt/v1/audit/traces?status=&provider=&before=&limit=`: one summary per generation,
+  newest first: `{"traces": [{"trace_id", "span_id", "status", "started_at", "ended_at", "user_id",
+  "device_id", "tokens_in", "tokens_out", "tokens_cached", "error_code", "provider_id", "model",
+  "ttft_ms", "latency_ms"}]}`. `status` filters on the turn's status, `provider` on the provider of
+  its last attempt, `before` is a `trace_id` (only older traces, for paging), `limit` is 1 to 200
+  (default 50). `trace_id` is the generation id.
+- `GET /mgmt/v1/audit/traces/{id}`: `{"trace_id", "spans": [...]}`, every span of that generation
+  in the order they began (`404` if there is none). A span has `id`, `parent_id`, `kind`, `name`,
+  `status`, `started_at`, `ended_at`, `provider_id`, `model`, `tokens_in|out|cached`, `ttft_ms`,
+  `error_code`, `user_id`, `device_id` and `attrs` (a JSON object).
+- `GET /mgmt/v1/audit/stats?since=<unix seconds>` (default: the last 24 hours):
+  `{"since", "requests", "by_status": {...}, "error_rate", "latency_ms": {"p50","p95"},
+  "ttft_ms": {"p50","p95"}, "tokens": {"in","out","cached"}}` over generations that began at or
+  after `since`. `error_rate` counts `error` and `timed_out`.
+
+### audit.db
+
+A separate SQLite file (`ASKBAR_AUDIT_DIR/audit.db`, the `audit-data` volume in the compose
+setup), with its own migrations and `PRAGMA user_version`, written only by the server.
+
+- `spans(id, trace_id, parent_id, kind, name, status, started_at, ended_at, provider_id, model,
+  tokens_in, tokens_out, tokens_cached, ttft_ms, error_code, user_id, device_id, attrs_json)`.
+  `kind` is `turn` (a whole generation), `gate` (a check or a wait, e.g. `queue`), `attempt` (one
+  request to a provider), `tool` or `agent_step`. `trace_id` is the generation id; an attempt's
+  parent is its turn. Times are unix seconds; an attempt's `attrs` carry `latency_ms`,
+  `http_status`, `usage_estimated` and `finish_reason`. A span starts `running` and ends `done`,
+  `error`, `cancelled`, `timed_out` or `interrupted` (the last for spans a restart cut off).
+- `payloads(span_id, role, key_id, ciphertext, created_at)`: reserved for sealed content.
+- The database enforces its own rules with triggers: nothing younger than 7 days is deleted, and
+  a span can change only while it is `running`. Records older than `audit_retention_days` (at
+  least 7) are deleted once a day.
 
 ## Errors
 
