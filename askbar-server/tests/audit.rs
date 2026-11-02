@@ -342,7 +342,6 @@ fn install_audit_key(state: &std::sync::Arc<askbar_server::AppState>) -> [u8; 32
 }
 
 #[tokio::test]
-#[ignore = "enabled in 5.9"]
 async fn sealed_content_is_stored_but_a_marker_never_appears_in_the_bytes_of_audit_db_or_its_wal() {
     let (_mock, port) = start_mock();
     let (state, dir) = audit_state(port);
@@ -393,4 +392,61 @@ async fn a_generation_with_no_audit_key_is_refused_with_503_audit_key_missing() 
         askbar_server::generation::Submit { user_id: user, device_id: device, conversation_id: None, provider_id: "p1".into(), prompt: "hi".into(), client_request_id: None },
     )
     .is_ok());
+}
+
+
+/// Every payload of a trace, opened with the test secret: (role, key_id, plaintext), by span kind.
+fn open_payloads(dir: &Path, trace: &str, secret: [u8; 32]) -> Vec<(String, String, String, String)> {
+    let key = crypto_box::SecretKey::from(secret);
+    let db = read(dir);
+    let mut stmt = db
+        .prepare("SELECT s.kind, p.role, p.key_id, p.ciphertext FROM payloads p JOIN spans s ON s.id = p.span_id WHERE s.trace_id = ?1 ORDER BY p.rowid")
+        .unwrap();
+    let rows = stmt
+        .query_map([trace], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, Vec<u8>>(3)?)))
+        .unwrap()
+        .map(|r| {
+            let (kind, role, key_id, ct) = r.unwrap();
+            (kind, role, key_id, String::from_utf8(key.unseal(&ct).expect("opens with the test key")).unwrap())
+        })
+        .collect();
+    rows
+}
+
+#[tokio::test]
+async fn the_request_and_the_reply_are_stored_sealed_on_their_spans_and_open_with_the_key() {
+    let (_mock, port) = start_mock();
+    let (state, dir) = audit_state(port);
+    let secret = install_audit_key(&state);
+    let trace = run_chat(&state, "What is the capital of Atlantis?").await;
+    state.audit.flush().await;
+
+    let opened = open_payloads(&dir, &trace, secret);
+    let key_id = askbar_server::testing::test_audit_key().key_id;
+    assert!(opened.iter().all(|p| p.2 == key_id), "each payload names the key that sealed it");
+    let request = opened.iter().find(|p| p.1 == "request").expect("a request payload");
+    assert_eq!(request.0, "attempt", "the request belongs to the attempt");
+    let request: serde_json::Value = serde_json::from_str(&request.3).unwrap();
+    assert!(request["system"].as_str().is_some_and(|s| !s.is_empty()));
+    assert_eq!(request["messages"][0]["content"], "What is the capital of Atlantis?");
+    let reply = opened.iter().find(|p| p.1 == "reply").expect("a reply payload");
+    assert_eq!(reply.0, "turn", "the reply belongs to the turn");
+    assert!(reply.3.ends_with("Anything else?"), "{:?}", reply.3);
+    assert_eq!(opened.iter().filter(|p| p.1 == "error").count(), 0);
+}
+
+#[tokio::test]
+async fn a_provider_failure_seals_its_error_text_on_the_attempt() {
+    let (_mock, port) = start_mock();
+    let (state, dir) = audit_state(port);
+    let secret = install_audit_key(&state);
+    let trace = run_chat(&state, "please fail").await;
+    state.audit.flush().await;
+    let opened = open_payloads(&dir, &trace, secret);
+    let err = opened.iter().find(|p| p.1 == "error").expect("an error payload");
+    assert_eq!(err.0, "attempt");
+    assert!(err.3.contains("Incorrect API key"), "{:?}", err.3);
+    assert!(opened.iter().all(|p| p.1 != "reply"), "no reply text, no reply payload");
+    let bytes = std::fs::read(dir.join("audit.db")).unwrap();
+    assert!(!String::from_utf8_lossy(&bytes).contains("Incorrect API key"));
 }

@@ -295,6 +295,28 @@ fn attempt_attrs(r: &crate::llm::StreamReport) -> serde_json::Value {
     })
 }
 
+/// The public bytes of the key content is sealed to now, from the current snapshot.
+fn current_audit_key(state: &AppState) -> Option<Vec<u8>> {
+    let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+    let key = crate::snapshot::current(&db).ok().flatten()?.audit_public_key?;
+    crate::snapshot::parse_hex(&key.public_key)
+}
+
+/// Provider error text kept with an attempt is cut here.
+pub const MAX_ERROR_PAYLOAD_BYTES: usize = 4096;
+
+/// `text` cut to at most `max` bytes at a character boundary.
+fn cut(text: &str, max: usize) -> &str {
+    if text.len() <= max {
+        return text;
+    }
+    let mut end = max;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
+}
+
 /// A short stable code for why a request failed, for the audit trail.
 fn error_code(e: &crate::llm::ChatError) -> String {
     use crate::llm::ChatError;
@@ -332,6 +354,9 @@ struct Finisher {
     usage: Option<Usage>,
     /// The audit span for this generation as a whole, and why it failed if it did.
     turn_span: String,
+    /// The public key content is sealed to, as it was when this generation started (None: the
+    /// snapshot had none, which `submit` normally prevents).
+    audit_key: Option<Vec<u8>>,
     error_code: Option<String>,
     saved: bool,
     /// Progress is flushed to the row about once a second, or every 2 KB.
@@ -398,6 +423,12 @@ impl Finisher {
     }
 
     fn finish_turn_span(&self, status: &str) {
+        // The reply, sealed, whatever way this ended (an empty reply has nothing to keep).
+        if let (Some(key), false) = (&self.audit_key, self.text.is_empty()) {
+            if let Ok(sealed) = crate::seal::seal(key, self.text.as_bytes()) {
+                self.state.audit.payload(&self.turn_span, "reply", sealed);
+            }
+        }
         let mut f = SpanFinish::new(&self.turn_span, status);
         f.error_code = self.error_code.clone();
         if let Some(u) = self.usage {
@@ -541,10 +572,12 @@ fn spawn_run(
     let turn_span = state.audit.start_span(
         SpanStart::new(id, Kind::Turn, "chat").who(user_id, device_id).attrs(&serde_json::json!({ "conversation_id": conversation_id })),
     );
+    let audit_key = current_audit_key(state);
     let mut fin = Finisher {
         state: state.clone(),
         live,
         turn_span,
+        audit_key,
         error_code: None,
         id: id.to_string(),
         user_id: user_id.to_string(),
@@ -577,6 +610,16 @@ fn spawn_run(
         let attempt = state.audit.start_span(
             SpanStart::new(&fin.id, Kind::Attempt, &provider.name).parent(&fin.turn_span).provider(&provider_id, &provider.model),
         );
+        // What was sent, sealed: the system prompt and the history, as the provider will see them.
+        if let Some(key) = &fin.audit_key {
+            let request = serde_json::json!({
+                "system": system,
+                "messages": history.iter().map(|m| serde_json::json!({ "role": m.role, "content": m.content })).collect::<Vec<_>>(),
+            });
+            if let Ok(sealed) = crate::seal::seal(key, request.to_string().as_bytes()) {
+                state.audit.payload(&attempt, "request", sealed);
+            }
+        }
         // Race the request against the deadline. Dropping the request on expiry closes the
         // upstream connection; the text that had arrived is already in `fin`.
         let result = {
@@ -599,6 +642,13 @@ fn spawn_run(
                 attempt_end.attrs_json = Some(attempt_attrs(r).to_string());
             }
             Some(Err(e)) => {
+                // The provider's own words about the failure, sealed, cut at 4 KB.
+                if let Some(key) = &fin.audit_key {
+                    let message = e.error.to_string();
+                    if let Ok(sealed) = crate::seal::seal(key, cut(&message, MAX_ERROR_PAYLOAD_BYTES).as_bytes()) {
+                        state.audit.payload(&attempt, "error", sealed);
+                    }
+                }
                 attempt_end.status = "error".into();
                 attempt_end.error_code = Some(error_code(&e.error));
                 attempt_end.ttft_ms = e.report.time_to_first_token.map(|d| d.as_millis() as u64);
@@ -936,6 +986,16 @@ mod tests {
         let want = [d(1, "1"), d(2, "2"), GenEvent::Done];
         assert_eq!(a.await.unwrap(), want);
         assert_eq!(b.await.unwrap(), want);
+    }
+
+    #[test]
+    fn error_text_is_cut_at_a_character_boundary_within_4_kb() {
+        assert_eq!(cut("short", 4096), "short");
+        let long = "é".repeat(3000); // 6000 bytes
+        let c = cut(&long, MAX_ERROR_PAYLOAD_BYTES);
+        assert!(c.len() <= 4096 && c.len() >= 4094, "{}", c.len());
+        assert!(c.chars().all(|ch| ch == 'é'), "never half a character");
+        assert_eq!(cut("abc", 0), "");
     }
 
     #[test]

@@ -382,11 +382,23 @@ impl SpanFinish {
     }
 }
 
+/// A sealed payload (see `seal`) for a span: `role` is `request`, `reply` or `error`.
+#[derive(Debug, Clone)]
+pub struct PayloadWrite {
+    pub span_id: String,
+    pub role: String,
+    pub key_id: String,
+    pub ciphertext: Vec<u8>,
+    pub created_at: i64,
+}
+
 enum Event {
     Start(SpanStart),
     Finish(SpanFinish),
     /// Answered once everything sent before it has been written.
     Flush(oneshot::Sender<()>),
+    /// Sealed content attached to a span.
+    Payload(PayloadWrite),
     /// Delete spans and payloads that started before `cutoff`; answered with how many of each.
     Prune { cutoff: i64, done: oneshot::Sender<Result<(usize, usize), String>> },
 }
@@ -448,6 +460,11 @@ impl Recorder {
                                 tracing::warn!("audit: could not write a span: {e}");
                             }
                         }
+                        Event::Payload(p) => {
+                            if let Err(e) = write_payload(db.conn(), &p) {
+                                tracing::warn!("audit: could not write a payload: {e}");
+                            }
+                        }
                         Event::Finish(f) => {
                             if let Err(e) = write_finish(db.conn(), &f) {
                                 tracing::warn!("audit: could not finish a span: {e}");
@@ -502,6 +519,17 @@ impl Recorder {
         self.send(Event::Finish(span));
     }
 
+    /// Records sealed content for a span. Only ciphertext ever gets here.
+    pub fn payload(&self, span_id: &str, role: &str, sealed: crate::seal::Sealed) {
+        self.send(Event::Payload(PayloadWrite {
+            span_id: span_id.to_string(),
+            role: role.to_string(),
+            key_id: sealed.key_id,
+            ciphertext: sealed.bytes,
+            created_at: now_secs(),
+        }));
+    }
+
     /// Waits until everything recorded so far has been written. For shutdown and tests.
     pub async fn flush(&self) {
         let Some(tx) = &self.tx else { return };
@@ -535,6 +563,14 @@ fn prune(conn: &Connection, cutoff: i64) -> rusqlite::Result<(usize, usize)> {
     let payloads = conn.execute("DELETE FROM payloads WHERE created_at < ?1", [cutoff])?;
     let spans = conn.execute("DELETE FROM spans WHERE started_at < ?1 AND status <> 'running'", [cutoff])?;
     Ok((spans, payloads))
+}
+
+fn write_payload(conn: &Connection, p: &PayloadWrite) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO payloads (span_id, role, key_id, ciphertext, created_at) VALUES (?1,?2,?3,?4,?5)",
+        rusqlite::params![p.span_id, p.role, p.key_id, p.ciphertext, p.created_at],
+    )?;
+    Ok(())
 }
 
 fn write_start(conn: &Connection, s: &SpanStart) -> rusqlite::Result<()> {
