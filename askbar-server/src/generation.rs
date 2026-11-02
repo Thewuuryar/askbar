@@ -296,6 +296,8 @@ pub enum SubmitError {
     QueueFull,
     /// The administrator has switched generations off.
     KillSwitch,
+    /// A token budget has been used up for its period (`"daily"` or `"monthly"`).
+    BudgetExceeded(&'static str),
     /// The audit writer is not keeping up: nothing new starts until it catches up.
     AuditBacklog,
     /// The administrator has not made an audit key yet, so nothing could be kept sealed.
@@ -312,6 +314,11 @@ impl IntoResponse for SubmitError {
             SubmitError::NotFound => StatusCode::NOT_FOUND.into_response(),
             SubmitError::QueueFull => StatusCode::CONFLICT.into_response(),
             SubmitError::Internal => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+            SubmitError::BudgetExceeded(period) => (
+                StatusCode::TOO_MANY_REQUESTS,
+                axum::Json(serde_json::json!({ "error": "budget_exceeded", "period": period })),
+            )
+                .into_response(),
             SubmitError::KillSwitch => {
                 (StatusCode::SERVICE_UNAVAILABLE, axum::Json(serde_json::json!({ "error": "kill_switch" }))).into_response()
             }
@@ -591,6 +598,78 @@ fn pass_kill_switch_gate(state: &AppState, generation_id: &str, s: &Submit) {
     state.audit.finish_span(SpanFinish::new(&span, "done"));
 }
 
+/// Records that the budget had room for this generation, with the numbers it saw.
+fn pass_budget_gate(state: &AppState, generation_id: &str, s: &Submit, note: &serde_json::Value) {
+    if note.is_null() {
+        return;
+    }
+    let span = state.audit.start_span(SpanStart::new(generation_id, Kind::Gate, "budget").who(&s.user_id, Some(&s.device_id)).attrs(note));
+    state.audit.finish_span(SpanFinish::new(&span, "done"));
+}
+
+/// Midnight UTC at the start of the day containing `t` (unix seconds).
+pub fn day_start(t: i64) -> i64 {
+    t - t.rem_euclid(86_400)
+}
+
+/// Midnight UTC on the first of the month containing `t` (unix seconds).
+pub fn month_start(t: i64) -> i64 {
+    // Civil date from days since 1970-01-01 and back (Howard Hinnant's algorithms).
+    let z = t.div_euclid(86_400) + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    // Days since 1970-01-01 of day 1 of that month.
+    let y = year - i64::from(month <= 2);
+    let era = y.div_euclid(400);
+    let yoe = y.rem_euclid(400);
+    let doy = (153 * (if month > 2 { month - 3 } else { month + 9 }) + 2) / 5;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    (era * 146_097 + doe - 719_468) * 86_400
+}
+
+/// The token budget gate. Counts the tokens used since the start of the day and of the month by
+/// providers that are paid per token (a subscription provider costs nothing, so its tokens do not
+/// count, and a request to one is never refused for budget). `Err((period, numbers))` once a limit
+/// that is set has been reached; `Ok(numbers)` otherwise, or `Null` when no budget is set.
+fn budget_gate(db: &crate::Db, snap: &askbar_proto::Snapshot, requested: &str, now: i64) -> Result<serde_json::Value, (&'static str, serde_json::Value)> {
+    let budget = &snap.budget;
+    if budget.daily_tokens.is_none() && budget.monthly_tokens.is_none() {
+        return Ok(serde_json::Value::Null);
+    }
+    // A request to a subscription provider spends no tokens that count.
+    if snap.providers.iter().any(|p| p.id == requested && p.billing == askbar_proto::Billing::Subscription) {
+        return Ok(serde_json::Value::Null);
+    }
+    let used_since = |since: i64| -> u64 {
+        let mut stmt = match db.conn().prepare("SELECT provider_id, COALESCE(SUM(tokens_in + tokens_out), 0) FROM token_usage WHERE created_at >= ?1 GROUP BY provider_id") {
+            Ok(s) => s,
+            Err(_) => return 0,
+        };
+        let rows = stmt.query_map([since], |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, i64>(1)?))).map(|it| it.flatten().collect::<Vec<_>>()).unwrap_or_default();
+        rows.into_iter()
+            .filter(|(pid, _)| !snap.providers.iter().any(|p| Some(&p.id) == pid.as_ref() && p.billing == askbar_proto::Billing::Subscription))
+            .map(|(_, n)| n.max(0) as u64)
+            .sum()
+    };
+    let (daily, monthly) = (used_since(day_start(now)), used_since(month_start(now)));
+    let note = serde_json::json!({
+        "daily_used": daily, "daily_limit": budget.daily_tokens,
+        "monthly_used": monthly, "monthly_limit": budget.monthly_tokens,
+    });
+    if budget.daily_tokens.is_some_and(|limit| daily >= limit) {
+        return Err(("daily", note));
+    }
+    if budget.monthly_tokens.is_some_and(|limit| monthly >= limit) {
+        return Err(("monthly", note));
+    }
+    Ok(note)
+}
+
 /// Starts a send: runs it now if its conversation is idle, else queues it. Everything that can
 /// fail with a plain HTTP status happens here, before any stream starts.
 pub fn submit(state: &Arc<AppState>, s: Submit) -> Result<Submitted, SubmitError> {
@@ -611,6 +690,18 @@ pub fn submit(state: &Arc<AppState>, s: Submit) -> Result<Submitted, SubmitError
     // The kill switch gate. It leaves a span either way: a refusal has no generation, so it gets a
     // trace of its own; a pass goes into the trace of the generation it lets through (below).
     let kill_switch = snapshot.as_ref().is_some_and(|snap| snap.kill_switch);
+    let mut budget_note = serde_json::Value::Null;
+    if let Some(snap) = snapshot.as_ref().filter(|_| !kill_switch) {
+        match budget_gate(&db, snap, &s.provider_id, crate::auth::now()) {
+            Ok(note) => budget_note = note,
+            Err((period, note)) => {
+                let trace = crate::ids::new_id();
+                let span = state.audit.start_span(SpanStart::new(&trace, Kind::Gate, "budget").who(&s.user_id, Some(&s.device_id)).attrs(&note));
+                state.audit.finish_span(SpanFinish::new(&span, "blocked").error_code("budget_exceeded"));
+                return Err(SubmitError::BudgetExceeded(period));
+            }
+        }
+    }
     if kill_switch {
         let trace = crate::ids::new_id();
         let span = state.audit.start_span(
@@ -645,6 +736,7 @@ pub fn submit(state: &Arc<AppState>, s: Submit) -> Result<Submitted, SubmitError
         // Queued: the question is stored when the message starts, not now.
         let id = db.create_generation(&new("queued", None)).map_err(internal)?;
         pass_kill_switch_gate(state, &id, &s);
+        pass_budget_gate(state, &id, &s, &budget_note);
         let live = Live::new();
         live.set_queue_span(state.audit.start_span(SpanStart::new(&id, Kind::Gate, "queue").who(&s.user_id, Some(&s.device_id))));
         state.generations.insert(&id, live.clone());
@@ -656,6 +748,7 @@ pub fn submit(state: &Arc<AppState>, s: Submit) -> Result<Submitted, SubmitError
     let timeout = timeout_now(state, &db);
     stamp_deadline(&db, &id, timeout);
     pass_kill_switch_gate(state, &id, &s);
+    pass_budget_gate(state, &id, &s, &budget_note);
     let live = Live::new();
     state.generations.insert(&id, live.clone());
     drop(db);
@@ -1272,6 +1365,21 @@ mod tests {
         let want = [d(1, "1"), d(2, "2"), GenEvent::Done];
         assert_eq!(a.await.unwrap(), want);
         assert_eq!(b.await.unwrap(), want);
+    }
+
+    #[test]
+    fn day_and_month_start_at_midnight_utc() {
+        // (instant, start of its day, start of its month), checked against an independent calendar.
+        for (t, day, month) in [
+            (1_793_631_845, 1_793_577_600, 1_793_491_200), // 2026-11-02 15:04:05
+            (1_801_439_999, 1_801_353_600, 1_798_761_600), // 2027-01-31 23:59:59
+            (1_709_164_800, 1_709_164_800, 1_706_745_600), // 2024-02-29 00:00:00, a leap day
+            (1_709_424_000, 1_709_424_000, 1_709_251_200), // 2024-03-03
+            (1_704_067_205, 1_704_067_200, 1_704_067_200), // 2024-01-01 00:00:05
+        ] {
+            assert_eq!(day_start(t), day, "day of {t}");
+            assert_eq!(month_start(t), month, "month of {t}");
+        }
     }
 
     #[test]

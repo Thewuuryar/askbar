@@ -200,7 +200,6 @@ async fn the_kill_switch_refuses_new_generations_with_503() {
 }
 
 #[tokio::test]
-#[ignore = "enabled in 6.12"]
 async fn an_exhausted_token_budget_refuses_new_generations_with_429() {
     let s = stack("m", "m", serde_json::json!({})).await;
     askbar_server::testing::update_snapshot(&s.state.db.lock().unwrap(), |snap| snap.budget.daily_tokens = Some(100));
@@ -454,4 +453,56 @@ async fn turning_it_on_without_abort_lets_running_replies_finish_but_still_clear
     assert_eq!(s.rows()[0].0, "cancelled");
     assert_eq!(s.rows()[1].0, "cancelled", "the queued one stayed cleared and did not start when the first ended");
     assert_eq!(s.m1.requests(), 1);
+}
+
+#[tokio::test]
+async fn the_monthly_limit_and_subscription_providers_are_handled_by_the_budget_gate() {
+    // Monthly limit: 150 used of 100 allowed -> refused as "monthly" (the daily one is not set).
+    let s = stack("m", "m", serde_json::json!({})).await;
+    askbar_server::testing::update_snapshot(&s.state.db.lock().unwrap(), |snap| snap.budget.monthly_tokens = Some(100));
+    assert!(is_done(&s.run("first").await));
+    let refused = s.submit("second").err().expect("over the monthly limit");
+    assert_eq!(refused, SubmitError::BudgetExceeded("monthly"));
+    let body = axum::body::to_bytes(refused.into_response().into_body(), 4096).await.unwrap();
+    assert!(String::from_utf8_lossy(&body).contains(r#""period":"monthly""#));
+    // A limit above the use lets it through, and with no limit nothing is checked.
+    askbar_server::testing::update_snapshot(&s.state.db.lock().unwrap(), |snap| snap.budget.monthly_tokens = Some(151));
+    assert!(s.submit("under it").is_ok());
+
+    // Tokens used by a subscription provider cost nothing, so they do not count toward the budget.
+    let s = stack("m", "m", serde_json::json!({})).await;
+    {
+        let db = s.state.db.lock().unwrap();
+        let sub = |snap: &mut askbar_proto::Snapshot| {
+            snap.providers.iter_mut().find(|p| p.id == "p1").unwrap().billing = askbar_proto::Billing::Subscription;
+            snap.budget.daily_tokens = Some(100);
+        };
+        askbar_server::testing::update_snapshot(&db, sub);
+    }
+    assert!(is_done(&s.run("on a subscription").await)); // 150 tokens, but free
+    assert!(s.submit("again").is_ok(), "subscription usage does not exhaust a budget, and is never refused for it");
+}
+
+#[tokio::test]
+async fn the_budget_gate_leaves_a_span_with_its_numbers() {
+    let s = stack("m", "m", serde_json::json!({})).await;
+    askbar_server::testing::update_snapshot(&s.state.db.lock().unwrap(), |snap| snap.budget.daily_tokens = Some(100));
+    let sub = s.submit("first").ok().expect("under the limit");
+    let trace = sub.generation_id.clone();
+    let _: Vec<GenEvent> = sub.live.subscribe(0).collect().await;
+    assert!(s.submit("second").is_err());
+    s.state.audit.flush().await;
+    let db = rusqlite::Connection::open(s._dir.join("audit.db")).unwrap();
+    let rows: Vec<(String, String, Option<String>, String)> = db
+        .prepare("SELECT trace_id, status, error_code, attrs_json FROM spans WHERE kind = 'gate' AND name = 'budget' ORDER BY id")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(rows.len(), 2);
+    assert_eq!((rows[0].0.as_str(), rows[0].1.as_str()), (trace.as_str(), "done"));
+    assert!(rows[0].3.contains(r#""daily_used":0"#) && rows[0].3.contains(r#""daily_limit":100"#), "{}", rows[0].3);
+    assert_eq!((rows[1].1.as_str(), rows[1].2.as_deref()), ("blocked", Some("budget_exceeded")));
+    assert!(rows[1].3.contains(r#""daily_used":150"#), "{}", rows[1].3);
 }
