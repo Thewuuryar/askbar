@@ -3,7 +3,7 @@
 //! is away. The server here is a stub that records what it was asked.
 
 mod common;
-use askbar_admin::{mgmt::ServerLink, web, AdminDb, AdminState};
+use askbar_admin::{server_link::ServerLink, web, AdminDb, AdminState};
 use axum::{extract::State, http::StatusCode, routing::get, Router};
 use serde_json::{json, Value};
 use std::sync::{Arc, Mutex};

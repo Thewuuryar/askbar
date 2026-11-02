@@ -1,11 +1,11 @@
-//! The admin site's API: thin handlers over `admin.db` and the server's management API.
+//! The admin API: thin handlers over `admin.db` and the server API.
 //!
 //! The rule for anything that changes configuration: write `admin.db`, send the server the new
 //! snapshot, and only keep the change if the server accepted it. If the server is not there the
 //! answer is `502` and nothing was changed, so the two never disagree. API keys are the one
 //! thing `admin.db` never holds: they go straight to the server.
 
-use crate::mgmt::{build_snapshot, PushError, ServerLink};
+use crate::server_link::{build_snapshot, PushError, ServerLink};
 use crate::web::{err, Failure};
 use crate::AdminState;
 use askbar_proto::DisplaySettings;
@@ -394,7 +394,7 @@ pub async fn create_pairing(State(state): St, Json(i): Json<PairInput>) -> Resul
         .and_then(|v| v[0]["id"].as_str().map(str::to_string))
         .ok_or_else(|| err(StatusCode::BAD_GATEWAY, "The server has no user to pair a device with."))?;
     let code = random_code();
-    let hash = crate::mgmt::sha256_hex(&code);
+    let hash = crate::server_link::sha256_hex(&code);
     let url = mutate(&state, vec![], move |c| {
         let now = crate::auth::now();
         c.execute("DELETE FROM pair_codes WHERE expires_at <= ?1", [now]).map_err(internal)?;

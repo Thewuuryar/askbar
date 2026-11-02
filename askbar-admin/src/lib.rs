@@ -4,12 +4,12 @@
 #![cfg(unix)]
 
 
-pub mod api;
+pub mod admin_api;
 pub mod audit_key;
 pub mod auth;
 pub mod caddy;
 pub mod db;
-pub mod mgmt;
+pub mod server_link;
 pub mod network;
 pub mod secrets;
 pub mod web;
@@ -34,7 +34,7 @@ pub struct AdminState {
     /// Limits guesses at the audit passphrase (see `audit_key::Limiter`).
     pub audit_opens: audit_key::Limiter,
     /// The link to the server; `None` in tests that don't need one.
-    pub server: Option<Arc<mgmt::ServerLink>>,
+    pub server: Option<Arc<server_link::ServerLink>>,
     /// Encrypts the Cloudflare token at rest.
     pub secrets: secrets::AdminSecrets,
     /// How to reach Caddy; set at start-up, changed by tests.
@@ -48,11 +48,11 @@ impl AdminState {
         AdminState::build(db, None, secrets::AdminSecrets::ephemeral())
     }
 
-    pub fn with_server(db: AdminDb, server: Arc<mgmt::ServerLink>) -> Arc<AdminState> {
+    pub fn with_server(db: AdminDb, server: Arc<server_link::ServerLink>) -> Arc<AdminState> {
         AdminState::build(db, Some(server), secrets::AdminSecrets::ephemeral())
     }
 
-    pub fn build(db: AdminDb, server: Option<Arc<mgmt::ServerLink>>, secrets: secrets::AdminSecrets) -> Arc<AdminState> {
+    pub fn build(db: AdminDb, server: Option<Arc<server_link::ServerLink>>, secrets: secrets::AdminSecrets) -> Arc<AdminState> {
         Arc::new(AdminState {
             db: Arc::new(Mutex::new(db)),
             auth: auth::AdminAuth::default(),
@@ -98,24 +98,24 @@ pub fn router(state: Arc<AdminState>) -> Router {
         .route("/admin/session", get(|| async { StatusCode::NO_CONTENT }))
         .route("/admin/logout", post(web::logout))
         .route("/admin/api/password", post(web::change_password))
-        .route("/admin/api/status", get(api::status))
-        .route("/admin/api/providers", get(api::list_providers).post(api::create_provider))
-        .route("/admin/api/providers/{id}", put(api::update_provider).delete(api::delete_provider))
-        .route("/admin/api/providers/{id}/test", post(api::test_provider))
-        .route("/admin/api/devices", get(api::list_devices))
-        .route("/admin/api/devices/{id}/revoke", post(api::revoke_device))
-        .route("/admin/api/pair", post(api::create_pairing))
-        .route("/admin/api/setup/audit-key", post(api::setup_audit_key))
-        .route("/admin/api/audit/traces", get(api::audit_traces))
-        .route("/admin/api/audit/traces/{id}", get(api::audit_trace))
-        .route("/admin/api/audit/stats", get(api::audit_stats))
-        .route("/admin/api/audit/provider-health", get(api::audit_provider_health))
-        .route("/admin/api/audit/access", get(api::audit_access))
-        .route("/admin/api/audit/rotate-key", post(api::rotate_audit_key))
-        .route("/admin/api/audit/payloads/{span_id}/open", post(api::open_audit_payloads))
-        .route("/admin/api/settings", get(api::get_settings).put(api::put_settings))
-        .route("/admin/api/users/{id}/display-defaults", put(api::put_user_display))
-        .route("/admin/api/backup", get(api::backup))
+        .route("/admin/api/status", get(admin_api::status))
+        .route("/admin/api/providers", get(admin_api::list_providers).post(admin_api::create_provider))
+        .route("/admin/api/providers/{id}", put(admin_api::update_provider).delete(admin_api::delete_provider))
+        .route("/admin/api/providers/{id}/test", post(admin_api::test_provider))
+        .route("/admin/api/devices", get(admin_api::list_devices))
+        .route("/admin/api/devices/{id}/revoke", post(admin_api::revoke_device))
+        .route("/admin/api/pair", post(admin_api::create_pairing))
+        .route("/admin/api/setup/audit-key", post(admin_api::setup_audit_key))
+        .route("/admin/api/audit/traces", get(admin_api::audit_traces))
+        .route("/admin/api/audit/traces/{id}", get(admin_api::audit_trace))
+        .route("/admin/api/audit/stats", get(admin_api::audit_stats))
+        .route("/admin/api/audit/provider-health", get(admin_api::audit_provider_health))
+        .route("/admin/api/audit/access", get(admin_api::audit_access))
+        .route("/admin/api/audit/rotate-key", post(admin_api::rotate_audit_key))
+        .route("/admin/api/audit/payloads/{span_id}/open", post(admin_api::open_audit_payloads))
+        .route("/admin/api/settings", get(admin_api::get_settings).put(admin_api::put_settings))
+        .route("/admin/api/users/{id}/display-defaults", put(admin_api::put_user_display))
+        .route("/admin/api/backup", get(admin_api::backup))
         .route("/admin/api/network", get(network::get_network).put(network::put_network))
         .route("/admin/api/network/apply", post(network::apply_network))
         .route_layer(middleware::from_fn_with_state(state.clone(), web::require_session));

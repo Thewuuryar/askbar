@@ -1,4 +1,4 @@
-//! The admin service's side of the management API: the token, the snapshot it builds from
+//! The admin service's side of the server API: the token, the snapshot it builds from
 //! `admin.db`, and the pusher that keeps the server's copy current.
 //!
 //! The raw token lives only in the admin's own secrets directory (mode 0600). The server is

@@ -97,7 +97,7 @@ fn view(state: &AdminState, conn: &rusqlite::Connection) -> rusqlite::Result<Net
     Ok(NetworkView {
         network: load(conn)?,
         has_token: stored_token(conn).is_some(),
-        public_url: crate::api::public_url(conn),
+        public_url: crate::admin_api::public_url(conn),
         proxy: state.proxy.lock().unwrap_or_else(|e| e.into_inner()).clone(),
     })
 }

@@ -2,7 +2,7 @@
 #![allow(dead_code)]
 
 use askbar_admin::caddy::CaddyLink;
-use askbar_admin::mgmt::{self, ServerLink};
+use askbar_admin::server_link::{self, ServerLink};
 use askbar_admin::secrets::AdminSecrets;
 use askbar_admin::{web, AdminDb, AdminState};
 use askbar_server::{secrets::Secrets, AppState};
@@ -62,14 +62,14 @@ pub async fn start(caddy_up: bool) -> T {
     let dir = std::env::temp_dir().join(format!("ab-{}", &ulid::Ulid::new().to_string()[16..]));
     std::fs::create_dir_all(&dir).unwrap();
     let (admin_secrets, mgmt_dir) = (dir.join("admin-secrets"), dir.join("askbar-mgmt"));
-    let token = mgmt::ensure_token(&admin_secrets, &mgmt_dir).unwrap();
+    let token = server_link::ensure_token(&admin_secrets, &mgmt_dir).unwrap();
 
     let sdb = askbar_server::Db::open_in_memory().unwrap();
     sdb.seed_server().unwrap();
     // The server records to a temp audit.db, so tests can put sealed content there and open it.
     let (recorder, _audit_dir) = askbar_server::testing::audit_recorder();
     let server = AppState::new(sdb, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), askbar_server::MIN_CLIENT).with_audit(recorder);
-    let mgmt_url = serve(askbar_server::server_api::router(server.clone(), mgmt_dir.join(mgmt::HASH_FILE))).await;
+    let mgmt_url = serve(askbar_server::server_api::router(server.clone(), mgmt_dir.join(server_link::HASH_FILE))).await;
 
     let fake = Arc::new(FakeCaddy::default());
     let caddy_socket = dir.join("c").join("a.sock");

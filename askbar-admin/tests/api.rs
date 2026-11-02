@@ -2,7 +2,7 @@
 //! The admin site's API against a real in-process server: changes land in `admin.db` and on
 //! the server together, or not at all.
 
-use askbar_admin::mgmt::{self, ServerLink};
+use askbar_admin::server_link::{self, ServerLink};
 use askbar_admin::{web, AdminDb, AdminState};
 use askbar_server::{secrets::Secrets, AppState};
 use reqwest::Method as M;
@@ -57,14 +57,14 @@ async fn fake_llm() -> String {
 async fn start(reachable: bool) -> T {
     let dir = std::env::temp_dir().join(format!("askbar-adminapi-{}", ulid::Ulid::new()));
     let (secrets, mgmt_dir) = (dir.join("admin-secrets"), dir.join("askbar-mgmt"));
-    let token = mgmt::ensure_token(&secrets, &mgmt_dir).unwrap();
+    let token = server_link::ensure_token(&secrets, &mgmt_dir).unwrap();
 
     let sdb = askbar_server::Db::open_in_memory().unwrap();
     sdb.seed_server().unwrap();
     let server = AppState::new(sdb, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), askbar_server::MIN_CLIENT);
     let api = serve(askbar_server::client_router(server.clone())).await;
     let mgmt_url = if reachable {
-        serve(askbar_server::server_api::router(server.clone(), mgmt_dir.join(mgmt::HASH_FILE))).await
+        serve(askbar_server::server_api::router(server.clone(), mgmt_dir.join(server_link::HASH_FILE))).await
     } else {
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         format!("http://{}", l.local_addr().unwrap()) // dropped: nothing listens
@@ -201,7 +201,7 @@ async fn a_pairing_string_pairs_a_device_which_can_then_be_revoked() {
 
     // Only the hash is kept here; the server got the same hash.
     let stored: String = t.admin.db.lock().await.conn().query_row("SELECT hash FROM pair_codes", [], |r| r.get(0)).unwrap();
-    assert_eq!(stored, mgmt::sha256_hex(&code));
+    assert_eq!(stored, server_link::sha256_hex(&code));
     assert_ne!(stored, code);
     assert_eq!(t.snapshot().unwrap().pair_codes[0].hash, stored);
 
