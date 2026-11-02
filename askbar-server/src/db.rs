@@ -486,6 +486,15 @@ impl Db {
             > 0)
     }
 
+    /// Deletes finished generations that ended before `older_than` (unix seconds). Running and
+    /// queued rows are never touched. Returns how many went.
+    pub fn prune_generations(&self, older_than: i64) -> Result<usize, DbError> {
+        Ok(self.conn.execute(
+            "DELETE FROM generations WHERE status NOT IN ('queued','running') AND ended_at < ?1",
+            [older_than],
+        )?)
+    }
+
     /// Returns the new generation's id.
     pub fn create_generation(&self, g: &NewGeneration) -> Result<String, DbError> {
         let (id, t) = (new_id(), now());
@@ -968,6 +977,32 @@ mod tests {
         assert_eq!(db.next_queued(&c).unwrap().unwrap().id, q2);
         db.finalize_generation(&q2, "cancelled", "", None, None).unwrap();
         assert_eq!(db.queued_count(&c).unwrap(), 0);
+    }
+
+    #[test]
+    fn prune_removes_only_finished_rows_older_than_the_cutoff() {
+        let (db, u) = db_with_user();
+        let c = db.create_conversation(&u, "c").unwrap();
+        let end = |status: &str, ended_at: i64| {
+            let id = db.create_generation(&new_gen(&u, &c, "running")).unwrap();
+            db.finalize_generation(&id, status, "t", None, None).unwrap();
+            db.conn.execute("UPDATE generations SET ended_at = ?2 WHERE id = ?1", params![id, ended_at]).unwrap();
+            id
+        };
+        let old: Vec<String> = ["done", "error", "cancelled", "timed_out", "interrupted"].iter().map(|s| end(s, 100)).collect();
+        let fresh = end("done", 1000);
+        let running = db.create_generation(&new_gen(&u, &c, "running")).unwrap();
+        let queued = db.create_generation(&new_gen(&u, &c, "queued")).unwrap();
+
+        assert_eq!(db.prune_generations(500).unwrap(), 5);
+        for id in &old {
+            assert_eq!(db.get_generation(&u, id).unwrap(), None);
+        }
+        for id in [&fresh, &running, &queued] {
+            assert!(db.get_generation(&u, id).unwrap().is_some(), "{id} stays");
+        }
+        assert_eq!(db.prune_generations(500).unwrap(), 0);
+        assert_eq!(db.prune_generations(2000).unwrap(), 1, "a later cutoff takes the fresh one too");
     }
 
     #[test]

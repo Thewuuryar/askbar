@@ -59,6 +59,21 @@ async fn stop_on_signal(state: std::sync::Arc<askbar_server::AppState>) {
     std::process::exit(0);
 }
 
+/// Finished generation rows are only kept for a day; the messages they produced stay.
+async fn prune_generations_hourly(state: std::sync::Arc<askbar_server::AppState>) {
+    let mut tick = tokio::time::interval(std::time::Duration::from_secs(3600));
+    loop {
+        tick.tick().await;
+        let cutoff = askbar_server::auth::now() - 24 * 3600;
+        let pruned = state.db.lock().unwrap_or_else(|e| e.into_inner()).prune_generations(cutoff);
+        match pruned {
+            Ok(0) => {}
+            Ok(n) => tracing::info!(pruned = n, "removed old generation rows"),
+            Err(e) => tracing::warn!("could not prune generation rows: {e}"),
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -100,6 +115,7 @@ async fn main() {
     }
     let state = askbar_server::AppState::new(db, secrets, askbar_server::MIN_CLIENT);
     tokio::spawn(stop_on_signal(state.clone()));
+    tokio::spawn(prune_generations_hourly(state.clone()));
     let mgmt_app = askbar_server::mgmt::router(state.clone(), askbar_server::mgmt::token_hash_path());
     let result = tokio::try_join!(serve(api, askbar_server::api_router(state)), serve(mgmt, mgmt_app));
     if let Err(e) = result {
