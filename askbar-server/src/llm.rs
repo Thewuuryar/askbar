@@ -116,6 +116,23 @@ pub struct Usage {
     pub estimated: bool,
 }
 
+impl Usage {
+    /// Takes every field `other` reports, keeping ours where it reports nothing.
+    pub fn merge(&mut self, other: &Usage) {
+        for (mine, theirs) in [
+            (&mut self.input, other.input),
+            (&mut self.output, other.output),
+            (&mut self.cache_read, other.cache_read),
+            (&mut self.cache_write, other.cache_write),
+        ] {
+            if theirs.is_some() {
+                *mine = theirs;
+            }
+        }
+        self.estimated |= other.estimated;
+    }
+}
+
 /// What happened during one request to a provider, for audit and cost.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StreamReport {
@@ -269,8 +286,14 @@ fn missing_key(p: &Provider) -> ChatError {
 #[derive(Debug, PartialEq, Eq)]
 pub enum Step {
     Delta(String),
+    /// Token counts the provider reported; partial (fields it did not report are `None`).
+    Usage(Usage),
     Done,
     Skip,
+}
+
+fn count(v: &Value) -> Option<u64> {
+    v.as_u64()
 }
 
 fn error_message(v: &Value) -> String {
@@ -294,7 +317,19 @@ pub fn decode_event(kind: ProviderKind, ev: &SseEvent) -> Result<Step, ChatError
             }
             match v["choices"][0]["delta"]["content"].as_str() {
                 Some(s) if !s.is_empty() => Ok(Step::Delta(s.to_string())),
-                _ => Ok(Step::Skip),
+                // The final chunk of a stream asked to include usage: empty `choices` and a `usage`
+                // object. (A chunk with text and usage together gives the text; the counts then
+                // come from the stream's last chunk.)
+                _ => match v.get("usage") {
+                    Some(u) if u.is_object() => Ok(Step::Usage(Usage {
+                        input: count(&u["prompt_tokens"]),
+                        output: count(&u["completion_tokens"]),
+                        cache_read: count(&u["prompt_tokens_details"]["cached_tokens"]),
+                        cache_write: None,
+                        estimated: false,
+                    })),
+                    _ => Ok(Step::Skip),
+                },
             }
         }
         ProviderKind::Anthropic => {
@@ -433,6 +468,8 @@ where
         });
     }
 
+    // Counts arrive in pieces on some APIs; they are merged as they come.
+    let note_usage = |u: Usage, report: &mut StreamReport| report.usage.get_or_insert_with(Usage::default).merge(&u);
     let mut deliver = |s: &str, report: &mut StreamReport| {
         if report.time_to_first_token.is_none() {
             report.time_to_first_token = Some(started.elapsed());
@@ -454,6 +491,7 @@ where
         for ev in events {
             match decode_event(provider.kind, &ev)? {
                 Step::Delta(s) => deliver(&s, report),
+                Step::Usage(u) => note_usage(u, report),
                 Step::Done => return Ok(StreamOutcome::Completed),
                 Step::Skip => {}
             }
@@ -462,6 +500,7 @@ where
     for ev in parser.finish() {
         match decode_event(provider.kind, &ev)? {
             Step::Delta(s) => deliver(&s, report),
+            Step::Usage(u) => note_usage(u, report),
             Step::Done => break,
             Step::Skip => {}
         }
@@ -565,6 +604,37 @@ mod tests {
         assert_eq!(b["max_tokens"], 4096);
         assert_eq!(b["messages"][0]["role"], "user");
         assert!(build_body(&a, "  ", &msgs).get("system").is_none());
+    }
+
+    #[test]
+    fn openai_usage_chunks_are_decoded_and_are_not_errors() {
+        let kind = ProviderKind::OpenAi;
+        // Final chunk: empty choices and usage, as sent when include_usage is on.
+        let chunk = r#"{"id":"x","choices":[],"usage":{"prompt_tokens":120,"completion_tokens":35,"total_tokens":155,"prompt_tokens_details":{"cached_tokens":64}}}"#;
+        assert_eq!(
+            decode_event(kind, &ev(chunk)).unwrap(),
+            Step::Usage(Usage { input: Some(120), output: Some(35), cache_read: Some(64), cache_write: None, estimated: false })
+        );
+        // No cached-token detail: unknown, not zero.
+        let plain = r#"{"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":2}}"#;
+        assert_eq!(
+            decode_event(kind, &ev(plain)).unwrap(),
+            Step::Usage(Usage { input: Some(10), output: Some(2), cache_read: None, cache_write: None, estimated: false })
+        );
+        // Usage riding on an otherwise empty last chunk (finish_reason, empty text).
+        let last = r#"{"choices":[{"delta":{"content":""},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":6}}"#;
+        assert!(matches!(decode_event(kind, &ev(last)).unwrap(), Step::Usage(u) if u.output == Some(6)));
+        // Providers that put `"usage": null` on every chunk, and ordinary text chunks, are untouched.
+        assert_eq!(decode_event(kind, &ev(r#"{"choices":[{"delta":{"content":"hi"}}],"usage":null}"#)).unwrap(), Step::Delta("hi".into()));
+        assert_eq!(decode_event(kind, &ev(r#"{"choices":[{"delta":{"role":"assistant"}}],"usage":null}"#)).unwrap(), Step::Skip);
+    }
+
+    #[test]
+    fn merging_usage_keeps_what_was_reported_and_takes_what_is_new() {
+        let mut u = Usage { input: Some(100), cache_read: Some(64), ..Default::default() };
+        u.merge(&Usage { output: Some(7), ..Default::default() });
+        u.merge(&Usage { output: Some(50), ..Default::default() }); // a running total replaces
+        assert_eq!(u, Usage { input: Some(100), output: Some(50), cache_read: Some(64), cache_write: None, estimated: false });
     }
 
     #[test]

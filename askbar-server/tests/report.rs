@@ -1,6 +1,6 @@
 //! `stream_chat_report` against the real tests/mock_llm.py: timings, statuses and Retry-After.
 
-use askbar_server::llm::{http_client, stream_chat_report, ChatMessage, Provider, ProviderKind, StreamOutcome};
+use askbar_server::llm::{http_client, stream_chat_report, ChatMessage, Provider, ProviderKind, StreamOutcome, Usage};
 use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -133,4 +133,21 @@ async fn a_connection_that_cannot_be_made_has_no_status() {
     let e = stream_chat_report(&http_client(), &p, "", &[ChatMessage::new("user", "hi")], cancel, |_| {}).await.unwrap_err();
     assert_eq!(e.report.http_status, None);
     assert!(matches!(e.error, askbar_server::llm::ChatError::Connect { .. }));
+}
+
+#[tokio::test]
+async fn openai_usage_from_the_final_chunk_reaches_the_report() {
+    let mock = start_mock();
+    let run = |text: &'static str| {
+        let p = provider(&mock, ProviderKind::OpenAi);
+        async move {
+            let (_k, cancel) = oneshot::channel::<()>();
+            stream_chat_report(&http_client(), &p, "", &[ChatMessage::new("user", text)], cancel, |_| {}).await.unwrap()
+        }
+    };
+    let r = run("hello").await;
+    assert_eq!(r.usage, Some(Usage { input: Some(100), output: Some(50), cache_read: Some(0), cache_write: None, estimated: false }));
+    let r = run("a cached prompt").await;
+    assert_eq!(r.usage.unwrap().cache_read, Some(64), "cached tokens are reported when the mock says so");
+    assert!(mock.log.lock().unwrap().iter().filter(|l| l.starts_with("POST")).all(|l| l.contains(r#"stream_options={"include_usage": true}"#)), "the request asked for usage");
 }
