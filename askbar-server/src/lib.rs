@@ -1,6 +1,7 @@
 //! Askbar server: the device API and, on its own listener, the management API the admin service uses.
 
 pub mod api;
+pub mod audit;
 pub mod auth;
 pub mod backup;
 pub mod chat;
