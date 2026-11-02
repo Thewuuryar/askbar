@@ -1,4 +1,4 @@
-//! The device token lives in the OS keychain, never in a config file.
+//! The client token lives in the OS keychain, never in a config file.
 
 #[cfg(test)]
 use std::sync::Mutex;
@@ -20,7 +20,8 @@ impl Keychain {
     }
 
     fn entry(&self) -> Result<keyring::Entry, keyring::Error> {
-        keyring::Entry::new("askbar", &format!("device-token:{}", self.profile))
+        // The entry name predates the word "client"; renaming it would drop every stored token.
+        keyring::Entry::new("askbar", &format!("device-token:{}", self.profile)) // names-ok
     }
 }
 
@@ -32,7 +33,7 @@ impl TokenStore for Keychain {
     fn set(&self, token: &str) -> Result<(), String> {
         self.entry()
             .and_then(|e| e.set_password(token))
-            .map_err(|e| format!("Could not save the device token in the system keychain: {e}"))
+            .map_err(|e| format!("Could not save the client token in the system keychain: {e}"))
     }
 }
 

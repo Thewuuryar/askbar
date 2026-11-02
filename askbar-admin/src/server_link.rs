@@ -139,15 +139,15 @@ pub fn build_snapshot(conn: &rusqlite::Connection) -> rusqlite::Result<Snapshot>
     }
     let mut pair_codes = Vec::new();
     {
-        let mut stmt = conn.prepare("SELECT hash, user_id, device_name, expires_at FROM pair_codes WHERE expires_at > ?1 ORDER BY created_at")?;
+        let mut stmt = conn.prepare("SELECT hash, user_id, client_name, expires_at FROM pair_codes WHERE expires_at > ?1 ORDER BY created_at")?;
         for c in stmt.query_map([crate::auth::now()], |r| {
-            Ok(SnapshotPairCode { hash: r.get(0)?, user_id: r.get(1)?, device_name: r.get(2)?, expires_at: r.get(3)? })
+            Ok(SnapshotPairCode { hash: r.get(0)?, user_id: r.get(1)?, client_name: r.get(2)?, expires_at: r.get(3)? })
         })? {
             pair_codes.push(c?);
         }
     }
-    let revoked_device_ids = {
-        let mut stmt = conn.prepare("SELECT device_id FROM revoked_devices ORDER BY device_id")?;
+    let revoked_client_ids = {
+        let mut stmt = conn.prepare("SELECT client_id FROM revoked_clients ORDER BY client_id")?;
         let ids = stmt.query_map([], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
         ids
     };
@@ -162,7 +162,7 @@ pub fn build_snapshot(conn: &rusqlite::Connection) -> rusqlite::Result<Snapshot>
         display,
         user_display_defaults,
         pair_codes,
-        revoked_device_ids,
+        revoked_client_ids,
         budget: Budget { daily_tokens: daily.map(|v| v as u64), monthly_tokens: monthly.map(|v| v as u64) },
         kill_switch: kill != 0,
         // Absent means the safer default: the switch really stops running replies.

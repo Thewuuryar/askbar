@@ -30,7 +30,7 @@ pub fn empty_snapshot() -> Snapshot {
         display: DisplaySettings::default(),
         user_display_defaults: Default::default(),
         pair_codes: vec![],
-        revoked_device_ids: vec![],
+        revoked_client_ids: vec![],
         budget: Budget::default(),
         kill_switch: false,
         kill_switch_aborts_running: true,
@@ -85,16 +85,16 @@ pub fn store_key(db: &Db, secrets: &crate::secrets::Secrets, provider_id: &str, 
 }
 
 /// A one-time pairing code for `user_id`, listed in the snapshot (valid for ten minutes).
-pub fn add_pair_code(db: &Db, user_id: &str, device_name: &str) -> String {
-    add_pair_code_expiring(db, user_id, device_name, 600)
+pub fn add_pair_code(db: &Db, user_id: &str, client_name: &str) -> String {
+    add_pair_code_expiring(db, user_id, client_name, 600)
 }
 
 /// Like `add_pair_code`, valid for `ttl_secs` from now (negative: already expired).
-pub fn add_pair_code_expiring(db: &Db, user_id: &str, device_name: &str, ttl_secs: i64) -> String {
+pub fn add_pair_code_expiring(db: &Db, user_id: &str, client_name: &str, ttl_secs: i64) -> String {
     let code = ids::new_id() + &ids::new_id();
     let hash: String = Sha256::digest(code.as_bytes()).iter().map(|b| format!("{b:02x}")).collect();
     update_snapshot(db, |s| {
-        s.pair_codes.push(SnapshotPairCode { hash, user_id: user_id.into(), device_name: device_name.into(), expires_at: auth::now() + ttl_secs })
+        s.pair_codes.push(SnapshotPairCode { hash, user_id: user_id.into(), client_name: client_name.into(), expires_at: auth::now() + ttl_secs })
     });
     code
 }

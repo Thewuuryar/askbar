@@ -265,7 +265,7 @@ async fn another_user_cannot_read_or_continue_my_conversation() {
     let ChatEvent::Meta { conversation_id, .. } = events[0].1.clone() else { panic!("first event must be meta") };
     wait_for("the reply to be saved", || (t.messages().len() == 2).then_some(()));
 
-    // A second user with their own device.
+    // A second user with their own client.
     let token_b = {
         let db = t.state.db.lock().unwrap();
         db.conn().execute("INSERT INTO users (id, name, created_at) VALUES ('B','other',0)", []).unwrap();
@@ -633,7 +633,7 @@ async fn two_posts_with_one_client_request_id_make_one_generation_and_one_user_m
     assert_eq!(t.state.db.lock().unwrap().list_conversations(&user).unwrap().len(), 1, "no second conversation");
     assert_eq!(t.mock.log.lock().unwrap().iter().filter(|l| l.starts_with("POST")).count(), 1, "one upstream request");
 
-    // The same id from another device is a different send.
+    // The same id from another client is a different send.
     let other = t.second_user_token();
     let third = client()
         .post(format!("http://{}/api/v1/chat", t.addr))
@@ -973,14 +973,14 @@ async fn a_finished_chat_records_one_token_usage_row_and_a_failed_one_none() {
     t.chat(&http, None, "p1", "Hello there").await.text().await.unwrap();
     let rows = |t: &T| -> Vec<(String, Option<String>, Option<String>, i64, i64)> {
         let db = t.state.db.lock().unwrap();
-        let mut stmt = db.conn().prepare("SELECT user_id, device_id, provider_id, tokens_in, tokens_out FROM token_usage").unwrap();
+        let mut stmt = db.conn().prepare("SELECT user_id, client_id, provider_id, tokens_in, tokens_out FROM token_usage").unwrap();
         let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))).unwrap().map(Result::unwrap).collect();
         rows
     };
     let r = rows(&t);
     assert_eq!(r.len(), 1);
-    let device: String = t.state.db.lock().unwrap().conn().query_row("SELECT id FROM devices", [], |r| r.get(0)).unwrap();
-    assert_eq!((r[0].1.as_deref(), r[0].2.as_deref(), r[0].3, r[0].4), (Some(device.as_str()), Some("p1"), 100, 50), "the mock's usage chunk");
+    let client: String = t.state.db.lock().unwrap().conn().query_row("SELECT id FROM clients", [], |r| r.get(0)).unwrap();
+    assert_eq!((r[0].1.as_deref(), r[0].2.as_deref(), r[0].3, r[0].4), (Some(client.as_str()), Some("p1"), 100, 50), "the mock's usage chunk");
     assert_eq!(r[0].0, t.user_id());
 
     t.chat(&http, None, "p1", "please fail").await.text().await.unwrap();

@@ -34,7 +34,7 @@ fn stamp(unix: i64) -> String {
 
 /// A consistent snapshot of the database (`VACUUM INTO`) with everything secret taken out:
 /// provider API keys and pairing-code hashes (unredeemed or used).
-/// Conversations, settings and paired-device records (token hashes only) stay.
+/// Conversations, settings and paired-client records (token hashes only) stay.
 fn make_snapshot(state: &AppState, path: &std::path::Path) -> rusqlite::Result<()> {
     {
         let db = state.db.lock().unwrap_or_else(|e| e.into_inner());

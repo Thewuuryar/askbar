@@ -174,10 +174,10 @@ async fn list_users(State(state): State<Arc<AppState>>) -> Result<Json<serde_jso
     read().map(|v| Json(serde_json::Value::Array(v))).map_err(|_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not read the users."))
 }
 
-/// Every paired device, newest first.
-async fn list_devices(State(state): State<Arc<AppState>>) -> Result<Json<Vec<crate::auth::DeviceRow>>, Failure> {
+/// Every paired client, newest first.
+async fn list_clients(State(state): State<Arc<AppState>>) -> Result<Json<Vec<crate::auth::ClientRow>>, Failure> {
     let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
-    crate::auth::list_devices(&db).map(Json).map_err(|_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not read the devices."))
+    crate::auth::list_clients(&db).map(Json).map_err(|_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not read the clients."))
 }
 
 // ------------------------------------------------------------------------ audit
@@ -273,9 +273,9 @@ async fn usage(State(state): State<Arc<AppState>>) -> Result<Json<serde_json::Va
             "users": count("SELECT COUNT(*) FROM users")?,
             "conversations": count("SELECT COUNT(*) FROM conversations")?,
             "messages": count("SELECT COUNT(*) FROM messages")?,
-            "devices": {
-                "active": count("SELECT COUNT(*) FROM devices WHERE revoked_at IS NULL")?,
-                "revoked": count("SELECT COUNT(*) FROM devices WHERE revoked_at IS NOT NULL")?,
+            "clients": {
+                "active": count("SELECT COUNT(*) FROM clients WHERE revoked_at IS NULL")?,
+                "revoked": count("SELECT COUNT(*) FROM clients WHERE revoked_at IS NOT NULL")?,
             },
             "tokens_in": count("SELECT COALESCE(SUM(tokens_in), 0) FROM token_usage")?,
             "tokens_out": count("SELECT COALESCE(SUM(tokens_out), 0) FROM token_usage")?,
@@ -299,7 +299,7 @@ pub fn router(state: Arc<AppState>, hash_file: PathBuf) -> Router {
         .route("/mgmt/v1/providers/health", get(providers_health))
         .route("/mgmt/v1/providers/{id}/test", post(test_provider))
         .route("/mgmt/v1/users", get(list_users))
-        .route("/mgmt/v1/devices", get(list_devices))
+        .route("/mgmt/v1/devices", get(list_clients))
         .route("/mgmt/v1/usage", get(usage))
         .route("/mgmt/v1/backup", get(backup))
         .route("/mgmt/v1/audit/traces", get(audit_traces))

@@ -5,7 +5,7 @@
 //! (see `generation`), so this stream going away does not stop it.
 
 use crate::generation::{self, GenEvent};
-use crate::{auth::DeviceAuth, AppState};
+use crate::{auth::ClientAuth, AppState};
 use askbar_proto::{ChatEvent, ChatRequest};
 use axum::{
     response::IntoResponse,
@@ -43,7 +43,7 @@ pub(crate) fn sse_event_with_id(e: &ChatEvent, seq: Option<u64>) -> Event {
 
 pub async fn chat(
     State(state): State<Arc<AppState>>,
-    Extension(auth): Extension<DeviceAuth>,
+    Extension(auth): Extension<ClientAuth>,
     Json(req): Json<ChatRequest>,
 ) -> Result<impl axum::response::IntoResponse, axum::response::Response> {
     let text = req.text.trim().to_string();
@@ -51,13 +51,13 @@ pub async fn chat(
         return Err(StatusCode::BAD_REQUEST.into_response());
     }
 
-    // A repeat of a send this device already made attaches to that generation and starts nothing.
+    // A repeat of a send this client already made attaches to that generation and starts nothing.
     if let Some(rid) = req.client_request_id.as_deref() {
         let existing = state
             .db
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .find_by_request_id(&auth.device_id, rid)
+            .find_by_request_id(&auth.client_id, rid)
             .map_err(|e| internal(e).into_response())?;
         if let Some(g) = existing {
             let meta = ChatEvent::Meta {
@@ -74,7 +74,7 @@ pub async fn chat(
         &state,
         generation::Submit {
             user_id: auth.user_id,
-            device_id: auth.device_id,
+            client_id: auth.client_id,
             conversation_id: req.conversation_id,
             provider_id: req.provider,
             prompt: text,

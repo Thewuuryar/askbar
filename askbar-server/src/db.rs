@@ -1,4 +1,4 @@
-//! SQLite storage: users, devices, conversations and messages.
+//! SQLite storage: users, clients, conversations and messages.
 //!
 //! Schema changes go in `MIGRATIONS` (append only); `PRAGMA user_version`
 //! records how many have been applied. A database that this build did not
@@ -17,7 +17,7 @@ const APPLICATION_ID: i64 = 0x4153_4B42;
 const MIGRATIONS: &[&str] = &[
     // v1: the final chat schema.
     //
-    // Live: users, devices, conversations, messages, messages_fts, user_prefs.
+    // Live: users, devices, conversations, messages, messages_fts, user_prefs. names-ok
     // Reserved, empty: memory (append-only), projects, token_usage.
     // Interim until migration 3: providers (full rows), settings, pair_codes, display_defaults.
     "CREATE TABLE users (
@@ -25,7 +25,7 @@ const MIGRATIONS: &[&str] = &[
          name       TEXT    NOT NULL,
          created_at INTEGER NOT NULL
      );
-     CREATE TABLE devices (
+     CREATE TABLE devices ( -- names-ok
          id         TEXT PRIMARY KEY,
          user_id    TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
          name       TEXT    NOT NULL,
@@ -88,7 +88,7 @@ const MIGRATIONS: &[&str] = &[
      CREATE TABLE token_usage (
          id          TEXT PRIMARY KEY,
          user_id     TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-         device_id   TEXT,
+         device_id   TEXT, -- names-ok
          provider_id TEXT,
          tokens_in   INTEGER NOT NULL DEFAULT 0,
          tokens_out  INTEGER NOT NULL DEFAULT 0,
@@ -113,7 +113,7 @@ const MIGRATIONS: &[&str] = &[
      CREATE TABLE pair_codes (
          hash        TEXT PRIMARY KEY,
          user_id     TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-         device_name TEXT    NOT NULL DEFAULT '',
+         device_name TEXT    NOT NULL DEFAULT '', -- names-ok
          expires_at  INTEGER NOT NULL,
          used        INTEGER NOT NULL DEFAULT 0
      );
@@ -130,7 +130,7 @@ const MIGRATIONS: &[&str] = &[
      );
      CREATE TABLE redeemed_codes (
          hash        TEXT PRIMARY KEY,
-         device_id   TEXT,
+         device_id   TEXT, -- names-ok
          redeemed_at INTEGER NOT NULL
      );",
     // v3: the admin site has left the server. Its tables go, and a provider keeps only what the
@@ -152,7 +152,7 @@ const MIGRATIONS: &[&str] = &[
     "CREATE TABLE generations (
          id                   TEXT PRIMARY KEY,
          user_id              TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-         device_id            TEXT,
+         device_id            TEXT, -- names-ok
          conversation_id      TEXT    NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
          user_message_id      TEXT,
          assistant_message_id TEXT,
@@ -168,7 +168,7 @@ const MIGRATIONS: &[&str] = &[
          deadline_at          INTEGER,
          ended_at             INTEGER
      );
-     CREATE UNIQUE INDEX idx_generations_request ON generations(device_id, client_request_id)
+     CREATE UNIQUE INDEX idx_generations_request ON generations(device_id, client_request_id) -- names-ok
          WHERE client_request_id IS NOT NULL;
      CREATE INDEX idx_generations_conversation ON generations(conversation_id, status);
      CREATE INDEX idx_generations_user_status ON generations(user_id, status);",
@@ -181,6 +181,11 @@ const MIGRATIONS: &[&str] = &[
          since       INTEGER NOT NULL,
          error_code  TEXT
      );",
+    // v6: one word for the paired app: clients (they were called devices). Tokens and rows are kept.
+    "ALTER TABLE devices RENAME TO clients; -- names-ok
+     ALTER TABLE generations RENAME COLUMN device_id TO client_id; -- names-ok
+     ALTER TABLE token_usage RENAME COLUMN device_id TO client_id; -- names-ok
+     ALTER TABLE redeemed_codes RENAME COLUMN device_id TO client_id; -- names-ok",
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -228,7 +233,7 @@ pub struct SearchHit {
 pub struct Generation {
     pub id: String,
     pub user_id: String,
-    pub device_id: Option<String>,
+    pub client_id: Option<String>,
     pub conversation_id: String,
     pub user_message_id: Option<String>,
     pub assistant_message_id: Option<String>,
@@ -248,7 +253,7 @@ pub struct Generation {
 #[derive(Debug, Clone)]
 pub struct NewGeneration<'a> {
     pub user_id: &'a str,
-    pub device_id: Option<&'a str>,
+    pub client_id: Option<&'a str>,
     pub conversation_id: &'a str,
     pub user_message_id: Option<&'a str>,
     pub client_request_id: Option<&'a str>,
@@ -258,14 +263,14 @@ pub struct NewGeneration<'a> {
     pub deadline_at: Option<i64>,
 }
 
-const GENERATION_COLUMNS: &str = "id, user_id, device_id, conversation_id, user_message_id, assistant_message_id, \
+const GENERATION_COLUMNS: &str = "id, user_id, client_id, conversation_id, user_message_id, assistant_message_id, \
      client_request_id, provider_id, status, prompt, text, error, queued_at, started_at, deadline_at, ended_at";
 
 fn read_generation(r: &rusqlite::Row<'_>) -> rusqlite::Result<Generation> {
     Ok(Generation {
         id: r.get(0)?,
         user_id: r.get(1)?,
-        device_id: r.get(2)?,
+        client_id: r.get(2)?,
         conversation_id: r.get(3)?,
         user_message_id: r.get(4)?,
         assistant_message_id: r.get(5)?,
@@ -532,11 +537,11 @@ impl Db {
         let (id, t) = (new_id(), now());
         let started = (g.status == "running").then_some(t);
         self.conn.execute(
-            "INSERT INTO generations (id, user_id, device_id, conversation_id, user_message_id, client_request_id,
+            "INSERT INTO generations (id, user_id, client_id, conversation_id, user_message_id, client_request_id,
                                       provider_id, status, prompt, queued_at, started_at, deadline_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
-                id, g.user_id, g.device_id, g.conversation_id, g.user_message_id, g.client_request_id,
+                id, g.user_id, g.client_id, g.conversation_id, g.user_message_id, g.client_request_id,
                 g.provider_id, g.status, g.prompt, t, started, g.deadline_at
             ],
         )?;
@@ -629,15 +634,15 @@ impl Db {
             .optional()?)
     }
 
-    /// A generation this device already started with `client_request_id`.
-    pub fn find_by_request_id(&self, device_id: &str, client_request_id: &str) -> Result<Option<Generation>, DbError> {
+    /// A generation this client already started with `client_request_id`.
+    pub fn find_by_request_id(&self, client_id: &str, client_request_id: &str) -> Result<Option<Generation>, DbError> {
         Ok(self
             .conn
             .query_row(
                 &format!(
-                    "SELECT {GENERATION_COLUMNS} FROM generations WHERE device_id = ?1 AND client_request_id = ?2"
+                    "SELECT {GENERATION_COLUMNS} FROM generations WHERE client_id = ?1 AND client_request_id = ?2"
                 ),
-                params![device_id, client_request_id],
+                params![client_id, client_request_id],
                 read_generation,
             )
             .optional()?)
@@ -804,7 +809,7 @@ mod tests {
         let db = Db::open_in_memory().unwrap();
         let t = tables(&db);
         for name in [
-            "users", "devices", "conversations", "messages", "messages_fts", "user_prefs", // live
+            "users", "clients", "conversations", "messages", "messages_fts", "user_prefs", // live
             "memory", "projects", "token_usage", // reserved
             "providers", // only the encrypted API keys, by provider id
             "config_snapshot", "redeemed_codes", // what the admin service pushes, and codes already used
@@ -821,7 +826,7 @@ mod tests {
             stmt.query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect()
         };
         assert_eq!(cols, ["id", "api_key_enc"], "a provider keeps only its id and its encrypted key");
-        assert!(!t.iter().any(|x| x == "device_tokens"), "devices replaces device_tokens");
+        assert!(!t.iter().any(|x| x == "client_tokens"), "clients replaces client_tokens");
         let v: i64 = db.conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
         assert_eq!(v as usize, MIGRATIONS.len());
         let app: i64 = db.conn.query_row("PRAGMA application_id", [], |r| r.get(0)).unwrap();
@@ -884,6 +889,41 @@ mod tests {
     }
 
     #[test]
+    fn a_database_from_before_the_clients_rename_keeps_its_paired_clients_and_generations() {
+        // A 0.4.0 database: schema version 5, with a paired device (as it was called) and a generation it started.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        for (i, sql) in MIGRATIONS.iter().take(5).enumerate() {
+            conn.execute_batch(sql).unwrap();
+            if i == 0 {
+                conn.execute_batch(&format!("PRAGMA application_id = {APPLICATION_ID}")).unwrap();
+            }
+        }
+        conn.execute_batch("PRAGMA user_version = 5").unwrap();
+        conn.execute_batch(
+            "INSERT INTO users (id, name, created_at) VALUES ('u1','owner',0);
+             INSERT INTO devices (id, user_id, name, hash, created_at) VALUES ('d1','u1','Work laptop','h1',0); -- names-ok
+             INSERT INTO conversations (id, user_id, title, created_at, updated_at) VALUES ('c1','u1','t',0,0);
+             INSERT INTO generations (id, user_id, device_id, conversation_id, client_request_id, status, queued_at) -- names-ok
+                 VALUES ('g1','u1','d1','c1','r1','done',0);
+             INSERT INTO redeemed_codes (hash, device_id, redeemed_at) VALUES ('code','d1',0);", // names-ok
+        )
+        .unwrap();
+        let db = Db::init(conn).unwrap();
+        let v: i64 = db.conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(v as usize, MIGRATIONS.len());
+        let t = tables(&db);
+        assert!(t.iter().any(|x| x == "clients") && !t.iter().any(|x| x == "devices"), "{t:?}"); // names-ok
+        let name: String = db.conn.query_row("SELECT name FROM clients WHERE hash = 'h1'", [], |r| r.get(0)).unwrap();
+        assert_eq!(name, "Work laptop", "the paired client and its token hash survive");
+        let g = db.find_by_request_id("d1", "r1").unwrap().expect("the generation is found by its client id");
+        assert_eq!(g.id, "g1");
+        let used: String = db.conn.query_row("SELECT client_id FROM redeemed_codes", [], |r| r.get(0)).unwrap();
+        assert_eq!(used, "d1");
+        assert!(crate::auth::authenticate(&db, "no such token").unwrap().is_none());
+    }
+
+    #[test]
     fn a_v3_database_upgrades_to_v4_and_keeps_its_data() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
@@ -908,16 +948,16 @@ mod tests {
         assert!(tables(&db).iter().any(|x| x == "generations"));
         let n: i64 = db.conn.query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 1, "existing history survives");
-        // The unique index covers (device, client_request_id) only when the latter is set.
+        // The unique index covers (client, client_request_id) only when the latter is set.
         let ins = |id: &str, rid: Option<&str>| {
             db.conn.execute(
-                "INSERT INTO generations (id, user_id, conversation_id, device_id, client_request_id, status, queued_at)
+                "INSERT INTO generations (id, user_id, conversation_id, client_id, client_request_id, status, queued_at)
                  VALUES (?1, 'u1', 'c1', 'd1', ?2, 'running', 0)",
                 params![id, rid],
             )
         };
         ins("g1", Some("r1")).unwrap();
-        assert!(ins("g2", Some("r1")).is_err(), "a repeated request id from one device is refused");
+        assert!(ins("g2", Some("r1")).is_err(), "a repeated request id from one client is refused");
         ins("g3", None).unwrap();
         ins("g4", None).unwrap();
     }
@@ -925,7 +965,7 @@ mod tests {
     fn new_gen<'a>(user: &'a str, conv: &'a str, status: &'a str) -> NewGeneration<'a> {
         NewGeneration {
             user_id: user,
-            device_id: Some("dev1"),
+            client_id: Some("dev1"),
             conversation_id: conv,
             user_message_id: None,
             client_request_id: None,
@@ -1040,7 +1080,7 @@ mod tests {
     }
 
     #[test]
-    fn find_by_request_id_is_per_device() {
+    fn find_by_request_id_is_per_client() {
         let (db, u) = db_with_user();
         let c = db.create_conversation(&u, "c").unwrap();
         let mut n = new_gen(&u, &c, "running");
@@ -1101,7 +1141,7 @@ mod tests {
         let old = dir.join("old.db");
         Connection::open(&old)
             .unwrap()
-            .execute_batch("CREATE TABLE device_tokens (id TEXT); PRAGMA user_version = 1;")
+            .execute_batch("CREATE TABLE client_tokens (id TEXT); PRAGMA user_version = 1;")
             .unwrap();
         assert!(refused(&old));
         let err = Db::open(&old).err().unwrap().to_string();

@@ -30,7 +30,7 @@ async fn the_api_and_management_routers_share_no_routes() {
     // Management answers 401 (no token) to everything, including paths that are not its own;
     // the API answers 404 to management paths and to the admin site that used to live here.
     assert_eq!(status(mgmt, "/mgmt/v1/health").await, 401);
-    assert_eq!(status(mgmt, "/api/v1/health").await, 401, "the device API is not served here");
+    assert_eq!(status(mgmt, "/api/v1/health").await, 401, "the client API is not served here");
     assert_eq!(status(api, "/mgmt/v1/health").await, 404);
     for gone in ["/admin/", "/admin/health", "/admin/login", "/admin/api/providers", "/"] {
         assert_eq!(status(api, gone).await, 404, "{gone}: the admin site is not part of the server");

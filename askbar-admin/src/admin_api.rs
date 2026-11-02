@@ -307,18 +307,18 @@ fn json_response(body: Vec<u8>) -> Result<Response, Failure> {
     Response::builder().header(header::CONTENT_TYPE, "application/json").body(axum::body::Body::from(body)).map_err(internal)
 }
 
-// ------------------------------------------------------------------ devices
+// ------------------------------------------------------------------ clients
 
 async fn revoked_ids(state: &AdminState) -> Vec<String> {
     let db = state.db.lock().await;
     db.conn()
-        .prepare("SELECT device_id FROM revoked_devices")
+        .prepare("SELECT client_id FROM revoked_clients")
         .and_then(|mut s| s.query_map([], |r| r.get(0))?.collect())
         .unwrap_or_default()
 }
 
-/// The server's devices, with the ones this admin has revoked marked as such.
-async fn devices(state: &AdminState) -> Result<Vec<serde_json::Value>, Failure> {
+/// The server's clients, with the ones this admin has revoked marked as such.
+async fn clients(state: &AdminState) -> Result<Vec<serde_json::Value>, Failure> {
     let (status, body) = link(state)?.request(reqwest::Method::GET, "/mgmt/v1/devices", None).await.map_err(from_push)?;
     if status != 200 {
         return Err(err(StatusCode::BAD_GATEWAY, &format!("The server answered {status}.")));
@@ -333,17 +333,17 @@ async fn devices(state: &AdminState) -> Result<Vec<serde_json::Value>, Failure> 
     Ok(list)
 }
 
-pub async fn list_devices(State(state): St) -> Result<Json<Vec<serde_json::Value>>, Failure> {
-    devices(&state).await.map(Json)
+pub async fn list_clients(State(state): St) -> Result<Json<Vec<serde_json::Value>>, Failure> {
+    clients(&state).await.map(Json)
 }
 
-/// Revoke a device by putting its id in the snapshot; the server refuses it from then on.
-pub async fn revoke_device(State(state): St, Path(id): Path<String>) -> Result<StatusCode, Failure> {
-    if !devices(&state).await?.iter().any(|d| d["id"].as_str() == Some(id.as_str())) {
-        return Err(err(StatusCode::NOT_FOUND, "No such device."));
+/// Revoke a client by putting its id in the snapshot; the server refuses it from then on.
+pub async fn revoke_client(State(state): St, Path(id): Path<String>) -> Result<StatusCode, Failure> {
+    if !clients(&state).await?.iter().any(|d| d["id"].as_str() == Some(id.as_str())) {
+        return Err(err(StatusCode::NOT_FOUND, "No such client."));
     }
     mutate(&state, vec![], move |c| {
-        c.execute("INSERT OR IGNORE INTO revoked_devices (device_id, revoked_at) VALUES (?1, ?2)", params![id, crate::auth::now()]).map(|_| ()).map_err(internal)
+        c.execute("INSERT OR IGNORE INTO revoked_clients (client_id, revoked_at) VALUES (?1, ?2)", params![id, crate::auth::now()]).map(|_| ()).map_err(internal)
     })
     .await?;
     Ok(StatusCode::NO_CONTENT)
@@ -371,7 +371,7 @@ fn random_code() -> String {
     URL_SAFE_NO_PAD.encode(b)
 }
 
-/// The address devices should pair with: the public HTTPS name when HTTPS is on, else the
+/// The address clients should pair with: the public HTTPS name when HTTPS is on, else the
 /// configured fallback.
 pub(crate) fn public_url(conn: &Connection) -> String {
     let net: Option<(i64, String)> = conn.query_row("SELECT tls_enabled, hostname FROM network_settings WHERE id = 1", [], |r| Ok((r.get(0)?, r.get(1)?))).ok();
@@ -381,25 +381,25 @@ pub(crate) fn public_url(conn: &Connection) -> String {
     }
 }
 
-/// A one-time pairing string for a new device, good for ten minutes. Only the code's hash is stored.
+/// A one-time pairing string for a new client, good for ten minutes. Only the code's hash is stored.
 pub async fn create_pairing(State(state): St, Json(i): Json<PairInput>) -> Result<Json<PairingOut>, Failure> {
     let name = i.name.trim().to_string();
     if name.chars().count() > 60 {
-        return Err(bad("The device name is too long."));
+        return Err(bad("The client name is too long."));
     }
     let (status, body) = link(&state)?.request(reqwest::Method::GET, "/mgmt/v1/users", None).await.map_err(from_push)?;
     let user = (status == 200)
         .then(|| serde_json::from_slice::<serde_json::Value>(&body).ok())
         .flatten()
         .and_then(|v| v[0]["id"].as_str().map(str::to_string))
-        .ok_or_else(|| err(StatusCode::BAD_GATEWAY, "The server has no user to pair a device with."))?;
+        .ok_or_else(|| err(StatusCode::BAD_GATEWAY, "The server has no user to pair a client with."))?;
     let code = random_code();
     let hash = crate::server_link::sha256_hex(&code);
     let url = mutate(&state, vec![], move |c| {
         let now = crate::auth::now();
         c.execute("DELETE FROM pair_codes WHERE expires_at <= ?1", [now]).map_err(internal)?;
         c.execute(
-            "INSERT INTO pair_codes (hash, user_id, device_name, expires_at, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO pair_codes (hash, user_id, client_name, expires_at, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![hash, user, name, now + PAIR_CODE_TTL_SECS, now],
         )
         .map_err(internal)?;

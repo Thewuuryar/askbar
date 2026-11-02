@@ -92,8 +92,9 @@ pub struct SnapshotPairCode {
     /// SHA-256 (hex) of the code; the code itself is never sent.
     pub hash: String,
     pub user_id: String,
-    #[serde(default)]
-    pub device_name: String,
+    // `device_name` is the old key, still read from a snapshot stored by an earlier version.
+    #[serde(default, alias = "device_name")] // names-ok
+    pub client_name: String,
     pub expires_at: i64,
 }
 
@@ -130,8 +131,9 @@ pub struct Snapshot {
     pub user_display_defaults: std::collections::BTreeMap<String, DisplaySettings>,
     #[serde(default)]
     pub pair_codes: Vec<SnapshotPairCode>,
-    #[serde(default)]
-    pub revoked_device_ids: Vec<String>,
+    // `revoked_device_ids` is the old key, still read from a snapshot stored by an earlier version.
+    #[serde(default, alias = "revoked_device_ids")] // names-ok
+    pub revoked_client_ids: Vec<String>,
     #[serde(default)]
     pub budget: Budget,
     /// When true the server refuses new chats.
@@ -173,7 +175,7 @@ fn default_generation_timeout_secs() -> u32 {
     DEFAULT_GENERATION_TIMEOUT_SECS
 }
 
-/// A user's preferences, shared by all of their devices.
+/// A user's preferences, shared by all of their clients.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Prefs {
     /// Id of the provider new chats use; `None` means "the server's default".
@@ -246,7 +248,7 @@ pub struct ChatRequest {
     /// Id of the provider to answer with.
     pub provider: String,
     pub text: String,
-    /// Chosen by the client for each send. A repeat from the same device attaches to the
+    /// Chosen by the client for each send. A repeat from the same client attaches to the
     /// generation it started instead of starting another, so a retry never doubles a message.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_request_id: Option<String>,

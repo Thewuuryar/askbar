@@ -119,8 +119,8 @@ async fn missing_or_bogus_session_is_401() {
 #[tokio::test]
 async fn bearer_tokens_never_open_the_admin() {
     let t = start(PASSWORD).await;
-    // The management token and a device token look alike to this site: neither is a session.
-    for token in ["mgt_the-management-token", "abt_a-device-token", PASSWORD] {
+    // The management token and a client token look alike to this site: neither is a session.
+    for token in ["mgt_the-management-token", "abt_a-client-token", PASSWORD] {
         assert_eq!(t.admin_get("/admin/session", None, Some(token)).await, 401);
         assert_eq!(t.admin_get("/admin/session", Some("askbar_admin=bogus"), Some(token)).await, 401);
     }

@@ -4,7 +4,7 @@
 //! its deltas so a client can attach, drop and attach again without losing or repeating text.
 
 use crate::llm::{stream_chat_report, ChatMessage, StreamOutcome, Usage};
-use crate::auth::DeviceAuth;
+use crate::auth::ClientAuth;
 use crate::chat::{sse_event, sse_event_with_id};
 use crate::audit::{Kind, SpanFinish, SpanStart};
 use crate::db::NewGeneration;
@@ -281,7 +281,7 @@ impl Generations {
 /// A chat send, as the handler received it.
 pub struct Submit {
     pub user_id: String,
-    pub device_id: String,
+    pub client_id: String,
     pub conversation_id: Option<String>,
     pub provider_id: String,
     pub prompt: String,
@@ -431,7 +431,7 @@ struct Finisher {
     live: Arc<Live>,
     id: String,
     user_id: String,
-    device_id: Option<String>,
+    client_id: Option<String>,
     provider_id: String,
     conversation_id: String,
     text: String,
@@ -492,12 +492,12 @@ impl Finisher {
         // One usage row per generation that has numbers, whatever way it ended.
         if let Some(u) = self.usage {
             let _ = db.conn().execute(
-                "INSERT INTO token_usage (id, user_id, device_id, provider_id, tokens_in, tokens_out, created_at)
+                "INSERT INTO token_usage (id, user_id, client_id, provider_id, tokens_in, tokens_out, created_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 rusqlite::params![
                     crate::ids::new_id(),
                     self.user_id,
-                    self.device_id,
+                    self.client_id,
                     self.provider_id,
                     u.input.unwrap_or(0) as i64,
                     u.output.unwrap_or(0) as i64,
@@ -593,7 +593,7 @@ fn stamp_deadline(db: &crate::Db, id: &str, timeout: Duration) {
 /// Records that the kill switch was off for this generation.
 fn pass_kill_switch_gate(state: &AppState, generation_id: &str, s: &Submit) {
     let span = state.audit.start_span(
-        SpanStart::new(generation_id, Kind::Gate, "kill_switch").who(&s.user_id, Some(&s.device_id)).attrs(&serde_json::json!({ "kill_switch": false })),
+        SpanStart::new(generation_id, Kind::Gate, "kill_switch").who(&s.user_id, Some(&s.client_id)).attrs(&serde_json::json!({ "kill_switch": false })),
     );
     state.audit.finish_span(SpanFinish::new(&span, "done"));
 }
@@ -603,7 +603,7 @@ fn pass_budget_gate(state: &AppState, generation_id: &str, s: &Submit, note: &se
     if note.is_null() {
         return;
     }
-    let span = state.audit.start_span(SpanStart::new(generation_id, Kind::Gate, "budget").who(&s.user_id, Some(&s.device_id)).attrs(note));
+    let span = state.audit.start_span(SpanStart::new(generation_id, Kind::Gate, "budget").who(&s.user_id, Some(&s.client_id)).attrs(note));
     state.audit.finish_span(SpanFinish::new(&span, "done"));
 }
 
@@ -696,7 +696,7 @@ pub fn submit(state: &Arc<AppState>, s: Submit) -> Result<Submitted, SubmitError
             Ok(note) => budget_note = note,
             Err((period, note)) => {
                 let trace = crate::ids::new_id();
-                let span = state.audit.start_span(SpanStart::new(&trace, Kind::Gate, "budget").who(&s.user_id, Some(&s.device_id)).attrs(&note));
+                let span = state.audit.start_span(SpanStart::new(&trace, Kind::Gate, "budget").who(&s.user_id, Some(&s.client_id)).attrs(&note));
                 state.audit.finish_span(SpanFinish::new(&span, "blocked").error_code("budget_exceeded"));
                 return Err(SubmitError::BudgetExceeded(period));
             }
@@ -705,7 +705,7 @@ pub fn submit(state: &Arc<AppState>, s: Submit) -> Result<Submitted, SubmitError
     if kill_switch {
         let trace = crate::ids::new_id();
         let span = state.audit.start_span(
-            SpanStart::new(&trace, Kind::Gate, "kill_switch").who(&s.user_id, Some(&s.device_id)).attrs(&serde_json::json!({ "kill_switch": true })),
+            SpanStart::new(&trace, Kind::Gate, "kill_switch").who(&s.user_id, Some(&s.client_id)).attrs(&serde_json::json!({ "kill_switch": true })),
         );
         state.audit.finish_span(SpanFinish::new(&span, "blocked").error_code("kill_switch"));
         return Err(SubmitError::KillSwitch);
@@ -720,7 +720,7 @@ pub fn submit(state: &Arc<AppState>, s: Submit) -> Result<Submitted, SubmitError
     };
     let new = |status, user_message_id| NewGeneration {
         user_id: &s.user_id,
-        device_id: Some(&s.device_id),
+        client_id: Some(&s.client_id),
         conversation_id: &conversation_id,
         user_message_id,
         client_request_id: s.client_request_id.as_deref(),
@@ -738,7 +738,7 @@ pub fn submit(state: &Arc<AppState>, s: Submit) -> Result<Submitted, SubmitError
         pass_kill_switch_gate(state, &id, &s);
         pass_budget_gate(state, &id, &s, &budget_note);
         let live = Live::new();
-        live.set_queue_span(state.audit.start_span(SpanStart::new(&id, Kind::Gate, "queue").who(&s.user_id, Some(&s.device_id))));
+        live.set_queue_span(state.audit.start_span(SpanStart::new(&id, Kind::Gate, "queue").who(&s.user_id, Some(&s.client_id))));
         state.generations.insert(&id, live.clone());
         return Ok(Submitted { generation_id: id, conversation_id, live, queued: true });
     }
@@ -752,7 +752,7 @@ pub fn submit(state: &Arc<AppState>, s: Submit) -> Result<Submitted, SubmitError
     let live = Live::new();
     state.generations.insert(&id, live.clone());
     drop(db);
-    spawn_run(state, &id, &s.user_id, Some(&s.device_id), &conversation_id, &s.provider_id, timeout, live.clone());
+    spawn_run(state, &id, &s.user_id, Some(&s.client_id), &conversation_id, &s.provider_id, timeout, live.clone());
     Ok(Submitted { generation_id: id, conversation_id, live, queued: false })
 }
 
@@ -763,14 +763,14 @@ fn spawn_run(
     state: &Arc<AppState>,
     id: &str,
     user_id: &str,
-    device_id: Option<&str>,
+    client_id: Option<&str>,
     conversation_id: &str,
     provider_id: &str,
     timeout: Duration,
     live: Arc<Live>,
 ) {
     let turn_span = state.audit.start_span(
-        SpanStart::new(id, Kind::Turn, "chat").who(user_id, device_id).attrs(&serde_json::json!({ "conversation_id": conversation_id })),
+        SpanStart::new(id, Kind::Turn, "chat").who(user_id, client_id).attrs(&serde_json::json!({ "conversation_id": conversation_id })),
     );
     let audit_key = current_audit_key(state);
     let mut fin = Finisher {
@@ -781,7 +781,7 @@ fn spawn_run(
         error_code: None,
         id: id.to_string(),
         user_id: user_id.to_string(),
-        device_id: device_id.map(str::to_string),
+        client_id: client_id.map(str::to_string),
         provider_id: provider_id.to_string(),
         conversation_id: conversation_id.to_string(),
         text: String::new(),
@@ -1068,7 +1068,7 @@ fn start_next(state: &Arc<AppState>, conversation_id: &str) {
                 l
             });
             live.end_queue_span(&state.audit, "done");
-            spawn_run(state, &next.id, &next.user_id, next.device_id.as_deref(), &next.conversation_id, next.provider_id.as_deref().unwrap_or(""), timeout, live);
+            spawn_run(state, &next.id, &next.user_id, next.client_id.as_deref(), &next.conversation_id, next.provider_id.as_deref().unwrap_or(""), timeout, live);
         }
         None => {
             // Try the one after it.
@@ -1211,7 +1211,7 @@ pub fn delete_conversation(state: &Arc<AppState>, user_id: &str, conversation_id
 /// 204 also when it has already finished; 404 for anyone else's.
 pub async fn cancel(
     State(state): State<Arc<AppState>>,
-    Extension(auth): Extension<DeviceAuth>,
+    Extension(auth): Extension<ClientAuth>,
     Path(id): Path<String>,
 ) -> StatusCode {
     // Under one lock, so a queued message cannot start between the look and the cancel.
@@ -1288,7 +1288,7 @@ pub(crate) fn events_for(state: &AppState, row: &crate::Generation, after: u64) 
 /// so it should reload the conversation to read the saved message.
 pub async fn stream(
     State(state): State<Arc<AppState>>,
-    Extension(auth): Extension<DeviceAuth>,
+    Extension(auth): Extension<ClientAuth>,
     Path(id): Path<String>,
     Query(q): Query<StreamQuery>,
 ) -> Result<impl axum::response::IntoResponse, StatusCode> {
@@ -1424,7 +1424,7 @@ mod tests {
         let mk = |status: &str| {
             db.create_generation(&NewGeneration {
                 user_id: &u,
-                device_id: None,
+                client_id: None,
                 conversation_id: &c,
                 user_message_id: None,
                 client_request_id: None,

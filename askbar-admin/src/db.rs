@@ -38,7 +38,7 @@ const MIGRATIONS: &[&str] = &[
      CREATE TABLE pair_codes (
          hash        TEXT PRIMARY KEY,
          user_id     TEXT    NOT NULL,
-         device_name TEXT    NOT NULL DEFAULT '',
+         device_name TEXT    NOT NULL DEFAULT '', -- names-ok
          expires_at  INTEGER NOT NULL,
          created_at  INTEGER NOT NULL
      );
@@ -60,9 +60,9 @@ const MIGRATIONS: &[&str] = &[
      );
      INSERT INTO budgets (id) VALUES (1);
      INSERT INTO network_settings (id) VALUES (1);",
-    // v2 (additive): devices the admin has revoked; they go to the server in the snapshot.
-    "CREATE TABLE revoked_devices (
-         device_id  TEXT PRIMARY KEY,
+    // v2 (additive): devices the admin has revoked; they go to the server in the snapshot. names-ok
+    "CREATE TABLE revoked_devices ( -- names-ok
+         device_id  TEXT PRIMARY KEY, -- names-ok
          revoked_at INTEGER NOT NULL
      );",
     // v3 (additive): whether the server holds an API key for the provider. The key itself
@@ -98,6 +98,10 @@ const MIGRATIONS: &[&str] = &[
      ALTER TABLE providers ADD COLUMN price_in REAL;
      ALTER TABLE providers ADD COLUMN price_out REAL;
      ALTER TABLE providers ADD COLUMN price_cached_in REAL;",
+    // v7: one word for the paired app: clients (they were called devices). Rows are kept.
+    "ALTER TABLE revoked_devices RENAME TO revoked_clients; -- names-ok
+     ALTER TABLE revoked_clients RENAME COLUMN device_id TO client_id; -- names-ok
+     ALTER TABLE pair_codes RENAME COLUMN device_name TO client_name; -- names-ok",
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -256,6 +260,31 @@ impl AdminDb {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_database_from_before_the_clients_rename_keeps_its_revoked_clients_and_pairing_codes() {
+        // A 0.4.0 database: schema version 6, with a revoked device (as it was called) and a pairing code.
+        let conn = Connection::open_in_memory().unwrap();
+        for (i, sql) in MIGRATIONS.iter().take(6).enumerate() {
+            conn.execute_batch(sql).unwrap();
+            if i == 0 {
+                conn.execute_batch(&format!("PRAGMA application_id = {APPLICATION_ID}")).unwrap();
+            }
+        }
+        conn.execute_batch("PRAGMA user_version = 6").unwrap();
+        conn.execute_batch(
+            "INSERT INTO revoked_devices (device_id, revoked_at) VALUES ('d1', 5); -- names-ok
+             INSERT INTO pair_codes (hash, user_id, device_name, expires_at, created_at) VALUES ('h', 'u', 'Work laptop', 9, 1);", // names-ok
+        )
+        .unwrap();
+        let db = AdminDb::init(conn).unwrap();
+        let v: i64 = db.conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(v as usize, MIGRATIONS.len());
+        let revoked: (String, i64) = db.conn.query_row("SELECT client_id, revoked_at FROM revoked_clients", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        assert_eq!(revoked, ("d1".to_string(), 5));
+        let name: String = db.conn.query_row("SELECT client_name FROM pair_codes WHERE hash = 'h'", [], |r| r.get(0)).unwrap();
+        assert_eq!(name, "Work laptop");
+    }
     use super::*;
 
     fn key(id: &str, retired: Option<i64>) -> AuditKeyRow {

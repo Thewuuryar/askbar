@@ -36,7 +36,7 @@ const MIGRATIONS: &[&str] = &[
          ttft_ms       INTEGER,
          error_code    TEXT,
          user_id       TEXT,
-         device_id     TEXT,
+         client_id     TEXT,
          attrs_json    TEXT
      );
      CREATE INDEX idx_spans_trace   ON spans(trace_id, started_at, id);
@@ -158,7 +158,7 @@ pub const MAX_TRACE_LIMIT: usize = 200;
 pub fn list_traces(conn: &Connection, f: &TraceFilter) -> rusqlite::Result<Vec<serde_json::Value>> {
     let limit = f.limit.unwrap_or(DEFAULT_TRACE_LIMIT).clamp(1, MAX_TRACE_LIMIT);
     let mut stmt = conn.prepare(
-        "SELECT t.trace_id, t.id, t.status, t.started_at, t.ended_at, t.user_id, t.device_id,
+        "SELECT t.trace_id, t.id, t.status, t.started_at, t.ended_at, t.user_id, t.client_id,
                 t.tokens_in, t.tokens_out, t.tokens_cached, t.error_code,
                 a.provider_id, a.model, a.ttft_ms, json_extract(a.attrs_json, '$.latency_ms')
          FROM spans t
@@ -177,7 +177,7 @@ pub fn list_traces(conn: &Connection, f: &TraceFilter) -> rusqlite::Result<Vec<s
             "started_at": r.get::<_, i64>(3)?,
             "ended_at": r.get::<_, Option<i64>>(4)?,
             "user_id": r.get::<_, Option<String>>(5)?,
-            "device_id": r.get::<_, Option<String>>(6)?,
+            "client_id": r.get::<_, Option<String>>(6)?,
             "tokens_in": r.get::<_, Option<i64>>(7)?,
             "tokens_out": r.get::<_, Option<i64>>(8)?,
             "tokens_cached": r.get::<_, Option<i64>>(9)?,
@@ -195,7 +195,7 @@ pub fn list_traces(conn: &Connection, f: &TraceFilter) -> rusqlite::Result<Vec<s
 pub fn trace_spans(conn: &Connection, trace_id: &str) -> rusqlite::Result<Vec<serde_json::Value>> {
     let mut stmt = conn.prepare(
         "SELECT id, parent_id, kind, name, status, started_at, ended_at, provider_id, model, tokens_in, tokens_out,
-                tokens_cached, ttft_ms, error_code, user_id, device_id, attrs_json,
+                tokens_cached, ttft_ms, error_code, user_id, client_id, attrs_json,
                 (SELECT COUNT(*) FROM payloads WHERE span_id = spans.id)
          FROM spans WHERE trace_id = ?1 ORDER BY started_at, id",
     )?;
@@ -217,7 +217,7 @@ pub fn trace_spans(conn: &Connection, trace_id: &str) -> rusqlite::Result<Vec<se
             "ttft_ms": r.get::<_, Option<i64>>(12)?,
             "error_code": r.get::<_, Option<String>>(13)?,
             "user_id": r.get::<_, Option<String>>(14)?,
-            "device_id": r.get::<_, Option<String>>(15)?,
+            "client_id": r.get::<_, Option<String>>(15)?,
             "attrs": attrs.and_then(|a| serde_json::from_str::<serde_json::Value>(&a).ok()),
             // How many sealed payloads the span has (their content is not here).
             "sealed": r.get::<_, i64>(17)?,
@@ -434,7 +434,7 @@ pub struct SpanStart {
     pub provider_id: Option<String>,
     pub model: Option<String>,
     pub user_id: Option<String>,
-    pub device_id: Option<String>,
+    pub client_id: Option<String>,
     pub attrs_json: Option<String>,
     /// When it began, in unix milliseconds. The columns hold whole seconds; this keeps the finer
     /// time in `attrs.started_ms` so a trace can be drawn to scale.
@@ -518,9 +518,9 @@ impl SpanStart {
         self
     }
 
-    pub fn who(mut self, user_id: &str, device_id: Option<&str>) -> SpanStart {
+    pub fn who(mut self, user_id: &str, client_id: Option<&str>) -> SpanStart {
         self.user_id = Some(user_id.to_string());
-        self.device_id = device_id.map(str::to_string);
+        self.client_id = client_id.map(str::to_string);
         self
     }
 
@@ -735,9 +735,9 @@ fn write_payload(conn: &Connection, p: &PayloadWrite) -> rusqlite::Result<()> {
 
 fn write_start(conn: &Connection, s: &SpanStart) -> rusqlite::Result<()> {
     conn.execute(
-        "INSERT INTO spans (id, trace_id, parent_id, kind, name, status, started_at, provider_id, model, user_id, device_id, attrs_json)
+        "INSERT INTO spans (id, trace_id, parent_id, kind, name, status, started_at, provider_id, model, user_id, client_id, attrs_json)
          VALUES (?1, ?2, ?3, ?4, ?5, 'running', ?6, ?7, ?8, ?9, ?10, json_patch(COALESCE(?11, '{}'), json_object('started_ms', ?12)))",
-        rusqlite::params![s.id, s.trace_id, s.parent_id, s.kind, s.name, s.started_at, s.provider_id, s.model, s.user_id, s.device_id, s.attrs_json, s.started_ms],
+        rusqlite::params![s.id, s.trace_id, s.parent_id, s.kind, s.name, s.started_at, s.provider_id, s.model, s.user_id, s.client_id, s.attrs_json, s.started_ms],
     )?;
     Ok(())
 }
@@ -791,7 +791,7 @@ mod tests {
             columns(&db, "spans"),
             [
                 "id", "trace_id", "parent_id", "kind", "name", "status", "started_at", "ended_at", "provider_id", "model",
-                "tokens_in", "tokens_out", "tokens_cached", "ttft_ms", "error_code", "user_id", "device_id", "attrs_json"
+                "tokens_in", "tokens_out", "tokens_cached", "ttft_ms", "error_code", "user_id", "client_id", "attrs_json"
             ]
         );
         assert_eq!(columns(&db, "payloads"), ["span_id", "role", "key_id", "ciphertext", "created_at"]);
@@ -994,13 +994,13 @@ mod tests {
         assert_eq!(row(&turn), ("gen-1".into(), None, "turn".into(), "done".into(), None, None));
         assert_eq!(row(&attempt), ("gen-1".into(), Some(turn.clone()), "attempt".into(), "done".into(), Some(5), None), "the first finish stands");
         assert_eq!(row(&gate).1.as_deref(), Some(turn.as_str()));
-        let (user, device, provider, model): (String, String, String, String) = (
+        let (user, client, provider, model): (String, String, String, String) = (
             conn.query_row("SELECT user_id FROM spans WHERE id = ?1", [&turn], |r| r.get(0)).unwrap(),
-            conn.query_row("SELECT device_id FROM spans WHERE id = ?1", [&turn], |r| r.get(0)).unwrap(),
+            conn.query_row("SELECT client_id FROM spans WHERE id = ?1", [&turn], |r| r.get(0)).unwrap(),
             conn.query_row("SELECT provider_id FROM spans WHERE id = ?1", [&attempt], |r| r.get(0)).unwrap(),
             conn.query_row("SELECT model FROM spans WHERE id = ?1", [&attempt], |r| r.get(0)).unwrap(),
         );
-        assert_eq!((user.as_str(), device.as_str(), provider.as_str(), model.as_str()), ("u1", "d1", "p1", "m1"));
+        assert_eq!((user.as_str(), client.as_str(), provider.as_str(), model.as_str()), ("u1", "d1", "p1", "m1"));
         let _ = std::fs::remove_dir_all(dir);
     }
 

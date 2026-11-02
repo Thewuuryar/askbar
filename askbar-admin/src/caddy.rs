@@ -213,7 +213,7 @@ admin.askbar.orraitu.com {
         let nets = vec!["192.168.1.0/24".to_string(), "10.0.0.5/32".to_string(), "fd00::/8".to_string()];
         let on = caddyfile(&net(true, false, true), &nets);
         assert!(on.contains("\t@outside not remote_ip 192.168.1.0/24 10.0.0.5/32 fd00::/8\n\tabort @outside\n"), "{on}");
-        // The matcher guards the admin host only; the API is open to paired devices.
+        // The matcher guards the admin host only; the API is open to paired clients.
         let (api, admin) = on.split_once("admin.askbar.orraitu.com").unwrap();
         assert!(!api.contains("remote_ip") && admin.contains("remote_ip"));
         // Off: the same addresses are ignored.

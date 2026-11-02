@@ -88,7 +88,7 @@ impl Stack {
             &self.state,
             Submit {
                 user_id: self.user.clone(),
-                device_id: "d1".into(),
+                client_id: "d1".into(),
                 conversation_id: None,
                 provider_id: "p1".into(),
                 prompt: prompt.into(),
@@ -394,7 +394,7 @@ async fn turning_the_kill_switch_on_with_abort_stops_running_replies_and_clears_
     let first = s.submit("please be slow").ok().expect("accepted");
     let queued = askbar_server::generation::submit(
         &s.state,
-        Submit { user_id: s.user.clone(), device_id: "d1".into(), conversation_id: Some(first.conversation_id.clone()), provider_id: "p1".into(), prompt: "waiting".into(), client_request_id: None },
+        Submit { user_id: s.user.clone(), client_id: "d1".into(), conversation_id: Some(first.conversation_id.clone()), provider_id: "p1".into(), prompt: "waiting".into(), client_request_id: None },
     )
     .ok()
     .expect("queued");
@@ -434,7 +434,7 @@ async fn turning_it_on_without_abort_lets_running_replies_finish_but_still_clear
     let first = s.submit("please be slow").ok().expect("accepted");
     let queued = askbar_server::generation::submit(
         &s.state,
-        Submit { user_id: s.user.clone(), device_id: "d1".into(), conversation_id: Some(first.conversation_id.clone()), provider_id: "p1".into(), prompt: "waiting".into(), client_request_id: None },
+        Submit { user_id: s.user.clone(), client_id: "d1".into(), conversation_id: Some(first.conversation_id.clone()), provider_id: "p1".into(), prompt: "waiting".into(), client_request_id: None },
     )
     .ok()
     .expect("queued");

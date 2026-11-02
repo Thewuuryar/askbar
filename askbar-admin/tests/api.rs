@@ -191,7 +191,7 @@ async fn status_reports_a_server_that_is_there() {
 }
 
 #[tokio::test]
-async fn a_pairing_string_pairs_a_device_which_can_then_be_revoked() {
+async fn a_pairing_string_pairs_a_client_which_can_then_be_revoked() {
     let t = start(true).await;
     let (st, out) = t.call(M::POST, "/admin/api/pair", Some(json!({ "name": "Work laptop" }))).await;
     assert_eq!(st, 200);
@@ -205,7 +205,7 @@ async fn a_pairing_string_pairs_a_device_which_can_then_be_revoked() {
     assert_ne!(stored, code);
     assert_eq!(t.snapshot().unwrap().pair_codes[0].hash, stored);
 
-    // The code pairs a device on the server's API, once.
+    // The code pairs a client on the server's API, once.
     let pair = || t.http.post(format!("{}/api/v1/pair", t.api)).header("x-askbar-client-version", "0.4.0").json(&json!({ "code": code })).send();
     let r = pair().await.unwrap();
     assert_eq!(r.status(), 200);
@@ -214,14 +214,14 @@ async fn a_pairing_string_pairs_a_device_which_can_then_be_revoked() {
 
     let whoami = || t.http.get(format!("{}/api/v1/whoami", t.api)).bearer_auth(&token).header("x-askbar-client-version", "0.4.0").send();
     assert_eq!(whoami().await.unwrap().status(), 204);
-    let (_, devices) = t.call(M::GET, "/admin/api/devices", None).await;
-    assert_eq!((devices[0]["name"].as_str(), devices[0]["revoked"].clone()), (Some("Work laptop"), json!(false)));
-    let id = devices[0]["id"].as_str().unwrap().to_string();
+    let (_, clients) = t.call(M::GET, "/admin/api/devices", None).await;
+    assert_eq!((clients[0]["name"].as_str(), clients[0]["revoked"].clone()), (Some("Work laptop"), json!(false)));
+    let id = clients[0]["id"].as_str().unwrap().to_string();
 
     assert_eq!(t.call(M::POST, &format!("/admin/api/devices/{id}/revoke"), None).await.0, 204);
-    assert_eq!(whoami().await.unwrap().status(), 401, "the revoked device is refused");
-    let (_, devices) = t.call(M::GET, "/admin/api/devices", None).await;
-    assert_eq!(devices[0]["revoked"], json!(true));
+    assert_eq!(whoami().await.unwrap().status(), 401, "the revoked client is refused");
+    let (_, clients) = t.call(M::GET, "/admin/api/devices", None).await;
+    assert_eq!(clients[0]["revoked"], json!(true));
     assert_eq!(t.call(M::POST, "/admin/api/devices/nope/revoke", None).await.0, 404);
     assert_eq!(t.call(M::POST, "/admin/api/pair", Some(json!({ "name": "x".repeat(61) }))).await.0, 400);
 }

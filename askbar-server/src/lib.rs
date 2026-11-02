@@ -82,7 +82,7 @@ impl AppState {
 }
 
 pub fn client_router(state: Arc<AppState>) -> Router {
-    // Everything that needs a device token goes in `protected`.
+    // Everything that needs a client token goes in `protected`.
     let protected: Router<Arc<AppState>> = Router::new()
         // Lets a client check that its token is still accepted.
         .route("/api/v1/whoami", get(|| async { StatusCode::NO_CONTENT }))
@@ -97,7 +97,7 @@ pub fn client_router(state: Arc<AppState>) -> Router {
         .route("/api/v1/generations", get(client_api::generations))
         .route("/api/v1/generations/{id}/stream", get(generation::stream))
         .route("/api/v1/generations/{id}/cancel", post(generation::cancel))
-        .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_device_token));
+        .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_client_token));
     // Everything except health checks the client version first.
     let gated = Router::new()
         .route("/api/v1/pair", post(pair))

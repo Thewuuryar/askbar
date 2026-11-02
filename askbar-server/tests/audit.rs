@@ -17,19 +17,19 @@ fn audit_state(mock_port: u16) -> (std::sync::Arc<askbar_server::AppState>, Path
 /// Runs one chat to the end through the generation code and returns its generation id.
 async fn run_chat(state: &std::sync::Arc<askbar_server::AppState>, prompt: &str) -> String {
     use futures_util::StreamExt;
-    let (user, device) = {
+    let (user, client) = {
         let db = state.db.lock().unwrap();
         let user = db.seed_server().unwrap();
         let code = askbar_server::testing::add_pair_code(&db, &user, "laptop");
         askbar_server::auth::redeem_pair_code(&db, &code).unwrap().unwrap();
-        let device: String = db.conn().query_row("SELECT id FROM devices ORDER BY created_at DESC LIMIT 1", [], |r| r.get(0)).unwrap();
-        (user, device)
+        let client: String = db.conn().query_row("SELECT id FROM clients ORDER BY created_at DESC LIMIT 1", [], |r| r.get(0)).unwrap();
+        (user, client)
     };
     let sub = askbar_server::generation::submit(
         state,
         askbar_server::generation::Submit {
             user_id: user,
-            device_id: device,
+            client_id: client,
             conversation_id: None,
             provider_id: "p1".into(),
             prompt: prompt.into(),
@@ -82,15 +82,15 @@ async fn a_finished_generation_leaves_one_turn_span_with_its_final_status() {
     let trace = run_chat(&state, "hello").await;
     state.audit.flush().await;
     let db = read(&dir);
-    let (n, status, user, device, error_code): (i64, String, Option<String>, Option<String>, Option<String>) = db
+    let (n, status, user, client, error_code): (i64, String, Option<String>, Option<String>, Option<String>) = db
         .query_row(
-            "SELECT COUNT(*), MAX(status), MAX(user_id), MAX(device_id), MAX(error_code) FROM spans WHERE trace_id = ?1 AND kind = 'turn'",
+            "SELECT COUNT(*), MAX(status), MAX(user_id), MAX(client_id), MAX(error_code) FROM spans WHERE trace_id = ?1 AND kind = 'turn'",
             [&trace],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
         )
         .unwrap();
     assert_eq!((n, status.as_str(), error_code), (1, "done", None));
-    assert!(user.is_some() && device.is_some(), "who it was for");
+    assert!(user.is_some() && client.is_some(), "who it was for");
     let (parent, ended): (Option<String>, Option<i64>) =
         db.query_row("SELECT parent_id, ended_at FROM spans WHERE trace_id = ?1 AND kind = 'turn'", [&trace], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
     assert!(parent.is_none() && ended.is_some());
@@ -216,20 +216,20 @@ async fn a_queued_message_records_a_gate_span_named_queue_from_enqueue_to_start(
     use futures_util::StreamExt;
     let (_mock, port) = start_mock();
     let (state, dir) = audit_state(port);
-    let (user, device) = {
+    let (user, client) = {
         let db = state.db.lock().unwrap();
         let user = db.seed_server().unwrap();
         let code = askbar_server::testing::add_pair_code(&db, &user, "laptop");
         askbar_server::auth::redeem_pair_code(&db, &code).unwrap().unwrap();
-        let device: String = db.conn().query_row("SELECT id FROM devices", [], |r| r.get(0)).unwrap();
-        (user, device)
+        let client: String = db.conn().query_row("SELECT id FROM clients", [], |r| r.get(0)).unwrap();
+        (user, client)
     };
     let send = |conversation: Option<String>, prompt: &str| {
         askbar_server::generation::submit(
             &state,
             askbar_server::generation::Submit {
                 user_id: user.clone(),
-                device_id: device.clone(),
+                client_id: client.clone(),
                 conversation_id: conversation,
                 provider_id: "p1".into(),
                 prompt: prompt.into(),
@@ -293,7 +293,7 @@ async fn a_backed_up_audit_writer_refuses_new_generations_with_503_and_retry_aft
             &state,
             askbar_server::generation::Submit {
                 user_id: user.clone(),
-                device_id: "d1".into(),
+                client_id: "d1".into(),
                 conversation_id: None,
                 provider_id: "p1".into(),
                 prompt: prompt.into(),
@@ -369,13 +369,13 @@ async fn a_generation_with_no_audit_key_is_refused_with_503_audit_key_missing() 
     let (_mock, port) = start_mock();
     let (state, _dir) = audit_state(port);
     askbar_server::testing::update_snapshot(&state.db.lock().unwrap(), |s| s.audit_public_key = None); // the admin has not made a key
-    let (user, device) = {
+    let (user, client) = {
         let db = state.db.lock().unwrap();
         (db.seed_server().unwrap(), "d1".to_string())
     };
     let refused = askbar_server::generation::submit(
         &state,
-        askbar_server::generation::Submit { user_id: user, device_id: device, conversation_id: None, provider_id: "p1".into(), prompt: "hi".into(), client_request_id: None },
+        askbar_server::generation::Submit { user_id: user, client_id: client, conversation_id: None, provider_id: "p1".into(), prompt: "hi".into(), client_request_id: None },
     )
     .err()
     .expect("no key, no generation");
@@ -386,13 +386,13 @@ async fn a_generation_with_no_audit_key_is_refused_with_503_audit_key_missing() 
 
     // Once the key arrives, generations run again.
     install_audit_key(&state);
-    let (user, device) = {
+    let (user, client) = {
         let db = state.db.lock().unwrap();
         (db.seed_server().unwrap(), "d1".to_string())
     };
     assert!(askbar_server::generation::submit(
         &state,
-        askbar_server::generation::Submit { user_id: user, device_id: device, conversation_id: None, provider_id: "p1".into(), prompt: "hi".into(), client_request_id: None },
+        askbar_server::generation::Submit { user_id: user, client_id: client, conversation_id: None, provider_id: "p1".into(), prompt: "hi".into(), client_request_id: None },
     )
     .is_ok());
 }

@@ -135,8 +135,8 @@ fn snapshot() -> Snapshot {
         system_prompt: Some("Be brief.".into()),
         display: DisplaySettings::default(),
         user_display_defaults: [("u1".to_string(), DisplaySettings { width: 900, ..Default::default() })].into(),
-        pair_codes: vec![SnapshotPairCode { hash: "ab".repeat(32), user_id: "u1".into(), device_name: "laptop".into(), expires_at: 4_000_000_000 }],
-        revoked_device_ids: vec!["d9".into()],
+        pair_codes: vec![SnapshotPairCode { hash: "ab".repeat(32), user_id: "u1".into(), client_name: "laptop".into(), expires_at: 4_000_000_000 }],
+        revoked_client_ids: vec!["d9".into()],
         budget: Budget { daily_tokens: Some(1000), monthly_tokens: None },
         kill_switch: false,
         kill_switch_aborts_running: true,
@@ -353,10 +353,10 @@ async fn the_test_endpoint_runs_a_provider_and_hides_the_key() {
     assert_eq!(s.call(M::POST, "/mgmt/v1/providers/nope/test", None).await.0, 404);
 }
 
-// ------------------------------------------------------- devices, usage, backup
+// ------------------------------------------------------- clients, usage, backup
 
 #[tokio::test]
-async fn devices_and_usage_are_listed_over_the_management_api() {
+async fn clients_and_usage_are_listed_over_the_management_api() {
     use reqwest::Method as M;
     let s = start_with_state().await;
     let user = {
@@ -369,7 +369,7 @@ async fn devices_and_usage_are_listed_over_the_management_api() {
         let c = db.create_conversation(&user, "chat").unwrap();
         db.add_message(&user, &c, "user", "hi").unwrap();
         db.add_message(&user, &c, "assistant", "hello").unwrap();
-        db.conn().execute("UPDATE devices SET revoked_at = 5 WHERE name = 'Phone'", []).unwrap();
+        db.conn().execute("UPDATE clients SET revoked_at = 5 WHERE name = 'Phone'", []).unwrap();
         db.conn().execute("INSERT INTO token_usage (id, user_id, tokens_in, tokens_out, created_at) VALUES ('t1', ?1, 10, 20, 0)", [&user]).unwrap();
         user
     };
@@ -377,8 +377,8 @@ async fn devices_and_usage_are_listed_over_the_management_api() {
 
     let (st, body) = s.call(M::GET, "/mgmt/v1/devices", None).await;
     assert_eq!(st, 200);
-    let devices: serde_json::Value = serde_json::from_str(&body).unwrap();
-    let by_name = |n: &str| devices.as_array().unwrap().iter().find(|d| d["name"] == n).unwrap().clone();
+    let clients: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let by_name = |n: &str| clients.as_array().unwrap().iter().find(|d| d["name"] == n).unwrap().clone();
     assert_eq!((by_name("Work laptop")["revoked"].clone(), by_name("Phone")["revoked"].clone()), (json!(false), json!(true)));
     assert!(!body.contains("abt_") && !body.contains("hash"), "no token material: {body}");
 
@@ -386,7 +386,7 @@ async fn devices_and_usage_are_listed_over_the_management_api() {
     let u: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(st, 200);
     assert_eq!(
-        (&u["conversations"], &u["messages"], &u["devices"]["active"], &u["devices"]["revoked"], &u["tokens_in"], &u["tokens_out"]),
+        (&u["conversations"], &u["messages"], &u["clients"]["active"], &u["clients"]["revoked"], &u["tokens_in"], &u["tokens_out"]),
         (&json!(1), &json!(2), &json!(1), &json!(1), &json!(10), &json!(20))
     );
 
@@ -410,7 +410,7 @@ async fn the_backup_has_the_data_and_none_of_the_secrets() {
         let c = db.create_conversation(&user, "kept conversation").unwrap();
         db.add_message(&user, &c, "user", "question one").unwrap();
         let code = askbar_server::testing::add_pair_code(&db, &user, "pending");
-        db.conn().execute("INSERT INTO redeemed_codes (hash, device_id, redeemed_at) VALUES ('used-hash-123', NULL, 0)", []).unwrap();
+        db.conn().execute("INSERT INTO redeemed_codes (hash, client_id, redeemed_at) VALUES ('used-hash-123', NULL, 0)", []).unwrap();
         let _ = code;
     }
 
@@ -500,21 +500,21 @@ async fn a_generation_with_the_mocks_usage_adds_to_the_overview_totals() {
     out.read_line(&mut first).unwrap(); // "mock LLM on ..."
 
     let s = start_with_state().await;
-    let (user, device) = {
+    let (user, client) = {
         let db = s.state.db.lock().unwrap();
         askbar_server::testing::add_provider(&db, askbar_server::testing::provider("p1", "mock", &format!("http://127.0.0.1:{port}/v1"), "m"));
         askbar_server::testing::store_key(&db, &s.state.secrets(), "p1", "sk-test");
         let user: String = db.conn().query_row("SELECT id FROM users", [], |r| r.get(0)).unwrap();
         let code = askbar_server::testing::add_pair_code(&db, &user, "laptop");
         askbar_server::auth::redeem_pair_code(&db, &code).unwrap().unwrap();
-        let device: String = db.conn().query_row("SELECT id FROM devices", [], |r| r.get(0)).unwrap();
-        (user, device)
+        let client: String = db.conn().query_row("SELECT id FROM clients", [], |r| r.get(0)).unwrap();
+        (user, client)
     };
     let sub = askbar_server::generation::submit(
         &s.state,
         askbar_server::generation::Submit {
             user_id: user,
-            device_id: device,
+            client_id: client,
             conversation_id: None,
             provider_id: "p1".into(),
             prompt: "hello".into(),
@@ -581,7 +581,7 @@ async fn audit_stack() -> AuditStack {
 impl AuditStack {
     async fn chat(&self, prompt: &str) -> String {
         use futures_util::StreamExt;
-        let (user, device) = {
+        let (user, client) = {
             let db = self.state.db.lock().unwrap();
             let user = db.seed_server().unwrap();
             (user, "dev-1".to_string())
@@ -590,7 +590,7 @@ impl AuditStack {
             &self.state,
             askbar_server::generation::Submit {
                 user_id: user,
-                device_id: device,
+                client_id: client,
                 conversation_id: None,
                 provider_id: "p1".into(),
                 prompt: prompt.into(),

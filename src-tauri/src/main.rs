@@ -199,7 +199,7 @@ async fn server_status(state: State<'_, AppState>) -> Result<Option<types::Clien
     Ok(state.backend().status().await)
 }
 
-/// Exchange a pairing string for a device token, remember the server, and switch to it.
+/// Exchange a pairing string for a client token, remember the server, and switch to it.
 #[tauri::command]
 async fn pair(app: AppHandle, state: State<'_, AppState>, pairing: String) -> Result<(), String> {
     let path = client_config::path();
@@ -256,7 +256,7 @@ async fn ask(
     Ok(())
 }
 
-/// Messages this device sent that the server has not taken, after dropping those it already has.
+/// Messages this app sent that the server has not taken, after dropping those it already has.
 #[tauri::command]
 async fn unsent_messages(state: State<'_, AppState>) -> Result<Vec<types::UnsentMessage>, String> {
     Ok(state.backend().unsent().await?.into_iter().map(Into::into).collect())

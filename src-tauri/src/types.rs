@@ -68,7 +68,7 @@ impl From<askbar_proto::PendingGeneration> for PendingReply {
     }
 }
 
-/// A message this device sent and the server has not taken yet.
+/// A message this app sent and the server has not taken yet.
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct UnsentMessage {

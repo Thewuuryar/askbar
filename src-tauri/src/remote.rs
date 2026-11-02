@@ -204,7 +204,7 @@ impl Inner {
     }
 
     fn request(&self, method: Method, path: &str) -> Result<RequestBuilder, String> {
-        let token = self.tokens.get().ok_or("This device is not paired with the server yet.")?;
+        let token = self.tokens.get().ok_or("This app is not paired with the server yet.")?;
         Ok(self
             .http
             .request(method, self.url(path))
@@ -386,7 +386,7 @@ fn refusal_for(status: StatusCode, retry_after: Option<u64>, code: &str, period:
 fn check_status(status: StatusCode) -> Result<(), String> {
     match status {
         s if s.is_success() => Ok(()),
-        StatusCode::UNAUTHORIZED => Err("The server rejected this device's token.".into()),
+        StatusCode::UNAUTHORIZED => Err("The server rejected this app's token.".into()),
         StatusCode::UPGRADE_REQUIRED => Err("This version of Askbar is too old for the server. Please update.".into()),
         StatusCode::SERVICE_UNAVAILABLE => Err(SETUP_PENDING.into()),
         s => Err(format!("The server answered {s}.")),
@@ -395,7 +395,7 @@ fn check_status(status: StatusCode) -> Result<(), String> {
 
 const SETUP_PENDING: &str = "The server's setup is not finished. Open its admin page to complete it.";
 
-/// Redeem a pairing string: exchange its code for a device token, keep the
+/// Redeem a pairing string: exchange its code for a client token, keep the
 /// token in `tokens`, and record the server in `client.yaml` (creating it, or
 /// updating `server_url` and leaving the rest alone).
 pub async fn pair(pairing: &str, client_yaml: &Path, tokens: &dyn TokenStore) -> Result<(), String> {
@@ -488,13 +488,13 @@ impl Remote {
             _ => return Some(offline()),
         }
         if i.tokens.get().is_none() {
-            return Some(ClientStatus::new("not_paired", "This device is not paired with the server yet."));
+            return Some(ClientStatus::new("not_paired", "This app is not paired with the server yet."));
         }
         let req = i.request(Method::GET, "/api/v1/whoami").ok()?.timeout(CHECK_TIMEOUT);
         match i.http_status(req).await {
             Err(_) => return Some(offline()),
             Ok(StatusCode::UNAUTHORIZED) => {
-                return Some(ClientStatus::new("rejected", "Token rejected. The server no longer accepts this device; it may have been revoked."))
+                return Some(ClientStatus::new("rejected", "Token rejected. The server no longer accepts this app; it may have been revoked."))
             }
             Ok(StatusCode::UPGRADE_REQUIRED) => {
                 return Some(ClientStatus::new("update_needed", "Update needed. This version of Askbar is too old for the server."))
@@ -724,7 +724,7 @@ mod tests {
         (Mock(child), port)
     }
 
-    /// Server with one mock provider; returns its URL and a fresh device token.
+    /// Server with one mock provider; returns its URL and a fresh client token.
     async fn start_server(mock_port: u16) -> (String, String) {
         use askbar_server::{auth, secrets::Secrets, AppState};
         let db = askbar_server::Db::open_in_memory().unwrap();
@@ -1420,11 +1420,11 @@ mod tests {
             [ProviderChoice { id: "p0".into(), name: "alpha".into() }, ProviderChoice { id: "p1".into(), name: "beta".into() }]
         );
 
-        // Revoking the device turns "ok" into "rejected".
+        // Revoking the client turns "ok" into "rejected".
         choose_provider(&state, "p0");
         let r = remote_for(&url, Some(&token), PathBuf::new());
         assert_eq!(kind(&r).await, None);
-        state.db.lock().unwrap().conn().execute("UPDATE devices SET revoked_at = 1", []).unwrap();
+        state.db.lock().unwrap().conn().execute("UPDATE clients SET revoked_at = 1", []).unwrap();
         assert_eq!(kind(&r).await.as_deref(), Some("rejected"));
     }
 
@@ -1485,7 +1485,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_active_provider_follows_the_user_across_devices() {
+    async fn the_active_provider_follows_the_user_across_clients() {
         let (url, token, state) = status_server("0.1.0").await;
         let second_token = {
             let db = state.db.lock().unwrap();
@@ -1496,7 +1496,7 @@ mod tests {
         let (laptop, desktop) = (remote_for(&url, Some(&token), PathBuf::new()), remote_for(&url, Some(&second_token), PathBuf::new()));
         assert_eq!(desktop.settings().await.unwrap().provider, "alpha", "the first provider until one is picked");
         laptop.set_active_provider("p1".into()).await.unwrap();
-        assert_eq!(desktop.settings().await.unwrap().provider, "beta", "picked on one device, used on the other");
+        assert_eq!(desktop.settings().await.unwrap().provider, "beta", "picked on one client, used on the other");
     }
 
     #[tokio::test]
@@ -1591,10 +1591,10 @@ mod tests {
         assert!(tokens.get().is_none() && !path.exists());
     }
 
-    /// Pair with a code the admin listed in its snapshot, have the admin revoke the device
+    /// Pair with a code the admin listed in its snapshot, have the admin revoke the client
     /// (again through the snapshot), and the client says "rejected".
     #[tokio::test]
-    async fn revoking_a_device_shows_token_rejected() {
+    async fn revoking_a_client_shows_token_rejected() {
         use askbar_server::{secrets::Secrets, testing, AppState};
         let db = askbar_server::Db::open_in_memory().unwrap();
         let user = db.seed_server().unwrap();
@@ -1614,8 +1614,8 @@ mod tests {
         let r = Remote::new(ClientConfig::load(&path), path.clone(), Box::new(MemoryTokens::with(&tokens.get().unwrap())));
         assert_eq!(kind(&r).await, None);
 
-        let device: String = state.db.lock().unwrap().conn().query_row("SELECT id FROM devices WHERE name = 'test client'", [], |r| r.get(0)).unwrap();
-        testing::update_snapshot(&state.db.lock().unwrap(), |s| s.revoked_device_ids.push(device));
+        let client_id: String = state.db.lock().unwrap().conn().query_row("SELECT id FROM clients WHERE name = 'test client'", [], |r| r.get(0)).unwrap();
+        testing::update_snapshot(&state.db.lock().unwrap(), |s| s.revoked_client_ids.push(client_id));
 
         let status = r.status().await.unwrap();
         assert_eq!(status.kind, "rejected");

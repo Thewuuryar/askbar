@@ -1,5 +1,5 @@
 //! `client.yaml`: where the server is and how this client looks. Secrets
-//! (the device token) are not stored here; see `tokens`.
+//! (the client token) are not stored here; see `tokens`.
 
 use askbar_proto::DisplaySettings;
 use reqwest::Url;

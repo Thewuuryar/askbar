@@ -39,7 +39,7 @@ async fn the_remote_ip_matcher_is_in_the_config_only_when_the_allowlist_is_on() 
     let on = t.fake.loads.lock().unwrap().last().unwrap().1.clone();
     assert!(on.contains("@outside not remote_ip 192.168.1.0/24") && on.contains("abort @outside"), "{on}");
 
-    // Allowlist off: the addresses stay saved but no matcher is sent, so any device reaches the login page.
+    // Allowlist off: the addresses stay saved but no matcher is sent, so any client reaches the login page.
     let mut off = settings(true);
     off["allowlist_enabled"] = json!(false);
     off.as_object_mut().unwrap().remove("cloudflare_token");

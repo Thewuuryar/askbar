@@ -150,7 +150,7 @@ async fn search_returns_only_my_matching_messages() {
 }
 
 #[tokio::test]
-async fn prefs_are_shared_by_a_users_devices_and_not_by_other_users() {
+async fn prefs_are_shared_by_a_users_clients_and_not_by_other_users() {
     let t = start().await;
     let get = |token: String| {
         let (http, addr) = (t.http.clone(), t.addr);
@@ -159,12 +159,12 @@ async fn prefs_are_shared_by_a_users_devices_and_not_by_other_users() {
     // Nothing chosen yet.
     assert_eq!(serde_json::from_str::<Prefs>(&get(t.token.clone()).await.text().await.unwrap()).unwrap(), Prefs::default());
 
-    // A second device of the same user, and a device of another user.
+    // A second client of the same user, and a client of another user.
     let (second, other) = {
         let db = t.state.db.lock().unwrap();
         db.conn().execute("INSERT INTO users (id, name, created_at) VALUES ('U2','other',0)", []).unwrap();
-        let c1 = askbar_server::testing::add_pair_code(&db, &t.user, "second device");
-        let c2 = askbar_server::testing::add_pair_code(&db, "U2", "their device");
+        let c1 = askbar_server::testing::add_pair_code(&db, &t.user, "second client");
+        let c2 = askbar_server::testing::add_pair_code(&db, "U2", "their client");
         (auth::redeem_pair_code(&db, &c1).unwrap().unwrap(), auth::redeem_pair_code(&db, &c2).unwrap().unwrap())
     };
 
@@ -172,7 +172,7 @@ async fn prefs_are_shared_by_a_users_devices_and_not_by_other_users() {
     assert_eq!(put.status(), 200);
     for token in [t.token.clone(), second] {
         let p: Prefs = serde_json::from_str(&get(token).await.text().await.unwrap()).unwrap();
-        assert_eq!(p.active_provider_id.as_deref(), Some("p1"), "every device of the user sees it");
+        assert_eq!(p.active_provider_id.as_deref(), Some("p1"), "every client of the user sees it");
     }
     let p: Prefs = serde_json::from_str(&get(other.clone()).await.text().await.unwrap()).unwrap();
     assert_eq!(p, Prefs::default(), "another user does not");

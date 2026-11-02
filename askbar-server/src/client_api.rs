@@ -1,6 +1,6 @@
 //! Read endpoints for a paired client. Every query is scoped to the token's user.
 
-use crate::{auth::DeviceAuth, AppState};
+use crate::{auth::ClientAuth, AppState};
 use askbar_proto::{Conversation, ConversationDetail, DisplaySettings, Message, PendingGeneration, Prefs, ProviderInfo, SearchHit, Settings};
 use axum::{
     extract::{Path, Query, State},
@@ -26,7 +26,7 @@ pub async fn providers(State(state): St) -> Res<Vec<ProviderInfo>> {
     Ok(Json(list.into_iter().map(|p| ProviderInfo { id: p.id, name: p.name, kind: p.kind, model: p.model }).collect()))
 }
 
-pub async fn conversations(State(state): St, Extension(auth): Extension<DeviceAuth>) -> Res<Vec<Conversation>> {
+pub async fn conversations(State(state): St, Extension(auth): Extension<ClientAuth>) -> Res<Vec<Conversation>> {
     let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
     let rows = db
         .list_conversations(&auth.user_id)
@@ -39,7 +39,7 @@ pub async fn conversations(State(state): St, Extension(auth): Extension<DeviceAu
 
 pub async fn conversation(
     State(state): St,
-    Extension(auth): Extension<DeviceAuth>,
+    Extension(auth): Extension<ClientAuth>,
     Path(id): Path<String>,
 ) -> Res<ConversationDetail> {
     let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
@@ -84,7 +84,7 @@ pub struct GenerationsQuery {
 /// conversations, so a client that just started (or reconnected) can find what is still going.
 pub async fn generations(
     State(state): St,
-    Extension(auth): Extension<DeviceAuth>,
+    Extension(auth): Extension<ClientAuth>,
     Query(q): Query<GenerationsQuery>,
 ) -> Res<Vec<PendingGeneration>> {
     if q.status.as_deref().is_some_and(|s| s != "running") {
@@ -96,7 +96,7 @@ pub async fn generations(
 
 pub async fn delete_conversation(
     State(state): St,
-    Extension(auth): Extension<DeviceAuth>,
+    Extension(auth): Extension<ClientAuth>,
     Path(id): Path<String>,
 ) -> StatusCode {
     match crate::generation::delete_conversation(&state, &auth.user_id, &id) {
@@ -106,7 +106,7 @@ pub async fn delete_conversation(
     }
 }
 
-pub async fn get_prefs(State(state): St, Extension(auth): Extension<DeviceAuth>) -> Res<Prefs> {
+pub async fn get_prefs(State(state): St, Extension(auth): Extension<ClientAuth>) -> Res<Prefs> {
     let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
     let active: Option<Option<String>> = db
         .conn()
@@ -117,7 +117,7 @@ pub async fn get_prefs(State(state): St, Extension(auth): Extension<DeviceAuth>)
 }
 
 /// Replaces the caller's preferences. A provider id must name an existing provider.
-pub async fn put_prefs(State(state): St, Extension(auth): Extension<DeviceAuth>, Json(p): Json<Prefs>) -> Res<Prefs> {
+pub async fn put_prefs(State(state): St, Extension(auth): Extension<ClientAuth>, Json(p): Json<Prefs>) -> Res<Prefs> {
     let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(id) = &p.active_provider_id {
         let listed = crate::snapshot::current(&db).map_err(internal)?.is_some_and(|s| s.providers.iter().any(|p| &p.id == id));
@@ -142,7 +142,7 @@ pub struct SearchQuery {
 }
 
 /// Full-text search over the caller's own messages.
-pub async fn search(State(state): St, Extension(auth): Extension<DeviceAuth>, Query(q): Query<SearchQuery>) -> Res<Vec<SearchHit>> {
+pub async fn search(State(state): St, Extension(auth): Extension<ClientAuth>, Query(q): Query<SearchQuery>) -> Res<Vec<SearchHit>> {
     if q.q.chars().count() > 200 {
         return Err(StatusCode::BAD_REQUEST);
     }
@@ -164,7 +164,7 @@ pub fn served_display(db: &crate::Db, user_id: Option<&str>) -> rusqlite::Result
 }
 
 /// Read-only: what this user's clients should look like unless the person overrides it locally.
-pub async fn display_defaults(State(state): St, Extension(auth): Extension<DeviceAuth>) -> Res<DisplaySettings> {
+pub async fn display_defaults(State(state): St, Extension(auth): Extension<ClientAuth>) -> Res<DisplaySettings> {
     let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
     Ok(Json(served_display(&db, Some(&auth.user_id)).map_err(internal)?))
 }

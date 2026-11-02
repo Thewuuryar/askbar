@@ -101,7 +101,7 @@ fn admin_db_with_data() -> AdminDb {
              INSERT INTO settings VALUES ('system_prompt', 'Be brief.');
              INSERT INTO settings VALUES ('default_provider_id', 'p1');
              INSERT INTO settings VALUES ('audit_retention_days', '14');
-             INSERT INTO revoked_devices VALUES ('dev-9', 0);
+             INSERT INTO revoked_clients VALUES ('dev-9', 0);
              UPDATE budgets SET daily_tokens = 5000, kill_switch = 1;",
         )
         .unwrap();
@@ -111,14 +111,14 @@ fn admin_db_with_data() -> AdminDb {
 #[test]
 fn the_snapshot_is_built_from_admin_db() {
     let db = admin_db_with_data();
-    db.conn().execute("INSERT INTO pair_codes (hash, user_id, device_name, expires_at, created_at) VALUES ('h1','u1','laptop', 4000000000, 0)", []).unwrap();
-    db.conn().execute("INSERT INTO pair_codes (hash, user_id, device_name, expires_at, created_at) VALUES ('old','u1','x', 1, 0)", []).unwrap();
+    db.conn().execute("INSERT INTO pair_codes (hash, user_id, client_name, expires_at, created_at) VALUES ('h1','u1','laptop', 4000000000, 0)", []).unwrap();
+    db.conn().execute("INSERT INTO pair_codes (hash, user_id, client_name, expires_at, created_at) VALUES ('old','u1','x', 1, 0)", []).unwrap();
     let s = server_link::build_snapshot(db.conn()).unwrap();
     assert_eq!(s.providers.len(), 1);
     assert_eq!((s.providers[0].id.as_str(), s.providers[0].model.as_str(), s.providers[0].max_tokens), ("p1", "m1", Some(100)));
     assert_eq!((s.default_provider_id.as_deref(), s.system_prompt.as_deref(), s.audit_retention_days), (Some("p1"), Some("Be brief."), 14));
     assert_eq!((s.budget.daily_tokens, s.budget.monthly_tokens, s.kill_switch), (Some(5000), None, true));
-    assert_eq!(s.revoked_device_ids, ["dev-9"]);
+    assert_eq!(s.revoked_client_ids, ["dev-9"]);
     assert_eq!(s.pair_codes.len(), 1, "an expired code is not sent");
     assert_eq!(s.pair_codes[0].hash, "h1");
     // A fresh database gives a valid, empty snapshot.

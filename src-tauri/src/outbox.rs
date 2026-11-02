@@ -1,4 +1,4 @@
-//! The outbox: messages this device has sent (or tried to send) and has not yet seen the server
+//! The outbox: messages this app has sent (or tried to send) and has not yet seen the server
 //! take. It keeps the text only; there is no offline chat. An entry is added when a message is
 //! sent and removed when the server's `meta` arrives, so a message that never got there is
 //! still here to Send, Edit or Discard. The file lives in the app data directory.
