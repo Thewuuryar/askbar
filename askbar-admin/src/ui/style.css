@@ -13,8 +13,8 @@ main.narrow { max-width: 360px; padding-top: 12vh; }
 h1 { font-size: 20px; margin: 0; }
 h2 { font-size: 17px; margin: 0; }
 h3 { font-size: 15px; margin: 0 0 8px; }
-.top { display: flex; gap: 16px; align-items: center; padding: 10px 16px; background: var(--card); border-bottom: 1px solid var(--line); }
-.top nav { display: flex; gap: 4px; flex: 1; }
+.top { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; padding: 10px 16px; background: var(--card); border-bottom: 1px solid var(--line); }
+.top nav { display: flex; flex-wrap: wrap; gap: 4px; flex: 1; }
 .top nav button { background: none; color: var(--fg); border: 0; padding: 6px 10px; border-radius: 6px; }
 .top nav button[aria-current="page"] { background: var(--bg); font-weight: 600; }
 .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
