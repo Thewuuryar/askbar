@@ -289,3 +289,14 @@ async fn the_flag_clears_on_the_next_success_and_when_a_new_key_is_saved_and_the
     let flagged: Vec<String> = s.state.db.lock().unwrap().provider_health().unwrap().into_iter().map(|h| h.0).collect();
     assert_eq!(flagged, ["p1"], "p2 worked, so its flag is gone; p1 failed again and is flagged again");
 }
+
+#[tokio::test]
+async fn the_generation_row_and_its_token_usage_name_the_provider_that_finally_served_it() {
+    let s = stack("m-500", "m", serde_json::json!({ "allow_as_fallback": true })).await;
+    assert!(is_done(&s.run("please answer").await));
+    assert_eq!(s.rows()[0].1.as_deref(), Some("p2"));
+    let usage_provider: String = s.state.db.lock().unwrap().conn().query_row("SELECT provider_id FROM token_usage", [], |r| r.get(0)).unwrap();
+    assert_eq!(usage_provider, "p2", "cost follows the provider that did the work, not the one that was asked");
+    let n: i64 = s.state.db.lock().unwrap().conn().query_row("SELECT COUNT(*) FROM token_usage", [], |r| r.get(0)).unwrap();
+    assert_eq!(n, 1, "the failed tries used nothing and recorded nothing");
+}
