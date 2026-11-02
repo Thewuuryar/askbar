@@ -3,7 +3,7 @@
 //! This module holds the in-memory registry: each running generation has a `Live` that buffers
 //! its deltas so a client can attach, drop and attach again without losing or repeating text.
 
-use crate::llm::{stream_chat, ChatMessage, Provider};
+use crate::llm::{stream_chat, ChatMessage, Provider, StreamOutcome};
 use crate::auth::DeviceAuth;
 use crate::chat::{sse_event, sse_event_with_id};
 use crate::db::{DbError, NewGeneration};
@@ -48,6 +48,8 @@ struct Inner {
 pub struct Live {
     inner: Mutex<Inner>,
     notify: Notify,
+    /// Fires the running request's cancel channel; taken on first use.
+    cancel: Mutex<Option<oneshot::Sender<()>>>,
 }
 
 impl Live {
@@ -81,6 +83,21 @@ impl Live {
             g.terminal = Some(terminal);
         }
         self.notify.notify_waiters();
+    }
+
+    pub fn set_cancel(&self, tx: oneshot::Sender<()>) {
+        *self.cancel.lock().unwrap_or_else(|e| e.into_inner()) = Some(tx);
+    }
+
+    /// Asks the generation to stop. True if it was still running and has been told.
+    pub fn cancel(&self) -> bool {
+        if self.is_finished() {
+            return false;
+        }
+        match self.cancel.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            Some(tx) => tx.send(()).is_ok(),
+            None => false,
+        }
     }
 
     pub fn delta_count(&self) -> u64 {
@@ -181,6 +198,13 @@ pub struct Start {
     pub history: Vec<ChatMessage>,
 }
 
+/// How a generation's request ended, which decides the stored status.
+enum Outcome {
+    Done,
+    Cancelled,
+    Error(String),
+}
+
 /// Owned by the task. However the task ends (finished, failed, panicked), the reply is saved
 /// once and subscribers are released.
 struct Finisher {
@@ -230,12 +254,16 @@ impl Finisher {
     }
 
     /// Saves the reply, then tells subscribers, so a client that has seen the end can read the message.
-    fn finish(&mut self, terminal: Terminal) {
-        match &terminal {
-            Terminal::Done => self.save("done", None),
-            Terminal::Error(m) => self.save("error", Some(m)),
+    fn finish(&mut self, outcome: Outcome) {
+        match &outcome {
+            Outcome::Done => self.save("done", None),
+            Outcome::Cancelled => self.save("cancelled", None),
+            Outcome::Error(m) => self.save("error", Some(m)),
         }
-        self.live.finish(terminal);
+        self.live.finish(match outcome {
+            Outcome::Done | Outcome::Cancelled => Terminal::Done,
+            Outcome::Error(m) => Terminal::Error(m),
+        });
     }
 }
 
@@ -272,6 +300,8 @@ pub fn start(state: &Arc<AppState>, s: Start) -> Result<(String, Arc<Live>), DbE
         deadline_at: None,
     })?;
     let live = Live::new();
+    let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
+    live.set_cancel(cancel_tx);
     state.generations.insert(&id, live.clone());
     let mut fin = Finisher {
         state: state.clone(),
@@ -286,15 +316,35 @@ pub fn start(state: &Arc<AppState>, s: Start) -> Result<(String, Arc<Live>), DbE
     };
     let state = state.clone();
     tokio::spawn(async move {
-        // Nothing fires this yet; cancelling arrives with the cancel endpoint.
-        let (_keep, cancel_rx) = oneshot::channel::<()>();
         let result = stream_chat(&state.http, &s.provider, &s.system, &s.history, cancel_rx, |delta| fin.push(delta)).await;
         fin.finish(match result {
-            Ok(_) => Terminal::Done,
-            Err(e) => Terminal::Error(e.to_string()),
+            Ok(StreamOutcome::Completed) => Outcome::Done,
+            Ok(StreamOutcome::Cancelled) => Outcome::Cancelled,
+            Err(e) => Outcome::Error(e.to_string()),
         });
     });
     Ok((id, live))
+}
+
+/// `POST /api/v1/generations/{id}/cancel`: stop a running reply, keeping the text so far.
+/// 204 also when it has already finished; 404 for anyone else's.
+pub async fn cancel(
+    State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<DeviceAuth>,
+    Path(id): Path<String>,
+) -> StatusCode {
+    {
+        let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+        match db.get_generation(&auth.user_id, &id) {
+            Ok(Some(_)) => {}
+            Ok(None) => return StatusCode::NOT_FOUND,
+            Err(_) => return StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    }
+    if let Some(live) = state.generations.get(&id) {
+        live.cancel();
+    }
+    StatusCode::NO_CONTENT
 }
 
 #[derive(serde::Deserialize)]

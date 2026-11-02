@@ -507,3 +507,53 @@ async fn another_users_generation_stream_is_404() {
     assert_eq!(t.get_with(&other, &format!("/api/v1/generations/{id}/stream")).await.status(), 404);
     assert_eq!(t.get_with(&other, "/api/v1/generations/nope/stream").await.status(), 404);
 }
+
+impl T {
+    async fn cancel_with(&self, token: &str, id: &str) -> reqwest::Response {
+        client().post(format!("http://{}/api/v1/generations/{id}/cancel", self.addr)).bearer_auth(token).send().await.unwrap()
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cancel_stops_the_upstream_keeps_the_partial_text_and_is_repeatable() {
+    let t = start().await;
+    let http = client_builder().pool_max_idle_per_host(0).build().unwrap();
+    let r = t.chat(&http, None, "p1", "please be slow").await;
+    let mut stream = r.bytes_stream();
+    let mut got = String::new();
+    while got.matches("event: delta").count() < 3 {
+        got.push_str(&String::from_utf8_lossy(&stream.next().await.unwrap().unwrap()));
+    }
+    let id = generation_id(&got);
+
+    assert_eq!(t.cancel_with(&t.token, &id).await.status(), 204);
+    wait_for_secs(5, "the upstream to see the stop", || {
+        t.mock.log.lock().unwrap().iter().any(|l| l.contains("client disconnected")).then_some(())
+    });
+    let partial = wait_for("the partial reply to be saved", || t.messages().into_iter().find(|(r, _)| r == "assistant"));
+    assert!(partial.1.starts_with("Streaming") && partial.1.len() < 1000, "got {} bytes", partial.1.len());
+    let rows = t.generations();
+    assert_eq!((rows[0].0.as_str(), rows[0].1.as_str()), ("cancelled", partial.1.as_str()));
+    assert!(rows[0].3.is_some());
+
+    // The attached stream ends cleanly, and a second cancel is still 204.
+    let mut rest = String::new();
+    while let Some(Ok(b)) = stream.next().await {
+        rest.push_str(&String::from_utf8_lossy(&b));
+    }
+    assert!(rest.contains("event: done"), "got {rest:?}");
+    assert_eq!(t.cancel_with(&t.token, &id).await.status(), 204);
+    assert_eq!(t.generations()[0].0, "cancelled", "a repeat changes nothing");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cancelling_a_finished_generation_is_204_and_another_users_is_404() {
+    let t = start().await;
+    let body = t.chat(&client(), None, "p1", "Hello there").await.text().await.unwrap();
+    let id = generation_id(&body);
+    assert_eq!(t.cancel_with(&t.token, &id).await.status(), 204);
+    assert_eq!(t.generations()[0].0, "done", "cancel after the end does not rewrite it");
+    let other = t.second_user_token();
+    assert_eq!(t.cancel_with(&other, &id).await.status(), 404);
+    assert_eq!(t.cancel_with(&t.token, "no-such-id").await.status(), 404);
+}
