@@ -329,3 +329,54 @@ async fn a_backed_up_audit_writer_refuses_new_generations_with_503_and_retry_aft
     assert!(send("and now").is_ok());
     let _ = std::fs::remove_dir_all(dir);
 }
+
+// ------------------------------------------------------------------ sealed content (Phase 5)
+
+/// Gives `state` an audit key, as the admin's snapshot would, and returns the matching secret key
+/// so a test can read what was sealed. Filled in by step 5.8.
+#[allow(dead_code)]
+fn install_audit_key(_state: &std::sync::Arc<askbar_server::AppState>) -> [u8; 32] {
+    unimplemented!("step 5.8")
+}
+
+#[tokio::test]
+#[ignore = "enabled in 5.9"]
+async fn sealed_content_is_stored_but_a_marker_never_appears_in_the_bytes_of_audit_db_or_its_wal() {
+    let (_mock, port) = start_mock();
+    let (state, dir) = audit_state(port);
+    let _secret = install_audit_key(&state);
+    let trace = run_chat(&state, "SECRET-PROMPT-MARKER-5512 tell me something").await;
+    state.audit.flush().await;
+    let payloads: i64 = read(&dir)
+        .query_row("SELECT COUNT(*) FROM payloads p JOIN spans s ON s.id = p.span_id WHERE s.trace_id = ?1", [&trace], |r| r.get(0))
+        .unwrap();
+    assert!(payloads >= 2, "the request and the reply are stored, sealed ({payloads})");
+    for name in ["audit.db", "audit.db-wal"] {
+        let Ok(bytes) = std::fs::read(dir.join(name)) else { continue };
+        let hay = String::from_utf8_lossy(&bytes);
+        assert!(!hay.contains("SECRET-PROMPT-MARKER-5512"), "{name} holds the prompt in the clear");
+        assert!(!hay.contains("Anything else?"), "{name} holds the reply in the clear");
+    }
+}
+
+#[tokio::test]
+#[ignore = "enabled in 5.8"]
+async fn a_generation_with_no_audit_key_is_refused_with_503_audit_key_missing() {
+    use axum::response::IntoResponse;
+    let (_mock, port) = start_mock();
+    let (state, _dir) = audit_state(port); // no key in the snapshot
+    let (user, device) = {
+        let db = state.db.lock().unwrap();
+        (db.seed_server().unwrap(), "d1".to_string())
+    };
+    let refused = askbar_server::generation::submit(
+        &state,
+        askbar_server::generation::Submit { user_id: user, device_id: device, conversation_id: None, provider_id: "p1".into(), prompt: "hi".into(), client_request_id: None },
+    )
+    .err()
+    .expect("no key, no generation");
+    let response = refused.into_response();
+    assert_eq!(response.status(), 503);
+    let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+    assert!(String::from_utf8_lossy(&body).contains("audit_key_missing"), "{body:?}");
+}
