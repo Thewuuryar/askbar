@@ -15,7 +15,6 @@ use axum::{
     http::{header, StatusCode},
     middleware::{self, Next},
     response::Response,
-    routing::{get, post, put},
     Json, Router,
 };
 use sha2::{Digest, Sha256};
@@ -293,22 +292,31 @@ async fn backup(State(state): State<Arc<AppState>>) -> Result<Response, ApiError
     crate::backup::response(state).await
 }
 
-/// The server routes behind the token check.
+/// All of the server API's routes, with the list of what was registered (see `routes`).
+pub fn routes() -> crate::routes::Routes {
+    use crate::routes::Routes;
+    // Every route is under `/api/server/v1` (askbar_proto::paths::SERVER_V1).
+    let v1 = |rest: &str| askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, rest);
+    Routes::new()
+        .get(&v1("/health"), || async { StatusCode::OK })
+        .put(&v1("/snapshot"), put_snapshot)
+        .put(&v1("/providers/{id}/key"), put_provider_key)
+        .get(&v1("/providers/health"), providers_health)
+        .post(&v1("/providers/{id}/test"), test_provider)
+        .get(&v1("/users"), list_users)
+        .get(&v1("/clients"), list_clients)
+        .get(&v1("/usage"), usage)
+        .get(&v1("/backup"), backup)
+        .get(&v1("/audit/traces"), audit_traces)
+        .get(&v1("/audit/traces/{id}"), audit_trace)
+        .get(&v1("/audit/stats"), audit_stats)
+        .get(&v1("/audit/payloads/{span_id}"), audit_payloads)
+}
+
+/// The server API's routes behind the token check.
 pub fn router(state: Arc<AppState>, hash_file: PathBuf) -> Router {
-    Router::new()
-        .route(&askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/health"), get(|| async { StatusCode::OK }))
-        .route(&askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/snapshot"), put(put_snapshot))
-        .route(&askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/providers/{id}/key"), put(put_provider_key))
-        .route(&askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/providers/health"), get(providers_health))
-        .route(&askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/providers/{id}/test"), post(test_provider))
-        .route(&askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/users"), get(list_users))
-        .route(&askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/clients"), get(list_clients))
-        .route(&askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/usage"), get(usage))
-        .route(&askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/backup"), get(backup))
-        .route(&askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/audit/traces"), get(audit_traces))
-        .route(&askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/audit/traces/{id}"), get(audit_trace))
-        .route(&askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/audit/stats"), get(audit_stats))
-        .route(&askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/audit/payloads/{span_id}"), get(audit_payloads))
+    let (router, _) = routes().into_parts();
+    router
         .fallback(crate::error::not_found)
         .method_not_allowed_fallback(crate::error::method_not_allowed)
         .layer(middleware::from_fn_with_state(Guard { hash_file }, require_token))

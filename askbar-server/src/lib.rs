@@ -14,6 +14,7 @@ pub mod llm;
 pub mod server_api;
 pub mod provider_test;
 pub mod router;
+pub mod routes;
 pub mod seal;
 pub mod secrets;
 pub mod snapshot;
@@ -29,7 +30,6 @@ use axum::{
     middleware,
     middleware::Next,
     response::Response,
-    routing::{get, post},
     Json, Router,
 };
 use askbar_proto::problem::ErrorCode;
@@ -84,36 +84,44 @@ impl AppState {
     }
 }
 
-pub fn client_router(state: Arc<AppState>) -> Router {
+/// All of the client API's routes, with the list of what was registered (see `routes`).
+pub fn client_routes(state: &Arc<AppState>) -> routes::Routes {
+    use routes::Routes;
     // Every route is under `/api/client/v1` (askbar_proto::paths::CLIENT_V1).
     let v1 = |rest: &str| askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, rest);
-    // Everything that needs a client token goes in `protected`.
-    let protected: Router<Arc<AppState>> = Router::new()
+    let token = || middleware::from_fn_with_state(state.clone(), auth::require_client_token);
+    let version = || middleware::from_fn_with_state(state.clone(), require_client_version);
+    // Everything that needs a client token.
+    let protected = Routes::new()
         // Lets a client check that its token is still accepted.
-        .route(&v1("/me"), get(|| async { StatusCode::NO_CONTENT }))
-        .route(&v1("/providers"), get(client_api::providers))
-        .route(&v1("/conversations"), get(client_api::conversations))
-        .route(&v1("/conversations/{id}"), get(client_api::conversation).delete(client_api::delete_conversation))
-        .route(&v1("/me/prefs"), get(client_api::get_prefs).put(client_api::put_prefs))
-        .route(&v1("/me/display-defaults"), get(client_api::display_defaults))
-        .route(&v1("/search"), get(client_api::search))
-        .route(&v1("/settings"), get(client_api::settings))
-        .route(&v1("/chat"), post(chat::chat))
-        .route(&v1("/generations"), get(client_api::generations))
-        .route(&v1("/generations/{id}/stream"), get(generation::stream))
-        .route(&v1("/generations/{id}/cancel"), post(generation::cancel))
-        .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_client_token));
+        .get(&v1("/me"), || async { StatusCode::NO_CONTENT })
+        .get(&v1("/providers"), client_api::providers)
+        .get(&v1("/conversations"), client_api::conversations)
+        .get(&v1("/conversations/{id}"), client_api::conversation)
+        .delete(&v1("/conversations/{id}"), client_api::delete_conversation)
+        .get(&v1("/me/prefs"), client_api::get_prefs)
+        .put(&v1("/me/prefs"), client_api::put_prefs)
+        .get(&v1("/me/display-defaults"), client_api::display_defaults)
+        .get(&v1("/search"), client_api::search)
+        .get(&v1("/settings"), client_api::settings)
+        .post(&v1("/chat"), chat::chat)
+        .get(&v1("/generations"), client_api::generations)
+        .get(&v1("/generations/{id}/stream"), generation::stream)
+        .post(&v1("/generations/{id}/cancel"), generation::cancel)
+        .guarded(|r| r.route_layer(token()));
     // Everything except health checks the client version first.
-    let gated = Router::new()
-        .route(&v1("/pairings"), post(pair))
-        .merge(protected)
-        .route_layer(middleware::from_fn_with_state(state.clone(), require_client_version));
-    Router::new()
-        .route(&v1("/health"), get(health))
+    let gated = Routes::new().post(&v1("/pairings"), pair).merge(protected).guarded(|r| r.route_layer(version()));
+    Routes::new()
+        .get(&v1("/health"), health)
         // The first generation of the API lived at /api/v1. It serves nothing now; every request there, of any
         // method and with or without a token, is told to update the app.
-        .route(&askbar_proto::paths::join(askbar_proto::paths::TOMBSTONE_V1, "/{*rest}"), axum::routing::any(update_the_app))
+        .any(&askbar_proto::paths::join(askbar_proto::paths::TOMBSTONE_V1, "/{*rest}"), update_the_app)
         .merge(gated)
+}
+
+pub fn client_router(state: Arc<AppState>) -> Router {
+    let (router, _) = client_routes(&state).into_parts();
+    router
         .fallback(error::not_found)
         .method_not_allowed_fallback(error::method_not_allowed)
         .with_state(state)
