@@ -19,6 +19,12 @@ pub const ADMIN_UPSTREAM: &str = "unix//run/admin/admin.sock";
 /// Caddy's own admin listener, as it must be written in every config it is given, or loading
 /// the config would take the listener away.
 pub const CADDY_ADMIN_LISTEN: &str = "unix//run/caddy/admin.sock|0660";
+/// First-run access. Until a host name and a Cloudflare token are saved Caddy has no site, and the admin has
+/// no TCP port, so Caddy also serves the admin over plain HTTP on this address and port, for the host's
+/// loopback only: `compose.yaml` publishes `127.0.0.1:8081` and gives Caddy this address on a network
+/// nothing else joins (`setup`). Only `/admin` is served there; every other path is a 404.
+pub const SETUP_BIND: &str = "172.31.0.2";
+pub const SETUP_PORT: u16 = 8081;
 pub const STAGING_CA: &str = "https://acme-staging-v02.api.letsencrypt.org/directory";
 
 /// Where this service reaches Caddy's admin socket, and where it writes the token file.
@@ -61,8 +67,19 @@ fn not_found_body() -> String {
     String::from_utf8(p.to_json_bytes()).expect("a problem is UTF-8 JSON")
 }
 
+/// The first-run site: the admin and nothing else, over plain HTTP, on the setup address only.
+fn setup_site() -> String {
+    use askbar_proto::paths;
+    let admin = paths::ADMIN;
+    format!(
+        "\nhttp://:{SETUP_PORT} {{\n\tbind {SETUP_BIND}\n\t@admin path {admin} {admin}/*\n\thandle @admin {{\n\t\treverse_proxy {ADMIN_UPSTREAM}\n\t}}\n\thandle {{\n\t\theader Content-Type {}\n\t\trespond `{}` 404\n\t}}\n}}\n",
+        askbar_proto::problem::CONTENT_TYPE,
+        not_found_body()
+    )
+}
+
 /// The full Caddyfile for the current settings. With HTTPS off it is just Caddy's own admin
-/// listener, which makes it serve nothing. With it on there is one host name and three kinds of path:
+/// listener and the first-run site. With it on there is one host name and three kinds of path:
 ///
 /// - `/admin` and below go to the admin's unix socket (behind the allowlist, when it is on);
 /// - the client API goes to the server's client listener; `/api/server` is excluded from that match
@@ -94,6 +111,7 @@ pub fn caddyfile(n: &Network, allowed: &[String]) -> String {
     } else {
         out.push_str("}\n");
     }
+    out.push_str(&setup_site());
     out
 }
 
@@ -213,10 +231,33 @@ mod tests {
     }
 
     #[test]
-    fn https_off_serves_nothing_but_keeps_caddys_admin_socket() {
+    fn https_off_serves_only_caddys_admin_socket_and_the_first_run_site() {
         let off = caddyfile(&net(false, false, true), &["10.0.0.1/32".into()]);
-        assert_eq!(off, "{\n\tadmin unix//run/caddy/admin.sock|0660\n}\n");
+        assert_eq!(off, format!("{{\n\tadmin unix//run/caddy/admin.sock|0660\n}}\n{SETUP}"));
         assert!(!off.contains("askbar.orraitu.com"));
+    }
+
+    #[test]
+    fn the_first_run_site_serves_the_admin_only_on_the_setup_address_and_has_no_allowlist_or_client_api() {
+        for on in [false, true] {
+            let got = caddyfile(&net(on, false, true), &["10.0.0.1/32".into()]);
+            let (_, setup) = got.split_once("http://:8081 {").unwrap();
+            assert!(setup.contains("bind 172.31.0.2"), "{setup}");
+            assert!(setup.contains("reverse_proxy unix//run/admin/admin.sock"));
+            assert!(!setup.contains("server:8080") && !setup.contains("remote_ip"), "{setup}");
+        }
+    }
+
+    #[test]
+    fn compose_and_the_bootstrap_file_agree_with_the_first_run_site() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let compose = std::fs::read_to_string(root.join("compose.yaml")).unwrap();
+        assert!(compose.contains(&format!("{SETUP_BIND}")), "compose.yaml gives Caddy {SETUP_BIND} on the setup network");
+        assert!(compose.contains(&format!("\"127.0.0.1:{SETUP_PORT}:{SETUP_PORT}\"")), "compose.yaml publishes the port on loopback only");
+        // The file Caddy starts with (before the admin has pushed anything) is the generator's output for HTTPS off.
+        let boot = std::fs::read_to_string(root.join("caddy/bootstrap.Caddyfile")).unwrap();
+        let body: String = boot.lines().filter(|l| !l.starts_with('#')).collect::<Vec<_>>().join("\n");
+        assert_eq!(body.trim(), caddyfile(&net(false, false, false), &[]).trim());
     }
 
     #[test]
@@ -225,6 +266,21 @@ mod tests {
         assert!(got.contains("{file./caddy-secrets/cf_token}"));
         assert!(!got.contains("cf_ABC") && !got.to_lowercase().contains("bearer"));
     }
+
+    /// The first-run site, as it must read in every config.
+    const SETUP: &str = r#"
+http://:8081 {
+	bind 172.31.0.2
+	@admin path /admin /admin/*
+	handle @admin {
+		reverse_proxy unix//run/admin/admin.sock
+	}
+	handle {
+		header Content-Type application/problem+json
+		respond `{"type":"urn:askbar:problem:not_found","title":"Not found","status":404,"detail":"There is nothing at this address.","error":"not_found"}` 404
+	}
+}
+"#;
 
     const NOT_FOUND: &str = r#"{"type":"urn:askbar:problem:not_found","title":"Not found","status":404,"detail":"There is nothing at this address.","error":"not_found"}"#;
 
@@ -256,7 +312,7 @@ askbar.orraitu.com {{
 \t\trespond `{NOT_FOUND}` 404
 \t}}
 }}
-"
+{SETUP}"
         );
         assert_eq!(got, want);
         assert!(!got.contains("admin.askbar.orraitu.com"), "there is no second host name");
@@ -269,7 +325,9 @@ askbar.orraitu.com {{
         let (matcher, _) = client.split_once("handle @client").unwrap();
         assert!(matcher.contains("not path /api/server /api/server/*"), "{matcher}");
         let proxied: Vec<&str> = got.lines().filter(|l| l.contains("reverse_proxy")).collect();
-        assert_eq!(proxied.len(), 2, "only the admin socket and the client API are proxied: {proxied:?}");
+        // The admin socket (host block and first-run site) and the client API; nothing else.
+        assert_eq!(proxied.len(), 3, "{proxied:?}");
+        assert_eq!(proxied.iter().filter(|l| l.contains("server:8080")).count(), 1, "{proxied:?}");
         assert!(!got.contains("8082") && !got.contains("172.30"), "the server API's address is not in the config");
     }
 

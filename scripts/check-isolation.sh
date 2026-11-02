@@ -284,5 +284,20 @@ for what in "provider key" "pair code" "password hash"; do
   printf '%s\n' "$out" | grep -q "^$what absent" && pass "the backup holds no $what" || fail "the backup holds the $what ($out)"
 done
 
+echo "== 6. The first-run page"
+# Caddy serves the admin over plain HTTP on 127.0.0.1:8081 of the host, on a network only Caddy joins.
+SETUP_CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:8081/admin/ 2>/dev/null || true)
+[ "$SETUP_CODE" = 200 ] && pass "http://127.0.0.1:8081/admin/ opens the admin" || fail "the first-run page answered '$SETUP_CODE'"
+for path in / /api/client/v1/health /api/server/v1/health /health; do
+  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1:8081$path" 2>/dev/null || true)
+  [ "$code" = 404 ] && pass "the first-run page has nothing at $path (404)" || fail "the first-run page answers $path with '$code'"
+done
+[ "$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$CADDY" | tr ' ' '\n' | grep -c "^${PROJECT}_setup$")" = 1 ] && pass "Caddy is on the setup network" || fail "Caddy is not on the setup network"
+for c in "$SERVER" "$ADMIN"; do
+  docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$c" | grep -q "${PROJECT}_setup" && fail "$c is on the setup network" || pass "$c is not on the setup network"
+done
+# Nothing on the edge network can open the first-run page.
+[ "$(http_status "$EDGE" "caddy:8081")" = 0 ] && pass "a container on edge cannot reach the first-run page" || fail "the first-run page answers on the edge network"
+
 echo
 if [ "$FAILS" -eq 0 ]; then echo "All isolation checks passed."; else echo "$FAILS isolation check(s) FAILED."; exit 1; fi

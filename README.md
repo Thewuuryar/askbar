@@ -111,15 +111,15 @@ That starts three containers on two networks:
 
 ### First run
 
-> **Open item:** the admin has no TCP port, and Caddy only serves `<hostname>/admin` once a hostname has been set in the admin. How a first-time visitor reaches the admin before HTTPS exists is not settled yet, and this README does not invent a way. `scripts/smoke.sh` and `tests/admin.test.js` drive the admin over its unix socket.
+Before you have a host name or a certificate, open the admin at **`http://127.0.0.1:8081/admin/`** on the machine that runs Docker (from another machine: `ssh -L 8081:127.0.0.1:8081 <host>` and open the same address locally). Caddy publishes that port on the host's loopback only and serves nothing there except the admin, over plain HTTP; it sits on a network no other container joins. Once HTTPS is set up (step 5) use `https://<hostname>/admin` instead.
 
-Once you can reach the admin site:
+1. Open the admin (above).
 
-1. Choose the admin password (the first visit wins).
-2. **Audit passphrase.** Setup asks for one: at least 20 characters. See *The Audit tab* below; write it down.
-3. **Providers** > add one (Anthropic, OpenAI-compatible, or the CLIProxyAPI preset) and press **Test**.
-4. **Network** > hostname, Cloudflare token and, if you want it, the allowlist (see below).
-5. **Clients** > generate a pairing string.
+2. Choose the admin password (the first visit wins).
+3. **Audit passphrase.** Setup asks for one: at least 20 characters. See *The Audit tab* below; write it down.
+4. **Providers** > add one (Anthropic, OpenAI-compatible, or the CLIProxyAPI preset) and press **Test**.
+5. **Network** > hostname, Cloudflare token and, if you want it, the allowlist (see below).
+6. **Clients** > generate a pairing string.
 
 No secret ever goes in `.env`, so nothing sensitive can be committed by accident.
 
