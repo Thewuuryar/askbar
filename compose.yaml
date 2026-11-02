@@ -1,7 +1,6 @@
 # Askbar. Copy .env.example to .env and edit it first.
-#   docker compose up -d                    server, admin and the HTTPS front end (Caddy)
+#   docker compose up -d                    server, admin, the HTTPS front end (Caddy) and CLIProxyAPI
 #   docker compose --profile dev up -d      plus the mock LLM (tests/mock_llm.py)
-#   docker compose --profile cpa up -d      plus CLIProxyAPI (subscription logins as a provider)
 #
 # Three services, two networks:
 #   edge  Caddy and the server (the device API on 8080). Caddy is the only service with published ports.
@@ -103,10 +102,10 @@ services:
       - caddy-secrets:/caddy-secrets:ro
 
   # --- CLIProxyAPI: use a ChatGPT/Claude/Gemini subscription as an OpenAI-compatible provider. ---
-  # `docker compose --profile cpa up -d`, then see cpa/README or the main README for the one-time login.
+  # Starts with the stack (`docker compose up -d`); see cpa/README.md for the one-time login. Until a login is
+  # done it idles and no provider uses it.
   # Its API port is NOT published; only containers on this compose network (the server) can reach it.
   cpa-init:
-    profiles: ["cpa"]
     image: eceasy/cli-proxy-api:v8.0.51@sha256:15d13889e1a39a688be306dfbf2f6cf9003e99cd913b5070fa463f8ab2aa0031
     # Strips CRs first, so the script still runs if a Windows checkout turned its line endings into CRLF.
     entrypoint: ["/bin/sh", "-c", "tr -d '\\r' < /init.sh | sh -s -- \"$$@\"", "init"]
@@ -115,7 +114,6 @@ services:
       - cpa-config:/cpa-config
 
   cpa:
-    profiles: ["cpa"]
     image: eceasy/cli-proxy-api:v8.0.51@sha256:15d13889e1a39a688be306dfbf2f6cf9003e99cd913b5070fa463f8ab2aa0031
     restart: unless-stopped
     depends_on:
@@ -129,7 +127,7 @@ services:
       - cpa-auth:/root/.cli-proxy-api
 
   # One-time provider login (run on demand, never started by `up`):
-  #   docker compose --profile cpa run --rm --service-ports cpa-login ./CLIProxyAPI -config /cpa-config/config.yaml -claude-login -no-browser
+  #   docker compose --profile cpa-login run --rm --service-ports cpa-login ./CLIProxyAPI -config /cpa-config/config.yaml -claude-login -no-browser
   # `--service-ports` publishes the OAuth callback ports on 127.0.0.1 for the duration of that command only.
   # Other logins: -codex-login (port 1455), -login/-antigravity-login, ... see `./CLIProxyAPI -h`.
   cpa-login:

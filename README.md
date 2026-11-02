@@ -146,9 +146,9 @@ The **content** of messages (prompts, replies, provider errors) is *sealed*: the
 
 The trace lives in `audit.db`, in the `audit-data` volume, which only the server mounts; the admin reads it through the management API.
 
-### CLIProxyAPI (profile `cpa`)
+### CLIProxyAPI
 
-Lets a Claude or ChatGPT subscription act as an OpenAI-compatible provider. See [cpa/README.md](cpa/README.md) for the one-time login. It joins the `edge` network only and its API is never published.
+Lets a Claude or ChatGPT subscription act as an OpenAI-compatible provider. It starts with the stack and idles until you log in. See [cpa/README.md](cpa/README.md) for the one-time login. It joins the `edge` network only and its API is never published.
 
 ### Configuration reference
 
@@ -163,7 +163,7 @@ Lets a Claude or ChatGPT subscription act as an OpenAI-compatible provider. See 
 
 **Set in the admin site** instead of in files: admin password, hostname, Cloudflare token, allowlist, the Let's Encrypt staging switch, the system prompt, display defaults and per-user defaults.
 
-**Compose profiles:** the three services are always on. `dev` adds a mock LLM (`tests/mock_llm.py`), `cpa` adds CLIProxyAPI.
+**Compose profiles:** the three services and CLIProxyAPI are always on. `dev` adds a mock LLM (`tests/mock_llm.py`); `cpa-login` is the one-time login helper, started on demand.
 
 **Server environment** (already set in `compose.yaml`; useful without Docker): `ASKBAR_API_ADDR`, `ASKBAR_MGMT_ADDR` (one specific address, never `0.0.0.0`), `ASKBAR_MGMT_TOKEN_HASH_FILE`, `ASKBAR_DATA_DIR`, `ASKBAR_SECRETS_DIR` or `ASKBAR_MASTER_KEY_FILE`. **Admin:** `ASKBAR_ADMIN_SOCKET`, `ASKBAR_ADMIN_DATA_DIR`, `ASKBAR_ADMIN_SECRETS_DIR`, `ASKBAR_MGMT_DIR`, `ASKBAR_SERVER_MGMT_URL`, `ASKBAR_CADDY_SOCKET`, `ASKBAR_CADDY_SECRETS_DIR`, `ASKBAR_PUBLIC_URL`.
 
@@ -188,7 +188,7 @@ askbar-admin/    the admin service: admin site (ui/), admin.db, snapshot push, C
 src-tauri/       the desktop client: window, hotkey, tray, pairing
 ui/              the popup: index.html, style.css, main.js, markdown.js (no build step)
 caddy/, cpa/     Caddy bootstrap config; CLIProxyAPI setup script and login notes
-compose.yaml     server, admin, caddy, plus the dev and cpa profiles
+compose.yaml     server, admin, caddy, CLIProxyAPI, plus the dev and cpa-login profiles
 Dockerfile       two targets: `admin` and `server`;  Dockerfile.caddy: Caddy with the Cloudflare DNS module
 scripts/         smoke.sh (end-to-end), check-isolation.sh (container isolation checks)
 docs/            wire-contract.md, refactor-log.md

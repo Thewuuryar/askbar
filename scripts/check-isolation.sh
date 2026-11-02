@@ -183,6 +183,17 @@ call('POST', '/admin/api/audit/rotate-key', {'current': '$LOGPASS', 'new': '$LOG
 docker logs "$ADMIN" 2>&1 | grep -q "$LOGPASS" && fail "the admin's logs contain a passphrase" || pass "the admin's logs contain no passphrase after open and rotate attempts"
 docker logs "$SERVER" 2>&1 | grep -q "$LOGPASS" && fail "the server's logs contain a passphrase" || pass "the server's logs contain no passphrase"
 
+echo "== 3d. CLIProxyAPI"
+# It starts with the stack, on the edge network only, and publishes nothing.
+CPA=$(docker compose -p "$PROJECT" ps -q cpa 2>/dev/null | head -1)
+if [ -z "$CPA" ]; then
+  echo "SKIP  cpa is not running"
+else
+  [ "$(docker inspect -f '{{len .NetworkSettings.Networks}}' "$CPA")" = 1 ] && docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}' "$CPA" | grep -q "^${EDGE}$" \
+    && pass "cpa is on the edge network only" || fail "cpa is not on the edge network only"
+  [ -z "$(docker inspect -f '{{range $p, $b := .NetworkSettings.Ports}}{{if $b}}{{$p}} {{end}}{{end}}' "$CPA")" ] && pass "cpa publishes no port" || fail "cpa publishes a port"
+fi
+
 echo "== 4. The allowlist"
 caddy_config() { # prints the admin site's route from Caddy's loaded config
   py -u 10001:10001 -v "${PROJECT}_caddy-run:/r" -- "

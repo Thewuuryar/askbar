@@ -9,7 +9,7 @@ KEYFILE=/cpa-config/askbar-api-key
 rand() { tr -dc 'A-Za-z0-9' < /dev/urandom | head -c "$1"; }
 
 if [ "${1:-}" = "show" ]; then
-  [ -f "$KEYFILE" ] || { echo "No CLIProxyAPI config yet. Run: docker compose --profile cpa up -d" >&2; exit 1; }
+  [ -f "$KEYFILE" ] || { echo "No CLIProxyAPI config yet. Run: docker compose up -d" >&2; exit 1; }
   cat "$KEYFILE"; echo
   exit 0
 fi
