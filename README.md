@@ -185,7 +185,7 @@ If you restore a raw copy of `data/` that still holds encrypted provider keys on
 askbar-proto/    request/response and snapshot types shared by the server, admin and client
 askbar-server/   the server: client API, server API, database, chat/LLM streaming, secrets
 askbar-admin/    the admin service: admin site (ui/), admin.db, snapshot push, Caddy configuration (unix only)
-src-tauri/       the desktop client: window, hotkey, tray, pairing
+src-tauri/       the desktop client (Cargo package askbar-client, program askbar): window, hotkey, tray, pairing
 ui/              the popup: index.html, style.css, main.js, markdown.js (no build step)
 caddy/, cpa/     Caddy bootstrap config; CLIProxyAPI setup script and login notes
 compose.yaml     server, admin, caddy, CLIProxyAPI, plus the dev and cpa-login profiles
