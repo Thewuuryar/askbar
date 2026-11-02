@@ -75,8 +75,8 @@ async fn read_reply(resp: reqwest::Response, reader: &mut ReplyReader, cancel: &
                     emit(StreamEvent::Done);
                     return Read::Finished;
                 }
-                Step::Fail(message) => {
-                    emit(server_error(message));
+                Step::Fail { message, code } => {
+                    emit(server_error(message, code));
                     return Read::Finished;
                 }
             }
@@ -84,13 +84,19 @@ async fn read_reply(resp: reqwest::Response, reader: &mut ReplyReader, cancel: &
     }
 }
 
-/// The server's last word on a failed reply. The wire has no separate code for a reply that ran
-/// out of time, only the words "Timed out after N unit"; those become kind `timed_out`, and the
-/// window keeps the text that arrived and offers to try again.
-fn server_error(message: String) -> StreamEvent {
-    match message.strip_prefix("Timed out after ") {
-        Some(took) if !took.trim().is_empty() => StreamEvent::error_kind("timed_out", format!("Stopped after {took}")),
-        _ => StreamEvent::error(message),
+/// The server's last word on a failed reply. Its `code` (timed_out, interrupted, kill_switch,
+/// provider_error, internal) becomes the event's kind; the words are only for display. A reply that
+/// ran out of time reads "Stopped after N ..." and the window keeps the text that arrived and offers
+/// to try again.
+fn server_error(message: String, code: Option<String>) -> StreamEvent {
+    match code.as_deref() {
+        Some("timed_out") => {
+            let took = message.strip_prefix("Timed out after ").filter(|t| !t.trim().is_empty());
+            let words = took.map(|t| format!("Stopped after {t}")).unwrap_or(message);
+            StreamEvent::error_kind("timed_out", words)
+        }
+        Some(other) => StreamEvent::error_kind(other, message),
+        None => StreamEvent::error(message),
     }
 }
 
@@ -100,8 +106,8 @@ enum Step {
     Emit(StreamEvent),
     /// The reply is complete.
     Done,
-    /// The server ended the reply with an error.
-    Fail(String),
+    /// The server ended the reply with an error; `code` says why, when the server says.
+    Fail { message: String, code: Option<String> },
 }
 
 /// Reads a reply stream and remembers where it got to, so a dropped stream can be resumed
@@ -132,7 +138,7 @@ impl ReplyReader {
                     steps.push(Step::Emit(StreamEvent::Delta { text }));
                 }
                 Ok(ChatEvent::Done) => steps.push(Step::Done),
-                Ok(ChatEvent::Error { message, .. }) => steps.push(Step::Fail(message)),
+                Ok(ChatEvent::Error { message, code }) => steps.push(Step::Fail { message, code }),
                 Err(_) => {} // unknown event from a newer server: ignore
             }
         }
@@ -217,8 +223,11 @@ impl Inner {
             .send()
             .await
             .map_err(|e| format!("Could not reach the server at {}: {e}", self.base))?;
-        check_status(resp.status())?;
-        Ok(resp)
+        if resp.status().is_success() {
+            return Ok(resp);
+        }
+        let status = resp.status();
+        Err(explain(status, &resp.bytes().await.unwrap_or_default()))
     }
 
     /// Sends the chat request. A refusal the server explains (see `refusal_for`) comes back with
@@ -236,11 +245,9 @@ impl Inner {
                 return Ok(resp);
             }
             let retry_after = resp.headers().get("retry-after").and_then(|v| v.to_str().ok()).and_then(|v| v.trim().parse::<u64>().ok());
-            let body: serde_json::Value = resp.json().await.unwrap_or_default();
-            let code = body["error"].as_str().unwrap_or("");
-            let period = body["period"].as_str().unwrap_or("");
-            let Some(refusal) = refusal_for(status, retry_after, code, period) else {
-                return Err(Refusal::plain(check_status(status).unwrap_err()));
+            let body = resp.bytes().await.unwrap_or_default();
+            let Some(refusal) = refusal_for(&problem_of(&body), retry_after) else {
+                return Err(Refusal::plain(explain(status, &body)));
             };
             match (refusal.kind, again) {
                 (Some("busy"), Some(next)) if !retried => {
@@ -300,7 +307,7 @@ impl Inner {
                         return fail("The reply is no longer on the server.".into());
                     }
                     Ok(r) if r.status() == StatusCode::UNAUTHORIZED => {
-                        return fail(check_status(r.status()).unwrap_err());
+                        return fail(explain(r.status(), &[]));
                     }
                     Ok(r) if r.status().is_success() => break r,
                     _ => {} // unreachable or a server hiccup: try again after the next wait
@@ -357,24 +364,39 @@ impl Refusal {
     }
 }
 
-/// The server's refusals of a send, in words for a person. `None` for anything else.
-fn refusal_for(status: StatusCode, retry_after: Option<u64>, code: &str, period: &str) -> Option<Refusal> {
-    let (kind, message) = match (status.as_u16(), code) {
-        (409, _) => ("queue_full", "Five messages are already waiting in this conversation. Wait for one to finish, or remove a waiting message.".to_string()),
-        (429, "budget_exceeded") => (
+/// The parts of an `application/problem+json` body the app uses.
+#[derive(Default)]
+struct Seen {
+    /// The stable code (`queue_full`, `unauthorized`, ...). Programs branch on this, never on the words.
+    code: String,
+    detail: String,
+    period: String,
+}
+
+fn problem_of(body: &[u8]) -> Seen {
+    let v: serde_json::Value = serde_json::from_slice(body).unwrap_or_default();
+    let text = |k: &str| v[k].as_str().unwrap_or("").to_string();
+    Seen { code: text("error"), detail: text("detail"), period: text("period") }
+}
+
+/// The server's refusals of a send, in words for a person, by code. `None` for anything else.
+fn refusal_for(p: &Seen, retry_after: Option<u64>) -> Option<Refusal> {
+    let (kind, message) = match p.code.as_str() {
+        "queue_full" => ("queue_full", "Five messages are already waiting in this conversation. Wait for one to finish, or remove a waiting message.".to_string()),
+        "budget_exceeded" => (
             "budget_exceeded",
-            if period == "monthly" {
+            if p.period == "monthly" {
                 "The usage limit for this month has been reached. Try again next month, or ask the administrator to raise it.".to_string()
             } else {
                 "The usage limit for today has been reached. Try again tomorrow, or ask the administrator to raise it.".to_string()
             },
         ),
-        (503, "kill_switch") => ("kill_switch", "Replies have been switched off by the administrator for now. Your message is kept; send it again when they are back.".to_string()),
-        (503, "audit_key_missing") => (
+        "kill_switch" => ("kill_switch", "Replies have been switched off by the administrator for now. Your message is kept; send it again when they are back.".to_string()),
+        "audit_key_missing" => (
             "audit_key_missing",
             "The server is not ready to answer yet: the administrator has to finish setting up the audit key in the admin site. Your message is kept.".to_string(),
         ),
-        (503, _) if retry_after.is_some() => (
+        "audit_backlog" => (
             "busy",
             format!("The server is busy recording and asked for a wait of {} seconds. Your message is kept; send it again in a moment.", retry_after.unwrap_or(0)),
         ),
@@ -383,13 +405,18 @@ fn refusal_for(status: StatusCode, retry_after: Option<u64>, code: &str, period:
     Some(Refusal { kind: Some(kind), message })
 }
 
-fn check_status(status: StatusCode) -> Result<(), String> {
-    match status {
-        s if s.is_success() => Ok(()),
-        StatusCode::UNAUTHORIZED => Err("The server rejected this app's token.".into()),
-        StatusCode::UPGRADE_REQUIRED => Err("This version of Askbar is too old for the server. Please update.".into()),
-        StatusCode::SERVICE_UNAVAILABLE => Err(SETUP_PENDING.into()),
-        s => Err(format!("The server answered {s}.")),
+/// A failed response, in words for a person: by the problem's `error` code, then (for a proxy or an
+/// older server that sends no body) by status.
+fn explain(status: StatusCode, body: &[u8]) -> String {
+    let p = problem_of(body);
+    let rejected = || "The server rejected this app's token.".to_string();
+    let too_old = || "This version of Askbar is too old for the server. Please update.".to_string();
+    match (p.code.as_str(), status) {
+        ("unauthorized", _) | (_, StatusCode::UNAUTHORIZED) => rejected(),
+        ("client_too_old", _) | (_, StatusCode::UPGRADE_REQUIRED) => too_old(),
+        ("setup_required", _) | (_, StatusCode::SERVICE_UNAVAILABLE) if p.detail.is_empty() || p.code == "setup_required" => SETUP_PENDING.into(),
+        _ if !p.detail.is_empty() => p.detail,
+        _ => format!("The server answered {status}."),
     }
 }
 
@@ -783,7 +810,7 @@ mod tests {
             [Step::Emit(StreamEvent::Started { conversation_id: "c1".into(), generation_id: None, queued: false })]
         );
         assert_eq!((r.last_id, r.generation_id.as_deref()), (0, None));
-        assert_eq!(r.feed(sse("error", None, r#"{"event":"error","message":"boom"}"#).as_bytes()), [Step::Fail("boom".into())]);
+        assert_eq!(r.feed(sse("error", None, r#"{"event":"error","message":"boom"}"#).as_bytes()), [Step::Fail { message: "boom".into(), code: None }]);
     }
 
     /// What the fake server saw.
@@ -904,7 +931,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn resuming_stops_on_an_error_event_a_404_or_a_401() {
-        let err = sse("error", None, r#"{"event":"error","message":"Timed out after 5 minutes"}"#);
+        let err = sse("error", None, r#"{"event":"error","message":"Timed out after 5 minutes","code":"timed_out"}"#);
         let events = ask_fake(&fake_server(vec![(200, err)]).await).await;
         assert!(matches!(events.last(), Some(StreamEvent::Error { message, .. }) if message == "Stopped after 5 minutes"), "{events:?}");
 
@@ -1124,7 +1151,7 @@ mod tests {
 
     /// The refusals the server can answer a send with, and the kind each should be told as.
     const REFUSALS: [(&str, u16, &str, &str); 5] = [
-        ("queue_full", 409, "", ""),
+        ("queue_full", 409, "", r#"{"error":"queue_full"}"#), // the 409 now carries its code; a bare 409 is no longer read as a full queue
         ("budget_exceeded", 429, "", r#"{"error":"budget_exceeded","period":"daily"}"#),
         ("kill_switch", 503, "", r#"{"error":"kill_switch"}"#),
         ("audit_key_missing", 503, "", r#"{"error":"audit_key_missing"}"#),
@@ -1173,7 +1200,7 @@ mod tests {
     async fn a_timed_out_reply_keeps_its_text_and_says_how_long_it_ran() {
         // The first stream (the fake's usual one) delivers "a", "b", "c" and drops; the resume brings
         // the server's last word: it ran out of time.
-        let stream = sse("error", None, r#"{"event":"error","message":"Timed out after 5 minutes"}"#);
+        let stream = sse("error", None, r#"{"event":"error","message":"Timed out after 5 minutes","code":"timed_out"}"#);
         let fake = fake_server(vec![(200, stream)]).await;
         let remote = remote_for(&fake.url, Some("t"), PathBuf::new()).with_backoff_unit(Duration::from_millis(2));
         let events = Mutex::new(Vec::new());
@@ -1286,7 +1313,7 @@ mod tests {
         let resumed = http.get(format!("{url2}/api/v1/generations/{gid}/stream")).bearer_auth(&token).header(askbar_proto::CLIENT_VERSION_HEADER, VERSION).header("accept", "text/event-stream").query(&[("after", reader.last_id)]).send().await.unwrap();
         assert!(resumed.status().is_success());
         let (tail, end) = read_some(resumed, &mut reader, |_| false).await;
-        let Some(Step::Fail(why)) = end else { panic!("an interrupted reply ends with an error event, got {end:?}") };
+        let Some(Step::Fail { message: why, .. }) = end else { panic!("an interrupted reply ends with an error event, got {end:?}") };
         assert!(!why.is_empty());
         let (status, stored_text): (String, String) = state2.db.lock().unwrap().conn().query_row("SELECT status, text FROM generations WHERE id = ?1", [&gid], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
         assert_eq!(status, "interrupted");
@@ -1297,11 +1324,28 @@ mod tests {
     }
 
     #[test]
-    fn only_the_servers_timeout_words_become_a_timed_out_error() {
-        assert_eq!(server_error("Timed out after 90 seconds".into()), StreamEvent::error_kind("timed_out", "Stopped after 90 seconds".into()));
-        assert_eq!(server_error("Timed out after 1 minute".into()), StreamEvent::error_kind("timed_out", "Stopped after 1 minute".into()));
-        assert_eq!(server_error("Timed out after ".into()), StreamEvent::error("Timed out after ".into()));
-        assert_eq!(server_error("upstream timed out".into()), StreamEvent::error("upstream timed out".into()));
+    fn the_servers_code_decides_the_kind_and_the_words_are_only_for_display() {
+        let some = |c: &str| Some(c.to_string());
+        assert_eq!(server_error("Timed out after 90 seconds".into(), some("timed_out")), StreamEvent::error_kind("timed_out", "Stopped after 90 seconds".into()));
+        assert_eq!(server_error("Timed out after 1 minute".into(), some("timed_out")), StreamEvent::error_kind("timed_out", "Stopped after 1 minute".into()));
+        // The code decides, not the sentence: other words, same kind.
+        assert_eq!(server_error("The reply ran out of time.".into(), some("timed_out")), StreamEvent::error_kind("timed_out", "The reply ran out of time.".into()));
+        // The sentence alone proves nothing.
+        assert_eq!(server_error("Timed out after 5 minutes".into(), None), StreamEvent::error("Timed out after 5 minutes".into()));
+        assert_eq!(server_error("The server restarted.".into(), some("interrupted")), StreamEvent::error_kind("interrupted", "The server restarted.".into()));
+        assert_eq!(server_error("boom".into(), some("provider_error")), StreamEvent::error_kind("provider_error", "boom".into()));
+    }
+
+    #[test]
+    fn a_failed_response_is_explained_by_its_code_then_its_status_then_its_sentence() {
+        let body = |code: &str, detail: &str| format!(r#"{{"error":"{code}","detail":"{detail}"}}"#).into_bytes();
+        let st = |n: u16| StatusCode::from_u16(n).unwrap();
+        assert!(explain(st(401), &body("unauthorized", "x")).contains("rejected"));
+        assert!(explain(st(401), b"").contains("rejected"), "a proxy that sends no body still gets the status right");
+        assert!(explain(st(426), &body("client_too_old", "x")).contains("too old"));
+        assert!(explain(st(503), &body("setup_required", "x")).contains("setup is not finished"));
+        assert_eq!(explain(st(404), &body("not_found", "That conversation was not found.")), "That conversation was not found.");
+        assert_eq!(explain(st(500), b"<html>"), "The server answered 500 Internal Server Error.");
     }
 
     #[test]
