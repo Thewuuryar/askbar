@@ -811,6 +811,11 @@ async fn attempts(
 
             let e = match result {
                 Ok(r) => {
+                    // It worked, so whatever was wrong with its credentials no longer is.
+                    if r.outcome == StreamOutcome::Completed {
+                        let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+                        let _ = db.clear_provider_health(&cand.id);
+                    }
                     return match r.outcome {
                         StreamOutcome::Completed => Ended::Done(r),
                         StreamOutcome::Cancelled => Ended::Cancelled(Some(r)),
@@ -824,8 +829,12 @@ async fn attempts(
                 return Ended::Failed(e);
             }
             match class {
-                // Bad credentials: another try here cannot help; the next provider may.
+                // Bad credentials: another try here cannot help; the next provider may. The
+                // administrator is told through the provider's health flag.
                 Failure::AuthFailed => {
+                    let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+                    let _ = db.flag_provider_auth_failed(&cand.id, &error_code(&e.error));
+                    drop(db);
                     last_error = Some(e);
                     break;
                 }

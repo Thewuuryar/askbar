@@ -132,7 +132,19 @@ async fn put_provider_key(State(state): State<Arc<AppState>>, Path(id): Path<Str
             rusqlite::params![id, enc],
         )
         .map_err(internal)?;
+    // A new key deserves a fresh start: whatever flagged the old one is cleared.
+    let _ = db.clear_provider_health(&id);
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// `GET /mgmt/v1/providers/health`: providers the router has found unusable, so the admin can say
+/// so. Only providers with a problem are listed; the reason is a code, never the provider's text.
+async fn providers_health(State(state): State<Arc<AppState>>) -> Result<Json<serde_json::Value>, Failure> {
+    let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+    let rows = db.provider_health().map_err(|_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not read provider health."))?;
+    Ok(Json(serde_json::json!({
+        "providers": rows.into_iter().map(|(id, status, since, code)| serde_json::json!({ "provider_id": id, "status": status, "since": since, "error_code": code })).collect::<Vec<_>>()
+    })))
 }
 
 /// Send one short message through the provider and report what happened.
@@ -249,6 +261,7 @@ pub fn router(state: Arc<AppState>, hash_file: PathBuf) -> Router {
         .route("/mgmt/v1/health", get(|| async { StatusCode::OK }))
         .route("/mgmt/v1/snapshot", put(put_snapshot))
         .route("/mgmt/v1/providers/{id}/key", put(put_provider_key))
+        .route("/mgmt/v1/providers/health", get(providers_health))
         .route("/mgmt/v1/providers/{id}/test", post(test_provider))
         .route("/mgmt/v1/users", get(list_users))
         .route("/mgmt/v1/devices", get(list_devices))

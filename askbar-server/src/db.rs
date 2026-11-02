@@ -172,6 +172,15 @@ const MIGRATIONS: &[&str] = &[
          WHERE client_request_id IS NOT NULL;
      CREATE INDEX idx_generations_conversation ON generations(conversation_id, status);
      CREATE INDEX idx_generations_user_status ON generations(user_id, status);",
+    // v5: what the router has learned about providers. A provider whose credentials were refused is
+    // flagged `auth_failed` (with the error code, never the provider's message, which may echo
+    // part of a key) until a try succeeds or a new key is saved.
+    "CREATE TABLE provider_health (
+         provider_id TEXT PRIMARY KEY,
+         status      TEXT    NOT NULL CHECK (status IN ('auth_failed')),
+         since       INTEGER NOT NULL,
+         error_code  TEXT
+     );",
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -495,6 +504,29 @@ impl Db {
         )?)
     }
 
+    /// Flags a provider as having had its credentials refused. Keeps the original time if it was
+    /// already flagged.
+    pub fn flag_provider_auth_failed(&self, provider_id: &str, error_code: &str) -> Result<(), DbError> {
+        self.conn.execute(
+            "INSERT INTO provider_health (provider_id, status, since, error_code) VALUES (?1, 'auth_failed', ?2, ?3)
+             ON CONFLICT(provider_id) DO UPDATE SET error_code = excluded.error_code",
+            params![provider_id, now(), error_code],
+        )?;
+        Ok(())
+    }
+
+    /// Clears a provider's flag (a try succeeded, or a new key was saved). True if there was one.
+    pub fn clear_provider_health(&self, provider_id: &str) -> Result<bool, DbError> {
+        Ok(self.conn.execute("DELETE FROM provider_health WHERE provider_id = ?1", [provider_id])? > 0)
+    }
+
+    /// Every flagged provider: (provider id, status, since, error code).
+    pub fn provider_health(&self) -> Result<Vec<(String, String, i64, Option<String>)>, DbError> {
+        let mut stmt = self.conn.prepare("SELECT provider_id, status, since, error_code FROM provider_health ORDER BY provider_id")?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
     /// Returns the new generation's id.
     pub fn create_generation(&self, g: &NewGeneration) -> Result<String, DbError> {
         let (id, t) = (new_id(), now());
@@ -777,6 +809,7 @@ mod tests {
             "providers", // only the encrypted API keys, by provider id
             "config_snapshot", "redeemed_codes", // what the admin service pushes, and codes already used
             "generations", // chat turns that outlive their client
+            "provider_health", // providers whose credentials were refused
         ] {
             assert!(t.iter().any(|x| x == name), "missing table {name}");
         }
@@ -870,7 +903,8 @@ mod tests {
         assert!(!conn.prepare("SELECT 1 FROM sqlite_master WHERE name = 'generations'").unwrap().exists([]).unwrap());
         let db = Db::init(conn).unwrap();
         let v: i64 = db.conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-        assert_eq!(v, 4);
+        assert_eq!(v as usize, MIGRATIONS.len());
+        assert!(v >= 4);
         assert!(tables(&db).iter().any(|x| x == "generations"));
         let n: i64 = db.conn.query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 1, "existing history survives");
@@ -1024,6 +1058,22 @@ mod tests {
         let id = db.create_generation(&new_gen(&u, &c, "queued")).unwrap();
         db.delete_conversation(&u, &c).unwrap();
         assert_eq!(db.get_generation(&u, &id).unwrap(), None);
+    }
+
+    #[test]
+    fn provider_health_flags_clears_and_keeps_the_first_time() {
+        let (db, _) = db_with_user();
+        assert!(db.provider_health().unwrap().is_empty());
+        db.flag_provider_auth_failed("p1", "http_401").unwrap();
+        db.conn.execute("UPDATE provider_health SET since = 100", []).unwrap();
+        db.flag_provider_auth_failed("p1", "http_403").unwrap(); // flagged again: same since, newer code
+        db.flag_provider_auth_failed("p2", "config").unwrap();
+        let h = db.provider_health().unwrap();
+        assert_eq!(h, [("p1".into(), "auth_failed".into(), 100, Some("http_403".into())), ("p2".into(), "auth_failed".into(), h[1].2, Some("config".into()))]);
+        assert!(db.clear_provider_health("p1").unwrap());
+        assert!(!db.clear_provider_health("p1").unwrap(), "already clear");
+        assert_eq!(db.provider_health().unwrap().len(), 1);
+        assert!(db.conn.execute("INSERT INTO provider_health VALUES ('x', 'broken', 0, NULL)", []).is_err(), "only the known status");
     }
 
     #[test]

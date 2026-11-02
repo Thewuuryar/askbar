@@ -159,7 +159,6 @@ async fn once_text_has_been_sent_the_router_never_switches_provider() {
 }
 
 #[tokio::test]
-#[ignore = "enabled in 6.7"]
 async fn a_401_falls_back_and_flags_the_provider_as_having_bad_credentials() {
     let s = stack("m-fail", "m", serde_json::json!({ "allow_as_fallback": true })).await;
     let events = s.run("hello there").await;
@@ -251,4 +250,42 @@ async fn the_audit_trail_shows_every_try_and_which_provider_the_new_one_stood_in
             want("p2", "done", 0, Some("p1")),
         ]
     );
+}
+
+#[tokio::test]
+async fn the_flag_clears_on_the_next_success_and_when_a_new_key_is_saved_and_the_endpoint_lists_it() {
+    use askbar_server::mgmt;
+    let s = stack("m-fail", "m", serde_json::json!({ "allow_as_fallback": true })).await;
+    assert!(is_done(&s.run("hello there").await));
+
+    // The management endpoint lists it, with a code and no provider text.
+    let dir = s._dir.clone();
+    let hash = dir.join("token.sha256");
+    let token = "mgt_health-test-token";
+    use sha2::Digest;
+    let hex: String = sha2::Sha256::digest(token.as_bytes()).iter().map(|b| format!("{b:02x}")).collect();
+    std::fs::write(&hash, hex).unwrap();
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", l.local_addr().unwrap());
+    let app = mgmt::router(s.state.clone(), hash);
+    tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
+    let http = reqwest::Client::new();
+    let get = || async { http.get(format!("{url}/mgmt/v1/providers/health")).bearer_auth(token).send().await.unwrap().json::<serde_json::Value>().await.unwrap() };
+    let v = get().await;
+    assert_eq!(v["providers"].as_array().unwrap().len(), 1);
+    assert_eq!((v["providers"][0]["provider_id"].as_str(), v["providers"][0]["status"].as_str(), v["providers"][0]["error_code"].as_str()), (Some("p1"), Some("auth_failed"), Some("http_401")));
+    assert!(!v.to_string().contains("Incorrect API key"), "the provider's own words are not kept: {v}");
+    let r = http.get(format!("{url}/mgmt/v1/providers/health")).send().await.unwrap();
+    assert_eq!(r.status(), 401, "needs the management token");
+
+    // Saving a new key for p1 clears the flag.
+    let r = http.put(format!("{url}/mgmt/v1/providers/p1/key")).bearer_auth(token).json(&serde_json::json!({ "key": "sk-new" })).send().await.unwrap();
+    assert_eq!(r.status(), 204);
+    assert!(get().await["providers"].as_array().unwrap().is_empty());
+
+    // A flagged provider that then works is cleared by the success. (p1 is now fine: point it at a good model.)
+    s.state.db.lock().unwrap().flag_provider_auth_failed("p2", "http_403").unwrap();
+    assert!(is_done(&s.run("another one").await)); // p1 still fails (m-fail) and p2 serves it
+    let flagged: Vec<String> = s.state.db.lock().unwrap().provider_health().unwrap().into_iter().map(|h| h.0).collect();
+    assert_eq!(flagged, ["p1"], "p2 worked, so its flag is gone; p1 failed again and is flagged again");
 }
