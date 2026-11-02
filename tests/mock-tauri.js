@@ -132,6 +132,14 @@
         onEvent.onmessage({ event: 'error', message: 'anthropic returned 401: invalid x-api-key. Check api_key in config.yaml.' });
         return;
       }
+      if (/timeout/i.test(text)) {
+        // The server stopped the reply: two pieces of text arrived, then the timeout.
+        conv.messages.push({ id: String(db.nextMsg++), role: 'assistant', content: 'Partial answer', created_at: db.clock });
+        onEvent.onmessage({ event: 'delta', text: 'Partial ' });
+        onEvent.onmessage({ event: 'delta', text: 'answer' });
+        onEvent.onmessage({ event: 'error', message: 'Timed out after 5 minutes' });
+        return;
+      }
       const slow = /slow/i.test(text);
       const full = slow ? 'This reply keeps streaming until you stop it. '.repeat(30) : REPLY;
       let sent = '';

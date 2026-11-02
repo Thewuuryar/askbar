@@ -332,6 +332,17 @@ async function waitIdle(page) {
     assert.equal((await calls(page, 'open_config')).length, 1);
   });
 
+  await step('a timeout error after two deltas keeps the text shown and adds the message', async () => {
+    await page.keyboard.press('Control+n');
+    await ask(page, 'this will timeout');
+    await page.waitForSelector('.msg.error');
+    await waitIdle(page);
+    assert.equal(await page.locator('.msg.assistant .body').innerText(), 'Partial answer', 'the reply stays');
+    assert.equal(await page.locator('.msg.error .body').innerText(), 'Timed out after 5 minutes');
+    assert.equal(await page.locator('.msg.assistant').count(), 1, 'one reply bubble, not removed');
+    assert.equal(await page.isVisible('#input'), true);
+  });
+
   await step('input stays usable after an error', async () => {
     await ask(page, 'works now');
     await waitIdle(page);
