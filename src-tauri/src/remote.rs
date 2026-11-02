@@ -715,6 +715,9 @@ mod tests {
         chats: Mutex<Vec<serde_json::Value>>,
         /// What `GET /api/v1/generations?status=running` answers.
         running: Mutex<String>,
+        /// When set, the answer to `POST /api/v1/chat` instead of the usual stream:
+        /// status, extra headers and body.
+        chat_answer: Mutex<Option<(u16, Vec<(String, String)>, String)>>,
     }
 
     struct Fake {
@@ -744,7 +747,19 @@ mod tests {
                     let b = first.clone();
                     async move {
                         seen.chats.lock().unwrap().push(body);
-                        ([(header::CONTENT_TYPE, "text/event-stream")], b)
+                        let custom = seen.chat_answer.lock().unwrap().clone();
+                        match custom {
+                            Some((status, headers, text)) => {
+                                let mut r = axum::response::Response::new(axum::body::Body::from(text));
+                                *r.status_mut() = S::from_u16(status).unwrap();
+                                r.headers_mut().insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
+                                for (k, v) in headers {
+                                    r.headers_mut().insert(header::HeaderName::from_bytes(k.as_bytes()).unwrap(), v.parse().unwrap());
+                                }
+                                r
+                            }
+                            None => axum::response::IntoResponse::into_response(([(header::CONTENT_TYPE, "text/event-stream")], b)),
+                        }
                     }
                 }),
             )
@@ -1002,6 +1017,94 @@ mod tests {
         assert!(remote.inner().unwrap().outbox.list().is_empty());
         let chats = fake.seen.chats.lock().unwrap().clone();
         assert!(chats[0]["client_request_id"].as_str().is_some_and(|id| id.len() == 36), "every send carries a request id");
+    }
+
+    /// Sends "my precious words" against a server that answers the chat with `status`, `headers` and
+    /// `body`; returns the events, the outbox afterwards and what the server saw.
+    async fn refused(status: u16, headers: &[(&str, &str)], body: &str) -> (Vec<StreamEvent>, Vec<OutboxEntry>, usize) {
+        let fake = fake_server(vec![(200, sse("done", None, r#"{"event":"done"}"#))]).await;
+        *fake.seen.chat_answer.lock().unwrap() = Some((status, headers.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(), body.to_string()));
+        let remote = remote_for(&fake.url, Some("t"), PathBuf::new()).with_backoff_unit(Duration::from_millis(2));
+        let events = Mutex::new(Vec::new());
+        let (_tx, rx) = oneshot::channel();
+        remote.ask(None, "my precious words".into(), rx, &|e| events.lock().unwrap().push(e)).await;
+        let sent = fake.seen.chats.lock().unwrap().len();
+        (events.into_inner().unwrap(), remote.inner().unwrap().outbox.list(), sent)
+    }
+
+    fn last_error(events: &[StreamEvent]) -> (String, Option<String>) {
+        match events.last() {
+            Some(e @ StreamEvent::Error { message, .. }) => (message.clone(), serde_json::to_value(e).unwrap()["kind"].as_str().map(str::to_string)),
+            other => panic!("expected an error, got {other:?}"),
+        }
+    }
+
+    /// The refusals the server can answer a send with, and the kind each should be told as.
+    const REFUSALS: [(&str, u16, &str, &str); 5] = [
+        ("queue_full", 409, "", ""),
+        ("budget_exceeded", 429, "", r#"{"error":"budget_exceeded","period":"daily"}"#),
+        ("kill_switch", 503, "", r#"{"error":"kill_switch"}"#),
+        ("audit_key_missing", 503, "", r#"{"error":"audit_key_missing"}"#),
+        ("busy", 503, "5", r#"{"error":"audit_backlog"}"#),
+    ];
+
+    #[tokio::test]
+    #[ignore = "enabled in 8.2"]
+    async fn each_refusal_has_its_own_kind_and_words_and_the_typed_text_is_kept() {
+        let mut seen_messages = Vec::new();
+        for (kind, status, retry_after, body) in REFUSALS {
+            let headers: Vec<(&str, &str)> = if retry_after.is_empty() { vec![] } else { vec![("retry-after", retry_after)] };
+            let (events, outbox, sent) = refused(status, &headers, body).await;
+            let (message, got_kind) = last_error(&events);
+            assert_eq!(got_kind.as_deref(), Some(kind), "{status} {body}: {message}");
+            assert!(message.len() > 20 && !message.contains("answered"), "a sentence for a person, not a status code: {message}");
+            assert!(!events.iter().any(|e| matches!(e, StreamEvent::Started { .. })), "{kind}: the reply never began");
+            assert_eq!(outbox.len(), 1, "{kind}: the message is still waiting to be sent");
+            assert_eq!(outbox[0].text, "my precious words", "{kind}: the typed text is kept as typed");
+            assert!(sent >= 1);
+            seen_messages.push(message);
+        }
+        let unique: std::collections::BTreeSet<_> = seen_messages.iter().collect();
+        assert_eq!(unique.len(), seen_messages.len(), "every refusal reads differently: {seen_messages:?}");
+        assert!(seen_messages[0].contains("waiting"), "{}", seen_messages[0]);
+        assert!(seen_messages[1].to_lowercase().contains("limit"), "{}", seen_messages[1]);
+        assert!(seen_messages[2].to_lowercase().contains("switched off"), "{}", seen_messages[2]);
+        assert!(seen_messages[3].to_lowercase().contains("audit"), "{}", seen_messages[3]);
+        assert!(seen_messages[4].contains('5'), "the wait is named: {}", seen_messages[4]);
+    }
+
+    #[tokio::test]
+    #[ignore = "enabled in 8.2"]
+    async fn a_busy_server_is_retried_once_after_its_retry_after_and_the_rest_wait_for_the_person() {
+        // 503 with Retry-After: the message is sent again once (after the delay) and no more.
+        let (events, outbox, sent) = refused(503, &[("retry-after", "1")], r#"{"error":"audit_backlog"}"#).await;
+        assert_eq!(sent, 2, "one retry, not a loop");
+        assert_eq!(last_error(&events).1.as_deref(), Some("busy"));
+        assert_eq!(outbox.len(), 1, "still waiting for the person after that");
+        // The others are not retried by themselves.
+        for (kind, status, _, body) in REFUSALS.iter().filter(|r| r.0 != "busy") {
+            let (_, _, sent) = refused(*status, &[], body).await;
+            assert_eq!(sent, 1, "{kind} is sent once");
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "enabled in 8.4"]
+    async fn a_timed_out_reply_keeps_its_text_and_says_how_long_it_ran() {
+        // The first stream (the fake's usual one) delivers "a", "b", "c" and drops; the resume brings
+        // the server's last word: it ran out of time.
+        let stream = sse("error", None, r#"{"event":"error","message":"Timed out after 5 minutes"}"#);
+        let fake = fake_server(vec![(200, stream)]).await;
+        let remote = remote_for(&fake.url, Some("t"), PathBuf::new()).with_backoff_unit(Duration::from_millis(2));
+        let events = Mutex::new(Vec::new());
+        let (_tx, rx) = oneshot::channel();
+        remote.ask(None, "hi".into(), rx, &|e| events.lock().unwrap().push(e)).await;
+        let events = events.into_inner().unwrap();
+        let text: String = events.iter().filter_map(|e| if let StreamEvent::Delta { text } = e { Some(text.as_str()) } else { None }).collect();
+        assert_eq!(text, "abc", "the text that arrived stays");
+        let (message, kind) = last_error(&events);
+        assert_eq!(kind.as_deref(), Some("timed_out"));
+        assert_eq!(message, "Stopped after 5 minutes");
     }
 
     #[test]
