@@ -169,7 +169,7 @@ async fn with_the_server_down_changes_get_502_and_nothing_is_saved() {
         let (st, res) = t.call(m, path, body).await;
         assert_eq!(st, 502, "{path}");
         if path != "/admin/api/backup" {
-            assert!(res["error"].as_str().unwrap().contains("offline"), "{path}: {res}");
+            assert!(res["detail"].as_str().unwrap().contains("offline"), "{path}: {res}");
         }
     }
     assert_eq!(t.admin_rows("SELECT COUNT(*) FROM providers").await, 0, "no half-saved provider");

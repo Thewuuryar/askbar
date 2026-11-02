@@ -189,7 +189,7 @@ async fn five_wrong_passphrases_lock_opening_out_even_for_the_right_one_and_unkn
     }
     let (st, body) = open(PASS).await;
     assert_eq!(st, 429, "locked out, even with the right one: {body}");
-    assert!(body["error"].as_str().unwrap_or("").contains("Try again"), "{body}");
+    assert!(body["detail"].as_str().unwrap_or("").contains("Try again"), "{body}");
     assert_eq!(access_rows(&t).await.len(), 5, "a refused attempt is not an open, so nothing more is recorded");
     // The login is a different lock: signing in still works.
     let r = t.http.post(format!("{}/admin/login", t.adm)).header("x-askbar-admin", "1").json(&json!({ "password": common::PW })).send().await.unwrap();
@@ -365,7 +365,7 @@ async fn the_settings_show_the_active_key_id_and_keep_the_retention_between_7_an
         assert_eq!(t.call(M::PUT, "/admin/api/settings", save(json!(days))).await.0, status, "{days}");
     }
     let (_, s) = t.call(M::PUT, "/admin/api/settings", save(json!(6))).await;
-    assert!(s["error"].as_str().unwrap().contains("at least 7 days"), "{s}");
+    assert!(s["detail"].as_str().unwrap().contains("at least 7 days"), "{s}");
     let (_, s) = t.call(M::GET, "/admin/api/settings", json!({})).await;
     assert_eq!(s["audit_retention_days"], 3650, "refused values changed nothing; the last accepted one stands");
     assert_eq!(askbar_server::snapshot::current(&t.server.db.lock().unwrap()).unwrap().unwrap().audit_retention_days, 3650, "and the server has it");

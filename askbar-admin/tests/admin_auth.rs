@@ -179,3 +179,53 @@ async fn every_response_carries_the_locked_down_headers() {
     assert_eq!(h["x-frame-options"], "DENY");
     assert_eq!(h["cache-control"], "no-store");
 }
+
+#[tokio::test]
+async fn every_admin_refusal_is_a_problem_with_a_code_a_sentence_and_no_bearer_challenge() {
+    let t = start(PASSWORD).await;
+    async fn expect(r: reqwest::Response, status: u16, code: &str) -> askbar_proto::Problem {
+        assert_eq!(r.status().as_u16(), status, "{code}");
+        assert_eq!(r.headers()["content-type"], "application/problem+json", "{code}");
+        assert!(!r.headers().contains_key("www-authenticate"), "{code}: the admin signs in with a cookie");
+        let p: askbar_proto::Problem = r.json().await.unwrap();
+        assert_eq!((p.error.as_str(), p.status), (code, status));
+        assert!(!p.detail.is_empty(), "{code}: a sentence for a person");
+        p
+    }
+    let url = |p: &str| format!("http://{}{p}", t.admin);
+    // Signed out, and a change without the header.
+    expect(t.http.get(url("/admin/api/providers")).send().await.unwrap(), 401, "unauthorized").await;
+    expect(t.http.post(url("/admin/login")).json(&serde_json::json!({ "password": "x" })).send().await.unwrap(), 403, "forbidden").await;
+    // Unknown path, wrong method, a body that is not JSON.
+    expect(t.http.get(url("/admin/nope")).send().await.unwrap(), 404, "not_found").await;
+    expect(t.http.get(url("/admin/logout")).send().await.unwrap(), 405, "method_not_allowed").await;
+    let bad = t.http.post(url("/admin/login")).header("x-askbar-admin", "1").header("content-type", "application/json").body("nope").send().await.unwrap();
+    expect(bad, 400, "bad_request").await;
+    // A wrong password, then the lockout with its wait.
+    let p = expect(t.login("wrong password").await, 401, "unauthorized").await;
+    assert!(p.detail.contains("wrong"));
+    for _ in 0..10 {
+        let _ = t.login("wrong password").await;
+    }
+    let r = t.login("wrong password").await;
+    let wait: u64 = r.headers()[reqwest::header::RETRY_AFTER].to_str().unwrap().parse().unwrap();
+    assert!(wait > 0);
+    let p = expect(r, 429, "too_many_attempts").await;
+    assert!(p.detail.contains("minute"), "{}", p.detail);
+}
+
+#[tokio::test]
+async fn signing_in_before_a_password_exists_says_setup_is_required() {
+    let db = AdminDb::open_in_memory().unwrap();
+    let state = AdminState::new(db);
+    let admin = spawn(askbar_admin::router(state)).await;
+    let r = reqwest::Client::new()
+        .post(format!("http://{admin}/admin/login"))
+        .header("x-askbar-admin", "1")
+        .json(&serde_json::json!({ "password": "whatever it is" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 503);
+    assert_eq!(r.json::<askbar_proto::Problem>().await.unwrap().error, "setup_required");
+}

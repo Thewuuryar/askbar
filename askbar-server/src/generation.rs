@@ -306,8 +306,7 @@ pub enum SubmitError {
     Internal,
 }
 
-/// How long a client is told to wait before sending again when the audit store is backed up.
-pub const AUDIT_BACKLOG_RETRY_SECS: u64 = 5;
+pub use askbar_proto::problem::AUDIT_BACKLOG_RETRY_SECS;
 
 impl From<SubmitError> for crate::error::ApiError {
     fn from(e: SubmitError) -> crate::error::ApiError {

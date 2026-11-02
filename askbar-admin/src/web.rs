@@ -3,6 +3,8 @@
 //! ignored, so no token of any kind opens the admin.
 
 use crate::{auth::SESSION_TTL_SECS, AdminState};
+use askbar_proto::http::{ApiError, ApiJson};
+use askbar_proto::problem::ErrorCode;
 use argon2::password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 use argon2::Argon2;
 use axum::{
@@ -21,10 +23,12 @@ pub const CSRF_HEADER: &str = "x-askbar-admin";
 pub const MIN_PASSWORD_CHARS: usize = 10;
 const MAX_PASSWORD_CHARS: usize = 200;
 
-pub type Failure = (StatusCode, Json<serde_json::Value>);
+pub type Failure = ApiError;
 
+/// An error with the sentence `msg`; the status picks the code. The admin signs in with a cookie, so a
+/// 401 carries no `WWW-Authenticate` challenge.
 pub fn err(status: StatusCode, msg: &str) -> Failure {
-    (status, Json(serde_json::json!({ "error": msg })))
+    ApiError::from(status).detail(msg).no_challenge()
 }
 
 fn hash_password(password: &str) -> Result<String, argon2::password_hash::Error> {
@@ -94,10 +98,10 @@ fn check_new_password(pw: &str) -> Result<(), Failure> {
 /// State-changing requests must carry `X-Askbar-Admin: 1`. A cross-site form or simple
 /// request can't add custom headers, and cross-origin scripts need a CORS preflight we
 /// never approve.
-pub async fn require_admin_header(req: Request, next: Next) -> Result<Response, StatusCode> {
+pub async fn require_admin_header(req: Request, next: Next) -> Result<Response, ApiError> {
     let safe = matches!(*req.method(), Method::GET | Method::HEAD | Method::OPTIONS);
     if !safe && req.headers().get(CSRF_HEADER).and_then(|v| v.to_str().ok()) != Some("1") {
-        return Err(StatusCode::FORBIDDEN);
+        return Err(ApiError::new(ErrorCode::Forbidden, "A change needs the header `X-Askbar-Admin: 1`.").no_challenge());
     }
     Ok(next.run(req).await)
 }
@@ -115,10 +119,11 @@ pub async fn security_headers(req: Request, next: Next) -> Response {
 }
 
 /// Cookie only. `Authorization` is deliberately ignored.
-pub async fn require_session(State(state): State<Arc<AdminState>>, req: Request, next: Next) -> Result<Response, StatusCode> {
-    let token = session_cookie(req.headers()).ok_or(StatusCode::UNAUTHORIZED)?;
+pub async fn require_session(State(state): State<Arc<AdminState>>, req: Request, next: Next) -> Result<Response, ApiError> {
+    let signed_out = || ApiError::new(ErrorCode::Unauthorized, "Sign in first.").no_challenge();
+    let token = session_cookie(req.headers()).ok_or_else(signed_out)?;
     if !state.auth.valid_session(&token) {
-        return Err(StatusCode::UNAUTHORIZED);
+        return Err(signed_out());
     }
     Ok(next.run(req).await)
 }
@@ -130,19 +135,22 @@ pub struct Login {
     password: String,
 }
 
-pub async fn login(State(state): State<Arc<AdminState>>, headers: HeaderMap, Json(body): Json<Login>) -> Response {
+pub async fn login(State(state): State<Arc<AdminState>>, headers: HeaderMap, ApiJson(body): ApiJson<Login>) -> Response {
     if let Some(secs) = state.auth.lockout_remaining() {
-        let mut r = StatusCode::TOO_MANY_REQUESTS.into_response();
-        r.headers_mut().insert(header::RETRY_AFTER, HeaderValue::from(secs));
-        return r;
+        let secs = secs.max(1) as u64;
+        let wait = ((secs + 59) / 60).max(1);
+        return ApiError::new(ErrorCode::TooManyAttempts, format!("Too many wrong passwords. Try again in {wait} minute{}.", if wait == 1 { "" } else { "s" }))
+            .retry_after(secs)
+            .no_challenge()
+            .into_response();
     }
     let Some(stored) = stored_hash(&state).await else {
         // No password yet: the setup page has to create one first.
-        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+        return ApiError::new(ErrorCode::SetupRequired, "Set the admin password first.").no_challenge().into_response();
     };
     if !verify(stored, body.password).await {
         state.auth.record_failure();
-        return StatusCode::UNAUTHORIZED.into_response();
+        return ApiError::new(ErrorCode::Unauthorized, "That password is wrong.").no_challenge().into_response();
     }
     state.auth.clear_failures();
     let token = state.auth.new_session();
@@ -167,7 +175,7 @@ pub async fn setup_status(State(state): State<Arc<AdminState>>) -> Json<serde_js
 }
 
 /// First run: the first visitor chooses the admin password and is signed in. Refused once one exists.
-pub async fn setup_password(State(state): State<Arc<AdminState>>, headers: HeaderMap, Json(body): Json<Login>) -> Result<Response, Failure> {
+pub async fn setup_password(State(state): State<Arc<AdminState>>, headers: HeaderMap, ApiJson(body): ApiJson<Login>) -> Result<Response, Failure> {
     check_new_password(&body.password)?;
     let password = body.password;
     let hash = tokio::task::spawn_blocking(move || hash_password(&password))
@@ -202,9 +210,9 @@ pub struct ChangePassword {
 }
 
 /// Change the password. The current one is required; every other session is signed out.
-pub async fn change_password(State(state): State<Arc<AdminState>>, headers: HeaderMap, Json(body): Json<ChangePassword>) -> Result<StatusCode, Failure> {
+pub async fn change_password(State(state): State<Arc<AdminState>>, headers: HeaderMap, ApiJson(body): ApiJson<ChangePassword>) -> Result<StatusCode, Failure> {
     if state.auth.lockout_remaining().is_some() {
-        return Err(err(StatusCode::TOO_MANY_REQUESTS, "Too many attempts. Try again later."));
+        return Err(ApiError::code(ErrorCode::TooManyAttempts).no_challenge());
     }
     let stored = stored_hash(&state).await.ok_or_else(|| err(StatusCode::CONFLICT, "No password is set."))?;
     if !verify(stored, body.current).await {

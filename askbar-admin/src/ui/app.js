@@ -18,8 +18,10 @@
     if (text) { try { data = JSON.parse(text); } catch (_) { data = null; } }
     if (res.status === 502 && typeof show === 'function' && document.getElementById('offline')) show($('offline'), true);
     if (!res.ok) {
-      const err = new Error((data && data.error) || ('Request failed (' + res.status + ')'));
+      // A problem+json body: `detail` is the sentence for a person, `error` the stable code.
+      const err = new Error((data && (data.detail || data.error)) || ('Request failed (' + res.status + ')'));
       err.status = res.status;
+      err.code = (data && data.error) || null;
       throw err;
     }
     return data;

@@ -7,6 +7,9 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+/// How long a client is told to wait before sending again when the audit store is backed up.
+pub const AUDIT_BACKLOG_RETRY_SECS: u64 = 5;
+
 /// The media type of every error body.
 pub const CONTENT_TYPE: &str = "application/problem+json";
 
@@ -29,12 +32,13 @@ pub enum ErrorCode {
     TooManyAttempts,
     ApiKeyExists,
     SetupRequired,
+    ServerUnavailable,
     Conflict,
     Internal,
 }
 
 impl ErrorCode {
-    pub const ALL: [ErrorCode; 18] = [
+    pub const ALL: [ErrorCode; 19] = [
         ErrorCode::QueueFull,
         ErrorCode::BudgetExceeded,
         ErrorCode::KillSwitch,
@@ -51,6 +55,7 @@ impl ErrorCode {
         ErrorCode::TooManyAttempts,
         ErrorCode::ApiKeyExists,
         ErrorCode::SetupRequired,
+        ErrorCode::ServerUnavailable,
         ErrorCode::Conflict,
         ErrorCode::Internal,
     ];
@@ -74,6 +79,7 @@ impl ErrorCode {
             ErrorCode::TooManyAttempts => "too_many_attempts",
             ErrorCode::ApiKeyExists => "api_key_exists",
             ErrorCode::SetupRequired => "setup_required",
+            ErrorCode::ServerUnavailable => "server_unavailable",
             ErrorCode::Conflict => "conflict",
             ErrorCode::Internal => "internal",
         }
@@ -92,6 +98,7 @@ impl ErrorCode {
             ErrorCode::NotFound => 404,
             ErrorCode::MethodNotAllowed => 405,
             ErrorCode::PayloadTooLarge => 413,
+            ErrorCode::ServerUnavailable => 502,
             ErrorCode::Internal => 500,
         }
     }
@@ -115,6 +122,7 @@ impl ErrorCode {
             ErrorCode::TooManyAttempts => "Too many attempts",
             ErrorCode::ApiKeyExists => "An API key already exists",
             ErrorCode::SetupRequired => "Setup is not finished",
+            ErrorCode::ServerUnavailable => "The Askbar server cannot be reached",
             ErrorCode::Conflict => "Conflict",
             ErrorCode::Internal => "Something went wrong on the server",
         }
@@ -221,6 +229,7 @@ mod tests {
         assert_eq!(status(ErrorCode::NotFound), 404);
         assert_eq!(status(ErrorCode::TooManyAttempts), 429);
         assert_eq!(status(ErrorCode::ApiKeyExists), 409);
+        assert_eq!(status(ErrorCode::ServerUnavailable), 502);
         assert_eq!(status(ErrorCode::Internal), 500);
     }
 
@@ -232,9 +241,9 @@ mod tests {
                 ErrorCode::QueueFull | ErrorCode::BudgetExceeded | ErrorCode::KillSwitch | ErrorCode::AuditKeyMissing | ErrorCode::AuditBacklog
                 | ErrorCode::ClientTooOld | ErrorCode::ClientVersionMissing | ErrorCode::Unauthorized | ErrorCode::Forbidden | ErrorCode::NotFound
                 | ErrorCode::MethodNotAllowed | ErrorCode::BadRequest | ErrorCode::PayloadTooLarge | ErrorCode::TooManyAttempts
-                | ErrorCode::ApiKeyExists | ErrorCode::SetupRequired | ErrorCode::Conflict | ErrorCode::Internal => {}
+                | ErrorCode::ApiKeyExists | ErrorCode::SetupRequired | ErrorCode::ServerUnavailable | ErrorCode::Conflict | ErrorCode::Internal => {}
             }
         }
-        assert_eq!(ErrorCode::ALL.len(), 18);
+        assert_eq!(ErrorCode::ALL.len(), 19);
     }
 }

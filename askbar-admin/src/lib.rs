@@ -131,6 +131,8 @@ pub fn router(state: Arc<AdminState>) -> Router {
         .route("/admin/api/setup-status", get(web::setup_status))
         .route("/admin/api/setup/password", post(web::setup_password))
         .merge(protected)
+        .fallback(askbar_proto::http::not_found)
+        .method_not_allowed_fallback(askbar_proto::http::method_not_allowed)
         .layer(middleware::from_fn(web::require_admin_header))
         .layer(middleware::from_fn(web::security_headers))
         .with_state(state)

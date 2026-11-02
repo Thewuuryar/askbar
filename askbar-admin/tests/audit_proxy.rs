@@ -169,6 +169,6 @@ async fn an_unreachable_server_is_a_502_with_a_message() {
     for p in ["/admin/api/audit/traces", "/admin/api/audit/traces/t1", "/admin/api/audit/stats", "/admin/api/audit/provider-health"] {
         let (st, body) = a.get(p, true, true).await;
         assert_eq!(st, 502, "{p}");
-        assert!(body["error"].as_str().unwrap_or("").contains("offline"), "{body}");
+        assert!(body["detail"].as_str().unwrap_or("").contains("offline"), "{body}");
     }
 }

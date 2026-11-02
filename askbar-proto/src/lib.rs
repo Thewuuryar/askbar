@@ -11,6 +11,9 @@ pub use sse::{SseEvent, SseParser};
 pub mod problem;
 pub use problem::{ErrorCode, Problem};
 
+#[cfg(feature = "axum")]
+pub mod http;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

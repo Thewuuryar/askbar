@@ -52,7 +52,7 @@ async fn leaving_the_token_blank_keeps_it_and_clear_removes_it() {
     keep["clear_token"] = json!(true);
     let (st, e) = t.save(keep.clone()).await;
     assert_eq!(st, 400);
-    assert!(e["error"].as_str().unwrap().contains("token"));
+    assert!(e["detail"].as_str().unwrap().contains("token"));
     assert_eq!(t.stored_token().await.unwrap(), before);
     keep["tls_enabled"] = json!(false);
     let (st, v) = t.save(keep).await;
@@ -82,7 +82,7 @@ async fn invalid_input_is_refused_and_changes_nothing() {
         }
         let (st, e) = t.save(body).await;
         assert_eq!(st, 400, "{label}");
-        assert!(e["error"].is_string(), "{label}");
+        assert!(e["detail"].is_string() && e["error"].is_string(), "{label}");
     }
     let (_, v) = t.call(M::GET, "/admin/api/network", json!({})).await;
     assert_eq!((v["tls_enabled"].as_bool(), v["hostname"].as_str(), v["has_token"].as_bool()), (Some(false), Some(""), Some(false)));

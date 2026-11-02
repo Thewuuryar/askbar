@@ -86,7 +86,7 @@ async fn changing_the_password() {
     let change = |cur: &str, new: &str| json!({ "current": cur, "new": new });
     let (st, _, e) = t.call(M::POST, "/admin/api/password", Some(&c1), change("wrong", "new password 456")).await;
     assert_eq!(st, 403, "403 (not 401) so the page doesn't think it was signed out");
-    assert!(e["error"].as_str().unwrap().contains("current password"));
+    assert!(e["detail"].as_str().unwrap().contains("current password"));
     assert_eq!(t.call(M::POST, "/admin/api/password", Some(&c1), change(PW, "short")).await.0, 400);
     assert_eq!(t.call(M::POST, "/admin/api/password", None, change(PW, "new password 456")).await.0, 401);
 
