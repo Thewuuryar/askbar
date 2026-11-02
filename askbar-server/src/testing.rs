@@ -24,6 +24,7 @@ pub fn empty_snapshot() -> Snapshot {
         budget: Budget::default(),
         kill_switch: false,
         audit_retention_days: 30,
+        generation_timeout_secs: 300,
     }
 }
 

@@ -71,6 +71,7 @@ impl T {
             budget: Budget::default(),
             kill_switch: false,
             audit_retention_days: 30,
+            generation_timeout_secs: 300,
         }
     }
     async fn push(&self, s: &Snapshot) {

@@ -113,6 +113,16 @@ pub struct Snapshot {
     pub kill_switch: bool,
     /// How long audit records are kept. At least 7.
     pub audit_retention_days: u32,
+    /// Seconds a generation may run before it is stopped (30 to 3600). Read when it starts.
+    #[serde(default = "default_generation_timeout_secs")]
+    pub generation_timeout_secs: u32,
+}
+
+/// Five minutes.
+pub const DEFAULT_GENERATION_TIMEOUT_SECS: u32 = 300;
+
+fn default_generation_timeout_secs() -> u32 {
+    DEFAULT_GENERATION_TIMEOUT_SECS
 }
 
 /// A user's preferences, shared by all of their devices.
@@ -314,6 +324,15 @@ mod tests {
         let s = serde_json::to_string(&d).unwrap();
         assert!(!s.contains("pending"), "{s}");
         assert_eq!(serde_json::from_str::<ConversationDetail>(&s).unwrap(), d);
+    }
+
+    #[test]
+    fn a_snapshot_without_a_generation_timeout_loads_as_300() {
+        let s: Snapshot = serde_json::from_str(r#"{"audit_retention_days": 30}"#).unwrap();
+        assert_eq!(s.generation_timeout_secs, 300);
+        assert_eq!(s.generation_timeout_secs, DEFAULT_GENERATION_TIMEOUT_SECS);
+        let s: Snapshot = serde_json::from_str(r#"{"audit_retention_days": 30, "generation_timeout_secs": 90}"#).unwrap();
+        assert_eq!(s.generation_timeout_secs, 90);
     }
 
     #[test]
