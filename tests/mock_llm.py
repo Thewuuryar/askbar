@@ -4,7 +4,8 @@
 
 Then point a provider at http://127.0.0.1:8765/v1 (any key). Say "slow" in a
 message to get a long, slow reply (handy for testing Stop), or "fail" to get
-an HTTP 401 error.
+an HTTP 401 error. "429" answers HTTP 429 with Retry-After: 1 and "500" answers
+HTTP 500.
 """
 import json
 import os
@@ -36,6 +37,16 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         pass
 
+    def send_json(self, status, obj, headers=None):
+        payload = json.dumps(obj).encode()
+        self.send_response(status)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(payload)))
+        for k, v in (headers or {}).items():
+            self.send_header(k, v)
+        self.end_headers()
+        self.wfile.write(payload)
+
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers.get("content-length", 0))) or b"{}")
         last = ""
@@ -53,6 +64,13 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("content-length", str(len(payload)))
             self.end_headers()
             self.wfile.write(payload)
+            return
+
+        if "429" in last:
+            self.send_json(429, {"error": {"message": "Rate limited (mock)"}}, {"retry-after": "1"})
+            return
+        if "500" in last:
+            self.send_json(500, {"error": {"message": "Internal error (mock)"}})
             return
 
         slow = "slow" in last.lower()
