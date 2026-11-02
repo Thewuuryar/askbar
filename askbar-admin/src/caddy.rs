@@ -82,8 +82,9 @@ fn setup_site() -> String {
 /// listener and the first-run site. With it on there is one host name and three kinds of path:
 ///
 /// - `/admin` and below go to the admin's unix socket (behind the allowlist, when it is on);
-/// - the client API goes to the server's client listener; `/api/server` is excluded from that match
-///   on purpose, because the server API is for the admin only and has no public route;
+/// - the client API (and `/api/v1`, which the server answers with "update the app") goes to the
+///   server's client listener. The match names those two prefixes and no wider one, because the
+///   server API (`/api/server`) is for the admin only and has no public route;
 /// - anything else gets a 404 problem.
 ///
 /// Every interpolated value was validated when it was saved (hostname, addresses); the token is
@@ -97,7 +98,7 @@ pub fn caddyfile(n: &Network, allowed: &[String]) -> String {
             out.push_str(&format!("\tacme_ca {STAGING_CA}\n"));
         }
         out.push_str("}\n");
-        let (admin, server) = (paths::ADMIN, paths::SERVER);
+        let (admin, client, old) = (paths::ADMIN, paths::CLIENT, paths::TOMBSTONE_V1);
         out.push_str(&format!("\n{host} {{\n", host = n.hostname));
         out.push_str(&format!("\t@admin path {admin} {admin}/*\n\thandle @admin {{\n"));
         if n.allowlist_enabled {
@@ -105,7 +106,7 @@ pub fn caddyfile(n: &Network, allowed: &[String]) -> String {
         }
         out.push_str(&format!("\t\treverse_proxy {ADMIN_UPSTREAM}\n\t}}\n"));
         out.push_str(&format!(
-            "\t@client {{\n\t\tpath /api/*\n\t\tnot path {server} {server}/*\n\t}}\n\thandle @client {{\n\t\treverse_proxy server:8080 {{\n\t\t\tflush_interval -1\n\t\t}}\n\t}}\n"
+            "\t@client path {client}/* {old}/*\n\thandle @client {{\n\t\treverse_proxy server:8080 {{\n\t\t\tflush_interval -1\n\t\t}}\n\t}}\n"
         ));
         out.push_str(&format!("\thandle {{\n\t\theader Content-Type {}\n\t\trespond `{}` 404\n\t}}\n}}\n", askbar_proto::problem::CONTENT_TYPE, not_found_body()));
     } else {
@@ -298,10 +299,7 @@ askbar.orraitu.com {{
 \thandle @admin {{
 \t\treverse_proxy unix//run/admin/admin.sock
 \t}}
-\t@client {{
-\t\tpath /api/*
-\t\tnot path /api/server /api/server/*
-\t}}
+\t@client path /api/client/* /api/v1/*
 \thandle @client {{
 \t\treverse_proxy server:8080 {{
 \t\t\tflush_interval -1
@@ -321,9 +319,9 @@ askbar.orraitu.com {{
     #[test]
     fn the_server_api_is_never_proxied_and_gets_the_404_like_any_other_path() {
         let got = caddyfile(&net(true, false, false), &[]);
-        let (_, client) = got.split_once("@client {").unwrap();
-        let (matcher, _) = client.split_once("handle @client").unwrap();
-        assert!(matcher.contains("not path /api/server /api/server/*"), "{matcher}");
+        let matcher = got.lines().find(|l| l.trim_start().starts_with("@client")).unwrap();
+        assert_eq!(matcher.trim(), "@client path /api/client/* /api/v1/*", "only the client API and the old prefix, never a wider /api/*");
+        assert!(!got.contains("/api/server") && !got.contains("path /api/*"), "{got}");
         let proxied: Vec<&str> = got.lines().filter(|l| l.contains("reverse_proxy")).collect();
         // The admin socket (host block and first-run site) and the client API; nothing else.
         assert_eq!(proxied.len(), 3, "{proxied:?}");
@@ -341,7 +339,7 @@ askbar.orraitu.com {{
     fn the_allowlist_guards_the_admin_path_only() {
         let nets = vec!["192.168.1.0/24".to_string(), "10.0.0.5/32".to_string(), "fd00::/8".to_string()];
         let on = caddyfile(&net(true, false, true), &nets);
-        let (admin, rest) = on.split_once("\t@client {").unwrap();
+        let (admin, rest) = on.split_once("\t@client path").unwrap();
         assert!(admin.contains("\t\t@outside not remote_ip 192.168.1.0/24 10.0.0.5/32 fd00::/8\n\t\tabort @outside\n\t\treverse_proxy unix//run/admin/admin.sock"), "{admin}");
         assert!(!rest.contains("remote_ip"), "the client API is open to paired apps: {rest}");
         assert!(!caddyfile(&net(true, false, false), &nets).contains("remote_ip"), "off: the same addresses are ignored");
