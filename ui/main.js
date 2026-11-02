@@ -148,7 +148,7 @@
       }, 'provider'));
     }
     if (st.kind === 'rejected' || st.kind === 'not_paired') {
-      el.statusActions.appendChild(actionButton('Pair this device', () => openPairing(), 'pair'));
+      el.statusActions.appendChild(actionButton('Pair this app', () => openPairing(), 'pair'));
     }
     el.statusActions.appendChild(actionButton('Retry', async () => {
       await refreshBootstrap().catch(() => {});

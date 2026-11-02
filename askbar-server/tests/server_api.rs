@@ -1,7 +1,7 @@
 use askbar_server::{server_api, secrets::Secrets, AppState};
 use sha2::{Digest, Sha256};
 
-const TOKEN: &str = "mgt_this-is-the-raw-management-token";
+const TOKEN: &str = "mgt_this-is-the-raw-server-token";
 
 fn hex(s: &str) -> String {
     Sha256::digest(s.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()

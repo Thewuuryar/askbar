@@ -98,7 +98,7 @@ const MIGRATIONS: &[&str] = &[
      ALTER TABLE providers ADD COLUMN price_in REAL;
      ALTER TABLE providers ADD COLUMN price_out REAL;
      ALTER TABLE providers ADD COLUMN price_cached_in REAL;",
-    // v7: one word for the paired app: clients (they were called devices). Rows are kept.
+    // v7: one word for the paired app: clients (they were called devices). Rows are kept. names-ok
     "ALTER TABLE revoked_devices RENAME TO revoked_clients; -- names-ok
      ALTER TABLE revoked_clients RENAME COLUMN device_id TO client_id; -- names-ok
      ALTER TABLE pair_codes RENAME COLUMN device_name TO client_name; -- names-ok",
@@ -263,7 +263,7 @@ mod tests {
 
     #[test]
     fn a_database_from_before_the_clients_rename_keeps_its_revoked_clients_and_pairing_codes() {
-        // A 0.4.0 database: schema version 6, with a revoked device (as it was called) and a pairing code.
+        // A 0.4.0 database: schema version 6, with a revoked device (as it was called) and a pairing code. names-ok
         let conn = Connection::open_in_memory().unwrap();
         for (i, sql) in MIGRATIONS.iter().take(6).enumerate() {
             conn.execute_batch(sql).unwrap();

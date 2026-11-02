@@ -306,12 +306,12 @@ async function waitIdle(page) {
     await step('re-showing the window picks up a reply that started elsewhere', async () => {
       await p2.evaluate(() => {
         const c = window.__db.convs.find((x) => x.id === '7');
-        c.pending = [{ generationId: 'g9', status: 'running', prompt: 'from elsewhere', replyText: 'Started on another device.' }];
+        c.pending = [{ generationId: 'g9', status: 'running', prompt: 'from elsewhere', replyText: 'Started on another app.' }];
         window.__listeners['askbar:shown']();
       });
       await p2.waitForFunction(() => window.__calls.some((c) => c[0] === 'attach' && c[1].generationId === 'g9'));
       await waitIdle(p2);
-      assert.ok((await p2.locator('.msg.assistant .body').last().innerText()).includes('Started on another device.'));
+      assert.ok((await p2.locator('.msg.assistant .body').last().innerText()).includes('Started on another app.'));
     });
 
     await step('no JavaScript errors while joining running replies', async () => {
@@ -432,7 +432,7 @@ async function waitIdle(page) {
   // ------------------------------------------------- server states
   const STATES = {
     offline: { kind: 'offline', message: 'Server offline. Could not reach http://localhost:8080. Check that it is running and that you are on the right network.' },
-    rejected: { kind: 'rejected', message: 'Token rejected. The server no longer accepts this device; it may have been revoked.' },
+    rejected: { kind: 'rejected', message: 'Token rejected. The server no longer accepts this app; it may have been revoked.' },
     update_needed: { kind: 'update_needed', message: 'Update needed. This version of Askbar is too old for the server.' },
     provider_missing: { kind: 'provider_missing', message: 'The provider you picked no longer exists on the server. Pick another.', providers: [{ id: 'p1', name: 'alpha' }, { id: 'p2', name: 'beta' }] },
   };
@@ -560,7 +560,7 @@ async function waitIdle(page) {
   await page.context().close();
 
   // ------------------------------------------------- pairing screen
-  page = await open(browser, { status: { kind: 'not_paired', message: 'This device is not paired with the server yet.' } });
+  page = await open(browser, { status: { kind: 'not_paired', message: 'This app is not paired with the server yet.' } });
   await step('not paired: the banner offers the pairing screen', async () => {
     await page.waitForSelector('#status:not([hidden])');
     assert.equal(await page.isVisible('#status-actions [data-action="pair"]'), true);

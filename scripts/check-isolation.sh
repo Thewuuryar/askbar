@@ -149,7 +149,7 @@ esac
 refused "the admin container has no /audit" docker exec "$ADMIN" test -e /audit
 refused "no audit.db anywhere in the admin container" docker exec "$ADMIN" sh -c 'find / -xdev -name "audit.db*" 2>/dev/null | grep -q .'
 check "audit.db exists in the server" docker exec "$SERVER" test -s /audit/audit.db
-# The device API (port 8080, reachable from the edge network) has no audit and no server routes.
+# The client API (port 8080, reachable from the edge network) has no audit and no server routes.
 http_get() { # network host:port path -> status; 0 = no connection
   py --network "$1" -- "
 import urllib.request, urllib.error
@@ -159,7 +159,7 @@ except Exception: print(0)
 "
 }
 for path in /audit /api/v1/audit /api/v1/audit/traces /api/v1/audit/stats /mgmt/v1/health /mgmt/v1/audit/traces /mgmt/v1/audit/stats; do
-  [ "$(http_get "$EDGE" "$EDGE_IP:8080" "$path")" = 404 ] && pass "the device API has no $path (404)" || fail "the device API answers $path"
+  [ "$(http_get "$EDGE" "$EDGE_IP:8080" "$path")" = 404 ] && pass "the client API has no $path (404)" || fail "the client API answers $path"
 done
 
 echo "== 3c. The server holds no secret for the audit key"
@@ -222,7 +222,7 @@ printf '%s' "$cfg" | grep -q '"abort":true' && printf '%s' "$cfg" | grep -q '"no
 out=$(set_network False 2>&1); printf '%s' "$out" | tail -1 | grep -q '^200 ok' && pass "allowlist off: Caddy took the configuration" || fail "allowlist off: $out"
 cfg=$(caddy_config)
 if printf '%s' "$cfg" | grep -q 'unix//run/admin/admin.sock' && ! printf '%s' "$cfg" | grep -q '"abort":true\|remote_ip'; then
-  pass "allowlist off: the admin site has no address check, any device reaches the login"
+  pass "allowlist off: the admin site has no address check, any client reaches the login"
 else
   fail "allowlist off: the admin site still has an address rule"
 fi
@@ -260,7 +260,7 @@ import tarfile, io, base64, json
 s, body = call('POST', '/admin/api/providers', {'name': 'iso-$(head -c 6 /dev/urandom | od -An -tx1 | tr -d ' \n')', 'type': 'openai', 'base_url': 'http://mock-llm:8765/v1', 'model': 'm', 'api_key': '$MARK'})
 assert s == 201, (s, body)
 provider_id = json.loads(body)['id']
-s, body = call('POST', '/admin/api/pair', {'name': 'iso device'})
+s, body = call('POST', '/admin/api/pair', {'name': 'iso client'})
 assert s == 200, (s, body)
 pairing = json.loads(body)['pairing']
 b = pairing.split(':', 1)[1]

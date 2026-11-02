@@ -32,7 +32,7 @@ oauth:
 access:
   api-keys:
     - "$API_KEY"
-management:
+management: # names-ok: CLIProxyAPI's own config key
   # Reachable only on the compose network: the API port is not published to the host.
   allow-remote: true
   secret-key: "$(rand 40)"

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1"> <!-- names-ok -->
   <title>Askbar admin</title>
   <link rel="stylesheet" href="/admin/style.css">
 </head>
@@ -51,7 +51,7 @@
       <button type="button" id="logout" class="link">Sign out</button>
     </header>
     <main>
-      <p id="offline" class="flash error" role="alert" hidden>Server offline. The admin can't reach the Askbar server, so changes, tests, devices and backups won't work until it is back. Nothing you change now is lost or half-saved.</p>
+      <p id="offline" class="flash error" role="alert" hidden>Server offline. The admin can't reach the Askbar server, so changes, tests, clients and backups won't work until it is back. Nothing you change now is lost or half-saved.</p>
       <p id="flash" class="flash" role="status" hidden></p>
 
       <section id="tab-providers" data-tab="providers">
@@ -92,21 +92,21 @@
         </form>
       </section>
 
-      <section id="tab-devices" data-tab="devices" hidden>
-        <h2>Devices</h2>
+      <section id="tab-clients" data-tab="clients" hidden>
+        <h2>Clients</h2>
         <form id="pair-form" class="panel">
-          <h3>Pair a new device</h3>
-          <label>Device name <input id="d-name" placeholder="Work laptop" maxlength="60"></label>
+          <h3>Pair a new client</h3>
+          <label>Client name <input id="d-name" placeholder="Work laptop" maxlength="60"></label>
           <div class="row"><button type="submit">Generate pairing string</button></div>
           <div id="pairing-out" hidden>
-            <label>Paste this into Askbar on the new device (tray icon, Pair with server). It works once and expires in 10 minutes.
+            <label>Paste this into Askbar in the app you are pairing (tray icon, Pair with server). It works once and expires in 10 minutes.
               <textarea id="pairing-string" rows="3" readonly></textarea>
             </label>
             <div class="row"><button type="button" id="pairing-copy" class="secondary">Copy</button></div>
           </div>
           <p id="pair-error" class="error" hidden></p>
         </form>
-        <div id="devices"></div>
+        <div id="clients"></div>
       </section>
 
       <section id="tab-audit" data-tab="audit" hidden>
@@ -219,7 +219,7 @@
       <section id="tab-backup" data-tab="backup" hidden>
         <h2>Backup</h2>
         <div class="panel">
-          <p>Download a backup: the server's database (conversations, settings and paired devices) and this admin's own settings, as a <code>.tar</code> file with <code>server.db</code> and <code>admin.db</code>.</p>
+          <p>Download a backup: the server's database (conversations, settings and paired clients) and this admin's own settings, as a <code>.tar</code> file with <code>server.db</code> and <code>admin.db</code>.</p>
           <p class="hint">Provider API keys, the Cloudflare token, the admin password and pairing codes are left out. After restoring, enter the keys again on the Providers page. The server's master key is not in this file: back up its <code>askbar-secrets</code> volume separately.</p>
           <p><a class="button" id="backup-link" href="/admin/api/backup" download>Download backup</a></p>
         </div>

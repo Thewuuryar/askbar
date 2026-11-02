@@ -267,10 +267,10 @@ async function waitForPort(port) {
     const r = await fetch(`http://127.0.0.1:${api}/api/v1/providers`, { headers: { 'x-askbar-client-version': '0.4.0' } });
     assert.equal(r.status, 401);
   });
-  await step('devices: generate a pairing string, pair with it, then revoke the device', async () => {
-    await page.click('#nav [data-tab="devices"]');
+  await step('clients: generate a pairing string, pair with it, then revoke the client', async () => {
+    await page.click('#nav [data-tab="clients"]');
     await page.waitForSelector('#pair-form');
-    await page.waitForFunction(() => /No devices are paired yet/.test(document.getElementById('devices').textContent));
+    await page.waitForFunction(() => /No clients are paired yet/.test(document.getElementById('clients').textContent));
     await page.fill('#d-name', 'Test laptop');
     await page.click('#pair-form button[type=submit]');
     await page.waitForSelector('#pairing-out:not([hidden])');
@@ -286,13 +286,13 @@ async function waitForPort(port) {
     assert.equal(await whoami(), 204);
 
     await page.click('#nav [data-tab="providers"]');
-    await page.click('#nav [data-tab="devices"]');
-    await page.waitForSelector('#devices .card');
-    assert.match(await page.innerText('#devices .card'), /Test laptop[\s\S]*active[\s\S]*last seen (?!never)/);
+    await page.click('#nav [data-tab="clients"]');
+    await page.waitForSelector('#clients .card');
+    assert.match(await page.innerText('#clients .card'), /Test laptop[\s\S]*active[\s\S]*last seen (?!never)/);
     page.once('dialog', (d) => d.accept());
-    await page.click('#devices [data-action="revoke"]');
-    await page.waitForFunction(() => /revoked/.test(document.querySelector('#devices .card').textContent));
-    assert.equal(await page.locator('#devices [data-action="revoke"]').count(), 0);
+    await page.click('#clients [data-action="revoke"]');
+    await page.waitForFunction(() => /revoked/.test(document.querySelector('#clients .card').textContent));
+    assert.equal(await page.locator('#clients [data-action="revoke"]').count(), 0);
     assert.equal(await whoami(), 401);
   });
   await step('settings page saves the system prompt and display defaults', async () => {
@@ -562,7 +562,7 @@ async function waitForPort(port) {
     await page.selectOption('#audit-window', '86400');
   });
   await step('audit requests: a canned list fills the table, filters and load-more ask for the right pages', async () => {
-    const row = (n, extra = {}) => ({ trace_id: 'T' + String(n).padStart(3, '0'), span_id: 's' + n, status: 'done', started_at: 1793631845 - n, ended_at: 1793631846 - n, user_id: 'user-1', device_id: 'd', tokens_in: 100, tokens_out: 50, tokens_cached: 0, error_code: null, provider_id: 'pA', model: 'model-' + n, ttft_ms: 200, latency_ms: 1500, cost: 0.0007, ...extra });
+    const row = (n, extra = {}) => ({ trace_id: 'T' + String(n).padStart(3, '0'), span_id: 's' + n, status: 'done', started_at: 1793631845 - n, ended_at: 1793631846 - n, user_id: 'user-1', client_id: 'd', tokens_in: 100, tokens_out: 50, tokens_cached: 0, error_code: null, provider_id: 'pA', model: 'model-' + n, ttft_ms: 200, latency_ms: 1500, cost: 0.0007, ...extra });
     const first = Array.from({ length: 25 }, (_, i) => row(100 - i));
     const second = Array.from({ length: 15 }, (_, i) => row(75 - i));
     const asked = [];

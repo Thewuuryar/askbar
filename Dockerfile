@@ -38,7 +38,7 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
 ENTRYPOINT ["askbar-admin"]
 
 # ----------------------------------------------------------------- server
-# The server: the device API on 8080 and the server API on its own address. Runs as uid 10002,
+# The server: the client API on 8080 and the server API on its own address. Runs as uid 10002,
 # so it shares no file ownership with the admin.
 FROM debian:bookworm-slim AS server
 RUN groupadd --system --gid 10002 askbar && useradd --system --uid 10002 --gid 10002 --home-dir /data --shell /usr/sbin/nologin askbar \

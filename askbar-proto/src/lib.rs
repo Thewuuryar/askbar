@@ -92,7 +92,7 @@ pub struct SnapshotPairCode {
     /// SHA-256 (hex) of the code; the code itself is never sent.
     pub hash: String,
     pub user_id: String,
-    // `device_name` is the old key, still read from a snapshot stored by an earlier version.
+    // `device_name` is the old key, still read from a snapshot stored by an earlier version. names-ok
     #[serde(default, alias = "device_name")] // names-ok
     pub client_name: String,
     pub expires_at: i64,
@@ -131,7 +131,7 @@ pub struct Snapshot {
     pub user_display_defaults: std::collections::BTreeMap<String, DisplaySettings>,
     #[serde(default)]
     pub pair_codes: Vec<SnapshotPairCode>,
-    // `revoked_device_ids` is the old key, still read from a snapshot stored by an earlier version.
+    // `revoked_device_ids` is the old key, still read from a snapshot stored by an earlier version. names-ok
     #[serde(default, alias = "revoked_device_ids")] // names-ok
     pub revoked_client_ids: Vec<String>,
     #[serde(default)]

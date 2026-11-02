@@ -181,7 +181,7 @@ const MIGRATIONS: &[&str] = &[
          since       INTEGER NOT NULL,
          error_code  TEXT
      );",
-    // v6: one word for the paired app: clients (they were called devices). Tokens and rows are kept.
+    // v6: one word for the paired app: clients (they were called devices). Tokens and rows are kept. names-ok
     "ALTER TABLE devices RENAME TO clients; -- names-ok
      ALTER TABLE generations RENAME COLUMN device_id TO client_id; -- names-ok
      ALTER TABLE token_usage RENAME COLUMN device_id TO client_id; -- names-ok
@@ -890,7 +890,7 @@ mod tests {
 
     #[test]
     fn a_database_from_before_the_clients_rename_keeps_its_paired_clients_and_generations() {
-        // A 0.4.0 database: schema version 5, with a paired device (as it was called) and a generation it started.
+        // A 0.4.0 database: schema version 5, with a paired device (as it was called) and a generation it started. names-ok
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
         for (i, sql) in MIGRATIONS.iter().take(5).enumerate() {

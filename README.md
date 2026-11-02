@@ -4,16 +4,16 @@ A Spotlight-style AI popup. Press a hotkey, a bar appears in the upper-middle of
 
 - **Conversation only.** The model gets text in and returns text out. There are no tools, no shell, no file access, and the window is granted no filesystem or network permissions (`src-tauri/capabilities/default.json`). Only the Rust side talks to your provider.
 - **Any provider.** Anthropic, or anything that speaks the OpenAI `/chat/completions` protocol (OpenAI, OpenRouter, Ollama, LM Studio, vLLM, Groq, ...).
-- **History** you can toggle (Ctrl+H), reopen and delete. Stored on your server, shared by every device you pair.
+- **History** you can toggle (Ctrl+H), reopen and delete. Stored on your server, shared by every app you pair.
 - **Copy in and out.** Paste anything into the bar. Copy a whole reply, a single code block, or the last reply (Ctrl+Shift+C).
 - **Replies run on the server.** Close the window or lose the connection and the reply keeps going; reopen the app and it is there.
 - **Keys stay on the server.** The desktop app is a thin client; provider API keys never reach it.
 
 Askbar is three programs:
 
-- **Desktop client** (Tauri): the popup. It pairs with one server and holds only its address, a hotkey and a device token (in the OS keychain).
-- **`askbar-server`**: the device API. It stores conversations, runs the chat against your providers and keeps provider keys encrypted. It has no web UI and no login.
-- **`askbar-admin`**: the admin site. It owns all configuration (providers, system prompt, display defaults, pairing codes, devices, network and HTTPS settings, limits and the kill switch) and pushes it to the server over a private server API. Its **Audit** tab shows what the server recorded about every reply.
+- **Desktop client** (Tauri): the popup. It pairs with one server and holds only its address, a hotkey and a client token (in the OS keychain).
+- **`askbar-server`**: the client API. It stores conversations, runs the chat against your providers and keeps provider keys encrypted. It has no web UI and no login.
+- **`askbar-admin`**: the admin site. It owns all configuration (providers, system prompt, display defaults, pairing codes, clients, network and HTTPS settings, limits and the kill switch) and pushes it to the server over a private server API. Its **Audit** tab shows what the server recorded about every reply.
 
 There is no standalone mode: the client always talks to a server.
 
@@ -40,7 +40,7 @@ npm run dev        # run it
 npm run build      # installers land in target/release/bundle/
 ```
 
-Until the app is paired it shows how to pair. Tray icon > **Pair with server...**, paste the pairing string from the admin site (Devices). The one-time code expires after 10 minutes; the app exchanges it for a per-device token stored in the OS keychain, not in a file. Revoke a device in the admin site and the app shows "token rejected". If the server can't be reached the app says "server offline"; there is no offline mode.
+Until the app is paired it shows how to pair. Tray icon > **Pair with server...**, paste the pairing string from the admin site (Clients). The one-time code expires after 10 minutes; the app exchanges it for a per-client token stored in the OS keychain, not in a file. Revoke a client in the admin site and the app shows "token rejected". If the server can't be reached the app says "server offline"; there is no offline mode.
 
 `client.yaml` (`~/.config/askbar/` on Linux, `~/Library/Application Support/askbar/` on macOS, `%APPDATA%\askbar\` on Windows; `ASKBAR_CLIENT_CONFIG` points at a different file, which is how you run a second profile) holds only:
 
@@ -70,7 +70,7 @@ In the history panel, click a conversation to reopen it. Delete needs two clicks
 
 ## Replies run on the server
 
-A reply is produced by the server, not by the window. The question is saved first and the server writes the answer as its own task, so closing the app, sleeping the laptop or switching networks does not stop it. When the window comes back it asks for the rest of the reply and picks up where it left off, without repeating or dropping text; a second device paired to the same server can open the conversation and watch the same reply.
+A reply is produced by the server, not by the window. The question is saved first and the server writes the answer as its own task, so closing the app, sleeping the laptop or switching networks does not stop it. When the window comes back it asks for the rest of the reply and picks up where it left off, without repeating or dropping text; a second client paired to the same server can open the conversation and watch the same reply.
 
 - **Waiting messages.** You can send another message while a reply is running. Up to **5** messages can wait in one conversation, and they run one after another; a sixth is refused ("Five messages are already waiting...") and your text is kept. A waiting message can be removed from the window.
 - **Stop** (Esc or the Stop button) tells the server to stop the reply; the text so far is kept.
@@ -104,7 +104,7 @@ That starts three containers on two networks:
 
 `server-api` is an `internal` network shared by the admin and the server's server API (172.30.0.2:8082, fixed in `compose.yaml`). Caddy is the only thing the outside world can reach.
 
-- The **server** serves the device API, which accepts only `Authorization: Bearer <device token>`. Chat replies stream as Server-Sent Events (`meta`, `provider`, `delta`, `done`, `error`) and can be resumed after a dropped connection. Device tokens are random, shown once, and stored as SHA-256 hashes. See [docs/wire-contract.md](docs/wire-contract.md).
+- The **server** serves the client API, which accepts only `Authorization: Bearer <client token>`. Chat replies stream as Server-Sent Events (`meta`, `provider`, `delta`, `done`, `error`) and can be resumed after a dropped connection. Client tokens are random, shown once, and stored as SHA-256 hashes. See [docs/wire-contract.md](docs/wire-contract.md).
 - The **admin** listens on a unix socket only. Caddy proxies `admin.<hostname>` to it, and the admin owns `admin.db`. Every change is made in `admin.db` and pushed to the server as one snapshot; if the server is down the change is refused ("The server is offline. Nothing was changed.") rather than half applied. With the server stopped the admin still loads and shows an offline banner.
 - The **server API** requires a bearer token. The admin keeps the token in its own secrets volume (mode 600); the server holds only its SHA-256 (`token.sha256`, read per request, compared in constant time, and the API refuses everything when the file is missing).
 - **Provider API keys** are encrypted at rest (ChaCha20-Poly1305) with a master key that the server creates on its first start in the `askbar-secrets` volume. They are sent to the server by the admin, stored only in `server.db`, and never returned by any endpoint. The Cloudflare token is encrypted in `admin.db` with the admin's own key (`admin-secrets`), separate from the server's, and written to a file only Caddy reads.
@@ -119,7 +119,7 @@ Once you can reach the admin site:
 2. **Audit passphrase.** Setup asks for one: at least 20 characters. See *The Audit tab* below; write it down.
 3. **Providers** > add one (Anthropic, OpenAI-compatible, or the CLIProxyAPI preset) and press **Test**.
 4. **Network** > hostname, Cloudflare token and, if you want it, the allowlist (see below).
-5. **Devices** > generate a pairing string.
+5. **Clients** > generate a pairing string.
 
 No secret ever goes in `.env`, so nothing sensitive can be committed by accident.
 
@@ -171,7 +171,7 @@ Lets a Claude or ChatGPT subscription act as an OpenAI-compatible provider. It s
 
 Four things to back up, **separately**:
 
-- **`data/`** (the server database: conversations, paired devices, and the provider keys *encrypted*) and the **`admin-data`** volume (the admin's database).
+- **`data/`** (the server database: conversations, paired clients, and the provider keys *encrypted*) and the **`admin-data`** volume (the admin's database).
 - **The `askbar-secrets` volume** (`master.key`) and the **`admin-secrets`** volume (`admin.key`). Keep these somewhere other than your database backups: anyone holding both can read the stored keys. For example: `docker run --rm -v askbar_askbar-secrets:/s -v "$PWD":/b alpine cp /s/master.key /b/master.key`, then store the copy in a password manager.
 - Admin site > **Backup** downloads one `.tar` with `server.db` and `admin.db`. It is consistent (`VACUUM INTO`) and leaves out provider API keys, pair codes, the Cloudflare token and the admin password hash, so after restoring it you enter those again.
 
@@ -183,7 +183,7 @@ If you restore a raw copy of `data/` that still holds encrypted provider keys on
 
 ```
 askbar-proto/    request/response and snapshot types shared by the server, admin and client
-askbar-server/   the server: device API, server API, database, chat/LLM streaming, secrets
+askbar-server/   the server: client API, server API, database, chat/LLM streaming, secrets
 askbar-admin/    the admin service: admin site (ui/), admin.db, snapshot push, Caddy configuration (unix only)
 src-tauri/       the desktop client: window, hotkey, tray, pairing
 ui/              the popup: index.html, style.css, main.js, markdown.js (no build step)

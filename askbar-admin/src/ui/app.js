@@ -35,7 +35,7 @@
 
   const tabs = [
     { id: 'providers', label: 'Providers', load: loadProviders },
-    { id: 'devices', label: 'Devices', load: loadDevices },
+    { id: 'clients', label: 'Clients', load: loadClients },
     { id: 'settings', label: 'Settings', load: loadSettings },
     { id: 'network', label: 'Network', load: loadNetwork },
     { id: 'security', label: 'Security' },
@@ -410,26 +410,26 @@
     }
   });
 
-  // ---------------------------------------------------------- devices
+  // ---------------------------------------------------------- clients
 
   function when(ts) {
     return ts ? new Date(ts * 1000).toLocaleString() : 'never';
   }
 
-  async function loadDevices() {
+  async function loadClients() {
     const list = await api('GET', '/admin/api/devices');
-    const box = $('devices');
+    const box = $('clients');
     box.textContent = '';
     if (!list.length) {
       const p = document.createElement('p');
       p.className = 'hint';
-      p.textContent = 'No devices are paired yet.';
+      p.textContent = 'No clients are paired yet.';
       box.appendChild(p);
     }
     for (const d of list) {
       const card = document.createElement('div');
       card.className = 'card';
-      card.dataset.device = d.id;
+      card.dataset.client = d.id;
       const head = document.createElement('div');
       head.className = 'row';
       const name = document.createElement('span');
@@ -444,7 +444,7 @@
       if (!d.revoked) {
         const revoke = button('Revoke', 'danger', async () => {
           if (!confirm('Revoke "' + d.name + '"? It will be signed out and must be paired again.')) return;
-          try { await api('POST', '/admin/api/devices/' + encodeURIComponent(d.id) + '/revoke'); loadDevices(); } catch (ex) { flash(ex.message); }
+          try { await api('POST', '/admin/api/devices/' + encodeURIComponent(d.id) + '/revoke'); loadClients(); } catch (ex) { flash(ex.message); }
         });
         revoke.dataset.action = 'revoke';
         head.appendChild(revoke);

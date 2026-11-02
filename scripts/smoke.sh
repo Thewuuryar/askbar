@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Smoke test: start the server and the admin on empty data directories, pair a device over the
+# Smoke test: start the server and the admin on empty data directories, pair a client over the
 # HTTP API, send a chat and read the streamed reply, then search history.
 # Prints PASS or FAIL per step. Steps it cannot check itself ask a person for y or n.
 #
@@ -114,7 +114,7 @@ if [ $LOCAL = 1 ]; then
   else
     fail "add a provider that points at the mock LLM"
   fi
-  if admin POST /admin/api/pair '{"name":"smoke test device"}' >"$WORK/pair.json"; then
+  if admin POST /admin/api/pair '{"name":"smoke test client"}' >"$WORK/pair.json"; then
     PAIRING=$(json "$WORK/pair.json" 'd["pairing"]'); pass "create a pair code"
   else
     fail "create a pair code"
@@ -123,7 +123,7 @@ elif [ -z "$PAIRING" ]; then
   read -r -p "Paste a pairing string from the admin page: " PAIRING
 fi
 
-# 4. Pair a test device over the HTTP API.
+# 4. Pair a test client over the HTTP API.
 TOKEN=""
 if [ -n "$PAIRING" ]; then
   CODE=$(py 'import base64,json,sys
@@ -137,12 +137,12 @@ print(d["code"])' "$PAIRING" 2>/dev/null)
     TOKEN=$(json "$WORK/token.json" 'd["token"]')
   fi
 fi
-if [ -n "$TOKEN" ]; then pass "pair a test device"; else fail "pair a test device"; fi
+if [ -n "$TOKEN" ]; then pass "pair a test client"; else fail "pair a test client"; fi
 api() { curl -sS -H "authorization: Bearer $TOKEN" -H "x-askbar-client-version: $CLIENT_VERSION" "$@"; }
 
 if [ -n "$TOKEN" ]; then
   # 5. The token works; an unrelated one does not.
-  [ "$(api -o /dev/null -w '%{http_code}' "$URL/api/v1/whoami")" = "204" ] && pass "the device token is accepted" || fail "the device token is accepted"
+  [ "$(api -o /dev/null -w '%{http_code}' "$URL/api/v1/whoami")" = "204" ] && pass "the client token is accepted" || fail "the client token is accepted"
   [ "$(curl -sS -o /dev/null -w '%{http_code}' -H 'authorization: Bearer nope' -H "x-askbar-client-version: $CLIENT_VERSION" "$URL/api/v1/whoami")" = "401" ] \
     && pass "a wrong token is refused" || fail "a wrong token is refused"
 
