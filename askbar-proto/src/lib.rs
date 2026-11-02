@@ -339,6 +339,51 @@ mod tests {
         assert_eq!(serde_json::from_str::<ConversationDetail>(&s).unwrap(), d);
     }
 
+    /// Every object key anywhere in `v`, lower-cased.
+    fn all_keys(v: &serde_json::Value, out: &mut Vec<String>) {
+        match v {
+            serde_json::Value::Object(m) => {
+                for (k, v) in m {
+                    out.push(k.to_lowercase());
+                    all_keys(v, out);
+                }
+            }
+            serde_json::Value::Array(a) => a.iter().for_each(|v| all_keys(v, out)),
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn the_snapshot_carries_a_public_key_and_nothing_that_could_be_a_secret() {
+        // A snapshot with every optional part filled in, so every field name shows up.
+        let mut s: Snapshot = serde_json::from_str(r#"{"audit_retention_days": 30}"#).unwrap();
+        s.audit_public_key = Some(AuditKey { key_id: "0011223344556677".into(), public_key: "ab".repeat(32) });
+        s.default_provider_id = Some("p".into());
+        s.system_prompt = Some("x".into());
+        s.providers.push(SnapshotProvider {
+            id: "p".into(),
+            name: "n".into(),
+            kind: "openai".into(),
+            base_url: String::new(),
+            model: "m".into(),
+            max_tokens: Some(1),
+            temperature: Some(0.5),
+            headers: Default::default(),
+        });
+        let mut keys = Vec::new();
+        all_keys(&serde_json::to_value(&s).unwrap(), &mut keys);
+        for k in &keys {
+            for banned in ["secret", "private", "passphrase", "password", "salt", "argon", "api_key"] {
+                assert!(!k.contains(banned), "the snapshot has a field named {k:?}");
+            }
+            // (`daily_tokens` and `monthly_tokens` are budget counts, not credentials.)
+            assert!(!matches!(k.as_str(), "token" | "bearer" | "auth_token" | "access_token"), "the snapshot has a field named {k:?}");
+        }
+        assert!(keys.contains(&"audit_public_key".to_string()));
+        // The key itself is 32 bytes: a public key, not a seed or a derived secret of another size.
+        assert_eq!(s.audit_public_key.as_ref().unwrap().public_key.len(), 64);
+    }
+
     #[test]
     fn the_audit_public_key_round_trips_and_an_older_snapshot_without_it_still_parses() {
         let mut s: Snapshot = serde_json::from_str(r#"{"audit_retention_days": 30}"#).unwrap();

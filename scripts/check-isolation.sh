@@ -162,6 +162,27 @@ for path in /audit /api/v1/audit /api/v1/audit/traces /api/v1/audit/stats /mgmt/
   [ "$(http_get "$EDGE" "$EDGE_IP:8080" "$path")" = 404 ] && pass "the device API has no $path (404)" || fail "the device API answers $path"
 done
 
+echo "== 3c. The server holds no secret for the audit key"
+# The server may seal (it has the public key) but must not be able to derive or open: no Argon2
+# and no admin code in its dependency tree.
+if command -v cargo >/dev/null 2>&1 && [ -f Cargo.toml ]; then
+  TREE=$(cargo tree -p askbar-server --prefix none 2>/dev/null)
+  if [ -z "$TREE" ]; then fail "cargo tree -p askbar-server printed nothing"; else
+    printf '%s\n' "$TREE" | grep -qi '^argon2 ' && fail "askbar-server depends on argon2" || pass "askbar-server does not depend on argon2"
+    printf '%s\n' "$TREE" | grep -q '^askbar-admin ' && fail "askbar-server depends on askbar-admin" || pass "askbar-server does not depend on any admin crate"
+  fi
+else
+  fail "cargo (and the workspace) is needed to check the server's dependencies"
+fi
+# After opening sealed content, the admin's logs hold no passphrase. A made-up one is used for a
+# failed open, which is the case that would be easiest to log by mistake.
+LOGPASS="isolation-check-passphrase-$(head -c 6 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+admin_script "$(admin_login)
+call('POST', '/admin/api/audit/payloads/no-such-span/open', {'passphrase': '$LOGPASS'})
+call('POST', '/admin/api/audit/rotate-key', {'current': '$LOGPASS', 'new': '$LOGPASS-new', 'confirm': '$LOGPASS-new'})" >/dev/null 2>&1
+docker logs "$ADMIN" 2>&1 | grep -q "$LOGPASS" && fail "the admin's logs contain a passphrase" || pass "the admin's logs contain no passphrase after open and rotate attempts"
+docker logs "$SERVER" 2>&1 | grep -q "$LOGPASS" && fail "the server's logs contain a passphrase" || pass "the server's logs contain no passphrase"
+
 echo "== 4. The allowlist"
 caddy_config() { # prints the admin site's route from Caddy's loaded config
   py -u 10001:10001 -v "${PROJECT}_caddy-run:/r" -- "

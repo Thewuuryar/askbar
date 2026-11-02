@@ -276,3 +276,43 @@ async fn rotation_needs_an_existing_key_and_a_reachable_server() {
     let (st, _) = t.call(M::POST, "/admin/api/audit/rotate-key", json!({ "current": PASS, "new": "another long enough passphrase", "confirm": "another long enough passphrase" })).await;
     assert_eq!(st, 409, "no key yet");
 }
+
+/// Collects everything the process logs on this thread.
+#[derive(Clone, Default)]
+struct LogBuf(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+impl std::io::Write for LogBuf {
+    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(b);
+        Ok(b.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LogBuf {
+    type Writer = LogBuf;
+    fn make_writer(&'a self) -> LogBuf {
+        self.clone()
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn no_passphrase_reaches_the_admin_logs_when_opening_content_or_rotating() {
+    let logs = LogBuf::default();
+    let sub = tracing_subscriber::fmt().with_max_level(tracing::Level::TRACE).with_writer(logs.clone()).finish();
+    let _guard = tracing::subscriber::set_default(sub);
+
+    let t = common::start(true).await;
+    let (span, _) = server_with_sealed_reply(&t).await;
+    let wrong = "a wrong passphrase that is long enough";
+    let new_pass = "the new passphrase after rotating";
+    for pass in [PASS, wrong] {
+        t.call(M::POST, &format!("/admin/api/audit/payloads/{span}/open"), json!({ "passphrase": pass })).await;
+    }
+    t.call(M::POST, "/admin/api/audit/rotate-key", json!({ "current": PASS, "new": new_pass, "confirm": new_pass })).await;
+    t.call(M::POST, "/admin/api/audit/rotate-key", json!({ "current": wrong, "new": new_pass, "confirm": new_pass })).await;
+    let log = String::from_utf8_lossy(&logs.0.lock().unwrap()).into_owned();
+    for p in [PASS, wrong, new_pass] {
+        assert!(!log.contains(p), "a passphrase is in the logs");
+    }
+}
