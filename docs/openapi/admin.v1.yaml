@@ -1,0 +1,1135 @@
+openapi: 3.1.0
+info:
+  title: Askbar admin API
+  version: 1.0.0
+  summary: The admin site's API, for the site and for your own scripts.
+  description: |
+    The API under `/admin/api/v1`, served by `askbar-admin` at `https://<host>/admin/api/v1`. The admin site is
+    a client of it; you can write your own. Every error is a problem (`application/problem+json`). Within `v1`
+    changes are additive only. See [docs/architecture.md](../architecture.md).
+
+    **Two ways in.**
+    - *A session* (the site): `POST /session` with the admin password sets the `askbar_admin` cookie. Send the
+      cookie, and on any change also the header `X-Askbar-Admin: 1` (it defends the cookie against cross-site
+      requests).
+    - *An admin API key* (scripts): make one in the site (Security tab); it is shown once. Send it as
+      `Authorization: Bearer <key>`. No cookie and no `X-Askbar-Admin` header. A key can use every operation
+      that lists `adminApiKey` below. The operations marked session-only (the session, the password, the keys)
+      refuse a key, so a leaked key cannot make more keys or lock you out. One key is active at a time; revoke
+      it from the site. A wrong key counts toward the same lockout as a wrong password.
+
+    The site's own files (`/admin/`, `app.js`, ...) are not part of the API. If the admin's address allowlist
+    is on, requests from other addresses never arrive.
+servers:
+  - url: https://askbar.example.com
+    description: Your server's host name. Before HTTPS is set up, http://127.0.0.1:8081 on the Docker host.
+security:
+  - adminSession: []
+  - adminApiKey: []
+paths:
+  /admin/api/v1/health:
+    get:
+      operationId: getHealth
+      summary: The admin service is up.
+      security: []
+      responses:
+        '200':
+          description: OK.
+  /admin/api/v1/setup:
+    get:
+      operationId: getSetup
+      summary: Which first-run screens are done (booleans only).
+      security: []
+      responses:
+        '200':
+          description: State.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [password_set, audit_key_set]
+                properties:
+                  password_set:
+                    type: boolean
+                  audit_key_set:
+                    type: boolean
+  /admin/api/v1/setup/password:
+    put:
+      operationId: setPassword
+      summary: "First run: choose the admin password and be signed in."
+      description: Refused with 409 once a password exists. At least 10 characters.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordBody'
+      responses:
+        '204':
+          description: Set; the session cookie is set.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /admin/api/v1/session:
+    post:
+      operationId: signIn
+      summary: Sign in with the admin password.
+      description: Sets the `askbar_admin` session cookie (HttpOnly, SameSite=Strict, Path=/admin). Five wrong attempts in 15 minutes lock sign-in out for 15 minutes (429 with Retry-After); wrong admin API keys count toward the same lock.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordBody'
+      responses:
+        '204':
+          description: Signed in.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooMany'
+        '503':
+          $ref: '#/components/responses/SetupRequired'
+    get:
+      operationId: getSession
+      summary: Is this session signed in?
+      security:
+        - adminSession: []
+      responses:
+        '204':
+          description: Yes.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    delete:
+      operationId: signOut
+      summary: Sign out.
+      security:
+        - adminSession: []
+      responses:
+        '204':
+          description: Signed out; the cookie is cleared.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /admin/api/v1/password:
+    put:
+      operationId: changePassword
+      summary: Change the admin password. Other sessions are signed out.
+      security:
+        - adminSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangePassword'
+      responses:
+        '204':
+          description: Changed.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/TooMany'
+  /admin/api/v1/keys:
+    get:
+      operationId: listKeys
+      summary: The admin API key that can be used, by name. Never the key or its hash.
+      security:
+        - adminSession: []
+      responses:
+        '200':
+          description: Zero or one key.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/KeyRow'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      operationId: createKey
+      summary: Make the admin API key. It is shown once, in this answer.
+      description: "One key at a time: while one is active this is 409 `api_key_exists`. A key can use the API except for the routes marked session-only (keys, the password, the session)."
+      security:
+        - adminSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NewKey'
+      responses:
+        '201':
+          description: The key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreatedKey'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /admin/api/v1/keys/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    delete:
+      operationId: revokeKey
+      summary: Revoke the key. It stops working at once.
+      security:
+        - adminSession: []
+      responses:
+        '204':
+          description: Revoked.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /admin/api/v1/status:
+    get:
+      operationId: getStatus
+      summary: Is the server reachable, and is a change waiting to be pushed?
+      security:
+        - adminSession: []
+        - adminApiKey: []
+      responses:
+        '200':
+          description: Status.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  server_online:
+                    type: boolean
+                  pending:
+                    type: boolean
+                  error:
+                    type: [string, 'null']
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /admin/api/v1/providers:
+    get:
+      operationId: listProviders
+      summary: The providers, by name. A key is never shown, only whether the server holds one.
+      security:
+        - adminSession: []
+        - adminApiKey: []
+      responses:
+        '200':
+          description: Providers.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ProviderRow'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      operationId: createProvider
+      summary: Add a provider. The key is sent to the server, not kept here.
+      security:
+        - adminSession: []
+        - adminApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProviderInput'
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id]
+                properties:
+                  id:
+                    type: string
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '502':
+          $ref: '#/components/responses/ServerUnavailable'
+  /admin/api/v1/providers/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    put:
+      operationId: updateProvider
+      summary: Change a provider. A missing or empty `api_key` keeps the current key.
+      security:
+        - adminSession: []
+        - adminApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProviderInput'
+      responses:
+        '204':
+          description: Saved.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '502':
+          $ref: '#/components/responses/ServerUnavailable'
+    delete:
+      operationId: deleteProvider
+      summary: Delete a provider.
+      security:
+        - adminSession: []
+        - adminApiKey: []
+      responses:
+        '204':
+          description: Deleted.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '502':
+          $ref: '#/components/responses/ServerUnavailable'
+  /admin/api/v1/providers/{id}/test:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      operationId: testProvider
+      summary: Send a tiny message through the provider.
+      security:
+        - adminSession: []
+        - adminApiKey: []
+      responses:
+        '200':
+          description: The result.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  message:
+                    type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '502':
+          $ref: '#/components/responses/ServerUnavailable'
+  /admin/api/v1/clients:
+    get:
+      operationId: listClients
+      summary: The paired apps, newest first.
+      security:
+        - adminSession: []
+        - adminApiKey: []
+      responses:
+        '200':
+          description: Clients.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                    name:
+                      type: string
+                    created_at:
+                      type: integer
+                    last_seen:
+                      type: [integer, 'null']
+                    revoked:
+                      type: boolean
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '502':
+          $ref: '#/components/responses/ServerUnavailable'
+  /admin/api/v1/clients/{id}/revoke:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      operationId: revokeClient
+      summary: Revoke a paired app. Its token gets 401 from then on.
+      security:
+        - adminSession: []
+        - adminApiKey: []
+      responses:
+        '204':
+          description: Revoked.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '502':
+          $ref: '#/components/responses/ServerUnavailable'
+  /admin/api/v1/pairings:
+    post:
+      operationId: createPairing
+      summary: Make a one-time pairing string for a new app (good for ten minutes).
+      security:
+        - adminSession: []
+        - adminApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PairInput'
+      responses:
+        '200':
+          description: The pairing string.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PairingOut'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '502':
+          $ref: '#/components/responses/ServerUnavailable'
+  /admin/api/v1/setup/audit-key:
+    put:
+      operationId: setupAuditKey
+      summary: "First run: make the audit key from a passphrase (at least 20 characters)."
+      description: The passphrase is turned into a keypair and forgotten. 409 if a key exists (rotation is its own action).
+      security:
+        - adminSession: []
+        - adminApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetupAuditKey'
+      responses:
+        '200':
+          description: The key id.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  key_id:
+                    type: string
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '502':
+          $ref: '#/components/responses/ServerUnavailable'
+  /admin/api/v1/settings:
+    get:
+      operationId: getSettings
+      summary: System prompt, display defaults, timeout, kill switch, audit retention.
+      security:
+        - adminSession: []
+        - adminApiKey: []
+      responses:
+        '200':
+          description: Settings.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminSettings'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    put:
+      operationId: putSettings
+      summary: Save settings. A field left out keeps its stored value.
+      security:
+        - adminSession: []
+        - adminApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminSettings'
+      responses:
+        '204':
+          description: Saved and pushed to the server.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '502':
+          $ref: '#/components/responses/ServerUnavailable'
+  /admin/api/v1/users/{id}/display-defaults:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    put:
+      operationId: putUserDisplayDefaults
+      summary: Display defaults for one user.
+      security:
+        - adminSession: []
+        - adminApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DisplaySettings'
+      responses:
+        '204':
+          description: Saved.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '502':
+          $ref: '#/components/responses/ServerUnavailable'
+  /admin/api/v1/network:
+    get:
+      operationId: getNetwork
+      summary: Host name, HTTPS and allowlist settings, and how the last attempt to configure Caddy went.
+      security:
+        - adminSession: []
+        - adminApiKey: []
+      responses:
+        '200':
+          description: Settings.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NetworkView'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    put:
+      operationId: putNetwork
+      summary: "Save them. The Cloudflare token is write-only: left out or empty keeps the stored one."
+      security:
+        - adminSession: []
+        - adminApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NetworkInput'
+      responses:
+        '200':
+          description: Saved (and applied to Caddy).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NetworkView'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /admin/api/v1/network/apply:
+    post:
+      operationId: applyNetwork
+      summary: Send the saved settings to Caddy again.
+      security:
+        - adminSession: []
+        - adminApiKey: []
+      responses:
+        '200':
+          description: How it went.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NetworkView'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /admin/api/v1/backup:
+    get:
+      operationId: getBackup
+      summary: One .tar with server.db and admin.db, consistent and without secrets.
+      description: Provider API keys, pairing-code hashes, the Cloudflare token, the admin password hash and the API key hash are left out.
+      security:
+        - adminSession: []
+        - adminApiKey: []
+      responses:
+        '200':
+          description: A tar file.
+          content:
+            application/x-tar:
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '502':
+          $ref: '#/components/responses/ServerUnavailable'
+  /admin/api/v1/audit/traces:
+    get:
+      operationId: listTraces
+      summary: One summary per generation, newest first (from the server API; metadata only).
+      security:
+        - adminSession: []
+        - adminApiKey: []
+      responses:
+        '200':
+          description: Traces.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '502':
+          $ref: '#/components/responses/ServerUnavailable'
+  /admin/api/v1/audit/traces/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getTrace
+      summary: Every span of one generation.
+      security:
+        - adminSession: []
+        - adminApiKey: []
+      responses:
+        '200':
+          description: Spans.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '502':
+          $ref: '#/components/responses/ServerUnavailable'
+  /admin/api/v1/audit/stats:
+    get:
+      operationId: getStats
+      summary: Counts, error rate, latency, tokens and cost.
+      security:
+        - adminSession: []
+        - adminApiKey: []
+      responses:
+        '200':
+          description: Statistics.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '502':
+          $ref: '#/components/responses/ServerUnavailable'
+  /admin/api/v1/audit/provider-health:
+    get:
+      operationId: getProviderHealth
+      summary: Providers the router found unusable.
+      security:
+        - adminSession: []
+        - adminApiKey: []
+      responses:
+        '200':
+          description: Flagged providers.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '502':
+          $ref: '#/components/responses/ServerUnavailable'
+  /admin/api/v1/audit/access:
+    get:
+      operationId: listAuditAccess
+      summary: Who opened sealed content and when (never the content), newest first.
+      security:
+        - adminSession: []
+        - adminApiKey: []
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            maximum: 500
+            default: 100
+      responses:
+        '200':
+          description: Rows.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  access:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /admin/api/v1/audit/rotate-key:
+    post:
+      operationId: rotateAuditKey
+      summary: Make a new audit key from a new passphrase; the old one is retired but kept.
+      security:
+        - adminSession: []
+        - adminApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RotateKey'
+      responses:
+        '200':
+          description: The ids.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  key_id:
+                    type: string
+                  retired_key_id:
+                    type: string
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/TooMany'
+        '502':
+          $ref: '#/components/responses/ServerUnavailable'
+  /admin/api/v1/audit/payloads/{span_id}/open:
+    parameters:
+      - name: span_id
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      operationId: openAuditPayloads
+      summary: Open the sealed content of one span with the audit passphrase.
+      description: The passphrase is used to derive the key in memory and then forgotten. An access row is written before any content is returned. A wrong passphrase is 403 and recorded; five wrong ones in 15 minutes lock opening out (429).
+      security:
+        - adminSession: []
+        - adminApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OpenRequest'
+      responses:
+        '200':
+          description: The plain content.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  span_id:
+                    type: string
+                  payloads:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: true
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooMany'
+        '502':
+          $ref: '#/components/responses/ServerUnavailable'
+components:
+  securitySchemes:
+    adminSession:
+      type: apiKey
+      in: cookie
+      name: askbar_admin
+      description: Set by `POST /session`. Changes also need the header `X-Askbar-Admin` set to `1`.
+    adminApiKey:
+      type: http
+      scheme: bearer
+      description: The admin API key (`askbar-admin-...`).
+  responses:
+    BadRequest:
+      description: The body, a parameter or a header could not be used (`bad_request`, `client_version_missing`).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Unauthorized:
+      description: Missing, unknown or revoked credentials (`unauthorized`).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    NotFound:
+      description: No such thing, or not yours (`not_found`). Also any unknown path.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Internal:
+      description: The server failed (`internal`).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Forbidden:
+      description: "Not allowed: the browser header is missing, or a passphrase or password is wrong (`forbidden`)."
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Conflict:
+      description: The request conflicts with the current state (`conflict`, `api_key_exists`).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    TooMany:
+      description: Too many attempts (`too_many_attempts`, with `Retry-After`).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    ServerUnavailable:
+      description: The admin cannot reach the Askbar server (`server_unavailable`); nothing was changed.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    SetupRequired:
+      description: Setup is not finished (`setup_required`).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+  schemas:
+    Problem:
+      type: object
+      description: >-
+        An error, as RFC 9457 problem details (application/problem+json). Branch on `error`, never on
+        `detail`. Extension members (for example `period`) may be present.
+      required: [type, title, status, detail, error]
+      additionalProperties: true
+      properties:
+        type:
+          type: string
+          description: A URN, `urn:askbar:problem:<error>`; nothing is hosted at it.
+          examples: ["urn:askbar:problem:not_found"]
+        title:
+          type: string
+          description: Fixed for each code.
+        status:
+          type: integer
+        detail:
+          type: string
+          description: A sentence for a person.
+        error:
+          type: string
+          description: The stable code.
+          enum:
+          - queue_full
+          - budget_exceeded
+          - kill_switch
+          - audit_key_missing
+          - audit_backlog
+          - client_too_old
+          - client_version_missing
+          - unauthorized
+          - forbidden
+          - not_found
+          - method_not_allowed
+          - bad_request
+          - payload_too_large
+          - too_many_attempts
+          - api_key_exists
+          - setup_required
+          - server_unavailable
+          - conflict
+          - internal
+    PasswordBody:
+      type: object
+      required: [password]
+      properties:
+        password:
+          type: string
+    ChangePassword:
+      type: object
+      required: [current, new]
+      properties:
+        current:
+          type: string
+        new:
+          type: string
+          minLength: 10
+    NewKey:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 60
+    KeyRow:
+      type: object
+      required: [id, name, scope, created_at, last_used_at]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        scope:
+          type: string
+          enum: [admin]
+          description: Only `admin` exists so far; later scopes (for example audit logs only) will be added.
+        created_at:
+          type: integer
+        last_used_at:
+          type: [integer, 'null']
+    CreatedKey:
+      allOf:
+        - $ref: '#/components/schemas/KeyRow'
+        - type: object
+          required: [key]
+          properties:
+            key:
+              type: string
+              description: Shown once. Nothing returns it again.
+    ProviderRow:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        type:
+          type: string
+          enum: [openai, anthropic]
+        base_url:
+          type: string
+        model:
+          type: string
+        max_tokens:
+          type: [integer, 'null']
+        temperature:
+          type: [number, 'null']
+        has_key:
+          type: boolean
+        billing:
+          type: string
+          enum: [metered, subscription]
+        allow_as_fallback:
+          type: boolean
+        price_in:
+          type: [number, 'null']
+        price_out:
+          type: [number, 'null']
+        price_cached_in:
+          type: [number, 'null']
+    ProviderInput:
+      type: object
+      required: [name, type, model]
+      properties:
+        name:
+          type: string
+        type:
+          type: string
+          enum: [openai, anthropic]
+        base_url:
+          type: string
+        model:
+          type: string
+        api_key:
+          type: string
+          description: Write-only. Missing or empty on update keeps the current key.
+        max_tokens:
+          type: integer
+        temperature:
+          type: number
+        billing:
+          type: string
+          enum: [metered, subscription]
+        allow_as_fallback:
+          type: boolean
+        price_in:
+          type: number
+        price_out:
+          type: number
+        price_cached_in:
+          type: number
+    PairInput:
+      type: object
+      properties:
+        name:
+          type: string
+          maxLength: 60
+    PairingOut:
+      type: object
+      required: [pairing, expires_in]
+      properties:
+        pairing:
+          type: string
+          description: '`askbar-pair:` plus base64url JSON of the server address and a one-time code.'
+        expires_in:
+          type: integer
+          description: Seconds.
+    SetupAuditKey:
+      type: object
+      required: [passphrase, confirm]
+      properties:
+        passphrase:
+          type: string
+          minLength: 20
+        confirm:
+          type: string
+    RotateKey:
+      type: object
+      required: [current, new]
+      properties:
+        current:
+          type: string
+        new:
+          type: string
+          minLength: 20
+        confirm:
+          type: string
+    OpenRequest:
+      type: object
+      required: [passphrase]
+      properties:
+        passphrase:
+          type: string
+    DisplaySettings:
+      type: object
+      properties:
+        theme:
+          type: string
+          enum: [auto, light, dark]
+        width:
+          type: integer
+        max_height:
+          type: integer
+        history_width:
+          type: integer
+        top_percent:
+          type: number
+        hide_on_blur:
+          type: boolean
+    AdminSettings:
+      type: object
+      required: [system_prompt, display]
+      properties:
+        system_prompt:
+          type: string
+        display:
+          $ref: '#/components/schemas/DisplaySettings'
+        generation_timeout_secs:
+          type: integer
+          minimum: 30
+          maximum: 3600
+        kill_switch:
+          type: boolean
+        kill_switch_aborts_running:
+          type: boolean
+        audit_retention_days:
+          type: integer
+          minimum: 7
+          maximum: 3650
+        audit_key_id:
+          type: [string, 'null']
+          readOnly: true
+    NetworkInput:
+      type: object
+      required: [tls_enabled, hostname, admin_cidr, acme_staging]
+      properties:
+        tls_enabled:
+          type: boolean
+        hostname:
+          type: string
+        admin_cidr:
+          type: string
+          description: Space- or comma-separated addresses and CIDRs.
+        acme_staging:
+          type: boolean
+        allowlist_enabled:
+          type: boolean
+        cloudflare_token:
+          type: string
+          description: Write-only. Missing or empty keeps the stored token.
+        clear_token:
+          type: boolean
+    NetworkView:
+      allOf:
+        - $ref: '#/components/schemas/NetworkInput'
+        - type: object
+          properties:
+            has_token:
+              type: boolean
+            public_url:
+              type: string
+              description: What new pairing strings point at.
+            proxy:
+              type: object
+              properties:
+                ok:
+                  type: boolean
+                message:
+                  type: string
+                at:
+                  type: integer
