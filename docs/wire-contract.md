@@ -292,7 +292,22 @@ setup), with its own migrations and `PRAGMA user_version`, written only by the s
 
 ## Errors
 
-Plain HTTP status codes with no body the client depends on: `400` bad request or missing
-version header, `401` bad token, `404` not found (or not yours), `409` the conversation
-already has five messages waiting, `426` client too old,
+Plain HTTP status codes. `400` bad request or missing version header, `401` bad token, `404`
+not found (or not yours), `409` the conversation already has five messages waiting, `426`
+client too old, `429` a token budget is used up, `503` the server cannot take the message
+now (its JSON `error` says which, see *Chat stream*), or, from the device API before setup is
+finished, setup is pending. A refusal never starts a generation and never loses the typed text.
+
 (There is no setup mode: the server creates its master key on first start.)
+
+## What the desktop client does with them
+
+- `409` `queue_full`, `429` `budget_exceeded` (`period` picks "today" or "this month"), `503`
+  `kill_switch` and `503` `audit_key_missing` each show their own sentence and keep the message
+  in the outbox; nothing is retried by itself.
+- `503` with `Retry-After` (`audit_backlog`) is tried once more after that many seconds; if it is
+  refused again the message waits for the person.
+- A reply that ran out of time ends with an `error` event whose message starts with
+  `Timed out after `. There is no separate code for it, so the client recognises those words,
+  shows "Stopped after ..." with the text that had arrived, and offers to ask again as a new reply.
+- A `provider` event naming a provider other than the one chosen is shown as "Answered by ...".

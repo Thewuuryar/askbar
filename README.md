@@ -6,13 +6,14 @@ A Spotlight-style AI popup. Press a hotkey, a bar appears in the upper-middle of
 - **Any provider.** Anthropic, or anything that speaks the OpenAI `/chat/completions` protocol (OpenAI, OpenRouter, Ollama, LM Studio, vLLM, Groq, ...).
 - **History** you can toggle (Ctrl+H), reopen and delete. Stored on your server, shared by every device you pair.
 - **Copy in and out.** Paste anything into the bar. Copy a whole reply, a single code block, or the last reply (Ctrl+Shift+C).
+- **Replies run on the server.** Close the window or lose the connection and the reply keeps going; reopen the app and it is there.
 - **Keys stay on the server.** The desktop app is a thin client; provider API keys never reach it.
 
 Askbar is three programs:
 
 - **Desktop client** (Tauri): the popup. It pairs with one server and holds only its address, a hotkey and a device token (in the OS keychain).
 - **`askbar-server`**: the device API. It stores conversations, runs the chat against your providers and keeps provider keys encrypted. It has no web UI and no login.
-- **`askbar-admin`**: the admin site. It owns all configuration (providers, system prompt, display defaults, pairing codes, devices, network and HTTPS settings) and pushes it to the server over a private management API.
+- **`askbar-admin`**: the admin site. It owns all configuration (providers, system prompt, display defaults, pairing codes, devices, network and HTTPS settings, limits and the kill switch) and pushes it to the server over a private management API. Its **Audit** tab shows what the server recorded about every reply.
 
 There is no standalone mode: the client always talks to a server.
 
@@ -67,6 +68,17 @@ The active provider and your other preferences are stored on the server per user
 
 In the history panel, click a conversation to reopen it. Delete needs two clicks ("Delete" then "Delete?"), and removes the conversation and its messages. Ctrl is used on macOS too, since Cmd+H and Cmd+N belong to the system.
 
+## Replies run on the server
+
+A reply is produced by the server, not by the window. The question is saved first and the server writes the answer as its own task, so closing the app, sleeping the laptop or switching networks does not stop it. When the window comes back it asks for the rest of the reply and picks up where it left off, without repeating or dropping text; a second device paired to the same server can open the conversation and watch the same reply.
+
+- **Waiting messages.** You can send another message while a reply is running. Up to **5** messages can wait in one conversation, and they run one after another; a sixth is refused ("Five messages are already waiting...") and your text is kept. A waiting message can be removed from the window.
+- **Stop** (Esc or the Stop button) tells the server to stop the reply; the text so far is kept.
+- **Time limit.** A reply that runs longer than **300 seconds** is stopped; the text that arrived stays, the window says "Stopped after 5 minutes" and offers **Try again**. The limit is the **Generation timeout** in the admin site's Settings (30 to 3600 seconds).
+- **Restarts.** If the server is restarted mid-reply, the reply ends as interrupted and keeps the text it had.
+- **Refusals.** When the administrator has switched replies off (the kill switch in Settings), a daily or monthly token limit is used up, or the audit key has not been made yet, the window says so in words and keeps what you typed. A busy server is tried once more by itself.
+- If another provider than the one you chose answered (the server fell back), the reply says "Answered by ...".
+
 ## Hotkeys by platform
 
 `Super+A` is accepted (`hotkey: "Super+A"`) and works on X11, but Windows reserves it for Quick Settings and GNOME for the app grid, so the default is `Ctrl+Shift+Space`. If a hotkey can't be registered, the window opens with the reason.
@@ -92,7 +104,7 @@ That starts three containers on two networks:
 
 `mgmt` is an `internal` network shared by the admin and the server's management API (172.30.0.2:8082, fixed in `compose.yaml`). Caddy is the only thing the outside world can reach.
 
-- The **server** serves the device API, which accepts only `Authorization: Bearer <device token>`. Chat replies stream as Server-Sent Events (`meta`, `delta`, `done`, `error`). Device tokens are random, shown once, and stored as SHA-256 hashes. See [docs/wire-contract.md](docs/wire-contract.md).
+- The **server** serves the device API, which accepts only `Authorization: Bearer <device token>`. Chat replies stream as Server-Sent Events (`meta`, `provider`, `delta`, `done`, `error`) and can be resumed after a dropped connection. Device tokens are random, shown once, and stored as SHA-256 hashes. See [docs/wire-contract.md](docs/wire-contract.md).
 - The **admin** listens on a unix socket only. Caddy proxies `admin.<hostname>` to it, and the admin owns `admin.db`. Every change is made in `admin.db` and pushed to the server as one snapshot; if the server is down the change is refused ("The server is offline. Nothing was changed.") rather than half applied. With the server stopped the admin still loads and shows an offline banner.
 - The **management API** requires a bearer token. The admin keeps the token in its own secrets volume (mode 600); the server holds only its SHA-256 (`token.sha256`, read per request, compared in constant time, and the API refuses everything when the file is missing).
 - **Provider API keys** are encrypted at rest (ChaCha20-Poly1305) with a master key that the server creates on its first start in the `askbar-secrets` volume. They are sent to the server by the admin, stored only in `server.db`, and never returned by any endpoint. The Cloudflare token is encrypted in `admin.db` with the admin's own key (`admin-secrets`), separate from the server's, and written to a file only Caddy reads.
@@ -104,9 +116,10 @@ That starts three containers on two networks:
 Once you can reach the admin site:
 
 1. Choose the admin password (the first visit wins).
-2. **Providers** > add one (Anthropic, OpenAI-compatible, or the CLIProxyAPI preset) and press **Test**.
-3. **Network** > hostname, Cloudflare token and, if you want it, the allowlist (see below).
-4. **Devices** > generate a pairing string.
+2. **Audit passphrase.** Setup asks for one: at least 20 characters. See *The Audit tab* below; write it down.
+3. **Providers** > add one (Anthropic, OpenAI-compatible, or the CLIProxyAPI preset) and press **Test**.
+4. **Network** > hostname, Cloudflare token and, if you want it, the allowlist (see below).
+5. **Devices** > generate a pairing string.
 
 No secret ever goes in `.env`, so nothing sensitive can be committed by accident.
 
@@ -119,6 +132,19 @@ Certificates come from Let's Encrypt using a DNS challenge on Cloudflare, so the
 3. The API is at `https://<hostname>` and the admin site at `https://admin.<hostname>`.
 
 The admin allowlist is **off by default**: anyone who can reach `admin.<hostname>` can try to log in (login is rate limited). Tick **Only let these addresses open the admin site over HTTPS** and list addresses or CIDRs (for example `192.168.1.0/24`) to make Caddy drop every other address before it reaches the admin. If you reach the admin from the same machine through Docker, the connection can appear to come from the Docker gateway (for example `172.x`), so include that range.
+
+### The Audit tab
+
+The server records a trace of every reply: when, for whom, through which provider, how long each step took, how many tokens it used, which providers were tried and how it ended. The admin site's **Audit** tab shows it as an overview, a list of requests, a timeline for each one, routing (which providers answered and how often they failed), and an access history.
+
+The **content** of messages (prompts, replies, provider errors) is *sealed*: the server encrypts it with a public key that is made from your audit passphrase (Argon2id to an X25519 key) and never holds the passphrase or the private key. It cannot read what it recorded. To read content, open a request in the Audit tab and type the passphrase; the admin derives the key in memory, opens that one item, and the opening is written to the access history (the request, the key and the time, never the content).
+
+- The passphrase is chosen during setup and **cannot be recovered**. If you lose it, the sealed content recorded with it can never be opened; the rest of the trace (times, tokens, routes, outcomes) stays readable.
+- **Settings > Rotate the audit key** makes a new key from a new passphrase. Content recorded earlier stays sealed with the old key and still needs the *old* passphrase.
+- Records older than **Keep audit records for (days)** (default 30, at least 7) are deleted once a day. Nothing younger than 7 days can be deleted.
+- Until a key exists the server refuses to start replies (`503`), rather than record them unsealed.
+
+The trace lives in `audit.db`, in the `audit-data` volume, which only the server mounts; the admin reads it through the management API.
 
 ### CLIProxyAPI (profile `cpa`)
 
@@ -143,11 +169,13 @@ Lets a Claude or ChatGPT subscription act as an OpenAI-compatible provider. See 
 
 ### Backup and recovery
 
-Three things to back up, **separately**:
+Four things to back up, **separately**:
 
 - **`data/`** (the server database: conversations, paired devices, and the provider keys *encrypted*) and the **`admin-data`** volume (the admin's database).
 - **The `askbar-secrets` volume** (`master.key`) and the **`admin-secrets`** volume (`admin.key`). Keep these somewhere other than your database backups: anyone holding both can read the stored keys. For example: `docker run --rm -v askbar_askbar-secrets:/s -v "$PWD":/b alpine cp /s/master.key /b/master.key`, then store the copy in a password manager.
 - Admin site > **Backup** downloads one `.tar` with `server.db` and `admin.db`. It is consistent (`VACUUM INTO`) and leaves out provider API keys, pair codes, the Cloudflare token and the admin password hash, so after restoring it you enter those again.
+
+- **The `audit-data` volume** (`audit.db`, the trace of replies) is **not** in the admin site's Backup `.tar`. Copy the whole volume if you want it (stop the server first, or copy `audit.db`, `audit.db-wal` and `audit.db-shm` together): `docker run --rm -v askbar_audit-data:/a -v "$PWD":/b alpine cp -a /a/. /b/audit-backup/`. A copy holds sealed content only, which is useless without the audit passphrase.
 
 If you restore a raw copy of `data/` that still holds encrypted provider keys onto a **new** `askbar-secrets` volume, the server refuses to start rather than create a new key, and names the volume: restore `master.key` into it first. A new, empty `data/` with a new `askbar-secrets` is a normal fresh install. The server never replaces an existing `master.key`, and there is no key rotation.
 
