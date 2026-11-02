@@ -889,6 +889,36 @@ async function waitForPort(port) {
     await page.waitForSelector('#flash:not([hidden])');
     assert.match(await page.innerText('#flash'), /Password changed/);
   });
+  await step('admin API key: shown once, then only its name; a script can use it until it is revoked', async () => {
+    await page.click('#nav [data-tab="security"]');
+    await page.waitForSelector('#key-form:not([hidden])');
+    await page.fill('#key-name', 'build server');
+    await page.click('#key-create');
+    await page.waitForSelector('#key-dialog[open]');
+    const key = (await page.innerText('#key-value')).trim();
+    assert.match(key, /^askbar-admin-[A-Za-z0-9_-]{43}$/);
+    assert.match(await page.innerText('#key-dialog'), /only time the key is shown/);
+    const call = (k, method = 'GET', path = '/admin/api/v1/providers') => fetch(`http://127.0.0.1:${adminPort}${path}`, { method, headers: { authorization: 'Bearer ' + k } });
+    assert.equal((await call(key)).status, 200, 'a script can use the key');
+    assert.equal((await call(key, 'GET', '/admin/api/v1/keys')).status, 401, 'but not to manage keys');
+    await page.click('#key-close');
+    assert.equal(await page.locator('#key-dialog[open]').count(), 0);
+    assert.ok(!(await page.content()).includes(key), 'the key is not on the page any more');
+    assert.equal(await page.isVisible('#key-form'), false, 'one key at a time: no form while one exists');
+    assert.match(await page.innerText('#key-row'), /build server/);
+    // After a reload it is still only a name.
+    await page.reload();
+    await page.waitForSelector('#app:not([hidden])');
+    await page.click('#nav [data-tab="security"]');
+    await page.waitForSelector('#key-row:not([hidden])');
+    assert.ok(!(await page.content()).includes(key));
+    // Revoking asks twice, then it stops working and a new one can be made.
+    await page.click('#key-revoke');
+    assert.match(await page.innerText('#key-revoke'), /stops working/);
+    await page.click('#key-revoke');
+    await page.waitForSelector('#key-form:not([hidden])');
+    assert.equal((await call(key)).status, 401, 'revoked');
+  });
   await step('sign out returns to the login form', async () => {
     await page.click('#logout');
     await page.waitForSelector('#login:not([hidden])');

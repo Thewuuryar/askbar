@@ -40,7 +40,7 @@
     { id: 'clients', label: 'Clients', load: loadClients },
     { id: 'settings', label: 'Settings', load: loadSettings },
     { id: 'network', label: 'Network', load: loadNetwork },
-    { id: 'security', label: 'Security' },
+    { id: 'security', label: 'Security', load: loadKeys },
     { id: 'backup', label: 'Backup' },
   ];
   function registerTab(tab) { tabs.push(tab); renderNav(); }
@@ -358,6 +358,87 @@
     } catch (ex) {
       err.textContent = ex.message;
       show(err, true);
+    }
+  });
+
+  // ------------------------------------------------------ admin API key
+
+  let keyId = null;
+  let revokeArmed = null;
+
+  function ago(t) {
+    if (!t) return 'never used';
+    return 'last used ' + new Date(t * 1000).toLocaleString();
+  }
+
+  async function loadKeys() {
+    const list = await api('GET', '/admin/api/v1/keys');
+    keyId = list.length ? list[0].id : null;
+    show($('key-row'), keyId !== null);
+    show($('key-form'), keyId === null);
+    if (keyId !== null) {
+      $('key-row-name').textContent = list[0].name;
+      $('key-row-times').textContent = 'made ' + new Date(list[0].created_at * 1000).toLocaleString() + ', ' + ago(list[0].last_used_at);
+    }
+    show($('key-error'), false);
+  }
+
+  $('key-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const err = $('key-error');
+    show(err, false);
+    try {
+      const made = await api('POST', '/admin/api/v1/keys', { name: $('key-name').value });
+      $('key-name').value = '';
+      $('key-value').textContent = made.key; // the only time it is on the page
+      $('key-dialog').showModal();
+      await loadKeys();
+    } catch (ex) {
+      err.textContent = ex.message;
+      show(err, true);
+    }
+  });
+
+  function closeKeyDialog() {
+    $('key-value').textContent = '';
+    if ($('key-dialog').open) $('key-dialog').close();
+  }
+  $('key-close').addEventListener('click', closeKeyDialog);
+  $('key-dialog').addEventListener('cancel', () => { $('key-value').textContent = ''; });
+  $('key-copy').addEventListener('click', async () => {
+    const text = $('key-value').textContent;
+    try {
+      await navigator.clipboard.writeText(text);
+      $('key-copy').textContent = 'Copied';
+    } catch (_) {
+      // No clipboard here (plain http off localhost): select the text so Ctrl+C works.
+      const range = document.createRange();
+      range.selectNodeContents($('key-value'));
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      $('key-copy').textContent = 'Selected: press Ctrl+C';
+    }
+    setTimeout(() => { $('key-copy').textContent = 'Copy'; }, 3000);
+  });
+
+  $('key-revoke').addEventListener('click', async () => {
+    const b = $('key-revoke');
+    if (!revokeArmed) {
+      b.textContent = 'Revoke? It stops working at once.';
+      revokeArmed = setTimeout(() => { revokeArmed = null; b.textContent = 'Revoke'; }, 5000);
+      return;
+    }
+    clearTimeout(revokeArmed);
+    revokeArmed = null;
+    b.textContent = 'Revoke';
+    try {
+      await api('DELETE', '/admin/api/v1/keys/' + encodeURIComponent(keyId));
+      flash('The API key was revoked.');
+      await loadKeys();
+    } catch (ex) {
+      $('key-error').textContent = ex.message;
+      show($('key-error'), true);
     }
   });
 
