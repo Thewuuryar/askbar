@@ -5,6 +5,7 @@
 
 
 pub mod admin_api;
+pub mod api_key;
 pub mod audit_key;
 pub mod auth;
 pub mod caddy;

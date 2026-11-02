@@ -102,7 +102,31 @@ const MIGRATIONS: &[&str] = &[
     "ALTER TABLE revoked_devices RENAME TO revoked_clients; -- names-ok
      ALTER TABLE revoked_clients RENAME COLUMN device_id TO client_id; -- names-ok
      ALTER TABLE pair_codes RENAME COLUMN device_name TO client_name; -- names-ok",
+    // v8: the admin API key, for scripts. Only the SHA-256 of the key is kept, with a name, a scope
+    // (`admin` is the only one so far) and when it was made and last used. At most one key is active
+    // (not revoked) at a time; a revoked row stays as a record.
+    "CREATE TABLE admin_api_keys (
+         id           TEXT PRIMARY KEY,
+         name         TEXT    NOT NULL,
+         hash         TEXT    NOT NULL UNIQUE,
+         scope        TEXT    NOT NULL DEFAULT 'admin',
+         created_at   INTEGER NOT NULL,
+         last_used_at INTEGER,
+         revoked_at   INTEGER
+     );
+     CREATE UNIQUE INDEX admin_api_keys_one_active ON admin_api_keys((1)) WHERE revoked_at IS NULL;",
 ];
+
+/// The schema steps, in order (for the upgrade tests).
+#[doc(hidden)]
+pub fn migrations() -> &'static [&'static str] {
+    MIGRATIONS
+}
+
+#[doc(hidden)]
+pub fn application_id() -> i64 {
+    APPLICATION_ID
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum DbError {
@@ -182,6 +206,12 @@ pub fn active_audit_key(conn: &Connection) -> rusqlite::Result<Option<AuditKeyRo
 }
 
 impl AdminDb {
+    /// Tests only: open a connection that already holds an older schema.
+    #[doc(hidden)]
+    pub fn init_for_test(conn: Connection) -> Result<AdminDb, DbError> {
+        AdminDb::init(conn)
+    }
+
     pub fn open(path: &Path) -> Result<AdminDb, DbError> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| DbError::Io { path: dir.display().to_string(), source: e })?;
