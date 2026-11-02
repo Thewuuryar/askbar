@@ -146,6 +146,32 @@ const MIGRATIONS: &[&str] = &[
      INSERT INTO providers_new (id, api_key_enc) SELECT id, api_key_enc FROM providers;
      DROP TABLE providers;
      ALTER TABLE providers_new RENAME TO providers;",
+    // v4: server-side generations. A chat turn is a row here that outlives its client.
+    // Statuses: queued, running, done, error, cancelled, timed_out, interrupted. A queued row
+    // holds the prompt; its user message is written to `messages` when it starts.
+    "CREATE TABLE generations (
+         id                   TEXT PRIMARY KEY,
+         user_id              TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+         device_id            TEXT,
+         conversation_id      TEXT    NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+         user_message_id      TEXT,
+         assistant_message_id TEXT,
+         client_request_id    TEXT,
+         provider_id          TEXT,
+         status               TEXT    NOT NULL CHECK (status IN
+                                  ('queued','running','done','error','cancelled','timed_out','interrupted')),
+         prompt               TEXT    NOT NULL DEFAULT '',
+         text                 TEXT    NOT NULL DEFAULT '',
+         error                TEXT,
+         queued_at            INTEGER NOT NULL,
+         started_at           INTEGER,
+         deadline_at          INTEGER,
+         ended_at             INTEGER
+     );
+     CREATE UNIQUE INDEX idx_generations_request ON generations(device_id, client_request_id)
+         WHERE client_request_id IS NOT NULL;
+     CREATE INDEX idx_generations_conversation ON generations(conversation_id, status);
+     CREATE INDEX idx_generations_user_status ON generations(user_id, status);",
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -566,6 +592,7 @@ mod tests {
             "memory", "projects", "token_usage", // reserved
             "providers", // only the encrypted API keys, by provider id
             "config_snapshot", "redeemed_codes", // what the admin service pushes, and codes already used
+            "generations", // chat turns that outlive their client
         ] {
             assert!(t.iter().any(|x| x == name), "missing table {name}");
         }
@@ -637,6 +664,44 @@ mod tests {
         assert_eq!(keys, [("p1".to_string(), Some(vec![1, 2])), ("p2".to_string(), None)], "ids and keys survive");
         let t = tables(&db);
         assert!(["settings", "pair_codes", "display_defaults"].iter().all(|gone| !t.iter().any(|x| x == gone)));
+    }
+
+    #[test]
+    fn a_v3_database_upgrades_to_v4_and_keeps_its_data() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        for (i, sql) in MIGRATIONS.iter().take(3).enumerate() {
+            conn.execute_batch(sql).unwrap();
+            if i == 0 {
+                conn.execute_batch(&format!("PRAGMA application_id = {APPLICATION_ID}")).unwrap();
+            }
+        }
+        conn.execute_batch("PRAGMA user_version = 3").unwrap();
+        conn.execute_batch(
+            "INSERT INTO users (id, name, created_at) VALUES ('u1','owner',0);
+             INSERT INTO conversations (id, user_id, title, created_at, updated_at) VALUES ('c1','u1','t',0,0);
+             INSERT INTO messages (id, conversation_id, user_id, role, content, created_at) VALUES ('m1','c1','u1','user','hi',0);",
+        )
+        .unwrap();
+        assert!(!conn.prepare("SELECT 1 FROM sqlite_master WHERE name = 'generations'").unwrap().exists([]).unwrap());
+        let db = Db::init(conn).unwrap();
+        let v: i64 = db.conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(v, 4);
+        assert!(tables(&db).iter().any(|x| x == "generations"));
+        let n: i64 = db.conn.query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 1, "existing history survives");
+        // The unique index covers (device, client_request_id) only when the latter is set.
+        let ins = |id: &str, rid: Option<&str>| {
+            db.conn.execute(
+                "INSERT INTO generations (id, user_id, conversation_id, device_id, client_request_id, status, queued_at)
+                 VALUES (?1, 'u1', 'c1', 'd1', ?2, 'running', 0)",
+                params![id, rid],
+            )
+        };
+        ins("g1", Some("r1")).unwrap();
+        assert!(ins("g2", Some("r1")).is_err(), "a repeated request id from one device is refused");
+        ins("g3", None).unwrap();
+        ins("g4", None).unwrap();
     }
 
     #[test]
