@@ -22,10 +22,57 @@ struct Inner {
     base: Url,
     http: reqwest::Client,
     tokens: Box<dyn TokenStore>,
+    /// One "second" of the resume backoff; tests shrink it.
+    backoff_unit: Duration,
+}
+
+/// Wait before resume attempt `n` (from 0): 1, 2, 4, 8, 16, then 30 seconds.
+fn backoff_secs(n: u32) -> u64 {
+    [1, 2, 4, 8, 16].get(n as usize).copied().unwrap_or(30)
 }
 
 pub struct Remote {
     inner: Result<Inner, String>,
+}
+
+enum Read {
+    /// done, an error event or a cancel was reported to the caller.
+    Finished,
+    /// The stream ended or broke before done; the reason, for when there is nothing to resume.
+    Lost(String),
+}
+
+/// Reads one response of a reply until it ends, reporting events as they arrive.
+async fn read_reply(resp: reqwest::Response, reader: &mut ReplyReader, cancel: &mut oneshot::Receiver<()>, emit: Emit<'_>) -> Read {
+    let mut stream = Box::pin(resp.bytes_stream());
+    loop {
+        let chunk = tokio::select! {
+            c = stream.next() => c,
+            // Dropping the stream closes the connection; the server keeps the partial reply.
+            _ = &mut *cancel => {
+                emit(StreamEvent::Cancelled);
+                return Read::Finished;
+            }
+        };
+        let bytes = match chunk {
+            None => return Read::Lost("The connection to the server ended before the reply was complete.".into()),
+            Some(Err(e)) => return Read::Lost(format!("The connection to the server was lost: {e}")),
+            Some(Ok(bytes)) => bytes,
+        };
+        for step in reader.feed(&bytes) {
+            match step {
+                Step::Emit(e) => emit(e),
+                Step::Done => {
+                    emit(StreamEvent::Done);
+                    return Read::Finished;
+                }
+                Step::Fail(message) => {
+                    emit(StreamEvent::Error { message });
+                    return Read::Finished;
+                }
+            }
+        }
+    }
 }
 
 /// What one chunk of a reply stream means for the caller.
@@ -45,9 +92,8 @@ enum Step {
 struct ReplyReader {
     parser: SseParser,
     /// Deltas received so far; the `after` to resume from.
-    #[allow(dead_code)] // read by the resume loop (step 1.18)
     last_id: u64,
-    #[allow(dead_code)] // read by cancel and resume (steps 1.18, 1.19)
+    #[allow(dead_code)] // read by cancel (step 1.19)
     generation_id: Option<String>,
 }
 
@@ -89,9 +135,18 @@ impl Remote {
                 .user_agent(format!("askbar/{VERSION}"))
                 .build()
                 .map_err(|e| e.to_string())?;
-            Ok(Inner { cfg: Mutex::new(cfg), path, base, http, tokens })
+            Ok(Inner { cfg: Mutex::new(cfg), path, base, http, tokens, backoff_unit: Duration::from_secs(1) })
         });
         Remote { inner }
+    }
+
+    /// Tests only: make the resume backoff run in milliseconds.
+    #[cfg(test)]
+    fn with_backoff_unit(mut self, unit: Duration) -> Remote {
+        if let Ok(i) = self.inner.as_mut() {
+            i.backoff_unit = unit;
+        }
+        self
     }
 
     fn inner(&self) -> Result<&Inner, String> {
@@ -342,28 +397,44 @@ impl Remote {
             _ = &mut cancel => return emit(StreamEvent::Cancelled),
         };
 
-        let mut stream = Box::pin(resp.bytes_stream());
         let mut reader = ReplyReader::default();
+        let mut resp = resp;
         loop {
-            let chunk = tokio::select! {
-                c = stream.next() => c,
-                // Dropping the stream closes the connection; the server keeps the partial reply.
-                _ = &mut cancel => return emit(StreamEvent::Cancelled),
+            let lost = match read_reply(resp, &mut reader, &mut cancel, emit).await {
+                Read::Finished => return,
+                Read::Lost(why) => why,
             };
-            let bytes = match chunk {
-                None => break,
-                Some(Err(e)) => return fail(format!("The connection to the server was lost: {e}")),
-                Some(Ok(bytes)) => bytes,
-            };
-            for step in reader.feed(&bytes) {
-                match step {
-                    Step::Emit(e) => emit(e),
-                    Step::Done => return emit(StreamEvent::Done),
-                    Step::Fail(message) => return fail(message),
+            // The stream ended without done. The server keeps generating, so ask for the rest,
+            // quietly: the person sees nothing unless the reply can no longer be had.
+            let Some(generation_id) = reader.generation_id.clone() else { return fail(lost) };
+            let mut attempt = 0u32;
+            resp = loop {
+                let wait = i.backoff_unit * backoff_secs(attempt) as u32;
+                attempt += 1;
+                tokio::select! {
+                    _ = tokio::time::sleep(wait) => {}
+                    _ = &mut cancel => return emit(StreamEvent::Cancelled),
                 }
-            }
+                let req = match i.request(Method::GET, &format!("/api/v1/generations/{generation_id}/stream")) {
+                    Ok(r) => r.header("accept", "text/event-stream").query(&[("after", reader.last_id)]),
+                    Err(e) => return fail(e),
+                };
+                let sent = tokio::select! {
+                    r = req.send() => r,
+                    _ = &mut cancel => return emit(StreamEvent::Cancelled),
+                };
+                match sent {
+                    Ok(r) if r.status() == StatusCode::NOT_FOUND => {
+                        return fail("The reply is no longer on the server.".into());
+                    }
+                    Ok(r) if r.status() == StatusCode::UNAUTHORIZED => {
+                        return fail(check_status(r.status()).unwrap_err());
+                    }
+                    Ok(r) if r.status().is_success() => break r,
+                    _ => {} // unreachable or a server hiccup: try again after the next wait
+                }
+            };
         }
-        fail("The connection to the server ended before the reply was complete.".into());
     }
 }
 
@@ -458,6 +529,105 @@ mod tests {
         );
         assert_eq!((r.last_id, r.generation_id.as_deref()), (0, None));
         assert_eq!(r.feed(sse("error", None, r#"{"event":"error","message":"boom"}"#).as_bytes()), [Step::Fail("boom".into())]);
+    }
+
+    /// A server that drops the first stream after three deltas, with no `done`.
+    /// `resume` answers each resume request in turn with a status and a body.
+    struct Fake {
+        url: String,
+        /// The `after` value of every resume request, in order.
+        resumes: Arc<Mutex<Vec<String>>>,
+    }
+
+    async fn fake_server(resume: Vec<(u16, String)>) -> Fake {
+        use axum::{extract::{Query, State}, http::{header, StatusCode as S}, routing::{get, post}, Router};
+        type Shared = Arc<(Mutex<Vec<(u16, String)>>, Mutex<Vec<String>>)>;
+        let shared: Shared = Arc::new((Mutex::new(resume), Mutex::new(Vec::new())));
+        let stream_body = |chunks: &[(Option<u64>, &str, &str)]| -> String { chunks.iter().map(|(id, name, data)| {
+            let id = id.map(|n| format!("id: {n}\n")).unwrap_or_default();
+            format!("event: {name}\n{id}data: {data}\n\n")
+        }).collect() };
+        let first = stream_body(&[
+            (None, "meta", r#"{"event":"meta","conversation_id":"c1","generation_id":"g1"}"#),
+            (Some(1), "delta", r#"{"event":"delta","text":"a"}"#),
+            (Some(2), "delta", r#"{"event":"delta","text":"b"}"#),
+            (Some(3), "delta", r#"{"event":"delta","text":"c"}"#),
+        ]);
+        let app = Router::new()
+            .route("/api/v1/me/prefs", get(|| async { r#"{"active_provider_id":"p"}"# }))
+            .route("/api/v1/chat", post(move || { let b = first.clone(); async move { ([(header::CONTENT_TYPE, "text/event-stream")], b) } }))
+            .route(
+                "/api/v1/generations/{id}/stream",
+                get(|State(sh): State<Shared>, Query(q): Query<std::collections::HashMap<String, String>>| async move {
+                    sh.1.lock().unwrap().push(q.get("after").cloned().unwrap_or_default());
+                    let (status, body) = {
+                        let mut plan = sh.0.lock().unwrap();
+                        if plan.len() > 1 { plan.remove(0) } else { plan[0].clone() }
+                    };
+                    (S::from_u16(status).unwrap(), [(header::CONTENT_TYPE, "text/event-stream")], body)
+                }),
+            )
+            .with_state(shared.clone());
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", l.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
+        let resumes = Arc::new(Mutex::new(Vec::new()));
+        // Mirror the shared log into the handle the test reads.
+        let (log, out) = (shared, resumes.clone());
+        tokio::spawn(async move {
+            loop {
+                *out.lock().unwrap() = log.1.lock().unwrap().clone();
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        });
+        Fake { url, resumes }
+    }
+
+    async fn ask_fake(fake: &Fake) -> Vec<StreamEvent> {
+        let remote = remote_for(&fake.url, Some("t"), PathBuf::new()).with_backoff_unit(Duration::from_millis(2));
+        let events = Mutex::new(Vec::new());
+        let (_tx, rx) = oneshot::channel();
+        remote.ask(None, "hi".into(), rx, &|e| events.lock().unwrap().push(e)).await;
+        events.into_inner().unwrap()
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_dropped_stream_is_resumed_quietly_and_the_reply_arrives_once_in_order() {
+        let rest = sse("delta", Some(4), r#"{"event":"delta","text":"d"}"#)
+            + &sse("delta", Some(5), r#"{"event":"delta","text":"e"}"#)
+            + &sse("done", None, r#"{"event":"done"}"#);
+        // The first resume attempt meets a server hiccup; the second gets the rest.
+        let fake = fake_server(vec![(503, String::new()), (200, rest)]).await;
+        let events = ask_fake(&fake).await;
+
+        let reply: String = events.iter().filter_map(|e| if let StreamEvent::Delta { text } = e { Some(text.as_str()) } else { None }).collect();
+        assert_eq!(reply, "abcde", "every delta once, in order");
+        assert!(matches!(events.first(), Some(StreamEvent::Started { generation_id: Some(g), .. }) if g == "g1"));
+        assert!(matches!(events.last(), Some(StreamEvent::Done)));
+        assert!(!events.iter().any(|e| matches!(e, StreamEvent::Error { .. })), "no error while retrying: {events:?}");
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert_eq!(*fake.resumes.lock().unwrap(), ["3", "3"], "both attempts ask for everything after delta 3");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn resuming_stops_on_an_error_event_a_404_or_a_401() {
+        let err = sse("error", None, r#"{"event":"error","message":"Timed out after 5 minutes"}"#);
+        let events = ask_fake(&fake_server(vec![(200, err)]).await).await;
+        assert!(matches!(events.last(), Some(StreamEvent::Error { message }) if message == "Timed out after 5 minutes"), "{events:?}");
+
+        let events = ask_fake(&fake_server(vec![(404, String::new())]).await).await;
+        assert!(matches!(events.last(), Some(StreamEvent::Error { message }) if message.contains("no longer on the server")), "{events:?}");
+
+        let events = ask_fake(&fake_server(vec![(401, String::new())]).await).await;
+        assert!(matches!(events.last(), Some(StreamEvent::Error { message }) if message.contains("rejected")), "{events:?}");
+        for e in [&events[..]] {
+            assert_eq!(e.iter().filter(|x| matches!(x, StreamEvent::Delta { .. })).count(), 3, "what arrived stays");
+        }
+    }
+
+    #[test]
+    fn the_resume_backoff_is_1_2_4_8_16_then_30_seconds() {
+        assert_eq!((0..8).map(backoff_secs).collect::<Vec<_>>(), [1, 2, 4, 8, 16, 30, 30, 30]);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
