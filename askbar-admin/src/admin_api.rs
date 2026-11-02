@@ -879,7 +879,8 @@ fn tar_entry(out: &mut Vec<u8>, name: &str, data: &[u8], mtime: i64) {
     out.resize(out.len().div_ceil(512) * 512, 0);
 }
 
-/// A copy of `admin.db` with the password hash, the Cloudflare token and pairing-code hashes removed.
+/// A copy of `admin.db` with the password hash, the Cloudflare token, pairing-code hashes and the admin
+/// API key's hash removed.
 fn admin_db_copy(db: &crate::AdminDb) -> Result<Vec<u8>, Failure> {
     let path = std::env::temp_dir().join(format!("askbar-admin-backup-{}.db", ulid::Ulid::new()));
     let result = (|| -> rusqlite::Result<Vec<u8>> {
@@ -889,6 +890,7 @@ fn admin_db_copy(db: &crate::AdminDb) -> Result<Vec<u8>, Failure> {
             "DELETE FROM admin_credentials;
              UPDATE network_settings SET cloudflare_token = NULL;
              DELETE FROM pair_codes;
+             DELETE FROM admin_api_keys;
              PRAGMA journal_mode = DELETE;
              VACUUM;",
         )?;

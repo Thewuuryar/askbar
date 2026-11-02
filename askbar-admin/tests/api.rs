@@ -434,6 +434,24 @@ async fn the_backup_has_no_audit_store_in_it() {
 }
 
 #[tokio::test]
+async fn the_backup_leaves_out_the_admin_api_key() {
+    let t = start(true).await;
+    let (_, made) = t.call(M::POST, "/admin/api/v1/keys", Some(json!({ "name": "ci" }))).await;
+    let key_hash = askbar_admin::api_key::hash(made["key"].as_str().unwrap());
+    let r = t.http.get(format!("{}/admin/api/v1/backup", t.adm)).header("cookie", &t.cookie).send().await.unwrap();
+    let bytes = r.bytes().await.unwrap();
+    let files = tar_files(&bytes);
+    let (_, admin_db) = files.iter().find(|(n, _)| n == "admin.db").unwrap();
+    assert!(!admin_db.windows(key_hash.len()).any(|w| w == key_hash.as_bytes()), "the key's hash is not in the backup");
+    std::fs::create_dir_all(&t.dir).unwrap();
+    let p = t.dir.join("keys-backup.db");
+    std::fs::write(&p, admin_db).unwrap();
+    let n: i64 = rusqlite::Connection::open(p).unwrap().query_row("SELECT COUNT(*) FROM admin_api_keys", [], |r| r.get(0)).unwrap();
+    assert_eq!(n, 0);
+    assert_eq!(t.admin_rows("SELECT COUNT(*) FROM admin_api_keys").await, 1, "the live database still has it");
+}
+
+#[tokio::test]
 async fn all_of_it_needs_a_session() {
     let t = start(true).await;
     for (m, path) in [
