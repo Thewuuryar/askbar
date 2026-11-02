@@ -28,7 +28,23 @@ pub enum StreamEvent {
     Delta { text: String },
     Done,
     Cancelled,
-    Error { message: String },
+    /// `kind` names a refusal the window can act on (`queue_full`, `budget_exceeded`, `kill_switch`,
+    /// `audit_key_missing`, `busy`, `timed_out`); plain failures have none.
+    Error {
+        message: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        kind: Option<String>,
+    },
+}
+
+impl StreamEvent {
+    pub fn error(message: String) -> StreamEvent {
+        StreamEvent::Error { message, kind: None }
+    }
+
+    pub fn error_kind(kind: &str, message: String) -> StreamEvent {
+        StreamEvent::Error { message, kind: Some(kind.to_string()) }
+    }
 }
 
 /// A reply that has not finished: running, or a message waiting its turn behind one.

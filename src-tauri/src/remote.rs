@@ -76,7 +76,7 @@ async fn read_reply(resp: reqwest::Response, reader: &mut ReplyReader, cancel: &
                     return Read::Finished;
                 }
                 Step::Fail(message) => {
-                    emit(StreamEvent::Error { message });
+                    emit(StreamEvent::error(message));
                     return Read::Finished;
                 }
             }
@@ -213,10 +213,42 @@ impl Inner {
         Ok(resp)
     }
 
+    /// Sends the chat request. A refusal the server explains (see `refusal_for`) comes back with
+    /// its kind and words; a busy server (503 with Retry-After) is asked again once after the wait.
+    async fn send_chat(&self, mut req: RequestBuilder) -> Result<reqwest::Response, Refusal> {
+        let mut retried = false;
+        loop {
+            let again = req.try_clone();
+            let resp = req
+                .send()
+                .await
+                .map_err(|e| Refusal::plain(format!("Could not reach the server at {}: {e}", self.base)))?;
+            let status = resp.status();
+            if status.is_success() {
+                return Ok(resp);
+            }
+            let retry_after = resp.headers().get("retry-after").and_then(|v| v.to_str().ok()).and_then(|v| v.trim().parse::<u64>().ok());
+            let body: serde_json::Value = resp.json().await.unwrap_or_default();
+            let code = body["error"].as_str().unwrap_or("");
+            let period = body["period"].as_str().unwrap_or("");
+            let Some(refusal) = refusal_for(status, retry_after, code, period) else {
+                return Err(Refusal::plain(check_status(status).unwrap_err()));
+            };
+            match (refusal.kind, again) {
+                (Some("busy"), Some(next)) if !retried => {
+                    retried = true;
+                    tokio::time::sleep(self.backoff_unit * retry_after.unwrap_or(1).min(30) as u32).await;
+                    req = next;
+                }
+                _ => return Err(refusal),
+            }
+        }
+    }
+
     /// Follows a reply to its end: reads `resp` if there is one, and when a stream ends without
     /// done, asks the server for the rest (see `backoff_secs`). Reports everything through `emit`.
     async fn drive(&self, resp: Option<reqwest::Response>, reader: &mut ReplyReader, cancel: &mut Cancel, stop: &mut bool, emit: Emit<'_>) {
-        let fail = |message: String| emit(StreamEvent::Error { message });
+        let fail = |message: String| emit(StreamEvent::error(message));
         let mut resp = resp;
         loop {
             let lost = match resp.take() {
@@ -279,8 +311,8 @@ impl Inner {
             };
             match sent {
                 Ok(r) if r.status().is_success() || r.status() == StatusCode::NOT_FOUND => {}
-                Ok(r) => return emit(StreamEvent::Error { message: format!("Could not stop the reply: the server answered {}.", r.status()) }),
-                Err(e) => return emit(StreamEvent::Error { message: format!("Could not reach the server to stop the reply: {e}") }),
+                Ok(r) => return emit(StreamEvent::error(format!("Could not stop the reply: the server answered {}.", r.status()))),
+                Err(e) => return emit(StreamEvent::error(format!("Could not reach the server to stop the reply: {e}"))),
             }
         }
         emit(StreamEvent::Cancelled);
@@ -303,6 +335,44 @@ impl Inner {
         let list: Vec<ProviderInfo> = self.get_json("/api/v1/providers").await?;
         list.into_iter().next().map(|p| p.id).ok_or_else(|| "The server has no providers configured yet.".into())
     }
+}
+
+/// A send the server did not take, told the way the window can act on it.
+struct Refusal {
+    kind: Option<&'static str>,
+    message: String,
+}
+
+impl Refusal {
+    fn plain(message: String) -> Refusal {
+        Refusal { kind: None, message }
+    }
+}
+
+/// The server's refusals of a send, in words for a person. `None` for anything else.
+fn refusal_for(status: StatusCode, retry_after: Option<u64>, code: &str, period: &str) -> Option<Refusal> {
+    let (kind, message) = match (status.as_u16(), code) {
+        (409, _) => ("queue_full", "Five messages are already waiting in this conversation. Wait for one to finish, or remove a waiting message.".to_string()),
+        (429, "budget_exceeded") => (
+            "budget_exceeded",
+            if period == "monthly" {
+                "The usage limit for this month has been reached. Try again next month, or ask the administrator to raise it.".to_string()
+            } else {
+                "The usage limit for today has been reached. Try again tomorrow, or ask the administrator to raise it.".to_string()
+            },
+        ),
+        (503, "kill_switch") => ("kill_switch", "Replies have been switched off by the administrator for now. Your message is kept; send it again when they are back.".to_string()),
+        (503, "audit_key_missing") => (
+            "audit_key_missing",
+            "The server is not ready to answer yet: the administrator has to finish setting up the audit key in the admin site. Your message is kept.".to_string(),
+        ),
+        (503, _) if retry_after.is_some() => (
+            "busy",
+            format!("The server is busy recording and asked for a wait of {} seconds. Your message is kept; send it again in a moment.", retry_after.unwrap_or(0)),
+        ),
+        _ => return None,
+    };
+    Some(Refusal { kind: Some(kind), message })
 }
 
 fn check_status(status: StatusCode) -> Result<(), String> {
@@ -483,7 +553,7 @@ impl Remote {
     pub async fn attach(&self, generation_id: String, cancel: oneshot::Receiver<()>, emit: Emit<'_>) {
         let i = match self.inner() {
             Ok(i) => i,
-            Err(e) => return emit(StreamEvent::Error { message: e }),
+            Err(e) => return emit(StreamEvent::error(e)),
         };
         let mut reader = ReplyReader { generation_id: Some(generation_id), ..Default::default() };
         let (mut cancel, mut stop) = (cancel.fuse(), false);
@@ -505,14 +575,14 @@ impl Remote {
     pub async fn ask(&self, conversation_id: Option<String>, text: String, cancel: oneshot::Receiver<()>, emit: Emit<'_>) {
         let i = match self.inner() {
             Ok(i) => i,
-            Err(e) => return emit(StreamEvent::Error { message: e }),
+            Err(e) => return emit(StreamEvent::error(e)),
         };
         // If the provider cannot be looked up (server unreachable), the entry still keeps the text;
         // sending it later looks the provider up again.
         let provider = i.active_provider().await;
         let entry = i.outbox.add(conversation_id, provider.as_deref().unwrap_or(""), &text);
         if let Err(e) = provider {
-            return emit(StreamEvent::Error { message: e });
+            return emit(StreamEvent::error(e));
         }
         self.send_entry(entry, cancel, emit).await;
     }
@@ -522,11 +592,11 @@ impl Remote {
     pub async fn resend(&self, client_request_id: String, cancel: oneshot::Receiver<()>, emit: Emit<'_>) {
         let i = match self.inner() {
             Ok(i) => i,
-            Err(e) => return emit(StreamEvent::Error { message: e }),
+            Err(e) => return emit(StreamEvent::error(e)),
         };
         match i.outbox.get(&client_request_id) {
             Some(entry) => self.send_entry(entry, cancel, emit).await,
-            None => emit(StreamEvent::Error { message: "That message is no longer waiting to be sent.".into() }),
+            None => emit(StreamEvent::error("That message is no longer waiting to be sent.".into())),
         }
     }
 
@@ -562,7 +632,7 @@ impl Remote {
     async fn send_entry(&self, entry: OutboxEntry, cancel: oneshot::Receiver<()>, emit: Emit<'_>) {
         let i = match self.inner() {
             Ok(i) => i,
-            Err(e) => return emit(StreamEvent::Error { message: e }),
+            Err(e) => return emit(StreamEvent::error(e)),
         };
         // The server has it once `meta` arrives; from then on it is the server's to keep.
         let forget = entry.client_request_id.clone();
@@ -573,7 +643,7 @@ impl Remote {
             emit(e)
         };
         let emit: Emit<'_> = &emit;
-        let fail = |message: String| emit(StreamEvent::Error { message });
+        let fail = |message: String| emit(StreamEvent::error(message));
         let provider = if entry.provider.is_empty() {
             match i.active_provider().await {
                 Ok(p) => p,
@@ -595,11 +665,15 @@ impl Remote {
         // generation id from `meta`. A Stop that comes sooner waits for it.
         let mut cancel = cancel.fuse();
         let mut stop = false;
-        let send = i.send(req);
+        let send = i.send_chat(req);
         tokio::pin!(send);
         let resp = loop {
             tokio::select! {
-                r = &mut send => match r { Ok(r) => break r, Err(e) => return fail(e) },
+                r = &mut send => match r {
+                    Ok(r) => break r,
+                    Err(Refusal { kind: Some(kind), message }) => return emit(StreamEvent::error_kind(kind, message)),
+                    Err(Refusal { message, .. }) => return fail(message),
+                },
                 _ = &mut cancel => stop = true,
             }
         };
@@ -823,13 +897,13 @@ mod tests {
     async fn resuming_stops_on_an_error_event_a_404_or_a_401() {
         let err = sse("error", None, r#"{"event":"error","message":"Timed out after 5 minutes"}"#);
         let events = ask_fake(&fake_server(vec![(200, err)]).await).await;
-        assert!(matches!(events.last(), Some(StreamEvent::Error { message }) if message == "Timed out after 5 minutes"), "{events:?}");
+        assert!(matches!(events.last(), Some(StreamEvent::Error { message, .. }) if message == "Timed out after 5 minutes"), "{events:?}");
 
         let events = ask_fake(&fake_server(vec![(404, String::new())]).await).await;
-        assert!(matches!(events.last(), Some(StreamEvent::Error { message }) if message.contains("no longer on the server")), "{events:?}");
+        assert!(matches!(events.last(), Some(StreamEvent::Error { message, .. }) if message.contains("no longer on the server")), "{events:?}");
 
         let events = ask_fake(&fake_server(vec![(401, String::new())]).await).await;
-        assert!(matches!(events.last(), Some(StreamEvent::Error { message }) if message.contains("rejected")), "{events:?}");
+        assert!(matches!(events.last(), Some(StreamEvent::Error { message, .. }) if message.contains("rejected")), "{events:?}");
         for e in [&events[..]] {
             assert_eq!(e.iter().filter(|x| matches!(x, StreamEvent::Delta { .. })).count(), 3, "what arrived stays");
         }
@@ -985,7 +1059,7 @@ mod tests {
         let events2 = Mutex::new(Vec::new());
         let (_tx2, rx2) = oneshot::channel();
         remote.resend("nope".into(), rx2, &|e| events2.lock().unwrap().push(e)).await;
-        assert!(matches!(events2.into_inner().unwrap().last(), Some(StreamEvent::Error { message }) if message.contains("no longer waiting")));
+        assert!(matches!(events2.into_inner().unwrap().last(), Some(StreamEvent::Error { message, .. }) if message.contains("no longer waiting")));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1049,7 +1123,6 @@ mod tests {
     ];
 
     #[tokio::test]
-    #[ignore = "enabled in 8.2"]
     async fn each_refusal_has_its_own_kind_and_words_and_the_typed_text_is_kept() {
         let mut seen_messages = Vec::new();
         for (kind, status, retry_after, body) in REFUSALS {
@@ -1074,7 +1147,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "enabled in 8.2"]
     async fn a_busy_server_is_retried_once_after_its_retry_after_and_the_rest_wait_for_the_person() {
         // 503 with Retry-After: the message is sent again once (after the delay) and no more.
         let (events, outbox, sent) = refused(503, &[("retry-after", "1")], r#"{"error":"audit_backlog"}"#).await;
