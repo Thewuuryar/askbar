@@ -11,6 +11,10 @@ use rusqlite::{params, OptionalExtension};
 /// Audit records are never kept for less than this many days.
 pub const MIN_AUDIT_RETENTION_DAYS: u32 = 7;
 
+/// A generation may be given between 30 seconds and an hour.
+pub const MIN_GENERATION_TIMEOUT_SECS: u32 = 30;
+pub const MAX_GENERATION_TIMEOUT_SECS: u32 = 3600;
+
 fn check_display(d: &DisplaySettings, whose: &str) -> Result<(), String> {
     let in_range = |v: u32, lo: u32, hi: u32| (lo..=hi).contains(&v);
     if !matches!(d.theme.as_str(), "auto" | "light" | "dark")
@@ -28,6 +32,11 @@ fn check_display(d: &DisplaySettings, whose: &str) -> Result<(), String> {
 pub fn validate(s: &Snapshot) -> Result<(), String> {
     if s.audit_retention_days < MIN_AUDIT_RETENTION_DAYS {
         return Err(format!("audit_retention_days must be at least {MIN_AUDIT_RETENTION_DAYS}"));
+    }
+    if !(MIN_GENERATION_TIMEOUT_SECS..=MAX_GENERATION_TIMEOUT_SECS).contains(&s.generation_timeout_secs) {
+        return Err(format!(
+            "generation_timeout_secs must be between {MIN_GENERATION_TIMEOUT_SECS} and {MAX_GENERATION_TIMEOUT_SECS}"
+        ));
     }
     let mut ids = std::collections::BTreeSet::new();
     for p in &s.providers {
@@ -119,4 +128,23 @@ pub fn apply(db: &Db, s: &Snapshot) -> Result<u64, ApplyError> {
         let _ = db.conn().execute("DELETE FROM providers WHERE id = ?1", [id]);
     }
     Ok(version)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_generation_timeout_must_be_between_30_and_3600_seconds() {
+        let mut s = crate::testing::empty_snapshot();
+        for ok in [30, 300, 3600] {
+            s.generation_timeout_secs = ok;
+            assert_eq!(validate(&s), Ok(()), "{ok} is allowed");
+        }
+        for bad in [0, 29, 3601, 86_400] {
+            s.generation_timeout_secs = bad;
+            let e = validate(&s).unwrap_err();
+            assert!(e.contains("generation_timeout_secs") && e.contains("30") && e.contains("3600"), "{bad}: {e}");
+        }
+    }
 }
