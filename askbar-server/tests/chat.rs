@@ -557,3 +557,43 @@ async fn cancelling_a_finished_generation_is_204_and_another_users_is_404() {
     assert_eq!(t.cancel_with(&other, &id).await.status(), 404);
     assert_eq!(t.cancel_with(&t.token, "no-such-id").await.status(), 404);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_running_generation_is_listed_and_a_finished_one_is_not() {
+    let t = start().await;
+    let http = client_builder().pool_max_idle_per_host(0).build().unwrap();
+    let r = t.chat(&http, None, "p1", "please be slow").await;
+    let mut stream = r.bytes_stream();
+    let mut got = String::new();
+    while got.matches("event: delta").count() < 2 {
+        got.push_str(&String::from_utf8_lossy(&stream.next().await.unwrap().unwrap()));
+    }
+    let id = generation_id(&got);
+    let conversation = {
+        let events = parse_events(&got.replace("\r\n", "\n").split("\n\n").take(1).collect::<Vec<_>>().join("\n\n"));
+        let ChatEvent::Meta { conversation_id, .. } = events[0].1.clone() else { panic!() };
+        conversation_id
+    };
+
+    let list: Vec<askbar_proto::PendingGeneration> =
+        t.get_with(&t.token, "/api/v1/generations?status=running").await.json().await.unwrap();
+    assert_eq!(list.len(), 1);
+    assert_eq!((list[0].generation_id.as_str(), list[0].status.as_str(), list[0].prompt.as_str()), (id.as_str(), "running", "please be slow"));
+    let detail: askbar_proto::ConversationDetail =
+        t.get_with(&t.token, &format!("/api/v1/conversations/{conversation}")).await.json().await.unwrap();
+    assert_eq!(detail.pending.len(), 1);
+    assert_eq!(detail.pending[0].generation_id, id);
+
+    // Another user sees neither.
+    let other = t.second_user_token();
+    let theirs: Vec<askbar_proto::PendingGeneration> = t.get_with(&other, "/api/v1/generations?status=running").await.json().await.unwrap();
+    assert!(theirs.is_empty());
+
+    assert_eq!(t.cancel_with(&t.token, &id).await.status(), 204);
+    wait_for("the generation to end", || (t.generations()[0].0 == "cancelled").then_some(()));
+    let list: Vec<askbar_proto::PendingGeneration> = t.get_with(&t.token, "/api/v1/generations?status=running").await.json().await.unwrap();
+    assert!(list.is_empty());
+    let body = t.get_with(&t.token, &format!("/api/v1/conversations/{conversation}")).await.text().await.unwrap();
+    assert!(!body.contains("pending"), "left out when nothing is pending: {body}");
+    assert_eq!(t.get_with(&t.token, "/api/v1/generations?status=bogus").await.status(), 400);
+}

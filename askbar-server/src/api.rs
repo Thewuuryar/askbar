@@ -1,7 +1,7 @@
 //! Read endpoints for a paired device. Every query is scoped to the token's user.
 
 use crate::{auth::DeviceAuth, AppState};
-use askbar_proto::{Conversation, ConversationDetail, DisplaySettings, Message, Prefs, ProviderInfo, SearchHit, Settings};
+use askbar_proto::{Conversation, ConversationDetail, DisplaySettings, Message, PendingGeneration, Prefs, ProviderInfo, SearchHit, Settings};
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
@@ -50,10 +50,48 @@ pub async fn conversation(
         .into_iter()
         .map(|m| Message { id: m.id, role: m.role, content: m.content, created_at: m.created_at })
         .collect();
+    let pending = db
+        .list_active_generations(&auth.user_id)
+        .map_err(internal)?
+        .into_iter()
+        .filter(|g| g.conversation_id == id)
+        .map(pending_of)
+        .collect();
     Ok(Json(ConversationDetail {
         conversation: Conversation { id: c.id, title: c.title, updated_at: c.updated_at, message_count: c.message_count },
         messages,
+        pending,
     }))
+}
+
+fn pending_of(g: crate::Generation) -> PendingGeneration {
+    PendingGeneration {
+        generation_id: g.id,
+        conversation_id: g.conversation_id,
+        status: g.status,
+        text: g.text,
+        prompt: g.prompt,
+        client_request_id: g.client_request_id,
+    }
+}
+
+#[derive(serde::Deserialize)]
+pub struct GenerationsQuery {
+    status: Option<String>,
+}
+
+/// `GET /api/v1/generations?status=running`: the caller's running and queued generations, across
+/// conversations, so a client that just started (or reconnected) can find what is still going.
+pub async fn generations(
+    State(state): St,
+    Extension(auth): Extension<DeviceAuth>,
+    Query(q): Query<GenerationsQuery>,
+) -> Res<Vec<PendingGeneration>> {
+    if q.status.as_deref().is_some_and(|s| s != "running") {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+    Ok(Json(db.list_active_generations(&auth.user_id).map_err(internal)?.into_iter().map(pending_of).collect()))
 }
 
 pub async fn delete_conversation(

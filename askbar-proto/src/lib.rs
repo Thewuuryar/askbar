@@ -138,6 +138,23 @@ pub struct ConversationDetail {
     #[serde(flatten)]
     pub conversation: Conversation,
     pub messages: Vec<Message>,
+    /// Replies still running or waiting their turn; left out when there are none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending: Vec<PendingGeneration>,
+}
+
+/// A generation that has not finished: `running`, or `queued` behind another reply.
+/// `prompt` is the question; for a queued one it is not in the messages yet.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingGeneration {
+    pub generation_id: String,
+    pub conversation_id: String,
+    pub status: String,
+    /// The reply so far, as last saved by the server (it can trail the live stream by a second).
+    pub text: String,
+    pub prompt: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_request_id: Option<String>,
 }
 
 /// Display defaults served to clients; each client may override fields locally.
@@ -277,6 +294,18 @@ mod tests {
             assert_eq!(serde_json::from_str::<ChatEvent>(&s).unwrap(), e);
         }
         assert_eq!(serde_json::to_string(&ChatEvent::Done).unwrap(), r#"{"event":"done"}"#);
+    }
+
+    #[test]
+    fn pending_is_left_out_when_empty_and_optional_to_read() {
+        let d = ConversationDetail {
+            conversation: Conversation { id: "c".into(), title: "t".into(), updated_at: 1, message_count: 0 },
+            messages: vec![],
+            pending: vec![],
+        };
+        let s = serde_json::to_string(&d).unwrap();
+        assert!(!s.contains("pending"), "{s}");
+        assert_eq!(serde_json::from_str::<ConversationDetail>(&s).unwrap(), d);
     }
 
     #[test]

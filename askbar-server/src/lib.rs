@@ -16,7 +16,7 @@ pub mod store;
 #[doc(hidden)]
 pub mod testing;
 
-pub use db::{make_title, ConversationSummary, Db, DbError, SearchHit, StoredMessage};
+pub use db::{make_title, ConversationSummary, Db, DbError, Generation, SearchHit, StoredMessage};
 use askbar_proto::{Health, PairRequest, PairResponse};
 use axum::{
     extract::{Request, State},
@@ -66,6 +66,7 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         .route("/api/v1/search", get(api::search))
         .route("/api/v1/settings", get(api::settings))
         .route("/api/v1/chat", post(chat::chat))
+        .route("/api/v1/generations", get(api::generations))
         .route("/api/v1/generations/{id}/stream", get(generation::stream))
         .route("/api/v1/generations/{id}/cancel", post(generation::cancel))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_device_token));
