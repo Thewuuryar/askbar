@@ -1,10 +1,12 @@
-//! `POST /api/v1/chat`: stream a reply as our own SSE events.
+//! `POST /api/v1/chat`: start a generation and stream its reply as our own SSE events.
 //!
 //! Provider output is never passed through; it is decoded by `llm`
-//! and re-emitted as `meta`, `delta`, `done` or `error`.
+//! and re-emitted as `meta`, `delta`, `done` or `error`. The generation runs as its own task
+//! (see `generation`), so this stream going away does not stop it.
 
+use crate::generation::{self, GenEvent};
+use crate::llm::ChatMessage;
 use crate::{auth::DeviceAuth, store, AppState};
-use crate::llm::{stream_chat, ChatMessage};
 use askbar_proto::{ChatEvent, ChatRequest};
 use axum::{
     extract::State,
@@ -13,8 +15,7 @@ use axum::{
     Extension, Json,
 };
 use std::{convert::Infallible, sync::Arc};
-use tokio::sync::{mpsc, oneshot};
-use tokio_stream::{wrappers::UnboundedReceiverStream, StreamExt};
+use tokio_stream::StreamExt;
 
 fn internal<E>(_: E) -> StatusCode {
     StatusCode::INTERNAL_SERVER_ERROR
@@ -28,25 +29,6 @@ fn sse_event(e: &ChatEvent) -> Event {
         ChatEvent::Error { .. } => "error",
     };
     Event::default().event(name).json_data(e).expect("ChatEvent serializes")
-}
-
-/// Holds the reply as it arrives. Dropping it, however the task ends
-/// (finished, error, client gone, panic), saves whatever text there is.
-struct ReplyGuard {
-    state: Arc<AppState>,
-    conversation: String,
-    user_id: String,
-    text: String,
-}
-
-impl Drop for ReplyGuard {
-    fn drop(&mut self) {
-        if self.text.trim().is_empty() {
-            return;
-        }
-        let db = self.state.db.lock().unwrap_or_else(|e| e.into_inner());
-        let _ = db.add_message(&self.user_id, &self.conversation, "assistant", &self.text);
-    }
 }
 
 pub async fn chat(
@@ -82,31 +64,17 @@ pub async fn chat(
         (provider, system, conversation, history)
     };
 
-    let (tx, rx) = mpsc::unbounded_channel::<ChatEvent>();
-    let _ = tx.send(ChatEvent::Meta { conversation_id: conversation.clone() });
-
-    tokio::spawn(async move {
-        let mut guard = ReplyGuard { state: state.clone(), conversation: conversation.clone(), user_id: auth.user_id, text: String::new() };
-        // Never fires; `stream_chat` wants a cancel channel and we cancel by dropping the future.
-        let (_keep, cancel_rx) = oneshot::channel::<()>();
-        let run = stream_chat(&state.http, &provider, &system, &history, cancel_rx, |delta| {
-            guard.text.push_str(delta);
-            let _ = tx.send(ChatEvent::Delta { text: delta.to_string() });
-        });
-        let outcome = tokio::select! {
-            r = run => Some(r),
-            // The client went away: dropping `run` closes the upstream request.
-            _ = tx.closed() => None,
-        };
-        if let Some(r) = outcome {
-            let _ = tx.send(match r {
-                Ok(_) => ChatEvent::Done,
-                Err(e) => ChatEvent::Error { message: e.to_string() },
-            });
-        }
-        // `guard` drops here and saves the reply (partial or complete).
+    let (_id, live) = generation::start(
+        &state,
+        generation::Start { user_id: auth.user_id, conversation_id: conversation.clone(), provider, system, history },
+    );
+    let meta = futures_util::stream::once(async move { Ok(sse_event(&ChatEvent::Meta { conversation_id: conversation })) });
+    let events = live.subscribe(0).map(|e| {
+        Ok(sse_event(&match e {
+            GenEvent::Delta { text, .. } => ChatEvent::Delta { text },
+            GenEvent::Done => ChatEvent::Done,
+            GenEvent::Error { message } => ChatEvent::Error { message },
+        }))
     });
-
-    let stream = UnboundedReceiverStream::new(rx).map(|e| Ok(sse_event(&e)));
-    Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
+    Ok(Sse::new(meta.chain(events)).keep_alive(KeepAlive::default()))
 }

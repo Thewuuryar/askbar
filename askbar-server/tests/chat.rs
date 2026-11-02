@@ -154,7 +154,9 @@ async fn complete_reply_is_streamed_and_saved_in_full() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn client_disconnect_saves_partial_reply_and_closes_upstream() {
+async fn client_disconnect_does_not_cut_the_reply_short() {
+    // Contract changed in 1.5: the reply no longer stops (or is saved as a partial) when the
+    // client leaves; it keeps going and is saved once, whole. See the test below for the full text.
     let t = start().await;
     let http = client_builder().pool_max_idle_per_host(0).build().unwrap();
     let r = t.chat(&http, None, "p1", "please be slow").await;
@@ -167,16 +169,15 @@ async fn client_disconnect_saves_partial_reply_and_closes_upstream() {
     drop(stream); // the client goes away mid-stream
     drop(http);
 
-    let partial = wait_for("partial reply to be saved", || t.messages().into_iter().find(|(r, _)| r == "assistant"));
-    assert!(!partial.1.trim().is_empty());
-    assert!(partial.1.len() < 1000, "should not have waited for the whole slow reply ({} bytes)", partial.1.len());
-    wait_for("upstream to see the disconnect", || {
-        t.mock.log.lock().unwrap().iter().any(|l| l.contains("client disconnected")).then_some(())
-    });
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert!(t.messages().iter().all(|(r, _)| r != "assistant"), "no partial reply is saved while it still runs");
+    assert!(
+        !t.mock.log.lock().unwrap().iter().any(|l| l.contains("client disconnected")),
+        "the upstream request stays open"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "enabled in 1.5"]
 async fn a_reply_keeps_generating_after_the_client_disconnects() {
     let t = start().await;
     let http = client_builder().pool_max_idle_per_host(0).build().unwrap();

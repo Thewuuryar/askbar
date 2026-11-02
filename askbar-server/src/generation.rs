@@ -3,10 +3,13 @@
 //! This module holds the in-memory registry: each running generation has a `Live` that buffers
 //! its deltas so a client can attach, drop and attach again without losing or repeating text.
 
+use crate::ids::new_id;
+use crate::llm::{stream_chat, ChatMessage, Provider};
+use crate::AppState;
 use futures_util::Stream;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use tokio::sync::Notify;
+use tokio::sync::{oneshot, Notify};
 
 /// What a subscriber sees. `seq` counts deltas from 1, and is what SSE `id:` carries.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -151,6 +154,88 @@ impl Generations {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
+}
+
+/// Everything a generation needs, gathered by the handler before it starts.
+pub struct Start {
+    pub user_id: String,
+    pub conversation_id: String,
+    pub provider: Provider,
+    pub system: String,
+    pub history: Vec<ChatMessage>,
+}
+
+/// Owned by the task. However the task ends (finished, failed, panicked), the reply is saved
+/// once and subscribers are released.
+struct Finisher {
+    state: Arc<AppState>,
+    live: Arc<Live>,
+    id: String,
+    user_id: String,
+    conversation_id: String,
+    text: String,
+    saved: bool,
+}
+
+impl Finisher {
+    fn save(&mut self) {
+        if self.saved {
+            return;
+        }
+        self.saved = true;
+        if self.text.trim().is_empty() {
+            return;
+        }
+        let db = self.state.db.lock().unwrap_or_else(|e| e.into_inner());
+        let _ = db.add_message(&self.user_id, &self.conversation_id, "assistant", &self.text);
+    }
+
+    /// Saves the reply, then tells subscribers, so a client that has seen the end can read the message.
+    fn finish(&mut self, terminal: Terminal) {
+        self.save();
+        self.live.finish(terminal);
+    }
+}
+
+impl Drop for Finisher {
+    fn drop(&mut self) {
+        self.save();
+        // A no-op if `finish` already ran; otherwise the task died and subscribers must not wait forever.
+        self.live.finish(Terminal::Error("The reply stopped unexpectedly.".into()));
+        self.state.generations.remove(&self.id);
+    }
+}
+
+/// Runs a generation as a task that does not depend on any client. Returns its id and its buffer.
+pub fn start(state: &Arc<AppState>, s: Start) -> (String, Arc<Live>) {
+    let id = new_id();
+    let live = Live::new();
+    state.generations.insert(&id, live.clone());
+    let mut fin = Finisher {
+        state: state.clone(),
+        live: live.clone(),
+        id: id.clone(),
+        user_id: s.user_id,
+        conversation_id: s.conversation_id,
+        text: String::new(),
+        saved: false,
+    };
+    let state = state.clone();
+    tokio::spawn(async move {
+        // Nothing fires this yet; cancelling arrives with the cancel endpoint.
+        let (_keep, cancel_rx) = oneshot::channel::<()>();
+        let live = fin.live.clone();
+        let result = stream_chat(&state.http, &s.provider, &s.system, &s.history, cancel_rx, |delta| {
+            fin.text.push_str(delta);
+            live.push(delta);
+        })
+        .await;
+        fin.finish(match result {
+            Ok(_) => Terminal::Done,
+            Err(e) => Terminal::Error(e.to_string()),
+        });
+    });
+    (id, live)
 }
 
 #[cfg(test)]
