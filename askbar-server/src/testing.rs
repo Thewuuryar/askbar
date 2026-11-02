@@ -81,3 +81,28 @@ pub fn add_pair_code_expiring(db: &Db, user_id: &str, device_name: &str, ttl_sec
     });
     code
 }
+
+/// Make generations started from now on time out after `d` instead of the snapshot's value.
+pub fn override_generation_timeout(state: &crate::AppState, d: std::time::Duration) {
+    state.set_generation_timeout_override(Some(d));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn the_timeout_override_can_be_set_read_back_and_cleared() {
+        let state = crate::AppState::new(
+            Db::open_in_memory().unwrap(),
+            crate::secrets::Secrets::new(TEST_MASTER_KEY).unwrap(),
+            crate::MIN_CLIENT,
+        );
+        assert_eq!(state.generation_timeout_override(), None);
+        override_generation_timeout(&state, Duration::from_secs(2));
+        assert_eq!(state.generation_timeout_override(), Some(Duration::from_secs(2)));
+        state.set_generation_timeout_override(None);
+        assert_eq!(state.generation_timeout_override(), None);
+    }
+}

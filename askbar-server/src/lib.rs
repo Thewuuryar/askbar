@@ -41,11 +41,25 @@ pub struct AppState {
     pub min_client: String,
     /// Running generations and their buffered output.
     pub generations: generation::Generations,
+    /// Tests only: replaces the configured generation timeout (see `testing`).
+    generation_timeout_override: Mutex<Option<std::time::Duration>>,
 }
 
 impl AppState {
     pub fn new(db: Db, secrets: Secrets, min_client: &str) -> Arc<AppState> {
-        Arc::new(AppState { db: Mutex::new(db), secrets: Arc::new(secrets), http: llm::http_client(), min_client: min_client.to_string(), generations: Default::default() })
+        Arc::new(AppState { db: Mutex::new(db), secrets: Arc::new(secrets), http: llm::http_client(), min_client: min_client.to_string(), generations: Default::default(), generation_timeout_override: Mutex::new(None) })
+    }
+
+    /// Tests only: make every generation started from now on use `d` as its timeout, whatever the
+    /// snapshot says, so a test need not wait 30 seconds.
+    #[doc(hidden)]
+    pub fn set_generation_timeout_override(&self, d: Option<std::time::Duration>) {
+        *self.generation_timeout_override.lock().unwrap_or_else(|e| e.into_inner()) = d;
+    }
+
+    #[doc(hidden)]
+    pub fn generation_timeout_override(&self) -> Option<std::time::Duration> {
+        *self.generation_timeout_override.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     pub fn secrets(&self) -> Arc<Secrets> {
