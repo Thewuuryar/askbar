@@ -369,6 +369,44 @@ pub async fn create_pairing(State(state): St, Json(i): Json<PairInput>) -> Resul
     Ok(Json(PairingOut { pairing: askbar_proto::encode_pairing(&url, &code), expires_in: PAIR_CODE_TTL_SECS }))
 }
 
+// -------------------------------------------------------------- audit key setup
+
+#[derive(Deserialize)]
+pub struct SetupAuditKey {
+    passphrase: String,
+    confirm: String,
+}
+
+/// `POST /admin/api/setup/audit-key`: make the first audit key from a passphrase. The passphrase
+/// is turned into a keypair, the public half and the salt are kept, and the passphrase is
+/// forgotten: nothing here stores or logs it. A second call is refused (rotation is its own
+/// step); losing the passphrase makes the sealed content unreadable for good.
+pub async fn setup_audit_key(State(state): St, Json(b): Json<SetupAuditKey>) -> Result<Json<serde_json::Value>, Failure> {
+    use crate::audit_key::{derive_for_setup, key_id, new_salt, KdfParams, KeyError};
+    if b.passphrase != b.confirm {
+        return Err(bad("The two passphrases do not match."));
+    }
+    if state.db.lock().await.active_audit_key().map_err(internal)?.is_some() {
+        return Err(err(StatusCode::CONFLICT, "An audit key already exists."));
+    }
+    let salt = new_salt();
+    let passphrase = b.passphrase;
+    let params = KdfParams::CURRENT;
+    let kp = tokio::task::spawn_blocking(move || derive_for_setup(&passphrase, &salt, params))
+        .await
+        .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Could not derive the key."))?
+        .map_err(|e| match e {
+            KeyError::TooShort => bad("The passphrase must be at least 20 characters."),
+            KeyError::Kdf(_) => err(StatusCode::INTERNAL_SERVER_ERROR, "Could not derive the key."),
+        })?;
+    let public = kp.public_bytes();
+    let id = key_id(&public);
+    let row = crate::db::AuditKeyRow { key_id: id.clone(), public_key: public, salt, argon_params: params.to_text(), created_at: crate::auth::now(), retired_at: None };
+    // The unique index on active keys also settles two calls at once: one wins, the other is a 409.
+    state.db.lock().await.insert_audit_key(&row).map_err(|_| err(StatusCode::CONFLICT, "An audit key already exists."))?;
+    Ok(Json(serde_json::json!({ "key_id": id })))
+}
+
 // ----------------------------------------------------------------- settings
 
 #[derive(Serialize, Deserialize)]

@@ -40,7 +40,6 @@ fn the_admin_can_decrypt_what_the_server_sealed() {
 }
 
 #[tokio::test]
-#[ignore = "enabled in 5.4"]
 async fn setup_refuses_a_passphrase_under_twenty_characters() {
     let t: T = common::start(true).await;
     let short = "only nineteen chars";
@@ -56,4 +55,45 @@ async fn setup_refuses_a_passphrase_under_twenty_characters() {
     let (st, body) = t.call(M::POST, "/admin/api/setup/audit-key", json!({ "passphrase": ok, "confirm": ok })).await;
     assert_eq!(st, 200, "{body}");
     assert!(body["key_id"].as_str().is_some_and(|k| k.len() == 16), "an 8-byte hex key id: {body}");
+}
+
+#[tokio::test]
+async fn the_audit_key_setup_checks_the_passphrase_makes_one_key_and_refuses_a_second() {
+    let t: T = common::start(true).await;
+    let call = |body: serde_json::Value| t.call(M::POST, "/admin/api/setup/audit-key", body);
+    let good = "a passphrase long enough to use";
+
+    // A mismatch is refused, and so is anything under twenty characters, and nothing is made.
+    assert_eq!(call(json!({ "passphrase": good, "confirm": "something else entirely here" })).await.0, 400);
+    assert_eq!(call(json!({ "passphrase": "too short", "confirm": "too short" })).await.0, 400);
+    assert_eq!(t.call(M::GET, "/admin/api/setup-status", json!({})).await.1["audit_key_set"], false);
+    assert!(t.admin.db.lock().await.active_audit_key().unwrap().is_none());
+
+    let (st, body) = call(json!({ "passphrase": good, "confirm": good })).await;
+    assert_eq!(st, 200, "{body}");
+    let key_id = body["key_id"].as_str().unwrap().to_string();
+    assert_eq!(t.call(M::GET, "/admin/api/setup-status", json!({})).await.1["audit_key_set"], true);
+
+    // What was kept is public: the key id matches the stored public key, and nothing holds the passphrase.
+    let row = t.admin.db.lock().await.active_audit_key().unwrap().unwrap();
+    assert_eq!(row.key_id, key_id);
+    assert_eq!(askbar_admin::audit_key::key_id(&row.public_key), key_id);
+    assert_eq!(row.argon_params, askbar_admin::audit_key::KdfParams::CURRENT.to_text());
+    let again = askbar_admin::audit_key::derive(good, &row.salt, askbar_admin::audit_key::KdfParams::CURRENT).unwrap();
+    assert_eq!(again.public_bytes(), row.public_key, "the passphrase and the salt give back the same public key");
+    let dump: Vec<u8> = {
+        let db = t.admin.db.lock().await;
+        let mut stmt = db.conn().prepare("SELECT value FROM settings").unwrap();
+        stmt.query_map([], |r| r.get::<_, String>(0)).unwrap().flat_map(|v| v.unwrap().into_bytes()).collect()
+    };
+    assert!(!String::from_utf8_lossy(&dump).contains(good));
+
+    // A second call is a conflict and changes nothing (rotation is a later step).
+    let (st, _) = call(json!({ "passphrase": "another passphrase, long enough", "confirm": "another passphrase, long enough" })).await;
+    assert_eq!(st, 409);
+    assert_eq!(t.admin.db.lock().await.active_audit_key().unwrap().unwrap().key_id, key_id);
+
+    // It needs a signed-in session like the rest of the admin API.
+    let r = t.http.post(format!("{}/admin/api/setup/audit-key", t.adm)).header("x-askbar-admin", "1").json(&json!({ "passphrase": good, "confirm": good })).send().await.unwrap();
+    assert_eq!(r.status(), 401);
 }

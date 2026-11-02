@@ -102,6 +102,7 @@ pub fn router(state: Arc<AdminState>) -> Router {
         .route("/admin/api/devices", get(api::list_devices))
         .route("/admin/api/devices/{id}/revoke", post(api::revoke_device))
         .route("/admin/api/pair", post(api::create_pairing))
+        .route("/admin/api/setup/audit-key", post(api::setup_audit_key))
         .route("/admin/api/settings", get(api::get_settings).put(api::put_settings))
         .route("/admin/api/users/{id}/display-defaults", put(api::put_user_display))
         .route("/admin/api/backup", get(api::backup))

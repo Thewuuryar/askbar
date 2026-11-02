@@ -162,7 +162,8 @@ pub async fn logout(State(state): State<Arc<AdminState>>, headers: HeaderMap) ->
 
 /// What the setup page needs to decide which screen to show. Booleans only.
 pub async fn setup_status(State(state): State<Arc<AdminState>>) -> Json<serde_json::Value> {
-    Json(serde_json::json!({ "password_set": stored_hash(&state).await.is_some() }))
+    let audit_key_set = state.db.lock().await.active_audit_key().ok().flatten().is_some();
+    Json(serde_json::json!({ "password_set": stored_hash(&state).await.is_some(), "audit_key_set": audit_key_set }))
 }
 
 /// First run: the first visitor chooses the admin password and is signed in. Refused once one exists.
