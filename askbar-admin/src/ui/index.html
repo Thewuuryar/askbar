@@ -271,6 +271,10 @@
           <p class="hint">Switched on, the server starts no new replies and clears the messages waiting in queues. Clients see a clear message.</p>
           <label class="check"><input id="s-kill-switch" type="checkbox"> Switch off all replies</label>
           <label class="check"><input id="s-kill-aborts" type="checkbox"> Also stop the replies that are running when it goes on (otherwise they finish)</label>
+          <h3>Audit</h3>
+          <p class="hint">How long the audit records are kept before they are deleted (7 days at least, always; the audit database itself refuses to delete anything younger).</p>
+          <label>Keep audit records for (days) <input id="s-retention" type="number" min="7" max="3650" step="1"></label>
+          <p class="hint">Sealing key: <code id="s-key-id">none</code></p>
           <h3>Display defaults</h3>
           <p class="hint">Clients use these unless their own client.yaml overrides them.</p>
           <label>Theme
@@ -283,6 +287,15 @@
           <label class="check"><input id="s-hide-on-blur" type="checkbox"> Hide the window when it loses focus</label>
           <div class="row"><button type="submit">Save settings</button></div>
           <p id="settings-error" class="error" hidden></p>
+        </form>
+        <form id="rotate-form" class="panel">
+          <h3>Rotate the audit key</h3>
+          <p class="hint">Makes a new key from a new passphrase; the server seals everything from then on with it. Content sealed before stays sealed with the old key, and still needs the <strong>old</strong> passphrase to open. Neither passphrase can be recovered.</p>
+          <label>Current passphrase <input id="r-current" type="password" autocomplete="off" required></label>
+          <label>New passphrase (at least 20 characters) <input id="r-new" type="password" autocomplete="new-password" minlength="20" required></label>
+          <label>Repeat the new passphrase <input id="r-new2" type="password" autocomplete="new-password" minlength="20" required></label>
+          <div class="row"><button type="submit">Rotate key</button></div>
+          <p id="rotate-error" class="error" hidden></p>
         </form>
       </section>
     </main>

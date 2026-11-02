@@ -691,7 +691,17 @@ pub struct AdminSettings {
     /// When the switch goes on: stop the replies already running (the default), or let them finish.
     #[serde(default)]
     kill_switch_aborts_running: Option<bool>,
+    /// Days audit records are kept (7 to 3650). Always present when read; left out on a save keeps it.
+    #[serde(default)]
+    audit_retention_days: Option<u32>,
+    /// The id of the key the server seals with now. Read-only: changing it is the rotate action.
+    #[serde(default, skip_deserializing)]
+    audit_key_id: Option<String>,
 }
+
+/// The same floor the server enforces (and the audit database's own trigger): a week.
+const MIN_AUDIT_RETENTION_DAYS: u32 = 7;
+const MAX_AUDIT_RETENTION_DAYS: u32 = 3650;
 
 /// The same bounds the server enforces on the snapshot.
 const MIN_GENERATION_TIMEOUT_SECS: u32 = 30;
@@ -726,6 +736,8 @@ pub async fn get_settings(State(state): St) -> Json<AdminSettings> {
         ),
         kill_switch: Some(c.query_row("SELECT kill_switch FROM budgets WHERE id = 1", [], |r| r.get::<_, i64>(0)).map(|v| v != 0).unwrap_or(false)),
         kill_switch_aborts_running: Some(setting(c, "kill_switch_aborts_running").map(|v| !matches!(v.trim(), "0" | "false")).unwrap_or(true)),
+        audit_retention_days: Some(setting(c, "audit_retention_days").and_then(|s| s.trim().parse().ok()).unwrap_or(30)),
+        audit_key_id: crate::db::active_audit_key(c).ok().flatten().map(|k| k.key_id),
     })
 }
 
@@ -743,6 +755,15 @@ pub async fn put_settings(State(state): St, Json(s): Json<AdminSettings>) -> Res
     }
     let display = serde_json::to_string(&s.display).map_err(|_| bad("Invalid display settings."))?;
     let timeout = s.generation_timeout_secs.map(|n| n.to_string());
+    if let Some(days) = s.audit_retention_days {
+        if days < MIN_AUDIT_RETENTION_DAYS {
+            return Err(bad(&format!("Audit records are kept for at least {MIN_AUDIT_RETENTION_DAYS} days.")));
+        }
+        if days > MAX_AUDIT_RETENTION_DAYS {
+            return Err(bad(&format!("Audit records are kept for at most {MAX_AUDIT_RETENTION_DAYS} days.")));
+        }
+    }
+    let retention = s.audit_retention_days.map(|n| n.to_string());
     let aborts = s.kill_switch_aborts_running.map(|b| if b { "1" } else { "0" });
     let kill = s.kill_switch;
     mutate(&state, vec![], move |c| {
@@ -752,6 +773,9 @@ pub async fn put_settings(State(state): St, Json(s): Json<AdminSettings>) -> Res
         }
         if let Some(a) = aborts {
             pairs.push(("kill_switch_aborts_running", a));
+        }
+        if let Some(r) = retention.as_deref() {
+            pairs.push(("audit_retention_days", r));
         }
         if let Some(k) = kill {
             c.execute("UPDATE budgets SET kill_switch = ?1 WHERE id = 1", [k as i64]).map_err(internal)?;

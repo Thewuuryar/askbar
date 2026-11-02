@@ -493,6 +493,8 @@
 
   async function loadSettings() {
     const s = await api('GET', '/admin/api/settings');
+    $('s-retention').value = s.audit_retention_days == null ? 30 : s.audit_retention_days;
+    $('s-key-id').textContent = s.audit_key_id || 'none';
     $('s-kill-switch').checked = !!s.kill_switch;
     $('s-kill-aborts').checked = s.kill_switch_aborts_running !== false;
     $('s-gen-timeout').value = s.generation_timeout_secs == null ? 300 : s.generation_timeout_secs;
@@ -515,6 +517,7 @@
       await api('PUT', '/admin/api/settings', {
         system_prompt: $('s-prompt').value,
         generation_timeout_secs: parseInt($('s-gen-timeout').value, 10),
+        audit_retention_days: parseInt($('s-retention').value, 10),
         kill_switch: $('s-kill-switch').checked,
         kill_switch_aborts_running: $('s-kill-aborts').checked,
         display: {
@@ -530,6 +533,27 @@
     } catch (ex) {
       err.textContent = ex.message;
       show(err, true);
+    }
+  });
+
+  // The audit key: switch to a new passphrase. The old key is kept, only for reading what it sealed.
+  $('rotate-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const err = $('rotate-error');
+    show(err, false);
+    const fail = (m) => { err.textContent = m; show(err, true); };
+    const cur = $('r-current').value;
+    const next = $('r-new').value;
+    if (next !== $('r-new2').value) return fail('The two new passphrases do not match.');
+    if ([...next].length < 20) return fail('The new passphrase must be at least 20 characters.');
+    try {
+      const r = await api('POST', '/admin/api/audit/rotate-key', { current: cur, new: next, confirm: $('r-new2').value });
+      for (const id of ['r-current', 'r-new', 'r-new2']) $(id).value = '';
+      $('s-key-id').textContent = r.key_id;
+      flash('The audit key was rotated. New key id ' + r.key_id + '. Content sealed before still needs the old passphrase.');
+    } catch (ex) {
+      $('r-current').value = '';
+      fail(ex.message);
     }
   });
 

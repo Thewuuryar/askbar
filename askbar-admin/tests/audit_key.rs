@@ -348,3 +348,34 @@ async fn the_access_history_lists_every_open_newest_first_without_content_and_ne
     let r = t.http.get(format!("{}/admin/api/audit/access", t.adm)).send().await.unwrap();
     assert_eq!(r.status(), 401);
 }
+
+#[tokio::test]
+async fn the_settings_show_the_active_key_id_and_keep_the_retention_between_7_and_3650_days() {
+    let t = common::start(true).await;
+    let (_, s) = t.call(M::GET, "/admin/api/settings", json!({})).await;
+    assert_eq!((s["audit_retention_days"].clone(), s["audit_key_id"].clone()), (json!(30), json!(null)), "the default, and no key yet");
+    server_with_sealed_reply(&t).await;
+    let active = t.admin.db.lock().await.active_audit_key().unwrap().unwrap().key_id;
+    let (_, s) = t.call(M::GET, "/admin/api/settings", json!({})).await;
+    assert_eq!(s["audit_key_id"], active.as_str());
+
+    let disp = serde_json::to_value(askbar_proto::DisplaySettings::default()).unwrap();
+    let save = |days: serde_json::Value| json!({ "system_prompt": "x", "display": disp, "audit_retention_days": days });
+    for (days, status) in [(7, 204), (90, 204), (3650, 204), (6, 400), (0, 400), (3651, 400)] {
+        assert_eq!(t.call(M::PUT, "/admin/api/settings", save(json!(days))).await.0, status, "{days}");
+    }
+    let (_, s) = t.call(M::PUT, "/admin/api/settings", save(json!(6))).await;
+    assert!(s["error"].as_str().unwrap().contains("at least 7 days"), "{s}");
+    let (_, s) = t.call(M::GET, "/admin/api/settings", json!({})).await;
+    assert_eq!(s["audit_retention_days"], 3650, "refused values changed nothing; the last accepted one stands");
+    assert_eq!(askbar_server::snapshot::current(&t.server.db.lock().unwrap()).unwrap().unwrap().audit_retention_days, 3650, "and the server has it");
+    // A save that leaves it out keeps it.
+    let without = json!({ "system_prompt": "y", "display": disp });
+    assert_eq!(t.call(M::PUT, "/admin/api/settings", without).await.0, 204);
+    assert_eq!(t.call(M::GET, "/admin/api/settings", json!({})).await.1["audit_retention_days"], 3650);
+    // The key id is read-only: sending one changes nothing.
+    let mut sneaky = save(json!(30));
+    sneaky["audit_key_id"] = json!("ffffffffffffffff");
+    assert_eq!(t.call(M::PUT, "/admin/api/settings", sneaky).await.0, 204);
+    assert_eq!(t.call(M::GET, "/admin/api/settings", json!({})).await.1["audit_key_id"], active.as_str());
+}

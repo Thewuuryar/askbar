@@ -799,6 +799,58 @@ async function waitForPort(port) {
     assert.equal(await page.isHidden('#audit-access'), true);
     await page.unroute('**/admin/api/audit/access*');
   });
+  await step('audit settings: the key id and retention show, bad values give their messages, and rotating works from the page', async () => {
+    await page.click('#nav [data-tab="providers"]');
+    await page.click('#nav [data-tab="settings"]');
+    await page.waitForFunction(() => /^[0-9a-f]{16}$/.test(document.getElementById('s-key-id').textContent));
+    const oldKey = await page.innerText('#s-key-id');
+    assert.equal(await page.inputValue('#s-retention'), '30');
+    assert.equal(await page.getAttribute('#s-retention', 'min'), '7');
+
+    // Retention: the server's message for a value that is too small.
+    await page.evaluate(() => document.getElementById('settings-form').noValidate = true);
+    await page.fill('#s-retention', '5');
+    await page.click('#settings-form button[type=submit]');
+    await page.waitForSelector('#settings-error:not([hidden])');
+    assert.match(await page.innerText('#settings-error'), /at least 7 days/);
+    await page.fill('#s-retention', '45');
+    await page.click('#settings-form button[type=submit]');
+    await page.waitForSelector('#flash:not([hidden])');
+    await page.fill('#s-retention', '999'); // unsaved, so the reload shows what was stored
+    await page.click('#nav [data-tab="providers"]');
+    await page.click('#nav [data-tab="settings"]');
+    await page.waitForFunction(() => document.getElementById('s-retention').value === '45');
+
+    // Rotation: each refusal in turn, then success.
+    await page.evaluate(() => document.getElementById('rotate-form').noValidate = true);
+    const NEW_PASS = 'a different long passphrase 77';
+    const rotate = async (cur, next, next2) => {
+      await page.fill('#r-current', cur);
+      await page.fill('#r-new', next);
+      await page.fill('#r-new2', next2);
+      await page.click('#rotate-form button[type=submit]');
+    };
+    await rotate(AUDIT_PASS, NEW_PASS, NEW_PASS + 'x');
+    assert.match(await page.innerText('#rotate-error'), /do not match/);
+    await rotate(AUDIT_PASS, 'too short', 'too short');
+    assert.match(await page.innerText('#rotate-error'), /at least 20/);
+    await rotate('not the current passphrase!!', NEW_PASS, NEW_PASS);
+    await page.waitForFunction(() => /current passphrase is wrong/.test(document.getElementById('rotate-error').textContent));
+    assert.equal(await page.inputValue('#r-current'), '', 'the current passphrase is cleared after a try');
+    assert.equal(await page.innerText('#s-key-id'), oldKey, 'nothing changed');
+    await rotate(AUDIT_PASS, NEW_PASS, NEW_PASS);
+    await page.waitForSelector('#flash:not([hidden])');
+    assert.match(await page.innerText('#flash'), /audit key was rotated/);
+    const newKey = await page.innerText('#s-key-id');
+    assert.match(newKey, /^[0-9a-f]{16}$/);
+    assert.notEqual(newKey, oldKey);
+    for (const id of ['r-current', 'r-new', 'r-new2']) assert.equal(await page.inputValue('#' + id), '', id);
+    assert.equal((await page.content()).includes(NEW_PASS), false);
+    // Put the retention back so later steps see an ordinary server.
+    await page.fill('#s-retention', '30');
+    await page.click('#settings-form button[type=submit]');
+    await page.waitForSelector('#flash:not([hidden])');
+  });
   await step('security: changing the password needs the current one', async () => {
     await page.click('#nav [data-tab="security"]');
     await page.fill('#pw-current', 'wrong');
