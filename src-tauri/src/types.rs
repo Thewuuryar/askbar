@@ -19,10 +19,12 @@ impl Settings {
     }
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(tag = "event", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum StreamEvent {
-    Started { conversation_id: String },
+    /// `generation_id` names the server-side reply (to resume or cancel it); `queued` means
+    /// another reply in this conversation is still running and this one waits its turn.
+    Started { conversation_id: String, generation_id: Option<String>, queued: bool },
     Delta { text: String },
     Done,
     Cancelled,

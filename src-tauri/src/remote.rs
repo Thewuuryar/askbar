@@ -28,6 +28,53 @@ pub struct Remote {
     inner: Result<Inner, String>,
 }
 
+/// What one chunk of a reply stream means for the caller.
+#[derive(Debug, PartialEq)]
+enum Step {
+    Emit(StreamEvent),
+    /// The reply is complete.
+    Done,
+    /// The server ended the reply with an error.
+    Fail(String),
+}
+
+/// Reads a reply stream and remembers where it got to, so a dropped stream can be resumed
+/// with `?after=<last_id>`. Deltas carry `id: 1, 2, 3...`, so the last id seen is the number
+/// of deltas received.
+#[derive(Default)]
+struct ReplyReader {
+    parser: SseParser,
+    /// Deltas received so far; the `after` to resume from.
+    #[allow(dead_code)] // read by the resume loop (step 1.18)
+    last_id: u64,
+    #[allow(dead_code)] // read by cancel and resume (steps 1.18, 1.19)
+    generation_id: Option<String>,
+}
+
+impl ReplyReader {
+    fn feed(&mut self, bytes: &[u8]) -> Vec<Step> {
+        let mut steps = Vec::new();
+        for ev in self.parser.feed(bytes) {
+            match serde_json::from_str::<ChatEvent>(&ev.data) {
+                Ok(ChatEvent::Meta { conversation_id, generation_id, queued }) => {
+                    if generation_id.is_some() {
+                        self.generation_id = generation_id.clone();
+                    }
+                    steps.push(Step::Emit(StreamEvent::Started { conversation_id, generation_id, queued }));
+                }
+                Ok(ChatEvent::Delta { text }) => {
+                    self.last_id += 1;
+                    steps.push(Step::Emit(StreamEvent::Delta { text }));
+                }
+                Ok(ChatEvent::Done) => steps.push(Step::Done),
+                Ok(ChatEvent::Error { message }) => steps.push(Step::Fail(message)),
+                Err(_) => {} // unknown event from a newer server: ignore
+            }
+        }
+        steps
+    }
+}
+
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
@@ -296,27 +343,23 @@ impl Remote {
         };
 
         let mut stream = Box::pin(resp.bytes_stream());
-        let mut parser = SseParser::default();
+        let mut reader = ReplyReader::default();
         loop {
             let chunk = tokio::select! {
                 c = stream.next() => c,
                 // Dropping the stream closes the connection; the server keeps the partial reply.
                 _ = &mut cancel => return emit(StreamEvent::Cancelled),
             };
-            let events = match chunk {
+            let bytes = match chunk {
                 None => break,
                 Some(Err(e)) => return fail(format!("The connection to the server was lost: {e}")),
-                Some(Ok(bytes)) => parser.feed(&bytes),
+                Some(Ok(bytes)) => bytes,
             };
-            for ev in events {
-                match serde_json::from_str::<ChatEvent>(&ev.data) {
-                    Ok(ChatEvent::Meta { conversation_id, .. }) => {
-                        emit(StreamEvent::Started { conversation_id })
-                    }
-                    Ok(ChatEvent::Delta { text }) => emit(StreamEvent::Delta { text }),
-                    Ok(ChatEvent::Done) => return emit(StreamEvent::Done),
-                    Ok(ChatEvent::Error { message }) => return fail(message),
-                    Err(_) => {} // unknown event from a newer server: ignore
+            for step in reader.feed(&bytes) {
+                match step {
+                    Step::Emit(e) => emit(e),
+                    Step::Done => return emit(StreamEvent::Done),
+                    Step::Fail(message) => return fail(message),
                 }
             }
         }
@@ -373,6 +416,50 @@ mod tests {
         (url, token)
     }
 
+    fn sse(name: &str, id: Option<u64>, data: &str) -> String {
+        let id = id.map(|n| format!("id: {n}\n")).unwrap_or_default();
+        format!("event: {name}\n{id}data: {data}\n\n")
+    }
+
+    #[test]
+    fn the_reply_reader_parses_the_new_meta_fields_and_counts_delta_ids() {
+        let mut r = ReplyReader::default();
+        let stream = [
+            sse("meta", None, r#"{"event":"meta","conversation_id":"c1","generation_id":"g1","queued":true}"#),
+            sse("delta", Some(1), r#"{"event":"delta","text":"Hel"}"#),
+            sse("provider", None, r#"{"event":"provider","id":"x"}"#), // from a newer server: ignored
+            sse("delta", Some(2), r#"{"event":"delta","text":"lo"}"#),
+            sse("done", None, r#"{"event":"done"}"#),
+        ]
+        .concat();
+        let steps = r.feed(stream.as_bytes());
+        assert_eq!(
+            steps,
+            [
+                Step::Emit(StreamEvent::Started { conversation_id: "c1".into(), generation_id: Some("g1".into()), queued: true }),
+                Step::Emit(StreamEvent::Delta { text: "Hel".into() }),
+                Step::Emit(StreamEvent::Delta { text: "lo".into() }),
+                Step::Done,
+            ]
+        );
+        assert_eq!((r.last_id, r.generation_id.as_deref()), (2, Some("g1")));
+    }
+
+    #[test]
+    fn the_reply_reader_copes_with_split_chunks_old_servers_and_errors() {
+        let mut r = ReplyReader::default();
+        // A server that does not send the new fields: no generation id, not queued.
+        let meta = sse("meta", None, r#"{"event":"meta","conversation_id":"c1"}"#);
+        let (a, b) = meta.as_bytes().split_at(10);
+        assert!(r.feed(a).is_empty());
+        assert_eq!(
+            r.feed(b),
+            [Step::Emit(StreamEvent::Started { conversation_id: "c1".into(), generation_id: None, queued: false })]
+        );
+        assert_eq!((r.last_id, r.generation_id.as_deref()), (0, None));
+        assert_eq!(r.feed(sse("error", None, r#"{"event":"error","message":"boom"}"#).as_bytes()), [Step::Fail("boom".into())]);
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn remote_talks_to_a_real_server() {
         let (_mock, mock_port) = start_mock();
@@ -389,7 +476,7 @@ mod tests {
         let (_tx, rx) = oneshot::channel();
         remote.ask(None, "hello".into(), rx, &|e| events.lock().unwrap().push(e)).await;
         let events = events.into_inner().unwrap();
-        let StreamEvent::Started { conversation_id } = events[0].clone() else { panic!("first event must be Started") };
+        let StreamEvent::Started { conversation_id, .. } = events[0].clone() else { panic!("first event must be Started") };
         assert!(matches!(events.last(), Some(StreamEvent::Done)));
         let reply: String = events.iter().filter_map(|e| if let StreamEvent::Delta { text } = e { Some(text.as_str()) } else { None }).collect();
         assert!(reply.ends_with("Anything else?"));
