@@ -7,6 +7,7 @@
 
 use crate::server_link::{build_snapshot, PushError, ServerLink};
 use crate::web::{err, Failure};
+use askbar_proto::http::ApiJson;
 use crate::AdminState;
 use askbar_proto::DisplaySettings;
 use axum::{
@@ -36,13 +37,15 @@ fn offline() -> Failure {
     err(StatusCode::BAD_GATEWAY, "The server is offline. Nothing was changed.")
 }
 
+/// The sentence in a problem the server answered with, if the body is one.
+fn server_detail(body: &[u8]) -> Option<String> {
+    serde_json::from_slice::<askbar_proto::Problem>(body).ok().map(|p| p.detail).filter(|d| !d.is_empty())
+}
+
 fn from_push(e: PushError) -> Failure {
     match e {
         PushError::Unreachable(_) => offline(),
-        PushError::Refused { status: 400, body } => {
-            let why = serde_json::from_str::<serde_json::Value>(&body).ok().and_then(|v| v["detail"].as_str().or(v["error"].as_str()).map(str::to_string));
-            bad(&why.unwrap_or_else(|| "The server did not accept that.".into()))
-        }
+        PushError::Refused { status: 400, body } => bad(&server_detail(body.as_bytes()).unwrap_or_else(|| "The server did not accept that.".into())),
         PushError::Refused { status, .. } => err(StatusCode::BAD_GATEWAY, &format!("The server answered {status}. Nothing was changed.")),
         PushError::Build(_) => internal(()),
     }
@@ -226,7 +229,7 @@ pub async fn list_providers(State(state): St) -> Result<Json<Vec<ProviderRow>>, 
     Ok(Json(rows))
 }
 
-pub async fn create_provider(State(state): St, Json(i): Json<ProviderInput>) -> Result<(StatusCode, Json<serde_json::Value>), Failure> {
+pub async fn create_provider(State(state): St, ApiJson(i): ApiJson<ProviderInput>) -> Result<(StatusCode, Json<serde_json::Value>), Failure> {
     validate(&i)?;
     let id = ulid::Ulid::new().to_string();
     let keys: Vec<(String, String)> = i.api_key.as_deref().map(str::trim).filter(|k| !k.is_empty()).map(|k| vec![(id.clone(), k.to_string())]).unwrap_or_default();
@@ -247,7 +250,7 @@ pub async fn create_provider(State(state): St, Json(i): Json<ProviderInput>) -> 
     Ok((StatusCode::CREATED, Json(serde_json::json!({ "id": id }))))
 }
 
-pub async fn update_provider(State(state): St, Path(id): Path<String>, Json(i): Json<ProviderInput>) -> Result<StatusCode, Failure> {
+pub async fn update_provider(State(state): St, Path(id): Path<String>, ApiJson(i): ApiJson<ProviderInput>) -> Result<StatusCode, Failure> {
     validate(&i)?;
     let keys: Vec<(String, String)> = i.api_key.as_deref().map(str::trim).filter(|k| !k.is_empty()).map(|k| vec![(id.clone(), k.to_string())]).unwrap_or_default();
     mutate(&state, keys, move |c| {
@@ -382,7 +385,7 @@ pub(crate) fn public_url(conn: &Connection) -> String {
 }
 
 /// A one-time pairing string for a new client, good for ten minutes. Only the code's hash is stored.
-pub async fn create_pairing(State(state): St, Json(i): Json<PairInput>) -> Result<Json<PairingOut>, Failure> {
+pub async fn create_pairing(State(state): St, ApiJson(i): ApiJson<PairInput>) -> Result<Json<PairingOut>, Failure> {
     let name = i.name.trim().to_string();
     if name.chars().count() > 60 {
         return Err(bad("The client name is too long."));
@@ -421,7 +424,7 @@ pub struct SetupAuditKey {
 /// is turned into a keypair, the public half and the salt are kept, and the passphrase is
 /// forgotten: nothing here stores or logs it. A second call is refused (rotation is its own
 /// step); losing the passphrase makes the sealed content unreadable for good.
-pub async fn setup_audit_key(State(state): St, Json(b): Json<SetupAuditKey>) -> Result<Json<serde_json::Value>, Failure> {
+pub async fn setup_audit_key(State(state): St, ApiJson(b): ApiJson<SetupAuditKey>) -> Result<Json<serde_json::Value>, Failure> {
     use crate::audit_key::{derive_for_setup, key_id, new_salt, KdfParams, KeyError};
     if b.passphrase != b.confirm {
         return Err(bad("The two passphrases do not match."));
@@ -478,8 +481,8 @@ async fn audit_get(state: &AdminState, path: &str, query: &std::collections::Has
     let (status, body) = link(state)?.request(reqwest::Method::GET, &target, None).await.map_err(from_push)?;
     match status {
         200 => serde_json::from_slice(&body).map(Json).map_err(internal),
-        404 => Err(err(StatusCode::NOT_FOUND, "No such trace.")),
-        503 => Err(err(StatusCode::SERVICE_UNAVAILABLE, "The server has no audit store recording.")),
+        404 => Err(err(StatusCode::NOT_FOUND, &server_detail(&body).unwrap_or_else(|| "No such trace.".into()))),
+        503 => Err(err(StatusCode::SERVICE_UNAVAILABLE, &server_detail(&body).unwrap_or_else(|| "The server has no audit store recording.".into()))),
         s => Err(err(StatusCode::BAD_GATEWAY, &format!("The server answered {s}."))),
     }
 }
@@ -544,11 +547,11 @@ pub struct RotateKey {
 /// new key is made and pushed (the server seals everything from then on with it); the old key is
 /// retired but kept, so what it sealed still opens, with its own passphrase. Nothing already
 /// sealed is touched or re-sealed.
-pub async fn rotate_audit_key(State(state): St, Json(b): Json<RotateKey>) -> Result<Json<serde_json::Value>, Failure> {
+pub async fn rotate_audit_key(State(state): St, ApiJson(b): ApiJson<RotateKey>) -> Result<Json<serde_json::Value>, Failure> {
     use crate::audit_key::{derive, derive_for_setup, key_id, new_salt, KdfParams, KeyError};
     let now = crate::auth::now();
     if let Some(wait) = state.audit_opens.locked_for(now) {
-        return Err(err(StatusCode::TOO_MANY_REQUESTS, &format!("Too many wrong passphrases. Try again in {} minutes.", (wait + 59) / 60)));
+        return Err(err(StatusCode::TOO_MANY_REQUESTS, &format!("Too many wrong passphrases. Try again in {} minutes.", (wait + 59) / 60)).retry_after(wait.max(1) as u64));
     }
     if b.confirm.as_deref().is_some_and(|c| c != b.new) {
         return Err(bad("The two new passphrases do not match."));
@@ -608,12 +611,12 @@ pub struct OpenRequest {
 /// server, derive the key from the passphrase in the body, open it, and drop the key. The
 /// passphrase is never stored or logged. Before any content is returned an `audit_access` row is
 /// written; a wrong passphrase is recorded too, answers 403, and is rate limited (429).
-pub async fn open_audit_payloads(State(state): St, Path(span_id): Path<String>, Json(b): Json<OpenRequest>) -> Result<Json<serde_json::Value>, Failure> {
+pub async fn open_audit_payloads(State(state): St, Path(span_id): Path<String>, ApiJson(b): ApiJson<OpenRequest>) -> Result<Json<serde_json::Value>, Failure> {
     use crate::audit_key::{derive, key_id, open_sealed, KdfParams};
     use base64::Engine;
     let now = crate::auth::now();
     if let Some(wait) = state.audit_opens.locked_for(now) {
-        return Err(err(StatusCode::TOO_MANY_REQUESTS, &format!("Too many wrong passphrases. Try again in {} minutes.", (wait + 59) / 60)));
+        return Err(err(StatusCode::TOO_MANY_REQUESTS, &format!("Too many wrong passphrases. Try again in {} minutes.", (wait + 59) / 60)).retry_after(wait.max(1) as u64));
     }
     let (status, body) = link(&state)?
         .request(reqwest::Method::GET, &format!("/mgmt/v1/audit/payloads/{span_id}"), None)
@@ -741,7 +744,7 @@ pub async fn get_settings(State(state): St) -> Json<AdminSettings> {
     })
 }
 
-pub async fn put_settings(State(state): St, Json(s): Json<AdminSettings>) -> Result<StatusCode, Failure> {
+pub async fn put_settings(State(state): St, ApiJson(s): ApiJson<AdminSettings>) -> Result<StatusCode, Failure> {
     if s.system_prompt.chars().count() > MAX_PROMPT_CHARS {
         return Err(bad("The system prompt is too long."));
     }
@@ -790,7 +793,7 @@ pub async fn put_settings(State(state): St, Json(s): Json<AdminSettings>) -> Res
 }
 
 /// One user's display defaults, instead of the server-wide ones.
-pub async fn put_user_display(State(state): St, Path(user_id): Path<String>, Json(d): Json<DisplaySettings>) -> Result<StatusCode, Failure> {
+pub async fn put_user_display(State(state): St, Path(user_id): Path<String>, ApiJson(d): ApiJson<DisplaySettings>) -> Result<StatusCode, Failure> {
     check_display(&d)?;
     let value = serde_json::to_string(&d).map_err(|_| bad("Invalid display settings."))?;
     let (status, body) = link(&state)?.request(reqwest::Method::GET, "/mgmt/v1/users", None).await.map_err(from_push)?;

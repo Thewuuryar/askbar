@@ -190,6 +190,7 @@ async fn five_wrong_passphrases_lock_opening_out_even_for_the_right_one_and_unkn
     let (st, body) = open(PASS).await;
     assert_eq!(st, 429, "locked out, even with the right one: {body}");
     assert!(body["detail"].as_str().unwrap_or("").contains("Try again"), "{body}");
+    assert_eq!(body["error"], "too_many_attempts");
     assert_eq!(access_rows(&t).await.len(), 5, "a refused attempt is not an open, so nothing more is recorded");
     // The login is a different lock: signing in still works.
     let r = t.http.post(format!("{}/admin/login", t.adm)).header("x-askbar-admin", "1").json(&json!({ "password": common::PW })).send().await.unwrap();

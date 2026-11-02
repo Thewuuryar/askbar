@@ -288,7 +288,7 @@ async fn the_generation_timeout_round_trips_reaches_the_server_and_is_range_chec
     for bad in [29, 3601, 0] {
         assert_eq!(t.call(M::PUT, "/admin/api/settings", Some(save(json!(bad)))).await.0, 400, "{bad}");
     }
-    assert_eq!(t.call(M::PUT, "/admin/api/settings", Some(save(json!("soon")))).await.0, 422, "not a number");
+    assert_eq!(t.call(M::PUT, "/admin/api/settings", Some(save(json!("soon")))).await.0, 400, "not a number: a body that does not fit is a bad_request problem (it was a bare 422)");
     assert_eq!(t.call(M::GET, "/admin/api/settings", None).await.1["generation_timeout_secs"], json!(120));
     assert_eq!(t.snapshot().unwrap().generation_timeout_secs, 120);
 

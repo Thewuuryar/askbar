@@ -170,5 +170,6 @@ async fn an_unreachable_server_is_a_502_with_a_message() {
         let (st, body) = a.get(p, true, true).await;
         assert_eq!(st, 502, "{p}");
         assert!(body["detail"].as_str().unwrap_or("").contains("offline"), "{body}");
+        assert_eq!(body["error"], "server_unavailable", "{p}");
     }
 }

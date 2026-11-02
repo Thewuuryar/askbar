@@ -3,6 +3,7 @@
 //! None of this needs a restart; the Caddy step turns it into proxy config.
 
 use crate::web::{err, Failure};
+use askbar_proto::http::ApiJson;
 use crate::AdminState;
 use axum::{extract::State, http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
@@ -176,7 +177,7 @@ async fn save(state: &AdminState, input: NetworkInput) -> Result<(), Failure> {
     Ok(())
 }
 
-pub async fn put_network(State(state): State<Arc<AdminState>>, Json(input): Json<NetworkInput>) -> Result<Json<NetworkView>, Failure> {
+pub async fn put_network(State(state): State<Arc<AdminState>>, ApiJson(input): ApiJson<NetworkInput>) -> Result<Json<NetworkView>, Failure> {
     save(&state, input).await?;
     // Saved. Now tell Caddy; if that fails the settings stay and the result says why.
     crate::caddy::apply(&state).await;
