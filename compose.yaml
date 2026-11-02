@@ -20,6 +20,8 @@ services:
     environment:
       # One specific address on the mgmt network; the server refuses a wildcard here.
       ASKBAR_MGMT_ADDR: 172.30.0.2:8082
+      # audit.db lives on its own volume, mounted into the server and nothing else.
+      ASKBAR_AUDIT_DIR: /audit
     networks:
       edge: {}
       mgmt:
@@ -31,6 +33,9 @@ services:
       # Back this volume up separately; without master.key the server will not start against a database
       # that holds encrypted provider keys.
       - askbar-secrets:/secrets
+      # The audit store (audit.db): a trace of every reply. Only the server mounts it; the admin reads
+      # it through the management API, never from disk. Back it up by copying the volume.
+      - audit-data:/audit
       # The admin's token hash (token.sha256). Read-only: the server can check the token, never mint one.
       - askbar-mgmt:/mgmt:ro
     extra_hosts:
@@ -149,6 +154,7 @@ networks:
 
 volumes:
   askbar-secrets:
+  audit-data:
   askbar-mgmt:
   admin-data:
   admin-secrets:
