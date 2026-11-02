@@ -7,3 +7,4 @@ docs/refactor-log.md                # history
 docs/handoff-server-side-chats.md   # history
 Cargo.lock                          # generated
 package-lock.json                   # generated
+docs/handoff-refactor-0.5.md       # history
