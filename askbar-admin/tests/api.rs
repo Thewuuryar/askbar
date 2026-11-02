@@ -76,7 +76,7 @@ async fn start(reachable: bool) -> T {
     let admin = AdminState::with_server(db, link);
     let adm = serve(askbar_admin::router(admin.clone())).await;
     let http = reqwest::Client::new();
-    let r = http.post(format!("{adm}/admin/login")).header("x-askbar-admin", "1").json(&json!({ "password": PW })).send().await.unwrap();
+    let r = http.post(format!("{adm}/admin/api/v1/session")).header("x-askbar-admin", "1").json(&json!({ "password": PW })).send().await.unwrap();
     let cookie = r.headers()["set-cookie"].to_str().unwrap().split(';').next().unwrap().to_string();
     T { adm, api, cookie, http, admin, server, dir }
 }
@@ -160,11 +160,11 @@ async fn with_the_server_down_changes_get_502_and_nothing_is_saved() {
     let llm = "http://x/v1";
     for (m, path, body) in [
         (M::POST, "/admin/api/v1/providers", Some(provider("p", llm, Some(KEY)))),
-        (M::GET, "/admin/api/v1/devices", None),
-        (M::POST, "/admin/api/v1/pair", Some(json!({ "name": "laptop" }))),
+        (M::GET, "/admin/api/v1/clients", None),
+        (M::POST, "/admin/api/v1/pairings", Some(json!({ "name": "laptop" }))),
         (M::PUT, "/admin/api/v1/settings", Some(json!({ "system_prompt": "x", "display": askbar_proto::DisplaySettings::default() }))),
         (M::GET, "/admin/api/v1/backup", None),
-        (M::POST, "/admin/api/v1/devices/d1/revoke", None),
+        (M::POST, "/admin/api/v1/clients/d1/revoke", None),
     ] {
         let (st, res) = t.call(m, path, body).await;
         assert_eq!(st, 502, "{path}");
@@ -193,7 +193,7 @@ async fn status_reports_a_server_that_is_there() {
 #[tokio::test]
 async fn a_pairing_string_pairs_a_client_which_can_then_be_revoked() {
     let t = start(true).await;
-    let (st, out) = t.call(M::POST, "/admin/api/v1/pair", Some(json!({ "name": "Work laptop" }))).await;
+    let (st, out) = t.call(M::POST, "/admin/api/v1/pairings", Some(json!({ "name": "Work laptop" }))).await;
     assert_eq!(st, 200);
     let (url, code) = askbar_proto::decode_pairing(out["pairing"].as_str().unwrap()).expect("a pairing string");
     assert_eq!(url, "http://localhost:8080", "no HTTPS configured: the fallback address");
@@ -214,23 +214,23 @@ async fn a_pairing_string_pairs_a_client_which_can_then_be_revoked() {
 
     let whoami = || t.http.get(format!("{}/api/v1/whoami", t.api)).bearer_auth(&token).header("x-askbar-client-version", "0.4.0").send();
     assert_eq!(whoami().await.unwrap().status(), 204);
-    let (_, clients) = t.call(M::GET, "/admin/api/v1/devices", None).await;
+    let (_, clients) = t.call(M::GET, "/admin/api/v1/clients", None).await;
     assert_eq!((clients[0]["name"].as_str(), clients[0]["revoked"].clone()), (Some("Work laptop"), json!(false)));
     let id = clients[0]["id"].as_str().unwrap().to_string();
 
-    assert_eq!(t.call(M::POST, &format!("/admin/api/v1/devices/{id}/revoke"), None).await.0, 204);
+    assert_eq!(t.call(M::POST, &format!("/admin/api/v1/clients/{id}/revoke"), None).await.0, 204);
     assert_eq!(whoami().await.unwrap().status(), 401, "the revoked client is refused");
-    let (_, clients) = t.call(M::GET, "/admin/api/v1/devices", None).await;
+    let (_, clients) = t.call(M::GET, "/admin/api/v1/clients", None).await;
     assert_eq!(clients[0]["revoked"], json!(true));
-    assert_eq!(t.call(M::POST, "/admin/api/v1/devices/nope/revoke", None).await.0, 404);
-    assert_eq!(t.call(M::POST, "/admin/api/v1/pair", Some(json!({ "name": "x".repeat(61) }))).await.0, 400);
+    assert_eq!(t.call(M::POST, "/admin/api/v1/clients/nope/revoke", None).await.0, 404);
+    assert_eq!(t.call(M::POST, "/admin/api/v1/pairings", Some(json!({ "name": "x".repeat(61) }))).await.0, 400);
 }
 
 #[tokio::test]
 async fn the_pairing_string_uses_the_public_https_name_when_https_is_on() {
     let t = start(true).await;
     t.admin.db.lock().await.conn().execute("UPDATE network_settings SET tls_enabled = 1, hostname = 'askbar.example.com'", []).unwrap();
-    let (_, out) = t.call(M::POST, "/admin/api/v1/pair", Some(json!({}))).await;
+    let (_, out) = t.call(M::POST, "/admin/api/v1/pairings", Some(json!({}))).await;
     assert_eq!(askbar_proto::decode_pairing(out["pairing"].as_str().unwrap()).unwrap().0, "https://askbar.example.com");
 }
 
@@ -372,7 +372,7 @@ async fn the_backup_holds_both_databases_and_none_of_the_secrets() {
     let t = start(true).await;
     let llm = fake_llm().await;
     t.call(M::POST, "/admin/api/v1/providers", Some(provider("mock", &llm, Some(KEY)))).await;
-    t.call(M::POST, "/admin/api/v1/pair", Some(json!({ "name": "pending" }))).await;
+    t.call(M::POST, "/admin/api/v1/pairings", Some(json!({ "name": "pending" }))).await;
     t.admin.db.lock().await.conn().execute("UPDATE network_settings SET cloudflare_token = x'deadbeefcafe'", []).unwrap();
     {
         let db = t.server.db.lock().unwrap();
@@ -443,9 +443,9 @@ async fn all_of_it_needs_a_session() {
         (M::PUT, "/admin/api/v1/providers/x"),
         (M::DELETE, "/admin/api/v1/providers/x"),
         (M::POST, "/admin/api/v1/providers/x/test"),
-        (M::GET, "/admin/api/v1/devices"),
-        (M::POST, "/admin/api/v1/devices/x/revoke"),
-        (M::POST, "/admin/api/v1/pair"),
+        (M::GET, "/admin/api/v1/clients"),
+        (M::POST, "/admin/api/v1/clients/x/revoke"),
+        (M::POST, "/admin/api/v1/pairings"),
         (M::GET, "/admin/api/v1/settings"),
         (M::PUT, "/admin/api/v1/settings"),
         (M::PUT, "/admin/api/v1/users/x/display-defaults"),

@@ -32,7 +32,7 @@ async fn the_client_and_server_api_routers_share_no_routes() {
     assert_eq!(status(server_api, "/mgmt/v1/health").await, 401);
     assert_eq!(status(server_api, "/api/v1/health").await, 401, "the client API is not served here");
     assert_eq!(status(api, "/mgmt/v1/health").await, 404);
-    for gone in ["/admin/", "/admin/health", "/admin/login", "/admin/api/v1/providers", "/"] {
+    for gone in ["/admin/", "/admin/health", "/admin/api/v1/session", "/admin/api/v1/providers", "/"] {
         assert_eq!(status(api, gone).await, 404, "{gone}: the admin site is not part of the server");
     }
     let _ = std::fs::remove_dir_all(&dir);

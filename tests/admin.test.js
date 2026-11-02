@@ -118,7 +118,7 @@ async function waitForPort(port) {
     await page.click('#setup-audit-form button[type=submit]');
     assert.match(await page.innerText('#setup-audit-error'), /stored the passphrase/);
     assert.equal(await page.isHidden('#app'), true);
-    const st = await (await fetch(`http://127.0.0.1:${adminPort}/admin/api/v1/setup-status`, { headers: { 'x-askbar-admin': '1' } })).json();
+    const st = await (await fetch(`http://127.0.0.1:${adminPort}/admin/api/v1/setup`, { headers: { 'x-askbar-admin': '1' } })).json();
     assert.equal(st.audit_key_set, false, 'no key yet');
   });
   await step('setup: saving shows the key id, then Continue opens the app', async () => {
@@ -447,7 +447,7 @@ async function waitForPort(port) {
   // One real chat through the server, so there is something to look at; returns once the reply is done.
   async function auditChat(text, providerName) {
     const pairing = await page.evaluate(async () => {
-      const r = await fetch('/admin/api/v1/pair', { method: 'POST', headers: { 'x-askbar-admin': '1', 'content-type': 'application/json' }, body: JSON.stringify({ name: 'audit test' }) });
+      const r = await fetch('/admin/api/v1/pairings', { method: 'POST', headers: { 'x-askbar-admin': '1', 'content-type': 'application/json' }, body: JSON.stringify({ name: 'audit test' }) });
       return (await r.json()).pairing;
     });
     const { code } = JSON.parse(Buffer.from(pairing.slice('askbar-pair:'.length), 'base64url').toString());

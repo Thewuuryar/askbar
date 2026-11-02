@@ -12,7 +12,7 @@
       headers: { 'X-Askbar-Admin': '1', ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}) },
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
-    if (res.status === 401 && path !== '/admin/login') { showLogin(); throw new Error('Signed out'); }
+    if (res.status === 401 && !(method === 'POST' && path === '/admin/api/v1/session')) { showLogin(); throw new Error('Signed out'); }
     let data = null;
     const text = await res.text();
     if (text) { try { data = JSON.parse(text); } catch (_) { data = null; } }
@@ -86,10 +86,10 @@
 
   async function route() {
     let status;
-    try { status = await api('GET', '/admin/api/v1/setup-status'); } catch (_) { status = { password_set: true }; }
+    try { status = await api('GET', '/admin/api/v1/setup'); } catch (_) { status = { password_set: true }; }
     if (!status.password_set) return showSetup();
     let signedIn = true;
-    try { await api('GET', '/admin/session'); } catch (_) { signedIn = false; }
+    try { await api('GET', '/admin/api/v1/session'); } catch (_) { signedIn = false; }
     if (!signedIn) return showLogin();
     // The audit passphrase is part of setup: without a key the server records nothing it may keep,
     // and refuses to start replies. An install from before audit keys is asked on its next visit.
@@ -116,7 +116,7 @@
     if ([...pass].length < 20) return fail('The passphrase must be at least 20 characters.');
     if (!$('setup-audit-stored').checked) return fail('Confirm that you stored the passphrase: it cannot be recovered.');
     try {
-      const r = await api('POST', '/admin/api/v1/setup/audit-key', { passphrase: pass, confirm: $('setup-audit2').value });
+      const r = await api('PUT', '/admin/api/v1/setup/audit-key', { passphrase: pass, confirm: $('setup-audit2').value });
       $('setup-audit').value = '';
       $('setup-audit2').value = '';
       $('setup-audit-stored').checked = false;
@@ -139,7 +139,7 @@
       return;
     }
     try {
-      await api('POST', '/admin/api/v1/setup/password', { password: $('setup-password').value });
+      await api('PUT', '/admin/api/v1/setup/password', { password: $('setup-password').value });
       $('setup-password').value = '';
       $('setup-password2').value = '';
       route();
@@ -179,7 +179,7 @@
     const err = $('login-error');
     show(err, false);
     try {
-      await api('POST', '/admin/login', { password: $('password').value });
+      await api('POST', '/admin/api/v1/session', { password: $('password').value });
       route();
     } catch (ex) {
       err.textContent = ex.status === 429 ? 'Too many attempts. Try again later.'
@@ -190,7 +190,7 @@
   });
 
   $('logout').addEventListener('click', async () => {
-    try { await api('POST', '/admin/logout'); } catch (_) { /* already signed out */ }
+    try { await api('DELETE', '/admin/api/v1/session'); } catch (_) { /* already signed out */ }
     route();
   });
 
@@ -352,7 +352,7 @@
       return;
     }
     try {
-      await api('POST', '/admin/api/v1/password', { current: $('pw-current').value, new: $('pw-new').value });
+      await api('PUT', '/admin/api/v1/password', { current: $('pw-current').value, new: $('pw-new').value });
       for (const id of ['pw-current', 'pw-new', 'pw-new2']) $(id).value = '';
       flash('Password changed. Other browsers have been signed out.');
     } catch (ex) {
@@ -419,7 +419,7 @@
   }
 
   async function loadClients() {
-    const list = await api('GET', '/admin/api/v1/devices');
+    const list = await api('GET', '/admin/api/v1/clients');
     const box = $('clients');
     box.textContent = '';
     if (!list.length) {
@@ -446,7 +446,7 @@
       if (!d.revoked) {
         const revoke = button('Revoke', 'danger', async () => {
           if (!confirm('Revoke "' + d.name + '"? It will be signed out and must be paired again.')) return;
-          try { await api('POST', '/admin/api/v1/devices/' + encodeURIComponent(d.id) + '/revoke'); loadClients(); } catch (ex) { flash(ex.message); }
+          try { await api('POST', '/admin/api/v1/clients/' + encodeURIComponent(d.id) + '/revoke'); loadClients(); } catch (ex) { flash(ex.message); }
         });
         revoke.dataset.action = 'revoke';
         head.appendChild(revoke);
@@ -464,7 +464,7 @@
     const err = $('pair-error');
     show(err, false);
     try {
-      const r = await api('POST', '/admin/api/v1/pair', { name: $('d-name').value.trim() });
+      const r = await api('POST', '/admin/api/v1/pairings', { name: $('d-name').value.trim() });
       $('pairing-string').value = r.pairing;
       show($('pairing-out'), true);
     } catch (ex) {

@@ -81,10 +81,10 @@ $1"
 }
 admin_login() { # python lines that sign in (or run first-run setup), used before every script
   cat <<EOF
-s, _ = call("POST", "/admin/login", {"password": "$PW"})
+s, _ = call("POST", "/admin/api/v1/session", {"password": "$PW"})
 if s != 204:
-    call("POST", "/admin/api/v1/setup/password", {"password": "$PW"})
-    s, _ = call("POST", "/admin/login", {"password": "$PW"})
+    call("PUT", "/admin/api/v1/setup/password", {"password": "$PW"})
+    s, _ = call("POST", "/admin/api/v1/session", {"password": "$PW"})
 assert s == 204 or s == 200, "cannot sign in to the admin"
 EOF
 }
@@ -265,7 +265,7 @@ import tarfile, io, base64, json
 s, body = call('POST', '/admin/api/v1/providers', {'name': 'iso-$(head -c 6 /dev/urandom | od -An -tx1 | tr -d ' \n')', 'type': 'openai', 'base_url': 'http://mock-llm:8765/v1', 'model': 'm', 'api_key': '$MARK'})
 assert s == 201, (s, body)
 provider_id = json.loads(body)['id']
-s, body = call('POST', '/admin/api/v1/pair', {'name': 'iso client'})
+s, body = call('POST', '/admin/api/v1/pairings', {'name': 'iso client'})
 assert s == 200, (s, body)
 pairing = json.loads(body)['pairing']
 b = pairing.split(':', 1)[1]

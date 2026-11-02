@@ -95,7 +95,7 @@ async fn http_mode_saves_without_a_token_and_pairing_follows_the_setting() {
     let (st, _) = t.save(json!({ "tls_enabled": false, "hostname": "", "admin_cidr": "", "acme_staging": false })).await;
     assert_eq!(st, 200);
     let pairing = |t: &T| {
-        let url = format!("{}/admin/api/v1/pair", t.adm);
+        let url = format!("{}/admin/api/v1/pairings", t.adm);
         let (http, cookie) = (t.http.clone(), t.cookie.clone());
         async move {
             let v: Value = http.post(url).header("x-askbar-admin", "1").header("cookie", cookie).json(&json!({})).send().await.unwrap().json().await.unwrap();

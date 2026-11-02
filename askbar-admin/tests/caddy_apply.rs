@@ -138,6 +138,8 @@ async fn the_ui_is_served_with_its_security_headers() {
     // key's rotation, added in 5.13 and 7.10, is a different thing and is here.)
     assert!(!page.contains("setup-key") && !page.contains("setup-saved") && !page.contains("Rotate the master key"), "no master-key screens here");
     assert!(page.contains("Rotate the audit key") && page.contains("id=\"rotate-form\""));
-    let redirect = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().unwrap().get(format!("{}/", t.adm)).send().await.unwrap();
-    assert_eq!(redirect.status(), 303);
+    // /admin (no slash) goes to the page; the root is not the admin's (Caddy never forwards it), so it is a 404.
+    let none = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().unwrap();
+    assert_eq!(none.get(format!("{}/admin", t.adm)).send().await.unwrap().status(), 303);
+    assert_eq!(none.get(format!("{}/", t.adm)).send().await.unwrap().status(), 404);
 }

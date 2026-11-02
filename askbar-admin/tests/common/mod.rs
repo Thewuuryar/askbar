@@ -87,7 +87,7 @@ pub async fn start(caddy_up: bool) -> T {
     admin.set_caddy(CaddyLink { socket: Some(caddy_socket.clone()), secrets_dir: Some(secrets_dir.clone()) });
     let adm = serve(askbar_admin::router(admin.clone())).await;
     let http = reqwest::Client::new();
-    let r = http.post(format!("{adm}/admin/login")).header("x-askbar-admin", "1").json(&json!({ "password": PW })).send().await.unwrap();
+    let r = http.post(format!("{adm}/admin/api/v1/session")).header("x-askbar-admin", "1").json(&json!({ "password": PW })).send().await.unwrap();
     let cookie = r.headers()["set-cookie"].to_str().unwrap().split(';').next().unwrap().to_string();
     T { adm, cookie, http, admin, server, fake, dir, secrets_dir, caddy_socket }
 }

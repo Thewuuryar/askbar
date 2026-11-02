@@ -28,7 +28,7 @@ async fn start(password: &str) -> T {
 impl T {
     async fn login(&self, password: &str) -> reqwest::Response {
         self.http
-            .post(format!("http://{}/admin/login", self.admin))
+            .post(format!("http://{}/admin/api/v1/session", self.admin))
             .header("x-askbar-admin", "1")
             .json(&serde_json::json!({ "password": password }))
             .send()
@@ -73,7 +73,7 @@ async fn login_sets_a_locked_down_cookie_and_opens_the_session() {
     assert!(c.contains("HttpOnly") && c.contains("SameSite=Strict") && c.contains("Path=/admin"), "{c}");
     assert!(!c.contains("Secure"), "plain http: no Secure flag");
     let cookie = c.split(';').next().unwrap();
-    assert_eq!(t.admin_get("/admin/session", Some(cookie), None).await, 204);
+    assert_eq!(t.admin_get("/admin/api/v1/session", Some(cookie), None).await, 204);
 }
 
 #[tokio::test]
@@ -111,9 +111,11 @@ async fn no_configured_password_means_no_login() {
 #[tokio::test]
 async fn missing_or_bogus_session_is_401() {
     let t = start(PASSWORD).await;
-    assert_eq!(t.admin_get("/admin/session", None, None).await, 401);
-    assert_eq!(t.admin_get("/admin/session", Some("askbar_admin=bogus"), None).await, 401);
-    assert_eq!(t.admin_get("/health", None, None).await, 200, "health stays public");
+    assert_eq!(t.admin_get("/admin/api/v1/session", None, None).await, 401);
+    assert_eq!(t.admin_get("/admin/api/v1/session", Some("askbar_admin=bogus"), None).await, 401);
+    assert_eq!(t.admin_get("/admin/api/v1/health", None, None).await, 200, "health stays public");
+    assert_eq!(t.admin_get("/health", None, None).await, 404, "the old health path is gone");
+    assert_eq!(t.admin_get("/", None, None).await, 404, "nothing answers at / any more");
 }
 
 #[tokio::test]
@@ -121,8 +123,8 @@ async fn bearer_tokens_never_open_the_admin() {
     let t = start(PASSWORD).await;
     // The server token and a client token look alike to this site: neither is a session.
     for token in ["mgt_the-server-token", "abt_a-client-token", PASSWORD] {
-        assert_eq!(t.admin_get("/admin/session", None, Some(token)).await, 401);
-        assert_eq!(t.admin_get("/admin/session", Some("askbar_admin=bogus"), Some(token)).await, 401);
+        assert_eq!(t.admin_get("/admin/api/v1/session", None, Some(token)).await, 401);
+        assert_eq!(t.admin_get("/admin/api/v1/session", Some("askbar_admin=bogus"), Some(token)).await, 401);
     }
 }
 
@@ -140,19 +142,19 @@ async fn state_changing_requests_need_the_admin_header() {
         }
         r.send()
     };
-    assert_eq!(post("/admin/login", false, None).await.unwrap().status(), 403);
-    assert_eq!(post("/admin/logout", false, Some(&cookie)).await.unwrap().status(), 403);
-    assert_eq!(t.admin_get("/admin/session", Some(&cookie), None).await, 204, "a rejected logout didn't sign us out");
+    assert_eq!(post("/admin/api/v1/session", false, None).await.unwrap().status(), 403);
+    assert_eq!(post("/admin/api/v1/session", false, Some(&cookie)).await.unwrap().status(), 403);
+    assert_eq!(t.admin_get("/admin/api/v1/session", Some(&cookie), None).await, 204, "a rejected logout didn't sign us out");
 }
 
 #[tokio::test]
 async fn logout_ends_the_session() {
     let t = start(PASSWORD).await;
     let cookie = t.session().await;
-    let r = t.http.post(format!("http://{}/admin/logout", t.admin)).header("x-askbar-admin", "1").header("cookie", &cookie).send().await.unwrap();
+    let r = t.http.delete(format!("http://{}/admin/api/v1/session", t.admin)).header("x-askbar-admin", "1").header("cookie", &cookie).send().await.unwrap();
     assert_eq!(r.status(), 204);
     assert!(r.headers()[reqwest::header::SET_COOKIE].to_str().unwrap().contains("Max-Age=0"));
-    assert_eq!(t.admin_get("/admin/session", Some(&cookie), None).await, 401);
+    assert_eq!(t.admin_get("/admin/api/v1/session", Some(&cookie), None).await, 401);
 }
 
 #[tokio::test]
@@ -160,7 +162,7 @@ async fn cookie_is_marked_secure_behind_the_tls_proxy() {
     let t = start(PASSWORD).await;
     let r = t
         .http
-        .post(format!("http://{}/admin/login", t.admin))
+        .post(format!("http://{}/admin/api/v1/session", t.admin))
         .header("x-askbar-admin", "1")
         .header("x-forwarded-proto", "https")
         .json(&serde_json::json!({ "password": PASSWORD }))
@@ -195,11 +197,11 @@ async fn every_admin_refusal_is_a_problem_with_a_code_a_sentence_and_no_bearer_c
     let url = |p: &str| format!("http://{}{p}", t.admin);
     // Signed out, and a change without the header.
     expect(t.http.get(url("/admin/api/v1/providers")).send().await.unwrap(), 401, "unauthorized").await;
-    expect(t.http.post(url("/admin/login")).json(&serde_json::json!({ "password": "x" })).send().await.unwrap(), 403, "forbidden").await;
+    expect(t.http.post(url("/admin/api/v1/session")).json(&serde_json::json!({ "password": "x" })).send().await.unwrap(), 403, "forbidden").await;
     // Unknown path, wrong method, a body that is not JSON.
     expect(t.http.get(url("/admin/nope")).send().await.unwrap(), 404, "not_found").await;
-    expect(t.http.get(url("/admin/logout")).send().await.unwrap(), 405, "method_not_allowed").await;
-    let bad = t.http.post(url("/admin/login")).header("x-askbar-admin", "1").header("content-type", "application/json").body("nope").send().await.unwrap();
+    expect(t.http.patch(url("/admin/api/v1/session")).header("x-askbar-admin", "1").send().await.unwrap(), 405, "method_not_allowed").await;
+    let bad = t.http.post(url("/admin/api/v1/session")).header("x-askbar-admin", "1").header("content-type", "application/json").body("nope").send().await.unwrap();
     expect(bad, 400, "bad_request").await;
     // A wrong password, then the lockout with its wait.
     let p = expect(t.login("wrong password").await, 401, "unauthorized").await;
@@ -220,7 +222,7 @@ async fn signing_in_before_a_password_exists_says_setup_is_required() {
     let state = AdminState::new(db);
     let admin = spawn(askbar_admin::router(state)).await;
     let r = reqwest::Client::new()
-        .post(format!("http://{admin}/admin/login"))
+        .post(format!("http://{admin}/admin/api/v1/session"))
         .header("x-askbar-admin", "1")
         .json(&serde_json::json!({ "password": "whatever it is" }))
         .send()

@@ -96,18 +96,17 @@ fn asset(content_type: &'static str, body: &'static str) -> impl axum::response:
 pub fn router(state: Arc<AdminState>) -> Router {
     // Every API route is under `/admin/api/v1` (askbar_proto::paths::ADMIN_V1).
     let v1 = |rest: &str| askbar_proto::paths::join(askbar_proto::paths::ADMIN_V1, rest);
+    let session = || middleware::from_fn_with_state(state.clone(), web::require_session);
     let protected: Router<Arc<AdminState>> = Router::new()
-        .route("/admin/session", get(|| async { StatusCode::NO_CONTENT }))
-        .route("/admin/logout", post(web::logout))
-        .route(&v1("/password"), post(web::change_password))
+        .route(&v1("/password"), put(web::change_password))
         .route(&v1("/status"), get(admin_api::status))
         .route(&v1("/providers"), get(admin_api::list_providers).post(admin_api::create_provider))
         .route(&v1("/providers/{id}"), put(admin_api::update_provider).delete(admin_api::delete_provider))
         .route(&v1("/providers/{id}/test"), post(admin_api::test_provider))
-        .route(&v1("/devices"), get(admin_api::list_clients))
-        .route(&v1("/devices/{id}/revoke"), post(admin_api::revoke_client))
-        .route(&v1("/pair"), post(admin_api::create_pairing))
-        .route(&v1("/setup/audit-key"), post(admin_api::setup_audit_key))
+        .route(&v1("/clients"), get(admin_api::list_clients))
+        .route(&v1("/clients/{id}/revoke"), post(admin_api::revoke_client))
+        .route(&v1("/pairings"), post(admin_api::create_pairing))
+        .route(&v1("/setup/audit-key"), put(admin_api::setup_audit_key))
         .route(&v1("/audit/traces"), get(admin_api::audit_traces))
         .route(&v1("/audit/traces/{id}"), get(admin_api::audit_trace))
         .route(&v1("/audit/stats"), get(admin_api::audit_stats))
@@ -120,18 +119,18 @@ pub fn router(state: Arc<AdminState>) -> Router {
         .route(&v1("/backup"), get(admin_api::backup))
         .route(&v1("/network"), get(network::get_network).put(network::put_network))
         .route(&v1("/network/apply"), post(network::apply_network))
-        .route_layer(middleware::from_fn_with_state(state.clone(), web::require_session));
+        .route_layer(session());
     Router::new()
-        .route("/", get(|| async { Redirect::to("/admin/") }))
         .route("/admin", get(|| async { Redirect::to("/admin/") }))
         .route("/admin/", get(|| async { asset("text/html; charset=utf-8", include_str!("ui/index.html")) }))
         .route("/admin/app.js", get(|| async { asset("text/javascript; charset=utf-8", include_str!("ui/app.js")) }))
         .route("/admin/audit.js", get(|| async { asset("text/javascript; charset=utf-8", include_str!("ui/audit.js")) }))
         .route("/admin/style.css", get(|| async { asset("text/css; charset=utf-8", include_str!("ui/style.css")) }))
-        .route("/health", get(|| async { (StatusCode::OK, "ok") }))
-        .route("/admin/login", post(web::login))
-        .route(&v1("/setup-status"), get(web::setup_status))
-        .route(&v1("/setup/password"), post(web::setup_password))
+        .route(&v1("/health"), get(|| async { (StatusCode::OK, "ok") }))
+        // The session: signing in is open, looking at it and ending it need the session itself.
+        .route(&v1("/session"), get(|| async { StatusCode::NO_CONTENT }).delete(web::logout).route_layer(session()).post(web::login))
+        .route(&v1("/setup"), get(web::setup_status))
+        .route(&v1("/setup/password"), put(web::setup_password))
         .merge(protected)
         .fallback(askbar_proto::http::not_found)
         .method_not_allowed_fallback(askbar_proto::http::method_not_allowed)
@@ -158,7 +157,7 @@ pub async fn serve_unix(path: &std::path::Path, app: Router) -> std::io::Result<
     axum::serve(listener, app).await
 }
 
-/// `askbar-admin healthcheck`: ask the admin socket for `/health`. True on a 200.
+/// `askbar-admin healthcheck`: ask the admin socket for `/admin/api/v1/health`. True on a 200.
 pub fn healthcheck(path: &std::path::Path) -> bool {
     use std::io::{Read, Write};
     let attempt = || -> std::io::Result<bool> {
@@ -166,7 +165,7 @@ pub fn healthcheck(path: &std::path::Path) -> bool {
         let mut s = std::os::unix::net::UnixStream::connect(path)?;
         s.set_read_timeout(Some(timeout))?;
         s.set_write_timeout(Some(timeout))?;
-        s.write_all(b"GET /health HTTP/1.0\r\nHost: admin\r\n\r\n")?;
+        s.write_all(b"GET /admin/api/v1/health HTTP/1.0\r\nHost: admin\r\n\r\n")?;
         let mut head = [0u8; 12];
         s.read_exact(&mut head)?;
         Ok(&head == b"HTTP/1.1 200" || &head == b"HTTP/1.0 200")
