@@ -188,3 +188,30 @@ async fn prefs_are_shared_by_a_users_clients_and_not_by_other_users() {
     let unauth = t.http.get(format!("http://{}/api/v1/me/prefs", t.addr)).send().await.unwrap();
     assert_eq!(unauth.status(), 401);
 }
+
+#[tokio::test]
+async fn read_api_failures_are_problems_with_a_code_and_a_sentence() {
+    let t = start().await;
+    let long = "x".repeat(201);
+    let cases: Vec<(reqwest::Method, String, u16, &str)> = vec![
+        (reqwest::Method::GET, "/api/v1/conversations/nope".into(), 404, "not_found"),
+        (reqwest::Method::DELETE, "/api/v1/conversations/nope".into(), 404, "not_found"),
+        (reqwest::Method::GET, format!("/api/v1/search?q={long}"), 400, "bad_request"),
+        (reqwest::Method::GET, "/api/v1/generations?status=done".into(), 400, "bad_request"),
+        (reqwest::Method::GET, "/api/v1/generations/nope/stream".into(), 404, "not_found"),
+        (reqwest::Method::POST, "/api/v1/generations/nope/cancel".into(), 404, "not_found"),
+        (reqwest::Method::GET, "/api/v1/no-such-endpoint".into(), 404, "not_found"),
+        (reqwest::Method::DELETE, "/api/v1/providers".into(), 405, "method_not_allowed"),
+    ];
+    for (method, path, status, code) in cases {
+        let r = t.req(method.clone(), &path).send().await.unwrap();
+        assert_eq!(r.status().as_u16(), status, "{method} {path}");
+        assert_eq!(r.headers()["content-type"], "application/problem+json", "{method} {path}");
+        let p: askbar_proto::Problem = r.json().await.unwrap();
+        assert_eq!((p.error.as_str(), p.status), (code, status), "{method} {path}");
+        assert!(!p.detail.is_empty());
+    }
+    let r = t.req(reqwest::Method::PUT, "/api/v1/me/prefs").json(&Prefs { active_provider_id: Some("no-such-provider".into()) }).send().await.unwrap();
+    assert_eq!(r.status(), 404);
+    assert_eq!(r.json::<askbar_proto::Problem>().await.unwrap().error, "not_found");
+}

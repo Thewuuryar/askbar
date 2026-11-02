@@ -1,6 +1,8 @@
 //! Read endpoints for a paired client. Every query is scoped to the token's user.
 
+use crate::error::{ApiError, ApiJson};
 use crate::{auth::ClientAuth, AppState};
+use askbar_proto::problem::ErrorCode;
 use askbar_proto::{Conversation, ConversationDetail, DisplaySettings, Message, PendingGeneration, Prefs, ProviderInfo, SearchHit, Settings};
 use axum::{
     extract::{Path, Query, State},
@@ -11,10 +13,10 @@ use rusqlite::{params, OptionalExtension};
 use std::sync::Arc;
 
 type St = State<Arc<AppState>>;
-type Res<T> = Result<Json<T>, StatusCode>;
+type Res<T> = Result<Json<T>, ApiError>;
 
-fn internal<E>(_: E) -> StatusCode {
-    StatusCode::INTERNAL_SERVER_ERROR
+fn internal<E>(_: E) -> ApiError {
+    ApiError::code(ErrorCode::Internal)
 }
 
 /// The providers clients may use, from the snapshot: the default first, then the fallbacks
@@ -43,7 +45,7 @@ pub async fn conversation(
     Path(id): Path<String>,
 ) -> Res<ConversationDetail> {
     let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
-    let c = db.get_conversation(&auth.user_id, &id).map_err(internal)?.ok_or(StatusCode::NOT_FOUND)?;
+    let c = db.get_conversation(&auth.user_id, &id).map_err(internal)?.ok_or_else(|| ApiError::new(ErrorCode::NotFound, "That conversation was not found."))?;
     let messages = db
         .get_messages(&auth.user_id, &id)
         .map_err(internal)?
@@ -88,7 +90,7 @@ pub async fn generations(
     Query(q): Query<GenerationsQuery>,
 ) -> Res<Vec<PendingGeneration>> {
     if q.status.as_deref().is_some_and(|s| s != "running") {
-        return Err(StatusCode::BAD_REQUEST);
+        return Err(ApiError::new(ErrorCode::BadRequest, "Only status=running is supported."));
     }
     let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
     Ok(Json(db.list_active_generations(&auth.user_id).map_err(internal)?.into_iter().map(pending_of).collect()))
@@ -98,11 +100,11 @@ pub async fn delete_conversation(
     State(state): St,
     Extension(auth): Extension<ClientAuth>,
     Path(id): Path<String>,
-) -> StatusCode {
+) -> Result<StatusCode, ApiError> {
     match crate::generation::delete_conversation(&state, &auth.user_id, &id) {
-        Ok(false) => StatusCode::NOT_FOUND,
-        Ok(true) => StatusCode::NO_CONTENT,
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        Ok(false) => Err(ApiError::new(ErrorCode::NotFound, "That conversation was not found.")),
+        Ok(true) => Ok(StatusCode::NO_CONTENT),
+        Err(_) => Err(ApiError::code(ErrorCode::Internal)),
     }
 }
 
@@ -117,12 +119,12 @@ pub async fn get_prefs(State(state): St, Extension(auth): Extension<ClientAuth>)
 }
 
 /// Replaces the caller's preferences. A provider id must name an existing provider.
-pub async fn put_prefs(State(state): St, Extension(auth): Extension<ClientAuth>, Json(p): Json<Prefs>) -> Res<Prefs> {
+pub async fn put_prefs(State(state): St, Extension(auth): Extension<ClientAuth>, ApiJson(p): ApiJson<Prefs>) -> Res<Prefs> {
     let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(id) = &p.active_provider_id {
         let listed = crate::snapshot::current(&db).map_err(internal)?.is_some_and(|s| s.providers.iter().any(|p| &p.id == id));
         if !listed {
-            return Err(StatusCode::NOT_FOUND);
+            return Err(ApiError::new(ErrorCode::NotFound, "That provider does not exist."));
         }
     }
     db.conn()
@@ -144,7 +146,7 @@ pub struct SearchQuery {
 /// Full-text search over the caller's own messages.
 pub async fn search(State(state): St, Extension(auth): Extension<ClientAuth>, Query(q): Query<SearchQuery>) -> Res<Vec<SearchHit>> {
     if q.q.chars().count() > 200 {
-        return Err(StatusCode::BAD_REQUEST);
+        return Err(ApiError::new(ErrorCode::BadRequest, "A search can be at most 200 characters."));
     }
     let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
     let hits = db

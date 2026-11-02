@@ -1220,7 +1220,9 @@ pub async fn cancel(
     State(state): State<Arc<AppState>>,
     Extension(auth): Extension<ClientAuth>,
     Path(id): Path<String>,
-) -> StatusCode {
+) -> Result<StatusCode, crate::error::ApiError> {
+    use crate::error::ApiError;
+    use askbar_proto::problem::ErrorCode;
     // Under one lock, so a queued message cannot start between the look and the cancel.
     let queued = {
         let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
@@ -1231,8 +1233,8 @@ pub async fn cancel(
                 true
             }
             Ok(Some(_)) => false,
-            Ok(None) => return StatusCode::NOT_FOUND,
-            Err(_) => return StatusCode::INTERNAL_SERVER_ERROR,
+            Ok(None) => return Err(ApiError::new(ErrorCode::NotFound, "That reply was not found.")),
+            Err(_) => return Err(ApiError::code(ErrorCode::Internal)),
         }
     };
     if let Some(live) = state.generations.get(&id) {
@@ -1244,7 +1246,7 @@ pub async fn cancel(
             live.cancel();
         }
     }
-    StatusCode::NO_CONTENT
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(serde::Deserialize)]
@@ -1298,11 +1300,15 @@ pub async fn stream(
     Extension(auth): Extension<ClientAuth>,
     Path(id): Path<String>,
     Query(q): Query<StreamQuery>,
-) -> Result<impl axum::response::IntoResponse, StatusCode> {
+) -> Result<impl axum::response::IntoResponse, crate::error::ApiError> {
+    use crate::error::ApiError;
+    use askbar_proto::problem::ErrorCode;
     let after = q.after.unwrap_or(0);
     let row = {
         let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
-        db.get_generation(&auth.user_id, &id).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?.ok_or(StatusCode::NOT_FOUND)?
+        db.get_generation(&auth.user_id, &id)
+            .map_err(|_| ApiError::code(ErrorCode::Internal))?
+            .ok_or_else(|| ApiError::new(ErrorCode::NotFound, "That reply was not found."))?
     };
     let events = events_for(&state, &row, after);
     Ok(Sse::new(events).keep_alive(KeepAlive::default()))
