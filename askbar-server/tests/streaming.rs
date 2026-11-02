@@ -173,7 +173,8 @@ async fn anthropic_streams_text_and_sends_expected_request() {
     assert!(lower.contains("x-api-key: ak-test"), "{req}");
     assert!(lower.contains("anthropic-version: 2023-06-01"), "{req}");
     let body: serde_json::Value = serde_json::from_str(req.split("\r\n\r\n").nth(1).unwrap()).unwrap();
-    assert_eq!(body["system"], "sys prompt");
+    assert_eq!(body["system"][0]["text"], "sys prompt", "the system prompt is sent as a cacheable block (6.15)");
+    assert_eq!(body["system"][0]["cache_control"]["type"], "ephemeral");
     assert_eq!(body["max_tokens"], 4096);
     assert_eq!(body["messages"][0]["role"], "user");
 }

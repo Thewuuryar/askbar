@@ -227,6 +227,23 @@ pub fn build_body(p: &Provider, system: &str, messages: &[ChatMessage]) -> Value
             body
         }
         ProviderKind::Anthropic => {
+            // Prompt caching: the system prompt and the older part of the conversation are marked
+            // cacheable, so the next turn (which repeats them) is billed at the cached rate. The
+            // newest message is not marked: it is the part that changes. (Short prompts are below
+            // the provider's minimum and simply are not cached.)
+            let cache = json!({ "type": "ephemeral" });
+            let last_older = messages.len().checked_sub(2);
+            let msgs: Vec<Value> = messages
+                .iter()
+                .enumerate()
+                .map(|(i, m)| {
+                    if Some(i) == last_older {
+                        json!({ "role": m.role, "content": [{ "type": "text", "text": m.content, "cache_control": cache }] })
+                    } else {
+                        json!({ "role": m.role, "content": m.content })
+                    }
+                })
+                .collect();
             let mut body = json!({
                 "model": p.model,
                 "max_tokens": p.max_tokens.unwrap_or(4096),
@@ -234,7 +251,7 @@ pub fn build_body(p: &Provider, system: &str, messages: &[ChatMessage]) -> Value
                 "stream": true,
             });
             if !system.trim().is_empty() {
-                body["system"] = json!(system);
+                body["system"] = json!([{ "type": "text", "text": system, "cache_control": cache }]);
             }
             if let Some(t) = p.temperature {
                 body["temperature"] = json!(t);
@@ -649,8 +666,9 @@ mod tests {
 
         let a = provider(ProviderKind::Anthropic);
         let b = build_body(&a, "be brief", &msgs);
-        assert_eq!(b["system"], "be brief");
-        assert!(b.get("stream_options").is_none(), "the Anthropic body is unchanged");
+        assert_eq!(b["system"][0]["text"], "be brief");
+        assert_eq!(b["system"][0]["cache_control"]["type"], "ephemeral", "the system prompt is cacheable");
+        assert!(b.get("stream_options").is_none(), "no OpenAI-only fields");
         assert_eq!(b["max_tokens"], 4096);
         assert_eq!(b["messages"][0]["role"], "user");
         assert!(build_body(&a, "  ", &msgs).get("system").is_none());
@@ -690,6 +708,29 @@ mod tests {
         u.merge(&Usage { output: Some(7), ..Default::default() });
         u.merge(&Usage { output: Some(50), ..Default::default() }); // a running total replaces
         assert_eq!(u, Usage { input: Some(100), output: Some(50), cache_read: Some(64), cache_write: None, estimated: false });
+    }
+
+    #[test]
+    fn anthropic_bodies_mark_the_system_prompt_and_older_history_cacheable_and_openai_ones_do_not() {
+        let a = provider(ProviderKind::Anthropic);
+        let msgs = [m("user", "first"), m("assistant", "reply"), m("user", "newest")];
+        let b = build_body(&a, "be brief", &msgs);
+        // The system prompt and the message just before the newest carry the marker...
+        assert_eq!(b["system"][0]["cache_control"]["type"], "ephemeral");
+        assert_eq!(b["messages"][1]["content"][0]["text"], "reply");
+        assert_eq!(b["messages"][1]["content"][0]["cache_control"]["type"], "ephemeral");
+        // ...earlier and later ones stay plain strings, so the part that changes is not cached.
+        assert_eq!(b["messages"][0]["content"], "first");
+        assert_eq!(b["messages"][2]["content"], "newest");
+        // One message alone has no older history to mark; no system prompt, no system field.
+        let b = build_body(&a, "  ", &[m("user", "only")]);
+        assert_eq!(b["messages"][0]["content"], "only");
+        assert!(b.get("system").is_none());
+        // An OpenAI-style body is exactly as before: strings, no cache_control anywhere.
+        let o = build_body(&provider(ProviderKind::OpenAi), "be brief", &msgs);
+        assert!(!o.to_string().contains("cache_control"));
+        assert_eq!(o["messages"][0]["content"], "be brief");
+        assert_eq!(o["messages"][2]["content"], "reply");
     }
 
     #[test]

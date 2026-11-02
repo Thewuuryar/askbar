@@ -506,3 +506,23 @@ async fn the_budget_gate_leaves_a_span_with_its_numbers() {
     assert_eq!((rows[1].1.as_str(), rows[1].2.as_deref()), ("blocked", Some("budget_exceeded")));
     assert!(rows[1].3.contains(r#""daily_used":150"#), "{}", rows[1].3);
 }
+
+#[tokio::test]
+async fn cached_tokens_an_anthropic_provider_reports_reach_the_attempt_span_and_the_trace() {
+    let s = stack("m", "m", serde_json::json!({})).await;
+    askbar_server::testing::update_snapshot(&s.state.db.lock().unwrap(), |snap| {
+        snap.providers.iter_mut().find(|p| p.id == "p1").unwrap().kind = "anthropic".into();
+    });
+    let sub = s.submit("a cached prompt").ok().expect("accepted");
+    let trace = sub.generation_id.clone();
+    let events: Vec<GenEvent> = sub.live.subscribe(0).collect().await;
+    assert!(is_done(&events), "{events:?}");
+    s.state.audit.flush().await;
+    let db = rusqlite::Connection::open(s._dir.join("audit.db")).unwrap();
+    let (kind, tin, tout, cached): (String, i64, i64, i64) = db
+        .query_row("SELECT kind, tokens_in, tokens_out, tokens_cached FROM spans WHERE trace_id = ?1 AND kind = 'attempt'", [&trace], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+        .unwrap();
+    assert_eq!((kind.as_str(), tin, tout, cached), ("attempt", 100, 50, 64), "the mock's message_start reports 64 cache-read tokens");
+    let turn_cached: i64 = db.query_row("SELECT tokens_cached FROM spans WHERE trace_id = ?1 AND kind = 'turn'", [&trace], |r| r.get(0)).unwrap();
+    assert_eq!(turn_cached, 64);
+}
