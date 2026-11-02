@@ -23,10 +23,9 @@ async fn run_chat(_state: &std::sync::Arc<askbar_server::AppState>, _prompt: &st
 }
 
 /// Opens `audit.db` in `dir` the way the server does at start-up (migrations, then the sweep of
-/// spans left `running`). Filled in by step 4.11.
-#[allow(dead_code)]
-fn start_up_audit(_dir: &Path) {
-    unimplemented!("step 4.11")
+/// spans left `running`, which step 4.11 adds).
+fn start_up_audit(dir: &Path) {
+    askbar_server::audit::AuditDb::open(&dir.join("audit.db")).unwrap();
 }
 
 fn read(dir: &Path) -> Connection {
@@ -107,7 +106,6 @@ fn a_span_still_running_at_startup_becomes_interrupted() {
 }
 
 #[test]
-#[ignore = "enabled in 4.3"]
 fn deleting_a_span_younger_than_seven_days_fails() {
     let dir = std::env::temp_dir().join(format!("askbar-audit-del-{}", ulid::Ulid::new()));
     std::fs::create_dir_all(&dir).unwrap();

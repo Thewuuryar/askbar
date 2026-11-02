@@ -46,6 +46,19 @@ const MIGRATIONS: &[&str] = &[
          created_at INTEGER NOT NULL
      );
      CREATE INDEX idx_payloads_span ON payloads(span_id);",
+    // v2: the store is append-only by rule, enforced by the database itself. Nothing younger than
+    // 7 days is ever deleted (so not even a mistaken retention setting can remove a week of
+    // evidence), and a span can only change while it is still `running`: once it has finished (or
+    // been marked interrupted) it is fixed.
+    "CREATE TRIGGER spans_keep_a_week BEFORE DELETE ON spans
+     WHEN old.started_at > CAST(strftime('%s','now') AS INTEGER) - 7 * 86400
+     BEGIN SELECT RAISE(ABORT, 'spans younger than 7 days cannot be deleted'); END;
+     CREATE TRIGGER payloads_keep_a_week BEFORE DELETE ON payloads
+     WHEN old.created_at > CAST(strftime('%s','now') AS INTEGER) - 7 * 86400
+     BEGIN SELECT RAISE(ABORT, 'payloads younger than 7 days cannot be deleted'); END;
+     CREATE TRIGGER spans_change_only_while_running BEFORE UPDATE ON spans
+     WHEN old.status <> 'running'
+     BEGIN SELECT RAISE(ABORT, 'a span that is no longer running cannot be changed'); END;",
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -155,6 +168,61 @@ mod tests {
         let v: i64 = db.conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
         assert_eq!(v as usize, MIGRATIONS.len(), "migrations ran once");
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    fn now() -> i64 {
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64
+    }
+
+    fn span(db: &AuditDb, id: &str, status: &str, started_at: i64) {
+        db.conn
+            .execute(
+                "INSERT INTO spans (id, trace_id, kind, name, status, started_at) VALUES (?1,'t','turn','chat',?2,?3)",
+                rusqlite::params![id, status, started_at],
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn spans_and_payloads_younger_than_seven_days_cannot_be_deleted() {
+        let db = AuditDb::open_in_memory().unwrap();
+        let n = now();
+        span(&db, "young", "done", n - 6 * 86400);
+        span(&db, "old", "done", n - 8 * 86400);
+        let e = db.conn.execute("DELETE FROM spans WHERE id = 'young'", []).unwrap_err();
+        assert!(e.to_string().contains("7 days"), "{e}");
+        assert!(db.conn.execute("DELETE FROM spans", []).is_err(), "a bulk delete that includes a young span fails whole");
+        assert_eq!(db.conn.execute("DELETE FROM spans WHERE id = 'old'", []).unwrap(), 1);
+
+        for (id, created) in [("young", n), ("old", n - 9 * 86400)] {
+            db.conn.execute("INSERT INTO payloads (span_id, role, key_id, ciphertext, created_at) VALUES (?1,'request','k',x'00',?2)", rusqlite::params![id, created]).unwrap();
+        }
+        assert!(db.conn.execute("DELETE FROM payloads WHERE span_id = 'young'", []).unwrap_err().to_string().contains("7 days"));
+        assert_eq!(db.conn.execute("DELETE FROM payloads WHERE span_id = 'old'", []).unwrap(), 1);
+        let left: i64 = db.conn.query_row("SELECT COUNT(*) FROM spans", [], |r| r.get(0)).unwrap();
+        assert_eq!(left, 1);
+    }
+
+    #[test]
+    fn a_span_can_change_only_while_it_is_running() {
+        let db = AuditDb::open_in_memory().unwrap();
+        span(&db, "s", "running", now());
+        // Allowed: a running span is finished...
+        assert_eq!(db.conn.execute("UPDATE spans SET status = 'done', ended_at = 5 WHERE id = 's'", []).unwrap(), 1);
+        // ...and then it is fixed, whatever the change.
+        for sql in [
+            "UPDATE spans SET status = 'error' WHERE id = 's'",
+            "UPDATE spans SET tokens_in = 9 WHERE id = 's'",
+            "UPDATE spans SET status = 'running' WHERE id = 's'",
+        ] {
+            let e = db.conn.execute(sql, []).unwrap_err();
+            assert!(e.to_string().contains("no longer running"), "{sql}: {e}");
+        }
+        // Marking a leftover running span interrupted is the same allowed path.
+        span(&db, "left-over", "running", now());
+        assert_eq!(db.conn.execute("UPDATE spans SET status = 'interrupted' WHERE status = 'running'", []).unwrap(), 1);
+        let status: String = db.conn.query_row("SELECT status FROM spans WHERE id = 's'", [], |r| r.get(0)).unwrap();
+        assert_eq!(status, "done");
     }
 
     #[test]
