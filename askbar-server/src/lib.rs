@@ -5,6 +5,7 @@ pub mod audit;
 pub mod auth;
 pub mod backup;
 pub mod chat;
+pub mod cost;
 pub mod db;
 pub mod generation;
 pub mod ids;
