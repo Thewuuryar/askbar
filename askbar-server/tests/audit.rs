@@ -9,17 +9,37 @@ use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 
 /// A server state whose audit recorder writes `audit.db` in a fresh temp directory, with a
-/// provider pointing at the mock on `mock_port`. Filled in by step 4.5.
-#[allow(dead_code)]
-fn audit_state(_mock_port: u16) -> (std::sync::Arc<askbar_server::AppState>, PathBuf) {
-    unimplemented!("step 4.5 builds an AppState with an audit recorder")
+/// provider pointing at the mock on `mock_port`.
+fn audit_state(mock_port: u16) -> (std::sync::Arc<askbar_server::AppState>, PathBuf) {
+    askbar_server::testing::state_with_audit(&format!("http://127.0.0.1:{mock_port}/v1"))
 }
 
-/// Runs one chat to the end through the generation code and returns its generation id. Filled in
-/// by step 4.5.
-#[allow(dead_code)]
-async fn run_chat(_state: &std::sync::Arc<askbar_server::AppState>, _prompt: &str) -> String {
-    unimplemented!("step 4.5")
+/// Runs one chat to the end through the generation code and returns its generation id.
+async fn run_chat(state: &std::sync::Arc<askbar_server::AppState>, prompt: &str) -> String {
+    use futures_util::StreamExt;
+    let (user, device) = {
+        let db = state.db.lock().unwrap();
+        let user = db.seed_server().unwrap();
+        let code = askbar_server::testing::add_pair_code(&db, &user, "laptop");
+        askbar_server::auth::redeem_pair_code(&db, &code).unwrap().unwrap();
+        let device: String = db.conn().query_row("SELECT id FROM devices ORDER BY created_at DESC LIMIT 1", [], |r| r.get(0)).unwrap();
+        (user, device)
+    };
+    let sub = askbar_server::generation::submit(
+        state,
+        askbar_server::generation::Submit {
+            user_id: user,
+            device_id: device,
+            conversation_id: None,
+            provider_id: "p1".into(),
+            prompt: prompt.into(),
+            client_request_id: None,
+        },
+    )
+    .ok()
+    .expect("the generation starts");
+    let _: Vec<_> = sub.live.subscribe(0).collect().await; // to the end
+    sub.generation_id
 }
 
 /// Opens `audit.db` in `dir` the way the server does at start-up (migrations, then the sweep of

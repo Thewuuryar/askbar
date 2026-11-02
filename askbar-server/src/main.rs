@@ -15,6 +15,12 @@ fn data_dir() -> std::path::PathBuf {
     std::path::PathBuf::from(std::env::var("ASKBAR_DATA_DIR").unwrap_or_else(|_| "data".into()))
 }
 
+/// Where `audit.db` lives: `ASKBAR_AUDIT_DIR`, else the data directory. In the compose setup this
+/// is a volume only the server mounts.
+fn audit_dir() -> std::path::PathBuf {
+    std::env::var("ASKBAR_AUDIT_DIR").map(std::path::PathBuf::from).unwrap_or_else(|_| data_dir())
+}
+
 fn die(e: impl std::fmt::Display, code: i32) -> ! {
     eprintln!("error: {e}");
     std::process::exit(code)
@@ -113,7 +119,9 @@ async fn main() {
         Ok((running, queued)) => tracing::warn!(running, queued, "marked generations from the previous run as interrupted"),
         Err(e) => die(format!("could not clean up generations: {e}"), 1),
     }
-    let state = askbar_server::AppState::new(db, secrets, askbar_server::MIN_CLIENT);
+    let audit_db = askbar_server::audit::AuditDb::open(&audit_dir().join("audit.db")).unwrap_or_else(|e| die(e, 1));
+    let state = askbar_server::AppState::new(db, secrets, askbar_server::MIN_CLIENT)
+        .with_audit(askbar_server::audit::Recorder::spawn(audit_db, 4096));
     tokio::spawn(stop_on_signal(state.clone()));
     tokio::spawn(prune_generations_hourly(state.clone()));
     let mgmt_app = askbar_server::mgmt::router(state.clone(), askbar_server::mgmt::token_hash_path());

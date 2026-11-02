@@ -42,13 +42,23 @@ pub struct AppState {
     pub min_client: String,
     /// Running generations and their buffered output.
     pub generations: generation::Generations,
+    /// Where generations leave their audit trace. Records nothing unless `with_audit` set one.
+    pub audit: audit::Recorder,
     /// Tests only: replaces the configured generation timeout (see `testing`).
     generation_timeout_override: Mutex<Option<std::time::Duration>>,
 }
 
 impl AppState {
     pub fn new(db: Db, secrets: Secrets, min_client: &str) -> Arc<AppState> {
-        Arc::new(AppState { db: Mutex::new(db), secrets: Arc::new(secrets), http: llm::http_client(), min_client: min_client.to_string(), generations: Default::default(), generation_timeout_override: Mutex::new(None) })
+        Arc::new(AppState { db: Mutex::new(db), secrets: Arc::new(secrets), http: llm::http_client(), min_client: min_client.to_string(), generations: Default::default(), audit: audit::Recorder::noop(), generation_timeout_override: Mutex::new(None) })
+    }
+
+    /// Gives a fresh state an audit recorder. `new` keeps its signature and records nothing, so
+    /// code and tests that do not care about the audit store are unchanged.
+    pub fn with_audit(self: Arc<Self>, recorder: audit::Recorder) -> Arc<AppState> {
+        let mut state = Arc::try_unwrap(self).unwrap_or_else(|_| panic!("with_audit is for a state nothing else holds yet"));
+        state.audit = recorder;
+        Arc::new(state)
     }
 
     /// Tests only: make every generation started from now on use `d` as its timeout, whatever the
