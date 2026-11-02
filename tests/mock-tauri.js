@@ -128,6 +128,7 @@
       conv.messages.push({ id: String(db.nextMsg++), role: 'user', content: text, created_at: db.clock });
       onEvent.onmessage({ event: 'started', conversationId: conv.id });
 
+      if (/fallback/i.test(text)) onEvent.onmessage({ event: 'provider', id: 'p2', name: 'Backup AI' });
       if (/fail/i.test(text)) {
         onEvent.onmessage({ event: 'error', message: 'anthropic returned 401: invalid x-api-key. Check api_key in config.yaml.' });
         return;

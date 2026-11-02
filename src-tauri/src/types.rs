@@ -25,6 +25,8 @@ pub enum StreamEvent {
     /// `generation_id` names the server-side reply (to resume or cancel it); `queued` means
     /// another reply in this conversation is still running and this one waits its turn.
     Started { conversation_id: String, generation_id: Option<String>, queued: bool },
+    /// Which provider is answering; sent when the server routes to another than the one chosen.
+    Provider { id: String, name: String },
     Delta { text: String },
     Done,
     Cancelled,

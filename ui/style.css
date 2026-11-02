@@ -365,3 +365,5 @@ button { font: inherit; color: inherit; }
 .conv:hover .del, .conv:focus-within .del, .conv .del.armed { opacity: 1; }
 .conv .del:hover { color: var(--danger); }
 .conv .del.armed { color: var(--danger); font-weight: 600; }
+
+.msg .served-by { margin-top: 4px; font-size: 12px; opacity: .65; }

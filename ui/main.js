@@ -288,6 +288,16 @@
     syncChrome();
   }
 
+  function showServedBy(reply, name) {
+    let tag = reply.node.querySelector('.served-by');
+    if (!tag) {
+      tag = document.createElement('div');
+      tag.className = 'served-by';
+      reply.node.insertBefore(tag, reply.node.querySelector('.actions'));
+    }
+    tag.textContent = 'Answered by ' + name;
+  }
+
   // Shows one reply as it streams in. `start(channel)` begins the stream (a new send, or joining
   // one that is already running on the server) and returns the command's promise.
   async function streamInto(reply, start, userMsg) {
@@ -303,6 +313,10 @@
           case 'started':
             accepted = true;
             state.convId = m.conversationId;
+            break;
+          case 'provider':
+            // Only worth saying when the server used another provider than the one chosen.
+            if (m.name && m.name !== state.provider) showServedBy(reply, m.name);
             break;
           case 'delta':
             reply.content += m.text;
@@ -710,6 +724,7 @@
     const b = await invoke('bootstrap');
     state.ui = b.ui;
     applyUi(b.ui);
+    state.provider = b.provider;
     el.modelLabel.textContent = b.model ? b.model + ' via ' + b.provider : '';
     if (b.notice) showNotice(b.notice);
   }

@@ -343,6 +343,17 @@ async function waitIdle(page) {
     assert.equal(await page.isVisible('#input'), true);
   });
 
+  await step('a reply from another provider than the chosen one says who answered', async () => {
+    await page.keyboard.press('Control+n');
+    await ask(page, 'use the fallback please');
+    await waitIdle(page);
+    assert.equal(await page.locator('.msg.assistant .served-by').innerText(), 'Answered by Backup AI');
+    await page.keyboard.press('Control+n');
+    await ask(page, 'plain question');
+    await waitIdle(page);
+    assert.equal(await page.locator('.served-by').count(), 0, 'nothing extra when the chosen provider answers');
+  });
+
   await step('input stays usable after an error', async () => {
     await ask(page, 'works now');
     await waitIdle(page);
