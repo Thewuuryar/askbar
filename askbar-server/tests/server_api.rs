@@ -1,4 +1,4 @@
-use askbar_server::{mgmt, secrets::Secrets, AppState};
+use askbar_server::{server_api, secrets::Secrets, AppState};
 use sha2::{Digest, Sha256};
 
 const TOKEN: &str = "mgt_this-is-the-raw-management-token";
@@ -32,7 +32,7 @@ async fn start(write_hash: bool) -> T {
     let state = AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), askbar_server::MIN_CLIENT);
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", l.local_addr().unwrap());
-    let app = mgmt::router(state, hash_file.clone());
+    let app = server_api::router(state, hash_file.clone());
     tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
     T { url, hash_file, dir, http: reqwest::Client::new() }
 }
@@ -95,12 +95,12 @@ async fn it_fails_closed_when_the_hash_file_is_missing_or_unusable() {
 
 #[test]
 fn the_listen_address_is_never_a_wildcard() {
-    assert!(mgmt::parse_addr("172.30.0.2:8082").is_ok());
-    assert!(mgmt::parse_addr("127.0.0.1:8082").is_ok());
+    assert!(server_api::parse_addr("172.30.0.2:8082").is_ok());
+    assert!(server_api::parse_addr("127.0.0.1:8082").is_ok());
     for bad in ["0.0.0.0:8082", "[::]:8082", "8082", "mgmt:8082", ""] {
-        assert!(mgmt::parse_addr(bad).is_err(), "{bad:?}");
+        assert!(server_api::parse_addr(bad).is_err(), "{bad:?}");
     }
-    assert!(mgmt::parse_addr("0.0.0.0:8082").unwrap_err().contains("every network"));
+    assert!(server_api::parse_addr("0.0.0.0:8082").unwrap_err().contains("every network"));
 }
 
 // ---------------------------------------------------------------- snapshot
@@ -161,7 +161,7 @@ async fn start_with_state() -> S {
     let state = AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), askbar_server::MIN_CLIENT);
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", l.local_addr().unwrap());
-    let app = mgmt::router(state.clone(), hash_file.clone());
+    let app = server_api::router(state.clone(), hash_file.clone());
     tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
     S { t: T { url, hash_file, dir, http: reqwest::Client::new() }, state }
 }
@@ -573,7 +573,7 @@ async fn audit_stack() -> AuditStack {
     std::fs::write(&hash_file, hex(TOKEN)).unwrap();
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", l.local_addr().unwrap());
-    let app = mgmt::router(state.clone(), hash_file);
+    let app = server_api::router(state.clone(), hash_file);
     tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
     AuditStack { url, http: reqwest::Client::new(), state, _mock: child, _dir: dir }
 }

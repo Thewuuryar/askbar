@@ -23,8 +23,8 @@ async fn the_api_and_management_routers_share_no_routes() {
     std::fs::create_dir_all(&dir).unwrap();
     let hash = dir.join("token.sha256");
     std::fs::write(&hash, "0".repeat(64)).unwrap();
-    let mgmt = spawn(askbar_server::mgmt::router(state(), hash)).await;
-    let api = spawn(askbar_server::api_router(state())).await;
+    let mgmt = spawn(askbar_server::server_api::router(state(), hash)).await;
+    let api = spawn(askbar_server::client_router(state())).await;
 
     assert_eq!(status(api, "/api/v1/health").await, 200);
     // Management answers 401 (no token) to everything, including paths that are not its own;

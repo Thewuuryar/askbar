@@ -25,7 +25,7 @@ async fn start() -> T {
     };
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let api = format!("http://{}", l.local_addr().unwrap());
-    let app = askbar_server::api_router(state.clone());
+    let app = askbar_server::client_router(state.clone());
     tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
     T { api, http: reqwest::Client::new(), state, user_a, token_a, token_b }
 }

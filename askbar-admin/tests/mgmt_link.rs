@@ -85,7 +85,7 @@ fn server_state() -> Arc<AppState> {
 }
 
 async fn serve_on(listener: tokio::net::TcpListener, state: Arc<AppState>, hash_file: PathBuf) {
-    let app = askbar_server::mgmt::router(state, hash_file);
+    let app = askbar_server::server_api::router(state, hash_file);
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
 }
 

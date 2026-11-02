@@ -69,7 +69,7 @@ pub async fn start(caddy_up: bool) -> T {
     // The server records to a temp audit.db, so tests can put sealed content there and open it.
     let (recorder, _audit_dir) = askbar_server::testing::audit_recorder();
     let server = AppState::new(sdb, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), askbar_server::MIN_CLIENT).with_audit(recorder);
-    let mgmt_url = serve(askbar_server::mgmt::router(server.clone(), mgmt_dir.join(mgmt::HASH_FILE))).await;
+    let mgmt_url = serve(askbar_server::server_api::router(server.clone(), mgmt_dir.join(mgmt::HASH_FILE))).await;
 
     let fake = Arc::new(FakeCaddy::default());
     let caddy_socket = dir.join("c").join("a.sock");

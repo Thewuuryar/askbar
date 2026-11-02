@@ -733,7 +733,7 @@ mod tests {
         let code = askbar_server::testing::add_pair_code(&db, &user, "test");
         let state: Arc<AppState> = AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), "0.1.0");
         let token = auth::redeem_pair_code(&state.db.lock().unwrap(), &code).unwrap().unwrap();
-        let app = askbar_server::api_router(state);
+        let app = askbar_server::client_router(state);
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", l.local_addr().unwrap());
         tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
@@ -1189,7 +1189,7 @@ mod tests {
 
     /// Serves `state` on a fresh port; returns the URL and a task that stops it.
     async fn serve_state(state: Arc<askbar_server::AppState>) -> (String, tokio::task::JoinHandle<()>) {
-        let app = askbar_server::api_router(state);
+        let app = askbar_server::client_router(state);
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", l.local_addr().unwrap());
         (url, tokio::spawn(async move { axum::serve(l, app).await.unwrap() }))
@@ -1369,7 +1369,7 @@ mod tests {
         let token = auth::redeem_pair_code(&state.db.lock().unwrap(), &code).unwrap().unwrap();
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", l.local_addr().unwrap());
-        let app = askbar_server::api_router(state.clone());
+        let app = askbar_server::client_router(state.clone());
         tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
         (url, token, state)
     }
@@ -1603,7 +1603,7 @@ mod tests {
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let api_url = format!("http://{}", l.local_addr().unwrap());
         let state = AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), "0.1.0");
-        let app = askbar_server::api_router(state.clone());
+        let app = askbar_server::client_router(state.clone());
         tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
 
         let dir = std::env::temp_dir().join(format!("askbar-revoke-{}", std::process::id()));

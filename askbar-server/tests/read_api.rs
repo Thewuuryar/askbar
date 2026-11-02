@@ -32,7 +32,7 @@ async fn start() -> T {
     let code = askbar_server::testing::add_pair_code(&db, &user, "t");
     let state = AppState::new(db, secrets, askbar_server::MIN_CLIENT);
     let token = auth::redeem_pair_code(&state.db.lock().unwrap(), &code).unwrap().unwrap();
-    let app = askbar_server::api_router(state.clone());
+    let app = askbar_server::client_router(state.clone());
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = l.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(l, app).await.unwrap() });

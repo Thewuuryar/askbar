@@ -1,4 +1,4 @@
-//! Read endpoints for a paired device. Every query is scoped to the token's user.
+//! Read endpoints for a paired client. Every query is scoped to the token's user.
 
 use crate::{auth::DeviceAuth, AppState};
 use askbar_proto::{Conversation, ConversationDetail, DisplaySettings, Message, PendingGeneration, Prefs, ProviderInfo, SearchHit, Settings};

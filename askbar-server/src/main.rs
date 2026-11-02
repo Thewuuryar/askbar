@@ -116,7 +116,7 @@ async fn main() {
         }
     };
     // The management API is for the admin service only: one specific address, never a wildcard.
-    if let Err(e) = askbar_server::mgmt::check_not_wildcard(&mgmt) {
+    if let Err(e) = askbar_server::server_api::check_not_wildcard(&mgmt) {
         eprintln!("error: {e}");
         std::process::exit(2);
     }
@@ -149,8 +149,8 @@ async fn main() {
     tokio::spawn(stop_on_signal(state.clone()));
     tokio::spawn(audit_retention_daily(state.clone()));
     tokio::spawn(prune_generations_hourly(state.clone()));
-    let mgmt_app = askbar_server::mgmt::router(state.clone(), askbar_server::mgmt::token_hash_path());
-    let result = tokio::try_join!(serve(api, askbar_server::api_router(state)), serve(mgmt, mgmt_app));
+    let mgmt_app = askbar_server::server_api::router(state.clone(), askbar_server::server_api::token_hash_path());
+    let result = tokio::try_join!(serve(api, askbar_server::client_router(state)), serve(mgmt, mgmt_app));
     if let Err(e) = result {
         eprintln!("error: {e}");
         std::process::exit(1);

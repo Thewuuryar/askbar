@@ -6,7 +6,7 @@ async fn start(min: &str) -> String {
     let state = AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), min);
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = l.local_addr().unwrap();
-    let app = askbar_server::api_router(state);
+    let app = askbar_server::client_router(state);
     tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
     format!("http://{addr}")
 }

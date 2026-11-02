@@ -1,5 +1,5 @@
-//! The management listener: a small HTTP API for the admin service, on its own
-//! address and its own router. The device API and this one share no routes.
+//! The server API listener: a small HTTP API for the admin service, on its own
+//! address and its own router. The client API and this one share no routes.
 //!
 //! Every request carries `Authorization: Bearer <token>`. The server never holds the
 //! token, only its SHA-256, which the admin service writes to a file the server mounts

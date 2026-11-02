@@ -1,6 +1,6 @@
-//! Askbar server: the device API and, on its own listener, the management API the admin service uses.
+//! Askbar server: the client API and, on its own listener, the server API the admin service uses.
 
-pub mod api;
+pub mod client_api;
 pub mod audit;
 pub mod auth;
 pub mod backup;
@@ -10,7 +10,7 @@ pub mod db;
 pub mod generation;
 pub mod ids;
 pub mod llm;
-pub mod mgmt;
+pub mod server_api;
 pub mod provider_test;
 pub mod router;
 pub mod seal;
@@ -81,20 +81,20 @@ impl AppState {
     }
 }
 
-pub fn api_router(state: Arc<AppState>) -> Router {
+pub fn client_router(state: Arc<AppState>) -> Router {
     // Everything that needs a device token goes in `protected`.
     let protected: Router<Arc<AppState>> = Router::new()
         // Lets a client check that its token is still accepted.
         .route("/api/v1/whoami", get(|| async { StatusCode::NO_CONTENT }))
-        .route("/api/v1/providers", get(api::providers))
-        .route("/api/v1/conversations", get(api::conversations))
-        .route("/api/v1/conversations/{id}", get(api::conversation).delete(api::delete_conversation))
-        .route("/api/v1/me/prefs", get(api::get_prefs).put(api::put_prefs))
-        .route("/api/v1/me/display-defaults", get(api::display_defaults))
-        .route("/api/v1/search", get(api::search))
-        .route("/api/v1/settings", get(api::settings))
+        .route("/api/v1/providers", get(client_api::providers))
+        .route("/api/v1/conversations", get(client_api::conversations))
+        .route("/api/v1/conversations/{id}", get(client_api::conversation).delete(client_api::delete_conversation))
+        .route("/api/v1/me/prefs", get(client_api::get_prefs).put(client_api::put_prefs))
+        .route("/api/v1/me/display-defaults", get(client_api::display_defaults))
+        .route("/api/v1/search", get(client_api::search))
+        .route("/api/v1/settings", get(client_api::settings))
         .route("/api/v1/chat", post(chat::chat))
-        .route("/api/v1/generations", get(api::generations))
+        .route("/api/v1/generations", get(client_api::generations))
         .route("/api/v1/generations/{id}/stream", get(generation::stream))
         .route("/api/v1/generations/{id}/cancel", post(generation::cancel))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_device_token));

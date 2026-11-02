@@ -252,7 +252,7 @@ async fn the_audit_trail_shows_every_try_and_which_provider_the_new_one_stood_in
 
 #[tokio::test]
 async fn the_flag_clears_on_the_next_success_and_when_a_new_key_is_saved_and_the_endpoint_lists_it() {
-    use askbar_server::mgmt;
+    use askbar_server::server_api;
     let s = stack("m-fail", "m", serde_json::json!({ "allow_as_fallback": true })).await;
     assert!(is_done(&s.run("hello there").await));
 
@@ -265,7 +265,7 @@ async fn the_flag_clears_on_the_next_success_and_when_a_new_key_is_saved_and_the
     std::fs::write(&hash, hex).unwrap();
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", l.local_addr().unwrap());
-    let app = mgmt::router(s.state.clone(), hash);
+    let app = server_api::router(s.state.clone(), hash);
     tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
     let http = reqwest::Client::new();
     let get = || async { http.get(format!("{url}/mgmt/v1/providers/health")).bearer_auth(token).send().await.unwrap().json::<serde_json::Value>().await.unwrap() };
@@ -373,7 +373,7 @@ async fn mgmt(s: &Stack) -> (String, String) {
     std::fs::write(&hash, sha2::Sha256::digest(token.as_bytes()).iter().map(|b| format!("{b:02x}")).collect::<String>()).unwrap();
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", l.local_addr().unwrap());
-    let app = askbar_server::mgmt::router(s.state.clone(), hash);
+    let app = askbar_server::server_api::router(s.state.clone(), hash);
     tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
     (url, token)
 }
