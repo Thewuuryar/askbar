@@ -9,6 +9,25 @@ A Spotlight-style AI popup. Press a hotkey, a bar appears in the upper-middle of
 - **Replies run on the server.** Close the window or lose the connection and the reply keeps going; reopen the app and it is there.
 - **Keys stay on the server.** The desktop app is a thin client; provider API keys never reach it.
 
+## Quick start
+
+You need Docker with Compose for the server, and [Rust](https://rustup.rs) and Node 18+ for the desktop app.
+
+```sh
+cp .env.example .env
+mkdir -p data
+docker compose up -d --build
+```
+
+1. Open **http://127.0.0.1:8081/admin/** on the machine that runs Docker (from another machine: `ssh -L 8081:127.0.0.1:8081 <host>`, then open the same address locally).
+2. Choose the **admin password** (the first visit wins).
+3. Choose the **audit passphrase**: at least 20 characters, and it cannot be recovered. It seals what the server records about replies; see *The Audit tab*.
+4. **Providers** > add one (Anthropic, OpenAI-compatible, or the CLIProxyAPI preset) and press **Test**.
+5. **Clients** > generate a pairing string.
+6. Run the app and pair it: `npm install && npm run dev`, then tray icon > **Pair with server...** and paste the string.
+
+That is a working install on one machine. For other machines, put it behind a host name with HTTPS (*HTTPS with your own hostname* below). How the pieces fit, and why, is in [docs/architecture.md](docs/architecture.md); the HTTP APIs are described in [docs/openapi/](docs/openapi/) (client, server, admin); contributing is in [CONTRIBUTING.md](CONTRIBUTING.md) and security in [SECURITY.md](SECURITY.md).
+
 Askbar is three programs:
 
 - **Desktop client** (Tauri): the popup. It pairs with one server and holds only its address, a hotkey and a client token (in the OS keychain).
@@ -105,7 +124,7 @@ That starts three containers on two networks:
 `server-api` is an `internal` network shared by the admin and the server's server API (172.30.0.2:8082, fixed in `compose.yaml`). Caddy is the only thing the outside world can reach.
 
 - The **server** serves the client API, which accepts only `Authorization: Bearer <client token>`. Chat replies stream as Server-Sent Events (`meta`, `provider`, `delta`, `done`, `error`) and can be resumed after a dropped connection. Client tokens are random, shown once, and stored as SHA-256 hashes. See [docs/wire-contract.md](docs/wire-contract.md).
-- The **admin** listens on a unix socket only. Caddy proxies `admin.<hostname>` to it, and the admin owns `admin.db`. Every change is made in `admin.db` and pushed to the server as one snapshot; if the server is down the change is refused ("The server is offline. Nothing was changed.") rather than half applied. With the server stopped the admin still loads and shows an offline banner.
+- The **admin** listens on a unix socket only. Caddy proxies `<hostname>/admin` to it, and the admin owns `admin.db`. Every change is made in `admin.db` and pushed to the server as one snapshot; if the server is down the change is refused ("The server is offline. Nothing was changed.") rather than half applied. With the server stopped the admin still loads and shows an offline banner.
 - The **server API** requires a bearer token. The admin keeps the token in its own secrets volume (mode 600); the server holds only its SHA-256 (`token.sha256`, read per request, compared in constant time, and the API refuses everything when the file is missing).
 - **Provider API keys** are encrypted at rest (ChaCha20-Poly1305) with a master key that the server creates on its first start in the `askbar-secrets` volume. They are sent to the server by the admin, stored only in `server.db`, and never returned by any endpoint. The Cloudflare token is encrypted in `admin.db` with the admin's own key (`admin-secrets`), separate from the server's, and written to a file only Caddy reads.
 
@@ -114,7 +133,6 @@ That starts three containers on two networks:
 Before you have a host name or a certificate, open the admin at **`http://127.0.0.1:8081/admin/`** on the machine that runs Docker (from another machine: `ssh -L 8081:127.0.0.1:8081 <host>` and open the same address locally). Caddy publishes that port on the host's loopback only and serves nothing there except the admin, over plain HTTP; it sits on a network no other container joins. Once HTTPS is set up (step 5) use `https://<hostname>/admin` instead.
 
 1. Open the admin (above).
-
 2. Choose the admin password (the first visit wins).
 3. **Audit passphrase.** Setup asks for one: at least 20 characters. See *The Audit tab* below; write it down.
 4. **Providers** > add one (Anthropic, OpenAI-compatible, or the CLIProxyAPI preset) and press **Test**.
@@ -199,14 +217,15 @@ ui/              the popup: index.html, style.css, main.js, markdown.js (no buil
 caddy/, cpa/     Caddy bootstrap config; CLIProxyAPI setup script and login notes
 compose.yaml     server, admin, caddy, CLIProxyAPI, plus the dev and cpa-login profiles
 Dockerfile       two targets: `admin` and `server`;  Dockerfile.caddy: Caddy with the Cloudflare DNS module
-scripts/         smoke.sh (end-to-end), check-isolation.sh (container isolation checks)
-docs/            wire-contract.md, refactor-log.md
+scripts/         smoke.sh (end-to-end), check-isolation.sh (container isolation checks), check-names.sh and check-docs.sh
+docs/            architecture.md, wire-contract.md, openapi/ (client, server, admin), refactor-log.md
 tests/           markdown, UI and admin-site browser tests, a mock LLM server, icon generator
 ```
 
 ## Tests
 
 ```sh
+npm test                         # everything below except smoke and isolation, plus the names and link checks
 cargo test --workspace           # proto, server, admin and client (needs python3 for the mock LLM)
 node tests/markdown.test.js
 node tests/ui.test.js            # desktop UI against a mocked backend
