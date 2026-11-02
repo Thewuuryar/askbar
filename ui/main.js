@@ -269,6 +269,7 @@
 
   function clearThread() {
     clearWaiting();
+    clearUnsent();
     state.messages = [];
     el.thread.textContent = '';
     state.pinned = true;
@@ -289,9 +290,10 @@
 
   // Shows one reply as it streams in. `start(channel)` begins the stream (a new send, or joining
   // one that is already running on the server) and returns the command's promise.
-  async function streamInto(reply, start) {
+  async function streamInto(reply, start, userMsg) {
     setStreaming(true);
     const channel = new Channel();
+    let accepted = false; // the server has taken the message once its reply has begun
     await new Promise((resolve) => {
       let finished = false;
       const finish = () => { if (!finished) { finished = true; resolve(); } };
@@ -299,6 +301,7 @@
       channel.onmessage = (m) => {
         switch (m.event) {
           case 'started':
+            accepted = true;
             state.convId = m.conversationId;
             break;
           case 'delta':
@@ -334,8 +337,11 @@
     reply.node.classList.remove('streaming');
     render(reply);
     setStreaming(false);
+    // A message the server never took is not part of the conversation: it moves to the unsent list.
+    if (!accepted && userMsg) removeMessage(userMsg);
     refreshHistory();
     el.input.focus();
+    syncUnsent();
     syncPending(); // messages that were waiting behind this reply may be running now
   }
 
@@ -347,9 +353,83 @@
     hideNotice();
     state.pinned = true;
 
-    addMessage('user', text);
+    const userMsg = addMessage('user', text);
     const reply = addMessage('assistant', '', { streaming: true });
-    await streamInto(reply, (channel) => invoke('ask', { conversationId: state.convId, text, onEvent: channel }));
+    await streamInto(reply, (channel) => invoke('ask', { conversationId: state.convId, text, onEvent: channel }), userMsg);
+  }
+
+  // ------------------------------------------------------- messages not sent
+
+  let unsentRows = [];
+
+  function clearUnsent() {
+    for (const r of unsentRows) r.remove();
+    unsentRows = [];
+  }
+
+  function addUnsent(u) {
+    const node = document.createElement('div');
+    node.className = 'msg user unsent';
+    node.dataset.request = u.clientRequestId;
+    const body = document.createElement('div');
+    body.className = 'body';
+    body.textContent = u.text;
+    const note = document.createElement('div');
+    note.className = 'wait-note';
+    note.textContent = 'Not sent';
+    const mk = (cls, label, aria) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'text-btn ' + cls;
+      b.textContent = label;
+      b.setAttribute('aria-label', aria);
+      return b;
+    };
+    const send = mk('unsent-send', 'Send', 'Send this message');
+    const edit = mk('unsent-edit', 'Edit', 'Edit this message before sending');
+    const discard = mk('unsent-discard', 'Discard', 'Discard this message');
+    const gone = () => { node.remove(); unsentRows = unsentRows.filter((r) => r !== node); };
+    send.addEventListener('click', async () => {
+      if (state.streaming) return;
+      gone();
+      hideNotice();
+      state.pinned = true;
+      const userMsg = addMessage('user', u.text);
+      const reply = addMessage('assistant', '', { streaming: true });
+      await streamInto(reply, (channel) => invoke('resend', { clientRequestId: u.clientRequestId, onEvent: channel }), userMsg);
+    });
+    edit.addEventListener('click', async () => {
+      try { await invoke('discard_unsent', { clientRequestId: u.clientRequestId }); } catch (e) { showNotice(String(e)); return; }
+      gone();
+      el.input.value = u.text;
+      autosize();
+      el.input.focus();
+    });
+    discard.addEventListener('click', async () => {
+      try { await invoke('discard_unsent', { clientRequestId: u.clientRequestId }); } catch (e) { showNotice(String(e)); return; }
+      gone();
+      layout();
+    });
+    node.append(body, note, send, edit, discard);
+    el.thread.appendChild(node);
+    unsentRows.push(node);
+  }
+
+  // Lists the open conversation's messages that never reached the server. Nothing is sent by
+  // itself: each one waits for Send, Edit or Discard.
+  async function syncUnsent() {
+    let list;
+    try { list = await invoke('unsent_messages'); } catch (_) { return; }
+    clearUnsent();
+    const mine = list.filter((u) => (u.conversationId || null) === state.convId);
+    for (const u of mine) addUnsent(u);
+    if (mine.length) {
+      el.thread.hidden = false;
+      el.foot.hidden = false;
+      el.card.dataset.thread = 'open';
+      if (state.pinned) el.thread.scrollTop = el.thread.scrollHeight;
+    }
+    layout();
   }
 
   // ----------------------------------------------- replies still going on the server
@@ -524,6 +604,7 @@
     el.thread.scrollTop = el.thread.scrollHeight;
     renderHistory();
     el.input.focus();
+    syncUnsent();
     syncPending();
   }
 
@@ -534,6 +615,7 @@
     hideNotice();
     renderHistory();
     el.input.focus();
+    syncUnsent();
   }
 
   function toggleHistory(force) {
@@ -636,6 +718,7 @@
     try { await refreshBootstrap(); } catch (_) { /* keep the previous settings */ }
     checkStatus();
     if (state.historyOpen) refreshHistory();
+    syncUnsent();
     syncPending();
     el.input.focus();
     el.input.select();
@@ -650,6 +733,7 @@
     checkStatus();
     await refreshHistory();
     syncChrome();
+    syncUnsent();
     el.input.focus();
   })();
 })();

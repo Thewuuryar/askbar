@@ -435,6 +435,74 @@ async function waitIdle(page) {
     await page.context().close();
   }
 
+  // ---------------------------------------------- the outbox: messages the server never took
+  {
+    const p3 = await open(browser, { status: STATES.offline });
+    await step('offline: a failed send moves to the unsent list with Send, Edit and Discard, and is not retried by itself', async () => {
+      await p3.waitForSelector('#status:not([hidden])');
+      await ask(p3, 'please keep this');
+      await p3.waitForSelector('.msg.unsent');
+      await waitIdle(p3);
+      assert.equal(await p3.locator('.msg.unsent .body').innerText(), 'please keep this');
+      assert.equal(await p3.locator('.msg.user:not(.unsent)').count(), 0, 'not shown as if it had been sent');
+      for (const [cls, label] of [['unsent-send', 'Send'], ['unsent-edit', 'Edit'], ['unsent-discard', 'Discard']]) {
+        assert.equal(await p3.locator(`.msg.unsent .${cls}`).innerText(), label);
+      }
+      assert.match(await p3.innerText('#status-text'), /Server offline/, 'the offline message stays');
+      await p3.waitForTimeout(400);
+      assert.equal((await calls(p3, 'ask')).length, 1, 'asked once');
+      assert.equal((await calls(p3, 'resend')).length, 0, 'nothing is sent automatically');
+      await shot(p3, '21-unsent');
+    });
+
+    await step('Edit puts the text back in the input and removes the unsent entry', async () => {
+      await p3.locator('.msg.unsent .unsent-edit').click();
+      await p3.waitForFunction(() => document.querySelectorAll('.msg.unsent').length === 0);
+      assert.equal(await p3.inputValue('#input'), 'please keep this');
+      assert.equal((await calls(p3, 'discard_unsent')).length, 1);
+      assert.equal((await calls(p3, 'unsent_messages')).length >= 1, true);
+      await p3.fill('#input', '');
+    });
+
+    await step('Discard removes the entry without sending it', async () => {
+      await ask(p3, 'throw this away');
+      await p3.waitForSelector('.msg.unsent');
+      await p3.locator('.msg.unsent .unsent-discard').click();
+      await p3.waitForFunction(() => document.querySelectorAll('.msg.unsent').length === 0);
+      assert.equal(await p3.evaluate(() => window.__db.unsent.length), 0);
+      assert.equal((await calls(p3, 'resend')).length, 0);
+      assert.equal(await p3.inputValue('#input'), '');
+    });
+
+    await step('Send, once the server is back, sends that message again and the reply streams', async () => {
+      await ask(p3, 'send me later');
+      await p3.waitForSelector('.msg.unsent');
+      await p3.evaluate(() => { window.__opts.status = null; });
+      await p3.locator('.msg.unsent .unsent-send').click();
+      await waitIdle(p3);
+      const r = await calls(p3, 'resend');
+      assert.equal(r.length, 1);
+      assert.match(r[0].clientRequestId, /^req-/);
+      assert.equal(await p3.locator('.msg.unsent').count(), 0);
+      assert.equal(await p3.locator('.msg.user .body').last().innerText(), 'send me later');
+      assert.match(await p3.locator('.msg.assistant').last().innerText(), /format strings/);
+    });
+
+    await step('unsent messages come back when the window is shown again', async () => {
+      await p3.evaluate(() => {
+        window.__db.unsent.push({ clientRequestId: 'req-x', conversationId: null, text: 'left over', createdAt: 1 });
+      });
+      await p3.keyboard.press('Control+n');
+      await p3.waitForSelector('.msg.unsent');
+      assert.equal(await p3.locator('.msg.unsent .body').innerText(), 'left over');
+    });
+
+    await step('no JavaScript errors in the outbox flow', async () => {
+      assert.deepEqual(p3.errors, []);
+    });
+    await p3.context().close();
+  }
+
   page = await open(browser, { status: STATES.provider_missing });
   await step('provider_missing: picking another provider fixes it and updates the label', async () => {
     await page.waitForSelector('#status:not([hidden])');

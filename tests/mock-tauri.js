@@ -2,7 +2,7 @@
 // Tauri bridge with an in-memory history, so UI behaviour can be tested in a
 // plain browser.
 (() => {
-  const db = { convs: [], nextConv: 1, nextMsg: 1, clock: Math.floor(Date.now() / 1000) };
+  const db = { convs: [], nextConv: 1, nextMsg: 1, clock: Math.floor(Date.now() / 1000), unsent: [], nextReq: 1 };
   const calls = [];
   const listeners = {};
   let cancelFlag = false;
@@ -89,16 +89,34 @@
       conv.updated_at = ++db.clock;
       onEvent.onmessage({ event: cancelFlag ? 'cancelled' : 'done' });
     },
+    // The outbox: text of messages the server never took. A send that fails before the reply
+    // begins (opts.status) leaves its text here; nothing sends it again unless the person asks.
+    unsent_messages: () => db.unsent.map((u) => ({ ...u })),
+    discard_unsent: ({ clientRequestId }) => {
+      const n = db.unsent.length;
+      db.unsent = db.unsent.filter((u) => u.clientRequestId !== clientRequestId);
+      return db.unsent.length !== n;
+    },
+    resend: async ({ clientRequestId, onEvent }) => {
+      const u = db.unsent.find((x) => x.clientRequestId === clientRequestId);
+      if (!u) { onEvent.onmessage({ event: 'error', message: 'That message is no longer waiting to be sent.' }); return; }
+      const st = window.__opts.status;
+      if (!(st && st.kind !== 'provider_missing')) db.unsent = db.unsent.filter((x) => x !== u);
+      return handlers.ask({ conversationId: u.conversationId, text: u.text, onEvent, fromOutbox: true });
+    },
     delete_conversation: ({ id }) => { db.convs = db.convs.filter((c) => c.id !== id); },
     cancel_ask: () => { cancelFlag = true; },
     resize_window: () => {},
     hide_window: () => {},
     open_config: () => {},
     open_url: () => {},
-    ask: async ({ conversationId, text, onEvent }) => {
+    ask: async ({ conversationId, text, onEvent, fromOutbox }) => {
       cancelFlag = false;
       const st = window.__opts.status;
       if (st && st.kind !== 'provider_missing') {
+        if (!fromOutbox) {
+          db.unsent.push({ clientRequestId: 'req-' + db.nextReq++, conversationId: conversationId || null, text, createdAt: db.clock });
+        }
         onEvent.onmessage({ event: 'error', message: st.message });
         return;
       }

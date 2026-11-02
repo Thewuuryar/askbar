@@ -535,8 +535,14 @@ impl Remote {
             return Ok(Vec::new());
         }
         let req = i.request(Method::GET, "/api/v1/generations")?.query(&[("status", "running")]).timeout(REQUEST_TIMEOUT);
-        let known: Vec<PendingGeneration> =
-            i.send(req).await?.json().await.map_err(|e| format!("The server sent an unexpected reply: {e}"))?;
+        // Without an answer (offline) nothing can be compared; the outbox is shown as it is.
+        let known: Vec<PendingGeneration> = match i.send(req).await {
+            Ok(r) => match r.json().await {
+                Ok(v) => v,
+                Err(_) => return Ok(i.outbox.list()),
+            },
+            Err(_) => return Ok(i.outbox.list()),
+        };
         for g in known {
             if let Some(id) = g.client_request_id {
                 i.outbox.remove(&id);
@@ -961,6 +967,13 @@ mod tests {
         let (_tx2, rx2) = oneshot::channel();
         remote.resend("nope".into(), rx2, &|e| events2.lock().unwrap().push(e)).await;
         assert!(matches!(events2.into_inner().unwrap().last(), Some(StreamEvent::Error { message }) if message.contains("no longer waiting")));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn unsent_messages_are_listed_as_they_are_when_the_server_cannot_be_asked() {
+        let remote = remote_for("http://127.0.0.1:9", Some("t"), PathBuf::new());
+        let e = remote.inner().unwrap().outbox.add(None, "p", "still here");
+        assert_eq!(remote.unsent().await.unwrap(), [e]);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
