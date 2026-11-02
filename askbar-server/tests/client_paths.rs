@@ -64,7 +64,6 @@ async fn the_old_names_are_gone_and_old_paths_are_404_except_the_one_that_says_u
 }
 
 #[tokio::test]
-#[ignore = "enabled in 7.6"]
 async fn the_first_generation_of_the_api_answers_426_update_the_app_whatever_is_asked() {
     let t = start().await;
     for (method, path) in [

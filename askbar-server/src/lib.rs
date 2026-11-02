@@ -110,11 +110,19 @@ pub fn client_router(state: Arc<AppState>) -> Router {
         .route_layer(middleware::from_fn_with_state(state.clone(), require_client_version));
     Router::new()
         .route(&v1("/health"), get(health))
+        // The first generation of the API lived at /api/v1. It serves nothing now; every request there, of any
+        // method and with or without a token, is told to update the app.
+        .route(&askbar_proto::paths::join(askbar_proto::paths::TOMBSTONE_V1, "/{*rest}"), axum::routing::any(update_the_app))
         .merge(gated)
         .fallback(error::not_found)
         .method_not_allowed_fallback(error::method_not_allowed)
         .with_state(state)
         .layer(middleware::from_fn(log_requests))
+}
+
+/// The answer to anything under the old `/api/v1` prefix.
+async fn update_the_app(State(state): State<Arc<AppState>>) -> ApiError {
+    ApiError::code(ErrorCode::ClientTooOld).with("min_client", state.min_client.clone())
 }
 
 /// 400 if the client sends no usable version header, 426 if it is older than `min_client`.
