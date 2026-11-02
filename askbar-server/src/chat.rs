@@ -5,8 +5,7 @@
 //! (see `generation`), so this stream going away does not stop it.
 
 use crate::generation::{self, GenEvent};
-use crate::llm::ChatMessage;
-use crate::{auth::DeviceAuth, store, AppState};
+use crate::{auth::DeviceAuth, AppState};
 use askbar_proto::{ChatEvent, ChatRequest};
 use axum::{
     extract::State,
@@ -59,55 +58,34 @@ pub async fn chat(
             .find_by_request_id(&auth.device_id, rid)
             .map_err(internal)?;
         if let Some(g) = existing {
-            let meta = ChatEvent::Meta { conversation_id: g.conversation_id.clone(), generation_id: Some(g.id.clone()) };
+            let meta = ChatEvent::Meta {
+                conversation_id: g.conversation_id.clone(),
+                generation_id: Some(g.id.clone()),
+                queued: g.status == "queued",
+            };
             let events = futures_util::stream::once(async move { Ok(sse_event(&meta)) }).chain(generation::events_for(&state, &g, 0));
             return Ok(Sse::new(Box::pin(events) as generation::EventStream).keep_alive(KeepAlive::default()));
         }
     }
 
-    // Everything that can fail with a plain HTTP status happens before the stream starts.
-    let (provider, system, conversation, history, user_message_id) = {
-        let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
-        let secrets = state.secrets();
-        let provider = store::load_provider(&db, &secrets, &req.provider)
-            .map_err(internal)?
-            .ok_or(StatusCode::NOT_FOUND)?;
-        let system = store::chat_system_prompt(&db).map_err(internal)?;
-        let conversation = match &req.conversation_id {
-            Some(id) => db.get_conversation(&auth.user_id, id).map_err(internal)?.ok_or(StatusCode::NOT_FOUND)?.id,
-            None => db.create_conversation(&auth.user_id, &crate::make_title(&text)).map_err(internal)?,
-        };
-        // Save the question first so it survives a failed request.
-        let user_message_id = db.add_message(&auth.user_id, &conversation, "user", &text).map_err(internal)?;
-        let history: Vec<ChatMessage> = db
-            .get_messages(&auth.user_id, &conversation)
-            .map_err(internal)?
-            .iter()
-            .map(|m| ChatMessage::new(&m.role, &m.content))
-            .collect();
-        (provider, system, conversation, history, user_message_id)
-    };
-
-    let (generation_id, live) = generation::start(
+    let sub = generation::submit(
         &state,
-        generation::Start {
+        generation::Submit {
             user_id: auth.user_id,
             device_id: auth.device_id,
-            conversation_id: conversation.clone(),
-            user_message_id: Some(user_message_id),
-            prompt: text,
+            conversation_id: req.conversation_id,
             provider_id: req.provider,
+            prompt: text,
             client_request_id: req.client_request_id,
-            provider,
-            system,
-            history,
         },
-    )
-    .map_err(internal)?;
-    let meta = futures_util::stream::once(async move {
-        Ok(sse_event(&ChatEvent::Meta { conversation_id: conversation, generation_id: Some(generation_id) }))
-    });
-    let events = live.subscribe(0).map(|e| {
+    )?;
+    let meta = ChatEvent::Meta {
+        conversation_id: sub.conversation_id,
+        generation_id: Some(sub.generation_id),
+        queued: sub.queued,
+    };
+    let meta = futures_util::stream::once(async move { Ok(sse_event(&meta)) });
+    let events = sub.live.subscribe(0).map(|e| {
         Ok(match e {
             GenEvent::Delta { seq, text } => sse_event_with_id(&ChatEvent::Delta { text }, Some(seq)),
             GenEvent::Done => sse_event(&ChatEvent::Done),

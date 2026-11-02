@@ -3,10 +3,11 @@
 //! This module holds the in-memory registry: each running generation has a `Live` that buffers
 //! its deltas so a client can attach, drop and attach again without losing or repeating text.
 
-use crate::llm::{stream_chat, ChatMessage, Provider, StreamOutcome};
+use crate::llm::{stream_chat, ChatMessage, StreamOutcome};
 use crate::auth::DeviceAuth;
 use crate::chat::{sse_event, sse_event_with_id};
-use crate::db::{DbError, NewGeneration};
+use crate::db::NewGeneration;
+use crate::store;
 use crate::AppState;
 use askbar_proto::ChatEvent;
 use axum::{
@@ -185,19 +186,45 @@ impl Generations {
     }
 }
 
-/// Everything a generation needs, gathered by the handler before it starts.
-pub struct Start {
+/// A chat send, as the handler received it.
+pub struct Submit {
     pub user_id: String,
     pub device_id: String,
-    pub conversation_id: String,
-    pub user_message_id: Option<String>,
-    pub prompt: String,
+    pub conversation_id: Option<String>,
     pub provider_id: String,
+    pub prompt: String,
     pub client_request_id: Option<String>,
-    pub provider: Provider,
-    pub system: String,
-    pub history: Vec<ChatMessage>,
 }
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum SubmitError {
+    /// The conversation or provider does not exist (or is someone else's).
+    NotFound,
+    /// The conversation already has `MAX_QUEUED` messages waiting.
+    QueueFull,
+    Internal,
+}
+
+impl From<SubmitError> for StatusCode {
+    fn from(e: SubmitError) -> StatusCode {
+        match e {
+            SubmitError::NotFound => StatusCode::NOT_FOUND,
+            SubmitError::QueueFull => StatusCode::CONFLICT,
+            SubmitError::Internal => StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    }
+}
+
+pub struct Submitted {
+    pub generation_id: String,
+    pub conversation_id: String,
+    pub live: Arc<Live>,
+    /// Waiting behind a reply that is still running; its question is not stored yet.
+    pub queued: bool,
+}
+
+/// Messages that may wait behind a running reply in one conversation.
+pub const MAX_QUEUED: i64 = 5;
 
 /// How a generation's request ended, which decides the stored status.
 enum Outcome {
@@ -287,44 +314,92 @@ impl Drop for Finisher {
     }
 }
 
-/// Runs a generation as a task that does not depend on any client. Returns its id and its buffer.
-pub fn start(state: &Arc<AppState>, s: Start) -> Result<(String, Arc<Live>), DbError> {
-    let id = state.db.lock().unwrap_or_else(|e| e.into_inner()).create_generation(&NewGeneration {
+/// Starts a send: runs it now if its conversation is idle, else queues it. Everything that can
+/// fail with a plain HTTP status happens here, before any stream starts.
+pub fn submit(state: &Arc<AppState>, s: Submit) -> Result<Submitted, SubmitError> {
+    let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+    fn internal<E>(_: E) -> SubmitError {
+        SubmitError::Internal
+    }
+    store::load_provider(&db, &state.secrets(), &s.provider_id).map_err(internal)?.ok_or(SubmitError::NotFound)?;
+    let (conversation_id, busy) = match &s.conversation_id {
+        Some(id) => {
+            let c = db.get_conversation(&s.user_id, id).map_err(internal)?.ok_or(SubmitError::NotFound)?;
+            let busy = db.conversation_busy(&c.id).map_err(internal)?;
+            (c.id, busy)
+        }
+        None => (db.create_conversation(&s.user_id, &crate::make_title(&s.prompt)).map_err(internal)?, false),
+    };
+    let new = |status, user_message_id| NewGeneration {
         user_id: &s.user_id,
         device_id: Some(&s.device_id),
-        conversation_id: &s.conversation_id,
-        user_message_id: s.user_message_id.as_deref(),
+        conversation_id: &conversation_id,
+        user_message_id,
         client_request_id: s.client_request_id.as_deref(),
         provider_id: Some(&s.provider_id),
-        status: "running",
+        status,
         prompt: &s.prompt,
         deadline_at: None,
-    })?;
+    };
+    if busy {
+        if db.queued_count(&conversation_id).map_err(internal)? >= MAX_QUEUED {
+            return Err(SubmitError::QueueFull);
+        }
+        // Queued: the question is stored when the message starts, not now.
+        let id = db.create_generation(&new("queued", None)).map_err(internal)?;
+        let live = Live::new();
+        state.generations.insert(&id, live.clone());
+        return Ok(Submitted { generation_id: id, conversation_id, live, queued: true });
+    }
+    // Save the question first so it survives a failed request.
+    let user_message_id = db.add_message(&s.user_id, &conversation_id, "user", &s.prompt).map_err(internal)?;
+    let id = db.create_generation(&new("running", Some(&user_message_id))).map_err(internal)?;
     let live = Live::new();
+    state.generations.insert(&id, live.clone());
+    drop(db);
+    spawn_run(state, &id, &s.user_id, &conversation_id, &s.provider_id, live.clone());
+    Ok(Submitted { generation_id: id, conversation_id, live, queued: false })
+}
+
+/// Runs generation `id` as a task that does not depend on any client. The provider, system prompt
+/// and history are read when it starts, so a message that waited sees the replies before it.
+fn spawn_run(state: &Arc<AppState>, id: &str, user_id: &str, conversation_id: &str, provider_id: &str, live: Arc<Live>) {
     let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
     live.set_cancel(cancel_tx);
-    state.generations.insert(&id, live.clone());
     let mut fin = Finisher {
         state: state.clone(),
-        live: live.clone(),
-        id: id.clone(),
-        user_id: s.user_id,
-        conversation_id: s.conversation_id,
+        live,
+        id: id.to_string(),
+        user_id: user_id.to_string(),
+        conversation_id: conversation_id.to_string(),
         text: String::new(),
         saved: false,
         last_flush: Instant::now(),
         unflushed: 0,
     };
-    let state = state.clone();
+    let (state, provider_id) = (state.clone(), provider_id.to_string());
     tokio::spawn(async move {
-        let result = stream_chat(&state.http, &s.provider, &s.system, &s.history, cancel_rx, |delta| fin.push(delta)).await;
+        let prepared = {
+            let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+            let provider = store::load_provider(&db, &state.secrets(), &provider_id).ok().flatten();
+            let system = store::chat_system_prompt(&db).ok();
+            let history: Option<Vec<ChatMessage>> = db
+                .get_messages(&fin.user_id, &fin.conversation_id)
+                .ok()
+                .map(|ms| ms.iter().map(|m| ChatMessage::new(&m.role, &m.content)).collect());
+            provider.zip(system).zip(history)
+        };
+        let Some(((provider, system), history)) = prepared else {
+            fin.finish(Outcome::Error("The provider is no longer available.".into()));
+            return;
+        };
+        let result = stream_chat(&state.http, &provider, &system, &history, cancel_rx, |delta| fin.push(delta)).await;
         fin.finish(match result {
             Ok(StreamOutcome::Completed) => Outcome::Done,
             Ok(StreamOutcome::Cancelled) => Outcome::Cancelled,
             Err(e) => Outcome::Error(e.to_string()),
         });
     });
-    Ok((id, live))
 }
 
 /// `POST /api/v1/generations/{id}/cancel`: stop a running reply, keeping the text so far.

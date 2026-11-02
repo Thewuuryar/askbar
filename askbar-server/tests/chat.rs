@@ -676,3 +676,51 @@ async fn a_repeat_while_the_reply_runs_attaches_to_it() {
     assert_eq!(t.generations().len(), 1);
     assert_eq!(t.messages().iter().filter(|(r, _)| r == "user").count(), 1);
 }
+
+fn conversation_id_of(body: &str) -> String {
+    let events = parse_events(&body.replace("\r\n", "\n").split("\n\n").take(1).collect::<Vec<_>>().join("\n\n"));
+    let ChatEvent::Meta { conversation_id, .. } = events[0].1.clone() else { panic!("first event must be meta") };
+    conversation_id
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sends_during_a_reply_are_queued_up_to_five_and_the_sixth_is_refused() {
+    let t = start().await;
+    let http = client_builder().pool_max_idle_per_host(0).build().unwrap();
+    let r = t.chat(&http, None, "p1", "please be slow").await;
+    let mut first = r.bytes_stream();
+    let mut got = String::new();
+    while got.matches("event: delta").count() < 1 {
+        got.push_str(&String::from_utf8_lossy(&first.next().await.unwrap().unwrap()));
+    }
+    let conversation = conversation_id_of(&got);
+    let first_meta: Vec<ChatEvent> = parse_events(&got.replace("\r\n", "\n").split("\n\n").take(1).collect::<String>()).into_iter().map(|e| e.1).collect();
+    assert!(matches!(&first_meta[0], ChatEvent::Meta { queued: false, .. }), "the first send runs at once");
+
+    let mut held = Vec::new(); // keep the queued connections open
+    for n in 1..=5 {
+        let r = t.chat(&http, Some(&conversation), "p1", &format!("queued {n}")).await;
+        assert_eq!(r.status(), 200, "send {n} is accepted");
+        let mut s = r.bytes_stream();
+        let mut meta = String::new();
+        while !meta.contains("\n\n") && !meta.contains("\r\n\r\n") {
+            meta.push_str(&String::from_utf8_lossy(&s.next().await.unwrap().unwrap()));
+        }
+        let ChatEvent::Meta { queued, generation_id, .. } = parse_events(&meta.replace("\r\n", "\n")).remove(0).1 else { panic!() };
+        assert!(queued, "send {n} waits");
+        assert!(generation_id.is_some());
+        held.push(s);
+    }
+    let sixth = t.chat(&http, Some(&conversation), "p1", "queued 6").await;
+    assert_eq!(sixth.status(), 409);
+
+    // Queued questions are not messages yet; only the first question is stored.
+    let users: Vec<String> = t.messages().into_iter().filter(|(r, _)| r == "user").map(|m| m.1).collect();
+    assert_eq!(users, ["please be slow"]);
+    let rows = t.generations();
+    assert_eq!(rows.iter().filter(|r| r.0 == "queued").count(), 5);
+    assert_eq!(rows.iter().filter(|r| r.0 == "running").count(), 1);
+    let list: Vec<askbar_proto::PendingGeneration> = t.get_with(&t.token, "/api/v1/generations?status=running").await.json().await.unwrap();
+    assert_eq!(list.iter().filter(|g| g.status == "queued").map(|g| g.prompt.as_str()).collect::<Vec<_>>(), ["queued 1", "queued 2", "queued 3", "queued 4", "queued 5"]);
+    drop(held);
+}

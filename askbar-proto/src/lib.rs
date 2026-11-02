@@ -203,6 +203,10 @@ pub enum ChatEvent {
         /// The generation running this reply; resume with `GET /api/v1/generations/{id}/stream`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         generation_id: Option<String>,
+        /// True when another reply in this conversation is still running: this message waits its
+        /// turn, and its question is not in the conversation yet.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        queued: bool,
     },
     Delta { text: String },
     Done,
@@ -288,8 +292,8 @@ mod tests {
     #[test]
     fn chat_event_round_trip() {
         for e in [
-            ChatEvent::Meta { conversation_id: "x".into(), generation_id: None },
-            ChatEvent::Meta { conversation_id: "x".into(), generation_id: Some("g".into()) },
+            ChatEvent::Meta { conversation_id: "x".into(), generation_id: None, queued: false },
+            ChatEvent::Meta { conversation_id: "x".into(), generation_id: Some("g".into()), queued: true },
             ChatEvent::Delta { text: "hi".into() },
             ChatEvent::Done,
             ChatEvent::Error { message: "bad".into() },
@@ -315,7 +319,7 @@ mod tests {
     #[test]
     fn meta_without_a_generation_id_still_parses() {
         let e: ChatEvent = serde_json::from_str(r#"{"event":"meta","conversation_id":"c"}"#).unwrap();
-        assert_eq!(e, ChatEvent::Meta { conversation_id: "c".into(), generation_id: None });
+        assert_eq!(e, ChatEvent::Meta { conversation_id: "c".into(), generation_id: None, queued: false });
     }
 
     #[test]
