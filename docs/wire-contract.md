@@ -83,7 +83,9 @@ Both follow the signed-in user, so all of a user's devices see the same values.
 Empty text is `400`; an unknown provider or a conversation that is not the caller's is
 `404`; a conversation that already has five messages waiting is `409` (see *The queue*); when
 the server's audit store cannot keep up it answers `503` with `Retry-After: 5` and
-`{"error":"audit_backlog"}` and starts nothing (replies already running are not affected).
+`{"error":"audit_backlog"}`, and when the administrator has not made an audit key yet it answers
+`503` with `{"error":"audit_key_missing"}` (no `Retry-After`: it needs a person); neither starts
+anything (replies already running are not affected).
 Otherwise the answer is `200 text/event-stream`. Provider output is never passed through;
 the server re-emits its own events. Each SSE message has `event:` naming the type and
 `data:` holding a JSON object that repeats the type in an `"event"` field:
@@ -168,8 +170,8 @@ endpoints), and a 0.3.x client would stop a reply when its connection dropped, s
 The admin service reads what the server recorded through three endpoints on the management
 listener. They are not part of the device API: they need the management token, the device API
 has no such routes (`404`), and the admin never opens `audit.db` itself. Everything they return
-is **metadata**; no prompt or reply text is ever in `audit.db` at this stage. A server with no
-audit store answers `503`.
+is **metadata** apart from the sealed payloads below, which are ciphertext the server cannot read.
+A server with no audit store answers `503`.
 
 - `GET /mgmt/v1/audit/traces?status=&provider=&before=&limit=`: one summary per generation,
   newest first: `{"traces": [{"trace_id", "span_id", "status", "started_at", "ended_at", "user_id",
@@ -186,6 +188,40 @@ audit store answers `503`.
   "ttft_ms": {"p50","p95"}, "tokens": {"in","out","cached"}}` over generations that began at or
   after `since`. `error_rate` counts `error` and `timed_out`.
 
+- `GET /mgmt/v1/audit/payloads/{span_id}`: `[{"role", "key_id", "ciphertext_b64"}]`, the sealed
+  content of one span exactly as stored (`404` for a span that does not exist, `[]` for one with
+  nothing sealed). `role` is `request` (on an attempt: the system prompt and history as JSON),
+  `reply` (on a turn) or `error` (on an attempt: the provider's error text, cut at 4 KB). Request
+  and reply are cut at 256 KB and the span then has `attrs.truncated = true`.
+
+### The audit key
+
+Prompts, replies and provider errors are stored in `audit.db` only as ciphertext, sealed (NaCl
+sealed boxes, X25519) to a public key the administrator's passphrase produces. The server never
+holds the private key and has no code to open a sealed payload.
+
+- **Setup.** In the admin's first-run setup the administrator chooses a passphrase of at least 20
+  characters (`POST /admin/api/setup/audit-key` with `passphrase` and `confirm`; `409` if a key
+  exists). The admin stretches it with Argon2id (64 MiB, 3 passes, 1 lane) and a random 16-byte
+  salt into 32 bytes, uses those as the X25519 secret key and keeps only the public key, the salt,
+  the cost and the key id (the first 8 bytes of the SHA-256 of the public key, in hex).
+- **The snapshot** carries `audit_public_key: {"key_id", "public_key"}` (32 bytes as 64 hex
+  characters; the server checks that the id matches the key). Without it the server refuses new
+  generations: `503 {"error":"audit_key_missing"}`.
+- **Reading.** `POST /admin/api/audit/payloads/{span_id}/open` with `{"passphrase"}`: the admin
+  fetches the ciphertext, derives the key, opens the content and forgets the key. An
+  `audit_access` row (span, key id, time, whether the passphrase was right) is written before any
+  content is returned. A wrong passphrase is `403` and recorded; five wrong ones in 15 minutes lock
+  opening out for 15 minutes (`429`).
+- **Rotation.** `POST /admin/api/audit/rotate-key` with `current`, `new` and `confirm`: a new key is
+  made and pushed, the old one is retired but kept. Content is never re-sealed: each payload names
+  its `key_id` and opens with the passphrase that made that key.
+
+**Operator note.** The passphrase is not stored anywhere and cannot be recovered. If it is lost,
+the content sealed with its key stays unreadable for good; the metadata (times, providers, models,
+tokens, errors, statuses) stays available. After a rotation, the old passphrase is still needed to
+read older content.
+
 ### audit.db
 
 A separate SQLite file (`ASKBAR_AUDIT_DIR/audit.db`, the `audit-data` volume in the compose
@@ -198,7 +234,7 @@ setup), with its own migrations and `PRAGMA user_version`, written only by the s
   parent is its turn. Times are unix seconds; an attempt's `attrs` carry `latency_ms`,
   `http_status`, `usage_estimated` and `finish_reason`. A span starts `running` and ends `done`,
   `error`, `cancelled`, `timed_out` or `interrupted` (the last for spans a restart cut off).
-- `payloads(span_id, role, key_id, ciphertext, created_at)`: reserved for sealed content.
+- `payloads(span_id, role, key_id, ciphertext, created_at)`: sealed content only (see *The audit key*).
 - The database enforces its own rules with triggers: nothing younger than 7 days is deleted, and
   a span can change only while it is `running`. Records older than `audit_retention_days` (at
   least 7) are deleted once a day.
