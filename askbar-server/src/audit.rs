@@ -405,6 +405,9 @@ pub struct SpanStart {
     pub user_id: Option<String>,
     pub device_id: Option<String>,
     pub attrs_json: Option<String>,
+    /// When it began, in unix milliseconds. The columns hold whole seconds; this keeps the finer
+    /// time in `attrs.started_ms` so a trace can be drawn to scale.
+    pub started_ms: i64,
 }
 
 /// How a span ended. Fields left `None` keep what the start recorded.
@@ -420,7 +423,10 @@ pub struct SpanFinish {
     pub tokens_cached: Option<u64>,
     pub ttft_ms: Option<u64>,
     pub error_code: Option<String>,
+    /// Merged into the span's attributes (a key given here replaces the same key from the start).
     pub attrs_json: Option<String>,
+    /// When it ended, unix milliseconds (kept in `attrs.ended_ms`).
+    pub ended_ms: i64,
 }
 
 /// What a span is. The set is fixed (the database checks it too).
@@ -452,6 +458,10 @@ fn now_secs() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
 
+fn now_ms() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
+}
+
 impl SpanStart {
     /// A span in trace `trace_id` (the generation id), starting now, with a fresh id.
     pub fn new(trace_id: &str, kind: Kind, name: &str) -> SpanStart {
@@ -461,6 +471,7 @@ impl SpanStart {
             kind: kind.as_str().to_string(),
             name: name.to_string(),
             started_at: now_secs(),
+            started_ms: now_ms(),
             ..Default::default()
         }
     }
@@ -491,7 +502,7 @@ impl SpanStart {
 impl SpanFinish {
     /// Ends span `id` now with `status`.
     pub fn new(id: &str, status: &str) -> SpanFinish {
-        SpanFinish { id: id.to_string(), status: status.to_string(), ended_at: now_secs(), ..Default::default() }
+        SpanFinish { id: id.to_string(), status: status.to_string(), ended_at: now_secs(), ended_ms: now_ms(), ..Default::default() }
     }
 
     pub fn error_code(mut self, code: &str) -> SpanFinish {
@@ -694,8 +705,8 @@ fn write_payload(conn: &Connection, p: &PayloadWrite) -> rusqlite::Result<()> {
 fn write_start(conn: &Connection, s: &SpanStart) -> rusqlite::Result<()> {
     conn.execute(
         "INSERT INTO spans (id, trace_id, parent_id, kind, name, status, started_at, provider_id, model, user_id, device_id, attrs_json)
-         VALUES (?1, ?2, ?3, ?4, ?5, 'running', ?6, ?7, ?8, ?9, ?10, ?11)",
-        rusqlite::params![s.id, s.trace_id, s.parent_id, s.kind, s.name, s.started_at, s.provider_id, s.model, s.user_id, s.device_id, s.attrs_json],
+         VALUES (?1, ?2, ?3, ?4, ?5, 'running', ?6, ?7, ?8, ?9, ?10, json_patch(COALESCE(?11, '{}'), json_object('started_ms', ?12)))",
+        rusqlite::params![s.id, s.trace_id, s.parent_id, s.kind, s.name, s.started_at, s.provider_id, s.model, s.user_id, s.device_id, s.attrs_json, s.started_ms],
     )?;
     Ok(())
 }
@@ -706,7 +717,8 @@ fn write_finish(conn: &Connection, f: &SpanFinish) -> rusqlite::Result<()> {
         "UPDATE spans SET status = ?2, ended_at = ?3,
              provider_id = COALESCE(?4, provider_id), model = COALESCE(?5, model),
              tokens_in = ?6, tokens_out = ?7, tokens_cached = ?8, ttft_ms = ?9,
-             error_code = ?10, attrs_json = COALESCE(?11, attrs_json)
+             error_code = ?10,
+             attrs_json = json_patch(json_patch(COALESCE(attrs_json, '{}'), COALESCE(?11, '{}')), json_object('ended_ms', ?12))
          WHERE id = ?1 AND status = 'running'",
         rusqlite::params![
             f.id,
@@ -719,7 +731,8 @@ fn write_finish(conn: &Connection, f: &SpanFinish) -> rusqlite::Result<()> {
             f.tokens_cached.map(|n| n as i64),
             f.ttft_ms.map(|n| n as i64),
             f.error_code,
-            f.attrs_json
+            f.attrs_json,
+            f.ended_ms
         ],
     )?;
     Ok(())
@@ -957,6 +970,32 @@ mod tests {
             conn.query_row("SELECT model FROM spans WHERE id = ?1", [&attempt], |r| r.get(0)).unwrap(),
         );
         assert_eq!((user.as_str(), device.as_str(), provider.as_str(), model.as_str()), ("u1", "d1", "p1", "m1"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn spans_keep_millisecond_times_in_their_attributes_and_attributes_merge_on_finish() {
+        let (dir, db) = temp_db();
+        let rec = Recorder::spawn(db, 64);
+        let id = rec.start_span(SpanStart::new("t", Kind::Attempt, "p").attrs(&serde_json::json!({ "retry_index": 1, "keep": "start" })));
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        let mut done = SpanFinish::new(&id, "done");
+        done.attrs_json = Some(serde_json::json!({ "latency_ms": 31, "keep": "finish" }).to_string());
+        rec.finish_span(done);
+        let bare = rec.start_span(SpanStart::new("t", Kind::Gate, "g")); // no attributes of its own
+        rec.finish_span(SpanFinish::new(&bare, "done"));
+        rec.flush().await;
+        let conn = Connection::open(dir.join("audit.db")).unwrap();
+        let attrs = |id: &str| -> serde_json::Value {
+            let a: String = conn.query_row("SELECT attrs_json FROM spans WHERE id = ?1", [id], |r| r.get(0)).unwrap();
+            serde_json::from_str(&a).unwrap()
+        };
+        let a = attrs(&id);
+        assert_eq!((a["retry_index"].as_i64(), a["latency_ms"].as_i64(), a["keep"].as_str()), (Some(1), Some(31), Some("finish")), "start attributes survive, finish ones are added or win");
+        let (s, e) = (a["started_ms"].as_i64().unwrap(), a["ended_ms"].as_i64().unwrap());
+        assert!(e - s >= 25 && e - s < 2000, "the span took about 30 ms: {}", e - s);
+        let b = attrs(&bare);
+        assert!(b["started_ms"].is_i64() && b["ended_ms"].is_i64(), "even a span with no attributes of its own has its times: {b}");
         let _ = std::fs::remove_dir_all(dir);
     }
 

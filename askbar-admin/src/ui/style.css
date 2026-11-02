@@ -69,3 +69,14 @@ table#audit-table { border-collapse: collapse; width: 100%; font-size: 14px; }
 #audit-table tbody tr[data-trace] { cursor: pointer; }
 #audit-table tbody tr[data-trace]:hover, #audit-table tbody tr[data-trace]:focus { background: var(--bg); outline: none; }
 .status-error, .status-timed_out { color: var(--danger, #b00020); }
+.waterfall { margin: 10px 0; }
+.span-row { display: grid; grid-template-columns: minmax(130px, 34%) 1fr; gap: 8px; align-items: center; padding: 2px 0; font-size: 13px; }
+.span-row .label { overflow-wrap: anywhere; }
+.span-row .label .kind { color: var(--muted); }
+.span-row .track { position: relative; height: 18px; background: var(--bg); border-radius: 4px; }
+.span-bar { position: absolute; top: 2px; height: 14px; min-width: 3px; background: var(--fg); opacity: .55; border-radius: 3px; }
+.span-bar:hover, .span-bar:focus { opacity: .9; outline: 2px solid var(--fg); outline-offset: 1px; }
+.span-bar.status-error, .span-bar.status-timed_out, .span-bar.status-blocked { background: var(--danger, #b00020); }
+.span-bar.running { background-image: repeating-linear-gradient(45deg, transparent 0 4px, rgba(255,255,255,.35) 4px 8px); }
+.span-details { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-width: 560px) { .span-row { grid-template-columns: 1fr; } }

@@ -598,14 +598,69 @@ async function waitForPort(port) {
     await page.waitForFunction(() => document.querySelectorAll('#audit-rows tr').length === 25);
 
     // A row opens its trace (by click or keyboard).
+    await page.route('**/admin/api/audit/traces/*', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ trace_id: route.request().url().split('/').pop(), cost: null, spans: [] }) }));
     await page.click('#audit-rows tr[data-trace="T099"]');
     assert.equal(await page.getAttribute('#audit-nav [data-sub="trace"]', 'aria-selected'), 'true');
-    assert.match(await page.innerText('#audit-trace'), /T099/);
+    await page.waitForFunction(() => /T099/.test(document.getElementById('audit-trace-head').textContent));
     await page.click('#audit-nav [data-sub="requests"]');
     await page.focus('#audit-rows tr[data-trace="T098"]');
     await page.keyboard.press('Enter');
-    assert.match(await page.innerText('#audit-trace'), /T098/);
+    await page.waitForFunction(() => /T098/.test(document.getElementById('audit-trace-head').textContent));
+    await page.unroute('**/admin/api/audit/traces/*');
     await page.unroute('**/admin/api/audit/traces?*');
+  });
+  await step('audit trace: the waterfall layout is right for fixed numbers, shows the tree, and copes with a running span', async () => {
+    const spans = [
+      { id: 'a-turn', parent_id: null, kind: 'turn', name: 'chat', status: 'done', started_at: 1000, ended_at: 1002, attrs: { started_ms: 1000000, ended_ms: 1002000 } },
+      { id: 'b-attempt', parent_id: 'a-turn', kind: 'attempt', name: 'prov', status: 'error', started_at: 1000, ended_at: 1000, provider_id: 'p1', model: 'm', error_code: 'http_429', attrs: { started_ms: 1000200, ended_ms: 1000700, retry_index: 0 } },
+      { id: 'c-attempt', parent_id: 'a-turn', kind: 'attempt', name: 'prov', status: 'done', started_at: 1001, ended_at: 1002, provider_id: 'p1', model: 'm', tokens_in: 100, tokens_out: 50, ttft_ms: 300, attrs: { started_ms: 1001000, ended_ms: 1001900, retry_index: 1 } },
+      { id: '0-gate', parent_id: null, kind: 'gate', name: 'kill_switch', status: 'done', started_at: 1000, ended_at: 1000, attrs: { started_ms: 999990, ended_ms: 1000000 } },
+      { id: 'd-running', parent_id: 'a-turn', kind: 'tool', name: 'still going', status: 'running', started_at: 1001, ended_at: null, attrs: { started_ms: 1001500 } },
+    ];
+    const lay = await page.evaluate((s) => window.askbarAudit.layout(s, 1002500), spans);
+    // Ordered by when they began: the gate first (it began 10 ms before the turn), then turn, attempt, attempt, tool.
+    assert.deepEqual(lay.rows.map((r) => r.span.id), ['0-gate', 'a-turn', 'b-attempt', 'c-attempt', 'd-running']);
+    assert.deepEqual(lay.rows.map((r) => r.depth), [0, 0, 1, 1, 1], 'attempts and the tool sit under the turn');
+    assert.equal(lay.start, 999990);
+    assert.equal(lay.end, 1002500, 'the running span is drawn up to now, which is the latest end');
+    assert.equal(lay.total, 2510);
+    const by = Object.fromEntries(lay.rows.map((r) => [r.span.id, r]));
+    assert.deepEqual([by['0-gate'].left, by['0-gate'].width], [0, 0.5], 'a 10 ms span of 2510 would be under half a percent: it keeps a visible minimum');
+    assert.deepEqual([by['a-turn'].left, by['a-turn'].width], [0.4, 79.68]);
+    assert.deepEqual([by['b-attempt'].left, by['b-attempt'].width], [8.37, 19.92]);
+    assert.deepEqual([by['c-attempt'].left, by['c-attempt'].width], [40.24, 35.86]);
+    assert.equal(by['d-running'].running, true);
+    assert.deepEqual([by['d-running'].left, by['d-running'].width], [60.16, 39.84], 'ends at the right edge');
+    assert.equal(by['d-running'].durationMs, 1000);
+    // Nothing at all lays out to nothing, without dividing by zero.
+    assert.deepEqual(await page.evaluate(() => window.askbarAudit.layout([], 5).rows), []);
+
+    // Drawn: the tree, the bars, and details on focus. (Without the running span, whose end is the
+    // real clock, so the widths below are exact.)
+    const finished = spans.filter((x) => x.status !== 'running');
+    await page.route('**/admin/api/audit/traces/TRACE1', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ trace_id: 'TRACE1', cost: 0.0007, spans: finished }) }));
+    await page.click('#nav [data-tab="providers"]');
+    await page.click('#nav [data-tab="audit"]');
+    await page.evaluate(() => window.askbarAudit.openTrace('TRACE1'));
+    await page.waitForSelector('#audit-waterfall .span-bar');
+    assert.equal(await page.locator('#audit-waterfall .span-bar').count(), 4);
+    assert.equal(await page.locator('#audit-waterfall .span-bar.status-error').count(), 1);
+    assert.match(await page.innerText('#audit-trace-head'), /TRACE1 · done · .* · cost 0\.0007/);
+    // total = 1002000 - 999990 = 2010 ms; c-attempt starts 1010 ms in and runs 900 ms.
+    assert.equal(await page.$eval('[data-span="c-attempt"]', (b) => b.style.width), '44.78%');
+    assert.equal(await page.$eval('[data-span="c-attempt"]', (b) => b.style.left), '50.25%');
+    assert.equal(await page.$eval('[data-span="b-attempt"]', (b) => b.closest('.span-row').querySelector('.label').style.paddingLeft), '14px');
+    await page.focus('[data-span="b-attempt"]');
+    const details = await page.innerText('#audit-span-details');
+    assert.match(details, /attempt · prov · error/);
+    assert.match(details, /starts at \+210 ms, takes 500 ms/);
+    assert.match(details, /error http_429/);
+    assert.match(details, /"retry_index":0/);
+    // A running span is drawn in its own style, up to now.
+    await page.evaluate((s) => window.askbarAudit.renderTrace({ trace_id: 'TRACE2', cost: null, spans: s }), spans);
+    assert.equal(await page.locator('#audit-waterfall .span-bar.running').count(), 1);
+    assert.equal(await page.locator('#audit-waterfall .span-bar').count(), 5);
+    await page.unroute('**/admin/api/audit/traces/TRACE1');
   });
   await step('security: changing the password needs the current one', async () => {
     await page.click('#nav [data-tab="security"]');

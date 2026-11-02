@@ -212,12 +212,102 @@
 
   // ---------------------------------------------------------------- trace
 
-  // Opens one request on the Trace view. (The waterfall itself arrives in the next step.)
-  function openTrace(id) {
+  // Where each span goes in the waterfall, as percentages of the trace's whole duration.
+  // `spans` are as the server sends them; times come from attrs.started_ms and attrs.ended_ms
+  // (milliseconds) and fall back to the whole-second columns. A span with no end is still running:
+  // it is drawn up to `nowMs`. Rows are in the order the spans began, each indented by how many
+  // parents it has. Pure, so it can be tested with fixed numbers.
+  function layout(spans, nowMs) {
+    const t0 = (s) => (s.attrs && s.attrs.started_ms) || s.started_at * 1000;
+    const t1 = (s) => (s.attrs && s.attrs.ended_ms) || (s.ended_at ? s.ended_at * 1000 : null);
+    const rows = spans.map((s) => ({ span: s, start: t0(s), end: t1(s) }));
+    for (const r of rows) r.running = r.end == null;
+    for (const r of rows) if (r.running) r.end = Math.max(r.start, nowMs);
+    rows.sort((a, b) => a.start - b.start || (a.span.id < b.span.id ? -1 : 1));
+    const byId = new Map(rows.map((r) => [r.span.id, r]));
+    const depth = (r, seen = new Set()) => {
+      const p = r.span.parent_id && byId.get(r.span.parent_id);
+      if (!p || seen.has(r.span.id)) return 0;
+      seen.add(r.span.id);
+      return 1 + depth(p, seen);
+    };
+    const start = rows.length ? Math.min(...rows.map((r) => r.start)) : 0;
+    const end = rows.length ? Math.max(...rows.map((r) => r.end)) : 0;
+    const total = Math.max(1, end - start);
+    const pct = (n) => Math.round(n * 100) / 100;
+    return {
+      start, end, total,
+      rows: rows.map((r) => ({
+        span: r.span,
+        depth: depth(r),
+        left: pct((100 * (r.start - start)) / total),
+        width: pct(Math.max(0.5, (100 * (r.end - r.start)) / total)),
+        durationMs: r.end - r.start,
+        offsetMs: r.start - start,
+        running: r.running,
+      })),
+    };
+  }
+
+  function spanDetails(row) {
+    const s = row.span;
+    const lines = [
+      s.kind + ' · ' + s.name + ' · ' + s.status + (row.running ? ' (still running)' : ''),
+      'starts at +' + row.offsetMs + ' ms, takes ' + row.durationMs + ' ms',
+    ];
+    if (s.provider_id) lines.push('provider ' + (providerNames[s.provider_id] || s.provider_id) + (s.model ? ' · ' + s.model : ''));
+    if (s.tokens_in != null || s.tokens_out != null) lines.push('tokens ' + number(s.tokens_in || 0) + ' in, ' + number(s.tokens_out || 0) + ' out' + (s.tokens_cached ? ', ' + number(s.tokens_cached) + ' cached' : ''));
+    if (s.ttft_ms != null) lines.push('first token after ' + s.ttft_ms + ' ms');
+    if (s.cost != null) lines.push('cost ' + money(s.cost));
+    if (s.error_code) lines.push('error ' + s.error_code);
+    const extra = Object.fromEntries(Object.entries(s.attrs || {}).filter(([k]) => k !== 'started_ms' && k !== 'ended_ms'));
+    if (Object.keys(extra).length) lines.push(JSON.stringify(extra));
+    return lines.join('\n');
+  }
+
+  function renderTrace(trace) {
+    const box = $('audit-waterfall');
+    box.textContent = '';
+    const lay = layout(trace.spans || [], Date.now());
+    show($('audit-trace-empty'), false);
+    show(box, true);
+    const head = $('audit-trace-head');
+    head.textContent = '';
+    const turn = lay.rows.find((r) => r.span.kind === 'turn');
+    head.append(
+      el('p', '', 'Request ' + trace.trace_id + (turn ? ' · ' + turn.span.status : '') + ' · ' + duration(lay.total) + ' · cost ' + money(trace.cost)),
+    );
+    show(head, true);
+    const details = $('audit-span-details');
+    for (const row of lay.rows) {
+      const line = el('div', 'span-row');
+      line.setAttribute('role', 'listitem');
+      const label = el('span', 'label');
+      label.style.paddingLeft = row.depth * 14 + 'px';
+      label.append(el('span', 'kind', row.span.kind + ' '), document.createTextNode(row.span.name + ' · ' + row.span.status));
+      const track = el('span', 'track');
+      const bar = el('span', 'span-bar status-' + row.span.status + (row.running ? ' running' : ''));
+      bar.dataset.span = row.span.id;
+      bar.tabIndex = 0;
+      bar.style.left = row.left + '%';
+      bar.style.width = row.width + '%';
+      bar.setAttribute('aria-label', row.span.kind + ' ' + row.span.name + ', ' + row.span.status + ', ' + duration(row.durationMs));
+      const show_ = () => { details.textContent = spanDetails(row); show(details, true); };
+      bar.addEventListener('mouseenter', show_);
+      bar.addEventListener('focus', show_);
+      track.appendChild(bar);
+      line.append(label, track);
+      box.appendChild(line);
+    }
+    show(details, false);
+  }
+
+  // Opens one request on the Trace view.
+  async function openTrace(id) {
     state.traceId = id;
     setSub('trace');
-    $('audit-trace').textContent = '';
-    $('audit-trace').appendChild(el('p', 'hint', 'Trace ' + id));
+    const trace = await read('/admin/api/audit/traces/' + encodeURIComponent(id));
+    if (trace && state.traceId === id) renderTrace(trace);
   }
 
   async function load() {
@@ -232,6 +322,6 @@
     if (b) setSub(b.dataset.sub);
   });
 
-  window.askbarAudit = { setSub, read, banner, state, renderOverview, requestsQuery, openTrace };
+  window.askbarAudit = { setSub, read, banner, state, renderOverview, requestsQuery, openTrace, layout, renderTrace };
   registerTab({ id: 'audit', label: 'Audit', load });
 })();

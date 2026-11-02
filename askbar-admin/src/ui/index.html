@@ -161,7 +161,12 @@
           </div>
           <div class="row"><button type="button" id="audit-more" class="secondary" hidden>Load more</button></div>
         </div>
-        <div id="audit-trace" data-subview="trace" hidden><p class="hint empty">Pick a request on the Requests view to see its trace.</p></div>
+        <div id="audit-trace" data-subview="trace" hidden>
+          <p class="hint empty" id="audit-trace-empty">Pick a request on the Requests view to see its trace.</p>
+          <div id="audit-trace-head" hidden></div>
+          <div id="audit-waterfall" class="waterfall" role="list" hidden></div>
+          <pre id="audit-span-details" class="span-details" aria-live="polite" hidden></pre>
+        </div>
         <div id="audit-routing" data-subview="routing" hidden><p class="hint empty">Pick a request on the Requests view to see how it was routed.</p></div>
         <div id="audit-content" data-subview="content" hidden><p class="hint empty">Pick a request on the Requests view to see its sealed content.</p></div>
       </section>
