@@ -5,7 +5,8 @@
 Then point a provider at http://127.0.0.1:8765/v1 (any key). Say "slow" in a
 message to get a long, slow reply (handy for testing Stop), or "fail" to get
 an HTTP 401 error. "429" answers HTTP 429 with Retry-After: 1 and "500" answers
-HTTP 500. "hang" accepts the request and sends nothing until the client closes;
+HTTP 500. With stream_options.include_usage a final usage chunk is sent
+(cached_tokens is non-zero when the message contains "cached"). "hang" accepts the request and sends nothing until the client closes;
 "drop" sends two content deltas and closes the connection without [DONE].
 """
 import json
@@ -56,7 +57,8 @@ class Handler(BaseHTTPRequestHandler):
                 last = m.get("content", "")
         system = next((m.get("content", "") for m in body.get("messages", []) if m.get("role") == "system"), "")
         print(f"POST {self.path} model={body.get('model')} msgs={len(body.get('messages', []))} "
-              f"auth={'yes' if self.headers.get('authorization') else 'no'} last={last[:40]!r} system={system[:60]!r}", flush=True)
+              f"auth={'yes' if self.headers.get('authorization') else 'no'} last={last[:40]!r} system={system[:60]!r} "
+              f"stream_options={json.dumps(body.get('stream_options'))}", flush=True)
 
         if "fail" in last.lower():
             payload = json.dumps({"error": {"message": "Incorrect API key provided (mock)"}}).encode()
@@ -111,6 +113,10 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
                 self.wfile.flush()
                 time.sleep(0.15 if slow else 0.012)
+            if (body.get("stream_options") or {}).get("include_usage"):
+                usage = {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150,
+                         "prompt_tokens_details": {"cached_tokens": 64 if "cached" in last.lower() else 0}}
+                self.wfile.write(f"data: {json.dumps({'choices': [], 'usage': usage})}\n\n".encode())
             self.wfile.write(b"data: [DONE]\n\n")
             self.wfile.flush()
         except ConnectionError:  # broken pipe, reset, or (on Windows) aborted

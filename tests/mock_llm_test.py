@@ -69,6 +69,28 @@ class Modes(unittest.TestCase):
         self.assertEqual(data.count('"content"'), 2)
         self.assertNotIn("[DONE]", data)
 
+    def usage_chunk(self, text, extra):
+        _, r = self.srv.post(text, extra=extra)
+        events = [json.loads(l[6:]) for l in r.read().decode().splitlines()
+                  if l.startswith("data: ") and l != "data: [DONE]"]
+        return [e for e in events if "usage" in e]
+
+    def test_usage_chunk_when_requested(self):
+        u = self.usage_chunk("hello", {"stream_options": {"include_usage": True}})
+        self.assertEqual(len(u), 1)
+        self.assertEqual(u[0]["choices"], [])
+        self.assertEqual(u[0]["usage"]["prompt_tokens"], 100)
+        self.assertEqual(u[0]["usage"]["completion_tokens"], 50)
+        self.assertEqual(u[0]["usage"]["prompt_tokens_details"]["cached_tokens"], 0)
+
+    def test_usage_chunk_reports_cached_tokens(self):
+        u = self.usage_chunk("a cached prompt", {"stream_options": {"include_usage": True}})
+        self.assertGreater(u[0]["usage"]["prompt_tokens_details"]["cached_tokens"], 0)
+
+    def test_no_usage_chunk_without_stream_options(self):
+        self.assertEqual(self.usage_chunk("hello", None), [])
+        self.assertEqual(self.usage_chunk("hello", {"stream_options": {"include_usage": False}}), [])
+
 
 if __name__ == "__main__":
     unittest.main()
