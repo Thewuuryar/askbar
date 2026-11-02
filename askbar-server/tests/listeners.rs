@@ -29,9 +29,9 @@ async fn the_client_and_server_api_routers_share_no_routes() {
     assert_eq!(status(api, "/api/v1/health").await, 200);
     // The server API answers 401 (no token) to everything, including paths that are not its own;
     // the client API answers 404 to server API paths and to the admin site that used to live here.
-    assert_eq!(status(server_api, "/mgmt/v1/health").await, 401);
+    assert_eq!(status(server_api, "/api/server/v1/health").await, 401);
     assert_eq!(status(server_api, "/api/v1/health").await, 401, "the client API is not served here");
-    assert_eq!(status(api, "/mgmt/v1/health").await, 404);
+    assert_eq!(status(api, "/api/server/v1/health").await, 404);
     for gone in ["/admin/", "/admin/health", "/admin/api/v1/session", "/admin/api/v1/providers", "/"] {
         assert_eq!(status(api, gone).await, 404, "{gone}: the admin site is not part of the server");
     }

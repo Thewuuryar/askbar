@@ -1,7 +1,7 @@
 //! The admin service's configuration snapshot, as the server stores and reads it.
 //!
 //! The admin service owns the configuration and pushes it whole with
-//! `PUT /mgmt/v1/snapshot`. That handler is the only writer (`save` is private to this
+//! `PUT /api/server/v1/snapshot`. That handler is the only writer (`save` is private to this
 //! module); everything else gets `current`, which only reads.
 
 use crate::Db;
@@ -141,7 +141,7 @@ pub enum ApplyError {
 }
 
 /// Validate and store `s` as the new snapshot, and drop the stored keys of providers it no
-/// longer lists. Returns the version the server assigned. This is what `PUT /mgmt/v1/snapshot`
+/// longer lists. Returns the version the server assigned. This is what `PUT /api/server/v1/snapshot`
 /// does; tests use it to put the server in a known state.
 pub fn apply(db: &Db, s: &Snapshot) -> Result<u64, ApplyError> {
     validate(s).map_err(ApplyError::Invalid)?;

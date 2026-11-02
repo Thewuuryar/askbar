@@ -200,7 +200,7 @@ The server, not the client, decides which provider serves a reply.
   UTC day and month by metered providers are compared with `budget.daily_tokens` and
   `budget.monthly_tokens`; subscription providers count as zero. Each gate leaves a `gate` span
   (`done`, or `blocked` for a refusal, which gets a trace of its own).
-- `GET /mgmt/v1/providers/health` (server token): `{"providers": [{"provider_id", "status":
+- `GET /api/server/v1/providers/health` (server token): `{"providers": [{"provider_id", "status":
   "auth_failed", "since", "error_code"}]}`; only flagged providers are listed, and the reason is a
   code (e.g. `http_401`), never the provider's own text.
 - Cost is computed whenever it is read, from the provider's prices in the snapshot at that moment:
@@ -218,20 +218,20 @@ has no such routes (`404`), and the admin never opens `audit.db` itself. Everyth
 is **metadata** apart from the sealed payloads below, which are ciphertext the server cannot read.
 A server with no audit store answers `503`.
 
-- `GET /mgmt/v1/audit/traces?status=&provider=&before=&limit=`: one summary per generation,
+- `GET /api/server/v1/audit/traces?status=&provider=&before=&limit=`: one summary per generation,
   newest first: `{"traces": [{"trace_id", "span_id", "status", "started_at", "ended_at", "user_id",
   "device_id", "tokens_in", "tokens_out", "tokens_cached", "error_code", "provider_id", "model",
   "ttft_ms", "latency_ms", "cost"}]}`. `status` filters on the turn's status, `provider` on the provider of
   its last attempt, `before` is a `trace_id` (only older traces, for paging), `limit` is 1 to 200
   (default 50). `trace_id` is the generation id.
-- `GET /mgmt/v1/audit/traces/{id}`: `{"trace_id", "cost", "spans": [...]}`, every span of that
+- `GET /api/server/v1/audit/traces/{id}`: `{"trace_id", "cost", "spans": [...]}`, every span of that
   generation in the order they began (`404` if there is none). A span has `id`, `parent_id`,
   `kind`, `name`, `status`, `started_at`, `ended_at`, `provider_id`, `model`,
   `tokens_in|out|cached`, `ttft_ms`, `error_code`, `user_id`, `device_id`, `cost` and `attrs` (a
   JSON object; an attempt's carries `retry_index`, `fallback_from`, `latency_ms`, `http_status`).
   `gate` spans (`kill_switch`, `budget`, `queue`) end `done` when they let it through and `blocked`
   when they refused it.
-- `GET /mgmt/v1/audit/stats?since=<unix seconds>` (default: the last 24 hours):
+- `GET /api/server/v1/audit/stats?since=<unix seconds>` (default: the last 24 hours):
   `{"since", "requests", "by_status": {...}, "error_rate", "latency_ms": {"p50","p95"},
   "ttft_ms": {"p50","p95"}, "tokens": {"in","out","cached"}, "cost", "cost_unknown_requests",
   "by_provider": [...], "by_day": [...]}` over generations that began at or after `since`.
@@ -239,7 +239,7 @@ A server with no audit store answers `503`.
   have `requests`, `tokens` and `cost`. A cost is `null`, and `cost_unknown_requests` says how many
   requests are the reason, when a price that was needed is missing.
 
-- `GET /mgmt/v1/audit/payloads/{span_id}`: `[{"role", "key_id", "ciphertext_b64"}]`, the sealed
+- `GET /api/server/v1/audit/payloads/{span_id}`: `[{"role", "key_id", "ciphertext_b64"}]`, the sealed
   content of one span exactly as stored (`404` for a span that does not exist, `[]` for one with
   nothing sealed). `role` is `request` (on an attempt: the system prompt and history as JSON),
   `reply` (on a turn) or `error` (on an attempt: the provider's error text, cut at 4 KB). Request

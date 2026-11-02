@@ -25,14 +25,14 @@ async fn stub() -> (String, Arc<Seen>) {
     };
     let app = Router::new()
         .route(
-            "/mgmt/v1/audit/traces",
+            "/api/server/v1/audit/traces",
             get(move |State(s): State<Arc<Seen>>, uri: axum::http::Uri, h: axum::http::HeaderMap| async move {
                 record(&uri, &h, &s);
                 axum::Json(json!({ "traces": [{ "trace_id": "t1", "status": "done" }] }))
             }),
         )
         .route(
-            "/mgmt/v1/audit/traces/{id}",
+            "/api/server/v1/audit/traces/{id}",
             get(move |State(s): State<Arc<Seen>>, uri: axum::http::Uri, h: axum::http::HeaderMap| async move {
                 record(&uri, &h, &s);
                 if uri.path().ends_with("/missing") {
@@ -42,14 +42,14 @@ async fn stub() -> (String, Arc<Seen>) {
             }),
         )
         .route(
-            "/mgmt/v1/providers/health",
+            "/api/server/v1/providers/health",
             get(move |State(s): State<Arc<Seen>>, uri: axum::http::Uri, h: axum::http::HeaderMap| async move {
                 record(&uri, &h, &s);
                 axum::Json(json!({ "providers": [{ "provider_id": "p1", "status": "auth_failed", "since": 5, "error_code": "http_401" }] }))
             }),
         )
         .route(
-            "/mgmt/v1/audit/stats",
+            "/api/server/v1/audit/stats",
             get(move |State(s): State<Arc<Seen>>, uri: axum::http::Uri, h: axum::http::HeaderMap| async move {
                 record(&uri, &h, &s);
                 axum::Json(json!({ "requests": 3 }))
@@ -115,7 +115,7 @@ async fn known_parameters_are_forwarded_with_the_server_token_and_unknown_ones_a
     assert_eq!(st, 200);
     assert_eq!(body["traces"][0]["trace_id"], "t1", "the server's answer is passed through");
     let (path, query, auth) = seen.requests.lock().unwrap()[0].clone();
-    assert_eq!(path, "/mgmt/v1/audit/traces");
+    assert_eq!(path, "/api/server/v1/audit/traces");
     let pairs: Vec<&str> = query.split('&').collect();
     for want in ["status=error", "provider=p1", "before=01ABC", "limit=25", "since=5"] {
         assert!(pairs.contains(&want), "{want} in {query}");
@@ -138,7 +138,7 @@ async fn one_trace_is_fetched_by_id_unknown_ones_are_404_and_odd_ids_never_reach
     let a = admin_for(&url).await;
     let (st, body) = a.get("/admin/api/v1/audit/traces/01HZXTRACE", true, true).await;
     assert_eq!((st, &body["trace_id"]), (200, &json!("t1")));
-    assert_eq!(seen.requests.lock().unwrap()[0].0, "/mgmt/v1/audit/traces/01HZXTRACE");
+    assert_eq!(seen.requests.lock().unwrap()[0].0, "/api/server/v1/audit/traces/01HZXTRACE");
     assert_eq!(a.get("/admin/api/v1/audit/traces/missing", true, true).await.0, 404);
     let before = seen.requests.lock().unwrap().len();
     for odd in ["..%2F..%2Fsnapshot", "a%20b", "x%3Fy%3D1"] {
@@ -155,7 +155,7 @@ async fn provider_health_is_proxied_behind_the_session() {
     assert!(seen.requests.lock().unwrap().is_empty());
     let (st, body) = a.get("/admin/api/v1/audit/provider-health", true, true).await;
     assert_eq!((st, &body["providers"][0]["status"]), (200, &json!("auth_failed")));
-    assert_eq!(seen.requests.lock().unwrap()[0].0, "/mgmt/v1/providers/health");
+    assert_eq!(seen.requests.lock().unwrap()[0].0, "/api/server/v1/providers/health");
 }
 
 #[tokio::test]

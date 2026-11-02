@@ -147,7 +147,7 @@ async fn put_provider_key(State(state): State<Arc<AppState>>, Path(id): Path<Str
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `GET /mgmt/v1/providers/health`: providers the router has found unusable, so the admin can say
+/// `GET /api/server/v1/providers/health`: providers the router has found unusable, so the admin can say
 /// so. Only providers with a problem are listed; the reason is a code, never the provider's text.
 async fn providers_health(State(state): State<Arc<AppState>>) -> Result<Json<serde_json::Value>, Failure> {
     let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
@@ -213,7 +213,7 @@ fn add_cost(row: &mut serde_json::Value, price_of: crate::audit::PriceOf) {
     row["cost"] = serde_json::json!(cost);
 }
 
-/// `GET /mgmt/v1/audit/traces`: one summary per generation, newest first. Metadata only.
+/// `GET /api/server/v1/audit/traces`: one summary per generation, newest first. Metadata only.
 async fn audit_traces(State(state): State<Arc<AppState>>, axum::extract::Query(q): axum::extract::Query<TracesQuery>) -> Result<Json<serde_json::Value>, Failure> {
     let conn = state.audit.reader().ok_or_else(no_audit)?;
     let filter = crate::audit::TraceFilter { status: q.status, provider: q.provider, before: q.before, limit: q.limit };
@@ -223,7 +223,7 @@ async fn audit_traces(State(state): State<Arc<AppState>>, axum::extract::Query(q
     Ok(Json(serde_json::json!({ "traces": rows })))
 }
 
-/// `GET /mgmt/v1/audit/traces/{id}`: all spans of one generation.
+/// `GET /api/server/v1/audit/traces/{id}`: all spans of one generation.
 async fn audit_trace(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Result<Json<serde_json::Value>, Failure> {
     let conn = state.audit.reader().ok_or_else(no_audit)?;
     let mut spans = crate::audit::trace_spans(&conn, &id).map_err(|_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not read the audit store."))?;
@@ -242,7 +242,7 @@ async fn audit_trace(State(state): State<Arc<AppState>>, Path(id): Path<String>)
     Ok(Json(serde_json::json!({ "trace_id": id, "cost": cost, "spans": spans })))
 }
 
-/// `GET /mgmt/v1/audit/payloads/{span_id}`: the sealed content of one span, as ciphertext.
+/// `GET /api/server/v1/audit/payloads/{span_id}`: the sealed content of one span, as ciphertext.
 /// Only the admin, with the passphrase, can turn it into text; this endpoint cannot.
 async fn audit_payloads(State(state): State<Arc<AppState>>, Path(span_id): Path<String>) -> Result<Json<serde_json::Value>, Failure> {
     let conn = state.audit.reader().ok_or_else(no_audit)?;
@@ -257,7 +257,7 @@ struct StatsQuery {
     since: Option<i64>,
 }
 
-/// `GET /mgmt/v1/audit/stats?since=<unix seconds>`: counts, error rate, latency percentiles
+/// `GET /api/server/v1/audit/stats?since=<unix seconds>`: counts, error rate, latency percentiles
 /// and token totals. `since` defaults to the last 24 hours.
 async fn audit_stats(State(state): State<Arc<AppState>>, axum::extract::Query(q): axum::extract::Query<StatsQuery>) -> Result<Json<serde_json::Value>, Failure> {
     let conn = state.audit.reader().ok_or_else(no_audit)?;
@@ -296,19 +296,19 @@ async fn backup(State(state): State<Arc<AppState>>) -> Result<Response, ApiError
 /// The server routes behind the token check.
 pub fn router(state: Arc<AppState>, hash_file: PathBuf) -> Router {
     Router::new()
-        .route("/mgmt/v1/health", get(|| async { StatusCode::OK }))
-        .route("/mgmt/v1/snapshot", put(put_snapshot))
-        .route("/mgmt/v1/providers/{id}/key", put(put_provider_key))
-        .route("/mgmt/v1/providers/health", get(providers_health))
-        .route("/mgmt/v1/providers/{id}/test", post(test_provider))
-        .route("/mgmt/v1/users", get(list_users))
-        .route("/mgmt/v1/devices", get(list_clients))
-        .route("/mgmt/v1/usage", get(usage))
-        .route("/mgmt/v1/backup", get(backup))
-        .route("/mgmt/v1/audit/traces", get(audit_traces))
-        .route("/mgmt/v1/audit/traces/{id}", get(audit_trace))
-        .route("/mgmt/v1/audit/stats", get(audit_stats))
-        .route("/mgmt/v1/audit/payloads/{span_id}", get(audit_payloads))
+        .route(&askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/health"), get(|| async { StatusCode::OK }))
+        .route(&askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/snapshot"), put(put_snapshot))
+        .route(&askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/providers/{id}/key"), put(put_provider_key))
+        .route(&askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/providers/health"), get(providers_health))
+        .route(&askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/providers/{id}/test"), post(test_provider))
+        .route(&askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/users"), get(list_users))
+        .route(&askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/devices"), get(list_clients))
+        .route(&askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/usage"), get(usage))
+        .route(&askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/backup"), get(backup))
+        .route(&askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/audit/traces"), get(audit_traces))
+        .route(&askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/audit/traces/{id}"), get(audit_trace))
+        .route(&askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/audit/stats"), get(audit_stats))
+        .route(&askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/audit/payloads/{span_id}"), get(audit_payloads))
         .fallback(crate::error::not_found)
         .method_not_allowed_fallback(crate::error::method_not_allowed)
         .layer(middleware::from_fn_with_state(Guard { hash_file }, require_token))

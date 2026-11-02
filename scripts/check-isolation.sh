@@ -52,7 +52,7 @@ py() {
 http_status() { # network host:port [bearer]
   py --network "$1" -- "
 import sys, urllib.request, urllib.error
-req = urllib.request.Request('http://$2/mgmt/v1/health')
+req = urllib.request.Request('http://$2/api/server/v1/health')
 if '${3:-}': req.add_header('authorization', 'Bearer ${3:-}')
 try: print(urllib.request.urlopen(req, timeout=4).status)
 except urllib.error.HTTPError as e: print(e.code)
@@ -119,7 +119,7 @@ code=$(http_status "$SERVER_API_NET" 172.30.0.9:8082 "$HASH")
 case "$code" in 401|403|503) pass "fails closed with no hash file ($code)";; *) fail "no hash file: got $code, expected a refusal";; esac
 docker rm -f askbar-check-nohash >/dev/null 2>&1
 
-docker exec "$CADDY" sh -c "wget -q -T3 -O /dev/null http://$SERVER_API/mgmt/v1/health" >/dev/null 2>&1 \
+docker exec "$CADDY" sh -c "wget -q -T3 -O /dev/null http://$SERVER_API/api/server/v1/health" >/dev/null 2>&1 \
   && fail "Caddy reached the server port" || pass "Caddy cannot reach the server port"
 EDGE_IP=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$EDGE\").IPAddress}}" "$SERVER")
 [ "$(http_status "$EDGE" "$EDGE_IP:8082")" = 0 ] && pass "nothing on the edge network answers on 8082" || fail "the server port answers on the edge network"
@@ -158,7 +158,7 @@ except urllib.error.HTTPError as e: print(e.code)
 except Exception: print(0)
 "
 }
-for path in /audit /api/v1/audit /api/v1/audit/traces /api/v1/audit/stats /mgmt/v1/health /mgmt/v1/audit/traces /mgmt/v1/audit/stats; do
+for path in /audit /api/v1/audit /api/v1/audit/traces /api/v1/audit/stats /api/server/v1/health /api/server/v1/audit/traces /api/server/v1/audit/stats; do
   [ "$(http_get "$EDGE" "$EDGE_IP:8080" "$path")" = 404 ] && pass "the client API has no $path (404)" || fail "the client API answers $path"
 done
 

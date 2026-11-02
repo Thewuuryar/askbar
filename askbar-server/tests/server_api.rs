@@ -39,7 +39,7 @@ async fn start(write_hash: bool) -> T {
 
 impl T {
     async fn health(&self, auth: Option<&str>) -> u16 {
-        let mut r = self.http.get(format!("{}/mgmt/v1/health", self.url));
+        let mut r = self.http.get(format!("{}/api/server/v1/health", self.url));
         if let Some(a) = auth {
             r = r.header("authorization", a);
         }
@@ -63,7 +63,7 @@ async fn no_token_a_wrong_token_or_the_stored_hash_is_401() {
     assert_eq!(t.health(Some("Bearer mgt_wrong")).await, 401);
     assert_eq!(t.health(Some(&format!("Bearer {}", hex(TOKEN)))).await, 401, "the hash the server holds is not a credential");
     // Unknown routes do not get past the check either.
-    let r = t.http.get(format!("{}/mgmt/v1/nope", t.url)).send().await.unwrap();
+    let r = t.http.get(format!("{}/api/server/v1/nope", t.url)).send().await.unwrap();
     assert_eq!(r.status(), 401);
 }
 
@@ -168,7 +168,7 @@ async fn start_with_state() -> S {
 
 impl S {
     async fn put(&self, body: &serde_json::Value, token: Option<&str>) -> (u16, serde_json::Value) {
-        let mut r = self.t.http.put(format!("{}/mgmt/v1/snapshot", self.t.url)).json(body);
+        let mut r = self.t.http.put(format!("{}/api/server/v1/snapshot", self.t.url)).json(body);
         if let Some(t) = token {
             r = r.bearer_auth(t);
         }
@@ -290,14 +290,14 @@ async fn a_key_is_stored_encrypted_and_never_returned() {
     let s = start_with_state().await;
     s.push_provider("http://x/v1").await;
 
-    let (st, body) = s.call(M::PUT, "/mgmt/v1/providers/p1/key", Some(json!({ "key": KEY }))).await;
+    let (st, body) = s.call(M::PUT, "/api/server/v1/providers/p1/key", Some(json!({ "key": KEY }))).await;
     assert_eq!((st, body.as_str()), (204, ""), "nothing comes back");
     let stored = s.stored("p1").expect("a row was made from the snapshot");
     assert!(!stored.windows(KEY.len()).any(|w| w == KEY.as_bytes()), "not stored in the clear");
     assert_eq!(s.state.secrets().decrypt(&stored).unwrap(), KEY, "encrypted with the master key");
 
     // Replacing it replaces. The row holds the id and the key and nothing else.
-    let (st, _) = s.call(M::PUT, "/mgmt/v1/providers/p1/key", Some(json!({ "key": "sk-second-key-456" }))).await;
+    let (st, _) = s.call(M::PUT, "/api/server/v1/providers/p1/key", Some(json!({ "key": "sk-second-key-456" }))).await;
     assert_eq!(st, 204);
     assert_eq!(s.state.secrets().decrypt(&s.stored("p1").unwrap()).unwrap(), "sk-second-key-456");
     let rows: i64 = s.state.db.lock().unwrap().conn().query_row("SELECT COUNT(*) FROM providers WHERE id = 'p1'", [], |r| r.get(0)).unwrap();
@@ -305,9 +305,9 @@ async fn a_key_is_stored_encrypted_and_never_returned() {
 
     // Errors do not echo the key either.
     for (path, body, want) in [
-        ("/mgmt/v1/providers/unknown/key", json!({ "key": KEY }), 404),
-        ("/mgmt/v1/providers/p2/key", json!({ "key": "   " }), 400),
-        ("/mgmt/v1/providers/p2/key", json!({ "key": "x".repeat(5000) }), 400),
+        ("/api/server/v1/providers/unknown/key", json!({ "key": KEY }), 404),
+        ("/api/server/v1/providers/p2/key", json!({ "key": "   " }), 400),
+        ("/api/server/v1/providers/p2/key", json!({ "key": "x".repeat(5000) }), 400),
     ] {
         let (st, text) = s.call(M::PUT, path, Some(body)).await;
         assert_eq!(st, want, "{path}");
@@ -315,13 +315,13 @@ async fn a_key_is_stored_encrypted_and_never_returned() {
     }
     assert!(s.stored("unknown").is_none());
     // There is no way to read it back.
-    for (m, p) in [(M::GET, "/mgmt/v1/providers/p1/key"), (M::GET, "/mgmt/v1/providers/p1"), (M::GET, "/mgmt/v1/providers")] {
+    for (m, p) in [(M::GET, "/api/server/v1/providers/p1/key"), (M::GET, "/api/server/v1/providers/p1"), (M::GET, "/api/server/v1/providers")] {
         let (st, text) = s.call(m, p, None).await;
         assert!(st == 404 || st == 405, "{p}: {st}");
         assert!(!text.contains("sk-"));
     }
     // Both endpoints need the token.
-    let r = s.t.http.put(format!("{}/mgmt/v1/providers/p1/key", s.t.url)).json(&json!({ "key": KEY })).send().await.unwrap();
+    let r = s.t.http.put(format!("{}/api/server/v1/providers/p1/key", s.t.url)).json(&json!({ "key": KEY })).send().await.unwrap();
     assert_eq!(r.status(), 401);
 }
 
@@ -333,25 +333,25 @@ async fn the_test_endpoint_runs_a_provider_and_hides_the_key() {
     s.push_provider(&llm).await;
 
     // No key yet: the provider is known (it is in the snapshot) but rejects the empty credential.
-    let (st, body) = s.call(M::POST, "/mgmt/v1/providers/p1/test", None).await;
+    let (st, body) = s.call(M::POST, "/api/server/v1/providers/p1/test", None).await;
     let v: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!((st, &v["ok"]), (200, &json!(false)), "{body}");
 
-    s.call(M::PUT, "/mgmt/v1/providers/p1/key", Some(json!({ "key": KEY }))).await;
-    let (st, body) = s.call(M::POST, "/mgmt/v1/providers/p1/test", None).await;
+    s.call(M::PUT, "/api/server/v1/providers/p1/key", Some(json!({ "key": KEY }))).await;
+    let (st, body) = s.call(M::POST, "/api/server/v1/providers/p1/test", None).await;
     let v: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!((st, &v["ok"], v["message"].as_str()), (200, &json!(true), Some("ok")));
     assert!(!body.contains(KEY));
 
     // A wrong key: the provider's error echoes it, and the response must not.
     let wrong = "sk-the-wrong-key-999";
-    s.call(M::PUT, "/mgmt/v1/providers/p1/key", Some(json!({ "key": wrong }))).await;
-    let (st, body) = s.call(M::POST, "/mgmt/v1/providers/p1/test", None).await;
+    s.call(M::PUT, "/api/server/v1/providers/p1/key", Some(json!({ "key": wrong }))).await;
+    let (st, body) = s.call(M::POST, "/api/server/v1/providers/p1/test", None).await;
     let v: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!((st, &v["ok"]), (200, &json!(false)));
     assert!(!body.contains(wrong) && body.contains("[key hidden]"), "{body}");
 
-    assert_eq!(s.call(M::POST, "/mgmt/v1/providers/nope/test", None).await.0, 404);
+    assert_eq!(s.call(M::POST, "/api/server/v1/providers/nope/test", None).await.0, 404);
 }
 
 // ------------------------------------------------------- clients, usage, backup
@@ -376,14 +376,14 @@ async fn clients_and_usage_are_listed_over_the_server_api() {
     };
     let _ = user;
 
-    let (st, body) = s.call(M::GET, "/mgmt/v1/devices", None).await;
+    let (st, body) = s.call(M::GET, "/api/server/v1/devices", None).await;
     assert_eq!(st, 200);
     let clients: serde_json::Value = serde_json::from_str(&body).unwrap();
     let by_name = |n: &str| clients.as_array().unwrap().iter().find(|d| d["name"] == n).unwrap().clone();
     assert_eq!((by_name("Work laptop")["revoked"].clone(), by_name("Phone")["revoked"].clone()), (json!(false), json!(true)));
     assert!(!body.contains("abt_") && !body.contains("hash"), "no token material: {body}");
 
-    let (st, body) = s.call(M::GET, "/mgmt/v1/usage", None).await;
+    let (st, body) = s.call(M::GET, "/api/server/v1/usage", None).await;
     let u: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(st, 200);
     assert_eq!(
@@ -391,7 +391,7 @@ async fn clients_and_usage_are_listed_over_the_server_api() {
         (&json!(1), &json!(2), &json!(1), &json!(1), &json!(10), &json!(20))
     );
 
-    for p in ["/mgmt/v1/devices", "/mgmt/v1/usage", "/mgmt/v1/backup"] {
+    for p in ["/api/server/v1/devices", "/api/server/v1/usage", "/api/server/v1/backup"] {
         let r = s.t.http.get(format!("{}{p}", s.t.url)).send().await.unwrap();
         assert_eq!(r.status(), 401, "{p} needs the token");
     }
@@ -403,7 +403,7 @@ async fn the_backup_has_the_data_and_none_of_the_secrets() {
     let s = start_with_state().await;
     let llm = "http://x/v1";
     s.push_provider(llm).await;
-    s.call(M::PUT, "/mgmt/v1/providers/p1/key", Some(json!({ "key": KEY }))).await;
+    s.call(M::PUT, "/api/server/v1/providers/p1/key", Some(json!({ "key": KEY }))).await;
     let code_hash = "ab".repeat(32); // the snapshot lists this pair-code hash
     {
         let db = s.state.db.lock().unwrap();
@@ -415,7 +415,7 @@ async fn the_backup_has_the_data_and_none_of_the_secrets() {
         let _ = code;
     }
 
-    let r = s.t.http.get(format!("{}/mgmt/v1/backup", s.t.url)).bearer_auth(TOKEN).send().await.unwrap();
+    let r = s.t.http.get(format!("{}/api/server/v1/backup", s.t.url)).bearer_auth(TOKEN).send().await.unwrap();
     assert_eq!(r.status(), 200);
     assert!(r.headers()["content-disposition"].to_str().unwrap().contains("askbar-backup-"));
     let bytes = r.bytes().await.unwrap();
@@ -447,14 +447,14 @@ async fn the_backup_has_the_data_and_none_of_the_secrets() {
 async fn users_are_listed_and_a_provider_dropped_from_the_snapshot_loses_its_key() {
     use reqwest::Method as M;
     let s = start_with_state().await;
-    let (st, body) = s.call(M::GET, "/mgmt/v1/users", None).await;
+    let (st, body) = s.call(M::GET, "/api/server/v1/users", None).await;
     let users: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!((st, users.as_array().unwrap().len(), users[0]["name"].as_str()), (200, 1, Some("owner")));
     assert!(users[0]["id"].as_str().unwrap().len() == 26);
 
     s.push_provider("http://x/v1").await;
-    s.call(M::PUT, "/mgmt/v1/providers/p1/key", Some(json!({ "key": KEY }))).await;
-    s.call(M::PUT, "/mgmt/v1/providers/p2/key", Some(json!({ "key": "sk-other-key-777" }))).await;
+    s.call(M::PUT, "/api/server/v1/providers/p1/key", Some(json!({ "key": KEY }))).await;
+    s.call(M::PUT, "/api/server/v1/providers/p2/key", Some(json!({ "key": "sk-other-key-777" }))).await;
     assert!(s.stored("p1").is_some() && s.stored("p2").is_some());
 
     // The admin drops p2: its stored key goes with it, p1's stays.
@@ -474,7 +474,7 @@ async fn taking_a_backup_leaves_no_temporary_file_behind() {
     };
     let before = leftovers();
     for _ in 0..3 {
-        let r = s.t.http.get(format!("{}/mgmt/v1/backup", s.t.url)).bearer_auth(TOKEN).send().await.unwrap();
+        let r = s.t.http.get(format!("{}/api/server/v1/backup", s.t.url)).bearer_auth(TOKEN).send().await.unwrap();
         assert_eq!(r.status(), 200);
         r.bytes().await.unwrap();
     }
@@ -533,7 +533,7 @@ async fn a_generation_with_the_mocks_usage_adds_to_the_overview_totals() {
     }
     let _ = sub;
 
-    let (st, body) = s.call(M::GET, "/mgmt/v1/usage", None).await;
+    let (st, body) = s.call(M::GET, "/api/server/v1/usage", None).await;
     let u: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(st, 200);
     assert_eq!((&u["tokens_in"], &u["tokens_out"]), (&json!(100), &json!(50)), "the totals are the mock's usage chunk");
@@ -626,7 +626,7 @@ async fn audit_traces_are_listed_filtered_and_paged_with_metadata_only() {
     let bad = a.chat("please fail").await;
     let ok2 = a.chat("SECRET-WORD two").await;
 
-    let (st, body) = a.get("/mgmt/v1/audit/traces").await;
+    let (st, body) = a.get("/api/server/v1/audit/traces").await;
     assert_eq!(st, 200);
     assert_metadata_only(&body);
     let v: serde_json::Value = serde_json::from_str(&body).unwrap();
@@ -639,18 +639,18 @@ async fn audit_traces_are_listed_filtered_and_paged_with_metadata_only() {
     assert_eq!(v["traces"][1]["error_code"], "http_401");
 
     // Filters and the cursor.
-    let (_, body) = a.get("/mgmt/v1/audit/traces?status=error").await;
+    let (_, body) = a.get("/api/server/v1/audit/traces?status=error").await;
     let v: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(v["traces"].as_array().unwrap().len(), 1);
     assert_eq!(v["traces"][0]["trace_id"], bad.as_str());
-    let (_, body) = a.get("/mgmt/v1/audit/traces?provider=p1&limit=2").await;
+    let (_, body) = a.get("/api/server/v1/audit/traces?provider=p1&limit=2").await;
     let v: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(v["traces"].as_array().unwrap().len(), 2);
-    let (_, body) = a.get(&format!("/mgmt/v1/audit/traces?before={bad}")).await;
+    let (_, body) = a.get(&format!("/api/server/v1/audit/traces?before={bad}")).await;
     let v: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(v["traces"].as_array().unwrap().len(), 1, "only older than the cursor");
     assert_eq!(v["traces"][0]["trace_id"], ok1.as_str());
-    let (_, body) = a.get("/mgmt/v1/audit/traces?provider=nope").await;
+    let (_, body) = a.get("/api/server/v1/audit/traces?provider=nope").await;
     assert_eq!(serde_json::from_str::<serde_json::Value>(&body).unwrap()["traces"].as_array().unwrap().len(), 0);
 }
 
@@ -658,7 +658,7 @@ async fn audit_traces_are_listed_filtered_and_paged_with_metadata_only() {
 async fn one_trace_returns_all_its_spans_and_unknown_ones_are_404() {
     let a = audit_stack().await;
     let id = a.chat("SECRET-WORD hello").await;
-    let (st, body) = a.get(&format!("/mgmt/v1/audit/traces/{id}")).await;
+    let (st, body) = a.get(&format!("/api/server/v1/audit/traces/{id}")).await;
     assert_eq!(st, 200);
     assert_metadata_only(&body);
     let v: serde_json::Value = serde_json::from_str(&body).unwrap();
@@ -670,7 +670,7 @@ async fn one_trace_returns_all_its_spans_and_unknown_ones_are_404() {
     // How many sealed items each span has: the attempt its request, the turn its reply, a gate none.
     let sealed: Vec<i64> = v["spans"].as_array().unwrap().iter().map(|s| s["sealed"].as_i64().unwrap()).collect();
     assert_eq!(sealed, [0, 1, 1]);
-    assert_eq!(a.get("/mgmt/v1/audit/traces/no-such-trace").await.0, 404);
+    assert_eq!(a.get("/api/server/v1/audit/traces/no-such-trace").await.0, 404);
 }
 
 #[tokio::test]
@@ -680,7 +680,7 @@ async fn audit_stats_count_rate_percentiles_and_tokens() {
         a.chat("SECRET-WORD hi").await;
     }
     a.chat("please fail").await;
-    let (st, body) = a.get("/mgmt/v1/audit/stats").await;
+    let (st, body) = a.get("/api/server/v1/audit/stats").await;
     assert_eq!(st, 200);
     assert_metadata_only(&body);
     let v: serde_json::Value = serde_json::from_str(&body).unwrap();
@@ -693,7 +693,7 @@ async fn audit_stats_count_rate_percentiles_and_tokens() {
     assert!(v["ttft_ms"]["p50"].is_i64());
 
     // A window that starts in the future holds nothing.
-    let (_, body) = a.get(&format!("/mgmt/v1/audit/stats?since={}", askbar_server::auth::now() + 3600)).await;
+    let (_, body) = a.get(&format!("/api/server/v1/audit/stats?since={}", askbar_server::auth::now() + 3600)).await;
     let v: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!((v["requests"].as_i64(), v["error_rate"].as_f64()), (Some(0), Some(0.0)));
     assert!(v["latency_ms"]["p50"].is_null());
@@ -702,13 +702,13 @@ async fn audit_stats_count_rate_percentiles_and_tokens() {
 #[tokio::test]
 async fn the_audit_endpoints_need_the_server_token_and_a_recording_store() {
     let a = audit_stack().await;
-    for p in ["/mgmt/v1/audit/traces", "/mgmt/v1/audit/traces/x", "/mgmt/v1/audit/stats"] {
+    for p in ["/api/server/v1/audit/traces", "/api/server/v1/audit/traces/x", "/api/server/v1/audit/stats"] {
         let r = a.http.get(format!("{}{p}", a.url)).send().await.unwrap();
         assert_eq!(r.status(), 401, "{p}");
     }
     // A server with no audit store says so instead of pretending the trail is empty.
     let s = start_with_state().await;
-    let (st, _) = s.call(reqwest::Method::GET, "/mgmt/v1/audit/stats", None).await;
+    let (st, _) = s.call(reqwest::Method::GET, "/api/server/v1/audit/stats", None).await;
     assert_eq!(st, 503);
 }
 
@@ -717,11 +717,11 @@ async fn sealed_payloads_are_served_as_ciphertext_only_and_unknown_spans_are_404
     use base64::Engine;
     let a = audit_stack().await;
     let id = a.chat("SECRET-WORD tell me").await;
-    let (_, body) = a.get(&format!("/mgmt/v1/audit/traces/{id}")).await;
+    let (_, body) = a.get(&format!("/api/server/v1/audit/traces/{id}")).await;
     let spans: serde_json::Value = serde_json::from_str(&body).unwrap();
     let span_of = |kind: &str| spans["spans"].as_array().unwrap().iter().find(|s| s["kind"] == kind).unwrap()["id"].as_str().unwrap().to_string();
 
-    let (st, body) = a.get(&format!("/mgmt/v1/audit/payloads/{}", span_of("attempt"))).await;
+    let (st, body) = a.get(&format!("/api/server/v1/audit/payloads/{}", span_of("attempt"))).await;
     assert_eq!(st, 200);
     assert!(!body.contains("SECRET-WORD") && !body.contains("Anything else?"), "no plaintext: {body}");
     let list: serde_json::Value = serde_json::from_str(&body).unwrap();
@@ -735,15 +735,15 @@ async fn sealed_payloads_are_served_as_ciphertext_only_and_unknown_spans_are_404
     let keys: Vec<&str> = list[0].as_object().unwrap().keys().map(String::as_str).collect();
     assert_eq!(keys.len(), 3, "role, key_id, ciphertext_b64 and nothing else: {keys:?}");
 
-    let (_, body) = a.get(&format!("/mgmt/v1/audit/payloads/{}", span_of("turn"))).await;
+    let (_, body) = a.get(&format!("/api/server/v1/audit/payloads/{}", span_of("turn"))).await;
     let turn: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(turn[0]["role"], "reply");
     assert!(!body.contains("Anything else?"));
 
     // A span that exists but has nothing sealed is an empty list; one that does not exist is 404.
-    let (st, body) = a.get("/mgmt/v1/audit/payloads/01NOSUCHSPAN").await;
+    let (st, body) = a.get("/api/server/v1/audit/payloads/01NOSUCHSPAN").await;
     assert_eq!(st, 404, "{body}");
-    let r = a.http.get(format!("{}/mgmt/v1/audit/payloads/{}", a.url, span_of("turn"))).send().await.unwrap();
+    let r = a.http.get(format!("{}/api/server/v1/audit/payloads/{}", a.url, span_of("turn"))).send().await.unwrap();
     assert_eq!(r.status(), 401, "needs the token");
 }
 
@@ -766,14 +766,14 @@ async fn cost_appears_in_traces_and_one_trace_computed_from_the_current_prices()
     let cached = a.chat("a cached prompt").await; // 100 in of which 64 cached, 50 out
     let failed = a.chat("please fail").await;
 
-    let (_, body) = a.get("/mgmt/v1/audit/traces").await;
+    let (_, body) = a.get("/api/server/v1/audit/traces").await;
     let v: serde_json::Value = serde_json::from_str(&body).unwrap();
     let cost_of = |id: &str| v["traces"].as_array().unwrap().iter().find(|t| t["trace_id"] == id).unwrap()["cost"].clone();
     assert!(approx(&cost_of(&plain), (100.0 * 2.0 + 50.0 * 10.0) / 1e6), "{}", cost_of(&plain));
     assert!(approx(&cost_of(&cached), (36.0 * 2.0 + 64.0 * 0.5 + 50.0 * 10.0) / 1e6), "uncached input, cached input and output: {}", cost_of(&cached));
     assert!(cost_of(&failed).is_null(), "nothing was used, so there is no cost to state");
 
-    let (_, body) = a.get(&format!("/mgmt/v1/audit/traces/{plain}")).await;
+    let (_, body) = a.get(&format!("/api/server/v1/audit/traces/{plain}")).await;
     let t: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert!(approx(&t["cost"], 0.0007), "{}", t["cost"]);
     let attempt = t["spans"].as_array().unwrap().iter().find(|s| s["kind"] == "attempt").unwrap();
@@ -781,14 +781,14 @@ async fn cost_appears_in_traces_and_one_trace_computed_from_the_current_prices()
 
     // A corrected price re-prices history at once: nothing about cost was stored.
     set_prices(&a, Some(4.0), Some(10.0), Some(0.5));
-    let (_, body) = a.get(&format!("/mgmt/v1/audit/traces/{plain}")).await;
+    let (_, body) = a.get(&format!("/api/server/v1/audit/traces/{plain}")).await;
     assert!(approx(&serde_json::from_str::<serde_json::Value>(&body).unwrap()["cost"], (100.0 * 4.0 + 500.0) / 1e6));
 
     // A price that is needed and missing gives null, not 0.
     set_prices(&a, Some(4.0), None, None);
-    let (_, body) = a.get(&format!("/mgmt/v1/audit/traces/{plain}")).await;
+    let (_, body) = a.get(&format!("/api/server/v1/audit/traces/{plain}")).await;
     assert!(serde_json::from_str::<serde_json::Value>(&body).unwrap()["cost"].is_null());
-    let (_, body) = a.get("/mgmt/v1/audit/traces").await;
+    let (_, body) = a.get("/api/server/v1/audit/traces").await;
     assert!(!body.contains("\"cost\":0.0"), "never a made-up zero: {body}");
 }
 
@@ -801,7 +801,7 @@ async fn stats_total_the_cost_with_a_breakdown_by_provider_and_by_day_and_say_wh
     }
     a.chat("please fail").await;
 
-    let (_, body) = a.get("/mgmt/v1/audit/stats").await;
+    let (_, body) = a.get("/api/server/v1/audit/stats").await;
     let v: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert!(approx(&v["cost"], 3.0 * 0.0007), "{}", v["cost"]);
     assert_eq!(v["cost_unknown_requests"], 0);
@@ -819,7 +819,7 @@ async fn stats_total_the_cost_with_a_breakdown_by_provider_and_by_day_and_say_wh
 
     // With a price missing, the figure is unknown (null) and the response says how many requests are why.
     set_prices(&a, Some(2.0), None, None);
-    let (_, body) = a.get("/mgmt/v1/audit/stats").await;
+    let (_, body) = a.get("/api/server/v1/audit/stats").await;
     let v: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert!(v["cost"].is_null() && v["by_provider"][0]["cost"].is_null() && v["by_day"][0]["cost"].is_null());
     assert_eq!(v["cost_unknown_requests"], 3);
@@ -839,26 +839,26 @@ async fn server_api_failures_are_problems_with_a_code_and_a_sentence() {
         assert!(!p.detail.is_empty(), "{code}: a sentence for a person");
     };
     // No token and a wrong token.
-    let r = t.http.get(url("/mgmt/v1/health")).send().await.unwrap();
+    let r = t.http.get(url("/api/server/v1/health")).send().await.unwrap();
     assert_eq!(r.headers()["www-authenticate"], "Bearer");
     check(r, 401, "unauthorized").await;
-    check(t.http.get(url("/mgmt/v1/health")).header("authorization", "Bearer wrong").send().await.unwrap(), 401, "unauthorized").await;
+    check(t.http.get(url("/api/server/v1/health")).header("authorization", "Bearer wrong").send().await.unwrap(), 401, "unauthorized").await;
     // Unknown route and wrong method (after the token check).
-    check(t.http.get(url("/mgmt/v1/nope")).header("authorization", &auth).send().await.unwrap(), 404, "not_found").await;
-    check(t.http.delete(url("/mgmt/v1/health")).header("authorization", &auth).send().await.unwrap(), 405, "method_not_allowed").await;
+    check(t.http.get(url("/api/server/v1/nope")).header("authorization", &auth).send().await.unwrap(), 404, "not_found").await;
+    check(t.http.delete(url("/api/server/v1/health")).header("authorization", &auth).send().await.unwrap(), 405, "method_not_allowed").await;
     // A body that is not JSON.
     check(
-        t.http.put(url("/mgmt/v1/snapshot")).header("authorization", &auth).header("content-type", "application/json").body("nope").send().await.unwrap(),
+        t.http.put(url("/api/server/v1/snapshot")).header("authorization", &auth).header("content-type", "application/json").body("nope").send().await.unwrap(),
         400,
         "bad_request",
     )
     .await;
     // A snapshot the server refuses says why, in detail.
-    let r = t.http.put(url("/mgmt/v1/snapshot")).header("authorization", &auth).json(&serde_json::json!({ "audit_retention_days": 3 })).send().await.unwrap();
+    let r = t.http.put(url("/api/server/v1/snapshot")).header("authorization", &auth).json(&serde_json::json!({ "audit_retention_days": 3 })).send().await.unwrap();
     assert_eq!(r.status(), 400);
     let p: askbar_proto::Problem = r.json().await.unwrap();
     assert_eq!(p.error, "bad_request");
     assert!(p.detail.contains("at least 7"), "{}", p.detail);
     // Unknown provider key target, and the audit endpoints with no store recording.
-    check(t.http.put(url("/mgmt/v1/providers/nope/key")).header("authorization", &auth).json(&serde_json::json!({ "key": "k" })).send().await.unwrap(), 404, "not_found").await;
+    check(t.http.put(url("/api/server/v1/providers/nope/key")).header("authorization", &auth).json(&serde_json::json!({ "key": "k" })).send().await.unwrap(), 404, "not_found").await;
 }

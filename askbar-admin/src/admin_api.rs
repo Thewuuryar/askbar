@@ -297,7 +297,7 @@ pub async fn test_provider(State(state): St, Path(id): Path<String>) -> Result<R
         return Err(err(StatusCode::NOT_FOUND, "No such provider."));
     }
     let (status, body) = link(&state)?
-        .request(reqwest::Method::POST, &format!("/mgmt/v1/providers/{id}/test"), None)
+        .request(reqwest::Method::POST, &format!("{}/providers/{id}/test", askbar_proto::paths::SERVER_V1), None)
         .await
         .map_err(from_push)?;
     if status != 200 {
@@ -322,7 +322,7 @@ async fn revoked_ids(state: &AdminState) -> Vec<String> {
 
 /// The server's clients, with the ones this admin has revoked marked as such.
 async fn clients(state: &AdminState) -> Result<Vec<serde_json::Value>, Failure> {
-    let (status, body) = link(state)?.request(reqwest::Method::GET, "/mgmt/v1/devices", None).await.map_err(from_push)?;
+    let (status, body) = link(state)?.request(reqwest::Method::GET, &askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/devices"), None).await.map_err(from_push)?;
     if status != 200 {
         return Err(err(StatusCode::BAD_GATEWAY, &format!("The server answered {status}.")));
     }
@@ -435,7 +435,7 @@ pub async fn create_pairing(State(state): St, ApiJson(i): ApiJson<PairInput>) ->
     if name.chars().count() > 60 {
         return Err(bad("The client name is too long."));
     }
-    let (status, body) = link(&state)?.request(reqwest::Method::GET, "/mgmt/v1/users", None).await.map_err(from_push)?;
+    let (status, body) = link(&state)?.request(reqwest::Method::GET, &askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/users"), None).await.map_err(from_push)?;
     let user = (status == 200)
         .then(|| serde_json::from_slice::<serde_json::Value>(&body).ok())
         .flatten()
@@ -505,7 +505,7 @@ pub async fn setup_audit_key(State(state): St, ApiJson(b): ApiJson<SetupAuditKey
 /// Query keys the audit endpoints understand; anything else is dropped rather than passed on.
 const AUDIT_QUERY_KEYS: [&str; 5] = ["status", "provider", "before", "limit", "since"];
 
-/// Asks the server's server API for `path` (one of its `/mgmt/v1/audit/...` endpoints) with
+/// Asks the server's server API for `path` (one of its `/api/server/v1/audit/...` endpoints) with
 /// the allowed query parameters, and hands back what it answered. The admin never reads
 /// `audit.db` itself and never pushes anything about it: it only pulls, and only metadata.
 async fn audit_get(state: &AdminState, path: &str, query: &std::collections::HashMap<String, String>) -> Result<Json<serde_json::Value>, Failure> {
@@ -533,7 +533,7 @@ async fn audit_get(state: &AdminState, path: &str, query: &std::collections::Has
 }
 
 pub async fn audit_traces(State(state): St, axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>) -> Result<Json<serde_json::Value>, Failure> {
-    audit_get(&state, "/mgmt/v1/audit/traces", &q).await
+    audit_get(&state, &askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/audit/traces"), &q).await
 }
 
 pub async fn audit_trace(State(state): St, Path(id): Path<String>) -> Result<Json<serde_json::Value>, Failure> {
@@ -541,12 +541,12 @@ pub async fn audit_trace(State(state): St, Path(id): Path<String>) -> Result<Jso
     if id.is_empty() || id.len() > 64 || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
         return Err(err(StatusCode::NOT_FOUND, "No such trace."));
     }
-    audit_get(&state, &format!("/mgmt/v1/audit/traces/{id}"), &Default::default()).await
+    audit_get(&state, &format!("{}/audit/traces/{id}", askbar_proto::paths::SERVER_V1), &Default::default()).await
 }
 
 /// Providers the router found unusable (bad credentials), from the server.
 pub async fn audit_provider_health(State(state): St) -> Result<Json<serde_json::Value>, Failure> {
-    audit_get(&state, "/mgmt/v1/providers/health", &Default::default()).await
+    audit_get(&state, &askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/providers/health"), &Default::default()).await
 }
 
 #[derive(Deserialize)]
@@ -575,7 +575,7 @@ pub async fn audit_access(State(state): St, axum::extract::Query(q): axum::extra
 }
 
 pub async fn audit_stats(State(state): St, axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>) -> Result<Json<serde_json::Value>, Failure> {
-    audit_get(&state, "/mgmt/v1/audit/stats", &q).await
+    audit_get(&state, &askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/audit/stats"), &q).await
 }
 
 // ------------------------------------------------------------------ rotation
@@ -664,7 +664,7 @@ pub async fn open_audit_payloads(State(state): St, Path(span_id): Path<String>, 
         return Err(err(StatusCode::TOO_MANY_REQUESTS, &format!("Too many wrong passphrases. Try again in {} minutes.", (wait + 59) / 60)).retry_after(wait.max(1) as u64));
     }
     let (status, body) = link(&state)?
-        .request(reqwest::Method::GET, &format!("/mgmt/v1/audit/payloads/{span_id}"), None)
+        .request(reqwest::Method::GET, &format!("{}/audit/payloads/{span_id}", askbar_proto::paths::SERVER_V1), None)
         .await
         .map_err(from_push)?;
     match status {
@@ -841,7 +841,7 @@ pub async fn put_settings(State(state): St, ApiJson(s): ApiJson<AdminSettings>) 
 pub async fn put_user_display(State(state): St, Path(user_id): Path<String>, ApiJson(d): ApiJson<DisplaySettings>) -> Result<StatusCode, Failure> {
     check_display(&d)?;
     let value = serde_json::to_string(&d).map_err(|_| bad("Invalid display settings."))?;
-    let (status, body) = link(&state)?.request(reqwest::Method::GET, "/mgmt/v1/users", None).await.map_err(from_push)?;
+    let (status, body) = link(&state)?.request(reqwest::Method::GET, &askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/users"), None).await.map_err(from_push)?;
     let known = status == 200
         && serde_json::from_slice::<serde_json::Value>(&body).ok().is_some_and(|v| v.as_array().is_some_and(|a| a.iter().any(|u| u["id"].as_str() == Some(user_id.as_str()))));
     if !known {
@@ -903,7 +903,7 @@ fn admin_db_copy(db: &crate::AdminDb) -> Result<Vec<u8>, Failure> {
 
 /// The server's backup and the admin's own, in one tar file: `server.db` and `admin.db`.
 pub async fn backup(State(state): St) -> Result<Response, Failure> {
-    let (status, server_db) = link(&state)?.request(reqwest::Method::GET, "/mgmt/v1/backup", None).await.map_err(from_push)?;
+    let (status, server_db) = link(&state)?.request(reqwest::Method::GET, &askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/backup"), None).await.map_err(from_push)?;
     if status != 200 {
         return Err(err(StatusCode::BAD_GATEWAY, &format!("The server answered {status}.")));
     }

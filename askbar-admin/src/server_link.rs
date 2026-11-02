@@ -268,7 +268,7 @@ impl ServerLink {
         let result = async {
             let resp = self
                 .http
-                .put(format!("{}/mgmt/v1/snapshot", self.base))
+                .put(format!("{}{}", self.base, askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/snapshot")))
                 .bearer_auth(&self.token)
                 .json(snapshot)
                 .send()
@@ -313,7 +313,7 @@ impl ServerLink {
 
     /// Hand the server a provider's API key. It is encrypted there; this side never keeps it.
     pub async fn put_key(&self, provider_id: &str, key: &str) -> Result<(), PushError> {
-        let (status, body) = self.request(reqwest::Method::PUT, &format!("/mgmt/v1/providers/{provider_id}/key"), Some(&serde_json::json!({ "key": key }))).await?;
+        let (status, body) = self.request(reqwest::Method::PUT, &format!("{}/providers/{provider_id}/key", askbar_proto::paths::SERVER_V1), Some(&serde_json::json!({ "key": key }))).await?;
         if status == 204 {
             Ok(())
         } else {
@@ -327,7 +327,7 @@ impl ServerLink {
         let was_online = self.server_online();
         let ok = self
             .http
-            .get(format!("{}/mgmt/v1/health", self.base))
+            .get(format!("{}{}", self.base, askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/health")))
             .bearer_auth(&self.token)
             .timeout(Duration::from_secs(3))
             .send()

@@ -294,16 +294,16 @@ async fn the_flag_clears_on_the_next_success_and_when_a_new_key_is_saved_and_the
     let app = server_api::router(s.state.clone(), hash);
     tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
     let http = reqwest::Client::new();
-    let get = || async { http.get(format!("{url}/mgmt/v1/providers/health")).bearer_auth(token).send().await.unwrap().json::<serde_json::Value>().await.unwrap() };
+    let get = || async { http.get(format!("{url}/api/server/v1/providers/health")).bearer_auth(token).send().await.unwrap().json::<serde_json::Value>().await.unwrap() };
     let v = get().await;
     assert_eq!(v["providers"].as_array().unwrap().len(), 1);
     assert_eq!((v["providers"][0]["provider_id"].as_str(), v["providers"][0]["status"].as_str(), v["providers"][0]["error_code"].as_str()), (Some("p1"), Some("auth_failed"), Some("http_401")));
     assert!(!v.to_string().contains("Incorrect API key"), "the provider's own words are not kept: {v}");
-    let r = http.get(format!("{url}/mgmt/v1/providers/health")).send().await.unwrap();
+    let r = http.get(format!("{url}/api/server/v1/providers/health")).send().await.unwrap();
     assert_eq!(r.status(), 401, "needs the server token");
 
     // Saving a new key for p1 clears the flag.
-    let r = http.put(format!("{url}/mgmt/v1/providers/p1/key")).bearer_auth(token).json(&serde_json::json!({ "key": "sk-new" })).send().await.unwrap();
+    let r = http.put(format!("{url}/api/server/v1/providers/p1/key")).bearer_auth(token).json(&serde_json::json!({ "key": "sk-new" })).send().await.unwrap();
     assert_eq!(r.status(), 204);
     assert!(get().await["providers"].as_array().unwrap().is_empty());
 
@@ -410,7 +410,7 @@ async fn switch_off(s: &Stack, aborts: bool) {
     let mut snap = askbar_server::snapshot::current(&s.state.db.lock().unwrap()).unwrap().unwrap();
     snap.kill_switch = true;
     snap.kill_switch_aborts_running = aborts;
-    let r = reqwest::Client::new().put(format!("{url}/mgmt/v1/snapshot")).bearer_auth(token).json(&snap).send().await.unwrap();
+    let r = reqwest::Client::new().put(format!("{url}/api/server/v1/snapshot")).bearer_auth(token).json(&snap).send().await.unwrap();
     assert_eq!(r.status(), 200);
 }
 

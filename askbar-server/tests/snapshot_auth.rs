@@ -77,7 +77,7 @@ impl T {
         }
     }
     async fn push(&self, s: &Snapshot) {
-        let r = self.http.put(format!("{}/mgmt/v1/snapshot", self.server_api)).bearer_auth(SERVER_TOKEN).json(s).send().await.unwrap();
+        let r = self.http.put(format!("{}/api/server/v1/snapshot", self.server_api)).bearer_auth(SERVER_TOKEN).json(s).send().await.unwrap();
         assert_eq!(r.status(), 200);
     }
     async fn pair(&self, code: &str) -> Option<String> {
