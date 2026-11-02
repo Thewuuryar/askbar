@@ -442,6 +442,32 @@ fn start_next(state: &Arc<AppState>, conversation_id: &str) {
     }
 }
 
+/// Deletes a conversation for `user_id`. Its queue is cleared and its running reply is told to
+/// stop first; their rows go with the conversation, and nothing is started in its place.
+/// False if there is no such conversation.
+pub fn delete_conversation(state: &Arc<AppState>, user_id: &str, conversation_id: &str) -> Result<bool, crate::DbError> {
+    let (deleted, active) = {
+        let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+        let active: Vec<_> =
+            db.list_active_generations(user_id)?.into_iter().filter(|g| g.conversation_id == conversation_id).collect();
+        // Queued messages never ran; ending them under this lock keeps the runner from starting one.
+        for g in active.iter().filter(|g| g.status == "queued") {
+            db.finalize_generation(&g.id, "cancelled", "", None, None)?;
+        }
+        (db.delete_conversation(user_id, conversation_id)?, active)
+    };
+    for g in active {
+        let Some(live) = state.generations.get(&g.id) else { continue };
+        if g.status == "queued" {
+            live.finish(Terminal::Done);
+            state.generations.remove(&g.id);
+        } else {
+            live.cancel();
+        }
+    }
+    Ok(deleted)
+}
+
 /// `POST /api/v1/generations/{id}/cancel`: stop a running reply, keeping the text so far.
 /// 204 also when it has already finished; 404 for anyone else's.
 pub async fn cancel(

@@ -800,3 +800,40 @@ async fn cancelling_a_queued_message_leaves_no_trace_in_the_messages() {
     assert_eq!(t.messages().len(), 2, "just the first question and its partial reply");
     assert!(!t.mock.log.lock().unwrap().iter().any(|l| l.contains("never runs")), "never sent upstream");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn deleting_a_conversation_mid_reply_stops_it_and_starts_nothing_queued() {
+    let t = start().await;
+    let http = client_builder().pool_max_idle_per_host(0).build().unwrap();
+    let mut first = t.chat(&http, None, "p1", "please be slow").await.bytes_stream();
+    let got = read_deltas(&mut first, 2).await;
+    let conversation = conversation_id_of(&got);
+    let mut queued = t.chat(&http, Some(&conversation), "p1", "waiting").await.bytes_stream();
+    let mut meta = String::new();
+    while !meta.contains("\n\n") && !meta.contains("\r\n\r\n") {
+        meta.push_str(&String::from_utf8_lossy(&queued.next().await.unwrap().unwrap()));
+    }
+
+    let r = http.delete(format!("http://{}/api/v1/conversations/{conversation}", t.addr)).bearer_auth(&t.token).send().await.unwrap();
+    assert_eq!(r.status(), 204);
+    wait_for_secs(5, "the upstream to see the stop", || {
+        t.mock.log.lock().unwrap().iter().any(|l| l.contains("client disconnected")).then_some(())
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    assert!(t.generations().is_empty(), "no generation rows left: {:?}", t.generations());
+    assert!(t.messages().is_empty(), "no stray messages");
+    assert_eq!(t.mock.log.lock().unwrap().iter().filter(|l| l.starts_with("POST")).count(), 1, "the queued message never started");
+    let (first_id, queued_id) = (generation_id(&got), generation_id(&meta));
+    for id in [first_id, queued_id] {
+        assert!(t.state.generations.get(&id).is_none_or(|l| l.is_finished()), "{id} is not still running");
+    }
+    let list: Vec<askbar_proto::PendingGeneration> = t.get_with(&t.token, "/api/v1/generations?status=running").await.json().await.unwrap();
+    assert!(list.is_empty());
+    // Both attached connections end.
+    let mut rest = String::new();
+    while let Some(Ok(b)) = queued.next().await {
+        rest.push_str(&String::from_utf8_lossy(&b));
+    }
+    assert!(rest.contains("event: done"));
+}

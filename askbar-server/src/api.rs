@@ -99,8 +99,7 @@ pub async fn delete_conversation(
     Extension(auth): Extension<DeviceAuth>,
     Path(id): Path<String>,
 ) -> StatusCode {
-    let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
-    match db.delete_conversation(&auth.user_id, &id) {
+    match crate::generation::delete_conversation(&state, &auth.user_id, &id) {
         Ok(false) => StatusCode::NOT_FOUND,
         Ok(true) => StatusCode::NO_CONTENT,
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
