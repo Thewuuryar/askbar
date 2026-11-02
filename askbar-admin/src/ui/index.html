@@ -17,6 +17,22 @@
       <button type="submit">Set password</button>
       <p id="setup-password-error" class="error" hidden></p>
     </form>
+    <form id="setup-audit-form" hidden>
+      <h2>Choose the audit passphrase</h2>
+      <p class="hint">Prompts, replies and provider errors are recorded for the Audit tab, sealed so that the server cannot read them. Only this passphrase opens them. At least 20 characters.</p>
+      <p class="hint"><strong>It is never stored and cannot be recovered.</strong> If it is lost, the recorded content stays unreadable for good; the metadata (times, providers, tokens, errors) stays available.</p>
+      <label>Passphrase <input id="setup-audit" type="password" autocomplete="new-password" minlength="20" required></label>
+      <label>Repeat passphrase <input id="setup-audit2" type="password" autocomplete="new-password" minlength="20" required></label>
+      <label class="check"><input id="setup-audit-stored" type="checkbox" required> I stored this passphrase; it cannot be recovered</label>
+      <button type="submit">Create the key</button>
+      <p id="setup-audit-error" class="error" hidden></p>
+    </form>
+    <div id="setup-audit-done" hidden>
+      <h2>The audit key is ready</h2>
+      <p>Key ID: <code id="setup-audit-keyid"></code></p>
+      <p class="hint">The key ID names the key; it is safe to write down next to the passphrase. Changing the passphrase later means rotating the key (Settings).</p>
+      <button id="setup-audit-continue" type="button">Continue</button>
+    </div>
   </main>
 
   <main id="login" class="narrow" hidden>

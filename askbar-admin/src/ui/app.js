@@ -89,8 +89,43 @@
     let signedIn = true;
     try { await api('GET', '/admin/session'); } catch (_) { signedIn = false; }
     if (!signedIn) return showLogin();
+    // The audit passphrase is part of setup: without a key the server records nothing it may keep,
+    // and refuses to start replies. An install from before audit keys is asked on its next visit.
+    if (status.audit_key_set === false) return showAuditSetup();
     showApp();
   }
+
+  function showAuditSetup() {
+    hideAll();
+    show($('setup'), true);
+    show($('setup-password-form'), false);
+    show($('setup-audit-done'), false);
+    show($('setup-audit-form'), true);
+    $('setup-audit').focus();
+  }
+
+  $('setup-audit-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const err = $('setup-audit-error');
+    show(err, false);
+    const fail = (m) => { err.textContent = m; show(err, true); };
+    const pass = $('setup-audit').value;
+    if (pass !== $('setup-audit2').value) return fail('The two passphrases do not match.');
+    if ([...pass].length < 20) return fail('The passphrase must be at least 20 characters.');
+    if (!$('setup-audit-stored').checked) return fail('Confirm that you stored the passphrase: it cannot be recovered.');
+    try {
+      const r = await api('POST', '/admin/api/setup/audit-key', { passphrase: pass, confirm: $('setup-audit2').value });
+      $('setup-audit').value = '';
+      $('setup-audit2').value = '';
+      $('setup-audit-stored').checked = false;
+      $('setup-audit-keyid').textContent = r.key_id;
+      show($('setup-audit-form'), false);
+      show($('setup-audit-done'), true);
+    } catch (ex) {
+      fail(ex.message);
+    }
+  });
+  $('setup-audit-continue').addEventListener('click', () => route());
 
   $('setup-password-form').addEventListener('submit', async (e) => {
     e.preventDefault();

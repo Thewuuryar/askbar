@@ -85,7 +85,8 @@ async function waitForPort(port) {
     assert.equal(await page.isHidden('#login'), true);
     assert.equal(await page.isHidden('#app'), true);
   });
-  await step('setup: the password must match and be long enough, then the app opens (no key step)', async () => {
+  const AUDIT_PASS = 'correct horse battery staple 42';
+  await step('setup: the password must match and be long enough, then the audit passphrase step opens', async () => {
     await page.fill('#setup-password', PASSWORD);
     await page.fill('#setup-password2', PASSWORD + 'x');
     await page.click('#setup-password-form button[type=submit]');
@@ -93,6 +94,42 @@ async function waitForPort(port) {
     assert.match(await page.innerText('#setup-password-error'), /do not match/);
     await page.fill('#setup-password2', PASSWORD);
     await page.click('#setup-password-form button[type=submit]');
+    await page.waitForSelector('#setup-audit-form:not([hidden])');
+    assert.equal(await page.isHidden('#app'), true, 'setup does not finish at the password');
+    assert.equal(await page.isHidden('#setup-password-form'), true);
+    assert.equal(await page.getAttribute('#setup-audit', 'type'), 'password');
+    assert.match(await page.innerText('#setup-audit-form'), /cannot be recovered/);
+  });
+  await step('setup: the audit passphrase must match, be 20+ characters and be confirmed as stored', async () => {
+    await page.evaluate(() => document.getElementById('setup-audit-form').noValidate = true);
+    await page.fill('#setup-audit', AUDIT_PASS);
+    await page.fill('#setup-audit2', AUDIT_PASS + 'x');
+    await page.check('#setup-audit-stored');
+    await page.click('#setup-audit-form button[type=submit]');
+    assert.match(await page.innerText('#setup-audit-error'), /do not match/);
+    await page.fill('#setup-audit', 'too short');
+    await page.fill('#setup-audit2', 'too short');
+    await page.click('#setup-audit-form button[type=submit]');
+    assert.match(await page.innerText('#setup-audit-error'), /at least 20/);
+    // Without the confirmation nothing is created, even with a good passphrase.
+    await page.fill('#setup-audit', AUDIT_PASS);
+    await page.fill('#setup-audit2', AUDIT_PASS);
+    await page.uncheck('#setup-audit-stored');
+    await page.click('#setup-audit-form button[type=submit]');
+    assert.match(await page.innerText('#setup-audit-error'), /stored the passphrase/);
+    assert.equal(await page.isHidden('#app'), true);
+    const st = await (await fetch(`http://127.0.0.1:${adminPort}/admin/api/setup-status`, { headers: { 'x-askbar-admin': '1' } })).json();
+    assert.equal(st.audit_key_set, false, 'no key yet');
+  });
+  await step('setup: saving shows the key id, then Continue opens the app', async () => {
+    await page.check('#setup-audit-stored');
+    await page.click('#setup-audit-form button[type=submit]');
+    await page.waitForSelector('#setup-audit-done:not([hidden])');
+    const keyId = await page.innerText('#setup-audit-keyid');
+    assert.match(keyId, /^[0-9a-f]{16}$/);
+    assert.equal(await page.inputValue('#setup-audit').catch(() => ''), '', 'the passphrase field is cleared');
+    assert.equal((await page.content()).includes(AUDIT_PASS), false, 'the passphrase is not left in the page');
+    await page.click('#setup-audit-continue');
     await page.waitForSelector('#app:not([hidden])');
     assert.equal(await page.isHidden('#setup'), true);
     assert.match(await page.innerText('#providers'), /No providers yet/);
