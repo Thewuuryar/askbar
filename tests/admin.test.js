@@ -247,6 +247,16 @@ async function waitForPort(port) {
     assert.match(await page.innerText('#provider-error'), /already exists/);
     await page.click('#provider-cancel');
   });
+  await step('a refusal reaches the page as a problem: a stable code and a sentence', async () => {
+    const r = await page.evaluate(async () => {
+      const res = await fetch('/admin/api/providers/no-such-provider/test', { method: 'POST', headers: { 'X-Askbar-Admin': '1' } });
+      return { status: res.status, type: res.headers.get('content-type'), body: await res.json() };
+    });
+    assert.equal(r.status, 404);
+    assert.equal(r.type, 'application/problem+json');
+    assert.equal(r.body.error, 'not_found');
+    assert.ok(r.body.detail && r.body.title && r.body.type === 'urn:askbar:problem:not_found', JSON.stringify(r.body));
+  });
   await step('the CLIProxyAPI preset fills type and base URL', async () => {
     await page.click('#add-cpa');
     assert.equal(await page.inputValue('#p-type'), 'openai');
