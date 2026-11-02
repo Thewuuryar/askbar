@@ -3,7 +3,7 @@
 //! This module holds the in-memory registry: each running generation has a `Live` that buffers
 //! its deltas so a client can attach, drop and attach again without losing or repeating text.
 
-use crate::llm::{stream_chat, ChatMessage, StreamOutcome};
+use crate::llm::{stream_chat_report, ChatMessage, StreamOutcome, Usage};
 use crate::auth::DeviceAuth;
 use crate::chat::{sse_event, sse_event_with_id};
 use crate::db::NewGeneration;
@@ -269,8 +269,12 @@ struct Finisher {
     live: Arc<Live>,
     id: String,
     user_id: String,
+    device_id: Option<String>,
+    provider_id: String,
     conversation_id: String,
     text: String,
+    /// What the provider (or an estimate) says the reply used; recorded when the row ends.
+    usage: Option<Usage>,
     saved: bool,
     /// Progress is flushed to the row about once a second, or every 2 KB.
     last_flush: Instant,
@@ -313,6 +317,22 @@ impl Finisher {
             db.add_message(&self.user_id, &self.conversation_id, "assistant", &self.text).ok()
         };
         let _ = db.finalize_generation(&self.id, status, &self.text, error, message_id.as_deref());
+        // One usage row per generation that has numbers, whatever way it ended.
+        if let Some(u) = self.usage {
+            let _ = db.conn().execute(
+                "INSERT INTO token_usage (id, user_id, device_id, provider_id, tokens_in, tokens_out, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                rusqlite::params![
+                    crate::ids::new_id(),
+                    self.user_id,
+                    self.device_id,
+                    self.provider_id,
+                    u.input.unwrap_or(0) as i64,
+                    u.output.unwrap_or(0) as i64,
+                    crate::auth::now()
+                ],
+            );
+        }
     }
 
     /// Saves the reply, then tells subscribers, so a client that has seen the end can read the message.
@@ -417,13 +437,23 @@ pub fn submit(state: &Arc<AppState>, s: Submit) -> Result<Submitted, SubmitError
     let live = Live::new();
     state.generations.insert(&id, live.clone());
     drop(db);
-    spawn_run(state, &id, &s.user_id, &conversation_id, &s.provider_id, timeout, live.clone());
+    spawn_run(state, &id, &s.user_id, Some(&s.device_id), &conversation_id, &s.provider_id, timeout, live.clone());
     Ok(Submitted { generation_id: id, conversation_id, live, queued: false })
 }
 
 /// Runs generation `id` as a task that does not depend on any client. The provider, system prompt
 /// and history are read when it starts, so a message that waited sees the replies before it.
-fn spawn_run(state: &Arc<AppState>, id: &str, user_id: &str, conversation_id: &str, provider_id: &str, timeout: Duration, live: Arc<Live>) {
+#[allow(clippy::too_many_arguments)]
+fn spawn_run(
+    state: &Arc<AppState>,
+    id: &str,
+    user_id: &str,
+    device_id: Option<&str>,
+    conversation_id: &str,
+    provider_id: &str,
+    timeout: Duration,
+    live: Arc<Live>,
+) {
     let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
     live.set_cancel(cancel_tx);
     let mut fin = Finisher {
@@ -431,8 +461,11 @@ fn spawn_run(state: &Arc<AppState>, id: &str, user_id: &str, conversation_id: &s
         live,
         id: id.to_string(),
         user_id: user_id.to_string(),
+        device_id: device_id.map(str::to_string),
+        provider_id: provider_id.to_string(),
         conversation_id: conversation_id.to_string(),
         text: String::new(),
+        usage: None,
         saved: false,
         last_flush: Instant::now(),
         unflushed: 0,
@@ -456,19 +489,26 @@ fn spawn_run(state: &Arc<AppState>, id: &str, user_id: &str, conversation_id: &s
         // Race the request against the deadline. Dropping the request on expiry closes the
         // upstream connection; the text that had arrived is already in `fin`.
         let result = {
-            let run = stream_chat(&state.http, &provider, &system, &history, cancel_rx, |delta| fin.push(delta));
+            let run = stream_chat_report(&state.http, &provider, &system, &history, cancel_rx, |delta| fin.push(delta));
             tokio::pin!(run);
             tokio::select! {
                 r = &mut run => Some(r),
                 _ = tokio::time::sleep(timeout) => None,
             }
         };
-        fin.finish(match result {
-            Some(Ok(StreamOutcome::Completed)) => Outcome::Done,
-            Some(Ok(StreamOutcome::Cancelled)) => Outcome::Cancelled,
-            Some(Err(e)) => Outcome::Error(e.to_string()),
-            None => Outcome::TimedOut(timed_out_message(timeout)),
-        });
+        let (outcome, usage) = match result {
+            Some(Ok(report)) => (
+                match report.outcome {
+                    StreamOutcome::Completed => Outcome::Done,
+                    StreamOutcome::Cancelled => Outcome::Cancelled,
+                },
+                report.usage,
+            ),
+            Some(Err(e)) => (Outcome::Error(e.error.to_string()), e.report.usage),
+            None => (Outcome::TimedOut(timed_out_message(timeout)), None),
+        };
+        fin.usage = usage;
+        fin.finish(outcome);
     });
 }
 
@@ -504,7 +544,7 @@ fn start_next(state: &Arc<AppState>, conversation_id: &str) {
                 state.generations.insert(&next.id, l.clone());
                 l
             });
-            spawn_run(state, &next.id, &next.user_id, &next.conversation_id, next.provider_id.as_deref().unwrap_or(""), timeout, live);
+            spawn_run(state, &next.id, &next.user_id, next.device_id.as_deref(), &next.conversation_id, next.provider_id.as_deref().unwrap_or(""), timeout, live);
         }
         None => {
             // Try the one after it.

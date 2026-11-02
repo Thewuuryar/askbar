@@ -479,3 +479,56 @@ async fn taking_a_backup_leaves_no_temporary_file_behind() {
     }
     assert!(leftovers() <= before, "backup files were left in the temp directory");
 }
+
+#[tokio::test]
+async fn a_generation_with_the_mocks_usage_adds_to_the_overview_totals() {
+    use reqwest::Method as M;
+    use std::io::{BufRead, BufReader};
+    use std::process::{Command, Stdio};
+    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let script = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/mock_llm.py");
+    let mut child = Command::new("python3").args(["-u", script, &port.to_string()]).stdout(Stdio::piped()).spawn().expect("python3 is needed");
+    let mut out = BufReader::new(child.stdout.take().unwrap());
+    let mut first = String::new();
+    out.read_line(&mut first).unwrap(); // "mock LLM on ..."
+
+    let s = start_with_state().await;
+    let (user, device) = {
+        let db = s.state.db.lock().unwrap();
+        askbar_server::testing::add_provider(&db, askbar_server::testing::provider("p1", "mock", &format!("http://127.0.0.1:{port}/v1"), "m"));
+        askbar_server::testing::store_key(&db, &s.state.secrets(), "p1", "sk-test");
+        let user: String = db.conn().query_row("SELECT id FROM users", [], |r| r.get(0)).unwrap();
+        let code = askbar_server::testing::add_pair_code(&db, &user, "laptop");
+        askbar_server::auth::redeem_pair_code(&db, &code).unwrap().unwrap();
+        let device: String = db.conn().query_row("SELECT id FROM devices", [], |r| r.get(0)).unwrap();
+        (user, device)
+    };
+    let sub = askbar_server::generation::submit(
+        &s.state,
+        askbar_server::generation::Submit {
+            user_id: user,
+            device_id: device,
+            conversation_id: None,
+            provider_id: "p1".into(),
+            prompt: "hello".into(),
+            client_request_id: None,
+        },
+    )
+    .ok()
+    .expect("the generation starts");
+    // Wait for it to end and its usage to be recorded.
+    for _ in 0..200 {
+        if s.state.db.lock().unwrap().conn().query_row("SELECT COUNT(*) FROM token_usage", [], |r| r.get::<_, i64>(0)).unwrap() > 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    let _ = sub;
+
+    let (st, body) = s.call(M::GET, "/mgmt/v1/usage", None).await;
+    let u: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(st, 200);
+    assert_eq!((&u["tokens_in"], &u["tokens_out"]), (&json!(100), &json!(50)), "the totals are the mock's usage chunk");
+    let _ = child.kill();
+    let _ = child.wait();
+}

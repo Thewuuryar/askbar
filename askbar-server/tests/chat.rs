@@ -964,3 +964,24 @@ async fn a_generation_that_runs_out_of_time_keeps_its_text_reports_it_and_the_qu
     let roles: Vec<String> = t.messages().into_iter().map(|m| m.0).collect();
     assert_eq!(roles, ["user", "assistant", "user", "assistant"]);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_finished_chat_records_one_token_usage_row_and_a_failed_one_none() {
+    let t = start().await;
+    let http = client();
+    t.chat(&http, None, "p1", "Hello there").await.text().await.unwrap();
+    let rows = |t: &T| -> Vec<(String, Option<String>, Option<String>, i64, i64)> {
+        let db = t.state.db.lock().unwrap();
+        let mut stmt = db.conn().prepare("SELECT user_id, device_id, provider_id, tokens_in, tokens_out FROM token_usage").unwrap();
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))).unwrap().map(Result::unwrap).collect();
+        rows
+    };
+    let r = rows(&t);
+    assert_eq!(r.len(), 1);
+    let device: String = t.state.db.lock().unwrap().conn().query_row("SELECT id FROM devices", [], |r| r.get(0)).unwrap();
+    assert_eq!((r[0].1.as_deref(), r[0].2.as_deref(), r[0].3, r[0].4), (Some(device.as_str()), Some("p1"), 100, 50), "the mock's usage chunk");
+    assert_eq!(r[0].0, t.user_id());
+
+    t.chat(&http, None, "p1", "please fail").await.text().await.unwrap();
+    assert_eq!(rows(&t).len(), 1, "a request that failed before any reply has no usage");
+}
