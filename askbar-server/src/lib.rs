@@ -5,6 +5,7 @@ pub mod auth;
 pub mod backup;
 pub mod chat;
 pub mod db;
+pub mod generation;
 pub mod ids;
 pub mod llm;
 pub mod mgmt;
@@ -38,11 +39,13 @@ pub struct AppState {
     pub http: llm::HttpClient,
     /// Oldest client version the API still serves.
     pub min_client: String,
+    /// Running generations and their buffered output.
+    pub generations: generation::Generations,
 }
 
 impl AppState {
     pub fn new(db: Db, secrets: Secrets, min_client: &str) -> Arc<AppState> {
-        Arc::new(AppState { db: Mutex::new(db), secrets: Arc::new(secrets), http: llm::http_client(), min_client: min_client.to_string() })
+        Arc::new(AppState { db: Mutex::new(db), secrets: Arc::new(secrets), http: llm::http_client(), min_client: min_client.to_string(), generations: Default::default() })
     }
 
     pub fn secrets(&self) -> Arc<Secrets> {
