@@ -31,7 +31,7 @@ use secrets::Secrets;
 use std::sync::{Arc, Mutex};
 
 pub const API_VERSION: u32 = 1;
-pub const MIN_CLIENT: &str = "0.3.0";
+pub const MIN_CLIENT: &str = "0.4.0";
 
 pub struct AppState {
     pub db: Mutex<Db>,

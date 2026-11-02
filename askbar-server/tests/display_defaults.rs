@@ -36,7 +36,7 @@ impl T {
             .http
             .get(format!("{}/api/v1/me/display-defaults", self.api))
             .bearer_auth(token)
-            .header("x-askbar-client-version", "0.3.0")
+            .header("x-askbar-client-version", "0.4.0")
             .send()
             .await
             .unwrap();

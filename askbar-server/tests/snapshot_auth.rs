@@ -81,7 +81,7 @@ impl T {
         let r = self
             .http
             .post(format!("{}/api/v1/pair", self.api))
-            .header("x-askbar-client-version", "0.3.0")
+            .header("x-askbar-client-version", "0.4.0")
             .json(&json!({ "code": code }))
             .send()
             .await
@@ -93,7 +93,7 @@ impl T {
         }
     }
     async fn whoami(&self, token: &str) -> u16 {
-        self.http.get(format!("{}/api/v1/whoami", self.api)).bearer_auth(token).header("x-askbar-client-version", "0.3.0").send().await.unwrap().status().as_u16()
+        self.http.get(format!("{}/api/v1/whoami", self.api)).bearer_auth(token).header("x-askbar-client-version", "0.4.0").send().await.unwrap().status().as_u16()
     }
     fn device_id(&self) -> String {
         self.state.db.lock().unwrap().conn().query_row("SELECT id FROM devices LIMIT 1", [], |r| r.get(0)).unwrap()

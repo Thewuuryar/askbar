@@ -17,7 +17,7 @@ cd "$(dirname "$0")/.."
 
 URL=""
 PAIRING="${ASKBAR_SMOKE_PAIRING:-}"
-CLIENT_VERSION="0.3.0"
+CLIENT_VERSION="0.4.0"
 while [ $# -gt 0 ]; do
   case "$1" in
     --url) URL="${2:?--url needs a value}"; shift 2 ;;

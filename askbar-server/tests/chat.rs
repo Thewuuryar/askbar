@@ -245,7 +245,7 @@ async fn bad_requests_are_plain_http_errors() {
 
 fn client_builder() -> reqwest::ClientBuilder {
     let mut h = reqwest::header::HeaderMap::new();
-    h.insert(askbar_proto::CLIENT_VERSION_HEADER, "0.3.0".parse().unwrap());
+    h.insert(askbar_proto::CLIENT_VERSION_HEADER, "0.4.0".parse().unwrap());
     reqwest::Client::builder().default_headers(h)
 }
 
@@ -324,7 +324,7 @@ async fn the_snapshots_system_prompt_is_sent_with_the_next_message_and_never_ser
     let settings = http
         .get(format!("http://{}/api/v1/settings", t.addr))
         .bearer_auth(&t.token)
-        .header("x-askbar-client-version", "0.3.0")
+        .header("x-askbar-client-version", "0.4.0")
         .send()
         .await
         .unwrap()
