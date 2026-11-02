@@ -172,3 +172,73 @@ async fn anthropic_usage_from_message_start_and_message_delta_reaches_the_report
     assert_eq!(r.usage.unwrap().cache_read, Some(64));
     assert!(r.time_to_first_token.is_some());
 }
+
+/// A provider that answers every request with `body` (an SSE stream) and nothing else.
+async fn canned_provider(body: &'static str) -> Provider {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = l.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut sock, _)) = l.accept().await else { return };
+            tokio::spawn(async move {
+                let mut buf = vec![0u8; 65536];
+                let mut seen = Vec::new();
+                while !seen.windows(4).any(|w| w == b"\r\n\r\n") {
+                    match sock.read(&mut buf).await {
+                        Ok(0) | Err(_) => return,
+                        Ok(n) => seen.extend_from_slice(&buf[..n]),
+                    }
+                }
+                // The body's length is not needed to answer; read what is there and reply.
+                let head = format!("HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n", body.len());
+                let _ = sock.write_all(head.as_bytes()).await;
+                let _ = sock.write_all(body.as_bytes()).await;
+            });
+        }
+    });
+    Provider {
+        name: "canned".into(),
+        kind: ProviderKind::OpenAi,
+        base_url: format!("http://127.0.0.1:{port}/v1"),
+        api_key: "k".into(),
+        api_key_env: String::new(),
+        model: "m".into(),
+        max_tokens: None,
+        temperature: None,
+        headers: Default::default(),
+    }
+}
+
+#[tokio::test]
+async fn a_completed_reply_with_no_usage_gets_a_marked_estimate() {
+    // 16 characters of reply; system "abcd" (4) + question "efghijkl" (8) = 12 characters sent.
+    let p = canned_provider(
+        "data: {\"choices\":[{\"delta\":{\"content\":\"0123456789\"}}]}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"abcdef\"}}]}\n\ndata: [DONE]\n\n",
+    )
+    .await;
+    let (_k, cancel) = oneshot::channel::<()>();
+    let r = stream_chat_report(&http_client(), &p, "abcd", &[ChatMessage::new("user", "efghijkl")], cancel, |_| {}).await.unwrap();
+    assert_eq!(r.usage, Some(Usage { input: Some(3), output: Some(4), cache_read: None, cache_write: None, estimated: true }));
+}
+
+#[tokio::test]
+async fn real_usage_is_never_overwritten_by_the_estimate_and_failures_get_none() {
+    let p = canned_provider(
+        "data: {\"choices\":[{\"delta\":{\"content\":\"hello there\"}}]}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":9,\"completion_tokens\":2}}\n\ndata: [DONE]\n\n",
+    )
+    .await;
+    let (_k, cancel) = oneshot::channel::<()>();
+    let r = stream_chat_report(&http_client(), &p, "a long system prompt that would estimate high", &[ChatMessage::new("user", "q")], cancel, |_| {})
+        .await
+        .unwrap();
+    assert_eq!(r.usage, Some(Usage { input: Some(9), output: Some(2), cache_read: None, cache_write: None, estimated: false }));
+
+    // A failed request has no usage and no estimate.
+    let mock = start_mock();
+    let (_k, cancel) = oneshot::channel::<()>();
+    let e = stream_chat_report(&http_client(), &provider(&mock, ProviderKind::OpenAi), "", &[ChatMessage::new("user", "please fail")], cancel, |_| {})
+        .await
+        .unwrap_err();
+    assert_eq!(e.report.usage, None);
+}

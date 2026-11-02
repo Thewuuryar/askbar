@@ -386,6 +386,12 @@ pub fn extract_api_error(body: &str) -> String {
 
 // ------------------------------------------------------------ streaming
 
+/// A rough token count for `chars` characters of text: one token per four characters, rounded up.
+/// Only used when a provider reports nothing.
+pub fn estimate_tokens(chars: usize) -> u64 {
+    chars.div_ceil(4) as u64
+}
+
 /// Stream one assistant reply, calling `on_delta` for each piece of text.
 ///
 /// Resolving `cancel` (by sending on, or dropping, its sender) stops the
@@ -430,11 +436,39 @@ where
         retry_after: None,
         finish_reason: None,
     };
-    let result = run_request(client, provider, system, messages, cancel, on_delta, started, &mut report).await;
+    // For the estimate if the provider reports no usage: what was sent, and what came back.
+    let sent_chars = system.chars().count() + normalize(messages).iter().map(|m| m.content.chars().count()).sum::<usize>();
+    let mut reply_chars = 0usize;
+    let mut on_delta = on_delta;
+    let result = run_request(
+        client,
+        provider,
+        system,
+        messages,
+        cancel,
+        |d: &str| {
+            reply_chars += d.chars().count();
+            on_delta(d)
+        },
+        started,
+        &mut report,
+    )
+    .await;
     report.total = started.elapsed();
     match result {
         Ok(outcome) => {
             report.outcome = outcome;
+            // A reply that finished with no counts from the provider gets an estimate, marked as
+            // one. Counts the provider did give are never replaced.
+            if outcome == StreamOutcome::Completed && report.usage.is_none() {
+                report.usage = Some(Usage {
+                    input: Some(estimate_tokens(sent_chars)),
+                    output: Some(estimate_tokens(reply_chars)),
+                    cache_read: None,
+                    cache_write: None,
+                    estimated: true,
+                });
+            }
             Ok(report)
         }
         Err(error) => Err(ReportedError { error, report }),
@@ -643,6 +677,11 @@ mod tests {
         // Providers that put `"usage": null` on every chunk, and ordinary text chunks, are untouched.
         assert_eq!(decode_event(kind, &ev(r#"{"choices":[{"delta":{"content":"hi"}}],"usage":null}"#)).unwrap(), Step::Delta("hi".into()));
         assert_eq!(decode_event(kind, &ev(r#"{"choices":[{"delta":{"role":"assistant"}}],"usage":null}"#)).unwrap(), Step::Skip);
+    }
+
+    #[test]
+    fn the_estimate_is_one_token_per_four_characters_rounded_up() {
+        assert_eq!([0, 1, 4, 5, 400].map(estimate_tokens), [0, 1, 1, 2, 100]);
     }
 
     #[test]
