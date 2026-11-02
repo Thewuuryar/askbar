@@ -282,6 +282,8 @@ pub enum SubmitError {
     NotFound,
     /// The conversation already has `MAX_QUEUED` messages waiting.
     QueueFull,
+    /// The administrator has switched generations off.
+    KillSwitch,
     /// The audit writer is not keeping up: nothing new starts until it catches up.
     AuditBacklog,
     /// The administrator has not made an audit key yet, so nothing could be kept sealed.
@@ -298,6 +300,9 @@ impl IntoResponse for SubmitError {
             SubmitError::NotFound => StatusCode::NOT_FOUND.into_response(),
             SubmitError::QueueFull => StatusCode::CONFLICT.into_response(),
             SubmitError::Internal => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+            SubmitError::KillSwitch => {
+                (StatusCode::SERVICE_UNAVAILABLE, axum::Json(serde_json::json!({ "error": "kill_switch" }))).into_response()
+            }
             SubmitError::AuditKeyMissing => (
                 StatusCode::SERVICE_UNAVAILABLE,
                 axum::Json(serde_json::json!({ "error": "audit_key_missing" })),
@@ -562,6 +567,14 @@ fn stamp_deadline(db: &crate::Db, id: &str, timeout: Duration) {
     let _ = db.conn().execute("UPDATE generations SET deadline_at = started_at + ?2 WHERE id = ?1", rusqlite::params![id, secs as i64]);
 }
 
+/// Records that the kill switch was off for this generation.
+fn pass_kill_switch_gate(state: &AppState, generation_id: &str, s: &Submit) {
+    let span = state.audit.start_span(
+        SpanStart::new(generation_id, Kind::Gate, "kill_switch").who(&s.user_id, Some(&s.device_id)).attrs(&serde_json::json!({ "kill_switch": false })),
+    );
+    state.audit.finish_span(SpanFinish::new(&span, "done"));
+}
+
 /// Starts a send: runs it now if its conversation is idle, else queues it. Everything that can
 /// fail with a plain HTTP status happens here, before any stream starts.
 pub fn submit(state: &Arc<AppState>, s: Submit) -> Result<Submitted, SubmitError> {
@@ -574,9 +587,21 @@ pub fn submit(state: &Arc<AppState>, s: Submit) -> Result<Submitted, SubmitError
         SubmitError::Internal
     }
     store::load_provider(&db, &state.secrets(), &s.provider_id).map_err(internal)?.ok_or(SubmitError::NotFound)?;
+    let snapshot = crate::snapshot::current(&db).map_err(internal)?;
     // Nothing runs unless what it says can be kept sealed: no audit key, no generation.
-    if crate::snapshot::current(&db).map_err(internal)?.and_then(|snap| snap.audit_public_key).is_none() {
+    if snapshot.as_ref().and_then(|snap| snap.audit_public_key.as_ref()).is_none() {
         return Err(SubmitError::AuditKeyMissing);
+    }
+    // The kill switch gate. It leaves a span either way: a refusal has no generation, so it gets a
+    // trace of its own; a pass goes into the trace of the generation it lets through (below).
+    let kill_switch = snapshot.as_ref().is_some_and(|snap| snap.kill_switch);
+    if kill_switch {
+        let trace = crate::ids::new_id();
+        let span = state.audit.start_span(
+            SpanStart::new(&trace, Kind::Gate, "kill_switch").who(&s.user_id, Some(&s.device_id)).attrs(&serde_json::json!({ "kill_switch": true })),
+        );
+        state.audit.finish_span(SpanFinish::new(&span, "blocked").error_code("kill_switch"));
+        return Err(SubmitError::KillSwitch);
     }
     let (conversation_id, busy) = match &s.conversation_id {
         Some(id) => {
@@ -603,6 +628,7 @@ pub fn submit(state: &Arc<AppState>, s: Submit) -> Result<Submitted, SubmitError
         }
         // Queued: the question is stored when the message starts, not now.
         let id = db.create_generation(&new("queued", None)).map_err(internal)?;
+        pass_kill_switch_gate(state, &id, &s);
         let live = Live::new();
         live.set_queue_span(state.audit.start_span(SpanStart::new(&id, Kind::Gate, "queue").who(&s.user_id, Some(&s.device_id))));
         state.generations.insert(&id, live.clone());
@@ -613,6 +639,7 @@ pub fn submit(state: &Arc<AppState>, s: Submit) -> Result<Submitted, SubmitError
     let id = db.create_generation(&new("running", Some(&user_message_id))).map_err(internal)?;
     let timeout = timeout_now(state, &db);
     stamp_deadline(&db, &id, timeout);
+    pass_kill_switch_gate(state, &id, &s);
     let live = Live::new();
     state.generations.insert(&id, live.clone());
     drop(db);

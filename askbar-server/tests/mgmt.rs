@@ -661,9 +661,10 @@ async fn one_trace_returns_all_its_spans_and_unknown_ones_are_404() {
     assert_metadata_only(&body);
     let v: serde_json::Value = serde_json::from_str(&body).unwrap();
     let kinds: Vec<&str> = v["spans"].as_array().unwrap().iter().map(|s| s["kind"].as_str().unwrap()).collect();
-    assert_eq!(kinds, ["turn", "attempt"]);
-    assert_eq!(v["spans"][1]["parent_id"], v["spans"][0]["id"]);
-    assert_eq!(v["spans"][1]["attrs"]["http_status"], 200);
+    assert_eq!(kinds, ["gate", "turn", "attempt"], "the kill switch gate it passed, then the turn and its attempt");
+    assert_eq!(v["spans"][0]["name"], "kill_switch");
+    assert_eq!(v["spans"][2]["parent_id"], v["spans"][1]["id"]);
+    assert_eq!(v["spans"][2]["attrs"]["http_status"], 200);
     assert_eq!(a.get("/mgmt/v1/audit/traces/no-such-trace").await.0, 404);
 }
 

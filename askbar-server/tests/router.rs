@@ -187,7 +187,6 @@ async fn a_metered_provider_is_skipped_as_a_fallback_unless_it_allows_it() {
 }
 
 #[tokio::test]
-#[ignore = "enabled in 6.10"]
 async fn the_kill_switch_refuses_new_generations_with_503() {
     let s = stack("m", "m", serde_json::json!({})).await;
     assert!(is_done(&s.run("works before").await));
@@ -336,4 +335,33 @@ async fn a_subscriber_who_already_has_text_is_not_sent_the_announcements_again()
     let rest: Vec<GenEvent> = sub.live.subscribe(3).collect().await;
     assert!(rest.iter().all(|e| !matches!(e, GenEvent::Provider { .. })), "{rest:?}");
     assert_eq!(rest.len(), all.len() - 1 - 3, "everything after delta 3, without the announcement");
+}
+
+#[tokio::test]
+async fn the_kill_switch_gate_leaves_a_span_whether_it_lets_a_generation_through_or_not() {
+    let s = stack("m", "m", serde_json::json!({})).await;
+    let sub = s.submit("works").ok().expect("accepted");
+    let trace = sub.generation_id.clone();
+    let _: Vec<GenEvent> = sub.live.subscribe(0).collect().await;
+    askbar_server::testing::update_snapshot(&s.state.db.lock().unwrap(), |snap| snap.kill_switch = true);
+    assert_eq!(s.submit("blocked").err(), Some(SubmitError::KillSwitch));
+    s.state.audit.flush().await;
+
+    let db = rusqlite::Connection::open(s._dir.join("audit.db")).unwrap();
+    let gates: Vec<(String, String, Option<String>, String)> = db
+        .prepare("SELECT trace_id, status, error_code, attrs_json FROM spans WHERE kind = 'gate' AND name = 'kill_switch' ORDER BY id")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(gates.len(), 2);
+    assert_eq!((gates[0].0.as_str(), gates[0].1.as_str(), gates[0].2.as_deref()), (trace.as_str(), "done", None), "passed, inside the generation's own trace");
+    assert!(gates[0].3.contains(r#""kill_switch":false"#));
+    assert_eq!((gates[1].1.as_str(), gates[1].2.as_deref()), ("blocked", Some("kill_switch")));
+    assert_ne!(gates[1].0, trace, "a refusal has no generation, so a trace of its own");
+    assert!(gates[1].3.contains(r#""kill_switch":true"#), "the snapshot flag is recorded");
+    // Turning it off again lets the next one through.
+    askbar_server::testing::update_snapshot(&s.state.db.lock().unwrap(), |snap| snap.kill_switch = false);
+    assert!(is_done(&s.run("works again").await));
 }

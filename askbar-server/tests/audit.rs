@@ -258,17 +258,20 @@ async fn a_queued_message_records_a_gate_span_named_queue_from_enqueue_to_start(
         .unwrap();
     assert_eq!((n, status.as_str()), (1, "done"));
     assert!(ended.unwrap() >= started, "it ends after it begins");
-    let none: i64 = db.query_row("SELECT COUNT(*) FROM spans WHERE trace_id = ?1 AND kind = 'gate'", [&first.generation_id], |r| r.get(0)).unwrap();
+    let none: i64 = db.query_row("SELECT COUNT(*) FROM spans WHERE trace_id = ?1 AND kind = 'gate' AND name = 'queue'", [&first.generation_id], |r| r.get(0)).unwrap();
     assert_eq!(none, 0, "a message that did not wait has no queue span");
-    // Its turn and attempt come after the wait, in the same trace.
-    let kinds: Vec<String> = db
-        .prepare("SELECT kind FROM spans WHERE trace_id = ?1 ORDER BY id")
+    // Its gates (the kill switch it passed, then the wait), turn and attempt, in the same trace.
+    let names: Vec<(String, String)> = db
+        .prepare("SELECT kind, name FROM spans WHERE trace_id = ?1 ORDER BY id")
         .unwrap()
-        .query_map([&second.generation_id], |r| r.get(0))
+        .query_map([&second.generation_id], |r| Ok((r.get(0)?, r.get(1)?)))
         .unwrap()
         .map(Result::unwrap)
         .collect();
-    assert_eq!(kinds, ["gate", "turn", "attempt"]);
+    let want = |k: &str, n: &str| (k.to_string(), n.to_string());
+    assert_eq!(names[..2], [want("gate", "kill_switch"), want("gate", "queue")]);
+    assert_eq!(names[2].0, "turn");
+    assert_eq!(names[3].0, "attempt");
 }
 
 #[tokio::test]
