@@ -214,6 +214,65 @@ pub struct SearchHit {
     pub created_at: i64,
 }
 
+/// One chat turn run by the server. See migration v4 for the statuses.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct Generation {
+    pub id: String,
+    pub user_id: String,
+    pub device_id: Option<String>,
+    pub conversation_id: String,
+    pub user_message_id: Option<String>,
+    pub assistant_message_id: Option<String>,
+    pub client_request_id: Option<String>,
+    pub provider_id: Option<String>,
+    pub status: String,
+    pub prompt: String,
+    pub text: String,
+    pub error: Option<String>,
+    pub queued_at: i64,
+    pub started_at: Option<i64>,
+    pub deadline_at: Option<i64>,
+    pub ended_at: Option<i64>,
+}
+
+/// What `create_generation` needs. `status` is `running` (the row also gets `started_at`) or `queued`.
+#[derive(Debug, Clone)]
+pub struct NewGeneration<'a> {
+    pub user_id: &'a str,
+    pub device_id: Option<&'a str>,
+    pub conversation_id: &'a str,
+    pub user_message_id: Option<&'a str>,
+    pub client_request_id: Option<&'a str>,
+    pub provider_id: Option<&'a str>,
+    pub status: &'a str,
+    pub prompt: &'a str,
+    pub deadline_at: Option<i64>,
+}
+
+const GENERATION_COLUMNS: &str = "id, user_id, device_id, conversation_id, user_message_id, assistant_message_id, \
+     client_request_id, provider_id, status, prompt, text, error, queued_at, started_at, deadline_at, ended_at";
+
+fn read_generation(r: &rusqlite::Row<'_>) -> rusqlite::Result<Generation> {
+    Ok(Generation {
+        id: r.get(0)?,
+        user_id: r.get(1)?,
+        device_id: r.get(2)?,
+        conversation_id: r.get(3)?,
+        user_message_id: r.get(4)?,
+        assistant_message_id: r.get(5)?,
+        client_request_id: r.get(6)?,
+        provider_id: r.get(7)?,
+        status: r.get(8)?,
+        prompt: r.get(9)?,
+        text: r.get(10)?,
+        error: r.get(11)?,
+        queued_at: r.get(12)?,
+        started_at: r.get(13)?,
+        deadline_at: r.get(14)?,
+        ended_at: r.get(15)?,
+    })
+}
+
 pub struct Db {
     conn: Connection,
 }
@@ -425,6 +484,122 @@ impl Db {
             .conn
             .execute("DELETE FROM conversations WHERE id = ?1 AND user_id = ?2", params![id, user_id])?
             > 0)
+    }
+
+    /// Returns the new generation's id.
+    pub fn create_generation(&self, g: &NewGeneration) -> Result<String, DbError> {
+        let (id, t) = (new_id(), now());
+        let started = (g.status == "running").then_some(t);
+        self.conn.execute(
+            "INSERT INTO generations (id, user_id, device_id, conversation_id, user_message_id, client_request_id,
+                                      provider_id, status, prompt, queued_at, started_at, deadline_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            params![
+                id, g.user_id, g.device_id, g.conversation_id, g.user_message_id, g.client_request_id,
+                g.provider_id, g.status, g.prompt, t, started, g.deadline_at
+            ],
+        )?;
+        Ok(id)
+    }
+
+    /// One of `user_id`'s generations; `None` for anyone else's.
+    pub fn get_generation(&self, user_id: &str, id: &str) -> Result<Option<Generation>, DbError> {
+        Ok(self
+            .conn
+            .query_row(
+                &format!("SELECT {GENERATION_COLUMNS} FROM generations WHERE id = ?1 AND user_id = ?2"),
+                params![id, user_id],
+                read_generation,
+            )
+            .optional()?)
+    }
+
+    /// Moves a queued generation to `running` once its user message is written.
+    pub fn start_generation(&self, id: &str, user_message_id: &str, deadline_at: Option<i64>) -> Result<(), DbError> {
+        self.conn.execute(
+            "UPDATE generations SET status = 'running', user_message_id = ?2, started_at = ?3, deadline_at = ?4
+             WHERE id = ?1 AND status = 'queued'",
+            params![id, user_message_id, now(), deadline_at],
+        )?;
+        Ok(())
+    }
+
+    /// Saves the reply so far while a generation runs. Ignored once it has finished.
+    pub fn flush_generation_text(&self, id: &str, text: &str) -> Result<(), DbError> {
+        self.conn.execute("UPDATE generations SET text = ?2 WHERE id = ?1 AND status = 'running'", params![id, text])?;
+        Ok(())
+    }
+
+    /// Ends a generation with its final status. Returns false if it had already ended.
+    pub fn finalize_generation(
+        &self,
+        id: &str,
+        status: &str,
+        text: &str,
+        error: Option<&str>,
+        assistant_message_id: Option<&str>,
+    ) -> Result<bool, DbError> {
+        Ok(self.conn.execute(
+            "UPDATE generations SET status = ?2, text = ?3, error = ?4, assistant_message_id = ?5, ended_at = ?6
+             WHERE id = ?1 AND status IN ('queued','running')",
+            params![id, status, text, error, assistant_message_id, now()],
+        )? > 0)
+    }
+
+    /// The caller's running and queued generations, oldest first.
+    pub fn list_active_generations(&self, user_id: &str) -> Result<Vec<Generation>, DbError> {
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {GENERATION_COLUMNS} FROM generations
+             WHERE user_id = ?1 AND status IN ('running','queued') ORDER BY id"
+        ))?;
+        let rows = stmt.query_map([user_id], read_generation)?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    pub fn queued_count(&self, conversation_id: &str) -> Result<i64, DbError> {
+        Ok(self.conn.query_row(
+            "SELECT COUNT(*) FROM generations WHERE conversation_id = ?1 AND status = 'queued'",
+            [conversation_id],
+            |r| r.get(0),
+        )?)
+    }
+
+    /// Whether the conversation has a running or queued generation.
+    pub fn conversation_busy(&self, conversation_id: &str) -> Result<bool, DbError> {
+        Ok(self.conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM generations WHERE conversation_id = ?1 AND status IN ('running','queued'))",
+            [conversation_id],
+            |r| r.get(0),
+        )?)
+    }
+
+    /// The oldest queued generation in the conversation.
+    pub fn next_queued(&self, conversation_id: &str) -> Result<Option<Generation>, DbError> {
+        Ok(self
+            .conn
+            .query_row(
+                &format!(
+                    "SELECT {GENERATION_COLUMNS} FROM generations
+                     WHERE conversation_id = ?1 AND status = 'queued' ORDER BY id LIMIT 1"
+                ),
+                [conversation_id],
+                read_generation,
+            )
+            .optional()?)
+    }
+
+    /// A generation this device already started with `client_request_id`.
+    pub fn find_by_request_id(&self, device_id: &str, client_request_id: &str) -> Result<Option<Generation>, DbError> {
+        Ok(self
+            .conn
+            .query_row(
+                &format!(
+                    "SELECT {GENERATION_COLUMNS} FROM generations WHERE device_id = ?1 AND client_request_id = ?2"
+                ),
+                params![device_id, client_request_id],
+                read_generation,
+            )
+            .optional()?)
     }
 }
 
@@ -702,6 +877,118 @@ mod tests {
         assert!(ins("g2", Some("r1")).is_err(), "a repeated request id from one device is refused");
         ins("g3", None).unwrap();
         ins("g4", None).unwrap();
+    }
+
+    fn new_gen<'a>(user: &'a str, conv: &'a str, status: &'a str) -> NewGeneration<'a> {
+        NewGeneration {
+            user_id: user,
+            device_id: Some("dev1"),
+            conversation_id: conv,
+            user_message_id: None,
+            client_request_id: None,
+            provider_id: Some("p"),
+            status,
+            prompt: "hello",
+            deadline_at: None,
+        }
+    }
+
+    fn other_user(db: &Db) -> String {
+        db.conn.execute("INSERT INTO users (id, name, created_at) VALUES ('u2','other',0)", []).unwrap();
+        "u2".into()
+    }
+
+    #[test]
+    fn generations_are_created_read_and_finalized() {
+        let (db, u) = db_with_user();
+        let c = db.create_conversation(&u, "c").unwrap();
+        let id = db.create_generation(&new_gen(&u, &c, "running")).unwrap();
+        let g = db.get_generation(&u, &id).unwrap().unwrap();
+        assert_eq!((g.status.as_str(), g.prompt.as_str(), g.text.as_str()), ("running", "hello", ""));
+        assert!(g.started_at.is_some() && g.ended_at.is_none());
+
+        db.flush_generation_text(&id, "partial").unwrap();
+        assert_eq!(db.get_generation(&u, &id).unwrap().unwrap().text, "partial");
+
+        assert!(db.finalize_generation(&id, "done", "full text", None, Some("m1")).unwrap());
+        let g = db.get_generation(&u, &id).unwrap().unwrap();
+        assert_eq!((g.status.as_str(), g.text.as_str(), g.assistant_message_id.as_deref()), ("done", "full text", Some("m1")));
+        assert!(g.ended_at.is_some());
+
+        // A finished generation is final: a second finalize and a late flush change nothing.
+        assert!(!db.finalize_generation(&id, "error", "x", Some("boom"), None).unwrap());
+        db.flush_generation_text(&id, "late").unwrap();
+        let g = db.get_generation(&u, &id).unwrap().unwrap();
+        assert_eq!((g.status.as_str(), g.text.as_str()), ("done", "full text"));
+    }
+
+    #[test]
+    fn another_users_generation_is_invisible() {
+        let (db, u) = db_with_user();
+        let c = db.create_conversation(&u, "c").unwrap();
+        let id = db.create_generation(&new_gen(&u, &c, "running")).unwrap();
+        let v = other_user(&db);
+        assert_eq!(db.get_generation(&v, &id).unwrap(), None);
+        assert!(db.list_active_generations(&v).unwrap().is_empty());
+        assert_eq!(db.list_active_generations(&u).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn active_list_holds_running_and_queued_only() {
+        let (db, u) = db_with_user();
+        let c = db.create_conversation(&u, "c").unwrap();
+        let done = db.create_generation(&new_gen(&u, &c, "running")).unwrap();
+        db.finalize_generation(&done, "done", "t", None, None).unwrap();
+        let running = db.create_generation(&new_gen(&u, &c, "running")).unwrap();
+        let queued = db.create_generation(&new_gen(&u, &c, "queued")).unwrap();
+        let ids: Vec<String> = db.list_active_generations(&u).unwrap().into_iter().map(|g| g.id).collect();
+        assert_eq!(ids, [running, queued]);
+    }
+
+    #[test]
+    fn queue_counts_and_order() {
+        let (db, u) = db_with_user();
+        let c = db.create_conversation(&u, "c").unwrap();
+        let c2 = db.create_conversation(&u, "c2").unwrap();
+        assert!(!db.conversation_busy(&c).unwrap());
+        assert_eq!(db.next_queued(&c).unwrap(), None);
+        db.create_generation(&new_gen(&u, &c, "running")).unwrap();
+        assert!(db.conversation_busy(&c).unwrap());
+        assert_eq!(db.queued_count(&c).unwrap(), 0);
+        let q1 = db.create_generation(&new_gen(&u, &c, "queued")).unwrap();
+        let q2 = db.create_generation(&new_gen(&u, &c, "queued")).unwrap();
+        db.create_generation(&new_gen(&u, &c2, "queued")).unwrap();
+        assert_eq!(db.queued_count(&c).unwrap(), 2, "other conversations don't count");
+        assert_eq!(db.next_queued(&c).unwrap().unwrap().id, q1, "oldest first");
+
+        db.start_generation(&q1, "um1", Some(99)).unwrap();
+        let g = db.get_generation(&u, &q1).unwrap().unwrap();
+        assert_eq!((g.status.as_str(), g.user_message_id.as_deref(), g.deadline_at), ("running", Some("um1"), Some(99)));
+        assert!(g.started_at.is_some());
+        assert_eq!(db.next_queued(&c).unwrap().unwrap().id, q2);
+        db.finalize_generation(&q2, "cancelled", "", None, None).unwrap();
+        assert_eq!(db.queued_count(&c).unwrap(), 0);
+    }
+
+    #[test]
+    fn find_by_request_id_is_per_device() {
+        let (db, u) = db_with_user();
+        let c = db.create_conversation(&u, "c").unwrap();
+        let mut n = new_gen(&u, &c, "running");
+        n.client_request_id = Some("req-1");
+        let id = db.create_generation(&n).unwrap();
+        assert_eq!(db.find_by_request_id("dev1", "req-1").unwrap().unwrap().id, id);
+        assert_eq!(db.find_by_request_id("dev2", "req-1").unwrap(), None);
+        assert_eq!(db.find_by_request_id("dev1", "req-2").unwrap(), None);
+    }
+
+    #[test]
+    fn deleting_a_conversation_removes_its_generations() {
+        let (db, u) = db_with_user();
+        let c = db.create_conversation(&u, "c").unwrap();
+        let id = db.create_generation(&new_gen(&u, &c, "queued")).unwrap();
+        db.delete_conversation(&u, &c).unwrap();
+        assert_eq!(db.get_generation(&u, &id).unwrap(), None);
     }
 
     #[test]
