@@ -412,6 +412,27 @@ async fn the_backup_holds_both_databases_and_none_of_the_secrets() {
     assert_eq!(t.admin_rows("SELECT COUNT(*) FROM pair_codes").await, 1);
 }
 
+/// `audit.db` (the trace of replies) lives in its own volume and is not part of the admin backup;
+/// the README says how to copy the volume. The archive must hold none of its tables.
+#[tokio::test]
+async fn the_backup_has_no_audit_store_in_it() {
+    let t = start(true).await;
+    let r = t.http.get(format!("{}/admin/api/backup", t.adm)).header("cookie", &t.cookie).send().await.unwrap();
+    assert_eq!(r.status(), 200);
+    let files = tar_files(&r.bytes().await.unwrap());
+    assert!(files.iter().all(|(name, _)| !name.contains("audit")), "no audit.db in the archive: {:?}", files.iter().map(|(n, _)| n).collect::<Vec<_>>());
+    std::fs::create_dir_all(&t.dir).unwrap();
+    for (name, data) in &files {
+        let p = t.dir.join(format!("nb-{name}"));
+        std::fs::write(&p, data).unwrap();
+        let c = rusqlite::Connection::open(p).unwrap();
+        for table in ["spans", "payloads"] {
+            let n: i64 = c.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1", [table], |r| r.get(0)).unwrap();
+            assert_eq!(n, 0, "{name} has an audit table `{table}`");
+        }
+    }
+}
+
 #[tokio::test]
 async fn all_of_it_needs_a_session() {
     let t = start(true).await;
