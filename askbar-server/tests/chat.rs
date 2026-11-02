@@ -411,3 +411,99 @@ async fn meta_carries_the_generation_id_and_deltas_carry_ascending_ids() {
     assert!(ids.len() > 3);
     assert_eq!(ids, (1..=ids.len() as u64).collect::<Vec<_>>());
 }
+
+impl T {
+    fn second_user_token(&self) -> String {
+        let db = self.state.db.lock().unwrap();
+        db.conn().execute("INSERT INTO users (id, name, created_at) VALUES ('B','other',0)", []).unwrap();
+        let code = askbar_server::testing::add_pair_code(&db, "B", "b-laptop");
+        auth::redeem_pair_code(&db, &code).unwrap().unwrap()
+    }
+    async fn get_with(&self, token: &str, path: &str) -> reqwest::Response {
+        client().get(format!("http://{}{path}", self.addr)).bearer_auth(token).send().await.unwrap()
+    }
+}
+
+/// The (id, text) of every delta in an SSE body, in order.
+fn deltas(body: &str) -> Vec<(u64, String)> {
+    let body = body.replace("\r\n", "\n");
+    body.split("\n\n")
+        .filter(|b| b.contains("event: delta"))
+        .map(|b| {
+            let id = b.lines().find_map(|l| l.strip_prefix("id:")).unwrap().trim().parse().unwrap();
+            let data = b.lines().find_map(|l| l.strip_prefix("data:")).unwrap().trim_start();
+            let ChatEvent::Delta { text } = serde_json::from_str(data).unwrap() else { panic!() };
+            (id, text)
+        })
+        .collect()
+}
+
+fn generation_id(body: &str) -> String {
+    let events = parse_events(&body.replace("\r\n", "\n"));
+    let ChatEvent::Meta { generation_id, .. } = &events[0].1 else { panic!("first event must be meta") };
+    generation_id.clone().unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn resuming_after_three_deltas_sends_the_rest_exactly_once() {
+    let t = start().await;
+    let body = t.chat(&client(), None, "p1", "Hello there").await.text().await.unwrap();
+    let all = deltas(&body);
+    assert!(all.len() > 5);
+    let id = generation_id(&body);
+
+    let rest = t.get_with(&t.token, &format!("/api/v1/generations/{id}/stream?after=3")).await;
+    assert_eq!(rest.status(), 200);
+    let rest_body = rest.text().await.unwrap();
+    assert_eq!(deltas(&rest_body), all[3..].to_vec(), "deltas 4.. exactly once, with their original ids");
+    assert!(rest_body.contains("event: done"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn resuming_a_running_generation_replays_then_follows() {
+    let t = start().await;
+    let http = client_builder().pool_max_idle_per_host(0).build().unwrap();
+    let r = t.chat(&http, None, "p1", "please be slow").await;
+    let mut stream = r.bytes_stream();
+    let mut got = String::new();
+    while got.matches("event: delta").count() < 4 {
+        got.push_str(&String::from_utf8_lossy(&stream.next().await.unwrap().unwrap()));
+    }
+    let id = generation_id(&got);
+    drop(stream);
+
+    let resumed = t.get_with(&t.token, &format!("/api/v1/generations/{id}/stream?after=2")).await;
+    let mut s = resumed.bytes_stream();
+    let mut body = String::new();
+    while deltas(&body).len() < 4 {
+        body.push_str(&String::from_utf8_lossy(&s.next().await.unwrap().unwrap()));
+    }
+    let seen: Vec<u64> = deltas(&body).iter().map(|d| d.0).collect();
+    assert_eq!(&seen[..4], &[3, 4, 5, 6], "starts right after id 2, then follows live");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_generation_only_the_database_remembers_sends_its_text_once_then_the_end() {
+    let t = start().await;
+    let body = t.chat(&client(), None, "p1", "Hello there").await.text().await.unwrap();
+    let id = generation_id(&body);
+    let text: String = deltas(&body).into_iter().map(|d| d.1).collect();
+    t.state.generations.remove(&id); // as after a restart
+
+    let whole = t.get_with(&t.token, &format!("/api/v1/generations/{id}/stream")).await.text().await.unwrap();
+    assert_eq!(deltas(&whole), [(1, text)]);
+    assert!(whole.contains("event: done"));
+
+    let tail = t.get_with(&t.token, &format!("/api/v1/generations/{id}/stream?after=5")).await.text().await.unwrap();
+    assert!(deltas(&tail).is_empty() && tail.contains("event: done"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn another_users_generation_stream_is_404() {
+    let t = start().await;
+    let body = t.chat(&client(), None, "p1", "Hello there").await.text().await.unwrap();
+    let id = generation_id(&body);
+    let other = t.second_user_token();
+    assert_eq!(t.get_with(&other, &format!("/api/v1/generations/{id}/stream")).await.status(), 404);
+    assert_eq!(t.get_with(&other, "/api/v1/generations/nope/stream").await.status(), 404);
+}

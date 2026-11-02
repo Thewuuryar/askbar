@@ -21,12 +21,12 @@ fn internal<E>(_: E) -> StatusCode {
     StatusCode::INTERNAL_SERVER_ERROR
 }
 
-fn sse_event(e: &ChatEvent) -> Event {
+pub(crate) fn sse_event(e: &ChatEvent) -> Event {
     sse_event_with_id(e, None)
 }
 
 /// Deltas carry `id: <seq>` so a client can resume with `?after=<last id>`.
-fn sse_event_with_id(e: &ChatEvent, seq: Option<u64>) -> Event {
+pub(crate) fn sse_event_with_id(e: &ChatEvent, seq: Option<u64>) -> Event {
     let name = match e {
         ChatEvent::Meta { .. } => "meta",
         ChatEvent::Delta { .. } => "delta",

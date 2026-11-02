@@ -4,8 +4,19 @@
 //! its deltas so a client can attach, drop and attach again without losing or repeating text.
 
 use crate::llm::{stream_chat, ChatMessage, Provider};
+use crate::auth::DeviceAuth;
+use crate::chat::{sse_event, sse_event_with_id};
 use crate::db::{DbError, NewGeneration};
 use crate::AppState;
+use askbar_proto::ChatEvent;
+use axum::{
+    extract::{Path, Query, State},
+    http::StatusCode,
+    response::sse::{Event, KeepAlive, Sse},
+    Extension,
+};
+use futures_util::StreamExt;
+use std::convert::Infallible;
 use futures_util::Stream;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -185,6 +196,8 @@ struct Finisher {
     unflushed: usize,
 }
 
+/// How long a finished generation's deltas stay replayable from memory.
+const FINISHED_RETENTION: Duration = Duration::from_secs(300);
 const FLUSH_EVERY: Duration = Duration::from_secs(1);
 const FLUSH_BYTES: usize = 2048;
 
@@ -231,7 +244,17 @@ impl Drop for Finisher {
         self.save("error", Some("The reply stopped unexpectedly."));
         // A no-op if `finish` already ran; otherwise the task died and subscribers must not wait forever.
         self.live.finish(Terminal::Error("The reply stopped unexpectedly.".into()));
-        self.state.generations.remove(&self.id);
+        // Keep the buffer a while so a client that dropped can still resume exactly where it was.
+        let (state, id) = (self.state.clone(), self.id.clone());
+        match tokio::runtime::Handle::try_current() {
+            Ok(rt) => {
+                rt.spawn(async move {
+                    tokio::time::sleep(FINISHED_RETENTION).await;
+                    state.generations.remove(&id);
+                });
+            }
+            Err(_) => state.generations.remove(&id),
+        }
     }
 }
 
@@ -272,6 +295,61 @@ pub fn start(state: &Arc<AppState>, s: Start) -> Result<(String, Arc<Live>), DbE
         });
     });
     Ok((id, live))
+}
+
+#[derive(serde::Deserialize)]
+pub struct StreamQuery {
+    after: Option<u64>,
+}
+
+type EventStream = std::pin::Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>;
+
+fn to_sse(e: GenEvent) -> Result<Event, Infallible> {
+    Ok(match e {
+        GenEvent::Delta { seq, text } => sse_event_with_id(&ChatEvent::Delta { text }, Some(seq)),
+        GenEvent::Done => sse_event(&ChatEvent::Done),
+        GenEvent::Error { message } => sse_event(&ChatEvent::Error { message }),
+    })
+}
+
+/// How a finished generation ends a stream: `done` unless it failed, was cut short or timed out.
+fn terminal_of(status: &str, error: Option<&str>) -> GenEvent {
+    match status {
+        "done" | "cancelled" => GenEvent::Done,
+        "interrupted" => GenEvent::Error { message: error.unwrap_or("The server restarted before the reply finished.").into() },
+        _ => GenEvent::Error { message: error.unwrap_or("The reply failed.").into() },
+    }
+}
+
+/// `GET /api/v1/generations/{id}/stream?after=N`: the deltas after the first N, then the rest live.
+///
+/// While the generation runs (and for a few minutes after) this replays from memory, exactly.
+/// Once only the database remembers it, delta boundaries are gone: a client that has seen
+/// nothing gets the whole text as one delta, and one that has seen some gets just the ending,
+/// so it should reload the conversation to read the saved message.
+pub async fn stream(
+    State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<DeviceAuth>,
+    Path(id): Path<String>,
+    Query(q): Query<StreamQuery>,
+) -> Result<impl axum::response::IntoResponse, StatusCode> {
+    let after = q.after.unwrap_or(0);
+    let row = {
+        let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+        db.get_generation(&auth.user_id, &id).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?.ok_or(StatusCode::NOT_FOUND)?
+    };
+    let events: EventStream = match state.generations.get(&id) {
+        Some(live) => Box::pin(live.subscribe(after).map(to_sse)),
+        None => {
+            let mut v = Vec::new();
+            if after == 0 && !row.text.is_empty() {
+                v.push(GenEvent::Delta { seq: 1, text: row.text.clone() });
+            }
+            v.push(terminal_of(&row.status, row.error.as_deref()));
+            Box::pin(futures_util::stream::iter(v.into_iter().map(to_sse)))
+        }
+    };
+    Ok(Sse::new(events).keep_alive(KeepAlive::default()))
 }
 
 #[cfg(test)]

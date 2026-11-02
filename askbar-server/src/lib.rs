@@ -66,6 +66,7 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         .route("/api/v1/search", get(api::search))
         .route("/api/v1/settings", get(api::settings))
         .route("/api/v1/chat", post(chat::chat))
+        .route("/api/v1/generations/{id}/stream", get(generation::stream))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_device_token));
     // Everything except health checks the client version first.
     let gated = Router::new()
