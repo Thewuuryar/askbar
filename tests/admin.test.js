@@ -503,6 +503,50 @@ async function waitForPort(port) {
     assert.equal(await page.inputValue('#audit-pass').catch(() => ''), '', 'the passphrase field is cleared after use');
     assert.equal(await page.evaluate(() => JSON.stringify(Object.entries(localStorage)).includes('passphrase')), false);
   };
+  await step('audit overview: a canned stats payload fills the tiles, the day bars and the provider bars', async () => {
+    const canned = {
+      since: 0, requests: 40, by_status: { done: 36, error: 3, cancelled: 1 }, error_rate: 0.075,
+      latency_ms: { p50: 1200, p95: 5400 }, ttft_ms: { p50: 300, p95: 900 },
+      tokens: { in: 12345, out: 6789, cached: 2000 }, cost: 1.2345, cost_unknown_requests: 0,
+      by_provider: [{ provider_id: 'p-unknown', requests: 30, tokens: { in: 9000, out: 4000, cached: 0 }, cost: 0.9 }, { provider_id: 'p2', requests: 10, tokens: { in: 3345, out: 2789, cached: 2000 }, cost: null }],
+      by_day: [{ day: '2026-11-01', requests: 10, tokens: { in: 100, out: 50, cached: 0 }, cost: 0.1 }, { day: '2026-11-02', requests: 30, tokens: { in: 12245, out: 6739, cached: 2000 }, cost: 1.1345 }],
+    };
+    const asked = [];
+    await page.route('**/admin/api/audit/stats*', (route) => { asked.push(route.request().url()); route.fulfill({ contentType: 'application/json', body: JSON.stringify(canned) }); });
+    await page.click('#nav [data-tab="providers"]');
+    await page.click('#nav [data-tab="audit"]');
+    await page.waitForSelector('#audit-overview [data-stat="requests"]');
+    const stat = (k) => page.innerText(`#audit-overview [data-stat="${k}"]`);
+    assert.deepEqual(
+      [await stat('requests'), await stat('error-rate'), await stat('latency-p50'), await stat('latency-p95'), await stat('ttft-p50'), await stat('ttft-p95')],
+      ['40', '7.5%', '1.2 s', '5.4 s', '300 ms', '900 ms'],
+    );
+    assert.deepEqual([await stat('tokens-in'), await stat('tokens-out'), await stat('tokens-cached'), await stat('cost')], ['12,345', '6,789', '2,000', '1.2345']);
+    const days = await page.$$eval('#audit-days .bar-row', (rows) => rows.map((r) => [r.querySelector('.name').textContent, r.querySelector('.fill').style.width, r.querySelector('.figs').textContent]));
+    assert.deepEqual(days.map((d) => d[0]), ['2026-11-01', '2026-11-02']);
+    assert.deepEqual(days.map((d) => d[1]), ['33%', '100%'], 'bars are sized by requests, the busiest day full width');
+    assert.match(days[1][2], /30 req · 18,984 tok · 1.1345/);
+    const provs = await page.$$eval('#audit-by-provider .bar-row .figs', (n) => n.map((x) => x.textContent));
+    assert.match(provs[1], /unknown/, 'a missing price shows as unknown, not as 0');
+    // The window decides what is asked for.
+    const since = (u) => Number(new URL(u).searchParams.get('since'));
+    const now = Math.floor(Date.now() / 1000);
+    assert.ok(Math.abs(now - since(asked.at(-1)) - 86400) < 120, 'the first look is the last 24 hours');
+    await page.selectOption('#audit-window', '604800');
+    await page.waitForTimeout(200);
+    assert.ok(Math.abs(now - since(asked.at(-1)) - 7 * 86400) < 120, 'then the last 7 days');
+    await page.selectOption('#audit-window', '2592000');
+    await page.waitForTimeout(200);
+    assert.ok(Math.abs(now - since(asked.at(-1)) - 30 * 86400) < 120, 'then the last 30 days');
+    // An empty window says so instead of showing zeros.
+    await page.unroute('**/admin/api/audit/stats*');
+    await page.route('**/admin/api/audit/stats*', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ requests: 0, by_status: {}, error_rate: 0, latency_ms: { p50: null, p95: null }, tokens: { in: 0, out: 0, cached: 0 }, cost: 0, cost_unknown_requests: 0, by_provider: [], by_day: [] }) }));
+    await page.selectOption('#audit-window', '86400');
+    await page.waitForSelector('#audit-overview-empty:not([hidden])');
+    assert.equal(await page.isHidden('#audit-tiles'), true);
+    await page.unroute('**/admin/api/audit/stats*');
+    await page.selectOption('#audit-window', '86400');
+  });
   await step('security: changing the password needs the current one', async () => {
     await page.click('#nav [data-tab="security"]');
     await page.fill('#pw-current', 'wrong');

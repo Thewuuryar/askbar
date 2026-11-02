@@ -120,7 +120,24 @@
           <button type="button" role="tab" data-sub="routing" aria-selected="false">Routing</button>
           <button type="button" role="tab" data-sub="content" aria-selected="false">Content</button>
         </div>
-        <div id="audit-overview" data-subview="overview"><p class="hint empty">Nothing recorded in this window yet.</p></div>
+        <div id="audit-overview" data-subview="overview">
+          <div class="row">
+            <label>Window
+              <select id="audit-window">
+                <option value="86400">Last 24 hours</option>
+                <option value="604800">Last 7 days</option>
+                <option value="2592000">Last 30 days</option>
+              </select>
+            </label>
+          </div>
+          <p class="hint empty" id="audit-overview-empty">Nothing recorded in this window yet.</p>
+          <div id="audit-tiles" class="tiles" hidden></div>
+          <p class="hint" id="audit-cost-note" hidden></p>
+          <h3 id="audit-days-title" hidden>By day</h3>
+          <div id="audit-days" class="bars"></div>
+          <h3 id="audit-providers-title" hidden>By provider</h3>
+          <div id="audit-by-provider" class="bars"></div>
+        </div>
         <div id="audit-requests" data-subview="requests" hidden><p class="hint empty">No requests recorded yet.</p></div>
         <div id="audit-trace" data-subview="trace" hidden><p class="hint empty">Pick a request on the Requests view to see its trace.</p></div>
         <div id="audit-routing" data-subview="routing" hidden><p class="hint empty">Pick a request on the Requests view to see how it was routed.</p></div>
