@@ -219,6 +219,11 @@ out=$(set_network True 2>&1); printf '%s' "$out" | tail -1 | grep -q '^200 ok' &
 cfg=$(caddy_config)
 printf '%s' "$cfg" | grep -q '"abort":true' && printf '%s' "$cfg" | grep -q '"not":\[{"remote_ip":{"ranges":\["10.0.0.0/8"\]' \
   && pass "allowlist on: addresses outside 10.0.0.0/8 are aborted on the admin site" || fail "allowlist on: no abort rule for outside addresses"
+# One host name, routed by path: the admin under /admin, the client API without /api/server, and a 404 for the rest.
+printf '%s' "$cfg" | grep -q '"/admin","/admin/\*"' && pass "Caddy routes /admin to the admin" || fail "Caddy has no /admin route"
+printf '%s' "$cfg" | grep -q '"not":\[{"path":\["/api/server","/api/server/\*"\]' && pass "the client API route excludes /api/server" || fail "the client API route does not exclude /api/server"
+printf '%s' "$cfg" | grep -q '"status_code":"\?404"\?' && pass "Caddy answers 404 for every other path" || fail "Caddy has no final 404"
+printf '%s' "$cfg" | grep -q 'admin.askbar.isolation.invalid' && fail "Caddy still has a second host name for the admin" || pass "Caddy has one host name"
 out=$(set_network False 2>&1); printf '%s' "$out" | tail -1 | grep -q '^200 ok' && pass "allowlist off: Caddy took the configuration" || fail "allowlist off: $out"
 cfg=$(caddy_config)
 if printf '%s' "$cfg" | grep -q 'unix//run/admin/admin.sock' && ! printf '%s' "$cfg" | grep -q '"abort":true\|remote_ip'; then
