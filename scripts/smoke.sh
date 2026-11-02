@@ -102,6 +102,12 @@ if [ $LOCAL = 1 ]; then
   else
     fail "first-run setup"
   fi
+  # The audit passphrase is part of setup; without its key the server refuses to start replies.
+  if admin POST /admin/api/setup/audit-key '{"passphrase":"smoke test audit passphrase","confirm":"smoke test audit passphrase"}' >/dev/null; then
+    pass "audit key setup"
+  else
+    fail "audit key setup"
+  fi
   if admin POST /admin/api/providers \
       "{\"name\":\"mock\",\"type\":\"openai\",\"base_url\":\"http://127.0.0.1:$MOCK_PORT/v1\",\"model\":\"mock-model\",\"api_key\":\"sk-smoke\"}" >/dev/null; then
     pass "add a provider that points at the mock LLM"

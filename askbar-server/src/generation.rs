@@ -235,6 +235,8 @@ pub enum SubmitError {
     QueueFull,
     /// The audit writer is not keeping up: nothing new starts until it catches up.
     AuditBacklog,
+    /// The administrator has not made an audit key yet, so nothing could be kept sealed.
+    AuditKeyMissing,
     Internal,
 }
 
@@ -247,6 +249,11 @@ impl IntoResponse for SubmitError {
             SubmitError::NotFound => StatusCode::NOT_FOUND.into_response(),
             SubmitError::QueueFull => StatusCode::CONFLICT.into_response(),
             SubmitError::Internal => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+            SubmitError::AuditKeyMissing => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                axum::Json(serde_json::json!({ "error": "audit_key_missing" })),
+            )
+                .into_response(),
             SubmitError::AuditBacklog => (
                 StatusCode::SERVICE_UNAVAILABLE,
                 [(axum::http::header::RETRY_AFTER, AUDIT_BACKLOG_RETRY_SECS.to_string())],
@@ -470,6 +477,10 @@ pub fn submit(state: &Arc<AppState>, s: Submit) -> Result<Submitted, SubmitError
         SubmitError::Internal
     }
     store::load_provider(&db, &state.secrets(), &s.provider_id).map_err(internal)?.ok_or(SubmitError::NotFound)?;
+    // Nothing runs unless what it says can be kept sealed: no audit key, no generation.
+    if crate::snapshot::current(&db).map_err(internal)?.and_then(|snap| snap.audit_public_key).is_none() {
+        return Err(SubmitError::AuditKeyMissing);
+    }
     let (conversation_id, busy) = match &s.conversation_id {
         Some(id) => {
             let c = db.get_conversation(&s.user_id, id).map_err(internal)?.ok_or(SubmitError::NotFound)?;

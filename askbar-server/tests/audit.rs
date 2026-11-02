@@ -332,11 +332,13 @@ async fn a_backed_up_audit_writer_refuses_new_generations_with_503_and_retry_aft
 
 // ------------------------------------------------------------------ sealed content (Phase 5)
 
-/// Gives `state` an audit key, as the admin's snapshot would, and returns the matching secret key
-/// so a test can read what was sealed. Filled in by step 5.8.
+/// Gives `state` the test audit key, as the admin's snapshot would, and returns the matching secret
+/// key so a test can read what was sealed. (The test helpers already include it; this makes it
+/// explicit and survives a snapshot that was changed.)
 #[allow(dead_code)]
-fn install_audit_key(_state: &std::sync::Arc<askbar_server::AppState>) -> [u8; 32] {
-    unimplemented!("step 5.8")
+fn install_audit_key(state: &std::sync::Arc<askbar_server::AppState>) -> [u8; 32] {
+    askbar_server::testing::update_snapshot(&state.db.lock().unwrap(), |s| s.audit_public_key = Some(askbar_server::testing::test_audit_key()));
+    askbar_server::testing::TEST_AUDIT_SECRET
 }
 
 #[tokio::test]
@@ -360,11 +362,11 @@ async fn sealed_content_is_stored_but_a_marker_never_appears_in_the_bytes_of_aud
 }
 
 #[tokio::test]
-#[ignore = "enabled in 5.8"]
 async fn a_generation_with_no_audit_key_is_refused_with_503_audit_key_missing() {
     use axum::response::IntoResponse;
     let (_mock, port) = start_mock();
-    let (state, _dir) = audit_state(port); // no key in the snapshot
+    let (state, _dir) = audit_state(port);
+    askbar_server::testing::update_snapshot(&state.db.lock().unwrap(), |s| s.audit_public_key = None); // the admin has not made a key
     let (user, device) = {
         let db = state.db.lock().unwrap();
         (db.seed_server().unwrap(), "d1".to_string())
@@ -379,4 +381,16 @@ async fn a_generation_with_no_audit_key_is_refused_with_503_audit_key_missing() 
     assert_eq!(response.status(), 503);
     let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
     assert!(String::from_utf8_lossy(&body).contains("audit_key_missing"), "{body:?}");
+
+    // Once the key arrives, generations run again.
+    install_audit_key(&state);
+    let (user, device) = {
+        let db = state.db.lock().unwrap();
+        (db.seed_server().unwrap(), "d1".to_string())
+    };
+    assert!(askbar_server::generation::submit(
+        &state,
+        askbar_server::generation::Submit { user_id: user, device_id: device, conversation_id: None, provider_id: "p1".into(), prompt: "hi".into(), client_request_id: None },
+    )
+    .is_ok());
 }

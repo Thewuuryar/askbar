@@ -9,7 +9,17 @@ use sha2::{Digest, Sha256};
 
 pub const TEST_MASTER_KEY: &str = "0123456789abcdef0123456789abcdef";
 
-/// A snapshot with nothing in it.
+/// The secret half of the test audit key (the tests that read what was sealed use it).
+pub const TEST_AUDIT_SECRET: [u8; 32] = [9; 32];
+
+/// The public key of `TEST_AUDIT_SECRET`, as a snapshot carries it. `empty_snapshot` includes it,
+/// so tests that start generations through the helpers have a key unless they remove it.
+pub fn test_audit_key() -> askbar_proto::AuditKey {
+    let public = *crypto_box::SecretKey::from(TEST_AUDIT_SECRET).public_key().as_bytes();
+    askbar_proto::AuditKey { key_id: crate::seal::key_id(&public), public_key: public.iter().map(|b| format!("{b:02x}")).collect() }
+}
+
+/// A snapshot with nothing in it, apart from the test audit key.
 pub fn empty_snapshot() -> Snapshot {
     Snapshot {
         version: 0,
@@ -25,7 +35,7 @@ pub fn empty_snapshot() -> Snapshot {
         kill_switch: false,
         audit_retention_days: 30,
         generation_timeout_secs: 300,
-        audit_public_key: None,
+        audit_public_key: Some(test_audit_key()),
     }
 }
 
