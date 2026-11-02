@@ -106,8 +106,12 @@ fn parse_events(body: &str) -> Vec<(String, ChatEvent)> {
         .collect()
 }
 
-fn wait_for<T>(what: &str, mut f: impl FnMut() -> Option<T>) -> T {
-    let deadline = Instant::now() + Duration::from_secs(10);
+fn wait_for<T>(what: &str, f: impl FnMut() -> Option<T>) -> T {
+    wait_for_secs(10, what, f)
+}
+
+fn wait_for_secs<T>(secs: u64, what: &str, mut f: impl FnMut() -> Option<T>) -> T {
+    let deadline = Instant::now() + Duration::from_secs(secs);
     loop {
         if let Some(v) = f() {
             return v;
@@ -169,6 +173,33 @@ async fn client_disconnect_saves_partial_reply_and_closes_upstream() {
     wait_for("upstream to see the disconnect", || {
         t.mock.log.lock().unwrap().iter().any(|l| l.contains("client disconnected")).then_some(())
     });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "enabled in 1.5"]
+async fn a_reply_keeps_generating_after_the_client_disconnects() {
+    let t = start().await;
+    let http = client_builder().pool_max_idle_per_host(0).build().unwrap();
+    let r = t.chat(&http, None, "p1", "please be slow").await;
+    assert_eq!(r.status(), 200);
+    let mut stream = r.bytes_stream();
+    let mut got = String::new();
+    while !got.contains("event: delta") {
+        got.push_str(&String::from_utf8_lossy(&stream.next().await.unwrap().unwrap()));
+    }
+    drop(stream); // the client goes away after the first delta
+    drop(http);
+
+    let full = "Streaming slowly so you can press Stop. ".repeat(40);
+    // The mock takes about a minute to send the whole slow reply.
+    let saved = wait_for_secs(120, "the full slow reply to be saved", || {
+        t.messages().into_iter().find(|(r, c)| r == "assistant" && c == &full)
+    });
+    assert_eq!(saved.1, full);
+    assert!(
+        !t.mock.log.lock().unwrap().iter().any(|l| l.contains("client disconnected")),
+        "the upstream request must not be closed when the client leaves"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
