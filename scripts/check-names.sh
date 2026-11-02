@@ -3,9 +3,9 @@
 # "mgmt", "management" and "device" in tracked files, except where scripts/names-allow.txt or a
 # `names-ok` marker on the line allows them.
 #   scripts/check-names.sh            list hits; exit 1 if there are any
-#   ASKBAR_NAMES_ENFORCE=0 ...        list hits but exit 0 (used while the renames are in progress)
+#   ASKBAR_NAMES_ENFORCE=0 ...        list hits but exit 0
 cd "$(dirname "$0")/.." || exit 2
-ENFORCE="${ASKBAR_NAMES_ENFORCE:-0}"
+ENFORCE="${ASKBAR_NAMES_ENFORCE:-1}"
 allowed=$(sed -e 's/#.*//' -e 's/[[:space:]]*$//' scripts/names-allow.txt | grep -v '^$')
 hits=$(git ls-files -z | xargs -0 grep -InHiE 'mgmt|management|device' 2>/dev/null \
   | grep -v 'names-ok' \

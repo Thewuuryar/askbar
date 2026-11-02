@@ -376,7 +376,7 @@ async fn clients_and_usage_are_listed_over_the_server_api() {
     };
     let _ = user;
 
-    let (st, body) = s.call(M::GET, "/api/server/v1/devices", None).await;
+    let (st, body) = s.call(M::GET, "/api/server/v1/clients", None).await;
     assert_eq!(st, 200);
     let clients: serde_json::Value = serde_json::from_str(&body).unwrap();
     let by_name = |n: &str| clients.as_array().unwrap().iter().find(|d| d["name"] == n).unwrap().clone();
@@ -391,7 +391,7 @@ async fn clients_and_usage_are_listed_over_the_server_api() {
         (&json!(1), &json!(2), &json!(1), &json!(1), &json!(10), &json!(20))
     );
 
-    for p in ["/api/server/v1/devices", "/api/server/v1/usage", "/api/server/v1/backup"] {
+    for p in ["/api/server/v1/clients", "/api/server/v1/usage", "/api/server/v1/backup"] {
         let r = s.t.http.get(format!("{}{p}", s.t.url)).send().await.unwrap();
         assert_eq!(r.status(), 401, "{p} needs the token");
     }

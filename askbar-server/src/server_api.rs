@@ -302,7 +302,7 @@ pub fn router(state: Arc<AppState>, hash_file: PathBuf) -> Router {
         .route(&askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/providers/health"), get(providers_health))
         .route(&askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/providers/{id}/test"), post(test_provider))
         .route(&askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/users"), get(list_users))
-        .route(&askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/devices"), get(list_clients))
+        .route(&askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/clients"), get(list_clients))
         .route(&askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/usage"), get(usage))
         .route(&askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/backup"), get(backup))
         .route(&askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/audit/traces"), get(audit_traces))

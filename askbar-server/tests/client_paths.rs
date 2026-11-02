@@ -56,7 +56,7 @@ async fn the_minimum_client_is_0_5_0_and_an_older_app_on_a_new_path_is_told_to_u
 #[tokio::test]
 async fn the_old_names_are_gone_and_old_paths_are_404_except_the_one_that_says_update() {
     let t = start().await;
-    for gone in ["/api/client/v1/pair", "/api/client/v1/whoami", "/api/client/v2/health", "/api/client/health", "/mgmt/v1/health", "/api/server/v1/health", "/api/health"] {
+    for gone in ["/api/client/v1/pair", "/api/client/v1/whoami", "/api/client/v2/health", "/api/client/health", "/mgmt/v1/health", "/api/server/v1/health", "/api/health"] {  // names-ok: proves the old path is gone
         let r = t.get(gone).send().await.unwrap();
         assert_eq!(r.status(), 404, "{gone}");
         assert_eq!(r.json::<Problem>().await.unwrap().error, "not_found");

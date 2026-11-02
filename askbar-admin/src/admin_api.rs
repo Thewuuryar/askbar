@@ -322,7 +322,7 @@ async fn revoked_ids(state: &AdminState) -> Vec<String> {
 
 /// The server's clients, with the ones this admin has revoked marked as such.
 async fn clients(state: &AdminState) -> Result<Vec<serde_json::Value>, Failure> {
-    let (status, body) = link(state)?.request(reqwest::Method::GET, &askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/devices"), None).await.map_err(from_push)?;
+    let (status, body) = link(state)?.request(reqwest::Method::GET, &askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/clients"), None).await.map_err(from_push)?;
     if status != 200 {
         return Err(err(StatusCode::BAD_GATEWAY, &format!("The server answered {status}.")));
     }

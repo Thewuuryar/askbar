@@ -54,7 +54,7 @@ fn the_table_lists_the_api_under_v1_without_duplicates() {
         assert!(api.iter().any(|r| r.method == m && r.path == p), "missing {m} {p}");
     }
     // Nothing from before the move is left.
-    assert!(table.iter().all(|r| !r.path.starts_with("/admin/api/devices") && r.path != "/admin/login" && r.path != "/health" && r.path != "/"), "{table:?}");
+    assert!(table.iter().all(|r| !r.path.starts_with("/admin/api/devices") && r.path != "/admin/login" && r.path != "/health" && r.path != "/"), "{table:?}");  // names-ok: proves the old path is gone
 }
 
 #[tokio::test]
