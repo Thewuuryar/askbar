@@ -192,6 +192,40 @@ async function waitForPort(port) {
     await page.waitForFunction(() => /Success|Failed/.test(document.querySelector('.card[data-name="mock"] .test-result').textContent));
     assert.match(await page.innerText('.card[data-name="mock"] .test-result'), /^Success:/);
   });
+  await step('provider billing: set a subscription with prices, see it on the card, refuse a negative price', async () => {
+    await page.click('.card[data-name="mock"] [data-action="edit"]');
+    assert.equal(await page.inputValue('#p-billing'), 'metered', 'the default');
+    assert.equal(await page.isChecked('#p-fallback'), false);
+    await page.selectOption('#p-billing', 'subscription');
+    await page.check('#p-fallback');
+    await page.fill('#p-price-in', '2.5');
+    await page.fill('#p-price-out', '10');
+    await page.fill('#p-price-cached', '0.25');
+    await page.click('#provider-form button[type=submit]');
+    await page.waitForFunction(() => /subscription/.test(document.querySelector('.card[data-name="mock"]')?.textContent || ''));
+    const card = await page.innerText('.card[data-name="mock"]');
+    assert.match(card, /fallback allowed/);
+    assert.match(card, /in 2\.5, out 10, cached in 0\.25/);
+    // It is kept: edit again, the values are back.
+    await page.click('.card[data-name="mock"] [data-action="edit"]');
+    assert.equal(await page.inputValue('#p-billing'), 'subscription');
+    assert.equal(await page.isChecked('#p-fallback'), true);
+    assert.equal(await page.inputValue('#p-price-out'), '10');
+    // A negative price is refused with the server's rule, and nothing changes.
+    await page.evaluate(() => document.getElementById('provider-form').noValidate = true);
+    await page.fill('#p-price-in', '-1');
+    await page.click('#provider-form button[type=submit]');
+    await page.waitForSelector('#provider-error:not([hidden])');
+    assert.match(await page.innerText('#provider-error'), /zero or more/);
+    // Put it back to an ordinary metered provider for the rest of the run.
+    await page.fill('#p-price-in', '');
+    await page.fill('#p-price-out', '');
+    await page.fill('#p-price-cached', '');
+    await page.selectOption('#p-billing', 'metered');
+    await page.uncheck('#p-fallback');
+    await page.click('#provider-form button[type=submit]');
+    await page.waitForFunction(() => !/subscription/.test(document.querySelector('.card[data-name="mock"]')?.textContent || ''));
+  });
   await step('a provider that cannot be reached shows its error', async () => {
     const dead = await freePort();
     await page.click('#add-provider');

@@ -91,6 +91,13 @@ const MIGRATIONS: &[&str] = &[
          opened_at INTEGER NOT NULL,
          ok        INTEGER NOT NULL CHECK (ok IN (0, 1))
      );",
+    // v6: how each provider is paid for, and what its tokens cost (per million). Existing
+    // providers are metered with no prices, which is what the server assumes when told nothing.
+    "ALTER TABLE providers ADD COLUMN billing TEXT NOT NULL DEFAULT 'metered';
+     ALTER TABLE providers ADD COLUMN allow_as_fallback INTEGER NOT NULL DEFAULT 0;
+     ALTER TABLE providers ADD COLUMN price_in REAL;
+     ALTER TABLE providers ADD COLUMN price_out REAL;
+     ALTER TABLE providers ADD COLUMN price_cached_in REAL;",
 ];
 
 #[derive(Debug, thiserror::Error)]

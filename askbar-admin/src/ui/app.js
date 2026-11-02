@@ -242,7 +242,11 @@
 
     const meta = document.createElement('div');
     meta.className = 'meta';
-    meta.textContent = p.model + (p.base_url ? ' · ' + p.base_url : '');
+    const prices = [['in', p.price_in], ['out', p.price_out], ['cached in', p.price_cached_in]].filter(([, v]) => v != null).map(([k, v]) => k + ' ' + v);
+    meta.textContent = p.model + (p.base_url ? ' · ' + p.base_url : '') +
+      ' · ' + (p.billing === 'subscription' ? 'subscription' : 'metered') +
+      (p.allow_as_fallback ? ' · fallback allowed' : '') +
+      (prices.length ? ' · per million: ' + prices.join(', ') : '');
     const result = document.createElement('div');
     result.className = 'test-result';
     card.append(head, meta, result);
@@ -283,6 +287,11 @@
     $('p-key').placeholder = p && p.has_key ? 'unchanged (write-only)' : 'write-only';
     $('p-max-tokens').value = v.max_tokens || '';
     $('p-temperature').value = v.temperature == null ? '' : v.temperature;
+    $('p-billing').value = v.billing || 'metered';
+    $('p-fallback').checked = !!v.allow_as_fallback;
+    $('p-price-in').value = v.price_in == null ? '' : v.price_in;
+    $('p-price-out').value = v.price_out == null ? '' : v.price_out;
+    $('p-price-cached').value = v.price_cached_in == null ? '' : v.price_cached_in;
     show($('provider-error'), false);
     $('p-hint').textContent = preset && preset.hint ? preset.hint : '';
     show($('p-hint'), !!(preset && preset.hint));
@@ -312,6 +321,11 @@
       api_key: $('p-key').value,
       max_tokens: num('p-max-tokens', (x) => parseInt(x, 10)),
       temperature: num('p-temperature', parseFloat),
+      billing: $('p-billing').value,
+      allow_as_fallback: $('p-fallback').checked,
+      price_in: num('p-price-in', parseFloat),
+      price_out: num('p-price-out', parseFloat),
+      price_cached_in: num('p-price-cached', parseFloat),
     };
     try {
       if (editing) await api('PUT', '/admin/api/providers/' + encodeURIComponent(editing), body);

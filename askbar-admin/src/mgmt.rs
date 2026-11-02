@@ -100,7 +100,7 @@ fn setting(conn: &rusqlite::Connection, key: &str) -> rusqlite::Result<Option<St
 pub fn build_snapshot(conn: &rusqlite::Connection) -> rusqlite::Result<Snapshot> {
     let mut providers = Vec::new();
     {
-        let mut stmt = conn.prepare("SELECT id, name, type, base_url, model, max_tokens, temperature, headers FROM providers ORDER BY name")?;
+        let mut stmt = conn.prepare("SELECT id, name, type, base_url, model, max_tokens, temperature, headers, billing, allow_as_fallback, price_in, price_out, price_cached_in FROM providers ORDER BY name")?;
         let rows = stmt.query_map([], |r| {
             Ok(SnapshotProvider {
                 id: r.get(0)?,
@@ -111,12 +111,11 @@ pub fn build_snapshot(conn: &rusqlite::Connection) -> rusqlite::Result<Snapshot>
                 max_tokens: r.get(5)?,
                 temperature: r.get(6)?,
                 headers: serde_json::from_str(&r.get::<_, String>(7)?).unwrap_or_default(),
-                // The admin learns to store these in step 6.16.
-                billing: Default::default(),
-                allow_as_fallback: false,
-                price_in: None,
-                price_out: None,
-                price_cached_in: None,
+                billing: if r.get::<_, String>(8)? == "subscription" { askbar_proto::Billing::Subscription } else { askbar_proto::Billing::Metered },
+                allow_as_fallback: r.get::<_, i64>(9)? != 0,
+                price_in: r.get(10)?,
+                price_out: r.get(11)?,
+                price_cached_in: r.get(12)?,
             })
         })?;
         for p in rows {

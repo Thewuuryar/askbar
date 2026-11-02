@@ -121,6 +121,13 @@ pub struct ProviderRow {
     temperature: Option<f32>,
     /// Whether the server holds a key. The key itself is never shown.
     has_key: bool,
+    /// "metered" or "subscription".
+    billing: String,
+    allow_as_fallback: bool,
+    /// Price per million tokens; absent means unknown.
+    price_in: Option<f64>,
+    price_out: Option<f64>,
+    price_cached_in: Option<f64>,
 }
 
 #[derive(Deserialize)]
@@ -138,6 +145,17 @@ pub struct ProviderInput {
     max_tokens: Option<u32>,
     #[serde(default)]
     temperature: Option<f32>,
+    /// "metered" (the default) or "subscription".
+    #[serde(default)]
+    billing: Option<String>,
+    #[serde(default)]
+    allow_as_fallback: bool,
+    #[serde(default)]
+    price_in: Option<f64>,
+    #[serde(default)]
+    price_out: Option<f64>,
+    #[serde(default)]
+    price_cached_in: Option<f64>,
 }
 
 fn validate(i: &ProviderInput) -> Result<(), Failure> {
@@ -153,6 +171,15 @@ fn validate(i: &ProviderInput) -> Result<(), Failure> {
     let url = i.base_url.trim();
     if !url.is_empty() && !(url.starts_with("http://") || url.starts_with("https://")) {
         return Err(bad("Base URL must start with http:// or https://."));
+    }
+    if !matches!(i.billing.as_deref().unwrap_or("metered"), "metered" | "subscription") {
+        return Err(bad("Billing must be metered or subscription."));
+    }
+    // The same rule the server applies to the snapshot.
+    for (label, price) in [("Input price", i.price_in), ("Output price", i.price_out), ("Cached input price", i.price_cached_in)] {
+        if price.is_some_and(|v| !v.is_finite() || v < 0.0) {
+            return Err(bad(&format!("{label} must be zero or more.")));
+        }
     }
     Ok(())
 }
@@ -173,7 +200,7 @@ pub async fn list_providers(State(state): St) -> Result<Json<Vec<ProviderRow>>, 
     let db = state.db.lock().await;
     let mut stmt = db
         .conn()
-        .prepare("SELECT id, name, type, base_url, model, max_tokens, temperature, has_key FROM providers ORDER BY name")
+        .prepare("SELECT id, name, type, base_url, model, max_tokens, temperature, has_key, billing, allow_as_fallback, price_in, price_out, price_cached_in FROM providers ORDER BY name")
         .map_err(internal)?;
     let rows = stmt
         .query_map([], |r| {
@@ -186,6 +213,11 @@ pub async fn list_providers(State(state): St) -> Result<Json<Vec<ProviderRow>>, 
                 max_tokens: r.get(5)?,
                 temperature: r.get(6)?,
                 has_key: r.get::<_, i64>(7)? != 0,
+                billing: r.get(8)?,
+                allow_as_fallback: r.get::<_, i64>(9)? != 0,
+                price_in: r.get(10)?,
+                price_out: r.get(11)?,
+                price_cached_in: r.get(12)?,
             })
         })
         .map_err(internal)?
@@ -201,8 +233,12 @@ pub async fn create_provider(State(state): St, Json(i): Json<ProviderInput>) -> 
     let new_id = id.clone();
     mutate(&state, keys, move |c| {
         c.execute(
-            "INSERT INTO providers (id, name, type, base_url, model, max_tokens, temperature, created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
-            params![new_id, i.name.trim(), i.kind, i.base_url.trim(), i.model.trim(), i.max_tokens, i.temperature, crate::auth::now()],
+            "INSERT INTO providers (id, name, type, base_url, model, max_tokens, temperature, created_at, billing, allow_as_fallback, price_in, price_out, price_cached_in)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+            params![
+                new_id, i.name.trim(), i.kind, i.base_url.trim(), i.model.trim(), i.max_tokens, i.temperature, crate::auth::now(),
+                i.billing.as_deref().unwrap_or("metered"), i.allow_as_fallback as i64, i.price_in, i.price_out, i.price_cached_in
+            ],
         )
         .map(|_| ())
         .map_err(clash_or_internal)
@@ -217,8 +253,12 @@ pub async fn update_provider(State(state): St, Path(id): Path<String>, Json(i): 
     mutate(&state, keys, move |c| {
         let n = c
             .execute(
-                "UPDATE providers SET name = ?2, type = ?3, base_url = ?4, model = ?5, max_tokens = ?6, temperature = ?7 WHERE id = ?1",
-                params![id, i.name.trim(), i.kind, i.base_url.trim(), i.model.trim(), i.max_tokens, i.temperature],
+                "UPDATE providers SET name = ?2, type = ?3, base_url = ?4, model = ?5, max_tokens = ?6, temperature = ?7,
+                        billing = ?8, allow_as_fallback = ?9, price_in = ?10, price_out = ?11, price_cached_in = ?12 WHERE id = ?1",
+                params![
+                    id, i.name.trim(), i.kind, i.base_url.trim(), i.model.trim(), i.max_tokens, i.temperature,
+                    i.billing.as_deref().unwrap_or("metered"), i.allow_as_fallback as i64, i.price_in, i.price_out, i.price_cached_in
+                ],
             )
             .map_err(clash_or_internal)?;
         if n == 0 {

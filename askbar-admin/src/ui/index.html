@@ -76,6 +76,14 @@
           <label>API key <input id="p-key" type="password" autocomplete="off" placeholder="write-only"></label>
           <label>Max tokens <input id="p-max-tokens" type="number" min="1"></label>
           <label>Temperature <input id="p-temperature" type="number" step="0.1" min="0" max="2"></label>
+          <label>Billing
+            <select id="p-billing"><option value="metered">metered (paid per token)</option><option value="subscription">subscription (flat plan)</option></select>
+          </label>
+          <label class="check"><input id="p-fallback" type="checkbox"> May be used as a fallback when another provider fails (a metered provider is otherwise never used that way)</label>
+          <p class="hint">Prices per million tokens, in your own currency. Leave empty if you do not know: cost then shows as unknown, not as zero.</p>
+          <label>Input price <input id="p-price-in" type="number" step="any" min="0"></label>
+          <label>Output price <input id="p-price-out" type="number" step="any" min="0"></label>
+          <label>Cached input price <input id="p-price-cached" type="number" step="any" min="0"></label>
           <div class="row">
             <button type="submit">Save</button>
             <button type="button" id="provider-cancel" class="secondary">Cancel</button>
