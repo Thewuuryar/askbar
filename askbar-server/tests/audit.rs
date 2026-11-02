@@ -109,7 +109,6 @@ async fn a_failed_generation_ends_its_turn_span_with_an_error_code() {
 }
 
 #[tokio::test]
-#[ignore = "enabled in 4.8"]
 async fn a_finished_generation_leaves_one_attempt_span_under_its_turn() {
     let (_mock, port) = start_mock();
     let (state, dir) = audit_state(port);
@@ -126,10 +125,37 @@ async fn a_finished_generation_leaves_one_attempt_span_under_its_turn() {
         )
         .unwrap();
     assert_eq!(parent, turn);
+
+    // What the attempt records: provider, model, timings, usage from Phase 3, no error.
+    #[allow(clippy::type_complexity)]
+    let (status, provider, model, ttft, tin, tout, code, attrs): (String, String, String, Option<i64>, Option<i64>, Option<i64>, Option<String>, String) = db
+        .query_row(
+            "SELECT status, provider_id, model, ttft_ms, tokens_in, tokens_out, error_code, attrs_json FROM spans WHERE trace_id = ?1 AND kind = 'attempt'",
+            [&trace],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?)),
+        )
+        .unwrap();
+    assert_eq!((status.as_str(), provider.as_str(), model.as_str()), ("done", "p1", "m"));
+    assert!(ttft.is_some(), "time to first token");
+    assert_eq!((tin, tout, code), (Some(100), Some(50), None), "the mock's usage chunk");
+    let attrs: serde_json::Value = serde_json::from_str(&attrs).unwrap();
+    assert!(attrs["latency_ms"].as_u64().is_some() && attrs["http_status"] == 200, "{attrs}");
 }
 
 #[tokio::test]
-#[ignore = "enabled in 4.8"]
+async fn a_failed_attempt_records_its_error_code_and_status() {
+    let (_mock, port) = start_mock();
+    let (state, dir) = audit_state(port);
+    let trace = run_chat(&state, "please fail").await;
+    state.audit.flush().await;
+    let (status, code, attrs): (String, Option<String>, String) = read(&dir)
+        .query_row("SELECT status, error_code, attrs_json FROM spans WHERE trace_id = ?1 AND kind = 'attempt'", [&trace], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .unwrap();
+    assert_eq!((status.as_str(), code.as_deref()), ("error", Some("http_401")));
+    assert!(attrs.contains("401"), "{attrs}");
+}
+
+#[tokio::test]
 async fn audit_db_contains_none_of_the_prompt_or_reply_text() {
     let (_mock, port) = start_mock();
     let (state, dir) = audit_state(port);

@@ -252,6 +252,17 @@ enum Outcome {
     Error(String),
 }
 
+/// What an attempt span records beyond its columns: the whole latency, the HTTP status, whether
+/// the counts were estimated, and why the provider says it stopped.
+fn attempt_attrs(r: &crate::llm::StreamReport) -> serde_json::Value {
+    serde_json::json!({
+        "latency_ms": r.total.as_millis() as u64,
+        "http_status": r.http_status,
+        "usage_estimated": r.usage.map(|u| u.estimated),
+        "finish_reason": r.finish_reason,
+    })
+}
+
 /// A short stable code for why a request failed, for the audit trail.
 fn error_code(e: &crate::llm::ChatError) -> String {
     use crate::llm::ChatError;
@@ -521,6 +532,10 @@ fn spawn_run(
             fin.finish(Outcome::Error("The provider is no longer available.".into()));
             return;
         };
+        // One attempt span for the request to the provider, under the turn.
+        let attempt = state.audit.start_span(
+            SpanStart::new(&fin.id, Kind::Attempt, &provider.name).parent(&fin.turn_span).provider(&provider_id, &provider.model),
+        );
         // Race the request against the deadline. Dropping the request on expiry closes the
         // upstream connection; the text that had arrived is already in `fin`.
         let result = {
@@ -531,6 +546,39 @@ fn spawn_run(
                 _ = tokio::time::sleep(timeout) => None,
             }
         };
+        let mut attempt_end = SpanFinish::new(&attempt, "done");
+        match &result {
+            Some(Ok(r)) => {
+                attempt_end.status = match r.outcome {
+                    StreamOutcome::Completed => "done",
+                    StreamOutcome::Cancelled => "cancelled",
+                }
+                .into();
+                attempt_end.ttft_ms = r.time_to_first_token.map(|d| d.as_millis() as u64);
+                attempt_end.attrs_json = Some(attempt_attrs(r).to_string());
+            }
+            Some(Err(e)) => {
+                attempt_end.status = "error".into();
+                attempt_end.error_code = Some(error_code(&e.error));
+                attempt_end.ttft_ms = e.report.time_to_first_token.map(|d| d.as_millis() as u64);
+                attempt_end.attrs_json = Some(attempt_attrs(&e.report).to_string());
+            }
+            None => {
+                attempt_end.status = "timed_out".into();
+                attempt_end.error_code = Some("timeout".into());
+            }
+        }
+        let used = match &result {
+            Some(Ok(r)) => r.usage,
+            Some(Err(e)) => e.report.usage,
+            None => None,
+        };
+        if let Some(u) = used {
+            attempt_end.tokens_in = u.input;
+            attempt_end.tokens_out = u.output;
+            attempt_end.tokens_cached = u.cache_read;
+        }
+        state.audit.finish_span(attempt_end);
         let (outcome, usage) = match result {
             Some(Ok(report)) => (
                 match report.outcome {
