@@ -310,7 +310,7 @@ impl Remote {
             };
             for ev in events {
                 match serde_json::from_str::<ChatEvent>(&ev.data) {
-                    Ok(ChatEvent::Meta { conversation_id }) => {
+                    Ok(ChatEvent::Meta { conversation_id, .. }) => {
                         emit(StreamEvent::Started { conversation_id })
                     }
                     Ok(ChatEvent::Delta { text }) => emit(StreamEvent::Delta { text }),

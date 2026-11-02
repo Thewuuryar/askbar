@@ -22,13 +22,22 @@ fn internal<E>(_: E) -> StatusCode {
 }
 
 fn sse_event(e: &ChatEvent) -> Event {
+    sse_event_with_id(e, None)
+}
+
+/// Deltas carry `id: <seq>` so a client can resume with `?after=<last id>`.
+fn sse_event_with_id(e: &ChatEvent, seq: Option<u64>) -> Event {
     let name = match e {
         ChatEvent::Meta { .. } => "meta",
         ChatEvent::Delta { .. } => "delta",
         ChatEvent::Done => "done",
         ChatEvent::Error { .. } => "error",
     };
-    Event::default().event(name).json_data(e).expect("ChatEvent serializes")
+    let ev = Event::default().event(name).json_data(e).expect("ChatEvent serializes");
+    match seq {
+        Some(n) => ev.id(n.to_string()),
+        None => ev,
+    }
 }
 
 pub async fn chat(
@@ -64,7 +73,7 @@ pub async fn chat(
         (provider, system, conversation, history, user_message_id)
     };
 
-    let (_id, live) = generation::start(
+    let (generation_id, live) = generation::start(
         &state,
         generation::Start {
             user_id: auth.user_id,
@@ -79,13 +88,13 @@ pub async fn chat(
         },
     )
     .map_err(internal)?;
-    let meta = futures_util::stream::once(async move { Ok(sse_event(&ChatEvent::Meta { conversation_id: conversation })) });
+    let meta = futures_util::stream::once(async move { Ok(sse_event(&ChatEvent::Meta { conversation_id: conversation, generation_id: Some(generation_id) })) });
     let events = live.subscribe(0).map(|e| {
-        Ok(sse_event(&match e {
-            GenEvent::Delta { text, .. } => ChatEvent::Delta { text },
-            GenEvent::Done => ChatEvent::Done,
-            GenEvent::Error { message } => ChatEvent::Error { message },
-        }))
+        Ok(match e {
+            GenEvent::Delta { seq, text } => sse_event_with_id(&ChatEvent::Delta { text }, Some(seq)),
+            GenEvent::Done => sse_event(&ChatEvent::Done),
+            GenEvent::Error { message } => sse_event(&ChatEvent::Error { message }),
+        })
     });
     Ok(Sse::new(meta.chain(events)).keep_alive(KeepAlive::default()))
 }

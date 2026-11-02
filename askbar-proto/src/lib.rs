@@ -177,7 +177,12 @@ pub struct ChatRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum ChatEvent {
-    Meta { conversation_id: String },
+    Meta {
+        conversation_id: String,
+        /// The generation running this reply; resume with `GET /api/v1/generations/{id}/stream`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        generation_id: Option<String>,
+    },
     Delta { text: String },
     Done,
     Error { message: String },
@@ -262,7 +267,8 @@ mod tests {
     #[test]
     fn chat_event_round_trip() {
         for e in [
-            ChatEvent::Meta { conversation_id: "x".into() },
+            ChatEvent::Meta { conversation_id: "x".into(), generation_id: None },
+            ChatEvent::Meta { conversation_id: "x".into(), generation_id: Some("g".into()) },
             ChatEvent::Delta { text: "hi".into() },
             ChatEvent::Done,
             ChatEvent::Error { message: "bad".into() },
@@ -271,6 +277,12 @@ mod tests {
             assert_eq!(serde_json::from_str::<ChatEvent>(&s).unwrap(), e);
         }
         assert_eq!(serde_json::to_string(&ChatEvent::Done).unwrap(), r#"{"event":"done"}"#);
+    }
+
+    #[test]
+    fn meta_without_a_generation_id_still_parses() {
+        let e: ChatEvent = serde_json::from_str(r#"{"event":"meta","conversation_id":"c"}"#).unwrap();
+        assert_eq!(e, ChatEvent::Meta { conversation_id: "c".into(), generation_id: None });
     }
 
     #[test]

@@ -148,7 +148,7 @@ async fn complete_reply_is_streamed_and_saved_in_full() {
     }
     assert!(reply.ends_with("Anything else?"), "got {reply:?}");
 
-    let ChatEvent::Meta { conversation_id } = &events[0].1 else { unreachable!() };
+    let ChatEvent::Meta { conversation_id, .. } = &events[0].1 else { unreachable!() };
     let saved = t.messages();
     assert_eq!(saved, [("user".to_string(), "Hello there".to_string()), ("assistant".to_string(), reply.clone())]);
 
@@ -261,7 +261,7 @@ async fn another_user_cannot_read_or_continue_my_conversation() {
     assert_eq!(r.status(), 200);
     let body = r.text().await.unwrap();
     let events = parse_events(&body);
-    let ChatEvent::Meta { conversation_id } = events[0].1.clone() else { panic!("first event must be meta") };
+    let ChatEvent::Meta { conversation_id, .. } = events[0].1.clone() else { panic!("first event must be meta") };
     wait_for("the reply to be saved", || (t.messages().len() == 2).then_some(()));
 
     // A second user with their own device.
@@ -386,4 +386,28 @@ async fn progress_is_flushed_to_the_row_while_the_reply_runs() {
     });
     assert!(text.starts_with("Streaming"), "got {text:?}");
     assert!(t.messages().iter().all(|(r, _)| r != "assistant"), "the message is written once, at the end");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn meta_carries_the_generation_id_and_deltas_carry_ascending_ids() {
+    let t = start().await;
+    let body = t.chat(&client(), None, "p1", "Hello there").await.text().await.unwrap().replace("\r\n", "\n");
+    let events = parse_events(&body);
+    let ChatEvent::Meta { generation_id, .. } = &events[0].1 else { panic!("first event must be meta") };
+    let generation_id = generation_id.clone().expect("meta names the generation");
+    let stored: String = t.state.db.lock().unwrap().conn().query_row("SELECT id FROM generations", [], |r| r.get(0)).unwrap();
+    assert_eq!(generation_id, stored);
+
+    // Every delta block has `id: n`, counting from 1; other events have none.
+    let mut ids = Vec::new();
+    for block in body.split("\n\n") {
+        let id = block.lines().find_map(|l| l.strip_prefix("id:")).map(|v| v.trim().parse::<u64>().unwrap());
+        if block.contains("event: delta") {
+            ids.push(id.expect("a delta has an id"));
+        } else {
+            assert_eq!(id, None, "only deltas carry ids: {block:?}");
+        }
+    }
+    assert!(ids.len() > 3);
+    assert_eq!(ids, (1..=ids.len() as u64).collect::<Vec<_>>());
 }
