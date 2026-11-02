@@ -157,8 +157,10 @@ pub fn build_snapshot(conn: &rusqlite::Connection) -> rusqlite::Result<Snapshot>
         budget: Budget { daily_tokens: daily.map(|v| v as u64), monthly_tokens: monthly.map(|v| v as u64) },
         kill_switch: kill != 0,
         audit_retention_days: setting(conn, "audit_retention_days")?.and_then(|s| s.parse().ok()).unwrap_or(30),
-        // Read from the settings in step 2.3.
-        generation_timeout_secs: askbar_proto::DEFAULT_GENERATION_TIMEOUT_SECS,
+        // Absent on installs that never set it: the default applies, no migration needed.
+        generation_timeout_secs: setting(conn, "generation_timeout_secs")?
+            .and_then(|s| s.trim().parse().ok())
+            .unwrap_or(askbar_proto::DEFAULT_GENERATION_TIMEOUT_SECS),
     })
 }
 

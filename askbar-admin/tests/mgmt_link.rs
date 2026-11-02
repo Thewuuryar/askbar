@@ -126,6 +126,18 @@ fn the_snapshot_is_built_from_admin_db() {
     assert_eq!((empty.providers.len(), empty.audit_retention_days, empty.kill_switch), (0, 30, false));
 }
 
+#[test]
+fn the_generation_timeout_defaults_to_300_when_never_set_and_follows_the_setting() {
+    let db = AdminDb::open_in_memory().unwrap();
+    // An install that predates the setting: no key, so the default, with no migration.
+    assert_eq!(mgmt::build_snapshot(db.conn()).unwrap().generation_timeout_secs, 300);
+    db.conn().execute("INSERT INTO settings VALUES ('generation_timeout_secs', '120')", []).unwrap();
+    assert_eq!(mgmt::build_snapshot(db.conn()).unwrap().generation_timeout_secs, 120);
+    // A stored value that is not a number falls back to the default rather than breaking the push.
+    db.conn().execute("UPDATE settings SET value = 'soon' WHERE key = 'generation_timeout_secs'", []).unwrap();
+    assert_eq!(mgmt::build_snapshot(db.conn()).unwrap().generation_timeout_secs, 300);
+}
+
 #[tokio::test]
 async fn a_push_applies_on_the_server() {
     let d = Dirs::new("push");
