@@ -140,6 +140,16 @@ fn read_key(r: &rusqlite::Row<'_>) -> rusqlite::Result<AuditKeyRow> {
     })
 }
 
+/// Retires the active key (if any) and makes `new` the active one, using the caller's transaction.
+pub fn replace_active_audit_key_in(conn: &Connection, new: &AuditKeyRow, now: i64) -> rusqlite::Result<()> {
+    conn.execute("UPDATE audit_keys SET retired_at = ?1 WHERE retired_at IS NULL", [now])?;
+    conn.execute(
+        "INSERT INTO audit_keys (key_id, public_key, salt, argon_params, created_at, retired_at) VALUES (?1,?2,?3,?4,?5,NULL)",
+        rusqlite::params![new.key_id, new.public_key.as_slice(), new.salt.as_slice(), new.argon_params, new.created_at],
+    )?;
+    Ok(())
+}
+
 /// Records an attempt to open the content of `span_id` (sealed to `key_id`).
 pub fn record_audit_access(conn: &Connection, span_id: &str, key_id: &str, opened_at: i64, ok: bool) -> rusqlite::Result<()> {
     conn.execute(
@@ -213,11 +223,7 @@ impl AdminDb {
     /// is never a moment with two active keys or none.
     pub fn replace_active_audit_key(&mut self, new: &AuditKeyRow, now: i64) -> Result<(), DbError> {
         let tx = self.conn.transaction()?;
-        tx.execute("UPDATE audit_keys SET retired_at = ?1 WHERE retired_at IS NULL", [now])?;
-        tx.execute(
-            "INSERT INTO audit_keys (key_id, public_key, salt, argon_params, created_at, retired_at) VALUES (?1,?2,?3,?4,?5,NULL)",
-            rusqlite::params![new.key_id, new.public_key.as_slice(), new.salt.as_slice(), new.argon_params, new.created_at],
-        )?;
+        replace_active_audit_key_in(&tx, new, now)?;
         tx.commit()?;
         Ok(())
     }

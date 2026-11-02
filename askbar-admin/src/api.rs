@@ -412,6 +412,73 @@ pub async fn setup_audit_key(State(state): St, Json(b): Json<SetupAuditKey>) -> 
     Ok(Json(serde_json::json!({ "key_id": id })))
 }
 
+// ------------------------------------------------------------------ rotation
+
+#[derive(Deserialize)]
+pub struct RotateKey {
+    current: String,
+    new: String,
+    #[serde(default)]
+    confirm: Option<String>,
+}
+
+/// `POST /admin/api/audit/rotate-key`: prove the current passphrase, then switch to a new one. A
+/// new key is made and pushed (the server seals everything from then on with it); the old key is
+/// retired but kept, so what it sealed still opens, with its own passphrase. Nothing already
+/// sealed is touched or re-sealed.
+pub async fn rotate_audit_key(State(state): St, Json(b): Json<RotateKey>) -> Result<Json<serde_json::Value>, Failure> {
+    use crate::audit_key::{derive, derive_for_setup, key_id, new_salt, KdfParams, KeyError};
+    let now = crate::auth::now();
+    if let Some(wait) = state.audit_opens.locked_for(now) {
+        return Err(err(StatusCode::TOO_MANY_REQUESTS, &format!("Too many wrong passphrases. Try again in {} minutes.", (wait + 59) / 60)));
+    }
+    if b.confirm.as_deref().is_some_and(|c| c != b.new) {
+        return Err(bad("The two new passphrases do not match."));
+    }
+    if b.new == b.current {
+        return Err(bad("The new passphrase must be different from the current one."));
+    }
+    let Some(active) = state.db.lock().await.active_audit_key().map_err(internal)? else {
+        return Err(err(StatusCode::CONFLICT, "There is no audit key to rotate yet."));
+    };
+
+    // The current passphrase must give the active key.
+    let (cur, salt, params) = (b.current, active.salt, KdfParams::parse(&active.argon_params).unwrap_or(KdfParams::CURRENT));
+    let derived = tokio::task::spawn_blocking(move || derive(&cur, &salt, params)).await.map_err(internal)?.map_err(internal)?;
+    if key_id(&derived.public_bytes()) != active.key_id {
+        state.audit_opens.record_wrong(now);
+        return Err(err(StatusCode::FORBIDDEN, "The current passphrase is wrong."));
+    }
+    state.audit_opens.record_right();
+    drop(derived);
+
+    let new_salt_bytes = new_salt();
+    let (pass, new_params) = (b.new, KdfParams::CURRENT);
+    let kp = tokio::task::spawn_blocking(move || derive_for_setup(&pass, &new_salt_bytes, new_params))
+        .await
+        .map_err(internal)?
+        .map_err(|e| match e {
+            KeyError::TooShort => bad("The new passphrase must be at least 20 characters."),
+            KeyError::Kdf(_) => internal(()),
+        })?;
+    let public = kp.public_bytes();
+    let row = crate::db::AuditKeyRow {
+        key_id: key_id(&public),
+        public_key: public,
+        salt: new_salt_bytes,
+        argon_params: new_params.to_text(),
+        created_at: now,
+        retired_at: None,
+    };
+    let (new_id, old_id) = (row.key_id.clone(), active.key_id.clone());
+    // Saved and pushed together, like every other setting: if the server is away, nothing changes.
+    mutate(&state, vec![], move |c| {
+        crate::db::replace_active_audit_key_in(c, &row, now).map_err(|_| err(StatusCode::CONFLICT, "That key already exists."))
+    })
+    .await?;
+    Ok(Json(serde_json::json!({ "key_id": new_id, "retired_key_id": old_id })))
+}
+
 // ------------------------------------------------------- opening sealed content
 
 #[derive(Deserialize)]

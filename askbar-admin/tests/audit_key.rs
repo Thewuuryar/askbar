@@ -211,3 +211,68 @@ async fn a_span_with_nothing_sealed_opens_to_an_empty_list_without_a_record() {
     assert_eq!((st, body["payloads"].as_array().map(Vec::len)), (200, Some(0)));
     assert!(access_rows(&t).await.is_empty());
 }
+
+#[tokio::test]
+async fn rotation_adds_a_key_retires_the_old_one_and_each_payload_opens_with_its_own_passphrase() {
+    use askbar_server::audit::{Kind, SpanStart};
+    let t = common::start(true).await;
+    let (old_span, old_text) = server_with_sealed_reply(&t).await;
+    let old_key = t.admin.db.lock().await.active_audit_key().unwrap().unwrap();
+    let new_pass = "a brand new passphrase, also long";
+
+    // The refusals first: wrong current, same passphrase, too short, mismatch.
+    let rotate = |cur: &str, new: &str, confirm: &str| {
+        let body = json!({ "current": cur, "new": new, "confirm": confirm });
+        let t = &t;
+        async move { t.call(M::POST, "/admin/api/audit/rotate-key", body).await }
+    };
+    assert_eq!(rotate("not the current one at all!!", new_pass, new_pass).await.0, 403);
+    assert_eq!(rotate(PASS, PASS, PASS).await.0, 400, "must differ");
+    assert_eq!(rotate(PASS, "too short", "too short").await.0, 400);
+    assert_eq!(rotate(PASS, new_pass, "does not match the new one").await.0, 400);
+    assert_eq!(t.admin.db.lock().await.active_audit_key().unwrap().unwrap().key_id, old_key.key_id, "nothing changed yet");
+
+    let (st, body) = rotate(PASS, new_pass, new_pass).await;
+    assert_eq!(st, 200, "{body}");
+    let new_id = body["key_id"].as_str().unwrap().to_string();
+    assert_ne!(new_id, old_key.key_id);
+    assert_eq!(body["retired_key_id"], old_key.key_id.as_str());
+
+    // One active key, the old one retired but kept.
+    let db = t.admin.db.lock().await;
+    assert_eq!(db.active_audit_key().unwrap().unwrap().key_id, new_id);
+    assert!(db.audit_key(&old_key.key_id).unwrap().unwrap().retired_at.is_some());
+    drop(db);
+    // The server was pushed the new public key; it seals with that from now on.
+    let pushed = askbar_server::snapshot::current(&t.server.db.lock().unwrap()).unwrap().unwrap().audit_public_key.unwrap();
+    assert_eq!(pushed.key_id, new_id);
+
+    // New content is sealed with the new key. Old content stays sealed with the old one.
+    let public = askbar_server::snapshot::parse_hex(&pushed.public_key).unwrap();
+    let new_text = "A reply sealed after the rotation.";
+    let new_span = t.server.audit.start_span(SpanStart::new("trace-9", Kind::Turn, "chat"));
+    t.server.audit.payload(&new_span, "reply", askbar_server::seal::seal(&public, new_text.as_bytes()).unwrap());
+    t.server.audit.flush().await;
+
+    let open = |span: &str, pass: &str| {
+        let (path, body) = (format!("/admin/api/audit/payloads/{span}/open"), json!({ "passphrase": pass }));
+        let t = &t;
+        async move { t.call(M::POST, &path, body).await }
+    };
+    let (st, b) = open(&new_span, new_pass).await;
+    assert_eq!((st, b["payloads"][0]["text"].as_str()), (200, Some(new_text)));
+    assert_eq!(b["payloads"][0]["key_id"], new_id.as_str());
+    let (st, b) = open(&old_span, PASS).await;
+    assert_eq!((st, b["payloads"][0]["text"].as_str()), (200, Some(old_text.as_str())), "the old content still opens, with the old passphrase");
+    assert_eq!(b["payloads"][0]["key_id"], old_key.key_id.as_str());
+    // A passphrase opens only what its own key sealed.
+    assert_eq!(open(&old_span, new_pass).await.0, 403);
+    assert_eq!(open(&new_span, PASS).await.0, 403);
+}
+
+#[tokio::test]
+async fn rotation_needs_an_existing_key_and_a_reachable_server() {
+    let t = common::start(true).await;
+    let (st, _) = t.call(M::POST, "/admin/api/audit/rotate-key", json!({ "current": PASS, "new": "another long enough passphrase", "confirm": "another long enough passphrase" })).await;
+    assert_eq!(st, 409, "no key yet");
+}
