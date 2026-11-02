@@ -42,7 +42,7 @@ pub async fn chat(
     }
 
     // Everything that can fail with a plain HTTP status happens before the stream starts.
-    let (provider, system, conversation, history) = {
+    let (provider, system, conversation, history, user_message_id) = {
         let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
         let secrets = state.secrets();
         let provider = store::load_provider(&db, &secrets, &req.provider)
@@ -54,20 +54,31 @@ pub async fn chat(
             None => db.create_conversation(&auth.user_id, &crate::make_title(&text)).map_err(internal)?,
         };
         // Save the question first so it survives a failed request.
-        db.add_message(&auth.user_id, &conversation, "user", &text).map_err(internal)?;
+        let user_message_id = db.add_message(&auth.user_id, &conversation, "user", &text).map_err(internal)?;
         let history: Vec<ChatMessage> = db
             .get_messages(&auth.user_id, &conversation)
             .map_err(internal)?
             .iter()
             .map(|m| ChatMessage::new(&m.role, &m.content))
             .collect();
-        (provider, system, conversation, history)
+        (provider, system, conversation, history, user_message_id)
     };
 
     let (_id, live) = generation::start(
         &state,
-        generation::Start { user_id: auth.user_id, conversation_id: conversation.clone(), provider, system, history },
-    );
+        generation::Start {
+            user_id: auth.user_id,
+            device_id: auth.device_id,
+            conversation_id: conversation.clone(),
+            user_message_id: Some(user_message_id),
+            prompt: text,
+            provider_id: req.provider,
+            provider,
+            system,
+            history,
+        },
+    )
+    .map_err(internal)?;
     let meta = futures_util::stream::once(async move { Ok(sse_event(&ChatEvent::Meta { conversation_id: conversation })) });
     let events = live.subscribe(0).map(|e| {
         Ok(sse_event(&match e {

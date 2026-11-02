@@ -3,12 +3,13 @@
 //! This module holds the in-memory registry: each running generation has a `Live` that buffers
 //! its deltas so a client can attach, drop and attach again without losing or repeating text.
 
-use crate::ids::new_id;
 use crate::llm::{stream_chat, ChatMessage, Provider};
+use crate::db::{DbError, NewGeneration};
 use crate::AppState;
 use futures_util::Stream;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tokio::sync::{oneshot, Notify};
 
 /// What a subscriber sees. `seq` counts deltas from 1, and is what SSE `id:` carries.
@@ -159,7 +160,11 @@ impl Generations {
 /// Everything a generation needs, gathered by the handler before it starts.
 pub struct Start {
     pub user_id: String,
+    pub device_id: String,
     pub conversation_id: String,
+    pub user_message_id: Option<String>,
+    pub prompt: String,
+    pub provider_id: String,
     pub provider: Provider,
     pub system: String,
     pub history: Vec<ChatMessage>,
@@ -175,31 +180,55 @@ struct Finisher {
     conversation_id: String,
     text: String,
     saved: bool,
+    /// Progress is flushed to the row about once a second, or every 2 KB.
+    last_flush: Instant,
+    unflushed: usize,
 }
 
+const FLUSH_EVERY: Duration = Duration::from_secs(1);
+const FLUSH_BYTES: usize = 2048;
+
 impl Finisher {
-    fn save(&mut self) {
+    fn push(&mut self, delta: &str) {
+        self.text.push_str(delta);
+        self.live.push(delta);
+        self.unflushed += delta.len();
+        if self.unflushed >= FLUSH_BYTES || self.last_flush.elapsed() >= FLUSH_EVERY {
+            let db = self.state.db.lock().unwrap_or_else(|e| e.into_inner());
+            let _ = db.flush_generation_text(&self.id, &self.text);
+            self.last_flush = Instant::now();
+            self.unflushed = 0;
+        }
+    }
+
+    /// Writes the assistant message (if there is any text) and ends the row, once.
+    fn save(&mut self, status: &str, error: Option<&str>) {
         if self.saved {
             return;
         }
         self.saved = true;
-        if self.text.trim().is_empty() {
-            return;
-        }
         let db = self.state.db.lock().unwrap_or_else(|e| e.into_inner());
-        let _ = db.add_message(&self.user_id, &self.conversation_id, "assistant", &self.text);
+        let message_id = if self.text.trim().is_empty() {
+            None
+        } else {
+            db.add_message(&self.user_id, &self.conversation_id, "assistant", &self.text).ok()
+        };
+        let _ = db.finalize_generation(&self.id, status, &self.text, error, message_id.as_deref());
     }
 
     /// Saves the reply, then tells subscribers, so a client that has seen the end can read the message.
     fn finish(&mut self, terminal: Terminal) {
-        self.save();
+        match &terminal {
+            Terminal::Done => self.save("done", None),
+            Terminal::Error(m) => self.save("error", Some(m)),
+        }
         self.live.finish(terminal);
     }
 }
 
 impl Drop for Finisher {
     fn drop(&mut self) {
-        self.save();
+        self.save("error", Some("The reply stopped unexpectedly."));
         // A no-op if `finish` already ran; otherwise the task died and subscribers must not wait forever.
         self.live.finish(Terminal::Error("The reply stopped unexpectedly.".into()));
         self.state.generations.remove(&self.id);
@@ -207,8 +236,18 @@ impl Drop for Finisher {
 }
 
 /// Runs a generation as a task that does not depend on any client. Returns its id and its buffer.
-pub fn start(state: &Arc<AppState>, s: Start) -> (String, Arc<Live>) {
-    let id = new_id();
+pub fn start(state: &Arc<AppState>, s: Start) -> Result<(String, Arc<Live>), DbError> {
+    let id = state.db.lock().unwrap_or_else(|e| e.into_inner()).create_generation(&NewGeneration {
+        user_id: &s.user_id,
+        device_id: Some(&s.device_id),
+        conversation_id: &s.conversation_id,
+        user_message_id: s.user_message_id.as_deref(),
+        client_request_id: None,
+        provider_id: Some(&s.provider_id),
+        status: "running",
+        prompt: &s.prompt,
+        deadline_at: None,
+    })?;
     let live = Live::new();
     state.generations.insert(&id, live.clone());
     let mut fin = Finisher {
@@ -219,23 +258,20 @@ pub fn start(state: &Arc<AppState>, s: Start) -> (String, Arc<Live>) {
         conversation_id: s.conversation_id,
         text: String::new(),
         saved: false,
+        last_flush: Instant::now(),
+        unflushed: 0,
     };
     let state = state.clone();
     tokio::spawn(async move {
         // Nothing fires this yet; cancelling arrives with the cancel endpoint.
         let (_keep, cancel_rx) = oneshot::channel::<()>();
-        let live = fin.live.clone();
-        let result = stream_chat(&state.http, &s.provider, &s.system, &s.history, cancel_rx, |delta| {
-            fin.text.push_str(delta);
-            live.push(delta);
-        })
-        .await;
+        let result = stream_chat(&state.http, &s.provider, &s.system, &s.history, cancel_rx, |delta| fin.push(delta)).await;
         fin.finish(match result {
             Ok(_) => Terminal::Done,
             Err(e) => Terminal::Error(e.to_string()),
         });
     });
-    (id, live)
+    Ok((id, live))
 }
 
 #[cfg(test)]

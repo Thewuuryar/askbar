@@ -80,6 +80,13 @@ impl T {
             .await
             .unwrap()
     }
+    /// (status, text, error, assistant_message_id) of every generation, oldest first.
+    fn generations(&self) -> Vec<(String, String, Option<String>, Option<String>)> {
+        let db = self.state.db.lock().unwrap();
+        let mut stmt = db.conn().prepare("SELECT status, text, error, assistant_message_id FROM generations ORDER BY id").unwrap();
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).unwrap().map(Result::unwrap).collect();
+        rows
+    }
     fn messages(&self) -> Vec<(String, String)> {
         let db = self.state.db.lock().unwrap();
         let mut stmt = db.conn().prepare("SELECT role, content FROM messages ORDER BY id").unwrap();
@@ -325,4 +332,58 @@ async fn the_snapshots_system_prompt_is_sent_with_the_next_message_and_never_ser
         .await
         .unwrap();
     assert!(!settings.contains("French") && !settings.contains("pirate"), "{settings}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_finished_generation_row_holds_the_full_text_and_the_message_id() {
+    let t = start().await;
+    let http = client();
+    let r = t.chat(&http, None, "p1", "Hello there").await;
+    r.text().await.unwrap();
+    let rows = t.generations();
+    assert_eq!(rows.len(), 1);
+    let (status, text, error, message_id) = &rows[0];
+    assert_eq!(status, "done");
+    assert!(text.ends_with("Anything else?"), "got {text:?}");
+    assert_eq!(error, &None);
+    let db = t.state.db.lock().unwrap();
+    let id: String = db.conn().query_row("SELECT id FROM messages WHERE role = 'assistant'", [], |r| r.get(0)).unwrap();
+    assert_eq!(message_id.as_deref(), Some(id.as_str()));
+    let (provider, user_msg): (String, Option<String>) = db
+        .conn()
+        .query_row("SELECT provider_id, user_message_id FROM generations", [], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap();
+    assert_eq!(provider, "p1");
+    assert!(user_msg.is_some());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_failed_generation_row_is_an_error_row() {
+    let t = start().await;
+    let http = client();
+    t.chat(&http, None, "p1", "please fail").await.text().await.unwrap();
+    let rows = t.generations();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].0, "error");
+    assert!(rows[0].2.as_deref().unwrap_or("").contains("Incorrect API key"), "got {:?}", rows[0].2);
+    assert_eq!(rows[0].3, None, "no reply text, so no assistant message");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn progress_is_flushed_to_the_row_while_the_reply_runs() {
+    let t = start().await;
+    let http = client_builder().pool_max_idle_per_host(0).build().unwrap();
+    let r = t.chat(&http, None, "p1", "please be slow").await;
+    let mut stream = r.bytes_stream();
+    let mut got = String::new();
+    while got.matches("event: delta").count() < 2 {
+        got.push_str(&String::from_utf8_lossy(&stream.next().await.unwrap().unwrap()));
+    }
+    // The row says running, and its text catches up within a flush interval or two.
+    let text = wait_for("text to be flushed", || {
+        let rows = t.generations();
+        (rows[0].0 == "running" && !rows[0].1.is_empty()).then(|| rows[0].1.clone())
+    });
+    assert!(text.starts_with("Streaming"), "got {text:?}");
+    assert!(t.messages().iter().all(|(r, _)| r != "assistant"), "the message is written once, at the end");
 }
