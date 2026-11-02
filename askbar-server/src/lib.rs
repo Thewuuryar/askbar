@@ -32,6 +32,8 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use askbar_proto::problem::ErrorCode;
+use error::{ApiError, ApiJson};
 use secrets::Secrets;
 use std::sync::{Arc, Mutex};
 
@@ -114,15 +116,15 @@ pub fn client_router(state: Arc<AppState>) -> Router {
 }
 
 /// 400 if the client sends no usable version header, 426 if it is older than `min_client`.
-async fn require_client_version(State(state): State<Arc<AppState>>, req: Request, next: Next) -> Result<Response, StatusCode> {
+async fn require_client_version(State(state): State<Arc<AppState>>, req: Request, next: Next) -> Result<Response, ApiError> {
     let sent = req
         .headers()
         .get(askbar_proto::CLIENT_VERSION_HEADER)
         .and_then(|v| v.to_str().ok())
         .and_then(askbar_proto::parse_version)
-        .ok_or(StatusCode::BAD_REQUEST)?;
+        .ok_or_else(|| ApiError::code(ErrorCode::ClientVersionMissing))?;
     match askbar_proto::parse_version(&state.min_client) {
-        Some(min) if sent < min => Err(StatusCode::UPGRADE_REQUIRED),
+        Some(min) if sent < min => Err(ApiError::code(ErrorCode::ClientTooOld).with("min_client", state.min_client.clone())),
         _ => Ok(next.run(req).await),
     }
 }
@@ -131,12 +133,12 @@ async fn health(State(state): State<Arc<AppState>>) -> Json<Health> {
     Json(Health { api_version: API_VERSION, min_client: state.min_client.clone() })
 }
 
-async fn pair(State(state): State<Arc<AppState>>, Json(req): Json<PairRequest>) -> Result<Json<PairResponse>, StatusCode> {
+async fn pair(State(state): State<Arc<AppState>>, ApiJson(req): ApiJson<PairRequest>) -> Result<Json<PairResponse>, ApiError> {
     let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
     match auth::redeem_pair_code(&db, req.code.trim()) {
         Ok(Some(token)) => Ok(Json(PairResponse { token })),
-        Ok(None) => Err(StatusCode::UNAUTHORIZED),
-        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+        Ok(None) => Err(ApiError::new(ErrorCode::Unauthorized, "That pairing code is not valid. It may have expired or been used already.")),
+        Err(_) => Err(ApiError::code(ErrorCode::Internal)),
     }
 }
 

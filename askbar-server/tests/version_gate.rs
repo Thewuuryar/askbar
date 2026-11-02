@@ -71,3 +71,26 @@ async fn the_minimum_client_is_0_4_0() {
     assert_eq!(status(&url, "/api/v1/conversations", Some("0.3.0")).await, 426);
     assert_eq!(status(&url, "/api/v1/conversations", Some("0.4.0")).await, 401);
 }
+
+#[tokio::test]
+async fn the_gate_answers_with_problems_a_program_can_branch_on() {
+    let url = start(askbar_server::MIN_CLIENT).await;
+    let http = reqwest::Client::new();
+    let get = |v: Option<&str>| {
+        let mut r = http.get(format!("{url}/api/v1/whoami")).bearer_auth("abt_not_a_real_token");
+        if let Some(v) = v {
+            r = r.header("X-Askbar-Client-Version", v);
+        }
+        r.send()
+    };
+    let r = get(Some("0.2.9")).await.unwrap();
+    assert_eq!(r.status(), 426);
+    assert_eq!(r.headers()["content-type"], "application/problem+json");
+    let p: askbar_proto::Problem = r.json().await.unwrap();
+    assert_eq!((p.error.as_str(), p.status), ("client_too_old", 426));
+    assert_eq!(p.extra["min_client"], askbar_server::MIN_CLIENT, "the problem says what version is needed");
+    let r = get(None).await.unwrap();
+    assert_eq!(r.status(), 400);
+    let p: askbar_proto::Problem = r.json().await.unwrap();
+    assert_eq!(p.error, "client_version_missing");
+}

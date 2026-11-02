@@ -114,3 +114,32 @@ fn client() -> reqwest::Client {
     h.insert(askbar_proto::CLIENT_VERSION_HEADER, "0.4.0".parse().unwrap());
     reqwest::Client::builder().default_headers(h).build().unwrap()
 }
+
+#[tokio::test]
+async fn a_refused_token_and_a_bad_pairing_code_are_problems() {
+    let s = start().await;
+    let ask = |token: Option<&str>| {
+        let mut r = s.http.get(s.url("/api/v1/whoami"));
+        if let Some(t) = token {
+            r = r.bearer_auth(t);
+        }
+        r.send()
+    };
+    for token in [None, Some("abt_wrong")] {
+        let r = ask(token).await.unwrap();
+        assert_eq!(r.status(), 401);
+        assert_eq!(r.headers()["www-authenticate"], "Bearer");
+        assert_eq!(r.headers()["content-type"], "application/problem+json");
+        let p: askbar_proto::Problem = r.json().await.unwrap();
+        assert_eq!(p.error, "unauthorized");
+    }
+    let r = s.pair("not-a-code").await;
+    assert_eq!(r.status(), 401);
+    let p: askbar_proto::Problem = r.json().await.unwrap();
+    assert_eq!(p.error, "unauthorized");
+    assert!(p.detail.contains("pairing code"));
+    // A body that is not JSON is a bad request problem, not plain text.
+    let r = s.http.post(s.url("/api/v1/pair")).header("content-type", "application/json").body("nope").send().await.unwrap();
+    assert_eq!(r.status(), 400);
+    assert_eq!(r.json::<askbar_proto::Problem>().await.unwrap().error, "bad_request");
+}

@@ -3,7 +3,9 @@
 //! Tokens and codes are random, shown once, and stored only as SHA-256 hashes.
 //! The API reads `Authorization: Bearer` and nothing else (no cookies).
 
+use crate::error::ApiError;
 use crate::AppState;
+use askbar_proto::problem::ErrorCode;
 use crate::Db;
 use axum::{
     extract::{Request, State},
@@ -98,13 +100,13 @@ pub async fn require_client_token(
     State(state): State<Arc<AppState>>,
     mut req: Request,
     next: Next,
-) -> Result<Response, StatusCode> {
-    let token = bearer(&req).ok_or(StatusCode::UNAUTHORIZED)?;
+) -> Result<Response, ApiError> {
+    let token = bearer(&req).ok_or_else(|| ApiError::new(ErrorCode::Unauthorized, "Send the client token as `Authorization: Bearer <token>`."))?;
     let auth = {
         let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
-        authenticate(&db, token).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        authenticate(&db, token).map_err(|_| ApiError::code(ErrorCode::Internal))?
     };
-    let auth = auth.ok_or(StatusCode::UNAUTHORIZED)?;
+    let auth = auth.ok_or_else(|| ApiError::new(ErrorCode::Unauthorized, "The server does not accept this token. It may have been revoked."))?;
     req.extensions_mut().insert(auth);
     Ok(next.run(req).await)
 }
