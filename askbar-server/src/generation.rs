@@ -246,7 +246,20 @@ pub const MAX_QUEUED: i64 = 5;
 enum Outcome {
     Done,
     Cancelled,
+    /// Ran out of time; carries the message subscribers see.
+    TimedOut(String),
     Error(String),
+}
+
+/// "Timed out after 5 minutes", or in seconds when the limit is not a whole number of minutes.
+fn timed_out_message(timeout: Duration) -> String {
+    let secs = timeout.as_secs() + u64::from(timeout.subsec_nanos() > 0);
+    let plural = |n: u64, unit: &str| format!("{n} {unit}{}", if n == 1 { "" } else { "s" });
+    if secs >= 60 && secs % 60 == 0 {
+        format!("Timed out after {}", plural(secs / 60, "minute"))
+    } else {
+        format!("Timed out after {}", plural(secs, "second"))
+    }
 }
 
 /// Owned by the task. However the task ends (finished, failed, panicked), the reply is saved
@@ -307,11 +320,12 @@ impl Finisher {
         match &outcome {
             Outcome::Done => self.save("done", None),
             Outcome::Cancelled => self.save("cancelled", None),
+            Outcome::TimedOut(m) => self.save("timed_out", Some(m)),
             Outcome::Error(m) => self.save("error", Some(m)),
         }
         self.live.finish(match outcome {
             Outcome::Done | Outcome::Cancelled => Terminal::Done,
-            Outcome::Error(m) => Terminal::Error(m),
+            Outcome::TimedOut(m) | Outcome::Error(m) => Terminal::Error(m),
         });
     }
 }
@@ -398,17 +412,18 @@ pub fn submit(state: &Arc<AppState>, s: Submit) -> Result<Submitted, SubmitError
     // Save the question first so it survives a failed request.
     let user_message_id = db.add_message(&s.user_id, &conversation_id, "user", &s.prompt).map_err(internal)?;
     let id = db.create_generation(&new("running", Some(&user_message_id))).map_err(internal)?;
-    stamp_deadline(&db, &id, timeout_now(state, &db));
+    let timeout = timeout_now(state, &db);
+    stamp_deadline(&db, &id, timeout);
     let live = Live::new();
     state.generations.insert(&id, live.clone());
     drop(db);
-    spawn_run(state, &id, &s.user_id, &conversation_id, &s.provider_id, live.clone());
+    spawn_run(state, &id, &s.user_id, &conversation_id, &s.provider_id, timeout, live.clone());
     Ok(Submitted { generation_id: id, conversation_id, live, queued: false })
 }
 
 /// Runs generation `id` as a task that does not depend on any client. The provider, system prompt
 /// and history are read when it starts, so a message that waited sees the replies before it.
-fn spawn_run(state: &Arc<AppState>, id: &str, user_id: &str, conversation_id: &str, provider_id: &str, live: Arc<Live>) {
+fn spawn_run(state: &Arc<AppState>, id: &str, user_id: &str, conversation_id: &str, provider_id: &str, timeout: Duration, live: Arc<Live>) {
     let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
     live.set_cancel(cancel_tx);
     let mut fin = Finisher {
@@ -438,11 +453,21 @@ fn spawn_run(state: &Arc<AppState>, id: &str, user_id: &str, conversation_id: &s
             fin.finish(Outcome::Error("The provider is no longer available.".into()));
             return;
         };
-        let result = stream_chat(&state.http, &provider, &system, &history, cancel_rx, |delta| fin.push(delta)).await;
+        // Race the request against the deadline. Dropping the request on expiry closes the
+        // upstream connection; the text that had arrived is already in `fin`.
+        let result = {
+            let run = stream_chat(&state.http, &provider, &system, &history, cancel_rx, |delta| fin.push(delta));
+            tokio::pin!(run);
+            tokio::select! {
+                r = &mut run => Some(r),
+                _ = tokio::time::sleep(timeout) => None,
+            }
+        };
         fin.finish(match result {
-            Ok(StreamOutcome::Completed) => Outcome::Done,
-            Ok(StreamOutcome::Cancelled) => Outcome::Cancelled,
-            Err(e) => Outcome::Error(e.to_string()),
+            Some(Ok(StreamOutcome::Completed)) => Outcome::Done,
+            Some(Ok(StreamOutcome::Cancelled)) => Outcome::Cancelled,
+            Some(Err(e)) => Outcome::Error(e.to_string()),
+            None => Outcome::TimedOut(timed_out_message(timeout)),
         });
     });
 }
@@ -461,8 +486,9 @@ fn start_next(state: &Arc<AppState>, conversation_id: &str) {
             Ok(message_id) => {
                 let _ = db.start_generation(&next.id, &message_id, None);
                 // A queued message's clock starts now, not when it was queued.
-                stamp_deadline(&db, &next.id, timeout_now(state, &db));
-                Some(next)
+                let timeout = timeout_now(state, &db);
+                stamp_deadline(&db, &next.id, timeout);
+                Some((next, timeout))
             }
             Err(_) => {
                 // The conversation is gone or unwritable: the message cannot run.
@@ -472,13 +498,13 @@ fn start_next(state: &Arc<AppState>, conversation_id: &str) {
         }
     };
     match started {
-        Some(next) => {
+        Some((next, timeout)) => {
             let live = state.generations.get(&next.id).unwrap_or_else(|| {
                 let l = Live::new();
                 state.generations.insert(&next.id, l.clone());
                 l
             });
-            spawn_run(state, &next.id, &next.user_id, &next.conversation_id, next.provider_id.as_deref().unwrap_or(""), live);
+            spawn_run(state, &next.id, &next.user_id, &next.conversation_id, next.provider_id.as_deref().unwrap_or(""), timeout, live);
         }
         None => {
             // Try the one after it.
@@ -736,6 +762,18 @@ mod tests {
         let want = [d(1, "1"), d(2, "2"), GenEvent::Done];
         assert_eq!(a.await.unwrap(), want);
         assert_eq!(b.await.unwrap(), want);
+    }
+
+    #[test]
+    fn the_timeout_message_is_in_minutes_when_whole_and_in_seconds_otherwise() {
+        let m = |s: u64| timed_out_message(Duration::from_secs(s));
+        assert_eq!(m(300), "Timed out after 5 minutes");
+        assert_eq!(m(60), "Timed out after 1 minute");
+        assert_eq!(m(3600), "Timed out after 60 minutes");
+        assert_eq!(m(90), "Timed out after 90 seconds");
+        assert_eq!(m(2), "Timed out after 2 seconds");
+        assert_eq!(m(1), "Timed out after 1 second");
+        assert_eq!(timed_out_message(Duration::from_millis(1500)), "Timed out after 2 seconds");
     }
 
     #[test]

@@ -923,3 +923,44 @@ async fn a_queued_message_gets_its_deadline_when_it_starts_not_when_it_was_queue
     let d = t.deadlines();
     assert_eq!(d[1].2.unwrap() - d[1].1.unwrap(), 60);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_generation_that_runs_out_of_time_keeps_its_text_reports_it_and_the_queue_moves_on() {
+    let t = start().await;
+    askbar_server::testing::override_generation_timeout(&t.state, Duration::from_secs(2));
+    let http = client_builder().pool_max_idle_per_host(0).build().unwrap();
+    let mut first = t.chat(&http, None, "p1", "please be slow").await.bytes_stream();
+    let got = read_deltas(&mut first, 2).await;
+    let conversation = conversation_id_of(&got);
+    let mut second = t.chat(&http, Some(&conversation), "p1", "second").await.bytes_stream();
+
+    // The first stream ends with the timeout error.
+    let mut rest = got;
+    while let Some(Ok(b)) = first.next().await {
+        rest.push_str(&String::from_utf8_lossy(&b));
+    }
+    assert!(rest.contains("event: error") && rest.contains("Timed out after 2 seconds"), "got {rest:?}");
+
+    // The upstream was closed, the text so far is kept as the assistant message, the row says why.
+    wait_for_secs(5, "the upstream to see the stop", || {
+        t.mock.log.lock().unwrap().iter().any(|l| l.contains("client disconnected")).then_some(())
+    });
+    let rows = t.generations();
+    assert_eq!(rows[0].0, "timed_out");
+    assert_eq!(rows[0].2.as_deref(), Some("Timed out after 2 seconds"));
+    assert!(rows[0].1.starts_with("Streaming slowly") && rows[0].1.len() < 400, "partial text kept: {:?}", rows[0].1);
+    let assistant: Vec<String> = t.messages().into_iter().filter(|m| m.0 == "assistant").map(|m| m.1).collect();
+    assert_eq!(assistant[0], rows[0].1, "saved as the assistant message");
+    assert!(rows[0].3.is_some());
+
+    // The queued message started afterwards and ran to the end under its own clock.
+    let mut body = String::new();
+    while let Some(Ok(b)) = second.next().await {
+        body.push_str(&String::from_utf8_lossy(&b));
+    }
+    assert!(body.contains("event: done"), "got {body:?}");
+    let rows = t.generations();
+    assert_eq!(rows.iter().map(|r| r.0.as_str()).collect::<Vec<_>>(), ["timed_out", "done"]);
+    let roles: Vec<String> = t.messages().into_iter().map(|m| m.0).collect();
+    assert_eq!(roles, ["user", "assistant", "user", "assistant"]);
+}
