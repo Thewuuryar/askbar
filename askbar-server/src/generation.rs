@@ -52,6 +52,8 @@ pub struct Live {
     notify: Notify,
     /// Fires the running request's cancel channel; taken on first use.
     cancel: Mutex<Option<oneshot::Sender<()>>>,
+    /// The audit span that times a queued message's wait, until it starts (or is removed).
+    queue_span: Mutex<Option<String>>,
 }
 
 impl Live {
@@ -85,6 +87,17 @@ impl Live {
             g.terminal = Some(terminal);
         }
         self.notify.notify_waiters();
+    }
+
+    pub fn set_queue_span(&self, id: String) {
+        *self.queue_span.lock().unwrap_or_else(|e| e.into_inner()) = Some(id);
+    }
+
+    /// Ends the wait span, if there is one, with `status`.
+    pub fn end_queue_span(&self, audit: &crate::audit::Recorder, status: &str) {
+        if let Some(id) = self.queue_span.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            audit.finish_span(SpanFinish::new(&id, status));
+        }
     }
 
     pub fn set_cancel(&self, tx: oneshot::Sender<()>) {
@@ -467,6 +480,7 @@ pub fn submit(state: &Arc<AppState>, s: Submit) -> Result<Submitted, SubmitError
         // Queued: the question is stored when the message starts, not now.
         let id = db.create_generation(&new("queued", None)).map_err(internal)?;
         let live = Live::new();
+        live.set_queue_span(state.audit.start_span(SpanStart::new(&id, Kind::Gate, "queue").who(&s.user_id, Some(&s.device_id))));
         state.generations.insert(&id, live.clone());
         return Ok(Submitted { generation_id: id, conversation_id, live, queued: true });
     }
@@ -633,6 +647,7 @@ fn start_next(state: &Arc<AppState>, conversation_id: &str) {
                 state.generations.insert(&next.id, l.clone());
                 l
             });
+            live.end_queue_span(&state.audit, "done");
             spawn_run(state, &next.id, &next.user_id, next.device_id.as_deref(), &next.conversation_id, next.provider_id.as_deref().unwrap_or(""), timeout, live);
         }
         None => {
@@ -704,6 +719,7 @@ pub fn shutdown(state: &Arc<AppState>) {
                 }
             }
         }
+        live.end_queue_span(&state.audit, "interrupted");
         live.finish(Terminal::Error(INTERRUPTED.into()));
         live.cancel();
     }
@@ -726,6 +742,7 @@ pub fn delete_conversation(state: &Arc<AppState>, user_id: &str, conversation_id
     for g in active {
         let Some(live) = state.generations.get(&g.id) else { continue };
         if g.status == "queued" {
+            live.end_queue_span(&state.audit, "cancelled");
             live.finish(Terminal::Done);
             state.generations.remove(&g.id);
         } else {
@@ -758,6 +775,7 @@ pub async fn cancel(
     };
     if let Some(live) = state.generations.get(&id) {
         if queued {
+            live.end_queue_span(&state.audit, "cancelled");
             live.finish(Terminal::Done);
             state.generations.remove(&id);
         } else {
