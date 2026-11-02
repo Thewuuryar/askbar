@@ -1,14 +1,15 @@
 # Wire contract
 
-What the desktop client and the server agree on. The types live in `askbar-proto`;
+What an Askbar app (a *client*) and the server agree on. The types live in `askbar-proto`;
 this page says what they mean. Everything is JSON over HTTPS except the chat stream.
-`/api/v1` is the device API. The admin site and its `/admin/api` are not part of this
-contract.
+`/api/client/v1` is the client API. The server API (`/api/server/v1`, for the admin service
+only) and the admin API (`/admin/api/v1`) are described in the sections below and in
+[architecture.md](architecture.md), not here.
 
 ## Ids
 
 - Every id the server hands out is a **ULID** (26 characters, Crockford base32), generated
-  by the server: users, devices, conversations, messages, providers.
+  by the server: users, clients, conversations, messages, providers.
 - Ids sort in creation order within one server process. Clients treat them as opaque
   strings and never make them up.
 - Timestamps are UTC unix seconds (`created_at`, `updated_at`).
@@ -16,30 +17,33 @@ contract.
 
 ## Authentication and the version gate
 
-- Every request except `GET /api/v1/health` carries
+- Every request except `GET /api/client/v1/health` carries
   `x-askbar-client-version: <major.minor.patch>` (a leading `v` and a `-suffix` are
   ignored).
 - The gate runs before authentication:
   - header missing or not a version: `400`;
   - version older than the server's `min_client`: `426` (the client shows "update needed");
   - otherwise the request goes on.
-- `min_client` is currently **0.4.0**. `GET /api/v1/health` reports it:
-  `{"api_version": 1, "min_client": "0.4.0"}` and needs neither header nor token.
-- After the gate, calls other than `POST /api/v1/pair` need `Authorization: Bearer <device token>`;
+- `min_client` is currently **0.5.0**. `GET /api/client/v1/health` reports it:
+  `{"api_version": 1, "min_client": "0.5.0"}` and needs neither header nor token.
+- After the gate, calls other than `POST /api/client/v1/pairings` need `Authorization: Bearer <client token>`;
   a missing, unknown or revoked token is `401`.
-- `GET /api/v1/whoami` answers `204` if the token is accepted.
+- `GET /api/client/v1/me` answers `204` if the token is accepted.
+- **The old prefix.** Everything under `/api/v1` (the first generation of this API) answers `426
+  client_too_old` ("update the app") whatever the method, token or header. Nothing else of the old
+  API exists.
 
 ### Pairing
 
 1. The admin shows a pairing string: `askbar-pair:<base64url(json {"url", "code"})>`
    (no padding). The code works once and expires after 10 minutes.
-2. `POST /api/v1/pair` with `{"code": "..."}` returns `{"token": "abt_..."}`. A wrong,
+2. `POST /api/client/v1/pairings` with `{"code": "..."}` returns `{"token": "abt_..."}`. A wrong,
    expired or used code is `401`. The token is shown once; the server keeps only its hash.
-3. An administrator can revoke a device; its token then gets `401`.
+3. An administrator can revoke a client; its token then gets `401`.
 
 ## Providers
 
-`GET /api/v1/providers` returns a list of
+`GET /api/client/v1/providers` returns a list of
 `{"id": "<ULID>", "name": "...", "type": "openai" | "anthropic", "model": "..."}`,
 ordered by name. Keys never appear.
 
@@ -48,42 +52,42 @@ active-provider preference hold an id; a name is not accepted as a fallback (`40
 
 ## Preferences and display defaults
 
-Both follow the signed-in user, so all of a user's devices see the same values.
+Both follow the signed-in user, so all of a user's clients see the same values.
 
-- `GET /api/v1/me/prefs` returns `{"active_provider_id": "<id>" | null}`. `null` means
+- `GET /api/client/v1/me/prefs` returns `{"active_provider_id": "<id>" | null}`. `null` means
   nothing was chosen; clients then use the first provider in the list.
-- `PUT /api/v1/me/prefs` with the same shape replaces it and returns it. An id that is
+- `PUT /api/client/v1/me/prefs` with the same shape replaces it and returns it. An id that is
   not a provider is `404` and changes nothing.
-- `GET /api/v1/me/display-defaults` (read-only) returns
+- `GET /api/client/v1/me/display-defaults` (read-only) returns
   `{"theme": "auto"|"light"|"dark", "width", "max_height", "history_width", "top_percent", "hide_on_blur"}`:
   the user's own defaults if the administrator set them, otherwise the server-wide ones.
   A client may override any field locally; a local override wins, and removing it returns
   the server's default.
-- `GET /api/v1/settings` (server-wide display defaults) remains for older callers.
+- `GET /api/client/v1/settings` (server-wide display defaults) remains for older callers.
 
 ## Conversations and search
 
-- `GET /api/v1/conversations` returns `[{"id", "title", "updated_at", "message_count"}]`,
+- `GET /api/client/v1/conversations` returns `[{"id", "title", "updated_at", "message_count"}]`,
   newest first, for the caller only.
-- `GET /api/v1/conversations/{id}` returns the same fields plus
+- `GET /api/client/v1/conversations/{id}` returns the same fields plus
   `"messages": [{"id", "role": "user"|"assistant", "content", "created_at"}]`, oldest first,
   and, only while something is unfinished, `"pending"`: the replies still running in this
   conversation and the messages waiting behind them (see *Generations* below).
-- `DELETE /api/v1/conversations/{id}` returns `204`, or `404` if it is not the caller's.
+- `DELETE /api/client/v1/conversations/{id}` returns `204`, or `404` if it is not the caller's.
   A reply still running in it is stopped and the messages waiting in it are dropped first.
-- `GET /api/v1/search?q=<words>` returns up to 20
+- `GET /api/client/v1/search?q=<words>` returns up to 20
   `{"conversation_id", "message_id", "role", "snippet", "created_at"}`, best match first,
   over the caller's own messages only. All words must match; punctuation is plain text.
   An empty query returns `[]`; more than 200 characters is `400`.
 
 ## Chat stream
 
-`POST /api/v1/chat` with
+`POST /api/client/v1/chat` with
 `{"conversation_id": "<id>" (optional), "provider": "<provider id>", "text": "...", "client_request_id": "<string>" (optional)}`.
 Empty text is `400`; an unknown provider or a conversation that is not the caller's is
 `404`; a conversation that already has five messages waiting is `409` (see *The queue*); when
-the server cannot take the message it refuses before anything starts, with a JSON body whose
-`error` says why (the typed text is never lost; the client keeps it):
+the server cannot take the message it refuses before anything starts, with a problem (see
+*Errors*) whose `error` says why (the typed text is never lost; the client keeps it):
 
 | status | `error` | meaning |
 | --- | --- | --- |
@@ -91,7 +95,7 @@ the server cannot take the message it refuses before anything starts, with a JSO
 | `503` | `audit_key_missing` | no audit key has been made yet (needs a person; no `Retry-After`) |
 | `503` | `audit_backlog` | the audit store cannot keep up; `Retry-After: 5`, try again |
 | `429` | `budget_exceeded` | a token budget is used up; `period` is `daily` or `monthly` |
-| `409` | (none) | five messages are already waiting in the conversation |
+| `409` | `queue_full` | five messages are already waiting in the conversation |
 
 None of these affect replies already running.
 Otherwise the answer is `200 text/event-stream`. Provider output is never passed through;
@@ -104,7 +108,7 @@ the server re-emits its own events. Each SSE message has `event:` naming the typ
 | `provider` | `{"event":"provider","id":"<provider id>","name":"..."}` | which provider is serving the reply; sent before the first delta, and again if a fallback changes it before any text. No SSE `id:` |
 | `delta` | `{"event":"delta","text":"..."}` | the next piece of the reply; zero or more. Carries an SSE `id:` line, see below |
 | `done` | `{"event":"done"}` | the reply is complete (also when it was stopped with cancel: the text so far is kept) |
-| `error` | `{"event":"error","message":"..."}` | the reply failed or was cut short; the question is still saved, and so is any text that had arrived |
+| `error` | `{"event":"error","message":"...","code":"timed_out"}` | the reply failed or was cut short; the question is still saved, and so is any text that had arrived. `code` is the stable reason: `timed_out`, `interrupted`, `kill_switch`, `provider_error` or `internal` (absent from an older server). Branch on `code`; `message` is for a person |
 
 (Comment lines starting with `:` are keep-alives. A client ignores events it does not know.)
 
@@ -119,9 +123,9 @@ assistant message when it ends, and the client can come back to it. Only cancel,
 the conversation, a timeout or a server stop ends it early.
 
 **Repeating a send.** `client_request_id` is chosen by the client for each send (a random
-UUID). A second `POST /api/v1/chat` from the same device with the same id starts nothing:
+UUID). A second `POST /api/client/v1/chat` from the same client with the same id starts nothing:
 it attaches to the generation the first one started (same `meta`, deltas replayed from the
-start) and writes no second question. The same id from another device is a different send.
+start) and writes no second question. The same id from another client is a different send.
 A generation row is kept for 24 hours, so the guarantee holds for that long.
 
 ## Generations
@@ -139,19 +143,19 @@ A generation is one reply being produced by the server. Its status is one of
 - `interrupted`: the server restarted or stopped while it was running (the text it had is
   saved) or waiting (nothing was saved; it never ran).
 
-Endpoints (all need a device token; another user's generation is `404`):
+Endpoints (all need a client token; another user's generation is `404`):
 
-- `GET /api/v1/generations/{id}/stream?after=N`: the events of that generation after its
+- `GET /api/client/v1/generations/{id}/stream?after=N`: the events of that generation after its
   first `N` deltas (`N` defaults to 0), then live ones, ending with `done` or `error`.
   While the generation runs, and for five minutes after it ends, this is exact (original
   `id:`s). Once only the database remembers it, delta boundaries are gone: with `after=0`
   you get the whole stored text as one `delta` (id 1), with `after>0` only the ending, and
   the client should reload the conversation to read the saved message. `cancelled` ends
   with `done`; `error`, `timed_out` and `interrupted` end with an `error` event.
-- `POST /api/v1/generations/{id}/cancel`: stop it. `204`, also when it has already
+- `POST /api/client/v1/generations/{id}/cancel`: stop it. `204`, also when it has already
   finished (nothing changes). A running generation ends as `cancelled` with its text kept;
   a queued one ends as `cancelled` and nothing is written to the conversation.
-- `GET /api/v1/generations?status=running`: the caller's running **and** queued
+- `GET /api/client/v1/generations?status=running`: the caller's running **and** queued
   generations, oldest first, as
   `[{"generation_id", "conversation_id", "status", "text", "prompt", "client_request_id"?}]`.
   `text` is what the server last saved (it can trail the live stream by about a second); to
@@ -170,9 +174,13 @@ conversation; the sixth gets `409`.
 
 ## Versions
 
-The wire format changed in 0.4.0 (generation ids, delta ids, queued messages, the new
-endpoints), and a 0.3.x client would stop a reply when its connection dropped, so
-`min_client` moved to 0.4.0.
+The version in the path is the API version (`v1`). Within it changes are additive only: new
+fields, endpoints and error codes. Anything else gets a `v2` beside it for one release.
+
+`min_client` is a separate, smaller thing: the oldest app this server will talk to within `v1`.
+0.4.0 changed the wire format (generation ids, delta ids, queued messages, new endpoints) and
+0.5.0 moved the paths (`/api/v1` to `/api/client/v1`, `/pair` to `/pairings`, `/whoami` to `/me`)
+and made every error a problem, so `min_client` is 0.5.0.
 
 ## Routing, retries and gates
 
@@ -212,22 +220,22 @@ The server, not the client, decides which provider serves a reply.
 
 ## Audit (server API)
 
-The admin service reads what the server recorded through three endpoints on the management
-listener. They are not part of the device API: they need the server token, the device API
+The admin service reads what the server recorded through three endpoints on the server API
+listener. They are not part of the client API: they need the server token, the client API
 has no such routes (`404`), and the admin never opens `audit.db` itself. Everything they return
 is **metadata** apart from the sealed payloads below, which are ciphertext the server cannot read.
 A server with no audit store answers `503`.
 
 - `GET /api/server/v1/audit/traces?status=&provider=&before=&limit=`: one summary per generation,
   newest first: `{"traces": [{"trace_id", "span_id", "status", "started_at", "ended_at", "user_id",
-  "device_id", "tokens_in", "tokens_out", "tokens_cached", "error_code", "provider_id", "model",
+  "client_id", "tokens_in", "tokens_out", "tokens_cached", "error_code", "provider_id", "model",
   "ttft_ms", "latency_ms", "cost"}]}`. `status` filters on the turn's status, `provider` on the provider of
   its last attempt, `before` is a `trace_id` (only older traces, for paging), `limit` is 1 to 200
   (default 50). `trace_id` is the generation id.
 - `GET /api/server/v1/audit/traces/{id}`: `{"trace_id", "cost", "spans": [...]}`, every span of that
   generation in the order they began (`404` if there is none). A span has `id`, `parent_id`,
   `kind`, `name`, `status`, `started_at`, `ended_at`, `provider_id`, `model`,
-  `tokens_in|out|cached`, `ttft_ms`, `error_code`, `user_id`, `device_id`, `cost` and `attrs` (a
+  `tokens_in|out|cached`, `ttft_ms`, `error_code`, `user_id`, `client_id`, `cost` and `attrs` (a
   JSON object; an attempt's carries `retry_index`, `fallback_from`, `latency_ms`, `http_status`).
   `gate` spans (`kill_switch`, `budget`, `queue`) end `done` when they let it through and `blocked`
   when they refused it.
@@ -252,7 +260,7 @@ sealed boxes, X25519) to a public key the administrator's passphrase produces. T
 holds the private key and has no code to open a sealed payload.
 
 - **Setup.** In the admin's first-run setup the administrator chooses a passphrase of at least 20
-  characters (`POST /admin/api/v1/setup/audit-key` with `passphrase` and `confirm`; `409` if a key
+  characters (`PUT /admin/api/v1/setup/audit-key` with `passphrase` and `confirm`; `409` if a key
   exists). The admin stretches it with Argon2id (64 MiB, 3 passes, 1 lane) and a random 16-byte
   salt into 32 bytes, uses those as the X25519 secret key and keeps only the public key, the salt,
   the cost and the key id (the first 8 bytes of the SHA-256 of the public key, in hex).
@@ -279,7 +287,7 @@ A separate SQLite file (`ASKBAR_AUDIT_DIR/audit.db`, the `audit-data` volume in 
 setup), with its own migrations and `PRAGMA user_version`, written only by the server.
 
 - `spans(id, trace_id, parent_id, kind, name, status, started_at, ended_at, provider_id, model,
-  tokens_in, tokens_out, tokens_cached, ttft_ms, error_code, user_id, device_id, attrs_json)`.
+  tokens_in, tokens_out, tokens_cached, ttft_ms, error_code, user_id, client_id, attrs_json)`.
   `kind` is `turn` (a whole generation), `gate` (a check or a wait, e.g. `queue`), `attempt` (one
   request to a provider), `tool` or `agent_step`. `trace_id` is the generation id; an attempt's
   parent is its turn. Times are unix seconds; an attempt's `attrs` carry `latency_ms`,
@@ -292,22 +300,48 @@ setup), with its own migrations and `PRAGMA user_version`, written only by the s
 
 ## Errors
 
-Plain HTTP status codes. `400` bad request or missing version header, `401` bad token, `404`
-not found (or not yours), `409` the conversation already has five messages waiting, `426`
-client too old, `429` a token budget is used up, `503` the server cannot take the message
-now (its JSON `error` says which, see *Chat stream*), or, from the device API before setup is
-finished, setup is pending. A refusal never starts a generation and never loses the typed text.
+Every failure of every Askbar API is `application/problem+json` (RFC 9457):
+
+```json
+{"type": "urn:askbar:problem:budget_exceeded", "title": "A usage limit has been reached",
+ "status": 429, "detail": "The usage limit for today has been reached. ...",
+ "error": "budget_exceeded", "period": "daily"}
+```
+
+`error` is the stable code a program branches on; `title` is fixed per code; `detail` is a
+sentence for a person; extra members such as `period` ride alongside. Status codes and
+`Retry-After` are part of the contract. The codes (`askbar-proto/src/problem.rs`):
+
+| `error` | status | when |
+| --- | --- | --- |
+| `queue_full` | 409 | five messages already wait in the conversation |
+| `budget_exceeded` | 429 | a token budget is used up (`period`: `daily` or `monthly`) |
+| `kill_switch` | 503 | the administrator switched replies off |
+| `audit_key_missing` | 503 | no audit key has been made yet |
+| `audit_backlog` | 503 | the audit store is behind; `Retry-After: 5` |
+| `client_too_old` | 426 | the app (or the old `/api/v1` prefix) is too old; `min_client` says the version |
+| `client_version_missing` | 400 | no usable `x-askbar-client-version` header |
+| `unauthorized` | 401 | missing, unknown or revoked token (`WWW-Authenticate: Bearer`) |
+| `not_found` | 404 | no such thing, or not yours; also an unknown path |
+| `method_not_allowed` | 405 | the path exists, the method does not |
+| `bad_request` | 400 | the body or a parameter cannot be used |
+| `internal` | 500 | the server failed |
+
+(The admin and server APIs add `forbidden`, `too_many_attempts`, `conflict`, `setup_required`,
+`server_unavailable`, `payload_too_large` and `api_key_exists`.) A refusal never starts a
+generation and never loses the typed text. Caddy answers a path nothing serves with the same
+`not_found` problem.
 
 (There is no setup mode: the server creates its master key on first start.)
 
 ## What the desktop client does with them
 
-- `409` `queue_full`, `429` `budget_exceeded` (`period` picks "today" or "this month"), `503`
-  `kill_switch` and `503` `audit_key_missing` each show their own sentence and keep the message
-  in the outbox; nothing is retried by itself.
-- `503` with `Retry-After` (`audit_backlog`) is tried once more after that many seconds; if it is
+- The app tells a refusal by its `error` code, never by its words: `queue_full`,
+  `budget_exceeded` (`period` picks "today" or "this month"), `kill_switch` and
+  `audit_key_missing` each show their own sentence and keep the message in the outbox; nothing is
+  retried by itself.
+- `audit_backlog` (with `Retry-After`) is tried once more after that many seconds; if it is
   refused again the message waits for the person.
-- A reply that ran out of time ends with an `error` event whose message starts with
-  `Timed out after `. There is no separate code for it, so the client recognises those words,
-  shows "Stopped after ..." with the text that had arrived, and offers to ask again as a new reply.
+- A reply whose `error` event has `code` `timed_out` is shown as "Stopped after ..." with the text
+  that had arrived, and the app offers to ask again as a new reply.
 - A `provider` event naming a provider other than the one chosen is shown as "Answered by ...".
