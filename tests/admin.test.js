@@ -274,7 +274,7 @@ async function waitForPort(port) {
   });
   await step('clients see the provider without its key', async () => {
     // The API is the other listener; without a token it must refuse.
-    const r = await fetch(`http://127.0.0.1:${api}/api/v1/providers`, { headers: { 'x-askbar-client-version': '0.4.0' } });
+    const r = await fetch(`http://127.0.0.1:${api}/api/client/v1/providers`, { headers: { 'x-askbar-client-version': '0.5.0' } });
     assert.equal(r.status, 401);
   });
   await step('clients: generate a pairing string, pair with it, then revoke the client', async () => {
@@ -288,11 +288,11 @@ async function waitForPort(port) {
     assert.match(pairing, /^askbar-pair:/);
     const { url, code } = JSON.parse(Buffer.from(pairing.slice('askbar-pair:'.length), 'base64url').toString());
     assert.equal(url, 'http://localhost:' + api);
-    const headers = { 'content-type': 'application/json', 'x-askbar-client-version': '0.4.0' };
-    const paired = await fetch(`http://127.0.0.1:${api}/api/v1/pair`, { method: 'POST', headers, body: JSON.stringify({ code }) });
+    const headers = { 'content-type': 'application/json', 'x-askbar-client-version': '0.5.0' };
+    const paired = await fetch(`http://127.0.0.1:${api}/api/client/v1/pairings`, { method: 'POST', headers, body: JSON.stringify({ code }) });
     assert.equal(paired.status, 200);
     const { token } = await paired.json();
-    const whoami = () => fetch(`http://127.0.0.1:${api}/api/v1/whoami`, { headers: { ...headers, authorization: 'Bearer ' + token } }).then((r) => r.status);
+    const whoami = () => fetch(`http://127.0.0.1:${api}/api/client/v1/me`, { headers: { ...headers, authorization: 'Bearer ' + token } }).then((r) => r.status);
     assert.equal(await whoami(), 204);
 
     await page.click('#nav [data-tab="providers"]');
@@ -451,12 +451,12 @@ async function waitForPort(port) {
       return (await r.json()).pairing;
     });
     const { code } = JSON.parse(Buffer.from(pairing.slice('askbar-pair:'.length), 'base64url').toString());
-    const h = { 'content-type': 'application/json', 'x-askbar-client-version': '0.4.0' };
-    const { token } = await (await fetch(`http://127.0.0.1:${api}/api/v1/pair`, { method: 'POST', headers: h, body: JSON.stringify({ code }) })).json();
+    const h = { 'content-type': 'application/json', 'x-askbar-client-version': '0.5.0' };
+    const { token } = await (await fetch(`http://127.0.0.1:${api}/api/client/v1/pairings`, { method: 'POST', headers: h, body: JSON.stringify({ code }) })).json();
     const auth = { ...h, authorization: 'Bearer ' + token };
-    const providers = await (await fetch(`http://127.0.0.1:${api}/api/v1/providers`, { headers: auth })).json();
+    const providers = await (await fetch(`http://127.0.0.1:${api}/api/client/v1/providers`, { headers: auth })).json();
     const provider = providers.find((p) => p.name === providerName) || providers[0];
-    const body = await (await fetch(`http://127.0.0.1:${api}/api/v1/chat`, { method: 'POST', headers: auth, body: JSON.stringify({ provider: provider.id, text }) })).text();
+    const body = await (await fetch(`http://127.0.0.1:${api}/api/client/v1/chat`, { method: 'POST', headers: auth, body: JSON.stringify({ provider: provider.id, text }) })).text();
     assert.match(body, /event: done/);
     return body;
   }

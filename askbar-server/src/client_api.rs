@@ -82,7 +82,7 @@ pub struct GenerationsQuery {
     status: Option<String>,
 }
 
-/// `GET /api/v1/generations?status=running`: the caller's running and queued generations, across
+/// `GET /api/client/v1/generations?status=running`: the caller's running and queued generations, across
 /// conversations, so a client that just started (or reconnected) can find what is still going.
 pub async fn generations(
     State(state): St,

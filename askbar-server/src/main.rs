@@ -37,7 +37,7 @@ fn run_healthcheck() -> ! {
         let timeout = std::time::Duration::from_secs(2);
         let mut s = std::net::TcpStream::connect_timeout(&SocketAddr::from(([127, 0, 0, 1], port)), timeout)?;
         s.set_read_timeout(Some(timeout))?;
-        s.write_all(b"GET /api/v1/health HTTP/1.0\r\nHost: localhost\r\n\r\n")?;
+        s.write_all(b"GET /api/client/v1/health HTTP/1.0\r\nHost: localhost\r\n\r\n")?;
         let mut head = [0u8; 12];
         s.read_exact(&mut head)?;
         Ok(&head == b"HTTP/1.1 200" || &head == b"HTTP/1.0 200")

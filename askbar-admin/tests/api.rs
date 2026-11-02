@@ -206,13 +206,13 @@ async fn a_pairing_string_pairs_a_client_which_can_then_be_revoked() {
     assert_eq!(t.snapshot().unwrap().pair_codes[0].hash, stored);
 
     // The code pairs a client on the server's API, once.
-    let pair = || t.http.post(format!("{}/api/v1/pair", t.api)).header("x-askbar-client-version", "0.4.0").json(&json!({ "code": code })).send();
+    let pair = || t.http.post(format!("{}/api/client/v1/pairings", t.api)).header("x-askbar-client-version", "0.5.0").json(&json!({ "code": code })).send();
     let r = pair().await.unwrap();
     assert_eq!(r.status(), 200);
     let token = r.json::<Value>().await.unwrap()["token"].as_str().unwrap().to_string();
     assert_eq!(pair().await.unwrap().status(), 401, "a second use fails");
 
-    let whoami = || t.http.get(format!("{}/api/v1/whoami", t.api)).bearer_auth(&token).header("x-askbar-client-version", "0.4.0").send();
+    let whoami = || t.http.get(format!("{}/api/client/v1/me", t.api)).bearer_auth(&token).header("x-askbar-client-version", "0.5.0").send();
     assert_eq!(whoami().await.unwrap().status(), 204);
     let (_, clients) = t.call(M::GET, "/admin/api/v1/clients", None).await;
     assert_eq!((clients[0]["name"].as_str(), clients[0]["revoked"].clone()), (Some("Work laptop"), json!(false)));

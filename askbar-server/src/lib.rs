@@ -38,7 +38,7 @@ use secrets::Secrets;
 use std::sync::{Arc, Mutex};
 
 pub const API_VERSION: u32 = 1;
-pub const MIN_CLIENT: &str = "0.4.0";
+pub const MIN_CLIENT: &str = "0.5.0";
 
 pub struct AppState {
     pub db: Mutex<Db>,
@@ -85,29 +85,31 @@ impl AppState {
 }
 
 pub fn client_router(state: Arc<AppState>) -> Router {
+    // Every route is under `/api/client/v1` (askbar_proto::paths::CLIENT_V1).
+    let v1 = |rest: &str| askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, rest);
     // Everything that needs a client token goes in `protected`.
     let protected: Router<Arc<AppState>> = Router::new()
         // Lets a client check that its token is still accepted.
-        .route("/api/v1/whoami", get(|| async { StatusCode::NO_CONTENT }))
-        .route("/api/v1/providers", get(client_api::providers))
-        .route("/api/v1/conversations", get(client_api::conversations))
-        .route("/api/v1/conversations/{id}", get(client_api::conversation).delete(client_api::delete_conversation))
-        .route("/api/v1/me/prefs", get(client_api::get_prefs).put(client_api::put_prefs))
-        .route("/api/v1/me/display-defaults", get(client_api::display_defaults))
-        .route("/api/v1/search", get(client_api::search))
-        .route("/api/v1/settings", get(client_api::settings))
-        .route("/api/v1/chat", post(chat::chat))
-        .route("/api/v1/generations", get(client_api::generations))
-        .route("/api/v1/generations/{id}/stream", get(generation::stream))
-        .route("/api/v1/generations/{id}/cancel", post(generation::cancel))
+        .route(&v1("/me"), get(|| async { StatusCode::NO_CONTENT }))
+        .route(&v1("/providers"), get(client_api::providers))
+        .route(&v1("/conversations"), get(client_api::conversations))
+        .route(&v1("/conversations/{id}"), get(client_api::conversation).delete(client_api::delete_conversation))
+        .route(&v1("/me/prefs"), get(client_api::get_prefs).put(client_api::put_prefs))
+        .route(&v1("/me/display-defaults"), get(client_api::display_defaults))
+        .route(&v1("/search"), get(client_api::search))
+        .route(&v1("/settings"), get(client_api::settings))
+        .route(&v1("/chat"), post(chat::chat))
+        .route(&v1("/generations"), get(client_api::generations))
+        .route(&v1("/generations/{id}/stream"), get(generation::stream))
+        .route(&v1("/generations/{id}/cancel"), post(generation::cancel))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_client_token));
     // Everything except health checks the client version first.
     let gated = Router::new()
-        .route("/api/v1/pair", post(pair))
+        .route(&v1("/pairings"), post(pair))
         .merge(protected)
         .route_layer(middleware::from_fn_with_state(state.clone(), require_client_version));
     Router::new()
-        .route("/api/v1/health", get(health))
+        .route(&v1("/health"), get(health))
         .merge(gated)
         .fallback(error::not_found)
         .method_not_allowed_fallback(error::method_not_allowed)

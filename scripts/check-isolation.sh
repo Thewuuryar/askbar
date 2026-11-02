@@ -158,7 +158,7 @@ except urllib.error.HTTPError as e: print(e.code)
 except Exception: print(0)
 "
 }
-for path in /audit /api/v1/audit /api/v1/audit/traces /api/v1/audit/stats /api/server/v1/health /api/server/v1/audit/traces /api/server/v1/audit/stats; do
+for path in /audit /api/client/v1/audit /api/client/v1/audit/traces /api/client/v1/audit/stats /api/server/v1/health /api/server/v1/audit/traces /api/server/v1/audit/stats; do
   [ "$(http_get "$EDGE" "$EDGE_IP:8080" "$path")" = 404 ] && pass "the client API has no $path (404)" || fail "the client API answers $path"
 done
 

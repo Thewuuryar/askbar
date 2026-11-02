@@ -1,4 +1,4 @@
-//! `POST /api/v1/chat`: start a generation and stream its reply as our own SSE events.
+//! `POST /api/client/v1/chat`: start a generation and stream its reply as our own SSE events.
 //!
 //! Provider output is never passed through; it is decoded by `llm`
 //! and re-emitted as `meta`, `delta`, `done` or `error`. The generation runs as its own task

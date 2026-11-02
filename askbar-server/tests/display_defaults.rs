@@ -34,9 +34,9 @@ impl T {
     async fn defaults(&self, token: &str) -> (u16, DisplaySettings) {
         let r = self
             .http
-            .get(format!("{}/api/v1/me/display-defaults", self.api))
+            .get(format!("{}/api/client/v1/me/display-defaults", self.api))
             .bearer_auth(token)
-            .header("x-askbar-client-version", "0.4.0")
+            .header("x-askbar-client-version", "0.5.0")
             .send()
             .await
             .unwrap();

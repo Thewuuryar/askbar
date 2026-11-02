@@ -294,7 +294,7 @@ impl Inner {
                     _ = tokio::time::sleep(wait) => {}
                     _ = &mut *cancel => return self.stop_reply(Some(&generation_id), emit).await,
                 }
-                let req = match self.request(Method::GET, &format!("/api/v1/generations/{generation_id}/stream")) {
+                let req = match self.request(Method::GET, &format!("{}/generations/{generation_id}/stream", askbar_proto::paths::CLIENT_V1)) {
                     Ok(r) => r.header("accept", "text/event-stream").query(&[("after", reader.last_id)]),
                     Err(e) => return fail(e),
                 };
@@ -320,7 +320,7 @@ impl Inner {
     /// (an older server) the reply cannot be stopped there; the connection is simply let go.
     async fn stop_reply(&self, id: Option<&str>, emit: Emit<'_>) {
         if let Some(id) = id {
-            let sent = match self.request(Method::POST, &format!("/api/v1/generations/{id}/cancel")) {
+            let sent = match self.request(Method::POST, &format!("{}/generations/{id}/cancel", askbar_proto::paths::CLIENT_V1)) {
                 Ok(req) => req.timeout(REQUEST_TIMEOUT).send().await.map_err(|e| e.to_string()),
                 Err(e) => Err(e),
             };
@@ -343,11 +343,11 @@ impl Inner {
     }
 
     async fn active_provider(&self) -> Result<String, String> {
-        let prefs: Prefs = self.get_json("/api/v1/me/prefs").await?;
+        let prefs: Prefs = self.get_json(&askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, "/me/prefs")).await?;
         if let Some(id) = prefs.active_provider_id.filter(|id| !id.trim().is_empty()) {
             return Ok(id);
         }
-        let list: Vec<ProviderInfo> = self.get_json("/api/v1/providers").await?;
+        let list: Vec<ProviderInfo> = self.get_json(&askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, "/providers")).await?;
         list.into_iter().next().map(|p| p.id).ok_or_else(|| "The server has no providers configured yet.".into())
     }
 }
@@ -430,7 +430,7 @@ pub async fn pair(pairing: &str, client_yaml: &Path, tokens: &dyn TokenStore) ->
         .ok_or("That is not a pairing string. It should start with \"askbar-pair:\".")?;
     let mut cfg = if client_yaml.exists() { ClientConfig::load(client_yaml)? } else { ClientConfig::default() };
     let mut base = check_server_url(&url, cfg.allow_insecure)?;
-    base.set_path(&format!("{}/api/v1/pair", base.path().trim_end_matches('/')));
+    base.set_path(&format!("{}{}", base.path().trim_end_matches('/'), askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, "/pairings")));
 
     let resp = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(5))
@@ -467,21 +467,21 @@ impl Remote {
         // Offline is not an error here: the window still opens with the local
         // look and feel, and `status` tells the user what is wrong.
         let quick = |path: &str| i.request(Method::GET, path).map(|r| r.timeout(CHECK_TIMEOUT));
-        let display: DisplaySettings = match quick("/api/v1/me/display-defaults") {
+        let display: DisplaySettings = match quick(&askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, "/me/display-defaults")) {
             Ok(req) => match i.send(req).await {
                 Ok(r) => r.json().await.unwrap_or_default(),
                 Err(_) => DisplaySettings::default(),
             },
             Err(_) => DisplaySettings::default(),
         };
-        let prefs: Prefs = match quick("/api/v1/me/prefs") {
+        let prefs: Prefs = match quick(&askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, "/me/prefs")) {
             Ok(req) => match i.send(req).await {
                 Ok(r) => r.json().await.unwrap_or_default(),
                 Err(_) => Prefs::default(),
             },
             Err(_) => Prefs::default(),
         };
-        let providers: Vec<ProviderInfo> = match quick("/api/v1/providers") {
+        let providers: Vec<ProviderInfo> = match quick(&askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, "/providers")) {
             Ok(req) => match i.send(req).await {
                 Ok(r) => r.json().await.unwrap_or_default(),
                 Err(_) => Vec::new(),
@@ -510,14 +510,14 @@ impl Remote {
             )
         };
         // Reachable at all? The health endpoint needs neither token nor version.
-        match i.http.get(i.url("/api/v1/health")).timeout(CHECK_TIMEOUT).send().await {
+        match i.http.get(i.url(&askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, "/health"))).timeout(CHECK_TIMEOUT).send().await {
             Ok(r) if r.status().is_success() => {}
             _ => return Some(offline()),
         }
         if i.tokens.get().is_none() {
             return Some(ClientStatus::new("not_paired", "This app is not paired with the server yet."));
         }
-        let req = i.request(Method::GET, "/api/v1/whoami").ok()?.timeout(CHECK_TIMEOUT);
+        let req = i.request(Method::GET, &askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, "/me")).ok()?.timeout(CHECK_TIMEOUT);
         match i.http_status(req).await {
             Err(_) => return Some(offline()),
             Ok(StatusCode::UNAUTHORIZED) => {
@@ -530,8 +530,8 @@ impl Remote {
             Ok(StatusCode::SERVICE_UNAVAILABLE) => return Some(ClientStatus::new("problem", SETUP_PENDING)),
             Ok(s) => return Some(ClientStatus::new("problem", format!("The server answered {s}."))),
         }
-        let providers: Vec<ProviderInfo> = i.get_json("/api/v1/providers").await.ok()?;
-        let prefs: Prefs = i.get_json("/api/v1/me/prefs").await.ok()?;
+        let providers: Vec<ProviderInfo> = i.get_json(&askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, "/providers")).await.ok()?;
+        let prefs: Prefs = i.get_json(&askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, "/me/prefs")).await.ok()?;
         let wanted = prefs.active_provider_id.unwrap_or_default();
         let wanted = wanted.trim();
         if providers.is_empty() {
@@ -547,35 +547,35 @@ impl Remote {
 
     pub async fn set_active_provider(&self, id: String) -> Result<(), String> {
         let i = self.inner()?;
-        let req = i.request(Method::PUT, "/api/v1/me/prefs")?.timeout(REQUEST_TIMEOUT).json(&Prefs { active_provider_id: Some(id) });
+        let req = i.request(Method::PUT, &askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, "/me/prefs"))?.timeout(REQUEST_TIMEOUT).json(&Prefs { active_provider_id: Some(id) });
         i.send(req).await.map(|_| ())
     }
 
     #[cfg(test)]
     pub async fn list_providers(&self) -> Result<Vec<ProviderInfo>, String> {
-        self.inner()?.get_json("/api/v1/providers").await
+        self.inner()?.get_json(&askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, "/providers")).await
     }
 
     pub async fn list_conversations(&self) -> Result<Vec<Conversation>, String> {
-        self.inner()?.get_json("/api/v1/conversations").await
+        self.inner()?.get_json(&askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, "/conversations")).await
     }
 
     pub async fn load_conversation(&self, id: String) -> Result<Vec<Message>, String> {
-        let d: ConversationDetail = self.inner()?.get_json(&format!("/api/v1/conversations/{id}")).await?;
+        let d: ConversationDetail = self.inner()?.get_json(&format!("{}/conversations/{id}", askbar_proto::paths::CLIENT_V1)).await?;
         Ok(d.messages)
     }
 
     /// Replies in this conversation that have not finished: the one running, and the messages
     /// waiting behind it.
     pub async fn load_pending(&self, id: String) -> Result<Vec<PendingReply>, String> {
-        let d: ConversationDetail = self.inner()?.get_json(&format!("/api/v1/conversations/{id}")).await?;
+        let d: ConversationDetail = self.inner()?.get_json(&format!("{}/conversations/{id}", askbar_proto::paths::CLIENT_V1)).await?;
         Ok(d.pending.into_iter().map(PendingReply::from).collect())
     }
 
     /// Stops (or, for a message still waiting, removes) one generation. Already finished is fine.
     pub async fn cancel_generation(&self, id: String) -> Result<(), String> {
         let i = self.inner()?;
-        let req = i.request(Method::POST, &format!("/api/v1/generations/{id}/cancel"))?.timeout(REQUEST_TIMEOUT);
+        let req = i.request(Method::POST, &format!("{}/generations/{id}/cancel", askbar_proto::paths::CLIENT_V1))?.timeout(REQUEST_TIMEOUT);
         match i.send(req).await {
             Ok(_) => Ok(()),
             Err(e) if e.ends_with("404 Not Found.") => Ok(()),
@@ -597,7 +597,7 @@ impl Remote {
 
     pub async fn delete_conversation(&self, id: String) -> Result<(), String> {
         let i = self.inner()?;
-        let resp = i.request(Method::DELETE, &format!("/api/v1/conversations/{id}"))?.timeout(REQUEST_TIMEOUT);
+        let resp = i.request(Method::DELETE, &format!("{}/conversations/{id}", askbar_proto::paths::CLIENT_V1))?.timeout(REQUEST_TIMEOUT);
         match i.send(resp).await {
             Ok(_) => Ok(()),
             Err(e) if e.ends_with("404 Not Found.") => Ok(()),
@@ -642,7 +642,7 @@ impl Remote {
         if i.outbox.list().is_empty() {
             return Ok(Vec::new());
         }
-        let req = i.request(Method::GET, "/api/v1/generations")?.query(&[("status", "running")]).timeout(REQUEST_TIMEOUT);
+        let req = i.request(Method::GET, &askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, "/generations"))?.query(&[("status", "running")]).timeout(REQUEST_TIMEOUT);
         // Without an answer (offline) nothing can be compared; the outbox is shown as it is.
         let known: Vec<PendingGeneration> = match i.send(req).await {
             Ok(r) => match r.json().await {
@@ -687,7 +687,7 @@ impl Remote {
         } else {
             entry.provider.clone()
         };
-        let req = match i.request(Method::POST, "/api/v1/chat") {
+        let req = match i.request(Method::POST, &askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, "/chat")) {
             Ok(r) => r.header("accept", "text/event-stream").json(&ChatRequest {
                 conversation_id: entry.conversation_id.clone(),
                 provider,
@@ -823,9 +823,9 @@ mod tests {
         cancels: Mutex<Vec<String>>,
         /// The JSON body of every chat request.
         chats: Mutex<Vec<serde_json::Value>>,
-        /// What `GET /api/v1/generations?status=running` answers.
+        /// What `GET /api/client/v1/generations?status=running` answers.
         running: Mutex<String>,
-        /// When set, the answer to `POST /api/v1/chat` instead of the usual stream:
+        /// When set, the answer to `POST /api/client/v1/chat` instead of the usual stream:
         /// status, extra headers and body.
         chat_answer: Mutex<Option<(u16, Vec<(String, String)>, String)>>,
     }
@@ -850,9 +850,9 @@ mod tests {
         .map(|(id, name, data)| sse(name, *id, data))
         .collect();
         let app = Router::new()
-            .route("/api/v1/me/prefs", get(|| async { r#"{"active_provider_id":"p"}"# }))
+            .route("/api/client/v1/me/prefs", get(|| async { r#"{"active_provider_id":"p"}"# }))
             .route(
-                "/api/v1/chat",
+                "/api/client/v1/chat",
                 post(move |State(seen): State<Arc<Seen>>, axum::Json(body): axum::Json<serde_json::Value>| {
                     let b = first.clone();
                     async move {
@@ -874,13 +874,13 @@ mod tests {
                 }),
             )
             .route(
-                "/api/v1/generations",
+                "/api/client/v1/generations",
                 get(|State(seen): State<Arc<Seen>>| async move {
                     ([(header::CONTENT_TYPE, "application/json")], seen.running.lock().unwrap().clone())
                 }),
             )
             .route(
-                "/api/v1/generations/{id}/stream",
+                "/api/client/v1/generations/{id}/stream",
                 get(|State(seen): State<Arc<Seen>>, Query(q): Query<std::collections::HashMap<String, String>>| async move {
                     seen.resumes.lock().unwrap().push(q.get("after").cloned().unwrap_or_default());
                     let (status, body) = {
@@ -891,7 +891,7 @@ mod tests {
                 }),
             )
             .route(
-                "/api/v1/generations/{id}/cancel",
+                "/api/client/v1/generations/{id}/cancel",
                 post(|State(seen): State<Arc<Seen>>, P(id): P<String>| async move {
                     seen.cancels.lock().unwrap().push(id);
                     S::NO_CONTENT
@@ -1242,7 +1242,7 @@ mod tests {
     }
 
     async fn stored_reply(http: &reqwest::Client, url: &str, token: &str, conversation_id: &str) -> String {
-        let detail: ConversationDetail = http.get(format!("{url}/api/v1/conversations/{conversation_id}")).bearer_auth(token).send().await.unwrap().json().await.unwrap();
+        let detail: ConversationDetail = http.get(format!("{url}/api/client/v1/conversations/{conversation_id}")).bearer_auth(token).send().await.unwrap().json().await.unwrap();
         detail.messages.iter().rev().find(|m| m.role == "assistant").map(|m| m.content.clone()).unwrap_or_default()
     }
 
@@ -1267,7 +1267,7 @@ mod tests {
         version.insert(askbar_proto::CLIENT_VERSION_HEADER, VERSION.parse().unwrap());
         let http = reqwest::Client::builder().default_headers(version).build().unwrap();
         let chat = |text: &str| {
-            http.post(format!("{url}/api/v1/chat"))
+            http.post(format!("{url}/api/client/v1/chat"))
                 .bearer_auth(&token)
                 .header(askbar_proto::CLIENT_VERSION_HEADER, VERSION)
                 .header("accept", "text/event-stream")
@@ -1277,7 +1277,7 @@ mod tests {
         // 1. Drop the client after a few deltas, resume after what was received (twice, to be sure),
         // then stop the reply: the three pieces joined are the stored reply.
         let resume = |gid: String, after: u64| {
-            http.get(format!("{url}/api/v1/generations/{gid}/stream")).bearer_auth(&token).header(askbar_proto::CLIENT_VERSION_HEADER, VERSION).header("accept", "text/event-stream").query(&[("after", after)])
+            http.get(format!("{url}/api/client/v1/generations/{gid}/stream")).bearer_auth(&token).header(askbar_proto::CLIENT_VERSION_HEADER, VERSION).header("accept", "text/event-stream").query(&[("after", after)])
         };
         let mut reader = ReplyReader::default();
         let first = chat("slow hello").send().await.unwrap();
@@ -1289,12 +1289,12 @@ mod tests {
         assert!(second.status().is_success());
         let (middle, end) = read_some(second, &mut reader, |r| r.last_id >= at_drop + 5).await;
         assert!(end.is_none() && reader.last_id >= at_drop + 5, "the resume carried on from delta {at_drop}");
-        let stop = http.post(format!("{url}/api/v1/generations/{gid}/cancel")).bearer_auth(&token).send().await.unwrap();
+        let stop = http.post(format!("{url}/api/client/v1/generations/{gid}/cancel")).bearer_auth(&token).send().await.unwrap();
         assert!(stop.status().is_success());
         let third = resume(gid.clone(), reader.last_id).send().await.unwrap();
         let (tail, _) = read_some(third, &mut reader, |_| false).await;
         let all = format!("{head}{middle}{tail}");
-        let convs: Vec<Conversation> = http.get(format!("{url}/api/v1/conversations")).bearer_auth(&token).send().await.unwrap().json().await.unwrap();
+        let convs: Vec<Conversation> = http.get(format!("{url}/api/client/v1/conversations")).bearer_auth(&token).send().await.unwrap().json().await.unwrap();
         assert_eq!(all, stored_reply(&http, &url, &token, &convs[0].id).await, "no delta twice, none missing");
         assert!(all.starts_with("Streaming slowly"), "{all}");
 
@@ -1310,7 +1310,7 @@ mod tests {
         askbar_server::generation::sweep_on_start(&restarted_db).unwrap();
         let state2: Arc<AppState> = AppState::new(restarted_db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), "0.1.0");
         let (url2, _server2) = serve_state(state2.clone()).await;
-        let resumed = http.get(format!("{url2}/api/v1/generations/{gid}/stream")).bearer_auth(&token).header(askbar_proto::CLIENT_VERSION_HEADER, VERSION).header("accept", "text/event-stream").query(&[("after", reader.last_id)]).send().await.unwrap();
+        let resumed = http.get(format!("{url2}/api/client/v1/generations/{gid}/stream")).bearer_auth(&token).header(askbar_proto::CLIENT_VERSION_HEADER, VERSION).header("accept", "text/event-stream").query(&[("after", reader.last_id)]).send().await.unwrap();
         assert!(resumed.status().is_success());
         let (tail, end) = read_some(resumed, &mut reader, |_| false).await;
         let Some(Step::Fail { message: why, .. }) = end else { panic!("an interrupted reply ends with an error event, got {end:?}") };

@@ -1215,7 +1215,7 @@ pub fn delete_conversation(state: &Arc<AppState>, user_id: &str, conversation_id
     Ok(deleted)
 }
 
-/// `POST /api/v1/generations/{id}/cancel`: stop a running reply, keeping the text so far.
+/// `POST /api/client/v1/generations/{id}/cancel`: stop a running reply, keeping the text so far.
 /// 204 also when it has already finished; 404 for anyone else's.
 pub async fn cancel(
     State(state): State<Arc<AppState>>,
@@ -1291,7 +1291,7 @@ pub(crate) fn events_for(state: &AppState, row: &crate::Generation, after: u64) 
     }
 }
 
-/// `GET /api/v1/generations/{id}/stream?after=N`: the deltas after the first N, then the rest live.
+/// `GET /api/client/v1/generations/{id}/stream?after=N`: the deltas after the first N, then the rest live.
 ///
 /// While the generation runs (and for a few minutes after) this replays from memory, exactly.
 /// Once only the database remembers it, delta boundaries are gone: a client that has seen

@@ -83,7 +83,7 @@ dependencies = [
 
 [[package]]
 name = "askbar-admin"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "argon2",
  "askbar-proto",
@@ -107,7 +107,7 @@ dependencies = [
 
 [[package]]
 name = "askbar-client"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "askbar-proto",
  "askbar-server",
@@ -132,7 +132,7 @@ dependencies = [
 
 [[package]]
 name = "askbar-proto"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -142,7 +142,7 @@ dependencies = [
 
 [[package]]
 name = "askbar-server"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "askbar-proto",
  "axum",

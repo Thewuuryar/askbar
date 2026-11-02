@@ -26,10 +26,10 @@ impl Server {
         format!("http://{}{p}", self.addr)
     }
     async fn pair(&self, code: &str) -> reqwest::Response {
-        self.http.post(self.url("/api/v1/pair")).json(&serde_json::json!({ "code": code })).send().await.unwrap()
+        self.http.post(self.url("/api/client/v1/pairings")).json(&serde_json::json!({ "code": code })).send().await.unwrap()
     }
     async fn probe(&self, token: Option<&str>) -> u16 {
-        let mut r = self.http.get(self.url("/api/v1/whoami"));
+        let mut r = self.http.get(self.url("/api/client/v1/me"));
         if let Some(t) = token {
             r = r.bearer_auth(t);
         }
@@ -50,7 +50,7 @@ async fn missing_and_bad_tokens_are_401() {
     let s = start().await;
     assert_eq!(s.probe(None).await, 401);
     assert_eq!(s.probe(Some("abt_nope")).await, 401);
-    let r = s.http.get(s.url("/api/v1/whoami")).header("authorization", "Basic abc").send().await.unwrap();
+    let r = s.http.get(s.url("/api/client/v1/me")).header("authorization", "Basic abc").send().await.unwrap();
     assert_eq!(r.status(), 401);
 }
 
@@ -106,12 +106,12 @@ async fn tokens_are_stored_hashed() {
 #[tokio::test]
 async fn health_stays_public() {
     let s = start().await;
-    assert_eq!(s.http.get(s.url("/api/v1/health")).send().await.unwrap().status(), 200);
+    assert_eq!(s.http.get(s.url("/api/client/v1/health")).send().await.unwrap().status(), 200);
 }
 
 fn client() -> reqwest::Client {
     let mut h = reqwest::header::HeaderMap::new();
-    h.insert(askbar_proto::CLIENT_VERSION_HEADER, "0.4.0".parse().unwrap());
+    h.insert(askbar_proto::CLIENT_VERSION_HEADER, "0.5.0".parse().unwrap());
     reqwest::Client::builder().default_headers(h).build().unwrap()
 }
 
@@ -119,7 +119,7 @@ fn client() -> reqwest::Client {
 async fn a_refused_token_and_a_bad_pairing_code_are_problems() {
     let s = start().await;
     let ask = |token: Option<&str>| {
-        let mut r = s.http.get(s.url("/api/v1/whoami"));
+        let mut r = s.http.get(s.url("/api/client/v1/me"));
         if let Some(t) = token {
             r = r.bearer_auth(t);
         }
@@ -139,7 +139,7 @@ async fn a_refused_token_and_a_bad_pairing_code_are_problems() {
     assert_eq!(p.error, "unauthorized");
     assert!(p.detail.contains("pairing code"));
     // A body that is not JSON is a bad request problem, not plain text.
-    let r = s.http.post(s.url("/api/v1/pair")).header("content-type", "application/json").body("nope").send().await.unwrap();
+    let r = s.http.post(s.url("/api/client/v1/pairings")).header("content-type", "application/json").body("nope").send().await.unwrap();
     assert_eq!(r.status(), 400);
     assert_eq!(r.json::<askbar_proto::Problem>().await.unwrap().error, "bad_request");
 }

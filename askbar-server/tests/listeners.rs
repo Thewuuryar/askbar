@@ -26,11 +26,11 @@ async fn the_client_and_server_api_routers_share_no_routes() {
     let server_api = spawn(askbar_server::server_api::router(state(), hash)).await;
     let api = spawn(askbar_server::client_router(state())).await;
 
-    assert_eq!(status(api, "/api/v1/health").await, 200);
+    assert_eq!(status(api, "/api/client/v1/health").await, 200);
     // The server API answers 401 (no token) to everything, including paths that are not its own;
     // the client API answers 404 to server API paths and to the admin site that used to live here.
     assert_eq!(status(server_api, "/api/server/v1/health").await, 401);
-    assert_eq!(status(server_api, "/api/v1/health").await, 401, "the client API is not served here");
+    assert_eq!(status(server_api, "/api/client/v1/health").await, 401, "the client API is not served here");
     assert_eq!(status(api, "/api/server/v1/health").await, 404);
     for gone in ["/admin/", "/admin/health", "/admin/api/v1/session", "/admin/api/v1/providers", "/"] {
         assert_eq!(status(api, gone).await, 404, "{gone}: the admin site is not part of the server");
@@ -51,7 +51,7 @@ async fn even_with_the_server_token_the_server_api_listener_serves_no_client_api
         reqwest::Client::new().get(format!("http://{server_api}{path}")).bearer_auth(token).send().await.unwrap().status().as_u16()
     };
     assert_eq!(get("/api/server/v1/health").await, 200);
-    for not_here in ["/api/client/v1/health", "/api/client/v1/conversations", "/api/v1/health", "/api/v1/conversations", "/mgmt/v1/health", "/admin/", "/"] {
+    for not_here in ["/api/client/v1/health", "/api/client/v1/conversations", "/api/client/v1/health", "/api/client/v1/conversations", "/mgmt/v1/health", "/admin/", "/"] {
         assert_eq!(get(not_here).await, 404, "{not_here}: the server API listener serves only /api/server/v1");
     }
     let _ = std::fs::remove_dir_all(&dir);

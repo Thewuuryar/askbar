@@ -73,7 +73,7 @@ async fn start() -> T {
 impl T {
     async fn chat(&self, client: &reqwest::Client, conv: Option<&str>, provider: &str, text: &str) -> reqwest::Response {
         client
-            .post(format!("http://{}/api/v1/chat", self.addr))
+            .post(format!("http://{}/api/client/v1/chat", self.addr))
             .bearer_auth(&self.token)
             .json(&ChatRequest { conversation_id: conv.map(String::from), provider: provider.into(), text: text.into(), client_request_id: None })
             .send()
@@ -237,7 +237,7 @@ async fn bad_requests_are_plain_http_errors() {
     assert_eq!(t.chat(&http, None, "mock", "hi").await.status(), 404);
     assert!(t.messages().is_empty());
     let r = http
-        .post(format!("http://{}/api/v1/chat", t.addr))
+        .post(format!("http://{}/api/client/v1/chat", t.addr))
         .json(&ChatRequest { conversation_id: None, provider: "p1".into(), text: "hi".into(), client_request_id: None })
         .send()
         .await
@@ -247,7 +247,7 @@ async fn bad_requests_are_plain_http_errors() {
 
 fn client_builder() -> reqwest::ClientBuilder {
     let mut h = reqwest::header::HeaderMap::new();
-    h.insert(askbar_proto::CLIENT_VERSION_HEADER, "0.4.0".parse().unwrap());
+    h.insert(askbar_proto::CLIENT_VERSION_HEADER, "0.5.0".parse().unwrap());
     reqwest::Client::builder().default_headers(h)
 }
 
@@ -277,14 +277,14 @@ async fn another_user_cannot_read_or_continue_my_conversation() {
         let (http, token, addr) = (http.clone(), token_b.clone(), t.addr);
         async move { http.get(format!("http://{addr}{path}")).bearer_auth(token).send().await.unwrap() }
     };
-    let list = get("/api/v1/conversations".into()).await;
+    let list = get("/api/client/v1/conversations".into()).await;
     assert_eq!(list.status(), 200);
     assert_eq!(list.text().await.unwrap(), "[]");
-    assert_eq!(get(format!("/api/v1/conversations/{conversation_id}")).await.status(), 404);
+    assert_eq!(get(format!("/api/client/v1/conversations/{conversation_id}")).await.status(), 404);
 
     // Continuing it is refused and writes nothing.
     let r = http
-        .post(format!("http://{}/api/v1/chat", t.addr))
+        .post(format!("http://{}/api/client/v1/chat", t.addr))
         .bearer_auth(&token_b)
         .json(&ChatRequest { conversation_id: Some(conversation_id.clone()), provider: "p1".into(), text: "intrusion".into(), client_request_id: None })
         .send()
@@ -294,9 +294,9 @@ async fn another_user_cannot_read_or_continue_my_conversation() {
     assert_eq!(t.messages().len(), 2);
 
     // Deleting it is refused too.
-    let r = http.delete(format!("http://{}/api/v1/conversations/{conversation_id}", t.addr)).bearer_auth(&token_b).send().await.unwrap();
+    let r = http.delete(format!("http://{}/api/client/v1/conversations/{conversation_id}", t.addr)).bearer_auth(&token_b).send().await.unwrap();
     assert_eq!(r.status(), 404);
-    let own = http.get(format!("http://{}/api/v1/conversations/{conversation_id}", t.addr)).bearer_auth(&t.token).send().await.unwrap();
+    let own = http.get(format!("http://{}/api/client/v1/conversations/{conversation_id}", t.addr)).bearer_auth(&t.token).send().await.unwrap();
     assert_eq!(own.status(), 200);
 }
 
@@ -324,9 +324,9 @@ async fn the_snapshots_system_prompt_is_sent_with_the_next_message_and_never_ser
 
     // Clients can read the display settings, but the prompt is never among them.
     let settings = http
-        .get(format!("http://{}/api/v1/settings", t.addr))
+        .get(format!("http://{}/api/client/v1/settings", t.addr))
         .bearer_auth(&t.token)
-        .header("x-askbar-client-version", "0.4.0")
+        .header("x-askbar-client-version", "0.5.0")
         .send()
         .await
         .unwrap()
@@ -454,7 +454,7 @@ async fn resuming_after_three_deltas_sends_the_rest_exactly_once() {
     assert!(all.len() > 5);
     let id = generation_id(&body);
 
-    let rest = t.get_with(&t.token, &format!("/api/v1/generations/{id}/stream?after=3")).await;
+    let rest = t.get_with(&t.token, &format!("/api/client/v1/generations/{id}/stream?after=3")).await;
     assert_eq!(rest.status(), 200);
     let rest_body = rest.text().await.unwrap();
     assert_eq!(deltas(&rest_body), all[3..].to_vec(), "deltas 4.. exactly once, with their original ids");
@@ -474,7 +474,7 @@ async fn resuming_a_running_generation_replays_then_follows() {
     let id = generation_id(&got);
     drop(stream);
 
-    let resumed = t.get_with(&t.token, &format!("/api/v1/generations/{id}/stream?after=2")).await;
+    let resumed = t.get_with(&t.token, &format!("/api/client/v1/generations/{id}/stream?after=2")).await;
     let mut s = resumed.bytes_stream();
     let mut body = String::new();
     while deltas(&body).len() < 4 {
@@ -492,11 +492,11 @@ async fn a_generation_only_the_database_remembers_sends_its_text_once_then_the_e
     let text: String = deltas(&body).into_iter().map(|d| d.1).collect();
     t.state.generations.remove(&id); // as after a restart
 
-    let whole = t.get_with(&t.token, &format!("/api/v1/generations/{id}/stream")).await.text().await.unwrap();
+    let whole = t.get_with(&t.token, &format!("/api/client/v1/generations/{id}/stream")).await.text().await.unwrap();
     assert_eq!(deltas(&whole), [(1, text)]);
     assert!(whole.contains("event: done"));
 
-    let tail = t.get_with(&t.token, &format!("/api/v1/generations/{id}/stream?after=5")).await.text().await.unwrap();
+    let tail = t.get_with(&t.token, &format!("/api/client/v1/generations/{id}/stream?after=5")).await.text().await.unwrap();
     assert!(deltas(&tail).is_empty() && tail.contains("event: done"));
 }
 
@@ -506,13 +506,13 @@ async fn another_users_generation_stream_is_404() {
     let body = t.chat(&client(), None, "p1", "Hello there").await.text().await.unwrap();
     let id = generation_id(&body);
     let other = t.second_user_token();
-    assert_eq!(t.get_with(&other, &format!("/api/v1/generations/{id}/stream")).await.status(), 404);
-    assert_eq!(t.get_with(&other, "/api/v1/generations/nope/stream").await.status(), 404);
+    assert_eq!(t.get_with(&other, &format!("/api/client/v1/generations/{id}/stream")).await.status(), 404);
+    assert_eq!(t.get_with(&other, "/api/client/v1/generations/nope/stream").await.status(), 404);
 }
 
 impl T {
     async fn cancel_with(&self, token: &str, id: &str) -> reqwest::Response {
-        client().post(format!("http://{}/api/v1/generations/{id}/cancel", self.addr)).bearer_auth(token).send().await.unwrap()
+        client().post(format!("http://{}/api/client/v1/generations/{id}/cancel", self.addr)).bearer_auth(token).send().await.unwrap()
     }
 }
 
@@ -578,26 +578,26 @@ async fn a_running_generation_is_listed_and_a_finished_one_is_not() {
     };
 
     let list: Vec<askbar_proto::PendingGeneration> =
-        t.get_with(&t.token, "/api/v1/generations?status=running").await.json().await.unwrap();
+        t.get_with(&t.token, "/api/client/v1/generations?status=running").await.json().await.unwrap();
     assert_eq!(list.len(), 1);
     assert_eq!((list[0].generation_id.as_str(), list[0].status.as_str(), list[0].prompt.as_str()), (id.as_str(), "running", "please be slow"));
     let detail: askbar_proto::ConversationDetail =
-        t.get_with(&t.token, &format!("/api/v1/conversations/{conversation}")).await.json().await.unwrap();
+        t.get_with(&t.token, &format!("/api/client/v1/conversations/{conversation}")).await.json().await.unwrap();
     assert_eq!(detail.pending.len(), 1);
     assert_eq!(detail.pending[0].generation_id, id);
 
     // Another user sees neither.
     let other = t.second_user_token();
-    let theirs: Vec<askbar_proto::PendingGeneration> = t.get_with(&other, "/api/v1/generations?status=running").await.json().await.unwrap();
+    let theirs: Vec<askbar_proto::PendingGeneration> = t.get_with(&other, "/api/client/v1/generations?status=running").await.json().await.unwrap();
     assert!(theirs.is_empty());
 
     assert_eq!(t.cancel_with(&t.token, &id).await.status(), 204);
     wait_for("the generation to end", || (t.generations()[0].0 == "cancelled").then_some(()));
-    let list: Vec<askbar_proto::PendingGeneration> = t.get_with(&t.token, "/api/v1/generations?status=running").await.json().await.unwrap();
+    let list: Vec<askbar_proto::PendingGeneration> = t.get_with(&t.token, "/api/client/v1/generations?status=running").await.json().await.unwrap();
     assert!(list.is_empty());
-    let body = t.get_with(&t.token, &format!("/api/v1/conversations/{conversation}")).await.text().await.unwrap();
+    let body = t.get_with(&t.token, &format!("/api/client/v1/conversations/{conversation}")).await.text().await.unwrap();
     assert!(!body.contains("pending"), "left out when nothing is pending: {body}");
-    assert_eq!(t.get_with(&t.token, "/api/v1/generations?status=bogus").await.status(), 400);
+    assert_eq!(t.get_with(&t.token, "/api/client/v1/generations?status=bogus").await.status(), 400);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -607,7 +607,7 @@ async fn two_posts_with_one_client_request_id_make_one_generation_and_one_user_m
         let (addr, token) = (t.addr, t.token.clone());
         async move {
             client()
-                .post(format!("http://{addr}/api/v1/chat"))
+                .post(format!("http://{addr}/api/client/v1/chat"))
                 .bearer_auth(token)
                 .json(&ChatRequest {
                     conversation_id: None,
@@ -637,7 +637,7 @@ async fn two_posts_with_one_client_request_id_make_one_generation_and_one_user_m
     // The same id from another client is a different send.
     let other = t.second_user_token();
     let third = client()
-        .post(format!("http://{}/api/v1/chat", t.addr))
+        .post(format!("http://{}/api/client/v1/chat", t.addr))
         .bearer_auth(&other)
         .json(&ChatRequest { conversation_id: None, provider: "p1".into(), text: "Hello there".into(), client_request_id: Some("req-1".into()) })
         .send()
@@ -658,7 +658,7 @@ async fn a_repeat_while_the_reply_runs_attaches_to_it() {
     let t = start().await;
     let post = || {
         client_builder().pool_max_idle_per_host(0).build().unwrap()
-            .post(format!("http://{}/api/v1/chat", t.addr))
+            .post(format!("http://{}/api/client/v1/chat", t.addr))
             .bearer_auth(&t.token)
             .json(&ChatRequest { conversation_id: None, provider: "p1".into(), text: "please be slow".into(), client_request_id: Some("r".into()) })
             .send()
@@ -725,7 +725,7 @@ async fn sends_during_a_reply_are_queued_up_to_five_and_the_sixth_is_refused() {
     let rows = t.generations();
     assert_eq!(rows.iter().filter(|r| r.0 == "queued").count(), 5);
     assert_eq!(rows.iter().filter(|r| r.0 == "running").count(), 1);
-    let list: Vec<askbar_proto::PendingGeneration> = t.get_with(&t.token, "/api/v1/generations?status=running").await.json().await.unwrap();
+    let list: Vec<askbar_proto::PendingGeneration> = t.get_with(&t.token, "/api/client/v1/generations?status=running").await.json().await.unwrap();
     assert_eq!(list.iter().filter(|g| g.status == "queued").map(|g| g.prompt.as_str()).collect::<Vec<_>>(), ["queued 1", "queued 2", "queued 3", "queued 4", "queued 5"]);
     drop(held);
 }
@@ -819,7 +819,7 @@ async fn deleting_a_conversation_mid_reply_stops_it_and_starts_nothing_queued() 
         meta.push_str(&String::from_utf8_lossy(&queued.next().await.unwrap().unwrap()));
     }
 
-    let r = http.delete(format!("http://{}/api/v1/conversations/{conversation}", t.addr)).bearer_auth(&t.token).send().await.unwrap();
+    let r = http.delete(format!("http://{}/api/client/v1/conversations/{conversation}", t.addr)).bearer_auth(&t.token).send().await.unwrap();
     assert_eq!(r.status(), 204);
     wait_for_secs(5, "the upstream to see the stop", || {
         t.mock.log.lock().unwrap().iter().any(|l| l.contains("client disconnected")).then_some(())
@@ -833,7 +833,7 @@ async fn deleting_a_conversation_mid_reply_stops_it_and_starts_nothing_queued() 
     for id in [first_id, queued_id] {
         assert!(t.state.generations.get(&id).is_none_or(|l| l.is_finished()), "{id} is not still running");
     }
-    let list: Vec<askbar_proto::PendingGeneration> = t.get_with(&t.token, "/api/v1/generations?status=running").await.json().await.unwrap();
+    let list: Vec<askbar_proto::PendingGeneration> = t.get_with(&t.token, "/api/client/v1/generations?status=running").await.json().await.unwrap();
     assert!(list.is_empty());
     // Both attached connections end.
     let mut rest = String::new();

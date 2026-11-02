@@ -17,7 +17,7 @@ cd "$(dirname "$0")/.."
 
 URL=""
 PAIRING="${ASKBAR_SMOKE_PAIRING:-}"
-CLIENT_VERSION="0.4.0"
+CLIENT_VERSION="0.5.0"
 while [ $# -gt 0 ]; do
   case "$1" in
     --url) URL="${2:?--url needs a value}"; shift 2 ;;
@@ -86,8 +86,8 @@ URL="${URL%/}"
 echo "Target: $URL ($([ $LOCAL = 1 ] && echo 'throwaway server on an empty data directory' || echo 'running stack'))"
 
 # 1. The server answers.
-if wait_for_url "$URL/api/v1/health" 20; then pass "server is up"; else
-  fail "server is up" "no answer from $URL/api/v1/health"; [ $LOCAL = 1 ] && tail -5 "$WORK/server.log"; exit 1
+if wait_for_url "$URL/api/client/v1/health" 20; then pass "server is up"; else
+  fail "server is up" "no answer from $URL/api/client/v1/health"; [ $LOCAL = 1 ] && tail -5 "$WORK/server.log"; exit 1
 fi
 
 # 2-3. Local only: first-run setup through the admin, a provider, a pair code.
@@ -133,7 +133,7 @@ b=s[len("askbar-pair:"):]
 d=json.loads(base64.urlsafe_b64decode(b+"="*(-len(b)%4)))
 print(d["code"])' "$PAIRING" 2>/dev/null)
   if [ -n "$CODE" ] && curl -fsS -X POST -H "x-askbar-client-version: $CLIENT_VERSION" -H 'content-type: application/json' \
-      -d "{\"code\":\"$CODE\"}" "$URL/api/v1/pair" >"$WORK/token.json" 2>/dev/null; then
+      -d "{\"code\":\"$CODE\"}" "$URL/api/client/v1/pairings" >"$WORK/token.json" 2>/dev/null; then
     TOKEN=$(json "$WORK/token.json" 'd["token"]')
   fi
 fi
@@ -142,19 +142,19 @@ api() { curl -sS -H "authorization: Bearer $TOKEN" -H "x-askbar-client-version: 
 
 if [ -n "$TOKEN" ]; then
   # 5. The token works; an unrelated one does not.
-  [ "$(api -o /dev/null -w '%{http_code}' "$URL/api/v1/whoami")" = "204" ] && pass "the client token is accepted" || fail "the client token is accepted"
-  [ "$(curl -sS -o /dev/null -w '%{http_code}' -H 'authorization: Bearer nope' -H "x-askbar-client-version: $CLIENT_VERSION" "$URL/api/v1/whoami")" = "401" ] \
+  [ "$(api -o /dev/null -w '%{http_code}' "$URL/api/client/v1/me")" = "204" ] && pass "the client token is accepted" || fail "the client token is accepted"
+  [ "$(curl -sS -o /dev/null -w '%{http_code}' -H 'authorization: Bearer nope' -H "x-askbar-client-version: $CLIENT_VERSION" "$URL/api/client/v1/me")" = "401" ] \
     && pass "a wrong token is refused" || fail "a wrong token is refused"
 
   # 6. Providers.
-  api "$URL/api/v1/providers" >"$WORK/providers.json"
+  api "$URL/api/client/v1/providers" >"$WORK/providers.json"
   PROVIDER=$(json "$WORK/providers.json" 'd[0]["id"]')
   if [ -n "$PROVIDER" ]; then pass "the server lists a provider ($(json "$WORK/providers.json" 'd[0]["name"]'))"; else fail "the server lists a provider"; fi
 
   # 7. Chat: read the streamed reply.
   QUESTION="smoke question zebra"
   api -N --max-time 60 -X POST -H 'content-type: application/json' \
-    -d "{\"provider\":\"$PROVIDER\",\"text\":\"$QUESTION\"}" "$URL/api/v1/chat" >"$WORK/chat.sse" 2>/dev/null
+    -d "{\"provider\":\"$PROVIDER\",\"text\":\"$QUESTION\"}" "$URL/api/client/v1/chat" >"$WORK/chat.sse" 2>/dev/null
   CHAT=$(py 'import json,sys
 events=[]; name=None
 for line in open(sys.argv[1], encoding="utf-8"):
@@ -171,7 +171,7 @@ print("ok" if ok else "bad", conv, len(text))' "$WORK/chat.sse" 2>/dev/null)
 
   # 8. History holds the exchange.
   if [ -n "${CONV_ID:-}" ]; then
-    api "$URL/api/v1/conversations/$CONV_ID" >"$WORK/conv.json"
+    api "$URL/api/client/v1/conversations/$CONV_ID" >"$WORK/conv.json"
     if [ "$(json "$WORK/conv.json" 'len(d["messages"])')" = "2" ] \
        && [ "$(json "$WORK/conv.json" 'd["messages"][0]["content"]')" = "$QUESTION" ]; then
       pass "the conversation holds the question and the reply"
@@ -183,7 +183,7 @@ print("ok" if ok else "bad", conv, len(text))' "$WORK/chat.sse" 2>/dev/null)
   fi
 
   # 9. Search history.
-  code=$(api -o "$WORK/search.json" -w '%{http_code}' --get --data-urlencode "q=zebra" "$URL/api/v1/search")
+  code=$(api -o "$WORK/search.json" -w '%{http_code}' --get --data-urlencode "q=zebra" "$URL/api/client/v1/search")
   if [ "$code" = "200" ] && [ "$(json "$WORK/search.json" 'len(d)')" -ge 1 ] 2>/dev/null; then
     pass "search history finds the question"
   else
@@ -193,7 +193,7 @@ print("ok" if ok else "bad", conv, len(text))' "$WORK/chat.sse" 2>/dev/null)
   # 10. Retries: the mock refuses this message with a 429 (Retry-After: 1) the first time; the
   # server waits and tries again, and the reply still completes.
   api -N --max-time 60 -X POST -H 'content-type: application/json' \
-    -d "{\"provider\":\"$PROVIDER\",\"text\":\"smoke 429once retry\"}" "$URL/api/v1/chat" >"$WORK/retry.sse" 2>/dev/null
+    -d "{\"provider\":\"$PROVIDER\",\"text\":\"smoke 429once retry\"}" "$URL/api/client/v1/chat" >"$WORK/retry.sse" 2>/dev/null
   RETRY=$(py 'import sys
 text=open(sys.argv[1], encoding="utf-8").read()
 print("ok" if "event: delta" in text and text.rstrip().endswith("data: {\"event\":\"done\"}") and "event: error" not in text else "bad")' "$WORK/retry.sse" 2>/dev/null)
