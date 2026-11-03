@@ -193,8 +193,23 @@ async function waitForPort(port) {
     const values = await page.$$eval('#provider-form input, #provider-form select', (els) => els.map((e) => e.value).join('|'));
     assert.equal(values.includes(SECRET_KEY), false);
   });
+  await step('editing a provider with a saved key turns the model into a dropdown of what it offers', async () => {
+    await page.waitForSelector('#p-model-list:not([hidden])');
+    assert.equal(await page.isHidden('#p-model'), true);
+    assert.deepEqual(await page.$$eval('#p-model-list option', (o) => o.map((x) => x.value)), ['mock-model', 'mock-model-2', '__manual__']);
+    assert.equal(await page.inputValue('#p-model-list'), 'mock-model', 'the saved model is selected');
+    assert.equal(await page.isHidden('#p-key'), false);
+    assert.equal(await page.inputValue('#p-key'), '', 'the saved key was used by the server; the page never held it');
+  });
+  await step('"Enter a name myself" brings back the text box', async () => {
+    await page.selectOption('#p-model-list', '__manual__');
+    assert.equal(await page.isVisible('#p-model'), true);
+    assert.equal(await page.isHidden('#p-model-list'), true);
+    await page.click('#p-model-refresh');
+    await page.waitForSelector('#p-model-list:not([hidden])');
+  });
   await step('editing without a new key keeps the old one working', async () => {
-    await page.fill('#p-model', 'mock-model-2');
+    await page.selectOption('#p-model-list', 'mock-model-2');
     await page.click('#provider-form button[type=submit]');
     await page.waitForFunction(() => /mock-model-2/.test(document.querySelector('.card[data-name="mock"]')?.textContent || ''));
     await page.click('.card[data-name="mock"] [data-action="test"]');

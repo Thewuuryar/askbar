@@ -72,7 +72,14 @@
             <select id="p-type"><option value="openai">openai (OpenAI-compatible)</option><option value="anthropic">anthropic</option></select>
           </label>
           <label>Base URL <input id="p-base-url" placeholder="https://api.openai.com/v1"></label>
-          <label>Model <input id="p-model" required></label>
+          <label>Model
+            <input id="p-model" required>
+            <select id="p-model-list" hidden aria-label="Model"></select>
+          </label>
+          <div class="row">
+            <button type="button" id="p-model-refresh" class="secondary">Load models</button>
+            <span id="p-model-status" class="hint" role="status"></span>
+          </div>
           <label>API key <input id="p-key" type="password" autocomplete="off" placeholder="write-only"></label>
           <label>Max tokens <input id="p-max-tokens" type="number" min="1"></label>
           <label>Temperature <input id="p-temperature" type="number" step="0.1" min="0" max="2"></label>

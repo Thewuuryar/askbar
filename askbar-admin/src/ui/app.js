@@ -277,8 +277,70 @@
     for (const p of list) box.appendChild(providerCard(p));
   }
 
+  // ---- model list: once the provider can be reached, the model is chosen from what it offers.
+  const MANUAL = '__manual__';
+  let editingHasKey = false;
+  let modelSeq = 0;
+
+  function canListModels() {
+    if ($('p-key').value.trim() !== '' || (editing && editingHasKey)) return true;
+    return $('p-type').value === 'openai' && $('p-base-url').value.trim() !== '';
+  }
+
+  function showModelInput() {
+    show($('p-model-list'), false);
+    show($('p-model'), true);
+  }
+
+  function fillModelList(models) {
+    const sel = $('p-model-list');
+    const current = $('p-model').value.trim();
+    sel.textContent = '';
+    const add = (value, text) => { const o = document.createElement('option'); o.value = value; o.textContent = text; sel.appendChild(o); };
+    if (current && !models.some((m) => m.id === current)) add(current, current + ' (not in the provider\'s list)');
+    for (const m of models) add(m.id, m.label ? m.label + ' (' + m.id + ')' : m.id);
+    add(MANUAL, 'Enter a name myself...');
+    sel.value = current || models[0].id;
+    $('p-model').value = sel.value;
+    show($('p-model'), false);
+    show(sel, true);
+  }
+
+  async function loadModels() {
+    const status = $('p-model-status');
+    if (!canListModels()) {
+      showModelInput();
+      status.textContent = 'Enter the address and key, then load the provider\'s models.';
+      return;
+    }
+    const seq = ++modelSeq;
+    status.textContent = 'Loading models...';
+    const body = { type: $('p-type').value, base_url: $('p-base-url').value.trim() };
+    if ($('p-key').value.trim() !== '') body.api_key = $('p-key').value.trim();
+    if (editing) body.provider_id = editing;
+    let res;
+    try { res = await api('POST', '/admin/api/v1/providers/models', body); }
+    catch (ex) { res = { ok: false, message: ex.message }; }
+    if (seq !== modelSeq) return; // a newer request replaced this one
+    if (res.ok && res.models.length) {
+      fillModelList(res.models);
+      status.textContent = res.models.length + ' models available.';
+    } else {
+      showModelInput();
+      status.textContent = (res.message || 'No models listed.') + ' Type the model name instead.';
+    }
+  }
+
+  $('p-model-list').addEventListener('change', () => {
+    if ($('p-model-list').value === MANUAL) { showModelInput(); $('p-model').focus(); return; }
+    $('p-model').value = $('p-model-list').value;
+  });
+  $('p-model-refresh').addEventListener('click', loadModels);
+  for (const id of ['p-type', 'p-base-url', 'p-key']) $(id).addEventListener('change', loadModels);
+
   function openForm(p, preset) {
     editing = p ? p.id : null;
+    editingHasKey = !!(p && p.has_key);
     const v = p || preset || { name: '', type: 'openai', base_url: '', model: '' };
     $('provider-form-title').textContent = p ? 'Edit ' + p.name : 'Add provider';
     $('p-name').value = v.name || '';
@@ -298,11 +360,16 @@
     $('p-hint').textContent = preset && preset.hint ? preset.hint : '';
     show($('p-hint'), !!(preset && preset.hint));
     show($('provider-form'), true);
+    modelSeq++;
+    showModelInput();
+    $('p-model-status').textContent = '';
+    if (p) loadModels();
     $('p-name').focus();
   }
 
   function closeForm() {
     editing = null;
+    modelSeq++;
     $('p-key').value = '';
     show($('provider-form'), false);
   }

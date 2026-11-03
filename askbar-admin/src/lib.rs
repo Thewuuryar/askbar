@@ -107,6 +107,7 @@ pub fn routes(state: &Arc<AdminState>) -> Routes {
         .put(&v1("/providers/{id}"), admin_api::update_provider)
         .delete(&v1("/providers/{id}"), admin_api::delete_provider)
         .post(&v1("/providers/{id}/test"), admin_api::test_provider)
+        .post(&v1("/providers/models"), admin_api::list_models)
         .get(&v1("/clients"), admin_api::list_clients)
         .post(&v1("/clients/{id}/revoke"), admin_api::revoke_client)
         .post(&v1("/pairings"), admin_api::create_pairing)

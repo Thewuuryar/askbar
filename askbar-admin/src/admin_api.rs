@@ -306,6 +306,36 @@ pub async fn test_provider(State(state): St, Path(id): Path<String>) -> Result<R
     json_response(body)
 }
 
+#[derive(Deserialize, serde::Serialize)]
+pub struct ModelsInput {
+    #[serde(rename = "type")]
+    kind: String,
+    #[serde(default)]
+    base_url: String,
+    /// Write-only, used once by the server for this request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    api_key: Option<String>,
+    /// A saved provider whose stored key the server may use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    provider_id: Option<String>,
+}
+
+/// Ask the server which models a provider offers (it has the keys and the network). Nothing is saved.
+pub async fn list_models(State(state): St, ApiJson(i): ApiJson<ModelsInput>) -> Result<Response, Failure> {
+    if !matches!(i.kind.as_str(), "openai" | "anthropic") {
+        return Err(bad("Type must be openai or anthropic."));
+    }
+    let body = serde_json::to_value(&i).map_err(internal)?;
+    let (status, bytes) = link(&state)?
+        .request(reqwest::Method::POST, &format!("{}/models/list", askbar_proto::paths::SERVER_V1), Some(&body))
+        .await
+        .map_err(from_push)?;
+    if status != 200 {
+        return Err(err(StatusCode::BAD_GATEWAY, &format!("The server answered {status}.")));
+    }
+    json_response(bytes)
+}
+
 fn json_response(body: Vec<u8>) -> Result<Response, Failure> {
     Response::builder().header(header::CONTENT_TYPE, "application/json").body(axum::body::Body::from(body)).map_err(internal)
 }

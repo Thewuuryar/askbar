@@ -22,6 +22,7 @@ h3 { font-size: 15px; margin: 0 0 8px; }
 .hint { color: var(--muted); font-size: 13px; }
 label { display: block; margin: 8px 0; font-size: 13px; color: var(--muted); }
 input, select, textarea { display: block; width: 100%; margin-top: 4px; padding: 8px 10px; font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; }
+[hidden] { display: none !important; }
 button { font: inherit; padding: 7px 14px; color: var(--accent-fg); background: var(--accent); border: 0; border-radius: 8px; cursor: pointer; }
 button.secondary { color: var(--fg); background: transparent; border: 1px solid var(--line); }
 button.danger { color: var(--bad); background: transparent; border: 1px solid var(--line); }
