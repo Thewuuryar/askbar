@@ -22,8 +22,8 @@ RUN sed -i 's/^members = .*/members = ["askbar-proto", "askbar-server", "askbar-
 # socket that only Caddy is given. Runs as uid 10001.
 FROM debian:bookworm-slim AS admin
 RUN groupadd --system --gid 10001 askbar-admin && useradd --system --uid 10001 --gid 10001 --home-dir /admin-data --shell /usr/sbin/nologin askbar-admin \
- && mkdir /admin-data /admin-secrets /server-token /control-token /caddy-secrets /run/admin /caddy-run \
- && chown askbar-admin:askbar-admin /admin-data /admin-secrets /server-token /control-token /caddy-secrets /run/admin /caddy-run \
+ && mkdir /admin-data /admin-secrets /server-token /control-token /cpa-config /caddy-secrets /run/admin /caddy-run \
+ && chown askbar-admin:askbar-admin /admin-data /admin-secrets /server-token /control-token /cpa-config /caddy-secrets /run/admin /caddy-run \
  && chmod 700 /admin-secrets
 COPY --from=build /src/target/release/askbar-admin /usr/local/bin/askbar-admin
 USER askbar-admin
@@ -32,6 +32,7 @@ ENV ASKBAR_ADMIN_DATA_DIR=/admin-data \
     ASKBAR_ADMIN_SOCKET=/run/admin/admin.sock \
     ASKBAR_SERVER_TOKEN_DIR=/server-token \
     ASKBAR_CONTROL_TOKEN_DIR=/control-token \
+    ASKBAR_CPA_CONFIG_DIR=/cpa-config \
     ASKBAR_CADDY_SOCKET=/caddy-run/admin.sock \
     ASKBAR_CADDY_SECRETS_DIR=/caddy-secrets
 VOLUME /admin-data /admin-secrets

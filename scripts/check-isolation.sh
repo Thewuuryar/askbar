@@ -134,11 +134,15 @@ docker exec "$CADDY" sh -c "wget -q -T3 -O /dev/null http://$SERVER_API/api/serv
 EDGE_IP=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$EDGE\").IPAddress}}" "$SERVER")
 [ "$(http_status "$EDGE" "$EDGE_IP:8082")" = 0 ] && pass "nothing on the edge network answers on 8082" || fail "the server port answers on the edge network"
 [ "$(http_status "$EDGE" "$SERVER_API")" = 0 ] && pass "a container on edge cannot reach the server API address" || fail "the server API address is reachable from edge"
-[ "$(docker inspect -f '{{len .NetworkSettings.Networks}}' "$ADMIN")" = 1 ] && pass "the admin is on one network only (server-api)" || fail "the admin joined more than one network"
+admin_nets=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$ADMIN" | tr ' ' '\n' | grep . | sort | tr '\n' ' ')
+[ "$admin_nets" = "${PROJECT}_control ${PROJECT}_cpa-admin ${PROJECT}_server-api " ] && pass "the admin is on server-api, control and cpa-admin only (all internal: no route out, never edge)" || fail "the admin's networks are: $admin_nets"
+for n in server-api control cpa-admin; do
+  [ "$(docker network inspect -f '{{.Internal}}' "${PROJECT}_$n" 2>/dev/null)" = true ] && pass "the $n network is internal" || fail "the $n network is not internal"
+done
 
 echo "== 3. What the server can see"
 VOLS=$(docker inspect -f '{{range .Mounts}}{{.Name}} {{end}}' "$SERVER")
-for v in admin-secrets admin-data admin-run caddy-run caddy-secrets; do
+for v in admin-secrets admin-data admin-run caddy-run caddy-secrets control-token cpa-config; do
   case " $VOLS" in *" ${PROJECT}_$v "*) fail "the server mounts $v";; *) pass "the server does not mount $v";; esac
 done
 refused "the server cannot list /admin-secrets" docker exec "$SERVER" ls /admin-secrets
@@ -199,9 +203,45 @@ CPA=$(docker compose -p "$PROJECT" ps -q cpa 2>/dev/null | head -1)
 if [ -z "$CPA" ]; then
   echo "SKIP  cpa is not running"
 else
-  [ "$(docker inspect -f '{{len .NetworkSettings.Networks}}' "$CPA")" = 1 ] && docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}' "$CPA" | grep -q "^${EDGE}$" \
-    && pass "cpa is on the edge network only" || fail "cpa is not on the edge network only"
+  cpa_nets=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$CPA" | tr ' ' '\n' | grep . | sort | tr '\n' ' ')
+  [ "$cpa_nets" = "${EDGE} ${PROJECT}_cpa-admin " ] && pass "cpa is on edge and cpa-admin only" || fail "cpa's networks are: $cpa_nets"
   [ -z "$(docker inspect -f '{{range $p, $b := .NetworkSettings.Ports}}{{if $b}}{{$p}} {{end}}{{end}}' "$CPA")" ] && pass "cpa publishes no port" || fail "cpa publishes a port"
+fi
+
+echo "== 3e. The controller"
+# The one container with the Docker socket: nothing else mounts it, it is reachable only from the admin, and
+# it cannot be asked about anything but the server, Caddy and CLIProxyAPI.
+CONTROLLER=askbar-controller
+if [ "$(docker inspect -f '{{.State.Running}}' "$CONTROLLER" 2>/dev/null)" != true ]; then
+  fail "the controller is not running"
+else
+  for c in $SERVER $ADMIN $CADDY $(docker compose -p "$PROJECT" ps -q cpa 2>/dev/null | head -1); do
+    [ -n "$c" ] || continue
+    docker inspect -f '{{range .Mounts}}{{.Source}} {{end}}' "$c" | grep -q 'docker.sock' && fail "$c mounts the Docker socket" || pass "$c does not mount the Docker socket"
+  done
+  docker inspect -f '{{range .Mounts}}{{.Source}} {{end}}' "$CONTROLLER" | grep -q 'docker.sock' && pass "the controller mounts the Docker socket" || fail "the controller does not mount the Docker socket"
+  [ "$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$CONTROLLER" | tr -d ' ')" = "${PROJECT}_control" ] && pass "the controller is on the control network only" || fail "the controller is on other networks"
+  [ -z "$(docker inspect -f '{{range $p, $b := .NetworkSettings.Ports}}{{if $b}}{{$p}} {{end}}{{end}}' "$CONTROLLER")" ] && pass "the controller publishes no port" || fail "the controller publishes a port"
+  [ "$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/control-token"}}{{.RW}}{{end}}{{end}}' "$CONTROLLER")" = false ] && pass "/control-token is read-only in the controller" || fail "/control-token is writable in the controller"
+  [ "$(docker inspect -f '{{.HostConfig.ReadonlyRootfs}}' "$CONTROLLER")" = true ] && pass "the controller's filesystem is read-only" || fail "the controller's filesystem is writable"
+  CTL_HASH=$(docker exec "$ADMIN" cat /control-token/token.sha256 2>/dev/null | tr -d '[:space:]')
+  ctl_status() { # path [bearer]
+    py --network "${PROJECT}_control" -- "
+import urllib.request, urllib.error
+req = urllib.request.Request('http://172.32.0.2:8083/api/control/v1$1')
+if '${2:-}': req.add_header('authorization', 'Bearer ${2:-}')
+try: print(urllib.request.urlopen(req, timeout=4).status)
+except urllib.error.HTTPError as e: print(e.code)
+except Exception: print(0)
+"
+  }
+  [ "$(ctl_status /services)" = 401 ] && pass "the controller refuses a call with no token" || fail "the controller answers without a token"
+  [ "$(ctl_status /services "$CTL_HASH")" = 401 ] && pass "the controller refuses its own token hash" || fail "the controller accepts the hash as a token"
+  [ "$(ctl_status /services wrong)" = 401 ] && pass "the controller refuses a wrong token" || fail "the controller accepts a wrong token"
+  [ "$(http_get "$EDGE" "172.32.0.2:8083" /api/control/v1/health)" = 0 ] && pass "a container on edge cannot reach the controller" || fail "the controller is reachable from edge"
+  out=$(admin_script "$(admin_login)
+print(call('POST', '/admin/api/v1/services/admin/stop')[0], call('POST', '/admin/api/v1/services/controller/stop')[0], call('POST', '/admin/api/v1/services/server/kill')[0])" 2>&1 | tail -1)
+  [ "$out" = "404 404 404" ] && pass "the admin and the controller cannot be stopped from the site, nor other actions run" || fail "service control accepted a bad name or action: $out"
 fi
 
 echo "== 4. The allowlist"

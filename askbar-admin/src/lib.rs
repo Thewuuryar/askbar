@@ -10,6 +10,7 @@ pub mod audit_key;
 pub mod auth;
 pub mod caddy;
 pub mod control_link;
+pub mod cpa;
 pub mod db;
 pub mod server_link;
 pub mod network;
@@ -47,6 +48,10 @@ pub struct AdminState {
     pub proxy: std::sync::Mutex<caddy::ProxyStatus>,
     /// The link to the controller (start, stop, restart); `None` until set at start-up or by a test.
     pub control: std::sync::Mutex<Option<Arc<control_link::ControlLink>>>,
+    /// The link to CLIProxyAPI, once its config exists.
+    pub cpa: std::sync::Mutex<Option<Arc<cpa::CpaLink>>>,
+    /// Logins started and not finished: state -> (provider, expiry in unix seconds).
+    pub cpa_logins: std::sync::Mutex<std::collections::HashMap<String, (String, i64)>>,
     /// When recent service actions happened (unix seconds), for the rate limit.
     pub service_actions: std::sync::Mutex<std::collections::VecDeque<i64>>,
 }
@@ -70,12 +75,18 @@ impl AdminState {
             caddy: std::sync::Mutex::new(caddy::CaddyLink::default()),
             proxy: std::sync::Mutex::new(caddy::ProxyStatus::default()),
             control: std::sync::Mutex::new(None),
+            cpa: std::sync::Mutex::new(None),
+            cpa_logins: std::sync::Mutex::new(Default::default()),
             service_actions: std::sync::Mutex::new(Default::default()),
         })
     }
 
     pub fn set_caddy(&self, link: caddy::CaddyLink) {
         *self.caddy.lock().unwrap_or_else(|e| e.into_inner()) = link;
+    }
+
+    pub fn set_cpa(&self, link: Arc<cpa::CpaLink>) {
+        *self.cpa.lock().unwrap_or_else(|e| e.into_inner()) = Some(link);
     }
 
     pub fn set_control(&self, link: Arc<control_link::ControlLink>) {
@@ -144,6 +155,11 @@ pub fn routes(state: &Arc<AdminState>) -> Routes {
         .put(&v1("/password"), web::change_password)
         .get(&v1("/session"), || async { StatusCode::NO_CONTENT })
         .delete(&v1("/session"), web::logout)
+        .get(&v1("/cpa"), cpa::status)
+        .post(&v1("/cpa/logins"), cpa::start_login)
+        .get(&v1("/cpa/logins/{state}"), cpa::login_status)
+        .post(&v1("/cpa/logins/{state}/callback"), cpa::finish_login)
+        .delete(&v1("/cpa/accounts/{name}"), cpa::remove_account)
         .get(&v1("/services"), services::list)
         .post(&v1("/services/{name}/{action}"), services::act)
         .post(&v1("/keys"), admin_api::create_key)

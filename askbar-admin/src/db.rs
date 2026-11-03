@@ -123,6 +123,9 @@ const MIGRATIONS: &[&str] = &[
          at      INTEGER NOT NULL,
          ok      INTEGER NOT NULL DEFAULT 0 CHECK (ok IN (0, 1))
      );",
+    // v10: a provider the admin made and keeps in step itself (the bundled CLIProxyAPI). Its name, type,
+    // address and key are not editable, and it cannot be deleted.
+    "ALTER TABLE providers ADD COLUMN managed INTEGER NOT NULL DEFAULT 0;",
 ];
 
 /// The schema steps, in order (for the upgrade tests).

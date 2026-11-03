@@ -45,7 +45,7 @@ fn io_err(path: &Path, e: std::io::Error) -> std::io::Error {
 }
 
 /// Write `contents` to `path` through a temporary file, so a reader never sees half of it.
-fn write_atomic(path: &Path, contents: &str, mode: u32) -> std::io::Result<()> {
+pub(crate) fn write_atomic(path: &Path, contents: &str, mode: u32) -> std::io::Result<()> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
     let tmp = path.with_extension("tmp");

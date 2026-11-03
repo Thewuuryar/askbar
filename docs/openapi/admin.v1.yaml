@@ -136,6 +136,170 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '429':
           $ref: '#/components/responses/TooMany'
+  /admin/api/v1/cpa:
+    get:
+      operationId: getCpa
+      summary: Whether CLIProxyAPI answers, the accounts connected to it, and the provider made for it.
+      description: Session-only. `provider_id` is null until an account is connected.
+      security:
+        - adminSession: []
+      responses:
+        '200':
+          description: The state.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [configured, reachable, accounts, provider_id]
+                properties:
+                  configured:
+                    type: boolean
+                  reachable:
+                    type: boolean
+                  accounts:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/CpaAccount'
+                  provider_id:
+                    type: string
+                    nullable: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /admin/api/v1/cpa/logins:
+    post:
+      operationId: startCpaLogin
+      summary: Start connecting a Claude or ChatGPT account.
+      description: >
+        Session-only. Open `url` in a browser and approve. The browser then lands on a `localhost` address that
+        will not load when the admin is on another machine; paste that whole address into
+        `POST /cpa/logins/{state}/callback`. A login expires after 10 minutes.
+      security:
+        - adminSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [provider]
+              properties:
+                provider:
+                  type: string
+                  enum: [anthropic, openai]
+      responses:
+        '200':
+          description: Where to go.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [url, state, expires_in]
+                properties:
+                  url:
+                    type: string
+                  state:
+                    type: string
+                  expires_in:
+                    type: integer
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooMany'
+        '502':
+          $ref: '#/components/responses/ServerUnavailable'
+  /admin/api/v1/cpa/logins/{state}:
+    parameters:
+      - name: state
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getCpaLogin
+      summary: How a login is going (`wait`, `ok` or `error`).
+      description: Session-only. On `ok` the CPA provider is made if it was not, and its id is returned.
+      security:
+        - adminSession: []
+      responses:
+        '200':
+          description: The status.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, message, provider_id]
+                properties:
+                  status:
+                    type: string
+                    enum: [wait, ok, error]
+                  message:
+                    type: string
+                  provider_id:
+                    type: string
+                    nullable: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '502':
+          $ref: '#/components/responses/ServerUnavailable'
+  /admin/api/v1/cpa/logins/{state}/callback:
+    parameters:
+      - name: state
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      operationId: finishCpaLogin
+      summary: Give the address the browser ended up on after approving.
+      description: >
+        Session-only. The address must be a `localhost` or `127.0.0.1` address carrying this login's `state` and a
+        `code`. A wrong address is a 400 and the login stays open; a good one is used once.
+      security:
+        - adminSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [redirect_url]
+              properties:
+                redirect_url:
+                  type: string
+      responses:
+        '200':
+          description: Sent to CLIProxyAPI. Poll the login for the result.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '502':
+          $ref: '#/components/responses/ServerUnavailable'
+  /admin/api/v1/cpa/accounts/{name}:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
+    delete:
+      operationId: removeCpaAccount
+      summary: Disconnect an account.
+      security:
+        - adminSession: []
+      responses:
+        '204':
+          description: Disconnected.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '502':
+          $ref: '#/components/responses/ServerUnavailable'
   /admin/api/v1/services:
     get:
       operationId: listServices
@@ -995,6 +1159,17 @@ components:
           schema:
             $ref: '#/components/schemas/Problem'
   schemas:
+    CpaAccount:
+      type: object
+      required: [name, provider, label]
+      properties:
+        name:
+          type: string
+        provider:
+          type: string
+          enum: [anthropic, openai]
+        label:
+          type: string
     ServiceState:
       type: object
       required: [name, state, status, health]
@@ -1133,6 +1308,9 @@ components:
           type: [number, 'null']
         price_cached_in:
           type: [number, 'null']
+        managed:
+          type: boolean
+          description: Made and kept in step by the admin (the CLIProxyAPI provider). Name, type, address and key are fixed and it cannot be deleted; the model and limits can change.
     ProviderInput:
       type: object
       required: [name, type, model]

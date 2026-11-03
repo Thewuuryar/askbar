@@ -22,7 +22,7 @@ docker compose up -d --build
 1. Open **http://127.0.0.1:8081/admin/** on the machine that runs Docker (from another machine: `ssh -L 8081:127.0.0.1:8081 <host>`, then open the same address locally).
 2. Choose the **admin password** (the first visit wins).
 3. Choose the **audit passphrase**: at least 20 characters, and it cannot be recovered. It seals what the server records about replies; see *The Audit tab*.
-4. **Providers** > add one (Anthropic, OpenAI-compatible, or the CLIProxyAPI preset) and press **Test**.
+4. **Providers** > add one (Anthropic or OpenAI-compatible; the model is a dropdown once the address and key are in) and press **Test**, or connect a Claude or ChatGPT account on **Services** (see *CLIProxyAPI*).
 5. **Clients** > generate a pairing string.
 6. Run the app and pair it: `npm install && npm run dev`, then tray icon > **Pair with server...** and paste the string.
 
@@ -135,7 +135,7 @@ Before you have a host name or a certificate, open the admin at **`http://127.0.
 1. Open the admin (above).
 2. Choose the admin password (the first visit wins).
 3. **Audit passphrase.** Setup asks for one: at least 20 characters. See *The Audit tab* below; write it down.
-4. **Providers** > add one (Anthropic, OpenAI-compatible, or the CLIProxyAPI preset) and press **Test**.
+4. **Providers** > add one (Anthropic or OpenAI-compatible: after you enter the address and key, **Model** becomes a dropdown of what the provider offers) and press **Test**. For a Claude or ChatGPT subscription use **Services** instead: *Connect Claude* / *Connect ChatGPT* (see *CLIProxyAPI*); no terminal is needed.
 5. **Network** > hostname, Cloudflare token and, if you want it, the allowlist (see below).
 6. **Clients** > generate a pairing string.
 
@@ -166,7 +166,13 @@ The trace lives in `audit.db`, in the `audit-data` volume, which only the server
 
 ### CLIProxyAPI
 
-Lets a Claude or ChatGPT subscription act as an OpenAI-compatible provider. It starts with the stack and idles until you log in. See [cpa/README.md](cpa/README.md) for the one-time login. It joins the `edge` network only and its API is never published.
+Lets a Claude or ChatGPT subscription act as an OpenAI-compatible provider. It starts with the stack and idles until you connect an account. Everything is done in the admin site, **Services** tab:
+
+1. **Connect Claude** (or **Connect ChatGPT**). The admin asks CLIProxyAPI for a login address.
+2. Open the address and approve. The browser then lands on an address starting `http://localhost` that will not load if the admin is on another machine. Copy that whole address from the address bar and paste it into the box. **Finish**.
+3. A provider named **CPA** appears on the Providers tab, already holding the key the admin made for CLIProxyAPI. Choose its model from the dropdown. Its name, address and key are fixed.
+
+The admin makes CLIProxyAPI's config and API key itself (nobody copies a key anywhere). CLIProxyAPI joins the `edge` network (the server reaches it there) and `cpa-admin` (the admin runs logins there); its API is never published. See [cpa/README.md](cpa/README.md).
 
 ### Configuration reference
 
@@ -190,7 +196,13 @@ Lets a Claude or ChatGPT subscription act as an OpenAI-compatible provider. It s
 
 **Set in the admin site** instead of in files: admin password, hostname, Cloudflare token, allowlist, the Let's Encrypt staging switch, the system prompt, display defaults and per-user defaults.
 
-**Compose profiles:** the three services and CLIProxyAPI are always on. `dev` adds a mock LLM (`tests/mock_llm.py`); `cpa-login` is the one-time login helper, started on demand.
+**Compose profiles:** the services (server, admin, Caddy, controller, CLIProxyAPI) are always on. `dev` adds a mock LLM (`tests/mock_llm.py`).
+
+### Starting and stopping services
+
+The admin site's **Services** tab shows the server, Caddy and CLIProxyAPI and can start, stop or restart each (it asks first and says what that will interrupt). It does this through the **controller**, a small container that alone holds the Docker socket and can do nothing but start, stop and restart those three services of this stack. The admin site and the controller are not on the list; restart the admin from the host (`docker compose restart admin`). Only a signed-in person can do this, not an admin API key; each action is recorded, and six a minute is the limit. See [SECURITY.md](SECURITY.md) for what this trusts.
+
+**Upgrading an install that used `cpa-init` / `cpa-login`:** CLIProxyAPI's config volume was root-owned; the admin (uid 10001) must be able to read and write it once: `docker compose run --rm --no-deps --user root --entrypoint chown admin -R 10001:10001 /cpa-config`, then `docker compose up -d --build`. The admin keeps your existing API key (so the provider and your logins carry on), replaces CLIProxyAPI's control secret and restarts it. If the admin cannot read the config it says so in its log and leaves CLIProxyAPI alone.
 
 **Server environment** (already set in `compose.yaml`; useful without Docker): `ASKBAR_CLIENT_API_ADDR`, `ASKBAR_SERVER_API_ADDR` (one specific address, never `0.0.0.0`), `ASKBAR_SERVER_TOKEN_HASH_FILE`, `ASKBAR_DATA_DIR`, `ASKBAR_SECRETS_DIR` or `ASKBAR_MASTER_KEY_FILE`. **Admin:** `ASKBAR_ADMIN_SOCKET`, `ASKBAR_ADMIN_DATA_DIR`, `ASKBAR_ADMIN_SECRETS_DIR`, `ASKBAR_SERVER_TOKEN_DIR`, `ASKBAR_SERVER_API_URL`, `ASKBAR_CADDY_SOCKET`, `ASKBAR_CADDY_SECRETS_DIR`, `ASKBAR_PUBLIC_URL`.
 
@@ -214,9 +226,10 @@ askbar-server/   the server: client API, server API, database, chat/LLM streamin
 askbar-admin/    the admin service: admin site (ui/), admin.db, snapshot push, Caddy configuration (unix only)
 src-tauri/       the desktop client (Cargo package askbar-client, program askbar): window, hotkey, tray, pairing
 ui/              the popup: index.html, style.css, main.js, markdown.js (no build step)
-caddy/, cpa/     Caddy bootstrap config; CLIProxyAPI setup script and login notes
-compose.yaml     server, admin, caddy, CLIProxyAPI, plus the dev and cpa-login profiles
-Dockerfile       two targets: `admin` and `server`;  Dockerfile.caddy: Caddy with the Cloudflare DNS module
+askbar-controller/ the controller: starts, stops and restarts the server, Caddy and CLIProxyAPI for the admin (holds the Docker socket)
+caddy/, cpa/     Caddy bootstrap config; notes on CLIProxyAPI
+compose.yaml     server, admin, controller, caddy, CLIProxyAPI, plus the dev profile
+Dockerfile       three targets: `admin`, `controller` and `server`;  Dockerfile.caddy: Caddy with the Cloudflare DNS module
 scripts/         smoke.sh (end-to-end), check-isolation.sh (container isolation checks), check-names.sh and check-docs.sh
 docs/            architecture.md, wire-contract.md, openapi/ (client, server, admin), refactor-log.md
 tests/           markdown, UI and admin-site browser tests, a mock LLM server, icon generator

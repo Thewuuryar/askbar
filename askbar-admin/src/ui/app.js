@@ -270,6 +270,7 @@
     }
     box.textContent = '';
     for (const svc of data.services) box.appendChild(serviceCard(svc));
+    loadCpa();
     const rec = $('services-recent');
     rec.textContent = data.recent.length ? '' : 'None yet.';
     for (const r of data.recent) {
@@ -278,6 +279,82 @@
       rec.appendChild(line);
     }
   }
+  // ---- CLIProxyAPI accounts: connect Claude or ChatGPT without a terminal.
+  let login = null; // { state } while a login is open
+
+  function cpaMessage(text) { $('cpa-message').textContent = text || ''; }
+
+  function closeLogin() {
+    login = null;
+    $('cpa-redirect').value = '';
+    show($('cpa-login'), false);
+  }
+
+  async function loadCpa() {
+    const panel = $('cpa-panel');
+    let c;
+    try { c = await api('GET', '/admin/api/v1/cpa'); } catch (_) { show(panel, false); return; }
+    show(panel, c.configured);
+    if (!c.configured) return;
+    const box = $('cpa-accounts');
+    box.textContent = '';
+    if (!c.reachable) cpaMessage('CLIProxyAPI is not answering. Start it with the card above.');
+    for (const a of c.accounts) {
+      const row = document.createElement('div');
+      row.className = 'row';
+      const label = document.createElement('span');
+      label.textContent = (a.provider === 'anthropic' ? 'Claude' : 'ChatGPT') + ' · ' + a.label;
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'secondary';
+      b.dataset.action = 'disconnect';
+      b.textContent = 'Disconnect';
+      b.addEventListener('click', async () => {
+        if (!confirm('Disconnect ' + a.label + '? Replies through the CPA provider stop working until you connect again.')) return;
+        try { await api('DELETE', '/admin/api/v1/cpa/accounts/' + encodeURIComponent(a.name)); } catch (ex) { flash(ex.message); }
+        loadCpa();
+      });
+      row.append(label, b);
+      box.appendChild(row);
+    }
+    if (!c.accounts.length && c.reachable) { cpaMessage('No account connected yet.'); }
+  }
+
+  async function connect(provider) {
+    cpaMessage('');
+    try {
+      const r = await api('POST', '/admin/api/v1/cpa/logins', { provider });
+      login = { state: r.state };
+      const a = $('cpa-login-link');
+      a.textContent = r.url;
+      a.href = r.url;
+      show($('cpa-login'), true);
+      $('cpa-redirect').focus();
+    } catch (ex) { cpaMessage(ex.message); }
+  }
+  $('cpa-connect-anthropic').addEventListener('click', () => connect('anthropic'));
+  $('cpa-connect-openai').addEventListener('click', () => connect('openai'));
+  $('cpa-cancel').addEventListener('click', closeLogin);
+
+  $('cpa-finish').addEventListener('click', async () => {
+    if (!login) return;
+    const state = login.state;
+    cpaMessage('Sending...');
+    try {
+      await api('POST', '/admin/api/v1/cpa/logins/' + encodeURIComponent(state) + '/callback', { redirect_url: $('cpa-redirect').value.trim() });
+    } catch (ex) { cpaMessage(ex.message); return; }
+    closeLogin();
+    cpaMessage('Waiting for CLIProxyAPI to confirm...');
+    for (let i = 0; i < 30; i++) {
+      let r;
+      try { r = await api('GET', '/admin/api/v1/cpa/logins/' + encodeURIComponent(state)); } catch (ex) { cpaMessage(ex.message); return; }
+      if (r.status === 'ok') { cpaMessage('Connected.' + (r.provider_id ? ' Pick the model on the CPA provider (Providers tab).' : '')); loadCpa(); return; }
+      if (r.status === 'error') { cpaMessage('The login failed' + (r.message ? ': ' + r.message : '.')); return; }
+      await new Promise((res) => setTimeout(res, 2000));
+    }
+    cpaMessage('CLIProxyAPI has not confirmed yet. Check the accounts list in a moment.');
+  });
+
   // Keep the state fresh while the tab is on screen.
   setInterval(() => {
     const sec = document.querySelector('section[data-tab="services"]');
@@ -330,7 +407,15 @@
       try { await api('DELETE', '/admin/api/v1/providers/' + encodeURIComponent(p.id)); loadProviders(); } catch (ex) { flash(ex.message); }
     });
     del.dataset.action = 'delete';
-    head.append(test, edit, del);
+    if (p.managed) {
+      const m = document.createElement('span');
+      m.className = 'badge';
+      m.textContent = 'managed by the admin';
+      head.insertBefore(m, sp);
+      head.append(test, edit);
+    } else {
+      head.append(test, edit, del);
+    }
 
     const meta = document.createElement('div');
     meta.className = 'meta';
@@ -437,6 +522,8 @@
     $('p-type').value = v.type || 'openai';
     $('p-base-url').value = v.base_url || '';
     $('p-model').value = v.model || '';
+    // A managed provider (CLIProxyAPI) keeps its name, type, address and key.
+    for (const id of ['p-name', 'p-type', 'p-base-url', 'p-key']) $(id).disabled = !!(p && p.managed);
     $('p-key').value = ''; // never prefilled
     $('p-key').placeholder = p && p.has_key ? 'unchanged (write-only)' : 'write-only';
     $('p-max-tokens').value = v.max_tokens || '';
@@ -465,8 +552,6 @@
   }
 
   $('add-provider').addEventListener('click', () => openForm(null));
-  // CLIProxyAPI runs next to the server in the compose network (profile `cpa`).
-  $('add-cpa').addEventListener('click', () => openForm(null, { name: 'cpa', type: 'openai', base_url: 'http://cpa:8317/v1', model: '', hint: 'Run `docker compose run --rm cpa-init show` to print the API key to paste below. For the model, use a name CLIProxyAPI lists (after you have logged in to a provider) such as one from `GET /v1/models`.' }));
   $('provider-cancel').addEventListener('click', closeForm);
 
   $('provider-form').addEventListener('submit', async (e) => {

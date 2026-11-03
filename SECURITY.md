@@ -38,7 +38,11 @@ Against a running stack it checks, among other things: the server API answers on
 no hash file; only the admin can reach it and the admin joins no other network; the server cannot read the admin's
 files or socket; the audit store is mounted by the server only; secret files are mode 600; the server image has no
 admin code; backups hold no secrets; the first-run page is reachable on the host's loopback only and not from other
-containers; Caddy's loaded route sends only the client API to the server; CLIProxyAPI publishes no port.
+containers; Caddy's loaded route sends only the client API to the server; CLIProxyAPI publishes no port; only the controller mounts the Docker socket and it is on a network with the admin alone; the controller refuses calls without its token and the admin site cannot name the admin or the controller.
+
+### The Docker socket
+
+Starting and stopping services from the admin site needs the Docker socket, which is root on the host. It is mounted in exactly one container, the **controller**, which has no published port, no route out, no capabilities and a read-only filesystem, and answers only the admin (a token whose hash it holds). It can start, stop and restart the `server`, `caddy` and `cpa` services of its own Compose project and nothing else: no create, exec, pull, volume or other containers (`askbar-controller/src/lib.rs`). A compromised admin can therefore stop or restart those three services, but not run anything new. A compromised controller is root on the host; it is small on purpose, and you can leave it out (remove it from `compose.yaml`; the Services tab then says the controller is not set up and everything else works).
 
 It does **not** prove: that the images are free of vulnerable dependencies, that a compromised container cannot attack
 the Docker host, that your host name, certificates or DNS are set up well, or that the allowlist you chose is right. It

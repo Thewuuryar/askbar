@@ -1,40 +1,18 @@
 # CLIProxyAPI
 
-CLIProxyAPI turns a Claude, ChatGPT/Codex or Gemini **subscription login** into an
-OpenAI-compatible endpoint. Askbar's server talks to it over the compose network; its API
-port is never published to the host.
+CLIProxyAPI turns a Claude or ChatGPT/Codex **subscription login** into an OpenAI-compatible endpoint.
+Askbar's server talks to it over the compose network; its API port is never published to the host.
 
-```bash
-docker compose up -d            # creates the config with random secrets on first run
-docker compose run --rm cpa-init show         # prints the API key to use in Askbar
-```
+There is nothing to run in a terminal. In the admin site, **Services** tab:
 
-## One-time login
+1. **Connect Claude** or **Connect ChatGPT**, open the address it shows and approve.
+2. The browser ends on a `http://localhost...` address that usually does not load. Paste that whole address
+   into the box and press **Finish**.
+3. The **CPA** provider appears on the Providers tab. Pick its model from the dropdown and press **Test**.
 
-Pick the provider you have a subscription for. The command prints a URL; open it in the
-browser **on the machine running Docker**. (Ignore the "SSH tunnel" hint it prints.) After you
-approve, the browser is redirected to `localhost`, which reaches the container because
-`--service-ports` publishes the callback port on `127.0.0.1` for this command only.
+The admin makes CLIProxyAPI's `config.yaml`, its API key and its control secret itself (in the `cpa-config`
+volume and the admin's secrets), and uses the key to set up the CPA provider. The logins live in the `cpa-auth`
+volume and survive restarts. **Disconnect** on the same panel removes an account.
 
-```bash
-# Claude
-docker compose --profile cpa-login run --rm --service-ports cpa-login ./CLIProxyAPI -config /cpa-config/config.yaml -claude-login -no-browser
-# ChatGPT / Codex
-docker compose --profile cpa-login run --rm --service-ports cpa-login ./CLIProxyAPI -config /cpa-config/config.yaml -codex-login -no-browser
-```
-
-Other providers: `docker compose run --rm cpa-login ./CLIProxyAPI -h`. The login is stored in the
-`cpa-auth` volume and survives restarts. CLIProxyAPI picks up new logins without a restart.
-
-## Use it from Askbar
-
-Admin page, Providers, **Add CLIProxyAPI**: the base URL is `http://cpa:8317/v1`; paste the API
-key from `cpa-init show`; for the model, use a name from CLIProxyAPI's list (the server image has no curl, so ask from a throwaway container):
-
-```bash
-docker run --rm --network askbar_default python:3.12-slim python -c "import urllib.request as u;r=u.Request('http://cpa:8317/v1/models',headers={'Authorization':'Bearer YOUR_KEY'});print(u.urlopen(r).read().decode())"
-```
-
-Press **Test** on the provider card, then ask a question from the desktop client.
-
-The config and the API key live in the `cpa-config` volume, not in this repository.
+Other CLIProxyAPI providers (Gemini and so on) are not connected from the admin site yet; for those, add a
+provider by hand.

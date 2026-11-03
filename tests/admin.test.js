@@ -74,6 +74,7 @@ async function waitForPort(port) {
     ASKBAR_ADMIN_SOCKET: sock, ASKBAR_ADMIN_DATA_DIR: dirs.adminData, ASKBAR_ADMIN_SECRETS_DIR: dirs.adminSecrets,
     ASKBAR_SERVER_TOKEN_DIR: dirs.serverToken, ASKBAR_SERVER_API_URL: 'http://127.0.0.1:' + serverApiPort,
     ASKBAR_PUBLIC_URL: 'http://localhost:' + api,
+    ASKBAR_CPA_CONFIG_DIR: path.join(data, 'cpa-config'), ASKBAR_CPA_URL: 'http://127.0.0.1:' + await freePort(),
     ASKBAR_CONTROL_URL: 'http://127.0.0.1:' + controlPort, ASKBAR_CONTROL_TOKEN_DIR: path.join(data, 'control-token'),
   });
   for (let i = 0; i < 100 && !fs.existsSync(sock); i++) await new Promise((r) => setTimeout(r, 50));
@@ -299,12 +300,15 @@ async function waitForPort(port) {
     assert.equal(r.body.error, 'not_found');
     assert.ok(r.body.detail && r.body.title && r.body.type === 'urn:askbar:problem:not_found', JSON.stringify(r.body));
   });
-  await step('the CLIProxyAPI preset fills type and base URL', async () => {
-    await page.click('#add-cpa');
-    assert.equal(await page.inputValue('#p-type'), 'openai');
-    assert.equal(await page.inputValue('#p-base-url'), 'http://cpa:8317/v1');
-    assert.equal(await page.inputValue('#p-name'), 'cpa');
-    await page.click('#provider-cancel');
+  await step('CLIProxyAPI: the accounts panel is on the Services tab, and says so when CLIProxyAPI is not answering', async () => {
+    await page.click('#nav [data-tab="services"]');
+    await page.waitForSelector('#cpa-panel:not([hidden])');
+    await page.waitForFunction(() => /not answering/.test(document.getElementById('cpa-message').textContent));
+    await page.click('#cpa-connect-anthropic');
+    await page.waitForFunction(() => /CLIProxyAPI did not answer/.test(document.getElementById('cpa-message').textContent));
+    assert.equal(await page.isHidden('#cpa-login'), true, 'no login opens when CLIProxyAPI cannot start one');
+    assert.equal(await page.locator('#add-cpa').count(), 0, 'the old preset button is gone');
+    await page.click('#nav [data-tab="providers"]');
   });
   await step('delete asks first, then removes the provider', async () => {
     page.once('dialog', (d) => d.dismiss());

@@ -1,6 +1,11 @@
 # Plan: set up and run the whole server from the admin site
 
-Status: proposal. Nothing here is built yet.
+Status: steps 1-5 and 7 are built; the OAuth endpoints (step 6) are written but not yet checked against the pinned CLIProxyAPI image. Changes from the plan as built:
+
+- One admin route for model listing, `POST /providers/models` (no `GET /providers/{id}/models`); a saved key is only used when the type and address match the saved provider.
+- `cpa-config` is writable by both the admin and CPA (CPA may rewrite its own config); the CPA API key and control secret are files in `admin-secrets`, not rows in `admin.db`.
+- The CPA provider is created when the first account is connected (it needs a model to exist), not before.
+- Existing installs: the admin adopts the old API key and replaces the control secret (restarting CPA through the controller); see the README upgrade note.
 
 ## Goals
 
