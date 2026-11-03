@@ -71,6 +71,7 @@ Data volumes must never be renamed: Compose would silently create an empty one (
 | --- | --- | --- |
 | `edge` | Caddy, server, cpa (and the dev mock) | the only network with a route out; only Caddy publishes ports |
 | `server-api` | admin, server | `internal`, so it has no route out; the server API listens on one fixed address, never a wildcard |
+| `admin-setup` | Caddy alone | the first-run page for the admin on `127.0.0.1:8081` (plain HTTP). Nothing else joins, so no container can open it. The name must sort before `edge`: Docker publishes a container's ports on its address on the first network in name order, and Caddy listens for this page on its `admin-setup` address only |
 
 ## Why each boundary exists
 

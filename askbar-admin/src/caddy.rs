@@ -22,7 +22,7 @@ pub const CADDY_ADMIN_LISTEN: &str = "unix//run/caddy/admin.sock|0660";
 /// First-run access. Until a host name and a Cloudflare token are saved Caddy has no site, and the admin has
 /// no TCP port, so Caddy also serves the admin over plain HTTP on this address and port, for the host's
 /// loopback only: `compose.yaml` publishes `127.0.0.1:8081` and gives Caddy this address on a network
-/// nothing else joins (`setup`). Only `/admin` is served there; every other path is a 404.
+/// nothing else joins (`admin-setup`, which must sort before `edge`: see compose.yaml). Only `/admin` is served there; every other path is a 404.
 pub const SETUP_BIND: &str = "172.31.0.2";
 pub const SETUP_PORT: u16 = 8081;
 pub const STAGING_CA: &str = "https://acme-staging-v02.api.letsencrypt.org/directory";
@@ -253,8 +253,17 @@ mod tests {
     fn compose_and_the_bootstrap_file_agree_with_the_first_run_site() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
         let compose = std::fs::read_to_string(root.join("compose.yaml")).unwrap();
-        assert!(compose.contains(&format!("{SETUP_BIND}")), "compose.yaml gives Caddy {SETUP_BIND} on the setup network");
+        assert!(compose.contains(&format!("{SETUP_BIND}")), "compose.yaml gives Caddy {SETUP_BIND} on the admin-setup network");
         assert!(compose.contains(&format!("\"127.0.0.1:{SETUP_PORT}:{SETUP_PORT}\"")), "compose.yaml publishes the port on loopback only");
+        // Docker publishes a container's ports on its address on the first network in name order. Caddy listens for the
+        // first-run page on its admin-setup address only, so that network's name has to sort before `edge` (and
+        // before any other network Caddy is on).
+        let networks: Vec<&str> = compose.lines().skip_while(|l| !l.starts_with("networks:")).filter(|l| l.starts_with("  ") && !l.starts_with("   ") && l.trim_end().ends_with(':')).map(|l| l.trim().trim_end_matches(':')).collect();
+        let pos = |n: &str| networks.iter().position(|x| *x == n).unwrap_or_else(|| panic!("no network {n} in {networks:?}"));
+        let mut by_name = networks.clone();
+        by_name.sort();
+        assert!(by_name.iter().position(|x| *x == "admin-setup") < by_name.iter().position(|x| *x == "edge"), "{by_name:?}");
+        let _ = pos("admin-setup");
         // The file Caddy starts with (before the admin has pushed anything) is the generator's output for HTTPS off.
         let boot = std::fs::read_to_string(root.join("caddy/bootstrap.Caddyfile")).unwrap();
         let body: String = boot.lines().filter(|l| !l.starts_with('#')).collect::<Vec<_>>().join("\n");

@@ -288,9 +288,9 @@ for path in / /api/client/v1/health /api/server/v1/health /api/v1/health /health
   code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1:8081$path" 2>/dev/null || true)
   [ "$code" = 404 ] && pass "the first-run page has nothing at $path (404)" || fail "the first-run page answers $path with '$code'"
 done
-[ "$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$CADDY" | tr ' ' '\n' | grep -c "^${PROJECT}_setup$")" = 1 ] && pass "Caddy is on the setup network" || fail "Caddy is not on the setup network"
+[ "$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$CADDY" | tr ' ' '\n' | grep -c "^${PROJECT}_admin-setup$")" = 1 ] && pass "Caddy is on the admin-setup network" || fail "Caddy is not on the admin-setup network"
 for c in "$SERVER" "$ADMIN"; do
-  docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$c" | grep -q "${PROJECT}_setup" && fail "$c is on the setup network" || pass "$c is not on the setup network"
+  docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$c" | grep -q "${PROJECT}_admin-setup" && fail "$c is on the admin-setup network" || pass "$c is not on the admin-setup network"
 done
 # Nothing on the edge network can open the first-run page.
 [ "$(http_status "$EDGE" "caddy:8081")" = 0 ] && pass "a container on edge cannot reach the first-run page" || fail "the first-run page answers on the edge network"
