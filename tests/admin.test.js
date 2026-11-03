@@ -78,6 +78,15 @@ async function waitForPort(port) {
   page.on('console', (m) => { if (m.type() === 'error' && !/status of (4\d\d|502)/.test(m.text())) errors.push(m.text()); });
 
   let masterKey = null;
+  // Opens the Settings tab and waits until its values have been read from the server. Waiting for a field to hold a
+  // value is not enough when the test typed that same value: a read that lands later overwrites what the test types next.
+  async function openSettings() {
+    await page.click('#nav [data-tab="providers"]');
+    const reread = page.waitForResponse((r) => r.url().endsWith('/admin/api/v1/settings') && r.request().method() === 'GET');
+    await page.click('#nav [data-tab="settings"]');
+    await reread;
+  }
+
   await step('first run shows the setup wizard, not a login form', async () => {
     await page.goto(base);
     await page.waitForSelector('#setup:not([hidden])');
@@ -315,8 +324,7 @@ async function waitForPort(port) {
     await page.click('#settings-form button[type=submit]');
     await page.waitForSelector('#flash:not([hidden])');
     assert.match(await page.innerText('#flash'), /Settings saved/);
-    await page.click('#nav [data-tab="providers"]');
-    await page.click('#nav [data-tab="settings"]');
+    await openSettings();
     await page.waitForFunction(() => document.getElementById('s-width').value === '900');
     assert.equal(await page.inputValue('#s-prompt'), 'You are a pirate.');
     assert.equal(await page.inputValue('#s-theme'), 'dark');
@@ -330,8 +338,7 @@ async function waitForPort(port) {
     assert.match(await page.innerText('#settings-error'), /Width must be/);
   });
   await step('generation timeout: defaults to 300, saves 120 across a reload, refuses 29', async () => {
-    await page.click('#nav [data-tab="providers"]');
-    await page.click('#nav [data-tab="settings"]');
+    await openSettings();
     await page.waitForFunction(() => document.getElementById('s-gen-timeout').value === '300');
     assert.equal(await page.getAttribute('#s-gen-timeout', 'min'), '30');
     assert.equal(await page.getAttribute('#s-gen-timeout', 'max'), '3600');
@@ -343,8 +350,7 @@ async function waitForPort(port) {
     await page.waitForSelector('#flash:not([hidden])');
     assert.match(await page.innerText('#flash'), /Settings saved/);
     await page.fill('#s-gen-timeout', '777'); // unsaved: only a reload from the server brings back 120
-    await page.click('#nav [data-tab="providers"]');
-    await page.click('#nav [data-tab="settings"]');
+    await openSettings();
     await page.waitForFunction(() => document.getElementById('s-gen-timeout').value === '120');
     assert.equal(await page.inputValue('#s-gen-timeout'), '120');
     await page.fill('#s-gen-timeout', '90');
@@ -356,14 +362,12 @@ async function waitForPort(port) {
     await page.waitForSelector('#settings-error:not([hidden])');
     assert.match(await page.innerText('#settings-error'), /between 30 and 3600/);
     await page.fill('#s-gen-timeout', '555'); // so the wait below can only be satisfied by a reload
-    await page.click('#nav [data-tab="providers"]');
-    await page.click('#nav [data-tab="settings"]');
+    await openSettings();
     await page.waitForFunction(() => document.getElementById('s-gen-timeout').value === '120');
     assert.equal(await page.inputValue('#s-gen-timeout'), '120', 'the refused value was not saved');
   });
   await step('kill switch: off by default, aborts running replies by default; both save and reload', async () => {
-    await page.click('#nav [data-tab="providers"]');
-    await page.click('#nav [data-tab="settings"]');
+    await openSettings();
     await page.waitForFunction(() => document.getElementById('s-gen-timeout').value === '120');
     assert.equal(await page.isChecked('#s-kill-switch'), false);
     assert.equal(await page.isChecked('#s-kill-aborts'), true);
@@ -373,8 +377,7 @@ async function waitForPort(port) {
     await page.waitForSelector('#flash:not([hidden])');
     await page.uncheck('#s-kill-switch'); // unsaved changes, undone by the reload below
     await page.check('#s-kill-aborts');
-    await page.click('#nav [data-tab="providers"]');
-    await page.click('#nav [data-tab="settings"]');
+    await openSettings();
     await page.waitForFunction(() => document.getElementById('s-kill-switch').checked === true);
     assert.equal(await page.isChecked('#s-kill-switch'), true);
     assert.equal(await page.isChecked('#s-kill-aborts'), false);
@@ -713,7 +716,8 @@ async function waitForPort(port) {
       ['p1', '2', '–', 'error', 'worth retrying', 'http_429', '300 ms'],
       ['p2', '1', 'p1', 'done', '–', '–', '300 ms'],
     ]);
-    await page.waitForSelector('#audit-routing-rows tr');
+    // The rows of an earlier step may still be there; wait for the ones this step's canned stats draw.
+    await page.waitForSelector('#audit-routing-rows tr[data-provider="p2"]');
     const overall = await page.$$eval('#audit-routing-rows tr', (r) => r.map((tr) => [...tr.children].map((td) => td.textContent)));
     assert.equal(overall.length, 2);
     assert.deepEqual(overall[0].slice(0, 5), ['p1', '2', '1', '0', '2']);
@@ -824,8 +828,7 @@ async function waitForPort(port) {
     await page.unroute('**/admin/api/v1/audit/access*');
   });
   await step('audit settings: the key id and retention show, bad values give their messages, and rotating works from the page', async () => {
-    await page.click('#nav [data-tab="providers"]');
-    await page.click('#nav [data-tab="settings"]');
+    await openSettings();
     await page.waitForFunction(() => /^[0-9a-f]{16}$/.test(document.getElementById('s-key-id').textContent));
     const oldKey = await page.innerText('#s-key-id');
     assert.equal(await page.inputValue('#s-retention'), '30');
@@ -841,8 +844,7 @@ async function waitForPort(port) {
     await page.click('#settings-form button[type=submit]');
     await page.waitForSelector('#flash:not([hidden])');
     await page.fill('#s-retention', '999'); // unsaved, so the reload shows what was stored
-    await page.click('#nav [data-tab="providers"]');
-    await page.click('#nav [data-tab="settings"]');
+    await openSettings();
     await page.waitForFunction(() => document.getElementById('s-retention').value === '45');
 
     // Rotation: each refusal in turn, then success.
