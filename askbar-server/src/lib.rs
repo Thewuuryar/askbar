@@ -11,6 +11,7 @@ pub mod error;
 pub mod generation;
 pub mod ids;
 pub mod llm;
+pub mod models;
 pub mod server_api;
 pub mod provider_test;
 pub mod router;

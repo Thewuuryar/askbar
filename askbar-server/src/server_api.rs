@@ -165,6 +165,14 @@ async fn test_provider(State(state): State<Arc<AppState>>, Path(id): Path<String
         .ok_or_else(|| fail(StatusCode::NOT_FOUND, "No such provider."))
 }
 
+/// Ask a provider which models it offers. A failure at the provider is a 200 with `ok: false`, like the test.
+async fn list_models(State(state): State<Arc<AppState>>, ApiJson(req): ApiJson<crate::models::ModelsRequest>) -> Result<Json<crate::models::ModelsResult>, Failure> {
+    crate::models::run(&state, req)
+        .await
+        .map(Json)
+        .map_err(|_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not list the models."))
+}
+
 /// The users, oldest first: `[{"id", "name"}]`. Pairing codes are made for one of these.
 async fn list_users(State(state): State<Arc<AppState>>) -> Result<Json<serde_json::Value>, Failure> {
     let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
@@ -303,6 +311,7 @@ pub fn routes() -> crate::routes::Routes {
         .put(&v1("/providers/{id}/key"), put_provider_key)
         .get(&v1("/providers/health"), providers_health)
         .post(&v1("/providers/{id}/test"), test_provider)
+        .post(&v1("/models/list"), list_models)
         .get(&v1("/users"), list_users)
         .get(&v1("/clients"), list_clients)
         .get(&v1("/usage"), usage)
