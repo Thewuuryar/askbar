@@ -59,7 +59,6 @@
           <h2>Providers</h2>
           <span class="spacer"></span>
           <button type="button" id="add-provider">Add provider</button>
-          <button type="button" id="add-cpa" class="secondary">Add CLIProxyAPI</button>
         </div>
         <p class="hint">API keys are write-only: they are stored encrypted and never shown again. Leave the key empty when editing to keep the current one.</p>
         <div id="providers"></div>
@@ -72,7 +71,14 @@
             <select id="p-type"><option value="openai">openai (OpenAI-compatible)</option><option value="anthropic">anthropic</option></select>
           </label>
           <label>Base URL <input id="p-base-url" placeholder="https://api.openai.com/v1"></label>
-          <label>Model <input id="p-model" required></label>
+          <label>Model
+            <input id="p-model" required>
+            <select id="p-model-list" hidden aria-label="Model"></select>
+          </label>
+          <div class="row">
+            <button type="button" id="p-model-refresh" class="secondary">Load models</button>
+            <span id="p-model-status" class="hint" role="status"></span>
+          </div>
           <label>API key <input id="p-key" type="password" autocomplete="off" placeholder="write-only"></label>
           <label>Max tokens <input id="p-max-tokens" type="number" min="1"></label>
           <label>Temperature <input id="p-temperature" type="number" step="0.1" min="0" max="2"></label>
@@ -90,6 +96,33 @@
           </div>
           <p id="provider-error" class="error" hidden></p>
         </form>
+      </section>
+
+      <section id="tab-services" data-tab="services" hidden>
+        <h2>Services</h2>
+        <p class="hint">Start, stop or restart the parts of the server from here. The admin site itself is not on this list.</p>
+        <div id="services"></div>
+        <div id="cpa-panel" class="card" hidden>
+          <div class="row"><strong>Claude and ChatGPT accounts</strong></div>
+          <p class="hint">CLIProxyAPI lets a Claude or ChatGPT subscription act as a provider. Its key is made and used automatically. Connect an account, then pick a model on the CPA provider.</p>
+          <div id="cpa-accounts"></div>
+          <div class="row">
+            <button type="button" id="cpa-connect-anthropic" class="secondary">Connect Claude</button>
+            <button type="button" id="cpa-connect-openai" class="secondary">Connect ChatGPT</button>
+          </div>
+          <div id="cpa-login" hidden>
+            <p class="hint">1. Open this address and approve: <a id="cpa-login-link" target="_blank" rel="noopener noreferrer"></a></p>
+            <p class="hint">2. The browser then lands on an address starting <code>http://localhost</code> that probably does not load. Copy that whole address from the address bar and paste it here:</p>
+            <label>Address <input id="cpa-redirect" autocomplete="off" placeholder="http://localhost:..."></label>
+            <div class="row">
+              <button type="button" id="cpa-finish">Finish</button>
+              <button type="button" id="cpa-cancel" class="secondary">Cancel</button>
+            </div>
+          </div>
+          <p id="cpa-message" class="hint" role="status"></p>
+        </div>
+        <h3>Recent actions</h3>
+        <div id="services-recent" class="hint"></div>
       </section>
 
       <section id="tab-clients" data-tab="clients" hidden>

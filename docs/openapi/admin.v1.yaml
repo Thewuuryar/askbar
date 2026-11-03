@@ -136,6 +136,248 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '429':
           $ref: '#/components/responses/TooMany'
+  /admin/api/v1/cpa:
+    get:
+      operationId: getCpa
+      summary: Whether CLIProxyAPI answers, the accounts connected to it, and the provider made for it.
+      description: Session-only. `provider_id` is null until an account is connected.
+      security:
+        - adminSession: []
+      responses:
+        '200':
+          description: The state.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [configured, reachable, accounts, provider_id]
+                properties:
+                  configured:
+                    type: boolean
+                  reachable:
+                    type: boolean
+                  accounts:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/CpaAccount'
+                  provider_id:
+                    type: string
+                    nullable: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /admin/api/v1/cpa/logins:
+    post:
+      operationId: startCpaLogin
+      summary: Start connecting a Claude or ChatGPT account.
+      description: >
+        Session-only. Open `url` in a browser and approve. The browser then lands on a `localhost` address that
+        will not load when the admin is on another machine; paste that whole address into
+        `POST /cpa/logins/{state}/callback`. A login expires after 10 minutes.
+      security:
+        - adminSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [provider]
+              properties:
+                provider:
+                  type: string
+                  enum: [anthropic, openai]
+      responses:
+        '200':
+          description: Where to go.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [url, state, expires_in]
+                properties:
+                  url:
+                    type: string
+                  state:
+                    type: string
+                  expires_in:
+                    type: integer
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooMany'
+        '502':
+          $ref: '#/components/responses/ServerUnavailable'
+  /admin/api/v1/cpa/logins/{state}:
+    parameters:
+      - name: state
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getCpaLogin
+      summary: How a login is going (`wait`, `ok` or `error`).
+      description: Session-only. On `ok` the CPA provider is made if it was not, and its id is returned.
+      security:
+        - adminSession: []
+      responses:
+        '200':
+          description: The status.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, message, provider_id]
+                properties:
+                  status:
+                    type: string
+                    enum: [wait, ok, error]
+                  message:
+                    type: string
+                  provider_id:
+                    type: string
+                    nullable: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '502':
+          $ref: '#/components/responses/ServerUnavailable'
+  /admin/api/v1/cpa/logins/{state}/callback:
+    parameters:
+      - name: state
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      operationId: finishCpaLogin
+      summary: Give the address the browser ended up on after approving.
+      description: >
+        Session-only. The address must be a `localhost` or `127.0.0.1` address carrying this login's `state` and a
+        `code`. A wrong address is a 400 and the login stays open; a good one is used once.
+      security:
+        - adminSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [redirect_url]
+              properties:
+                redirect_url:
+                  type: string
+      responses:
+        '200':
+          description: Sent to CLIProxyAPI. Poll the login for the result.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '502':
+          $ref: '#/components/responses/ServerUnavailable'
+  /admin/api/v1/cpa/accounts/{name}:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
+    delete:
+      operationId: removeCpaAccount
+      summary: Disconnect an account.
+      security:
+        - adminSession: []
+      responses:
+        '204':
+          description: Disconnected.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '502':
+          $ref: '#/components/responses/ServerUnavailable'
+  /admin/api/v1/services:
+    get:
+      operationId: listServices
+      summary: How the server, Caddy and CLIProxyAPI are doing, and the last ten start/stop/restart actions.
+      description: Session-only. The answer comes from the controller; if it cannot be reached this is 502 `server_unavailable`.
+      security:
+        - adminSession: []
+      responses:
+        '200':
+          description: The services and recent actions.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [services, recent]
+                properties:
+                  services:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ServiceState'
+                  recent:
+                    type: array
+                    items:
+                      type: object
+                      required: [service, action, at, ok]
+                      properties:
+                        service:
+                          type: string
+                        action:
+                          type: string
+                        at:
+                          type: integer
+                          description: Unix seconds.
+                        ok:
+                          type: boolean
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '502':
+          $ref: '#/components/responses/ServerUnavailable'
+  /admin/api/v1/services/{name}/{action}:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
+          enum: [server, caddy, cpa]
+      - name: action
+        in: path
+        required: true
+        schema:
+          type: string
+          enum: [start, stop, restart]
+    post:
+      operationId: controlService
+      summary: Start, stop or restart a service.
+      description: >
+        Session-only: an admin API key cannot do this. Every attempt is recorded before the controller is asked,
+        and at most 6 are allowed per minute (429 `too_many_attempts`). Stopping or restarting Caddy can drop the
+        connection to this site; stopping the server ends running replies as interrupted. The admin and the
+        controller cannot be named. Answers with the service as it is afterwards.
+      security:
+        - adminSession: []
+      responses:
+        '200':
+          description: The service after the action.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceState'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooMany'
+        '502':
+          $ref: '#/components/responses/ServerUnavailable'
   /admin/api/v1/keys:
     get:
       operationId: listKeys
@@ -314,6 +556,63 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
+        '502':
+          $ref: '#/components/responses/ServerUnavailable'
+  /admin/api/v1/providers/models:
+    post:
+      operationId: listProviderModels
+      summary: Ask a provider which models it offers.
+      description: >
+        The server asks the provider (it has the keys and the network); nothing is saved. Give `api_key`
+        (used once) or a saved `provider_id` whose stored key may be used when the type and address match.
+        A failure at the provider is a 200 with `ok: false` and a `message`.
+      security:
+        - adminSession: []
+        - adminApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type]
+              properties:
+                type:
+                  type: string
+                  enum: [openai, anthropic]
+                base_url:
+                  type: string
+                api_key:
+                  type: string
+                provider_id:
+                  type: string
+      responses:
+        '200':
+          description: The result.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, message, models]
+                properties:
+                  ok:
+                    type: boolean
+                  message:
+                    type: string
+                  models:
+                    type: array
+                    items:
+                      type: object
+                      required: [id]
+                      properties:
+                        id:
+                          type: string
+                        label:
+                          type: string
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '502':
           $ref: '#/components/responses/ServerUnavailable'
   /admin/api/v1/providers/{id}/test:
@@ -860,6 +1159,33 @@ components:
           schema:
             $ref: '#/components/schemas/Problem'
   schemas:
+    CpaAccount:
+      type: object
+      required: [name, provider, label]
+      properties:
+        name:
+          type: string
+        provider:
+          type: string
+          enum: [anthropic, openai]
+        label:
+          type: string
+    ServiceState:
+      type: object
+      required: [name, state, status, health]
+      properties:
+        name:
+          type: string
+          enum: [server, caddy, cpa]
+        state:
+          type: string
+          description: Docker's state (`running`, `exited`, `restarting`, ...), or `missing` when there is no container.
+        status:
+          type: string
+        health:
+          type: string
+          nullable: true
+          enum: [healthy, unhealthy, starting, null]
     Problem:
       type: object
       description: >-
@@ -982,6 +1308,9 @@ components:
           type: [number, 'null']
         price_cached_in:
           type: [number, 'null']
+        managed:
+          type: boolean
+          description: Made and kept in step by the admin (the CLIProxyAPI provider). Name, type, address and key are fixed and it cannot be deleted; the model and limits can change.
     ProviderInput:
       type: object
       required: [name, type, model]

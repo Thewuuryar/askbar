@@ -86,6 +86,12 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(f"data: {json.dumps({'choices': [{'delta': {'content': piece}}]})}\n\n".encode())
             self.wfile.flush()
 
+    def do_GET(self):
+        # The model list, for the admin's model dropdown (OpenAI shape; any key).
+        if self.path.split("?")[0].rstrip("/").endswith("/models"):
+            return self.send_json(200, {"object": "list", "data": [{"id": "mock-model"}, {"id": "mock-model-2"}]})
+        self.send_json(404, {"error": {"message": "not found"}})
+
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers.get("content-length", 0))) or b"{}")
         anthropic = self.path.split("?")[0].rstrip("/").endswith("/messages")

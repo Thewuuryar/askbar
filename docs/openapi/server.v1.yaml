@@ -149,6 +149,61 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/Internal'
+  /api/server/v1/models/list:
+    post:
+      operationId: listModels
+      summary: Ask a provider which models it offers.
+      description: >
+        Sent from the server, where the network and the keys are. Either give `api_key` (used once, never stored
+        or logged) or a saved `provider_id`; a saved key is used only when the type and address match the saved
+        provider. A failure at the provider is a 200 with `ok: false`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type]
+              properties:
+                type:
+                  type: string
+                  enum: [openai, anthropic]
+                base_url:
+                  type: string
+                api_key:
+                  type: string
+                provider_id:
+                  type: string
+      responses:
+        '200':
+          description: The result.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, message, models]
+                properties:
+                  ok:
+                    type: boolean
+                  message:
+                    type: string
+                    description: Why it failed. Never contains the key.
+                  models:
+                    type: array
+                    items:
+                      type: object
+                      required: [id]
+                      properties:
+                        id:
+                          type: string
+                        label:
+                          type: string
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Internal'
   /api/server/v1/users:
     get:
       operationId: listUsers

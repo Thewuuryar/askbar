@@ -115,6 +115,17 @@ const MIGRATIONS: &[&str] = &[
          revoked_at   INTEGER
      );
      CREATE UNIQUE INDEX admin_api_keys_one_active ON admin_api_keys((1)) WHERE revoked_at IS NULL;",
+    // v9: who started, stopped or restarted a service, and when. Written before the controller is asked.
+    "CREATE TABLE service_actions (
+         id      INTEGER PRIMARY KEY AUTOINCREMENT,
+         service TEXT    NOT NULL,
+         action  TEXT    NOT NULL,
+         at      INTEGER NOT NULL,
+         ok      INTEGER NOT NULL DEFAULT 0 CHECK (ok IN (0, 1))
+     );",
+    // v10: a provider the admin made and keeps in step itself (the bundled CLIProxyAPI). Its name, type,
+    // address and key are not editable, and it cannot be deleted.
+    "ALTER TABLE providers ADD COLUMN managed INTEGER NOT NULL DEFAULT 0;",
 ];
 
 /// The schema steps, in order (for the upgrade tests).

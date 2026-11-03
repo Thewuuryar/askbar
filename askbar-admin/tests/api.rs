@@ -50,6 +50,17 @@ async fn fake_llm() -> String {
             }
         }),
     );
+    // The model list answers to the same key.
+    let app = app.route(
+        "/v1/models",
+        axum::routing::get(|headers: HeaderMap| async move {
+            if headers.get("authorization").and_then(|v| v.to_str().ok()) == Some(&format!("Bearer {KEY}")) {
+                axum::Json(json!({ "data": [{ "id": "zeta" }, { "id": "alpha" }] })).into_response()
+            } else {
+                axum::http::StatusCode::UNAUTHORIZED.into_response()
+            }
+        }),
+    );
     format!("{}/v1", serve(app).await)
 }
 
@@ -529,4 +540,37 @@ async fn the_key_routes_need_a_session_and_a_key_cannot_make_or_revoke_keys() {
         assert_eq!(with_key.status(), 401, "{m} {path} with the key");
     }
     assert_eq!(t.call(M::GET, "/admin/api/v1/keys", None).await.1.as_array().unwrap().len(), 1, "the key made no key");
+}
+
+#[tokio::test]
+async fn models_are_listed_by_the_server_with_a_typed_key_or_the_saved_one() {
+    let t = start(true).await;
+    let llm = fake_llm().await;
+    let ask = |body: Value| t.call(M::POST, "/admin/api/v1/providers/models", Some(body));
+
+    let (st, res) = ask(json!({ "type": "openai", "base_url": llm, "api_key": KEY })).await;
+    assert_eq!((st, res["ok"].clone(), res["models"].clone()), (200, json!(true), json!([{ "id": "alpha" }, { "id": "zeta" }])));
+    assert!(!res.to_string().contains(KEY));
+
+    let (_, res) = ask(json!({ "type": "openai", "base_url": llm, "api_key": "wrong-key-123" })).await;
+    assert_eq!(res["ok"], json!(false));
+    assert!(!res.to_string().contains("wrong-key-123"));
+
+    // A saved provider's key is used when the address is the saved one, and only then.
+    let (_, created) = t.call(M::POST, "/admin/api/v1/providers", Some(provider("mock", &llm, Some(KEY)))).await;
+    let id = created["id"].as_str().unwrap();
+    let (_, res) = ask(json!({ "type": "openai", "base_url": llm, "provider_id": id })).await;
+    assert_eq!(res["ok"], json!(true), "{res}");
+    let (_, res) = ask(json!({ "type": "openai", "base_url": format!("{llm}x"), "provider_id": id })).await;
+    assert_eq!(res["ok"], json!(false), "the saved key is not sent to another address");
+
+    assert_eq!(ask(json!({ "type": "gemini" })).await.0, 400);
+    assert_eq!(t.call(M::POST, "/admin/api/v1/providers/models", Some(json!({ "type": "openai" }))).await.0, 200);
+}
+
+#[tokio::test]
+async fn models_get_502_when_the_server_is_down() {
+    let t = start(false).await;
+    let (st, _) = t.call(M::POST, "/admin/api/v1/providers/models", Some(json!({ "type": "openai" }))).await;
+    assert_eq!(st, 502);
 }

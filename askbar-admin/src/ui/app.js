@@ -37,6 +37,7 @@
 
   const tabs = [
     { id: 'providers', label: 'Providers', load: loadProviders },
+    { id: 'services', label: 'Services', load: loadServices },
     { id: 'clients', label: 'Clients', load: loadClients },
     { id: 'settings', label: 'Settings', load: loadSettings },
     { id: 'network', label: 'Network', load: loadNetwork },
@@ -194,6 +195,172 @@
     route();
   });
 
+  // -------------------------------------------------------- services
+
+  const SERVICE_INFO = {
+    server: { title: 'Server', what: 'the Askbar server (chats, history, provider calls)', warn: 'Replies being written end as interrupted, and apps say "server offline" until it is back.' },
+    caddy: { title: 'Caddy (HTTPS front end)', what: 'the HTTPS front end', warn: 'This page, and apps, lose their connection while it restarts or is stopped. Only start it again from the host if you stop it.' },
+    cpa: { title: 'CLIProxyAPI', what: 'CLIProxyAPI', warn: 'Providers that use your Claude or ChatGPT login fail until it is back.' },
+  };
+  let servicesBusy = false;
+
+  function serviceCard(svc) {
+    const info = SERVICE_INFO[svc.name] || { title: svc.name, what: svc.name, warn: '' };
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.dataset.name = svc.name;
+    const head = document.createElement('div');
+    head.className = 'row';
+    const title = document.createElement('strong');
+    title.textContent = info.title;
+    const state = document.createElement('span');
+    state.className = 'svc-state';
+    state.textContent = svc.state + (svc.health ? ' · ' + svc.health : '');
+    head.append(title, state);
+    const meta = document.createElement('div');
+    meta.className = 'hint';
+    meta.textContent = svc.status || (svc.state === 'missing' ? 'No container found.' : '');
+    const buttons = document.createElement('div');
+    buttons.className = 'row';
+    for (const action of ['start', 'stop', 'restart']) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'secondary';
+      b.dataset.action = action;
+      b.textContent = action[0].toUpperCase() + action.slice(1);
+      b.disabled = servicesBusy || svc.state === 'missing' || (action === 'start' && svc.state === 'running') || (action === 'stop' && svc.state !== 'running');
+      b.addEventListener('click', () => serviceAction(svc.name, action, info));
+      buttons.appendChild(b);
+    }
+    const out = document.createElement('span');
+    out.className = 'svc-result hint';
+    buttons.appendChild(out);
+    card.append(head, meta, buttons);
+    return card;
+  }
+
+  async function serviceAction(name, action, info) {
+    const sentence = action[0].toUpperCase() + action.slice(1) + ' ' + info.what + '? ' + (action === 'start' ? '' : info.warn);
+    if (!confirm(sentence.trim())) return;
+    servicesBusy = true;
+    const card = document.querySelector('#services .card[data-name="' + name + '"]');
+    for (const b of document.querySelectorAll('#services button')) b.disabled = true;
+    const out = card && card.querySelector('.svc-result');
+    if (out) out.textContent = 'Working...';
+    try {
+      await api('POST', '/admin/api/v1/services/' + encodeURIComponent(name) + '/' + action);
+    } catch (ex) {
+      flash(ex.message);
+    }
+    servicesBusy = false;
+    loadServices().catch((e) => flash(e.message));
+  }
+
+  async function loadServices() {
+    const box = $('services');
+    let data;
+    try { data = await api('GET', '/admin/api/v1/services'); }
+    catch (ex) {
+      box.textContent = '';
+      const p = document.createElement('p');
+      p.className = 'error';
+      p.textContent = ex.message;
+      box.appendChild(p);
+      return;
+    }
+    box.textContent = '';
+    for (const svc of data.services) box.appendChild(serviceCard(svc));
+    loadCpa();
+    const rec = $('services-recent');
+    rec.textContent = data.recent.length ? '' : 'None yet.';
+    for (const r of data.recent) {
+      const line = document.createElement('div');
+      line.textContent = new Date(r.at * 1000).toLocaleString() + ' · ' + r.action + ' ' + r.service + (r.ok ? '' : ' · failed');
+      rec.appendChild(line);
+    }
+  }
+  // ---- CLIProxyAPI accounts: connect Claude or ChatGPT without a terminal.
+  let login = null; // { state } while a login is open
+
+  function cpaMessage(text) { $('cpa-message').textContent = text || ''; }
+
+  function closeLogin() {
+    login = null;
+    $('cpa-redirect').value = '';
+    show($('cpa-login'), false);
+  }
+
+  async function loadCpa() {
+    const panel = $('cpa-panel');
+    let c;
+    try { c = await api('GET', '/admin/api/v1/cpa'); } catch (_) { show(panel, false); return; }
+    show(panel, c.configured);
+    if (!c.configured) return;
+    const box = $('cpa-accounts');
+    box.textContent = '';
+    if (!c.reachable) cpaMessage('CLIProxyAPI is not answering. Start it with the card above.');
+    for (const a of c.accounts) {
+      const row = document.createElement('div');
+      row.className = 'row';
+      const label = document.createElement('span');
+      label.textContent = (a.provider === 'anthropic' ? 'Claude' : 'ChatGPT') + ' · ' + a.label;
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'secondary';
+      b.dataset.action = 'disconnect';
+      b.textContent = 'Disconnect';
+      b.addEventListener('click', async () => {
+        if (!confirm('Disconnect ' + a.label + '? Replies through the CPA provider stop working until you connect again.')) return;
+        try { await api('DELETE', '/admin/api/v1/cpa/accounts/' + encodeURIComponent(a.name)); } catch (ex) { flash(ex.message); }
+        loadCpa();
+      });
+      row.append(label, b);
+      box.appendChild(row);
+    }
+    if (!c.accounts.length && c.reachable) { cpaMessage('No account connected yet.'); }
+  }
+
+  async function connect(provider) {
+    cpaMessage('');
+    try {
+      const r = await api('POST', '/admin/api/v1/cpa/logins', { provider });
+      login = { state: r.state };
+      const a = $('cpa-login-link');
+      a.textContent = r.url;
+      a.href = r.url;
+      show($('cpa-login'), true);
+      $('cpa-redirect').focus();
+    } catch (ex) { cpaMessage(ex.message); }
+  }
+  $('cpa-connect-anthropic').addEventListener('click', () => connect('anthropic'));
+  $('cpa-connect-openai').addEventListener('click', () => connect('openai'));
+  $('cpa-cancel').addEventListener('click', closeLogin);
+
+  $('cpa-finish').addEventListener('click', async () => {
+    if (!login) return;
+    const state = login.state;
+    cpaMessage('Sending...');
+    try {
+      await api('POST', '/admin/api/v1/cpa/logins/' + encodeURIComponent(state) + '/callback', { redirect_url: $('cpa-redirect').value.trim() });
+    } catch (ex) { cpaMessage(ex.message); return; }
+    closeLogin();
+    cpaMessage('Waiting for CLIProxyAPI to confirm...');
+    for (let i = 0; i < 30; i++) {
+      let r;
+      try { r = await api('GET', '/admin/api/v1/cpa/logins/' + encodeURIComponent(state)); } catch (ex) { cpaMessage(ex.message); return; }
+      if (r.status === 'ok') { cpaMessage('Connected.' + (r.provider_id ? ' Pick the model on the CPA provider (Providers tab).' : '')); loadCpa(); return; }
+      if (r.status === 'error') { cpaMessage('The login failed' + (r.message ? ': ' + r.message : '.')); return; }
+      await new Promise((res) => setTimeout(res, 2000));
+    }
+    cpaMessage('CLIProxyAPI has not confirmed yet. Check the accounts list in a moment.');
+  });
+
+  // Keep the state fresh while the tab is on screen.
+  setInterval(() => {
+    const sec = document.querySelector('section[data-tab="services"]');
+    if (sec && !sec.hidden && !servicesBusy && !document.hidden) loadServices().catch(() => {});
+  }, 5000);
+
   // -------------------------------------------------------- providers
 
   let editing = null; // provider id, or null when adding
@@ -240,7 +407,15 @@
       try { await api('DELETE', '/admin/api/v1/providers/' + encodeURIComponent(p.id)); loadProviders(); } catch (ex) { flash(ex.message); }
     });
     del.dataset.action = 'delete';
-    head.append(test, edit, del);
+    if (p.managed) {
+      const m = document.createElement('span');
+      m.className = 'badge';
+      m.textContent = 'managed by the admin';
+      head.insertBefore(m, sp);
+      head.append(test, edit);
+    } else {
+      head.append(test, edit, del);
+    }
 
     const meta = document.createElement('div');
     meta.className = 'meta';
@@ -277,14 +452,78 @@
     for (const p of list) box.appendChild(providerCard(p));
   }
 
+  // ---- model list: once the provider can be reached, the model is chosen from what it offers.
+  const MANUAL = '__manual__';
+  let editingHasKey = false;
+  let modelSeq = 0;
+
+  function canListModels() {
+    if ($('p-key').value.trim() !== '' || (editing && editingHasKey)) return true;
+    return $('p-type').value === 'openai' && $('p-base-url').value.trim() !== '';
+  }
+
+  function showModelInput() {
+    show($('p-model-list'), false);
+    show($('p-model'), true);
+  }
+
+  function fillModelList(models) {
+    const sel = $('p-model-list');
+    const current = $('p-model').value.trim();
+    sel.textContent = '';
+    const add = (value, text) => { const o = document.createElement('option'); o.value = value; o.textContent = text; sel.appendChild(o); };
+    if (current && !models.some((m) => m.id === current)) add(current, current + ' (not in the provider\'s list)');
+    for (const m of models) add(m.id, m.label ? m.label + ' (' + m.id + ')' : m.id);
+    add(MANUAL, 'Enter a name myself...');
+    sel.value = current || models[0].id;
+    $('p-model').value = sel.value;
+    show($('p-model'), false);
+    show(sel, true);
+  }
+
+  async function loadModels() {
+    const status = $('p-model-status');
+    if (!canListModels()) {
+      showModelInput();
+      status.textContent = 'Enter the address and key, then load the provider\'s models.';
+      return;
+    }
+    const seq = ++modelSeq;
+    status.textContent = 'Loading models...';
+    const body = { type: $('p-type').value, base_url: $('p-base-url').value.trim() };
+    if ($('p-key').value.trim() !== '') body.api_key = $('p-key').value.trim();
+    if (editing) body.provider_id = editing;
+    let res;
+    try { res = await api('POST', '/admin/api/v1/providers/models', body); }
+    catch (ex) { res = { ok: false, message: ex.message }; }
+    if (seq !== modelSeq) return; // a newer request replaced this one
+    if (res.ok && res.models.length) {
+      fillModelList(res.models);
+      status.textContent = res.models.length + ' models available.';
+    } else {
+      showModelInput();
+      status.textContent = (res.message || 'No models listed.') + ' Type the model name instead.';
+    }
+  }
+
+  $('p-model-list').addEventListener('change', () => {
+    if ($('p-model-list').value === MANUAL) { showModelInput(); $('p-model').focus(); return; }
+    $('p-model').value = $('p-model-list').value;
+  });
+  $('p-model-refresh').addEventListener('click', loadModels);
+  for (const id of ['p-type', 'p-base-url', 'p-key']) $(id).addEventListener('change', loadModels);
+
   function openForm(p, preset) {
     editing = p ? p.id : null;
+    editingHasKey = !!(p && p.has_key);
     const v = p || preset || { name: '', type: 'openai', base_url: '', model: '' };
     $('provider-form-title').textContent = p ? 'Edit ' + p.name : 'Add provider';
     $('p-name').value = v.name || '';
     $('p-type').value = v.type || 'openai';
     $('p-base-url').value = v.base_url || '';
     $('p-model').value = v.model || '';
+    // A managed provider (CLIProxyAPI) keeps its name, type, address and key.
+    for (const id of ['p-name', 'p-type', 'p-base-url', 'p-key']) $(id).disabled = !!(p && p.managed);
     $('p-key').value = ''; // never prefilled
     $('p-key').placeholder = p && p.has_key ? 'unchanged (write-only)' : 'write-only';
     $('p-max-tokens').value = v.max_tokens || '';
@@ -298,18 +537,21 @@
     $('p-hint').textContent = preset && preset.hint ? preset.hint : '';
     show($('p-hint'), !!(preset && preset.hint));
     show($('provider-form'), true);
+    modelSeq++;
+    showModelInput();
+    $('p-model-status').textContent = '';
+    if (p) loadModels();
     $('p-name').focus();
   }
 
   function closeForm() {
     editing = null;
+    modelSeq++;
     $('p-key').value = '';
     show($('provider-form'), false);
   }
 
   $('add-provider').addEventListener('click', () => openForm(null));
-  // CLIProxyAPI runs next to the server in the compose network (profile `cpa`).
-  $('add-cpa').addEventListener('click', () => openForm(null, { name: 'cpa', type: 'openai', base_url: 'http://cpa:8317/v1', model: '', hint: 'Run `docker compose run --rm cpa-init show` to print the API key to paste below. For the model, use a name CLIProxyAPI lists (after you have logged in to a provider) such as one from `GET /v1/models`.' }));
   $('provider-cancel').addEventListener('click', closeForm);
 
   $('provider-form').addEventListener('submit', async (e) => {

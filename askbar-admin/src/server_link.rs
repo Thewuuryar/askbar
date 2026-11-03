@@ -45,7 +45,7 @@ fn io_err(path: &Path, e: std::io::Error) -> std::io::Error {
 }
 
 /// Write `contents` to `path` through a temporary file, so a reader never sees half of it.
-fn write_atomic(path: &Path, contents: &str, mode: u32) -> std::io::Result<()> {
+pub(crate) fn write_atomic(path: &Path, contents: &str, mode: u32) -> std::io::Result<()> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
     let tmp = path.with_extension("tmp");
@@ -58,17 +58,22 @@ fn write_atomic(path: &Path, contents: &str, mode: u32) -> std::io::Result<()> {
 /// Make sure the token exists (created once, 32 random bytes, mode 0600, never overwritten)
 /// and that the server's hash file matches it. Returns the raw token.
 pub fn ensure_token(secrets_dir: &Path, token_dir: &Path) -> std::io::Result<String> {
+    ensure_token_as(secrets_dir, token_dir, TOKEN_FILE, "mgt_") // names-ok: the token prefix already issued
+}
+
+/// The same for any service the admin calls: the raw token in `secrets_dir/token_file`, its hash in `token_dir`.
+pub fn ensure_token_as(secrets_dir: &Path, token_dir: &Path, token_file: &str, prefix: &str) -> std::io::Result<String> {
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     std::fs::create_dir_all(secrets_dir).map_err(|e| io_err(secrets_dir, e))?;
     std::fs::set_permissions(secrets_dir, std::fs::Permissions::from_mode(0o700)).map_err(|e| io_err(secrets_dir, e))?;
-    let path = secrets_dir.join(TOKEN_FILE);
+    let path = secrets_dir.join(token_file);
     let token = match std::fs::read_to_string(&path) {
         Ok(t) if !t.trim().is_empty() => t.trim().to_string(),
         Ok(_) => return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{} is empty; delete it to make a new token", path.display()))),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             let mut raw = [0u8; 32];
             OsRng.fill_bytes(&mut raw);
-            let token = format!("mgt_{}", URL_SAFE_NO_PAD.encode(raw));
+            let token = format!("{prefix}{}", URL_SAFE_NO_PAD.encode(raw));
             let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path).map_err(|e| io_err(&path, e))?;
             std::io::Write::write_all(&mut f, token.as_bytes()).and_then(|_| f.sync_all()).map_err(|e| io_err(&path, e))?;
             token

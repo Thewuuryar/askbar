@@ -57,7 +57,7 @@ fn link(state: &AdminState) -> Result<&Arc<ServerLink>, Failure> {
 
 /// Apply `apply` to `admin.db`, send the server the resulting snapshot, then send it each of
 /// `keys` (provider id, API key), and commit only if all of that worked.
-async fn mutate<T>(state: &AdminState, keys: Vec<(String, String)>, apply: impl FnOnce(&Connection) -> Result<T, Failure>) -> Result<T, Failure> {
+pub(crate) async fn mutate<T>(state: &AdminState, keys: Vec<(String, String)>, apply: impl FnOnce(&Connection) -> Result<T, Failure>) -> Result<T, Failure> {
     let link = link(state)?;
     let db = state.db.lock().await;
     let conn = db.conn();
@@ -131,6 +131,8 @@ pub struct ProviderRow {
     price_in: Option<f64>,
     price_out: Option<f64>,
     price_cached_in: Option<f64>,
+    /// Made and kept in step by the admin itself (the bundled CLIProxyAPI): name, address and key are fixed.
+    managed: bool,
 }
 
 #[derive(Deserialize)]
@@ -203,7 +205,7 @@ pub async fn list_providers(State(state): St) -> Result<Json<Vec<ProviderRow>>, 
     let db = state.db.lock().await;
     let mut stmt = db
         .conn()
-        .prepare("SELECT id, name, type, base_url, model, max_tokens, temperature, has_key, billing, allow_as_fallback, price_in, price_out, price_cached_in FROM providers ORDER BY name")
+        .prepare("SELECT id, name, type, base_url, model, max_tokens, temperature, has_key, billing, allow_as_fallback, price_in, price_out, price_cached_in, managed FROM providers ORDER BY name")
         .map_err(internal)?;
     let rows = stmt
         .query_map([], |r| {
@@ -221,6 +223,7 @@ pub async fn list_providers(State(state): St) -> Result<Json<Vec<ProviderRow>>, 
                 price_in: r.get(10)?,
                 price_out: r.get(11)?,
                 price_cached_in: r.get(12)?,
+                managed: r.get::<_, i64>(13)? != 0,
             })
         })
         .map_err(internal)?
@@ -250,8 +253,16 @@ pub async fn create_provider(State(state): St, ApiJson(i): ApiJson<ProviderInput
     Ok((StatusCode::CREATED, Json(serde_json::json!({ "id": id }))))
 }
 
-pub async fn update_provider(State(state): St, Path(id): Path<String>, ApiJson(i): ApiJson<ProviderInput>) -> Result<StatusCode, Failure> {
+pub async fn update_provider(State(state): St, Path(id): Path<String>, ApiJson(mut i): ApiJson<ProviderInput>) -> Result<StatusCode, Failure> {
     validate(&i)?;
+    // A managed provider keeps the name, type, address and key the admin gave it.
+    let managed_row: Option<(String, String, String)> = {
+        let db = state.db.lock().await;
+        db.conn().query_row("SELECT name, type, base_url FROM providers WHERE id = ?1 AND managed = 1", [&id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).ok()
+    };
+    if let Some((name, kind, base_url)) = &managed_row {
+        (i.name, i.kind, i.base_url, i.api_key) = (name.clone(), kind.clone(), base_url.clone(), None);
+    }
     let keys: Vec<(String, String)> = i.api_key.as_deref().map(str::trim).filter(|k| !k.is_empty()).map(|k| vec![(id.clone(), k.to_string())]).unwrap_or_default();
     mutate(&state, keys, move |c| {
         let n = c
@@ -275,6 +286,9 @@ pub async fn update_provider(State(state): St, Path(id): Path<String>, ApiJson(i
 
 pub async fn delete_provider(State(state): St, Path(id): Path<String>) -> Result<StatusCode, Failure> {
     mutate(&state, vec![], move |c| {
+        if c.query_row("SELECT 1 FROM providers WHERE id = ?1 AND managed = 1", [&id], |_| Ok(())).is_ok() {
+            return Err(err(StatusCode::CONFLICT, "This provider is kept by the admin and cannot be deleted. Disconnect the accounts on the Services tab instead."));
+        }
         let n = c.execute("DELETE FROM providers WHERE id = ?1", [&id]).map_err(internal)?;
         if n == 0 {
             return Err(err(StatusCode::NOT_FOUND, "No such provider."));
@@ -304,6 +318,36 @@ pub async fn test_provider(State(state): St, Path(id): Path<String>) -> Result<R
         return Err(err(StatusCode::BAD_GATEWAY, &format!("The server answered {status}.")));
     }
     json_response(body)
+}
+
+#[derive(Deserialize, serde::Serialize)]
+pub struct ModelsInput {
+    #[serde(rename = "type")]
+    kind: String,
+    #[serde(default)]
+    base_url: String,
+    /// Write-only, used once by the server for this request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    api_key: Option<String>,
+    /// A saved provider whose stored key the server may use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    provider_id: Option<String>,
+}
+
+/// Ask the server which models a provider offers (it has the keys and the network). Nothing is saved.
+pub async fn list_models(State(state): St, ApiJson(i): ApiJson<ModelsInput>) -> Result<Response, Failure> {
+    if !matches!(i.kind.as_str(), "openai" | "anthropic") {
+        return Err(bad("Type must be openai or anthropic."));
+    }
+    let body = serde_json::to_value(&i).map_err(internal)?;
+    let (status, bytes) = link(&state)?
+        .request(reqwest::Method::POST, &format!("{}/models/list", askbar_proto::paths::SERVER_V1), Some(&body))
+        .await
+        .map_err(from_push)?;
+    if status != 200 {
+        return Err(err(StatusCode::BAD_GATEWAY, &format!("The server answered {status}.")));
+    }
+    json_response(bytes)
 }
 
 fn json_response(body: Vec<u8>) -> Result<Response, Failure> {
