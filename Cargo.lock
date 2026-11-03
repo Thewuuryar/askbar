@@ -132,6 +132,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "askbar-controller"
+version = "0.5.0"
+dependencies = [
+ "askbar-proto",
+ "axum",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "sha2",
+ "subtle",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "askbar-proto"
 version = "0.5.0"
 dependencies = [

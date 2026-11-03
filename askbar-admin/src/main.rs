@@ -17,6 +17,10 @@ async fn main() {
     let secrets = askbar_admin::secrets::AdminSecrets::load_or_create(&askbar_admin::server_link::secrets_dir()).unwrap_or_else(|e| die(e, 1));
     let state = askbar_admin::AdminState::build(db, Some(link.clone()), secrets);
     state.set_caddy(askbar_admin::caddy::CaddyLink::from_env());
+    match askbar_admin::control_link::ControlLink::from_env(&askbar_admin::server_link::secrets_dir()) {
+        Ok(link) => state.set_control(link),
+        Err(e) => eprintln!("warning: the controller link is off: {e}"),
+    }
     askbar_admin::caddy::apply_at_startup(state.clone());
     tokio::spawn(link.run(state.db.clone()));
     if let Err(e) = askbar_admin::serve_unix(&askbar_admin::socket_path(), askbar_admin::router(state)).await {

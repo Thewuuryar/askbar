@@ -9,11 +9,13 @@ pub mod api_key;
 pub mod audit_key;
 pub mod auth;
 pub mod caddy;
+pub mod control_link;
 pub mod db;
 pub mod server_link;
 pub mod network;
 pub mod routes;
 pub mod secrets;
+pub mod services;
 pub mod web;
 
 use axum::{
@@ -43,6 +45,10 @@ pub struct AdminState {
     pub caddy: std::sync::Mutex<caddy::CaddyLink>,
     /// How the last attempt to configure Caddy went.
     pub proxy: std::sync::Mutex<caddy::ProxyStatus>,
+    /// The link to the controller (start, stop, restart); `None` until set at start-up or by a test.
+    pub control: std::sync::Mutex<Option<Arc<control_link::ControlLink>>>,
+    /// When recent service actions happened (unix seconds), for the rate limit.
+    pub service_actions: std::sync::Mutex<std::collections::VecDeque<i64>>,
 }
 
 impl AdminState {
@@ -63,11 +69,17 @@ impl AdminState {
             secrets,
             caddy: std::sync::Mutex::new(caddy::CaddyLink::default()),
             proxy: std::sync::Mutex::new(caddy::ProxyStatus::default()),
+            control: std::sync::Mutex::new(None),
+            service_actions: std::sync::Mutex::new(Default::default()),
         })
     }
 
     pub fn set_caddy(&self, link: caddy::CaddyLink) {
         *self.caddy.lock().unwrap_or_else(|e| e.into_inner()) = link;
+    }
+
+    pub fn set_control(&self, link: Arc<control_link::ControlLink>) {
+        *self.control.lock().unwrap_or_else(|e| e.into_inner()) = Some(link);
     }
 
     /// Is the server there? (False when there is no link at all.)
@@ -132,6 +144,8 @@ pub fn routes(state: &Arc<AdminState>) -> Routes {
         .put(&v1("/password"), web::change_password)
         .get(&v1("/session"), || async { StatusCode::NO_CONTENT })
         .delete(&v1("/session"), web::logout)
+        .get(&v1("/services"), services::list)
+        .post(&v1("/services/{name}/{action}"), services::act)
         .post(&v1("/keys"), admin_api::create_key)
         .get(&v1("/keys"), admin_api::list_keys)
         .delete(&v1("/keys/{id}"), admin_api::revoke_key)
