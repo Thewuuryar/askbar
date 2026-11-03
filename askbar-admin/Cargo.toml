@@ -1,13 +1,14 @@
 [package]
 name = "askbar-admin"
 license = "AGPL-3.0-or-later"
-version = "0.3.0"
+version = "0.5.0"
 edition = "2021"
 description = "Askbar admin service: the admin site and its own database, kept apart from the server"
 
 [dependencies]
-askbar-proto = { path = "../askbar-proto" }
+askbar-proto = { path = "../askbar-proto", features = ["axum"] }
 argon2 = "0.5"
+crypto_box = { version = "0.9", features = ["seal"] }
 axum = "0.8"
 chacha20poly1305 = "0.10"
 base64 = "0.22"
@@ -23,5 +24,6 @@ tracing-subscriber = "0.3"
 ulid = "1"
 
 [dev-dependencies]
+serde_yaml_ng = "0.10"
 futures-util = "0.3"
 askbar-server = { path = "../askbar-server" }

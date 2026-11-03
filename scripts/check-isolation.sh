@@ -4,7 +4,7 @@
 #   scripts/check-isolation.sh
 #
 # Proves the split between the server, the admin and Caddy holds in the real containers:
-# the admin works with the server stopped, the management port needs the token (and
+# the admin works with the server stopped, the server port needs the token (and
 # fails closed without a hash file), only the admin can reach it, the server cannot touch
 # the admin's files or socket, the admin allowlist does what its switch says, the server image
 # carries no admin code, secret files are mode 600, and a backup holds no secrets.
@@ -16,9 +16,9 @@
 set -u
 
 PROJECT="${COMPOSE_PROJECT_NAME:-askbar}"
-EDGE="${PROJECT}_edge"; MGMT="${PROJECT}_mgmt"
+EDGE="${PROJECT}_edge"; SERVER_API_NET="${PROJECT}_server-api"
 SERVER=askbar-server; ADMIN=askbar-admin; CADDY=askbar-caddy
-SERVER_MGMT=172.30.0.2:8082
+SERVER_API=172.30.0.2:8082
 PYIMG="${ASKBAR_CHECK_IMAGE:-python:3.12-slim}"
 PW="${ASKBAR_ADMIN_PASSWORD:-$(head -c 24 /dev/urandom | base64 | tr -d '/+=')}"
 FAILS=0
@@ -52,7 +52,7 @@ py() {
 http_status() { # network host:port [bearer]
   py --network "$1" -- "
 import sys, urllib.request, urllib.error
-req = urllib.request.Request('http://$2/mgmt/v1/health')
+req = urllib.request.Request('http://$2/api/server/v1/health')
 if '${3:-}': req.add_header('authorization', 'Bearer ${3:-}')
 try: print(urllib.request.urlopen(req, timeout=4).status)
 except urllib.error.HTTPError as e: print(e.code)
@@ -79,20 +79,30 @@ admin_script() { # python lines using call(); the result is printed by the lines
   py --network "$EDGE" -v "${PROJECT}_admin-run:/run/admin" -- "$ADMIN_PY
 $1"
 }
+# Before anything else: an admin that already has a password needs ASKBAR_ADMIN_PASSWORD. Without it every
+# step would sign in wrongly, fail, and (five wrong tries) lock sign-in out for 15 minutes.
+if [ -z "${ASKBAR_ADMIN_PASSWORD:-}" ]; then
+  state=$(admin_script "s, body = call('GET', '/admin/api/v1/setup'); print(json.loads(body).get('password_set') if s == 200 else 'unknown')" 2>/dev/null | tail -1)
+  if [ "$state" = "True" ]; then
+    echo "The admin already has a password. Run again with it:" >&2
+    echo "  ASKBAR_ADMIN_PASSWORD='your admin password' scripts/check-isolation.sh" >&2
+    exit 2
+  fi
+fi
 admin_login() { # python lines that sign in (or run first-run setup), used before every script
   cat <<EOF
-s, _ = call("POST", "/admin/login", {"password": "$PW"})
+s, _ = call("POST", "/admin/api/v1/session", {"password": "$PW"})
 if s != 204:
-    call("POST", "/admin/api/setup/password", {"password": "$PW"})
-    s, _ = call("POST", "/admin/login", {"password": "$PW"})
-assert s == 204 or s == 200, "cannot sign in to the admin"
+    call("PUT", "/admin/api/v1/setup/password", {"password": "$PW"})
+    s, _ = call("POST", "/admin/api/v1/session", {"password": "$PW"})
+assert s == 204 or s == 200, "cannot sign in to the admin: set ASKBAR_ADMIN_PASSWORD to its password (repeated wrong tries lock sign-in for 15 minutes)"
 EOF
 }
 
 echo "== 1. The admin works with the server stopped"
 docker stop "$SERVER" >/dev/null
 out=$(admin_script "$(admin_login)
-s, body = call('GET', '/admin/api/status')
+s, body = call('GET', '/admin/api/v1/status')
 print(s, 'offline' if '\"server_online\":false' in body.replace(' ', '') else 'online?')
 s, _ = call('GET', '/admin/')
 print(s)" 2>&1)
@@ -102,29 +112,29 @@ docker start "$SERVER" >/dev/null
 for i in $(seq 1 30); do [ "$(docker inspect -f '{{.State.Health.Status}}' "$SERVER")" = healthy ] && break; sleep 2; done
 [ "$(docker inspect -f '{{.State.Health.Status}}' "$SERVER")" = healthy ] && pass "server healthy again" || fail "server did not come back"
 
-echo "== 2. The management port"
-HASH=$(docker exec "$ADMIN" cat /mgmt/token.sha256 2>/dev/null | tr -d '[:space:]')
-[ -n "$HASH" ] || fail "could not read the token hash from the admin's /mgmt"
-[ "$(http_status "$MGMT" "$SERVER_MGMT")" = 401 ] && pass "401 without a token" || fail "no token should give 401"
-[ "$(http_status "$MGMT" "$SERVER_MGMT" "$HASH")" = 401 ] && pass "401 with the token's hash instead of the token" || fail "the hash must not work as the token"
-[ "$(http_status "$MGMT" "$SERVER_MGMT" wrong)" = 401 ] && pass "401 with a wrong token" || fail "a wrong token should give 401"
+echo "== 2. The server port"
+HASH=$(docker exec "$ADMIN" cat /server-token/token.sha256 2>/dev/null | tr -d '[:space:]')
+[ -n "$HASH" ] || fail "could not read the token hash from the admin's /server-token"
+[ "$(http_status "$SERVER_API_NET" "$SERVER_API")" = 401 ] && pass "401 without a token" || fail "no token should give 401"
+[ "$(http_status "$SERVER_API_NET" "$SERVER_API" "$HASH")" = 401 ] && pass "401 with the token's hash instead of the token" || fail "the hash must not work as the token"
+[ "$(http_status "$SERVER_API_NET" "$SERVER_API" wrong)" = 401 ] && pass "401 with a wrong token" || fail "a wrong token should give 401"
 
 # A second server on its own scratch volumes, with no hash file at all: nothing may be accepted.
 docker rm -f askbar-check-nohash >/dev/null 2>&1
-docker run -d --name askbar-check-nohash --network "$MGMT" --ip 172.30.0.9 \
-  -e ASKBAR_MGMT_ADDR=172.30.0.9:8082 -e ASKBAR_API_ADDR=127.0.0.1:8080 \
-  -e ASKBAR_MGMT_TOKEN_HASH_FILE=/nowhere/token.sha256 "$(docker inspect -f '{{.Config.Image}}' "$SERVER")" >/dev/null
+docker run -d --name askbar-check-nohash --network "$SERVER_API_NET" --ip 172.30.0.9 \
+  -e ASKBAR_SERVER_API_ADDR=172.30.0.9:8082 -e ASKBAR_CLIENT_API_ADDR=127.0.0.1:8080 \
+  -e ASKBAR_SERVER_TOKEN_HASH_FILE=/nowhere/token.sha256 "$(docker inspect -f '{{.Config.Image}}' "$SERVER")" >/dev/null
 sleep 3
-code=$(http_status "$MGMT" 172.30.0.9:8082 "$HASH")
+code=$(http_status "$SERVER_API_NET" 172.30.0.9:8082 "$HASH")
 case "$code" in 401|403|503) pass "fails closed with no hash file ($code)";; *) fail "no hash file: got $code, expected a refusal";; esac
 docker rm -f askbar-check-nohash >/dev/null 2>&1
 
-docker exec "$CADDY" sh -c "wget -q -T3 -O /dev/null http://$SERVER_MGMT/mgmt/v1/health" >/dev/null 2>&1 \
-  && fail "Caddy reached the management port" || pass "Caddy cannot reach the management port"
+docker exec "$CADDY" sh -c "wget -q -T3 -O /dev/null http://$SERVER_API/api/server/v1/health" >/dev/null 2>&1 \
+  && fail "Caddy reached the server port" || pass "Caddy cannot reach the server port"
 EDGE_IP=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$EDGE\").IPAddress}}" "$SERVER")
-[ "$(http_status "$EDGE" "$EDGE_IP:8082")" = 0 ] && pass "nothing on the edge network answers on 8082" || fail "the management port answers on the edge network"
-[ "$(http_status "$EDGE" "$SERVER_MGMT")" = 0 ] && pass "a container on edge cannot reach the mgmt address" || fail "the mgmt address is reachable from edge"
-[ "$(docker inspect -f '{{len .NetworkSettings.Networks}}' "$ADMIN")" = 1 ] && pass "the admin is on one network only (mgmt)" || fail "the admin joined more than one network"
+[ "$(http_status "$EDGE" "$EDGE_IP:8082")" = 0 ] && pass "nothing on the edge network answers on 8082" || fail "the server port answers on the edge network"
+[ "$(http_status "$EDGE" "$SERVER_API")" = 0 ] && pass "a container on edge cannot reach the server API address" || fail "the server API address is reachable from edge"
+[ "$(docker inspect -f '{{len .NetworkSettings.Networks}}' "$ADMIN")" = 1 ] && pass "the admin is on one network only (server-api)" || fail "the admin joined more than one network"
 
 echo "== 3. What the server can see"
 VOLS=$(docker inspect -f '{{range .Mounts}}{{.Name}} {{end}}' "$SERVER")
@@ -133,12 +143,66 @@ for v in admin-secrets admin-data admin-run caddy-run caddy-secrets; do
 done
 refused "the server cannot list /admin-secrets" docker exec "$SERVER" ls /admin-secrets
 refused "the server cannot reach an admin socket" docker exec "$SERVER" test -e /run/admin/admin.sock
-refused "the server cannot write to /mgmt (read-only)" docker exec "$SERVER" sh -c 'touch /mgmt/x'
-[ "$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/mgmt"}}{{.RW}}{{end}}{{end}}' "$SERVER")" = false ] && pass "/mgmt is mounted read-only in the server" || fail "/mgmt is writable in the server"
+refused "the server cannot write to /server-token (read-only)" docker exec "$SERVER" sh -c 'touch /server-token/x'
+[ "$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/server-token"}}{{.RW}}{{end}}{{end}}' "$SERVER")" = false ] && pass "/server-token is mounted read-only in the server" || fail "/server-token is writable in the server"
 [ "$(docker exec "$SERVER" id -u)" != "$(docker exec "$ADMIN" id -u)" ] && pass "the server and the admin run as different users" || fail "the server and the admin share a user"
 # Even as the admin's own uid, the server container has nothing of the admin's to open.
 refused "the admin's database is not in the server" docker exec -u "$(docker exec "$ADMIN" id -u)" "$SERVER" sh -c 'ls /admin-data/admin.db'
 refused "the admin cannot read the server's master key" docker exec "$ADMIN" sh -c 'cat /secrets/master.key'
+
+echo "== 3b. The audit store"
+# audit.db is the server's alone: its own volume, mounted nowhere else.
+case " $VOLS" in *" ${PROJECT}_audit-data "*) pass "the server mounts audit-data";; *) fail "the server does not mount audit-data";; esac
+case " $(docker inspect -f '{{range .Mounts}}{{.Name}} {{end}}' "$ADMIN")" in
+  *" ${PROJECT}_audit-data "*) fail "the admin mounts audit-data";; *) pass "the admin does not mount audit-data";;
+esac
+refused "the admin container has no /audit" docker exec "$ADMIN" test -e /audit
+refused "no audit.db anywhere in the admin container" docker exec "$ADMIN" sh -c 'find / -xdev -name "audit.db*" 2>/dev/null | grep -q .'
+check "audit.db exists in the server" docker exec "$SERVER" test -s /audit/audit.db
+# The client API (port 8080, reachable from the edge network) has no audit and no server routes.
+http_get() { # network host:port path -> status; 0 = no connection
+  py --network "$1" -- "
+import urllib.request, urllib.error
+try: print(urllib.request.urlopen('http://$2$3', timeout=4).status)
+except urllib.error.HTTPError as e: print(e.code)
+except Exception: print(0)
+"
+}
+for path in /audit /api/client/v1/audit /api/client/v1/audit/traces /api/client/v1/audit/stats /api/server/v1/health /api/server/v1/audit/traces /api/server/v1/audit/stats; do
+  [ "$(http_get "$EDGE" "$EDGE_IP:8080" "$path")" = 404 ] && pass "the client API has no $path (404)" || fail "the client API answers $path"
+done
+
+echo "== 3c. The server holds no secret for the audit key"
+# The server may seal (it has the public key) but must not be able to derive or open: no Argon2
+# and no admin code in its dependency tree.
+if command -v cargo >/dev/null 2>&1 && [ -f Cargo.toml ]; then
+  TREE=$(cargo tree -p askbar-server --prefix none 2>/dev/null)
+  if [ -z "$TREE" ]; then fail "cargo tree -p askbar-server printed nothing"; else
+    printf '%s\n' "$TREE" | grep -qi '^argon2 ' && fail "askbar-server depends on argon2" || pass "askbar-server does not depend on argon2"
+    printf '%s\n' "$TREE" | grep -q '^askbar-admin ' && fail "askbar-server depends on askbar-admin" || pass "askbar-server does not depend on any admin crate"
+  fi
+else
+  fail "cargo (and the workspace) is needed to check the server's dependencies"
+fi
+# After opening sealed content, the admin's logs hold no passphrase. A made-up one is used for a
+# failed open, which is the case that would be easiest to log by mistake.
+LOGPASS="isolation-check-passphrase-$(head -c 6 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+admin_script "$(admin_login)
+call('POST', '/admin/api/v1/audit/payloads/no-such-span/open', {'passphrase': '$LOGPASS'})
+call('POST', '/admin/api/v1/audit/rotate-key', {'current': '$LOGPASS', 'new': '$LOGPASS-new', 'confirm': '$LOGPASS-new'})" >/dev/null 2>&1
+docker logs "$ADMIN" 2>&1 | grep -q "$LOGPASS" && fail "the admin's logs contain a passphrase" || pass "the admin's logs contain no passphrase after open and rotate attempts"
+docker logs "$SERVER" 2>&1 | grep -q "$LOGPASS" && fail "the server's logs contain a passphrase" || pass "the server's logs contain no passphrase"
+
+echo "== 3d. CLIProxyAPI"
+# It starts with the stack, on the edge network only, and publishes nothing.
+CPA=$(docker compose -p "$PROJECT" ps -q cpa 2>/dev/null | head -1)
+if [ -z "$CPA" ]; then
+  echo "SKIP  cpa is not running"
+else
+  [ "$(docker inspect -f '{{len .NetworkSettings.Networks}}' "$CPA")" = 1 ] && docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}' "$CPA" | grep -q "^${EDGE}$" \
+    && pass "cpa is on the edge network only" || fail "cpa is not on the edge network only"
+  [ -z "$(docker inspect -f '{{range $p, $b := .NetworkSettings.Ports}}{{if $b}}{{$p}} {{end}}{{end}}' "$CPA")" ] && pass "cpa publishes no port" || fail "cpa publishes a port"
+fi
 
 echo "== 4. The allowlist"
 caddy_config() { # prints the admin site's route from Caddy's loaded config
@@ -156,19 +220,20 @@ print(data.decode().split('\r\n\r\n', 1)[1])
 }
 set_network() { # allowlist_enabled(true|false)
   admin_script "$(admin_login)
-s, body = call('PUT', '/admin/api/network', {'tls_enabled': True, 'hostname': 'askbar.isolation.invalid', 'admin_cidr': '10.0.0.0/8', 'acme_staging': True, 'allowlist_enabled': $1, 'cloudflare_token': 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN'})
+s, body = call('PUT', '/admin/api/v1/network', {'tls_enabled': True, 'hostname': 'askbar.isolation.invalid', 'admin_cidr': '10.0.0.0/8', 'acme_staging': True, 'allowlist_enabled': $1, 'cloudflare_token': 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN'})
 assert s == 200, (s, body)
-s, body = call('POST', '/admin/api/network/apply')
+s, body = call('POST', '/admin/api/v1/network/apply')
 print(s, 'ok' if '\"ok\":true' in body.replace(' ', '') else body)"
 }
 out=$(set_network True 2>&1); printf '%s' "$out" | tail -1 | grep -q '^200 ok' && pass "allowlist on: Caddy took the configuration" || fail "allowlist on: $out"
 cfg=$(caddy_config)
-printf '%s' "$cfg" | grep -q '"abort":true' && printf '%s' "$cfg" | grep -q '"not":\[{"remote_ip":{"ranges":\["10.0.0.0/8"\]' \
-  && pass "allowlist on: addresses outside 10.0.0.0/8 are aborted on the admin site" || fail "allowlist on: no abort rule for outside addresses"
+printf '%s' "$cfg" | grep -q '"abort":true' && printf '%s' "$cfg" | grep -q '"/api/client/\*","/api/v1/\*"' && ! printf '%s' "$cfg" | grep -q '/api/server' && pass "the client API route names /api/client and /api/v1 only, never /api/server" || fail "the client API route is wrong"
+printf '%s' "$cfg" | grep -q '"status_code":"\?404"\?' && pass "Caddy answers 404 for every other path" || fail "Caddy has no final 404"
+printf '%s' "$cfg" | grep -q 'admin.askbar.isolation.invalid' && fail "Caddy still has a second host name for the admin" || pass "Caddy has one host name"
 out=$(set_network False 2>&1); printf '%s' "$out" | tail -1 | grep -q '^200 ok' && pass "allowlist off: Caddy took the configuration" || fail "allowlist off: $out"
 cfg=$(caddy_config)
 if printf '%s' "$cfg" | grep -q 'unix//run/admin/admin.sock' && ! printf '%s' "$cfg" | grep -q '"abort":true\|remote_ip'; then
-  pass "allowlist off: the admin site has no address check, any device reaches the login"
+  pass "allowlist off: the admin site has no address check, any client reaches the login"
 else
   fail "allowlist off: the admin site still has an address rule"
 fi
@@ -192,7 +257,7 @@ case " $(docker inspect -f '{{range .Mounts}}{{.Name}} {{end}}' "$ADMIN")" in
 esac
 refused "the admin has no /secrets" docker exec "$ADMIN" test -e /secrets
 modes_ok=1
-for f in "$ADMIN:/admin-secrets/admin.key" "$ADMIN:/admin-secrets/mgmt.token" "$SERVER:/secrets/master.key"; do
+for f in "$ADMIN:/admin-secrets/admin.key" "$ADMIN:/admin-secrets/server.token" "$SERVER:/secrets/master.key"; do
   m=$(docker exec "${f%%:*}" stat -c %a "${f#*:}" 2>/dev/null)
   [ "$m" = 600 ] || { fail "${f#*:} has mode ${m:-missing}, expected 600"; modes_ok=0; }
 done
@@ -203,15 +268,15 @@ docker exec "$ADMIN" test -e /caddy-secrets/cf_token \
 MARK="sk-isolation-$(head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 out=$(admin_script "$(admin_login)
 import tarfile, io, base64, json
-s, body = call('POST', '/admin/api/providers', {'name': 'iso-$(head -c 6 /dev/urandom | od -An -tx1 | tr -d ' \n')', 'type': 'openai', 'base_url': 'http://mock-llm:8765/v1', 'model': 'm', 'api_key': '$MARK'})
+s, body = call('POST', '/admin/api/v1/providers', {'name': 'iso-$(head -c 6 /dev/urandom | od -An -tx1 | tr -d ' \n')', 'type': 'openai', 'base_url': 'http://mock-llm:8765/v1', 'model': 'm', 'api_key': '$MARK'})
 assert s == 201, (s, body)
 provider_id = json.loads(body)['id']
-s, body = call('POST', '/admin/api/pair', {'name': 'iso device'})
+s, body = call('POST', '/admin/api/v1/pairings', {'name': 'iso client'})
 assert s == 200, (s, body)
 pairing = json.loads(body)['pairing']
 b = pairing.split(':', 1)[1]
 code = json.loads(base64.urlsafe_b64decode(b + '=' * (-len(b) % 4)))['code']
-c.request('GET', '/admin/api/backup', headers={'x-askbar-admin': '1', 'cookie': cookie})
+c.request('GET', '/admin/api/v1/backup', headers={'x-askbar-admin': '1', 'cookie': cookie})
 r = c.getresponse(); raw = r.read()
 assert r.status == 200, r.status
 names = sorted(m.name for m in tarfile.open(fileobj=io.BytesIO(raw)).getmembers())
@@ -219,11 +284,26 @@ blob = b''.join(tarfile.open(fileobj=io.BytesIO(raw)).extractfile(n).read() for 
 print('names', ','.join(names))
 for label, needle in (('provider key', '$MARK'), ('pair code', code), ('password hash', '\$argon2')):
     print(label, 'FOUND' if needle.encode() in blob else 'absent')
-call('DELETE', '/admin/api/providers/' + provider_id)" 2>&1)
+call('DELETE', '/admin/api/v1/providers/' + provider_id)" 2>&1)
 printf '%s\n' "$out" | grep -q '^names .*admin.db.*server.db' && pass "the backup holds admin.db and server.db" || fail "backup contents: $out"
 for what in "provider key" "pair code" "password hash"; do
   printf '%s\n' "$out" | grep -q "^$what absent" && pass "the backup holds no $what" || fail "the backup holds the $what ($out)"
 done
+
+echo "== 6. The first-run page"
+# Caddy serves the admin over plain HTTP on 127.0.0.1:8081 of the host, on a network only Caddy joins.
+SETUP_CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:8081/admin/ 2>/dev/null || true)
+[ "$SETUP_CODE" = 200 ] && pass "http://127.0.0.1:8081/admin/ opens the admin" || fail "the first-run page answered '$SETUP_CODE'"
+for path in / /api/client/v1/health /api/server/v1/health /api/v1/health /health; do
+  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1:8081$path" 2>/dev/null || true)
+  [ "$code" = 404 ] && pass "the first-run page has nothing at $path (404)" || fail "the first-run page answers $path with '$code'"
+done
+[ "$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$CADDY" | tr ' ' '\n' | grep -c "^${PROJECT}_admin-setup$")" = 1 ] && pass "Caddy is on the admin-setup network" || fail "Caddy is not on the admin-setup network"
+for c in "$SERVER" "$ADMIN"; do
+  docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$c" | grep -q "${PROJECT}_admin-setup" && fail "$c is on the admin-setup network" || pass "$c is not on the admin-setup network"
+done
+# Nothing on the edge network can open the first-run page.
+[ "$(http_status "$EDGE" "caddy:8081")" = 0 ] && pass "a container on edge cannot reach the first-run page" || fail "the first-run page answers on the edge network"
 
 echo
 if [ "$FAILS" -eq 0 ]; then echo "All isolation checks passed."; else echo "$FAILS isolation check(s) FAILED."; exit 1; fi

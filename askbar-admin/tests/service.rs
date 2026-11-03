@@ -20,11 +20,11 @@ fn migrations_apply_and_the_defaults_are_safe() {
         let mut stmt = db.conn().prepare("SELECT name FROM sqlite_master WHERE type = 'table'").unwrap();
         stmt.query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect()
     };
-    for t in ["admin_credentials", "providers", "settings", "display_defaults", "pair_codes", "budgets", "network_settings", "revoked_devices"] {
+    for t in ["admin_credentials", "providers", "settings", "display_defaults", "pair_codes", "budgets", "network_settings", "revoked_clients", "audit_keys", "audit_access"] {
         assert!(tables.iter().any(|x| x == t), "missing {t}");
     }
     let v: i64 = db.conn().query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-    assert_eq!(v, 3);
+    assert_eq!(v, 8);
     // No password until setup; no limits; the IP allowlist and HTTPS start switched off.
     let creds: i64 = db.conn().query_row("SELECT COUNT(*) FROM admin_credentials", [], |r| r.get(0)).unwrap();
     assert_eq!(creds, 0);
@@ -107,7 +107,7 @@ fn sessions_are_in_memory_tokens_that_can_end() {
 fn get_health(path: &std::path::Path) -> String {
     let mut s = UnixStream::connect(path).unwrap();
     s.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
-    s.write_all(b"GET /health HTTP/1.0\r\nHost: admin\r\n\r\n").unwrap();
+    s.write_all(b"GET /admin/api/v1/health HTTP/1.0\r\nHost: admin\r\n\r\n").unwrap();
     let mut out = String::new();
     s.read_to_string(&mut out).unwrap();
     out
@@ -152,13 +152,13 @@ fn the_binary_serves_a_socket_and_opens_no_tcp_port() {
     let dir = temp("bin");
     let sock = dir.join("admin.sock");
     let bin = env!("CARGO_BIN_EXE_askbar-admin");
-    // The secrets and management directories default to absolute container paths a normal user cannot create.
-    let (secrets, mgmt) = (dir.join("secrets"), dir.join("mgmt"));
+    // The secrets and token directories default to absolute container paths a normal user cannot create.
+    let (secrets, server_api) = (dir.join("secrets"), dir.join("server-token"));
     let envs = [
         ("ASKBAR_ADMIN_SOCKET", sock.to_str().unwrap()),
         ("ASKBAR_ADMIN_DATA_DIR", dir.to_str().unwrap()),
         ("ASKBAR_ADMIN_SECRETS_DIR", secrets.to_str().unwrap()),
-        ("ASKBAR_MGMT_DIR", mgmt.to_str().unwrap()),
+        ("ASKBAR_SERVER_TOKEN_DIR", server_api.to_str().unwrap()),
     ];
     let mut child = std::process::Command::new(bin).envs(envs).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn().unwrap();
     for _ in 0..100 {

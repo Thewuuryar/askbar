@@ -9,7 +9,17 @@ use sha2::{Digest, Sha256};
 
 pub const TEST_MASTER_KEY: &str = "0123456789abcdef0123456789abcdef";
 
-/// A snapshot with nothing in it.
+/// The secret half of the test audit key (the tests that read what was sealed use it).
+pub const TEST_AUDIT_SECRET: [u8; 32] = [9; 32];
+
+/// The public key of `TEST_AUDIT_SECRET`, as a snapshot carries it. `empty_snapshot` includes it,
+/// so tests that start generations through the helpers have a key unless they remove it.
+pub fn test_audit_key() -> askbar_proto::AuditKey {
+    let public = *crypto_box::SecretKey::from(TEST_AUDIT_SECRET).public_key().as_bytes();
+    askbar_proto::AuditKey { key_id: crate::seal::key_id(&public), public_key: public.iter().map(|b| format!("{b:02x}")).collect() }
+}
+
+/// A snapshot with nothing in it, apart from the test audit key.
 pub fn empty_snapshot() -> Snapshot {
     Snapshot {
         version: 0,
@@ -20,10 +30,13 @@ pub fn empty_snapshot() -> Snapshot {
         display: DisplaySettings::default(),
         user_display_defaults: Default::default(),
         pair_codes: vec![],
-        revoked_device_ids: vec![],
+        revoked_client_ids: vec![],
         budget: Budget::default(),
         kill_switch: false,
+        kill_switch_aborts_running: true,
         audit_retention_days: 30,
+        generation_timeout_secs: 300,
+        audit_public_key: Some(test_audit_key()),
     }
 }
 
@@ -38,6 +51,11 @@ pub fn provider(id: &str, name: &str, base_url: &str, model: &str) -> SnapshotPr
         max_tokens: None,
         temperature: None,
         headers: Default::default(),
+        billing: Default::default(),
+        allow_as_fallback: false,
+        price_in: None,
+        price_out: None,
+        price_cached_in: None,
     }
 }
 
@@ -56,7 +74,7 @@ pub fn add_provider(db: &Db, p: SnapshotProvider) {
     });
 }
 
-/// Store an API key for a provider the way the management API would.
+/// Store an API key for a provider the way the server API would.
 pub fn store_key(db: &Db, secrets: &crate::secrets::Secrets, provider_id: &str, key: &str) {
     db.conn()
         .execute(
@@ -67,16 +85,77 @@ pub fn store_key(db: &Db, secrets: &crate::secrets::Secrets, provider_id: &str, 
 }
 
 /// A one-time pairing code for `user_id`, listed in the snapshot (valid for ten minutes).
-pub fn add_pair_code(db: &Db, user_id: &str, device_name: &str) -> String {
-    add_pair_code_expiring(db, user_id, device_name, 600)
+pub fn add_pair_code(db: &Db, user_id: &str, client_name: &str) -> String {
+    add_pair_code_expiring(db, user_id, client_name, 600)
 }
 
 /// Like `add_pair_code`, valid for `ttl_secs` from now (negative: already expired).
-pub fn add_pair_code_expiring(db: &Db, user_id: &str, device_name: &str, ttl_secs: i64) -> String {
+pub fn add_pair_code_expiring(db: &Db, user_id: &str, client_name: &str, ttl_secs: i64) -> String {
     let code = ids::new_id() + &ids::new_id();
     let hash: String = Sha256::digest(code.as_bytes()).iter().map(|b| format!("{b:02x}")).collect();
     update_snapshot(db, |s| {
-        s.pair_codes.push(SnapshotPairCode { hash, user_id: user_id.into(), device_name: device_name.into(), expires_at: auth::now() + ttl_secs })
+        s.pair_codes.push(SnapshotPairCode { hash, user_id: user_id.into(), client_name: client_name.into(), expires_at: auth::now() + ttl_secs })
     });
     code
+}
+
+/// An `AppState` over an empty in-memory database, for unit tests.
+pub fn state_for_tests() -> std::sync::Arc<crate::AppState> {
+    crate::AppState::new(Db::open_in_memory().unwrap(), crate::secrets::Secrets::new(TEST_MASTER_KEY).unwrap(), crate::MIN_CLIENT)
+}
+
+/// A recorder writing `audit.db` in a fresh temp directory, which is returned too. For tests.
+pub fn audit_recorder() -> (crate::audit::Recorder, std::path::PathBuf) {
+    let dir = std::env::temp_dir().join(format!("askbar-audit-test-{}", ids::new_id()));
+    let db = crate::audit::AuditDb::open(&dir.join("audit.db")).expect("audit.db opens");
+    (crate::audit::Recorder::spawn(db, 1024), dir)
+}
+
+/// An `AppState` over an in-memory database with a provider "p1" pointing at `base_url` (its key
+/// stored), a user, and a recorder writing a temp `audit.db`; returns the state and that
+/// directory. For tests.
+pub fn state_with_audit(base_url: &str) -> (std::sync::Arc<crate::AppState>, std::path::PathBuf) {
+    let db = Db::open_in_memory().unwrap();
+    db.seed_server().unwrap();
+    let secrets = crate::secrets::Secrets::new(TEST_MASTER_KEY).unwrap();
+    add_provider(&db, provider("p1", "mock", base_url, "m"));
+    store_key(&db, &secrets, "p1", "sk-test");
+    let (recorder, dir) = audit_recorder();
+    (crate::AppState::new(db, secrets, crate::MIN_CLIENT).with_audit(recorder), dir)
+}
+
+/// Make generations started from now on time out after `d` instead of the snapshot's value.
+pub fn override_generation_timeout(state: &crate::AppState, d: std::time::Duration) {
+    state.set_generation_timeout_override(Some(d));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn new_records_nothing_and_with_audit_gives_a_state_its_recorder() {
+        let plain = state_for_tests();
+        assert!(plain.audit.healthy() && plain.audit.dropped() == 0, "the default recorder is a healthy no-op");
+        let (state, dir) = state_with_audit("http://127.0.0.1:1/v1");
+        assert!(dir.join("audit.db").exists(), "the audit store is opened beside the state");
+        assert!(state.audit.healthy());
+        assert!(crate::store::load_provider(&state.db.lock().unwrap(), &state.secrets(), "p1").unwrap().is_some(), "with its provider");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn the_timeout_override_can_be_set_read_back_and_cleared() {
+        let state = crate::AppState::new(
+            Db::open_in_memory().unwrap(),
+            crate::secrets::Secrets::new(TEST_MASTER_KEY).unwrap(),
+            crate::MIN_CLIENT,
+        );
+        assert_eq!(state.generation_timeout_override(), None);
+        override_generation_timeout(&state, Duration::from_secs(2));
+        assert_eq!(state.generation_timeout_override(), Some(Duration::from_secs(2)));
+        state.set_generation_timeout_override(None);
+        assert_eq!(state.generation_timeout_override(), None);
+    }
 }

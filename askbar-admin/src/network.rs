@@ -3,6 +3,7 @@
 //! None of this needs a restart; the Caddy step turns it into proxy config.
 
 use crate::web::{err, Failure};
+use askbar_proto::http::ApiJson;
 use crate::AdminState;
 use axum::{extract::State, http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
@@ -12,7 +13,7 @@ use std::sync::Arc;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct Network {
     pub tls_enabled: bool,
-    /// The API's name, for example `askbar.example.com`. The admin site is `admin.` plus this.
+    /// The API's name, for example `askbar.example.com`. The admin site is at `/admin` on the same name.
     pub hostname: String,
     /// Space- or comma-separated addresses and CIDRs allowed to open the admin site.
     pub admin_cidr: String,
@@ -97,7 +98,7 @@ fn view(state: &AdminState, conn: &rusqlite::Connection) -> rusqlite::Result<Net
     Ok(NetworkView {
         network: load(conn)?,
         has_token: stored_token(conn).is_some(),
-        public_url: crate::api::public_url(conn),
+        public_url: crate::admin_api::public_url(conn),
         proxy: state.proxy.lock().unwrap_or_else(|e| e.into_inner()).clone(),
     })
 }
@@ -176,7 +177,7 @@ async fn save(state: &AdminState, input: NetworkInput) -> Result<(), Failure> {
     Ok(())
 }
 
-pub async fn put_network(State(state): State<Arc<AdminState>>, Json(input): Json<NetworkInput>) -> Result<Json<NetworkView>, Failure> {
+pub async fn put_network(State(state): State<Arc<AdminState>>, ApiJson(input): ApiJson<NetworkInput>) -> Result<Json<NetworkView>, Failure> {
     save(&state, input).await?;
     // Saved. Now tell Caddy; if that fails the settings stay and the result says why.
     crate::caddy::apply(&state).await;

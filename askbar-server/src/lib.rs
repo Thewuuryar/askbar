@@ -1,21 +1,28 @@
-//! Askbar server: the device API and, on its own listener, the management API the admin service uses.
+//! Askbar server: the client API and, on its own listener, the server API the admin service uses.
 
-pub mod api;
+pub mod client_api;
+pub mod audit;
 pub mod auth;
 pub mod backup;
 pub mod chat;
+pub mod cost;
 pub mod db;
+pub mod error;
+pub mod generation;
 pub mod ids;
 pub mod llm;
-pub mod mgmt;
+pub mod server_api;
 pub mod provider_test;
+pub mod router;
+pub mod routes;
+pub mod seal;
 pub mod secrets;
 pub mod snapshot;
 pub mod store;
 #[doc(hidden)]
 pub mod testing;
 
-pub use db::{make_title, ConversationSummary, Db, DbError, SearchHit, StoredMessage};
+pub use db::{make_title, ConversationSummary, Db, DbError, Generation, SearchHit, StoredMessage};
 use askbar_proto::{Health, PairRequest, PairResponse};
 use axum::{
     extract::{Request, State},
@@ -23,14 +30,15 @@ use axum::{
     middleware,
     middleware::Next,
     response::Response,
-    routing::{get, post},
     Json, Router,
 };
+use askbar_proto::problem::ErrorCode;
+use error::{ApiError, ApiJson};
 use secrets::Secrets;
 use std::sync::{Arc, Mutex};
 
 pub const API_VERSION: u32 = 1;
-pub const MIN_CLIENT: &str = "0.3.0";
+pub const MIN_CLIENT: &str = "0.5.0";
 
 pub struct AppState {
     pub db: Mutex<Db>,
@@ -38,11 +46,37 @@ pub struct AppState {
     pub http: llm::HttpClient,
     /// Oldest client version the API still serves.
     pub min_client: String,
+    /// Running generations and their buffered output.
+    pub generations: generation::Generations,
+    /// Where generations leave their audit trace. Records nothing unless `with_audit` set one.
+    pub audit: audit::Recorder,
+    /// Tests only: replaces the configured generation timeout (see `testing`).
+    generation_timeout_override: Mutex<Option<std::time::Duration>>,
 }
 
 impl AppState {
     pub fn new(db: Db, secrets: Secrets, min_client: &str) -> Arc<AppState> {
-        Arc::new(AppState { db: Mutex::new(db), secrets: Arc::new(secrets), http: llm::http_client(), min_client: min_client.to_string() })
+        Arc::new(AppState { db: Mutex::new(db), secrets: Arc::new(secrets), http: llm::http_client(), min_client: min_client.to_string(), generations: Default::default(), audit: audit::Recorder::noop(), generation_timeout_override: Mutex::new(None) })
+    }
+
+    /// Gives a fresh state an audit recorder. `new` keeps its signature and records nothing, so
+    /// code and tests that do not care about the audit store are unchanged.
+    pub fn with_audit(self: Arc<Self>, recorder: audit::Recorder) -> Arc<AppState> {
+        let mut state = Arc::try_unwrap(self).unwrap_or_else(|_| panic!("with_audit is for a state nothing else holds yet"));
+        state.audit = recorder;
+        Arc::new(state)
+    }
+
+    /// Tests only: make every generation started from now on use `d` as its timeout, whatever the
+    /// snapshot says, so a test need not wait 30 seconds.
+    #[doc(hidden)]
+    pub fn set_generation_timeout_override(&self, d: Option<std::time::Duration>) {
+        *self.generation_timeout_override.lock().unwrap_or_else(|e| e.into_inner()) = d;
+    }
+
+    #[doc(hidden)]
+    pub fn generation_timeout_override(&self) -> Option<std::time::Duration> {
+        *self.generation_timeout_override.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     pub fn secrets(&self) -> Arc<Secrets> {
@@ -50,42 +84,65 @@ impl AppState {
     }
 }
 
-pub fn api_router(state: Arc<AppState>) -> Router {
-    // Everything that needs a device token goes in `protected`.
-    let protected: Router<Arc<AppState>> = Router::new()
+/// All of the client API's routes, with the list of what was registered (see `routes`).
+pub fn client_routes(state: &Arc<AppState>) -> routes::Routes {
+    use routes::Routes;
+    // Every route is under `/api/client/v1` (askbar_proto::paths::CLIENT_V1).
+    let v1 = |rest: &str| askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, rest);
+    let token = || middleware::from_fn_with_state(state.clone(), auth::require_client_token);
+    let version = || middleware::from_fn_with_state(state.clone(), require_client_version);
+    // Everything that needs a client token.
+    let protected = Routes::new()
         // Lets a client check that its token is still accepted.
-        .route("/api/v1/whoami", get(|| async { StatusCode::NO_CONTENT }))
-        .route("/api/v1/providers", get(api::providers))
-        .route("/api/v1/conversations", get(api::conversations))
-        .route("/api/v1/conversations/{id}", get(api::conversation).delete(api::delete_conversation))
-        .route("/api/v1/me/prefs", get(api::get_prefs).put(api::put_prefs))
-        .route("/api/v1/me/display-defaults", get(api::display_defaults))
-        .route("/api/v1/search", get(api::search))
-        .route("/api/v1/settings", get(api::settings))
-        .route("/api/v1/chat", post(chat::chat))
-        .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_device_token));
+        .get(&v1("/me"), || async { StatusCode::NO_CONTENT })
+        .get(&v1("/providers"), client_api::providers)
+        .get(&v1("/conversations"), client_api::conversations)
+        .get(&v1("/conversations/{id}"), client_api::conversation)
+        .delete(&v1("/conversations/{id}"), client_api::delete_conversation)
+        .get(&v1("/me/prefs"), client_api::get_prefs)
+        .put(&v1("/me/prefs"), client_api::put_prefs)
+        .get(&v1("/me/display-defaults"), client_api::display_defaults)
+        .get(&v1("/search"), client_api::search)
+        .get(&v1("/settings"), client_api::settings)
+        .post(&v1("/chat"), chat::chat)
+        .get(&v1("/generations"), client_api::generations)
+        .get(&v1("/generations/{id}/stream"), generation::stream)
+        .post(&v1("/generations/{id}/cancel"), generation::cancel)
+        .guarded(|r| r.route_layer(token()));
     // Everything except health checks the client version first.
-    let gated = Router::new()
-        .route("/api/v1/pair", post(pair))
-        .merge(protected)
-        .route_layer(middleware::from_fn_with_state(state.clone(), require_client_version));
-    Router::new()
-        .route("/api/v1/health", get(health))
+    let gated = Routes::new().post(&v1("/pairings"), pair).merge(protected).guarded(|r| r.route_layer(version()));
+    Routes::new()
+        .get(&v1("/health"), health)
+        // The first generation of the API lived at /api/v1. It serves nothing now; every request there, of any
+        // method and with or without a token, is told to update the app.
+        .any(&askbar_proto::paths::join(askbar_proto::paths::TOMBSTONE_V1, "/{*rest}"), update_the_app)
         .merge(gated)
+}
+
+pub fn client_router(state: Arc<AppState>) -> Router {
+    let (router, _) = client_routes(&state).into_parts();
+    router
+        .fallback(error::not_found)
+        .method_not_allowed_fallback(error::method_not_allowed)
         .with_state(state)
         .layer(middleware::from_fn(log_requests))
 }
 
+/// The answer to anything under the old `/api/v1` prefix.
+async fn update_the_app(State(state): State<Arc<AppState>>) -> ApiError {
+    ApiError::code(ErrorCode::ClientTooOld).with("min_client", state.min_client.clone())
+}
+
 /// 400 if the client sends no usable version header, 426 if it is older than `min_client`.
-async fn require_client_version(State(state): State<Arc<AppState>>, req: Request, next: Next) -> Result<Response, StatusCode> {
+async fn require_client_version(State(state): State<Arc<AppState>>, req: Request, next: Next) -> Result<Response, ApiError> {
     let sent = req
         .headers()
         .get(askbar_proto::CLIENT_VERSION_HEADER)
         .and_then(|v| v.to_str().ok())
         .and_then(askbar_proto::parse_version)
-        .ok_or(StatusCode::BAD_REQUEST)?;
+        .ok_or_else(|| ApiError::code(ErrorCode::ClientVersionMissing))?;
     match askbar_proto::parse_version(&state.min_client) {
-        Some(min) if sent < min => Err(StatusCode::UPGRADE_REQUIRED),
+        Some(min) if sent < min => Err(ApiError::code(ErrorCode::ClientTooOld).with("min_client", state.min_client.clone())),
         _ => Ok(next.run(req).await),
     }
 }
@@ -94,12 +151,12 @@ async fn health(State(state): State<Arc<AppState>>) -> Json<Health> {
     Json(Health { api_version: API_VERSION, min_client: state.min_client.clone() })
 }
 
-async fn pair(State(state): State<Arc<AppState>>, Json(req): Json<PairRequest>) -> Result<Json<PairResponse>, StatusCode> {
+async fn pair(State(state): State<Arc<AppState>>, ApiJson(req): ApiJson<PairRequest>) -> Result<Json<PairResponse>, ApiError> {
     let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
     match auth::redeem_pair_code(&db, req.code.trim()) {
         Ok(Some(token)) => Ok(Json(PairResponse { token })),
-        Ok(None) => Err(StatusCode::UNAUTHORIZED),
-        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+        Ok(None) => Err(ApiError::new(ErrorCode::Unauthorized, "That pairing code is not valid. It may have expired or been used already.")),
+        Err(_) => Err(ApiError::code(ErrorCode::Internal)),
     }
 }
 

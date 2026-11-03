@@ -1,9 +1,14 @@
 [package]
-name = "askbar"
+name = "askbar-client"
 license = "AGPL-3.0-or-later"
-version = "0.3.0"
+version = "0.5.0"
 edition = "2021"
 description = "A Spotlight-style, conversation-only AI popup"
+
+# The package is askbar-client; the program, installers and product stay "askbar".
+[[bin]]
+name = "askbar"
+path = "src/main.rs"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -23,6 +28,7 @@ url = "2"
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 askbar-proto = { path = "../askbar-proto" }
 opener = { version = "0.8", features = ["reveal"] }
+uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
 askbar-server = { path = "../askbar-server" }

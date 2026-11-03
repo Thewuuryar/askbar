@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1"> <!-- names-ok -->
   <title>Askbar admin</title>
   <link rel="stylesheet" href="/admin/style.css">
 </head>
@@ -17,6 +17,22 @@
       <button type="submit">Set password</button>
       <p id="setup-password-error" class="error" hidden></p>
     </form>
+    <form id="setup-audit-form" hidden>
+      <h2>Choose the audit passphrase</h2>
+      <p class="hint">Prompts, replies and provider errors are recorded for the Audit tab, sealed so that the server cannot read them. Only this passphrase opens them. At least 20 characters.</p>
+      <p class="hint"><strong>It is never stored and cannot be recovered.</strong> If it is lost, the recorded content stays unreadable for good; the metadata (times, providers, tokens, errors) stays available.</p>
+      <label>Passphrase <input id="setup-audit" type="password" autocomplete="new-password" minlength="20" required></label>
+      <label>Repeat passphrase <input id="setup-audit2" type="password" autocomplete="new-password" minlength="20" required></label>
+      <label class="check"><input id="setup-audit-stored" type="checkbox" required> I stored this passphrase; it cannot be recovered</label>
+      <button type="submit">Create the key</button>
+      <p id="setup-audit-error" class="error" hidden></p>
+    </form>
+    <div id="setup-audit-done" hidden>
+      <h2>The audit key is ready</h2>
+      <p>Key ID: <code id="setup-audit-keyid"></code></p>
+      <p class="hint">The key ID names the key; it is safe to write down next to the passphrase. Changing the passphrase later means rotating the key (Settings).</p>
+      <button id="setup-audit-continue" type="button">Continue</button>
+    </div>
   </main>
 
   <main id="login" class="narrow" hidden>
@@ -35,7 +51,7 @@
       <button type="button" id="logout" class="link">Sign out</button>
     </header>
     <main>
-      <p id="offline" class="flash error" role="alert" hidden>Server offline. The admin can't reach the Askbar server, so changes, tests, devices and backups won't work until it is back. Nothing you change now is lost or half-saved.</p>
+      <p id="offline" class="flash error" role="alert" hidden>Server offline. The admin can't reach the Askbar server, so changes, tests, clients and backups won't work until it is back. Nothing you change now is lost or half-saved.</p>
       <p id="flash" class="flash" role="status" hidden></p>
 
       <section id="tab-providers" data-tab="providers">
@@ -60,6 +76,14 @@
           <label>API key <input id="p-key" type="password" autocomplete="off" placeholder="write-only"></label>
           <label>Max tokens <input id="p-max-tokens" type="number" min="1"></label>
           <label>Temperature <input id="p-temperature" type="number" step="0.1" min="0" max="2"></label>
+          <label>Billing
+            <select id="p-billing"><option value="metered">metered (paid per token)</option><option value="subscription">subscription (flat plan)</option></select>
+          </label>
+          <label class="check"><input id="p-fallback" type="checkbox"> May be used as a fallback when another provider fails (a metered provider is otherwise never used that way)</label>
+          <p class="hint">Prices per million tokens, in your own currency. Leave empty if you do not know: cost then shows as unknown, not as zero.</p>
+          <label>Input price <input id="p-price-in" type="number" step="any" min="0"></label>
+          <label>Output price <input id="p-price-out" type="number" step="any" min="0"></label>
+          <label>Cached input price <input id="p-price-cached" type="number" step="any" min="0"></label>
           <div class="row">
             <button type="submit">Save</button>
             <button type="button" id="provider-cancel" class="secondary">Cancel</button>
@@ -68,29 +92,136 @@
         </form>
       </section>
 
-      <section id="tab-devices" data-tab="devices" hidden>
-        <h2>Devices</h2>
+      <section id="tab-clients" data-tab="clients" hidden>
+        <h2>Clients</h2>
         <form id="pair-form" class="panel">
-          <h3>Pair a new device</h3>
-          <label>Device name <input id="d-name" placeholder="Work laptop" maxlength="60"></label>
+          <h3>Pair a new client</h3>
+          <label>Client name <input id="d-name" placeholder="Work laptop" maxlength="60"></label>
           <div class="row"><button type="submit">Generate pairing string</button></div>
           <div id="pairing-out" hidden>
-            <label>Paste this into Askbar on the new device (tray icon, Pair with server). It works once and expires in 10 minutes.
+            <label>Paste this into Askbar in the app you are pairing (tray icon, Pair with server). It works once and expires in 10 minutes.
               <textarea id="pairing-string" rows="3" readonly></textarea>
             </label>
             <div class="row"><button type="button" id="pairing-copy" class="secondary">Copy</button></div>
           </div>
           <p id="pair-error" class="error" hidden></p>
         </form>
-        <div id="devices"></div>
+        <div id="clients"></div>
+      </section>
+
+      <section id="tab-audit" data-tab="audit" hidden>
+        <h2>Audit</h2>
+        <p class="hint">What the server recorded about each reply: when, for whom, through which provider, how long it took, what it used and how it ended. Message content is sealed; opening it asks for the audit passphrase and is logged.</p>
+        <p id="audit-error" class="error" hidden></p>
+        <div id="audit-nav" class="subnav" role="tablist" aria-label="Audit views">
+          <button type="button" role="tab" data-sub="overview" aria-selected="true">Overview</button>
+          <button type="button" role="tab" data-sub="requests" aria-selected="false">Requests</button>
+          <button type="button" role="tab" data-sub="trace" aria-selected="false">Trace</button>
+          <button type="button" role="tab" data-sub="routing" aria-selected="false">Routing</button>
+          <button type="button" role="tab" data-sub="content" aria-selected="false">Content</button>
+        </div>
+        <div id="audit-overview" data-subview="overview">
+          <div class="row">
+            <label>Window
+              <select id="audit-window">
+                <option value="86400">Last 24 hours</option>
+                <option value="604800">Last 7 days</option>
+                <option value="2592000">Last 30 days</option>
+              </select>
+            </label>
+          </div>
+          <p class="hint empty" id="audit-overview-empty">Nothing recorded in this window yet.</p>
+          <div id="audit-tiles" class="tiles" hidden></div>
+          <p class="hint" id="audit-cost-note" hidden></p>
+          <h3 id="audit-days-title" hidden>By day</h3>
+          <div id="audit-days" class="bars"></div>
+          <h3 id="audit-providers-title" hidden>By provider</h3>
+          <div id="audit-by-provider" class="bars"></div>
+        </div>
+        <div id="audit-requests" data-subview="requests" hidden>
+          <div class="row filters">
+            <label>Status
+              <select id="audit-f-status">
+                <option value="">Any</option>
+                <option value="done">done</option>
+                <option value="error">error</option>
+                <option value="cancelled">cancelled</option>
+                <option value="timed_out">timed out</option>
+                <option value="interrupted">interrupted</option>
+              </select>
+            </label>
+            <label>Provider <select id="audit-f-provider"><option value="">Any</option></select></label>
+          </div>
+          <p class="hint empty" id="audit-requests-empty">No requests recorded yet.</p>
+          <div class="table-wrap">
+            <table id="audit-table" hidden>
+              <thead><tr><th>Time</th><th>User</th><th>Provider</th><th>Model</th><th>Status</th><th>Latency</th><th>Tokens (in → out)</th><th>Cost</th></tr></thead>
+              <tbody id="audit-rows"></tbody>
+            </table>
+          </div>
+          <div class="row"><button type="button" id="audit-more" class="secondary" hidden>Load more</button></div>
+        </div>
+        <div id="audit-trace" data-subview="trace" hidden>
+          <p class="hint empty" id="audit-trace-empty">Pick a request on the Requests view to see its trace.</p>
+          <div id="audit-trace-head" hidden></div>
+          <div id="audit-waterfall" class="waterfall" role="list" hidden></div>
+          <pre id="audit-span-details" class="span-details" aria-live="polite" hidden></pre>
+        </div>
+        <div id="audit-routing" data-subview="routing" hidden>
+          <h3>This request</h3>
+          <p class="hint empty" id="audit-routing-empty">Pick a request on the Requests view to see how it was routed.</p>
+          <div class="table-wrap">
+            <table id="audit-attempts" hidden>
+              <thead><tr><th>Provider</th><th>Try</th><th>Standing in for</th><th>Status</th><th>Kind of failure</th><th>Reason</th><th>Latency</th></tr></thead>
+              <tbody id="audit-attempt-rows"></tbody>
+            </table>
+          </div>
+          <h3>Providers, in the chosen window</h3>
+          <p class="hint empty" id="audit-routing-overall-empty">No tries recorded in this window yet.</p>
+          <div class="table-wrap">
+            <table id="audit-routing-table" hidden>
+              <thead><tr><th>Provider</th><th>Tries</th><th>Retries</th><th>Served as fallback</th><th>Failed tries</th><th>Credentials</th></tr></thead>
+              <tbody id="audit-routing-rows"></tbody>
+            </table>
+          </div>
+        </div>
+        <div id="audit-content" data-subview="content" hidden>
+          <p class="hint empty" id="audit-content-empty">Pick a request on the Requests view to see its sealed content.</p>
+          <div id="audit-sealed"></div>
+          <h3>Access history</h3>
+          <p class="hint">Every time sealed content was opened, or someone tried the wrong passphrase. It records the request, the key and the time, never the content.</p>
+          <p class="hint empty" id="audit-access-empty">Nothing has been opened yet.</p>
+          <div class="table-wrap">
+            <table id="audit-access" hidden>
+              <thead><tr><th>Time</th><th>Span</th><th>Key</th><th>Result</th></tr></thead>
+              <tbody id="audit-access-rows"></tbody>
+            </table>
+          </div>
+          <dialog id="audit-pass-dialog" aria-labelledby="audit-pass-title">
+            <form method="dialog" id="audit-pass-form">
+              <h3 id="audit-pass-title">Open sealed content</h3>
+              <p class="hint" id="audit-pass-what"></p>
+              <div id="audit-ask">
+                <label>Audit passphrase <input id="audit-pass" type="password" autocomplete="off" spellcheck="false"></label>
+                <p class="hint">Opening content is recorded in the access history.</p>
+              </div>
+              <p id="audit-pass-error" class="error" hidden></p>
+              <pre id="audit-plain" class="plain"></pre>
+              <div class="row">
+                <button type="submit" id="audit-pass-ok">Open</button>
+                <button type="button" id="audit-pass-cancel" class="secondary">Cancel</button>
+              </div>
+            </form>
+          </dialog>
+        </div>
       </section>
 
       <section id="tab-backup" data-tab="backup" hidden>
         <h2>Backup</h2>
         <div class="panel">
-          <p>Download a backup: the server's database (conversations, settings and paired devices) and this admin's own settings, as a <code>.tar</code> file with <code>server.db</code> and <code>admin.db</code>.</p>
+          <p>Download a backup: the server's database (conversations, settings and paired clients) and this admin's own settings, as a <code>.tar</code> file with <code>server.db</code> and <code>admin.db</code>.</p>
           <p class="hint">Provider API keys, the Cloudflare token, the admin password and pairing codes are left out. After restoring, enter the keys again on the Providers page. The server's master key is not in this file: back up its <code>askbar-secrets</code> volume separately.</p>
-          <p><a class="button" id="backup-link" href="/admin/api/backup" download>Download backup</a></p>
+          <p><a class="button" id="backup-link" href="/admin/api/v1/backup" download>Download backup</a></p>
         </div>
       </section>
 
@@ -100,7 +231,7 @@
           <label class="check"><input id="n-tls" type="checkbox"> Serve over HTTPS (through the Caddy front end)</label>
           <label>Hostname <input id="n-host" placeholder="askbar.example.com" autocomplete="off" spellcheck="false"></label>
           <label>Cloudflare API token <input id="n-token" type="password" autocomplete="off" placeholder="write-only"></label>
-          <p class="hint">Used only to prove ownership of the hostname to Let's Encrypt (permissions Zone:DNS:Edit and Zone:Zone:Read). It is stored encrypted and never shown again. The API is served at the hostname and this admin site at <code>admin.</code> plus the hostname.</p>
+          <p class="hint">Used only to prove ownership of the hostname to Let's Encrypt (permissions Zone:DNS:Edit and Zone:Zone:Read). It is stored encrypted and never shown again. The apps reach the server at the hostname, and this admin site is at <code>/admin</code> on the same hostname.</p>
           <label class="check" id="n-clear-row" hidden><input id="n-clear" type="checkbox"> Remove the stored token</label>
           <label class="check"><input id="n-allow" type="checkbox"> Only let these addresses open the admin site over HTTPS (off: anyone who can reach it may try to sign in)</label>
           <label>Allowed addresses and networks <input id="n-cidr" placeholder="192.168.1.0/24 10.0.0.5" autocomplete="off" spellcheck="false"></label>
@@ -124,6 +255,25 @@
           <p class="hint">Other signed-in browsers are signed out.</p>
           <p id="pw-error" class="error" hidden></p>
         </form>
+        <div id="key-panel" class="panel">
+          <h3>Admin API key</h3>
+          <p class="hint">For scripts. Send it as <code>Authorization: Bearer &lt;key&gt;</code> to <code>/admin/api/v1</code>. It can do what this site can, except manage keys, change the password or sign in. One key at a time. It is shown once, when you make it.</p>
+          <form id="key-form">
+            <label>Name <input id="key-name" maxlength="60" placeholder="build server" autocomplete="off" required></label>
+            <div class="row"><button type="submit" id="key-create">Create key</button></div>
+          </form>
+          <div id="key-row" class="sealed-row" hidden>
+            <span class="what"><strong id="key-row-name"></strong> <span id="key-row-times" class="hint"></span></span>
+            <button type="button" id="key-revoke" class="danger">Revoke</button>
+          </div>
+          <p id="key-error" class="error" hidden></p>
+          <dialog id="key-dialog" aria-labelledby="key-dialog-title">
+            <h3 id="key-dialog-title">Your new API key</h3>
+            <p class="hint"><strong>This is the only time the key is shown.</strong> Copy it now and keep it somewhere safe. If you lose it, revoke it and make another.</p>
+            <pre id="key-value" class="plain"></pre>
+            <div class="row"><button type="button" id="key-copy">Copy</button><button type="button" id="key-close" class="secondary">I have copied it</button></div>
+          </dialog>
+        </div>
       </section>
 
       <section id="tab-settings" data-tab="settings" hidden>
@@ -132,6 +282,18 @@
           <h3>System prompt</h3>
           <p class="hint">Sent with every message. It is never shown to clients.</p>
           <label>Prompt <textarea id="s-prompt" rows="8"></textarea></label>
+          <h3>Reply time limit</h3>
+          <p class="hint">A reply still running after this long is stopped and the text so far is kept. The default is 300 seconds (5 minutes); allowed 30 to 3600. A message that waits in the queue is timed from when it starts.</p>
+          <label>Generation timeout (seconds) <input id="s-gen-timeout" type="number" min="30" max="3600" step="1"></label>
+          <p id="s-gen-timeout-min" class="hint"></p>
+          <h3>Kill switch</h3>
+          <p class="hint">Switched on, the server starts no new replies and clears the messages waiting in queues. Clients see a clear message.</p>
+          <label class="check"><input id="s-kill-switch" type="checkbox"> Switch off all replies</label>
+          <label class="check"><input id="s-kill-aborts" type="checkbox"> Also stop the replies that are running when it goes on (otherwise they finish)</label>
+          <h3>Audit</h3>
+          <p class="hint">How long the audit records are kept before they are deleted (7 days at least, always; the audit database itself refuses to delete anything younger).</p>
+          <label>Keep audit records for (days) <input id="s-retention" type="number" min="7" max="3650" step="1"></label>
+          <p class="hint">Sealing key: <code id="s-key-id">none</code></p>
           <h3>Display defaults</h3>
           <p class="hint">Clients use these unless their own client.yaml overrides them.</p>
           <label>Theme
@@ -145,6 +307,15 @@
           <div class="row"><button type="submit">Save settings</button></div>
           <p id="settings-error" class="error" hidden></p>
         </form>
+        <form id="rotate-form" class="panel">
+          <h3>Rotate the audit key</h3>
+          <p class="hint">Makes a new key from a new passphrase; the server seals everything from then on with it. Content sealed before stays sealed with the old key, and still needs the <strong>old</strong> passphrase to open. Neither passphrase can be recovered.</p>
+          <label>Current passphrase <input id="r-current" type="password" autocomplete="off" required></label>
+          <label>New passphrase (at least 20 characters) <input id="r-new" type="password" autocomplete="new-password" minlength="20" required></label>
+          <label>Repeat the new passphrase <input id="r-new2" type="password" autocomplete="new-password" minlength="20" required></label>
+          <div class="row"><button type="submit">Rotate key</button></div>
+          <p id="rotate-error" class="error" hidden></p>
+        </form>
       </section>
     </main>
   </div>
@@ -152,5 +323,6 @@
   <footer class="footer">Askbar is free software under the AGPL-3.0-or-later. <a href="https://github.com/Thewuuryar/askbar" rel="noreferrer">Source code</a></footer>
 
   <script src="/admin/app.js"></script>
+  <script src="/admin/audit.js"></script>
 </body>
 </html>

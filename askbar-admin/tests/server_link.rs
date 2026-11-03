@@ -1,7 +1,7 @@
 #![cfg(unix)]
-//! The admin side of the management link, against a real in-process server.
+//! The admin side of the server link, against a real in-process server.
 
-use askbar_admin::mgmt::{self, ServerLink};
+use askbar_admin::server_link::{self, ServerLink};
 use askbar_admin::AdminDb;
 use askbar_server::{secrets::Secrets, AppState};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
@@ -24,13 +24,13 @@ fn mode(p: &std::path::Path) -> u32 {
 struct Dirs {
     root: PathBuf,
     secrets: PathBuf,
-    mgmt: PathBuf,
+    server_api: PathBuf,
 }
 
 impl Dirs {
     fn new(tag: &str) -> Dirs {
         let root = temp(tag);
-        Dirs { secrets: root.join("admin-secrets"), mgmt: root.join("askbar-mgmt"), root }
+        Dirs { secrets: root.join("admin-secrets"), server_api: root.join("server-token"), root }
     }
 }
 
@@ -45,35 +45,35 @@ impl Drop for Dirs {
 #[test]
 fn the_token_is_private_the_server_gets_only_its_hash_and_nothing_is_overwritten() {
     let d = Dirs::new("token");
-    let token = mgmt::ensure_token(&d.secrets, &d.mgmt).unwrap();
+    let token = server_link::ensure_token(&d.secrets, &d.server_api).unwrap();
 
-    let token_file = d.secrets.join(mgmt::TOKEN_FILE);
+    let token_file = d.secrets.join(server_link::TOKEN_FILE);
     assert_eq!(mode(&token_file), 0o600, "the raw token is private to the admin");
     assert_eq!(mode(&d.secrets), 0o700);
     assert_eq!(std::fs::read_to_string(&token_file).unwrap(), token);
     let raw = URL_SAFE_NO_PAD.decode(token.strip_prefix("mgt_").expect("prefixed")).unwrap();
     assert_eq!(raw.len(), 32, "32 random bytes");
 
-    let hash_file = d.mgmt.join(mgmt::HASH_FILE);
+    let hash_file = d.server_api.join(server_link::HASH_FILE);
     let hash = std::fs::read_to_string(&hash_file).unwrap();
-    assert_eq!(hash.trim(), mgmt::sha256_hex(&token));
+    assert_eq!(hash.trim(), server_link::sha256_hex(&token));
     assert_eq!(hash.trim().len(), 64);
     assert!(!hash.contains(&token) && !hash.contains(token.trim_start_matches("mgt_")), "the hash file holds no raw token");
-    assert!(std::fs::read_dir(&d.mgmt).unwrap().all(|e| e.unwrap().file_name() == mgmt::HASH_FILE), "only the hash is in the server's directory");
+    assert!(std::fs::read_dir(&d.server_api).unwrap().all(|e| e.unwrap().file_name() == server_link::HASH_FILE), "only the hash is in the server's directory");
     assert_ne!(mode(&hash_file) & 0o044, 0, "the server's user can read the hash");
 
     // A restart keeps the token; a damaged hash file is put right; a second token is never made.
-    assert_eq!(mgmt::ensure_token(&d.secrets, &d.mgmt).unwrap(), token);
+    assert_eq!(server_link::ensure_token(&d.secrets, &d.server_api).unwrap(), token);
     std::fs::write(&hash_file, "tampered").unwrap();
-    assert_eq!(mgmt::ensure_token(&d.secrets, &d.mgmt).unwrap(), token);
-    assert_eq!(std::fs::read_to_string(&hash_file).unwrap().trim(), mgmt::sha256_hex(&token));
+    assert_eq!(server_link::ensure_token(&d.secrets, &d.server_api).unwrap(), token);
+    assert_eq!(std::fs::read_to_string(&hash_file).unwrap().trim(), server_link::sha256_hex(&token));
     std::fs::remove_file(&hash_file).unwrap();
-    mgmt::ensure_token(&d.secrets, &d.mgmt).unwrap();
+    server_link::ensure_token(&d.secrets, &d.server_api).unwrap();
     assert!(hash_file.exists(), "a lost hash file is written again");
 
     // An empty token file is an error, not a reason to make a new token silently.
     std::fs::write(&token_file, "").unwrap();
-    assert!(mgmt::ensure_token(&d.secrets, &d.mgmt).is_err());
+    assert!(server_link::ensure_token(&d.secrets, &d.server_api).is_err());
 }
 
 // ------------------------------------------------------------------ the server
@@ -85,7 +85,7 @@ fn server_state() -> Arc<AppState> {
 }
 
 async fn serve_on(listener: tokio::net::TcpListener, state: Arc<AppState>, hash_file: PathBuf) {
-    let app = askbar_server::mgmt::router(state, hash_file);
+    let app = askbar_server::server_api::router(state, hash_file);
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
 }
 
@@ -101,7 +101,7 @@ fn admin_db_with_data() -> AdminDb {
              INSERT INTO settings VALUES ('system_prompt', 'Be brief.');
              INSERT INTO settings VALUES ('default_provider_id', 'p1');
              INSERT INTO settings VALUES ('audit_retention_days', '14');
-             INSERT INTO revoked_devices VALUES ('dev-9', 0);
+             INSERT INTO revoked_clients VALUES ('dev-9', 0);
              UPDATE budgets SET daily_tokens = 5000, kill_switch = 1;",
         )
         .unwrap();
@@ -111,60 +111,92 @@ fn admin_db_with_data() -> AdminDb {
 #[test]
 fn the_snapshot_is_built_from_admin_db() {
     let db = admin_db_with_data();
-    db.conn().execute("INSERT INTO pair_codes (hash, user_id, device_name, expires_at, created_at) VALUES ('h1','u1','laptop', 4000000000, 0)", []).unwrap();
-    db.conn().execute("INSERT INTO pair_codes (hash, user_id, device_name, expires_at, created_at) VALUES ('old','u1','x', 1, 0)", []).unwrap();
-    let s = mgmt::build_snapshot(db.conn()).unwrap();
+    db.conn().execute("INSERT INTO pair_codes (hash, user_id, client_name, expires_at, created_at) VALUES ('h1','u1','laptop', 4000000000, 0)", []).unwrap();
+    db.conn().execute("INSERT INTO pair_codes (hash, user_id, client_name, expires_at, created_at) VALUES ('old','u1','x', 1, 0)", []).unwrap();
+    let s = server_link::build_snapshot(db.conn()).unwrap();
     assert_eq!(s.providers.len(), 1);
     assert_eq!((s.providers[0].id.as_str(), s.providers[0].model.as_str(), s.providers[0].max_tokens), ("p1", "m1", Some(100)));
     assert_eq!((s.default_provider_id.as_deref(), s.system_prompt.as_deref(), s.audit_retention_days), (Some("p1"), Some("Be brief."), 14));
     assert_eq!((s.budget.daily_tokens, s.budget.monthly_tokens, s.kill_switch), (Some(5000), None, true));
-    assert_eq!(s.revoked_device_ids, ["dev-9"]);
+    assert_eq!(s.revoked_client_ids, ["dev-9"]);
     assert_eq!(s.pair_codes.len(), 1, "an expired code is not sent");
     assert_eq!(s.pair_codes[0].hash, "h1");
     // A fresh database gives a valid, empty snapshot.
-    let empty = mgmt::build_snapshot(AdminDb::open_in_memory().unwrap().conn()).unwrap();
+    let empty = server_link::build_snapshot(AdminDb::open_in_memory().unwrap().conn()).unwrap();
     assert_eq!((empty.providers.len(), empty.audit_retention_days, empty.kill_switch), (0, 30, false));
+}
+
+#[test]
+fn the_snapshot_carries_the_active_audit_public_key_and_only_that() {
+    let db = AdminDb::open_in_memory().unwrap();
+    assert_eq!(server_link::build_snapshot(db.conn()).unwrap().audit_public_key, None, "no key made yet");
+    db.insert_audit_key(&askbar_admin::db::AuditKeyRow {
+        key_id: "0011223344556677".into(),
+        public_key: [0xab; 32],
+        salt: [9; 16],
+        argon_params: "m=65536,t=3,p=1".into(),
+        created_at: 1,
+        retired_at: None,
+    })
+    .unwrap();
+    let s = server_link::build_snapshot(db.conn()).unwrap();
+    let json = serde_json::to_string(&s).unwrap();
+    let k = s.audit_public_key.expect("the active key");
+    assert_eq!((k.key_id.as_str(), k.public_key.as_str()), ("0011223344556677", "ab".repeat(32).as_str()));
+    assert!(!json.contains("salt") && !json.contains("argon"), "the salt and cost stay in the admin: {json}");
+}
+
+#[test]
+fn the_generation_timeout_defaults_to_300_when_never_set_and_follows_the_setting() {
+    let db = AdminDb::open_in_memory().unwrap();
+    // An install that predates the setting: no key, so the default, with no migration.
+    assert_eq!(server_link::build_snapshot(db.conn()).unwrap().generation_timeout_secs, 300);
+    db.conn().execute("INSERT INTO settings VALUES ('generation_timeout_secs', '120')", []).unwrap();
+    assert_eq!(server_link::build_snapshot(db.conn()).unwrap().generation_timeout_secs, 120);
+    // A stored value that is not a number falls back to the default rather than breaking the push.
+    db.conn().execute("UPDATE settings SET value = 'soon' WHERE key = 'generation_timeout_secs'", []).unwrap();
+    assert_eq!(server_link::build_snapshot(db.conn()).unwrap().generation_timeout_secs, 300);
 }
 
 #[tokio::test]
 async fn a_push_applies_on_the_server() {
     let d = Dirs::new("push");
-    let token = mgmt::ensure_token(&d.secrets, &d.mgmt).unwrap();
+    let token = server_link::ensure_token(&d.secrets, &d.server_api).unwrap();
     let state = server_state();
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = l.local_addr().unwrap();
-    serve_on(l, state.clone(), d.mgmt.join(mgmt::HASH_FILE)).await;
+    serve_on(l, state.clone(), d.server_api.join(server_link::HASH_FILE)).await;
 
     let link = ServerLink::new(&format!("http://{addr}"), token);
     assert!(!link.server_online(), "unknown until it has been in touch");
     let db = admin_db_with_data();
-    let v = link.push(&mgmt::build_snapshot(db.conn()).unwrap()).await.unwrap();
+    let v = link.push(&server_link::build_snapshot(db.conn()).unwrap()).await.unwrap();
     assert_eq!(v, 1);
     assert!(link.server_online());
     assert_eq!(link.last_version(), 1);
     let stored = askbar_server::snapshot::current(&state.db.lock().unwrap()).unwrap().unwrap();
     assert_eq!((stored.version, stored.providers.len(), stored.audit_retention_days, stored.kill_switch), (1, 1, 14, true));
-    assert_eq!(link.push(&mgmt::build_snapshot(db.conn()).unwrap()).await.unwrap(), 2, "the server numbers each one");
+    assert_eq!(link.push(&server_link::build_snapshot(db.conn()).unwrap()).await.unwrap(), 2, "the server numbers each one");
 }
 
 #[tokio::test]
 async fn an_unreachable_server_is_reported_as_offline_and_a_wrong_token_as_a_refusal() {
     let d = Dirs::new("offline");
-    let token = mgmt::ensure_token(&d.secrets, &d.mgmt).unwrap();
+    let token = server_link::ensure_token(&d.secrets, &d.server_api).unwrap();
     let dead = free_port().await;
     let link = ServerLink::new(&format!("http://{dead}"), token.clone());
-    let snap = mgmt::build_snapshot(AdminDb::open_in_memory().unwrap().conn()).unwrap();
-    assert!(matches!(link.push(&snap).await, Err(mgmt::PushError::Unreachable(_))));
+    let snap = server_link::build_snapshot(AdminDb::open_in_memory().unwrap().conn()).unwrap();
+    assert!(matches!(link.push(&snap).await, Err(server_link::PushError::Unreachable(_))));
     assert!(!link.server_online());
     assert!(link.last_error().is_some());
     assert!(!link.check().await);
 
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = l.local_addr().unwrap();
-    serve_on(l, server_state(), d.mgmt.join(mgmt::HASH_FILE)).await;
+    serve_on(l, server_state(), d.server_api.join(server_link::HASH_FILE)).await;
     let wrong = ServerLink::new(&format!("http://{addr}"), "mgt_not-the-token".into());
     match wrong.push(&snap).await {
-        Err(mgmt::PushError::Refused { status, .. }) => assert_eq!(status, 401),
+        Err(server_link::PushError::Refused { status, .. }) => assert_eq!(status, 401),
         other => panic!("{other:?}"),
     }
     assert!(wrong.server_online(), "it answered, so it is there");
@@ -174,7 +206,7 @@ async fn an_unreachable_server_is_reported_as_offline_and_a_wrong_token_as_a_ref
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn pushing_retries_until_the_server_is_up_and_follows_later_changes() {
     let d = Dirs::new("retry");
-    let token = mgmt::ensure_token(&d.secrets, &d.mgmt).unwrap();
+    let token = server_link::ensure_token(&d.secrets, &d.server_api).unwrap();
     let addr = free_port().await; // nothing listens here yet
     let link = ServerLink::new(&format!("http://{addr}"), token);
     let db = Arc::new(Mutex::new(admin_db_with_data()));
@@ -186,7 +218,7 @@ async fn pushing_retries_until_the_server_is_up_and_follows_later_changes() {
     // The server comes up on that address.
     let state = server_state();
     let l = tokio::net::TcpListener::bind(addr).await.unwrap();
-    serve_on(l, state.clone(), d.mgmt.join(mgmt::HASH_FILE)).await;
+    serve_on(l, state.clone(), d.server_api.join(server_link::HASH_FILE)).await;
     let applied = |want: usize| {
         askbar_server::snapshot::current(&state.db.lock().unwrap()).ok().flatten().is_some_and(|s| s.providers.len() == want)
     };

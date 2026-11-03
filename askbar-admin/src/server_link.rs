@@ -1,4 +1,4 @@
-//! The admin service's side of the management API: the token, the snapshot it builds from
+//! The admin service's side of the server API: the token, the snapshot it builds from
 //! `admin.db`, and the pusher that keeps the server's copy current.
 //!
 //! The raw token lives only in the admin's own secrets directory (mode 0600). The server is
@@ -18,7 +18,7 @@ use tokio::sync::Mutex;
 use std::time::Duration;
 use tokio::sync::Notify;
 
-pub const TOKEN_FILE: &str = "mgmt.token";
+pub const TOKEN_FILE: &str = "server.token";
 pub const HASH_FILE: &str = "token.sha256";
 
 /// Where the raw token is kept: `ASKBAR_ADMIN_SECRETS_DIR`, default `/admin-secrets`.
@@ -26,14 +26,14 @@ pub fn secrets_dir() -> PathBuf {
     std::env::var("ASKBAR_ADMIN_SECRETS_DIR").ok().filter(|p| !p.trim().is_empty()).map(PathBuf::from).unwrap_or_else(|| "/admin-secrets".into())
 }
 
-/// Where the token's hash is written for the server: `ASKBAR_MGMT_DIR`, default `/mgmt`.
-pub fn mgmt_dir() -> PathBuf {
-    std::env::var("ASKBAR_MGMT_DIR").ok().filter(|p| !p.trim().is_empty()).map(PathBuf::from).unwrap_or_else(|| "/mgmt".into())
+/// Where the token's hash is written for the server: `ASKBAR_SERVER_TOKEN_DIR`, default `/server-token`.
+pub fn token_dir() -> PathBuf {
+    std::env::var("ASKBAR_SERVER_TOKEN_DIR").ok().filter(|p| !p.trim().is_empty()).map(PathBuf::from).unwrap_or_else(|| "/server-token".into())
 }
 
-/// The server's management API: `ASKBAR_SERVER_MGMT_URL`, default `http://server:8082`.
+/// The server's server API: `ASKBAR_SERVER_API_URL`, default `http://server:8082`.
 pub fn server_url() -> String {
-    std::env::var("ASKBAR_SERVER_MGMT_URL").ok().filter(|p| !p.trim().is_empty()).unwrap_or_else(|| "http://server:8082".into())
+    std::env::var("ASKBAR_SERVER_API_URL").ok().filter(|p| !p.trim().is_empty()).unwrap_or_else(|| "http://server:8082".into())
 }
 
 pub fn sha256_hex(s: &str) -> String {
@@ -57,7 +57,7 @@ fn write_atomic(path: &Path, contents: &str, mode: u32) -> std::io::Result<()> {
 
 /// Make sure the token exists (created once, 32 random bytes, mode 0600, never overwritten)
 /// and that the server's hash file matches it. Returns the raw token.
-pub fn ensure_token(secrets_dir: &Path, mgmt_dir: &Path) -> std::io::Result<String> {
+pub fn ensure_token(secrets_dir: &Path, token_dir: &Path) -> std::io::Result<String> {
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     std::fs::create_dir_all(secrets_dir).map_err(|e| io_err(secrets_dir, e))?;
     std::fs::set_permissions(secrets_dir, std::fs::Permissions::from_mode(0o700)).map_err(|e| io_err(secrets_dir, e))?;
@@ -75,8 +75,8 @@ pub fn ensure_token(secrets_dir: &Path, mgmt_dir: &Path) -> std::io::Result<Stri
         }
         Err(e) => return Err(io_err(&path, e)),
     };
-    std::fs::create_dir_all(mgmt_dir).map_err(|e| io_err(mgmt_dir, e))?;
-    let hash_path = mgmt_dir.join(HASH_FILE);
+    std::fs::create_dir_all(token_dir).map_err(|e| io_err(token_dir, e))?;
+    let hash_path = token_dir.join(HASH_FILE);
     let hash = sha256_hex(&token);
     if std::fs::read_to_string(&hash_path).map(|h| h.trim() != hash).unwrap_or(true) {
         // Readable by the server's user, which is not ours.
@@ -87,6 +87,10 @@ pub fn ensure_token(secrets_dir: &Path, mgmt_dir: &Path) -> std::io::Result<Stri
 
 // ------------------------------------------------------------------ the snapshot
 
+fn active_audit_key(conn: &rusqlite::Connection) -> rusqlite::Result<Option<crate::db::AuditKeyRow>> {
+    crate::db::active_audit_key(conn)
+}
+
 fn setting(conn: &rusqlite::Connection, key: &str) -> rusqlite::Result<Option<String>> {
     conn.query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| r.get(0)).optional()
 }
@@ -96,7 +100,7 @@ fn setting(conn: &rusqlite::Connection, key: &str) -> rusqlite::Result<Option<St
 pub fn build_snapshot(conn: &rusqlite::Connection) -> rusqlite::Result<Snapshot> {
     let mut providers = Vec::new();
     {
-        let mut stmt = conn.prepare("SELECT id, name, type, base_url, model, max_tokens, temperature, headers FROM providers ORDER BY name")?;
+        let mut stmt = conn.prepare("SELECT id, name, type, base_url, model, max_tokens, temperature, headers, billing, allow_as_fallback, price_in, price_out, price_cached_in FROM providers ORDER BY name")?;
         let rows = stmt.query_map([], |r| {
             Ok(SnapshotProvider {
                 id: r.get(0)?,
@@ -107,6 +111,11 @@ pub fn build_snapshot(conn: &rusqlite::Connection) -> rusqlite::Result<Snapshot>
                 max_tokens: r.get(5)?,
                 temperature: r.get(6)?,
                 headers: serde_json::from_str(&r.get::<_, String>(7)?).unwrap_or_default(),
+                billing: if r.get::<_, String>(8)? == "subscription" { askbar_proto::Billing::Subscription } else { askbar_proto::Billing::Metered },
+                allow_as_fallback: r.get::<_, i64>(9)? != 0,
+                price_in: r.get(10)?,
+                price_out: r.get(11)?,
+                price_cached_in: r.get(12)?,
             })
         })?;
         for p in rows {
@@ -130,15 +139,15 @@ pub fn build_snapshot(conn: &rusqlite::Connection) -> rusqlite::Result<Snapshot>
     }
     let mut pair_codes = Vec::new();
     {
-        let mut stmt = conn.prepare("SELECT hash, user_id, device_name, expires_at FROM pair_codes WHERE expires_at > ?1 ORDER BY created_at")?;
+        let mut stmt = conn.prepare("SELECT hash, user_id, client_name, expires_at FROM pair_codes WHERE expires_at > ?1 ORDER BY created_at")?;
         for c in stmt.query_map([crate::auth::now()], |r| {
-            Ok(SnapshotPairCode { hash: r.get(0)?, user_id: r.get(1)?, device_name: r.get(2)?, expires_at: r.get(3)? })
+            Ok(SnapshotPairCode { hash: r.get(0)?, user_id: r.get(1)?, client_name: r.get(2)?, expires_at: r.get(3)? })
         })? {
             pair_codes.push(c?);
         }
     }
-    let revoked_device_ids = {
-        let mut stmt = conn.prepare("SELECT device_id FROM revoked_devices ORDER BY device_id")?;
+    let revoked_client_ids = {
+        let mut stmt = conn.prepare("SELECT client_id FROM revoked_clients ORDER BY client_id")?;
         let ids = stmt.query_map([], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
         ids
     };
@@ -153,10 +162,21 @@ pub fn build_snapshot(conn: &rusqlite::Connection) -> rusqlite::Result<Snapshot>
         display,
         user_display_defaults,
         pair_codes,
-        revoked_device_ids,
+        revoked_client_ids,
         budget: Budget { daily_tokens: daily.map(|v| v as u64), monthly_tokens: monthly.map(|v| v as u64) },
         kill_switch: kill != 0,
+        // Absent means the safer default: the switch really stops running replies.
+        kill_switch_aborts_running: setting(conn, "kill_switch_aborts_running")?.map(|v| !matches!(v.trim(), "0" | "false")).unwrap_or(true),
         audit_retention_days: setting(conn, "audit_retention_days")?.and_then(|s| s.parse().ok()).unwrap_or(30),
+        // Absent on installs that never set it: the default applies, no migration needed.
+        generation_timeout_secs: setting(conn, "generation_timeout_secs")?
+            .and_then(|s| s.trim().parse().ok())
+            .unwrap_or(askbar_proto::DEFAULT_GENERATION_TIMEOUT_SECS),
+        // Public half only; the keyring holds nothing else.
+        audit_public_key: active_audit_key(conn)?.map(|k| askbar_proto::AuditKey {
+            key_id: k.key_id,
+            public_key: k.public_key.iter().map(|b| format!("{b:02x}")).collect(),
+        }),
     })
 }
 
@@ -172,7 +192,7 @@ pub enum PushError {
     Build(String),
 }
 
-/// Talks to the server's management API and remembers whether it is there.
+/// Talks to the server's server API and remembers whether it is there.
 pub struct ServerLink {
     http: reqwest::Client,
     base: String,
@@ -248,7 +268,7 @@ impl ServerLink {
         let result = async {
             let resp = self
                 .http
-                .put(format!("{}/mgmt/v1/snapshot", self.base))
+                .put(format!("{}{}", self.base, askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/snapshot")))
                 .bearer_auth(&self.token)
                 .json(snapshot)
                 .send()
@@ -269,7 +289,7 @@ impl ServerLink {
         result
     }
 
-    /// Any management call. Returns the status and body of whatever the server answered, or
+    /// Any server call. Returns the status and body of whatever the server answered, or
     /// `Unreachable` if it did not answer at all (which also marks it offline).
     pub async fn request(&self, method: reqwest::Method, path: &str, body: Option<&serde_json::Value>) -> Result<(u16, Vec<u8>), PushError> {
         let mut req = self.http.request(method, format!("{}{path}", self.base)).bearer_auth(&self.token);
@@ -293,7 +313,7 @@ impl ServerLink {
 
     /// Hand the server a provider's API key. It is encrypted there; this side never keeps it.
     pub async fn put_key(&self, provider_id: &str, key: &str) -> Result<(), PushError> {
-        let (status, body) = self.request(reqwest::Method::PUT, &format!("/mgmt/v1/providers/{provider_id}/key"), Some(&serde_json::json!({ "key": key }))).await?;
+        let (status, body) = self.request(reqwest::Method::PUT, &format!("{}/providers/{provider_id}/key", askbar_proto::paths::SERVER_V1), Some(&serde_json::json!({ "key": key }))).await?;
         if status == 204 {
             Ok(())
         } else {
@@ -307,7 +327,7 @@ impl ServerLink {
         let was_online = self.server_online();
         let ok = self
             .http
-            .get(format!("{}/mgmt/v1/health", self.base))
+            .get(format!("{}{}", self.base, askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/health")))
             .bearer_auth(&self.token)
             .timeout(Duration::from_secs(3))
             .send()

@@ -19,14 +19,69 @@ impl Settings {
     }
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(tag = "event", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum StreamEvent {
-    Started { conversation_id: String },
+    /// `generation_id` names the server-side reply (to resume or cancel it); `queued` means
+    /// another reply in this conversation is still running and this one waits its turn.
+    Started { conversation_id: String, generation_id: Option<String>, queued: bool },
+    /// Which provider is answering; sent when the server routes to another than the one chosen.
+    Provider { id: String, name: String },
     Delta { text: String },
     Done,
     Cancelled,
-    Error { message: String },
+    /// `kind` names a refusal the window can act on (`queue_full`, `budget_exceeded`, `kill_switch`,
+    /// `audit_key_missing`, `busy`, `timed_out`); plain failures have none.
+    Error {
+        message: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        kind: Option<String>,
+    },
+}
+
+impl StreamEvent {
+    pub fn error(message: String) -> StreamEvent {
+        StreamEvent::Error { message, kind: None }
+    }
+
+    pub fn error_kind(kind: &str, message: String) -> StreamEvent {
+        StreamEvent::Error { message, kind: Some(kind.to_string()) }
+    }
+}
+
+/// A reply that has not finished: running, or a message waiting its turn behind one.
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingReply {
+    pub generation_id: String,
+    /// "running" or "queued".
+    pub status: String,
+    /// The reply so far, as last saved by the server.
+    pub text: String,
+    /// The question; for a queued message it is not in the conversation yet.
+    pub prompt: String,
+}
+
+impl From<askbar_proto::PendingGeneration> for PendingReply {
+    fn from(g: askbar_proto::PendingGeneration) -> PendingReply {
+        PendingReply { generation_id: g.generation_id, status: g.status, text: g.text, prompt: g.prompt }
+    }
+}
+
+/// A message this app sent and the server has not taken yet.
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct UnsentMessage {
+    pub client_request_id: String,
+    pub conversation_id: Option<String>,
+    pub text: String,
+    pub created_at: i64,
+}
+
+impl From<crate::outbox::OutboxEntry> for UnsentMessage {
+    fn from(e: crate::outbox::OutboxEntry) -> UnsentMessage {
+        UnsentMessage { client_request_id: e.client_request_id, conversation_id: e.conversation_id, text: e.text, created_at: e.created_at }
+    }
 }
 
 /// Something wrong between this client and its backend, with a way forward in the UI.

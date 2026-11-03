@@ -1,13 +1,13 @@
 //! Pairing and revocation follow the snapshot: codes are checked by hash and recorded as
-//! redeemed; devices the snapshot lists as revoked are refused.
+//! redeemed; clients the snapshot lists as revoked are refused.
 
 use askbar_proto::{Budget, DisplaySettings, Snapshot, SnapshotPairCode};
-use askbar_server::{mgmt, secrets::Secrets, AppState};
+use askbar_server::{server_api, secrets::Secrets, AppState};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 
-const MGMT_TOKEN: &str = "mgt_test-token";
+const SERVER_TOKEN: &str = "mgt_test-token";
 const CODE: &str = "pairing-code-one";
 
 fn hex(s: &str) -> String {
@@ -16,7 +16,7 @@ fn hex(s: &str) -> String {
 
 struct T {
     api: String,
-    mgmt: String,
+    server_api: String,
     user: String,
     state: Arc<AppState>,
     http: reqwest::Client,
@@ -39,13 +39,13 @@ async fn serve(app: axum::Router) -> String {
 async fn start() -> T {
     let dir = std::env::temp_dir().join(format!("askbar-snapauth-{}", ulid::Ulid::new()));
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("token.sha256"), hex(MGMT_TOKEN)).unwrap();
+    std::fs::write(dir.join("token.sha256"), hex(SERVER_TOKEN)).unwrap();
     let db = askbar_server::Db::open_in_memory().unwrap();
     let user = db.seed_server().unwrap();
     let state = AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), askbar_server::MIN_CLIENT);
     T {
-        api: serve(askbar_server::api_router(state.clone())).await,
-        mgmt: serve(mgmt::router(state.clone(), dir.join("token.sha256"))).await,
+        api: serve(askbar_server::client_router(state.clone())).await,
+        server_api: serve(server_api::router(state.clone(), dir.join("token.sha256"))).await,
         user,
         state,
         http: reqwest::Client::new(),
@@ -65,23 +65,26 @@ impl T {
             user_display_defaults: Default::default(),
             pair_codes: codes
                 .iter()
-                .map(|(c, exp)| SnapshotPairCode { hash: hex(c), user_id: self.user.clone(), device_name: "laptop".into(), expires_at: *exp })
+                .map(|(c, exp)| SnapshotPairCode { hash: hex(c), user_id: self.user.clone(), client_name: "laptop".into(), expires_at: *exp })
                 .collect(),
-            revoked_device_ids: revoked.iter().map(|s| s.to_string()).collect(),
+            revoked_client_ids: revoked.iter().map(|s| s.to_string()).collect(),
             budget: Budget::default(),
             kill_switch: false,
+            kill_switch_aborts_running: true,
             audit_retention_days: 30,
+            generation_timeout_secs: 300,
+            audit_public_key: None,
         }
     }
     async fn push(&self, s: &Snapshot) {
-        let r = self.http.put(format!("{}/mgmt/v1/snapshot", self.mgmt)).bearer_auth(MGMT_TOKEN).json(s).send().await.unwrap();
+        let r = self.http.put(format!("{}/api/server/v1/snapshot", self.server_api)).bearer_auth(SERVER_TOKEN).json(s).send().await.unwrap();
         assert_eq!(r.status(), 200);
     }
     async fn pair(&self, code: &str) -> Option<String> {
         let r = self
             .http
-            .post(format!("{}/api/v1/pair", self.api))
-            .header("x-askbar-client-version", "0.3.0")
+            .post(format!("{}/api/client/v1/pairings", self.api))
+            .header("x-askbar-client-version", "0.5.0")
             .json(&json!({ "code": code }))
             .send()
             .await
@@ -93,10 +96,10 @@ impl T {
         }
     }
     async fn whoami(&self, token: &str) -> u16 {
-        self.http.get(format!("{}/api/v1/whoami", self.api)).bearer_auth(token).header("x-askbar-client-version", "0.3.0").send().await.unwrap().status().as_u16()
+        self.http.get(format!("{}/api/client/v1/me", self.api)).bearer_auth(token).header("x-askbar-client-version", "0.5.0").send().await.unwrap().status().as_u16()
     }
-    fn device_id(&self) -> String {
-        self.state.db.lock().unwrap().conn().query_row("SELECT id FROM devices LIMIT 1", [], |r| r.get(0)).unwrap()
+    fn client_id(&self) -> String {
+        self.state.db.lock().unwrap().conn().query_row("SELECT id FROM clients LIMIT 1", [], |r| r.get(0)).unwrap()
     }
 }
 
@@ -110,8 +113,8 @@ async fn a_code_in_the_snapshot_pairs_once_and_a_reused_code_fails() {
     assert_eq!(t.whoami(&token).await, 204);
     assert!(t.pair(CODE).await.is_none(), "the same code a second time fails");
     let (n, name): (i64, String) =
-        t.state.db.lock().unwrap().conn().query_row("SELECT COUNT(*), MAX(name) FROM devices", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
-    assert_eq!((n, name.as_str()), (1, "laptop"), "one device, named from the snapshot's entry");
+        t.state.db.lock().unwrap().conn().query_row("SELECT COUNT(*), MAX(name) FROM clients", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+    assert_eq!((n, name.as_str()), (1, "laptop"), "one client, named from the snapshot's entry");
 
     // Redeemed codes are recorded by hash, and stay refused even if the admin pushes the code again.
     let recorded: String = t.state.db.lock().unwrap().conn().query_row("SELECT hash FROM redeemed_codes", [], |r| r.get(0)).unwrap();
@@ -134,21 +137,21 @@ async fn unknown_expired_and_racing_codes() {
 }
 
 #[tokio::test]
-async fn a_device_the_snapshot_lists_as_revoked_is_refused() {
+async fn a_client_the_snapshot_lists_as_revoked_is_refused() {
     let t = start().await;
     let soon = askbar_server::auth::now() + 600;
     t.push(&t.snapshot(&[(CODE, soon)], &[])).await;
     let token = t.pair(CODE).await.unwrap();
     assert_eq!(t.whoami(&token).await, 204);
-    let id = t.device_id();
+    let id = t.client_id();
 
-    // Revoked only through the snapshot: the devices row itself is untouched.
+    // Revoked only through the snapshot: the clients row itself is untouched.
     t.push(&t.snapshot(&[], &[&id])).await;
     assert_eq!(t.whoami(&token).await, 401, "refused");
-    let revoked_at: Option<i64> = t.state.db.lock().unwrap().conn().query_row("SELECT revoked_at FROM devices", [], |r| r.get(0)).unwrap();
+    let revoked_at: Option<i64> = t.state.db.lock().unwrap().conn().query_row("SELECT revoked_at FROM clients", [], |r| r.get(0)).unwrap();
     assert_eq!(revoked_at, None);
 
-    // Other devices are not affected, and the snapshot decides: take the id out and it works again.
-    t.push(&t.snapshot(&[], &["some-other-device"])).await;
+    // Other clients are not affected, and the snapshot decides: take the id out and it works again.
+    t.push(&t.snapshot(&[], &["some-other-client"])).await;
     assert_eq!(t.whoami(&token).await, 204);
 }

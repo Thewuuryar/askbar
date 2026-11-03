@@ -256,6 +256,70 @@ async function waitIdle(page) {
     assert.equal((await calls(page, 'cancel_ask')).length, 2);
   });
 
+  // ------------------------------------------------- replies still running on the server
+  {
+    const p2 = await open(browser);
+    await p2.evaluate(() => {
+      window.__db.convs.push({
+        id: '7', title: 'Long question', updated_at: 999, messages: [{ id: 'm1', role: 'user', content: 'Long question', created_at: 1 }],
+        pending: [
+          { generationId: 'g1', status: 'running', prompt: 'Long question', replyText: 'Running reply text from the server. '.repeat(3), slow: true },
+          { generationId: 'g2', status: 'queued', prompt: 'Waiting question', replyText: 'Answer to the waiting question.' },
+          { generationId: 'g3', status: 'queued', prompt: 'Unwanted question' },
+        ],
+      });
+      window.__db.nextConv = 8;
+    });
+
+    await step('opening a conversation joins its running reply and lists the waiting messages', async () => {
+      await p2.click('#history-toggle');
+      await p2.locator('.conv .open', { hasText: 'Long question' }).click();
+      await p2.waitForSelector('#stop:not([hidden])');
+      assert.deepEqual((await calls(p2, 'attach')).map((a) => a.generationId), ['g1']);
+      assert.deepEqual(await calls(p2, 'load_pending'), [{ id: '7' }].concat((await calls(p2, 'load_pending')).slice(1)));
+      await p2.waitForFunction(() => document.querySelector('.msg.assistant .body').textContent.includes('Running reply text'));
+      const rows = p2.locator('.msg.waiting');
+      assert.equal(await rows.count(), 2);
+      assert.equal(await rows.nth(0).locator('.body').innerText(), 'Waiting question');
+      assert.match(await rows.nth(0).innerText(), /Waiting/);
+      assert.equal(await p2.locator('.del-queued').count(), 2, 'each waiting message has a way to remove it');
+      await shot(p2, '20-waiting');
+    });
+
+    await step('removing a waiting message cancels it and takes the row away', async () => {
+      await p2.locator('.msg.waiting', { hasText: 'Unwanted question' }).locator('.del-queued').click();
+      await p2.waitForFunction(() => document.querySelectorAll('.msg.waiting').length === 1);
+      assert.deepEqual(await calls(p2, 'cancel_generation'), [{ id: 'g3' }]);
+      assert.equal(await p2.locator('.msg.waiting .body').innerText(), 'Waiting question');
+    });
+
+    await step('when the reply ends, the waiting message starts and its reply is joined', async () => {
+      await p2.waitForFunction(() => (window.__calls.filter((c) => c[0] === 'attach').length === 2), null, { timeout: 15000 });
+      await p2.waitForFunction(() => document.querySelectorAll('.msg.waiting').length === 0);
+      await waitIdle(p2);
+      assert.deepEqual((await calls(p2, 'attach')).map((a) => a.generationId), ['g1', 'g2']);
+      const bodies = await p2.locator('.msg .body').allInnerTexts();
+      assert.ok(bodies.some((b) => b.includes('Answer to the waiting question.')), bodies.join(' | '));
+      assert.ok(bodies.some((b) => b === 'Waiting question'), 'its question is now a normal message');
+    });
+
+    await step('re-showing the window picks up a reply that started elsewhere', async () => {
+      await p2.evaluate(() => {
+        const c = window.__db.convs.find((x) => x.id === '7');
+        c.pending = [{ generationId: 'g9', status: 'running', prompt: 'from elsewhere', replyText: 'Started on another app.' }];
+        window.__listeners['askbar:shown']();
+      });
+      await p2.waitForFunction(() => window.__calls.some((c) => c[0] === 'attach' && c[1].generationId === 'g9'));
+      await waitIdle(p2);
+      assert.ok((await p2.locator('.msg.assistant .body').last().innerText()).includes('Started on another app.'));
+    });
+
+    await step('no JavaScript errors while joining running replies', async () => {
+      assert.deepEqual(p2.errors, []);
+    });
+    await p2.context().close();
+  }
+
   // ------------------------------------------------------------ errors
   await step('errors show inline with a way to open the config', async () => {
     await page.keyboard.press('Control+n');
@@ -266,6 +330,39 @@ async function waitIdle(page) {
     await shot(page, '06-error');
     await page.locator('.msg.error .open-config').click();
     assert.equal((await calls(page, 'open_config')).length, 1);
+  });
+
+  await step('a timeout error after two deltas keeps the text shown and adds the message', async () => {
+    await page.keyboard.press('Control+n');
+    await ask(page, 'this will timeout');
+    await page.waitForSelector('.msg.error');
+    await waitIdle(page);
+    assert.equal(await page.locator('.msg.assistant .body').innerText(), 'Partial answer', 'the reply stays');
+    assert.equal(await page.locator('.msg.error .body').innerText(), 'Stopped after 5 minutes');
+    assert.equal(await page.locator('.msg.assistant').count(), 1, 'one reply bubble, not removed');
+    assert.equal(await page.isVisible('#input'), true);
+  });
+
+  await step('Try again after a timeout asks the same question as a new reply and keeps the partial one', async () => {
+    const before = (await calls(page, 'ask')).length;
+    await page.locator('.msg.error .retry-reply').click();
+    await waitIdle(page);
+    const asks = await calls(page, 'ask');
+    assert.equal(asks.length, before + 1);
+    assert.equal(asks[asks.length - 1].text, 'this will timeout');
+    assert.equal(await page.locator('.msg.assistant').count(), 2, 'the partial reply stays and a new one begins');
+    assert.equal(await page.locator('.msg.assistant .body').first().innerText(), 'Partial answer');
+  });
+
+  await step('a reply from another provider than the chosen one says who answered', async () => {
+    await page.keyboard.press('Control+n');
+    await ask(page, 'use the fallback please');
+    await waitIdle(page);
+    assert.equal(await page.locator('.msg.assistant .served-by').innerText(), 'Answered by Backup AI');
+    await page.keyboard.press('Control+n');
+    await ask(page, 'plain question');
+    await waitIdle(page);
+    assert.equal(await page.locator('.served-by').count(), 0, 'nothing extra when the chosen provider answers');
   });
 
   await step('input stays usable after an error', async () => {
@@ -335,7 +432,7 @@ async function waitIdle(page) {
   // ------------------------------------------------- server states
   const STATES = {
     offline: { kind: 'offline', message: 'Server offline. Could not reach http://localhost:8080. Check that it is running and that you are on the right network.' },
-    rejected: { kind: 'rejected', message: 'Token rejected. The server no longer accepts this device; it may have been revoked.' },
+    rejected: { kind: 'rejected', message: 'Token rejected. The server no longer accepts this app; it may have been revoked.' },
     update_needed: { kind: 'update_needed', message: 'Update needed. This version of Askbar is too old for the server.' },
     provider_missing: { kind: 'provider_missing', message: 'The provider you picked no longer exists on the server. Pick another.', providers: [{ id: 'p1', name: 'alpha' }, { id: 'p2', name: 'beta' }] },
   };
@@ -371,6 +468,74 @@ async function waitIdle(page) {
     await page.context().close();
   }
 
+  // ---------------------------------------------- the outbox: messages the server never took
+  {
+    const p3 = await open(browser, { status: STATES.offline });
+    await step('offline: a failed send moves to the unsent list with Send, Edit and Discard, and is not retried by itself', async () => {
+      await p3.waitForSelector('#status:not([hidden])');
+      await ask(p3, 'please keep this');
+      await p3.waitForSelector('.msg.unsent');
+      await waitIdle(p3);
+      assert.equal(await p3.locator('.msg.unsent .body').innerText(), 'please keep this');
+      assert.equal(await p3.locator('.msg.user:not(.unsent)').count(), 0, 'not shown as if it had been sent');
+      for (const [cls, label] of [['unsent-send', 'Send'], ['unsent-edit', 'Edit'], ['unsent-discard', 'Discard']]) {
+        assert.equal(await p3.locator(`.msg.unsent .${cls}`).innerText(), label);
+      }
+      assert.match(await p3.innerText('#status-text'), /Server offline/, 'the offline message stays');
+      await p3.waitForTimeout(400);
+      assert.equal((await calls(p3, 'ask')).length, 1, 'asked once');
+      assert.equal((await calls(p3, 'resend')).length, 0, 'nothing is sent automatically');
+      await shot(p3, '21-unsent');
+    });
+
+    await step('Edit puts the text back in the input and removes the unsent entry', async () => {
+      await p3.locator('.msg.unsent .unsent-edit').click();
+      await p3.waitForFunction(() => document.querySelectorAll('.msg.unsent').length === 0);
+      assert.equal(await p3.inputValue('#input'), 'please keep this');
+      assert.equal((await calls(p3, 'discard_unsent')).length, 1);
+      assert.equal((await calls(p3, 'unsent_messages')).length >= 1, true);
+      await p3.fill('#input', '');
+    });
+
+    await step('Discard removes the entry without sending it', async () => {
+      await ask(p3, 'throw this away');
+      await p3.waitForSelector('.msg.unsent');
+      await p3.locator('.msg.unsent .unsent-discard').click();
+      await p3.waitForFunction(() => document.querySelectorAll('.msg.unsent').length === 0);
+      assert.equal(await p3.evaluate(() => window.__db.unsent.length), 0);
+      assert.equal((await calls(p3, 'resend')).length, 0);
+      assert.equal(await p3.inputValue('#input'), '');
+    });
+
+    await step('Send, once the server is back, sends that message again and the reply streams', async () => {
+      await ask(p3, 'send me later');
+      await p3.waitForSelector('.msg.unsent');
+      await p3.evaluate(() => { window.__opts.status = null; });
+      await p3.locator('.msg.unsent .unsent-send').click();
+      await waitIdle(p3);
+      const r = await calls(p3, 'resend');
+      assert.equal(r.length, 1);
+      assert.match(r[0].clientRequestId, /^req-/);
+      assert.equal(await p3.locator('.msg.unsent').count(), 0);
+      assert.equal(await p3.locator('.msg.user .body').last().innerText(), 'send me later');
+      assert.match(await p3.locator('.msg.assistant').last().innerText(), /format strings/);
+    });
+
+    await step('unsent messages come back when the window is shown again', async () => {
+      await p3.evaluate(() => {
+        window.__db.unsent.push({ clientRequestId: 'req-x', conversationId: null, text: 'left over', createdAt: 1 });
+      });
+      await p3.keyboard.press('Control+n');
+      await p3.waitForSelector('.msg.unsent');
+      assert.equal(await p3.locator('.msg.unsent .body').innerText(), 'left over');
+    });
+
+    await step('no JavaScript errors in the outbox flow', async () => {
+      assert.deepEqual(p3.errors, []);
+    });
+    await p3.context().close();
+  }
+
   page = await open(browser, { status: STATES.provider_missing });
   await step('provider_missing: picking another provider fixes it and updates the label', async () => {
     await page.waitForSelector('#status:not([hidden])');
@@ -395,7 +560,7 @@ async function waitIdle(page) {
   await page.context().close();
 
   // ------------------------------------------------- pairing screen
-  page = await open(browser, { status: { kind: 'not_paired', message: 'This device is not paired with the server yet.' } });
+  page = await open(browser, { status: { kind: 'not_paired', message: 'This app is not paired with the server yet.' } });
   await step('not paired: the banner offers the pairing screen', async () => {
     await page.waitForSelector('#status:not([hidden])');
     assert.equal(await page.isVisible('#status-actions [data-action="pair"]'), true);

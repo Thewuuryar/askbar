@@ -1,4 +1,4 @@
-//! SQLite storage: users, devices, conversations and messages.
+//! SQLite storage: users, clients, conversations and messages.
 //!
 //! Schema changes go in `MIGRATIONS` (append only); `PRAGMA user_version`
 //! records how many have been applied. A database that this build did not
@@ -17,7 +17,7 @@ const APPLICATION_ID: i64 = 0x4153_4B42;
 const MIGRATIONS: &[&str] = &[
     // v1: the final chat schema.
     //
-    // Live: users, devices, conversations, messages, messages_fts, user_prefs.
+    // Live: users, devices, conversations, messages, messages_fts, user_prefs. names-ok
     // Reserved, empty: memory (append-only), projects, token_usage.
     // Interim until migration 3: providers (full rows), settings, pair_codes, display_defaults.
     "CREATE TABLE users (
@@ -25,7 +25,7 @@ const MIGRATIONS: &[&str] = &[
          name       TEXT    NOT NULL,
          created_at INTEGER NOT NULL
      );
-     CREATE TABLE devices (
+     CREATE TABLE devices ( -- names-ok
          id         TEXT PRIMARY KEY,
          user_id    TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
          name       TEXT    NOT NULL,
@@ -88,7 +88,7 @@ const MIGRATIONS: &[&str] = &[
      CREATE TABLE token_usage (
          id          TEXT PRIMARY KEY,
          user_id     TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-         device_id   TEXT,
+         device_id   TEXT, -- names-ok
          provider_id TEXT,
          tokens_in   INTEGER NOT NULL DEFAULT 0,
          tokens_out  INTEGER NOT NULL DEFAULT 0,
@@ -113,7 +113,7 @@ const MIGRATIONS: &[&str] = &[
      CREATE TABLE pair_codes (
          hash        TEXT PRIMARY KEY,
          user_id     TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-         device_name TEXT    NOT NULL DEFAULT '',
+         device_name TEXT    NOT NULL DEFAULT '', -- names-ok
          expires_at  INTEGER NOT NULL,
          used        INTEGER NOT NULL DEFAULT 0
      );
@@ -130,7 +130,7 @@ const MIGRATIONS: &[&str] = &[
      );
      CREATE TABLE redeemed_codes (
          hash        TEXT PRIMARY KEY,
-         device_id   TEXT,
+         device_id   TEXT, -- names-ok
          redeemed_at INTEGER NOT NULL
      );",
     // v3: the admin site has left the server. Its tables go, and a provider keeps only what the
@@ -146,6 +146,46 @@ const MIGRATIONS: &[&str] = &[
      INSERT INTO providers_new (id, api_key_enc) SELECT id, api_key_enc FROM providers;
      DROP TABLE providers;
      ALTER TABLE providers_new RENAME TO providers;",
+    // v4: server-side generations. A chat turn is a row here that outlives its client.
+    // Statuses: queued, running, done, error, cancelled, timed_out, interrupted. A queued row
+    // holds the prompt; its user message is written to `messages` when it starts.
+    "CREATE TABLE generations (
+         id                   TEXT PRIMARY KEY,
+         user_id              TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+         device_id            TEXT, -- names-ok
+         conversation_id      TEXT    NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+         user_message_id      TEXT,
+         assistant_message_id TEXT,
+         client_request_id    TEXT,
+         provider_id          TEXT,
+         status               TEXT    NOT NULL CHECK (status IN
+                                  ('queued','running','done','error','cancelled','timed_out','interrupted')),
+         prompt               TEXT    NOT NULL DEFAULT '',
+         text                 TEXT    NOT NULL DEFAULT '',
+         error                TEXT,
+         queued_at            INTEGER NOT NULL,
+         started_at           INTEGER,
+         deadline_at          INTEGER,
+         ended_at             INTEGER
+     );
+     CREATE UNIQUE INDEX idx_generations_request ON generations(device_id, client_request_id) -- names-ok
+         WHERE client_request_id IS NOT NULL;
+     CREATE INDEX idx_generations_conversation ON generations(conversation_id, status);
+     CREATE INDEX idx_generations_user_status ON generations(user_id, status);",
+    // v5: what the router has learned about providers. A provider whose credentials were refused is
+    // flagged `auth_failed` (with the error code, never the provider's message, which may echo
+    // part of a key) until a try succeeds or a new key is saved.
+    "CREATE TABLE provider_health (
+         provider_id TEXT PRIMARY KEY,
+         status      TEXT    NOT NULL CHECK (status IN ('auth_failed')),
+         since       INTEGER NOT NULL,
+         error_code  TEXT
+     );",
+    // v6: one word for the paired app: clients (they were called devices). Tokens and rows are kept. names-ok
+    "ALTER TABLE devices RENAME TO clients; -- names-ok
+     ALTER TABLE generations RENAME COLUMN device_id TO client_id; -- names-ok
+     ALTER TABLE token_usage RENAME COLUMN device_id TO client_id; -- names-ok
+     ALTER TABLE redeemed_codes RENAME COLUMN device_id TO client_id; -- names-ok",
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -186,6 +226,65 @@ pub struct SearchHit {
     pub role: String,
     pub snippet: String,
     pub created_at: i64,
+}
+
+/// One chat turn run by the server. See migration v4 for the statuses.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct Generation {
+    pub id: String,
+    pub user_id: String,
+    pub client_id: Option<String>,
+    pub conversation_id: String,
+    pub user_message_id: Option<String>,
+    pub assistant_message_id: Option<String>,
+    pub client_request_id: Option<String>,
+    pub provider_id: Option<String>,
+    pub status: String,
+    pub prompt: String,
+    pub text: String,
+    pub error: Option<String>,
+    pub queued_at: i64,
+    pub started_at: Option<i64>,
+    pub deadline_at: Option<i64>,
+    pub ended_at: Option<i64>,
+}
+
+/// What `create_generation` needs. `status` is `running` (the row also gets `started_at`) or `queued`.
+#[derive(Debug, Clone)]
+pub struct NewGeneration<'a> {
+    pub user_id: &'a str,
+    pub client_id: Option<&'a str>,
+    pub conversation_id: &'a str,
+    pub user_message_id: Option<&'a str>,
+    pub client_request_id: Option<&'a str>,
+    pub provider_id: Option<&'a str>,
+    pub status: &'a str,
+    pub prompt: &'a str,
+    pub deadline_at: Option<i64>,
+}
+
+const GENERATION_COLUMNS: &str = "id, user_id, client_id, conversation_id, user_message_id, assistant_message_id, \
+     client_request_id, provider_id, status, prompt, text, error, queued_at, started_at, deadline_at, ended_at";
+
+fn read_generation(r: &rusqlite::Row<'_>) -> rusqlite::Result<Generation> {
+    Ok(Generation {
+        id: r.get(0)?,
+        user_id: r.get(1)?,
+        client_id: r.get(2)?,
+        conversation_id: r.get(3)?,
+        user_message_id: r.get(4)?,
+        assistant_message_id: r.get(5)?,
+        client_request_id: r.get(6)?,
+        provider_id: r.get(7)?,
+        status: r.get(8)?,
+        prompt: r.get(9)?,
+        text: r.get(10)?,
+        error: r.get(11)?,
+        queued_at: r.get(12)?,
+        started_at: r.get(13)?,
+        deadline_at: r.get(14)?,
+        ended_at: r.get(15)?,
+    })
 }
 
 pub struct Db {
@@ -400,6 +499,154 @@ impl Db {
             .execute("DELETE FROM conversations WHERE id = ?1 AND user_id = ?2", params![id, user_id])?
             > 0)
     }
+
+    /// Deletes finished generations that ended before `older_than` (unix seconds). Running and
+    /// queued rows are never touched. Returns how many went.
+    pub fn prune_generations(&self, older_than: i64) -> Result<usize, DbError> {
+        Ok(self.conn.execute(
+            "DELETE FROM generations WHERE status NOT IN ('queued','running') AND ended_at < ?1",
+            [older_than],
+        )?)
+    }
+
+    /// Flags a provider as having had its credentials refused. Keeps the original time if it was
+    /// already flagged.
+    pub fn flag_provider_auth_failed(&self, provider_id: &str, error_code: &str) -> Result<(), DbError> {
+        self.conn.execute(
+            "INSERT INTO provider_health (provider_id, status, since, error_code) VALUES (?1, 'auth_failed', ?2, ?3)
+             ON CONFLICT(provider_id) DO UPDATE SET error_code = excluded.error_code",
+            params![provider_id, now(), error_code],
+        )?;
+        Ok(())
+    }
+
+    /// Clears a provider's flag (a try succeeded, or a new key was saved). True if there was one.
+    pub fn clear_provider_health(&self, provider_id: &str) -> Result<bool, DbError> {
+        Ok(self.conn.execute("DELETE FROM provider_health WHERE provider_id = ?1", [provider_id])? > 0)
+    }
+
+    /// Every flagged provider: (provider id, status, since, error code).
+    pub fn provider_health(&self) -> Result<Vec<(String, String, i64, Option<String>)>, DbError> {
+        let mut stmt = self.conn.prepare("SELECT provider_id, status, since, error_code FROM provider_health ORDER BY provider_id")?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    /// Returns the new generation's id.
+    pub fn create_generation(&self, g: &NewGeneration) -> Result<String, DbError> {
+        let (id, t) = (new_id(), now());
+        let started = (g.status == "running").then_some(t);
+        self.conn.execute(
+            "INSERT INTO generations (id, user_id, client_id, conversation_id, user_message_id, client_request_id,
+                                      provider_id, status, prompt, queued_at, started_at, deadline_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            params![
+                id, g.user_id, g.client_id, g.conversation_id, g.user_message_id, g.client_request_id,
+                g.provider_id, g.status, g.prompt, t, started, g.deadline_at
+            ],
+        )?;
+        Ok(id)
+    }
+
+    /// One of `user_id`'s generations; `None` for anyone else's.
+    pub fn get_generation(&self, user_id: &str, id: &str) -> Result<Option<Generation>, DbError> {
+        Ok(self
+            .conn
+            .query_row(
+                &format!("SELECT {GENERATION_COLUMNS} FROM generations WHERE id = ?1 AND user_id = ?2"),
+                params![id, user_id],
+                read_generation,
+            )
+            .optional()?)
+    }
+
+    /// Moves a queued generation to `running` once its user message is written.
+    pub fn start_generation(&self, id: &str, user_message_id: &str, deadline_at: Option<i64>) -> Result<(), DbError> {
+        self.conn.execute(
+            "UPDATE generations SET status = 'running', user_message_id = ?2, started_at = ?3, deadline_at = ?4
+             WHERE id = ?1 AND status = 'queued'",
+            params![id, user_message_id, now(), deadline_at],
+        )?;
+        Ok(())
+    }
+
+    /// Saves the reply so far while a generation runs. Ignored once it has finished.
+    pub fn flush_generation_text(&self, id: &str, text: &str) -> Result<(), DbError> {
+        self.conn.execute("UPDATE generations SET text = ?2 WHERE id = ?1 AND status = 'running'", params![id, text])?;
+        Ok(())
+    }
+
+    /// Ends a generation with its final status. Returns false if it had already ended.
+    pub fn finalize_generation(
+        &self,
+        id: &str,
+        status: &str,
+        text: &str,
+        error: Option<&str>,
+        assistant_message_id: Option<&str>,
+    ) -> Result<bool, DbError> {
+        Ok(self.conn.execute(
+            "UPDATE generations SET status = ?2, text = ?3, error = ?4, assistant_message_id = ?5, ended_at = ?6
+             WHERE id = ?1 AND status IN ('queued','running')",
+            params![id, status, text, error, assistant_message_id, now()],
+        )? > 0)
+    }
+
+    /// The caller's running and queued generations, oldest first.
+    pub fn list_active_generations(&self, user_id: &str) -> Result<Vec<Generation>, DbError> {
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {GENERATION_COLUMNS} FROM generations
+             WHERE user_id = ?1 AND status IN ('running','queued') ORDER BY id"
+        ))?;
+        let rows = stmt.query_map([user_id], read_generation)?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    pub fn queued_count(&self, conversation_id: &str) -> Result<i64, DbError> {
+        Ok(self.conn.query_row(
+            "SELECT COUNT(*) FROM generations WHERE conversation_id = ?1 AND status = 'queued'",
+            [conversation_id],
+            |r| r.get(0),
+        )?)
+    }
+
+    /// Whether the conversation has a running or queued generation.
+    pub fn conversation_busy(&self, conversation_id: &str) -> Result<bool, DbError> {
+        Ok(self.conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM generations WHERE conversation_id = ?1 AND status IN ('running','queued'))",
+            [conversation_id],
+            |r| r.get(0),
+        )?)
+    }
+
+    /// The oldest queued generation in the conversation.
+    pub fn next_queued(&self, conversation_id: &str) -> Result<Option<Generation>, DbError> {
+        Ok(self
+            .conn
+            .query_row(
+                &format!(
+                    "SELECT {GENERATION_COLUMNS} FROM generations
+                     WHERE conversation_id = ?1 AND status = 'queued' ORDER BY id LIMIT 1"
+                ),
+                [conversation_id],
+                read_generation,
+            )
+            .optional()?)
+    }
+
+    /// A generation this client already started with `client_request_id`.
+    pub fn find_by_request_id(&self, client_id: &str, client_request_id: &str) -> Result<Option<Generation>, DbError> {
+        Ok(self
+            .conn
+            .query_row(
+                &format!(
+                    "SELECT {GENERATION_COLUMNS} FROM generations WHERE client_id = ?1 AND client_request_id = ?2"
+                ),
+                params![client_id, client_request_id],
+                read_generation,
+            )
+            .optional()?)
+    }
 }
 
 #[cfg(test)]
@@ -562,10 +809,12 @@ mod tests {
         let db = Db::open_in_memory().unwrap();
         let t = tables(&db);
         for name in [
-            "users", "devices", "conversations", "messages", "messages_fts", "user_prefs", // live
+            "users", "clients", "conversations", "messages", "messages_fts", "user_prefs", // live
             "memory", "projects", "token_usage", // reserved
             "providers", // only the encrypted API keys, by provider id
             "config_snapshot", "redeemed_codes", // what the admin service pushes, and codes already used
+            "generations", // chat turns that outlive their client
+            "provider_health", // providers whose credentials were refused
         ] {
             assert!(t.iter().any(|x| x == name), "missing table {name}");
         }
@@ -577,7 +826,7 @@ mod tests {
             stmt.query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect()
         };
         assert_eq!(cols, ["id", "api_key_enc"], "a provider keeps only its id and its encrypted key");
-        assert!(!t.iter().any(|x| x == "device_tokens"), "devices replaces device_tokens");
+        assert!(!t.iter().any(|x| x == "client_tokens"), "clients replaces client_tokens");
         let v: i64 = db.conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
         assert_eq!(v as usize, MIGRATIONS.len());
         let app: i64 = db.conn.query_row("PRAGMA application_id", [], |r| r.get(0)).unwrap();
@@ -640,6 +889,234 @@ mod tests {
     }
 
     #[test]
+    fn a_database_from_before_the_clients_rename_keeps_its_paired_clients_and_generations() {
+        // A 0.4.0 database: schema version 5, with a paired device (as it was called) and a generation it started. names-ok
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        for (i, sql) in MIGRATIONS.iter().take(5).enumerate() {
+            conn.execute_batch(sql).unwrap();
+            if i == 0 {
+                conn.execute_batch(&format!("PRAGMA application_id = {APPLICATION_ID}")).unwrap();
+            }
+        }
+        conn.execute_batch("PRAGMA user_version = 5").unwrap();
+        conn.execute_batch(
+            "INSERT INTO users (id, name, created_at) VALUES ('u1','owner',0);
+             INSERT INTO devices (id, user_id, name, hash, created_at) VALUES ('d1','u1','Work laptop','h1',0); -- names-ok
+             INSERT INTO conversations (id, user_id, title, created_at, updated_at) VALUES ('c1','u1','t',0,0);
+             INSERT INTO generations (id, user_id, device_id, conversation_id, client_request_id, status, queued_at) -- names-ok
+                 VALUES ('g1','u1','d1','c1','r1','done',0);
+             INSERT INTO redeemed_codes (hash, device_id, redeemed_at) VALUES ('code','d1',0);", // names-ok
+        )
+        .unwrap();
+        let db = Db::init(conn).unwrap();
+        let v: i64 = db.conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(v as usize, MIGRATIONS.len());
+        let t = tables(&db);
+        assert!(t.iter().any(|x| x == "clients") && !t.iter().any(|x| x == "devices"), "{t:?}"); // names-ok
+        let name: String = db.conn.query_row("SELECT name FROM clients WHERE hash = 'h1'", [], |r| r.get(0)).unwrap();
+        assert_eq!(name, "Work laptop", "the paired client and its token hash survive");
+        let g = db.find_by_request_id("d1", "r1").unwrap().expect("the generation is found by its client id");
+        assert_eq!(g.id, "g1");
+        let used: String = db.conn.query_row("SELECT client_id FROM redeemed_codes", [], |r| r.get(0)).unwrap();
+        assert_eq!(used, "d1");
+        assert!(crate::auth::authenticate(&db, "no such token").unwrap().is_none());
+    }
+
+    #[test]
+    fn a_v3_database_upgrades_to_v4_and_keeps_its_data() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        for (i, sql) in MIGRATIONS.iter().take(3).enumerate() {
+            conn.execute_batch(sql).unwrap();
+            if i == 0 {
+                conn.execute_batch(&format!("PRAGMA application_id = {APPLICATION_ID}")).unwrap();
+            }
+        }
+        conn.execute_batch("PRAGMA user_version = 3").unwrap();
+        conn.execute_batch(
+            "INSERT INTO users (id, name, created_at) VALUES ('u1','owner',0);
+             INSERT INTO conversations (id, user_id, title, created_at, updated_at) VALUES ('c1','u1','t',0,0);
+             INSERT INTO messages (id, conversation_id, user_id, role, content, created_at) VALUES ('m1','c1','u1','user','hi',0);",
+        )
+        .unwrap();
+        assert!(!conn.prepare("SELECT 1 FROM sqlite_master WHERE name = 'generations'").unwrap().exists([]).unwrap());
+        let db = Db::init(conn).unwrap();
+        let v: i64 = db.conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(v as usize, MIGRATIONS.len());
+        assert!(v >= 4);
+        assert!(tables(&db).iter().any(|x| x == "generations"));
+        let n: i64 = db.conn.query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 1, "existing history survives");
+        // The unique index covers (client, client_request_id) only when the latter is set.
+        let ins = |id: &str, rid: Option<&str>| {
+            db.conn.execute(
+                "INSERT INTO generations (id, user_id, conversation_id, client_id, client_request_id, status, queued_at)
+                 VALUES (?1, 'u1', 'c1', 'd1', ?2, 'running', 0)",
+                params![id, rid],
+            )
+        };
+        ins("g1", Some("r1")).unwrap();
+        assert!(ins("g2", Some("r1")).is_err(), "a repeated request id from one client is refused");
+        ins("g3", None).unwrap();
+        ins("g4", None).unwrap();
+    }
+
+    fn new_gen<'a>(user: &'a str, conv: &'a str, status: &'a str) -> NewGeneration<'a> {
+        NewGeneration {
+            user_id: user,
+            client_id: Some("dev1"),
+            conversation_id: conv,
+            user_message_id: None,
+            client_request_id: None,
+            provider_id: Some("p"),
+            status,
+            prompt: "hello",
+            deadline_at: None,
+        }
+    }
+
+    fn other_user(db: &Db) -> String {
+        db.conn.execute("INSERT INTO users (id, name, created_at) VALUES ('u2','other',0)", []).unwrap();
+        "u2".into()
+    }
+
+    #[test]
+    fn generations_are_created_read_and_finalized() {
+        let (db, u) = db_with_user();
+        let c = db.create_conversation(&u, "c").unwrap();
+        let id = db.create_generation(&new_gen(&u, &c, "running")).unwrap();
+        let g = db.get_generation(&u, &id).unwrap().unwrap();
+        assert_eq!((g.status.as_str(), g.prompt.as_str(), g.text.as_str()), ("running", "hello", ""));
+        assert!(g.started_at.is_some() && g.ended_at.is_none());
+
+        db.flush_generation_text(&id, "partial").unwrap();
+        assert_eq!(db.get_generation(&u, &id).unwrap().unwrap().text, "partial");
+
+        assert!(db.finalize_generation(&id, "done", "full text", None, Some("m1")).unwrap());
+        let g = db.get_generation(&u, &id).unwrap().unwrap();
+        assert_eq!((g.status.as_str(), g.text.as_str(), g.assistant_message_id.as_deref()), ("done", "full text", Some("m1")));
+        assert!(g.ended_at.is_some());
+
+        // A finished generation is final: a second finalize and a late flush change nothing.
+        assert!(!db.finalize_generation(&id, "error", "x", Some("boom"), None).unwrap());
+        db.flush_generation_text(&id, "late").unwrap();
+        let g = db.get_generation(&u, &id).unwrap().unwrap();
+        assert_eq!((g.status.as_str(), g.text.as_str()), ("done", "full text"));
+    }
+
+    #[test]
+    fn another_users_generation_is_invisible() {
+        let (db, u) = db_with_user();
+        let c = db.create_conversation(&u, "c").unwrap();
+        let id = db.create_generation(&new_gen(&u, &c, "running")).unwrap();
+        let v = other_user(&db);
+        assert_eq!(db.get_generation(&v, &id).unwrap(), None);
+        assert!(db.list_active_generations(&v).unwrap().is_empty());
+        assert_eq!(db.list_active_generations(&u).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn active_list_holds_running_and_queued_only() {
+        let (db, u) = db_with_user();
+        let c = db.create_conversation(&u, "c").unwrap();
+        let done = db.create_generation(&new_gen(&u, &c, "running")).unwrap();
+        db.finalize_generation(&done, "done", "t", None, None).unwrap();
+        let running = db.create_generation(&new_gen(&u, &c, "running")).unwrap();
+        let queued = db.create_generation(&new_gen(&u, &c, "queued")).unwrap();
+        let ids: Vec<String> = db.list_active_generations(&u).unwrap().into_iter().map(|g| g.id).collect();
+        assert_eq!(ids, [running, queued]);
+    }
+
+    #[test]
+    fn queue_counts_and_order() {
+        let (db, u) = db_with_user();
+        let c = db.create_conversation(&u, "c").unwrap();
+        let c2 = db.create_conversation(&u, "c2").unwrap();
+        assert!(!db.conversation_busy(&c).unwrap());
+        assert_eq!(db.next_queued(&c).unwrap(), None);
+        db.create_generation(&new_gen(&u, &c, "running")).unwrap();
+        assert!(db.conversation_busy(&c).unwrap());
+        assert_eq!(db.queued_count(&c).unwrap(), 0);
+        let q1 = db.create_generation(&new_gen(&u, &c, "queued")).unwrap();
+        let q2 = db.create_generation(&new_gen(&u, &c, "queued")).unwrap();
+        db.create_generation(&new_gen(&u, &c2, "queued")).unwrap();
+        assert_eq!(db.queued_count(&c).unwrap(), 2, "other conversations don't count");
+        assert_eq!(db.next_queued(&c).unwrap().unwrap().id, q1, "oldest first");
+
+        db.start_generation(&q1, "um1", Some(99)).unwrap();
+        let g = db.get_generation(&u, &q1).unwrap().unwrap();
+        assert_eq!((g.status.as_str(), g.user_message_id.as_deref(), g.deadline_at), ("running", Some("um1"), Some(99)));
+        assert!(g.started_at.is_some());
+        assert_eq!(db.next_queued(&c).unwrap().unwrap().id, q2);
+        db.finalize_generation(&q2, "cancelled", "", None, None).unwrap();
+        assert_eq!(db.queued_count(&c).unwrap(), 0);
+    }
+
+    #[test]
+    fn prune_removes_only_finished_rows_older_than_the_cutoff() {
+        let (db, u) = db_with_user();
+        let c = db.create_conversation(&u, "c").unwrap();
+        let end = |status: &str, ended_at: i64| {
+            let id = db.create_generation(&new_gen(&u, &c, "running")).unwrap();
+            db.finalize_generation(&id, status, "t", None, None).unwrap();
+            db.conn.execute("UPDATE generations SET ended_at = ?2 WHERE id = ?1", params![id, ended_at]).unwrap();
+            id
+        };
+        let old: Vec<String> = ["done", "error", "cancelled", "timed_out", "interrupted"].iter().map(|s| end(s, 100)).collect();
+        let fresh = end("done", 1000);
+        let running = db.create_generation(&new_gen(&u, &c, "running")).unwrap();
+        let queued = db.create_generation(&new_gen(&u, &c, "queued")).unwrap();
+
+        assert_eq!(db.prune_generations(500).unwrap(), 5);
+        for id in &old {
+            assert_eq!(db.get_generation(&u, id).unwrap(), None);
+        }
+        for id in [&fresh, &running, &queued] {
+            assert!(db.get_generation(&u, id).unwrap().is_some(), "{id} stays");
+        }
+        assert_eq!(db.prune_generations(500).unwrap(), 0);
+        assert_eq!(db.prune_generations(2000).unwrap(), 1, "a later cutoff takes the fresh one too");
+    }
+
+    #[test]
+    fn find_by_request_id_is_per_client() {
+        let (db, u) = db_with_user();
+        let c = db.create_conversation(&u, "c").unwrap();
+        let mut n = new_gen(&u, &c, "running");
+        n.client_request_id = Some("req-1");
+        let id = db.create_generation(&n).unwrap();
+        assert_eq!(db.find_by_request_id("dev1", "req-1").unwrap().unwrap().id, id);
+        assert_eq!(db.find_by_request_id("dev2", "req-1").unwrap(), None);
+        assert_eq!(db.find_by_request_id("dev1", "req-2").unwrap(), None);
+    }
+
+    #[test]
+    fn deleting_a_conversation_removes_its_generations() {
+        let (db, u) = db_with_user();
+        let c = db.create_conversation(&u, "c").unwrap();
+        let id = db.create_generation(&new_gen(&u, &c, "queued")).unwrap();
+        db.delete_conversation(&u, &c).unwrap();
+        assert_eq!(db.get_generation(&u, &id).unwrap(), None);
+    }
+
+    #[test]
+    fn provider_health_flags_clears_and_keeps_the_first_time() {
+        let (db, _) = db_with_user();
+        assert!(db.provider_health().unwrap().is_empty());
+        db.flag_provider_auth_failed("p1", "http_401").unwrap();
+        db.conn.execute("UPDATE provider_health SET since = 100", []).unwrap();
+        db.flag_provider_auth_failed("p1", "http_403").unwrap(); // flagged again: same since, newer code
+        db.flag_provider_auth_failed("p2", "config").unwrap();
+        let h = db.provider_health().unwrap();
+        assert_eq!(h, [("p1".into(), "auth_failed".into(), 100, Some("http_403".into())), ("p2".into(), "auth_failed".into(), h[1].2, Some("config".into()))]);
+        assert!(db.clear_provider_health("p1").unwrap());
+        assert!(!db.clear_provider_health("p1").unwrap(), "already clear");
+        assert_eq!(db.provider_health().unwrap().len(), 1);
+        assert!(db.conn.execute("INSERT INTO provider_health VALUES ('x', 'broken', 0, NULL)", []).is_err(), "only the known status");
+    }
+
+    #[test]
     fn memory_is_append_only() {
         let (db, u) = db_with_user();
         db.conn.execute("INSERT INTO memory (id, user_id, content, created_at) VALUES ('m1', ?1, 'x', 0)", [&u]).unwrap();
@@ -664,7 +1141,7 @@ mod tests {
         let old = dir.join("old.db");
         Connection::open(&old)
             .unwrap()
-            .execute_batch("CREATE TABLE device_tokens (id TEXT); PRAGMA user_version = 1;")
+            .execute_batch("CREATE TABLE client_tokens (id TEXT); PRAGMA user_version = 1;")
             .unwrap();
         assert!(refused(&old));
         let err = Db::open(&old).err().unwrap().to_string();

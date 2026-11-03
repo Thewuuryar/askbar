@@ -14,7 +14,7 @@ async fn start() -> Server {
     let db = askbar_server::Db::open_in_memory().unwrap();
     let user = db.seed_server().unwrap();
     let state = AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), askbar_server::MIN_CLIENT);
-    let app: Router = askbar_server::api_router(state.clone());
+    let app: Router = askbar_server::client_router(state.clone());
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = l.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
@@ -26,10 +26,10 @@ impl Server {
         format!("http://{}{p}", self.addr)
     }
     async fn pair(&self, code: &str) -> reqwest::Response {
-        self.http.post(self.url("/api/v1/pair")).json(&serde_json::json!({ "code": code })).send().await.unwrap()
+        self.http.post(self.url("/api/client/v1/pairings")).json(&serde_json::json!({ "code": code })).send().await.unwrap()
     }
     async fn probe(&self, token: Option<&str>) -> u16 {
-        let mut r = self.http.get(self.url("/api/v1/whoami"));
+        let mut r = self.http.get(self.url("/api/client/v1/me"));
         if let Some(t) = token {
             r = r.bearer_auth(t);
         }
@@ -50,7 +50,7 @@ async fn missing_and_bad_tokens_are_401() {
     let s = start().await;
     assert_eq!(s.probe(None).await, 401);
     assert_eq!(s.probe(Some("abt_nope")).await, 401);
-    let r = s.http.get(s.url("/api/v1/whoami")).header("authorization", "Basic abc").send().await.unwrap();
+    let r = s.http.get(s.url("/api/client/v1/me")).header("authorization", "Basic abc").send().await.unwrap();
     assert_eq!(r.status(), 401);
 }
 
@@ -59,7 +59,7 @@ async fn valid_token_works_and_updates_last_seen() {
     let s = start().await;
     let token = s.token().await;
     let seen = |s: &Server| -> Option<i64> {
-        s.state.db.lock().unwrap().conn().query_row("SELECT last_seen FROM devices", [], |r| r.get(0)).unwrap()
+        s.state.db.lock().unwrap().conn().query_row("SELECT last_seen FROM clients", [], |r| r.get(0)).unwrap()
     };
     assert_eq!(seen(&s), None);
     assert_eq!(s.probe(Some(&token)).await, 204);
@@ -71,7 +71,7 @@ async fn revoked_token_is_401() {
     let s = start().await;
     let token = s.token().await;
     assert_eq!(s.probe(Some(&token)).await, 204);
-    s.state.db.lock().unwrap().conn().execute("UPDATE devices SET revoked_at = 1", []).unwrap();
+    s.state.db.lock().unwrap().conn().execute("UPDATE clients SET revoked_at = 1", []).unwrap();
     assert_eq!(s.probe(Some(&token)).await, 401);
 }
 
@@ -96,21 +96,50 @@ async fn tokens_are_stored_hashed() {
     let s = start().await;
     let token = s.token().await;
     let db = s.state.db.lock().unwrap();
-    let stored: String = db.conn().query_row("SELECT hash FROM devices", [], |r| r.get(0)).unwrap();
+    let stored: String = db.conn().query_row("SELECT hash FROM clients", [], |r| r.get(0)).unwrap();
     assert_ne!(stored, token);
     assert_eq!(stored.len(), 64);
-    let name: String = db.conn().query_row("SELECT name FROM devices", [], |r| r.get(0)).unwrap();
+    let name: String = db.conn().query_row("SELECT name FROM clients", [], |r| r.get(0)).unwrap();
     assert_eq!(name, "laptop");
 }
 
 #[tokio::test]
 async fn health_stays_public() {
     let s = start().await;
-    assert_eq!(s.http.get(s.url("/api/v1/health")).send().await.unwrap().status(), 200);
+    assert_eq!(s.http.get(s.url("/api/client/v1/health")).send().await.unwrap().status(), 200);
 }
 
 fn client() -> reqwest::Client {
     let mut h = reqwest::header::HeaderMap::new();
-    h.insert(askbar_proto::CLIENT_VERSION_HEADER, "0.3.0".parse().unwrap());
+    h.insert(askbar_proto::CLIENT_VERSION_HEADER, "0.5.0".parse().unwrap());
     reqwest::Client::builder().default_headers(h).build().unwrap()
+}
+
+#[tokio::test]
+async fn a_refused_token_and_a_bad_pairing_code_are_problems() {
+    let s = start().await;
+    let ask = |token: Option<&str>| {
+        let mut r = s.http.get(s.url("/api/client/v1/me"));
+        if let Some(t) = token {
+            r = r.bearer_auth(t);
+        }
+        r.send()
+    };
+    for token in [None, Some("abt_wrong")] {
+        let r = ask(token).await.unwrap();
+        assert_eq!(r.status(), 401);
+        assert_eq!(r.headers()["www-authenticate"], "Bearer");
+        assert_eq!(r.headers()["content-type"], "application/problem+json");
+        let p: askbar_proto::Problem = r.json().await.unwrap();
+        assert_eq!(p.error, "unauthorized");
+    }
+    let r = s.pair("not-a-code").await;
+    assert_eq!(r.status(), 401);
+    let p: askbar_proto::Problem = r.json().await.unwrap();
+    assert_eq!(p.error, "unauthorized");
+    assert!(p.detail.contains("pairing code"));
+    // A body that is not JSON is a bad request problem, not plain text.
+    let r = s.http.post(s.url("/api/client/v1/pairings")).header("content-type", "application/json").body("nope").send().await.unwrap();
+    assert_eq!(r.status(), 400);
+    assert_eq!(r.json::<askbar_proto::Problem>().await.unwrap().error, "bad_request");
 }

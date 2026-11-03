@@ -1,13 +1,13 @@
 # Askbar. Copy .env.example to .env and edit it first.
-#   docker compose up -d                    server, admin and the HTTPS front end (Caddy)
+#   docker compose up -d                    server, admin, the HTTPS front end (Caddy) and CLIProxyAPI
 #   docker compose --profile dev up -d      plus the mock LLM (tests/mock_llm.py)
-#   docker compose --profile cpa up -d      plus CLIProxyAPI (subscription logins as a provider)
 #
-# Three services, two networks:
-#   edge  Caddy and the server (the device API on 8080). Caddy is the only service with published ports.
-#   mgmt  the admin and the server's management API, nothing else. `internal`, so it has no route out.
-# The admin joins no network but mgmt. Caddy reaches it only through its unix socket (volume admin-run),
-# for admin.<hostname>.
+# Three services, three networks:
+#   edge  Caddy and the server (the client API on 8080). Caddy is the only service with published ports.
+#   server-api  the admin and the server's server API, nothing else. `internal`, so it has no route out.
+#   admin-setup Caddy alone: the first-run page for the admin on 127.0.0.1:8081 (plain HTTP, host loopback only).
+# The admin joins no network but server-api. Caddy reaches it only through its unix socket (volume admin-run),
+# for <hostname>/admin. One host name serves the admin (/admin), the client API (/api/client) and a 404 for the rest.
 
 services:
   server:
@@ -18,11 +18,13 @@ services:
     container_name: askbar-server
     restart: unless-stopped
     environment:
-      # One specific address on the mgmt network; the server refuses a wildcard here.
-      ASKBAR_MGMT_ADDR: 172.30.0.2:8082
+      # One specific address on the server-api network; the server refuses a wildcard here.
+      ASKBAR_SERVER_API_ADDR: 172.30.0.2:8082
+      # audit.db lives on its own volume, mounted into the server and nothing else.
+      ASKBAR_AUDIT_DIR: /audit
     networks:
       edge: {}
-      mgmt:
+      server-api:
         ipv4_address: 172.30.0.2
     volumes:
       # The bind-mounted DATA_DIR must be writable by uid 10002.
@@ -31,8 +33,11 @@ services:
       # Back this volume up separately; without master.key the server will not start against a database
       # that holds encrypted provider keys.
       - askbar-secrets:/secrets
+      # The audit store (audit.db): a trace of every reply. Only the server mounts it; the admin reads
+      # it through the server API, never from disk. Back it up by copying the volume.
+      - audit-data:/audit
       # The admin's token hash (token.sha256). Read-only: the server can check the token, never mint one.
-      - askbar-mgmt:/mgmt:ro
+      - server-token:/server-token:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
@@ -44,15 +49,15 @@ services:
     container_name: askbar-admin
     restart: unless-stopped
     environment:
-      ASKBAR_SERVER_MGMT_URL: http://172.30.0.2:8082
+      ASKBAR_SERVER_API_URL: http://172.30.0.2:8082
       ASKBAR_PUBLIC_URL: ${ASKBAR_PUBLIC_URL:-}
     networks:
-      mgmt:
+      server-api:
         ipv4_address: 172.30.0.3
     volumes:
       - admin-data:/admin-data
       - admin-secrets:/admin-secrets
-      - askbar-mgmt:/mgmt
+      - server-token:/server-token
       - admin-run:/run/admin
       - caddy-run:/caddy-run
       - caddy-secrets:/caddy-secrets
@@ -86,10 +91,19 @@ services:
       admin:
         condition: service_healthy
     networks:
-      - edge
+      edge: {}
+      # First-run access: nothing but Caddy is on this network, and Caddy serves the admin there over plain
+      # HTTP (see SETUP_BIND in askbar-admin/src/caddy.rs). Only the host's loopback can reach it, so the
+      # admin login can be opened with no host name, certificate or DNS yet.
+      # The name matters: when a container has several networks Docker publishes its ports on the address
+      # it has on the first one in name order (the default-route network), and Caddy listens for this page
+      # on the address below only. `admin-setup` sorts before `edge`, so the published port reaches it.
+      admin-setup:
+        ipv4_address: 172.31.0.2
     ports:
       - "443:443"
       - "80:80"
+      - "127.0.0.1:8081:8081"
     volumes:
       - caddy-data:/data
       - caddy-config:/config
@@ -98,11 +112,11 @@ services:
       - caddy-secrets:/caddy-secrets:ro
 
   # --- CLIProxyAPI: use a ChatGPT/Claude/Gemini subscription as an OpenAI-compatible provider. ---
-  # `docker compose --profile cpa up -d`, then see cpa/README or the main README for the one-time login.
+  # Starts with the stack (`docker compose up -d`); see cpa/README.md for the one-time login. Until a login is
+  # done it idles and no provider uses it.
   # Its API port is NOT published; only containers on this compose network (the server) can reach it.
   cpa-init:
-    profiles: ["cpa"]
-    image: eceasy/cli-proxy-api:latest
+    image: eceasy/cli-proxy-api:v8.0.51@sha256:15d13889e1a39a688be306dfbf2f6cf9003e99cd913b5070fa463f8ab2aa0031
     # Strips CRs first, so the script still runs if a Windows checkout turned its line endings into CRLF.
     entrypoint: ["/bin/sh", "-c", "tr -d '\\r' < /init.sh | sh -s -- \"$$@\"", "init"]
     volumes:
@@ -110,8 +124,7 @@ services:
       - cpa-config:/cpa-config
 
   cpa:
-    profiles: ["cpa"]
-    image: eceasy/cli-proxy-api:latest
+    image: eceasy/cli-proxy-api:v8.0.51@sha256:15d13889e1a39a688be306dfbf2f6cf9003e99cd913b5070fa463f8ab2aa0031
     restart: unless-stopped
     depends_on:
       cpa-init:
@@ -124,12 +137,12 @@ services:
       - cpa-auth:/root/.cli-proxy-api
 
   # One-time provider login (run on demand, never started by `up`):
-  #   docker compose --profile cpa run --rm --service-ports cpa-login ./CLIProxyAPI -config /cpa-config/config.yaml -claude-login -no-browser
+  #   docker compose --profile cpa-login run --rm --service-ports cpa-login ./CLIProxyAPI -config /cpa-config/config.yaml -claude-login -no-browser
   # `--service-ports` publishes the OAuth callback ports on 127.0.0.1 for the duration of that command only.
   # Other logins: -codex-login (port 1455), -login/-antigravity-login, ... see `./CLIProxyAPI -h`.
   cpa-login:
     profiles: ["cpa-login"]
-    image: eceasy/cli-proxy-api:latest
+    image: eceasy/cli-proxy-api:v8.0.51@sha256:15d13889e1a39a688be306dfbf2f6cf9003e99cd913b5070fa463f8ab2aa0031
     volumes:
       - cpa-config:/cpa-config
       - cpa-auth:/root/.cli-proxy-api
@@ -141,7 +154,11 @@ services:
 
 networks:
   edge:
-  mgmt:
+  admin-setup:
+    ipam:
+      config:
+        - subnet: 172.31.0.0/24
+  server-api:
     internal: true
     ipam:
       config:
@@ -149,7 +166,8 @@ networks:
 
 volumes:
   askbar-secrets:
-  askbar-mgmt:
+  audit-data:
+  server-token:
   admin-data:
   admin-secrets:
   admin-run:

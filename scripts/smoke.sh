@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Smoke test: start the server and the admin on empty data directories, pair a device over the
+# Smoke test: start the server and the admin on empty data directories, pair a client over the
 # HTTP API, send a chat and read the streamed reply, then search history.
 # Prints PASS or FAIL per step. Steps it cannot check itself ask a person for y or n.
 #
@@ -17,7 +17,7 @@ cd "$(dirname "$0")/.."
 
 URL=""
 PAIRING="${ASKBAR_SMOKE_PAIRING:-}"
-CLIENT_VERSION="0.3.0"
+CLIENT_VERSION="0.5.0"
 while [ $# -gt 0 ]; do
   case "$1" in
     --url) URL="${2:?--url needs a value}"; shift 2 ;;
@@ -65,19 +65,19 @@ if [ -z "$URL" ]; then
   if [ ! -x "$BIN" ]; then cargo build -q -p askbar-server || { fail "build the server"; exit 1; }; fi
   ABIN="${ASKBAR_ADMIN_BIN:-target/debug/askbar-admin}"
   if [ ! -x "$ABIN" ]; then cargo build -q -p askbar-admin || { fail "build the admin"; exit 1; }; fi
-  API_PORT=$(free_port); MGMT_PORT=$(free_port); MOCK_PORT=$(free_port)
+  API_PORT=$(free_port); SERVER_API_PORT=$(free_port); MOCK_PORT=$(free_port)
   URL="http://127.0.0.1:$API_PORT"
   SOCK="$WORK/admin-run/admin.sock"
   mkdir -p "$WORK/data" "$WORK/secrets" "$WORK/admin-run"
   python3 -u tests/mock_llm.py "$MOCK_PORT" >/dev/null 2>&1 & PIDS+=($!)
   # The admin service: its own database and secrets, a unix socket and no TCP port.
   ASKBAR_ADMIN_SOCKET="$SOCK" ASKBAR_ADMIN_DATA_DIR="$WORK/admin-data" ASKBAR_ADMIN_SECRETS_DIR="$WORK/admin-secrets" \
-    ASKBAR_MGMT_DIR="$WORK/mgmt" ASKBAR_SERVER_MGMT_URL="http://127.0.0.1:$MGMT_PORT" ASKBAR_PUBLIC_URL="$URL" \
+    ASKBAR_SERVER_TOKEN_DIR="$WORK/server-token" ASKBAR_SERVER_API_URL="http://127.0.0.1:$SERVER_API_PORT" ASKBAR_PUBLIC_URL="$URL" \
     "$ABIN" >"$WORK/admin.log" 2>&1 & PIDS+=($!)
   for _ in $(seq 100); do [ -S "$SOCK" ] && break; sleep 0.1; done
-  # The server: the API, and a management listener that only the admin's token opens.
-  ASKBAR_API_ADDR="127.0.0.1:$API_PORT" \
-    ASKBAR_MGMT_ADDR="127.0.0.1:$MGMT_PORT" ASKBAR_MGMT_TOKEN_HASH_FILE="$WORK/mgmt/token.sha256" \
+  # The server: the API, and a server listener that only the admin's token opens.
+  ASKBAR_CLIENT_API_ADDR="127.0.0.1:$API_PORT" \
+    ASKBAR_SERVER_API_ADDR="127.0.0.1:$SERVER_API_PORT" ASKBAR_SERVER_TOKEN_HASH_FILE="$WORK/server-token/token.sha256" \
     ASKBAR_DATA_DIR="$WORK/data" ASKBAR_SECRETS_DIR="$WORK/secrets" \
     ASKBAR_PUBLIC_URL="$URL" "$BIN" >"$WORK/server.log" 2>&1 & PIDS+=($!)
 fi
@@ -86,8 +86,8 @@ URL="${URL%/}"
 echo "Target: $URL ($([ $LOCAL = 1 ] && echo 'throwaway server on an empty data directory' || echo 'running stack'))"
 
 # 1. The server answers.
-if wait_for_url "$URL/api/v1/health" 20; then pass "server is up"; else
-  fail "server is up" "no answer from $URL/api/v1/health"; [ $LOCAL = 1 ] && tail -5 "$WORK/server.log"; exit 1
+if wait_for_url "$URL/api/client/v1/health" 20; then pass "server is up"; else
+  fail "server is up" "no answer from $URL/api/client/v1/health"; [ $LOCAL = 1 ] && tail -5 "$WORK/server.log"; exit 1
 fi
 
 # 2-3. Local only: first-run setup through the admin, a provider, a pair code.
@@ -97,18 +97,24 @@ if [ $LOCAL = 1 ]; then
     curl -fsS --unix-socket "$SOCK" -X "$1" -H 'x-askbar-admin: 1' -H 'content-type: application/json' -b "$WORK/jar" -c "$WORK/jar" \
       ${3:+-d "$3"} "http://admin$2"
   }
-  if admin POST /admin/api/setup/password "{\"password\":\"$PW\"}" >/dev/null; then
+  if admin PUT /admin/api/v1/setup/password "{\"password\":\"$PW\"}" >/dev/null; then
     pass "first-run setup"
   else
     fail "first-run setup"
   fi
-  if admin POST /admin/api/providers \
+  # The audit passphrase is part of setup; without its key the server refuses to start replies.
+  if admin PUT /admin/api/v1/setup/audit-key '{"passphrase":"smoke test audit passphrase","confirm":"smoke test audit passphrase"}' >/dev/null; then
+    pass "audit key setup"
+  else
+    fail "audit key setup"
+  fi
+  if admin POST /admin/api/v1/providers \
       "{\"name\":\"mock\",\"type\":\"openai\",\"base_url\":\"http://127.0.0.1:$MOCK_PORT/v1\",\"model\":\"mock-model\",\"api_key\":\"sk-smoke\"}" >/dev/null; then
     pass "add a provider that points at the mock LLM"
   else
     fail "add a provider that points at the mock LLM"
   fi
-  if admin POST /admin/api/pair '{"name":"smoke test device"}' >"$WORK/pair.json"; then
+  if admin POST /admin/api/v1/pairings '{"name":"smoke test client"}' >"$WORK/pair.json"; then
     PAIRING=$(json "$WORK/pair.json" 'd["pairing"]'); pass "create a pair code"
   else
     fail "create a pair code"
@@ -117,7 +123,7 @@ elif [ -z "$PAIRING" ]; then
   read -r -p "Paste a pairing string from the admin page: " PAIRING
 fi
 
-# 4. Pair a test device over the HTTP API.
+# 4. Pair a test client over the HTTP API.
 TOKEN=""
 if [ -n "$PAIRING" ]; then
   CODE=$(py 'import base64,json,sys
@@ -127,28 +133,28 @@ b=s[len("askbar-pair:"):]
 d=json.loads(base64.urlsafe_b64decode(b+"="*(-len(b)%4)))
 print(d["code"])' "$PAIRING" 2>/dev/null)
   if [ -n "$CODE" ] && curl -fsS -X POST -H "x-askbar-client-version: $CLIENT_VERSION" -H 'content-type: application/json' \
-      -d "{\"code\":\"$CODE\"}" "$URL/api/v1/pair" >"$WORK/token.json" 2>/dev/null; then
+      -d "{\"code\":\"$CODE\"}" "$URL/api/client/v1/pairings" >"$WORK/token.json" 2>/dev/null; then
     TOKEN=$(json "$WORK/token.json" 'd["token"]')
   fi
 fi
-if [ -n "$TOKEN" ]; then pass "pair a test device"; else fail "pair a test device"; fi
+if [ -n "$TOKEN" ]; then pass "pair a test client"; else fail "pair a test client"; fi
 api() { curl -sS -H "authorization: Bearer $TOKEN" -H "x-askbar-client-version: $CLIENT_VERSION" "$@"; }
 
 if [ -n "$TOKEN" ]; then
   # 5. The token works; an unrelated one does not.
-  [ "$(api -o /dev/null -w '%{http_code}' "$URL/api/v1/whoami")" = "204" ] && pass "the device token is accepted" || fail "the device token is accepted"
-  [ "$(curl -sS -o /dev/null -w '%{http_code}' -H 'authorization: Bearer nope' -H "x-askbar-client-version: $CLIENT_VERSION" "$URL/api/v1/whoami")" = "401" ] \
+  [ "$(api -o /dev/null -w '%{http_code}' "$URL/api/client/v1/me")" = "204" ] && pass "the client token is accepted" || fail "the client token is accepted"
+  [ "$(curl -sS -o /dev/null -w '%{http_code}' -H 'authorization: Bearer nope' -H "x-askbar-client-version: $CLIENT_VERSION" "$URL/api/client/v1/me")" = "401" ] \
     && pass "a wrong token is refused" || fail "a wrong token is refused"
 
   # 6. Providers.
-  api "$URL/api/v1/providers" >"$WORK/providers.json"
+  api "$URL/api/client/v1/providers" >"$WORK/providers.json"
   PROVIDER=$(json "$WORK/providers.json" 'd[0]["id"]')
   if [ -n "$PROVIDER" ]; then pass "the server lists a provider ($(json "$WORK/providers.json" 'd[0]["name"]'))"; else fail "the server lists a provider"; fi
 
   # 7. Chat: read the streamed reply.
   QUESTION="smoke question zebra"
   api -N --max-time 60 -X POST -H 'content-type: application/json' \
-    -d "{\"provider\":\"$PROVIDER\",\"text\":\"$QUESTION\"}" "$URL/api/v1/chat" >"$WORK/chat.sse" 2>/dev/null
+    -d "{\"provider\":\"$PROVIDER\",\"text\":\"$QUESTION\"}" "$URL/api/client/v1/chat" >"$WORK/chat.sse" 2>/dev/null
   CHAT=$(py 'import json,sys
 events=[]; name=None
 for line in open(sys.argv[1], encoding="utf-8"):
@@ -165,7 +171,7 @@ print("ok" if ok else "bad", conv, len(text))' "$WORK/chat.sse" 2>/dev/null)
 
   # 8. History holds the exchange.
   if [ -n "${CONV_ID:-}" ]; then
-    api "$URL/api/v1/conversations/$CONV_ID" >"$WORK/conv.json"
+    api "$URL/api/client/v1/conversations/$CONV_ID" >"$WORK/conv.json"
     if [ "$(json "$WORK/conv.json" 'len(d["messages"])')" = "2" ] \
        && [ "$(json "$WORK/conv.json" 'd["messages"][0]["content"]')" = "$QUESTION" ]; then
       pass "the conversation holds the question and the reply"
@@ -177,15 +183,40 @@ print("ok" if ok else "bad", conv, len(text))' "$WORK/chat.sse" 2>/dev/null)
   fi
 
   # 9. Search history.
-  code=$(api -o "$WORK/search.json" -w '%{http_code}' --get --data-urlencode "q=zebra" "$URL/api/v1/search")
+  code=$(api -o "$WORK/search.json" -w '%{http_code}' --get --data-urlencode "q=zebra" "$URL/api/client/v1/search")
   if [ "$code" = "200" ] && [ "$(json "$WORK/search.json" 'len(d)')" -ge 1 ] 2>/dev/null; then
     pass "search history finds the question"
   else
     fail "search history finds the question" "HTTP $code"
   fi
+
+  # 10. Retries: the mock refuses this message with a 429 (Retry-After: 1) the first time; the
+  # server waits and tries again, and the reply still completes.
+  api -N --max-time 60 -X POST -H 'content-type: application/json' \
+    -d "{\"provider\":\"$PROVIDER\",\"text\":\"smoke 429once retry\"}" "$URL/api/client/v1/chat" >"$WORK/retry.sse" 2>/dev/null
+  RETRY=$(py 'import sys
+text=open(sys.argv[1], encoding="utf-8").read()
+print("ok" if "event: delta" in text and text.rstrip().endswith("data: {\"event\":\"done\"}") and "event: error" not in text else "bad")' "$WORK/retry.sse" 2>/dev/null)
+  if [ "$RETRY" = "ok" ]; then pass "a provider that answers 429 once still completes the reply"; else fail "a provider that answers 429 once still completes the reply" "$(tail -c 200 "$WORK/retry.sse")"; fi
 fi
 
-# 10. What only a person can check.
+# 10b. The shapes the APIs promise: the old prefix says "update", a refusal is a problem, and (local) an admin API key works.
+OLD=$(curl -sS -o "$WORK/old.json" -w '%{http_code}' "$URL/api/v1/health" 2>/dev/null || true)
+if [ "$OLD" = "426" ] && [ "$(json "$WORK/old.json" "d['error']")" = "client_too_old" ]; then pass "the old /api/v1 prefix answers 426 client_too_old"; else fail "the old /api/v1 prefix answers 426" "got $OLD"; fi
+NOPE=$(curl -sS -o "$WORK/nope.json" -w '%{http_code}' -H "x-askbar-client-version: $CLIENT_VERSION" "$URL/api/server/v1/health" 2>/dev/null || true)
+if [ "$NOPE" = "404" ] && [ "$(json "$WORK/nope.json" "d['error']")" = "not_found" ]; then pass "the server API is not served on the client listener (404 problem)"; else fail "the server API is not served on the client listener" "got $NOPE"; fi
+if [ $LOCAL = 1 ]; then
+  if admin POST /admin/api/v1/keys '{"name":"smoke test"}' >"$WORK/key.json" 2>/dev/null; then
+    KEY=$(json "$WORK/key.json" "d['key']")
+    CODE_KEY=$(curl -sS -o /dev/null -w '%{http_code}' --unix-socket "$SOCK" -H "authorization: Bearer $KEY" "http://admin/admin/api/v1/providers" 2>/dev/null || true)
+    CODE_SESSION=$(curl -sS -o /dev/null -w '%{http_code}' --unix-socket "$SOCK" -H "authorization: Bearer $KEY" "http://admin/admin/api/v1/keys" 2>/dev/null || true)
+    if [ "$CODE_KEY" = "200" ] && [ "$CODE_SESSION" = "401" ]; then pass "an admin API key reads the API but cannot manage keys"; else fail "admin API key" "api=$CODE_KEY keys=$CODE_SESSION"; fi
+  else
+    fail "make an admin API key"
+  fi
+fi
+
+# 11. What only a person can check.
 ask_person "Does the desktop client, paired to this server, show the streamed reply?"
 
 echo

@@ -2,7 +2,7 @@
 #![allow(dead_code)]
 
 use askbar_admin::caddy::CaddyLink;
-use askbar_admin::mgmt::{self, ServerLink};
+use askbar_admin::server_link::{self, ServerLink};
 use askbar_admin::secrets::AdminSecrets;
 use askbar_admin::{web, AdminDb, AdminState};
 use askbar_server::{secrets::Secrets, AppState};
@@ -61,13 +61,15 @@ pub async fn serve(app: Router) -> String {
 pub async fn start(caddy_up: bool) -> T {
     let dir = std::env::temp_dir().join(format!("ab-{}", &ulid::Ulid::new().to_string()[16..]));
     std::fs::create_dir_all(&dir).unwrap();
-    let (admin_secrets, mgmt_dir) = (dir.join("admin-secrets"), dir.join("askbar-mgmt"));
-    let token = mgmt::ensure_token(&admin_secrets, &mgmt_dir).unwrap();
+    let (admin_secrets, token_dir) = (dir.join("admin-secrets"), dir.join("server-token"));
+    let token = server_link::ensure_token(&admin_secrets, &token_dir).unwrap();
 
     let sdb = askbar_server::Db::open_in_memory().unwrap();
     sdb.seed_server().unwrap();
-    let server = AppState::new(sdb, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), askbar_server::MIN_CLIENT);
-    let mgmt_url = serve(askbar_server::mgmt::router(server.clone(), mgmt_dir.join(mgmt::HASH_FILE))).await;
+    // The server records to a temp audit.db, so tests can put sealed content there and open it.
+    let (recorder, _audit_dir) = askbar_server::testing::audit_recorder();
+    let server = AppState::new(sdb, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), askbar_server::MIN_CLIENT).with_audit(recorder);
+    let server_api_url = serve(askbar_server::server_api::router(server.clone(), token_dir.join(server_link::HASH_FILE))).await;
 
     let fake = Arc::new(FakeCaddy::default());
     let caddy_socket = dir.join("c").join("a.sock");
@@ -81,11 +83,11 @@ pub async fn start(caddy_up: bool) -> T {
 
     let db = AdminDb::open_in_memory().unwrap();
     web::init_password(&db, PW).unwrap();
-    let admin = AdminState::build(db, Some(ServerLink::new(&mgmt_url, token)), AdminSecrets::ephemeral());
+    let admin = AdminState::build(db, Some(ServerLink::new(&server_api_url, token)), AdminSecrets::ephemeral());
     admin.set_caddy(CaddyLink { socket: Some(caddy_socket.clone()), secrets_dir: Some(secrets_dir.clone()) });
     let adm = serve(askbar_admin::router(admin.clone())).await;
     let http = reqwest::Client::new();
-    let r = http.post(format!("{adm}/admin/login")).header("x-askbar-admin", "1").json(&json!({ "password": PW })).send().await.unwrap();
+    let r = http.post(format!("{adm}/admin/api/v1/session")).header("x-askbar-admin", "1").json(&json!({ "password": PW })).send().await.unwrap();
     let cookie = r.headers()["set-cookie"].to_str().unwrap().split(';').next().unwrap().to_string();
     T { adm, cookie, http, admin, server, fake, dir, secrets_dir, caddy_socket }
 }
@@ -97,7 +99,7 @@ impl T {
         (st, serde_json::from_str(&r.text().await.unwrap()).unwrap_or(Value::Null))
     }
     pub async fn save(&self, body: Value) -> (u16, Value) {
-        self.call(M::PUT, "/admin/api/network", body).await
+        self.call(M::PUT, "/admin/api/v1/network", body).await
     }
     pub async fn stored_token(&self) -> Option<Vec<u8>> {
         let db = self.admin.db.lock().await;

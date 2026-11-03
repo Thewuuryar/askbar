@@ -148,7 +148,7 @@
       }, 'provider'));
     }
     if (st.kind === 'rejected' || st.kind === 'not_paired') {
-      el.statusActions.appendChild(actionButton('Pair this device', () => openPairing(), 'pair'));
+      el.statusActions.appendChild(actionButton('Pair this app', () => openPairing(), 'pair'));
     }
     el.statusActions.appendChild(actionButton('Retry', async () => {
       await refreshBootstrap().catch(() => {});
@@ -245,13 +245,25 @@
     return msg;
   }
 
-  function addError(message) {
+  function addError(message, retry) {
     const node = document.createElement('div');
     node.className = 'msg error';
     const body = document.createElement('div');
     body.className = 'body';
     body.textContent = message;
     node.appendChild(body);
+    if (retry) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'text-btn retry-reply';
+      btn.textContent = 'Try again';
+      btn.addEventListener('click', () => {
+        if (state.streaming) return;
+        node.remove();
+        retry();
+      });
+      node.appendChild(btn);
+    }
     if (/config\.yaml|API key/i.test(message)) {
       const btn = document.createElement('button');
       btn.type = 'button';
@@ -268,6 +280,8 @@
   }
 
   function clearThread() {
+    clearWaiting();
+    clearUnsent();
     state.messages = [];
     el.thread.textContent = '';
     state.pinned = true;
@@ -286,19 +300,22 @@
     syncChrome();
   }
 
-  async function send() {
-    const text = el.input.value.trim();
-    if (!text || state.streaming) return;
-    el.input.value = '';
-    autosize();
-    hideNotice();
-    state.pinned = true;
+  function showServedBy(reply, name) {
+    let tag = reply.node.querySelector('.served-by');
+    if (!tag) {
+      tag = document.createElement('div');
+      tag.className = 'served-by';
+      reply.node.insertBefore(tag, reply.node.querySelector('.actions'));
+    }
+    tag.textContent = 'Answered by ' + name;
+  }
 
-    addMessage('user', text);
-    const reply = addMessage('assistant', '', { streaming: true });
+  // Shows one reply as it streams in. `start(channel)` begins the stream (a new send, or joining
+  // one that is already running on the server) and returns the command's promise.
+  async function streamInto(reply, start, userMsg) {
     setStreaming(true);
-
     const channel = new Channel();
+    let accepted = false; // the server has taken the message once its reply has begun
     await new Promise((resolve) => {
       let finished = false;
       const finish = () => { if (!finished) { finished = true; resolve(); } };
@@ -306,7 +323,12 @@
       channel.onmessage = (m) => {
         switch (m.event) {
           case 'started':
+            accepted = true;
             state.convId = m.conversationId;
+            break;
+          case 'provider':
+            // Only worth saying when the server used another provider than the one chosen.
+            if (m.name && m.name !== state.provider) showServedBy(reply, m.name);
             break;
           case 'delta':
             reply.content += m.text;
@@ -321,14 +343,16 @@
             break;
           case 'error':
             if (!reply.content.trim()) removeMessage(reply);
-            addError(m.message);
+            // A reply that ran out of time keeps what it wrote; trying again asks the same question
+            // as a new reply, below this one.
+            addError(m.message, m.kind === 'timed_out' && userMsg ? () => retryAsked(userMsg.content) : undefined);
             checkStatus();
             finish();
             break;
         }
       };
 
-      invoke('ask', { conversationId: state.convId, text, onEvent: channel })
+      start(channel)
         .then(() => setTimeout(finish, 1500)) // terminal event normally arrives first
         .catch((e) => {
           if (!reply.content.trim()) removeMessage(reply);
@@ -341,8 +365,173 @@
     reply.node.classList.remove('streaming');
     render(reply);
     setStreaming(false);
+    // A message the server never took is not part of the conversation: it moves to the unsent list.
+    if (!accepted && userMsg) removeMessage(userMsg);
     refreshHistory();
     el.input.focus();
+    syncUnsent();
+    syncPending(); // messages that were waiting behind this reply may be running now
+  }
+
+  async function retryAsked(text) {
+    state.pinned = true;
+    const reply = addMessage('assistant', '', { streaming: true });
+    await streamInto(reply, (channel) => invoke('ask', { conversationId: state.convId, text, onEvent: channel }), null);
+  }
+
+  async function send() {
+    const text = el.input.value.trim();
+    if (!text || state.streaming) return;
+    el.input.value = '';
+    autosize();
+    hideNotice();
+    state.pinned = true;
+
+    const userMsg = addMessage('user', text);
+    const reply = addMessage('assistant', '', { streaming: true });
+    await streamInto(reply, (channel) => invoke('ask', { conversationId: state.convId, text, onEvent: channel }), userMsg);
+  }
+
+  // ------------------------------------------------------- messages not sent
+
+  let unsentRows = [];
+
+  function clearUnsent() {
+    for (const r of unsentRows) r.remove();
+    unsentRows = [];
+  }
+
+  function addUnsent(u) {
+    const node = document.createElement('div');
+    node.className = 'msg user unsent';
+    node.dataset.request = u.clientRequestId;
+    const body = document.createElement('div');
+    body.className = 'body';
+    body.textContent = u.text;
+    const note = document.createElement('div');
+    note.className = 'wait-note';
+    note.textContent = 'Not sent';
+    const mk = (cls, label, aria) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'text-btn ' + cls;
+      b.textContent = label;
+      b.setAttribute('aria-label', aria);
+      return b;
+    };
+    const send = mk('unsent-send', 'Send', 'Send this message');
+    const edit = mk('unsent-edit', 'Edit', 'Edit this message before sending');
+    const discard = mk('unsent-discard', 'Discard', 'Discard this message');
+    const gone = () => { node.remove(); unsentRows = unsentRows.filter((r) => r !== node); };
+    send.addEventListener('click', async () => {
+      if (state.streaming) return;
+      gone();
+      hideNotice();
+      state.pinned = true;
+      const userMsg = addMessage('user', u.text);
+      const reply = addMessage('assistant', '', { streaming: true });
+      await streamInto(reply, (channel) => invoke('resend', { clientRequestId: u.clientRequestId, onEvent: channel }), userMsg);
+    });
+    edit.addEventListener('click', async () => {
+      try { await invoke('discard_unsent', { clientRequestId: u.clientRequestId }); } catch (e) { showNotice(String(e)); return; }
+      gone();
+      el.input.value = u.text;
+      autosize();
+      el.input.focus();
+    });
+    discard.addEventListener('click', async () => {
+      try { await invoke('discard_unsent', { clientRequestId: u.clientRequestId }); } catch (e) { showNotice(String(e)); return; }
+      gone();
+      layout();
+    });
+    node.append(body, note, send, edit, discard);
+    el.thread.appendChild(node);
+    unsentRows.push(node);
+  }
+
+  // Lists the open conversation's messages that never reached the server. Nothing is sent by
+  // itself: each one waits for Send, Edit or Discard.
+  async function syncUnsent() {
+    let list;
+    try { list = await invoke('unsent_messages'); } catch (_) { return; }
+    clearUnsent();
+    const mine = list.filter((u) => (u.conversationId || null) === state.convId);
+    for (const u of mine) addUnsent(u);
+    if (mine.length) {
+      el.thread.hidden = false;
+      el.foot.hidden = false;
+      el.card.dataset.thread = 'open';
+      if (state.pinned) el.thread.scrollTop = el.thread.scrollHeight;
+    }
+    layout();
+  }
+
+  // ----------------------------------------------- replies still going on the server
+
+  let waiting = [];       // rows for messages queued behind a running reply
+  let pendingTimer = null;
+
+  function clearWaiting() {
+    for (const w of waiting) w.remove();
+    waiting = [];
+    clearTimeout(pendingTimer);
+    pendingTimer = null;
+  }
+
+  function addWaiting(p) {
+    const node = document.createElement('div');
+    node.className = 'msg user waiting';
+    node.dataset.generation = p.generationId;
+    node.style.opacity = '0.6';
+    const body = document.createElement('div');
+    body.className = 'body';
+    body.textContent = p.prompt;
+    const note = document.createElement('div');
+    note.className = 'wait-note';
+    note.textContent = 'Waiting for the reply above to finish';
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'text-btn del-queued';
+    del.textContent = 'Remove';
+    del.setAttribute('aria-label', 'Remove this waiting message');
+    del.addEventListener('click', async () => {
+      del.disabled = true;
+      try { await invoke('cancel_generation', { id: p.generationId }); } catch (e) { showNotice(String(e)); }
+      node.remove();
+      waiting = waiting.filter((w) => w !== node);
+      syncPending();
+    });
+    node.append(body, note, del);
+    el.thread.appendChild(node);
+    waiting.push(node);
+  }
+
+  // Looks at what the server is still doing in the open conversation: joins the reply that is
+  // running, and lists the messages waiting behind it with a way to remove each.
+  async function syncPending() {
+    const id = state.convId;
+    if (!id || state.streaming) return;
+    let pending;
+    try { pending = await invoke('load_pending', { id }); } catch (_) { return; }
+    if (id !== state.convId || state.streaming) return;
+    clearWaiting();
+    const running = pending.find((p) => p.status === 'running');
+    if (running) {
+      state.pinned = true;
+      // A message that waited has just started: its question is stored now, but not shown yet.
+      const last = state.messages[state.messages.length - 1];
+      if (!last || last.role !== 'user') addMessage('user', running.prompt);
+      const reply = addMessage('assistant', '', { streaming: true });
+      for (const p of pending) if (p.status === 'queued') addWaiting(p);
+      el.thread.hidden = false;
+      layout();
+      streamInto(reply, (channel) => invoke('attach', { generationId: running.generationId, onEvent: channel }));
+      return;
+    }
+    const queued = pending.filter((p) => p.status === 'queued');
+    for (const p of queued) addWaiting(p);
+    // A queued message starts a moment after the reply before it ends; look again until it does.
+    if (queued.length) pendingTimer = setTimeout(syncPending, 2000);
   }
 
   function cancel() {
@@ -449,6 +638,8 @@
     el.thread.scrollTop = el.thread.scrollHeight;
     renderHistory();
     el.input.focus();
+    syncUnsent();
+    syncPending();
   }
 
   function newChat() {
@@ -458,6 +649,7 @@
     hideNotice();
     renderHistory();
     el.input.focus();
+    syncUnsent();
   }
 
   function toggleHistory(force) {
@@ -552,6 +744,7 @@
     const b = await invoke('bootstrap');
     state.ui = b.ui;
     applyUi(b.ui);
+    state.provider = b.provider;
     el.modelLabel.textContent = b.model ? b.model + ' via ' + b.provider : '';
     if (b.notice) showNotice(b.notice);
   }
@@ -560,6 +753,8 @@
     try { await refreshBootstrap(); } catch (_) { /* keep the previous settings */ }
     checkStatus();
     if (state.historyOpen) refreshHistory();
+    syncUnsent();
+    syncPending();
     el.input.focus();
     el.input.select();
     layout();
@@ -573,6 +768,7 @@
     checkStatus();
     await refreshHistory();
     syncChrome();
+    syncUnsent();
     el.input.focus();
   })();
 })();

@@ -12,9 +12,9 @@ async fn main() {
     }
     tracing_subscriber::fmt().with_target(false).init();
     let db = askbar_admin::AdminDb::open(&askbar_admin::db_path()).unwrap_or_else(|e| die(e, 1));
-    let token = askbar_admin::mgmt::ensure_token(&askbar_admin::mgmt::secrets_dir(), &askbar_admin::mgmt::mgmt_dir()).unwrap_or_else(|e| die(e, 1));
-    let link = askbar_admin::mgmt::ServerLink::new(&askbar_admin::mgmt::server_url(), token);
-    let secrets = askbar_admin::secrets::AdminSecrets::load_or_create(&askbar_admin::mgmt::secrets_dir()).unwrap_or_else(|e| die(e, 1));
+    let token = askbar_admin::server_link::ensure_token(&askbar_admin::server_link::secrets_dir(), &askbar_admin::server_link::token_dir()).unwrap_or_else(|e| die(e, 1));
+    let link = askbar_admin::server_link::ServerLink::new(&askbar_admin::server_link::server_url(), token);
+    let secrets = askbar_admin::secrets::AdminSecrets::load_or_create(&askbar_admin::server_link::secrets_dir()).unwrap_or_else(|e| die(e, 1));
     let state = askbar_admin::AdminState::build(db, Some(link.clone()), secrets);
     state.set_caddy(askbar_admin::caddy::CaddyLink::from_env());
     askbar_admin::caddy::apply_at_startup(state.clone());

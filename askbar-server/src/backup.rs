@@ -1,12 +1,13 @@
 //! The database backup: a consistent copy with everything secret taken out.
-//! Shared by the admin site and the management API.
+//! Shared by the admin site and the server API.
 
 use crate::AppState;
-use axum::http::StatusCode;
+use crate::error::ApiError;
+use askbar_proto::problem::ErrorCode;
 use std::sync::Arc;
 
-fn internal_error<E>(_: E) -> StatusCode {
-    StatusCode::INTERNAL_SERVER_ERROR
+fn internal_error<E>(_: E) -> ApiError {
+    ApiError::new(ErrorCode::Internal, "Could not make the backup.")
 }
 
 /// Deletes the snapshot file when the download finishes or the client goes away.
@@ -34,7 +35,7 @@ fn stamp(unix: i64) -> String {
 
 /// A consistent snapshot of the database (`VACUUM INTO`) with everything secret taken out:
 /// provider API keys and pairing-code hashes (unredeemed or used).
-/// Conversations, settings and paired-device records (token hashes only) stay.
+/// Conversations, settings and paired-client records (token hashes only) stay.
 fn make_snapshot(state: &AppState, path: &std::path::Path) -> rusqlite::Result<()> {
     {
         let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
@@ -56,7 +57,7 @@ fn make_snapshot(state: &AppState, path: &std::path::Path) -> rusqlite::Result<(
     Ok(())
 }
 
-pub async fn response(state: Arc<AppState>) -> Result<axum::response::Response, StatusCode> {
+pub async fn response(state: Arc<AppState>) -> Result<axum::response::Response, ApiError> {
     use axum::{body::Body, http::header};
     let mut raw = [0u8; 8];
     chacha20poly1305::aead::rand_core::RngCore::fill_bytes(&mut chacha20poly1305::aead::OsRng, &mut raw);

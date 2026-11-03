@@ -12,14 +12,16 @@
       headers: { 'X-Askbar-Admin': '1', ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}) },
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
-    if (res.status === 401 && path !== '/admin/login') { showLogin(); throw new Error('Signed out'); }
+    if (res.status === 401 && !(method === 'POST' && path === '/admin/api/v1/session')) { showLogin(); throw new Error('Signed out'); }
     let data = null;
     const text = await res.text();
     if (text) { try { data = JSON.parse(text); } catch (_) { data = null; } }
     if (res.status === 502 && typeof show === 'function' && document.getElementById('offline')) show($('offline'), true);
     if (!res.ok) {
-      const err = new Error((data && data.error) || ('Request failed (' + res.status + ')'));
+      // A problem+json body: `detail` is the sentence for a person, `error` the stable code.
+      const err = new Error((data && (data.detail || data.error)) || ('Request failed (' + res.status + ')'));
       err.status = res.status;
+      err.code = (data && data.error) || null;
       throw err;
     }
     return data;
@@ -35,10 +37,10 @@
 
   const tabs = [
     { id: 'providers', label: 'Providers', load: loadProviders },
-    { id: 'devices', label: 'Devices', load: loadDevices },
+    { id: 'clients', label: 'Clients', load: loadClients },
     { id: 'settings', label: 'Settings', load: loadSettings },
     { id: 'network', label: 'Network', load: loadNetwork },
-    { id: 'security', label: 'Security' },
+    { id: 'security', label: 'Security', load: loadKeys },
     { id: 'backup', label: 'Backup' },
   ];
   function registerTab(tab) { tabs.push(tab); renderNav(); }
@@ -84,13 +86,48 @@
 
   async function route() {
     let status;
-    try { status = await api('GET', '/admin/api/setup-status'); } catch (_) { status = { password_set: true }; }
+    try { status = await api('GET', '/admin/api/v1/setup'); } catch (_) { status = { password_set: true }; }
     if (!status.password_set) return showSetup();
     let signedIn = true;
-    try { await api('GET', '/admin/session'); } catch (_) { signedIn = false; }
+    try { await api('GET', '/admin/api/v1/session'); } catch (_) { signedIn = false; }
     if (!signedIn) return showLogin();
+    // The audit passphrase is part of setup: without a key the server records nothing it may keep,
+    // and refuses to start replies. An install from before audit keys is asked on its next visit.
+    if (status.audit_key_set === false) return showAuditSetup();
     showApp();
   }
+
+  function showAuditSetup() {
+    hideAll();
+    show($('setup'), true);
+    show($('setup-password-form'), false);
+    show($('setup-audit-done'), false);
+    show($('setup-audit-form'), true);
+    $('setup-audit').focus();
+  }
+
+  $('setup-audit-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const err = $('setup-audit-error');
+    show(err, false);
+    const fail = (m) => { err.textContent = m; show(err, true); };
+    const pass = $('setup-audit').value;
+    if (pass !== $('setup-audit2').value) return fail('The two passphrases do not match.');
+    if ([...pass].length < 20) return fail('The passphrase must be at least 20 characters.');
+    if (!$('setup-audit-stored').checked) return fail('Confirm that you stored the passphrase: it cannot be recovered.');
+    try {
+      const r = await api('PUT', '/admin/api/v1/setup/audit-key', { passphrase: pass, confirm: $('setup-audit2').value });
+      $('setup-audit').value = '';
+      $('setup-audit2').value = '';
+      $('setup-audit-stored').checked = false;
+      $('setup-audit-keyid').textContent = r.key_id;
+      show($('setup-audit-form'), false);
+      show($('setup-audit-done'), true);
+    } catch (ex) {
+      fail(ex.message);
+    }
+  });
+  $('setup-audit-continue').addEventListener('click', () => route());
 
   $('setup-password-form').addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -102,7 +139,7 @@
       return;
     }
     try {
-      await api('POST', '/admin/api/setup/password', { password: $('setup-password').value });
+      await api('PUT', '/admin/api/v1/setup/password', { password: $('setup-password').value });
       $('setup-password').value = '';
       $('setup-password2').value = '';
       route();
@@ -123,7 +160,7 @@
   let statusTimer = null;
   async function checkServer() {
     try {
-      const st = await api('GET', '/admin/api/status');
+      const st = await api('GET', '/admin/api/v1/status');
       show($('offline'), !st.server_online);
     } catch (_) { /* signed out, or the admin itself is away */ }
   }
@@ -142,7 +179,7 @@
     const err = $('login-error');
     show(err, false);
     try {
-      await api('POST', '/admin/login', { password: $('password').value });
+      await api('POST', '/admin/api/v1/session', { password: $('password').value });
       route();
     } catch (ex) {
       err.textContent = ex.status === 429 ? 'Too many attempts. Try again later.'
@@ -153,7 +190,7 @@
   });
 
   $('logout').addEventListener('click', async () => {
-    try { await api('POST', '/admin/logout'); } catch (_) { /* already signed out */ }
+    try { await api('DELETE', '/admin/api/v1/session'); } catch (_) { /* already signed out */ }
     route();
   });
 
@@ -186,7 +223,7 @@
       result.textContent = 'Testing…';
       test.disabled = true;
       try {
-        const r = await api('POST', '/admin/api/providers/' + encodeURIComponent(p.id) + '/test');
+        const r = await api('POST', '/admin/api/v1/providers/' + encodeURIComponent(p.id) + '/test');
         result.className = 'test-result ' + (r.ok ? 'ok' : 'error');
         result.textContent = r.ok ? 'Success: ' + r.message : 'Failed: ' + r.message;
       } catch (ex) {
@@ -200,14 +237,18 @@
     edit.dataset.action = 'edit';
     const del = button('Delete', 'danger', async () => {
       if (!confirm('Delete provider "' + p.name + '"?')) return;
-      try { await api('DELETE', '/admin/api/providers/' + encodeURIComponent(p.id)); loadProviders(); } catch (ex) { flash(ex.message); }
+      try { await api('DELETE', '/admin/api/v1/providers/' + encodeURIComponent(p.id)); loadProviders(); } catch (ex) { flash(ex.message); }
     });
     del.dataset.action = 'delete';
     head.append(test, edit, del);
 
     const meta = document.createElement('div');
     meta.className = 'meta';
-    meta.textContent = p.model + (p.base_url ? ' · ' + p.base_url : '');
+    const prices = [['in', p.price_in], ['out', p.price_out], ['cached in', p.price_cached_in]].filter(([, v]) => v != null).map(([k, v]) => k + ' ' + v);
+    meta.textContent = p.model + (p.base_url ? ' · ' + p.base_url : '') +
+      ' · ' + (p.billing === 'subscription' ? 'subscription' : 'metered') +
+      (p.allow_as_fallback ? ' · fallback allowed' : '') +
+      (prices.length ? ' · per million: ' + prices.join(', ') : '');
     const result = document.createElement('div');
     result.className = 'test-result';
     card.append(head, meta, result);
@@ -224,7 +265,7 @@
   }
 
   async function loadProviders() {
-    const list = await api('GET', '/admin/api/providers');
+    const list = await api('GET', '/admin/api/v1/providers');
     const box = $('providers');
     box.textContent = '';
     if (!list.length) {
@@ -248,6 +289,11 @@
     $('p-key').placeholder = p && p.has_key ? 'unchanged (write-only)' : 'write-only';
     $('p-max-tokens').value = v.max_tokens || '';
     $('p-temperature').value = v.temperature == null ? '' : v.temperature;
+    $('p-billing').value = v.billing || 'metered';
+    $('p-fallback').checked = !!v.allow_as_fallback;
+    $('p-price-in').value = v.price_in == null ? '' : v.price_in;
+    $('p-price-out').value = v.price_out == null ? '' : v.price_out;
+    $('p-price-cached').value = v.price_cached_in == null ? '' : v.price_cached_in;
     show($('provider-error'), false);
     $('p-hint').textContent = preset && preset.hint ? preset.hint : '';
     show($('p-hint'), !!(preset && preset.hint));
@@ -277,10 +323,15 @@
       api_key: $('p-key').value,
       max_tokens: num('p-max-tokens', (x) => parseInt(x, 10)),
       temperature: num('p-temperature', parseFloat),
+      billing: $('p-billing').value,
+      allow_as_fallback: $('p-fallback').checked,
+      price_in: num('p-price-in', parseFloat),
+      price_out: num('p-price-out', parseFloat),
+      price_cached_in: num('p-price-cached', parseFloat),
     };
     try {
-      if (editing) await api('PUT', '/admin/api/providers/' + encodeURIComponent(editing), body);
-      else await api('POST', '/admin/api/providers', body);
+      if (editing) await api('PUT', '/admin/api/v1/providers/' + encodeURIComponent(editing), body);
+      else await api('POST', '/admin/api/v1/providers', body);
       closeForm();
       loadProviders();
     } catch (ex) {
@@ -301,7 +352,7 @@
       return;
     }
     try {
-      await api('POST', '/admin/api/password', { current: $('pw-current').value, new: $('pw-new').value });
+      await api('PUT', '/admin/api/v1/password', { current: $('pw-current').value, new: $('pw-new').value });
       for (const id of ['pw-current', 'pw-new', 'pw-new2']) $(id).value = '';
       flash('Password changed. Other browsers have been signed out.');
     } catch (ex) {
@@ -310,10 +361,91 @@
     }
   });
 
+  // ------------------------------------------------------ admin API key
+
+  let keyId = null;
+  let revokeArmed = null;
+
+  function ago(t) {
+    if (!t) return 'never used';
+    return 'last used ' + new Date(t * 1000).toLocaleString();
+  }
+
+  async function loadKeys() {
+    const list = await api('GET', '/admin/api/v1/keys');
+    keyId = list.length ? list[0].id : null;
+    show($('key-row'), keyId !== null);
+    show($('key-form'), keyId === null);
+    if (keyId !== null) {
+      $('key-row-name').textContent = list[0].name;
+      $('key-row-times').textContent = 'made ' + new Date(list[0].created_at * 1000).toLocaleString() + ', ' + ago(list[0].last_used_at);
+    }
+    show($('key-error'), false);
+  }
+
+  $('key-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const err = $('key-error');
+    show(err, false);
+    try {
+      const made = await api('POST', '/admin/api/v1/keys', { name: $('key-name').value });
+      $('key-name').value = '';
+      $('key-value').textContent = made.key; // the only time it is on the page
+      $('key-dialog').showModal();
+      await loadKeys();
+    } catch (ex) {
+      err.textContent = ex.message;
+      show(err, true);
+    }
+  });
+
+  function closeKeyDialog() {
+    $('key-value').textContent = '';
+    if ($('key-dialog').open) $('key-dialog').close();
+  }
+  $('key-close').addEventListener('click', closeKeyDialog);
+  $('key-dialog').addEventListener('cancel', () => { $('key-value').textContent = ''; });
+  $('key-copy').addEventListener('click', async () => {
+    const text = $('key-value').textContent;
+    try {
+      await navigator.clipboard.writeText(text);
+      $('key-copy').textContent = 'Copied';
+    } catch (_) {
+      // No clipboard here (plain http off localhost): select the text so Ctrl+C works.
+      const range = document.createRange();
+      range.selectNodeContents($('key-value'));
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      $('key-copy').textContent = 'Selected: press Ctrl+C';
+    }
+    setTimeout(() => { $('key-copy').textContent = 'Copy'; }, 3000);
+  });
+
+  $('key-revoke').addEventListener('click', async () => {
+    const b = $('key-revoke');
+    if (!revokeArmed) {
+      b.textContent = 'Revoke? It stops working at once.';
+      revokeArmed = setTimeout(() => { revokeArmed = null; b.textContent = 'Revoke'; }, 5000);
+      return;
+    }
+    clearTimeout(revokeArmed);
+    revokeArmed = null;
+    b.textContent = 'Revoke';
+    try {
+      await api('DELETE', '/admin/api/v1/keys/' + encodeURIComponent(keyId));
+      flash('The API key was revoked.');
+      await loadKeys();
+    } catch (ex) {
+      $('key-error').textContent = ex.message;
+      show($('key-error'), true);
+    }
+  });
+
   // ----------------------------------------------------------- network
 
   async function loadNetwork() {
-    const n = await api('GET', '/admin/api/network');
+    const n = await api('GET', '/admin/api/v1/network');
     $('n-tls').checked = n.tls_enabled;
     $('n-host').value = n.hostname;
     $('n-cidr').value = n.admin_cidr;
@@ -323,7 +455,7 @@
     $('n-token').placeholder = n.has_token ? 'unchanged (write-only)' : 'write-only';
     $('n-clear').checked = false;
     show($('n-clear-row'), n.has_token);
-    $('n-info').textContent = (n.tls_enabled && n.hostname ? 'The admin site is at https://admin.' + n.hostname + '. ' : '')
+    $('n-info').textContent = (n.tls_enabled && n.hostname ? 'The admin site is at https://' + n.hostname + '/admin. ' : '')
       + 'New pairing strings point at ' + n.public_url + '.';
     showProxy(n.proxy);
     show($('network-error'), false);
@@ -336,7 +468,7 @@
   }
 
   $('n-apply').addEventListener('click', async () => {
-    try { showProxy(await api('POST', '/admin/api/network/apply')); } catch (ex) { flash(ex.message); }
+    try { showProxy(await api('POST', '/admin/api/v1/network/apply')); } catch (ex) { flash(ex.message); }
   });
 
   $('network-form').addEventListener('submit', async (e) => {
@@ -344,7 +476,7 @@
     const err = $('network-error');
     show(err, false);
     try {
-      await api('PUT', '/admin/api/network', {
+      await api('PUT', '/admin/api/v1/network', {
         tls_enabled: $('n-tls').checked,
         hostname: $('n-host').value.trim(),
         admin_cidr: $('n-cidr').value.trim(),
@@ -361,26 +493,26 @@
     }
   });
 
-  // ---------------------------------------------------------- devices
+  // ---------------------------------------------------------- clients
 
   function when(ts) {
     return ts ? new Date(ts * 1000).toLocaleString() : 'never';
   }
 
-  async function loadDevices() {
-    const list = await api('GET', '/admin/api/devices');
-    const box = $('devices');
+  async function loadClients() {
+    const list = await api('GET', '/admin/api/v1/clients');
+    const box = $('clients');
     box.textContent = '';
     if (!list.length) {
       const p = document.createElement('p');
       p.className = 'hint';
-      p.textContent = 'No devices are paired yet.';
+      p.textContent = 'No clients are paired yet.';
       box.appendChild(p);
     }
     for (const d of list) {
       const card = document.createElement('div');
       card.className = 'card';
-      card.dataset.device = d.id;
+      card.dataset.client = d.id;
       const head = document.createElement('div');
       head.className = 'row';
       const name = document.createElement('span');
@@ -395,7 +527,7 @@
       if (!d.revoked) {
         const revoke = button('Revoke', 'danger', async () => {
           if (!confirm('Revoke "' + d.name + '"? It will be signed out and must be paired again.')) return;
-          try { await api('POST', '/admin/api/devices/' + encodeURIComponent(d.id) + '/revoke'); loadDevices(); } catch (ex) { flash(ex.message); }
+          try { await api('POST', '/admin/api/v1/clients/' + encodeURIComponent(d.id) + '/revoke'); loadClients(); } catch (ex) { flash(ex.message); }
         });
         revoke.dataset.action = 'revoke';
         head.appendChild(revoke);
@@ -413,7 +545,7 @@
     const err = $('pair-error');
     show(err, false);
     try {
-      const r = await api('POST', '/admin/api/pair', { name: $('d-name').value.trim() });
+      const r = await api('POST', '/admin/api/v1/pairings', { name: $('d-name').value.trim() });
       $('pairing-string').value = r.pairing;
       show($('pairing-out'), true);
     } catch (ex) {
@@ -430,8 +562,26 @@
 
   // --------------------------------------------------------- settings
 
+  // "120 seconds = 2 minutes", "90 seconds = 1.5 minutes".
+  function minutesText(secs) {
+    if (!Number.isFinite(secs) || secs <= 0) return '';
+    const m = secs / 60;
+    const shown = Number.isInteger(m) ? String(m) : String(Math.round(m * 10) / 10);
+    return secs + ' seconds = ' + shown + (shown === '1' ? ' minute' : ' minutes');
+  }
+  function showTimeoutMinutes() {
+    $('s-gen-timeout-min').textContent = minutesText(parseInt($('s-gen-timeout').value, 10));
+  }
+  $('s-gen-timeout').addEventListener('input', showTimeoutMinutes);
+
   async function loadSettings() {
-    const s = await api('GET', '/admin/api/settings');
+    const s = await api('GET', '/admin/api/v1/settings');
+    $('s-retention').value = s.audit_retention_days == null ? 30 : s.audit_retention_days;
+    $('s-key-id').textContent = s.audit_key_id || 'none';
+    $('s-kill-switch').checked = !!s.kill_switch;
+    $('s-kill-aborts').checked = s.kill_switch_aborts_running !== false;
+    $('s-gen-timeout').value = s.generation_timeout_secs == null ? 300 : s.generation_timeout_secs;
+    showTimeoutMinutes();
     $('s-prompt').value = s.system_prompt;
     $('s-theme').value = s.display.theme;
     $('s-width').value = s.display.width;
@@ -447,8 +597,12 @@
     const err = $('settings-error');
     show(err, false);
     try {
-      await api('PUT', '/admin/api/settings', {
+      await api('PUT', '/admin/api/v1/settings', {
         system_prompt: $('s-prompt').value,
+        generation_timeout_secs: parseInt($('s-gen-timeout').value, 10),
+        audit_retention_days: parseInt($('s-retention').value, 10),
+        kill_switch: $('s-kill-switch').checked,
+        kill_switch_aborts_running: $('s-kill-aborts').checked,
         display: {
           theme: $('s-theme').value,
           width: parseInt($('s-width').value, 10),
@@ -462,6 +616,27 @@
     } catch (ex) {
       err.textContent = ex.message;
       show(err, true);
+    }
+  });
+
+  // The audit key: switch to a new passphrase. The old key is kept, only for reading what it sealed.
+  $('rotate-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const err = $('rotate-error');
+    show(err, false);
+    const fail = (m) => { err.textContent = m; show(err, true); };
+    const cur = $('r-current').value;
+    const next = $('r-new').value;
+    if (next !== $('r-new2').value) return fail('The two new passphrases do not match.');
+    if ([...next].length < 20) return fail('The new passphrase must be at least 20 characters.');
+    try {
+      const r = await api('POST', '/admin/api/v1/audit/rotate-key', { current: cur, new: next, confirm: $('r-new2').value });
+      for (const id of ['r-current', 'r-new', 'r-new2']) $(id).value = '';
+      $('s-key-id').textContent = r.key_id;
+      flash('The audit key was rotated. New key id ' + r.key_id + '. Content sealed before still needs the old passphrase.');
+    } catch (ex) {
+      $('r-current').value = '';
+      fail(ex.message);
     }
   });
 

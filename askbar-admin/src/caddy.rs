@@ -19,6 +19,12 @@ pub const ADMIN_UPSTREAM: &str = "unix//run/admin/admin.sock";
 /// Caddy's own admin listener, as it must be written in every config it is given, or loading
 /// the config would take the listener away.
 pub const CADDY_ADMIN_LISTEN: &str = "unix//run/caddy/admin.sock|0660";
+/// First-run access. Until a host name and a Cloudflare token are saved Caddy has no site, and the admin has
+/// no TCP port, so Caddy also serves the admin over plain HTTP on this address and port, for the host's
+/// loopback only: `compose.yaml` publishes `127.0.0.1:8081` and gives Caddy this address on a network
+/// nothing else joins (`admin-setup`, which must sort before `edge`: see compose.yaml). Only `/admin` is served there; every other path is a 404.
+pub const SETUP_BIND: &str = "172.31.0.2";
+pub const SETUP_PORT: u16 = 8081;
 pub const STAGING_CA: &str = "https://acme-staging-v02.api.letsencrypt.org/directory";
 
 /// Where this service reaches Caddy's admin socket, and where it writes the token file.
@@ -53,12 +59,38 @@ fn status(ok: bool, message: impl Into<String>) -> ProxyStatus {
     ProxyStatus { ok, message: message.into(), at: now() }
 }
 
-/// The full Caddyfile for the current settings. With HTTPS off it is just the admin listener,
-/// which makes Caddy stop serving. The API is served at the hostname and this admin site at
-/// `admin.` plus the hostname. `remote_ip` is added only when the allowlist is on, and then
-/// anyone outside it has the connection dropped. Every interpolated value was validated when it
-/// was saved (hostname, addresses); the token is never interpolated.
+/// The JSON body of Caddy's own 404: the same problem the servers send, so every 404 on the host
+/// reads alike.
+fn not_found_body() -> String {
+    use askbar_proto::{http::default_detail, ErrorCode, Problem};
+    let p = Problem::new(ErrorCode::NotFound, default_detail(ErrorCode::NotFound));
+    String::from_utf8(p.to_json_bytes()).expect("a problem is UTF-8 JSON")
+}
+
+/// The first-run site: the admin and nothing else, over plain HTTP, on the setup address only.
+fn setup_site() -> String {
+    use askbar_proto::paths;
+    let admin = paths::ADMIN;
+    format!(
+        "\nhttp://:{SETUP_PORT} {{\n\tbind {SETUP_BIND}\n\t@admin path {admin} {admin}/*\n\thandle @admin {{\n\t\treverse_proxy {ADMIN_UPSTREAM}\n\t}}\n\thandle {{\n\t\theader Content-Type {}\n\t\trespond `{}` 404\n\t}}\n}}\n",
+        askbar_proto::problem::CONTENT_TYPE,
+        not_found_body()
+    )
+}
+
+/// The full Caddyfile for the current settings. With HTTPS off it is just Caddy's own admin
+/// listener and the first-run site. With it on there is one host name and three kinds of path:
+///
+/// - `/admin` and below go to the admin's unix socket (behind the allowlist, when it is on);
+/// - the client API (and `/api/v1`, which the server answers with "update the app") goes to the
+///   server's client listener. The match names those two prefixes and no wider one, because the
+///   server API (`/api/server`) is for the admin only and has no public route;
+/// - anything else gets a 404 problem.
+///
+/// Every interpolated value was validated when it was saved (hostname, addresses); the token is
+/// never interpolated.
 pub fn caddyfile(n: &Network, allowed: &[String]) -> String {
+    use askbar_proto::paths;
     let mut out = format!("{{\n\tadmin {CADDY_ADMIN_LISTEN}\n");
     if n.tls_enabled && !n.hostname.is_empty() {
         out.push_str(&format!("\tacme_dns cloudflare {{file.{CADDY_TOKEN_PATH}}}\n"));
@@ -66,15 +98,21 @@ pub fn caddyfile(n: &Network, allowed: &[String]) -> String {
             out.push_str(&format!("\tacme_ca {STAGING_CA}\n"));
         }
         out.push_str("}\n");
-        out.push_str(&format!("\n{host} {{\n\treverse_proxy server:8080 {{\n\t\tflush_interval -1\n\t}}\n}}\n", host = n.hostname));
-        out.push_str(&format!("\nadmin.{host} {{\n", host = n.hostname));
+        let (admin, client, old) = (paths::ADMIN, paths::CLIENT, paths::TOMBSTONE_V1);
+        out.push_str(&format!("\n{host} {{\n", host = n.hostname));
+        out.push_str(&format!("\t@admin path {admin} {admin}/*\n\thandle @admin {{\n"));
         if n.allowlist_enabled {
-            out.push_str(&format!("\t@outside not remote_ip {}\n\tabort @outside\n", allowed.join(" ")));
+            out.push_str(&format!("\t\t@outside not remote_ip {}\n\t\tabort @outside\n", allowed.join(" ")));
         }
-        out.push_str(&format!("\treverse_proxy {ADMIN_UPSTREAM}\n}}\n"));
+        out.push_str(&format!("\t\treverse_proxy {ADMIN_UPSTREAM}\n\t}}\n"));
+        out.push_str(&format!(
+            "\t@client path {client}/* {old}/*\n\thandle @client {{\n\t\treverse_proxy server:8080 {{\n\t\t\tflush_interval -1\n\t\t}}\n\t}}\n"
+        ));
+        out.push_str(&format!("\thandle {{\n\t\theader Content-Type {}\n\t\trespond `{}` 404\n\t}}\n}}\n", askbar_proto::problem::CONTENT_TYPE, not_found_body()));
     } else {
         out.push_str("}\n");
     }
+    out.push_str(&setup_site());
     out
 }
 
@@ -186,41 +224,6 @@ mod tests {
     }
 
     #[test]
-    fn production_config_without_an_allowlist() {
-        let got = caddyfile(&net(true, false, false), &[]);
-        let want = "{
-\tadmin unix//run/caddy/admin.sock|0660
-\tacme_dns cloudflare {file./caddy-secrets/cf_token}
-}
-
-askbar.orraitu.com {
-\treverse_proxy server:8080 {
-\t\tflush_interval -1
-\t}
-}
-
-admin.askbar.orraitu.com {
-\treverse_proxy unix//run/admin/admin.sock
-}
-";
-        assert_eq!(got, want);
-        assert!(!got.contains("remote_ip") && !got.contains("abort"), "no matcher when the allowlist is off");
-        assert!(!got.contains("origins"), "the admin socket has no origins line");
-    }
-
-    #[test]
-    fn the_allowlist_adds_a_remote_ip_abort_matcher_only_when_on() {
-        let nets = vec!["192.168.1.0/24".to_string(), "10.0.0.5/32".to_string(), "fd00::/8".to_string()];
-        let on = caddyfile(&net(true, false, true), &nets);
-        assert!(on.contains("\t@outside not remote_ip 192.168.1.0/24 10.0.0.5/32 fd00::/8\n\tabort @outside\n"), "{on}");
-        // The matcher guards the admin host only; the API is open to paired devices.
-        let (api, admin) = on.split_once("admin.askbar.orraitu.com").unwrap();
-        assert!(!api.contains("remote_ip") && admin.contains("remote_ip"));
-        // Off: the same addresses are ignored.
-        assert!(!caddyfile(&net(true, false, false), &nets).contains("remote_ip"));
-    }
-
-    #[test]
     fn staging_adds_the_test_ca_and_nothing_else() {
         let prod = caddyfile(&net(true, false, false), &[]);
         let staging = caddyfile(&net(true, true, false), &[]);
@@ -229,10 +232,42 @@ admin.askbar.orraitu.com {
     }
 
     #[test]
-    fn https_off_serves_nothing_but_keeps_caddys_admin_socket() {
+    fn https_off_serves_only_caddys_admin_socket_and_the_first_run_site() {
         let off = caddyfile(&net(false, false, true), &["10.0.0.1/32".into()]);
-        assert_eq!(off, "{\n\tadmin unix//run/caddy/admin.sock|0660\n}\n");
+        assert_eq!(off, format!("{{\n\tadmin unix//run/caddy/admin.sock|0660\n}}\n{SETUP}"));
         assert!(!off.contains("askbar.orraitu.com"));
+    }
+
+    #[test]
+    fn the_first_run_site_serves_the_admin_only_on_the_setup_address_and_has_no_allowlist_or_client_api() {
+        for on in [false, true] {
+            let got = caddyfile(&net(on, false, true), &["10.0.0.1/32".into()]);
+            let (_, setup) = got.split_once("http://:8081 {").unwrap();
+            assert!(setup.contains("bind 172.31.0.2"), "{setup}");
+            assert!(setup.contains("reverse_proxy unix//run/admin/admin.sock"));
+            assert!(!setup.contains("server:8080") && !setup.contains("remote_ip"), "{setup}");
+        }
+    }
+
+    #[test]
+    fn compose_and_the_bootstrap_file_agree_with_the_first_run_site() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let compose = std::fs::read_to_string(root.join("compose.yaml")).unwrap();
+        assert!(compose.contains(&format!("{SETUP_BIND}")), "compose.yaml gives Caddy {SETUP_BIND} on the admin-setup network");
+        assert!(compose.contains(&format!("\"127.0.0.1:{SETUP_PORT}:{SETUP_PORT}\"")), "compose.yaml publishes the port on loopback only");
+        // Docker publishes a container's ports on its address on the first network in name order. Caddy listens for the
+        // first-run page on its admin-setup address only, so that network's name has to sort before `edge` (and
+        // before any other network Caddy is on).
+        let networks: Vec<&str> = compose.lines().skip_while(|l| !l.starts_with("networks:")).filter(|l| l.starts_with("  ") && !l.starts_with("   ") && l.trim_end().ends_with(':')).map(|l| l.trim().trim_end_matches(':')).collect();
+        let pos = |n: &str| networks.iter().position(|x| *x == n).unwrap_or_else(|| panic!("no network {n} in {networks:?}"));
+        let mut by_name = networks.clone();
+        by_name.sort();
+        assert!(by_name.iter().position(|x| *x == "admin-setup") < by_name.iter().position(|x| *x == "edge"), "{by_name:?}");
+        let _ = pos("admin-setup");
+        // The file Caddy starts with (before the admin has pushed anything) is the generator's output for HTTPS off.
+        let boot = std::fs::read_to_string(root.join("caddy/bootstrap.Caddyfile")).unwrap();
+        let body: String = boot.lines().filter(|l| !l.starts_with('#')).collect::<Vec<_>>().join("\n");
+        assert_eq!(body.trim(), caddyfile(&net(false, false, false), &[]).trim());
     }
 
     #[test]
@@ -240,6 +275,83 @@ admin.askbar.orraitu.com {
         let got = caddyfile(&net(true, true, true), &["10.0.0.1/32".into()]);
         assert!(got.contains("{file./caddy-secrets/cf_token}"));
         assert!(!got.contains("cf_ABC") && !got.to_lowercase().contains("bearer"));
+    }
+
+    /// The first-run site, as it must read in every config.
+    const SETUP: &str = r#"
+http://:8081 {
+	bind 172.31.0.2
+	@admin path /admin /admin/*
+	handle @admin {
+		reverse_proxy unix//run/admin/admin.sock
+	}
+	handle {
+		header Content-Type application/problem+json
+		respond `{"type":"urn:askbar:problem:not_found","title":"Not found","status":404,"detail":"There is nothing at this address.","error":"not_found"}` 404
+	}
+}
+"#;
+
+    const NOT_FOUND: &str = r#"{"type":"urn:askbar:problem:not_found","title":"Not found","status":404,"detail":"There is nothing at this address.","error":"not_found"}"#;
+
+    #[test]
+    fn one_host_serves_the_admin_the_client_api_and_a_404_for_everything_else() {
+        let got = caddyfile(&net(true, false, false), &[]);
+        let want = format!(
+            "{{
+\tadmin unix//run/caddy/admin.sock|0660
+\tacme_dns cloudflare {{file./caddy-secrets/cf_token}}
+}}
+
+askbar.orraitu.com {{
+\t@admin path /admin /admin/*
+\thandle @admin {{
+\t\treverse_proxy unix//run/admin/admin.sock
+\t}}
+\t@client path /api/client/* /api/v1/*
+\thandle @client {{
+\t\treverse_proxy server:8080 {{
+\t\t\tflush_interval -1
+\t\t}}
+\t}}
+\thandle {{
+\t\theader Content-Type application/problem+json
+\t\trespond `{NOT_FOUND}` 404
+\t}}
+}}
+{SETUP}"
+        );
+        assert_eq!(got, want);
+        assert!(!got.contains("admin.askbar.orraitu.com"), "there is no second host name");
+    }
+
+    #[test]
+    fn the_server_api_is_never_proxied_and_gets_the_404_like_any_other_path() {
+        let got = caddyfile(&net(true, false, false), &[]);
+        let matcher = got.lines().find(|l| l.trim_start().starts_with("@client")).unwrap();
+        assert_eq!(matcher.trim(), "@client path /api/client/* /api/v1/*", "only the client API and the old prefix, never a wider /api/*");
+        assert!(!got.contains("/api/server") && !got.contains("path /api/*"), "{got}");
+        let proxied: Vec<&str> = got.lines().filter(|l| l.contains("reverse_proxy")).collect();
+        // The admin socket (host block and first-run site) and the client API; nothing else.
+        assert_eq!(proxied.len(), 3, "{proxied:?}");
+        assert_eq!(proxied.iter().filter(|l| l.contains("server:8080")).count(), 1, "{proxied:?}");
+        assert!(!got.contains("8082") && !got.contains("172.30"), "the server API's address is not in the config");
+    }
+
+    #[test]
+    fn the_fixed_404_body_is_the_same_problem_the_servers_send() {
+        let p = askbar_proto::Problem::new(askbar_proto::ErrorCode::NotFound, askbar_proto::http::default_detail(askbar_proto::ErrorCode::NotFound));
+        assert_eq!(String::from_utf8(p.to_json_bytes()).unwrap(), NOT_FOUND);
+    }
+
+    #[test]
+    fn the_allowlist_guards_the_admin_path_only() {
+        let nets = vec!["192.168.1.0/24".to_string(), "10.0.0.5/32".to_string(), "fd00::/8".to_string()];
+        let on = caddyfile(&net(true, false, true), &nets);
+        let (admin, rest) = on.split_once("\t@client path").unwrap();
+        assert!(admin.contains("\t\t@outside not remote_ip 192.168.1.0/24 10.0.0.5/32 fd00::/8\n\t\tabort @outside\n\t\treverse_proxy unix//run/admin/admin.sock"), "{admin}");
+        assert!(!rest.contains("remote_ip"), "the client API is open to paired apps: {rest}");
+        assert!(!caddyfile(&net(true, false, false), &nets).contains("remote_ip"), "off: the same addresses are ignored");
     }
 
     #[test]

@@ -8,7 +8,7 @@ use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
 
 pub use askbar_proto::DEFAULT_SYSTEM_PROMPT;
@@ -102,6 +102,61 @@ pub enum ChatError {
     Stream(String),
 }
 
+/// Tokens a reply used, as the provider reported them (or estimated, see `estimated`).
+/// A field the provider did not report is `None`, not 0.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Usage {
+    pub input: Option<u64>,
+    pub output: Option<u64>,
+    /// Prompt tokens served from the provider's cache.
+    pub cache_read: Option<u64>,
+    /// Prompt tokens written to the provider's cache.
+    pub cache_write: Option<u64>,
+    /// True when the numbers are our own estimate, not the provider's.
+    pub estimated: bool,
+}
+
+impl Usage {
+    /// Takes every field `other` reports, keeping ours where it reports nothing.
+    pub fn merge(&mut self, other: &Usage) {
+        for (mine, theirs) in [
+            (&mut self.input, other.input),
+            (&mut self.output, other.output),
+            (&mut self.cache_read, other.cache_read),
+            (&mut self.cache_write, other.cache_write),
+        ] {
+            if theirs.is_some() {
+                *mine = theirs;
+            }
+        }
+        self.estimated |= other.estimated;
+    }
+}
+
+/// What happened during one request to a provider, for audit and cost.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StreamReport {
+    pub outcome: StreamOutcome,
+    pub usage: Option<Usage>,
+    /// From sending the request to the first piece of text.
+    pub time_to_first_token: Option<Duration>,
+    /// From sending the request to the end (or the failure).
+    pub total: Duration,
+    /// The HTTP status of the response, if one arrived.
+    pub http_status: Option<u16>,
+    /// The provider's `Retry-After`, if it sent one (seconds form).
+    pub retry_after: Option<Duration>,
+    /// Why the provider says it stopped (`stop`, `end_turn`, ...), if it said.
+    pub finish_reason: Option<String>,
+}
+
+/// A failed request, with what is known about it up to the failure.
+#[derive(Debug)]
+pub struct ReportedError {
+    pub error: ChatError,
+    pub report: StreamReport,
+}
+
 pub type HttpClient = reqwest::Client;
 
 pub fn http_client() -> HttpClient {
@@ -161,7 +216,8 @@ pub fn build_body(p: &Provider, system: &str, messages: &[ChatMessage]) -> Value
                 all.push(json!({ "role": "system", "content": system }));
             }
             all.extend(msgs);
-            let mut body = json!({ "model": p.model, "messages": all, "stream": true });
+            // Ask for token counts in a final chunk; OpenAI-compatible servers that support it send it.
+            let mut body = json!({ "model": p.model, "messages": all, "stream": true, "stream_options": { "include_usage": true } });
             if let Some(n) = p.max_tokens {
                 body["max_tokens"] = json!(n);
             }
@@ -171,6 +227,23 @@ pub fn build_body(p: &Provider, system: &str, messages: &[ChatMessage]) -> Value
             body
         }
         ProviderKind::Anthropic => {
+            // Prompt caching: the system prompt and the older part of the conversation are marked
+            // cacheable, so the next turn (which repeats them) is billed at the cached rate. The
+            // newest message is not marked: it is the part that changes. (Short prompts are below
+            // the provider's minimum and simply are not cached.)
+            let cache = json!({ "type": "ephemeral" });
+            let last_older = messages.len().checked_sub(2);
+            let msgs: Vec<Value> = messages
+                .iter()
+                .enumerate()
+                .map(|(i, m)| {
+                    if Some(i) == last_older {
+                        json!({ "role": m.role, "content": [{ "type": "text", "text": m.content, "cache_control": cache }] })
+                    } else {
+                        json!({ "role": m.role, "content": m.content })
+                    }
+                })
+                .collect();
             let mut body = json!({
                 "model": p.model,
                 "max_tokens": p.max_tokens.unwrap_or(4096),
@@ -178,7 +251,7 @@ pub fn build_body(p: &Provider, system: &str, messages: &[ChatMessage]) -> Value
                 "stream": true,
             });
             if !system.trim().is_empty() {
-                body["system"] = json!(system);
+                body["system"] = json!([{ "type": "text", "text": system, "cache_control": cache }]);
             }
             if let Some(t) = p.temperature {
                 body["temperature"] = json!(t);
@@ -230,8 +303,14 @@ fn missing_key(p: &Provider) -> ChatError {
 #[derive(Debug, PartialEq, Eq)]
 pub enum Step {
     Delta(String),
+    /// Token counts the provider reported; partial (fields it did not report are `None`).
+    Usage(Usage),
     Done,
     Skip,
+}
+
+fn count(v: &Value) -> Option<u64> {
+    v.as_u64()
 }
 
 fn error_message(v: &Value) -> String {
@@ -255,7 +334,19 @@ pub fn decode_event(kind: ProviderKind, ev: &SseEvent) -> Result<Step, ChatError
             }
             match v["choices"][0]["delta"]["content"].as_str() {
                 Some(s) if !s.is_empty() => Ok(Step::Delta(s.to_string())),
-                _ => Ok(Step::Skip),
+                // The final chunk of a stream asked to include usage: empty `choices` and a `usage`
+                // object. (A chunk with text and usage together gives the text; the counts then
+                // come from the stream's last chunk.)
+                _ => match v.get("usage") {
+                    Some(u) if u.is_object() => Ok(Step::Usage(Usage {
+                        input: count(&u["prompt_tokens"]),
+                        output: count(&u["completion_tokens"]),
+                        cache_read: count(&u["prompt_tokens_details"]["cached_tokens"]),
+                        cache_write: None,
+                        estimated: false,
+                    })),
+                    _ => Ok(Step::Skip),
+                },
             }
         }
         ProviderKind::Anthropic => {
@@ -265,6 +356,22 @@ pub fn decode_event(kind: ProviderKind, ev: &SseEvent) -> Result<Step, ChatError
                 "content_block_delta" if v["delta"]["type"] == "text_delta" => {
                     Ok(Step::Delta(v["delta"]["text"].as_str().unwrap_or("").to_string()))
                 }
+                // Input and cache counts come first, with the message...
+                "message_start" if v["message"]["usage"].is_object() => {
+                    let u = &v["message"]["usage"];
+                    Ok(Step::Usage(Usage {
+                        input: count(&u["input_tokens"]),
+                        output: None, // the 1 here is a placeholder; message_delta has the real total
+                        cache_read: count(&u["cache_read_input_tokens"]),
+                        cache_write: count(&u["cache_creation_input_tokens"]),
+                        estimated: false,
+                    }))
+                }
+                // ...and the output count follows as a running total, the last one being final.
+                "message_delta" if v["usage"].is_object() => Ok(Step::Usage(Usage {
+                    output: count(&v["usage"]["output_tokens"]),
+                    ..Default::default()
+                })),
                 "message_stop" => Ok(Step::Done),
                 "error" => Err(ChatError::Stream(error_message(&v["error"]))),
                 _ => Ok(Step::Skip),
@@ -296,6 +403,12 @@ pub fn extract_api_error(body: &str) -> String {
 
 // ------------------------------------------------------------ streaming
 
+/// A rough token count for `chars` characters of text: one token per four characters, rounded up.
+/// Only used when a provider reports nothing.
+pub fn estimate_tokens(chars: usize) -> u64 {
+    chars.div_ceil(4) as u64
+}
+
 /// Stream one assistant reply, calling `on_delta` for each piece of text.
 ///
 /// Resolving `cancel` (by sending on, or dropping, its sender) stops the
@@ -305,8 +418,90 @@ pub async fn stream_chat<F>(
     provider: &Provider,
     system: &str,
     messages: &[ChatMessage],
+    cancel: oneshot::Receiver<()>,
+    on_delta: F,
+) -> Result<StreamOutcome, ChatError>
+where
+    F: FnMut(&str),
+{
+    stream_chat_report(client, provider, system, messages, cancel, on_delta)
+        .await
+        .map(|r| r.outcome)
+        .map_err(|e| e.error)
+}
+
+/// Like `stream_chat`, and also says how it went: timings, the HTTP status, `Retry-After`. On
+/// failure the error carries the report up to that point.
+pub async fn stream_chat_report<F>(
+    client: &reqwest::Client,
+    provider: &Provider,
+    system: &str,
+    messages: &[ChatMessage],
+    cancel: oneshot::Receiver<()>,
+    on_delta: F,
+) -> Result<StreamReport, ReportedError>
+where
+    F: FnMut(&str),
+{
+    let started = Instant::now();
+    let mut report = StreamReport {
+        outcome: StreamOutcome::Completed,
+        usage: None,
+        time_to_first_token: None,
+        total: Duration::ZERO,
+        http_status: None,
+        retry_after: None,
+        finish_reason: None,
+    };
+    // For the estimate if the provider reports no usage: what was sent, and what came back.
+    let sent_chars = system.chars().count() + normalize(messages).iter().map(|m| m.content.chars().count()).sum::<usize>();
+    let mut reply_chars = 0usize;
+    let mut on_delta = on_delta;
+    let result = run_request(
+        client,
+        provider,
+        system,
+        messages,
+        cancel,
+        |d: &str| {
+            reply_chars += d.chars().count();
+            on_delta(d)
+        },
+        started,
+        &mut report,
+    )
+    .await;
+    report.total = started.elapsed();
+    match result {
+        Ok(outcome) => {
+            report.outcome = outcome;
+            // A reply that finished with no counts from the provider gets an estimate, marked as
+            // one. Counts the provider did give are never replaced.
+            if outcome == StreamOutcome::Completed && report.usage.is_none() {
+                report.usage = Some(Usage {
+                    input: Some(estimate_tokens(sent_chars)),
+                    output: Some(estimate_tokens(reply_chars)),
+                    cache_read: None,
+                    cache_write: None,
+                    estimated: true,
+                });
+            }
+            Ok(report)
+        }
+        Err(error) => Err(ReportedError { error, report }),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_request<F>(
+    client: &reqwest::Client,
+    provider: &Provider,
+    system: &str,
+    messages: &[ChatMessage],
     mut cancel: oneshot::Receiver<()>,
     mut on_delta: F,
+    started: Instant,
+    report: &mut StreamReport,
 ) -> Result<StreamOutcome, ChatError>
 where
     F: FnMut(&str),
@@ -324,6 +519,13 @@ where
     };
 
     let status = resp.status();
+    report.http_status = Some(status.as_u16());
+    report.retry_after = resp
+        .headers()
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .map(Duration::from_secs);
     if !status.is_success() {
         let body = resp.text().await.unwrap_or_default();
         return Err(ChatError::Api {
@@ -333,6 +535,14 @@ where
         });
     }
 
+    // Counts arrive in pieces on some APIs; they are merged as they come.
+    let note_usage = |u: Usage, report: &mut StreamReport| report.usage.get_or_insert_with(Usage::default).merge(&u);
+    let mut deliver = |s: &str, report: &mut StreamReport| {
+        if report.time_to_first_token.is_none() {
+            report.time_to_first_token = Some(started.elapsed());
+        }
+        on_delta(s);
+    };
     let mut stream = Box::pin(resp.bytes_stream());
     let mut parser = SseParser::default();
     loop {
@@ -347,7 +557,8 @@ where
         };
         for ev in events {
             match decode_event(provider.kind, &ev)? {
-                Step::Delta(s) => on_delta(&s),
+                Step::Delta(s) => deliver(&s, report),
+                Step::Usage(u) => note_usage(u, report),
                 Step::Done => return Ok(StreamOutcome::Completed),
                 Step::Skip => {}
             }
@@ -355,7 +566,8 @@ where
     }
     for ev in parser.finish() {
         match decode_event(provider.kind, &ev)? {
-            Step::Delta(s) => on_delta(&s),
+            Step::Delta(s) => deliver(&s, report),
+            Step::Usage(u) => note_usage(u, report),
             Step::Done => break,
             Step::Skip => {}
         }
@@ -444,6 +656,7 @@ mod tests {
         let mut p = provider(ProviderKind::OpenAi);
         let b = build_body(&p, "be brief", &msgs);
         assert_eq!(b["stream"], true);
+        assert_eq!(b["stream_options"], json!({ "include_usage": true }), "OpenAI-style bodies ask for usage");
         assert_eq!(b["messages"][0]["role"], "system");
         assert_eq!(b["messages"][1]["content"], "hi");
         assert!(b.get("max_tokens").is_none(), "unset max_tokens must be omitted");
@@ -453,10 +666,71 @@ mod tests {
 
         let a = provider(ProviderKind::Anthropic);
         let b = build_body(&a, "be brief", &msgs);
-        assert_eq!(b["system"], "be brief");
+        assert_eq!(b["system"][0]["text"], "be brief");
+        assert_eq!(b["system"][0]["cache_control"]["type"], "ephemeral", "the system prompt is cacheable");
+        assert!(b.get("stream_options").is_none(), "no OpenAI-only fields");
         assert_eq!(b["max_tokens"], 4096);
         assert_eq!(b["messages"][0]["role"], "user");
         assert!(build_body(&a, "  ", &msgs).get("system").is_none());
+    }
+
+    #[test]
+    fn openai_usage_chunks_are_decoded_and_are_not_errors() {
+        let kind = ProviderKind::OpenAi;
+        // Final chunk: empty choices and usage, as sent when include_usage is on.
+        let chunk = r#"{"id":"x","choices":[],"usage":{"prompt_tokens":120,"completion_tokens":35,"total_tokens":155,"prompt_tokens_details":{"cached_tokens":64}}}"#;
+        assert_eq!(
+            decode_event(kind, &ev(chunk)).unwrap(),
+            Step::Usage(Usage { input: Some(120), output: Some(35), cache_read: Some(64), cache_write: None, estimated: false })
+        );
+        // No cached-token detail: unknown, not zero.
+        let plain = r#"{"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":2}}"#;
+        assert_eq!(
+            decode_event(kind, &ev(plain)).unwrap(),
+            Step::Usage(Usage { input: Some(10), output: Some(2), cache_read: None, cache_write: None, estimated: false })
+        );
+        // Usage riding on an otherwise empty last chunk (finish_reason, empty text).
+        let last = r#"{"choices":[{"delta":{"content":""},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":6}}"#;
+        assert!(matches!(decode_event(kind, &ev(last)).unwrap(), Step::Usage(u) if u.output == Some(6)));
+        // Providers that put `"usage": null` on every chunk, and ordinary text chunks, are untouched.
+        assert_eq!(decode_event(kind, &ev(r#"{"choices":[{"delta":{"content":"hi"}}],"usage":null}"#)).unwrap(), Step::Delta("hi".into()));
+        assert_eq!(decode_event(kind, &ev(r#"{"choices":[{"delta":{"role":"assistant"}}],"usage":null}"#)).unwrap(), Step::Skip);
+    }
+
+    #[test]
+    fn the_estimate_is_one_token_per_four_characters_rounded_up() {
+        assert_eq!([0, 1, 4, 5, 400].map(estimate_tokens), [0, 1, 1, 2, 100]);
+    }
+
+    #[test]
+    fn merging_usage_keeps_what_was_reported_and_takes_what_is_new() {
+        let mut u = Usage { input: Some(100), cache_read: Some(64), ..Default::default() };
+        u.merge(&Usage { output: Some(7), ..Default::default() });
+        u.merge(&Usage { output: Some(50), ..Default::default() }); // a running total replaces
+        assert_eq!(u, Usage { input: Some(100), output: Some(50), cache_read: Some(64), cache_write: None, estimated: false });
+    }
+
+    #[test]
+    fn anthropic_bodies_mark_the_system_prompt_and_older_history_cacheable_and_openai_ones_do_not() {
+        let a = provider(ProviderKind::Anthropic);
+        let msgs = [m("user", "first"), m("assistant", "reply"), m("user", "newest")];
+        let b = build_body(&a, "be brief", &msgs);
+        // The system prompt and the message just before the newest carry the marker...
+        assert_eq!(b["system"][0]["cache_control"]["type"], "ephemeral");
+        assert_eq!(b["messages"][1]["content"][0]["text"], "reply");
+        assert_eq!(b["messages"][1]["content"][0]["cache_control"]["type"], "ephemeral");
+        // ...earlier and later ones stay plain strings, so the part that changes is not cached.
+        assert_eq!(b["messages"][0]["content"], "first");
+        assert_eq!(b["messages"][2]["content"], "newest");
+        // One message alone has no older history to mark; no system prompt, no system field.
+        let b = build_body(&a, "  ", &[m("user", "only")]);
+        assert_eq!(b["messages"][0]["content"], "only");
+        assert!(b.get("system").is_none());
+        // An OpenAI-style body is exactly as before: strings, no cache_control anywhere.
+        let o = build_body(&provider(ProviderKind::OpenAi), "be brief", &msgs);
+        assert!(!o.to_string().contains("cache_control"));
+        assert_eq!(o["messages"][0]["content"], "be brief");
+        assert_eq!(o["messages"][2]["content"], "reply");
     }
 
     #[test]
@@ -506,6 +780,17 @@ mod tests {
             assert_eq!(decode_event(k, &ev(skip)).unwrap(), Step::Skip, "{skip}");
         }
         assert_eq!(decode_event(k, &ev(r#"{"type":"message_stop"}"#)).unwrap(), Step::Done);
+        // Usage: input and cache counts with message_start, the output total with message_delta.
+        let start = r#"{"type":"message_start","message":{"id":"m","usage":{"input_tokens":25,"output_tokens":1,"cache_read_input_tokens":10,"cache_creation_input_tokens":3}}}"#;
+        assert_eq!(
+            decode_event(k, &ev(start)).unwrap(),
+            Step::Usage(Usage { input: Some(25), output: None, cache_read: Some(10), cache_write: Some(3), estimated: false })
+        );
+        let delta = r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":15}}"#;
+        assert_eq!(decode_event(k, &ev(delta)).unwrap(), Step::Usage(Usage { output: Some(15), ..Default::default() }));
+        // Without the cache fields they stay unknown rather than 0.
+        let bare = r#"{"type":"message_start","message":{"usage":{"input_tokens":7}}}"#;
+        assert!(matches!(decode_event(k, &ev(bare)).unwrap(), Step::Usage(u) if u.input == Some(7) && u.cache_read.is_none() && u.cache_write.is_none()));
         let err = decode_event(k, &ev(r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#))
             .unwrap_err();
         assert!(err.to_string().contains("Overloaded"));

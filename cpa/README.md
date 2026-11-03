@@ -1,11 +1,11 @@
-# CLIProxyAPI (profile `cpa`)
+# CLIProxyAPI
 
 CLIProxyAPI turns a Claude, ChatGPT/Codex or Gemini **subscription login** into an
 OpenAI-compatible endpoint. Askbar's server talks to it over the compose network; its API
 port is never published to the host.
 
 ```bash
-docker compose --profile cpa up -d            # creates the config with random secrets on first run
+docker compose up -d            # creates the config with random secrets on first run
 docker compose run --rm cpa-init show         # prints the API key to use in Askbar
 ```
 
@@ -18,9 +18,9 @@ approve, the browser is redirected to `localhost`, which reaches the container b
 
 ```bash
 # Claude
-docker compose --profile cpa run --rm --service-ports cpa-login ./CLIProxyAPI -config /cpa-config/config.yaml -claude-login -no-browser
+docker compose --profile cpa-login run --rm --service-ports cpa-login ./CLIProxyAPI -config /cpa-config/config.yaml -claude-login -no-browser
 # ChatGPT / Codex
-docker compose --profile cpa run --rm --service-ports cpa-login ./CLIProxyAPI -config /cpa-config/config.yaml -codex-login -no-browser
+docker compose --profile cpa-login run --rm --service-ports cpa-login ./CLIProxyAPI -config /cpa-config/config.yaml -codex-login -no-browser
 ```
 
 Other providers: `docker compose run --rm cpa-login ./CLIProxyAPI -h`. The login is stored in the

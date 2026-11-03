@@ -6,5 +6,5 @@ FROM caddy:2
 COPY --from=build /usr/bin/caddy /usr/bin/caddy
 COPY caddy/bootstrap.Caddyfile /etc/caddy/bootstrap.Caddyfile
 # The admin service pushes the real configuration through the admin socket; `--resume` brings back
-# the last one after a restart. The bootstrap file only moves the admin API onto a unix socket.
+# the last one after a restart. The bootstrap file moves Caddy's admin API onto a unix socket and serves the first-run page for the admin.
 CMD ["caddy", "run", "--config", "/etc/caddy/bootstrap.Caddyfile", "--adapter", "caddyfile", "--resume"]

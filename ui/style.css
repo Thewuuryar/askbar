@@ -175,7 +175,7 @@ button { font: inherit; color: inherit; }
 .status span#status-text { flex: 1 1 240px; min-width: 0; overflow-wrap: anywhere; }
 .status-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 
-/* Pairing screen: shown instead of the conversation until this device is paired. */
+/* Pairing screen: shown instead of the conversation until this app is paired. */
 .pair {
   padding: 12px 20px 14px;
   font-size: 13.5px;
@@ -365,3 +365,5 @@ button { font: inherit; color: inherit; }
 .conv:hover .del, .conv:focus-within .del, .conv .del.armed { opacity: 1; }
 .conv .del:hover { color: var(--danger); }
 .conv .del.armed { color: var(--danger); font-weight: 600; }
+
+.msg .served-by { margin-top: 4px; font-size: 12px; opacity: .65; }

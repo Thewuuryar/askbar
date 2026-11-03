@@ -2,7 +2,7 @@
 // Tauri bridge with an in-memory history, so UI behaviour can be tested in a
 // plain browser.
 (() => {
-  const db = { convs: [], nextConv: 1, nextMsg: 1, clock: Math.floor(Date.now() / 1000) };
+  const db = { convs: [], nextConv: 1, nextMsg: 1, clock: Math.floor(Date.now() / 1000), unsent: [], nextReq: 1 };
   const calls = [];
   const listeners = {};
   let cancelFlag = false;
@@ -55,16 +55,68 @@
       db.convs.slice().sort((a, b) => b.updated_at - a.updated_at || Number(b.id) - Number(a.id))
         .map((c) => ({ id: c.id, title: c.title, updated_at: c.updated_at, message_count: c.messages.length })),
     load_conversation: ({ id }) => db.convs.find((c) => c.id === id).messages,
+    // Replies the server is still working on, per conversation: conv.pending is a list of
+    // { generationId, status: 'running' | 'queued', prompt, text, replyText } set by a test.
+    load_pending: ({ id }) => {
+      const c = db.convs.find((x) => x.id === id);
+      return ((c && c.pending) || []).map(({ generationId, status, prompt, text }) => ({ generationId, status, prompt, text: text || '' }));
+    },
+    cancel_generation: ({ id }) => {
+      for (const c of db.convs) c.pending = (c.pending || []).filter((p) => p.generationId !== id);
+    },
+    // Joins a running reply: replays its text from the start, then it finishes and the next
+    // queued message (if any) starts running.
+    attach: async ({ generationId, onEvent }) => {
+      cancelFlag = false;
+      const conv = db.convs.find((c) => (c.pending || []).some((p) => p.generationId === generationId));
+      const p = conv.pending.find((x) => x.generationId === generationId);
+      const full = p.replyText || 'The reply that was already running.';
+      let sent = '';
+      for (let i = 0; i < full.length; i += 6) {
+        if (cancelFlag) break;
+        const piece = full.slice(i, i + 6);
+        sent += piece;
+        onEvent.onmessage({ event: 'delta', text: piece });
+        await sleep(p.slow ? 40 : 2);
+      }
+      if (sent) conv.messages.push({ id: String(db.nextMsg++), role: 'assistant', content: sent, created_at: db.clock });
+      conv.pending = conv.pending.filter((x) => x !== p);
+      const next = conv.pending.find((x) => x.status === 'queued');
+      if (next) {
+        next.status = 'running';
+        conv.messages.push({ id: String(db.nextMsg++), role: 'user', content: next.prompt, created_at: db.clock });
+      }
+      conv.updated_at = ++db.clock;
+      onEvent.onmessage({ event: cancelFlag ? 'cancelled' : 'done' });
+    },
+    // The outbox: text of messages the server never took. A send that fails before the reply
+    // begins (opts.status) leaves its text here; nothing sends it again unless the person asks.
+    unsent_messages: () => db.unsent.map((u) => ({ ...u })),
+    discard_unsent: ({ clientRequestId }) => {
+      const n = db.unsent.length;
+      db.unsent = db.unsent.filter((u) => u.clientRequestId !== clientRequestId);
+      return db.unsent.length !== n;
+    },
+    resend: async ({ clientRequestId, onEvent }) => {
+      const u = db.unsent.find((x) => x.clientRequestId === clientRequestId);
+      if (!u) { onEvent.onmessage({ event: 'error', message: 'That message is no longer waiting to be sent.' }); return; }
+      const st = window.__opts.status;
+      if (!(st && st.kind !== 'provider_missing')) db.unsent = db.unsent.filter((x) => x !== u);
+      return handlers.ask({ conversationId: u.conversationId, text: u.text, onEvent, fromOutbox: true });
+    },
     delete_conversation: ({ id }) => { db.convs = db.convs.filter((c) => c.id !== id); },
     cancel_ask: () => { cancelFlag = true; },
     resize_window: () => {},
     hide_window: () => {},
     open_config: () => {},
     open_url: () => {},
-    ask: async ({ conversationId, text, onEvent }) => {
+    ask: async ({ conversationId, text, onEvent, fromOutbox }) => {
       cancelFlag = false;
       const st = window.__opts.status;
       if (st && st.kind !== 'provider_missing') {
+        if (!fromOutbox) {
+          db.unsent.push({ clientRequestId: 'req-' + db.nextReq++, conversationId: conversationId || null, text, createdAt: db.clock });
+        }
         onEvent.onmessage({ event: 'error', message: st.message });
         return;
       }
@@ -76,8 +128,17 @@
       conv.messages.push({ id: String(db.nextMsg++), role: 'user', content: text, created_at: db.clock });
       onEvent.onmessage({ event: 'started', conversationId: conv.id });
 
+      if (/fallback/i.test(text)) onEvent.onmessage({ event: 'provider', id: 'p2', name: 'Backup AI' });
       if (/fail/i.test(text)) {
         onEvent.onmessage({ event: 'error', message: 'anthropic returned 401: invalid x-api-key. Check api_key in config.yaml.' });
+        return;
+      }
+      if (/timeout/i.test(text)) {
+        // The server stopped the reply: two pieces of text arrived, then the timeout.
+        conv.messages.push({ id: String(db.nextMsg++), role: 'assistant', content: 'Partial answer', created_at: db.clock });
+        onEvent.onmessage({ event: 'delta', text: 'Partial ' });
+        onEvent.onmessage({ event: 'delta', text: 'answer' });
+        onEvent.onmessage({ event: 'error', kind: 'timed_out', message: 'Stopped after 5 minutes' });
         return;
       }
       const slow = /slow/i.test(text);

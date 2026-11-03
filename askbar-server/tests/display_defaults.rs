@@ -25,7 +25,7 @@ async fn start() -> T {
     };
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let api = format!("http://{}", l.local_addr().unwrap());
-    let app = askbar_server::api_router(state.clone());
+    let app = askbar_server::client_router(state.clone());
     tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
     T { api, http: reqwest::Client::new(), state, user_a, token_a, token_b }
 }
@@ -34,9 +34,9 @@ impl T {
     async fn defaults(&self, token: &str) -> (u16, DisplaySettings) {
         let r = self
             .http
-            .get(format!("{}/api/v1/me/display-defaults", self.api))
+            .get(format!("{}/api/client/v1/me/display-defaults", self.api))
             .bearer_auth(token)
-            .header("x-askbar-client-version", "0.3.0")
+            .header("x-askbar-client-version", "0.5.0")
             .send()
             .await
             .unwrap();

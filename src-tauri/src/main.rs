@@ -4,6 +4,7 @@
 mod client_config;
 mod remote;
 mod tokens;
+mod outbox;
 mod types;
 
 use askbar_proto::{Conversation, Message};
@@ -198,13 +199,14 @@ async fn server_status(state: State<'_, AppState>) -> Result<Option<types::Clien
     Ok(state.backend().status().await)
 }
 
-/// Exchange a pairing string for a device token, remember the server, and switch to it.
+/// Exchange a pairing string for a client token, remember the server, and switch to it.
 #[tauri::command]
 async fn pair(app: AppHandle, state: State<'_, AppState>, pairing: String) -> Result<(), String> {
     let path = client_config::path();
     let keychain = tokens::Keychain::new(&path);
     remote::pair(&pairing, &path, &keychain).await?;
-    let remote = Remote::new(client_config::ClientConfig::load(&path), path, Box::new(keychain));
+    let remote = Remote::new(client_config::ClientConfig::load(&path), path, Box::new(keychain))
+        .with_outbox(outbox::Outbox::load(outbox::default_path()));
     *state.backend.write().unwrap_or_else(|e| e.into_inner()) = Arc::new(remote);
     // Pick up the new hotkey and look and feel.
     let _ = apply_config(&app);
@@ -254,6 +256,62 @@ async fn ask(
     Ok(())
 }
 
+/// Messages this app sent that the server has not taken, after dropping those it already has.
+#[tauri::command]
+async fn unsent_messages(state: State<'_, AppState>) -> Result<Vec<types::UnsentMessage>, String> {
+    Ok(state.backend().unsent().await?.into_iter().map(Into::into).collect())
+}
+
+/// Sends an unsent message again (same request id, so the server never doubles it).
+#[tauri::command]
+async fn resend(state: State<'_, AppState>, client_request_id: String, on_event: Channel<StreamEvent>) -> Result<(), String> {
+    let (tx, rx) = oneshot::channel();
+    *lock(&state.cancel) = Some(tx);
+    state
+        .backend()
+        .resend(client_request_id, rx, &|e| {
+            let _ = on_event.send(e);
+        })
+        .await;
+    lock(&state.cancel).take();
+    Ok(())
+}
+
+/// Throws an unsent message away.
+#[tauri::command]
+fn discard_unsent(state: State<'_, AppState>, client_request_id: String) -> Result<bool, String> {
+    state.backend().discard_unsent(&client_request_id)
+}
+
+/// The replies of a conversation that have not finished (running, or waiting behind one).
+#[tauri::command]
+async fn load_pending(state: State<'_, AppState>, id: String) -> Result<Vec<types::PendingReply>, String> {
+    state.backend().load_pending(id).await
+}
+
+/// Removes a message that is waiting its turn (or stops a running reply) by generation id.
+#[tauri::command]
+async fn cancel_generation(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    state.backend().cancel_generation(id).await
+}
+
+/// Joins a reply that is already running on the server. Stop (`cancel_ask`) works on it as on `ask`.
+#[tauri::command]
+async fn attach(state: State<'_, AppState>, generation_id: String, on_event: Channel<StreamEvent>) -> Result<(), String> {
+    let (tx, rx) = oneshot::channel();
+    *lock(&state.cancel) = Some(tx);
+    state
+        .backend()
+        .attach(generation_id, rx, &|e| {
+            let _ = on_event.send(e);
+        })
+        .await;
+    lock(&state.cancel).take();
+    Ok(())
+}
+
+/// Stop: tells the running `ask` to ask the server to stop the reply (the reply then ends there
+/// with its text so far kept); the window gets `Cancelled` once the server has been told.
 #[tauri::command]
 fn cancel_ask(state: State<'_, AppState>) {
     if let Some(tx) = lock(&state.cancel).take() {
@@ -334,7 +392,7 @@ fn main() {
             let client_yaml = client_config::path();
             let tokens = Box::new(tokens::Keychain::new(&client_yaml));
             let config = if client_yaml.exists() { client_config::ClientConfig::load(&client_yaml) } else { Ok(Default::default()) };
-            let backend = Arc::new(Remote::new(config, client_yaml, tokens));
+            let backend = Arc::new(Remote::new(config, client_yaml, tokens).with_outbox(outbox::Outbox::load(outbox::default_path())));
             let (cfg, config_error) = match tauri::async_runtime::block_on(backend.settings()) {
                 Ok(s) => (s, None),
                 Err(e) => (Settings::builtin(), Some(e)),
@@ -416,6 +474,12 @@ fn main() {
             delete_conversation,
             ask,
             cancel_ask,
+            load_pending,
+            unsent_messages,
+            resend,
+            discard_unsent,
+            cancel_generation,
+            attach,
             resize_window,
             hide_window,
             open_config,
