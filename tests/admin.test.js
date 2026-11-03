@@ -6,6 +6,7 @@ const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const net = require('node:net');
+const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 
@@ -45,18 +46,35 @@ async function waitForPort(port) {
   const children = [];
   const run = (cmd, args, env) => { const c = spawn(cmd, args, { env: { ...process.env, ...env }, stdio: 'ignore' }); children.push(c); return c; };
   let forwarder = null;
-  const cleanup = () => { for (const c of children) c.kill(); if (forwarder) forwarder.close(); fs.rmSync(data, { recursive: true, force: true }); };
+  const cleanup = () => { if (typeof controller !== 'undefined') controller.close(); for (const c of children) c.kill(); if (forwarder) forwarder.close(); fs.rmSync(data, { recursive: true, force: true }); };
 
   const startServer = () => run(path.join(ROOT, 'target/debug/askbar-server'), [], {
     ASKBAR_CLIENT_API_ADDR: '127.0.0.1:' + api,
     ASKBAR_SERVER_API_ADDR: '127.0.0.1:' + serverApiPort, ASKBAR_SERVER_TOKEN_HASH_FILE: path.join(dirs.serverToken, 'token.sha256'),
     ASKBAR_DATA_DIR: dirs.serverData, ASKBAR_SECRETS_DIR: dirs.serverSecrets,
   });
+  // A stand-in for the controller: three services whose state the page can change.
+  const controlPort = await freePort();
+  const svc = { server: 'running', caddy: 'running', cpa: 'exited' };
+  const controlCalls = [];
+  const controller = http.createServer((req, res) => {
+    const send = (code, obj) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(obj)); };
+    const row = (n) => ({ name: n, state: svc[n], status: svc[n] === 'running' ? 'Up 1 hour' : 'Exited (0)', health: null });
+    if (req.headers.authorization !== undefined && req.url === '/api/control/v1/services') return send(200, { services: Object.keys(svc).map(row) });
+    const m = req.method === 'POST' && req.url.match(/^\/api\/control\/v1\/services\/(\w+)\/(\w+)$/);
+    if (m && svc[m[1]] !== undefined) {
+      controlCalls.push(m[2] + ' ' + m[1]);
+      svc[m[1]] = m[2] === 'stop' ? 'exited' : 'running';
+      return send(200, row(m[1]));
+    }
+    send(404, { error: 'not_found', detail: 'No such service.' });
+  }).listen(controlPort, '127.0.0.1');
   run('python3', ['-u', path.join(ROOT, 'tests/mock_llm.py'), String(mockPort)], {});
   run(path.join(ROOT, 'target/debug/askbar-admin'), [], {
     ASKBAR_ADMIN_SOCKET: sock, ASKBAR_ADMIN_DATA_DIR: dirs.adminData, ASKBAR_ADMIN_SECRETS_DIR: dirs.adminSecrets,
     ASKBAR_SERVER_TOKEN_DIR: dirs.serverToken, ASKBAR_SERVER_API_URL: 'http://127.0.0.1:' + serverApiPort,
     ASKBAR_PUBLIC_URL: 'http://localhost:' + api,
+    ASKBAR_CONTROL_URL: 'http://127.0.0.1:' + controlPort, ASKBAR_CONTROL_TOKEN_DIR: path.join(data, 'control-token'),
   });
   for (let i = 0; i < 100 && !fs.existsSync(sock); i++) await new Promise((r) => setTimeout(r, 50));
   forwarder = net.createServer((c) => {
@@ -295,6 +313,24 @@ async function waitForPort(port) {
     page.once('dialog', (d) => d.accept());
     await page.click('.card[data-name="dead"] [data-action="delete"]');
     await page.waitForFunction(() => !document.querySelector('.card[data-name="dead"]'));
+  });
+  await step('Services: the three services show their state, and Restart asks first and then acts', async () => {
+    await page.click('#nav [data-tab="services"]');
+    await page.waitForSelector('#services .card[data-name="cpa"]');
+    assert.deepEqual(await page.$$eval('#services .card', (c) => c.map((x) => x.dataset.name)), ['server', 'caddy', 'cpa']);
+    assert.match(await page.innerText('#services .card[data-name="cpa"]'), /exited/);
+    assert.equal(await page.isDisabled('#services .card[data-name="cpa"] [data-action="stop"]'), true, 'a stopped service cannot be stopped');
+    assert.equal(await page.isDisabled('#services .card[data-name="cpa"] [data-action="start"]'), false);
+    let asked = '';
+    page.once('dialog', (d) => { asked = d.message(); d.dismiss(); });
+    await page.click('#services .card[data-name="server"] [data-action="restart"]');
+    assert.match(asked, /Replies being written end as interrupted/);
+    assert.deepEqual(controlCalls, [], 'declining the question does nothing');
+    page.once('dialog', (d) => d.accept());
+    await page.click('#services .card[data-name="cpa"] [data-action="start"]');
+    await page.waitForFunction(() => /running/.test(document.querySelector('#services .card[data-name="cpa"]')?.textContent || ''));
+    assert.deepEqual(controlCalls, ['start cpa']);
+    await page.waitForFunction(() => /start cpa/.test(document.getElementById('services-recent').textContent));
   });
   await step('clients see the provider without its key', async () => {
     // The API is the other listener; without a token it must refuse.

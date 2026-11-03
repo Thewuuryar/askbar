@@ -89,3 +89,5 @@ pre.plain:empty { display: none; }
 .sealed-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 6px 0; border-bottom: 1px solid var(--line); }
 .sealed-row .what { flex: 1; min-width: 160px; overflow-wrap: anywhere; }
 #tab-audit h3 { margin-top: 22px; }
+
+.svc-state { margin-left: auto; color: var(--muted); font-size: 13px; }

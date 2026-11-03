@@ -37,6 +37,7 @@
 
   const tabs = [
     { id: 'providers', label: 'Providers', load: loadProviders },
+    { id: 'services', label: 'Services', load: loadServices },
     { id: 'clients', label: 'Clients', load: loadClients },
     { id: 'settings', label: 'Settings', load: loadSettings },
     { id: 'network', label: 'Network', load: loadNetwork },
@@ -193,6 +194,95 @@
     try { await api('DELETE', '/admin/api/v1/session'); } catch (_) { /* already signed out */ }
     route();
   });
+
+  // -------------------------------------------------------- services
+
+  const SERVICE_INFO = {
+    server: { title: 'Server', what: 'the Askbar server (chats, history, provider calls)', warn: 'Replies being written end as interrupted, and apps say "server offline" until it is back.' },
+    caddy: { title: 'Caddy (HTTPS front end)', what: 'the HTTPS front end', warn: 'This page, and apps, lose their connection while it restarts or is stopped. Only start it again from the host if you stop it.' },
+    cpa: { title: 'CLIProxyAPI', what: 'CLIProxyAPI', warn: 'Providers that use your Claude or ChatGPT login fail until it is back.' },
+  };
+  let servicesBusy = false;
+
+  function serviceCard(svc) {
+    const info = SERVICE_INFO[svc.name] || { title: svc.name, what: svc.name, warn: '' };
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.dataset.name = svc.name;
+    const head = document.createElement('div');
+    head.className = 'row';
+    const title = document.createElement('strong');
+    title.textContent = info.title;
+    const state = document.createElement('span');
+    state.className = 'svc-state';
+    state.textContent = svc.state + (svc.health ? ' · ' + svc.health : '');
+    head.append(title, state);
+    const meta = document.createElement('div');
+    meta.className = 'hint';
+    meta.textContent = svc.status || (svc.state === 'missing' ? 'No container found.' : '');
+    const buttons = document.createElement('div');
+    buttons.className = 'row';
+    for (const action of ['start', 'stop', 'restart']) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'secondary';
+      b.dataset.action = action;
+      b.textContent = action[0].toUpperCase() + action.slice(1);
+      b.disabled = servicesBusy || svc.state === 'missing' || (action === 'start' && svc.state === 'running') || (action === 'stop' && svc.state !== 'running');
+      b.addEventListener('click', () => serviceAction(svc.name, action, info));
+      buttons.appendChild(b);
+    }
+    const out = document.createElement('span');
+    out.className = 'svc-result hint';
+    buttons.appendChild(out);
+    card.append(head, meta, buttons);
+    return card;
+  }
+
+  async function serviceAction(name, action, info) {
+    const sentence = action[0].toUpperCase() + action.slice(1) + ' ' + info.what + '? ' + (action === 'start' ? '' : info.warn);
+    if (!confirm(sentence.trim())) return;
+    servicesBusy = true;
+    const card = document.querySelector('#services .card[data-name="' + name + '"]');
+    for (const b of document.querySelectorAll('#services button')) b.disabled = true;
+    const out = card && card.querySelector('.svc-result');
+    if (out) out.textContent = 'Working...';
+    try {
+      await api('POST', '/admin/api/v1/services/' + encodeURIComponent(name) + '/' + action);
+    } catch (ex) {
+      flash(ex.message);
+    }
+    servicesBusy = false;
+    loadServices().catch((e) => flash(e.message));
+  }
+
+  async function loadServices() {
+    const box = $('services');
+    let data;
+    try { data = await api('GET', '/admin/api/v1/services'); }
+    catch (ex) {
+      box.textContent = '';
+      const p = document.createElement('p');
+      p.className = 'error';
+      p.textContent = ex.message;
+      box.appendChild(p);
+      return;
+    }
+    box.textContent = '';
+    for (const svc of data.services) box.appendChild(serviceCard(svc));
+    const rec = $('services-recent');
+    rec.textContent = data.recent.length ? '' : 'None yet.';
+    for (const r of data.recent) {
+      const line = document.createElement('div');
+      line.textContent = new Date(r.at * 1000).toLocaleString() + ' · ' + r.action + ' ' + r.service + (r.ok ? '' : ' · failed');
+      rec.appendChild(line);
+    }
+  }
+  // Keep the state fresh while the tab is on screen.
+  setInterval(() => {
+    const sec = document.querySelector('section[data-tab="services"]');
+    if (sec && !sec.hidden && !servicesBusy && !document.hidden) loadServices().catch(() => {});
+  }, 5000);
 
   // -------------------------------------------------------- providers
 
