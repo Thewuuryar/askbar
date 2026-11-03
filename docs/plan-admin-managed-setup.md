@@ -33,15 +33,15 @@ Mounting `/var/run/docker.sock` into the admin would make an admin compromise eq
 
 ### D2. The admin owns CPA's config and API key
 
-- New volume ownership: `cpa-config` is mounted **read-write by the admin** and **read-only by cpa**. The admin generates `config.yaml` (API key, management secret) on first start, in the same format `cpa/init.sh` writes today, and stores the key and secret sealed in `admin.db` (using `secrets.rs`, same as the Cloudflare token).
-- `cpa-init` and `cpa/init.sh` go away. Existing installs: on first start the admin finds an existing `config.yaml` and adopts its API key and management secret instead of replacing them (so existing logins and the current provider keep working). Covered by a migration test.
+- New volume ownership: `cpa-config` is mounted **read-write by the admin** and **read-only by cpa**. The admin generates `config.yaml` (API key, control secret) on first start, in the same format `cpa/init.sh` writes today, and stores the key and secret sealed in `admin.db` (using `secrets.rs`, same as the Cloudflare token).
+- `cpa-init` and `cpa/init.sh` go away. Existing installs: on first start the admin finds an existing `config.yaml` and adopts its API key and control secret instead of replacing them (so existing logins and the current provider keep working). Covered by a migration test.
 - New internal network `cpa-admin` (`internal: true`) with the admin and cpa. The admin gets no route out. The server still reaches cpa over `edge` as today.
 - The admin creates the "CPA" provider itself (type `openai`, base URL `http://cpa:8317/v1`, key = the CPA API key, billing `subscription`) the first time CPA is up, and keeps its key in sync if the key is ever rotated. The Providers page shows it as "Managed by the admin"; name, URL and key are not editable for it. The "Add CLIProxyAPI" preset button is removed.
 - CPA config changes (key rotation) are applied by the admin writing the file and asking the controller to restart `cpa` (or relying on CPA's file watcher; verify).
 
-### D3. OAuth from the browser, using CPA's management API
+### D3. OAuth from the browser, using CPA's control API
 
-CPA exposes a management API (login URL, callback, status, list/remove auth files). The admin proxies it so the browser never sees the management secret.
+CPA exposes a control API (login URL, callback, status, list/remove auth files). The admin proxies it so the browser never sees the control secret.
 
 Flow (works when the admin is opened from another machine, with no published callback ports):
 
@@ -51,7 +51,7 @@ Flow (works when the admin is opened from another machine, with no published cal
 4. Admin polls CPA's auth status for that state and shows "Connected as <account>" (from the auth file list). A **Disconnect** button removes the auth file.
 5. Where the admin is opened on the Docker host itself, the same flow works; the paste box is simply the fallback. No `cpa-login` service, no published ports 54545/1455/8085/51121.
 
-Security notes: management secret stays in the admin; only one login in flight per provider; pasted URLs are never logged; the auth list shows account label only, never tokens.
+Security notes: control secret stays in the admin; only one login in flight per provider; pasted URLs are never logged; the auth list shows account label only, never tokens.
 
 Open item to verify before coding: exact CPA v8.0.51 endpoint paths, parameters and response shapes (I could not reach the docs from this session). Pin them in a short `askbar-admin/src/cpa.rs` module with tests against a recorded fixture and a mock in `tests/mock_cpa.py`.
 
@@ -92,7 +92,7 @@ Each step is its own commit with tests and the OpenAPI/docs change that goes wit
 - Docker socket mounted in exactly one container (`controller`), which has no published ports and is on one internal network with the admin.
 - Controller token compared against a stored hash; admin cannot be tricked into passing a service name outside the allow list because the controller re-checks it.
 - A compromised admin can restart or stop the three services but cannot start new containers, read volumes, or exec; this is the main residual risk and is stated in `SECURITY.md`.
-- CPA management secret and API key sealed at rest, never returned by any admin endpoint, never logged.
+- CPA control secret and API key sealed at rest, never returned by any admin endpoint, never logged.
 - Pasted OAuth URLs: strict parse, state match, expiry, single use.
 - Model-listing requests cannot be used as an SSRF probe beyond what provider setup already allows (same URL rules as providers; the request goes from the server, which already contacts arbitrary provider URLs). Decide whether to refuse link-local and metadata addresses for both listing and chat in one shared check.
 - All new routes: session-only vs key-allowed decided per route, CSRF header on changes, problem+json errors, OpenAPI entries (the openapi tests enforce this).
