@@ -79,13 +79,23 @@ admin_script() { # python lines using call(); the result is printed by the lines
   py --network "$EDGE" -v "${PROJECT}_admin-run:/run/admin" -- "$ADMIN_PY
 $1"
 }
+# Before anything else: an admin that already has a password needs ASKBAR_ADMIN_PASSWORD. Without it every
+# step would sign in wrongly, fail, and (five wrong tries) lock sign-in out for 15 minutes.
+if [ -z "${ASKBAR_ADMIN_PASSWORD:-}" ]; then
+  state=$(admin_script "s, body = call('GET', '/admin/api/v1/setup'); print(json.loads(body).get('password_set') if s == 200 else 'unknown')" 2>/dev/null | tail -1)
+  if [ "$state" = "True" ]; then
+    echo "The admin already has a password. Run again with it:" >&2
+    echo "  ASKBAR_ADMIN_PASSWORD='your admin password' scripts/check-isolation.sh" >&2
+    exit 2
+  fi
+fi
 admin_login() { # python lines that sign in (or run first-run setup), used before every script
   cat <<EOF
 s, _ = call("POST", "/admin/api/v1/session", {"password": "$PW"})
 if s != 204:
     call("PUT", "/admin/api/v1/setup/password", {"password": "$PW"})
     s, _ = call("POST", "/admin/api/v1/session", {"password": "$PW"})
-assert s == 204 or s == 200, "cannot sign in to the admin"
+assert s == 204 or s == 200, "cannot sign in to the admin: set ASKBAR_ADMIN_PASSWORD to its password (repeated wrong tries lock sign-in for 15 minutes)"
 EOF
 }
 
