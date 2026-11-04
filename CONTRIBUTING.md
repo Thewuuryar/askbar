@@ -101,6 +101,7 @@ The whole API is [docs/openapi/admin.v1.yaml](docs/openapi/admin.v1.yaml).
   `docs`, `ci`, `deps`. The body says why, lists any deviation from a plan, and says when a test was changed. A breaking
   change has `!` after the scope and a `BREAKING CHANGE:` footer. One concern per commit; tests and docs ride with the code.
 - **Pull requests.** The title is a commit subject. Fill in the template: what was verified, and what was not.
+- **Merging.** Squash by default. A stepwise series where each commit stands alone is rebase-merged; say so in the PR.
 - **A boundary change needs an ADR.** If a change moves a boundary (crate, container, network, volume, API audience),
   adds a dependency or a container, or reverses an accepted ADR, write or supersede one in [docs/adr/](docs/adr/) in the
   same PR.

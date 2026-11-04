@@ -1,6 +1,6 @@
 # 0007. Conversation only, and what gates tools
 
-Status: Proposed
+Status: Accepted (2026-11-03): conversation only through 1.0. Where the executor runs and which tools come first are left for the ADR that proposes them.
 Date: 2026-11-03
 
 ## Context
@@ -9,9 +9,9 @@ The README says Askbar is conversation only: text in, text out, no tools, no she
 
 Both cannot stay true without a rule for when and how tools arrive.
 
-## Decision (proposed)
+## Decision
 
-Askbar stays conversation only until this ADR is accepted with an answer to the questions below. When tools are added, these invariants hold from the first commit:
+Askbar stays conversation only through 1.0. A change that gives the model any tool needs its own ADR first, and when tools are added these invariants hold from the first commit:
 
 1. Tools run in a new container (the **executor**) that has no route to the admin, the server API, the controller or any secret volume. Name it as a fifth word in [architecture.md](../architecture.md) before it exists.
 2. Network egress from the executor is denied by default and allowed per destination.
@@ -25,13 +25,11 @@ Askbar stays conversation only until this ADR is accepted with an answer to the 
 - **Stay conversation only for good.** Simplest, and keeps the audit story small. Loses the research and code features.
 - **Tools inside `askbar-server`.** Rejected here: it puts untrusted execution in the container that holds provider keys and the audit store.
 
-## Questions to answer before accepting
+## Left for the ADR that proposes tools
 
-1. Are tools in scope for 1.0, or after?
-2. Where does the executor run: same host, or a separate machine (the NAS)? If separate, how is it reached and authenticated?
-3. Is "fail closed on audit failure" acceptable for tool calls?
-4. Which tools first: web research (fetch and search) or code execution?
+1. Where the executor runs: same host, or a separate machine (the NAS), and how it is reached and authenticated.
+2. Which tools first: web research (fetch and search) or code execution.
 
 ## Consequences
 
-If accepted: [AGENTS.md](../../AGENTS.md) and [logging-and-audit.md](../style/logging-and-audit.md) drop their "proposed" tags for tools, and `scripts/check-isolation.sh` gains checks for each invariant.
+Until then no tool, shell or file access reaches the model, which keeps the audit trace to replies only. When tools are proposed, `scripts/check-isolation.sh` gains a check for each invariant above.

@@ -15,7 +15,7 @@ Askbar has three kinds of caller: the apps, the admin service and its site, and 
 
 ## Alternatives considered
 
-A separate admin subdomain (the goals document, and builds before 0.5.0). The reason it was dropped is not recorded beyond "one name, one certificate" (README). See [0008](0008-admin-sign-in-and-exposure.md) for whether to revisit it.
+A separate admin subdomain (the goals document, and builds before 0.5.0). Rejected by the owner on 2026-11-03: one domain and one certificate, with the admin at `/admin`. The admin still runs in its own isolated container ([0003](0003-admin-and-server-isolation.md)); sharing a host name does not mean sharing a process.
 
 ## Consequences
 

@@ -2,7 +2,7 @@
 
 Rules for AI coding agents working on Askbar (Claude Code, Codex, Cursor, Copilot, others). Humans follow them too; the long form is [CONTRIBUTING.md](CONTRIBUTING.md).
 
-"Agent" here means a coding agent working on this repo. Askbar itself has none: the model gets text in and returns text out (README). Giving the model tools needs an accepted ADR first ([docs/adr/](docs/adr/)).
+"Agent" here means a coding agent working on this repo. Askbar itself has none: the model gets text in and returns text out (README), and stays that way through 1.0 ([ADR 0007](docs/adr/0007-conversation-only-and-tool-gating.md)). Do not add tools, a shell or file access for the model.
 
 Items marked **(proposed)** await a decision; see [docs/plan-contributor-guidelines.md](docs/plan-contributor-guidelines.md).
 
@@ -21,6 +21,7 @@ If code and `docs/architecture.md` disagree, one is a bug. Fix it in the same co
 
 ```sh
 cargo build --workspace
+cargo fmt --all --check                # (proposed) required once the rustfmt PR lands
 cargo test --workspace                 # needs python3 (mock LLM)
 npm install && npx playwright install chromium
 npm test                               # names + docs checks, cargo tests, markdown, UI and admin browser tests
@@ -33,6 +34,7 @@ Before you finish: `npm test` and `scripts/smoke.sh` pass. If you touched `compo
 ## Hard rules (MUST NOT)
 
 - The server side never reads or writes the admin's data or settings, and never calls the admin. The admin pushes to the server over the server API only. A model, tool or reply must never be able to change settings.
+- The admin stays in its own container and image. No admin code in the server image; the only things the two share are the `server-api` network and the `server-token` volume (a hash). The admin is served at `/admin` on the one host name; do not add a second domain or certificate.
 - Never route `/api/server/*` or the controller publicly. Only Caddy publishes ports.
 - The Docker socket stays in the controller, and the controller keeps its allow list of `server`, `caddy`, `cpa`. Do not widen it.
 - Secrets never go in `.env`, logs, backups, error messages, test output or commits. Provider keys live encrypted in the server database and are never returned by any endpoint. An environment variable holds a path or an address, never a secret.
@@ -71,3 +73,4 @@ Before you finish: `npm test` and `scripts/smoke.sh` pass. If you touched `compo
 - Commit: [Conventional Commits](https://www.conventionalcommits.org/): `type(scope): subject`. Imperative, lower case, no full stop, 72 characters or fewer. Scope is one of `proto server admin controller client ui compose docs ci deps`.
 - Body: why, not what. List any deviation from the plan or any test you changed. Breaking change: `!` after the scope and a `BREAKING CHANGE:` footer.
 - Pull request title is a commit subject. Fill in the PR template.
+- Merging: squash by default. A stepwise series, where each commit stands alone, is rebase-merged; say so in the PR.

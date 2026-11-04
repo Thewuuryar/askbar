@@ -26,6 +26,6 @@ The record of what the system did with a reply, kept for investigation. Describe
 - **Only the server mounts `audit.db`.** The admin reads it through the server API.
 - **Admin actions.** Starting, stopping or restarting a service writes a `service_actions` row in `admin.db` (service, action, time, whether it worked). It does not record who did it. **(proposed)** Every admin action that changes state writes a row that also says who did it (a session or the API key), and opening sealed content stays in the access history.
 
-## Later **(proposed)**
+## Later
 
 If the model is ever given tools ([ADR 0007](../adr/0007-conversation-only-and-tool-gating.md)): each tool call, command, network request and file change is an audit span written **before** it runs, and a failed audit write stops the call.

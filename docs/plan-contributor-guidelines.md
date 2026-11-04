@@ -1,6 +1,6 @@
 # Plan: contributor and agent guidelines
 
-Status: draft for review. Nothing here is enforced until the matching step in "Rollout" lands.
+Status: draft for review; four decisions made (below). Nothing here is enforced until the matching step in "Rollout" lands.
 
 ## What this adds
 
@@ -35,16 +35,23 @@ Status: draft for review. Nothing here is enforced until the matching step in "R
 
 | Goals document | `main` | Handled by |
 | --- | --- | --- |
-| Admin on `admin.askbar...` subdomain, desktop only | `/admin` on one host, optional allowlist | [ADR 0008](adr/0008-admin-sign-in-and-exposure.md) (proposed) |
-| Passkey login, password and TOTP as backup | password and an admin API key | ADR 0008 |
+| Admin on `admin.askbar...` subdomain, desktop only | `/admin` on one host, optional allowlist | **Settled:** keep `/admin`, one domain and cert, admin in its own isolated container ([ADR 0002](adr/0002-three-audiences-one-host.md), [0003](adr/0003-admin-and-server-isolation.md)) |
+| Passkey login, password and TOTP as backup | password and an admin API key | [ADR 0008](adr/0008-admin-sign-in-and-exposure.md) (proposed) |
 | Native Swift iPhone app | not started; API already allows it | ui-ux.md "Other clients" (proposed) |
-| "Log everything agents do"; web research and code execution later | README: conversation only, no tools | [ADR 0007](adr/0007-conversation-only-and-tool-gating.md) (proposed) |
+| "Log everything agents do"; web research and code execution later | README: conversation only, no tools | **Settled:** conversation only through 1.0; tools later under fixed invariants ([ADR 0007](adr/0007-conversation-only-and-tool-gating.md)) |
 | Audit kept at least 7 days, only admin reads | sealed content, 30 days default, floor 7 | `main` is stricter; adopted |
 | Self-improving memory, projects, NAS, Tailscale | listed under "Not built yet" | no guideline needed yet |
 
+## Decided in review (2026-11-03)
+
+- Admin stays at `/admin` on one domain and certificate, in its own isolated container.
+- Conversation only through 1.0.
+- Merging: squash small PRs; rebase-merge a stepwise series and say so in the PR.
+- rustfmt now: `max_width = 140`, `use_small_heuristics = "Max"`, one reformat commit (branch `style/rustfmt`).
+
 ## Open decisions
 
-Recommendation first. "Tool" lists the usual choices; check each one's current state before adopting.
+Recommendation first. "Tool" lists the usual choices; check each one's current state before adopting. #3 and #4 are decided (above).
 
 | # | Question | Recommendation | Tool |
 | --- | --- | --- | --- |
@@ -84,7 +91,7 @@ Recommendation first. "Tool" lists the usual choices; check each one's current s
 Each step is its own PR. Stop after any step; the earlier ones stand alone.
 
 1. **This branch**: the documents, PR template, CODEOWNERS, `check-docs.sh` change. Verify: `npm test` names and docs checks pass.
-2. **rustfmt** (#4): `rustfmt.toml`, one `style: apply rustfmt` commit, `.git-blame-ignore-revs`. Verify: `cargo fmt --check` clean; `cargo test --workspace` unchanged.
+2. **rustfmt** (#4): branch `style/rustfmt` off `main`: `rustfmt.toml` and one `style: apply rustfmt` commit. Verify: `cargo fmt --all --check` clean; tests unchanged. After it merges, add the SHA that landed on `main` (a squash or rebase changes the SHA) to `.git-blame-ignore-revs` in a small follow-up.
 3. **clippy** (#5, #13): `[workspace.lints]`, fix or explicitly allow each baseline warning with a reason. Verify: `cargo clippy --workspace --all-targets -- -D warnings` clean.
 4. **CI on pull requests** (#7, #8, #9): `ci.yml`, `deny.toml`, Dependabot, gitleaks. Verify: open a draft PR and watch it run; the 0.5.0 hand-off notes that `build.yml` has never run, so expect first-run failures.
 5. **Branch protection** (#10) last, once the checks are known to pass; otherwise it blocks every merge.
