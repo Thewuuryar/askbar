@@ -1,10 +1,10 @@
 #!/bin/sh
-# Fails if a relative markdown link in README.md, CONTRIBUTING.md, SECURITY.md or docs/ points at a file that does not exist.
+# Fails if a relative markdown link in README.md, CONTRIBUTING.md, SECURITY.md, AGENTS.md or docs/ points at a file that does not exist.
 # Usage: scripts/check-docs.sh
 cd "$(dirname "$0")/.." || exit 2
 python3 - <<'PY'
 import os, re, sys
-files = [f for f in ("README.md", "CONTRIBUTING.md", "SECURITY.md") if os.path.exists(f)]
+files = [f for f in ("README.md", "CONTRIBUTING.md", "SECURITY.md", "AGENTS.md") if os.path.exists(f)]
 for root, _, names in os.walk("docs"):
     files += [os.path.join(root, n) for n in names if n.endswith(".md")]
 bad = 0

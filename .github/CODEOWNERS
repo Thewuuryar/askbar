@@ -1,0 +1,15 @@
+# Default owner.
+*                               @Thewuuryar
+
+# Paths that decide who can reach what. Keep each of these on an explicit line so a
+# second owner or team can be added here without hunting.
+/compose.yaml                   @Thewuuryar
+/Dockerfile*                    @Thewuuryar
+/caddy/                         @Thewuuryar
+/askbar-controller/             @Thewuuryar
+/SECURITY.md                    @Thewuuryar
+/scripts/check-isolation.sh     @Thewuuryar
+/askbar-proto/src/problem.rs    @Thewuuryar
+/docs/openapi/                  @Thewuuryar
+/docs/adr/                      @Thewuuryar
+/.github/                       @Thewuuryar

@@ -1,7 +1,8 @@
 # Contributing
 
 Thanks for looking. This page is how to build, run and change Askbar. How the parts fit and why is in
-[docs/architecture.md](docs/architecture.md); read that first.
+[docs/architecture.md](docs/architecture.md); read that first. Decisions and their reasons are in
+[docs/adr/](docs/adr/). If you are an AI agent, read [AGENTS.md](AGENTS.md) too; its rules apply to everyone.
 
 ## The three words
 
@@ -88,6 +89,22 @@ The whole API is [docs/openapi/admin.v1.yaml](docs/openapi/admin.v1.yaml).
 - `askbar-server` and `askbar-admin` each have their own copy of the small route-table builder (`routes.rs`), so
   neither crate depends on the other. Keep them alike.
 - Secrets never go in `.env`, logs, backups or error messages.
+- Names, logs and audit, and UI text follow [docs/style/](docs/style/). The rules an agent must never break are the
+  "Hard rules" in [AGENTS.md](AGENTS.md).
+
+## Workflow **(proposed)**
+
+- **Branches.** `<type>/<short-kebab-description>`; type is one of `feat`, `fix`, `docs`, `refactor`, `test`, `chore`,
+  `ci`. Branch from `main`; never push to it.
+- **Commits.** [Conventional Commits](https://www.conventionalcommits.org/): `type(scope): subject`, imperative, lower
+  case, 72 characters or fewer. Scope is one of `proto`, `server`, `admin`, `controller`, `client`, `ui`, `compose`,
+  `docs`, `ci`, `deps`. The body says why, lists any deviation from a plan, and says when a test was changed. A breaking
+  change has `!` after the scope and a `BREAKING CHANGE:` footer. One concern per commit; tests and docs ride with the code.
+- **Pull requests.** The title is a commit subject. Fill in the template: what was verified, and what was not.
+- **A boundary change needs an ADR.** If a change moves a boundary (crate, container, network, volume, API audience),
+  adds a dependency or a container, or reverses an accepted ADR, write or supersede one in [docs/adr/](docs/adr/) in the
+  same PR.
+- **Review.** `.github/CODEOWNERS` names who must review the paths that decide who can reach what.
 
 ## Before you open a pull request
 
