@@ -14,6 +14,7 @@ Every API, module, environment variable, UI label and document uses these names 
 | **server** | the Askbar server, and its own control and inspection interface: configuration snapshot, provider keys, usage, audit, backup | `/api/server/v1` | `askbar-server`, internal listener only | `askbar-admin` |
 | **admin** | the admin site and its control interface | `/admin/api/v1` | `askbar-admin` | the admin site (session cookie) or a script (admin API key) |
 | **controller** | the one container with the Docker socket; starts, stops and restarts `server`, `caddy` and `cpa` | `/api/control/v1` | `askbar-controller`, internal network only | `askbar-admin` |
+| **auditor** (proposed) | the container that will keep the audit store: the server can append to it and nothing else, the admin can read it ([ADR 0009](adr/0009-the-auditor.md)) | `/api/audit/v1` | `askbar-auditor`, internal networks only | `askbar-server` (append), `askbar-admin` (read) |
 | **executor** (reserved) | the container that will run tools, with no route to the server, admin or controller; nothing uses it yet ([ADR 0007](adr/0007-conversation-only-and-tool-gating.md)) | none | none | none |
 
 Third-party components keep their product name (`caddy`, `cpa`). First-party components get a role name. The model gateway is a module inside `server` and has no component name until it gets its own container.

@@ -9,7 +9,7 @@ Goal from the goals document: "Keep admin separate, so running agents can never 
 
 ## Decision
 
-1. **Separate containers, uids, volumes and images.** The server cannot read the admin's data. The admin cannot read the server's database or the audit store; it reads audit metadata through the server API.
+1. **Separate containers, uids, volumes and images.** The server cannot read the admin's data. The admin cannot read the server's database. The audit store is kept by the auditor, not the server ([0009](0009-the-auditor.md)); the admin reads it through the auditor's API.
 2. **The admin holds every secret and the server holds none at rest.** Provider keys, the Cloudflare token and the other configuration secrets live in the admin's storage. The admin sends the server only what it needs, over the server API, in the configuration snapshot. The server keeps provider keys in memory. It has no `master.key` and no `askbar-secrets` volume.
 3. **The server never calls the admin.** Until the admin has pushed a snapshot, the server answers `503 not_configured`. The admin checks a status route on the server API (`GET /status`, reporting the configuration version) and pushes when the server is unconfigured, for example after a restart.
 4. **The only link is the server API.** It listens on one fixed address on an `internal` network that only the admin and the server join. No volume is shared between them.
