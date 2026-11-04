@@ -1,0 +1,4 @@
+# Askbar formatting. The code was not formatted at the default width, so this is wider.
+# See docs/plan-contributor-guidelines.md (decision #4).
+max_width = 140
+use_small_heuristics = "Max"

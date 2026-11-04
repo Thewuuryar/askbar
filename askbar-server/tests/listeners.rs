@@ -3,7 +3,11 @@ use std::net::SocketAddr;
 fn state() -> std::sync::Arc<askbar_server::AppState> {
     let db = askbar_server::Db::open_in_memory().unwrap();
     db.seed_server().unwrap();
-    askbar_server::AppState::new(db, askbar_server::secrets::Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), askbar_server::MIN_CLIENT)
+    askbar_server::AppState::new(
+        db,
+        askbar_server::secrets::Secrets::new("0123456789abcdef0123456789abcdef").unwrap(),
+        askbar_server::MIN_CLIENT,
+    )
 }
 
 async fn spawn(app: axum::Router) -> SocketAddr {
@@ -51,7 +55,15 @@ async fn even_with_the_server_token_the_server_api_listener_serves_no_client_api
         reqwest::Client::new().get(format!("http://{server_api}{path}")).bearer_auth(token).send().await.unwrap().status().as_u16()
     };
     assert_eq!(get("/api/server/v1/health").await, 200);
-    for not_here in ["/api/client/v1/health", "/api/client/v1/conversations", "/api/v1/health", "/api/v1/conversations", "/mgmt/v1/health", "/admin/", "/"] { // names-ok: the old path is the point
+    for not_here in [
+        "/api/client/v1/health",
+        "/api/client/v1/conversations",
+        "/api/v1/health",
+        "/api/v1/conversations",
+        "/mgmt/v1/health", // names-ok: the old path is the point
+        "/admin/",
+        "/",
+    ] {
         assert_eq!(get(not_here).await, 404, "{not_here}: the server API listener serves only /api/server/v1");
     }
     let _ = std::fs::remove_dir_all(&dir);

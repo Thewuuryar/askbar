@@ -3,8 +3,8 @@
 //! None of this needs a restart; the Caddy step turns it into proxy config.
 
 use crate::web::{err, Failure};
-use askbar_proto::http::ApiJson;
 use crate::AdminState;
+use askbar_proto::http::ApiJson;
 use axum::{extract::State, http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
 use std::net::IpAddr;
@@ -24,24 +24,23 @@ pub struct Network {
 }
 
 pub fn load(conn: &rusqlite::Connection) -> rusqlite::Result<Network> {
-    conn.query_row(
-        "SELECT tls_enabled, hostname, allowlist, staging_ca, allowlist_enabled FROM network_settings WHERE id = 1",
-        [],
-        |r| {
-            Ok(Network {
-                tls_enabled: r.get::<_, i64>(0)? != 0,
-                hostname: r.get(1)?,
-                admin_cidr: r.get(2)?,
-                acme_staging: r.get::<_, i64>(3)? != 0,
-                allowlist_enabled: r.get::<_, i64>(4)? != 0,
-            })
-        },
-    )
+    conn.query_row("SELECT tls_enabled, hostname, allowlist, staging_ca, allowlist_enabled FROM network_settings WHERE id = 1", [], |r| {
+        Ok(Network {
+            tls_enabled: r.get::<_, i64>(0)? != 0,
+            hostname: r.get(1)?,
+            admin_cidr: r.get(2)?,
+            acme_staging: r.get::<_, i64>(3)? != 0,
+            allowlist_enabled: r.get::<_, i64>(4)? != 0,
+        })
+    })
 }
 
 /// The encrypted token as stored, if any.
 pub fn stored_token(conn: &rusqlite::Connection) -> Option<Vec<u8>> {
-    conn.query_row("SELECT cloudflare_token FROM network_settings WHERE id = 1", [], |r| r.get::<_, Option<Vec<u8>>>(0)).ok().flatten().filter(|v| !v.is_empty())
+    conn.query_row("SELECT cloudflare_token FROM network_settings WHERE id = 1", [], |r| r.get::<_, Option<Vec<u8>>>(0))
+        .ok()
+        .flatten()
+        .filter(|v| !v.is_empty())
 }
 
 /// A DNS name: dot-separated labels of letters, digits and hyphens. No scheme, port or path.
@@ -50,7 +49,11 @@ pub fn valid_hostname(h: &str) -> bool {
         return false;
     }
     h.split('.').all(|l| {
-        !l.is_empty() && l.len() <= 63 && !l.starts_with('-') && !l.ends_with('-') && l.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        !l.is_empty()
+            && l.len() <= 63
+            && !l.starts_with('-')
+            && !l.ends_with('-')
+            && l.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
     })
 }
 
@@ -130,11 +133,14 @@ async fn save(state: &AdminState, input: NetworkInput) -> Result<(), Failure> {
     if !n.hostname.is_empty() && !valid_hostname(&n.hostname) {
         return Err(bad("The hostname must be a plain DNS name such as askbar.example.com (no https://, port or path)."));
     }
-    let cidrs = if n.admin_cidr.trim().is_empty() {
-        None
-    } else {
-        Some(parse_cidr_list(&n.admin_cidr).ok_or_else(|| bad("Allowed addresses must be addresses or CIDRs such as 192.168.1.0/24, separated by spaces or commas."))?)
-    };
+    let cidrs =
+        if n.admin_cidr.trim().is_empty() {
+            None
+        } else {
+            Some(parse_cidr_list(&n.admin_cidr).ok_or_else(|| {
+                bad("Allowed addresses must be addresses or CIDRs such as 192.168.1.0/24, separated by spaces or commas.")
+            })?)
+        };
     n.admin_cidr = cidrs.as_ref().map(|c| c.join(" ")).unwrap_or_default();
     let new_token = input.cloudflare_token.as_deref().map(str::trim).filter(|t| !t.is_empty());
     if let Some(t) = new_token {
@@ -158,7 +164,9 @@ async fn save(state: &AdminState, input: NetworkInput) -> Result<(), Failure> {
         }
     }
     if n.allowlist_enabled && cidrs.is_none() {
-        return Err(bad("Add at least one address or network before restricting the admin site to an allowlist (or you would lock yourself out)."));
+        return Err(bad(
+            "Add at least one address or network before restricting the admin site to an allowlist (or you would lock yourself out).",
+        ));
     }
 
     let fail = |_| err(StatusCode::INTERNAL_SERVER_ERROR, "Could not save the network settings.");
@@ -177,7 +185,10 @@ async fn save(state: &AdminState, input: NetworkInput) -> Result<(), Failure> {
     Ok(())
 }
 
-pub async fn put_network(State(state): State<Arc<AdminState>>, ApiJson(input): ApiJson<NetworkInput>) -> Result<Json<NetworkView>, Failure> {
+pub async fn put_network(
+    State(state): State<Arc<AdminState>>,
+    ApiJson(input): ApiJson<NetworkInput>,
+) -> Result<Json<NetworkView>, Failure> {
     save(&state, input).await?;
     // Saved. Now tell Caddy; if that fails the settings stay and the result says why.
     crate::caddy::apply(&state).await;
@@ -199,7 +210,18 @@ mod tests {
         for ok in ["askbar.orraitu.com", "a-b.example.org", "nas.local", "x1.y2.z3"] {
             assert!(valid_hostname(ok), "{ok}");
         }
-        for bad in ["", "localhost", "https://askbar.example.com", "askbar.example.com:8443", "askbar.example.com/x", "-a.example.com", "a..b", "a b.example.com", "ex_ample.com", &format!("{}.com", "a".repeat(64))] {
+        for bad in [
+            "",
+            "localhost",
+            "https://askbar.example.com",
+            "askbar.example.com:8443",
+            "askbar.example.com/x",
+            "-a.example.com",
+            "a..b",
+            "a b.example.com",
+            "ex_ample.com",
+            &format!("{}.com", "a".repeat(64)),
+        ] {
             assert!(!valid_hostname(bad), "{bad}");
         }
     }
@@ -217,7 +239,14 @@ mod tests {
     #[test]
     fn tokens() {
         assert!(valid_token("abcdEFGH1234_-abcdEFGH1234"));
-        for bad in ["short", "has space in the middle 1234567890", "line\nbreak1234567890123456", "quote\"1234567890123456789", "brace}1234567890123456789", &"a".repeat(201)] {
+        for bad in [
+            "short",
+            "has space in the middle 1234567890",
+            "line\nbreak1234567890123456",
+            "quote\"1234567890123456789",
+            "brace}1234567890123456789",
+            &"a".repeat(201),
+        ] {
             assert!(!valid_token(bad), "{bad:?}");
         }
     }

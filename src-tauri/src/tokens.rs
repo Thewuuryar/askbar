@@ -21,7 +21,8 @@ impl Keychain {
 
     fn entry(&self) -> Result<keyring::Entry, keyring::Error> {
         // The entry name predates the word "client"; renaming it would drop every stored token.
-        keyring::Entry::new("askbar", &format!("device-token:{}", self.profile)) // names-ok
+        let name = format!("device-token:{}", self.profile); // names-ok
+        keyring::Entry::new("askbar", &name)
     }
 }
 
@@ -31,9 +32,7 @@ impl TokenStore for Keychain {
     }
 
     fn set(&self, token: &str) -> Result<(), String> {
-        self.entry()
-            .and_then(|e| e.set_password(token))
-            .map_err(|e| format!("Could not save the client token in the system keychain: {e}"))
+        self.entry().and_then(|e| e.set_password(token)).map_err(|e| format!("Could not save the client token in the system keychain: {e}"))
     }
 }
 

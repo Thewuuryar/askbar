@@ -81,12 +81,7 @@ pub struct ClientConfig {
 
 impl Default for ClientConfig {
     fn default() -> Self {
-        Self {
-            server_url: String::new(),
-            hotkey: "Ctrl+Shift+Space".into(),
-            ui: UiOverrides::default(),
-            allow_insecure: false,
-        }
+        Self { server_url: String::new(), hotkey: "Ctrl+Shift+Space".into(), ui: UiOverrides::default(), allow_insecure: false }
     }
 }
 
@@ -186,7 +181,13 @@ mod tests {
         for ok in ["http://localhost:8080", "http://127.0.0.1:8080", "http://127.5.5.5", "http://[::1]:8080", "http://app.localhost"] {
             assert!(check_server_url(ok, false).is_ok(), "{ok}");
         }
-        for bad in ["http://192.168.1.10:8080", "http://nas.local:8080", "http://askbar.example.com", "http://10.0.0.5", "http://localhost.evil.com"] {
+        for bad in [
+            "http://192.168.1.10:8080",
+            "http://nas.local:8080",
+            "http://askbar.example.com",
+            "http://10.0.0.5",
+            "http://localhost.evil.com",
+        ] {
             let e = check_server_url(bad, false).unwrap_err();
             assert!(e.contains("allow_insecure"), "{bad}: {e}");
         }
@@ -207,12 +208,19 @@ mod tests {
 
     #[test]
     fn display_overrides_merge_over_server_defaults() {
-        let server = DisplaySettings { theme: "dark".into(), width: 800, max_height: 500, history_width: 300, top_percent: 0.3, hide_on_blur: true };
+        let server =
+            DisplaySettings { theme: "dark".into(), width: 800, max_height: 500, history_width: 300, top_percent: 0.3, hide_on_blur: true };
         let none = merge_ui(&server, &UiOverrides::default());
         assert_eq!((none.theme, none.width, none.max_height, none.history_width, none.hide_on_blur), (Theme::Dark, 800, 500, 300, true));
         assert!(none.macos_hide_dock_icon);
 
-        let o = UiOverrides { theme: Some(Theme::Light), width: Some(640), hide_on_blur: Some(false), top_percent: Some(5.0), ..Default::default() };
+        let o = UiOverrides {
+            theme: Some(Theme::Light),
+            width: Some(640),
+            hide_on_blur: Some(false),
+            top_percent: Some(5.0),
+            ..Default::default()
+        };
         let m = merge_ui(&server, &o);
         assert_eq!((m.theme, m.width, m.max_height, m.hide_on_blur), (Theme::Light, 640, 500, false));
         assert_eq!(m.top_percent, 0.8, "clamped like the local config");
@@ -223,7 +231,8 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("askbar-client-yaml-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("client.yaml");
-        std::fs::write(&p, "server_url: https://x.example.com\nactive_provider: old-setting-from-v0.2\nui:\n  width: 600\n  theme: dark\n").unwrap();
+        std::fs::write(&p, "server_url: https://x.example.com\nactive_provider: old-setting-from-v0.2\nui:\n  width: 600\n  theme: dark\n")
+            .unwrap();
         let c = ClientConfig::load(&p).unwrap();
         assert_eq!((c.server_url.as_str(), c.allow_insecure), ("https://x.example.com", false));
         assert_eq!(c.hotkey, "Ctrl+Shift+Space");

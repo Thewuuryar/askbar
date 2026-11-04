@@ -36,16 +36,25 @@ pub struct Config {
 }
 
 pub fn token_hash_path() -> PathBuf {
-    std::env::var("ASKBAR_CONTROL_TOKEN_HASH_FILE").ok().filter(|p| !p.trim().is_empty()).map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/control-token/token.sha256"))
+    std::env::var("ASKBAR_CONTROL_TOKEN_HASH_FILE")
+        .ok()
+        .filter(|p| !p.trim().is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/control-token/token.sha256"))
 }
 
 pub fn socket_path() -> PathBuf {
-    std::env::var("ASKBAR_DOCKER_SOCKET").ok().filter(|p| !p.trim().is_empty()).map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/var/run/docker.sock"))
+    std::env::var("ASKBAR_DOCKER_SOCKET")
+        .ok()
+        .filter(|p| !p.trim().is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/var/run/docker.sock"))
 }
 
 /// One specific address, never `0.0.0.0` or `::`, so the controller cannot end up on every network.
 pub fn parse_addr(raw: &str) -> Result<SocketAddr, String> {
-    let addr: SocketAddr = raw.trim().parse().map_err(|_| format!("ASKBAR_CONTROL_ADDR is not a valid socket address: {raw} (example: 172.32.0.2:8083)"))?;
+    let addr: SocketAddr =
+        raw.trim().parse().map_err(|_| format!("ASKBAR_CONTROL_ADDR is not a valid socket address: {raw} (example: 172.32.0.2:8083)"))?;
     if addr.ip().is_unspecified() {
         return Err(format!("ASKBAR_CONTROL_ADDR must be one specific address, not {}", addr.ip()));
     }
@@ -117,7 +126,10 @@ async fn act(State(cfg): State<Arc<Config>>, Path((name, action)): Path<(String,
     let all = cfg.docker.project_containers(&cfg.project).await.map_err(docker_failure)?;
     let mut mine = all.iter().filter(|c| c.service == name);
     let (Some(c), None) = (mine.next(), mine.next()) else {
-        return Err(ApiError::new(ErrorCode::NotFound, format!("The {name} service is not there, or there is more than one container for it.")));
+        return Err(ApiError::new(
+            ErrorCode::NotFound,
+            format!("The {name} service is not there, or there is more than one container for it."),
+        ));
     };
     tracing::info!(service = %name, ?action, "acting");
     cfg.docker.act(&c.id, action).await.map_err(docker_failure)?;

@@ -3,7 +3,9 @@
 use crate::error::{ApiError, ApiJson};
 use crate::{auth::ClientAuth, AppState};
 use askbar_proto::problem::ErrorCode;
-use askbar_proto::{Conversation, ConversationDetail, DisplaySettings, Message, PendingGeneration, Prefs, ProviderInfo, SearchHit, Settings};
+use askbar_proto::{
+    Conversation, ConversationDetail, DisplaySettings, Message, PendingGeneration, Prefs, ProviderInfo, SearchHit, Settings,
+};
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
@@ -39,13 +41,12 @@ pub async fn conversations(State(state): St, Extension(auth): Extension<ClientAu
     Ok(Json(rows))
 }
 
-pub async fn conversation(
-    State(state): St,
-    Extension(auth): Extension<ClientAuth>,
-    Path(id): Path<String>,
-) -> Res<ConversationDetail> {
+pub async fn conversation(State(state): St, Extension(auth): Extension<ClientAuth>, Path(id): Path<String>) -> Res<ConversationDetail> {
     let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
-    let c = db.get_conversation(&auth.user_id, &id).map_err(internal)?.ok_or_else(|| ApiError::new(ErrorCode::NotFound, "That conversation was not found."))?;
+    let c = db
+        .get_conversation(&auth.user_id, &id)
+        .map_err(internal)?
+        .ok_or_else(|| ApiError::new(ErrorCode::NotFound, "That conversation was not found."))?;
     let messages = db
         .get_messages(&auth.user_id, &id)
         .map_err(internal)?
@@ -153,7 +154,13 @@ pub async fn search(State(state): St, Extension(auth): Extension<ClientAuth>, Qu
         .search_messages(&auth.user_id, &q.q, 20)
         .map_err(internal)?
         .into_iter()
-        .map(|h| SearchHit { conversation_id: h.conversation_id, message_id: h.message_id, role: h.role, snippet: h.snippet, created_at: h.created_at })
+        .map(|h| SearchHit {
+            conversation_id: h.conversation_id,
+            message_id: h.message_id,
+            role: h.role,
+            snippet: h.snippet,
+            created_at: h.created_at,
+        })
         .collect();
     Ok(Json(hits))
 }

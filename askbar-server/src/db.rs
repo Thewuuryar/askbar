@@ -292,19 +292,12 @@ pub struct Db {
 }
 
 fn now() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
 
 /// First non-empty line of `text`, collapsed and cut to 60 characters.
 pub fn make_title(text: &str) -> String {
-    let line = text
-        .lines()
-        .map(str::trim)
-        .find(|l| !l.is_empty())
-        .unwrap_or("New conversation");
+    let line = text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("New conversation");
     let collapsed = line.split_whitespace().collect::<Vec<_>>().join(" ");
     const MAX: usize = 60;
     if collapsed.chars().count() <= MAX {
@@ -318,10 +311,7 @@ pub fn make_title(text: &str) -> String {
 impl Db {
     pub fn open(path: &Path) -> Result<Db, DbError> {
         if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir).map_err(|e| DbError::Io {
-                path: dir.display().to_string(),
-                source: e,
-            })?;
+            std::fs::create_dir_all(dir).map_err(|e| DbError::Io { path: dir.display().to_string(), source: e })?;
         }
         Db::init(Connection::open(path)?)
     }
@@ -331,7 +321,9 @@ impl Db {
     }
 
     fn init(conn: Connection) -> Result<Db, DbError> {
-        conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;")?;
+        conn.execute_batch(
+            "PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;",
+        )?;
         let mut db = Db { conn };
         db.migrate()?;
         Ok(db)
@@ -364,18 +356,13 @@ impl Db {
 
     /// Server start-up: make sure one user exists. Returns the user's id.
     pub fn seed_server(&self) -> Result<String, DbError> {
-        let existing: Option<String> = self
-            .conn
-            .query_row("SELECT id FROM users ORDER BY created_at, id LIMIT 1", [], |r| r.get(0))
-            .optional()?;
+        let existing: Option<String> =
+            self.conn.query_row("SELECT id FROM users ORDER BY created_at, id LIMIT 1", [], |r| r.get(0)).optional()?;
         match existing {
             Some(u) => Ok(u),
             None => {
                 let id = new_id();
-                self.conn.execute(
-                    "INSERT INTO users (id, name, created_at) VALUES (?1, 'owner', ?2)",
-                    params![id, now()],
-                )?;
+                self.conn.execute("INSERT INTO users (id, name, created_at) VALUES (?1, 'owner', ?2)", params![id, now()])?;
                 Ok(id)
             }
         }
@@ -416,12 +403,7 @@ impl Db {
              ORDER BY c.updated_at DESC, c.id DESC",
         )?;
         let rows = stmt.query_map([user_id], |r| {
-            Ok(ConversationSummary {
-                id: r.get(0)?,
-                title: r.get(1)?,
-                updated_at: r.get(2)?,
-                message_count: r.get(3)?,
-            })
+            Ok(ConversationSummary { id: r.get(0)?, title: r.get(1)?, updated_at: r.get(2)?, message_count: r.get(3)? })
         })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
@@ -435,14 +417,7 @@ impl Db {
                         (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id)
                  FROM conversations c WHERE c.id = ?1 AND c.user_id = ?2",
                 params![id, user_id],
-                |r| {
-                    Ok(ConversationSummary {
-                        id: r.get(0)?,
-                        title: r.get(1)?,
-                        updated_at: r.get(2)?,
-                        message_count: r.get(3)?,
-                    })
-                },
+                |r| Ok(ConversationSummary { id: r.get(0)?, title: r.get(1)?, updated_at: r.get(2)?, message_count: r.get(3)? }),
             )
             .optional()?)
     }
@@ -454,12 +429,7 @@ impl Db {
              WHERE conversation_id = ?1 AND user_id = ?2 ORDER BY id ASC",
         )?;
         let rows = stmt.query_map(params![conversation_id, user_id], |r| {
-            Ok(StoredMessage {
-                id: r.get(0)?,
-                role: r.get(1)?,
-                content: r.get(2)?,
-                created_at: r.get(3)?,
-            })
+            Ok(StoredMessage { id: r.get(0)?, role: r.get(1)?, content: r.get(2)?, created_at: r.get(3)? })
         })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
@@ -467,10 +437,7 @@ impl Db {
     /// Full-text search over `user_id`'s own messages, best match first. Every word
     /// must appear; punctuation in `query` is treated as plain text, never as search syntax.
     pub fn search_messages(&self, user_id: &str, query: &str, limit: usize) -> Result<Vec<SearchHit>, DbError> {
-        let terms: Vec<String> = query
-            .split_whitespace()
-            .map(|t| format!("\"{}\"", t.replace('"', "\"\"")))
-            .collect();
+        let terms: Vec<String> = query.split_whitespace().map(|t| format!("\"{}\"", t.replace('"', "\"\""))).collect();
         if terms.is_empty() {
             return Ok(Vec::new());
         }
@@ -481,32 +448,20 @@ impl Db {
              ORDER BY messages_fts.rank, m.id DESC LIMIT ?3",
         )?;
         let rows = stmt.query_map(params![terms.join(" "), user_id, limit as i64], |r| {
-            Ok(SearchHit {
-                conversation_id: r.get(0)?,
-                message_id: r.get(1)?,
-                role: r.get(2)?,
-                snippet: r.get(3)?,
-                created_at: r.get(4)?,
-            })
+            Ok(SearchHit { conversation_id: r.get(0)?, message_id: r.get(1)?, role: r.get(2)?, snippet: r.get(3)?, created_at: r.get(4)? })
         })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
     /// Returns true if a conversation was deleted. Its messages go with it.
     pub fn delete_conversation(&self, user_id: &str, id: &str) -> Result<bool, DbError> {
-        Ok(self
-            .conn
-            .execute("DELETE FROM conversations WHERE id = ?1 AND user_id = ?2", params![id, user_id])?
-            > 0)
+        Ok(self.conn.execute("DELETE FROM conversations WHERE id = ?1 AND user_id = ?2", params![id, user_id])? > 0)
     }
 
     /// Deletes finished generations that ended before `older_than` (unix seconds). Running and
     /// queued rows are never touched. Returns how many went.
     pub fn prune_generations(&self, older_than: i64) -> Result<usize, DbError> {
-        Ok(self.conn.execute(
-            "DELETE FROM generations WHERE status NOT IN ('queued','running') AND ended_at < ?1",
-            [older_than],
-        )?)
+        Ok(self.conn.execute("DELETE FROM generations WHERE status NOT IN ('queued','running') AND ended_at < ?1", [older_than])?)
     }
 
     /// Flags a provider as having had its credentials refused. Keeps the original time if it was
@@ -541,8 +496,18 @@ impl Db {
                                       provider_id, status, prompt, queued_at, started_at, deadline_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
-                id, g.user_id, g.client_id, g.conversation_id, g.user_message_id, g.client_request_id,
-                g.provider_id, g.status, g.prompt, t, started, g.deadline_at
+                id,
+                g.user_id,
+                g.client_id,
+                g.conversation_id,
+                g.user_message_id,
+                g.client_request_id,
+                g.provider_id,
+                g.status,
+                g.prompt,
+                t,
+                started,
+                g.deadline_at
             ],
         )?;
         Ok(id)
@@ -639,9 +604,7 @@ impl Db {
         Ok(self
             .conn
             .query_row(
-                &format!(
-                    "SELECT {GENERATION_COLUMNS} FROM generations WHERE client_id = ?1 AND client_request_id = ?2"
-                ),
+                &format!("SELECT {GENERATION_COLUMNS} FROM generations WHERE client_id = ?1 AND client_request_id = ?2"),
                 params![client_id, client_request_id],
                 read_generation,
             )
@@ -728,7 +691,10 @@ mod tests {
 
         let hits = db.search_messages(&a, "zebra", 20).unwrap();
         assert_eq!(hits.len(), 1, "{hits:?}");
-        assert_eq!((hits[0].conversation_id.as_str(), hits[0].message_id.as_str(), hits[0].role.as_str()), (mine.as_str(), m.as_str(), "user"));
+        assert_eq!(
+            (hits[0].conversation_id.as_str(), hits[0].message_id.as_str(), hits[0].role.as_str()),
+            (mine.as_str(), m.as_str(), "user")
+        );
         assert!(hits[0].snippet.contains("zebra"));
 
         let theirs_only = db.search_messages("B", "zebra", 20).unwrap();
@@ -767,9 +733,7 @@ mod tests {
         // Same-second timestamps tie-break on id, so b is first...
         assert_eq!(db.list_conversations(&u).unwrap()[0].id, b);
         // ...and touching a with a later timestamp must not push it below b.
-        db.conn
-            .execute("UPDATE conversations SET updated_at = updated_at - 100 WHERE id = ?1", [&b])
-            .unwrap();
+        db.conn.execute("UPDATE conversations SET updated_at = updated_at - 100 WHERE id = ?1", [&b]).unwrap();
         db.add_message(&u, &a, "user", "bump").unwrap();
         assert_eq!(db.list_conversations(&u).unwrap()[0].id, a);
     }
@@ -809,11 +773,19 @@ mod tests {
         let db = Db::open_in_memory().unwrap();
         let t = tables(&db);
         for name in [
-            "users", "clients", "conversations", "messages", "messages_fts", "user_prefs", // live
-            "memory", "projects", "token_usage", // reserved
-            "providers", // only the encrypted API keys, by provider id
-            "config_snapshot", "redeemed_codes", // what the admin service pushes, and codes already used
-            "generations", // chat turns that outlive their client
+            "users",
+            "clients",
+            "conversations",
+            "messages",
+            "messages_fts",
+            "user_prefs", // live
+            "memory",
+            "projects",
+            "token_usage", // reserved
+            "providers",   // only the encrypted API keys, by provider id
+            "config_snapshot",
+            "redeemed_codes",  // what the admin service pushes, and codes already used
+            "generations",     // chat turns that outlive their client
             "provider_health", // providers whose credentials were refused
         ] {
             assert!(t.iter().any(|x| x == name), "missing table {name}");
@@ -837,8 +809,7 @@ mod tests {
 
         let u = db.seed_server().unwrap();
         let c = db.create_conversation(&u, "c").unwrap();
-        let project: Option<String> =
-            db.conn.query_row("SELECT project_id FROM conversations WHERE id = ?1", [&c], |r| r.get(0)).unwrap();
+        let project: Option<String> = db.conn.query_row("SELECT project_id FROM conversations WHERE id = ?1", [&c], |r| r.get(0)).unwrap();
         assert_eq!(project, None);
         for reserved in ["memory", "projects", "token_usage"] {
             let n: i64 = db.conn.query_row(&format!("SELECT COUNT(*) FROM {reserved}"), [], |r| r.get(0)).unwrap();
@@ -1109,7 +1080,13 @@ mod tests {
         db.flag_provider_auth_failed("p1", "http_403").unwrap(); // flagged again: same since, newer code
         db.flag_provider_auth_failed("p2", "config").unwrap();
         let h = db.provider_health().unwrap();
-        assert_eq!(h, [("p1".into(), "auth_failed".into(), 100, Some("http_403".into())), ("p2".into(), "auth_failed".into(), h[1].2, Some("config".into()))]);
+        assert_eq!(
+            h,
+            [
+                ("p1".into(), "auth_failed".into(), 100, Some("http_403".into())),
+                ("p2".into(), "auth_failed".into(), h[1].2, Some("config".into()))
+            ]
+        );
         assert!(db.clear_provider_health("p1").unwrap());
         assert!(!db.clear_provider_health("p1").unwrap(), "already clear");
         assert_eq!(db.provider_health().unwrap().len(), 1);
@@ -1139,10 +1116,7 @@ mod tests {
 
         // A v0.2.0 database has user_version 2 and no Askbar application id.
         let old = dir.join("old.db");
-        Connection::open(&old)
-            .unwrap()
-            .execute_batch("CREATE TABLE client_tokens (id TEXT); PRAGMA user_version = 1;")
-            .unwrap();
+        Connection::open(&old).unwrap().execute_batch("CREATE TABLE client_tokens (id TEXT); PRAGMA user_version = 1;").unwrap();
         assert!(refused(&old));
         let err = Db::open(&old).err().unwrap().to_string();
         assert!(err.contains("unexpected database version"), "{err}");

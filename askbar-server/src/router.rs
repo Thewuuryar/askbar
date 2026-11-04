@@ -117,7 +117,10 @@ mod tests {
 
     #[test]
     fn the_requested_provider_comes_first_then_the_fallback_order() {
-        let s = snap(&[("a", Billing::Subscription, false), ("b", Billing::Subscription, false), ("c", Billing::Subscription, false)], &["b", "c"]);
+        let s = snap(
+            &[("a", Billing::Subscription, false), ("b", Billing::Subscription, false), ("c", Billing::Subscription, false)],
+            &["b", "c"],
+        );
         let p = plan(&s, "a");
         assert_eq!(ids(&p), ["a", "b", "c"]);
         assert_eq!(p[0].fallback_from, None);
@@ -129,7 +132,15 @@ mod tests {
 
     #[test]
     fn a_metered_provider_is_skipped_as_a_fallback_unless_it_allows_it() {
-        let s = snap(&[("a", Billing::Subscription, false), ("m1", Billing::Metered, false), ("m2", Billing::Metered, true), ("sub", Billing::Subscription, false)], &["m1", "m2", "sub"]);
+        let s = snap(
+            &[
+                ("a", Billing::Subscription, false),
+                ("m1", Billing::Metered, false),
+                ("m2", Billing::Metered, true),
+                ("sub", Billing::Subscription, false),
+            ],
+            &["m1", "m2", "sub"],
+        );
         assert_eq!(ids(&plan(&s, "a")), ["a", "m2", "sub"]);
         // But a metered provider that was asked for is used, whatever its flag.
         assert_eq!(ids(&plan(&s, "m1")), ["m1", "m2", "sub"]);

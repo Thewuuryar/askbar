@@ -157,7 +157,14 @@ pub struct Problem {
 
 impl Problem {
     pub fn new(code: ErrorCode, detail: impl Into<String>) -> Problem {
-        Problem { kind: code.type_urn(), title: code.title().into(), status: code.status(), detail: detail.into(), error: code.as_str().into(), extra: Map::new() }
+        Problem {
+            kind: code.type_urn(),
+            title: code.title().into(),
+            status: code.status(),
+            detail: detail.into(),
+            error: code.as_str().into(),
+            extra: Map::new(),
+        }
     }
 
     /// Adds an extension member.
@@ -238,10 +245,25 @@ mod tests {
         // Adding a variant without adding it to ALL makes this match non-exhaustive at compile time.
         for c in ErrorCode::ALL {
             match c {
-                ErrorCode::QueueFull | ErrorCode::BudgetExceeded | ErrorCode::KillSwitch | ErrorCode::AuditKeyMissing | ErrorCode::AuditBacklog
-                | ErrorCode::ClientTooOld | ErrorCode::ClientVersionMissing | ErrorCode::Unauthorized | ErrorCode::Forbidden | ErrorCode::NotFound
-                | ErrorCode::MethodNotAllowed | ErrorCode::BadRequest | ErrorCode::PayloadTooLarge | ErrorCode::TooManyAttempts
-                | ErrorCode::ApiKeyExists | ErrorCode::SetupRequired | ErrorCode::ServerUnavailable | ErrorCode::Conflict | ErrorCode::Internal => {}
+                ErrorCode::QueueFull
+                | ErrorCode::BudgetExceeded
+                | ErrorCode::KillSwitch
+                | ErrorCode::AuditKeyMissing
+                | ErrorCode::AuditBacklog
+                | ErrorCode::ClientTooOld
+                | ErrorCode::ClientVersionMissing
+                | ErrorCode::Unauthorized
+                | ErrorCode::Forbidden
+                | ErrorCode::NotFound
+                | ErrorCode::MethodNotAllowed
+                | ErrorCode::BadRequest
+                | ErrorCode::PayloadTooLarge
+                | ErrorCode::TooManyAttempts
+                | ErrorCode::ApiKeyExists
+                | ErrorCode::SetupRequired
+                | ErrorCode::ServerUnavailable
+                | ErrorCode::Conflict
+                | ErrorCode::Internal => {}
             }
         }
         assert_eq!(ErrorCode::ALL.len(), 19);

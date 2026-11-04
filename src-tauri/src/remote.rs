@@ -1,10 +1,12 @@
 //! `Remote`: the client for an Askbar server over HTTPS.
 
-use crate::types::{ClientStatus, Emit, PendingReply, ProviderChoice, Settings, StreamEvent};
 use crate::client_config::{check_server_url, merge_ui, ClientConfig};
 use crate::outbox::{Outbox, OutboxEntry};
 use crate::tokens::TokenStore;
-use askbar_proto::{ChatEvent, ChatRequest, Conversation, ConversationDetail, DisplaySettings, Message, PendingGeneration, Prefs, ProviderInfo, SseParser};
+use crate::types::{ClientStatus, Emit, PendingReply, ProviderChoice, Settings, StreamEvent};
+use askbar_proto::{
+    ChatEvent, ChatRequest, Conversation, ConversationDetail, DisplaySettings, Message, PendingGeneration, Prefs, ProviderInfo, SseParser,
+};
 use futures_util::{FutureExt, StreamExt};
 use reqwest::{Method, RequestBuilder, StatusCode, Url};
 use std::path::{Path, PathBuf};
@@ -107,7 +109,10 @@ enum Step {
     /// The reply is complete.
     Done,
     /// The server ended the reply with an error; `code` says why, when the server says.
-    Fail { message: String, code: Option<String> },
+    Fail {
+        message: String,
+        code: Option<String>,
+    },
 }
 
 /// Reads a reply stream and remembers where it got to, so a dropped stream can be resumed
@@ -211,18 +216,11 @@ impl Inner {
 
     fn request(&self, method: Method, path: &str) -> Result<RequestBuilder, String> {
         let token = self.tokens.get().ok_or("This app is not paired with the server yet.")?;
-        Ok(self
-            .http
-            .request(method, self.url(path))
-            .bearer_auth(token)
-            .header(askbar_proto::CLIENT_VERSION_HEADER, VERSION))
+        Ok(self.http.request(method, self.url(path)).bearer_auth(token).header(askbar_proto::CLIENT_VERSION_HEADER, VERSION))
     }
 
     async fn send(&self, req: RequestBuilder) -> Result<reqwest::Response, String> {
-        let resp = req
-            .send()
-            .await
-            .map_err(|e| format!("Could not reach the server at {}: {e}", self.base))?;
+        let resp = req.send().await.map_err(|e| format!("Could not reach the server at {}: {e}", self.base))?;
         if resp.status().is_success() {
             return Ok(resp);
         }
@@ -236,10 +234,7 @@ impl Inner {
         let mut retried = false;
         loop {
             let again = req.try_clone();
-            let resp = req
-                .send()
-                .await
-                .map_err(|e| Refusal::plain(format!("Could not reach the server at {}: {e}", self.base)))?;
+            let resp = req.send().await.map_err(|e| Refusal::plain(format!("Could not reach the server at {}: {e}", self.base)))?;
             let status = resp.status();
             if status.is_success() {
                 return Ok(resp);
@@ -294,7 +289,8 @@ impl Inner {
                     _ = tokio::time::sleep(wait) => {}
                     _ = &mut *cancel => return self.stop_reply(Some(&generation_id), emit).await,
                 }
-                let req = match self.request(Method::GET, &format!("{}/generations/{generation_id}/stream", askbar_proto::paths::CLIENT_V1)) {
+                let req = match self.request(Method::GET, &format!("{}/generations/{generation_id}/stream", askbar_proto::paths::CLIENT_V1))
+                {
                     Ok(r) => r.header("accept", "text/event-stream").query(&[("after", reader.last_id)]),
                     Err(e) => return fail(e),
                 };
@@ -414,7 +410,9 @@ fn explain(status: StatusCode, body: &[u8]) -> String {
     match (p.code.as_str(), status) {
         ("unauthorized", _) | (_, StatusCode::UNAUTHORIZED) => rejected(),
         ("client_too_old", _) | (_, StatusCode::UPGRADE_REQUIRED) => too_old(),
-        ("setup_required", _) | (_, StatusCode::SERVICE_UNAVAILABLE) if p.detail.is_empty() || p.code == "setup_required" => SETUP_PENDING.into(),
+        ("setup_required", _) | (_, StatusCode::SERVICE_UNAVAILABLE) if p.detail.is_empty() || p.code == "setup_required" => {
+            SETUP_PENDING.into()
+        }
         _ if !p.detail.is_empty() => p.detail,
         _ => format!("The server answered {status}."),
     }
@@ -426,11 +424,15 @@ const SETUP_PENDING: &str = "The server's setup is not finished. Open its admin 
 /// token in `tokens`, and record the server in `client.yaml` (creating it, or
 /// updating `server_url` and leaving the rest alone).
 pub async fn pair(pairing: &str, client_yaml: &Path, tokens: &dyn TokenStore) -> Result<(), String> {
-    let (url, code) = askbar_proto::decode_pairing(pairing)
-        .ok_or("That is not a pairing string. It should start with \"askbar-pair:\".")?;
+    let (url, code) =
+        askbar_proto::decode_pairing(pairing).ok_or("That is not a pairing string. It should start with \"askbar-pair:\".")?;
     let mut cfg = if client_yaml.exists() { ClientConfig::load(client_yaml)? } else { ClientConfig::default() };
     let mut base = check_server_url(&url, cfg.allow_insecure)?;
-    base.set_path(&format!("{}{}", base.path().trim_end_matches('/'), askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, "/pairings")));
+    base.set_path(&format!(
+        "{}{}",
+        base.path().trim_end_matches('/'),
+        askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, "/pairings")
+    ));
 
     let resp = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(5))
@@ -445,15 +447,13 @@ pub async fn pair(pairing: &str, client_yaml: &Path, tokens: &dyn TokenStore) ->
         .map_err(|_| format!("Could not reach the server at {url}. Check the address and your network."))?;
     match resp.status() {
         s if s.is_success() => {}
-        StatusCode::UNAUTHORIZED => return Err("The pairing code is wrong, expired (they last 10 minutes) or already used. Create a new one.".into()),
+        StatusCode::UNAUTHORIZED => {
+            return Err("The pairing code is wrong, expired (they last 10 minutes) or already used. Create a new one.".into())
+        }
         StatusCode::UPGRADE_REQUIRED => return Err("This version of Askbar is too old for the server. Please update.".into()),
         s => return Err(format!("The server answered {s}.")),
     }
-    let token = resp
-        .json::<askbar_proto::PairResponse>()
-        .await
-        .map_err(|_| "The server sent an unexpected reply.".to_string())?
-        .token;
+    let token = resp.json::<askbar_proto::PairResponse>().await.map_err(|_| "The server sent an unexpected reply.".to_string())?.token;
     tokens.set(&token)?;
     cfg.server_url = url.trim_end_matches('/').to_string();
     cfg.save(client_yaml)
@@ -521,7 +521,10 @@ impl Remote {
         match i.http_status(req).await {
             Err(_) => return Some(offline()),
             Ok(StatusCode::UNAUTHORIZED) => {
-                return Some(ClientStatus::new("rejected", "Token rejected. The server no longer accepts this app; it may have been revoked."))
+                return Some(ClientStatus::new(
+                    "rejected",
+                    "Token rejected. The server no longer accepts this app; it may have been revoked.",
+                ))
             }
             Ok(StatusCode::UPGRADE_REQUIRED) => {
                 return Some(ClientStatus::new("update_needed", "Update needed. This version of Askbar is too old for the server."))
@@ -530,7 +533,8 @@ impl Remote {
             Ok(StatusCode::SERVICE_UNAVAILABLE) => return Some(ClientStatus::new("problem", SETUP_PENDING)),
             Ok(s) => return Some(ClientStatus::new("problem", format!("The server answered {s}."))),
         }
-        let providers: Vec<ProviderInfo> = i.get_json(&askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, "/providers")).await.ok()?;
+        let providers: Vec<ProviderInfo> =
+            i.get_json(&askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, "/providers")).await.ok()?;
         let prefs: Prefs = i.get_json(&askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, "/me/prefs")).await.ok()?;
         let wanted = prefs.active_provider_id.unwrap_or_default();
         let wanted = wanted.trim();
@@ -547,7 +551,10 @@ impl Remote {
 
     pub async fn set_active_provider(&self, id: String) -> Result<(), String> {
         let i = self.inner()?;
-        let req = i.request(Method::PUT, &askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, "/me/prefs"))?.timeout(REQUEST_TIMEOUT).json(&Prefs { active_provider_id: Some(id) });
+        let req = i
+            .request(Method::PUT, &askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, "/me/prefs"))?
+            .timeout(REQUEST_TIMEOUT)
+            .json(&Prefs { active_provider_id: Some(id) });
         i.send(req).await.map(|_| ())
     }
 
@@ -642,7 +649,10 @@ impl Remote {
         if i.outbox.list().is_empty() {
             return Ok(Vec::new());
         }
-        let req = i.request(Method::GET, &askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, "/generations"))?.query(&[("status", "running")]).timeout(REQUEST_TIMEOUT);
+        let req = i
+            .request(Method::GET, &askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, "/generations"))?
+            .query(&[("status", "running")])
+            .timeout(REQUEST_TIMEOUT);
         // Without an answer (offline) nothing can be compared; the outbox is shown as it is.
         let known: Vec<PendingGeneration> = match i.send(req).await {
             Ok(r) => match r.json().await {
@@ -756,7 +766,10 @@ mod tests {
         use askbar_server::{auth, secrets::Secrets, AppState};
         let db = askbar_server::Db::open_in_memory().unwrap();
         let user = db.seed_server().unwrap();
-        askbar_server::testing::add_provider(&db, askbar_server::testing::provider("p", "mock", &format!("http://127.0.0.1:{mock_port}/v1"), "mock-model"));
+        askbar_server::testing::add_provider(
+            &db,
+            askbar_server::testing::provider("p", "mock", &format!("http://127.0.0.1:{mock_port}/v1"), "mock-model"),
+        );
         let code = askbar_server::testing::add_pair_code(&db, &user, "test");
         let state: Arc<AppState> = AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), "0.1.0");
         let token = auth::redeem_pair_code(&state.db.lock().unwrap(), &code).unwrap().unwrap();
@@ -779,7 +792,7 @@ mod tests {
             sse("meta", None, r#"{"event":"meta","conversation_id":"c1","generation_id":"g1","queued":true}"#),
             sse("delta", Some(1), r#"{"event":"delta","text":"Hel"}"#),
             sse("provider", None, r#"{"event":"provider","id":"p1","name":"OpenAI"}"#), // who is answering; passed on, not counted as text
-            sse("brand_new", None, r#"{"event":"brand_new","x":1}"#), // from a newer server: ignored
+            sse("brand_new", None, r#"{"event":"brand_new","x":1}"#),                   // from a newer server: ignored
             sse("delta", Some(2), r#"{"event":"delta","text":"lo"}"#),
             sse("done", None, r#"{"event":"done"}"#),
         ]
@@ -805,12 +818,12 @@ mod tests {
         let meta = sse("meta", None, r#"{"event":"meta","conversation_id":"c1"}"#);
         let (a, b) = meta.as_bytes().split_at(10);
         assert!(r.feed(a).is_empty());
-        assert_eq!(
-            r.feed(b),
-            [Step::Emit(StreamEvent::Started { conversation_id: "c1".into(), generation_id: None, queued: false })]
-        );
+        assert_eq!(r.feed(b), [Step::Emit(StreamEvent::Started { conversation_id: "c1".into(), generation_id: None, queued: false })]);
         assert_eq!((r.last_id, r.generation_id.as_deref()), (0, None));
-        assert_eq!(r.feed(sse("error", None, r#"{"event":"error","message":"boom"}"#).as_bytes()), [Step::Fail { message: "boom".into(), code: None }]);
+        assert_eq!(
+            r.feed(sse("error", None, r#"{"event":"error","message":"boom"}"#).as_bytes()),
+            [Step::Fail { message: "boom".into(), code: None }]
+        );
     }
 
     /// What the fake server saw.
@@ -838,7 +851,12 @@ mod tests {
     /// A server that drops the first stream after three deltas, with no `done`. `resume` answers
     /// each resume request in turn with a status and a body (the last one repeats).
     async fn fake_server(resume: Vec<(u16, String)>) -> Fake {
-        use axum::{extract::{Path as P, Query, State}, http::{header, StatusCode as S}, routing::{get, post}, Router};
+        use axum::{
+            extract::{Path as P, Query, State},
+            http::{header, StatusCode as S},
+            routing::{get, post},
+            Router,
+        };
         let seen = Arc::new(Seen { plan: Mutex::new(resume), running: Mutex::new("[]".into()), ..Default::default() });
         let first: String = [
             (None, "meta", r#"{"event":"meta","conversation_id":"c1","generation_id":"g1"}"#),
@@ -885,7 +903,11 @@ mod tests {
                     seen.resumes.lock().unwrap().push(q.get("after").cloned().unwrap_or_default());
                     let (status, body) = {
                         let mut plan = seen.plan.lock().unwrap();
-                        if plan.len() > 1 { plan.remove(0) } else { plan[0].clone() }
+                        if plan.len() > 1 {
+                            plan.remove(0)
+                        } else {
+                            plan[0].clone()
+                        }
                     };
                     (S::from_u16(status).unwrap(), [(header::CONTENT_TYPE, "text/event-stream")], body)
                 }),
@@ -921,7 +943,8 @@ mod tests {
         let fake = fake_server(vec![(503, String::new()), (200, rest)]).await;
         let events = ask_fake(&fake).await;
 
-        let reply: String = events.iter().filter_map(|e| if let StreamEvent::Delta { text } = e { Some(text.as_str()) } else { None }).collect();
+        let reply: String =
+            events.iter().filter_map(|e| if let StreamEvent::Delta { text } = e { Some(text.as_str()) } else { None }).collect();
         assert_eq!(reply, "abcde", "every delta once, in order");
         assert!(matches!(events.first(), Some(StreamEvent::Started { generation_id: Some(g), .. }) if g == "g1"));
         assert!(matches!(events.last(), Some(StreamEvent::Done)));
@@ -936,7 +959,10 @@ mod tests {
         assert!(matches!(events.last(), Some(StreamEvent::Error { message, .. }) if message == "Stopped after 5 minutes"), "{events:?}");
 
         let events = ask_fake(&fake_server(vec![(404, String::new())]).await).await;
-        assert!(matches!(events.last(), Some(StreamEvent::Error { message, .. }) if message.contains("no longer on the server")), "{events:?}");
+        assert!(
+            matches!(events.last(), Some(StreamEvent::Error { message, .. }) if message.contains("no longer on the server")),
+            "{events:?}"
+        );
 
         let events = ask_fake(&fake_server(vec![(401, String::new())]).await).await;
         assert!(matches!(events.last(), Some(StreamEvent::Error { message, .. }) if message.contains("rejected")), "{events:?}");
@@ -982,7 +1008,11 @@ mod tests {
     }
 
     /// Runs `remote.ask` in the background, returning its events and Stop's sender.
-    fn ask_in_background(remote: Arc<Remote>, conversation: Option<String>, text: &str) -> (Arc<Mutex<Vec<StreamEvent>>>, oneshot::Sender<()>, tokio::task::JoinHandle<()>) {
+    fn ask_in_background(
+        remote: Arc<Remote>,
+        conversation: Option<String>,
+        text: &str,
+    ) -> (Arc<Mutex<Vec<StreamEvent>>>, oneshot::Sender<()>, tokio::task::JoinHandle<()>) {
         let events = Arc::new(Mutex::new(Vec::new()));
         let (tx, rx) = oneshot::channel();
         let (ev, text) = (events.clone(), text.to_string());
@@ -1011,7 +1041,10 @@ mod tests {
 
         // A starts a slow reply; B did not start it.
         let (a_events, a_stop, a_task) = ask_in_background(a.clone(), None, "please be slow");
-        wait_until("A's reply to begin", || a_events.lock().unwrap().iter().filter(|e| matches!(e, StreamEvent::Delta { .. })).count() >= 3).await;
+        wait_until("A's reply to begin", || {
+            a_events.lock().unwrap().iter().filter(|e| matches!(e, StreamEvent::Delta { .. })).count() >= 3
+        })
+        .await;
         let (conversation, generation) = match a_events.lock().unwrap()[0].clone() {
             StreamEvent::Started { conversation_id, generation_id: Some(g), .. } => (conversation_id, g),
             other => panic!("expected Started, got {other:?}"),
@@ -1033,7 +1066,10 @@ mod tests {
         };
         assert_eq!(queued.prompt, "second question");
         let pending = b.load_pending(conversation.clone()).await.unwrap();
-        assert_eq!(pending.iter().map(|p| (p.status.as_str(), p.prompt.as_str())).collect::<Vec<_>>(), [("running", "please be slow"), ("queued", "second question")]);
+        assert_eq!(
+            pending.iter().map(|p| (p.status.as_str(), p.prompt.as_str())).collect::<Vec<_>>(),
+            [("running", "please be slow"), ("queued", "second question")]
+        );
         assert_eq!(pending[0].generation_id, generation);
 
         // Attaching replays from the start, then follows.
@@ -1042,7 +1078,12 @@ mod tests {
         let (att, remote_b) = (attached.clone(), b.clone());
         let att_task = tokio::spawn(async move { remote_b.attach(generation, att_rx, &|e| att.lock().unwrap().push(e)).await });
         wait_until("the attached stream to catch up", || attached.lock().unwrap().len() >= 6).await;
-        let text: String = attached.lock().unwrap().iter().filter_map(|e| if let StreamEvent::Delta { text } = e { Some(text.clone()) } else { None }).collect();
+        let text: String = attached
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|e| if let StreamEvent::Delta { text } = e { Some(text.clone()) } else { None })
+            .collect();
         assert!(text.starts_with("Streaming slowly so"), "replayed from the start: {text:?}");
 
         // Removing the queued message: it never runs and leaves nothing in the conversation.
@@ -1088,14 +1129,19 @@ mod tests {
         let chats = fake.seen.chats.lock().unwrap().clone();
         assert_eq!(chats.len(), 1);
         assert_eq!(chats[0]["client_request_id"], missing.client_request_id.as_str());
-        assert_eq!((chats[0]["text"].as_str(), chats[0]["conversation_id"].as_str(), chats[0]["provider"].as_str()), (Some("this one never arrived"), Some("c5"), Some("p")));
+        assert_eq!(
+            (chats[0]["text"].as_str(), chats[0]["conversation_id"].as_str(), chats[0]["provider"].as_str()),
+            (Some("this one never arrived"), Some("c5"), Some("p"))
+        );
         assert!(remote.unsent().await.unwrap().is_empty(), "the server took it (meta arrived)");
 
         // An id that is not in the outbox says so.
         let events2 = Mutex::new(Vec::new());
         let (_tx2, rx2) = oneshot::channel();
         remote.resend("nope".into(), rx2, &|e| events2.lock().unwrap().push(e)).await;
-        assert!(matches!(events2.into_inner().unwrap().last(), Some(StreamEvent::Error { message, .. }) if message.contains("no longer waiting")));
+        assert!(
+            matches!(events2.into_inner().unwrap().last(), Some(StreamEvent::Error { message, .. }) if message.contains("no longer waiting"))
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1133,7 +1179,8 @@ mod tests {
     /// `body`; returns the events, the outbox afterwards and what the server saw.
     async fn refused(status: u16, headers: &[(&str, &str)], body: &str) -> (Vec<StreamEvent>, Vec<OutboxEntry>, usize) {
         let fake = fake_server(vec![(200, sse("done", None, r#"{"event":"done"}"#))]).await;
-        *fake.seen.chat_answer.lock().unwrap() = Some((status, headers.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(), body.to_string()));
+        *fake.seen.chat_answer.lock().unwrap() =
+            Some((status, headers.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(), body.to_string()));
         let remote = remote_for(&fake.url, Some("t"), PathBuf::new()).with_backoff_unit(Duration::from_millis(2));
         let events = Mutex::new(Vec::new());
         let (_tx, rx) = oneshot::channel();
@@ -1144,7 +1191,9 @@ mod tests {
 
     fn last_error(events: &[StreamEvent]) -> (String, Option<String>) {
         match events.last() {
-            Some(e @ StreamEvent::Error { message, .. }) => (message.clone(), serde_json::to_value(e).unwrap()["kind"].as_str().map(str::to_string)),
+            Some(e @ StreamEvent::Error { message, .. }) => {
+                (message.clone(), serde_json::to_value(e).unwrap()["kind"].as_str().map(str::to_string))
+            }
             other => panic!("expected an error, got {other:?}"),
         }
     }
@@ -1207,7 +1256,8 @@ mod tests {
         let (_tx, rx) = oneshot::channel();
         remote.ask(None, "hi".into(), rx, &|e| events.lock().unwrap().push(e)).await;
         let events = events.into_inner().unwrap();
-        let text: String = events.iter().filter_map(|e| if let StreamEvent::Delta { text } = e { Some(text.as_str()) } else { None }).collect();
+        let text: String =
+            events.iter().filter_map(|e| if let StreamEvent::Delta { text } = e { Some(text.as_str()) } else { None }).collect();
         assert_eq!(text, "abc", "the text that arrived stays");
         let (message, kind) = last_error(&events);
         assert_eq!(kind.as_deref(), Some("timed_out"));
@@ -1242,7 +1292,15 @@ mod tests {
     }
 
     async fn stored_reply(http: &reqwest::Client, url: &str, token: &str, conversation_id: &str) -> String {
-        let detail: ConversationDetail = http.get(format!("{url}/api/client/v1/conversations/{conversation_id}")).bearer_auth(token).send().await.unwrap().json().await.unwrap();
+        let detail: ConversationDetail = http
+            .get(format!("{url}/api/client/v1/conversations/{conversation_id}"))
+            .bearer_auth(token)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
         detail.messages.iter().rev().find(|m| m.role == "assistant").map(|m| m.content.clone()).unwrap_or_default()
     }
 
@@ -1258,7 +1316,10 @@ mod tests {
         let db_path = dir.join("server.db");
         let db = askbar_server::Db::open(&db_path).unwrap();
         let user = db.seed_server().unwrap();
-        askbar_server::testing::add_provider(&db, askbar_server::testing::provider("p", "mock", &format!("http://127.0.0.1:{mock_port}/v1"), "mock-model"));
+        askbar_server::testing::add_provider(
+            &db,
+            askbar_server::testing::provider("p", "mock", &format!("http://127.0.0.1:{mock_port}/v1"), "mock-model"),
+        );
         let code = askbar_server::testing::add_pair_code(&db, &user, "test");
         let state: Arc<AppState> = AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), "0.1.0");
         let token = auth::redeem_pair_code(&state.db.lock().unwrap(), &code).unwrap().unwrap();
@@ -1277,12 +1338,20 @@ mod tests {
         // 1. Drop the client after a few deltas, resume after what was received (twice, to be sure),
         // then stop the reply: the three pieces joined are the stored reply.
         let resume = |gid: String, after: u64| {
-            http.get(format!("{url}/api/client/v1/generations/{gid}/stream")).bearer_auth(&token).header(askbar_proto::CLIENT_VERSION_HEADER, VERSION).header("accept", "text/event-stream").query(&[("after", after)])
+            http.get(format!("{url}/api/client/v1/generations/{gid}/stream"))
+                .bearer_auth(&token)
+                .header(askbar_proto::CLIENT_VERSION_HEADER, VERSION)
+                .header("accept", "text/event-stream")
+                .query(&[("after", after)])
         };
         let mut reader = ReplyReader::default();
         let first = chat("slow hello").send().await.unwrap();
         let (head, end) = read_some(first, &mut reader, |r| r.last_id >= 3).await;
-        assert!(end.is_none() && reader.last_id >= 3, "the reply was still going when the client left: {end:?} {} {head:?}", reader.last_id);
+        assert!(
+            end.is_none() && reader.last_id >= 3,
+            "the reply was still going when the client left: {end:?} {} {head:?}",
+            reader.last_id
+        );
         let gid = reader.generation_id.clone().expect("meta names the generation");
         let at_drop = reader.last_id;
         let second = resume(gid.clone(), at_drop).send().await.unwrap();
@@ -1294,7 +1363,8 @@ mod tests {
         let third = resume(gid.clone(), reader.last_id).send().await.unwrap();
         let (tail, _) = read_some(third, &mut reader, |_| false).await;
         let all = format!("{head}{middle}{tail}");
-        let convs: Vec<Conversation> = http.get(format!("{url}/api/client/v1/conversations")).bearer_auth(&token).send().await.unwrap().json().await.unwrap();
+        let convs: Vec<Conversation> =
+            http.get(format!("{url}/api/client/v1/conversations")).bearer_auth(&token).send().await.unwrap().json().await.unwrap();
         assert_eq!(all, stored_reply(&http, &url, &token, &convs[0].id).await, "no delta twice, none missing");
         assert!(all.starts_with("Streaming slowly"), "{all}");
 
@@ -1310,12 +1380,26 @@ mod tests {
         askbar_server::generation::sweep_on_start(&restarted_db).unwrap();
         let state2: Arc<AppState> = AppState::new(restarted_db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), "0.1.0");
         let (url2, _server2) = serve_state(state2.clone()).await;
-        let resumed = http.get(format!("{url2}/api/client/v1/generations/{gid}/stream")).bearer_auth(&token).header(askbar_proto::CLIENT_VERSION_HEADER, VERSION).header("accept", "text/event-stream").query(&[("after", reader.last_id)]).send().await.unwrap();
+        let resumed = http
+            .get(format!("{url2}/api/client/v1/generations/{gid}/stream"))
+            .bearer_auth(&token)
+            .header(askbar_proto::CLIENT_VERSION_HEADER, VERSION)
+            .header("accept", "text/event-stream")
+            .query(&[("after", reader.last_id)])
+            .send()
+            .await
+            .unwrap();
         assert!(resumed.status().is_success());
         let (tail, end) = read_some(resumed, &mut reader, |_| false).await;
         let Some(Step::Fail { message: why, .. }) = end else { panic!("an interrupted reply ends with an error event, got {end:?}") };
         assert!(!why.is_empty());
-        let (status, stored_text): (String, String) = state2.db.lock().unwrap().conn().query_row("SELECT status, text FROM generations WHERE id = ?1", [&gid], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        let (status, stored_text): (String, String) = state2
+            .db
+            .lock()
+            .unwrap()
+            .conn()
+            .query_row("SELECT status, text FROM generations WHERE id = ?1", [&gid], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap();
         assert_eq!(status, "interrupted");
         let all = format!("{head}{tail}");
         assert!(stored_text.starts_with("Streaming sl") && stored_text.len() >= 12, "{stored_text}");
@@ -1326,13 +1410,25 @@ mod tests {
     #[test]
     fn the_servers_code_decides_the_kind_and_the_words_are_only_for_display() {
         let some = |c: &str| Some(c.to_string());
-        assert_eq!(server_error("Timed out after 90 seconds".into(), some("timed_out")), StreamEvent::error_kind("timed_out", "Stopped after 90 seconds".into()));
-        assert_eq!(server_error("Timed out after 1 minute".into(), some("timed_out")), StreamEvent::error_kind("timed_out", "Stopped after 1 minute".into()));
+        assert_eq!(
+            server_error("Timed out after 90 seconds".into(), some("timed_out")),
+            StreamEvent::error_kind("timed_out", "Stopped after 90 seconds".into())
+        );
+        assert_eq!(
+            server_error("Timed out after 1 minute".into(), some("timed_out")),
+            StreamEvent::error_kind("timed_out", "Stopped after 1 minute".into())
+        );
         // The code decides, not the sentence: other words, same kind.
-        assert_eq!(server_error("The reply ran out of time.".into(), some("timed_out")), StreamEvent::error_kind("timed_out", "The reply ran out of time.".into()));
+        assert_eq!(
+            server_error("The reply ran out of time.".into(), some("timed_out")),
+            StreamEvent::error_kind("timed_out", "The reply ran out of time.".into())
+        );
         // The sentence alone proves nothing.
         assert_eq!(server_error("Timed out after 5 minutes".into(), None), StreamEvent::error("Timed out after 5 minutes".into()));
-        assert_eq!(server_error("The server restarted.".into(), some("interrupted")), StreamEvent::error_kind("interrupted", "The server restarted.".into()));
+        assert_eq!(
+            server_error("The server restarted.".into(), some("interrupted")),
+            StreamEvent::error_kind("interrupted", "The server restarted.".into())
+        );
         assert_eq!(server_error("boom".into(), some("provider_error")), StreamEvent::error_kind("provider_error", "boom".into()));
     }
 
@@ -1371,7 +1467,8 @@ mod tests {
         let events = events.into_inner().unwrap();
         let StreamEvent::Started { conversation_id, .. } = events[0].clone() else { panic!("first event must be Started") };
         assert!(matches!(events.last(), Some(StreamEvent::Done)));
-        let reply: String = events.iter().filter_map(|e| if let StreamEvent::Delta { text } = e { Some(text.as_str()) } else { None }).collect();
+        let reply: String =
+            events.iter().filter_map(|e| if let StreamEvent::Delta { text } = e { Some(text.as_str()) } else { None }).collect();
         assert!(reply.ends_with("Anything else?"));
 
         let list = remote.list_conversations().await.unwrap();
@@ -1425,10 +1522,7 @@ mod tests {
             .lock()
             .unwrap()
             .conn()
-            .execute(
-                "INSERT OR REPLACE INTO user_prefs (user_id, active_provider_id) SELECT id, ?1 FROM users",
-                [id],
-            )
+            .execute("INSERT OR REPLACE INTO user_prefs (user_id, active_provider_id) SELECT id, ?1 FROM users", [id])
             .unwrap();
     }
 
@@ -1549,8 +1643,10 @@ mod tests {
         {
             let db = state.db.lock().unwrap();
             let user: String = db.conn().query_row("SELECT id FROM users", [], |r| r.get(0)).unwrap();
-            let dark: DisplaySettings =
-                serde_json::from_str(r#"{"theme":"dark","width":900,"max_height":700,"history_width":300,"top_percent":0.3,"hide_on_blur":false}"#).unwrap();
+            let dark: DisplaySettings = serde_json::from_str(
+                r#"{"theme":"dark","width":900,"max_height":700,"history_width":300,"top_percent":0.3,"hide_on_blur":false}"#,
+            )
+            .unwrap();
             askbar_server::testing::update_snapshot(&db, |s| {
                 s.user_display_defaults.insert(user, dark);
             });
@@ -1658,7 +1754,8 @@ mod tests {
         let r = Remote::new(ClientConfig::load(&path), path.clone(), Box::new(MemoryTokens::with(&tokens.get().unwrap())));
         assert_eq!(kind(&r).await, None);
 
-        let client_id: String = state.db.lock().unwrap().conn().query_row("SELECT id FROM clients WHERE name = 'test client'", [], |r| r.get(0)).unwrap();
+        let client_id: String =
+            state.db.lock().unwrap().conn().query_row("SELECT id FROM clients WHERE name = 'test client'", [], |r| r.get(0)).unwrap();
         testing::update_snapshot(&state.db.lock().unwrap(), |s| s.revoked_client_ids.push(client_id));
 
         let status = r.status().await.unwrap();
@@ -1686,7 +1783,8 @@ mod tests {
         remote.ask(None, "hello from the second profile".into(), rx, &|e| events.lock().unwrap().push(e)).await;
         let events = events.into_inner().unwrap();
         assert!(matches!(events.last(), Some(StreamEvent::Done)), "{}", serde_json::to_string(&events.last()).unwrap());
-        let reply: String = events.iter().filter_map(|e| if let StreamEvent::Delta { text } = e { Some(text.as_str()) } else { None }).collect();
+        let reply: String =
+            events.iter().filter_map(|e| if let StreamEvent::Delta { text } = e { Some(text.as_str()) } else { None }).collect();
         println!("reply: {}", reply.lines().next().unwrap_or(""));
         assert!(!reply.is_empty());
     }

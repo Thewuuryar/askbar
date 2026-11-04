@@ -1,7 +1,7 @@
 //! `POST /api/server/v1/models/list`: the server asks a provider for its models.
 
-use axum::{extract::Query, http::HeaderMap, routing::get, Json, Router};
 use askbar_server::{secrets::Secrets, server_api, AppState};
+use axum::{extract::Query, http::HeaderMap, routing::get, Json, Router};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -25,7 +25,10 @@ async fn provider() -> String {
             Json(json!({"data": [{"id": "c-1"}], "has_more": true, "last_id": "c-1"}))
         }
     }
-    let app = Router::new().route("/v1/models", get(openai)).route("/anthropic/v1/models", get(anthropic)).route("/empty/v1/models", get(|| async { Json(json!({"data": []})) }));
+    let app = Router::new()
+        .route("/v1/models", get(openai))
+        .route("/anthropic/v1/models", get(anthropic))
+        .route("/empty/v1/models", get(|| async { Json(json!({"data": []})) }));
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", l.local_addr().unwrap());
     tokio::spawn(async move { axum::serve(l, app).await.unwrap() });

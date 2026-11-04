@@ -54,9 +54,7 @@ pub fn validate(s: &Snapshot) -> Result<(), String> {
         return Err(format!("audit_retention_days must be at least {MIN_AUDIT_RETENTION_DAYS}"));
     }
     if !(MIN_GENERATION_TIMEOUT_SECS..=MAX_GENERATION_TIMEOUT_SECS).contains(&s.generation_timeout_secs) {
-        return Err(format!(
-            "generation_timeout_secs must be between {MIN_GENERATION_TIMEOUT_SECS} and {MAX_GENERATION_TIMEOUT_SECS}"
-        ));
+        return Err(format!("generation_timeout_secs must be between {MIN_GENERATION_TIMEOUT_SECS} and {MAX_GENERATION_TIMEOUT_SECS}"));
     }
     if let Some(k) = &s.audit_public_key {
         check_audit_key(k)?;
@@ -107,10 +105,8 @@ pub fn in_client_order(s: &Snapshot) -> Vec<askbar_proto::SnapshotProvider> {
 
 /// The stored snapshot, or `None' before the admin service has pushed one. Read-only.
 pub fn current(db: &Db) -> rusqlite::Result<Option<Snapshot>> {
-    let row: Option<(i64, String)> = db
-        .conn()
-        .query_row("SELECT version, body FROM config_snapshot WHERE id = 1", [], |r| Ok((r.get(0)?, r.get(1)?)))
-        .optional()?;
+    let row: Option<(i64, String)> =
+        db.conn().query_row("SELECT version, body FROM config_snapshot WHERE id = 1", [], |r| Ok((r.get(0)?, r.get(1)?))).optional()?;
     Ok(row.and_then(|(version, body)| {
         let mut s: Snapshot = serde_json::from_str(&body).ok()?;
         s.version = version as u64;
@@ -123,7 +119,8 @@ fn save(db: &Db, s: &Snapshot) -> rusqlite::Result<u64> {
     let tx = db.conn().unchecked_transaction()?;
     let previous: Option<i64> = tx.query_row("SELECT version FROM config_snapshot WHERE id = 1", [], |r| r.get(0)).optional()?;
     let version = previous.unwrap_or(0) + 1;
-    let body = serde_json::to_string(&Snapshot { version: version as u64, ..s.clone() }).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+    let body = serde_json::to_string(&Snapshot { version: version as u64, ..s.clone() })
+        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
     tx.execute(
         "INSERT INTO config_snapshot (id, version, body, updated_at) VALUES (1, ?1, ?2, ?3)
          ON CONFLICT(id) DO UPDATE SET version = excluded.version, body = excluded.body, updated_at = excluded.updated_at",
@@ -147,11 +144,8 @@ pub fn apply(db: &Db, s: &Snapshot) -> Result<u64, ApplyError> {
     validate(s).map_err(ApplyError::Invalid)?;
     let version = save(db, s).map_err(ApplyError::Store)?;
     let keep: std::collections::BTreeSet<&str> = s.providers.iter().map(|p| p.id.as_str()).collect();
-    let stored: Vec<String> = db
-        .conn()
-        .prepare("SELECT id FROM providers")
-        .and_then(|mut st| st.query_map([], |r| r.get(0))?.collect())
-        .unwrap_or_default();
+    let stored: Vec<String> =
+        db.conn().prepare("SELECT id FROM providers").and_then(|mut st| st.query_map([], |r| r.get(0))?.collect()).unwrap_or_default();
     for id in stored.iter().filter(|id| !keep.contains(id.as_str())) {
         let _ = db.conn().execute("DELETE FROM providers WHERE id = ?1", [id]);
     }

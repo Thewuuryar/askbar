@@ -27,7 +27,10 @@ async fn main() {
         std::process::exit(if healthcheck() { 0 } else { 1 });
     }
     tracing_subscriber::fmt().with_target(false).init();
-    let addr = askbar_controller::parse_addr(&std::env::var("ASKBAR_CONTROL_ADDR").unwrap_or_else(|_| die("ASKBAR_CONTROL_ADDR is not set (example: 172.32.0.2:8083)", 1))).unwrap_or_else(|e| die(e, 1));
+    let addr = askbar_controller::parse_addr(
+        &std::env::var("ASKBAR_CONTROL_ADDR").unwrap_or_else(|_| die("ASKBAR_CONTROL_ADDR is not set (example: 172.32.0.2:8083)", 1)),
+    )
+    .unwrap_or_else(|e| die(e, 1));
     let docker = askbar_controller::docker::Docker::new(askbar_controller::socket_path());
     // Only this Compose project's containers are ever touched: the project this container belongs to, or the one named.
     let project = match std::env::var("ASKBAR_COMPOSE_PROJECT").ok().filter(|p| !p.trim().is_empty()) {

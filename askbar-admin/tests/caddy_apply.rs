@@ -1,8 +1,8 @@
 #![cfg(unix)]
 mod common;
 
-use common::*;
 use askbar_admin::caddy::{CaddyLink, STAGING_CA};
+use common::*;
 use reqwest::Method as M;
 use serde_json::{json, Value};
 use std::os::unix::fs::PermissionsExt;
@@ -22,7 +22,12 @@ async fn saving_pushes_the_config_through_the_socket_and_writes_the_token_file()
     assert_eq!(loads.len(), 1);
     assert_eq!(loads[0].0, "text/caddyfile");
     let body = &loads[0].1;
-    assert!(body.contains("\naskbar.orraitu.com {") && body.contains("@admin path /admin /admin/*") && !body.contains("admin.askbar.orraitu.com"), "one host, the admin under /admin: {body}");
+    assert!(
+        body.contains("\naskbar.orraitu.com {")
+            && body.contains("@admin path /admin /admin/*")
+            && !body.contains("admin.askbar.orraitu.com"),
+        "one host, the admin under /admin: {body}"
+    );
     assert!(body.contains("remote_ip 192.168.1.0/24") && body.contains(STAGING_CA));
     assert!(body.contains("admin unix//run/caddy/admin.sock") && !body.contains("origins"));
     assert!(!body.contains(TOKEN), "the token never goes into the config");
@@ -115,7 +120,13 @@ async fn without_a_caddy_link_the_status_says_so() {
 async fn a_token_that_cannot_be_read_is_not_pushed() {
     let t = start(true).await;
     t.save(settings(true)).await;
-    t.admin.db.lock().await.conn().execute("UPDATE network_settings SET cloudflare_token = x'00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff'", []).unwrap();
+    t.admin
+        .db
+        .lock()
+        .await
+        .conn()
+        .execute("UPDATE network_settings SET cloudflare_token = x'00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff'", [])
+        .unwrap();
     t.fake.loads.lock().unwrap().clear();
     let (_, v) = t.call(M::POST, "/admin/api/v1/network/apply", json!({})).await;
     assert_eq!(v["ok"], false);
@@ -126,7 +137,12 @@ async fn a_token_that_cannot_be_read_is_not_pushed() {
 #[tokio::test]
 async fn the_ui_is_served_with_its_security_headers() {
     let t = start(true).await;
-    for (path, ctype) in [("/admin/", "text/html"), ("/admin/app.js", "text/javascript"), ("/admin/audit.js", "text/javascript"), ("/admin/style.css", "text/css")] {
+    for (path, ctype) in [
+        ("/admin/", "text/html"),
+        ("/admin/app.js", "text/javascript"),
+        ("/admin/audit.js", "text/javascript"),
+        ("/admin/style.css", "text/css"),
+    ] {
         let r = t.http.get(format!("{}{path}", t.adm)).send().await.unwrap();
         assert_eq!(r.status(), 200, "{path}");
         assert!(r.headers()["content-type"].to_str().unwrap().starts_with(ctype), "{path}");
@@ -136,7 +152,10 @@ async fn the_ui_is_served_with_its_security_headers() {
     assert!(page.contains("id=\"offline\"") && page.contains("id=\"n-allow\""));
     // The admin holds no master key (the server makes its own), so its screens are gone. (The audit
     // key's rotation, added in 5.13 and 7.10, is a different thing and is here.)
-    assert!(!page.contains("setup-key") && !page.contains("setup-saved") && !page.contains("Rotate the master key"), "no master-key screens here");
+    assert!(
+        !page.contains("setup-key") && !page.contains("setup-saved") && !page.contains("Rotate the master key"),
+        "no master-key screens here"
+    );
     assert!(page.contains("Rotate the audit key") && page.contains("id=\"rotate-form\""));
     // /admin (no slash) goes to the page; the root is not the admin's (Caddy never forwards it), so it is a 404.
     let none = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().unwrap();

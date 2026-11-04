@@ -104,7 +104,10 @@ impl Docker {
     }
 
     fn message(body: &[u8]) -> String {
-        serde_json::from_slice::<Value>(body).ok().and_then(|v| v["message"].as_str().map(String::from)).unwrap_or_else(|| String::from_utf8_lossy(body).chars().take(200).collect())
+        serde_json::from_slice::<Value>(body)
+            .ok()
+            .and_then(|v| v["message"].as_str().map(String::from))
+            .unwrap_or_else(|| String::from_utf8_lossy(body).chars().take(200).collect())
     }
 
     /// The Compose project this container belongs to, read from its own labels (`id` is its hostname by default).
@@ -117,13 +120,19 @@ impl Docker {
             return Err(DockerError::Refused(status, Self::message(&body)));
         }
         let v: Value = serde_json::from_slice(&body).map_err(|e| DockerError::Unreachable(e.to_string()))?;
-        v["Config"]["Labels"][PROJECT_LABEL].as_str().map(String::from).ok_or_else(|| DockerError::Refused(404, "this container has no Compose project label".into()))
+        v["Config"]["Labels"][PROJECT_LABEL]
+            .as_str()
+            .map(String::from)
+            .ok_or_else(|| DockerError::Refused(404, "this container has no Compose project label".into()))
     }
 
     /// Every container (running or not) of `project`, with its service name.
     pub async fn project_containers(&self, project: &str) -> Result<Vec<Container>, DockerError> {
         let filters = serde_json::json!({ "label": [format!("{PROJECT_LABEL}={project}")] }).to_string();
-        let q: String = filters.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect();
+        let q: String = filters
+            .bytes()
+            .map(|b| if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") })
+            .collect();
         let (status, body) = self.request("GET", &format!("/containers/json?all=1&filters={q}")).await?;
         if status != 200 {
             return Err(DockerError::Refused(status, Self::message(&body)));

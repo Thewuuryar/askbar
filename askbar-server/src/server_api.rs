@@ -46,7 +46,10 @@ pub fn parse_addr(raw: &str) -> Result<SocketAddr, String> {
 /// The server address must be one specific address, not `0.0.0.0` or `::`.
 pub fn check_not_wildcard(addr: &SocketAddr) -> Result<(), String> {
     if addr.ip().is_unspecified() {
-        return Err(format!("ASKBAR_SERVER_API_ADDR must be one specific address, not {}: the server API must not listen on every network", addr.ip()));
+        return Err(format!(
+            "ASKBAR_SERVER_API_ADDR must be one specific address, not {}: the server API must not listen on every network",
+            addr.ip()
+        ));
     }
     Ok(())
 }
@@ -122,7 +125,11 @@ const MAX_KEY_CHARS: usize = 4096;
 
 /// Store a provider's API key, encrypted with the master key. Write-only: no endpoint
 /// ever returns it, and this one answers `204` with no body.
-async fn put_provider_key(State(state): State<Arc<AppState>>, Path(id): Path<String>, ApiJson(input): ApiJson<KeyInput>) -> Result<StatusCode, Failure> {
+async fn put_provider_key(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    ApiJson(input): ApiJson<KeyInput>,
+) -> Result<StatusCode, Failure> {
     let key = input.key.trim();
     if key.is_empty() || key.chars().count() > MAX_KEY_CHARS {
         return Err(fail(StatusCode::BAD_REQUEST, "The key must be 1 to 4096 characters."));
@@ -157,7 +164,10 @@ async fn providers_health(State(state): State<Arc<AppState>>) -> Result<Json<ser
 }
 
 /// Send one short message through the provider and report what happened.
-async fn test_provider(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Result<Json<crate::provider_test::TestResult>, Failure> {
+async fn test_provider(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<crate::provider_test::TestResult>, Failure> {
     crate::provider_test::run(&state, &id)
         .await
         .map_err(|_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not run the test."))?
@@ -166,11 +176,11 @@ async fn test_provider(State(state): State<Arc<AppState>>, Path(id): Path<String
 }
 
 /// Ask a provider which models it offers. A failure at the provider is a 200 with `ok: false`, like the test.
-async fn list_models(State(state): State<Arc<AppState>>, ApiJson(req): ApiJson<crate::models::ModelsRequest>) -> Result<Json<crate::models::ModelsResult>, Failure> {
-    crate::models::run(&state, req)
-        .await
-        .map(Json)
-        .map_err(|_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not list the models."))
+async fn list_models(
+    State(state): State<Arc<AppState>>,
+    ApiJson(req): ApiJson<crate::models::ModelsRequest>,
+) -> Result<Json<crate::models::ModelsResult>, Failure> {
+    crate::models::run(&state, req).await.map(Json).map_err(|_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not list the models."))
 }
 
 /// The users, oldest first: `[{"id", "name"}]`. Pairing codes are made for one of these.
@@ -178,7 +188,8 @@ async fn list_users(State(state): State<Arc<AppState>>) -> Result<Json<serde_jso
     let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
     let read = || -> rusqlite::Result<Vec<serde_json::Value>> {
         let mut stmt = db.conn().prepare("SELECT id, name FROM users ORDER BY created_at, id")?;
-        let rows = stmt.query_map([], |r| Ok(serde_json::json!({ "id": r.get::<_, String>(0)?, "name": r.get::<_, String>(1)? })))?.collect();
+        let rows =
+            stmt.query_map([], |r| Ok(serde_json::json!({ "id": r.get::<_, String>(0)?, "name": r.get::<_, String>(1)? })))?.collect();
         rows
     };
     read().map(|v| Json(serde_json::Value::Array(v))).map_err(|_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not read the users."))
@@ -221,10 +232,14 @@ fn add_cost(row: &mut serde_json::Value, price_of: crate::audit::PriceOf) {
 }
 
 /// `GET /api/server/v1/audit/traces`: one summary per generation, newest first. Metadata only.
-async fn audit_traces(State(state): State<Arc<AppState>>, axum::extract::Query(q): axum::extract::Query<TracesQuery>) -> Result<Json<serde_json::Value>, Failure> {
+async fn audit_traces(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Query(q): axum::extract::Query<TracesQuery>,
+) -> Result<Json<serde_json::Value>, Failure> {
     let conn = state.audit.reader().ok_or_else(no_audit)?;
     let filter = crate::audit::TraceFilter { status: q.status, provider: q.provider, before: q.before, limit: q.limit };
-    let mut rows = crate::audit::list_traces(&conn, &filter).map_err(|_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not read the audit store."))?;
+    let mut rows = crate::audit::list_traces(&conn, &filter)
+        .map_err(|_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not read the audit store."))?;
     let price_of = price_lookup(&state);
     rows.iter_mut().for_each(|r| add_cost(r, &price_of));
     Ok(Json(serde_json::json!({ "traces": rows })))
@@ -233,7 +248,8 @@ async fn audit_traces(State(state): State<Arc<AppState>>, axum::extract::Query(q
 /// `GET /api/server/v1/audit/traces/{id}`: all spans of one generation.
 async fn audit_trace(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Result<Json<serde_json::Value>, Failure> {
     let conn = state.audit.reader().ok_or_else(no_audit)?;
-    let mut spans = crate::audit::trace_spans(&conn, &id).map_err(|_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not read the audit store."))?;
+    let mut spans =
+        crate::audit::trace_spans(&conn, &id).map_err(|_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not read the audit store."))?;
     if spans.is_empty() {
         return Err(fail(StatusCode::NOT_FOUND, "No such trace."));
     }
@@ -253,7 +269,9 @@ async fn audit_trace(State(state): State<Arc<AppState>>, Path(id): Path<String>)
 /// Only the admin, with the passphrase, can turn it into text; this endpoint cannot.
 async fn audit_payloads(State(state): State<Arc<AppState>>, Path(span_id): Path<String>) -> Result<Json<serde_json::Value>, Failure> {
     let conn = state.audit.reader().ok_or_else(no_audit)?;
-    match crate::audit::span_payloads(&conn, &span_id).map_err(|_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not read the audit store."))? {
+    match crate::audit::span_payloads(&conn, &span_id)
+        .map_err(|_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not read the audit store."))?
+    {
         Some(list) => Ok(Json(serde_json::Value::Array(list))),
         None => Err(fail(StatusCode::NOT_FOUND, "No such span.")),
     }
@@ -266,11 +284,16 @@ struct StatsQuery {
 
 /// `GET /api/server/v1/audit/stats?since=<unix seconds>`: counts, error rate, latency percentiles
 /// and token totals. `since` defaults to the last 24 hours.
-async fn audit_stats(State(state): State<Arc<AppState>>, axum::extract::Query(q): axum::extract::Query<StatsQuery>) -> Result<Json<serde_json::Value>, Failure> {
+async fn audit_stats(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Query(q): axum::extract::Query<StatsQuery>,
+) -> Result<Json<serde_json::Value>, Failure> {
     let conn = state.audit.reader().ok_or_else(no_audit)?;
     let since = q.since.unwrap_or_else(|| crate::auth::now() - 24 * 3600);
     let price_of = price_lookup(&state);
-    crate::audit::stats(&conn, since, &price_of).map(Json).map_err(|_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not read the audit store."))
+    crate::audit::stats(&conn, since, &price_of)
+        .map(Json)
+        .map_err(|_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not read the audit store."))
 }
 
 /// Counts for the admin service's overview. Token totals come from `token_usage`, which

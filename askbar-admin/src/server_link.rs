@@ -14,8 +14,8 @@ use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
-use tokio::sync::Mutex;
 use std::time::Duration;
+use tokio::sync::Mutex;
 use tokio::sync::Notify;
 
 pub const TOKEN_FILE: &str = "server.token";
@@ -23,12 +23,20 @@ pub const HASH_FILE: &str = "token.sha256";
 
 /// Where the raw token is kept: `ASKBAR_ADMIN_SECRETS_DIR`, default `/admin-secrets`.
 pub fn secrets_dir() -> PathBuf {
-    std::env::var("ASKBAR_ADMIN_SECRETS_DIR").ok().filter(|p| !p.trim().is_empty()).map(PathBuf::from).unwrap_or_else(|| "/admin-secrets".into())
+    std::env::var("ASKBAR_ADMIN_SECRETS_DIR")
+        .ok()
+        .filter(|p| !p.trim().is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| "/admin-secrets".into())
 }
 
 /// Where the token's hash is written for the server: `ASKBAR_SERVER_TOKEN_DIR`, default `/server-token`.
 pub fn token_dir() -> PathBuf {
-    std::env::var("ASKBAR_SERVER_TOKEN_DIR").ok().filter(|p| !p.trim().is_empty()).map(PathBuf::from).unwrap_or_else(|| "/server-token".into())
+    std::env::var("ASKBAR_SERVER_TOKEN_DIR")
+        .ok()
+        .filter(|p| !p.trim().is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| "/server-token".into())
 }
 
 /// The server's server API: `ASKBAR_SERVER_API_URL`, default `http://server:8082`.
@@ -69,7 +77,12 @@ pub fn ensure_token_as(secrets_dir: &Path, token_dir: &Path, token_file: &str, p
     let path = secrets_dir.join(token_file);
     let token = match std::fs::read_to_string(&path) {
         Ok(t) if !t.trim().is_empty() => t.trim().to_string(),
-        Ok(_) => return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{} is empty; delete it to make a new token", path.display()))),
+        Ok(_) => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("{} is empty; delete it to make a new token", path.display()),
+            ))
+        }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             let mut raw = [0u8; 32];
             OsRng.fill_bytes(&mut raw);
@@ -116,7 +129,11 @@ pub fn build_snapshot(conn: &rusqlite::Connection) -> rusqlite::Result<Snapshot>
                 max_tokens: r.get(5)?,
                 temperature: r.get(6)?,
                 headers: serde_json::from_str(&r.get::<_, String>(7)?).unwrap_or_default(),
-                billing: if r.get::<_, String>(8)? == "subscription" { askbar_proto::Billing::Subscription } else { askbar_proto::Billing::Metered },
+                billing: if r.get::<_, String>(8)? == "subscription" {
+                    askbar_proto::Billing::Subscription
+                } else {
+                    askbar_proto::Billing::Metered
+                },
                 allow_as_fallback: r.get::<_, i64>(9)? != 0,
                 price_in: r.get(10)?,
                 price_out: r.get(11)?,
@@ -129,8 +146,12 @@ pub fn build_snapshot(conn: &rusqlite::Connection) -> rusqlite::Result<Snapshot>
     }
     let known = |id: &String| providers.iter().any(|p| &p.id == id);
     let default_provider_id = setting(conn, "default_provider_id")?.filter(known);
-    let fallback_order: Vec<String> =
-        setting(conn, "fallback_order")?.and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok()).unwrap_or_default().into_iter().filter(known).collect();
+    let fallback_order: Vec<String> = setting(conn, "fallback_order")?
+        .and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(known)
+        .collect();
     let display: DisplaySettings = setting(conn, "display")?.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
     let mut user_display_defaults = std::collections::BTreeMap::new();
     {
@@ -144,7 +165,8 @@ pub fn build_snapshot(conn: &rusqlite::Connection) -> rusqlite::Result<Snapshot>
     }
     let mut pair_codes = Vec::new();
     {
-        let mut stmt = conn.prepare("SELECT hash, user_id, client_name, expires_at FROM pair_codes WHERE expires_at > ?1 ORDER BY created_at")?;
+        let mut stmt =
+            conn.prepare("SELECT hash, user_id, client_name, expires_at FROM pair_codes WHERE expires_at > ?1 ORDER BY created_at")?;
         for c in stmt.query_map([crate::auth::now()], |r| {
             Ok(SnapshotPairCode { hash: r.get(0)?, user_id: r.get(1)?, client_name: r.get(2)?, expires_at: r.get(3)? })
         })? {
@@ -157,7 +179,9 @@ pub fn build_snapshot(conn: &rusqlite::Connection) -> rusqlite::Result<Snapshot>
         ids
     };
     let (daily, monthly, kill): (Option<i64>, Option<i64>, i64) =
-        conn.query_row("SELECT daily_tokens, monthly_tokens, kill_switch FROM budgets WHERE id = 1", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        conn.query_row("SELECT daily_tokens, monthly_tokens, kill_switch FROM budgets WHERE id = 1", [], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        })?;
     Ok(Snapshot {
         version: 0,
         providers,
@@ -171,17 +195,17 @@ pub fn build_snapshot(conn: &rusqlite::Connection) -> rusqlite::Result<Snapshot>
         budget: Budget { daily_tokens: daily.map(|v| v as u64), monthly_tokens: monthly.map(|v| v as u64) },
         kill_switch: kill != 0,
         // Absent means the safer default: the switch really stops running replies.
-        kill_switch_aborts_running: setting(conn, "kill_switch_aborts_running")?.map(|v| !matches!(v.trim(), "0" | "false")).unwrap_or(true),
+        kill_switch_aborts_running: setting(conn, "kill_switch_aborts_running")?
+            .map(|v| !matches!(v.trim(), "0" | "false"))
+            .unwrap_or(true),
         audit_retention_days: setting(conn, "audit_retention_days")?.and_then(|s| s.parse().ok()).unwrap_or(30),
         // Absent on installs that never set it: the default applies, no migration needed.
         generation_timeout_secs: setting(conn, "generation_timeout_secs")?
             .and_then(|s| s.trim().parse().ok())
             .unwrap_or(askbar_proto::DEFAULT_GENERATION_TIMEOUT_SECS),
         // Public half only; the keyring holds nothing else.
-        audit_public_key: active_audit_key(conn)?.map(|k| askbar_proto::AuditKey {
-            key_id: k.key_id,
-            public_key: k.public_key.iter().map(|b| format!("{b:02x}")).collect(),
-        }),
+        audit_public_key: active_audit_key(conn)?
+            .map(|k| askbar_proto::AuditKey { key_id: k.key_id, public_key: k.public_key.iter().map(|b| format!("{b:02x}")).collect() }),
     })
 }
 
@@ -212,7 +236,11 @@ pub struct ServerLink {
 impl ServerLink {
     pub fn new(base: &str, token: String) -> Arc<ServerLink> {
         Arc::new(ServerLink {
-            http: reqwest::Client::builder().connect_timeout(Duration::from_secs(3)).timeout(Duration::from_secs(15)).build().expect("a plain HTTP client builds"),
+            http: reqwest::Client::builder()
+                .connect_timeout(Duration::from_secs(3))
+                .timeout(Duration::from_secs(15))
+                .build()
+                .expect("a plain HTTP client builds"),
             base: base.trim_end_matches('/').to_string(),
             token,
             online: AtomicBool::new(false),
@@ -296,7 +324,12 @@ impl ServerLink {
 
     /// Any server call. Returns the status and body of whatever the server answered, or
     /// `Unreachable` if it did not answer at all (which also marks it offline).
-    pub async fn request(&self, method: reqwest::Method, path: &str, body: Option<&serde_json::Value>) -> Result<(u16, Vec<u8>), PushError> {
+    pub async fn request(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        body: Option<&serde_json::Value>,
+    ) -> Result<(u16, Vec<u8>), PushError> {
         let mut req = self.http.request(method, format!("{}{path}", self.base)).bearer_auth(&self.token);
         if let Some(b) = body {
             req = req.json(b);
@@ -318,7 +351,13 @@ impl ServerLink {
 
     /// Hand the server a provider's API key. It is encrypted there; this side never keeps it.
     pub async fn put_key(&self, provider_id: &str, key: &str) -> Result<(), PushError> {
-        let (status, body) = self.request(reqwest::Method::PUT, &format!("{}/providers/{provider_id}/key", askbar_proto::paths::SERVER_V1), Some(&serde_json::json!({ "key": key }))).await?;
+        let (status, body) = self
+            .request(
+                reqwest::Method::PUT,
+                &format!("{}/providers/{provider_id}/key", askbar_proto::paths::SERVER_V1),
+                Some(&serde_json::json!({ "key": key })),
+            )
+            .await?;
         if status == 204 {
             Ok(())
         } else {

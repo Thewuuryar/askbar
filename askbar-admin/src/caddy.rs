@@ -108,7 +108,11 @@ pub fn caddyfile(n: &Network, allowed: &[String]) -> String {
         out.push_str(&format!(
             "\t@client path {client}/* {old}/*\n\thandle @client {{\n\t\treverse_proxy server:8080 {{\n\t\t\tflush_interval -1\n\t\t}}\n\t}}\n"
         ));
-        out.push_str(&format!("\thandle {{\n\t\theader Content-Type {}\n\t\trespond `{}` 404\n\t}}\n}}\n", askbar_proto::problem::CONTENT_TYPE, not_found_body()));
+        out.push_str(&format!(
+            "\thandle {{\n\t\theader Content-Type {}\n\t\trespond `{}` 404\n\t}}\n}}\n",
+            askbar_proto::problem::CONTENT_TYPE,
+            not_found_body()
+        ));
     } else {
         out.push_str("}\n");
     }
@@ -185,9 +189,14 @@ async fn apply_inner(state: &Arc<AdminState>) -> ProxyStatus {
         .await;
     match sent {
         Err(_) => status(false, "Could not reach Caddy. Is it running?"),
-        Ok(r) if r.status().is_success() => {
-            status(true, if enabled { "Caddy is serving the configuration. Certificates are requested the first time it is used." } else { "HTTPS is off; Caddy is not serving any site." })
-        }
+        Ok(r) if r.status().is_success() => status(
+            true,
+            if enabled {
+                "Caddy is serving the configuration. Certificates are requested the first time it is used."
+            } else {
+                "HTTPS is off; Caddy is not serving any site."
+            },
+        ),
         Ok(r) => {
             let code = r.status();
             let body = r.text().await.unwrap_or_default();
@@ -220,7 +229,13 @@ mod tests {
     use super::*;
 
     fn net(tls: bool, staging: bool, allowlist: bool) -> Network {
-        Network { tls_enabled: tls, hostname: "askbar.orraitu.com".into(), admin_cidr: String::new(), acme_staging: staging, allowlist_enabled: allowlist }
+        Network {
+            tls_enabled: tls,
+            hostname: "askbar.orraitu.com".into(),
+            admin_cidr: String::new(),
+            acme_staging: staging,
+            allowlist_enabled: allowlist,
+        }
     }
 
     #[test]
@@ -258,7 +273,12 @@ mod tests {
         // Docker publishes a container's ports on its address on the first network in name order. Caddy listens for the
         // first-run page on its admin-setup address only, so that network's name has to sort before `edge` (and
         // before any other network Caddy is on).
-        let networks: Vec<&str> = compose.lines().skip_while(|l| !l.starts_with("networks:")).filter(|l| l.starts_with("  ") && !l.starts_with("   ") && l.trim_end().ends_with(':')).map(|l| l.trim().trim_end_matches(':')).collect();
+        let networks: Vec<&str> = compose
+            .lines()
+            .skip_while(|l| !l.starts_with("networks:"))
+            .filter(|l| l.starts_with("  ") && !l.starts_with("   ") && l.trim_end().ends_with(':'))
+            .map(|l| l.trim().trim_end_matches(':'))
+            .collect();
         let pos = |n: &str| networks.iter().position(|x| *x == n).unwrap_or_else(|| panic!("no network {n} in {networks:?}"));
         let mut by_name = networks.clone();
         by_name.sort();
@@ -340,7 +360,10 @@ askbar.orraitu.com {{
 
     #[test]
     fn the_fixed_404_body_is_the_same_problem_the_servers_send() {
-        let p = askbar_proto::Problem::new(askbar_proto::ErrorCode::NotFound, askbar_proto::http::default_detail(askbar_proto::ErrorCode::NotFound));
+        let p = askbar_proto::Problem::new(
+            askbar_proto::ErrorCode::NotFound,
+            askbar_proto::http::default_detail(askbar_proto::ErrorCode::NotFound),
+        );
         assert_eq!(String::from_utf8(p.to_json_bytes()).unwrap(), NOT_FOUND);
     }
 

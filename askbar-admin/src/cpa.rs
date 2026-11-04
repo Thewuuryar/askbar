@@ -79,7 +79,10 @@ pub fn ensure_config(config_dir: &FsPath, secrets_dir: &FsPath) -> std::io::Resu
     let config = config_dir.join("config.yaml");
     if !config.exists() {
         std::fs::create_dir_all(config_dir)?;
-        let keys = Keys { api_key: read_trim(&api_path).unwrap_or_else(|| format!("sk-cpa-{}", rand(40))), control_secret: read_trim(&secret_path).unwrap_or_else(|| rand(40)) };
+        let keys = Keys {
+            api_key: read_trim(&api_path).unwrap_or_else(|| format!("sk-cpa-{}", rand(40))),
+            control_secret: read_trim(&secret_path).unwrap_or_else(|| rand(40)),
+        };
         write_atomic(&config, &config_yaml(&keys.api_key, &keys.control_secret), 0o644)?;
         write_secret(&api_path, &keys.api_key)?;
         write_secret(&secret_path, &keys.control_secret)?;
@@ -148,7 +151,11 @@ const API: &str = "/v0/management"; // names-ok: CLIProxyAPI's own path
 
 impl CpaLink {
     pub fn new(base: &str, keys: Keys) -> Arc<CpaLink> {
-        let http = reqwest::Client::builder().connect_timeout(Duration::from_secs(3)).timeout(Duration::from_secs(20)).build().expect("reqwest client");
+        let http = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(3))
+            .timeout(Duration::from_secs(20))
+            .build()
+            .expect("reqwest client");
         Arc::new(CpaLink { http, base: base.trim_end_matches('/').to_string(), keys })
     }
 
@@ -170,7 +177,10 @@ impl CpaLink {
         let status = r.status();
         let text = r.text().await.map_err(|e| e.without_url().to_string())?;
         if !status.is_success() {
-            let why = serde_json::from_str::<Value>(&text).ok().and_then(|v| v["error"].as_str().or(v["message"].as_str()).map(String::from)).unwrap_or_else(|| format!("status {}", status.as_u16()));
+            let why = serde_json::from_str::<Value>(&text)
+                .ok()
+                .and_then(|v| v["error"].as_str().or(v["message"].as_str()).map(String::from))
+                .unwrap_or_else(|| format!("status {}", status.as_u16()));
             return Err(format!("CLIProxyAPI refused: {why}"));
         }
         Ok(serde_json::from_str(&text).unwrap_or(Value::Null))
@@ -188,7 +198,13 @@ impl CpaLink {
 
     pub async fn callback(&self, provider: &str, redirect_url: &str, code: &str, state: &str) -> Result<(), String> {
         let (name, _) = cpa_name(provider).ok_or("Unknown provider.")?;
-        self.call(reqwest::Method::POST, "/oauth-callback", Some(json!({ "provider": name, "redirect_url": redirect_url, "code": code, "state": state }))).await.map(|_| ())
+        self.call(
+            reqwest::Method::POST,
+            "/oauth-callback",
+            Some(json!({ "provider": name, "redirect_url": redirect_url, "code": code, "state": state })),
+        )
+        .await
+        .map(|_| ())
     }
 
     /// `("wait" | "ok" | "error", message)`.
@@ -225,7 +241,9 @@ impl CpaLink {
 }
 
 fn urlencode(s: &str) -> String {
-    s.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
+    s.bytes()
+        .map(|b| if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") })
+        .collect()
 }
 
 // ---------------------------------------------------------------- the managed provider
@@ -244,7 +262,10 @@ pub async fn ensure_managed_provider(state: &AdminState, link: &CpaLink) -> Resu
     }
     let server = state.server.as_ref().ok_or("The server is not linked.")?;
     let body = json!({ "type": "openai", "base_url": link.provider_url(), "api_key": link.api_key() });
-    let (status, bytes) = server.request(reqwest::Method::POST, &format!("{}/models/list", askbar_proto::paths::SERVER_V1), Some(&body)).await.map_err(|_| "The server is offline.".to_string())?;
+    let (status, bytes) = server
+        .request(reqwest::Method::POST, &format!("{}/models/list", askbar_proto::paths::SERVER_V1), Some(&body))
+        .await
+        .map_err(|_| "The server is offline.".to_string())?;
     let list: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
     let ids: Vec<&str> = list["models"].as_array().map(|a| a.iter().filter_map(|m| m["id"].as_str()).collect()).unwrap_or_default();
     if status != 200 || ids.is_empty() {
@@ -269,7 +290,12 @@ pub async fn ensure_managed_provider(state: &AdminState, link: &CpaLink) -> Resu
 // ---------------------------------------------------------------- the API
 
 fn link(state: &AdminState) -> Result<Arc<CpaLink>, Failure> {
-    state.cpa.lock().unwrap_or_else(|e| e.into_inner()).clone().ok_or_else(|| ApiError::new(ErrorCode::ServerUnavailable, "CLIProxyAPI is not set up here."))
+    state
+        .cpa
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+        .ok_or_else(|| ApiError::new(ErrorCode::ServerUnavailable, "CLIProxyAPI is not set up here."))
 }
 
 fn down(e: String) -> Failure {
@@ -283,7 +309,11 @@ pub async fn status(State(state): St) -> Json<Value> {
     let reachable = accounts.is_ok();
     let accounts = accounts.unwrap_or_default();
     // Catches an account that was connected some other way, too.
-    let provider_id = if reachable && !accounts.is_empty() { ensure_managed_provider(&state, &l).await.ok().flatten() } else { managed_id(state.db.lock().await.conn()) };
+    let provider_id = if reachable && !accounts.is_empty() {
+        ensure_managed_provider(&state, &l).await.ok().flatten()
+    } else {
+        managed_id(state.db.lock().await.conn())
+    };
     Json(json!({ "configured": true, "reachable": reachable, "accounts": accounts, "provider_id": provider_id }))
 }
 
@@ -319,7 +349,8 @@ pub struct CallbackInput {
 
 /// What a pasted address must be: a `localhost` or `127.0.0.1` address carrying the `code` and the `state` of this login.
 fn check_redirect(raw: &str, state: &str) -> Result<String, &'static str> {
-    let u = reqwest::Url::parse(raw.trim()).map_err(|_| "That is not an address. Paste the whole address from the browser's address bar.")?;
+    let u =
+        reqwest::Url::parse(raw.trim()).map_err(|_| "That is not an address. Paste the whole address from the browser's address bar.")?;
     if !matches!(u.scheme(), "http" | "https") || !matches!(u.host_str(), Some("localhost" | "127.0.0.1" | "[::1]")) {
         return Err("That address does not start with http://localhost. Paste the address the browser ended up on after you approved.");
     }
@@ -338,7 +369,12 @@ pub async fn finish_login(State(state): St, Path(st): Path<String>, ApiJson(i): 
     let l = link(&state)?;
     let now = crate::auth::now();
     // Single use: the login is taken out now, so a pasted address cannot be replayed.
-    let (provider, exp) = state.cpa_logins.lock().unwrap_or_else(|e| e.into_inner()).remove(&st).ok_or_else(|| ApiError::new(ErrorCode::NotFound, "No such login, or it was already used."))?;
+    let (provider, exp) = state
+        .cpa_logins
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&st)
+        .ok_or_else(|| ApiError::new(ErrorCode::NotFound, "No such login, or it was already used."))?;
     if exp <= now {
         return Err(ApiError::new(ErrorCode::NotFound, "This login expired. Start it again."));
     }

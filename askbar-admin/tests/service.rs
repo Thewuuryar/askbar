@@ -20,7 +20,18 @@ fn migrations_apply_and_the_defaults_are_safe() {
         let mut stmt = db.conn().prepare("SELECT name FROM sqlite_master WHERE type = 'table'").unwrap();
         stmt.query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect()
     };
-    for t in ["admin_credentials", "providers", "settings", "display_defaults", "pair_codes", "budgets", "network_settings", "revoked_clients", "audit_keys", "audit_access"] {
+    for t in [
+        "admin_credentials",
+        "providers",
+        "settings",
+        "display_defaults",
+        "pair_codes",
+        "budgets",
+        "network_settings",
+        "revoked_clients",
+        "audit_keys",
+        "audit_access",
+    ] {
         assert!(tables.iter().any(|x| x == t), "missing {t}");
     }
     let v: i64 = db.conn().query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
@@ -30,7 +41,9 @@ fn migrations_apply_and_the_defaults_are_safe() {
     assert_eq!(creds, 0);
     let (allow, tls, kill): (i64, i64, i64) = db
         .conn()
-        .query_row("SELECT n.allowlist_enabled, n.tls_enabled, b.kill_switch FROM network_settings n, budgets b", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .query_row("SELECT n.allowlist_enabled, n.tls_enabled, b.kill_switch FROM network_settings n, budgets b", [], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        })
         .unwrap();
     assert_eq!((allow, tls, kill), (0, 0, 0));
 }
@@ -50,7 +63,10 @@ fn it_persists_and_refuses_databases_it_did_not_make() {
 
     // The server's database (a different application id) and a newer version are both refused.
     let foreign = dir.join("foreign.db");
-    rusqlite::Connection::open(&foreign).unwrap().execute_batch("CREATE TABLE t (x); PRAGMA application_id = 1095062338; PRAGMA user_version = 1;").unwrap();
+    rusqlite::Connection::open(&foreign)
+        .unwrap()
+        .execute_batch("CREATE TABLE t (x); PRAGMA application_id = 1095062338; PRAGMA user_version = 1;")
+        .unwrap();
     assert!(matches!(AdminDb::open(&foreign), Err(DbError::UnexpectedVersion { .. })));
     let newer = dir.join("newer.db");
     drop(AdminDb::open(&newer).unwrap());
@@ -160,7 +176,8 @@ fn the_binary_serves_a_socket_and_opens_no_tcp_port() {
         ("ASKBAR_ADMIN_SECRETS_DIR", secrets.to_str().unwrap()),
         ("ASKBAR_SERVER_TOKEN_DIR", server_api.to_str().unwrap()),
     ];
-    let mut child = std::process::Command::new(bin).envs(envs).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn().unwrap();
+    let mut child =
+        std::process::Command::new(bin).envs(envs).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn().unwrap();
     for _ in 0..100 {
         if sock.exists() {
             break;

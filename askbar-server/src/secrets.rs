@@ -217,12 +217,7 @@ mod tests {
         let path = dir.join("master.key");
         let db = crate::Db::open_in_memory().unwrap();
         let key = Secrets::new(KEY).unwrap();
-        db.conn()
-            .execute(
-                "INSERT INTO providers (id, api_key_enc) VALUES ('p', ?1)",
-                [key.encrypt("sk-live")],
-            )
-            .unwrap();
+        db.conn().execute("INSERT INTO providers (id, api_key_enc) VALUES ('p', ?1)", [key.encrypt("sk-live")]).unwrap();
 
         let err = ensure_key_file(&path, &db).err().expect("must refuse");
         assert!(matches!(err, SecretsError::KeyMissing { .. }));

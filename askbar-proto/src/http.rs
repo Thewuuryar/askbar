@@ -152,4 +152,3 @@ pub async fn not_found() -> ApiError {
 pub async fn method_not_allowed() -> ApiError {
     ApiError::code(ErrorCode::MethodNotAllowed)
 }
-

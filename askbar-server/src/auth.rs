@@ -5,8 +5,8 @@
 
 use crate::error::ApiError;
 use crate::AppState;
-use askbar_proto::problem::ErrorCode;
 use crate::Db;
+use askbar_proto::problem::ErrorCode;
 use axum::{
     extract::{Request, State},
     http::header,
@@ -55,7 +55,8 @@ pub fn redeem_pair_code(db: &Db, code: &str) -> rusqlite::Result<Option<String>>
         return Ok(None);
     }
     let tx = db.conn().unchecked_transaction()?;
-    let claimed = tx.execute("INSERT OR IGNORE INTO redeemed_codes (hash, client_id, redeemed_at) VALUES (?1, NULL, ?2)", params![h, now()])?;
+    let claimed =
+        tx.execute("INSERT OR IGNORE INTO redeemed_codes (hash, client_id, redeemed_at) VALUES (?1, NULL, ?2)", params![h, now()])?;
     if claimed != 1 {
         return Ok(None);
     }
@@ -76,11 +77,9 @@ pub fn redeem_pair_code(db: &Db, code: &str) -> rusqlite::Result<Option<String>>
 pub fn authenticate(db: &Db, token: &str) -> rusqlite::Result<Option<ClientAuth>> {
     let found = db
         .conn()
-        .query_row(
-            "SELECT id, user_id FROM clients WHERE hash = ?1 AND revoked_at IS NULL",
-            [hash(token)],
-            |r| Ok(ClientAuth { client_id: r.get(0)?, user_id: r.get(1)? }),
-        )
+        .query_row("SELECT id, user_id FROM clients WHERE hash = ?1 AND revoked_at IS NULL", [hash(token)], |r| {
+            Ok(ClientAuth { client_id: r.get(0)?, user_id: r.get(1)? })
+        })
         .optional()?;
     let Some(auth) = found else { return Ok(None) };
     if crate::snapshot::current(db)?.is_some_and(|s| s.revoked_client_ids.contains(&auth.client_id)) {
@@ -96,17 +95,15 @@ fn bearer(req: &Request) -> Option<&str> {
     (scheme.eq_ignore_ascii_case("bearer") && !token.trim().is_empty()).then(|| token.trim())
 }
 
-pub async fn require_client_token(
-    State(state): State<Arc<AppState>>,
-    mut req: Request,
-    next: Next,
-) -> Result<Response, ApiError> {
-    let token = bearer(&req).ok_or_else(|| ApiError::new(ErrorCode::Unauthorized, "Send the client token as `Authorization: Bearer <token>`."))?;
+pub async fn require_client_token(State(state): State<Arc<AppState>>, mut req: Request, next: Next) -> Result<Response, ApiError> {
+    let token =
+        bearer(&req).ok_or_else(|| ApiError::new(ErrorCode::Unauthorized, "Send the client token as `Authorization: Bearer <token>`."))?;
     let auth = {
         let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
         authenticate(&db, token).map_err(|_| ApiError::code(ErrorCode::Internal))?
     };
-    let auth = auth.ok_or_else(|| ApiError::new(ErrorCode::Unauthorized, "The server does not accept this token. It may have been revoked."))?;
+    let auth =
+        auth.ok_or_else(|| ApiError::new(ErrorCode::Unauthorized, "The server does not accept this token. It may have been revoked."))?;
     req.extensions_mut().insert(auth);
     Ok(next.run(req).await)
 }
@@ -123,8 +120,11 @@ pub struct ClientRow {
 
 /// All clients, newest first.
 pub fn list_clients(db: &Db) -> rusqlite::Result<Vec<ClientRow>> {
-    let mut stmt =
-        db.conn().prepare("SELECT id, name, created_at, last_seen, revoked_at IS NOT NULL FROM clients ORDER BY created_at DESC, id DESC")?;
-    let rows = stmt.query_map([], |r| Ok(ClientRow { id: r.get(0)?, name: r.get(1)?, created_at: r.get(2)?, last_seen: r.get(3)?, revoked: r.get(4)? }))?;
+    let mut stmt = db
+        .conn()
+        .prepare("SELECT id, name, created_at, last_seen, revoked_at IS NOT NULL FROM clients ORDER BY created_at DESC, id DESC")?;
+    let rows = stmt.query_map([], |r| {
+        Ok(ClientRow { id: r.get(0)?, name: r.get(1)?, created_at: r.get(2)?, last_seen: r.get(3)?, revoked: r.get(4)? })
+    })?;
     rows.collect()
 }

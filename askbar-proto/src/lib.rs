@@ -278,8 +278,13 @@ pub enum ChatEvent {
     /// Which provider is serving this reply, sent before the first delta (and again if a fallback
     /// changes it before any text). Not a delta: it has no SSE `id`. Clients that do not know it
     /// ignore it.
-    Provider { id: String, name: String },
-    Delta { text: String },
+    Provider {
+        id: String,
+        name: String,
+    },
+    Delta {
+        text: String,
+    },
     Done,
     /// `code` is the stable reason (`timed_out`, `interrupted`, `kill_switch`, `provider_error`, `internal`); clients
     /// branch on it and show `message`. Absent from servers that predate it.
@@ -418,8 +423,14 @@ mod tests {
             r#"{"id":"p","name":"n","type":"openai","model":"m","billing":"subscription","allow_as_fallback":true,"price_in":2.5,"price_out":10,"price_cached_in":0.25}"#,
         )
         .unwrap();
-        assert_eq!((p.billing, p.allow_as_fallback, p.price_in, p.price_out, p.price_cached_in), (Billing::Subscription, true, Some(2.5), Some(10.0), Some(0.25)));
-        assert!(serde_json::from_str::<SnapshotProvider>(r#"{"id":"p","name":"n","type":"openai","model":"m","billing":"free"}"#).is_err(), "only metered or subscription");
+        assert_eq!(
+            (p.billing, p.allow_as_fallback, p.price_in, p.price_out, p.price_cached_in),
+            (Billing::Subscription, true, Some(2.5), Some(10.0), Some(0.25))
+        );
+        assert!(
+            serde_json::from_str::<SnapshotProvider>(r#"{"id":"p","name":"n","type":"openai","model":"m","billing":"free"}"#).is_err(),
+            "only metered or subscription"
+        );
         // And it serializes back to the same words.
         assert!(serde_json::to_string(&p).unwrap().contains(r#""billing":"subscription""#));
     }

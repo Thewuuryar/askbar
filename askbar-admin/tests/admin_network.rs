@@ -14,14 +14,21 @@ async fn saving_normalises_and_encrypts_the_token() {
     let t = start(true).await;
     let (st, v) = t.call(M::GET, "/admin/api/v1/network", json!({})).await;
     assert_eq!(st, 200);
-    assert_eq!((v["tls_enabled"].as_bool(), v["has_token"].as_bool(), v["allowlist_enabled"].as_bool()), (Some(false), Some(false), Some(false)), "everything starts off");
+    assert_eq!(
+        (v["tls_enabled"].as_bool(), v["has_token"].as_bool(), v["allowlist_enabled"].as_bool()),
+        (Some(false), Some(false), Some(false)),
+        "everything starts off"
+    );
     assert_eq!(v["public_url"], "http://localhost:8080");
 
     let (st, v) = t.save(full()).await;
     assert_eq!(st, 200, "{v}");
     assert_eq!(v["hostname"], "askbar.orraitu.com", "lower-cased");
     assert_eq!(v["admin_cidr"], "192.168.1.0/24 10.0.0.5/32", "normalised");
-    assert_eq!((v["tls_enabled"].as_bool(), v["acme_staging"].as_bool(), v["has_token"].as_bool(), v["allowlist_enabled"].as_bool()), (Some(true), Some(true), Some(true), Some(true)));
+    assert_eq!(
+        (v["tls_enabled"].as_bool(), v["acme_staging"].as_bool(), v["has_token"].as_bool(), v["allowlist_enabled"].as_bool()),
+        (Some(true), Some(true), Some(true), Some(true))
+    );
     assert_eq!(v["public_url"], "https://askbar.orraitu.com");
     assert!(!v.to_string().contains(TOKEN) && !v.to_string().contains("cloudflare_token"), "write-only");
 
@@ -98,7 +105,17 @@ async fn http_mode_saves_without_a_token_and_pairing_follows_the_setting() {
         let url = format!("{}/admin/api/v1/pairings", t.adm);
         let (http, cookie) = (t.http.clone(), t.cookie.clone());
         async move {
-            let v: Value = http.post(url).header("x-askbar-admin", "1").header("cookie", cookie).json(&json!({})).send().await.unwrap().json().await.unwrap();
+            let v: Value = http
+                .post(url)
+                .header("x-askbar-admin", "1")
+                .header("cookie", cookie)
+                .json(&json!({}))
+                .send()
+                .await
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
             askbar_proto::decode_pairing(v["pairing"].as_str().unwrap()).unwrap().0
         }
     };

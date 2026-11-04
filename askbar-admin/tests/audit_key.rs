@@ -86,7 +86,11 @@ async fn the_audit_key_setup_checks_the_passphrase_makes_one_key_and_refuses_a_s
     assert!(!String::from_utf8_lossy(&dump).contains(good));
 
     // The public half reached the server in the snapshot; nothing else of the key did.
-    let pushed = askbar_server::snapshot::current(&t.server.db.lock().unwrap()).unwrap().unwrap().audit_public_key.expect("the server has the public key");
+    let pushed = askbar_server::snapshot::current(&t.server.db.lock().unwrap())
+        .unwrap()
+        .unwrap()
+        .audit_public_key
+        .expect("the server has the public key");
     assert_eq!(pushed.key_id, key_id);
     assert_eq!(pushed.public_key.len(), 64);
     assert_eq!(pushed.public_key, row.public_key.iter().map(|b| format!("{b:02x}")).collect::<String>());
@@ -97,7 +101,14 @@ async fn the_audit_key_setup_checks_the_passphrase_makes_one_key_and_refuses_a_s
     assert_eq!(t.admin.db.lock().await.active_audit_key().unwrap().unwrap().key_id, key_id);
 
     // It needs a signed-in session like the rest of the admin API.
-    let r = t.http.put(format!("{}/admin/api/v1/setup/audit-key", t.adm)).header("x-askbar-admin", "1").json(&json!({ "passphrase": good, "confirm": good })).send().await.unwrap();
+    let r = t
+        .http
+        .put(format!("{}/admin/api/v1/setup/audit-key", t.adm))
+        .header("x-askbar-admin", "1")
+        .json(&json!({ "passphrase": good, "confirm": good }))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(r.status(), 401);
 }
 
@@ -166,7 +177,15 @@ async fn a_wrong_passphrase_is_403_is_recorded_and_returns_no_content() {
     let t = common::start(true).await;
     let (span, text) = server_with_sealed_reply(&t).await;
     let wrong = "another passphrase of good length";
-    let r = t.http.post(format!("{}/admin/api/v1/audit/payloads/{span}/open", t.adm)).header("x-askbar-admin", "1").header("cookie", &t.cookie).json(&json!({ "passphrase": wrong })).send().await.unwrap();
+    let r = t
+        .http
+        .post(format!("{}/admin/api/v1/audit/payloads/{span}/open", t.adm))
+        .header("x-askbar-admin", "1")
+        .header("cookie", &t.cookie)
+        .json(&json!({ "passphrase": wrong }))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(r.status(), 403);
     let body = r.text().await.unwrap();
     assert!(!body.contains(&text) && !body.contains(wrong) && !body.contains("\"text\""), "{body}");
@@ -193,7 +212,14 @@ async fn five_wrong_passphrases_lock_opening_out_even_for_the_right_one_and_unkn
     assert_eq!(body["error"], "too_many_attempts");
     assert_eq!(access_rows(&t).await.len(), 5, "a refused attempt is not an open, so nothing more is recorded");
     // The login is a different lock: signing in still works.
-    let r = t.http.post(format!("{}/admin/api/v1/session", t.adm)).header("x-askbar-admin", "1").json(&json!({ "password": common::PW })).send().await.unwrap();
+    let r = t
+        .http
+        .post(format!("{}/admin/api/v1/session", t.adm))
+        .header("x-askbar-admin", "1")
+        .json(&json!({ "password": common::PW }))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(r.status(), 204);
 
     let t2 = common::start(true).await;
@@ -264,7 +290,11 @@ async fn rotation_adds_a_key_retires_the_old_one_and_each_payload_opens_with_its
     assert_eq!((st, b["payloads"][0]["text"].as_str()), (200, Some(new_text)));
     assert_eq!(b["payloads"][0]["key_id"], new_id.as_str());
     let (st, b) = open(&old_span, PASS).await;
-    assert_eq!((st, b["payloads"][0]["text"].as_str()), (200, Some(old_text.as_str())), "the old content still opens, with the old passphrase");
+    assert_eq!(
+        (st, b["payloads"][0]["text"].as_str()),
+        (200, Some(old_text.as_str())),
+        "the old content still opens, with the old passphrase"
+    );
     assert_eq!(b["payloads"][0]["key_id"], old_key.key_id.as_str());
     // A passphrase opens only what its own key sealed.
     assert_eq!(open(&old_span, new_pass).await.0, 403);
@@ -274,7 +304,13 @@ async fn rotation_adds_a_key_retires_the_old_one_and_each_payload_opens_with_its
 #[tokio::test]
 async fn rotation_needs_an_existing_key_and_a_reachable_server() {
     let t = common::start(true).await;
-    let (st, _) = t.call(M::POST, "/admin/api/v1/audit/rotate-key", json!({ "current": PASS, "new": "another long enough passphrase", "confirm": "another long enough passphrase" })).await;
+    let (st, _) = t
+        .call(
+            M::POST,
+            "/admin/api/v1/audit/rotate-key",
+            json!({ "current": PASS, "new": "another long enough passphrase", "confirm": "another long enough passphrase" }),
+        )
+        .await;
     assert_eq!(st, 409, "no key yet");
 }
 
@@ -337,8 +373,14 @@ async fn the_access_history_lists_every_open_newest_first_without_content_and_ne
     let (st, list) = t.call(M::GET, "/admin/api/v1/audit/access", json!({})).await;
     assert_eq!(st, 200);
     let rows = list["access"].as_array().unwrap();
-    assert_eq!(rows.iter().map(|r| r["ok"].as_bool().unwrap()).collect::<Vec<_>>(), [true, true, false], "newest first; the wrong guess is there too");
-    assert!(rows.iter().all(|r| r["span_id"] == span.as_str() && r["key_id"].as_str().unwrap().len() == 16 && r["opened_at"].as_i64().unwrap() > 0));
+    assert_eq!(
+        rows.iter().map(|r| r["ok"].as_bool().unwrap()).collect::<Vec<_>>(),
+        [true, true, false],
+        "newest first; the wrong guess is there too"
+    );
+    assert!(rows
+        .iter()
+        .all(|r| r["span_id"] == span.as_str() && r["key_id"].as_str().unwrap().len() == 16 && r["opened_at"].as_i64().unwrap() > 0));
     let body = list.to_string();
     assert!(!body.contains(&text) && !body.contains(PASS) && !body.contains("passphrase"), "no content, no passphrase: {body}");
     assert!(rows[0]["id"].as_i64().unwrap() > rows[1]["id"].as_i64().unwrap());
@@ -369,7 +411,11 @@ async fn the_settings_show_the_active_key_id_and_keep_the_retention_between_7_an
     assert!(s["detail"].as_str().unwrap().contains("at least 7 days"), "{s}");
     let (_, s) = t.call(M::GET, "/admin/api/v1/settings", json!({})).await;
     assert_eq!(s["audit_retention_days"], 3650, "refused values changed nothing; the last accepted one stands");
-    assert_eq!(askbar_server::snapshot::current(&t.server.db.lock().unwrap()).unwrap().unwrap().audit_retention_days, 3650, "and the server has it");
+    assert_eq!(
+        askbar_server::snapshot::current(&t.server.db.lock().unwrap()).unwrap().unwrap().audit_retention_days,
+        3650,
+        "and the server has it"
+    );
     // A save that leaves it out keeps it.
     let without = json!({ "system_prompt": "y", "display": disp });
     assert_eq!(t.call(M::PUT, "/admin/api/v1/settings", without).await.0, 204);

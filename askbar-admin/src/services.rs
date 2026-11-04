@@ -26,16 +26,27 @@ fn unreachable(msg: &str) -> Failure {
 }
 
 fn control(state: &AdminState) -> Result<Arc<crate::control_link::ControlLink>, Failure> {
-    state.control.lock().unwrap_or_else(|e| e.into_inner()).clone().ok_or_else(|| unreachable("The controller is not set up, so services cannot be controlled from here."))
+    state
+        .control
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+        .ok_or_else(|| unreachable("The controller is not set up, so services cannot be controlled from here."))
 }
 
 fn passthrough(status: u16, body: Vec<u8>) -> Result<Response, Failure> {
     if status != 200 {
         // The controller speaks problems too; pass its sentence on without its status.
-        let detail = serde_json::from_slice::<serde_json::Value>(&body).ok().and_then(|v| v["detail"].as_str().map(String::from)).unwrap_or_else(|| format!("The controller answered {status}."));
+        let detail = serde_json::from_slice::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|v| v["detail"].as_str().map(String::from))
+            .unwrap_or_else(|| format!("The controller answered {status}."));
         return Err(if status == 404 { ApiError::new(ErrorCode::NotFound, detail) } else { unreachable(&detail) });
     }
-    Response::builder().header(header::CONTENT_TYPE, "application/json").body(axum::body::Body::from(body)).map_err(|_| ApiError::code(ErrorCode::Internal))
+    Response::builder()
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(axum::body::Body::from(body))
+        .map_err(|_| ApiError::code(ErrorCode::Internal))
 }
 
 fn recent(db: &crate::AdminDb) -> serde_json::Value {
@@ -77,7 +88,8 @@ pub async fn act(State(state): St, Path((name, action)): Path<(String, String)>)
             q.pop_front();
         }
         if q.len() >= MAX_ACTIONS {
-            return Err(ApiError::new(ErrorCode::TooManyAttempts, "Too many service actions in a minute. Wait a little and try again.").retry_after(WINDOW_SECS as u64));
+            return Err(ApiError::new(ErrorCode::TooManyAttempts, "Too many service actions in a minute. Wait a little and try again.")
+                .retry_after(WINDOW_SECS as u64));
         }
         q.push_back(now);
     }

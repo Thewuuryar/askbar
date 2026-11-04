@@ -32,7 +32,13 @@ pub struct Prices {
 
 impl Prices {
     pub fn of(p: &SnapshotProvider) -> Prices {
-        Prices { billing: p.billing, input: p.price_in, output: p.price_out, cached_input: p.price_cached_in, includes_cached: p.kind != "anthropic" }
+        Prices {
+            billing: p.billing,
+            input: p.price_in,
+            output: p.price_out,
+            cached_input: p.price_cached_in,
+            includes_cached: p.kind != "anthropic",
+        }
     }
 }
 

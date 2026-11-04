@@ -4,7 +4,12 @@
 mod common;
 
 use askbar_admin::control_link::ControlLink;
-use axum::{extract::{Path, State}, http::HeaderMap, routing::{get, post}, Json, Router};
+use axum::{
+    extract::{Path, State},
+    http::HeaderMap,
+    routing::{get, post},
+    Json, Router,
+};
 use common::*;
 use reqwest::Method as M;
 use serde_json::{json, Value};
@@ -57,7 +62,10 @@ async fn services_are_listed_and_actions_reach_the_controller_with_its_token() {
 
     // The attempt is on record.
     let (_, v) = t.call(M::GET, "/admin/api/v1/services", json!(null)).await;
-    assert_eq!((v["recent"][0]["service"].as_str(), v["recent"][0]["action"].as_str(), v["recent"][0]["ok"].clone()), (Some("cpa"), Some("start"), json!(true)));
+    assert_eq!(
+        (v["recent"][0]["service"].as_str(), v["recent"][0]["action"].as_str(), v["recent"][0]["ok"].clone()),
+        (Some("cpa"), Some("start"), json!(true))
+    );
 }
 
 #[tokio::test]
@@ -78,11 +86,22 @@ async fn an_admin_api_key_cannot_control_services() {
     let (_, k) = t.call(M::POST, "/admin/api/v1/keys", json!({ "name": "script" })).await;
     let key = k["key"].as_str().unwrap();
     for (m, path) in [(M::GET, "/admin/api/v1/services"), (M::POST, "/admin/api/v1/services/server/restart")] {
-        let r = reqwest::Client::new().request(m, format!("{}{path}", t.adm)).bearer_auth(key).header("X-Askbar-Admin", "1").send().await.unwrap();
+        let r = reqwest::Client::new()
+            .request(m, format!("{}{path}", t.adm))
+            .bearer_auth(key)
+            .header("X-Askbar-Admin", "1")
+            .send()
+            .await
+            .unwrap();
         assert_eq!(r.status(), 401, "{path}");
     }
     // And no session at all.
-    let r = reqwest::Client::new().post(format!("{}/admin/api/v1/services/server/restart", t.adm)).header("X-Askbar-Admin", "1").send().await.unwrap();
+    let r = reqwest::Client::new()
+        .post(format!("{}/admin/api/v1/services/server/restart", t.adm))
+        .header("X-Askbar-Admin", "1")
+        .send()
+        .await
+        .unwrap();
     assert_eq!(r.status(), 401);
     assert!(fake.calls.lock().unwrap().is_empty());
 }

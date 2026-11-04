@@ -1,10 +1,10 @@
 //! Askbar server: the client API and, on its own listener, the server API the admin service uses.
 
-pub mod client_api;
 pub mod audit;
 pub mod auth;
 pub mod backup;
 pub mod chat;
+pub mod client_api;
 pub mod cost;
 pub mod db;
 pub mod error;
@@ -12,18 +12,18 @@ pub mod generation;
 pub mod ids;
 pub mod llm;
 pub mod models;
-pub mod server_api;
 pub mod provider_test;
 pub mod router;
 pub mod routes;
 pub mod seal;
 pub mod secrets;
+pub mod server_api;
 pub mod snapshot;
 pub mod store;
 #[doc(hidden)]
 pub mod testing;
 
-pub use db::{make_title, ConversationSummary, Db, DbError, Generation, SearchHit, StoredMessage};
+use askbar_proto::problem::ErrorCode;
 use askbar_proto::{Health, PairRequest, PairResponse};
 use axum::{
     extract::{Request, State},
@@ -33,7 +33,7 @@ use axum::{
     response::Response,
     Json, Router,
 };
-use askbar_proto::problem::ErrorCode;
+pub use db::{make_title, ConversationSummary, Db, DbError, Generation, SearchHit, StoredMessage};
 use error::{ApiError, ApiJson};
 use secrets::Secrets;
 use std::sync::{Arc, Mutex};
@@ -57,7 +57,15 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(db: Db, secrets: Secrets, min_client: &str) -> Arc<AppState> {
-        Arc::new(AppState { db: Mutex::new(db), secrets: Arc::new(secrets), http: llm::http_client(), min_client: min_client.to_string(), generations: Default::default(), audit: audit::Recorder::noop(), generation_timeout_override: Mutex::new(None) })
+        Arc::new(AppState {
+            db: Mutex::new(db),
+            secrets: Arc::new(secrets),
+            http: llm::http_client(),
+            min_client: min_client.to_string(),
+            generations: Default::default(),
+            audit: audit::Recorder::noop(),
+            generation_timeout_override: Mutex::new(None),
+        })
     }
 
     /// Gives a fresh state an audit recorder. `new` keeps its signature and records nothing, so
@@ -156,7 +164,9 @@ async fn pair(State(state): State<Arc<AppState>>, ApiJson(req): ApiJson<PairRequ
     let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
     match auth::redeem_pair_code(&db, req.code.trim()) {
         Ok(Some(token)) => Ok(Json(PairResponse { token })),
-        Ok(None) => Err(ApiError::new(ErrorCode::Unauthorized, "That pairing code is not valid. It may have expired or been used already.")),
+        Ok(None) => {
+            Err(ApiError::new(ErrorCode::Unauthorized, "That pairing code is not valid. It may have expired or been used already."))
+        }
         Err(_) => Err(ApiError::code(ErrorCode::Internal)),
     }
 }
@@ -169,4 +179,3 @@ async fn log_requests(req: Request, next: Next) -> Response {
     tracing::info!(%method, %path, status = res.status().as_u16(), "request");
     res
 }
-

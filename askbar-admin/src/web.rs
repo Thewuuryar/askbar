@@ -3,10 +3,10 @@
 //! ignored, so no token of any kind opens the admin.
 
 use crate::{auth::SESSION_TTL_SECS, AdminState};
-use askbar_proto::http::{ApiError, ApiJson};
-use askbar_proto::problem::ErrorCode;
 use argon2::password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 use argon2::Argon2;
+use askbar_proto::http::{ApiError, ApiJson};
+use askbar_proto::problem::ErrorCode;
 use axum::{
     extract::{Request, State},
     http::{header, HeaderMap, HeaderValue, Method, StatusCode},
@@ -61,10 +61,8 @@ fn session_cookie(headers: &HeaderMap) -> Option<String> {
 fn set_cookie(headers: &HeaderMap, value: &str, max_age: i64) -> HeaderValue {
     // Behind the TLS proxy the app itself sees plain http; trust its hint to mark the cookie Secure.
     let secure = headers.get("x-forwarded-proto").and_then(|v| v.to_str().ok()) == Some("https");
-    let c = format!(
-        "{COOKIE_NAME}={value}; HttpOnly; SameSite=Strict; Path=/admin; Max-Age={max_age}{}",
-        if secure { "; Secure" } else { "" }
-    );
+    let c =
+        format!("{COOKIE_NAME}={value}; HttpOnly; SameSite=Strict; Path=/admin; Max-Age={max_age}{}", if secure { "; Secure" } else { "" });
     HeaderValue::from_str(&c).expect("cookie is plain ASCII")
 }
 
@@ -156,7 +154,12 @@ pub async fn require_admin_auth(State(state): State<Arc<AdminState>>, req: Reque
     if let Some(secs) = state.auth.lockout_remaining() {
         return Err(too_many_attempts(secs));
     }
-    let key = value.to_str().ok().and_then(|v| v.split_once(' ')).filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer")).map(|(_, k)| k.trim().to_string());
+    let key = value
+        .to_str()
+        .ok()
+        .and_then(|v| v.split_once(' '))
+        .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer"))
+        .map(|(_, k)| k.trim().to_string());
     let scope = match key {
         Some(k) => {
             let db = state.db.lock().await;
@@ -177,9 +180,12 @@ pub async fn require_admin_auth(State(state): State<Arc<AdminState>>, req: Reque
 fn too_many_attempts(secs: i64) -> ApiError {
     let secs = secs.max(1) as u64;
     let wait = ((secs + 59) / 60).max(1);
-    ApiError::new(ErrorCode::TooManyAttempts, format!("Too many wrong passwords or keys. Try again in {wait} minute{}.", if wait == 1 { "" } else { "s" }))
-        .retry_after(secs)
-        .no_challenge()
+    ApiError::new(
+        ErrorCode::TooManyAttempts,
+        format!("Too many wrong passwords or keys. Try again in {wait} minute{}.", if wait == 1 { "" } else { "s" }),
+    )
+    .retry_after(secs)
+    .no_challenge()
 }
 
 // -------------------------------------------------------------------- handlers
@@ -224,7 +230,11 @@ pub async fn setup_status(State(state): State<Arc<AdminState>>) -> Json<serde_js
 }
 
 /// First run: the first visitor chooses the admin password and is signed in. Refused once one exists.
-pub async fn setup_password(State(state): State<Arc<AdminState>>, headers: HeaderMap, ApiJson(body): ApiJson<Login>) -> Result<Response, Failure> {
+pub async fn setup_password(
+    State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+    ApiJson(body): ApiJson<Login>,
+) -> Result<Response, Failure> {
     check_new_password(&body.password)?;
     let password = body.password;
     let hash = tokio::task::spawn_blocking(move || hash_password(&password))
@@ -259,7 +269,11 @@ pub struct ChangePassword {
 }
 
 /// Change the password. The current one is required; every other session is signed out.
-pub async fn change_password(State(state): State<Arc<AdminState>>, headers: HeaderMap, ApiJson(body): ApiJson<ChangePassword>) -> Result<StatusCode, Failure> {
+pub async fn change_password(
+    State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+    ApiJson(body): ApiJson<ChangePassword>,
+) -> Result<StatusCode, Failure> {
     if state.auth.lockout_remaining().is_some() {
         return Err(ApiError::code(ErrorCode::TooManyAttempts).no_challenge());
     }
@@ -280,7 +294,10 @@ pub async fn change_password(State(state): State<Arc<AdminState>>, headers: Head
     {
         let db = state.db.lock().await;
         db.conn()
-            .execute("UPDATE admin_credentials SET password_hash = ?1, updated_at = ?2 WHERE id = 1", rusqlite::params![hash, crate::auth::now()])
+            .execute(
+                "UPDATE admin_credentials SET password_hash = ?1, updated_at = ?2 WHERE id = 1",
+                rusqlite::params![hash, crate::auth::now()],
+            )
             .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Could not save the password."))?;
     }
     state.auth.keep_only(session_cookie(&headers).as_deref());

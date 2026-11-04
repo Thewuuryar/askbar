@@ -2,15 +2,14 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod client_config;
+mod outbox;
 mod remote;
 mod tokens;
-mod outbox;
 mod types;
 
 use askbar_proto::{Conversation, Message};
 use client_config::Ui;
 use remote::Remote;
-use types::{Settings, StreamEvent};
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, RwLock};
@@ -20,6 +19,7 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{ipc::Channel, AppHandle, Emitter, LogicalSize, Manager, Monitor, PhysicalPosition, State, WebviewWindow, WindowEvent};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 use tokio::sync::oneshot;
+use types::{Settings, StreamEvent};
 
 /// Ignore focus-loss events this soon after showing; some window managers
 /// send a spurious one while the window is being mapped.
@@ -68,10 +68,8 @@ fn pick_monitor(w: &WebviewWindow) -> Option<Monitor> {
     if let (Ok(cur), Ok(monitors)) = (w.cursor_position(), w.available_monitors()) {
         for m in monitors {
             let (p, s) = (m.position(), m.size());
-            let inside = cur.x >= p.x as f64
-                && cur.x < p.x as f64 + s.width as f64
-                && cur.y >= p.y as f64
-                && cur.y < p.y as f64 + s.height as f64;
+            let inside =
+                cur.x >= p.x as f64 && cur.x < p.x as f64 + s.width as f64 && cur.y >= p.y as f64 && cur.y < p.y as f64 + s.height as f64;
             if inside {
                 return Some(m);
             }
@@ -336,9 +334,7 @@ fn hide_window(app: AppHandle) {
 #[tauri::command]
 fn open_config() -> Result<(), String> {
     let path = client_config::path();
-    opener::open(&path)
-        .or_else(|_| opener::reveal(&path))
-        .map_err(|e| format!("Could not open {}: {e}", path.display()))
+    opener::open(&path).or_else(|_| opener::reveal(&path)).map_err(|e| format!("Could not open {}: {e}", path.display()))
 }
 
 #[tauri::command]

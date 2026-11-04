@@ -65,10 +65,7 @@ impl Provider {
         if var.is_empty() {
             return None;
         }
-        std::env::var(var)
-            .ok()
-            .map(|v| v.trim().to_string())
-            .filter(|v| !v.is_empty())
+        std::env::var(var).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
     }
 }
 
@@ -205,10 +202,7 @@ fn messages_url(p: &Provider) -> String {
 }
 
 pub fn build_body(p: &Provider, system: &str, messages: &[ChatMessage]) -> Value {
-    let msgs: Vec<Value> = messages
-        .iter()
-        .map(|m| json!({ "role": m.role, "content": m.content }))
-        .collect();
+    let msgs: Vec<Value> = messages.iter().map(|m| json!({ "role": m.role, "content": m.content })).collect();
     match p.kind {
         ProviderKind::OpenAi => {
             let mut all = Vec::with_capacity(msgs.len() + 1);
@@ -268,10 +262,7 @@ fn build_request(
     messages: &[ChatMessage],
 ) -> Result<reqwest::RequestBuilder, ChatError> {
     let key = p.resolve_key();
-    let mut req = client
-        .post(messages_url(p))
-        .header("accept", "text/event-stream")
-        .json(&build_body(p, system, messages));
+    let mut req = client.post(messages_url(p)).header("accept", "text/event-stream").json(&build_body(p, system, messages));
     match p.kind {
         ProviderKind::OpenAi => {
             if let Some(k) = key {
@@ -290,11 +281,8 @@ fn build_request(
 }
 
 fn missing_key(p: &Provider) -> ChatError {
-    let hint = if p.api_key_env.trim().is_empty() {
-        "set api_key".to_string()
-    } else {
-        format!("set api_key or export {}", p.api_key_env.trim())
-    };
+    let hint =
+        if p.api_key_env.trim().is_empty() { "set api_key".to_string() } else { format!("set api_key or export {}", p.api_key_env.trim()) };
     ChatError::Config(format!("No API key for provider \"{}\". In config.yaml, {hint}.", p.name))
 }
 
@@ -314,11 +302,7 @@ fn count(v: &Value) -> Option<u64> {
 }
 
 fn error_message(v: &Value) -> String {
-    v.get("message")
-        .and_then(Value::as_str)
-        .or_else(|| v.as_str())
-        .map(str::to_string)
-        .unwrap_or_else(|| v.to_string())
+    v.get("message").and_then(Value::as_str).or_else(|| v.as_str()).map(str::to_string).unwrap_or_else(|| v.to_string())
 }
 
 pub fn decode_event(kind: ProviderKind, ev: &SseEvent) -> Result<Step, ChatError> {
@@ -368,10 +352,9 @@ pub fn decode_event(kind: ProviderKind, ev: &SseEvent) -> Result<Step, ChatError
                     }))
                 }
                 // ...and the output count follows as a running total, the last one being final.
-                "message_delta" if v["usage"].is_object() => Ok(Step::Usage(Usage {
-                    output: count(&v["usage"]["output_tokens"]),
-                    ..Default::default()
-                })),
+                "message_delta" if v["usage"].is_object() => {
+                    Ok(Step::Usage(Usage { output: count(&v["usage"]["output_tokens"]), ..Default::default() }))
+                }
                 "message_stop" => Ok(Step::Done),
                 "error" => Err(ChatError::Stream(error_message(&v["error"]))),
                 _ => Ok(Step::Skip),
@@ -424,10 +407,7 @@ pub async fn stream_chat<F>(
 where
     F: FnMut(&str),
 {
-    stream_chat_report(client, provider, system, messages, cancel, on_delta)
-        .await
-        .map(|r| r.outcome)
-        .map_err(|e| e.error)
+    stream_chat_report(client, provider, system, messages, cancel, on_delta).await.map(|r| r.outcome).map_err(|e| e.error)
 }
 
 /// Like `stream_chat`, and also says how it went: timings, the HTTP status, `Retry-After`. On
@@ -528,11 +508,7 @@ where
         .map(Duration::from_secs);
     if !status.is_success() {
         let body = resp.text().await.unwrap_or_default();
-        return Err(ChatError::Api {
-            provider: provider.name.clone(),
-            status: status.as_u16(),
-            message: extract_api_error(&body),
-        });
+        return Err(ChatError::Api { provider: provider.name.clone(), status: status.as_u16(), message: extract_api_error(&body) });
     }
 
     // Counts arrive in pieces on some APIs; they are merged as they come.
@@ -750,10 +726,7 @@ mod tests {
     #[test]
     fn decode_openai() {
         let k = ProviderKind::OpenAi;
-        assert_eq!(
-            decode_event(k, &ev(r#"{"choices":[{"delta":{"content":"Hi"}}]}"#)).unwrap(),
-            Step::Delta("Hi".into())
-        );
+        assert_eq!(decode_event(k, &ev(r#"{"choices":[{"delta":{"content":"Hi"}}]}"#)).unwrap(), Step::Delta("Hi".into()));
         // role-only first chunk, empty content, and non-JSON all skip
         assert_eq!(decode_event(k, &ev(r#"{"choices":[{"delta":{"role":"assistant"}}]}"#)).unwrap(), Step::Skip);
         assert_eq!(decode_event(k, &ev(r#"{"choices":[{"delta":{"content":""}}]}"#)).unwrap(), Step::Skip);
@@ -767,8 +740,7 @@ mod tests {
     fn decode_anthropic() {
         let k = ProviderKind::Anthropic;
         assert_eq!(
-            decode_event(k, &ev(r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Yo"}}"#))
-                .unwrap(),
+            decode_event(k, &ev(r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Yo"}}"#)).unwrap(),
             Step::Delta("Yo".into())
         );
         for skip in [
@@ -790,9 +762,10 @@ mod tests {
         assert_eq!(decode_event(k, &ev(delta)).unwrap(), Step::Usage(Usage { output: Some(15), ..Default::default() }));
         // Without the cache fields they stay unknown rather than 0.
         let bare = r#"{"type":"message_start","message":{"usage":{"input_tokens":7}}}"#;
-        assert!(matches!(decode_event(k, &ev(bare)).unwrap(), Step::Usage(u) if u.input == Some(7) && u.cache_read.is_none() && u.cache_write.is_none()));
-        let err = decode_event(k, &ev(r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#))
-            .unwrap_err();
+        assert!(
+            matches!(decode_event(k, &ev(bare)).unwrap(), Step::Usage(u) if u.input == Some(7) && u.cache_read.is_none() && u.cache_write.is_none())
+        );
+        let err = decode_event(k, &ev(r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#)).unwrap_err();
         assert!(err.to_string().contains("Overloaded"));
     }
 

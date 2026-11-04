@@ -29,10 +29,7 @@ fn die(e: impl std::fmt::Display, code: i32) -> ! {
 /// `askbar-server healthcheck`: GET the local API health endpoint; exit 0 if it answers 200.
 fn run_healthcheck() -> ! {
     use std::io::{Read, Write};
-    let port = std::env::var("ASKBAR_CLIENT_API_ADDR")
-        .ok()
-        .and_then(|a| a.parse::<SocketAddr>().ok())
-        .map_or(8080, |a| a.port());
+    let port = std::env::var("ASKBAR_CLIENT_API_ADDR").ok().and_then(|a| a.parse::<SocketAddr>().ok()).map_or(8080, |a| a.port());
     let ok = (|| -> std::io::Result<bool> {
         let timeout = std::time::Duration::from_secs(2);
         let mut s = std::net::TcpStream::connect_timeout(&SocketAddr::from(([127, 0, 0, 1], port)), timeout)?;

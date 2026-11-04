@@ -103,8 +103,11 @@ pub fn create(conn: &Connection, name: &str, now: i64) -> Result<(KeyRow, String
 
 /// The keys that can still be used (at most one).
 pub fn list(conn: &Connection) -> rusqlite::Result<Vec<KeyRow>> {
-    let mut stmt = conn.prepare("SELECT id, name, scope, created_at, last_used_at FROM admin_api_keys WHERE revoked_at IS NULL ORDER BY created_at, id")?;
-    let rows = stmt.query_map([], |r| Ok(KeyRow { id: r.get(0)?, name: r.get(1)?, scope: r.get(2)?, created_at: r.get(3)?, last_used_at: r.get(4)? }))?;
+    let mut stmt = conn
+        .prepare("SELECT id, name, scope, created_at, last_used_at FROM admin_api_keys WHERE revoked_at IS NULL ORDER BY created_at, id")?;
+    let rows = stmt.query_map([], |r| {
+        Ok(KeyRow { id: r.get(0)?, name: r.get(1)?, scope: r.get(2)?, created_at: r.get(3)?, last_used_at: r.get(4)? })
+    })?;
     rows.collect()
 }
 
@@ -119,7 +122,9 @@ pub fn authenticate(conn: &Connection, key: &str, now: i64) -> rusqlite::Result<
         return Ok(None);
     }
     let found: Option<(String, String, Option<i64>)> = conn
-        .query_row("SELECT id, scope, last_used_at FROM admin_api_keys WHERE hash = ?1 AND revoked_at IS NULL", [hash(key)], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .query_row("SELECT id, scope, last_used_at FROM admin_api_keys WHERE hash = ?1 AND revoked_at IS NULL", [hash(key)], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        })
         .optional()?;
     let Some((id, scope, last)) = found else { return Ok(None) };
     if last.is_none_or(|t| now - t >= TOUCH_EVERY_SECS) {
@@ -148,10 +153,8 @@ mod tests {
         let (row, key) = create(d.conn(), "  build server ", 100).unwrap();
         assert_eq!((row.name.as_str(), row.scope.as_str(), row.created_at, row.last_used_at), ("build server", "admin", 100, None));
         // Nothing in the table holds the key.
-        let (stored_hash, dump): (String, String) = d
-            .conn()
-            .query_row("SELECT hash, id || name || hash || scope FROM admin_api_keys", [], |r| Ok((r.get(0)?, r.get(1)?)))
-            .unwrap();
+        let (stored_hash, dump): (String, String) =
+            d.conn().query_row("SELECT hash, id || name || hash || scope FROM admin_api_keys", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
         assert_eq!(stored_hash, hash(&key));
         assert!(!dump.contains(&key));
     }

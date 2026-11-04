@@ -60,7 +60,11 @@ async fn first_run_password() {
     assert_eq!(t.status().await, json!({ "password_set": true, "audit_key_set": false }));
     let stored: String = t.state.db.lock().await.conn().query_row("SELECT password_hash FROM admin_credentials", [], |r| r.get(0)).unwrap();
     assert!(stored.starts_with("$argon2") && !stored.contains(PW));
-    assert_eq!(t.call(M::PUT, "/admin/api/v1/setup/password", None, json!({ "password": "someone else 999" })).await.0, 409, "only the first visitor can set it");
+    assert_eq!(
+        t.call(M::PUT, "/admin/api/v1/setup/password", None, json!({ "password": "someone else 999" })).await.0,
+        409,
+        "only the first visitor can set it"
+    );
     assert_eq!(t.call(M::POST, "/admin/api/v1/session", None, json!({ "password": PW })).await.0, 204);
 }
 

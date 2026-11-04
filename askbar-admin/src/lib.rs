@@ -3,7 +3,6 @@
 //! only through the server's server API. It listens on a unix socket, never on a TCP port.
 #![cfg(unix)]
 
-
 pub mod admin_api;
 pub mod api_key;
 pub mod audit_key;
@@ -12,19 +11,14 @@ pub mod caddy;
 pub mod control_link;
 pub mod cpa;
 pub mod db;
-pub mod server_link;
 pub mod network;
 pub mod routes;
 pub mod secrets;
+pub mod server_link;
 pub mod services;
 pub mod web;
 
-use axum::{
-    http::StatusCode,
-    middleware,
-    response::Redirect,
-    Router,
-};
+use axum::{http::StatusCode, middleware, response::Redirect, Router};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;

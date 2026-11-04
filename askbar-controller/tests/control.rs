@@ -187,7 +187,11 @@ async fn a_token_is_needed_and_a_wrong_one_or_the_hash_is_refused() {
 #[tokio::test]
 async fn docker_being_away_is_a_502_problem() {
     let t = start().await;
-    let cfg = Arc::new(Config { docker: Docker::new(t.dir.join("nothing.sock")), project: PROJECT.into(), token_hash_file: t.dir.join("token.sha256") });
+    let cfg = Arc::new(Config {
+        docker: Docker::new(t.dir.join("nothing.sock")),
+        project: PROJECT.into(),
+        token_hash_file: t.dir.join("token.sha256"),
+    });
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}/api/control/v1/services", l.local_addr().unwrap());
     tokio::spawn(async move { axum::serve(l, router(cfg)).await.unwrap() });

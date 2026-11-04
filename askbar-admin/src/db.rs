@@ -178,7 +178,9 @@ fn read_key(r: &rusqlite::Row<'_>) -> rusqlite::Result<AuditKeyRow> {
     let salt: Vec<u8> = r.get(2)?;
     Ok(AuditKeyRow {
         key_id: r.get(0)?,
-        public_key: public.try_into().map_err(|_| rusqlite::Error::InvalidColumnType(1, "public_key".into(), rusqlite::types::Type::Blob))?,
+        public_key: public
+            .try_into()
+            .map_err(|_| rusqlite::Error::InvalidColumnType(1, "public_key".into(), rusqlite::types::Type::Blob))?,
         salt: salt.try_into().map_err(|_| rusqlite::Error::InvalidColumnType(2, "salt".into(), rusqlite::types::Type::Blob))?,
         argon_params: r.get(3)?,
         created_at: r.get(4)?,
@@ -235,7 +237,9 @@ impl AdminDb {
     }
 
     fn init(conn: Connection) -> Result<AdminDb, DbError> {
-        conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;")?;
+        conn.execute_batch(
+            "PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;",
+        )?;
         let mut db = AdminDb { conn };
         db.migrate()?;
         Ok(db)
@@ -321,7 +325,8 @@ mod tests {
         let db = AdminDb::init(conn).unwrap();
         let v: i64 = db.conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
         assert_eq!(v as usize, MIGRATIONS.len());
-        let revoked: (String, i64) = db.conn.query_row("SELECT client_id, revoked_at FROM revoked_clients", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        let revoked: (String, i64) =
+            db.conn.query_row("SELECT client_id, revoked_at FROM revoked_clients", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
         assert_eq!(revoked, ("d1".to_string(), 5));
         let name: String = db.conn.query_row("SELECT client_name FROM pair_codes WHERE hash = 'h'", [], |r| r.get(0)).unwrap();
         assert_eq!(name, "Work laptop");
@@ -329,7 +334,14 @@ mod tests {
     use super::*;
 
     fn key(id: &str, retired: Option<i64>) -> AuditKeyRow {
-        AuditKeyRow { key_id: id.into(), public_key: [id.len() as u8; 32], salt: [3; 16], argon_params: "m=65536,t=3,p=1".into(), created_at: 100, retired_at: retired }
+        AuditKeyRow {
+            key_id: id.into(),
+            public_key: [id.len() as u8; 32],
+            salt: [3; 16],
+            argon_params: "m=65536,t=3,p=1".into(),
+            created_at: 100,
+            retired_at: retired,
+        }
     }
 
     #[test]
@@ -342,7 +354,14 @@ mod tests {
         assert_eq!(db.active_audit_key().unwrap(), Some(k));
         assert_eq!(db.audit_key("nope").unwrap(), None);
         // Nothing in the table could hold a passphrase or a private key.
-        let cols: Vec<String> = db.conn.prepare("SELECT name FROM pragma_table_info('audit_keys') ORDER BY cid").unwrap().query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
+        let cols: Vec<String> = db
+            .conn
+            .prepare("SELECT name FROM pragma_table_info('audit_keys') ORDER BY cid")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
         assert_eq!(cols, ["key_id", "public_key", "salt", "argon_params", "created_at", "retired_at"]);
     }
 

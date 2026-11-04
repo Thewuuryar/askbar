@@ -2,7 +2,7 @@
 //! redeemed; clients the snapshot lists as revoked are refused.
 
 use askbar_proto::{Budget, DisplaySettings, Snapshot, SnapshotPairCode};
-use askbar_server::{server_api, secrets::Secrets, AppState};
+use askbar_server::{secrets::Secrets, server_api, AppState};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
@@ -65,7 +65,12 @@ impl T {
             user_display_defaults: Default::default(),
             pair_codes: codes
                 .iter()
-                .map(|(c, exp)| SnapshotPairCode { hash: hex(c), user_id: self.user.clone(), client_name: "laptop".into(), expires_at: *exp })
+                .map(|(c, exp)| SnapshotPairCode {
+                    hash: hex(c),
+                    user_id: self.user.clone(),
+                    client_name: "laptop".into(),
+                    expires_at: *exp,
+                })
                 .collect(),
             revoked_client_ids: revoked.iter().map(|s| s.to_string()).collect(),
             budget: Budget::default(),
@@ -77,7 +82,8 @@ impl T {
         }
     }
     async fn push(&self, s: &Snapshot) {
-        let r = self.http.put(format!("{}/api/server/v1/snapshot", self.server_api)).bearer_auth(SERVER_TOKEN).json(s).send().await.unwrap();
+        let r =
+            self.http.put(format!("{}/api/server/v1/snapshot", self.server_api)).bearer_auth(SERVER_TOKEN).json(s).send().await.unwrap();
         assert_eq!(r.status(), 200);
     }
     async fn pair(&self, code: &str) -> Option<String> {
@@ -96,7 +102,15 @@ impl T {
         }
     }
     async fn whoami(&self, token: &str) -> u16 {
-        self.http.get(format!("{}/api/client/v1/me", self.api)).bearer_auth(token).header("x-askbar-client-version", "0.5.0").send().await.unwrap().status().as_u16()
+        self.http
+            .get(format!("{}/api/client/v1/me", self.api))
+            .bearer_auth(token)
+            .header("x-askbar-client-version", "0.5.0")
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .as_u16()
     }
     fn client_id(&self) -> String {
         self.state.db.lock().unwrap().conn().query_row("SELECT id FROM clients LIMIT 1", [], |r| r.get(0)).unwrap()

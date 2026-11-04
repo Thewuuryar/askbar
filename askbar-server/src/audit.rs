@@ -311,7 +311,8 @@ pub fn stats(conn: &Connection, since: i64, price_of: PriceOf) -> rusqlite::Resu
     let mut by_status = serde_json::Map::new();
     let mut requests = 0i64;
     {
-        let mut stmt = conn.prepare("SELECT status, COUNT(*) FROM spans WHERE kind = 'turn' AND started_at >= ?1 GROUP BY status ORDER BY status")?;
+        let mut stmt =
+            conn.prepare("SELECT status, COUNT(*) FROM spans WHERE kind = 'turn' AND started_at >= ?1 GROUP BY status ORDER BY status")?;
         for row in stmt.query_map([since], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))? {
             let (status, n) = row?;
             requests += n;
@@ -348,7 +349,13 @@ pub fn stats(conn: &Connection, since: i64, price_of: PriceOf) -> rusqlite::Resu
              FROM spans t WHERE t.kind = 'turn' AND t.started_at >= ?1",
         )?;
         let rows = stmt.query_map([since], |r| {
-            Ok((r.get::<_, i64>(0)?, r.get::<_, Option<i64>>(1)?, r.get::<_, Option<i64>>(2)?, r.get::<_, Option<i64>>(3)?, r.get::<_, Option<String>>(4)?))
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, Option<i64>>(1)?,
+                r.get::<_, Option<i64>>(2)?,
+                r.get::<_, Option<i64>>(3)?,
+                r.get::<_, Option<String>>(4)?,
+            ))
         })?;
         for row in rows {
             let (started, tin, tout, tcached, provider) = row?;
@@ -374,7 +381,9 @@ pub fn stats(conn: &Connection, since: i64, price_of: PriceOf) -> rusqlite::Resu
                     COALESCE(SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END), 0)
              FROM spans WHERE kind = 'attempt' AND started_at >= ?1 GROUP BY provider_id",
         )?;
-        for row in stmt.query_map([since], |r| Ok((r.get::<_, String>(0)?, (r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, i64>(3)?, r.get::<_, i64>(4)?))))? {
+        for row in stmt.query_map([since], |r| {
+            Ok((r.get::<_, String>(0)?, (r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, i64>(3)?, r.get::<_, i64>(4)?)))
+        })? {
             let (k, v) = row?;
             routing.insert(k, v);
         }
@@ -560,7 +569,10 @@ enum Event {
     /// Sealed content attached to a span.
     Payload(PayloadWrite),
     /// Delete spans and payloads that started before `cutoff`; answered with how many of each.
-    Prune { cutoff: i64, done: oneshot::Sender<Result<(usize, usize), String>> },
+    Prune {
+        cutoff: i64,
+        done: oneshot::Sender<Result<(usize, usize), String>>,
+    },
 }
 
 /// Records are never kept for less than this many days, whatever the setting says.
@@ -705,7 +717,9 @@ impl Recorder {
     pub async fn prune(&self, retention_days: u32, now: i64) -> Result<(usize, usize), String> {
         let Some(tx) = &self.tx else { return Ok((0, 0)) };
         let (done, wait) = oneshot::channel();
-        tx.send(Event::Prune { cutoff: retention_cutoff(now, retention_days), done }).await.map_err(|_| "the audit writer has stopped".to_string())?;
+        tx.send(Event::Prune { cutoff: retention_cutoff(now, retention_days), done })
+            .await
+            .map_err(|_| "the audit writer has stopped".to_string())?;
         wait.await.map_err(|_| "the audit writer has stopped".to_string())?
     }
 
@@ -737,7 +751,20 @@ fn write_start(conn: &Connection, s: &SpanStart) -> rusqlite::Result<()> {
     conn.execute(
         "INSERT INTO spans (id, trace_id, parent_id, kind, name, status, started_at, provider_id, model, user_id, client_id, attrs_json)
          VALUES (?1, ?2, ?3, ?4, ?5, 'running', ?6, ?7, ?8, ?9, ?10, json_patch(COALESCE(?11, '{}'), json_object('started_ms', ?12)))",
-        rusqlite::params![s.id, s.trace_id, s.parent_id, s.kind, s.name, s.started_at, s.provider_id, s.model, s.user_id, s.client_id, s.attrs_json, s.started_ms],
+        rusqlite::params![
+            s.id,
+            s.trace_id,
+            s.parent_id,
+            s.kind,
+            s.name,
+            s.started_at,
+            s.provider_id,
+            s.model,
+            s.user_id,
+            s.client_id,
+            s.attrs_json,
+            s.started_ms
+        ],
     )?;
     Ok(())
 }
@@ -790,8 +817,24 @@ mod tests {
         assert_eq!(
             columns(&db, "spans"),
             [
-                "id", "trace_id", "parent_id", "kind", "name", "status", "started_at", "ended_at", "provider_id", "model",
-                "tokens_in", "tokens_out", "tokens_cached", "ttft_ms", "error_code", "user_id", "client_id", "attrs_json"
+                "id",
+                "trace_id",
+                "parent_id",
+                "kind",
+                "name",
+                "status",
+                "started_at",
+                "ended_at",
+                "provider_id",
+                "model",
+                "tokens_in",
+                "tokens_out",
+                "tokens_cached",
+                "ttft_ms",
+                "error_code",
+                "user_id",
+                "client_id",
+                "attrs_json"
             ]
         );
         assert_eq!(columns(&db, "payloads"), ["span_id", "role", "key_id", "ciphertext", "created_at"]);
@@ -807,7 +850,9 @@ mod tests {
         let path = dir.join("nested").join("audit.db");
         {
             let db = AuditDb::open(&path).unwrap();
-            db.conn.execute("INSERT INTO spans (id, trace_id, kind, name, status, started_at) VALUES ('s','t','turn','chat','done',1)", []).unwrap();
+            db.conn
+                .execute("INSERT INTO spans (id, trace_id, kind, name, status, started_at) VALUES ('s','t','turn','chat','done',1)", [])
+                .unwrap();
         }
         let db = AuditDb::open(&path).unwrap();
         let n: i64 = db.conn.query_row("SELECT COUNT(*) FROM spans", [], |r| r.get(0)).unwrap();
@@ -842,7 +887,12 @@ mod tests {
         assert_eq!(db.conn.execute("DELETE FROM spans WHERE id = 'old'", []).unwrap(), 1);
 
         for (id, created) in [("young", n), ("old", n - 9 * 86400)] {
-            db.conn.execute("INSERT INTO payloads (span_id, role, key_id, ciphertext, created_at) VALUES (?1,'request','k',x'00',?2)", rusqlite::params![id, created]).unwrap();
+            db.conn
+                .execute(
+                    "INSERT INTO payloads (span_id, role, key_id, ciphertext, created_at) VALUES (?1,'request','k',x'00',?2)",
+                    rusqlite::params![id, created],
+                )
+                .unwrap();
         }
         assert!(db.conn.execute("DELETE FROM payloads WHERE span_id = 'young'", []).unwrap_err().to_string().contains("7 days"));
         assert_eq!(db.conn.execute("DELETE FROM payloads WHERE span_id = 'old'", []).unwrap(), 1);
@@ -880,7 +930,9 @@ mod tests {
         span(&db, "c", "done", now());
         assert_eq!(db.sweep_running().unwrap(), 2);
         let status = |id: &str| -> (String, Option<i64>, Option<String>) {
-            db.conn.query_row("SELECT status, ended_at, error_code FROM spans WHERE id = ?1", [id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap()
+            db.conn
+                .query_row("SELECT status, ended_at, error_code FROM spans WHERE id = ?1", [id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+                .unwrap()
         };
         let (s, ended, code) = status("a");
         assert_eq!((s.as_str(), code.as_deref()), ("interrupted", Some("interrupted")));
@@ -893,9 +945,14 @@ mod tests {
     fn a_span_kind_outside_the_fixed_set_is_refused() {
         let db = AuditDb::open_in_memory().unwrap();
         for kind in ["turn", "gate", "attempt", "tool", "agent_step"] {
-            db.conn.execute("INSERT INTO spans (id, trace_id, kind, name, status, started_at) VALUES (?1,'t',?1,'n','done',1)", [kind]).unwrap();
+            db.conn
+                .execute("INSERT INTO spans (id, trace_id, kind, name, status, started_at) VALUES (?1,'t',?1,'n','done',1)", [kind])
+                .unwrap();
         }
-        assert!(db.conn.execute("INSERT INTO spans (id, trace_id, kind, name, status, started_at) VALUES ('x','t','banana','n','done',1)", []).is_err());
+        assert!(db
+            .conn
+            .execute("INSERT INTO spans (id, trace_id, kind, name, status, started_at) VALUES ('x','t','banana','n','done',1)", [])
+            .is_err());
     }
 
     #[test]
@@ -931,14 +988,22 @@ mod tests {
         for i in 0..200 {
             rec.start_span(start(&format!("s{i:03}"), "t"));
             if i % 2 == 0 {
-                rec.finish_span(SpanFinish { id: format!("s{i:03}"), status: "done".into(), ended_at: 101, tokens_in: Some(i), ..Default::default() });
+                rec.finish_span(SpanFinish {
+                    id: format!("s{i:03}"),
+                    status: "done".into(),
+                    ended_at: 101,
+                    tokens_in: Some(i),
+                    ..Default::default()
+                });
             }
         }
         rec.flush().await;
         let conn = Connection::open(dir.join("audit.db")).unwrap();
-        let ids: Vec<String> = conn.prepare("SELECT id FROM spans ORDER BY rowid").unwrap().query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
+        let ids: Vec<String> =
+            conn.prepare("SELECT id FROM spans ORDER BY rowid").unwrap().query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
         assert_eq!(ids, (0..200).map(|i| format!("s{i:03}")).collect::<Vec<_>>());
-        let done: i64 = conn.query_row("SELECT COUNT(*) FROM spans WHERE status = 'done' AND tokens_in IS NOT NULL", [], |r| r.get(0)).unwrap();
+        let done: i64 =
+            conn.query_row("SELECT COUNT(*) FROM spans WHERE status = 'done' AND tokens_in IS NOT NULL", [], |r| r.get(0)).unwrap();
         assert_eq!(done, 100);
         let running: i64 = conn.query_row("SELECT COUNT(*) FROM spans WHERE status = 'running'", [], |r| r.get(0)).unwrap();
         assert_eq!(running, 100, "odd ones were never finished");
@@ -956,7 +1021,8 @@ mod tests {
         for i in 0..8 {
             rec.start_span(start(&format!("s{i}"), "t"));
             if i == 0 {
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await; // let it pick the first up
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                // let it pick the first up
             }
         }
         assert!(!rec.healthy(), "the queue is full");
@@ -992,7 +1058,11 @@ mod tests {
             .unwrap()
         };
         assert_eq!(row(&turn), ("gen-1".into(), None, "turn".into(), "done".into(), None, None));
-        assert_eq!(row(&attempt), ("gen-1".into(), Some(turn.clone()), "attempt".into(), "done".into(), Some(5), None), "the first finish stands");
+        assert_eq!(
+            row(&attempt),
+            ("gen-1".into(), Some(turn.clone()), "attempt".into(), "done".into(), Some(5), None),
+            "the first finish stands"
+        );
         assert_eq!(row(&gate).1.as_deref(), Some(turn.as_str()));
         let (user, client, provider, model): (String, String, String, String) = (
             conn.query_row("SELECT user_id FROM spans WHERE id = ?1", [&turn], |r| r.get(0)).unwrap(),
@@ -1022,8 +1092,11 @@ mod tests {
         span("a2", "T", "attempt", Some("p1"), "error", r#"{"retry_index":1}"#);
         span("a3", "T", "attempt", Some("p2"), "done", r#"{"retry_index":0,"fallback_from":"p1"}"#);
         let v = stats(&db.conn, now - 10, &|_| None).unwrap();
-        let by = |p: &str| v["by_provider"].as_array().unwrap().iter().find(|x| x["provider_id"] == p).cloned().unwrap_or_else(|| panic!("no row for {p}"));
-        let nums = |row: &serde_json::Value| ["requests", "attempts", "retries", "fallbacks", "failed_attempts"].map(|k| row[k].as_i64().unwrap());
+        let by = |p: &str| {
+            v["by_provider"].as_array().unwrap().iter().find(|x| x["provider_id"] == p).cloned().unwrap_or_else(|| panic!("no row for {p}"))
+        };
+        let nums =
+            |row: &serde_json::Value| ["requests", "attempts", "retries", "fallbacks", "failed_attempts"].map(|k| row[k].as_i64().unwrap());
         assert_eq!(nums(&by("p1")), [0, 2, 1, 0, 2], "p1 served nothing but had two tries, one a retry, both failed");
         assert_eq!(nums(&by("p2")), [1, 1, 0, 1, 0], "p2 served the request, standing in for p1");
         // Outside the window nothing counts.
@@ -1049,7 +1122,11 @@ mod tests {
             serde_json::from_str(&a).unwrap()
         };
         let a = attrs(&id);
-        assert_eq!((a["retry_index"].as_i64(), a["latency_ms"].as_i64(), a["keep"].as_str()), (Some(1), Some(31), Some("finish")), "start attributes survive, finish ones are added or win");
+        assert_eq!(
+            (a["retry_index"].as_i64(), a["latency_ms"].as_i64(), a["keep"].as_str()),
+            (Some(1), Some(31), Some("finish")),
+            "start attributes survive, finish ones are added or win"
+        );
         let (s, e) = (a["started_ms"].as_i64().unwrap(), a["ended_ms"].as_i64().unwrap());
         assert!(e - s >= 25 && e - s < 2000, "the span took about 30 ms: {}", e - s);
         let b = attrs(&bare);
@@ -1061,7 +1138,12 @@ mod tests {
     fn the_five_span_kinds_match_what_the_database_accepts() {
         let db = AuditDb::open_in_memory().unwrap();
         for k in [Kind::Turn, Kind::Gate, Kind::Attempt, Kind::Tool, Kind::AgentStep] {
-            db.conn.execute("INSERT INTO spans (id, trace_id, kind, name, status, started_at) VALUES (?1,'t',?2,'n','done',1)", rusqlite::params![k.as_str(), k.as_str()]).unwrap();
+            db.conn
+                .execute(
+                    "INSERT INTO spans (id, trace_id, kind, name, status, started_at) VALUES (?1,'t',?2,'n','done',1)",
+                    rusqlite::params![k.as_str(), k.as_str()],
+                )
+                .unwrap();
         }
     }
 
@@ -1089,8 +1171,16 @@ mod tests {
         {
             let conn = Connection::open(dir.join("audit.db")).unwrap();
             for (id, age) in ages {
-                conn.execute("INSERT INTO spans (id, trace_id, kind, name, status, started_at, ended_at) VALUES (?1,'t','turn','c','done',?2,?2)", rusqlite::params![id, real - age]).unwrap();
-                conn.execute("INSERT INTO payloads (span_id, role, key_id, ciphertext, created_at) VALUES (?1,'reply','k',x'00',?2)", rusqlite::params![id, real - age]).unwrap();
+                conn.execute(
+                    "INSERT INTO spans (id, trace_id, kind, name, status, started_at, ended_at) VALUES (?1,'t','turn','c','done',?2,?2)",
+                    rusqlite::params![id, real - age],
+                )
+                .unwrap();
+                conn.execute(
+                    "INSERT INTO payloads (span_id, role, key_id, ciphertext, created_at) VALUES (?1,'reply','k',x'00',?2)",
+                    rusqlite::params![id, real - age],
+                )
+                .unwrap();
             }
         }
         let left = |dir: &std::path::Path| -> Vec<String> {

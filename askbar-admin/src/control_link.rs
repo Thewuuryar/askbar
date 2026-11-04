@@ -13,7 +13,11 @@ pub const ACTIONS: [&str; 3] = ["start", "stop", "restart"];
 
 /// `ASKBAR_CONTROL_TOKEN_DIR`, default `/control-token`.
 pub fn token_dir() -> PathBuf {
-    std::env::var("ASKBAR_CONTROL_TOKEN_DIR").ok().filter(|p| !p.trim().is_empty()).map(PathBuf::from).unwrap_or_else(|| "/control-token".into())
+    std::env::var("ASKBAR_CONTROL_TOKEN_DIR")
+        .ok()
+        .filter(|p| !p.trim().is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| "/control-token".into())
 }
 
 /// `ASKBAR_CONTROL_URL`, default `http://controller:8083`.
@@ -29,7 +33,11 @@ pub struct ControlLink {
 
 impl ControlLink {
     pub fn new(base: &str, token: String) -> std::sync::Arc<ControlLink> {
-        let http = reqwest::Client::builder().connect_timeout(Duration::from_secs(3)).timeout(Duration::from_secs(90)).build().expect("reqwest client");
+        let http = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(3))
+            .timeout(Duration::from_secs(90))
+            .build()
+            .expect("reqwest client");
         std::sync::Arc::new(ControlLink { http, base: base.trim_end_matches('/').to_string(), token })
     }
 
