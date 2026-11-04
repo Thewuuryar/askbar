@@ -5,7 +5,7 @@ Date: 2026-11-03
 
 ## Context
 
-On `main` ([0002](0002-three-audiences-one-host.md)): the admin is at `/admin` on the shared host name, signs in with a password (or an admin API key for scripts), rate-limits and locks out after failures, and has an address allowlist that is **off by default**.
+On `main` ([0002](0002-one-name-per-role-one-host.md)): the admin is at `/admin` on the shared host name, signs in with a password (or an admin API key for scripts), rate-limits and locks out after failures, and has an address allowlist that is **off by default**.
 
 Settled on 2026-11-03: the admin stays at `/admin` on one host name and one certificate, in its own isolated container. Still open from the goals document: passkey sign-in with password and TOTP as backup, and "view user data" as an explicit action.
 
@@ -17,7 +17,7 @@ Settled on 2026-11-03: the admin stays at `/admin` on one host name and one cert
 
 ## Alternatives considered
 
-- **Admin on a subdomain.** Rejected, see [0002](0002-three-audiences-one-host.md).
+- **Admin on a subdomain.** Rejected, see [0002](0002-one-name-per-role-one-host.md).
 - **Admin only over Tailscale.** Strongest exposure story; needs the Tailscale item from the goals document first.
 
 ## Questions to answer before accepting

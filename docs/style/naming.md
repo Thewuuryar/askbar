@@ -4,7 +4,7 @@ Everything here is how the code already behaves on `main`, except items marked *
 
 ## The words
 
-Use **client**, **server**, **admin** and **controller**, in paths, variables, UI text and docs. Their meanings are in [architecture.md](../architecture.md). The old words are refused by `scripts/check-names.sh`. A line that must use one (a migration, an old path in a test) carries `names-ok` and a reason; whole files are listed in `scripts/names-allow.txt`.
+Use **client**, **server**, **admin** and **controller**, in paths, variables, UI text and docs. Their meanings, and the other terms (user, provider, account, token and key), are in the [glossary](../architecture.md#glossary). The old words are refused by `scripts/check-names.sh`. A line that must use one (a migration, an old path in a test) carries `names-ok` and a reason; whole files are listed in `scripts/names-allow.txt`.
 
 ## Code
 

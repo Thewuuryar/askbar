@@ -16,7 +16,7 @@ One short file per decision that a later contributor, human or agent, could othe
 | ADR | Title | Status |
 | --- | --- | --- |
 | [0001](0001-record-architecture-decisions.md) | Record architecture decisions | Accepted |
-| [0002](0002-three-audiences-one-host.md) | Three audiences, one vocabulary, one host name | Accepted |
+| [0002](0002-one-name-per-role-one-host.md) | One name per role, one host name | Proposed |
 | [0003](0003-admin-and-server-isolation.md) | The admin and the server are isolated | Accepted |
 | [0004](0004-sealed-audit-content.md) | Audit content is sealed | Accepted |
 | [0005](0005-docker-socket-only-in-controller.md) | The Docker socket lives only in the controller | Accepted |

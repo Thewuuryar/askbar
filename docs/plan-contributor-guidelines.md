@@ -17,7 +17,7 @@ Status: draft for review; four decisions made (below). Nothing here is enforced 
 | Decision | Source on `main` | Recorded in |
 | --- | --- | --- |
 | Thin clients; one server holds history and settings | README, architecture.md | architecture.md |
-| Three words plus controller, enforced by script | architecture.md, `check-names.sh` | [naming.md](style/naming.md), [ADR 0002](adr/0002-three-audiences-one-host.md) |
+| One name per role, enforced by script | architecture.md, `check-names.sh` | [naming.md](style/naming.md), [ADR 0002](adr/0002-one-name-per-role-one-host.md) |
 | One host; admin at `/admin`; audiences by path | architecture.md | ADR 0002 |
 | Admin and server isolated; one-way config push | architecture.md, SECURITY.md | [ADR 0003](adr/0003-admin-and-server-isolation.md), AGENTS.md |
 | Audit content sealed; keep 30 days, floor 7 | README | [ADR 0004](adr/0004-sealed-audit-content.md), [logging-and-audit.md](style/logging-and-audit.md) |
@@ -35,7 +35,7 @@ Status: draft for review; four decisions made (below). Nothing here is enforced 
 
 | Goals document | `main` | Handled by |
 | --- | --- | --- |
-| Admin on `admin.askbar...` subdomain, desktop only | `/admin` on one host, optional allowlist | **Settled:** keep `/admin`, one domain and cert, admin in its own isolated container ([ADR 0002](adr/0002-three-audiences-one-host.md), [0003](adr/0003-admin-and-server-isolation.md)) |
+| Admin on `admin.askbar...` subdomain, desktop only | `/admin` on one host, optional allowlist | **Settled:** keep `/admin`, one domain and cert, admin in its own isolated container ([ADR 0002](adr/0002-one-name-per-role-one-host.md), [0003](adr/0003-admin-and-server-isolation.md)) |
 | Passkey login, password and TOTP as backup | password and an admin API key | [ADR 0008](adr/0008-admin-sign-in-and-exposure.md) (proposed) |
 | Native Swift iPhone app | not started; API already allows it | ui-ux.md "Other clients" (proposed) |
 | "Log everything agents do"; web research and code execution later | README: conversation only, no tools | **Settled:** conversation only through 1.0; tools later under fixed invariants ([ADR 0007](adr/0007-conversation-only-and-tool-gating.md)) |

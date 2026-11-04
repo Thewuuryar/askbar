@@ -43,7 +43,7 @@ Before you finish: `npm test` and `scripts/smoke.sh` pass. If you touched `compo
 - Never rename a Docker volume that holds data. Never edit an earlier database migration; append.
 - Within `v1`, never remove or rename a field, endpoint or error code. Add only.
 - The admin site writes text with `textContent`, never `innerHTML`, and keeps its CSP. In the popup, only `renderMarkdown` output may reach `innerHTML`.
-- Use the three words: **client**, **server**, **admin** (plus **controller**). `scripts/check-names.sh` refuses the old words.
+- Use the names in the [glossary](docs/architecture.md#glossary) (**client**, **server**, **admin**, **controller** and the rest). `scripts/check-names.sh` refuses the old words.
 - Do not loosen or delete a test unless the contract changed, and say so in the commit message.
 - Do not add a dependency without saying why in the PR. **(proposed)** `cargo deny check` passes.
 - Do not change `.github/workflows/` or repository settings without asking.

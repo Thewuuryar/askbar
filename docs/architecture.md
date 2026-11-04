@@ -2,18 +2,34 @@
 
 This document is the target the code follows. If code and this file disagree, one of them is a bug; fix it in the same commit.
 
-## The three words
+## Glossary
 
-Every API, module, environment variable, UI label and document uses exactly these words.
+Every API, module, environment variable, UI label and document uses these names ([ADR 0002](adr/0002-one-name-per-role-one-host.md)). This glossary is not an ADR: names and meanings can change here, in the same commit as the code that follows them. Wire-visible names (paths, headers, JSON fields, error codes) stay as they are within `v1`.
 
-| Word | Means | API | Served by | Called by |
+### Components
+
+| Name | Means | API | Served by | Called by |
 | --- | --- | --- | --- | --- |
-| **client** | a paired app instance (the desktop app today) and its token | `/api/client/v1` | `askbar-server` | the app, or anyone's client |
-| **server** | the Askbar server's own control and inspection interface: configuration snapshot, provider keys, usage, audit, backup | `/api/server/v1` | `askbar-server`, internal listener only | `askbar-admin` |
+| **client** | one paired app instance (the desktop app today) and its token; belongs to exactly one user | `/api/client/v1` | `askbar-server` | the app, or anyone's client |
+| **server** | the Askbar server, and its own control and inspection interface: configuration snapshot, provider keys, usage, audit, backup | `/api/server/v1` | `askbar-server`, internal listener only | `askbar-admin` |
 | **admin** | the admin site and its control interface | `/admin/api/v1` | `askbar-admin` | the admin site (session cookie) or a script (admin API key) |
 | **controller** | the one container with the Docker socket; starts, stops and restarts `server`, `caddy` and `cpa` | `/api/control/v1` | `askbar-controller`, internal network only | `askbar-admin` |
+| **executor** (reserved) | the container that will run tools, with no route to the server, admin or controller; nothing uses it yet ([ADR 0007](adr/0007-conversation-only-and-tool-gating.md)) | none | none | none |
 
-"Management" and "mgmt" were the old word for **server**; "device" was the old word for **client**. `scripts/check-names.sh` keeps the old words out.
+Third-party components keep their product name (`caddy`, `cpa`). First-party components get a role name. The model gateway is a module inside `server` and has no component name until it gets its own container.
+
+### Other terms
+
+| Name | Means |
+| --- | --- |
+| **user** | a person who owns conversations and memory (family accounts, later) |
+| **provider** | an upstream source of model output (`cpa`, a paid API) |
+| **account** | a login held inside a provider, such as a Claude or ChatGPT login in `cpa`; never called a provider |
+| **token** / **key** | token: a bearer secret Askbar issues. Key: a cryptographic key, or a third party's API key |
+| **settings** / **snapshot** | settings: what the owner edits in the admin. Snapshot: the object pushed to the server |
+| **audit** / **trace** / **span** | audit: the feature. Trace: the record of one reply. Span: one step in it |
+
+Retired words, refused by `scripts/check-names.sh`: "management" and "mgmt" (now **server**), "device" (now **client**).
 
 ## Picture
 
