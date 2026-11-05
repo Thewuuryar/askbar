@@ -1,6 +1,6 @@
 # 0019. Post-v1 order and tools
 
-Status: Proposed
+Status: Accepted 
 Date: 2026-11-04
 Plan decisions: 25, 26
 
