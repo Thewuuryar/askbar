@@ -4,7 +4,7 @@ Everything here is how the code already behaves on `main`, except items marked *
 
 ## The words
 
-Use **client**, **server**, **admin** and **controller**, in paths, variables, UI text and docs. Their meanings, and the other terms (user, provider, account, token and key), are in the [glossary](../architecture.md#glossary). The old words are refused by `scripts/check-names.sh`. A line that must use one (a migration, an old path in a test) carries `names-ok` and a reason; whole files are listed in `scripts/names-allow.txt`.
+Use the component names in the [glossary](../architecture.md#glossary) in paths, variables, UI text and docs. The glossary also defines the other terms (user, provider, account, token and key). A new component gets a name and an ADR before it exists ([ADR 0021](../adr/0021-names-and-new-components.md)). The old words are refused by `scripts/check-names.sh`. A line that must use one (a migration, an old path in a test) carries `names-ok` and a reason; whole files are listed in `scripts/names-allow.txt`.
 
 ## Code
 
@@ -21,10 +21,10 @@ Use **client**, **server**, **admin** and **controller**, in paths, variables, U
 
 | What | Rule | Example |
 | --- | --- | --- |
-| URL path | `/<audience>/<...>/v<N>/<resource>`; plural nouns; built from `askbar_proto::paths`, never a new literal | `/api/client/v1/pairings` |
-| Action route | only for something that is not a plain create, update or delete | `POST .../cancel` |
+| URL path | `/api/<name>/v<N>/<resource>` ([ADR 0022](../adr/0022-api-path-conventions.md)); plural nouns, kebab-case segments, snake_case variables; built from `askbar_proto::paths`, never a new literal | `/api/client/v1/me/pairing-keys` |
+| Action route | only for something that is not a plain create, update or delete; a literal verb as the last segment, never `/{name}/{action}` | `POST .../cancel` |
 | JSON fields | `snake_case` | `min_client`, `client_request_id` |
-| Error codes | `snake_case`, in `askbar-proto/src/problem.rs`, only ever added | `budget_exceeded` |
+| Error codes | `snake_case`, in `askbar-proto/src/problem.rs`, added; after 1.0 never renamed or removed | `budget_exceeded` |
 | Error type URN | `urn:askbar:problem:<code>` | |
 | Ids | ULID, made by the server, opaque to clients | |
 | Timestamps | UTC unix seconds, `created_at`, `updated_at` | |
@@ -37,11 +37,11 @@ Use **client**, **server**, **admin** and **controller**, in paths, variables, U
 | What | Rule | Example |
 | --- | --- | --- |
 | Environment variables | `ASKBAR_<COMPONENT>_<THING>` with a kind suffix: `_ADDR`, `_URL`, `_DIR`, `_FILE`, `_SOCKET` | `ASKBAR_SERVER_API_ADDR`, `ASKBAR_ADMIN_SOCKET` |
-| Compose services | the role, lower case | `server`, `admin`, `caddy`, `cpa`, `controller` |
+| Compose services | the role, lower case | `server`, `admin`, `auditor`, `model-gateway`, `caddy`, `cpa` |
 | Containers and images | `askbar-<service>` | `askbar-server` |
 | Networks | what they connect | `edge`, `control`, `cpa-admin`, `server-api` |
 | Volumes | kebab-case; **never renamed** | `askbar-secrets`, `audit-data` |
 
-## Git **(proposed)**
+## Git
 
-Branches and commits: see "Branches and commits" in [AGENTS.md](../../AGENTS.md).
+Branches and commits: see "Branches and commits" in [AGENTS.md](../../AGENTS.md). The branch rule is decided; the commit format is still proposed.
