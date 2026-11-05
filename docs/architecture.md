@@ -1,33 +1,36 @@
 # Architecture
 
-This document is the target the code follows. If code and this file disagree, one of them is a bug; fix it in the same commit.
+This document is the proposed v1 target that the code will follow. The code on `main` doesn't fully match it yet, and the [ADRs](adr/README.md) are still Proposed.
 
 ## Glossary
 
-Every API, module, environment variable, UI label and document uses these names ([ADR 0002](adr/0002-one-name-per-role-one-host.md)). This glossary is not an ADR: names and meanings can change here, in the same commit as the code that follows them. Wire-visible names (paths, headers, JSON fields, error codes) stay as they are within `v1`.
+Every API, module, environment variable, UI label and document uses these names ([ADR 0021](adr/0021-names-and-new-components.md)). This glossary is not an ADR: names and meanings can change here, in the same commit as the code that follows them.
 
 ### Components
 
 | Name | Means | API | Served by | Called by |
 | --- | --- | --- | --- | --- |
-| **client** | one paired app instance (the desktop app today) and its token; belongs to exactly one user | `/api/client/v1` | `askbar-server` | the app, or anyone's client |
-| **server** | the Askbar server, and its own control and inspection interface: configuration snapshot, provider keys, usage, audit, backup | `/api/server/v1` | `askbar-server`, internal listener only | `askbar-admin` |
-| **admin** | the admin site and its control interface | `/admin/api/v1` | `askbar-admin` | the admin site (session cookie) or a script (admin API key) |
-| **controller** | the one container with the Docker socket; starts, stops and restarts `server`, `caddy` and `cpa` | `/api/control/v1` | `askbar-controller`, internal network only | `askbar-admin` |
-| **auditor** (proposed) | the container that will keep the audit store: the server can append to it and nothing else, the admin can read it ([ADR 0009](adr/0009-the-auditor.md)) | `/api/audit/v1` | `askbar-auditor`, internal networks only | `askbar-server` (append), `askbar-admin` (read) |
-| **executor** (reserved) | the container that will run tools, with no route to the server, admin or controller; nothing uses it yet ([ADR 0007](adr/0007-conversation-only-and-tool-gating.md)) | none | none | none |
+| **client** | one paired app instance and its token; belongs to exactly one user | `/api/client/v1` | `askbar-server` | the app |
+| **server** | the Askbar server: chats, spaces, and its control and inspection interface | `/api/server/v1` | `askbar-server`, internal listener only | `askbar-admin` |
+| **admin** | the admin site and its control interface | `/api/admin/v1` | `askbar-admin` | the admin site (session cookie) or a script (admin API key) |
+| **auditor** | the container that keeps the audit store: services append to it, and the admin reads it | `/api/audit/v1` | `askbar-auditor`, internal only | services (append), `askbar-admin` (read) |
+| **model gateway** | the container that holds provider keys in memory, enforces budgets and the kill switch, and calls providers | `/api/gateway/v1` | model gateway, internal only | `askbar-server` |
+| **alert sender** | the small container that delivers alerts and checks for new releases | `/api/alerts/v1` | alert sender, internal only | `askbar-auditor`, `askbar-admin` |
+| **bootstrap** | the one-time container that creates per-link tokens on first start | none | none | none |
 
-Third-party components keep their product name (`caddy`, `cpa`). First-party components get a role name. The model gateway is a module inside `server` and has no component name until it gets its own container.
+Third-party components keep their product name (`caddy`, `cpa`). After v1, these names are added: **egress proxy**, **MCP gateway**, **judge**, **executor**, **`executor-link`** and `searxng` ([ADR 0019](adr/0019-post-v1-order-and-tools.md), [ADR 0020](adr/0020-remote-executor-and-ca-triggers.md)).
 
 ### Other terms
 
 | Name | Means |
 | --- | --- |
-| **user** | a person who owns conversations and memory (family accounts, later) |
-| **provider** | an upstream source of model output (`cpa`, a paid API) |
-| **account** | a login held inside a provider, such as a Claude or ChatGPT login in `cpa`; never called a provider |
+| **user** | a person the admin creates, who owns clients and a personal space |
+| **space** | one SQLite file of conversations, history, memory and search: personal or shared |
+| **pairing key** | a one-time key that registers one client for a user |
+| **provider** | an upstream source of model output (`cpa`, a paid API, a self-hosted model) |
+| **account** | a login held inside a provider, such as a login in `cpa`; never called a provider |
 | **token** / **key** | token: a bearer secret Askbar issues. Key: a cryptographic key, or a third party's API key |
-| **settings** / **snapshot** | settings: what the owner edits in the admin. Snapshot: the object pushed to the server |
+| **settings** / **snapshot** | settings: what the owner edits in the admin. Snapshot: the object pushed to a service |
 | **audit** / **trace** / **span** | audit: the feature. Trace: the record of one reply. Span: one step in it |
 
 Retired words, refused by `scripts/check-names.sh`: "management" and "mgmt" (now **server**), "device" (now **client**).
@@ -35,32 +38,30 @@ Retired words, refused by `scripts/check-names.sh`: "management" and "mgmt" (now
 ## Picture
 
 ```
- desktop app  --HTTPS, client token-->  Caddy :443 --/api/client/v1/*--> askbar-server :8080 --> providers
- browser      --HTTPS, session cookie-> Caddy :443 --/admin, /admin/*--unix socket--> askbar-admin
- script       --HTTPS, admin API key--> Caddy :443 --/admin/api/v1/*---unix socket--> askbar-admin
-                                                                                          |
-                                                    server API (server token, internal network only)
-                                                                                          v
-                                                                                   askbar-server :8082
+ client  --HTTPS, client token---> Caddy --/api/client/v1/*--> server --> model gateway --> providers, GPU desktop
+ browser --HTTPS, session cookie-> Caddy --/admin, /api/admin/v1/*--unix socket--> admin    |
+ script  --HTTPS, admin API key--> Caddy --/api/admin/v1/*----unix socket--> admin          +--> cpa --> account providers
 
- admin --control network, controller token--> askbar-controller --docker.sock--> Docker (start/stop/restart server, caddy, cpa)
- admin --cpa-admin network, control secret--> cpa :8317   (account logins: connect Claude / ChatGPT)
+ admin --config, restarts, backup exports--> each service
+ admin --read token--> auditor <--append tokens-- each service except the admin
+ auditor --alert events--> alert sender --> ntfy or email, dead-man monitor, release check
+ admin --encrypted backups--> /backup volume or SMB/NFS share volume
 ```
 
-Caddy is the only service with published ports. `askbar-server` serves two listeners: the client API (reachable from Caddy) and the server API (reachable from the admin only).
+Caddy is the only service with published ports. The server stores no secrets and has no outbound route.
 
 ## Routes
 
-One public host. The path rule is `/<audience>/<...>/v<N>/<resource>`: the audience comes first and the version after it, so each API versions independently.
+One host name. Every API uses `/api/{name}/v{major}` ([ADR 0022](adr/0022-api-path-conventions.md)).
 
 | Public path | Goes to | Who can reach it | What protects it |
 | --- | --- | --- | --- |
-| `/admin`, `/admin/*` (site files and `/admin/api/v1/*`) | admin unix socket | anyone Caddy lets through | session cookie plus `X-Askbar-Admin: 1` on changes, or an admin API key as `Authorization: Bearer`; optional `remote_ip` allowlist; login lockout |
-| `/api/client/v1/*` | `server:8080` | anyone | client bearer token plus the client-version gate (`health` and `pairings` need no token) |
-| `/api/server/*` | answered 404 by Caddy | nobody from outside | not routed; the real listener is on the internal `server-api` network |
-| everything else | answered 404 by Caddy | n/a | n/a |
+| `/admin`, `/admin/*` (site files) | admin unix socket | private addresses by default | `remote_ip` allowlist |
+| `/api/admin/v1/*` | admin unix socket | private addresses by default | session cookie and CSRF header on changes, or an admin API key; allowlist; login lockout |
+| `/api/client/v1/*` | `server` | local network or Tailscale by default | client bearer token plus the client-version gate |
+| everything else, including other `/api/*` paths | answered 404 by Caddy | n/a | n/a |
 
-Within `v1`, changes are additive only (new fields, endpoints, error codes). Anything else gets `v2` beside `v1` for one release.
+Before 1.0, paths can change to fit the conventions. After 1.0, `/api/client/v1` changes are additive only.
 
 ## Errors
 
@@ -68,56 +69,67 @@ Every failure is `application/problem+json` (RFC 9457) with `type` (`urn:askbar:
 
 ## Versions
 
-The version in the URL is the API version. `X-Askbar-Client-Version` and the 426 `client_too_old` response remain for one case only: the client is too old for this server within `v1`. The header applies to the client API only.
+The version in the URL is the API version. `X-Askbar-Client-Version` and the 426 `client_too_old` response remain for one case only: the client is too old for this server. The header applies to the client API only.
 
-## Volumes and networks
+## Links
 
-Data volumes must never be renamed: Compose would silently create an empty one (for `askbar-secrets` that orphans the master key).
+Every link has its own authenticated path and uses separate networks, so a missing row means a blocked path.
 
-| Name | Holds | Mounted by |
-| --- | --- | --- |
-| `./data` (bind, `DATA_DIR`) | `askbar.db`: conversations, clients, encrypted provider keys | server (uid 10002) |
-| `askbar-secrets` | `master.key` | server only |
-| `audit-data` | `audit.db`, the trace of replies (content sealed) | server only |
-| `server-token` | `token.sha256`, the server token's hash (regenerable) | admin read-write, server read-only |
-| `admin-data` | `admin.db` | admin only |
-| `admin-secrets` | `admin.key` | admin only |
-| `admin-run` | the admin's unix socket | admin, Caddy |
-| `caddy-run` | Caddy's admin socket | Caddy, admin |
-| `caddy-secrets` | the Cloudflare token file | admin read-write, Caddy read-only |
-| `caddy-data`, `caddy-config` | certificates and Caddy state | Caddy |
-| `control-token` | `token.sha256`, the controller token's hash (regenerable) | admin read-write, controller read-only |
-| `cpa-config` | CLIProxyAPI's `config.yaml`: the admin makes it (API key, control secret) | admin read-write, cpa |
-| `cpa-auth` | the Claude / ChatGPT logins | cpa only |
-| `/var/run/docker.sock` (host) | Docker | controller only |
+| From | To | Purpose | Authentication |
+| --- | --- | --- | --- |
+| Client, browser, script | Caddy | Public entry | TLS, then the target API's credential |
+| Caddy | `server` | Client API | Client token at the server |
+| Caddy | `admin` | Admin site and API, over a unix socket | Admin credential at the admin |
+| `admin` | Caddy | Configuration, over Caddy's admin socket | Socket permissions |
+| `admin` | `server`, model gateway, `cpa` | Status, configuration, restarts, logins | Per-link token |
+| `admin` | Each exporting service | Encrypted backup exports | Per-link token |
+| `admin` | `auditor` | Read logs and set retention | Admin read token |
+| `admin` | Alert sender | Read release results | Per-link token |
+| Each service except the admin | `auditor` | Append records | Service append token |
+| `auditor` | Alert sender | Alert events | Per-link token |
+| `server` | Model gateway | Model calls | Per-link token |
+| Model gateway | `cpa` | Subscription providers | `cpa` API key |
 
-| Network | Members | Why |
-| --- | --- | --- |
-| `edge` | Caddy, server, cpa (and the dev mock) | the only network with a route out; only Caddy publishes ports |
-| `control` | admin, controller | `internal`; the controller has no other network and no ports |
-| `cpa-admin` | admin, cpa | `internal`; how the admin runs CLIProxyAPI logins without ever joining `edge` |
-| `server-api` | admin, server | `internal`, so it has no route out; the server API listens on one fixed address, never a wildcard |
-| `admin-setup` | Caddy alone | the first-run page for the admin on `127.0.0.1:8081` (plain HTTP). Nothing else joins, so no container can open it. The name must sort before `edge`: Docker publishes a container's ports on its address on the first network in name order, and Caddy listens for this page on its `admin-setup` address only |
+**Outbound access:** in v1, Caddy, the model gateway, `cpa` and the alert sender have direct outbound access. The server and auditor have none. The egress proxy ships first after v1.
+
+## Volumes
+
+Each service has its own data and credential volumes and user ID, with no shared data volumes or host bind mounts ([ADR 0003](adr/0003-v1-service-layout.md)). Data volumes must never be renamed: Compose would silently create an empty one.
+
+| Holds | Mounted by |
+| --- | --- |
+| Control database and space files | `server` |
+| Audit store | `auditor` |
+| Admin data and secrets | `admin` |
+| Per-link token files and hashes | `bootstrap` once, then the service that owns each file |
+| Certificates and Caddy state | `caddy` |
+| `cpa` config | `cpa`, written by `admin` |
+| `cpa` logins | `cpa` |
+| Alert sender state and delivery settings | Alert sender |
+| Admin and Caddy unix sockets | `admin` and `caddy` |
+| `/backup` or SMB/NFS share volume, defined in Compose | `admin` |
 
 ## Why each boundary exists
 
-- **Server API on its own internal listener.** It can replace the whole configuration and read the audit trace. It is never routed publicly; Caddy answers 404 for `/api/server/*` as a second layer.
-- **Server token, hashed on the server side.** The admin holds the token, the server holds only its SHA-256 on a volume it mounts read-only, so a compromised server cannot mint a token.
-- **Admin on a unix socket, one network.** No TCP port exists to attack; only Caddy shares the socket's volume.
-- **Admin and server in different containers with different uids.** The server cannot read `admin.db`, the admin cannot read `master.key` or `audit.db`.
-- **Audit content sealed.** The server holds only a public key derived from the audit passphrase, so it cannot read what it recorded.
-- **One origin for client and admin.** The client API serves JSON only and the admin cookie is `Path=/admin`, `HttpOnly`, `SameSite=Strict` with a CSRF header and a strict CSP, so sharing a host name does not let one reach the other's credentials. The remaining protection is Caddy's 404 for every path outside the three prefixes.
-- **CLIProxyAPI on `edge` and `cpa-admin`.** The server reaches it on `edge`; the admin reaches its account-login API on `cpa-admin`, which has no route out. Nothing publishes it and Caddy has no route to it.
-- **The Docker socket only in the controller.** Service control needs it, and it is root on the host, so it lives in a container with nothing else: no ports, no route out, one network shared with the admin, a token, and an allow list of three services (see SECURITY.md). The admin cannot start anything new.
-- **The admin makes CLIProxyAPI's config.** The CPA API key and control secret are generated by the admin (kept in `admin-secrets`) so no one copies a key; the provider for CLIProxyAPI is created by the admin and its name, address and key are fixed.
+- **Server API on its own internal listener.** It can replace the server's configuration, so it is never routed publicly.
+- **Per-link tokens from bootstrap.** Each receiver holds a hash and maps it to one caller and its allowed routes, so a compromised service can use only its own token.
+- **Admin on a unix socket.** No admin TCP port exists to attack through Caddy.
+- **Admin and server in different containers with different user IDs and images.** The server can't read the admin's data, and the server never calls the admin. Services answer `503 not_configured` until the admin pushes their configuration ([ADR 0028](adr/0028-service-boundaries-and-config-delivery.md)).
+- **Provider keys in the model gateway.** The server has no keys or outbound route, so a compromised server can't copy keys or send data directly.
+- **Auditor in its own container.** It accepts appends only, with a hash chain, so a compromised server or admin can't rewrite earlier records. A provider call doesn't start until the auditor acknowledges its span ([ADR 0031](adr/0031-audit-span-start-and-backlog.md)).
+- **Audit content sealed.** The server holds only a public key derived from the audit passphrase, so it can't read what it recorded ([ADR 0030](adr/0030-sealed-audit-content.md)).
+- **One file per space.** A query bug in one space can't reach another space's file ([ADR 0009](adr/0009-spaces-and-storage.md)).
+- **One origin for client and admin.** The client API serves JSON or its documented event stream, and the admin cookie uses `Path=/api/admin`, `HttpOnly` and `SameSite=Strict`, with a CSRF header, `Sec-Fetch-Site` checks and a strict CSP ([ADR 0029](adr/0029-shared-origin-protections.md)).
+- **No Docker socket.** Docker access could mount any volume, so services restart themselves through their own endpoints ([ADR 0005](adr/0005-no-controller-and-self-restart.md)).
+- **Container hardening.** Every service uses a read-only root filesystem, dropped capabilities and limits ([ADR 0032](adr/0032-container-hardening.md)).
+- **Encrypted exports.** Each service encrypts its backup export, so the admin bundles files it can't read ([ADR 0013](adr/0013-backups.md)).
 
 ## Decisions
 
-- **Chat stays `POST /api/client/v1/chat`.** It creates the conversation if needed, saves the question, starts a generation and streams it in one call, with `client_request_id` idempotency the outbox relies on. It is the one RPC-style endpoint.
+- **Chat is `POST /api/client/v1/spaces/{space_id}/chat`.** It creates the conversation if needed, saves the question and starts a generation, with `client_request_id` idempotency. Chats are processed on the server and sent to clients when complete. Live sync happens only on the client that started the chat, or it shows a processing message ([ADR 0008](adr/0008-users-clients-and-client-access.md)).
 - **Old clients.** `/api/v1/*` answers one 426 `client_too_old`; nothing else of the old paths exists.
-- **Client tokens and pairing strings stay valid** across the upgrade: nothing stored changes.
-- **The admin API is public and documented**, with its own OpenAPI file; scripts use an admin API key.
+- **The admin API is documented**, with its own OpenAPI file; scripts use an admin API key.
 
 ## Considered and not changed
 
-`askbar-proto` (shared types), cookie and header names, the `askbar-pair:` prefix, container and image names, `src-tauri/` and `ui/` directory names (Tauri convention), data volume names.
+`askbar-proto` (shared types), the `askbar-pair:` prefix, `src-tauri/` and `ui/` directory names (Tauri convention).

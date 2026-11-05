@@ -1,28 +1,42 @@
 # Security
 
+This document describes the proposed v1 target. The code on `main` doesn't fully match it yet, and the [ADRs](docs/adr/README.md) are still Proposed.
+
 ## What each part can read
 
 | Part | Can read | Cannot read |
 | --- | --- | --- |
-| **Server** (`askbar-server`) | conversations, client token hashes, provider API keys (encrypted with a master key only it holds), the audit trace (content sealed) | the admin's database, the admin password hash, the Cloudflare token, the audit passphrase or private key |
-| **Admin** (`askbar-admin`) | its own database (password hash, Cloudflare token encrypted, pairing codes, API key hash), the audit trace's metadata through the server API | provider keys (it only sends them), the master key, `audit.db` itself |
+| **Server** (`askbar-server`) | conversations and memory in every space file, the control database | stored provider keys, the admin's data, the audit passphrase or private key, audit records |
+| **Model gateway** | provider keys held in memory, budgets, the prompts and replies it passes through | space files, the admin's data, the audit passphrase or private key |
+| **Admin** (`askbar-admin`) | its own data, including provider keys, the Cloudflare token and the password hash; audit metadata | space files, other services' volumes, backup contents; sealed audit content without the passphrase |
+| **Auditor** (`askbar-auditor`) | audit metadata, sealed content as ciphertext, the hash chain | sealed content, the audit passphrase or private key |
 | **Caddy** | the Cloudflare token file, TLS certificates | everything else |
-| **A client** (the app) | its own conversations; its token only | other users' data, provider keys |
-| **An admin API key** | what the admin site can do except managing keys, the password and the session | the same |
+| **`cpa`** | its config and account logins | everything else |
+| **Alert sender** | alert events and its delivery settings | conversations, sealed content |
+| **A client** (the app) | its user's personal space and the shared spaces that user belongs to | other users' data, provider keys |
+| **An admin API key** | what the admin site can do except managing keys, the password and the session | sealed audit content |
 
-Prompts, replies and provider errors are recorded in the audit store only as ciphertext, sealed to a public key
-made from the audit passphrase. The server cannot open them; only someone with the passphrase can, in the admin
-site, and every opening is recorded. If the passphrase is lost, that content is gone for good. How and why:
-[docs/architecture.md](docs/architecture.md).
+Prompts, replies and provider errors are recorded in the audit store only as ciphertext, sealed to a public key made from the audit passphrase. The server and auditor can't open them. In v1, only the single admin can, by entering the passphrase in a timed session ([ADR 0011](docs/adr/0011-sealed-content-access.md)). Each session and item viewed is recorded, and each unseal sends an alert. If the passphrase is lost, that content is gone for good.
+
+## Exposure
+
+- **Admin:** it's limited to private addresses by default, and the admin can add Tailscale or widen the allowlist in settings. Caddy checks the connection's real source, never a forwarded header.
+- **Clients:** they use the local network or Tailscale by default. Public access is a deployer option.
+- **Port forwarding:** a router or proxy that rewrites the source can make public traffic look private. Don't forward the admin page to the internet.
+- **First run:** the published `admin:admin` login works from private addresses until you change the password, and nothing else is allowed until you do. Change it as soon as you deploy.
+- **Sign-in:** passkeys are optional but recommended, and they need a real domain. Once you create one, recovery codes replace the password as the backup.
 
 ## What a leaked admin API key can do
 
-It can use the admin API like the site (read audit metadata, change providers and settings, make pairing strings,
-download a backup, turn the kill switch on or off). It **cannot** make or revoke keys, change the admin password, open
-a session, or open sealed audit content (that needs the passphrase). Revoke it in the admin site, Security tab; it
-stops working at once. Only its hash is stored. Wrong keys count toward the same lockout as wrong passwords.
+It can use the admin API like the site: read audit metadata, change providers and settings, make pairing keys, download an encrypted backup, and turn the kill switch on or off. It **cannot** make or revoke keys, change the admin password, open a session, or open sealed audit content. Revoke it in the admin site, Security tab; it stops working at once. Only its hash is stored. Wrong keys count toward the same lockout as wrong passwords.
 
-If the admin is reachable from the internet, turn on the address allowlist (Network tab).
+## Backups
+
+Backups contain secrets, encrypted with age. Each service encrypts its own export, and the admin bundles the encrypted exports without being able to read them. Your backup passphrase protects the private key stored in each backup, so anyone with a stolen file can try to guess it offline. Use a long, random passphrase and keep it safe; it can't be recovered. See [ADR 0013](docs/adr/0013-backups.md).
+
+## Who is responsible
+
+Askbar has no support or uptime guarantee. The project maintainer is responsible for what each release contains. Each deployer is responsible for their host, Docker, patches, alerts, recovery, and any consent, notice, or legal duties, which can differ for minors, employees, and other countries. See the [risk register](docs/adr/0016-risk-register.md) for what v1 defends and what it accepts.
 
 ## Reporting a problem
 
@@ -32,18 +46,24 @@ issue that says only that you have a security report and asks for a private way 
 
 We do not run a bug bounty and cannot promise a fix date, but we will answer and credit you if you wish.
 
-## What `scripts/check-isolation.sh` proves
+## What `scripts/check-isolation.sh` must prove
 
-Against a running stack it checks, among other things: the server API answers only with the token and fails closed with
-no hash file; only the admin can reach it and the admin joins no other network; the server cannot read the admin's
-files or socket; the audit store is mounted by the server only; secret files are mode 600; the server image has no
-admin code; backups hold no secrets; the first-run page is reachable on the host's loopback only and not from other
-containers; Caddy's loaded route sends only the client API to the server; CLIProxyAPI publishes no port; only the controller mounts the Docker socket and it is on a network with the admin alone; the controller refuses calls without its token and the admin site cannot name the admin or the controller.
+The script still checks the current `main` layout. For v1, it must check against a running stack that:
+
+- Internal APIs answer only with the right token, and fail closed without one.
+- Only approved services can reach each link.
+- Services can't read each other's files or sockets, and only the auditor mounts the audit store.
+- Secret files are mode 600, and the server image has no admin code.
+- Backups hold secrets only in encrypted form.
+- No service mounts the Docker socket.
+- Caddy routes only `/admin`, `/api/admin` and `/api/client`, and refuses public sources for the admin.
+- `cpa` publishes no port.
+- Every service has the required container hardening.
+
+It does **not** prove: that the images are free of vulnerable dependencies, that a compromised container cannot attack the Docker host, that your host name, certificates or DNS are set up well, or that the allowlist you chose is right.
 
 ### The Docker socket
 
-Starting and stopping services from the admin site needs the Docker socket, which is root on the host. It is mounted in exactly one container, the **controller**, which has no published port, no route out, no capabilities and a read-only filesystem, and answers only the admin (a token whose hash it holds). It can start, stop and restart the `server`, `caddy` and `cpa` services of its own Compose project and nothing else: no create, exec, pull, volume or other containers (`askbar-controller/src/lib.rs`). A compromised admin can therefore stop or restart those three services, but not run anything new. A compromised controller is root on the host; it is small on purpose, and you can leave it out (remove it from `compose.yaml`; the Services tab then says the controller is not set up and everything else works).
+No Askbar service has the Docker socket, which is root on the host. The admin requests restarts through each service's own endpoint, and Docker's restart policy starts the service again ([ADR 0005](docs/adr/0005-no-controller-and-self-restart.md)). A compromised admin can restart services, but it can't use Docker to mount other volumes or run new containers.
 
-It does **not** prove: that the images are free of vulnerable dependencies, that a compromised container cannot attack
-the Docker host, that your host name, certificates or DNS are set up well, or that the allowlist you chose is right. It
-needs Docker and a throwaway stack; the CI here does not run it.
+If you use an update tool such as Dockhand, its usual setup mounts the socket. It's your own tool, outside the Askbar stack, so you accept that risk and should consider a socket proxy.

@@ -2,7 +2,9 @@
 
 Rules for AI coding agents working on Askbar (Claude Code, Codex, Cursor, Copilot, others). Humans follow them too; the long form is [CONTRIBUTING.md](CONTRIBUTING.md).
 
-"Agent" here means a coding agent working on this repo. Askbar itself has none: the model gets text in and returns text out (README), and stays that way through 1.0 ([ADR 0007](docs/adr/0007-conversation-only-and-tool-gating.md)). Do not add tools, a shell or file access for the model.
+"Agent" here means a coding agent working on this repo. Askbar itself has none: the model gets text in and returns text out, and stays that way through 1.0 ([ADR 0002](docs/adr/0002-v1-scope-limits-and-ship-criteria.md)). Do not add tools, a shell or file access for the model.
+
+This file, [SECURITY.md](SECURITY.md) and [docs/architecture.md](docs/architecture.md) describe the proposed v1 target. Nothing here is accepted or fully built yet, and the code on `main` still differs. Follow these rules for new work, and do not treat a difference from `main` as permission to change a boundary without the owner's approval.
 
 Items marked **(proposed)** await a decision; see [docs/plan-contributor-guidelines.md](docs/plan-contributor-guidelines.md).
 
@@ -11,11 +13,11 @@ Items marked **(proposed)** await a decision; see [docs/plan-contributor-guideli
 When rules conflict, the higher one wins:
 
 1. Security and audit invariants (below, [SECURITY.md](SECURITY.md)).
-2. Architecture: [docs/architecture.md](docs/architecture.md) and accepted ADRs.
+2. Architecture: [docs/architecture.md](docs/architecture.md) and [ADRs](docs/adr/README.md).
 3. API contract: [docs/openapi/](docs/openapi/) and [docs/wire-contract.md](docs/wire-contract.md).
 4. Style: [docs/style/](docs/style/).
 
-If code and `docs/architecture.md` disagree, one is a bug. Fix it in the same commit; do not pick silently. If a rule is unclear or two rules clash, stop and ask.
+If code and `docs/architecture.md` disagree on behavior the target has already reached, one is a bug. Fix it in the same commit; do not pick silently. If the code hasn't reached the target yet, say so in the PR. If a rule is unclear or two rules clash, stop and ask.
 
 ## Commands
 
@@ -34,20 +36,20 @@ Before you finish: `npm test` and `scripts/smoke.sh` pass. If you touched `compo
 ## Hard rules (MUST NOT)
 
 - The server side never reads or writes the admin's data or settings, and never calls the admin. The admin pushes to the server over the server API only. A model, tool or reply must never be able to change settings.
-- The admin stays in its own container and image. No admin code in the server image; the only things the two share are the `server-api` network and the `server-token` volume (a hash). The admin is served at `/admin` on the one host name; do not add a second domain or certificate.
-- Never route `/api/server/*` or the controller publicly. Only Caddy publishes ports.
-- The Docker socket stays in the controller, and the controller keeps its allow list of `server`, `caddy`, `cpa`. Do not widen it.
-- Secrets never go in `.env`, logs, backups, error messages, test output or commits. Provider keys live encrypted in the server database and are never returned by any endpoint. An environment variable holds a path or an address, never a secret.
-- Audit content stays sealed. The server never holds the audit passphrase or private key. Prompts, replies and provider errors appear nowhere except sealed audit payloads, not in logs or error text. Retention never goes below 7 days.
-- Every path that calls a model or provider is recorded in the audit trace.
+- The admin stays in its own container and image. No admin code in the server image. The admin and server share only their authenticated API link and no data volumes. The admin site is at `/admin` and its API is at `/api/admin/v1` on the one host name; do not add a second domain or certificate.
+- Never route `/api/server/*` or another internal API publicly. Only Caddy publishes ports.
+- No service gets the Docker socket.
+- Secrets never go in `.env`, logs, error messages, test output or commits. Backups contain secrets only under the encryption in [ADR 0013](docs/adr/0013-backups.md). The admin stores provider keys, the model gateway holds them in memory, and no endpoint returns them. An environment variable holds a path or an address, never a secret.
+- Audit content stays sealed. The server and auditor never hold the audit passphrase or private key. Prompts, replies and provider errors appear nowhere except sealed audit payloads, not in logs or error text. Retention never goes below 7 days.
+- Every path that calls a model or provider is recorded in the audit trace. A provider call doesn't start until the auditor acknowledges its span.
 - Never rename a Docker volume that holds data. Never edit an earlier database migration; append.
-- Within `v1`, never remove or rename a field, endpoint or error code. Add only.
+- After 1.0, within `/api/client/v1`, never remove or rename a field, endpoint or error code. Add only.
 - The admin site writes text with `textContent`, never `innerHTML`, and keeps its CSP. In the popup, only `renderMarkdown` output may reach `innerHTML`.
-- Use the names in the [glossary](docs/architecture.md#glossary) (**client**, **server**, **admin**, **controller** and the rest). `scripts/check-names.sh` refuses the old words.
+- Use the names in the [glossary](docs/architecture.md#glossary). `scripts/check-names.sh` refuses the old words.
 - Do not loosen or delete a test unless the contract changed, and say so in the commit message.
-- Do not add a dependency without saying why in the PR. **(proposed)** `cargo deny check` passes.
+- Do not add a dependency without saying why in the PR. `cargo deny check` and the npm license check must pass.
 - Do not change `.github/workflows/` or repository settings without asking.
-- Do not push to `main`. Do not force-push a shared branch.
+- Do not push to `main`, merge a pull request, or accept an ADR without the owner's approval. Do not force-push a shared branch.
 
 ## How to work
 
@@ -55,7 +57,9 @@ Before you finish: `npm test` and `scripts/smoke.sh` pass. If you touched `compo
 - Make the smallest change that does the job. One concern per commit. Tests and docs go in the same commit as the code.
 - One place per fact: link to it, do not copy it.
 - New endpoint: follow "Adding an endpoint, end to end" in CONTRIBUTING.md. The OpenAPI test fails if a route and its file disagree.
-- Errors: return `ApiError` with an `ErrorCode`. Clients branch on `error`, never on prose.
+- Errors: return `ApiError` with an `ErrorCode`. Clients branch on `error`, never on prose ([ADR 0023](docs/adr/0023-api-error-format.md)).
+- API paths: follow [ADR 0022](docs/adr/0022-api-path-conventions.md).
+- Decisions and changes: follow [ADR 0001](docs/adr/0001-decision-records-and-change-rules.md).
 - Logs and audit: follow [docs/style/logging-and-audit.md](docs/style/logging-and-audit.md).
 - Names: follow [docs/style/naming.md](docs/style/naming.md). UI text and behaviour: [docs/style/ui-ux.md](docs/style/ui-ux.md).
 - Report what you verified and what you did not, in the PR body.
@@ -70,7 +74,7 @@ Before you finish: `npm test` and `scripts/smoke.sh` pass. If you touched `compo
 ## Branches and commits **(proposed)**
 
 - Branch: `<type>/<short-kebab-description>`, type one of `feat fix docs refactor test chore ci`. A harness-made `claude/...` branch is fine.
-- Commit: [Conventional Commits](https://www.conventionalcommits.org/): `type(scope): subject`. Imperative, lower case, no full stop, 72 characters or fewer. Scope is one of `proto server admin controller client ui compose docs ci deps`.
+- Commit: [Conventional Commits](https://www.conventionalcommits.org/): `type(scope): subject`. Imperative, lower case, no full stop, 72 characters or fewer. Scope is one of `proto server admin auditor gateway client ui compose docs ci deps`.
 - Body: why, not what. List any deviation from the plan or any test you changed. Breaking change: `!` after the scope and a `BREAKING CHANGE:` footer.
 - Pull request title is a commit subject. Fill in the PR template.
 - Merging: squash by default. A stepwise series, where each commit stands alone, is rebase-merged; say so in the PR.
