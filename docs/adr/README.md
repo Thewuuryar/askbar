@@ -1,6 +1,6 @@
 # Architecture decision records
 
-This set records the decisions in the Askbar Architecture Plan: Clean Copy, plus the requirements and recommendations added afterward. Every ADR is Proposed, because only the owner can move an ADR to Accepted ([0001](0001-decision-records-and-change-rules.md)).
+This set records the decisions in the [Askbar Architecture Plan: Clean Copy](../architecture-plan.md), plus the requirements and recommendations added afterward. Every ADR is Proposed, because only the owner can move an ADR to Accepted ([0001](0001-decision-records-and-change-rules.md)).
 
 | ADR | Title | Plan decisions |
 | --- | --- | --- |
