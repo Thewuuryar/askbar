@@ -1,6 +1,6 @@
 # 0015. Certificates
 
-Status: Proposed
+Status: Accepted 
 Date: 2026-11-04
 Plan decisions: 20, 34
 
