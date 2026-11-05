@@ -4,7 +4,7 @@ Rules for AI coding agents working on Askbar (Claude Code, Codex, Cursor, Copilo
 
 "Agent" here means a coding agent working on this repo. Askbar itself has none: the model gets text in and returns text out, and stays that way through 1.0 ([ADR 0002](docs/adr/0002-v1-scope-limits-and-ship-criteria.md)). Do not add tools, a shell or file access for the model.
 
-This file, [SECURITY.md](SECURITY.md) and [docs/architecture.md](docs/architecture.md) describe the proposed v1 target. Nothing here is accepted or fully built yet, and the code on `main` still differs. Follow these rules for new work, and do not treat a difference from `main` as permission to change a boundary without the owner's approval.
+This file, [SECURITY.md](SECURITY.md) and [docs/architecture.md](docs/architecture.md) describe the proposed v1 target. Not everything here is accepted or built yet, and the code on `main` still differs. Check each [ADR](docs/adr/README.md)'s status. Follow these rules for new work, and do not treat a difference from `main` as permission to change a boundary without the owner's approval.
 
 Items marked **(proposed)** await a decision; see [docs/plan-contributor-guidelines.md](docs/plan-contributor-guidelines.md).
 
@@ -39,7 +39,7 @@ Before you finish: `npm test` and `scripts/smoke.sh` pass. If you touched `compo
 - The admin stays in its own container and image. No admin code in the server image. The admin and server share only their authenticated API link and no data volumes. The admin site is at `/admin` and its API is at `/api/admin/v1` on the one host name; do not add a second domain or certificate.
 - Never route `/api/server/*` or another internal API publicly. Only Caddy publishes ports.
 - No service gets the Docker socket.
-- Secrets never go in `.env`, logs, error messages, test output or commits. Backups contain secrets only under the encryption in [ADR 0013](docs/adr/0013-backups.md). The admin stores provider keys, the model gateway holds them in memory, and no endpoint returns them. An environment variable holds a path or an address, never a secret.
+- Secrets never go in `.env`, logs, error messages, test output or commits. Backups contain secrets only under the encryption in [ADR 0013](docs/adr/0013-backups.md). The admin stores provider keys, `model-gateway` holds them in memory, and no endpoint returns them. An environment variable holds a path or an address, never a secret.
 - Audit content stays sealed. The server and auditor never hold the audit passphrase or private key. Prompts, replies and provider errors appear nowhere except sealed audit payloads, not in logs or error text. Retention never goes below 7 days.
 - Every path that calls a model or provider is recorded in the audit trace. A provider call doesn't start until the auditor acknowledges its span.
 - Never rename a Docker volume that holds data. Never edit an earlier database migration; append.
@@ -74,7 +74,7 @@ Before you finish: `npm test` and `scripts/smoke.sh` pass. If you touched `compo
 ## Branches and commits **(proposed)**
 
 - Branch: `<type>/<short-kebab-description>`, type one of `feat fix docs refactor test chore ci`. A harness-made `claude/...` branch is fine.
-- Commit: [Conventional Commits](https://www.conventionalcommits.org/): `type(scope): subject`. Imperative, lower case, no full stop, 72 characters or fewer. Scope is one of `proto server admin auditor gateway client ui compose docs ci deps`.
+- Commit: [Conventional Commits](https://www.conventionalcommits.org/): `type(scope): subject`. Imperative, lower case, no full stop, 72 characters or fewer. Scope is one of `proto server admin auditor model-gateway alerter client ui compose docs ci deps`.
 - Body: why, not what. List any deviation from the plan or any test you changed. Breaking change: `!` after the scope and a `BREAKING CHANGE:` footer.
 - Pull request title is a commit subject. Fill in the PR template.
 - Merging: squash by default. A stepwise series, where each commit stands alone, is rebase-merged; say so in the PR.

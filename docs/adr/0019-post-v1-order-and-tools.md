@@ -25,7 +25,7 @@ The server runs the agent loop, so each tool action passes through a single audi
 
 **Models:** the admin can choose a provider and model separately for research agents and for the judge.
 
-- Both roles go through the model gateway, with usage tracked per role against budgets.
+- Both roles go through `model-gateway`, with usage tracked per role against budgets.
 - Every model or provider change is recorded in the audit log.
 - If the judge's model is unavailable or over budget, actions that need its review are refused.
 

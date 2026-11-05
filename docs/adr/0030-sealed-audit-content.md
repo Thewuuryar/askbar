@@ -13,7 +13,7 @@ Audit records must support investigations without letting the server or auditor 
 1. **Sealing:** the server encrypts prompts, replies, and provider errors with a public key made from the audit passphrase, using Argon2id to derive an X25519 key.
 2. **No private key:** the server and auditor never hold the passphrase or private key. The auditor stores only metadata and ciphertext.
 3. **Metadata:** the admin can read metadata such as time, user, space, providers tried, step timings, tokens, and outcome.
-4. **Model gateway:** its independent records contain metadata only.
+4. **`model-gateway`:** its independent records contain metadata only.
 5. **No plain copies:** prompts, replies, and provider errors appear only in sealed payloads, never in logs or error text.
 6. **Missing key:** until an audit key exists, Askbar answers `503 audit_key_missing` instead of recording unsealed.
 7. **Rotation:** a new passphrase seals new content with a new key. Older content still needs the old passphrase.

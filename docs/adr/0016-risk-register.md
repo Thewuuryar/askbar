@@ -33,7 +33,7 @@ The owner accepted the third list on November 4, 2026. The first list describes 
 | Admin or pairing brute force | Recommended passkeys, allowlist, rate limits, attempt cap, identical errors | Limit and lockout tests |
 | Compromised admin, which holds live secrets | Fresh sign-in for sensitive changes, independent audit, alerts | Admin can't alter records; alerts fire |
 | Unknown changes to the audit log | Hash chain with an off-host copy of the latest hash | Tamper test |
-| False or missing records after a server compromise | Model gateway records each call and refuses calls without a valid audit span; Caddy sends access logs to the auditor; alerts when a component goes silent; off-host hash. Add mismatch alerts if time allows | A call without a span is refused and recorded; a silent component triggers an alert |
+| False or missing records after a server compromise | `model-gateway` records each call and refuses calls without a valid audit span; Caddy sends access logs to the auditor; alerts when a component goes silent; off-host hash. Add mismatch alerts if time allows | A call without a span is refused and recorded; a silent component triggers an alert |
 | Backup theft | Encrypted exports, a passphrase of at least 20 characters, and alerts on public key changes | Restore without the passphrase fails; the admin can't read exports; a key change sends an alert |
 | Vulnerable or changed dependency | Pinned images, scheduled CVE scans of dependencies and images, and alerts on new CVEs and dependency updates | A known vulnerable test dependency fails CI and sends an alert |
 | Malicious model output in a client or admin page | Block remote images and media; allow only safe links and show the destination before opening; strict sanitizer allowlist for `renderMarkdown`; CSP with no inline scripts, plus Trusted Types where supported | XSS and malicious Markdown payload library in CI, across client and admin views; a real-browser test confirms a malicious reply makes no network request and runs no script |
@@ -49,8 +49,8 @@ The owner accepted the third list on November 4, 2026. The first list describes 
 | Stolen host or disk | It depends on the hardware | Use disk encryption where practical |
 | Container or kernel escape | Outside this project's control | Hardened containers and host patches |
 | Compromised server container opens all space files | The server must read these files to answer users | Container hardening, no outbound route, and audit records |
-| Compromised server misuses model access or sends data through model calls | The server must call the model gateway, and data can reach only configured providers | Gateway budgets, model limits, kill switch, audit records, and budget alerts |
-| Compromised model gateway or `cpa` sends data directly | The egress proxy is deferred | Egress proxy first after v1 |
+| Compromised server misuses model access or sends data through model calls | The server must call `model-gateway`, and data can reach only configured providers | `model-gateway` budgets, model limits, kill switch, audit records, and budget alerts |
+| Compromised `model-gateway` or `cpa` sends data directly | The egress proxy is deferred | Egress proxy first after v1 |
 | Compromised service uses its own token | Any service credential has this limit | One token per link, limited routes, and token rotation after a suspected compromise |
 | Audit records older than 7 days age out if a compromised admin lowers retention | The admin controls retention above the 7-day floor | Retention changes are audited and send an alert; backups keep older copies until they expire |
 | First-run takeover from a machine on a private network | First run follows the pfSense model | Private-address limit and forced password change |

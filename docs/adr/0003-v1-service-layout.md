@@ -10,7 +10,7 @@ The service layout must limit what a compromise can reach while staying small en
 
 ## Decision
 
-- **Services:** v1 runs `caddy`, `server`, `admin`, `cpa`, `auditor`, and the model gateway. It also has a small alert sender and a one-time `bootstrap`.
+- **Services:** v1 runs `caddy`, `server`, `admin`, `cpa`, `auditor`, and `model-gateway`. It also has a small `alerter` and a one-time `bootstrap`.
 - **Names:** `server` keeps its name, with no rename to orchestrator.
 - **Host name:** the admin stays on one host name, with one admin URL and no separate hostname switch or admin ingress. The switch can be revisited in v2.
 - **Published ports:** only `caddy` publishes ports. It attaches to a non-internal network, and this exception is documented.
@@ -23,7 +23,7 @@ The service layout must limit what a compromise can reach while staying small en
 - A component matrix lists what each service holds, what it can reach, and what its compromise exposes, and is tested with `check-isolation.sh`.
 - A failure table records behavior, alerting, and recovery for each service, including a full auditor disk.
 - A network map shows every link, including config pushes, audit appends, alerts, and certificate requests.
-- The emergency stop uses a server or gateway policy flag for per-user pause, and keeps alert delivery running during level 1.
+- The emergency stop uses a `server` or `model-gateway` policy flag for per-user pause, and keeps alert delivery running during level 1.
 - Each delivery step has acceptance tests and a rollback.
 
 ## Alternatives considered

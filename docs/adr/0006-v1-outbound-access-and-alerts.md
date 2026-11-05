@@ -10,10 +10,10 @@ V1 needs provider access, certificates, and alerts, but the egress proxy is defe
 
 ## Decision
 
-- **Direct outbound:** Caddy, the model gateway, `cpa`, and the small alert sender use direct outbound access in v1.
+- **Direct outbound:** Caddy, `model-gateway`, `cpa`, and the small `alerter` use direct outbound access in v1.
 - **No outbound:** the server and auditor have no outbound route.
 - **Egress proxy:** it stays out of v1 and ships first after v1 ([0019](0019-post-v1-order-and-tools.md)).
-- **Alert sender:** it delivers alerts through ntfy or email, so the auditor stays offline.
+- **Alerter:** it delivers alerts through ntfy or email, so the auditor stays offline.
 - **Dead-man monitor:** an external monitor catches a silent system.
 - **Audit hash:** the latest hash chain value goes off-host with the dead-man ping, and is stored somewhere the Askbar host can't rewrite.
 - **Emergency use:** when the owner is away, alerts reach their phone, and the stop script remains the emergency control.
@@ -25,4 +25,4 @@ V1 needs provider access, certificates, and alerts, but the egress proxy is defe
 
 ## Consequences
 
-A compromised model gateway or `cpa` can send data directly until the egress proxy ships. This risk is accepted for v1 ([0016](0016-risk-register.md)).
+A compromised `model-gateway` or `cpa` can send data directly until the egress proxy ships. This risk is accepted for v1 ([0016](0016-risk-register.md)).

@@ -1,18 +1,18 @@
 # Security
 
-This document describes the proposed v1 target. The code on `main` doesn't fully match it yet, and the [ADRs](docs/adr/README.md) are still Proposed.
+This document describes the proposed v1 target. The code on `main` doesn't fully match it yet, and each [ADR](docs/adr/README.md) states whether it's Proposed or Accepted.
 
 ## What each part can read
 
 | Part | Can read | Cannot read |
 | --- | --- | --- |
 | **Server** (`askbar-server`) | conversations and memory in every space file, the control database | stored provider keys, the admin's data, the audit passphrase or private key, audit records |
-| **Model gateway** | provider keys held in memory, budgets, the prompts and replies it passes through | space files, the admin's data, the audit passphrase or private key |
+| **`model-gateway`** | provider keys held in memory, budgets, the prompts and replies it passes through | space files, the admin's data, the audit passphrase or private key |
 | **Admin** (`askbar-admin`) | its own data, including provider keys, the Cloudflare token and the password hash; audit metadata | space files, other services' volumes, backup contents; sealed audit content without the passphrase |
 | **Auditor** (`askbar-auditor`) | audit metadata, sealed content as ciphertext, the hash chain | sealed content, the audit passphrase or private key |
 | **Caddy** | the Cloudflare token file, TLS certificates | everything else |
 | **`cpa`** | its config and account logins | everything else |
-| **Alert sender** | alert events and its delivery settings | conversations, sealed content |
+| **`alerter`** | alert events and its delivery settings | conversations, sealed content |
 | **A client** (the app) | its user's personal space and the shared spaces that user belongs to | other users' data, provider keys |
 | **An admin API key** | what the admin site can do except managing keys, the password and the session | sealed audit content |
 

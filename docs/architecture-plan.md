@@ -42,7 +42,7 @@ V1 runs six long-running services and a small alert sender, plus a one-time boot
 
 ```mermaid
 ---
-title: V1 keeps the server offline behind one model gateway
+title: V1 keeps the server offline behind one model-gateway
 ---
 flowchart TB
     clients["Clients"]
@@ -53,9 +53,9 @@ flowchart TB
         server["<b>server</b><br/>Chats and space files<br/>No secrets or outbound route"]
         auditor["<b>auditor</b><br/>Append-only log, hash chain<br/>No outbound route"]
         admin["<b>admin</b><br/>Secrets, settings, pairing<br/>Backups and restart requests"]
-        gateway["<b>model gateway</b><br/>Provider keys, budgets,<br/>kill switch, direct outbound"]
+        modelGateway["<b>model-gateway</b><br/>Provider keys, budgets,<br/>kill switch, direct outbound"]
         cpa["<b>cpa</b><br/>Optional subscription login<br/>Direct outbound"]
-        sender["<b>alert sender</b><br/>Sends alerts, checks releases<br/>Direct outbound"]
+        alerter["<b>alerter</b><br/>Sends alerts, checks releases<br/>Direct outbound"]
         bootstrap["<b>bootstrap, first start only</b><br/>No network. Writes per-link<br/>tokens, then exits"]
     end
 
@@ -70,17 +70,17 @@ flowchart TB
     admin -->|"config"| caddy
     server --> auditor
     admin --> auditor
-    server -->|"model calls"| gateway
-    gateway --> cpa
-    auditor -->|"alert events"| sender
-    sender -->|"releases"| admin
-    gateway --> providers
+    server -->|"model calls"| modelGateway
+    modelGateway --> cpa
+    auditor -->|"alert events"| alerter
+    alerter -->|"releases"| admin
+    modelGateway --> providers
     cpa --> providers
-    sender --> alerts
+    alerter --> alerts
     admin --> backup
 
     classDef key stroke-width:3px
-    class gateway key
+    class modelGateway key
 ```
 
 Every service except the admin appends to the auditor with its own token. The admin reads the auditor and pushes configuration and restart requests to each service. The egress proxy stays out of v1, so Caddy, the model gateway, `cpa`, and the alert sender use direct outbound access. `server` keeps its name.
@@ -463,12 +463,12 @@ flowchart TB
         auditor["<b>auditor</b><br/>Append-only log, hash chain<br/>No outbound route"]
         admin["<b>admin</b><br/>Secrets, settings, pairing<br/>CA only if a trigger is met"]
         judge["<b>judge (new)</b><br/>Reviews gray areas<br/>Own provider, model"]
-        gateway["<b>model gateway</b><br/>Provider keys, budgets,<br/>kill switch"]
+        modelGateway["<b>model-gateway</b><br/>Provider keys, budgets,<br/>kill switch"]
         mcp["<b>MCP gateway (new)</b><br/>Credentialed tools,<br/>web research"]
         link["<b>executor-link (new)</b><br/>Optional Tailscale<br/>service, one port"]
         cpa["<b>cpa</b><br/>Optional login"]
         searxng["<b>searxng (new)</b><br/>Web search"]
-        sender["<b>alert sender</b><br/>Auditor alerts, releases"]
+        alerter["<b>alerter</b><br/>Auditor alerts, releases"]
         egress["<b>egress proxy (new)</b><br/>Default deny, with an allowlist per source<br/>Blocks private addresses except approved hosts such as the GPU desktop"]
     end
 
@@ -483,17 +483,17 @@ flowchart TB
     server --> auditor
     admin --> auditor
     server -->|"server calls"| judge
-    server -->|"server calls"| gateway
+    server -->|"server calls"| modelGateway
     server -->|"server calls"| mcp
     link -->|"work and output"| server
-    judge --> gateway
-    gateway --> cpa
+    judge --> modelGateway
+    modelGateway --> cpa
     mcp --> searxng
-    gateway --> egress
+    modelGateway --> egress
     mcp --> egress
     cpa --> egress
     searxng --> egress
-    sender --> egress
+    alerter --> egress
     egress --> internet
     executor -->|"Tailscale"| link
 

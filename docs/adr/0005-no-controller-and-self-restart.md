@@ -14,7 +14,7 @@ Neither v1 nor v2 has a controller, and no service gets the Docker socket for re
 
 | Service | Restart approach |
 | --- | --- |
-| `server`, `admin`, model gateway | Built-in self-restart endpoint |
+| `server`, `admin`, `model-gateway` | Built-in self-restart endpoint |
 | `caddy` | Live config reload, with no custom endpoint |
 | `cpa` | Test its reload behavior first, and add a small supervisor process only if needed |
 | `auditor` | Host recovery only |

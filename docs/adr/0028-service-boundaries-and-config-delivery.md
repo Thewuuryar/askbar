@@ -6,7 +6,7 @@ Source: required by v1 decisions
 
 ## Context
 
-The server handles untrusted text and must not be able to change settings. The model gateway holds keys only in memory, so restarted services need their configuration back with no manual commands.
+The server handles untrusted text and must not be able to change settings. `model-gateway` holds keys only in memory, so restarted services need their configuration back with no manual commands.
 
 ## Decision
 

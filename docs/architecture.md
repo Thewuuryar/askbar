@@ -1,6 +1,6 @@
 # Architecture
 
-This document is the proposed v1 target that the code will follow. The code on `main` doesn't fully match it yet, and the [ADRs](adr/README.md) are still Proposed.
+This document is the proposed v1 target that the code will follow. The code on `main` doesn't fully match it yet, and each [ADR](adr/README.md) states whether it's Proposed or Accepted.
 
 ## Glossary
 
@@ -14,8 +14,8 @@ Every API, module, environment variable, UI label and document uses these names 
 | **server** | the Askbar server: chats, spaces, and its control and inspection interface | `/api/server/v1` | `askbar-server`, internal listener only | `askbar-admin` |
 | **admin** | the admin site and its control interface | `/api/admin/v1` | `askbar-admin` | the admin site (session cookie) or a script (admin API key) |
 | **auditor** | the container that keeps the audit store: services append to it, and the admin reads it | `/api/audit/v1` | `askbar-auditor`, internal only | services (append), `askbar-admin` (read) |
-| **model gateway** | the container that holds provider keys in memory, enforces budgets and the kill switch, and calls providers | `/api/gateway/v1` | model gateway, internal only | `askbar-server` |
-| **alert sender** | the small container that delivers alerts and checks for new releases | `/api/alerts/v1` | alert sender, internal only | `askbar-auditor`, `askbar-admin` |
+| **model-gateway** | the container that holds provider keys in memory, enforces budgets and the kill switch, and calls providers | `/api/model-gateway/v1` | `askbar-model-gateway`, internal only | `askbar-server` |
+| **alerter** | the small container that delivers alerts and checks for new releases | `/api/alerter/v1` | `askbar-alerter`, internal only | `askbar-auditor`, `askbar-admin` |
 | **bootstrap** | the one-time container that creates per-link tokens on first start | none | none | none |
 
 Third-party components keep their product name (`caddy`, `cpa`). After v1, these names are added: **egress proxy**, **MCP gateway**, **judge**, **executor**, **`executor-link`** and `searxng` ([ADR 0019](adr/0019-post-v1-order-and-tools.md), [ADR 0020](adr/0020-remote-executor-and-ca-triggers.md)).
@@ -38,13 +38,13 @@ Retired words, refused by `scripts/check-names.sh`: "management" and "mgmt" (now
 ## Picture
 
 ```
- client  --HTTPS, client token---> Caddy --/api/client/v1/*--> server --> model gateway --> providers, GPU desktop
+ client  --HTTPS, client token---> Caddy --/api/client/v1/*--> server --> model-gateway --> providers, GPU desktop
  browser --HTTPS, session cookie-> Caddy --/admin, /api/admin/v1/*--unix socket--> admin    |
  script  --HTTPS, admin API key--> Caddy --/api/admin/v1/*----unix socket--> admin          +--> cpa --> account providers
 
  admin --config, restarts, backup exports--> each service
  admin --read token--> auditor <--append tokens-- each service except the admin
- auditor --alert events--> alert sender --> ntfy or email, dead-man monitor, release check
+ auditor --alert events--> alerter --> ntfy or email, dead-man monitor, release check
  admin --encrypted backups--> /backup volume or SMB/NFS share volume
 ```
 
@@ -81,16 +81,16 @@ Every link has its own authenticated path and uses separate networks, so a missi
 | Caddy | `server` | Client API | Client token at the server |
 | Caddy | `admin` | Admin site and API, over a unix socket | Admin credential at the admin |
 | `admin` | Caddy | Configuration, over Caddy's admin socket | Socket permissions |
-| `admin` | `server`, model gateway, `cpa` | Status, configuration, restarts, logins | Per-link token |
+| `admin` | `server`, `model-gateway`, `cpa` | Status, configuration, restarts, logins | Per-link token |
 | `admin` | Each exporting service | Encrypted backup exports | Per-link token |
 | `admin` | `auditor` | Read logs and set retention | Admin read token |
-| `admin` | Alert sender | Read release results | Per-link token |
+| `admin` | `alerter` | Read release results | Per-link token |
 | Each service except the admin | `auditor` | Append records | Service append token |
-| `auditor` | Alert sender | Alert events | Per-link token |
-| `server` | Model gateway | Model calls | Per-link token |
-| Model gateway | `cpa` | Subscription providers | `cpa` API key |
+| `auditor` | `alerter` | Alert events | Per-link token |
+| `server` | `model-gateway` | Model calls | Per-link token |
+| `model-gateway` | `cpa` | Subscription providers | `cpa` API key |
 
-**Outbound access:** in v1, Caddy, the model gateway, `cpa` and the alert sender have direct outbound access. The server and auditor have none. The egress proxy ships first after v1.
+**Outbound access:** in v1, Caddy, `model-gateway`, `cpa` and `alerter` have direct outbound access. The server and auditor have none. The egress proxy ships first after v1.
 
 ## Volumes
 
@@ -105,7 +105,7 @@ Each service has its own data and credential volumes and user ID, with no shared
 | Certificates and Caddy state | `caddy` |
 | `cpa` config | `cpa`, written by `admin` |
 | `cpa` logins | `cpa` |
-| Alert sender state and delivery settings | Alert sender |
+| `alerter` state and delivery settings | `alerter` |
 | Admin and Caddy unix sockets | `admin` and `caddy` |
 | `/backup` or SMB/NFS share volume, defined in Compose | `admin` |
 
@@ -115,7 +115,7 @@ Each service has its own data and credential volumes and user ID, with no shared
 - **Per-link tokens from bootstrap.** Each receiver holds a hash and maps it to one caller and its allowed routes, so a compromised service can use only its own token.
 - **Admin on a unix socket.** No admin TCP port exists to attack through Caddy.
 - **Admin and server in different containers with different user IDs and images.** The server can't read the admin's data, and the server never calls the admin. Services answer `503 not_configured` until the admin pushes their configuration ([ADR 0028](adr/0028-service-boundaries-and-config-delivery.md)).
-- **Provider keys in the model gateway.** The server has no keys or outbound route, so a compromised server can't copy keys or send data directly.
+- **Provider keys in `model-gateway`.** The server has no keys or outbound route, so a compromised server can't copy keys or send data directly.
 - **Auditor in its own container.** It accepts appends only, with a hash chain, so a compromised server or admin can't rewrite earlier records. A provider call doesn't start until the auditor acknowledges its span ([ADR 0031](adr/0031-audit-span-start-and-backlog.md)).
 - **Audit content sealed.** The server holds only a public key derived from the audit passphrase, so it can't read what it recorded ([ADR 0030](adr/0030-sealed-audit-content.md)).
 - **One file per space.** A query bug in one space can't reach another space's file ([ADR 0009](adr/0009-spaces-and-storage.md)).

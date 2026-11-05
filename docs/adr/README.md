@@ -1,6 +1,6 @@
 # Architecture decision records
 
-This set records the decisions in the [Askbar Architecture Plan: Clean Copy](../architecture-plan.md), plus the requirements and recommendations added afterward. Every ADR is Proposed, because only the owner can move an ADR to Accepted ([0001](0001-decision-records-and-change-rules.md)).
+This set records the decisions in the [Askbar Architecture Plan: Clean Copy](../architecture-plan.md), plus the requirements and recommendations added afterward. Every ADR starts as Proposed, because only the owner can move an ADR to Accepted ([0001](0001-decision-records-and-change-rules.md)).
 
 | ADR | Title | Plan decisions |
 | --- | --- | --- |
@@ -17,7 +17,7 @@ This set records the decisions in the [Askbar Architecture Plan: Clean Copy](../
 | [0011](0011-sealed-content-access.md) | Sealed content access | 11, 22 |
 | [0012](0012-consent-notices-and-deletion.md) | Consent, notices, and deletion | 22 |
 | [0013](0013-backups.md) | Backups | 9 |
-| [0014](0014-model-gateway-and-providers.md) | Model gateway and providers | 4, 20 |
+| [0014](0014-model-gateway-and-providers.md) | `model-gateway` and providers | 4, 20 |
 | [0015](0015-certificates.md) | Certificates | 20, 34 |
 | [0016](0016-risk-register.md) | Risk register | 16 |
 | [0017](0017-dependencies-and-patches.md) | Dependencies and patches | 18 |
