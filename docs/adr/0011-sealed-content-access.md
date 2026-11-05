@@ -1,6 +1,6 @@
 # 0011. Sealed content access
 
-Status: Proposed
+Status: Accepted
 Date: 2026-11-04
 Plan decisions: 11, 22
 
