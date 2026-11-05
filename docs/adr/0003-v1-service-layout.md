@@ -11,7 +11,6 @@ The service layout must limit what a compromise can reach while staying small en
 ## Decision
 
 - **Services:** v1 runs `caddy`, `server`, `admin`, `cpa`, `auditor`, and `model-gateway`. It also has a small `alerter` and a one-time `bootstrap`.
-- **Names:** `server` keeps its name, with no rename to orchestrator.
 - **Host name:** the admin stays on one host name, with one admin URL and no separate hostname switch or admin ingress. The switch can be revisited in v2.
 - **Published ports:** only `caddy` publishes ports. It attaches to a non-internal network, and this exception is documented.
 - **Server:** it stores no secrets and has no outbound route.
@@ -29,7 +28,6 @@ The service layout must limit what a compromise can reach while staying small en
 ## Alternatives considered
 
 - **A separate admin hostname:** rejected for v1. It would add another host name, certificate, Cloudflare token, and container.
-- **Renaming `server` to orchestrator:** rejected. It adds work and no security.
 
 ## Consequences
 
