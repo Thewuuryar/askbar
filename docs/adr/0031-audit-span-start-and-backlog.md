@@ -1,6 +1,6 @@
 # 0031. Audit span start and backlog
 
-Status: Proposed
+Status: Accepted
 Date: 2026-11-04
 Source: required by v1 decisions
 
