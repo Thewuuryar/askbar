@@ -74,7 +74,7 @@ Before you finish: `npm test` and `scripts/smoke.sh` pass. If you touched `compo
 
 ## Branches and commits **(proposed)**
 
-- Branch: `<type>/<short-kebab-description>`, type one of `feat fix docs refactor test chore ci`. A harness-made `claude/...` branch is fine.
+- Branch: `<type>/<short-kebab-description>`, type one of `feat fix docs refactor test chore ci`.
 - Commit: [Conventional Commits](https://www.conventionalcommits.org/): `type(scope): subject`. Imperative, lower case, no full stop, 72 characters or fewer. Scope is one of `proto server admin auditor model-gateway alerter client ui compose docs ci deps`.
 - Body: why, not what. List any deviation from the plan or any test you changed. Breaking change: `!` after the scope and a `BREAKING CHANGE:` footer.
 - Pull request title is a commit subject. Fill in the PR template.
