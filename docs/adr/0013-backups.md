@@ -40,6 +40,7 @@ V1 has manual and scheduled backups, encrypted with age.
 | The `cpa` configuration and subscription credentials | |
 | Audit records: metadata, sealed content as ciphertext, and the hash chain | The backup passphrase |
 | Audit-bound logs, such as settings and policy changes | |
+| The `alerter` state and delivery settings | |
 
 **Destinations**
 

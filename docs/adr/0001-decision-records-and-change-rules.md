@@ -13,7 +13,7 @@ Askbar needs one place to record decisions that a later contributor, person or A
 These rules go in `AGENTS.md` and the ADR README:
 
 1. **Approval:** only the owner can move an ADR from Proposed to Accepted.
-2. **Changing a decision:** write a new ADR that supersedes the old one, and change only the old ADR's status line.
+2. **Changing a decision:** once an ADR is on `main`, write a new ADR that supersedes the old one, and change only the old ADR's status line. Until then, an accepted ADR can be edited directly with the owner's approval.
 3. **Proposed ADRs:** these can be edited freely until accepted.
 4. **Reversals:** a reversal must state what changed since the original decision.
 5. **When an ADR is required:** any change to a boundary, container, network, volume, API audience, or hard rule, and any new dependency that is an image or a service or is outside the license allowlist ([0026](0026-dependency-license-check.md)). A library inside the allowlist needs a reason in the pull request instead.
