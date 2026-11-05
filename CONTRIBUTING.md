@@ -118,7 +118,7 @@ The whole API is [docs/openapi/admin.v1.yaml](docs/openapi/admin.v1.yaml).
   adds a dependency or a container, changes a hard rule in [AGENTS.md](AGENTS.md), or reverses an accepted ADR, write or
   supersede one in [docs/adr/](docs/adr/) in the same PR. Only the owner accepts an ADR. A change to a security rule
   includes its docs and isolation tests in the same PR ([ADR 0001](docs/adr/0001-decision-records-and-change-rules.md)).
-- **Review.** `.github/CODEOWNERS` names who must review the paths that decide who can reach what.
+- **Review.** The owner reviews every pull request. Changes to the paths that decide who can reach what get extra care.
 
 ## Before you open a pull request
 
