@@ -1,12 +1,12 @@
 # 0002. V1 scope, limits, and ship criteria
 
-Status: Proposed
+Status: Accepted
 Date: 2026-11-04
 Plan decisions: 1, 14, 15, 17, 23, 27
 
 ## Context
 
-V1 must be useful to a family of 3 and fit the owner's available time, budget, and hardware. Hardening never truly ends, so v1 needs a clear security bar.
+V1 must be useful to a small family and fit the owner's available time, budget, and hardware. Hardening never truly ends, so v1 needs a clear security bar.
 
 ## Decision
 
@@ -51,7 +51,6 @@ The README states that Askbar is an open-source project for personal hardware, w
 - Auditor and admin failure tests pass.
 - No known ship-blocking finding remains open.
 - Documentation is up to date with v1, including an architecture diagram that matches the shipped services and links.
-- The owner has rechecked Anthropic's policy and decided whether to disable Anthropic subscription login for the 1.0 release.
 - A person tests the client on macOS, Windows, and Linux.
 
 **Triage rule:** a new finding blocks v1 only if it allows remote access without authentication, exposure of another user's data, exposure of secrets, a bypass of audit recording, or failure of a Defend control. Anything else goes on the backlog with a target version.
