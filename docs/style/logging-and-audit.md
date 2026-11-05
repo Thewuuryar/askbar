@@ -28,4 +28,4 @@ The record of what the system did with a reply, kept for investigation. Describe
 
 ## Later
 
-If the model is ever given tools ([ADR 0007](../adr/0007-conversation-only-and-tool-gating.md)): each tool call, command, network request and file change is an audit span written **before** it runs, and a failed audit write stops the call.
+If the model is ever given tools ([ADR 0002](../adr/0002-v1-scope-limits-and-ship-criteria.md)): each tool call, command, network request and file change is an audit span written **before** it runs, and a failed audit write stops the call.
