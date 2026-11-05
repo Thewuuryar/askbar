@@ -62,7 +62,6 @@ Thick outline and "(new)": new in v2.
 
 ## Repo work
 
-- **Merge the rules.** `AGENTS.md`, the ADRs and the architecture documents live on the `docs/contributor-guidelines` branch only. Merge them first, so agents working from `main` can see them.
 - **Pinning gaps.** `caddy:2`, `rust:1` and `debian:bookworm-slim` float. `package.json` uses version ranges with no npm lockfile, GitHub Actions use tags, and the Caddy Cloudflare plugin is unpinned ([ADR 0017](adr/0017-dependencies-and-patches.md)).
 - **Update tools.** No Dependabot or Renovate config exists. `cpa` is already pinned to a digest.
 - **CI.** The current CI does not run `check-isolation.sh` ([ADR 0018](adr/0018-releases-and-migrations.md)).

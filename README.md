@@ -2,6 +2,10 @@
 
 A Spotlight-style AI popup. Press a hotkey, a bar appears in the upper-middle of the screen, type a question, read the answer, press Esc.
 
+Askbar is an open-source project for personal hardware, with no support or uptime guarantee.
+
+This page describes the code on `main`. The accepted v1 target differs: see [docs/architecture.md](docs/architecture.md] and the [ADRs](docs/adr/README.md). Where they disagree, build to the ADR.
+
 - **Conversation only.** The model gets text in and returns text out. There are no tools, no shell, no file access, and the window is granted no filesystem or network permissions (`src-tauri/capabilities/default.json`). Only the Rust side talks to your provider.
 - **Any provider.** Anthropic, or anything that speaks the OpenAI `/chat/completions` protocol (OpenAI, OpenRouter, Ollama, LM Studio, vLLM, Groq, ...).
 - **History** you can toggle (Ctrl+H), reopen and delete. Stored on your server, shared by every app you pair.

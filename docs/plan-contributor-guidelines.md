@@ -21,7 +21,7 @@ Recommendation first. "Tool" lists the usual choices; check each one's current s
 | 5 | clippy | Put lints in `[workspace.lints]`; fix the baseline; then `-D warnings` in CI | `clippy` |
 | 6 | Where the gate lives | CI is the gate. Local hooks are optional speed-ups; agents can skip them | `lefthook`, `pre-commit` |
 | 7 | CI triggers | Add a workflow on `pull_request`: fmt, clippy, `npm test`, smoke. Run `check-isolation.sh` there too (GitHub's Ubuntu runners have Docker). Keep the macOS and Windows matrix manual or on release tags | GitHub Actions |
-| 8 | Dependencies | `cargo deny` for advisories, licences (this is AGPL) and sources; Dependabot for cargo, npm, Docker and Actions | `cargo-deny`, Dependabot |
+| 8 | Dependencies | Decided in [ADR 0017](adr/0017-dependencies-and-patches.md) and [ADR 0026](adr/0026-dependency-license-check.md): `cargo deny` and an npm license check, Dependabot for security alerts, Renovate for version updates. Only the rollout is open | `cargo-deny`, Dependabot, Renovate |
 | 9 | Secret scanning | gitleaks in CI, plus GitHub push protection if the repo is public | `gitleaks` |
 | 10 | Branch protection | A ruleset on `main`: PR required, status checks required, no force push, no deletion. Zero required approvals while you are the only owner; raise it when others join | GitHub rulesets |
 | 11 | AI attribution | Keep a `Co-authored-by:` trailer on agent commits so history shows it | none |
@@ -52,7 +52,7 @@ Each step is its own PR. Stop after any step; the earlier ones stand alone.
 1. **This branch**: the documents, PR template, `check-docs.sh` change. There is no CODEOWNERS file while the owner is the only reviewer; add one with a second reviewer. Verify: `npm test` names and docs checks pass.
 2. **rustfmt** (#4): branch `style/rustfmt` off `main`: `rustfmt.toml` and one `style: apply rustfmt` commit. Verify: `cargo fmt --all --check` clean; tests unchanged. After it merges, add the SHA that landed on `main` (a squash or rebase changes the SHA) to `.git-blame-ignore-revs` in a small follow-up.
 3. **clippy** (#5, #13): `[workspace.lints]`, fix or explicitly allow each baseline warning with a reason. Verify: `cargo clippy --workspace --all-targets -- -D warnings` clean.
-4. **CI on pull requests** (#7, #8, #9): `ci.yml`, `deny.toml`, Dependabot, gitleaks. Verify: open a draft PR and watch it run; the 0.5.0 hand-off notes that `build.yml` has never run, so expect first-run failures.
+4. **CI on pull requests** (#7, #8, #9): `ci.yml`, `deny.toml`, Dependabot, Renovate, gitleaks. Verify: open a draft PR and watch it run; the 0.5.0 hand-off notes that `build.yml` has never run, so expect first-run failures.
 5. **Branch protection** (#10) last, once the checks are known to pass; otherwise it blocks every merge.
 6. **Update AGENTS.md** to drop the `(proposed)` tags and add the new commands.
 7. **Delete this file** once steps 2 to 6 are done and the open decisions are settled or moved to issues.

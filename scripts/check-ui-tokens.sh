@@ -1,6 +1,6 @@
 #!/bin/sh
-# Fails if the admin copy of tokens.css differs from ui/tokens.css, or if a text colour is under 4.5:1 contrast
-# (or --line-free accent/danger/good under 3:1) against --bg or --card in either theme.
+# Fails if the admin copy of tokens.css differs from ui/tokens.css, or if --fg, --muted, --accent, --danger or --good is under
+# 4.5:1 contrast against --bg or --card, or --accent-fg under 4.5:1 against --accent, in either theme.
 # Usage: scripts/check-ui-tokens.sh
 cd "$(dirname "$0")/.." || exit 2
 python3 - <<'PY'
