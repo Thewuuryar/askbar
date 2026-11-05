@@ -1,6 +1,6 @@
 # 0001. Decision records and change rules
 
-Status: Proposed
+Status: Accepted
 Date: 2026-11-04
 Plan decisions: 21
 
