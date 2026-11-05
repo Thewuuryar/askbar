@@ -1,6 +1,6 @@
 # 0014. `model-gateway` and providers
 
-Status: Proposed
+Status: Accepted
 Date: 2026-11-04
 Plan decisions: 4, 20
 
