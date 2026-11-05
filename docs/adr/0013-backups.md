@@ -20,6 +20,12 @@ V1 has manual and scheduled backups, encrypted with age.
 4. Each backup includes the protected private key.
 5. Each public key change is recorded in the audit log and sends an alert.
 
+**Rotation**
+
+- Rotating the audit passphrase doesn't affect backups or restore. Backups hold sealed content as ciphertext, and content sealed under an old passphrase still needs that passphrase ([0030](0030-sealed-audit-content.md)). A restore never needs an audit passphrase.
+- Rotating the backup passphrase makes a new key pair. Each backup carries the key protected by the passphrase in force when it was made, so older backups need the old passphrase.
+- After a backup passphrase rotation, the admin takes a new backup at once. Keep older backups only until the new ones cover the retention window, and delete them if the rotation followed a suspected compromise.
+
 **Flow and restore**
 
 1. Each component encrypts its snapshot to the public key and exports it through its own authenticated API. The auditor's export is read-only.
@@ -51,7 +57,7 @@ V1 has manual and scheduled backups, encrypted with age.
 - The admin sets the schedule. A daily schedule meets the data loss target.
 - By default, delete a backup once there are more than 5 files or it's older than 30 days, and always keep the newest backup. The admin can change both limits per destination.
 - A failed or missed backup sends an alert.
-- CI runs a restore test with a throwaway key, including a test that a backup from a newer release is refused.
+- CI runs a restore test with a throwaway key and no audit passphrase, including a test that a backup from a newer release is refused.
 - A person runs a restore drill before 1.0 and before each release with a migration. The admin shows a reminder every 90 days.
 
 ## Alternatives considered
@@ -65,4 +71,4 @@ V1 has manual and scheduled backups, encrypted with age.
 
 ## Consequences
 
-A stolen backup can be attacked offline, so the passphrase length matters. A lost passphrase makes backups unusable. A share on the same site doesn't protect against a fire or theft that affects both machines.
+A stolen backup can be attacked offline, so the passphrase length matters. A lost passphrase makes backups unusable. A backup needs the backup passphrase that was current when it was made. A share on the same site doesn't protect against a fire or theft that affects both machines.

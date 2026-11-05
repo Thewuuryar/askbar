@@ -13,7 +13,8 @@ The server shouldn't hold provider keys, and Askbar should work with most cloud 
 - **Keys and budgets:** the admin stores keys and sets budgets. `model-gateway` holds keys in memory and enforces budgets.
 - **Fallback:** v1 has no automatic provider fallback. If a provider fails, the admin adds or selects another one.
 - **Format:** providers default to the OpenAI-compatible format, using `/v1/models` and `/v1/chat/completions`.
-- **Testing:** the admin's Test button also tests streaming.
+- **Model catalog:** the admin picks approved models from each provider's model list and sets one default. IDs are provider-qualified (`provider/model`). The admin pushes the catalog to `model-gateway`, which serves it to the server, and the server offers it to clients to choose from for each chat. A conversation stores its model. `model-gateway` refuses any model outside the catalog, and the server checks too. The admin can't save a catalog without a default.
+- **Testing:** the admin's Test button also tests streaming, and shows pass or fail and time to first token. An optional details view shows the request and response with secrets redacted. `model-gateway` runs the test with a fixed prompt, the details are capped at 4 KB and never stored, and the audit record holds metadata only.
 - **Anthropic adapter:** keep the direct Anthropic support in `main`.
 
 **Subscription login through `cpa`**
@@ -37,4 +38,4 @@ The server shouldn't hold provider keys, and Askbar should work with most cloud 
 
 ## Consequences
 
-A compromised server can still misuse model access through `model-gateway`, within its budgets and configured providers ([0016](0016-risk-register.md)). The owner rechecks Anthropic's policy before the 1.0 release ([0002](0002-v1-scope-limits-and-ship-criteria.md)).
+A compromised server can still misuse model access through `model-gateway`, within its budgets, configured providers, and approved models ([0016](0016-risk-register.md)). The owner rechecks Anthropic's policy before the 1.0 release ([0002](0002-v1-scope-limits-and-ship-criteria.md)).
