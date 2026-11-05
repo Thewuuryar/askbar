@@ -1,6 +1,6 @@
 # 0017. Dependencies and patches
 
-Status: Proposed
+Status: Accepted 
 Date: 2026-11-04
 Plan decisions: 18
 
@@ -22,8 +22,7 @@ A deployer can't patch code they don't maintain, so maintainers and deployers ne
 - **Updates:** Dependabot handles security alerts, and Renovate handles version update pull requests.
 - **Checks:** require the `cargo deny` check and scheduled CVE scans.
 - **Patch alerts:** a new release appears in the admin and sends an alert. `alerter` checks for new releases and passes the result to the admin, without sending user data.
-- **Installation:** the deployment admin pulls updated images from the host, or can automate this with Dockhand.
-- **Dockhand:** it's the deployer's own tool, outside the Askbar stack. Its usual setup mounts the Docker socket, so the deployer accepts that risk and should consider a socket proxy.
+- **Installation:** the deployment admin pulls updated images from the host, or can automate this via a third party service. 
 - **Migrations:** releases with a database migration need a backup first and are marked for manual installation.
 - **Patch targets:** internet-facing critical issues within 7 days, and other security updates within 30 days.
 
