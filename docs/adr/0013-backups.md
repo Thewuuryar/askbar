@@ -1,6 +1,6 @@
 # 0013. Backups
 
-Status: Proposed
+Status: Accepted
 Date: 2026-11-04
 Plan decisions: 9
 
