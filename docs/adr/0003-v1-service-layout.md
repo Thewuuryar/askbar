@@ -1,6 +1,6 @@
 # 0003. V1 service layout
 
-Status: Proposed
+Status: Accepted
 Date: 2026-11-04
 Plan decisions: 2, 5, 13
 
