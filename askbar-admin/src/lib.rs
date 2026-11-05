@@ -173,6 +173,7 @@ pub fn routes(state: &Arc<AdminState>) -> Routes {
         .get("/admin/", || async { asset("text/html; charset=utf-8", include_str!("ui/index.html")) })
         .get("/admin/app.js", || async { asset("text/javascript; charset=utf-8", include_str!("ui/app.js")) })
         .get("/admin/audit.js", || async { asset("text/javascript; charset=utf-8", include_str!("ui/audit.js")) })
+        .get("/admin/tokens.css", || async { asset("text/css; charset=utf-8", include_str!("ui/tokens.css")) })
         .get("/admin/style.css", || async { asset("text/css; charset=utf-8", include_str!("ui/style.css")) })
         .get(&v1("/health"), || async { (StatusCode::OK, "ok") })
         .get(&v1("/setup"), web::setup_status)

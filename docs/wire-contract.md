@@ -1,5 +1,7 @@
 # Wire contract
 
+This page describes the code on `main`. The accepted v1 target differs: see [architecture.md](architecture.md] and the [ADRs](adr/README.md). Where they disagree, build to the ADR.
+
 What an Askbar app (a *client*) and the server agree on. The types live in `askbar-proto`;
 this page says what they mean. Everything is JSON over HTTPS except the chat stream.
 `/api/client/v1` is the client API. The server API (`/api/server/v1`, for the admin service
