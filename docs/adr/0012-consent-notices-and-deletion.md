@@ -1,6 +1,6 @@
 # 0012. Consent, notices, and deletion
 
-Status: Proposed
+Status: Accepted 
 Date: 2026-11-04
 Plan decisions: 22; client warning from 16
 
