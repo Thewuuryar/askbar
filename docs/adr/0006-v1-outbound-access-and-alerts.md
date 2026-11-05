@@ -1,6 +1,6 @@
 # 0006. V1 outbound access and alerts
 
-Status: Proposed
+Status: Accepted
 Date: 2026-11-04
 Plan decisions: 3, 33; Keep the egress proxy out of v1
 
