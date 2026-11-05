@@ -13,10 +13,10 @@ Every API, module, environment variable, UI label and document uses these names 
 | **client** | one paired app instance and its token; belongs to exactly one user | `/api/client/v1` | `askbar-server` | the app |
 | **server** | the Askbar server: chats, spaces, and its control and inspection interface | `/api/server/v1` | `askbar-server`, internal listener only | `askbar-admin` |
 | **admin** | the admin site and its control interface | `/api/admin/v1` | `askbar-admin` | the admin site (session cookie) or a script (admin API key) |
-| **auditor** | the container that keeps the audit store: services append to it, and the admin reads it | `/api/audit/v1` | `askbar-auditor`, internal only | services (append), `askbar-admin` (read) |
-| **model-gateway** | the container that holds provider keys in memory, enforces budgets and the kill switch, and calls providers | `/api/model-gateway/v1` | `askbar-model-gateway`, internal only | `askbar-server` |
+| **auditor** | the container that keeps the audit store: services and the admin append to it, and the admin reads it | `/api/audit/v1` | `askbar-auditor`, internal only | services and `askbar-admin` (append), `askbar-admin` (read) |
+| **model-gateway** | the container that holds provider keys in memory, enforces budgets, the kill switch and the approved model list, opens each model call's audit span, and calls providers | `/api/model-gateway/v1` | `askbar-model-gateway`, internal only | `askbar-server`, `askbar-admin` |
 | **alerter** | the small container that delivers alerts and checks for new releases | `/api/alerter/v1` | `askbar-alerter`, internal only | `askbar-auditor`, `askbar-admin` |
-| **bootstrap** | the one-time container that creates per-link tokens on first start | none | none | none |
+| **bootstrap** | the container that creates per-link tokens on first start and rotates them when run from the host | none | none | none |
 
 Third-party components keep their product name (`caddy`, `cpa`). After v1, these names are added: **egress proxy**, **MCP gateway**, **judge**, **executor**, **`executor-link`** and `searxng` ([ADR 0019](adr/0019-post-v1-order-and-tools.md), [ADR 0020](adr/0020-remote-executor-and-ca-triggers.md)).
 
@@ -43,12 +43,12 @@ Retired words, refused by `scripts/check-names.sh`: "management" and "mgmt" (now
  script  --HTTPS, admin API key--> Caddy --/api/admin/v1/*----unix socket--> admin          +--> cpa --> account providers
 
  admin --config, restarts, backup exports--> each service
- admin --read token--> auditor <--append tokens-- each service except the admin
+ admin --read token, admin append token--> auditor <--append tokens-- each other service
  auditor --alert events--> alerter --> ntfy or email, release check
  admin --encrypted backups--> /backup volume or SMB/NFS share volume
 ```
 
-Caddy is the only service with published ports. The server stores no secrets and has no outbound route.
+Caddy is the only service with published ports. The server stores no provider keys or admin data, only its own link tokens, and has no outbound route.
 
 ## Routes
 
@@ -84,10 +84,11 @@ Every link has its own authenticated path and uses separate networks, so a missi
 | `admin` | `server`, `model-gateway`, `cpa` | Status, configuration, restarts, logins | Per-link token |
 | `admin` | Each exporting service | Encrypted backup exports | Per-link token |
 | `admin` | `auditor` | Read logs and set retention | Admin read token |
+| `admin` | `auditor` | Append admin action records | Admin append token |
 | `admin` | `alerter` | Read release results | Per-link token |
-| Each service except the admin | `auditor` | Append records | Service append token |
+| Each service other than the admin | `auditor` | Append records, including `model-gateway` span starts | Service append token |
 | `auditor` | `alerter` | Alert events | Per-link token |
-| `server` | `model-gateway` | Model calls | Per-link token |
+| `server` | `model-gateway` | Model calls and the approved model list | Per-link token |
 | `model-gateway` | `cpa` | Subscription providers | `cpa` API key |
 
 **Outbound access:** in v1, Caddy, `model-gateway`, `cpa` and `alerter` have direct outbound access. The server and auditor have none. The egress proxy ships first after v1.
@@ -112,12 +113,13 @@ Each service has its own data and credential volumes and user ID, with no shared
 ## Why each boundary exists
 
 - **Server API on its own internal listener.** It can replace the server's configuration, so it is never routed publicly.
-- **Per-link tokens from bootstrap.** Each receiver holds a hash and maps it to one caller and its allowed routes, so a compromised service can use only its own token.
+- **Per-link tokens from bootstrap.** Each receiver holds a hash and maps it to one caller and its allowed routes, so a compromised service can use only its own token. Rotation is a host command that re-runs `bootstrap` ([ADR 0005](adr/0005-no-controller-and-self-restart.md)).
 - **Admin on a unix socket.** No admin TCP port exists to attack through Caddy.
 - **Admin and server in different containers with different user IDs and images.** The server can't read the admin's data, and the server never calls the admin. Services answer `503 not_configured` until the admin pushes their configuration ([ADR 0028](adr/0028-service-boundaries-and-config-delivery.md)).
 - **Provider keys in `model-gateway`.** The server has no keys or outbound route, so a compromised server can't copy keys or send data directly.
-- **Auditor in its own container.** It accepts appends only, with a hash chain, so a compromised server or admin can't rewrite earlier records. A provider call doesn't start until the auditor acknowledges its span ([ADR 0031](adr/0031-audit-span-start-and-backlog.md)).
-- **Audit content sealed.** The server holds only a public key derived from the audit passphrase, so it can't read what it recorded ([ADR 0030](adr/0030-sealed-audit-content.md)).
+- **Auditor in its own container.** It accepts appends only, with a hash chain, so a compromised server or admin can't rewrite earlier records. `model-gateway` opens each model call's span, and a provider call doesn't start until the auditor acknowledges it ([ADR 0031](adr/0031-audit-span-start-and-backlog.md)).
+- **Admin actions recorded.** The admin appends its own actions with a token that can't read or change records, and refuses an action if its record can't be written ([ADR 0010](adr/0010-auditor.md)).
+- **Audit content sealed.** The server holds only a public key derived from the audit passphrase, so the auditor and a compromised admin can't read the content, and opening it takes the passphrase ([ADR 0030](adr/0030-sealed-audit-content.md)).
 - **One file per space.** A query bug in one space can't reach another space's file ([ADR 0009](adr/0009-spaces-and-storage.md)).
 - **One origin for client and admin.** The client API serves JSON or its documented event stream, and the admin cookie uses `Path=/api/admin`, `HttpOnly` and `SameSite=Strict`, with a CSRF header, `Sec-Fetch-Site` checks and a strict CSP ([ADR 0029](adr/0029-shared-origin-protections.md)).
 - **No Docker socket.** Docker access could mount any volume, so services restart themselves through their own endpoints ([ADR 0005](adr/0005-no-controller-and-self-restart.md)).
@@ -127,6 +129,7 @@ Each service has its own data and credential volumes and user ID, with no shared
 ## Decisions
 
 - **Chat is `POST /api/client/v1/spaces/{space_id}/chat`.** It creates the conversation if needed, saves the question and starts a generation, with `client_request_id` idempotency. Chats are processed on the server and sent to clients when complete. Live sync happens only on the client that started the chat, or it shows a processing message ([ADR 0008](adr/0008-users-clients-and-client-access.md)).
+- **Model choice.** The admin approves models and sets one default. Clients choose from that list for each chat, and `model-gateway` refuses any other model ([ADR 0014](adr/0014-model-gateway-and-providers.md)).
 - **Old clients.** `/api/v1/*` answers one 426 `client_too_old`; nothing else of the old paths exists.
 - **The admin API is documented**, with its own OpenAPI file; scripts use an admin API key.
 
