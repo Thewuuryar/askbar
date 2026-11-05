@@ -8,7 +8,7 @@ How the popup and the admin site look and behave. Items marked **(proposed)** ar
 
 ### Tokens and scales
 
-- **One token set for both UIs.** Colours, sizes, spacing, radii and weights are CSS variables defined once, in `ui/tokens.css`. The admin site uses a byte-identical copy, and a check fails if they differ (one place per fact). Names: `--bg`, `--card`, `--fg`, `--muted`, `--line`, `--accent`, `--danger`, `--good`. The admin's `--bad` becomes `--danger`, and no rule uses a fallback colour. The accent is the popup's `#3e63dd`; neutrals are the popup's.
+- **One token set for both UIs.** Colours, sizes, spacing, radii and weights are CSS variables defined once, in `ui/tokens.css`. The admin site uses a byte-identical copy (`askbar-admin/src/ui/tokens.css`). `scripts/check-ui-tokens.sh` fails if they differ or if a text colour is under 4.5:1 in either theme (one place per fact). Names: `--bg`, `--card`, `--fg`, `--muted`, `--line`, `--accent`, `--danger`, `--good`. The admin's `--bad` becomes `--danger`, and no rule uses a fallback colour. Neutrals are the popup's. The accent is the popup's blue, darkened slightly (`#3a5bd0`) so it passes 4.5:1 as text on both backgrounds; muted text and the success colour were darkened for the same reason.
 - **Text: four sizes.** `0.75rem` (hints, meta), `0.875rem` (secondary), `0.9375rem` (body), `1.3rem` (input bar, headings). Two weights: 400 and 600.
 - **Spacing: 4, 8, 12, 16, 24, 32 px.** No other value.
 - **Radii: two.** 8 px for controls and 16 px for the popup card. No pill shapes and no 4, 6 or 12.
@@ -36,7 +36,7 @@ None, or one transition of 150 ms or less (opacity or colour). Under `prefers-re
 - **Notice:** a dismissible bar. One at a time.
 - **Loading:** one indicator, in the same place.
 - **Empty:** only the bar.
-- **Trust text stays quiet.** The AI warning ([ADR 0012](../adr/0012-consent-notices-and-deletion.md)) is a muted line (`--muted`, smallest size) next to the input. The privacy notice shows once at pairing and again only when the relevant settings change.
+- **Trust text stays quiet.** The AI warning ([ADR 0012](../adr/0012-consent-notices-and-deletion.md)) is a muted line (`--muted`, smallest size) above the chat box. The privacy notice shows once at pairing and again only when the relevant settings change.
 
 ## The popup (`ui/`, Tauri)
 
