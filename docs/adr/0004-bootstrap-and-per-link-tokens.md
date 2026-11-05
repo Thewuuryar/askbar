@@ -1,6 +1,6 @@
 # 0004. Bootstrap and per-link tokens
 
-Status: Proposed
+Status: Accepted
 Date: 2026-11-04
 Plan decisions: Bootstrap and per-link tokens; CA as optional
 
