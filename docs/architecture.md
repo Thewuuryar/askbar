@@ -44,7 +44,7 @@ Retired words, refused by `scripts/check-names.sh`: "management" and "mgmt" (now
 
  admin --config, restarts, backup exports--> each service
  admin --read token--> auditor <--append tokens-- each service except the admin
- auditor --alert events--> alerter --> ntfy or email, dead-man monitor, release check
+ auditor --alert events--> alerter --> ntfy or email, release check
  admin --encrypted backups--> /backup volume or SMB/NFS share volume
 ```
 

@@ -10,7 +10,7 @@ The owner's priority order is a compromised server, a compromised admin, then mo
 
 ## Decision
 
-The owner accepted the third list on November 4, 2026. The first list describes the v1 target, so each item counts only once it's built and tested.
+The owner accepted the third list on November 4, 2026, and amended it on November 5, 2026. The first list describes the v1 target, so each item counts only once it's built and tested.
 
 **Mitigated by design**
 
@@ -32,8 +32,8 @@ The owner accepted the third list on November 4, 2026. The first list describes 
 | --- | --- | --- |
 | Admin or pairing brute force | Recommended passkeys, allowlist, rate limits, attempt cap, identical errors | Limit and lockout tests |
 | Compromised admin, which holds live secrets | Fresh sign-in for sensitive changes, independent audit, alerts | Admin can't alter records; alerts fire |
-| Unknown changes to the audit log | Hash chain with an off-host copy of the latest hash | Tamper test |
-| False or missing records after a server compromise | `model-gateway` records each call and refuses calls without a valid audit span; Caddy sends access logs to the auditor; alerts when a component goes silent; off-host hash. Add mismatch alerts if time allows | A call without a span is refused and recorded; a silent component triggers an alert |
+| Unknown changes to the audit log | Hash chain, with the admin checking the latest chain head against the auditor ([0025](0025-audit-record-reliability.md)) | Tamper test |
+| False or missing records after a server compromise | `model-gateway` records each call and refuses calls without a valid audit span; Caddy sends access logs to the auditor; alerts when a component goes silent. Add mismatch alerts if time allows | A call without a span is refused and recorded; a silent component triggers an alert |
 | Backup theft | Encrypted exports, a passphrase of at least 20 characters, and alerts on public key changes | Restore without the passphrase fails; the admin can't read exports; a key change sends an alert |
 | Vulnerable or changed dependency | Pinned images, scheduled CVE scans of dependencies and images, and alerts on new CVEs and dependency updates | A known vulnerable test dependency fails CI and sends an alert |
 | Malicious model output in a client or admin page | Block remote images and media; allow only safe links and show the destination before opening; strict sanitizer allowlist for `renderMarkdown`; CSP with no inline scripts, plus Trusted Types where supported | XSS and malicious Markdown payload library in CI, across client and admin views; a real-browser test confirms a malicious reply makes no network request and runs no script |
@@ -45,7 +45,9 @@ The owner accepted the third list on November 4, 2026. The first list describes 
 
 | Risk | Why it's accepted | Mitigation or later step |
 | --- | --- | --- |
-| Root access on the host | Host security is the admin's responsibility, and containers can't defend against root | Keep the host patched; use an off-host audit hash |
+| Root access on the host | Host security is the admin's responsibility, and containers can't defend against root | Keep the host patched |
+| Audit history rewritten by host root, or by a compromised admin and auditor together | With no off-host copy of the chain head, nothing outside the host can show it. The admin's chain head check catches an auditor-only change | Off-host audit hash after v1 |
+| The whole system stops silently | With no dead-man monitor, nothing outside the host notices if the host or the `alerter` is down | The client shows "server offline"; check the stack by hand; dead-man monitor after v1 |
 | Stolen host or disk | It depends on the hardware | Use disk encryption where practical |
 | Container or kernel escape | Outside this project's control | Hardened containers and host patches |
 | Compromised server container opens all space files | The server must read these files to answer users | Container hardening, no outbound route, and audit records |
