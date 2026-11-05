@@ -38,4 +38,4 @@ The server shouldn't hold provider keys, and Askbar should work with most cloud 
 
 ## Consequences
 
-A compromised server can still misuse model access through `model-gateway`, within its budgets, configured providers, and approved models ([0016](0016-risk-register.md)). The owner rechecks Anthropic's policy before the 1.0 release ([0002](0002-v1-scope-limits-and-ship-criteria.md)).
+A compromised server can still misuse model access through `model-gateway`, within its budgets, configured providers, and approved models ([0016](0016-risk-register.md)).

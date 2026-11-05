@@ -1,6 +1,6 @@
 # Architecture decision records
 
-This set records the decisions in the [Askbar Architecture Plan: Clean Copy](../architecture-plan.md), plus the requirements and recommendations added afterward. Every ADR starts as Proposed, because only the owner can move an ADR to Accepted ([0001](0001-decision-records-and-change-rules.md)).
+This set records the decisions from the original Askbar architecture plan (kept in git history as `docs/architecture-plan.md`, last at commit 1f47f86), plus the requirements and recommendations added afterward. The "Plan decisions" column gives the decision numbers from that plan. Every ADR starts as Proposed, because only the owner can move an ADR to Accepted ([0001](0001-decision-records-and-change-rules.md)).
 
 | ADR | Title | Status | Plan decisions |
 | --- | --- | --- | --- |

@@ -37,18 +37,54 @@ Retired words, refused by `scripts/check-names.sh`: "management" and "mgmt" (now
 
 ## Picture
 
-```
- client  --HTTPS, client token---> Caddy --/api/client/v1/*--> server --> model-gateway --> providers, GPU desktop
- browser --HTTPS, session cookie-> Caddy --/admin, /api/admin/v1/*--unix socket--> admin    |
- script  --HTTPS, admin API key--> Caddy --/api/admin/v1/*----unix socket--> admin          +--> cpa --> account providers
+```mermaid
+---
+title: V1 keeps the server offline behind one model-gateway
+---
+flowchart TB
+    clients["Clients"]
+    adminUser["Admin user or script"]
 
- admin --config, restarts, backup exports--> each service
- admin --read token, admin append token--> auditor <--append tokens-- each other service
- auditor --alert events--> alerter --> ntfy or email, release check
- admin --encrypted backups--> /backup volume or SMB/NFS share volume
+    subgraph host["Askbar host"]
+        caddy["<b>caddy</b><br/>Only published ports, with direct certificate access<br/>Admin limited to private addresses"]
+        server["<b>server</b><br/>Chats and space files<br/>No provider keys, no outbound route"]
+        auditor["<b>auditor</b><br/>Append-only log, hash chain<br/>No outbound route"]
+        admin["<b>admin</b><br/>Secrets, settings, pairing<br/>Backups and restart requests"]
+        modelGateway["<b>model-gateway</b><br/>Provider keys, budgets,<br/>kill switch, direct outbound"]
+        cpa["<b>cpa</b><br/>Optional subscription login<br/>Direct outbound"]
+        alerter["<b>alerter</b><br/>Sends alerts, checks releases<br/>Direct outbound"]
+        bootstrap["<b>bootstrap</b><br/>No network. Writes per-link tokens,<br/>then exits. Re-run from the host to rotate"]
+    end
+
+    providers["<b>Model providers</b><br/>Cloud APIs and<br/>the GPU desktop"]
+    alerts["<b>Alert services</b><br/>ntfy or email, release source"]
+    backup["<b>Backup storage</b><br/>/backup volume or<br/>SMB or NFS share volume"]
+
+    clients -->|"HTTPS, client token<br/>local network or Tailscale"| caddy
+    adminUser -->|"HTTPS, session cookie or API key"| caddy
+    caddy -->|"/api/client/v1"| server
+    caddy -->|"/admin, /api/admin/v1<br/>unix socket"| admin
+    admin -->|"config"| caddy
+    caddy -->|"access logs"| auditor
+    server -->|"appends"| auditor
+    admin -->|"appends, reads"| auditor
+    modelGateway -->|"model-call spans"| auditor
+    server -->|"model calls"| modelGateway
+    admin -->|"config, restarts"| server
+    admin -->|"config, restarts, keys, budgets"| modelGateway
+    modelGateway --> cpa
+    modelGateway --> providers
+    cpa --> providers
+    auditor -->|"alert events"| alerter
+    admin -->|"release check"| alerter
+    alerter --> alerts
+    admin -->|"encrypted backups"| backup
+
+    classDef key stroke-width:3px
+    class modelGateway key
 ```
 
-Caddy is the only service with published ports. The server stores no provider keys or admin data, only its own link tokens, and has no outbound route.
+Every service appends to the auditor with its own token. Caddy is the only service with published ports. The server stores no provider keys or admin data, only its own link tokens, and has no outbound route.
 
 ## Routes
 
