@@ -23,7 +23,7 @@ The server shouldn't hold provider keys, and Askbar should work with most cloud 
 
 1. First start creates the `cpa` config and credentials and adds `cpa` to `model-gateway`.
 2. The admin selects a provider and opens the authentication link.
-3. If the provider redirects back to the server, the login finishes automatically. Otherwise, the admin pastes the returned URL, and the admin service extracts the code.
+3. If the provider redirects back to the admin site, the login finishes automatically. If the admin site is on localhost or has no domain, the redirect fails, so the admin pastes the returned URL into the admin site, and the admin service extracts the code.
 4. A pasted URL must match the expected address and state, expires after 10 minutes, works once, and is never logged.
 5. Both providers are tested against the pinned `cpa` image before v1 ships.
 

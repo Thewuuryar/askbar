@@ -14,7 +14,7 @@ Audit records must support investigations, and reading their content must take a
 2. **No private key:** the server and auditor never hold the passphrase or private key. The auditor stores only metadata and ciphertext. The server can still read its own space files, so sealing protects the audit copy, not the history.
 3. **Metadata:** the admin can read metadata such as time, user, space, providers tried, step timings, tokens, and outcome.
 4. **`model-gateway`:** its independent records contain metadata only.
-5. **No plain copies:** prompts, replies, and provider errors appear only in sealed payloads, never in logs or error text.
+5. **No plain copies:** prompts, replies, and provider errors appear in the audit store only as sealed payloads, and never in logs or error text.
 6. **Missing key:** until an audit key exists, Askbar answers `503 audit_key_missing` instead of recording unsealed.
 7. **Rotation:** a new passphrase seals new content with a new key. Older content still needs the old passphrase. Each sealed record carries a key ID, and audit metadata keeps a registry of key IDs with created and retired dates, so the admin can name the passphrase a record needs. Records aren't re-sealed in v1, and old content ages out under retention.
 8. **Loss:** a lost passphrase can't be recovered, and content sealed under it is gone for good.

@@ -40,7 +40,7 @@ Before you finish: `npm test` and `scripts/smoke.sh` pass. If you touched `compo
 - Never route `/api/server/*` or another internal API publicly. Only Caddy publishes ports.
 - No service gets the Docker socket.
 - Secrets never go in `.env`, logs, error messages, test output or commits. Backups contain secrets only under the encryption in [ADR 0013](docs/adr/0013-backups.md). The admin stores provider keys, `model-gateway` holds them in memory, and no endpoint returns them. An environment variable holds a path or an address, never a secret.
-- Audit content stays sealed. The server and auditor never hold the audit passphrase or private key. Prompts, replies and provider errors appear nowhere except sealed audit payloads, not in logs or error text. Retention never goes below 7 days.
+- Audit content stays sealed. The server and auditor never hold the audit passphrase or private key. Prompts, replies and provider errors appear in the audit store only as sealed payloads, and never in logs or error text. Retention never goes below 7 days.
 - Every path that calls a model or provider is recorded in the audit trace. Only `model-gateway` opens model-call spans, and a provider call doesn't start until the auditor acknowledges its span.
 - The admin records its own actions in the auditor, and refuses an action if its record can't be appended.
 - Never rename a Docker volume that holds data. Never edit an earlier database migration; append.
@@ -48,7 +48,7 @@ Before you finish: `npm test` and `scripts/smoke.sh` pass. If you touched `compo
 - The admin site writes text with `textContent`, never `innerHTML`, and keeps its CSP. In the popup, only `renderMarkdown` output may reach `innerHTML`.
 - Use the names in the [glossary](docs/architecture.md#glossary). `scripts/check-names.sh` refuses the old words.
 - Do not loosen or delete a test unless the contract changed, and say so in the commit message.
-- Do not add a dependency without saying why in the PR. `cargo deny check` and the npm license check must pass.
+- Do not add a dependency without saying why in the PR. A new container, image or service, or a dependency outside the license allowlist, also needs an ADR ([ADR 0026](docs/adr/0026-dependency-license-check.md)). `cargo deny check` and the npm license check must pass.
 - Do not change `.github/workflows/` or repository settings without asking.
 - Do not push to `main`, merge a pull request, or accept an ADR without the owner's approval. Do not force-push a shared branch.
 

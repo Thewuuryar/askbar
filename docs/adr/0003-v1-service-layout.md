@@ -14,7 +14,7 @@ The service layout must limit what a compromise can reach while staying small en
 - **Host name:** the admin stays on one host name, with one admin URL and no separate hostname switch or admin ingress. The switch can be revisited in v2.
 - **Published ports:** only `caddy` publishes ports. It attaches to a non-internal network, and this exception is documented.
 - **Server:** it stores no provider keys or admin data, only its own link tokens ([0004](0004-bootstrap-and-per-link-tokens.md)), and has no outbound route.
-- **Audit and configuration:** every service appends to the auditor with its own token. The admin's token is limited to admin action events, and the admin refuses an action if its record can't be appended ([0010](0010-auditor.md)). The admin also reads the auditor and pushes configuration and restart requests to each service.
+- **Audit and configuration:** `server`, `model-gateway`, and `alerter` append to the auditor with their own tokens. Caddy appends only its access logs, and `cpa` and `bootstrap` don't append. The admin's token is limited to admin action events, and the admin refuses an action if its record can't be appended ([0010](0010-auditor.md)). The admin also reads the auditor and pushes configuration and restart requests to each service.
 - **Storage:** each service has its own data and credential volumes and user ID, with no shared data volumes or host bind mounts.
 
 **Design records**

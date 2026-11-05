@@ -20,7 +20,7 @@ Audit records must survive a compromised server or admin, and their credentials 
 - A normal admin config push can't replace these tokens. Rotation is a host command that re-runs `bootstrap` ([0005](0005-no-controller-and-self-restart.md)).
 - Only `model-gateway` opens model-call spans ([0031](0031-audit-span-start-and-backlog.md)). The server can add records to an open model-call span but can't open one. Tool-call spans follow [0019](0019-post-v1-order-and-tools.md).
 - The admin's events cover these categories: settings (including providers, models, budgets, users, clients, and pairing keys), restarts, configuration pushes, secret, retention, and backup key changes, backups and restores, provider tests, admin resets, and sealed-content sessions ([0011](0011-sealed-content-access.md)). The admin refuses an action if its record can't be appended.
-- Admin records are claims. An admin action with no matching record from the service that applied it ([0028](0028-service-boundaries-and-config-delivery.md)) raises an alert.
+- Admin records are claims. For a service the project builds, an admin action with no matching record from the service that applied it ([0028](0028-service-boundaries-and-config-delivery.md)) raises a mismatch alert. Caddy and `cpa` write no such record, so a change to them raises none. Mismatch alerts can be deferred past v1 ([0002](0002-v1-scope-limits-and-ship-criteria.md), [0016](0016-risk-register.md)).
 - The auditor accepts appends only, and uses a hash chain.
 - When the auditor is down or full, model work fails closed. Reserve disk space, alert early, and recover from the host.
 - Sealed audit content is retained for 30 days by default, with a 7-day minimum.

@@ -12,7 +12,7 @@ Askbar is licensed under `AGPL-3.0-or-later`. Code built into Askbar must have a
 
 - CI uses a license allowlist in `cargo deny` for Rust crates.
 - CI uses a similar license check for npm packages.
-- A dependency outside the allowlist needs review before it's added.
+- A dependency outside the allowlist needs an ADR before it's added ([0001](0001-decision-records-and-change-rules.md)). A library inside the allowlist needs a reason in the pull request.
 - The docs state that anyone who modifies Askbar and offers it over a network must follow the AGPL's source offer requirement.
 
 ## Alternatives considered

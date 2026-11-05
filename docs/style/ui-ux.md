@@ -52,7 +52,7 @@ None, or one transition of 150 ms or less (opacity or colour). Under `prefers-re
 - **Live only where it started.** The client that started a chat streams the reply. Other clients show a processing message with a short description until the chat completes ([ADR 0008](../adr/0008-users-clients-and-client-access.md)).
 - **No build step.** `ui/` is plain HTML, CSS and JavaScript. Adding a framework or bundler needs an ADR.
 - **Markdown links and images.** Remote images are blocked. A link shows its destination before it opens ([ADR 0016](../adr/0016-risk-register.md); a ship criterion).
-- **Markdown is escaped first.** `ui/markdown.js` HTML-escapes everything before it adds markup, so model output cannot inject HTML. That is the only reason `renderMarkdown` output may be assigned to `innerHTML`. Keep `tests/markdown.test.js` covering it.
+- **Markdown is escaped first.** `ui/markdown.js` HTML-escapes everything, then adds only the markup on its allowlist, so model output cannot inject HTML ([ADR 0016](../adr/0016-risk-register.md)). That is the only reason `renderMarkdown` output may be assigned to `innerHTML`. Keep `tests/markdown.test.js` covering it.
 - **Colours and sizes come from the tokens** in "Look and feel". Do not hard-code a colour, size or radius in a rule or in script.
 - **The footer always shows two things:** the server connection status and the model picker. The five shortcut hints show only on first use and when the person presses `?`.
 - **Tests.** Behaviour changes carry a test in `tests/ui.test.js` (Playwright against `tests/mock-tauri.js`).

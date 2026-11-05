@@ -10,6 +10,8 @@ A crash or brief outage can leave audit spans unfinished, and local tampering mu
 
 ## Decision
 
+These rules cover the services the project builds that append to the auditor ([0003](0003-v1-service-layout.md)). Caddy's access logs are outside them.
+
 1. **Finish records:** a service queues finish and payload records, and retries them until the auditor acknowledges them.
 2. **Boot IDs:** a service announces a new boot ID when it connects. The auditor ends that service's earlier unfinished spans as interrupted.
 3. **Chain head check:** the admin stores the latest hash chain head at intervals and checks it against the auditor. A rollback, deletion, or edit appears in the admin and sends an alert.

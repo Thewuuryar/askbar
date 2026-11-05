@@ -16,7 +16,8 @@
 
 - [ ] No change to an API, a migration, an error code, a volume, a network or a published port
 - [ ] If there is one: OpenAPI file, `docs/wire-contract.md`, migration test and `docs/architecture.md` updated in this PR
-- [ ] If a boundary moved or a dependency or container was added: an ADR in `docs/adr/`
+- [ ] If a new library was added: the reason, under "What and why"
+- [ ] If a boundary moved, a container, image or service was added, or a dependency is outside the license allowlist: an ADR in `docs/adr/`
 - [ ] No secret, key, token or message content in logs, errors, tests or fixtures
 
 ## Notes for the reviewer
