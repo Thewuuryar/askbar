@@ -1,6 +1,6 @@
 # 0020. Remote executor and CA triggers
 
-Status: Proposed
+Status: Accepted
 Date: 2026-11-04
 Plan decisions: 24
 
