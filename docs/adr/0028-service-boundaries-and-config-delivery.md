@@ -19,7 +19,7 @@ The server handles untrusted text and must not be able to change settings. `mode
 ## Alternatives considered
 
 - **Services pulling configuration from the admin:** rejected for v1, with no pull for any service. It would give the admin an inbound listener on the internal network, reachable from services such as `model-gateway`, and push with boot detection already restores services without it.
-- **Storing secrets in each service:** rejected, because a stolen service volume would expose them.
+- **Storing secrets in each service:** rejected, because a stolen service volume would expose them. Here, secrets means provider keys and admin data. Each service's own link tokens ([0004](0004-bootstrap-and-per-link-tokens.md)) and the `cpa` subscription credentials ([0014](0014-model-gateway-and-providers.md)) are the exceptions.
 
 ## Consequences
 

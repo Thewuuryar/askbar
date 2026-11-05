@@ -14,7 +14,7 @@ Each personal space and shared space has its own SQLite file, with membership in
 
 | File | Holds | Who can open it |
 | --- | --- | --- |
-| Control database | Users, clients, permissions, budgets, pairing hashes, spaces, memberships | The server, for control checks |
+| Control database | Users, clients, permissions, budgets (a copy; `model-gateway` holds the authoritative one, [0014](0014-model-gateway-and-providers.md)), pairing hashes, spaces, memberships | The server, for control checks |
 | Personal space, one per user | Private conversations, history, memory, settings, search | That user |
 | Shared space, any number | Shared conversations, history, memory, search | Its members |
 

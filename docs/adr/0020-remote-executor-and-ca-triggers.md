@@ -17,7 +17,7 @@ V2 keeps per-link tokens unless a CA trigger is met. The executor runs what it's
 - The admin creates a one-time code, the executor makes its own key pair, and it registers the public key. The private key never leaves that machine.
 - Executor pairing has its own credential scope and API audience, separate from client permissions.
 - The admin can revoke one executor at once.
-- The tool rules in [0019](0019-post-v1-order-and-tools.md) apply, including no route to the admin or server API.
+- The tool rules in [0019](0019-post-v1-order-and-tools.md) apply, including no route to `/api/server/v1` or the admin API. The executor reaches only its own endpoint, `/api/executor/v1`.
 
 **Connection direction:** the executor may open the connection, but only to receive work and return output.
 

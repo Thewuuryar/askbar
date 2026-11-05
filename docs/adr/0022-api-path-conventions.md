@@ -18,7 +18,7 @@ Each API needs a predictable path and its own version. The admin prefix currentl
 | Admin | `/api/admin/v1` | `admin` | Admin site and scripts | Through Caddy |
 | Server | `/api/server/v1` | `server` | `admin` | Internal |
 | Audit | `/api/audit/v1` | `auditor` | Services and `admin` | Internal |
-| Model gateway | `/api/model-gateway/v1` | `model-gateway` | `server` and the judge | Internal |
+| Model gateway | `/api/model-gateway/v1` | `model-gateway` | `server`, `admin`, and the judge | Internal |
 | Alerter | `/api/alerter/v1` | `alerter` | `auditor` and `admin` | Internal |
 | Executor, after v1 | `/api/executor/v1` | `server` | Executor | Through `executor-link` only |
 

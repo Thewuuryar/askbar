@@ -28,7 +28,7 @@ V1 has manual and scheduled backups, encrypted with age.
 
 **Flow and restore**
 
-1. Each component encrypts its snapshot to the public key and exports it through its own authenticated API. The auditor's export is read-only.
+1. Each component encrypts its snapshot to the public key and exports it through its own authenticated API. The auditor's export is read-only. If `cpa` has no export route of its own, a small wrapper in its container provides one. Test this before v1 ships.
 2. The admin bundles the encrypted exports and adds a manifest of their hashes and the Askbar release version. It can't read them, and it never mounts another component's volume.
 3. A restore decrypts the exports only in an empty, unconfigured install.
 4. A restore checks the release version before asking for the passphrase. It refuses a backup from a newer release and names the release to install. After 1.0, an older backup restores into a newer release and then runs the normal migrations.
@@ -37,6 +37,7 @@ V1 has manual and scheduled backups, encrypted with age.
 | --- | --- |
 | The control database and every space file | Container logs |
 | Admin data, including secrets | The audit passphrase |
+| The `cpa` configuration and subscription credentials | |
 | Audit records: metadata, sealed content as ciphertext, and the hash chain | The backup passphrase |
 | Audit-bound logs, such as settings and policy changes | |
 

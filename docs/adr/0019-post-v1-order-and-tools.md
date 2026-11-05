@@ -14,7 +14,7 @@ Web search and research are the first features wanted after v1. They let untrust
 
 **Tool rules**
 
-1. Tools run in two containers: the executor for untrusted code, and the MCP gateway for credentialed tools. Neither has a route to the admin or server API. The executor has no secret volumes, and the MCP gateway holds only tool credentials.
+1. Tools run in two containers: the executor for untrusted code, and the MCP gateway for credentialed tools. Neither has a route to `/api/server/v1` or the admin API. The executor has no secret volumes, and the MCP gateway holds only tool credentials.
 2. Network egress from tool containers is denied by default and allowed per destination.
 3. Every tool call, command, network request, and file change is an audit span written before it runs. If the audit write fails, the call doesn't run.
 4. Tool output is untrusted text. It can't change settings, create a client, or reach the admin API.

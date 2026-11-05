@@ -21,7 +21,7 @@ A deployer can't patch code they don't maintain, so maintainers and deployers ne
 - **Pinning:** pin images and GitHub Actions to digests or commit hashes, the Caddy plugin to a version, and Rust and npm packages through committed lockfiles.
 - **Updates:** Dependabot handles security alerts, and Renovate handles version update pull requests.
 - **Checks:** require the `cargo deny` check and scheduled CVE scans.
-- **Patch alerts:** a new release appears in the admin and sends an alert. `alerter` checks for new releases and passes the result to the admin, without sending user data.
+- **Patch alerts:** a new release appears in the admin and sends an alert. `alerter` checks for new releases without sending user data, and the admin reads the result from it.
 - **Installation:** the deployment admin pulls updated images from the host, or can automate this via a third party service. 
 - **Migrations:** releases with a database migration need a backup first and are marked for manual installation.
 - **Patch targets:** internet-facing critical issues within 7 days, and other security updates within 30 days.

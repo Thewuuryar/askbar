@@ -21,6 +21,8 @@ Neither v1 nor v2 has a controller, and no service gets the Docker socket for re
 
 Each endpoint has authentication, an audit event, a cooldown, a shutdown limit, and restart-loop alerts. Services the project builds also get an internal watchdog, because Docker marks a failed health check unhealthy but doesn't restart the container.
 
+**Token rotation:** a host command re-runs `bootstrap` for one link or all links. It writes new tokens and hashes, and the admin restarts the affected services so they read them. The admin can't rotate tokens itself ([0010](0010-auditor.md)).
+
 ## Alternatives considered
 
 - **A controller with the Docker socket:** rejected, because its access could get around storage isolation.
