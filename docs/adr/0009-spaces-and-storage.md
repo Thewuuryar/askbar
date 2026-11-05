@@ -1,6 +1,6 @@
 # 0009. Spaces and storage
 
-Status: Proposed
+Status: Accepted 
 Date: 2026-11-04
 Plan decisions: 8, 30
 
