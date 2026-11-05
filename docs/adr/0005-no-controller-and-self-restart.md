@@ -1,6 +1,6 @@
 # 0005. No controller, with self-restart
 
-Status: Proposed
+Status: Accepted 
 Date: 2026-11-04
 Plan decisions: 12; Drop the controller; Use self-restart endpoints
 
