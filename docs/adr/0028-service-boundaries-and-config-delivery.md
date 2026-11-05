@@ -1,6 +1,6 @@
 # 0028. Service boundaries and config delivery
 
-Status: Proposed
+Status: Accepted
 Date: 2026-11-04
 Source: required by v1 decisions
 
