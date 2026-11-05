@@ -1,6 +1,42 @@
 # UI and UX
 
-How the popup and the admin site behave. Items marked **(proposed)** are not decided.
+How the popup and the admin site look and behave. Items marked **(proposed)** are not decided. The look-and-feel rules below are the target; the CSS on `main` still differs (two palettes, mixed radii) and moves to them in the UI change that follows.
+
+## Look and feel
+
+**Intent: a quiet card; the input bar is the only loud thing.** Judge every UI change against that sentence. If a change adds something louder than the input, remove it or justify it in the PR.
+
+### Tokens and scales
+
+- **One token set for both UIs.** Colours, sizes, spacing, radii and weights are CSS variables defined once, in `ui/tokens.css`. The admin site uses a byte-identical copy, and a check fails if they differ (one place per fact). Names: `--bg`, `--card`, `--fg`, `--muted`, `--line`, `--accent`, `--danger`, `--good`. The admin's `--bad` becomes `--danger`, and no rule uses a fallback colour. The accent is the popup's `#3e63dd`; neutrals are the popup's.
+- **Text: four sizes.** `0.75rem` (hints, meta), `0.875rem` (secondary), `0.9375rem` (body), `1.3rem` (input bar, headings). Two weights: 400 and 600.
+- **Spacing: 4, 8, 12, 16, 24, 32 px.** No other value.
+- **Radii: two.** 8 px for controls and 16 px for the popup card. No pill shapes and no 4, 6 or 12.
+- **Rules, not boxes.** Separate things with whitespace and one 1 px `--line` hairline. No card inside a card, no border on a border. Only the popup card has a shadow.
+- **No hard-coded colour** in a rule or in script; the `rgba(...)` values on `main` become tokens.
+
+### Themes and contrast
+
+- Themes are `auto`, `light` and `dark`, both built from the same tokens: each token has one light and one dark value, set in one place. `light-dark()` may replace the duplicate blocks once WebKitGTK and the macOS and Windows webviews all support it (to verify).
+- Text has at least 4.5:1 contrast against its background in both themes; borders, focus rings and icons that carry meaning have at least 3:1. Never use colour alone to carry meaning.
+
+### Accessibility
+
+- Every action is reachable by keyboard, with a visible `:focus-visible` ring.
+- Type sizes are in `rem`, so text follows the OS or browser font size. Layouts must not break at 200 %.
+- Honour `prefers-reduced-motion`.
+
+### Motion
+
+None, or one transition of 150 ms or less (opacity or colour). Under `prefers-reduced-motion: reduce` there is none.
+
+### Patterns for states
+
+- **Error:** one sentence under the input. Never a modal.
+- **Notice:** a dismissible bar. One at a time.
+- **Loading:** one indicator, in the same place.
+- **Empty:** only the bar.
+- **Trust text stays quiet.** The AI warning ([ADR 0012](../adr/0012-consent-notices-and-deletion.md)) is a muted line (`--muted`, smallest size) next to the input. The privacy notice shows once at pairing and again only when the relevant settings change.
 
 ## The popup (`ui/`, Tauri)
 
@@ -17,19 +53,22 @@ How the popup and the admin site behave. Items marked **(proposed)** are not dec
 - **No build step.** `ui/` is plain HTML, CSS and JavaScript. Adding a framework or bundler needs an ADR.
 - **Markdown links and images.** Remote images are blocked. A link shows its destination before it opens ([ADR 0016](../adr/0016-risk-register.md); a ship criterion).
 - **Markdown is escaped first.** `ui/markdown.js` HTML-escapes everything before it adds markup, so model output cannot inject HTML. That is the only reason `renderMarkdown` output may be assigned to `innerHTML`. Keep `tests/markdown.test.js` covering it.
-- **Colours and sizes come from CSS variables** in `ui/style.css` (`--card`, `--fg`, `--accent`, ...). Do not hard-code a colour in a rule or in script. Themes are `auto`, `light`, `dark`.
+- **Colours and sizes come from the tokens** in "Look and feel". Do not hard-code a colour, size or radius in a rule or in script.
+- **The footer always shows two things:** the server connection status and the model picker. The five shortcut hints show only on first use and when the person presses `?`.
 - **Tests.** Behaviour changes carry a test in `tests/ui.test.js` (Playwright against `tests/mock-tauri.js`).
 
 ## The admin site (`askbar-admin/src/ui/`)
 
 - Text goes in through `textContent`, never `innerHTML`. The CSP forbids inline script and style; do not loosen it.
+- **One primary action per view.** Buttons are secondary by default (outline, no fill). The one primary action is marked explicitly and is the only one filled with `--accent`. A destructive action uses `--danger`, never the primary style.
+- **Desktop and mobile layouts.** The site works at phone width and desktop width: one column and a full-width navigation menu at small widths, and a side navigation with a content column at large ones. Tap targets are at least 44 px high on small widths. Tables scroll inside their own box; the page never scrolls sideways. Browser tests run at both widths.
+- **Audit tab:** a table with a few numbers above it (replies, errors, tokens, p50 and p95 time). No charts by default; add one only if a table cannot answer the question. Use `--danger` only for errors.
 - Anything that interrupts something says what it will interrupt before it asks (the Services tab does this).
 - Show a secret once, at creation (API key, pairing string, token), and say so.
 - A change made while the server is down is refused with a sentence, not half applied. The admin does not queue it ([ADR 0028](../adr/0028-service-boundaries-and-config-delivery.md)); it pushes the saved state when the server returns.
 - Sealed content ([ADR 0011](../adr/0011-sealed-content-access.md)): the session shows its remaining time and a **Seal** button that ends it at once. Opening and timeout changes raise an alert; the screen says so before it asks for the passphrase.
 - Tests: `tests/admin.test.js`, in a real browser against the real server and admin.
 
-## Other clients **(proposed)**
+## Other clients
 
-- An iPhone app (native Swift) uses the same API, the same error codes and the same glossary names as the desktop app, and the same rules above: server offline in words, typed text kept, no keys on the phone.
-- The admin site is for a desktop browser; it does not need a phone layout.
+- **iPhone app (ADR 0008: preferred, can be deferred past v1).** It is a native Swift app. It uses the same API, error codes, glossary names and rules as the desktop app, including the tokens, the footer (connection status and model picker), the notices, and: server offline in words, typed text kept, no keys on the phone. It follows Apple's accessibility settings, including Dynamic Type.
