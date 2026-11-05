@@ -41,7 +41,8 @@ Before you finish: `npm test` and `scripts/smoke.sh` pass. If you touched `compo
 - No service gets the Docker socket.
 - Secrets never go in `.env`, logs, error messages, test output or commits. Backups contain secrets only under the encryption in [ADR 0013](docs/adr/0013-backups.md). The admin stores provider keys, `model-gateway` holds them in memory, and no endpoint returns them. An environment variable holds a path or an address, never a secret.
 - Audit content stays sealed. The server and auditor never hold the audit passphrase or private key. Prompts, replies and provider errors appear nowhere except sealed audit payloads, not in logs or error text. Retention never goes below 7 days.
-- Every path that calls a model or provider is recorded in the audit trace. A provider call doesn't start until the auditor acknowledges its span.
+- Every path that calls a model or provider is recorded in the audit trace. Only `model-gateway` opens model-call spans, and a provider call doesn't start until the auditor acknowledges its span.
+- The admin records its own actions in the auditor, and refuses an action if its record can't be appended.
 - Never rename a Docker volume that holds data. Never edit an earlier database migration; append.
 - After 1.0, within `/api/client/v1`, never remove or rename a field, endpoint or error code. Add only.
 - The admin site writes text with `textContent`, never `innerHTML`, and keeps its CSP. In the popup, only `renderMarkdown` output may reach `innerHTML`.
