@@ -167,9 +167,14 @@ pub fn http_client() -> HttpClient {
         .expect("reqwest client")
 }
 
-/// Drop empty messages and leading assistant turns, and merge consecutive
-/// messages with the same role (a failed turn leaves two user messages in a
-/// row, which some APIs reject).
+/// Drop empty messages and leading assistant turns, and never send two messages with the same role
+/// in a row (some APIs reject that).
+///
+/// Two user messages in a row mean the earlier one got no reply: its turn failed, or was stopped,
+/// timed out or interrupted before any text. Only the last of them is kept. Sending the unanswered
+/// ones again would repeat whatever made them fail (a question the provider refuses would stick the
+/// conversation for good) and mix old questions into the new one; the person retries a question on
+/// purpose instead. Consecutive assistant messages are joined.
 pub fn normalize(messages: &[ChatMessage]) -> Vec<ChatMessage> {
     let mut out: Vec<ChatMessage> = Vec::new();
     for m in messages {
@@ -177,6 +182,7 @@ pub fn normalize(messages: &[ChatMessage]) -> Vec<ChatMessage> {
             continue;
         }
         match out.last_mut() {
+            Some(last) if last.role == m.role && m.role == "user" => *last = m.clone(),
             Some(last) if last.role == m.role => {
                 last.content.push_str("\n\n");
                 last.content.push_str(&m.content);
@@ -622,7 +628,7 @@ mod tests {
     }
 
     #[test]
-    fn normalize_merges_and_trims() {
+    fn normalize_keeps_the_last_unanswered_question_and_trims() {
         let out = normalize(&[
             m("assistant", "stray"),
             m("user", "a"),
@@ -631,8 +637,13 @@ mod tests {
             m("assistant", "c"),
             m("user", "d"),
         ]);
-        assert_eq!(out, vec![m("user", "a\n\nb"), m("assistant", "c"), m("user", "d")]);
+        assert_eq!(out, vec![m("user", "b"), m("assistant", "c"), m("user", "d")], "a got no reply, so only b is sent");
         assert!(normalize(&[m("assistant", "only")]).is_empty());
+        // A failed question is not carried into the next turn.
+        let out = normalize(&[m("user", "hello"), m("assistant", "hi"), m("user", "fail"), m("user", "429"), m("user", "hello again")]);
+        assert_eq!(out, vec![m("user", "hello"), m("assistant", "hi"), m("user", "hello again")]);
+        // Two assistant messages in a row are still joined.
+        assert_eq!(normalize(&[m("user", "q"), m("assistant", "x"), m("assistant", "y")]), vec![m("user", "q"), m("assistant", "x\n\ny")]);
     }
 
     #[test]

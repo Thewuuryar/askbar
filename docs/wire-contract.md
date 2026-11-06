@@ -110,6 +110,11 @@ The refusals are 409 `queue_full`, 429 `budget_exceeded` (with `period`), 503 `k
 503 `audit_key_missing` and 503 `audit_backlog` (with `Retry-After`); the OpenAPI file lists them on
 `POST /chat`.
 
+Each turn sends the conversation's history with the new question. A question that got no reply (its
+turn failed, or was stopped, timed out or interrupted before any text) stays in the conversation but
+is not sent to the model again: of several unanswered questions in a row only the newest is sent. To
+retry one, send it again.
+
 None of these affect replies already running.
 Otherwise the answer is `200 text/event-stream`. Provider output is never passed through;
 the server re-emits its own events. Each SSE message has `event:` naming the type and

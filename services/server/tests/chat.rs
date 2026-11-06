@@ -226,6 +226,26 @@ async fn provider_failure_becomes_an_error_event_and_keeps_the_question() {
     assert_eq!(t.messages(), [("user".to_string(), "please fail".to_string())]);
 }
 
+/// A question that got no reply is not sent again with the next one: a question the provider refuses
+/// must not stick the conversation.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_failed_question_is_not_sent_again_with_the_next_one() {
+    let t = start().await;
+    let http = client();
+    let events = parse_events(&t.chat(&http, None, "p1", "hello").await.text().await.unwrap().replace("\r\n", "\n"));
+    let ChatEvent::Meta { conversation_id, .. } = events[0].1.clone() else { panic!("first event must be meta") };
+    let failed = parse_events(&t.chat(&http, Some(&conversation_id), "p1", "please fail").await.text().await.unwrap().replace("\r\n", "\n"));
+    assert_eq!(failed.last().unwrap().0, "error");
+    let next = parse_events(&t.chat(&http, Some(&conversation_id), "p1", "hello again").await.text().await.unwrap().replace("\r\n", "\n"));
+    assert_eq!(next.last().unwrap().0, "done", "{next:?}");
+    let posts: Vec<String> = t.mock.log.lock().unwrap().iter().filter(|l| l.starts_with("POST")).cloned().collect();
+    let last = posts.last().unwrap();
+    assert!(last.contains("last='hello again'"), "the failed question is left out: {last}");
+    // The person still sees every question.
+    let users: Vec<String> = t.messages().into_iter().filter(|(r, _)| r == "user").map(|(_, c)| c).collect();
+    assert_eq!(users, ["hello", "please fail", "hello again"]);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn bad_requests_are_plain_http_errors() {
     let t = start().await;

@@ -113,6 +113,11 @@ Order change: 1.6 and 1.7 were done first, right after phase 0. Before them a Do
 **1.12 `feat: shared spaces`** (M) — [ADR 0009](adr/0009-spaces-and-storage.md) (deferrable, last in [ADR 0002](adr/0002-v1-scope-limits-and-ship-criteria.md) order)
 - Admin create/rename/delete (with confirmation), add/remove members with the "new members see history" notice; client space picker.
 
+**1.13 Backlog: failed turns and long conversations** (owner request, 2026-11-07; estimate before starting). Since `fix(server): leave unanswered questions out of later prompts`, a question that got no reply is shown but not sent to the model again.
+- **Edit and Try again on a failed line** (S): the failed question in the window gets **Edit** (puts its text back in the box) and **Try again** (resends it), for every failure kind, not only timeouts.
+- **History length limit** (S): an admin setting for how much history is sent with each question. Today the whole conversation is sent every turn, with no limit.
+- **Summarize when the context would overflow** (L): when a conversation is expected to exceed the model's context length, the server summarizes (compacts) the older part and sends the summary instead; the client shows "Summarizing the conversation…" with a progress bar while it runs. Needs a design note first: which model summarizes, where the summary is stored, and how the extra model call is audited (it goes through `model-gateway` like any other, phase 3).
+
 ## Phase 2 — Add bootstrap and the auditor
 
 **2.1 `feat(bootstrap): create per-link tokens on first start`** (M) — [ADR 0004](adr/0004-bootstrap-and-per-link-tokens.md), 0021

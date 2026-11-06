@@ -105,6 +105,7 @@ A reply is produced by the server, not by the window. The question is saved firs
 - **Time limit.** A reply that runs longer than **300 seconds** is stopped; the text that arrived stays, the window says "Stopped after 5 minutes" and offers **Try again**. The limit is the **Generation timeout** in the admin site's Settings (30 to 3600 seconds).
 - **Restarts.** If the server is restarted mid-reply, the reply ends as interrupted and keeps the text it had.
 - **Refusals.** When the administrator has switched replies off (the kill switch in Settings), a daily or monthly token limit is used up, or the audit key has not been made yet, the window says so in words and keeps what you typed. A busy server is tried once more by itself.
+- **Failed questions are not resent.** A question that got no reply stays in the conversation but is not sent to the model with your next one, so a question the provider refuses can't stick the conversation. To retry it, send it again (or **Try again** after a timeout).
 - If another provider than the one you chose answered (the server fell back), the reply says "Answered by ...".
 
 ## Hotkeys by platform
