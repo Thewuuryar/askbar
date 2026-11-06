@@ -50,7 +50,9 @@ async function waitIdle(page) {
 
   await step('starts as a bare input bar with focus', async () => {
     assert.equal(await page.isHidden('#thread'), true);
-    assert.equal(await page.isHidden('#foot'), true);
+    assert.equal(await page.isVisible('#foot'), true, 'the status bar is always there');
+    assert.equal(await page.getAttribute('#conn', 'data-state'), 'ok');
+    assert.equal(await page.innerText('#conn-text'), 'Connected');
     assert.equal(await page.isHidden('#history'), true);
     assert.equal(await page.evaluate(() => document.activeElement.id), 'input');
     await shot(page, '01-idle');
@@ -546,7 +548,7 @@ async function waitIdle(page) {
     assert.deepEqual(await calls(page, 'set_active_provider'), [{ id: 'p2' }]);
     await ask(page, 'works now');
     await waitIdle(page);
-    assert.match(await page.innerText('#model-label'), /via beta/);
+    assert.match(await page.innerText('#model-label'), /· beta/);
   });
   await step('server_status is re-checked when the window is shown again', async () => {
     await page.evaluate(() => { window.__opts.status = { kind: 'offline', message: 'Server offline.' }; });
@@ -590,6 +592,16 @@ async function waitIdle(page) {
     await page.evaluate(() => window.__listeners['askbar:pair']());
     assert.equal(await page.isVisible('#pair'), true);
   });
+  await step('not paired: the status bar shows a red dot with the reason, and the model button opens pairing', async () => {
+    await page.press('#pair-input', 'Escape');
+    assert.equal(await page.isVisible('#foot'), true);
+    assert.equal(await page.getAttribute('#conn', 'data-state'), 'bad');
+    assert.equal(await page.innerText('#conn-text'), 'Not paired');
+    assert.match(await page.getAttribute('#conn', 'title'), /not paired/);
+    await page.click('#model-btn');
+    assert.equal(await page.isVisible('#pair'), true);
+    assert.equal(await page.isHidden('#picker'), true);
+  });
   await step('a good pairing string says it worked, then closes and lets you ask', async () => {
     await page.fill('#pair-input', 'askbar-pair:abc');
     await page.press('#pair-input', 'Enter');
@@ -597,6 +609,8 @@ async function waitIdle(page) {
     assert.match(await page.innerText('#pair-ok'), /Paired with askbar\.example\.com/);
     assert.equal(await page.isHidden('#pair-input'), true, 'the code box is gone once it worked');
     await page.waitForSelector('#pair', { state: 'hidden' });
+    assert.equal(await page.getAttribute('#conn', 'data-state'), 'ok');
+    assert.equal(await page.innerText('#conn-text'), 'Connected');
     await page.waitForSelector('#status', { state: 'hidden' });
     assert.deepEqual((await calls(page, 'pair')).pop(), { pairing: 'askbar-pair:abc' });
     await ask(page, 'hello after pairing');
@@ -609,6 +623,132 @@ async function waitIdle(page) {
     await page.waitForSelector('#status-actions [data-action="pair"]');
   });
   await step('no JavaScript errors on the pairing screen', async () => {
+    assert.deepEqual(page.errors, []);
+  });
+  await page.context().close();
+
+  // -------------------------------------------- provider and model picker
+  page = await open(browser, {
+    provider: 'alpha',
+    model: 'a-1',
+    providers: [
+      { id: 'p1', name: 'alpha', model: 'a-1', models: ['a-2'] },
+      { id: 'p2', name: 'beta', model: 'b-1', models: ['b-2', 'b-3'] },
+    ],
+  });
+  await step('the history button is the first thing in the bar', async () => {
+    assert.equal(await page.evaluate(() => document.querySelector('.bar').firstElementChild.id), 'history-toggle');
+    const [h, i] = await Promise.all([page.locator('#history-toggle').boundingBox(), page.locator('#input').boundingBox()]);
+    assert.ok(h.x < i.x);
+  });
+  await step('the status bar names the model and provider, and the picker lists both', async () => {
+    assert.equal(await page.innerText('#model-label'), 'a-1 · alpha');
+    await page.click('#model-btn');
+    await page.waitForSelector('#picker:not([hidden])');
+    await page.waitForFunction(() => document.querySelectorAll('#pick-models .pick-item').length === 2);
+    assert.deepEqual(await page.locator('#pick-providers .pick-item').allInnerTexts(), ['alpha', 'beta']);
+    assert.deepEqual(await page.locator('#pick-models .pick-item').allInnerTexts(), ['a-1', 'a-2']);
+    assert.equal(await page.getAttribute('#pick-models .pick-item >> nth=0', 'aria-selected'), 'true');
+    await shot(page, '11-picker');
+  });
+  await step('picking another model saves it and closes the picker', async () => {
+    await page.click('#pick-models .pick-item >> text=a-2');
+    await page.waitForSelector('#picker', { state: 'hidden' });
+    assert.deepEqual((await calls(page, 'set_selection')).pop(), { providerId: 'p1', model: 'a-2' });
+    assert.equal(await page.innerText('#model-label'), 'a-2 · alpha');
+  });
+  await step('picking the default model saves "no choice"', async () => {
+    await page.click('#model-btn');
+    await page.waitForSelector('#pick-models .pick-item');
+    await page.click('#pick-models .pick-item >> text=a-1');
+    await page.waitForSelector('#picker', { state: 'hidden' });
+    assert.deepEqual((await calls(page, 'set_selection')).pop(), { providerId: 'p1', model: null });
+  });
+  await step('picking another provider switches to its default model and lists its models', async () => {
+    await page.click('#model-btn');
+    await page.waitForSelector('#pick-models .pick-item');
+    await page.click('#pick-providers .pick-item >> text=beta');
+    await page.waitForFunction(() => document.getElementById('model-label').textContent === 'b-1 · beta');
+    assert.deepEqual((await calls(page, 'set_selection')).pop(), { providerId: 'p2', model: null });
+    await page.waitForFunction(() => document.querySelectorAll('#pick-models .pick-item').length === 3);
+    assert.equal(await page.isVisible('#picker'), true, 'stays open to choose a model');
+  });
+  await step('the hints show on first use, leave after the first message, and return on ? in an empty box', async () => {
+    const hints = await open(browser);
+    assert.equal(await hints.isVisible('#hints'), true);
+    assert.match(await hints.innerText('#hints'), /Shift\+Enter new line.*Ctrl\+N new chat/);
+    await ask(hints, 'hello');
+    await waitIdle(hints);
+    assert.equal(await hints.isHidden('#hints'), true);
+    await hints.reload();
+    await hints.waitForSelector('#foot');
+    assert.equal(await hints.isHidden('#hints'), true, 'first use is over for good');
+    await hints.focus('#input');
+    await hints.keyboard.press('?');
+    assert.equal(await hints.isVisible('#hints'), true);
+    assert.equal(await hints.inputValue('#input'), '', 'the ? is not typed');
+    await hints.keyboard.press('?');
+    assert.equal(await hints.isHidden('#hints'), true);
+    await hints.fill('#input', 'why');
+    await hints.press('#input', '?');
+    assert.equal(await hints.inputValue('#input'), 'why?', 'a question mark in a question is just that');
+    assert.equal(await hints.isHidden('#hints'), true);
+    await hints.context().close();
+  });
+  await step('offline: the model button does not ask a paired app to pair again', async () => {
+    const off = await open(browser, { status: { kind: 'offline', message: 'Server offline.' } });
+    await off.click('#model-btn');
+    assert.equal(await off.isHidden('#pair'), true);
+    assert.equal(await off.isVisible('#picker'), true);
+    await off.context().close();
+  });
+  await step('a chat keeps its model: the footer follows it, and a pick in it applies to it', async () => {
+    const chat = await open(browser, {
+      provider: 'alpha',
+      model: 'a-1',
+      providers: [{ id: 'p1', name: 'alpha', model: 'a-1', models: ['a-2'] }],
+    });
+    await ask(chat, 'hello');
+    await waitIdle(chat);
+    await chat.keyboard.press('Control+n');
+    await chat.waitForFunction(() => document.getElementById('model-label').textContent === 'a-1 · alpha');
+    await chat.click('#model-btn');
+    await chat.waitForSelector('#pick-models .pick-item');
+    await chat.click('#pick-models .pick-item >> text=a-2');
+    await chat.waitForFunction(() => document.getElementById('model-label').textContent === 'a-2 · alpha');
+    assert.equal((await calls(chat, 'set_selection')).pop().conversationId, undefined, 'a new chat has nothing to change');
+
+    await ask(chat, 'second chat');
+    await waitIdle(chat);
+    await chat.click('#model-btn');
+    await chat.waitForSelector('#pick-models .pick-item');
+    await chat.click('#pick-models .pick-item >> text=a-1');
+    await chat.waitForFunction(() => document.getElementById('model-label').textContent === 'a-1 · alpha');
+    const last = (await calls(chat, 'set_selection')).pop();
+    assert.ok(last.conversationId, 'a pick in an open chat names it');
+
+    // The defaults move on elsewhere: the open chat stays put, a new chat follows them, and
+    // reopening the old chat brings its model back.
+    await chat.click('#model-btn');
+    await chat.waitForSelector('#pick-models .pick-item');
+    await chat.click('#pick-models .pick-item >> text=a-2');
+    await chat.waitForFunction(() => document.getElementById('model-label').textContent === 'a-2 · alpha');
+    await chat.evaluate(() => { window.__opts.model = 'a-1'; window.__listeners['askbar:shown'](); });
+    await chat.waitForFunction(() => window.__calls.filter((c) => c[0] === 'bootstrap').length > 3);
+    assert.equal(await chat.innerText('#model-label'), 'a-2 · alpha');
+    await chat.keyboard.press('Control+n');
+    await chat.waitForFunction(() => document.getElementById('model-label').textContent === 'a-1 · alpha');
+    await chat.keyboard.press('Control+h');
+    await chat.click('.conv .open >> text=second chat');
+    await chat.waitForFunction(() => document.getElementById('model-label').textContent === 'a-2 · alpha');
+    await chat.context().close();
+  });
+  await step('Esc closes the picker before anything else', async () => {
+    await page.keyboard.press('Escape');
+    assert.equal(await page.isHidden('#picker'), true);
+    assert.equal((await calls(page, 'hide_window')).length, 0);
+  });
+  await step('no JavaScript errors in the picker', async () => {
     assert.deepEqual(page.errors, []);
   });
   await page.context().close();

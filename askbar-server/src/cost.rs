@@ -3,7 +3,8 @@
 //! Prices live on the provider in the snapshot, per million tokens. The usage rows and audit spans
 //! hold only token counts, so correcting a price re-prices all of history the next time it is read.
 //! An unknown price gives an unknown cost (`None`, shown as null), never 0: a wrong zero would
-//! look like a bargain.
+//! look like a bargain. A provider's prices are for its default model, so a metered reply from
+//! another of its models has an unknown cost too.
 
 use askbar_proto::{Billing, SnapshotProvider};
 
@@ -34,6 +35,12 @@ impl Prices {
     pub fn of(p: &SnapshotProvider) -> Prices {
         Prices { billing: p.billing, input: p.price_in, output: p.price_out, cached_input: p.price_cached_in, includes_cached: p.kind != "anthropic" }
     }
+
+    /// The prices for a reply from `model` (`None`: not recorded, so the default). A subscription
+    /// costs the same whichever model answered; a metered provider's prices cover only its default.
+    pub fn for_model(p: &SnapshotProvider, model: Option<&str>) -> Option<Prices> {
+        (p.billing == Billing::Subscription || model.is_none_or(|m| m == p.model)).then(|| Prices::of(p))
+    }
 }
 
 fn term(tokens: u64, price: Option<f64>) -> Option<f64> {
@@ -62,6 +69,17 @@ mod tests {
     }
     fn close(a: Option<f64>, b: f64) -> bool {
         a.is_some_and(|a| (a - b).abs() < 1e-9)
+    }
+
+    #[test]
+    fn a_metered_providers_prices_cover_only_its_default_model() {
+        let mut p: SnapshotProvider = crate::testing::provider("p", "n", "", "default");
+        p.price_in = Some(1.0);
+        assert!(Prices::for_model(&p, None).is_some());
+        assert!(Prices::for_model(&p, Some("default")).is_some());
+        assert!(Prices::for_model(&p, Some("other")).is_none(), "unknown, not the default's price");
+        p.billing = Billing::Subscription;
+        assert_eq!(Prices::for_model(&p, Some("other")).map(|x| cost(Tokens { input: 9, output: 9, cached: 0 }, x)), Some(Some(0.0)));
     }
 
     #[test]

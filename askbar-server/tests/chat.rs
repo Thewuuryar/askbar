@@ -72,13 +72,23 @@ async fn start() -> T {
 
 impl T {
     async fn chat(&self, client: &reqwest::Client, conv: Option<&str>, provider: &str, text: &str) -> reqwest::Response {
+        self.chat_with_model(client, conv, provider, None, text).await
+    }
+    async fn chat_with_model(&self, client: &reqwest::Client, conv: Option<&str>, provider: &str, model: Option<&str>, text: &str) -> reqwest::Response {
         client
             .post(format!("http://{}/api/client/v1/chat", self.addr))
             .bearer_auth(&self.token)
-            .json(&ChatRequest { conversation_id: conv.map(String::from), provider: provider.into(), text: text.into(), client_request_id: None })
+            .json(&ChatRequest { conversation_id: conv.map(String::from), provider: provider.into(), text: text.into(), client_request_id: None, model: model.map(String::from) })
             .send()
             .await
             .unwrap()
+    }
+    /// The model each generation was sent with, oldest first.
+    fn generation_models(&self) -> Vec<Option<String>> {
+        let db = self.state.db.lock().unwrap();
+        let mut stmt = db.conn().prepare("SELECT model FROM generations ORDER BY id").unwrap();
+        let rows = stmt.query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
+        rows
     }
     /// (status, text, error, assistant_message_id) of every generation, oldest first.
     fn generations(&self) -> Vec<(String, String, Option<String>, Option<String>)> {
@@ -238,7 +248,7 @@ async fn bad_requests_are_plain_http_errors() {
     assert!(t.messages().is_empty());
     let r = http
         .post(format!("http://{}/api/client/v1/chat", t.addr))
-        .json(&ChatRequest { conversation_id: None, provider: "p1".into(), text: "hi".into(), client_request_id: None })
+        .json(&ChatRequest { conversation_id: None, provider: "p1".into(), text: "hi".into(), client_request_id: None, model: None })
         .send()
         .await
         .unwrap();
@@ -286,7 +296,7 @@ async fn another_user_cannot_read_or_continue_my_conversation() {
     let r = http
         .post(format!("http://{}/api/client/v1/chat", t.addr))
         .bearer_auth(&token_b)
-        .json(&ChatRequest { conversation_id: Some(conversation_id.clone()), provider: "p1".into(), text: "intrusion".into(), client_request_id: None })
+        .json(&ChatRequest { conversation_id: Some(conversation_id.clone()), provider: "p1".into(), text: "intrusion".into(), client_request_id: None, model: None })
         .send()
         .await
         .unwrap();
@@ -614,6 +624,7 @@ async fn two_posts_with_one_client_request_id_make_one_generation_and_one_user_m
                     provider: "p1".into(),
                     text: text.into(),
                     client_request_id: Some("req-1".into()),
+                    model: None,
                 })
                 .send()
                 .await
@@ -639,7 +650,7 @@ async fn two_posts_with_one_client_request_id_make_one_generation_and_one_user_m
     let third = client()
         .post(format!("http://{}/api/client/v1/chat", t.addr))
         .bearer_auth(&other)
-        .json(&ChatRequest { conversation_id: None, provider: "p1".into(), text: "Hello there".into(), client_request_id: Some("req-1".into()) })
+        .json(&ChatRequest { conversation_id: None, provider: "p1".into(), text: "Hello there".into(), client_request_id: Some("req-1".into()), model: None })
         .send()
         .await
         .unwrap();
@@ -660,7 +671,7 @@ async fn a_repeat_while_the_reply_runs_attaches_to_it() {
         client_builder().pool_max_idle_per_host(0).build().unwrap()
             .post(format!("http://{}/api/client/v1/chat", t.addr))
             .bearer_auth(&t.token)
-            .json(&ChatRequest { conversation_id: None, provider: "p1".into(), text: "please be slow".into(), client_request_id: Some("r".into()) })
+            .json(&ChatRequest { conversation_id: None, provider: "p1".into(), text: "please be slow".into(), client_request_id: Some("r".into()), model: None })
             .send()
     };
     let mut s1 = post().await.unwrap().bytes_stream();
@@ -737,6 +748,48 @@ async fn read_deltas<B: AsRef<[u8]>>(s: &mut (impl futures_util::Stream<Item = r
         got.push_str(&String::from_utf8_lossy(s.next().await.unwrap().unwrap().as_ref()));
     }
     got
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_conversation_keeps_its_model_until_another_is_asked_for() {
+    let t = start().await;
+    askbar_server::testing::update_snapshot(&t.state.db.lock().unwrap(), |s| s.providers[0].models = vec!["m2".into()]);
+    let http = client_builder().build().unwrap();
+    let body = t.chat_with_model(&http, None, "p1", Some("m2"), "first").await.text().await.unwrap();
+    let conversation = conversation_id_of(&body);
+    t.chat(&http, Some(&conversation), "p1", "second").await.text().await.unwrap();
+    t.chat_with_model(&http, Some(&conversation), "p1", Some("m"), "third").await.text().await.unwrap();
+    t.chat(&http, Some(&conversation), "p1", "fourth").await.text().await.unwrap();
+    assert_eq!(t.generation_models(), [Some("m2".to_string()), Some("m2".to_string()), Some("m".to_string()), Some("m".to_string())]);
+
+    // The administrator drops it: a message that did not ask for it gets the default.
+    t.chat_with_model(&http, Some(&conversation), "p1", Some("m2"), "fifth").await.text().await.unwrap();
+    askbar_server::testing::update_snapshot(&t.state.db.lock().unwrap(), |s| s.providers[0].models.clear());
+    t.chat(&http, Some(&conversation), "p1", "sixth").await.text().await.unwrap();
+    assert_eq!(t.generation_models().pop().unwrap(), None);
+    assert_eq!(t.chat_with_model(&http, Some(&conversation), "p1", Some("m2"), "seventh").await.status(), 404, "asking for it is refused");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_queued_message_whose_model_was_dropped_is_refused_when_its_turn_comes() {
+    let t = start().await;
+    askbar_server::testing::update_snapshot(&t.state.db.lock().unwrap(), |s| s.providers[0].models = vec!["m2".into()]);
+    let http = client_builder().pool_max_idle_per_host(0).build().unwrap();
+    let mut first = t.chat(&http, None, "p1", "please be slow").await.bytes_stream();
+    let got = read_deltas(&mut first, 2).await;
+    let (conversation, first_id) = (conversation_id_of(&got), generation_id(&got));
+    let mut second = t.chat_with_model(&http, Some(&conversation), "p1", Some("m2"), "second").await.bytes_stream();
+
+    askbar_server::testing::update_snapshot(&t.state.db.lock().unwrap(), |s| s.providers[0].models.clear());
+    assert_eq!(t.cancel_with(&t.token, &first_id).await.status(), 204);
+    let mut body = String::new();
+    while let Some(Ok(b)) = second.next().await {
+        body.push_str(&String::from_utf8_lossy(&b));
+    }
+    assert!(body.contains("no longer offered"), "{body:?}");
+    assert!(!body.contains("event: delta"), "nothing was asked of the provider: {body:?}");
+    assert!(!t.mock.log.lock().unwrap().iter().any(|l| l.contains("last='second'")));
+    assert_eq!(t.generations()[1].0, "error");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

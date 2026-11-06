@@ -574,3 +574,25 @@ async fn models_get_502_when_the_server_is_down() {
     let (st, _) = t.call(M::POST, "/admin/api/v1/providers/models", Some(json!({ "type": "openai" }))).await;
     assert_eq!(st, 502);
 }
+
+#[tokio::test]
+async fn a_providers_model_list_is_cleaned_saved_and_pushed_to_the_server() {
+    let t = start(true).await;
+    let mut body = provider("mock", "http://127.0.0.1:1/v1", None);
+    body["models"] = json!([" big ", "m1", "big", "", "small"]);
+    let (st, created) = t.call(M::POST, "/admin/api/v1/providers", Some(body.clone())).await;
+    assert_eq!(st, 201);
+    let id = created["id"].as_str().unwrap().to_string();
+    let (_, list) = t.call(M::GET, "/admin/api/v1/providers", None).await;
+    assert_eq!(list[0]["models"], json!(["big", "small"]), "trimmed, no blanks or repeats, default not repeated");
+    assert_eq!(t.snapshot().unwrap().providers[0].models, ["big", "small"]);
+
+    body["models"] = json!(["only"]);
+    assert_eq!(t.call(M::PUT, &format!("/admin/api/v1/providers/{id}"), Some(body)).await.0, 204);
+    assert_eq!(t.snapshot().unwrap().providers[0].choices(), ["m1", "only"]);
+
+    // Left out, the list is empty: only the default is offered.
+    let (st, _) = t.call(M::PUT, &format!("/admin/api/v1/providers/{id}"), Some(provider("mock", "http://127.0.0.1:1/v1", None))).await;
+    assert_eq!(st, 204);
+    assert_eq!(t.snapshot().unwrap().providers[0].choices(), ["m1"]);
+}

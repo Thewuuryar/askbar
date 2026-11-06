@@ -60,6 +60,10 @@ pub struct SnapshotProvider {
     #[serde(default)]
     pub base_url: String,
     pub model: String,
+    /// Models users may choose on this provider. `model` is the default and counts as a member
+    /// even when it is not listed here.
+    #[serde(default)]
+    pub models: Vec<String>,
     #[serde(default)]
     pub max_tokens: Option<u32>,
     #[serde(default)]
@@ -92,6 +96,19 @@ pub enum Billing {
     Metered,
     /// A flat plan; tokens cost nothing extra.
     Subscription,
+}
+
+impl SnapshotProvider {
+    /// The models users may choose: the default first, then the listed ones without repeats.
+    pub fn choices(&self) -> Vec<String> {
+        let mut out = vec![self.model.clone()];
+        for m in &self.models {
+            if !out.contains(m) {
+                out.push(m.clone());
+            }
+        }
+        out
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -187,6 +204,26 @@ fn default_generation_timeout_secs() -> u32 {
 pub struct Prefs {
     /// Id of the provider new chats use; `None` means "the server's default".
     pub active_provider_id: Option<String>,
+    /// Model new chats use on that provider; `None` means the provider's default model.
+    #[serde(default)]
+    pub active_model: Option<String>,
+}
+
+/// What one conversation answers with, for `PUT /conversations/{id}/model`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConversationModel {
+    pub provider_id: String,
+    /// `None` means the provider's default.
+    #[serde(default)]
+    pub model: Option<String>,
+}
+
+/// The models a user may choose on one provider.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderModels {
+    /// The provider's default model; always one of `models`.
+    pub default: String,
+    pub models: Vec<String>,
 }
 
 /// One message that matched a history search.
@@ -205,6 +242,12 @@ pub struct ConversationDetail {
     #[serde(flatten)]
     pub conversation: Conversation,
     pub messages: Vec<Message>,
+    /// The provider this conversation uses; `None` until its first message.
+    #[serde(default)]
+    pub provider_id: Option<String>,
+    /// The model this conversation uses; `None` means the provider's default.
+    #[serde(default)]
+    pub model: Option<String>,
     /// Replies still running or waiting their turn; left out when there are none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pending: Vec<PendingGeneration>,
@@ -259,6 +302,10 @@ pub struct ChatRequest {
     /// generation it started instead of starting another, so a retry never doubles a message.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_request_id: Option<String>,
+    /// Model to answer with; must be one the provider offers. `None` keeps the conversation's model
+    /// if it is on this provider, and otherwise means the provider's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 /// Server-Sent Event payloads for `POST /api/client/v1/chat`; the SSE event name is the `event` tag.
@@ -388,6 +435,8 @@ mod tests {
         let d = ConversationDetail {
             conversation: Conversation { id: "c".into(), title: "t".into(), updated_at: 1, message_count: 0 },
             messages: vec![],
+            provider_id: None,
+            model: None,
             pending: vec![],
         };
         let s = serde_json::to_string(&d).unwrap();
@@ -437,6 +486,7 @@ mod tests {
             kind: "openai".into(),
             base_url: String::new(),
             model: "m".into(),
+            models: vec!["m".into(), "m2".into()],
             max_tokens: Some(1),
             temperature: Some(0.5),
             headers: Default::default(),

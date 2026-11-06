@@ -126,6 +126,8 @@ const MIGRATIONS: &[&str] = &[
     // v10: a provider the admin made and keeps in step itself (the bundled CLIProxyAPI). Its name, type,
     // address and key are not editable, and it cannot be deleted.
     "ALTER TABLE providers ADD COLUMN managed INTEGER NOT NULL DEFAULT 0;",
+    // v11: the models users may choose on a provider, as a JSON array. `model` stays the default.
+    "ALTER TABLE providers ADD COLUMN models TEXT NOT NULL DEFAULT '[]';",
 ];
 
 /// The schema steps, in order (for the upgrade tests).
@@ -327,6 +329,22 @@ mod tests {
         assert_eq!(name, "Work laptop");
     }
     use super::*;
+
+    #[test]
+    fn a_provider_from_before_model_lists_offers_only_its_default() {
+        let conn = Connection::open_in_memory().unwrap();
+        for (i, sql) in MIGRATIONS.iter().take(8).enumerate() {
+            conn.execute_batch(sql).unwrap();
+            if i == 0 {
+                conn.execute_batch(&format!("PRAGMA application_id = {APPLICATION_ID}")).unwrap();
+            }
+        }
+        conn.execute_batch("PRAGMA user_version = 8").unwrap();
+        conn.execute_batch("INSERT INTO providers (id, name, type, base_url, model, created_at) VALUES ('p', 'old', 'openai', '', 'm1', 1)").unwrap();
+        let db = AdminDb::init(conn).unwrap();
+        let models: String = db.conn.query_row("SELECT models FROM providers WHERE id = 'p'", [], |r| r.get(0)).unwrap();
+        assert_eq!(models, "[]");
+    }
 
     fn key(id: &str, retired: Option<i64>) -> AuditKeyRow {
         AuditKeyRow { key_id: id.into(), public_key: [id.len() as u8; 32], salt: [3; 16], argon_params: "m=65536,t=3,p=1".into(), created_at: 100, retired_at: retired }

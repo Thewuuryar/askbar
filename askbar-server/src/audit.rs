@@ -255,17 +255,19 @@ fn percentile(sorted: &[i64], p: f64) -> Option<i64> {
     Some(sorted[rank.min(sorted.len()) - 1])
 }
 
-/// Prices by provider id, as the snapshot has them now. `None` for a provider it does not know.
-pub type PriceOf<'a> = &'a dyn Fn(&str) -> Option<crate::cost::Prices>;
+/// Prices by provider id and the model that answered, as the snapshot has them now. `None` for a
+/// provider it does not know, and for a model the provider's prices do not cover (see `cost`).
+pub type PriceOf<'a> = &'a dyn Fn(&str, Option<&str>) -> Option<crate::cost::Prices>;
 
 /// The cost of a set of tokens reported by `provider_id`, or `None` when it cannot be known: the
-/// provider is gone from the snapshot, or a price that matters is missing.
-pub fn cost_of(price_of: PriceOf, provider_id: Option<&str>, input: Option<i64>, output: Option<i64>, cached: Option<i64>) -> Option<f64> {
+/// provider is gone from the snapshot, the model isn't one its prices cover, or a price that matters
+/// is missing.
+pub fn cost_of(price_of: PriceOf, provider_id: Option<&str>, model: Option<&str>, input: Option<i64>, output: Option<i64>, cached: Option<i64>) -> Option<f64> {
     // No token counts at all (a request that failed before any reply): nothing to put a price on.
     if input.is_none() && output.is_none() {
         return None;
     }
-    let prices = price_of(provider_id?)?;
+    let prices = price_of(provider_id?, model)?;
     let n = |v: Option<i64>| v.unwrap_or(0).max(0) as u64;
     crate::cost::cost(crate::cost::Tokens { input: n(input), output: n(output), cached: n(cached) }, prices)
 }
@@ -344,16 +346,17 @@ pub fn stats(conn: &Connection, since: i64, price_of: PriceOf) -> rusqlite::Resu
     {
         let mut stmt = conn.prepare(
             "SELECT t.started_at, t.tokens_in, t.tokens_out, t.tokens_cached,
-                    (SELECT provider_id FROM spans WHERE trace_id = t.trace_id AND kind = 'attempt' ORDER BY id DESC LIMIT 1)
+                    (SELECT provider_id FROM spans WHERE trace_id = t.trace_id AND kind = 'attempt' ORDER BY id DESC LIMIT 1),
+                    (SELECT model FROM spans WHERE trace_id = t.trace_id AND kind = 'attempt' ORDER BY id DESC LIMIT 1)
              FROM spans t WHERE t.kind = 'turn' AND t.started_at >= ?1",
         )?;
         let rows = stmt.query_map([since], |r| {
-            Ok((r.get::<_, i64>(0)?, r.get::<_, Option<i64>>(1)?, r.get::<_, Option<i64>>(2)?, r.get::<_, Option<i64>>(3)?, r.get::<_, Option<String>>(4)?))
+            Ok((r.get::<_, i64>(0)?, r.get::<_, Option<i64>>(1)?, r.get::<_, Option<i64>>(2)?, r.get::<_, Option<i64>>(3)?, r.get::<_, Option<String>>(4)?, r.get::<_, Option<String>>(5)?))
         })?;
         for row in rows {
-            let (started, tin, tout, tcached, provider) = row?;
+            let (started, tin, tout, tcached, provider, model) = row?;
             let has_tokens = tin.is_some() || tout.is_some();
-            let cost = cost_of(price_of, provider.as_deref(), tin, tout, tcached);
+            let cost = cost_of(price_of, provider.as_deref(), model.as_deref(), tin, tout, tcached);
             total.add(cost, has_tokens);
             for (map, key) in [(&mut by_provider, provider.clone().unwrap_or_default()), (&mut by_day, utc_day(started))] {
                 let g = map.entry(key).or_insert_with(|| Group { requests: 0, tokens: (0, 0, 0), cost: CostSum::default() });
@@ -1021,13 +1024,13 @@ mod tests {
         span("a1", "T", "attempt", Some("p1"), "error", r#"{"retry_index":0}"#);
         span("a2", "T", "attempt", Some("p1"), "error", r#"{"retry_index":1}"#);
         span("a3", "T", "attempt", Some("p2"), "done", r#"{"retry_index":0,"fallback_from":"p1"}"#);
-        let v = stats(&db.conn, now - 10, &|_| None).unwrap();
+        let v = stats(&db.conn, now - 10, &|_, _| None).unwrap();
         let by = |p: &str| v["by_provider"].as_array().unwrap().iter().find(|x| x["provider_id"] == p).cloned().unwrap_or_else(|| panic!("no row for {p}"));
         let nums = |row: &serde_json::Value| ["requests", "attempts", "retries", "fallbacks", "failed_attempts"].map(|k| row[k].as_i64().unwrap());
         assert_eq!(nums(&by("p1")), [0, 2, 1, 0, 2], "p1 served nothing but had two tries, one a retry, both failed");
         assert_eq!(nums(&by("p2")), [1, 1, 0, 1, 0], "p2 served the request, standing in for p1");
         // Outside the window nothing counts.
-        let later = stats(&db.conn, now + 100, &|_| None).unwrap();
+        let later = stats(&db.conn, now + 100, &|_, _| None).unwrap();
         assert!(later["by_provider"].as_array().unwrap().is_empty());
     }
 

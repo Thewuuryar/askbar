@@ -104,6 +104,30 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '426':
           $ref: '#/components/responses/TooOld'
+  /api/client/v1/providers/{id}/models:
+    get:
+      operationId: listProviderModels
+      summary: The models this app may choose on one provider. The default is always included.
+      parameters:
+        - $ref: '#/components/parameters/ClientVersion'
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The models.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProviderModels'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '426':
+          $ref: '#/components/responses/TooOld'
   /api/client/v1/conversations:
     get:
       operationId: listConversations
@@ -149,6 +173,34 @@ paths:
       responses:
         '204':
           description: Deleted.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '426':
+          $ref: '#/components/responses/TooOld'
+  /api/client/v1/conversations/{id}/model:
+    parameters:
+      - $ref: '#/components/parameters/ClientVersion'
+      - $ref: '#/components/parameters/ConversationId'
+    put:
+      operationId: putConversationModel
+      summary: Set the provider and model this conversation answers with from its next message on.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConversationModel'
+      responses:
+        '200':
+          description: What the conversation now answers with.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationModel'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
@@ -530,6 +582,17 @@ components:
           enum: [openai, anthropic]
         model:
           type: string
+    ProviderModels:
+      type: object
+      required: [default, models]
+      properties:
+        default:
+          type: string
+          description: The provider's default model. Always one of `models`.
+        models:
+          type: array
+          items:
+            type: string
     Conversation:
       type: object
       required: [id, title, updated_at, message_count]
@@ -584,11 +647,26 @@ components:
               type: array
               items:
                 $ref: '#/components/schemas/Message'
+            provider_id:
+              type: [string, 'null']
+              description: The provider this conversation uses; null until its first message.
+            model:
+              type: [string, 'null']
+              description: The model this conversation uses; null means the provider's default.
             pending:
               type: array
               description: Left out when nothing is unfinished.
               items:
                 $ref: '#/components/schemas/PendingGeneration'
+    ConversationModel:
+      type: object
+      required: [provider_id]
+      properties:
+        provider_id:
+          type: string
+        model:
+          type: [string, 'null']
+          description: A model the provider offers; null means its default.
     Prefs:
       type: object
       required: [active_provider_id]
@@ -596,6 +674,9 @@ components:
         active_provider_id:
           type: [string, 'null']
           description: The provider new chats use; null means the first one listed.
+        active_model:
+          type: [string, 'null']
+          description: The model new chats use on that provider; null means the provider's default. Needs `active_provider_id`.
     DisplaySettings:
       type: object
       properties:
@@ -647,6 +728,9 @@ components:
         client_request_id:
           type: string
           description: A random id the app chooses for each send (a UUID). A repeat attaches to the first send.
+        model:
+          type: string
+          description: A model the provider offers (see `listProviderModels`); one it does not offer is `404`. Omit to keep the conversation's model if it is on this provider and still offered, otherwise the provider's default.
     ChatEvent:
       description: The `data:` of each stream message; the SSE `event:` name is the `event` value.
       oneOf:

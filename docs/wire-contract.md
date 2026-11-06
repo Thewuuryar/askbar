@@ -60,6 +60,17 @@ Tests check that each file lists exactly the routes the code registers.
 `{"id": "<ULID>", "name": "...", "type": "openai" | "anthropic", "model": "..."}`,
 ordered by name. Keys never appear.
 
+A conversation stores the provider and model it answers with. `GET /api/client/v1/conversations/{id}`
+returns them as `provider_id` and `model` (`null`: not chosen yet, or the provider's default).
+`PUT /api/client/v1/conversations/{id}/model` with `{"provider_id": "...", "model": "..." | null}`
+sets them for the next message. A `model` on `ChatRequest` replaces the stored one; without one the
+conversation keeps it, while the provider still offers it. A queued message whose model is dropped
+before its turn ends with an error and asks the provider nothing.
+
+`GET /api/client/v1/providers/{id}/models` returns `{"default": "...", "models": ["...", ...]}`:
+the models users may choose on that provider, as the administrator set them. `default` is the
+provider's own model and is always in `models`, first. An unknown provider is `404`.
+
 **Providers are addressed by `id`, never by name.** `ChatRequest.provider` and the
 active-provider preference hold an id; a name is not accepted as a fallback (`404`).
 
@@ -67,10 +78,13 @@ active-provider preference hold an id; a name is not accepted as a fallback (`40
 
 Both follow the signed-in user, so all of a user's clients see the same values.
 
-- `GET /api/client/v1/me/prefs` returns `{"active_provider_id": "<id>" | null}`. `null` means
-  nothing was chosen; clients then use the first provider in the list.
+- `GET /api/client/v1/me/prefs` returns `{"active_provider_id": "<id>" | null, "active_model": "<model>" | null}`.
+  `null` means nothing was chosen; clients then use the first provider in the list, and a
+  provider's default model.
 - `PUT /api/client/v1/me/prefs` with the same shape replaces it and returns it. An id that is
-  not a provider is `404` and changes nothing.
+  not a provider, or a model that provider does not offer, is `404` and changes nothing. A model
+  with no provider is `400`. Changing the provider means sending `active_model` again (or `null`).
+  These are what new chats start with; a chat already open keeps its own.
 - `GET /api/client/v1/me/display-defaults` (read-only) returns
   `{"theme": "auto"|"light"|"dark", "width", "max_height", "history_width", "top_percent", "hide_on_blur"}`:
   the user's own defaults if the administrator set them, otherwise the server-wide ones.
@@ -200,7 +214,10 @@ The server, not the client, decides which provider serves a reply.
   `allow_as_fallback`; a **subscription** provider always may be. Provider entries carry
   `billing` (`metered` by default, or `subscription`), `allow_as_fallback` (false by default) and
   per-million prices `price_in`, `price_out`, `price_cached_in` (optional; a missing price is an
-  unknown cost, never zero).
+  unknown cost, never zero). They also carry `models`, the models users may choose (`model` is the
+  default and is always offered). The model a user chose applies to the provider asked for; a
+  fallback provider answers with its own default. A provider's prices cover its default model, so a
+  metered reply from another of its models has an unknown cost.
 - Each provider is tried up to three times (once, then twice more) when the failure is worth it: a
   connection problem, a timeout, `408`, `429`, any `5xx`, or a stream that broke. The waits are
   250 ms and 1 s, or the provider's `Retry-After` when it is shorter than the time left. `401`,

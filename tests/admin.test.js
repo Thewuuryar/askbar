@@ -235,6 +235,20 @@ async function waitForPort(port) {
     await page.waitForFunction(() => /Success|Failed/.test(document.querySelector('.card[data-name="mock"] .test-result').textContent));
     assert.match(await page.innerText('.card[data-name="mock"] .test-result'), /^Success:/);
   });
+  await step('model list: the models users may choose are ticked from the provider\'s list and saved', async () => {
+    await page.click('.card[data-name="mock"] [data-action="edit"]');
+    await page.waitForSelector('#p-models-list:not([hidden])');
+    assert.equal(await page.isHidden('#p-models'), true, 'the text box gives way to the list');
+    assert.deepEqual(await page.$$eval('#p-models-list option', (o) => o.map((x) => x.value)), ['mock-model', 'mock-model-2']);
+    await page.selectOption('#p-models-list', ['mock-model']);
+    await page.click('#provider-form button[type=submit]');
+    await page.waitForFunction(() => /\+1 more/.test(document.querySelector('.card[data-name="mock"]')?.textContent || ''));
+    await page.click('.card[data-name="mock"] [data-action="edit"]');
+    await page.waitForSelector('#p-models-list:not([hidden])');
+    assert.deepEqual(await page.$$eval('#p-models-list option:checked', (o) => o.map((x) => x.value)), ['mock-model']);
+    await page.click('#provider-form button[type=submit]');
+    await page.waitForSelector('#provider-form', { state: 'hidden' });
+  });
   await step('provider billing: set a subscription with prices, see it on the card, refuse a negative price', async () => {
     await page.click('.card[data-name="mock"] [data-action="edit"]');
     assert.equal(await page.inputValue('#p-billing'), 'metered', 'the default');

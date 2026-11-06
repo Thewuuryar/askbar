@@ -97,9 +97,11 @@ pub fn client_routes(state: &Arc<AppState>) -> routes::Routes {
         // Lets a client check that its token is still accepted.
         .get(&v1("/me"), || async { StatusCode::NO_CONTENT })
         .get(&v1("/providers"), client_api::providers)
+        .get(&v1("/providers/{id}/models"), client_api::provider_models)
         .get(&v1("/conversations"), client_api::conversations)
         .get(&v1("/conversations/{id}"), client_api::conversation)
         .delete(&v1("/conversations/{id}"), client_api::delete_conversation)
+        .put(&v1("/conversations/{id}/model"), client_api::put_conversation_model)
         .get(&v1("/me/prefs"), client_api::get_prefs)
         .put(&v1("/me/prefs"), client_api::put_prefs)
         .get(&v1("/me/display-defaults"), client_api::display_defaults)

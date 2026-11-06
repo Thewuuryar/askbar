@@ -72,6 +72,9 @@ pub fn validate(s: &Snapshot) -> Result<(), String> {
         if p.name.trim().is_empty() || p.model.trim().is_empty() {
             return Err(format!("provider {}: name and model are required", p.id));
         }
+        if p.models.iter().any(|m| m.trim().is_empty() || m.trim() != m) {
+            return Err(format!("provider {}: models must not be blank or padded with spaces", p.id));
+        }
         for (label, price) in [("price_in", p.price_in), ("price_out", p.price_out), ("price_cached_in", p.price_cached_in)] {
             if price.is_some_and(|v| !v.is_finite() || v < 0.0) {
                 return Err(format!("provider {}: {label} must be zero or more", p.id));

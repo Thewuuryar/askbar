@@ -78,6 +78,7 @@ pub async fn chat(
             client_id: auth.client_id,
             conversation_id: req.conversation_id,
             provider_id: req.provider,
+            model: req.model,
             prompt: text,
             client_request_id: req.client_request_id,
         },

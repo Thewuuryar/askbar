@@ -186,6 +186,13 @@ const MIGRATIONS: &[&str] = &[
      ALTER TABLE generations RENAME COLUMN device_id TO client_id; -- names-ok
      ALTER TABLE token_usage RENAME COLUMN device_id TO client_id; -- names-ok
      ALTER TABLE redeemed_codes RENAME COLUMN device_id TO client_id; -- names-ok",
+    // v7: a user can choose which of a provider's models answers (NULL: the provider's default), and
+    // a generation remembers the model it was sent with so a queued message keeps it.
+    // A conversation keeps the provider and model it answers with.
+    "ALTER TABLE user_prefs ADD COLUMN active_model TEXT;
+     ALTER TABLE generations ADD COLUMN model TEXT;
+     ALTER TABLE conversations ADD COLUMN provider_id TEXT;
+     ALTER TABLE conversations ADD COLUMN model TEXT;",
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -239,6 +246,8 @@ pub struct Generation {
     pub assistant_message_id: Option<String>,
     pub client_request_id: Option<String>,
     pub provider_id: Option<String>,
+    /// The model the user chose for this message; `None` means the provider's default.
+    pub model: Option<String>,
     pub status: String,
     pub prompt: String,
     pub text: String,
@@ -258,13 +267,14 @@ pub struct NewGeneration<'a> {
     pub user_message_id: Option<&'a str>,
     pub client_request_id: Option<&'a str>,
     pub provider_id: Option<&'a str>,
+    pub model: Option<&'a str>,
     pub status: &'a str,
     pub prompt: &'a str,
     pub deadline_at: Option<i64>,
 }
 
 const GENERATION_COLUMNS: &str = "id, user_id, client_id, conversation_id, user_message_id, assistant_message_id, \
-     client_request_id, provider_id, status, prompt, text, error, queued_at, started_at, deadline_at, ended_at";
+     client_request_id, provider_id, model, status, prompt, text, error, queued_at, started_at, deadline_at, ended_at";
 
 fn read_generation(r: &rusqlite::Row<'_>) -> rusqlite::Result<Generation> {
     Ok(Generation {
@@ -276,14 +286,15 @@ fn read_generation(r: &rusqlite::Row<'_>) -> rusqlite::Result<Generation> {
         assistant_message_id: r.get(5)?,
         client_request_id: r.get(6)?,
         provider_id: r.get(7)?,
-        status: r.get(8)?,
-        prompt: r.get(9)?,
-        text: r.get(10)?,
-        error: r.get(11)?,
-        queued_at: r.get(12)?,
-        started_at: r.get(13)?,
-        deadline_at: r.get(14)?,
-        ended_at: r.get(15)?,
+        model: r.get(8)?,
+        status: r.get(9)?,
+        prompt: r.get(10)?,
+        text: r.get(11)?,
+        error: r.get(12)?,
+        queued_at: r.get(13)?,
+        started_at: r.get(14)?,
+        deadline_at: r.get(15)?,
+        ended_at: r.get(16)?,
     })
 }
 
@@ -447,6 +458,20 @@ impl Db {
             .optional()?)
     }
 
+    /// The provider and model one of `user_id`'s conversations answers with.
+    pub fn conversation_model(&self, user_id: &str, id: &str) -> Result<Option<(Option<String>, Option<String>)>, DbError> {
+        Ok(self
+            .conn
+            .query_row("SELECT provider_id, model FROM conversations WHERE id = ?1 AND user_id = ?2", params![id, user_id], |r| Ok((r.get(0)?, r.get(1)?)))
+            .optional()?)
+    }
+
+    /// Sets what one of `user_id`'s conversations answers with. False if it isn't theirs.
+    pub fn set_conversation_model(&self, user_id: &str, id: &str, provider_id: &str, model: Option<&str>) -> Result<bool, DbError> {
+        let n = self.conn.execute("UPDATE conversations SET provider_id = ?3, model = ?4 WHERE id = ?1 AND user_id = ?2", params![id, user_id, provider_id, model])?;
+        Ok(n > 0)
+    }
+
     /// Oldest first. Empty if the conversation doesn't exist or is someone else's.
     pub fn get_messages(&self, user_id: &str, conversation_id: &str) -> Result<Vec<StoredMessage>, DbError> {
         let mut stmt = self.conn.prepare(
@@ -538,11 +563,11 @@ impl Db {
         let started = (g.status == "running").then_some(t);
         self.conn.execute(
             "INSERT INTO generations (id, user_id, client_id, conversation_id, user_message_id, client_request_id,
-                                      provider_id, status, prompt, queued_at, started_at, deadline_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                                      provider_id, model, status, prompt, queued_at, started_at, deadline_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 id, g.user_id, g.client_id, g.conversation_id, g.user_message_id, g.client_request_id,
-                g.provider_id, g.status, g.prompt, t, started, g.deadline_at
+                g.provider_id, g.model, g.status, g.prompt, t, started, g.deadline_at
             ],
         )?;
         Ok(id)
@@ -652,6 +677,24 @@ impl Db {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_user_and_a_generation_from_before_model_choice_have_no_model() {
+        let conn = Connection::open_in_memory().unwrap();
+        for (i, sql) in MIGRATIONS.iter().take(6).enumerate() {
+            conn.execute_batch(sql).unwrap();
+            if i == 0 {
+                conn.execute_batch(&format!("PRAGMA application_id = {APPLICATION_ID}")).unwrap();
+            }
+        }
+        conn.execute_batch("PRAGMA user_version = 6").unwrap();
+        conn.execute_batch("INSERT INTO users (id, name, created_at) VALUES ('u', 'n', 0); INSERT INTO user_prefs (user_id, active_provider_id) VALUES ('u', 'p');").unwrap();
+        let db = Db::init(conn).unwrap();
+        let m: Option<String> = db.conn.query_row("SELECT active_model FROM user_prefs WHERE user_id = 'u'", [], |r| r.get(0)).unwrap();
+        assert_eq!(m, None);
+        db.conn.execute_batch("SELECT model FROM generations").unwrap();
+        db.conn.execute_batch("SELECT provider_id, model FROM conversations").unwrap();
+    }
 
     fn db_with_user() -> (Db, String) {
         let db = Db::open_in_memory().unwrap();
@@ -970,6 +1013,7 @@ mod tests {
             user_message_id: None,
             client_request_id: None,
             provider_id: Some("p"),
+            model: None,
             status,
             prompt: "hello",
             deadline_at: None,

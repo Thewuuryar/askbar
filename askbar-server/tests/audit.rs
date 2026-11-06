@@ -32,6 +32,7 @@ async fn run_chat(state: &std::sync::Arc<askbar_server::AppState>, prompt: &str)
             client_id: client,
             conversation_id: None,
             provider_id: "p1".into(),
+            model: None,
             prompt: prompt.into(),
             client_request_id: None,
         },
@@ -232,6 +233,7 @@ async fn a_queued_message_records_a_gate_span_named_queue_from_enqueue_to_start(
                 client_id: client.clone(),
                 conversation_id: conversation,
                 provider_id: "p1".into(),
+                model: None,
                 prompt: prompt.into(),
                 client_request_id: None,
             },
@@ -296,6 +298,7 @@ async fn a_backed_up_audit_writer_refuses_new_generations_with_503_and_retry_aft
                 client_id: "d1".into(),
                 conversation_id: None,
                 provider_id: "p1".into(),
+                model: None,
                 prompt: prompt.into(),
                 client_request_id: None,
             },
@@ -375,7 +378,7 @@ async fn a_generation_with_no_audit_key_is_refused_with_503_audit_key_missing() 
     };
     let refused = askbar_server::generation::submit(
         &state,
-        askbar_server::generation::Submit { user_id: user, client_id: client, conversation_id: None, provider_id: "p1".into(), prompt: "hi".into(), client_request_id: None },
+        askbar_server::generation::Submit { user_id: user, client_id: client, conversation_id: None, provider_id: "p1".into(), model: None, prompt: "hi".into(), client_request_id: None },
     )
     .err()
     .expect("no key, no generation");
@@ -392,7 +395,7 @@ async fn a_generation_with_no_audit_key_is_refused_with_503_audit_key_missing() 
     };
     assert!(askbar_server::generation::submit(
         &state,
-        askbar_server::generation::Submit { user_id: user, client_id: client, conversation_id: None, provider_id: "p1".into(), prompt: "hi".into(), client_request_id: None },
+        askbar_server::generation::Submit { user_id: user, client_id: client, conversation_id: None, provider_id: "p1".into(), model: None, prompt: "hi".into(), client_request_id: None },
     )
     .is_ok());
 }

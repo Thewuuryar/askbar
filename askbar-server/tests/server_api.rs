@@ -115,6 +115,7 @@ fn provider(id: &str) -> SnapshotProvider {
         kind: "openai".into(),
         base_url: "http://x/v1".into(),
         model: "m".into(),
+        models: Vec::new(),
         max_tokens: Some(100),
         temperature: None,
         headers: Default::default(),
@@ -518,6 +519,7 @@ async fn a_generation_with_the_mocks_usage_adds_to_the_overview_totals() {
             client_id: client,
             conversation_id: None,
             provider_id: "p1".into(),
+            model: None,
             prompt: "hello".into(),
             client_request_id: None,
         },
@@ -594,6 +596,7 @@ impl AuditStack {
                 client_id: client,
                 conversation_id: None,
                 provider_id: "p1".into(),
+                model: None,
                 prompt: prompt.into(),
                 client_request_id: None,
             },
@@ -756,6 +759,26 @@ fn set_prices(a: &AuditStack, price_in: Option<f64>, price_out: Option<f64>, pri
 
 fn approx(v: &serde_json::Value, want: f64) -> bool {
     v.as_f64().is_some_and(|got| (got - want).abs() < 1e-9)
+}
+
+#[tokio::test]
+async fn a_reply_from_another_model_has_an_unknown_cost_not_the_defaults_price() {
+    let a = audit_stack().await;
+    set_prices(&a, Some(2.0), Some(10.0), Some(0.5));
+    let plain = a.chat("hello").await;
+    let (_, body) = a.get("/api/server/v1/audit/traces").await;
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let trace = v["traces"].as_array().unwrap().iter().find(|t| t["trace_id"] == plain).unwrap().clone();
+    assert!(approx(&trace["cost"], (100.0 * 2.0 + 50.0 * 10.0) / 1e6), "the default model is priced: {trace}");
+
+    // The default changes, so what answered is now some other model.
+    askbar_server::testing::update_snapshot(&a.state.db.lock().unwrap(), |snap| snap.providers.iter_mut().find(|p| p.id == "p1").unwrap().model = "another".into());
+    let (_, body) = a.get("/api/server/v1/audit/traces").await;
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let trace = v["traces"].as_array().unwrap().iter().find(|t| t["trace_id"] == plain).unwrap().clone();
+    assert!(trace["cost"].is_null(), "{trace}");
+    let (_, body) = a.get(&format!("/api/server/v1/audit/traces/{plain}")).await;
+    assert!(serde_json::from_str::<serde_json::Value>(&body).unwrap()["cost"].is_null(), "{body}");
 }
 
 #[tokio::test]

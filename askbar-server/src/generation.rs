@@ -285,6 +285,8 @@ pub struct Submit {
     pub client_id: String,
     pub conversation_id: Option<String>,
     pub provider_id: String,
+    /// The model to use on that provider; `None` keeps the conversation's, or else its default.
+    pub model: Option<String>,
     pub prompt: String,
     pub client_request_id: Option<String>,
 }
@@ -680,6 +682,10 @@ fn budget_gate(db: &crate::Db, snap: &askbar_proto::Snapshot, requested: &str, n
 
 /// Starts a send: runs it now if its conversation is idle, else queues it. Everything that can
 /// fail with a plain HTTP status happens here, before any stream starts.
+fn model_offered(snapshot: &askbar_proto::Snapshot, provider_id: &str, model: &str) -> bool {
+    snapshot.providers.iter().find(|p| p.id == provider_id).is_some_and(|p| p.choices().iter().any(|m| m == model))
+}
+
 pub fn submit(state: &Arc<AppState>, s: Submit) -> Result<Submitted, SubmitError> {
     // Generations already running finish; new ones wait until the audit store has caught up.
     if !state.audit.healthy() {
@@ -691,6 +697,11 @@ pub fn submit(state: &Arc<AppState>, s: Submit) -> Result<Submitted, SubmitError
     }
     store::load_provider(&db, &state.secrets(), &s.provider_id).map_err(internal)?.ok_or(SubmitError::NotFound)?;
     let snapshot = crate::snapshot::current(&db).map_err(internal)?;
+    if let Some(m) = &s.model {
+        if !snapshot.as_ref().is_some_and(|snap| model_offered(snap, &s.provider_id, m)) {
+            return Err(SubmitError::NotFound);
+        }
+    }
     // Nothing runs unless what it says can be kept sealed: no audit key, no generation.
     if snapshot.as_ref().and_then(|snap| snap.audit_public_key.as_ref()).is_none() {
         return Err(SubmitError::AuditKeyMissing);
@@ -718,10 +729,19 @@ pub fn submit(state: &Arc<AppState>, s: Submit) -> Result<Submitted, SubmitError
         state.audit.finish_span(SpanFinish::new(&span, "blocked").error_code("kill_switch"));
         return Err(SubmitError::KillSwitch);
     }
+    let mut model = s.model.clone();
     let (conversation_id, busy) = match &s.conversation_id {
         Some(id) => {
             let c = db.get_conversation(&s.user_id, id).map_err(internal)?.ok_or(SubmitError::NotFound)?;
             let busy = db.conversation_busy(&c.id).map_err(internal)?;
+            // No model asked for: the conversation keeps its own while its provider still offers it.
+            if model.is_none() {
+                if let Some((Some(provider), Some(stored))) = db.conversation_model(&s.user_id, &c.id).map_err(internal)? {
+                    if provider == s.provider_id && snapshot.as_ref().is_some_and(|snap| model_offered(snap, &provider, &stored)) {
+                        model = Some(stored);
+                    }
+                }
+            }
             (c.id, busy)
         }
         None => (db.create_conversation(&s.user_id, &crate::make_title(&s.prompt)).map_err(internal)?, false),
@@ -733,6 +753,7 @@ pub fn submit(state: &Arc<AppState>, s: Submit) -> Result<Submitted, SubmitError
         user_message_id,
         client_request_id: s.client_request_id.as_deref(),
         provider_id: Some(&s.provider_id),
+        model: model.as_deref(),
         status,
         prompt: &s.prompt,
         deadline_at: None,
@@ -741,6 +762,7 @@ pub fn submit(state: &Arc<AppState>, s: Submit) -> Result<Submitted, SubmitError
         if db.queued_count(&conversation_id).map_err(internal)? >= MAX_QUEUED {
             return Err(SubmitError::QueueFull);
         }
+        db.set_conversation_model(&s.user_id, &conversation_id, &s.provider_id, model.as_deref()).map_err(internal)?;
         // Queued: the question is stored when the message starts, not now.
         let id = db.create_generation(&new("queued", None)).map_err(internal)?;
         pass_kill_switch_gate(state, &id, &s);
@@ -750,6 +772,7 @@ pub fn submit(state: &Arc<AppState>, s: Submit) -> Result<Submitted, SubmitError
         state.generations.insert(&id, live.clone());
         return Ok(Submitted { generation_id: id, conversation_id, live, queued: true });
     }
+    db.set_conversation_model(&s.user_id, &conversation_id, &s.provider_id, model.as_deref()).map_err(internal)?;
     // Save the question first so it survives a failed request.
     let user_message_id = db.add_message(&s.user_id, &conversation_id, "user", &s.prompt).map_err(internal)?;
     let id = db.create_generation(&new("running", Some(&user_message_id))).map_err(internal)?;
@@ -760,7 +783,7 @@ pub fn submit(state: &Arc<AppState>, s: Submit) -> Result<Submitted, SubmitError
     let live = Live::new();
     state.generations.insert(&id, live.clone());
     drop(db);
-    spawn_run(state, &id, &s.user_id, Some(&s.client_id), &conversation_id, &s.provider_id, timeout, live.clone());
+    spawn_run(state, &id, &s.user_id, Some(&s.client_id), &conversation_id, &s.provider_id, model.as_deref(), timeout, live.clone());
     Ok(Submitted { generation_id: id, conversation_id, live, queued: false })
 }
 
@@ -774,6 +797,7 @@ fn spawn_run(
     client_id: Option<&str>,
     conversation_id: &str,
     provider_id: &str,
+    model: Option<&str>,
     timeout: Duration,
     live: Arc<Live>,
 ) {
@@ -798,17 +822,24 @@ fn spawn_run(
         last_flush: Instant::now(),
         unflushed: 0,
     };
-    let (state, provider_id) = (state.clone(), provider_id.to_string());
+    let (state, provider_id, model) = (state.clone(), provider_id.to_string(), model.map(str::to_string));
     tokio::spawn(async move {
         // The providers to try, in order: the one asked for, then the fallbacks the administrator
         // allowed (see router::plan), each loaded with its key.
-        let prepared = {
+        let (model_gone, prepared) = {
             let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
-            let plan = crate::snapshot::current(&db).ok().flatten().map(|s| crate::router::plan(&s, &provider_id)).unwrap_or_default();
+            let snapshot = crate::snapshot::current(&db).ok().flatten();
+            // A queued message may outlive its model: the administrator can drop it while it waits.
+            let model_gone = model.as_ref().is_some_and(|m| !snapshot.as_ref().is_some_and(|s| model_offered(s, &provider_id, m)));
+            let plan = snapshot.as_ref().map(|s| crate::router::plan(s, &provider_id)).unwrap_or_default();
             let candidates: Vec<Candidate> = plan
                 .into_iter()
                 .filter_map(|r| {
-                    let provider = store::load_provider(&db, &state.secrets(), &r.id).ok().flatten()?;
+                    let mut provider = store::load_provider(&db, &state.secrets(), &r.id).ok().flatten()?;
+                    // The chosen model belongs to the provider asked for; another provider would refuse it.
+                    if let Some(m) = model.as_ref().filter(|_| r.id == provider_id) {
+                        provider.model = m.clone();
+                    }
                     Some(Candidate { id: r.id, provider, fallback_from: r.fallback_from })
                 })
                 .collect();
@@ -817,8 +848,12 @@ fn spawn_run(
                 .get_messages(&fin.user_id, &fin.conversation_id)
                 .ok()
                 .map(|ms| ms.iter().map(|m| ChatMessage::new(&m.role, &m.content)).collect());
-            (!candidates.is_empty()).then_some(candidates).zip(system).zip(history)
+            (model_gone, (!candidates.is_empty()).then_some(candidates).zip(system).zip(history))
         };
+        if model_gone {
+            fin.finish(Outcome::Error("That model is no longer offered. Choose another and send it again.".into()));
+            return;
+        }
         let Some(((candidates, system), history)) = prepared else {
             fin.finish(Outcome::Error("The provider is no longer available.".into()));
             return;
@@ -1076,7 +1111,7 @@ fn start_next(state: &Arc<AppState>, conversation_id: &str) {
                 l
             });
             live.end_queue_span(&state.audit, "done");
-            spawn_run(state, &next.id, &next.user_id, next.client_id.as_deref(), &next.conversation_id, next.provider_id.as_deref().unwrap_or(""), timeout, live);
+            spawn_run(state, &next.id, &next.user_id, next.client_id.as_deref(), &next.conversation_id, next.provider_id.as_deref().unwrap_or(""), next.model.as_deref(), timeout, live);
         }
         None => {
             // Try the one after it.
@@ -1444,6 +1479,7 @@ mod tests {
                 user_message_id: None,
                 client_request_id: None,
                 provider_id: None,
+                model: None,
                 status,
                 prompt: "q",
                 deadline_at: None,

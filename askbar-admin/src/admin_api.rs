@@ -120,6 +120,8 @@ pub struct ProviderRow {
     kind: String,
     base_url: String,
     model: String,
+    /// Models users may choose besides the default.
+    models: Vec<String>,
     max_tokens: Option<u32>,
     temperature: Option<f32>,
     /// Whether the server holds a key. The key itself is never shown.
@@ -143,6 +145,9 @@ pub struct ProviderInput {
     #[serde(default)]
     base_url: String,
     model: String,
+    /// Models users may choose. The default model is always offered, listed or not.
+    #[serde(default)]
+    models: Vec<String>,
     /// Write-only. Missing or empty on update means "keep the current key".
     #[serde(default)]
     api_key: Option<String>,
@@ -189,6 +194,18 @@ fn validate(i: &ProviderInput) -> Result<(), Failure> {
     Ok(())
 }
 
+/// The list as stored: trimmed, without blanks, repeats or the default (which is always offered).
+fn clean_models(i: &ProviderInput) -> String {
+    let default = i.model.trim();
+    let mut out: Vec<String> = Vec::new();
+    for m in i.models.iter().map(|m| m.trim()) {
+        if !m.is_empty() && m != default && !out.iter().any(|x| x == m) {
+            out.push(m.to_string());
+        }
+    }
+    serde_json::to_string(&out).unwrap_or_else(|_| "[]".into())
+}
+
 fn name_taken(e: &rusqlite::Error) -> bool {
     matches!(e, rusqlite::Error::SqliteFailure(f, _) if f.code == rusqlite::ErrorCode::ConstraintViolation)
 }
@@ -205,7 +222,7 @@ pub async fn list_providers(State(state): St) -> Result<Json<Vec<ProviderRow>>, 
     let db = state.db.lock().await;
     let mut stmt = db
         .conn()
-        .prepare("SELECT id, name, type, base_url, model, max_tokens, temperature, has_key, billing, allow_as_fallback, price_in, price_out, price_cached_in, managed FROM providers ORDER BY name")
+        .prepare("SELECT id, name, type, base_url, model, max_tokens, temperature, has_key, billing, allow_as_fallback, price_in, price_out, price_cached_in, managed, models FROM providers ORDER BY name")
         .map_err(internal)?;
     let rows = stmt
         .query_map([], |r| {
@@ -224,6 +241,7 @@ pub async fn list_providers(State(state): St) -> Result<Json<Vec<ProviderRow>>, 
                 price_out: r.get(11)?,
                 price_cached_in: r.get(12)?,
                 managed: r.get::<_, i64>(13)? != 0,
+                models: serde_json::from_str(&r.get::<_, String>(14)?).unwrap_or_default(),
             })
         })
         .map_err(internal)?
@@ -237,13 +255,14 @@ pub async fn create_provider(State(state): St, ApiJson(i): ApiJson<ProviderInput
     let id = ulid::Ulid::new().to_string();
     let keys: Vec<(String, String)> = i.api_key.as_deref().map(str::trim).filter(|k| !k.is_empty()).map(|k| vec![(id.clone(), k.to_string())]).unwrap_or_default();
     let new_id = id.clone();
+    let models = clean_models(&i);
     mutate(&state, keys, move |c| {
         c.execute(
-            "INSERT INTO providers (id, name, type, base_url, model, max_tokens, temperature, created_at, billing, allow_as_fallback, price_in, price_out, price_cached_in)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+            "INSERT INTO providers (id, name, type, base_url, model, max_tokens, temperature, created_at, billing, allow_as_fallback, price_in, price_out, price_cached_in, models)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
             params![
                 new_id, i.name.trim(), i.kind, i.base_url.trim(), i.model.trim(), i.max_tokens, i.temperature, crate::auth::now(),
-                i.billing.as_deref().unwrap_or("metered"), i.allow_as_fallback as i64, i.price_in, i.price_out, i.price_cached_in
+                i.billing.as_deref().unwrap_or("metered"), i.allow_as_fallback as i64, i.price_in, i.price_out, i.price_cached_in, models
             ],
         )
         .map(|_| ())
@@ -264,14 +283,15 @@ pub async fn update_provider(State(state): St, Path(id): Path<String>, ApiJson(m
         (i.name, i.kind, i.base_url, i.api_key) = (name.clone(), kind.clone(), base_url.clone(), None);
     }
     let keys: Vec<(String, String)> = i.api_key.as_deref().map(str::trim).filter(|k| !k.is_empty()).map(|k| vec![(id.clone(), k.to_string())]).unwrap_or_default();
+    let models = clean_models(&i);
     mutate(&state, keys, move |c| {
         let n = c
             .execute(
                 "UPDATE providers SET name = ?2, type = ?3, base_url = ?4, model = ?5, max_tokens = ?6, temperature = ?7,
-                        billing = ?8, allow_as_fallback = ?9, price_in = ?10, price_out = ?11, price_cached_in = ?12 WHERE id = ?1",
+                        billing = ?8, allow_as_fallback = ?9, price_in = ?10, price_out = ?11, price_cached_in = ?12, models = ?13 WHERE id = ?1",
                 params![
                     id, i.name.trim(), i.kind, i.base_url.trim(), i.model.trim(), i.max_tokens, i.temperature,
-                    i.billing.as_deref().unwrap_or("metered"), i.allow_as_fallback as i64, i.price_in, i.price_out, i.price_cached_in
+                    i.billing.as_deref().unwrap_or("metered"), i.allow_as_fallback as i64, i.price_in, i.price_out, i.price_cached_in, models
                 ],
             )
             .map_err(clash_or_internal)?;

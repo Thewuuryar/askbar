@@ -28,10 +28,18 @@
     pairCancel: $('pair-cancel'),
     pairError: $('pair-error'),
     pairOk: $('pair-ok'),
+    pairRow: document.querySelector('#pair .pair-row'),
     status: $('status'),
     statusText: $('status-text'),
     statusActions: $('status-actions'),
     modelLabel: $('model-label'),
+    hints: $('hints'),
+    modelBtn: $('model-btn'),
+    conn: $('conn'),
+    connText: $('conn-text'),
+    picker: $('picker'),
+    pickProviders: $('pick-providers'),
+    pickModels: $('pick-models'),
   };
 
   const state = {
@@ -43,6 +51,12 @@
     conversations: [],
     armed: null,         // { id, timer } for two-step delete
     pinned: true,        // thread follows new output until the user scrolls up
+    needsPairing: true,  // no token, or the server refused it
+    defaults: { provider: '', model: '' },  // what new chats use
+    chat: null,          // what the open chat uses; null for a new chat
+    providerName: '',    // what the footer and the picker show: the chat's, or the defaults
+    model: '',
+    pickProvider: null,  // provider whose models the picker lists
   };
 
   // ------------------------------------------------------------ helpers
@@ -98,7 +112,6 @@
   function syncChrome() {
     const hasThread = state.messages.length > 0;
     el.thread.hidden = !hasThread;
-    el.foot.hidden = !hasThread;
     el.card.dataset.thread = hasThread ? 'open' : 'empty';
     el.card.dataset.history = state.historyOpen ? 'open' : 'closed';
     el.history.hidden = !state.historyOpen;
@@ -133,7 +146,27 @@
     return b;
   }
 
+  // The dot in the status bar: is this app paired with a server that answers?
+  const CONN_TEXT = {
+    not_paired: 'Not paired',
+    rejected: 'Token revoked',
+    offline: 'Offline',
+    update_needed: 'Update needed',
+    problem: 'Server problem',
+  };
+
+  function setConnection(st) {
+    // A missing provider is a choice to make, not a broken connection.
+    const ok = !st || st.kind === 'provider_missing';
+    // Pairing only helps when there is no accepted token; being offline is not that.
+    state.needsPairing = !!st && (st.kind === 'not_paired' || st.kind === 'rejected');
+    el.conn.dataset.state = ok ? 'ok' : 'bad';
+    el.connText.textContent = ok ? 'Connected' : (CONN_TEXT[st.kind] || 'Not connected');
+    el.conn.title = ok ? 'Connected to the server' : st.message;
+  }
+
   function showStatus(st) {
+    setConnection(st);
     el.statusActions.textContent = '';
     if (!st) {
       if (!el.status.hidden) { el.status.hidden = true; layout(); }
@@ -177,6 +210,7 @@
   }
 
   function openPairing() {
+    closePicker();
     el.pair.dataset.state = '';
     el.pairError.hidden = true;
     el.pairOk.hidden = true;
@@ -233,6 +267,106 @@
     await refreshBootstrap().catch(() => {});
     await checkStatus();
     await refreshHistory();
+  }
+
+  // ----------------------------------------------------- provider and model
+
+  function pickItem(label, selected, onClick) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'pick-item';
+    b.setAttribute('role', 'option');
+    b.setAttribute('aria-selected', String(selected));
+    b.textContent = label;
+    b.title = label;
+    b.addEventListener('click', onClick);
+    return b;
+  }
+
+  function closePicker() {
+    if (el.picker.hidden) return false;
+    el.picker.hidden = true;
+    el.modelBtn.setAttribute('aria-expanded', 'false');
+    layout();
+    return true;
+  }
+
+  function showSelection() {
+    const s = state.chat || state.defaults;
+    state.providerName = s.provider;
+    state.model = s.model;
+    el.modelLabel.textContent = s.model ? s.model + ' · ' + s.provider : 'No model';
+  }
+
+  // A chat keeps its own model. An old chat with none, or whose provider is gone, follows the defaults.
+  async function loadChatSelection() {
+    const id = state.convId;
+    state.chat = null;
+    if (id) {
+      const chosen = await invoke('conversation_selection', { id }).catch(() => null);
+      if (state.convId !== id) return;
+      state.chat = chosen;
+    }
+    showSelection();
+  }
+
+  async function save(providerId, model) {
+    // In an open chat the choice applies to it too; either way it becomes the default for new chats.
+    const args = state.convId ? { providerId, model, conversationId: state.convId } : { providerId, model };
+    try { await invoke('set_selection', args); } catch (e) { showNotice(String(e)); }
+    await refreshBootstrap().catch(() => {});
+    await loadChatSelection();
+    await checkStatus();
+  }
+
+  async function renderPicker() {
+    let providers = [];
+    let loaded = true;
+    try { providers = await invoke('list_providers'); } catch (e) { loaded = false; showNotice(String(e)); }
+    if (!state.pickProvider || !providers.some((p) => p.id === state.pickProvider)) {
+      const active = providers.find((p) => p.name === state.providerName) || providers[0];
+      state.pickProvider = active ? active.id : null;
+    }
+    el.pickProviders.textContent = '';
+    for (const p of providers) {
+      el.pickProviders.appendChild(pickItem(p.name, p.name === state.providerName, async () => {
+        state.pickProvider = p.id;
+        // A new provider starts on its default model.
+        if (p.name !== state.providerName) await save(p.id, null);
+        await renderPicker();
+      }));
+    }
+    if (loaded && !providers.length) {
+      const none = document.createElement('div');
+      none.className = 'pick-empty';
+      none.textContent = 'No providers yet';
+      el.pickProviders.appendChild(none);
+    }
+    el.pickModels.textContent = '';
+    if (state.pickProvider) {
+      let info = null;
+      try { info = await invoke('list_models', { providerId: state.pickProvider }); } catch (e) { showNotice(String(e)); }
+      const current = providers.find((p) => p.id === state.pickProvider);
+      const onActive = current && current.name === state.providerName;
+      for (const m of (info && info.models) || []) {
+        el.pickModels.appendChild(pickItem(m, onActive && m === state.model, async () => {
+          await save(state.pickProvider, m === info.default ? null : m);
+          closePicker();
+          el.input.focus();
+        }));
+      }
+    }
+    layout();
+  }
+
+  async function togglePicker() {
+    if (state.needsPairing) { openPairing(); return; }
+    if (!closePicker()) {
+      state.pickProvider = null;
+      el.picker.hidden = false;
+      el.modelBtn.setAttribute('aria-expanded', 'true');
+      await renderPicker();
+    }
   }
 
   // ------------------------------------------------------------ messages
@@ -303,7 +437,6 @@
     el.thread.appendChild(node);
     if (state.pinned) el.thread.scrollTop = el.thread.scrollHeight;
     el.thread.hidden = false;
-    el.foot.hidden = false;
     el.card.dataset.thread = 'open';
     layout();
   }
@@ -354,6 +487,8 @@
           case 'started':
             accepted = true;
             state.convId = m.conversationId;
+            // A new chat now keeps what it started with, whatever the defaults become.
+            if (!state.chat) state.chat = { ...state.defaults };
             break;
           case 'provider':
             // Only worth saying when the server used another provider than the one chosen.
@@ -413,6 +548,7 @@
     if (!text || state.streaming) return;
     el.input.value = '';
     autosize();
+    markHintsSeen();
     hideNotice();
     state.pinned = true;
 
@@ -488,7 +624,6 @@
     for (const u of mine) addUnsent(u);
     if (mine.length) {
       el.thread.hidden = false;
-      el.foot.hidden = false;
       el.card.dataset.thread = 'open';
       if (state.pinned) el.thread.scrollTop = el.thread.scrollHeight;
     }
@@ -662,6 +797,7 @@
     hideNotice();
     clearThread();
     state.convId = id;
+    await loadChatSelection();
     for (const r of rows) addMessage(r.role, r.content);
     state.pinned = true;
     el.thread.scrollTop = el.thread.scrollHeight;
@@ -674,6 +810,8 @@
   function newChat() {
     if (state.streaming) return;
     state.convId = null;
+    state.chat = null;
+    showSelection();
     clearThread();
     hideNotice();
     renderHistory();
@@ -698,10 +836,36 @@
     }
   });
 
+  // The shortcut hints show until the first message, then only on `?` in an empty box.
+  const HINTS_SEEN = 'askbar.hintsSeen';
+
+  function setHints(show) {
+    el.hints.hidden = !show;
+    layout();
+  }
+
+  function markHintsSeen() {
+    try { localStorage.setItem(HINTS_SEEN, '1'); } catch (_) { /* then they show again next time */ }
+    setHints(false);
+  }
+
+  function initHints() {
+    let seen = false;
+    try { seen = localStorage.getItem(HINTS_SEEN) === '1'; } catch (_) { /* treat as first use */ }
+    setHints(!seen);
+  }
+
+  el.input.addEventListener('keydown', (e) => {
+    if (e.key === '?' && !el.input.value && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.preventDefault();
+      setHints(el.hints.hidden);
+    }
+  });
+
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       e.preventDefault();
-      if (closePairing()) return;
+      if (closePicker() || closePairing()) return;
       if (state.streaming) cancel(); else invoke('hide_window');
       return;
     }
@@ -758,6 +922,10 @@
   });
 
   el.histToggle.addEventListener('click', () => toggleHistory());
+  el.modelBtn.addEventListener('click', togglePicker);
+  document.addEventListener('mousedown', (e) => {
+    if (!el.picker.hidden && !e.target.closest('#picker, #model-btn')) closePicker();
+  });
   el.newChat.addEventListener('click', newChat);
   el.stop.addEventListener('click', cancel);
   el.noticeClose.addEventListener('click', hideNotice);
@@ -774,7 +942,8 @@
     state.ui = b.ui;
     applyUi(b.ui);
     state.provider = b.provider;
-    el.modelLabel.textContent = b.model ? b.model + ' via ' + b.provider : '';
+    state.defaults = { provider: b.provider, model: b.model };
+    showSelection();
     if (b.notice) showNotice(b.notice);
   }
 
@@ -794,6 +963,7 @@
 
   (async () => {
     try { await refreshBootstrap(); } catch (e) { showNotice(String(e)); }
+    initHints();
     checkStatus();
     await refreshHistory();
     syncChrome();

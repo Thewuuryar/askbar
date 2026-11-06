@@ -226,6 +226,34 @@ async fn pair(app: AppHandle, state: State<'_, AppState>, pairing: String) -> Re
 }
 
 #[tauri::command]
+async fn list_providers(state: State<'_, AppState>) -> Result<Vec<askbar_proto::ProviderInfo>, String> {
+    state.backend().list_providers().await
+}
+
+#[tauri::command]
+async fn list_models(state: State<'_, AppState>, provider_id: String) -> Result<askbar_proto::ProviderModels, String> {
+    state.backend().list_models(&provider_id).await
+}
+
+/// Save the provider and model new chats use, and, when a chat is open, that chat; no model means
+/// the provider's default.
+#[tauri::command]
+async fn set_selection(state: State<'_, AppState>, provider_id: String, model: Option<String>, conversation_id: Option<String>) -> Result<(), String> {
+    let backend = state.backend();
+    backend.set_selection(provider_id.clone(), model.clone()).await?;
+    match conversation_id {
+        Some(id) => backend.set_conversation_selection(&id, provider_id, model).await,
+        None => Ok(()),
+    }
+}
+
+/// What an open chat answers with, to show in the footer.
+#[tauri::command]
+async fn conversation_selection(state: State<'_, AppState>, id: String) -> Result<Option<types::ChatSelection>, String> {
+    state.backend().conversation_selection(&id).await
+}
+
+#[tauri::command]
 async fn set_active_provider(state: State<'_, AppState>, id: String) -> Result<(), String> {
     state.backend().set_active_provider(id).await
 }
@@ -480,6 +508,10 @@ fn main() {
             bootstrap,
             server_status,
             set_active_provider,
+            list_providers,
+            list_models,
+            set_selection,
+            conversation_selection,
             pair,
             list_conversations,
             load_conversation,

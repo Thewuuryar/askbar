@@ -206,17 +206,17 @@ struct TracesQuery {
 
 /// Prices as the snapshot has them now, by provider id. Read per request, so a corrected price
 /// changes every figure at once; nothing about cost is stored.
-fn price_lookup(state: &AppState) -> impl Fn(&str) -> Option<crate::cost::Prices> {
+fn price_lookup(state: &AppState) -> impl Fn(&str, Option<&str>) -> Option<crate::cost::Prices> {
     let providers = {
         let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
         crate::snapshot::current(&db).ok().flatten().map(|s| s.providers).unwrap_or_default()
     };
-    move |id: &str| providers.iter().find(|p| p.id == id).map(crate::cost::Prices::of)
+    move |id: &str, model: Option<&str>| providers.iter().find(|p| p.id == id).and_then(|p| crate::cost::Prices::for_model(p, model))
 }
 
 fn add_cost(row: &mut serde_json::Value, price_of: crate::audit::PriceOf) {
     let n = |k: &str| row[k].as_i64();
-    let cost = crate::audit::cost_of(price_of, row["provider_id"].as_str(), n("tokens_in"), n("tokens_out"), n("tokens_cached"));
+    let cost = crate::audit::cost_of(price_of, row["provider_id"].as_str(), row["model"].as_str(), n("tokens_in"), n("tokens_out"), n("tokens_cached"));
     row["cost"] = serde_json::json!(cost);
 }
 
@@ -240,11 +240,13 @@ async fn audit_trace(State(state): State<Arc<AppState>>, Path(id): Path<String>)
     let price_of = price_lookup(&state);
     // Each attempt is priced by its own provider; the trace as a whole by the provider that served it.
     spans.iter_mut().for_each(|s| add_cost(s, &price_of));
-    let final_provider = spans.iter().rev().find(|s| s["kind"] == "attempt").and_then(|s| s["provider_id"].as_str().map(str::to_string));
+    let final_attempt = spans.iter().rev().find(|s| s["kind"] == "attempt");
+    let final_provider = final_attempt.and_then(|s| s["provider_id"].as_str().map(str::to_string));
+    let final_model = final_attempt.and_then(|s| s["model"].as_str().map(str::to_string));
     let mut cost = None;
     if let Some(turn) = spans.iter().find(|s| s["kind"] == "turn") {
         let n = |k: &str| turn[k].as_i64();
-        cost = crate::audit::cost_of(&price_of, final_provider.as_deref(), n("tokens_in"), n("tokens_out"), n("tokens_cached"));
+        cost = crate::audit::cost_of(&price_of, final_provider.as_deref(), final_model.as_deref(), n("tokens_in"), n("tokens_out"), n("tokens_cached"));
     }
     Ok(Json(serde_json::json!({ "trace_id": id, "cost": cost, "spans": spans })))
 }

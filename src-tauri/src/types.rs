@@ -84,6 +84,13 @@ impl From<crate::outbox::OutboxEntry> for UnsentMessage {
     }
 }
 
+/// What an open chat answers with, for the footer.
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct ChatSelection {
+    pub provider: String,
+    pub model: String,
+}
+
 /// Something wrong between this client and its backend, with a way forward in the UI.
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct ClientStatus {

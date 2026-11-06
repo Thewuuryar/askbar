@@ -35,7 +35,7 @@
         window.__opts.override || {},
         window.__opts.theme ? { theme: window.__opts.theme } : {},
       ),
-      hotkey: 'Ctrl+Shift+Space', provider: window.__opts.provider || 'mock', model: 'mock-model',
+      hotkey: 'Ctrl+Shift+Space', provider: window.__opts.provider || 'mock', model: window.__opts.model || 'mock-model',
       notice: window.__opts.notice || null,
     }),
     // opts.status stands for the server's state: { kind, message, providers? } or absent when healthy.
@@ -44,6 +44,23 @@
       const chosen = ((window.__opts.status || {}).providers || []).find((p) => p.id === id);
       window.__opts.provider = chosen ? chosen.name : id;
       if (window.__opts.status && window.__opts.status.kind === 'provider_missing') window.__opts.status = null;
+    },
+    // opts.providers: [{ id, name, model, models }] stands for the server's providers.
+    list_providers: () => (window.__opts.providers || [{ id: 'p1', name: 'mock', model: 'mock-model' }]).map(({ id, name, model }) => ({ id, name, type: 'openai', model })),
+    list_models: ({ providerId }) => {
+      const p = (window.__opts.providers || [{ id: 'p1', name: 'mock', model: 'mock-model' }]).find((x) => x.id === providerId);
+      return { default: p.model, models: [p.model, ...(p.models || []).filter((m) => m !== p.model)] };
+    },
+    set_selection: ({ providerId, model, conversationId }) => {
+      const p = (window.__opts.providers || []).find((x) => x.id === providerId);
+      window.__opts.provider = p.name;
+      window.__opts.model = model || p.model;
+      if (conversationId) db.convs.find((c) => c.id === conversationId).selection = { provider: p.name, model: model || p.model };
+    },
+    // A conversation answers with conv.selection, set by a test or by the picker; none means the defaults.
+    conversation_selection: ({ id }) => {
+      const c = db.convs.find((x) => x.id === id);
+      return (c && c.selection) || null;
     },
     // A pairing string is accepted when it starts with the prefix and the code is not "bad".
     pair: ({ pairing }) => {

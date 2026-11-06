@@ -168,7 +168,7 @@ async fn prefs_are_shared_by_a_users_clients_and_not_by_other_users() {
         (auth::redeem_pair_code(&db, &c1).unwrap().unwrap(), auth::redeem_pair_code(&db, &c2).unwrap().unwrap())
     };
 
-    let put = t.req(reqwest::Method::PUT, "/api/client/v1/me/prefs").json(&Prefs { active_provider_id: Some("p1".into()) }).send().await.unwrap();
+    let put = t.req(reqwest::Method::PUT, "/api/client/v1/me/prefs").json(&Prefs { active_provider_id: Some("p1".into()), active_model: None }).send().await.unwrap();
     assert_eq!(put.status(), 200);
     for token in [t.token.clone(), second] {
         let p: Prefs = serde_json::from_str(&get(token).await.text().await.unwrap()).unwrap();
@@ -178,7 +178,7 @@ async fn prefs_are_shared_by_a_users_clients_and_not_by_other_users() {
     assert_eq!(p, Prefs::default(), "another user does not");
 
     // An unknown provider is refused and changes nothing; null clears the choice.
-    let bad = t.req(reqwest::Method::PUT, "/api/client/v1/me/prefs").json(&Prefs { active_provider_id: Some("nope".into()) }).send().await.unwrap();
+    let bad = t.req(reqwest::Method::PUT, "/api/client/v1/me/prefs").json(&Prefs { active_provider_id: Some("nope".into()), active_model: None }).send().await.unwrap();
     assert_eq!(bad.status(), 404);
     let still: Prefs = serde_json::from_str(&get(t.token.clone()).await.text().await.unwrap()).unwrap();
     assert_eq!(still.active_provider_id.as_deref(), Some("p1"));
@@ -211,7 +211,60 @@ async fn read_api_failures_are_problems_with_a_code_and_a_sentence() {
         assert_eq!((p.error.as_str(), p.status), (code, status), "{method} {path}");
         assert!(!p.detail.is_empty());
     }
-    let r = t.req(reqwest::Method::PUT, "/api/client/v1/me/prefs").json(&Prefs { active_provider_id: Some("no-such-provider".into()) }).send().await.unwrap();
+    let r = t.req(reqwest::Method::PUT, "/api/client/v1/me/prefs").json(&Prefs { active_provider_id: Some("no-such-provider".into()), active_model: None }).send().await.unwrap();
     assert_eq!(r.status(), 404);
     assert_eq!(r.json::<askbar_proto::Problem>().await.unwrap().error, "not_found");
+}
+
+#[tokio::test]
+async fn a_conversation_stores_its_model_and_only_accepts_ones_the_provider_offers() {
+    let t = start().await;
+    askbar_server::testing::update_snapshot(&t.state.db.lock().unwrap(), |s| s.providers[0].models = vec!["m2".into()]);
+    let conversation = {
+        let db = t.state.db.lock().unwrap();
+        let user: String = db.conn().query_row("SELECT id FROM users LIMIT 1", [], |r| r.get(0)).unwrap();
+        db.create_conversation(&user, "t").unwrap()
+    };
+    let path = format!("/api/client/v1/conversations/{conversation}");
+    let put = |path: String, provider: &str, model: Option<&str>| {
+        t.req(reqwest::Method::PUT, &format!("{path}/model")).json(&askbar_proto::ConversationModel { provider_id: provider.into(), model: model.map(String::from) }).send()
+    };
+    let detail: askbar_proto::ConversationDetail = serde_json::from_str(&t.get_text(&path).await.1).unwrap();
+    assert_eq!((detail.provider_id, detail.model), (None, None));
+
+    assert_eq!(put(path.clone(), "p1", Some("m2")).await.unwrap().status(), 200);
+    let detail: askbar_proto::ConversationDetail = serde_json::from_str(&t.get_text(&path).await.1).unwrap();
+    assert_eq!((detail.provider_id.as_deref(), detail.model.as_deref()), (Some("p1"), Some("m2")));
+
+    assert_eq!(put(path.clone(), "p1", Some("zzz")).await.unwrap().status(), 404);
+    assert_eq!(put(path.clone(), "nope", None).await.unwrap().status(), 404);
+    assert_eq!(put("/api/client/v1/conversations/nope".into(), "p1", None).await.unwrap().status(), 404);
+    let detail: askbar_proto::ConversationDetail = serde_json::from_str(&t.get_text(&path).await.1).unwrap();
+    assert_eq!(detail.model.as_deref(), Some("m2"), "a refused change changes nothing");
+}
+
+#[tokio::test]
+async fn a_provider_lists_its_models_and_prefs_only_accept_ones_it_offers() {
+    let t = start().await;
+    let (st, body) = t.get_text("/api/client/v1/providers/p1/models").await;
+    let m: askbar_proto::ProviderModels = serde_json::from_str(&body).unwrap();
+    assert_eq!((st, m.default.as_str(), m.models.clone()), (200, "m1", vec!["m1".to_string()]), "a provider with no list offers its default");
+
+    askbar_server::testing::update_snapshot(&t.state.db.lock().unwrap(), |s| s.providers[0].models = vec!["m2".into(), "m1".into(), "m2".into()]);
+    let m: askbar_proto::ProviderModels = serde_json::from_str(&t.get_text("/api/client/v1/providers/p1/models").await.1).unwrap();
+    assert_eq!(m.models, ["m1", "m2"], "the default first, no repeats");
+    assert_eq!(t.get_text("/api/client/v1/providers/nope/models").await.0, 404);
+
+    let put = |p: Prefs| t.req(reqwest::Method::PUT, "/api/client/v1/me/prefs").json(&p).send();
+    let ok = put(Prefs { active_provider_id: Some("p1".into()), active_model: Some("m2".into()) }).await.unwrap();
+    assert_eq!(ok.status(), 200);
+    let got: Prefs = serde_json::from_str(&t.get_text("/api/client/v1/me/prefs").await.1).unwrap();
+    assert_eq!((got.active_provider_id.as_deref(), got.active_model.as_deref()), (Some("p1"), Some("m2")));
+
+    let bad = put(Prefs { active_provider_id: Some("p1".into()), active_model: Some("zzz".into()) }).await.unwrap();
+    assert_eq!(bad.status(), 404);
+    let orphan = put(Prefs { active_provider_id: None, active_model: Some("m2".into()) }).await.unwrap();
+    assert_eq!(orphan.status(), 400, "a request that makes no sense, not a missing thing");
+    let still: Prefs = serde_json::from_str(&t.get_text("/api/client/v1/me/prefs").await.1).unwrap();
+    assert_eq!(still.active_model.as_deref(), Some("m2"), "a refused change changes nothing");
 }

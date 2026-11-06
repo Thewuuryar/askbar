@@ -15,6 +15,9 @@ pub struct OutboxEntry {
     pub conversation_id: Option<String>,
     /// Id of the provider the message was sent to.
     pub provider: String,
+    /// The model chosen for it; `None` means the provider's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
     pub text: String,
     pub created_at: i64,
 }
@@ -51,11 +54,12 @@ impl Outbox {
     }
 
     /// Adds a message with a fresh random request id and saves the file. Returns the entry.
-    pub fn add(&self, conversation_id: Option<String>, provider: &str, text: &str) -> OutboxEntry {
+    pub fn add(&self, conversation_id: Option<String>, provider: &str, model: Option<String>, text: &str) -> OutboxEntry {
         let entry = OutboxEntry {
             client_request_id: uuid::Uuid::new_v4().to_string(),
             conversation_id,
             provider: provider.to_string(),
+            model,
             text: text.to_string(),
             created_at: now(),
         };
@@ -131,8 +135,8 @@ mod tests {
         let path = temp_path("add");
         let o = Outbox::load(path.clone());
         assert!(o.list().is_empty());
-        let a = o.add(None, "p1", "first");
-        let b = o.add(Some("c1".into()), "p1", "second");
+        let a = o.add(None, "p1", None, "first");
+        let b = o.add(Some("c1".into()), "p1", None, "second");
         assert_ne!(a.client_request_id, b.client_request_id);
         assert_eq!(a.client_request_id.len(), 36, "a UUID: {}", a.client_request_id);
         assert_eq!(uuid::Uuid::parse_str(&a.client_request_id).unwrap().get_version_num(), 4);
@@ -146,8 +150,8 @@ mod tests {
     fn remove_takes_one_entry_and_reports_whether_it_was_there() {
         let path = temp_path("remove");
         let o = Outbox::load(path.clone());
-        let a = o.add(None, "p1", "first");
-        let b = o.add(None, "p1", "second");
+        let a = o.add(None, "p1", None, "first");
+        let b = o.add(None, "p1", None, "second");
         assert!(o.remove(&a.client_request_id));
         assert!(!o.remove(&a.client_request_id), "already gone");
         assert_eq!(o.list(), [b]);
@@ -159,7 +163,7 @@ mod tests {
         let path = temp_path("reload");
         let (a, b) = {
             let o = Outbox::load(path.clone());
-            (o.add(Some("c9".into()), "p2", "keep me"), o.add(None, "p2", "drop me"))
+            (o.add(Some("c9".into()), "p2", None, "keep me"), o.add(None, "p2", None, "drop me"))
         };
         let reloaded = Outbox::load(path.clone());
         assert_eq!(reloaded.list(), [a.clone(), b.clone()], "read back from disk, in order");
@@ -181,7 +185,7 @@ mod tests {
         std::fs::write(&path, "this is not json").unwrap();
         let o = Outbox::load(path.clone());
         assert!(o.list().is_empty());
-        let e = o.add(None, "p", "after a bad file");
+        let e = o.add(None, "p", None, "after a bad file");
         assert_eq!(Outbox::load(path.clone()).list(), [e], "the next change replaces the bad file");
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }

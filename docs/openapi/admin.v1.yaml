@@ -1291,6 +1291,12 @@ components:
           type: string
         model:
           type: string
+          description: The default model.
+        models:
+          type: array
+          items:
+            type: string
+          description: Other models users may choose.
         max_tokens:
           type: [integer, 'null']
         temperature:
@@ -1324,6 +1330,12 @@ components:
           type: string
         model:
           type: string
+          description: The default model.
+        models:
+          type: array
+          items:
+            type: string
+          description: Other models users may choose. The default is always offered, listed or not.
         api_key:
           type: string
           description: Write-only. Missing or empty on update keeps the current key.

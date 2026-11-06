@@ -342,13 +342,39 @@ impl Inner {
         resp.json().await.map_err(|e| format!("The server sent an unexpected reply: {e}"))
     }
 
-    async fn active_provider(&self) -> Result<String, String> {
+    /// The provider and model new messages use. The model is `None` for the provider's default,
+    /// including when the one the user picked is no longer offered.
+    async fn active_selection(&self) -> Result<(String, Option<String>), String> {
         let prefs: Prefs = self.get_json(&askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, "/me/prefs")).await?;
         if let Some(id) = prefs.active_provider_id.filter(|id| !id.trim().is_empty()) {
-            return Ok(id);
+            let model = self.offered_model(&id, prefs.active_model).await;
+            return Ok((id, model));
         }
         let list: Vec<ProviderInfo> = self.get_json(&askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, "/providers")).await?;
-        list.into_iter().next().map(|p| p.id).ok_or_else(|| "The server has no providers configured yet.".into())
+        list.into_iter().next().map(|p| (p.id, None)).ok_or_else(|| "The server has no providers configured yet.".into())
+    }
+
+    /// What an existing conversation answers with, while its provider is still listed.
+    async fn conversation_choice(&self, id: &str) -> Option<(String, Option<String>)> {
+        let d: ConversationDetail = self.get_json(&format!("{}/conversations/{id}", askbar_proto::paths::CLIENT_V1)).await.ok()?;
+        let provider = d.provider_id?;
+        let list: Vec<ProviderInfo> = self.get_json(&askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, "/providers")).await.ok()?;
+        if !list.iter().any(|p| p.id == provider) {
+            return None;
+        }
+        let model = self.offered_model(&provider, d.model).await;
+        Some((provider, model))
+    }
+
+    /// `wanted` if the provider still offers it; otherwise `None` (its default).
+    async fn offered_model(&self, provider_id: &str, wanted: Option<String>) -> Option<String> {
+        let wanted = wanted.filter(|m| !m.trim().is_empty())?;
+        let models = self.provider_models(provider_id).await.ok()?;
+        models.models.contains(&wanted).then_some(wanted)
+    }
+
+    async fn provider_models(&self, provider_id: &str) -> Result<askbar_proto::ProviderModels, String> {
+        self.get_json(&askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, &format!("/providers/{provider_id}/models"))).await
     }
 }
 
@@ -490,11 +516,15 @@ impl Remote {
         };
         let wanted = prefs.active_provider_id.as_deref().unwrap_or("").trim();
         let active = providers.iter().find(|p| wanted.is_empty() || p.id == wanted);
+        let chosen = match active {
+            Some(p) if !wanted.is_empty() => i.offered_model(&p.id, prefs.active_model.clone()).await,
+            _ => None,
+        };
         Ok(Settings {
             ui: merge_ui(&display, &cfg.ui),
             hotkey: cfg.hotkey.clone(),
             provider: active.map(|p| p.name.clone()).unwrap_or_default(),
-            model: active.map(|p| p.model.clone()).unwrap_or_default(),
+            model: chosen.or_else(|| active.map(|p| p.model.clone())).unwrap_or_default(),
         })
     }
 
@@ -546,14 +576,44 @@ impl Remote {
     }
 
     pub async fn set_active_provider(&self, id: String) -> Result<(), String> {
+        self.set_selection(id, None).await
+    }
+
+    /// Saves the provider and model new messages use (`None`: the provider's default model).
+    pub async fn set_selection(&self, provider_id: String, model: Option<String>) -> Result<(), String> {
         let i = self.inner()?;
-        let req = i.request(Method::PUT, &askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, "/me/prefs"))?.timeout(REQUEST_TIMEOUT).json(&Prefs { active_provider_id: Some(id) });
+        let req = i
+            .request(Method::PUT, &askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, "/me/prefs"))?
+            .timeout(REQUEST_TIMEOUT)
+            .json(&Prefs { active_provider_id: Some(provider_id), active_model: model });
         i.send(req).await.map(|_| ())
     }
 
-    #[cfg(test)]
+    /// Sets what one conversation answers with from its next message on.
+    pub async fn set_conversation_selection(&self, conversation_id: &str, provider_id: String, model: Option<String>) -> Result<(), String> {
+        let i = self.inner()?;
+        let req = i
+            .request(Method::PUT, &format!("{}/conversations/{conversation_id}/model", askbar_proto::paths::CLIENT_V1))?
+            .timeout(REQUEST_TIMEOUT)
+            .json(&askbar_proto::ConversationModel { provider_id, model });
+        i.send(req).await.map(|_| ())
+    }
+
+    /// The provider name and model to show for an open conversation. `None` when it has no choice
+    /// of its own yet, or its provider is gone.
+    pub async fn conversation_selection(&self, id: &str) -> Result<Option<crate::types::ChatSelection>, String> {
+        let i = self.inner()?;
+        let Some((provider, model)) = i.conversation_choice(id).await else { return Ok(None) };
+        let list: Vec<ProviderInfo> = i.get_json(&askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, "/providers")).await?;
+        Ok(list.into_iter().find(|p| p.id == provider).map(|p| crate::types::ChatSelection { provider: p.name, model: model.unwrap_or(p.model) }))
+    }
+
     pub async fn list_providers(&self) -> Result<Vec<ProviderInfo>, String> {
         self.inner()?.get_json(&askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, "/providers")).await
+    }
+
+    pub async fn list_models(&self, provider_id: &str) -> Result<askbar_proto::ProviderModels, String> {
+        self.inner()?.provider_models(provider_id).await
     }
 
     pub async fn list_conversations(&self) -> Result<Vec<Conversation>, String> {
@@ -614,9 +674,17 @@ impl Remote {
         };
         // If the provider cannot be looked up (server unreachable), the entry still keeps the text;
         // sending it later looks the provider up again.
-        let provider = i.active_provider().await;
-        let entry = i.outbox.add(conversation_id, provider.as_deref().unwrap_or(""), &text);
-        if let Err(e) = provider {
+        let chosen = match &conversation_id {
+            Some(id) => i.conversation_choice(id).await,
+            None => None,
+        };
+        let selection = match chosen {
+            Some(c) => Ok(c),
+            None => i.active_selection().await,
+        };
+        let (provider, model) = selection.clone().unwrap_or_default();
+        let entry = i.outbox.add(conversation_id, &provider, model, &text);
+        if let Err(e) = selection {
             return emit(StreamEvent::error(e));
         }
         self.send_entry(entry, cancel, emit).await;
@@ -679,18 +747,19 @@ impl Remote {
         };
         let emit: Emit<'_> = &emit;
         let fail = |message: String| emit(StreamEvent::error(message));
-        let provider = if entry.provider.is_empty() {
-            match i.active_provider().await {
+        let (provider, model) = if entry.provider.is_empty() {
+            match i.active_selection().await {
                 Ok(p) => p,
                 Err(e) => return fail(e),
             }
         } else {
-            entry.provider.clone()
+            (entry.provider.clone(), entry.model.clone())
         };
         let req = match i.request(Method::POST, &askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, "/chat")) {
             Ok(r) => r.header("accept", "text/event-stream").json(&ChatRequest {
                 conversation_id: entry.conversation_id.clone(),
                 provider,
+                model,
                 text: entry.text.clone(),
                 client_request_id: Some(entry.client_request_id.clone()),
             }),
@@ -1068,8 +1137,8 @@ mod tests {
         let fake = fake_server(vec![(200, sse("done", None, r#"{"event":"done"}"#))]).await;
         let remote = remote_for(&fake.url, Some("t"), PathBuf::new()).with_backoff_unit(Duration::from_millis(2));
         let i = remote.inner().unwrap();
-        let had = i.outbox.add(None, "p", "the server has this one");
-        let missing = i.outbox.add(Some("c5".into()), "p", "this one never arrived");
+        let had = i.outbox.add(None, "p", None, "the server has this one");
+        let missing = i.outbox.add(Some("c5".into()), "p", None, "this one never arrived");
         *fake.seen.running.lock().unwrap() = format!(
             r#"[{{"generation_id":"g7","conversation_id":"c1","status":"queued","text":"","prompt":"x","client_request_id":"{}"}},
                 {{"generation_id":"g8","conversation_id":"c1","status":"running","text":"","prompt":"y"}}]"#,
@@ -1101,7 +1170,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn unsent_messages_are_listed_as_they_are_when_the_server_cannot_be_asked() {
         let remote = remote_for("http://127.0.0.1:9", Some("t"), PathBuf::new());
-        let e = remote.inner().unwrap().outbox.add(None, "p", "still here");
+        let e = remote.inner().unwrap().outbox.add(None, "p", None, "still here");
         assert_eq!(remote.unsent().await.unwrap(), [e]);
     }
 
@@ -1271,7 +1340,7 @@ mod tests {
                 .bearer_auth(&token)
                 .header(askbar_proto::CLIENT_VERSION_HEADER, VERSION)
                 .header("accept", "text/event-stream")
-                .json(&ChatRequest { conversation_id: None, provider: "p".into(), text: text.into(), client_request_id: None })
+                .json(&ChatRequest { conversation_id: None, provider: "p".into(), text: text.into(), client_request_id: None, model: None })
         };
 
         // 1. Drop the client after a few deltas, resume after what was received (twice, to be sure),
@@ -1526,6 +1595,57 @@ mod tests {
         assert!(!path.exists());
         assert!(r.set_active_provider("nope".into()).await.is_err(), "an unknown provider is refused");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn a_chosen_model_is_saved_shown_and_dropped_when_the_provider_stops_offering_it() {
+        let (url, token, state) = status_server("0.1.0").await;
+        askbar_server::testing::update_snapshot(&state.db.lock().unwrap(), |s| {
+            s.providers.iter_mut().find(|p| p.id == "p1").unwrap().models = vec!["big".into()];
+        });
+        let r = remote_for(&url, Some(&token), PathBuf::new());
+        let models = r.list_models("p1").await.unwrap();
+        assert!(models.models.contains(&"big".to_string()) && models.models[0] == models.default);
+        let default = models.default.clone();
+
+        r.set_selection("p1".into(), Some("big".into())).await.unwrap();
+        let s = r.settings().await.unwrap();
+        assert_eq!((s.provider.as_str(), s.model.as_str()), ("beta", "big"));
+        assert_eq!(r.inner().unwrap().active_selection().await.unwrap(), ("p1".to_string(), Some("big".to_string())));
+        assert!(r.set_selection("p1".into(), Some("nope".into())).await.is_err(), "a model the provider does not offer is refused");
+
+        // The administrator drops it: the default applies and nothing is sent for it.
+        askbar_server::testing::update_snapshot(&state.db.lock().unwrap(), |s| {
+            s.providers.iter_mut().find(|p| p.id == "p1").unwrap().models.clear();
+        });
+        assert_eq!(r.settings().await.unwrap().model, default);
+        assert_eq!(r.inner().unwrap().active_selection().await.unwrap(), ("p1".to_string(), None));
+    }
+
+    #[tokio::test]
+    async fn a_chat_keeps_its_own_model_whatever_the_defaults_become() {
+        let (url, token, state) = status_server("0.1.0").await;
+        askbar_server::testing::update_snapshot(&state.db.lock().unwrap(), |s| {
+            s.providers.iter_mut().find(|p| p.id == "p1").unwrap().models = vec!["big".into()];
+        });
+        let conversation = {
+            let db = state.db.lock().unwrap();
+            let user: String = db.conn().query_row("SELECT id FROM users LIMIT 1", [], |r| r.get(0)).unwrap();
+            db.create_conversation(&user, "t").unwrap()
+        };
+        let r = remote_for(&url, Some(&token), PathBuf::new());
+        assert_eq!(r.conversation_selection(&conversation).await.unwrap(), None, "no choice of its own yet");
+
+        r.set_conversation_selection(&conversation, "p1".into(), Some("big".into())).await.unwrap();
+        r.set_selection("p0".into(), None).await.unwrap();
+        let chosen = r.conversation_selection(&conversation).await.unwrap().unwrap();
+        assert_eq!((chosen.provider.as_str(), chosen.model.as_str()), ("beta", "big"));
+        let i = r.inner().unwrap();
+        assert_eq!(i.conversation_choice(&conversation).await, Some(("p1".to_string(), Some("big".to_string()))));
+        assert_eq!(i.active_selection().await.unwrap(), ("p0".to_string(), None), "new chats use the default");
+
+        assert!(r.set_conversation_selection(&conversation, "p1".into(), Some("nope".into())).await.is_err());
+        assert!(r.set_conversation_selection("no-such-chat", "p1".into(), None).await.is_err());
     }
 
     #[tokio::test]

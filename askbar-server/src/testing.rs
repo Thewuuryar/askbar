@@ -48,6 +48,7 @@ pub fn provider(id: &str, name: &str, base_url: &str, model: &str) -> SnapshotPr
         kind: "openai".into(),
         base_url: base_url.into(),
         model: model.into(),
+        models: Vec::new(),
         max_tokens: None,
         temperature: None,
         headers: Default::default(),

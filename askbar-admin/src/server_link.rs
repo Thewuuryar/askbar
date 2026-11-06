@@ -105,7 +105,7 @@ fn setting(conn: &rusqlite::Connection, key: &str) -> rusqlite::Result<Option<St
 pub fn build_snapshot(conn: &rusqlite::Connection) -> rusqlite::Result<Snapshot> {
     let mut providers = Vec::new();
     {
-        let mut stmt = conn.prepare("SELECT id, name, type, base_url, model, max_tokens, temperature, headers, billing, allow_as_fallback, price_in, price_out, price_cached_in FROM providers ORDER BY name")?;
+        let mut stmt = conn.prepare("SELECT id, name, type, base_url, model, max_tokens, temperature, headers, billing, allow_as_fallback, price_in, price_out, price_cached_in, models FROM providers ORDER BY name")?;
         let rows = stmt.query_map([], |r| {
             Ok(SnapshotProvider {
                 id: r.get(0)?,
@@ -121,6 +121,7 @@ pub fn build_snapshot(conn: &rusqlite::Connection) -> rusqlite::Result<Snapshot>
                 price_in: r.get(10)?,
                 price_out: r.get(11)?,
                 price_cached_in: r.get(12)?,
+                models: serde_json::from_str(&r.get::<_, String>(13)?).unwrap_or_default(),
             })
         })?;
         for p in rows {

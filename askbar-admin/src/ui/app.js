@@ -420,7 +420,7 @@
     const meta = document.createElement('div');
     meta.className = 'meta';
     const prices = [['in', p.price_in], ['out', p.price_out], ['cached in', p.price_cached_in]].filter(([, v]) => v != null).map(([k, v]) => k + ' ' + v);
-    meta.textContent = p.model + (p.base_url ? ' · ' + p.base_url : '') +
+    meta.textContent = p.model + ((p.models || []).length ? ' (+' + p.models.length + ' more)' : '') + (p.base_url ? ' · ' + p.base_url : '') +
       ' · ' + (p.billing === 'subscription' ? 'subscription' : 'metered') +
       (p.allow_as_fallback ? ' · fallback allowed' : '') +
       (prices.length ? ' · per million: ' + prices.join(', ') : '');
@@ -465,6 +465,24 @@
   function showModelInput() {
     show($('p-model-list'), false);
     show($('p-model'), true);
+    show($('p-models-list'), false);
+    show($('p-models'), true);
+  }
+
+  // The same list, to tick the models users may choose (the default is always offered).
+  function fillChoices(models) {
+    const box = $('p-models-list');
+    const chosen = new Set($('p-models').value.split('\n').map((m) => m.trim()).filter(Boolean));
+    box.textContent = '';
+    for (const m of models) {
+      const o = document.createElement('option');
+      o.value = m.id;
+      o.textContent = m.label ? m.label + ' (' + m.id + ')' : m.id;
+      o.selected = chosen.has(m.id);
+      box.appendChild(o);
+    }
+    show($('p-models'), false);
+    show(box, true);
   }
 
   function fillModelList(models) {
@@ -479,6 +497,7 @@
     $('p-model').value = sel.value;
     show($('p-model'), false);
     show(sel, true);
+    fillChoices(models);
   }
 
   async function loadModels() {
@@ -510,6 +529,9 @@
     if ($('p-model-list').value === MANUAL) { showModelInput(); $('p-model').focus(); return; }
     $('p-model').value = $('p-model-list').value;
   });
+  $('p-models-list').addEventListener('change', () => {
+    $('p-models').value = [...$('p-models-list').selectedOptions].map((o) => o.value).join('\n');
+  });
   $('p-model-refresh').addEventListener('click', loadModels);
   for (const id of ['p-type', 'p-base-url', 'p-key']) $(id).addEventListener('change', loadModels);
 
@@ -524,6 +546,7 @@
     $('p-model').value = v.model || '';
     // A managed provider (CLIProxyAPI) keeps its name, type, address and key.
     for (const id of ['p-name', 'p-type', 'p-base-url', 'p-key']) $(id).disabled = !!(p && p.managed);
+    $('p-models').value = (v.models || []).join('\n');
     $('p-key').value = ''; // never prefilled
     $('p-key').placeholder = p && p.has_key ? 'unchanged (write-only)' : 'write-only';
     $('p-max-tokens').value = v.max_tokens || '';
@@ -562,6 +585,7 @@
       type: $('p-type').value,
       base_url: $('p-base-url').value.trim(),
       model: $('p-model').value.trim(),
+      models: $('p-models').value.split('\n').map((m) => m.trim()).filter(Boolean),
       api_key: $('p-key').value,
       max_tokens: num('p-max-tokens', (x) => parseInt(x, 10)),
       temperature: num('p-temperature', parseFloat),
