@@ -1,4 +1,4 @@
-"""Generate Askbar's app icons (run from the repo root: python3 tests/make_icons.py).
+"""Generate Askbar's app icons (run from clients/desktop: python3 tests/make_icons.py).
 
 A rounded cobalt square with a white input-bar pill and a caret.
 """

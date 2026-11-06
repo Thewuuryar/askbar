@@ -6,7 +6,7 @@ Askbar is an open-source project for personal hardware, with no support or uptim
 
 This page describes the code on `main`. The accepted v1 target differs: see [docs/architecture.md](docs/architecture.md] and the [ADRs](docs/adr/README.md). Where they disagree, build to the ADR.
 
-- **Conversation only.** The model gets text in and returns text out. There are no tools, no shell, no file access, and the window is granted no filesystem or network permissions (`src-tauri/capabilities/default.json`). Only the Rust side talks to your provider.
+- **Conversation only.** The model gets text in and returns text out. There are no tools, no shell, no file access, and the window is granted no filesystem or network permissions (`clients/desktop/src-tauri/capabilities/default.json`). Only the Rust side talks to your provider.
 - **Any provider.** Anthropic, or anything that speaks the OpenAI `/chat/completions` protocol (OpenAI, OpenRouter, Ollama, LM Studio, vLLM, Groq, ...).
 - **History** you can toggle (Ctrl+H), reopen and delete. Stored on your server, shared by every app you pair.
 - **Copy in and out.** Paste anything into the bar. Copy a whole reply, a single code block, or the last reply (Ctrl+Shift+C).
@@ -28,7 +28,7 @@ docker compose up -d --build
 3. Choose the **audit passphrase**: at least 20 characters, and it cannot be recovered. It seals what the server records about replies; see *The Audit tab*.
 4. **Providers** > add one (Anthropic or OpenAI-compatible; the model is a dropdown once the address and key are in) and press **Test**, or connect a Claude or ChatGPT account on **Services** (see *CLIProxyAPI*).
 5. **Clients** > generate a pairing string.
-6. Run the app and pair it: `npm install && npm run dev`, then tray icon > **Pair with server...** and paste the string.
+6. Run the app and pair it: `cd clients/desktop && npm install && npm run dev`, then tray icon > **Pair with server...** and paste the string.
 
 That is a working install on one machine. For other machines, put it behind a host name with HTTPS (*HTTPS with your own hostname* below). How the pieces fit, and why, is in [docs/architecture.md](docs/architecture.md); the HTTP APIs are described in [docs/openapi/](docs/openapi/) (client, server, admin); contributing is in [CONTRIBUTING.md](CONTRIBUTING.md) and security in [SECURITY.md](SECURITY.md).
 
@@ -58,10 +58,13 @@ Prerequisites: [Rust](https://rustup.rs), Node 18+, and your platform's WebView.
 | Windows | Visual Studio Build Tools (C++), WebView2 (preinstalled on Windows 11) |
 
 ```sh
+cd clients/desktop
 npm install
 npm run dev        # run it
-npm run build      # installers land in target/release/bundle/
+npm run build      # installers land in clients/desktop/target/release/bundle/
 ```
+
+The app is its own Cargo workspace (`clients/desktop/`), so building the server needs none of these libraries.
 
 Until the app is paired it shows how to pair. Tray icon > **Pair with server...**, paste the pairing string from the admin site (Clients). The one-time code expires after 10 minutes; the app exchanges it for a per-client token stored in the OS keychain, not in a file. Revoke a client in the admin site and the app shows "token rejected". If the server can't be reached the app says "server offline"; there is no offline mode.
 
@@ -229,15 +232,16 @@ crates/askbar-proto/   request/response and snapshot types shared by the server,
 services/server/       the server: client API, server API, database, chat/LLM streaming, secrets
 services/admin/        the admin service: admin site (src/ui/), admin.db, snapshot push, Caddy configuration (unix only)
 services/controller/   the controller: starts, stops and restarts the server, Caddy and CLIProxyAPI for the admin (holds the Docker socket)
-src-tauri/             the desktop client (Cargo package askbar-client, program askbar): window, hotkey, tray, pairing
-ui/                    the popup: index.html, style.css, main.js, markdown.js (no build step)
+clients/desktop/       the desktop client, its own Cargo workspace and package.json:
+  src-tauri/           Cargo package askbar-client, program askbar: window, hotkey, tray, pairing
+  ui/                  the popup: index.html, style.css, main.js, markdown.js (no build step)
+  tests/               markdown and UI tests for the popup, icon generator
 deploy/caddy/          Caddy's bootstrap config
 deploy/cpa/            notes on CLIProxyAPI
 compose.yaml           server, admin, controller, caddy, CLIProxyAPI, plus the dev profile
 Dockerfile             one target per service: `server`, `admin`, `controller` and `caddy` (Caddy with the Cloudflare DNS module)
 scripts/               smoke.sh (end-to-end), check-isolation.sh (container isolation checks), check-names.sh and check-docs.sh
 docs/                  architecture.md, wire-contract.md, adr/, style/, openapi/ (client, server, admin), refactor-log.md
-tests/                 markdown and UI tests for the popup, icon generator
 tests/e2e/             the admin-site browser test and the mock LLM server
 ```
 
@@ -247,16 +251,15 @@ The target layout is in [ADR 0033](docs/adr/0033-repository-layout.md).
 
 ```sh
 npm test                         # everything below except smoke and isolation, plus the names and link checks
-cargo test --workspace           # proto, server, admin and client (needs python3 for the mock LLM)
-node tests/markdown.test.js
-node tests/ui.test.js            # desktop UI against a mocked backend
+cargo test --workspace           # proto, server and admin (needs python3 for the mock LLM)
+npm --prefix clients/desktop test   # the app: its cargo tests, markdown, and the UI against a mocked backend
 cargo build --workspace && node tests/e2e/admin.test.js   # the admin site in a real browser against the real server and admin
 scripts/smoke.sh                 # server + admin + mock LLM: setup, pairing, chat, search
 docker compose up -d && scripts/check-isolation.sh    # against a throwaway stack
 python3 tests/e2e/mock_llm.py 8765   # fake OpenAI-compatible server to try the app without a key
 ```
 
-The UI and admin tests need `npm install && npx playwright install chromium`.
+The UI and admin tests need `npm install && npm --prefix clients/desktop install && npx playwright install chromium`.
 
 ## Verified, and not
 

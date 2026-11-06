@@ -1,4 +1,4 @@
-// Run: node tests/ui.test.js   (needs `playwright` with Chromium installed)
+// Run (from clients/desktop): node tests/ui.test.js   (needs `playwright` with Chromium installed)
 // Drives the real ui/ files against tests/mock-tauri.js.
 const { chromium } = require('playwright');
 const assert = require('node:assert/strict');

@@ -1,0 +1,17 @@
+# The desktop client is its own workspace (ADR 0033): its dependencies and system libraries stay out of
+# the services' build. It shares only crates/askbar-proto, and uses services/server in its tests.
+[workspace]
+members = ["src-tauri"]
+resolver = "2"
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = "s"
+strip = true
+
+# Password hashing in the server the tests start is deliberately slow; keep it usable in debug builds.
+[profile.dev.package.argon2]
+opt-level = 3
+[profile.dev.package.blake2]
+opt-level = 3

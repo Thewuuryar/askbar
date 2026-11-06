@@ -12,9 +12,8 @@ WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates crates
 COPY services services
-# The desktop client (src-tauri) is not part of any image.
-RUN sed -i 's/^members = .*/members = ["crates\/askbar-proto", "services\/server", "services\/admin", "services\/controller"]/' Cargo.toml \
- && cargo build --release -p askbar-server -p askbar-admin -p askbar-controller
+# The desktop client is its own workspace (clients/desktop) and is not part of any image.
+RUN cargo build --release -p askbar-server -p askbar-admin -p askbar-controller
 
 # ------------------------------------------------------------------ admin
 # The admin service: the admin site and its own database. No TCP port: it listens on a unix

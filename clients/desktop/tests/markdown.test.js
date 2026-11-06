@@ -1,4 +1,4 @@
-// Run: node tests/markdown.test.js
+// Run (from clients/desktop): node tests/markdown.test.js
 const assert = require('node:assert/strict');
 const { renderMarkdown: md } = require('../ui/markdown.js');
 

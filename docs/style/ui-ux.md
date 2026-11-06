@@ -8,7 +8,7 @@ How the popup and the admin site look and behave. Items marked **(proposed)** ar
 
 ### Tokens and scales
 
-- **One token set for both UIs.** Colours, sizes, spacing, radii and weights are CSS variables defined once, in `ui/tokens.css`. The admin site uses a byte-identical copy (`services/admin/src/ui/tokens.css`). `scripts/check-ui-tokens.sh` fails if they differ or if a text colour is under 4.5:1 in either theme (one place per fact). Names: `--bg`, `--card`, `--fg`, `--muted`, `--line`, `--accent`, `--danger`, `--good`. The admin's `--bad` becomes `--danger`, and no rule uses a fallback colour. Neutrals are the popup's. The accent is the popup's blue, darkened slightly (`#3a5bd0`) so it passes 4.5:1 as text on both backgrounds; muted text and the success colour were darkened for the same reason.
+- **One token set for both UIs.** Colours, sizes, spacing, radii and weights are CSS variables defined once, in `clients/desktop/ui/tokens.css`. The admin site uses a byte-identical copy (`services/admin/src/ui/tokens.css`). `scripts/check-ui-tokens.sh` fails if they differ or if a text colour is under 4.5:1 in either theme (one place per fact). Names: `--bg`, `--card`, `--fg`, `--muted`, `--line`, `--accent`, `--danger`, `--good`. The admin's `--bad` becomes `--danger`, and no rule uses a fallback colour. Neutrals are the popup's. The accent is the popup's blue, darkened slightly (`#3a5bd0`) so it passes 4.5:1 as text on both backgrounds; muted text and the success colour were darkened for the same reason.
 - **Text: four sizes.** `0.75rem` (hints, meta), `0.875rem` (secondary), `0.9375rem` (body), `1.3rem` (input bar, headings). Two weights: 400 and 600.
 - **Spacing: 4, 8, 12, 16, 24, 32 px.** No other value.
 - **Radii: two.** 8 px for controls and 16 px for the popup card. No pill shapes and no 4, 6 or 12.
@@ -38,11 +38,11 @@ None, or one transition of 150 ms or less (opacity or colour). Under `prefers-re
 - **Empty:** only the bar.
 - **Trust text stays quiet.** The AI warning ([ADR 0012](../adr/0012-consent-notices-and-deletion.md)) is a muted line (`--muted`, smallest size) above the chat box. The privacy notice shows once at pairing and again only when the relevant settings change.
 
-## The popup (`ui/`, Tauri)
+## The popup (`clients/desktop/ui/`, Tauri)
 
 - **A bar, not an app.** One hotkey shows and hides it. Esc stops a streaming reply; otherwise it hides. Default hotkey `Ctrl+Shift+Space`.
 - **Keyboard first.** Every action has a key (README, "Using it"). Ctrl is used on macOS too, because Cmd+H and Cmd+N belong to the system.
-- **Thin client.** The window has no filesystem or network permission (`src-tauri/capabilities/default.json`). Only the Rust side talks to the server. Provider keys never reach the client.
+- **Thin client.** The window has no filesystem or network permission (`clients/desktop/src-tauri/capabilities/default.json`). Only the Rust side talks to the server. Provider keys never reach the client.
 - **No offline mode.** If the server cannot be reached the window says "server offline". It does not queue work silently or show stale answers as current.
 - **Say it in words, keep what was typed.** A refusal (kill switch, token limit, no audit key, `audit_backlog`, queue full) is shown as a sentence and the text the person typed stays in the box. A cut-off reply keeps its text and offers **Try again**.
 - **Branch on codes.** The app decides what to do from the `error` code, never from the wording. The text shown comes from the problem's `detail`.
@@ -52,10 +52,10 @@ None, or one transition of 150 ms or less (opacity or colour). Under `prefers-re
 - **Live only where it started.** The client that started a chat streams the reply. Other clients show a processing message with a short description until the chat completes ([ADR 0008](../adr/0008-users-clients-and-client-access.md)).
 - **No build step.** `ui/` is plain HTML, CSS and JavaScript. Adding a framework or bundler needs an ADR.
 - **Markdown links and images.** Remote images are blocked. A link shows its destination before it opens ([ADR 0016](../adr/0016-risk-register.md); a ship criterion).
-- **Markdown is escaped first.** `ui/markdown.js` HTML-escapes everything, then adds only the markup on its allowlist, so model output cannot inject HTML ([ADR 0016](../adr/0016-risk-register.md)). That is the only reason `renderMarkdown` output may be assigned to `innerHTML`. Keep `tests/markdown.test.js` covering it.
+- **Markdown is escaped first.** `clients/desktop/ui/markdown.js` HTML-escapes everything, then adds only the markup on its allowlist, so model output cannot inject HTML ([ADR 0016](../adr/0016-risk-register.md)). That is the only reason `renderMarkdown` output may be assigned to `innerHTML`. Keep `tests/markdown.test.js` covering it.
 - **Colours and sizes come from the tokens** in "Look and feel". Do not hard-code a colour, size or radius in a rule or in script.
 - **The footer always shows two things:** the server connection status and the model picker. The five shortcut hints show only on first use and when the person presses `?`.
-- **Tests.** Behaviour changes carry a test in `tests/ui.test.js` (Playwright against `tests/mock-tauri.js`).
+- **Tests.** Behaviour changes carry a test in `clients/desktop/tests/ui.test.js` (Playwright against `clients/desktop/tests/mock-tauri.js`).
 
 ## The admin site (`services/admin/src/ui/`)
 

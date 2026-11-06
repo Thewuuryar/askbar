@@ -173,4 +173,4 @@ Each service has its own data and credential volumes and user ID, with no shared
 
 ## Considered and not changed
 
-`askbar-proto` (shared types), the `askbar-pair:` prefix, `src-tauri/` and `ui/` directory names (Tauri convention).
+`askbar-proto` (shared types), the `askbar-pair:` prefix, `src-tauri/` and `ui/` directory names (Tauri convention), now under `clients/desktop/` ([ADR 0033](adr/0033-repository-layout.md)).

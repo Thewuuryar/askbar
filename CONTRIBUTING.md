@@ -19,7 +19,7 @@ to use one (a database migration, an old path in a test) carries `names-ok` and 
 | `services/server/` | The server: client API (`client_api.rs`), server API (`server_api.rs`), chat and generations, audit store. |
 | `services/admin/` | The admin service: the admin API (`admin_api.rs`), the site (`src/ui/`), Caddy configuration, API keys. Unix only. |
 | `services/controller/` | The controller: Docker-socket access narrowed to start, stop and restart three services. Its API is `docs/openapi/control.v1.yaml`. |
-| `src-tauri/`, `ui/` | The desktop app (Cargo package `askbar-client`, program `askbar`) and its popup. No build step for `ui/`. |
+| `clients/desktop/` | The desktop app, its own Cargo workspace: `src-tauri/` (Cargo package `askbar-client`, program `askbar`), the popup in `ui/` (no build step) and its `tests/`. |
 | `deploy/caddy/`, `deploy/cpa/` | Caddy's bootstrap config; notes on CLIProxyAPI. |
 | `docs/` | `architecture.md`, `adr/` (decisions), `style/`, `wire-contract.md` (prose), `openapi/` (one file per API), `refactor-log.md`. |
 | `scripts/`, `tests/` | Smoke and isolation scripts, the checks, popup tests. |
@@ -30,15 +30,15 @@ This table lists what is on `main`; the target layout is in [ADR 0033](docs/adr/
 ## Build, run, test
 
 ```sh
-cargo build --workspace            # server, admin and the app's Rust side
+cargo build --workspace            # server and admin (the app is built in clients/desktop)
 cargo fmt --all --check            # (proposed) required once the rustfmt PR lands
 cargo test --workspace             # needs python3 (a mock LLM)
-npm install && npx playwright install chromium
-npm test                           # names and link checks, cargo tests, markdown, UI and admin browser tests, mock LLM
+npm install && npm --prefix clients/desktop install && npx playwright install chromium
+npm test                           # names and link checks, cargo tests (both workspaces), markdown, UI and admin browser tests, mock LLM
 scripts/smoke.sh                   # server + admin + mock LLM, end to end, no Docker
 docker compose up -d --build && scripts/check-isolation.sh   # needs Docker; a throwaway stack
 python3 tests/e2e/mock_llm.py 8765     # a fake OpenAI-compatible server to try things without a key
-npm run dev                        # the desktop app
+npm --prefix clients/desktop install && npm --prefix clients/desktop run dev   # the desktop app
 ```
 
 The browser tests start the built `askbar-server` and `askbar-admin`; run `cargo build -p askbar-server -p askbar-admin` first

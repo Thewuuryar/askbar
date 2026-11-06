@@ -1,5 +1,5 @@
 [workspace]
-members = ["src-tauri", "crates/askbar-proto", "services/server", "services/admin", "services/controller"]
+members = ["crates/askbar-proto", "services/server", "services/admin", "services/controller"]
 resolver = "2"
 
 [profile.release]

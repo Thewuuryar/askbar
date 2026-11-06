@@ -11,10 +11,10 @@ Use the component names in the [glossary](../architecture.md#glossary) in paths,
 | What | Rule | Example |
 | --- | --- | --- |
 | Cargo packages | `askbar-<role>` | `askbar-server`, `askbar-proto` |
-| Desktop package and program | package `askbar-client`, program `askbar` | `src-tauri/` |
+| Desktop package and program | package `askbar-client`, program `askbar` | `clients/desktop/src-tauri/` |
 | Rust | the [Rust API Guidelines](https://rust-lang.github.io/api-guidelines/naming.html) | `snake_case` items, `CamelCase` types |
 | Rust files | `snake_case.rs` | `client_api.rs`, `server_api.rs` |
-| JavaScript (`ui/`, admin site) | `camelCase` functions, no build step | `showStatus`, `copyText` |
+| JavaScript (`clients/desktop/ui/`, admin site) | `camelCase` functions, no build step | `showStatus`, `copyText` |
 | Tests | in the crate's `tests/`, named for the area | `services/server/tests/streaming.rs` |
 
 ## Wire and storage
