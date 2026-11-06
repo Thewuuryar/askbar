@@ -204,7 +204,7 @@ if [ -z "$CPA" ]; then
   echo "SKIP  cpa is not running"
 else
   cpa_nets=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$CPA" | tr ' ' '\n' | grep . | sort | tr '\n' ' ')
-  [ "$cpa_nets" = "${EDGE} ${PROJECT}_cpa-admin " ] && pass "cpa is on edge and cpa-admin only" || fail "cpa's networks are: $cpa_nets"
+  [ "$cpa_nets" = "${PROJECT}_cpa-admin ${EDGE} " ] && pass "cpa is on edge and cpa-admin only" || fail "cpa's networks are: $cpa_nets"
   [ -z "$(docker inspect -f '{{range $p, $b := .NetworkSettings.Ports}}{{if $b}}{{$p}} {{end}}{{end}}' "$CPA")" ] && pass "cpa publishes no port" || fail "cpa publishes a port"
 fi
 
