@@ -68,6 +68,8 @@ The app is its own Cargo workspace (`clients/desktop/`), so building the server 
 
 Until the app is paired it shows how to pair. Tray icon > **Pair with server...**, paste the pairing string from the admin site (Clients). The one-time code expires after 10 minutes; the app exchanges it for a per-client token stored in the OS keychain, not in a file. Revoke a client in the admin site and the app shows "token rejected". If the server can't be reached the app says "server offline"; there is no offline mode.
 
+The app reads the token from the keychain once per launch. On macOS a build from `npm run dev` is unsigned, so after each rebuild macOS asks once for the keychain password before that build can read the token; **Always Allow** covers that build until the next rebuild.
+
 `client.yaml` (`~/.config/askbar/` on Linux, `~/Library/Application Support/askbar/` on macOS, `%APPDATA%\askbar\` on Windows; `ASKBAR_CLIENT_CONFIG` points at a different file, which is how you run a second profile) holds only:
 
 ```yaml

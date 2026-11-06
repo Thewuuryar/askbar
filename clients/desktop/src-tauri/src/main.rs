@@ -203,7 +203,7 @@ async fn server_status(state: State<'_, AppState>) -> Result<Option<types::Clien
 #[tauri::command]
 async fn pair(app: AppHandle, state: State<'_, AppState>, pairing: String) -> Result<(), String> {
     let path = client_config::path();
-    let keychain = tokens::Keychain::new(&path);
+    let keychain = tokens::CachedTokens::new(tokens::Keychain::new(&path));
     remote::pair(&pairing, &path, &keychain).await?;
     let remote = Remote::new(client_config::ClientConfig::load(&path), path, Box::new(keychain))
         .with_outbox(outbox::Outbox::load(outbox::default_path()));
@@ -390,7 +390,7 @@ fn main() {
         })
         .setup(|app| {
             let client_yaml = client_config::path();
-            let tokens = Box::new(tokens::Keychain::new(&client_yaml));
+            let tokens = Box::new(tokens::CachedTokens::new(tokens::Keychain::new(&client_yaml)));
             let config = if client_yaml.exists() { client_config::ClientConfig::load(&client_yaml) } else { Ok(Default::default()) };
             let backend = Arc::new(Remote::new(config, client_yaml, tokens).with_outbox(outbox::Outbox::load(outbox::default_path())));
             let (cfg, config_error) = match tauri::async_runtime::block_on(backend.settings()) {
