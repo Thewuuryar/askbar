@@ -21,7 +21,7 @@ Size: S ≈ 1–2 h, M ≈ 3–5 h, L ≈ 6–10 h (owner budget ~100 h to March
 ```bash
 docker compose --profile dev up -d --build
 ```
-1. Open the admin (`https://<mac-LAN-IP>/admin` once phase 1 step 1.6 lands; `http://127.0.0.1:8081/admin/` before it), sign in, add the mock-llm provider, create a pairing key.
+1. Open the admin at `https://localhost/admin` (or the Mac's LAN address) and accept the certificate warning, sign in, add the mock-llm provider, create a pairing key.
 2. `cd clients/desktop && npm install && npm run dev`, pair from the tray, send a message, see a streamed reply, close and reopen the window mid-reply.
 3. `scripts/smoke.sh` passes.
 
@@ -85,12 +85,14 @@ New crates `crates/askbar-service` and `crates/askbar-audit` are created in the 
 **1.5 `refactor(server): remove automatic provider fallback`** (S) — [ADR 0014](adr/0014-model-gateway-and-providers.md)
 - `router.rs` tries only the chosen provider (retries kept); drop `fallback_order`, `allow_as_fallback`, the `provider` "answered by" event usage in the client UI. Contract change noted in the commit.
 
+Order change: 1.6 and 1.7 were done first, right after phase 0. Before them a Docker stack had no client route at all without a host name and a Cloudflare token, so the Mac check could not pass; the plan had assumed the 8081 page served clients, and it served the admin only.
+
 **1.6 `feat(caddy)!: self-signed HTTPS from first boot on the private address`** (M) — [ADR 0007](adr/0007-first-run-and-admin-sign-in.md), 0015
-- Caddy serves `/admin`, `/api/admin`, `/api/client` on 443 with an internal self-signed cert, 80 redirects; private-address `remote_ip` allowlist from boot (real source, not forwarded headers). Remove the `admin-setup` network and the `127.0.0.1:8081` port.
+- Caddy serves `/admin`, `/api/admin`, `/api/client` on 443 with a certificate the admin makes for the install (Caddy's internal CA would need on-demand TLS, since Caddy doesn't know the host's address), handed out for any name, 80 redirects; private-address `remote_ip` allowlist from boot (real source, not forwarded headers). Remove the `admin-setup` network and the `127.0.0.1:8081` port.
 - Isolation script: allowlist rules, no 8081, published ports 80/443 only.
 
-**1.7 `feat(client): pin the self-signed certificate from the pairing key`** (M) — ADR 0034 (new, proposed)
-- Pairing key carries Caddy's certificate SHA-256 (admin reads it through the Caddy socket). Client pins it with a custom rustls verifier while the cert is not publicly valid; normal validation once a real cert is issued; `allow_insecure` stays dev-only. Client and server ship together; bump `MIN_CLIENT`.
+**1.7 `feat(client): pin the self-signed certificate from the pairing key`** (M) — [ADR 0034](adr/0034-self-signed-https-and-certificate-pinning.md) (proposed)
+- Pairing key carries the certificate's SHA-256 (the admin made it, so it reads it from its own file). Client pins it with a custom rustls verifier while there is no host name; normal validation once a real cert is issued; `allow_insecure` stays dev-only. The pin is an optional field, so older pairing keys still decode.
 - *1.6 and 1.7 must land together for the Mac check to pass over HTTPS* (the two-PR window).
 
 **1.8 `feat(admin): first run with published credentials and a forced password change`** (M) — [ADR 0007](adr/0007-first-run-and-admin-sign-in.md)
@@ -110,6 +112,15 @@ New crates `crates/askbar-service` and `crates/askbar-audit` are created in the 
 
 **1.12 `feat: shared spaces`** (M) — [ADR 0009](adr/0009-spaces-and-storage.md) (deferrable, last in [ADR 0002](adr/0002-v1-scope-limits-and-ship-criteria.md) order)
 - Admin create/rename/delete (with confirmation), add/remove members with the "new members see history" notice; client space picker.
+
+**1.13 Backlog: failed turns and long conversations** (owner request, 2026-11-07; estimate before starting). Since `fix(server): leave unanswered questions out of later prompts`, a question that got no reply is shown but not sent to the model again.
+- **Edit and Try again on a failed line** (S): the failed question in the window gets **Edit** (puts its text back in the box) and **Try again** (resends it), for every failure kind, not only timeouts.
+- **History length limit** (S): an admin setting for how much history is sent with each question. Today the whole conversation is sent every turn, with no limit.
+- **Summarize when the context would overflow** (L): when a conversation is expected to exceed the model's context length, the server summarizes (compacts) the older part and sends the summary instead; the client shows "Summarizing the conversation…" with a progress bar while it runs. Needs a design note first: which model summarizes, where the summary is stored, and how the extra model call is audited (it goes through `model-gateway` like any other, phase 3).
+- **Failed questions stay marked** (S/M): a question that got no reply is shown with a coloured background (a `--danger` tint that passes contrast in both themes) and its error text, live and after reopening the chat. Today the error line exists only in the live window; a reopened conversation shows just the unanswered questions. Needs the client API to say which questions failed and why: an additive field on each message in the conversation detail (for example `failed: {code, message}` from the turn's generation, linked by `user_message_id`), the OpenAPI file and wire contract, and the popup rendering. Pairs with Edit and Try again.
+- **Newest at the top or bottom** (S): show the conversation newest-first, with the input box following it, or oldest-first as now. The admin sets the default (a new display-defaults field, server-wide and per user, edited in the admin site); a client can override it locally (`client.yaml` `ui`), as with the other display defaults.
+- **Copy the whole conversation** (S): a copy button on each conversation in the history panel, next to its delete button, that copies every question and reply, in order, as Markdown with who said what.
+- **Message actions on hover** (S/M): under each question and each reply, a copy icon (replacing today's Copy text button) and the date and time it was sent, both shown when the pointer is over that message or it has keyboard focus. Each message keeps the padding for them at all times, so nothing moves when they appear. Needs each message's time in the popup (`created_at` is stored; check it reaches the window).
 
 ## Phase 2 — Add bootstrap and the auditor
 

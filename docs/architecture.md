@@ -102,7 +102,7 @@ Before 1.0, paths can change to fit the conventions. After 1.0, `/api/client/v1`
 
 ## Errors
 
-Every failure is `application/problem+json` (RFC 9457) with `type` (`urn:askbar:problem:<code>`), `title`, `status`, `detail` (a sentence for a person), `error` (the stable code clients branch on) and extension members such as `period`. Status codes and `Retry-After` are part of the contract. Clients map by `error`, never by prose. The registry of codes lives in `askbar-proto/src/problem.rs`.
+Every failure is `application/problem+json` (RFC 9457) with `type` (`urn:askbar:problem:<code>`), `title`, `status`, `detail` (a sentence for a person), `error` (the stable code clients branch on) and extension members such as `period`. Status codes and `Retry-After` are part of the contract. Clients map by `error`, never by prose. The registry of codes lives in `crates/askbar-proto/src/problem.rs`.
 
 ## Versions
 
@@ -173,4 +173,4 @@ Each service has its own data and credential volumes and user ID, with no shared
 
 ## Considered and not changed
 
-`askbar-proto` (shared types), the `askbar-pair:` prefix, `src-tauri/` and `ui/` directory names (Tauri convention).
+`askbar-proto` (shared types), the `askbar-pair:` prefix, `src-tauri/` and `ui/` directory names (Tauri convention), now under `clients/desktop/` ([ADR 0033](adr/0033-repository-layout.md)).

@@ -1,0 +1,83 @@
+/* Askbar design tokens. The one source for the popup and the admin site.
+   services/admin/src/ui/tokens.css is a byte-identical copy (scripts/check-ui-tokens.sh).
+   Rules: docs/style/ui-ux.md, "Look and feel". Each token has one light and one dark value. */
+
+:root {
+  /* colour */
+  --bg: #eceef2;
+  --card: #f6f7f9;
+  --fg: #181b22;
+  --muted: #5d6779;
+  --line: rgba(24, 32, 56, 0.12);
+  --accent: #3a5bd0;
+  --accent-fg: #ffffff;
+  --accent-soft: rgba(58, 91, 208, 0.09);
+  --code-bg: #e9ecf1;
+  --danger: #b4342a;
+  --good: #17724a;
+  --shadow: 0 8px 28px -6px rgba(10, 14, 30, 0.38), 0 1px 3px rgba(10, 14, 30, 0.18);
+
+  /* type: four sizes, two weights */
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace;
+  --text-xs: 0.75rem;
+  --text-s: 0.875rem;
+  --text-m: 0.9375rem;
+  --text-l: 1.3rem;
+  --weight-regular: 400;
+  --weight-bold: 600;
+
+  /* spacing */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  /* radii: two */
+  --radius-control: 8px;
+  --radius-card: 16px;
+
+  /* motion: one duration, none under prefers-reduced-motion */
+  --motion: 150ms;
+
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #16181d;
+    --card: #1b1d23;
+    --fg: #e8eaef;
+    --muted: #8c93a4;
+    --line: rgba(255, 255, 255, 0.1);
+    --accent: #8ba3f0;
+    --accent-fg: #0d1020;
+    --accent-soft: rgba(139, 163, 240, 0.12);
+    --code-bg: #121419;
+    --danger: #ff8d82;
+    --good: #4fd18b;
+    --shadow: 0 8px 28px -6px rgba(0, 0, 0, 0.65), 0 1px 3px rgba(0, 0, 0, 0.5);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #16181d;
+  --card: #1b1d23;
+  --fg: #e8eaef;
+  --muted: #8c93a4;
+  --line: rgba(255, 255, 255, 0.1);
+  --accent: #8ba3f0;
+  --accent-fg: #0d1020;
+  --accent-soft: rgba(139, 163, 240, 0.12);
+  --code-bg: #121419;
+  --danger: #ff8d82;
+  --good: #4fd18b;
+  --shadow: 0 8px 28px -6px rgba(0, 0, 0, 0.65), 0 1px 3px rgba(0, 0, 0, 0.5);
+  color-scheme: dark;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root { --motion: 0ms; }
+}

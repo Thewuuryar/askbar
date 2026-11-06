@@ -24,9 +24,9 @@ If code and `docs/architecture.md` disagree on behavior the target has already r
 ```sh
 cargo build --workspace
 cargo fmt --all --check                # (proposed) required once the rustfmt PR lands
-cargo test --workspace                 # needs python3 (mock LLM)
-npm install && npx playwright install chromium
-npm test                               # names + docs checks, cargo tests, markdown, UI and admin browser tests
+cargo test --workspace                 # services and crates; needs python3 (mock LLM)
+npm install && npm --prefix clients/desktop install && npx playwright install chromium
+npm test                               # names + docs checks, cargo tests (root and clients/desktop), markdown, UI and admin browser tests
 scripts/smoke.sh                       # end to end, no Docker
 scripts/check-isolation.sh             # needs Docker; throwaway stack
 ```

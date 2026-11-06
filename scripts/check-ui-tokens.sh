@@ -1,13 +1,13 @@
 #!/bin/sh
-# Fails if the admin copy of tokens.css differs from ui/tokens.css, or if --fg, --muted, --accent, --danger or --good is under
+# Fails if the admin copy of tokens.css differs from clients/desktop/ui/tokens.css, or if --fg, --muted, --accent, --danger or --good is under
 # 4.5:1 contrast against --bg or --card, or --accent-fg under 4.5:1 against --accent, in either theme.
 # Usage: scripts/check-ui-tokens.sh
 cd "$(dirname "$0")/.." || exit 2
 python3 - <<'PY'
 import re, sys
-a = open("ui/tokens.css", encoding="utf-8").read()
-if a != open("askbar-admin/src/ui/tokens.css", encoding="utf-8").read():
-    print("askbar-admin/src/ui/tokens.css differs from ui/tokens.css; copy it"); sys.exit(1)
+a = open("clients/desktop/ui/tokens.css", encoding="utf-8").read()
+if a != open("services/admin/src/ui/tokens.css", encoding="utf-8").read():
+    print("services/admin/src/ui/tokens.css differs from clients/desktop/ui/tokens.css; copy it"); sys.exit(1)
 
 def block(start):
     i = a.index(start); j = a.index("}", i)

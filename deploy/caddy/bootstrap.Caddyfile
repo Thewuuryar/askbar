@@ -1,0 +1,7 @@
+# Starting point only. Caddy starts with its own admin API on a unix socket and serves nothing; the
+# admin pushes the real configuration (Network settings) through that socket when it starts, and
+# `--resume` brings back the last one after a restart. A test keeps this file and the admin's copy
+# (`bootstrap_caddyfile` in services/admin/src/caddy.rs) the same.
+{
+	admin unix//run/caddy/admin.sock|0660
+}

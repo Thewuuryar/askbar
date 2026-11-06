@@ -1,8 +1,7 @@
 target
 .git
 node_modules
-src-tauri
-ui
+clients
 tests
 data
 .env

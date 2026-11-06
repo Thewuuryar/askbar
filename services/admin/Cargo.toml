@@ -1,0 +1,30 @@
+[package]
+name = "askbar-admin"
+license = "AGPL-3.0-or-later"
+version = "0.5.0"
+edition = "2021"
+description = "Askbar admin service: the admin site and its own database, kept apart from the server"
+
+[dependencies]
+askbar-proto = { path = "../../crates/askbar-proto", features = ["axum"] }
+argon2 = "0.5"
+crypto_box = { version = "0.9", features = ["seal"] }
+axum = "0.8"
+chacha20poly1305 = "0.10"
+base64 = "0.22"
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time", "fs", "io-util"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+ulid = "1"
+rcgen = { version = "0.14.10", default-features = false, features = ["ring", "pem"] }
+
+[dev-dependencies]
+serde_yaml_ng = "0.10"
+futures-util = "0.3"
+askbar-server = { path = "../server" }

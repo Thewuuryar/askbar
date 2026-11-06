@@ -48,8 +48,12 @@ Tests check that each file lists exactly the routes the code registers.
 
 ### Pairing
 
-1. The admin shows a pairing string: `askbar-pair:<base64url(json {"url", "code"})>`
-   (no padding). The code works once and expires after 10 minutes.
+1. The admin shows a pairing string: `askbar-pair:<base64url(json {"url", "code", "cert_sha256"?})>`
+   (no padding). The code works once and expires after 10 minutes. `cert_sha256` (64 lowercase hex
+   digits) is present while the server uses the install's own certificate instead of a publicly trusted
+   one: the client then trusts exactly the certificate with that SHA-256 for this server, whatever name
+   or address it connects with ([ADR 0034](adr/0034-self-signed-https-and-certificate-pinning.md)).
+   A string without it is checked against the public roots as usual.
 2. `POST /api/client/v1/pairings` with `{"code": "..."}` returns `{"token": "abt_..."}`. A wrong,
    expired or used code is `401`. The token is shown once; the server keeps only its hash.
 3. An administrator can revoke a client; its token then gets `401`.
@@ -105,6 +109,11 @@ the server cannot take the message it refuses before anything starts, with a pro
 The refusals are 409 `queue_full`, 429 `budget_exceeded` (with `period`), 503 `kill_switch`,
 503 `audit_key_missing` and 503 `audit_backlog` (with `Retry-After`); the OpenAPI file lists them on
 `POST /chat`.
+
+Each turn sends the conversation's history with the new question. A question that got no reply (its
+turn failed, or was stopped, timed out or interrupted before any text) stays in the conversation but
+is not sent to the model again: of several unanswered questions in a row only the newest is sent. To
+retry one, send it again.
 
 None of these affect replies already running.
 Otherwise the answer is `200 text/event-stream`. Provider output is never passed through;
@@ -319,10 +328,10 @@ Every failure of every Askbar API is `application/problem+json` (RFC 9457):
 
 `error` is the stable code a program branches on; `title` is fixed per code; `detail` is a
 sentence for a person; extra members such as `period` ride alongside. Status codes and
-`Retry-After` are part of the contract. The codes (`askbar-proto/src/problem.rs`):
+`Retry-After` are part of the contract. The codes (`crates/askbar-proto/src/problem.rs`):
 
 The full list of codes, with their statuses, is the `error` enum of the `Problem` schema in each
-OpenAPI file below; the source is `askbar-proto/src/problem.rs`. A test keeps the files and the code the
+OpenAPI file below; the source is `crates/askbar-proto/src/problem.rs`. A test keeps the files and the code the
 same.
 
 A refusal never starts a

@@ -22,7 +22,7 @@ info:
     is on, requests from other addresses never arrive.
 servers:
   - url: https://askbar.example.com
-    description: Your server's host name. Before HTTPS is set up, http://127.0.0.1:8081 on the Docker host.
+    description: Your server's host name. Before one is set, https://<the Docker host's address>, with the install's own certificate.
 security:
   - adminSession: []
   - adminApiKey: []

@@ -7,10 +7,12 @@
 # the admin works with the server stopped, the server port needs the token (and
 # fails closed without a hash file), only the admin can reach it, the server cannot touch
 # the admin's files or socket, the admin allowlist does what its switch says, the server image
-# carries no admin code, secret files are mode 600, and a backup holds no secrets.
+# carries no admin code, secret files are mode 600, a backup holds no secrets, and before a host
+# name is set Caddy serves HTTPS on 443 only, with the install's own certificate.
 #
 # Meant for a throwaway stack: it stops and restarts the server, and it sets the admin's
-# network settings (a made-up hostname, no certificate is requested). Needs docker and the
+# network settings (a made-up hostname, no certificate is requested), then puts them back to a fresh
+# install's (no host name, allowlist off, the Cloudflare token cleared). Needs docker and the
 # python:3.12-slim image. Set ASKBAR_ADMIN_PASSWORD if the admin already has a password;
 # otherwise the first-run password is set to a random one.
 set -u
@@ -204,7 +206,7 @@ if [ -z "$CPA" ]; then
   echo "SKIP  cpa is not running"
 else
   cpa_nets=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$CPA" | tr ' ' '\n' | grep . | sort | tr '\n' ' ')
-  [ "$cpa_nets" = "${EDGE} ${PROJECT}_cpa-admin " ] && pass "cpa is on edge and cpa-admin only" || fail "cpa's networks are: $cpa_nets"
+  [ "$cpa_nets" = "${PROJECT}_cpa-admin ${EDGE} " ] && pass "cpa is on edge and cpa-admin only" || fail "cpa's networks are: $cpa_nets"
   [ -z "$(docker inspect -f '{{range $p, $b := .NetworkSettings.Ports}}{{if $b}}{{$p}} {{end}}{{end}}' "$CPA")" ] && pass "cpa publishes no port" || fail "cpa publishes a port"
 fi
 
@@ -330,20 +332,53 @@ for what in "provider key" "pair code" "password hash"; do
   printf '%s\n' "$out" | grep -q "^$what absent" && pass "the backup holds no $what" || fail "the backup holds the $what ($out)"
 done
 
-echo "== 6. The first-run page"
-# Caddy serves the admin over plain HTTP on 127.0.0.1:8081 of the host, on a network only Caddy joins.
-SETUP_CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:8081/admin/ 2>/dev/null || true)
-[ "$SETUP_CODE" = 200 ] && pass "http://127.0.0.1:8081/admin/ opens the admin" || fail "the first-run page answered '$SETUP_CODE'"
-for path in / /api/client/v1/health /api/server/v1/health /api/v1/health /health; do
-  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1:8081$path" 2>/dev/null || true)
-  [ "$code" = 404 ] && pass "the first-run page has nothing at $path (404)" || fail "the first-run page answers $path with '$code'"
+echo "== 6. HTTPS before a host name is set"
+# Back to a fresh install's settings: no host name, allowlist off. Caddy then serves every address on 443 with the
+# install's own certificate, and the admin site is open to private addresses only.
+out=$(admin_script "$(admin_login)
+s, body = call('PUT', '/admin/api/v1/network', {'tls_enabled': False, 'hostname': '', 'admin_cidr': '', 'acme_staging': False, 'allowlist_enabled': False, 'clear_token': True})
+assert s == 200, (s, body)
+s, body = call('POST', '/admin/api/v1/network/apply')
+print(s, 'ok' if '\"ok\":true' in body.replace(' ', '') else body)" 2>&1)
+printf '%s' "$out" | tail -1 | grep -q '^200 ok' && pass "no host name: Caddy took the configuration" || fail "no host name: $out"
+ports=$(docker inspect -f '{{range $p, $b := .NetworkSettings.Ports}}{{if $b}}{{$p}} {{end}}{{end}}' "$CADDY" | tr ' ' '\n' | grep . | sort | tr '\n' ' ')
+[ "$ports" = "443/tcp 80/tcp " ] && pass "Caddy publishes 443 and 80 only" || fail "Caddy publishes: $ports"
+cfg=$(caddy_config)
+printf '%s' "$cfg" | grep -q '"abort":true' && printf '%s' "$cfg" | grep -q '192.168.0.0/16' && pass "the admin site is limited to private addresses" || fail "the admin site has no private-address rule"
+code=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 https://localhost/admin/ 2>/dev/null || true)
+[ "$code" = 200 ] && pass "https://localhost/admin/ opens the admin" || fail "https://localhost/admin/ answered '$code'"
+code=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 https://localhost/api/client/v1/health 2>/dev/null || true)
+[ "$code" = 200 ] && pass "the client API answers over HTTPS" || fail "https://localhost/api/client/v1/health answered '$code'"
+for path in /api/server/v1/health /health /; do
+  code=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 "https://localhost$path" 2>/dev/null || true)
+  [ "$code" = 404 ] && pass "nothing at $path (404)" || fail "$path answered '$code'"
 done
-[ "$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$CADDY" | tr ' ' '\n' | grep -c "^${PROJECT}_admin-setup$")" = 1 ] && pass "Caddy is on the admin-setup network" || fail "Caddy is not on the admin-setup network"
-for c in "$SERVER" "$ADMIN"; do
-  docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$c" | grep -q "${PROJECT}_admin-setup" && fail "$c is on the admin-setup network" || pass "$c is not on the admin-setup network"
-done
-# Nothing on the edge network can open the first-run page.
-[ "$(http_status "$EDGE" "caddy:8081")" = 0 ] && pass "a container on edge cannot reach the first-run page" || fail "the first-run page answers on the edge network"
+redirect=$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 5 http://localhost/admin/ 2>/dev/null || true)
+case "$redirect" in 30[178]" https://localhost/admin/") pass "port 80 redirects to HTTPS";; *) fail "http://localhost/admin/ answered '$redirect'";; esac
+# The certificate Caddy hands out, with no name (an address) and with a name it has no certificate for, is the one
+# the admin made in caddy-secrets.
+out=$(py --network "$EDGE" -u 10001:10001 -v "${PROJECT}_caddy-secrets:/s:ro" -- "
+import base64, hashlib, socket, ssl
+pem = open('/s/self.crt').read()
+want = hashlib.sha256(base64.b64decode(''.join(pem.split('-----')[2].split()))).hexdigest()
+ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT); ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE
+for name in (None, 'some-other-name.example'):
+    with socket.create_connection(('caddy', 443), timeout=5) as raw:
+        with ctx.wrap_socket(raw, server_hostname=name) as t:
+            got = hashlib.sha256(t.getpeercert(binary_form=True)).hexdigest()
+    print(name, 'same' if got == want else 'DIFFERENT')
+print('file', want)
+" 2>&1)
+printf '%s\n' "$out" | grep -q '^None same' && pass "a client connecting by address gets the install's certificate" || fail "by address: $out"
+printf '%s\n' "$out" | grep -q '^some-other-name.example same' && pass "a client using any other name gets the install's certificate" || fail "by another name: $out"
+# A pairing string made now names that certificate, so the app trusts exactly it.
+file_fp=$(printf '%s\n' "$out" | sed -n 's/^file //p')
+pin=$(admin_script "$(admin_login)
+import base64
+s, body = call('POST', '/admin/api/v1/pairings', {'name': 'isolation check'})
+p = json.loads(body)['pairing'][len('askbar-pair:'):]
+print(json.loads(base64.urlsafe_b64decode(p + '=' * (-len(p) % 4))).get('cert_sha256'))" 2>&1 | tail -1)
+[ -n "$file_fp" ] && [ "$pin" = "$file_fp" ] && pass "a new pairing string pins the install's certificate" || fail "pairing pin '$pin', certificate '$file_fp'"
 
 echo
 if [ "$FAILS" -eq 0 ]; then echo "All isolation checks passed."; else echo "$FAILS isolation check(s) FAILED."; exit 1; fi

@@ -18,7 +18,7 @@ Every failure from every API, and Caddy's 404, is `application/problem+json` (RF
 - `detail`: a sentence for a person
 - `error`: the stable code clients branch on
 
-The `ErrorCode` enum in `askbar-proto/src/problem.rs` is the registry. After 1.0, codes in `v1` are only added, never renamed or removed.
+The `ErrorCode` enum in `crates/askbar-proto/src/problem.rs` is the registry. After 1.0, codes in `v1` are only added, never renamed or removed.
 
 ## Alternatives considered
 

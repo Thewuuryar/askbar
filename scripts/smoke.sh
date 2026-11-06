@@ -69,7 +69,7 @@ if [ -z "$URL" ]; then
   URL="http://127.0.0.1:$API_PORT"
   SOCK="$WORK/admin-run/admin.sock"
   mkdir -p "$WORK/data" "$WORK/secrets" "$WORK/admin-run"
-  python3 -u tests/mock_llm.py "$MOCK_PORT" >/dev/null 2>&1 & PIDS+=($!)
+  python3 -u tests/e2e/mock_llm.py "$MOCK_PORT" >/dev/null 2>&1 & PIDS+=($!)
   # The admin service: its own database and secrets, a unix socket and no TCP port.
   ASKBAR_ADMIN_SOCKET="$SOCK" ASKBAR_ADMIN_DATA_DIR="$WORK/admin-data" ASKBAR_ADMIN_SECRETS_DIR="$WORK/admin-secrets" \
     ASKBAR_SERVER_TOKEN_DIR="$WORK/server-token" ASKBAR_SERVER_API_URL="http://127.0.0.1:$SERVER_API_PORT" ASKBAR_PUBLIC_URL="$URL" \
