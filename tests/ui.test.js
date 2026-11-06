@@ -579,6 +579,9 @@ async function waitIdle(page) {
     await page.click('#pair-submit');
     await page.waitForFunction(() => /wrong, expired/.test(document.getElementById('pair-error').textContent));
     assert.equal(await page.isVisible('#pair'), true);
+    assert.equal(await page.inputValue('#pair-input'), 'askbar-pair:bad', 'kept so it can be fixed');
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'pair-input');
+    assert.equal(await page.isEnabled('#pair-submit'), true);
   });
   await step('Esc closes the pairing screen without hiding the window', async () => {
     await page.press('#pair-input', 'Escape');
@@ -587,9 +590,12 @@ async function waitIdle(page) {
     await page.evaluate(() => window.__listeners['askbar:pair']());
     assert.equal(await page.isVisible('#pair'), true);
   });
-  await step('a good pairing string pairs, clears the banner and lets you ask', async () => {
+  await step('a good pairing string says it worked, then closes and lets you ask', async () => {
     await page.fill('#pair-input', 'askbar-pair:abc');
     await page.press('#pair-input', 'Enter');
+    await page.waitForSelector('#pair-ok:not([hidden])');
+    assert.match(await page.innerText('#pair-ok'), /Paired with askbar\.example\.com/);
+    assert.equal(await page.isHidden('#pair-input'), true, 'the code box is gone once it worked');
     await page.waitForSelector('#pair', { state: 'hidden' });
     await page.waitForSelector('#status', { state: 'hidden' });
     assert.deepEqual((await calls(page, 'pair')).pop(), { pairing: 'askbar-pair:abc' });

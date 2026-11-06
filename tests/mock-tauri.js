@@ -50,6 +50,7 @@
       if (!pairing.startsWith('askbar-pair:')) throw 'That is not a pairing string. It should start with "askbar-pair:".';
       if (pairing.includes('bad')) throw 'The pairing code is wrong, expired (they last 10 minutes) or already used. Create a new one.';
       window.__opts.status = null;
+      return 'https://askbar.example.com';
     },
     list_conversations: () =>
       db.convs.slice().sort((a, b) => b.updated_at - a.updated_at || Number(b.id) - Number(a.id))

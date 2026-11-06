@@ -158,16 +158,22 @@ fn register_hotkey(app: &AppHandle, spec: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Re-read config.yaml and apply what can change at runtime.
-fn apply_config(app: &AppHandle) -> Option<String> {
+/// Apply what can change at runtime from freshly read settings.
+fn apply_settings(app: &AppHandle, cfg: &Settings) -> Option<String> {
     let state = app.state::<AppState>();
-    let cfg = match tauri::async_runtime::block_on(state.backend().settings()) {
-        Ok(c) => c,
-        Err(e) => return Some(e),
-    };
     state.hide_on_blur.store(cfg.ui.hide_on_blur, Ordering::Relaxed);
     lock(&state.placement).top_percent = cfg.ui.top_percent;
     register_hotkey(app, &cfg.hotkey).err()
+}
+
+/// Re-read config.yaml and apply what can change at runtime. Blocks, so call it only from a
+/// thread that is not running async code (the tray menu); async commands use `apply_settings`.
+fn apply_config(app: &AppHandle) -> Option<String> {
+    let state = app.state::<AppState>();
+    match tauri::async_runtime::block_on(state.backend().settings()) {
+        Ok(c) => apply_settings(app, &c),
+        Err(e) => Some(e),
+    }
 }
 
 // ----------------------------------------------------------- commands
@@ -200,17 +206,23 @@ async fn server_status(state: State<'_, AppState>) -> Result<Option<types::Clien
 }
 
 /// Exchange a pairing string for a client token, remember the server, and switch to it.
+/// Returns the server's address for the window to show. (This must not block on the async
+/// runtime it runs on, or the window would wait for an answer that never comes.)
 #[tauri::command]
-async fn pair(app: AppHandle, state: State<'_, AppState>, pairing: String) -> Result<(), String> {
+async fn pair(app: AppHandle, state: State<'_, AppState>, pairing: String) -> Result<String, String> {
     let path = client_config::path();
     let keychain = tokens::Keychain::new(&path);
     remote::pair(&pairing, &path, &keychain).await?;
-    let remote = Remote::new(client_config::ClientConfig::load(&path), path, Box::new(keychain))
-        .with_outbox(outbox::Outbox::load(outbox::default_path()));
-    *state.backend.write().unwrap_or_else(|e| e.into_inner()) = Arc::new(remote);
+    let cfg = client_config::ClientConfig::load(&path);
+    let server = cfg.as_ref().map(|c| c.server_url.clone()).unwrap_or_default();
+    let remote = Remote::new(cfg, path, Box::new(keychain)).with_outbox(outbox::Outbox::load(outbox::default_path()));
+    let remote = Arc::new(remote);
+    *state.backend.write().unwrap_or_else(|e| e.into_inner()) = remote.clone();
     // Pick up the new hotkey and look and feel.
-    let _ = apply_config(&app);
-    Ok(())
+    if let Ok(settings) = remote.settings().await {
+        let _ = apply_settings(&app, &settings);
+    }
+    Ok(server)
 }
 
 #[tauri::command]

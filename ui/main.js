@@ -27,6 +27,7 @@
     pairSubmit: $('pair-submit'),
     pairCancel: $('pair-cancel'),
     pairError: $('pair-error'),
+    pairOk: $('pair-ok'),
     status: $('status'),
     statusText: $('status-text'),
     statusActions: $('status-actions'),
@@ -167,9 +168,20 @@
 
   // ------------------------------------------------------------- pairing
 
+  const PAIR_TIMEOUT_MS = 15000;
+
+  function setPairBusy(busy) {
+    el.pairSubmit.disabled = busy;
+    el.pairInput.disabled = busy;
+    el.pairSubmit.textContent = busy ? 'Pairing…' : 'Pair';
+  }
+
   function openPairing() {
+    el.pair.dataset.state = '';
     el.pairError.hidden = true;
+    el.pairOk.hidden = true;
     el.pairInput.value = '';
+    setPairBusy(false);
     el.pair.hidden = false;
     layout();
     el.pairInput.focus();
@@ -183,22 +195,39 @@
     return true;
   }
 
+  function serverName(url) {
+    try { return new URL(url).host; } catch (_) { return String(url || 'the server'); }
+  }
+
   async function submitPairing(e) {
     e.preventDefault();
     const pairing = el.pairInput.value.trim();
-    if (!pairing) return;
-    el.pairSubmit.disabled = true;
+    if (!pairing || el.pairInput.disabled) return;
+    el.pairError.hidden = true;
+    setPairBusy(true);
+    let server;
     try {
-      await invoke('pair', { pairing });
+      let timer;
+      const timeout = new Promise((_, reject) => {
+        timer = setTimeout(() => reject('The app did not answer. Try again.'), PAIR_TIMEOUT_MS);
+      });
+      try { server = await Promise.race([invoke('pair', { pairing }), timeout]); }
+      finally { clearTimeout(timer); }
     } catch (err) {
       el.pairError.textContent = String(err);
       el.pairError.hidden = false;
-      el.pairSubmit.disabled = false;
+      setPairBusy(false);
+      el.pairInput.select();
+      el.pairInput.focus();
       layout();
       return;
     }
-    el.pairSubmit.disabled = false;
-    el.pairInput.value = '';
+    // Say it worked, then get out of the way.
+    el.pairOk.textContent = 'Paired with ' + serverName(server) + '.';
+    el.pairOk.hidden = false;
+    el.pair.dataset.state = 'done';
+    layout();
+    await new Promise((r) => setTimeout(r, 1000));
     closePairing();
     newChat();
     await refreshBootstrap().catch(() => {});
