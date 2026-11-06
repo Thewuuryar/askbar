@@ -1,4 +1,4 @@
-"""Self-test for tests/mock_llm.py: python3 tests/mock_llm_test.py"""
+"""Self-test for tests/e2e/mock_llm.py: python3 tests/e2e/mock_llm_test.py"""
 import http.client
 import json
 import os

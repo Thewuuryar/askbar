@@ -494,7 +494,7 @@ async fn a_generation_with_the_mocks_usage_adds_to_the_overview_totals() {
     use std::io::{BufRead, BufReader};
     use std::process::{Command, Stdio};
     let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-    let script = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/mock_llm.py");
+    let script = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/e2e/mock_llm.py");
     let mut child = Command::new("python3").args(["-u", script, &port.to_string()]).stdout(Stdio::piped()).spawn().expect("python3 is needed");
     let mut out = BufReader::new(child.stdout.take().unwrap());
     let mut first = String::new();
@@ -562,7 +562,7 @@ async fn audit_stack() -> AuditStack {
     use std::io::{BufRead, BufReader};
     use std::process::{Command, Stdio};
     let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-    let script = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/mock_llm.py");
+    let script = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/e2e/mock_llm.py");
     let mut child = Command::new("python3").args(["-u", script, &port.to_string()]).stdout(Stdio::piped()).spawn().expect("python3 is needed");
     let mut out = BufReader::new(child.stdout.take().unwrap());
     let mut line = String::new();

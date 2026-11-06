@@ -15,7 +15,7 @@ Use the component names in the [glossary](../architecture.md#glossary) in paths,
 | Rust | the [Rust API Guidelines](https://rust-lang.github.io/api-guidelines/naming.html) | `snake_case` items, `CamelCase` types |
 | Rust files | `snake_case.rs` | `client_api.rs`, `server_api.rs` |
 | JavaScript (`ui/`, admin site) | `camelCase` functions, no build step | `showStatus`, `copyText` |
-| Tests | in the crate's `tests/`, named for the area | `askbar-server/tests/streaming.rs` |
+| Tests | in the crate's `tests/`, named for the area | `services/server/tests/streaming.rs` |
 
 ## Wire and storage
 
@@ -24,7 +24,7 @@ Use the component names in the [glossary](../architecture.md#glossary) in paths,
 | URL path | `/api/<name>/v<N>/<resource>` ([ADR 0022](../adr/0022-api-path-conventions.md)); plural nouns, kebab-case segments, snake_case variables; built from `askbar_proto::paths`, never a new literal | `/api/client/v1/me/pairing-keys` |
 | Action route | only for something that is not a plain create, update or delete; a literal verb as the last segment, never `/{name}/{action}` | `POST .../cancel` |
 | JSON fields | `snake_case` | `min_client`, `client_request_id` |
-| Error codes | `snake_case`, in `askbar-proto/src/problem.rs`, added; after 1.0 never renamed or removed | `budget_exceeded` |
+| Error codes | `snake_case`, in `crates/askbar-proto/src/problem.rs`, added; after 1.0 never renamed or removed | `budget_exceeded` |
 | Error type URN | `urn:askbar:problem:<code>` | |
 | Ids | ULID, made by the server, opaque to clients | |
 | Timestamps | UTC unix seconds, `created_at`, `updated_at` | |

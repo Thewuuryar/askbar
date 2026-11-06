@@ -6,8 +6,8 @@ cd "$(dirname "$0")/.." || exit 2
 python3 - <<'PY'
 import re, sys
 a = open("ui/tokens.css", encoding="utf-8").read()
-if a != open("askbar-admin/src/ui/tokens.css", encoding="utf-8").read():
-    print("askbar-admin/src/ui/tokens.css differs from ui/tokens.css; copy it"); sys.exit(1)
+if a != open("services/admin/src/ui/tokens.css", encoding="utf-8").read():
+    print("services/admin/src/ui/tokens.css differs from ui/tokens.css; copy it"); sys.exit(1)
 
 def block(start):
     i = a.index(start); j = a.index("}", i)

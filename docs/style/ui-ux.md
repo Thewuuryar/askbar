@@ -8,7 +8,7 @@ How the popup and the admin site look and behave. Items marked **(proposed)** ar
 
 ### Tokens and scales
 
-- **One token set for both UIs.** Colours, sizes, spacing, radii and weights are CSS variables defined once, in `ui/tokens.css`. The admin site uses a byte-identical copy (`askbar-admin/src/ui/tokens.css`). `scripts/check-ui-tokens.sh` fails if they differ or if a text colour is under 4.5:1 in either theme (one place per fact). Names: `--bg`, `--card`, `--fg`, `--muted`, `--line`, `--accent`, `--danger`, `--good`. The admin's `--bad` becomes `--danger`, and no rule uses a fallback colour. Neutrals are the popup's. The accent is the popup's blue, darkened slightly (`#3a5bd0`) so it passes 4.5:1 as text on both backgrounds; muted text and the success colour were darkened for the same reason.
+- **One token set for both UIs.** Colours, sizes, spacing, radii and weights are CSS variables defined once, in `ui/tokens.css`. The admin site uses a byte-identical copy (`services/admin/src/ui/tokens.css`). `scripts/check-ui-tokens.sh` fails if they differ or if a text colour is under 4.5:1 in either theme (one place per fact). Names: `--bg`, `--card`, `--fg`, `--muted`, `--line`, `--accent`, `--danger`, `--good`. The admin's `--bad` becomes `--danger`, and no rule uses a fallback colour. Neutrals are the popup's. The accent is the popup's blue, darkened slightly (`#3a5bd0`) so it passes 4.5:1 as text on both backgrounds; muted text and the success colour were darkened for the same reason.
 - **Text: four sizes.** `0.75rem` (hints, meta), `0.875rem` (secondary), `0.9375rem` (body), `1.3rem` (input bar, headings). Two weights: 400 and 600.
 - **Spacing: 4, 8, 12, 16, 24, 32 px.** No other value.
 - **Radii: two.** 8 px for controls and 16 px for the popup card. No pill shapes and no 4, 6 or 12.
@@ -57,7 +57,7 @@ None, or one transition of 150 ms or less (opacity or colour). Under `prefers-re
 - **The footer always shows two things:** the server connection status and the model picker. The five shortcut hints show only on first use and when the person presses `?`.
 - **Tests.** Behaviour changes carry a test in `tests/ui.test.js` (Playwright against `tests/mock-tauri.js`).
 
-## The admin site (`askbar-admin/src/ui/`)
+## The admin site (`services/admin/src/ui/`)
 
 - Text goes in through `textContent`, never `innerHTML`. The CSP forbids inline script and style; do not loosen it.
 - **One primary action per view.** Buttons are secondary by default (outline, no fill). The one primary action is marked explicitly and is the only one filled with `--accent`. A destructive action uses `--danger`, never the primary style.
@@ -67,7 +67,7 @@ None, or one transition of 150 ms or less (opacity or colour). Under `prefers-re
 - Show a secret once, at creation (API key, pairing string, token), and say so.
 - A change made while the server is down is refused with a sentence, not half applied. The admin does not queue it ([ADR 0028](../adr/0028-service-boundaries-and-config-delivery.md)); it pushes the saved state when the server returns.
 - Sealed content ([ADR 0011](../adr/0011-sealed-content-access.md)): the session shows its remaining time and a **Seal** button that ends it at once. Opening and timeout changes raise an alert; the screen says so before it asks for the passphrase.
-- Tests: `tests/admin.test.js`, in a real browser against the real server and admin.
+- Tests: `tests/e2e/admin.test.js`, in a real browser against the real server and admin.
 
 ## Other clients
 

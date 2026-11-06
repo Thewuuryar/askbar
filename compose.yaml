@@ -1,6 +1,6 @@
 # Askbar. Copy .env.example to .env and edit it first.
 #   docker compose up -d                    server, admin, the HTTPS front end (Caddy) and CLIProxyAPI
-#   docker compose --profile dev up -d      plus the mock LLM (tests/mock_llm.py)
+#   docker compose --profile dev up -d      plus the mock LLM (tests/e2e/mock_llm.py)
 #
 # Services and networks (the controller and its `control` network are described below):
 #   edge  Caddy and the server (the client API on 8080). Caddy is the only service with published ports.
@@ -73,7 +73,7 @@ services:
 
   # Starts, stops and restarts the server, Caddy and CLIProxyAPI for the admin. The only container with the
   # Docker socket, on a network of its own that only the admin shares. It can name those three services of this
-  # project and nothing else (askbar-controller/src/lib.rs); the admin itself is not one of them.
+  # project and nothing else (services/controller/src/lib.rs); the admin itself is not one of them.
   controller:
     build:
       context: .
@@ -104,13 +104,13 @@ services:
     networks:
       - edge
     volumes:
-      - ./tests/mock_llm.py:/app/mock_llm.py:ro
+      - ./tests/e2e/mock_llm.py:/app/mock_llm.py:ro
 
   # HTTPS front end. Configured by the admin through Caddy's admin socket; nothing secret in this file.
   caddy:
     build:
       context: .
-      dockerfile: Dockerfile.caddy
+      target: caddy
     image: askbar-caddy:latest
     container_name: askbar-caddy
     restart: unless-stopped
@@ -125,7 +125,7 @@ services:
     networks:
       edge: {}
       # First-run access: nothing but Caddy is on this network, and Caddy serves the admin there over plain
-      # HTTP (see SETUP_BIND in askbar-admin/src/caddy.rs). Only the host's loopback can reach it, so the
+      # HTTP (see SETUP_BIND in services/admin/src/caddy.rs). Only the host's loopback can reach it, so the
       # admin login can be opened with no host name, certificate or DNS yet.
       # The name matters: when a container has several networks Docker publishes its ports on the address
       # it has on the first one in name order (the default-route network), and Caddy listens for this page

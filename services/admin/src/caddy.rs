@@ -251,7 +251,7 @@ mod tests {
 
     #[test]
     fn compose_and_the_bootstrap_file_agree_with_the_first_run_site() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let compose = std::fs::read_to_string(root.join("compose.yaml")).unwrap();
         assert!(compose.contains(&format!("{SETUP_BIND}")), "compose.yaml gives Caddy {SETUP_BIND} on the admin-setup network");
         assert!(compose.contains(&format!("\"127.0.0.1:{SETUP_PORT}:{SETUP_PORT}\"")), "compose.yaml publishes the port on loopback only");
@@ -265,7 +265,7 @@ mod tests {
         assert!(by_name.iter().position(|x| *x == "admin-setup") < by_name.iter().position(|x| *x == "edge"), "{by_name:?}");
         let _ = pos("admin-setup");
         // The file Caddy starts with (before the admin has pushed anything) is the generator's output for HTTPS off.
-        let boot = std::fs::read_to_string(root.join("caddy/bootstrap.Caddyfile")).unwrap();
+        let boot = std::fs::read_to_string(root.join("deploy/caddy/bootstrap.Caddyfile")).unwrap();
         let body: String = boot.lines().filter(|l| !l.starts_with('#')).collect::<Vec<_>>().join("\n");
         assert_eq!(body.trim(), caddyfile(&net(false, false, false), &[]).trim());
     }

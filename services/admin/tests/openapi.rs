@@ -8,7 +8,7 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
 fn spec() -> Value {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../docs/openapi/admin.v1.yaml");
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/openapi/admin.v1.yaml");
     serde_yaml_ng::from_str(&std::fs::read_to_string(&path).unwrap()).expect("admin.v1.yaml is YAML")
 }
 

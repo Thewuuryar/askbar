@@ -1,5 +1,5 @@
 /* Askbar design tokens. The one source for the popup and the admin site.
-   askbar-admin/src/ui/tokens.css is a byte-identical copy (scripts/check-ui-tokens.sh).
+   services/admin/src/ui/tokens.css is a byte-identical copy (scripts/check-ui-tokens.sh).
    Rules: docs/style/ui-ux.md, "Look and feel". Each token has one light and one dark value. */
 
 :root {

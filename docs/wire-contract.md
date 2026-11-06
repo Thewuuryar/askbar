@@ -319,10 +319,10 @@ Every failure of every Askbar API is `application/problem+json` (RFC 9457):
 
 `error` is the stable code a program branches on; `title` is fixed per code; `detail` is a
 sentence for a person; extra members such as `period` ride alongside. Status codes and
-`Retry-After` are part of the contract. The codes (`askbar-proto/src/problem.rs`):
+`Retry-After` are part of the contract. The codes (`crates/askbar-proto/src/problem.rs`):
 
 The full list of codes, with their statuses, is the `error` enum of the `Problem` schema in each
-OpenAPI file below; the source is `askbar-proto/src/problem.rs`. A test keeps the files and the code the
+OpenAPI file below; the source is `crates/askbar-proto/src/problem.rs`. A test keeps the files and the code the
 same.
 
 A refusal never starts a

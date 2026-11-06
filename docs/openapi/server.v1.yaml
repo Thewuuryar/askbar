@@ -531,7 +531,7 @@ components:
     Snapshot:
       type: object
       description: >-
-        The configuration the admin pushes. See `askbar-proto/src/lib.rs` (`Snapshot`) for every field and
+        The configuration the admin pushes. See `crates/askbar-proto/src/lib.rs` (`Snapshot`) for every field and
         docs/wire-contract.md for what the server does with them. Unknown fields are ignored.
       required: [audit_retention_days]
       additionalProperties: true

@@ -1,5 +1,5 @@
-// Run: node tests/admin.test.js   (needs `cargo build -p askbar-server -p askbar-admin` and `playwright` with Chromium)
-// Starts the real server, the real admin service and tests/mock_llm.py, then drives the admin site in a browser.
+// Run: node tests/e2e/admin.test.js   (needs `cargo build -p askbar-server -p askbar-admin` and `playwright` with Chromium)
+// Starts the real server, the real admin service and tests/e2e/mock_llm.py, then drives the admin site in a browser.
 // The admin listens on a unix socket only, so the test puts a small TCP forwarder in front of it for the browser.
 const { chromium } = require('playwright');
 const assert = require('node:assert/strict');
@@ -10,7 +10,7 @@ const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 
-const ROOT = path.resolve(__dirname, '..');
+const ROOT = path.resolve(__dirname, '../..');
 const PASSWORD = 'correct horse battery';
 const SECRET_KEY = 'sk-do-not-show-me-123';
 
@@ -69,7 +69,7 @@ async function waitForPort(port) {
     }
     send(404, { error: 'not_found', detail: 'No such service.' });
   }).listen(controlPort, '127.0.0.1');
-  run('python3', ['-u', path.join(ROOT, 'tests/mock_llm.py'), String(mockPort)], {});
+  run('python3', ['-u', path.join(ROOT, 'tests/e2e/mock_llm.py'), String(mockPort)], {});
   run(path.join(ROOT, 'target/debug/askbar-admin'), [], {
     ASKBAR_ADMIN_SOCKET: sock, ASKBAR_ADMIN_DATA_DIR: dirs.adminData, ASKBAR_ADMIN_SECRETS_DIR: dirs.adminSecrets,
     ASKBAR_SERVER_TOKEN_DIR: dirs.serverToken, ASKBAR_SERVER_API_URL: 'http://127.0.0.1:' + serverApiPort,

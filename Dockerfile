@@ -1,20 +1,19 @@
 # syntax=docker/dockerfile:1
 #
-# Two images from one build:
-#   docker build --target server -t askbar-server .
-#   docker build --target admin  -t askbar-admin  .
+# One target per service:
+#   docker build --target server     -t askbar-server .
+#   docker build --target admin      -t askbar-admin  .
 #   docker build --target controller -t askbar-controller .
+#   docker build --target caddy      -t askbar-caddy  .
 # A plain `docker build .` builds the last stage, the server.
 
 FROM rust:1-bookworm AS build
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
-COPY askbar-proto askbar-proto
-COPY askbar-server askbar-server
-COPY askbar-admin askbar-admin
-COPY askbar-controller askbar-controller
-# The desktop client (src-tauri) is not part of either image.
-RUN sed -i 's/^members = .*/members = ["askbar-proto", "askbar-server", "askbar-admin", "askbar-controller"]/' Cargo.toml \
+COPY crates crates
+COPY services services
+# The desktop client (src-tauri) is not part of any image.
+RUN sed -i 's/^members = .*/members = ["crates\/askbar-proto", "services\/server", "services\/admin", "services\/controller"]/' Cargo.toml \
  && cargo build --release -p askbar-server -p askbar-admin -p askbar-controller
 
 # ------------------------------------------------------------------ admin
@@ -43,7 +42,7 @@ ENTRYPOINT ["askbar-admin"]
 
 # ------------------------------------------------------------- controller
 # The only image that is given the Docker socket. It starts, stops and restarts the server, Caddy and
-# CLIProxyAPI for the admin and can do nothing else (see askbar-controller/src/lib.rs). It runs as root
+# CLIProxyAPI for the admin and can do nothing else (see services/controller/src/lib.rs). It runs as root
 # only so that it can open the socket, whatever group owns it; compose drops every capability.
 FROM debian:bookworm-slim AS controller
 # The token-hash volume is owned by the admin's uid (10001), whichever container Docker creates it for first.
@@ -55,6 +54,18 @@ ENV ASKBAR_CONTROL_TOKEN_HASH_FILE=/control-token/token.sha256 \
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD ["askbar-controller", "healthcheck"]
 ENTRYPOINT ["askbar-controller"]
+
+# ------------------------------------------------------------------ caddy
+# Caddy with the Cloudflare DNS plugin, used to get certificates without opening port 80/443.
+FROM caddy:2-builder AS caddy-build
+RUN xcaddy build --with github.com/caddy-dns/cloudflare
+
+FROM caddy:2 AS caddy
+COPY --from=caddy-build /usr/bin/caddy /usr/bin/caddy
+COPY deploy/caddy/bootstrap.Caddyfile /etc/caddy/bootstrap.Caddyfile
+# The admin service pushes the real configuration through the admin socket; `--resume` brings back
+# the last one after a restart. The bootstrap file moves Caddy's admin API onto a unix socket and serves the first-run page for the admin.
+CMD ["caddy", "run", "--config", "/etc/caddy/bootstrap.Caddyfile", "--adapter", "caddyfile", "--resume"]
 
 # ----------------------------------------------------------------- server
 # The server: the client API on 8080 and the server API on its own address. Runs as uid 10002,

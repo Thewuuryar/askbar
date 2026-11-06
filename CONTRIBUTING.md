@@ -15,15 +15,17 @@ to use one (a database migration, an old path in a test) carries `names-ok` and 
 
 | Directory | What |
 | --- | --- |
-| `askbar-proto/` | Types shared by everything: wire types, the error registry (`problem.rs`), URL prefixes (`paths.rs`). |
-| `askbar-server/` | The server: client API (`client_api.rs`), server API (`server_api.rs`), chat and generations, audit store. |
-| `askbar-admin/` | The admin service: the admin API (`admin_api.rs`), the site (`src/ui/`), Caddy configuration, API keys. Unix only. |
-| `askbar-controller/` | The controller: Docker-socket access narrowed to start, stop and restart three services. Its API is `docs/openapi/control.v1.yaml`. |
+| `crates/askbar-proto/` | Types shared by everything: wire types, the error registry (`problem.rs`), URL prefixes (`paths.rs`). |
+| `services/server/` | The server: client API (`client_api.rs`), server API (`server_api.rs`), chat and generations, audit store. |
+| `services/admin/` | The admin service: the admin API (`admin_api.rs`), the site (`src/ui/`), Caddy configuration, API keys. Unix only. |
+| `services/controller/` | The controller: Docker-socket access narrowed to start, stop and restart three services. Its API is `docs/openapi/control.v1.yaml`. |
 | `src-tauri/`, `ui/` | The desktop app (Cargo package `askbar-client`, program `askbar`) and its popup. No build step for `ui/`. |
+| `deploy/caddy/`, `deploy/cpa/` | Caddy's bootstrap config; notes on CLIProxyAPI. |
 | `docs/` | `architecture.md`, `adr/` (decisions), `style/`, `wire-contract.md` (prose), `openapi/` (one file per API), `refactor-log.md`. |
-| `scripts/`, `tests/` | Smoke and isolation scripts, the checks, browser tests, a mock LLM. |
+| `scripts/`, `tests/` | Smoke and isolation scripts, the checks, popup tests. |
+| `tests/e2e/` | The admin-site browser test, screenshots, a mock LLM. |
 
-This table lists what is on `main`. The v1 target adds the `auditor`, `model-gateway`, `alerter` and `bootstrap` services and drops the controller ([ADR 0003](docs/adr/0003-v1-service-layout.md), [ADR 0005](docs/adr/0005-no-controller-and-self-restart.md)). A new service needs a name and an ADR first ([ADR 0021](docs/adr/0021-names-and-new-components.md)).
+This table lists what is on `main`; the target layout is in [ADR 0033](docs/adr/0033-repository-layout.md). The v1 target adds the `auditor`, `model-gateway`, `alerter` and `bootstrap` services and drops the controller ([ADR 0003](docs/adr/0003-v1-service-layout.md), [ADR 0005](docs/adr/0005-no-controller-and-self-restart.md)). A new service needs a name and an ADR first ([ADR 0021](docs/adr/0021-names-and-new-components.md)).
 
 ## Build, run, test
 
@@ -35,7 +37,7 @@ npm install && npx playwright install chromium
 npm test                           # names and link checks, cargo tests, markdown, UI and admin browser tests, mock LLM
 scripts/smoke.sh                   # server + admin + mock LLM, end to end, no Docker
 docker compose up -d --build && scripts/check-isolation.sh   # needs Docker; a throwaway stack
-python3 tests/mock_llm.py 8765     # a fake OpenAI-compatible server to try things without a key
+python3 tests/e2e/mock_llm.py 8765     # a fake OpenAI-compatible server to try things without a key
 npm run dev                        # the desktop app
 ```
 
@@ -44,18 +46,18 @@ when you have changed them (the admin site's files are compiled in).
 
 ## Adding an endpoint, end to end
 
-1. **Route.** Register it in the right table: `client_routes` in `askbar-server/src/lib.rs`, `routes()` in
-   `askbar-server/src/server_api.rs`, or `routes()` in `askbar-admin/src/lib.rs`. Build the path from
+1. **Route.** Register it in the right table: `client_routes` in `services/server/src/lib.rs`, `routes()` in
+   `services/server/src/server_api.rs`, or `routes()` in `services/admin/src/lib.rs`. Build the path from
    `askbar_proto::paths` (never a new literal); use plural nouns, and a sub-resource action
    (`POST .../cancel`) only for something that is not a plain create, update or delete. The rules are in
    [ADR 0022](docs/adr/0022-api-path-conventions.md).
 2. **Who may call it.** Client API: behind the token and the version gate. Admin API: decide whether an API key may
    call it (the `signed_in_or_key` group) or only a person's session (`signed_in`: keys, the password, the session).
 3. **Errors.** Return `ApiError` (`askbar_proto::http`), never a bare `StatusCode`. Use an existing `ErrorCode` if one
-   fits; if not, add it to `askbar-proto/src/problem.rs` (codes are only ever added) with its status and title.
+   fits; if not, add it to `crates/askbar-proto/src/problem.rs` (codes are only ever added) with its status and title.
    Give a sentence for a person in `detail`.
 4. **The OpenAPI entry.** Add the operation to the file for that API in `docs/openapi/`, with its responses. The test
-   `tests/openapi.rs` fails if a route and the file disagree, in either direction, or if the `Problem` codes drift.
+   each crate's `tests/openapi.rs` fails if a route and the file disagree, in either direction, or if the `Problem` codes drift.
 5. **Tests**, in the same commit as the code: the happy path, each refusal (check the `error` code, not the words),
    and the auth rule.
 6. **Docs**, in the same commit: `docs/wire-contract.md` if the meaning needs words; `README.md` if a person would
@@ -66,10 +68,10 @@ beside it for a release. Before 1.0, paths can change to fit [ADR 0022](docs/adr
 
 ## Database changes
 
-Schema changes append to `MIGRATIONS` in `askbar-server/src/db.rs` or `askbar-admin/src/db.rs`; never edit an
+Schema changes append to `MIGRATIONS` in `services/server/src/db.rs` or `services/admin/src/db.rs`; never edit an
 earlier entry (its text is what made existing databases). Add a test that builds a database at the previous version,
 puts rows in it and opens it with the new code; the existing ones show how. The audit store has its own
-migrations in `askbar-server/src/audit.rs`.
+migrations in `services/server/src/audit.rs`.
 
 Every space file runs the same migrations ([ADR 0009](docs/adr/0009-spaces-and-storage.md)). A release with a migration
 needs a backup first and is installed by hand ([ADR 0017](docs/adr/0017-dependencies-and-patches.md),

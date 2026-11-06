@@ -1,4 +1,4 @@
-// Run: node tests/audit-shots.js [outdir]   (needs the server and admin built, and playwright with Chromium)
+// Run: node tests/e2e/audit-shots.js [outdir]   (needs the server and admin built, and playwright with Chromium)
 // Not part of `npm test`. Starts the real server, admin and mock LLM, makes some traffic (a plain
 // reply, one that needed a retry, one that fell back, a failure, one with a long provider name),
 // then opens the Audit tab in Chromium at desktop and phone width, screenshots every view and
@@ -11,7 +11,7 @@ const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 
-const ROOT = path.resolve(__dirname, '..');
+const ROOT = path.resolve(__dirname, '../..');
 const OUT = process.argv[2] || path.join(os.tmpdir(), 'audit-shots');
 const PASSWORD = 'correct horse battery';
 const AUDIT_PASS = 'correct horse battery staple 42';
@@ -39,7 +39,7 @@ async function waitForPort(port) {
   const cleanup = () => { for (const c of children) c.kill(); if (forwarder) forwarder.close(); fs.rmSync(data, { recursive: true, force: true }); };
   process.on('exit', cleanup);
 
-  run('python3', ['-u', path.join(ROOT, 'tests/mock_llm.py'), String(mockPort)], {});
+  run('python3', ['-u', path.join(ROOT, 'tests/e2e/mock_llm.py'), String(mockPort)], {});
   run(path.join(ROOT, 'target/debug/askbar-admin'), [], { ASKBAR_ADMIN_SOCKET: sock, ASKBAR_ADMIN_DATA_DIR: d.adminData, ASKBAR_ADMIN_SECRETS_DIR: d.adminSecrets, ASKBAR_SERVER_TOKEN_DIR: d.serverToken, ASKBAR_SERVER_API_URL: 'http://127.0.0.1:' + serverApiPort, ASKBAR_PUBLIC_URL: 'http://localhost:' + api });
   for (let i = 0; i < 100 && !fs.existsSync(sock); i++) await new Promise((r) => setTimeout(r, 50));
   forwarder = net.createServer((c) => { const u = net.connect(sock); c.pipe(u); u.pipe(c); c.on('error', () => u.destroy()); u.on('error', () => c.destroy()); }).listen(adminPort, '127.0.0.1');

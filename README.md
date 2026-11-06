@@ -176,7 +176,7 @@ Lets a Claude or ChatGPT subscription act as an OpenAI-compatible provider. It s
 2. Open the address and approve. The browser then lands on an address starting `http://localhost` that will not load if the admin is on another machine. Copy that whole address from the address bar and paste it into the box. **Finish**.
 3. A provider named **CPA** appears on the Providers tab, already holding the key the admin made for CLIProxyAPI. Choose its model from the dropdown. Its name, address and key are fixed.
 
-The admin makes CLIProxyAPI's config and API key itself (nobody copies a key anywhere). CLIProxyAPI joins the `edge` network (the server reaches it there) and `cpa-admin` (the admin runs logins there); its API is never published. See [cpa/README.md](cpa/README.md).
+The admin makes CLIProxyAPI's config and API key itself (nobody copies a key anywhere). CLIProxyAPI joins the `edge` network (the server reaches it there) and `cpa-admin` (the admin runs logins there); its API is never published. See [deploy/cpa/README.md](deploy/cpa/README.md).
 
 ### Configuration reference
 
@@ -200,7 +200,7 @@ The admin makes CLIProxyAPI's config and API key itself (nobody copies a key any
 
 **Set in the admin site** instead of in files: admin password, hostname, Cloudflare token, allowlist, the Let's Encrypt staging switch, the system prompt, display defaults and per-user defaults.
 
-**Compose profiles:** the services (server, admin, Caddy, controller, CLIProxyAPI) are always on. `dev` adds a mock LLM (`tests/mock_llm.py`).
+**Compose profiles:** the services (server, admin, Caddy, controller, CLIProxyAPI) are always on. `dev` adds a mock LLM (`tests/e2e/mock_llm.py`).
 
 ### Starting and stopping services
 
@@ -225,19 +225,23 @@ If you restore a raw copy of `data/` that still holds encrypted provider keys on
 ## Layout
 
 ```
-askbar-proto/    request/response and snapshot types shared by the server, admin and client
-askbar-server/   the server: client API, server API, database, chat/LLM streaming, secrets
-askbar-admin/    the admin service: admin site (ui/), admin.db, snapshot push, Caddy configuration (unix only)
-src-tauri/       the desktop client (Cargo package askbar-client, program askbar): window, hotkey, tray, pairing
-ui/              the popup: index.html, style.css, main.js, markdown.js (no build step)
-askbar-controller/ the controller: starts, stops and restarts the server, Caddy and CLIProxyAPI for the admin (holds the Docker socket)
-caddy/, cpa/     Caddy bootstrap config; notes on CLIProxyAPI
-compose.yaml     server, admin, controller, caddy, CLIProxyAPI, plus the dev profile
-Dockerfile       three targets: `admin`, `controller` and `server`;  Dockerfile.caddy: Caddy with the Cloudflare DNS module
-scripts/         smoke.sh (end-to-end), check-isolation.sh (container isolation checks), check-names.sh and check-docs.sh
-docs/            architecture.md, wire-contract.md, openapi/ (client, server, admin), refactor-log.md
-tests/           markdown, UI and admin-site browser tests, a mock LLM server, icon generator
+crates/askbar-proto/   request/response and snapshot types shared by the server, admin and client
+services/server/       the server: client API, server API, database, chat/LLM streaming, secrets
+services/admin/        the admin service: admin site (src/ui/), admin.db, snapshot push, Caddy configuration (unix only)
+services/controller/   the controller: starts, stops and restarts the server, Caddy and CLIProxyAPI for the admin (holds the Docker socket)
+src-tauri/             the desktop client (Cargo package askbar-client, program askbar): window, hotkey, tray, pairing
+ui/                    the popup: index.html, style.css, main.js, markdown.js (no build step)
+deploy/caddy/          Caddy's bootstrap config
+deploy/cpa/            notes on CLIProxyAPI
+compose.yaml           server, admin, controller, caddy, CLIProxyAPI, plus the dev profile
+Dockerfile             one target per service: `server`, `admin`, `controller` and `caddy` (Caddy with the Cloudflare DNS module)
+scripts/               smoke.sh (end-to-end), check-isolation.sh (container isolation checks), check-names.sh and check-docs.sh
+docs/                  architecture.md, wire-contract.md, adr/, style/, openapi/ (client, server, admin), refactor-log.md
+tests/                 markdown and UI tests for the popup, icon generator
+tests/e2e/             the admin-site browser test and the mock LLM server
 ```
+
+The target layout is in [ADR 0033](docs/adr/0033-repository-layout.md).
 
 ## Tests
 
@@ -246,10 +250,10 @@ npm test                         # everything below except smoke and isolation, 
 cargo test --workspace           # proto, server, admin and client (needs python3 for the mock LLM)
 node tests/markdown.test.js
 node tests/ui.test.js            # desktop UI against a mocked backend
-cargo build --workspace && node tests/admin.test.js   # the admin site in a real browser against the real server and admin
+cargo build --workspace && node tests/e2e/admin.test.js   # the admin site in a real browser against the real server and admin
 scripts/smoke.sh                 # server + admin + mock LLM: setup, pairing, chat, search
 docker compose up -d && scripts/check-isolation.sh    # against a throwaway stack
-python3 tests/mock_llm.py 8765   # fake OpenAI-compatible server to try the app without a key
+python3 tests/e2e/mock_llm.py 8765   # fake OpenAI-compatible server to try the app without a key
 ```
 
 The UI and admin tests need `npm install && npx playwright install chromium`.

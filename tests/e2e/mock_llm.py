@@ -1,6 +1,6 @@
 """Tiny OpenAI-compatible streaming server for trying Askbar without an API key.
 
-    python3 tests/mock_llm.py 8765
+    python3 tests/e2e/mock_llm.py 8765
 
 Then point a provider at http://127.0.0.1:8765/v1 (any key). Say "slow" in a
 message to get a long, slow reply (handy for testing Stop), or "fail" to get

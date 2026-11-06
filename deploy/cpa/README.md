@@ -1,6 +1,6 @@
 # CLIProxyAPI
 
-This page describes the code on `main`. The accepted v1 target differs: see [docs/architecture.md](../docs/architecture.md] and the [ADRs](../docs/adr/README.md). Where they disagree, build to the ADR.
+This page describes the code on `main`. The accepted v1 target differs: see [docs/architecture.md](../../docs/architecture.md] and the [ADRs](../../docs/adr/README.md). Where they disagree, build to the ADR.
 
 CLIProxyAPI turns a Claude or ChatGPT/Codex **subscription login** into an OpenAI-compatible endpoint.
 Askbar's server talks to it over the compose network; its API port is never published to the host.

@@ -8,8 +8,8 @@
     "dev": "tauri dev",
     "build": "tauri build",
     "icons": "python3 tests/make_icons.py",
-    "test": "scripts/check-names.sh && scripts/check-docs.sh && scripts/check-ui-tokens.sh && cargo test --workspace && node tests/markdown.test.js && node tests/ui.test.js && node tests/admin.test.js && python3 tests/mock_llm_test.py",
-    "mock": "python3 tests/mock_llm.py 8765",
+    "test": "scripts/check-names.sh && scripts/check-docs.sh && scripts/check-ui-tokens.sh && cargo test --workspace && node tests/markdown.test.js && node tests/ui.test.js && node tests/e2e/admin.test.js && python3 tests/e2e/mock_llm_test.py",
+    "mock": "python3 tests/e2e/mock_llm.py 8765",
     "docs": "scripts/check-docs.sh"
   },
   "devDependencies": {
