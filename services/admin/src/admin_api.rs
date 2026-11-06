@@ -468,16 +468,20 @@ fn random_code() -> String {
 /// the request's `Host` header, which Caddy passes through), over HTTPS with the install's own
 /// certificate.
 pub(crate) fn public_url(conn: &Connection, host: Option<&str>) -> String {
-    let net: Option<(i64, String)> = conn.query_row("SELECT tls_enabled, hostname FROM network_settings WHERE id = 1", [], |r| Ok((r.get(0)?, r.get(1)?))).ok();
-    if let Some((1, name)) = &net {
-        if !name.is_empty() {
-            return format!("https://{name}");
-        }
+    if let Some(name) = real_host_name(conn) {
+        return format!("https://{name}");
     }
     if let Some(u) = std::env::var("ASKBAR_PUBLIC_URL").ok().filter(|u| !u.trim().is_empty()) {
         return u.trim().trim_end_matches('/').to_string();
     }
     format!("https://{}", host.filter(|h| valid_host(h)).unwrap_or("localhost"))
+}
+
+/// The host name, when HTTPS with a real certificate is on. `None` means Caddy serves the install's
+/// own certificate.
+fn real_host_name(conn: &Connection) -> Option<String> {
+    let (tls, name): (i64, String) = conn.query_row("SELECT tls_enabled, hostname FROM network_settings WHERE id = 1", [], |r| Ok((r.get(0)?, r.get(1)?))).ok()?;
+    (tls == 1 && !name.is_empty()).then_some(name)
 }
 
 /// A `Host` header worth putting in a pairing string: a name or address, an optional port, nothing else.
@@ -513,10 +517,20 @@ pub async fn create_pairing(State(state): St, headers: axum::http::HeaderMap, Ap
             params![hash, user, name, now + PAIR_CODE_TTL_SECS, now],
         )
         .map_err(internal)?;
-        Ok(public_url(c, host.as_deref()))
+        Ok((public_url(c, host.as_deref()), real_host_name(c).is_none()))
     })
     .await?;
-    Ok(Json(PairingOut { pairing: askbar_proto::encode_pairing(&url, &code), expires_in: PAIR_CODE_TTL_SECS }))
+    let (url, own_cert) = url;
+    // While Caddy serves the install's own certificate, the string names it, and the app trusts exactly
+    // that certificate for this server (ADR 0034). Without Caddy (a server on the same machine, over
+    // http) there is nothing to pin.
+    let secrets_dir = state.caddy.lock().unwrap_or_else(|e| e.into_inner()).secrets_dir.clone();
+    let cert_sha256 = match (own_cert && url.starts_with("https://"), secrets_dir) {
+        (true, Some(dir)) => Some(crate::self_cert::ensure(&dir).map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Could not read this install's certificate. Nothing was paired."))?),
+        _ => None,
+    };
+    let pairing = askbar_proto::Pairing { url, code, cert_sha256 }.encode();
+    Ok(Json(PairingOut { pairing, expires_in: PAIR_CODE_TTL_SECS }))
 }
 
 // -------------------------------------------------------------- audit key setup

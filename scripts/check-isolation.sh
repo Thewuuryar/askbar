@@ -367,9 +367,18 @@ for name in (None, 'some-other-name.example'):
         with ctx.wrap_socket(raw, server_hostname=name) as t:
             got = hashlib.sha256(t.getpeercert(binary_form=True)).hexdigest()
     print(name, 'same' if got == want else 'DIFFERENT')
+print('file', want)
 " 2>&1)
 printf '%s\n' "$out" | grep -q '^None same' && pass "a client connecting by address gets the install's certificate" || fail "by address: $out"
 printf '%s\n' "$out" | grep -q '^some-other-name.example same' && pass "a client using any other name gets the install's certificate" || fail "by another name: $out"
+# A pairing string made now names that certificate, so the app trusts exactly it.
+file_fp=$(printf '%s\n' "$out" | sed -n 's/^file //p')
+pin=$(admin_script "$(admin_login)
+import base64
+s, body = call('POST', '/admin/api/v1/pairings', {'name': 'isolation check'})
+p = json.loads(body)['pairing'][len('askbar-pair:'):]
+print(json.loads(base64.urlsafe_b64decode(p + '=' * (-len(p) % 4))).get('cert_sha256'))" 2>&1 | tail -1)
+[ -n "$file_fp" ] && [ "$pin" = "$file_fp" ] && pass "a new pairing string pins the install's certificate" || fail "pairing pin '$pin', certificate '$file_fp'"
 
 echo
 if [ "$FAILS" -eq 0 ]; then echo "All isolation checks passed."; else echo "$FAILS isolation check(s) FAILED."; exit 1; fi

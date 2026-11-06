@@ -37,3 +37,4 @@ This set records the decisions from the original Askbar architecture plan (kept 
 | [0031](0031-audit-span-start-and-backlog.md) | Audit span start and backlog | Accepted | Required by v1 decisions |
 | [0032](0032-container-hardening.md) | Container hardening | Accepted | Required by v1 decisions |
 | [0033](0033-repository-layout.md) | Repository layout | Proposed | Owner request with the v1 plan |
+| [0034](0034-self-signed-https-and-certificate-pinning.md) | Self-signed HTTPS and certificate pinning | Proposed | Required by 0007; owner choice in the v1 plan |

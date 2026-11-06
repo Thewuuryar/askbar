@@ -101,15 +101,21 @@ async fn http_mode_saves_without_a_token_and_pairing_follows_the_setting() {
         let (http, cookie) = (t.http.clone(), t.cookie.clone());
         async move {
             let v: Value = http.post(url).header("x-askbar-admin", "1").header("cookie", cookie).header("host", host).json(&json!({})).send().await.unwrap().json().await.unwrap();
-            askbar_proto::decode_pairing(v["pairing"].as_str().unwrap()).unwrap().0
+            askbar_proto::Pairing::decode(v["pairing"].as_str().unwrap()).unwrap()
         }
     };
-    // No host name yet: the address the admin site was opened with, over HTTPS (the install's own certificate).
-    assert_eq!(pairing(&t, "192.168.1.20").await, "https://192.168.1.20");
-    assert_eq!(pairing(&t, "localhost").await, "https://localhost");
-    assert_eq!(pairing(&t, "bad host/<x>").await, "https://localhost", "a Host that is not a plain name or address is not used");
+    // No host name yet: the address the admin site was opened with, over HTTPS with the install's own
+    // certificate, which the string names so the app trusts exactly that one.
+    let own = pairing(&t, "192.168.1.20").await;
+    assert_eq!(own.url, "https://192.168.1.20");
+    let made = askbar_admin::self_cert::fingerprint(&t.secrets_dir).expect("the certificate exists");
+    assert_eq!(own.cert_sha256.as_deref(), Some(made.as_str()));
+    assert_eq!(pairing(&t, "localhost").await.url, "https://localhost");
+    assert_eq!(pairing(&t, "bad host/<x>").await.url, "https://localhost", "a Host that is not a plain name or address is not used");
+    // A host name with a real certificate: no pin, the app checks the certificate the usual way.
     assert_eq!(t.save(full()).await.0, 200);
-    assert_eq!(pairing(&t, "192.168.1.20").await, "https://askbar.orraitu.com");
+    let real = pairing(&t, "192.168.1.20").await;
+    assert_eq!((real.url.as_str(), real.cert_sha256), ("https://askbar.orraitu.com", None));
 }
 
 #[tokio::test]

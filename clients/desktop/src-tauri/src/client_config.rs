@@ -77,6 +77,10 @@ pub struct ClientConfig {
     pub hotkey: String,
     pub ui: UiOverrides,
     pub allow_insecure: bool,
+    /// SHA-256 of the server's own certificate, from the pairing string, while the server has no
+    /// publicly trusted one. The app then trusts exactly that certificate (ADR 0034). Not a secret.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cert_sha256: Option<String>,
 }
 
 impl Default for ClientConfig {
@@ -86,6 +90,7 @@ impl Default for ClientConfig {
             hotkey: "Ctrl+Shift+Space".into(),
             ui: UiOverrides::default(),
             allow_insecure: false,
+            cert_sha256: None,
         }
     }
 }

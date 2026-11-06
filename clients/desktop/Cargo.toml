@@ -10,8 +10,6 @@ codegen-units = 1
 opt-level = "s"
 strip = true
 
-# Password hashing in the server the tests start is deliberately slow; keep it usable in debug builds.
-[profile.dev.package.argon2]
-opt-level = 3
+# Hashing in the server the tests start is deliberately slow; keep it usable in debug builds.
 [profile.dev.package.blake2]
 opt-level = 3

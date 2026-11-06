@@ -91,7 +91,7 @@ Order change: 1.6 and 1.7 were done first, right after phase 0. Before them a Do
 - Caddy serves `/admin`, `/api/admin`, `/api/client` on 443 with a certificate the admin makes for the install (Caddy's internal CA would need on-demand TLS, since Caddy doesn't know the host's address), handed out for any name, 80 redirects; private-address `remote_ip` allowlist from boot (real source, not forwarded headers). Remove the `admin-setup` network and the `127.0.0.1:8081` port.
 - Isolation script: allowlist rules, no 8081, published ports 80/443 only.
 
-**1.7 `feat(client): pin the self-signed certificate from the pairing key`** (M) — ADR 0034 (new, proposed)
+**1.7 `feat(client): pin the self-signed certificate from the pairing key`** (M) — [ADR 0034](adr/0034-self-signed-https-and-certificate-pinning.md) (proposed)
 - Pairing key carries the certificate's SHA-256 (the admin made it, so it reads it from its own file). Client pins it with a custom rustls verifier while there is no host name; normal validation once a real cert is issued; `allow_insecure` stays dev-only. The pin is an optional field, so older pairing keys still decode.
 - *1.6 and 1.7 must land together for the Mac check to pass over HTTPS* (the two-PR window).
 

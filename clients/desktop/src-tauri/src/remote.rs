@@ -155,7 +155,7 @@ impl Remote {
     pub fn new(cfg: Result<ClientConfig, String>, path: PathBuf, tokens: Box<dyn TokenStore>) -> Remote {
         let inner = cfg.and_then(|cfg| {
             let base = cfg.server()?;
-            let http = reqwest::Client::builder()
+            let http = crate::pinned_tls::client_builder(cfg.cert_sha256.as_deref())
                 .connect_timeout(Duration::from_secs(5))
                 .user_agent(format!("askbar/{VERSION}"))
                 .build()
@@ -426,13 +426,13 @@ const SETUP_PENDING: &str = "The server's setup is not finished. Open its admin 
 /// token in `tokens`, and record the server in `client.yaml` (creating it, or
 /// updating `server_url` and leaving the rest alone).
 pub async fn pair(pairing: &str, client_yaml: &Path, tokens: &dyn TokenStore) -> Result<(), String> {
-    let (url, code) = askbar_proto::decode_pairing(pairing)
-        .ok_or("That is not a pairing string. It should start with \"askbar-pair:\".")?;
+    let askbar_proto::Pairing { url, code, cert_sha256 } =
+        askbar_proto::Pairing::decode(pairing).ok_or("That is not a pairing string. It should start with \"askbar-pair:\".")?;
     let mut cfg = if client_yaml.exists() { ClientConfig::load(client_yaml)? } else { ClientConfig::default() };
     let mut base = check_server_url(&url, cfg.allow_insecure)?;
     base.set_path(&format!("{}{}", base.path().trim_end_matches('/'), askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, "/pairings")));
 
-    let resp = reqwest::Client::builder()
+    let resp = crate::pinned_tls::client_builder(cert_sha256.as_deref())
         .connect_timeout(Duration::from_secs(5))
         .build()
         .map_err(|e| e.to_string())?
@@ -442,7 +442,13 @@ pub async fn pair(pairing: &str, client_yaml: &Path, tokens: &dyn TokenStore) ->
         .timeout(REQUEST_TIMEOUT)
         .send()
         .await
-        .map_err(|_| format!("Could not reach the server at {url}. Check the address and your network."))?;
+        .map_err(|e| {
+            if crate::pinned_tls::is_pin_mismatch(&e) {
+                format!("The server at {url} shows a different certificate than the one in this pairing string. Create a new pairing string in its admin site.")
+            } else {
+                format!("Could not reach the server at {url}. Check the address and your network.")
+            }
+        })?;
     match resp.status() {
         s if s.is_success() => {}
         StatusCode::UNAUTHORIZED => return Err("The pairing code is wrong, expired (they last 10 minutes) or already used. Create a new one.".into()),
@@ -456,6 +462,7 @@ pub async fn pair(pairing: &str, client_yaml: &Path, tokens: &dyn TokenStore) ->
         .token;
     tokens.set(&token)?;
     cfg.server_url = url.trim_end_matches('/').to_string();
+    cfg.cert_sha256 = cert_sha256;
     cfg.save(client_yaml)
 }
 
@@ -512,6 +519,12 @@ impl Remote {
         // Reachable at all? The health endpoint needs neither token nor version.
         match i.http.get(i.url(&askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, "/health"))).timeout(CHECK_TIMEOUT).send().await {
             Ok(r) if r.status().is_success() => {}
+            Err(e) if crate::pinned_tls::is_pin_mismatch(&e) => {
+                return Some(ClientStatus::new(
+                    "rejected",
+                    "The server's certificate changed, so this app no longer trusts it. Pair again with a new pairing string from the admin site.",
+                ))
+            }
             _ => return Some(offline()),
         }
         if i.tokens.get().is_none() {
@@ -1633,6 +1646,39 @@ mod tests {
         assert!(err(pair(&too_old, &path, &tokens).await).contains("too old"));
 
         assert!(tokens.get().is_none() && !path.exists());
+    }
+
+    /// A pairing string names the server's own certificate: the app reaches that server over HTTPS by
+    /// address, and refuses one that shows another certificate.
+    #[tokio::test]
+    async fn pairing_trusts_exactly_the_certificate_in_the_pairing_string() {
+        let dir = std::env::temp_dir().join(format!("askbar-pair-pin-{}", std::process::id()));
+        let path = dir.join("client.yaml");
+        let tokens = MemoryTokens::default();
+        let (url, fp) = crate::pinned_tls::tests::self_signed_server().await;
+        let with = |pin: Option<String>| askbar_proto::Pairing { url: url.clone(), code: "c".into(), cert_sha256: pin }.encode();
+
+        let other = pair(&with(Some("0".repeat(64))), &path, &tokens).await.unwrap_err();
+        assert!(other.contains("different certificate"), "{other}");
+        let unpinned = pair(&with(None), &path, &tokens).await.unwrap_err();
+        assert!(unpinned.contains("Could not reach"), "{unpinned}");
+        // The right pin gets through TLS; this stub server then answers something that is not a token.
+        let pinned = pair(&with(Some(fp)), &path, &tokens).await.unwrap_err();
+        assert!(pinned.contains("unexpected reply"), "{pinned}");
+        assert!(tokens.get().is_none() && !path.exists());
+    }
+
+    #[test]
+    fn the_pin_is_kept_in_client_yaml_and_left_out_when_there_is_none() {
+        let dir = std::env::temp_dir().join(format!("askbar-pin-yaml-{}", std::process::id()));
+        let path = dir.join("client.yaml");
+        let mut cfg = ClientConfig { server_url: "https://192.168.1.20".into(), ..Default::default() };
+        cfg.save(&path).unwrap();
+        assert!(!std::fs::read_to_string(&path).unwrap().contains("cert_sha256"));
+        cfg.cert_sha256 = Some("ab".repeat(32));
+        cfg.save(&path).unwrap();
+        assert_eq!(ClientConfig::load(&path).unwrap().cert_sha256, Some("ab".repeat(32)));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Pair with a code the admin listed in its snapshot, have the admin revoke the client

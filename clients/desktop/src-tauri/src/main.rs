@@ -3,6 +3,7 @@
 
 mod client_config;
 mod remote;
+mod pinned_tls;
 mod tokens;
 mod outbox;
 mod types;

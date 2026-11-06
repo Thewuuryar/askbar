@@ -314,25 +314,50 @@ pub fn parse_version(v: &str) -> Option<(u64, u64, u64)> {
 
 pub const PAIR_PREFIX: &str = "askbar-pair:";
 
+/// What a pairing string carries: `askbar-pair:<base64url(json)>`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-struct PairPayload {
-    url: String,
-    code: String,
+pub struct Pairing {
+    /// The server's address, `https://...` (or `http://` for a server on the same machine).
+    pub url: String,
+    /// The one-time pairing code.
+    pub code: String,
+    /// SHA-256 (lowercase hex) of the server's certificate, while the server uses its own certificate
+    /// instead of a publicly trusted one. A client trusts exactly that certificate for this server.
+    /// Absent when the server has a real certificate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cert_sha256: Option<String>,
 }
 
-/// `askbar-pair:<base64url(json{url, code})>`
+impl Pairing {
+    pub fn encode(&self) -> String {
+        use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+        let json = serde_json::to_vec(self).expect("plain struct serializes");
+        format!("{PAIR_PREFIX}{}", URL_SAFE_NO_PAD.encode(json))
+    }
+
+    /// `None` if `s` is not a pairing string, or names a certificate in a form that is not a SHA-256.
+    pub fn decode(s: &str) -> Option<Pairing> {
+        use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+        let body = s.trim().strip_prefix(PAIR_PREFIX)?;
+        let mut p: Pairing = serde_json::from_slice(&URL_SAFE_NO_PAD.decode(body).ok()?).ok()?;
+        if let Some(fp) = &mut p.cert_sha256 {
+            *fp = fp.to_ascii_lowercase();
+            if fp.len() != 64 || !fp.chars().all(|c| c.is_ascii_hexdigit()) {
+                return None;
+            }
+        }
+        (!p.url.is_empty() && !p.code.is_empty()).then_some(p)
+    }
+}
+
+/// A pairing string with no certificate pin.
 pub fn encode_pairing(url: &str, code: &str) -> String {
-    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-    let json = serde_json::to_vec(&PairPayload { url: url.into(), code: code.into() }).expect("plain struct serializes");
-    format!("{PAIR_PREFIX}{}", URL_SAFE_NO_PAD.encode(json))
+    Pairing { url: url.into(), code: code.into(), cert_sha256: None }.encode()
 }
 
 /// Returns `(url, code)`, or `None` if the string is not a pairing string.
 pub fn decode_pairing(s: &str) -> Option<(String, String)> {
-    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-    let body = s.trim().strip_prefix(PAIR_PREFIX)?;
-    let p: PairPayload = serde_json::from_slice(&URL_SAFE_NO_PAD.decode(body).ok()?).ok()?;
-    (!p.url.is_empty() && !p.code.is_empty()).then_some((p.url, p.code))
+    Pairing::decode(s).map(|p| (p.url, p.code))
 }
 
 #[cfg(test)]
@@ -358,6 +383,19 @@ mod tests {
         assert_eq!(decode_pairing("askbar-pair:!!!"), None);
         assert_eq!(decode_pairing("hello"), None);
         assert_eq!(decode_pairing(&encode_pairing("", "x")), None);
+    }
+
+    #[test]
+    fn a_pairing_string_can_carry_the_certificate_pin() {
+        let fp = "AB".repeat(32);
+        let s = Pairing { url: "https://192.168.1.20".into(), code: "c".into(), cert_sha256: Some(fp.clone()) }.encode();
+        assert_eq!(Pairing::decode(&s).unwrap().cert_sha256, Some(fp.to_lowercase()), "kept, in lower case");
+        // Without a pin the field is left out, so a string looks as it did before pins existed.
+        let plain = encode_pairing("https://askbar.example.com", "c");
+        assert!(!String::from_utf8(base64::Engine::decode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, &plain[PAIR_PREFIX.len()..]).unwrap()).unwrap().contains("cert_sha256"));
+        assert_eq!(Pairing::decode(&plain).unwrap().cert_sha256, None);
+        let bad = Pairing { url: "https://x".into(), code: "c".into(), cert_sha256: Some("not-a-hash".into()) }.encode();
+        assert_eq!(Pairing::decode(&bad), None, "a malformed pin is refused, not ignored");
     }
 
     #[test]
