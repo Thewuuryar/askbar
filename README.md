@@ -23,7 +23,7 @@ mkdir -p data
 docker compose up -d --build
 ```
 
-1. Open **http://127.0.0.1:8081/admin/** on the machine that runs Docker (from another machine: `ssh -L 8081:127.0.0.1:8081 <host>`, then open the same address locally).
+1. Open **https://localhost/admin** on the machine that runs Docker, or `https://<its address>/admin` from another machine on your network, and accept the certificate warning (the install uses its own certificate until you set a host name).
 2. Choose the **admin password** (the first visit wins).
 3. Choose the **audit passphrase**: at least 20 characters, and it cannot be recovered. It seals what the server records about replies; see *The Audit tab*.
 4. **Providers** > add one (Anthropic or OpenAI-compatible; the model is a dropdown once the address and key are in) and press **Test**, or connect a Claude or ChatGPT account on **Services** (see *CLIProxyAPI*).
@@ -139,7 +139,7 @@ That starts three containers on two networks:
 
 ### First run
 
-Before you have a host name or a certificate, open the admin at **`http://127.0.0.1:8081/admin/`** on the machine that runs Docker (from another machine: `ssh -L 8081:127.0.0.1:8081 <host>` and open the same address locally). Caddy publishes that port on the host's loopback only and serves nothing there except the admin, over plain HTTP; it sits on a network no other container joins. Once HTTPS is set up (step 5) use `https://<hostname>/admin` instead.
+From the first start Caddy serves HTTPS on port 443 of every address of the host, with a certificate the admin makes for this install (port 80 redirects). Open **`https://localhost/admin`** on the machine that runs Docker, or `https://<its address>/admin` from another machine, and accept the browser's warning. Until you set a host name, the admin site answers only private addresses (loopback, 10/8, 172.16/12, 192.168/16, Tailscale's 100.64/10 and the IPv6 equivalents) unless the allowlist names others. Caddy checks the connection's real source; a router or proxy that rewrites sources can make public traffic look private. A pairing string made now points at the address you opened the admin with (set `ASKBAR_PUBLIC_URL` in `.env` to choose another address). Once a host name and a real certificate are set (step 5) use `https://<hostname>/admin`.
 
 1. Open the admin (above).
 2. Choose the admin password (the first visit wins).
@@ -196,7 +196,7 @@ The admin makes CLIProxyAPI's config and API key itself (nobody copies a key any
 
 1. Back up first: `data/`, the `askbar-secrets`, `admin-data`, `admin-secrets` and `audit-data` volumes (see *Backup and recovery*).
 2. `docker compose down` (not `-v`), `git pull`, `docker compose up -d --build`. The databases migrate themselves on the first start (the `devices` table becomes `clients`; paired apps and their tokens are kept). <!-- names-ok: the old names are the point of this note -->
-3. What moved: the admin is at `https://<hostname>/admin` (the `admin.<hostname>` name and its DNS record are no longer used; before HTTPS is set up use `http://127.0.0.1:8081/admin/` on the Docker host). The old token volume `askbar-mgmt` and network `mgmt` are replaced by `server-token` and `server-api`; the admin makes a new server token and writes its hash there on first start, so the old volume can be removed. Data volumes keep their names. CLIProxyAPI now starts with the stack (it idles until you log in). <!-- names-ok: the old names are the point of this note --> If you ran an earlier build of this branch, remove its leftover network first: `docker network rm askbar_setup` (the first-run page now uses `askbar_admin-setup`).
+3. What moved: the admin is at `https://<hostname>/admin` (the `admin.<hostname>` name and its DNS record are no longer used; before HTTPS was set up 0.5 used `http://127.0.0.1:8081/admin/` on the Docker host; that page is gone, see *First run*). The old token volume `askbar-mgmt` and network `mgmt` are replaced by `server-token` and `server-api`; the admin makes a new server token and writes its hash there on first start, so the old volume can be removed. Data volumes keep their names. CLIProxyAPI now starts with the stack (it idles until you log in). <!-- names-ok: the old names are the point of this note --> If you ran an earlier build of this branch, remove its leftover network first: `docker network rm askbar_setup` (the first-run page now uses `askbar_admin-setup`).
 4. Update the Askbar app to 0.5.0. Paired apps keep their tokens, so nothing needs pairing again; an older app says it is too old for the server.
 5. If you set any of these in your own compose file, rename them: `ASKBAR_API_ADDR` to `ASKBAR_CLIENT_API_ADDR`, `ASKBAR_MGMT_ADDR` to `ASKBAR_SERVER_API_ADDR`, `ASKBAR_SERVER_MGMT_URL` to `ASKBAR_SERVER_API_URL`, `ASKBAR_MGMT_DIR` to `ASKBAR_SERVER_TOKEN_DIR`, `ASKBAR_MGMT_TOKEN_HASH_FILE` to `ASKBAR_SERVER_TOKEN_HASH_FILE`. <!-- names-ok: the old names are the point of this note -->
 6. If anything of yours calls the HTTP APIs: the apps' API is now `/api/client/v1` (`/pair` is `/pairings`, `/whoami` is `/me`), the admin's is `/admin/api/v1`, and every error is a [problem](docs/wire-contract.md#errors) with a stable `error` code.

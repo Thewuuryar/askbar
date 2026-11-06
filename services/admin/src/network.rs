@@ -94,18 +94,18 @@ pub struct NetworkView {
     proxy: crate::caddy::ProxyStatus,
 }
 
-fn view(state: &AdminState, conn: &rusqlite::Connection) -> rusqlite::Result<NetworkView> {
+fn view(state: &AdminState, conn: &rusqlite::Connection, host: Option<&str>) -> rusqlite::Result<NetworkView> {
     Ok(NetworkView {
         network: load(conn)?,
         has_token: stored_token(conn).is_some(),
-        public_url: crate::admin_api::public_url(conn),
+        public_url: crate::admin_api::public_url(conn, host),
         proxy: state.proxy.lock().unwrap_or_else(|e| e.into_inner()).clone(),
     })
 }
 
-pub async fn get_network(State(state): State<Arc<AdminState>>) -> Result<Json<NetworkView>, StatusCode> {
+pub async fn get_network(State(state): State<Arc<AdminState>>, headers: axum::http::HeaderMap) -> Result<Json<NetworkView>, StatusCode> {
     let db = state.db.lock().await;
-    view(&state, db.conn()).map(Json).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+    view(&state, db.conn(), crate::admin_api::request_host(&headers).as_deref()).map(Json).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
 #[derive(Deserialize)]
@@ -177,12 +177,12 @@ async fn save(state: &AdminState, input: NetworkInput) -> Result<(), Failure> {
     Ok(())
 }
 
-pub async fn put_network(State(state): State<Arc<AdminState>>, ApiJson(input): ApiJson<NetworkInput>) -> Result<Json<NetworkView>, Failure> {
+pub async fn put_network(State(state): State<Arc<AdminState>>, headers: axum::http::HeaderMap, ApiJson(input): ApiJson<NetworkInput>) -> Result<Json<NetworkView>, Failure> {
     save(&state, input).await?;
     // Saved. Now tell Caddy; if that fails the settings stay and the result says why.
     crate::caddy::apply(&state).await;
     let db = state.db.lock().await;
-    view(&state, db.conn()).map(Json).map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Saved, but could not read the settings back."))
+    view(&state, db.conn(), crate::admin_api::request_host(&headers).as_deref()).map(Json).map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Saved, but could not read the settings back."))
 }
 
 /// Push the saved settings to Caddy again (for example after starting it).

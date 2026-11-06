@@ -207,7 +207,7 @@ async fn a_pairing_string_pairs_a_client_which_can_then_be_revoked() {
     let (st, out) = t.call(M::POST, "/admin/api/v1/pairings", Some(json!({ "name": "Work laptop" }))).await;
     assert_eq!(st, 200);
     let (url, code) = askbar_proto::decode_pairing(out["pairing"].as_str().unwrap()).expect("a pairing string");
-    assert_eq!(url, "http://localhost:8080", "no HTTPS configured: the fallback address");
+    assert_eq!(url, format!("https://{}", t.adm.trim_start_matches("http://")), "no host name: the address the admin was opened with, over HTTPS");
     assert_eq!(out["expires_in"], json!(600));
 
     // Only the hash is kept here; the server got the same hash.

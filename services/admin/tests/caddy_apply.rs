@@ -59,7 +59,7 @@ async fn the_remote_ip_matcher_is_in_the_config_only_when_the_allowlist_is_on() 
 }
 
 #[tokio::test]
-async fn turning_https_off_serves_nothing_and_removes_the_token_file() {
+async fn turning_https_off_serves_the_installs_own_certificate_and_removes_the_token_file() {
     let t = start(true).await;
     t.save(settings(true)).await;
     assert!(t.token_file().is_some());
@@ -71,6 +71,11 @@ async fn turning_https_off_serves_nothing_and_removes_the_token_file() {
     let last = t.fake.loads.lock().unwrap().last().unwrap().1.clone();
     assert!(!last.contains("askbar.orraitu.com"));
     assert!(last.contains("admin unix//run/caddy/admin.sock"), "Caddy keeps its admin socket");
+    assert!(last.contains("\n:443 {\n\ttls /caddy-secrets/self.crt /caddy-secrets/self.key\n"), "{last}");
+    // The admin made the certificate Caddy is told to use, next to where the token file was.
+    let fp = askbar_admin::self_cert::fingerprint(&t.secrets_dir).expect("self.crt is written");
+    assert_eq!(fp.len(), 64);
+    assert_eq!(std::fs::metadata(t.secrets_dir.join("self.key")).unwrap().permissions().mode() & 0o777, 0o600);
     // The encrypted copy is still stored, so turning HTTPS back on needs no re-entry.
     assert_eq!(t.call(M::GET, "/admin/api/v1/network", json!({})).await.1["has_token"], true);
 }

@@ -16,6 +16,7 @@ pub mod server_link;
 pub mod network;
 pub mod routes;
 pub mod secrets;
+pub mod self_cert;
 pub mod services;
 pub mod web;
 

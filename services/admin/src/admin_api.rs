@@ -463,18 +463,36 @@ fn random_code() -> String {
     URL_SAFE_NO_PAD.encode(b)
 }
 
-/// The address clients should pair with: the public HTTPS name when HTTPS is on, else the
-/// configured fallback.
-pub(crate) fn public_url(conn: &Connection) -> String {
+/// The address clients should pair with: the host name when HTTPS with a real certificate is on;
+/// else `ASKBAR_PUBLIC_URL` if it is set; else the address the admin site was opened with (`host`,
+/// the request's `Host` header, which Caddy passes through), over HTTPS with the install's own
+/// certificate.
+pub(crate) fn public_url(conn: &Connection, host: Option<&str>) -> String {
     let net: Option<(i64, String)> = conn.query_row("SELECT tls_enabled, hostname FROM network_settings WHERE id = 1", [], |r| Ok((r.get(0)?, r.get(1)?))).ok();
-    match net {
-        Some((1, host)) if !host.is_empty() => format!("https://{host}"),
-        _ => std::env::var("ASKBAR_PUBLIC_URL").ok().filter(|u| !u.trim().is_empty()).unwrap_or_else(|| "http://localhost:8080".into()).trim_end_matches('/').to_string(),
+    if let Some((1, name)) = &net {
+        if !name.is_empty() {
+            return format!("https://{name}");
+        }
     }
+    if let Some(u) = std::env::var("ASKBAR_PUBLIC_URL").ok().filter(|u| !u.trim().is_empty()) {
+        return u.trim().trim_end_matches('/').to_string();
+    }
+    format!("https://{}", host.filter(|h| valid_host(h)).unwrap_or("localhost"))
+}
+
+/// A `Host` header worth putting in a pairing string: a name or address, an optional port, nothing else.
+fn valid_host(h: &str) -> bool {
+    !h.is_empty() && h.len() <= 255 && h.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':' | '[' | ']'))
+}
+
+/// The request's `Host` header, if it is plain text.
+pub(crate) fn request_host(headers: &axum::http::HeaderMap) -> Option<String> {
+    headers.get(axum::http::header::HOST)?.to_str().ok().map(str::to_string)
 }
 
 /// A one-time pairing string for a new client, good for ten minutes. Only the code's hash is stored.
-pub async fn create_pairing(State(state): St, ApiJson(i): ApiJson<PairInput>) -> Result<Json<PairingOut>, Failure> {
+pub async fn create_pairing(State(state): St, headers: axum::http::HeaderMap, ApiJson(i): ApiJson<PairInput>) -> Result<Json<PairingOut>, Failure> {
+    let host = request_host(&headers);
     let name = i.name.trim().to_string();
     if name.chars().count() > 60 {
         return Err(bad("The client name is too long."));
@@ -495,7 +513,7 @@ pub async fn create_pairing(State(state): St, ApiJson(i): ApiJson<PairInput>) ->
             params![hash, user, name, now + PAIR_CODE_TTL_SECS, now],
         )
         .map_err(internal)?;
-        Ok(public_url(c))
+        Ok(public_url(c, host.as_deref()))
     })
     .await?;
     Ok(Json(PairingOut { pairing: askbar_proto::encode_pairing(&url, &code), expires_in: PAIR_CODE_TTL_SECS }))

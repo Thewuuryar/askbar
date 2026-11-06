@@ -15,7 +15,8 @@ async fn saving_normalises_and_encrypts_the_token() {
     let (st, v) = t.call(M::GET, "/admin/api/v1/network", json!({})).await;
     assert_eq!(st, 200);
     assert_eq!((v["tls_enabled"].as_bool(), v["has_token"].as_bool(), v["allowlist_enabled"].as_bool()), (Some(false), Some(false), Some(false)), "everything starts off");
-    assert_eq!(v["public_url"], "http://localhost:8080");
+    // No host name yet: the address this request used, over HTTPS with the install's own certificate.
+    assert_eq!(v["public_url"], format!("https://{}", t.adm.trim_start_matches("http://")));
 
     let (st, v) = t.save(full()).await;
     assert_eq!(st, 200, "{v}");
@@ -94,17 +95,21 @@ async fn http_mode_saves_without_a_token_and_pairing_follows_the_setting() {
     let t = start(true).await;
     let (st, _) = t.save(json!({ "tls_enabled": false, "hostname": "", "admin_cidr": "", "acme_staging": false })).await;
     assert_eq!(st, 200);
-    let pairing = |t: &T| {
+    // `host` is the Host header the admin site was opened with, as Caddy passes it through.
+    let pairing = |t: &T, host: &'static str| {
         let url = format!("{}/admin/api/v1/pairings", t.adm);
         let (http, cookie) = (t.http.clone(), t.cookie.clone());
         async move {
-            let v: Value = http.post(url).header("x-askbar-admin", "1").header("cookie", cookie).json(&json!({})).send().await.unwrap().json().await.unwrap();
+            let v: Value = http.post(url).header("x-askbar-admin", "1").header("cookie", cookie).header("host", host).json(&json!({})).send().await.unwrap().json().await.unwrap();
             askbar_proto::decode_pairing(v["pairing"].as_str().unwrap()).unwrap().0
         }
     };
-    assert_eq!(pairing(&t).await, "http://localhost:8080");
+    // No host name yet: the address the admin site was opened with, over HTTPS (the install's own certificate).
+    assert_eq!(pairing(&t, "192.168.1.20").await, "https://192.168.1.20");
+    assert_eq!(pairing(&t, "localhost").await, "https://localhost");
+    assert_eq!(pairing(&t, "bad host/<x>").await, "https://localhost", "a Host that is not a plain name or address is not used");
     assert_eq!(t.save(full()).await.0, 200);
-    assert_eq!(pairing(&t).await, "https://askbar.orraitu.com");
+    assert_eq!(pairing(&t, "192.168.1.20").await, "https://askbar.orraitu.com");
 }
 
 #[tokio::test]
