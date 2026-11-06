@@ -1,6 +1,6 @@
 # 0035. Editorial edits to accepted ADRs
 
-Status: Proposed
+Status: Accepted
 Date: 2026-11-07
 Source: owner review of the v1 layout change
 
