@@ -1,6 +1,6 @@
 # 0033. Repository layout
 
-Status: Proposed
+Status: Approved
 Date: 2026-11-06
 Source: owner request with the v1 plan ([plan-v1.md](../plan-v1.md))
 
