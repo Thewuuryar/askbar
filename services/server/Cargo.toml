@@ -7,6 +7,7 @@ description = "Askbar server: history, providers and settings behind an HTTP API
 
 [dependencies]
 askbar-proto = { path = "../../crates/askbar-proto", features = ["axum"] }
+askbar-service = { path = "../../crates/askbar-service" }
 axum = "0.8"
 serde = { version = "1", features = ["derive"] }
 futures-util = "0.3"

@@ -11,8 +11,16 @@ struct Server {
 }
 
 async fn start() -> Server {
+    start_with(true).await
+}
+
+/// `configured`: whether the admin has pushed a snapshot yet.
+async fn start_with(configured: bool) -> Server {
     let db = askbar_server::Db::open_in_memory().unwrap();
     let user = db.seed_server().unwrap();
+    if configured {
+        askbar_server::testing::update_snapshot(&db, |_| {});
+    }
     let state = AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), askbar_server::MIN_CLIENT);
     let app: Router = askbar_server::client_router(state.clone());
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -142,4 +150,24 @@ async fn a_refused_token_and_a_bad_pairing_code_are_problems() {
     let r = s.http.post(s.url("/api/client/v1/pairings")).header("content-type", "application/json").body("nope").send().await.unwrap();
     assert_eq!(r.status(), 400);
     assert_eq!(r.json::<askbar_proto::Problem>().await.unwrap().error, "bad_request");
+}
+
+#[tokio::test]
+async fn before_the_first_push_every_client_route_but_health_is_503_not_configured() {
+    // ADR 0028 rule 3. The stored snapshot survives a restart, so only a never-configured server is closed.
+    let s = start_with(false).await;
+    let version = |r: reqwest::RequestBuilder| r.header("x-askbar-client-version", askbar_server::MIN_CLIENT);
+    assert_eq!(s.http.get(s.url("/api/client/v1/health")).send().await.unwrap().status(), 200);
+    for r in [version(s.http.get(s.url("/api/client/v1/me"))).bearer_auth("abt_anything"), version(s.http.post(s.url("/api/client/v1/pairings"))).json(&serde_json::json!({ "code": "x" }))] {
+        let r = r.send().await.unwrap();
+        assert_eq!(r.status(), 503);
+        assert_eq!(r.headers()["retry-after"], "5");
+        let p: askbar_proto::Problem = r.json().await.unwrap();
+        assert_eq!(p.error, "not_configured");
+    }
+    assert_eq!(s.http.get(s.url("/api/v1/chat")).send().await.unwrap().status(), 426, "the old prefix still says update the app");
+    assert_eq!(s.http.get(s.url("/api/client/v1/no-such-route")).send().await.unwrap().status(), 404, "an unknown path is still a 404");
+    // The first push opens it.
+    askbar_server::testing::update_snapshot(&s.state.db.lock().unwrap(), |_| {});
+    assert_eq!(version(s.http.get(s.url("/api/client/v1/me"))).bearer_auth("abt_anything").send().await.unwrap().status(), 401);
 }

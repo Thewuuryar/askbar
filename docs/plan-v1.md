@@ -27,6 +27,16 @@ docker compose --profile dev up -d --build
 
 ---
 
+### Component ADRs (owner rule, 2026-11-07)
+
+A component is anything the stack or the repository ships as its own unit: a container (service), a library crate, or a client. Each component has an ADR of its own that says what it is, what it holds, what it can reach, its volumes, networks and links, and any hardening exception; it links to the decision ADRs instead of repeating them. Under [ADR 0001](adr/0001-decision-records-and-change-rules.md) and [ADR 0027](adr/0027-adr-format-and-numbering.md):
+
+- **New component:** its ADR is proposed in its own `docs(adr):` PR, and the owner accepts it before the PR that creates the component merges. Numbers are taken in order when the ADR is written, never reserved.
+- **Retired component:** if its ADR is still Proposed, amend it (ADR 0001 rule 3): say it is retired, when and why. If it is Accepted and on `main`, write a new ADR that supersedes it and change only the old ADR's status line to `Superseded by NNNN` (ADR 0001 rule 2). The index in [adr/README.md](adr/README.md) follows either way.
+- **Existing components** get retroactive ADRs once phase 1 is done (step 1.14), all Proposed, so the owner reviews what is there before phases 2 to 4 add more.
+
+Steps that create or retire a component say which ADR they need. Estimate: about 1 h per component ADR.
+
 ## Phase 0 — Restructure (no behaviour change)
 
 Target layout:
@@ -69,12 +79,12 @@ Order change (owner approved 2026-11-07): the remaining steps keep their numbers
 
 | # | Step | Size | Why here |
 | --- | --- | --- | --- |
-| 4 | 1.2 server API path conventions | S | As above; also renames `PUT /snapshot` to `PUT /config` and adds `GET /status`, which 1.3 builds on. |
 | 5 | 1.3 `crates/askbar-service` | M | Base for 1.4 and for every service in phases 2–4. |
 | 6 | 1.4 self-restart, controller removed | M | Needs 1.3's health and token check. Does not wait for 2.1: restart is authenticated with the existing admin→server token, and 2.1 later changes only where that token comes from, not the endpoint. Doing it now removes the only Docker socket mount. The restart record is a log line until 2.7 sends it to the auditor. |
 | 7 | 1.8 first run and forced password change | M | Independent of storage; before 1.9 so the wizard's last step can create the first user. |
 | 8 | 1.9 users and pairing keys in the admin | M | 1.9 and 1.11 both change storage and pairing; next to each other they cost one "wipe volumes and re-pair" instead of two. |
 | 9 | 1.11 spaces, one SQLite file each | L | As above. Wipe and re-pair once, at the end of this step. |
+| 10 | 1.14 retroactive component ADRs | M | Closes phase 1: the components that exist then get their ADRs before phase 2 adds new ones. |
 | — | 1.13 backlog | see below | After 1.11, which reshapes the conversation routes the S items touch. Summarizing waits for 3.1 (its model call goes through `model-gateway`). |
 | — | 1.12 shared spaces | M | Deferred to after phase 7 ([ADR 0002](adr/0002-v1-scope-limits-and-ship-criteria.md) defer order). |
 
@@ -87,26 +97,27 @@ Midpoints S = 1.5 h, M = 4 h, L = 8 h. Required work left (excluding 1.12, 1.13 
 | Phase | Hours |
 | --- | --- |
 | 1 (1.1–1.5, 1.8–1.11) | 32.5 |
+| Component ADRs (1.14, and one each for bootstrap, `askbar-audit`, auditor, `model-gateway`, alerter) | ≈ 9 |
 | 2 | 35 |
 | 3 | 21.5 |
 | 4 | 9.5 |
 | 5 | 11 |
 | 6 | 17.5 |
 | 7 | 12.5 |
-| **Total** | **≈ 140** |
+| **Total** | **≈ 149** |
 
-That is about 40 h over the ~100 h budget before any backlog item. Proposed cuts, first to last: phase 8 (iOS, memory, mismatch alerts); 1.13 summarizing (L, ~8 h); the rest of 1.13 (~12 h); 6.4 multiple destinations (one daily destination stays: it is the ship criterion for data loss in [ADR 0002](adr/0002-v1-scope-limits-and-ship-criteria.md)); 1.12 shared spaces; 5.4 passkey (optional, after 1.0); 4.3 release check. Those cuts save about 8 h of required work (5.4, 4.3, part of 6.4), leaving ≈ 130 h. The owner kept the budget unchanged (2026-11-07); the gap is recorded here so cuts can be made in this order if hours run out.
-
-**1.2 `refactor(server)!: follow the path conventions on the server API`** (S) — [ADR 0022](adr/0022-api-path-conventions.md)
-- `/models/list` → `GET /models`; `PUT /snapshot` → `PUT /config`; add `GET /status` (config version, boot ID); `/backup` → `POST /exports` placeholder kept unencrypted until phase 6. Admin `/services/{name}/{action}` → literal `POST /services/{name}/restart` (start/stop dropped with the controller in 1.4; keep the controller call behind it until then).
+That is about 49 h over the ~100 h budget before any backlog item (the component ADRs, added 2026-11-07, are about 9 h of it). Proposed cuts, first to last: phase 8 (iOS, memory, mismatch alerts); 1.13 summarizing (L, ~8 h); the rest of 1.13 (~12 h); 6.4 multiple destinations (one daily destination stays: it is the ship criterion for data loss in [ADR 0002](adr/0002-v1-scope-limits-and-ship-criteria.md)); 1.12 shared spaces; 5.4 passkey (optional, after 1.0); 4.3 release check. Those cuts save about 8 h of required work (5.4, 4.3, part of 6.4), leaving ≈ 139 h. The owner kept the budget unchanged (2026-11-07); the gap is recorded here so cuts can be made in this order if hours run out.
 
 **1.3 `feat(server): answer 503 not_configured until the admin pushes config`** (M) — [ADR 0028](adr/0028-service-boundaries-and-config-delivery.md)
+- Component ADR: [0036 `askbar-service` crate](adr/0036-askbar-service-crate.md) (Proposed in the same PR, as the rule was set while the PR was open; to be accepted before it merges).
 - New `crates/askbar-service`: `/health`, `/status`, `PUT /config` scaffolding, config version, boot ID, per-link bearer check (hash file → caller → allowed routes), `not_configured` error code.
 - The server already answers `GET /status` (`config_version`, `boot_id`) and `PUT /config` since 1.2; 1.3 moves them into the crate.
 - Server uses it; admin polls `GET /status` every 10–15 s and re-pushes when unconfigured or stale; a refused change stays "nothing applied" (already true).
 
 **1.4 `feat!: replace the controller with self-restart`** (M) — [ADR 0005](adr/0005-no-controller-and-self-restart.md)
+- Retires the controller. It has no component ADR to amend or supersede: accepted [ADR 0005](adr/0005-no-controller-and-self-restart.md) already decides its removal, so the PR cites it and adds no ADR. (Owner to confirm.)
 - `POST /restart` on server and admin (auth, audit record (local until 3.x), cooldown, shutdown limit), internal watchdog for failed health; admin restarts Caddy by config reload; test `cpa` reload and restart it by config rewrite, adding a supervisor only if needed.
+- Build `POST /restart` on `crates/askbar-service` (the restart route can join `routes`, and its link rules are `links::Allow`). After a restart the admin already pushes again within one status check (12 s), from the new boot ID (1.3).
 - Delete `services/controller`, the `control` network, `control-token` volume reference, `docker.sock` mount, `CONTROL_V1`, `control.v1.yaml`, isolation section 3e (replace with "no service mounts docker.sock").
 - Test: scripted restart from the admin returns under 1 minute ([ADR 0002](adr/0002-v1-scope-limits-and-ship-criteria.md)).
 
@@ -121,6 +132,10 @@ That is about 40 h over the ~100 h budget before any backlog item. Proposed cuts
 - Server: `control.db` (users, clients, pairing hashes, spaces, memberships, budget copy) and one file per space under `/data/spaces/`; a `SpaceStore` handed to handlers only after a membership check; migrations run on every file. Drop the unused `projects` table.
 - Client API: `GET /spaces`, `/spaces/{space_id}/conversations[/{id}]`, `/spaces/{space_id}/search`, `/spaces/{space_id}/chat`; flat routes removed. Client uses the personal space by default. `MIN_CLIENT` bump, `client.v1.yaml`, `wire-contract.md`.
 - Test: a bug-shaped query in one space file cannot return another space's rows; cross-user access refused.
+
+**1.14 `docs(adr): retroactive ADRs for the existing components`** (M, after 1.11; owner rule 2026-11-07)
+- One Proposed ADR per component that exists when phase 1 is done, each in its own commit, all in one PR, and each listed in the ADR index: `server` (`services/server`), `admin` (`services/admin`), `caddy` (`deploy/caddy` and the Dockerfile target), `cpa` (the pinned CLIProxyAPI image and `deploy/cpa`), `mock-llm` (dev profile and tests only), the desktop client (`clients/desktop`), and the `askbar-proto` crate. (`askbar-service` already has [0036](adr/0036-askbar-service-crate.md); the controller is retired in 1.4.)
+- Each describes the component as it is on `main` then, with "Not recorded" where the reasoning is unknown ([ADR 0027](adr/0027-adr-format-and-numbering.md)), and links the decision ADRs ([0003](adr/0003-v1-service-layout.md), [0028](adr/0028-service-boundaries-and-config-delivery.md), [0032](adr/0032-container-hardening.md) and the rest) instead of repeating them. Where the code and an accepted ADR disagree, the component ADR says so and the PR lists it.
 
 **1.12 `feat: shared spaces`** (M) — [ADR 0009](adr/0009-spaces-and-storage.md) (deferrable, last in [ADR 0002](adr/0002-v1-scope-limits-and-ship-criteria.md) order)
 - Admin create/rename/delete (with confirmation), add/remove members with the "new members see history" notice; client space picker.
@@ -137,6 +152,7 @@ That is about 40 h over the ~100 h budget before any backlog item. Proposed cuts
 ## Phase 2 — Add bootstrap and the auditor
 
 **2.1 `feat(bootstrap): create per-link tokens on first start`** (M) — [ADR 0004](adr/0004-bootstrap-and-per-link-tokens.md), 0021
+- Before the code: a component ADR for `bootstrap` (its volumes, the links it writes, no network, run once), proposed in its own PR and accepted.
 - `services/bootstrap`: no network, mounts credential volumes only, writes each token to the caller's volume and its hash to the receiver's, exits; `depends_on: condition: service_completed_successfully`. Host rotation: `docker compose run --rm bootstrap rotate [link]`, then restart from the admin.
 - Replace the admin-minted server token (`server-token` volume keeps its name).
 - Learned in 1.10: every container now runs with `cap_drop: [ALL]`, so root can't write or read another uid's files. `bootstrap` must create each token and hash with the owner and mode its reader needs (or run as that reader's uid), and the isolation script's hardening section must list `bootstrap`. Links table from architecture.md is the source of truth; unit test the link list.
@@ -145,9 +161,11 @@ That is about 40 h over the ~100 h budget before any backlog item. Proposed cuts
 - Caller records the failure; receiver counts repeated invalid tokens. Delivered as a log + admin banner now, wired to the alerter in 4.2.
 
 **2.3 `refactor: move the audit store into crates/askbar-audit`** (S)
+- Before the code: a component ADR for the `askbar-audit` crate (what it holds, who links it: server now, auditor in 2.4), proposed in its own PR and accepted.
 - Pure move of `services/server/src/audit.rs` and `seal.rs` into a library; server keeps using it in-process.
 
 **2.4 `feat(auditor): run the audit store as its own container`** (L) — [ADR 0010](adr/0010-auditor.md), 0025
+- Before the code: a component ADR for the `auditor` (its volume `audit-data`, its internal network, its links and tokens, no outbound), proposed in its own PR and accepted. The `server` component ADR from 1.14 changes too (it no longer mounts `audit-data`): amend it if still Proposed, or supersede it if Accepted.
 - `services/auditor`: `/api/audit/v1` append (service and admin append tokens), read and retention (admin read token, floor 7 days, default 30), boot-ID handling that ends earlier open spans as interrupted, group commit. Internal-only network, no outbound.
 - Server appends over HTTP with a bounded retry queue for finish/payload records; the `audit-data` volume is mounted by the auditor instead of the server (same name). Server answers `503 audit_backlog` when the auditor is unreachable.
 - Failure tests: auditor down, disk full, slow ack.
@@ -164,11 +182,12 @@ That is about 40 h over the ~100 h budget before any backlog item. Proposed cuts
 **2.8 `feat(admin): sealed-content sessions`** (M) — [ADR 0011](adr/0011-sealed-content-access.md), 0030
 - Fresh sign-in + passphrase; key in memory only; 15 min idle / 1 h total (configurable to 12 h); ends on Seal, sign-out, restart; start/end/each item viewed recorded; refused if not recorded. Key-ID registry with created/retired dates.
 
-**2.9 `feat(caddy): send access logs to the auditor`** (M) — needs a short design note (Caddy's `net` log writer carries no token: likely a tiny ingest listener on the auditor reachable only from Caddy's network, or a log-forwarding sidecar). Propose as an [ADR 0016](adr/0016-risk-register.md) implementation note before building.
+**2.9 `feat(caddy): send access logs to the auditor`** (M) — if the design adds a log-forwarding sidecar, that is a new component and needs its own ADR first, under the rule above. Needs a short design note (Caddy's `net` log writer carries no token: likely a tiny ingest listener on the auditor reachable only from Caddy's network, or a log-forwarding sidecar). Propose as an [ADR 0016](adr/0016-risk-register.md) implementation note before building.
 
 ## Phase 3 — Add model-gateway
 
 **3.1 `feat(model-gateway): move provider calls and keys out of the server`** (L) — [ADR 0014](adr/0014-model-gateway-and-providers.md), 0031 (wipe and re-enter keys)
+- Before the code: a component ADR for `model-gateway` (keys in memory only, outbound access, its networks and links), proposed in its own PR and accepted. The `server` component ADR changes (no keys, no outbound): amend or supersede it as above.
 - `services/model-gateway`: `/api/model-gateway/v1` streaming chat endpoint; keys pushed by the admin in `PUT /config`, held in memory only; opens the span in the auditor and waits for the ack before calling a provider; metadata-only independent records.
 - Server calls the gateway with user, space, turn; adds finish/payload records to the returned span ID. Server drops `secrets.rs`, `llm.rs` provider code, `master.key` (stop mounting `askbar-secrets`, keep it declared).
 - Networks: server moves to internal networks only (Caddy↔server, server↔gateway, server↔auditor); gateway gets outbound; `mock-llm` joins the gateway's network in the dev profile. Isolation: server has no route out.
@@ -188,6 +207,7 @@ That is about 40 h over the ~100 h budget before any backlog item. Proposed cuts
 ## Phase 4 — Add the alerter
 
 **4.1 `feat(alerter): deliver alerts through ntfy or email`** (M) — [ADR 0006](adr/0006-v1-outbound-access-and-alerts.md), 0021
+- Before the code: a component ADR for the `alerter` (its settings volume, outbound for delivery only, its links), proposed in its own PR and accepted.
 - `services/alerter`: `/api/alerter/v1`, delivery settings on its own volume, auditor → alerter events, outbound only for delivery; admin configures delivery and sends a test alert.
 
 **4.2 `feat: alert rules`** (M) — [ADR 0010](adr/0010-auditor.md), 0011, 0016, 0024, 0005
@@ -238,7 +258,7 @@ That is about 40 h over the ~100 h budget before any backlog item. Proposed cuts
 ## Phase 8 — Deferrable (cut first if hours run out)
 
 - **8.1 Memory** per space with creator recorded ([ADR 0009](adr/0009-spaces-and-storage.md)).
-- **8.2 `clients/ios`**: Swift client generated from `docs/openapi/client.v1.yaml`, same error-code mapping; first decide swift-format vs SwiftLint (contributor plan #14).
+- **8.2 `clients/ios`**: Swift client generated from `docs/openapi/client.v1.yaml`, same error-code mapping; first decide swift-format vs SwiftLint (contributor plan #14). Before the code: a component ADR for the iOS client, proposed and accepted.
 - Mismatch alerts ([ADR 0010](adr/0010-auditor.md)).
 
 ---

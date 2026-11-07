@@ -55,12 +55,12 @@ pub struct AppState {
     generation_timeout_override: Mutex<Option<std::time::Duration>>,
     /// New on every start of the process, so the admin can tell a restart from a long silence
     /// (`GET /api/server/v1/status`, ADR 0028).
-    pub boot_id: String,
+    pub boot_id: askbar_service::status::BootId,
 }
 
 impl AppState {
     pub fn new(db: Db, secrets: Secrets, min_client: &str) -> Arc<AppState> {
-        Arc::new(AppState { db: Mutex::new(db), secrets: Arc::new(secrets), http: llm::http_client(), min_client: min_client.to_string(), generations: Default::default(), audit: audit::Recorder::noop(), generation_timeout_override: Mutex::new(None), boot_id: ids::new_id() })
+        Arc::new(AppState { db: Mutex::new(db), secrets: Arc::new(secrets), http: llm::http_client(), min_client: min_client.to_string(), generations: Default::default(), audit: audit::Recorder::noop(), generation_timeout_override: Mutex::new(None), boot_id: askbar_service::status::BootId::new() })
     }
 
     /// Gives a fresh state an audit recorder. `new` keeps its signature and records nothing, so
@@ -113,8 +113,16 @@ pub fn client_routes(state: &Arc<AppState>) -> routes::Routes {
         .get(&v1("/generations/{id}/stream"), generation::stream)
         .post(&v1("/generations/{id}/cancel"), generation::cancel)
         .guarded(|r| r.route_layer(token()));
-    // Everything except health checks the client version first.
-    let gated = Routes::new().post(&v1("/pairings"), pair).merge(protected).guarded(|r| r.route_layer(version()));
+    // Everything except health checks, in this order: the client version (an old app is told to
+    // update), then whether the admin has pushed configuration yet (503 not_configured, ADR 0028
+    // rule 3; checked before the token, so an app is never told its token is refused while the
+    // server waits for its settings), then the token.
+    let gate = configured_gate(state);
+    let gated = Routes::new()
+        .post(&v1("/pairings"), pair)
+        .merge(protected)
+        .guarded(|r| r.route_layer(middleware::from_fn_with_state(gate, askbar_service::configured::require)))
+        .guarded(|r| r.route_layer(version()));
     Routes::new()
         .get(&v1("/health"), health)
         // The first generation of the API lived at /api/v1. It serves nothing now; every request there, of any
@@ -131,6 +139,14 @@ pub fn client_router(state: Arc<AppState>) -> Router {
         .with_state(state)
         .layer(middleware::from_fn(log_requests))
         .layer(middleware::from_fn(nosniff))
+}
+
+/// Open once a configuration has been stored: it is kept in `server.db`, so a restart stays
+/// configured, and only a server that has never been sent one (a fresh volume) is closed. Health
+/// and the old prefix are outside the gated routes, so no path needs to be left open here.
+fn configured_gate(state: &Arc<AppState>) -> askbar_service::configured::Gate {
+    let s = state.clone();
+    askbar_service::configured::Gate::new(move || snapshot::exists(&s.db.lock().unwrap_or_else(|e| e.into_inner())), |_| false)
 }
 
 /// Every client API answer is JSON or the documented event stream; no browser may guess it is HTML

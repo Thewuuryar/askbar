@@ -196,6 +196,25 @@ pub enum PushError {
     Build(String),
 }
 
+/// How often the admin reads the server's status (ADR 0028: every 10 to 15 seconds).
+const CHECK_EVERY: Duration = Duration::from_secs(12);
+
+/// What `GET /api/server/v1/status` answers.
+#[derive(serde::Deserialize, Debug)]
+struct ServerStatus {
+    config_version: Option<u64>,
+    boot_id: String,
+}
+
+/// Whether the server should be sent the snapshot again: it was away (`!was_online`), it is a new
+/// process (a boot ID other than the last one seen), or it does not run the version this admin
+/// last pushed (none at all, or another one).
+fn needs_push(was_online: bool, last_boot: Option<&str>, last_version: u64, st: &ServerStatus) -> bool {
+    let restarted = last_boot.is_some_and(|b| b != st.boot_id);
+    let stale = st.config_version != Some(last_version);
+    !was_online || restarted || stale
+}
+
 /// Talks to the server's server API and remembers whether it is there.
 pub struct ServerLink {
     http: reqwest::Client,
@@ -206,6 +225,8 @@ pub struct ServerLink {
     last_error: StdMutex<Option<String>>,
     dirty: AtomicBool,
     wake: Notify,
+    /// The server process the last status came from (its boot ID), to see a restart.
+    last_boot: StdMutex<Option<String>>,
 }
 
 impl ServerLink {
@@ -220,6 +241,7 @@ impl ServerLink {
             // A fresh admin has never pushed, so it starts out needing to.
             dirty: AtomicBool::new(true),
             wake: Notify::new(),
+            last_boot: StdMutex::new(None),
         })
     }
 
@@ -325,24 +347,45 @@ impl ServerLink {
         }
     }
 
-    /// Is the server there? Updates the online state; a server that is back after being
-    /// away is sent the snapshot again.
-    pub async fn check(&self) -> bool {
+    /// Is the server there, and does it run what was pushed? Reads `GET /status` (ADR 0028
+    /// rule 4). `None` if the server did not answer (or refused the token); otherwise whether the
+    /// snapshot should be pushed again (see `needs_push`). Updates the online state.
+    pub async fn poll(&self) -> Option<bool> {
         let was_online = self.server_online();
-        let ok = self
-            .http
-            .get(format!("{}{}", self.base, askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/health")))
-            .bearer_auth(&self.token)
-            .timeout(Duration::from_secs(3))
-            .send()
-            .await
-            .map(|r| r.status().is_success())
-            .unwrap_or(false);
-        self.online.store(ok, Ordering::Relaxed);
-        if ok && !was_online {
-            self.mark_dirty();
+        let status = async {
+            let r = self
+                .http
+                .get(format!("{}{}", self.base, askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/status")))
+                .bearer_auth(&self.token)
+                .timeout(Duration::from_secs(3))
+                .send()
+                .await
+                .ok()?;
+            if !r.status().is_success() {
+                return None;
+            }
+            r.json::<ServerStatus>().await.ok()
         }
-        ok
+        .await;
+        self.online.store(status.is_some(), Ordering::Relaxed);
+        let st = status?;
+        let mut boot = self.last_boot.lock().unwrap_or_else(|e| e.into_inner());
+        let push = needs_push(was_online, boot.as_deref(), self.last_version(), &st);
+        *boot = Some(st.boot_id);
+        Some(push)
+    }
+
+    /// `poll`, and mark the snapshot to be pushed when it should be. True if the server answered.
+    pub async fn check(&self) -> bool {
+        match self.poll().await {
+            Some(push) => {
+                if push {
+                    self.mark_dirty();
+                }
+                true
+            }
+            None => false,
+        }
     }
 
     /// Keep the server's snapshot current for as long as the process runs: push at start-up
@@ -373,8 +416,28 @@ impl ServerLink {
             }
             tokio::select! {
                 _ = self.wake.notified() => {}
-                _ = tokio::time::sleep(Duration::from_secs(10)) => { self.check().await; }
+                _ = tokio::time::sleep(CHECK_EVERY) => { self.check().await; }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod status_tests {
+    use super::*;
+
+    fn st(version: Option<u64>, boot: &str) -> ServerStatus {
+        ServerStatus { config_version: version, boot_id: boot.into() }
+    }
+
+    #[test]
+    fn a_push_is_needed_when_away_restarted_unconfigured_or_out_of_date_and_only_then() {
+        assert!(!needs_push(true, Some("A"), 3, &st(Some(3), "A")), "in step");
+        assert!(!needs_push(true, None, 3, &st(Some(3), "A")), "the first status seen is not a restart");
+        assert!(needs_push(true, Some("A"), 3, &st(Some(3), "B")), "a new process, even with the same version");
+        assert!(needs_push(true, Some("A"), 3, &st(None, "A")), "no configuration");
+        assert!(needs_push(true, Some("A"), 3, &st(Some(4), "A")), "another version");
+        assert!(needs_push(true, Some("A"), 0, &st(Some(3), "A")), "nothing pushed by this admin yet");
+        assert!(needs_push(false, Some("A"), 3, &st(Some(3), "A")), "back after being away");
     }
 }

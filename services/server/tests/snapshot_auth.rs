@@ -125,7 +125,10 @@ async fn a_code_in_the_snapshot_pairs_once_and_a_reused_code_fails() {
 #[tokio::test]
 async fn unknown_expired_and_racing_codes() {
     let t = start().await;
-    assert!(t.pair(CODE).await.is_none(), "no snapshot yet, so nothing can pair");
+    // No snapshot yet, so nothing can pair: the server is not configured (ADR 0028 rule 3).
+    let r = t.http.post(format!("{}/api/client/v1/pairings", t.api)).header("x-askbar-client-version", "0.5.0").json(&json!({ "code": CODE })).send().await.unwrap();
+    assert_eq!(r.status(), 503);
+    assert_eq!(r.json::<askbar_proto::Problem>().await.unwrap().error, "not_configured");
     let now = askbar_server::auth::now();
     t.push(&t.snapshot(&[(CODE, now + 600), ("expired-code", now - 1)], &[])).await;
     assert!(t.pair("not-in-the-snapshot").await.is_none());

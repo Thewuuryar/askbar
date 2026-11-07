@@ -16,6 +16,7 @@ to use one (a database migration, an old path in a test) carries `names-ok` and 
 | Directory | What |
 | --- | --- |
 | `crates/askbar-proto/` | Types shared by everything: wire types, the error registry (`problem.rs`), URL prefixes (`paths.rs`). |
+| `crates/askbar-service/` | What every service shares: the per-link bearer check (`links.rs`), boot ID and `GET /status` body (`status.rs`), the `503 not_configured` gate (`configured.rs`). |
 | `services/server/` | The server: client API (`client_api.rs`), server API (`server_api.rs`), chat and generations, audit store. |
 | `services/admin/` | The admin service: the admin API (`admin_api.rs`), the site (`src/ui/`), Caddy configuration, API keys. Unix only. |
 | `services/controller/` | The controller: Docker-socket access narrowed to start, stop and restart three services. Its API is `docs/openapi/control.v1.yaml`. |

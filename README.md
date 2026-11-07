@@ -234,6 +234,7 @@ If you restore a raw copy of `data/` that still holds encrypted provider keys on
 
 ```
 crates/askbar-proto/   request/response and snapshot types shared by the server, admin and client
+crates/askbar-service/ what every service shares: per-link token checks, GET /status, the not-configured gate
 services/server/       the server: client API, server API, database, chat/LLM streaming, secrets
 services/admin/        the admin service: admin site (src/ui/), admin.db, snapshot push, Caddy configuration (unix only)
 services/controller/   the controller: starts, stops and restarts the server, Caddy and CLIProxyAPI for the admin (holds the Docker socket)
