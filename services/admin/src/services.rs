@@ -2,7 +2,7 @@
 //! session may do this (a script's API key may not), every attempt is written to `service_actions` before the
 //! controller is asked, and a few actions per minute is the most that is allowed.
 
-use crate::control_link::{ACTIONS, SERVICES};
+use crate::control_link::SERVICES;
 use crate::AdminState;
 use askbar_proto::http::ApiError;
 use askbar_proto::problem::ErrorCode;
@@ -61,13 +61,25 @@ pub async fn list(State(state): St) -> Result<Json<serde_json::Value>, Failure> 
     Ok(Json(v))
 }
 
-/// `POST /api/admin/v1/services/{name}/{action}`.
-pub async fn act(State(state): St, Path((name, action)): Path<(String, String)>) -> Result<Response, Failure> {
+/// `POST /api/admin/v1/services/{name}/start`. (Start and stop go with the controller, plan step 1.4.)
+pub async fn start(state: St, Path(name): Path<String>) -> Result<Response, Failure> {
+    act(state, name, "start").await
+}
+
+/// `POST /api/admin/v1/services/{name}/stop`.
+pub async fn stop(state: St, Path(name): Path<String>) -> Result<Response, Failure> {
+    act(state, name, "stop").await
+}
+
+/// `POST /api/admin/v1/services/{name}/restart`.
+pub async fn restart(state: St, Path(name): Path<String>) -> Result<Response, Failure> {
+    act(state, name, "restart").await
+}
+
+/// One action, each a literal path of its own (ADR 0022: no variable as an action).
+async fn act(State(state): St, name: String, action: &'static str) -> Result<Response, Failure> {
     if !SERVICES.contains(&name.as_str()) {
         return Err(ApiError::new(ErrorCode::NotFound, "No such service."));
-    }
-    if !ACTIONS.contains(&action.as_str()) {
-        return Err(ApiError::new(ErrorCode::NotFound, "No such action. Use start, stop or restart."));
     }
     let link = control(&state)?;
     let now = crate::auth::now();
@@ -88,7 +100,7 @@ pub async fn act(State(state): St, Path((name, action)): Path<(String, String)>)
             .map_err(|_| ApiError::code(ErrorCode::Internal))?;
         db.conn().last_insert_rowid()
     };
-    let (status, body) = link.act(&name, &action).await.map_err(|e| unreachable(&e))?;
+    let (status, body) = link.act(&name, action).await.map_err(|e| unreachable(&e))?;
     if status == 200 {
         let db = state.db.lock().await;
         let _ = db.conn().execute("UPDATE service_actions SET ok = 1 WHERE id = ?1", [row]);

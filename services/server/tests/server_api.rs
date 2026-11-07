@@ -166,7 +166,7 @@ async fn start_with_state() -> S {
 
 impl S {
     async fn put(&self, body: &serde_json::Value, token: Option<&str>) -> (u16, serde_json::Value) {
-        let mut r = self.t.http.put(format!("{}/api/server/v1/snapshot", self.t.url)).json(body);
+        let mut r = self.t.http.put(format!("{}/api/server/v1/config", self.t.url)).json(body);
         if let Some(t) = token {
             r = r.bearer_auth(t);
         }
@@ -196,6 +196,23 @@ async fn a_pushed_snapshot_is_stored_and_the_version_goes_up() {
     assert_eq!((stored.version, stored.kill_switch, stored.providers.len()), (2, true, 1));
     let rows: i64 = s.state.db.lock().unwrap().conn().query_row("SELECT COUNT(*) FROM config_snapshot", [], |r| r.get(0)).unwrap();
     assert_eq!(rows, 1, "one snapshot, replaced in place");
+}
+
+#[tokio::test]
+async fn status_reports_the_config_version_and_a_boot_id_that_changes_on_restart() {
+    let s = start_with_state().await;
+    let get = || async { s.t.http.get(format!("{}/api/server/v1/status", s.t.url)).bearer_auth(TOKEN).send().await.unwrap().json::<serde_json::Value>().await.unwrap() };
+    let before = get().await;
+    assert_eq!(before["config_version"], json!(null), "nothing pushed yet");
+    let boot = before["boot_id"].as_str().unwrap().to_string();
+    assert_eq!(boot.len(), 26, "a ULID: {boot}");
+    s.put(&serde_json::to_value(snapshot()).unwrap(), Some(TOKEN)).await;
+    s.put(&serde_json::to_value(snapshot()).unwrap(), Some(TOKEN)).await;
+    let after = get().await;
+    assert_eq!((after["config_version"].clone(), after["boot_id"].as_str()), (json!(2), Some(boot.as_str())), "same process, newer config");
+    // Another process (a restart) has another boot ID.
+    let other = start_with_state().await;
+    assert_ne!(other.state.boot_id, s.state.boot_id);
 }
 
 #[tokio::test]
@@ -388,9 +405,16 @@ async fn clients_and_usage_are_listed_over_the_server_api() {
         (&json!(1), &json!(2), &json!(1), &json!(1), &json!(10), &json!(20))
     );
 
-    for p in ["/api/server/v1/clients", "/api/server/v1/usage", "/api/server/v1/backup"] {
+    for p in ["/api/server/v1/clients", "/api/server/v1/usage", "/api/server/v1/status"] {
         let r = s.t.http.get(format!("{}{p}", s.t.url)).send().await.unwrap();
         assert_eq!(r.status(), 401, "{p} needs the token");
+    }
+    let r = s.t.http.post(format!("{}/api/server/v1/exports", s.t.url)).send().await.unwrap();
+    assert_eq!(r.status(), 401, "exports need the token");
+    // The old paths are gone (ADR 0022).
+    for (m, p) in [("GET", "/api/server/v1/backup"), ("PUT", "/api/server/v1/snapshot"), ("POST", "/api/server/v1/models/list")] {
+        let r = s.t.http.request(m.parse().unwrap(), format!("{}{p}", s.t.url)).bearer_auth(TOKEN).send().await.unwrap();
+        assert_eq!(r.status(), 404, "{m} {p}");
     }
 }
 
@@ -412,7 +436,7 @@ async fn the_backup_has_the_data_and_none_of_the_secrets() {
         let _ = code;
     }
 
-    let r = s.t.http.get(format!("{}/api/server/v1/backup", s.t.url)).bearer_auth(TOKEN).send().await.unwrap();
+    let r = s.t.http.post(format!("{}/api/server/v1/exports", s.t.url)).bearer_auth(TOKEN).send().await.unwrap();
     assert_eq!(r.status(), 200);
     assert!(r.headers()["content-disposition"].to_str().unwrap().contains("askbar-backup-"));
     let bytes = r.bytes().await.unwrap();
@@ -470,7 +494,7 @@ async fn taking_a_backup_leaves_no_temporary_file_behind() {
     };
     let before = leftovers();
     for _ in 0..3 {
-        let r = s.t.http.get(format!("{}/api/server/v1/backup", s.t.url)).bearer_auth(TOKEN).send().await.unwrap();
+        let r = s.t.http.post(format!("{}/api/server/v1/exports", s.t.url)).bearer_auth(TOKEN).send().await.unwrap();
         assert_eq!(r.status(), 200);
         r.bytes().await.unwrap();
     }
@@ -844,13 +868,13 @@ async fn server_api_failures_are_problems_with_a_code_and_a_sentence() {
     check(t.http.delete(url("/api/server/v1/health")).header("authorization", &auth).send().await.unwrap(), 405, "method_not_allowed").await;
     // A body that is not JSON.
     check(
-        t.http.put(url("/api/server/v1/snapshot")).header("authorization", &auth).header("content-type", "application/json").body("nope").send().await.unwrap(),
+        t.http.put(url("/api/server/v1/config")).header("authorization", &auth).header("content-type", "application/json").body("nope").send().await.unwrap(),
         400,
         "bad_request",
     )
     .await;
     // A snapshot the server refuses says why, in detail.
-    let r = t.http.put(url("/api/server/v1/snapshot")).header("authorization", &auth).json(&serde_json::json!({ "audit_retention_days": 3 })).send().await.unwrap();
+    let r = t.http.put(url("/api/server/v1/config")).header("authorization", &auth).json(&serde_json::json!({ "audit_retention_days": 3 })).send().await.unwrap();
     assert_eq!(r.status(), 400);
     let p: askbar_proto::Problem = r.json().await.unwrap();
     assert_eq!(p.error, "bad_request");

@@ -51,7 +51,7 @@ fn the_tables_list_each_api_under_its_own_prefix_and_nothing_else() {
     }
     let server = server_routes();
     assert_unique_under(&server, "/api/server/v1", &[]);
-    for (m, p) in [("PUT", "/api/server/v1/snapshot"), ("GET", "/api/server/v1/clients"), ("GET", "/api/server/v1/audit/stats")] {
+    for (m, p) in [("PUT", "/api/server/v1/config"), ("GET", "/api/server/v1/clients"), ("GET", "/api/server/v1/audit/stats")] {
         assert!(server.iter().any(|r| r.method == m && r.path == p), "missing {m} {p}");
     }
     assert!(client.iter().all(|r| !r.path.starts_with("/api/server")) && server.iter().all(|r| !r.path.starts_with("/api/client")), "the two APIs share no prefix");

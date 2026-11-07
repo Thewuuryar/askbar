@@ -294,6 +294,17 @@ async fn usage(State(state): State<Arc<AppState>>) -> Result<Json<serde_json::Va
     read().map(Json).map_err(|_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not read the usage."))
 }
 
+/// `GET /status`: which configuration this process is running, and which process it is. The admin
+/// compares both with what it pushed: no version (`config_version: null`) or another boot ID means
+/// it should push again (ADR 0028). Changes nothing.
+async fn status(State(state): State<Arc<AppState>>) -> Result<Json<serde_json::Value>, ApiError> {
+    let version = {
+        let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+        crate::snapshot::current(&db).map_err(|_| ApiError::code(ErrorCode::Internal))?.map(|s| s.version)
+    };
+    Ok(Json(serde_json::json!({ "config_version": version, "boot_id": state.boot_id })))
+}
+
 /// The database as a download, with provider keys, the Cloudflare token, the admin password
 /// hash and pairing-code hashes taken out.
 async fn backup(State(state): State<Arc<AppState>>) -> Result<Response, ApiError> {
@@ -307,15 +318,18 @@ pub fn routes() -> crate::routes::Routes {
     let v1 = |rest: &str| askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, rest);
     Routes::new()
         .get(&v1("/health"), || async { StatusCode::OK })
-        .put(&v1("/snapshot"), put_snapshot)
+        .get(&v1("/status"), status)
+        .put(&v1("/config"), put_snapshot)
         .put(&v1("/providers/{id}/key"), put_provider_key)
         .get(&v1("/providers/health"), providers_health)
         .post(&v1("/providers/{id}/test"), test_provider)
-        .post(&v1("/models/list"), list_models)
+        // POST, not GET: the request can carry a provider key, which must not go in a URL.
+        .post(&v1("/models"), list_models)
         .get(&v1("/users"), list_users)
         .get(&v1("/clients"), list_clients)
         .get(&v1("/usage"), usage)
-        .get(&v1("/backup"), backup)
+        // Unencrypted until phase 6 makes exports encrypted (ADR 0013).
+        .post(&v1("/exports"), backup)
         .get(&v1("/audit/traces"), audit_traces)
         .get(&v1("/audit/traces/{id}"), audit_trace)
         .get(&v1("/audit/stats"), audit_stats)

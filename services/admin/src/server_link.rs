@@ -272,7 +272,7 @@ impl ServerLink {
         let result = async {
             let resp = self
                 .http
-                .put(format!("{}{}", self.base, askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/snapshot")))
+                .put(format!("{}{}", self.base, askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/config")))
                 .bearer_auth(&self.token)
                 .json(snapshot)
                 .send()

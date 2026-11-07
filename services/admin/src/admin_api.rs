@@ -337,7 +337,7 @@ pub async fn list_models(State(state): St, ApiJson(i): ApiJson<ModelsInput>) -> 
     }
     let body = serde_json::to_value(&i).map_err(internal)?;
     let (status, bytes) = link(&state)?
-        .request(reqwest::Method::POST, &format!("{}/models/list", askbar_proto::paths::SERVER_V1), Some(&body))
+        .request(reqwest::Method::POST, &askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/models"), Some(&body))
         .await
         .map_err(from_push)?;
     if status != 200 {
@@ -975,7 +975,7 @@ fn admin_db_copy(db: &crate::AdminDb) -> Result<Vec<u8>, Failure> {
 
 /// The server's backup and the admin's own, in one tar file: `server.db` and `admin.db`.
 pub async fn backup(State(state): St) -> Result<Response, Failure> {
-    let (status, server_db) = link(&state)?.request(reqwest::Method::GET, &askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/backup"), None).await.map_err(from_push)?;
+    let (status, server_db) = link(&state)?.request(reqwest::Method::POST, &askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/exports"), None).await.map_err(from_push)?;
     if status != 200 {
         return Err(err(StatusCode::BAD_GATEWAY, &format!("The server answered {status}.")));
     }

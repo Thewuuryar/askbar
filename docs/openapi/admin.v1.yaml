@@ -340,7 +340,7 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '502':
           $ref: '#/components/responses/ServerUnavailable'
-  /api/admin/v1/services/{name}/{action}:
+  /api/admin/v1/services/{name}/start:
     parameters:
       - name: name
         in: path
@@ -348,15 +348,75 @@ paths:
         schema:
           type: string
           enum: [server, caddy, cpa]
-      - name: action
+    post:
+      operationId: startService
+      summary: Start a service. (Goes with the controller in plan step 1.4.)
+      description: >
+        Session-only: an admin API key cannot do this. Every attempt is recorded before the controller is asked,
+        and at most 6 are allowed per minute (429 `too_many_attempts`). Stopping or restarting Caddy can drop the
+        connection to this site; stopping the server ends running replies as interrupted. The admin and the
+        controller cannot be named. Answers with the service as it is afterwards.
+      security:
+        - adminSession: []
+      responses:
+        '200':
+          description: The service after the action.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceState'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooMany'
+        '502':
+          $ref: '#/components/responses/ServerUnavailable'
+  /api/admin/v1/services/{name}/stop:
+    parameters:
+      - name: name
         in: path
         required: true
         schema:
           type: string
-          enum: [start, stop, restart]
+          enum: [server, caddy, cpa]
     post:
-      operationId: controlService
-      summary: Start, stop or restart a service.
+      operationId: stopService
+      summary: Stop a service. (Goes with the controller in plan step 1.4.)
+      description: >
+        Session-only: an admin API key cannot do this. Every attempt is recorded before the controller is asked,
+        and at most 6 are allowed per minute (429 `too_many_attempts`). Stopping or restarting Caddy can drop the
+        connection to this site; stopping the server ends running replies as interrupted. The admin and the
+        controller cannot be named. Answers with the service as it is afterwards.
+      security:
+        - adminSession: []
+      responses:
+        '200':
+          description: The service after the action.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceState'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooMany'
+        '502':
+          $ref: '#/components/responses/ServerUnavailable'
+  /api/admin/v1/services/{name}/restart:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
+          enum: [server, caddy, cpa]
+    post:
+      operationId: restartService
+      summary: Restart a service.
       description: >
         Session-only: an admin API key cannot do this. Every attempt is recorded before the controller is asked,
         and at most 6 are allowed per minute (429 `too_many_attempts`). Stopping or restarting Caddy can drop the
