@@ -1,6 +1,6 @@
 # 0038. Names and new components, without a name check
 
-Status: Proposed
+Status: Accepted
 Date: 2026-11-07
 Source: owner decision to delete `scripts/check-names.sh`; supersedes [0021](0021-names-and-new-components.md)
 
