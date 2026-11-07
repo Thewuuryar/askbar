@@ -24,7 +24,7 @@ docker compose up -d --build
 ```
 
 1. Open **https://localhost/admin** on the machine that runs Docker, or `https://<its address>/admin` from another machine on your network, and accept the certificate warning (the install uses its own certificate until you set a host name).
-2. Sign in with the published login, **`admin` / `admin`**, and change the password at once: nothing else opens until you do ([ADR 0007](docs/adr/0007-first-run-and-admin-sign-in.md)).
+2. Sign in with the published login, **`admin` / `admin`**, and change the password.
 3. Choose the **audit passphrase**: at least 20 characters, and it cannot be recovered. It seals what the server records about replies; see *The Audit tab*.
 4. **Providers** > add one (Anthropic or OpenAI-compatible; the model is a dropdown once the address and key are in) and press **Test**, or connect a Claude or ChatGPT account on **Services** (see *CLIProxyAPI*).
 5. **Clients** > generate a pairing string.
