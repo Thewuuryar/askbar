@@ -80,6 +80,7 @@ Order change (owner approved 2026-11-07): the remaining steps keep their numbers
 | # | Step | Size | Why here |
 | --- | --- | --- | --- |
 | 6 | 1.4 self-restart, controller removed | M | Needs 1.3's health and token check. Does not wait for 2.1: restart is authenticated with the existing admin→server token, and 2.1 later changes only where that token comes from, not the endpoint. Doing it now removes the only Docker socket mount. The restart record is a log line until 2.7 sends it to the auditor. |
+| 7 | 1.15 `askbar-cpa` image with a supervisor | S–M | Right after 1.4, once [ADR 0037](adr/0037-askbar-cpa-image-and-supervisor.md) is accepted: brings back restarting `cpa` from the admin, and 3.5 needs it. |
 | 7 | 1.8 first run and forced password change | M | Independent of storage; before 1.9 so the wizard's last step can create the first user. |
 | 8 | 1.9 users and pairing keys in the admin | M | 1.9 and 1.11 both change storage and pairing; next to each other they cost one "wipe volumes and re-pair" instead of two. |
 | 9 | 1.11 spaces, one SQLite file each | L | As above. Wipe and re-pair once, at the end of this step. |
@@ -97,15 +98,16 @@ Midpoints S = 1.5 h, M = 4 h, L = 8 h. Required work left (excluding 1.12, 1.13 
 | --- | --- |
 | 1 (1.1–1.5, 1.8–1.11) | 32.5 |
 | Component ADRs (1.14, and one each for bootstrap, `askbar-audit`, auditor, `model-gateway`, alerter) | ≈ 9 |
+| 1.15 `askbar-cpa` supervisor (added 2026-11-07) | ≈ 3 |
 | 2 | 35 |
 | 3 | 21.5 |
 | 4 | 9.5 |
 | 5 | 11 |
 | 6 | 17.5 |
 | 7 | 12.5 |
-| **Total** | **≈ 149** |
+| **Total** | **≈ 152** |
 
-That is about 49 h over the ~100 h budget before any backlog item (the component ADRs, added 2026-11-07, are about 9 h of it). Proposed cuts, first to last: phase 8 (iOS, memory, mismatch alerts); 1.13 summarizing (L, ~8 h); the rest of 1.13 (~12 h); 6.4 multiple destinations (one daily destination stays: it is the ship criterion for data loss in [ADR 0002](adr/0002-v1-scope-limits-and-ship-criteria.md)); 1.12 shared spaces; 5.4 passkey (optional, after 1.0); 4.3 release check. Those cuts save about 8 h of required work (5.4, 4.3, part of 6.4), leaving ≈ 139 h. The owner kept the budget unchanged (2026-11-07); the gap is recorded here so cuts can be made in this order if hours run out.
+That is about 52 h over the ~100 h budget before any backlog item (the component ADRs and the `cpa` supervisor, added 2026-11-07, are about 12 h of it). Proposed cuts, first to last: phase 8 (iOS, memory, mismatch alerts); 1.13 summarizing (L, ~8 h); the rest of 1.13 (~12 h); 6.4 multiple destinations (one daily destination stays: it is the ship criterion for data loss in [ADR 0002](adr/0002-v1-scope-limits-and-ship-criteria.md)); 1.12 shared spaces; 5.4 passkey (optional, after 1.0); 4.3 release check. Those cuts save about 8 h of required work (5.4, 4.3, part of 6.4), leaving ≈ 142 h. The owner kept the budget unchanged (2026-11-07); the gap is recorded here so cuts can be made in this order if hours run out.
 
 **1.4 `feat!: replace the controller with self-restart`** (M) — [ADR 0005](adr/0005-no-controller-and-self-restart.md)
 - Retires the controller. It has no component ADR to amend or supersede: accepted [ADR 0005](adr/0005-no-controller-and-self-restart.md) already decides its removal, so the PR cites it and adds no ADR. (Owner to confirm.)
@@ -113,7 +115,13 @@ That is about 49 h over the ~100 h budget before any backlog item (the component
 - Build `POST /restart` on `crates/askbar-service` (the restart route can join `routes`, and its link rules are `links::Allow`). After a restart the admin already pushes again within one status check (12 s), from the new boot ID (1.3).
 - Delete `services/controller`, the `control` network, `control-token` volume reference, `docker.sock` mount, `CONTROL_V1`, `control.v1.yaml`, isolation section 3e (replace with "no service mounts docker.sock").
 - Test: scripted restart from the admin returns under 1 minute ([ADR 0002](adr/0002-v1-scope-limits-and-ship-criteria.md)).
-- Found while building it: CLIProxyAPI does not reload its config by itself (a new API key written to its config file is refused until the container restarts), so the "reload by config rewrite" above does not work. Its restart stays a host command (`docker compose restart cpa`) and the Services tab says so. **Owner decision:** add the supervisor [ADR 0005](adr/0005-no-controller-and-self-restart.md) allows, in an `askbar-cpa` image of our own built on the pinned one (a new image: component ADR first, under the rule above), or keep the host command and record that in an ADR that supersedes 0005's `cpa` row.
+- Found while building it: CLIProxyAPI does not reload its config by itself (a new API key written to its config file is refused until the container restarts), so the "reload by config rewrite" above does not work. Its restart stays a host command (`docker compose restart cpa`) and the Services tab says so. **Owner decision (2026-11-07):** add the supervisor [ADR 0005](adr/0005-no-controller-and-self-restart.md) allows, in an `askbar-cpa` image of our own: [ADR 0037](adr/0037-askbar-cpa-image-and-supervisor.md) (Proposed) first, then step 1.15.
+
+**1.15 `feat(cpa): run CLIProxyAPI under a supervisor in an askbar-cpa image`** (S–M, after [ADR 0037](adr/0037-askbar-cpa-image-and-supervisor.md) is accepted) — 0005, 0037
+- `services/cpa-supervisor` (binary `askbar-cpa-supervisor`) and a `cpa` Dockerfile target `FROM` the pinned digest; compose builds `askbar-cpa` instead of pulling the image. Restart on a `config.yaml` change, on `restart-request`, and after a crash with backoff; at most one restart per 5 s; `restart-done` echoes the request; stop signals passed on.
+- Admin: the Services tab's `cpa` Restart writes `restart-request` and waits for `restart-done` and the API (replaces the 409 and the host command); no host step when the control secret is replaced.
+- Isolation: the supervisor is the main process; a restart from the admin restarts CLIProxyAPI without restarting the container; networks, ports and volumes unchanged. Test a real login against the image.
+- A new dependency? The supervisor needs signal handling: `libc` (MIT/Apache, already in `Cargo.lock` through tokio), reason given in the PR.
 
 **1.8 `feat(admin): first run with published credentials and a forced password change`** (M) — [ADR 0007](adr/0007-first-run-and-admin-sign-in.md)
 - Initial `admin`/documented password; every route except password change refuses until changed; reject the default and username-equal passwords; host reset command (`docker compose run --rm admin reset`) recorded. Login lockout, rate limits, identical errors (Defend list, [ADR 0016](adr/0016-risk-register.md)).
@@ -196,7 +204,7 @@ That is about 49 h over the ~100 h budget before any backlog item (the component
 - Fixed prompt; pass/fail, TTFT, redacted details view; metadata-only audit record.
 
 **3.5 `feat(cpa): connect cpa to model-gateway automatically`** (M) — [ADR 0014](adr/0014-model-gateway-and-providers.md)
-- CLIProxyAPI reads its config only at start (found in 1.4), so writing its config is not enough: it must be restarted, which needs the supervisor decision from 1.4 or a host step.
+- CLIProxyAPI reads its config only at start (found in 1.4); after 1.15 its supervisor restarts it when the admin writes the config, so no host step is needed.
 - `cpa` on a gateway-only network; first start writes its config and adds it as a provider; paste-URL login: matches address and state, 10 min, single use, never logged. Test both providers against the pinned image.
 
 ## Phase 4 — Add the alerter
