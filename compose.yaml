@@ -137,8 +137,17 @@ services:
   # Its API port is NOT published; only containers on its networks can reach it: the server (edge) and the
   # admin (cpa-admin).
   cpa:
-    image: eceasy/cli-proxy-api:v8.0.51@sha256:15d13889e1a39a688be306dfbf2f6cf9003e99cd913b5070fa463f8ab2aa0031
+    # CLIProxyAPI (pinned by digest in the Dockerfile's `cpa` target) under a small supervisor of ours, which
+    # restarts it when its config changes or the admin asks: it reads its config only at start (ADR 0037).
+    build:
+      context: .
+      target: cpa
+    image: askbar-cpa:latest
     container_name: askbar-cpa
+    # Root, as CLIProxyAPI writes /root/.cli-proxy-api, in the admin's group (10001) like Caddy: with every
+    # capability dropped, the supervisor writes the admin's restart-done (mode 0660) through the group bit.
+    # cpa mounts nothing else group 10001 could open.
+    user: "0:10001"
     restart: unless-stopped
     # No exception needed (tested with v8.0.51): logins go to cpa-auth, and the admin writes the config. CPA
     # logs a warning that it cannot make /cpa-config/static, its own web panel, which Askbar does not use.
@@ -147,7 +156,6 @@ services:
     depends_on:
       admin:
         condition: service_healthy
-    command: ["./CLIProxyAPI", "-config", "/cpa-config/config.yaml"]
     networks:
       - edge
       - cpa-admin

@@ -7,9 +7,9 @@ Thanks for looking. This page is how to build, run and change Askbar. How the pa
 ## The names
 
 The glossary in [docs/architecture.md](docs/architecture.md#glossary) is the list. Everything, from paths to variable names to UI text, says **client** (a paired app and its token), **server**
-(the Askbar server, and its interface for the admin) or **admin** (the admin site and its interface). The old
-words `mgmt`, `management` and `device` are checked for and refused by `scripts/check-names.sh`; a line that has <!-- names-ok: this sentence names them -->
-to use one (a database migration, an old path in a test) carries `names-ok` and a reason.
+(the Askbar server, and its interface for the admin) or **admin** (the admin site and its interface). Reviewers
+check for the retired names `mgmt`, `management` and `device` in Askbar's own roles; there is no script
+([ADR 0038](docs/adr/0038-names-and-new-components-without-a-name-check.md)).
 
 ## Layout
 
@@ -19,6 +19,7 @@ to use one (a database migration, an old path in a test) carries `names-ok` and 
 | `crates/askbar-service/` | What every service shares: the per-link bearer check (`links.rs`), boot ID and `GET /status` body (`status.rs`), the `503 not_configured` gate (`configured.rs`). |
 | `services/server/` | The server: client API (`client_api.rs`), server API (`server_api.rs`), chat and generations, audit store. |
 | `services/admin/` | The admin service: the admin API (`admin_api.rs`), the site (`src/ui/`), Caddy configuration, API keys. Unix only. |
+| `services/cpa-supervisor/` | The supervisor in the `askbar-cpa` image: runs CLIProxyAPI and restarts it on a config change, a restart request or a crash ([ADR 0037](docs/adr/0037-askbar-cpa-image-and-supervisor.md)). |
 | `clients/desktop/` | The desktop app, its own Cargo workspace: `src-tauri/` (Cargo package `askbar-client`, program `askbar`), the popup in `ui/` (no build step) and its `tests/`. |
 | `deploy/caddy/`, `deploy/cpa/` | Caddy's bootstrap config; notes on CLIProxyAPI. |
 | `docs/` | `architecture.md`, `adr/` (decisions), `style/`, `wire-contract.md` (prose), `openapi/` (one file per API), `refactor-log.md`. |

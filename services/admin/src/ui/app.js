@@ -201,7 +201,7 @@
     server: { title: 'Server', what: 'the Askbar server (chats, history, provider calls)', warn: 'Replies being written end as interrupted, and apps say "server offline" until it is back (under a minute).' },
     admin: { title: 'Admin', what: 'the admin (this site)', warn: 'This page stops answering for a few seconds, then reloads, and you sign in again.' },
     caddy: { title: 'Caddy (HTTPS front end)', what: 'the HTTPS front end', warn: 'Its configuration is pushed again; connections may drop for a moment.' },
-    cpa: { title: 'CLIProxyAPI', what: 'CLIProxyAPI', warn: '', host: 'Restart it from the host: docker compose restart cpa' },
+    cpa: { title: 'CLIProxyAPI', what: 'CLIProxyAPI', warn: 'Providers that use your Claude or ChatGPT login fail for a few seconds while it starts again.' },
   };
   let servicesBusy = false;
 
@@ -220,10 +220,10 @@
     head.append(title, state);
     const meta = document.createElement('div');
     meta.className = 'hint';
-    meta.textContent = (svc.status || '') + (info.host ? ' ' + info.host + '.' : '');
+    meta.textContent = svc.status || '';
     const buttons = document.createElement('div');
     buttons.className = 'row';
-    for (const action of info.host ? [] : ['restart']) {
+    for (const action of ['restart']) {
       const b = document.createElement('button');
       b.type = 'button';
       b.className = 'secondary';

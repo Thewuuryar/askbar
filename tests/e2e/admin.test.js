@@ -312,9 +312,9 @@ async function waitForPort(port) {
     await page.click('#services .card[data-name="server"] [data-action="restart"]');
     assert.match(asked, /Replies being written end as interrupted/);
     await page.waitForFunction(() => /None yet/.test(document.getElementById('services-recent').textContent));
-    // CLIProxyAPI is restarted from the host: no button, and the card says how.
-    assert.equal(await page.locator('#services .card[data-name="cpa"] button').count(), 0);
-    assert.match(await page.innerText('#services .card[data-name="cpa"]'), /docker compose restart cpa/);
+    // CLIProxyAPI is restarted through its supervisor (ADR 0037), so it has a Restart button too. (Not
+    // clicked here: there is no supervisor in this test, and the admin would wait a minute for it.)
+    assert.deepEqual(await page.$$eval('#services .card[data-name="cpa"] button', (b) => b.map((x) => x.dataset.action)), ['restart']);
     // Accepted: the attempt is made and recorded; Caddy is not running here, so it fails and says so.
     page.once('dialog', (d) => d.accept());
     await page.click('#services .card[data-name="caddy"] [data-action="restart"]');

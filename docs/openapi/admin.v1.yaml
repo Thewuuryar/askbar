@@ -357,8 +357,7 @@ paths:
         process answers (a new boot ID), at most a minute; replies being written end as interrupted, and the
         server's 30-second cooldown after it starts is passed on as 429. `admin`: answers 202 and exits; this page
         reconnects when Docker has started it again. `caddy`: pushes its configuration again, which Caddy applies
-        live. `cpa`: refused with 409 `conflict` and the host command (`docker compose restart cpa`), because
-        CLIProxyAPI does not reload its configuration by itself.
+        live. `cpa`: asks its supervisor (ADR 0037) and waits for CLIProxyAPI to answer again, at most a minute.
       security:
         - adminSession: []
       responses:
@@ -378,8 +377,6 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
-        '409':
-          description: CLIProxyAPI is restarted from the host (`conflict`); the detail names the command.
         '429':
           $ref: '#/components/responses/TooMany'
         '502':
