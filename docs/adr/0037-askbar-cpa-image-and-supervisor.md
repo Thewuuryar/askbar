@@ -1,6 +1,6 @@
 # 0037. The `askbar-cpa` image and its supervisor
 
-Status: Proposed
+Status: Accepted
 Date: 2026-11-07
 Source: plan step 1.4 ([plan-v1.md](../plan-v1.md)); owner choice of a supervisor for `cpa`; owner rule that every new component gets an ADR before it is created
 
