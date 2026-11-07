@@ -53,7 +53,7 @@ The script still checks the current `main` layout. For v1, it must check against
 - Internal APIs answer only with the right token, and fail closed without one.
 - Only approved services can reach each link.
 - Services can't read each other's files or sockets, and only the auditor mounts the audit store.
-- Secret files are mode 600, and the server image has no admin code.
+- Secret files are mode 600, and the server image has no admin code. The two Caddy reads (the install's own certificate key and the Cloudflare token) are 640 with the admin's group, which only Caddy shares.
 - Backups hold secrets only in encrypted form.
 - No unsealed prompts, replies or provider errors appear in the audit store, logs or error text.
 - The server can't open a model-call span, and no service token can read, change or delete audit records.

@@ -210,6 +210,33 @@ else
   [ -z "$(docker inspect -f '{{range $p, $b := .NetworkSettings.Ports}}{{if $b}}{{$p}} {{end}}{{end}}' "$CPA")" ] && pass "cpa publishes no port" || fail "cpa publishes a port"
 fi
 
+echo "== 3d2. Container hardening (ADR 0032)"
+# Every running service: read-only root, no capabilities but Caddy's NET_BIND_SERVICE, no privilege gain,
+# process and memory limits, a private /tmp, and no host-gateway alias.
+for svc in server admin caddy cpa controller mock-llm; do
+  c=$(docker compose -p "$PROJECT" ps -q "$svc" 2>/dev/null | head -1)
+  [ -n "$c" ] || { echo "SKIP  $svc is not running"; continue; }
+  want_add=""; [ "$svc" = caddy ] && want_add="NET_BIND_SERVICE"
+  got=$(docker inspect -f '{{.HostConfig.ReadonlyRootfs}}|{{join .HostConfig.CapDrop ","}}|{{join .HostConfig.CapAdd ","}}|{{join .HostConfig.SecurityOpt ","}}|{{if .HostConfig.PidsLimit}}{{.HostConfig.PidsLimit}}{{end}}|{{.HostConfig.Memory}}|{{range $k, $v := .HostConfig.Tmpfs}}{{$k}}{{end}}|{{join .HostConfig.ExtraHosts ","}}' "$c")
+  IFS='|' read -r ro drop add sec pids mem tmp hosts <<EOF_H
+$got
+EOF_H
+  bad=""
+  [ "$ro" = true ] || bad="$bad read_only=$ro"
+  [ "$drop" = ALL ] || bad="$bad cap_drop=$drop"
+  [ "${add#CAP_}" = "$want_add" ] || bad="$bad cap_add=$add"
+  case ",$sec," in *",no-new-privileges:true,"*|*",no-new-privileges,"*) ;; *) bad="$bad security_opt=$sec";; esac
+  [ -n "$pids" ] && [ "$pids" -gt 0 ] || bad="$bad pids_limit=${pids:-none}"
+  [ "${mem:-0}" -gt 0 ] || bad="$bad mem_limit=none"
+  [ "$tmp" = /tmp ] || bad="$bad tmpfs=$tmp"
+  case "$hosts" in *host-gateway*|*host.docker.internal*) bad="$bad extra_hosts=$hosts";; esac
+  [ -z "$bad" ] && pass "$svc is hardened" || fail "$svc is not hardened:$bad"
+done
+# Each hardened service is writing only to its volumes: its root filesystem refuses a write.
+for c in $SERVER $ADMIN $CADDY; do
+  refused "$c cannot write its root filesystem" docker exec "$c" sh -c 'echo x > /hardening-probe'
+done
+
 echo "== 3e. The controller"
 # The one container with the Docker socket: nothing else mounts it, it is reachable only from the admin, and
 # it cannot be asked about anything but the server, Caddy and CLIProxyAPI.
@@ -303,9 +330,13 @@ for f in "$ADMIN:/admin-secrets/admin.key" "$ADMIN:/admin-secrets/server.token" 
   m=$(docker exec "${f%%:*}" stat -c %a "${f#*:}" 2>/dev/null)
   [ "$m" = 600 ] || { fail "${f#*:} has mode ${m:-missing}, expected 600"; modes_ok=0; }
 done
-docker exec "$ADMIN" test -e /caddy-secrets/cf_token \
-  && { [ "$(docker exec "$ADMIN" stat -c %a /caddy-secrets/cf_token)" = 600 ] || { fail "cf_token is not 0600"; modes_ok=0; }; }
-[ "$modes_ok" = 1 ] && pass "token files and the master key are mode 600"
+# Caddy reads these two through group 10001 (no CAP_DAC_OVERRIDE, ADR 0032), so they are 0640, not 0600.
+for f in self.key cf_token; do
+  docker exec "$ADMIN" test -e "/caddy-secrets/$f" || continue
+  m=$(docker exec "$ADMIN" stat -c '%a %g' "/caddy-secrets/$f")
+  [ "$m" = "640 10001" ] || { fail "$f has mode and group '$m', expected '640 10001'"; modes_ok=0; }
+done
+[ "$modes_ok" = 1 ] && pass "token files and the master key are mode 600, Caddy's key and token 640"
 
 MARK="sk-isolation-$(head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 out=$(admin_script "$(admin_login)

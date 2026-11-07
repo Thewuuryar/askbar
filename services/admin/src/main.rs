@@ -16,7 +16,11 @@ async fn main() {
     let link = askbar_admin::server_link::ServerLink::new(&askbar_admin::server_link::server_url(), token);
     let secrets = askbar_admin::secrets::AdminSecrets::load_or_create(&askbar_admin::server_link::secrets_dir()).unwrap_or_else(|e| die(e, 1));
     let state = askbar_admin::AdminState::build(db, Some(link.clone()), secrets);
-    state.set_caddy(askbar_admin::caddy::CaddyLink::from_env());
+    let caddy = askbar_admin::caddy::CaddyLink::from_env();
+    if let Err(e) = caddy.share_socket_dir() {
+        eprintln!("warning: Caddy may not be able to make its admin socket: {e}");
+    }
+    state.set_caddy(caddy);
     match askbar_admin::control_link::ControlLink::from_env(&askbar_admin::server_link::secrets_dir()) {
         Ok(link) => state.set_control(link),
         Err(e) => eprintln!("warning: the controller link is off: {e}"),

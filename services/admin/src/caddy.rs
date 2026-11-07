@@ -41,6 +41,18 @@ impl CaddyLink {
         let get = |k: &str| std::env::var(k).ok().filter(|v| !v.trim().is_empty());
         CaddyLink { socket: get("ASKBAR_CADDY_SOCKET").map(PathBuf::from), secrets_dir: get("ASKBAR_CADDY_SECRETS_DIR").map(PathBuf::from) }
     }
+
+    /// Let Caddy make its admin socket in the directory the admin shares with it. The admin's image owns
+    /// that directory (uid and group 10001); Caddy runs in group 10001 with every capability dropped
+    /// ([ADR 0032](../../../docs/adr/0032-container-hardening.md)), so it can write there only through the
+    /// group bit. Set on every start, because a volume made by an earlier release is 0755.
+    pub fn share_socket_dir(&self) -> std::io::Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+        match self.socket.as_deref().and_then(Path::parent) {
+            Some(dir) if dir.is_dir() => std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o770)),
+            _ => Ok(()),
+        }
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -125,7 +137,8 @@ pub fn bootstrap_caddyfile() -> String {
     format!("{{\n\tadmin {CADDY_ADMIN_LISTEN}\n}}\n")
 }
 
-/// Write (or remove) the token file Caddy reads. Atomic, mode 0600.
+/// Write (or remove) the token file Caddy reads. Atomic, mode 0640: Caddy reads it through the admin's
+/// group, with every capability dropped (ADR 0032).
 fn sync_token_file(dir: &Path, token: Option<&str>) -> std::io::Result<()> {
     let target = dir.join("cf_token");
     match token {
@@ -135,7 +148,7 @@ fn sync_token_file(dir: &Path, token: Option<&str>) -> std::io::Result<()> {
             std::fs::create_dir_all(dir)?;
             let tmp = dir.join(".cf_token.tmp");
             let _ = std::fs::remove_file(&tmp);
-            let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&tmp)?;
+            let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o640).open(&tmp)?;
             f.write_all(t.as_bytes())?;
             f.sync_all()?;
             std::fs::rename(&tmp, &target)
@@ -393,12 +406,25 @@ askbar.orraitu.com {{
     }
 
     #[test]
-    fn token_file_is_private_and_removed_when_not_needed() {
+    fn the_socket_directory_is_shared_with_the_group_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("askbar-admin-run-{}", ulid::Ulid::new()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let link = CaddyLink { socket: Some(dir.join("admin.sock")), secrets_dir: None };
+        link.share_socket_dir().unwrap();
+        assert_eq!(std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777, 0o770);
+        CaddyLink { socket: None, secrets_dir: None }.share_socket_dir().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn token_file_is_owner_and_group_only_and_removed_when_not_needed() {
         let dir = std::env::temp_dir().join(format!("askbar-admin-cf-{}", ulid::Ulid::new()));
         sync_token_file(&dir, Some("tok_123")).unwrap();
         let f = dir.join("cf_token");
         assert_eq!(std::fs::read_to_string(&f).unwrap(), "tok_123");
-        assert_eq!(std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(&f).unwrap().permissions()) & 0o777, 0o600);
+        assert_eq!(std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(&f).unwrap().permissions()) & 0o777, 0o640);
         sync_token_file(&dir, Some("tok_456")).unwrap();
         assert_eq!(std::fs::read_to_string(&f).unwrap(), "tok_456");
         sync_token_file(&dir, None).unwrap();

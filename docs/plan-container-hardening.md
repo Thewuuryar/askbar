@@ -4,7 +4,7 @@ Status: tracker for hardening work not yet decided or built. The v1 container se
 
 ## Why
 
-The owner's priority is a compromised server, then a compromised admin, and keeping every path a model or a bug could use to break containment short. On `main`, only the controller is hardened in `compose.yaml` today (`read_only`, `cap_drop: [ALL]`, `no-new-privileges`), and v1 drops the controller ([ADR 0005](adr/0005-no-controller-and-self-restart.md)).
+The owner's priority is a compromised server, then a compromised admin, and keeping every path a model or a bug could use to break containment short. Every service in `compose.yaml` now has the [ADR 0032](adr/0032-container-hardening.md) settings, from one shared block; Caddy keeps only `NET_BIND_SERVICE`.
 
 ## Proposals
 
@@ -18,4 +18,3 @@ Each is small enough to ship alone. Order is by value for effort.
 ## Open questions
 
 - Who maintains the egress proxy's allowed list (item 1)?
-- Do any services still need a writable root filesystem? [ADR 0032](adr/0032-container-hardening.md) allows a documented exception for `cpa` after testing.
