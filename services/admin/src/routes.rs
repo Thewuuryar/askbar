@@ -115,7 +115,7 @@ pub fn route_table() -> Vec<RouteEntry> {
     table
 }
 
-/// The routes of the API only (under `/admin/api/v1`), sorted: what the OpenAPI file describes.
+/// The routes of the API only (under `/api/admin/v1`), sorted: what the OpenAPI file describes.
 pub fn api_route_table() -> Vec<RouteEntry> {
     route_table().into_iter().filter(|r| r.path.starts_with(askbar_proto::paths::ADMIN_V1)).collect()
 }

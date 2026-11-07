@@ -81,15 +81,15 @@ fn not_found_body() -> String {
     String::from_utf8(p.to_json_bytes()).expect("a problem is UTF-8 JSON")
 }
 
-/// The three kinds of path on the one host: `/admin` and below go to the admin's unix socket (behind
-/// `allowed`, when it is not empty); the client API (and `/api/v1`, which the server answers with
+/// The three kinds of path on the one host: the admin site (`/admin`) and the admin API
+/// (`/api/admin`) go to the admin's unix socket (behind `allowed`, when it is not empty); the client API (and `/api/v1`, which the server answers with
 /// "update the app") goes to the server's client listener. The match names those two prefixes and
 /// no wider one, because the server API (`/api/server`) is for the admin only and has no public
 /// route; anything else gets a 404 problem.
 fn routes(allowed: &[String]) -> String {
     use askbar_proto::paths;
-    let (admin, client, old) = (paths::ADMIN, paths::CLIENT, paths::TOMBSTONE_V1);
-    let mut out = format!("\t@admin path {admin} {admin}/*\n\thandle @admin {{\n");
+    let (admin, admin_api, client, old) = (paths::ADMIN, paths::ADMIN_API, paths::CLIENT, paths::TOMBSTONE_V1);
+    let mut out = format!("\t@admin path {admin} {admin}/* {admin_api}/*\n\thandle @admin {{\n");
     if !allowed.is_empty() {
         out.push_str(&format!("\t\t@outside not remote_ip {}\n\t\tabort @outside\n", allowed.join(" ")));
     }
@@ -282,7 +282,7 @@ mod tests {
 
 :443 {{
 \ttls /caddy-secrets/self.crt /caddy-secrets/self.key
-\t@admin path /admin /admin/*
+\t@admin path /admin /admin/* /api/admin/*
 \thandle @admin {{
 \t\t@outside not remote_ip 127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 ::1/128 fc00::/7 fe80::/10
 \t\tabort @outside
@@ -353,7 +353,7 @@ http:// {{
 }}
 
 askbar.orraitu.com {{
-\t@admin path /admin /admin/*
+\t@admin path /admin /admin/* /api/admin/*
 \thandle @admin {{
 \t\treverse_proxy unix//run/admin/admin.sock
 \t}}

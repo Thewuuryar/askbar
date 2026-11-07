@@ -48,7 +48,7 @@ fn recent(db: &crate::AdminDb) -> serde_json::Value {
     serde_json::Value::Array(out)
 }
 
-/// `GET /admin/api/v1/services`: how each service is doing, and the last ten actions.
+/// `GET /api/admin/v1/services`: how each service is doing, and the last ten actions.
 pub async fn list(State(state): St) -> Result<Json<serde_json::Value>, Failure> {
     let link = control(&state)?;
     let (status, body) = link.services().await.map_err(|e| unreachable(&e))?;
@@ -61,7 +61,7 @@ pub async fn list(State(state): St) -> Result<Json<serde_json::Value>, Failure> 
     Ok(Json(v))
 }
 
-/// `POST /admin/api/v1/services/{name}/{action}`.
+/// `POST /api/admin/v1/services/{name}/{action}`.
 pub async fn act(State(state): St, Path((name, action)): Path<(String, String)>) -> Result<Response, Failure> {
     if !SERVICES.contains(&name.as_str()) {
         return Err(ApiError::new(ErrorCode::NotFound, "No such service."));

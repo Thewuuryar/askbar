@@ -121,7 +121,7 @@ fn asset(content_type: &'static str, body: &'static str) -> impl axum::response:
 
 /// All of the admin's routes, with the list of what was registered (see `routes`).
 pub fn routes(state: &Arc<AdminState>) -> Routes {
-    // Every API route is under `/admin/api/v1` (askbar_proto::paths::ADMIN_V1).
+    // Every API route is under `/api/admin/v1` (askbar_proto::paths::ADMIN_V1).
     let v1 = |rest: &str| askbar_proto::paths::join(askbar_proto::paths::ADMIN_V1, rest);
     // What a script with an admin API key may also call.
     let api = Routes::new()
@@ -210,7 +210,7 @@ pub async fn serve_unix(path: &std::path::Path, app: Router) -> std::io::Result<
     axum::serve(listener, app).await
 }
 
-/// `askbar-admin healthcheck`: ask the admin socket for `/admin/api/v1/health`. True on a 200.
+/// `askbar-admin healthcheck`: ask the admin socket for `/api/admin/v1/health`. True on a 200.
 pub fn healthcheck(path: &std::path::Path) -> bool {
     use std::io::{Read, Write};
     let attempt = || -> std::io::Result<bool> {
@@ -218,7 +218,7 @@ pub fn healthcheck(path: &std::path::Path) -> bool {
         let mut s = std::os::unix::net::UnixStream::connect(path)?;
         s.set_read_timeout(Some(timeout))?;
         s.set_write_timeout(Some(timeout))?;
-        s.write_all(b"GET /admin/api/v1/health HTTP/1.0\r\nHost: admin\r\n\r\n")?;
+        s.write_all(b"GET /api/admin/v1/health HTTP/1.0\r\nHost: admin\r\n\r\n")?;
         let mut head = [0u8; 12];
         s.read_exact(&mut head)?;
         Ok(&head == b"HTTP/1.1 200" || &head == b"HTTP/1.0 200")

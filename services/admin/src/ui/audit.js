@@ -131,10 +131,10 @@
   async function loadOverview() {
     const since = Math.floor(Date.now() / 1000) - Number($('audit-window').value);
     try {
-      const list = await api('GET', '/admin/api/v1/providers');
+      const list = await api('GET', '/api/admin/v1/providers');
       providerNames = Object.fromEntries(list.map((p) => [p.id, p.name]));
     } catch (_) { /* names are a nicety; ids are shown without them */ }
-    const stats = await read('/admin/api/v1/audit/stats?since=' + since);
+    const stats = await read('/api/admin/v1/audit/stats?since=' + since);
     if (stats) renderOverview(stats);
   }
 
@@ -181,7 +181,7 @@
       $('audit-rows').textContent = '';
       requests.last = null;
     }
-    const list = await read('/admin/api/v1/audit/traces?' + requestsQuery({ status: requests.status, provider: requests.provider, before: more ? requests.last : null }));
+    const list = await read('/api/admin/v1/audit/traces?' + requestsQuery({ status: requests.status, provider: requests.provider, before: more ? requests.last : null }));
     if (!list) return;
     const rows = list.traces || [];
     for (const t of rows) $('audit-rows').appendChild(requestRow(t));
@@ -352,7 +352,7 @@
   async function loadRouting() {
     renderAttempts(state.trace);
     const since = Math.floor(Date.now() / 1000) - Number($('audit-window').value);
-    const [stats, health] = await Promise.all([read('/admin/api/v1/audit/stats?since=' + since), read('/admin/api/v1/audit/provider-health')]);
+    const [stats, health] = await Promise.all([read('/api/admin/v1/audit/stats?since=' + since), read('/api/admin/v1/audit/provider-health')]);
     const flagged = new Map(((health && health.providers) || []).map((p) => [p.provider_id, p]));
     const rows = ((stats && stats.by_provider) || []).filter((p) => p.provider_id);
     // A provider that is flagged but had no tries in the window still deserves a row.
@@ -402,7 +402,7 @@
 
   // Every attempt to open sealed content, newest first, from the admin's own record.
   async function loadAccess() {
-    const r = await read('/admin/api/v1/audit/access');
+    const r = await read('/api/admin/v1/audit/access');
     if (!r) return;
     const body = $('audit-access-rows');
     body.textContent = '';
@@ -459,7 +459,7 @@
     $('audit-pass').value = ''; // gone from the field the moment it is sent, whatever the answer
     show($('audit-pass-error'), false);
     try {
-      const r = await api('POST', '/admin/api/v1/audit/payloads/' + encodeURIComponent(state.opening.id) + '/open', { passphrase }).finally(loadAccess);
+      const r = await api('POST', '/api/admin/v1/audit/payloads/' + encodeURIComponent(state.opening.id) + '/open', { passphrase }).finally(loadAccess);
       const plain = $('audit-plain');
       plain.textContent = '';
       for (const p of r.payloads) {
@@ -485,7 +485,7 @@
   async function openTrace(id) {
     state.traceId = id;
     setSub('trace');
-    const trace = await read('/admin/api/v1/audit/traces/' + encodeURIComponent(id));
+    const trace = await read('/api/admin/v1/audit/traces/' + encodeURIComponent(id));
     if (trace && state.traceId === id) {
       state.trace = trace;
       renderTrace(trace);

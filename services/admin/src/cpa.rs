@@ -276,7 +276,7 @@ fn down(e: String) -> Failure {
     ApiError::new(ErrorCode::ServerUnavailable, e)
 }
 
-/// `GET /admin/api/v1/cpa`: whether CPA answers, the accounts connected to it, and its provider.
+/// `GET /api/admin/v1/cpa`: whether CPA answers, the accounts connected to it, and its provider.
 pub async fn status(State(state): St) -> Json<Value> {
     let Ok(l) = link(&state) else { return Json(json!({ "configured": false, "reachable": false, "accounts": [], "provider_id": null })) };
     let accounts = l.accounts().await;
@@ -292,7 +292,7 @@ pub struct LoginInput {
     provider: String,
 }
 
-/// `POST /admin/api/v1/cpa/logins`: start a login. Open `url` in a browser, approve, then paste the address the
+/// `POST /api/admin/v1/cpa/logins`: start a login. Open `url` in a browser, approve, then paste the address the
 /// browser ends up on into `POST .../logins/{state}/callback`.
 pub async fn start_login(State(state): St, ApiJson(i): ApiJson<LoginInput>) -> Result<Json<Value>, Failure> {
     if cpa_name(&i.provider).is_none() {
@@ -333,7 +333,7 @@ fn check_redirect(raw: &str, state: &str) -> Result<String, &'static str> {
     }
 }
 
-/// `POST /admin/api/v1/cpa/logins/{state}/callback`.
+/// `POST /api/admin/v1/cpa/logins/{state}/callback`.
 pub async fn finish_login(State(state): St, Path(st): Path<String>, ApiJson(i): ApiJson<CallbackInput>) -> Result<Json<Value>, Failure> {
     let l = link(&state)?;
     let now = crate::auth::now();
@@ -354,7 +354,7 @@ pub async fn finish_login(State(state): St, Path(st): Path<String>, ApiJson(i): 
     Ok(Json(json!({ "ok": true })))
 }
 
-/// `GET /admin/api/v1/cpa/logins/{state}`: `wait`, `ok` or `error`. On `ok` the CPA provider is made if it was not.
+/// `GET /api/admin/v1/cpa/logins/{state}`: `wait`, `ok` or `error`. On `ok` the CPA provider is made if it was not.
 pub async fn login_status(State(state): St, Path(st): Path<String>) -> Result<Json<Value>, Failure> {
     let l = link(&state)?;
     let (status, message) = l.login_status(&st).await.map_err(down)?;
@@ -365,7 +365,7 @@ pub async fn login_status(State(state): St, Path(st): Path<String>) -> Result<Js
     Ok(Json(json!({ "status": status, "message": message, "provider_id": provider_id })))
 }
 
-/// `DELETE /admin/api/v1/cpa/accounts/{name}`: disconnect an account.
+/// `DELETE /api/admin/v1/cpa/accounts/{name}`: disconnect an account.
 pub async fn remove_account(State(state): St, Path(name): Path<String>) -> Result<axum::http::StatusCode, Failure> {
     if name.is_empty() || name.len() > 200 || name.contains('/') || name.contains('\\') || name.contains("..") {
         return Err(ApiError::new(ErrorCode::NotFound, "No such account."));

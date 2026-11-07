@@ -39,17 +39,17 @@ fn the_table_lists_the_api_under_v1_without_duplicates() {
     }
     let api = routes::api_route_table();
     assert!(api.len() >= 25, "{}", api.len());
-    assert!(api.iter().all(|r| r.path.starts_with("/admin/api/v1/")), "{api:?}");
+    assert!(api.iter().all(|r| r.path.starts_with("/api/admin/v1/")), "{api:?}");
     for (m, p) in [
-        ("GET", "/admin/api/v1/providers"),
-        ("POST", "/admin/api/v1/providers"),
-        ("PUT", "/admin/api/v1/password"),
-        ("POST", "/admin/api/v1/session"),
-        ("GET", "/admin/api/v1/session"),
-        ("DELETE", "/admin/api/v1/session"),
-        ("GET", "/admin/api/v1/health"),
-        ("POST", "/admin/api/v1/pairings"),
-        ("GET", "/admin/api/v1/clients"),
+        ("GET", "/api/admin/v1/providers"),
+        ("POST", "/api/admin/v1/providers"),
+        ("PUT", "/api/admin/v1/password"),
+        ("POST", "/api/admin/v1/session"),
+        ("GET", "/api/admin/v1/session"),
+        ("DELETE", "/api/admin/v1/session"),
+        ("GET", "/api/admin/v1/health"),
+        ("POST", "/api/admin/v1/pairings"),
+        ("GET", "/api/admin/v1/clients"),
     ] {
         assert!(api.iter().any(|r| r.method == m && r.path == p), "missing {m} {p}");
     }
@@ -73,6 +73,6 @@ async fn every_registered_route_answers_and_a_method_that_is_not_registered_is_a
         let res = http.patch(format!("{url}{}", concrete(p))).header("x-askbar-admin", "1").send().await.unwrap();
         assert_eq!(res.status(), 405, "PATCH {p} is not registered");
     }
-    let res = http.get(format!("{url}/admin/api/v1/no-such-thing")).send().await.unwrap();
+    let res = http.get(format!("{url}/api/admin/v1/no-such-thing")).send().await.unwrap();
     assert_eq!(res.status(), 404);
 }

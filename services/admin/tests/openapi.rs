@@ -110,7 +110,7 @@ async fn what_the_file_says_about_a_key_is_what_the_admin_does() {
     }
     let want_session_only: BTreeSet<(String, String)> = [("GET", "/session"), ("DELETE", "/session"), ("PUT", "/password"), ("GET", "/keys"), ("POST", "/keys"), ("DELETE", "/keys/{id}"), ("GET", "/services"), ("POST", "/services/{name}/{action}"), ("GET", "/cpa"), ("POST", "/cpa/logins"), ("GET", "/cpa/logins/{state}"), ("POST", "/cpa/logins/{state}/callback"), ("DELETE", "/cpa/accounts/{name}")]
         .into_iter()
-        .map(|(m, p)| (m.to_string(), format!("/admin/api/v1{p}")))
+        .map(|(m, p)| (m.to_string(), format!("/api/admin/v1{p}")))
         .collect();
     assert_eq!(session_only, want_session_only, "the routes a key may not call");
     assert_eq!(open.len(), 4, "health, setup (read), setup password and sign-in are open: {open:?}");

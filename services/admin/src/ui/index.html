@@ -254,7 +254,7 @@
         <div class="panel">
           <p>Download a backup: the server's database (conversations, settings and paired clients) and this admin's own settings, as a <code>.tar</code> file with <code>server.db</code> and <code>admin.db</code>.</p>
           <p class="hint">Provider API keys, the Cloudflare token, the admin password and pairing codes are left out. After restoring, enter the keys again on the Providers page. The server's master key is not in this file: back up its <code>askbar-secrets</code> volume separately.</p>
-          <p><a class="button" id="backup-link" href="/admin/api/v1/backup" download>Download backup</a></p>
+          <p><a class="button" id="backup-link" href="/api/admin/v1/backup" download>Download backup</a></p>
         </div>
       </section>
 
@@ -290,7 +290,7 @@
         </form>
         <div id="key-panel" class="panel">
           <h3>Admin API key</h3>
-          <p class="hint">For scripts. Send it as <code>Authorization: Bearer &lt;key&gt;</code> to <code>/admin/api/v1</code>. It can do what this site can, except manage keys, change the password or sign in. One key at a time. It is shown once, when you make it.</p>
+          <p class="hint">For scripts. Send it as <code>Authorization: Bearer &lt;key&gt;</code> to <code>/api/admin/v1</code>. It can do what this site can, except manage keys, change the password or sign in. One key at a time. It is shown once, when you make it.</p>
           <form id="key-form">
             <label>Name <input id="key-name" maxlength="60" placeholder="build server" autocomplete="off" required></label>
             <div class="row"><button type="submit" id="key-create">Create key</button></div>

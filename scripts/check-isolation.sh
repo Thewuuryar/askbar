@@ -84,7 +84,7 @@ $1"
 # Before anything else: an admin that already has a password needs ASKBAR_ADMIN_PASSWORD. Without it every
 # step would sign in wrongly, fail, and (five wrong tries) lock sign-in out for 15 minutes.
 if [ -z "${ASKBAR_ADMIN_PASSWORD:-}" ]; then
-  state=$(admin_script "s, body = call('GET', '/admin/api/v1/setup'); print(json.loads(body).get('password_set') if s == 200 else 'unknown')" 2>/dev/null | tail -1)
+  state=$(admin_script "s, body = call('GET', '/api/admin/v1/setup'); print(json.loads(body).get('password_set') if s == 200 else 'unknown')" 2>/dev/null | tail -1)
   if [ "$state" = "True" ]; then
     echo "The admin already has a password. Run again with it:" >&2
     echo "  ASKBAR_ADMIN_PASSWORD='your admin password' scripts/check-isolation.sh" >&2
@@ -93,10 +93,10 @@ if [ -z "${ASKBAR_ADMIN_PASSWORD:-}" ]; then
 fi
 admin_login() { # python lines that sign in (or run first-run setup), used before every script
   cat <<EOF
-s, _ = call("POST", "/admin/api/v1/session", {"password": "$PW"})
+s, _ = call("POST", "/api/admin/v1/session", {"password": "$PW"})
 if s != 204:
-    call("PUT", "/admin/api/v1/setup/password", {"password": "$PW"})
-    s, _ = call("POST", "/admin/api/v1/session", {"password": "$PW"})
+    call("PUT", "/api/admin/v1/setup/password", {"password": "$PW"})
+    s, _ = call("POST", "/api/admin/v1/session", {"password": "$PW"})
 assert s == 204 or s == 200, "cannot sign in to the admin: set ASKBAR_ADMIN_PASSWORD to its password (repeated wrong tries lock sign-in for 15 minutes)"
 EOF
 }
@@ -104,7 +104,7 @@ EOF
 echo "== 1. The admin works with the server stopped"
 docker stop "$SERVER" >/dev/null
 out=$(admin_script "$(admin_login)
-s, body = call('GET', '/admin/api/v1/status')
+s, body = call('GET', '/api/admin/v1/status')
 print(s, 'offline' if '\"server_online\":false' in body.replace(' ', '') else 'online?')
 s, _ = call('GET', '/admin/')
 print(s)" 2>&1)
@@ -194,8 +194,8 @@ fi
 # failed open, which is the case that would be easiest to log by mistake.
 LOGPASS="isolation-check-passphrase-$(head -c 6 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 admin_script "$(admin_login)
-call('POST', '/admin/api/v1/audit/payloads/no-such-span/open', {'passphrase': '$LOGPASS'})
-call('POST', '/admin/api/v1/audit/rotate-key', {'current': '$LOGPASS', 'new': '$LOGPASS-new', 'confirm': '$LOGPASS-new'})" >/dev/null 2>&1
+call('POST', '/api/admin/v1/audit/payloads/no-such-span/open', {'passphrase': '$LOGPASS'})
+call('POST', '/api/admin/v1/audit/rotate-key', {'current': '$LOGPASS', 'new': '$LOGPASS-new', 'confirm': '$LOGPASS-new'})" >/dev/null 2>&1
 docker logs "$ADMIN" 2>&1 | grep -q "$LOGPASS" && fail "the admin's logs contain a passphrase" || pass "the admin's logs contain no passphrase after open and rotate attempts"
 docker logs "$SERVER" 2>&1 | grep -q "$LOGPASS" && fail "the server's logs contain a passphrase" || pass "the server's logs contain no passphrase"
 
@@ -269,7 +269,7 @@ except Exception: print(0)
   [ "$(ctl_status /services wrong)" = 401 ] && pass "the controller refuses a wrong token" || fail "the controller accepts a wrong token"
   [ "$(http_get "$EDGE" "172.32.0.2:8083" /api/control/v1/health)" = 0 ] && pass "a container on edge cannot reach the controller" || fail "the controller is reachable from edge"
   out=$(admin_script "$(admin_login)
-print(call('POST', '/admin/api/v1/services/admin/stop')[0], call('POST', '/admin/api/v1/services/controller/stop')[0], call('POST', '/admin/api/v1/services/server/kill')[0])" 2>&1 | tail -1)
+print(call('POST', '/api/admin/v1/services/admin/stop')[0], call('POST', '/api/admin/v1/services/controller/stop')[0], call('POST', '/api/admin/v1/services/server/kill')[0])" 2>&1 | tail -1)
   [ "$out" = "404 404 404" ] && pass "the admin and the controller cannot be stopped from the site, nor other actions run" || fail "service control accepted a bad name or action: $out"
 fi
 
@@ -289,15 +289,17 @@ print(data.decode().split('\r\n\r\n', 1)[1])
 }
 set_network() { # allowlist_enabled(true|false)
   admin_script "$(admin_login)
-s, body = call('PUT', '/admin/api/v1/network', {'tls_enabled': True, 'hostname': 'askbar.isolation.invalid', 'admin_cidr': '10.0.0.0/8', 'acme_staging': True, 'allowlist_enabled': $1, 'cloudflare_token': 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN'})
+s, body = call('PUT', '/api/admin/v1/network', {'tls_enabled': True, 'hostname': 'askbar.isolation.invalid', 'admin_cidr': '10.0.0.0/8', 'acme_staging': True, 'allowlist_enabled': $1, 'cloudflare_token': 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN'})
 assert s == 200, (s, body)
-s, body = call('POST', '/admin/api/v1/network/apply')
+s, body = call('POST', '/api/admin/v1/network/apply')
 print(s, 'ok' if '\"ok\":true' in body.replace(' ', '') else body)"
 }
 out=$(set_network True 2>&1); printf '%s' "$out" | tail -1 | grep -q '^200 ok' && pass "allowlist on: Caddy took the configuration" || fail "allowlist on: $out"
 cfg=$(caddy_config)
 printf '%s' "$cfg" | grep -q '"abort":true' && printf '%s' "$cfg" | grep -q '"/api/client/\*","/api/v1/\*"' && ! printf '%s' "$cfg" | grep -q '/api/server' && pass "the client API route names /api/client and /api/v1 only, never /api/server" || fail "the client API route is wrong"
 printf '%s' "$cfg" | grep -q '"status_code":"\?404"\?' && pass "Caddy answers 404 for every other path" || fail "Caddy has no final 404"
+# The admin site and the admin API share one route, so the address check guards both (ADR 0022, 0029).
+printf '%s' "$cfg" | grep -q '"/admin","/admin/\*","/api/admin/\*"' && pass "the admin route covers /admin and /api/admin, behind the same address check" || fail "the admin route does not cover /admin and /api/admin together"
 printf '%s' "$cfg" | grep -q 'admin.askbar.isolation.invalid' && fail "Caddy still has a second host name for the admin" || pass "Caddy has one host name"
 out=$(set_network False 2>&1); printf '%s' "$out" | tail -1 | grep -q '^200 ok' && pass "allowlist off: Caddy took the configuration" || fail "allowlist off: $out"
 cfg=$(caddy_config)
@@ -341,15 +343,15 @@ done
 MARK="sk-isolation-$(head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 out=$(admin_script "$(admin_login)
 import tarfile, io, base64, json
-s, body = call('POST', '/admin/api/v1/providers', {'name': 'iso-$(head -c 6 /dev/urandom | od -An -tx1 | tr -d ' \n')', 'type': 'openai', 'base_url': 'http://mock-llm:8765/v1', 'model': 'm', 'api_key': '$MARK'})
+s, body = call('POST', '/api/admin/v1/providers', {'name': 'iso-$(head -c 6 /dev/urandom | od -An -tx1 | tr -d ' \n')', 'type': 'openai', 'base_url': 'http://mock-llm:8765/v1', 'model': 'm', 'api_key': '$MARK'})
 assert s == 201, (s, body)
 provider_id = json.loads(body)['id']
-s, body = call('POST', '/admin/api/v1/pairings', {'name': 'iso client'})
+s, body = call('POST', '/api/admin/v1/pairings', {'name': 'iso client'})
 assert s == 200, (s, body)
 pairing = json.loads(body)['pairing']
 b = pairing.split(':', 1)[1]
 code = json.loads(base64.urlsafe_b64decode(b + '=' * (-len(b) % 4)))['code']
-c.request('GET', '/admin/api/v1/backup', headers={'x-askbar-admin': '1', 'cookie': cookie})
+c.request('GET', '/api/admin/v1/backup', headers={'x-askbar-admin': '1', 'cookie': cookie})
 r = c.getresponse(); raw = r.read()
 assert r.status == 200, r.status
 names = sorted(m.name for m in tarfile.open(fileobj=io.BytesIO(raw)).getmembers())
@@ -357,7 +359,7 @@ blob = b''.join(tarfile.open(fileobj=io.BytesIO(raw)).extractfile(n).read() for 
 print('names', ','.join(names))
 for label, needle in (('provider key', '$MARK'), ('pair code', code), ('password hash', '\$argon2')):
     print(label, 'FOUND' if needle.encode() in blob else 'absent')
-call('DELETE', '/admin/api/v1/providers/' + provider_id)" 2>&1)
+call('DELETE', '/api/admin/v1/providers/' + provider_id)" 2>&1)
 printf '%s\n' "$out" | grep -q '^names .*admin.db.*server.db' && pass "the backup holds admin.db and server.db" || fail "backup contents: $out"
 for what in "provider key" "pair code" "password hash"; do
   printf '%s\n' "$out" | grep -q "^$what absent" && pass "the backup holds no $what" || fail "the backup holds the $what ($out)"
@@ -367,9 +369,9 @@ echo "== 6. HTTPS before a host name is set"
 # Back to a fresh install's settings: no host name, allowlist off. Caddy then serves every address on 443 with the
 # install's own certificate, and the admin site is open to private addresses only.
 out=$(admin_script "$(admin_login)
-s, body = call('PUT', '/admin/api/v1/network', {'tls_enabled': False, 'hostname': '', 'admin_cidr': '', 'acme_staging': False, 'allowlist_enabled': False, 'clear_token': True})
+s, body = call('PUT', '/api/admin/v1/network', {'tls_enabled': False, 'hostname': '', 'admin_cidr': '', 'acme_staging': False, 'allowlist_enabled': False, 'clear_token': True})
 assert s == 200, (s, body)
-s, body = call('POST', '/admin/api/v1/network/apply')
+s, body = call('POST', '/api/admin/v1/network/apply')
 print(s, 'ok' if '\"ok\":true' in body.replace(' ', '') else body)" 2>&1)
 printf '%s' "$out" | tail -1 | grep -q '^200 ok' && pass "no host name: Caddy took the configuration" || fail "no host name: $out"
 ports=$(docker inspect -f '{{range $p, $b := .NetworkSettings.Ports}}{{if $b}}{{$p}} {{end}}{{end}}' "$CADDY" | tr ' ' '\n' | grep . | sort | tr '\n' ' ')
@@ -378,8 +380,24 @@ cfg=$(caddy_config)
 printf '%s' "$cfg" | grep -q '"abort":true' && printf '%s' "$cfg" | grep -q '192.168.0.0/16' && pass "the admin site is limited to private addresses" || fail "the admin site has no private-address rule"
 code=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 https://localhost/admin/ 2>/dev/null || true)
 [ "$code" = 200 ] && pass "https://localhost/admin/ opens the admin" || fail "https://localhost/admin/ answered '$code'"
+code=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 https://localhost/api/admin/v1/health 2>/dev/null || true)
+[ "$code" = 200 ] && pass "the admin API answers at /api/admin/v1 over HTTPS" || fail "https://localhost/api/admin/v1/health answered '$code'"
+code=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 https://localhost/admin/api/v1/health 2>/dev/null || true)
+[ "$code" = 404 ] && pass "nothing at the old /admin/api/v1 (404)" || fail "https://localhost/admin/api/v1/health answered '$code'"
+# Signing in over HTTPS through Caddy sets the cookie ADR 0029 asks for; a change from another site is refused.
+cookie=$(curl -sk -D - -o /dev/null --max-time 5 -X POST -H 'x-askbar-admin: 1' -H 'content-type: application/json' \
+  -d "{\"password\":\"$PW\"}" https://localhost/api/admin/v1/session 2>/dev/null | tr -d '\r' | grep -i '^set-cookie:' | head -1)
+case "$cookie" in
+  *"__Secure-askbar_admin="*"; Secure"*"; HttpOnly"*"; SameSite=Strict"*"; Path=/api/admin;"*) pass "the session cookie is __Secure-, Secure, HttpOnly, SameSite=Strict, Path=/api/admin";;
+  *) fail "the session cookie is: ${cookie:-none}";;
+esac
+pair=$(printf '%s' "$cookie" | sed 's/^[Ss]et-[Cc]ookie: *//; s/;.*//')
+code=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 -X DELETE -H 'x-askbar-admin: 1' -H 'sec-fetch-site: cross-site' -H "cookie: $pair" https://localhost/api/admin/v1/session 2>/dev/null || true)
+[ "$code" = 403 ] && pass "a change marked cross-site is refused (403)" || fail "a cross-site change answered '$code'"
 code=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 https://localhost/api/client/v1/health 2>/dev/null || true)
 [ "$code" = 200 ] && pass "the client API answers over HTTPS" || fail "https://localhost/api/client/v1/health answered '$code'"
+curl -sk -D - -o /dev/null --max-time 5 https://localhost/api/client/v1/health 2>/dev/null | tr -d '\r' | grep -qi '^x-content-type-options: nosniff$' \
+  && pass "the client API says nosniff" || fail "the client API has no X-Content-Type-Options: nosniff"
 for path in /api/server/v1/health /health /; do
   code=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 "https://localhost$path" 2>/dev/null || true)
   [ "$code" = 404 ] && pass "nothing at $path (404)" || fail "$path answered '$code'"
@@ -406,7 +424,7 @@ printf '%s\n' "$out" | grep -q '^some-other-name.example same' && pass "a client
 file_fp=$(printf '%s\n' "$out" | sed -n 's/^file //p')
 pin=$(admin_script "$(admin_login)
 import base64
-s, body = call('POST', '/admin/api/v1/pairings', {'name': 'isolation check'})
+s, body = call('POST', '/api/admin/v1/pairings', {'name': 'isolation check'})
 p = json.loads(body)['pairing'][len('askbar-pair:'):]
 print(json.loads(base64.urlsafe_b64decode(p + '=' * (-len(p) % 4))).get('cert_sha256'))" 2>&1 | tail -1)
 [ -n "$file_fp" ] && [ "$pin" = "$file_fp" ] && pass "a new pairing string pins the install's certificate" || fail "pairing pin '$pin', certificate '$file_fp'"

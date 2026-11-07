@@ -87,27 +87,27 @@ const GOOD: &str = "http://localhost:54545/callback?code=THECODE&state=STATE-1";
 #[tokio::test]
 async fn connecting_an_account_from_the_page_makes_the_cpa_provider_with_the_key_the_admin_made() {
     let (t, cpa) = with_cpa().await;
-    let (s, v) = t.call(M::GET, "/admin/api/v1/cpa", json!(null)).await;
+    let (s, v) = t.call(M::GET, "/api/admin/v1/cpa", json!(null)).await;
     assert_eq!((s, v["configured"].clone(), v["reachable"].clone(), v["accounts"].clone(), v["provider_id"].clone()), (200, json!(true), json!(true), json!([]), json!(null)));
-    assert!(t.call(M::GET, "/admin/api/v1/providers", json!(null)).await.1.as_array().unwrap().is_empty(), "no provider before an account is connected");
+    assert!(t.call(M::GET, "/api/admin/v1/providers", json!(null)).await.1.as_array().unwrap().is_empty(), "no provider before an account is connected");
 
-    let (s, login) = t.call(M::POST, "/admin/api/v1/cpa/logins", json!({ "provider": "anthropic" })).await;
+    let (s, login) = t.call(M::POST, "/api/admin/v1/cpa/logins", json!({ "provider": "anthropic" })).await;
     assert_eq!((s, login["state"].as_str()), (200, Some("STATE-1")));
     assert!(login["url"].as_str().unwrap().starts_with("https://claude.example/"));
 
     // Waiting until the address is pasted.
-    assert_eq!(t.call(M::GET, "/admin/api/v1/cpa/logins/STATE-1", json!(null)).await.1["status"], "wait");
+    assert_eq!(t.call(M::GET, "/api/admin/v1/cpa/logins/STATE-1", json!(null)).await.1["status"], "wait");
 
-    let (s, _) = t.call(M::POST, "/admin/api/v1/cpa/logins/STATE-1/callback", json!({ "redirect_url": GOOD })).await;
+    let (s, _) = t.call(M::POST, "/api/admin/v1/cpa/logins/STATE-1/callback", json!({ "redirect_url": GOOD })).await;
     assert_eq!(s, 200);
     let sent = cpa.callbacks.lock().unwrap()[0].clone();
     assert_eq!((sent["provider"].as_str(), sent["code"].as_str(), sent["state"].as_str()), (Some("anthropic"), Some("THECODE"), Some("STATE-1")));
 
-    let (_, v) = t.call(M::GET, "/admin/api/v1/cpa/logins/STATE-1", json!(null)).await;
+    let (_, v) = t.call(M::GET, "/api/admin/v1/cpa/logins/STATE-1", json!(null)).await;
     assert_eq!(v["status"], "ok");
     let id = v["provider_id"].as_str().expect("the provider is made once an account is connected").to_string();
 
-    let (_, list) = t.call(M::GET, "/admin/api/v1/providers", json!(null)).await;
+    let (_, list) = t.call(M::GET, "/api/admin/v1/providers", json!(null)).await;
     let p = &list[0];
     assert_eq!((p["name"].as_str(), p["type"].as_str(), p["model"].as_str(), p["billing"].as_str(), p["managed"].clone(), p["has_key"].clone()), (Some("CPA"), Some("openai"), Some("claude-sonnet-x"), Some("subscription"), json!(true), json!(true)));
     assert!(p["base_url"].as_str().unwrap().ends_with("/v1"));
@@ -116,16 +116,16 @@ async fn connecting_an_account_from_the_page_makes_the_cpa_provider_with_the_key
     assert_eq!(t.server.secrets().decrypt(&enc).unwrap(), API_KEY);
     assert!(!list.to_string().contains(API_KEY));
     // Asking again does not make a second one.
-    let (_, v) = t.call(M::GET, "/admin/api/v1/cpa", json!(null)).await;
+    let (_, v) = t.call(M::GET, "/api/admin/v1/cpa", json!(null)).await;
     assert_eq!((v["provider_id"].as_str(), v["accounts"][0]["label"].as_str()), (Some(id.as_str()), Some("me@example.com")));
-    assert_eq!(t.call(M::GET, "/admin/api/v1/providers", json!(null)).await.1.as_array().unwrap().len(), 1);
+    assert_eq!(t.call(M::GET, "/api/admin/v1/providers", json!(null)).await.1.as_array().unwrap().len(), 1);
 }
 
 #[tokio::test]
 async fn a_bad_address_is_explained_and_costs_nothing_but_a_good_one_works_once() {
     let (t, cpa) = with_cpa().await;
-    t.call(M::POST, "/admin/api/v1/cpa/logins", json!({ "provider": "anthropic" })).await;
-    let path = "/admin/api/v1/cpa/logins/STATE-1/callback";
+    t.call(M::POST, "/api/admin/v1/cpa/logins", json!({ "provider": "anthropic" })).await;
+    let path = "/api/admin/v1/cpa/logins/STATE-1/callback";
     for bad in ["nonsense", "https://evil.example/cb?code=c&state=STATE-1", "http://localhost:1/cb?code=c&state=OTHER", "http://localhost:1/cb?state=STATE-1"] {
         let (s, v) = t.call(M::POST, path, json!({ "redirect_url": bad })).await;
         assert_eq!((s, v["error"].as_str()), (400, Some("bad_request")), "{bad}");
@@ -133,46 +133,46 @@ async fn a_bad_address_is_explained_and_costs_nothing_but_a_good_one_works_once(
     assert!(cpa.callbacks.lock().unwrap().is_empty(), "nothing reached CPA");
     assert_eq!(t.call(M::POST, path, json!({ "redirect_url": GOOD })).await.0, 200, "the login survived the typos");
     assert_eq!(t.call(M::POST, path, json!({ "redirect_url": GOOD })).await.0, 404, "an address cannot be replayed");
-    assert_eq!(t.call(M::POST, "/admin/api/v1/cpa/logins/NEVER-STARTED/callback", json!({ "redirect_url": GOOD })).await.0, 404);
-    assert_eq!(t.call(M::POST, "/admin/api/v1/cpa/logins", json!({ "provider": "gemini" })).await.0, 400);
+    assert_eq!(t.call(M::POST, "/api/admin/v1/cpa/logins/NEVER-STARTED/callback", json!({ "redirect_url": GOOD })).await.0, 404);
+    assert_eq!(t.call(M::POST, "/api/admin/v1/cpa/logins", json!({ "provider": "gemini" })).await.0, 400);
 }
 
 #[tokio::test]
 async fn the_cpa_provider_cannot_be_renamed_repointed_re_keyed_or_deleted_but_its_model_can_change() {
     let (t, _cpa) = with_cpa().await;
-    t.call(M::POST, "/admin/api/v1/cpa/logins", json!({ "provider": "anthropic" })).await;
-    t.call(M::POST, "/admin/api/v1/cpa/logins/STATE-1/callback", json!({ "redirect_url": GOOD })).await;
-    let id = t.call(M::GET, "/admin/api/v1/cpa/logins/STATE-1", json!(null)).await.1["provider_id"].as_str().unwrap().to_string();
+    t.call(M::POST, "/api/admin/v1/cpa/logins", json!({ "provider": "anthropic" })).await;
+    t.call(M::POST, "/api/admin/v1/cpa/logins/STATE-1/callback", json!({ "redirect_url": GOOD })).await;
+    let id = t.call(M::GET, "/api/admin/v1/cpa/logins/STATE-1", json!(null)).await.1["provider_id"].as_str().unwrap().to_string();
     let attempt = json!({ "name": "other", "type": "anthropic", "base_url": "http://evil.example/v1", "model": "gpt-5", "api_key": "stolen-key-123", "billing": "subscription" });
-    assert_eq!(t.call(M::PUT, &format!("/admin/api/v1/providers/{id}"), attempt).await.0, 204);
-    let (_, list) = t.call(M::GET, "/admin/api/v1/providers", json!(null)).await;
+    assert_eq!(t.call(M::PUT, &format!("/api/admin/v1/providers/{id}"), attempt).await.0, 204);
+    let (_, list) = t.call(M::GET, "/api/admin/v1/providers", json!(null)).await;
     let p = &list[0];
     assert_eq!((p["name"].as_str(), p["type"].as_str(), p["model"].as_str()), (Some("CPA"), Some("openai"), Some("gpt-5")));
     assert!(p["base_url"].as_str().unwrap().contains("127.0.0.1"), "still pointing at CPA");
     let enc: Vec<u8> = t.server.db.lock().unwrap().conn().query_row("SELECT api_key_enc FROM providers WHERE id = ?1", [&id], |r| r.get(0)).unwrap();
     assert_eq!(t.server.secrets().decrypt(&enc).unwrap(), API_KEY, "the key was not replaced");
-    assert_eq!(t.call(M::DELETE, &format!("/admin/api/v1/providers/{id}"), json!(null)).await.0, 409);
+    assert_eq!(t.call(M::DELETE, &format!("/api/admin/v1/providers/{id}"), json!(null)).await.0, 409);
 }
 
 #[tokio::test]
 async fn disconnecting_removes_the_account_and_only_a_known_one() {
     let (t, cpa) = with_cpa().await;
-    t.call(M::POST, "/admin/api/v1/cpa/logins", json!({ "provider": "openai" })).await;
-    t.call(M::POST, "/admin/api/v1/cpa/logins/STATE-1/callback", json!({ "redirect_url": GOOD })).await;
-    assert_eq!(t.call(M::DELETE, "/admin/api/v1/cpa/accounts/nope.json", json!(null)).await.0, 404);
-    assert_eq!(t.call(M::DELETE, "/admin/api/v1/cpa/accounts/..%2Fescape", json!(null)).await.0, 404);
+    t.call(M::POST, "/api/admin/v1/cpa/logins", json!({ "provider": "openai" })).await;
+    t.call(M::POST, "/api/admin/v1/cpa/logins/STATE-1/callback", json!({ "redirect_url": GOOD })).await;
+    assert_eq!(t.call(M::DELETE, "/api/admin/v1/cpa/accounts/nope.json", json!(null)).await.0, 404);
+    assert_eq!(t.call(M::DELETE, "/api/admin/v1/cpa/accounts/..%2Fescape", json!(null)).await.0, 404);
     assert!(cpa.removed.lock().unwrap().is_empty());
-    assert_eq!(t.call(M::DELETE, "/admin/api/v1/cpa/accounts/claude-me@example.com.json", json!(null)).await.0, 204);
+    assert_eq!(t.call(M::DELETE, "/api/admin/v1/cpa/accounts/claude-me@example.com.json", json!(null)).await.0, 204);
     assert_eq!(*cpa.removed.lock().unwrap(), vec!["claude-me@example.com.json".to_string()]);
 }
 
 #[tokio::test]
 async fn the_routes_are_session_only_and_say_so_when_cpa_is_not_set_up() {
     let t = start(true).await;
-    let (_, v) = t.call(M::GET, "/admin/api/v1/cpa", json!(null)).await;
+    let (_, v) = t.call(M::GET, "/api/admin/v1/cpa", json!(null)).await;
     assert_eq!((v["configured"].clone(), v["reachable"].clone()), (json!(false), json!(false)));
-    assert_eq!(t.call(M::POST, "/admin/api/v1/cpa/logins", json!({ "provider": "anthropic" })).await.0, 502);
-    let (_, k) = t.call(M::POST, "/admin/api/v1/keys", json!({ "name": "script" })).await;
-    let r = reqwest::Client::new().get(format!("{}/admin/api/v1/cpa", t.adm)).bearer_auth(k["key"].as_str().unwrap()).send().await.unwrap();
+    assert_eq!(t.call(M::POST, "/api/admin/v1/cpa/logins", json!({ "provider": "anthropic" })).await.0, 502);
+    let (_, k) = t.call(M::POST, "/api/admin/v1/keys", json!({ "name": "script" })).await;
+    let r = reqwest::Client::new().get(format!("{}/api/admin/v1/cpa", t.adm)).bearer_auth(k["key"].as_str().unwrap()).send().await.unwrap();
     assert_eq!(r.status(), 401, "an admin API key cannot connect or read accounts");
 }

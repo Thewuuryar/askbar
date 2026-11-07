@@ -127,6 +127,15 @@ pub fn client_router(state: Arc<AppState>) -> Router {
         .method_not_allowed_fallback(error::method_not_allowed)
         .with_state(state)
         .layer(middleware::from_fn(log_requests))
+        .layer(middleware::from_fn(nosniff))
+}
+
+/// Every client API answer is JSON or the documented event stream; no browser may guess it is HTML
+/// or script (ADR 0029 rule 4). Set on every response, errors and 404s included.
+async fn nosniff(req: Request, next: Next) -> Response {
+    let mut res = next.run(req).await;
+    res.headers_mut().insert("x-content-type-options", axum::http::HeaderValue::from_static("nosniff"));
+    res
 }
 
 /// The answer to anything under the old `/api/v1` prefix.

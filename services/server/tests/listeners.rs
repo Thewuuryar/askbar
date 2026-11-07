@@ -32,7 +32,7 @@ async fn the_client_and_server_api_routers_share_no_routes() {
     assert_eq!(status(server_api, "/api/server/v1/health").await, 401);
     assert_eq!(status(server_api, "/api/client/v1/health").await, 401, "the client API is not served here");
     assert_eq!(status(api, "/api/server/v1/health").await, 404);
-    for gone in ["/admin/", "/admin/health", "/admin/api/v1/session", "/admin/api/v1/providers", "/"] {
+    for gone in ["/admin/", "/admin/health", "/api/admin/v1/session", "/api/admin/v1/providers", "/"] {
         assert_eq!(status(api, gone).await, 404, "{gone}: the admin site is not part of the server");
     }
     let _ = std::fs::remove_dir_all(&dir);
@@ -55,4 +55,28 @@ async fn even_with_the_server_token_the_server_api_listener_serves_no_client_api
         assert_eq!(get(not_here).await, 404, "{not_here}: the server API listener serves only /api/server/v1");
     }
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn every_client_api_answer_says_nosniff() {
+    // ADR 0029 rule 4: JSON or the event stream, never content a browser may guess is HTML or script.
+    let api = spawn(askbar_server::client_router(state())).await;
+    let http = reqwest::Client::new();
+    for (path, version, token) in [
+        ("/api/client/v1/health", false, false),             // 200
+        ("/api/client/v1/conversations", true, false),       // 401, no token
+        ("/api/client/v1/conversations", false, true),       // 400, no version header
+        ("/api/client/v1/nothing-here", false, false),       // 404
+        ("/api/v1/chat", false, false),                      // 426, the old prefix
+    ] {
+        let mut r = http.get(format!("http://{api}{path}"));
+        if version {
+            r = r.header("x-askbar-client-version", askbar_server::MIN_CLIENT);
+        }
+        if token {
+            r = r.bearer_auth("abt_not-a-real-token");
+        }
+        let r = r.send().await.unwrap();
+        assert_eq!(r.headers().get("x-content-type-options").map(|v| v.to_str().unwrap()), Some("nosniff"), "{path} ({})", r.status());
+    }
 }
