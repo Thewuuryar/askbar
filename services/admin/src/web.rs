@@ -23,6 +23,11 @@ use std::sync::Arc;
 pub const COOKIE_NAME: &str = "__Secure-askbar_admin";
 pub const CSRF_HEADER: &str = "x-askbar-admin";
 pub const MIN_PASSWORD_CHARS: usize = 10;
+/// The one admin account's name (ADR 0007: v1 has one admin account).
+pub const ADMIN_USERNAME: &str = "admin";
+/// The published first-run password (ADR 0007). It works until it is changed, and nothing but the
+/// change is allowed while it is in use. Also what `askbar-admin reset` restores.
+pub const DEFAULT_PASSWORD: &str = "admin";
 const MAX_PASSWORD_CHARS: usize = 200;
 
 pub type Failure = ApiError;
@@ -50,6 +55,50 @@ pub fn init_password(db: &crate::AdminDb, password: &str) -> rusqlite::Result<bo
         rusqlite::params![hash, crate::auth::now()],
     )?;
     Ok(n == 1)
+}
+
+/// First start: store the published password, marked as needing a change. Does nothing once any
+/// password exists. Returns true if it stored one.
+pub fn ensure_default_credentials(db: &crate::AdminDb) -> rusqlite::Result<bool> {
+    let hash = hash_password(DEFAULT_PASSWORD).map_err(|_| rusqlite::Error::InvalidQuery)?;
+    let n = db.conn().execute(
+        "INSERT OR IGNORE INTO admin_credentials (id, password_hash, updated_at, must_change) VALUES (1, ?1, ?2, 1)",
+        rusqlite::params![hash, crate::auth::now()],
+    )?;
+    Ok(n == 1)
+}
+
+/// `askbar-admin reset` (a host command, ADR 0007): put the published password back, marked as needing a
+/// change, and record the reset in the admin's action log. Sessions of a running admin live in its memory;
+/// restart the admin afterwards to end them.
+pub fn reset_to_default(db: &crate::AdminDb) -> rusqlite::Result<()> {
+    let hash = hash_password(DEFAULT_PASSWORD).map_err(|_| rusqlite::Error::InvalidQuery)?;
+    let now = crate::auth::now();
+    db.conn().execute(
+        "INSERT INTO admin_credentials (id, password_hash, updated_at, must_change) VALUES (1, ?1, ?2, 1)
+         ON CONFLICT(id) DO UPDATE SET password_hash = excluded.password_hash, updated_at = excluded.updated_at, must_change = 1",
+        rusqlite::params![hash, now],
+    )?;
+    db.conn().execute("INSERT INTO service_actions (service, action, at, ok) VALUES ('admin', 'reset', ?1, 1)", [now])?;
+    Ok(())
+}
+
+/// True while the published password is still the admin password.
+pub async fn password_change_required(state: &AdminState) -> bool {
+    let db = state.db.lock().await;
+    db.conn().query_row("SELECT must_change FROM admin_credentials WHERE id = 1", [], |r| r.get::<_, i64>(0)).optional().ok().flatten() == Some(1)
+}
+
+/// While the published password is in use, only these signed-in routes answer: signing out, checking
+/// the session, and changing the password.
+fn allowed_before_change(req: &Request) -> bool {
+    let path = req.uri().path();
+    let (session, password) = (format!("{}/session", askbar_proto::paths::ADMIN_V1), format!("{}/password", askbar_proto::paths::ADMIN_V1));
+    (path == session && matches!(*req.method(), Method::GET | Method::DELETE)) || (path == password && *req.method() == Method::PUT)
+}
+
+fn change_first() -> ApiError {
+    ApiError::code(ErrorCode::PasswordChangeRequired).no_challenge()
 }
 
 fn session_cookie(headers: &HeaderMap) -> Option<String> {
@@ -150,6 +199,9 @@ pub async fn require_session(State(state): State<Arc<AdminState>>, req: Request,
     if let Some(e) = browser_change_refused(&req) {
         return Err(e);
     }
+    if !allowed_before_change(&req) && password_change_required(&state).await {
+        return Err(change_first());
+    }
     Ok(next.run(req).await)
 }
 
@@ -174,6 +226,8 @@ pub async fn require_admin_auth(State(state): State<Arc<AdminState>>, req: Reque
         None => None,
     };
     match scope {
+        // (A key can only be made after the password was changed, and a reset puts the published one back.)
+        Some(_) if password_change_required(&state).await => Err(change_first()),
         Some(scope) if scope.allows(RouteClass::Api) => Ok(next.run(req).await),
         _ => {
             state.auth.record_failure();
@@ -195,6 +249,9 @@ fn too_many_attempts(secs: i64) -> ApiError {
 
 #[derive(Deserialize)]
 pub struct Login {
+    /// Optional; when given it must be `admin`. A wrong name and a wrong password get the same answer.
+    #[serde(default)]
+    username: Option<String>,
     password: String,
 }
 
@@ -206,9 +263,12 @@ pub async fn login(State(state): State<Arc<AdminState>>, ApiJson(body): ApiJson<
         // No password yet: the setup page has to create one first.
         return ApiError::new(ErrorCode::SetupRequired, "Set the admin password first.").no_challenge().into_response();
     };
-    if !verify(stored, body.password).await {
+    let name_ok = body.username.as_deref().is_none_or(|u| u.trim() == ADMIN_USERNAME);
+    // The hash is checked whatever the name, so a wrong name takes as long as a wrong password.
+    let password_ok = verify(stored, body.password).await;
+    if !(name_ok && password_ok) {
         state.auth.record_failure();
-        return ApiError::new(ErrorCode::Unauthorized, "That password is wrong.").no_challenge().into_response();
+        return ApiError::new(ErrorCode::Unauthorized, "That username or password is wrong.").no_challenge().into_response();
     }
     state.auth.clear_failures();
     let token = state.auth.new_session();
@@ -229,36 +289,7 @@ pub async fn logout(State(state): State<Arc<AdminState>>, headers: HeaderMap) ->
 /// What the setup page needs to decide which screen to show. Booleans only.
 pub async fn setup_status(State(state): State<Arc<AdminState>>) -> Json<serde_json::Value> {
     let audit_key_set = state.db.lock().await.active_audit_key().ok().flatten().is_some();
-    Json(serde_json::json!({ "password_set": stored_hash(&state).await.is_some(), "audit_key_set": audit_key_set }))
-}
-
-/// First run: the first visitor chooses the admin password and is signed in. Refused once one exists.
-pub async fn setup_password(State(state): State<Arc<AdminState>>, ApiJson(body): ApiJson<Login>) -> Result<Response, Failure> {
-    check_new_password(&body.password)?;
-    let password = body.password;
-    let hash = tokio::task::spawn_blocking(move || hash_password(&password))
-        .await
-        .ok()
-        .and_then(Result::ok)
-        .ok_or_else(|| err(StatusCode::INTERNAL_SERVER_ERROR, "Could not hash the password."))?;
-    {
-        let db = state.db.lock().await;
-        // INSERT OR IGNORE: if two visitors race, exactly one row lands.
-        let n = db
-            .conn()
-            .execute(
-                "INSERT OR IGNORE INTO admin_credentials (id, password_hash, updated_at) VALUES (1, ?1, ?2)",
-                rusqlite::params![hash, crate::auth::now()],
-            )
-            .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Could not save the password."))?;
-        if n != 1 {
-            return Err(err(StatusCode::CONFLICT, "An admin password is already set."));
-        }
-    }
-    let token = state.auth.new_session();
-    let mut r = StatusCode::NO_CONTENT.into_response();
-    r.headers_mut().insert(header::SET_COOKIE, set_cookie(&token, SESSION_TTL_SECS));
-    Ok(r)
+    Json(serde_json::json!({ "password_change_required": password_change_required(&state).await, "audit_key_set": audit_key_set }))
 }
 
 #[derive(Deserialize)]
@@ -273,13 +304,16 @@ pub async fn change_password(State(state): State<Arc<AdminState>>, headers: Head
         return Err(ApiError::code(ErrorCode::TooManyAttempts).no_challenge());
     }
     let stored = stored_hash(&state).await.ok_or_else(|| err(StatusCode::CONFLICT, "No password is set."))?;
-    if !verify(stored, body.current).await {
+    if !verify(stored, body.current.clone()).await {
         state.auth.record_failure();
         // 403, not 401: the page treats 401 as "signed out".
         return Err(err(StatusCode::FORBIDDEN, "The current password is wrong."));
     }
     state.auth.clear_failures();
     check_new_password(&body.new)?;
+    if body.new == DEFAULT_PASSWORD || body.new.trim().eq_ignore_ascii_case(ADMIN_USERNAME) || body.new == body.current {
+        return Err(err(StatusCode::BAD_REQUEST, "Choose a new password: not the published one, not the username, and not the current one."));
+    }
     let new = body.new;
     let hash = tokio::task::spawn_blocking(move || hash_password(&new))
         .await
@@ -289,7 +323,7 @@ pub async fn change_password(State(state): State<Arc<AdminState>>, headers: Head
     {
         let db = state.db.lock().await;
         db.conn()
-            .execute("UPDATE admin_credentials SET password_hash = ?1, updated_at = ?2 WHERE id = 1", rusqlite::params![hash, crate::auth::now()])
+            .execute("UPDATE admin_credentials SET password_hash = ?1, updated_at = ?2, must_change = 0 WHERE id = 1", rusqlite::params![hash, crate::auth::now()])
             .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Could not save the password."))?;
     }
     state.auth.keep_only(session_cookie(&headers).as_deref());

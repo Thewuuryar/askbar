@@ -81,22 +81,25 @@ admin_script() { # python lines using call(); the result is printed by the lines
   py --network "$EDGE" -v "${PROJECT}_admin-run:/run/admin" -- "$ADMIN_PY
 $1"
 }
-# Before anything else: an admin that already has a password needs ASKBAR_ADMIN_PASSWORD. Without it every
-# step would sign in wrongly, fail, and (five wrong tries) lock sign-in out for 15 minutes.
+# Before anything else: an admin whose published first-run password was already changed needs
+# ASKBAR_ADMIN_PASSWORD. Without it every step would sign in wrongly, fail, and (five wrong tries) lock sign-in
+# out for 15 minutes.
 if [ -z "${ASKBAR_ADMIN_PASSWORD:-}" ]; then
-  state=$(admin_script "s, body = call('GET', '/api/admin/v1/setup'); print(json.loads(body).get('password_set') if s == 200 else 'unknown')" 2>/dev/null | tail -1)
-  if [ "$state" = "True" ]; then
+  state=$(admin_script "s, body = call('GET', '/api/admin/v1/setup'); print(json.loads(body).get('password_change_required') if s == 200 else 'unknown')" 2>/dev/null | tail -1)
+  if [ "$state" = "False" ]; then
     echo "The admin already has a password. Run again with it:" >&2
     echo "  ASKBAR_ADMIN_PASSWORD='your admin password' scripts/check-isolation.sh" >&2
     exit 2
   fi
 fi
-admin_login() { # python lines that sign in (or run first-run setup), used before every script
+admin_login() { # python lines that sign in (or, on a fresh install, change the published password), used before every script
   cat <<EOF
-s, _ = call("POST", "/api/admin/v1/session", {"password": "$PW"})
+s, _ = call("POST", "/api/admin/v1/session", {"username": "admin", "password": "$PW"})
 if s != 204:
-    call("PUT", "/api/admin/v1/setup/password", {"password": "$PW"})
-    s, _ = call("POST", "/api/admin/v1/session", {"password": "$PW"})
+    s, _ = call("POST", "/api/admin/v1/session", {"username": "admin", "password": "admin"})
+    if s == 204:
+        call("PUT", "/api/admin/v1/password", {"current": "admin", "new": "$PW"})
+    s, _ = call("POST", "/api/admin/v1/session", {"username": "admin", "password": "$PW"})
 assert s == 204 or s == 200, "cannot sign in to the admin: set ASKBAR_ADMIN_PASSWORD to its password (repeated wrong tries lock sign-in for 15 minutes)"
 EOF
 }

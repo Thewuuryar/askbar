@@ -496,6 +496,7 @@ components:
           - api_key_exists
           - setup_required
           - not_configured
+          - password_change_required
           - server_unavailable
           - conflict
           - internal

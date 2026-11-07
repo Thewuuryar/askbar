@@ -163,7 +163,7 @@ pub fn routes(state: &Arc<AdminState>) -> Routes {
         .delete(&v1("/keys/{id}"), admin_api::revoke_key)
         .signed_in(state);
     // Open, but a change still wants the browser header.
-    let open = Routes::new().post(&v1("/session"), web::login).put(&v1("/setup/password"), web::setup_password).browser_header();
+    let open = Routes::new().post(&v1("/session"), web::login).browser_header();
     Routes::new()
         .get("/admin", || async { Redirect::to("/admin/") })
         .get("/admin/", || async { asset("text/html; charset=utf-8", include_str!("ui/index.html")) })

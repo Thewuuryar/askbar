@@ -24,7 +24,7 @@ docker compose up -d --build
 ```
 
 1. Open **https://localhost/admin** on the machine that runs Docker, or `https://<its address>/admin` from another machine on your network, and accept the certificate warning (the install uses its own certificate until you set a host name).
-2. Choose the **admin password** (the first visit wins).
+2. Sign in with the published login, **`admin` / `admin`**, and change the password at once: nothing else opens until you do ([ADR 0007](docs/adr/0007-first-run-and-admin-sign-in.md)).
 3. Choose the **audit passphrase**: at least 20 characters, and it cannot be recovered. It seals what the server records about replies; see *The Audit tab*.
 4. **Providers** > add one (Anthropic or OpenAI-compatible; the model is a dropdown once the address and key are in) and press **Test**, or connect a Claude or ChatGPT account on **Services** (see *CLIProxyAPI*).
 5. **Clients** > generate a pairing string.
@@ -145,7 +145,8 @@ Every container has a read-only root filesystem, no Linux capabilities (Caddy ke
 From the first start Caddy serves HTTPS on port 443 of every address of the host, with a certificate the admin makes for this install (port 80 redirects). Open **`https://localhost/admin`** on the machine that runs Docker, or `https://<its address>/admin` from another machine, and accept the browser's warning. Until you set a host name, the admin site answers only private addresses (loopback, 10/8, 172.16/12, 192.168/16, Tailscale's 100.64/10 and the IPv6 equivalents) unless the allowlist names others. Caddy checks the connection's real source; a router or proxy that rewrites sources can make public traffic look private. A pairing string made now points at the address you opened the admin with and carries the certificate's fingerprint, so the app trusts exactly this certificate for this server (set `ASKBAR_PUBLIC_URL` in `.env` to choose another address). Once a host name and a real certificate are set (step 5) use `https://<hostname>/admin`.
 
 1. Open the admin (above).
-2. Choose the admin password (the first visit wins).
+2. Sign in as **`admin`** with the password **`admin`**. Every page but the password change refuses (403 `password_change_required`) until you choose your own: at least 10 characters, not `admin`. Anyone on a private address can use the published login until you do, so do it as soon as the stack is up.
+   - **Locked out?** On the host, `docker compose exec admin askbar-admin reset` puts the published login back (you must change it again at the next sign-in) and records the reset on the Services tab; then `docker compose restart admin` to sign out every session. If the admin is not running, use `docker compose run --rm admin reset` instead (`run` cannot start beside a running admin: they would share its fixed network address).
 3. **Audit passphrase.** Setup asks for one: at least 20 characters. See *The Audit tab* below; write it down.
 4. **Providers** > add one (Anthropic or OpenAI-compatible: after you enter the address and key, **Model** becomes a dropdown of what the provider offers) and press **Test**. For a Claude or ChatGPT subscription use **Services** instead: *Connect Claude* / *Connect ChatGPT* (see *CLIProxyAPI*); no terminal is needed.
 5. **Network** > hostname, Cloudflare token and, if you want it, the allowlist (see below).

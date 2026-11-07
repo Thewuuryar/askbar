@@ -11,11 +11,12 @@
   <main id="setup" class="narrow" hidden>
     <h1>Set up Askbar</h1>
     <form id="setup-password-form" hidden>
-      <h2>Choose an admin password</h2>
-      <p class="hint">This protects this admin site. At least 10 characters.</p>
-      <label>Password <input id="setup-password" type="password" autocomplete="new-password" minlength="10" required></label>
-      <label>Repeat password <input id="setup-password2" type="password" autocomplete="new-password" minlength="10" required></label>
-      <button type="submit">Set password</button>
+      <h2>Change the published password</h2>
+      <p class="hint">You signed in with the password everyone can read in the documentation. Choose your own before anything else: at least 10 characters, not the published one and not the username.</p>
+      <label>Current password <input id="setup-current" type="password" autocomplete="current-password" required></label>
+      <label>New password <input id="setup-password" type="password" autocomplete="new-password" minlength="10" required></label>
+      <label>Repeat new password <input id="setup-password2" type="password" autocomplete="new-password" minlength="10" required></label>
+      <button type="submit">Change password</button>
       <p id="setup-password-error" class="error" hidden></p>
     </form>
     <form id="setup-audit-form" hidden>
@@ -32,6 +33,12 @@
       <h2>The audit key is ready</h2>
       <p>Key ID: <code id="setup-audit-keyid"></code></p>
       <p class="hint">The key ID names the key; it is safe to write down next to the passphrase. Changing the passphrase later means rotating the key (Settings).</p>
+      <h2>Next steps</h2>
+      <ol id="setup-next" class="hint">
+        <li><a href="#" data-tab="network">Network</a> (optional): a host name and a real certificate.</li>
+        <li><a href="#" data-tab="providers">Providers</a>: add at least one model provider.</li>
+        <li><a href="#" data-tab="clients">Clients</a>: create a pairing string and pair the Askbar app.</li>
+      </ol>
       <button id="setup-audit-continue" type="button">Continue</button>
     </div>
   </main>
@@ -39,7 +46,9 @@
   <main id="login" class="narrow" hidden>
     <h1>Askbar admin</h1>
     <form id="login-form">
+      <label>Username <input id="username" type="text" autocomplete="username" value="admin" required></label>
       <label>Password <input id="password" type="password" autocomplete="current-password" required></label>
+      <p class="hint">On a new install the login is the published one; see the README's first-run steps.</p>
       <button type="submit">Sign in</button>
       <p id="login-error" class="error" hidden></p>
     </form>

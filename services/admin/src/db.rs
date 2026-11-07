@@ -126,6 +126,9 @@ const MIGRATIONS: &[&str] = &[
     // v10: a provider the admin made and keeps in step itself (the bundled CLIProxyAPI). Its name, type,
     // address and key are not editable, and it cannot be deleted.
     "ALTER TABLE providers ADD COLUMN managed INTEGER NOT NULL DEFAULT 0;",
+    // v11: the published first-run password must be changed before anything else (ADR 0007).
+    // Existing installs chose their own password, so they start with nothing to change.
+    "ALTER TABLE admin_credentials ADD COLUMN must_change INTEGER NOT NULL DEFAULT 0 CHECK (must_change IN (0, 1));",
 ];
 
 /// The schema steps, in order (for the upgrade tests).

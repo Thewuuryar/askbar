@@ -73,6 +73,7 @@ pub fn default_detail(code: ErrorCode) -> &'static str {
         ErrorCode::SetupRequired => "Setup is not finished.",
         ErrorCode::ServerUnavailable => "The Askbar server cannot be reached.",
         ErrorCode::NotConfigured => "The service has not received its settings yet. Try again in a few seconds.",
+        ErrorCode::PasswordChangeRequired => "The admin password is still the published one. Change it before anything else.",
         ErrorCode::Conflict => "The request conflicts with the current state.",
         ErrorCode::Internal => "Something went wrong on the server.",
     }

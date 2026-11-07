@@ -24,10 +24,14 @@ fn migrations_apply_and_the_defaults_are_safe() {
         assert!(tables.iter().any(|x| x == t), "missing {t}");
     }
     let v: i64 = db.conn().query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-    assert_eq!(v, 10);
-    // No password until setup; no limits; the IP allowlist and HTTPS start switched off.
+    assert_eq!(v, 11);
+    // No password until the admin's first start stores the published one (ADR 0007); no limits; the IP
+    // allowlist and HTTPS start switched off.
     let creds: i64 = db.conn().query_row("SELECT COUNT(*) FROM admin_credentials", [], |r| r.get(0)).unwrap();
     assert_eq!(creds, 0);
+    askbar_admin::web::ensure_default_credentials(&db).unwrap();
+    let must_change: i64 = db.conn().query_row("SELECT must_change FROM admin_credentials", [], |r| r.get(0)).unwrap();
+    assert_eq!(must_change, 1, "the published password must be changed");
     let (allow, tls, kill): (i64, i64, i64) = db
         .conn()
         .query_row("SELECT n.allowlist_enabled, n.tls_enabled, b.kill_switch FROM network_settings n, budgets b", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
