@@ -27,7 +27,7 @@ async fn saving_pushes_the_config_through_the_socket_and_writes_the_token_file()
     assert!(body.contains("admin unix//run/caddy/admin.sock") && !body.contains("origins"));
     assert!(!body.contains(TOKEN), "the token never goes into the config");
     assert_eq!(t.token_file().as_deref(), Some(TOKEN));
-    assert_eq!(std::fs::metadata(t.secrets_dir.join("cf_token")).unwrap().permissions().mode() & 0o777, 0o600);
+    assert_eq!(std::fs::metadata(t.secrets_dir.join("cf_token")).unwrap().permissions().mode() & 0o777, 0o640, "Caddy reads it through group 10001");
     // The status is remembered and served back.
     assert_eq!(t.call(M::GET, "/admin/api/v1/network", json!({})).await.1["proxy"]["ok"], true);
 }
@@ -75,7 +75,7 @@ async fn turning_https_off_serves_the_installs_own_certificate_and_removes_the_t
     // The admin made the certificate Caddy is told to use, next to where the token file was.
     let fp = askbar_admin::self_cert::fingerprint(&t.secrets_dir).expect("self.crt is written");
     assert_eq!(fp.len(), 64);
-    assert_eq!(std::fs::metadata(t.secrets_dir.join("self.key")).unwrap().permissions().mode() & 0o777, 0o600);
+    assert_eq!(std::fs::metadata(t.secrets_dir.join("self.key")).unwrap().permissions().mode() & 0o777, 0o640, "Caddy reads it through group 10001");
     // The encrypted copy is still stored, so turning HTTPS back on needs no re-entry.
     assert_eq!(t.call(M::GET, "/admin/api/v1/network", json!({})).await.1["has_token"], true);
 }

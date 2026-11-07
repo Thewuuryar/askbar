@@ -3,7 +3,9 @@
 //!
 //! The admin makes it once, on the volume it shares with Caddy for secrets, and never replaces it:
 //! clients paired while it is in use pin its SHA-256, so a new one would mean pairing every client
-//! again. Caddy reads both files; nothing else does.
+//! again. Caddy reads both files; nothing else does. The key is mode 0640: Caddy runs in the admin's
+//! group (10001) with every capability dropped, so it reads the key through the group bit
+//! ([ADR 0032](../../../docs/adr/0032-container-hardening.md)).
 
 use sha2::{Digest, Sha256};
 use std::io::Write;
@@ -15,17 +17,23 @@ pub const KEY_FILE: &str = "self.key";
 /// The name in the certificate. Caddy hands the certificate out for this name when a client sends
 /// no name (an address) or one it has no certificate for (`default_sni`, `fallback_sni`).
 pub const NAME: &str = "askbar.internal";
+/// The key's mode: owner and the admin's group (Caddy's), nobody else.
+const KEY_MODE: u32 = 0o640;
 
 /// Make the certificate and key in `dir` unless both are there. Returns the certificate's SHA-256.
 pub fn ensure(dir: &Path) -> std::io::Result<String> {
     if let Some(fp) = fingerprint(dir) {
-        if dir.join(KEY_FILE).exists() {
+        let key = dir.join(KEY_FILE);
+        if key.exists() {
+            // A key made before 0640 was 0600, which Caddy could read only with CAP_DAC_OVERRIDE.
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&key, std::fs::Permissions::from_mode(KEY_MODE))?;
             return Ok(fp);
         }
     }
     let made = rcgen::generate_simple_self_signed(vec![NAME.to_string(), "localhost".to_string()]).map_err(std::io::Error::other)?;
     std::fs::create_dir_all(dir)?;
-    write_new(dir, KEY_FILE, made.signing_key.serialize_pem().as_bytes(), 0o600)?;
+    write_new(dir, KEY_FILE, made.signing_key.serialize_pem().as_bytes(), KEY_MODE)?;
     write_new(dir, CERT_FILE, made.cert.pem().as_bytes(), 0o644)?;
     Ok(hex(&Sha256::digest(made.cert.der())))
 }
@@ -83,13 +91,23 @@ mod tests {
     }
 
     #[test]
-    fn the_key_is_private_and_the_certificate_readable() {
+    fn the_key_is_readable_by_owner_and_group_only_and_the_certificate_by_all() {
         let d = dir();
         ensure(&d).unwrap();
         let mode = |f: &str| std::fs::metadata(d.join(f)).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode(KEY_FILE), 0o600);
+        assert_eq!(mode(KEY_FILE), 0o640);
         assert_eq!(mode(CERT_FILE), 0o644);
         assert!(std::fs::read_to_string(d.join(KEY_FILE)).unwrap().contains("PRIVATE KEY"));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_key_made_0600_by_an_earlier_release_becomes_0640() {
+        let d = dir();
+        ensure(&d).unwrap();
+        std::fs::set_permissions(d.join(KEY_FILE), std::fs::Permissions::from_mode(0o600)).unwrap();
+        ensure(&d).unwrap();
+        assert_eq!(std::fs::metadata(d.join(KEY_FILE)).unwrap().permissions().mode() & 0o777, 0o640);
         let _ = std::fs::remove_dir_all(&d);
     }
 

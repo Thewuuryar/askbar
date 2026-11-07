@@ -22,7 +22,8 @@ FROM debian:bookworm-slim AS admin
 RUN groupadd --system --gid 10001 askbar-admin && useradd --system --uid 10001 --gid 10001 --home-dir /admin-data --shell /usr/sbin/nologin askbar-admin \
  && mkdir /admin-data /admin-secrets /server-token /control-token /cpa-config /caddy-secrets /run/admin /caddy-run \
  && chown askbar-admin:askbar-admin /admin-data /admin-secrets /server-token /control-token /cpa-config /caddy-secrets /run/admin /caddy-run \
- && chmod 700 /admin-secrets
+ && chmod 700 /admin-secrets \
+ && chmod 770 /caddy-run
 COPY --from=build /src/target/release/askbar-admin /usr/local/bin/askbar-admin
 USER askbar-admin
 ENV ASKBAR_ADMIN_DATA_DIR=/admin-data \
