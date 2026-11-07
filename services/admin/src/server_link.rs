@@ -352,7 +352,23 @@ impl ServerLink {
     /// snapshot should be pushed again (see `needs_push`). Updates the online state.
     pub async fn poll(&self) -> Option<bool> {
         let was_online = self.server_online();
-        let status = async {
+        let status = self.fetch_status().await;
+        self.online.store(status.is_some(), Ordering::Relaxed);
+        let st = status?;
+        let mut boot = self.last_boot.lock().unwrap_or_else(|e| e.into_inner());
+        let push = needs_push(was_online, boot.as_deref(), self.last_version(), &st);
+        *boot = Some(st.boot_id);
+        Some(push)
+    }
+
+    /// The server's `GET /status` as it is now: `(config_version, boot_id)`, or `None` if it did not
+    /// answer. Changes nothing here (the push decision is `poll`'s).
+    pub async fn status_now(&self) -> Option<(Option<u64>, String)> {
+        self.fetch_status().await.map(|s| (s.config_version, s.boot_id))
+    }
+
+    async fn fetch_status(&self) -> Option<ServerStatus> {
+        async {
             let r = self
                 .http
                 .get(format!("{}{}", self.base, askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/status")))
@@ -366,13 +382,7 @@ impl ServerLink {
             }
             r.json::<ServerStatus>().await.ok()
         }
-        .await;
-        self.online.store(status.is_some(), Ordering::Relaxed);
-        let st = status?;
-        let mut boot = self.last_boot.lock().unwrap_or_else(|e| e.into_inner());
-        let push = needs_push(was_online, boot.as_deref(), self.last_version(), &st);
-        *boot = Some(st.boot_id);
-        Some(push)
+        .await
     }
 
     /// `poll`, and mark the snapshot to be pushed when it should be. True if the server answered.

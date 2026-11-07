@@ -7,6 +7,7 @@ description = "Askbar admin service: the admin site and its own database, kept a
 
 [dependencies]
 askbar-proto = { path = "../../crates/askbar-proto", features = ["axum"] }
+askbar-service = { path = "../../crates/askbar-service" }
 argon2 = "0.5"
 crypto_box = { version = "0.9", features = ["seal"] }
 axum = "0.8"

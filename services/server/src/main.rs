@@ -28,6 +28,11 @@ fn die(e: impl std::fmt::Display, code: i32) -> ! {
 
 /// `askbar-server healthcheck`: GET the local API health endpoint; exit 0 if it answers 200.
 fn run_healthcheck() -> ! {
+    std::process::exit(if healthy() { 0 } else { 1 })
+}
+
+/// True if the local client API answers its health endpoint with 200 within 2 seconds.
+fn healthy() -> bool {
     use std::io::{Read, Write};
     let port = std::env::var("ASKBAR_CLIENT_API_ADDR")
         .ok()
@@ -42,7 +47,7 @@ fn run_healthcheck() -> ! {
         s.read_exact(&mut head)?;
         Ok(&head == b"HTTP/1.1 200" || &head == b"HTTP/1.0 200")
     })();
-    std::process::exit(if ok.unwrap_or(false) { 0 } else { 1 })
+    ok.unwrap_or(false)
 }
 
 /// On SIGTERM or Ctrl-C: keep what running replies have so far, then exit.
@@ -147,6 +152,11 @@ async fn main() {
     let state = askbar_server::AppState::new(db, secrets, askbar_server::MIN_CLIENT)
         .with_audit(askbar_server::audit::Recorder::spawn(audit_db, 4096));
     tokio::spawn(stop_on_signal(state.clone()));
+    // POST /api/server/v1/restart saves running replies, as a stop does, then exits (ADR 0005).
+    let on_stop = state.clone();
+    let _ = state.restarter.set(askbar_service::restart::Restarter::new(state.boot_id.clone(), move || askbar_server::generation::shutdown(&on_stop)));
+    // Docker does not restart an unhealthy container; the watchdog does, by exiting (ADR 0005).
+    askbar_service::restart::start_watchdog(healthy);
     tokio::spawn(audit_retention_daily(state.clone()));
     tokio::spawn(prune_generations_hourly(state.clone()));
     let server_api_app = askbar_server::server_api::router(state.clone(), askbar_server::server_api::token_hash_path());

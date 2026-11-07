@@ -12,8 +12,6 @@ pub const ADMIN_V1: &str = "/api/admin/v1";
 pub const CLIENT_V1: &str = "/api/client/v1";
 /// What the admin calls on the server. Served only on the internal listener; Caddy answers 404.
 pub const SERVER_V1: &str = "/api/server/v1";
-/// What the admin calls on the controller (start, stop, restart). Internal network only; never routed.
-pub const CONTROL_V1: &str = "/api/control/v1";
 /// Every version of the server API, as Caddy blocks it.
 pub const SERVER: &str = "/api/server";
 /// Every version of the client API.
@@ -33,7 +31,7 @@ mod tests {
 
     #[test]
     fn every_prefix_is_audience_first_then_the_version_and_has_no_trailing_slash() {
-        for p in [ADMIN, ADMIN_API, ADMIN_V1, CLIENT_V1, SERVER_V1, CONTROL_V1, SERVER, CLIENT, TOMBSTONE_V1] {
+        for p in [ADMIN, ADMIN_API, ADMIN_V1, CLIENT_V1, SERVER_V1, SERVER, CLIENT, TOMBSTONE_V1] {
             assert!(p.starts_with('/') && !p.ends_with('/'), "{p}");
         }
         // The versioned prefixes sit under their audience prefix, with the version after it.

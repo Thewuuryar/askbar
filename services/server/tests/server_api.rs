@@ -216,6 +216,29 @@ async fn status_reports_the_config_version_and_a_boot_id_that_changes_on_restart
 }
 
 #[tokio::test]
+async fn restart_answers_202_with_the_boot_id_then_stops_and_needs_the_token() {
+    let s = start_with_state().await;
+    let url = format!("{}/api/server/v1/restart", s.t.url);
+    let r = s.t.http.post(&url).bearer_auth(TOKEN).send().await.unwrap();
+    assert_eq!(r.status(), 500, "not set up in this process (only main sets it)");
+    let (stopped, exited) = (std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)));
+    let (st, ex) = (stopped.clone(), exited.clone());
+    let _ = s.state.restarter.set(askbar_service::restart::Restarter::for_tests(
+        s.state.boot_id.clone(),
+        std::time::Duration::ZERO,
+        std::time::Duration::from_secs(1),
+        move || st.store(true, std::sync::atomic::Ordering::SeqCst),
+        move || ex.store(true, std::sync::atomic::Ordering::SeqCst),
+    ));
+    assert_eq!(s.t.http.post(&url).send().await.unwrap().status(), 401);
+    let r = s.t.http.post(&url).bearer_auth(TOKEN).send().await.unwrap();
+    assert_eq!(r.status(), 202);
+    assert_eq!(r.json::<serde_json::Value>().await.unwrap()["boot_id"], s.state.boot_id.as_str());
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    assert!(stopped.load(std::sync::atomic::Ordering::SeqCst) && exited.load(std::sync::atomic::Ordering::SeqCst));
+}
+
+#[tokio::test]
 async fn retention_below_seven_days_is_rejected_and_changes_nothing() {
     let s = start_with_state().await;
     s.put(&serde_json::to_value(snapshot()).unwrap(), Some(TOKEN)).await;

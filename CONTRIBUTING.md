@@ -19,14 +19,13 @@ to use one (a database migration, an old path in a test) carries `names-ok` and 
 | `crates/askbar-service/` | What every service shares: the per-link bearer check (`links.rs`), boot ID and `GET /status` body (`status.rs`), the `503 not_configured` gate (`configured.rs`). |
 | `services/server/` | The server: client API (`client_api.rs`), server API (`server_api.rs`), chat and generations, audit store. |
 | `services/admin/` | The admin service: the admin API (`admin_api.rs`), the site (`src/ui/`), Caddy configuration, API keys. Unix only. |
-| `services/controller/` | The controller: Docker-socket access narrowed to start, stop and restart three services. Its API is `docs/openapi/control.v1.yaml`. |
 | `clients/desktop/` | The desktop app, its own Cargo workspace: `src-tauri/` (Cargo package `askbar-client`, program `askbar`), the popup in `ui/` (no build step) and its `tests/`. |
 | `deploy/caddy/`, `deploy/cpa/` | Caddy's bootstrap config; notes on CLIProxyAPI. |
 | `docs/` | `architecture.md`, `adr/` (decisions), `style/`, `wire-contract.md` (prose), `openapi/` (one file per API), `refactor-log.md`. |
 | `scripts/`, `tests/` | Smoke and isolation scripts, the checks, popup tests. |
 | `tests/e2e/` | The admin-site browser test, screenshots, a mock LLM. |
 
-This table lists what is on `main`; the target layout is in [ADR 0033](docs/adr/0033-repository-layout.md). The v1 target adds the `auditor`, `model-gateway`, `alerter` and `bootstrap` services and drops the controller ([ADR 0003](docs/adr/0003-v1-service-layout.md), [ADR 0005](docs/adr/0005-no-controller-and-self-restart.md)). A new service needs a name and an ADR first ([ADR 0021](docs/adr/0021-names-and-new-components.md)).
+This table lists what is on `main`; the target layout is in [ADR 0033](docs/adr/0033-repository-layout.md). The v1 target adds the `auditor`, `model-gateway`, `alerter` and `bootstrap` services ([ADR 0003](docs/adr/0003-v1-service-layout.md)); the controller is gone ([ADR 0005](docs/adr/0005-no-controller-and-self-restart.md)). A new service needs a name and an ADR first ([ADR 0021](docs/adr/0021-names-and-new-components.md)).
 
 ## Build, run, test
 
