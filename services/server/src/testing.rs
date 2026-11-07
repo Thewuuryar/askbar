@@ -28,6 +28,7 @@ pub fn empty_snapshot() -> Snapshot {
         system_prompt: None,
         display: DisplaySettings::default(),
         user_display_defaults: Default::default(),
+        users: vec![],
         pair_codes: vec![],
         revoked_client_ids: vec![],
         budget: Budget::default(),

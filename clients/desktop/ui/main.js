@@ -27,6 +27,14 @@
     pairSubmit: $('pair-submit'),
     pairCancel: $('pair-cancel'),
     pairError: $('pair-error'),
+    share: $('share'),
+    shareName: $('share-name'),
+    shareSubmit: $('share-submit'),
+    shareCancel: $('share-cancel'),
+    shareOut: $('share-out'),
+    shareKey: $('share-key'),
+    shareCopy: $('share-copy'),
+    shareError: $('share-error'),
     status: $('status'),
     statusText: $('status-text'),
     statusActions: $('status-actions'),
@@ -168,6 +176,7 @@
   // ------------------------------------------------------------- pairing
 
   function openPairing() {
+    closeShare();
     el.pairError.hidden = true;
     el.pairInput.value = '';
     el.pair.hidden = false;
@@ -181,6 +190,43 @@
     layout();
     el.input.focus();
     return true;
+  }
+
+  // "Pair another app" (ADR 0008): a one-time key for this user's next app.
+  function openShare() {
+    closePairing();
+    el.shareError.hidden = true;
+    el.shareOut.hidden = true;
+    el.shareKey.value = '';
+    el.shareName.value = '';
+    el.share.hidden = false;
+    layout();
+    el.shareName.focus();
+  }
+
+  function closeShare() {
+    if (el.share.hidden) return false;
+    el.share.hidden = true;
+    el.shareKey.value = '';
+    layout();
+    el.input.focus();
+    return true;
+  }
+
+  async function submitShare(e) {
+    e.preventDefault();
+    el.shareSubmit.disabled = true;
+    el.shareError.hidden = true;
+    try {
+      el.shareKey.value = await invoke('new_pairing_key', { name: el.shareName.value.trim() });
+      el.shareOut.hidden = false;
+      el.shareKey.select();
+    } catch (err) {
+      el.shareError.textContent = String(err);
+      el.shareError.hidden = false;
+    }
+    el.shareSubmit.disabled = false;
+    layout();
   }
 
   async function submitPairing(e) {
@@ -661,7 +707,7 @@
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       e.preventDefault();
-      if (closePairing()) return;
+      if (closePairing() || closeShare()) return;
       if (state.streaming) cancel(); else invoke('hide_window');
       return;
     }
@@ -723,6 +769,9 @@
   el.noticeClose.addEventListener('click', hideNotice);
   el.pair.addEventListener('submit', submitPairing);
   el.pairCancel.addEventListener('click', closePairing);
+  el.share.addEventListener('submit', submitShare);
+  el.shareCancel.addEventListener('click', closeShare);
+  el.shareCopy.addEventListener('click', () => copyText(el.shareKey.value, el.shareCopy));
   el.noticeConfig.addEventListener('click', () => invoke('open_config').catch(() => {}));
 
   new ResizeObserver(layout).observe(el.card);
@@ -751,6 +800,7 @@
 
   listen('askbar:shown', onShown);
   listen('askbar:pair', () => openPairing());
+  listen('askbar:pair-another', () => openShare());
 
   (async () => {
     try { await refreshBootstrap(); } catch (e) { showNotice(String(e)); }

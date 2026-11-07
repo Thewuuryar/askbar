@@ -129,6 +129,13 @@ const MIGRATIONS: &[&str] = &[
     // v11: the published first-run password must be changed before anything else (ADR 0007).
     // Existing installs chose their own password, so they start with nothing to change.
     "ALTER TABLE admin_credentials ADD COLUMN must_change INTEGER NOT NULL DEFAULT 0 CHECK (must_change IN (0, 1));",
+    // v12: the users the admin makes (ADR 0008); pushed to the server, which keeps them. An install from
+    // before adopts the server's users the first time the list is read (see admin_api::list_users).
+    "CREATE TABLE users (
+         id         TEXT PRIMARY KEY,
+         name       TEXT    NOT NULL UNIQUE,
+         created_at INTEGER NOT NULL
+     );",
 ];
 
 /// The schema steps, in order (for the upgrade tests).

@@ -66,7 +66,8 @@ async function waitForPort(port) {
   const pid = (n) => providers.find((p) => p.name.startsWith(n)).id;
   await admin('PUT', '/api/admin/v1/settings', { system_prompt: 'x', display: (await admin('GET', '/api/admin/v1/settings')).body.display });
 
-  const pairing = (await admin('POST', '/api/admin/v1/pairings', { name: 'shots' })).body.pairing;
+  const user = (await admin('POST', '/api/admin/v1/users', { name: 'shots' })).body.id;
+  const pairing = (await admin('POST', '/api/admin/v1/users/' + user + '/pairing-keys', { name: 'shots' })).body.pairing;
   const { code } = JSON.parse(Buffer.from(pairing.slice('askbar-pair:'.length), 'base64url').toString());
   const h = { 'content-type': 'application/json', 'x-askbar-client-version': '0.5.0' };
   const { token } = await (await fetch(`http://127.0.0.1:${api}/api/client/v1/pairings`, { method: 'POST', headers: h, body: JSON.stringify({ code }) })).json();

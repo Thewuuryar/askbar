@@ -707,7 +707,7 @@
     $('n-clear').checked = false;
     show($('n-clear-row'), n.has_token);
     $('n-info').textContent = (n.tls_enabled && n.hostname ? 'The admin site is at https://' + n.hostname + '/admin. ' : '')
-      + 'New pairing strings point at ' + n.public_url + '.';
+      + 'New pairing keys point at ' + n.public_url + '.';
     showProxy(n.proxy);
     show($('network-error'), false);
   }
@@ -750,7 +750,46 @@
     return ts ? new Date(ts * 1000).toLocaleString() : 'never';
   }
 
+  let userNames = {};
+  async function loadUsers() {
+    const users = await api('GET', '/api/admin/v1/users');
+    userNames = Object.fromEntries(users.map((u) => [u.id, u.name]));
+    const box = $('users');
+    box.textContent = '';
+    const p = document.createElement('p');
+    p.className = 'hint';
+    p.textContent = users.length ? users.map((u) => u.name).join(' · ') : 'No users yet. Add one to pair an app for them.';
+    box.appendChild(p);
+    const sel = $('d-user');
+    const keep = sel.value;
+    sel.textContent = '';
+    for (const u of users) {
+      const o = document.createElement('option');
+      o.value = u.id;
+      o.textContent = u.name;
+      sel.appendChild(o);
+    }
+    if (users.some((u) => u.id === keep)) sel.value = keep;
+    $('pair-form').querySelector('button[type=submit]').disabled = users.length === 0;
+  }
+
+  $('user-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const err = $('user-error');
+    show(err, false);
+    try {
+      const r = await api('POST', '/api/admin/v1/users', { name: $('u-name').value.trim() });
+      $('u-name').value = '';
+      await loadUsers();
+      $('d-user').value = r.id;
+    } catch (ex) {
+      err.textContent = ex.message;
+      show(err, true);
+    }
+  });
+
   async function loadClients() {
+    await loadUsers();
     const list = await api('GET', '/api/admin/v1/clients');
     const box = $('clients');
     box.textContent = '';
@@ -785,7 +824,7 @@
       }
       const meta = document.createElement('div');
       meta.className = 'meta';
-      meta.textContent = 'Paired ' + when(d.created_at) + ' · last seen ' + when(d.last_seen);
+      meta.textContent = (userNames[d.user_id] || 'unknown user') + ' · paired ' + when(d.created_at) + ' · last seen ' + when(d.last_seen);
       card.append(head, meta);
       box.appendChild(card);
     }
@@ -796,7 +835,7 @@
     const err = $('pair-error');
     show(err, false);
     try {
-      const r = await api('POST', '/api/admin/v1/pairings', { name: $('d-name').value.trim() });
+      const r = await api('POST', '/api/admin/v1/users/' + encodeURIComponent($('d-user').value) + '/pairing-keys', { name: $('d-name').value.trim() });
       $('pairing-string').value = r.pairing;
       show($('pairing-out'), true);
     } catch (ex) {

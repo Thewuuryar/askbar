@@ -162,6 +162,11 @@ pub fn build_snapshot(conn: &rusqlite::Connection) -> rusqlite::Result<Snapshot>
         version: 0,
         providers,
         default_provider_id,
+        users: {
+            let mut stmt = conn.prepare("SELECT id, name FROM users ORDER BY created_at, name")?;
+            let rows = stmt.query_map([], |r| Ok(askbar_proto::SnapshotUser { id: r.get(0)?, name: r.get(1)? }))?.collect::<Result<Vec<_>, _>>()?;
+            rows
+        },
         system_prompt: setting(conn, "system_prompt")?,
         display,
         user_display_defaults,

@@ -97,7 +97,7 @@ async fn http_mode_saves_without_a_token_and_pairing_follows_the_setting() {
     assert_eq!(st, 200);
     // `host` is the Host header the admin site was opened with, as Caddy passes it through.
     let pairing = |t: &T, host: &'static str| {
-        let url = format!("{}/api/admin/v1/pairings", t.adm);
+        let url = format!("{}/api/admin/v1/users/U1/pairing-keys", t.adm);
         let (http, cookie) = (t.http.clone(), t.cookie.clone());
         async move {
             let v: Value = http.post(url).header("x-askbar-admin", "1").header("cookie", cookie).header("host", host).json(&json!({})).send().await.unwrap().json().await.unwrap();

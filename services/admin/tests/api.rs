@@ -83,6 +83,8 @@ async fn start(reachable: bool) -> T {
 
     let db = AdminDb::open_in_memory().unwrap();
     web::init_password(&db, PW).unwrap();
+    // One user to pair clients for (ADR 0008); the first change pushes it to the server.
+    db.conn().execute("INSERT INTO users (id, name, created_at) VALUES ('U1', 'tester', 0)", []).unwrap();
     let link = ServerLink::new(&server_api_url, token);
     let admin = AdminState::with_server(db, link);
     let adm = serve(askbar_admin::router(admin.clone())).await;
@@ -172,7 +174,7 @@ async fn with_the_server_down_changes_get_502_and_nothing_is_saved() {
     for (m, path, body) in [
         (M::POST, "/api/admin/v1/providers", Some(provider("p", llm, Some(KEY)))),
         (M::GET, "/api/admin/v1/clients", None),
-        (M::POST, "/api/admin/v1/pairings", Some(json!({ "name": "laptop" }))),
+        (M::POST, "/api/admin/v1/users/U1/pairing-keys", Some(json!({ "name": "laptop" }))),
         (M::PUT, "/api/admin/v1/settings", Some(json!({ "system_prompt": "x", "display": askbar_proto::DisplaySettings::default() }))),
         (M::GET, "/api/admin/v1/backup", None),
         (M::POST, "/api/admin/v1/clients/d1/revoke", None),
@@ -204,9 +206,9 @@ async fn status_reports_a_server_that_is_there() {
 #[tokio::test]
 async fn a_pairing_string_pairs_a_client_which_can_then_be_revoked() {
     let t = start(true).await;
-    let (st, out) = t.call(M::POST, "/api/admin/v1/pairings", Some(json!({ "name": "Work laptop" }))).await;
+    let (st, out) = t.call(M::POST, "/api/admin/v1/users/U1/pairing-keys", Some(json!({ "name": "Work laptop" }))).await;
     assert_eq!(st, 200);
-    let (url, code) = askbar_proto::decode_pairing(out["pairing"].as_str().unwrap()).expect("a pairing string");
+    let (url, code) = askbar_proto::decode_pairing(out["pairing"].as_str().unwrap()).expect("a pairing key");
     assert_eq!(url, format!("https://{}", t.adm.trim_start_matches("http://")), "no host name: the address the admin was opened with, over HTTPS");
     assert_eq!(out["expires_in"], json!(600));
 
@@ -234,14 +236,14 @@ async fn a_pairing_string_pairs_a_client_which_can_then_be_revoked() {
     let (_, clients) = t.call(M::GET, "/api/admin/v1/clients", None).await;
     assert_eq!(clients[0]["revoked"], json!(true));
     assert_eq!(t.call(M::POST, "/api/admin/v1/clients/nope/revoke", None).await.0, 404);
-    assert_eq!(t.call(M::POST, "/api/admin/v1/pairings", Some(json!({ "name": "x".repeat(61) }))).await.0, 400);
+    assert_eq!(t.call(M::POST, "/api/admin/v1/users/U1/pairing-keys", Some(json!({ "name": "x".repeat(61) }))).await.0, 400);
 }
 
 #[tokio::test]
 async fn the_pairing_string_uses_the_public_https_name_when_https_is_on() {
     let t = start(true).await;
     t.admin.db.lock().await.conn().execute("UPDATE network_settings SET tls_enabled = 1, hostname = 'askbar.example.com'", []).unwrap();
-    let (_, out) = t.call(M::POST, "/api/admin/v1/pairings", Some(json!({}))).await;
+    let (_, out) = t.call(M::POST, "/api/admin/v1/users/U1/pairing-keys", Some(json!({}))).await;
     assert_eq!(askbar_proto::decode_pairing(out["pairing"].as_str().unwrap()).unwrap().0, "https://askbar.example.com");
 }
 
@@ -386,7 +388,7 @@ async fn the_backup_holds_both_databases_and_none_of_the_secrets() {
     let t = start(true).await;
     let llm = fake_llm().await;
     t.call(M::POST, "/api/admin/v1/providers", Some(provider("mock", &llm, Some(KEY)))).await;
-    t.call(M::POST, "/api/admin/v1/pairings", Some(json!({ "name": "pending" }))).await;
+    t.call(M::POST, "/api/admin/v1/users/U1/pairing-keys", Some(json!({ "name": "pending" }))).await;
     t.admin.db.lock().await.conn().execute("UPDATE network_settings SET cloudflare_token = x'deadbeefcafe'", []).unwrap();
     {
         let db = t.server.db.lock().unwrap();
@@ -477,7 +479,7 @@ async fn all_of_it_needs_a_session() {
         (M::POST, "/api/admin/v1/providers/x/test"),
         (M::GET, "/api/admin/v1/clients"),
         (M::POST, "/api/admin/v1/clients/x/revoke"),
-        (M::POST, "/api/admin/v1/pairings"),
+        (M::POST, "/api/admin/v1/users/U1/pairing-keys"),
         (M::GET, "/api/admin/v1/settings"),
         (M::PUT, "/api/admin/v1/settings"),
         (M::PUT, "/api/admin/v1/users/x/display-defaults"),
@@ -576,4 +578,50 @@ async fn models_get_502_when_the_server_is_down() {
     let t = start(false).await;
     let (st, _) = t.call(M::POST, "/api/admin/v1/providers/models", Some(json!({ "type": "openai" }))).await;
     assert_eq!(st, 502);
+}
+
+#[tokio::test]
+async fn users_are_made_here_reach_the_server_and_each_gets_its_own_pairing_keys() {
+    let t = start(true).await;
+    let (st, made) = t.call(M::POST, "/api/admin/v1/users", Some(json!({ "name": " Alice " }))).await;
+    assert_eq!(st, 201, "{made}");
+    let alice = made["id"].as_str().unwrap().to_string();
+    let (_, list) = t.call(M::GET, "/api/admin/v1/users", None).await;
+    let names: Vec<&str> = list.as_array().unwrap().iter().map(|u| u["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["tester", "Alice"], "oldest first, the name trimmed");
+    // Pushed to the server, which now has the user.
+    let snap = t.snapshot().unwrap();
+    assert!(snap.users.iter().any(|u| u.id == alice && u.name == "Alice"));
+    let on_server: String = t.server.db.lock().unwrap().conn().query_row("SELECT name FROM users WHERE id = ?1", [&alice], |r| r.get(0)).unwrap();
+    assert_eq!(on_server, "Alice");
+
+    // A pairing key for Alice pairs a client that belongs to Alice.
+    let (st, out) = t.call(M::POST, &format!("/api/admin/v1/users/{alice}/pairing-keys"), Some(json!({ "name": "Alice's laptop" }))).await;
+    assert_eq!(st, 200);
+    let p = askbar_proto::Pairing::decode(out["pairing"].as_str().unwrap()).unwrap();
+    let r = t.http.post(format!("{}/api/client/v1/pairings", t.api)).header("x-askbar-client-version", "0.5.0").json(&json!({ "code": p.code })).send().await.unwrap();
+    assert_eq!(r.status(), 200);
+    let owner: String = t.server.db.lock().unwrap().conn().query_row("SELECT user_id FROM clients WHERE name = 'Alice''s laptop'", [], |r| r.get(0)).unwrap();
+    assert_eq!(owner, alice);
+
+    // Refusals.
+    assert_eq!(t.call(M::POST, "/api/admin/v1/users", Some(json!({ "name": "Alice" }))).await.0, 409, "names are unique");
+    for bad in ["", "   ", &"x".repeat(61)] {
+        assert_eq!(t.call(M::POST, "/api/admin/v1/users", Some(json!({ "name": bad }))).await.0, 400, "{bad:?}");
+    }
+    assert_eq!(t.call(M::POST, "/api/admin/v1/users/nobody/pairing-keys", Some(json!({}))).await.0, 404);
+}
+
+#[tokio::test]
+async fn an_install_from_before_takes_over_the_servers_users_so_its_clients_keep_working() {
+    let t = start(true).await;
+    t.admin.db.lock().await.conn().execute("DELETE FROM users", []).unwrap(); // as before 1.9: no users here
+    let owner: String = t.server.db.lock().unwrap().conn().query_row("SELECT id FROM users", [], |r| r.get(0)).unwrap();
+    let (st, list) = t.call(M::GET, "/api/admin/v1/users", None).await;
+    assert_eq!(st, 200);
+    assert_eq!((list[0]["id"].as_str(), list[0]["name"].as_str()), (Some(owner.as_str()), Some("owner")), "the same id, so its clients stay its own");
+    assert_eq!(list.as_array().unwrap().len(), 1);
+    // Taken over once: the next read does not ask again or duplicate.
+    let (_, again) = t.call(M::GET, "/api/admin/v1/users", None).await;
+    assert_eq!(again, list);
 }

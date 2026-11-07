@@ -422,12 +422,12 @@ fn explain(status: StatusCode, body: &[u8]) -> String {
 
 const SETUP_PENDING: &str = "The server's setup is not finished. Open its admin page to complete it.";
 
-/// Redeem a pairing string: exchange its code for a client token, keep the
+/// Redeem a pairing key: exchange its code for a client token, keep the
 /// token in `tokens`, and record the server in `client.yaml` (creating it, or
 /// updating `server_url` and leaving the rest alone).
 pub async fn pair(pairing: &str, client_yaml: &Path, tokens: &dyn TokenStore) -> Result<(), String> {
     let askbar_proto::Pairing { url, code, cert_sha256 } =
-        askbar_proto::Pairing::decode(pairing).ok_or("That is not a pairing string. It should start with \"askbar-pair:\".")?;
+        askbar_proto::Pairing::decode(pairing).ok_or("That is not a pairing key. It should start with \"askbar-pair:\".")?;
     let mut cfg = if client_yaml.exists() { ClientConfig::load(client_yaml)? } else { ClientConfig::default() };
     let mut base = check_server_url(&url, cfg.allow_insecure)?;
     base.set_path(&format!("{}{}", base.path().trim_end_matches('/'), askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, "/pairings")));
@@ -444,14 +444,14 @@ pub async fn pair(pairing: &str, client_yaml: &Path, tokens: &dyn TokenStore) ->
         .await
         .map_err(|e| {
             if crate::pinned_tls::is_pin_mismatch(&e) {
-                format!("The server at {url} shows a different certificate than the one in this pairing string. Create a new pairing string in its admin site.")
+                format!("The server at {url} shows a different certificate than the one in this pairing key. Create a new pairing key in its admin site.")
             } else {
                 format!("Could not reach the server at {url}. Check the address and your network.")
             }
         })?;
     match resp.status() {
         s if s.is_success() => {}
-        StatusCode::UNAUTHORIZED => return Err("The pairing code is wrong, expired (they last 10 minutes) or already used. Create a new one.".into()),
+        StatusCode::UNAUTHORIZED => return Err("The pairing key is wrong, expired (they last 10 minutes) or already used. Create a new one.".into()),
         StatusCode::UPGRADE_REQUIRED => return Err("This version of Askbar is too old for the server. Please update.".into()),
         s => return Err(format!("The server answered {s}.")),
     }
@@ -522,7 +522,7 @@ impl Remote {
             Err(e) if crate::pinned_tls::is_pin_mismatch(&e) => {
                 return Some(ClientStatus::new(
                     "rejected",
-                    "The server's certificate changed, so this app no longer trusts it. Pair again with a new pairing string from the admin site.",
+                    "The server's certificate changed, so this app no longer trusts it. Pair again with a new pairing key from the admin site.",
                 ))
             }
             _ => return Some(offline()),
@@ -567,6 +567,21 @@ impl Remote {
     #[cfg(test)]
     pub async fn list_providers(&self) -> Result<Vec<ProviderInfo>, String> {
         self.inner()?.get_json(&askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, "/providers")).await
+    }
+
+    /// "Pair another app" (ADR 0008): ask the server for a one-time code for this user, and build the
+    /// pairing key from it with this app's own server address and certificate pin, which the server
+    /// does not know. The key works once, for ten minutes.
+    pub async fn new_pairing_key(&self, name: String) -> Result<String, String> {
+        let i = self.inner()?;
+        let req = i
+            .request(Method::POST, &askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, "/me/pairing-keys"))?
+            .timeout(REQUEST_TIMEOUT)
+            .json(&askbar_proto::PairingKeyRequest { name });
+        let resp = i.send(req).await?;
+        let key: askbar_proto::PairingKeyResponse = resp.json().await.map_err(|e| format!("The server's answer was not understood: {e}"))?;
+        let cert_sha256 = lock(&i.cfg).cert_sha256.clone();
+        Ok(askbar_proto::Pairing { url: i.base.as_str().trim_end_matches('/').to_string(), code: key.code, cert_sha256 }.encode())
     }
 
     pub async fn list_conversations(&self) -> Result<Vec<Conversation>, String> {
@@ -1459,6 +1474,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn pair_another_app_gives_a_key_with_this_apps_address_that_pairs_once() {
+        let (url, token, state) = status_server("0.1.0").await;
+        let r = remote_for(&url, Some(&token), PathBuf::new());
+        let key = r.new_pairing_key("Work laptop".into()).await.unwrap();
+        let p = askbar_proto::Pairing::decode(&key).expect("a pairing key");
+        assert_eq!((p.url.as_str(), p.cert_sha256), (url.as_str(), None), "the key points at the server this app uses");
+        let db = state.db.lock().unwrap();
+        assert!(askbar_server::auth::redeem_pair_code(&db, &p.code).unwrap().is_some());
+        assert!(askbar_server::auth::redeem_pair_code(&db, &p.code).unwrap().is_none(), "once only");
+        drop(db);
+        assert!(r.new_pairing_key("x".repeat(61)).await.is_err(), "a name over 60 characters is refused");
+        assert!(remote_for(&url, None, PathBuf::new()).new_pairing_key(String::new()).await.unwrap_err().contains("not paired"));
+    }
+
+    #[tokio::test]
     async fn status_reports_each_problem_with_its_kind() {
         let (url, token, state) = status_server("0.1.0").await;
 
@@ -1648,7 +1678,7 @@ mod tests {
         assert!(tokens.get().is_none() && !path.exists());
     }
 
-    /// A pairing string names the server's own certificate: the app reaches that server over HTTPS by
+    /// A pairing key names the server's own certificate: the app reaches that server over HTTPS by
     /// address, and refuses one that shows another certificate.
     #[tokio::test]
     async fn pairing_trusts_exactly_the_certificate_in_the_pairing_string() {

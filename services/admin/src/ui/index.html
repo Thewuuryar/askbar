@@ -37,7 +37,7 @@
       <ol id="setup-next" class="hint">
         <li><a href="#" data-tab="network">Network</a> (optional): a host name and a real certificate.</li>
         <li><a href="#" data-tab="providers">Providers</a>: add at least one model provider.</li>
-        <li><a href="#" data-tab="clients">Clients</a>: create a pairing string and pair the Askbar app.</li>
+        <li><a href="#" data-tab="clients">Clients</a>: create a user, then a pairing key for them, and pair the Askbar app.</li>
       </ol>
       <button id="setup-audit-continue" type="button">Continue</button>
     </div>
@@ -136,12 +136,21 @@
 
       <section id="tab-clients" data-tab="clients" hidden>
         <h2>Clients</h2>
+        <form id="user-form" class="panel">
+          <h3>Users</h3>
+          <p class="hint">Each person who uses Askbar is a user. A user's apps share their conversations; another user never sees them.</p>
+          <div id="users"></div>
+          <label>New user <input id="u-name" placeholder="Alice" maxlength="60" required></label>
+          <div class="row"><button type="submit">Add user</button></div>
+          <p id="user-error" class="error" hidden></p>
+        </form>
         <form id="pair-form" class="panel">
           <h3>Pair a new client</h3>
+          <label>For user <select id="d-user" required></select></label>
           <label>Client name <input id="d-name" placeholder="Work laptop" maxlength="60"></label>
-          <div class="row"><button type="submit">Generate pairing string</button></div>
+          <div class="row"><button type="submit">Generate pairing key</button></div>
           <div id="pairing-out" hidden>
-            <label>Paste this into Askbar in the app you are pairing (tray icon, Pair with server). It works once and expires in 10 minutes.
+            <label>Paste this into Askbar in the app you are pairing (tray icon, Pair with server). It works once and expires in 10 minutes. That user's other apps can then be paired from this one (Pair another app).
               <textarea id="pairing-string" rows="3" readonly></textarea>
             </label>
             <div class="row"><button type="button" id="pairing-copy" class="secondary">Copy</button></div>

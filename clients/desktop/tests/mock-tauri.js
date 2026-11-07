@@ -45,11 +45,16 @@
       window.__opts.provider = chosen ? chosen.name : id;
       if (window.__opts.status && window.__opts.status.kind === 'provider_missing') window.__opts.status = null;
     },
-    // A pairing string is accepted when it starts with the prefix and the code is not "bad".
+    // A pairing key is accepted when it starts with the prefix and the code is not "bad".
     pair: ({ pairing }) => {
-      if (!pairing.startsWith('askbar-pair:')) throw 'That is not a pairing string. It should start with "askbar-pair:".';
-      if (pairing.includes('bad')) throw 'The pairing code is wrong, expired (they last 10 minutes) or already used. Create a new one.';
+      if (!pairing.startsWith('askbar-pair:')) throw 'That is not a pairing key. It should start with "askbar-pair:".';
+      if (pairing.includes('bad')) throw 'The pairing key is wrong, expired (they last 10 minutes) or already used. Create a new one.';
       window.__opts.status = null;
+    },
+    // "Pair another app": a name containing "fail" stands for a server that refuses.
+    new_pairing_key: ({ name }) => {
+      if (name.includes('fail')) throw 'Too many unused pairing keys for this user. Try again later.';
+      return 'askbar-pair:shared-key';
     },
     list_conversations: () =>
       db.convs.slice().sort((a, b) => b.updated_at - a.updated_at || Number(b.id) - Number(a.id))

@@ -48,10 +48,27 @@ fn hash(secret: &str) -> String {
 /// requests race.
 pub fn redeem_pair_code(db: &Db, code: &str) -> rusqlite::Result<Option<String>> {
     let h = hash(code);
-    let Some(entry) = crate::snapshot::current(db)?.and_then(|s| s.pair_codes.into_iter().find(|c| c.hash == h)) else {
-        return Ok(None);
+    // A code the admin made (in the snapshot), or one a paired client asked for (this server's own).
+    let from_admin = crate::snapshot::current(db)?.and_then(|s| s.pair_codes.into_iter().find(|c| c.hash == h));
+    let entry = match from_admin {
+        Some(e) => e,
+        None => {
+            let own = db
+                .conn()
+                .query_row("SELECT user_id, client_name, expires_at FROM client_pair_codes WHERE hash = ?1", [&h], |r| {
+                    Ok(askbar_proto::SnapshotPairCode { hash: h.clone(), user_id: r.get(0)?, client_name: r.get(1)?, expires_at: r.get(2)? })
+                })
+                .optional()?;
+            let Some(e) = own else { return Ok(None) };
+            e
+        }
     };
     if entry.expires_at <= now() {
+        return Ok(None);
+    }
+    // The user must exist here (the admin pushes users with the codes); otherwise the code is no good.
+    let user_known = db.conn().query_row("SELECT 1 FROM users WHERE id = ?1", [&entry.user_id], |_| Ok(())).optional()?.is_some();
+    if !user_known {
         return Ok(None);
     }
     let tx = db.conn().unchecked_transaction()?;
@@ -69,6 +86,31 @@ pub fn redeem_pair_code(db: &Db, code: &str) -> rusqlite::Result<Option<String>>
     tx.execute("UPDATE redeemed_codes SET client_id = ?1 WHERE hash = ?2", params![client_id, h])?;
     tx.commit()?;
     Ok(Some(token))
+}
+
+/// How long a client's own pairing code lasts, and how many may be open per user at once.
+pub const CLIENT_PAIR_CODE_TTL_SECS: i64 = 10 * 60;
+pub const MAX_OPEN_CLIENT_PAIR_CODES: i64 = 5;
+
+/// A paired client asks for a code to pair another client of its user (ADR 0008). `None` when the user
+/// already has `MAX_OPEN_CLIENT_PAIR_CODES` unexpired, unused codes. Only the code's hash is stored.
+pub fn new_client_pair_code(db: &Db, auth: &ClientAuth, client_name: &str) -> rusqlite::Result<Option<String>> {
+    let now = now();
+    db.conn().execute("DELETE FROM client_pair_codes WHERE expires_at <= ?1", [now])?;
+    let open: i64 = db.conn().query_row(
+        "SELECT COUNT(*) FROM client_pair_codes c WHERE c.user_id = ?1 AND NOT EXISTS (SELECT 1 FROM redeemed_codes r WHERE r.hash = c.hash)",
+        [&auth.user_id],
+        |r| r.get(0),
+    )?;
+    if open >= MAX_OPEN_CLIENT_PAIR_CODES {
+        return Ok(None);
+    }
+    let code = random_secret("");
+    db.conn().execute(
+        "INSERT INTO client_pair_codes (hash, user_id, client_name, created_by, expires_at, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![hash(&code), auth.user_id, client_name.trim(), auth.client_id, now + CLIENT_PAIR_CODE_TTL_SECS, now],
+    )?;
+    Ok(Some(code))
 }
 
 /// Look up a live token and record that it was just used. A client is refused if it is
@@ -115,6 +157,8 @@ pub async fn require_client_token(
 #[derive(serde::Serialize)]
 pub struct ClientRow {
     pub id: String,
+    /// The user the client belongs to (ADR 0008).
+    pub user_id: String,
     pub name: String,
     pub created_at: i64,
     pub last_seen: Option<i64>,
@@ -124,7 +168,7 @@ pub struct ClientRow {
 /// All clients, newest first.
 pub fn list_clients(db: &Db) -> rusqlite::Result<Vec<ClientRow>> {
     let mut stmt =
-        db.conn().prepare("SELECT id, name, created_at, last_seen, revoked_at IS NOT NULL FROM clients ORDER BY created_at DESC, id DESC")?;
-    let rows = stmt.query_map([], |r| Ok(ClientRow { id: r.get(0)?, name: r.get(1)?, created_at: r.get(2)?, last_seen: r.get(3)?, revoked: r.get(4)? }))?;
+        db.conn().prepare("SELECT id, user_id, name, created_at, last_seen, revoked_at IS NOT NULL FROM clients ORDER BY created_at DESC, id DESC")?;
+    let rows = stmt.query_map([], |r| Ok(ClientRow { id: r.get(0)?, user_id: r.get(1)?, name: r.get(2)?, created_at: r.get(3)?, last_seen: r.get(4)?, revoked: r.get(5)? }))?;
     rows.collect()
 }

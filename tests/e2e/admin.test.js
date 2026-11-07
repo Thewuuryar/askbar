@@ -342,10 +342,18 @@ async function waitForPort(port) {
     const r = await fetch(`http://127.0.0.1:${api}/api/client/v1/providers`, { headers: { 'x-askbar-client-version': '0.5.0' } });
     assert.equal(r.status, 401);
   });
-  await step('clients: generate a pairing string, pair with it, then revoke the client', async () => {
+  await step('clients: add a user, generate a pairing key for them, pair with it, then revoke the client', async () => {
     await page.click('#nav [data-tab="clients"]');
     await page.waitForSelector('#pair-form');
     await page.waitForFunction(() => /No clients are paired yet/.test(document.getElementById('clients').textContent));
+    // A fresh install has no users, so nothing can be paired yet (ADR 0008).
+    await page.waitForFunction(() => /No users yet/.test(document.getElementById('users').textContent));
+    assert.equal(await page.isDisabled('#pair-form button[type=submit]'), true);
+    await page.fill('#u-name', 'Ann');
+    await page.click('#user-form button[type=submit]');
+    await page.waitForFunction(() => /Ann/.test(document.getElementById('users').textContent));
+    assert.equal(await page.inputValue('#d-user').then((v) => v.length > 0), true, 'the new user is picked');
+    assert.equal(await page.isDisabled('#pair-form button[type=submit]'), false);
     await page.fill('#d-name', 'Test laptop');
     await page.click('#pair-form button[type=submit]');
     await page.waitForSelector('#pairing-out:not([hidden])');
@@ -363,7 +371,7 @@ async function waitForPort(port) {
     await page.click('#nav [data-tab="providers"]');
     await page.click('#nav [data-tab="clients"]');
     await page.waitForSelector('#clients .card');
-    assert.match(await page.innerText('#clients .card'), /Test laptop[\s\S]*active[\s\S]*last seen (?!never)/);
+    assert.match(await page.innerText('#clients .card'), /Test laptop[\s\S]*active[\s\S]*Ann · paired[\s\S]*last seen (?!never)/);
     page.once('dialog', (d) => d.accept());
     await page.click('#clients [data-action="revoke"]');
     await page.waitForFunction(() => /revoked/.test(document.querySelector('#clients .card').textContent));
@@ -446,7 +454,7 @@ async function waitForPort(port) {
   await step('network: hostname, token and networks are saved; the token is write-only', async () => {
     const CF = 'cf_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     await page.click('#nav [data-tab="network"]');
-    await page.waitForFunction(() => /pairing strings point at/.test(document.getElementById('n-info').textContent));
+    await page.waitForFunction(() => /pairing keys point at/.test(document.getElementById('n-info').textContent));
     await page.check('#n-tls');
     await page.fill('#n-host', 'https://askbar.orraitu.com');
     await page.fill('#n-token', CF);
@@ -461,7 +469,7 @@ async function waitForPort(port) {
     await page.waitForSelector('#flash:not([hidden])');
     assert.match(await page.innerText('#flash'), /Network settings saved/);
     assert.match(await page.innerText('#n-info'), /admin site is at https:\/\/askbar\.orraitu\.com\/admin/);
-    assert.match(await page.innerText('#n-info'), /pairing strings point at https:\/\/askbar\.orraitu\.com\./);
+    assert.match(await page.innerText('#n-info'), /pairing keys point at https:\/\/askbar\.orraitu\.com\./);
     assert.equal(await page.inputValue('#n-token'), '');
     assert.match(await page.getAttribute('#n-token', 'placeholder'), /unchanged/);
     assert.equal((await page.content()).includes(CF), false);
@@ -506,7 +514,9 @@ async function waitForPort(port) {
   // One real chat through the server, so there is something to look at; returns once the reply is done.
   async function auditChat(text, providerName) {
     const pairing = await page.evaluate(async () => {
-      const r = await fetch('/api/admin/v1/pairings', { method: 'POST', headers: { 'x-askbar-admin': '1', 'content-type': 'application/json' }, body: JSON.stringify({ name: 'audit test' }) });
+      const H = { 'x-askbar-admin': '1', 'content-type': 'application/json' };
+      const users = await (await fetch('/api/admin/v1/users', { headers: H })).json();
+      const r = await fetch('/api/admin/v1/users/' + encodeURIComponent(users[0].id) + '/pairing-keys', { method: 'POST', headers: H, body: JSON.stringify({ name: 'audit test' }) });
       return (await r.json()).pairing;
     });
     const { code } = JSON.parse(Buffer.from(pairing.slice('askbar-pair:'.length), 'base64url').toString());

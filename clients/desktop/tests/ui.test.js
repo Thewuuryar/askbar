@@ -567,11 +567,11 @@ async function waitIdle(page) {
     assert.equal(await page.evaluate(() => document.activeElement.id), 'pair-input');
     await shot(page, '10-pairing');
   });
-  await step('a bad pairing string shows the reason and stays on the screen', async () => {
+  await step('a bad pairing key shows the reason and stays on the screen', async () => {
     await page.fill('#pair-input', 'hello');
     await page.click('#pair-submit');
     await page.waitForSelector('#pair-error:not([hidden])');
-    assert.match(await page.innerText('#pair-error'), /not a pairing string/);
+    assert.match(await page.innerText('#pair-error'), /not a pairing key/);
     await page.fill('#pair-input', 'askbar-pair:bad');
     await page.click('#pair-submit');
     await page.waitForFunction(() => /wrong, expired/.test(document.getElementById('pair-error').textContent));
@@ -584,7 +584,7 @@ async function waitIdle(page) {
     await page.evaluate(() => window.__listeners['askbar:pair']());
     assert.equal(await page.isVisible('#pair'), true);
   });
-  await step('a good pairing string pairs, clears the banner and lets you ask', async () => {
+  await step('a good pairing key pairs, clears the banner and lets you ask', async () => {
     await page.fill('#pair-input', 'askbar-pair:abc');
     await page.press('#pair-input', 'Enter');
     await page.waitForSelector('#pair', { state: 'hidden' });
@@ -593,6 +593,26 @@ async function waitIdle(page) {
     await ask(page, 'hello after pairing');
     await waitIdle(page);
     assert.equal(await page.locator('.msg.assistant').count(), 1);
+  });
+  await step('Pair another app makes a key to copy, shows a refusal, and Esc closes it', async () => {
+    await page.evaluate(() => window.__listeners['askbar:pair-another']());
+    assert.equal(await page.isVisible('#share'), true);
+    assert.equal(await page.isHidden('#share-out'), true);
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'share-name');
+    await page.fill('#share-name', 'fail');
+    await page.click('#share-submit');
+    await page.waitForSelector('#share-error:not([hidden])');
+    assert.match(await page.innerText('#share-error'), /Too many/);
+    await page.fill('#share-name', 'Work laptop');
+    await page.click('#share-submit');
+    await page.waitForSelector('#share-out:not([hidden])');
+    assert.equal(await page.inputValue('#share-key'), 'askbar-pair:shared-key');
+    assert.equal(await page.isHidden('#share-error'), true);
+    assert.deepEqual((await calls(page, 'new_pairing_key')).pop(), { name: 'Work laptop' });
+    await shot(page, '11-pair-another');
+    await page.press('#share-name', 'Escape');
+    assert.equal(await page.isHidden('#share'), true);
+    assert.equal(await page.inputValue('#share-key'), '');
   });
   await step('rejected token also offers the pairing screen', async () => {
     await page.evaluate(() => { window.__opts.status = { kind: 'rejected', message: 'Token rejected.' }; });

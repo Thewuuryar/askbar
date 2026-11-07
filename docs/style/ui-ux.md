@@ -64,7 +64,7 @@ None, or one transition of 150 ms or less (opacity or colour). Under `prefers-re
 - **Desktop and mobile layouts.** The site works at phone width and desktop width: one column and a full-width navigation menu at small widths, and a side navigation with a content column at large ones. Tap targets are at least 44 px high on small widths. Tables scroll inside their own box; the page never scrolls sideways. Browser tests run at both widths.
 - **Audit tab:** a table with a few numbers above it (replies, errors, tokens, p50 and p95 time). No charts by default; add one only if a table cannot answer the question. Use `--danger` only for errors.
 - Anything that interrupts something says what it will interrupt before it asks (the Services tab does this).
-- Show a secret once, at creation (API key, pairing string, token), and say so.
+- Show a secret once, at creation (API key, pairing key, token), and say so.
 - A change made while the server is down is refused with a sentence, not half applied. The admin does not queue it ([ADR 0028](../adr/0028-service-boundaries-and-config-delivery.md)); it pushes the saved state when the server returns.
 - Sealed content ([ADR 0011](../adr/0011-sealed-content-access.md)): the session shows its remaining time and a **Seal** button that ends it at once. Opening and timeout changes raise an alert; the screen says so before it asks for the passphrase.
 - Tests: `tests/e2e/admin.test.js`, in a real browser against the real server and admin.

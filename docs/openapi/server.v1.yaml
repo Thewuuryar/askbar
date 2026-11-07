@@ -288,9 +288,11 @@ paths:
                 type: array
                 items:
                   type: object
-                  required: [id, name, created_at, last_seen, revoked]
+                  required: [id, user_id, name, created_at, last_seen, revoked]
                   properties:
                     id:
+                      type: string
+                    user_id:
                       type: string
                     name:
                       type: string

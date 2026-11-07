@@ -326,7 +326,10 @@ import tarfile, io, base64, json
 s, body = call('POST', '/api/admin/v1/providers', {'name': 'iso-$(head -c 6 /dev/urandom | od -An -tx1 | tr -d ' \n')', 'type': 'openai', 'base_url': 'http://mock-llm:8765/v1', 'model': 'm', 'api_key': '$MARK'})
 assert s == 201, (s, body)
 provider_id = json.loads(body)['id']
-s, body = call('POST', '/api/admin/v1/pairings', {'name': 'iso client'})
+s, users = call('GET', '/api/admin/v1/users'); users = json.loads(users)
+if not users:
+    s, made = call('POST', '/api/admin/v1/users', {'name': 'isolation user'}); users = [json.loads(made)]
+s, body = call('POST', '/api/admin/v1/users/' + users[0]['id'] + '/pairing-keys', {'name': 'iso client'})
 assert s == 200, (s, body)
 pairing = json.loads(body)['pairing']
 b = pairing.split(':', 1)[1]
@@ -400,14 +403,17 @@ print('file', want)
 " 2>&1)
 printf '%s\n' "$out" | grep -q '^None same' && pass "a client connecting by address gets the install's certificate" || fail "by address: $out"
 printf '%s\n' "$out" | grep -q '^some-other-name.example same' && pass "a client using any other name gets the install's certificate" || fail "by another name: $out"
-# A pairing string made now names that certificate, so the app trusts exactly it.
+# A pairing key made now names that certificate, so the app trusts exactly it.
 file_fp=$(printf '%s\n' "$out" | sed -n 's/^file //p')
 pin=$(admin_script "$(admin_login)
 import base64
-s, body = call('POST', '/api/admin/v1/pairings', {'name': 'isolation check'})
+s, users = call('GET', '/api/admin/v1/users'); users = json.loads(users)
+if not users:
+    s, made = call('POST', '/api/admin/v1/users', {'name': 'isolation user'}); users = [json.loads(made)]
+s, body = call('POST', '/api/admin/v1/users/' + users[0]['id'] + '/pairing-keys', {'name': 'isolation check'})
 p = json.loads(body)['pairing'][len('askbar-pair:'):]
 print(json.loads(base64.urlsafe_b64decode(p + '=' * (-len(p) % 4))).get('cert_sha256'))" 2>&1 | tail -1)
-[ -n "$file_fp" ] && [ "$pin" = "$file_fp" ] && pass "a new pairing string pins the install's certificate" || fail "pairing pin '$pin', certificate '$file_fp'"
+[ -n "$file_fp" ] && [ "$pin" = "$file_fp" ] && pass "a new pairing key pins the install's certificate" || fail "pairing pin '$pin', certificate '$file_fp'"
 
 echo "== 7. Restarts without a controller (ADR 0005)"
 # Each restart is asked from the admin site and comes back on its own; the server within a minute

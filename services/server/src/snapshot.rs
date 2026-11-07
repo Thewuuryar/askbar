@@ -83,6 +83,15 @@ pub fn validate(s: &Snapshot) -> Result<(), String> {
             return Err(format!("{id} is named as the default provider but is not in providers"));
         }
     }
+    let mut user_ids = std::collections::BTreeSet::new();
+    for u in &s.users {
+        if u.id.trim().is_empty() || u.name.trim().is_empty() {
+            return Err("every user needs an id and a name".into());
+        }
+        if !user_ids.insert(u.id.as_str()) {
+            return Err(format!("user {} is listed twice", u.id));
+        }
+    }
     check_display(&s.display, "display")?;
     for (user, d) in &s.user_display_defaults {
         check_display(d, user)?;
@@ -148,6 +157,16 @@ pub enum ApplyError {
 pub fn apply(db: &Db, s: &Snapshot) -> Result<u64, ApplyError> {
     validate(s).map_err(ApplyError::Invalid)?;
     let version = save(db, s).map_err(ApplyError::Store)?;
+    // The admin's users (ADR 0008): added or renamed here. One the admin no longer lists is left as it
+    // is, with its conversations and clients; deleting a user and its data is plan step 5.1.
+    for u in &s.users {
+        db.conn()
+            .execute(
+                "INSERT INTO users (id, name, created_at) VALUES (?1, ?2, ?3) ON CONFLICT(id) DO UPDATE SET name = excluded.name",
+                rusqlite::params![u.id, u.name, crate::auth::now()],
+            )
+            .map_err(ApplyError::Store)?;
+    }
     let keep: std::collections::BTreeSet<&str> = s.providers.iter().map(|p| p.id.as_str()).collect();
     let stored: Vec<String> = db
         .conn()

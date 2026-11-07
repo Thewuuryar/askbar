@@ -658,6 +658,9 @@ paths:
                   properties:
                     id:
                       type: string
+                    user_id:
+                      type: string
+                      description: The user it belongs to (`GET /users`).
                     name:
                       type: string
                     created_at:
@@ -692,10 +695,82 @@ paths:
           $ref: '#/components/responses/NotFound'
         '502':
           $ref: '#/components/responses/ServerUnavailable'
-  /api/admin/v1/pairings:
+  /api/admin/v1/users:
+    get:
+      operationId: listUsers
+      summary: The users, oldest first (ADR 0008).
+      description: >-
+        The first time the admin has none, it takes over the server's users (an install from before users were
+        made here has one, `owner`, with its paired clients), so those clients keep working.
+      security:
+        - adminSession: []
+        - adminApiKey: []
+      responses:
+        '200':
+          description: The users.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  required: [id, name, created_at]
+                  properties:
+                    id:
+                      type: string
+                    name:
+                      type: string
+                    created_at:
+                      type: integer
+        '401':
+          $ref: '#/components/responses/Unauthorized'
     post:
-      operationId: createPairing
-      summary: Make a one-time pairing string for a new app (good for ten minutes).
+      operationId: createUser
+      summary: Make a user; it reaches the server with the rest of the configuration.
+      security:
+        - adminSession: []
+        - adminApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                  description: 1 to 60 characters, unique.
+      responses:
+        '201':
+          description: Made.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id]
+                properties:
+                  id:
+                    type: string
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '502':
+          $ref: '#/components/responses/ServerUnavailable'
+  /api/admin/v1/users/{id}/pairing-keys:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      operationId: createPairingKey
+      summary: A one-time pairing key that registers one app for this user (good for ten minutes).
+      description: The user's other apps can then be paired from a paired app (client API `POST /me/pairing-keys`).
       security:
         - adminSession: []
         - adminApiKey: []
@@ -707,7 +782,7 @@ paths:
               $ref: '#/components/schemas/PairInput'
       responses:
         '200':
-          description: The pairing string.
+          description: The pairing key.
           content:
             application/json:
               schema:
@@ -716,6 +791,8 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
         '502':
           $ref: '#/components/responses/ServerUnavailable'
   /api/admin/v1/setup/audit-key:
@@ -1447,7 +1524,7 @@ components:
               type: boolean
             public_url:
               type: string
-              description: What new pairing strings point at.
+              description: What new pairing keys point at.
             proxy:
               type: object
               properties:

@@ -83,6 +83,7 @@ pub async fn start(caddy_up: bool) -> T {
 
     let db = AdminDb::open_in_memory().unwrap();
     web::init_password(&db, PW).unwrap();
+    db.conn().execute("INSERT INTO users (id, name, created_at) VALUES ('U1', 'tester', 0)", []).unwrap();
     let admin = AdminState::build(db, Some(ServerLink::new(&server_api_url, token)), AdminSecrets::ephemeral());
     admin.set_caddy(CaddyLink { socket: Some(caddy_socket.clone()), secrets_dir: Some(secrets_dir.clone()) });
     let adm = serve(askbar_admin::router(admin.clone())).await;

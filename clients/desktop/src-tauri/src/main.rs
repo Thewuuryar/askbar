@@ -200,7 +200,7 @@ async fn server_status(state: State<'_, AppState>) -> Result<Option<types::Clien
     Ok(state.backend().status().await)
 }
 
-/// Exchange a pairing string for a client token, remember the server, and switch to it.
+/// Exchange a pairing key for a client token, remember the server, and switch to it.
 #[tauri::command]
 async fn pair(app: AppHandle, state: State<'_, AppState>, pairing: String) -> Result<(), String> {
     let path = client_config::path();
@@ -212,6 +212,12 @@ async fn pair(app: AppHandle, state: State<'_, AppState>, pairing: String) -> Re
     // Pick up the new hotkey and look and feel.
     let _ = apply_config(&app);
     Ok(())
+}
+
+/// "Pair another app": a one-time pairing key for this user's next app (ADR 0008).
+#[tauri::command]
+async fn new_pairing_key(state: State<'_, AppState>, name: String) -> Result<String, String> {
+    state.backend().new_pairing_key(name).await
 }
 
 #[tauri::command]
@@ -420,8 +426,9 @@ fn main() {
             let config_item = MenuItem::with_id(app, "config", "Open config file", true, None::<&str>)?;
             let reload_item = MenuItem::with_id(app, "reload", "Reload config", true, None::<&str>)?;
             let pair_item = MenuItem::with_id(app, "pair", "Pair with server…", true, None::<&str>)?;
+            let pair_another_item = MenuItem::with_id(app, "pair-another", "Pair another app…", true, None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "quit", "Quit Askbar", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&toggle_item, &config_item, &reload_item, &pair_item, &quit_item])?;
+            let menu = Menu::with_items(app, &[&toggle_item, &config_item, &reload_item, &pair_item, &pair_another_item, &quit_item])?;
 
             let mut tray = TrayIconBuilder::with_id("askbar")
                 .tooltip("Askbar")
@@ -440,6 +447,10 @@ fn main() {
                     "pair" => {
                         show(app);
                         let _ = app.emit("askbar:pair", ());
+                    }
+                    "pair-another" => {
+                        show(app);
+                        let _ = app.emit("askbar:pair-another", ());
                     }
                     "quit" => app.exit(0),
                     _ => {}
@@ -470,6 +481,7 @@ fn main() {
             server_status,
             set_active_provider,
             pair,
+            new_pairing_key,
             list_conversations,
             load_conversation,
             delete_conversation,
