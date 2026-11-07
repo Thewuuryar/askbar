@@ -25,7 +25,7 @@ to use one (a database migration, an old path in a test) carries `names-ok` and 
 | `scripts/`, `tests/` | Smoke and isolation scripts, the checks, popup tests. |
 | `tests/e2e/` | The admin-site browser test, screenshots, a mock LLM. |
 
-This table lists what is on `main`; the target layout is in [ADR 0033](docs/adr/0033-repository-layout.md). The v1 target adds the `auditor`, `model-gateway`, `alerter` and `bootstrap` services ([ADR 0003](docs/adr/0003-v1-service-layout.md)); the controller is gone ([ADR 0005](docs/adr/0005-no-controller-and-self-restart.md)). A new service needs a name and an ADR first ([ADR 0021](docs/adr/0021-names-and-new-components.md)).
+This table lists what is on `main`; the target layout is in [ADR 0033](docs/adr/0033-repository-layout.md). The v1 target adds the `auditor`, `model-gateway`, `alerter` and `bootstrap` services ([ADR 0003](docs/adr/0003-v1-service-layout.md)); the controller is gone ([ADR 0005](docs/adr/0005-no-controller-and-self-restart.md)). A new service needs a name and an ADR first ([ADR 0038](docs/adr/0038-names-and-new-components-without-a-name-check.md)).
 
 ## Build, run, test
 

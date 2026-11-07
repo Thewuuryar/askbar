@@ -8,3 +8,4 @@ docs/handoff-server-side-chats.md   # history
 Cargo.lock                          # generated
 package-lock.json                   # generated
 docs/handoff-refactor-0.5.md       # history
+docs/adr/0038-names-and-new-components-without-a-name-check.md  # names the retired words; the script itself is removed in step 1.15

@@ -4,7 +4,7 @@ This document is the proposed v1 target that the code will follow. The code on `
 
 ## Glossary
 
-Every API, module, environment variable, UI label and document uses these names ([ADR 0021](adr/0021-names-and-new-components.md)). This glossary is not an ADR: names and meanings can change here, in the same commit as the code that follows them.
+Every API, module, environment variable, UI label and document uses these names ([ADR 0038](adr/0038-names-and-new-components-without-a-name-check.md), which superseded 0021). This glossary is not an ADR: names and meanings can change here, in the same commit as the code that follows them.
 
 ### Components
 

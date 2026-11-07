@@ -80,7 +80,7 @@ Order change (owner approved 2026-11-07): the remaining steps keep their numbers
 | # | Step | Size | Why here |
 | --- | --- | --- | --- |
 | 6 | 1.4 self-restart, controller removed | M | Needs 1.3's health and token check. Does not wait for 2.1: restart is authenticated with the existing admin→server token, and 2.1 later changes only where that token comes from, not the endpoint. Doing it now removes the only Docker socket mount. The restart record is a log line until 2.7 sends it to the auditor. |
-| 7 | 1.15 `askbar-cpa` image with a supervisor | S–M | Right after 1.4, once [ADR 0037](adr/0037-askbar-cpa-image-and-supervisor.md) is accepted: brings back restarting `cpa` from the admin, and 3.5 needs it. |
+| 7 | 1.15 `askbar-cpa` image with a supervisor, and the name check removed | S–M | Next after 1.4 (owner, 2026-11-07). [ADR 0037](adr/0037-askbar-cpa-image-and-supervisor.md) and [ADR 0038](adr/0038-names-and-new-components-without-a-name-check.md) are accepted. Brings back restarting `cpa` from the admin, which 3.5 needs. |
 | 7 | 1.8 first run and forced password change | M | Independent of storage; before 1.9 so the wizard's last step can create the first user. |
 | 8 | 1.9 users and pairing keys in the admin | M | 1.9 and 1.11 both change storage and pairing; next to each other they cost one "wipe volumes and re-pair" instead of two. |
 | 9 | 1.11 spaces, one SQLite file each | L | As above. Wipe and re-pair once, at the end of this step. |
@@ -98,7 +98,7 @@ Midpoints S = 1.5 h, M = 4 h, L = 8 h. Required work left (excluding 1.12, 1.13 
 | --- | --- |
 | 1 (1.1–1.5, 1.8–1.11) | 32.5 |
 | Component ADRs (1.14, and one each for bootstrap, `askbar-audit`, auditor, `model-gateway`, alerter) | ≈ 9 |
-| 1.15 `askbar-cpa` supervisor (added 2026-11-07) | ≈ 3 |
+| 1.15 `askbar-cpa` supervisor and the name check removal (added 2026-11-07) | ≈ 3.5 |
 | 2 | 35 |
 | 3 | 21.5 |
 | 4 | 9.5 |
@@ -115,9 +115,10 @@ That is about 52 h over the ~100 h budget before any backlog item (the component
 - Build `POST /restart` on `crates/askbar-service` (the restart route can join `routes`, and its link rules are `links::Allow`). After a restart the admin already pushes again within one status check (12 s), from the new boot ID (1.3).
 - Delete `services/controller`, the `control` network, `control-token` volume reference, `docker.sock` mount, `CONTROL_V1`, `control.v1.yaml`, isolation section 3e (replace with "no service mounts docker.sock").
 - Test: scripted restart from the admin returns under 1 minute ([ADR 0002](adr/0002-v1-scope-limits-and-ship-criteria.md)).
-- Found while building it: CLIProxyAPI does not reload its config by itself (a new API key written to its config file is refused until the container restarts), so the "reload by config rewrite" above does not work. Its restart stays a host command (`docker compose restart cpa`) and the Services tab says so. **Owner decision (2026-11-07):** add the supervisor [ADR 0005](adr/0005-no-controller-and-self-restart.md) allows, in an `askbar-cpa` image of our own: [ADR 0037](adr/0037-askbar-cpa-image-and-supervisor.md) (Proposed) first, then step 1.15.
+- Found while building it: CLIProxyAPI does not reload its config by itself (a new API key written to its config file is refused until the container restarts), so the "reload by config rewrite" above does not work. Its restart stays a host command (`docker compose restart cpa`) and the Services tab says so. **Owner decision (2026-11-07):** add the supervisor [ADR 0005](adr/0005-no-controller-and-self-restart.md) allows, in an `askbar-cpa` image of our own: [ADR 0037](adr/0037-askbar-cpa-image-and-supervisor.md), accepted; built in step 1.15.
 
-**1.15 `feat(cpa): run CLIProxyAPI under a supervisor in an askbar-cpa image`** (S–M, after [ADR 0037](adr/0037-askbar-cpa-image-and-supervisor.md) is accepted) — 0005, 0037
+**1.15 `feat(cpa): run CLIProxyAPI under a supervisor in an askbar-cpa image`, and `chore: delete the name check script`** (S–M, the next step after 1.4) — [ADR 0005](adr/0005-no-controller-and-self-restart.md), [0037](adr/0037-askbar-cpa-image-and-supervisor.md), [0038](adr/0038-names-and-new-components-without-a-name-check.md); both ADRs accepted 2026-11-07. Two concerns, two commits in one PR, as the owner asked.
+- Name check ([ADR 0038](adr/0038-names-and-new-components-without-a-name-check.md)): delete `scripts/check-names.sh` and `scripts/names-allow.txt`; drop the step from `npm test` and from the `npm test` comment in AGENTS.md; AGENTS.md, CONTRIBUTING.md, README.md, `docs/architecture.md` and `docs/style/naming.md` stop pointing at the script; the comment in `services/admin/src/services.rs` says "management API" again (CLIProxyAPI's own term). Existing `names-ok` markers stay (some are in migration text).
 - `services/cpa-supervisor` (binary `askbar-cpa-supervisor`) and a `cpa` Dockerfile target `FROM` the pinned digest; compose builds `askbar-cpa` instead of pulling the image. Restart on a `config.yaml` change, on `restart-request`, and after a crash with backoff; at most one restart per 5 s; `restart-done` echoes the request; stop signals passed on.
 - Admin: the Services tab's `cpa` Restart writes `restart-request` and waits for `restart-done` and the API (replaces the 409 and the host command); no host step when the control secret is replaced.
 - Isolation: the supervisor is the main process; a restart from the admin restarts CLIProxyAPI without restarting the container; networks, ports and volumes unchanged. Test a real login against the image.
@@ -153,7 +154,7 @@ That is about 52 h over the ~100 h budget before any backlog item (the component
 
 ## Phase 2 — Add bootstrap and the auditor
 
-**2.1 `feat(bootstrap): create per-link tokens on first start`** (M) — [ADR 0004](adr/0004-bootstrap-and-per-link-tokens.md), 0021
+**2.1 `feat(bootstrap): create per-link tokens on first start`** (M) — [ADR 0004](adr/0004-bootstrap-and-per-link-tokens.md), 0038
 - Before the code: a component ADR for `bootstrap` (its volumes, the links it writes, no network, run once), proposed in its own PR and accepted.
 - `services/bootstrap`: no network, mounts credential volumes only, writes each token to the caller's volume and its hash to the receiver's, exits; `depends_on: condition: service_completed_successfully`. Host rotation: `docker compose run --rm bootstrap rotate [link]`, then restart from the admin.
 - Replace the admin-minted server token (`server-token` volume keeps its name).
@@ -209,7 +210,7 @@ That is about 52 h over the ~100 h budget before any backlog item (the component
 
 ## Phase 4 — Add the alerter
 
-**4.1 `feat(alerter): deliver alerts through ntfy or email`** (M) — [ADR 0006](adr/0006-v1-outbound-access-and-alerts.md), 0021
+**4.1 `feat(alerter): deliver alerts through ntfy or email`** (M) — [ADR 0006](adr/0006-v1-outbound-access-and-alerts.md), 0038
 - Before the code: a component ADR for the `alerter` (its settings volume, outbound for delivery only, its links), proposed in its own PR and accepted.
 - `services/alerter`: `/api/alerter/v1`, delivery settings on its own volume, auditor → alerter events, outbound only for delivery; admin configures delivery and sends a test alert.
 
