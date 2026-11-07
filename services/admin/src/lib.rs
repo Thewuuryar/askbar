@@ -9,7 +9,6 @@ pub mod api_key;
 pub mod audit_key;
 pub mod auth;
 pub mod caddy;
-pub mod control_link;
 pub mod cpa;
 pub mod db;
 pub mod server_link;
@@ -47,8 +46,8 @@ pub struct AdminState {
     pub caddy: std::sync::Mutex<caddy::CaddyLink>,
     /// How the last attempt to configure Caddy went.
     pub proxy: std::sync::Mutex<caddy::ProxyStatus>,
-    /// The link to the controller (start, stop, restart); `None` until set at start-up or by a test.
-    pub control: std::sync::Mutex<Option<Arc<control_link::ControlLink>>>,
+    /// What `POST /api/admin/v1/services/admin/restart` does; set once by `main` (tests set their own).
+    pub restarter: std::sync::OnceLock<askbar_service::restart::Restarter>,
     /// The link to CLIProxyAPI, once its config exists.
     pub cpa: std::sync::Mutex<Option<Arc<cpa::CpaLink>>>,
     /// Logins started and not finished: state -> (provider, expiry in unix seconds).
@@ -75,7 +74,7 @@ impl AdminState {
             secrets,
             caddy: std::sync::Mutex::new(caddy::CaddyLink::default()),
             proxy: std::sync::Mutex::new(caddy::ProxyStatus::default()),
-            control: std::sync::Mutex::new(None),
+            restarter: Default::default(),
             cpa: std::sync::Mutex::new(None),
             cpa_logins: std::sync::Mutex::new(Default::default()),
             service_actions: std::sync::Mutex::new(Default::default()),
@@ -88,10 +87,6 @@ impl AdminState {
 
     pub fn set_cpa(&self, link: Arc<cpa::CpaLink>) {
         *self.cpa.lock().unwrap_or_else(|e| e.into_inner()) = Some(link);
-    }
-
-    pub fn set_control(&self, link: Arc<control_link::ControlLink>) {
-        *self.control.lock().unwrap_or_else(|e| e.into_inner()) = Some(link);
     }
 
     /// Is the server there? (False when there is no link at all.)
@@ -162,8 +157,6 @@ pub fn routes(state: &Arc<AdminState>) -> Routes {
         .post(&v1("/cpa/logins/{state}/callback"), cpa::finish_login)
         .delete(&v1("/cpa/accounts/{name}"), cpa::remove_account)
         .get(&v1("/services"), services::list)
-        .post(&v1("/services/{name}/start"), services::start)
-        .post(&v1("/services/{name}/stop"), services::stop)
         .post(&v1("/services/{name}/restart"), services::restart)
         .post(&v1("/keys"), admin_api::create_key)
         .get(&v1("/keys"), admin_api::list_keys)

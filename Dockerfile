@@ -3,7 +3,6 @@
 # One target per service:
 #   docker build --target server     -t askbar-server .
 #   docker build --target admin      -t askbar-admin  .
-#   docker build --target controller -t askbar-controller .
 #   docker build --target caddy      -t askbar-caddy  .
 # A plain `docker build .` builds the last stage, the server.
 
@@ -13,15 +12,15 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates crates
 COPY services services
 # The desktop client is its own workspace (clients/desktop) and is not part of any image.
-RUN cargo build --release -p askbar-server -p askbar-admin -p askbar-controller
+RUN cargo build --release -p askbar-server -p askbar-admin
 
 # ------------------------------------------------------------------ admin
 # The admin service: the admin site and its own database. No TCP port: it listens on a unix
 # socket that only Caddy is given. Runs as uid 10001.
 FROM debian:bookworm-slim AS admin
 RUN groupadd --system --gid 10001 askbar-admin && useradd --system --uid 10001 --gid 10001 --home-dir /admin-data --shell /usr/sbin/nologin askbar-admin \
- && mkdir /admin-data /admin-secrets /server-token /control-token /cpa-config /caddy-secrets /run/admin /caddy-run \
- && chown askbar-admin:askbar-admin /admin-data /admin-secrets /server-token /control-token /cpa-config /caddy-secrets /run/admin /caddy-run \
+ && mkdir /admin-data /admin-secrets /server-token /cpa-config /caddy-secrets /run/admin /caddy-run \
+ && chown askbar-admin:askbar-admin /admin-data /admin-secrets /server-token /cpa-config /caddy-secrets /run/admin /caddy-run \
  && chmod 700 /admin-secrets \
  && chmod 770 /caddy-run
 COPY --from=build /src/target/release/askbar-admin /usr/local/bin/askbar-admin
@@ -30,7 +29,6 @@ ENV ASKBAR_ADMIN_DATA_DIR=/admin-data \
     ASKBAR_ADMIN_SECRETS_DIR=/admin-secrets \
     ASKBAR_ADMIN_SOCKET=/run/admin/admin.sock \
     ASKBAR_SERVER_TOKEN_DIR=/server-token \
-    ASKBAR_CONTROL_TOKEN_DIR=/control-token \
     ASKBAR_CPA_CONFIG_DIR=/cpa-config \
     ASKBAR_CADDY_SOCKET=/caddy-run/admin.sock \
     ASKBAR_CADDY_SECRETS_DIR=/caddy-secrets
@@ -39,21 +37,6 @@ VOLUME /admin-data /admin-secrets
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD ["askbar-admin", "healthcheck"]
 ENTRYPOINT ["askbar-admin"]
-
-# ------------------------------------------------------------- controller
-# The only image that is given the Docker socket. It starts, stops and restarts the server, Caddy and
-# CLIProxyAPI for the admin and can do nothing else (see services/controller/src/lib.rs). It runs as root
-# only so that it can open the socket, whatever group owns it; compose drops every capability.
-FROM debian:bookworm-slim AS controller
-# The token-hash volume is owned by the admin's uid (10001), whichever container Docker creates it for first.
-RUN mkdir /control-token && chown 10001:10001 /control-token
-COPY --from=build /src/target/release/askbar-controller /usr/local/bin/askbar-controller
-ENV ASKBAR_CONTROL_TOKEN_HASH_FILE=/control-token/token.sha256 \
-    ASKBAR_DOCKER_SOCKET=/var/run/docker.sock
-# ASKBAR_CONTROL_ADDR has no default: it must be one specific address (the compose file sets it).
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD ["askbar-controller", "healthcheck"]
-ENTRYPOINT ["askbar-controller"]
 
 # ------------------------------------------------------------------ caddy
 # Caddy with the Cloudflare DNS plugin, used to get certificates without opening port 80/443.

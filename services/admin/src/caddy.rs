@@ -160,6 +160,14 @@ fn sync_token_file(dir: &Path, token: Option<&str>) -> std::io::Result<()> {
     }
 }
 
+/// Does Caddy's admin socket answer? (`GET /config/` on it.)
+pub async fn reachable(state: &Arc<AdminState>) -> bool {
+    let socket = state.caddy.lock().unwrap_or_else(|e| e.into_inner()).socket.clone();
+    let Some(socket) = socket else { return false };
+    let Ok(client) = reqwest::Client::builder().unix_socket(socket).timeout(Duration::from_secs(3)).build() else { return false };
+    client.get("http://caddy/config/").send().await.is_ok_and(|r| r.status().is_success())
+}
+
 /// Push the current settings to Caddy and remember how it went.
 pub async fn apply(state: &Arc<AdminState>) -> ProxyStatus {
     let result = apply_inner(state).await;

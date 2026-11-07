@@ -1,107 +1,169 @@
-//! Starting, stopping and restarting services from the admin: session only, recorded, rate limited, and
-//! refused for anything but the three services.
+//! The Services tab without a controller (ADR 0005): each service's state comes from the service
+//! itself, and a restart is session-only, recorded, rate limited, and limited to the four services.
 
 mod common;
 
-use askbar_admin::control_link::ControlLink;
-use axum::{extract::{Path, State}, http::HeaderMap, routing::{get, post}, Json, Router};
+use askbar_admin::server_link::ServerLink;
+use askbar_admin::{web, AdminDb, AdminState};
+use axum::{extract::State, http::StatusCode, routing::{get, post}, Json, Router};
 use common::*;
 use reqwest::Method as M;
 use serde_json::{json, Value};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
 
-const CTL_TOKEN: &str = "ctl_test-token";
-
-#[derive(Default)]
-struct Fake {
-    calls: Mutex<Vec<String>>,
-    tokens: Mutex<Vec<String>>,
-}
-
-async fn list(State(f): State<Arc<Fake>>, h: HeaderMap) -> Json<Value> {
-    f.tokens.lock().unwrap().push(h["authorization"].to_str().unwrap().to_string());
-    Json(json!({ "services": [
-        { "name": "server", "state": "running", "status": "Up 1 hour (healthy)", "health": "healthy" },
-        { "name": "caddy", "state": "running", "status": "Up 1 hour", "health": null },
-        { "name": "cpa", "state": "exited", "status": "Exited (0)", "health": null } ] }))
-}
-
-async fn act(State(f): State<Arc<Fake>>, Path((n, a)): Path<(String, String)>) -> Json<Value> {
-    f.calls.lock().unwrap().push(format!("{a} {n}"));
-    Json(json!({ "name": n, "state": "running", "status": "Up", "health": null }))
-}
-
-async fn start_with_control() -> (T, Arc<Fake>) {
+#[tokio::test]
+async fn the_four_services_are_listed_from_the_services_themselves() {
     let t = start(true).await;
-    let fake = Arc::new(Fake::default());
-    let app = Router::new()
-        .route("/api/control/v1/services", get(list))
-        .route("/api/control/v1/services/{name}/{action}", post(act))
-        .with_state(fake.clone());
-    t.admin.set_control(ControlLink::new(&serve(app).await, CTL_TOKEN.into()));
-    (t, fake)
-}
-
-#[tokio::test]
-async fn services_are_listed_and_actions_reach_the_controller_with_its_token() {
-    let (t, fake) = start_with_control().await;
     let (s, v) = t.call(M::GET, "/api/admin/v1/services", json!(null)).await;
-    assert_eq!(s, 200);
-    assert_eq!(v["services"][2]["state"], "exited");
+    assert_eq!(s, 200, "{v}");
+    let by: Vec<(String, String)> = v["services"].as_array().unwrap().iter().map(|c| (c["name"].as_str().unwrap().into(), c["state"].as_str().unwrap().into())).collect();
+    assert_eq!(
+        by,
+        [("server".into(), "running".into()), ("admin".into(), "running".into()), ("caddy".into(), "running".into()), ("cpa".into(), "unreachable".into())],
+        "the server answers /status, Caddy its socket; CLIProxyAPI is not set up in this test"
+    );
+    assert!(v["services"][0]["status"].as_str().unwrap().contains("not received its configuration"), "{v}");
     assert_eq!(v["recent"], json!([]));
-    assert_eq!(fake.tokens.lock().unwrap()[0], format!("Bearer {CTL_TOKEN}"));
 
-    let (s, v) = t.call(M::POST, "/api/admin/v1/services/cpa/start", json!(null)).await;
-    assert_eq!((s, v["name"].as_str()), (200, Some("cpa")));
-    assert_eq!(*fake.calls.lock().unwrap(), vec!["start cpa".to_string()]);
-
-    // The attempt is on record.
+    // With Caddy's socket silent, it reads as unreachable.
+    let t = start(false).await;
     let (_, v) = t.call(M::GET, "/api/admin/v1/services", json!(null)).await;
-    assert_eq!((v["recent"][0]["service"].as_str(), v["recent"][0]["action"].as_str(), v["recent"][0]["ok"].clone()), (Some("cpa"), Some("start"), json!(true)));
+    assert_eq!(v["services"][2]["state"], "unreachable");
+}
+
+/// A server stand-in: boot ID "A" until it is asked to restart, then "B" (a new process). `refuse`
+/// answers the restart with the cooldown's 429 instead.
+#[derive(Default)]
+struct FakeServer {
+    restarted: AtomicBool,
+    asked: AtomicU32,
+    refuse: bool,
+}
+
+async fn status(State(f): State<Arc<FakeServer>>) -> Json<Value> {
+    Json(json!({ "config_version": 1, "boot_id": if f.restarted.load(Ordering::SeqCst) { "B" } else { "A" } }))
+}
+
+async fn restart(State(f): State<Arc<FakeServer>>) -> Result<(StatusCode, Json<Value>), askbar_proto::http::ApiError> {
+    f.asked.fetch_add(1, Ordering::SeqCst);
+    if f.refuse {
+        return Err(askbar_proto::http::ApiError::new(askbar_proto::problem::ErrorCode::TooManyAttempts, "This service started 3s ago.").retry_after(27));
+    }
+    let f2 = f.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(700)).await;
+        f2.restarted.store(true, Ordering::SeqCst);
+    });
+    Ok((StatusCode::ACCEPTED, Json(json!({ "boot_id": "A" }))))
+}
+
+async fn admin_with_fake_server(refuse: bool) -> (String, String, Arc<FakeServer>, Arc<AdminState>) {
+    let fake = Arc::new(FakeServer { refuse, ..Default::default() });
+    let app = Router::new().route("/api/server/v1/status", get(status)).route("/api/server/v1/restart", post(restart)).with_state(fake.clone());
+    let url = serve(app).await;
+    let db = AdminDb::open_in_memory().unwrap();
+    web::init_password(&db, PW).unwrap();
+    let admin = AdminState::with_server(db, ServerLink::new(&url, "mgt_t".into()));
+    let adm = serve(askbar_admin::router(admin.clone())).await;
+    let r = reqwest::Client::new().post(format!("{adm}/api/admin/v1/session")).header("x-askbar-admin", "1").json(&json!({ "password": PW })).send().await.unwrap();
+    let cookie = r.headers()["set-cookie"].to_str().unwrap().split(';').next().unwrap().to_string();
+    (adm, cookie, fake, admin)
+}
+
+async fn post_as(adm: &str, cookie: &str, path: &str) -> (u16, Value) {
+    let r = reqwest::Client::new().post(format!("{adm}{path}")).header("x-askbar-admin", "1").header("cookie", cookie).send().await.unwrap();
+    (r.status().as_u16(), r.json().await.unwrap_or(json!(null)))
 }
 
 #[tokio::test]
-async fn only_the_three_services_and_three_actions_can_be_named() {
-    let (t, fake) = start_with_control().await;
-    for name in ["admin", "controller", "caddy%2F..", "mock-llm"] {
-        assert_eq!(t.call(M::POST, &format!("/api/admin/v1/services/{name}/stop"), json!(null)).await.0, 404, "{name}");
+async fn a_server_restart_asks_the_server_and_waits_for_a_new_process() {
+    let (adm, cookie, fake, _) = admin_with_fake_server(false).await;
+    let t0 = std::time::Instant::now();
+    let (s, v) = post_as(&adm, &cookie, "/api/admin/v1/services/server/restart").await;
+    assert_eq!((s, v["state"].as_str()), (200, Some("running")), "{v}");
+    assert!(v["status"].as_str().unwrap().starts_with("Restarted"), "{v}");
+    assert!(t0.elapsed() < Duration::from_secs(60), "ADR 0002: back within a minute");
+    assert_eq!(fake.asked.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn the_servers_cooldown_refusal_is_passed_on() {
+    let (adm, cookie, _, admin) = admin_with_fake_server(true).await;
+    let (s, v) = post_as(&adm, &cookie, "/api/admin/v1/services/server/restart").await;
+    assert_eq!((s, v["error"].as_str()), (429, Some("too_many_attempts")), "{v}");
+    // The attempt is on record, and marked as not done.
+    let db = admin.db.lock().await;
+    let (service, action, ok): (String, String, i64) = db.conn().query_row("SELECT service, action, ok FROM service_actions", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap();
+    assert_eq!((service.as_str(), action.as_str(), ok), ("server", "restart", 0));
+}
+
+#[tokio::test]
+async fn the_admin_restarts_itself_by_answering_and_exiting() {
+    let t = start(true).await;
+    let exited = Arc::new(AtomicBool::new(false));
+    let e = exited.clone();
+    let _ = t.admin.restarter.set(askbar_service::restart::Restarter::for_tests(askbar_service::status::BootId::new(), Duration::ZERO, Duration::from_secs(1), || {}, move || e.store(true, Ordering::SeqCst)));
+    let (s, v) = t.call(M::POST, "/api/admin/v1/services/admin/restart", json!(null)).await;
+    assert_eq!((s, v["state"].as_str()), (202, Some("restarting")), "{v}");
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(exited.load(Ordering::SeqCst), "it exits after answering");
+}
+
+#[tokio::test]
+async fn caddy_is_restarted_by_pushing_its_configuration_again() {
+    let t = start(true).await;
+    let before = t.fake.loads.lock().unwrap().len();
+    let (s, v) = t.call(M::POST, "/api/admin/v1/services/caddy/restart", json!(null)).await;
+    assert_eq!((s, v["state"].as_str()), (200, Some("running")), "{v}");
+    assert_eq!(t.fake.loads.lock().unwrap().len(), before + 1, "one config push");
+    let (_, v) = t.call(M::GET, "/api/admin/v1/services", json!(null)).await;
+    assert_eq!((v["recent"][0]["service"].as_str(), v["recent"][0]["action"].as_str(), v["recent"][0]["ok"].clone()), (Some("caddy"), Some("restart"), json!(true)));
+}
+
+#[tokio::test]
+async fn only_the_four_services_can_be_restarted_and_start_and_stop_are_gone() {
+    let t = start(true).await;
+    for name in ["controller", "caddy%2F..", "mock-llm", "auditor"] {
+        assert_eq!(t.call(M::POST, &format!("/api/admin/v1/services/{name}/restart"), json!(null)).await.0, 404, "{name}");
     }
-    for action in ["kill", "exec", "rm"] {
+    for action in ["start", "stop", "kill"] {
         assert_eq!(t.call(M::POST, &format!("/api/admin/v1/services/server/{action}"), json!(null)).await.0, 404, "{action}");
     }
-    assert!(fake.calls.lock().unwrap().is_empty());
 }
 
 #[tokio::test]
-async fn an_admin_api_key_cannot_control_services() {
-    let (t, fake) = start_with_control().await;
+async fn an_admin_api_key_cannot_restart_services() {
+    let t = start(true).await;
     let (_, k) = t.call(M::POST, "/api/admin/v1/keys", json!({ "name": "script" })).await;
     let key = k["key"].as_str().unwrap();
     for (m, path) in [(M::GET, "/api/admin/v1/services"), (M::POST, "/api/admin/v1/services/server/restart")] {
         let r = reqwest::Client::new().request(m, format!("{}{path}", t.adm)).bearer_auth(key).header("X-Askbar-Admin", "1").send().await.unwrap();
         assert_eq!(r.status(), 401, "{path}");
     }
-    // And no session at all.
     let r = reqwest::Client::new().post(format!("{}/api/admin/v1/services/server/restart", t.adm)).header("X-Askbar-Admin", "1").send().await.unwrap();
-    assert_eq!(r.status(), 401);
-    assert!(fake.calls.lock().unwrap().is_empty());
+    assert_eq!(r.status(), 401, "and no session at all");
 }
 
 #[tokio::test]
 async fn at_most_six_actions_a_minute() {
-    let (t, fake) = start_with_control().await;
+    let t = start(true).await;
     for _ in 0..6 {
         assert_eq!(t.call(M::POST, "/api/admin/v1/services/caddy/restart", json!(null)).await.0, 200);
     }
     let (s, v) = t.call(M::POST, "/api/admin/v1/services/caddy/restart", json!(null)).await;
     assert_eq!((s, v["error"].as_str()), (429, Some("too_many_attempts")));
-    assert_eq!(fake.calls.lock().unwrap().len(), 6);
 }
 
 #[tokio::test]
-async fn without_a_controller_the_answer_is_a_clear_502() {
+async fn cpa_is_restarted_from_the_host_and_the_refusal_names_the_command() {
+    // CLIProxyAPI does not reload its config by itself (tested on the stack); until a supervisor is
+    // decided, its restart is refused with the host command. The attempt is still recorded.
     let t = start(true).await;
-    let (s, v) = t.call(M::GET, "/api/admin/v1/services", json!(null)).await;
-    assert_eq!((s, v["error"].as_str()), (502, Some("server_unavailable")));
-    assert_eq!(t.call(M::POST, "/api/admin/v1/services/cpa/start", json!(null)).await.0, 502);
+    let (s, v) = t.call(M::POST, "/api/admin/v1/services/cpa/restart", json!(null)).await;
+    assert_eq!((s, v["error"].as_str()), (409, Some("conflict")), "{v}");
+    assert!(v["detail"].as_str().unwrap().contains("docker compose restart cpa"), "{v}");
+    let (_, v) = t.call(M::GET, "/api/admin/v1/services", json!(null)).await;
+    assert_eq!((v["recent"][0]["service"].as_str(), v["recent"][0]["ok"].clone()), (Some("cpa"), json!(false)));
 }

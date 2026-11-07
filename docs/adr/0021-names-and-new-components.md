@@ -1,6 +1,6 @@
 # 0021. Names and new components
 
-Status: Accepted 
+Status: Superseded by 0038
 Date: 2026-11-04
 Source: recommendation accepted after the clean copy
 

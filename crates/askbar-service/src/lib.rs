@@ -4,13 +4,16 @@
 //!   its SHA-256 in a file, and each caller may call only its own routes.
 //! - [`status`]: the boot ID and the `GET /status` body the admin polls.
 //! - [`configured`]: `503 not_configured` until the admin has pushed configuration.
+//! - [`restart`]: `POST /restart` (exit cleanly; Docker's restart policy starts the service again)
+//!   and the watchdog that exits a service whose own health check keeps failing (ADR 0005).
 //!
 //! The common internal routes are the same in every service (ADR 0022): `GET /health`,
-//! `GET /status`, `PUT /config` (and later `POST /restart`, `POST /exports`). Their paths are in
+//! `GET /status`, `PUT /config`, `POST /restart` (and later `POST /exports`). Their paths are in
 //! [`routes`].
 
 pub mod configured;
 pub mod links;
+pub mod restart;
 pub mod status;
 
 /// The common internal routes, after a service's own `/api/{name}/v1` prefix.
@@ -18,4 +21,5 @@ pub mod routes {
     pub const HEALTH: &str = "/health";
     pub const STATUS: &str = "/status";
     pub const CONFIG: &str = "/config";
+    pub const RESTART: &str = "/restart";
 }
