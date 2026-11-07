@@ -212,7 +212,7 @@ The admin makes CLIProxyAPI's config and API key itself (nobody copies a key any
 
 ### Starting and stopping services
 
-The admin site's **Services** tab shows whether the server, the admin, Caddy and CLIProxyAPI answer, and can restart each (it asks first and says what that will interrupt). No service has the Docker socket ([ADR 0005](docs/adr/0005-no-controller-and-self-restart.md)): the server and the admin restart themselves through their own endpoints and Docker's restart policy starts them again (the server is back within a minute; you sign in to the admin again), Caddy has its configuration pushed again. CLIProxyAPI does not reload its configuration by itself, so it is restarted from the host (`docker compose restart cpa`); the tab says so. A service refuses a restart in its first 30 seconds, and the server and admin also restart themselves if their own health check fails three times in a row. Starting or stopping a service is done from the host (`docker compose stop server`). Only a signed-in person can restart, not an admin API key; each attempt is recorded, and six a minute is the limit. See [SECURITY.md](SECURITY.md) for what this trusts.
+The admin site's **Services** tab shows whether the server, the admin, Caddy and CLIProxyAPI answer, and can restart each (it asks first and says what that will interrupt). No service has the Docker socket ([ADR 0005](docs/adr/0005-no-controller-and-self-restart.md)): the server and the admin restart themselves through their own endpoints and Docker's restart policy starts them again (the server is back within a minute; you sign in to the admin again), Caddy has its configuration pushed again, and CLIProxyAPI is restarted by a small supervisor in its image (`askbar-cpa`, [ADR 0037](docs/adr/0037-askbar-cpa-image-and-supervisor.md)), which also restarts it when its config changes or it crashes. A service refuses a restart in its first 30 seconds, and the server and admin also restart themselves if their own health check fails three times in a row. Starting or stopping a service is done from the host (`docker compose stop server`). Only a signed-in person can restart, not an admin API key; each attempt is recorded, and six a minute is the limit. See [SECURITY.md](SECURITY.md) for what this trusts.
 
 **Upgrading from an install with the controller:** `docker compose up -d --remove-orphans` removes the old `askbar-controller` container; the `control` network goes with it. The `control-token` volume stays declared and unused until 1.0.
 
@@ -239,14 +239,15 @@ crates/askbar-proto/   request/response and snapshot types shared by the server,
 crates/askbar-service/ what every service shares: per-link token checks, GET /status, the not-configured gate
 services/server/       the server: client API, server API, database, chat/LLM streaming, secrets
 services/admin/        the admin service: admin site (src/ui/), admin.db, snapshot push, Caddy configuration (unix only)
+services/cpa-supervisor/ runs CLIProxyAPI in the askbar-cpa image and restarts it on a config change, a request or a crash
 clients/desktop/       the desktop client, its own Cargo workspace and package.json:
   src-tauri/           Cargo package askbar-client, program askbar: window, hotkey, tray, pairing
   ui/                  the popup: index.html, style.css, main.js, markdown.js (no build step)
   tests/               markdown and UI tests for the popup, icon generator
 deploy/caddy/          Caddy's bootstrap config
 deploy/cpa/            notes on CLIProxyAPI
-compose.yaml           server, admin, caddy, CLIProxyAPI, plus the dev profile
-Dockerfile             one target per service: `server`, `admin` and `caddy` (Caddy with the Cloudflare DNS module)
+compose.yaml           server, admin, caddy, cpa (CLIProxyAPI), plus the dev profile
+Dockerfile             one target per service: `server`, `admin`, `caddy` (Caddy with the Cloudflare DNS module) and `cpa` (the pinned CLIProxyAPI with our supervisor)
 scripts/               smoke.sh (end-to-end), check-isolation.sh (container isolation checks) and check-docs.sh
 docs/                  architecture.md, wire-contract.md, adr/, style/, openapi/ (client, server, admin), refactor-log.md
 tests/e2e/             the admin-site browser test and the mock LLM server

@@ -19,6 +19,7 @@ check for the retired names `mgmt`, `management` and `device` in Askbar's own ro
 | `crates/askbar-service/` | What every service shares: the per-link bearer check (`links.rs`), boot ID and `GET /status` body (`status.rs`), the `503 not_configured` gate (`configured.rs`). |
 | `services/server/` | The server: client API (`client_api.rs`), server API (`server_api.rs`), chat and generations, audit store. |
 | `services/admin/` | The admin service: the admin API (`admin_api.rs`), the site (`src/ui/`), Caddy configuration, API keys. Unix only. |
+| `services/cpa-supervisor/` | The supervisor in the `askbar-cpa` image: runs CLIProxyAPI and restarts it on a config change, a restart request or a crash ([ADR 0037](docs/adr/0037-askbar-cpa-image-and-supervisor.md)). |
 | `clients/desktop/` | The desktop app, its own Cargo workspace: `src-tauri/` (Cargo package `askbar-client`, program `askbar`), the popup in `ui/` (no build step) and its `tests/`. |
 | `deploy/caddy/`, `deploy/cpa/` | Caddy's bootstrap config; notes on CLIProxyAPI. |
 | `docs/` | `architecture.md`, `adr/` (decisions), `style/`, `wire-contract.md` (prose), `openapi/` (one file per API), `refactor-log.md`. |

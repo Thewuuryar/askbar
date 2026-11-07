@@ -24,11 +24,14 @@ async fn main() {
     // CLIProxyAPI's config and key are made here, before CPA starts (it waits for the admin to be healthy).
     match askbar_admin::cpa::ensure_config(&askbar_admin::cpa::config_dir(), &askbar_admin::server_link::secrets_dir()) {
         Ok((keys, secret_replaced)) => {
+            if let Err(e) = askbar_admin::cpa::prepare_restart_done(&askbar_admin::cpa::config_dir()) {
+                eprintln!("warning: CLIProxyAPI's supervisor cannot report restarts: {e}");
+            }
             state.set_cpa(askbar_admin::cpa::CpaLink::new(&askbar_admin::cpa::cpa_url(), keys));
             if secret_replaced {
-                // CPA is running with the old secret and does not reload its config by itself; with no
-                // controller (ADR 0005) the admin cannot restart it, so the person must, once.
-                tracing::warn!("CLIProxyAPI's control secret was replaced; restart it from the host so it reads the new one: docker compose restart cpa");
+                // CPA reads its config only at start; its supervisor restarts it because the config
+                // just changed (ADR 0037).
+                tracing::info!("CLIProxyAPI's control secret was replaced; its supervisor restarts it to read the new one");
             }
         }
         Err(e) => eprintln!("warning: CLIProxyAPI is not managed here: {e}"),

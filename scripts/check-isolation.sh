@@ -426,11 +426,18 @@ case "$out" in
   *) fail "server restart answered: $out";;
 esac
 out=$(restart caddy); case "$out" in "200 "*) pass "Caddy reloads its configuration";; *) fail "Caddy restart answered: $out";; esac
-# CLIProxyAPI does not reload its config by itself, and nothing here may restart its container: the site
-# refuses and names the host command.
-cpa_before=$(docker inspect -f '{{.State.StartedAt}}' askbar-cpa 2>/dev/null)
+# CLIProxyAPI runs under our supervisor (ADR 0037): it is the container's main process, and a restart from
+# the site starts a new CLIProxyAPI process inside the same container.
+cpa_pid() { docker top askbar-cpa -o pid,args 2>/dev/null | awk '/CLIProxyAPI -config/ && !/askbar-cpa-supervisor/ {print $1; exit}'; }
+[ "$(docker inspect -f '{{index .Config.Entrypoint 0}}' askbar-cpa 2>/dev/null)" = askbar-cpa-supervisor ] && docker top askbar-cpa -o pid,args | grep -q 'askbar-cpa-supervisor ./CLIProxyAPI' \
+  && pass "CLIProxyAPI runs under the supervisor" || fail "the cpa container's main process is not the supervisor"
+cpa_before=$(docker inspect -f '{{.State.StartedAt}}' askbar-cpa 2>/dev/null); pid_before=$(cpa_pid)
 out=$(restart cpa)
-case "$out" in "409 "*) [ "$cpa_before" = "$(docker inspect -f '{{.State.StartedAt}}' askbar-cpa)" ] && pass "CLIProxyAPI is restarted from the host only (409, container untouched)" || fail "CLIProxyAPI's container was restarted";; *) fail "CLIProxyAPI restart answered: $out";; esac
+case "$out" in
+  "200 "*) [ "$cpa_before" = "$(docker inspect -f '{{.State.StartedAt}}' askbar-cpa)" ] && [ -n "$pid_before" ] && [ "$pid_before" != "$(cpa_pid)" ] \
+    && pass "CLIProxyAPI restarts through its supervisor, in the same container (${out#200 }s)" || fail "cpa restart: container or process not as expected";;
+  *) fail "CLIProxyAPI restart answered: $out";;
+esac
 admin_before=$(docker inspect -f '{{.State.StartedAt}}' "$ADMIN")
 out=$(restart admin)
 back=no

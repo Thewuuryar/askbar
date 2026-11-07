@@ -2,7 +2,7 @@
 //! through CPA's own control API (no terminal), and keeps one "managed" provider pointing at it.
 //!
 //! NOTE: the control API paths and shapes below are written from CPA's documentation as remembered and are
-//! not yet checked against the pinned image (`eceasy/cli-proxy-api:v8.0.51`). They are all in this file, and
+//! not yet checked against the pinned image (`eceasy/cli-proxy-api:v8.0.51`, the base of the `askbar-cpa` image). They are all in this file, and
 //! `tests/mock_cpa` in `askbar-admin/tests/cpa.rs` states what is assumed.
 //!
 //! Secrets: the CPA API key and CPA's control secret are made here and kept as files in the admin's secrets
@@ -119,6 +119,31 @@ pub fn ensure_config(config_dir: &FsPath, secrets_dir: &FsPath) -> std::io::Resu
     write_atomic(&config, &(rewritten + "\n"), 0o644)?;
     write_secret(&secret_path, &secret)?;
     Ok((Keys { api_key, control_secret: secret }, true))
+}
+
+/// The files the `askbar-cpa` supervisor watches and writes (ADR 0037), in the config directory.
+pub const RESTART_REQUEST: &str = "restart-request";
+pub const RESTART_DONE: &str = "restart-done";
+
+/// Make `restart-done` writable by the supervisor: mode 0660 in the admin's group. The supervisor runs as
+/// root in group 10001 with every capability dropped (ADR 0032), so it can write a file of the admin's
+/// only through the group bit, and cannot create one in the admin's directory.
+pub fn prepare_restart_done(config_dir: &FsPath) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let p = config_dir.join(RESTART_DONE);
+    if !p.exists() {
+        std::fs::write(&p, "")?;
+    }
+    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o660))
+}
+
+/// Ask the supervisor to restart CLIProxyAPI: write a new random value to `restart-request`. Returns
+/// the value; the supervisor writes it to `restart-done` once CLIProxyAPI has started again.
+pub fn request_restart(config_dir: &FsPath) -> std::io::Result<String> {
+    prepare_restart_done(config_dir)?;
+    let value = rand(24);
+    write_atomic(&config_dir.join(RESTART_REQUEST), &value, 0o644)?;
+    Ok(value)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -381,6 +406,23 @@ pub async fn remove_account(State(state): St, Path(name): Path<String>) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_restart_request_is_a_new_value_and_restart_done_is_group_writable() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("askbar-cpa-req-{}", ulid::Ulid::new()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let a = request_restart(&dir).unwrap();
+        let b = request_restart(&dir).unwrap();
+        assert_ne!(a, b);
+        assert_eq!(std::fs::read_to_string(dir.join(RESTART_REQUEST)).unwrap(), b);
+        let done = dir.join(RESTART_DONE);
+        assert_eq!(std::fs::metadata(&done).unwrap().permissions().mode() & 0o777, 0o660, "the supervisor writes it through the group");
+        std::fs::write(&done, "x").unwrap();
+        prepare_restart_done(&dir).unwrap();
+        assert_eq!(std::fs::read_to_string(&done).unwrap(), "x", "an existing file is kept, only its mode is set");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn a_pasted_address_must_be_local_and_carry_this_logins_state_and_a_code() {

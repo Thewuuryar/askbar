@@ -4,6 +4,7 @@
 #   docker build --target server     -t askbar-server .
 #   docker build --target admin      -t askbar-admin  .
 #   docker build --target caddy      -t askbar-caddy  .
+#   docker build --target cpa        -t askbar-cpa    .
 # A plain `docker build .` builds the last stage, the server.
 
 FROM rust:1-bookworm AS build
@@ -12,7 +13,7 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates crates
 COPY services services
 # The desktop client is its own workspace (clients/desktop) and is not part of any image.
-RUN cargo build --release -p askbar-server -p askbar-admin
+RUN cargo build --release -p askbar-server -p askbar-admin -p askbar-cpa-supervisor
 
 # ------------------------------------------------------------------ admin
 # The admin service: the admin site and its own database. No TCP port: it listens on a unix
@@ -49,6 +50,17 @@ COPY deploy/caddy/bootstrap.Caddyfile /etc/caddy/bootstrap.Caddyfile
 # The admin service pushes the real configuration through the admin socket; `--resume` brings back
 # the last one after a restart. The bootstrap file only moves Caddy's admin API onto a unix socket.
 CMD ["caddy", "run", "--config", "/etc/caddy/bootstrap.Caddyfile", "--adapter", "caddyfile", "--resume"]
+
+# -------------------------------------------------------------------- cpa
+# CLIProxyAPI, pinned by digest, with our supervisor as the entry point (ADR 0037). The supervisor runs it as a
+# child and restarts it when /cpa-config/config.yaml changes, when the admin writes a new value to
+# /cpa-config/restart-request, or after a crash; it opens no port. CLIProxyAPI itself is unchanged.
+FROM eceasy/cli-proxy-api:v8.0.51@sha256:15d13889e1a39a688be306dfbf2f6cf9003e99cd913b5070fa463f8ab2aa0031 AS cpa
+COPY --from=build /src/target/release/askbar-cpa-supervisor /usr/local/bin/askbar-cpa-supervisor
+WORKDIR /CLIProxyAPI
+ENV ASKBAR_CPA_CONFIG_DIR=/cpa-config
+ENTRYPOINT ["askbar-cpa-supervisor"]
+CMD ["./CLIProxyAPI", "-config", "/cpa-config/config.yaml"]
 
 # ----------------------------------------------------------------- server
 # The server: the client API on 8080 and the server API on its own address. Runs as uid 10002,

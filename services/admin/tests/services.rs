@@ -157,13 +157,29 @@ async fn at_most_six_actions_a_minute() {
 }
 
 #[tokio::test]
-async fn cpa_is_restarted_from_the_host_and_the_refusal_names_the_command() {
-    // CLIProxyAPI does not reload its config by itself (tested on the stack); until a supervisor is
-    // decided, its restart is refused with the host command. The attempt is still recorded.
+async fn cpa_is_restarted_through_its_supervisor_files() {
+    // ADR 0037: the admin writes restart-request and waits for the supervisor to echo it in restart-done.
+    // A thread stands in for the supervisor. (Only this test sets ASKBAR_CPA_CONFIG_DIR.)
+    let dir = std::env::temp_dir().join(format!("askbar-cpa-restart-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::env::set_var("ASKBAR_CPA_CONFIG_DIR", &dir);
+    let d = dir.clone();
+    let supervisor = std::thread::spawn(move || {
+        for _ in 0..200 {
+            if let Ok(v) = std::fs::read_to_string(d.join("restart-request")) {
+                std::thread::sleep(Duration::from_millis(300)); // CLIProxyAPI starting again
+                std::fs::write(d.join("restart-done"), v).unwrap();
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        false
+    });
     let t = start(true).await;
     let (s, v) = t.call(M::POST, "/api/admin/v1/services/cpa/restart", json!(null)).await;
-    assert_eq!((s, v["error"].as_str()), (409, Some("conflict")), "{v}");
-    assert!(v["detail"].as_str().unwrap().contains("docker compose restart cpa"), "{v}");
+    assert!(supervisor.join().unwrap(), "the admin wrote a restart request");
+    assert_eq!((s, v["state"].as_str()), (200, Some("running")), "{v}");
     let (_, v) = t.call(M::GET, "/api/admin/v1/services", json!(null)).await;
-    assert_eq!((v["recent"][0]["service"].as_str(), v["recent"][0]["ok"].clone()), (Some("cpa"), json!(false)));
+    assert_eq!((v["recent"][0]["service"].as_str(), v["recent"][0]["ok"].clone()), (Some("cpa"), json!(true)));
+    let _ = std::fs::remove_dir_all(&dir);
 }

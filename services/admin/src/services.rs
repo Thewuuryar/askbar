@@ -6,12 +6,10 @@
 //! | `server` | `GET /api/server/v1/status` | `POST /api/server/v1/restart`, then wait for a new boot ID |
 //! | `admin` | this process | exit after answering; Docker starts it again |
 //! | `caddy` | its admin socket | push its configuration again (a live reload) |
-//! | `cpa` | its management API (accounts) | not from here: from the host (`docker compose restart cpa`) |
+//! | `cpa` | its management API (accounts) | ask its supervisor through `restart-request`, wait for `restart-done` and the API |
 //!
-//! CLIProxyAPI was tested for a reload on a config change (ADR 0005 asks for that test first) and does
-//! not reload: a new API key written to its config is refused until the container restarts. Restarting
-//! it from here needs a small supervisor in its image, a new image that needs its own ADR first, so
-//! until the owner decides, its Restart is refused with the host command.
+//! CLIProxyAPI reads its config only at start, so it runs under a supervisor in the `askbar-cpa` image
+//! (ADR 0037) that restarts it when the admin writes `restart-request` (or its config changes).
 //! Only a person's own session may restart (a script's API key may not), every attempt is written to
 //! `service_actions` first, and a few actions per minute is the most that is allowed. Each service the
 //! project builds also refuses a restart in its first 30 seconds (askbar_service::restart).
@@ -122,7 +120,7 @@ pub async fn restart(State(state): St, Path(name): Path<String>) -> Result<(Stat
         "server" => restart_server(&state).await,
         "admin" => restart_admin(&state).await,
         "caddy" => restart_caddy(&state).await,
-        _ => Err(ApiError::new(ErrorCode::Conflict, "CLIProxyAPI cannot be restarted from here yet: it does not reload its configuration by itself. On the host, run: docker compose restart cpa")),
+        _ => restart_cpa(&state).await,
     };
     if result.is_ok() {
         let db = state.db.lock().await;
@@ -176,4 +174,32 @@ async fn restart_caddy(state: &Arc<AdminState>) -> Result<(StatusCode, Json<Valu
     } else {
         Err(unreachable(&st.message))
     }
+}
+
+/// Ask CLIProxyAPI's supervisor (ADR 0037): write a new value to `restart-request`, then wait for the
+/// supervisor to echo it in `restart-done` and for CLIProxyAPI's API to answer, at most a minute.
+async fn restart_cpa(state: &Arc<AdminState>) -> Result<(StatusCode, Json<Value>), Failure> {
+    let dir = crate::cpa::config_dir();
+    let request = crate::cpa::request_restart(&dir).map_err(|_| unreachable("CLIProxyAPI's restart request could not be written."))?;
+    let started = Instant::now();
+    let link = state.cpa.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let mut restarted = false;
+    while started.elapsed() < SERVER_BACK_WITHIN {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        restarted = restarted || std::fs::read_to_string(dir.join(crate::cpa::RESTART_DONE)).is_ok_and(|d| d == request);
+        if restarted {
+            match &link {
+                Some(l) if l.accounts().await.is_err() => continue,
+                _ => {
+                    let secs = started.elapsed().as_secs();
+                    return Ok((StatusCode::OK, Json(card("cpa", true, format!("Restarted; back after {secs}s.")))));
+                }
+            }
+        }
+    }
+    Err(unreachable(if restarted {
+        "CLIProxyAPI was restarted but does not answer. Check it from the host."
+    } else {
+        "CLIProxyAPI's supervisor did not act on the restart request within a minute. Check it from the host."
+    }))
 }
