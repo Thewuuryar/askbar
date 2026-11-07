@@ -275,6 +275,12 @@ async fn status(State(state): State<Arc<AppState>>) -> Result<Json<serde_json::V
     Ok(Json(askbar_service::status::body(version, &state.boot_id)))
 }
 
+/// `POST /restart` (ADR 0005): answer, save running replies, exit; Docker starts the server again.
+async fn restart(State(state): State<Arc<AppState>>) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    let r = state.restarter.get().cloned().ok_or_else(|| ApiError::new(ErrorCode::Internal, "Restart is not set up in this process."))?;
+    askbar_service::restart::handler(State(r)).await
+}
+
 /// The database as a download, with provider keys, the Cloudflare token, the admin password
 /// hash and pairing-code hashes taken out.
 async fn backup(State(state): State<Arc<AppState>>) -> Result<Response, ApiError> {
@@ -290,6 +296,7 @@ pub fn routes() -> crate::routes::Routes {
         .get(&v1(askbar_service::routes::HEALTH), || async { StatusCode::OK })
         .get(&v1(askbar_service::routes::STATUS), status)
         .put(&v1(askbar_service::routes::CONFIG), put_snapshot)
+        .post(&v1(askbar_service::routes::RESTART), restart)
         .put(&v1("/providers/{id}/key"), put_provider_key)
         .get(&v1("/providers/health"), providers_health)
         .post(&v1("/providers/{id}/test"), test_provider)

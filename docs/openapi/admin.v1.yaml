@@ -304,8 +304,8 @@ paths:
   /api/admin/v1/services:
     get:
       operationId: listServices
-      summary: How the server, Caddy and CLIProxyAPI are doing, and the last ten start/stop/restart actions.
-      description: Session-only. The answer comes from the controller; if it cannot be reached this is 502 `server_unavailable`.
+      summary: How the server, the admin, Caddy and CLIProxyAPI are doing, and the last ten restarts.
+      description: Session-only. Each state comes from the service itself (the server's status, Caddy's admin socket, CLIProxyAPI's API); there is no controller (ADR 0005).
       security:
         - adminSession: []
       responses:
@@ -340,72 +340,6 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '502':
           $ref: '#/components/responses/ServerUnavailable'
-  /api/admin/v1/services/{name}/start:
-    parameters:
-      - name: name
-        in: path
-        required: true
-        schema:
-          type: string
-          enum: [server, caddy, cpa]
-    post:
-      operationId: startService
-      summary: Start a service. (Goes with the controller in plan step 1.4.)
-      description: >
-        Session-only: an admin API key cannot do this. Every attempt is recorded before the controller is asked,
-        and at most 6 are allowed per minute (429 `too_many_attempts`). Stopping or restarting Caddy can drop the
-        connection to this site; stopping the server ends running replies as interrupted. The admin and the
-        controller cannot be named. Answers with the service as it is afterwards.
-      security:
-        - adminSession: []
-      responses:
-        '200':
-          description: The service after the action.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ServiceState'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '429':
-          $ref: '#/components/responses/TooMany'
-        '502':
-          $ref: '#/components/responses/ServerUnavailable'
-  /api/admin/v1/services/{name}/stop:
-    parameters:
-      - name: name
-        in: path
-        required: true
-        schema:
-          type: string
-          enum: [server, caddy, cpa]
-    post:
-      operationId: stopService
-      summary: Stop a service. (Goes with the controller in plan step 1.4.)
-      description: >
-        Session-only: an admin API key cannot do this. Every attempt is recorded before the controller is asked,
-        and at most 6 are allowed per minute (429 `too_many_attempts`). Stopping or restarting Caddy can drop the
-        connection to this site; stopping the server ends running replies as interrupted. The admin and the
-        controller cannot be named. Answers with the service as it is afterwards.
-      security:
-        - adminSession: []
-      responses:
-        '200':
-          description: The service after the action.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ServiceState'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '429':
-          $ref: '#/components/responses/TooMany'
-        '502':
-          $ref: '#/components/responses/ServerUnavailable'
   /api/admin/v1/services/{name}/restart:
     parameters:
       - name: name
@@ -413,20 +347,29 @@ paths:
         required: true
         schema:
           type: string
-          enum: [server, caddy, cpa]
+          enum: [server, admin, caddy, cpa]
     post:
       operationId: restartService
-      summary: Restart a service.
+      summary: Restart a service, without a controller (ADR 0005).
       description: >
-        Session-only: an admin API key cannot do this. Every attempt is recorded before the controller is asked,
-        and at most 6 are allowed per minute (429 `too_many_attempts`). Stopping or restarting Caddy can drop the
-        connection to this site; stopping the server ends running replies as interrupted. The admin and the
-        controller cannot be named. Answers with the service as it is afterwards.
+        Session-only: an admin API key cannot do this. Every attempt is recorded first, and at most 6 are allowed
+        per minute (429 `too_many_attempts`). `server`: asks the server's own `POST /restart` and waits until a new
+        process answers (a new boot ID), at most a minute; replies being written end as interrupted, and the
+        server's 30-second cooldown after it starts is passed on as 429. `admin`: answers 202 and exits; this page
+        reconnects when Docker has started it again. `caddy`: pushes its configuration again, which Caddy applies
+        live. `cpa`: refused with 409 `conflict` and the host command (`docker compose restart cpa`), because
+        CLIProxyAPI does not reload its configuration by itself.
       security:
         - adminSession: []
       responses:
         '200':
-          description: The service after the action.
+          description: The service after the restart (server, caddy, cpa).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceState'
+        '202':
+          description: The admin is restarting itself.
           content:
             application/json:
               schema:
@@ -435,6 +378,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
+        '409':
+          description: CLIProxyAPI is restarted from the host (`conflict`); the detail names the command.
         '429':
           $ref: '#/components/responses/TooMany'
         '502':
@@ -1237,16 +1182,17 @@ components:
       properties:
         name:
           type: string
-          enum: [server, caddy, cpa]
+          enum: [server, admin, caddy, cpa]
         state:
           type: string
-          description: Docker's state (`running`, `exited`, `restarting`, ...), or `missing` when there is no container.
+          description: Whether it answers (`running`), does not (`unreachable`), or is restarting itself (`restarting`, the admin only).
+          enum: [running, unreachable, restarting]
         status:
           type: string
+          description: A sentence for a person.
         health:
-          type: string
-          nullable: true
-          enum: [healthy, unhealthy, starting, null]
+          type: 'null'
+          description: Always null; kept so the shape stays the same.
     Problem:
       type: object
       description: >-

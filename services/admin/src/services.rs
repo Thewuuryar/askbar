@@ -1,87 +1,103 @@
-//! Start, stop and restart the server, Caddy and CLIProxyAPI, through the controller. Only a person's own
-//! session may do this (a script's API key may not), every attempt is written to `service_actions` before the
-//! controller is asked, and a few actions per minute is the most that is allowed.
+//! The Services tab: how the server, the admin, Caddy and CLIProxyAPI are doing, and restarting one.
+//! There is no controller and no Docker socket (ADR 0005), so each service is asked in its own way:
+//!
+//! | Service | State from | Restart |
+//! | --- | --- | --- |
+//! | `server` | `GET /api/server/v1/status` | `POST /api/server/v1/restart`, then wait for a new boot ID |
+//! | `admin` | this process | exit after answering; Docker starts it again |
+//! | `caddy` | its admin socket | push its configuration again (a live reload) |
+//! | `cpa` | its own API (accounts) | not from here: from the host (`docker compose restart cpa`) |
+//!
+//! CLIProxyAPI was tested for a reload on a config change (ADR 0005 asks for that test first) and does
+//! not reload: a new API key written to its config is refused until the container restarts. Restarting
+//! it from here needs a small supervisor in its image, a new image that needs its own ADR first, so
+//! until the owner decides, its Restart is refused with the host command.
+//! Only a person's own session may restart (a script's API key may not), every attempt is written to
+//! `service_actions` first, and a few actions per minute is the most that is allowed. Each service the
+//! project builds also refuses a restart in its first 30 seconds (askbar_service::restart).
 
-use crate::control_link::SERVICES;
 use crate::AdminState;
 use askbar_proto::http::ApiError;
 use askbar_proto::problem::ErrorCode;
 use axum::{
     extract::{Path, State},
-    http::header,
-    response::Response,
+    http::StatusCode,
     Json,
 };
+use serde_json::{json, Value};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 type St = State<Arc<AdminState>>;
 type Failure = ApiError;
 
+/// The services the Services tab shows and may restart.
+pub const SERVICES: [&str; 4] = ["server", "admin", "caddy", "cpa"];
 /// At most this many actions in `WINDOW_SECS`.
 const MAX_ACTIONS: usize = 6;
 const WINDOW_SECS: i64 = 60;
+/// How long a server restart may take before the admin gives up waiting (ADR 0002: under a minute).
+const SERVER_BACK_WITHIN: Duration = Duration::from_secs(60);
 
 fn unreachable(msg: &str) -> Failure {
     ApiError::new(ErrorCode::ServerUnavailable, msg)
 }
 
-fn control(state: &AdminState) -> Result<Arc<crate::control_link::ControlLink>, Failure> {
-    state.control.lock().unwrap_or_else(|e| e.into_inner()).clone().ok_or_else(|| unreachable("The controller is not set up, so services cannot be controlled from here."))
+fn card(name: &str, up: bool, status: impl Into<String>) -> Value {
+    json!({ "name": name, "state": if up { "running" } else { "unreachable" }, "status": status.into(), "health": null })
 }
 
-fn passthrough(status: u16, body: Vec<u8>) -> Result<Response, Failure> {
-    if status != 200 {
-        // The controller speaks problems too; pass its sentence on without its status.
-        let detail = serde_json::from_slice::<serde_json::Value>(&body).ok().and_then(|v| v["detail"].as_str().map(String::from)).unwrap_or_else(|| format!("The controller answered {status}."));
-        return Err(if status == 404 { ApiError::new(ErrorCode::NotFound, detail) } else { unreachable(&detail) });
+async fn server_state(state: &Arc<AdminState>) -> Value {
+    let Some(link) = state.server.clone() else { return card("server", false, "No link to the server is set up.") };
+    match link.status_now().await {
+        Some((Some(v), _)) => card("server", true, format!("Answers; configuration version {v}.")),
+        Some((None, _)) => card("server", true, "Answers, but has not received its configuration yet."),
+        None => card("server", false, "Does not answer."),
     }
-    Response::builder().header(header::CONTENT_TYPE, "application/json").body(axum::body::Body::from(body)).map_err(|_| ApiError::code(ErrorCode::Internal))
 }
 
-fn recent(db: &crate::AdminDb) -> serde_json::Value {
+async fn caddy_state(state: &Arc<AdminState>) -> Value {
+    if crate::caddy::reachable(state).await {
+        card("caddy", true, "Its admin socket answers.")
+    } else {
+        card("caddy", false, "Its admin socket does not answer.")
+    }
+}
+
+async fn cpa_state(state: &Arc<AdminState>) -> Value {
+    let link = state.cpa.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    match link {
+        None => card("cpa", false, "Not set up from here (its config could not be made)."),
+        Some(l) => match l.accounts().await {
+            Ok(a) => card("cpa", true, format!("Answers; {} account(s) connected.", a.len())),
+            Err(_) => card("cpa", false, "Does not answer."),
+        },
+    }
+}
+
+fn recent(db: &crate::AdminDb) -> Value {
     let mut out = Vec::new();
     if let Ok(mut stmt) = db.conn().prepare("SELECT service, action, at, ok FROM service_actions ORDER BY id DESC LIMIT 10") {
-        if let Ok(rows) = stmt.query_map([], |r| Ok(serde_json::json!({ "service": r.get::<_, String>(0)?, "action": r.get::<_, String>(1)?, "at": r.get::<_, i64>(2)?, "ok": r.get::<_, i64>(3)? != 0 }))) {
+        if let Ok(rows) = stmt.query_map([], |r| Ok(json!({ "service": r.get::<_, String>(0)?, "action": r.get::<_, String>(1)?, "at": r.get::<_, i64>(2)?, "ok": r.get::<_, i64>(3)? != 0 }))) {
             out.extend(rows.flatten());
         }
     }
-    serde_json::Value::Array(out)
+    Value::Array(out)
 }
 
 /// `GET /api/admin/v1/services`: how each service is doing, and the last ten actions.
-pub async fn list(State(state): St) -> Result<Json<serde_json::Value>, Failure> {
-    let link = control(&state)?;
-    let (status, body) = link.services().await.map_err(|e| unreachable(&e))?;
-    if status != 200 {
-        passthrough(status, body)?;
-        return Err(unreachable("The controller gave no list."));
-    }
-    let mut v: serde_json::Value = serde_json::from_slice(&body).map_err(|_| unreachable("The controller's answer was not understood."))?;
-    v["recent"] = recent(&*state.db.lock().await);
-    Ok(Json(v))
-}
-
-/// `POST /api/admin/v1/services/{name}/start`. (Start and stop go with the controller, plan step 1.4.)
-pub async fn start(state: St, Path(name): Path<String>) -> Result<Response, Failure> {
-    act(state, name, "start").await
-}
-
-/// `POST /api/admin/v1/services/{name}/stop`.
-pub async fn stop(state: St, Path(name): Path<String>) -> Result<Response, Failure> {
-    act(state, name, "stop").await
+pub async fn list(State(state): St) -> Result<Json<Value>, Failure> {
+    let (server, caddy, cpa) = tokio::join!(server_state(&state), caddy_state(&state), cpa_state(&state));
+    let admin = card("admin", true, "This page is served by it.");
+    let recent = recent(&*state.db.lock().await);
+    Ok(Json(json!({ "services": [server, admin, caddy, cpa], "recent": recent })))
 }
 
 /// `POST /api/admin/v1/services/{name}/restart`.
-pub async fn restart(state: St, Path(name): Path<String>) -> Result<Response, Failure> {
-    act(state, name, "restart").await
-}
-
-/// One action, each a literal path of its own (ADR 0022: no variable as an action).
-async fn act(State(state): St, name: String, action: &'static str) -> Result<Response, Failure> {
+pub async fn restart(State(state): St, Path(name): Path<String>) -> Result<(StatusCode, Json<Value>), Failure> {
     if !SERVICES.contains(&name.as_str()) {
         return Err(ApiError::new(ErrorCode::NotFound, "No such service."));
     }
-    let link = control(&state)?;
     let now = crate::auth::now();
     {
         let mut q = state.service_actions.lock().unwrap_or_else(|e| e.into_inner());
@@ -93,17 +109,71 @@ async fn act(State(state): St, name: String, action: &'static str) -> Result<Res
         }
         q.push_back(now);
     }
+    // Recorded before anything is asked, so a restart that takes the admin down is still on record.
     let row = {
         let db = state.db.lock().await;
         db.conn()
-            .execute("INSERT INTO service_actions (service, action, at) VALUES (?1, ?2, ?3)", rusqlite::params![name, action, now])
+            .execute("INSERT INTO service_actions (service, action, at) VALUES (?1, 'restart', ?2)", rusqlite::params![name, now])
             .map_err(|_| ApiError::code(ErrorCode::Internal))?;
         db.conn().last_insert_rowid()
     };
-    let (status, body) = link.act(&name, action).await.map_err(|e| unreachable(&e))?;
-    if status == 200 {
+    tracing::info!(service = %name, "restart asked from the admin site");
+    let result = match name.as_str() {
+        "server" => restart_server(&state).await,
+        "admin" => restart_admin(&state).await,
+        "caddy" => restart_caddy(&state).await,
+        _ => Err(ApiError::new(ErrorCode::Conflict, "CLIProxyAPI cannot be restarted from here yet: it does not reload its configuration by itself. On the host, run: docker compose restart cpa")),
+    };
+    if result.is_ok() {
         let db = state.db.lock().await;
         let _ = db.conn().execute("UPDATE service_actions SET ok = 1 WHERE id = ?1", [row]);
     }
-    passthrough(status, body)
+    result
+}
+
+/// Ask the server to restart, then wait until a new process answers (a new boot ID).
+async fn restart_server(state: &Arc<AdminState>) -> Result<(StatusCode, Json<Value>), Failure> {
+    let link = state.server.clone().ok_or_else(|| unreachable("No link to the server is set up."))?;
+    let path = askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, askbar_service::routes::RESTART);
+    let (status, body) = link.request(reqwest::Method::POST, &path, None).await.map_err(|_| unreachable("The server did not answer, so it could not be asked to restart."))?;
+    if status != 202 {
+        let p: Option<askbar_proto::Problem> = serde_json::from_slice(&body).ok();
+        let detail = p.as_ref().map(|p| p.detail.clone()).unwrap_or_else(|| format!("The server answered {status}."));
+        return Err(match p.as_ref().and_then(|p| p.code()) {
+            // The server's cooldown (its first 30 seconds): pass the refusal on.
+            Some(ErrorCode::TooManyAttempts) => ApiError::new(ErrorCode::TooManyAttempts, detail).retry_after(askbar_service::restart::COOLDOWN.as_secs()),
+            _ => unreachable(&detail),
+        });
+    }
+    let old = serde_json::from_slice::<Value>(&body).ok().and_then(|v| v["boot_id"].as_str().map(String::from)).unwrap_or_default();
+    let started = Instant::now();
+    while started.elapsed() < SERVER_BACK_WITHIN {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        if let Some((_, boot)) = link.status_now().await {
+            if boot != old {
+                // The status check that follows sees the new boot ID and pushes the configuration.
+                link.check().await;
+                let secs = started.elapsed().as_secs();
+                return Ok((StatusCode::OK, Json(card("server", true, format!("Restarted; back after {secs}s.")))));
+            }
+        }
+    }
+    Err(unreachable("The server was asked to restart but has not come back within a minute. Check it from the host."))
+}
+
+/// Answer, then exit; Docker starts the admin again. This page reconnects when it is back.
+async fn restart_admin(state: &Arc<AdminState>) -> Result<(StatusCode, Json<Value>), Failure> {
+    let r = state.restarter.get().cloned().ok_or_else(|| ApiError::new(ErrorCode::Internal, "Restart is not set up in this process."))?;
+    let _accepted = askbar_service::restart::handler(State(r)).await?;
+    Ok((StatusCode::ACCEPTED, Json(json!({ "name": "admin", "state": "restarting", "status": "Restarting; this page reconnects in a few seconds.", "health": null }))))
+}
+
+/// Caddy has no restart endpoint (ADR 0005): push its configuration again, which it applies live.
+async fn restart_caddy(state: &Arc<AdminState>) -> Result<(StatusCode, Json<Value>), Failure> {
+    let st = crate::caddy::apply(state).await;
+    if st.ok {
+        Ok((StatusCode::OK, Json(card("caddy", true, "Configuration reloaded."))))
+    } else {
+        Err(unreachable(&st.message))
+    }
 }

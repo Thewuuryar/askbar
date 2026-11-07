@@ -75,7 +75,7 @@ pub async fn start(caddy_up: bool) -> T {
     let caddy_socket = dir.join("c").join("a.sock");
     std::fs::create_dir_all(caddy_socket.parent().unwrap()).unwrap();
     if caddy_up {
-        let app = Router::new().route("/load", post(load)).with_state(fake.clone());
+        let app = Router::new().route("/load", post(load)).route("/config/", axum::routing::get(|| async { "{}" })).with_state(fake.clone());
         let listener = tokio::net::UnixListener::bind(&caddy_socket).unwrap();
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     }

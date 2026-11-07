@@ -43,7 +43,7 @@ Recommendation first. "Tool" lists the usual choices; check each one's current s
 | `max_width = 160`, `use_small_heuristics = "Max"` | 332 |
 
   No setting reaches zero, so any adoption is one large reformat commit. Do it when no other branch is open.
-- `cargo clippy --workspace --all-targets` on the four server-side crates (`askbar-proto`, `-server`, `-admin`, `-controller`) gives about **44 warnings**: 20 "`Err` variant is very large", 16 "`ok().expect()` on a `Result`", and 8 one-offs. `src-tauri` was not checked here (it needs GTK libraries).
+- `cargo clippy --workspace --all-targets` on the four server-side crates as of 2026-11 (`askbar-proto`, `-server`, `-admin`, `-controller`; the controller has since been removed) gives about **44 warnings**: 20 "`Err` variant is very large", 16 "`ok().expect()` on a `Result`", and 8 one-offs. `src-tauri` was not checked here (it needs GTK libraries).
 
 ## Rollout
 

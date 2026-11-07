@@ -55,6 +55,31 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '500':
           $ref: '#/components/responses/Internal'
+  /api/server/v1/restart:
+    post:
+      operationId: restart
+      summary: Restart the server (ADR 0005).
+      description: >-
+        Answers 202 with the boot ID of the process that is about to stop, saves what running replies have so far
+        (they end as interrupted), and exits within 10 seconds; Docker's restart policy starts it again with a new
+        boot ID. Refused with 429 `too_many_attempts` (and `Retry-After`) during the first 30 seconds after a start.
+      responses:
+        '202':
+          description: Restarting.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [boot_id]
+                properties:
+                  boot_id:
+                    type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          description: Too soon after a start (`too_many_attempts`, with `Retry-After`).
+        '500':
+          $ref: '#/components/responses/Internal'
   /api/server/v1/config:
     put:
       operationId: putConfig

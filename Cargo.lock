@@ -43,6 +43,7 @@ dependencies = [
  "argon2",
  "askbar-proto",
  "askbar-server",
+ "askbar-service",
  "axum",
  "base64 0.22.1",
  "chacha20poly1305",
@@ -60,23 +61,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "ulid",
-]
-
-[[package]]
-name = "askbar-controller"
-version = "0.5.0"
-dependencies = [
- "askbar-proto",
- "axum",
- "reqwest",
- "serde",
- "serde_json",
- "serde_yaml_ng",
- "sha2",
- "subtle",
- "tokio",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
