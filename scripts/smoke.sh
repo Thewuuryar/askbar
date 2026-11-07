@@ -99,7 +99,9 @@ if [ $LOCAL = 1 ]; then
     curl -fsS --unix-socket "$SOCK" -X "$1" -H 'x-askbar-admin: 1' -H 'content-type: application/json' -b "$WORK/jar" -c "$WORK/jar" \
       ${3:+-d "$3"} "http://localhost$2"
   }
-  if admin PUT /api/admin/v1/setup/password "{\"password\":\"$PW\"}" >/dev/null; then
+  # First run (ADR 0007): sign in with the published login, change it, then everything else opens.
+  if admin POST /api/admin/v1/session '{"username":"admin","password":"admin"}' >/dev/null \
+     && admin PUT /api/admin/v1/password "{\"current\":\"admin\",\"new\":\"$PW\"}" >/dev/null; then
     pass "first-run setup"
   else
     fail "first-run setup"

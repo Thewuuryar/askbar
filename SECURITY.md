@@ -23,7 +23,7 @@ Prompts, replies and provider errors are recorded in the audit store only as cip
 - **Admin:** it's limited to private addresses by default, and the admin can add Tailscale or widen the allowlist in settings. Caddy checks the connection's real source, never a forwarded header.
 - **Clients:** they use the local network or Tailscale by default. Public access is a deployer option.
 - **Port forwarding:** a router or proxy that rewrites the source can make public traffic look private. Don't forward the admin page to the internet.
-- **First run:** the published `admin:admin` login works from private addresses until you change the password, and nothing else is allowed until you do. Change it as soon as you deploy.
+- **First run:** the published login works from private addresses until you change the password. Change it as soon as you deploy.
 - **Sign-in:** passkeys are optional but recommended, and they need a real domain. Once you create one, recovery codes replace the password as the backup.
 
 ## What a leaked admin API key can do

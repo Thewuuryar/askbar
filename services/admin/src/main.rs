@@ -12,6 +12,18 @@ async fn main() {
     }
     tracing_subscriber::fmt().with_target(false).init();
     let db = askbar_admin::AdminDb::open(&askbar_admin::db_path()).unwrap_or_else(|e| die(e, 1));
+    // `askbar-admin reset` (on the host: `docker compose exec admin askbar-admin reset`, or
+    // `docker compose run --rm admin reset` while the admin is stopped): the published password again,
+    // to be changed at the next sign-in (ADR 0007).
+    if std::env::args().nth(1).as_deref() == Some("reset") {
+        askbar_admin::web::reset_to_default(&db).unwrap_or_else(|e| die(e, 1));
+        println!("The admin password is the published one again ({}/{}); you must change it at the next sign-in.", askbar_admin::web::ADMIN_USERNAME, askbar_admin::web::DEFAULT_PASSWORD);
+        println!("Restart the admin to sign out every session: docker compose restart admin");
+        std::process::exit(0);
+    }
+    if askbar_admin::web::ensure_default_credentials(&db).unwrap_or_else(|e| die(e, 1)) {
+        tracing::warn!("first start: the admin password is the published one; sign in and change it now");
+    }
     let token = askbar_admin::server_link::ensure_token(&askbar_admin::server_link::secrets_dir(), &askbar_admin::server_link::token_dir()).unwrap_or_else(|e| die(e, 1));
     let link = askbar_admin::server_link::ServerLink::new(&askbar_admin::server_link::server_url(), token);
     let secrets = askbar_admin::secrets::AdminSecrets::load_or_create(&askbar_admin::server_link::secrets_dir()).unwrap_or_else(|e| die(e, 1));

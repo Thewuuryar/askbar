@@ -79,7 +79,6 @@ Order change (owner approved 2026-11-07): the remaining steps keep their numbers
 
 | # | Step | Size | Why here |
 | --- | --- | --- | --- |
-| 7 | 1.15 `askbar-cpa` image with a supervisor, and the name check removed | S–M | Next after 1.4 (owner, 2026-11-07). [ADR 0037](adr/0037-askbar-cpa-image-and-supervisor.md) and [ADR 0038](adr/0038-names-and-new-components-without-a-name-check.md) are accepted. Brings back restarting `cpa` from the admin, which 3.5 needs. |
 | 7 | 1.8 first run and forced password change | M | Independent of storage; before 1.9 so the wizard's last step can create the first user. |
 | 8 | 1.9 users and pairing keys in the admin | M | 1.9 and 1.11 both change storage and pairing; next to each other they cost one "wipe volumes and re-pair" instead of two. |
 | 9 | 1.11 spaces, one SQLite file each | L | As above. Wipe and re-pair once, at the end of this step. |
@@ -108,19 +107,14 @@ Midpoints S = 1.5 h, M = 4 h, L = 8 h. Required work left (excluding 1.12, 1.13 
 
 That is about 52 h over the ~100 h budget before any backlog item (the component ADRs and the `cpa` supervisor, added 2026-11-07, are about 12 h of it). Proposed cuts, first to last: phase 8 (iOS, memory, mismatch alerts); 1.13 summarizing (L, ~8 h); the rest of 1.13 (~12 h); 6.4 multiple destinations (one daily destination stays: it is the ship criterion for data loss in [ADR 0002](adr/0002-v1-scope-limits-and-ship-criteria.md)); 1.12 shared spaces; 5.4 passkey (optional, after 1.0); 4.3 release check. Those cuts save about 8 h of required work (5.4, 4.3, part of 6.4), leaving ≈ 142 h. The owner kept the budget unchanged (2026-11-07); the gap is recorded here so cuts can be made in this order if hours run out.
 
-**1.15 `feat(cpa): run CLIProxyAPI under a supervisor in an askbar-cpa image`, and `chore: delete the name check script`** (S–M, the next step after 1.4) — [ADR 0005](adr/0005-no-controller-and-self-restart.md), [0037](adr/0037-askbar-cpa-image-and-supervisor.md), [0038](adr/0038-names-and-new-components-without-a-name-check.md); both ADRs accepted 2026-11-07. Two concerns, two commits in one PR, as the owner asked.
-- Name check ([ADR 0038](adr/0038-names-and-new-components-without-a-name-check.md)): delete `scripts/check-names.sh` and `scripts/names-allow.txt`; drop the step from `npm test` and from the `npm test` comment in AGENTS.md; AGENTS.md, CONTRIBUTING.md, README.md, `docs/architecture.md` and `docs/style/naming.md` stop pointing at the script; the comment in `services/admin/src/services.rs` says "management API" again (CLIProxyAPI's own term). Existing `names-ok` markers stay (some are in migration text).
-- `services/cpa-supervisor` (binary `askbar-cpa-supervisor`) and a `cpa` Dockerfile target `FROM` the pinned digest; compose builds `askbar-cpa` instead of pulling the image. Restart on a `config.yaml` change, on `restart-request`, and after a crash with backoff; at most one restart per 5 s; `restart-done` echoes the request; stop signals passed on.
-- Admin: the Services tab's `cpa` Restart writes `restart-request` and waits for `restart-done` and the API (replaces the 409 and the host command); no host step when the control secret is replaced.
-- Isolation: the supervisor is the main process; a restart from the admin restarts CLIProxyAPI without restarting the container; networks, ports and volumes unchanged. Test a real login against the image.
-- A new dependency? The supervisor needs signal handling: `libc` (MIT/Apache, already in `Cargo.lock` through tokio), reason given in the PR.
-
 **1.8 `feat(admin): first run with published credentials and a forced password change`** (M) — [ADR 0007](adr/0007-first-run-and-admin-sign-in.md)
 - Initial `admin`/documented password; every route except password change refuses until changed; reject the default and username-equal passwords; host reset command (`docker compose run --rm admin reset`) recorded. Login lockout, rate limits, identical errors (Defend list, [ADR 0016](adr/0016-risk-register.md)).
 - Wizard: password → audit passphrase → (backup passphrase added in 6.1) → optional URL/DNS → providers → user and pairing key.
+- Built so: the wizard ends with a list of next steps (Network, Providers, Clients); 1.9 adds the user step to it. The host reset is `docker compose exec admin askbar-admin reset` (`run --rm` clashes with a running admin's fixed address).
 
 **1.9 `feat: users and pairing keys created in the admin`** (M) — [ADR 0008](adr/0008-users-clients-and-client-access.md), 0022
 - Admin keeps users; `POST /api/admin/v1/users`, `POST /api/admin/v1/users/{id}/pairing-keys`; server receives users in config; pairing registers a client for an existing user. `POST /api/client/v1/me/pairing-keys` for extra clients; client UI "Pair another app". Rename "pairing string/code" to "pairing key" in UI and docs.
+- Add "create a user" to the first-run next-steps list (1.8), before Clients.
 
 **1.11 `feat: spaces with one SQLite file each`** (L) — [ADR 0009](adr/0009-spaces-and-storage.md) (wipe and re-pair)
 - Server: `control.db` (users, clients, pairing hashes, spaces, memberships, budget copy) and one file per space under `/data/spaces/`; a `SpaceStore` handed to handlers only after a membership check; migrations run on every file. Drop the unused `projects` table.

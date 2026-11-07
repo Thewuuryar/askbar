@@ -48,36 +48,23 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [password_set, audit_key_set]
+                required: [password_change_required, audit_key_set]
                 properties:
-                  password_set:
+                  password_change_required:
                     type: boolean
+                    description: The published first-run password (ADR 0007) is still in use and must be changed.
                   audit_key_set:
                     type: boolean
-  /api/admin/v1/setup/password:
-    put:
-      operationId: setPassword
-      summary: "First run: choose the admin password and be signed in."
-      description: Refused with 409 once a password exists. At least 10 characters.
-      security: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/PasswordBody'
-      responses:
-        '204':
-          description: Set; the session cookie is set.
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '409':
-          $ref: '#/components/responses/Conflict'
   /api/admin/v1/session:
     post:
       operationId: signIn
-      summary: Sign in with the admin password.
-      description: Sets the `__Secure-askbar_admin` session cookie (Secure, HttpOnly, SameSite=Strict, Path=/api/admin). Five wrong attempts in 15 minutes lock sign-in out for 15 minutes (429 with Retry-After); wrong admin API keys count toward the same lock.
+      summary: Sign in as `admin` with the admin password.
+      description: >-
+        On a first start (and after the host command `askbar-admin reset`) the login is the published one,
+        `admin` / `admin` (ADR 0007), and every signed-in route except this one, `GET` and `DELETE
+        /session` and `PUT /password` answers 403 `password_change_required` until the password is changed.
+        `username` is optional; a wrong username and a wrong password get the same answer. Sets the
+        `__Secure-askbar_admin` session cookie (Secure, HttpOnly, SameSite=Strict, Path=/api/admin). Five wrong attempts in 15 minutes lock sign-in out for 15 minutes (429 with Retry-After); wrong admin API keys count toward the same lock.
       security: []
       requestBody:
         required: true
@@ -118,6 +105,9 @@ paths:
     put:
       operationId: changePassword
       summary: Change the admin password. Other sessions are signed out.
+      description: >-
+        At least 10 characters, and not the published first-run password, the username (`admin`) or the
+        current password (400). Clears `password_change_required`.
       security:
         - adminSession: []
       requestBody:
@@ -1231,6 +1221,7 @@ components:
           - api_key_exists
           - setup_required
           - not_configured
+          - password_change_required
           - server_unavailable
           - conflict
           - internal
@@ -1238,6 +1229,9 @@ components:
       type: object
       required: [password]
       properties:
+        username:
+          type: string
+          description: Optional; `admin` when given.
         password:
           type: string
     ChangePassword:

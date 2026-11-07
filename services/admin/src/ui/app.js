@@ -77,25 +77,27 @@
     for (const id of ['app', 'login', 'setup']) show($(id), false);
   }
 
-  // First run: choose a password.
-  function showSetup() {
+  // First run (ADR 0007): signed in with the published password, change it before anything else.
+  function showPasswordChange() {
     hideAll();
     show($('setup'), true);
+    show($('setup-audit-form'), false);
+    show($('setup-audit-done'), false);
     show($('setup-password-form'), true);
-    $('setup-password').focus();
+    $('setup-current').focus();
   }
 
-  async function route() {
-    let status;
-    try { status = await api('GET', '/api/admin/v1/setup'); } catch (_) { status = { password_set: true }; }
-    if (!status.password_set) return showSetup();
+  async function route(afterTab) {
     let signedIn = true;
     try { await api('GET', '/api/admin/v1/session'); } catch (_) { signedIn = false; }
     if (!signedIn) return showLogin();
+    let status;
+    try { status = await api('GET', '/api/admin/v1/setup'); } catch (_) { status = {}; }
+    if (status.password_change_required) return showPasswordChange();
     // The audit passphrase is part of setup: without a key the server records nothing it may keep,
     // and refuses to start replies. An install from before audit keys is asked on its next visit.
     if (status.audit_key_set === false) return showAuditSetup();
-    showApp();
+    showApp(afterTab);
   }
 
   function showAuditSetup() {
@@ -129,6 +131,9 @@
     }
   });
   $('setup-audit-continue').addEventListener('click', () => route());
+  for (const a of document.querySelectorAll('#setup-next a')) {
+    a.addEventListener('click', (e) => { e.preventDefault(); route(a.dataset.tab); });
+  }
 
   $('setup-password-form').addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -140,9 +145,8 @@
       return;
     }
     try {
-      await api('PUT', '/api/admin/v1/setup/password', { password: $('setup-password').value });
-      $('setup-password').value = '';
-      $('setup-password2').value = '';
+      await api('PUT', '/api/admin/v1/password', { current: $('setup-current').value, new: $('setup-password').value });
+      for (const id of ['setup-current', 'setup-password', 'setup-password2']) $(id).value = '';
       route();
     } catch (ex) {
       err.textContent = ex.message;
@@ -166,11 +170,11 @@
     } catch (_) { /* signed out, or the admin itself is away */ }
   }
 
-  function showApp() {
+  function showApp(tab) {
     hideAll();
     show($('app'), true);
     renderNav();
-    openTab(tabs[0].id);
+    openTab(tabs.some((t) => t.id === tab) ? tab : tabs[0].id);
     checkServer();
     if (!statusTimer) statusTimer = setInterval(() => { if (!$('app').hidden) checkServer(); }, 5000);
   }
@@ -180,12 +184,10 @@
     const err = $('login-error');
     show(err, false);
     try {
-      await api('POST', '/api/admin/v1/session', { password: $('password').value });
+      await api('POST', '/api/admin/v1/session', { username: $('username').value, password: $('password').value });
       route();
     } catch (ex) {
-      err.textContent = ex.status === 429 ? 'Too many attempts. Try again later.'
-        : ex.status === 503 ? 'No admin password is set yet. Reload this page to set one up.'
-        : 'Wrong password.';
+      err.textContent = ex.status === 429 ? 'Too many attempts. Try again later.' : 'Wrong username or password.';
       show(err, true);
     }
   });

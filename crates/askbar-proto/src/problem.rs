@@ -34,12 +34,13 @@ pub enum ErrorCode {
     SetupRequired,
     ServerUnavailable,
     NotConfigured,
+    PasswordChangeRequired,
     Conflict,
     Internal,
 }
 
 impl ErrorCode {
-    pub const ALL: [ErrorCode; 20] = [
+    pub const ALL: [ErrorCode; 21] = [
         ErrorCode::QueueFull,
         ErrorCode::BudgetExceeded,
         ErrorCode::KillSwitch,
@@ -58,6 +59,7 @@ impl ErrorCode {
         ErrorCode::SetupRequired,
         ErrorCode::ServerUnavailable,
         ErrorCode::NotConfigured,
+        ErrorCode::PasswordChangeRequired,
         ErrorCode::Conflict,
         ErrorCode::Internal,
     ];
@@ -83,6 +85,7 @@ impl ErrorCode {
             ErrorCode::SetupRequired => "setup_required",
             ErrorCode::ServerUnavailable => "server_unavailable",
             ErrorCode::NotConfigured => "not_configured",
+            ErrorCode::PasswordChangeRequired => "password_change_required",
             ErrorCode::Conflict => "conflict",
             ErrorCode::Internal => "internal",
         }
@@ -97,7 +100,7 @@ impl ErrorCode {
             ErrorCode::ClientTooOld => 426,
             ErrorCode::ClientVersionMissing | ErrorCode::BadRequest => 400,
             ErrorCode::Unauthorized => 401,
-            ErrorCode::Forbidden => 403,
+            ErrorCode::Forbidden | ErrorCode::PasswordChangeRequired => 403,
             ErrorCode::NotFound => 404,
             ErrorCode::MethodNotAllowed => 405,
             ErrorCode::PayloadTooLarge => 413,
@@ -127,6 +130,7 @@ impl ErrorCode {
             ErrorCode::SetupRequired => "Setup is not finished",
             ErrorCode::ServerUnavailable => "The Askbar server cannot be reached",
             ErrorCode::NotConfigured => "The service has not received its settings yet",
+            ErrorCode::PasswordChangeRequired => "Change the admin password first",
             ErrorCode::Conflict => "Conflict",
             ErrorCode::Internal => "Something went wrong on the server",
         }
@@ -246,9 +250,9 @@ mod tests {
                 ErrorCode::QueueFull | ErrorCode::BudgetExceeded | ErrorCode::KillSwitch | ErrorCode::AuditKeyMissing | ErrorCode::AuditBacklog
                 | ErrorCode::ClientTooOld | ErrorCode::ClientVersionMissing | ErrorCode::Unauthorized | ErrorCode::Forbidden | ErrorCode::NotFound
                 | ErrorCode::MethodNotAllowed | ErrorCode::BadRequest | ErrorCode::PayloadTooLarge | ErrorCode::TooManyAttempts
-                | ErrorCode::ApiKeyExists | ErrorCode::SetupRequired | ErrorCode::ServerUnavailable | ErrorCode::NotConfigured | ErrorCode::Conflict | ErrorCode::Internal => {}
+                | ErrorCode::ApiKeyExists | ErrorCode::SetupRequired | ErrorCode::ServerUnavailable | ErrorCode::NotConfigured | ErrorCode::PasswordChangeRequired | ErrorCode::Conflict | ErrorCode::Internal => {}
             }
         }
-        assert_eq!(ErrorCode::ALL.len(), 20);
+        assert_eq!(ErrorCode::ALL.len(), 21);
     }
 }

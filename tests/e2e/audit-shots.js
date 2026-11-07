@@ -55,7 +55,8 @@ async function waitForPort(port) {
     const t = await r.text();
     return { status: r.status, body: t ? JSON.parse(t) : null };
   };
-  await admin('PUT', '/api/admin/v1/setup/password', { password: PASSWORD });
+  await admin('POST', '/api/admin/v1/session', { username: 'admin', password: 'admin' });
+  await admin('PUT', '/api/admin/v1/password', { current: 'admin', new: PASSWORD });
   await admin('PUT', '/api/admin/v1/setup/audit-key', { passphrase: AUDIT_PASS, confirm: AUDIT_PASS });
   const mock = `http://127.0.0.1:${mockPort}/v1`;
   const mk = (name, extra = {}) => admin('POST', '/api/admin/v1/providers', { name, type: 'openai', base_url: mock, model: 'mock-model', api_key: 'sk-x', ...extra });

@@ -89,20 +89,36 @@ async function waitForPort(port) {
     await reread;
   }
 
-  await step('first run shows the setup wizard, not a login form', async () => {
+  await step('first run: sign in with the published login (ADR 0007)', async () => {
     await page.goto(base);
-    await page.waitForSelector('#setup:not([hidden])');
-    assert.equal(await page.isVisible('#setup-password-form'), true);
-    assert.equal(await page.isHidden('#login'), true);
-    assert.equal(await page.isHidden('#app'), true);
+    await page.waitForSelector('#login:not([hidden])');
+    assert.equal(await page.inputValue('#username'), 'admin');
+    await page.fill('#username', 'root');
+    await page.fill('#password', 'admin');
+    await page.click('#login-form button');
+    await page.waitForSelector('#login-error:not([hidden])');
+    assert.match(await page.innerText('#login-error'), /Wrong username or password/, 'a wrong name gets the same answer as a wrong password');
+    await page.fill('#username', 'admin');
+    await page.fill('#password', 'admin');
+    await page.click('#login-form button');
+    await page.waitForSelector('#setup-password-form:not([hidden])');
+    assert.equal(await page.isHidden('#app'), true, 'nothing else opens before the password is changed');
   });
   const AUDIT_PASS = 'correct horse battery staple 42';
-  await step('setup: the password must match and be long enough, then the audit passphrase step opens', async () => {
+  await step('setup: the published password must be changed, to something else, then the audit passphrase step opens', async () => {
+    await page.fill('#setup-current', 'admin');
     await page.fill('#setup-password', PASSWORD);
     await page.fill('#setup-password2', PASSWORD + 'x');
     await page.click('#setup-password-form button[type=submit]');
     await page.waitForSelector('#setup-password-error:not([hidden])');
     assert.match(await page.innerText('#setup-password-error'), /do not match/);
+    // The published password (`admin`) as the new one is refused (by the server too, not only the form).
+    await page.evaluate(() => { document.getElementById('setup-password-form').noValidate = true; });
+    await page.fill('#setup-password', 'admin');
+    await page.fill('#setup-password2', 'admin');
+    await page.click('#setup-password-form button[type=submit]');
+    await page.waitForFunction(() => /at least 10/.test(document.getElementById('setup-password-error').textContent));
+    await page.fill('#setup-password', PASSWORD);
     await page.fill('#setup-password2', PASSWORD);
     await page.click('#setup-password-form button[type=submit]');
     await page.waitForSelector('#setup-audit-form:not([hidden])');
@@ -140,6 +156,7 @@ async function waitForPort(port) {
     assert.match(keyId, /^[0-9a-f]{16}$/);
     assert.equal(await page.inputValue('#setup-audit').catch(() => ''), '', 'the passphrase field is cleared');
     assert.equal((await page.content()).includes(AUDIT_PASS), false, 'the passphrase is not left in the page');
+    assert.match(await page.innerText('#setup-next'), /Network[\s\S]*Providers[\s\S]*Clients/, 'the next steps, in order');
     await page.click('#setup-audit-continue');
     await page.waitForSelector('#app:not([hidden])');
     assert.equal(await page.isHidden('#setup'), true);
@@ -162,7 +179,7 @@ async function waitForPort(port) {
     await page.fill('#password', 'nope');
     await page.click('#login-form button');
     await page.waitForSelector('#login-error:not([hidden])');
-    assert.match(await page.innerText('#login-error'), /Wrong password/);
+    assert.match(await page.innerText('#login-error'), /Wrong username or password/);
     await page.fill('#password', PASSWORD);
     await page.click('#login-form button');
     await page.waitForSelector('#app:not([hidden])');
