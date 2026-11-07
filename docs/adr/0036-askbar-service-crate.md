@@ -1,6 +1,6 @@
 # 0036. The `askbar-service` crate
 
-Status: Proposed
+Status: Accepted
 Date: 2026-11-07
 Source: plan step 1.3 ([plan-v1.md](../plan-v1.md)); owner rule that every new component gets an ADR before it is created
 
