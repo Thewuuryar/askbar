@@ -13,6 +13,10 @@ info:
     unreadable value is 400 `client_version_missing`; one older than `min_client` is 426 `client_too_old`.
     The gate runs before the token is checked.
 
+    **Not configured.** Until the admin has pushed configuration for the first time, every request
+    except `GET /health` answers 503 `not_configured` with `Retry-After: 5`, after the version gate and
+    before the token is checked (ADR 0028).
+
     **The old prefix.** Anything under `/api/v1` answers 426 `client_too_old`, whatever the method; nothing
     else of that API exists. It is not described here.
 
@@ -491,6 +495,7 @@ components:
           - too_many_attempts
           - api_key_exists
           - setup_required
+          - not_configured
           - server_unavailable
           - conflict
           - internal

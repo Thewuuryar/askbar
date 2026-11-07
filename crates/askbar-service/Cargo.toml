@@ -1,0 +1,19 @@
+[package]
+name = "askbar-service"
+license = "AGPL-3.0-or-later"
+version = "0.5.0"
+edition = "2021"
+description = "What every Askbar service shares: per-link token checks, status, and the not-configured gate"
+
+[dependencies]
+askbar-proto = { path = "../askbar-proto", features = ["axum"] }
+axum = "0.8"
+serde_json = "1"
+sha2 = "0.10"
+subtle = "2"
+tokio = { version = "1", features = ["rt"] }
+ulid = "1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
+reqwest = { version = "0.12", default-features = false, features = ["json"] }

@@ -1287,6 +1287,7 @@ components:
           - too_many_attempts
           - api_key_exists
           - setup_required
+          - not_configured
           - server_unavailable
           - conflict
           - internal

@@ -340,13 +340,22 @@ generation and never loses the typed text. Caddy answers a path nothing serves w
 
 (There is no setup mode: the server creates its master key on first start.)
 
+**Not configured yet.** Until the admin has pushed configuration for the first time, every client
+route except `GET /health` (and the old `/api/v1`) answers 503 `not_configured` with
+`Retry-After: 5` ([ADR 0028](adr/0028-service-boundaries-and-config-delivery.md) rule 3). The
+order is the version gate, then this, then the token: an app is never told its token is refused
+while the server waits for its settings. The configuration is stored in `server.db`, so a
+restarted server stays configured; only one on an empty volume answers this, for the few seconds
+until the admin's next status check (every 12 s) pushes it.
+
 ## What the desktop client does with them
 
 - The app tells a refusal by its `error` code, never by its words: `queue_full`,
   `budget_exceeded` (`period` picks "today" or "this month"), `kill_switch` and
   `audit_key_missing` each show their own sentence and keep the message in the outbox; nothing is
   retried by itself.
-- `audit_backlog` (with `Retry-After`) is tried once more after that many seconds; if it is
-  refused again the message waits for the person.
+- `audit_backlog` and `not_configured` (with `Retry-After`) are tried once more after that many
+  seconds; if it is refused again the message waits for the person. The status check shows a 503
+  as "setup pending" and keeps the token.
 - A reply whose `error` event has `code` `timed_out` is shown as "Stopped after ..." with the text
   that had arrived, and the app offers to ask again as a new reply.

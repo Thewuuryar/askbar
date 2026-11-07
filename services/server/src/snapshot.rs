@@ -102,6 +102,11 @@ pub fn in_client_order(s: &Snapshot) -> Vec<askbar_proto::SnapshotProvider> {
     out
 }
 
+/// True once the admin service has pushed a snapshot. Cheaper than `current`: nothing is parsed.
+pub fn exists(db: &Db) -> bool {
+    db.conn().query_row("SELECT 1 FROM config_snapshot WHERE id = 1", [], |_| Ok(())).optional().ok().flatten().is_some()
+}
+
 /// The stored snapshot, or `None' before the admin service has pushed one. Read-only.
 pub fn current(db: &Db) -> rusqlite::Result<Option<Snapshot>> {
     let row: Option<(i64, String)> = db

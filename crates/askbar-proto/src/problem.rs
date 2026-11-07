@@ -33,12 +33,13 @@ pub enum ErrorCode {
     ApiKeyExists,
     SetupRequired,
     ServerUnavailable,
+    NotConfigured,
     Conflict,
     Internal,
 }
 
 impl ErrorCode {
-    pub const ALL: [ErrorCode; 19] = [
+    pub const ALL: [ErrorCode; 20] = [
         ErrorCode::QueueFull,
         ErrorCode::BudgetExceeded,
         ErrorCode::KillSwitch,
@@ -56,6 +57,7 @@ impl ErrorCode {
         ErrorCode::ApiKeyExists,
         ErrorCode::SetupRequired,
         ErrorCode::ServerUnavailable,
+        ErrorCode::NotConfigured,
         ErrorCode::Conflict,
         ErrorCode::Internal,
     ];
@@ -80,6 +82,7 @@ impl ErrorCode {
             ErrorCode::ApiKeyExists => "api_key_exists",
             ErrorCode::SetupRequired => "setup_required",
             ErrorCode::ServerUnavailable => "server_unavailable",
+            ErrorCode::NotConfigured => "not_configured",
             ErrorCode::Conflict => "conflict",
             ErrorCode::Internal => "internal",
         }
@@ -90,7 +93,7 @@ impl ErrorCode {
         match self {
             ErrorCode::QueueFull | ErrorCode::ApiKeyExists | ErrorCode::Conflict => 409,
             ErrorCode::BudgetExceeded | ErrorCode::TooManyAttempts => 429,
-            ErrorCode::KillSwitch | ErrorCode::AuditKeyMissing | ErrorCode::AuditBacklog | ErrorCode::SetupRequired => 503,
+            ErrorCode::KillSwitch | ErrorCode::AuditKeyMissing | ErrorCode::AuditBacklog | ErrorCode::SetupRequired | ErrorCode::NotConfigured => 503,
             ErrorCode::ClientTooOld => 426,
             ErrorCode::ClientVersionMissing | ErrorCode::BadRequest => 400,
             ErrorCode::Unauthorized => 401,
@@ -123,6 +126,7 @@ impl ErrorCode {
             ErrorCode::ApiKeyExists => "An API key already exists",
             ErrorCode::SetupRequired => "Setup is not finished",
             ErrorCode::ServerUnavailable => "The Askbar server cannot be reached",
+            ErrorCode::NotConfigured => "The service has not received its settings yet",
             ErrorCode::Conflict => "Conflict",
             ErrorCode::Internal => "Something went wrong on the server",
         }
@@ -230,6 +234,7 @@ mod tests {
         assert_eq!(status(ErrorCode::TooManyAttempts), 429);
         assert_eq!(status(ErrorCode::ApiKeyExists), 409);
         assert_eq!(status(ErrorCode::ServerUnavailable), 502);
+        assert_eq!(status(ErrorCode::NotConfigured), 503);
         assert_eq!(status(ErrorCode::Internal), 500);
     }
 
@@ -241,9 +246,9 @@ mod tests {
                 ErrorCode::QueueFull | ErrorCode::BudgetExceeded | ErrorCode::KillSwitch | ErrorCode::AuditKeyMissing | ErrorCode::AuditBacklog
                 | ErrorCode::ClientTooOld | ErrorCode::ClientVersionMissing | ErrorCode::Unauthorized | ErrorCode::Forbidden | ErrorCode::NotFound
                 | ErrorCode::MethodNotAllowed | ErrorCode::BadRequest | ErrorCode::PayloadTooLarge | ErrorCode::TooManyAttempts
-                | ErrorCode::ApiKeyExists | ErrorCode::SetupRequired | ErrorCode::ServerUnavailable | ErrorCode::Conflict | ErrorCode::Internal => {}
+                | ErrorCode::ApiKeyExists | ErrorCode::SetupRequired | ErrorCode::ServerUnavailable | ErrorCode::NotConfigured | ErrorCode::Conflict | ErrorCode::Internal => {}
             }
         }
-        assert_eq!(ErrorCode::ALL.len(), 19);
+        assert_eq!(ErrorCode::ALL.len(), 20);
     }
 }

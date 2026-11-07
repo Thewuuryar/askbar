@@ -242,3 +242,41 @@ async fn pushing_retries_until_the_server_is_up_and_follows_later_changes() {
     }
     assert!(applied(2), "the change was pushed");
 }
+
+#[tokio::test]
+async fn the_status_check_asks_for_a_push_when_the_server_is_unconfigured_or_out_of_date() {
+    // ADR 0028 rule 4: read GET /status, and push when unconfigured, out of date, or a new process.
+    let d = Dirs::new("status");
+    let token = server_link::ensure_token(&d.secrets, &d.server_api).unwrap();
+    let hash = d.server_api.join(server_link::HASH_FILE);
+    let db = admin_db_with_data();
+    let snap = || server_link::build_snapshot(db.conn()).unwrap();
+    let state = server_state();
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = l.local_addr().unwrap();
+    serve_on(l, state.clone(), hash.clone()).await;
+    let link = ServerLink::new(&format!("http://{addr}"), token.clone());
+
+    assert_eq!(link.poll().await, Some(true), "never configured: push");
+    link.push(&snap()).await.unwrap();
+    assert_eq!(link.poll().await, Some(false), "in step: nothing to do");
+    assert_eq!(link.poll().await, Some(false));
+
+    // Another admin (or a restore) pushed a different version: this one's is no longer current.
+    askbar_server::testing::update_snapshot(&state.db.lock().unwrap(), |_| {});
+    assert_eq!(link.poll().await, Some(true), "out of date: push");
+    link.push(&snap()).await.unwrap();
+    assert_eq!(link.poll().await, Some(false));
+
+    // The config is lost (a new volume): the version reads null.
+    state.db.lock().unwrap().conn().execute("DELETE FROM config_snapshot", []).unwrap();
+    assert_eq!(link.poll().await, Some(true), "unconfigured again: push");
+    link.push(&snap()).await.unwrap();
+    assert_eq!(link.poll().await, Some(false));
+
+    // A new process (another boot ID) is covered by the unit tests of `needs_push` in server_link.rs.
+
+    // Offline: no answer.
+    let dead = ServerLink::new(&format!("http://{}", free_port().await), token);
+    assert_eq!(dead.poll().await, None);
+}

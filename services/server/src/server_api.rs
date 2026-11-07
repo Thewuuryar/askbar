@@ -1,27 +1,26 @@
 //! The server API listener: a small HTTP API for the admin service, on its own
 //! address and its own router. The client API and this one share no routes.
 //!
-//! Every request carries `Authorization: Bearer <token>`. The server never holds the
-//! token, only its SHA-256, which the admin service writes to a file the server mounts
-//! read-only. The file is read on every request, so a replaced hash takes effect at once,
-//! and if it is missing or unreadable every request is refused (fail closed).
+//! Every request carries `Authorization: Bearer <token>`, checked per link by
+//! `askbar_service::links`: the server never holds the token, only its SHA-256, which the
+//! admin service writes to a file the server mounts read-only. The file is read on every
+//! request, so a replaced hash takes effect at once, and if it is missing or unreadable every
+//! request is refused (fail closed).
 
 use crate::error::{ApiError, ApiJson};
 use crate::AppState;
 use askbar_proto::problem::ErrorCode;
 use askbar_proto::Snapshot;
 use axum::{
-    extract::{Path, Request, State},
-    http::{header, StatusCode},
-    middleware::{self, Next},
+    extract::{Path, State},
+    http::StatusCode,
+    middleware,
     response::Response,
     Json, Router,
 };
-use sha2::{Digest, Sha256};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use subtle::ConstantTimeEq;
 
 /// Where the SHA-256 (hex) of the server token is.
 pub fn token_hash_path() -> PathBuf {
@@ -51,41 +50,12 @@ pub fn check_not_wildcard(addr: &SocketAddr) -> Result<(), String> {
     Ok(())
 }
 
-#[derive(Clone)]
-struct Guard {
-    hash_file: PathBuf,
-}
-
-fn sha256_hex(s: &str) -> String {
-    Sha256::digest(s.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
-}
-
-/// True only if the file holds a well-formed hash and the token hashes to it.
-fn token_matches(hash_file: &std::path::Path, token: &str) -> bool {
-    let Ok(stored) = std::fs::read_to_string(hash_file) else { return false };
-    let stored = stored.trim().to_ascii_lowercase();
-    if stored.len() != 64 || !stored.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return false;
-    }
-    sha256_hex(token).as_bytes().ct_eq(stored.as_bytes()).into()
-}
-
-async fn require_token(State(guard): State<Guard>, req: Request, next: Next) -> Result<Response, ApiError> {
-    let token = req
-        .headers()
-        .get(header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.split_once(' '))
-        .filter(|(scheme, t)| scheme.eq_ignore_ascii_case("bearer") && !t.trim().is_empty())
-        .map(|(_, t)| t.trim().to_string())
-        .ok_or_else(|| ApiError::new(ErrorCode::Unauthorized, "Send the server token as `Authorization: Bearer <token>`."))?;
-    let file = guard.hash_file.clone();
-    let ok = tokio::task::spawn_blocking(move || token_matches(&file, &token)).await.unwrap_or(false);
-    if ok {
-        Ok(next.run(req).await)
-    } else {
-        Err(ApiError::new(ErrorCode::Unauthorized, "The server does not accept this token."))
-    }
+/// The links that may call the server API (ADR 0004): today only the admin, on every route of
+/// this listener (a path that is no route is then a 404). Each later caller gets its own link and
+/// only its own routes here.
+pub fn links(hash_file: PathBuf) -> askbar_service::links::Links {
+    use askbar_service::links::{Allow, Link, Links};
+    Links::new(vec![Link { caller: "admin", hash_file, allow: vec![Allow::any("/**")] }])
 }
 
 /// Replace the configuration snapshot. The version in the body is ignored; the server
@@ -302,7 +272,7 @@ async fn status(State(state): State<Arc<AppState>>) -> Result<Json<serde_json::V
         let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
         crate::snapshot::current(&db).map_err(|_| ApiError::code(ErrorCode::Internal))?.map(|s| s.version)
     };
-    Ok(Json(serde_json::json!({ "config_version": version, "boot_id": state.boot_id })))
+    Ok(Json(askbar_service::status::body(version, &state.boot_id)))
 }
 
 /// The database as a download, with provider keys, the Cloudflare token, the admin password
@@ -317,9 +287,9 @@ pub fn routes() -> crate::routes::Routes {
     // Every route is under `/api/server/v1` (askbar_proto::paths::SERVER_V1).
     let v1 = |rest: &str| askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, rest);
     Routes::new()
-        .get(&v1("/health"), || async { StatusCode::OK })
-        .get(&v1("/status"), status)
-        .put(&v1("/config"), put_snapshot)
+        .get(&v1(askbar_service::routes::HEALTH), || async { StatusCode::OK })
+        .get(&v1(askbar_service::routes::STATUS), status)
+        .put(&v1(askbar_service::routes::CONFIG), put_snapshot)
         .put(&v1("/providers/{id}/key"), put_provider_key)
         .get(&v1("/providers/health"), providers_health)
         .post(&v1("/providers/{id}/test"), test_provider)
@@ -342,6 +312,6 @@ pub fn router(state: Arc<AppState>, hash_file: PathBuf) -> Router {
     router
         .fallback(crate::error::not_found)
         .method_not_allowed_fallback(crate::error::method_not_allowed)
-        .layer(middleware::from_fn_with_state(Guard { hash_file }, require_token))
+        .layer(middleware::from_fn_with_state(links(hash_file), askbar_service::links::require))
         .with_state(state)
 }
