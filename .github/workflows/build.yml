@@ -23,28 +23,39 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            clients/desktop
 
       - uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      - name: Rust tests
+      - name: Rust tests (services and crates)
+        run: cargo test --workspace
+
+      - name: Rust tests (desktop client)
+        working-directory: clients/desktop
         run: cargo test --workspace
 
       - name: Markdown renderer tests
+        working-directory: clients/desktop
         run: node tests/markdown.test.js
 
       - name: Install JS dependencies
+        working-directory: clients/desktop
         run: npm install
 
       - name: Build the app
+        working-directory: clients/desktop
         run: npm run build
 
       - uses: actions/upload-artifact@v4
         with:
           name: askbar-${{ matrix.os }}
           path: |
-            target/release/bundle/**/*
+            clients/desktop/target/release/bundle/**/*
 
   images:
     # The server and admin container images build, start and answer their own health checks.

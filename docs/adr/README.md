@@ -38,4 +38,4 @@ This set records the decisions from the original Askbar architecture plan (kept 
 | [0032](0032-container-hardening.md) | Container hardening | Accepted | Required by v1 decisions |
 | [0033](0033-repository-layout.md) | Repository layout | Accepted | Owner request with the v1 plan |
 | [0034](0034-self-signed-https-and-certificate-pinning.md) | Self-signed HTTPS and certificate pinning | Accepted | Required by 0007; owner choice in the v1 plan |
-| [0035](0035-editorial-edits-to-accepted-adrs.md) | Editorial edits to accepted ADRs | Proposed | Owner review of the v1 layout change |
+| [0035](0035-editorial-edits-to-accepted-adrs.md) | Editorial edits to accepted ADRs | Accepted | Owner review of the v1 layout change |
