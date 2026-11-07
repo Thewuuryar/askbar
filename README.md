@@ -23,6 +23,8 @@ mkdir -p data
 docker compose up -d --build
 ```
 
+To stop it, or before rebuilding after an update, use `docker compose --profile dev down --remove-orphans`. With `--profile dev`, the mock LLM is removed as well; without it, a dev container left behind can point at a network that no longer exists.
+
 1. Open **https://localhost/admin** on the machine that runs Docker, or `https://<its address>/admin` from another machine on your network, and accept the certificate warning (the install uses its own certificate until you set a host name).
 2. Sign in with the published login, **`admin` / `admin`**, and change the password.
 3. Choose the **audit passphrase**: at least 20 characters, and it cannot be recovered. It seals what the server records about replies; see *The Audit tab*.
