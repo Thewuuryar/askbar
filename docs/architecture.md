@@ -33,7 +33,7 @@ Third-party components keep their product name (`caddy`, `cpa`). After v1, these
 | **settings** / **snapshot** | settings: what the owner edits in the admin. Snapshot: the object pushed to a service |
 | **audit** / **trace** / **span** | audit: the feature. Trace: the record of one reply. Span: one step in it |
 
-Retired names for Askbar's own roles: "management" and "mgmt" (now **server**), "device" (now **client**). Reviewers check for them ([ADR 0038](adr/0038-names-and-new-components-without-a-name-check.md)); the words are fine in their ordinary meaning.
+Retired words, refused by `scripts/check-names.sh`: "management" and "mgmt" (now **server**), "device" (now **client**).
 
 ## Picture
 

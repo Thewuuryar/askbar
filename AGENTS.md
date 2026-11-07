@@ -46,7 +46,7 @@ Before you finish: `npm test` and `scripts/smoke.sh` pass. If you touched `compo
 - Never rename a Docker volume that holds data. Never edit an earlier database migration; append.
 - After 1.0, within `/api/client/v1`, never remove or rename a field, endpoint or error code. Add only.
 - The admin site writes text with `textContent`, never `innerHTML`, and keeps its CSP. In the popup, only `renderMarkdown` output may reach `innerHTML`.
-- Use the names in the [glossary](docs/architecture.md#glossary).
+- Use the names in the [glossary](docs/architecture.md#glossary). `scripts/check-names.sh` refuses the old words.
 - Do not loosen or delete a test unless the contract changed, and say so in the commit message.
 - Do not add a dependency without saying why in the PR. A new container, image or service, or a dependency outside the license allowlist, also needs an ADR ([ADR 0026](docs/adr/0026-dependency-license-check.md)). `cargo deny check` and the npm license check must pass.
 - Do not change `.github/workflows/` or repository settings without asking.

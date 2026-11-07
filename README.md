@@ -247,7 +247,7 @@ deploy/caddy/          Caddy's bootstrap config
 deploy/cpa/            notes on CLIProxyAPI
 compose.yaml           server, admin, caddy, CLIProxyAPI, plus the dev profile
 Dockerfile             one target per service: `server`, `admin` and `caddy` (Caddy with the Cloudflare DNS module)
-scripts/               smoke.sh (end-to-end), check-isolation.sh (container isolation checks) and check-docs.sh
+scripts/               smoke.sh (end-to-end), check-isolation.sh (container isolation checks), check-names.sh and check-docs.sh
 docs/                  architecture.md, wire-contract.md, adr/, style/, openapi/ (client, server, admin), refactor-log.md
 tests/e2e/             the admin-site browser test and the mock LLM server
 ```

@@ -4,7 +4,7 @@ Everything here is how the code already behaves on `main`, except items marked *
 
 ## The words
 
-Use the component names in the [glossary](../architecture.md#glossary) in paths, variables, UI text and docs. The glossary also defines the other terms (user, provider, account, token and key). A new component gets a name and an ADR before it exists ([ADR 0021](../adr/0021-names-and-new-components.md)). Reviewers keep the retired names out of Askbar's own roles ([ADR 0038](../adr/0038-names-and-new-components-without-a-name-check.md)); there is no script, and existing `names-ok` markers have no effect.
+Use the component names in the [glossary](../architecture.md#glossary) in paths, variables, UI text and docs. The glossary also defines the other terms (user, provider, account, token and key). A new component gets a name and an ADR before it exists ([ADR 0021](../adr/0021-names-and-new-components.md)). The old words are refused by `scripts/check-names.sh`. A line that must use one (a migration, an old path in a test) carries `names-ok` and a reason; whole files are listed in `scripts/names-allow.txt`.
 
 ## Code
 
