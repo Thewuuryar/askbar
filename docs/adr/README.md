@@ -39,4 +39,4 @@ This set records the decisions from the original Askbar architecture plan (kept 
 | [0033](0033-repository-layout.md) | Repository layout | Accepted | Owner request with the v1 plan |
 | [0034](0034-self-signed-https-and-certificate-pinning.md) | Self-signed HTTPS and certificate pinning | Accepted | Required by 0007; owner choice in the v1 plan |
 | [0035](0035-editorial-edits-to-accepted-adrs.md) | Editorial edits to accepted ADRs | Accepted | Owner review of the v1 layout change |
-| [0036](0036-askbar-service-crate.md) | The `askbar-service` crate | Proposed | Plan step 1.3; owner rule for component ADRs |
+| [0036](0036-askbar-service-crate.md) | The `askbar-service` crate | Accepted | Plan step 1.3; owner rule for component ADRs |
