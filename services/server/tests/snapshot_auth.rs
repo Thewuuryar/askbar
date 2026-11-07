@@ -59,7 +59,6 @@ impl T {
             version: 0,
             providers: vec![],
             default_provider_id: None,
-            fallback_order: vec![],
             system_prompt: None,
             display: DisplaySettings::default(),
             user_display_defaults: Default::default(),

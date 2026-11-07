@@ -354,15 +354,12 @@ async function waitIdle(page) {
     assert.equal(await page.locator('.msg.assistant .body').first().innerText(), 'Partial answer');
   });
 
-  await step('a reply from another provider than the chosen one says who answered', async () => {
+  await step('a provider event never adds an "Answered by" line (there is no fallback)', async () => {
     await page.keyboard.press('Control+n');
-    await ask(page, 'use the fallback please');
+    await ask(page, 'announce another provider please');
     await waitIdle(page);
-    assert.equal(await page.locator('.msg.assistant .served-by').innerText(), 'Answered by Backup AI');
-    await page.keyboard.press('Control+n');
-    await ask(page, 'plain question');
-    await waitIdle(page);
-    assert.equal(await page.locator('.served-by').count(), 0, 'nothing extra when the chosen provider answers');
+    assert.equal(await page.locator('.msg.assistant').count(), 1);
+    assert.doesNotMatch(await page.locator('.msg.assistant').innerText(), /Answered by/);
   });
 
   await step('input stays usable after an error', async () => {

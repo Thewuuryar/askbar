@@ -59,8 +59,8 @@ async function waitForPort(port) {
   await admin('PUT', '/admin/api/v1/setup/audit-key', { passphrase: AUDIT_PASS, confirm: AUDIT_PASS });
   const mock = `http://127.0.0.1:${mockPort}/v1`;
   const mk = (name, extra = {}) => admin('POST', '/admin/api/v1/providers', { name, type: 'openai', base_url: mock, model: 'mock-model', api_key: 'sk-x', ...extra });
-  await mk('Primary mock', { price_in: 2.5, price_out: 10, allow_as_fallback: true });
-  await mk('Backup provider with a really quite long display name to test wrapping', { model: 'm-fallback-model-with-a-long-name', price_in: 1, price_out: 4, allow_as_fallback: true });
+  await mk('Primary mock', { price_in: 2.5, price_out: 10 });
+  await mk('Backup provider with a really quite long display name to test wrapping', { model: 'm-backup-model-with-a-long-name', price_in: 1, price_out: 4 });
   const providers = (await admin('GET', '/admin/api/v1/providers')).body;
   const pid = (n) => providers.find((p) => p.name.startsWith(n)).id;
   await admin('PUT', '/admin/api/v1/settings', { system_prompt: 'x', display: (await admin('GET', '/admin/api/v1/settings')).body.display });

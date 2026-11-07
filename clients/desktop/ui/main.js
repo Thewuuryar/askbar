@@ -300,16 +300,6 @@
     syncChrome();
   }
 
-  function showServedBy(reply, name) {
-    let tag = reply.node.querySelector('.served-by');
-    if (!tag) {
-      tag = document.createElement('div');
-      tag.className = 'served-by';
-      reply.node.insertBefore(tag, reply.node.querySelector('.actions'));
-    }
-    tag.textContent = 'Answered by ' + name;
-  }
-
   // Shows one reply as it streams in. `start(channel)` begins the stream (a new send, or joining
   // one that is already running on the server) and returns the command's promise.
   async function streamInto(reply, start, userMsg) {
@@ -327,8 +317,7 @@
             state.convId = m.conversationId;
             break;
           case 'provider':
-            // Only worth saying when the server used another provider than the one chosen.
-            if (m.name && m.name !== state.provider) showServedBy(reply, m.name);
+            // Always the provider chosen: there is no fallback (ADR 0014), so nothing to show.
             break;
           case 'delta':
             reply.content += m.text;

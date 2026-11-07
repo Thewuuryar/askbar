@@ -545,10 +545,6 @@ components:
             additionalProperties: true
         default_provider_id:
           type: [string, 'null']
-        fallback_order:
-          type: array
-          items:
-            type: string
         system_prompt:
           type: [string, 'null']
         display:

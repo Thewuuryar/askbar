@@ -69,7 +69,6 @@ Order change (owner approved 2026-11-07): the remaining steps keep their numbers
 
 | # | Step | Size | Why here |
 | --- | --- | --- | --- |
-| 1 | 1.10 harden every container | S | Small; every later service starts hardened instead of being retrofitted. Has one known fix (below). |
 | 2 | 1.5 remove provider fallback | S | Independent; shrinks `router.rs` before 1.3 and 3.1 touch or move it. |
 | 3 | 1.1 admin API to `/api/admin/v1` | M | 1.1 and 1.2 both break contracts the admin site, scripts and tests use; back to back keeps the churn in one place. |
 | 4 | 1.2 server API path conventions | S | As above; also renames `PUT /snapshot` to `PUT /config` and adds `GET /status`, which 1.3 builds on. |
@@ -137,10 +136,6 @@ Order change: 1.6 and 1.7 were done first, right after phase 0. Before them a Do
 **1.9 `feat: users and pairing keys created in the admin`** (M) — [ADR 0008](adr/0008-users-clients-and-client-access.md), 0022
 - Admin keeps users; `POST /api/admin/v1/users`, `POST /api/admin/v1/users/{id}/pairing-keys`; server receives users in config; pairing registers a client for an existing user. `POST /api/client/v1/me/pairing-keys` for extra clients; client UI "Pair another app". Rename "pairing string/code" to "pairing key" in UI and docs.
 
-**1.10 `feat(compose): harden every container`** (S) — [ADR 0032](adr/0032-container-hardening.md)
-- `x-hardening` block (`read_only`, `cap_drop: [ALL]`, `no-new-privileges`, `pids_limit`, `mem_limit`, `tmpfs: /tmp`); Caddy keeps `NET_BIND_SERVICE`; `cpa` exceptions documented after testing; `host.docker.internal` moves to `compose.dev.yaml`. Isolation script checks each setting.
-- Known fix: Caddy runs as `0:10001` and reads `/caddy-secrets/self.key`, which the admin writes as uid 10001 with mode 0600 (`services/admin/src/self_cert.rs`). Today that works only through root's `CAP_DAC_OVERRIDE`, which `cap_drop: [ALL]` removes. Write the key 0640 (group 10001, Caddy's group) and test that Caddy still starts and serves 443.
-
 **1.11 `feat: spaces with one SQLite file each`** (L) — [ADR 0009](adr/0009-spaces-and-storage.md) (wipe and re-pair)
 - Server: `control.db` (users, clients, pairing hashes, spaces, memberships, budget copy) and one file per space under `/data/spaces/`; a `SpaceStore` handed to handlers only after a membership check; migrations run on every file. Drop the unused `projects` table.
 - Client API: `GET /spaces`, `/spaces/{space_id}/conversations[/{id}]`, `/spaces/{space_id}/search`, `/spaces/{space_id}/chat`; flat routes removed. Client uses the personal space by default. `MIN_CLIENT` bump, `client.v1.yaml`, `wire-contract.md`.
@@ -162,7 +157,8 @@ Order change: 1.6 and 1.7 were done first, right after phase 0. Before them a Do
 
 **2.1 `feat(bootstrap): create per-link tokens on first start`** (M) — [ADR 0004](adr/0004-bootstrap-and-per-link-tokens.md), 0021
 - `services/bootstrap`: no network, mounts credential volumes only, writes each token to the caller's volume and its hash to the receiver's, exits; `depends_on: condition: service_completed_successfully`. Host rotation: `docker compose run --rm bootstrap rotate [link]`, then restart from the admin.
-- Replace the admin-minted server token (`server-token` volume keeps its name). Links table from architecture.md is the source of truth; unit test the link list.
+- Replace the admin-minted server token (`server-token` volume keeps its name).
+- Learned in 1.10: every container now runs with `cap_drop: [ALL]`, so root can't write or read another uid's files. `bootstrap` must create each token and hash with the owner and mode its reader needs (or run as that reader's uid), and the isolation script's hardening section must list `bootstrap`. Links table from architecture.md is the source of truth; unit test the link list.
 
 **2.2 `feat: alert when a previously accepted token is rejected`** (S) — [ADR 0024](adr/0024-rejected-token-alert.md)
 - Caller records the failure; receiver counts repeated invalid tokens. Delivered as a log + admin banner now, wired to the alerter in 4.2.

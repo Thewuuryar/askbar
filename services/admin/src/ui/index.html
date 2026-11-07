@@ -86,7 +86,6 @@
           <label>Billing
             <select id="p-billing"><option value="metered">metered (paid per token)</option><option value="subscription">subscription (flat plan)</option></select>
           </label>
-          <label class="check"><input id="p-fallback" type="checkbox"> May be used as a fallback when another provider fails (a metered provider is otherwise never used that way)</label>
           <p class="hint">Prices per million tokens, in your own currency. Leave empty if you do not know: cost then shows as unknown, not as zero.</p>
           <label>Input price <input id="p-price-in" type="number" step="any" min="0"></label>
           <label>Output price <input id="p-price-out" type="number" step="any" min="0"></label>
@@ -206,7 +205,7 @@
           <p class="hint empty" id="audit-routing-empty">Pick a request on the Requests view to see how it was routed.</p>
           <div class="table-wrap">
             <table id="audit-attempts" hidden>
-              <thead><tr><th>Provider</th><th>Try</th><th>Standing in for</th><th>Status</th><th>Kind of failure</th><th>Reason</th><th>Latency</th></tr></thead>
+              <thead><tr><th>Provider</th><th>Try</th><th>Status</th><th>Kind of failure</th><th>Reason</th><th>Latency</th></tr></thead>
               <tbody id="audit-attempt-rows"></tbody>
             </table>
           </div>
@@ -214,7 +213,7 @@
           <p class="hint empty" id="audit-routing-overall-empty">No tries recorded in this window yet.</p>
           <div class="table-wrap">
             <table id="audit-routing-table" hidden>
-              <thead><tr><th>Provider</th><th>Tries</th><th>Retries</th><th>Served as fallback</th><th>Failed tries</th><th>Credentials</th></tr></thead>
+              <thead><tr><th>Provider</th><th>Tries</th><th>Retries</th><th>Failed tries</th><th>Credentials</th></tr></thead>
               <tbody id="audit-routing-rows"></tbody>
             </table>
           </div>

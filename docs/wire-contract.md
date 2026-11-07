@@ -62,10 +62,10 @@ Tests check that each file lists exactly the routes the code registers.
 
 `GET /api/client/v1/providers` returns a list of
 `{"id": "<ULID>", "name": "...", "type": "openai" | "anthropic", "model": "..."}`,
-ordered by name. Keys never appear.
+the default provider first, then the rest by name. Keys never appear.
 
 **Providers are addressed by `id`, never by name.** `ChatRequest.provider` and the
-active-provider preference hold an id; a name is not accepted as a fallback (`404`).
+active-provider preference hold an id; a name is not accepted in place of one (`404`).
 
 ## Preferences and display defaults
 
@@ -123,7 +123,7 @@ the server re-emits its own events. Each SSE message has `event:` naming the typ
 | event | data | meaning |
 | --- | --- | --- |
 | `meta` | `{"event":"meta","conversation_id":"<id>","generation_id":"<id>","queued":true}` | always first. The conversation this turn belongs to (new if none was sent) and the generation running it. `queued` appears only when it is true |
-| `provider` | `{"event":"provider","id":"<provider id>","name":"..."}` | which provider is serving the reply; sent before the first delta, and again if a fallback changes it before any text. No SSE `id:` |
+| `provider` | `{"event":"provider","id":"<provider id>","name":"..."}` | which provider is serving the reply: always the one asked for. Sent once, before the first delta. No SSE `id:` |
 | `delta` | `{"event":"delta","text":"..."}` | the next piece of the reply; zero or more. Carries an SSE `id:` line, see below |
 | `done` | `{"event":"done"}` | the reply is complete (also when it was stopped with cancel: the text so far is kept) |
 | `error` | `{"event":"error","message":"...","code":"timed_out"}` | the reply failed or was cut short; the question is still saved, and so is any text that had arrived. `code` is the stable reason: `timed_out`, `interrupted`, `kill_switch`, `provider_error` or `internal` (absent from an older server). Branch on `code`; `message` is for a person |
@@ -202,21 +202,20 @@ and made every error a problem, so `min_client` is 0.5.0.
 
 ## Routing, retries and gates
 
-The server, not the client, decides which provider serves a reply.
-
-- The provider asked for (`ChatRequest.provider`) is tried first, then the snapshot's
-  `fallback_order`. A **metered** provider is used as a fallback only if its snapshot entry has
-  `allow_as_fallback`; a **subscription** provider always may be. Provider entries carry
-  `billing` (`metered` by default, or `subscription`), `allow_as_fallback` (false by default) and
-  per-million prices `price_in`, `price_out`, `price_cached_in` (optional; a missing price is an
-  unknown cost, never zero).
-- Each provider is tried up to three times (once, then twice more) when the failure is worth it: a
+- Only the provider asked for (`ChatRequest.provider`) serves the reply. There is no automatic
+  fallback to another provider ([ADR 0014](adr/0014-model-gateway-and-providers.md)): if it fails,
+  the reply ends with an `error` event, and the administrator adds or selects another provider.
+  (A snapshot from an earlier version may still carry `fallback_order` and `allow_as_fallback`;
+  both are ignored.) Provider entries carry `billing` (`metered` by default, or `subscription`)
+  and per-million prices `price_in`, `price_out`, `price_cached_in` (optional; a missing price is
+  an unknown cost, never zero).
+- The provider is tried up to three times (once, then twice more) when the failure is worth it: a
   connection problem, a timeout, `408`, `429`, any `5xx`, or a stream that broke. The waits are
   250 ms and 1 s, or the provider's `Retry-After` when it is shorter than the time left. `401`,
-  `403` and a missing key are not retried: the next provider is tried and the provider is flagged
+  `403` and a missing key are not retried: the reply ends and the provider is flagged
   `auth_failed` until a reply from it succeeds or a new key is saved. Any other `4xx` ends the
   generation (it would be refused anywhere).
-- **After the first delta the router never retries or switches.** The person has seen text, so a
+- **After the first delta the router never retries.** The person has seen text, so a
   failure then ends the generation with an `error` event and the text so far is kept.
 - Everything above sits inside the generation's timeout (`generation_timeout_secs`).
 - Gates run before anything starts. `kill_switch`: with the snapshot's `kill_switch` on, new
@@ -254,7 +253,8 @@ A server with no audit store answers `503`.
   generation in the order they began (`404` if there is none). A span has `id`, `parent_id`,
   `kind`, `name`, `status`, `started_at`, `ended_at`, `provider_id`, `model`,
   `tokens_in|out|cached`, `ttft_ms`, `error_code`, `user_id`, `client_id`, `cost` and `attrs` (a
-  JSON object; an attempt's carries `retry_index`, `fallback_from`, `latency_ms`, `http_status`).
+  JSON object; an attempt's carries `retry_index`, `latency_ms`, `http_status`; one recorded by an earlier
+  version may also carry `fallback_from`).
   `gate` spans (`kill_switch`, `budget`, `queue`) end `done` when they let it through and `blocked`
   when they refused it.
 - `GET /api/server/v1/audit/stats?since=<unix seconds>` (default: the last 24 hours):
@@ -350,4 +350,3 @@ generation and never loses the typed text. Caddy answers a path nothing serves w
   refused again the message waits for the person.
 - A reply whose `error` event has `code` `timed_out` is shown as "Stopped after ..." with the text
   that had arrived, and the app offers to ask again as a new reply.
-- A `provider` event naming a provider other than the one chosen is shown as "Answered by ...".

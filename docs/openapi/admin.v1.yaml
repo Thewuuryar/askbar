@@ -1300,8 +1300,6 @@ components:
         billing:
           type: string
           enum: [metered, subscription]
-        allow_as_fallback:
-          type: boolean
         price_in:
           type: [number, 'null']
         price_out:
@@ -1334,8 +1332,6 @@ components:
         billing:
           type: string
           enum: [metered, subscription]
-        allow_as_fallback:
-          type: boolean
         price_in:
           type: number
         price_out:

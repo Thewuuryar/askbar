@@ -19,8 +19,7 @@ fn internal<E>(_: E) -> ApiError {
     ApiError::code(ErrorCode::Internal)
 }
 
-/// The providers clients may use, from the snapshot: the default first, then the fallbacks
-/// in order, then the rest by name. A client with no choice of its own uses the first one.
+/// The providers clients may use, from the snapshot: the default first, then the rest by name. A client with no choice of its own uses the first one.
 pub async fn providers(State(state): St) -> Res<Vec<ProviderInfo>> {
     let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
     let snapshot = crate::snapshot::current(&db).map_err(internal)?;

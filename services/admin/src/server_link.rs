@@ -100,12 +100,15 @@ fn setting(conn: &rusqlite::Connection, key: &str) -> rusqlite::Result<Option<St
     conn.query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| r.get(0)).optional()
 }
 
-/// The snapshot of everything in `admin.db` the server needs. `user_id` is the one user a
+/// The snapshot of everything in `admin.db` the server needs. (The `providers.allow_as_fallback`
+/// column and a `fallback_order` setting from earlier versions are no longer read: v1 has no
+/// provider fallback, ADR 0014. Migrations are append-only, so the column stays.)
+/// `user_id` is the one user a
 /// pairing code belongs to; the admin keeps codes per user already.
 pub fn build_snapshot(conn: &rusqlite::Connection) -> rusqlite::Result<Snapshot> {
     let mut providers = Vec::new();
     {
-        let mut stmt = conn.prepare("SELECT id, name, type, base_url, model, max_tokens, temperature, headers, billing, allow_as_fallback, price_in, price_out, price_cached_in FROM providers ORDER BY name")?;
+        let mut stmt = conn.prepare("SELECT id, name, type, base_url, model, max_tokens, temperature, headers, billing, price_in, price_out, price_cached_in FROM providers ORDER BY name")?;
         let rows = stmt.query_map([], |r| {
             Ok(SnapshotProvider {
                 id: r.get(0)?,
@@ -117,10 +120,9 @@ pub fn build_snapshot(conn: &rusqlite::Connection) -> rusqlite::Result<Snapshot>
                 temperature: r.get(6)?,
                 headers: serde_json::from_str(&r.get::<_, String>(7)?).unwrap_or_default(),
                 billing: if r.get::<_, String>(8)? == "subscription" { askbar_proto::Billing::Subscription } else { askbar_proto::Billing::Metered },
-                allow_as_fallback: r.get::<_, i64>(9)? != 0,
-                price_in: r.get(10)?,
-                price_out: r.get(11)?,
-                price_cached_in: r.get(12)?,
+                price_in: r.get(9)?,
+                price_out: r.get(10)?,
+                price_cached_in: r.get(11)?,
             })
         })?;
         for p in rows {
@@ -129,8 +131,6 @@ pub fn build_snapshot(conn: &rusqlite::Connection) -> rusqlite::Result<Snapshot>
     }
     let known = |id: &String| providers.iter().any(|p| &p.id == id);
     let default_provider_id = setting(conn, "default_provider_id")?.filter(known);
-    let fallback_order: Vec<String> =
-        setting(conn, "fallback_order")?.and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok()).unwrap_or_default().into_iter().filter(known).collect();
     let display: DisplaySettings = setting(conn, "display")?.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
     let mut user_display_defaults = std::collections::BTreeMap::new();
     {
@@ -162,7 +162,6 @@ pub fn build_snapshot(conn: &rusqlite::Connection) -> rusqlite::Result<Snapshot>
         version: 0,
         providers,
         default_provider_id,
-        fallback_order,
         system_prompt: setting(conn, "system_prompt")?,
         display,
         user_display_defaults,

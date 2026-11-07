@@ -78,9 +78,9 @@ pub fn validate(s: &Snapshot) -> Result<(), String> {
             }
         }
     }
-    for id in s.default_provider_id.iter().chain(s.fallback_order.iter()) {
+    if let Some(id) = &s.default_provider_id {
         if !ids.contains(id.as_str()) {
-            return Err(format!("{id} is named as a default or fallback provider but is not in providers"));
+            return Err(format!("{id} is named as the default provider but is not in providers"));
         }
     }
     check_display(&s.display, "display")?;
@@ -90,16 +90,13 @@ pub fn validate(s: &Snapshot) -> Result<(), String> {
     Ok(())
 }
 
-/// The providers in the order clients should offer them: the default, then the fallbacks
-/// in order, then the rest by name.
+/// The providers in the order clients should offer them: the default, then the rest by name.
 pub fn in_client_order(s: &Snapshot) -> Vec<askbar_proto::SnapshotProvider> {
     let mut rest: Vec<_> = s.providers.clone();
     rest.sort_by(|a, b| a.name.cmp(&b.name));
     let mut out = Vec::new();
-    for id in s.default_provider_id.iter().chain(s.fallback_order.iter()) {
-        if let Some(pos) = rest.iter().position(|p| &p.id == id) {
-            out.push(rest.remove(pos));
-        }
+    if let Some(pos) = s.default_provider_id.as_ref().and_then(|id| rest.iter().position(|p| &p.id == id)) {
+        out.push(rest.remove(pos));
     }
     out.extend(rest);
     out
@@ -171,7 +168,6 @@ mod tests {
         s.providers[0].price_out = Some(15.5);
         s.providers[0].price_cached_in = Some(0.3);
         s.providers[0].billing = askbar_proto::Billing::Subscription;
-        s.providers[0].allow_as_fallback = true;
         assert_eq!(validate(&s), Ok(()), "zero is a price (free)");
         for set in [
             (|p: &mut askbar_proto::SnapshotProvider| p.price_in = Some(-0.01)) as fn(&mut askbar_proto::SnapshotProvider),
