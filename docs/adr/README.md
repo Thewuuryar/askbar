@@ -24,7 +24,7 @@ This set records the decisions from the original Askbar architecture plan (kept 
 | [0018](0018-releases-and-migrations.md) | Releases and migrations | Accepted | 19, 32 |
 | [0019](0019-post-v1-order-and-tools.md) | Post-v1 order and tools | Accepted | 25, 26 |
 | [0020](0020-remote-executor-and-ca-triggers.md) | Remote executor and CA triggers | Accepted | 24 |
-| [0021](0021-names-and-new-components.md) | Names and new components | Accepted | Added recommendation |
+| [0021](0021-names-and-new-components.md) | Names and new components | Superseded by 0038 | Added recommendation |
 | [0022](0022-api-path-conventions.md) | API path conventions | Accepted | Added recommendation |
 | [0023](0023-api-error-format.md) | API error format | Accepted | Added recommendation |
 | [0024](0024-rejected-token-alert.md) | Rejected token alert | Accepted | Added recommendation |
@@ -40,5 +40,5 @@ This set records the decisions from the original Askbar architecture plan (kept 
 | [0034](0034-self-signed-https-and-certificate-pinning.md) | Self-signed HTTPS and certificate pinning | Accepted | Required by 0007; owner choice in the v1 plan |
 | [0035](0035-editorial-edits-to-accepted-adrs.md) | Editorial edits to accepted ADRs | Accepted | Owner review of the v1 layout change |
 | [0036](0036-askbar-service-crate.md) | The `askbar-service` crate | Accepted | Plan step 1.3; owner rule for component ADRs |
-| [0037](0037-askbar-cpa-image-and-supervisor.md) | The `askbar-cpa` image and its supervisor | Proposed | Plan step 1.4; owner choice of a supervisor for `cpa` |
-| [0038](0038-names-and-new-components-without-a-name-check.md) | Names and new components, without a name check | Proposed | Owner decision; supersedes 0021 |
+| [0037](0037-askbar-cpa-image-and-supervisor.md) | The `askbar-cpa` image and its supervisor | Accepted | Plan step 1.4; owner choice of a supervisor for `cpa` |
+| [0038](0038-names-and-new-components-without-a-name-check.md) | Names and new components, without a name check | Accepted | Owner decision; supersedes 0021 |
