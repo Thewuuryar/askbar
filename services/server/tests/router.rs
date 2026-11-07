@@ -400,7 +400,7 @@ async fn switch_off(s: &Stack, aborts: bool) {
     let mut snap = askbar_server::snapshot::current(&s.state.db.lock().unwrap()).unwrap().unwrap();
     snap.kill_switch = true;
     snap.kill_switch_aborts_running = aborts;
-    let r = reqwest::Client::new().put(format!("{url}/api/server/v1/snapshot")).bearer_auth(token).json(&snap).send().await.unwrap();
+    let r = reqwest::Client::new().put(format!("{url}/api/server/v1/config")).bearer_auth(token).json(&snap).send().await.unwrap();
     assert_eq!(r.status(), 200);
 }
 

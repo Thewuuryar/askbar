@@ -53,11 +53,14 @@ pub struct AppState {
     pub audit: audit::Recorder,
     /// Tests only: replaces the configured generation timeout (see `testing`).
     generation_timeout_override: Mutex<Option<std::time::Duration>>,
+    /// New on every start of the process, so the admin can tell a restart from a long silence
+    /// (`GET /api/server/v1/status`, ADR 0028).
+    pub boot_id: String,
 }
 
 impl AppState {
     pub fn new(db: Db, secrets: Secrets, min_client: &str) -> Arc<AppState> {
-        Arc::new(AppState { db: Mutex::new(db), secrets: Arc::new(secrets), http: llm::http_client(), min_client: min_client.to_string(), generations: Default::default(), audit: audit::Recorder::noop(), generation_timeout_override: Mutex::new(None) })
+        Arc::new(AppState { db: Mutex::new(db), secrets: Arc::new(secrets), http: llm::http_client(), min_client: min_client.to_string(), generations: Default::default(), audit: audit::Recorder::noop(), generation_timeout_override: Mutex::new(None), boot_id: ids::new_id() })
     }
 
     /// Gives a fresh state an audit recorder. `new` keeps its signature and records nothing, so

@@ -244,7 +244,7 @@ pub async fn ensure_managed_provider(state: &AdminState, link: &CpaLink) -> Resu
     }
     let server = state.server.as_ref().ok_or("The server is not linked.")?;
     let body = json!({ "type": "openai", "base_url": link.provider_url(), "api_key": link.api_key() });
-    let (status, bytes) = server.request(reqwest::Method::POST, &format!("{}/models/list", askbar_proto::paths::SERVER_V1), Some(&body)).await.map_err(|_| "The server is offline.".to_string())?;
+    let (status, bytes) = server.request(reqwest::Method::POST, &askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/models"), Some(&body)).await.map_err(|_| "The server is offline.".to_string())?;
     let list: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
     let ids: Vec<&str> = list["models"].as_array().map(|a| a.iter().filter_map(|m| m["id"].as_str()).collect()).unwrap_or_default();
     if status != 200 || ids.is_empty() {

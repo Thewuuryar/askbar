@@ -30,9 +30,34 @@ paths:
           description: OK.
         '401':
           $ref: '#/components/responses/Unauthorized'
-  /api/server/v1/snapshot:
+  /api/server/v1/status:
+    get:
+      operationId: getStatus
+      summary: Which configuration this process runs, and which process it is.
+      description: >-
+        `config_version` is the version of the last configuration accepted (null before the first push).
+        `boot_id` is new on every start of the process. The admin pushes again when either is not what it
+        expects (ADR 0028). Changes nothing.
+      responses:
+        '200':
+          description: The status.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [config_version, boot_id]
+                properties:
+                  config_version:
+                    type: [integer, 'null']
+                  boot_id:
+                    type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /api/server/v1/config:
     put:
-      operationId: putSnapshot
+      operationId: putConfig
       summary: Replace the configuration snapshot.
       description: >-
         Everything the server needs from the admin to run, as one document (providers, system prompt, display
@@ -149,12 +174,12 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/Internal'
-  /api/server/v1/models/list:
+  /api/server/v1/models:
     post:
       operationId: listModels
       summary: Ask a provider which models it offers.
       description: >
-        Sent from the server, where the network and the keys are. Either give `api_key` (used once, never stored
+        POST, not GET, because the request may carry a provider key, which must not go in a URL. Sent from the server, where the network and the keys are. Either give `api_key` (used once, never stored
         or logged) or a saved `provider_id`; a saved key is used only when the type and address match the saved
         provider. A failure at the provider is a 200 with `ok: false`.
       requestBody:
@@ -283,11 +308,11 @@ paths:
                     type: integer
         '401':
           $ref: '#/components/responses/Unauthorized'
-  /api/server/v1/backup:
-    get:
-      operationId: getBackup
+  /api/server/v1/exports:
+    post:
+      operationId: createExport
       summary: A consistent copy of the server database with everything secret taken out.
-      description: Provider API keys and pairing-code hashes are removed. Conversations, settings and paired-client records (token hashes only) stay.
+      description: Unencrypted until encrypted exports arrive (ADR 0013, plan phase 6). Provider API keys and pairing-code hashes are removed. Conversations, settings and paired-client records (token hashes only) stay.
       responses:
         '200':
           description: A SQLite file.

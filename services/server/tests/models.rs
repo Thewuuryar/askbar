@@ -1,4 +1,4 @@
-//! `POST /api/server/v1/models/list`: the server asks a provider for its models.
+//! `POST /api/server/v1/models`: the server asks a provider for its models.
 
 use axum::{extract::Query, http::HeaderMap, routing::get, Json, Router};
 use askbar_server::{secrets::Secrets, server_api, AppState};
@@ -49,7 +49,7 @@ async fn server() -> (String, reqwest::Client, std::path::PathBuf) {
 }
 
 async fn list(url: &str, http: &reqwest::Client, body: Value) -> (u16, Value) {
-    let r = http.post(format!("{url}/api/server/v1/models/list")).bearer_auth(TOKEN).json(&body).send().await.unwrap();
+    let r = http.post(format!("{url}/api/server/v1/models")).bearer_auth(TOKEN).json(&body).send().await.unwrap();
     (r.status().as_u16(), r.json().await.unwrap())
 }
 
@@ -91,7 +91,7 @@ async fn bad_input_and_empty_lists_are_ok_false_and_the_token_is_required() {
     assert_eq!(list(&url, &http, json!({"type": "openai", "base_url": "ftp://x"})).await.1["ok"], false);
     assert_eq!(list(&url, &http, json!({"type": "openai", "base_url": format!("{up}/empty/v1")})).await.1["ok"], false);
     assert_eq!(list(&url, &http, json!({"type": "openai", "provider_id": "nope"})).await.1["message"], "No such provider.");
-    let r = http.post(format!("{url}/api/server/v1/models/list")).json(&json!({"type": "openai"})).send().await.unwrap();
+    let r = http.post(format!("{url}/api/server/v1/models")).json(&json!({"type": "openai"})).send().await.unwrap();
     assert_eq!(r.status(), 401);
     let _ = std::fs::remove_dir_all(dir);
 }
