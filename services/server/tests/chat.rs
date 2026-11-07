@@ -253,7 +253,7 @@ async fn bad_requests_are_plain_http_errors() {
     assert_eq!(t.chat(&http, None, "nope", "hi").await.status(), 404);
     assert_eq!(t.chat(&http, Some("01NOSUCH"), "p1", "hi").await.status(), 404);
     assert_eq!(t.chat(&http, None, "p1", "   ").await.status(), 400);
-    // Providers are addressed by id; the name "mock" is not accepted as a fallback.
+    // Providers are addressed by id; the name "mock" is not accepted in place of one.
     assert_eq!(t.chat(&http, None, "mock", "hi").await.status(), 404);
     assert!(t.messages().is_empty());
     let r = http

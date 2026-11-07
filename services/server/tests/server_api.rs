@@ -119,7 +119,6 @@ fn provider(id: &str) -> SnapshotProvider {
         temperature: None,
         headers: Default::default(),
         billing: Default::default(),
-        allow_as_fallback: false,
         price_in: None,
         price_out: None,
         price_cached_in: None,
@@ -131,7 +130,6 @@ fn snapshot() -> Snapshot {
         version: 0,
         providers: vec![provider("p1"), provider("p2")],
         default_provider_id: Some("p1".into()),
-        fallback_order: vec!["p2".into()],
         system_prompt: Some("Be brief.".into()),
         display: DisplaySettings::default(),
         user_display_defaults: [("u1".to_string(), DisplaySettings { width: 900, ..Default::default() })].into(),
@@ -192,7 +190,6 @@ async fn a_pushed_snapshot_is_stored_and_the_version_goes_up() {
     next.version = 77;
     next.kill_switch = true;
     next.providers.pop();
-    next.fallback_order.clear();
     let (st, body) = s.put(&serde_json::to_value(next).unwrap(), Some(TOKEN)).await;
     assert_eq!((st, &body["version"]), (200, &json!(2)));
     let stored = askbar_server::snapshot::current(&s.state.db.lock().unwrap()).unwrap().unwrap();
@@ -460,7 +457,6 @@ async fn users_are_listed_and_a_provider_dropped_from_the_snapshot_loses_its_key
     // The admin drops p2: its stored key goes with it, p1's stays.
     let mut next = snapshot();
     next.providers.retain(|p| p.id == "p1");
-    next.fallback_order.clear();
     assert_eq!(s.put(&serde_json::to_value(next).unwrap(), Some(TOKEN)).await.0, 200);
     assert!(s.stored("p2").is_none(), "no key left behind for a deleted provider");
     assert!(s.stored("p1").is_some());

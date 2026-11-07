@@ -1,5 +1,5 @@
-//! The router: one place decides which provider serves a generation, with retries, fallbacks,
-//! a kill switch and a budget gate. Written before the code (step 6.1); each test names the step
+//! The router: one place decides how a generation is served, with retries on the provider asked
+//! for (never a fallback to another one, ADR 0014), a kill switch and a budget gate. Written before the code (step 6.1); each test names the step
 //! that enables it. Failures are driven by the mock LLM's modes, chosen here by model name
 //! ("m-429", "m-fail", "m-reset"), so two providers on one mock can behave differently.
 
@@ -48,8 +48,8 @@ impl Mock {
     }
 }
 
-/// Two providers on two mocks: `p1` (requested first) and `p2` (the fallback). `model1` and
-/// `model2` pick each one's mock mode.
+/// Two providers on two mocks: `p1` (the one requests ask for) and `p2`, another provider that
+/// must never be used in its place. `model1` and `model2` pick each one's mock mode.
 struct Stack {
     state: Arc<askbar_server::AppState>,
     m1: Mock,
@@ -76,7 +76,6 @@ async fn stack(model1: &str, model2: &str, p2_extra: serde_json::Value) -> Stack
         askbar_server::testing::add_provider(&db, provider("p2", m2.port, model2, p2_extra));
         askbar_server::testing::store_key(&db, &secrets, "p1", "sk-1");
         askbar_server::testing::store_key(&db, &secrets, "p2", "sk-2");
-        askbar_server::testing::update_snapshot(&db, |s| s.fallback_order = vec!["p2".into()]);
         db.seed_server().unwrap()
     };
     Stack { state, m1, m2, user, _dir: dir }
@@ -84,13 +83,17 @@ async fn stack(model1: &str, model2: &str, p2_extra: serde_json::Value) -> Stack
 
 impl Stack {
     fn submit(&self, prompt: &str) -> Result<askbar_server::generation::Submitted, SubmitError> {
+        self.submit_to("p1", prompt)
+    }
+
+    fn submit_to(&self, provider_id: &str, prompt: &str) -> Result<askbar_server::generation::Submitted, SubmitError> {
         submit(
             &self.state,
             Submit {
                 user_id: self.user.clone(),
                 client_id: "d1".into(),
                 conversation_id: None,
-                provider_id: "p1".into(),
+                provider_id: provider_id.into(),
                 prompt: prompt.into(),
                 client_request_id: None,
             },
@@ -122,7 +125,7 @@ async fn a_429_is_retried_and_the_reply_then_succeeds_on_the_same_provider() {
     let events = s.run("hello 429once retry-A").await;
     assert!(is_done(&events), "{events:?}");
     assert_eq!(s.m1.requests(), 2, "refused once, then served");
-    assert_eq!(s.m2.requests(), 0, "no fallback was needed");
+    assert_eq!(s.m2.requests(), 0, "the other provider is never asked");
     assert_eq!(s.rows()[0].1.as_deref(), Some("p1"));
 }
 
@@ -138,52 +141,44 @@ async fn the_wait_before_a_retry_is_the_providers_retry_after_not_the_default_ba
 }
 
 #[tokio::test]
-async fn when_retries_run_out_the_next_provider_serves_it() {
-    let s = stack("m-500", "m", serde_json::json!({ "allow_as_fallback": true })).await;
+async fn when_retries_run_out_the_reply_fails_and_no_other_provider_is_tried() {
+    let s = stack("m-500", "m", serde_json::json!({})).await;
     let events = s.run("please answer").await;
-    assert!(is_done(&events), "{events:?}");
+    assert!(matches!(events.last(), Some(GenEvent::Error { code: "provider_error", .. })), "{events:?}");
     assert_eq!(s.m1.requests(), 3, "the first try and two retries");
-    assert_eq!(s.m2.requests(), 1);
-    assert_eq!(s.rows()[0].1.as_deref(), Some("p2"), "the row records the provider that finally served it");
+    assert_eq!(s.m2.requests(), 0, "no fallback (ADR 0014)");
+    let rows = s.rows();
+    assert_eq!((rows[0].0.as_str(), rows[0].1.as_deref()), ("error", Some("p1")));
 }
 
 #[tokio::test]
-async fn once_text_has_been_sent_the_router_never_switches_provider() {
-    let s = stack("m-reset", "m", serde_json::json!({ "allow_as_fallback": true })).await;
+async fn even_a_subscription_provider_is_never_used_in_place_of_the_one_asked_for() {
+    let s = stack("m-500", "m", serde_json::json!({ "billing": "subscription" })).await;
+    let events = s.run("please answer").await;
+    assert!(matches!(events.last(), Some(GenEvent::Error { .. })), "{events:?}");
+    assert_eq!(s.m2.requests(), 0);
+}
+
+#[tokio::test]
+async fn once_text_has_been_sent_the_router_does_not_retry() {
+    let s = stack("m-reset", "m", serde_json::json!({})).await;
     let events = s.run("tell me something").await;
     assert!(matches!(events.last(), Some(GenEvent::Error { .. })), "the failure ends the generation: {events:?}");
-    assert_eq!(s.m2.requests(), 0, "no second provider after a delta was sent");
+    assert_eq!(s.m2.requests(), 0, "no other provider");
     assert_eq!(s.m1.requests(), 1, "and no retry either");
     let rows = s.rows();
     assert_eq!((rows[0].0.as_str(), rows[0].2.as_str()), ("error", "Reset midway"), "what arrived is kept");
 }
 
 #[tokio::test]
-async fn a_401_falls_back_and_flags_the_provider_as_having_bad_credentials() {
-    let s = stack("m-fail", "m", serde_json::json!({ "allow_as_fallback": true })).await;
+async fn a_401_is_not_retried_ends_the_reply_and_flags_the_provider_as_having_bad_credentials() {
+    let s = stack("m-fail", "m", serde_json::json!({})).await;
     let events = s.run("hello there").await;
-    assert!(is_done(&events), "{events:?}");
+    assert!(matches!(events.last(), Some(GenEvent::Error { .. })), "{events:?}");
     assert_eq!(s.m1.requests(), 1, "a bad key is not retried");
-    assert_eq!(s.m2.requests(), 1);
+    assert_eq!(s.m2.requests(), 0, "and no other provider stands in");
     let flag: String = s.state.db.lock().unwrap().conn().query_row("SELECT status FROM provider_health WHERE provider_id = 'p1'", [], |r| r.get(0)).unwrap();
     assert_eq!(flag, "auth_failed");
-}
-
-#[tokio::test]
-async fn a_metered_provider_is_skipped_as_a_fallback_unless_it_allows_it() {
-    // p2 is metered (the default) and has not said it may be a fallback.
-    let s = stack("m-500", "m", serde_json::json!({})).await;
-    let events = s.run("please answer").await;
-    assert!(matches!(events.last(), Some(GenEvent::Error { .. })), "{events:?}");
-    assert_eq!(s.m2.requests(), 0, "money is not spent behind the administrator's back");
-
-    // With allow_as_fallback it is used; a subscription provider needs no such permission.
-    let s = stack("m-500", "m", serde_json::json!({ "billing": "subscription" })).await;
-    assert!(is_done(&s.run("please answer").await));
-    assert_eq!(s.m2.requests(), 1);
-    let s = stack("m-500", "m", serde_json::json!({ "billing": "metered", "allow_as_fallback": true })).await;
-    assert!(is_done(&s.run("please answer").await));
-    assert_eq!(s.m2.requests(), 1);
 }
 
 #[tokio::test]
@@ -252,8 +247,8 @@ async fn a_stop_while_waiting_to_retry_ends_the_generation_at_once() {
 }
 
 #[tokio::test]
-async fn the_audit_trail_shows_every_try_and_which_provider_the_new_one_stood_in_for() {
-    let s = stack("m-500", "m", serde_json::json!({ "allow_as_fallback": true })).await;
+async fn the_audit_trail_shows_every_try_on_the_one_provider() {
+    let s = stack("m-500", "m", serde_json::json!({})).await;
     let sub = s.submit("please answer").ok().expect("accepted");
     let trace = sub.generation_id.clone();
     let _: Vec<GenEvent> = sub.live.subscribe(0).collect().await;
@@ -271,7 +266,6 @@ async fn the_audit_trail_shows_every_try_and_which_provider_the_new_one_stood_in
             want("p1", "error", 0, None),
             want("p1", "error", 1, None),
             want("p1", "error", 2, None),
-            want("p2", "done", 0, Some("p1")),
         ]
     );
 }
@@ -279,8 +273,8 @@ async fn the_audit_trail_shows_every_try_and_which_provider_the_new_one_stood_in
 #[tokio::test]
 async fn the_flag_clears_on_the_next_success_and_when_a_new_key_is_saved_and_the_endpoint_lists_it() {
     use askbar_server::server_api;
-    let s = stack("m-fail", "m", serde_json::json!({ "allow_as_fallback": true })).await;
-    assert!(is_done(&s.run("hello there").await));
+    let s = stack("m-fail", "m", serde_json::json!({})).await;
+    assert!(matches!(s.run("hello there").await.last(), Some(GenEvent::Error { .. })));
 
     // The server endpoint lists it, with a code and no provider text.
     let dir = s._dir.clone();
@@ -307,47 +301,43 @@ async fn the_flag_clears_on_the_next_success_and_when_a_new_key_is_saved_and_the
     assert_eq!(r.status(), 204);
     assert!(get().await["providers"].as_array().unwrap().is_empty());
 
-    // A flagged provider that then works is cleared by the success. (p1 is now fine: point it at a good model.)
+    // A flagged provider that then works is cleared by the success.
     s.state.db.lock().unwrap().flag_provider_auth_failed("p2", "http_403").unwrap();
-    assert!(is_done(&s.run("another one").await)); // p1 still fails (m-fail) and p2 serves it
+    assert!(matches!(s.run("another one").await.last(), Some(GenEvent::Error { .. }))); // p1 still fails (m-fail)
+    let sub = s.submit_to("p2", "on p2").ok().expect("accepted");
+    assert!(is_done(&sub.live.subscribe(0).collect::<Vec<_>>().await));
     let flagged: Vec<String> = s.state.db.lock().unwrap().provider_health().unwrap().into_iter().map(|h| h.0).collect();
     assert_eq!(flagged, ["p1"], "p2 worked, so its flag is gone; p1 failed again and is flagged again");
 }
 
 #[tokio::test]
-async fn the_generation_row_and_its_token_usage_name_the_provider_that_finally_served_it() {
-    let s = stack("m-500", "m", serde_json::json!({ "allow_as_fallback": true })).await;
-    assert!(is_done(&s.run("please answer").await));
-    assert_eq!(s.rows()[0].1.as_deref(), Some("p2"));
+async fn after_a_retry_the_generation_row_and_its_token_usage_name_the_provider_once() {
+    let s = stack("m", "m", serde_json::json!({})).await;
+    assert!(is_done(&s.run("hello 429once retry-D").await));
+    assert_eq!(s.rows()[0].1.as_deref(), Some("p1"));
     let usage_provider: String = s.state.db.lock().unwrap().conn().query_row("SELECT provider_id FROM token_usage", [], |r| r.get(0)).unwrap();
-    assert_eq!(usage_provider, "p2", "cost follows the provider that did the work, not the one that was asked");
+    assert_eq!(usage_provider, "p1");
     let n: i64 = s.state.db.lock().unwrap().conn().query_row("SELECT COUNT(*) FROM token_usage", [], |r| r.get(0)).unwrap();
     assert_eq!(n, 1, "the failed tries used nothing and recorded nothing");
 }
 
 #[tokio::test]
-async fn the_provider_is_announced_before_the_first_delta_and_again_after_a_fallback() {
+async fn the_provider_is_announced_once_before_the_first_delta_even_after_retries() {
     let s = stack("m", "m", serde_json::json!({})).await;
     let events = s.run("hello").await;
     assert_eq!(events[0], GenEvent::Provider { id: "p1".into(), name: "p1".into() }, "first of all");
     assert!(matches!(events[1], GenEvent::Delta { seq: 1, .. }), "then the text, counted from 1: {:?}", &events[..3]);
     assert_eq!(events.iter().filter(|e| matches!(e, GenEvent::Provider { .. })).count(), 1);
 
-    // After a fallback both are announced, in order, still before any text.
-    let s = stack("m-500", "m", serde_json::json!({ "allow_as_fallback": true })).await;
-    let events = s.run("please answer").await;
-    assert_eq!(
-        events[..3],
-        [
-            GenEvent::Provider { id: "p1".into(), name: "p1".into() },
-            GenEvent::Provider { id: "p2".into(), name: "p2".into() },
-            events[2].clone()
-        ]
-    );
-    assert!(matches!(events[2], GenEvent::Delta { seq: 1, .. }));
+    // A retry does not announce it again.
+    let s = stack("m", "m", serde_json::json!({})).await;
+    let events = s.run("hello 429once retry-C").await;
+    assert_eq!(events[0], GenEvent::Provider { id: "p1".into(), name: "p1".into() });
+    assert!(matches!(events[1], GenEvent::Delta { seq: 1, .. }), "{:?}", &events[..2]);
+    assert_eq!(events.iter().filter(|e| matches!(e, GenEvent::Provider { .. })).count(), 1);
 
-    // No change of provider is ever announced once text has gone out.
-    let s = stack("m-reset", "m", serde_json::json!({ "allow_as_fallback": true })).await;
+    // Nor does a failure after text has gone out.
+    let s = stack("m-reset", "m", serde_json::json!({})).await;
     let events = s.run("tell me something").await;
     assert_eq!(events.iter().filter(|e| matches!(e, GenEvent::Provider { .. })).count(), 1);
 }

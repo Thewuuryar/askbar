@@ -246,30 +246,33 @@ async fn the_pairing_string_uses_the_public_https_name_when_https_is_on() {
 }
 
 #[tokio::test]
-async fn provider_billing_fallback_permission_and_prices_round_trip_reach_the_server_and_are_validated() {
+async fn provider_billing_and_prices_round_trip_reach_the_server_and_are_validated() {
     let t = start(true).await;
     let base = json!({ "name": "metered one", "type": "openai", "base_url": "http://x/v1", "model": "m" });
-    // Omitted fields mean what the server would assume: metered, no fallback, unknown prices.
+    // Omitted fields mean what the server would assume: metered, unknown prices.
     let (st, body) = t.call(M::POST, "/admin/api/v1/providers", Some(base.clone())).await;
     assert_eq!(st, 201, "{body}");
     let id = body["id"].as_str().unwrap().to_string();
     let (_, list) = t.call(M::GET, "/admin/api/v1/providers", None).await;
-    assert_eq!((&list[0]["billing"], &list[0]["allow_as_fallback"], &list[0]["price_in"]), (&json!("metered"), &json!(false), &json!(null)));
+    assert_eq!((&list[0]["billing"], &list[0]["price_in"]), (&json!("metered"), &json!(null)));
+    assert!(list[0].get("allow_as_fallback").is_none(), "there is no provider fallback (ADR 0014)");
     let sp = t.snapshot().unwrap().providers.into_iter().find(|p| p.id == id).unwrap();
-    assert_eq!((sp.billing, sp.allow_as_fallback, sp.price_in, sp.price_out, sp.price_cached_in), (askbar_proto::Billing::Metered, false, None, None, None));
+    assert_eq!((sp.billing, sp.price_in, sp.price_out, sp.price_cached_in), (askbar_proto::Billing::Metered, None, None, None));
 
     // Setting them: stored, listed and pushed.
     let mut full = base.clone();
     full["billing"] = json!("subscription");
-    full["allow_as_fallback"] = json!(true);
+    full["allow_as_fallback"] = json!(true); // sent by an older admin page: accepted and ignored
     full["price_in"] = json!(2.5);
     full["price_out"] = json!(10.0);
     full["price_cached_in"] = json!(0.0);
     assert_eq!(t.call(M::PUT, &format!("/admin/api/v1/providers/{id}"), Some(full.clone())).await.0, 204);
     let (_, list) = t.call(M::GET, "/admin/api/v1/providers", None).await;
-    assert_eq!((&list[0]["billing"], &list[0]["allow_as_fallback"], &list[0]["price_in"], &list[0]["price_out"], &list[0]["price_cached_in"]), (&json!("subscription"), &json!(true), &json!(2.5), &json!(10.0), &json!(0.0)));
+    assert_eq!((&list[0]["billing"], &list[0]["price_in"], &list[0]["price_out"], &list[0]["price_cached_in"]), (&json!("subscription"), &json!(2.5), &json!(10.0), &json!(0.0)));
+    assert!(list[0].get("allow_as_fallback").is_none());
     let sp = t.snapshot().unwrap().providers.into_iter().find(|p| p.id == id).unwrap();
-    assert_eq!((sp.billing, sp.allow_as_fallback, sp.price_in, sp.price_out, sp.price_cached_in), (askbar_proto::Billing::Subscription, true, Some(2.5), Some(10.0), Some(0.0)));
+    assert_eq!((sp.billing, sp.price_in, sp.price_out, sp.price_cached_in), (askbar_proto::Billing::Subscription, Some(2.5), Some(10.0), Some(0.0)));
+    assert!(!t.snapshot().unwrap().providers.iter().any(|p| serde_json::to_string(p).unwrap().contains("fallback")));
 
     // Validation matches the server's: billing words, and prices of zero or more.
     for (field, value) in [("billing", json!("free")), ("price_in", json!(-1.0)), ("price_out", json!(-0.5)), ("price_cached_in", json!(-3))] {

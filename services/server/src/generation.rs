@@ -46,7 +46,7 @@ pub enum Terminal {
 #[derive(Default)]
 struct Inner {
     deltas: Vec<String>,
-    /// The providers announced before the first delta, in order (more than one after a fallback).
+    /// The provider announced before the first delta (one at most: there is no fallback).
     providers: Vec<(String, String)>,
     terminal: Option<Terminal>,
 }
@@ -366,12 +366,11 @@ enum Outcome {
     Error(String),
 }
 
-/// What an attempt span records beyond its columns: which try it was (and which provider it stood
-/// in for), the whole latency, the HTTP status, whether the counts were estimated, why the provider
+/// What an attempt span records beyond its columns: which try it was, the whole latency, the HTTP status, whether the counts were estimated, why the provider
 /// says it stopped, and whether the request was cut. `report` is `None` for an attempt that never
 /// finished (a timeout).
 fn attempt_attrs(r: Option<&crate::llm::StreamReport>, info: &AttemptInfo) -> serde_json::Value {
-    let mut attrs = serde_json::json!({ "retry_index": info.retry_index, "fallback_from": info.fallback_from });
+    let mut attrs = serde_json::json!({ "retry_index": info.retry_index });
     if let Some(r) = r {
         attrs["latency_ms"] = (r.total.as_millis() as u64).into();
         attrs["http_status"] = serde_json::json!(r.http_status);
@@ -800,26 +799,19 @@ fn spawn_run(
     };
     let (state, provider_id) = (state.clone(), provider_id.to_string());
     tokio::spawn(async move {
-        // The providers to try, in order: the one asked for, then the fallbacks the administrator
-        // allowed (see router::plan), each loaded with its key.
+        // The provider asked for, loaded with its key. It is the only one tried: there is no
+        // automatic fallback to another provider (ADR 0014).
         let prepared = {
             let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
-            let plan = crate::snapshot::current(&db).ok().flatten().map(|s| crate::router::plan(&s, &provider_id)).unwrap_or_default();
-            let candidates: Vec<Candidate> = plan
-                .into_iter()
-                .filter_map(|r| {
-                    let provider = store::load_provider(&db, &state.secrets(), &r.id).ok().flatten()?;
-                    Some(Candidate { id: r.id, provider, fallback_from: r.fallback_from })
-                })
-                .collect();
+            let candidate = store::load_provider(&db, &state.secrets(), &provider_id).ok().flatten().map(|provider| Candidate { id: provider_id.clone(), provider });
             let system = store::chat_system_prompt(&db).ok();
             let history: Option<Vec<ChatMessage>> = db
                 .get_messages(&fin.user_id, &fin.conversation_id)
                 .ok()
                 .map(|ms| ms.iter().map(|m| ChatMessage::new(&m.role, &m.content)).collect());
-            (!candidates.is_empty()).then_some(candidates).zip(system).zip(history)
+            candidate.zip(system).zip(history)
         };
-        let Some(((candidates, system), history)) = prepared else {
+        let Some(((candidate, system), history)) = prepared else {
             fin.finish(Outcome::Error("The provider is no longer available.".into()));
             return;
         };
@@ -829,7 +821,7 @@ fn spawn_run(
         let started = Instant::now();
         let open_attempt: Mutex<Option<OpenAttempt>> = Mutex::new(None);
         let ended = {
-            let run = attempts(&state, &mut fin, &candidates, &system, &history, started, timeout, &open_attempt);
+            let run = attempts(&state, &mut fin, &candidate, &system, &history, started, timeout, &open_attempt);
             tokio::pin!(run);
             tokio::select! {
                 r = &mut run => Some(r),
@@ -868,14 +860,13 @@ fn spawn_run(
     });
 }
 
-/// A provider to try, with the provider it stands in for (if it is not the one asked for).
+/// The provider to try.
 struct Candidate {
     id: String,
     provider: crate::llm::Provider,
-    fallback_from: Option<String>,
 }
 
-/// Retries per provider, and the wait before each (when the provider names none).
+/// Retries, and the wait before each (when the provider names none).
 const MAX_RETRIES: u32 = 2;
 const RETRY_BACKOFF: [Duration; 2] = [Duration::from_millis(250), Duration::from_secs(1)];
 
@@ -890,7 +881,6 @@ enum Ended {
 #[derive(Clone)]
 struct AttemptInfo {
     retry_index: u32,
-    fallback_from: Option<String>,
     request_truncated: bool,
 }
 
@@ -900,15 +890,14 @@ struct OpenAttempt {
     info: AttemptInfo,
 }
 
-/// Tries each candidate in order, and each up to `MAX_RETRIES` more times when the failure is
-/// worth it, until one serves the reply. Nothing is retried or switched once a delta has been
-/// sent: the person has seen text, so the failure ends the generation. A cancel ends it at once,
-/// also while it waits to retry.
+/// Tries the provider, and up to `MAX_RETRIES` more times when the failure is worth it. Nothing is
+/// retried once a delta has been sent: the person has seen text, so the failure ends the
+/// generation. A cancel ends it at once, also while it waits to retry.
 #[allow(clippy::too_many_arguments)]
 async fn attempts(
     state: &Arc<AppState>,
     fin: &mut Finisher,
-    candidates: &[Candidate],
+    cand: &Candidate,
     system: &str,
     history: &[ChatMessage],
     started: Instant,
@@ -917,16 +906,16 @@ async fn attempts(
 ) -> Ended {
     use crate::router::{classify, Failure};
     let live = fin.live.clone();
-    let mut last_error = None;
-    for cand in candidates {
-        for retry_index in 0..=MAX_RETRIES {
+    let mut retry_index = 0;
+    loop {
+        {
             let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
             live.set_cancel(cancel_tx);
             if live.cancel_was_asked() {
                 return Ended::Cancelled(None);
             }
-            if fin.provider_id != cand.id || retry_index == 0 {
-                // The row says which provider is serving it (finally: the one that did).
+            if retry_index == 0 {
+                // The row says which provider is serving it.
                 fin.provider_id = cand.id.clone();
                 let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
                 let _ = db.conn().execute("UPDATE generations SET provider_id = ?2 WHERE id = ?1", rusqlite::params![fin.id, cand.id]);
@@ -936,9 +925,9 @@ async fn attempts(
                 SpanStart::new(&fin.id, Kind::Attempt, &cand.provider.name)
                     .parent(&fin.turn_span)
                     .provider(&cand.id, &cand.provider.model)
-                    .attrs(&serde_json::json!({ "retry_index": retry_index, "fallback_from": cand.fallback_from })),
+                    .attrs(&serde_json::json!({ "retry_index": retry_index })),
             );
-            let mut info = AttemptInfo { retry_index, fallback_from: cand.fallback_from.clone(), request_truncated: false };
+            let mut info = AttemptInfo { retry_index, request_truncated: false };
             // What was sent, sealed: the system prompt and the history, as the provider will see them.
             if let Some(key) = &fin.audit_key {
                 let request = serde_json::json!({
@@ -1006,24 +995,19 @@ async fn attempts(
                 Err(e) => e,
             };
             let class = classify(&e.error);
-            // Text already sent, or a request that no provider would accept: the failure stands.
+            // Text already sent, or a request the provider refuses: the failure stands.
             if !fin.text.is_empty() || class == Failure::Fatal {
                 return Ended::Failed(e);
             }
             match class {
-                // Bad credentials: another try here cannot help; the next provider may. The
-                // administrator is told through the provider's health flag.
+                // Bad credentials: another try cannot help. The administrator is told through the
+                // provider's health flag.
                 Failure::AuthFailed => {
                     let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
                     let _ = db.flag_provider_auth_failed(&cand.id, &error_code(&e.error));
-                    drop(db);
-                    last_error = Some(e);
-                    break;
+                    return Ended::Failed(e);
                 }
-                _ if retry_index >= MAX_RETRIES => {
-                    last_error = Some(e);
-                    break;
-                }
+                _ if retry_index >= MAX_RETRIES => return Ended::Failed(e),
                 _ => {
                     // The provider's Retry-After replaces our backoff when it fits in the time left.
                     let remaining = timeout.saturating_sub(started.elapsed());
@@ -1031,7 +1015,6 @@ async fn attempts(
                         Some(ra) if ra < remaining => ra,
                         _ => RETRY_BACKOFF[retry_index as usize],
                     };
-                    last_error = Some(e);
                     tokio::select! {
                         _ = tokio::time::sleep(wait) => {}
                         _ = live.cancel_asked() => return Ended::Cancelled(None),
@@ -1039,8 +1022,8 @@ async fn attempts(
                 }
             }
         }
+        retry_index += 1;
     }
-    Ended::Failed(last_error.expect("at least one candidate was tried"))
 }
 
 /// Starts the oldest message waiting in `conversation_id`, if any: its question is stored now, so

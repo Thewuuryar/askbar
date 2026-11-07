@@ -66,13 +66,10 @@ pub struct SnapshotProvider {
     pub temperature: Option<f32>,
     #[serde(default)]
     pub headers: std::collections::BTreeMap<String, String>,
-    /// How the provider is paid for. A `subscription` costs nothing per token; a `metered` one
-    /// does, so it is not used as a fallback unless `allow_as_fallback` says so.
+    /// How the provider is paid for. A `subscription` costs nothing per token; a `metered` one does.
+    /// (`allow_as_fallback`, sent by earlier versions, is ignored: v1 has no provider fallback, ADR 0014.)
     #[serde(default)]
     pub billing: Billing,
-    /// A metered provider may serve as a fallback for another only when this is true.
-    #[serde(default)]
-    pub allow_as_fallback: bool,
     /// Price per million tokens, in whatever currency the administrator thinks in. Missing means
     /// unknown (cost is then reported as unknown, never as 0).
     #[serde(default)]
@@ -125,9 +122,8 @@ pub struct Snapshot {
     pub providers: Vec<SnapshotProvider>,
     #[serde(default)]
     pub default_provider_id: Option<String>,
-    /// Provider ids to try, in order, when the first choice fails.
-    #[serde(default)]
-    pub fallback_order: Vec<String>,
+    // `fallback_order`, in snapshots stored by earlier versions, is ignored: there is no provider
+    // fallback in v1 (ADR 0014). A failed provider is an error, not another provider's answer.
     #[serde(default)]
     pub system_prompt: Option<String>,
     /// Server-wide display defaults.
@@ -275,9 +271,9 @@ pub enum ChatEvent {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         queued: bool,
     },
-    /// Which provider is serving this reply, sent before the first delta (and again if a fallback
-    /// changes it before any text). Not a delta: it has no SSE `id`. Clients that do not know it
-    /// ignore it.
+    /// Which provider is serving this reply, sent once before the first delta. It is always the one
+    /// asked for (there is no provider fallback). Not a delta: it has no SSE `id`. Clients that do
+    /// not know it ignore it.
     Provider { id: String, name: String },
     Delta { text: String },
     Done,
@@ -450,16 +446,25 @@ mod tests {
     #[test]
     fn an_older_provider_without_billing_or_prices_parses_as_metered_with_unknown_prices() {
         let p: SnapshotProvider = serde_json::from_str(r#"{"id":"p","name":"n","type":"openai","model":"m"}"#).unwrap();
-        assert_eq!((p.billing, p.allow_as_fallback), (Billing::Metered, false));
+        assert_eq!(p.billing, Billing::Metered);
         assert_eq!((p.price_in, p.price_out, p.price_cached_in), (None, None, None));
         let p: SnapshotProvider = serde_json::from_str(
             r#"{"id":"p","name":"n","type":"openai","model":"m","billing":"subscription","allow_as_fallback":true,"price_in":2.5,"price_out":10,"price_cached_in":0.25}"#,
         )
         .unwrap();
-        assert_eq!((p.billing, p.allow_as_fallback, p.price_in, p.price_out, p.price_cached_in), (Billing::Subscription, true, Some(2.5), Some(10.0), Some(0.25)));
+        // `allow_as_fallback` from an earlier version is read and dropped.
+        assert_eq!((p.billing, p.price_in, p.price_out, p.price_cached_in), (Billing::Subscription, Some(2.5), Some(10.0), Some(0.25)));
+        assert!(!serde_json::to_string(&p).unwrap().contains("fallback"));
         assert!(serde_json::from_str::<SnapshotProvider>(r#"{"id":"p","name":"n","type":"openai","model":"m","billing":"free"}"#).is_err(), "only metered or subscription");
         // And it serializes back to the same words.
         assert!(serde_json::to_string(&p).unwrap().contains(r#""billing":"subscription""#));
+    }
+
+    #[test]
+    fn a_snapshot_stored_with_a_fallback_order_still_parses_and_drops_it() {
+        let s: Snapshot = serde_json::from_str(r#"{"version":3,"audit_retention_days":30,"default_provider_id":"p1","fallback_order":["p2"]}"#).unwrap();
+        assert_eq!((s.version, s.default_provider_id.as_deref()), (3, Some("p1")));
+        assert!(!serde_json::to_string(&s).unwrap().contains("fallback"));
     }
 
     #[test]
@@ -479,7 +484,6 @@ mod tests {
             temperature: Some(0.5),
             headers: Default::default(),
             billing: Billing::Subscription,
-            allow_as_fallback: true,
             price_in: Some(1.0),
             price_out: Some(2.0),
             price_cached_in: Some(0.5),
