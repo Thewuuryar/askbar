@@ -65,7 +65,7 @@ New crates `crates/askbar-service` and `crates/askbar-audit` are created in the 
 
 ## Phase 1 — Bring the existing components to the target
 
-Order change (proposed 2026-11-07, awaiting the owner): the remaining steps keep their numbers as IDs but run in this order.
+Order change (owner approved 2026-11-07): the remaining steps keep their numbers as IDs but run in this order.
 
 | # | Step | Size | Why here |
 | --- | --- | --- | --- |
@@ -98,7 +98,7 @@ Midpoints S = 1.5 h, M = 4 h, L = 8 h. Required work left (excluding 1.12, 1.13 
 | 7 | 12.5 |
 | **Total** | **≈ 140** |
 
-That is about 40 h over the ~100 h budget before any backlog item. Proposed cuts, first to last: phase 8 (iOS, memory, mismatch alerts); 1.13 summarizing (L, ~8 h); the rest of 1.13 (~12 h); 6.4 multiple destinations (one daily destination stays: it is the ship criterion for data loss in [ADR 0002](adr/0002-v1-scope-limits-and-ship-criteria.md)); 1.12 shared spaces; 5.4 passkey (optional, after 1.0); 4.3 release check. Those cuts save about 8 h of required work (5.4, 4.3, part of 6.4), leaving ≈ 130 h. Closing the rest needs an owner decision: move the date, or move further items (for example 2.9 Caddy access logs, 2.6 hash chain) out of v1 through an ADR that changes [ADR 0002](adr/0002-v1-scope-limits-and-ship-criteria.md)'s scope.
+That is about 40 h over the ~100 h budget before any backlog item. Proposed cuts, first to last: phase 8 (iOS, memory, mismatch alerts); 1.13 summarizing (L, ~8 h); the rest of 1.13 (~12 h); 6.4 multiple destinations (one daily destination stays: it is the ship criterion for data loss in [ADR 0002](adr/0002-v1-scope-limits-and-ship-criteria.md)); 1.12 shared spaces; 5.4 passkey (optional, after 1.0); 4.3 release check. Those cuts save about 8 h of required work (5.4, 4.3, part of 6.4), leaving ≈ 130 h. The owner kept the budget unchanged (2026-11-07); the gap is recorded here so cuts can be made in this order if hours run out.
 
 **1.1 `refactor(admin)!: move the admin API to /api/admin/v1`** (M) — [ADR 0022](adr/0022-api-path-conventions.md), 0029
 - `paths::ADMIN_V1 = "/api/admin/v1"`; admin router, site `fetch` calls, `admin.v1.yaml`, tests, smoke, isolation script, Caddy route generator (`services/admin/src/caddy.rs`) and allowlist cover `/admin` and `/api/admin`; everything else stays 404.
