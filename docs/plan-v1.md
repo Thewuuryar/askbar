@@ -65,6 +65,41 @@ New crates `crates/askbar-service` and `crates/askbar-audit` are created in the 
 
 ## Phase 1 — Bring the existing components to the target
 
+Order change (proposed 2026-11-07, awaiting the owner): the remaining steps keep their numbers as IDs but run in this order.
+
+| # | Step | Size | Why here |
+| --- | --- | --- | --- |
+| 1 | 1.10 harden every container | S | Small; every later service starts hardened instead of being retrofitted. Has one known fix (below). |
+| 2 | 1.5 remove provider fallback | S | Independent; shrinks `router.rs` before 1.3 and 3.1 touch or move it. |
+| 3 | 1.1 admin API to `/api/admin/v1` | M | 1.1 and 1.2 both break contracts the admin site, scripts and tests use; back to back keeps the churn in one place. |
+| 4 | 1.2 server API path conventions | S | As above; also renames `PUT /snapshot` to `PUT /config` and adds `GET /status`, which 1.3 builds on. |
+| 5 | 1.3 `crates/askbar-service` | M | Base for 1.4 and for every service in phases 2–4. |
+| 6 | 1.4 self-restart, controller removed | M | Needs 1.3's health and token check. Does not wait for 2.1: restart is authenticated with the existing admin→server token, and 2.1 later changes only where that token comes from, not the endpoint. Doing it now removes the only Docker socket mount. The restart record is a log line until 2.7 sends it to the auditor. |
+| 7 | 1.8 first run and forced password change | M | Independent of storage; before 1.9 so the wizard's last step can create the first user. |
+| 8 | 1.9 users and pairing keys in the admin | M | 1.9 and 1.11 both change storage and pairing; next to each other they cost one "wipe volumes and re-pair" instead of two. |
+| 9 | 1.11 spaces, one SQLite file each | L | As above. Wipe and re-pair once, at the end of this step. |
+| — | 1.13 backlog | see below | After 1.11, which reshapes the conversation routes the S items touch. Summarizing waits for 3.1 (its model call goes through `model-gateway`). |
+| — | 1.12 shared spaces | M | Deferred to after phase 7 ([ADR 0002](adr/0002-v1-scope-limits-and-ship-criteria.md) defer order). |
+
+Bootstrap tokens (2.1) stay in phase 2: nothing in phase 1 needs per-link tokens beyond the one admin→server token that exists.
+
+### Budget
+
+Midpoints S = 1.5 h, M = 4 h, L = 8 h. Required work left (excluding 1.12, 1.13 and phase 8):
+
+| Phase | Hours |
+| --- | --- |
+| 1 (1.1–1.5, 1.8–1.11) | 32.5 |
+| 2 | 35 |
+| 3 | 21.5 |
+| 4 | 9.5 |
+| 5 | 11 |
+| 6 | 17.5 |
+| 7 | 12.5 |
+| **Total** | **≈ 140** |
+
+That is about 40 h over the ~100 h budget before any backlog item. Proposed cuts, first to last: phase 8 (iOS, memory, mismatch alerts); 1.13 summarizing (L, ~8 h); the rest of 1.13 (~12 h); 6.4 multiple destinations (one daily destination stays: it is the ship criterion for data loss in [ADR 0002](adr/0002-v1-scope-limits-and-ship-criteria.md)); 1.12 shared spaces; 5.4 passkey (optional, after 1.0); 4.3 release check. Those cuts save about 8 h of required work (5.4, 4.3, part of 6.4), leaving ≈ 130 h. Closing the rest needs an owner decision: move the date, or move further items (for example 2.9 Caddy access logs, 2.6 hash chain) out of v1 through an ADR that changes [ADR 0002](adr/0002-v1-scope-limits-and-ship-criteria.md)'s scope.
+
 **1.1 `refactor(admin)!: move the admin API to /api/admin/v1`** (M) — [ADR 0022](adr/0022-api-path-conventions.md), 0029
 - `paths::ADMIN_V1 = "/api/admin/v1"`; admin router, site `fetch` calls, `admin.v1.yaml`, tests, smoke, isolation script, Caddy route generator (`services/admin/src/caddy.rs`) and allowlist cover `/admin` and `/api/admin`; everything else stays 404.
 - Cookie: `__Secure-` prefix, `Secure`, `Path=/api/admin` (`web.rs:65`). Add `Sec-Fetch-Site` refusal for cross-site changes next to the CSRF header check (`web.rs:101`).
@@ -104,6 +139,7 @@ Order change: 1.6 and 1.7 were done first, right after phase 0. Before them a Do
 
 **1.10 `feat(compose): harden every container`** (S) — [ADR 0032](adr/0032-container-hardening.md)
 - `x-hardening` block (`read_only`, `cap_drop: [ALL]`, `no-new-privileges`, `pids_limit`, `mem_limit`, `tmpfs: /tmp`); Caddy keeps `NET_BIND_SERVICE`; `cpa` exceptions documented after testing; `host.docker.internal` moves to `compose.dev.yaml`. Isolation script checks each setting.
+- Known fix: Caddy runs as `0:10001` and reads `/caddy-secrets/self.key`, which the admin writes as uid 10001 with mode 0600 (`services/admin/src/self_cert.rs`). Today that works only through root's `CAP_DAC_OVERRIDE`, which `cap_drop: [ALL]` removes. Write the key 0640 (group 10001, Caddy's group) and test that Caddy still starts and serves 443.
 
 **1.11 `feat: spaces with one SQLite file each`** (L) — [ADR 0009](adr/0009-spaces-and-storage.md) (wipe and re-pair)
 - Server: `control.db` (users, clients, pairing hashes, spaces, memberships, budget copy) and one file per space under `/data/spaces/`; a `SpaceStore` handed to handlers only after a membership check; migrations run on every file. Drop the unused `projects` table.
