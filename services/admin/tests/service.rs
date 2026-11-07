@@ -107,7 +107,7 @@ fn sessions_are_in_memory_tokens_that_can_end() {
 fn get_health(path: &std::path::Path) -> String {
     let mut s = UnixStream::connect(path).unwrap();
     s.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
-    s.write_all(b"GET /admin/api/v1/health HTTP/1.0\r\nHost: admin\r\n\r\n").unwrap();
+    s.write_all(b"GET /api/admin/v1/health HTTP/1.0\r\nHost: admin\r\n\r\n").unwrap();
     let mut out = String::new();
     s.read_to_string(&mut out).unwrap();
     out

@@ -12,7 +12,7 @@ fn full() -> Value {
 #[tokio::test]
 async fn saving_normalises_and_encrypts_the_token() {
     let t = start(true).await;
-    let (st, v) = t.call(M::GET, "/admin/api/v1/network", json!({})).await;
+    let (st, v) = t.call(M::GET, "/api/admin/v1/network", json!({})).await;
     assert_eq!(st, 200);
     assert_eq!((v["tls_enabled"].as_bool(), v["has_token"].as_bool(), v["allowlist_enabled"].as_bool()), (Some(false), Some(false), Some(false)), "everything starts off");
     // No host name yet: the address this request used, over HTTPS with the install's own certificate.
@@ -30,7 +30,7 @@ async fn saving_normalises_and_encrypts_the_token() {
     let stored = t.stored_token().await.unwrap();
     assert!(!stored.windows(TOKEN.len()).any(|w| w == TOKEN.as_bytes()));
     assert_eq!(t.admin.secrets.decrypt(&stored).as_deref(), Some(TOKEN));
-    let (_, again) = t.call(M::GET, "/admin/api/v1/network", json!({})).await;
+    let (_, again) = t.call(M::GET, "/api/admin/v1/network", json!({})).await;
     assert!(!again.to_string().contains(TOKEN));
 }
 
@@ -85,7 +85,7 @@ async fn invalid_input_is_refused_and_changes_nothing() {
         assert_eq!(st, 400, "{label}");
         assert!(e["detail"].is_string() && e["error"].is_string(), "{label}");
     }
-    let (_, v) = t.call(M::GET, "/admin/api/v1/network", json!({})).await;
+    let (_, v) = t.call(M::GET, "/api/admin/v1/network", json!({})).await;
     assert_eq!((v["tls_enabled"].as_bool(), v["hostname"].as_str(), v["has_token"].as_bool()), (Some(false), Some(""), Some(false)));
     assert!(t.stored_token().await.is_none());
 }
@@ -97,7 +97,7 @@ async fn http_mode_saves_without_a_token_and_pairing_follows_the_setting() {
     assert_eq!(st, 200);
     // `host` is the Host header the admin site was opened with, as Caddy passes it through.
     let pairing = |t: &T, host: &'static str| {
-        let url = format!("{}/admin/api/v1/pairings", t.adm);
+        let url = format!("{}/api/admin/v1/pairings", t.adm);
         let (http, cookie) = (t.http.clone(), t.cookie.clone());
         async move {
             let v: Value = http.post(url).header("x-askbar-admin", "1").header("cookie", cookie).header("host", host).json(&json!({})).send().await.unwrap().json().await.unwrap();
@@ -122,7 +122,7 @@ async fn http_mode_saves_without_a_token_and_pairing_follows_the_setting() {
 async fn the_backup_leaves_out_the_token_but_keeps_the_rest() {
     let t = start(true).await;
     t.save(full()).await;
-    let r = t.http.get(format!("{}/admin/api/v1/backup", t.adm)).header("cookie", &t.cookie).send().await.unwrap();
+    let r = t.http.get(format!("{}/api/admin/v1/backup", t.adm)).header("cookie", &t.cookie).send().await.unwrap();
     assert_eq!(r.status(), 200);
     let bytes = r.bytes().await.unwrap();
     let has = |needle: &[u8]| bytes.windows(needle.len()).any(|w| w == needle);
@@ -134,7 +134,7 @@ async fn the_backup_leaves_out_the_token_but_keeps_the_rest() {
 #[tokio::test]
 async fn network_needs_a_session() {
     let t = start(true).await;
-    for (m, p) in [(M::GET, "/admin/api/v1/network"), (M::PUT, "/admin/api/v1/network"), (M::POST, "/admin/api/v1/network/apply")] {
+    for (m, p) in [(M::GET, "/api/admin/v1/network"), (M::PUT, "/api/admin/v1/network"), (M::POST, "/api/admin/v1/network/apply")] {
         let r = t.http.request(m, format!("{}{p}", t.adm)).header("x-askbar-admin", "1").json(&json!({})).send().await.unwrap();
         assert_eq!(r.status(), 401, "{p}");
     }

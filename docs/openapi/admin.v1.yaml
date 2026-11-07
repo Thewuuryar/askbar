@@ -4,14 +4,15 @@ info:
   version: 1.0.0
   summary: The admin site's API, for the site and for your own scripts.
   description: |
-    The API under `/admin/api/v1`, served by `askbar-admin` at `https://<host>/admin/api/v1`. The admin site is
+    The API under `/api/admin/v1`, served by `askbar-admin` at `https://<host>/api/admin/v1`. The admin site is
     a client of it; you can write your own. Every error is a problem (`application/problem+json`). Within `v1`
     changes are additive only. See [docs/architecture.md](../architecture.md).
 
     **Two ways in.**
-    - *A session* (the site): `POST /session` with the admin password sets the `askbar_admin` cookie. Send the
-      cookie, and on any change also the header `X-Askbar-Admin: 1` (it defends the cookie against cross-site
-      requests).
+    - *A session* (the site): `POST /session` with the admin password sets the `__Secure-askbar_admin` cookie
+      (Secure, HttpOnly, SameSite=Strict, Path=/api/admin). Send the cookie, and on any change also the header
+      `X-Askbar-Admin: 1`. A change whose `Sec-Fetch-Site` is anything but `same-origin` or `none` is refused
+      (403 `forbidden`), whatever it carries (ADR 0029).
     - *An admin API key* (scripts): make one in the site (Security tab); it is shown once. Send it as
       `Authorization: Bearer <key>`. No cookie and no `X-Askbar-Admin` header. A key can use every operation
       that lists `adminApiKey` below. The operations marked session-only (the session, the password, the keys)
@@ -27,7 +28,7 @@ security:
   - adminSession: []
   - adminApiKey: []
 paths:
-  /admin/api/v1/health:
+  /api/admin/v1/health:
     get:
       operationId: getHealth
       summary: The admin service is up.
@@ -35,7 +36,7 @@ paths:
       responses:
         '200':
           description: OK.
-  /admin/api/v1/setup:
+  /api/admin/v1/setup:
     get:
       operationId: getSetup
       summary: Which first-run screens are done (booleans only).
@@ -53,7 +54,7 @@ paths:
                     type: boolean
                   audit_key_set:
                     type: boolean
-  /admin/api/v1/setup/password:
+  /api/admin/v1/setup/password:
     put:
       operationId: setPassword
       summary: "First run: choose the admin password and be signed in."
@@ -72,11 +73,11 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '409':
           $ref: '#/components/responses/Conflict'
-  /admin/api/v1/session:
+  /api/admin/v1/session:
     post:
       operationId: signIn
       summary: Sign in with the admin password.
-      description: Sets the `askbar_admin` session cookie (HttpOnly, SameSite=Strict, Path=/admin). Five wrong attempts in 15 minutes lock sign-in out for 15 minutes (429 with Retry-After); wrong admin API keys count toward the same lock.
+      description: Sets the `__Secure-askbar_admin` session cookie (Secure, HttpOnly, SameSite=Strict, Path=/api/admin). Five wrong attempts in 15 minutes lock sign-in out for 15 minutes (429 with Retry-After); wrong admin API keys count toward the same lock.
       security: []
       requestBody:
         required: true
@@ -113,7 +114,7 @@ paths:
           description: Signed out; the cookie is cleared.
         '401':
           $ref: '#/components/responses/Unauthorized'
-  /admin/api/v1/password:
+  /api/admin/v1/password:
     put:
       operationId: changePassword
       summary: Change the admin password. Other sessions are signed out.
@@ -136,7 +137,7 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '429':
           $ref: '#/components/responses/TooMany'
-  /admin/api/v1/cpa:
+  /api/admin/v1/cpa:
     get:
       operationId: getCpa
       summary: Whether CLIProxyAPI answers, the accounts connected to it, and the provider made for it.
@@ -165,7 +166,7 @@ paths:
                     nullable: true
         '401':
           $ref: '#/components/responses/Unauthorized'
-  /admin/api/v1/cpa/logins:
+  /api/admin/v1/cpa/logins:
     post:
       operationId: startCpaLogin
       summary: Start connecting a Claude or ChatGPT account.
@@ -209,7 +210,7 @@ paths:
           $ref: '#/components/responses/TooMany'
         '502':
           $ref: '#/components/responses/ServerUnavailable'
-  /admin/api/v1/cpa/logins/{state}:
+  /api/admin/v1/cpa/logins/{state}:
     parameters:
       - name: state
         in: path
@@ -243,7 +244,7 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '502':
           $ref: '#/components/responses/ServerUnavailable'
-  /admin/api/v1/cpa/logins/{state}/callback:
+  /api/admin/v1/cpa/logins/{state}/callback:
     parameters:
       - name: state
         in: path
@@ -279,7 +280,7 @@ paths:
           $ref: '#/components/responses/NotFound'
         '502':
           $ref: '#/components/responses/ServerUnavailable'
-  /admin/api/v1/cpa/accounts/{name}:
+  /api/admin/v1/cpa/accounts/{name}:
     parameters:
       - name: name
         in: path
@@ -300,7 +301,7 @@ paths:
           $ref: '#/components/responses/NotFound'
         '502':
           $ref: '#/components/responses/ServerUnavailable'
-  /admin/api/v1/services:
+  /api/admin/v1/services:
     get:
       operationId: listServices
       summary: How the server, Caddy and CLIProxyAPI are doing, and the last ten start/stop/restart actions.
@@ -339,7 +340,7 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '502':
           $ref: '#/components/responses/ServerUnavailable'
-  /admin/api/v1/services/{name}/{action}:
+  /api/admin/v1/services/{name}/{action}:
     parameters:
       - name: name
         in: path
@@ -378,7 +379,7 @@ paths:
           $ref: '#/components/responses/TooMany'
         '502':
           $ref: '#/components/responses/ServerUnavailable'
-  /admin/api/v1/keys:
+  /api/admin/v1/keys:
     get:
       operationId: listKeys
       summary: The admin API key that can be used, by name. Never the key or its hash.
@@ -420,7 +421,7 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '409':
           $ref: '#/components/responses/Conflict'
-  /admin/api/v1/keys/{id}:
+  /api/admin/v1/keys/{id}:
     parameters:
       - name: id
         in: path
@@ -439,7 +440,7 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
-  /admin/api/v1/status:
+  /api/admin/v1/status:
     get:
       operationId: getStatus
       summary: Is the server reachable, and is a change waiting to be pushed?
@@ -462,7 +463,7 @@ paths:
                     type: [string, 'null']
         '401':
           $ref: '#/components/responses/Unauthorized'
-  /admin/api/v1/providers:
+  /api/admin/v1/providers:
     get:
       operationId: listProviders
       summary: The providers, by name. A key is never shown, only whether the server holds one.
@@ -511,7 +512,7 @@ paths:
           $ref: '#/components/responses/Conflict'
         '502':
           $ref: '#/components/responses/ServerUnavailable'
-  /admin/api/v1/providers/{id}:
+  /api/admin/v1/providers/{id}:
     parameters:
       - name: id
         in: path
@@ -558,7 +559,7 @@ paths:
           $ref: '#/components/responses/NotFound'
         '502':
           $ref: '#/components/responses/ServerUnavailable'
-  /admin/api/v1/providers/models:
+  /api/admin/v1/providers/models:
     post:
       operationId: listProviderModels
       summary: Ask a provider which models it offers.
@@ -615,7 +616,7 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '502':
           $ref: '#/components/responses/ServerUnavailable'
-  /admin/api/v1/providers/{id}/test:
+  /api/admin/v1/providers/{id}/test:
     parameters:
       - name: id
         in: path
@@ -646,7 +647,7 @@ paths:
           $ref: '#/components/responses/NotFound'
         '502':
           $ref: '#/components/responses/ServerUnavailable'
-  /admin/api/v1/clients:
+  /api/admin/v1/clients:
     get:
       operationId: listClients
       summary: The paired apps, newest first.
@@ -677,7 +678,7 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '502':
           $ref: '#/components/responses/ServerUnavailable'
-  /admin/api/v1/clients/{id}/revoke:
+  /api/admin/v1/clients/{id}/revoke:
     parameters:
       - name: id
         in: path
@@ -699,7 +700,7 @@ paths:
           $ref: '#/components/responses/NotFound'
         '502':
           $ref: '#/components/responses/ServerUnavailable'
-  /admin/api/v1/pairings:
+  /api/admin/v1/pairings:
     post:
       operationId: createPairing
       summary: Make a one-time pairing string for a new app (good for ten minutes).
@@ -725,7 +726,7 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '502':
           $ref: '#/components/responses/ServerUnavailable'
-  /admin/api/v1/setup/audit-key:
+  /api/admin/v1/setup/audit-key:
     put:
       operationId: setupAuditKey
       summary: "First run: make the audit key from a passphrase (at least 20 characters)."
@@ -757,7 +758,7 @@ paths:
           $ref: '#/components/responses/Conflict'
         '502':
           $ref: '#/components/responses/ServerUnavailable'
-  /admin/api/v1/settings:
+  /api/admin/v1/settings:
     get:
       operationId: getSettings
       summary: System prompt, display defaults, timeout, kill switch, audit retention.
@@ -794,7 +795,7 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '502':
           $ref: '#/components/responses/ServerUnavailable'
-  /admin/api/v1/users/{id}/display-defaults:
+  /api/admin/v1/users/{id}/display-defaults:
     parameters:
       - name: id
         in: path
@@ -822,7 +823,7 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '502':
           $ref: '#/components/responses/ServerUnavailable'
-  /admin/api/v1/network:
+  /api/admin/v1/network:
     get:
       operationId: getNetwork
       summary: Host name, HTTPS and allowlist settings, and how the last attempt to configure Caddy went.
@@ -861,7 +862,7 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
-  /admin/api/v1/network/apply:
+  /api/admin/v1/network/apply:
     post:
       operationId: applyNetwork
       summary: Send the saved settings to Caddy again.
@@ -877,7 +878,7 @@ paths:
                 $ref: '#/components/schemas/NetworkView'
         '401':
           $ref: '#/components/responses/Unauthorized'
-  /admin/api/v1/backup:
+  /api/admin/v1/backup:
     get:
       operationId: getBackup
       summary: One .tar with server.db and admin.db, consistent and without secrets.
@@ -897,7 +898,7 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '502':
           $ref: '#/components/responses/ServerUnavailable'
-  /admin/api/v1/audit/traces:
+  /api/admin/v1/audit/traces:
     get:
       operationId: listTraces
       summary: One summary per generation, newest first (from the server API; metadata only).
@@ -916,7 +917,7 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '502':
           $ref: '#/components/responses/ServerUnavailable'
-  /admin/api/v1/audit/traces/{id}:
+  /api/admin/v1/audit/traces/{id}:
     parameters:
       - name: id
         in: path
@@ -943,7 +944,7 @@ paths:
           $ref: '#/components/responses/NotFound'
         '502':
           $ref: '#/components/responses/ServerUnavailable'
-  /admin/api/v1/audit/stats:
+  /api/admin/v1/audit/stats:
     get:
       operationId: getStats
       summary: Counts, error rate, latency, tokens and cost.
@@ -962,7 +963,7 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '502':
           $ref: '#/components/responses/ServerUnavailable'
-  /admin/api/v1/audit/provider-health:
+  /api/admin/v1/audit/provider-health:
     get:
       operationId: getProviderHealth
       summary: Providers the router found unusable.
@@ -981,7 +982,7 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '502':
           $ref: '#/components/responses/ServerUnavailable'
-  /admin/api/v1/audit/access:
+  /api/admin/v1/audit/access:
     get:
       operationId: listAuditAccess
       summary: Who opened sealed content and when (never the content), newest first.
@@ -1010,7 +1011,7 @@ paths:
                       additionalProperties: true
         '401':
           $ref: '#/components/responses/Unauthorized'
-  /admin/api/v1/audit/rotate-key:
+  /api/admin/v1/audit/rotate-key:
     post:
       operationId: rotateAuditKey
       summary: Make a new audit key from a new passphrase; the old one is retired but kept.
@@ -1045,7 +1046,7 @@ paths:
           $ref: '#/components/responses/TooMany'
         '502':
           $ref: '#/components/responses/ServerUnavailable'
-  /admin/api/v1/audit/payloads/{span_id}/open:
+  /api/admin/v1/audit/payloads/{span_id}/open:
     parameters:
       - name: span_id
         in: path

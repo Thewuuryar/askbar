@@ -87,7 +87,7 @@ pub async fn start(caddy_up: bool) -> T {
     admin.set_caddy(CaddyLink { socket: Some(caddy_socket.clone()), secrets_dir: Some(secrets_dir.clone()) });
     let adm = serve(askbar_admin::router(admin.clone())).await;
     let http = reqwest::Client::new();
-    let r = http.post(format!("{adm}/admin/api/v1/session")).header("x-askbar-admin", "1").json(&json!({ "password": PW })).send().await.unwrap();
+    let r = http.post(format!("{adm}/api/admin/v1/session")).header("x-askbar-admin", "1").json(&json!({ "password": PW })).send().await.unwrap();
     let cookie = r.headers()["set-cookie"].to_str().unwrap().split(';').next().unwrap().to_string();
     T { adm, cookie, http, admin, server, fake, dir, secrets_dir, caddy_socket }
 }
@@ -99,7 +99,7 @@ impl T {
         (st, serde_json::from_str(&r.text().await.unwrap()).unwrap_or(Value::Null))
     }
     pub async fn save(&self, body: Value) -> (u16, Value) {
-        self.call(M::PUT, "/admin/api/v1/network", body).await
+        self.call(M::PUT, "/api/admin/v1/network", body).await
     }
     pub async fn stored_token(&self) -> Option<Vec<u8>> {
         let db = self.admin.db.lock().await;

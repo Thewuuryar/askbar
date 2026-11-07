@@ -18,7 +18,9 @@ use rusqlite::OptionalExtension;
 use serde::Deserialize;
 use std::sync::Arc;
 
-pub const COOKIE_NAME: &str = "askbar_admin";
+/// The session cookie (ADR 0029): `__Secure-` makes a browser accept it only with `Secure` from a
+/// secure origin, and `Path=/api/admin` sends it to the admin API and nowhere else on the host.
+pub const COOKIE_NAME: &str = "__Secure-askbar_admin";
 pub const CSRF_HEADER: &str = "x-askbar-admin";
 pub const MIN_PASSWORD_CHARS: usize = 10;
 const MAX_PASSWORD_CHARS: usize = 200;
@@ -58,13 +60,10 @@ fn session_cookie(headers: &HeaderMap) -> Option<String> {
     })
 }
 
-fn set_cookie(headers: &HeaderMap, value: &str, max_age: i64) -> HeaderValue {
-    // Behind the TLS proxy the app itself sees plain http; trust its hint to mark the cookie Secure.
-    let secure = headers.get("x-forwarded-proto").and_then(|v| v.to_str().ok()) == Some("https");
-    let c = format!(
-        "{COOKIE_NAME}={value}; HttpOnly; SameSite=Strict; Path=/admin; Max-Age={max_age}{}",
-        if secure { "; Secure" } else { "" }
-    );
+fn set_cookie(value: &str, max_age: i64) -> HeaderValue {
+    // Always `Secure`: the site is served over HTTPS from the first start (ADR 0034), and a browser
+    // also treats http://localhost and 127.0.0.1 as secure, which is what the tests use.
+    let c = format!("{COOKIE_NAME}={value}; Secure; HttpOnly; SameSite=Strict; Path={}; Max-Age={max_age}", askbar_proto::paths::ADMIN_API);
     HeaderValue::from_str(&c).expect("cookie is plain ASCII")
 }
 
@@ -95,22 +94,32 @@ fn check_new_password(pw: &str) -> Result<(), Failure> {
 
 // ------------------------------------------------------------------ middleware
 
-/// A change made from a browser must carry `X-Askbar-Admin: 1`. A cross-site form or simple request
-/// can't add custom headers, and cross-origin scripts need a CORS preflight we never approve. Reads
-/// need nothing. (An API key is not a cookie, so a request made with one skips this: see `require_admin_auth`.)
-fn csrf_missing(req: &Request) -> bool {
-    let safe = matches!(*req.method(), Method::GET | Method::HEAD | Method::OPTIONS);
-    !safe && req.headers().get(CSRF_HEADER).and_then(|v| v.to_str().ok()) != Some("1")
-}
-
-fn csrf_error() -> ApiError {
-    ApiError::new(ErrorCode::Forbidden, "A change needs the header `X-Askbar-Admin: 1`.").no_challenge()
+/// A change made from a browser must come from the admin site itself (ADR 0029):
+/// - `Sec-Fetch-Site`, when the browser sends it, must be `same-origin` (or `none`, typed by the
+///   person). A `cross-site` or `same-site` change is refused, whatever else it carries.
+/// - It must carry `X-Askbar-Admin: 1`. A cross-site form or simple request can't add custom
+///   headers, and cross-origin scripts need a CORS preflight we never approve.
+///
+/// Reads need neither. (An API key is not a cookie, so a request made with one skips this: see
+/// `require_admin_auth`.)
+fn browser_change_refused(req: &Request) -> Option<ApiError> {
+    if matches!(*req.method(), Method::GET | Method::HEAD | Method::OPTIONS) {
+        return None;
+    }
+    let site = req.headers().get("sec-fetch-site").map(|v| v.to_str().unwrap_or(""));
+    if site.is_some_and(|s| !matches!(s, "same-origin" | "none")) {
+        return Some(ApiError::new(ErrorCode::Forbidden, "Changes are accepted only from the admin site itself.").no_challenge());
+    }
+    if req.headers().get(CSRF_HEADER).and_then(|v| v.to_str().ok()) != Some("1") {
+        return Some(ApiError::new(ErrorCode::Forbidden, "A change needs the header `X-Askbar-Admin: 1`.").no_challenge());
+    }
+    None
 }
 
 /// For the open routes that change things (signing in, first-run setup).
 pub async fn require_admin_header(req: Request, next: Next) -> Result<Response, ApiError> {
-    if csrf_missing(&req) {
-        return Err(csrf_error());
+    if let Some(e) = browser_change_refused(&req) {
+        return Err(e);
     }
     Ok(next.run(req).await)
 }
@@ -138,8 +147,8 @@ pub async fn require_session(State(state): State<Arc<AdminState>>, req: Request,
     if !state.auth.valid_session(&token) {
         return Err(signed_out());
     }
-    if csrf_missing(&req) {
-        return Err(csrf_error());
+    if let Some(e) = browser_change_refused(&req) {
+        return Err(e);
     }
     Ok(next.run(req).await)
 }
@@ -189,7 +198,7 @@ pub struct Login {
     password: String,
 }
 
-pub async fn login(State(state): State<Arc<AdminState>>, headers: HeaderMap, ApiJson(body): ApiJson<Login>) -> Response {
+pub async fn login(State(state): State<Arc<AdminState>>, ApiJson(body): ApiJson<Login>) -> Response {
     if let Some(secs) = state.auth.lockout_remaining() {
         return too_many_attempts(secs).into_response();
     }
@@ -204,7 +213,7 @@ pub async fn login(State(state): State<Arc<AdminState>>, headers: HeaderMap, Api
     state.auth.clear_failures();
     let token = state.auth.new_session();
     let mut r = StatusCode::NO_CONTENT.into_response();
-    r.headers_mut().insert(header::SET_COOKIE, set_cookie(&headers, &token, SESSION_TTL_SECS));
+    r.headers_mut().insert(header::SET_COOKIE, set_cookie(&token, SESSION_TTL_SECS));
     r
 }
 
@@ -213,7 +222,7 @@ pub async fn logout(State(state): State<Arc<AdminState>>, headers: HeaderMap) ->
         state.auth.end_session(&t);
     }
     let mut r = StatusCode::NO_CONTENT.into_response();
-    r.headers_mut().insert(header::SET_COOKIE, set_cookie(&headers, "", 0));
+    r.headers_mut().insert(header::SET_COOKIE, set_cookie("", 0));
     r
 }
 
@@ -224,7 +233,7 @@ pub async fn setup_status(State(state): State<Arc<AdminState>>) -> Json<serde_js
 }
 
 /// First run: the first visitor chooses the admin password and is signed in. Refused once one exists.
-pub async fn setup_password(State(state): State<Arc<AdminState>>, headers: HeaderMap, ApiJson(body): ApiJson<Login>) -> Result<Response, Failure> {
+pub async fn setup_password(State(state): State<Arc<AdminState>>, ApiJson(body): ApiJson<Login>) -> Result<Response, Failure> {
     check_new_password(&body.password)?;
     let password = body.password;
     let hash = tokio::task::spawn_blocking(move || hash_password(&password))
@@ -248,7 +257,7 @@ pub async fn setup_password(State(state): State<Arc<AdminState>>, headers: Heade
     }
     let token = state.auth.new_session();
     let mut r = StatusCode::NO_CONTENT.into_response();
-    r.headers_mut().insert(header::SET_COOKIE, set_cookie(&headers, &token, SESSION_TTL_SECS));
+    r.headers_mut().insert(header::SET_COOKIE, set_cookie(&token, SESSION_TTL_SECS));
     Ok(r)
 }
 

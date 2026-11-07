@@ -71,7 +71,7 @@ async fn admin_for(server_url: &str) -> A {
     let state = AdminState::with_server(db, ServerLink::new(server_url, "mgt_stub-token".into()));
     let adm = common::serve(askbar_admin::router(state)).await;
     let http = reqwest::Client::new();
-    let r = http.post(format!("{adm}/admin/api/v1/session")).header("x-askbar-admin", "1").json(&json!({ "password": common::PW })).send().await.unwrap();
+    let r = http.post(format!("{adm}/api/admin/v1/session")).header("x-askbar-admin", "1").json(&json!({ "password": common::PW })).send().await.unwrap();
     let cookie = r.headers()["set-cookie"].to_str().unwrap().split(';').next().unwrap().to_string();
     A { adm, cookie, http }
 }
@@ -94,14 +94,14 @@ impl A {
 async fn the_proxy_needs_a_session_like_every_other_admin_route() {
     let (url, seen) = stub().await;
     let a = admin_for(&url).await;
-    for p in ["/admin/api/v1/audit/traces", "/admin/api/v1/audit/traces/t1", "/admin/api/v1/audit/stats"] {
+    for p in ["/api/admin/v1/audit/traces", "/api/admin/v1/audit/traces/t1", "/api/admin/v1/audit/stats"] {
         assert_eq!(a.get(p, false, true).await.0, 401, "{p} without a session");
         assert_eq!(a.get(p, false, false).await.0, 401, "{p} with neither");
         // (The admin-header rule applies to changing requests; reads need only the session, as elsewhere.)
         assert_eq!(a.get(p, true, false).await.0, 200, "{p} with a session");
     }
     seen.requests.lock().unwrap().clear();
-    for p in ["/admin/api/v1/audit/traces", "/admin/api/v1/audit/stats"] {
+    for p in ["/api/admin/v1/audit/traces", "/api/admin/v1/audit/stats"] {
         assert_eq!(a.get(p, false, true).await.0, 401);
     }
     assert!(seen.requests.lock().unwrap().is_empty(), "nothing reaches the server without a session");
@@ -111,7 +111,7 @@ async fn the_proxy_needs_a_session_like_every_other_admin_route() {
 async fn known_parameters_are_forwarded_with_the_server_token_and_unknown_ones_are_dropped() {
     let (url, seen) = stub().await;
     let a = admin_for(&url).await;
-    let (st, body) = a.get("/admin/api/v1/audit/traces?status=error&provider=p1&before=01ABC&limit=25&evil=1&since=5", true, true).await;
+    let (st, body) = a.get("/api/admin/v1/audit/traces?status=error&provider=p1&before=01ABC&limit=25&evil=1&since=5", true, true).await;
     assert_eq!(st, 200);
     assert_eq!(body["traces"][0]["trace_id"], "t1", "the server's answer is passed through");
     let (path, query, auth) = seen.requests.lock().unwrap()[0].clone();
@@ -124,10 +124,10 @@ async fn known_parameters_are_forwarded_with_the_server_token_and_unknown_ones_a
     assert_eq!(auth, "Bearer mgt_stub-token", "the admin speaks to the server with its own token");
 
     // Odd characters in a value are encoded, not interpreted.
-    a.get("/admin/api/v1/audit/traces?status=a%26b%3Dc", true, true).await;
+    a.get("/api/admin/v1/audit/traces?status=a%26b%3Dc", true, true).await;
     assert!(seen.requests.lock().unwrap()[1].1.contains("status=a%26b%3Dc"), "{:?}", seen.requests.lock().unwrap()[1]);
 
-    let (st, _) = a.get("/admin/api/v1/audit/stats?since=100", true, true).await;
+    let (st, _) = a.get("/api/admin/v1/audit/stats?since=100", true, true).await;
     assert_eq!(st, 200);
     assert_eq!(seen.requests.lock().unwrap()[2].1, "since=100");
 }
@@ -136,13 +136,13 @@ async fn known_parameters_are_forwarded_with_the_server_token_and_unknown_ones_a
 async fn one_trace_is_fetched_by_id_unknown_ones_are_404_and_odd_ids_never_reach_the_server() {
     let (url, seen) = stub().await;
     let a = admin_for(&url).await;
-    let (st, body) = a.get("/admin/api/v1/audit/traces/01HZXTRACE", true, true).await;
+    let (st, body) = a.get("/api/admin/v1/audit/traces/01HZXTRACE", true, true).await;
     assert_eq!((st, &body["trace_id"]), (200, &json!("t1")));
     assert_eq!(seen.requests.lock().unwrap()[0].0, "/api/server/v1/audit/traces/01HZXTRACE");
-    assert_eq!(a.get("/admin/api/v1/audit/traces/missing", true, true).await.0, 404);
+    assert_eq!(a.get("/api/admin/v1/audit/traces/missing", true, true).await.0, 404);
     let before = seen.requests.lock().unwrap().len();
     for odd in ["..%2F..%2Fsnapshot", "a%20b", "x%3Fy%3D1"] {
-        assert_eq!(a.get(&format!("/admin/api/v1/audit/traces/{odd}"), true, true).await.0, 404, "{odd}");
+        assert_eq!(a.get(&format!("/api/admin/v1/audit/traces/{odd}"), true, true).await.0, 404, "{odd}");
     }
     assert_eq!(seen.requests.lock().unwrap().len(), before, "an id that is not an id is not sent anywhere");
 }
@@ -151,9 +151,9 @@ async fn one_trace_is_fetched_by_id_unknown_ones_are_404_and_odd_ids_never_reach
 async fn provider_health_is_proxied_behind_the_session() {
     let (url, seen) = stub().await;
     let a = admin_for(&url).await;
-    assert_eq!(a.get("/admin/api/v1/audit/provider-health", false, true).await.0, 401);
+    assert_eq!(a.get("/api/admin/v1/audit/provider-health", false, true).await.0, 401);
     assert!(seen.requests.lock().unwrap().is_empty());
-    let (st, body) = a.get("/admin/api/v1/audit/provider-health", true, true).await;
+    let (st, body) = a.get("/api/admin/v1/audit/provider-health", true, true).await;
     assert_eq!((st, &body["providers"][0]["status"]), (200, &json!("auth_failed")));
     assert_eq!(seen.requests.lock().unwrap()[0].0, "/api/server/v1/providers/health");
 }
@@ -166,7 +166,7 @@ async fn an_unreachable_server_is_a_502_with_a_message() {
         format!("http://{}", l.local_addr().unwrap())
     };
     let a = admin_for(&dead).await;
-    for p in ["/admin/api/v1/audit/traces", "/admin/api/v1/audit/traces/t1", "/admin/api/v1/audit/stats", "/admin/api/v1/audit/provider-health"] {
+    for p in ["/api/admin/v1/audit/traces", "/api/admin/v1/audit/traces/t1", "/api/admin/v1/audit/stats", "/api/admin/v1/audit/provider-health"] {
         let (st, body) = a.get(p, true, true).await;
         assert_eq!(st, 502, "{p}");
         assert!(body["detail"].as_str().unwrap_or("").contains("offline"), "{body}");

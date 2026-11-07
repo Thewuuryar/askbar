@@ -409,7 +409,7 @@ pub struct CreatedKey {
     key: String,
 }
 
-/// `POST /admin/api/v1/keys`: make the admin API key. 409 `api_key_exists` while one is active.
+/// `POST /api/admin/v1/keys`: make the admin API key. 409 `api_key_exists` while one is active.
 pub async fn create_key(State(state): St, ApiJson(b): ApiJson<NewKey>) -> Result<(StatusCode, Json<CreatedKey>), Failure> {
     use crate::api_key::{create, CreateError};
     let db = state.db.lock().await;
@@ -421,13 +421,13 @@ pub async fn create_key(State(state): St, ApiJson(b): ApiJson<NewKey>) -> Result
     }
 }
 
-/// `GET /admin/api/v1/keys`: the key that can be used, by name. Never the key or its hash.
+/// `GET /api/admin/v1/keys`: the key that can be used, by name. Never the key or its hash.
 pub async fn list_keys(State(state): St) -> Result<Json<Vec<crate::api_key::KeyRow>>, Failure> {
     let db = state.db.lock().await;
     crate::api_key::list(db.conn()).map(Json).map_err(internal)
 }
 
-/// `DELETE /admin/api/v1/keys/{id}`: revoke it. It stops working at once.
+/// `DELETE /api/admin/v1/keys/{id}`: revoke it. It stops working at once.
 pub async fn revoke_key(State(state): St, Path(id): Path<String>) -> Result<StatusCode, Failure> {
     let db = state.db.lock().await;
     match crate::api_key::revoke(db.conn(), &id, crate::auth::now()) {
@@ -537,7 +537,7 @@ pub struct SetupAuditKey {
     confirm: String,
 }
 
-/// `POST /admin/api/v1/setup/audit-key`: make the first audit key from a passphrase. The passphrase
+/// `POST /api/admin/v1/setup/audit-key`: make the first audit key from a passphrase. The passphrase
 /// is turned into a keypair, the public half and the salt are kept, and the passphrase is
 /// forgotten: nothing here stores or logs it. A second call is refused (rotation is its own
 /// step); losing the passphrase makes the sealed content unreadable for good.
@@ -626,7 +626,7 @@ pub struct AccessQuery {
     limit: Option<usize>,
 }
 
-/// `GET /admin/api/v1/audit/access`: who opened sealed content and when, newest first (up to 100, at
+/// `GET /api/admin/v1/audit/access`: who opened sealed content and when, newest first (up to 100, at
 /// most 500). Rows are kept in `admin.db`, written before any content is returned (see
 /// `open_audit_payloads`); they hold which span and key, never content or passphrases.
 pub async fn audit_access(State(state): St, axum::extract::Query(q): axum::extract::Query<AccessQuery>) -> Result<Json<serde_json::Value>, Failure> {
@@ -660,7 +660,7 @@ pub struct RotateKey {
     confirm: Option<String>,
 }
 
-/// `POST /admin/api/v1/audit/rotate-key`: prove the current passphrase, then switch to a new one. A
+/// `POST /api/admin/v1/audit/rotate-key`: prove the current passphrase, then switch to a new one. A
 /// new key is made and pushed (the server seals everything from then on with it); the old key is
 /// retired but kept, so what it sealed still opens, with its own passphrase. Nothing already
 /// sealed is touched or re-sealed.
@@ -724,7 +724,7 @@ pub struct OpenRequest {
     passphrase: String,
 }
 
-/// `POST /admin/api/v1/audit/payloads/{span_id}/open`: fetch the sealed content of one span from the
+/// `POST /api/admin/v1/audit/payloads/{span_id}/open`: fetch the sealed content of one span from the
 /// server, derive the key from the passphrase in the body, open it, and drop the key. The
 /// passphrase is never stored or logged. Before any content is returned an `audit_access` row is
 /// written; a wrong passphrase is recorded too, answers 403, and is rate limited (429).

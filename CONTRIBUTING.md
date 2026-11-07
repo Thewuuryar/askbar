@@ -85,12 +85,11 @@ Do not rename a Docker volume that holds data: Compose would create an empty one
 The admin API is public. Make a key in the admin site (Security tab; it is shown once), then:
 
 ```sh
-curl -H "Authorization: Bearer $KEY" https://<host>/admin/api/v1/providers
+curl -H "Authorization: Bearer $KEY" https://<host>/api/admin/v1/providers
 ```
 
-The examples use the path on `main`. Before 1.0 it moves to `/api/admin/v1` ([ADR 0022](docs/adr/0022-api-path-conventions.md)).
 A key can do everything the site can except manage keys, change the password, sign in or open sealed audit content. In a browser use the session:
-`POST /admin/api/v1/session` with the password, then send the cookie and the header `X-Askbar-Admin: 1` on changes.
+`POST /api/admin/v1/session` with the password, then send the cookie (`__Secure-askbar_admin`, `Path=/api/admin`) and the header `X-Askbar-Admin: 1` on changes.
 The whole API is [docs/openapi/admin.v1.yaml](docs/openapi/admin.v1.yaml).
 
 ## Conventions

@@ -5,7 +5,7 @@ This page describes the code on `main`. The accepted v1 target differs: see [arc
 What an Askbar app (a *client*) and the server agree on. The types live in `askbar-proto`;
 this page says what they mean. Everything is JSON over HTTPS except the chat stream.
 `/api/client/v1` is the client API. The server API (`/api/server/v1`, for the admin service
-only) and the admin API (`/admin/api/v1`) are described in the sections below and in
+only) and the admin API (`/api/admin/v1`) are described in the sections below and in
 [architecture.md](architecture.md), not here.
 
 ## The specs
@@ -15,7 +15,7 @@ goes with them (what the pieces mean and why), and does not repeat them.
 
 - [openapi/client.v1.yaml](openapi/client.v1.yaml): the client API, `/api/client/v1`.
 - [openapi/server.v1.yaml](openapi/server.v1.yaml): the server API, `/api/server/v1` (internal).
-- [openapi/admin.v1.yaml](openapi/admin.v1.yaml): the admin API, `/admin/api/v1`.
+- [openapi/admin.v1.yaml](openapi/admin.v1.yaml): the admin API, `/api/admin/v1`.
 
 Tests check that each file lists exactly the routes the code registers.
 
@@ -278,19 +278,19 @@ sealed boxes, X25519) to a public key the administrator's passphrase produces. T
 holds the private key and has no code to open a sealed payload.
 
 - **Setup.** In the admin's first-run setup the administrator chooses a passphrase of at least 20
-  characters (`PUT /admin/api/v1/setup/audit-key` with `passphrase` and `confirm`; `409` if a key
+  characters (`PUT /api/admin/v1/setup/audit-key` with `passphrase` and `confirm`; `409` if a key
   exists). The admin stretches it with Argon2id (64 MiB, 3 passes, 1 lane) and a random 16-byte
   salt into 32 bytes, uses those as the X25519 secret key and keeps only the public key, the salt,
   the cost and the key id (the first 8 bytes of the SHA-256 of the public key, in hex).
 - **The snapshot** carries `audit_public_key: {"key_id", "public_key"}` (32 bytes as 64 hex
   characters; the server checks that the id matches the key). Without it the server refuses new
   generations: `503 {"error":"audit_key_missing"}`.
-- **Reading.** `POST /admin/api/v1/audit/payloads/{span_id}/open` with `{"passphrase"}`: the admin
+- **Reading.** `POST /api/admin/v1/audit/payloads/{span_id}/open` with `{"passphrase"}`: the admin
   fetches the ciphertext, derives the key, opens the content and forgets the key. An
   `audit_access` row (span, key id, time, whether the passphrase was right) is written before any
   content is returned. A wrong passphrase is `403` and recorded; five wrong ones in 15 minutes lock
   opening out for 15 minutes (`429`).
-- **Rotation.** `POST /admin/api/v1/audit/rotate-key` with `current`, `new` and `confirm`: a new key is
+- **Rotation.** `POST /api/admin/v1/audit/rotate-key` with `current`, `new` and `confirm`: a new key is
   made and pushed, the old one is retired but kept. Content is never re-sealed: each payload names
   its `key_id` and opens with the passphrase that made that key.
 

@@ -93,28 +93,30 @@ fi
 # 2-3. Local only: first-run setup through the admin, a provider, a pair code.
 if [ $LOCAL = 1 ]; then
   PW="smoke test password"
+  # localhost, not a made-up host name: curl keeps the admin's `__Secure-` cookie (Secure) only from a
+  # secure origin, and it counts http://localhost as one, as browsers do.
   admin() { # method path [json]
     curl -fsS --unix-socket "$SOCK" -X "$1" -H 'x-askbar-admin: 1' -H 'content-type: application/json' -b "$WORK/jar" -c "$WORK/jar" \
-      ${3:+-d "$3"} "http://admin$2"
+      ${3:+-d "$3"} "http://localhost$2"
   }
-  if admin PUT /admin/api/v1/setup/password "{\"password\":\"$PW\"}" >/dev/null; then
+  if admin PUT /api/admin/v1/setup/password "{\"password\":\"$PW\"}" >/dev/null; then
     pass "first-run setup"
   else
     fail "first-run setup"
   fi
   # The audit passphrase is part of setup; without its key the server refuses to start replies.
-  if admin PUT /admin/api/v1/setup/audit-key '{"passphrase":"smoke test audit passphrase","confirm":"smoke test audit passphrase"}' >/dev/null; then
+  if admin PUT /api/admin/v1/setup/audit-key '{"passphrase":"smoke test audit passphrase","confirm":"smoke test audit passphrase"}' >/dev/null; then
     pass "audit key setup"
   else
     fail "audit key setup"
   fi
-  if admin POST /admin/api/v1/providers \
+  if admin POST /api/admin/v1/providers \
       "{\"name\":\"mock\",\"type\":\"openai\",\"base_url\":\"http://127.0.0.1:$MOCK_PORT/v1\",\"model\":\"mock-model\",\"api_key\":\"sk-smoke\"}" >/dev/null; then
     pass "add a provider that points at the mock LLM"
   else
     fail "add a provider that points at the mock LLM"
   fi
-  if admin POST /admin/api/v1/pairings '{"name":"smoke test client"}' >"$WORK/pair.json"; then
+  if admin POST /api/admin/v1/pairings '{"name":"smoke test client"}' >"$WORK/pair.json"; then
     PAIRING=$(json "$WORK/pair.json" 'd["pairing"]'); pass "create a pair code"
   else
     fail "create a pair code"
@@ -206,10 +208,10 @@ if [ "$OLD" = "426" ] && [ "$(json "$WORK/old.json" "d['error']")" = "client_too
 NOPE=$(curl -sS -o "$WORK/nope.json" -w '%{http_code}' -H "x-askbar-client-version: $CLIENT_VERSION" "$URL/api/server/v1/health" 2>/dev/null || true)
 if [ "$NOPE" = "404" ] && [ "$(json "$WORK/nope.json" "d['error']")" = "not_found" ]; then pass "the server API is not served on the client listener (404 problem)"; else fail "the server API is not served on the client listener" "got $NOPE"; fi
 if [ $LOCAL = 1 ]; then
-  if admin POST /admin/api/v1/keys '{"name":"smoke test"}' >"$WORK/key.json" 2>/dev/null; then
+  if admin POST /api/admin/v1/keys '{"name":"smoke test"}' >"$WORK/key.json" 2>/dev/null; then
     KEY=$(json "$WORK/key.json" "d['key']")
-    CODE_KEY=$(curl -sS -o /dev/null -w '%{http_code}' --unix-socket "$SOCK" -H "authorization: Bearer $KEY" "http://admin/admin/api/v1/providers" 2>/dev/null || true)
-    CODE_SESSION=$(curl -sS -o /dev/null -w '%{http_code}' --unix-socket "$SOCK" -H "authorization: Bearer $KEY" "http://admin/admin/api/v1/keys" 2>/dev/null || true)
+    CODE_KEY=$(curl -sS -o /dev/null -w '%{http_code}' --unix-socket "$SOCK" -H "authorization: Bearer $KEY" "http://admin/api/admin/v1/providers" 2>/dev/null || true)
+    CODE_SESSION=$(curl -sS -o /dev/null -w '%{http_code}' --unix-socket "$SOCK" -H "authorization: Bearer $KEY" "http://admin/api/admin/v1/keys" 2>/dev/null || true)
     if [ "$CODE_KEY" = "200" ] && [ "$CODE_SESSION" = "401" ]; then pass "an admin API key reads the API but cannot manage keys"; else fail "admin API key" "api=$CODE_KEY keys=$CODE_SESSION"; fi
   else
     fail "make an admin API key"

@@ -94,7 +94,7 @@ One host name. Every API uses `/api/{name}/v{major}` ([ADR 0022](adr/0022-api-pa
 | Public path | Goes to | Who can reach it | What protects it |
 | --- | --- | --- | --- |
 | `/admin`, `/admin/*` (site files) | admin unix socket | private addresses by default | `remote_ip` allowlist |
-| `/api/admin/v1/*` | admin unix socket | private addresses by default | session cookie and CSRF header on changes, or an admin API key; allowlist; login lockout |
+| `/api/admin/*` (`/api/admin/v1`) | admin unix socket, the same Caddy route as the site | private addresses by default | session cookie (`__Secure-`, `Path=/api/admin`) with the CSRF header and `Sec-Fetch-Site` check on changes, or an admin API key; allowlist; login lockout |
 | `/api/client/v1/*` | `server` | local network or Tailscale by default | client bearer token plus the client-version gate |
 | everything else, including other `/api/*` paths | answered 404 by Caddy | n/a | n/a |
 
