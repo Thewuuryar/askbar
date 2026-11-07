@@ -69,7 +69,6 @@ Order change (owner approved 2026-11-07): the remaining steps keep their numbers
 
 | # | Step | Size | Why here |
 | --- | --- | --- | --- |
-| 4 | 1.2 server API path conventions | S | As above; also renames `PUT /snapshot` to `PUT /config` and adds `GET /status`, which 1.3 builds on. |
 | 5 | 1.3 `crates/askbar-service` | M | Base for 1.4 and for every service in phases 2–4. |
 | 6 | 1.4 self-restart, controller removed | M | Needs 1.3's health and token check. Does not wait for 2.1: restart is authenticated with the existing admin→server token, and 2.1 later changes only where that token comes from, not the endpoint. Doing it now removes the only Docker socket mount. The restart record is a log line until 2.7 sends it to the auditor. |
 | 7 | 1.8 first run and forced password change | M | Independent of storage; before 1.9 so the wizard's last step can create the first user. |
@@ -97,9 +96,6 @@ Midpoints S = 1.5 h, M = 4 h, L = 8 h. Required work left (excluding 1.12, 1.13 
 
 That is about 40 h over the ~100 h budget before any backlog item. Proposed cuts, first to last: phase 8 (iOS, memory, mismatch alerts); 1.13 summarizing (L, ~8 h); the rest of 1.13 (~12 h); 6.4 multiple destinations (one daily destination stays: it is the ship criterion for data loss in [ADR 0002](adr/0002-v1-scope-limits-and-ship-criteria.md)); 1.12 shared spaces; 5.4 passkey (optional, after 1.0); 4.3 release check. Those cuts save about 8 h of required work (5.4, 4.3, part of 6.4), leaving ≈ 130 h. The owner kept the budget unchanged (2026-11-07); the gap is recorded here so cuts can be made in this order if hours run out.
 
-**1.2 `refactor(server)!: follow the path conventions on the server API`** (S) — [ADR 0022](adr/0022-api-path-conventions.md)
-- `/models/list` → `GET /models`; `PUT /snapshot` → `PUT /config`; add `GET /status` (config version, boot ID); `/backup` → `POST /exports` placeholder kept unencrypted until phase 6. Admin `/services/{name}/{action}` → literal `POST /services/{name}/restart` (start/stop dropped with the controller in 1.4; keep the controller call behind it until then).
-
 **1.3 `feat(server): answer 503 not_configured until the admin pushes config`** (M) — [ADR 0028](adr/0028-service-boundaries-and-config-delivery.md)
 - New `crates/askbar-service`: `/health`, `/status`, `PUT /config` scaffolding, config version, boot ID, per-link bearer check (hash file → caller → allowed routes), `not_configured` error code.
 - The server already answers `GET /status` (`config_version`, `boot_id`) and `PUT /config` since 1.2; 1.3 moves them into the crate.
@@ -107,6 +103,7 @@ That is about 40 h over the ~100 h budget before any backlog item. Proposed cuts
 
 **1.4 `feat!: replace the controller with self-restart`** (M) — [ADR 0005](adr/0005-no-controller-and-self-restart.md)
 - `POST /restart` on server and admin (auth, audit record (local until 3.x), cooldown, shutdown limit), internal watchdog for failed health; admin restarts Caddy by config reload; test `cpa` reload and restart it by config rewrite, adding a supervisor only if needed.
+- Build `POST /restart` on `crates/askbar-service` (the restart route can join `routes`, and its link rules are `links::Allow`). After a restart the admin already pushes again within one status check (12 s), from the new boot ID (1.3).
 - Delete `services/controller`, the `control` network, `control-token` volume reference, `docker.sock` mount, `CONTROL_V1`, `control.v1.yaml`, isolation section 3e (replace with "no service mounts docker.sock").
 - Test: scripted restart from the admin returns under 1 minute ([ADR 0002](adr/0002-v1-scope-limits-and-ship-criteria.md)).
 
