@@ -4,7 +4,7 @@ Status: tracker for the v1 build order. Decisions live in the [ADRs](adr/README.
 
 ## Context
 
-`main` (0.5.0) is three programs plus a controller: `askbar-server` (client API, server API, provider keys under a master key, the router with fallback, and the sealed audit store in `audit.db`), `askbar-admin` (site at `/admin`, API at `/admin/api/v1`, first run on `127.0.0.1:8081`), `askbar-controller` (Docker socket), `askbar-proto`, and the Tauri client (`src-tauri/`, `ui/`). The accepted ADRs (0001–0032) and `docs/architecture.md` describe a different v1: no controller, a `bootstrap` container with per-link tokens, an `auditor`, a `model-gateway` that alone holds keys and opens spans, an `alerter`, per-space SQLite files, encrypted per-service backups, hardened containers, and `/api/{name}/v1` paths everywhere.
+`main` (0.5.0) is three programs plus a controller: `askbar-server` (client API, server API, provider keys under a master key, the router, and the sealed audit store in `audit.db`), `askbar-admin` (site at `/admin`, API at `/admin/api/v1`, first run on `127.0.0.1:8081`), `askbar-controller` (Docker socket), `askbar-proto`, and the Tauri client (`src-tauri/`, `ui/`). The accepted ADRs (0001–0032) and `docs/architecture.md` describe a different v1: no controller, a `bootstrap` container with per-link tokens, an `auditor`, a `model-gateway` that alone holds keys and opens spans, an `alerter`, per-space SQLite files, encrypted per-service backups, hardened containers, and `/api/{name}/v1` paths everywhere.
 
 This plan gets there in small PRs. Rules for every PR:
 
@@ -69,7 +69,6 @@ Order change (owner approved 2026-11-07): the remaining steps keep their numbers
 
 | # | Step | Size | Why here |
 | --- | --- | --- | --- |
-| 2 | 1.5 remove provider fallback | S | Independent; shrinks `router.rs` before 1.3 and 3.1 touch or move it. |
 | 3 | 1.1 admin API to `/api/admin/v1` | M | 1.1 and 1.2 both break contracts the admin site, scripts and tests use; back to back keeps the churn in one place. |
 | 4 | 1.2 server API path conventions | S | As above; also renames `PUT /snapshot` to `PUT /config` and adds `GET /status`, which 1.3 builds on. |
 | 5 | 1.3 `crates/askbar-service` | M | Base for 1.4 and for every service in phases 2–4. |
@@ -115,19 +114,6 @@ That is about 40 h over the ~100 h budget before any backlog item. Proposed cuts
 - `POST /restart` on server and admin (auth, audit record (local until 3.x), cooldown, shutdown limit), internal watchdog for failed health; admin restarts Caddy by config reload; test `cpa` reload and restart it by config rewrite, adding a supervisor only if needed.
 - Delete `services/controller`, the `control` network, `control-token` volume reference, `docker.sock` mount, `CONTROL_V1`, `control.v1.yaml`, isolation section 3e (replace with "no service mounts docker.sock").
 - Test: scripted restart from the admin returns under 1 minute ([ADR 0002](adr/0002-v1-scope-limits-and-ship-criteria.md)).
-
-**1.5 `refactor(server): remove automatic provider fallback`** (S) — [ADR 0014](adr/0014-model-gateway-and-providers.md)
-- `router.rs` tries only the chosen provider (retries kept); drop `fallback_order`, `allow_as_fallback`, the `provider` "answered by" event usage in the client UI. Contract change noted in the commit.
-
-Order change: 1.6 and 1.7 were done first, right after phase 0. Before them a Docker stack had no client route at all without a host name and a Cloudflare token, so the Mac check could not pass; the plan had assumed the 8081 page served clients, and it served the admin only.
-
-**1.6 `feat(caddy)!: self-signed HTTPS from first boot on the private address`** (M) — [ADR 0007](adr/0007-first-run-and-admin-sign-in.md), 0015
-- Caddy serves `/admin`, `/api/admin`, `/api/client` on 443 with a certificate the admin makes for the install (Caddy's internal CA would need on-demand TLS, since Caddy doesn't know the host's address), handed out for any name, 80 redirects; private-address `remote_ip` allowlist from boot (real source, not forwarded headers). Remove the `admin-setup` network and the `127.0.0.1:8081` port.
-- Isolation script: allowlist rules, no 8081, published ports 80/443 only.
-
-**1.7 `feat(client): pin the self-signed certificate from the pairing key`** (M) — [ADR 0034](adr/0034-self-signed-https-and-certificate-pinning.md) (proposed)
-- Pairing key carries the certificate's SHA-256 (the admin made it, so it reads it from its own file). Client pins it with a custom rustls verifier while there is no host name; normal validation once a real cert is issued; `allow_insecure` stays dev-only. The pin is an optional field, so older pairing keys still decode.
-- *1.6 and 1.7 must land together for the Mac check to pass over HTTPS* (the two-PR window).
 
 **1.8 `feat(admin): first run with published credentials and a forced password change`** (M) — [ADR 0007](adr/0007-first-run-and-admin-sign-in.md)
 - Initial `admin`/documented password; every route except password change refuses until changed; reject the default and username-equal passwords; host reset command (`docker compose run --rm admin reset`) recorded. Login lockout, rate limits, identical errors (Defend list, [ADR 0016](adr/0016-risk-register.md)).
