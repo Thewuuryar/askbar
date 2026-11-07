@@ -6,7 +6,7 @@
 //! | `server` | `GET /api/server/v1/status` | `POST /api/server/v1/restart`, then wait for a new boot ID |
 //! | `admin` | this process | exit after answering; Docker starts it again |
 //! | `caddy` | its admin socket | push its configuration again (a live reload) |
-//! | `cpa` | its own API (accounts) | not from here: from the host (`docker compose restart cpa`) |
+//! | `cpa` | its management API (accounts) | not from here: from the host (`docker compose restart cpa`) |
 //!
 //! CLIProxyAPI was tested for a reload on a config change (ADR 0005 asks for that test first) and does
 //! not reload: a new API key written to its config is refused until the container restarts. Restarting
