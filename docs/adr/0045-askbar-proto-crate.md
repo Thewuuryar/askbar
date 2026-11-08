@@ -1,6 +1,6 @@
 # 0045. The `askbar-proto` crate
 
-Status: Proposed
+Status: Accepted
 Date: 2026-11-08
 Kind: component
 Source: plan step 1.14 ([plan-v1.md](../plan-v1.md)); owner rule that every component has an ADR of its own (2026-11-07)

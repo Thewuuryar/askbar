@@ -1,6 +1,6 @@
 # 0046. Component and register ADRs, partial amendments, and deferral
 
-Status: Proposed
+Status: Accepted
 Date: 2026-11-08
 Source: owner request in review of plan step 1.14
 
