@@ -29,7 +29,8 @@ tracing = "0.1"
 tracing-subscriber = "0.3"
 
 [dev-dependencies]
-serde_yaml_ng = "0.10"
+# YAML in safe Rust, to read our own OpenAPI files (it replaced serde_yaml_ng, built on the unmaintained unsafe-libyaml).
+serde-saphyr = { version = "2.1", default-features = false, features = ["deserialize"] }
 serde_json = "1"
 
 [lints]

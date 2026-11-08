@@ -97,7 +97,7 @@ impl Default for ClientConfig {
 
 impl ClientConfig {
     pub fn save(&self, path: &Path) -> Result<(), String> {
-        let text = serde_yaml_ng::to_string(self).map_err(|e| e.to_string())?;
+        let text = serde_saphyr::to_string(self).map_err(|e| e.to_string())?;
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
         }
@@ -109,7 +109,7 @@ impl ClientConfig {
         if text.trim().is_empty() {
             return Ok(ClientConfig::default());
         }
-        serde_yaml_ng::from_str(&text).map_err(|e| format!("Could not parse {}: {e}", path.display()))
+        serde_saphyr::from_str(&text).map_err(|e| format!("Could not parse {}: {e}", path.display()))
     }
 
     /// The validated server URL, or why it can't be used.
@@ -249,6 +249,46 @@ mod tests {
         assert_eq!((c.ui.width, c.ui.theme), (Some(600), Some(Theme::Dark)));
         std::fs::write(&p, "server_url: [oops").unwrap();
         assert!(ClientConfig::load(&p).unwrap_err().contains("client.yaml"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_file_the_old_yaml_library_wrote_still_loads_and_saving_round_trips() {
+        // client.yaml files on people's machines were written by serde_yaml_ng; the parser that replaced
+        // it must read them the same way, and what it writes must read back unchanged.
+        let dir = std::env::temp_dir().join(format!("askbar-client-yaml-compat-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("client.yaml");
+        std::fs::write(
+            &p,
+            "server_url: https://askbar.example.com:8443\nhotkey: Ctrl+Shift+Space\nui:\n  theme: dark\n  width: 720\n  \
+             max_height: 640\n  top_percent: 0.2\n  hide_on_blur: true\nallow_insecure: false\n\
+             cert_sha256: 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\n",
+        )
+        .unwrap();
+        let c = ClientConfig::load(&p).unwrap();
+        assert_eq!(c.server_url, "https://askbar.example.com:8443");
+        assert_eq!(c.hotkey, "Ctrl+Shift+Space");
+        assert_eq!((c.ui.theme, c.ui.width, c.ui.max_height), (Some(Theme::Dark), Some(720), Some(640)));
+        assert_eq!((c.ui.top_percent, c.ui.hide_on_blur, c.ui.history_width), (Some(0.2), Some(true), None));
+        assert!(!c.allow_insecure);
+        assert_eq!(c.cert_sha256.as_deref(), Some("9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"));
+
+        c.save(&p).unwrap();
+        let again = ClientConfig::load(&p).unwrap();
+        assert_eq!(
+            (again.server_url.as_str(), again.hotkey.as_str(), again.allow_insecure, again.cert_sha256.as_deref()),
+            (c.server_url.as_str(), c.hotkey.as_str(), c.allow_insecure, c.cert_sha256.as_deref())
+        );
+        assert_eq!((again.ui.theme, again.ui.width, again.ui.max_height), (c.ui.theme, c.ui.width, c.ui.max_height));
+        assert_eq!((again.ui.top_percent, again.ui.hide_on_blur, again.ui.history_width), (c.ui.top_percent, c.ui.hide_on_blur, None));
+
+        // The default the app writes on first start (an empty server URL), and the old library's quoting of it.
+        ClientConfig::default().save(&p).unwrap();
+        assert_eq!(ClientConfig::load(&p).unwrap().server_url, "");
+        std::fs::write(&p, "server_url: ''\nhotkey: Ctrl+Shift+Space\nui: {}\nallow_insecure: false\n").unwrap();
+        let empty = ClientConfig::load(&p).unwrap();
+        assert_eq!((empty.server_url.as_str(), empty.ui.width), ("", None));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
