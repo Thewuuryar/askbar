@@ -11,6 +11,7 @@ pub mod caddy;
 pub mod cpa;
 pub mod db;
 pub mod network;
+pub mod pages;
 pub mod routes;
 pub mod secrets;
 pub mod self_cert;
@@ -18,7 +19,12 @@ pub mod server_link;
 pub mod services;
 pub mod web;
 
-use axum::{http::StatusCode, middleware, response::Redirect, Router};
+use axum::{
+    http::{HeaderMap, StatusCode},
+    middleware,
+    response::Redirect,
+    Router,
+};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -104,9 +110,8 @@ pub fn db_path() -> PathBuf {
     PathBuf::from(dir).join("admin.db")
 }
 
-fn asset(content_type: &'static str, body: &'static str) -> impl axum::response::IntoResponse {
-    ([(axum::http::header::CONTENT_TYPE, content_type)], body)
-}
+const JS: &str = "text/javascript; charset=utf-8";
+const CSS: &str = "text/css; charset=utf-8";
 
 /// All of the admin's routes, with the list of what was registered (see `routes`).
 pub fn routes(state: &Arc<AdminState>) -> Routes {
@@ -160,13 +165,18 @@ pub fn routes(state: &Arc<AdminState>) -> Routes {
         .signed_in(state);
     // Open, but a change still wants the browser header.
     let open = Routes::new().post(&v1("/session"), web::login).browser_header();
-    Routes::new()
-        .get("/admin", || async { Redirect::to("/admin/") })
-        .get("/admin/", || async { asset("text/html; charset=utf-8", include_str!("ui/index.html")) })
-        .get("/admin/app.js", || async { asset("text/javascript; charset=utf-8", include_str!("ui/app.js")) })
-        .get("/admin/audit.js", || async { asset("text/javascript; charset=utf-8", include_str!("ui/audit.js")) })
-        .get("/admin/tokens.css", || async { asset("text/css; charset=utf-8", include_str!("ui/tokens.css")) })
-        .get("/admin/style.css", || async { asset("text/css; charset=utf-8", include_str!("ui/style.css")) })
+    // One route per admin page (plan step 1.16); any other `/admin/...` path is the fallback's 404.
+    pages::rendered();
+    let mut site = Routes::new();
+    for (i, page) in pages::PAGES.iter().enumerate() {
+        site = site.get(&pages::path(page), move || async move { pages::page_response(i) });
+    }
+    site.get("/admin", || async { Redirect::to(&pages::path(&pages::PAGES[0])) })
+        .get("/admin/", || async { Redirect::to(&pages::path(&pages::PAGES[0])) })
+        .get("/admin/app.js", |h: HeaderMap| async move { pages::static_file(&h, JS, include_str!("ui/app.js")) })
+        .get("/admin/audit.js", |h: HeaderMap| async move { pages::static_file(&h, JS, include_str!("ui/audit.js")) })
+        .get("/admin/tokens.css", |h: HeaderMap| async move { pages::static_file(&h, CSS, include_str!("ui/tokens.css")) })
+        .get("/admin/style.css", |h: HeaderMap| async move { pages::static_file(&h, CSS, include_str!("ui/style.css")) })
         .get(&v1("/health"), || async { (StatusCode::OK, "ok") })
         .get(&v1("/setup"), web::setup_status)
         .merge(open)

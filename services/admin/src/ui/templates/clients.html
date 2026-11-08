@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{%- import "blocks.html" as b %}
+{% block hint %}Users, the apps each one paired, and pairing keys for new apps.{% endblock %}
+{% block content %}
+    <form id="user-form" class="panel">
+      <h3>Users</h3>
+      {% call b::hint("Each person who uses Askbar is a user. A user's apps share their conversations; another user never sees them.") %}{% endcall %}
+      <div id="users"></div>
+      <label>New user <input id="u-name" placeholder="Alice" maxlength="60" required></label>
+      <div class="row"><button type="submit">Add user</button></div>
+      {% call b::error_line("user-error") %}{% endcall %}
+    </form>
+    <form id="pair-form" class="panel">
+      <h3>Pair a new client</h3>
+      <label>For user <select id="d-user" required></select></label>
+      <label>Client name <input id="d-name" placeholder="Work laptop" maxlength="60"></label>
+      <div class="row"><button type="submit">Generate pairing key</button></div>
+      <div id="pairing-out" hidden>
+        <label>Paste this into Askbar in the app you are pairing (tray icon, Pair with server). It works once and expires in 10 minutes. That user's other apps can then be paired from this one (Pair another app).
+          <textarea id="pairing-string" rows="3" readonly></textarea>
+        </label>
+        <div class="row"><button type="button" id="pairing-copy" class="secondary">Copy</button></div>
+      </div>
+      {% call b::error_line("pair-error") %}{% endcall %}
+    </form>
+    <div id="clients"></div>
+{% endblock %}

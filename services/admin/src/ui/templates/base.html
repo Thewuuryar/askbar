@@ -1,0 +1,89 @@
+<!doctype html>
+{%- import "blocks.html" as b %}
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1"> <!-- names-ok -->
+  <title>{{ label }} · Askbar admin</title>
+  <link rel="stylesheet" href="/admin/tokens.css">
+  <link rel="stylesheet" href="/admin/style.css">
+  <script src="/admin/app.js" defer></script>
+  {% block scripts %}{% endblock %}
+</head>
+<body data-page="{{ current }}">
+  <main id="setup" class="narrow" hidden>
+    <h1>Set up Askbar</h1>
+    <form id="setup-password-form" hidden>
+      <h2>Change the published password</h2>
+      {% call b::hint("You signed in with the password everyone can read in the documentation. Choose your own before anything else: at least 10 characters, not the published one and not the username.") %}{% endcall %}
+      <label>Current password <input id="setup-current" type="password" autocomplete="current-password" required></label>
+      <label>New password <input id="setup-password" type="password" autocomplete="new-password" minlength="10" required></label>
+      <label>Repeat new password <input id="setup-password2" type="password" autocomplete="new-password" minlength="10" required></label>
+      <button type="submit">Change password</button>
+      {% call b::error_line("setup-password-error") %}{% endcall %}
+    </form>
+    <form id="setup-audit-form" hidden>
+      <h2>Choose the audit passphrase</h2>
+      {% call b::hint("Prompts, replies and provider errors are recorded for the Audit tab, sealed so that the server cannot read them. Only this passphrase opens them. At least 20 characters.") %}{% endcall %}
+      <p class="hint"><strong>It is never stored and cannot be recovered.</strong> If it is lost, the recorded content stays unreadable for good; the metadata (times, providers, tokens, errors) stays available.</p>
+      <label>Passphrase <input id="setup-audit" type="password" autocomplete="new-password" minlength="20" required></label>
+      <label>Repeat passphrase <input id="setup-audit2" type="password" autocomplete="new-password" minlength="20" required></label>
+      <label class="check"><input id="setup-audit-stored" type="checkbox" required> I stored this passphrase; it cannot be recovered</label>
+      <button type="submit">Create the key</button>
+      {% call b::error_line("setup-audit-error") %}{% endcall %}
+    </form>
+    <div id="setup-audit-done" hidden>
+      <h2>The audit key is ready</h2>
+      <p>Key ID: <code id="setup-audit-keyid"></code></p>
+      {% call b::hint("The key ID names the key; it is safe to write down next to the passphrase. Changing the passphrase later means rotating the key (Settings).") %}{% endcall %}
+      <h2>Next steps</h2>
+      <ol id="setup-next" class="hint">
+        <li><a href="/admin/network/" data-tab="network">Network</a> (optional): a host name and a real certificate.</li>
+        <li><a href="/admin/providers/" data-tab="providers">Providers</a>: add at least one model provider.</li>
+        <li><a href="/admin/clients/" data-tab="clients">Clients</a>: create a user, then a pairing key for them, and pair the Askbar app.</li>
+      </ol>
+      <button id="setup-audit-continue" type="button">Continue</button>
+    </div>
+  </main>
+
+  <main id="login" class="narrow" hidden>
+    <h1>Askbar admin</h1>
+    <form id="login-form">
+      <label>Username <input id="username" type="text" autocomplete="username" value="admin" required></label>
+      <label>Password <input id="password" type="password" autocomplete="current-password" required></label>
+      {% call b::hint("On a new install the login is the published one; see the README's first-run steps.") %}{% endcall %}
+      <button type="submit">Sign in</button>
+      {% call b::error_line("login-error") %}{% endcall %}
+    </form>
+  </main>
+
+  <div id="app" hidden>
+    <header class="top">
+      <h1>Askbar admin</h1>
+      <nav id="nav" aria-label="Admin pages">
+        {%- for p in pages %}
+        <a href="/admin/{{ p.slug }}/" data-tab="{{ p.slug }}"{% if p.slug == current %} aria-current="page"{% endif %}>{{ p.label }}</a>
+        {%- endfor %}
+      </nav>
+      <button type="button" id="logout" class="link">Sign out</button>
+    </header>
+    <main>
+      <p id="offline" class="flash error" role="alert" hidden>Server offline. The admin can't reach the Askbar server, so changes, tests, clients and backups won't work until it is back. Nothing you change now is lost or half-saved.</p>
+      <p id="flash" class="flash" role="status" hidden></p>
+
+      <section id="tab-{{ current }}" data-tab="{{ current }}">
+        <div class="row">
+          <h2>{{ label }}</h2>
+          <span class="spacer"></span>
+          {% block actions %}{% endblock %}
+        </div>
+        <p class="hint">{% block hint %}{% endblock %}</p>
+{% block content %}{% endblock %}
+      </section>
+    </main>
+  </div>
+
+  <footer class="footer">Askbar is free software under the AGPL-3.0-or-later. <a href="https://github.com/Thewuuryar/askbar" rel="noreferrer">Source code</a></footer>
+
+</body>
+</html>

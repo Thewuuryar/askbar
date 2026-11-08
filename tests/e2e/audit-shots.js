@@ -90,7 +90,10 @@ async function waitForPort(port) {
     await page.fill('#password', PASSWORD);
     await page.click('#login-form button');
     await page.waitForSelector('#app:not([hidden])');
+    // Each admin section is its own page (plan step 1.16).
     await page.click('#nav [data-tab="audit"]');
+    await page.waitForURL('**/admin/audit/**');
+    await page.waitForSelector('#app:not([hidden])');
     await page.waitForFunction(() => Number(document.querySelector('[data-stat="requests"]')?.textContent) >= 1);
     const check = async (view) => {
       await page.waitForTimeout(250);

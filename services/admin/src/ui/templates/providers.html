@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{%- import "blocks.html" as b %}
+{% block hint %}API keys are write-only: they are stored encrypted and never shown again. Leave the key empty when editing to keep the current one.{% endblock %}
+{% block actions %}<button type="button" id="add-provider">Add provider</button>{% endblock %}
+{% block content %}
+    <div id="providers"></div>
+
+    <form id="provider-form" hidden>
+      <h3 id="provider-form-title">Add provider</h3>
+      <p id="p-hint" class="hint" hidden></p>
+      <label>Name <input id="p-name" required></label>
+      <label>Type
+        <select id="p-type"><option value="openai">openai (OpenAI-compatible)</option><option value="anthropic">anthropic</option></select>
+      </label>
+      <label>Base URL <input id="p-base-url" placeholder="https://api.openai.com/v1"></label>
+      <label>Model
+        <input id="p-model" required>
+        <select id="p-model-list" hidden aria-label="Model"></select>
+      </label>
+      <div class="row">
+        <button type="button" id="p-model-refresh" class="secondary">Load models</button>
+        <span id="p-model-status" class="hint" role="status"></span>
+      </div>
+      <label>API key <input id="p-key" type="password" autocomplete="off" placeholder="write-only"></label>
+      <label>Max tokens <input id="p-max-tokens" type="number" min="1"></label>
+      <label>Temperature <input id="p-temperature" type="number" step="0.1" min="0" max="2"></label>
+      <label>Billing
+        <select id="p-billing"><option value="metered">metered (paid per token)</option><option value="subscription">subscription (flat plan)</option></select>
+      </label>
+      {% call b::hint("Prices per million tokens, in your own currency. Leave empty if you do not know: cost then shows as unknown, not as zero.") %}{% endcall %}
+      <label>Input price <input id="p-price-in" type="number" step="any" min="0"></label>
+      <label>Output price <input id="p-price-out" type="number" step="any" min="0"></label>
+      <label>Cached input price <input id="p-price-cached" type="number" step="any" min="0"></label>
+      <div class="row">
+        <button type="submit">Save</button>
+        <button type="button" id="provider-cancel" class="secondary">Cancel</button>
+      </div>
+      {% call b::error_line("provider-error") %}{% endcall %}
+    </form>
+{% endblock %}
