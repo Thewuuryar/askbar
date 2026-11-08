@@ -1,6 +1,7 @@
 [package]
 name = "askbar-admin"
 license = "AGPL-3.0-or-later"
+publish = false
 version = "0.6.0"
 edition = "2021"
 description = "Askbar admin service: the admin site and its own database, kept apart from the server"
@@ -31,3 +32,6 @@ rcgen = { version = "0.14.10", default-features = false, features = ["ring", "pe
 serde_yaml_ng = "0.10"
 futures-util = "0.3"
 askbar-server = { path = "../server" }
+
+[lints]
+workspace = true

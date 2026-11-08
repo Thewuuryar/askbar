@@ -1,0 +1,37 @@
+# Dependabot (ADR 0017): security updates only. Renovate (renovate.json) opens the version updates, so
+# version updates are switched off here (open-pull-requests-limit: 0); that limit does not apply to
+# security updates. A security update opens a pull request when an advisory affects a dependency, once
+# "Dependabot alerts" and "Dependabot security updates" are on in the repository's security settings.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directories: ["/", "/clients/desktop"]
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    commit-message:
+      prefix: "fix(deps)"
+
+  - package-ecosystem: npm
+    directories: ["/", "/clients/desktop"]
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    commit-message:
+      prefix: "fix(deps)"
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    commit-message:
+      prefix: "fix(ci)"
+
+  - package-ecosystem: docker
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    commit-message:
+      prefix: "fix(deps)"

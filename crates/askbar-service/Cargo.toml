@@ -1,6 +1,7 @@
 [package]
 name = "askbar-service"
 license = "AGPL-3.0-or-later"
+publish = false
 version = "0.6.0"
 edition = "2021"
 description = "What every Askbar service shares: per-link token checks, status, and the not-configured gate"
@@ -17,3 +18,6 @@ ulid = "1"
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
 reqwest = { version = "0.12", default-features = false, features = ["json"] }
+
+[lints]
+workspace = true

@@ -102,8 +102,11 @@ The whole API is [docs/openapi/admin.v1.yaml](docs/openapi/admin.v1.yaml).
   neither crate depends on the other. Keep them alike.
 - Secrets never go in `.env`, logs or error messages, and go in backups only under the encryption in
   [ADR 0013](docs/adr/0013-backups.md).
-- A new library inside the license allowlist needs a reason in the PR. A new container, image or service, or a dependency outside the allowlist, also needs an ADR. `cargo deny check` and the npm license check must pass
-  ([ADR 0026](docs/adr/0026-dependency-license-check.md)).
+- A new library inside the license allowlist needs a reason in the PR. A new container, image or service, or a dependency outside the allowlist, also needs an ADR. The allowlist is
+  the `allow` list in [deny.toml](deny.toml). `cargo deny check` (in the root and in `clients/desktop`) and the npm
+  license check (`node scripts/check-npm-licenses.js package-lock.json clients/desktop/package-lock.json`) must
+  pass ([ADR 0026](docs/adr/0026-dependency-license-check.md)). Commit both `package-lock.json` files with any
+  npm change.
 - Names, logs and audit, and UI text follow [docs/style/](docs/style/). The rules an agent must never break are the
   "Hard rules" in [AGENTS.md](AGENTS.md).
 

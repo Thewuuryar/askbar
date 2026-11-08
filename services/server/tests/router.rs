@@ -104,7 +104,7 @@ impl Stack {
 
     /// Sends and waits for the end; returns the events.
     async fn run(&self, prompt: &str) -> Vec<GenEvent> {
-        let sub = self.submit(prompt).ok().expect("accepted");
+        let sub = self.submit(prompt).expect("accepted");
         sub.live.subscribe(0).collect().await
     }
 
@@ -245,7 +245,7 @@ async fn every_chat_refusal_is_a_problem_with_its_code_status_and_retry_after() 
 #[tokio::test]
 async fn a_stop_while_waiting_to_retry_ends_the_generation_at_once() {
     let s = stack("m-429", "m", serde_json::json!({})).await;
-    let sub = s.submit("hello").ok().expect("accepted");
+    let sub = s.submit("hello").expect("accepted");
     tokio::time::sleep(Duration::from_millis(300)).await; // the first try was refused; it is now waiting
     let asked = Instant::now();
     assert!(s.state.generations.get(&sub.generation_id).unwrap().cancel());
@@ -259,7 +259,7 @@ async fn a_stop_while_waiting_to_retry_ends_the_generation_at_once() {
 #[tokio::test]
 async fn the_audit_trail_shows_every_try_on_the_one_provider() {
     let s = stack("m-500", "m", serde_json::json!({})).await;
-    let sub = s.submit("please answer").ok().expect("accepted");
+    let sub = s.submit("please answer").expect("accepted");
     let trace = sub.generation_id.clone();
     let _: Vec<GenEvent> = sub.live.subscribe(0).collect().await;
     s.state.audit.flush().await;
@@ -341,7 +341,7 @@ async fn the_flag_clears_on_the_next_success_and_when_a_new_key_is_saved_and_the
     // A flagged provider that then works is cleared by the success.
     s.state.db.lock().unwrap().flag_provider_auth_failed("p2", "http_403").unwrap();
     assert!(matches!(s.run("another one").await.last(), Some(GenEvent::Error { .. }))); // p1 still fails (m-fail)
-    let sub = s.submit_to("p2", "on p2").ok().expect("accepted");
+    let sub = s.submit_to("p2", "on p2").expect("accepted");
     assert!(is_done(&sub.live.subscribe(0).collect::<Vec<_>>().await));
     let flagged: Vec<String> = s.state.db.lock().unwrap().provider_health().unwrap().into_iter().map(|h| h.0).collect();
     assert_eq!(flagged, ["p1"], "p2 worked, so its flag is gone; p1 failed again and is flagged again");
@@ -383,7 +383,7 @@ async fn the_provider_is_announced_once_before_the_first_delta_even_after_retrie
 #[tokio::test]
 async fn a_subscriber_who_already_has_text_is_not_sent_the_announcements_again() {
     let s = stack("m", "m", serde_json::json!({})).await;
-    let sub = s.submit("hello").ok().expect("accepted");
+    let sub = s.submit("hello").expect("accepted");
     let all: Vec<GenEvent> = sub.live.subscribe(0).collect().await;
     let rest: Vec<GenEvent> = sub.live.subscribe(3).collect().await;
     assert!(rest.iter().all(|e| !matches!(e, GenEvent::Provider { .. })), "{rest:?}");
@@ -393,7 +393,7 @@ async fn a_subscriber_who_already_has_text_is_not_sent_the_announcements_again()
 #[tokio::test]
 async fn the_kill_switch_gate_leaves_a_span_whether_it_lets_a_generation_through_or_not() {
     let s = stack("m", "m", serde_json::json!({})).await;
-    let sub = s.submit("works").ok().expect("accepted");
+    let sub = s.submit("works").expect("accepted");
     let trace = sub.generation_id.clone();
     let _: Vec<GenEvent> = sub.live.subscribe(0).collect().await;
     askbar_server::testing::update_snapshot(&s.state.db.lock().unwrap(), |snap| snap.kill_switch = true);
@@ -449,7 +449,7 @@ async fn switch_off(s: &Stack, aborts: bool) {
 #[tokio::test]
 async fn turning_the_kill_switch_on_with_abort_stops_running_replies_and_clears_the_queue() {
     let s = stack("m", "m", serde_json::json!({})).await;
-    let first = s.submit("please be slow").ok().expect("accepted");
+    let first = s.submit("please be slow").expect("accepted");
     let queued = askbar_server::generation::submit(
         &s.state,
         Submit {
@@ -462,7 +462,6 @@ async fn turning_the_kill_switch_on_with_abort_stops_running_replies_and_clears_
             client_request_id: None,
         },
     )
-    .ok()
     .expect("queued");
     assert!(queued.queued);
     tokio::time::sleep(Duration::from_millis(1200)).await; // it has produced some text
@@ -504,7 +503,7 @@ async fn turning_the_kill_switch_on_with_abort_stops_running_replies_and_clears_
 #[tokio::test]
 async fn turning_it_on_without_abort_lets_running_replies_finish_but_still_clears_the_queue() {
     let s = stack("m", "m", serde_json::json!({})).await;
-    let first = s.submit("please be slow").ok().expect("accepted");
+    let first = s.submit("please be slow").expect("accepted");
     let queued = askbar_server::generation::submit(
         &s.state,
         Submit {
@@ -517,7 +516,6 @@ async fn turning_it_on_without_abort_lets_running_replies_finish_but_still_clear
             client_request_id: None,
         },
     )
-    .ok()
     .expect("queued");
     tokio::time::sleep(Duration::from_millis(800)).await;
 
@@ -568,7 +566,7 @@ async fn the_monthly_limit_and_subscription_providers_are_handled_by_the_budget_
 async fn the_budget_gate_leaves_a_span_with_its_numbers() {
     let s = stack("m", "m", serde_json::json!({})).await;
     askbar_server::testing::update_snapshot(&s.state.db.lock().unwrap(), |snap| snap.budget.daily_tokens = Some(100));
-    let sub = s.submit("first").ok().expect("under the limit");
+    let sub = s.submit("first").expect("under the limit");
     let trace = sub.generation_id.clone();
     let _: Vec<GenEvent> = sub.live.subscribe(0).collect().await;
     assert!(s.submit("second").is_err());
@@ -594,7 +592,7 @@ async fn cached_tokens_an_anthropic_provider_reports_reach_the_attempt_span_and_
     askbar_server::testing::update_snapshot(&s.state.db.lock().unwrap(), |snap| {
         snap.providers.iter_mut().find(|p| p.id == "p1").unwrap().kind = "anthropic".into();
     });
-    let sub = s.submit("a cached prompt").ok().expect("accepted");
+    let sub = s.submit("a cached prompt").expect("accepted");
     let trace = sub.generation_id.clone();
     let events: Vec<GenEvent> = sub.live.subscribe(0).collect().await;
     assert!(is_done(&events), "{events:?}");

@@ -287,6 +287,8 @@ python3 tests/e2e/mock_llm.py 8765   # fake OpenAI-compatible server to try the 
 
 The UI and admin tests need `npm install && npm --prefix clients/desktop install && npx playwright install chromium`.
 
+Every pull request runs `.github/workflows/ci.yml` on Linux: rustfmt and clippy in both workspaces, `npm test`, the smoke test, the isolation checks against a stack it builds, `cargo deny` and the npm license and advisory checks, and a gitleaks scan of the history. The same advisory checks run weekly. `build.yml` builds and tests macOS and Windows, by hand.
+
 ## Verified, and not
 
 Verified on Linux (X11) by driving the real binary: hotkey show/hide, second-launch toggle, typing, streaming, Esc-to-stop (the server sees the disconnect and the partial reply is saved), deleting through real clicks, clipboard copy and paste, a bad hotkey, and hide-on-click-away (these were checked before the 0.3.0 split; the 0.3.0 client has been build- and test-verified, not driven by hand).

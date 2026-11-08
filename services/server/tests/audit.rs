@@ -37,7 +37,6 @@ async fn run_chat(state: &std::sync::Arc<askbar_server::AppState>, prompt: &str)
             client_request_id: None,
         },
     )
-    .ok()
     .expect("the generation starts");
     let _: Vec<_> = sub.live.subscribe(0).collect().await; // to the end
     sub.generation_id
@@ -267,7 +266,6 @@ async fn a_queued_message_records_a_gate_span_named_queue_from_enqueue_to_start(
                 client_request_id: None,
             },
         )
-        .ok()
         .expect("accepted")
     };
     let first = send(None, "please be slow");
@@ -340,7 +338,7 @@ async fn a_backed_up_audit_writer_refuses_new_generations_with_503_and_retry_aft
 
     assert!(recorder.healthy());
     recorder.pause_writer(true); // the writer stalls
-    let running = send("hello").ok().expect("accepted while the queue has room");
+    let running = send("hello").expect("accepted while the queue has room");
     for _ in 0..50 {
         if !recorder.healthy() {
             break;

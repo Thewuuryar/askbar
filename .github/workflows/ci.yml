@@ -1,0 +1,147 @@
+# The checks every pull request must pass (contributor guidelines rollout step 4): formatting, clippy,
+# the tests, the smoke test, the isolation checks against a real stack, licenses and advisories, and a
+# secret scan. Linux only; build.yml covers macOS and Windows, by hand.
+#
+# Actions are pinned to commit hashes and gitleaks to a checksum (ADR 0017); Renovate proposes updates.
+# Rust is pinned too, so that a new release's lints never turn every pull request red at once: raise
+# RUST_VERSION in its own pull request and fix what it finds.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  # Advisories appear without any change here: check them weekly (ADR 0017, scheduled CVE scans).
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+# Every job only checks out code, builds and tests: read access is enough.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  RUST_VERSION: "1.97.0"
+  CARGO_TERM_COLOR: always
+  # The desktop client's system libraries (README, "Build and run").
+  TAURI_LIBS: build-essential libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev
+
+jobs:
+  lint:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: System libraries
+        run: sudo apt-get update && sudo apt-get install -y $TAURI_LIBS
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: |
+            .
+            clients/desktop
+      - name: rustfmt
+        run: |
+          cargo fmt --all --check
+          (cd clients/desktop && cargo fmt --all --check)
+      - name: clippy
+        run: |
+          cargo clippy --workspace --all-targets --locked -- -D warnings
+          (cd clients/desktop && cargo clippy --workspace --all-targets --locked -- -D warnings)
+
+  test:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: System libraries
+        run: sudo apt-get update && sudo apt-get install -y $TAURI_LIBS
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: |
+            .
+            clients/desktop
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: JS dependencies and the browser for the UI tests
+        run: |
+          npm ci
+          npm --prefix clients/desktop ci
+          npx playwright install --with-deps chromium
+      - name: npm test (docs checks, cargo tests, admin and popup browser tests)
+        run: npm test
+      - name: Smoke test
+        run: scripts/smoke.sh
+
+  isolation:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Start a throwaway stack
+        run: |
+          cp .env.example .env
+          mkdir -p data
+          sudo chown 10002:10002 data
+          docker compose up -d --build --wait --wait-timeout 300
+      - name: Isolation checks
+        run: scripts/check-isolation.sh
+      - name: Container logs
+        if: failure()
+        run: docker compose logs --no-color --tail 200
+      - name: Stop the stack
+        if: always()
+        run: docker compose --profile dev down --remove-orphans --volumes
+
+  dependencies:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # cargo-deny finds deny.toml beside the manifest or in a parent directory, so both runs use the root one.
+      - name: cargo deny (services)
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check
+      - name: cargo deny (desktop client)
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          manifest-path: clients/desktop/Cargo.toml
+          command: check
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: npm licenses
+        run: node scripts/check-npm-licenses.js package-lock.json clients/desktop/package-lock.json
+      - name: npm advisories
+        run: |
+          npm audit --audit-level=high
+          npm --prefix clients/desktop audit --audit-level=high
+
+  secrets:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    env:
+      GITLEAKS_VERSION: "8.30.1"
+      GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: gitleaks, verified by checksum
+        run: |
+          curl -sSfL -o gitleaks.tgz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  gitleaks.tgz" | sha256sum --check
+          tar xzf gitleaks.tgz gitleaks
+      - name: Scan the history
+        run: ./gitleaks git --no-banner --redact --config .gitleaks.toml .

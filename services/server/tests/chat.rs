@@ -1095,7 +1095,9 @@ async fn a_finished_chat_records_one_token_usage_row_and_a_failed_one_none() {
     let t = start().await;
     let http = client();
     t.chat(&http, None, "p1", "Hello there").await.text().await.unwrap();
-    let rows = |t: &T| -> Vec<(String, Option<String>, Option<String>, i64, i64)> {
+    // user, client, provider, tokens in, tokens out
+    type UsageRow = (String, Option<String>, Option<String>, i64, i64);
+    let rows = |t: &T| -> Vec<UsageRow> {
         let db = t.state.db.lock().unwrap();
         let mut stmt = db.conn().prepare("SELECT user_id, client_id, provider_id, tokens_in, tokens_out FROM token_usage").unwrap();
         let rows =
