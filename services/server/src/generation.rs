@@ -244,10 +244,13 @@ impl Live {
     }
 }
 
+/// A running generation and the space it runs in, by generation id.
+type LiveMap = HashMap<String, (Arc<Live>, Arc<Space>)>;
+
 /// The running generations, by id, each with the space it runs in.
 #[derive(Default)]
 pub struct Generations {
-    live: Mutex<HashMap<String, (Arc<Live>, Arc<Space>)>>,
+    live: Mutex<LiveMap>,
     /// Set when the server is shutting down: nothing new starts.
     stopping: std::sync::atomic::AtomicBool,
 }
@@ -262,7 +265,7 @@ impl Generations {
         self.map().iter().filter(|(_, (l, _))| !l.is_finished()).map(|(k, (l, s))| (k.clone(), l.clone(), s.clone())).collect()
     }
 
-    fn map(&self) -> std::sync::MutexGuard<'_, HashMap<String, (Arc<Live>, Arc<Space>)>> {
+    fn map(&self) -> std::sync::MutexGuard<'_, LiveMap> {
         self.live.lock().unwrap_or_else(|e| e.into_inner())
     }
 
@@ -432,7 +435,7 @@ fn error_code(e: &crate::llm::ChatError) -> String {
 fn timed_out_message(timeout: Duration) -> String {
     let secs = timeout.as_secs() + u64::from(timeout.subsec_nanos() > 0);
     let plural = |n: u64, unit: &str| format!("{n} {unit}{}", if n == 1 { "" } else { "s" });
-    if secs >= 60 && secs % 60 == 0 {
+    if secs >= 60 && secs.is_multiple_of(60) {
         format!("Timed out after {}", plural(secs / 60, "minute"))
     } else {
         format!("Timed out after {}", plural(secs, "second"))

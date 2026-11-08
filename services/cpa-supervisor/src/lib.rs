@@ -83,6 +83,7 @@ fn spawn(s: &Settings) -> Option<Child> {
 }
 
 /// SIGTERM, then up to `grace` for it to exit, then SIGKILL.
+#[allow(unsafe_code)] // kill(2): std can send only SIGKILL (ADR 0037)
 fn stop_child(child: &mut Child, grace: Duration) {
     if let Ok(Some(_)) = child.try_wait() {
         return;
@@ -176,6 +177,7 @@ extern "C" fn on_signal(_: libc::c_int) {
 }
 
 /// Set `STOP` on SIGTERM and SIGINT.
+#[allow(unsafe_code)] // signal(2): std has no signal API (ADR 0037)
 pub fn install_signal_handlers() {
     // SAFETY: the handler only stores to an atomic, which is async-signal-safe.
     unsafe {

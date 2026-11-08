@@ -20,7 +20,7 @@ fn concrete(path: &str) -> String {
         match c {
             '{' => {
                 in_param = true;
-                out.push_str("x");
+                out.push('x');
             }
             '}' => in_param = false,
             _ if !in_param => out.push(c),
