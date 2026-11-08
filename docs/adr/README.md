@@ -35,7 +35,7 @@ This set records the decisions from the original Askbar architecture plan (kept 
 | [0029](0029-shared-origin-protections.md) | Shared origin protections | Accepted | Required by v1 decisions |
 | [0030](0030-sealed-audit-content.md) | Sealed audit content | Accepted | Required by v1 decisions |
 | [0031](0031-audit-span-start-and-backlog.md) | Audit span start and backlog | Accepted | Required by v1 decisions |
-| [0032](0032-container-hardening.md) | Container hardening | Accepted | Required by v1 decisions |
+| [0032](0032-container-hardening.md) | Container hardening | Accepted; amended by 0050 | Required by v1 decisions |
 | [0033](0033-repository-layout.md) | Repository layout | Accepted | Owner request with the v1 plan |
 | [0034](0034-self-signed-https-and-certificate-pinning.md) | Self-signed HTTPS and certificate pinning | Accepted | Required by 0007; owner choice in the v1 plan |
 | [0035](0035-editorial-edits-to-accepted-adrs.md) | Editorial edits to accepted ADRs | Accepted | Owner review of the v1 layout change |
@@ -52,3 +52,5 @@ This set records the decisions from the original Askbar architecture plan (kept 
 | [0046](0046-component-and-register-adrs-and-partial-amendments.md) | Component and register ADRs, partial amendments, and deferral | Accepted | Owner request in review of plan step 1.14 |
 | [0047](0047-generation-routes-under-spaces.md) | Generation routes under spaces | Accepted; amended by 0048 | Plan step 1.11, as built |
 | [0048](0048-drop-post-space-conversations.md) | Drop `POST /spaces/{space_id}/conversations` | Accepted | Owner decision after review of 0047 |
+| [0049](0049-bootstrap.md) | The `bootstrap` component | Accepted | Plan step 2.1; owner rule for component ADRs |
+| [0050](0050-bootstrap-chown-exception.md) | A `CHOWN` exception for `bootstrap` | Accepted | Owner review of the open questions in 0049 |
