@@ -23,9 +23,7 @@ impl AdminSecrets {
 
     /// A fresh key that is never written anywhere. For tests.
     pub fn ephemeral() -> AdminSecrets {
-        let mut raw = [0u8; 32];
-        OsRng.fill_bytes(&mut raw);
-        AdminSecrets::from_bytes(&raw)
+        AdminSecrets { cipher: ChaCha20Poly1305::new(&ChaCha20Poly1305::generate_key(&mut OsRng)) }
     }
 
     /// Load `admin.key` from `dir`, creating it (0600) on the first start.
