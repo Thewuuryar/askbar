@@ -245,7 +245,7 @@ pub async fn require_admin_auth(State(state): State<Arc<AdminState>>, req: Reque
 /// 429 with how long to wait.
 fn too_many_attempts(secs: i64) -> ApiError {
     let secs = secs.max(1) as u64;
-    let wait = ((secs + 59) / 60).max(1);
+    let wait = secs.div_ceil(60).max(1);
     ApiError::new(
         ErrorCode::TooManyAttempts,
         format!("Too many wrong passwords or keys. Try again in {wait} minute{}.", if wait == 1 { "" } else { "s" }),
