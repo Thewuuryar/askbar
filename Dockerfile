@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1
+# syntax=docker/dockerfile:1@sha256:4edf897a3ffa55b89f906fc8cc78afdb3f1834cc9c7083565e611a8a7d5fe99e
 #
 # One target per service:
 #   docker build --target server     -t askbar-server .
@@ -6,8 +6,10 @@
 #   docker build --target caddy      -t askbar-caddy  .
 #   docker build --target cpa        -t askbar-cpa    .
 # A plain `docker build .` builds the last stage, the server.
+# Every image is pinned by digest, and the Caddy plugin by version (ADR 0017); the tag beside each
+# digest says which line it follows. To update one, take the tag's current digest and test the stack.
 
-FROM rust:1-bookworm AS build
+FROM rust:1-bookworm@sha256:e6f2cff35d0f309acf8433b4f05878ed77092602c5065cc81801177da0bb3a9c AS build
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates crates
@@ -18,7 +20,7 @@ RUN cargo build --release -p askbar-server -p askbar-admin -p askbar-cpa-supervi
 # ------------------------------------------------------------------ admin
 # The admin service: the admin site and its own database. No TCP port: it listens on a unix
 # socket that only Caddy is given. Runs as uid 10001.
-FROM debian:bookworm-slim AS admin
+FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc AS admin
 RUN groupadd --system --gid 10001 askbar-admin && useradd --system --uid 10001 --gid 10001 --home-dir /admin-data --shell /usr/sbin/nologin askbar-admin \
  && mkdir /admin-data /admin-secrets /server-token /cpa-config /caddy-secrets /run/admin /caddy-run \
  && chown askbar-admin:askbar-admin /admin-data /admin-secrets /server-token /cpa-config /caddy-secrets /run/admin /caddy-run \
@@ -41,10 +43,11 @@ ENTRYPOINT ["askbar-admin"]
 
 # ------------------------------------------------------------------ caddy
 # Caddy with the Cloudflare DNS plugin, used to get certificates without opening port 80/443.
-FROM caddy:2-builder AS caddy-build
-RUN xcaddy build --with github.com/caddy-dns/cloudflare
+# The builder's digest fixes the Caddy version it builds (v2.11.9); the plugin is pinned to a release.
+FROM caddy:2-builder@sha256:3db11aead97f1fdff9c563d0dd8e7fba2e4c7031bef40f3e44fd1982f3e8366b AS caddy-build
+RUN xcaddy build --with github.com/caddy-dns/cloudflare@v0.2.4
 
-FROM caddy:2 AS caddy
+FROM caddy:2@sha256:ce773ec7a742ce15ee6bf2bb5f65882b9e2a4487b10733e6f1484f86e6b5d8bc AS caddy
 COPY --from=caddy-build /usr/bin/caddy /usr/bin/caddy
 COPY deploy/caddy/bootstrap.Caddyfile /etc/caddy/bootstrap.Caddyfile
 # The admin service pushes the real configuration through the admin socket; `--resume` brings back
@@ -65,7 +68,7 @@ CMD ["./CLIProxyAPI", "-config", "/cpa-config/config.yaml"]
 # ----------------------------------------------------------------- server
 # The server: the client API on 8080 and the server API on its own address. Runs as uid 10002,
 # so it shares no file ownership with the admin.
-FROM debian:bookworm-slim AS server
+FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc AS server
 RUN groupadd --system --gid 10002 askbar && useradd --system --uid 10002 --gid 10002 --home-dir /data --shell /usr/sbin/nologin askbar \
  && mkdir /data /secrets /audit && chown askbar:askbar /data /secrets /audit
 COPY --from=build /src/target/release/askbar-server /usr/local/bin/askbar-server

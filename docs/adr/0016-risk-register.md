@@ -3,6 +3,7 @@
 Status: Accepted
 Date: 2026-11-04
 Plan decisions: 16
+Kind: register
 
 ## Context
 
@@ -71,3 +72,7 @@ Not recorded.
 ## Consequences
 
 Each Defend control is a ship requirement. A new accepted risk needs the owner's approval and an update through the change rules in [0001](0001-decision-records-and-change-rules.md).
+
+## Amendments
+
+- 2026-11-08: marked as a register ADR, so it is amended in place ([0046](0046-component-and-register-adrs-and-partial-amendments.md)). Nothing else changed.

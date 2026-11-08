@@ -3,6 +3,7 @@
 Status: Accepted
 Date: 2026-11-07
 Source: plan step 1.3 ([plan-v1.md](../plan-v1.md)); owner rule that every new component gets an ADR before it is created
+Kind: component
 
 ## Context
 
@@ -30,3 +31,7 @@ Source: plan step 1.3 ([plan-v1.md](../plan-v1.md)); owner rule that every new c
 - Every new service starts from the same token check and gate; a fix lands in all of them at once.
 - The crate's own tests cover the link rules, the patterns, the boot ID and the gate. Each service still tests its own links and gated routes, and `check-isolation.sh` tests the running stack.
 - A change to the crate changes every service, so it needs the same care as a change to a hard rule.
+
+## Amendments
+
+- 2026-11-08: marked as a component ADR, so it is amended in place ([0046](0046-component-and-register-adrs-and-partial-amendments.md)). Nothing else changed.
