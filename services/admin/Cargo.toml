@@ -29,3 +29,6 @@ rcgen = { version = "0.14.10", default-features = false, features = ["ring", "pe
 serde_yaml_ng = "0.10"
 futures-util = "0.3"
 askbar-server = { path = "../server" }
+
+[lints]
+workspace = true

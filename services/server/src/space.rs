@@ -591,7 +591,7 @@ mod tests {
             let mut stmt = db.conn().prepare(sql).unwrap();
             stmt.query_map([], |r| r.get::<_, String>(0)).unwrap().map(Result::unwrap).collect()
         };
-        assert_eq!(all("SELECT id FROM conversations"), [mine.clone()]);
+        assert_eq!(all("SELECT id FROM conversations"), std::slice::from_ref(&mine));
         assert_eq!(all("SELECT content FROM messages"), ["my zebra question"]);
         assert!(all("SELECT id FROM generations").is_empty());
         assert_eq!(all("SELECT content FROM messages_fts WHERE messages_fts MATCH 'zebra'"), ["my zebra question"]);

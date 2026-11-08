@@ -228,6 +228,9 @@ const MIGRATIONS: &[&str] = &[
      CREATE INDEX idx_space_members_user ON space_members(user_id);",
 ];
 
+/// A provider whose credentials were refused: its id, status, since when (unix seconds) and error code.
+pub type ProviderHealth = (String, String, i64, Option<String>);
+
 #[derive(Debug, thiserror::Error)]
 pub enum DbError {
     #[error("history database error: {0}")]
@@ -352,7 +355,7 @@ impl Db {
     }
 
     /// Every flagged provider: (provider id, status, since, error code).
-    pub fn provider_health(&self) -> Result<Vec<(String, String, i64, Option<String>)>, DbError> {
+    pub fn provider_health(&self) -> Result<Vec<ProviderHealth>, DbError> {
         let mut stmt = self.conn.prepare("SELECT provider_id, status, since, error_code FROM provider_health ORDER BY provider_id")?;
         let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)

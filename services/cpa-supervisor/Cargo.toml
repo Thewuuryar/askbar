@@ -8,3 +8,6 @@ description = "Runs CLIProxyAPI and restarts it on a config change, a restart re
 [dependencies]
 # Signals: pass SIGTERM/SIGINT on to CLIProxyAPI and stop it cleanly (std has no signal API).
 libc = "0.2"
+
+[lints]
+workspace = true

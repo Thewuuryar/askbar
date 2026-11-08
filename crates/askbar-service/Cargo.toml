@@ -17,3 +17,6 @@ ulid = "1"
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
 reqwest = { version = "0.12", default-features = false, features = ["json"] }
+
+[lints]
+workspace = true

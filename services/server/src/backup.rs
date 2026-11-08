@@ -97,12 +97,12 @@ pub async fn response(state: Arc<AppState>) -> Result<axum::response::Response, 
     let st = state.clone();
     let tar = tokio::task::spawn_blocking(move || make_export(&st, &guard.0)).await.map_err(internal_error)?.map_err(internal_error)?;
     let filename = format!("askbar-server-backup-{}.tar", stamp(crate::auth::now()));
-    Ok(axum::response::Response::builder()
+    axum::response::Response::builder()
         .header(header::CONTENT_TYPE, "application/x-tar")
         .header(header::CONTENT_LENGTH, tar.len())
         .header(header::CONTENT_DISPOSITION, format!("attachment; filename=\"{filename}\""))
         .body(Body::from(tar))
-        .map_err(internal_error)?)
+        .map_err(internal_error)
 }
 
 #[cfg(test)]

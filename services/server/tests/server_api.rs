@@ -646,7 +646,6 @@ async fn a_generation_with_the_mocks_usage_adds_to_the_overview_totals() {
             client_request_id: None,
         },
     )
-    .ok()
     .expect("the generation starts");
     // Wait for it to end and its usage to be recorded.
     for _ in 0..200 {
@@ -724,7 +723,6 @@ impl AuditStack {
                 client_request_id: None,
             },
         )
-        .ok()
         .expect("accepted");
         let _: Vec<_> = sub.live.subscribe(0).collect().await;
         sub.generation_id

@@ -14,3 +14,6 @@ axum = { version = "0.8", optional = true }
 
 [features]
 axum = ["dep:axum"]
+
+[lints]
+workspace = true

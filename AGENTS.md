@@ -24,6 +24,7 @@ If code and `docs/architecture.md` disagree on behavior the target has already r
 ```sh
 cargo build --workspace
 cargo fmt --all --check                # (proposed) required once the rustfmt PR lands
+cargo clippy --workspace --all-targets -- -D warnings   # here and in clients/desktop
 cargo test --workspace                 # services and crates; needs python3 (mock LLM)
 npm install && npm --prefix clients/desktop install && npx playwright install chromium
 npm test                               # docs checks, cargo tests (root and clients/desktop), markdown, UI and admin browser tests
@@ -31,7 +32,7 @@ scripts/smoke.sh                       # end to end, no Docker
 scripts/check-isolation.sh             # needs Docker; throwaway stack
 ```
 
-Before you finish: `npm test` and `scripts/smoke.sh` pass. If you touched `compose.yaml`, a `Dockerfile`, Caddy, a network, a volume or anything about who can reach what, also run `scripts/check-isolation.sh`. If you cannot run something, say so in the PR; never imply it passed.
+Before you finish: `npm test` and `scripts/smoke.sh` pass, and clippy is clean in both workspaces. If you touched `compose.yaml`, a `Dockerfile`, Caddy, a network, a volume or anything about who can reach what, also run `scripts/check-isolation.sh`. If you cannot run something, say so in the PR; never imply it passed.
 
 ## Hard rules (MUST NOT)
 

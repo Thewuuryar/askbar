@@ -39,3 +39,6 @@ rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"]
 rusqlite = { version = "0.32", features = ["bundled"] }
 tokio = { version = "1", features = ["sync", "time", "macros", "rt-multi-thread", "net", "io-util"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
+
+[lints]
+workspace = true
