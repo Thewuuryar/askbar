@@ -2,6 +2,7 @@
 
 Status: Proposed
 Date: 2026-11-08
+Kind: component
 Source: plan step 1.14 ([plan-v1.md](../plan-v1.md)); owner rule that every component has an ADR of its own (2026-11-07)
 
 ## Context
@@ -36,3 +37,7 @@ Not recorded: the admin predates this record.
 - [0004](0004-bootstrap-and-per-link-tokens.md): the admin makes the server API token and writes its hash to `server-token`, a volume it shares with the server; `bootstrap` will do this (plan step 2.1).
 - [0013](0013-backups.md): the backup is an unencrypted tar that the admin can read, so secrets are left out (phase 6).
 - [0003](0003-v1-service-layout.md) (no shared volumes): the admin shares `server-token` with the server, `caddy-run`, `caddy-secrets` and `admin-run` with Caddy, and `cpa-config` with `cpa`. These carry tokens, sockets and configuration, not another service's data; the target layout keeps the Caddy and `cpa` ones and moves the token to `bootstrap`.
+
+## Amendments
+
+None yet.

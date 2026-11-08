@@ -2,6 +2,7 @@
 
 Status: Proposed
 Date: 2026-11-08
+Kind: component
 Source: plan step 1.14 ([plan-v1.md](../plan-v1.md)); owner rule that every component has an ADR of its own (2026-11-07)
 
 ## Context
@@ -29,3 +30,7 @@ Tests and the Mac check run without a provider account or network access. A prov
 
 - [0017](0017-dependencies-and-patches.md) (pin images to digests): the dev profile uses `python:3.12-slim` by tag.
 - [0003](0003-v1-service-layout.md) (no host bind mounts): the dev service bind-mounts the script from the repository. It is dev-only and read-only.
+
+## Amendments
+
+None yet.

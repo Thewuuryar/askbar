@@ -2,6 +2,7 @@
 
 Status: Proposed
 Date: 2026-11-08
+Kind: component
 Source: plan step 1.14 ([plan-v1.md](../plan-v1.md)); owner rule that every component has an ADR of its own (2026-11-07)
 
 ## Context
@@ -30,3 +31,7 @@ Not recorded: the crate predates this record.
 A change to a shared type changes every user at once, and the OpenAPI tests in `services/server` and `services/admin` fail if a route, its file or the error registry drift apart. The crate's own tests cover the paths, the problem codes, the SSE parser and the pairing key.
 
 **Where the code and an accepted ADR disagree:** none found. One observation for review: the desktop client compiles the server API's snapshot types too, since they live in the same crate. They hold no secret, but a later split could keep the client's build to the client API.
+
+## Amendments
+
+None yet.
