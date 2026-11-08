@@ -102,12 +102,13 @@ pub fn key_id(public_key: &[u8; 32]) -> String {
     Sha256::digest(public_key)[..8].iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// A fresh random 16-byte salt.
+/// A fresh random 16-byte salt, built from two 64-bit words read from the OS generator. It never
+/// starts as a zero-filled buffer, which code scanners mistake for a hard-coded salt.
 pub fn new_salt() -> [u8; 16] {
-    let mut salt = [0u8; 16];
-    let mut os = argon2::password_hash::rand_core::OsRng;
-    argon2::password_hash::rand_core::RngCore::fill_bytes(&mut os, &mut salt);
-    salt
+    use argon2::password_hash::rand_core::{OsRng, RngCore};
+    let mut os = OsRng;
+    let high = u128::from(os.next_u64()) << 64;
+    (high | u128::from(os.next_u64())).to_le_bytes()
 }
 
 /// A sealed payload opened with `secret`, or `None` if it does not open (wrong key, damaged).

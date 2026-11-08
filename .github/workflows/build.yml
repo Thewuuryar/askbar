@@ -5,6 +5,10 @@ name: build
 on:
   workflow_dispatch:
 
+# Both jobs only check out code, build, test and upload build output: read access is enough.
+permissions:
+  contents: read
+
 jobs:
   build:
     strategy:
