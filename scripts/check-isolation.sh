@@ -21,7 +21,7 @@ PROJECT="${COMPOSE_PROJECT_NAME:-askbar}"
 EDGE="${PROJECT}_edge"; SERVER_API_NET="${PROJECT}_server-api"
 SERVER=askbar-server; ADMIN=askbar-admin; CADDY=askbar-caddy
 SERVER_API=172.30.0.2:8082
-PYIMG="${ASKBAR_CHECK_IMAGE:-python:3.12-slim}"
+PYIMG="${ASKBAR_CHECK_IMAGE:-python:3.12-slim@sha256:4840d514c583a4d3d8cad3940e68dee6f0f6f3635c12fcd0a3d74c21a5b93a54}"
 PW="${ASKBAR_ADMIN_PASSWORD:-$(head -c 24 /dev/urandom | base64 | tr -d '/+=')}"
 FAILS=0
 pass() { printf 'PASS  %s\n' "$1"; }
