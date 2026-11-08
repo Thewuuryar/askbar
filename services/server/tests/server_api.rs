@@ -488,8 +488,16 @@ async fn the_backup_has_the_data_and_none_of_the_secrets() {
         let code = askbar_server::testing::add_pair_code(&db, &user, "pending");
         db.conn().execute("INSERT INTO redeemed_codes (hash, client_id, redeemed_at) VALUES ('used-hash-123', NULL, 0)", []).unwrap();
         let _ = code;
+        // A paired client asks for a code to pair another app of its user (step 1.9).
+        db.conn()
+            .execute("INSERT INTO clients (id, user_id, name, hash, created_at) VALUES ('C1', ?1, 'laptop', 'token-hash', 0)", [&user])
+            .unwrap();
+        let auth = askbar_server::auth::ClientAuth { user_id: user.clone(), client_id: "C1".into() };
+        askbar_server::auth::new_client_pair_code(&db, &auth, "phone").unwrap().expect("a code");
         space.id.clone()
     };
+    let client_code_hash: String =
+        s.state.db.lock().unwrap().conn().query_row("SELECT hash FROM client_pair_codes", [], |r| r.get(0)).unwrap();
 
     let r = s.t.http.post(format!("{}/api/server/v1/exports", s.t.url)).bearer_auth(TOKEN).send().await.unwrap();
     assert_eq!(r.status(), 200);
@@ -509,6 +517,7 @@ async fn the_backup_has_the_data_and_none_of_the_secrets() {
     assert!(!has(KEY.as_bytes()), "no provider key");
     assert!(!has(code_hash.as_bytes()), "the snapshot's pair-code hashes are gone");
     assert!(!has(b"used-hash-123"), "so are redeemed-code hashes");
+    assert!(!has(client_code_hash.as_bytes()), "and the hashes of codes a client asked for");
 
     let dir = std::env::temp_dir().join(format!("server-token-backup-{}", ulid::Ulid::new()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -518,6 +527,7 @@ async fn the_backup_has_the_data_and_none_of_the_secrets() {
     let one = |sql: &str| c.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap();
     assert_eq!(one("SELECT COUNT(*) FROM providers WHERE api_key_enc IS NOT NULL"), 0);
     assert_eq!(one("SELECT COUNT(*) FROM redeemed_codes"), 0);
+    assert_eq!(one("SELECT COUNT(*) FROM client_pair_codes"), 0);
     std::fs::write(dir.join("s.db"), &files[space_index].1).unwrap();
     let space_db = rusqlite::Connection::open(dir.join("s.db")).unwrap();
     let kept: i64 = space_db.query_row("SELECT COUNT(*) FROM conversations WHERE title = 'kept conversation'", [], |r| r.get(0)).unwrap();
@@ -533,6 +543,8 @@ async fn the_backup_has_the_data_and_none_of_the_secrets() {
         2,
         "both listed codes are still there"
     );
+    let live: i64 = s.state.db.lock().unwrap().conn().query_row("SELECT COUNT(*) FROM client_pair_codes", [], |r| r.get(0)).unwrap();
+    assert_eq!(live, 1, "and so is the client's code");
 }
 
 #[tokio::test]

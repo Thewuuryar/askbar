@@ -34,8 +34,9 @@ fn stamp(unix: i64) -> String {
 }
 
 /// A consistent copy (`VACUUM INTO`) of the control database with everything secret taken out:
-/// provider API keys and pairing-code hashes (unredeemed or used). Settings and paired-client
-/// records (token hashes only) stay.
+/// provider API keys and pairing-code hashes (the admin's, the ones clients asked for, and used
+/// ones). Settings and paired-client records (token hashes only) stay. Until exports are encrypted
+/// (ADR 0013), a backup holds no secret.
 fn control_copy(state: &AppState, path: &std::path::Path) -> rusqlite::Result<()> {
     {
         let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
@@ -51,6 +52,7 @@ fn control_copy(state: &AppState, path: &std::path::Path) -> rusqlite::Result<()
     snap.execute_batch(
         "UPDATE providers SET api_key_enc = NULL;
          DELETE FROM redeemed_codes;
+         DELETE FROM client_pair_codes;
          PRAGMA journal_mode = DELETE;
          VACUUM;", // rewrite the file so the removed values don't linger in free pages
     )?;
