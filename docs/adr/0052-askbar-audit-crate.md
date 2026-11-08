@@ -1,6 +1,6 @@
 # 0052. The `askbar-audit` crate
 
-Status: Proposed
+Status: Accepted
 Date: 2026-11-08
 Kind: component
 Source: plan step 2.3 ([plan-v1.md](../plan-v1.md)); owner rule that every component has an ADR of its own (2026-11-07); owner review of the open questions (2026-11-08)

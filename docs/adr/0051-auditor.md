@@ -1,6 +1,6 @@
 # 0051. The `auditor` component
 
-Status: Proposed
+Status: Accepted
 Date: 2026-11-08
 Kind: component
 Source: plan steps 2.4 to 2.9 ([plan-v1.md](../plan-v1.md)); owner rule that every component has an ADR of its own (2026-11-07); owner review of the open questions (2026-11-08)
