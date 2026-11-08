@@ -267,25 +267,57 @@
     requestAnimationFrame(() => { renderQueued.delete(msg); render(msg); });
   }
 
+  // A message's date and time, in the person's own locale: `created_at` is unix seconds.
+  function formatTime(secs) {
+    return new Date(secs * 1000).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+  }
+
+  // The little chip beside a reply's time: which provider and model wrote it (plan step 1.13).
+  // Text goes in through setAttribute only; replies stored before servers recorded it get none.
+  function setProvider(msg, provider) {
+    if (!provider || !provider.name) return;
+    msg.provider = provider;
+    let chip = msg.node.querySelector('.by');
+    if (!chip) {
+      chip = document.createElement('span');
+      chip.className = 'by';
+      chip.tabIndex = 0;
+      chip.setAttribute('role', 'img');
+      msg.node.querySelector('.meta').insertBefore(chip, msg.node.querySelector('.copy-msg'));
+    }
+    const label = (provider.model ? 'Model: ' + provider.model + ' · ' : '') + 'Provider: ' + provider.name;
+    chip.title = label;
+    chip.setAttribute('aria-label', label);
+  }
+
+  // A message, with its meta row: the date and time, the provider chip on a reply, and the copy
+  // button. The row's space is kept at all times; it only shows on hover or when one of its controls
+  // has keyboard focus (they stay reachable by Tab), so nothing moves when it appears.
   function addMessage(role, content, opts = {}) {
     const node = document.createElement('div');
     node.className = 'msg ' + role + (opts.streaming ? ' streaming' : '');
-    const actions = document.createElement('div');
-    actions.className = 'actions';
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    const createdAt = opts.createdAt || Math.floor(Date.now() / 1000);
+    const when = document.createElement('time');
+    when.className = 'when';
+    when.dateTime = new Date(createdAt * 1000).toISOString();
+    when.textContent = formatTime(createdAt);
     const copy = document.createElement('button');
     copy.type = 'button';
     copy.className = 'copy-msg';
-    copy.textContent = 'Copy';
+    copy.title = 'Copy';
     copy.setAttribute('aria-label', 'Copy this message');
-    actions.appendChild(copy);
+    meta.append(when, copy);
     const bodyNode = document.createElement('div');
     bodyNode.className = 'body';
-    node.append(bodyNode, actions);
+    node.append(bodyNode, meta);
     el.thread.appendChild(node);
 
     const msg = { role, content, node, bodyNode };
     node._msg = msg;
     state.messages.push(msg);
+    if (role === 'assistant') setProvider(msg, opts.provider);
     render(msg);
     syncChrome();
     return msg;
@@ -363,7 +395,9 @@
             state.convId = m.conversationId;
             break;
           case 'provider':
-            // Always the provider chosen: there is no fallback (ADR 0014), so nothing to show.
+            // Always the provider chosen: there is no fallback (ADR 0014). The reply's chip names it
+            // and its model, as a reopened conversation will.
+            setProvider(reply, { id: m.id, name: m.name, model: m.model });
             break;
           case 'delta':
             reply.content += m.text;
@@ -668,7 +702,7 @@
     hideNotice();
     clearThread();
     state.convId = id;
-    for (const r of rows) addMessage(r.role, r.content);
+    for (const r of rows) addMessage(r.role, r.content, { createdAt: r.created_at, provider: r.provider });
     state.pinned = true;
     el.thread.scrollTop = el.thread.scrollHeight;
     renderHistory();

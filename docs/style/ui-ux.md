@@ -53,6 +53,7 @@ None, or one transition of 150 ms or less (opacity or colour). Under `prefers-re
 - **No build step.** `ui/` is plain HTML, CSS and JavaScript. Adding a framework or bundler needs an ADR.
 - **Markdown links and images.** Remote images are blocked. A link shows its destination before it opens ([ADR 0016](../adr/0016-risk-register.md); a ship criterion).
 - **Markdown is escaped first.** `clients/desktop/ui/markdown.js` HTML-escapes everything, then adds only the markup on its allowlist, so model output cannot inject HTML ([ADR 0016](../adr/0016-risk-register.md)). That is the only reason `renderMarkdown` output may be assigned to `innerHTML`. Keep `tests/markdown.test.js` covering it.
+- **Every message has a meta row:** its date and time, and on a reply a small chip whose tooltip (`title`, and the same `aria-label`) names the model and provider that wrote it, then the copy icon. The row shows on hover or when one of its controls has keyboard focus, and its height is kept at all times, so nothing moves when it appears. A reply stored before servers recorded its provider shows no chip.
 - **Colours and sizes come from the tokens** in "Look and feel". Do not hard-code a colour, size or radius in a rule or in script.
 - **The footer always shows two things:** the server connection status and the model picker. The five shortcut hints show only on first use and when the person presses `?`.
 - **Tests.** Behaviour changes carry a test in `clients/desktop/tests/ui.test.js` (Playwright against `clients/desktop/tests/mock-tauri.js`).
