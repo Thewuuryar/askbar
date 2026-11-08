@@ -5,7 +5,8 @@ use crate::outbox::{Outbox, OutboxEntry};
 use crate::tokens::TokenStore;
 use crate::types::{ClientStatus, Emit, PendingReply, ProviderChoice, Settings, StreamEvent};
 use askbar_proto::{
-    ChatEvent, ChatRequest, Conversation, ConversationDetail, DisplaySettings, Message, PendingGeneration, Prefs, ProviderInfo, SseParser,
+    ChatEvent, ChatRequest, Conversation, ConversationDetail, DisplaySettings, Message, PendingGeneration, Prefs, ProviderInfo, SpaceInfo,
+    SseParser,
 };
 use futures_util::{FutureExt, StreamExt};
 use reqwest::{Method, RequestBuilder, StatusCode, Url};
@@ -29,6 +30,9 @@ struct Inner {
     backoff_unit: Duration,
     /// Messages sent and not yet seen by the server.
     outbox: Outbox,
+    /// The space this app works in: the user's personal space (ADR 0009), found with `GET /spaces`
+    /// the first time it is needed and kept for this pairing.
+    space: Mutex<Option<String>>,
 }
 
 /// Wait before resume attempt `n` (from 0): 1, 2, 4, 8, 16, then 30 seconds.
@@ -165,7 +169,16 @@ impl Remote {
                 .user_agent(format!("askbar/{VERSION}"))
                 .build()
                 .map_err(|e| e.to_string())?;
-            Ok(Inner { cfg: Mutex::new(cfg), path, base, http, tokens, backoff_unit: Duration::from_secs(1), outbox: Outbox::in_memory() })
+            Ok(Inner {
+                cfg: Mutex::new(cfg),
+                path,
+                base,
+                http,
+                tokens,
+                backoff_unit: Duration::from_secs(1),
+                outbox: Outbox::in_memory(),
+                space: Mutex::new(None),
+            })
         });
         Remote { inner }
     }
@@ -212,6 +225,27 @@ impl Inner {
         let mut u = self.base.clone();
         u.set_path(&format!("{}{path}", self.base.path().trim_end_matches('/')));
         u
+    }
+
+    /// The client API path `rest` in this app's space: `/api/client/v1/spaces/<id><rest>`. The
+    /// personal space is used unless the server lists none, then the first one.
+    async fn space_path(&self, rest: &str) -> Result<String, String> {
+        let known = lock(&self.space).clone();
+        let id = match known {
+            Some(id) => id,
+            None => {
+                let spaces: Vec<SpaceInfo> = self.get_json(&askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, "/spaces")).await?;
+                let id = spaces
+                    .iter()
+                    .find(|s| s.kind == "personal")
+                    .or(spaces.first())
+                    .map(|s| s.id.clone())
+                    .ok_or("The server lists no space for this app's user.")?;
+                *lock(&self.space) = Some(id.clone());
+                id
+            }
+        };
+        Ok(format!("{}/spaces/{id}{rest}", askbar_proto::paths::CLIENT_V1))
     }
 
     fn request(&self, method: Method, path: &str) -> Result<RequestBuilder, String> {
@@ -289,8 +323,11 @@ impl Inner {
                     _ = tokio::time::sleep(wait) => {}
                     _ = &mut *cancel => return self.stop_reply(Some(&generation_id), emit).await,
                 }
-                let req = match self.request(Method::GET, &format!("{}/generations/{generation_id}/stream", askbar_proto::paths::CLIENT_V1))
-                {
+                let path = match self.space_path(&format!("/generations/{generation_id}/stream")).await {
+                    Ok(p) => p,
+                    Err(e) => return fail(e),
+                };
+                let req = match self.request(Method::GET, &path) {
                     Ok(r) => r.header("accept", "text/event-stream").query(&[("after", reader.last_id)]),
                     Err(e) => return fail(e),
                 };
@@ -316,7 +353,8 @@ impl Inner {
     /// (an older server) the reply cannot be stopped there; the connection is simply let go.
     async fn stop_reply(&self, id: Option<&str>, emit: Emit<'_>) {
         if let Some(id) = id {
-            let sent = match self.request(Method::POST, &format!("{}/generations/{id}/cancel", askbar_proto::paths::CLIENT_V1)) {
+            let path = self.space_path(&format!("/generations/{id}/cancel")).await;
+            let sent = match path.and_then(|p| self.request(Method::POST, &p)) {
                 Ok(req) => req.timeout(REQUEST_TIMEOUT).send().await.map_err(|e| e.to_string()),
                 Err(e) => Err(e),
             };
@@ -591,25 +629,28 @@ impl Remote {
     }
 
     pub async fn list_conversations(&self) -> Result<Vec<Conversation>, String> {
-        self.inner()?.get_json(&askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, "/conversations")).await
+        let i = self.inner()?;
+        i.get_json(&i.space_path("/conversations").await?).await
     }
 
     pub async fn load_conversation(&self, id: String) -> Result<Vec<Message>, String> {
-        let d: ConversationDetail = self.inner()?.get_json(&format!("{}/conversations/{id}", askbar_proto::paths::CLIENT_V1)).await?;
+        let i = self.inner()?;
+        let d: ConversationDetail = i.get_json(&i.space_path(&format!("/conversations/{id}")).await?).await?;
         Ok(d.messages)
     }
 
     /// Replies in this conversation that have not finished: the one running, and the messages
     /// waiting behind it.
     pub async fn load_pending(&self, id: String) -> Result<Vec<PendingReply>, String> {
-        let d: ConversationDetail = self.inner()?.get_json(&format!("{}/conversations/{id}", askbar_proto::paths::CLIENT_V1)).await?;
+        let i = self.inner()?;
+        let d: ConversationDetail = i.get_json(&i.space_path(&format!("/conversations/{id}")).await?).await?;
         Ok(d.pending.into_iter().map(PendingReply::from).collect())
     }
 
     /// Stops (or, for a message still waiting, removes) one generation. Already finished is fine.
     pub async fn cancel_generation(&self, id: String) -> Result<(), String> {
         let i = self.inner()?;
-        let req = i.request(Method::POST, &format!("{}/generations/{id}/cancel", askbar_proto::paths::CLIENT_V1))?.timeout(REQUEST_TIMEOUT);
+        let req = i.request(Method::POST, &i.space_path(&format!("/generations/{id}/cancel")).await?)?.timeout(REQUEST_TIMEOUT);
         match i.send(req).await {
             Ok(_) => Ok(()),
             Err(e) if e.ends_with("404 Not Found.") => Ok(()),
@@ -631,7 +672,7 @@ impl Remote {
 
     pub async fn delete_conversation(&self, id: String) -> Result<(), String> {
         let i = self.inner()?;
-        let resp = i.request(Method::DELETE, &format!("{}/conversations/{id}", askbar_proto::paths::CLIENT_V1))?.timeout(REQUEST_TIMEOUT);
+        let resp = i.request(Method::DELETE, &i.space_path(&format!("/conversations/{id}")).await?)?.timeout(REQUEST_TIMEOUT);
         match i.send(resp).await {
             Ok(_) => Ok(()),
             Err(e) if e.ends_with("404 Not Found.") => Ok(()),
@@ -676,11 +717,9 @@ impl Remote {
         if i.outbox.list().is_empty() {
             return Ok(Vec::new());
         }
-        let req = i
-            .request(Method::GET, &askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, "/generations"))?
-            .query(&[("status", "running")])
-            .timeout(REQUEST_TIMEOUT);
         // Without an answer (offline) nothing can be compared; the outbox is shown as it is.
+        let Ok(path) = i.space_path("/generations").await else { return Ok(i.outbox.list()) };
+        let req = i.request(Method::GET, &path)?.query(&[("status", "running")]).timeout(REQUEST_TIMEOUT);
         let known: Vec<PendingGeneration> = match i.send(req).await {
             Ok(r) => match r.json().await {
                 Ok(v) => v,
@@ -724,7 +763,7 @@ impl Remote {
         } else {
             entry.provider.clone()
         };
-        let req = match i.request(Method::POST, &askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, "/chat")) {
+        let req = match i.space_path("/chat").await.and_then(|p| i.request(Method::POST, &p)) {
             Ok(r) => r.header("accept", "text/event-stream").json(&ChatRequest {
                 conversation_id: entry.conversation_id.clone(),
                 provider,
@@ -863,9 +902,9 @@ mod tests {
         cancels: Mutex<Vec<String>>,
         /// The JSON body of every chat request.
         chats: Mutex<Vec<serde_json::Value>>,
-        /// What `GET /api/client/v1/generations?status=running` answers.
+        /// What `GET /api/client/v1/spaces/{space_id}/generations?status=running` answers.
         running: Mutex<String>,
-        /// When set, the answer to `POST /api/client/v1/chat` instead of the usual stream:
+        /// When set, the answer to `POST /api/client/v1/spaces/{space_id}/chat` instead of the usual stream:
         /// status, extra headers and body.
         chat_answer: Mutex<Option<(u16, Vec<(String, String)>, String)>>,
     }
@@ -874,6 +913,9 @@ mod tests {
         url: String,
         seen: Arc<Seen>,
     }
+
+    /// The one space the fake server lists.
+    const FAKE_SPACE: &str = "01JFAKESPACE0000000000000S";
 
     /// A server that drops the first stream after three deltas, with no `done`. `resume` answers
     /// each resume request in turn with a status and a body (the last one repeats).
@@ -897,7 +939,13 @@ mod tests {
         let app = Router::new()
             .route("/api/client/v1/me/prefs", get(|| async { r#"{"active_provider_id":"p"}"# }))
             .route(
-                "/api/client/v1/chat",
+                "/api/client/v1/spaces",
+                get(|| async {
+                    ([(header::CONTENT_TYPE, "application/json")], format!(r#"[{{"id":"{FAKE_SPACE}","kind":"personal","name":""}}]"#))
+                }),
+            )
+            .route(
+                "/api/client/v1/spaces/{space_id}/chat",
                 post(move |State(seen): State<Arc<Seen>>, axum::Json(body): axum::Json<serde_json::Value>| {
                     let b = first.clone();
                     async move {
@@ -919,13 +967,13 @@ mod tests {
                 }),
             )
             .route(
-                "/api/client/v1/generations",
+                "/api/client/v1/spaces/{space_id}/generations",
                 get(|State(seen): State<Arc<Seen>>| async move {
                     ([(header::CONTENT_TYPE, "application/json")], seen.running.lock().unwrap().clone())
                 }),
             )
             .route(
-                "/api/client/v1/generations/{id}/stream",
+                "/api/client/v1/spaces/{space_id}/generations/{id}/stream",
                 get(|State(seen): State<Arc<Seen>>, Query(q): Query<std::collections::HashMap<String, String>>| async move {
                     seen.resumes.lock().unwrap().push(q.get("after").cloned().unwrap_or_default());
                     let (status, body) = {
@@ -940,8 +988,8 @@ mod tests {
                 }),
             )
             .route(
-                "/api/client/v1/generations/{id}/cancel",
-                post(|State(seen): State<Arc<Seen>>, P(id): P<String>| async move {
+                "/api/client/v1/spaces/{space_id}/generations/{id}/cancel",
+                post(|State(seen): State<Arc<Seen>>, P((_, id)): P<(String, String)>| async move {
                     seen.cancels.lock().unwrap().push(id);
                     S::NO_CONTENT
                 }),
@@ -1319,15 +1367,8 @@ mod tests {
     }
 
     async fn stored_reply(http: &reqwest::Client, url: &str, token: &str, conversation_id: &str) -> String {
-        let detail: ConversationDetail = http
-            .get(format!("{url}/api/client/v1/conversations/{conversation_id}"))
-            .bearer_auth(token)
-            .send()
-            .await
-            .unwrap()
-            .json()
-            .await
-            .unwrap();
+        let detail: ConversationDetail =
+            http.get(format!("{url}/conversations/{conversation_id}")).bearer_auth(token).send().await.unwrap().json().await.unwrap();
         detail.messages.iter().rev().find(|m| m.role == "assistant").map(|m| m.content.clone()).unwrap_or_default()
     }
 
@@ -1340,7 +1381,7 @@ mod tests {
         let (_mock, mock_port) = start_mock();
         let dir = std::env::temp_dir().join(format!("askbar-8-5-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let db_path = dir.join("server.db");
+        let db_path = dir.join("control.db");
         let db = askbar_server::Db::open(&db_path).unwrap();
         let user = db.seed_server().unwrap();
         askbar_server::testing::add_provider(
@@ -1348,14 +1389,18 @@ mod tests {
             askbar_server::testing::provider("p", "mock", &format!("http://127.0.0.1:{mock_port}/v1"), "mock-model"),
         );
         let code = askbar_server::testing::add_pair_code(&db, &user, "test");
-        let state: Arc<AppState> = AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), "0.1.0");
+        let state: Arc<AppState> = AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), "0.1.0")
+            .with_spaces(askbar_server::Spaces::on_disk(dir.join("spaces")));
         let token = auth::redeem_pair_code(&state.db.lock().unwrap(), &code).unwrap().unwrap();
+        let space = askbar_server::testing::personal_space(&state, &user);
         let (url, server) = serve_state(state.clone()).await;
+        // Everything below is in the user's personal space.
+        let sp = format!("{url}/api/client/v1/spaces/{}", space.id);
         let mut version = reqwest::header::HeaderMap::new();
         version.insert(askbar_proto::CLIENT_VERSION_HEADER, VERSION.parse().unwrap());
         let http = reqwest::Client::builder().default_headers(version).build().unwrap();
         let chat = |text: &str| {
-            http.post(format!("{url}/api/client/v1/chat"))
+            http.post(format!("{sp}/chat"))
                 .bearer_auth(&token)
                 .header(askbar_proto::CLIENT_VERSION_HEADER, VERSION)
                 .header("accept", "text/event-stream")
@@ -1365,7 +1410,7 @@ mod tests {
         // 1. Drop the client after a few deltas, resume after what was received (twice, to be sure),
         // then stop the reply: the three pieces joined are the stored reply.
         let resume = |gid: String, after: u64| {
-            http.get(format!("{url}/api/client/v1/generations/{gid}/stream"))
+            http.get(format!("{sp}/generations/{gid}/stream"))
                 .bearer_auth(&token)
                 .header(askbar_proto::CLIENT_VERSION_HEADER, VERSION)
                 .header("accept", "text/event-stream")
@@ -1385,14 +1430,14 @@ mod tests {
         assert!(second.status().is_success());
         let (middle, end) = read_some(second, &mut reader, |r| r.last_id >= at_drop + 5).await;
         assert!(end.is_none() && reader.last_id >= at_drop + 5, "the resume carried on from delta {at_drop}");
-        let stop = http.post(format!("{url}/api/client/v1/generations/{gid}/cancel")).bearer_auth(&token).send().await.unwrap();
+        let stop = http.post(format!("{sp}/generations/{gid}/cancel")).bearer_auth(&token).send().await.unwrap();
         assert!(stop.status().is_success());
         let third = resume(gid.clone(), reader.last_id).send().await.unwrap();
         let (tail, _) = read_some(third, &mut reader, |_| false).await;
         let all = format!("{head}{middle}{tail}");
         let convs: Vec<Conversation> =
-            http.get(format!("{url}/api/client/v1/conversations")).bearer_auth(&token).send().await.unwrap().json().await.unwrap();
-        assert_eq!(all, stored_reply(&http, &url, &token, &convs[0].id).await, "no delta twice, none missing");
+            http.get(format!("{sp}/conversations")).bearer_auth(&token).send().await.unwrap().json().await.unwrap();
+        assert_eq!(all, stored_reply(&http, &sp, &token, &convs[0].id).await, "no delta twice, none missing");
         assert!(all.starts_with("Streaming slowly"), "{all}");
 
         // 2. A server restart while a reply is running.
@@ -1403,12 +1448,19 @@ mod tests {
         let gid = reader.generation_id.clone().unwrap();
         askbar_server::generation::shutdown(&state);
         server.abort();
+        drop(space);
         let restarted_db = askbar_server::Db::open(&db_path).unwrap();
-        askbar_server::generation::sweep_on_start(&restarted_db).unwrap();
-        let state2: Arc<AppState> = AppState::new(restarted_db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), "0.1.0");
+        // As the server starts: every space file opened, then swept.
+        let spaces = askbar_server::Spaces::on_disk(dir.join("spaces"));
+        for s in spaces.open_all(&restarted_db).unwrap() {
+            askbar_server::generation::sweep_on_start(&s.lock()).unwrap();
+        }
+        let state2: Arc<AppState> =
+            AppState::new(restarted_db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), "0.1.0").with_spaces(spaces);
         let (url2, _server2) = serve_state(state2.clone()).await;
+        let space2 = askbar_server::testing::personal_space(&state2, &user);
         let resumed = http
-            .get(format!("{url2}/api/client/v1/generations/{gid}/stream"))
+            .get(format!("{url2}/api/client/v1/spaces/{}/generations/{gid}/stream", space2.id))
             .bearer_auth(&token)
             .header(askbar_proto::CLIENT_VERSION_HEADER, VERSION)
             .header("accept", "text/event-stream")
@@ -1420,10 +1472,8 @@ mod tests {
         let (tail, end) = read_some(resumed, &mut reader, |_| false).await;
         let Some(Step::Fail { message: why, .. }) = end else { panic!("an interrupted reply ends with an error event, got {end:?}") };
         assert!(!why.is_empty());
-        let (status, stored_text): (String, String) = state2
-            .db
+        let (status, stored_text): (String, String) = space2
             .lock()
-            .unwrap()
             .conn()
             .query_row("SELECT status, text FROM generations WHERE id = ?1", [&gid], |r| Ok((r.get(0)?, r.get(1)?)))
             .unwrap();

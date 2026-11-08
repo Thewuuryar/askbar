@@ -7,6 +7,8 @@ struct T {
     token: String,
     http: reqwest::Client,
     code: String,
+    /// The user's personal space.
+    space: String,
 }
 
 async fn start() -> T {
@@ -16,11 +18,12 @@ async fn start() -> T {
     let code2 = askbar_server::testing::add_pair_code(&db, &user, "second");
     let state = AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), askbar_server::MIN_CLIENT);
     let token = auth::redeem_pair_code(&state.db.lock().unwrap(), &code).unwrap().unwrap();
+    let space = askbar_server::testing::personal_space(&state, &user).id.clone();
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", l.local_addr().unwrap());
     let app = askbar_server::client_router(state);
     tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
-    T { url, token, http: reqwest::Client::new(), code: code2 }
+    T { url, token, http: reqwest::Client::new(), code: code2, space }
 }
 
 impl T {
@@ -33,24 +36,26 @@ impl T {
 async fn the_client_api_answers_at_its_new_paths() {
     let t = start().await;
     let h: askbar_proto::Health = t.http.get(format!("{}/api/client/v1/health", t.url)).send().await.unwrap().json().await.unwrap();
-    assert_eq!(h.min_client, "0.5.0");
+    assert_eq!(h.min_client, "0.6.0");
     assert_eq!(t.get("/api/client/v1/me").send().await.unwrap().status(), 204, "who am I: a token that is still accepted");
+    let s = &t.space;
     for path in [
-        "/api/client/v1/providers",
-        "/api/client/v1/conversations",
-        "/api/client/v1/me/prefs",
-        "/api/client/v1/me/display-defaults",
-        "/api/client/v1/settings",
-        "/api/client/v1/generations?status=running",
-        "/api/client/v1/search?q=x",
+        "/api/client/v1/providers".to_string(),
+        "/api/client/v1/spaces".to_string(),
+        format!("/api/client/v1/spaces/{s}/conversations"),
+        "/api/client/v1/me/prefs".to_string(),
+        "/api/client/v1/me/display-defaults".to_string(),
+        "/api/client/v1/settings".to_string(),
+        format!("/api/client/v1/spaces/{s}/generations?status=running"),
+        format!("/api/client/v1/spaces/{s}/search?q=x"),
     ] {
-        assert_eq!(t.get(path).send().await.unwrap().status(), 200, "{path}");
+        assert_eq!(t.get(&path).send().await.unwrap().status(), 200, "{path}");
     }
     // Pairing is a pairings resource: POST creates a token.
     let r = t
         .http
         .post(format!("{}/api/client/v1/pairings", t.url))
-        .header("x-askbar-client-version", "0.5.0")
+        .header("x-askbar-client-version", "0.6.0")
         .json(&serde_json::json!({ "code": t.code }))
         .send()
         .await
@@ -60,8 +65,8 @@ async fn the_client_api_answers_at_its_new_paths() {
 }
 
 #[tokio::test]
-async fn the_minimum_client_is_0_5_0_and_an_older_app_on_a_new_path_is_told_to_update() {
-    assert_eq!(askbar_server::MIN_CLIENT, "0.5.0");
+async fn the_minimum_client_is_0_6_0_and_an_older_app_on_a_new_path_is_told_to_update() {
+    assert_eq!(askbar_server::MIN_CLIENT, "0.6.0");
     let t = start().await;
     let old = t
         .http
@@ -86,6 +91,12 @@ async fn the_old_names_are_gone_and_old_paths_are_404_except_the_one_that_says_u
         "/mgmt/v1/health",
         "/api/server/v1/health",
         "/api/health",
+        // The flat routes of 0.5.x, before spaces (ADR 0009, ADR 0022).
+        "/api/client/v1/conversations",
+        "/api/client/v1/conversations/x",
+        "/api/client/v1/search?q=x",
+        "/api/client/v1/generations?status=running",
+        "/api/client/v1/generations/x/stream",
     ] {
         // names-ok: proves the old path is gone
         let r = t.get(gone).send().await.unwrap();

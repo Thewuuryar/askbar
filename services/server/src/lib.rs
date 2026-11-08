@@ -19,6 +19,7 @@ pub mod seal;
 pub mod secrets;
 pub mod server_api;
 pub mod snapshot;
+pub mod space;
 pub mod store;
 #[doc(hidden)]
 pub mod testing;
@@ -33,16 +34,20 @@ use axum::{
     response::Response,
     Json, Router,
 };
-pub use db::{make_title, ConversationSummary, Db, DbError, Generation, SearchHit, StoredMessage};
+pub use db::{make_title, Db, DbError};
 use error::{ApiError, ApiJson};
 use secrets::Secrets;
+pub use space::{ConversationSummary, Generation, SearchHit, Space, SpaceStore, Spaces, StoredMessage};
 use std::sync::{Arc, Mutex};
 
 pub const API_VERSION: u32 = 1;
-pub const MIN_CLIENT: &str = "0.5.0";
+pub const MIN_CLIENT: &str = "0.6.0";
 
 pub struct AppState {
+    /// The control database (`control.db`). Lock it before a space, never while holding one.
     pub db: Mutex<Db>,
+    /// The space files (ADR 0009). A handler gets one through `Spaces::for_member`.
+    pub spaces: Spaces,
     secrets: Arc<Secrets>,
     pub http: llm::HttpClient,
     /// Oldest client version the API still serves.
@@ -64,6 +69,7 @@ impl AppState {
     pub fn new(db: Db, secrets: Secrets, min_client: &str) -> Arc<AppState> {
         Arc::new(AppState {
             db: Mutex::new(db),
+            spaces: Spaces::in_memory(),
             secrets: Arc::new(secrets),
             http: llm::http_client(),
             min_client: min_client.to_string(),
@@ -80,6 +86,13 @@ impl AppState {
     pub fn with_audit(self: Arc<Self>, recorder: audit::Recorder) -> Arc<AppState> {
         let mut state = Arc::try_unwrap(self).unwrap_or_else(|_| panic!("with_audit is for a state nothing else holds yet"));
         state.audit = recorder;
+        Arc::new(state)
+    }
+
+    /// Gives a fresh state its space files (`Spaces::on_disk`); `new` keeps them in memory.
+    pub fn with_spaces(self: Arc<Self>, spaces: Spaces) -> Arc<AppState> {
+        let mut state = Arc::try_unwrap(self).unwrap_or_else(|_| panic!("with_spaces is for a state nothing else holds yet"));
+        state.spaces = spaces;
         Arc::new(state)
     }
 
@@ -112,19 +125,22 @@ pub fn client_routes(state: &Arc<AppState>) -> routes::Routes {
         // Lets a client check that its token is still accepted.
         .get(&v1("/me"), || async { StatusCode::NO_CONTENT })
         .get(&v1("/providers"), client_api::providers)
-        .get(&v1("/conversations"), client_api::conversations)
-        .get(&v1("/conversations/{id}"), client_api::conversation)
-        .delete(&v1("/conversations/{id}"), client_api::delete_conversation)
         .get(&v1("/me/prefs"), client_api::get_prefs)
         .put(&v1("/me/prefs"), client_api::put_prefs)
         .get(&v1("/me/display-defaults"), client_api::display_defaults)
         .post(&v1("/me/pairing-keys"), client_api::new_pairing_key)
-        .get(&v1("/search"), client_api::search)
         .get(&v1("/settings"), client_api::settings)
-        .post(&v1("/chat"), chat::chat)
-        .get(&v1("/generations"), client_api::generations)
-        .get(&v1("/generations/{id}/stream"), generation::stream)
-        .post(&v1("/generations/{id}/cancel"), generation::cancel)
+        // Spaces (ADR 0009, ADR 0022): every route below `{space_id}` takes `MemberSpace`, which
+        // checks membership before the space's file is opened.
+        .get(&v1("/spaces"), client_api::spaces)
+        .get(&v1("/spaces/{space_id}/conversations"), client_api::conversations)
+        .get(&v1("/spaces/{space_id}/conversations/{id}"), client_api::conversation)
+        .delete(&v1("/spaces/{space_id}/conversations/{id}"), client_api::delete_conversation)
+        .get(&v1("/spaces/{space_id}/search"), client_api::search)
+        .post(&v1("/spaces/{space_id}/chat"), chat::chat)
+        .get(&v1("/spaces/{space_id}/generations"), client_api::generations)
+        .get(&v1("/spaces/{space_id}/generations/{id}/stream"), generation::stream)
+        .post(&v1("/spaces/{space_id}/generations/{id}/cancel"), generation::cancel)
         .guarded(|r| r.route_layer(token()));
     // Everything except health checks, in this order: the client version (an old app is told to
     // update), then whether the admin has pushed configuration yet (503 not_configured, ADR 0028
@@ -154,7 +170,7 @@ pub fn client_router(state: Arc<AppState>) -> Router {
         .layer(middleware::from_fn(nosniff))
 }
 
-/// Open once a configuration has been stored: it is kept in `server.db`, so a restart stays
+/// Open once a configuration has been stored: it is kept in `control.db`, so a restart stays
 /// configured, and only a server that has never been sent one (a fresh volume) is closed. Health
 /// and the old prefix are outside the gated routes, so no path needs to be left open here.
 fn configured_gate(state: &Arc<AppState>) -> askbar_service::configured::Gate {

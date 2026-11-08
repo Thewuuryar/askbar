@@ -127,6 +127,14 @@ pub fn state_with_audit(base_url: &str) -> (std::sync::Arc<crate::AppState>, std
     (crate::AppState::new(db, secrets, crate::MIN_CLIENT).with_audit(recorder), dir)
 }
 
+/// `user_id`'s personal space, made if need be, as `GET /spaces` would list it. For tests that call
+/// `generation::submit` or read a space's store directly.
+pub fn personal_space(state: &crate::AppState, user_id: &str) -> std::sync::Arc<crate::Space> {
+    let db = state.db.lock().unwrap();
+    let id = db.ensure_personal_space(user_id).unwrap();
+    state.spaces.for_member(&db, user_id, &id).unwrap().expect("the owner is a member")
+}
+
 /// Make generations started from now on time out after `d` instead of the snapshot's value.
 pub fn override_generation_timeout(state: &crate::AppState, d: std::time::Duration) {
     state.set_generation_timeout_override(Some(d));

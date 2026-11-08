@@ -97,7 +97,7 @@ fn the_server_api_file_describes_exactly_the_servers_routes() {
 fn every_path_in_the_files_is_under_its_apis_prefix_and_the_stream_is_described() {
     let client = load("client.v1.yaml");
     assert!(client["paths"].as_object().unwrap().keys().all(|p| p.starts_with("/api/client/v1/")), "client paths");
-    let chat = &client["paths"]["/api/client/v1/chat"]["post"]["responses"]["200"];
+    let chat = &client["paths"]["/api/client/v1/spaces/{space_id}/chat"]["post"]["responses"]["200"];
     assert!(chat["$ref"].as_str().is_some_and(|r| r.ends_with("EventStream")));
     assert!(client["components"]["responses"]["EventStream"]["content"]["text/event-stream"].is_object());
     let server = load("server.v1.yaml");

@@ -12,10 +12,14 @@ struct T {
     user: String,
     token: String,
     http: reqwest::Client,
+    /// The user's personal space.
+    space: String,
 }
 
+/// A conversation in `user`'s personal space.
 fn add_conversation(state: &AppState, user: &str, title: &str, msgs: &[(&str, &str)]) -> String {
-    let db = state.db.lock().unwrap();
+    let space = askbar_server::testing::personal_space(state, user);
+    let db = space.lock();
     let id = db.create_conversation(user, title).unwrap();
     for (role, content) in msgs {
         db.add_message(user, &id, role, content).unwrap();
@@ -36,10 +40,15 @@ async fn start() -> T {
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = l.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
-    T { addr, state, user, token, http: client() }
+    let space = askbar_server::testing::personal_space(&state, &user).id.clone();
+    T { addr, state, user, token, http: client(), space }
 }
 
 impl T {
+    /// A client API path in the user's personal space: `sp("/search?q=x")`.
+    fn sp(&self, rest: &str) -> String {
+        format!("/api/client/v1/spaces/{}{rest}", self.space)
+    }
     fn req(&self, m: reqwest::Method, p: &str) -> reqwest::RequestBuilder {
         self.http.request(m, format!("http://{}{p}", self.addr)).bearer_auth(&self.token)
     }
@@ -57,21 +66,21 @@ async fn endpoints_return_scoped_data() {
     t.state.db.lock().unwrap().conn().execute("INSERT INTO users (id, name, created_at) VALUES ('U2','other',0)", []).unwrap();
     let c2 = add_conversation(&t.state, "U2", "theirs", &[("user", "secret chat")]);
 
-    let list: Vec<Conversation> = serde_json::from_str(&t.get_text("/api/client/v1/conversations").await.1).unwrap();
+    let list: Vec<Conversation> = serde_json::from_str(&t.get_text(&t.sp("/conversations")).await.1).unwrap();
     assert_eq!(list.len(), 1);
     assert_eq!((list[0].id.as_str(), list[0].title.as_str(), list[0].message_count), (c1.as_str(), "mine", 2));
 
-    let (st, body) = t.get_text(&format!("/api/client/v1/conversations/{c1}")).await;
+    let (st, body) = t.get_text(&t.sp(&format!("/conversations/{c1}"))).await;
     assert_eq!(st, 200);
     let d: ConversationDetail = serde_json::from_str(&body).unwrap();
     assert_eq!(d.messages.iter().map(|m| m.content.as_str()).collect::<Vec<_>>(), ["hi", "hello"]);
 
-    assert_eq!(t.get_text(&format!("/api/client/v1/conversations/{c2}")).await.0, 404);
-    assert_eq!(t.req(reqwest::Method::DELETE, &format!("/api/client/v1/conversations/{c2}")).send().await.unwrap().status(), 404);
-    assert_eq!(t.req(reqwest::Method::DELETE, &format!("/api/client/v1/conversations/{c1}")).send().await.unwrap().status(), 204);
-    assert_eq!(t.get_text(&format!("/api/client/v1/conversations/{c1}")).await.0, 404);
-    let n: i64 =
-        t.state.db.lock().unwrap().conn().query_row("SELECT COUNT(*) FROM messages WHERE user_id = 'U2'", [], |r| r.get(0)).unwrap();
+    assert_eq!(t.get_text(&t.sp(&format!("/conversations/{c2}"))).await.0, 404);
+    assert_eq!(t.req(reqwest::Method::DELETE, &t.sp(&format!("/conversations/{c2}"))).send().await.unwrap().status(), 404);
+    assert_eq!(t.req(reqwest::Method::DELETE, &t.sp(&format!("/conversations/{c1}"))).send().await.unwrap().status(), 204);
+    assert_eq!(t.get_text(&t.sp(&format!("/conversations/{c1}"))).await.0, 404);
+    let theirs = askbar_server::testing::personal_space(&t.state, "U2");
+    let n: i64 = theirs.lock().conn().query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0)).unwrap();
     assert_eq!(n, 1, "other user's rows untouched");
 
     let providers: Vec<ProviderInfo> = serde_json::from_str(&t.get_text("/api/client/v1/providers").await.1).unwrap();
@@ -112,9 +121,9 @@ async fn no_response_contains_provider_key_material() {
         "/api/client/v1/health",
         "/api/client/v1/me",
         "/api/client/v1/providers",
-        "/api/client/v1/conversations",
-        &format!("/api/client/v1/conversations/{c1}"),
-        "/api/client/v1/conversations/nope",
+        &t.sp("/conversations"),
+        &t.sp(&format!("/conversations/{c1}")),
+        &t.sp("/conversations/nope"),
         "/api/client/v1/settings",
     ] {
         let r = t.req(reqwest::Method::GET, p).send().await.unwrap();
@@ -129,7 +138,7 @@ async fn no_response_contains_provider_key_material() {
 #[tokio::test]
 async fn read_endpoints_require_a_token() {
     let t = start().await;
-    for p in ["/api/client/v1/providers", "/api/client/v1/conversations", "/api/client/v1/conversations/C1", "/api/client/v1/settings"] {
+    for p in ["/api/client/v1/providers", &t.sp("/conversations"), &t.sp("/conversations/C1"), "/api/client/v1/settings"] {
         let r = t.http.get(format!("http://{}{p}", t.addr)).send().await.unwrap();
         assert_eq!(r.status(), 401, "{p}");
     }
@@ -137,7 +146,7 @@ async fn read_endpoints_require_a_token() {
 
 fn client() -> reqwest::Client {
     let mut h = reqwest::header::HeaderMap::new();
-    h.insert(askbar_proto::CLIENT_VERSION_HEADER, "0.5.0".parse().unwrap());
+    h.insert(askbar_proto::CLIENT_VERSION_HEADER, "0.6.0".parse().unwrap());
     reqwest::Client::builder().default_headers(h).build().unwrap()
 }
 
@@ -148,16 +157,16 @@ async fn search_returns_only_my_matching_messages() {
     t.state.db.lock().unwrap().conn().execute("INSERT INTO users (id, name, created_at) VALUES ('U2','other',0)", []).unwrap();
     add_conversation(&t.state, "U2", "theirs", &[("user", "zebra secrets")]);
 
-    let (st, body) = t.get_text("/api/client/v1/search?q=zebra").await;
+    let (st, body) = t.get_text(&t.sp("/search?q=zebra")).await;
     assert_eq!(st, 200);
     let hits: Vec<SearchHit> = serde_json::from_str(&body).unwrap();
     assert_eq!(hits.len(), 1);
     assert_eq!((hits[0].conversation_id.as_str(), hits[0].role.as_str()), (c1.as_str(), "user"));
     assert!(!body.contains("secrets"));
 
-    assert_eq!(t.get_text("/api/client/v1/search?q=").await, (200, "[]".to_string()));
-    assert_eq!(t.get_text(&format!("/api/client/v1/search?q={}", "x".repeat(201))).await.0, 400);
-    let r = t.http.get(format!("http://{}/api/client/v1/search?q=zebra", t.addr)).send().await.unwrap();
+    assert_eq!(t.get_text(&t.sp("/search?q=")).await, (200, "[]".to_string()));
+    assert_eq!(t.get_text(&t.sp(&format!("/search?q={}", "x".repeat(201)))).await.0, 400);
+    let r = t.http.get(format!("http://{}{}", t.addr, t.sp("/search?q=zebra"))).send().await.unwrap();
     assert_eq!(r.status(), 401, "search needs a token");
 }
 
@@ -212,12 +221,12 @@ async fn read_api_failures_are_problems_with_a_code_and_a_sentence() {
     let t = start().await;
     let long = "x".repeat(201);
     let cases: Vec<(reqwest::Method, String, u16, &str)> = vec![
-        (reqwest::Method::GET, "/api/client/v1/conversations/nope".into(), 404, "not_found"),
-        (reqwest::Method::DELETE, "/api/client/v1/conversations/nope".into(), 404, "not_found"),
-        (reqwest::Method::GET, format!("/api/client/v1/search?q={long}"), 400, "bad_request"),
-        (reqwest::Method::GET, "/api/client/v1/generations?status=done".into(), 400, "bad_request"),
-        (reqwest::Method::GET, "/api/client/v1/generations/nope/stream".into(), 404, "not_found"),
-        (reqwest::Method::POST, "/api/client/v1/generations/nope/cancel".into(), 404, "not_found"),
+        (reqwest::Method::GET, t.sp("/conversations/nope"), 404, "not_found"),
+        (reqwest::Method::DELETE, t.sp("/conversations/nope"), 404, "not_found"),
+        (reqwest::Method::GET, t.sp(&format!("/search?q={long}")), 400, "bad_request"),
+        (reqwest::Method::GET, t.sp("/generations?status=done"), 400, "bad_request"),
+        (reqwest::Method::GET, t.sp("/generations/nope/stream"), 404, "not_found"),
+        (reqwest::Method::POST, t.sp("/generations/nope/cancel"), 404, "not_found"),
         (reqwest::Method::GET, "/api/client/v1/no-such-endpoint".into(), 404, "not_found"),
         (reqwest::Method::DELETE, "/api/client/v1/providers".into(), 405, "method_not_allowed"),
     ];

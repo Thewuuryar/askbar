@@ -22,11 +22,12 @@ Tests check that each file lists exactly the routes the code registers.
 ## Ids
 
 - Every id the server hands out is a **ULID** (26 characters, Crockford base32), generated
-  by the server: users, clients, conversations, messages, providers.
+  by the server: users, clients, spaces, conversations, messages, providers.
 - Ids sort in creation order within one server process. Clients treat them as opaque
   strings and never make them up.
 - Timestamps are UTC unix seconds (`created_at`, `updated_at`).
-- Another user's ids behave exactly like ids that do not exist: `404`.
+- Another user's ids, and ids from a space the caller is not in, behave exactly like ids that do
+  not exist: `404`.
 
 ## Authentication and the version gate
 
@@ -37,8 +38,8 @@ Tests check that each file lists exactly the routes the code registers.
   - header missing or not a version: `400`;
   - version older than the server's `min_client`: `426` (the client shows "update needed");
   - otherwise the request goes on.
-- `min_client` is currently **0.5.0**. `GET /api/client/v1/health` reports it:
-  `{"api_version": 1, "min_client": "0.5.0"}` and needs neither header nor token.
+- `min_client` is currently **0.6.0**. `GET /api/client/v1/health` reports it:
+  `{"api_version": 1, "min_client": "0.6.0"}` and needs neither header nor token.
 - After the gate, calls other than `POST /api/client/v1/pairings` need `Authorization: Bearer <client token>`;
   a missing, unknown or revoked token is `401`.
 - `GET /api/client/v1/me` answers `204` if the token is accepted.
@@ -89,33 +90,55 @@ Both follow the signed-in user, so all of a user's clients see the same values.
   the server's default.
 - `GET /api/client/v1/settings` (server-wide display defaults) remains for older callers.
 
+## Spaces
+
+A **space** holds conversations, their messages, search and replies, in a file of its own on the
+server ([ADR 0009](adr/0009-spaces-and-storage.md)). Every user has one **personal** space, made with
+the user. Shared spaces come later (plan step 1.12).
+
+- `GET /api/client/v1/spaces` returns `[{"id", "kind": "personal"|"shared", "name"}]`, the spaces the
+  caller is a member of, the personal one first (its `name` is empty).
+- Every route below is under `/api/client/v1/spaces/{space_id}`. The server checks that the caller's
+  user is a member of that space before it opens the space; a space that does not exist and one the
+  user is not in both answer `404 not_found`, so the answer says nothing about other people's spaces.
+- A client uses the personal space unless the person picks another. It finds the id once with
+  `GET /spaces` and keeps it for as long as it stays paired.
+- Ids from one space mean nothing in another: a conversation or generation id sent under the wrong
+  space is `404`.
+
+The flat routes of 0.5.x (`/api/client/v1/conversations`, `/search`, `/chat`, `/generations`) are gone
+and answer `404`; `min_client` is `0.6.0`, so a 0.5.x app is told to update first.
+
 ## Conversations and search
 
-- `GET /api/client/v1/conversations` returns `[{"id", "title", "updated_at", "message_count"}]`,
-  newest first, for the caller only.
-- `GET /api/client/v1/conversations/{id}` returns the same fields plus
+Paths below are relative to `/api/client/v1/spaces/{space_id}`.
+
+- `GET /conversations` returns `[{"id", "title", "updated_at", "message_count"}]`,
+  newest first, every conversation in the space.
+- `GET /conversations/{id}` returns the same fields plus
   `"messages": [{"id", "role": "user"|"assistant", "content", "created_at"}]`, oldest first,
   and, only while something is unfinished, `"pending"`: the replies still running in this
   conversation and the messages waiting behind them (see *Generations* below).
-- `DELETE /api/client/v1/conversations/{id}` returns `204`, or `404` if it is not the caller's.
+- `DELETE /conversations/{id}` returns `204`, or `404` if there is no such conversation in the space.
   A reply still running in it is stopped and the messages waiting in it are dropped first.
-- `GET /api/client/v1/search?q=<words>` returns up to 20
+- `GET /search?q=<words>` returns up to 20
   `{"conversation_id", "message_id", "role", "snippet", "created_at"}`, best match first,
-  over the caller's own messages only. All words must match; punctuation is plain text.
+  over the space's messages only. All words must match; punctuation is plain text.
   An empty query returns `[]`; more than 200 characters is `400`.
 
 ## Chat stream
 
-`POST /api/client/v1/chat` with
+`POST /api/client/v1/spaces/{space_id}/chat` with
 `{"conversation_id": "<id>" (optional), "provider": "<provider id>", "text": "...", "client_request_id": "<string>" (optional)}`.
-Empty text is `400`; an unknown provider or a conversation that is not the caller's is
-`404`; a conversation that already has five messages waiting is `409` (see *The queue*); when
+A new conversation is made in that space, and the history sent to the model comes from that space
+only. Empty text is `400`; an unknown provider, a conversation that is not in the space, or a space
+the caller is not a member of is `404`; a conversation that already has five messages waiting is `409` (see *The queue*); when
 the server cannot take the message it refuses before anything starts, with a problem (see
 *Errors*) whose `error` says why (the typed text is never lost; the client keeps it):
 
 The refusals are 409 `queue_full`, 429 `budget_exceeded` (with `period`), 503 `kill_switch`,
 503 `audit_key_missing` and 503 `audit_backlog` (with `Retry-After`); the OpenAPI file lists them on
-`POST /chat`.
+`POST /spaces/{space_id}/chat`.
 
 Each turn sends the conversation's history with the new question. A question that got no reply (its
 turn failed, or was stopped, timed out or interrupted before any text) stays in the conversation but
@@ -148,7 +171,7 @@ assistant message when it ends, and the client can come back to it. Only cancel,
 the conversation, a timeout or a server stop ends it early.
 
 **Repeating a send.** `client_request_id` is chosen by the client for each send (a random
-UUID). A second `POST /api/client/v1/chat` from the same client with the same id starts nothing:
+UUID). A second `POST /spaces/{space_id}/chat` from the same client in the same space with the same id starts nothing:
 it attaches to the generation the first one started (same `meta`, deltas replayed from the
 start) and writes no second question. The same id from another client is a different send.
 A generation row is kept for 24 hours, so the guarantee holds for that long.
@@ -168,19 +191,20 @@ A generation is one reply being produced by the server. Its status is one of
 - `interrupted`: the server restarted or stopped while it was running (the text it had is
   saved) or waiting (nothing was saved; it never ran).
 
-Endpoints (all need a client token; another user's generation is `404`):
+Endpoints, under `/api/client/v1/spaces/{space_id}` (all need a client token; a generation in
+another space is `404`):
 
-- `GET /api/client/v1/generations/{id}/stream?after=N`: the events of that generation after its
+- `GET /generations/{id}/stream?after=N`: the events of that generation after its
   first `N` deltas (`N` defaults to 0), then live ones, ending with `done` or `error`.
   While the generation runs, and for five minutes after it ends, this is exact (original
   `id:`s). Once only the database remembers it, delta boundaries are gone: with `after=0`
   you get the whole stored text as one `delta` (id 1), with `after>0` only the ending, and
   the client should reload the conversation to read the saved message. `cancelled` ends
   with `done`; `error`, `timed_out` and `interrupted` end with an `error` event.
-- `POST /api/client/v1/generations/{id}/cancel`: stop it. `204`, also when it has already
+- `POST /generations/{id}/cancel`: stop it. `204`, also when it has already
   finished (nothing changes). A running generation ends as `cancelled` with its text kept;
   a queued one ends as `cancelled` and nothing is written to the conversation.
-- `GET /api/client/v1/generations?status=running`: the caller's running **and** queued
+- `GET /generations?status=running`: the space's running **and** queued
   generations, oldest first, as
   `[{"generation_id", "conversation_id", "status", "text", "prompt", "client_request_id"?}]`.
   `text` is what the server last saved (it can trail the live stream by about a second); to
@@ -205,7 +229,9 @@ fields, endpoints and error codes. Anything else gets a `v2` beside it for one r
 `min_client` is a separate, smaller thing: the oldest app this server will talk to within `v1`.
 0.4.0 changed the wire format (generation ids, delta ids, queued messages, new endpoints) and
 0.5.0 moved the paths (`/api/v1` to `/api/client/v1`, `/pair` to `/pairings`, `/whoami` to `/me`)
-and made every error a problem, so `min_client` is 0.5.0.
+and made every error a problem. 0.6.0 moved conversations, search, chat and generations under
+`/spaces/{space_id}` (*Spaces* above), so `min_client` is 0.6.0. Before 1.0 paths may change like
+this ([ADR 0022](adr/0022-api-path-conventions.md)); after 1.0, `v1` changes are additive only.
 
 ## Routing, retries and gates
 
@@ -351,7 +377,7 @@ generation and never loses the typed text. Caddy answers a path nothing serves w
 route except `GET /health` (and the old `/api/v1`) answers 503 `not_configured` with
 `Retry-After: 5` ([ADR 0028](adr/0028-service-boundaries-and-config-delivery.md) rule 3). The
 order is the version gate, then this, then the token: an app is never told its token is refused
-while the server waits for its settings. The configuration is stored in `server.db`, so a
+while the server waits for its settings. The configuration is stored in `control.db`, so a
 restarted server stays configured; only one on an empty volume answers this, for the few seconds
 until the admin's next status check (every 12 s) pushes it.
 

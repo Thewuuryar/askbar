@@ -1,6 +1,6 @@
 //! The audit store: a separate SQLite file (`audit.db`) holding a trace of spans for every
 //! generation. It has its own append-only migrations and its own `PRAGMA user_version`,
-//! independent of `askbar.db`. Phase 4 stores metadata only; message content is added in
+//! independent of `control.db` and the space files. Phase 4 stores metadata only; message content is added in
 //! Phase 5, sealed.
 
 use rusqlite::Connection;

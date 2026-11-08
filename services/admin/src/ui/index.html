@@ -270,7 +270,7 @@
       <section id="tab-backup" data-tab="backup" hidden>
         <h2>Backup</h2>
         <div class="panel">
-          <p>Download a backup: the server's database (conversations, settings and paired clients) and this admin's own settings, as a <code>.tar</code> file with <code>server.db</code> and <code>admin.db</code>.</p>
+          <p>Download a backup of the server's data (settings, paired clients and every space's conversations) and this admin's own settings, as one <code>.tar</code> file: <code>server/control.db</code>, one file per space in <code>server/spaces/</code>, and <code>admin.db</code>.</p>
           <p class="hint">Provider API keys, the Cloudflare token, the admin password and pairing codes are left out. After restoring, enter the keys again on the Providers page. The server's master key is not in this file: back up its <code>askbar-secrets</code> volume separately.</p>
           <p><a class="button" id="backup-link" href="/api/admin/v1/backup" download>Download backup</a></p>
         </div>
