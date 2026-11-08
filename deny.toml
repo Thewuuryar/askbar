@@ -5,7 +5,12 @@
 [advisories]
 version = 2
 # A RustSec advisory fails the check. Ignore one only with its ID, a reason and a date to look again.
-ignore = []
+ignore = [
+    # unsafe-libyaml is unmaintained, with no safe upgrade. It comes in only through serde_yaml_ng, a
+    # dev-dependency that parses our own docs/openapi/*.yaml in the server's and admin's tests; it is in
+    # no binary. Revisit by 2027-02-01, or sooner by moving those tests to a YAML parser in safe Rust.
+    { id = "RUSTSEC-2024-0449", reason = "test-only YAML parser for our own OpenAPI files; in no binary" },
+]
 
 [licenses]
 version = 2
@@ -30,11 +35,14 @@ allow = [
     "Zlib",
 ]
 confidence-threshold = 0.93
+# One list serves both workspaces and the npm check, so an entry one of them never uses is expected.
+unused-allowed-license = "allow"
 
 [bans]
 # Several versions of one crate are common in the Tauri tree and cost only build time.
 multiple-versions = "allow"
 wildcards = "deny"
+# Path dependencies between our own crates are fine: every one of them sets `publish = false`.
 allow-wildcard-paths = true
 
 [sources]
