@@ -625,3 +625,26 @@ async fn an_install_from_before_takes_over_the_servers_users_so_its_clients_keep
     let (_, again) = t.call(M::GET, "/api/admin/v1/users", None).await;
     assert_eq!(again, list);
 }
+
+#[tokio::test]
+async fn a_provider_whose_key_the_server_lost_says_so_until_the_key_is_entered_again() {
+    let t = start(true).await;
+    let llm = fake_llm().await;
+    let (_, created) = t.call(M::POST, "/api/admin/v1/providers", Some(provider("mock", &llm, Some(KEY)))).await;
+    let id = created["id"].as_str().unwrap().to_string();
+    let (_, _) = t.call(M::POST, "/api/admin/v1/providers", Some(provider("keyless", &llm, None))).await;
+    let flags = || async {
+        let (_, list) = t.call(M::GET, "/api/admin/v1/providers", None).await;
+        list.as_array().unwrap().iter().map(|p| (p["name"].as_str().unwrap().to_string(), p["key_missing"].as_bool().unwrap())).collect::<Vec<_>>()
+    };
+    assert_eq!(flags().await, [("keyless".to_string(), false), ("mock".to_string(), false)]);
+
+    // The server's database was replaced: it lists the provider (the snapshot) but holds no key.
+    t.server.db.lock().unwrap().conn().execute("UPDATE providers SET api_key_enc = NULL WHERE id = ?1", [&id]).unwrap();
+    assert_eq!(flags().await, [("keyless".to_string(), false), ("mock".to_string(), true)], "only the one the admin sent a key for");
+
+    // Entering the key again (an edit with a key) clears it.
+    let (st, _) = t.call(M::PUT, &format!("/api/admin/v1/providers/{id}"), Some(provider("mock", &llm, Some(KEY)))).await;
+    assert_eq!(st, 204);
+    assert_eq!(flags().await, [("keyless".to_string(), false), ("mock".to_string(), false)]);
+}

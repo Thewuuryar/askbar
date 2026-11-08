@@ -1385,6 +1385,9 @@ components:
         managed:
           type: boolean
           description: Made and kept in step by the admin (the CLIProxyAPI provider). Name, type, address and key are fixed and it cannot be deleted; the model and limits can change.
+        key_missing:
+          type: boolean
+          description: The server reports it holds no key for this provider, though one was sent. Enter the key again. Never true for the managed provider.
     ProviderInput:
       type: object
       required: [name, type, model]

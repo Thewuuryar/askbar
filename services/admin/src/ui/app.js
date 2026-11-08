@@ -392,7 +392,8 @@
     badge.textContent = p.type;
     const key = document.createElement('span');
     key.className = 'badge';
-    key.textContent = p.has_key ? 'key set' : 'no key';
+    key.textContent = p.key_missing ? 'key missing on the server, enter it again' : p.has_key ? 'key set' : 'no key';
+    if (p.key_missing) key.classList.add('error');
     const sp = document.createElement('span');
     sp.className = 'spacer';
     head.append(name, badge, key, sp);

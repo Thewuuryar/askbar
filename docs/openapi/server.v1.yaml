@@ -146,7 +146,9 @@ paths:
     get:
       operationId: getProvidersHealth
       summary: Providers the router found unusable (bad credentials).
-      description: Only flagged providers are listed; the reason is a code such as `http_401`, never the provider's own text.
+      description: >
+        Only flagged providers are listed; the reason is a code such as `http_401`, never the provider's own text.
+        `missing_key` lists the providers in the current configuration that hold no key on the server.
       responses:
         '200':
           description: Flagged providers.
@@ -154,8 +156,12 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [providers]
+                required: [providers, missing_key]
                 properties:
+                  missing_key:
+                    type: array
+                    items:
+                      type: string
                   providers:
                     type: array
                     items:

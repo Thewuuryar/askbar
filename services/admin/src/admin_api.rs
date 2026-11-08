@@ -132,6 +132,9 @@ pub struct ProviderRow {
     price_cached_in: Option<f64>,
     /// Made and kept in step by the admin itself (the bundled CLIProxyAPI): name, address and key are fixed.
     managed: bool,
+    /// The admin sent a key, but the server reports it holds none (its database was replaced, say). The
+    /// person enters it again. Never set for the managed provider: the admin resends that key itself.
+    key_missing: bool,
 }
 
 #[derive(Deserialize)]
@@ -198,7 +201,17 @@ fn clash_or_internal(e: rusqlite::Error) -> Failure {
     }
 }
 
+/// The providers the server says hold no key. Empty if the server cannot be asked: the list still works.
+async fn server_missing_keys(state: &AdminState) -> std::collections::HashSet<String> {
+    let Some(server) = state.server.as_ref() else { return Default::default() };
+    let path = askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/providers/health");
+    let Ok((200, body)) = server.request(reqwest::Method::GET, &path, None).await else { return Default::default() };
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
+    v["missing_key"].as_array().map(|a| a.iter().filter_map(|i| i.as_str().map(String::from)).collect()).unwrap_or_default()
+}
+
 pub async fn list_providers(State(state): St) -> Result<Json<Vec<ProviderRow>>, Failure> {
+    let missing = server_missing_keys(&state).await;
     let db = state.db.lock().await;
     let mut stmt = db
         .conn()
@@ -220,11 +233,13 @@ pub async fn list_providers(State(state): St) -> Result<Json<Vec<ProviderRow>>, 
                 price_out: r.get(10)?,
                 price_cached_in: r.get(11)?,
                 managed: r.get::<_, i64>(12)? != 0,
+                key_missing: false,
             })
         })
         .map_err(internal)?
         .collect::<Result<Vec<_>, _>>()
         .map_err(internal)?;
+    let rows = rows.into_iter().map(|p| ProviderRow { key_missing: p.has_key && !p.managed && missing.contains(&p.id), ..p }).collect();
     Ok(Json(rows))
 }
 

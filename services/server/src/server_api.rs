@@ -118,11 +118,21 @@ async fn put_provider_key(State(state): State<Arc<AppState>>, Path(id): Path<Str
 
 /// `GET /api/server/v1/providers/health`: providers the router has found unusable, so the admin can say
 /// so. Only providers with a problem are listed; the reason is a code, never the provider's text.
+/// `missing_key` lists the providers in the current configuration that hold no key here (never set, or lost
+/// when the database was replaced), so the admin can ask for it again.
 async fn providers_health(State(state): State<Arc<AppState>>) -> Result<Json<serde_json::Value>, Failure> {
     let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
     let rows = db.provider_health().map_err(|_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not read provider health."))?;
+    let internal = |_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not read provider keys.");
+    let keyed: std::collections::HashSet<String> = {
+        let mut stmt = db.conn().prepare("SELECT id FROM providers WHERE api_key_enc IS NOT NULL AND length(api_key_enc) > 0").map_err(internal)?;
+        let ids = stmt.query_map([], |r| r.get::<_, String>(0)).map_err(internal)?.collect::<Result<_, _>>().map_err(internal)?;
+        ids
+    };
+    let missing: Vec<String> = crate::snapshot::current(&db).map_err(internal)?.map(|s| s.providers.into_iter().map(|p| p.id).filter(|id| !keyed.contains(id)).collect()).unwrap_or_default();
     Ok(Json(serde_json::json!({
-        "providers": rows.into_iter().map(|(id, status, since, code)| serde_json::json!({ "provider_id": id, "status": status, "since": since, "error_code": code })).collect::<Vec<_>>()
+        "providers": rows.into_iter().map(|(id, status, since, code)| serde_json::json!({ "provider_id": id, "status": status, "since": since, "error_code": code })).collect::<Vec<_>>(),
+        "missing_key": missing,
     })))
 }
 
