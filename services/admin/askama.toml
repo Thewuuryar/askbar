@@ -1,0 +1,3 @@
+# Askama looks for the admin pages here (plan step 1.16).
+[general]
+dirs = ["src/ui/templates"]

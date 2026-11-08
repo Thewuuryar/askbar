@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{%- import "blocks.html" as b %}
+{% block hint %}What every reply starts from: the system prompt, defaults and limits.{% endblock %}
+{% block content %}
+    <form id="settings-form" class="panel">
+      <h3>System prompt</h3>
+      {% call b::hint("Sent with every message. It is never shown to clients.") %}{% endcall %}
+      <label>Prompt <textarea id="s-prompt" rows="8"></textarea></label>
+      <h3>Reply time limit</h3>
+      {% call b::hint("A reply still running after this long is stopped and the text so far is kept. The default is 300 seconds (5 minutes); allowed 30 to 3600. A message that waits in the queue is timed from when it starts.") %}{% endcall %}
+      <label>Generation timeout (seconds) <input id="s-gen-timeout" type="number" min="30" max="3600" step="1"></label>
+      <p id="s-gen-timeout-min" class="hint"></p>
+      <h3>Kill switch</h3>
+      {% call b::hint("Switched on, the server starts no new replies and clears the messages waiting in queues. Clients see a clear message.") %}{% endcall %}
+      <label class="check"><input id="s-kill-switch" type="checkbox"> Switch off all replies</label>
+      <label class="check"><input id="s-kill-aborts" type="checkbox"> Also stop the replies that are running when it goes on (otherwise they finish)</label>
+      <h3>Audit</h3>
+      {% call b::hint("How long the audit records are kept before they are deleted (7 days at least, always; the audit database itself refuses to delete anything younger).") %}{% endcall %}
+      <label>Keep audit records for (days) <input id="s-retention" type="number" min="7" max="3650" step="1"></label>
+      <p class="hint">Sealing key: <code id="s-key-id">none</code></p>
+      <h3>Display defaults</h3>
+      {% call b::hint("Clients use these unless their own client.yaml overrides them.") %}{% endcall %}
+      <label>Theme
+        <select id="s-theme"><option value="auto">auto</option><option value="light">light</option><option value="dark">dark</option></select>
+      </label>
+      <label>Width (px) <input id="s-width" type="number" min="300" max="4000"></label>
+      <label>Max height (px) <input id="s-max-height" type="number" min="200" max="4000"></label>
+      <label>History panel width (px) <input id="s-history-width" type="number" min="120" max="1000"></label>
+      <label>Top position (0 to 0.8 of the screen height) <input id="s-top" type="number" step="0.01" min="0" max="0.8"></label>
+      <label class="check"><input id="s-hide-on-blur" type="checkbox"> Hide the window when it loses focus</label>
+      <div class="row"><button type="submit">Save settings</button></div>
+      {% call b::error_line("settings-error") %}{% endcall %}
+    </form>
+    <form id="rotate-form" class="panel">
+      <h3>Rotate the audit key</h3>
+      <p class="hint">Makes a new key from a new passphrase; the server seals everything from then on with it. Content sealed before stays sealed with the old key, and still needs the <strong>old</strong> passphrase to open. Neither passphrase can be recovered.</p>
+      <label>Current passphrase <input id="r-current" type="password" autocomplete="off" required></label>
+      <label>New passphrase (at least 20 characters) <input id="r-new" type="password" autocomplete="new-password" minlength="20" required></label>
+      <label>Repeat the new passphrase <input id="r-new2" type="password" autocomplete="new-password" minlength="20" required></label>
+      <div class="row"><button type="submit">Rotate key</button></div>
+      {% call b::error_line("rotate-error") %}{% endcall %}
+    </form>
+{% endblock %}

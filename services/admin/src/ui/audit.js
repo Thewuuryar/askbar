@@ -13,8 +13,17 @@
     state.sub = name;
     for (const b of $('audit-nav').children) b.setAttribute('aria-selected', b.dataset.sub === name ? 'true' : 'false');
     for (const s of SUBS) show($('audit-' + s), s === name);
+    keepInAddress();
     if (name === 'routing' && window.askbarAudit) window.askbarAudit.loadRouting();
     if (name === 'content' && window.askbarAudit) window.askbarAudit.loadAccess();
+  }
+
+  // The address names the view, and the request on the Trace view, so it can be bookmarked or shared:
+  // /admin/audit/?view=trace&id=<trace id> (plan step 1.16).
+  function keepInAddress() {
+    const q = new URLSearchParams({ view: state.sub });
+    if (state.sub === 'trace' && state.traceId) q.set('id', state.traceId);
+    history.replaceState(null, '', location.pathname + '?' + q.toString());
   }
 
   // One banner for anything that stops the tab reading the audit store: the server away (502), or a
@@ -495,10 +504,15 @@
   }
 
   async function load() {
+    const q = new URLSearchParams(location.search);
+    const view = q.get('view');
+    const traceId = view === 'trace' ? q.get('id') : null;
+    if (SUBS.includes(view) && view !== 'trace') state.sub = view;
     setSub(state.sub);
     await loadOverview();
     fillProviderFilter();
     await loadRequests(false);
+    if (traceId) await openTrace(traceId);
   }
 
   $('audit-nav').addEventListener('click', (e) => {
@@ -507,5 +521,5 @@
   });
 
   window.askbarAudit = { setSub, read, banner, state, renderOverview, requestsQuery, openTrace, layout, renderTrace, loadRouting, failureClass, renderSealed, loadAccess };
-  registerTab({ id: 'audit', label: 'Audit', load });
+  registerTab({ id: 'audit', load });
 })();

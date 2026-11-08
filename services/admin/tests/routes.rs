@@ -62,6 +62,26 @@ fn the_table_lists_the_api_under_v1_without_duplicates() {
     ); // names-ok: proves the old path is gone
 }
 
+#[test]
+fn every_admin_page_has_a_route_and_a_nav_link() {
+    // Plan step 1.16: `PAGES` is the one list the routes and the nav come from.
+    let table = routes::route_table();
+    for p in askbar_admin::pages::PAGES {
+        let path = askbar_admin::pages::path(p);
+        assert!(table.iter().any(|r| r.method == "GET" && r.path == path), "no route for {path}");
+    }
+    let pages = table.iter().filter(|r| r.path.starts_with("/admin/") && r.path.ends_with('/') && r.path != "/admin/").count();
+    assert_eq!(pages, askbar_admin::pages::PAGES.len(), "every page route comes from PAGES");
+}
+
+#[tokio::test]
+async fn an_unknown_admin_page_is_a_404() {
+    let url = start().await;
+    for path in ["/admin/x/", "/admin/users/", "/admin/providers/x/"] {
+        assert_eq!(reqwest::get(format!("{url}{path}")).await.unwrap().status(), 404, "{path}");
+    }
+}
+
 #[tokio::test]
 async fn every_registered_route_answers_and_a_method_that_is_not_registered_is_a_405() {
     let url = start().await;
