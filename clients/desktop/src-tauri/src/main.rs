@@ -159,16 +159,26 @@ fn register_hotkey(app: &AppHandle, spec: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Re-read config.yaml and apply what can change at runtime.
-fn apply_config(app: &AppHandle) -> Option<String> {
+/// Apply the settings that can change at runtime: the blur behaviour, the window's place and the hotkey.
+/// Sync and cheap, so an async command can call it with settings it already read.
+fn apply_settings(app: &AppHandle, cfg: &Settings) -> Option<String> {
     let state = app.state::<AppState>();
-    let cfg = match tauri::async_runtime::block_on(state.backend().settings()) {
-        Ok(c) => c,
-        Err(e) => return Some(e),
-    };
     state.hide_on_blur.store(cfg.ui.hide_on_blur, Ordering::Relaxed);
     lock(&state.placement).top_percent = cfg.ui.top_percent;
     register_hotkey(app, &cfg.hotkey).err()
+}
+
+/// Re-read config.yaml and apply what can change at runtime.
+///
+/// Call it only from the main thread (the tray menu), never from an async command: it blocks on the
+/// runtime, which panics inside a runtime worker ("Cannot start a runtime from within a runtime").
+/// An async command reads `settings().await` and calls `apply_settings`.
+fn apply_config(app: &AppHandle) -> Option<String> {
+    let state = app.state::<AppState>();
+    match tauri::async_runtime::block_on(state.backend().settings()) {
+        Ok(cfg) => apply_settings(app, &cfg),
+        Err(e) => Some(e),
+    }
 }
 
 // ----------------------------------------------------------- commands
@@ -209,8 +219,11 @@ async fn pair(app: AppHandle, state: State<'_, AppState>, pairing: String) -> Re
     let remote = Remote::new(client_config::ClientConfig::load(&path), path, Box::new(keychain))
         .with_outbox(outbox::Outbox::load(outbox::default_path()));
     *state.backend.write().unwrap_or_else(|e| e.into_inner()) = Arc::new(remote);
-    // Pick up the new hotkey and look and feel.
-    let _ = apply_config(&app);
+    // Pick up the new hotkey and look and feel. Not `apply_config`: it blocks, and this is async.
+    let settings = state.backend().settings().await;
+    if let Ok(cfg) = settings {
+        let _ = apply_settings(&app, &cfg);
+    }
     Ok(())
 }
 
@@ -500,4 +513,29 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running Askbar");
+}
+
+#[cfg(test)]
+mod tests {
+    /// `apply_config` and `block_on` panic when called from an async command, which runs on a runtime
+    /// worker. A test can't build an `AppHandle`, so this reads the source.
+    #[test]
+    fn async_commands_never_block_on_the_runtime() {
+        let src = include_str!("main.rs");
+        // Everything before the test module, so this test's own strings are not scanned.
+        let src = &src[..src.find("#[cfg(test)]\nmod tests").expect("the test module")];
+        let mut checked = 0;
+        for part in src.split("#[tauri::command]").skip(1) {
+            let part = part.trim_start();
+            if !part.starts_with("async fn") {
+                continue;
+            }
+            let body = &part[..part.find("\n}\n").unwrap_or(part.len())];
+            let name = body.lines().next().unwrap_or_default();
+            assert!(!body.contains("apply_config("), "{name} calls apply_config; use apply_settings");
+            assert!(!body.contains("block_on("), "{name} calls block_on");
+            checked += 1;
+        }
+        assert!(checked > 5, "only {checked} async commands found; the check is not looking at the commands");
+    }
 }
