@@ -1,4 +1,4 @@
-# 0051. The `askbar-audit` crate
+# 0052. The `askbar-audit` crate
 
 Status: Proposed
 Date: 2026-11-08
@@ -7,7 +7,7 @@ Source: plan step 2.3 ([plan-v1.md](../plan-v1.md)); owner rule that every compo
 
 ## Context
 
-The audit store's code is in the server today: `services/server/src/audit.rs` (the `audit.db` schema and migrations, the writer, the queries and retention) and `services/server/src/seal.rs` (sealing to the audit public key). Plan step 2.3 moves both into a library, unchanged, so that the `auditor` ([0050](0050-auditor.md)) can run the store in step 2.4. This record describes that crate, and is proposed before step 2.3 so the owner accepts it first. It follows [0010](0010-auditor.md), [0025](0025-audit-record-reliability.md), [0030](0030-sealed-audit-content.md) and [0033](0033-repository-layout.md).
+The audit store's code is in the server today: `services/server/src/audit.rs` (the `audit.db` schema and migrations, the writer, the queries and retention) and `services/server/src/seal.rs` (sealing to the audit public key). Plan step 2.3 moves both into a library, unchanged, so that the `auditor` ([0051](0051-auditor.md)) can run the store in step 2.4. This record describes that crate, and is proposed before step 2.3 so the owner accepts it first. It follows [0010](0010-auditor.md), [0025](0025-audit-record-reliability.md), [0030](0030-sealed-audit-content.md) and [0033](0033-repository-layout.md).
 
 ## Decision
 

@@ -52,5 +52,5 @@ This set records the decisions from the original Askbar architecture plan (kept 
 | [0046](0046-component-and-register-adrs-and-partial-amendments.md) | Component and register ADRs, partial amendments, and deferral | Accepted | Owner request in review of plan step 1.14 |
 | [0047](0047-generation-routes-under-spaces.md) | Generation routes under spaces | Accepted; amended by 0048 | Plan step 1.11, as built |
 | [0048](0048-drop-post-space-conversations.md) | Drop `POST /spaces/{space_id}/conversations` | Accepted | Owner decision after review of 0047 |
-| [0050](0050-auditor.md) | The `auditor` component | Proposed | Plan steps 2.4 to 2.9; owner rule for component ADRs |
-| [0051](0051-askbar-audit-crate.md) | The `askbar-audit` crate | Proposed | Plan step 2.3; owner rule for component ADRs |
+| [0051](0051-auditor.md) | The `auditor` component | Proposed | Plan steps 2.4 to 2.9; owner rule for component ADRs |
+| [0052](0052-askbar-audit-crate.md) | The `askbar-audit` crate | Proposed | Plan step 2.3; owner rule for component ADRs |
