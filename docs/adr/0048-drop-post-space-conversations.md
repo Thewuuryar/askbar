@@ -1,6 +1,6 @@
 # 0048. Drop `POST /spaces/{space_id}/conversations`
 
-Status: Proposed
+Status: Accepted
 Date: 2026-11-08
 Amends: [0047](0047-generation-routes-under-spaces.md), the space route list
 Source: owner decision after review of 0047
