@@ -3,6 +3,7 @@
 Status: Accepted
 Date: 2026-11-07
 Source: plan step 1.4 ([plan-v1.md](../plan-v1.md)); owner choice of a supervisor for `cpa`; owner rule that every new component gets an ADR before it is created
+Kind: component
 
 ## Context
 
@@ -34,3 +35,7 @@ Source: plan step 1.4 ([plan-v1.md](../plan-v1.md)); owner choice of a superviso
 - The project builds and ships one more image (`askbar-cpa`); its only code of ours is the supervisor. `check-isolation.sh` checks that the `cpa` container runs the supervisor as its main process, still publishes nothing and is on the same networks, and that a restart from the admin site restarts CLIProxyAPI without restarting the container.
 - The supervisor's tests cover restart on a config change, on a request, after a crash (with backoff), the 5-second limit, and stop-signal forwarding.
 - A `cpa` component ADR written in step 1.14 links this ADR for its image and restart.
+
+## Amendments
+
+- 2026-11-08: marked as a component ADR, so it is amended in place ([0046](0046-component-and-register-adrs-and-partial-amendments.md)). Nothing else changed.
