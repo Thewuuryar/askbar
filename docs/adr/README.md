@@ -47,3 +47,4 @@ This set records the decisions from the original Askbar architecture plan (kept 
 | [0041](0041-caddy.md) | The `caddy` component | Proposed | Plan step 1.14; owner rule for component ADRs |
 | [0042](0042-cpa.md) | The `cpa` component | Proposed | Plan step 1.14; owner rule for component ADRs |
 | [0043](0043-mock-llm.md) | The `mock-llm` component | Proposed | Plan step 1.14; owner rule for component ADRs |
+| [0044](0044-desktop-client.md) | The desktop client | Proposed | Plan step 1.14; owner rule for component ADRs |
