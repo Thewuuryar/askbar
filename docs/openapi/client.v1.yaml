@@ -20,8 +20,13 @@ info:
     **The old prefix.** Anything under `/api/v1` answers 426 `client_too_old`, whatever the method; nothing
     else of that API exists. It is not described here.
 
-    **The chat stream.** OpenAPI cannot describe Server-Sent Events well. `POST /chat` and
-    `GET /generations/{id}/stream` answer `text/event-stream`; each message has an `event:` name and a JSON
+    **Spaces.** Conversations, search and replies live in a space (ADR 0009): every route under
+    `/spaces/{space_id}` first checks that the token's user is a member of that space. A space that
+    does not exist and one the user is not in both answer 404 `not_found`. `GET /spaces` lists the
+    caller's spaces; each user has a personal one.
+
+    **The chat stream.** OpenAPI cannot describe Server-Sent Events well. `POST /spaces/{space_id}/chat` and
+    `GET /spaces/{space_id}/generations/{id}/stream` answer `text/event-stream`; each message has an `event:` name and a JSON
     `data:` that repeats the name in `"event"`: `meta` (first), `provider`, `delta` (with an SSE `id:` that
     counts deltas from 1), `done`, and `error` (with a stable `code`). See `ChatEvent` below and
     the wire contract.
@@ -108,12 +113,36 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '426':
           $ref: '#/components/responses/TooOld'
-  /api/client/v1/conversations:
+  /api/client/v1/spaces:
     get:
-      operationId: listConversations
-      summary: The caller's conversations, newest first.
+      operationId: listSpaces
+      summary: The spaces the caller is a member of, the personal one first.
+      description: |
+        Every user has one `personal` space, made with the user. Its id is what the routes below
+        `/spaces/{space_id}` take; an app uses the personal space unless the person picks another.
+        Shared spaces (plan step 1.12) will be listed here too.
       parameters:
         - $ref: '#/components/parameters/ClientVersion'
+      responses:
+        '200':
+          description: Spaces.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SpaceInfo'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '426':
+          $ref: '#/components/responses/TooOld'
+  /api/client/v1/spaces/{space_id}/conversations:
+    get:
+      operationId: listConversations
+      summary: The space's conversations, newest first.
+      parameters:
+        - $ref: '#/components/parameters/ClientVersion'
+        - $ref: '#/components/parameters/SpaceId'
       responses:
         '200':
           description: Conversations.
@@ -125,11 +154,14 @@ paths:
                   $ref: '#/components/schemas/Conversation'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
         '426':
           $ref: '#/components/responses/TooOld'
-  /api/client/v1/conversations/{id}:
+  /api/client/v1/spaces/{space_id}/conversations/{id}:
     parameters:
       - $ref: '#/components/parameters/ClientVersion'
+      - $ref: '#/components/parameters/SpaceId'
       - $ref: '#/components/parameters/ConversationId'
     get:
       operationId: getConversation
@@ -277,12 +309,13 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '426':
           $ref: '#/components/responses/TooOld'
-  /api/client/v1/search:
+  /api/client/v1/spaces/{space_id}/search:
     get:
       operationId: searchMessages
-      summary: Full-text search over the caller's own messages (up to 20 hits, best first).
+      summary: Full-text search over the space's messages (up to 20 hits, best first).
       parameters:
         - $ref: '#/components/parameters/ClientVersion'
+        - $ref: '#/components/parameters/SpaceId'
         - name: q
           in: query
           description: Words; all must match. Empty gives `[]`; more than 200 characters is 400.
@@ -302,23 +335,27 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
         '426':
           $ref: '#/components/responses/TooOld'
-  /api/client/v1/chat:
+  /api/client/v1/spaces/{space_id}/chat:
     post:
       operationId: chat
-      summary: Send a message and stream the reply.
+      summary: Send a message in a space and stream the reply.
       description: |
         The one RPC-style endpoint, on purpose: one call creates the conversation if none is given, saves the
-        question, starts a generation and streams it. The reply does not depend on the connection: if it drops,
-        resume with `GET /generations/{id}/stream?after=N`. `client_request_id` makes a repeat
-        send attach to the first instead of starting a second.
+        question, starts a generation and streams it. The conversation, its history and the reply stay in this
+        space. The reply does not depend on the connection: if it drops, resume with
+        `GET /spaces/{space_id}/generations/{id}/stream?after=N`. `client_request_id` makes a repeat send from
+        the same client in the same space attach to the first instead of starting a second.
 
         Before anything starts the server may refuse, with a problem: 409 `queue_full` (five messages
         already wait), 429 `budget_exceeded` (`period`: daily or monthly), 503 `kill_switch`, 503
         `audit_key_missing`, 503 `audit_backlog` (with `Retry-After: 5`). The typed text is never lost; the app keeps it.
       parameters:
         - $ref: '#/components/parameters/ClientVersion'
+        - $ref: '#/components/parameters/SpaceId'
       requestBody:
         required: true
         content:
@@ -359,12 +396,13 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/Problem'
-  /api/client/v1/generations:
+  /api/client/v1/spaces/{space_id}/generations:
     get:
       operationId: listGenerations
-      summary: The caller's running and queued replies, across conversations, oldest first.
+      summary: The space's running and queued replies, across its conversations, oldest first.
       parameters:
         - $ref: '#/components/parameters/ClientVersion'
+        - $ref: '#/components/parameters/SpaceId'
         - name: status
           in: query
           description: Only `running` is accepted (it includes queued ones); anything else is 400.
@@ -384,9 +422,11 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
         '426':
           $ref: '#/components/responses/TooOld'
-  /api/client/v1/generations/{id}/stream:
+  /api/client/v1/spaces/{space_id}/generations/{id}/stream:
     get:
       operationId: streamGeneration
       summary: The events of one reply after its first N deltas, then live ones.
@@ -396,6 +436,7 @@ paths:
         the conversation. `cancelled` ends with `done`; `error`, `timed_out` and `interrupted` end with an `error` event.
       parameters:
         - $ref: '#/components/parameters/ClientVersion'
+        - $ref: '#/components/parameters/SpaceId'
         - $ref: '#/components/parameters/GenerationId'
         - name: after
           in: query
@@ -413,12 +454,13 @@ paths:
           $ref: '#/components/responses/NotFound'
         '426':
           $ref: '#/components/responses/TooOld'
-  /api/client/v1/generations/{id}/cancel:
+  /api/client/v1/spaces/{space_id}/generations/{id}/cancel:
     post:
       operationId: cancelGeneration
       summary: Stop a reply (the text so far is kept). 204 also when it has already finished.
       parameters:
         - $ref: '#/components/parameters/ClientVersion'
+        - $ref: '#/components/parameters/SpaceId'
         - $ref: '#/components/parameters/GenerationId'
       responses:
         '204':
@@ -443,7 +485,14 @@ components:
       description: The sending app's version, `major.minor.patch` (a leading `v` and a `-suffix` are ignored).
       schema:
         type: string
-        examples: ["0.5.0"]
+        examples: ["0.6.0"]
+    SpaceId:
+      name: space_id
+      in: path
+      required: true
+      description: A space id from `GET /spaces`. Not a member of it (or no such space) is 404.
+      schema:
+        type: string
     ConversationId:
       name: id
       in: path
@@ -579,6 +628,18 @@ components:
           enum: [openai, anthropic]
         model:
           type: string
+    SpaceInfo:
+      type: object
+      required: [id, kind, name]
+      properties:
+        id:
+          type: string
+        kind:
+          type: string
+          enum: [personal, shared]
+        name:
+          type: string
+          description: Empty for a personal space.
     Conversation:
       type: object
       required: [id, title, updated_at, message_count]

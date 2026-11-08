@@ -34,6 +34,17 @@ pub struct ProviderInfo {
     pub model: String,
 }
 
+/// A space the caller is a member of (`GET /api/client/v1/spaces`, ADR 0009). Each user has one
+/// `personal` space, listed first; `shared` spaces come later (plan step 1.12).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SpaceInfo {
+    pub id: String,
+    /// `personal` or `shared`.
+    pub kind: String,
+    /// Empty for a personal space.
+    pub name: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Conversation {
     pub id: String,
@@ -267,13 +278,13 @@ pub struct ChatRequest {
     pub client_request_id: Option<String>,
 }
 
-/// Server-Sent Event payloads for `POST /api/client/v1/chat`; the SSE event name is the `event` tag.
+/// Server-Sent Event payloads for `POST /api/client/v1/spaces/{space_id}/chat`; the SSE event name is the `event` tag.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum ChatEvent {
     Meta {
         conversation_id: String,
-        /// The generation running this reply; resume with `GET /api/client/v1/generations/{id}/stream`.
+        /// The generation running this reply; resume with `GET /api/client/v1/spaces/{space_id}/generations/{id}/stream`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         generation_id: Option<String>,
         /// True when another reply in this conversation is still running: this message waits its

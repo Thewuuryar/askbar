@@ -66,7 +66,10 @@ pub fn links(hash_file: PathBuf) -> askbar_service::links::Links {
 async fn put_snapshot(State(state): State<Arc<AppState>>, ApiJson(s): ApiJson<Snapshot>) -> Result<Json<serde_json::Value>, ApiError> {
     let applied = {
         let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
-        crate::snapshot::apply(&db, &s)
+        // A new user's personal space gets its file now, with every migration (ADR 0009 mechanism 4).
+        crate::snapshot::apply(&db, &s).and_then(|v| {
+            state.spaces.open_all(&db).map(|_| v).map_err(|_| crate::snapshot::ApplyError::Store(rusqlite::Error::InvalidQuery))
+        })
     };
     // A snapshot with the kill switch on acts at once, on what is already queued or running.
     if applied.is_ok() && s.kill_switch {
@@ -280,16 +283,20 @@ async fn audit_stats(
         .map_err(|_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not read the audit store."))
 }
 
-/// Counts for the admin service's overview. Token totals come from `token_usage`, which
-/// nothing fills in yet, so they are 0 for now.
+/// Counts for the admin service's overview. Users, clients and tokens come from the control
+/// database; conversations and messages are summed over every space's file (ADR 0009).
 async fn usage(State(state): State<Arc<AppState>>) -> Result<Json<serde_json::Value>, Failure> {
     let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
     let count = |sql: &str| db.conn().query_row(sql, [], |r| r.get::<_, i64>(0));
+    let in_spaces = |sql: &str| -> rusqlite::Result<i64> {
+        let spaces = state.spaces.open_all(&db).map_err(|_| rusqlite::Error::InvalidQuery)?;
+        spaces.iter().map(|s| s.lock().conn().query_row(sql, [], |r| r.get::<_, i64>(0))).sum()
+    };
     let read = || -> rusqlite::Result<serde_json::Value> {
         Ok(serde_json::json!({
             "users": count("SELECT COUNT(*) FROM users")?,
-            "conversations": count("SELECT COUNT(*) FROM conversations")?,
-            "messages": count("SELECT COUNT(*) FROM messages")?,
+            "conversations": in_spaces("SELECT COUNT(*) FROM conversations")?,
+            "messages": in_spaces("SELECT COUNT(*) FROM messages")?,
             "clients": {
                 "active": count("SELECT COUNT(*) FROM clients WHERE revoked_at IS NULL")?,
                 "revoked": count("SELECT COUNT(*) FROM clients WHERE revoked_at IS NOT NULL")?,

@@ -28,6 +28,7 @@ async fn run_chat(state: &std::sync::Arc<askbar_server::AppState>, prompt: &str)
     let sub = askbar_server::generation::submit(
         state,
         askbar_server::generation::Submit {
+            space: askbar_server::testing::personal_space(state, &user),
             user_id: user,
             client_id: client,
             conversation_id: None,
@@ -96,6 +97,23 @@ async fn a_finished_generation_leaves_one_turn_span_with_its_final_status() {
         .query_row("SELECT parent_id, ended_at FROM spans WHERE trace_id = ?1 AND kind = 'turn'", [&trace], |r| Ok((r.get(0)?, r.get(1)?)))
         .unwrap();
     assert!(parent.is_none() && ended.is_some());
+}
+
+/// ADR 0009 mechanism 5: the audit record for each reply says which space it ran in.
+#[tokio::test]
+async fn the_turn_span_names_the_space_and_the_conversation() {
+    let (_mock, port) = start_mock();
+    let (state, dir) = audit_state(port);
+    let trace = run_chat(&state, "hello").await;
+    state.audit.flush().await;
+    let attrs: String =
+        read(&dir).query_row("SELECT attrs_json FROM spans WHERE trace_id = ?1 AND kind = 'turn'", [&trace], |r| r.get(0)).unwrap();
+    let attrs: serde_json::Value = serde_json::from_str(&attrs).unwrap();
+    let user: String = state.db.lock().unwrap().conn().query_row("SELECT id FROM users", [], |r| r.get(0)).unwrap();
+    let space = askbar_server::testing::personal_space(&state, &user);
+    assert_eq!(attrs["space_id"], space.id.as_str());
+    let conversation: String = space.lock().conn().query_row("SELECT id FROM conversations", [], |r| r.get(0)).unwrap();
+    assert_eq!(attrs["conversation_id"], conversation.as_str());
 }
 
 #[tokio::test]
@@ -240,6 +258,7 @@ async fn a_queued_message_records_a_gate_span_named_queue_from_enqueue_to_start(
         askbar_server::generation::submit(
             &state,
             askbar_server::generation::Submit {
+                space: askbar_server::testing::personal_space(&state, &user),
                 user_id: user.clone(),
                 client_id: client.clone(),
                 conversation_id: conversation,
@@ -308,6 +327,7 @@ async fn a_backed_up_audit_writer_refuses_new_generations_with_503_and_retry_aft
         askbar_server::generation::submit(
             &state,
             askbar_server::generation::Submit {
+                space: askbar_server::testing::personal_space(&state, &user),
                 user_id: user.clone(),
                 client_id: "d1".into(),
                 conversation_id: None,
@@ -338,7 +358,8 @@ async fn a_backed_up_audit_writer_refuses_new_generations_with_503_and_retry_aft
     // The one that was running finishes normally, whatever the audit store is doing.
     let events: Vec<_> = running.live.subscribe(0).collect().await;
     assert!(matches!(events.last(), Some(askbar_server::generation::GenEvent::Done)));
-    let status: String = state.db.lock().unwrap().conn().query_row("SELECT status FROM generations", [], |r| r.get(0)).unwrap();
+    let space = askbar_server::testing::personal_space(&state, &user);
+    let status: String = space.lock().conn().query_row("SELECT status FROM generations", [], |r| r.get(0)).unwrap();
     assert_eq!(status, "done");
 
     // Once the writer catches up, new generations are accepted again.
@@ -394,6 +415,7 @@ async fn a_generation_with_no_audit_key_is_refused_with_503_audit_key_missing() 
     let refused = askbar_server::generation::submit(
         &state,
         askbar_server::generation::Submit {
+            space: askbar_server::testing::personal_space(&state, &user),
             user_id: user,
             client_id: client,
             conversation_id: None,
@@ -418,6 +440,7 @@ async fn a_generation_with_no_audit_key_is_refused_with_503_audit_key_missing() 
     assert!(askbar_server::generation::submit(
         &state,
         askbar_server::generation::Submit {
+            space: askbar_server::testing::personal_space(&state, &user),
             user_id: user,
             client_id: client,
             conversation_id: None,

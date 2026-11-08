@@ -71,7 +71,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "askbar-client"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "askbar-proto",
  "askbar-server",
@@ -100,7 +100,7 @@ dependencies = [
 
 [[package]]
 name = "askbar-proto"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -110,7 +110,7 @@ dependencies = [
 
 [[package]]
 name = "askbar-server"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "askbar-proto",
  "askbar-service",
@@ -129,7 +129,6 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tokio-stream",
- "tokio-util",
  "tracing",
  "tracing-subscriber",
  "ulid",
@@ -137,7 +136,7 @@ dependencies = [
 
 [[package]]
 name = "askbar-service"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "askbar-proto",
  "axum",

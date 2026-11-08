@@ -92,11 +92,12 @@ async fn prune_generations_hourly(state: std::sync::Arc<askbar_server::AppState>
     loop {
         tick.tick().await;
         let cutoff = askbar_server::auth::now() - 24 * 3600;
-        let pruned = state.db.lock().unwrap_or_else(|e| e.into_inner()).prune_generations(cutoff);
-        match pruned {
-            Ok(0) => {}
-            Ok(n) => tracing::info!(pruned = n, "removed old generation rows"),
-            Err(e) => tracing::warn!("could not prune generation rows: {e}"),
+        for space in state.spaces.opened() {
+            match space.lock().prune_generations(cutoff) {
+                Ok(0) => {}
+                Ok(n) => tracing::info!(space = %space.id, pruned = n, "removed old generation rows"),
+                Err(e) => tracing::warn!(space = %space.id, "could not prune generation rows: {e}"),
+            }
         }
     }
 }
@@ -123,7 +124,13 @@ async fn main() {
         std::process::exit(2);
     }
     let key_path = askbar_server::secrets::key_path();
-    let db = askbar_server::Db::open(&data_dir().join("askbar.db")).unwrap_or_else(|e| die(e, 1));
+    // The control database and one file per space (ADR 0009). The single `askbar.db` of earlier
+    // versions is never opened, read or deleted: pre-1.0 storage changes wipe and re-pair (ADR 0018).
+    let old = data_dir().join("askbar.db");
+    if old.exists() {
+        tracing::warn!(path = %old.display(), "this database is from an earlier version and is not used; it can be deleted");
+    }
+    let db = askbar_server::Db::open(&data_dir().join("control.db")).unwrap_or_else(|e| die(e, 1));
     let secrets = askbar_server::secrets::ensure_key_file(&key_path, &db).unwrap_or_else(|e| die(e, 2));
     // Users come from the admin's configuration (ADR 0008); the server no longer makes one of its own.
     tracing::info!("database ready");
@@ -132,11 +139,19 @@ async fn main() {
         Ok(None) => tracing::warn!("no configuration yet: the admin service has not pushed one"),
         Err(e) => die(format!("could not read the configuration snapshot: {e}"), 1),
     }
+    // Every space's file is opened (and migrated) now, so a bad one stops the start-up here.
+    let spaces = askbar_server::Spaces::on_disk(data_dir().join("spaces"));
+    let opened = spaces.open_all(&db).unwrap_or_else(|e| die(format!("could not open the space files: {e}"), 1));
+    tracing::info!(spaces = opened.len(), "space files ready");
     // Replies that were running when the last process stopped did not finish.
-    match askbar_server::generation::sweep_on_start(&db) {
-        Ok((0, 0)) => {}
-        Ok((running, queued)) => tracing::warn!(running, queued, "marked generations from the previous run as interrupted"),
-        Err(e) => die(format!("could not clean up generations: {e}"), 1),
+    for space in &opened {
+        match askbar_server::generation::sweep_on_start(&space.lock()) {
+            Ok((0, 0)) => {}
+            Ok((running, queued)) => {
+                tracing::warn!(space = %space.id, running, queued, "marked generations from the previous run as interrupted")
+            }
+            Err(e) => die(format!("could not clean up generations in space {}: {e}", space.id), 1),
+        }
     }
     let audit_db = askbar_server::audit::AuditDb::open(&audit_dir().join("audit.db")).unwrap_or_else(|e| die(e, 1));
     match audit_db.sweep_running() {
@@ -145,6 +160,7 @@ async fn main() {
         Err(e) => die(format!("could not clean up the audit store: {e}"), 1),
     }
     let state = askbar_server::AppState::new(db, secrets, askbar_server::MIN_CLIENT)
+        .with_spaces(spaces)
         .with_audit(askbar_server::audit::Recorder::spawn(audit_db, 4096));
     tokio::spawn(stop_on_signal(state.clone()));
     // POST /api/server/v1/restart saves running replies, as a stop does, then exits (ADR 0005).

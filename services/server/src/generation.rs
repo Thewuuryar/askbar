@@ -4,10 +4,10 @@
 //! its deltas so a client can attach, drop and attach again without losing or repeating text.
 
 use crate::audit::{Kind, SpanFinish, SpanStart};
-use crate::auth::ClientAuth;
 use crate::chat::{sse_event, sse_event_with_id};
-use crate::db::NewGeneration;
+use crate::client_api::MemberSpace;
 use crate::llm::{stream_chat_report, ChatMessage, StreamOutcome, Usage};
+use crate::space::{NewGeneration, Space, SpaceStore};
 use crate::store;
 use crate::AppState;
 use askbar_proto::ChatEvent;
@@ -16,7 +16,6 @@ use axum::{
     http::StatusCode,
     response::sse::{Event, KeepAlive, Sse},
     response::IntoResponse,
-    Extension,
 };
 use futures_util::Stream;
 use futures_util::StreamExt;
@@ -245,10 +244,10 @@ impl Live {
     }
 }
 
-/// The running generations, by id.
+/// The running generations, by id, each with the space it runs in.
 #[derive(Default)]
 pub struct Generations {
-    live: Mutex<HashMap<String, Arc<Live>>>,
+    live: Mutex<HashMap<String, (Arc<Live>, Arc<Space>)>>,
     /// Set when the server is shutting down: nothing new starts.
     stopping: std::sync::atomic::AtomicBool,
 }
@@ -258,21 +257,21 @@ impl Generations {
         self.stopping.load(std::sync::atomic::Ordering::SeqCst)
     }
 
-    /// The generations that have not finished, by id.
-    pub fn unfinished(&self) -> Vec<(String, Arc<Live>)> {
-        self.map().iter().filter(|(_, l)| !l.is_finished()).map(|(k, l)| (k.clone(), l.clone())).collect()
+    /// The generations that have not finished, by id, with their space.
+    pub fn unfinished(&self) -> Vec<(String, Arc<Live>, Arc<Space>)> {
+        self.map().iter().filter(|(_, (l, _))| !l.is_finished()).map(|(k, (l, s))| (k.clone(), l.clone(), s.clone())).collect()
     }
 
-    fn map(&self) -> std::sync::MutexGuard<'_, HashMap<String, Arc<Live>>> {
+    fn map(&self) -> std::sync::MutexGuard<'_, HashMap<String, (Arc<Live>, Arc<Space>)>> {
         self.live.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    pub fn insert(&self, id: &str, live: Arc<Live>) {
-        self.map().insert(id.to_string(), live);
+    pub fn insert(&self, id: &str, live: Arc<Live>, space: &Arc<Space>) {
+        self.map().insert(id.to_string(), (live, space.clone()));
     }
 
     pub fn get(&self, id: &str) -> Option<Arc<Live>> {
-        self.map().get(id).cloned()
+        self.map().get(id).map(|(l, _)| l.clone())
     }
 
     pub fn remove(&self, id: &str) {
@@ -288,8 +287,9 @@ impl Generations {
     }
 }
 
-/// A chat send, as the handler received it.
+/// A chat send, as the handler received it, in a space the user is a member of.
 pub struct Submit {
+    pub space: Arc<Space>,
     pub user_id: String,
     pub client_id: String,
     pub conversation_id: Option<String>,
@@ -443,6 +443,7 @@ fn timed_out_message(timeout: Duration) -> String {
 /// once and subscribers are released.
 struct Finisher {
     state: Arc<AppState>,
+    space: Arc<Space>,
     live: Arc<Live>,
     id: String,
     user_id: String,
@@ -475,8 +476,7 @@ impl Finisher {
         self.live.push(delta);
         self.unflushed += delta.len();
         if self.unflushed >= FLUSH_BYTES || self.last_flush.elapsed() >= FLUSH_EVERY {
-            let db = self.state.db.lock().unwrap_or_else(|e| e.into_inner());
-            let _ = db.flush_generation_text(&self.id, &self.text);
+            let _ = self.space.lock().flush_generation_text(&self.id, &self.text);
             self.last_flush = Instant::now();
             self.unflushed = 0;
         }
@@ -488,27 +488,32 @@ impl Finisher {
             return;
         }
         self.saved = true;
-        let db = self.state.db.lock().unwrap_or_else(|e| e.into_inner());
-        // Something else may have ended this generation already (shutdown, or the conversation
-        // was deleted); then the reply has been dealt with and must not be written twice.
-        let row_status = db.get_generation(&self.user_id, &self.id).ok().flatten().map(|g| g.status);
-        if row_status.as_deref() != Some("running") {
-            // Its row ended some other way; the audit trail says the same.
-            self.finish_turn_span(row_status.as_deref().unwrap_or("cancelled"));
-            return;
+        {
+            let db = self.space.lock();
+            // Something else may have ended this generation already (shutdown, or the conversation
+            // was deleted); then the reply has been dealt with and must not be written twice.
+            let row_status = db.get_generation(&self.id).ok().flatten().map(|g| g.status);
+            if row_status.as_deref() != Some("running") {
+                drop(db);
+                // Its row ended some other way; the audit trail says the same.
+                self.finish_turn_span(row_status.as_deref().unwrap_or("cancelled"));
+                return;
+            }
+            let message_id = if self.text.trim().is_empty() {
+                None
+            } else {
+                db.add_message(&self.user_id, &self.conversation_id, "assistant", &self.text).ok()
+            };
+            let _ = db.finalize_generation(&self.id, status, &self.text, error, message_id.as_deref());
         }
-        let message_id = if self.text.trim().is_empty() {
-            None
-        } else {
-            db.add_message(&self.user_id, &self.conversation_id, "assistant", &self.text).ok()
-        };
-        let _ = db.finalize_generation(&self.id, status, &self.text, error, message_id.as_deref());
         self.finish_turn_span(status);
-        // One usage row per generation that has numbers, whatever way it ended.
+        // One usage row per generation that has numbers, whatever way it ended. In the control
+        // database, which keeps the budget's counts across spaces.
         if let Some(u) = self.usage {
+            let db = self.state.db.lock().unwrap_or_else(|e| e.into_inner());
             let _ = db.conn().execute(
-                "INSERT INTO token_usage (id, user_id, client_id, provider_id, tokens_in, tokens_out, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                "INSERT INTO token_usage (id, user_id, client_id, provider_id, tokens_in, tokens_out, created_at, space_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 rusqlite::params![
                     crate::ids::new_id(),
                     self.user_id,
@@ -516,7 +521,8 @@ impl Finisher {
                     self.provider_id,
                     u.input.unwrap_or(0) as i64,
                     u.output.unwrap_or(0) as i64,
-                    crate::auth::now()
+                    crate::auth::now(),
+                    self.space.id
                 ],
             );
         }
@@ -535,7 +541,7 @@ impl Finisher {
         let mut f = SpanFinish::new(&self.turn_span, status);
         if truncated {
             // Replaces the start attributes, so they are repeated.
-            f.attrs_json = Some(serde_json::json!({ "conversation_id": self.conversation_id, "truncated": true }).to_string());
+            f.attrs_json = Some(turn_attrs(&self.space.id, &self.conversation_id, true).to_string());
         }
         f.error_code = self.error_code.clone();
         if let Some(u) = self.usage {
@@ -570,7 +576,7 @@ impl Drop for Finisher {
         // A no-op if `finish` already ran; otherwise the task died and subscribers must not wait forever.
         self.live.finish(Terminal::Error { message: "The reply stopped unexpectedly.".into(), code: "internal" });
         // The row is final and the reply saved: the next message waiting in this conversation goes.
-        start_next(&self.state, &self.conversation_id);
+        start_next(&self.state, &self.space, &self.conversation_id);
         // Keep the buffer a while so a client that dropped can still resume exactly where it was.
         let (state, id) = (self.state.clone(), self.id.clone());
         match tokio::runtime::Handle::try_current() {
@@ -599,9 +605,18 @@ fn timeout_now(state: &AppState, db: &crate::Db) -> Duration {
     Duration::from_secs(secs as u64)
 }
 
+/// What a turn span says about where the generation ran (ADR 0009 mechanism 5: the space id).
+fn turn_attrs(space_id: &str, conversation_id: &str, truncated: bool) -> serde_json::Value {
+    let mut v = serde_json::json!({ "space_id": space_id, "conversation_id": conversation_id });
+    if truncated {
+        v["truncated"] = true.into();
+    }
+    v
+}
+
 /// Writes the row's deadline: when it started, plus `timeout` (whole seconds, rounded up). Done
 /// in SQL so `deadline_at - started_at` is exactly the timeout, whatever second it is.
-fn stamp_deadline(db: &crate::Db, id: &str, timeout: Duration) {
+fn stamp_deadline(db: &SpaceStore, id: &str, timeout: Duration) {
     let secs = timeout.as_secs() + u64::from(timeout.subsec_nanos() > 0);
     let _ = db.conn().execute("UPDATE generations SET deadline_at = started_at + ?2 WHERE id = ?1", rusqlite::params![id, secs as i64]);
 }
@@ -743,13 +758,17 @@ pub fn submit(state: &Arc<AppState>, s: Submit) -> Result<Submitted, SubmitError
         state.audit.finish_span(SpanFinish::new(&span, "blocked").error_code("kill_switch"));
         return Err(SubmitError::KillSwitch);
     }
+    let timeout = timeout_now(state, &db);
+    // The control database stays locked while the space is used: control first, then the space.
+    let space = s.space.clone();
+    let store = space.lock();
     let (conversation_id, busy) = match &s.conversation_id {
         Some(id) => {
-            let c = db.get_conversation(&s.user_id, id).map_err(internal)?.ok_or(SubmitError::NotFound)?;
-            let busy = db.conversation_busy(&c.id).map_err(internal)?;
+            let c = store.get_conversation(id).map_err(internal)?.ok_or(SubmitError::NotFound)?;
+            let busy = store.conversation_busy(&c.id).map_err(internal)?;
             (c.id, busy)
         }
-        None => (db.create_conversation(&s.user_id, &crate::make_title(&s.prompt)).map_err(internal)?, false),
+        None => (store.create_conversation(&s.user_id, &crate::make_title(&s.prompt)).map_err(internal)?, false),
     };
     let new = |status, user_message_id| NewGeneration {
         user_id: &s.user_id,
@@ -763,29 +782,29 @@ pub fn submit(state: &Arc<AppState>, s: Submit) -> Result<Submitted, SubmitError
         deadline_at: None,
     };
     if busy {
-        if db.queued_count(&conversation_id).map_err(internal)? >= MAX_QUEUED {
+        if store.queued_count(&conversation_id).map_err(internal)? >= MAX_QUEUED {
             return Err(SubmitError::QueueFull);
         }
         // Queued: the question is stored when the message starts, not now.
-        let id = db.create_generation(&new("queued", None)).map_err(internal)?;
+        let id = store.create_generation(&new("queued", None)).map_err(internal)?;
         pass_kill_switch_gate(state, &id, &s);
         pass_budget_gate(state, &id, &s, &budget_note);
         let live = Live::new();
         live.set_queue_span(state.audit.start_span(SpanStart::new(&id, Kind::Gate, "queue").who(&s.user_id, Some(&s.client_id))));
-        state.generations.insert(&id, live.clone());
+        state.generations.insert(&id, live.clone(), &space);
         return Ok(Submitted { generation_id: id, conversation_id, live, queued: true });
     }
     // Save the question first so it survives a failed request.
-    let user_message_id = db.add_message(&s.user_id, &conversation_id, "user", &s.prompt).map_err(internal)?;
-    let id = db.create_generation(&new("running", Some(&user_message_id))).map_err(internal)?;
-    let timeout = timeout_now(state, &db);
-    stamp_deadline(&db, &id, timeout);
+    let user_message_id = store.add_message(&s.user_id, &conversation_id, "user", &s.prompt).map_err(internal)?;
+    let id = store.create_generation(&new("running", Some(&user_message_id))).map_err(internal)?;
+    stamp_deadline(&store, &id, timeout);
     pass_kill_switch_gate(state, &id, &s);
     pass_budget_gate(state, &id, &s, &budget_note);
     let live = Live::new();
-    state.generations.insert(&id, live.clone());
+    state.generations.insert(&id, live.clone(), &space);
+    drop(store);
     drop(db);
-    spawn_run(state, &id, &s.user_id, Some(&s.client_id), &conversation_id, &s.provider_id, timeout, live.clone());
+    spawn_run(state, &space, &id, &s.user_id, Some(&s.client_id), &conversation_id, &s.provider_id, timeout, live.clone());
     Ok(Submitted { generation_id: id, conversation_id, live, queued: false })
 }
 
@@ -794,6 +813,7 @@ pub fn submit(state: &Arc<AppState>, s: Submit) -> Result<Submitted, SubmitError
 #[allow(clippy::too_many_arguments)]
 fn spawn_run(
     state: &Arc<AppState>,
+    space: &Arc<Space>,
     id: &str,
     user_id: &str,
     client_id: Option<&str>,
@@ -802,12 +822,15 @@ fn spawn_run(
     timeout: Duration,
     live: Arc<Live>,
 ) {
-    let turn_span = state.audit.start_span(
-        SpanStart::new(id, Kind::Turn, "chat").who(user_id, client_id).attrs(&serde_json::json!({ "conversation_id": conversation_id })),
-    );
+    let turn_span = state.audit.start_span(SpanStart::new(id, Kind::Turn, "chat").who(user_id, client_id).attrs(&turn_attrs(
+        &space.id,
+        conversation_id,
+        false,
+    )));
     let audit_key = current_audit_key(state);
     let mut fin = Finisher {
         state: state.clone(),
+        space: space.clone(),
         live,
         turn_span,
         audit_key,
@@ -834,8 +857,12 @@ fn spawn_run(
                 .flatten()
                 .map(|provider| Candidate { id: provider_id.clone(), provider });
             let system = store::chat_system_prompt(&db).ok();
-            let history: Option<Vec<ChatMessage>> = db
-                .get_messages(&fin.user_id, &fin.conversation_id)
+            drop(db);
+            // History from this conversation's own space only.
+            let history: Option<Vec<ChatMessage>> = fin
+                .space
+                .lock()
+                .get_messages(&fin.conversation_id)
                 .ok()
                 .map(|ms| ms.iter().map(|m| ChatMessage::new(&m.role, &m.content)).collect());
             candidate.zip(system).zip(history)
@@ -946,8 +973,11 @@ async fn attempts(
             if retry_index == 0 {
                 // The row says which provider is serving it.
                 fin.provider_id = cand.id.clone();
-                let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
-                let _ = db.conn().execute("UPDATE generations SET provider_id = ?2 WHERE id = ?1", rusqlite::params![fin.id, cand.id]);
+                let _ = fin
+                    .space
+                    .lock()
+                    .conn()
+                    .execute("UPDATE generations SET provider_id = ?2 WHERE id = ?1", rusqlite::params![fin.id, cand.id]);
             }
             live.set_provider(&cand.id, &cand.provider.name);
             let span = state.audit.start_span(
@@ -1057,19 +1087,19 @@ async fn attempts(
 
 /// Starts the oldest message waiting in `conversation_id`, if any: its question is stored now, so
 /// the stored order is question, reply, question, reply, and its history includes the replies before it.
-fn start_next(state: &Arc<AppState>, conversation_id: &str) {
+fn start_next(state: &Arc<AppState>, space: &Arc<Space>, conversation_id: &str) {
     // Starting spawns a task, which only works inside the runtime.
     if tokio::runtime::Handle::try_current().is_err() || state.generations.is_stopping() {
         return;
     }
+    // A queued message's clock starts now, not when it was queued. Read before the space is locked.
+    let timeout = timeout_now(state, &state.db.lock().unwrap_or_else(|e| e.into_inner()));
     let started = {
-        let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+        let db = space.lock();
         let Ok(Some(next)) = db.next_queued(conversation_id) else { return };
         match db.add_message(&next.user_id, &next.conversation_id, "user", &next.prompt) {
             Ok(message_id) => {
                 let _ = db.start_generation(&next.id, &message_id, None);
-                // A queued message's clock starts now, not when it was queued.
-                let timeout = timeout_now(state, &db);
                 stamp_deadline(&db, &next.id, timeout);
                 Some((next, timeout))
             }
@@ -1084,12 +1114,13 @@ fn start_next(state: &Arc<AppState>, conversation_id: &str) {
         Some((next, timeout)) => {
             let live = state.generations.get(&next.id).unwrap_or_else(|| {
                 let l = Live::new();
-                state.generations.insert(&next.id, l.clone());
+                state.generations.insert(&next.id, l.clone(), space);
                 l
             });
             live.end_queue_span(&state.audit, "done");
             spawn_run(
                 state,
+                space,
                 &next.id,
                 &next.user_id,
                 next.client_id.as_deref(),
@@ -1101,7 +1132,7 @@ fn start_next(state: &Arc<AppState>, conversation_id: &str) {
         }
         None => {
             // Try the one after it.
-            start_next(state, conversation_id);
+            start_next(state, space, conversation_id);
         }
     }
 }
@@ -1110,10 +1141,10 @@ const KILLED: &str = "Generations were switched off by the administrator.";
 const INTERRUPTED: &str = "The server restarted before the reply finished.";
 const NOT_RUN: &str = "Not run: the server restarted before this message started.";
 
-/// At start-up: no task from a previous run exists, so any `running` row was cut off. Its partial
-/// text becomes the assistant message; a `queued` row never ran and gets no message. Returns
-/// how many of each it fixed.
-pub fn sweep_on_start(db: &crate::Db) -> Result<(usize, usize), crate::DbError> {
+/// At start-up, for each space: no task from a previous run exists, so any `running` row was cut
+/// off. Its partial text becomes the assistant message; a `queued` row never ran and gets no
+/// message. Returns how many of each it fixed.
+pub fn sweep_on_start(db: &SpaceStore) -> Result<(usize, usize), crate::DbError> {
     let rows: Vec<(String, String, String, String, String)> = {
         let mut stmt = db.conn().prepare(
             "SELECT id, user_id, conversation_id, status, text FROM generations WHERE status IN ('running','queued') ORDER BY id",
@@ -1140,10 +1171,10 @@ pub fn sweep_on_start(db: &crate::Db) -> Result<(usize, usize), crate::DbError> 
 /// never run. Upstream requests are stopped, and nothing new starts.
 pub fn shutdown(state: &Arc<AppState>) {
     state.generations.stopping.store(true, std::sync::atomic::Ordering::SeqCst);
-    for (id, live) in state.generations.unfinished() {
+    for (id, live, space) in state.generations.unfinished() {
         let text = live.text();
         {
-            let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+            let db = space.lock();
             use rusqlite::OptionalExtension;
             let row: Option<(String, String, String)> = db
                 .conn()
@@ -1174,8 +1205,10 @@ pub fn shutdown(state: &Arc<AppState>) {
 /// `kill_switch`) when `aborts_running`, and left to finish when not. Nothing new starts either
 /// way (`submit` refuses). Safe to call again while the switch stays on.
 pub fn apply_kill_switch(state: &Arc<AppState>, aborts_running: bool) {
-    let queued: Vec<String> = {
-        let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+    // A queued message exists only in a space this process has opened (queues do not outlive a run).
+    let mut queued: Vec<String> = Vec::new();
+    for space in state.spaces.opened() {
+        let db = space.lock();
         let ids: Vec<String> = db
             .conn()
             .prepare("SELECT id FROM generations WHERE status = 'queued'")
@@ -1187,8 +1220,8 @@ pub fn apply_kill_switch(state: &Arc<AppState>, aborts_running: bool) {
                 rusqlite::params![id, KILLED, crate::auth::now()],
             );
         }
-        ids
-    };
+        queued.extend(ids);
+    }
     for id in queued {
         if let Some(live) = state.generations.get(&id) {
             live.end_queue_span(&state.audit, "cancelled");
@@ -1197,24 +1230,24 @@ pub fn apply_kill_switch(state: &Arc<AppState>, aborts_running: bool) {
         }
     }
     if aborts_running {
-        for (_, live) in state.generations.unfinished() {
+        for (_, live, _) in state.generations.unfinished() {
             live.cancel_because("kill_switch");
         }
     }
 }
 
-/// Deletes a conversation for `user_id`. Its queue is cleared and its running reply is told to
+/// Deletes a conversation in `space`. Its queue is cleared and its running reply is told to
 /// stop first; their rows go with the conversation, and nothing is started in its place.
 /// False if there is no such conversation.
-pub fn delete_conversation(state: &Arc<AppState>, user_id: &str, conversation_id: &str) -> Result<bool, crate::DbError> {
+pub fn delete_conversation(state: &Arc<AppState>, space: &Space, conversation_id: &str) -> Result<bool, crate::DbError> {
     let (deleted, active) = {
-        let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
-        let active: Vec<_> = db.list_active_generations(user_id)?.into_iter().filter(|g| g.conversation_id == conversation_id).collect();
+        let db = space.lock();
+        let active: Vec<_> = db.list_active_generations()?.into_iter().filter(|g| g.conversation_id == conversation_id).collect();
         // Queued messages never ran; ending them under this lock keeps the runner from starting one.
         for g in active.iter().filter(|g| g.status == "queued") {
             db.finalize_generation(&g.id, "cancelled", "", None, None)?;
         }
-        (db.delete_conversation(user_id, conversation_id)?, active)
+        (db.delete_conversation(conversation_id)?, active)
     };
     for g in active {
         let Some(live) = state.generations.get(&g.id) else { continue };
@@ -1229,19 +1262,19 @@ pub fn delete_conversation(state: &Arc<AppState>, user_id: &str, conversation_id
     Ok(deleted)
 }
 
-/// `POST /api/client/v1/generations/{id}/cancel`: stop a running reply, keeping the text so far.
-/// 204 also when it has already finished; 404 for anyone else's.
+/// `POST /api/client/v1/spaces/{space_id}/generations/{id}/cancel`: stop a running reply, keeping
+/// the text so far. 204 also when it has already finished; 404 for one in another space.
 pub async fn cancel(
     State(state): State<Arc<AppState>>,
-    Extension(auth): Extension<ClientAuth>,
-    Path(id): Path<String>,
+    MemberSpace(space): MemberSpace,
+    Path((_, id)): Path<(String, String)>,
 ) -> Result<StatusCode, crate::error::ApiError> {
     use crate::error::ApiError;
     use askbar_proto::problem::ErrorCode;
     // Under one lock, so a queued message cannot start between the look and the cancel.
     let queued = {
-        let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
-        match db.get_generation(&auth.user_id, &id) {
+        let db = space.lock();
+        match db.get_generation(&id) {
             Ok(Some(g)) if g.status == "queued" => {
                 // Never ran: nothing was stored for it, and nothing is written now.
                 let _ = db.finalize_generation(&id, "cancelled", "", None, None);
@@ -1307,7 +1340,7 @@ pub(crate) fn events_for(state: &AppState, row: &crate::Generation, after: u64) 
     }
 }
 
-/// `GET /api/client/v1/generations/{id}/stream?after=N`: the deltas after the first N, then the rest live.
+/// `GET /api/client/v1/spaces/{space_id}/generations/{id}/stream?after=N`: the deltas after the first N, then the rest live.
 ///
 /// While the generation runs (and for a few minutes after) this replays from memory, exactly.
 /// Once only the database remembers it, delta boundaries are gone: a client that has seen
@@ -1315,16 +1348,16 @@ pub(crate) fn events_for(state: &AppState, row: &crate::Generation, after: u64) 
 /// so it should reload the conversation to read the saved message.
 pub async fn stream(
     State(state): State<Arc<AppState>>,
-    Extension(auth): Extension<ClientAuth>,
-    Path(id): Path<String>,
+    MemberSpace(space): MemberSpace,
+    Path((_, id)): Path<(String, String)>,
     Query(q): Query<StreamQuery>,
 ) -> Result<impl axum::response::IntoResponse, crate::error::ApiError> {
     use crate::error::ApiError;
     use askbar_proto::problem::ErrorCode;
     let after = q.after.unwrap_or(0);
     let row = {
-        let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
-        db.get_generation(&auth.user_id, &id)
+        let db = space.lock();
+        db.get_generation(&id)
             .map_err(|_| ApiError::code(ErrorCode::Internal))?
             .ok_or_else(|| ApiError::new(ErrorCode::NotFound, "That reply was not found."))?
     };
@@ -1452,8 +1485,8 @@ mod tests {
 
     #[test]
     fn the_start_up_sweep_interrupts_running_and_queued_rows() {
-        let db = crate::Db::open_in_memory().unwrap();
-        let u = db.seed_server().unwrap();
+        let db = crate::SpaceStore::open_in_memory().unwrap();
+        let u = "u1".to_string();
         let c = db.create_conversation(&u, "c").unwrap();
         let mk = |status: &str| {
             db.create_generation(&NewGeneration {
@@ -1474,7 +1507,7 @@ mod tests {
         db.finalize_generation(&done, "done", "all of it", None, None).unwrap();
 
         assert_eq!(sweep_on_start(&db).unwrap(), (2, 1));
-        let get = |id: &str| db.get_generation(&u, id).unwrap().unwrap();
+        let get = |id: &str| db.get_generation(id).unwrap().unwrap();
         let g = get(&with_text);
         assert_eq!((g.status.as_str(), g.text.as_str()), ("interrupted", "partial answer"));
         assert!(g.assistant_message_id.is_some() && g.ended_at.is_some());
@@ -1485,7 +1518,7 @@ mod tests {
         assert_eq!((g.status.as_str(), g.assistant_message_id), ("interrupted", None));
         assert!(g.error.unwrap().contains("Not run"));
         assert_eq!(get(&done).status, "done", "finished rows are left alone");
-        let messages = db.get_messages(&u, &c).unwrap();
+        let messages = db.get_messages(&c).unwrap();
         assert_eq!(messages.len(), 1, "only the partial text became a message");
         assert_eq!((messages[0].role.as_str(), messages[0].content.as_str()), ("assistant", "partial answer"));
         assert_eq!(sweep_on_start(&db).unwrap(), (0, 0), "a second sweep finds nothing");
@@ -1496,7 +1529,8 @@ mod tests {
         let reg = Generations::default();
         assert!(reg.get("g1").is_none() && reg.is_empty());
         let live = Live::new();
-        reg.insert("g1", live.clone());
+        let spaces = crate::Spaces::in_memory();
+        reg.insert("g1", live.clone(), &spaces.open(&crate::ids::new_id()).unwrap());
         assert!(Arc::ptr_eq(&reg.get("g1").unwrap(), &live));
         assert_eq!(reg.len(), 1);
         reg.remove("g1");

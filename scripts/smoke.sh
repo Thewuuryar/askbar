@@ -17,7 +17,7 @@ cd "$(dirname "$0")/.."
 
 URL=""
 PAIRING="${ASKBAR_SMOKE_PAIRING:-}"
-CLIENT_VERSION="0.5.0"
+CLIENT_VERSION="0.6.0"
 while [ $# -gt 0 ]; do
   case "$1" in
     --url) URL="${2:?--url needs a value}"; shift 2 ;;
@@ -169,10 +169,23 @@ if [ -n "$TOKEN" ]; then
   PROVIDER=$(json "$WORK/providers.json" 'd[0]["id"]')
   if [ -n "$PROVIDER" ]; then pass "the server lists a provider ($(json "$WORK/providers.json" 'd[0]["name"]'))"; else fail "the server lists a provider"; fi
 
+  # 6b. Spaces (ADR 0009): the user has a personal space, listed first; the routes below are under it.
+  api "$URL/api/client/v1/spaces" >"$WORK/spaces.json"
+  SPACE=$(json "$WORK/spaces.json" 'next(s["id"] for s in d if s["kind"]=="personal")')
+  if [ -n "$SPACE" ]; then pass "the user has a personal space"; else fail "the user has a personal space"; fi
+  SP="$URL/api/client/v1/spaces/$SPACE"
+  if [ $LOCAL = 1 ]; then
+    if [ -f "$WORK/data/control.db" ] && [ -f "$WORK/data/spaces/$SPACE.db" ] && [ ! -e "$WORK/data/askbar.db" ]; then
+      pass "the server keeps control.db and one file per space"
+    else
+      fail "the server keeps control.db and one file per space" "$(ls -R "$WORK/data" 2>/dev/null | tr '\n' ' ')"
+    fi
+  fi
+
   # 7. Chat: read the streamed reply.
   QUESTION="smoke question zebra"
   api -N --max-time 60 -X POST -H 'content-type: application/json' \
-    -d "{\"provider\":\"$PROVIDER\",\"text\":\"$QUESTION\"}" "$URL/api/client/v1/chat" >"$WORK/chat.sse" 2>/dev/null
+    -d "{\"provider\":\"$PROVIDER\",\"text\":\"$QUESTION\"}" "$SP/chat" >"$WORK/chat.sse" 2>/dev/null
   CHAT=$(py 'import json,sys
 events=[]; name=None
 for line in open(sys.argv[1], encoding="utf-8"):
@@ -189,7 +202,7 @@ print("ok" if ok else "bad", conv, len(text))' "$WORK/chat.sse" 2>/dev/null)
 
   # 8. History holds the exchange.
   if [ -n "${CONV_ID:-}" ]; then
-    api "$URL/api/client/v1/conversations/$CONV_ID" >"$WORK/conv.json"
+    api "$SP/conversations/$CONV_ID" >"$WORK/conv.json"
     if [ "$(json "$WORK/conv.json" 'len(d["messages"])')" = "2" ] \
        && [ "$(json "$WORK/conv.json" 'd["messages"][0]["content"]')" = "$QUESTION" ]; then
       pass "the conversation holds the question and the reply"
@@ -201,7 +214,7 @@ print("ok" if ok else "bad", conv, len(text))' "$WORK/chat.sse" 2>/dev/null)
   fi
 
   # 9. Search history.
-  code=$(api -o "$WORK/search.json" -w '%{http_code}' --get --data-urlencode "q=zebra" "$URL/api/client/v1/search")
+  code=$(api -o "$WORK/search.json" -w '%{http_code}' --get --data-urlencode "q=zebra" "$SP/search")
   if [ "$code" = "200" ] && [ "$(json "$WORK/search.json" 'len(d)')" -ge 1 ] 2>/dev/null; then
     pass "search history finds the question"
   else
@@ -211,7 +224,7 @@ print("ok" if ok else "bad", conv, len(text))' "$WORK/chat.sse" 2>/dev/null)
   # 10. Retries: the mock refuses this message with a 429 (Retry-After: 1) the first time; the
   # server waits and tries again, and the reply still completes.
   api -N --max-time 60 -X POST -H 'content-type: application/json' \
-    -d "{\"provider\":\"$PROVIDER\",\"text\":\"smoke 429once retry\"}" "$URL/api/client/v1/chat" >"$WORK/retry.sse" 2>/dev/null
+    -d "{\"provider\":\"$PROVIDER\",\"text\":\"smoke 429once retry\"}" "$SP/chat" >"$WORK/retry.sse" 2>/dev/null
   RETRY=$(py 'import sys
 text=open(sys.argv[1], encoding="utf-8").read()
 print("ok" if "event: delta" in text and text.rstrip().endswith("data: {\"event\":\"done\"}") and "event: error" not in text else "bad")' "$WORK/retry.sse" 2>/dev/null)

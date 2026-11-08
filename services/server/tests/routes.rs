@@ -47,12 +47,13 @@ fn the_tables_list_each_api_under_its_own_prefix_and_nothing_else() {
     let client = client_routes();
     assert_unique_under(&client, "/api/client/v1", &["/api/v1/"]);
     for (m, p) in [
-        ("POST", "/api/client/v1/chat"),
+        ("GET", "/api/client/v1/spaces"),
+        ("POST", "/api/client/v1/spaces/{space_id}/chat"),
         ("POST", "/api/client/v1/pairings"),
         ("GET", "/api/client/v1/me"),
         ("GET", "/api/client/v1/health"),
         ("ANY", "/api/v1/{*rest}"),
-        ("POST", "/api/client/v1/generations/{id}/cancel"),
+        ("POST", "/api/client/v1/spaces/{space_id}/generations/{id}/cancel"),
     ] {
         assert!(client.iter().any(|r| r.method == m && r.path == p), "missing {m} {p}");
     }
@@ -75,7 +76,7 @@ async fn every_client_route_answers_and_a_method_that_is_not_registered_is_a_405
     for r in table.iter().filter(|r| r.method != "ANY") {
         let method = reqwest::Method::from_bytes(r.method.as_bytes()).unwrap();
         let res =
-            http.request(method, format!("{url}{}", concrete(&r.path))).header("x-askbar-client-version", "0.5.0").send().await.unwrap();
+            http.request(method, format!("{url}{}", concrete(&r.path))).header("x-askbar-client-version", "0.6.0").send().await.unwrap();
         let s = res.status().as_u16();
         assert!(s != 404 && s != 405, "{} {} answered {s}", r.method, r.path);
     }
@@ -85,7 +86,7 @@ async fn every_client_route_answers_and_a_method_that_is_not_registered_is_a_405
     }
     let paths: BTreeSet<&str> = table.iter().filter(|r| r.method != "ANY").map(|r| r.path.as_str()).collect();
     for p in paths {
-        let res = http.patch(format!("{url}{}", concrete(p))).header("x-askbar-client-version", "0.5.0").send().await.unwrap();
+        let res = http.patch(format!("{url}{}", concrete(p))).header("x-askbar-client-version", "0.6.0").send().await.unwrap();
         assert!(res.status() == 405 || res.status() == 401, "PATCH {p} answered {}", res.status());
     }
 }

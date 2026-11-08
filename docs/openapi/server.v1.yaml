@@ -344,13 +344,13 @@ paths:
   /api/server/v1/exports:
     post:
       operationId: createExport
-      summary: A consistent copy of the server database with everything secret taken out.
-      description: Unencrypted until encrypted exports arrive (ADR 0013, plan phase 6). Provider API keys and pairing-code hashes are removed. Conversations, settings and paired-client records (token hashes only) stay.
+      summary: Consistent copies of the control database and of every space's file, with everything secret taken out.
+      description: Unencrypted until encrypted exports arrive (ADR 0013, plan phase 6). A tar with `control.db` (provider API keys and pairing-code hashes removed; settings and paired-client records, token hashes only, stay) and `spaces/<space id>.db` for every space (ADR 0009).
       responses:
         '200':
-          description: A SQLite file.
+          description: A tar of SQLite files.
           content:
-            application/vnd.sqlite3:
+            application/x-tar:
               schema:
                 type: string
                 format: binary

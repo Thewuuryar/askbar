@@ -1115,27 +1115,6 @@ pub async fn put_user_display(
 
 // ------------------------------------------------------------------- backup
 
-/// One file in a tar archive (ustar, regular files only).
-fn tar_entry(out: &mut Vec<u8>, name: &str, data: &[u8], mtime: i64) {
-    let mut h = [0u8; 512];
-    h[..name.len()].copy_from_slice(name.as_bytes());
-    let put = |h: &mut [u8; 512], at: usize, s: String| h[at..at + s.len()].copy_from_slice(s.as_bytes());
-    put(&mut h, 100, "0000644\0".into());
-    put(&mut h, 108, "0000000\0".into());
-    put(&mut h, 116, "0000000\0".into());
-    put(&mut h, 124, format!("{:011o}\0", data.len()));
-    put(&mut h, 136, format!("{:011o}\0", mtime.max(0)));
-    h[148..156].copy_from_slice(b"        ");
-    h[156] = b'0';
-    put(&mut h, 257, "ustar\0".into());
-    put(&mut h, 263, "00".into());
-    let sum: u32 = h.iter().map(|b| *b as u32).sum();
-    put(&mut h, 148, format!("{sum:06o}\0 "));
-    out.extend_from_slice(&h);
-    out.extend_from_slice(data);
-    out.resize(out.len().div_ceil(512) * 512, 0);
-}
-
 /// A copy of `admin.db` with the password hash, the Cloudflare token, pairing-code hashes and the admin
 /// API key's hash removed.
 fn admin_db_copy(db: &crate::AdminDb) -> Result<Vec<u8>, Failure> {
@@ -1158,21 +1137,26 @@ fn admin_db_copy(db: &crate::AdminDb) -> Result<Vec<u8>, Failure> {
     result.map_err(internal)
 }
 
-/// The server's backup and the admin's own, in one tar file: `server.db` and `admin.db`.
+/// The server's backup and the admin's own, in one tar file: the server's files under `server/`
+/// (`server/control.db` and `server/spaces/<space id>.db`, ADR 0009), then `admin.db`.
 pub async fn backup(State(state): St) -> Result<Response, Failure> {
-    let (status, server_db) = link(&state)?
+    let (status, server_tar) = link(&state)?
         .request(reqwest::Method::POST, &askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/exports"), None)
         .await
         .map_err(from_push)?;
     if status != 200 {
         return Err(err(StatusCode::BAD_GATEWAY, &format!("The server answered {status}.")));
     }
+    let server_files =
+        askbar_service::tar::read(&server_tar).ok_or_else(|| err(StatusCode::BAD_GATEWAY, "The server's backup could not be read."))?;
     let admin_db = admin_db_copy(&*state.db.lock().await)?;
     let now = crate::auth::now();
     let mut tar = Vec::new();
-    tar_entry(&mut tar, "server.db", &server_db, now);
-    tar_entry(&mut tar, "admin.db", &admin_db, now);
-    tar.extend_from_slice(&[0u8; 1024]);
+    for (name, data) in &server_files {
+        askbar_service::tar::append(&mut tar, &format!("server/{name}"), data, now);
+    }
+    askbar_service::tar::append(&mut tar, "admin.db", &admin_db, now);
+    askbar_service::tar::finish(&mut tar);
     Response::builder()
         .header(header::CONTENT_TYPE, "application/x-tar")
         .header(header::CONTENT_LENGTH, tar.len())

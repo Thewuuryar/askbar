@@ -1,14 +1,16 @@
-//! Read endpoints for a paired client. Every query is scoped to the token's user.
+//! Read endpoints for a paired client. User-level reads are scoped to the token's user; everything
+//! under `/spaces/{space_id}` goes through `MemberSpace`, which checks membership in the control
+//! database before the space's file is opened (ADR 0009).
 
 use crate::error::{ApiError, ApiJson};
 use crate::{auth::ClientAuth, AppState};
 use askbar_proto::problem::ErrorCode;
 use askbar_proto::{
-    Conversation, ConversationDetail, DisplaySettings, Message, PendingGeneration, Prefs, ProviderInfo, SearchHit, Settings,
+    Conversation, ConversationDetail, DisplaySettings, Message, PendingGeneration, Prefs, ProviderInfo, SearchHit, Settings, SpaceInfo,
 };
 use axum::{
-    extract::{Path, Query, State},
-    http::StatusCode,
+    extract::{FromRequestParts, Path, Query, RawPathParams, State},
+    http::{request::Parts, StatusCode},
     Extension, Json,
 };
 use rusqlite::{params, OptionalExtension};
@@ -19,6 +21,35 @@ type Res<T> = Result<Json<T>, ApiError>;
 
 fn internal<E>(_: E) -> ApiError {
     ApiError::code(ErrorCode::Internal)
+}
+
+/// The space named by the route's `{space_id}`, once the control database says the token's user is
+/// a member of it. A space that does not exist and one the user is not in get the same 404, so the
+/// answer says nothing about other people's spaces. The only way a handler reaches a space's file.
+pub struct MemberSpace(pub Arc<crate::Space>);
+
+impl FromRequestParts<Arc<AppState>> for MemberSpace {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &Arc<AppState>) -> Result<Self, ApiError> {
+        let auth = parts.extensions.get::<ClientAuth>().cloned().ok_or_else(|| ApiError::code(ErrorCode::Unauthorized))?;
+        let params = RawPathParams::from_request_parts(parts, state).await.map_err(internal)?;
+        let space_id = params.iter().find(|(k, _)| *k == "space_id").map(|(_, v)| v.to_string()).ok_or_else(|| internal(()))?;
+        let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+        state
+            .spaces
+            .for_member(&db, &auth.user_id, &space_id)
+            .map_err(internal)?
+            .map(MemberSpace)
+            .ok_or_else(|| ApiError::new(ErrorCode::NotFound, "That space was not found."))
+    }
+}
+
+/// `GET /spaces`: the spaces the caller is a member of, the personal one first.
+pub async fn spaces(State(state): St, Extension(auth): Extension<ClientAuth>) -> Res<Vec<SpaceInfo>> {
+    let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+    let rows = db.spaces_for(&auth.user_id).map_err(internal)?;
+    Ok(Json(rows.into_iter().map(|s| SpaceInfo { id: s.id, kind: s.kind, name: s.name }).collect()))
 }
 
 /// The providers clients may use, from the snapshot: the default first, then the rest by name. A client with no choice of its own uses the first one.
@@ -56,10 +87,10 @@ pub async fn providers(State(state): St) -> Res<Vec<ProviderInfo>> {
     Ok(Json(list.into_iter().map(|p| ProviderInfo { id: p.id, name: p.name, kind: p.kind, model: p.model }).collect()))
 }
 
-pub async fn conversations(State(state): St, Extension(auth): Extension<ClientAuth>) -> Res<Vec<Conversation>> {
-    let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+pub async fn conversations(MemberSpace(space): MemberSpace) -> Res<Vec<Conversation>> {
+    let db = space.lock();
     let rows = db
-        .list_conversations(&auth.user_id)
+        .list_conversations()
         .map_err(internal)?
         .into_iter()
         .map(|c| Conversation { id: c.id, title: c.title, updated_at: c.updated_at, message_count: c.message_count })
@@ -67,25 +98,19 @@ pub async fn conversations(State(state): St, Extension(auth): Extension<ClientAu
     Ok(Json(rows))
 }
 
-pub async fn conversation(State(state): St, Extension(auth): Extension<ClientAuth>, Path(id): Path<String>) -> Res<ConversationDetail> {
-    let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+pub async fn conversation(MemberSpace(space): MemberSpace, Path((_, id)): Path<(String, String)>) -> Res<ConversationDetail> {
+    let db = space.lock();
     let c = db
-        .get_conversation(&auth.user_id, &id)
+        .get_conversation(&id)
         .map_err(internal)?
         .ok_or_else(|| ApiError::new(ErrorCode::NotFound, "That conversation was not found."))?;
     let messages = db
-        .get_messages(&auth.user_id, &id)
+        .get_messages(&id)
         .map_err(internal)?
         .into_iter()
         .map(|m| Message { id: m.id, role: m.role, content: m.content, created_at: m.created_at })
         .collect();
-    let pending = db
-        .list_active_generations(&auth.user_id)
-        .map_err(internal)?
-        .into_iter()
-        .filter(|g| g.conversation_id == id)
-        .map(pending_of)
-        .collect();
+    let pending = db.list_active_generations().map_err(internal)?.into_iter().filter(|g| g.conversation_id == id).map(pending_of).collect();
     Ok(Json(ConversationDetail {
         conversation: Conversation { id: c.id, title: c.title, updated_at: c.updated_at, message_count: c.message_count },
         messages,
@@ -109,26 +134,23 @@ pub struct GenerationsQuery {
     status: Option<String>,
 }
 
-/// `GET /api/client/v1/generations?status=running`: the caller's running and queued generations, across
-/// conversations, so a client that just started (or reconnected) can find what is still going.
-pub async fn generations(
-    State(state): St,
-    Extension(auth): Extension<ClientAuth>,
-    Query(q): Query<GenerationsQuery>,
-) -> Res<Vec<PendingGeneration>> {
+/// `GET /api/client/v1/spaces/{space_id}/generations?status=running`: the space's running and queued
+/// generations, across its conversations, so a client that just started (or reconnected) can find
+/// what is still going.
+pub async fn generations(MemberSpace(space): MemberSpace, Query(q): Query<GenerationsQuery>) -> Res<Vec<PendingGeneration>> {
     if q.status.as_deref().is_some_and(|s| s != "running") {
         return Err(ApiError::new(ErrorCode::BadRequest, "Only status=running is supported."));
     }
-    let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
-    Ok(Json(db.list_active_generations(&auth.user_id).map_err(internal)?.into_iter().map(pending_of).collect()))
+    let db = space.lock();
+    Ok(Json(db.list_active_generations().map_err(internal)?.into_iter().map(pending_of).collect()))
 }
 
 pub async fn delete_conversation(
     State(state): St,
-    Extension(auth): Extension<ClientAuth>,
-    Path(id): Path<String>,
+    MemberSpace(space): MemberSpace,
+    Path((_, id)): Path<(String, String)>,
 ) -> Result<StatusCode, ApiError> {
-    match crate::generation::delete_conversation(&state, &auth.user_id, &id) {
+    match crate::generation::delete_conversation(&state, &space, &id) {
         Ok(false) => Err(ApiError::new(ErrorCode::NotFound, "That conversation was not found.")),
         Ok(true) => Ok(StatusCode::NO_CONTENT),
         Err(_) => Err(ApiError::code(ErrorCode::Internal)),
@@ -170,14 +192,14 @@ pub struct SearchQuery {
     q: String,
 }
 
-/// Full-text search over the caller's own messages.
-pub async fn search(State(state): St, Extension(auth): Extension<ClientAuth>, Query(q): Query<SearchQuery>) -> Res<Vec<SearchHit>> {
+/// Full-text search over one space's messages.
+pub async fn search(MemberSpace(space): MemberSpace, Query(q): Query<SearchQuery>) -> Res<Vec<SearchHit>> {
     if q.q.chars().count() > 200 {
         return Err(ApiError::new(ErrorCode::BadRequest, "A search can be at most 200 characters."));
     }
-    let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+    let db = space.lock();
     let hits = db
-        .search_messages(&auth.user_id, &q.q, 20)
+        .search_messages(&q.q, 20)
         .map_err(internal)?
         .into_iter()
         .map(|h| SearchHit {

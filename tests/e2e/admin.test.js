@@ -339,7 +339,7 @@ async function waitForPort(port) {
   });
   await step('clients see the provider without its key', async () => {
     // The API is the other listener; without a token it must refuse.
-    const r = await fetch(`http://127.0.0.1:${api}/api/client/v1/providers`, { headers: { 'x-askbar-client-version': '0.5.0' } });
+    const r = await fetch(`http://127.0.0.1:${api}/api/client/v1/providers`, { headers: { 'x-askbar-client-version': '0.6.0' } });
     assert.equal(r.status, 401);
   });
   await step('clients: add a user, generate a pairing key for them, pair with it, then revoke the client', async () => {
@@ -361,7 +361,7 @@ async function waitForPort(port) {
     assert.match(pairing, /^askbar-pair:/);
     const { url, code } = JSON.parse(Buffer.from(pairing.slice('askbar-pair:'.length), 'base64url').toString());
     assert.equal(url, 'http://localhost:' + api);
-    const headers = { 'content-type': 'application/json', 'x-askbar-client-version': '0.5.0' };
+    const headers = { 'content-type': 'application/json', 'x-askbar-client-version': '0.6.0' };
     const paired = await fetch(`http://127.0.0.1:${api}/api/client/v1/pairings`, { method: 'POST', headers, body: JSON.stringify({ code }) });
     assert.equal(paired.status, 200);
     const { token } = await paired.json();
@@ -500,7 +500,10 @@ async function waitForPort(port) {
       files[name] = bytes.subarray(at + 512, at + 512 + size);
       at += 512 + Math.ceil(size / 512) * 512;
     }
-    assert.deepEqual(Object.keys(files).sort(), ['admin.db', 'server.db']);
+    // The server's control database and one file per space (ADR 0009), then the admin's own.
+    const names = Object.keys(files).sort();
+    assert.deepEqual(names.filter((n) => !n.startsWith('server/spaces/')), ['admin.db', 'server/control.db']);
+    for (const n of names.filter((n) => n.startsWith('server/spaces/'))) assert.match(n, /^server\/spaces\/[0-9A-Z]{26}\.db$/);
     for (const [name, data] of Object.entries(files)) {
       assert.equal(data.subarray(0, 15).toString(), 'SQLite format 3', name);
       assert.equal(data.includes(SECRET_KEY), false, name + ' has the provider key');
@@ -520,12 +523,14 @@ async function waitForPort(port) {
       return (await r.json()).pairing;
     });
     const { code } = JSON.parse(Buffer.from(pairing.slice('askbar-pair:'.length), 'base64url').toString());
-    const h = { 'content-type': 'application/json', 'x-askbar-client-version': '0.5.0' };
+    const h = { 'content-type': 'application/json', 'x-askbar-client-version': '0.6.0' };
     const { token } = await (await fetch(`http://127.0.0.1:${api}/api/client/v1/pairings`, { method: 'POST', headers: h, body: JSON.stringify({ code }) })).json();
     const auth = { ...h, authorization: 'Bearer ' + token };
     const providers = await (await fetch(`http://127.0.0.1:${api}/api/client/v1/providers`, { headers: auth })).json();
     const provider = providers.find((p) => p.name === providerName) || providers[0];
-    const body = await (await fetch(`http://127.0.0.1:${api}/api/client/v1/chat`, { method: 'POST', headers: auth, body: JSON.stringify({ provider: provider.id, text }) })).text();
+    const spaces = await (await fetch(`http://127.0.0.1:${api}/api/client/v1/spaces`, { headers: auth })).json();
+    const space = spaces.find((s) => s.kind === 'personal').id;
+    const body = await (await fetch(`http://127.0.0.1:${api}/api/client/v1/spaces/${space}/chat`, { method: 'POST', headers: auth, body: JSON.stringify({ provider: provider.id, text }) })).text();
     assert.match(body, /event: done/);
     return body;
   }

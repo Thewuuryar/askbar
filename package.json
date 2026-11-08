@@ -1,6 +1,6 @@
 {
   "name": "askbar",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "private": true,
   "license": "AGPL-3.0-or-later",
   "description": "Askbar: services, checks and end-to-end tests. The desktop client is in clients/desktop.",

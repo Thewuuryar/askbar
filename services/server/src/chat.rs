@@ -1,4 +1,5 @@
-//! `POST /api/client/v1/chat`: start a generation and stream its reply as our own SSE events.
+//! `POST /api/client/v1/spaces/{space_id}/chat`: start a generation in a space and stream its reply
+//! as our own SSE events.
 //!
 //! Provider output is never passed through; it is decoded by `llm`
 //! and re-emitted as `meta`, `delta`, `done` or `error`. The generation runs as its own task
@@ -6,7 +7,7 @@
 
 use crate::error::{ApiError, ApiJson};
 use crate::generation::{self, GenEvent};
-use crate::{auth::ClientAuth, AppState};
+use crate::{auth::ClientAuth, client_api::MemberSpace, AppState};
 use askbar_proto::problem::ErrorCode;
 use askbar_proto::{ChatEvent, ChatRequest};
 use axum::{
@@ -45,6 +46,7 @@ pub(crate) fn sse_event_with_id(e: &ChatEvent, seq: Option<u64>) -> Event {
 pub async fn chat(
     State(state): State<Arc<AppState>>,
     Extension(auth): Extension<ClientAuth>,
+    MemberSpace(space): MemberSpace,
     ApiJson(req): ApiJson<ChatRequest>,
 ) -> Result<impl axum::response::IntoResponse, axum::response::Response> {
     let text = req.text.trim().to_string();
@@ -52,14 +54,9 @@ pub async fn chat(
         return Err(ApiError::new(ErrorCode::BadRequest, "The message is empty.").into_response());
     }
 
-    // A repeat of a send this client already made attaches to that generation and starts nothing.
+    // A repeat of a send this client already made in this space attaches to that generation and starts nothing.
     if let Some(rid) = req.client_request_id.as_deref() {
-        let existing = state
-            .db
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .find_by_request_id(&auth.client_id, rid)
-            .map_err(|e| internal(e).into_response())?;
+        let existing = space.lock().find_by_request_id(&auth.client_id, rid).map_err(|e| internal(e).into_response())?;
         if let Some(g) = existing {
             let meta = ChatEvent::Meta {
                 conversation_id: g.conversation_id.clone(),
@@ -74,6 +71,7 @@ pub async fn chat(
     let sub = generation::submit(
         &state,
         generation::Submit {
+            space,
             user_id: auth.user_id,
             client_id: auth.client_id,
             conversation_id: req.conversation_id,
