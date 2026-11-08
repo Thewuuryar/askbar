@@ -29,7 +29,8 @@ ulid = "1"
 rcgen = { version = "0.14.10", default-features = false, features = ["ring", "pem"] }
 
 [dev-dependencies]
-serde_yaml_ng = "0.10"
+# YAML in safe Rust, to read our own OpenAPI files (it replaced serde_yaml_ng, built on the unmaintained unsafe-libyaml).
+serde-saphyr = { version = "2.1", default-features = false, features = ["deserialize"] }
 futures-util = "0.3"
 askbar-server = { path = "../server" }
 

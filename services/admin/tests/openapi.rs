@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 fn spec() -> Value {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/openapi/admin.v1.yaml");
-    serde_yaml_ng::from_str(&std::fs::read_to_string(&path).unwrap()).expect("admin.v1.yaml is YAML")
+    serde_saphyr::from_str(&std::fs::read_to_string(&path).unwrap()).expect("admin.v1.yaml is YAML")
 }
 
 /// (METHOD, path) -> the security alternatives written for it ([] means open; None means the file's default).
