@@ -25,7 +25,7 @@ This set records the decisions from the original Askbar architecture plan (kept 
 | [0019](0019-post-v1-order-and-tools.md) | Post-v1 order and tools | Accepted | 25, 26 |
 | [0020](0020-remote-executor-and-ca-triggers.md) | Remote executor and CA triggers | Accepted | 24 |
 | [0021](0021-names-and-new-components.md) | Names and new components | Superseded by 0038 | Added recommendation |
-| [0022](0022-api-path-conventions.md) | API path conventions | Accepted | Added recommendation |
+| [0022](0022-api-path-conventions.md) | API path conventions | Accepted; amended by 0047 | Added recommendation |
 | [0023](0023-api-error-format.md) | API error format | Accepted | Added recommendation |
 | [0024](0024-rejected-token-alert.md) | Rejected token alert | Accepted | Added recommendation |
 | [0025](0025-audit-record-reliability.md) | Audit record reliability | Accepted | Added recommendation |
@@ -50,3 +50,4 @@ This set records the decisions from the original Askbar architecture plan (kept 
 | [0044](0044-desktop-client.md) | The desktop client | Accepted | Plan step 1.14; owner rule for component ADRs |
 | [0045](0045-askbar-proto-crate.md) | The `askbar-proto` crate | Accepted | Plan step 1.14; owner rule for component ADRs |
 | [0046](0046-component-and-register-adrs-and-partial-amendments.md) | Component and register ADRs, partial amendments, and deferral | Accepted | Owner request in review of plan step 1.14 |
+| [0047](0047-generation-routes-under-spaces.md) | Generation routes under spaces | Proposed | Plan step 1.11, as built |

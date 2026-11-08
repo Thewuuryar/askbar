@@ -1,6 +1,6 @@
 # 0022. API path conventions
 
-Status: Accepted
+Status: Accepted; amended by 0047
 Date: 2026-11-04
 Source: recommendation accepted after the clean copy
 
