@@ -28,6 +28,8 @@ Not recorded: the app predates this record.
 
 The app's Rust tests run against a real server built from this repository and the mock (`clients/desktop/src-tauri`), and `tests/ui.test.js` drives the popup in a browser with a mocked Tauri layer. A person runs it on macOS, Windows and Linux before v1 ships ([0008](0008-users-clients-and-client-access.md)); only Linux runs in this repository's tests today.
 
+**glib stays at 0.18 (owner decision, 2026-11-08).** The Linux build links glib 0.18 through Tauri's GTK 3 stack (`tauri`, `tao`, `wry`, `muda` and `tray-icon` need `gtk` 0.18, and `wry` pins `webkit2gtk` 2.0.2). No published Tauri release, up to 3.0.0-alpha.6, allows glib 0.20 or later, so a security alert asking for it is accepted with this reason until Tauri moves its Linux backend to newer bindings. The macOS and Windows builds and the server-side images contain no glib, and the app's own code does not call it. Patching glib 0.18 with a fork, or replacing the Linux backend, was not chosen. Check again on every Tauri update.
+
 **Where the code and an accepted ADR disagree:**
 
 - [0009](0009-spaces-and-storage.md): the app uses the personal space only and its outbox records no space; choosing a shared space is plan step 1.12.
