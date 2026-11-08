@@ -11,7 +11,7 @@ The admin existed before the rule that each component has its own ADR. This reco
 
 ## Decision
 
-- **What it is:** `services/admin`, binary and image `askbar-admin`, the Dockerfile's `admin` target. It runs as uid and gid 10001. It serves the admin site at `/admin` and its API at `/api/admin/v1`, on a unix socket only (`/run/admin/admin.sock`); it opens no TCP port.
+- **What it is:** `services/admin`, binary and image `askbar-admin`, the Dockerfile's `admin` target. It runs as uid and gid 10001. It serves the admin site at `/admin` and its API at `/api/admin/v1`, on a unix socket only (`/run/admin/admin.sock`); it opens no TCP port. The site is one page per section, `/admin/<section>/`, rendered once at start from Askama templates compiled into the binary; the static files are served with an `ETag` (plan step 1.16).
 - **What it holds:**
   - `admin.db`: the admin's password hash, admin API key hashes, users, providers (no keys except the managed `cpa` one, below), settings, display defaults, budgets and the kill switch, network settings (the Cloudflare token encrypted with `admin.key`), pairing-code hashes, the audit keyring (public keys and salts only, [0030](0030-sealed-audit-content.md)) and its record of who opened sealed content;
   - in `admin-secrets`: `admin.key`, the server API token, and `cpa`'s API key and control secret;
@@ -41,3 +41,4 @@ Not recorded: the admin predates this record.
 ## Amendments
 
 - 2026-11-08: no fixed address on `server-api`; it calls the server by the alias `server-api-host` (PR #32).
+- 2026-11-08: the site is one page per section, from one Askama template, instead of one page with tabs (plan step 1.16).
