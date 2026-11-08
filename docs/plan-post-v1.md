@@ -65,7 +65,7 @@ Thick outline and "(new)": new in v2.
 - **Pinning gaps.** `caddy:2`, `rust:1` and `debian:bookworm-slim` float. `package.json` uses version ranges with no npm lockfile, GitHub Actions use tags, and the Caddy Cloudflare plugin is unpinned ([ADR 0017](adr/0017-dependencies-and-patches.md)).
 - **Update tools.** No Dependabot or Renovate config exists. `cpa` is already pinned to a digest.
 - **CI.** The current CI does not run `check-isolation.sh` ([ADR 0018](adr/0018-releases-and-migrations.md)).
-- **Unverified paths.** The README lists a real certificate through this layout and person-tested pairing as unverified. The `cpa` login endpoints have not been checked against the pinned image.
+- **Unverified paths.** The [guide](guide.md#verified-and-not) lists a real certificate through this layout and person-tested pairing as unverified. The `cpa` login endpoints have not been checked against the pinned image.
 
 ## Background: the first-run model
 
