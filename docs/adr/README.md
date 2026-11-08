@@ -35,7 +35,7 @@ This set records the decisions from the original Askbar architecture plan (kept 
 | [0029](0029-shared-origin-protections.md) | Shared origin protections | Accepted | Required by v1 decisions |
 | [0030](0030-sealed-audit-content.md) | Sealed audit content | Accepted | Required by v1 decisions |
 | [0031](0031-audit-span-start-and-backlog.md) | Audit span start and backlog | Accepted | Required by v1 decisions |
-| [0032](0032-container-hardening.md) | Container hardening | Accepted; amended by 0050 | Required by v1 decisions |
+| [0032](0032-container-hardening.md) | Container hardening | Accepted; amended by 0050 and 0053 | Required by v1 decisions |
 | [0033](0033-repository-layout.md) | Repository layout | Accepted | Owner request with the v1 plan |
 | [0034](0034-self-signed-https-and-certificate-pinning.md) | Self-signed HTTPS and certificate pinning | Accepted | Required by 0007; owner choice in the v1 plan |
 | [0035](0035-editorial-edits-to-accepted-adrs.md) | Editorial edits to accepted ADRs | Accepted | Owner review of the v1 layout change |
@@ -56,3 +56,4 @@ This set records the decisions from the original Askbar architecture plan (kept 
 | [0050](0050-bootstrap-chown-exception.md) | A `CHOWN` exception for `bootstrap` | Accepted | Owner review of the open questions in 0049 |
 | [0051](0051-auditor.md) | The `auditor` component | Proposed | Plan steps 2.4 to 2.9; owner rule for component ADRs |
 | [0052](0052-askbar-audit-crate.md) | The `askbar-audit` crate | Proposed | Plan step 2.3; owner rule for component ADRs |
+| [0053](0053-auditor-start-up-exception.md) | A start-up exception for the `auditor` | Proposed | Owner review of the open questions in 0051 |
