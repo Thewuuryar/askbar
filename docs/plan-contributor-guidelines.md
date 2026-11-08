@@ -7,10 +7,11 @@ Status: tracker for decisions not yet made and work not yet done. Decisions that
 - Merging: squash small PRs; rebase-merge a stepwise series and say so in the PR (2026-11-03).
 - rustfmt now: `max_width = 140`, `use_small_heuristics = "Max"`, one reformat commit (branch `style/rustfmt`) (2026-11-03).
 - Branch names: `<type>/<short-kebab-description>` for everyone, including agent harnesses (2026-11-05).
+- clippy and `unsafe` (#5, #13): lints in `[workspace.lints]` in both workspaces, and `cargo clippy --workspace --all-targets -- -D warnings` clean in each. `result_large_err` is allowed, with the reason in `Cargo.toml`. `unsafe_code` is `deny` in the services' workspace, where `cpa-supervisor` allows it on its two libc calls ([ADR 0037](adr/0037-askbar-cpa-image-and-supervisor.md)), and `forbid` in the desktop client (2026-11-08).
 
 ## Open decisions
 
-Recommendation first. "Tool" lists the usual choices; check each one's current state before adopting. #2, #3 and #4 are decided (above).
+Recommendation first. "Tool" lists the usual choices; check each one's current state before adopting. #2, #3, #4, #5 and #13 are decided (above).
 
 | # | Question | Recommendation | Tool |
 | --- | --- | --- | --- |
@@ -51,7 +52,7 @@ Each step is its own PR. Stop after any step; the earlier ones stand alone.
 
 1. **This branch**: the documents, PR template, `check-docs.sh` change. There is no CODEOWNERS file while the owner is the only reviewer; add one with a second reviewer. Verify: `npm test` names and docs checks pass.
 2. **rustfmt** (#4): branch `style/rustfmt` off `main`: `rustfmt.toml` and one `style: apply rustfmt` commit. Verify: `cargo fmt --all --check` clean; tests unchanged. After it merges, add the SHA that landed on `main` (a squash or rebase changes the SHA) to `.git-blame-ignore-revs` in a small follow-up.
-3. **clippy** (#5, #13): `[workspace.lints]`, fix or explicitly allow each baseline warning with a reason. Verify: `cargo clippy --workspace --all-targets -- -D warnings` clean.
+3. **Done (2026-11-08). clippy** (#5, #13): `[workspace.lints]`, fix or explicitly allow each baseline warning with a reason. Verify: `cargo clippy --workspace --all-targets -- -D warnings` clean.
 4. **CI on pull requests** (#7, #8, #9): `ci.yml`, `deny.toml`, Dependabot, Renovate, gitleaks. Verify: open a draft PR and watch it run; the 0.5.0 hand-off notes that `build.yml` has never run, so expect first-run failures.
 5. **Branch protection** (#10) last, once the checks are known to pass; otherwise it blocks every merge.
 6. **Update AGENTS.md** to drop the `(proposed)` tags and add the new commands.
