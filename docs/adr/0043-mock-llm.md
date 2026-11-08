@@ -12,7 +12,7 @@ Askbar's tests and the Mac check need a model provider that answers fast, costs 
 
 - **What it is:** `tests/e2e/mock_llm.py`, one Python file with no dependencies beyond the standard library. It answers the OpenAI-compatible `/v1/models` and streaming `/v1/chat/completions`, and Anthropic's `/v1/messages`, with a fixed Markdown reply. Words in the message or the model name choose a behaviour: `slow`, `fail` (401), `429`, `429once`, `500`, `reset`, `hang`, `drop`, and `cached` (usage with cached tokens). `tests/e2e/mock_llm_test.py` tests it.
 - **Test use, not in the stack:** the Rust tests of the server, the admin and the desktop client, `tests/e2e/*.js` and `scripts/smoke.sh` start it as a local process on a free port of `127.0.0.1`.
-- **Dev profile:** `compose.yaml` runs it as the `mock-llm` service only under `--profile dev`, for the Mac check. The image is `python:3.12-slim`; the script is bind-mounted read-only from the repository; it listens on `0.0.0.0:8765` inside the container (`MOCK_LLM_HOST`), on the `edge` network, with no published port. Providers reach it at `http://mock-llm:8765/v1`.
+- **Dev profile:** `compose.yaml` runs it as the `mock-llm` service only under `--profile dev`, for the Mac check. The image is `python:3.12-slim`, pinned by digest ([0017](0017-dependencies-and-patches.md)); the script is bind-mounted read-only from the repository; it listens on `0.0.0.0:8765` inside the container (`MOCK_LLM_HOST`), on the `edge` network, with no published port. Providers reach it at `http://mock-llm:8765/v1`.
 - **What it holds and reaches:** nothing. It keeps only an in-memory set of the `429once` messages it has seen, has no volume of its own, calls nothing and receives no secret (any key is accepted).
 - **Hardening:** the shared defaults of [0032](0032-container-hardening.md), with no exception; memory limit 128 MB.
 - **Never shipped:** it is not part of a release and is never in the default profile.
@@ -27,5 +27,4 @@ Tests and the Mac check run without a provider account or network access. A prov
 
 **Where the code and an accepted ADR disagree:**
 
-- [0017](0017-dependencies-and-patches.md) (pin images to digests): the dev profile uses `python:3.12-slim` by tag.
 - [0003](0003-v1-service-layout.md) (no host bind mounts): the dev service bind-mounts the script from the repository. It is dev-only and read-only.
