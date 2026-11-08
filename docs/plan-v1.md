@@ -159,7 +159,7 @@ That is about 52 h over the ~100 h budget before any backlog item (the component
 
 **2.3 `refactor: move the audit store into crates/askbar-audit`** (S)
 - Before the code: a component ADR for the `askbar-audit` crate (what it holds, who links it: server now, auditor in 2.4), proposed in its own PR and accepted.
-- Pure move of `services/server/src/audit.rs` and `seal.rs` into a library; server keeps using it in-process.
+- Pure move of `services/server/src/audit.rs` into a library; server keeps using it in-process. `seal.rs` stays in the server, and the span record types move to `askbar-proto` in 2.4, when they become wire types ([ADR 0052](adr/0052-askbar-audit-crate.md)).
 
 **2.4 `feat(auditor): run the audit store as its own container`** (L) — [ADR 0010](adr/0010-auditor.md), 0025
 - Before the code: a component ADR for the `auditor` (its volume `auditor-data`, its internal network, its links and tokens, no outbound), proposed in its own PR and accepted. The `server` component ADR (0039) is amended in place in the same PR: it no longer mounts `audit-data` ([ADR 0046](adr/0046-component-and-register-adrs-and-partial-amendments.md)).
