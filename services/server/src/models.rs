@@ -177,7 +177,8 @@ pub async fn run(state: &AppState, req: ModelsRequest) -> rusqlite::Result<Model
         let Some(saved) = saved else {
             return Ok(ModelsResult::fail("No such provider."));
         };
-        let same = saved.kind == kind && same_url(&saved.effective_base_url(), &Provider { base_url: url.to_string(), kind, ..saved.clone() }.effective_base_url());
+        let same = saved.kind == kind
+            && same_url(&saved.effective_base_url(), &Provider { base_url: url.to_string(), kind, ..saved.clone() }.effective_base_url());
         if same {
             headers = saved.headers.clone();
             if key.is_empty() {
@@ -220,13 +221,27 @@ mod tests {
 
     #[test]
     fn lists_are_sorted_and_deduplicated() {
-        let v = finish(vec![ModelInfo { id: "b".into(), label: None }, ModelInfo { id: "a".into(), label: None }, ModelInfo { id: "b".into(), label: None }]);
+        let v = finish(vec![
+            ModelInfo { id: "b".into(), label: None },
+            ModelInfo { id: "a".into(), label: None },
+            ModelInfo { id: "b".into(), label: None },
+        ]);
         assert_eq!(v.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["a", "b"]);
     }
 
     #[test]
     fn urls() {
-        let p = |kind, base: &str| Provider { name: String::new(), kind, base_url: base.into(), api_key: String::new(), api_key_env: String::new(), model: String::new(), max_tokens: None, temperature: None, headers: Default::default() };
+        let p = |kind, base: &str| Provider {
+            name: String::new(),
+            kind,
+            base_url: base.into(),
+            api_key: String::new(),
+            api_key_env: String::new(),
+            model: String::new(),
+            max_tokens: None,
+            temperature: None,
+            headers: Default::default(),
+        };
         assert_eq!(list_url(&p(ProviderKind::OpenAi, "http://cpa:8317/v1/")), "http://cpa:8317/v1/models");
         assert_eq!(list_url(&p(ProviderKind::OpenAi, "")), "https://api.openai.com/v1/models");
         assert_eq!(list_url(&p(ProviderKind::Anthropic, "")), "https://api.anthropic.com/v1/models");

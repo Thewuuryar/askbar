@@ -3,10 +3,10 @@
 //! ignored, so no token of any kind opens the admin.
 
 use crate::{auth::SESSION_TTL_SECS, AdminState};
-use askbar_proto::http::{ApiError, ApiJson};
-use askbar_proto::problem::ErrorCode;
 use argon2::password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 use argon2::Argon2;
+use askbar_proto::http::{ApiError, ApiJson};
+use askbar_proto::problem::ErrorCode;
 use axum::{
     extract::{Request, State},
     http::{header, HeaderMap, HeaderValue, Method, StatusCode},
@@ -86,7 +86,8 @@ pub fn reset_to_default(db: &crate::AdminDb) -> rusqlite::Result<()> {
 /// True while the published password is still the admin password.
 pub async fn password_change_required(state: &AdminState) -> bool {
     let db = state.db.lock().await;
-    db.conn().query_row("SELECT must_change FROM admin_credentials WHERE id = 1", [], |r| r.get::<_, i64>(0)).optional().ok().flatten() == Some(1)
+    db.conn().query_row("SELECT must_change FROM admin_credentials WHERE id = 1", [], |r| r.get::<_, i64>(0)).optional().ok().flatten()
+        == Some(1)
 }
 
 /// While the published password is in use, only these signed-in routes answer: signing out, checking
@@ -217,7 +218,12 @@ pub async fn require_admin_auth(State(state): State<Arc<AdminState>>, req: Reque
     if let Some(secs) = state.auth.lockout_remaining() {
         return Err(too_many_attempts(secs));
     }
-    let key = value.to_str().ok().and_then(|v| v.split_once(' ')).filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer")).map(|(_, k)| k.trim().to_string());
+    let key = value
+        .to_str()
+        .ok()
+        .and_then(|v| v.split_once(' '))
+        .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer"))
+        .map(|(_, k)| k.trim().to_string());
     let scope = match key {
         Some(k) => {
             let db = state.db.lock().await;
@@ -240,9 +246,12 @@ pub async fn require_admin_auth(State(state): State<Arc<AdminState>>, req: Reque
 fn too_many_attempts(secs: i64) -> ApiError {
     let secs = secs.max(1) as u64;
     let wait = ((secs + 59) / 60).max(1);
-    ApiError::new(ErrorCode::TooManyAttempts, format!("Too many wrong passwords or keys. Try again in {wait} minute{}.", if wait == 1 { "" } else { "s" }))
-        .retry_after(secs)
-        .no_challenge()
+    ApiError::new(
+        ErrorCode::TooManyAttempts,
+        format!("Too many wrong passwords or keys. Try again in {wait} minute{}.", if wait == 1 { "" } else { "s" }),
+    )
+    .retry_after(secs)
+    .no_challenge()
 }
 
 // -------------------------------------------------------------------- handlers
@@ -299,7 +308,11 @@ pub struct ChangePassword {
 }
 
 /// Change the password. The current one is required; every other session is signed out.
-pub async fn change_password(State(state): State<Arc<AdminState>>, headers: HeaderMap, ApiJson(body): ApiJson<ChangePassword>) -> Result<StatusCode, Failure> {
+pub async fn change_password(
+    State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+    ApiJson(body): ApiJson<ChangePassword>,
+) -> Result<StatusCode, Failure> {
     if state.auth.lockout_remaining().is_some() {
         return Err(ApiError::code(ErrorCode::TooManyAttempts).no_challenge());
     }
@@ -312,7 +325,10 @@ pub async fn change_password(State(state): State<Arc<AdminState>>, headers: Head
     state.auth.clear_failures();
     check_new_password(&body.new)?;
     if body.new == DEFAULT_PASSWORD || body.new.trim().eq_ignore_ascii_case(ADMIN_USERNAME) || body.new == body.current {
-        return Err(err(StatusCode::BAD_REQUEST, "Choose a new password: not the published one, not the username, and not the current one."));
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "Choose a new password: not the published one, not the username, and not the current one.",
+        ));
     }
     let new = body.new;
     let hash = tokio::task::spawn_blocking(move || hash_password(&new))
@@ -323,7 +339,10 @@ pub async fn change_password(State(state): State<Arc<AdminState>>, headers: Head
     {
         let db = state.db.lock().await;
         db.conn()
-            .execute("UPDATE admin_credentials SET password_hash = ?1, updated_at = ?2, must_change = 0 WHERE id = 1", rusqlite::params![hash, crate::auth::now()])
+            .execute(
+                "UPDATE admin_credentials SET password_hash = ?1, updated_at = ?2, must_change = 0 WHERE id = 1",
+                rusqlite::params![hash, crate::auth::now()],
+            )
             .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Could not save the password."))?;
     }
     state.auth.keep_only(session_cookie(&headers).as_deref());

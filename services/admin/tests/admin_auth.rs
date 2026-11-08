@@ -90,7 +90,8 @@ async fn a_change_from_another_site_is_refused_even_with_the_header_and_a_sessio
     let t = start(PASSWORD).await;
     let cookie = t.session().await;
     let change = |site: Option<&str>| {
-        let mut r = t.http.delete(format!("http://{}/api/admin/v1/session", t.admin)).header("x-askbar-admin", "1").header("cookie", &cookie);
+        let mut r =
+            t.http.delete(format!("http://{}/api/admin/v1/session", t.admin)).header("x-askbar-admin", "1").header("cookie", &cookie);
         if let Some(s) = site {
             r = r.header("sec-fetch-site", s);
         }
@@ -104,16 +105,39 @@ async fn a_change_from_another_site_is_refused_even_with_the_header_and_a_sessio
         assert_eq!(t.admin_get("/api/admin/v1/session", Some(&cookie), None).await, 204, "nothing changed: still signed in after {site}");
     }
     // Signing in from another site is refused too (it is a change, before any session exists).
-    let r = t.http.post(format!("http://{}/api/admin/v1/session", t.admin)).header("x-askbar-admin", "1").header("sec-fetch-site", "cross-site").json(&serde_json::json!({ "password": PASSWORD })).send().await.unwrap();
+    let r = t
+        .http
+        .post(format!("http://{}/api/admin/v1/session", t.admin))
+        .header("x-askbar-admin", "1")
+        .header("sec-fetch-site", "cross-site")
+        .json(&serde_json::json!({ "password": PASSWORD }))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(r.status(), 403);
     // A read from another site is not a change, so the rule does not apply (the cookie's SameSite
     // keeps it from being sent cross-site anyway).
-    let r = t.http.get(format!("http://{}/api/admin/v1/session", t.admin)).header("cookie", &cookie).header("sec-fetch-site", "cross-site").send().await.unwrap();
+    let r = t
+        .http
+        .get(format!("http://{}/api/admin/v1/session", t.admin))
+        .header("cookie", &cookie)
+        .header("sec-fetch-site", "cross-site")
+        .send()
+        .await
+        .unwrap();
     assert_eq!(r.status(), 204);
     // The admin site's own page (same-origin) and a typed request (none) may change things.
     assert_eq!(change(Some("none")).send().await.unwrap().status(), 204);
     let cookie2 = t.session().await;
-    let r = t.http.delete(format!("http://{}/api/admin/v1/session", t.admin)).header("x-askbar-admin", "1").header("cookie", &cookie2).header("sec-fetch-site", "same-origin").send().await.unwrap();
+    let r = t
+        .http
+        .delete(format!("http://{}/api/admin/v1/session", t.admin))
+        .header("x-askbar-admin", "1")
+        .header("cookie", &cookie2)
+        .header("sec-fetch-site", "same-origin")
+        .send()
+        .await
+        .unwrap();
     assert_eq!(r.status(), 204);
 }
 
@@ -192,7 +216,14 @@ async fn state_changing_requests_need_the_admin_header() {
 async fn logout_ends_the_session() {
     let t = start(PASSWORD).await;
     let cookie = t.session().await;
-    let r = t.http.delete(format!("http://{}/api/admin/v1/session", t.admin)).header("x-askbar-admin", "1").header("cookie", &cookie).send().await.unwrap();
+    let r = t
+        .http
+        .delete(format!("http://{}/api/admin/v1/session", t.admin))
+        .header("x-askbar-admin", "1")
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
     assert_eq!(r.status(), 204);
     assert!(r.headers()[reqwest::header::SET_COOKIE].to_str().unwrap().contains("Max-Age=0"));
     assert_eq!(t.admin_get("/api/admin/v1/session", Some(&cookie), None).await, 401);
@@ -229,11 +260,20 @@ async fn every_admin_refusal_is_a_problem_with_a_code_a_sentence_and_no_bearer_c
     let url = |p: &str| format!("http://{}{p}", t.admin);
     // Signed out, and a change without the header.
     expect(t.http.get(url("/api/admin/v1/providers")).send().await.unwrap(), 401, "unauthorized").await;
-    expect(t.http.post(url("/api/admin/v1/session")).json(&serde_json::json!({ "password": "x" })).send().await.unwrap(), 403, "forbidden").await;
+    expect(t.http.post(url("/api/admin/v1/session")).json(&serde_json::json!({ "password": "x" })).send().await.unwrap(), 403, "forbidden")
+        .await;
     // Unknown path, wrong method, a body that is not JSON.
     expect(t.http.get(url("/admin/nope")).send().await.unwrap(), 404, "not_found").await;
     expect(t.http.patch(url("/api/admin/v1/session")).header("x-askbar-admin", "1").send().await.unwrap(), 405, "method_not_allowed").await;
-    let bad = t.http.post(url("/api/admin/v1/session")).header("x-askbar-admin", "1").header("content-type", "application/json").body("nope").send().await.unwrap();
+    let bad = t
+        .http
+        .post(url("/api/admin/v1/session"))
+        .header("x-askbar-admin", "1")
+        .header("content-type", "application/json")
+        .body("nope")
+        .send()
+        .await
+        .unwrap();
     expect(bad, 400, "bad_request").await;
     // A wrong password, then the lockout with its wait.
     let p = expect(t.login("wrong password").await, 401, "unauthorized").await;
@@ -292,13 +332,25 @@ async fn a_key_cannot_open_a_session_change_the_password_or_stand_in_for_one() {
     let t = start(PASSWORD).await;
     let (_, key) = make_key(&t).await;
     let url = |p: &str| format!("http://{}{p}", t.admin);
-    for (method, path) in [(reqwest::Method::GET, "/api/admin/v1/session"), (reqwest::Method::DELETE, "/api/admin/v1/session"), (reqwest::Method::PUT, "/api/admin/v1/password")] {
+    for (method, path) in [
+        (reqwest::Method::GET, "/api/admin/v1/session"),
+        (reqwest::Method::DELETE, "/api/admin/v1/session"),
+        (reqwest::Method::PUT, "/api/admin/v1/password"),
+    ] {
         let r = t.http.request(method.clone(), url(path)).bearer_auth(&key).header("x-askbar-admin", "1").send().await.unwrap();
         assert_eq!(r.status(), 401, "{method} {path} needs the person's own session");
         assert_eq!(r.json::<askbar_proto::Problem>().await.unwrap().error, "unauthorized");
     }
     // And the key is not a way to sign in.
-    let r = t.http.post(url("/api/admin/v1/session")).header("x-askbar-admin", "1").bearer_auth(&key).json(&serde_json::json!({ "password": "wrong password here" })).send().await.unwrap();
+    let r = t
+        .http
+        .post(url("/api/admin/v1/session"))
+        .header("x-askbar-admin", "1")
+        .bearer_auth(&key)
+        .json(&serde_json::json!({ "password": "wrong password here" }))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(r.status(), 401);
     assert!(!r.headers().contains_key(reqwest::header::SET_COOKIE));
 }
@@ -320,7 +372,11 @@ async fn a_wrong_or_revoked_key_is_401_and_is_not_rescued_by_a_cookie() {
     };
     assert_eq!(get(Some("askbar-admin-not-a-key"), None).await.unwrap().status(), 401);
     assert_eq!(get(Some("abt_a-client-token"), None).await.unwrap().status(), 401);
-    assert_eq!(get(Some("askbar-admin-not-a-key"), Some(&cookie)).await.unwrap().status(), 401, "a valid cookie does not rescue a wrong key");
+    assert_eq!(
+        get(Some("askbar-admin-not-a-key"), Some(&cookie)).await.unwrap().status(),
+        401,
+        "a valid cookie does not rescue a wrong key"
+    );
     assert_eq!(get(None, Some(&cookie)).await.unwrap().status(), 200, "the cookie alone still works");
     assert_eq!(get(Some(&key), None).await.unwrap().status(), 200);
     askbar_admin::api_key::revoke(t.state.db.lock().await.conn(), &id, askbar_admin::auth::now()).unwrap();

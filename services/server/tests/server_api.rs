@@ -1,4 +1,4 @@
-use askbar_server::{server_api, secrets::Secrets, AppState};
+use askbar_server::{secrets::Secrets, server_api, AppState};
 use sha2::{Digest, Sha256};
 
 const TOKEN: &str = "mgt_this-is-the-raw-server-token";
@@ -134,7 +134,12 @@ fn snapshot() -> Snapshot {
         display: DisplaySettings::default(),
         user_display_defaults: [("u1".to_string(), DisplaySettings { width: 900, ..Default::default() })].into(),
         users: vec![askbar_proto::SnapshotUser { id: "u1".into(), name: "owner".into() }],
-        pair_codes: vec![SnapshotPairCode { hash: "ab".repeat(32), user_id: "u1".into(), client_name: "laptop".into(), expires_at: 4_000_000_000 }],
+        pair_codes: vec![SnapshotPairCode {
+            hash: "ab".repeat(32),
+            user_id: "u1".into(),
+            client_name: "laptop".into(),
+            expires_at: 4_000_000_000,
+        }],
         revoked_client_ids: vec!["d9".into()],
         budget: Budget { daily_tokens: Some(1000), monthly_tokens: None },
         kill_switch: false,
@@ -202,7 +207,17 @@ async fn a_pushed_snapshot_is_stored_and_the_version_goes_up() {
 #[tokio::test]
 async fn status_reports_the_config_version_and_a_boot_id_that_changes_on_restart() {
     let s = start_with_state().await;
-    let get = || async { s.t.http.get(format!("{}/api/server/v1/status", s.t.url)).bearer_auth(TOKEN).send().await.unwrap().json::<serde_json::Value>().await.unwrap() };
+    let get = || async {
+        s.t.http
+            .get(format!("{}/api/server/v1/status", s.t.url))
+            .bearer_auth(TOKEN)
+            .send()
+            .await
+            .unwrap()
+            .json::<serde_json::Value>()
+            .await
+            .unwrap()
+    };
     let before = get().await;
     assert_eq!(before["config_version"], json!(null), "nothing pushed yet");
     let boot = before["boot_id"].as_str().unwrap().to_string();
@@ -222,7 +237,8 @@ async fn restart_answers_202_with_the_boot_id_then_stops_and_needs_the_token() {
     let url = format!("{}/api/server/v1/restart", s.t.url);
     let r = s.t.http.post(&url).bearer_auth(TOKEN).send().await.unwrap();
     assert_eq!(r.status(), 500, "not set up in this process (only main sets it)");
-    let (stopped, exited) = (std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)));
+    let (stopped, exited) =
+        (std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)));
     let (st, ex) = (stopped.clone(), exited.clone());
     let _ = s.state.restarter.set(askbar_service::restart::Restarter::for_tests(
         s.state.boot_id.clone(),
@@ -291,9 +307,14 @@ async fn fake_llm() -> String {
         post(|headers: HeaderMap| async move {
             let auth = headers.get("authorization").and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
             if auth == format!("Bearer {KEY}") {
-                ([("content-type", "text/event-stream")], "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n").into_response()
+                ([("content-type", "text/event-stream")], "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n")
+                    .into_response()
             } else {
-                (axum::http::StatusCode::UNAUTHORIZED, format!("{{\"error\":{{\"message\":\"Incorrect API key provided: {}\"}}}}", auth.trim_start_matches("Bearer "))).into_response()
+                (
+                    axum::http::StatusCode::UNAUTHORIZED,
+                    format!("{{\"error\":{{\"message\":\"Incorrect API key provided: {}\"}}}}", auth.trim_start_matches("Bearer ")),
+                )
+                    .into_response()
             }
         }),
     );
@@ -338,7 +359,8 @@ async fn a_key_is_stored_encrypted_and_never_returned() {
     let (st, _) = s.call(M::PUT, "/api/server/v1/providers/p1/key", Some(json!({ "key": "sk-second-key-456" }))).await;
     assert_eq!(st, 204);
     assert_eq!(s.state.secrets().decrypt(&s.stored("p1").unwrap()).unwrap(), "sk-second-key-456");
-    let rows: i64 = s.state.db.lock().unwrap().conn().query_row("SELECT COUNT(*) FROM providers WHERE id = 'p1'", [], |r| r.get(0)).unwrap();
+    let rows: i64 =
+        s.state.db.lock().unwrap().conn().query_row("SELECT COUNT(*) FROM providers WHERE id = 'p1'", [], |r| r.get(0)).unwrap();
     assert_eq!(rows, 1);
 
     // Errors do not echo the key either.
@@ -353,7 +375,9 @@ async fn a_key_is_stored_encrypted_and_never_returned() {
     }
     assert!(s.stored("unknown").is_none());
     // There is no way to read it back.
-    for (m, p) in [(M::GET, "/api/server/v1/providers/p1/key"), (M::GET, "/api/server/v1/providers/p1"), (M::GET, "/api/server/v1/providers")] {
+    for (m, p) in
+        [(M::GET, "/api/server/v1/providers/p1/key"), (M::GET, "/api/server/v1/providers/p1"), (M::GET, "/api/server/v1/providers")]
+    {
         let (st, text) = s.call(m, p, None).await;
         assert!(st == 404 || st == 405, "{p}: {st}");
         assert!(!text.contains("sk-"));
@@ -409,7 +433,9 @@ async fn clients_and_usage_are_listed_over_the_server_api() {
         db.add_message(&user, &c, "user", "hi").unwrap();
         db.add_message(&user, &c, "assistant", "hello").unwrap();
         db.conn().execute("UPDATE clients SET revoked_at = 5 WHERE name = 'Phone'", []).unwrap();
-        db.conn().execute("INSERT INTO token_usage (id, user_id, tokens_in, tokens_out, created_at) VALUES ('t1', ?1, 10, 20, 0)", [&user]).unwrap();
+        db.conn()
+            .execute("INSERT INTO token_usage (id, user_id, tokens_in, tokens_out, created_at) VALUES ('t1', ?1, 10, 20, 0)", [&user])
+            .unwrap();
         user
     };
     let _ = user;
@@ -485,7 +511,11 @@ async fn the_backup_has_the_data_and_none_of_the_secrets() {
     assert_eq!(doc["providers"].as_array().unwrap().len(), 2, "the rest of the snapshot stays");
     let _ = std::fs::remove_dir_all(&dir);
     // The live database is untouched by taking a backup.
-    assert_eq!(askbar_server::snapshot::current(&s.state.db.lock().unwrap()).unwrap().unwrap().pair_codes.len(), 2, "both listed codes are still there");
+    assert_eq!(
+        askbar_server::snapshot::current(&s.state.db.lock().unwrap()).unwrap().unwrap().pair_codes.len(),
+        2,
+        "both listed codes are still there"
+    );
 }
 
 #[tokio::test]
@@ -514,7 +544,11 @@ async fn users_are_listed_and_a_provider_dropped_from_the_snapshot_loses_its_key
 async fn taking_a_backup_leaves_no_temporary_file_behind() {
     let s = start_with_state().await;
     let leftovers = || -> usize {
-        std::fs::read_dir(std::env::temp_dir()).unwrap().filter_map(Result::ok).filter(|e| e.file_name().to_string_lossy().starts_with("askbar-backup-")).count()
+        std::fs::read_dir(std::env::temp_dir())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|e| e.file_name().to_string_lossy().starts_with("askbar-backup-"))
+            .count()
     };
     let before = leftovers();
     for _ in 0..3 {
@@ -539,7 +573,8 @@ async fn a_generation_with_the_mocks_usage_adds_to_the_overview_totals() {
     use std::process::{Command, Stdio};
     let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
     let script = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/e2e/mock_llm.py");
-    let mut child = Command::new("python3").args(["-u", script, &port.to_string()]).stdout(Stdio::piped()).spawn().expect("python3 is needed");
+    let mut child =
+        Command::new("python3").args(["-u", script, &port.to_string()]).stdout(Stdio::piped()).spawn().expect("python3 is needed");
     let mut out = BufReader::new(child.stdout.take().unwrap());
     let mut first = String::new();
     out.read_line(&mut first).unwrap(); // "mock LLM on ..."
@@ -547,7 +582,10 @@ async fn a_generation_with_the_mocks_usage_adds_to_the_overview_totals() {
     let s = start_with_state().await;
     let (user, client) = {
         let db = s.state.db.lock().unwrap();
-        askbar_server::testing::add_provider(&db, askbar_server::testing::provider("p1", "mock", &format!("http://127.0.0.1:{port}/v1"), "m"));
+        askbar_server::testing::add_provider(
+            &db,
+            askbar_server::testing::provider("p1", "mock", &format!("http://127.0.0.1:{port}/v1"), "m"),
+        );
         askbar_server::testing::store_key(&db, &s.state.secrets(), "p1", "sk-test");
         let user: String = db.conn().query_row("SELECT id FROM users", [], |r| r.get(0)).unwrap();
         let code = askbar_server::testing::add_pair_code(&db, &user, "laptop");
@@ -607,7 +645,8 @@ async fn audit_stack() -> AuditStack {
     use std::process::{Command, Stdio};
     let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
     let script = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/e2e/mock_llm.py");
-    let mut child = Command::new("python3").args(["-u", script, &port.to_string()]).stdout(Stdio::piped()).spawn().expect("python3 is needed");
+    let mut child =
+        Command::new("python3").args(["-u", script, &port.to_string()]).stdout(Stdio::piped()).spawn().expect("python3 is needed");
     let mut out = BufReader::new(child.stdout.take().unwrap());
     let mut line = String::new();
     out.read_line(&mut line).unwrap();
@@ -763,7 +802,8 @@ async fn sealed_payloads_are_served_as_ciphertext_only_and_unknown_spans_are_404
     let id = a.chat("SECRET-WORD tell me").await;
     let (_, body) = a.get(&format!("/api/server/v1/audit/traces/{id}")).await;
     let spans: serde_json::Value = serde_json::from_str(&body).unwrap();
-    let span_of = |kind: &str| spans["spans"].as_array().unwrap().iter().find(|s| s["kind"] == kind).unwrap()["id"].as_str().unwrap().to_string();
+    let span_of =
+        |kind: &str| spans["spans"].as_array().unwrap().iter().find(|s| s["kind"] == kind).unwrap()["id"].as_str().unwrap().to_string();
 
     let (st, body) = a.get(&format!("/api/server/v1/audit/payloads/{}", span_of("attempt"))).await;
     assert_eq!(st, 200);
@@ -814,7 +854,11 @@ async fn cost_appears_in_traces_and_one_trace_computed_from_the_current_prices()
     let v: serde_json::Value = serde_json::from_str(&body).unwrap();
     let cost_of = |id: &str| v["traces"].as_array().unwrap().iter().find(|t| t["trace_id"] == id).unwrap()["cost"].clone();
     assert!(approx(&cost_of(&plain), (100.0 * 2.0 + 50.0 * 10.0) / 1e6), "{}", cost_of(&plain));
-    assert!(approx(&cost_of(&cached), (36.0 * 2.0 + 64.0 * 0.5 + 50.0 * 10.0) / 1e6), "uncached input, cached input and output: {}", cost_of(&cached));
+    assert!(
+        approx(&cost_of(&cached), (36.0 * 2.0 + 64.0 * 0.5 + 50.0 * 10.0) / 1e6),
+        "uncached input, cached input and output: {}",
+        cost_of(&cached)
+    );
     assert!(cost_of(&failed).is_null(), "nothing was used, so there is no cost to state");
 
     let (_, body) = a.get(&format!("/api/server/v1/audit/traces/{plain}")).await;
@@ -886,23 +930,50 @@ async fn server_api_failures_are_problems_with_a_code_and_a_sentence() {
     let r = t.http.get(url("/api/server/v1/health")).send().await.unwrap();
     assert_eq!(r.headers()["www-authenticate"], "Bearer");
     check(r, 401, "unauthorized").await;
-    check(t.http.get(url("/api/server/v1/health")).header("authorization", "Bearer wrong").send().await.unwrap(), 401, "unauthorized").await;
+    check(t.http.get(url("/api/server/v1/health")).header("authorization", "Bearer wrong").send().await.unwrap(), 401, "unauthorized")
+        .await;
     // Unknown route and wrong method (after the token check).
     check(t.http.get(url("/api/server/v1/nope")).header("authorization", &auth).send().await.unwrap(), 404, "not_found").await;
-    check(t.http.delete(url("/api/server/v1/health")).header("authorization", &auth).send().await.unwrap(), 405, "method_not_allowed").await;
+    check(t.http.delete(url("/api/server/v1/health")).header("authorization", &auth).send().await.unwrap(), 405, "method_not_allowed")
+        .await;
     // A body that is not JSON.
     check(
-        t.http.put(url("/api/server/v1/config")).header("authorization", &auth).header("content-type", "application/json").body("nope").send().await.unwrap(),
+        t.http
+            .put(url("/api/server/v1/config"))
+            .header("authorization", &auth)
+            .header("content-type", "application/json")
+            .body("nope")
+            .send()
+            .await
+            .unwrap(),
         400,
         "bad_request",
     )
     .await;
     // A snapshot the server refuses says why, in detail.
-    let r = t.http.put(url("/api/server/v1/config")).header("authorization", &auth).json(&serde_json::json!({ "audit_retention_days": 3 })).send().await.unwrap();
+    let r = t
+        .http
+        .put(url("/api/server/v1/config"))
+        .header("authorization", &auth)
+        .json(&serde_json::json!({ "audit_retention_days": 3 }))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(r.status(), 400);
     let p: askbar_proto::Problem = r.json().await.unwrap();
     assert_eq!(p.error, "bad_request");
     assert!(p.detail.contains("at least 7"), "{}", p.detail);
     // Unknown provider key target, and the audit endpoints with no store recording.
-    check(t.http.put(url("/api/server/v1/providers/nope/key")).header("authorization", &auth).json(&serde_json::json!({ "key": "k" })).send().await.unwrap(), 404, "not_found").await;
+    check(
+        t.http
+            .put(url("/api/server/v1/providers/nope/key"))
+            .header("authorization", &auth)
+            .json(&serde_json::json!({ "key": "k" }))
+            .send()
+            .await
+            .unwrap(),
+        404,
+        "not_found",
+    )
+    .await;
 }

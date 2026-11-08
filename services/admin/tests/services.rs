@@ -5,7 +5,12 @@ mod common;
 
 use askbar_admin::server_link::ServerLink;
 use askbar_admin::{web, AdminDb, AdminState};
-use axum::{extract::State, http::StatusCode, routing::{get, post}, Json, Router};
+use axum::{
+    extract::State,
+    http::StatusCode,
+    routing::{get, post},
+    Json, Router,
+};
 use common::*;
 use reqwest::Method as M;
 use serde_json::{json, Value};
@@ -18,10 +23,20 @@ async fn the_four_services_are_listed_from_the_services_themselves() {
     let t = start(true).await;
     let (s, v) = t.call(M::GET, "/api/admin/v1/services", json!(null)).await;
     assert_eq!(s, 200, "{v}");
-    let by: Vec<(String, String)> = v["services"].as_array().unwrap().iter().map(|c| (c["name"].as_str().unwrap().into(), c["state"].as_str().unwrap().into())).collect();
+    let by: Vec<(String, String)> = v["services"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| (c["name"].as_str().unwrap().into(), c["state"].as_str().unwrap().into()))
+        .collect();
     assert_eq!(
         by,
-        [("server".into(), "running".into()), ("admin".into(), "running".into()), ("caddy".into(), "running".into()), ("cpa".into(), "unreachable".into())],
+        [
+            ("server".into(), "running".into()),
+            ("admin".into(), "running".into()),
+            ("caddy".into(), "running".into()),
+            ("cpa".into(), "unreachable".into())
+        ],
         "the server answers /status, Caddy its socket; CLIProxyAPI is not set up in this test"
     );
     assert!(v["services"][0]["status"].as_str().unwrap().contains("not received its configuration"), "{v}");
@@ -49,7 +64,8 @@ async fn status(State(f): State<Arc<FakeServer>>) -> Json<Value> {
 async fn restart(State(f): State<Arc<FakeServer>>) -> Result<(StatusCode, Json<Value>), askbar_proto::http::ApiError> {
     f.asked.fetch_add(1, Ordering::SeqCst);
     if f.refuse {
-        return Err(askbar_proto::http::ApiError::new(askbar_proto::problem::ErrorCode::TooManyAttempts, "This service started 3s ago.").retry_after(27));
+        return Err(askbar_proto::http::ApiError::new(askbar_proto::problem::ErrorCode::TooManyAttempts, "This service started 3s ago.")
+            .retry_after(27));
     }
     let f2 = f.clone();
     tokio::spawn(async move {
@@ -61,19 +77,27 @@ async fn restart(State(f): State<Arc<FakeServer>>) -> Result<(StatusCode, Json<V
 
 async fn admin_with_fake_server(refuse: bool) -> (String, String, Arc<FakeServer>, Arc<AdminState>) {
     let fake = Arc::new(FakeServer { refuse, ..Default::default() });
-    let app = Router::new().route("/api/server/v1/status", get(status)).route("/api/server/v1/restart", post(restart)).with_state(fake.clone());
+    let app =
+        Router::new().route("/api/server/v1/status", get(status)).route("/api/server/v1/restart", post(restart)).with_state(fake.clone());
     let url = serve(app).await;
     let db = AdminDb::open_in_memory().unwrap();
     web::init_password(&db, PW).unwrap();
     let admin = AdminState::with_server(db, ServerLink::new(&url, "mgt_t".into()));
     let adm = serve(askbar_admin::router(admin.clone())).await;
-    let r = reqwest::Client::new().post(format!("{adm}/api/admin/v1/session")).header("x-askbar-admin", "1").json(&json!({ "password": PW })).send().await.unwrap();
+    let r = reqwest::Client::new()
+        .post(format!("{adm}/api/admin/v1/session"))
+        .header("x-askbar-admin", "1")
+        .json(&json!({ "password": PW }))
+        .send()
+        .await
+        .unwrap();
     let cookie = r.headers()["set-cookie"].to_str().unwrap().split(';').next().unwrap().to_string();
     (adm, cookie, fake, admin)
 }
 
 async fn post_as(adm: &str, cookie: &str, path: &str) -> (u16, Value) {
-    let r = reqwest::Client::new().post(format!("{adm}{path}")).header("x-askbar-admin", "1").header("cookie", cookie).send().await.unwrap();
+    let r =
+        reqwest::Client::new().post(format!("{adm}{path}")).header("x-askbar-admin", "1").header("cookie", cookie).send().await.unwrap();
     (r.status().as_u16(), r.json().await.unwrap_or(json!(null)))
 }
 
@@ -95,7 +119,8 @@ async fn the_servers_cooldown_refusal_is_passed_on() {
     assert_eq!((s, v["error"].as_str()), (429, Some("too_many_attempts")), "{v}");
     // The attempt is on record, and marked as not done.
     let db = admin.db.lock().await;
-    let (service, action, ok): (String, String, i64) = db.conn().query_row("SELECT service, action, ok FROM service_actions", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap();
+    let (service, action, ok): (String, String, i64) =
+        db.conn().query_row("SELECT service, action, ok FROM service_actions", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap();
     assert_eq!((service.as_str(), action.as_str(), ok), ("server", "restart", 0));
 }
 
@@ -104,7 +129,13 @@ async fn the_admin_restarts_itself_by_answering_and_exiting() {
     let t = start(true).await;
     let exited = Arc::new(AtomicBool::new(false));
     let e = exited.clone();
-    let _ = t.admin.restarter.set(askbar_service::restart::Restarter::for_tests(askbar_service::status::BootId::new(), Duration::ZERO, Duration::from_secs(1), || {}, move || e.store(true, Ordering::SeqCst)));
+    let _ = t.admin.restarter.set(askbar_service::restart::Restarter::for_tests(
+        askbar_service::status::BootId::new(),
+        Duration::ZERO,
+        Duration::from_secs(1),
+        || {},
+        move || e.store(true, Ordering::SeqCst),
+    ));
     let (s, v) = t.call(M::POST, "/api/admin/v1/services/admin/restart", json!(null)).await;
     assert_eq!((s, v["state"].as_str()), (202, Some("restarting")), "{v}");
     tokio::time::sleep(Duration::from_millis(500)).await;
@@ -119,7 +150,10 @@ async fn caddy_is_restarted_by_pushing_its_configuration_again() {
     assert_eq!((s, v["state"].as_str()), (200, Some("running")), "{v}");
     assert_eq!(t.fake.loads.lock().unwrap().len(), before + 1, "one config push");
     let (_, v) = t.call(M::GET, "/api/admin/v1/services", json!(null)).await;
-    assert_eq!((v["recent"][0]["service"].as_str(), v["recent"][0]["action"].as_str(), v["recent"][0]["ok"].clone()), (Some("caddy"), Some("restart"), json!(true)));
+    assert_eq!(
+        (v["recent"][0]["service"].as_str(), v["recent"][0]["action"].as_str(), v["recent"][0]["ok"].clone()),
+        (Some("caddy"), Some("restart"), json!(true))
+    );
 }
 
 #[tokio::test]
@@ -139,10 +173,21 @@ async fn an_admin_api_key_cannot_restart_services() {
     let (_, k) = t.call(M::POST, "/api/admin/v1/keys", json!({ "name": "script" })).await;
     let key = k["key"].as_str().unwrap();
     for (m, path) in [(M::GET, "/api/admin/v1/services"), (M::POST, "/api/admin/v1/services/server/restart")] {
-        let r = reqwest::Client::new().request(m, format!("{}{path}", t.adm)).bearer_auth(key).header("X-Askbar-Admin", "1").send().await.unwrap();
+        let r = reqwest::Client::new()
+            .request(m, format!("{}{path}", t.adm))
+            .bearer_auth(key)
+            .header("X-Askbar-Admin", "1")
+            .send()
+            .await
+            .unwrap();
         assert_eq!(r.status(), 401, "{path}");
     }
-    let r = reqwest::Client::new().post(format!("{}/api/admin/v1/services/server/restart", t.adm)).header("X-Askbar-Admin", "1").send().await.unwrap();
+    let r = reqwest::Client::new()
+        .post(format!("{}/api/admin/v1/services/server/restart", t.adm))
+        .header("X-Askbar-Admin", "1")
+        .send()
+        .await
+        .unwrap();
     assert_eq!(r.status(), 401, "and no session at all");
 }
 

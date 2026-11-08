@@ -1,7 +1,7 @@
 //! Helpers for reading server-side configuration: the snapshot, and the provider keys stored beside it.
 
-use crate::secrets::Secrets;
 use crate::llm::{Provider, ProviderKind, DEFAULT_SYSTEM_PROMPT};
+use crate::secrets::Secrets;
 use crate::Db;
 use rusqlite::OptionalExtension;
 
@@ -28,7 +28,5 @@ pub fn load_provider(db: &Db, secrets: &Secrets, id: &str) -> rusqlite::Result<O
 
 /// The system prompt chats use: the snapshot's, else the built-in one.
 pub fn chat_system_prompt(db: &Db) -> rusqlite::Result<String> {
-    Ok(crate::snapshot::current(db)?
-        .and_then(|s| s.system_prompt)
-        .unwrap_or_else(|| DEFAULT_SYSTEM_PROMPT.to_string()))
+    Ok(crate::snapshot::current(db)?.and_then(|s| s.system_prompt).unwrap_or_else(|| DEFAULT_SYSTEM_PROMPT.to_string()))
 }

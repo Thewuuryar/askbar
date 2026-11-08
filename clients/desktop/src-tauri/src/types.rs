@@ -15,7 +15,12 @@ pub struct Settings {
 impl Settings {
     /// Used when the real settings could not be read, so the window can still open.
     pub fn builtin() -> Settings {
-        Settings { ui: Ui::default(), hotkey: crate::client_config::ClientConfig::default().hotkey, provider: String::new(), model: String::new() }
+        Settings {
+            ui: Ui::default(),
+            hotkey: crate::client_config::ClientConfig::default().hotkey,
+            provider: String::new(),
+            model: String::new(),
+        }
     }
 }
 
@@ -24,10 +29,19 @@ impl Settings {
 pub enum StreamEvent {
     /// `generation_id` names the server-side reply (to resume or cancel it); `queued` means
     /// another reply in this conversation is still running and this one waits its turn.
-    Started { conversation_id: String, generation_id: Option<String>, queued: bool },
+    Started {
+        conversation_id: String,
+        generation_id: Option<String>,
+        queued: bool,
+    },
     /// Which provider is answering; sent when the server routes to another than the one chosen.
-    Provider { id: String, name: String },
-    Delta { text: String },
+    Provider {
+        id: String,
+        name: String,
+    },
+    Delta {
+        text: String,
+    },
     Done,
     Cancelled,
     /// `kind` names a refusal the window can act on (`queue_full`, `budget_exceeded`, `kill_switch`,

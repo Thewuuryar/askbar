@@ -6,7 +6,6 @@ use crate::{auth, ids, snapshot, Db};
 use askbar_proto::{Budget, DisplaySettings, Snapshot, SnapshotPairCode, SnapshotProvider};
 use sha2::{Digest, Sha256};
 
-
 pub const TEST_MASTER_KEY: &str = "0123456789abcdef0123456789abcdef";
 
 /// The secret half of the test audit key (the tests that read what was sealed use it).
@@ -93,7 +92,12 @@ pub fn add_pair_code_expiring(db: &Db, user_id: &str, client_name: &str, ttl_sec
     let code = ids::new_id() + &ids::new_id();
     let hash: String = Sha256::digest(code.as_bytes()).iter().map(|b| format!("{b:02x}")).collect();
     update_snapshot(db, |s| {
-        s.pair_codes.push(SnapshotPairCode { hash, user_id: user_id.into(), client_name: client_name.into(), expires_at: auth::now() + ttl_secs })
+        s.pair_codes.push(SnapshotPairCode {
+            hash,
+            user_id: user_id.into(),
+            client_name: client_name.into(),
+            expires_at: auth::now() + ttl_secs,
+        })
     });
     code
 }
@@ -146,11 +150,8 @@ mod tests {
 
     #[test]
     fn the_timeout_override_can_be_set_read_back_and_cleared() {
-        let state = crate::AppState::new(
-            Db::open_in_memory().unwrap(),
-            crate::secrets::Secrets::new(TEST_MASTER_KEY).unwrap(),
-            crate::MIN_CLIENT,
-        );
+        let state =
+            crate::AppState::new(Db::open_in_memory().unwrap(), crate::secrets::Secrets::new(TEST_MASTER_KEY).unwrap(), crate::MIN_CLIENT);
         assert_eq!(state.generation_timeout_override(), None);
         override_generation_timeout(&state, Duration::from_secs(2));
         assert_eq!(state.generation_timeout_override(), Some(Duration::from_secs(2)));

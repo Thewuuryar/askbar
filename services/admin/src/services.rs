@@ -103,7 +103,8 @@ pub async fn restart(State(state): St, Path(name): Path<String>) -> Result<(Stat
             q.pop_front();
         }
         if q.len() >= MAX_ACTIONS {
-            return Err(ApiError::new(ErrorCode::TooManyAttempts, "Too many service actions in a minute. Wait a little and try again.").retry_after(WINDOW_SECS as u64));
+            return Err(ApiError::new(ErrorCode::TooManyAttempts, "Too many service actions in a minute. Wait a little and try again.")
+                .retry_after(WINDOW_SECS as u64));
         }
         q.push_back(now);
     }
@@ -133,13 +134,18 @@ pub async fn restart(State(state): St, Path(name): Path<String>) -> Result<(Stat
 async fn restart_server(state: &Arc<AdminState>) -> Result<(StatusCode, Json<Value>), Failure> {
     let link = state.server.clone().ok_or_else(|| unreachable("No link to the server is set up."))?;
     let path = askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, askbar_service::routes::RESTART);
-    let (status, body) = link.request(reqwest::Method::POST, &path, None).await.map_err(|_| unreachable("The server did not answer, so it could not be asked to restart."))?;
+    let (status, body) = link
+        .request(reqwest::Method::POST, &path, None)
+        .await
+        .map_err(|_| unreachable("The server did not answer, so it could not be asked to restart."))?;
     if status != 202 {
         let p: Option<askbar_proto::Problem> = serde_json::from_slice(&body).ok();
         let detail = p.as_ref().map(|p| p.detail.clone()).unwrap_or_else(|| format!("The server answered {status}."));
         return Err(match p.as_ref().and_then(|p| p.code()) {
             // The server's cooldown (its first 30 seconds): pass the refusal on.
-            Some(ErrorCode::TooManyAttempts) => ApiError::new(ErrorCode::TooManyAttempts, detail).retry_after(askbar_service::restart::COOLDOWN.as_secs()),
+            Some(ErrorCode::TooManyAttempts) => {
+                ApiError::new(ErrorCode::TooManyAttempts, detail).retry_after(askbar_service::restart::COOLDOWN.as_secs())
+            }
             _ => unreachable(&detail),
         });
     }
@@ -163,7 +169,12 @@ async fn restart_server(state: &Arc<AdminState>) -> Result<(StatusCode, Json<Val
 async fn restart_admin(state: &Arc<AdminState>) -> Result<(StatusCode, Json<Value>), Failure> {
     let r = state.restarter.get().cloned().ok_or_else(|| ApiError::new(ErrorCode::Internal, "Restart is not set up in this process."))?;
     let _accepted = askbar_service::restart::handler(State(r)).await?;
-    Ok((StatusCode::ACCEPTED, Json(json!({ "name": "admin", "state": "restarting", "status": "Restarting; this page reconnects in a few seconds.", "health": null }))))
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(
+            json!({ "name": "admin", "state": "restarting", "status": "Restarting; this page reconnects in a few seconds.", "health": null }),
+        ),
+    ))
 }
 
 /// Caddy has no restart endpoint (ADR 0005): push its configuration again, which it applies live.

@@ -51,8 +51,22 @@ impl Restarter {
 
     /// Tests only: other limits, and something other than exiting the process.
     #[doc(hidden)]
-    pub fn for_tests(boot_id: BootId, cooldown: Duration, grace: Duration, on_stop: impl Fn() + Send + Sync + 'static, exit: impl Fn() + Send + Sync + 'static) -> Restarter {
-        Restarter { started: Instant::now(), boot_id, cooldown, grace, on_stop: Arc::new(on_stop), exit: Arc::new(exit), asked: Arc::new(AtomicBool::new(false)) }
+    pub fn for_tests(
+        boot_id: BootId,
+        cooldown: Duration,
+        grace: Duration,
+        on_stop: impl Fn() + Send + Sync + 'static,
+        exit: impl Fn() + Send + Sync + 'static,
+    ) -> Restarter {
+        Restarter {
+            started: Instant::now(),
+            boot_id,
+            cooldown,
+            grace,
+            on_stop: Arc::new(on_stop),
+            exit: Arc::new(exit),
+            asked: Arc::new(AtomicBool::new(false)),
+        }
     }
 
     /// Stop now (a refused cooldown aside): run `on_stop` for at most `grace`, then exit. Returns
@@ -84,7 +98,11 @@ pub async fn handler(State(r): State<Restarter>) -> Result<(StatusCode, Json<ser
     let up = r.started.elapsed();
     if up < r.cooldown {
         let wait = (r.cooldown - up).as_secs().max(1);
-        return Err(ApiError::new(ErrorCode::TooManyAttempts, format!("This service started {}s ago. Restart it again in {wait}s.", up.as_secs())).retry_after(wait));
+        return Err(ApiError::new(
+            ErrorCode::TooManyAttempts,
+            format!("This service started {}s ago. Restart it again in {wait}s.", up.as_secs()),
+        )
+        .retry_after(wait));
     }
     eprintln!("restart: asked to restart; stopping (boot {})", r.boot_id.as_str());
     r.stop_soon();
@@ -136,7 +154,17 @@ mod tests {
         let (stopped, exited) = (Arc::new(AtomicU32::new(0)), Arc::new(AtomicU32::new(0)));
         let (s, e) = (stopped.clone(), exited.clone());
         let boot = BootId::new();
-        let r = Restarter::for_tests(boot.clone(), Duration::from_millis(300), Duration::from_secs(2), move || { s.fetch_add(1, Ordering::SeqCst); }, move || { e.fetch_add(1, Ordering::SeqCst); });
+        let r = Restarter::for_tests(
+            boot.clone(),
+            Duration::from_millis(300),
+            Duration::from_secs(2),
+            move || {
+                s.fetch_add(1, Ordering::SeqCst);
+            },
+            move || {
+                e.fetch_add(1, Ordering::SeqCst);
+            },
+        );
         let url = serve(r).await;
         let http = reqwest::Client::new();
         let refused = http.post(format!("{url}/restart")).send().await.unwrap();
@@ -157,7 +185,15 @@ mod tests {
     fn a_stop_that_hangs_is_cut_off_at_the_limit() {
         let exited = Arc::new(AtomicU32::new(0));
         let e = exited.clone();
-        let r = Restarter::for_tests(BootId::new(), Duration::ZERO, Duration::from_millis(300), || std::thread::sleep(Duration::from_secs(60)), move || { e.fetch_add(1, Ordering::SeqCst); });
+        let r = Restarter::for_tests(
+            BootId::new(),
+            Duration::ZERO,
+            Duration::from_millis(300),
+            || std::thread::sleep(Duration::from_secs(60)),
+            move || {
+                e.fetch_add(1, Ordering::SeqCst);
+            },
+        );
         let t = Instant::now();
         r.stop_soon();
         while exited.load(Ordering::SeqCst) == 0 {

@@ -70,7 +70,8 @@ async fn endpoints_return_scoped_data() {
     assert_eq!(t.req(reqwest::Method::DELETE, &format!("/api/client/v1/conversations/{c2}")).send().await.unwrap().status(), 404);
     assert_eq!(t.req(reqwest::Method::DELETE, &format!("/api/client/v1/conversations/{c1}")).send().await.unwrap().status(), 204);
     assert_eq!(t.get_text(&format!("/api/client/v1/conversations/{c1}")).await.0, 404);
-    let n: i64 = t.state.db.lock().unwrap().conn().query_row("SELECT COUNT(*) FROM messages WHERE user_id = 'U2'", [], |r| r.get(0)).unwrap();
+    let n: i64 =
+        t.state.db.lock().unwrap().conn().query_row("SELECT COUNT(*) FROM messages WHERE user_id = 'U2'", [], |r| r.get(0)).unwrap();
     assert_eq!(n, 1, "other user's rows untouched");
 
     let providers: Vec<ProviderInfo> = serde_json::from_str(&t.get_text("/api/client/v1/providers").await.1).unwrap();
@@ -101,10 +102,21 @@ async fn no_response_contains_provider_key_material() {
     let t = start().await;
     let c1 = add_conversation(&t.state, &t.user, "c", &[("user", "hi")]);
     let enc: Vec<u8> = t.state.db.lock().unwrap().conn().query_row("SELECT api_key_enc FROM providers", [], |r| r.get(0)).unwrap();
-    use base64::{engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD}, Engine};
+    use base64::{
+        engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
+        Engine,
+    };
     let hex: String = enc.iter().map(|b| format!("{b:02x}")).collect();
     let needles = [PROVIDER_SECRET.to_string(), STANDARD.encode(&enc), URL_SAFE_NO_PAD.encode(&enc), hex, "api_key".to_string()];
-    for p in ["/api/client/v1/health", "/api/client/v1/me", "/api/client/v1/providers", "/api/client/v1/conversations", &format!("/api/client/v1/conversations/{c1}"), "/api/client/v1/conversations/nope", "/api/client/v1/settings"] {
+    for p in [
+        "/api/client/v1/health",
+        "/api/client/v1/me",
+        "/api/client/v1/providers",
+        "/api/client/v1/conversations",
+        &format!("/api/client/v1/conversations/{c1}"),
+        "/api/client/v1/conversations/nope",
+        "/api/client/v1/settings",
+    ] {
         let r = t.req(reqwest::Method::GET, p).send().await.unwrap();
         let headers = format!("{:?}", r.headers());
         let body = r.text().await.unwrap();
@@ -168,7 +180,8 @@ async fn prefs_are_shared_by_a_users_clients_and_not_by_other_users() {
         (auth::redeem_pair_code(&db, &c1).unwrap().unwrap(), auth::redeem_pair_code(&db, &c2).unwrap().unwrap())
     };
 
-    let put = t.req(reqwest::Method::PUT, "/api/client/v1/me/prefs").json(&Prefs { active_provider_id: Some("p1".into()) }).send().await.unwrap();
+    let put =
+        t.req(reqwest::Method::PUT, "/api/client/v1/me/prefs").json(&Prefs { active_provider_id: Some("p1".into()) }).send().await.unwrap();
     assert_eq!(put.status(), 200);
     for token in [t.token.clone(), second] {
         let p: Prefs = serde_json::from_str(&get(token).await.text().await.unwrap()).unwrap();
@@ -178,7 +191,12 @@ async fn prefs_are_shared_by_a_users_clients_and_not_by_other_users() {
     assert_eq!(p, Prefs::default(), "another user does not");
 
     // An unknown provider is refused and changes nothing; null clears the choice.
-    let bad = t.req(reqwest::Method::PUT, "/api/client/v1/me/prefs").json(&Prefs { active_provider_id: Some("nope".into()) }).send().await.unwrap();
+    let bad = t
+        .req(reqwest::Method::PUT, "/api/client/v1/me/prefs")
+        .json(&Prefs { active_provider_id: Some("nope".into()) })
+        .send()
+        .await
+        .unwrap();
     assert_eq!(bad.status(), 404);
     let still: Prefs = serde_json::from_str(&get(t.token.clone()).await.text().await.unwrap()).unwrap();
     assert_eq!(still.active_provider_id.as_deref(), Some("p1"));
@@ -211,7 +229,12 @@ async fn read_api_failures_are_problems_with_a_code_and_a_sentence() {
         assert_eq!((p.error.as_str(), p.status), (code, status), "{method} {path}");
         assert!(!p.detail.is_empty());
     }
-    let r = t.req(reqwest::Method::PUT, "/api/client/v1/me/prefs").json(&Prefs { active_provider_id: Some("no-such-provider".into()) }).send().await.unwrap();
+    let r = t
+        .req(reqwest::Method::PUT, "/api/client/v1/me/prefs")
+        .json(&Prefs { active_provider_id: Some("no-such-provider".into()) })
+        .send()
+        .await
+        .unwrap();
     assert_eq!(r.status(), 404);
     assert_eq!(r.json::<askbar_proto::Problem>().await.unwrap().error, "not_found");
 }

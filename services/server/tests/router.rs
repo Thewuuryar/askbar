@@ -26,7 +26,8 @@ impl Mock {
     fn start() -> Mock {
         let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
         let script = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/e2e/mock_llm.py");
-        let mut child = Command::new("python3").args(["-u", script, &port.to_string()]).stdout(Stdio::piped()).spawn().expect("python3 is needed");
+        let mut child =
+            Command::new("python3").args(["-u", script, &port.to_string()]).stdout(Stdio::piped()).spawn().expect("python3 is needed");
         let log = Arc::new(Mutex::new(Vec::new()));
         let out = BufReader::new(child.stdout.take().unwrap());
         let l = log.clone();
@@ -177,7 +178,14 @@ async fn a_401_is_not_retried_ends_the_reply_and_flags_the_provider_as_having_ba
     assert!(matches!(events.last(), Some(GenEvent::Error { .. })), "{events:?}");
     assert_eq!(s.m1.requests(), 1, "a bad key is not retried");
     assert_eq!(s.m2.requests(), 0, "and no other provider stands in");
-    let flag: String = s.state.db.lock().unwrap().conn().query_row("SELECT status FROM provider_health WHERE provider_id = 'p1'", [], |r| r.get(0)).unwrap();
+    let flag: String = s
+        .state
+        .db
+        .lock()
+        .unwrap()
+        .conn()
+        .query_row("SELECT status FROM provider_health WHERE provider_id = 'p1'", [], |r| r.get(0))
+        .unwrap();
     assert_eq!(flag, "auth_failed");
 }
 
@@ -260,14 +268,7 @@ async fn the_audit_trail_shows_every_try_on_the_one_provider() {
     let rows: Vec<(String, String, i64, Option<String>)> =
         stmt.query_map([&trace], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).unwrap().map(Result::unwrap).collect();
     let want = |p: &str, st: &str, i: i64, from: Option<&str>| (p.to_string(), st.to_string(), i, from.map(str::to_string));
-    assert_eq!(
-        rows,
-        [
-            want("p1", "error", 0, None),
-            want("p1", "error", 1, None),
-            want("p1", "error", 2, None),
-        ]
-    );
+    assert_eq!(rows, [want("p1", "error", 0, None), want("p1", "error", 1, None), want("p1", "error", 2, None),]);
 }
 
 #[tokio::test]
@@ -288,24 +289,50 @@ async fn the_flag_clears_on_the_next_success_and_when_a_new_key_is_saved_and_the
     let app = server_api::router(s.state.clone(), hash);
     tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
     let http = reqwest::Client::new();
-    let get = || async { http.get(format!("{url}/api/server/v1/providers/health")).bearer_auth(token).send().await.unwrap().json::<serde_json::Value>().await.unwrap() };
+    let get = || async {
+        http.get(format!("{url}/api/server/v1/providers/health"))
+            .bearer_auth(token)
+            .send()
+            .await
+            .unwrap()
+            .json::<serde_json::Value>()
+            .await
+            .unwrap()
+    };
     let v = get().await;
     assert_eq!(v["providers"].as_array().unwrap().len(), 1);
-    assert_eq!((v["providers"][0]["provider_id"].as_str(), v["providers"][0]["status"].as_str(), v["providers"][0]["error_code"].as_str()), (Some("p1"), Some("auth_failed"), Some("http_401")));
+    assert_eq!(
+        (v["providers"][0]["provider_id"].as_str(), v["providers"][0]["status"].as_str(), v["providers"][0]["error_code"].as_str()),
+        (Some("p1"), Some("auth_failed"), Some("http_401"))
+    );
     assert!(!v.to_string().contains("Incorrect API key"), "the provider's own words are not kept: {v}");
     let r = http.get(format!("{url}/api/server/v1/providers/health")).send().await.unwrap();
     assert_eq!(r.status(), 401, "needs the server token");
 
     // Saving a new key for p1 clears the flag.
-    let r = http.put(format!("{url}/api/server/v1/providers/p1/key")).bearer_auth(token).json(&serde_json::json!({ "key": "sk-new" })).send().await.unwrap();
+    let r = http
+        .put(format!("{url}/api/server/v1/providers/p1/key"))
+        .bearer_auth(token)
+        .json(&serde_json::json!({ "key": "sk-new" }))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(r.status(), 204);
     assert!(get().await["providers"].as_array().unwrap().is_empty());
 
     // A provider the configuration lists but that holds no key is reported as missing its key, and is not once it has one.
     s.state.db.lock().unwrap().conn().execute("UPDATE providers SET api_key_enc = NULL WHERE id = 'p1'", []).unwrap();
-    let missing = |v: &serde_json::Value| v["missing_key"].as_array().unwrap().iter().filter_map(|i| i.as_str().map(String::from)).collect::<Vec<_>>();
+    let missing = |v: &serde_json::Value| {
+        v["missing_key"].as_array().unwrap().iter().filter_map(|i| i.as_str().map(String::from)).collect::<Vec<_>>()
+    };
     assert!(missing(&get().await).contains(&"p1".to_string()), "p1 lost its key");
-    let r = http.put(format!("{url}/api/server/v1/providers/p1/key")).bearer_auth(token).json(&serde_json::json!({ "key": "sk-newer" })).send().await.unwrap();
+    let r = http
+        .put(format!("{url}/api/server/v1/providers/p1/key"))
+        .bearer_auth(token)
+        .json(&serde_json::json!({ "key": "sk-newer" }))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(r.status(), 204);
     assert!(!missing(&get().await).contains(&"p1".to_string()), "p1 has a key again");
 
@@ -323,7 +350,8 @@ async fn after_a_retry_the_generation_row_and_its_token_usage_name_the_provider_
     let s = stack("m", "m", serde_json::json!({})).await;
     assert!(is_done(&s.run("hello 429once retry-D").await));
     assert_eq!(s.rows()[0].1.as_deref(), Some("p1"));
-    let usage_provider: String = s.state.db.lock().unwrap().conn().query_row("SELECT provider_id FROM token_usage", [], |r| r.get(0)).unwrap();
+    let usage_provider: String =
+        s.state.db.lock().unwrap().conn().query_row("SELECT provider_id FROM token_usage", [], |r| r.get(0)).unwrap();
     assert_eq!(usage_provider, "p1");
     let n: i64 = s.state.db.lock().unwrap().conn().query_row("SELECT COUNT(*) FROM token_usage", [], |r| r.get(0)).unwrap();
     assert_eq!(n, 1, "the failed tries used nothing and recorded nothing");
@@ -379,7 +407,11 @@ async fn the_kill_switch_gate_leaves_a_span_whether_it_lets_a_generation_through
         .map(Result::unwrap)
         .collect();
     assert_eq!(gates.len(), 2);
-    assert_eq!((gates[0].0.as_str(), gates[0].1.as_str(), gates[0].2.as_deref()), (trace.as_str(), "done", None), "passed, inside the generation's own trace");
+    assert_eq!(
+        (gates[0].0.as_str(), gates[0].1.as_str(), gates[0].2.as_deref()),
+        (trace.as_str(), "done", None),
+        "passed, inside the generation's own trace"
+    );
     assert!(gates[0].3.contains(r#""kill_switch":false"#));
     assert_eq!((gates[1].1.as_str(), gates[1].2.as_deref()), ("blocked", Some("kill_switch")));
     assert_ne!(gates[1].0, trace, "a refusal has no generation, so a trace of its own");
@@ -418,7 +450,14 @@ async fn turning_the_kill_switch_on_with_abort_stops_running_replies_and_clears_
     let first = s.submit("please be slow").ok().expect("accepted");
     let queued = askbar_server::generation::submit(
         &s.state,
-        Submit { user_id: s.user.clone(), client_id: "d1".into(), conversation_id: Some(first.conversation_id.clone()), provider_id: "p1".into(), prompt: "waiting".into(), client_request_id: None },
+        Submit {
+            user_id: s.user.clone(),
+            client_id: "d1".into(),
+            conversation_id: Some(first.conversation_id.clone()),
+            provider_id: "p1".into(),
+            prompt: "waiting".into(),
+            client_request_id: None,
+        },
     )
     .ok()
     .expect("queued");
@@ -430,7 +469,10 @@ async fn turning_the_kill_switch_on_with_abort_stops_running_replies_and_clears_
     let b: Vec<GenEvent> = queued.live.subscribe(0).collect().await;
     assert!(matches!(a.last(), Some(GenEvent::Error { message, .. }) if message.contains("switched off")), "{:?}", a.last());
     assert!(matches!(a.last(), Some(GenEvent::Error { code: "kill_switch", .. })), "{:?}", a.last());
-    assert!(matches!(b.last(), Some(GenEvent::Error { .. })) && !b.iter().any(|e| matches!(e, GenEvent::Delta { .. })), "the waiting one never ran: {b:?}");
+    assert!(
+        matches!(b.last(), Some(GenEvent::Error { .. })) && !b.iter().any(|e| matches!(e, GenEvent::Delta { .. })),
+        "the waiting one never ran: {b:?}"
+    );
     tokio::time::sleep(Duration::from_millis(300)).await;
 
     let rows = s.rows();
@@ -447,8 +489,10 @@ async fn turning_the_kill_switch_on_with_abort_stops_running_replies_and_clears_
     assert_eq!(s.m1.requests(), 1, "nothing further went upstream");
     s.state.audit.flush().await;
     let db = rusqlite::Connection::open(s._dir.join("audit.db")).unwrap();
-    let code: Option<String> = db.query_row("SELECT error_code FROM spans WHERE trace_id = ?1 AND kind = 'turn'", [&first.generation_id], |r| r.get(0)).unwrap();
-    let status: String = db.query_row("SELECT status FROM spans WHERE trace_id = ?1 AND kind = 'turn'", [&first.generation_id], |r| r.get(0)).unwrap();
+    let code: Option<String> =
+        db.query_row("SELECT error_code FROM spans WHERE trace_id = ?1 AND kind = 'turn'", [&first.generation_id], |r| r.get(0)).unwrap();
+    let status: String =
+        db.query_row("SELECT status FROM spans WHERE trace_id = ?1 AND kind = 'turn'", [&first.generation_id], |r| r.get(0)).unwrap();
     assert_eq!((status.as_str(), code.as_deref()), ("cancelled", Some("kill_switch")));
     assert!(matches!(s.submit("and now").err(), Some(SubmitError::KillSwitch)), "and nothing new starts");
 }
@@ -459,7 +503,14 @@ async fn turning_it_on_without_abort_lets_running_replies_finish_but_still_clear
     let first = s.submit("please be slow").ok().expect("accepted");
     let queued = askbar_server::generation::submit(
         &s.state,
-        Submit { user_id: s.user.clone(), client_id: "d1".into(), conversation_id: Some(first.conversation_id.clone()), provider_id: "p1".into(), prompt: "waiting".into(), client_request_id: None },
+        Submit {
+            user_id: s.user.clone(),
+            client_id: "d1".into(),
+            conversation_id: Some(first.conversation_id.clone()),
+            provider_id: "p1".into(),
+            prompt: "waiting".into(),
+            client_request_id: None,
+        },
     )
     .ok()
     .expect("queued");
@@ -545,9 +596,12 @@ async fn cached_tokens_an_anthropic_provider_reports_reach_the_attempt_span_and_
     s.state.audit.flush().await;
     let db = rusqlite::Connection::open(s._dir.join("audit.db")).unwrap();
     let (kind, tin, tout, cached): (String, i64, i64, i64) = db
-        .query_row("SELECT kind, tokens_in, tokens_out, tokens_cached FROM spans WHERE trace_id = ?1 AND kind = 'attempt'", [&trace], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+        .query_row("SELECT kind, tokens_in, tokens_out, tokens_cached FROM spans WHERE trace_id = ?1 AND kind = 'attempt'", [&trace], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+        })
         .unwrap();
     assert_eq!((kind.as_str(), tin, tout, cached), ("attempt", 100, 50, 64), "the mock's message_start reports 64 cache-read tokens");
-    let turn_cached: i64 = db.query_row("SELECT tokens_cached FROM spans WHERE trace_id = ?1 AND kind = 'turn'", [&trace], |r| r.get(0)).unwrap();
+    let turn_cached: i64 =
+        db.query_row("SELECT tokens_cached FROM spans WHERE trace_id = ?1 AND kind = 'turn'", [&trace], |r| r.get(0)).unwrap();
     assert_eq!(turn_cached, 64);
 }

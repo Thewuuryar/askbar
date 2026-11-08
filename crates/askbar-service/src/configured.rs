@@ -24,7 +24,11 @@ pub async fn require(axum::extract::State(gate): axum::extract::State<Gate>, req
     if (gate.open)(req.uri().path()) || (gate.is_configured)() {
         return Ok(next.run(req).await);
     }
-    Err(ApiError::new(ErrorCode::NotConfigured, "The server is starting and has not received its settings yet. Try again in a few seconds.").retry_after(5))
+    Err(ApiError::new(
+        ErrorCode::NotConfigured,
+        "The server is starting and has not received its settings yet. Try again in a few seconds.",
+    )
+    .retry_after(5))
 }
 
 #[cfg(test)]

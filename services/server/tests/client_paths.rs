@@ -35,11 +35,26 @@ async fn the_client_api_answers_at_its_new_paths() {
     let h: askbar_proto::Health = t.http.get(format!("{}/api/client/v1/health", t.url)).send().await.unwrap().json().await.unwrap();
     assert_eq!(h.min_client, "0.5.0");
     assert_eq!(t.get("/api/client/v1/me").send().await.unwrap().status(), 204, "who am I: a token that is still accepted");
-    for path in ["/api/client/v1/providers", "/api/client/v1/conversations", "/api/client/v1/me/prefs", "/api/client/v1/me/display-defaults", "/api/client/v1/settings", "/api/client/v1/generations?status=running", "/api/client/v1/search?q=x"] {
+    for path in [
+        "/api/client/v1/providers",
+        "/api/client/v1/conversations",
+        "/api/client/v1/me/prefs",
+        "/api/client/v1/me/display-defaults",
+        "/api/client/v1/settings",
+        "/api/client/v1/generations?status=running",
+        "/api/client/v1/search?q=x",
+    ] {
         assert_eq!(t.get(path).send().await.unwrap().status(), 200, "{path}");
     }
     // Pairing is a pairings resource: POST creates a token.
-    let r = t.http.post(format!("{}/api/client/v1/pairings", t.url)).header("x-askbar-client-version", "0.5.0").json(&serde_json::json!({ "code": t.code })).send().await.unwrap();
+    let r = t
+        .http
+        .post(format!("{}/api/client/v1/pairings", t.url))
+        .header("x-askbar-client-version", "0.5.0")
+        .json(&serde_json::json!({ "code": t.code }))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(r.status(), 200);
     assert!(r.json::<askbar_proto::PairResponse>().await.unwrap().token.starts_with("abt_"));
 }
@@ -48,7 +63,14 @@ async fn the_client_api_answers_at_its_new_paths() {
 async fn the_minimum_client_is_0_5_0_and_an_older_app_on_a_new_path_is_told_to_update() {
     assert_eq!(askbar_server::MIN_CLIENT, "0.5.0");
     let t = start().await;
-    let old = t.http.get(format!("{}/api/client/v1/me", t.url)).bearer_auth(&t.token).header("x-askbar-client-version", "0.4.0").send().await.unwrap();
+    let old = t
+        .http
+        .get(format!("{}/api/client/v1/me", t.url))
+        .bearer_auth(&t.token)
+        .header("x-askbar-client-version", "0.4.0")
+        .send()
+        .await
+        .unwrap();
     assert_eq!(old.status(), 426);
     assert_eq!(old.json::<Problem>().await.unwrap().error, "client_too_old");
 }
@@ -56,7 +78,16 @@ async fn the_minimum_client_is_0_5_0_and_an_older_app_on_a_new_path_is_told_to_u
 #[tokio::test]
 async fn the_old_names_are_gone_and_old_paths_are_404_except_the_one_that_says_update() {
     let t = start().await;
-    for gone in ["/api/client/v1/pair", "/api/client/v1/whoami", "/api/client/v2/health", "/api/client/health", "/mgmt/v1/health", "/api/server/v1/health", "/api/health"] {  // names-ok: proves the old path is gone
+    for gone in [
+        "/api/client/v1/pair",
+        "/api/client/v1/whoami",
+        "/api/client/v2/health",
+        "/api/client/health",
+        "/mgmt/v1/health",
+        "/api/server/v1/health",
+        "/api/health",
+    ] {
+        // names-ok: proves the old path is gone
         let r = t.get(gone).send().await.unwrap();
         assert_eq!(r.status(), 404, "{gone}");
         assert_eq!(r.json::<Problem>().await.unwrap().error, "not_found");

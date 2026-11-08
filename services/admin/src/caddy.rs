@@ -26,7 +26,8 @@ pub const SELF_KEY_PATH: &str = "/caddy-secrets/self.key";
 /// Who may open the admin site while there is no host name, unless the allowlist setting names
 /// others: loopback, the private ranges, Tailscale's range and their IPv6 counterparts (ADR 0007).
 /// Caddy checks the connection's source, never a forwarded header.
-pub const PRIVATE_RANGES: [&str; 8] = ["127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "::1/128", "fc00::/7", "fe80::/10"];
+pub const PRIVATE_RANGES: [&str; 8] =
+    ["127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "::1/128", "fc00::/7", "fe80::/10"];
 pub const STAGING_CA: &str = "https://acme-staging-v02.api.letsencrypt.org/directory";
 
 /// Where this service reaches Caddy's admin socket, and where it writes the token file.
@@ -94,8 +95,14 @@ fn routes(allowed: &[String]) -> String {
         out.push_str(&format!("\t\t@outside not remote_ip {}\n\t\tabort @outside\n", allowed.join(" ")));
     }
     out.push_str(&format!("\t\treverse_proxy {ADMIN_UPSTREAM}\n\t}}\n"));
-    out.push_str(&format!("\t@client path {client}/* {old}/*\n\thandle @client {{\n\t\treverse_proxy server:8080 {{\n\t\t\tflush_interval -1\n\t\t}}\n\t}}\n"));
-    out.push_str(&format!("\thandle {{\n\t\theader Content-Type {}\n\t\trespond `{}` 404\n\t}}\n", askbar_proto::problem::CONTENT_TYPE, not_found_body()));
+    out.push_str(&format!(
+        "\t@client path {client}/* {old}/*\n\thandle @client {{\n\t\treverse_proxy server:8080 {{\n\t\t\tflush_interval -1\n\t\t}}\n\t}}\n"
+    ));
+    out.push_str(&format!(
+        "\thandle {{\n\t\theader Content-Type {}\n\t\trespond `{}` 404\n\t}}\n",
+        askbar_proto::problem::CONTENT_TYPE,
+        not_found_body()
+    ));
     out
 }
 
@@ -223,16 +230,14 @@ async fn apply_inner(state: &Arc<AdminState>) -> ProxyStatus {
         .await;
     match sent {
         Err(_) => status(false, "Could not reach Caddy. Is it running?"),
-        Ok(r) if r.status().is_success() => {
-            status(
-                true,
-                if enabled {
-                    "Caddy is serving the configuration. Certificates are requested the first time it is used."
-                } else {
-                    "No host name yet: Caddy serves HTTPS on every address with this install's own certificate."
-                },
-            )
-        }
+        Ok(r) if r.status().is_success() => status(
+            true,
+            if enabled {
+                "Caddy is serving the configuration. Certificates are requested the first time it is used."
+            } else {
+                "No host name yet: Caddy serves HTTPS on every address with this install's own certificate."
+            },
+        ),
         Ok(r) => {
             let code = r.status();
             let body = r.text().await.unwrap_or_default();
@@ -265,7 +270,13 @@ mod tests {
     use super::*;
 
     fn net(tls: bool, staging: bool, allowlist: bool) -> Network {
-        Network { tls_enabled: tls, hostname: "askbar.orraitu.com".into(), admin_cidr: String::new(), acme_staging: staging, allowlist_enabled: allowlist }
+        Network {
+            tls_enabled: tls,
+            hostname: "askbar.orraitu.com".into(),
+            admin_cidr: String::new(),
+            acme_staging: staging,
+            allowlist_enabled: allowlist,
+        }
     }
 
     const NOT_FOUND: &str = r#"{"type":"urn:askbar:problem:not_found","title":"Not found","status":404,"detail":"There is nothing at this address.","error":"not_found"}"#;
@@ -341,7 +352,10 @@ http:// {{
         let boot = std::fs::read_to_string(root.join("deploy/caddy/bootstrap.Caddyfile")).unwrap();
         let body: String = boot.lines().filter(|l| !l.starts_with('#')).collect::<Vec<_>>().join("\n");
         assert_eq!(body.trim(), bootstrap_caddyfile().trim());
-        assert!(caddyfile(&net(false, false, false), &[]).starts_with(bootstrap_caddyfile().trim_end_matches("}\n")), "every config keeps Caddy's admin socket");
+        assert!(
+            caddyfile(&net(false, false, false), &[]).starts_with(bootstrap_caddyfile().trim_end_matches("}\n")),
+            "every config keeps Caddy's admin socket"
+        );
     }
 
     #[test]
@@ -387,7 +401,11 @@ askbar.orraitu.com {{
     fn the_server_api_is_never_proxied_and_gets_the_404_like_any_other_path() {
         for got in [caddyfile(&net(true, false, false), &[]), caddyfile(&net(false, false, false), &[])] {
             let matcher = got.lines().find(|l| l.trim_start().starts_with("@client")).unwrap();
-            assert_eq!(matcher.trim(), "@client path /api/client/* /api/v1/*", "only the client API and the old prefix, never a wider /api/*");
+            assert_eq!(
+                matcher.trim(),
+                "@client path /api/client/* /api/v1/*",
+                "only the client API and the old prefix, never a wider /api/*"
+            );
             assert!(!got.contains("/api/server") && !got.contains("path /api/*"), "{got}");
             let proxied: Vec<&str> = got.lines().filter(|l| l.contains("reverse_proxy")).collect();
             // The admin socket and the client API; nothing else.
@@ -399,7 +417,10 @@ askbar.orraitu.com {{
 
     #[test]
     fn the_fixed_404_body_is_the_same_problem_the_servers_send() {
-        let p = askbar_proto::Problem::new(askbar_proto::ErrorCode::NotFound, askbar_proto::http::default_detail(askbar_proto::ErrorCode::NotFound));
+        let p = askbar_proto::Problem::new(
+            askbar_proto::ErrorCode::NotFound,
+            askbar_proto::http::default_detail(askbar_proto::ErrorCode::NotFound),
+        );
         assert_eq!(String::from_utf8(p.to_json_bytes()).unwrap(), NOT_FOUND);
     }
 
