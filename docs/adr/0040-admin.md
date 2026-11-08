@@ -17,7 +17,7 @@ The admin existed before the rule that each component has its own ADR. This reco
   - in `admin-secrets`: `admin.key`, the server API token, and `cpa`'s API key and control secret;
   - in `caddy-secrets`: the install's own certificate and key ([0034](0034-self-signed-https-and-certificate-pinning.md)) and the Cloudflare token file Caddy reads.
 - **Volumes:** `admin-data`, `admin-secrets`, `server-token` (it writes the token's hash for the server), `admin-run` (its socket, for Caddy), `caddy-run` (Caddy's admin socket), `caddy-secrets`, and `cpa-config` (it writes `cpa`'s config and restart requests, [0037](0037-askbar-cpa-image-and-supervisor.md)).
-- **Networks:** `server-api` (fixed address `172.30.0.3`) and `cpa-admin`. Both are `internal`, so the admin has no route out. Caddy reaches it only through its socket.
+- **Networks:** `server-api` and `cpa-admin`, with addresses Docker assigns; it calls the server at `http://server-api-host:8082`. Both are `internal`, so the admin has no route out. Caddy reaches it only through its socket.
 - **Links:** it calls the server API with its token, pushes Caddy's configuration through Caddy's admin socket, and calls `cpa`'s management API with the control secret. Nothing calls it except Caddy, for a person's browser or a script with an admin API key.
 - **Configuration push:** every change is saved in `admin.db` and pushed to the server as one snapshot; if the server cannot be reached the change is refused and nothing is saved ([0028](0028-service-boundaries-and-config-delivery.md)). It polls the server's status and pushes again after a restart.
 - **Hardening:** the shared defaults of [0032](0032-container-hardening.md), with no exception; memory limit 256 MB.
@@ -40,4 +40,4 @@ Not recorded: the admin predates this record.
 
 ## Amendments
 
-None yet.
+- 2026-11-08: no fixed address on `server-api`; it calls the server by the alias `server-api-host` (PR #32).
