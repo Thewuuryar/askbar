@@ -44,3 +44,4 @@ This set records the decisions from the original Askbar architecture plan (kept 
 | [0038](0038-names-and-new-components-without-a-name-check.md) | Names and new components, without a name check | Accepted | Owner decision; supersedes 0021 |
 | [0039](0039-server.md) | The `server` component | Proposed | Plan step 1.14; owner rule for component ADRs |
 | [0040](0040-admin.md) | The `admin` component | Proposed | Plan step 1.14; owner rule for component ADRs |
+| [0041](0041-caddy.md) | The `caddy` component | Proposed | Plan step 1.14; owner rule for component ADRs |
