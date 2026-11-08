@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{%- import "blocks.html" as b %}
+{% block hint %}What the server recorded about each reply: when, for whom, through which provider, how long it took, what it used and how it ended. Message content is sealed; opening it asks for the audit passphrase and is logged.{% endblock %}
+{% block scripts %}<script src="/admin/audit.js" defer></script>{% endblock %}
+{% block content %}
+    {% call b::error_line("audit-error") %}{% endcall %}
+    <div id="audit-nav" class="subnav" role="tablist" aria-label="Audit views">
+      <button type="button" role="tab" data-sub="overview" aria-selected="true">Overview</button>
+      <button type="button" role="tab" data-sub="requests" aria-selected="false">Requests</button>
+      <button type="button" role="tab" data-sub="trace" aria-selected="false">Trace</button>
+      <button type="button" role="tab" data-sub="routing" aria-selected="false">Routing</button>
+      <button type="button" role="tab" data-sub="content" aria-selected="false">Content</button>
+    </div>
+    <div id="audit-overview" data-subview="overview">
+      <div class="row">
+        <label>Window
+          <select id="audit-window">
+            <option value="86400">Last 24 hours</option>
+            <option value="604800">Last 7 days</option>
+            <option value="2592000">Last 30 days</option>
+          </select>
+        </label>
+      </div>
+      <p class="hint empty" id="audit-overview-empty">Nothing recorded in this window yet.</p>
+      <div id="audit-tiles" class="tiles" hidden></div>
+      <p class="hint" id="audit-cost-note" hidden></p>
+      <h3 id="audit-days-title" hidden>By day</h3>
+      <div id="audit-days" class="bars"></div>
+      <h3 id="audit-providers-title" hidden>By provider</h3>
+      <div id="audit-by-provider" class="bars"></div>
+    </div>
+    <div id="audit-requests" data-subview="requests" hidden>
+      <div class="row filters">
+        <label>Status
+          <select id="audit-f-status">
+            <option value="">Any</option>
+            <option value="done">done</option>
+            <option value="error">error</option>
+            <option value="cancelled">cancelled</option>
+            <option value="timed_out">timed out</option>
+            <option value="interrupted">interrupted</option>
+          </select>
+        </label>
+        <label>Provider <select id="audit-f-provider"><option value="">Any</option></select></label>
+      </div>
+      <p class="hint empty" id="audit-requests-empty">No requests recorded yet.</p>
+      <div class="table-wrap">
+        <table id="audit-table" hidden>
+          <thead><tr><th>Time</th><th>User</th><th>Provider</th><th>Model</th><th>Status</th><th>Latency</th><th>Tokens (in → out)</th><th>Cost</th></tr></thead>
+          <tbody id="audit-rows"></tbody>
+        </table>
+      </div>
+      <div class="row"><button type="button" id="audit-more" class="secondary" hidden>Load more</button></div>
+    </div>
+    <div id="audit-trace" data-subview="trace" hidden>
+      <p class="hint empty" id="audit-trace-empty">Pick a request on the Requests view to see its trace.</p>
+      <div id="audit-trace-head" hidden></div>
+      <div id="audit-waterfall" class="waterfall" role="list" hidden></div>
+      <pre id="audit-span-details" class="span-details" aria-live="polite" hidden></pre>
+    </div>
+    <div id="audit-routing" data-subview="routing" hidden>
+      <h3>This request</h3>
+      <p class="hint empty" id="audit-routing-empty">Pick a request on the Requests view to see how it was routed.</p>
+      <div class="table-wrap">
+        <table id="audit-attempts" hidden>
+          <thead><tr><th>Provider</th><th>Try</th><th>Status</th><th>Kind of failure</th><th>Reason</th><th>Latency</th></tr></thead>
+          <tbody id="audit-attempt-rows"></tbody>
+        </table>
+      </div>
+      <h3>Providers, in the chosen window</h3>
+      <p class="hint empty" id="audit-routing-overall-empty">No tries recorded in this window yet.</p>
+      <div class="table-wrap">
+        <table id="audit-routing-table" hidden>
+          <thead><tr><th>Provider</th><th>Tries</th><th>Retries</th><th>Failed tries</th><th>Credentials</th></tr></thead>
+          <tbody id="audit-routing-rows"></tbody>
+        </table>
+      </div>
+    </div>
+    <div id="audit-content" data-subview="content" hidden>
+      <p class="hint empty" id="audit-content-empty">Pick a request on the Requests view to see its sealed content.</p>
+      <div id="audit-sealed"></div>
+      <h3>Access history</h3>
+      {% call b::hint("Every time sealed content was opened, or someone tried the wrong passphrase. It records the request, the key and the time, never the content.") %}{% endcall %}
+      <p class="hint empty" id="audit-access-empty">Nothing has been opened yet.</p>
+      <div class="table-wrap">
+        <table id="audit-access" hidden>
+          <thead><tr><th>Time</th><th>Span</th><th>Key</th><th>Result</th></tr></thead>
+          <tbody id="audit-access-rows"></tbody>
+        </table>
+      </div>
+      <dialog id="audit-pass-dialog" aria-labelledby="audit-pass-title">
+        <form method="dialog" id="audit-pass-form">
+          <h3 id="audit-pass-title">Open sealed content</h3>
+          <p class="hint" id="audit-pass-what"></p>
+          <div id="audit-ask">
+            <label>Audit passphrase <input id="audit-pass" type="password" autocomplete="off" spellcheck="false"></label>
+            {% call b::hint("Opening content is recorded in the access history.") %}{% endcall %}
+          </div>
+          {% call b::error_line("audit-pass-error") %}{% endcall %}
+          <pre id="audit-plain" class="plain"></pre>
+          <div class="row">
+            <button type="submit" id="audit-pass-ok">Open</button>
+            <button type="button" id="audit-pass-cancel" class="secondary">Cancel</button>
+          </div>
+        </form>
+      </dialog>
+    </div>
+{% endblock %}

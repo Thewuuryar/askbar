@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{%- import "blocks.html" as b %}
+{% block hint %}The admin password, and API keys for scripts.{% endblock %}
+{% block content %}
+    <form id="password-form" class="panel">
+      <h3>Change admin password</h3>
+      <label>Current password <input id="pw-current" type="password" autocomplete="current-password" required></label>
+      <label>New password <input id="pw-new" type="password" autocomplete="new-password" minlength="10" required></label>
+      <label>Repeat new password <input id="pw-new2" type="password" autocomplete="new-password" minlength="10" required></label>
+      <div class="row"><button type="submit">Change password</button></div>
+      {% call b::hint("Other signed-in browsers are signed out.") %}{% endcall %}
+      {% call b::error_line("pw-error") %}{% endcall %}
+    </form>
+    <div id="key-panel" class="panel">
+      <h3>Admin API key</h3>
+      <p class="hint">For scripts. Send it as <code>Authorization: Bearer &lt;key&gt;</code> to <code>/api/admin/v1</code>. It can do what this site can, except manage keys, change the password or sign in. One key at a time. It is shown once, when you make it.</p>
+      <form id="key-form">
+        <label>Name <input id="key-name" maxlength="60" placeholder="build server" autocomplete="off" required></label>
+        <div class="row"><button type="submit" id="key-create">Create key</button></div>
+      </form>
+      <div id="key-row" class="sealed-row" hidden>
+        <span class="what"><strong id="key-row-name"></strong> <span id="key-row-times" class="hint"></span></span>
+        <button type="button" id="key-revoke" class="danger">Revoke</button>
+      </div>
+      {% call b::error_line("key-error") %}{% endcall %}
+      <dialog id="key-dialog" aria-labelledby="key-dialog-title">
+        <h3 id="key-dialog-title">Your new API key</h3>
+        <p class="hint"><strong>This is the only time the key is shown.</strong> Copy it now and keep it somewhere safe. If you lose it, revoke it and make another.</p>
+        <pre id="key-value" class="plain"></pre>
+        <div class="row"><button type="button" id="key-copy">Copy</button><button type="button" id="key-close" class="secondary">I have copied it</button></div>
+      </dialog>
+    </div>
+{% endblock %}

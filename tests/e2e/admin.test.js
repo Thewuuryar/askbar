@@ -76,6 +76,14 @@ async function waitForPort(port) {
   const ctx = await browser.newContext({ viewport: { width: 900, height: 800 }, permissions: ['clipboard-read', 'clipboard-write'] });
   const page = await ctx.newPage();
   const errors = [];
+  // Each admin section is its own page (plan step 1.16): a nav link loads it, and its scripts run before
+  // `load`, so wait for that before using the page.
+  const openPage = async (slug) => {
+    await page.click('#nav [data-tab="' + slug + '"]');
+    await page.waitForURL('**/admin/' + slug + '/**');
+    await page.waitForLoadState('load');
+    await page.waitForSelector('#app:not([hidden])');
+  };
   page.on('pageerror', (e) => errors.push(e.message));
   page.on('console', (m) => { if (m.type() === 'error' && !/status of (4\d\d|502)/.test(m.text())) errors.push(m.text()); });
 
@@ -83,9 +91,9 @@ async function waitForPort(port) {
   // Opens the Settings tab and waits until its values have been read from the server. Waiting for a field to hold a
   // value is not enough when the test typed that same value: a read that lands later overwrites what the test types next.
   async function openSettings() {
-    await page.click('#nav [data-tab="providers"]');
+    await openPage('providers');
     const reread = page.waitForResponse((r) => r.url().endsWith('/api/admin/v1/settings') && r.request().method() === 'GET');
-    await page.click('#nav [data-tab="settings"]');
+    await openPage('settings');
     await reread;
   }
 
@@ -298,14 +306,14 @@ async function waitForPort(port) {
     assert.ok(r.body.detail && r.body.title && r.body.type === 'urn:askbar:problem:not_found', JSON.stringify(r.body));
   });
   await step('CLIProxyAPI: the accounts panel is on the Services tab, and says so when CLIProxyAPI is not answering', async () => {
-    await page.click('#nav [data-tab="services"]');
+    await openPage('services');
     await page.waitForSelector('#cpa-panel:not([hidden])');
     await page.waitForFunction(() => /not answering/.test(document.getElementById('cpa-message').textContent));
     await page.click('#cpa-connect-anthropic');
     await page.waitForFunction(() => /CLIProxyAPI did not answer/.test(document.getElementById('cpa-message').textContent));
     assert.equal(await page.isHidden('#cpa-login'), true, 'no login opens when CLIProxyAPI cannot start one');
     assert.equal(await page.locator('#add-cpa').count(), 0, 'the old preset button is gone');
-    await page.click('#nav [data-tab="providers"]');
+    await openPage('providers');
   });
   await step('delete asks first, then removes the provider', async () => {
     page.once('dialog', (d) => d.dismiss());
@@ -318,7 +326,7 @@ async function waitForPort(port) {
   await step('Services: the four services show whether they answer, and Restart asks first and then acts', async () => {
     // No controller (ADR 0005): each state comes from the service. Here the server and the admin run;
     // Caddy and CLIProxyAPI do not.
-    await page.click('#nav [data-tab="services"]');
+    await openPage('services');
     await page.waitForSelector('#services .card[data-name="cpa"]');
     assert.deepEqual(await page.$$eval('#services .card', (c) => c.map((x) => x.dataset.name)), ['server', 'admin', 'caddy', 'cpa']);
     assert.match(await page.innerText('#services .card[data-name="server"]'), /running/);
@@ -343,7 +351,7 @@ async function waitForPort(port) {
     assert.equal(r.status, 401);
   });
   await step('clients: add a user, generate a pairing key for them, pair with it, then revoke the client', async () => {
-    await page.click('#nav [data-tab="clients"]');
+    await openPage('clients');
     await page.waitForSelector('#pair-form');
     await page.waitForFunction(() => /No clients are paired yet/.test(document.getElementById('clients').textContent));
     // A fresh install has no users, so nothing can be paired yet (ADR 0008).
@@ -368,8 +376,8 @@ async function waitForPort(port) {
     const whoami = () => fetch(`http://127.0.0.1:${api}/api/client/v1/me`, { headers: { ...headers, authorization: 'Bearer ' + token } }).then((r) => r.status);
     assert.equal(await whoami(), 204);
 
-    await page.click('#nav [data-tab="providers"]');
-    await page.click('#nav [data-tab="clients"]');
+    await openPage('providers');
+    await openPage('clients');
     await page.waitForSelector('#clients .card');
     assert.match(await page.innerText('#clients .card'), /Test laptop[\s\S]*active[\s\S]*Ann · paired[\s\S]*last seen (?!never)/);
     page.once('dialog', (d) => d.accept());
@@ -379,7 +387,7 @@ async function waitForPort(port) {
     assert.equal(await whoami(), 401);
   });
   await step('settings page saves the system prompt and display defaults', async () => {
-    await page.click('#nav [data-tab="settings"]');
+    await openPage('settings');
     await page.waitForSelector('#settings-form');
     await page.waitForFunction(() => /quick-question popup/.test(document.getElementById('s-prompt').value));
     await page.fill('#s-prompt', 'You are a pirate.');
@@ -453,7 +461,7 @@ async function waitForPort(port) {
   });
   await step('network: hostname, token and networks are saved; the token is write-only', async () => {
     const CF = 'cf_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-    await page.click('#nav [data-tab="network"]');
+    await openPage('network');
     await page.waitForFunction(() => /pairing keys point at/.test(document.getElementById('n-info').textContent));
     await page.check('#n-tls');
     await page.fill('#n-host', 'https://askbar.orraitu.com');
@@ -474,7 +482,7 @@ async function waitForPort(port) {
     assert.match(await page.getAttribute('#n-token', 'placeholder'), /unchanged/);
     assert.equal((await page.content()).includes(CF), false);
     await page.reload();
-    await page.click('#nav [data-tab="network"]');
+    await openPage('network');
     await page.waitForFunction(() => document.getElementById('n-host').value === 'askbar.orraitu.com');
     assert.equal(await page.isChecked('#n-staging'), true);
     assert.equal(await page.isChecked('#n-allow'), false);
@@ -486,7 +494,7 @@ async function waitForPort(port) {
     await page.waitForFunction(() => /point at http:\/\/localhost/.test(document.getElementById('n-info').textContent));
   });
   await step('backup downloads the server and admin databases without secrets', async () => {
-    await page.click('#nav [data-tab="backup"]');
+    await openPage('backup');
     const [download] = await Promise.all([page.waitForEvent('download'), page.click('#backup-link')]);
     assert.match(download.suggestedFilename(), /^askbar-backup-\d+\.tar$/);
     const file = path.join(data, 'downloaded.tar');
@@ -539,7 +547,7 @@ async function waitForPort(port) {
       await fetch('/api/admin/v1/providers', { method: 'POST', headers: { 'x-askbar-admin': '1', 'content-type': 'application/json' }, body: JSON.stringify({ name: xss, type: 'openai', base_url: mockUrl, model: xss, api_key: 'sk-audit' }) });
     }, { xss: XSS, mockUrl: `http://127.0.0.1:${mockPort}/v1` });
     await auditChat('audit question', XSS);
-    await page.click('#nav [data-tab="audit"]');
+    await openPage('audit');
     await page.waitForSelector('#tab-audit:not([hidden])');
     const subs = await page.$$eval('#audit-nav button', (b) => b.map((x) => x.dataset.sub));
     assert.deepEqual(subs, ['overview', 'requests', 'trace', 'routing', 'content']);
@@ -610,8 +618,8 @@ async function waitForPort(port) {
     };
     const asked = [];
     await page.route('**/api/admin/v1/audit/stats*', (route) => { asked.push(route.request().url()); route.fulfill({ contentType: 'application/json', body: JSON.stringify(canned) }); });
-    await page.click('#nav [data-tab="providers"]');
-    await page.click('#nav [data-tab="audit"]');
+    await openPage('providers');
+    await openPage('audit');
     await page.click('#audit-nav [data-sub="overview"]'); // the tab remembers the view it was last on
     await page.waitForSelector('#audit-overview [data-stat="requests"]');
     const stat = (k) => page.innerText(`#audit-overview [data-stat="${k}"]`);
@@ -659,8 +667,8 @@ async function waitForPort(port) {
       if (q.get('provider') === 'pNone') traces = [];
       route.fulfill({ contentType: 'application/json', body: JSON.stringify({ traces }) });
     });
-    await page.click('#nav [data-tab="providers"]');
-    await page.click('#nav [data-tab="audit"]');
+    await openPage('providers');
+    await openPage('audit');
     await page.click('#audit-nav [data-sub="requests"]');
     await page.waitForSelector('#audit-rows tr[data-trace]');
     assert.deepEqual(asked[asked.length - 1], { limit: '25' }, 'no filters, no cursor');
@@ -737,8 +745,8 @@ async function waitForPort(port) {
     // real clock, so the widths below are exact.)
     const finished = spans.filter((x) => x.status !== 'running');
     await page.route('**/api/admin/v1/audit/traces/TRACE1', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ trace_id: 'TRACE1', cost: 0.0007, spans: finished }) }));
-    await page.click('#nav [data-tab="providers"]');
-    await page.click('#nav [data-tab="audit"]');
+    await openPage('providers');
+    await openPage('audit');
     await page.evaluate(() => window.askbarAudit.openTrace('TRACE1'));
     await page.waitForSelector('#audit-waterfall .span-bar');
     assert.equal(await page.locator('#audit-waterfall .span-bar').count(), 4);
@@ -775,8 +783,8 @@ async function waitForPort(port) {
     await page.route('**/api/admin/v1/audit/traces/ROUTE1', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ trace_id: 'ROUTE1', cost: 0, spans }) }));
     await page.route('**/api/admin/v1/audit/stats*', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify(stats) }));
     await page.route('**/api/admin/v1/audit/provider-health', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ providers: [{ provider_id: 'p1', status: 'auth_failed', since: 1793631845, error_code: 'http_401' }] }) }));
-    await page.click('#nav [data-tab="providers"]');
-    await page.click('#nav [data-tab="audit"]');
+    await openPage('providers');
+    await openPage('audit');
     await page.evaluate(() => window.askbarAudit.openTrace('ROUTE1'));
     await page.waitForSelector('#audit-waterfall .span-bar');
     await page.click('#audit-nav [data-sub="routing"]');
@@ -815,8 +823,8 @@ async function waitForPort(port) {
       if (body.passphrase !== 'the right passphrase here') return route.fulfill({ status: 403, contentType: 'application/json', body: JSON.stringify({ error: 'That passphrase does not open this content.' }) });
       route.fulfill({ contentType: 'application/json', body: JSON.stringify({ span_id: 'sp-attempt', payloads: [{ role: 'request', key_id: 'k1', text: 'the <b>question</b> that was asked' }, { role: 'error', key_id: 'k1', text: null }] }) });
     });
-    await page.click('#nav [data-tab="providers"]');
-    await page.click('#nav [data-tab="audit"]');
+    await openPage('providers');
+    await openPage('audit');
     await page.evaluate(() => window.askbarAudit.openTrace('SEAL1'));
     await page.waitForSelector('#audit-waterfall .span-bar');
     await page.click('#audit-nav [data-sub="content"]');
@@ -883,8 +891,8 @@ async function waitForPort(port) {
       { id: 1, span_id: 'span-1', key_id: '0011223344556677', opened_at: 1793631800, ok: true },
     ];
     await page.route('**/api/admin/v1/audit/access*', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ access: rows }) }));
-    await page.click('#nav [data-tab="providers"]');
-    await page.click('#nav [data-tab="audit"]');
+    await openPage('providers');
+    await openPage('audit');
     await page.click('#audit-nav [data-sub="content"]');
     await page.waitForSelector('#audit-access-rows tr');
     const cells = await page.$$eval('#audit-access-rows tr', (r) => r.map((tr) => [...tr.children].map((td) => td.textContent).slice(1)));
@@ -949,7 +957,7 @@ async function waitForPort(port) {
     await page.waitForSelector('#flash:not([hidden])');
   });
   await step('security: changing the password needs the current one', async () => {
-    await page.click('#nav [data-tab="security"]');
+    await openPage('security');
     await page.fill('#pw-current', 'wrong');
     await page.fill('#pw-new', 'brand new password 1');
     await page.fill('#pw-new2', 'brand new password 1');
@@ -963,7 +971,7 @@ async function waitForPort(port) {
     assert.match(await page.innerText('#flash'), /Password changed/);
   });
   await step('admin API key: shown once, then only its name; a script can use it until it is revoked', async () => {
-    await page.click('#nav [data-tab="security"]');
+    await openPage('security');
     await page.waitForSelector('#key-form:not([hidden])');
     await page.fill('#key-name', 'build server');
     await page.click('#key-create');
@@ -982,7 +990,7 @@ async function waitForPort(port) {
     // After a reload it is still only a name.
     await page.reload();
     await page.waitForSelector('#app:not([hidden])');
-    await page.click('#nav [data-tab="security"]');
+    await openPage('security');
     await page.waitForSelector('#key-row:not([hidden])');
     assert.ok(!(await page.content()).includes(key));
     // Revoking asks twice, then it stops working and a new one can be made.
@@ -991,6 +999,57 @@ async function waitForPort(port) {
     await page.click('#key-revoke');
     await page.waitForSelector('#key-form:not([hidden])');
     assert.equal((await call(key)).status, 401, 'revoked');
+  });
+  await step('pages: each section has its own URL, the nav marks it, Back works and the frame is the same', async () => {
+    // Plan step 1.16: a page and a URL for every admin section, from one template.
+    const slugs = await page.$$eval('#nav a', (as) => as.map((a) => a.dataset.tab));
+    assert.deepEqual(slugs, ['providers', 'services', 'clients', 'audit', 'backup', 'network', 'security', 'settings']);
+    for (const slug of slugs) {
+      await page.goto(`http://127.0.0.1:${adminPort}/admin/${slug}/`);
+      await page.waitForSelector('#app:not([hidden])');
+      assert.equal(await page.getAttribute(`#nav a[data-tab="${slug}"]`, 'aria-current'), 'page', slug);
+      assert.equal(await page.locator('#nav a[aria-current="page"]').count(), 1, slug + ': one current page');
+      assert.equal(await page.locator(`section[data-tab="${slug}"]`).count(), 1, slug + ': its own section');
+      assert.equal(await page.locator('section[data-tab]').count(), 1, slug + ': and no other');
+      for (const id of ['#logout', '#offline', '#flash', '#login', '#setup']) assert.equal(await page.locator(id).count(), 1, slug + ' ' + id);
+      assert.match(await page.title(), / · Askbar admin$/);
+    }
+    await openPage('providers');
+    await openPage('clients');
+    await page.goBack();
+    await page.waitForURL('**/admin/providers/');
+    await page.waitForSelector('#app:not([hidden])');
+    assert.equal(await page.getAttribute('#nav a[data-tab="providers"]', 'aria-current'), 'page', 'Back returns to the page before');
+    await page.goto(`http://127.0.0.1:${adminPort}/admin`);
+    assert.match(page.url(), /\/admin\/providers\/$/, '/admin goes to the first page');
+    const missing = await page.goto(`http://127.0.0.1:${adminPort}/admin/nothing-here/`);
+    assert.equal(missing.status(), 404, 'an unknown admin page is a 404');
+    await page.goto(base);
+  });
+  await step('pages: an audit request opens directly from its address, and the address follows the view', async () => {
+    const list = await page.evaluate(async () => (await fetch('/api/admin/v1/audit/traces', { credentials: 'same-origin' })).json());
+    const id = list.traces[0].trace_id;
+    await page.goto(`http://127.0.0.1:${adminPort}/admin/audit/?view=trace&id=${encodeURIComponent(id)}`);
+    await page.waitForSelector('#audit-trace:not([hidden])');
+    assert.equal(await page.getAttribute('#audit-nav [data-sub="trace"]', 'aria-selected'), 'true');
+    await page.waitForFunction((t) => window.askbarAudit.state.traceId === t && !!window.askbarAudit.state.trace, id);
+    assert.match(page.url(), new RegExp('[?]view=trace&id=' + encodeURIComponent(id) + '$'), 'the address keeps the request');
+    await page.click('#audit-nav [data-sub="requests"]');
+    assert.match(page.url(), /\/admin\/audit\/\?view=requests$/);
+    await openPage('providers');
+  });
+  await step('pages: a static file is kept and answers 304 when unchanged; pages are never stored', async () => {
+    const first = await page.evaluate(async () => {
+      const r = await fetch('/admin/app.js');
+      return { status: r.status, etag: r.headers.get('etag'), cache: r.headers.get('cache-control') };
+    });
+    assert.equal(first.status, 200);
+    assert.equal(first.cache, 'no-cache');
+    assert.match(first.etag, /^"[0-9a-f]{16}"$/);
+    const again = await page.evaluate(async (etag) => (await fetch('/admin/app.js', { headers: { 'If-None-Match': etag } })).status, first.etag);
+    assert.equal(again, 304);
+    const pageCache = await page.evaluate(async () => (await fetch('/admin/providers/')).headers.get('cache-control'));
+    assert.equal(pageCache, 'no-store');
   });
   await step('sign out returns to the login form', async () => {
     await page.click('#logout');
@@ -1020,7 +1079,7 @@ async function waitForPort(port) {
     await page.waitForSelector('#offline:not([hidden])');
   });
   await step('audit: with the server away the tab explains instead of failing, and the views are still there', async () => {
-    await page.click('#nav [data-tab="audit"]');
+    await openPage('audit');
     await page.waitForSelector('#audit-error:not([hidden])');
     assert.match(await page.innerText('#audit-error'), /server is offline/i);
     for (const sub of ['overview', 'requests', 'trace', 'routing', 'content']) {
@@ -1033,7 +1092,7 @@ async function waitForPort(port) {
     await page.click('#audit-nav [data-sub="overview"]');
   });
   await step('a change while the server is away is refused with a clear message and saves nothing', async () => {
-    await page.click('#nav [data-tab="providers"]');
+    await openPage('providers');
     await page.click('#add-provider');
     await page.fill('#p-name', 'while-away');
     await page.fill('#p-model', 'm');

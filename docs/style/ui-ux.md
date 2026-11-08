@@ -62,12 +62,25 @@ None, or one transition of 150 ms or less (opacity or colour). Under `prefers-re
 - Text goes in through `textContent`, never `innerHTML`. The CSP forbids inline script and style; do not loosen it.
 - **One primary action per view.** Buttons are secondary by default (outline, no fill). The one primary action is marked explicitly and is the only one filled with `--accent`. A destructive action uses `--danger`, never the primary style.
 - **Desktop and mobile layouts.** The site works at phone width and desktop width: one column and a full-width navigation menu at small widths, and a side navigation with a content column at large ones. Tap targets are at least 44 px high on small widths. Tables scroll inside their own box; the page never scrolls sideways. Browser tests run at both widths.
-- **Audit tab:** a table with a few numbers above it (replies, errors, tokens, p50 and p95 time). No charts by default; add one only if a table cannot answer the question. Use `--danger` only for errors.
-- Anything that interrupts something says what it will interrupt before it asks (the Services tab does this).
+- **Audit page:** a table with a few numbers above it (replies, errors, tokens, p50 and p95 time). No charts by default; add one only if a table cannot answer the question. Use `--danger` only for errors.
+- Anything that interrupts something says what it will interrupt before it asks (the Services page does this).
 - Show a secret once, at creation (API key, pairing key, token), and say so.
 - A change made while the server is down is refused with a sentence, not half applied. The admin does not queue it ([ADR 0028](../adr/0028-service-boundaries-and-config-delivery.md)); it pushes the saved state when the server returns.
 - Sealed content ([ADR 0011](../adr/0011-sealed-content-access.md)): the session shows its remaining time and a **Seal** button that ends it at once. Opening and timeout changes raise an alert; the screen says so before it asks for the passphrase.
 - Tests: `tests/e2e/admin.test.js`, in a real browser against the real server and admin.
+
+### Admin pages
+
+Each section is its own page at `/admin/<slug>/`, pre-rendered HTML with no client-side routing (plan step 1.16).
+
+- **One list:** `PAGES` in `services/admin/src/pages.rs`. The routes, the nav and the route-table test all come from it.
+- **One frame:** `services/admin/src/ui/templates/base.html` (Askama) holds the head, the header with sign-out, the nav (`aria-current="page"` on the current page), the page heading and its one-line hint, the sign-in, first-run and offline screens, and the footer. Every page has the same frame.
+- **A new page** is one `PAGES` entry, one `page!` line, and one `ui/templates/<slug>.html` that extends `base.html` and fills `hint` and `content` (and `actions` for a button beside the heading, `scripts` for a page-only script). If it needs loading, add its loader to the `tabs` table in `app.js`.
+- **Building blocks** (`ui/templates/blocks.html`): `error_line(id)` for a form's or view's error line, and `hint(text)` for a plain-text hint. Use them rather than writing the markup again; add a block when the same markup is needed a third time.
+- Templates hold static text and the page list only; Askama escapes them. Everything that comes from the API goes in through `textContent` in the scripts, as before.
+- State a person may want to link to goes in the query string and is kept current with `history.replaceState` (the Audit page's `?view=trace&id=...`).
+- `app.js` wires each element only if it is on the page (`on(id, event, fn)`), and runs only the current page's loader.
+- Static files are sent with an `ETag` and `no-cache`, so a page change costs one page plus 304s; pages and the API are `no-store`.
 
 ## Other clients
 

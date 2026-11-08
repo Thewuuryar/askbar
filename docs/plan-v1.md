@@ -145,6 +145,7 @@ That is about 52 h over the ~100 h budget before any backlog item (the component
   - **Browser:** each page opens by URL, the nav marks it current, Back returns to the previous page, `/admin/audit/?view=trace&id=…` opens directly, every page has the same header, nav and banners, and a static file answers 304 on a second load.
   - **Rust:** every `PAGES` entry has a route and a nav link, and an unknown `/admin/x/` is 404.
 - **Docs:** the guide's admin site steps ([guide.md](guide.md#server)) and `docs/style/ui-ux.md`.
+- **Built so (2026-11-08):** as above, with these differences. **Eight pages, not nine:** users are managed on the Clients page, where step 1.9 put them, so there is no `/admin/users/`, and it is a 404. **Paths:** the templates are in `services/admin/src/ui/templates/`, next to the scripts, with `services/admin/askama.toml` pointing Askama there; Askama 0.16. **Building blocks:** `blocks.html` has `error_line` and `hint`, the two pieces of markup that repeat verbatim (28 uses); a card, a list and a form are written out, because today's sections differ in shape, and `docs/style/ui-ux.md` says to add a block on the third use. **Hints:** five sections had no hint under their heading; each got one line. **Scripts:** `app.js` wires an element only when it is on the page. The browser tests wait for a page to load after each nav click (`openPage`), and three new steps cover the URLs, Back, the Audit deep link and the 304s.
 
 ## Phase 2 — Add bootstrap and the auditor
 

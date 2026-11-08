@@ -182,7 +182,10 @@ pub async fn security_headers(req: Request, next: Next) -> Response {
     h.insert("x-frame-options", HeaderValue::from_static("DENY"));
     h.insert("x-content-type-options", HeaderValue::from_static("nosniff"));
     h.insert("referrer-policy", HeaderValue::from_static("no-referrer"));
-    h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    // Pages and the API are never stored. A static file sets its own `no-cache` with an `ETag` (pages.rs).
+    if !h.contains_key(header::CACHE_CONTROL) {
+        h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    }
     res
 }
 

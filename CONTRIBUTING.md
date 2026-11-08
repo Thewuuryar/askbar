@@ -83,7 +83,7 @@ Do not rename a Docker volume that holds data: Compose would create an empty one
 
 ## Writing your own admin UI, or scripting the admin
 
-The admin API is public. Make a key in the admin site (Security tab; it is shown once), then:
+The admin API is public. Make a key in the admin site (the Security page; it is shown once), then:
 
 ```sh
 curl -H "Authorization: Bearer $KEY" https://<host>/api/admin/v1/providers

@@ -17,7 +17,7 @@ What a person running the stack reads in `docker compose logs`. Written with `tr
 
 ## The audit trace
 
-The record of what the system did with a reply, kept for investigation. Described for users in README ("The Audit tab"); the boundaries are in [architecture.md](../architecture.md).
+The record of what the system did with a reply, kept for investigation. Described for users in the guide ("The Audit page"); the boundaries are in [architecture.md](../architecture.md).
 
 - **Every reply is recorded**: when, for whom, in which space, which providers were tried, step timings, tokens, outcome. Any new code path that calls a model or provider must record it too. Only `model-gateway` opens model-call spans, and a provider call doesn't start until the auditor acknowledges its span ([ADR 0031](../adr/0031-audit-span-start-and-backlog.md)).
 - **Content is sealed.** Prompts, replies and provider errors are stored only as ciphertext made with the public audit key. The server cannot open them. Opening is done by the admin with the passphrase. Each session start, end and item viewed is recorded in the auditor, never the content. Each unseal and timeout change sends an alert ([ADR 0011](../adr/0011-sealed-content-access.md)).

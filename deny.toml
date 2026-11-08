@@ -14,6 +14,10 @@ ignore = [
     { id = "RUSTSEC-2026-0370", reason = "zvariant via zbus 5 in opener and tauri-plugin-single-instance" },
     { id = "RUSTSEC-2026-0371", reason = "zbus_names via zbus 5 in opener and tauri-plugin-single-instance" },
     { id = "RUSTSEC-2026-0372", reason = "zvariant_derive via zbus 5 in opener and tauri-plugin-single-instance" },
+    # basic-toml is unmaintained, with no safe upgrade. It comes in through askama_derive 0.16.1 (the
+    # latest askama), which uses it at compile time to read our own services/admin/askama.toml; it is in
+    # no binary. Revisit by 2027-02-01, or when askama moves to the toml crate.
+    { id = "RUSTSEC-2026-0374", reason = "basic-toml in askama's compile-time macro, reading our own askama.toml; in no binary" },
 ]
 
 [licenses]

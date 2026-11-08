@@ -1,0 +1,8 @@
+{#- Building blocks for admin pages (plan step 1.16), used the same way on every page:
+    {% import "blocks.html" as b %} then {% call b::error_line("x-error") %}{% endcall %}. Text is escaped. -#}
+
+{#- A form's or a view's error line: hidden until the script fills it. -#}
+{% macro error_line(id) %}<p id="{{ id }}" class="error" hidden></p>{% endmacro %}
+
+{#- A one-line explanation under a heading or a field. Plain text only; a hint with markup is written out. -#}
+{% macro hint(text) %}<p class="hint">{{ text }}</p>{% endmacro %}

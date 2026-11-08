@@ -108,7 +108,7 @@ docker stop "$SERVER" >/dev/null
 out=$(admin_script "$(admin_login)
 s, body = call('GET', '/api/admin/v1/status')
 print(s, 'offline' if '\"server_online\":false' in body.replace(' ', '') else 'online?')
-s, _ = call('GET', '/admin/')
+s, _ = call('GET', '/admin/providers/')
 print(s)" 2>&1)
 if printf '%s' "$out" | head -1 | grep -q '^200 offline'; then pass "admin signs in and reports the server offline"; else fail "admin with the server stopped: $out"; fi
 printf '%s' "$out" | tail -1 | grep -q '^200$' && pass "admin page loads" || fail "admin page loads"
@@ -372,8 +372,9 @@ ports=$(docker inspect -f '{{range $p, $b := .NetworkSettings.Ports}}{{if $b}}{{
 [ "$ports" = "443/tcp 80/tcp " ] && pass "Caddy publishes 443 and 80 only" || fail "Caddy publishes: $ports"
 cfg=$(caddy_config)
 printf '%s' "$cfg" | grep -q '"abort":true' && printf '%s' "$cfg" | grep -q '192.168.0.0/16' && pass "the admin site is limited to private addresses" || fail "the admin site has no private-address rule"
-code=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 https://localhost/admin/ 2>/dev/null || true)
-[ "$code" = 200 ] && pass "https://localhost/admin/ opens the admin" || fail "https://localhost/admin/ answered '$code'"
+# /admin/ goes to the first admin page (plan step 1.16), through Caddy.
+code=$(curl -skL -o /dev/null -w '%{http_code} %{url_effective}' --max-time 5 https://localhost/admin/ 2>/dev/null || true)
+[ "$code" = "200 https://localhost/admin/providers/" ] && pass "https://localhost/admin/ opens the admin's first page" || fail "https://localhost/admin/ answered '$code'"
 code=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 https://localhost/api/admin/v1/health 2>/dev/null || true)
 [ "$code" = 200 ] && pass "the admin API answers at /api/admin/v1 over HTTPS" || fail "https://localhost/api/admin/v1/health answered '$code'"
 code=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 https://localhost/admin/api/v1/health 2>/dev/null || true)

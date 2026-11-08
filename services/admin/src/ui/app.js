@@ -3,7 +3,9 @@
   'use strict';
 
   const $ = (id) => document.getElementById(id);
-  const show = (node, on) => { node.hidden = !on; };
+  const show = (node, visible) => { node.hidden = !visible; };
+  // Each page holds only its own section (plan step 1.16), so wiring for another page's elements is skipped.
+  const on = (id, event, fn) => { const el = $(id); if (el) el.addEventListener(event, fn); };
 
   async function api(method, path, body) {
     const res = await fetch(path, {
@@ -33,42 +35,30 @@
     show(f, !!text);
   }
 
-  // ------------------------------------------------------------- tabs
+  // ------------------------------------------------------------- pages
 
+  // One admin page per URL (plan step 1.16): the nav is plain links, and this script runs only the
+  // current page's loader. A page with no entry here needs none; audit.js registers the Audit page's.
+  const page = document.body.dataset.page;
   const tabs = [
-    { id: 'providers', label: 'Providers', load: loadProviders },
-    { id: 'services', label: 'Services', load: loadServices },
-    { id: 'clients', label: 'Clients', load: loadClients },
-    { id: 'settings', label: 'Settings', load: loadSettings },
-    { id: 'network', label: 'Network', load: loadNetwork },
-    { id: 'security', label: 'Security', load: loadKeys },
-    { id: 'backup', label: 'Backup' },
+    { id: 'providers', load: loadProviders },
+    { id: 'services', load: loadServices },
+    { id: 'clients', load: loadClients },
+    { id: 'settings', load: loadSettings },
+    { id: 'network', load: loadNetwork },
+    { id: 'security', load: loadKeys },
   ];
-  function registerTab(tab) { tabs.push(tab); renderNav(); }
+  let appShown = false;
+  function registerTab(tab) {
+    tabs.push(tab);
+    if (appShown && tab.id === page) loadPage();
+  }
   window.askbarAdmin = { api, flash, registerTab, show, $ };
 
-  function openTab(id) {
-    for (const t of tabs) {
-      const sec = document.querySelector('section[data-tab="' + t.id + '"]');
-      if (sec) show(sec, t.id === id);
-    }
-    for (const b of $('nav').children) b.setAttribute('aria-current', b.dataset.tab === id ? 'page' : 'false');
+  function loadPage() {
     flash('');
-    const t = tabs.find((x) => x.id === id);
+    const t = tabs.find((x) => x.id === page);
     if (t && t.load) t.load().catch((e) => flash(e.message));
-  }
-
-  function renderNav() {
-    const nav = $('nav');
-    nav.textContent = '';
-    for (const t of tabs) {
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.dataset.tab = t.id;
-      b.textContent = t.label;
-      b.addEventListener('click', () => openTab(t.id));
-      nav.appendChild(b);
-    }
   }
 
   // ------------------------------------------------------------ login
@@ -87,7 +77,7 @@
     $('setup-current').focus();
   }
 
-  async function route(afterTab) {
+  async function route() {
     let signedIn = true;
     try { await api('GET', '/api/admin/v1/session'); } catch (_) { signedIn = false; }
     if (!signedIn) return showLogin();
@@ -97,7 +87,7 @@
     // The audit passphrase is part of setup: without a key the server records nothing it may keep,
     // and refuses to start replies. An install from before audit keys is asked on its next visit.
     if (status.audit_key_set === false) return showAuditSetup();
-    showApp(afterTab);
+    showApp();
   }
 
   function showAuditSetup() {
@@ -109,7 +99,7 @@
     $('setup-audit').focus();
   }
 
-  $('setup-audit-form').addEventListener('submit', async (e) => {
+  on('setup-audit-form', 'submit', async (e) => {
     e.preventDefault();
     const err = $('setup-audit-error');
     show(err, false);
@@ -130,12 +120,9 @@
       fail(ex.message);
     }
   });
-  $('setup-audit-continue').addEventListener('click', () => route());
-  for (const a of document.querySelectorAll('#setup-next a')) {
-    a.addEventListener('click', (e) => { e.preventDefault(); route(a.dataset.tab); });
-  }
+  on('setup-audit-continue', 'click', () => route());
 
-  $('setup-password-form').addEventListener('submit', async (e) => {
+  on('setup-password-form', 'submit', async (e) => {
     e.preventDefault();
     const err = $('setup-password-error');
     show(err, false);
@@ -170,16 +157,16 @@
     } catch (_) { /* signed out, or the admin itself is away */ }
   }
 
-  function showApp(tab) {
+  function showApp() {
     hideAll();
     show($('app'), true);
-    renderNav();
-    openTab(tabs.some((t) => t.id === tab) ? tab : tabs[0].id);
+    appShown = true;
+    loadPage();
     checkServer();
     if (!statusTimer) statusTimer = setInterval(() => { if (!$('app').hidden) checkServer(); }, 5000);
   }
 
-  $('login-form').addEventListener('submit', async (e) => {
+  on('login-form', 'submit', async (e) => {
     e.preventDefault();
     const err = $('login-error');
     show(err, false);
@@ -192,7 +179,7 @@
     }
   });
 
-  $('logout').addEventListener('click', async () => {
+  on('logout', 'click', async () => {
     try { await api('DELETE', '/api/admin/v1/session'); } catch (_) { /* already signed out */ }
     route();
   });
@@ -344,11 +331,11 @@
       $('cpa-redirect').focus();
     } catch (ex) { cpaMessage(ex.message); }
   }
-  $('cpa-connect-anthropic').addEventListener('click', () => connect('anthropic'));
-  $('cpa-connect-openai').addEventListener('click', () => connect('openai'));
-  $('cpa-cancel').addEventListener('click', closeLogin);
+  on('cpa-connect-anthropic', 'click', () => connect('anthropic'));
+  on('cpa-connect-openai', 'click', () => connect('openai'));
+  on('cpa-cancel', 'click', closeLogin);
 
-  $('cpa-finish').addEventListener('click', async () => {
+  on('cpa-finish', 'click', async () => {
     if (!login) return;
     const state = login.state;
     cpaMessage('Sending...');
@@ -518,12 +505,12 @@
     }
   }
 
-  $('p-model-list').addEventListener('change', () => {
+  on('p-model-list', 'change', () => {
     if ($('p-model-list').value === MANUAL) { showModelInput(); $('p-model').focus(); return; }
     $('p-model').value = $('p-model-list').value;
   });
-  $('p-model-refresh').addEventListener('click', loadModels);
-  for (const id of ['p-type', 'p-base-url', 'p-key']) $(id).addEventListener('change', loadModels);
+  on('p-model-refresh', 'click', loadModels);
+  for (const id of ['p-type', 'p-base-url', 'p-key']) on(id, 'change', loadModels);
 
   function openForm(p, preset) {
     editing = p ? p.id : null;
@@ -562,10 +549,10 @@
     show($('provider-form'), false);
   }
 
-  $('add-provider').addEventListener('click', () => openForm(null));
-  $('provider-cancel').addEventListener('click', closeForm);
+  on('add-provider', 'click', () => openForm(null));
+  on('provider-cancel', 'click', closeForm);
 
-  $('provider-form').addEventListener('submit', async (e) => {
+  on('provider-form', 'submit', async (e) => {
     e.preventDefault();
     const num = (id, parse) => ($(id).value.trim() === '' ? null : parse($(id).value));
     const body = {
@@ -594,7 +581,7 @@
 
   // --------------------------------------------------------- security (admin password)
 
-  $('password-form').addEventListener('submit', async (e) => {
+  on('password-form', 'submit', async (e) => {
     e.preventDefault();
     const err = $('pw-error');
     show(err, false);
@@ -635,7 +622,7 @@
     show($('key-error'), false);
   }
 
-  $('key-form').addEventListener('submit', async (e) => {
+  on('key-form', 'submit', async (e) => {
     e.preventDefault();
     const err = $('key-error');
     show(err, false);
@@ -655,9 +642,9 @@
     $('key-value').textContent = '';
     if ($('key-dialog').open) $('key-dialog').close();
   }
-  $('key-close').addEventListener('click', closeKeyDialog);
-  $('key-dialog').addEventListener('cancel', () => { $('key-value').textContent = ''; });
-  $('key-copy').addEventListener('click', async () => {
+  on('key-close', 'click', closeKeyDialog);
+  on('key-dialog', 'cancel', () => { $('key-value').textContent = ''; });
+  on('key-copy', 'click', async () => {
     const text = $('key-value').textContent;
     try {
       await navigator.clipboard.writeText(text);
@@ -674,7 +661,7 @@
     setTimeout(() => { $('key-copy').textContent = 'Copy'; }, 3000);
   });
 
-  $('key-revoke').addEventListener('click', async () => {
+  on('key-revoke', 'click', async () => {
     const b = $('key-revoke');
     if (!revokeArmed) {
       b.textContent = 'Revoke? It stops working at once.';
@@ -719,11 +706,11 @@
     el.textContent = 'HTTPS front end: ' + p.message + (p.at ? ' (' + new Date(p.at * 1000).toLocaleTimeString() + ')' : '');
   }
 
-  $('n-apply').addEventListener('click', async () => {
+  on('n-apply', 'click', async () => {
     try { showProxy(await api('POST', '/api/admin/v1/network/apply')); } catch (ex) { flash(ex.message); }
   });
 
-  $('network-form').addEventListener('submit', async (e) => {
+  on('network-form', 'submit', async (e) => {
     e.preventDefault();
     const err = $('network-error');
     show(err, false);
@@ -774,7 +761,7 @@
     $('pair-form').querySelector('button[type=submit]').disabled = users.length === 0;
   }
 
-  $('user-form').addEventListener('submit', async (e) => {
+  on('user-form', 'submit', async (e) => {
     e.preventDefault();
     const err = $('user-error');
     show(err, false);
@@ -831,7 +818,7 @@
     }
   }
 
-  $('pair-form').addEventListener('submit', async (e) => {
+  on('pair-form', 'submit', async (e) => {
     e.preventDefault();
     const err = $('pair-error');
     show(err, false);
@@ -845,7 +832,7 @@
     }
   });
 
-  $('pairing-copy').addEventListener('click', async () => {
+  on('pairing-copy', 'click', async () => {
     const t = $('pairing-string');
     t.select();
     try { await navigator.clipboard.writeText(t.value); flash('Copied.'); } catch (_) { document.execCommand('copy'); flash('Copied.'); }
@@ -863,7 +850,7 @@
   function showTimeoutMinutes() {
     $('s-gen-timeout-min').textContent = minutesText(parseInt($('s-gen-timeout').value, 10));
   }
-  $('s-gen-timeout').addEventListener('input', showTimeoutMinutes);
+  on('s-gen-timeout', 'input', showTimeoutMinutes);
 
   async function loadSettings() {
     const s = await api('GET', '/api/admin/v1/settings');
@@ -883,7 +870,7 @@
     show($('settings-error'), false);
   }
 
-  $('settings-form').addEventListener('submit', async (e) => {
+  on('settings-form', 'submit', async (e) => {
     e.preventDefault();
     const err = $('settings-error');
     show(err, false);
@@ -911,7 +898,7 @@
   });
 
   // The audit key: switch to a new passphrase. The old key is kept, only for reading what it sealed.
-  $('rotate-form').addEventListener('submit', async (e) => {
+  on('rotate-form', 'submit', async (e) => {
     e.preventDefault();
     const err = $('rotate-error');
     show(err, false);

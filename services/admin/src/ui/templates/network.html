@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{%- import "blocks.html" as b %}
+{% block hint %}The host name, its certificate, and which addresses may open this site.{% endblock %}
+{% block content %}
+    <form id="network-form" class="panel">
+      <label class="check"><input id="n-tls" type="checkbox"> Serve over HTTPS (through the Caddy front end)</label>
+      <label>Hostname <input id="n-host" placeholder="askbar.example.com" autocomplete="off" spellcheck="false"></label>
+      <label>Cloudflare API token <input id="n-token" type="password" autocomplete="off" placeholder="write-only"></label>
+      <p class="hint">Used only to prove ownership of the hostname to Let's Encrypt (permissions Zone:DNS:Edit and Zone:Zone:Read). It is stored encrypted and never shown again. The apps reach the server at the hostname, and this admin site is at <code>/admin</code> on the same hostname.</p>
+      <label class="check" id="n-clear-row" hidden><input id="n-clear" type="checkbox"> Remove the stored token</label>
+      <label class="check"><input id="n-allow" type="checkbox"> Only let these addresses open the admin site over HTTPS (off: anyone who can reach it may try to sign in)</label>
+      <label>Allowed addresses and networks <input id="n-cidr" placeholder="192.168.1.0/24 10.0.0.5" autocomplete="off" spellcheck="false"></label>
+      <label class="check"><input id="n-staging" type="checkbox"> Use the Let's Encrypt staging CA (test certificates; browsers will warn)</label>
+      <div class="row"><button type="submit">Save network settings</button></div>
+      <p class="hint" id="n-info"></p>
+      <p id="n-proxy" class="hint"></p>
+      <div class="row"><button type="button" id="n-apply" class="secondary">Apply to HTTPS front end again</button></div>
+      {% call b::error_line("network-error") %}{% endcall %}
+    </form>
+{% endblock %}

@@ -151,7 +151,8 @@ async fn a_token_that_cannot_be_read_is_not_pushed() {
 async fn the_ui_is_served_with_its_security_headers() {
     let t = start(true).await;
     for (path, ctype) in [
-        ("/admin/", "text/html"),
+        ("/admin/providers/", "text/html"),
+        ("/admin/network/", "text/html"),
         ("/admin/app.js", "text/javascript"),
         ("/admin/audit.js", "text/javascript"),
         ("/admin/style.css", "text/css"),
@@ -161,7 +162,8 @@ async fn the_ui_is_served_with_its_security_headers() {
         assert!(r.headers()["content-type"].to_str().unwrap().starts_with(ctype), "{path}");
         assert!(r.headers()["content-security-policy"].to_str().unwrap().contains("frame-ancestors 'none'"));
     }
-    let page = t.http.get(format!("{}/admin/", t.adm)).send().await.unwrap().text().await.unwrap();
+    // Each section is its own page (plan step 1.16); the network page holds the allowlist.
+    let page = t.http.get(format!("{}/admin/network/", t.adm)).send().await.unwrap().text().await.unwrap();
     assert!(page.contains("id=\"offline\"") && page.contains("id=\"n-allow\""));
     // The admin holds no master key (the server makes its own), so its screens are gone. (The audit
     // key's rotation, added in 5.13 and 7.10, is a different thing and is here.)
@@ -169,7 +171,8 @@ async fn the_ui_is_served_with_its_security_headers() {
         !page.contains("setup-key") && !page.contains("setup-saved") && !page.contains("Rotate the master key"),
         "no master-key screens here"
     );
-    assert!(page.contains("Rotate the audit key") && page.contains("id=\"rotate-form\""));
+    let settings = t.http.get(format!("{}/admin/settings/", t.adm)).send().await.unwrap().text().await.unwrap();
+    assert!(settings.contains("Rotate the audit key") && settings.contains("id=\"rotate-form\""));
     // /admin (no slash) goes to the page; the root is not the admin's (Caddy never forwards it), so it is a 404.
     let none = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().unwrap();
     assert_eq!(none.get(format!("{}/admin", t.adm)).send().await.unwrap().status(), 303);
