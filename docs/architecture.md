@@ -124,7 +124,7 @@ Every link has its own authenticated path and uses separate networks, so a missi
 | `admin` | `auditor` | Append admin action records | Admin append token |
 | `admin` | `alerter` | Read release results | Per-link token |
 | `server`, `model-gateway`, `alerter` | `auditor` | Append records, including `model-gateway` span starts | Service append token |
-| Caddy | `auditor` | Append access logs | Service append token |
+| Caddy | `auditor` | Append access logs | The network alone: Caddy is the only other member of `audit-caddy` ([ADR 0051](adr/0051-auditor.md)) |
 | `auditor` | `alerter` | Alert events | Per-link token |
 | `server` | `model-gateway` | Model calls and the approved model list | Per-link token |
 | `model-gateway` | `cpa` | Subscription providers | `cpa` API key |
