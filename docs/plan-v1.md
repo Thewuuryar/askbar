@@ -162,9 +162,9 @@ That is about 52 h over the ~100 h budget before any backlog item (the component
 - Pure move of `services/server/src/audit.rs` and `seal.rs` into a library; server keeps using it in-process.
 
 **2.4 `feat(auditor): run the audit store as its own container`** (L) — [ADR 0010](adr/0010-auditor.md), 0025
-- Before the code: a component ADR for the `auditor` (its volume `audit-data`, its internal network, its links and tokens, no outbound), proposed in its own PR and accepted. The `server` component ADR (0039) is amended in place in the same PR: it no longer mounts `audit-data` ([ADR 0046](adr/0046-component-and-register-adrs-and-partial-amendments.md)).
+- Before the code: a component ADR for the `auditor` (its volume `auditor-data`, its internal network, its links and tokens, no outbound), proposed in its own PR and accepted. The `server` component ADR (0039) is amended in place in the same PR: it no longer mounts `audit-data` ([ADR 0046](adr/0046-component-and-register-adrs-and-partial-amendments.md)).
 - `services/auditor`: `/api/audit/v1` append (service and admin append tokens), read and retention (admin read token, floor 7 days, default 30), boot-ID handling that ends earlier open spans as interrupted, group commit. Internal-only network, no outbound.
-- Server appends over HTTP with a bounded retry queue for finish/payload records; the `audit-data` volume is mounted by the auditor instead of the server (same name). Server answers `503 audit_backlog` when the auditor is unreachable.
+- Server appends over HTTP with a bounded retry queue for finish/payload records; the auditor mounts a new volume, `auditor-data`; the server's `audit-data` stays declared and unmounted until 1.0 ([ADR 0051](adr/0051-auditor.md)). Server answers `503 audit_backlog` when the auditor is unreachable.
 - Failure tests: auditor down, disk full, slow ack.
 
 **2.5 `refactor(admin): read the audit trail from the auditor`** (M)

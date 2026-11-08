@@ -1,6 +1,6 @@
 # 0032. Container hardening
 
-Status: Accepted; amended by 0050 and 0053
+Status: Accepted; amended by 0050
 Date: 2026-11-04
 Source: required by v1 decisions
 

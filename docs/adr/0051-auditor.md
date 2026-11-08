@@ -13,7 +13,7 @@ Source: plan steps 2.4 to 2.9 ([plan-v1.md](../plan-v1.md)); owner rule that eve
 
 - **What it is:** `services/auditor`, a Dockerfile target and image `askbar-auditor`. It keeps the audit store and serves `/api/audit/v1` ([0022](0022-api-path-conventions.md)). It links `askbar-audit` ([0052](0052-askbar-audit-crate.md)) and `askbar-service` ([0036](0036-askbar-service-crate.md)).
 - **What it holds:**
-  - `audit.db` on the `audit-data` volume, which moves from the server to the auditor and keeps its name ([architecture.md](../architecture.md): data volumes are never renamed);
+  - `audit.db` on a new volume, `auditor-data`. Nothing needs migrating before 1.0 ([0018](0018-releases-and-migrations.md)), so the auditor starts with an empty store rather than taking over the server's;
   - the hashes of the tokens that may call it, in `auditor-token`, written by `bootstrap` ([0049](0049-bootstrap.md));
   - metadata and sealed payloads only. It never holds the audit passphrase or the private key, and has no function that opens a sealed payload ([0030](0030-sealed-audit-content.md)).
 - **Its API, `/api/audit/v1`,** by token ([0010](0010-auditor.md)):
@@ -41,15 +41,15 @@ Source: plan steps 2.4 to 2.9 ([plan-v1.md](../plan-v1.md)); owner rule that eve
   - holds no audit key registry of its own. The admin keeps the registry, with each key's created and retired dates and what is needed to open its records, and appends each key's creation and retirement as an admin action record ([0010](0010-auditor.md)), so the registry's history is in the chain (plan step 2.7, [0030](0030-sealed-audit-content.md) rule 7);
   - takes Caddy's access logs (plan step 2.9) on an ingest listener reachable only on `audit-caddy`. Caddy's log writer sends no token, so this one link is authenticated by the network alone: Caddy is the only other member of `audit-caddy`, and the listener accepts only access-log records and is rate limited;
   - later: sends alert events to `alerter` (phase 4), and makes a read-only backup export (phase 6).
-- **Volumes:** `audit-data` (data); `auditor-token`, its credential volume, read-only, written by `bootstrap` ([0049](0049-bootstrap.md)): the hashes of its callers' tokens, and from phase 4 its token for `alerter`.
-- **Who it runs as:** its own uid, 10003 ([0003](0003-v1-service-layout.md)). On an existing install the files on `audit-data` belong to the server's uid (10002). The entrypoint starts as root with `CHOWN`, `SETUID` and `SETGID` only, gives the store to 10003 if it is not already, and switches to 10003 before it opens the store or a port. Switching to a non-root uid drops every capability, so the running auditor has none ([0053](0053-auditor-start-up-exception.md)).
+- **Volumes:** `auditor-data` (data). Docker creates it empty and already owned by uid 10003, because the auditor image's `/audit` directory belongs to that uid; the owner is set when the image is built, not at run time. The server's old `audit-data` is neither renamed nor mounted: it stays declared and unmounted until 1.0, like `control-token`, and holds the records from before step 2.4 until the owner copies or deletes it (the guide says how, from step 2.4). `auditor-token`, its credential volume, read-only, written by `bootstrap` ([0049](0049-bootstrap.md)): the hashes of its callers' tokens, and from phase 4 its token for `alerter`.
+- **Who it runs as:** its own uid, 10003 ([0003](0003-v1-service-layout.md)), from its first instruction, with no capabilities.
 - **Networks:** internal only, with no outbound route ([architecture.md](../architecture.md), Outbound access). One network per caller, shared with the auditor alone: `audit-server` and `audit-admin` in step 2.4, `audit-caddy` in step 2.9, `audit-model-gateway` in phase 3 and `audit-alerter` in phase 4 (which also carries the alert events). A caller of the auditor reaches no other service through it, and a missing row in the Links table is a blocked path. No network pins a subnet; Docker assigns them. The [guide](../guide.md#docker-networks) says how to give Docker more address pools if a host runs out.
 - **Listeners:** each binds the addresses of a network alias, never a wildcard, the way the server API binds `server-api-host`:
   - `/api/audit/v1` binds every address of `auditor-api-host`, an alias the auditor has on each caller's network except `audit-caddy`; callers use that name;
   - the access-log listener binds the one address of `auditor-ingest-host`, an alias on `audit-caddy` only. The network is that link's only authentication, so the listener must not answer on any other network: a server or `alerter` that could reach it could append false access logs.
   - `check-isolation.sh` checks that each listener answers on its own networks and on no other.
 - **Links** ([architecture.md](../architecture.md), Links): in from the server, the admin (append and read), and later `model-gateway`, `alerter` and Caddy (network only, above); out only to `alerter` (alert events, per-link token, phase 4).
-- **Hardening:** the shared defaults of [0032](0032-container-hardening.md) with the start-up exception in [0053](0053-auditor-start-up-exception.md). `check-isolation.sh` lists `auditor`, checks that the running process has no capabilities (`CapEff` is 0) and no route out, that each caller reaches it only on its own network, and that no unsealed content reaches its store ([0030](0030-sealed-audit-content.md)).
+- **Hardening:** the shared defaults of [0032](0032-container-hardening.md), with no exception. `check-isolation.sh` lists `auditor`, checks that the running process has no capabilities (`CapEff` is 0) and no route out, that each caller reaches it only on its own network, and that no unsealed content reaches its store ([0030](0030-sealed-audit-content.md)).
 - **Changes elsewhere when built:** the server stops mounting `audit-data` and appends over HTTP with a bounded retry queue for finish and payload records, answering `503 audit_backlog` when the auditor cannot take them; 0039 is amended in the same pull request (plan step 2.4). Plan step 2.5 removes `/api/server/v1/audit/*`.
 
 ## Alternatives considered
@@ -59,7 +59,7 @@ Source: plan steps 2.4 to 2.9 ([plan-v1.md](../plan-v1.md)); owner rule that eve
 - **An off-host copy of the chain head in v1:** rejected by [0025](0025-audit-record-reliability.md).
 - **One shared audit network:** rejected. The server, `model-gateway`, `alerter` and Caddy could reach each other's ports on it. Tokens would refuse their requests, but reach would no longer follow the Links table.
 - **Running as the server's uid:** rejected. It needs no exception, but each service has its own uid ([0003](0003-v1-service-layout.md)).
-- **A one-time host command to change the store's owner:** rejected. An upgrade would need a manual step, against the rule that a restart needs no commands (plan step 7.3).
+- **Keeping `audit-data` and changing its owner at start-up:** rejected. It needs a capability exception to 0032 for a migration that [0018](0018-releases-and-migrations.md) says isn't needed before 1.0. A one-time host command instead would put a manual step in the upgrade.
 - **Verifying the chain only from the oldest kept record, with no prune record:** rejected. A deletion of the oldest records would look like retention.
 - **A log-forwarding sidecar for Caddy:** rejected for v1. It is one more component, with its own ADR, to carry a token for one link that a network already isolates.
 - **An auditor copy of the key registry:** rejected. The admin needs the registry to open records, and two copies could disagree; the admin action records already carry its history.
@@ -68,7 +68,9 @@ Source: plan steps 2.4 to 2.9 ([plan-v1.md](../plan-v1.md)); owner rule that eve
 
 If the auditor is down or full, model work stops until it recovers ([0010](0010-auditor.md)). Every reply adds one round trip to it. A compromised server or admin can still append false records or leave some out; the hash chain shows rewrites and deletions, not lies ([0016](0016-risk-register.md)). The isolation script has one more service to check.
 
-Each caller adds a network (the stack has about fifteen by phase 4), and every network takes one of Docker's address pools; the [guide](../guide.md#docker-networks) covers a host that runs out. The Caddy link is the one link authenticated by its network alone. The auditor holds three capabilities for the moment before it switches uid.
+Each caller adds a network (the stack has about fifteen by phase 4), and every network takes one of Docker's address pools; the [guide](../guide.md#docker-networks) covers a host that runs out. The Caddy link is the one link authenticated by its network alone.
+
+The audit trail starts again at step 2.4: records from before it stay only in the unmounted `audit-data`, outside retention, until the owner copies or deletes that volume.
 
 ## Amendments
 
