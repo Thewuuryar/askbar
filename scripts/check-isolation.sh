@@ -20,7 +20,6 @@ set -u
 PROJECT="${COMPOSE_PROJECT_NAME:-askbar}"
 EDGE="${PROJECT}_edge"; SERVER_API_NET="${PROJECT}_server-api"
 SERVER=askbar-server; ADMIN=askbar-admin; CADDY=askbar-caddy
-SERVER_API=172.30.0.2:8082
 PYIMG="${ASKBAR_CHECK_IMAGE:-python:3.12-slim@sha256:4840d514c583a4d3d8cad3940e68dee6f0f6f3635c12fcd0a3d74c21a5b93a54}"
 PW="${ASKBAR_ADMIN_PASSWORD:-$(head -c 24 /dev/urandom | base64 | tr -d '/+=')}"
 FAILS=0
@@ -118,6 +117,13 @@ for i in $(seq 1 30); do [ "$(docker inspect -f '{{.State.Health.Status}}' "$SER
 [ "$(docker inspect -f '{{.State.Health.Status}}' "$SERVER")" = healthy ] && pass "server healthy again" || fail "server did not come back"
 
 echo "== 2. The server port"
+# No address is fixed in compose.yaml: the server listens on whatever server-api address Docker gave it,
+# found by the alias server-api-host, which exists on that network alone. Read it after the restart above.
+SERVER_API_IP=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$SERVER_API_NET\").IPAddress}}" "$SERVER")
+SERVER_API="$SERVER_API_IP:8082"
+[ -n "$SERVER_API_IP" ] && pass "the server has an address on server-api ($SERVER_API_IP)" || fail "the server has no address on server-api"
+[ "$(http_status "$SERVER_API_NET" server-api-host:8082)" = 401 ] && pass "the admin's address for it, server-api-host, reaches the server API" || fail "server-api-host:8082 does not reach the server API"
+refused "compose.yaml pins no subnet or address (docs/guide.md, Docker networks)" grep -En '^[[:space:]]*(ipv[46]_address|subnet|ip_range):' "$(dirname "$0")/../compose.yaml"
 HASH=$(docker exec "$ADMIN" cat /server-token/token.sha256 2>/dev/null | tr -d '[:space:]')
 [ -n "$HASH" ] || fail "could not read the token hash from the admin's /server-token"
 [ "$(http_status "$SERVER_API_NET" "$SERVER_API")" = 401 ] && pass "401 without a token" || fail "no token should give 401"
@@ -126,11 +132,11 @@ HASH=$(docker exec "$ADMIN" cat /server-token/token.sha256 2>/dev/null | tr -d '
 
 # A second server on its own scratch volumes, with no hash file at all: nothing may be accepted.
 docker rm -f askbar-check-nohash >/dev/null 2>&1
-docker run -d --name askbar-check-nohash --network "$SERVER_API_NET" --ip 172.30.0.9 \
-  -e ASKBAR_SERVER_API_ADDR=172.30.0.9:8082 -e ASKBAR_CLIENT_API_ADDR=127.0.0.1:8080 \
+docker run -d --name askbar-check-nohash --network "$SERVER_API_NET" --network-alias askbar-check-nohash-host \
+  -e ASKBAR_SERVER_API_ADDR=askbar-check-nohash-host:8082 -e ASKBAR_CLIENT_API_ADDR=127.0.0.1:8080 \
   -e ASKBAR_SERVER_TOKEN_HASH_FILE=/nowhere/token.sha256 "$(docker inspect -f '{{.Config.Image}}' "$SERVER")" >/dev/null
 sleep 3
-code=$(http_status "$SERVER_API_NET" 172.30.0.9:8082 "$HASH")
+code=$(http_status "$SERVER_API_NET" askbar-check-nohash-host:8082 "$HASH")
 case "$code" in 401|403|503) pass "fails closed with no hash file ($code)";; *) fail "no hash file: got $code, expected a refusal";; esac
 docker rm -f askbar-check-nohash >/dev/null 2>&1
 

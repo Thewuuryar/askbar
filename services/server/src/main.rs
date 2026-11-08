@@ -109,7 +109,10 @@ async fn main() {
         run_healthcheck();
     }
     tracing_subscriber::fmt().with_target(false).init();
-    let (api, server_api) = match (addr_from_env("ASKBAR_CLIENT_API_ADDR"), addr_from_env("ASKBAR_SERVER_API_ADDR")) {
+    let server_api_addr = std::env::var("ASKBAR_SERVER_API_ADDR")
+        .map_err(|_| "ASKBAR_SERVER_API_ADDR is not set (example: server-api-host:8082)".to_string())
+        .and_then(|raw| askbar_server::server_api::parse_addr(&raw));
+    let (api, server_api) = match (addr_from_env("ASKBAR_CLIENT_API_ADDR"), server_api_addr) {
         (Ok(a), Ok(m)) => (a, m),
         (a, m) => {
             for e in [a.err(), m.err()].into_iter().flatten() {
@@ -118,11 +121,7 @@ async fn main() {
             std::process::exit(2);
         }
     };
-    // The server API is for the admin service only: one specific address, never a wildcard.
-    if let Err(e) = askbar_server::server_api::check_not_wildcard(&server_api) {
-        eprintln!("error: {e}");
-        std::process::exit(2);
-    }
+    // The server API is for the admin service only: `parse_addr` gives one specific address, never a wildcard.
     let key_path = askbar_server::secrets::key_path();
     // The control database and one file per space (ADR 0009). The single `askbar.db` of earlier
     // versions is never opened, read or deleted: pre-1.0 storage changes wipe and re-pair (ADR 0018).

@@ -16,7 +16,7 @@ info:
     Every error is a problem (`application/problem+json`). See [docs/architecture.md](../architecture.md)
     and, for the audit endpoints, [docs/wire-contract.md](../wire-contract.md).
 servers:
-  - url: http://172.30.0.2:8082
+  - url: http://server-api-host:8082
     description: The server's address on the internal network, as set in compose.yaml.
 security:
   - serverToken: []

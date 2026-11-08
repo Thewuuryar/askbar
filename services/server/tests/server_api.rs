@@ -97,10 +97,22 @@ async fn it_fails_closed_when_the_hash_file_is_missing_or_unusable() {
 fn the_listen_address_is_never_a_wildcard() {
     assert!(server_api::parse_addr("172.30.0.2:8082").is_ok());
     assert!(server_api::parse_addr("127.0.0.1:8082").is_ok());
-    for bad in ["0.0.0.0:8082", "[::]:8082", "8082", "server-api:8082", ""] {
+    // `.invalid` never resolves (RFC 2606), so a name that does not exist is refused.
+    for bad in ["0.0.0.0:8082", "[::]:8082", "8082", "nowhere.invalid:8082", ""] {
         assert!(server_api::parse_addr(bad).is_err(), "{bad:?}");
     }
     assert!(server_api::parse_addr("0.0.0.0:8082").unwrap_err().contains("every network"));
+}
+
+#[test]
+fn a_name_must_resolve_to_exactly_one_address() {
+    let a: std::net::SocketAddr = "172.18.0.4:8082".parse().unwrap();
+    let b: std::net::SocketAddr = "172.19.0.4:8082".parse().unwrap();
+    assert_eq!(server_api::one_addr("server-api-host:8082", vec![a]), Ok(a));
+    assert_eq!(server_api::one_addr("server-api-host:8082", vec![a, a]), Ok(a), "the same address twice is one");
+    let two = server_api::one_addr("server-api-host:8082", vec![a, b]).unwrap_err();
+    assert!(two.contains("one network") && two.contains("172.18.0.4") && two.contains("172.19.0.4"), "{two}");
+    assert!(server_api::one_addr("server-api-host:8082", vec![]).is_err());
 }
 
 // ---------------------------------------------------------------- snapshot
