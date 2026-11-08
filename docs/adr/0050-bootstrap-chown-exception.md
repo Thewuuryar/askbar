@@ -1,6 +1,6 @@
 # 0050. A `CHOWN` exception for `bootstrap`
 
-Status: Proposed
+Status: Accepted
 Date: 2026-11-08
 Amends: [0032](0032-container-hardening.md), the service exceptions and checks (rules 3 to 6)
 Source: owner review of the open questions in [0049](0049-bootstrap.md) (2026-11-08)
