@@ -39,16 +39,13 @@ Source: plan steps 2.4 to 2.9 ([plan-v1.md](../plan-v1.md)); owner rule that eve
 
   - serves token counts by provider and model to the admin read token (plan step 2.5). The admin applies the prices it already holds; the auditor holds no prices;
   - holds no audit key registry of its own. The admin keeps the registry, with each key's created and retired dates and what is needed to open its records, and appends each key's creation and retirement as an admin action record ([0010](0010-auditor.md)), so the registry's history is in the chain (plan step 2.7, [0030](0030-sealed-audit-content.md) rule 7);
-  - takes Caddy's access logs (plan step 2.9) on an ingest listener reachable only on `audit-caddy`. Caddy's log writer sends no token, so this one link is authenticated by the network alone: Caddy is the only other member of `audit-caddy`, and the listener accepts only access-log records and is rate limited;
   - later: sends alert events to `alerter` (phase 4), and makes a read-only backup export (phase 6).
+- **Caddy's access logs** stay a control in [0016](0016-risk-register.md). Caddy's log writer sends no token, so how they reach the auditor is designed in plan step 2.9, and this record is amended then ([0046](0046-component-and-register-adrs-and-partial-amendments.md)).
 - **Volumes:** `auditor-data` (data). Docker creates it empty and already owned by uid 10003, because the auditor image's `/audit` directory belongs to that uid; the owner is set when the image is built, not at run time. The server's old `audit-data` is neither renamed nor mounted: it stays declared and unmounted until 1.0, like `control-token`, and holds the records from before step 2.4 until the owner copies or deletes it (the guide says how, from step 2.4). `auditor-token`, its credential volume, read-only, written by `bootstrap` ([0049](0049-bootstrap.md)): the hashes of its callers' tokens, and from phase 4 its token for `alerter`.
 - **Who it runs as:** its own uid, 10003 ([0003](0003-v1-service-layout.md)), from its first instruction, with no capabilities.
-- **Networks:** internal only, with no outbound route ([architecture.md](../architecture.md), Outbound access). One network per caller, shared with the auditor alone: `audit-server` and `audit-admin` in step 2.4, `audit-caddy` in step 2.9, `audit-model-gateway` in phase 3 and `audit-alerter` in phase 4 (which also carries the alert events). A caller of the auditor reaches no other service through it, and a missing row in the Links table is a blocked path. No network pins a subnet; Docker assigns them. The [guide](../guide.md#docker-networks) says how to give Docker more address pools if a host runs out.
-- **Listeners:** each binds the addresses of a network alias, never a wildcard, the way the server API binds `server-api-host`:
-  - `/api/audit/v1` binds every address of `auditor-api-host`, an alias the auditor has on each caller's network except `audit-caddy`; callers use that name;
-  - the access-log listener binds the one address of `auditor-ingest-host`, an alias on `audit-caddy` only. The network is that link's only authentication, so the listener must not answer on any other network: a server or `alerter` that could reach it could append false access logs.
-  - `check-isolation.sh` checks that each listener answers on its own networks and on no other.
-- **Links** ([architecture.md](../architecture.md), Links): in from the server, the admin (append and read), and later `model-gateway`, `alerter` and Caddy (network only, above); out only to `alerter` (alert events, per-link token, phase 4).
+- **Networks:** internal only, with no outbound route ([architecture.md](../architecture.md), Outbound access). One network per caller, shared with the auditor alone: `audit-server` and `audit-admin` in step 2.4, `audit-model-gateway` in phase 3 and `audit-alerter` in phase 4 (which also carries the alert events). A caller of the auditor reaches no other service through it, and a missing row in the Links table is a blocked path. No network pins a subnet; Docker assigns them. The [guide](../guide.md#docker-networks) says how to give Docker more address pools if a host runs out.
+- **Listener:** one, `/api/audit/v1`, on one port and every interface. That is safe because the auditor joins only `audit-*` networks, each made for one caller to reach this API; `check-isolation.sh` checks that its networks are exactly those.
+- **Links** ([architecture.md](../architecture.md), Links): in from the server, the admin (append and read), and later `model-gateway` and `alerter`; Caddy's link is designed in step 2.9; out only to `alerter` (alert events, per-link token, phase 4).
 - **Hardening:** the shared defaults of [0032](0032-container-hardening.md), with no exception. `check-isolation.sh` lists `auditor`, checks that the running process has no capabilities (`CapEff` is 0) and no route out, that each caller reaches it only on its own network, and that no unsealed content reaches its store ([0030](0030-sealed-audit-content.md)).
 - **Changes elsewhere when built:** the server stops mounting `audit-data` and appends over HTTP with a bounded retry queue for finish and payload records, answering `503 audit_backlog` when the auditor cannot take them; 0039 is amended in the same pull request (plan step 2.4). Plan step 2.5 removes `/api/server/v1/audit/*`.
 
@@ -57,18 +54,17 @@ Source: plan steps 2.4 to 2.9 ([plan-v1.md](../plan-v1.md)); owner rule that eve
 - **Keeping the audit store in the server:** rejected by [0010](0010-auditor.md). A compromised server could rewrite earlier records.
 - **Writing records asynchronously, or before the acknowledgment:** rejected by [0031](0031-audit-span-start-and-backlog.md).
 - **An off-host copy of the chain head in v1:** rejected by [0025](0025-audit-record-reliability.md).
-- **One shared audit network:** rejected. The server, `model-gateway`, `alerter` and Caddy could reach each other's ports on it. Tokens would refuse their requests, but reach would no longer follow the Links table.
+- **One shared audit network:** rejected. The server, `model-gateway` and `alerter` could reach each other's ports on it. Tokens would refuse their requests, but reach would no longer follow the Links table.
 - **Running as the server's uid:** rejected. It needs no exception, but each service has its own uid ([0003](0003-v1-service-layout.md)).
 - **Keeping `audit-data` and changing its owner at start-up:** rejected. It needs a capability exception to 0032 for a migration that [0018](0018-releases-and-migrations.md) says isn't needed before 1.0. A one-time host command instead would put a manual step in the upgrade.
 - **Verifying the chain only from the oldest kept record, with no prune record:** rejected. A deletion of the oldest records would look like retention.
-- **A log-forwarding sidecar for Caddy:** rejected for v1. It is one more component, with its own ADR, to carry a token for one link that a network already isolates.
 - **An auditor copy of the key registry:** rejected. The admin needs the registry to open records, and two copies could disagree; the admin action records already carry its history.
 
 ## Consequences
 
 If the auditor is down or full, model work stops until it recovers ([0010](0010-auditor.md)). Every reply adds one round trip to it. A compromised server or admin can still append false records or leave some out; the hash chain shows rewrites and deletions, not lies ([0016](0016-risk-register.md)). The isolation script has one more service to check.
 
-Each caller adds a network (the stack has about fifteen by phase 4), and every network takes one of Docker's address pools; the [guide](../guide.md#docker-networks) covers a host that runs out. The Caddy link is the one link authenticated by its network alone.
+Each caller adds a network (the stack has about fifteen by phase 4), and every network takes one of Docker's address pools; the [guide](../guide.md#docker-networks) covers a host that runs out.
 
 The audit trail starts again at step 2.4: records from before it stay only in the unmounted `audit-data`, outside retention, until the owner copies or deletes that volume.
 
