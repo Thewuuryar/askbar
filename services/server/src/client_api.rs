@@ -108,7 +108,13 @@ pub async fn conversation(MemberSpace(space): MemberSpace, Path((_, id)): Path<(
         .get_messages(&id)
         .map_err(internal)?
         .into_iter()
-        .map(|m| Message { id: m.id, role: m.role, content: m.content, created_at: m.created_at })
+        .map(|m| Message {
+            id: m.id,
+            role: m.role,
+            content: m.content,
+            created_at: m.created_at,
+            provider: m.by.map(|b| askbar_proto::ReplyProvider { id: b.provider_id, name: b.provider_name, model: b.model }),
+        })
         .collect();
     let pending = db.list_active_generations().map_err(internal)?.into_iter().filter(|g| g.conversation_id == id).map(pending_of).collect();
     Ok(Json(ConversationDetail {

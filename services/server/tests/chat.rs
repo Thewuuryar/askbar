@@ -155,7 +155,7 @@ async fn complete_reply_is_streamed_and_saved_in_full() {
     // Our own event names and shapes, in order: meta, provider, deltas..., done.
     assert!(matches!(&events[0], (n, ChatEvent::Meta { .. }) if n == "meta"));
     assert!(
-        matches!(&events[1], (n, ChatEvent::Provider { id, name }) if n == "provider" && id == "p1" && name == "mock"),
+        matches!(&events[1], (n, ChatEvent::Provider { id, name, model }) if n == "provider" && id == "p1" && name == "mock" && model.as_deref() == Some("m")),
         "{:?}",
         events[1]
     );
@@ -171,6 +171,21 @@ async fn complete_reply_is_streamed_and_saved_in_full() {
     let ChatEvent::Meta { conversation_id, .. } = &events[0].1 else { unreachable!() };
     let saved = t.messages();
     assert_eq!(saved, [("user".to_string(), "Hello there".to_string()), ("assistant".to_string(), reply.clone())]);
+
+    // The reply names the provider and model that wrote it; the question names none (plan step 1.13).
+    let detail: serde_json::Value = http
+        .get(format!("http://{}{}", t.addr, t.sp(&format!("/conversations/{conversation_id}"))))
+        .bearer_auth(&t.token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let msgs = detail["messages"].as_array().unwrap();
+    assert!(msgs[0].get("provider").is_none(), "a question has no provider: {}", msgs[0]);
+    assert_eq!(msgs[1]["provider"], serde_json::json!({ "id": "p1", "name": "mock", "model": "m" }));
+    assert!(msgs.iter().all(|m| m["created_at"].as_i64().unwrap() > 0), "every message has its time");
 
     // The new conversation is visible, with a ULID id, and continues with history.
     let r = t.chat(&http, Some(conversation_id), "p1", "And again").await;

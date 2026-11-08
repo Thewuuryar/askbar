@@ -666,6 +666,22 @@ components:
           type: string
         created_at:
           type: integer
+        provider:
+          $ref: '#/components/schemas/ReplyProvider'
+    ReplyProvider:
+      type: object
+      description: >-
+        On a reply only: the provider and model that wrote it, copied when it was stored, so a provider
+        renamed or deleted later does not change it. Absent on questions and on replies stored before
+        servers recorded it.
+      required: [id, name, model]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        model:
+          type: string
     PendingGeneration:
       type: object
       required: [generation_id, conversation_id, status, text, prompt]
@@ -781,6 +797,9 @@ components:
               type: string
             name:
               type: string
+            model:
+              type: string
+              description: The model the provider is set to use (absent from older servers).
         - type: object
           required: [event, text]
           properties:

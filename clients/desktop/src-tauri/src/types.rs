@@ -34,10 +34,12 @@ pub enum StreamEvent {
         generation_id: Option<String>,
         queued: bool,
     },
-    /// Which provider is answering; sent when the server routes to another than the one chosen.
+    /// Which provider is answering, and the model it is set to (`None` from an older server). Always
+    /// the one chosen (there is no fallback); the popup labels the reply with it.
     Provider {
         id: String,
         name: String,
+        model: Option<String>,
     },
     Delta {
         text: String,

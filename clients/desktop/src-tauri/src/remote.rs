@@ -141,7 +141,7 @@ impl ReplyReader {
                     }
                     steps.push(Step::Emit(StreamEvent::Started { conversation_id, generation_id, queued }));
                 }
-                Ok(ChatEvent::Provider { id, name }) => steps.push(Step::Emit(StreamEvent::Provider { id, name })),
+                Ok(ChatEvent::Provider { id, name, model }) => steps.push(Step::Emit(StreamEvent::Provider { id, name, model })),
                 Ok(ChatEvent::Delta { text }) => {
                     self.last_id += 1;
                     steps.push(Step::Emit(StreamEvent::Delta { text }));
@@ -857,8 +857,8 @@ mod tests {
         let stream = [
             sse("meta", None, r#"{"event":"meta","conversation_id":"c1","generation_id":"g1","queued":true}"#),
             sse("delta", Some(1), r#"{"event":"delta","text":"Hel"}"#),
-            sse("provider", None, r#"{"event":"provider","id":"p1","name":"OpenAI"}"#), // who is answering; passed on, not counted as text
-            sse("brand_new", None, r#"{"event":"brand_new","x":1}"#),                   // from a newer server: ignored
+            sse("provider", None, r#"{"event":"provider","id":"p1","name":"OpenAI","model":"gpt-x"}"#), // who is answering; passed on, not counted as text
+            sse("brand_new", None, r#"{"event":"brand_new","x":1}"#),                                   // from a newer server: ignored
             sse("delta", Some(2), r#"{"event":"delta","text":"lo"}"#),
             sse("done", None, r#"{"event":"done"}"#),
         ]
@@ -869,7 +869,7 @@ mod tests {
             [
                 Step::Emit(StreamEvent::Started { conversation_id: "c1".into(), generation_id: Some("g1".into()), queued: true }),
                 Step::Emit(StreamEvent::Delta { text: "Hel".into() }),
-                Step::Emit(StreamEvent::Provider { id: "p1".into(), name: "OpenAI".into() }),
+                Step::Emit(StreamEvent::Provider { id: "p1".into(), name: "OpenAI".into(), model: Some("gpt-x".into()) }),
                 Step::Emit(StreamEvent::Delta { text: "lo".into() }),
                 Step::Done,
             ]
