@@ -61,8 +61,8 @@ when you have changed them (the admin site's files are compiled in).
    each crate's `tests/openapi.rs` fails if a route and the file disagree, in either direction, or if the `Problem` codes drift.
 5. **Tests**, in the same commit as the code: the happy path, each refusal (check the `error` code, not the words),
    and the auth rule.
-6. **Docs**, in the same commit: `docs/wire-contract.md` if the meaning needs words; `README.md` if a person would
-   notice. One place per fact: link, don't repeat.
+6. **Docs**, in the same commit: `docs/wire-contract.md` if the meaning needs words; `README.md` (the short
+   version) or `docs/guide.md` (the details) if a person would notice. One place per fact: link, don't repeat.
 
 After 1.0, changes within `/api/client/v1` are additive only (new fields, endpoints, codes); anything else needs a `v2`
 beside it for a release. Before 1.0, paths can change to fit [ADR 0022](docs/adr/0022-api-path-conventions.md).

@@ -168,7 +168,7 @@ That is about 52 h over the ~100 h budget before any backlog item (the component
 - **Tests:**
   - **Browser:** each page opens by URL, the nav marks it current, Back returns to the previous page, `/admin/audit/?view=trace&id=…` opens directly, every page has the same header, nav and banners, and a static file answers 304 on a second load.
   - **Rust:** every `PAGES` entry has a route and a nav link, and an unknown `/admin/x/` is 404.
-- **Docs:** the README admin section and `docs/style/ui-ux.md`.
+- **Docs:** the guide's admin site steps ([guide.md](guide.md#server)) and `docs/style/ui-ux.md`.
 
 ## Phase 2 — Add bootstrap and the auditor
 
