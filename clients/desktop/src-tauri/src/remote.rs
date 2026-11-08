@@ -906,8 +906,11 @@ mod tests {
         running: Mutex<String>,
         /// When set, the answer to `POST /api/client/v1/spaces/{space_id}/chat` instead of the usual stream:
         /// status, extra headers and body.
-        chat_answer: Mutex<Option<(u16, Vec<(String, String)>, String)>>,
+        chat_answer: Mutex<Option<ChatAnswer>>,
     }
+
+    /// A canned chat answer: status, extra headers and body.
+    type ChatAnswer = (u16, Vec<(String, String)>, String);
 
     struct Fake {
         url: String,
@@ -1041,7 +1044,8 @@ mod tests {
 
         let events = ask_fake(&fake_server(vec![(401, String::new())]).await).await;
         assert!(matches!(events.last(), Some(StreamEvent::Error { message, .. }) if message.contains("rejected")), "{events:?}");
-        for e in [&events[..]] {
+        {
+            let e = &events[..];
             assert_eq!(e.iter().filter(|x| matches!(x, StreamEvent::Delta { .. })).count(), 3, "what arrived stays");
         }
     }
@@ -1193,8 +1197,8 @@ mod tests {
         );
 
         let unsent = remote.unsent().await.unwrap();
-        assert_eq!(unsent, [missing.clone()], "only the message the server lacks is left");
-        assert_eq!(remote.inner().unwrap().outbox.list(), [missing.clone()], "and the other left the outbox for good");
+        assert_eq!(unsent, std::slice::from_ref(&missing), "only the message the server lacks is left");
+        assert_eq!(remote.inner().unwrap().outbox.list(), std::slice::from_ref(&missing), "and the other left the outbox for good");
 
         // Sending it again carries its own request id (and nothing else changes), and it leaves
         // the outbox once the server says it has it.
@@ -1623,10 +1627,11 @@ mod tests {
         let key = r.new_pairing_key("Work laptop".into()).await.unwrap();
         let p = askbar_proto::Pairing::decode(&key).expect("a pairing key");
         assert_eq!((p.url.as_str(), p.cert_sha256), (url.as_str(), None), "the key points at the server this app uses");
-        let db = state.db.lock().unwrap();
-        assert!(askbar_server::auth::redeem_pair_code(&db, &p.code).unwrap().is_some());
-        assert!(askbar_server::auth::redeem_pair_code(&db, &p.code).unwrap().is_none(), "once only");
-        drop(db);
+        {
+            let db = state.db.lock().unwrap();
+            assert!(askbar_server::auth::redeem_pair_code(&db, &p.code).unwrap().is_some());
+            assert!(askbar_server::auth::redeem_pair_code(&db, &p.code).unwrap().is_none(), "once only");
+        }
         assert!(r.new_pairing_key("x".repeat(61)).await.is_err(), "a name over 60 characters is refused");
         assert!(remote_for(&url, None, PathBuf::new()).new_pairing_key(String::new()).await.unwrap_err().contains("not paired"));
     }
@@ -1793,7 +1798,7 @@ mod tests {
         assert!(pair(&s, &path, &MemoryTokens::default()).await.unwrap_err().contains("already used"));
 
         // Re-pairing updates the server but keeps hand-edited settings.
-        std::fs::write(&path, format!("server_url: http://old.invalid\nhotkey: Alt+Space\nallow_insecure: true\n")).unwrap();
+        std::fs::write(&path, "server_url: http://old.invalid\nhotkey: Alt+Space\nallow_insecure: true\n").unwrap();
         pair(&new_pairing(&state, &url), &path, &tokens).await.unwrap();
         let cfg = ClientConfig::load(&path).unwrap();
         assert_eq!((cfg.server_url.as_str(), cfg.hotkey.as_str(), cfg.allow_insecure), (url.as_str(), "Alt+Space", true));
