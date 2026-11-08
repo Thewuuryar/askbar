@@ -14,7 +14,7 @@ The server existed before the rule that each component has its own ADR. This rec
 - **What it is:** `services/server`, binary and image `askbar-server`, the Dockerfile's `server` target. It runs as uid 10002 and serves chats for paired clients.
 - **Two listeners:**
   - the client API, `/api/client/v1`, on port 8080 of the `edge` network, reached through Caddy;
-  - the server API, `/api/server/v1`, on one fixed address of the `server-api` network (`172.30.0.2:8082`), for the admin only. It refuses a wildcard address.
+  - the server API, `/api/server/v1`, on the server's own address on the `server-api` network, found by the alias `server-api-host` that exists on that network only (port 8082), for the admin only. It refuses a wildcard address, or a name that resolves to more than one.
 - **What it holds:**
   - `control.db`: users, clients (token hashes only), pairing-code hashes, spaces and memberships, the snapshot the admin pushed (with the budget copy), token usage and provider health;
   - one file per space under `spaces/` ([0009](0009-spaces-and-storage.md));
@@ -45,4 +45,4 @@ Not recorded: the server predates this record.
 
 ## Amendments
 
-None yet.
+- 2026-11-08: the server API binds the address of the alias `server-api-host` instead of the fixed `172.30.0.2`; no subnet or address is pinned (PR #32, [0051](0051-auditor.md)).
