@@ -54,3 +54,5 @@ This set records the decisions from the original Askbar architecture plan (kept 
 | [0048](0048-drop-post-space-conversations.md) | Drop `POST /spaces/{space_id}/conversations` | Accepted | Owner decision after review of 0047 |
 | [0049](0049-bootstrap.md) | The `bootstrap` component | Accepted | Plan step 2.1; owner rule for component ADRs |
 | [0050](0050-bootstrap-chown-exception.md) | A `CHOWN` exception for `bootstrap` | Accepted | Owner review of the open questions in 0049 |
+| [0051](0051-auditor.md) | The `auditor` component | Accepted | Plan steps 2.4 to 2.9; owner rule for component ADRs |
+| [0052](0052-askbar-audit-crate.md) | The `askbar-audit` crate | Accepted | Plan step 2.3; owner rule for component ADRs |
