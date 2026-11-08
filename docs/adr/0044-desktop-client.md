@@ -1,7 +1,8 @@
 # 0044. The desktop client
 
-Status: Proposed
+Status: Accepted
 Date: 2026-11-08
+Kind: component
 Source: plan step 1.14 ([plan-v1.md](../plan-v1.md)); owner rule that every component has an ADR of its own (2026-11-07)
 
 ## Context
@@ -34,3 +35,7 @@ The app's Rust tests run against a real server built from this repository and th
 
 - [0009](0009-spaces-and-storage.md): the app uses the personal space only and its outbox records no space; choosing a shared space is plan step 1.12.
 - [0008](0008-users-clients-and-client-access.md): the macOS, Windows and Linux test by a person has not been done for this version.
+
+## Amendments
+
+None yet.

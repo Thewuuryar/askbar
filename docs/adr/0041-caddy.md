@@ -1,7 +1,8 @@
 # 0041. The `caddy` component
 
-Status: Proposed
+Status: Accepted
 Date: 2026-11-08
+Kind: component
 Source: plan step 1.14 ([plan-v1.md](../plan-v1.md)); owner rule that every component has an ADR of its own (2026-11-07)
 
 ## Context
@@ -34,3 +35,7 @@ Not recorded: Caddy predates this record.
 
 - [0010](0010-auditor.md): Caddy does not append its access logs to an auditor; there is no auditor yet (plan phase 2).
 - [0015](0015-certificates.md) adds HTTP-01 next to the DNS challenge; only the DNS challenge is configured.
+
+## Amendments
+
+None yet.

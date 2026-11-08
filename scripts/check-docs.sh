@@ -1,7 +1,9 @@
 #!/bin/sh
 # Checks the markdown files:
 #   1. every relative link points at a file that exists, and a #anchor at a heading in that file;
-#   2. every ADR in docs/adr/ has a row in docs/adr/README.md, and the row's Status matches the ADR's "Status:" line.
+#   2. every ADR in docs/adr/ has a row in docs/adr/README.md, and the row's Status matches the ADR's "Status:" line;
+#   3. ADR 0046: a component or register ADR has an Amendments section, a Retired or Deferred ADR says when and why,
+#      and "Amends:" lines and "amended by" statuses name ADRs that exist and that name each other back.
 # Covers every tracked *.md file (all *.md files outside node_modules and target when git is not available).
 # Usage: scripts/check-docs.sh
 cd "$(dirname "$0")/.." || exit 2
@@ -69,8 +71,39 @@ if os.path.exists("docs/adr/README.md"):
             print(f"docs/adr/README.md: no row for ADR {n}"); bad += 1
         elif not sm:
             print(f"docs/adr/{name}: no Status line"); bad += 1
-        elif sm.group(1) != rows[n].split()[0]:
+        elif sm.group(1) != rows[n].split()[0].rstrip(";,"):
             print(f"docs/adr/{name}: Status {sm.group(1)} but README says {rows[n]}"); bad += 1
+    # ADR 0046: kinds, amendments, retired and deferred ADRs.
+    adrs = {}
+    for name in sorted(os.listdir("docs/adr")):
+        m = re.match(r"^(\d{4})-.*\.md$", name)
+        if m and m.group(1) != "0000":
+            adrs[m.group(1)] = (name, open(os.path.join("docs/adr", name), encoding="utf-8").read())
+    for n, (name, text) in adrs.items():
+        where = f"docs/adr/{name}"
+        kind = re.search(r"^Kind:\s*(\S+)", text, re.M)
+        if kind and kind.group(1) not in ("component", "register"):
+            print(f"{where}: Kind {kind.group(1)} is not component or register"); bad += 1
+        if kind and not re.search(r"^## Amendments\s*$", text, re.M):
+            print(f"{where}: a {kind.group(1)} ADR needs an '## Amendments' section"); bad += 1
+        status = (re.search(r"^Status:\s*(.*)$", text, re.M) or [None, ""])[1]
+        for word in ("Retired", "Deferred"):
+            if status.startswith(word) and not re.search(rf"^{word}:\s*\S", text, re.M):
+                print(f"{where}: Status {word} needs a '{word}:' line with the date and the reason"); bad += 1
+        for by in re.findall(r"amended by ([0-9, and]+)", status):
+            for m in sorted(set(re.findall(r"\d{4}", by))):
+                other = adrs.get(m)
+                if not other:
+                    print(f"{where}: amended by {m}, which does not exist"); bad += 1
+                elif not re.search(rf"^Amends:.*\b{n}\b", other[1], re.M):
+                    print(f"{where}: amended by {m}, but {other[0]} has no 'Amends:' line naming {n}"); bad += 1
+        for line in re.findall(r"^Amends:(.*)$", text, re.M):
+            for m in sorted(set(re.findall(r"\b\d{4}\b", line))):
+                other = adrs.get(m)
+                if not other:
+                    print(f"{where}: amends {m}, which does not exist"); bad += 1
+                elif not re.search(rf"^Status:.*amended by[^\n]*\b{n}\b", other[1], re.M):
+                    print(f"{where}: amends {m}, but {other[0]}'s status does not say 'amended by {n}'"); bad += 1
     if nums and nums != list(range(1, len(nums) + 1)):
         print("docs/adr: numbers are not contiguous from 0001"); bad += 1
     for n in rows:

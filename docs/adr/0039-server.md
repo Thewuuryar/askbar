@@ -1,7 +1,8 @@
 # 0039. The `server` component
 
-Status: Proposed
+Status: Accepted
 Date: 2026-11-08
+Kind: component
 Source: plan step 1.14 ([plan-v1.md](../plan-v1.md)); owner rule that every component has an ADR of its own (2026-11-07)
 
 ## Context
@@ -41,3 +42,7 @@ Not recorded: the server predates this record.
 - [0003](0003-v1-service-layout.md) (no host bind mounts): the data directory is a host bind mount.
 - [0013](0013-backups.md): the backup export is not encrypted, so it leaves secrets out (phase 6).
 - [0028](0028-service-boundaries-and-config-delivery.md) rule 5: the server does not record the configuration version it applied in an auditor, because there is no auditor yet.
+
+## Amendments
+
+None yet.
