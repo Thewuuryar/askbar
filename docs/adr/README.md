@@ -42,3 +42,4 @@ This set records the decisions from the original Askbar architecture plan (kept 
 | [0036](0036-askbar-service-crate.md) | The `askbar-service` crate | Accepted | Plan step 1.3; owner rule for component ADRs |
 | [0037](0037-askbar-cpa-image-and-supervisor.md) | The `askbar-cpa` image and its supervisor | Accepted | Plan step 1.4; owner choice of a supervisor for `cpa` |
 | [0038](0038-names-and-new-components-without-a-name-check.md) | Names and new components, without a name check | Accepted | Owner decision; supersedes 0021 |
+| [0039](0039-server.md) | The `server` component | Proposed | Plan step 1.14; owner rule for component ADRs |
