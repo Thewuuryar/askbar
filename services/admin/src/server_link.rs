@@ -11,7 +11,9 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chacha20poly1305::aead::{rand_core::RngCore, OsRng};
 use rusqlite::OptionalExtension;
 use sha2::{Digest, Sha256};
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::Mutex;
@@ -220,6 +222,15 @@ fn needs_push(was_online: bool, last_boot: Option<&str>, last_version: u64, st: 
     !was_online || restarted || stale
 }
 
+/// Gives the keys to hand to the server again after each snapshot push: `(provider id, key)` pairs.
+/// For keys the admin holds itself (the CPA key); it never holds the keys of ordinary providers.
+pub type Resend = Arc<dyn Fn() -> Pin<Box<dyn Future<Output = Vec<(String, String)>> + Send>> + Send + Sync>;
+
+/// A `Resend` that gives nothing.
+pub fn no_resend() -> Resend {
+    Arc::new(|| Box::pin(async { Vec::new() }))
+}
+
 /// Talks to the server's server API and remembers whether it is there.
 pub struct ServerLink {
     http: reqwest::Client,
@@ -405,8 +416,10 @@ impl ServerLink {
 
     /// Keep the server's snapshot current for as long as the process runs: push at start-up
     /// and after each `mark_dirty`, retrying with a growing pause while the server is away,
-    /// and check on the server now and then so the online state stays true.
-    pub async fn run(self: Arc<Self>, db: Arc<Mutex<AdminDb>>) {
+    /// and check on the server now and then so the online state stays true. After each push the keys
+    /// `resend` gives are handed to the server again (a server that restarted with an empty database has
+    /// lost them), and a key that fails is retried like a failed push.
+    pub async fn run(self: Arc<Self>, db: Arc<Mutex<AdminDb>>, resend: Resend) {
         let mut pause = Duration::from_secs(1);
         loop {
             if self.dirty.swap(false, Ordering::Relaxed) {
@@ -415,11 +428,22 @@ impl ServerLink {
                     Ok(s) => self.push(&s).await,
                     Err(e) => Err(PushError::Build(e.to_string())),
                 };
-                match result {
+                let result = match result {
                     Ok(v) => {
                         tracing::info!(version = v, "snapshot pushed");
-                        pause = Duration::from_secs(1);
+                        let mut failed = None;
+                        for (id, key) in resend().await {
+                            if let Err(e) = self.put_key(&id, &key).await {
+                                tracing::warn!(provider = %id, "could not hand the server a provider key again: {e}");
+                                failed = Some(e);
+                            }
+                        }
+                        failed.map_or(Ok(v), Err)
                     }
+                    Err(e) => Err(e),
+                };
+                match result {
+                    Ok(_) => pause = Duration::from_secs(1),
                     Err(e) => {
                         tracing::warn!("{e}; will retry");
                         self.dirty.store(true, Ordering::Relaxed);
