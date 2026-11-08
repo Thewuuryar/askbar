@@ -140,7 +140,7 @@ The fix is to give Docker smaller subnets, so the same address range holds many 
 
 That gives 4,096 networks of 254 addresses each, plenty for Askbar and any other projects on the host. Pick a `base` your home network or VPN does not use. If yours uses part of `172.16.0.0/12`, use a range such as `10.200.0.0/16` (256 networks) instead. Networks that already exist keep their subnets. Run `docker compose down` and then `docker compose up -d` to recreate Askbar's from the new pools.
 
-New Askbar networks never pin a subnet; Docker assigns them from these pools. `server-api` is the exception for now: it is fixed at `172.30.0.0/24`, so keep that range free.
+New Askbar networks never pin a subnet; Docker assigns them from these pools.
 
 Every container has a read-only root filesystem, no Linux capabilities (Caddy keeps only the one to bind 80 and 443), no privilege gain, and limits on processes and memory; it writes only to its own volumes and a private `/tmp` ([ADR 0032](adr/0032-container-hardening.md)). Caddy, though root, reads the admin's certificate key and Cloudflare token (mode 640) and makes its admin socket through group 10001.
 
