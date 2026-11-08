@@ -8,5 +8,5 @@ description = "Lockfiles: crate names such as crypto_secretbox look like keys"
 paths = ['''(^|/)Cargo\.lock$''', '''(^|/)package-lock\.json$''']
 
 [[allowlists]]
-description = "Made-up keys in tests that check a key is never echoed or accepted"
-regexes = ['''^sk-abcdef123$''', '''^(stolen|wrong)-key-123$''']
+description = "Made-up keys in tests: ones that check a key is never echoed or accepted, and an early test's dummy master key (history reachable from the v0.x tags)"
+regexes = ['''^sk-abcdef123$''', '''^(stolen|wrong)-key-123$''', '''^0123456789abcdef0123456789abcdef$''']
