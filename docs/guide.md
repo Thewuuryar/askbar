@@ -155,7 +155,7 @@ From the first start Caddy serves HTTPS on port 443 of every address of the host
 
 1. Open the admin (above).
 2. Sign in as **`admin`** with the password **`admin`**. Every page but the password change refuses (403 `password_change_required`) until you choose your own: at least 10 characters, not `admin`. Anyone on a private address can use the published login until you do, so do it as soon as the stack is up.
-   - **Locked out?** On the host, `docker compose exec admin askbar-admin reset` puts the published login back (you must change it again at the next sign-in) and records the reset on the Services tab; then `docker compose restart admin` to sign out every session. If the admin is not running, use `docker compose run --rm admin reset` instead (`run` cannot start beside a running admin: they would share its fixed network address).
+   - **Locked out?** On the host, `docker compose exec admin askbar-admin reset` puts the published login back (you must change it again at the next sign-in) and records the reset on the Services tab; then `docker compose restart admin` to sign out every session. If the admin is not running, use `docker compose run --rm admin reset` instead.
 3. **Audit passphrase.** Setup asks for one: at least 20 characters. See *The Audit tab* below; write it down.
 4. **Providers** > add one (Anthropic or OpenAI-compatible: after you enter the address and key, **Model** becomes a dropdown of what the provider offers) and press **Test**. For a Claude or ChatGPT subscription use **Services** instead: *Connect Claude* / *Connect ChatGPT* (see *CLIProxyAPI*); no terminal is needed.
 5. **Network** > hostname, Cloudflare token and, if you want it, the allowlist (see below).
