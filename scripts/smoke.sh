@@ -118,13 +118,16 @@ if [ $LOCAL = 1 ]; then
   else
     fail "add a provider that points at the mock LLM"
   fi
-  if admin POST /api/admin/v1/pairings '{"name":"smoke test client"}' >"$WORK/pair.json"; then
-    PAIRING=$(json "$WORK/pair.json" 'd["pairing"]'); pass "create a pair code"
+  # A pairing key belongs to a user, made in the admin (ADR 0008).
+  if admin POST /api/admin/v1/users '{"name":"smoke test user"}' >"$WORK/user.json" \
+     && USER_ID=$(json "$WORK/user.json" 'd["id"]') \
+     && admin POST "/api/admin/v1/users/$USER_ID/pairing-keys" '{"name":"smoke test client"}' >"$WORK/pair.json"; then
+    PAIRING=$(json "$WORK/pair.json" 'd["pairing"]'); pass "create a user and a pairing key"
   else
-    fail "create a pair code"
+    fail "create a user and a pairing key"
   fi
 elif [ -z "$PAIRING" ]; then
-  read -r -p "Paste a pairing string from the admin page: " PAIRING
+  read -r -p "Paste a pairing key from the admin page: " PAIRING
 fi
 
 # 4. Pair a test client over the HTTP API.
@@ -149,6 +152,17 @@ if [ -n "$TOKEN" ]; then
   [ "$(api -o /dev/null -w '%{http_code}' "$URL/api/client/v1/me")" = "204" ] && pass "the client token is accepted" || fail "the client token is accepted"
   [ "$(curl -sS -o /dev/null -w '%{http_code}' -H 'authorization: Bearer nope' -H "x-askbar-client-version: $CLIENT_VERSION" "$URL/api/client/v1/me")" = "401" ] \
     && pass "a wrong token is refused" || fail "a wrong token is refused"
+
+  # 5b. Pair another app of the same user from this one (ADR 0008): its own code, used once.
+  if api -X POST -H 'content-type: application/json' -d '{"name":"smoke second app"}' "$URL/api/client/v1/me/pairing-keys" >"$WORK/key2.json" 2>/dev/null \
+     && CODE2=$(json "$WORK/key2.json" 'd["code"]') && [ -n "$CODE2" ] \
+     && curl -fsS -X POST -H "x-askbar-client-version: $CLIENT_VERSION" -H 'content-type: application/json' -d "{\"code\":\"$CODE2\"}" "$URL/api/client/v1/pairings" >"$WORK/token2.json" 2>/dev/null \
+     && TOKEN2=$(json "$WORK/token2.json" 'd["token"]') \
+     && [ "$(curl -sS -o /dev/null -w '%{http_code}' -H "authorization: Bearer $TOKEN2" -H "x-askbar-client-version: $CLIENT_VERSION" "$URL/api/client/v1/me")" = "204" ]; then
+    pass "a paired app pairs another app of its user"
+  else
+    fail "a paired app pairs another app of its user"
+  fi
 
   # 6. Providers.
   api "$URL/api/client/v1/providers" >"$WORK/providers.json"

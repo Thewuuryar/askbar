@@ -186,6 +186,16 @@ const MIGRATIONS: &[&str] = &[
      ALTER TABLE generations RENAME COLUMN device_id TO client_id; -- names-ok
      ALTER TABLE token_usage RENAME COLUMN device_id TO client_id; -- names-ok
      ALTER TABLE redeemed_codes RENAME COLUMN device_id TO client_id; -- names-ok",
+    // v7: codes a paired client asked for, to pair another client of the same user (ADR 0008). The
+    // server makes these itself (it never calls the admin); redeemed like the admin's, once.
+    "CREATE TABLE client_pair_codes (
+         hash        TEXT PRIMARY KEY,
+         user_id     TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+         client_name TEXT    NOT NULL DEFAULT '',
+         created_by  TEXT    NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+         expires_at  INTEGER NOT NULL,
+         created_at  INTEGER NOT NULL
+     );",
 ];
 
 #[derive(Debug, thiserror::Error)]

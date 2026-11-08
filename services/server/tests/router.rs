@@ -301,6 +301,14 @@ async fn the_flag_clears_on_the_next_success_and_when_a_new_key_is_saved_and_the
     assert_eq!(r.status(), 204);
     assert!(get().await["providers"].as_array().unwrap().is_empty());
 
+    // A provider the configuration lists but that holds no key is reported as missing its key, and is not once it has one.
+    s.state.db.lock().unwrap().conn().execute("UPDATE providers SET api_key_enc = NULL WHERE id = 'p1'", []).unwrap();
+    let missing = |v: &serde_json::Value| v["missing_key"].as_array().unwrap().iter().filter_map(|i| i.as_str().map(String::from)).collect::<Vec<_>>();
+    assert!(missing(&get().await).contains(&"p1".to_string()), "p1 lost its key");
+    let r = http.put(format!("{url}/api/server/v1/providers/p1/key")).bearer_auth(token).json(&serde_json::json!({ "key": "sk-newer" })).send().await.unwrap();
+    assert_eq!(r.status(), 204);
+    assert!(!missing(&get().await).contains(&"p1".to_string()), "p1 has a key again");
+
     // A flagged provider that then works is cleared by the success.
     s.state.db.lock().unwrap().flag_provider_auth_failed("p2", "http_403").unwrap();
     assert!(matches!(s.run("another one").await.last(), Some(GenEvent::Error { .. }))); // p1 still fails (m-fail)

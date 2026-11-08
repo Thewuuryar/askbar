@@ -19,6 +19,7 @@ Size: S ≈ 1–2 h, M ≈ 3–5 h, L ≈ 6–10 h (owner budget ~100 h to March
 ### The Mac check (run for every PR)
 
 ```bash
+docker compose --profile dev down --remove-orphans   # --profile dev also removes mock-llm, which would otherwise keep a deleted network
 docker compose --profile dev up -d --build
 ```
 1. Open the admin at `https://localhost/admin` (or the Mac's LAN address) and accept the certificate warning, sign in, add the mock-llm provider, create a pairing key.
@@ -84,6 +85,7 @@ Order change (owner approved 2026-11-07): the remaining steps keep their numbers
 | 9 | 1.11 spaces, one SQLite file each | L | As above. Wipe and re-pair once, at the end of this step. |
 | 10 | 1.14 retroactive component ADRs | M | Closes phase 1: the components that exist then get their ADRs before phase 2 adds new ones. |
 | — | 1.13 backlog | see below | After 1.11, which reshapes the conversation routes the S items touch. Summarizing waits for 3.1 (its model call goes through `model-gateway`). |
+| — | 1.16 a page and a URL for every admin section | M–L | After 1.11, or when scheduled. Deferrable, cut with the 1.13 backlog. |
 | — | 1.12 shared spaces | M | Deferred to after phase 7 ([ADR 0002](adr/0002-v1-scope-limits-and-ship-criteria.md) defer order). |
 
 Bootstrap tokens (2.1) stay in phase 2: nothing in phase 1 needs per-link tokens beyond the one admin→server token that exists.
@@ -105,7 +107,7 @@ Midpoints S = 1.5 h, M = 4 h, L = 8 h. Required work left (excluding 1.12, 1.13 
 | 7 | 12.5 |
 | **Total** | **≈ 152** |
 
-That is about 52 h over the ~100 h budget before any backlog item (the component ADRs and the `cpa` supervisor, added 2026-11-07, are about 12 h of it). Proposed cuts, first to last: phase 8 (iOS, memory, mismatch alerts); 1.13 summarizing (L, ~8 h); the rest of 1.13 (~12 h); 6.4 multiple destinations (one daily destination stays: it is the ship criterion for data loss in [ADR 0002](adr/0002-v1-scope-limits-and-ship-criteria.md)); 1.12 shared spaces; 5.4 passkey (optional, after 1.0); 4.3 release check. Those cuts save about 8 h of required work (5.4, 4.3, part of 6.4), leaving ≈ 142 h. The owner kept the budget unchanged (2026-11-07); the gap is recorded here so cuts can be made in this order if hours run out.
+That is about 52 h over the ~100 h budget before any backlog item (the component ADRs and the `cpa` supervisor, added 2026-11-07, are about 12 h of it). Proposed cuts, first to last: phase 8 (iOS, memory, mismatch alerts); 1.13 summarizing (L, ~8 h); the rest of 1.13 (~12 h) and 1.16 (~6 h); 6.4 multiple destinations (one daily destination stays: it is the ship criterion for data loss in [ADR 0002](adr/0002-v1-scope-limits-and-ship-criteria.md)); 1.12 shared spaces; 5.4 passkey (optional, after 1.0); 4.3 release check. Those cuts save about 8 h of required work (5.4, 4.3, part of 6.4), leaving ≈ 142 h. The owner kept the budget unchanged (2026-11-07); the gap is recorded here so cuts can be made in this order if hours run out.
 
 **1.8 `feat(admin): first run with published credentials and a forced password change`** (M) — [ADR 0007](adr/0007-first-run-and-admin-sign-in.md)
 - Initial `admin`/documented password; every route except password change refuses until changed; reject the default and username-equal passwords; host reset command (`docker compose run --rm admin reset`) recorded. Login lockout, rate limits, identical errors (Defend list, [ADR 0016](adr/0016-risk-register.md)).
@@ -115,6 +117,7 @@ That is about 52 h over the ~100 h budget before any backlog item (the component
 **1.9 `feat: users and pairing keys created in the admin`** (M) — [ADR 0008](adr/0008-users-clients-and-client-access.md), 0022
 - Admin keeps users; `POST /api/admin/v1/users`, `POST /api/admin/v1/users/{id}/pairing-keys`; server receives users in config; pairing registers a client for an existing user. `POST /api/client/v1/me/pairing-keys` for extra clients; client UI "Pair another app". Rename "pairing string/code" to "pairing key" in UI and docs.
 - Add "create a user" to the first-run next-steps list (1.8), before Clients.
+- Built so: no wipe was needed. The admin's users live in `admin.db` (migration 12); the first time it lists users and has none, it adopts the users the server already has (the owner the server seeded), so existing clients keep their user. The server stops seeding an owner on a fresh database: users arrive only in the config. A client's extra pairing code is minted by the server (`client_pair_codes`, migration 7, hash only, 10 minutes, at most five unused per user), so the admin→server direction stays one-way; the client builds the key from its own address and certificate pin. Users and pairing keys sit on the Clients tab until 1.16 gives them their own page.
 
 **1.11 `feat: spaces with one SQLite file each`** (L) — [ADR 0009](adr/0009-spaces-and-storage.md) (wipe and re-pair)
 - Server: `control.db` (users, clients, pairing hashes, spaces, memberships, budget copy) and one file per space under `/data/spaces/`; a `SpaceStore` handed to handlers only after a membership check; migrations run on every file. Drop the unused `projects` table.
@@ -136,6 +139,35 @@ That is about 52 h over the ~100 h budget before any backlog item (the component
 - **Newest at the top or bottom** (S): show the conversation newest-first, with the input box following it, or oldest-first as now. The admin sets the default (a new display-defaults field, server-wide and per user, edited in the admin site); a client can override it locally (`client.yaml` `ui`), as with the other display defaults.
 - **Copy the whole conversation** (S): a copy button on each conversation in the history panel, next to its delete button, that copies every question and reply, in order, as Markdown with who said what.
 - **Message actions on hover** (S/M): under each question and each reply, a copy icon (replacing today's Copy text button) and the date and time it was sent, both shown when the pointer is over that message or it has keyboard focus. Each message keeps the padding for them at all times, so nothing moves when they appear. Needs each message's time in the popup (`created_at` is stored; check it reaches the window).
+
+**1.16 `feat(admin): a page and a URL for every admin section, from one template`** (M–L ≈ 6 h; owner request, 2026-11-07; deferrable with the 1.13 backlog, so outside the required total). Today the admin site is one page whose tabs don't change the address, so a section can't be linked, bookmarked or reached with Back.
+- **Pages:** `/admin/providers/`, `/admin/services/`, `/admin/clients/`, `/admin/users/` (from 1.9), `/admin/audit/`, `/admin/backup/`, `/admin/network/`, `/admin/security/`, `/admin/settings/`. `/admin` and `/admin/` redirect to the first. Unknown `/admin/...` paths stay 404.
+- **One list of pages:** `services/admin/src/pages.rs` holds `PAGES: [(slug, label, template)]`. The routes in `lib.rs` (replacing the single `/admin/` route), the nav, and the route-table test all come from it.
+- **One template (Askama):** `ui/templates/base.html` holds the frame, written once:
+  - head (`tokens.css`, `style.css`, `app.js` with `defer`);
+  - header with sign-out;
+  - nav from `PAGES`, with `aria-current="page"` on the current page;
+  - page heading with a one-line hint, and the content block;
+  - the sign-in, first-run and offline-banner screens.
+
+  Each page is `ui/templates/<slug>.html`, which extends `base.html` and fills `title`, `hint` and `content`. Templates compile into the binary and render once at start, so serving a page costs what serving a file does now.
+- **Building blocks** (`ui/templates/blocks.html`, Askama macros), used the same way on every page: a card, a list with its empty-state line, a form with its error line, a section hint, and the confirm wording. `docs/style/ui-ux.md` gets an "Admin pages" section: a new page is one `PAGES` entry plus one template using these blocks.
+- **Behaviour:**
+  - Nav entries become plain `<a href>`, so Back, Forward and bookmarks work without routing code.
+  - `app.js` runs only the current page's loader (the `tabs[].load` table stays; `renderNav` and `openTab` go).
+  - `audit.js` loads on the Audit page only. Audit deep links use the query string (`/admin/audit/?view=trace&id=<trace id>`): it is read on load and kept current with `history.replaceState`.
+  - The first-run "next steps" links become page links.
+- **Unchanged:** the API; the session cookie (`Path=/api/admin`); the CSP (`script-src 'self'`, no inline script); `textContent`-only rendering in scripts. Askama escapes by default, and templates hold only static text and the page list.
+- **Weight and speed:** browsers get plain pre-rendered HTML, with no framework or client-side rendering.
+  - **Today:** every visit loads about 92 KB (the 24 KB page with all sections, 35 KB `app.js`, 23 KB `audit.js`, 10 KB CSS).
+  - **After:** a page carries only its own section.
+  - **Caching:** `security_headers` (`web.rs`) sends `no-store` on everything today. Static files get `no-cache` with an `ETag` instead, so a click costs one small page plus 304s. Pages and the API stay `no-store`.
+  - **Devices:** this keeps it fast on an old laptop or a Raspberry Pi's browser. An ESP32 can neither host Askbar nor run a browser, whatever the design.
+- **New dependency:** `askama` (MIT OR Apache-2.0, inside the license allowlist, so a reason in the PR is enough, [ADR 0026](adr/0026-dependency-license-check.md)). The reason: compile-time checked templates, escaping by default, and no template files to read at run time.
+- **Tests:**
+  - **Browser:** each page opens by URL, the nav marks it current, Back returns to the previous page, `/admin/audit/?view=trace&id=…` opens directly, every page has the same header, nav and banners, and a static file answers 304 on a second load.
+  - **Rust:** every `PAGES` entry has a route and a nav link, and an unknown `/admin/x/` is 404.
+- **Docs:** the README admin section and `docs/style/ui-ux.md`.
 
 ## Phase 2 — Add bootstrap and the auditor
 

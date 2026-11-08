@@ -62,6 +62,7 @@ impl T {
             system_prompt: None,
             display: DisplaySettings::default(),
             user_display_defaults: Default::default(),
+            users: vec![],
             pair_codes: codes
                 .iter()
                 .map(|(c, exp)| SnapshotPairCode { hash: hex(c), user_id: self.user.clone(), client_name: "laptop".into(), expires_at: *exp })
@@ -156,4 +157,90 @@ async fn a_client_the_snapshot_lists_as_revoked_is_refused() {
     // Other clients are not affected, and the snapshot decides: take the id out and it works again.
     t.push(&t.snapshot(&[], &["some-other-client"])).await;
     assert_eq!(t.whoami(&token).await, 204);
+}
+
+impl T {
+    async fn new_key(&self, token: &str, name: &str) -> reqwest::Response {
+        self.http
+            .post(format!("{}/api/client/v1/me/pairing-keys", self.api))
+            .bearer_auth(token)
+            .header("x-askbar-client-version", "0.5.0")
+            .json(&json!({ "name": name }))
+            .send()
+            .await
+            .unwrap()
+    }
+}
+
+#[tokio::test]
+async fn users_arrive_with_the_config_and_are_renamed_by_it() {
+    let t = start().await;
+    let mut s = t.snapshot(&[], &[]);
+    s.users = vec![askbar_proto::SnapshotUser { id: "U-ALICE".into(), name: "Alice".into() }];
+    t.push(&s).await;
+    s.users[0].name = "Alice B.".into();
+    t.push(&s).await;
+    let name: String = t.state.db.lock().unwrap().conn().query_row("SELECT name FROM users WHERE id = 'U-ALICE'", [], |r| r.get(0)).unwrap();
+    assert_eq!(name, "Alice B.");
+    // A user listed twice, or without a name, is refused and nothing is stored.
+    for bad in [
+        vec![askbar_proto::SnapshotUser { id: "x".into(), name: "a".into() }, askbar_proto::SnapshotUser { id: "x".into(), name: "b".into() }],
+        vec![askbar_proto::SnapshotUser { id: "y".into(), name: " ".into() }],
+    ] {
+        let mut b = t.snapshot(&[], &[]);
+        b.users = bad;
+        let r = t.http.put(format!("{}/api/server/v1/config", t.server_api)).bearer_auth(SERVER_TOKEN).json(&b).send().await.unwrap();
+        assert_eq!(r.status(), 400);
+    }
+}
+
+#[tokio::test]
+async fn a_code_for_a_user_the_server_does_not_know_pairs_nothing() {
+    let t = start().await;
+    let mut s = t.snapshot(&[], &[]);
+    s.pair_codes = vec![SnapshotPairCode { hash: hex(CODE), user_id: "nobody".into(), client_name: "x".into(), expires_at: askbar_server::auth::now() + 600 }];
+    t.push(&s).await;
+    assert!(t.pair(CODE).await.is_none());
+}
+
+#[tokio::test]
+async fn a_paired_client_gets_a_code_that_pairs_another_client_of_the_same_user_once() {
+    let t = start().await;
+    t.push(&t.snapshot(&[(CODE, askbar_server::auth::now() + 600)], &[])).await;
+    let first = t.pair(CODE).await.unwrap();
+    let r = t.new_key(&first, "Work laptop").await;
+    assert_eq!(r.status(), 201);
+    let body: askbar_proto::PairingKeyResponse = r.json().await.unwrap();
+    assert_eq!(body.expires_in, 600);
+    let second = t.pair(&body.code).await.expect("the client's code pairs a new client");
+    assert_eq!(t.whoami(&second).await, 204);
+    assert!(t.pair(&body.code).await.is_none(), "once only");
+    let rows: Vec<(String, String)> = {
+        let db = t.state.db.lock().unwrap();
+        let mut st = db.conn().prepare("SELECT user_id, name FROM clients ORDER BY created_at, name").unwrap();
+        let v = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect();
+        v
+    };
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().all(|(u, _)| *u == t.user), "both belong to the same user: {rows:?}");
+    assert!(rows.iter().any(|(_, n)| n == "Work laptop"));
+    // Only the hash is stored.
+    let stored: String = t.state.db.lock().unwrap().conn().query_row("SELECT hash FROM client_pair_codes", [], |r| r.get(0)).unwrap();
+    assert_eq!(stored, hex(&body.code));
+}
+
+#[tokio::test]
+async fn at_most_five_unused_client_codes_per_user_and_a_token_is_needed() {
+    let t = start().await;
+    t.push(&t.snapshot(&[(CODE, askbar_server::auth::now() + 600)], &[])).await;
+    let token = t.pair(CODE).await.unwrap();
+    for _ in 0..5 {
+        assert_eq!(t.new_key(&token, "").await.status(), 201);
+    }
+    let r = t.new_key(&token, "").await;
+    assert_eq!(r.status(), 429);
+    assert!(r.headers().contains_key("retry-after"));
+    assert_eq!(r.json::<askbar_proto::Problem>().await.unwrap().error, "too_many_attempts");
+    assert_eq!(t.new_key("abt_not-a-token", "").await.status(), 401);
+    assert_eq!(t.new_key(&token, &"x".repeat(61)).await.status(), 400);
 }

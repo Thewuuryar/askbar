@@ -133,6 +133,7 @@ fn snapshot() -> Snapshot {
         system_prompt: Some("Be brief.".into()),
         display: DisplaySettings::default(),
         user_display_defaults: [("u1".to_string(), DisplaySettings { width: 900, ..Default::default() })].into(),
+        users: vec![askbar_proto::SnapshotUser { id: "u1".into(), name: "owner".into() }],
         pair_codes: vec![SnapshotPairCode { hash: "ab".repeat(32), user_id: "u1".into(), client_name: "laptop".into(), expires_at: 4_000_000_000 }],
         revoked_client_ids: vec!["d9".into()],
         budget: Budget { daily_tokens: Some(1000), monthly_tokens: None },

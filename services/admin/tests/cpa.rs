@@ -176,3 +176,54 @@ async fn the_routes_are_session_only_and_say_so_when_cpa_is_not_set_up() {
     let r = reqwest::Client::new().get(format!("{}/api/admin/v1/cpa", t.adm)).bearer_auth(k["key"].as_str().unwrap()).send().await.unwrap();
     assert_eq!(r.status(), 401, "an admin API key cannot connect or read accounts");
 }
+
+/// What the server holds for the provider: its key decrypted, or `None` when it has none.
+fn server_key(t: &T, id: &str) -> Option<String> {
+    let enc: Option<Vec<u8>> = t.server.db.lock().unwrap().conn().query_row("SELECT api_key_enc FROM providers WHERE id = ?1", [id], |r| r.get(0)).unwrap();
+    enc.filter(|e| !e.is_empty()).map(|e| t.server.secrets().decrypt(&e).unwrap())
+}
+
+fn lose_server_key(t: &T, id: &str) {
+    t.server.db.lock().unwrap().conn().execute("UPDATE providers SET api_key_enc = NULL WHERE id = ?1", [id]).unwrap();
+}
+
+#[tokio::test]
+async fn the_admin_hands_the_cpa_key_to_the_server_again_when_the_server_has_lost_it() {
+    let (t, _cpa) = with_cpa().await;
+    t.call(M::POST, "/api/admin/v1/cpa/logins", json!({ "provider": "anthropic" })).await;
+    t.call(M::POST, "/api/admin/v1/cpa/logins/STATE-1/callback", json!({ "redirect_url": GOOD })).await;
+    let id = t.call(M::GET, "/api/admin/v1/cpa/logins/STATE-1", json!(null)).await.1["provider_id"].as_str().unwrap().to_string();
+    let models = || t.call(M::POST, "/api/admin/v1/providers/models", json!({ "type": "openai", "base_url": t.admin.cpa.lock().unwrap().as_ref().unwrap().provider_url(), "provider_id": id }));
+    assert_eq!(models().await.1["ok"], json!(true), "set up: the key is there");
+
+    // The server's database was replaced: the provider is known (from the snapshot), its key is gone, and CPA answers 401.
+    lose_server_key(&t, &id);
+    assert_eq!(server_key(&t, &id), None);
+    let (_, res) = models().await;
+    assert_eq!(res["ok"], json!(false), "CPA refuses without the key: {res}");
+
+    // Opening the Services tab (which reads /cpa) puts it back.
+    t.call(M::GET, "/api/admin/v1/cpa", json!(null)).await;
+    assert_eq!(server_key(&t, &id).as_deref(), Some(API_KEY));
+    assert_eq!(models().await.1["ok"], json!(true));
+
+    // And so does the push loop, with nobody opening anything: after a push, the key follows.
+    lose_server_key(&t, &id);
+    let resend: askbar_admin::server_link::Resend = {
+        let state = t.admin.clone();
+        Arc::new(move || {
+            let state = state.clone();
+            Box::pin(async move { askbar_admin::cpa::managed_key(&state).await.into_iter().collect() })
+        })
+    };
+    let link = t.admin.server.clone().unwrap();
+    tokio::spawn(link.clone().run(t.admin.db.clone(), resend));
+    for _ in 0..80 {
+        if server_key(&t, &id).is_some() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert_eq!(server_key(&t, &id).as_deref(), Some(API_KEY), "the key came back after the push");
+    assert_eq!(models().await.1["ok"], json!(true));
+}

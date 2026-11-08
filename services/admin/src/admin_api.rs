@@ -132,6 +132,9 @@ pub struct ProviderRow {
     price_cached_in: Option<f64>,
     /// Made and kept in step by the admin itself (the bundled CLIProxyAPI): name, address and key are fixed.
     managed: bool,
+    /// The admin sent a key, but the server reports it holds none (its database was replaced, say). The
+    /// person enters it again. Never set for the managed provider: the admin resends that key itself.
+    key_missing: bool,
 }
 
 #[derive(Deserialize)]
@@ -198,7 +201,17 @@ fn clash_or_internal(e: rusqlite::Error) -> Failure {
     }
 }
 
+/// The providers the server says hold no key. Empty if the server cannot be asked: the list still works.
+async fn server_missing_keys(state: &AdminState) -> std::collections::HashSet<String> {
+    let Some(server) = state.server.as_ref() else { return Default::default() };
+    let path = askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/providers/health");
+    let Ok((200, body)) = server.request(reqwest::Method::GET, &path, None).await else { return Default::default() };
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
+    v["missing_key"].as_array().map(|a| a.iter().filter_map(|i| i.as_str().map(String::from)).collect()).unwrap_or_default()
+}
+
 pub async fn list_providers(State(state): St) -> Result<Json<Vec<ProviderRow>>, Failure> {
+    let missing = server_missing_keys(&state).await;
     let db = state.db.lock().await;
     let mut stmt = db
         .conn()
@@ -220,11 +233,13 @@ pub async fn list_providers(State(state): St) -> Result<Json<Vec<ProviderRow>>, 
                 price_out: r.get(10)?,
                 price_cached_in: r.get(11)?,
                 managed: r.get::<_, i64>(12)? != 0,
+                key_missing: false,
             })
         })
         .map_err(internal)?
         .collect::<Result<Vec<_>, _>>()
         .map_err(internal)?;
+    let rows = rows.into_iter().map(|p| ProviderRow { key_missing: p.has_key && !p.managed && missing.contains(&p.id), ..p }).collect();
     Ok(Json(rows))
 }
 
@@ -480,7 +495,7 @@ fn real_host_name(conn: &Connection) -> Option<String> {
     (tls == 1 && !name.is_empty()).then_some(name)
 }
 
-/// A `Host` header worth putting in a pairing string: a name or address, an optional port, nothing else.
+/// A `Host` header worth putting in a pairing key: a name or address, an optional port, nothing else.
 fn valid_host(h: &str) -> bool {
     !h.is_empty() && h.len() <= 255 && h.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':' | '[' | ']'))
 }
@@ -490,19 +505,75 @@ pub(crate) fn request_host(headers: &axum::http::HeaderMap) -> Option<String> {
     headers.get(axum::http::header::HOST)?.to_str().ok().map(str::to_string)
 }
 
-/// A one-time pairing string for a new client, good for ten minutes. Only the code's hash is stored.
-pub async fn create_pairing(State(state): St, headers: axum::http::HeaderMap, ApiJson(i): ApiJson<PairInput>) -> Result<Json<PairingOut>, Failure> {
+/// A one-time pairing key for a new client, good for ten minutes. Only the code's hash is stored.
+#[derive(Serialize)]
+pub struct UserRow {
+    id: String,
+    name: String,
+    created_at: i64,
+}
+
+fn read_users(c: &Connection) -> rusqlite::Result<Vec<UserRow>> {
+    let mut stmt = c.prepare("SELECT id, name, created_at FROM users ORDER BY created_at, name")?;
+    let rows = stmt.query_map([], |r| Ok(UserRow { id: r.get(0)?, name: r.get(1)?, created_at: r.get(2)? }))?.collect();
+    rows
+}
+
+/// An install from before 1.9 has users only on the server (one, "owner", with its paired clients). The
+/// first time the admin has none, it takes them over, ids and all, so those clients keep working.
+async fn adopt_server_users(state: &AdminState) {
+    let Some(link) = state.server.clone() else { return };
+    let Ok((200, body)) = link.request(reqwest::Method::GET, &askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/users"), None).await else { return };
+    let Ok(serde_json::Value::Array(users)) = serde_json::from_slice::<serde_json::Value>(&body) else { return };
+    let db = state.db.lock().await;
+    for u in users {
+        if let (Some(id), Some(name)) = (u["id"].as_str(), u["name"].as_str()) {
+            let _ = db.conn().execute("INSERT OR IGNORE INTO users (id, name, created_at) VALUES (?1, ?2, ?3)", params![id, name, crate::auth::now()]);
+        }
+    }
+}
+
+/// `GET /users`, oldest first.
+pub async fn list_users(State(state): St) -> Result<Json<Vec<UserRow>>, Failure> {
+    let empty = state.db.lock().await.conn().query_row("SELECT COUNT(*) FROM users", [], |r| r.get::<_, i64>(0)).map_err(internal)? == 0;
+    if empty {
+        adopt_server_users(&state).await;
+    }
+    let db = state.db.lock().await;
+    read_users(db.conn()).map(Json).map_err(internal)
+}
+
+#[derive(Deserialize)]
+pub struct UserInput {
+    name: String,
+}
+
+/// `POST /users`: a new user, pushed to the server with everything else (ADR 0008).
+pub async fn create_user(State(state): St, ApiJson(i): ApiJson<UserInput>) -> Result<(StatusCode, Json<serde_json::Value>), Failure> {
+    let name = i.name.trim().to_string();
+    if name.is_empty() || name.chars().count() > 60 {
+        return Err(bad("A user's name is 1 to 60 characters."));
+    }
+    let id = ulid::Ulid::new().to_string();
+    let new_id = id.clone();
+    mutate(&state, vec![], move |c| {
+        c.execute("INSERT INTO users (id, name, created_at) VALUES (?1, ?2, ?3)", params![new_id, name, crate::auth::now()]).map(|_| ()).map_err(clash_or_internal)
+    })
+    .await?;
+    Ok((StatusCode::CREATED, Json(serde_json::json!({ "id": id }))))
+}
+
+/// `POST /users/{id}/pairing-keys`: a pairing key that registers one client for this user.
+pub async fn create_pairing_key(State(state): St, Path(user): Path<String>, headers: axum::http::HeaderMap, ApiJson(i): ApiJson<PairInput>) -> Result<Json<PairingOut>, Failure> {
     let host = request_host(&headers);
     let name = i.name.trim().to_string();
     if name.chars().count() > 60 {
         return Err(bad("The client name is too long."));
     }
-    let (status, body) = link(&state)?.request(reqwest::Method::GET, &askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/users"), None).await.map_err(from_push)?;
-    let user = (status == 200)
-        .then(|| serde_json::from_slice::<serde_json::Value>(&body).ok())
-        .flatten()
-        .and_then(|v| v[0]["id"].as_str().map(str::to_string))
-        .ok_or_else(|| err(StatusCode::BAD_GATEWAY, "The server has no user to pair a client with."))?;
+    let known = state.db.lock().await.conn().query_row("SELECT 1 FROM users WHERE id = ?1", [&user], |_| Ok(())).map(|_| true).or_else(|e| if e == rusqlite::Error::QueryReturnedNoRows { Ok(false) } else { Err(e) }).map_err(internal)?;
+    if !known {
+        return Err(err(StatusCode::NOT_FOUND, "No such user."));
+    }
     let code = random_code();
     let hash = crate::server_link::sha256_hex(&code);
     let url = mutate(&state, vec![], move |c| {

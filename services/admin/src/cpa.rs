@@ -260,14 +260,27 @@ fn managed_id(conn: &rusqlite::Connection) -> Option<String> {
     conn.query_row("SELECT id FROM providers WHERE managed = 1", [], |r| r.get(0)).ok()
 }
 
+/// The managed provider's id and the CPA API key the server needs for it, if both exist. The admin keeps this key in
+/// its own files, so it can hand it to the server again whenever the server has lost its copy.
+pub async fn managed_key(state: &AdminState) -> Option<(String, String)> {
+    let link = state.cpa.lock().unwrap_or_else(|e| e.into_inner()).clone()?;
+    let id = managed_id(state.db.lock().await.conn())?;
+    Some((id, link.api_key().to_string()))
+}
+
 /// Make the managed provider once CPA lists a model (so only after an account is connected): named `CPA`, type
 /// `openai`, pointing at CPA with the API key the admin made, billed as a subscription. The model starts as
 /// the first one CPA lists (Claude's, if any) and is changed from the dropdown like any other.
 pub async fn ensure_managed_provider(state: &AdminState, link: &CpaLink) -> Result<Option<String>, String> {
+    let server = state.server.as_ref().ok_or("The server is not linked.")?;
     if let Some(id) = managed_id(state.db.lock().await.conn()) {
+        // The server's copy of the key can be gone (its database was replaced); the admin is the one that has it.
+        // Handing it over again changes nothing when it is there, so opening Services repairs a broken provider.
+        if let Err(e) = server.put_key(&id, link.api_key()).await {
+            tracing::warn!("could not hand the CPA key to the server again: {e}");
+        }
         return Ok(Some(id));
     }
-    let server = state.server.as_ref().ok_or("The server is not linked.")?;
     let body = json!({ "type": "openai", "base_url": link.provider_url(), "api_key": link.api_key() });
     let (status, bytes) = server.request(reqwest::Method::POST, &askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/models"), Some(&body)).await.map_err(|_| "The server is offline.".to_string())?;
     let list: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);

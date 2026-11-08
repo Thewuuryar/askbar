@@ -210,7 +210,7 @@ async fn pushing_retries_until_the_server_is_up_and_follows_later_changes() {
     let addr = free_port().await; // nothing listens here yet
     let link = ServerLink::new(&format!("http://{addr}"), token);
     let db = Arc::new(Mutex::new(admin_db_with_data()));
-    tokio::spawn(link.clone().run(db.clone()));
+    tokio::spawn(link.clone().run(db.clone(), server_link::no_resend()));
 
     tokio::time::sleep(Duration::from_millis(1500)).await;
     assert!(!link.server_online() && link.pending(), "still trying, and says so");

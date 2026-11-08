@@ -45,13 +45,27 @@
       </div>
 
       <form class="pair" id="pair" hidden>
-        <p>Paste the pairing string from the server's admin page.</p>
+        <p>Paste the pairing key from the server's admin page, or from another of your apps (Pair another app).</p>
         <div class="pair-row">
-          <input id="pair-input" type="text" spellcheck="false" autocomplete="off" aria-label="Pairing string" placeholder="askbar-pair:…">
+          <input id="pair-input" type="text" spellcheck="false" autocomplete="off" aria-label="Pairing key" placeholder="askbar-pair:…">
           <button type="submit" class="text-btn" id="pair-submit">Pair</button>
           <button type="button" class="text-btn" id="pair-cancel">Cancel</button>
         </div>
         <p class="pair-error" id="pair-error" role="alert" hidden></p>
+      </form>
+
+      <form class="pair" id="share" hidden>
+        <p>Pair another of your apps: make a key here, then paste it into the other app (tray icon, Pair with server). It works once, for 10 minutes.</p>
+        <div class="pair-row">
+          <input id="share-name" type="text" maxlength="60" autocomplete="off" aria-label="Name of the other app" placeholder="Name of the other app (optional)">
+          <button type="submit" class="text-btn" id="share-submit">Make key</button>
+          <button type="button" class="text-btn" id="share-cancel">Close</button>
+        </div>
+        <div class="pair-row" id="share-out" hidden>
+          <input id="share-key" type="text" readonly spellcheck="false" aria-label="Pairing key">
+          <button type="button" class="text-btn" id="share-copy">Copy</button>
+        </div>
+        <p class="pair-error" id="share-error" role="alert" hidden></p>
       </form>
 
       <div class="thread" id="thread" aria-live="polite" hidden></div>

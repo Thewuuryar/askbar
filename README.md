@@ -23,12 +23,14 @@ mkdir -p data
 docker compose up -d --build
 ```
 
+To stop it, or before rebuilding after an update, use `docker compose --profile dev down --remove-orphans`. With `--profile dev`, the mock LLM is removed as well; without it, a dev container left behind can point at a network that no longer exists.
+
 1. Open **https://localhost/admin** on the machine that runs Docker, or `https://<its address>/admin` from another machine on your network, and accept the certificate warning (the install uses its own certificate until you set a host name).
 2. Sign in with the published login, **`admin` / `admin`**, and change the password.
 3. Choose the **audit passphrase**: at least 20 characters, and it cannot be recovered. It seals what the server records about replies; see *The Audit tab*.
 4. **Providers** > add one (Anthropic or OpenAI-compatible; the model is a dropdown once the address and key are in) and press **Test**, or connect a Claude or ChatGPT account on **Services** (see *CLIProxyAPI*).
-5. **Clients** > generate a pairing string.
-6. Run the app and pair it: `cd clients/desktop && npm install && npm run dev`, then tray icon > **Pair with server...** and paste the string.
+5. **Clients** > add a user, then generate a pairing key for them.
+6. Run the app and pair it: `cd clients/desktop && npm install && npm run dev`, then tray icon > **Pair with server...** and paste the key.
 
 That is a working install on one machine. For other machines, put it behind a host name with HTTPS (*HTTPS with your own hostname* below). How the pieces fit, and why, is in [docs/architecture.md](docs/architecture.md); the HTTP APIs are described in [docs/openapi/](docs/openapi/) (client, server, admin); contributing is in [CONTRIBUTING.md](CONTRIBUTING.md) and security in [SECURITY.md](SECURITY.md).
 
@@ -66,7 +68,7 @@ npm run build      # installers land in clients/desktop/target/release/bundle/
 
 The app is its own Cargo workspace (`clients/desktop/`), so building the server needs none of these libraries.
 
-Until the app is paired it shows how to pair. Tray icon > **Pair with server...**, paste the pairing string from the admin site (Clients). The one-time code expires after 10 minutes; the app exchanges it for a per-client token stored in the OS keychain, not in a file. Revoke a client in the admin site and the app shows "token rejected". If the server can't be reached the app says "server offline"; there is no offline mode.
+Until the app is paired it shows how to pair. Tray icon > **Pair with server...**, paste the pairing key from the admin site (Clients), or make one in an app you already paired (tray icon > **Pair another app...**). A key works once and expires after 10 minutes; the app exchanges it for a per-client token stored in the OS keychain, not in a file. Revoke a client in the admin site and the app shows "token rejected". If the server can't be reached the app says "server offline"; there is no offline mode.
 
 The app reads the token from the keychain once per launch. On macOS a build from `npm run dev` is unsigned, so after each rebuild macOS asks once for the keychain password before that build can read the token; **Always Allow** covers that build until the next rebuild.
 
@@ -142,7 +144,7 @@ Every container has a read-only root filesystem, no Linux capabilities (Caddy ke
 
 ### First run
 
-From the first start Caddy serves HTTPS on port 443 of every address of the host, with a certificate the admin makes for this install (port 80 redirects). Open **`https://localhost/admin`** on the machine that runs Docker, or `https://<its address>/admin` from another machine, and accept the browser's warning. Until you set a host name, the admin site answers only private addresses (loopback, 10/8, 172.16/12, 192.168/16, Tailscale's 100.64/10 and the IPv6 equivalents) unless the allowlist names others. Caddy checks the connection's real source; a router or proxy that rewrites sources can make public traffic look private. A pairing string made now points at the address you opened the admin with and carries the certificate's fingerprint, so the app trusts exactly this certificate for this server (set `ASKBAR_PUBLIC_URL` in `.env` to choose another address). Once a host name and a real certificate are set (step 5) use `https://<hostname>/admin`.
+From the first start Caddy serves HTTPS on port 443 of every address of the host, with a certificate the admin makes for this install (port 80 redirects). Open **`https://localhost/admin`** on the machine that runs Docker, or `https://<its address>/admin` from another machine, and accept the browser's warning. Until you set a host name, the admin site answers only private addresses (loopback, 10/8, 172.16/12, 192.168/16, Tailscale's 100.64/10 and the IPv6 equivalents) unless the allowlist names others. Caddy checks the connection's real source; a router or proxy that rewrites sources can make public traffic look private. A pairing key made now points at the address you opened the admin with and carries the certificate's fingerprint, so the app trusts exactly this certificate for this server (set `ASKBAR_PUBLIC_URL` in `.env` to choose another address). Once a host name and a real certificate are set (step 5) use `https://<hostname>/admin`.
 
 1. Open the admin (above).
 2. Sign in as **`admin`** with the password **`admin`**. Every page but the password change refuses (403 `password_change_required`) until you choose your own: at least 10 characters, not `admin`. Anyone on a private address can use the published login until you do, so do it as soon as the stack is up.
@@ -150,7 +152,7 @@ From the first start Caddy serves HTTPS on port 443 of every address of the host
 3. **Audit passphrase.** Setup asks for one: at least 20 characters. See *The Audit tab* below; write it down.
 4. **Providers** > add one (Anthropic or OpenAI-compatible: after you enter the address and key, **Model** becomes a dropdown of what the provider offers) and press **Test**. For a Claude or ChatGPT subscription use **Services** instead: *Connect Claude* / *Connect ChatGPT* (see *CLIProxyAPI*); no terminal is needed.
 5. **Network** > hostname, Cloudflare token and, if you want it, the allowlist (see below).
-6. **Clients** > generate a pairing string.
+6. **Clients** > add a user, then generate a pairing key for them.
 
 No secret ever goes in `.env`, so nothing sensitive can be committed by accident.
 
@@ -193,7 +195,7 @@ The admin makes CLIProxyAPI's config and API key itself (nobody copies a key any
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `ASKBAR_PUBLIC_URL` | empty | address put in pairing strings until HTTPS is configured; with HTTPS on it is `https://<hostname>` |
+| `ASKBAR_PUBLIC_URL` | empty | address put in pairing keys until HTTPS is configured; with HTTPS on it is `https://<hostname>` |
 | `DATA_DIR` | `./data` | where the server's database lives on the host; must be writable by **uid 10002** |
 
 **Upgrading from 0.4 to 0.5** (stop the stack, pull, rebuild, update the app):

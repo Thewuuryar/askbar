@@ -1,4 +1,4 @@
-//! Trust exactly one certificate: the server's own, named by its SHA-256 in the pairing string
+//! Trust exactly one certificate: the server's own, named by its SHA-256 in the pairing key
 //! (ADR 0034). Used while the server has no publicly trusted certificate, so the app can reach it by
 //! address over HTTPS. The pin is the server's identity: the name and the issuer are not checked, the
 //! handshake signature is.

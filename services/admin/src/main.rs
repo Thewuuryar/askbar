@@ -54,7 +54,15 @@ async fn main() {
     let socket = askbar_admin::socket_path();
     askbar_service::restart::start_watchdog(move || askbar_admin::healthcheck(&socket));
     askbar_admin::caddy::apply_at_startup(state.clone());
-    tokio::spawn(link.run(state.db.clone()));
+    // The CPA key is the admin's own; the server gets it again after every push (a server with an empty database lost it).
+    let resend: askbar_admin::server_link::Resend = {
+        let state = state.clone();
+        std::sync::Arc::new(move || {
+            let state = state.clone();
+            Box::pin(async move { askbar_admin::cpa::managed_key(&state).await.into_iter().collect() })
+        })
+    };
+    tokio::spawn(link.run(state.db.clone(), resend));
     if let Err(e) = askbar_admin::serve_unix(&askbar_admin::socket_path(), askbar_admin::router(state)).await {
         die(e, 1);
     }

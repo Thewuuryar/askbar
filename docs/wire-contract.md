@@ -48,15 +48,22 @@ Tests check that each file lists exactly the routes the code registers.
 
 ### Pairing
 
-1. The admin shows a pairing string: `askbar-pair:<base64url(json {"url", "code", "cert_sha256"?})>`
+1. The admin shows a pairing key: `askbar-pair:<base64url(json {"url", "code", "cert_sha256"?})>`
    (no padding). The code works once and expires after 10 minutes. `cert_sha256` (64 lowercase hex
    digits) is present while the server uses the install's own certificate instead of a publicly trusted
    one: the client then trusts exactly the certificate with that SHA-256 for this server, whatever name
    or address it connects with ([ADR 0034](adr/0034-self-signed-https-and-certificate-pinning.md)).
-   A string without it is checked against the public roots as usual.
+   A key without it is checked against the public roots as usual.
 2. `POST /api/client/v1/pairings` with `{"code": "..."}` returns `{"token": "abt_..."}`. A wrong,
-   expired or used code is `401`. The token is shown once; the server keeps only its hash.
-3. An administrator can revoke a client; its token then gets `401`.
+   expired or used code is `401`. The token is shown once; the server keeps only its hash. The new
+   client belongs to the user the code was made for; a code for a user the server does not have
+   pairs nothing.
+3. A paired client can make a pairing key for another client of the same user ("Pair another app"):
+   `POST /api/client/v1/me/pairing-keys` with `{"name": "..."}` (optional, at most 60 characters)
+   returns `201 {"code": "...", "expires_in": 600}`. The client builds the key itself from its own
+   server address and certificate pin, which the server does not know. At most five unused codes per
+   user; a sixth is `429 too_many_attempts` with `Retry-After`. The server keeps only the code's hash.
+4. An administrator can revoke a client; its token then gets `401`.
 
 ## Providers
 

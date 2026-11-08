@@ -48,7 +48,9 @@ fn the_table_lists_the_api_under_v1_without_duplicates() {
         ("GET", "/api/admin/v1/session"),
         ("DELETE", "/api/admin/v1/session"),
         ("GET", "/api/admin/v1/health"),
-        ("POST", "/api/admin/v1/pairings"),
+        ("GET", "/api/admin/v1/users"),
+        ("POST", "/api/admin/v1/users"),
+        ("POST", "/api/admin/v1/users/{id}/pairing-keys"),
         ("GET", "/api/admin/v1/clients"),
     ] {
         assert!(api.iter().any(|r| r.method == m && r.path == p), "missing {m} {p}");

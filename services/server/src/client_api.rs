@@ -20,6 +20,27 @@ fn internal<E>(_: E) -> ApiError {
 }
 
 /// The providers clients may use, from the snapshot: the default first, then the rest by name. A client with no choice of its own uses the first one.
+/// `POST /me/pairing-keys`: a code to pair another client of this user (ADR 0008). The client builds the
+/// pairing key from it with the server address and certificate pin it already has.
+pub async fn new_pairing_key(
+    State(state): St,
+    Extension(auth): Extension<ClientAuth>,
+    ApiJson(req): ApiJson<askbar_proto::PairingKeyRequest>,
+) -> Result<(axum::http::StatusCode, Json<askbar_proto::PairingKeyResponse>), ApiError> {
+    if req.name.chars().count() > 60 {
+        return Err(ApiError::new(ErrorCode::BadRequest, "The client name is too long."));
+    }
+    let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+    match crate::auth::new_client_pair_code(&db, &auth, &req.name).map_err(internal)? {
+        Some(code) => Ok((axum::http::StatusCode::CREATED, Json(askbar_proto::PairingKeyResponse { code, expires_in: crate::auth::CLIENT_PAIR_CODE_TTL_SECS }))),
+        None => Err(ApiError::new(
+            ErrorCode::TooManyAttempts,
+            format!("{} pairing keys are already waiting to be used. Use one, or wait 10 minutes.", crate::auth::MAX_OPEN_CLIENT_PAIR_CODES),
+        )
+        .retry_after(crate::auth::CLIENT_PAIR_CODE_TTL_SECS as u64)),
+    }
+}
+
 pub async fn providers(State(state): St) -> Res<Vec<ProviderInfo>> {
     let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
     let snapshot = crate::snapshot::current(&db).map_err(internal)?;

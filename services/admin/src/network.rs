@@ -88,7 +88,7 @@ pub struct NetworkView {
     #[serde(flatten)]
     network: Network,
     has_token: bool,
-    /// What new pairing strings will point at.
+    /// What new pairing keys will point at.
     public_url: String,
     /// How the last attempt to configure the HTTPS front end went.
     proxy: crate::caddy::ProxyStatus,

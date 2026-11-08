@@ -108,6 +108,7 @@ pub fn client_routes(state: &Arc<AppState>) -> routes::Routes {
         .get(&v1("/me/prefs"), client_api::get_prefs)
         .put(&v1("/me/prefs"), client_api::put_prefs)
         .get(&v1("/me/display-defaults"), client_api::display_defaults)
+        .post(&v1("/me/pairing-keys"), client_api::new_pairing_key)
         .get(&v1("/search"), client_api::search)
         .get(&v1("/settings"), client_api::settings)
         .post(&v1("/chat"), chat::chat)

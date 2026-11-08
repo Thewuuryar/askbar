@@ -91,6 +91,13 @@ pub enum Billing {
     Subscription,
 }
 
+/// A user, as the admin pushes it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SnapshotUser {
+    pub id: String,
+    pub name: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SnapshotPairCode {
     /// SHA-256 (hex) of the code; the code itself is never sent.
@@ -132,6 +139,9 @@ pub struct Snapshot {
     /// Per-user display defaults, by user id.
     #[serde(default)]
     pub user_display_defaults: std::collections::BTreeMap<String, DisplaySettings>,
+    /// The users the admin made (ADR 0008). The server keeps them; a pairing key names one of them.
+    #[serde(default)]
+    pub users: Vec<SnapshotUser>,
     #[serde(default)]
     pub pair_codes: Vec<SnapshotPairCode>,
     // `revoked_device_ids` is the old key, still read from a snapshot stored by an earlier version. names-ok
@@ -296,6 +306,24 @@ pub struct PairResponse {
     pub token: String,
 }
 
+/// `POST /api/client/v1/me/pairing-keys`: a paired client asks for a code to pair another client of
+/// the same user (ADR 0008). The client builds the pairing key from the code and the server address
+/// and certificate pin it already holds; the server knows neither.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PairingKeyRequest {
+    /// What the new client will be called; empty means "client".
+    #[serde(default)]
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PairingKeyResponse {
+    /// The one-time code, as in [`Pairing::code`].
+    pub code: String,
+    /// Seconds until it expires.
+    pub expires_in: i64,
+}
+
 /// Header every client sends on API calls other than health.
 pub const CLIENT_VERSION_HEADER: &str = "x-askbar-client-version";
 
@@ -310,7 +338,7 @@ pub fn parse_version(v: &str) -> Option<(u64, u64, u64)> {
 
 pub const PAIR_PREFIX: &str = "askbar-pair:";
 
-/// What a pairing string carries: `askbar-pair:<base64url(json)>`.
+/// What a pairing key carries: `askbar-pair:<base64url(json)>`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Pairing {
     /// The server's address, `https://...` (or `http://` for a server on the same machine).
@@ -331,7 +359,7 @@ impl Pairing {
         format!("{PAIR_PREFIX}{}", URL_SAFE_NO_PAD.encode(json))
     }
 
-    /// `None` if `s` is not a pairing string, or names a certificate in a form that is not a SHA-256.
+    /// `None` if `s` is not a pairing key, or names a certificate in a form that is not a SHA-256.
     pub fn decode(s: &str) -> Option<Pairing> {
         use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
         let body = s.trim().strip_prefix(PAIR_PREFIX)?;
@@ -346,12 +374,12 @@ impl Pairing {
     }
 }
 
-/// A pairing string with no certificate pin.
+/// A pairing key with no certificate pin.
 pub fn encode_pairing(url: &str, code: &str) -> String {
     Pairing { url: url.into(), code: code.into(), cert_sha256: None }.encode()
 }
 
-/// Returns `(url, code)`, or `None` if the string is not a pairing string.
+/// Returns `(url, code)`, or `None` if the string is not a pairing key.
 pub fn decode_pairing(s: &str) -> Option<(String, String)> {
     Pairing::decode(s).map(|p| (p.url, p.code))
 }

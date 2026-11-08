@@ -47,7 +47,7 @@ paths:
     post:
       operationId: createPairing
       summary: Trade a one-time pairing code for a client token.
-      description: The code comes from a pairing string made in the admin site; it works once and expires after 10 minutes. The token is shown once; the server keeps only its hash.
+      description: The code comes from a pairing key made in the admin site; it works once and expires after 10 minutes. The token is shown once; the server keeps only its hash.
       security: []
       parameters:
         - $ref: '#/components/parameters/ClientVersion'
@@ -217,6 +217,49 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '426':
           $ref: '#/components/responses/TooOld'
+  /api/client/v1/me/pairing-keys:
+    post:
+      operationId: newPairingKey
+      summary: A code to pair another app of this user (ADR 0008).
+      description: >-
+        A paired app asks for a one-time code for the same user's next app. The app builds the pairing key
+        (`askbar-pair:...`) from the code and the server address and certificate pin it already has; the server
+        knows neither. The code lasts 10 minutes and is used once. At most 5 unused codes per user at a time:
+        another one is refused with 429 `too_many_attempts` and `Retry-After`.
+      parameters:
+        - $ref: '#/components/parameters/ClientVersion'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  maxLength: 60
+                  description: What the new app will be called; empty means "client".
+      responses:
+        '201':
+          description: The code.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [code, expires_in]
+                properties:
+                  code:
+                    type: string
+                  expires_in:
+                    type: integer
+                    description: Seconds.
+        '400':
+          description: The name is too long (`bad_request`).
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '426':
+          $ref: '#/components/responses/TooOld'
+        '429':
+          description: Too many unused codes for this user (`too_many_attempts`, with `Retry-After`).
   /api/client/v1/settings:
     get:
       operationId: getSettings
