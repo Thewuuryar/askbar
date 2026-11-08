@@ -1,6 +1,6 @@
 # 0047. Generation routes under spaces
 
-Status: Proposed
+Status: Accepted
 Date: 2026-11-08
 Amends: [0022](0022-api-path-conventions.md), the space route list
 Source: plan step 1.11, as built
