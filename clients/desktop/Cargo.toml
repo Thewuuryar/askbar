@@ -13,3 +13,8 @@ strip = true
 # Hashing in the server the tests start is deliberately slow; keep it usable in debug builds.
 [profile.dev.package.blake2]
 opt-level = 3
+
+# Lints for the client (`[lints] workspace = true` in src-tauri). CI runs clippy with `-D warnings`.
+[workspace.lints.rust]
+# The client needs no unsafe code. Tauri's macros expand to none that this lint sees.
+unsafe_code = "forbid"
