@@ -18,6 +18,7 @@ Kind: component
   - restarts at most once every 5 seconds;
   - after each start, writes the request value it acted on to `/cpa-config/restart-done`, so the admin can tell the restart happened;
   - on `SIGTERM` or `SIGINT`, passes the signal to the child, waits up to 10 seconds, and exits.
+- **Unsafe code:** the only `unsafe` in the services' workspace, in two functions that each allow it: `kill(2)` to send `SIGTERM` to its own child (`std` can send only `SIGKILL`) and `signal(2)` to install a handler that only sets an atomic (`std` has no signal API). Both go through `libc`, with a `SAFETY:` comment. The workspace denies `unsafe_code` everywhere else.
 - **No new way in:** the supervisor opens no port and holds no token. The trigger is a file on the `cpa-config` volume, which only the admin and `cpa` mount, as today. A compromised admin could restart `cpa` this way, which it can already do from the Services tab.
 - **Everything else is as today:** same container name, the `edge` and `cpa-admin` networks, no published port, the `cpa-config` and `cpa-auth` volumes, the [0032](0032-container-hardening.md) hardening (root, as CLIProxyAPI writes `/root/.cli-proxy-api` on its volume).
 - **Admin:** Restart on the Services tab writes a random value to `restart-request`, then waits up to a minute for `restart-done` to show it and for CLIProxyAPI's API to answer. The admin no longer asks for a host restart when it replaces CLIProxyAPI's control secret: the config change restarts it.
@@ -39,3 +40,4 @@ Kind: component
 ## Amendments
 
 - 2026-11-08: marked as a component ADR, so it is amended in place ([0046](0046-component-and-register-adrs-and-partial-amendments.md)). Nothing else changed.
+- 2026-11-08: records the supervisor's two `unsafe` libc calls, now that the workspace denies `unsafe_code` (contributor guidelines rollout step 3). The code did not change.
