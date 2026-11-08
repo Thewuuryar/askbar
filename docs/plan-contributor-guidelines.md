@@ -53,7 +53,7 @@ Each step is its own PR. Stop after any step; the earlier ones stand alone.
 1. **This branch**: the documents, PR template, `check-docs.sh` change. There is no CODEOWNERS file while the owner is the only reviewer; add one with a second reviewer. Verify: `npm test` names and docs checks pass.
 2. **rustfmt** (#4): branch `style/rustfmt` off `main`: `rustfmt.toml` and one `style: apply rustfmt` commit. Verify: `cargo fmt --all --check` clean; tests unchanged. After it merges, add the SHA that landed on `main` (a squash or rebase changes the SHA) to `.git-blame-ignore-revs` in a small follow-up.
 3. **Done (2026-11-08). clippy** (#5, #13): `[workspace.lints]`, fix or explicitly allow each baseline warning with a reason. Verify: `cargo clippy --workspace --all-targets -- -D warnings` clean.
-4. **CI on pull requests** (#7, #8, #9): `ci.yml`, `deny.toml`, Dependabot, Renovate, gitleaks. Verify: open a draft PR and watch it run; the 0.5.0 hand-off notes that `build.yml` has never run, so expect first-run failures.
+4. **In review (2026-11-08): CI on pull requests** (#7, #8, #9): `ci.yml`, `deny.toml`, Dependabot, Renovate, gitleaks. Verify: open a draft PR and watch it run; the 0.5.0 hand-off notes that `build.yml` has never run, so expect first-run failures.
 5. **Branch protection** (#10) last, once the checks are known to pass; otherwise it blocks every merge.
 6. **Update AGENTS.md** to drop the `(proposed)` tags and add the new commands.
 7. **Delete this file** once steps 2 to 6 are done and the open decisions are settled or moved to issues.

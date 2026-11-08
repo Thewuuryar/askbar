@@ -62,9 +62,9 @@ Thick outline and "(new)": new in v2.
 
 ## Repo work
 
-- **Pinning gaps.** `caddy:2`, `rust:1` and `debian:bookworm-slim` float. `package.json` uses version ranges with no npm lockfile, GitHub Actions use tags, and the Caddy Cloudflare plugin is unpinned ([ADR 0017](adr/0017-dependencies-and-patches.md)).
-- **Update tools.** No Dependabot or Renovate config exists. `cpa` is already pinned to a digest.
-- **CI.** The current CI does not run `check-isolation.sh` ([ADR 0018](adr/0018-releases-and-migrations.md)).
+- **Pinning gaps.** Done: the images are pinned to digests and the Caddy Cloudflare plugin to a release (the `Dockerfile`), the npm lockfiles are committed, and the GitHub Actions are pinned to commit hashes ([ADR 0017](adr/0017-dependencies-and-patches.md)).
+- **Update tools.** Done: `renovate.json` for version updates and `.github/dependabot.yml` for security updates only. Each takes effect once its app or setting is turned on for the repository.
+- **CI.** Done: `.github/workflows/ci.yml` runs `check-isolation.sh` on every pull request, with the other checks ([ADR 0018](adr/0018-releases-and-migrations.md)).
 - **Unverified paths.** The [guide](guide.md#verified-and-not) lists a real certificate through this layout and person-tested pairing as unverified. The `cpa` login endpoints have not been checked against the pinned image.
 
 ## Background: the first-run model
