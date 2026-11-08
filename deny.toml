@@ -10,6 +10,14 @@ ignore = [
     # dev-dependency that parses our own docs/openapi/*.yaml in the server's and admin's tests; it is in
     # no binary. Revisit by 2027-02-01, or sooner by moving those tests to a YAML parser in safe Rust.
     { id = "RUSTSEC-2024-0449", reason = "test-only YAML parser for our own OpenAPI files; in no binary" },
+    # The desktop client, through Tauri; unmaintained, not vulnerable, and no safe upgrade. Revisit by
+    # 2027-02-01, or when Tauri moves on: proc-macro-error comes from glib-macros 0.18 in Tauri's GTK
+    # stack on Linux (ADR 0044 keeps glib at 0.18 with Tauri); the zvariant and zbus_names crates were
+    # folded into zbus 6, and come through zbus 5 in opener and tauri-plugin-single-instance.
+    { id = "RUSTSEC-2024-0370", reason = "proc-macro-error via glib-macros 0.18 in Tauri's GTK stack" },
+    { id = "RUSTSEC-2026-0370", reason = "zvariant via zbus 5 in opener and tauri-plugin-single-instance" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names via zbus 5 in opener and tauri-plugin-single-instance" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive via zbus 5 in opener and tauri-plugin-single-instance" },
 ]
 
 [licenses]
