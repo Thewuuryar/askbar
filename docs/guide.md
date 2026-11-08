@@ -120,6 +120,28 @@ That starts three containers on two networks:
 
 `server-api` is an `internal` network shared by the admin and the server's server API (172.30.0.2:8082, fixed in `compose.yaml`). Caddy is the only thing the outside world can reach.
 
+### Docker networks
+
+Askbar gives each link between two services its own network, so a service reaches only the services it has to ([architecture.md](architecture.md#links)). The stack has three networks today and about fifteen once the auditor, `model-gateway` and the alerter are added. Each network takes a subnet from Docker's address pools, and with Docker's default settings a host has about 30 to share between all its Compose projects. When they run out, `docker compose up` fails with:
+
+```text
+could not find an available, non-overlapping IPv4 address pool among the defaults to assign to the network
+```
+
+The fix is to give Docker smaller subnets, so the same address range holds many more networks. On Linux, add this to `/etc/docker/daemon.json` (create the file if it does not exist) and restart Docker with `sudo systemctl restart docker`. With Docker Desktop, paste it under **Settings > Docker Engine** and press **Apply & restart**:
+
+```json
+{
+  "default-address-pools": [
+    { "base": "172.16.0.0/12", "size": 24 }
+  ]
+}
+```
+
+That gives 4,096 networks of 254 addresses each, plenty for Askbar and any other projects on the host. Pick a `base` your home network or VPN does not use. If yours uses part of `172.16.0.0/12`, use a range such as `10.200.0.0/16` (256 networks) instead. Networks that already exist keep their subnets. Run `docker compose down` and then `docker compose up -d` to recreate Askbar's from the new pools.
+
+New Askbar networks never pin a subnet; Docker assigns them from these pools. `server-api` is the exception for now: it is fixed at `172.30.0.0/24`, so keep that range free.
+
 Every container has a read-only root filesystem, no Linux capabilities (Caddy keeps only the one to bind 80 and 443), no privilege gain, and limits on processes and memory; it writes only to its own volumes and a private `/tmp` ([ADR 0032](adr/0032-container-hardening.md)). Caddy, though root, reads the admin's certificate key and Cloudflare token (mode 640) and makes its admin socket through group 10001.
 
 - The **server** serves the client API, which accepts only `Authorization: Bearer <client token>`. Chat replies stream as Server-Sent Events (`meta`, `provider`, `delta`, `done`, `error`) and can be resumed after a dropped connection. Client tokens are random, shown once, and stored as SHA-256 hashes. See [docs/wire-contract.md](wire-contract.md).
