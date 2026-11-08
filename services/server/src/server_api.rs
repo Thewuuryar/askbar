@@ -31,15 +31,41 @@ pub fn token_hash_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/server-token/token.sha256"))
 }
 
-/// The server listener's address from `ASKBAR_SERVER_API_ADDR`: a concrete address,
-/// never a wildcard (`0.0.0.0` or `::`), so it can't end up on every network.
+/// The server listener's address from `ASKBAR_SERVER_API_ADDR`: `host:port` or `ip:port`. A host
+/// name is resolved once, at start-up, and must give exactly one address. In Compose it is an
+/// alias that exists only on the `server-api` network, so it resolves to the server's own address
+/// there and the listener is on that network alone, with no address written down. Never a
+/// wildcard (`0.0.0.0` or `::`), so it can't end up on every network.
 pub fn parse_addr(raw: &str) -> Result<SocketAddr, String> {
-    let addr: SocketAddr = raw
-        .trim()
-        .parse()
-        .map_err(|_| format!("ASKBAR_SERVER_API_ADDR is not a valid socket address: {raw} (example: 172.30.0.2:8082)"))?;
+    use std::net::ToSocketAddrs;
+    let raw = raw.trim();
+    let addrs: Vec<SocketAddr> = match raw.parse::<SocketAddr>() {
+        Ok(addr) => vec![addr],
+        Err(_) => raw
+            .to_socket_addrs()
+            .map_err(|e| {
+                format!("ASKBAR_SERVER_API_ADDR is not an address this server can resolve: {raw} ({e}; example: server-api-host:8082)")
+            })?
+            .collect(),
+    };
+    let addr = one_addr(raw, addrs)?;
     check_not_wildcard(&addr)?;
     Ok(addr)
+}
+
+/// The one address a name resolved to. Several would leave it unclear which network the
+/// listener is on, so they are refused rather than picked from.
+pub fn one_addr(raw: &str, mut addrs: Vec<SocketAddr>) -> Result<SocketAddr, String> {
+    addrs.sort();
+    addrs.dedup();
+    match addrs.as_slice() {
+        [addr] => Ok(*addr),
+        [] => Err(format!("ASKBAR_SERVER_API_ADDR resolved to no address: {raw}")),
+        many => Err(format!(
+            "ASKBAR_SERVER_API_ADDR must resolve to one address, but {raw} gives {}: the server API must listen on one network",
+            many.iter().map(|a| a.ip().to_string()).collect::<Vec<_>>().join(", ")
+        )),
+    }
 }
 
 /// The server address must be one specific address, not `0.0.0.0` or `::`.
