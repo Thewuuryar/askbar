@@ -140,7 +140,7 @@ Every container has a read-only root filesystem, no Linux capabilities (Caddy ke
 - The **server** serves the client API, which accepts only `Authorization: Bearer <client token>`. Chat replies stream as Server-Sent Events (`meta`, `provider`, `delta`, `done`, `error`) and can be resumed after a dropped connection. Client tokens are random, shown once, and stored as SHA-256 hashes. See [docs/wire-contract.md](docs/wire-contract.md).
 - The **admin** listens on a unix socket only. Caddy proxies the site (`<hostname>/admin`) and its API (`<hostname>/api/admin/v1`) to it, and the admin owns `admin.db`. Every change is made in `admin.db` and pushed to the server as one snapshot; if the server is down the change is refused ("The server is offline. Nothing was changed.") rather than half applied. With the server stopped the admin still loads and shows an offline banner.
 - The **server API** requires a bearer token. The admin keeps the token in its own secrets volume (mode 600); the server holds only its SHA-256 (`token.sha256`, read per request, compared in constant time, and the API refuses everything when the file is missing).
-- **Provider API keys** are encrypted at rest (ChaCha20-Poly1305) with a master key that the server creates on its first start in the `askbar-secrets` volume. They are sent to the server by the admin, stored only in `server.db`, and never returned by any endpoint. The Cloudflare token is encrypted in `admin.db` with the admin's own key (`admin-secrets`), separate from the server's, and written to a file only Caddy reads.
+- **Provider API keys** are encrypted at rest (ChaCha20-Poly1305) with a master key that the server creates on its first start in the `askbar-secrets` volume. They are sent to the server by the admin, stored only in the server's `control.db`, and never returned by any endpoint. The Cloudflare token is encrypted in `admin.db` with the admin's own key (`admin-secrets`), separate from the server's, and written to a file only Caddy reads.
 
 ### First run
 
@@ -196,7 +196,15 @@ The admin makes CLIProxyAPI's config and API key itself (nobody copies a key any
 | Variable | Default | Meaning |
 |---|---|---|
 | `ASKBAR_PUBLIC_URL` | empty | address put in pairing keys until HTTPS is configured; with HTTPS on it is `https://<hostname>` |
-| `DATA_DIR` | `./data` | where the server's database lives on the host; must be writable by **uid 10002** |
+| `DATA_DIR` | `./data` | where the server's `control.db` and `spaces/` live on the host; must be writable by **uid 10002** |
+
+**Upgrading from 0.5 to 0.6 (spaces): wipe the server's data and pair again.** Conversations now live in one file per space ([ADR 0009](docs/adr/0009-spaces-and-storage.md)); before 1.0 nothing is migrated ([ADR 0018](docs/adr/0018-releases-and-migrations.md)), so the server's conversations, paired apps and stored provider keys go. The admin's settings, users and providers stay, and the admin pushes them again; it keeps the key only for its own CLIProxyAPI provider, and sends that one again by itself.
+
+1. `docker compose --profile dev down` (not `-v`: no volume is removed or renamed).
+2. Empty the server's data directory: `rm -rf ./data/*` (or your `DATA_DIR`). The server no longer reads `askbar.db`; if one is left it says so in its log and leaves it alone.
+3. `docker compose --profile dev up -d --build`.
+4. In the admin site, **Providers** shows "key missing on the server" for each provider whose key went with the data: edit it and enter the key again.
+5. Update the Askbar app to 0.6.0 (a 0.5 app is told it is too old), create a pairing key for each user in the admin site, and pair each app again.
 
 **Upgrading from 0.4 to 0.5** (stop the stack, pull, rebuild, update the app):
 
@@ -227,9 +235,9 @@ The admin site's **Services** tab shows whether the server, the admin, Caddy and
 
 Four things to back up, **separately**:
 
-- **`data/`** (the server database: conversations, paired clients, and the provider keys *encrypted*) and the **`admin-data`** volume (the admin's database).
+- **`data/`** (the server's `control.db`: users, paired clients, spaces and the provider keys *encrypted*; and `spaces/`, one file per space with its conversations) and the **`admin-data`** volume (the admin's database).
 - **The `askbar-secrets` volume** (`master.key`) and the **`admin-secrets`** volume (`admin.key`). Keep these somewhere other than your database backups: anyone holding both can read the stored keys. For example: `docker run --rm -v askbar_askbar-secrets:/s -v "$PWD":/b alpine cp /s/master.key /b/master.key`, then store the copy in a password manager.
-- Admin site > **Backup** downloads one `.tar` with `server.db` and `admin.db`. It is consistent (`VACUUM INTO`) and leaves out provider API keys, pair codes, the Cloudflare token and the admin password hash, so after restoring it you enter those again.
+- Admin site > **Backup** downloads one `.tar` with `server/control.db`, `server/spaces/<space id>.db` for every space, and `admin.db`. It is consistent (`VACUUM INTO`) and leaves out provider API keys, pair codes, the Cloudflare token and the admin password hash, so after restoring it you enter those again.
 
 - **The `audit-data` volume** (`audit.db`, the trace of replies) is **not** in the admin site's Backup `.tar`. Copy the whole volume if you want it (stop the server first, or copy `audit.db`, `audit.db-wal` and `audit.db-shm` together): `docker run --rm -v askbar_audit-data:/a -v "$PWD":/b alpine cp -a /a/. /b/audit-backup/`. A copy holds sealed content only, which is useless without the audit passphrase.
 

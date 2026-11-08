@@ -51,6 +51,8 @@ struct T {
     state: Arc<AppState>,
     token: String,
     mock: Mock,
+    /// The user's personal space, where these tests chat.
+    space: Arc<askbar_server::Space>,
 }
 
 async fn start() -> T {
@@ -66,17 +68,22 @@ async fn start() -> T {
     let code = askbar_server::testing::add_pair_code(&db, &user, "t");
     let state = AppState::new(db, secrets, askbar_server::MIN_CLIENT);
     let token = auth::redeem_pair_code(&state.db.lock().unwrap(), &code).unwrap().unwrap();
+    let space = askbar_server::testing::personal_space(&state, &user);
     let app = askbar_server::client_router(state.clone());
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = l.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
-    T { addr, state, token, mock }
+    T { addr, state, token, mock, space }
 }
 
 impl T {
+    /// A client API path in the user's personal space: `sp("/chat")`.
+    fn sp(&self, rest: &str) -> String {
+        format!("/api/client/v1/spaces/{}{rest}", self.space.id)
+    }
     async fn chat(&self, client: &reqwest::Client, conv: Option<&str>, provider: &str, text: &str) -> reqwest::Response {
         client
-            .post(format!("http://{}/api/client/v1/chat", self.addr))
+            .post(format!("http://{}{}", self.addr, self.sp("/chat")))
             .bearer_auth(&self.token)
             .json(&ChatRequest {
                 conversation_id: conv.map(String::from),
@@ -90,13 +97,13 @@ impl T {
     }
     /// (status, text, error, assistant_message_id) of every generation, oldest first.
     fn generations(&self) -> Vec<(String, String, Option<String>, Option<String>)> {
-        let db = self.state.db.lock().unwrap();
+        let db = self.space.lock();
         let mut stmt = db.conn().prepare("SELECT status, text, error, assistant_message_id FROM generations ORDER BY id").unwrap();
         let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).unwrap().map(Result::unwrap).collect();
         rows
     }
     fn messages(&self) -> Vec<(String, String)> {
-        let db = self.state.db.lock().unwrap();
+        let db = self.space.lock();
         let mut stmt = db.conn().prepare("SELECT role, content FROM messages ORDER BY id").unwrap();
         let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect();
         rows
@@ -266,7 +273,7 @@ async fn bad_requests_are_plain_http_errors() {
     assert_eq!(t.chat(&http, None, "mock", "hi").await.status(), 404);
     assert!(t.messages().is_empty());
     let r = http
-        .post(format!("http://{}/api/client/v1/chat", t.addr))
+        .post(format!("http://{}{}", t.addr, t.sp("/chat")))
         .json(&ChatRequest { conversation_id: None, provider: "p1".into(), text: "hi".into(), client_request_id: None })
         .send()
         .await
@@ -276,7 +283,7 @@ async fn bad_requests_are_plain_http_errors() {
 
 fn client_builder() -> reqwest::ClientBuilder {
     let mut h = reqwest::header::HeaderMap::new();
-    h.insert(askbar_proto::CLIENT_VERSION_HEADER, "0.5.0".parse().unwrap());
+    h.insert(askbar_proto::CLIENT_VERSION_HEADER, "0.6.0".parse().unwrap());
     reqwest::Client::builder().default_headers(h)
 }
 
@@ -299,6 +306,7 @@ async fn another_user_cannot_read_or_continue_my_conversation() {
     let token_b = {
         let db = t.state.db.lock().unwrap();
         db.conn().execute("INSERT INTO users (id, name, created_at) VALUES ('B','other',0)", []).unwrap();
+        db.ensure_personal_space("B").unwrap();
         let code = askbar_server::testing::add_pair_code(&db, "B", "b-laptop");
         auth::redeem_pair_code(&db, &code).unwrap().unwrap()
     };
@@ -306,33 +314,64 @@ async fn another_user_cannot_read_or_continue_my_conversation() {
         let (http, token, addr) = (http.clone(), token_b.clone(), t.addr);
         async move { http.get(format!("http://{addr}{path}")).bearer_auth(token).send().await.unwrap() }
     };
-    let list = get("/api/client/v1/conversations".into()).await;
+    // B's own space is listed and empty; A's space is not among B's spaces.
+    let spaces: Vec<askbar_proto::SpaceInfo> = get("/api/client/v1/spaces".into()).await.json().await.unwrap();
+    assert_eq!(spaces.len(), 1);
+    assert_eq!(spaces[0].kind, "personal");
+    let b_space = spaces[0].id.clone();
+    assert_ne!(b_space, t.space.id);
+    let list = get(format!("/api/client/v1/spaces/{b_space}/conversations")).await;
     assert_eq!(list.status(), 200);
     assert_eq!(list.text().await.unwrap(), "[]");
-    assert_eq!(get(format!("/api/client/v1/conversations/{conversation_id}")).await.status(), 404);
+    assert_eq!(get(format!("/api/client/v1/spaces/{b_space}/conversations/{conversation_id}")).await.status(), 404);
 
-    // Continuing it is refused and writes nothing.
+    // A's space is refused to B: listing, reading, searching, the running list. The same 404 as for
+    // a space that does not exist, so nothing is said about it.
+    for path in [
+        t.sp("/conversations"),
+        t.sp(&format!("/conversations/{conversation_id}")),
+        t.sp("/search?q=private"),
+        t.sp("/generations?status=running"),
+        format!("/api/client/v1/spaces/{}/conversations", askbar_server::ids::new_id()),
+    ] {
+        let r = get(path.clone()).await;
+        assert_eq!(r.status(), 404, "{path}");
+        let p: askbar_proto::Problem = r.json().await.unwrap();
+        assert_eq!(p.error, "not_found", "{path}");
+    }
+
+    // Continuing it is refused and writes nothing, in A's space or in B's own.
+    for path in [t.sp("/chat"), format!("/api/client/v1/spaces/{b_space}/chat")] {
+        let r = http
+            .post(format!("http://{}{path}", t.addr))
+            .bearer_auth(&token_b)
+            .json(&ChatRequest {
+                conversation_id: Some(conversation_id.clone()),
+                provider: "p1".into(),
+                text: "intrusion".into(),
+                client_request_id: None,
+            })
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status(), 404, "{path}");
+    }
+    assert_eq!(t.messages().len(), 2);
+
+    // Deleting it is refused too.
     let r = http
-        .post(format!("http://{}/api/client/v1/chat", t.addr))
+        .delete(format!("http://{}{}", t.addr, t.sp(&format!("/conversations/{conversation_id}"))))
         .bearer_auth(&token_b)
-        .json(&ChatRequest {
-            conversation_id: Some(conversation_id.clone()),
-            provider: "p1".into(),
-            text: "intrusion".into(),
-            client_request_id: None,
-        })
         .send()
         .await
         .unwrap();
     assert_eq!(r.status(), 404);
-    assert_eq!(t.messages().len(), 2);
-
-    // Deleting it is refused too.
-    let r =
-        http.delete(format!("http://{}/api/client/v1/conversations/{conversation_id}", t.addr)).bearer_auth(&token_b).send().await.unwrap();
-    assert_eq!(r.status(), 404);
-    let own =
-        http.get(format!("http://{}/api/client/v1/conversations/{conversation_id}", t.addr)).bearer_auth(&t.token).send().await.unwrap();
+    let own = http
+        .get(format!("http://{}{}", t.addr, t.sp(&format!("/conversations/{conversation_id}"))))
+        .bearer_auth(&t.token)
+        .send()
+        .await
+        .unwrap();
     assert_eq!(own.status(), 200);
 }
 
@@ -368,7 +407,7 @@ async fn the_snapshots_system_prompt_is_sent_with_the_next_message_and_never_ser
     let settings = http
         .get(format!("http://{}/api/client/v1/settings", t.addr))
         .bearer_auth(&t.token)
-        .header("x-askbar-client-version", "0.5.0")
+        .header("x-askbar-client-version", "0.6.0")
         .send()
         .await
         .unwrap()
@@ -390,7 +429,7 @@ async fn a_finished_generation_row_holds_the_full_text_and_the_message_id() {
     assert_eq!(status, "done");
     assert!(text.ends_with("Anything else?"), "got {text:?}");
     assert_eq!(error, &None);
-    let db = t.state.db.lock().unwrap();
+    let db = t.space.lock();
     let id: String = db.conn().query_row("SELECT id FROM messages WHERE role = 'assistant'", [], |r| r.get(0)).unwrap();
     assert_eq!(message_id.as_deref(), Some(id.as_str()));
     let (provider, user_msg): (String, Option<String>) =
@@ -437,7 +476,7 @@ async fn meta_carries_the_generation_id_and_deltas_carry_ascending_ids() {
     let events = parse_events(&body);
     let ChatEvent::Meta { generation_id, .. } = &events[0].1 else { panic!("first event must be meta") };
     let generation_id = generation_id.clone().expect("meta names the generation");
-    let stored: String = t.state.db.lock().unwrap().conn().query_row("SELECT id FROM generations", [], |r| r.get(0)).unwrap();
+    let stored: String = t.space.lock().conn().query_row("SELECT id FROM generations", [], |r| r.get(0)).unwrap();
     assert_eq!(generation_id, stored);
 
     // Every delta block has `id: n`, counting from 1; other events have none.
@@ -458,6 +497,7 @@ impl T {
     fn second_user_token(&self) -> String {
         let db = self.state.db.lock().unwrap();
         db.conn().execute("INSERT INTO users (id, name, created_at) VALUES ('B','other',0)", []).unwrap();
+        db.ensure_personal_space("B").unwrap();
         let code = askbar_server::testing::add_pair_code(&db, "B", "b-laptop");
         auth::redeem_pair_code(&db, &code).unwrap().unwrap()
     }
@@ -494,7 +534,7 @@ async fn resuming_after_three_deltas_sends_the_rest_exactly_once() {
     assert!(all.len() > 5);
     let id = generation_id(&body);
 
-    let rest = t.get_with(&t.token, &format!("/api/client/v1/generations/{id}/stream?after=3")).await;
+    let rest = t.get_with(&t.token, &t.sp(&format!("/generations/{id}/stream?after=3"))).await;
     assert_eq!(rest.status(), 200);
     let rest_body = rest.text().await.unwrap();
     assert_eq!(deltas(&rest_body), all[3..].to_vec(), "deltas 4.. exactly once, with their original ids");
@@ -514,7 +554,7 @@ async fn resuming_a_running_generation_replays_then_follows() {
     let id = generation_id(&got);
     drop(stream);
 
-    let resumed = t.get_with(&t.token, &format!("/api/client/v1/generations/{id}/stream?after=2")).await;
+    let resumed = t.get_with(&t.token, &t.sp(&format!("/generations/{id}/stream?after=2"))).await;
     let mut s = resumed.bytes_stream();
     let mut body = String::new();
     while deltas(&body).len() < 4 {
@@ -532,11 +572,11 @@ async fn a_generation_only_the_database_remembers_sends_its_text_once_then_the_e
     let text: String = deltas(&body).into_iter().map(|d| d.1).collect();
     t.state.generations.remove(&id); // as after a restart
 
-    let whole = t.get_with(&t.token, &format!("/api/client/v1/generations/{id}/stream")).await.text().await.unwrap();
+    let whole = t.get_with(&t.token, &t.sp(&format!("/generations/{id}/stream"))).await.text().await.unwrap();
     assert_eq!(deltas(&whole), [(1, text)]);
     assert!(whole.contains("event: done"));
 
-    let tail = t.get_with(&t.token, &format!("/api/client/v1/generations/{id}/stream?after=5")).await.text().await.unwrap();
+    let tail = t.get_with(&t.token, &t.sp(&format!("/generations/{id}/stream?after=5"))).await.text().await.unwrap();
     assert!(deltas(&tail).is_empty() && tail.contains("event: done"));
 }
 
@@ -546,13 +586,18 @@ async fn another_users_generation_stream_is_404() {
     let body = t.chat(&client(), None, "p1", "Hello there").await.text().await.unwrap();
     let id = generation_id(&body);
     let other = t.second_user_token();
-    assert_eq!(t.get_with(&other, &format!("/api/client/v1/generations/{id}/stream")).await.status(), 404);
-    assert_eq!(t.get_with(&other, "/api/client/v1/generations/nope/stream").await.status(), 404);
+    assert_eq!(t.get_with(&other, &t.sp(&format!("/generations/{id}/stream"))).await.status(), 404);
+    assert_eq!(t.get_with(&other, &t.sp("/generations/nope/stream")).await.status(), 404);
 }
 
 impl T {
     async fn cancel_with(&self, token: &str, id: &str) -> reqwest::Response {
-        client().post(format!("http://{}/api/client/v1/generations/{id}/cancel", self.addr)).bearer_auth(token).send().await.unwrap()
+        client()
+            .post(format!("http://{}{}", self.addr, self.sp(&format!("/generations/{id}/cancel"))))
+            .bearer_auth(token)
+            .send()
+            .await
+            .unwrap()
     }
 }
 
@@ -617,42 +662,42 @@ async fn a_running_generation_is_listed_and_a_finished_one_is_not() {
         conversation_id
     };
 
-    let list: Vec<askbar_proto::PendingGeneration> =
-        t.get_with(&t.token, "/api/client/v1/generations?status=running").await.json().await.unwrap();
+    let list: Vec<askbar_proto::PendingGeneration> = t.get_with(&t.token, &t.sp("/generations?status=running")).await.json().await.unwrap();
     assert_eq!(list.len(), 1);
     assert_eq!(
         (list[0].generation_id.as_str(), list[0].status.as_str(), list[0].prompt.as_str()),
         (id.as_str(), "running", "please be slow")
     );
     let detail: askbar_proto::ConversationDetail =
-        t.get_with(&t.token, &format!("/api/client/v1/conversations/{conversation}")).await.json().await.unwrap();
+        t.get_with(&t.token, &t.sp(&format!("/conversations/{conversation}"))).await.json().await.unwrap();
     assert_eq!(detail.pending.len(), 1);
     assert_eq!(detail.pending[0].generation_id, id);
 
-    // Another user sees neither.
+    // Another user sees neither: this space is refused to them, and their own lists nothing.
     let other = t.second_user_token();
+    assert_eq!(t.get_with(&other, &t.sp("/generations?status=running")).await.status(), 404);
+    let spaces: Vec<askbar_proto::SpaceInfo> = t.get_with(&other, "/api/client/v1/spaces").await.json().await.unwrap();
     let theirs: Vec<askbar_proto::PendingGeneration> =
-        t.get_with(&other, "/api/client/v1/generations?status=running").await.json().await.unwrap();
+        t.get_with(&other, &format!("/api/client/v1/spaces/{}/generations?status=running", spaces[0].id)).await.json().await.unwrap();
     assert!(theirs.is_empty());
 
     assert_eq!(t.cancel_with(&t.token, &id).await.status(), 204);
     wait_for("the generation to end", || (t.generations()[0].0 == "cancelled").then_some(()));
-    let list: Vec<askbar_proto::PendingGeneration> =
-        t.get_with(&t.token, "/api/client/v1/generations?status=running").await.json().await.unwrap();
+    let list: Vec<askbar_proto::PendingGeneration> = t.get_with(&t.token, &t.sp("/generations?status=running")).await.json().await.unwrap();
     assert!(list.is_empty());
-    let body = t.get_with(&t.token, &format!("/api/client/v1/conversations/{conversation}")).await.text().await.unwrap();
+    let body = t.get_with(&t.token, &t.sp(&format!("/conversations/{conversation}"))).await.text().await.unwrap();
     assert!(!body.contains("pending"), "left out when nothing is pending: {body}");
-    assert_eq!(t.get_with(&t.token, "/api/client/v1/generations?status=bogus").await.status(), 400);
+    assert_eq!(t.get_with(&t.token, &t.sp("/generations?status=bogus")).await.status(), 400);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn two_posts_with_one_client_request_id_make_one_generation_and_one_user_message() {
     let t = start().await;
     let send = |text: &'static str| {
-        let (addr, token) = (t.addr, t.token.clone());
+        let (addr, token, path) = (t.addr, t.token.clone(), t.sp("/chat"));
         async move {
             client()
-                .post(format!("http://{addr}/api/client/v1/chat"))
+                .post(format!("http://{addr}{path}"))
                 .bearer_auth(token)
                 .json(&ChatRequest {
                     conversation_id: None,
@@ -675,14 +720,13 @@ async fn two_posts_with_one_client_request_id_make_one_generation_and_one_user_m
     assert!(second.contains("event: done"));
     assert_eq!(t.generations().len(), 1);
     assert_eq!(t.messages().iter().filter(|(r, _)| r == "user").count(), 1);
-    let user = t.user_id();
-    assert_eq!(t.state.db.lock().unwrap().list_conversations(&user).unwrap().len(), 1, "no second conversation");
+    assert_eq!(t.space.lock().list_conversations().unwrap().len(), 1, "no second conversation");
     assert_eq!(t.mock.log.lock().unwrap().iter().filter(|l| l.starts_with("POST")).count(), 1, "one upstream request");
 
-    // The same id from another client is a different send.
-    let other = t.second_user_token();
+    // The same id from another client (of the same user, in the same space) is a different send.
+    let other = t.second_client_token();
     let third = client()
-        .post(format!("http://{}/api/client/v1/chat", t.addr))
+        .post(format!("http://{}{}", t.addr, t.sp("/chat")))
         .bearer_auth(&other)
         .json(&ChatRequest {
             conversation_id: None,
@@ -701,6 +745,13 @@ impl T {
     fn user_id(&self) -> String {
         self.state.db.lock().unwrap().seed_server().unwrap()
     }
+    /// A token for a second client of this test's user.
+    fn second_client_token(&self) -> String {
+        let user = self.user_id();
+        let db = self.state.db.lock().unwrap();
+        let code = askbar_server::testing::add_pair_code(&db, &user, "second-laptop");
+        auth::redeem_pair_code(&db, &code).unwrap().unwrap()
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -711,7 +762,7 @@ async fn a_repeat_while_the_reply_runs_attaches_to_it() {
             .pool_max_idle_per_host(0)
             .build()
             .unwrap()
-            .post(format!("http://{}/api/client/v1/chat", t.addr))
+            .post(format!("http://{}{}", t.addr, t.sp("/chat")))
             .bearer_auth(&t.token)
             .json(&ChatRequest {
                 conversation_id: None,
@@ -784,8 +835,7 @@ async fn sends_during_a_reply_are_queued_up_to_five_and_the_sixth_is_refused() {
     let rows = t.generations();
     assert_eq!(rows.iter().filter(|r| r.0 == "queued").count(), 5);
     assert_eq!(rows.iter().filter(|r| r.0 == "running").count(), 1);
-    let list: Vec<askbar_proto::PendingGeneration> =
-        t.get_with(&t.token, "/api/client/v1/generations?status=running").await.json().await.unwrap();
+    let list: Vec<askbar_proto::PendingGeneration> = t.get_with(&t.token, &t.sp("/generations?status=running")).await.json().await.unwrap();
     assert_eq!(
         list.iter().filter(|g| g.status == "queued").map(|g| g.prompt.as_str()).collect::<Vec<_>>(),
         ["queued 1", "queued 2", "queued 3", "queued 4", "queued 5"]
@@ -882,8 +932,12 @@ async fn deleting_a_conversation_mid_reply_stops_it_and_starts_nothing_queued() 
         meta.push_str(&String::from_utf8_lossy(&queued.next().await.unwrap().unwrap()));
     }
 
-    let r =
-        http.delete(format!("http://{}/api/client/v1/conversations/{conversation}", t.addr)).bearer_auth(&t.token).send().await.unwrap();
+    let r = http
+        .delete(format!("http://{}{}", t.addr, t.sp(&format!("/conversations/{conversation}"))))
+        .bearer_auth(&t.token)
+        .send()
+        .await
+        .unwrap();
     assert_eq!(r.status(), 204);
     wait_for_secs(5, "the upstream to see the stop", || {
         t.mock.log.lock().unwrap().iter().any(|l| l.contains("client disconnected")).then_some(())
@@ -897,8 +951,7 @@ async fn deleting_a_conversation_mid_reply_stops_it_and_starts_nothing_queued() 
     for id in [first_id, queued_id] {
         assert!(t.state.generations.get(&id).is_none_or(|l| l.is_finished()), "{id} is not still running");
     }
-    let list: Vec<askbar_proto::PendingGeneration> =
-        t.get_with(&t.token, "/api/client/v1/generations?status=running").await.json().await.unwrap();
+    let list: Vec<askbar_proto::PendingGeneration> = t.get_with(&t.token, &t.sp("/generations?status=running")).await.json().await.unwrap();
     assert!(list.is_empty());
     // Both attached connections end.
     let mut rest = String::new();
@@ -942,7 +995,7 @@ async fn shutdown_saves_the_partial_reply_marks_it_interrupted_and_writes_it_onc
 impl T {
     /// (status, started_at, deadline_at) of every generation, oldest first.
     fn deadlines(&self) -> Vec<(String, Option<i64>, Option<i64>)> {
-        let db = self.state.db.lock().unwrap();
+        let db = self.space.lock();
         let mut stmt = db.conn().prepare("SELECT status, started_at, deadline_at FROM generations ORDER BY id").unwrap();
         let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap().map(Result::unwrap).collect();
         rows

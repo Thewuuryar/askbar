@@ -91,6 +91,7 @@ impl Stack {
         submit(
             &self.state,
             Submit {
+                space: askbar_server::testing::personal_space(&self.state, &self.user),
                 user_id: self.user.clone(),
                 client_id: "d1".into(),
                 conversation_id: None,
@@ -109,7 +110,8 @@ impl Stack {
 
     /// (status, provider_id, text) of the generation rows, oldest first.
     fn rows(&self) -> Vec<(String, Option<String>, String)> {
-        let db = self.state.db.lock().unwrap();
+        let space = askbar_server::testing::personal_space(&self.state, &self.user);
+        let db = space.lock();
         let mut stmt = db.conn().prepare("SELECT status, provider_id, text FROM generations ORDER BY id").unwrap();
         let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap().map(Result::unwrap).collect();
         rows
@@ -451,6 +453,7 @@ async fn turning_the_kill_switch_on_with_abort_stops_running_replies_and_clears_
     let queued = askbar_server::generation::submit(
         &s.state,
         Submit {
+            space: askbar_server::testing::personal_space(&s.state, &s.user),
             user_id: s.user.clone(),
             client_id: "d1".into(),
             conversation_id: Some(first.conversation_id.clone()),
@@ -479,7 +482,8 @@ async fn turning_the_kill_switch_on_with_abort_stops_running_replies_and_clears_
     assert_eq!((rows[0].0.as_str(), rows[1].0.as_str()), ("cancelled", "cancelled"));
     assert!(rows[0].2.starts_with("Streaming slowly"), "the text so far is kept: {:?}", rows[0].2);
     let (messages, user_msgs): (i64, i64) = {
-        let db = s.state.db.lock().unwrap();
+        let space = askbar_server::testing::personal_space(&s.state, &s.user);
+        let db = space.lock();
         (
             db.conn().query_row("SELECT COUNT(*) FROM messages WHERE role = 'assistant'", [], |r| r.get(0)).unwrap(),
             db.conn().query_row("SELECT COUNT(*) FROM messages WHERE role = 'user'", [], |r| r.get(0)).unwrap(),
@@ -504,6 +508,7 @@ async fn turning_it_on_without_abort_lets_running_replies_finish_but_still_clear
     let queued = askbar_server::generation::submit(
         &s.state,
         Submit {
+            space: askbar_server::testing::personal_space(&s.state, &s.user),
             user_id: s.user.clone(),
             client_id: "d1".into(),
             conversation_id: Some(first.conversation_id.clone()),

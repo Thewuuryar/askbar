@@ -950,7 +950,7 @@ paths:
   /api/admin/v1/backup:
     get:
       operationId: getBackup
-      summary: One .tar with server.db and admin.db, consistent and without secrets.
+      summary: One .tar with the server's files (server/control.db, server/spaces/<space id>.db) and admin.db, consistent and without secrets.
       description: Provider API keys, pairing-code hashes, the Cloudflare token, the admin password hash and the API key hash are left out.
       security:
         - adminSession: []

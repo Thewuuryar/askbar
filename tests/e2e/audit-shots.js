@@ -69,9 +69,11 @@ async function waitForPort(port) {
   const user = (await admin('POST', '/api/admin/v1/users', { name: 'shots' })).body.id;
   const pairing = (await admin('POST', '/api/admin/v1/users/' + user + '/pairing-keys', { name: 'shots' })).body.pairing;
   const { code } = JSON.parse(Buffer.from(pairing.slice('askbar-pair:'.length), 'base64url').toString());
-  const h = { 'content-type': 'application/json', 'x-askbar-client-version': '0.5.0' };
+  const h = { 'content-type': 'application/json', 'x-askbar-client-version': '0.6.0' };
   const { token } = await (await fetch(`http://127.0.0.1:${api}/api/client/v1/pairings`, { method: 'POST', headers: h, body: JSON.stringify({ code }) })).json();
-  const chat = async (provider, text) => (await fetch(`http://127.0.0.1:${api}/api/client/v1/chat`, { method: 'POST', headers: { ...h, authorization: 'Bearer ' + token }, body: JSON.stringify({ provider, text }) })).text();
+  const spaces = await (await fetch(`http://127.0.0.1:${api}/api/client/v1/spaces`, { headers: { ...h, authorization: 'Bearer ' + token } })).json();
+  const space = spaces.find((s) => s.kind === 'personal').id;
+  const chat = async (provider, text) => (await fetch(`http://127.0.0.1:${api}/api/client/v1/spaces/${space}/chat`, { method: 'POST', headers: { ...h, authorization: 'Bearer ' + token }, body: JSON.stringify({ provider, text }) })).text();
   await chat(pid('Primary'), 'hello there');
   await chat(pid('Primary'), 'a cached prompt about caching');
   await chat(pid('Primary'), 'hello 429once screenshot');

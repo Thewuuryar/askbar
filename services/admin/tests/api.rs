@@ -245,7 +245,7 @@ async fn a_pairing_string_pairs_a_client_which_can_then_be_revoked() {
     let pair = || {
         t.http
             .post(format!("{}/api/client/v1/pairings", t.api))
-            .header("x-askbar-client-version", "0.5.0")
+            .header("x-askbar-client-version", "0.6.0")
             .json(&json!({ "code": code }))
             .send()
     };
@@ -254,7 +254,7 @@ async fn a_pairing_string_pairs_a_client_which_can_then_be_revoked() {
     let token = r.json::<Value>().await.unwrap()["token"].as_str().unwrap().to_string();
     assert_eq!(pair().await.unwrap().status(), 401, "a second use fails");
 
-    let whoami = || t.http.get(format!("{}/api/client/v1/me", t.api)).bearer_auth(&token).header("x-askbar-client-version", "0.5.0").send();
+    let whoami = || t.http.get(format!("{}/api/client/v1/me", t.api)).bearer_auth(&token).header("x-askbar-client-version", "0.6.0").send();
     assert_eq!(whoami().await.unwrap().status(), 204);
     let (_, clients) = t.call(M::GET, "/api/admin/v1/clients", None).await;
     assert_eq!((clients[0]["name"].as_str(), clients[0]["revoked"].clone()), (Some("Work laptop"), json!(false)));
@@ -438,19 +438,25 @@ async fn the_backup_holds_both_databases_and_none_of_the_secrets() {
     t.call(M::POST, "/api/admin/v1/providers", Some(provider("mock", &llm, Some(KEY)))).await;
     t.call(M::POST, "/api/admin/v1/users/U1/pairing-keys", Some(json!({ "name": "pending" }))).await;
     t.admin.db.lock().await.conn().execute("UPDATE network_settings SET cloudflare_token = x'deadbeefcafe'", []).unwrap();
-    {
-        let db = t.server.db.lock().unwrap();
-        let user: String = db.conn().query_row("SELECT id FROM users", [], |r| r.get(0)).unwrap();
-        let c = db.create_conversation(&user, "kept conversation").unwrap();
-        db.add_message(&user, &c, "user", "question one").unwrap();
-    }
+    let space = {
+        let user: String = t.server.db.lock().unwrap().conn().query_row("SELECT id FROM users", [], |r| r.get(0)).unwrap();
+        let space = askbar_server::testing::personal_space(&t.server, &user);
+        let c = space.lock().create_conversation(&user, "kept conversation").unwrap();
+        space.lock().add_message(&user, &c, "user", "question one").unwrap();
+        space.id.clone()
+    };
 
     let r = t.http.get(format!("{}/api/admin/v1/backup", t.adm)).header("cookie", &t.cookie).send().await.unwrap();
     assert_eq!(r.status(), 200);
     assert!(r.headers()["content-disposition"].to_str().unwrap().contains(".tar"));
     let bytes = r.bytes().await.unwrap();
     let files = tar_files(&bytes);
-    assert_eq!(files.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(), ["server.db", "admin.db"]);
+    // The server's control database and one file per space (ADR 0009), then the admin's own.
+    let mut expected = vec!["server/control.db".to_string()];
+    expected.extend(t.server.db.lock().unwrap().space_ids().unwrap().iter().map(|id| format!("server/spaces/{id}.db")));
+    expected.push("admin.db".into());
+    assert_eq!(files.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>(), expected);
+    let space_index = files.iter().position(|(n, _)| n == &format!("server/spaces/{space}.db")).expect("the user's space is in it");
     for (_, data) in &files {
         assert_eq!(&data[..15], b"SQLite format 3");
         assert!(!data.windows(KEY.len()).any(|w| w == KEY.as_bytes()), "no provider key in either");
@@ -463,9 +469,10 @@ async fn the_backup_holds_both_databases_and_none_of_the_secrets() {
         rusqlite::Connection::open(p).unwrap()
     };
     let server_db = open("s.db", &files[0].1);
-    let admin_db = open("a.db", &files[1].1);
+    let space_db = open("sp.db", &files[space_index].1);
+    let admin_db = open("a.db", &files.last().unwrap().1);
     let one = |c: &rusqlite::Connection, sql: &str| c.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap();
-    assert_eq!(one(&server_db, "SELECT COUNT(*) FROM conversations WHERE title = 'kept conversation'"), 1);
+    assert_eq!(one(&space_db, "SELECT COUNT(*) FROM conversations WHERE title = 'kept conversation'"), 1);
     assert_eq!(one(&server_db, "SELECT COUNT(*) FROM providers WHERE api_key_enc IS NOT NULL"), 0);
     assert_eq!(one(&admin_db, "SELECT COUNT(*) FROM providers"), 1, "the admin's own data is in it");
     assert_eq!(one(&admin_db, "SELECT COUNT(*) FROM admin_credentials"), 0, "no password hash");
@@ -491,7 +498,7 @@ async fn the_backup_has_no_audit_store_in_it() {
     );
     std::fs::create_dir_all(&t.dir).unwrap();
     for (name, data) in &files {
-        let p = t.dir.join(format!("nb-{name}"));
+        let p = t.dir.join(format!("nb-{}", name.replace('/', "-")));
         std::fs::write(&p, data).unwrap();
         let c = rusqlite::Connection::open(p).unwrap();
         for table in ["spans", "payloads"] {
@@ -664,7 +671,7 @@ async fn users_are_made_here_reach_the_server_and_each_gets_its_own_pairing_keys
     let r = t
         .http
         .post(format!("{}/api/client/v1/pairings", t.api))
-        .header("x-askbar-client-version", "0.5.0")
+        .header("x-askbar-client-version", "0.6.0")
         .json(&json!({ "code": p.code }))
         .send()
         .await

@@ -89,7 +89,7 @@ impl T {
         let r = self
             .http
             .post(format!("{}/api/client/v1/pairings", self.api))
-            .header("x-askbar-client-version", "0.5.0")
+            .header("x-askbar-client-version", "0.6.0")
             .json(&json!({ "code": code }))
             .send()
             .await
@@ -104,7 +104,7 @@ impl T {
         self.http
             .get(format!("{}/api/client/v1/me", self.api))
             .bearer_auth(token)
-            .header("x-askbar-client-version", "0.5.0")
+            .header("x-askbar-client-version", "0.6.0")
             .send()
             .await
             .unwrap()
@@ -143,7 +143,7 @@ async fn unknown_expired_and_racing_codes() {
     let r = t
         .http
         .post(format!("{}/api/client/v1/pairings", t.api))
-        .header("x-askbar-client-version", "0.5.0")
+        .header("x-askbar-client-version", "0.6.0")
         .json(&json!({ "code": CODE }))
         .send()
         .await
@@ -184,7 +184,7 @@ impl T {
         self.http
             .post(format!("{}/api/client/v1/me/pairing-keys", self.api))
             .bearer_auth(token)
-            .header("x-askbar-client-version", "0.5.0")
+            .header("x-askbar-client-version", "0.6.0")
             .json(&json!({ "name": name }))
             .send()
             .await

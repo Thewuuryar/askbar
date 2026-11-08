@@ -167,6 +167,9 @@ case " $(docker inspect -f '{{range .Mounts}}{{.Name}} {{end}}' "$ADMIN")" in
 esac
 refused "the admin container has no /audit" docker exec "$ADMIN" test -e /audit
 refused "no audit.db anywhere in the admin container" docker exec "$ADMIN" sh -c 'find / -xdev -name "audit.db*" 2>/dev/null | grep -q .'
+# The server's data (ADR 0009): control.db and one file per space, mounted by the server only.
+refused "the admin container has no server data (/data)" docker exec "$ADMIN" test -e /data
+refused "no control.db or space file anywhere in the admin container" docker exec "$ADMIN" sh -c 'find / -xdev \( -name "control.db*" -o -path "*/spaces/*.db" \) 2>/dev/null | grep -q .'
 check "audit.db exists in the server" docker exec "$SERVER" test -s /audit/audit.db
 # The client API (port 8080, reachable from the edge network) has no audit and no server routes.
 http_get() { # network host:port path -> status; 0 = no connection
@@ -343,7 +346,9 @@ print('names', ','.join(names))
 for label, needle in (('provider key', '$MARK'), ('pair code', code), ('password hash', '\$argon2')):
     print(label, 'FOUND' if needle.encode() in blob else 'absent')
 call('DELETE', '/api/admin/v1/providers/' + provider_id)" 2>&1)
-printf '%s\n' "$out" | grep -q '^names .*admin.db.*server.db' && pass "the backup holds admin.db and server.db" || fail "backup contents: $out"
+printf '%s\n' "$out" | grep -q '^names admin.db,server/control.db,server/spaces/[0-9A-Z]\{26\}\.db' && pass "the backup holds admin.db, the server's control.db and its space files" || fail "backup contents: $out"
+check "the server keeps control.db and a file per space under /data" docker exec "$SERVER" sh -c 'test -f /data/control.db && ls /data/spaces/*.db'
+refused "the server makes no askbar.db (the layout before spaces)" docker exec "$SERVER" test -e /data/askbar.db
 for what in "provider key" "pair code" "password hash"; do
   printf '%s\n' "$out" | grep -q "^$what absent" && pass "the backup holds no $what" || fail "the backup holds the $what ($out)"
 done

@@ -154,8 +154,9 @@ pub enum ApplyError {
 pub fn apply(db: &Db, s: &Snapshot) -> Result<u64, ApplyError> {
     validate(s).map_err(ApplyError::Invalid)?;
     let version = save(db, s).map_err(ApplyError::Store)?;
-    // The admin's users (ADR 0008): added or renamed here. One the admin no longer lists is left as it
-    // is, with its conversations and clients; deleting a user and its data is plan step 5.1.
+    // The admin's users (ADR 0008): added or renamed here, each with a personal space (ADR 0009).
+    // One the admin no longer lists is left as it is, with its space and clients; deleting a user
+    // and its data is plan step 5.1. The space's file is made by `Spaces::open_all` after this.
     for u in &s.users {
         db.conn()
             .execute(
@@ -163,6 +164,10 @@ pub fn apply(db: &Db, s: &Snapshot) -> Result<u64, ApplyError> {
                 rusqlite::params![u.id, u.name, crate::auth::now()],
             )
             .map_err(ApplyError::Store)?;
+        db.ensure_personal_space(&u.id).map_err(|e| match e {
+            crate::DbError::Sqlite(e) => ApplyError::Store(e),
+            _ => ApplyError::Store(rusqlite::Error::InvalidQuery),
+        })?;
     }
     let keep: std::collections::BTreeSet<&str> = s.providers.iter().map(|p| p.id.as_str()).collect();
     let stored: Vec<String> =
