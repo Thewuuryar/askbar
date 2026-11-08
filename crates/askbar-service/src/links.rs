@@ -102,9 +102,11 @@ fn bearer(req: &Request) -> Option<String> {
 
 /// The middleware: `axum::middleware::from_fn_with_state(links, links::require)`.
 pub async fn require(State(links): State<Links>, mut req: Request, next: Next) -> Result<Response, ApiError> {
-    let token = bearer(&req).ok_or_else(|| ApiError::new(ErrorCode::Unauthorized, "Send this link's token as `Authorization: Bearer <token>`."))?;
+    let token =
+        bearer(&req).ok_or_else(|| ApiError::new(ErrorCode::Unauthorized, "Send this link's token as `Authorization: Bearer <token>`."))?;
     let l = links.clone();
-    let found = tokio::task::spawn_blocking(move || l.caller_for(&token).map(|link| (link.caller, link.allow.clone()))).await.ok().flatten();
+    let found =
+        tokio::task::spawn_blocking(move || l.caller_for(&token).map(|link| (link.caller, link.allow.clone()))).await.ok().flatten();
     let Some((caller, allow)) = found else {
         return Err(ApiError::new(ErrorCode::Unauthorized, "This service does not accept this token."));
     };
@@ -173,7 +175,11 @@ mod tests {
         let r = call(M::PUT, "/v1/config", Some("token-a")).await.unwrap();
         assert_eq!((r.status().as_u16(), r.text().await.unwrap()), (200, "admin".to_string()));
         let r = call(M::GET, "/v1/status", Some("token-b")).await.unwrap();
-        assert_eq!((r.status().as_u16(), r.text().await.unwrap()), (200, "reader".to_string()), "an upper-case hash with a newline is fine");
+        assert_eq!(
+            (r.status().as_u16(), r.text().await.unwrap()),
+            (200, "reader".to_string()),
+            "an upper-case hash with a newline is fine"
+        );
         assert_eq!(call(M::PUT, "/v1/config", Some("token-b")).await.unwrap().status(), 403, "not this link's route");
         assert_eq!(call(M::PUT, "/v1/status", Some("token-b")).await.unwrap().status(), 403, "nor this method");
         for bad in [None, Some("wrong"), Some("not a hash"), Some(hex("token-a").as_str())] {

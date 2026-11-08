@@ -44,7 +44,8 @@ async fn fake_llm() -> String {
         post(|headers: HeaderMap| async move {
             let auth = headers.get("authorization").and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
             if auth == format!("Bearer {KEY}") {
-                ([("content-type", "text/event-stream")], "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n").into_response()
+                ([("content-type", "text/event-stream")], "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n")
+                    .into_response()
             } else {
                 axum::http::StatusCode::UNAUTHORIZED.into_response()
             }
@@ -89,7 +90,13 @@ async fn start(reachable: bool) -> T {
     let admin = AdminState::with_server(db, link);
     let adm = serve(askbar_admin::router(admin.clone())).await;
     let http = reqwest::Client::new();
-    let r = http.post(format!("{adm}/api/admin/v1/session")).header("x-askbar-admin", "1").json(&json!({ "password": PW })).send().await.unwrap();
+    let r = http
+        .post(format!("{adm}/api/admin/v1/session"))
+        .header("x-askbar-admin", "1")
+        .json(&json!({ "password": PW }))
+        .send()
+        .await
+        .unwrap();
     let cookie = r.headers()["set-cookie"].to_str().unwrap().split(';').next().unwrap().to_string();
     T { adm, api, cookie, http, admin, server, dir }
 }
@@ -131,14 +138,22 @@ async fn providers_are_saved_here_pushed_to_the_server_and_the_key_goes_only_to_
     // The server has the provider in its snapshot and the key, encrypted.
     let snap = t.snapshot().unwrap();
     assert_eq!((snap.providers.len(), snap.providers[0].id.as_str(), snap.providers[0].name.as_str()), (1, id.as_str(), "mock"));
-    let enc: Vec<u8> = t.server.db.lock().unwrap().conn().query_row("SELECT api_key_enc FROM providers WHERE id = ?1", [&id], |r| r.get(0)).unwrap();
+    let enc: Vec<u8> =
+        t.server.db.lock().unwrap().conn().query_row("SELECT api_key_enc FROM providers WHERE id = ?1", [&id], |r| r.get(0)).unwrap();
     assert_eq!(t.server.secrets().decrypt(&enc).unwrap(), KEY);
 
     // This side never holds the key: not in admin.db, not in the list.
     let (_, list) = t.call(M::GET, "/api/admin/v1/providers", None).await;
     assert_eq!((list[0]["name"].as_str(), list[0]["has_key"].clone()), (Some("mock"), json!(true)));
     assert!(!list.to_string().contains(KEY));
-    let dump: String = t.admin.db.lock().await.conn().query_row("SELECT group_concat(name || model || headers || base_url) FROM providers", [], |r| r.get(0)).unwrap();
+    let dump: String = t
+        .admin
+        .db
+        .lock()
+        .await
+        .conn()
+        .query_row("SELECT group_concat(name || model || headers || base_url) FROM providers", [], |r| r.get(0))
+        .unwrap();
     assert!(!dump.contains(KEY));
     let snapshot_text = serde_json::to_string(&snap).unwrap();
     assert!(!snapshot_text.contains(KEY), "the snapshot carries no key");
@@ -151,7 +166,11 @@ async fn providers_are_saved_here_pushed_to_the_server_and_the_key_goes_only_to_
     // Editing keeps the key unless a new one comes; renaming reaches the server.
     assert_eq!(t.call(M::PUT, &format!("/api/admin/v1/providers/{id}"), Some(provider("renamed", &llm, None))).await.0, 204);
     assert_eq!(t.snapshot().unwrap().providers[0].name, "renamed");
-    assert_eq!(t.call(M::POST, &format!("/api/admin/v1/providers/{id}/test"), None).await.1["ok"], json!(true), "the stored key still works");
+    assert_eq!(
+        t.call(M::POST, &format!("/api/admin/v1/providers/{id}/test"), None).await.1["ok"],
+        json!(true),
+        "the stored key still works"
+    );
 
     // Validation and name clashes change nothing.
     assert_eq!(t.call(M::POST, "/api/admin/v1/providers", Some(json!({ "name": "", "type": "openai", "model": "m" }))).await.0, 400);
@@ -209,7 +228,11 @@ async fn a_pairing_string_pairs_a_client_which_can_then_be_revoked() {
     let (st, out) = t.call(M::POST, "/api/admin/v1/users/U1/pairing-keys", Some(json!({ "name": "Work laptop" }))).await;
     assert_eq!(st, 200);
     let (url, code) = askbar_proto::decode_pairing(out["pairing"].as_str().unwrap()).expect("a pairing key");
-    assert_eq!(url, format!("https://{}", t.adm.trim_start_matches("http://")), "no host name: the address the admin was opened with, over HTTPS");
+    assert_eq!(
+        url,
+        format!("https://{}", t.adm.trim_start_matches("http://")),
+        "no host name: the address the admin was opened with, over HTTPS"
+    );
     assert_eq!(out["expires_in"], json!(600));
 
     // Only the hash is kept here; the server got the same hash.
@@ -219,7 +242,13 @@ async fn a_pairing_string_pairs_a_client_which_can_then_be_revoked() {
     assert_eq!(t.snapshot().unwrap().pair_codes[0].hash, stored);
 
     // The code pairs a client on the server's API, once.
-    let pair = || t.http.post(format!("{}/api/client/v1/pairings", t.api)).header("x-askbar-client-version", "0.5.0").json(&json!({ "code": code })).send();
+    let pair = || {
+        t.http
+            .post(format!("{}/api/client/v1/pairings", t.api))
+            .header("x-askbar-client-version", "0.5.0")
+            .json(&json!({ "code": code }))
+            .send()
+    };
     let r = pair().await.unwrap();
     assert_eq!(r.status(), 200);
     let token = r.json::<Value>().await.unwrap()["token"].as_str().unwrap().to_string();
@@ -270,14 +299,22 @@ async fn provider_billing_and_prices_round_trip_reach_the_server_and_are_validat
     full["price_cached_in"] = json!(0.0);
     assert_eq!(t.call(M::PUT, &format!("/api/admin/v1/providers/{id}"), Some(full.clone())).await.0, 204);
     let (_, list) = t.call(M::GET, "/api/admin/v1/providers", None).await;
-    assert_eq!((&list[0]["billing"], &list[0]["price_in"], &list[0]["price_out"], &list[0]["price_cached_in"]), (&json!("subscription"), &json!(2.5), &json!(10.0), &json!(0.0)));
+    assert_eq!(
+        (&list[0]["billing"], &list[0]["price_in"], &list[0]["price_out"], &list[0]["price_cached_in"]),
+        (&json!("subscription"), &json!(2.5), &json!(10.0), &json!(0.0))
+    );
     assert!(list[0].get("allow_as_fallback").is_none());
     let sp = t.snapshot().unwrap().providers.into_iter().find(|p| p.id == id).unwrap();
-    assert_eq!((sp.billing, sp.price_in, sp.price_out, sp.price_cached_in), (askbar_proto::Billing::Subscription, Some(2.5), Some(10.0), Some(0.0)));
+    assert_eq!(
+        (sp.billing, sp.price_in, sp.price_out, sp.price_cached_in),
+        (askbar_proto::Billing::Subscription, Some(2.5), Some(10.0), Some(0.0))
+    );
     assert!(!t.snapshot().unwrap().providers.iter().any(|p| serde_json::to_string(p).unwrap().contains("fallback")));
 
     // Validation matches the server's: billing words, and prices of zero or more.
-    for (field, value) in [("billing", json!("free")), ("price_in", json!(-1.0)), ("price_out", json!(-0.5)), ("price_cached_in", json!(-3))] {
+    for (field, value) in
+        [("billing", json!("free")), ("price_in", json!(-1.0)), ("price_out", json!(-0.5)), ("price_cached_in", json!(-3))]
+    {
         let mut bad = base.clone();
         bad["name"] = json!("bad one");
         bad[field] = value;
@@ -304,7 +341,11 @@ async fn the_generation_timeout_round_trips_reaches_the_server_and_is_range_chec
     for bad in [29, 3601, 0] {
         assert_eq!(t.call(M::PUT, "/api/admin/v1/settings", Some(save(json!(bad)))).await.0, 400, "{bad}");
     }
-    assert_eq!(t.call(M::PUT, "/api/admin/v1/settings", Some(save(json!("soon")))).await.0, 400, "not a number: a body that does not fit is a bad_request problem (it was a bare 422)");
+    assert_eq!(
+        t.call(M::PUT, "/api/admin/v1/settings", Some(save(json!("soon")))).await.0,
+        400,
+        "not a number: a body that does not fit is a bad_request problem (it was a bare 422)"
+    );
     assert_eq!(t.call(M::GET, "/api/admin/v1/settings", None).await.1["generation_timeout_secs"], json!(120));
     assert_eq!(t.snapshot().unwrap().generation_timeout_secs, 120);
 
@@ -327,8 +368,12 @@ async fn the_kill_switch_and_its_abort_setting_round_trip_and_reach_the_server()
 
     let save = |kill: Option<bool>, aborts: Option<bool>| {
         let mut b = json!({ "system_prompt": "x", "display": disp });
-        if let Some(k) = kill { b["kill_switch"] = json!(k); }
-        if let Some(a) = aborts { b["kill_switch_aborts_running"] = json!(a); }
+        if let Some(k) = kill {
+            b["kill_switch"] = json!(k);
+        }
+        if let Some(a) = aborts {
+            b["kill_switch_aborts_running"] = json!(a);
+        }
         b
     };
     for (kill, aborts) in [(true, true), (true, false), (false, false), (false, true)] {
@@ -357,7 +402,10 @@ async fn settings_and_per_user_display_defaults_reach_the_server() {
     let snap = t.snapshot().unwrap();
     assert_eq!((snap.system_prompt.as_deref(), snap.display.width, snap.display.theme.as_str()), (Some("Be terse."), 900, "dark"));
     assert_eq!(t.call(M::GET, "/api/admin/v1/settings", None).await.1["system_prompt"], json!("Be terse."));
-    assert_eq!(t.call(M::PUT, "/api/admin/v1/settings", Some(json!({ "system_prompt": "x", "display": { "theme": "neon" } }))).await.0, 400);
+    assert_eq!(
+        t.call(M::PUT, "/api/admin/v1/settings", Some(json!({ "system_prompt": "x", "display": { "theme": "neon" } }))).await.0,
+        400
+    );
     assert_eq!(t.call(M::PUT, "/api/admin/v1/settings", Some(json!({ "system_prompt": "x".repeat(20_001), "display": {} }))).await.0, 400);
     assert_eq!(t.snapshot().unwrap().system_prompt.as_deref(), Some("Be terse."), "refused changes left it alone");
 
@@ -436,14 +484,19 @@ async fn the_backup_has_no_audit_store_in_it() {
     let r = t.http.get(format!("{}/api/admin/v1/backup", t.adm)).header("cookie", &t.cookie).send().await.unwrap();
     assert_eq!(r.status(), 200);
     let files = tar_files(&r.bytes().await.unwrap());
-    assert!(files.iter().all(|(name, _)| !name.contains("audit")), "no audit.db in the archive: {:?}", files.iter().map(|(n, _)| n).collect::<Vec<_>>());
+    assert!(
+        files.iter().all(|(name, _)| !name.contains("audit")),
+        "no audit.db in the archive: {:?}",
+        files.iter().map(|(n, _)| n).collect::<Vec<_>>()
+    );
     std::fs::create_dir_all(&t.dir).unwrap();
     for (name, data) in &files {
         let p = t.dir.join(format!("nb-{name}"));
         std::fs::write(&p, data).unwrap();
         let c = rusqlite::Connection::open(p).unwrap();
         for table in ["spans", "payloads"] {
-            let n: i64 = c.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1", [table], |r| r.get(0)).unwrap();
+            let n: i64 =
+                c.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1", [table], |r| r.get(0)).unwrap();
             assert_eq!(n, 0, "{name} has an audit table `{table}`");
         }
     }
@@ -509,10 +562,13 @@ async fn the_admin_api_key_is_shown_once_listed_by_name_and_revoked() {
     assert!(listed[0].get("key").is_none() && listed[0].get("hash").is_none(), "{listed}");
     // The key shows up in no other answer: the keys, the status, the settings, a backup.
     let mut seen = vec![listed.to_string()];
-    for path in ["/api/admin/v1/status", "/api/admin/v1/settings", "/api/admin/v1/network", "/api/admin/v1/providers", "/api/admin/v1/clients"] {
+    for path in
+        ["/api/admin/v1/status", "/api/admin/v1/settings", "/api/admin/v1/network", "/api/admin/v1/providers", "/api/admin/v1/clients"]
+    {
         seen.push(t.call(M::GET, path, None).await.1.to_string());
     }
-    let backup = t.http.get(format!("{}/api/admin/v1/backup", t.adm)).header("cookie", &t.cookie).send().await.unwrap().bytes().await.unwrap();
+    let backup =
+        t.http.get(format!("{}/api/admin/v1/backup", t.adm)).header("cookie", &t.cookie).send().await.unwrap().bytes().await.unwrap();
     assert!(!backup.windows(key.len()).any(|w| w == key.as_bytes()), "not in a backup");
     assert!(seen.iter().all(|s| !s.contains(&key)), "not in any later answer");
     // One at a time.
@@ -538,10 +594,15 @@ async fn the_key_routes_need_a_session_and_a_key_cannot_make_or_revoke_keys() {
     let t = start(true).await;
     let (_, made) = t.call(M::POST, "/api/admin/v1/keys", Some(json!({ "name": "ci" }))).await;
     let key = made["key"].as_str().unwrap().to_string();
-    for (m, path) in [(reqwest::Method::GET, "/api/admin/v1/keys"), (reqwest::Method::POST, "/api/admin/v1/keys"), (reqwest::Method::DELETE, "/api/admin/v1/keys/x")] {
+    for (m, path) in [
+        (reqwest::Method::GET, "/api/admin/v1/keys"),
+        (reqwest::Method::POST, "/api/admin/v1/keys"),
+        (reqwest::Method::DELETE, "/api/admin/v1/keys/x"),
+    ] {
         let signed_out = t.http.request(m.clone(), format!("{}{path}", t.adm)).header("x-askbar-admin", "1").send().await.unwrap();
         assert_eq!(signed_out.status(), 401, "{m} {path} with nothing");
-        let with_key = t.http.request(m.clone(), format!("{}{path}", t.adm)).bearer_auth(&key).json(&json!({ "name": "evil" })).send().await.unwrap();
+        let with_key =
+            t.http.request(m.clone(), format!("{}{path}", t.adm)).bearer_auth(&key).json(&json!({ "name": "evil" })).send().await.unwrap();
         assert_eq!(with_key.status(), 401, "{m} {path} with the key");
     }
     assert_eq!(t.call(M::GET, "/api/admin/v1/keys", None).await.1.as_array().unwrap().len(), 1, "the key made no key");
@@ -592,16 +653,31 @@ async fn users_are_made_here_reach_the_server_and_each_gets_its_own_pairing_keys
     // Pushed to the server, which now has the user.
     let snap = t.snapshot().unwrap();
     assert!(snap.users.iter().any(|u| u.id == alice && u.name == "Alice"));
-    let on_server: String = t.server.db.lock().unwrap().conn().query_row("SELECT name FROM users WHERE id = ?1", [&alice], |r| r.get(0)).unwrap();
+    let on_server: String =
+        t.server.db.lock().unwrap().conn().query_row("SELECT name FROM users WHERE id = ?1", [&alice], |r| r.get(0)).unwrap();
     assert_eq!(on_server, "Alice");
 
     // A pairing key for Alice pairs a client that belongs to Alice.
     let (st, out) = t.call(M::POST, &format!("/api/admin/v1/users/{alice}/pairing-keys"), Some(json!({ "name": "Alice's laptop" }))).await;
     assert_eq!(st, 200);
     let p = askbar_proto::Pairing::decode(out["pairing"].as_str().unwrap()).unwrap();
-    let r = t.http.post(format!("{}/api/client/v1/pairings", t.api)).header("x-askbar-client-version", "0.5.0").json(&json!({ "code": p.code })).send().await.unwrap();
+    let r = t
+        .http
+        .post(format!("{}/api/client/v1/pairings", t.api))
+        .header("x-askbar-client-version", "0.5.0")
+        .json(&json!({ "code": p.code }))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(r.status(), 200);
-    let owner: String = t.server.db.lock().unwrap().conn().query_row("SELECT user_id FROM clients WHERE name = 'Alice''s laptop'", [], |r| r.get(0)).unwrap();
+    let owner: String = t
+        .server
+        .db
+        .lock()
+        .unwrap()
+        .conn()
+        .query_row("SELECT user_id FROM clients WHERE name = 'Alice''s laptop'", [], |r| r.get(0))
+        .unwrap();
     assert_eq!(owner, alice);
 
     // Refusals.
@@ -619,7 +695,11 @@ async fn an_install_from_before_takes_over_the_servers_users_so_its_clients_keep
     let owner: String = t.server.db.lock().unwrap().conn().query_row("SELECT id FROM users", [], |r| r.get(0)).unwrap();
     let (st, list) = t.call(M::GET, "/api/admin/v1/users", None).await;
     assert_eq!(st, 200);
-    assert_eq!((list[0]["id"].as_str(), list[0]["name"].as_str()), (Some(owner.as_str()), Some("owner")), "the same id, so its clients stay its own");
+    assert_eq!(
+        (list[0]["id"].as_str(), list[0]["name"].as_str()),
+        (Some(owner.as_str()), Some("owner")),
+        "the same id, so its clients stay its own"
+    );
     assert_eq!(list.as_array().unwrap().len(), 1);
     // Taken over once: the next read does not ask again or duplicate.
     let (_, again) = t.call(M::GET, "/api/admin/v1/users", None).await;
@@ -635,7 +715,11 @@ async fn a_provider_whose_key_the_server_lost_says_so_until_the_key_is_entered_a
     let (_, _) = t.call(M::POST, "/api/admin/v1/providers", Some(provider("keyless", &llm, None))).await;
     let flags = || async {
         let (_, list) = t.call(M::GET, "/api/admin/v1/providers", None).await;
-        list.as_array().unwrap().iter().map(|p| (p["name"].as_str().unwrap().to_string(), p["key_missing"].as_bool().unwrap())).collect::<Vec<_>>()
+        list.as_array()
+            .unwrap()
+            .iter()
+            .map(|p| (p["name"].as_str().unwrap().to_string(), p["key_missing"].as_bool().unwrap()))
+            .collect::<Vec<_>>()
     };
     assert_eq!(flags().await, [("keyless".to_string(), false), ("mock".to_string(), false)]);
 

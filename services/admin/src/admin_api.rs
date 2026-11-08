@@ -7,8 +7,8 @@
 
 use crate::server_link::{build_snapshot, PushError, ServerLink};
 use crate::web::{err, Failure};
-use askbar_proto::http::ApiJson;
 use crate::AdminState;
+use askbar_proto::http::ApiJson;
 use askbar_proto::DisplaySettings;
 use axum::{
     extract::{Path, State},
@@ -45,7 +45,9 @@ fn server_detail(body: &[u8]) -> Option<String> {
 fn from_push(e: PushError) -> Failure {
     match e {
         PushError::Unreachable(_) => offline(),
-        PushError::Refused { status: 400, body } => bad(&server_detail(body.as_bytes()).unwrap_or_else(|| "The server did not accept that.".into())),
+        PushError::Refused { status: 400, body } => {
+            bad(&server_detail(body.as_bytes()).unwrap_or_else(|| "The server did not accept that.".into()))
+        }
         PushError::Refused { status, .. } => err(StatusCode::BAD_GATEWAY, &format!("The server answered {status}. Nothing was changed.")),
         PushError::Build(_) => internal(()),
     }
@@ -57,7 +59,11 @@ fn link(state: &AdminState) -> Result<&Arc<ServerLink>, Failure> {
 
 /// Apply `apply` to `admin.db`, send the server the resulting snapshot, then send it each of
 /// `keys` (provider id, API key), and commit only if all of that worked.
-pub(crate) async fn mutate<T>(state: &AdminState, keys: Vec<(String, String)>, apply: impl FnOnce(&Connection) -> Result<T, Failure>) -> Result<T, Failure> {
+pub(crate) async fn mutate<T>(
+    state: &AdminState,
+    keys: Vec<(String, String)>,
+    apply: impl FnOnce(&Connection) -> Result<T, Failure>,
+) -> Result<T, Failure> {
     let link = link(state)?;
     let db = state.db.lock().await;
     let conn = db.conn();
@@ -243,10 +249,14 @@ pub async fn list_providers(State(state): St) -> Result<Json<Vec<ProviderRow>>, 
     Ok(Json(rows))
 }
 
-pub async fn create_provider(State(state): St, ApiJson(i): ApiJson<ProviderInput>) -> Result<(StatusCode, Json<serde_json::Value>), Failure> {
+pub async fn create_provider(
+    State(state): St,
+    ApiJson(i): ApiJson<ProviderInput>,
+) -> Result<(StatusCode, Json<serde_json::Value>), Failure> {
     validate(&i)?;
     let id = ulid::Ulid::new().to_string();
-    let keys: Vec<(String, String)> = i.api_key.as_deref().map(str::trim).filter(|k| !k.is_empty()).map(|k| vec![(id.clone(), k.to_string())]).unwrap_or_default();
+    let keys: Vec<(String, String)> =
+        i.api_key.as_deref().map(str::trim).filter(|k| !k.is_empty()).map(|k| vec![(id.clone(), k.to_string())]).unwrap_or_default();
     let new_id = id.clone();
     mutate(&state, keys, move |c| {
         c.execute(
@@ -264,25 +274,43 @@ pub async fn create_provider(State(state): St, ApiJson(i): ApiJson<ProviderInput
     Ok((StatusCode::CREATED, Json(serde_json::json!({ "id": id }))))
 }
 
-pub async fn update_provider(State(state): St, Path(id): Path<String>, ApiJson(mut i): ApiJson<ProviderInput>) -> Result<StatusCode, Failure> {
+pub async fn update_provider(
+    State(state): St,
+    Path(id): Path<String>,
+    ApiJson(mut i): ApiJson<ProviderInput>,
+) -> Result<StatusCode, Failure> {
     validate(&i)?;
     // A managed provider keeps the name, type, address and key the admin gave it.
     let managed_row: Option<(String, String, String)> = {
         let db = state.db.lock().await;
-        db.conn().query_row("SELECT name, type, base_url FROM providers WHERE id = ?1 AND managed = 1", [&id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).ok()
+        db.conn()
+            .query_row("SELECT name, type, base_url FROM providers WHERE id = ?1 AND managed = 1", [&id], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })
+            .ok()
     };
     if let Some((name, kind, base_url)) = &managed_row {
         (i.name, i.kind, i.base_url, i.api_key) = (name.clone(), kind.clone(), base_url.clone(), None);
     }
-    let keys: Vec<(String, String)> = i.api_key.as_deref().map(str::trim).filter(|k| !k.is_empty()).map(|k| vec![(id.clone(), k.to_string())]).unwrap_or_default();
+    let keys: Vec<(String, String)> =
+        i.api_key.as_deref().map(str::trim).filter(|k| !k.is_empty()).map(|k| vec![(id.clone(), k.to_string())]).unwrap_or_default();
     mutate(&state, keys, move |c| {
         let n = c
             .execute(
                 "UPDATE providers SET name = ?2, type = ?3, base_url = ?4, model = ?5, max_tokens = ?6, temperature = ?7,
                         billing = ?8, price_in = ?9, price_out = ?10, price_cached_in = ?11 WHERE id = ?1",
                 params![
-                    id, i.name.trim(), i.kind, i.base_url.trim(), i.model.trim(), i.max_tokens, i.temperature,
-                    i.billing.as_deref().unwrap_or("metered"), i.price_in, i.price_out, i.price_cached_in
+                    id,
+                    i.name.trim(),
+                    i.kind,
+                    i.base_url.trim(),
+                    i.model.trim(),
+                    i.max_tokens,
+                    i.temperature,
+                    i.billing.as_deref().unwrap_or("metered"),
+                    i.price_in,
+                    i.price_out,
+                    i.price_cached_in
                 ],
             )
             .map_err(clash_or_internal)?;
@@ -298,7 +326,10 @@ pub async fn update_provider(State(state): St, Path(id): Path<String>, ApiJson(m
 pub async fn delete_provider(State(state): St, Path(id): Path<String>) -> Result<StatusCode, Failure> {
     mutate(&state, vec![], move |c| {
         if c.query_row("SELECT 1 FROM providers WHERE id = ?1 AND managed = 1", [&id], |_| Ok(())).is_ok() {
-            return Err(err(StatusCode::CONFLICT, "This provider is kept by the admin and cannot be deleted. Disconnect the accounts on the Services tab instead."));
+            return Err(err(
+                StatusCode::CONFLICT,
+                "This provider is kept by the admin and cannot be deleted. Disconnect the accounts on the Services tab instead.",
+            ));
         }
         let n = c.execute("DELETE FROM providers WHERE id = ?1", [&id]).map_err(internal)?;
         if n == 0 {
@@ -377,7 +408,10 @@ async fn revoked_ids(state: &AdminState) -> Vec<String> {
 
 /// The server's clients, with the ones this admin has revoked marked as such.
 async fn clients(state: &AdminState) -> Result<Vec<serde_json::Value>, Failure> {
-    let (status, body) = link(state)?.request(reqwest::Method::GET, &askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/clients"), None).await.map_err(from_push)?;
+    let (status, body) = link(state)?
+        .request(reqwest::Method::GET, &askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/clients"), None)
+        .await
+        .map_err(from_push)?;
     if status != 200 {
         return Err(err(StatusCode::BAD_GATEWAY, &format!("The server answered {status}.")));
     }
@@ -401,7 +435,9 @@ pub async fn revoke_client(State(state): St, Path(id): Path<String>) -> Result<S
         return Err(err(StatusCode::NOT_FOUND, "No such client."));
     }
     mutate(&state, vec![], move |c| {
-        c.execute("INSERT OR IGNORE INTO revoked_clients (client_id, revoked_at) VALUES (?1, ?2)", params![id, crate::auth::now()]).map(|_| ()).map_err(internal)
+        c.execute("INSERT OR IGNORE INTO revoked_clients (client_id, revoked_at) VALUES (?1, ?2)", params![id, crate::auth::now()])
+            .map(|_| ())
+            .map_err(internal)
     })
     .await?;
     Ok(StatusCode::NO_CONTENT)
@@ -430,7 +466,11 @@ pub async fn create_key(State(state): St, ApiJson(b): ApiJson<NewKey>) -> Result
     let db = state.db.lock().await;
     match create(db.conn(), &b.name, crate::auth::now()) {
         Ok((row, key)) => Ok((StatusCode::CREATED, Json(CreatedKey { row, key }))),
-        Err(CreateError::Exists) => Err(askbar_proto::http::ApiError::new(askbar_proto::ErrorCode::ApiKeyExists, "An API key already exists. Revoke it before making another.").no_challenge()),
+        Err(CreateError::Exists) => Err(askbar_proto::http::ApiError::new(
+            askbar_proto::ErrorCode::ApiKeyExists,
+            "An API key already exists. Revoke it before making another.",
+        )
+        .no_challenge()),
         Err(CreateError::BadName) => Err(bad("The name must be 1 to 60 characters.")),
         Err(CreateError::Db(_)) => Err(internal(())),
     }
@@ -491,7 +531,8 @@ pub(crate) fn public_url(conn: &Connection, host: Option<&str>) -> String {
 /// The host name, when HTTPS with a real certificate is on. `None` means Caddy serves the install's
 /// own certificate.
 fn real_host_name(conn: &Connection) -> Option<String> {
-    let (tls, name): (i64, String) = conn.query_row("SELECT tls_enabled, hostname FROM network_settings WHERE id = 1", [], |r| Ok((r.get(0)?, r.get(1)?))).ok()?;
+    let (tls, name): (i64, String) =
+        conn.query_row("SELECT tls_enabled, hostname FROM network_settings WHERE id = 1", [], |r| Ok((r.get(0)?, r.get(1)?))).ok()?;
     (tls == 1 && !name.is_empty()).then_some(name)
 }
 
@@ -523,12 +564,18 @@ fn read_users(c: &Connection) -> rusqlite::Result<Vec<UserRow>> {
 /// first time the admin has none, it takes them over, ids and all, so those clients keep working.
 async fn adopt_server_users(state: &AdminState) {
     let Some(link) = state.server.clone() else { return };
-    let Ok((200, body)) = link.request(reqwest::Method::GET, &askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/users"), None).await else { return };
+    let Ok((200, body)) =
+        link.request(reqwest::Method::GET, &askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/users"), None).await
+    else {
+        return;
+    };
     let Ok(serde_json::Value::Array(users)) = serde_json::from_slice::<serde_json::Value>(&body) else { return };
     let db = state.db.lock().await;
     for u in users {
         if let (Some(id), Some(name)) = (u["id"].as_str(), u["name"].as_str()) {
-            let _ = db.conn().execute("INSERT OR IGNORE INTO users (id, name, created_at) VALUES (?1, ?2, ?3)", params![id, name, crate::auth::now()]);
+            let _ = db
+                .conn()
+                .execute("INSERT OR IGNORE INTO users (id, name, created_at) VALUES (?1, ?2, ?3)", params![id, name, crate::auth::now()]);
         }
     }
 }
@@ -557,20 +604,35 @@ pub async fn create_user(State(state): St, ApiJson(i): ApiJson<UserInput>) -> Re
     let id = ulid::Ulid::new().to_string();
     let new_id = id.clone();
     mutate(&state, vec![], move |c| {
-        c.execute("INSERT INTO users (id, name, created_at) VALUES (?1, ?2, ?3)", params![new_id, name, crate::auth::now()]).map(|_| ()).map_err(clash_or_internal)
+        c.execute("INSERT INTO users (id, name, created_at) VALUES (?1, ?2, ?3)", params![new_id, name, crate::auth::now()])
+            .map(|_| ())
+            .map_err(clash_or_internal)
     })
     .await?;
     Ok((StatusCode::CREATED, Json(serde_json::json!({ "id": id }))))
 }
 
 /// `POST /users/{id}/pairing-keys`: a pairing key that registers one client for this user.
-pub async fn create_pairing_key(State(state): St, Path(user): Path<String>, headers: axum::http::HeaderMap, ApiJson(i): ApiJson<PairInput>) -> Result<Json<PairingOut>, Failure> {
+pub async fn create_pairing_key(
+    State(state): St,
+    Path(user): Path<String>,
+    headers: axum::http::HeaderMap,
+    ApiJson(i): ApiJson<PairInput>,
+) -> Result<Json<PairingOut>, Failure> {
     let host = request_host(&headers);
     let name = i.name.trim().to_string();
     if name.chars().count() > 60 {
         return Err(bad("The client name is too long."));
     }
-    let known = state.db.lock().await.conn().query_row("SELECT 1 FROM users WHERE id = ?1", [&user], |_| Ok(())).map(|_| true).or_else(|e| if e == rusqlite::Error::QueryReturnedNoRows { Ok(false) } else { Err(e) }).map_err(internal)?;
+    let known = state
+        .db
+        .lock()
+        .await
+        .conn()
+        .query_row("SELECT 1 FROM users WHERE id = ?1", [&user], |_| Ok(()))
+        .map(|_| true)
+        .or_else(|e| if e == rusqlite::Error::QueryReturnedNoRows { Ok(false) } else { Err(e) })
+        .map_err(internal)?;
     if !known {
         return Err(err(StatusCode::NOT_FOUND, "No such user."));
     }
@@ -593,7 +655,10 @@ pub async fn create_pairing_key(State(state): St, Path(user): Path<String>, head
     // http) there is nothing to pin.
     let secrets_dir = state.caddy.lock().unwrap_or_else(|e| e.into_inner()).secrets_dir.clone();
     let cert_sha256 = match (own_cert && url.starts_with("https://"), secrets_dir) {
-        (true, Some(dir)) => Some(crate::self_cert::ensure(&dir).map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Could not read this install's certificate. Nothing was paired."))?),
+        (true, Some(dir)) => Some(
+            crate::self_cert::ensure(&dir)
+                .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Could not read this install's certificate. Nothing was paired."))?,
+        ),
         _ => None,
     };
     let pairing = askbar_proto::Pairing { url, code, cert_sha256 }.encode();
@@ -632,7 +697,14 @@ pub async fn setup_audit_key(State(state): St, ApiJson(b): ApiJson<SetupAuditKey
         })?;
     let public = kp.public_bytes();
     let id = key_id(&public);
-    let row = crate::db::AuditKeyRow { key_id: id.clone(), public_key: public, salt, argon_params: params.to_text(), created_at: crate::auth::now(), retired_at: None };
+    let row = crate::db::AuditKeyRow {
+        key_id: id.clone(),
+        public_key: public,
+        salt,
+        argon_params: params.to_text(),
+        created_at: crate::auth::now(),
+        retired_at: None,
+    };
     // Saved and pushed to the server together: if the server cannot be reached the key is not kept
     // either (the same rule as every other setting). The unique index on active keys also settles
     // two calls at once: one wins, the other is a 409.
@@ -651,7 +723,11 @@ const AUDIT_QUERY_KEYS: [&str; 5] = ["status", "provider", "before", "limit", "s
 /// Asks the server's server API for `path` (one of its `/api/server/v1/audit/...` endpoints) with
 /// the allowed query parameters, and hands back what it answered. The admin never reads
 /// `audit.db` itself and never pushes anything about it: it only pulls, and only metadata.
-async fn audit_get(state: &AdminState, path: &str, query: &std::collections::HashMap<String, String>) -> Result<Json<serde_json::Value>, Failure> {
+async fn audit_get(
+    state: &AdminState,
+    path: &str,
+    query: &std::collections::HashMap<String, String>,
+) -> Result<Json<serde_json::Value>, Failure> {
     let mut url = reqwest::Url::parse("http://x/").map_err(internal)?;
     url.set_path(path);
     {
@@ -670,12 +746,18 @@ async fn audit_get(state: &AdminState, path: &str, query: &std::collections::Has
     match status {
         200 => serde_json::from_slice(&body).map(Json).map_err(internal),
         404 => Err(err(StatusCode::NOT_FOUND, &server_detail(&body).unwrap_or_else(|| "No such trace.".into()))),
-        503 => Err(err(StatusCode::SERVICE_UNAVAILABLE, &server_detail(&body).unwrap_or_else(|| "The server has no audit store recording.".into()))),
+        503 => Err(err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            &server_detail(&body).unwrap_or_else(|| "The server has no audit store recording.".into()),
+        )),
         s => Err(err(StatusCode::BAD_GATEWAY, &format!("The server answered {s}."))),
     }
 }
 
-pub async fn audit_traces(State(state): St, axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>) -> Result<Json<serde_json::Value>, Failure> {
+pub async fn audit_traces(
+    State(state): St,
+    axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Result<Json<serde_json::Value>, Failure> {
     audit_get(&state, &askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/audit/traces"), &q).await
 }
 
@@ -700,13 +782,14 @@ pub struct AccessQuery {
 /// `GET /api/admin/v1/audit/access`: who opened sealed content and when, newest first (up to 100, at
 /// most 500). Rows are kept in `admin.db`, written before any content is returned (see
 /// `open_audit_payloads`); they hold which span and key, never content or passphrases.
-pub async fn audit_access(State(state): St, axum::extract::Query(q): axum::extract::Query<AccessQuery>) -> Result<Json<serde_json::Value>, Failure> {
+pub async fn audit_access(
+    State(state): St,
+    axum::extract::Query(q): axum::extract::Query<AccessQuery>,
+) -> Result<Json<serde_json::Value>, Failure> {
     let limit = q.limit.unwrap_or(100).clamp(1, 500);
     let db = state.db.lock().await;
-    let mut stmt = db
-        .conn()
-        .prepare("SELECT id, span_id, key_id, opened_at, ok FROM audit_access ORDER BY id DESC LIMIT ?1")
-        .map_err(internal)?;
+    let mut stmt =
+        db.conn().prepare("SELECT id, span_id, key_id, opened_at, ok FROM audit_access ORDER BY id DESC LIMIT ?1").map_err(internal)?;
     let rows = stmt
         .query_map([limit as i64], |r| {
             Ok(serde_json::json!({ "id": r.get::<_, i64>(0)?, "span_id": r.get::<_, String>(1)?, "key_id": r.get::<_, String>(2)?, "opened_at": r.get::<_, i64>(3)?, "ok": r.get::<_, i64>(4)? != 0 }))
@@ -717,7 +800,10 @@ pub async fn audit_access(State(state): St, axum::extract::Query(q): axum::extra
     Ok(Json(serde_json::json!({ "access": rows })))
 }
 
-pub async fn audit_stats(State(state): St, axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>) -> Result<Json<serde_json::Value>, Failure> {
+pub async fn audit_stats(
+    State(state): St,
+    axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Result<Json<serde_json::Value>, Failure> {
     audit_get(&state, &askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/audit/stats"), &q).await
 }
 
@@ -739,7 +825,8 @@ pub async fn rotate_audit_key(State(state): St, ApiJson(b): ApiJson<RotateKey>) 
     use crate::audit_key::{derive, derive_for_setup, key_id, new_salt, KdfParams, KeyError};
     let now = crate::auth::now();
     if let Some(wait) = state.audit_opens.locked_for(now) {
-        return Err(err(StatusCode::TOO_MANY_REQUESTS, &format!("Too many wrong passphrases. Try again in {} minutes.", (wait + 59) / 60)).retry_after(wait.max(1) as u64));
+        return Err(err(StatusCode::TOO_MANY_REQUESTS, &format!("Too many wrong passphrases. Try again in {} minutes.", (wait + 59) / 60))
+            .retry_after(wait.max(1) as u64));
     }
     if b.confirm.as_deref().is_some_and(|c| c != b.new) {
         return Err(bad("The two new passphrases do not match."));
@@ -763,13 +850,12 @@ pub async fn rotate_audit_key(State(state): St, ApiJson(b): ApiJson<RotateKey>) 
 
     let new_salt_bytes = new_salt();
     let (pass, new_params) = (b.new, KdfParams::CURRENT);
-    let kp = tokio::task::spawn_blocking(move || derive_for_setup(&pass, &new_salt_bytes, new_params))
-        .await
-        .map_err(internal)?
-        .map_err(|e| match e {
+    let kp = tokio::task::spawn_blocking(move || derive_for_setup(&pass, &new_salt_bytes, new_params)).await.map_err(internal)?.map_err(
+        |e| match e {
             KeyError::TooShort => bad("The new passphrase must be at least 20 characters."),
             KeyError::Kdf(_) => internal(()),
-        })?;
+        },
+    )?;
     let public = kp.public_bytes();
     let row = crate::db::AuditKeyRow {
         key_id: key_id(&public),
@@ -799,12 +885,17 @@ pub struct OpenRequest {
 /// server, derive the key from the passphrase in the body, open it, and drop the key. The
 /// passphrase is never stored or logged. Before any content is returned an `audit_access` row is
 /// written; a wrong passphrase is recorded too, answers 403, and is rate limited (429).
-pub async fn open_audit_payloads(State(state): St, Path(span_id): Path<String>, ApiJson(b): ApiJson<OpenRequest>) -> Result<Json<serde_json::Value>, Failure> {
+pub async fn open_audit_payloads(
+    State(state): St,
+    Path(span_id): Path<String>,
+    ApiJson(b): ApiJson<OpenRequest>,
+) -> Result<Json<serde_json::Value>, Failure> {
     use crate::audit_key::{derive, key_id, open_sealed, KdfParams};
     use base64::Engine;
     let now = crate::auth::now();
     if let Some(wait) = state.audit_opens.locked_for(now) {
-        return Err(err(StatusCode::TOO_MANY_REQUESTS, &format!("Too many wrong passphrases. Try again in {} minutes.", (wait + 59) / 60)).retry_after(wait.max(1) as u64));
+        return Err(err(StatusCode::TOO_MANY_REQUESTS, &format!("Too many wrong passphrases. Try again in {} minutes.", (wait + 59) / 60))
+            .retry_after(wait.max(1) as u64));
     }
     let (status, body) = link(&state)?
         .request(reqwest::Method::GET, &format!("{}/audit/payloads/{span_id}", askbar_proto::paths::SERVER_V1), None)
@@ -833,7 +924,8 @@ pub async fn open_audit_payloads(State(state): St, Path(span_id): Path<String>, 
         let derived = match row {
             None => None,
             Some(row) => {
-                let (pass, salt, params) = (passphrase.clone(), row.salt, KdfParams::parse(&row.argon_params).unwrap_or(KdfParams::CURRENT));
+                let (pass, salt, params) =
+                    (passphrase.clone(), row.salt, KdfParams::parse(&row.argon_params).unwrap_or(KdfParams::CURRENT));
                 let kp = tokio::task::spawn_blocking(move || derive(&pass, &salt, params)).await.map_err(internal)?.map_err(internal)?;
                 // Right passphrase only if it gives back the very key the payload names.
                 (key_id(&kp.public_bytes()) == kid).then_some(kp)
@@ -923,10 +1015,16 @@ pub async fn get_settings(State(state): St) -> Json<AdminSettings> {
         system_prompt: setting(c, "system_prompt").unwrap_or_else(|| askbar_proto::DEFAULT_SYSTEM_PROMPT.to_string()),
         display: setting(c, "display").and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default(),
         generation_timeout_secs: Some(
-            setting(c, "generation_timeout_secs").and_then(|s| s.trim().parse().ok()).unwrap_or(askbar_proto::DEFAULT_GENERATION_TIMEOUT_SECS),
+            setting(c, "generation_timeout_secs")
+                .and_then(|s| s.trim().parse().ok())
+                .unwrap_or(askbar_proto::DEFAULT_GENERATION_TIMEOUT_SECS),
         ),
-        kill_switch: Some(c.query_row("SELECT kill_switch FROM budgets WHERE id = 1", [], |r| r.get::<_, i64>(0)).map(|v| v != 0).unwrap_or(false)),
-        kill_switch_aborts_running: Some(setting(c, "kill_switch_aborts_running").map(|v| !matches!(v.trim(), "0" | "false")).unwrap_or(true)),
+        kill_switch: Some(
+            c.query_row("SELECT kill_switch FROM budgets WHERE id = 1", [], |r| r.get::<_, i64>(0)).map(|v| v != 0).unwrap_or(false),
+        ),
+        kill_switch_aborts_running: Some(
+            setting(c, "kill_switch_aborts_running").map(|v| !matches!(v.trim(), "0" | "false")).unwrap_or(true),
+        ),
         audit_retention_days: Some(setting(c, "audit_retention_days").and_then(|s| s.trim().parse().ok()).unwrap_or(30)),
         audit_key_id: crate::db::active_audit_key(c).ok().flatten().map(|k| k.key_id),
     })
@@ -972,7 +1070,11 @@ pub async fn put_settings(State(state): St, ApiJson(s): ApiJson<AdminSettings>) 
             c.execute("UPDATE budgets SET kill_switch = ?1 WHERE id = 1", [k as i64]).map_err(internal)?;
         }
         for (k, v) in pairs {
-            c.execute("INSERT INTO settings (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value", params![k, v]).map_err(internal)?;
+            c.execute(
+                "INSERT INTO settings (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                params![k, v],
+            )
+            .map_err(internal)?;
         }
         Ok(())
     })
@@ -981,19 +1083,31 @@ pub async fn put_settings(State(state): St, ApiJson(s): ApiJson<AdminSettings>) 
 }
 
 /// One user's display defaults, instead of the server-wide ones.
-pub async fn put_user_display(State(state): St, Path(user_id): Path<String>, ApiJson(d): ApiJson<DisplaySettings>) -> Result<StatusCode, Failure> {
+pub async fn put_user_display(
+    State(state): St,
+    Path(user_id): Path<String>,
+    ApiJson(d): ApiJson<DisplaySettings>,
+) -> Result<StatusCode, Failure> {
     check_display(&d)?;
     let value = serde_json::to_string(&d).map_err(|_| bad("Invalid display settings."))?;
-    let (status, body) = link(&state)?.request(reqwest::Method::GET, &askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/users"), None).await.map_err(from_push)?;
+    let (status, body) = link(&state)?
+        .request(reqwest::Method::GET, &askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/users"), None)
+        .await
+        .map_err(from_push)?;
     let known = status == 200
-        && serde_json::from_slice::<serde_json::Value>(&body).ok().is_some_and(|v| v.as_array().is_some_and(|a| a.iter().any(|u| u["id"].as_str() == Some(user_id.as_str()))));
+        && serde_json::from_slice::<serde_json::Value>(&body)
+            .ok()
+            .is_some_and(|v| v.as_array().is_some_and(|a| a.iter().any(|u| u["id"].as_str() == Some(user_id.as_str()))));
     if !known {
         return Err(err(StatusCode::NOT_FOUND, "No such user."));
     }
     mutate(&state, vec![], move |c| {
-        c.execute("INSERT INTO display_defaults (user_id, value) VALUES (?1, ?2) ON CONFLICT(user_id) DO UPDATE SET value = excluded.value", params![user_id, value])
-            .map(|_| ())
-            .map_err(internal)
+        c.execute(
+            "INSERT INTO display_defaults (user_id, value) VALUES (?1, ?2) ON CONFLICT(user_id) DO UPDATE SET value = excluded.value",
+            params![user_id, value],
+        )
+        .map(|_| ())
+        .map_err(internal)
     })
     .await?;
     Ok(StatusCode::NO_CONTENT)
@@ -1046,7 +1160,10 @@ fn admin_db_copy(db: &crate::AdminDb) -> Result<Vec<u8>, Failure> {
 
 /// The server's backup and the admin's own, in one tar file: `server.db` and `admin.db`.
 pub async fn backup(State(state): St) -> Result<Response, Failure> {
-    let (status, server_db) = link(&state)?.request(reqwest::Method::POST, &askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/exports"), None).await.map_err(from_push)?;
+    let (status, server_db) = link(&state)?
+        .request(reqwest::Method::POST, &askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/exports"), None)
+        .await
+        .map_err(from_push)?;
     if status != 200 {
         return Err(err(StatusCode::BAD_GATEWAY, &format!("The server answered {status}.")));
     }

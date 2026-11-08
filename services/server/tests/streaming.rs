@@ -55,9 +55,8 @@ async fn serve(status: u16, chunks: Vec<String>, gap_ms: u64, hang_after: bool) 
                 log.lock().unwrap().push(String::from_utf8_lossy(&buf).to_string());
 
                 let ctype = if status == 200 { "text/event-stream" } else { "application/json" };
-                let head = format!(
-                    "HTTP/1.1 {status} X\r\ncontent-type: {ctype}\r\ntransfer-encoding: chunked\r\nconnection: close\r\n\r\n"
-                );
+                let head =
+                    format!("HTTP/1.1 {status} X\r\ncontent-type: {ctype}\r\ntransfer-encoding: chunked\r\nconnection: close\r\n\r\n");
                 let _ = sock.write_all(head.as_bytes()).await;
                 for c in chunks {
                     let frame = format!("{:x}\r\n{}\r\n", c.len(), c);
@@ -198,10 +197,7 @@ async fn http_errors_surface_the_providers_message() {
 async fn mid_stream_error_event_keeps_earlier_text() {
     let mock = serve(
         200,
-        vec![
-            sse(r#"{"choices":[{"delta":{"content":"partial"}}]}"#),
-            sse(r#"{"error":{"message":"upstream exploded"}}"#),
-        ],
+        vec![sse(r#"{"choices":[{"delta":{"content":"partial"}}]}"#), sse(r#"{"error":{"message":"upstream exploded"}}"#)],
         0,
         false,
     )

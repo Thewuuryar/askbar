@@ -96,7 +96,11 @@ impl ErrorCode {
         match self {
             ErrorCode::QueueFull | ErrorCode::ApiKeyExists | ErrorCode::Conflict => 409,
             ErrorCode::BudgetExceeded | ErrorCode::TooManyAttempts => 429,
-            ErrorCode::KillSwitch | ErrorCode::AuditKeyMissing | ErrorCode::AuditBacklog | ErrorCode::SetupRequired | ErrorCode::NotConfigured => 503,
+            ErrorCode::KillSwitch
+            | ErrorCode::AuditKeyMissing
+            | ErrorCode::AuditBacklog
+            | ErrorCode::SetupRequired
+            | ErrorCode::NotConfigured => 503,
             ErrorCode::ClientTooOld => 426,
             ErrorCode::ClientVersionMissing | ErrorCode::BadRequest => 400,
             ErrorCode::Unauthorized => 401,
@@ -165,7 +169,14 @@ pub struct Problem {
 
 impl Problem {
     pub fn new(code: ErrorCode, detail: impl Into<String>) -> Problem {
-        Problem { kind: code.type_urn(), title: code.title().into(), status: code.status(), detail: detail.into(), error: code.as_str().into(), extra: Map::new() }
+        Problem {
+            kind: code.type_urn(),
+            title: code.title().into(),
+            status: code.status(),
+            detail: detail.into(),
+            error: code.as_str().into(),
+            extra: Map::new(),
+        }
     }
 
     /// Adds an extension member.
@@ -247,10 +258,27 @@ mod tests {
         // Adding a variant without adding it to ALL makes this match non-exhaustive at compile time.
         for c in ErrorCode::ALL {
             match c {
-                ErrorCode::QueueFull | ErrorCode::BudgetExceeded | ErrorCode::KillSwitch | ErrorCode::AuditKeyMissing | ErrorCode::AuditBacklog
-                | ErrorCode::ClientTooOld | ErrorCode::ClientVersionMissing | ErrorCode::Unauthorized | ErrorCode::Forbidden | ErrorCode::NotFound
-                | ErrorCode::MethodNotAllowed | ErrorCode::BadRequest | ErrorCode::PayloadTooLarge | ErrorCode::TooManyAttempts
-                | ErrorCode::ApiKeyExists | ErrorCode::SetupRequired | ErrorCode::ServerUnavailable | ErrorCode::NotConfigured | ErrorCode::PasswordChangeRequired | ErrorCode::Conflict | ErrorCode::Internal => {}
+                ErrorCode::QueueFull
+                | ErrorCode::BudgetExceeded
+                | ErrorCode::KillSwitch
+                | ErrorCode::AuditKeyMissing
+                | ErrorCode::AuditBacklog
+                | ErrorCode::ClientTooOld
+                | ErrorCode::ClientVersionMissing
+                | ErrorCode::Unauthorized
+                | ErrorCode::Forbidden
+                | ErrorCode::NotFound
+                | ErrorCode::MethodNotAllowed
+                | ErrorCode::BadRequest
+                | ErrorCode::PayloadTooLarge
+                | ErrorCode::TooManyAttempts
+                | ErrorCode::ApiKeyExists
+                | ErrorCode::SetupRequired
+                | ErrorCode::ServerUnavailable
+                | ErrorCode::NotConfigured
+                | ErrorCode::PasswordChangeRequired
+                | ErrorCode::Conflict
+                | ErrorCode::Internal => {}
             }
         }
         assert_eq!(ErrorCode::ALL.len(), 21);

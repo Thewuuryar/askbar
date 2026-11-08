@@ -8,7 +8,8 @@ use std::collections::BTreeSet;
 
 fn load(name: &str) -> Value {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/openapi").join(name);
-    serde_yaml_ng::from_str(&std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))).unwrap_or_else(|e| panic!("{name} is not YAML: {e}"))
+    serde_yaml_ng::from_str(&std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display())))
+        .unwrap_or_else(|e| panic!("{name} is not YAML: {e}"))
 }
 
 fn operations(spec: &Value) -> BTreeSet<(String, String)> {

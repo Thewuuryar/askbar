@@ -19,7 +19,9 @@ fn operations(spec: &Value) -> BTreeMap<(String, String), Option<Vec<String>>> {
         for (key, op) in item.as_object().unwrap() {
             if ["get", "post", "put", "delete", "patch"].contains(&key.as_str()) {
                 assert!(op["responses"].as_object().is_some_and(|r| !r.is_empty()), "{key} {path} has no responses");
-                let sec = op.get("security").map(|s| s.as_array().unwrap().iter().flat_map(|alt| alt.as_object().unwrap().keys().cloned()).collect::<Vec<_>>());
+                let sec = op
+                    .get("security")
+                    .map(|s| s.as_array().unwrap().iter().flat_map(|alt| alt.as_object().unwrap().keys().cloned()).collect::<Vec<_>>());
                 out.insert((key.to_uppercase(), path.clone()), sec);
             }
         }
@@ -54,7 +56,12 @@ fn the_file_describes_exactly_the_admin_api_routes_and_its_problem_codes_are_the
         }
         assert!(!cur.is_null(), "{r} does not resolve");
     }
-    let listed: BTreeSet<String> = spec["components"]["schemas"]["Problem"]["properties"]["error"]["enum"].as_array().unwrap().iter().map(|c| c.as_str().unwrap().to_string()).collect();
+    let listed: BTreeSet<String> = spec["components"]["schemas"]["Problem"]["properties"]["error"]["enum"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c.as_str().unwrap().to_string())
+        .collect();
     let real: BTreeSet<String> = ErrorCode::ALL.iter().map(|c| c.as_str().to_string()).collect();
     assert_eq!(listed, real);
     let mut ids = BTreeSet::new();
@@ -85,7 +92,9 @@ async fn what_the_file_says_about_a_key_is_what_the_admin_does() {
     for ((method, path), security) in operations(&spec) {
         let concrete = path.replace("{id}", "x").replace("{span_id}", "x");
         let call = |key: Option<&str>| {
-            let mut r = http.request(reqwest::Method::from_bytes(method.as_bytes()).unwrap(), format!("{url}{concrete}")).header("x-askbar-admin", "1");
+            let mut r = http
+                .request(reqwest::Method::from_bytes(method.as_bytes()).unwrap(), format!("{url}{concrete}"))
+                .header("x-askbar-admin", "1");
             if let Some(k) = key {
                 r = r.bearer_auth(k);
             }
@@ -108,10 +117,24 @@ async fn what_the_file_says_about_a_key_is_what_the_admin_does() {
             }
         }
     }
-    let want_session_only: BTreeSet<(String, String)> = [("GET", "/session"), ("DELETE", "/session"), ("PUT", "/password"), ("GET", "/keys"), ("POST", "/keys"), ("DELETE", "/keys/{id}"), ("GET", "/services"), ("POST", "/services/{name}/restart"), ("GET", "/cpa"), ("POST", "/cpa/logins"), ("GET", "/cpa/logins/{state}"), ("POST", "/cpa/logins/{state}/callback"), ("DELETE", "/cpa/accounts/{name}")]
-        .into_iter()
-        .map(|(m, p)| (m.to_string(), format!("/api/admin/v1{p}")))
-        .collect();
+    let want_session_only: BTreeSet<(String, String)> = [
+        ("GET", "/session"),
+        ("DELETE", "/session"),
+        ("PUT", "/password"),
+        ("GET", "/keys"),
+        ("POST", "/keys"),
+        ("DELETE", "/keys/{id}"),
+        ("GET", "/services"),
+        ("POST", "/services/{name}/restart"),
+        ("GET", "/cpa"),
+        ("POST", "/cpa/logins"),
+        ("GET", "/cpa/logins/{state}"),
+        ("POST", "/cpa/logins/{state}/callback"),
+        ("DELETE", "/cpa/accounts/{name}"),
+    ]
+    .into_iter()
+    .map(|(m, p)| (m.to_string(), format!("/api/admin/v1{p}")))
+    .collect();
     assert_eq!(session_only, want_session_only, "the routes a key may not call");
     assert_eq!(open.len(), 3, "health, setup (read) and sign-in are open (the first-visitor setup route is gone): {open:?}");
 }

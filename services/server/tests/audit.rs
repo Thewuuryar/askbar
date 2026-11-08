@@ -66,7 +66,8 @@ fn start_mock() -> (Mock, u16) {
     use std::process::{Command, Stdio};
     let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
     let script = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/e2e/mock_llm.py");
-    let mut child = Command::new("python3").args(["-u", script, &port.to_string()]).stdout(Stdio::piped()).spawn().expect("python3 is needed");
+    let mut child =
+        Command::new("python3").args(["-u", script, &port.to_string()]).stdout(Stdio::piped()).spawn().expect("python3 is needed");
     let mut out = BufReader::new(child.stdout.take().unwrap());
     let mut line = String::new();
     out.read_line(&mut line).unwrap();
@@ -91,8 +92,9 @@ async fn a_finished_generation_leaves_one_turn_span_with_its_final_status() {
         .unwrap();
     assert_eq!((n, status.as_str(), error_code), (1, "done", None));
     assert!(user.is_some() && client.is_some(), "who it was for");
-    let (parent, ended): (Option<String>, Option<i64>) =
-        db.query_row("SELECT parent_id, ended_at FROM spans WHERE trace_id = ?1 AND kind = 'turn'", [&trace], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+    let (parent, ended): (Option<String>, Option<i64>) = db
+        .query_row("SELECT parent_id, ended_at FROM spans WHERE trace_id = ?1 AND kind = 'turn'", [&trace], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap();
     assert!(parent.is_none() && ended.is_some());
 }
 
@@ -149,7 +151,9 @@ async fn a_failed_attempt_records_its_error_code_and_status() {
     let trace = run_chat(&state, "please fail").await;
     state.audit.flush().await;
     let (status, code, attrs): (String, Option<String>, String) = read(&dir)
-        .query_row("SELECT status, error_code, attrs_json FROM spans WHERE trace_id = ?1 AND kind = 'attempt'", [&trace], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .query_row("SELECT status, error_code, attrs_json FROM spans WHERE trace_id = ?1 AND kind = 'attempt'", [&trace], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        })
         .unwrap();
     assert_eq!((status.as_str(), code.as_deref()), ("error", Some("http_401")));
     assert!(attrs.contains("401"), "{attrs}");
@@ -203,8 +207,16 @@ fn deleting_a_span_younger_than_seven_days_fails() {
     start_up_audit(&dir);
     let db = read(&dir);
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
-    db.execute("INSERT INTO spans (id, trace_id, kind, name, status, started_at, ended_at) VALUES ('new', 't', 'turn', 'chat', 'done', ?1, ?1)", [now]).unwrap();
-    db.execute("INSERT INTO spans (id, trace_id, kind, name, status, started_at, ended_at) VALUES ('old', 't', 'turn', 'chat', 'done', ?1, ?1)", [now - 8 * 86400]).unwrap();
+    db.execute(
+        "INSERT INTO spans (id, trace_id, kind, name, status, started_at, ended_at) VALUES ('new', 't', 'turn', 'chat', 'done', ?1, ?1)",
+        [now],
+    )
+    .unwrap();
+    db.execute(
+        "INSERT INTO spans (id, trace_id, kind, name, status, started_at, ended_at) VALUES ('old', 't', 'turn', 'chat', 'done', ?1, ?1)",
+        [now - 8 * 86400],
+    )
+    .unwrap();
     let e = db.execute("DELETE FROM spans WHERE id = 'new'", []).unwrap_err();
     assert!(e.to_string().contains("7 days"), "{e}");
     assert_eq!(db.execute("DELETE FROM spans WHERE id = 'old'", []).unwrap(), 1, "older than a week may go");
@@ -258,7 +270,11 @@ async fn a_queued_message_records_a_gate_span_named_queue_from_enqueue_to_start(
         .unwrap();
     assert_eq!((n, status.as_str()), (1, "done"));
     assert!(ended.unwrap() >= started, "it ends after it begins");
-    let none: i64 = db.query_row("SELECT COUNT(*) FROM spans WHERE trace_id = ?1 AND kind = 'gate' AND name = 'queue'", [&first.generation_id], |r| r.get(0)).unwrap();
+    let none: i64 = db
+        .query_row("SELECT COUNT(*) FROM spans WHERE trace_id = ?1 AND kind = 'gate' AND name = 'queue'", [&first.generation_id], |r| {
+            r.get(0)
+        })
+        .unwrap();
     assert_eq!(none, 0, "a message that did not wait has no queue span");
     // Its gates (the kill switch it passed, then the wait), turn and attempt, in the same trace.
     let names: Vec<(String, String)> = db
@@ -340,7 +356,9 @@ async fn a_backed_up_audit_writer_refuses_new_generations_with_503_and_retry_aft
 /// explicit and survives a snapshot that was changed.)
 #[allow(dead_code)]
 fn install_audit_key(state: &std::sync::Arc<askbar_server::AppState>) -> [u8; 32] {
-    askbar_server::testing::update_snapshot(&state.db.lock().unwrap(), |s| s.audit_public_key = Some(askbar_server::testing::test_audit_key()));
+    askbar_server::testing::update_snapshot(&state.db.lock().unwrap(), |s| {
+        s.audit_public_key = Some(askbar_server::testing::test_audit_key())
+    });
     askbar_server::testing::TEST_AUDIT_SECRET
 }
 
@@ -375,7 +393,14 @@ async fn a_generation_with_no_audit_key_is_refused_with_503_audit_key_missing() 
     };
     let refused = askbar_server::generation::submit(
         &state,
-        askbar_server::generation::Submit { user_id: user, client_id: client, conversation_id: None, provider_id: "p1".into(), prompt: "hi".into(), client_request_id: None },
+        askbar_server::generation::Submit {
+            user_id: user,
+            client_id: client,
+            conversation_id: None,
+            provider_id: "p1".into(),
+            prompt: "hi".into(),
+            client_request_id: None,
+        },
     )
     .err()
     .expect("no key, no generation");
@@ -392,11 +417,17 @@ async fn a_generation_with_no_audit_key_is_refused_with_503_audit_key_missing() 
     };
     assert!(askbar_server::generation::submit(
         &state,
-        askbar_server::generation::Submit { user_id: user, client_id: client, conversation_id: None, provider_id: "p1".into(), prompt: "hi".into(), client_request_id: None },
+        askbar_server::generation::Submit {
+            user_id: user,
+            client_id: client,
+            conversation_id: None,
+            provider_id: "p1".into(),
+            prompt: "hi".into(),
+            client_request_id: None
+        },
     )
     .is_ok());
 }
-
 
 /// Every payload of a trace, opened with the test secret: (role, key_id, plaintext), by span kind.
 fn open_payloads(dir: &Path, trace: &str, secret: [u8; 32]) -> Vec<(String, String, String, String)> {
@@ -479,7 +510,8 @@ async fn an_oversized_prompt_is_cut_at_256_kb_and_the_attempt_is_marked_truncate
     // A normal prompt is not marked.
     let small = run_chat(&state, "short").await;
     state.audit.flush().await;
-    let a: Option<String> = read(&dir).query_row("SELECT attrs_json FROM spans WHERE trace_id = ?1 AND kind = 'attempt'", [&small], |r| r.get(0)).unwrap();
+    let a: Option<String> =
+        read(&dir).query_row("SELECT attrs_json FROM spans WHERE trace_id = ?1 AND kind = 'attempt'", [&small], |r| r.get(0)).unwrap();
     assert!(!a.unwrap().contains("truncated"));
 }
 

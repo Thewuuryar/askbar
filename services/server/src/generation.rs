@@ -3,25 +3,25 @@
 //! This module holds the in-memory registry: each running generation has a `Live` that buffers
 //! its deltas so a client can attach, drop and attach again without losing or repeating text.
 
-use crate::llm::{stream_chat_report, ChatMessage, StreamOutcome, Usage};
+use crate::audit::{Kind, SpanFinish, SpanStart};
 use crate::auth::ClientAuth;
 use crate::chat::{sse_event, sse_event_with_id};
-use crate::audit::{Kind, SpanFinish, SpanStart};
 use crate::db::NewGeneration;
+use crate::llm::{stream_chat_report, ChatMessage, StreamOutcome, Usage};
 use crate::store;
 use crate::AppState;
 use askbar_proto::ChatEvent;
 use axum::{
     extract::{Path, Query, State},
-    response::IntoResponse,
     http::StatusCode,
     response::sse::{Event, KeepAlive, Sse},
+    response::IntoResponse,
     Extension,
 };
-use futures_util::StreamExt;
-use std::convert::Infallible;
 use futures_util::Stream;
+use futures_util::StreamExt;
 use std::collections::HashMap;
+use std::convert::Infallible;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::{oneshot, Notify};
@@ -30,11 +30,20 @@ use tokio::sync::{oneshot, Notify};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GenEvent {
     /// The provider serving the reply; before any delta. Not counted in `seq`.
-    Provider { id: String, name: String },
-    Delta { seq: u64, text: String },
+    Provider {
+        id: String,
+        name: String,
+    },
+    Delta {
+        seq: u64,
+        text: String,
+    },
     Done,
     /// `code` is the stable reason the stream's `error` event carries.
-    Error { message: String, code: &'static str },
+    Error {
+        message: String,
+        code: &'static str,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -600,7 +609,9 @@ fn stamp_deadline(db: &crate::Db, id: &str, timeout: Duration) {
 /// Records that the kill switch was off for this generation.
 fn pass_kill_switch_gate(state: &AppState, generation_id: &str, s: &Submit) {
     let span = state.audit.start_span(
-        SpanStart::new(generation_id, Kind::Gate, "kill_switch").who(&s.user_id, Some(&s.client_id)).attrs(&serde_json::json!({ "kill_switch": false })),
+        SpanStart::new(generation_id, Kind::Gate, "kill_switch")
+            .who(&s.user_id, Some(&s.client_id))
+            .attrs(&serde_json::json!({ "kill_switch": false })),
     );
     state.audit.finish_span(SpanFinish::new(&span, "done"));
 }
@@ -643,7 +654,12 @@ pub fn month_start(t: i64) -> i64 {
 /// providers that are paid per token (a subscription provider costs nothing, so its tokens do not
 /// count, and a request to one is never refused for budget). `Err((period, numbers))` once a limit
 /// that is set has been reached; `Ok(numbers)` otherwise, or `Null` when no budget is set.
-fn budget_gate(db: &crate::Db, snap: &askbar_proto::Snapshot, requested: &str, now: i64) -> Result<serde_json::Value, (&'static str, serde_json::Value)> {
+fn budget_gate(
+    db: &crate::Db,
+    snap: &askbar_proto::Snapshot,
+    requested: &str,
+    now: i64,
+) -> Result<serde_json::Value, (&'static str, serde_json::Value)> {
     let budget = &snap.budget;
     if budget.daily_tokens.is_none() && budget.monthly_tokens.is_none() {
         return Ok(serde_json::Value::Null);
@@ -653,13 +669,20 @@ fn budget_gate(db: &crate::Db, snap: &askbar_proto::Snapshot, requested: &str, n
         return Ok(serde_json::Value::Null);
     }
     let used_since = |since: i64| -> u64 {
-        let mut stmt = match db.conn().prepare("SELECT provider_id, COALESCE(SUM(tokens_in + tokens_out), 0) FROM token_usage WHERE created_at >= ?1 GROUP BY provider_id") {
+        let mut stmt = match db.conn().prepare(
+            "SELECT provider_id, COALESCE(SUM(tokens_in + tokens_out), 0) FROM token_usage WHERE created_at >= ?1 GROUP BY provider_id",
+        ) {
             Ok(s) => s,
             Err(_) => return 0,
         };
-        let rows = stmt.query_map([since], |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, i64>(1)?))).map(|it| it.flatten().collect::<Vec<_>>()).unwrap_or_default();
+        let rows = stmt
+            .query_map([since], |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, i64>(1)?)))
+            .map(|it| it.flatten().collect::<Vec<_>>())
+            .unwrap_or_default();
         rows.into_iter()
-            .filter(|(pid, _)| !snap.providers.iter().any(|p| Some(&p.id) == pid.as_ref() && p.billing == askbar_proto::Billing::Subscription))
+            .filter(|(pid, _)| {
+                !snap.providers.iter().any(|p| Some(&p.id) == pid.as_ref() && p.billing == askbar_proto::Billing::Subscription)
+            })
             .map(|(_, n)| n.max(0) as u64)
             .sum()
     };
@@ -703,7 +726,8 @@ pub fn submit(state: &Arc<AppState>, s: Submit) -> Result<Submitted, SubmitError
             Ok(note) => budget_note = note,
             Err((period, note)) => {
                 let trace = crate::ids::new_id();
-                let span = state.audit.start_span(SpanStart::new(&trace, Kind::Gate, "budget").who(&s.user_id, Some(&s.client_id)).attrs(&note));
+                let span =
+                    state.audit.start_span(SpanStart::new(&trace, Kind::Gate, "budget").who(&s.user_id, Some(&s.client_id)).attrs(&note));
                 state.audit.finish_span(SpanFinish::new(&span, "blocked").error_code("budget_exceeded"));
                 return Err(SubmitError::BudgetExceeded(period));
             }
@@ -712,7 +736,9 @@ pub fn submit(state: &Arc<AppState>, s: Submit) -> Result<Submitted, SubmitError
     if kill_switch {
         let trace = crate::ids::new_id();
         let span = state.audit.start_span(
-            SpanStart::new(&trace, Kind::Gate, "kill_switch").who(&s.user_id, Some(&s.client_id)).attrs(&serde_json::json!({ "kill_switch": true })),
+            SpanStart::new(&trace, Kind::Gate, "kill_switch")
+                .who(&s.user_id, Some(&s.client_id))
+                .attrs(&serde_json::json!({ "kill_switch": true })),
         );
         state.audit.finish_span(SpanFinish::new(&span, "blocked").error_code("kill_switch"));
         return Err(SubmitError::KillSwitch);
@@ -803,7 +829,10 @@ fn spawn_run(
         // automatic fallback to another provider (ADR 0014).
         let prepared = {
             let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
-            let candidate = store::load_provider(&db, &state.secrets(), &provider_id).ok().flatten().map(|provider| Candidate { id: provider_id.clone(), provider });
+            let candidate = store::load_provider(&db, &state.secrets(), &provider_id)
+                .ok()
+                .flatten()
+                .map(|provider| Candidate { id: provider_id.clone(), provider });
             let system = store::chat_system_prompt(&db).ok();
             let history: Option<Vec<ChatMessage>> = db
                 .get_messages(&fin.user_id, &fin.conversation_id)
@@ -990,7 +1019,7 @@ async fn attempts(
                     return match r.outcome {
                         StreamOutcome::Completed => Ended::Done(r),
                         StreamOutcome::Cancelled => Ended::Cancelled(Some(r)),
-                    }
+                    };
                 }
                 Err(e) => e,
             };
@@ -1059,7 +1088,16 @@ fn start_next(state: &Arc<AppState>, conversation_id: &str) {
                 l
             });
             live.end_queue_span(&state.audit, "done");
-            spawn_run(state, &next.id, &next.user_id, next.client_id.as_deref(), &next.conversation_id, next.provider_id.as_deref().unwrap_or(""), timeout, live);
+            spawn_run(
+                state,
+                &next.id,
+                &next.user_id,
+                next.client_id.as_deref(),
+                &next.conversation_id,
+                next.provider_id.as_deref().unwrap_or(""),
+                timeout,
+                live,
+            );
         }
         None => {
             // Try the one after it.
@@ -1077,9 +1115,9 @@ const NOT_RUN: &str = "Not run: the server restarted before this message started
 /// how many of each it fixed.
 pub fn sweep_on_start(db: &crate::Db) -> Result<(usize, usize), crate::DbError> {
     let rows: Vec<(String, String, String, String, String)> = {
-        let mut stmt = db
-            .conn()
-            .prepare("SELECT id, user_id, conversation_id, status, text FROM generations WHERE status IN ('running','queued') ORDER BY id")?;
+        let mut stmt = db.conn().prepare(
+            "SELECT id, user_id, conversation_id, status, text FROM generations WHERE status IN ('running','queued') ORDER BY id",
+        )?;
         let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?;
         rows.collect::<Result<_, _>>()?
     };
@@ -1089,11 +1127,8 @@ pub fn sweep_on_start(db: &crate::Db) -> Result<(usize, usize), crate::DbError> 
             db.finalize_generation(&id, "interrupted", "", Some(NOT_RUN), None)?;
             queued += 1;
         } else {
-            let message_id = if text.trim().is_empty() {
-                None
-            } else {
-                db.add_message(&user_id, &conversation_id, "assistant", &text).ok()
-            };
+            let message_id =
+                if text.trim().is_empty() { None } else { db.add_message(&user_id, &conversation_id, "assistant", &text).ok() };
             db.finalize_generation(&id, "interrupted", &text, Some(INTERRUPTED), message_id.as_deref())?;
             running += 1;
         }
@@ -1120,11 +1155,8 @@ pub fn shutdown(state: &Arc<AppState>) {
                 .flatten();
             if let Some((user_id, conversation_id, status)) = row {
                 if status == "running" {
-                    let message_id = if text.trim().is_empty() {
-                        None
-                    } else {
-                        db.add_message(&user_id, &conversation_id, "assistant", &text).ok()
-                    };
+                    let message_id =
+                        if text.trim().is_empty() { None } else { db.add_message(&user_id, &conversation_id, "assistant", &text).ok() };
                     let _ = db.finalize_generation(&id, "interrupted", &text, Some(INTERRUPTED), message_id.as_deref());
                 } else {
                     let _ = db.finalize_generation(&id, "interrupted", "", Some(NOT_RUN), None);
@@ -1177,8 +1209,7 @@ pub fn apply_kill_switch(state: &Arc<AppState>, aborts_running: bool) {
 pub fn delete_conversation(state: &Arc<AppState>, user_id: &str, conversation_id: &str) -> Result<bool, crate::DbError> {
     let (deleted, active) = {
         let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
-        let active: Vec<_> =
-            db.list_active_generations(user_id)?.into_iter().filter(|g| g.conversation_id == conversation_id).collect();
+        let active: Vec<_> = db.list_active_generations(user_id)?.into_iter().filter(|g| g.conversation_id == conversation_id).collect();
         // Queued messages never ran; ending them under this lock keeps the runner from starting one.
         for g in active.iter().filter(|g| g.status == "queued") {
             db.finalize_generation(&g.id, "cancelled", "", None, None)?;
@@ -1253,7 +1284,9 @@ fn to_sse(e: GenEvent) -> Result<Event, Infallible> {
 fn terminal_of(status: &str, error: Option<&str>) -> GenEvent {
     match status {
         "done" | "cancelled" => GenEvent::Done,
-        "interrupted" => GenEvent::Error { message: error.unwrap_or("The server restarted before the reply finished.").into(), code: "interrupted" },
+        "interrupted" => {
+            GenEvent::Error { message: error.unwrap_or("The server restarted before the reply finished.").into(), code: "interrupted" }
+        }
         "timed_out" => GenEvent::Error { message: error.unwrap_or("The reply ran out of time.").into(), code: "timed_out" },
         _ => GenEvent::Error { message: error.unwrap_or("The reply failed.").into(), code: "provider_error" },
     }
@@ -1333,7 +1366,10 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(30)).await;
         live.push("c");
         live.finish(Terminal::Error { message: "boom".into(), code: "provider_error" });
-        assert_eq!(sub.await.unwrap(), [d(1, "a"), d(2, "b"), d(3, "c"), GenEvent::Error { message: "boom".into(), code: "provider_error" }]);
+        assert_eq!(
+            sub.await.unwrap(),
+            [d(1, "a"), d(2, "b"), d(3, "c"), GenEvent::Error { message: "boom".into(), code: "provider_error" }]
+        );
     }
 
     #[tokio::test]

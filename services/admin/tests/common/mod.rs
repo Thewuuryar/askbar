@@ -2,11 +2,16 @@
 #![allow(dead_code)]
 
 use askbar_admin::caddy::CaddyLink;
-use askbar_admin::server_link::{self, ServerLink};
 use askbar_admin::secrets::AdminSecrets;
+use askbar_admin::server_link::{self, ServerLink};
 use askbar_admin::{web, AdminDb, AdminState};
 use askbar_server::{secrets::Secrets, AppState};
-use axum::{extract::State, http::{HeaderMap, StatusCode}, routing::post, Router};
+use axum::{
+    extract::State,
+    http::{HeaderMap, StatusCode},
+    routing::post,
+    Router,
+};
 use reqwest::Method as M;
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -68,14 +73,16 @@ pub async fn start(caddy_up: bool) -> T {
     sdb.seed_server().unwrap();
     // The server records to a temp audit.db, so tests can put sealed content there and open it.
     let (recorder, _audit_dir) = askbar_server::testing::audit_recorder();
-    let server = AppState::new(sdb, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), askbar_server::MIN_CLIENT).with_audit(recorder);
+    let server =
+        AppState::new(sdb, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), askbar_server::MIN_CLIENT).with_audit(recorder);
     let server_api_url = serve(askbar_server::server_api::router(server.clone(), token_dir.join(server_link::HASH_FILE))).await;
 
     let fake = Arc::new(FakeCaddy::default());
     let caddy_socket = dir.join("c").join("a.sock");
     std::fs::create_dir_all(caddy_socket.parent().unwrap()).unwrap();
     if caddy_up {
-        let app = Router::new().route("/load", post(load)).route("/config/", axum::routing::get(|| async { "{}" })).with_state(fake.clone());
+        let app =
+            Router::new().route("/load", post(load)).route("/config/", axum::routing::get(|| async { "{}" })).with_state(fake.clone());
         let listener = tokio::net::UnixListener::bind(&caddy_socket).unwrap();
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     }
@@ -88,14 +95,28 @@ pub async fn start(caddy_up: bool) -> T {
     admin.set_caddy(CaddyLink { socket: Some(caddy_socket.clone()), secrets_dir: Some(secrets_dir.clone()) });
     let adm = serve(askbar_admin::router(admin.clone())).await;
     let http = reqwest::Client::new();
-    let r = http.post(format!("{adm}/api/admin/v1/session")).header("x-askbar-admin", "1").json(&json!({ "password": PW })).send().await.unwrap();
+    let r = http
+        .post(format!("{adm}/api/admin/v1/session"))
+        .header("x-askbar-admin", "1")
+        .json(&json!({ "password": PW }))
+        .send()
+        .await
+        .unwrap();
     let cookie = r.headers()["set-cookie"].to_str().unwrap().split(';').next().unwrap().to_string();
     T { adm, cookie, http, admin, server, fake, dir, secrets_dir, caddy_socket }
 }
 
 impl T {
     pub async fn call(&self, m: M, path: &str, body: Value) -> (u16, Value) {
-        let r = self.http.request(m, format!("{}{path}", self.adm)).header("x-askbar-admin", "1").header("cookie", &self.cookie).json(&body).send().await.unwrap();
+        let r = self
+            .http
+            .request(m, format!("{}{path}", self.adm))
+            .header("x-askbar-admin", "1")
+            .header("cookie", &self.cookie)
+            .json(&body)
+            .send()
+            .await
+            .unwrap();
         let st = r.status().as_u16();
         (st, serde_json::from_str(&r.text().await.unwrap()).unwrap_or(Value::Null))
     }

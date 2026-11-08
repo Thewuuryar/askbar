@@ -72,7 +72,13 @@ async fn first_run_signs_in_with_the_published_password_and_must_change_it_befor
     assert_eq!(st, 204, "the published login works");
     let c = c.unwrap();
     // Everything but the session and the password change is refused, with its own code.
-    for (m, path) in [(M::GET, "/api/admin/v1/providers"), (M::GET, "/api/admin/v1/settings"), (M::PUT, "/api/admin/v1/setup/audit-key"), (M::POST, "/api/admin/v1/keys"), (M::GET, "/api/admin/v1/services")] {
+    for (m, path) in [
+        (M::GET, "/api/admin/v1/providers"),
+        (M::GET, "/api/admin/v1/settings"),
+        (M::PUT, "/api/admin/v1/setup/audit-key"),
+        (M::POST, "/api/admin/v1/keys"),
+        (M::GET, "/api/admin/v1/services"),
+    ] {
         let (st, _, e) = t.call(m.clone(), path, Some(&c), json!({})).await;
         assert_eq!((st, e["error"].as_str()), (403, Some("password_change_required")), "{m} {path}");
     }
@@ -109,11 +115,23 @@ async fn reset_puts_the_published_password_back_and_records_it() {
     let c = t.first_run().await;
     web::reset_to_default(&*t.state.db.lock().await).unwrap();
     assert_eq!(t.status().await["password_change_required"], true);
-    assert_eq!(t.call(M::GET, "/api/admin/v1/providers", Some(&c), json!({})).await.2["error"], "password_change_required", "even an old session must change it first");
+    assert_eq!(
+        t.call(M::GET, "/api/admin/v1/providers", Some(&c), json!({})).await.2["error"],
+        "password_change_required",
+        "even an old session must change it first"
+    );
     assert_eq!(t.sign_in(None, PW).await.0, 401);
     assert_eq!(t.sign_in(Some("admin"), DEFAULT).await.0, 204);
-    let (service, action, ok): (String, String, i64) =
-        t.state.db.lock().await.conn().query_row("SELECT service, action, ok FROM service_actions ORDER BY id DESC LIMIT 1", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap();
+    let (service, action, ok): (String, String, i64) = t
+        .state
+        .db
+        .lock()
+        .await
+        .conn()
+        .query_row("SELECT service, action, ok FROM service_actions ORDER BY id DESC LIMIT 1", [], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        })
+        .unwrap();
     assert_eq!((service.as_str(), action.as_str(), ok), ("admin", "reset", 1));
 }
 

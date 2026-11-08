@@ -2,7 +2,7 @@
 //! redeemed; clients the snapshot lists as revoked are refused.
 
 use askbar_proto::{Budget, DisplaySettings, Snapshot, SnapshotPairCode};
-use askbar_server::{server_api, secrets::Secrets, AppState};
+use askbar_server::{secrets::Secrets, server_api, AppState};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
@@ -65,7 +65,12 @@ impl T {
             users: vec![],
             pair_codes: codes
                 .iter()
-                .map(|(c, exp)| SnapshotPairCode { hash: hex(c), user_id: self.user.clone(), client_name: "laptop".into(), expires_at: *exp })
+                .map(|(c, exp)| SnapshotPairCode {
+                    hash: hex(c),
+                    user_id: self.user.clone(),
+                    client_name: "laptop".into(),
+                    expires_at: *exp,
+                })
                 .collect(),
             revoked_client_ids: revoked.iter().map(|s| s.to_string()).collect(),
             budget: Budget::default(),
@@ -96,7 +101,15 @@ impl T {
         }
     }
     async fn whoami(&self, token: &str) -> u16 {
-        self.http.get(format!("{}/api/client/v1/me", self.api)).bearer_auth(token).header("x-askbar-client-version", "0.5.0").send().await.unwrap().status().as_u16()
+        self.http
+            .get(format!("{}/api/client/v1/me", self.api))
+            .bearer_auth(token)
+            .header("x-askbar-client-version", "0.5.0")
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .as_u16()
     }
     fn client_id(&self) -> String {
         self.state.db.lock().unwrap().conn().query_row("SELECT id FROM clients LIMIT 1", [], |r| r.get(0)).unwrap()
@@ -127,7 +140,14 @@ async fn a_code_in_the_snapshot_pairs_once_and_a_reused_code_fails() {
 async fn unknown_expired_and_racing_codes() {
     let t = start().await;
     // No snapshot yet, so nothing can pair: the server is not configured (ADR 0028 rule 3).
-    let r = t.http.post(format!("{}/api/client/v1/pairings", t.api)).header("x-askbar-client-version", "0.5.0").json(&json!({ "code": CODE })).send().await.unwrap();
+    let r = t
+        .http
+        .post(format!("{}/api/client/v1/pairings", t.api))
+        .header("x-askbar-client-version", "0.5.0")
+        .json(&json!({ "code": CODE }))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(r.status(), 503);
     assert_eq!(r.json::<askbar_proto::Problem>().await.unwrap().error, "not_configured");
     let now = askbar_server::auth::now();
@@ -180,11 +200,15 @@ async fn users_arrive_with_the_config_and_are_renamed_by_it() {
     t.push(&s).await;
     s.users[0].name = "Alice B.".into();
     t.push(&s).await;
-    let name: String = t.state.db.lock().unwrap().conn().query_row("SELECT name FROM users WHERE id = 'U-ALICE'", [], |r| r.get(0)).unwrap();
+    let name: String =
+        t.state.db.lock().unwrap().conn().query_row("SELECT name FROM users WHERE id = 'U-ALICE'", [], |r| r.get(0)).unwrap();
     assert_eq!(name, "Alice B.");
     // A user listed twice, or without a name, is refused and nothing is stored.
     for bad in [
-        vec![askbar_proto::SnapshotUser { id: "x".into(), name: "a".into() }, askbar_proto::SnapshotUser { id: "x".into(), name: "b".into() }],
+        vec![
+            askbar_proto::SnapshotUser { id: "x".into(), name: "a".into() },
+            askbar_proto::SnapshotUser { id: "x".into(), name: "b".into() },
+        ],
         vec![askbar_proto::SnapshotUser { id: "y".into(), name: " ".into() }],
     ] {
         let mut b = t.snapshot(&[], &[]);
@@ -198,7 +222,12 @@ async fn users_arrive_with_the_config_and_are_renamed_by_it() {
 async fn a_code_for_a_user_the_server_does_not_know_pairs_nothing() {
     let t = start().await;
     let mut s = t.snapshot(&[], &[]);
-    s.pair_codes = vec![SnapshotPairCode { hash: hex(CODE), user_id: "nobody".into(), client_name: "x".into(), expires_at: askbar_server::auth::now() + 600 }];
+    s.pair_codes = vec![SnapshotPairCode {
+        hash: hex(CODE),
+        user_id: "nobody".into(),
+        client_name: "x".into(),
+        expires_at: askbar_server::auth::now() + 600,
+    }];
     t.push(&s).await;
     assert!(t.pair(CODE).await.is_none());
 }

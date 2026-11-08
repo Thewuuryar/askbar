@@ -3,7 +3,11 @@ use std::net::SocketAddr;
 fn state() -> std::sync::Arc<askbar_server::AppState> {
     let db = askbar_server::Db::open_in_memory().unwrap();
     db.seed_server().unwrap();
-    askbar_server::AppState::new(db, askbar_server::secrets::Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), askbar_server::MIN_CLIENT)
+    askbar_server::AppState::new(
+        db,
+        askbar_server::secrets::Secrets::new("0123456789abcdef0123456789abcdef").unwrap(),
+        askbar_server::MIN_CLIENT,
+    )
 }
 
 async fn spawn(app: axum::Router) -> SocketAddr {
@@ -51,7 +55,16 @@ async fn even_with_the_server_token_the_server_api_listener_serves_no_client_api
         reqwest::Client::new().get(format!("http://{server_api}{path}")).bearer_auth(token).send().await.unwrap().status().as_u16()
     };
     assert_eq!(get("/api/server/v1/health").await, 200);
-    for not_here in ["/api/client/v1/health", "/api/client/v1/conversations", "/api/v1/health", "/api/v1/conversations", "/mgmt/v1/health", "/admin/", "/"] { // names-ok: the old path is the point
+    for not_here in [
+        "/api/client/v1/health",
+        "/api/client/v1/conversations",
+        "/api/v1/health",
+        "/api/v1/conversations",
+        "/mgmt/v1/health",
+        "/admin/",
+        "/",
+    ] {
+        // names-ok: the old path is the point
         assert_eq!(get(not_here).await, 404, "{not_here}: the server API listener serves only /api/server/v1");
     }
     let _ = std::fs::remove_dir_all(&dir);
@@ -63,11 +76,11 @@ async fn every_client_api_answer_says_nosniff() {
     let api = spawn(askbar_server::client_router(state())).await;
     let http = reqwest::Client::new();
     for (path, version, token) in [
-        ("/api/client/v1/health", false, false),             // 200
-        ("/api/client/v1/conversations", true, false),       // 401, no token
-        ("/api/client/v1/conversations", false, true),       // 400, no version header
-        ("/api/client/v1/nothing-here", false, false),       // 404
-        ("/api/v1/chat", false, false),                      // 426, the old prefix
+        ("/api/client/v1/health", false, false),       // 200
+        ("/api/client/v1/conversations", true, false), // 401, no token
+        ("/api/client/v1/conversations", false, true), // 400, no version header
+        ("/api/client/v1/nothing-here", false, false), // 404
+        ("/api/v1/chat", false, false),                // 426, the old prefix
     ] {
         let mut r = http.get(format!("http://{api}{path}"));
         if version {

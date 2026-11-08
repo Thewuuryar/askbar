@@ -6,13 +6,13 @@
 
 use crate::error::{ApiError, ApiJson};
 use crate::generation::{self, GenEvent};
-use askbar_proto::problem::ErrorCode;
 use crate::{auth::ClientAuth, AppState};
+use askbar_proto::problem::ErrorCode;
 use askbar_proto::{ChatEvent, ChatRequest};
 use axum::{
-    response::IntoResponse,
     extract::State,
     response::sse::{Event, KeepAlive, Sse},
+    response::IntoResponse,
     Extension,
 };
 use std::sync::Arc;
@@ -83,11 +83,7 @@ pub async fn chat(
         },
     )
     .map_err(IntoResponse::into_response)?;
-    let meta = ChatEvent::Meta {
-        conversation_id: sub.conversation_id,
-        generation_id: Some(sub.generation_id),
-        queued: sub.queued,
-    };
+    let meta = ChatEvent::Meta { conversation_id: sub.conversation_id, generation_id: Some(sub.generation_id), queued: sub.queued };
     let meta = futures_util::stream::once(async move { Ok(sse_event(&meta)) });
     let events = sub.live.subscribe(0).map(|e| {
         Ok(match e {

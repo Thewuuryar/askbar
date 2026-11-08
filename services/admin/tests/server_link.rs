@@ -8,8 +8,8 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 use std::time::Duration;
+use tokio::sync::Mutex;
 
 fn temp(tag: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("askbar-link-{tag}-{}", ulid::Ulid::new()));
@@ -59,7 +59,10 @@ fn the_token_is_private_the_server_gets_only_its_hash_and_nothing_is_overwritten
     assert_eq!(hash.trim(), server_link::sha256_hex(&token));
     assert_eq!(hash.trim().len(), 64);
     assert!(!hash.contains(&token) && !hash.contains(token.trim_start_matches("mgt_")), "the hash file holds no raw token");
-    assert!(std::fs::read_dir(&d.server_api).unwrap().all(|e| e.unwrap().file_name() == server_link::HASH_FILE), "only the hash is in the server's directory");
+    assert!(
+        std::fs::read_dir(&d.server_api).unwrap().all(|e| e.unwrap().file_name() == server_link::HASH_FILE),
+        "only the hash is in the server's directory"
+    );
     assert_ne!(mode(&hash_file) & 0o044, 0, "the server's user can read the hash");
 
     // A restart keeps the token; a damaged hash file is put right; a second token is never made.
@@ -111,8 +114,15 @@ fn admin_db_with_data() -> AdminDb {
 #[test]
 fn the_snapshot_is_built_from_admin_db() {
     let db = admin_db_with_data();
-    db.conn().execute("INSERT INTO pair_codes (hash, user_id, client_name, expires_at, created_at) VALUES ('h1','u1','laptop', 4000000000, 0)", []).unwrap();
-    db.conn().execute("INSERT INTO pair_codes (hash, user_id, client_name, expires_at, created_at) VALUES ('old','u1','x', 1, 0)", []).unwrap();
+    db.conn()
+        .execute(
+            "INSERT INTO pair_codes (hash, user_id, client_name, expires_at, created_at) VALUES ('h1','u1','laptop', 4000000000, 0)",
+            [],
+        )
+        .unwrap();
+    db.conn()
+        .execute("INSERT INTO pair_codes (hash, user_id, client_name, expires_at, created_at) VALUES ('old','u1','x', 1, 0)", [])
+        .unwrap();
     let s = server_link::build_snapshot(db.conn()).unwrap();
     assert_eq!(s.providers.len(), 1);
     assert_eq!((s.providers[0].id.as_str(), s.providers[0].model.as_str(), s.providers[0].max_tokens), ("p1", "m1", Some(100)));
@@ -219,9 +229,8 @@ async fn pushing_retries_until_the_server_is_up_and_follows_later_changes() {
     let state = server_state();
     let l = tokio::net::TcpListener::bind(addr).await.unwrap();
     serve_on(l, state.clone(), d.server_api.join(server_link::HASH_FILE)).await;
-    let applied = |want: usize| {
-        askbar_server::snapshot::current(&state.db.lock().unwrap()).ok().flatten().is_some_and(|s| s.providers.len() == want)
-    };
+    let applied =
+        |want: usize| askbar_server::snapshot::current(&state.db.lock().unwrap()).ok().flatten().is_some_and(|s| s.providers.len() == want);
     for _ in 0..80 {
         if applied(1) {
             break;
@@ -232,7 +241,11 @@ async fn pushing_retries_until_the_server_is_up_and_follows_later_changes() {
     assert!(link.server_online() && !link.pending());
 
     // A change in admin.db reaches it after mark_dirty.
-    db.lock().await.conn().execute("INSERT INTO providers (id, name, type, model, created_at) VALUES ('p2','second','anthropic','m2',0)", []).unwrap();
+    db.lock()
+        .await
+        .conn()
+        .execute("INSERT INTO providers (id, name, type, model, created_at) VALUES ('p2','second','anthropic','m2',0)", [])
+        .unwrap();
     link.mark_dirty();
     for _ in 0..50 {
         if applied(2) {

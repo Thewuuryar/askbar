@@ -71,7 +71,13 @@ async fn admin_for(server_url: &str) -> A {
     let state = AdminState::with_server(db, ServerLink::new(server_url, "mgt_stub-token".into()));
     let adm = common::serve(askbar_admin::router(state)).await;
     let http = reqwest::Client::new();
-    let r = http.post(format!("{adm}/api/admin/v1/session")).header("x-askbar-admin", "1").json(&json!({ "password": common::PW })).send().await.unwrap();
+    let r = http
+        .post(format!("{adm}/api/admin/v1/session"))
+        .header("x-askbar-admin", "1")
+        .json(&json!({ "password": common::PW }))
+        .send()
+        .await
+        .unwrap();
     let cookie = r.headers()["set-cookie"].to_str().unwrap().split(';').next().unwrap().to_string();
     A { adm, cookie, http }
 }
@@ -166,7 +172,9 @@ async fn an_unreachable_server_is_a_502_with_a_message() {
         format!("http://{}", l.local_addr().unwrap())
     };
     let a = admin_for(&dead).await;
-    for p in ["/api/admin/v1/audit/traces", "/api/admin/v1/audit/traces/t1", "/api/admin/v1/audit/stats", "/api/admin/v1/audit/provider-health"] {
+    for p in
+        ["/api/admin/v1/audit/traces", "/api/admin/v1/audit/traces/t1", "/api/admin/v1/audit/stats", "/api/admin/v1/audit/provider-health"]
+    {
         let (st, body) = a.get(p, true, true).await;
         assert_eq!(st, 502, "{p}");
         assert!(body["detail"].as_str().unwrap_or("").contains("offline"), "{body}");

@@ -20,7 +20,8 @@ impl Keychain {
 
     fn entry(&self) -> Result<keyring::Entry, keyring::Error> {
         // The entry name predates the word "client"; renaming it would drop every stored token.
-        keyring::Entry::new("askbar", &format!("device-token:{}", self.profile)) // names-ok
+        keyring::Entry::new("askbar", &format!("device-token:{}", self.profile))
+        // names-ok
     }
 }
 
@@ -30,9 +31,7 @@ impl TokenStore for Keychain {
     }
 
     fn set(&self, token: &str) -> Result<(), String> {
-        self.entry()
-            .and_then(|e| e.set_password(token))
-            .map_err(|e| format!("Could not save the client token in the system keychain: {e}"))
+        self.entry().and_then(|e| e.set_password(token)).map_err(|e| format!("Could not save the client token in the system keychain: {e}"))
     }
 }
 
@@ -120,10 +119,12 @@ mod tests {
         let inner = Arc::new(Counting::default());
         *inner.token.lock().unwrap() = Some("tok".into());
         let cached = Arc::new(CachedTokens::new(inner.clone()));
-        let threads: Vec<_> = (0..12).map(|_| {
-            let c = cached.clone();
-            std::thread::spawn(move || c.get())
-        }).collect();
+        let threads: Vec<_> = (0..12)
+            .map(|_| {
+                let c = cached.clone();
+                std::thread::spawn(move || c.get())
+            })
+            .collect();
         for t in threads {
             assert_eq!(t.join().unwrap().as_deref(), Some("tok"));
         }

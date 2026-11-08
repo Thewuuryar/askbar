@@ -284,8 +284,13 @@ pub enum ChatEvent {
     /// Which provider is serving this reply, sent once before the first delta. It is always the one
     /// asked for (there is no provider fallback). Not a delta: it has no SSE `id`. Clients that do
     /// not know it ignore it.
-    Provider { id: String, name: String },
-    Delta { text: String },
+    Provider {
+        id: String,
+        name: String,
+    },
+    Delta {
+        text: String,
+    },
     Done,
     /// `code` is the stable reason (`timed_out`, `interrupted`, `kill_switch`, `provider_error`, `internal`); clients
     /// branch on it and show `message`. Absent from servers that predate it.
@@ -416,7 +421,11 @@ mod tests {
         assert_eq!(Pairing::decode(&s).unwrap().cert_sha256, Some(fp.to_lowercase()), "kept, in lower case");
         // Without a pin the field is left out, so a string looks as it did before pins existed.
         let plain = encode_pairing("https://askbar.example.com", "c");
-        assert!(!String::from_utf8(base64::Engine::decode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, &plain[PAIR_PREFIX.len()..]).unwrap()).unwrap().contains("cert_sha256"));
+        assert!(!String::from_utf8(
+            base64::Engine::decode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, &plain[PAIR_PREFIX.len()..]).unwrap()
+        )
+        .unwrap()
+        .contains("cert_sha256"));
         assert_eq!(Pairing::decode(&plain).unwrap().cert_sha256, None);
         let bad = Pairing { url: "https://x".into(), code: "c".into(), cert_sha256: Some("not-a-hash".into()) }.encode();
         assert_eq!(Pairing::decode(&bad), None, "a malformed pin is refused, not ignored");
@@ -483,14 +492,18 @@ mod tests {
         // `allow_as_fallback` from an earlier version is read and dropped.
         assert_eq!((p.billing, p.price_in, p.price_out, p.price_cached_in), (Billing::Subscription, Some(2.5), Some(10.0), Some(0.25)));
         assert!(!serde_json::to_string(&p).unwrap().contains("fallback"));
-        assert!(serde_json::from_str::<SnapshotProvider>(r#"{"id":"p","name":"n","type":"openai","model":"m","billing":"free"}"#).is_err(), "only metered or subscription");
+        assert!(
+            serde_json::from_str::<SnapshotProvider>(r#"{"id":"p","name":"n","type":"openai","model":"m","billing":"free"}"#).is_err(),
+            "only metered or subscription"
+        );
         // And it serializes back to the same words.
         assert!(serde_json::to_string(&p).unwrap().contains(r#""billing":"subscription""#));
     }
 
     #[test]
     fn a_snapshot_stored_with_a_fallback_order_still_parses_and_drops_it() {
-        let s: Snapshot = serde_json::from_str(r#"{"version":3,"audit_retention_days":30,"default_provider_id":"p1","fallback_order":["p2"]}"#).unwrap();
+        let s: Snapshot =
+            serde_json::from_str(r#"{"version":3,"audit_retention_days":30,"default_provider_id":"p1","fallback_order":["p2"]}"#).unwrap();
         assert_eq!((s.version, s.default_provider_id.as_deref()), (3, Some("p1")));
         assert!(!serde_json::to_string(&s).unwrap().contains("fallback"));
     }

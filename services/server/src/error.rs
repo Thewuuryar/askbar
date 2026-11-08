@@ -52,7 +52,9 @@ mod tests {
         assert_eq!((s, p.error.as_str(), p.status), (404, "not_found", 404));
         let (s, p, _) = problem(http.get(format!("{url}/echo")).send().await.unwrap()).await;
         assert_eq!((s, p.error.as_str()), (405, "method_not_allowed"));
-        let (s, p, _) = problem(http.post(format!("{url}/echo")).header("content-type", "application/json").body("{not json").send().await.unwrap()).await;
+        let (s, p, _) =
+            problem(http.post(format!("{url}/echo")).header("content-type", "application/json").body("{not json").send().await.unwrap())
+                .await;
         assert_eq!((s, p.error.as_str()), (400, "bad_request"));
         assert!(!p.detail.is_empty());
         let (s, p, _) = problem(http.post(format!("{url}/echo")).body("{}").send().await.unwrap()).await;

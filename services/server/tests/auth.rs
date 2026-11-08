@@ -158,7 +158,10 @@ async fn before_the_first_push_every_client_route_but_health_is_503_not_configur
     let s = start_with(false).await;
     let version = |r: reqwest::RequestBuilder| r.header("x-askbar-client-version", askbar_server::MIN_CLIENT);
     assert_eq!(s.http.get(s.url("/api/client/v1/health")).send().await.unwrap().status(), 200);
-    for r in [version(s.http.get(s.url("/api/client/v1/me"))).bearer_auth("abt_anything"), version(s.http.post(s.url("/api/client/v1/pairings"))).json(&serde_json::json!({ "code": "x" }))] {
+    for r in [
+        version(s.http.get(s.url("/api/client/v1/me"))).bearer_auth("abt_anything"),
+        version(s.http.post(s.url("/api/client/v1/pairings"))).json(&serde_json::json!({ "code": "x" })),
+    ] {
         let r = r.send().await.unwrap();
         assert_eq!(r.status(), 503);
         assert_eq!(r.headers()["retry-after"], "5");

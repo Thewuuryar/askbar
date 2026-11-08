@@ -46,7 +46,14 @@ fn assert_unique_under(table: &[RouteEntry], prefix: &str, also: &[&str]) {
 fn the_tables_list_each_api_under_its_own_prefix_and_nothing_else() {
     let client = client_routes();
     assert_unique_under(&client, "/api/client/v1", &["/api/v1/"]);
-    for (m, p) in [("POST", "/api/client/v1/chat"), ("POST", "/api/client/v1/pairings"), ("GET", "/api/client/v1/me"), ("GET", "/api/client/v1/health"), ("ANY", "/api/v1/{*rest}"), ("POST", "/api/client/v1/generations/{id}/cancel")] {
+    for (m, p) in [
+        ("POST", "/api/client/v1/chat"),
+        ("POST", "/api/client/v1/pairings"),
+        ("GET", "/api/client/v1/me"),
+        ("GET", "/api/client/v1/health"),
+        ("ANY", "/api/v1/{*rest}"),
+        ("POST", "/api/client/v1/generations/{id}/cancel"),
+    ] {
         assert!(client.iter().any(|r| r.method == m && r.path == p), "missing {m} {p}");
     }
     let server = server_routes();
@@ -54,7 +61,10 @@ fn the_tables_list_each_api_under_its_own_prefix_and_nothing_else() {
     for (m, p) in [("PUT", "/api/server/v1/config"), ("GET", "/api/server/v1/clients"), ("GET", "/api/server/v1/audit/stats")] {
         assert!(server.iter().any(|r| r.method == m && r.path == p), "missing {m} {p}");
     }
-    assert!(client.iter().all(|r| !r.path.starts_with("/api/server")) && server.iter().all(|r| !r.path.starts_with("/api/client")), "the two APIs share no prefix");
+    assert!(
+        client.iter().all(|r| !r.path.starts_with("/api/server")) && server.iter().all(|r| !r.path.starts_with("/api/client")),
+        "the two APIs share no prefix"
+    );
 }
 
 #[tokio::test]
@@ -64,7 +74,8 @@ async fn every_client_route_answers_and_a_method_that_is_not_registered_is_a_405
     let table = client_routes();
     for r in table.iter().filter(|r| r.method != "ANY") {
         let method = reqwest::Method::from_bytes(r.method.as_bytes()).unwrap();
-        let res = http.request(method, format!("{url}{}", concrete(&r.path))).header("x-askbar-client-version", "0.5.0").send().await.unwrap();
+        let res =
+            http.request(method, format!("{url}{}", concrete(&r.path))).header("x-askbar-client-version", "0.5.0").send().await.unwrap();
         let s = res.status().as_u16();
         assert!(s != 404 && s != 405, "{} {} answered {s}", r.method, r.path);
     }
