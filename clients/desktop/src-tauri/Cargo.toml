@@ -22,7 +22,8 @@ serde_json = "1"
 tokio = { version = "1", features = ["sync", "time", "macros"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json"] }
 futures-util = "0.3"
-serde_yaml_ng = "0.10"
+# client.yaml: YAML in safe Rust (it replaced serde_yaml_ng, built on the unmaintained unsafe-libyaml).
+serde-saphyr = { version = "2.1", default-features = false, features = ["serialize", "deserialize"] }
 dirs = "6"
 url = "2"
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
