@@ -6,10 +6,12 @@
 version = 2
 # A RustSec advisory fails the check. Ignore one only with its ID, a reason and a date to look again.
 ignore = [
-    # unsafe-libyaml is unmaintained, with no safe upgrade. It comes in only through serde_yaml_ng, a
-    # dev-dependency that parses our own docs/openapi/*.yaml in the server's and admin's tests; it is in
-    # no binary. Revisit by 2027-02-01, or sooner by moving those tests to a YAML parser in safe Rust.
-    { id = "RUSTSEC-2024-0449", reason = "test-only YAML parser for our own OpenAPI files; in no binary" },
+    # unsafe-libyaml is unmaintained, with no safe upgrade. It comes in through serde_yaml_ng: in the
+    # server's and admin's tests it parses our own docs/openapi/*.yaml, and in the desktop client it reads
+    # and writes the person's own client.yaml (client_config.rs), a local file, never network input. It
+    # is not in the server or admin images. Revisit by 2027-02-01, or sooner by moving to a YAML parser
+    # in safe Rust.
+    { id = "RUSTSEC-2024-0449", reason = "YAML for our own OpenAPI files in tests, and the desktop client's local client.yaml" },
     # The desktop client, through Tauri; unmaintained, not vulnerable, and no safe upgrade. Revisit by
     # 2027-02-01, or when Tauri moves on: proc-macro-error comes from glib-macros 0.18 in Tauri's GTK
     # stack on Linux (ADR 0044 keeps glib at 0.18 with Tauri); the zvariant and zbus_names crates were
