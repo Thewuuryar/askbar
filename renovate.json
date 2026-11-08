@@ -1,0 +1,15 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "Version updates (ADR 0017). Security alerts come from Dependabot. Images and Actions stay pinned to digests and commit hashes; Renovate updates the pin and the version comment together.",
+  "extends": ["config:recommended", "helpers:pinGitHubActionDigests", "docker:pinDigests"],
+  "dependencyDashboard": true,
+  "prHourlyLimit": 2,
+  "prConcurrentLimit": 5,
+  "packageRules": [
+    {
+      "description": "Group Tauri's crates and its npm CLI, which must move together",
+      "matchPackageNames": ["tauri", "tauri-build", "tauri-plugin-*", "@tauri-apps/*"],
+      "groupName": "tauri"
+    }
+  ]
+}
