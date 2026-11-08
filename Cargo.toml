@@ -13,3 +13,15 @@ strip = true
 opt-level = 3
 [profile.dev.package.blake2]
 opt-level = 3
+
+# Lints for every member (each has `[lints] workspace = true`). CI runs clippy with `-D warnings`.
+[workspace.lints.rust]
+# Denied everywhere. Code that cannot avoid it allows it on the one item, with a `SAFETY:` comment, and
+# the component's ADR says so: today only cpa-supervisor's two libc calls (ADR 0037).
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+# ApiError (askbar-proto) carries a whole problem-details body, so every handler's Err is large. It is
+# built once per failed request, where its size costs nothing that matters; boxing it would touch every
+# handler's signature.
+result_large_err = "allow"
