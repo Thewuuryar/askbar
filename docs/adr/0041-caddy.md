@@ -38,4 +38,4 @@ Not recorded: Caddy predates this record.
 
 ## Amendments
 
-None yet.
+- 2026-11-08: both Caddy images are pinned by digest and the Cloudflare plugin to v0.2.4, so the 0017 mismatch is gone (Thewuuryar/askbar#26).

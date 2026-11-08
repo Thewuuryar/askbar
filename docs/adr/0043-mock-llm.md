@@ -32,4 +32,4 @@ Tests and the Mac check run without a provider account or network access. A prov
 
 ## Amendments
 
-None yet.
+- 2026-11-08: the dev image `python:3.12-slim` is pinned by digest, so the 0017 mismatch is gone (Thewuuryar/askbar#26).
