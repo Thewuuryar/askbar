@@ -11,7 +11,7 @@ Caddy, a third-party web server, is the stack's only entry point. It existed bef
 
 ## Decision
 
-- **What it is:** the Dockerfile's `caddy` target, image `askbar-caddy`: Caddy 2 rebuilt with `xcaddy` and the Cloudflare DNS plugin, plus `deploy/caddy/bootstrap.Caddyfile`. The bootstrap file only moves Caddy's admin API onto a unix socket (`/run/caddy/admin.sock`, mode 0660, group 10001); it serves nothing. The admin pushes the real configuration through that socket, and `--resume` brings the last one back after a restart.
+- **What it is:** the Dockerfile's `caddy` target, image `askbar-caddy`: Caddy 2 rebuilt with `xcaddy` and the Cloudflare DNS plugin (both Caddy images pinned by digest, the plugin to a release, [0017](0017-dependencies-and-patches.md)), plus `deploy/caddy/bootstrap.Caddyfile`. The bootstrap file only moves Caddy's admin API onto a unix socket (`/run/caddy/admin.sock`, mode 0660, group 10001); it serves nothing. The admin pushes the real configuration through that socket, and `--resume` brings the last one back after a restart.
 - **What it serves**, on one host name ([0022](0022-api-path-conventions.md)):
   - `/admin` and `/api/admin` to the admin's unix socket, open to private addresses by default (`remote_ip` allowlist);
   - `/api/client` (and the old `/api/v1`, which the server answers with 426) to `server:8080`, unbuffered for the chat stream;
@@ -34,9 +34,8 @@ Not recorded: Caddy predates this record.
 **Where the code and an accepted ADR disagree:**
 
 - [0010](0010-auditor.md): Caddy does not append its access logs to an auditor; there is no auditor yet (plan phase 2).
-- [0017](0017-dependencies-and-patches.md) (pin images to digests and the Caddy plugin to a version): the `caddy:2` and `caddy:2-builder` images are referenced by tag, and the Cloudflare plugin is built at its latest version.
 - [0015](0015-certificates.md) adds HTTP-01 next to the DNS challenge; only the DNS challenge is configured.
 
 ## Amendments
 
-None yet.
+- 2026-11-08: both Caddy images are pinned by digest and the Cloudflare plugin to v0.2.4, so the 0017 mismatch is gone (Thewuuryar/askbar#26).
