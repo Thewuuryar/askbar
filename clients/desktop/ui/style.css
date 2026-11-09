@@ -162,7 +162,7 @@ button { font: inherit; color: inherit; }
   scrollbar-width: thin;
 }
 
-.msg { position: relative; margin: 0 0 16px; }
+.msg { position: relative; margin: 0 0 4px; }
 .msg:last-child { margin-bottom: 8px; }
 
 .msg.user .body {
@@ -175,17 +175,39 @@ button { font: inherit; color: inherit; }
   overflow-wrap: anywhere;
 }
 
-.msg .actions {
-  position: absolute;
-  top: -2px;
-  right: 0;
+/* Under each message: its date and time, the provider chip on a reply, and the copy button. The row's
+   height is kept at all times and only its opacity changes, so nothing moves when it appears; its
+   controls stay reachable by Tab, and showing them shows the row. */
+.msg .meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 20px;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: var(--text-xs);
   opacity: 0;
-  transition: opacity 0.12s;
+  transition: opacity var(--motion);
 }
-.msg:hover .actions, .msg:focus-within .actions { opacity: 1; }
-.msg.user .actions { display: none; }
-.msg.user:hover .actions, .msg.user:focus-within .actions { display: block; }
-.msg.user { padding-right: 0; }
+.msg:hover .meta, .msg .meta:focus-within { opacity: 1; }
+
+/* The provider chip: which provider and model wrote a reply, in its tooltip. */
+.by {
+  position: relative;
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border: 1.5px solid currentColor;
+  border-radius: 3px;
+  cursor: help;
+}
+.by::before {
+  content: '';
+  position: absolute;
+  inset: 2px;
+  border-radius: 1px;
+  background: currentColor;
+}
 
 .copy-msg, .copy-code {
   border: 0;
@@ -197,7 +219,29 @@ button { font: inherit; color: inherit; }
   cursor: pointer;
   box-shadow: 0 0 0 1px var(--line);
 }
-.copy-msg:hover, .copy-code:hover { color: var(--fg); }
+.copy-msg:hover, .copy-code:hover, .by:hover { color: var(--fg); }
+
+/* The copy button is an icon (two sheets); after a copy it says so beside the icon. */
+.copy-msg {
+  position: relative;
+  height: 20px;
+  min-width: 24px;
+  padding: 0 6px 0 22px;
+  font-size: var(--text-xs);
+  box-shadow: none;
+  background: transparent;
+}
+.copy-msg::before, .copy-msg::after {
+  content: '';
+  position: absolute;
+  width: 7px;
+  height: 8px;
+  border: 1.5px solid currentColor;
+  border-radius: 2px;
+  background: var(--card);
+}
+.copy-msg::before { left: 6px; top: 6px; }
+.copy-msg::after { left: 9px; top: 3px; }
 
 .msg.error .body {
   color: var(--danger);

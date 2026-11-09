@@ -76,6 +76,8 @@
       const conv = db.convs.find((c) => (c.pending || []).some((p) => p.generationId === generationId));
       const p = conv.pending.find((x) => x.generationId === generationId);
       const full = p.replyText || 'The reply that was already running.';
+      const by = { id: 'p1', name: 'Mock AI', model: 'mock-1' };
+      onEvent.onmessage({ event: 'provider', ...by });
       let sent = '';
       for (let i = 0; i < full.length; i += 6) {
         if (cancelFlag) break;
@@ -84,7 +86,7 @@
         onEvent.onmessage({ event: 'delta', text: piece });
         await sleep(p.slow ? 40 : 2);
       }
-      if (sent) conv.messages.push({ id: String(db.nextMsg++), role: 'assistant', content: sent, created_at: db.clock });
+      if (sent) conv.messages.push({ id: String(db.nextMsg++), role: 'assistant', content: sent, created_at: db.clock, provider: by });
       conv.pending = conv.pending.filter((x) => x !== p);
       const next = conv.pending.find((x) => x.status === 'queued');
       if (next) {
@@ -133,14 +135,18 @@
       conv.messages.push({ id: String(db.nextMsg++), role: 'user', content: text, created_at: db.clock });
       onEvent.onmessage({ event: 'started', conversationId: conv.id });
 
-      if (/announce another provider/i.test(text)) onEvent.onmessage({ event: 'provider', id: 'p2', name: 'Backup AI' });
+      // Like the server: the provider and model serving the reply, before any text; replies are stored with them.
+      const by = /announce another provider/i.test(text)
+        ? { id: 'p2', name: 'Backup AI', model: 'backup-2' }
+        : { id: 'p1', name: 'Mock AI', model: 'mock-1' };
+      onEvent.onmessage({ event: 'provider', ...by });
       if (/fail/i.test(text)) {
         onEvent.onmessage({ event: 'error', message: 'anthropic returned 401: invalid x-api-key. Check api_key in config.yaml.' });
         return;
       }
       if (/timeout/i.test(text)) {
         // The server stopped the reply: two pieces of text arrived, then the timeout.
-        conv.messages.push({ id: String(db.nextMsg++), role: 'assistant', content: 'Partial answer', created_at: db.clock });
+        conv.messages.push({ id: String(db.nextMsg++), role: 'assistant', content: 'Partial answer', created_at: db.clock, provider: by });
         onEvent.onmessage({ event: 'delta', text: 'Partial ' });
         onEvent.onmessage({ event: 'delta', text: 'answer' });
         onEvent.onmessage({ event: 'error', kind: 'timed_out', message: 'Stopped after 5 minutes' });
@@ -156,7 +162,7 @@
         onEvent.onmessage({ event: 'delta', text: piece });
         await sleep(slow ? 40 : 2);
       }
-      if (sent) conv.messages.push({ id: String(db.nextMsg++), role: 'assistant', content: sent, created_at: db.clock });
+      if (sent) conv.messages.push({ id: String(db.nextMsg++), role: 'assistant', content: sent, created_at: db.clock, provider: by });
       conv.updated_at = ++db.clock;
       onEvent.onmessage({ event: cancelFlag ? 'cancelled' : 'done' });
     },

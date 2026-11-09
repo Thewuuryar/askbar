@@ -87,7 +87,23 @@ const SPACE_MIGRATIONS: &[&str] = &[
          WHERE client_request_id IS NOT NULL;
      CREATE INDEX idx_generations_conversation ON generations(conversation_id, status);
      CREATE INDEX idx_generations_status ON generations(status);",
+    // 2: which provider and model wrote each reply (plan step 1.13). A copy, taken when the reply is
+    // stored, so renaming or deleting the provider later changes nothing. The generation keeps the same
+    // copy while it runs, for the replies a restart or shutdown writes from it.
+    "ALTER TABLE messages ADD COLUMN provider_id TEXT;
+     ALTER TABLE messages ADD COLUMN provider_name TEXT;
+     ALTER TABLE messages ADD COLUMN model TEXT;
+     ALTER TABLE generations ADD COLUMN provider_name TEXT;
+     ALTER TABLE generations ADD COLUMN model TEXT;",
 ];
+
+/// The provider and model that wrote a reply, as they were when it was written.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ReplyBy {
+    pub provider_id: String,
+    pub provider_name: String,
+    pub model: String,
+}
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct ConversationSummary {
@@ -103,6 +119,8 @@ pub struct StoredMessage {
     pub role: String,
     pub content: String,
     pub created_at: i64,
+    /// For a reply: who wrote it. `None` for questions and for replies stored before migration 2.
+    pub by: Option<ReplyBy>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -240,12 +258,38 @@ impl SpaceStore {
 
     /// Adds a message by `user_id` to a conversation in this space; `NotFound` if there is no such conversation.
     pub fn add_message(&self, user_id: &str, conversation_id: &str, role: &str, content: &str) -> Result<String, DbError> {
+        self.insert_message(user_id, conversation_id, role, content, None)
+    }
+
+    /// Adds a reply, with the provider and model that wrote it when they are known.
+    pub fn add_reply(&self, user_id: &str, conversation_id: &str, content: &str, by: Option<&ReplyBy>) -> Result<String, DbError> {
+        self.insert_message(user_id, conversation_id, "assistant", content, by)
+    }
+
+    fn insert_message(
+        &self,
+        user_id: &str,
+        conversation_id: &str,
+        role: &str,
+        content: &str,
+        by: Option<&ReplyBy>,
+    ) -> Result<String, DbError> {
         let (id, t) = (new_id(), now());
         let tx = self.conn.unchecked_transaction()?;
         let added = tx.execute(
-            "INSERT INTO messages (id, conversation_id, user_id, role, content, created_at)
-             SELECT ?1, id, ?3, ?4, ?5, ?6 FROM conversations WHERE id = ?2",
-            params![id, conversation_id, user_id, role, content, t],
+            "INSERT INTO messages (id, conversation_id, user_id, role, content, created_at, provider_id, provider_name, model)
+             SELECT ?1, id, ?3, ?4, ?5, ?6, ?7, ?8, ?9 FROM conversations WHERE id = ?2",
+            params![
+                id,
+                conversation_id,
+                user_id,
+                role,
+                content,
+                t,
+                by.map(|b| &b.provider_id),
+                by.map(|b| &b.provider_name),
+                by.map(|b| &b.model)
+            ],
         )?;
         if added == 0 {
             return Err(DbError::NotFound);
@@ -284,10 +328,20 @@ impl SpaceStore {
 
     /// Oldest first. Empty if there is no such conversation.
     pub fn get_messages(&self, conversation_id: &str) -> Result<Vec<StoredMessage>, DbError> {
-        let mut stmt =
-            self.conn.prepare("SELECT id, role, content, created_at FROM messages WHERE conversation_id = ?1 ORDER BY id ASC")?;
+        let mut stmt = self.conn.prepare(
+            "SELECT id, role, content, created_at, provider_id, provider_name, model
+             FROM messages WHERE conversation_id = ?1 ORDER BY id ASC",
+        )?;
         let rows = stmt.query_map(params![conversation_id], |r| {
-            Ok(StoredMessage { id: r.get(0)?, role: r.get(1)?, content: r.get(2)?, created_at: r.get(3)? })
+            let provider_id: Option<String> = r.get(4)?;
+            let by = provider_id.map(|provider_id| -> rusqlite::Result<ReplyBy> {
+                Ok(ReplyBy {
+                    provider_id,
+                    provider_name: r.get::<_, Option<String>>(5)?.unwrap_or_default(),
+                    model: r.get::<_, Option<String>>(6)?.unwrap_or_default(),
+                })
+            });
+            Ok(StoredMessage { id: r.get(0)?, role: r.get(1)?, content: r.get(2)?, created_at: r.get(3)?, by: by.transpose()? })
         })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
@@ -370,6 +424,35 @@ impl SpaceStore {
     pub fn flush_generation_text(&self, id: &str, text: &str) -> Result<(), DbError> {
         self.conn.execute("UPDATE generations SET text = ?2 WHERE id = ?1 AND status = 'running'", params![id, text])?;
         Ok(())
+    }
+
+    /// Records which provider and model are serving a generation, as they are now.
+    pub fn set_generation_provider(&self, id: &str, by: &ReplyBy) -> Result<(), DbError> {
+        self.conn.execute(
+            "UPDATE generations SET provider_id = ?2, provider_name = ?3, model = ?4 WHERE id = ?1",
+            params![id, by.provider_id, by.provider_name, by.model],
+        )?;
+        Ok(())
+    }
+
+    /// The provider and model recorded for a generation once an attempt started serving it. (The
+    /// requested provider's id is on the row from the start; its name and model only once it serves.)
+    pub fn generation_provider(&self, id: &str) -> Result<Option<ReplyBy>, DbError> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT provider_id, provider_name, model FROM generations
+                 WHERE id = ?1 AND provider_id IS NOT NULL AND provider_name IS NOT NULL",
+                params![id],
+                |r| {
+                    Ok(ReplyBy {
+                        provider_id: r.get(0)?,
+                        provider_name: r.get(1)?,
+                        model: r.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                    })
+                },
+            )
+            .optional()?)
     }
 
     /// Ends a generation with its final status. Returns false if it had already ended.
@@ -751,6 +834,63 @@ mod tests {
             prompt: "hello",
             deadline_at: None,
         }
+    }
+
+    fn by(id: &str, name: &str, model: &str) -> ReplyBy {
+        ReplyBy { provider_id: id.into(), provider_name: name.into(), model: model.into() }
+    }
+
+    #[test]
+    fn a_reply_keeps_the_provider_and_model_that_wrote_it() {
+        let db = store();
+        let c = db.create_conversation(U, "c").unwrap();
+        db.add_message(U, &c, "user", "hi").unwrap();
+        db.add_reply(U, &c, "hello", Some(&by("p1", "OpenAI", "gpt-x"))).unwrap();
+        db.add_reply(U, &c, "unlabelled", None).unwrap();
+        let msgs = db.get_messages(&c).unwrap();
+        assert_eq!(msgs[0].by, None, "a question has no provider");
+        assert_eq!(msgs[1].by, Some(by("p1", "OpenAI", "gpt-x")));
+        assert_eq!(msgs[2].by, None);
+
+        // A copy: what the provider is called later does not reach a stored reply.
+        db.conn.execute("UPDATE generations SET provider_name = 'renamed'", []).unwrap();
+        assert_eq!(db.get_messages(&c).unwrap()[1].by.as_ref().unwrap().provider_name, "OpenAI");
+
+        // The running generation keeps the same copy, for a reply written after a restart.
+        let g = db.create_generation(&new_gen(U, &c, "running")).unwrap();
+        assert_eq!(db.generation_provider(&g).unwrap(), None, "none until an attempt starts");
+        db.set_generation_provider(&g, &by("p2", "Claude", "sonnet")).unwrap();
+        assert_eq!(db.generation_provider(&g).unwrap(), Some(by("p2", "Claude", "sonnet")));
+        assert_eq!(db.generation_provider("no-such-generation").unwrap(), None);
+    }
+
+    #[test]
+    fn a_space_file_from_before_reply_labels_is_migrated_and_keeps_its_rows() {
+        // A file at version 1, as servers before migration 2 left it, with a question and a reply.
+        let dir = std::env::temp_dir().join(format!("askbar-space-v1-{}", new_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("{}.db", new_id()));
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(SPACE_MIGRATIONS[0]).unwrap();
+            conn.execute_batch(&format!("PRAGMA application_id = {SPACE_APPLICATION_ID}; PRAGMA user_version = 1;")).unwrap();
+            conn.execute_batch(
+                "INSERT INTO conversations (id, created_by, title, created_at, updated_at) VALUES ('c1','u1','old',1,1);
+                 INSERT INTO messages (id, conversation_id, user_id, role, content, created_at) VALUES
+                     ('m1','c1','u1','user','q',1), ('m2','c1','u1','assistant','a',2);",
+            )
+            .unwrap();
+        }
+        let db = SpaceStore::open(&path).unwrap();
+        let v: i64 = db.conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(v as usize, SPACE_MIGRATIONS.len());
+        let msgs = db.get_messages("c1").unwrap();
+        assert_eq!(msgs.iter().map(|m| (m.content.as_str(), m.by.is_none())).collect::<Vec<_>>(), [("q", true), ("a", true)]);
+        db.add_reply(U, "c1", "new", Some(&by("p1", "OpenAI", "gpt-x"))).unwrap();
+        let new = db.get_messages("c1").unwrap().into_iter().find(|m| m.content == "new").unwrap();
+        assert_eq!(new.by, Some(by("p1", "OpenAI", "gpt-x")));
+        drop(db);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

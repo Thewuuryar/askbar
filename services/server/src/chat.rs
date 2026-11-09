@@ -85,7 +85,7 @@ pub async fn chat(
     let meta = futures_util::stream::once(async move { Ok(sse_event(&meta)) });
     let events = sub.live.subscribe(0).map(|e| {
         Ok(match e {
-            GenEvent::Provider { id, name } => sse_event(&ChatEvent::Provider { id, name }),
+            GenEvent::Provider { id, name, model } => sse_event(&ChatEvent::Provider { id, name, model: Some(model) }),
             GenEvent::Delta { seq, text } => sse_event_with_id(&ChatEvent::Delta { text }, Some(seq)),
             GenEvent::Done => sse_event(&ChatEvent::Done),
             GenEvent::Error { message, code } => sse_event(&ChatEvent::Error { message, code: Some(code.into()) }),

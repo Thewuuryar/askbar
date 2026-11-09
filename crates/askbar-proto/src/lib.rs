@@ -59,6 +59,19 @@ pub struct Message {
     pub role: String,
     pub content: String,
     pub created_at: i64,
+    /// For a reply: the provider and model that wrote it, as they were then. Left out for questions
+    /// and for replies stored before servers recorded it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<ReplyProvider>,
+}
+
+/// Which provider wrote a reply, and with which model. A copy taken when the reply was stored, so a
+/// provider renamed or deleted later does not change it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReplyProvider {
+    pub id: String,
+    pub name: String,
+    pub model: String,
 }
 
 /// Provider metadata in a snapshot. Never carries a key: those go through their own endpoint.
@@ -298,6 +311,9 @@ pub enum ChatEvent {
     Provider {
         id: String,
         name: String,
+        /// The model the provider is set to use. Left out by servers from before it was sent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
     },
     Delta {
         text: String,
@@ -453,7 +469,8 @@ mod tests {
         for e in [
             ChatEvent::Meta { conversation_id: "x".into(), generation_id: None, queued: false },
             ChatEvent::Meta { conversation_id: "x".into(), generation_id: Some("g".into()), queued: true },
-            ChatEvent::Provider { id: "p1".into(), name: "OpenAI".into() },
+            ChatEvent::Provider { id: "p1".into(), name: "OpenAI".into(), model: None },
+            ChatEvent::Provider { id: "p1".into(), name: "OpenAI".into(), model: Some("gpt-x".into()) },
             ChatEvent::Delta { text: "hi".into() },
             ChatEvent::Done,
             ChatEvent::Error { message: "bad".into(), code: None },
@@ -463,6 +480,28 @@ mod tests {
             assert_eq!(serde_json::from_str::<ChatEvent>(&s).unwrap(), e);
         }
         assert_eq!(serde_json::to_string(&ChatEvent::Done).unwrap(), r#"{"event":"done"}"#);
+    }
+
+    #[test]
+    fn a_reply_names_its_provider_and_older_messages_still_read() {
+        let reply = Message {
+            id: "m".into(),
+            role: "assistant".into(),
+            content: "hi".into(),
+            created_at: 1,
+            provider: Some(ReplyProvider { id: "p1".into(), name: "OpenAI".into(), model: "gpt-x".into() }),
+        };
+        let s = serde_json::to_string(&reply).unwrap();
+        assert!(s.contains(r#""provider":{"id":"p1","name":"OpenAI","model":"gpt-x"}"#), "{s}");
+        assert_eq!(serde_json::from_str::<Message>(&s).unwrap(), reply);
+        // A question, or a reply from before replies were labelled: no `provider` key, and one without it reads.
+        let question = Message { provider: None, role: "user".into(), ..reply };
+        assert!(!serde_json::to_string(&question).unwrap().contains("provider"));
+        let old: Message = serde_json::from_str(r#"{"id":"m","role":"assistant","content":"hi","created_at":1}"#).unwrap();
+        assert_eq!(old.provider, None);
+        // A provider event from an older server, without `model`, still reads.
+        let ev: ChatEvent = serde_json::from_str(r#"{"event":"provider","id":"p1","name":"OpenAI"}"#).unwrap();
+        assert_eq!(ev, ChatEvent::Provider { id: "p1".into(), name: "OpenAI".into(), model: None });
     }
 
     #[test]

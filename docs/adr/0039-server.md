@@ -17,7 +17,7 @@ The server existed before the rule that each component has its own ADR. This rec
   - the server API, `/api/server/v1`, on the server's own address on the `server-api` network, found by the alias `server-api-host` that exists on that network only (port 8082), for the admin only. It refuses a wildcard address, or a name that resolves to more than one.
 - **What it holds:**
   - `control.db`: users, clients (token hashes only), pairing-code hashes, spaces and memberships, the snapshot the admin pushed (with the budget copy), token usage and provider health;
-  - one file per space under `spaces/` ([0009](0009-spaces-and-storage.md));
+  - one file per space under `spaces/` ([0009](0009-spaces-and-storage.md)), holding its conversations; each reply keeps a copy of the provider name and model that wrote it, so renaming or deleting a provider does not change it;
   - provider API keys, encrypted with its master key;
   - `audit.db`, the audit store, holding sealed content and only the public half of the audit key ([0030](0030-sealed-audit-content.md)).
 - **Volumes:** `DATA_DIR` (a host directory, `./data` by default) at `/data`; `askbar-secrets` at `/secrets` (`master.key`); `audit-data` at `/audit`; `server-token` read-only at `/server-token` (the admin's token hash).
@@ -46,3 +46,4 @@ Not recorded: the server predates this record.
 ## Amendments
 
 - 2026-11-08: the server API binds the address of the alias `server-api-host` instead of the fixed `172.30.0.2`; no subnet or address is pinned (PR #32, [0051](0051-auditor.md)).
+- 2026-11-08: each reply in a space file keeps a copy of the provider and model that wrote it (space migration 2; plan step 1.13).

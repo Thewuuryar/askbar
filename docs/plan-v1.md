@@ -80,7 +80,7 @@ Order change (owner approved 2026-11-07): the remaining steps keep their numbers
 
 | # | Step | Size | Why here |
 | --- | --- | --- | --- |
-| — | 1.13 backlog | see below | After 1.11, which reshapes the conversation routes the S items touch. Summarizing waits for 3.1 (its model call goes through `model-gateway`). |
+| — | 1.13 backlog | see below | After 1.11, which reshapes the conversation routes the S items touch. The owner chose to build every item but summarizing before phase 2 (2026-11-08), one pull request at a time, because they touch `generation.rs` and the popup, which 2.4 also changes. Summarizing waits for 3.1 (its model call goes through `model-gateway`). |
 | — | 1.16 a page and a URL for every admin section | M–L | After 1.11, or when scheduled. Deferrable, cut with the 1.13 backlog. |
 | — | 1.12 shared spaces | M | Deferred to after phase 7 ([ADR 0002](adr/0002-v1-scope-limits-and-ship-criteria.md) defer order). |
 
@@ -109,6 +109,8 @@ That is about 52 h over the ~100 h budget before any backlog item (the component
 - Admin create/rename/delete (with confirmation), add/remove members with the "new members see history" notice; client space picker.
 
 **1.13 Backlog: failed turns and long conversations** (owner request, 2026-11-07; estimate before starting). Since `fix(server): leave unanswered questions out of later prompts`, a question that got no reply is shown but not sent to the model again.
+
+Order (owner, 2026-11-08), before phase 2: message actions on hover with the model and provider per reply; then failed questions stay marked with Edit and Try again; then copy the whole conversation; then the history length limit; then newest at the top or bottom. Summarizing is deferred to after 3.1. Anything a reopened conversation must show is stored on the message: finished generations are pruned.
 - **Edit and Try again on a failed line** (S): the failed question in the window gets **Edit** (puts its text back in the box) and **Try again** (resends it), for every failure kind, not only timeouts.
 - **History length limit** (S): an admin setting for how much history is sent with each question. Today the whole conversation is sent every turn, with no limit.
 - **Summarize when the context would overflow** (L): when a conversation is expected to exceed the model's context length, the server summarizes (compacts) the older part and sends the summary instead; the client shows "Summarizing the conversation…" with a progress bar while it runs. Needs a design note first: which model summarizes, where the summary is stored, and how the extra model call is audited (it goes through `model-gateway` like any other, phase 3).
@@ -116,6 +118,12 @@ That is about 52 h over the ~100 h budget before any backlog item (the component
 - **Newest at the top or bottom** (S): show the conversation newest-first, with the input box following it, or oldest-first as now. The admin sets the default (a new display-defaults field, server-wide and per user, edited in the admin site); a client can override it locally (`client.yaml` `ui`), as with the other display defaults.
 - **Copy the whole conversation** (S): a copy button on each conversation in the history panel, next to its delete button, that copies every question and reply, in order, as Markdown with who said what.
 - **Message actions on hover** (S/M): under each question and each reply, a copy icon (replacing today's Copy text button) and the date and time it was sent, both shown when the pointer is over that message or it has keyboard focus. Each message keeps the padding for them at all times, so nothing moves when they appear. Needs each message's time in the popup (`created_at` is stored; check it reaches the window).
+- **Model and provider per reply** (S/M; owner request, 2026-11-08): the person can change providers between messages, so each reply records the provider and model that wrote it, a copy taken when it is stored, and a small icon next to its date and time has a tooltip naming both.
+- **Built so (2026-11-08), message actions and model and provider per reply:**
+  - **Storage:** space migration 2 adds `provider_id`, `provider_name` and `model` to `messages`, and `provider_name` and `model` to `generations`. The generation keeps the copy while it runs, so a reply written by the start-up sweep or at shutdown is labelled too. Questions, and replies stored before the migration, have none.
+  - **API (additive):** `Message.provider` (`{id, name, model}`) in the conversation detail, and `model` on the `provider` stream event; `MIN_CLIENT` unchanged.
+  - **Popup:** a meta row under every message: the date and time (a `<time>` in the person's locale), a chip on replies whose `title` and `aria-label` read `Model: … · Provider: …`, and the copy button as an icon. The row's height is always kept and only its opacity changes; its controls stay reachable by Tab, which shows it. The gap between messages shrank to keep the thread about as tall as before.
+  - **Not as the plan first said:** there is no provider fallback (ADR 0014), so the chip always names the provider that was asked for.
 
 **1.16 `feat(admin): a page and a URL for every admin section, from one template`** (M–L ≈ 6 h; owner request, 2026-11-07; deferrable with the 1.13 backlog, so outside the required total). Today the admin site is one page whose tabs don't change the address, so a section can't be linked, bookmarked or reached with Back.
 - **Pages:** `/admin/providers/`, `/admin/services/`, `/admin/clients/`, `/admin/users/` (from 1.9), `/admin/audit/`, `/admin/backup/`, `/admin/network/`, `/admin/security/`, `/admin/settings/`. `/admin` and `/admin/` redirect to the first. Unknown `/admin/...` paths stay 404.

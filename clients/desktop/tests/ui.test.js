@@ -362,6 +362,74 @@ async function waitIdle(page) {
     assert.doesNotMatch(await page.locator('.msg.assistant').innerText(), /Answered by/);
   });
 
+  await step('each message shows its time on hover, and a reply names its model and provider', async () => {
+    // Plan step 1.13: the date and time under every message, and a chip beside a reply's time whose
+    // tooltip names the model and provider that wrote it, live and after reopening.
+    const reply = page.locator('.msg.assistant').last();
+    const question = page.locator('.msg.user').last();
+    const chip = reply.locator('.meta .by');
+    assert.equal(await chip.getAttribute('title'), 'Model: backup-2 · Provider: Backup AI');
+    assert.equal(await chip.getAttribute('aria-label'), 'Model: backup-2 · Provider: Backup AI');
+    assert.equal(await question.locator('.by').count(), 0, 'a question names no provider');
+    for (const m of [reply, question]) {
+      const when = m.locator('.meta time.when');
+      assert.match(await when.getAttribute('datetime'), /^\d{4}-\d\d-\d\dT/);
+      assert.ok((await when.innerText()).trim().length > 0);
+    }
+
+    // Hidden until hover, and showing it moves nothing. (The row fades, so wait for it to settle.)
+    const meta = reply.locator('.meta');
+    const settlesAt = async (want) => {
+      for (let i = 0; i < 50; i++) {
+        if ((await meta.evaluate((e) => getComputedStyle(e).opacity)) === want) return;
+        await page.waitForTimeout(20);
+      }
+      assert.fail('the meta row did not reach opacity ' + want);
+    };
+    await page.locator('#input').hover();
+    await settlesAt('0');
+    const before = await reply.boundingBox();
+    const qBefore = await question.boundingBox();
+    await reply.hover();
+    await settlesAt('1');
+    assert.deepEqual(await reply.boundingBox(), before, 'the reply does not move or grow');
+    assert.deepEqual(await question.boundingBox(), qBefore, 'nothing above it moves');
+
+    // Keyboard: the chip can take focus, which shows the row.
+    await page.locator('#input').hover();
+    await settlesAt('0');
+    await chip.focus();
+    await settlesAt('1');
+    await page.locator('#input').focus();
+
+    // After reopening, the stored reply keeps the same label.
+    await page.click('#history-toggle');
+    await page.locator('.conv .open', { hasText: 'announce another provider' }).click();
+    assert.equal(await page.locator('.msg.assistant .by').last().getAttribute('title'), 'Model: backup-2 · Provider: Backup AI');
+    await page.click('#history-toggle');
+  });
+
+  await step('a reply stored without a provider shows its time and no chip', async () => {
+    await page.evaluate(() => {
+      window.__db.convs.push({
+        id: 'old',
+        title: 'From before labels',
+        updated_at: 1,
+        messages: [
+          { id: 'o1', role: 'user', content: 'old question', created_at: 1700000000 },
+          { id: 'o2', role: 'assistant', content: 'old answer', created_at: 1700000060 },
+        ],
+      });
+    });
+    await page.click('#history-toggle');
+    await page.locator('.conv .open', { hasText: 'From before labels' }).click();
+    const old = page.locator('.msg.assistant').last();
+    assert.equal(await old.locator('.by').count(), 0);
+    assert.equal(await old.locator('time.when').getAttribute('datetime'), new Date(1700000060 * 1000).toISOString());
+    await page.click('#history-toggle');
+    await page.keyboard.press('Control+n');
+  });
+
   await step('input stays usable after an error', async () => {
     await ask(page, 'works now');
     await waitIdle(page);

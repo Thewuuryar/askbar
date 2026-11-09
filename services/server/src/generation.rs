@@ -28,10 +28,11 @@ use tokio::sync::{oneshot, Notify};
 /// What a subscriber sees. `seq` counts deltas from 1, and is what SSE `id:` carries.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GenEvent {
-    /// The provider serving the reply; before any delta. Not counted in `seq`.
+    /// The provider serving the reply, and the model it is set to; before any delta. Not counted in `seq`.
     Provider {
         id: String,
         name: String,
+        model: String,
     },
     Delta {
         seq: u64,
@@ -54,8 +55,8 @@ pub enum Terminal {
 #[derive(Default)]
 struct Inner {
     deltas: Vec<String>,
-    /// The provider announced before the first delta (one at most: there is no fallback).
-    providers: Vec<(String, String)>,
+    /// The provider announced before the first delta (one at most: there is no fallback): id, name, model.
+    providers: Vec<(String, String, String)>,
     terminal: Option<Terminal>,
 }
 
@@ -99,15 +100,24 @@ impl Live {
 
     /// Announces the provider now serving the reply. Only before the first delta (after text has
     /// been sent the provider cannot change), and not twice in a row for the same provider.
-    pub fn set_provider(&self, id: &str, name: &str) {
+    pub fn set_provider(&self, id: &str, name: &str, model: &str) {
         {
             let mut g = self.lock();
-            if g.terminal.is_some() || !g.deltas.is_empty() || g.providers.last().is_some_and(|(last, _)| last == id) {
+            if g.terminal.is_some() || !g.deltas.is_empty() || g.providers.last().is_some_and(|(last, _, _)| last == id) {
                 return;
             }
-            g.providers.push((id.to_string(), name.to_string()));
+            g.providers.push((id.to_string(), name.to_string(), model.to_string()));
         }
         self.notify.notify_waiters();
+    }
+
+    /// The provider serving the reply, once one was announced.
+    pub fn provider(&self) -> Option<crate::ReplyBy> {
+        self.lock().providers.last().map(|(id, name, model)| crate::ReplyBy {
+            provider_id: id.clone(),
+            provider_name: name.clone(),
+            model: model.clone(),
+        })
     }
 
     /// Ends the generation; the first call wins.
@@ -215,9 +225,9 @@ impl Live {
                 let step = {
                     let g = live.lock();
                     if s.next == 0 && s.providers_sent < g.providers.len() {
-                        let (id, name) = g.providers[s.providers_sent].clone();
+                        let (id, name, model) = g.providers[s.providers_sent].clone();
                         s.providers_sent += 1;
-                        Some(GenEvent::Provider { id, name })
+                        Some(GenEvent::Provider { id, name, model })
                     } else if (s.next as usize) < g.deltas.len() {
                         Some(GenEvent::Delta { seq: s.next + 1, text: g.deltas[s.next as usize].clone() })
                     } else {
@@ -452,6 +462,8 @@ struct Finisher {
     user_id: String,
     client_id: Option<String>,
     provider_id: String,
+    /// The provider and model serving the reply, once an attempt starts; the reply is labelled with them.
+    by: Option<crate::ReplyBy>,
     conversation_id: String,
     text: String,
     /// What the provider (or an estimate) says the reply used; recorded when the row ends.
@@ -505,7 +517,7 @@ impl Finisher {
             let message_id = if self.text.trim().is_empty() {
                 None
             } else {
-                db.add_message(&self.user_id, &self.conversation_id, "assistant", &self.text).ok()
+                db.add_reply(&self.user_id, &self.conversation_id, &self.text, self.by.as_ref()).ok()
             };
             let _ = db.finalize_generation(&self.id, status, &self.text, error, message_id.as_deref());
         }
@@ -842,6 +854,7 @@ fn spawn_run(
         user_id: user_id.to_string(),
         client_id: client_id.map(str::to_string),
         provider_id: provider_id.to_string(),
+        by: None,
         conversation_id: conversation_id.to_string(),
         text: String::new(),
         usage: None,
@@ -974,15 +987,18 @@ async fn attempts(
                 return Ended::Cancelled(None);
             }
             if retry_index == 0 {
-                // The row says which provider is serving it.
+                // The row says which provider is serving it, and with which model, as they are now: the
+                // reply is labelled with these, even if it is written after a restart.
                 fin.provider_id = cand.id.clone();
-                let _ = fin
-                    .space
-                    .lock()
-                    .conn()
-                    .execute("UPDATE generations SET provider_id = ?2 WHERE id = ?1", rusqlite::params![fin.id, cand.id]);
+                let by = crate::ReplyBy {
+                    provider_id: cand.id.clone(),
+                    provider_name: cand.provider.name.clone(),
+                    model: cand.provider.model.clone(),
+                };
+                let _ = fin.space.lock().set_generation_provider(&fin.id, &by);
+                fin.by = Some(by);
             }
-            live.set_provider(&cand.id, &cand.provider.name);
+            live.set_provider(&cand.id, &cand.provider.name, &cand.provider.model);
             let span = state.audit.start_span(
                 SpanStart::new(&fin.id, Kind::Attempt, &cand.provider.name)
                     .parent(&fin.turn_span)
@@ -1161,8 +1177,8 @@ pub fn sweep_on_start(db: &SpaceStore) -> Result<(usize, usize), crate::DbError>
             db.finalize_generation(&id, "interrupted", "", Some(NOT_RUN), None)?;
             queued += 1;
         } else {
-            let message_id =
-                if text.trim().is_empty() { None } else { db.add_message(&user_id, &conversation_id, "assistant", &text).ok() };
+            let by = db.generation_provider(&id)?;
+            let message_id = if text.trim().is_empty() { None } else { db.add_reply(&user_id, &conversation_id, &text, by.as_ref()).ok() };
             db.finalize_generation(&id, "interrupted", &text, Some(INTERRUPTED), message_id.as_deref())?;
             running += 1;
         }
@@ -1189,8 +1205,9 @@ pub fn shutdown(state: &Arc<AppState>) {
                 .flatten();
             if let Some((user_id, conversation_id, status)) = row {
                 if status == "running" {
+                    let by = live.provider();
                     let message_id =
-                        if text.trim().is_empty() { None } else { db.add_message(&user_id, &conversation_id, "assistant", &text).ok() };
+                        if text.trim().is_empty() { None } else { db.add_reply(&user_id, &conversation_id, &text, by.as_ref()).ok() };
                     let _ = db.finalize_generation(&id, "interrupted", &text, Some(INTERRUPTED), message_id.as_deref());
                 } else {
                     let _ = db.finalize_generation(&id, "interrupted", "", Some(NOT_RUN), None);
@@ -1309,7 +1326,7 @@ pub(crate) type EventStream = std::pin::Pin<Box<dyn Stream<Item = Result<Event, 
 
 fn to_sse(e: GenEvent) -> Result<Event, Infallible> {
     Ok(match e {
-        GenEvent::Provider { id, name } => sse_event(&ChatEvent::Provider { id, name }),
+        GenEvent::Provider { id, name, model } => sse_event(&ChatEvent::Provider { id, name, model: Some(model) }),
         GenEvent::Delta { seq, text } => sse_event_with_id(&ChatEvent::Delta { text }, Some(seq)),
         GenEvent::Done => sse_event(&ChatEvent::Done),
         GenEvent::Error { message, code } => sse_event(&ChatEvent::Error { message, code: Some(code.into()) }),
@@ -1507,6 +1524,8 @@ mod tests {
         };
         let (with_text, empty, queued, done) = (mk("running"), mk("running"), mk("queued"), mk("running"));
         db.flush_generation_text(&with_text, "partial answer").unwrap();
+        let by = crate::ReplyBy { provider_id: "p1".into(), provider_name: "OpenAI".into(), model: "gpt-x".into() };
+        db.set_generation_provider(&with_text, &by).unwrap();
         db.finalize_generation(&done, "done", "all of it", None, None).unwrap();
 
         assert_eq!(sweep_on_start(&db).unwrap(), (2, 1));
@@ -1524,6 +1543,7 @@ mod tests {
         let messages = db.get_messages(&c).unwrap();
         assert_eq!(messages.len(), 1, "only the partial text became a message");
         assert_eq!((messages[0].role.as_str(), messages[0].content.as_str()), ("assistant", "partial answer"));
+        assert_eq!(messages[0].by.as_ref(), Some(&by), "the reply saved after the restart keeps who wrote it");
         assert_eq!(sweep_on_start(&db).unwrap(), (0, 0), "a second sweep finds nothing");
     }
 

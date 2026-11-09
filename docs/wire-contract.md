@@ -116,9 +116,12 @@ Paths below are relative to `/api/client/v1/spaces/{space_id}`.
 - `GET /conversations` returns `[{"id", "title", "updated_at", "message_count"}]`,
   newest first, every conversation in the space.
 - `GET /conversations/{id}` returns the same fields plus
-  `"messages": [{"id", "role": "user"|"assistant", "content", "created_at"}]`, oldest first,
+  `"messages": [{"id", "role": "user"|"assistant", "content", "created_at", "provider"}]`, oldest first,
   and, only while something is unfinished, `"pending"`: the replies still running in this
   conversation and the messages waiting behind them (see *Generations* below).
+  `"provider"` is on replies only: `{"id", "name", "model"}`, the provider and model that wrote it, copied
+  when the reply was stored (renaming or deleting the provider later does not change it). It is absent on
+  questions and on replies stored before servers recorded it.
 - `DELETE /conversations/{id}` returns `204`, or `404` if there is no such conversation in the space.
   A reply still running in it is stopped and the messages waiting in it are dropped first.
 - `GET /search?q=<words>` returns up to 20
@@ -153,7 +156,7 @@ the server re-emits its own events. Each SSE message has `event:` naming the typ
 | event | data | meaning |
 | --- | --- | --- |
 | `meta` | `{"event":"meta","conversation_id":"<id>","generation_id":"<id>","queued":true}` | always first. The conversation this turn belongs to (new if none was sent) and the generation running it. `queued` appears only when it is true |
-| `provider` | `{"event":"provider","id":"<provider id>","name":"..."}` | which provider is serving the reply: always the one asked for. Sent once, before the first delta. No SSE `id:` |
+| `provider` | `{"event":"provider","id":"<provider id>","name":"...","model":"..."}` | which provider is serving the reply, and the model it is set to: always the provider asked for. Sent once, before the first delta. No SSE `id:`. `model` is absent from older servers |
 | `delta` | `{"event":"delta","text":"..."}` | the next piece of the reply; zero or more. Carries an SSE `id:` line, see below |
 | `done` | `{"event":"done"}` | the reply is complete (also when it was stopped with cancel: the text so far is kept) |
 | `error` | `{"event":"error","message":"...","code":"timed_out"}` | the reply failed or was cut short; the question is still saved, and so is any text that had arrived. `code` is the stable reason: `timed_out`, `interrupted`, `kill_switch`, `provider_error` or `internal` (absent from an older server). Branch on `code`; `message` is for a person |

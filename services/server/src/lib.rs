@@ -37,7 +37,7 @@ use axum::{
 pub use db::{make_title, Db, DbError};
 use error::{ApiError, ApiJson};
 use secrets::Secrets;
-pub use space::{ConversationSummary, Generation, SearchHit, Space, SpaceStore, Spaces, StoredMessage};
+pub use space::{ConversationSummary, Generation, ReplyBy, SearchHit, Space, SpaceStore, Spaces, StoredMessage};
 use std::sync::{Arc, Mutex};
 
 pub const API_VERSION: u32 = 1;

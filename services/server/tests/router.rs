@@ -363,14 +363,14 @@ async fn after_a_retry_the_generation_row_and_its_token_usage_name_the_provider_
 async fn the_provider_is_announced_once_before_the_first_delta_even_after_retries() {
     let s = stack("m", "m", serde_json::json!({})).await;
     let events = s.run("hello").await;
-    assert_eq!(events[0], GenEvent::Provider { id: "p1".into(), name: "p1".into() }, "first of all");
+    assert_eq!(events[0], GenEvent::Provider { id: "p1".into(), name: "p1".into(), model: "m".into() }, "first of all");
     assert!(matches!(events[1], GenEvent::Delta { seq: 1, .. }), "then the text, counted from 1: {:?}", &events[..3]);
     assert_eq!(events.iter().filter(|e| matches!(e, GenEvent::Provider { .. })).count(), 1);
 
     // A retry does not announce it again.
     let s = stack("m", "m", serde_json::json!({})).await;
     let events = s.run("hello 429once retry-C").await;
-    assert_eq!(events[0], GenEvent::Provider { id: "p1".into(), name: "p1".into() });
+    assert_eq!(events[0], GenEvent::Provider { id: "p1".into(), name: "p1".into(), model: "m".into() });
     assert!(matches!(events[1], GenEvent::Delta { seq: 1, .. }), "{:?}", &events[..2]);
     assert_eq!(events.iter().filter(|e| matches!(e, GenEvent::Provider { .. })).count(), 1);
 

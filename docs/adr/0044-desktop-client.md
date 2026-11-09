@@ -19,7 +19,7 @@ The desktop app is how a person uses Askbar: a popup opened with a hotkey that a
   - `client.yaml` in the user's config directory: the server address, the certificate pin, the hotkey and local display overrides. It holds no secret;
   - the outbox, in the app's data directory: the text of messages sent and not yet taken by the server, so a message is never lost. There is no offline chat.
 - **Replies:** a reply runs on the server, so the app can close mid-reply and reattach with `?after=` from the last delta it saw. Stop asks the server to cancel.
-- **Rendering:** the popup's content security policy allows only its own scripts. Only the output of `renderMarkdown` reaches `innerHTML`; everything else is set as text.
+- **Rendering:** the popup's content security policy allows only its own scripts. Only the output of `renderMarkdown` reaches `innerHTML`; everything else is set as text. Under each message a meta row shows its date and time and, on a reply, a chip whose tooltip names the model and provider that wrote it.
 
 ## Alternatives considered
 
@@ -38,4 +38,4 @@ The app's Rust tests run against a real server built from this repository and th
 
 ## Amendments
 
-None yet.
+- 2026-11-08: each message shows its date and time, and each reply the model and provider that wrote it (plan step 1.13).
