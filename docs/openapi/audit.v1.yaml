@@ -304,7 +304,10 @@ paths:
     get:
       operationId: getStats
       summary: Counts, error rate, latency percentiles and token totals since a time. Every cost is null.
-      description: The auditor holds no prices; the admin applies them. `since` defaults to the last 24 hours.
+      description: >-
+        The auditor holds no prices; whoever shows cost applies them. `since` defaults to the last 24 hours. Each row
+        of `by_provider` and `by_day` has `requests_with_tokens` (how many of its requests have counts), and
+        `by_day_provider` gives the tokens for each day and provider, so each day can be priced exactly.
       parameters:
         - $ref: '#/components/parameters/Since'
       responses:
