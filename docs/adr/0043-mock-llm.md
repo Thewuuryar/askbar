@@ -33,4 +33,4 @@ Tests and the Mac check run without a provider account or network access. A prov
 ## Amendments
 
 - 2026-11-08: the dev image `python:3.12-slim` is pinned by digest, so the 0017 mismatch is gone (Thewuuryar/askbar#26).
-- 2026-11-10: `brisk` sends the slow reply's text in about 4 seconds, for tests that need the whole long reply (the faster-CI pull request).
+- 2026-11-10: `brisk` sends the slow reply's text in about 4 seconds, for tests that need the whole long reply (Thewuuryar/askbar#41).
