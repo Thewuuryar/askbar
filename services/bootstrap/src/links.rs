@@ -94,8 +94,9 @@ mod tests {
     #[test]
     fn uids_match_the_dockerfile() {
         let dockerfile = repo_file("Dockerfile");
-        for (name, uid) in SERVICES {
-            assert!(dockerfile.contains(&format!("--uid {uid} ")), "no stage of the Dockerfile runs {name} as uid {uid}");
+        for (name, id) in SERVICES {
+            // The message names the service; the number is in the table above.
+            assert!(dockerfile.contains(&format!("--uid {id} ")), "no stage of the Dockerfile runs {name} as the user the table gives it");
         }
     }
 }
