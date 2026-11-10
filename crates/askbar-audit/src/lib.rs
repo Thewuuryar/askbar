@@ -724,6 +724,25 @@ impl Recorder {
         *self.pause.paused.lock().unwrap_or_else(|e| e.into_inner()) = paused;
         self.pause.changed.notify_all();
     }
+
+    /// Tests only: hold the writer still with an event in its hands, and return once it is. A paused writer
+    /// still takes one event off the queue and parks with it, so with `pause_writer` alone the queue looks
+    /// full until the writer's thread first runs, and then has room for one more (a test that checks
+    /// `healthy()` in between sees it flip). Here the writer has taken its event before this returns, so
+    /// the queue holds exactly its capacity from then on and stays unhealthy until the writer is let go.
+    #[doc(hidden)]
+    pub async fn stall_writer(&self) {
+        self.pause_writer(true);
+        let Some(tx) = &self.tx else { return };
+        // An event that writes nothing: the writer answers it when it is let go, and nobody is listening.
+        let (done, _) = oneshot::channel();
+        if tx.send(Event::Flush(done)).await.is_err() {
+            return;
+        }
+        while tx.capacity() < tx.max_capacity() {
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        }
+    }
 }
 
 /// Payloads first (they belong to spans), then the spans. Only finished spans: one still running
