@@ -166,6 +166,8 @@ Order (owner, 2026-11-08), before phase 2: message actions on hover with the mod
 
 ## Phase 2 — Add bootstrap and the auditor
 
+**Order (owner, 2026-11-10):** 2.3, 2.1, 2.2, 2.4a (the auditor standing alone, with nothing sending to it), the `model-gateway` component ADR, 3.1, then 2.5 to 2.9, then 3.2 to 3.5. Reason: only `model-gateway` may open model-call spans ([ADR 0010](adr/0010-auditor.md) rule 2, [ADR 0051](adr/0051-auditor.md)), so the server switches to the auditor in the same step that adds the gateway.
+
 **2.1 `feat(bootstrap): create per-link tokens on first start`** (M) — [ADR 0004](adr/0004-bootstrap-and-per-link-tokens.md), 0038
 - Before the code: a component ADR for `bootstrap` (its volumes, the links it writes, no network, run once), proposed in its own PR and accepted.
 - `services/bootstrap`: no network, mounts credential volumes only, writes each token to the caller's volume and its hash to the receiver's, exits; `depends_on: condition: service_completed_successfully`. Host rotation: `docker compose run --rm bootstrap rotate [link]`, then restart from the admin.
@@ -178,6 +180,7 @@ Order (owner, 2026-11-08), before phase 2: message actions on hover with the mod
 **2.3 `refactor: move the audit store into crates/askbar-audit`** (S)
 - Before the code: a component ADR for the `askbar-audit` crate (what it holds, who links it: server now, auditor in 2.4), proposed in its own PR and accepted.
 - Pure move of `services/server/src/audit.rs` into a library; server keeps using it in-process. `seal.rs` stays in the server, and the span record types move to `askbar-proto` in 2.4, when they become wire types ([ADR 0052](adr/0052-askbar-audit-crate.md)).
+- **Built so (2026-11-10):** as above. `new_id` moved first, in its own commit, to `askbar_service::ids`; the server re-exports it as `ids`, so its callers are unchanged. The store is `crates/askbar-audit/src/lib.rs`, moved unchanged apart from paths and two edits: `Sealed` is defined there (`seal.rs` re-exports it), and `stats` takes a cost callback (`CostFn`) instead of calling `cost`; `PriceOf` and `cost_of` moved to the server's `cost.rs`, and `server_api.rs` passes the callback. The server keeps `pub use askbar_audit as audit`. The crate's dependencies are the ones the server already used: `rusqlite`, `tokio`, `serde_json`, `base64`, `thiserror`, `tracing`, plus `askbar-service`. The Dockerfile copies its manifest for the dependency-cache layer. `docs/architecture.md` lists no crates one by one and [ADR 0033](adr/0033-repository-layout.md) already names `askbar-audit`, so neither changed.
 
 **2.4 `feat(auditor): run the audit store as its own container`** (L) — [ADR 0010](adr/0010-auditor.md), 0025
 - Before the code: a component ADR for the `auditor` (its volume `auditor-data`, its internal network, its links and tokens, no outbound), proposed in its own PR and accepted. The `server` component ADR (0039) is amended in place in the same PR: it no longer mounts `audit-data` ([ADR 0001](adr/0001-decision-records-and-change-rules.md) rule 13).
