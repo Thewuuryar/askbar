@@ -143,6 +143,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "askbar-bootstrap"
+version = "0.6.0"
+dependencies = [
+ "base64 0.22.1",
+ "sha2",
+]
+
+[[package]]
 name = "askbar-cpa-supervisor"
 version = "0.6.0"
 dependencies = [
