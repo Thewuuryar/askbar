@@ -2,8 +2,10 @@
 # Checks the markdown files:
 #   1. every relative link points at a file that exists, and a #anchor at a heading in that file;
 #   2. every ADR in docs/adr/ has a row in docs/adr/README.md, and the row's Status matches the ADR's "Status:" line;
-#   3. ADR 0046: a component or register ADR has an Amendments section, a Retired or Deferred ADR says when and why,
-#      and "Amends:" lines and "amended by" statuses name ADRs that exist and that name each other back.
+#   3. ADR 0001: every ADR but a stub has an Amendments section; a Kind is component or register; a Retired or
+#      Deferred ADR says when and why; a "Merged into NNNN" stub has a Merged: line and names an ADR that exists,
+#      is not a stub and lists it in its Amendments; "Amends:" lines and "amended by" statuses (older partial
+#      amendments, until they are folded in) name ADRs that exist and that name each other back.
 # Covers every tracked *.md file (all *.md files outside node_modules and target when git is not available).
 # Usage: scripts/check-docs.sh
 cd "$(dirname "$0")/.." || exit 2
@@ -54,7 +56,7 @@ for f, t in texts.items():
             print(f"{f}: no heading for anchor {target}")
             bad += 1
 
-# ADR index (ADR 0027)
+# ADR index (ADR 0001)
 rows = {}
 if os.path.exists("docs/adr/README.md"):
     for m in re.finditer(r"^\|\s*\[(\d{4})\]\([^)]*\)\s*\|[^|]*\|\s*([^|]*?)\s*\|", open("docs/adr/README.md", encoding="utf-8").read(), re.M):
@@ -73,7 +75,7 @@ if os.path.exists("docs/adr/README.md"):
             print(f"docs/adr/{name}: no Status line"); bad += 1
         elif sm.group(1) != rows[n].split()[0].rstrip(";,"):
             print(f"docs/adr/{name}: Status {sm.group(1)} but README says {rows[n]}"); bad += 1
-    # ADR 0046: kinds, amendments, retired and deferred ADRs.
+    # ADR 0001: kinds, amendments, stubs, retired and deferred ADRs.
     adrs = {}
     for name in sorted(os.listdir("docs/adr")):
         m = re.match(r"^(\d{4})-.*\.md$", name)
@@ -84,9 +86,24 @@ if os.path.exists("docs/adr/README.md"):
         kind = re.search(r"^Kind:\s*(\S+)", text, re.M)
         if kind and kind.group(1) not in ("component", "register"):
             print(f"{where}: Kind {kind.group(1)} is not component or register"); bad += 1
-        if kind and not re.search(r"^## Amendments\s*$", text, re.M):
-            print(f"{where}: a {kind.group(1)} ADR needs an '## Amendments' section"); bad += 1
         status = (re.search(r"^Status:\s*(.*)$", text, re.M) or [None, ""])[1]
+        merged = re.match(r"Merged into (\d{4})\s*$", status)
+        if status.startswith("Merged") and not merged:
+            print(f"{where}: Status {status!r} should be 'Merged into NNNN'"); bad += 1
+        if merged:
+            if not re.search(r"^Merged:\s*\S", text, re.M):
+                print(f"{where}: a merged ADR needs a 'Merged:' line with the date and where its content went"); bad += 1
+            into = adrs.get(merged.group(1))
+            if not into:
+                print(f"{where}: merged into {merged.group(1)}, which does not exist"); bad += 1
+            elif re.search(r"^Status:\s*Merged", into[1], re.M):
+                print(f"{where}: merged into {merged.group(1)}, which is itself a stub"); bad += 1
+            else:
+                amends = into[1].split("## Amendments", 1)[1] if "## Amendments" in into[1] else ""
+                if not re.search(rf"\b{n}\b", amends):
+                    print(f"{where}: merged into {into[0]}, whose Amendments do not mention {n}"); bad += 1
+        elif not re.search(r"^## Amendments\s*$", text, re.M):
+            print(f"{where}: needs an '## Amendments' section (empty until the first amendment)"); bad += 1
         for word in ("Retired", "Deferred"):
             if status.startswith(word) and not re.search(rf"^{word}:\s*\S", text, re.M):
                 print(f"{where}: Status {word} needs a '{word}:' line with the date and the reason"); bad += 1
