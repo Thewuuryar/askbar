@@ -1,4 +1,5 @@
 # syntax=docker/dockerfile:1@sha256:4edf897a3ffa55b89f906fc8cc78afdb3f1834cc9c7083565e611a8a7d5fe99e
+# check=skip=SecretsUsedInArgOrEnv
 #
 # One target per service:
 #   docker build --target server     -t askbar-server .
@@ -6,6 +7,9 @@
 #   docker build --target caddy      -t askbar-caddy  .
 #   docker build --target cpa        -t askbar-cpa    .
 # A plain `docker build .` builds the last stage, the server.
+# The build check SecretsUsedInArgOrEnv is skipped: it flags variable names with TOKEN or SECRET in them,
+# and here every one holds a path (AGENTS.md: an environment variable holds a path or an address,
+# never a secret).
 # Every image is pinned by digest, and the Caddy plugin by version (ADR 0017); the tag beside each
 # digest says which line it follows. To update one, take the tag's current digest and test the stack.
 
