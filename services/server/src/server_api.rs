@@ -238,9 +238,9 @@ fn price_lookup(state: &AppState) -> impl Fn(&str) -> Option<crate::cost::Prices
     move |id: &str| providers.iter().find(|p| p.id == id).map(crate::cost::Prices::of)
 }
 
-fn add_cost(row: &mut serde_json::Value, price_of: crate::audit::PriceOf) {
+fn add_cost(row: &mut serde_json::Value, price_of: crate::cost::PriceOf) {
     let n = |k: &str| row[k].as_i64();
-    let cost = crate::audit::cost_of(price_of, row["provider_id"].as_str(), n("tokens_in"), n("tokens_out"), n("tokens_cached"));
+    let cost = crate::cost::cost_of(price_of, row["provider_id"].as_str(), n("tokens_in"), n("tokens_out"), n("tokens_cached"));
     row["cost"] = serde_json::json!(cost);
 }
 
@@ -273,7 +273,7 @@ async fn audit_trace(State(state): State<Arc<AppState>>, Path(id): Path<String>)
     let mut cost = None;
     if let Some(turn) = spans.iter().find(|s| s["kind"] == "turn") {
         let n = |k: &str| turn[k].as_i64();
-        cost = crate::audit::cost_of(&price_of, final_provider.as_deref(), n("tokens_in"), n("tokens_out"), n("tokens_cached"));
+        cost = crate::cost::cost_of(&price_of, final_provider.as_deref(), n("tokens_in"), n("tokens_out"), n("tokens_cached"));
     }
     Ok(Json(serde_json::json!({ "trace_id": id, "cost": cost, "spans": spans })))
 }
@@ -304,7 +304,7 @@ async fn audit_stats(
     let conn = state.audit.reader().ok_or_else(no_audit)?;
     let since = q.since.unwrap_or_else(|| crate::auth::now() - 24 * 3600);
     let price_of = price_lookup(&state);
-    crate::audit::stats(&conn, since, &price_of)
+    crate::audit::stats(&conn, since, &|p, i, o, c| crate::cost::cost_of(&price_of, p, i, o, c))
         .map(Json)
         .map_err(|_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not read the audit store."))
 }

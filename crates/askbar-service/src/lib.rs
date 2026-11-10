@@ -6,6 +6,7 @@
 //! - [`configured`]: `503 not_configured` until the admin has pushed configuration.
 //! - [`restart`]: `POST /restart` (exit cleanly; Docker's restart policy starts the service again)
 //!   and the watchdog that exits a service whose own health check keeps failing (ADR 0005).
+//! - [`ids`]: server-generated ULIDs.
 //! - [`tar`]: the archive a backup export is written in.
 //!
 //! The common internal routes are the same in every service (ADR 0022): `GET /health`,
@@ -13,6 +14,7 @@
 //! [`routes`].
 
 pub mod configured;
+pub mod ids;
 pub mod links;
 pub mod restart;
 pub mod status;

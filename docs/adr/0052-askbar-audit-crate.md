@@ -45,3 +45,4 @@ The schema and migrations have one home. The crate's tests are the store's, move
 ## Amendments
 
 - 2026-11-10: trimmed, and links to the merged 0025 and 0030 point to 0010 rule 7 and 0011 rule 4. No decision changed.
+- 2026-11-10: built in plan step 2.3 (PR: refactor/askbar-audit-crate). The server re-exports the crate as `audit` and calls `stats` with a cost callback.

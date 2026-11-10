@@ -10,13 +10,7 @@
 use crypto_box::{aead::OsRng, PublicKey};
 use sha2::{Digest, Sha256};
 
-/// A sealed payload and the id of the key it was sealed to, so the right key can be chosen to
-/// read it even after the key has been rotated.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Sealed {
-    pub key_id: String,
-    pub bytes: Vec<u8>,
-}
+pub use askbar_audit::Sealed;
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum SealError {

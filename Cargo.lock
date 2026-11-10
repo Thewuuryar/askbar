@@ -129,6 +129,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "askbar-audit"
+version = "0.6.0"
+dependencies = [
+ "askbar-service",
+ "base64 0.22.1",
+ "rusqlite",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "ulid",
+]
+
+[[package]]
 name = "askbar-cpa-supervisor"
 version = "0.6.0"
 dependencies = [
@@ -149,6 +163,7 @@ dependencies = [
 name = "askbar-server"
 version = "0.6.0"
 dependencies = [
+ "askbar-audit",
  "askbar-proto",
  "askbar-service",
  "axum",

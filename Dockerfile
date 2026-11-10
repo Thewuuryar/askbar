@@ -20,6 +20,7 @@ COPY Cargo.toml Cargo.lock ./
 # not on every source change. Each member gets stub sources; a new workspace member needs its line here.
 COPY crates/askbar-proto/Cargo.toml crates/askbar-proto/
 COPY crates/askbar-service/Cargo.toml crates/askbar-service/
+COPY crates/askbar-audit/Cargo.toml crates/askbar-audit/
 COPY services/server/Cargo.toml services/server/
 COPY services/admin/Cargo.toml services/admin/
 COPY services/cpa-supervisor/Cargo.toml services/cpa-supervisor/

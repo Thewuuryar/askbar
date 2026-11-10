@@ -59,6 +59,21 @@ pub fn cost(tokens: Tokens, prices: Prices) -> Option<f64> {
     Some(term(uncached, prices.input)? + term(tokens.cached, prices.cached_input)? + term(tokens.output, prices.output)?)
 }
 
+/// Prices by provider id, as the snapshot has them now. `None` for a provider it does not know.
+pub type PriceOf<'a> = &'a dyn Fn(&str) -> Option<Prices>;
+
+/// The cost of a set of tokens reported by `provider_id`, or `None` when it cannot be known: the
+/// provider is gone from the snapshot, or a price that matters is missing.
+pub fn cost_of(price_of: PriceOf, provider_id: Option<&str>, input: Option<i64>, output: Option<i64>, cached: Option<i64>) -> Option<f64> {
+    // No token counts at all (a request that failed before any reply): nothing to put a price on.
+    if input.is_none() && output.is_none() {
+        return None;
+    }
+    let prices = price_of(provider_id?)?;
+    let n = |v: Option<i64>| v.unwrap_or(0).max(0) as u64;
+    cost(Tokens { input: n(input), output: n(output), cached: n(cached) }, prices)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

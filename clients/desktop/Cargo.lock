@@ -81,6 +81,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d902e3d592a523def97af8f317b08ce16b7ab854c1985a0c671e6f15cebc236"
 
 [[package]]
+name = "askbar-audit"
+version = "0.6.0"
+dependencies = [
+ "askbar-service",
+ "base64 0.22.1",
+ "rusqlite",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "askbar-client"
 version = "0.6.0"
 dependencies = [
@@ -122,6 +135,7 @@ dependencies = [
 name = "askbar-server"
 version = "0.6.0"
 dependencies = [
+ "askbar-audit",
  "askbar-proto",
  "askbar-service",
  "axum",
