@@ -421,11 +421,13 @@ async fn settings_and_per_user_display_defaults_reach_the_server() {
     let (_, s) = t.call(M::GET, "/api/admin/v1/settings", None).await;
     assert_eq!(s["system_prompt"].as_str(), Some(askbar_proto::DEFAULT_SYSTEM_PROMPT), "the built-in prompt until one is set");
     assert_eq!(s["display"]["width"], json!(720));
+    assert_eq!(s["display"]["newest_first"], json!(false), "oldest first until set");
 
-    let new = json!({ "system_prompt": "Be terse.", "display": { "theme": "dark", "width": 900, "max_height": 700, "history_width": 300, "top_percent": 0.3, "hide_on_blur": false } });
+    let new = json!({ "system_prompt": "Be terse.", "display": { "theme": "dark", "width": 900, "max_height": 700, "history_width": 300, "top_percent": 0.3, "hide_on_blur": false, "newest_first": true } });
     assert_eq!(t.call(M::PUT, "/api/admin/v1/settings", Some(new)).await.0, 204);
     let snap = t.snapshot().unwrap();
     assert_eq!((snap.system_prompt.as_deref(), snap.display.width, snap.display.theme.as_str()), (Some("Be terse."), 900, "dark"));
+    assert!(snap.display.newest_first, "the order reaches the server");
     assert_eq!(t.call(M::GET, "/api/admin/v1/settings", None).await.1["system_prompt"], json!("Be terse."));
     assert_eq!(
         t.call(M::PUT, "/api/admin/v1/settings", Some(json!({ "system_prompt": "x", "display": { "theme": "neon" } }))).await.0,
@@ -439,6 +441,7 @@ async fn settings_and_per_user_display_defaults_reach_the_server() {
     assert_eq!(t.call(M::PUT, &format!("/api/admin/v1/users/{user}/display-defaults"), Some(mine)).await.0, 204);
     let snap = t.snapshot().unwrap();
     assert_eq!(snap.user_display_defaults[&user].width, 500);
+    assert!(!snap.user_display_defaults[&user].newest_first, "left out of a user's defaults: oldest first");
     assert_eq!(snap.display.width, 900, "the server-wide default is unchanged");
     assert_eq!(t.call(M::PUT, "/api/admin/v1/users/nobody/display-defaults", Some(json!({}))).await.0, 404);
     assert_eq!(t.call(M::PUT, &format!("/api/admin/v1/users/{user}/display-defaults"), Some(json!({ "width": 5 }))).await.0, 400);

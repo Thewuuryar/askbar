@@ -868,6 +868,7 @@
     $('s-history-width').value = s.display.history_width;
     $('s-top').value = s.display.top_percent;
     $('s-hide-on-blur').checked = !!s.display.hide_on_blur;
+    $('s-newest-first').checked = !!s.display.newest_first;
     show($('settings-error'), false);
   }
 
@@ -890,6 +891,7 @@
           history_width: parseInt($('s-history-width').value, 10),
           top_percent: parseFloat($('s-top').value),
           hide_on_blur: $('s-hide-on-blur').checked,
+          newest_first: $('s-newest-first').checked,
         },
       });
       flash('Settings saved. Clients pick them up on their next message or when their window opens.');

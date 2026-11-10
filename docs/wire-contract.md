@@ -84,8 +84,9 @@ Both follow the signed-in user, so all of a user's clients see the same values.
 - `PUT /api/client/v1/me/prefs` with the same shape replaces it and returns it. An id that is
   not a provider is `404` and changes nothing.
 - `GET /api/client/v1/me/display-defaults` (read-only) returns
-  `{"theme": "auto"|"light"|"dark", "width", "max_height", "history_width", "top_percent", "hide_on_blur"}`:
+  `{"theme": "auto"|"light"|"dark", "width", "max_height", "history_width", "top_percent", "hide_on_blur", "newest_first"}`:
   the user's own defaults if the administrator set them, otherwise the server-wide ones.
+  `newest_first` (absent from an older server: `false`) shows a conversation newest first.
   A client may override any field locally; a local override wins, and removing it returns
   the server's default.
 - `GET /api/client/v1/settings` (server-wide display defaults) remains for older callers.

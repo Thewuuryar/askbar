@@ -29,7 +29,7 @@
       ui: Object.assign(
         {
           theme: 'auto', width: 720, max_height: 640, history_width: 260,
-          top_percent: 0.22, hide_on_blur: true, macos_hide_dock_icon: true,
+          top_percent: 0.22, hide_on_blur: true, newest_first: false, macos_hide_dock_icon: true,
         },
         window.__opts.serverUi || {},
         window.__opts.override || {},

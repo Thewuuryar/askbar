@@ -281,11 +281,22 @@ pub struct DisplaySettings {
     pub history_width: u32,
     pub top_percent: f64,
     pub hide_on_blur: bool,
+    /// Show a conversation newest first, just under the input bar (each question still above its
+    /// reply). False, the default, is oldest first.
+    pub newest_first: bool,
 }
 
 impl Default for DisplaySettings {
     fn default() -> Self {
-        Self { theme: "auto".into(), width: 720, max_height: 640, history_width: 260, top_percent: 0.22, hide_on_blur: true }
+        Self {
+            theme: "auto".into(),
+            width: 720,
+            max_height: 640,
+            history_width: 260,
+            top_percent: 0.22,
+            hide_on_blur: true,
+            newest_first: false,
+        }
     }
 }
 
@@ -663,6 +674,18 @@ mod tests {
         assert_eq!(s.history_turns, 0);
         let s: Snapshot = serde_json::from_str(r#"{"audit_retention_days": 30, "history_turns": 5}"#).unwrap();
         assert_eq!(s.history_turns, 5);
+    }
+
+    #[test]
+    fn display_settings_without_the_order_are_oldest_first() {
+        let d: DisplaySettings = serde_json::from_str(
+            r#"{"theme":"dark","width":900,"max_height":700,"history_width":300,"top_percent":0.3,"hide_on_blur":false}"#,
+        )
+        .unwrap();
+        assert!(!d.newest_first);
+        assert_eq!(d.width, 900, "the other fields still read");
+        let d: DisplaySettings = serde_json::from_str(r#"{"newest_first":true}"#).unwrap();
+        assert!(d.newest_first);
     }
 
     #[test]

@@ -162,6 +162,9 @@ button { font: inherit; color: inherit; }
   scrollbar-width: thin;
 }
 
+/* Newest first: the rows are laid out by their flex `order` (see orderTurns in main.js). */
+.thread[data-order="newest"] { display: flex; flex-direction: column; }
+
 .msg { position: relative; margin: 0 0 4px; }
 .msg:last-child { margin-bottom: 8px; }
 
@@ -249,6 +252,8 @@ button { font: inherit; color: inherit; }
 }
 .msg.error .text-btn { color: var(--danger); padding-left: 0; }
 .msg.error .text-btn + .text-btn { margin-left: 8px; }
+/* An error line has no meta row under it; this keeps the same gap before the next turn. */
+.msg.error { margin-bottom: 12px; }
 
 /* A question whose turn failed: a light danger tint; the error line after it says why in words. */
 .msg.user.failed .body { background: var(--danger-soft); }

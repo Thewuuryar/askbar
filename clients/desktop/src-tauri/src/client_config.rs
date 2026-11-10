@@ -33,6 +33,7 @@ pub struct Ui {
     pub history_width: u32,
     pub top_percent: f64,
     pub hide_on_blur: bool,
+    pub newest_first: bool,
     pub macos_hide_dock_icon: bool,
 }
 
@@ -45,6 +46,7 @@ impl Default for Ui {
             history_width: 260,
             top_percent: 0.22,
             hide_on_blur: true,
+            newest_first: false,
             macos_hide_dock_icon: true,
         }
     }
@@ -66,6 +68,8 @@ pub struct UiOverrides {
     pub top_percent: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hide_on_blur: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub newest_first: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub macos_hide_dock_icon: Option<bool>,
 }
@@ -159,6 +163,7 @@ pub fn merge_ui(server: &DisplaySettings, o: &UiOverrides) -> Ui {
         history_width: o.history_width.unwrap_or(server.history_width),
         top_percent: o.top_percent.unwrap_or(server.top_percent).clamp(0.0, 0.8),
         hide_on_blur: o.hide_on_blur.unwrap_or(server.hide_on_blur),
+        newest_first: o.newest_first.unwrap_or(server.newest_first),
         macos_hide_dock_icon: o.macos_hide_dock_icon.unwrap_or(true),
     }
 }
@@ -218,20 +223,30 @@ mod tests {
 
     #[test]
     fn display_overrides_merge_over_server_defaults() {
-        let server =
-            DisplaySettings { theme: "dark".into(), width: 800, max_height: 500, history_width: 300, top_percent: 0.3, hide_on_blur: true };
+        let server = DisplaySettings {
+            theme: "dark".into(),
+            width: 800,
+            max_height: 500,
+            history_width: 300,
+            top_percent: 0.3,
+            hide_on_blur: true,
+            newest_first: true,
+        };
         let none = merge_ui(&server, &UiOverrides::default());
         assert_eq!((none.theme, none.width, none.max_height, none.history_width, none.hide_on_blur), (Theme::Dark, 800, 500, 300, true));
         assert!(none.macos_hide_dock_icon);
+        assert!(none.newest_first, "the server's order unless this client overrides it");
 
         let o = UiOverrides {
             theme: Some(Theme::Light),
             width: Some(640),
             hide_on_blur: Some(false),
             top_percent: Some(5.0),
+            newest_first: Some(false),
             ..Default::default()
         };
         let m = merge_ui(&server, &o);
+        assert!(!m.newest_first, "a local override wins");
         assert_eq!((m.theme, m.width, m.max_height, m.hide_on_blur), (Theme::Light, 640, 500, false));
         assert_eq!(m.top_percent, 0.8, "clamped like the local config");
     }
