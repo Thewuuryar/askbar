@@ -120,8 +120,9 @@ The whole API is [docs/openapi/admin.v1.yaml](docs/openapi/admin.v1.yaml).
 - **Pull requests (proposed).** The title is a commit subject. Fill in the template: what was verified, and what was not.
 - **Merging.** Squash by default. A stepwise series where each commit stands alone is rebase-merged; say so in the PR.
 - **A boundary change needs an ADR.** If a change moves a boundary (crate, container, network, volume, API audience),
-  adds a container, image or service or a dependency outside the license allowlist, changes a hard rule in [AGENTS.md](AGENTS.md), or reverses an ADR on `main`, write or
-  supersede one in [docs/adr/](docs/adr/) in the same PR. Only the owner accepts an ADR. A change to a security rule
+  adds a container, image or service or a dependency outside the license allowlist, changes a hard rule in [AGENTS.md](AGENTS.md), or changes or reverses an ADR on `main`, write an
+  ADR or amend one in place, with a line in its Amendments, in [docs/adr/](docs/adr/) in the same PR. Only the owner
+  accepts an ADR or approves a change to a decision. A change to a security rule
   includes its docs and isolation tests in the same PR ([ADR 0001](docs/adr/0001-decision-records-and-change-rules.md)).
 - **Review.** The owner reviews every pull request. Changes to the paths that decide who can reach what get extra care.
 

@@ -30,10 +30,11 @@ docker compose --profile dev up -d --build
 
 ### Component ADRs (owner rule, 2026-11-07)
 
-A component is anything the stack or the repository ships as its own unit: a container (service), a library crate, or a client. Each component has an ADR of its own that says what it is, what it holds, what it can reach, its volumes, networks and links, and any hardening exception; it links to the decision ADRs instead of repeating them. Under [ADR 0001](adr/0001-decision-records-and-change-rules.md) and [ADR 0027](adr/0027-adr-format-and-numbering.md):
+A component is anything the stack or the repository ships as its own unit: a container (service), a library crate, or a client. Each component has an ADR of its own that says what it is, what it holds, what it can reach, its volumes, networks and links, and any hardening exception; it links to the decision ADRs instead of repeating them. Under [ADR 0001](adr/0001-decision-records-and-change-rules.md):
 
 - **New component:** its ADR is proposed in its own `docs(adr):` PR, and the owner accepts it before the PR that creates the component merges. Numbers are taken in order when the ADR is written, never reserved.
-- **Retired component:** if its ADR is still Proposed, amend it (ADR 0001 rule 3): say it is retired, when and why. If it is Accepted and on `main`, write a new ADR that supersedes it and change only the old ADR's status line to `Superseded by NNNN` (ADR 0001 rule 2). Once [ADR 0046](adr/0046-component-and-register-adrs-and-partial-amendments.md) is accepted, its status becomes `Retired` with a `Retired:` line instead, and a changed component's ADR is amended in place. The index in [adr/README.md](adr/README.md) follows either way.
+- **Changed component:** its ADR is amended in place, in the PR with the code (ADR 0001 rule 13).
+- **Retired component:** its ADR's status becomes `Retired`, with a `Retired:` line giving the date and the reason (ADR 0001 rule 11). The index in [adr/README.md](adr/README.md) follows.
 - **Existing components** get retroactive ADRs once phase 1 is done (step 1.14), all Proposed, so the owner reviews what is there before phases 2 to 4 add more.
 
 Steps that create or retire a component say which ADR they need. Estimate: about 1 h per component ADR.
@@ -179,7 +180,7 @@ Order (owner, 2026-11-08), before phase 2: message actions on hover with the mod
 - Pure move of `services/server/src/audit.rs` into a library; server keeps using it in-process. `seal.rs` stays in the server, and the span record types move to `askbar-proto` in 2.4, when they become wire types ([ADR 0052](adr/0052-askbar-audit-crate.md)).
 
 **2.4 `feat(auditor): run the audit store as its own container`** (L) — [ADR 0010](adr/0010-auditor.md), 0025
-- Before the code: a component ADR for the `auditor` (its volume `auditor-data`, its internal network, its links and tokens, no outbound), proposed in its own PR and accepted. The `server` component ADR (0039) is amended in place in the same PR: it no longer mounts `audit-data` ([ADR 0046](adr/0046-component-and-register-adrs-and-partial-amendments.md)).
+- Before the code: a component ADR for the `auditor` (its volume `auditor-data`, its internal network, its links and tokens, no outbound), proposed in its own PR and accepted. The `server` component ADR (0039) is amended in place in the same PR: it no longer mounts `audit-data` ([ADR 0001](adr/0001-decision-records-and-change-rules.md) rule 13).
 - `services/auditor`: `/api/audit/v1` append (service and admin append tokens), read and retention (admin read token, floor 7 days, default 30), boot-ID handling that ends earlier open spans as interrupted, group commit. Internal-only network, no outbound.
 - Server appends over HTTP with a bounded retry queue for finish/payload records; the auditor mounts a new volume, `auditor-data`; the server's `audit-data` stays declared and unmounted until 1.0 ([ADR 0051](adr/0051-auditor.md)). Server answers `503 audit_backlog` when the auditor is unreachable.
 - Failure tests: auditor down, disk full, slow ack.
