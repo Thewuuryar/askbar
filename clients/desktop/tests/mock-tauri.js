@@ -132,7 +132,8 @@
         conv = { id: String(db.nextConv++), title: title(text), updated_at: ++db.clock, messages: [] };
         db.convs.push(conv);
       }
-      conv.messages.push({ id: String(db.nextMsg++), role: 'user', content: text, created_at: db.clock });
+      const question = { id: String(db.nextMsg++), role: 'user', content: text, created_at: db.clock };
+      conv.messages.push(question);
       onEvent.onmessage({ event: 'started', conversationId: conv.id });
 
       // Like the server: the provider and model serving the reply, before any text; replies are stored with them.
@@ -140,12 +141,15 @@
         ? { id: 'p2', name: 'Backup AI', model: 'backup-2' }
         : { id: 'p1', name: 'Mock AI', model: 'mock-1' };
       onEvent.onmessage({ event: 'provider', ...by });
+      // Like the server, a failed turn marks its question with the server's own sentence.
       if (/fail/i.test(text)) {
-        onEvent.onmessage({ event: 'error', message: 'anthropic returned 401: invalid x-api-key. Check api_key in config.yaml.' });
+        question.failed = { code: 'provider_error', message: 'The provider could not answer.' };
+        onEvent.onmessage({ event: 'error', kind: 'provider_error', message: 'anthropic returned 401: invalid x-api-key. Check api_key in config.yaml.' });
         return;
       }
       if (/timeout/i.test(text)) {
         // The server stopped the reply: two pieces of text arrived, then the timeout.
+        question.failed = { code: 'timed_out', message: 'Stopped after 5 minutes' };
         conv.messages.push({ id: String(db.nextMsg++), role: 'assistant', content: 'Partial answer', created_at: db.clock, provider: by });
         onEvent.onmessage({ event: 'delta', text: 'Partial ' });
         onEvent.onmessage({ event: 'delta', text: 'answer' });

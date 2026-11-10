@@ -63,6 +63,19 @@ pub struct Message {
     /// and for replies stored before servers recorded it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<ReplyProvider>,
+    /// For a question: why its turn failed (it got no reply, or only part of one). Left out when it
+    /// did not fail, and for questions stored before servers recorded it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failed: Option<MessageFailure>,
+}
+
+/// Why a question's turn failed. `code` is the same stable reason as the stream's `error` event
+/// (`timed_out`, `interrupted`, `kill_switch`, `provider_error`, `internal`); `message` is a sentence
+/// for a person, always the server's own words, never a provider's error text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MessageFailure {
+    pub code: String,
+    pub message: String,
 }
 
 /// Which provider wrote a reply, and with which model. A copy taken when the reply was stored, so a
@@ -490,6 +503,7 @@ mod tests {
             content: "hi".into(),
             created_at: 1,
             provider: Some(ReplyProvider { id: "p1".into(), name: "OpenAI".into(), model: "gpt-x".into() }),
+            failed: None,
         };
         let s = serde_json::to_string(&reply).unwrap();
         assert!(s.contains(r#""provider":{"id":"p1","name":"OpenAI","model":"gpt-x"}"#), "{s}");
@@ -502,6 +516,25 @@ mod tests {
         // A provider event from an older server, without `model`, still reads.
         let ev: ChatEvent = serde_json::from_str(r#"{"event":"provider","id":"p1","name":"OpenAI"}"#).unwrap();
         assert_eq!(ev, ChatEvent::Provider { id: "p1".into(), name: "OpenAI".into(), model: None });
+    }
+
+    #[test]
+    fn a_failed_question_says_why_and_older_messages_still_read() {
+        let q = Message {
+            id: "m".into(),
+            role: "user".into(),
+            content: "q".into(),
+            created_at: 1,
+            provider: None,
+            failed: Some(MessageFailure { code: "timed_out".into(), message: "Timed out after 5 minutes".into() }),
+        };
+        let s = serde_json::to_string(&q).unwrap();
+        assert!(s.contains(r#""failed":{"code":"timed_out","message":"Timed out after 5 minutes"}"#), "{s}");
+        assert_eq!(serde_json::from_str::<Message>(&s).unwrap(), q);
+        // One that did not fail has no `failed` key, and a message without it reads.
+        assert!(!serde_json::to_string(&Message { failed: None, ..q }).unwrap().contains("failed"));
+        let old: Message = serde_json::from_str(r#"{"id":"m","role":"user","content":"q","created_at":1}"#).unwrap();
+        assert_eq!(old.failed, None);
     }
 
     #[test]

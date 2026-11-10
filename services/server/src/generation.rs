@@ -497,8 +497,9 @@ impl Finisher {
         }
     }
 
-    /// Writes the assistant message (if there is any text) and ends the row, once.
-    fn save(&mut self, status: &str, error: Option<&str>) {
+    /// Writes the assistant message (if there is any text) and ends the row, once. A turn that
+    /// failed also marks its question with `failed` (a code and the server's own sentence).
+    fn save(&mut self, status: &str, error: Option<&str>, failed: Option<(&str, &str)>) {
         if self.saved {
             return;
         }
@@ -520,6 +521,9 @@ impl Finisher {
                 db.add_reply(&self.user_id, &self.conversation_id, &self.text, self.by.as_ref()).ok()
             };
             let _ = db.finalize_generation(&self.id, status, &self.text, error, message_id.as_deref());
+            if let Some((code, message)) = failed {
+                let _ = db.mark_question_failed(&self.id, code, message);
+            }
         }
         self.finish_turn_span(status);
         // One usage row per generation that has numbers, whatever way it ended. In the control
@@ -570,11 +574,12 @@ impl Finisher {
     /// Saves the reply, then tells subscribers, so a client that has seen the end can read the message.
     fn finish(&mut self, outcome: Outcome) {
         match &outcome {
-            Outcome::Done => self.save("done", None),
-            Outcome::Cancelled => self.save("cancelled", None),
-            Outcome::Killed => self.save("cancelled", Some(KILLED)),
-            Outcome::TimedOut(m) => self.save("timed_out", Some(m)),
-            Outcome::Error(m) => self.save("error", Some(m)),
+            Outcome::Done => self.save("done", None, None),
+            Outcome::Cancelled => self.save("cancelled", None, None),
+            Outcome::Killed => self.save("cancelled", Some(KILLED), Some(("kill_switch", KILLED))),
+            Outcome::TimedOut(m) => self.save("timed_out", Some(m), Some(("timed_out", m))),
+            // The question keeps our sentence, not the provider's words (those are sealed in the audit).
+            Outcome::Error(m) => self.save("error", Some(m), Some(("provider_error", PROVIDER_FAILED))),
         }
         self.live.finish(match outcome {
             Outcome::Done | Outcome::Cancelled => Terminal::Done,
@@ -587,9 +592,9 @@ impl Finisher {
 
 impl Drop for Finisher {
     fn drop(&mut self) {
-        self.save("error", Some("The reply stopped unexpectedly."));
+        self.save("error", Some(STOPPED), Some(("internal", STOPPED)));
         // A no-op if `finish` already ran; otherwise the task died and subscribers must not wait forever.
-        self.live.finish(Terminal::Error { message: "The reply stopped unexpectedly.".into(), code: "internal" });
+        self.live.finish(Terminal::Error { message: STOPPED.into(), code: "internal" });
         // The row is final and the reply saved: the next message waiting in this conversation goes.
         start_next(&self.state, &self.space, &self.conversation_id);
         // Keep the buffer a while so a client that dropped can still resume exactly where it was.
@@ -1157,6 +1162,9 @@ fn start_next(state: &Arc<AppState>, space: &Arc<Space>, conversation_id: &str) 
 }
 
 const KILLED: &str = "Generations were switched off by the administrator.";
+/// What a failed question says when the provider failed; its own words stay sealed in the audit.
+const PROVIDER_FAILED: &str = "The provider could not answer.";
+const STOPPED: &str = "The reply stopped unexpectedly.";
 const INTERRUPTED: &str = "The server restarted before the reply finished.";
 const NOT_RUN: &str = "Not run: the server restarted before this message started.";
 
@@ -1180,6 +1188,7 @@ pub fn sweep_on_start(db: &SpaceStore) -> Result<(usize, usize), crate::DbError>
             let by = db.generation_provider(&id)?;
             let message_id = if text.trim().is_empty() { None } else { db.add_reply(&user_id, &conversation_id, &text, by.as_ref()).ok() };
             db.finalize_generation(&id, "interrupted", &text, Some(INTERRUPTED), message_id.as_deref())?;
+            db.mark_question_failed(&id, "interrupted", INTERRUPTED)?;
             running += 1;
         }
     }
@@ -1209,6 +1218,7 @@ pub fn shutdown(state: &Arc<AppState>) {
                     let message_id =
                         if text.trim().is_empty() { None } else { db.add_reply(&user_id, &conversation_id, &text, by.as_ref()).ok() };
                     let _ = db.finalize_generation(&id, "interrupted", &text, Some(INTERRUPTED), message_id.as_deref());
+                    let _ = db.mark_question_failed(&id, "interrupted", INTERRUPTED);
                 } else {
                     let _ = db.finalize_generation(&id, "interrupted", "", Some(NOT_RUN), None);
                 }
@@ -1527,6 +1537,9 @@ mod tests {
         let by = crate::ReplyBy { provider_id: "p1".into(), provider_name: "OpenAI".into(), model: "gpt-x".into() };
         db.set_generation_provider(&with_text, &by).unwrap();
         db.finalize_generation(&done, "done", "all of it", None, None).unwrap();
+        // The row cut off before any text has its question; the restart marks it failed.
+        let question = db.add_message(&u, &c, "user", "q").unwrap();
+        db.conn().execute("UPDATE generations SET user_message_id = ?2 WHERE id = ?1", [&empty, &question]).unwrap();
 
         assert_eq!(sweep_on_start(&db).unwrap(), (2, 1));
         let get = |id: &str| db.get_generation(id).unwrap().unwrap();
@@ -1541,9 +1554,12 @@ mod tests {
         assert!(g.error.unwrap().contains("Not run"));
         assert_eq!(get(&done).status, "done", "finished rows are left alone");
         let messages = db.get_messages(&c).unwrap();
-        assert_eq!(messages.len(), 1, "only the partial text became a message");
-        assert_eq!((messages[0].role.as_str(), messages[0].content.as_str()), ("assistant", "partial answer"));
-        assert_eq!(messages[0].by.as_ref(), Some(&by), "the reply saved after the restart keeps who wrote it");
+        let replies: Vec<_> = messages.iter().filter(|m| m.role == "assistant").collect();
+        assert_eq!(replies.len(), 1, "only the partial text became a reply");
+        assert_eq!(replies[0].content, "partial answer");
+        assert_eq!(replies[0].by.as_ref(), Some(&by), "the reply saved after the restart keeps who wrote it");
+        let q = messages.iter().find(|m| m.id == question).unwrap();
+        assert_eq!(q.failed, Some(crate::space::Failure { code: "interrupted".into(), message: INTERRUPTED.into() }));
         assert_eq!(sweep_on_start(&db).unwrap(), (0, 0), "a second sweep finds nothing");
     }
 

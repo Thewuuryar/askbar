@@ -668,6 +668,22 @@ components:
           type: integer
         provider:
           $ref: '#/components/schemas/ReplyProvider'
+        failed:
+          $ref: '#/components/schemas/MessageFailure'
+    MessageFailure:
+      type: object
+      description: >-
+        On a question only: why its turn failed (it got no reply, or only part of one). `code` is the
+        stream's `error` code; `message` is a sentence for a person, always the server's own words,
+        never a provider's error text. Absent when the turn did not fail, after a Stop, and on
+        questions stored before servers recorded it.
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum: [timed_out, interrupted, kill_switch, provider_error, internal]
+        message:
+          type: string
     ReplyProvider:
       type: object
       description: >-

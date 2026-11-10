@@ -1,6 +1,7 @@
 #!/bin/sh
 # Fails if the admin copy of tokens.css differs from clients/desktop/ui/tokens.css, or if --fg, --muted, --accent, --danger or --good is under
-# 4.5:1 contrast against --bg or --card, or --accent-fg under 4.5:1 against --accent, in either theme.
+# 4.5:1 contrast against --bg or --card, --accent-fg under 4.5:1 against --accent, or --fg under 4.5:1 on
+# --danger-soft (a failed question's tint) laid over --card, in either theme.
 # Usage: scripts/check-ui-tokens.sh
 cd "$(dirname "$0")/.." || exit 2
 python3 - <<'PY'
@@ -11,7 +12,13 @@ if a != open("services/admin/src/ui/tokens.css", encoding="utf-8").read():
 
 def block(start):
     i = a.index(start); j = a.index("}", i)
-    return dict(re.findall(r"--([\w-]+):\s*(#[0-9a-fA-F]{6})\s*;", a[i:j]))
+    return dict(re.findall(r"--([\w-]+):\s*(#[0-9a-fA-F]{6}|rgba\([^)]*\))\s*;", a[i:j]))
+
+def over(rgba, under):
+    # An rgba() colour laid over an opaque #rrggbb one, as #rrggbb.
+    r, g, b, alpha = [float(x) for x in rgba[5:-1].split(",")]
+    u = [int(under[i:i + 2], 16) for i in (1, 3, 5)]
+    return "#" + "".join(f"{round(c * alpha + d * (1 - alpha)):02x}" for c, d in zip((r, g, b), u))
 
 def lum(h):
     c = [int(h[i:i + 2], 16) / 255 for i in (1, 3, 5)]
@@ -32,6 +39,9 @@ for theme, t in (("light", block(":root {")), ("dark", block(':root[data-theme="
     r = ratio(t["accent-fg"], t["accent"])
     if r < 4.5:
         print(f"{theme}: --accent-fg on --accent is {r:.2f}:1 (needs 4.5)"); bad += 1
+    r = ratio(t["fg"], over(t["danger-soft"], t["card"]))
+    if r < 4.5:
+        print(f"{theme}: --fg on --danger-soft over --card is {r:.2f}:1 (needs 4.5)"); bad += 1
 print("ui tokens ok" if not bad else f"{bad} problem(s)")
 sys.exit(1 if bad else 0)
 PY

@@ -95,6 +95,10 @@ const SPACE_MIGRATIONS: &[&str] = &[
      ALTER TABLE messages ADD COLUMN model TEXT;
      ALTER TABLE generations ADD COLUMN provider_name TEXT;
      ALTER TABLE generations ADD COLUMN model TEXT;",
+    // 3: a question whose turn failed keeps why (plan step 1.13), so a reopened conversation still
+    // shows it. The message is always the server's own words, never a provider's error text.
+    "ALTER TABLE messages ADD COLUMN failed_code TEXT;
+     ALTER TABLE messages ADD COLUMN failed_message TEXT;",
 ];
 
 /// The provider and model that wrote a reply, as they were when it was written.
@@ -103,6 +107,13 @@ pub struct ReplyBy {
     pub provider_id: String,
     pub provider_name: String,
     pub model: String,
+}
+
+/// Why a question got no complete reply: a stable code and a sentence for a person.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct Failure {
+    pub code: String,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -121,6 +132,8 @@ pub struct StoredMessage {
     pub created_at: i64,
     /// For a reply: who wrote it. `None` for questions and for replies stored before migration 2.
     pub by: Option<ReplyBy>,
+    /// For a question: why its turn failed. `None` if it did not, and for questions stored before migration 3.
+    pub failed: Option<Failure>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -329,7 +342,7 @@ impl SpaceStore {
     /// Oldest first. Empty if there is no such conversation.
     pub fn get_messages(&self, conversation_id: &str) -> Result<Vec<StoredMessage>, DbError> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, role, content, created_at, provider_id, provider_name, model
+            "SELECT id, role, content, created_at, provider_id, provider_name, model, failed_code, failed_message
              FROM messages WHERE conversation_id = ?1 ORDER BY id ASC",
         )?;
         let rows = stmt.query_map(params![conversation_id], |r| {
@@ -341,7 +354,17 @@ impl SpaceStore {
                     model: r.get::<_, Option<String>>(6)?.unwrap_or_default(),
                 })
             });
-            Ok(StoredMessage { id: r.get(0)?, role: r.get(1)?, content: r.get(2)?, created_at: r.get(3)?, by: by.transpose()? })
+            let failed = r.get::<_, Option<String>>(7)?.map(|code| -> rusqlite::Result<Failure> {
+                Ok(Failure { code, message: r.get::<_, Option<String>>(8)?.unwrap_or_default() })
+            });
+            Ok(StoredMessage {
+                id: r.get(0)?,
+                role: r.get(1)?,
+                content: r.get(2)?,
+                created_at: r.get(3)?,
+                by: by.transpose()?,
+                failed: failed.transpose()?,
+            })
         })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
@@ -453,6 +476,17 @@ impl SpaceStore {
                 },
             )
             .optional()?)
+    }
+
+    /// Marks the question a generation answers as failed, with a code and the server's own sentence.
+    /// Does nothing if the generation has no question yet (it never started).
+    pub fn mark_question_failed(&self, generation_id: &str, code: &str, message: &str) -> Result<(), DbError> {
+        self.conn.execute(
+            "UPDATE messages SET failed_code = ?2, failed_message = ?3
+             WHERE id = (SELECT user_message_id FROM generations WHERE id = ?1)",
+            params![generation_id, code, message],
+        )?;
+        Ok(())
     }
 
     /// Ends a generation with its final status. Returns false if it had already ended.
@@ -889,6 +923,58 @@ mod tests {
         db.add_reply(U, "c1", "new", Some(&by("p1", "OpenAI", "gpt-x"))).unwrap();
         let new = db.get_messages("c1").unwrap().into_iter().find(|m| m.content == "new").unwrap();
         assert_eq!(new.by, Some(by("p1", "OpenAI", "gpt-x")));
+        drop(db);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failed_turn_marks_only_its_question() {
+        let db = store();
+        let c = db.create_conversation(U, "c").unwrap();
+        let q = db.add_message(U, &c, "user", "q").unwrap();
+        db.add_reply(U, &c, "partial", None).unwrap();
+        let g = db.create_generation(&new_gen(U, &c, "queued")).unwrap();
+        db.start_generation(&g, &q, None).unwrap();
+        db.mark_question_failed(&g, "timed_out", "Timed out after 5 minutes").unwrap();
+        let msgs = db.get_messages(&c).unwrap();
+        let failed: Vec<_> = msgs.iter().map(|m| (m.content.as_str(), m.failed.clone())).collect();
+        assert_eq!(
+            failed,
+            [("q", Some(Failure { code: "timed_out".into(), message: "Timed out after 5 minutes".into() })), ("partial", None)]
+        );
+        // A generation that never started has no question: nothing changes.
+        let queued = db.create_generation(&new_gen(U, &c, "queued")).unwrap();
+        db.mark_question_failed(&queued, "interrupted", "x").unwrap();
+        db.mark_question_failed("no-such-generation", "interrupted", "x").unwrap();
+        assert_eq!(db.get_messages(&c).unwrap(), msgs);
+    }
+
+    #[test]
+    fn a_space_file_from_before_failed_questions_is_migrated_and_keeps_its_rows() {
+        // A file at version 2, as servers before migration 3 left it.
+        let dir = std::env::temp_dir().join(format!("askbar-space-v2-{}", new_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("{}.db", new_id()));
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(SPACE_MIGRATIONS[0]).unwrap();
+            conn.execute_batch(SPACE_MIGRATIONS[1]).unwrap();
+            conn.execute_batch(&format!("PRAGMA application_id = {SPACE_APPLICATION_ID}; PRAGMA user_version = 2;")).unwrap();
+            conn.execute_batch(
+                "INSERT INTO conversations (id, created_by, title, created_at, updated_at) VALUES ('c1','u1','old',1,1);
+                 INSERT INTO messages (id, conversation_id, user_id, role, content, created_at, provider_id, provider_name, model)
+                     VALUES ('m1','c1','u1','user','q',1,NULL,NULL,NULL), ('m2','c1','u1','assistant','a',2,'p1','OpenAI','gpt-x');",
+            )
+            .unwrap();
+        }
+        let db = SpaceStore::open(&path).unwrap();
+        let v: i64 = db.conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(v as usize, SPACE_MIGRATIONS.len());
+        let msgs = db.get_messages("c1").unwrap();
+        assert_eq!(
+            msgs.iter().map(|m| (m.content.as_str(), m.by.is_some(), m.failed.is_none())).collect::<Vec<_>>(),
+            [("q", false, true), ("a", true, true)]
+        );
         drop(db);
         let _ = std::fs::remove_dir_all(&dir);
     }
