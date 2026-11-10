@@ -44,7 +44,9 @@ async function waitForPort(port) {
   fs.mkdirSync(dirs.run, { recursive: true });
   // The tokens come from bootstrap, as in the stack (ADR 0049); here its volumes are plain directories.
   const hashFile = path.join(dirs.creds, 'server-token', 'accept', 'admin-server.sha256');
-  execFileSync(path.join(ROOT, 'target/debug/askbar-bootstrap'), [], { env: { ...process.env, ASKBAR_BOOTSTRAP_ROOT: dirs.creds }, stdio: 'inherit' });
+  const bootstrapBin = path.join(ROOT, 'target/debug/askbar-bootstrap');
+  if (!fs.existsSync(bootstrapBin)) execFileSync('cargo', ['build', '-q', '-p', 'askbar-bootstrap'], { cwd: ROOT, stdio: 'inherit' });
+  execFileSync(bootstrapBin, [], { env: { ...process.env, ASKBAR_BOOTSTRAP_ROOT: dirs.creds }, stdio: 'inherit' });
   const sock = path.join(dirs.run, 'admin.sock');
   const children = [];
   const run = (cmd, args, env) => { const c = spawn(cmd, args, { env: { ...process.env, ...env }, stdio: 'ignore' }); children.push(c); return c; };
