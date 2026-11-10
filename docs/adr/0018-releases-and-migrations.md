@@ -26,3 +26,5 @@ Not recorded.
 ## Consequences
 
 An untested merge can't reach a tagged deployment. Published images don't exist until the v1 release, so pre-1.0 use builds locally.
+
+## Amendments

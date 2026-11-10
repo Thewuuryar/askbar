@@ -41,3 +41,5 @@ V2 keeps per-link tokens unless a CA trigger is met. The executor runs what it's
 ## Consequences
 
 Tailscale needs one manual setup for its tags, rules, and OAuth client. Pairing still proves which executor is connected, because the tunnel provides only the private route. This ADR's details are finalized when executor work starts.
+
+## Amendments

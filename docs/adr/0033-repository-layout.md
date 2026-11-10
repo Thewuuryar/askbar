@@ -40,3 +40,5 @@ askbar/
 ## Consequences
 
 Paths in scripts, tests, compose and the docs change once. A server-only machine builds and tests the root workspace without GTK. The client gets its own `Cargo.lock`, so shared dependencies can drift between the two workspaces. Enforced by the build: compose, the Dockerfile and the tests use these paths.
+
+## Amendments

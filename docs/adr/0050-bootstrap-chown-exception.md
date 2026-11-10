@@ -27,3 +27,5 @@ Source: owner review of the open questions in [0049](0049-bootstrap.md) (2026-11
 ## Consequences
 
 `bootstrap` is the second service, after Caddy, that adds a capability. It holds it only for the seconds it runs, with no network. `check-isolation.sh` checks that `CHOWN` is its only capability.
+
+## Amendments

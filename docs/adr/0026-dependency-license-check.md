@@ -22,3 +22,5 @@ Askbar is licensed under `AGPL-3.0-or-later`. Code built into Askbar must have a
 ## Consequences
 
 An incompatible dependency fails CI before it's merged. The check doesn't replace legal advice, and third-party images still need their own license notices when published.
+
+## Amendments

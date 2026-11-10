@@ -62,3 +62,5 @@ Not recorded.
 ## Consequences
 
 Hardening continues in later versions, and new ideas that don't meet the triage rule don't delay v1. The v1 build still needs an estimate against the 100 hours.
+
+## Amendments

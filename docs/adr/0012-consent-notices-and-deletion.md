@@ -29,3 +29,5 @@ Not recorded.
 ## Consequences
 
 Deleted data survives in backups and audit records until those periods end. A notice that the admin has turned off gives users no warning.
+
+## Amendments

@@ -20,3 +20,5 @@ When a caller's previously accepted token is rejected, the caller records the fa
 ## Consequences
 
 The admin gets early warning of a broken or attacked link, and investigates and rotates the token as needed. Alert rules must limit repeats, so one fault doesn't flood alerts.
+
+## Amendments

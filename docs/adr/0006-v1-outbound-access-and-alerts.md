@@ -26,3 +26,5 @@ V1 needs provider access, certificates, and alerts, but the egress proxy, a dead
 ## Consequences
 
 A compromised `model-gateway` or `cpa` can send data directly until the egress proxy ships. Without the monitor and the off-host hash, nothing outside the host notices a silent system or a rewritten audit chain. These risks are accepted for v1 ([0016](0016-risk-register.md)).
+
+## Amendments

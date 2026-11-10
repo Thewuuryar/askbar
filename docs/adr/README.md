@@ -1,6 +1,6 @@
 # Architecture decision records
 
-This set records the decisions from the original Askbar architecture plan (kept in git history as `docs/architecture-plan.md`, last at commit 1f47f86), plus the requirements and recommendations added afterward. The "Plan decisions" column gives the decision numbers from that plan. Every ADR starts as Proposed, because only the owner can move an ADR to Accepted ([0001](0001-decision-records-and-change-rules.md)). Component and register ADRs (a `Kind:` line) are amended in place, a decision ADR can be amended in part, and a held-back ADR can be Deferred ([0046](0046-component-and-register-adrs-and-partial-amendments.md), once accepted).
+This set records the decisions from the original Askbar architecture plan (kept in git history as `docs/architecture-plan.md`, last at commit 1f47f86), plus the requirements and recommendations added afterward. The "Plan decisions" column gives the decision numbers from that plan. The rules for writing and changing ADRs are all in [0001](0001-decision-records-and-change-rules.md): only the owner accepts an ADR; any accepted ADR is amended in place, with an Amendments list; and an ADR folded into another stays as a stub, `Merged into NNNN`, so its number still works.
 
 | ADR | Title | Status | Plan decisions |
 | --- | --- | --- | --- |
@@ -30,7 +30,7 @@ This set records the decisions from the original Askbar architecture plan (kept 
 | [0024](0024-rejected-token-alert.md) | Rejected token alert | Accepted | Added recommendation |
 | [0025](0025-audit-record-reliability.md) | Audit record reliability | Accepted | Added recommendation |
 | [0026](0026-dependency-license-check.md) | Dependency license check | Accepted | Added recommendation |
-| [0027](0027-adr-format-and-numbering.md) | ADR format and numbering | Accepted | Added recommendation |
+| [0027](0027-adr-format-and-numbering.md) | ADR format and numbering | Merged into 0001 | Added recommendation |
 | [0028](0028-service-boundaries-and-config-delivery.md) | Service boundaries and config delivery | Accepted | Required by v1 decisions |
 | [0029](0029-shared-origin-protections.md) | Shared origin protections | Accepted | Required by v1 decisions |
 | [0030](0030-sealed-audit-content.md) | Sealed audit content | Accepted | Required by v1 decisions |
@@ -38,7 +38,7 @@ This set records the decisions from the original Askbar architecture plan (kept 
 | [0032](0032-container-hardening.md) | Container hardening | Accepted; amended by 0050 | Required by v1 decisions |
 | [0033](0033-repository-layout.md) | Repository layout | Accepted | Owner request with the v1 plan |
 | [0034](0034-self-signed-https-and-certificate-pinning.md) | Self-signed HTTPS and certificate pinning | Accepted | Required by 0007; owner choice in the v1 plan |
-| [0035](0035-editorial-edits-to-accepted-adrs.md) | Editorial edits to accepted ADRs | Accepted | Owner review of the v1 layout change |
+| [0035](0035-editorial-edits-to-accepted-adrs.md) | Editorial edits to accepted ADRs | Merged into 0001 | Owner review of the v1 layout change |
 | [0036](0036-askbar-service-crate.md) | The `askbar-service` crate | Accepted | Plan step 1.3; owner rule for component ADRs |
 | [0037](0037-askbar-cpa-image-and-supervisor.md) | The `askbar-cpa` image and its supervisor | Accepted | Plan step 1.4; owner choice of a supervisor for `cpa` |
 | [0038](0038-names-and-new-components-without-a-name-check.md) | Names and new components, without a name check | Accepted | Owner decision; supersedes 0021 |
@@ -49,11 +49,11 @@ This set records the decisions from the original Askbar architecture plan (kept 
 | [0043](0043-mock-llm.md) | The `mock-llm` component | Accepted | Plan step 1.14; owner rule for component ADRs |
 | [0044](0044-desktop-client.md) | The desktop client | Accepted | Plan step 1.14; owner rule for component ADRs |
 | [0045](0045-askbar-proto-crate.md) | The `askbar-proto` crate | Accepted | Plan step 1.14; owner rule for component ADRs |
-| [0046](0046-component-and-register-adrs-and-partial-amendments.md) | Component and register ADRs, partial amendments, and deferral | Accepted | Owner request in review of plan step 1.14 |
+| [0046](0046-component-and-register-adrs-and-partial-amendments.md) | Component and register ADRs, partial amendments, and deferral | Merged into 0001 | Owner request in review of plan step 1.14 |
 | [0047](0047-generation-routes-under-spaces.md) | Generation routes under spaces | Accepted; amended by 0048 | Plan step 1.11, as built |
 | [0048](0048-drop-post-space-conversations.md) | Drop `POST /spaces/{space_id}/conversations` | Accepted | Owner decision after review of 0047 |
 | [0049](0049-bootstrap.md) | The `bootstrap` component | Accepted | Plan step 2.1; owner rule for component ADRs |
 | [0050](0050-bootstrap-chown-exception.md) | A `CHOWN` exception for `bootstrap` | Accepted | Owner review of the open questions in 0049 |
 | [0051](0051-auditor.md) | The `auditor` component | Accepted | Plan steps 2.4 to 2.9; owner rule for component ADRs |
 | [0052](0052-askbar-audit-crate.md) | The `askbar-audit` crate | Accepted | Plan step 2.3; owner rule for component ADRs |
-| [0053](0053-amending-adrs-in-place.md) | Amending any ADR in place | Accepted | Owner request, 2026-11-10 |
+| [0053](0053-amending-adrs-in-place.md) | Amending any ADR in place | Merged into 0001 | Owner request, 2026-11-10 |

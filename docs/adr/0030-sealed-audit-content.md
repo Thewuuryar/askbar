@@ -27,3 +27,5 @@ Audit records must support investigations, and reading their content must take a
 ## Consequences
 
 A compromised server can't open records it already sealed, but it can still read conversations in its space files. Sealed content can't be searched by the server. Rotating after a suspected compromise protects new content only. Tests and `check-isolation.sh` confirm that no unsealed content is recorded.
+
+## Amendments

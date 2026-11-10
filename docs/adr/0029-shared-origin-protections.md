@@ -24,3 +24,5 @@ The admin and client API share one host name, and so one browser origin. Somethi
 ## Consequences
 
 The admin and client API can stay on one URL, but these rules become part of the security boundary. Browser and API tests must cover each rule, and a new route that serves content needs a review against them.
+
+## Amendments

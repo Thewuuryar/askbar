@@ -74,3 +74,5 @@ V1 has manual and scheduled backups, encrypted with age.
 ## Consequences
 
 A stolen backup can be attacked offline, so the passphrase length matters. A lost passphrase makes backups unusable. A backup needs the backup passphrase that was current when it was made. A share on the same site doesn't protect against a fire or theft that affects both machines.
+
+## Amendments

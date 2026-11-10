@@ -26,3 +26,5 @@ Users need simple client setup and private access away from home.
 ## Consequences
 
 The default deployment has a smaller attack surface. Clients other than the one that started a chat receive it when it's complete. A lost or stolen client must be revocable ([0016](0016-risk-register.md)).
+
+## Amendments

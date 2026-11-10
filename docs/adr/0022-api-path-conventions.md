@@ -75,3 +75,5 @@ Each internal service uses the same routes where they apply: `GET /health`, `GET
 ## Consequences
 
 Caddy routes only `/admin`, `/api/admin`, and `/api/client`, and answers 404 for other paths. Moving the admin API changes its routes, cookie, site calls, OpenAPI file, and tests. Every route is recorded in its OpenAPI file, and OpenAPI tests catch drift.
+
+## Amendments

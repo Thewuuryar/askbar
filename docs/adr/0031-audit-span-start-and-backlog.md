@@ -25,3 +25,5 @@ Fail-closed auditing only works if a model call can't begin before its record ex
 ## Consequences
 
 Each reply adds an auditor round trip, which counts toward the 200 ms latency target. If the auditor is down, model work stops until it recovers. Payload records follow the reply start, so a crash mid-stream can leave a reply without content, marked interrupted ([0025](0025-audit-record-reliability.md)). A compromised `model-gateway` can skip a span start, since it can already reach providers directly in v1. Its independent records and the alerts in [0016](0016-risk-register.md) cover that. Failure tests cover an unreachable auditor, a full disk, and a span start that isn't acknowledged.
+
+## Amendments

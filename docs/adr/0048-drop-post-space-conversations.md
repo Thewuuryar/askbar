@@ -34,3 +34,5 @@ That is the nine routes the code registers. A conversation is created by its fir
 
 - The list matches the code and `docs/openapi/client.v1.yaml`, which the server OpenAPI test enforces against the code.
 - After 1.0 no client may rely on this route, and adding it later is an additive change.
+
+## Amendments

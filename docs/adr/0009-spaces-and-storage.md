@@ -43,3 +43,5 @@ Each personal space and shared space has its own SQLite file, with membership in
 ## Consequences
 
 Search across spaces must query each file and merge results. SQLite allows one writer per file and needs one host. Storage stays behind a per-space interface to limit any later rewrite. A compromised server container can still open all space files ([0016](0016-risk-register.md)).
+
+## Amendments

@@ -31,3 +31,5 @@ Each endpoint has authentication, an audit event, a cooldown, a shutdown limit, 
 ## Consequences
 
 A hung service, a failed admin, or the auditor needs host recovery. The admin also can't pull images, so updates run from the host ([0017](0017-dependencies-and-patches.md)). Docker, and any DNS or router settings, must exist before deployment.
+
+## Amendments
