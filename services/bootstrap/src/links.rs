@@ -13,14 +13,17 @@ pub struct Link {
     pub prefix: &'static str,
 }
 
-/// Only links whose receiver exists: the auditor links come in step 2.4, `model-gateway` in phase 3,
-/// `alerter` in phase 4.
+/// Only links whose receiver exists: `admin-server` (step 2.1), the auditor's two admin links (2.4);
+/// `model-gateway` links come in phase 3 and `alerter` in phase 4. The auditor's other links (`server-auditor`,
+/// `model-gateway-auditor`) come with the services that call it.
 pub const LINKS: &[Link] = &[
     Link { name: "admin-server", caller: "admin", receiver: "server", prefix: "mgt_" }, // names-ok: the token prefix already issued
+    Link { name: "admin-auditor-append", caller: "admin", receiver: "auditor", prefix: "audapp_" },
+    Link { name: "admin-auditor-read", caller: "admin", receiver: "auditor", prefix: "audrd_" },
 ];
 
 /// A service with a credential volume `<name>-token`, and the uid that reads it (ADR 0003).
-pub const SERVICES: &[(&str, u32)] = &[("admin", 10001), ("server", 10002)];
+pub const SERVICES: &[(&str, u32)] = &[("admin", 10001), ("server", 10002), ("auditor", 10003)];
 
 pub fn link(name: &str) -> Option<&'static Link> {
     LINKS.iter().find(|l| l.name == name)

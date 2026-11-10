@@ -4,6 +4,7 @@
 # One target per service:
 #   docker build --target server     -t askbar-server .
 #   docker build --target bootstrap  -t askbar-bootstrap .
+#   docker build --target auditor    -t askbar-auditor .
 #   docker build --target admin      -t askbar-admin  .
 #   docker build --target caddy      -t askbar-caddy  .
 #   docker build --target cpa        -t askbar-cpa    .
@@ -26,22 +27,23 @@ COPY services/server/Cargo.toml services/server/
 COPY services/admin/Cargo.toml services/admin/
 COPY services/cpa-supervisor/Cargo.toml services/cpa-supervisor/
 COPY services/bootstrap/Cargo.toml services/bootstrap/
+COPY services/auditor/Cargo.toml services/auditor/
 RUN for d in crates/* services/*; do mkdir -p "$d/src" && touch "$d/src/lib.rs" && echo 'fn main() {}' > "$d/src/main.rs"; done \
- && cargo build --release --locked -p askbar-server -p askbar-admin -p askbar-cpa-supervisor -p askbar-bootstrap \
+ && cargo build --release --locked -p askbar-server -p askbar-admin -p askbar-cpa-supervisor -p askbar-bootstrap -p askbar-auditor \
  && rm -rf crates/*/src services/*/src target/release/.fingerprint/askbar-*
 # The real sources. Removing the members' fingerprints above makes cargo rebuild them, whatever the
 # copied files' timestamps.
 COPY crates crates
 COPY services services
 # The desktop client is its own workspace (clients/desktop) and is not part of any image.
-RUN cargo build --release --locked -p askbar-server -p askbar-admin -p askbar-cpa-supervisor -p askbar-bootstrap
+RUN cargo build --release --locked -p askbar-server -p askbar-admin -p askbar-cpa-supervisor -p askbar-bootstrap -p askbar-auditor
 
 # --------------------------------------------------------------- bootstrap
 # Creates the per-link tokens and exits (ADR 0049). Runs as root with CHOWN as its only capability, no
 # network, and mounts the credential volumes only. No user is made: it must own a directory it writes
 # to, then give it to the service that reads it.
 FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc AS bootstrap
-RUN mkdir /server-token /admin-token
+RUN mkdir /server-token /admin-token /auditor-token
 COPY --from=build /src/target/release/askbar-bootstrap /usr/local/bin/askbar-bootstrap
 ENTRYPOINT ["askbar-bootstrap"]
 
@@ -92,6 +94,24 @@ WORKDIR /CLIProxyAPI
 ENV ASKBAR_CPA_CONFIG_DIR=/cpa-config
 ENTRYPOINT ["askbar-cpa-supervisor"]
 CMD ["./CLIProxyAPI", "-config", "/cpa-config/config.yaml"]
+
+# ----------------------------------------------------------------- auditor
+# The audit store as its own container (ADR 0051): /api/audit/v1 on 8083, on `audit-*` networks only, with no route
+# out. Runs as uid 10003 from its first instruction, with no capabilities. /audit belongs to that uid in the image,
+# so Docker gives a new `auditor-data` volume the same owner. `df` (coreutils) tells it how much room is left.
+FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc AS auditor
+RUN groupadd --system --gid 10003 askbar-auditor && useradd --system --uid 10003 --gid 10003 --home-dir /audit --shell /usr/sbin/nologin askbar-auditor \
+ && mkdir /audit /auditor-token && chown askbar-auditor:askbar-auditor /audit /auditor-token
+COPY --from=build /src/target/release/askbar-auditor /usr/local/bin/askbar-auditor
+USER askbar-auditor
+ENV ASKBAR_AUDIT_DIR=/audit \
+    ASKBAR_AUDITOR_TOKEN_DIR=/auditor-token \
+    ASKBAR_AUDIT_API_ADDR=0.0.0.0:8083
+VOLUME /audit
+EXPOSE 8083
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD ["askbar-auditor", "healthcheck"]
+ENTRYPOINT ["askbar-auditor"]
 
 # ----------------------------------------------------------------- server
 # The server: the client API on 8080 and the server API on its own address. Runs as uid 10002,

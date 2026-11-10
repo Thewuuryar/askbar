@@ -42,7 +42,7 @@ Source: plan steps 2.4 to 2.9 ([plan-v1.md](../plan-v1.md)); owner rule that eve
   - `auditor-token`: its credential volume, read-only.
   - The server's old `audit-data` is neither renamed nor mounted. It stays declared until 1.0 and holds the pre-2.4 records until the owner copies or deletes it (the guide says how).
 - **Who it runs as:** uid 10003 ([0003](0003-v1-service-layout.md)), from its first instruction, with no capabilities.
-- **Networks:** internal only, with no outbound route. There is one network per caller, shared with the auditor alone: `audit-server` and `audit-admin` (step 2.4), `audit-model-gateway` (phase 3) and `audit-alerter` (phase 4, which also carries alert events). No subnet is pinned ([guide](../guide.md#docker-networks)).
+- **Networks:** internal only, with no outbound route. There is one network per caller, shared with the auditor alone: `audit-admin` (step 2.4a, built), `audit-server` (with the server's switch to the auditor, step 3.1), `audit-model-gateway` (phase 3) and `audit-alerter` (phase 4, which also carries alert events). No subnet is pinned ([guide](../guide.md#docker-networks)).
 - **Listener:** one port, every interface. That is safe because it joins only `audit-*` networks, each for one caller.
 - **Links** ([architecture.md](../architecture.md), Links):
   - in: from the server, the admin (append and read), and later `model-gateway` and `alerter`;
@@ -75,3 +75,4 @@ The decisions behind the auditor itself (its own container, synchronous acknowle
 ## Amendments
 
 - 2026-11-10: trimmed: decisions that 0010 and 0011 make are linked instead of restated (token scopes, acknowledgment and latency, boot IDs, retention, backlog), and links to the merged 0025, 0030, 0031 and 0046 point to 0010, 0011 and 0001. No decision changed.
+- 2026-11-10: built standing alone in plan step 2.4a (PR: feat/auditor): nothing sends it records until step 3.1, and the server still records to its own file. Built so: its links are `server-auditor`, `model-gateway-auditor`, `admin-auditor-append` and `admin-auditor-read` (only the two admin links have tokens from `bootstrap` yet, [0049](0049-bootstrap.md)); the server's link opens `gate` spans only and `model-gateway`'s any kind; a hello ends that service's earlier unfinished spans as interrupted; admin action records and prune records are tables of their own, never changed or deleted (a prune record holds the cutoff and the counts; the hash of the last record deleted comes with the chain, plan step 2.6); a backlog over 1,000 queued records or an oldest record waiting over 5 s refuses every append, and below 256 MiB free a new span, with `503 audit_backlog`; free space is read from `df`; the network `audit-admin` is built, the others come with their callers.

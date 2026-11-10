@@ -3,10 +3,13 @@
 //! independent of `control.db` and the space files. Phase 4 stores metadata only; message content is added in
 //! Phase 5, sealed.
 
+pub use rusqlite;
 use rusqlite::Connection;
+use std::collections::VecDeque;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
+use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, oneshot};
 
 /// "ADIT": marks the file as an Askbar audit database, so no other SQLite file is taken for one.
@@ -62,6 +65,40 @@ const MIGRATIONS: &[&str] = &[
      CREATE TRIGGER spans_change_only_while_running BEFORE UPDATE ON spans
      WHEN old.status <> 'running'
      BEGIN SELECT RAISE(ABORT, 'a span that is no longer running cannot be changed'); END;",
+    // v3: the auditor (ADR 0051). A span records which service appended it and in which process (its boot
+    // ID), so a service that starts again can have its earlier unfinished spans ended as interrupted
+    // (ADR 0010 rule 6). Admin action records, a record of each prune and the retention setting are new.
+    // Admin action records and prune records are never changed or deleted: retention removes spans and
+    // payloads only.
+    "ALTER TABLE spans ADD COLUMN service TEXT;
+     ALTER TABLE spans ADD COLUMN boot_id TEXT;
+     CREATE INDEX idx_spans_service_status ON spans(service, status);
+     CREATE TABLE admin_actions (
+         id          TEXT PRIMARY KEY,
+         at          INTEGER NOT NULL,
+         service     TEXT    NOT NULL,
+         category    TEXT    NOT NULL,
+         action      TEXT    NOT NULL,
+         outcome     TEXT    NOT NULL,
+         detail_json TEXT
+     );
+     CREATE INDEX idx_admin_actions_at ON admin_actions(at DESC, id DESC);
+     CREATE TRIGGER admin_actions_are_never_changed BEFORE UPDATE ON admin_actions
+     BEGIN SELECT RAISE(ABORT, 'admin action records cannot be changed'); END;
+     CREATE TRIGGER admin_actions_are_never_deleted BEFORE DELETE ON admin_actions
+     BEGIN SELECT RAISE(ABORT, 'admin action records cannot be deleted'); END;
+     CREATE TABLE prunes (
+         id       INTEGER PRIMARY KEY AUTOINCREMENT,
+         at       INTEGER NOT NULL,
+         cutoff   INTEGER NOT NULL,
+         spans    INTEGER NOT NULL,
+         payloads INTEGER NOT NULL
+     );
+     CREATE TRIGGER prunes_are_never_changed BEFORE UPDATE ON prunes
+     BEGIN SELECT RAISE(ABORT, 'prune records cannot be changed'); END;
+     CREATE TRIGGER prunes_are_never_deleted BEFORE DELETE ON prunes
+     BEGIN SELECT RAISE(ABORT, 'prune records cannot be deleted'); END;
+     CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -244,6 +281,69 @@ pub fn span_payloads(conn: &Connection, span_id: &str) -> rusqlite::Result<Optio
         }))
     })?;
     Ok(Some(rows.collect::<Result<_, _>>()?))
+}
+
+/// Admin action records, newest first. `before` is the id of the last one already seen (ids sort by time).
+pub fn list_admin_actions(conn: &Connection, before: Option<&str>, limit: Option<usize>) -> rusqlite::Result<Vec<serde_json::Value>> {
+    let limit = limit.unwrap_or(DEFAULT_TRACE_LIMIT).clamp(1, MAX_TRACE_LIMIT);
+    let mut stmt = conn.prepare(
+        "SELECT id, at, service, category, action, outcome, detail_json FROM admin_actions
+         WHERE (?1 IS NULL OR id < ?1) ORDER BY id DESC LIMIT ?2",
+    )?;
+    let rows = stmt.query_map(rusqlite::params![before, limit as i64], |r| {
+        let detail: Option<String> = r.get(6)?;
+        Ok(serde_json::json!({
+            "id": r.get::<_, String>(0)?,
+            "at": r.get::<_, i64>(1)?,
+            "service": r.get::<_, String>(2)?,
+            "category": r.get::<_, String>(3)?,
+            "action": r.get::<_, String>(4)?,
+            "outcome": r.get::<_, String>(5)?,
+            "detail": detail.and_then(|d| serde_json::from_str::<serde_json::Value>(&d).ok()),
+        }))
+    })?;
+    rows.collect()
+}
+
+/// What was used since `since` (unix seconds), by provider and model of each generation's last attempt. Token
+/// counts only: prices are the admin's.
+pub fn token_counts(conn: &Connection, since: i64) -> rusqlite::Result<Vec<serde_json::Value>> {
+    let mut stmt = conn.prepare(
+        "SELECT a.provider_id, a.model, COUNT(*), COALESCE(SUM(t.tokens_in), 0), COALESCE(SUM(t.tokens_out), 0),
+                COALESCE(SUM(t.tokens_cached), 0)
+         FROM spans t
+         LEFT JOIN spans a ON a.id = (SELECT id FROM spans WHERE trace_id = t.trace_id AND kind = 'attempt' ORDER BY id DESC LIMIT 1)
+         WHERE t.kind = 'turn' AND t.started_at >= ?1
+         GROUP BY a.provider_id, a.model ORDER BY a.provider_id, a.model",
+    )?;
+    let rows = stmt.query_map([since], |r| {
+        Ok(serde_json::json!({
+            "provider_id": r.get::<_, Option<String>>(0)?,
+            "model": r.get::<_, Option<String>>(1)?,
+            "requests": r.get::<_, i64>(2)?,
+            "tokens_in": r.get::<_, i64>(3)?,
+            "tokens_out": r.get::<_, i64>(4)?,
+            "tokens_cached": r.get::<_, i64>(5)?,
+        }))
+    })?;
+    rows.collect()
+}
+
+/// A setting of the store itself (see `Record::Setting`).
+pub fn get_setting(conn: &Connection, key: &str) -> rusqlite::Result<Option<String>> {
+    use rusqlite::OptionalExtension;
+    conn.query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| r.get(0)).optional()
+}
+
+/// Every prune so far, oldest first: when, the cutoff, and how many spans and payloads it deleted.
+pub fn list_prunes(conn: &Connection) -> rusqlite::Result<Vec<serde_json::Value>> {
+    let mut stmt = conn.prepare("SELECT at, cutoff, spans, payloads FROM prunes ORDER BY id")?;
+    let rows = stmt.query_map([], |r| {
+        Ok(serde_json::json!({
+            "at": r.get::<_, i64>(0)?, "cutoff": r.get::<_, i64>(1)?, "spans": r.get::<_, i64>(2)?, "payloads": r.get::<_, i64>(3)?,
+        }))
+    })?;
+    rows.collect()
 }
 
 /// The p-th percentile (0 to 100) of a sorted list, by nearest rank.
@@ -443,6 +543,10 @@ pub struct SpanStart {
     /// When it began, in unix milliseconds. The columns hold whole seconds; this keeps the finer
     /// time in `attrs.started_ms` so a trace can be drawn to scale.
     pub started_ms: i64,
+    /// The service that appended it and its process, set by the auditor from the caller's token (a
+    /// server recording to its own file leaves them empty).
+    pub service: Option<String>,
+    pub boot_id: Option<String>,
 }
 
 /// How a span ended. Fields left `None` keep what the start recorded.
@@ -556,6 +660,56 @@ pub struct PayloadWrite {
     pub created_at: i64,
 }
 
+/// An admin action record (ADR 0010), as stored.
+#[derive(Debug, Clone)]
+pub struct AdminActionWrite {
+    pub id: String,
+    pub at: i64,
+    /// The caller, from its token.
+    pub service: String,
+    pub category: String,
+    pub action: String,
+    pub outcome: String,
+    pub detail_json: Option<String>,
+}
+
+/// What can be appended and acknowledged (see [`Recorder::append`]). The acknowledgment comes after the
+/// record is committed, and appending the same record twice records it once.
+#[derive(Debug, Clone)]
+pub enum Record {
+    Start(SpanStart),
+    Finish(SpanFinish),
+    Payload(PayloadWrite),
+    AdminAction(AdminActionWrite),
+    /// A service's process announces itself: that service's spans from other processes that are still
+    /// running end as interrupted. Acknowledged with how many.
+    Hello {
+        service: String,
+        boot_id: String,
+    },
+    /// A setting of the store itself (the retention days). Not an audit record.
+    Setting {
+        key: String,
+        value: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum AppendError {
+    /// The queue is full: nothing was recorded.
+    #[error("the audit queue is full")]
+    Full,
+    /// A finish or a payload for a span that is not there.
+    #[error("no such span")]
+    NoSuchSpan,
+    #[error("the audit writer has stopped")]
+    Stopped,
+    #[error("{0}")]
+    Db(String),
+}
+
+type Ack = oneshot::Sender<Result<u64, AppendError>>;
+
 enum Event {
     Start(SpanStart),
     Finish(SpanFinish),
@@ -568,6 +722,8 @@ enum Event {
         cutoff: i64,
         done: oneshot::Sender<Result<(usize, usize), String>>,
     },
+    /// A record whose caller waits for it to be committed.
+    Acked(Record, Ack),
 }
 
 /// Records are never kept for less than this many days, whatever the setting says.
@@ -588,22 +744,38 @@ struct Pause {
     changed: Condvar,
 }
 
+/// How far behind the writer is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Backlog {
+    /// Records queued or being written.
+    pub queued: usize,
+    /// How long the oldest of them has waited.
+    pub oldest: Duration,
+}
+
+/// The most records one transaction holds (group commit).
+const MAX_BATCH: usize = 128;
+
 /// The handle the rest of the server records through. Cheap to clone. Recording never waits:
 /// events go into a bounded queue, one writer thread owns the connection and drains it, and
 /// when the queue is full the event is dropped and `healthy()` says so (new generations are
-/// then refused, see 4.10).
+/// then refused, see 4.10). The writer commits what is queued in groups. A caller that must know its
+/// record is stored uses [`Recorder::append`], which answers after the commit.
 #[derive(Clone)]
 pub struct Recorder {
     tx: Option<mpsc::Sender<Event>>,
     path: Option<std::path::PathBuf>,
     pause: Arc<Pause>,
     dropped: Arc<AtomicU64>,
+    /// When each queued record was queued, oldest first. Pushed under the same lock that sends it and
+    /// popped by the writer when it takes it, so the two never disagree.
+    queued: Arc<Mutex<VecDeque<Instant>>>,
 }
 
 impl Recorder {
     /// Records nothing. The default, so a server without an audit store behaves as before.
     pub fn noop() -> Recorder {
-        Recorder { tx: None, path: None, pause: Arc::default(), dropped: Arc::default() }
+        Recorder { tx: None, path: None, pause: Arc::default(), dropped: Arc::default(), queued: Arc::default() }
     }
 
     /// Takes ownership of `db` and writes to it from one thread. `capacity` is the queue length.
@@ -612,42 +784,75 @@ impl Recorder {
         let (tx, mut rx) = mpsc::channel::<Event>(capacity.max(1));
         let pause = Arc::new(Pause::default());
         let writer_pause = pause.clone();
+        let queued: Arc<Mutex<VecDeque<Instant>>> = Arc::default();
+        let writer_queued = queued.clone();
         std::thread::Builder::new()
             .name("askbar-audit-writer".into())
             .spawn(move || {
-                while let Some(event) = rx.blocking_recv() {
+                while let Some(first) = rx.blocking_recv() {
                     let mut paused = writer_pause.paused.lock().unwrap_or_else(|e| e.into_inner());
                     while *paused {
                         paused = writer_pause.changed.wait(paused).unwrap_or_else(|e| e.into_inner());
                     }
                     drop(paused);
-                    match event {
-                        Event::Start(s) => {
-                            if let Err(e) = write_start(db.conn(), &s) {
-                                tracing::warn!("audit: could not write a span: {e}");
-                            }
-                        }
-                        Event::Payload(p) => {
-                            if let Err(e) = write_payload(db.conn(), &p) {
-                                tracing::warn!("audit: could not write a payload: {e}");
-                            }
-                        }
-                        Event::Finish(f) => {
-                            if let Err(e) = write_finish(db.conn(), &f) {
-                                tracing::warn!("audit: could not finish a span: {e}");
-                            }
-                        }
-                        Event::Flush(done) => {
-                            let _ = done.send(());
-                        }
-                        Event::Prune { cutoff, done } => {
-                            let _ = done.send(prune(db.conn(), cutoff).map_err(|e| e.to_string()));
+                    // Whatever else is already queued goes in the same transaction.
+                    let mut batch = vec![first];
+                    while batch.len() < MAX_BATCH {
+                        match rx.try_recv() {
+                            Ok(event) => batch.push(event),
+                            Err(_) => break,
                         }
                     }
+                    {
+                        let mut q = writer_queued.lock().unwrap_or_else(|e| e.into_inner());
+                        for _ in 0..batch.len() {
+                            q.pop_front();
+                        }
+                    }
+                    run_batch(db.conn(), batch);
                 }
             })
             .expect("audit writer thread");
-        Recorder { tx: Some(tx), path, pause, dropped: Arc::default() }
+        Recorder { tx: Some(tx), path, pause, dropped: Arc::default(), queued }
+    }
+
+    /// Queues `event` if there is room. The queue time is noted under the lock that sends it.
+    fn try_enqueue(&self, event: Event) -> Result<(), AppendError> {
+        let Some(tx) = &self.tx else { return Err(AppendError::Stopped) };
+        let mut queued = self.queued.lock().unwrap_or_else(|e| e.into_inner());
+        match tx.try_reserve() {
+            Ok(permit) => {
+                permit.send(event);
+                queued.push_back(Instant::now());
+                Ok(())
+            }
+            Err(mpsc::error::TrySendError::Full(_)) => Err(AppendError::Full),
+            Err(mpsc::error::TrySendError::Closed(_)) => Err(AppendError::Stopped),
+        }
+    }
+
+    /// Queues `event`, waiting for room.
+    async fn enqueue(&self, event: Event) -> Result<(), AppendError> {
+        let Some(tx) = &self.tx else { return Err(AppendError::Stopped) };
+        let permit = tx.reserve().await.map_err(|_| AppendError::Stopped)?;
+        let mut queued = self.queued.lock().unwrap_or_else(|e| e.into_inner());
+        permit.send(event);
+        queued.push_back(Instant::now());
+        Ok(())
+    }
+
+    /// Appends `record` and answers once it is committed: how many spans a `Hello` interrupted, else 0.
+    /// Never waits for room: a full queue is `Full`, and nothing was recorded.
+    pub async fn append(&self, record: Record) -> Result<u64, AppendError> {
+        let (ack, wait) = oneshot::channel();
+        self.try_enqueue(Event::Acked(record, ack))?;
+        wait.await.map_err(|_| AppendError::Stopped)?
+    }
+
+    /// How far behind the writer is.
+    pub fn backlog(&self) -> Backlog {
+        let q = self.queued.lock().unwrap_or_else(|e| e.into_inner());
+        Backlog { queued: q.len(), oldest: q.front().map(Instant::elapsed).unwrap_or_default() }
     }
 
     /// False while the queue is full, i.e. the writer is not keeping up.
@@ -668,8 +873,10 @@ impl Recorder {
     }
 
     fn send(&self, event: Event) {
-        let Some(tx) = &self.tx else { return };
-        if tx.try_send(event).is_err() {
+        if self.tx.is_none() {
+            return;
+        }
+        if self.try_enqueue(event).is_err() {
             self.dropped.fetch_add(1, Ordering::Relaxed);
         }
     }
@@ -699,9 +906,11 @@ impl Recorder {
 
     /// Waits until everything recorded so far has been written. For shutdown and tests.
     pub async fn flush(&self) {
-        let Some(tx) = &self.tx else { return };
+        if self.tx.is_none() {
+            return;
+        }
         let (done, wait) = oneshot::channel();
-        if tx.send(Event::Flush(done)).await.is_ok() {
+        if self.enqueue(Event::Flush(done)).await.is_ok() {
             let _ = wait.await;
         }
     }
@@ -710,9 +919,11 @@ impl Recorder {
     /// is passed in so tests can cross the boundary without waiting. Runs on the writer's
     /// connection, in order with everything else. Returns (spans, payloads) deleted.
     pub async fn prune(&self, retention_days: u32, now: i64) -> Result<(usize, usize), String> {
-        let Some(tx) = &self.tx else { return Ok((0, 0)) };
+        if self.tx.is_none() {
+            return Ok((0, 0));
+        }
         let (done, wait) = oneshot::channel();
-        tx.send(Event::Prune { cutoff: retention_cutoff(now, retention_days), done })
+        self.enqueue(Event::Prune { cutoff: retention_cutoff(now, retention_days), done })
             .await
             .map_err(|_| "the audit writer has stopped".to_string())?;
         wait.await.map_err(|_| "the audit writer has stopped".to_string())?
@@ -736,7 +947,7 @@ impl Recorder {
         let Some(tx) = &self.tx else { return };
         // An event that writes nothing: the writer answers it when it is let go, and nobody is listening.
         let (done, _) = oneshot::channel();
-        if tx.send(Event::Flush(done)).await.is_err() {
+        if self.enqueue(Event::Flush(done)).await.is_err() {
             return;
         }
         // A writer that never takes it (its thread has died) fails the test here instead of hanging it.
@@ -748,12 +959,136 @@ impl Recorder {
     }
 }
 
-/// Payloads first (they belong to spans), then the spans. Only finished spans: one still running
-/// is never old enough to matter, and the sweep handles the strays.
+/// Payloads first (they belong to spans), then the spans, and a record of the prune, in one transaction: a
+/// delete without its record cannot happen. Only finished spans: one still running is never old enough to
+/// matter, and the sweep handles the strays.
 fn prune(conn: &Connection, cutoff: i64) -> rusqlite::Result<(usize, usize)> {
-    let payloads = conn.execute("DELETE FROM payloads WHERE created_at < ?1", [cutoff])?;
-    let spans = conn.execute("DELETE FROM spans WHERE started_at < ?1 AND status <> 'running'", [cutoff])?;
+    let tx = conn.unchecked_transaction()?;
+    let payloads = tx.execute("DELETE FROM payloads WHERE created_at < ?1", [cutoff])?;
+    let spans = tx.execute("DELETE FROM spans WHERE started_at < ?1 AND status <> 'running'", [cutoff])?;
+    tx.execute(
+        "INSERT INTO prunes (at, cutoff, spans, payloads) VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params![now_secs(), cutoff, spans as i64, payloads as i64],
+    )?;
+    tx.commit()?;
     Ok((spans, payloads))
+}
+
+type Answers = Vec<(Ack, Result<u64, AppendError>)>;
+
+/// Writes one batch in one transaction, then answers the callers that wait for a commit. A prune is its own
+/// transaction (it is written with its record), so the batch is committed before it and a new one begins.
+fn run_batch(conn: &Connection, batch: Vec<Event>) {
+    let mut in_txn = conn.execute_batch("BEGIN IMMEDIATE").is_ok();
+    let mut acks: Answers = Vec::new();
+    let mut dones: Vec<oneshot::Sender<()>> = Vec::new();
+    let commit = |in_txn: &mut bool, acks: &mut Answers, dones: &mut Vec<oneshot::Sender<()>>| {
+        let committed = if *in_txn { conn.execute_batch("COMMIT").map_err(|e| AppendError::Db(e.to_string())) } else { Ok(()) };
+        *in_txn = false;
+        for (ack, result) in acks.drain(..) {
+            let _ = ack.send(match &committed {
+                Ok(()) => result,
+                Err(e) => Err(e.clone()),
+            });
+        }
+        for done in dones.drain(..) {
+            let _ = done.send(());
+        }
+    };
+    for event in batch {
+        match event {
+            Event::Start(s) => {
+                if let Err(e) = write_start(conn, &s, false) {
+                    tracing::warn!("audit: could not write a span: {e}");
+                }
+            }
+            Event::Payload(p) => {
+                if let Err(e) = write_payload(conn, &p) {
+                    tracing::warn!("audit: could not write a payload: {e}");
+                }
+            }
+            Event::Finish(f) => {
+                if let Err(e) = write_finish(conn, &f) {
+                    tracing::warn!("audit: could not finish a span: {e}");
+                }
+            }
+            Event::Flush(done) => dones.push(done),
+            Event::Acked(record, ack) => {
+                let result = apply(conn, &record);
+                acks.push((ack, result));
+            }
+            Event::Prune { cutoff, done } => {
+                commit(&mut in_txn, &mut acks, &mut dones);
+                let _ = done.send(prune(conn, cutoff).map_err(|e| e.to_string()));
+                in_txn = conn.execute_batch("BEGIN IMMEDIATE").is_ok();
+            }
+        }
+    }
+    commit(&mut in_txn, &mut acks, &mut dones);
+}
+
+fn db_err(e: rusqlite::Error) -> AppendError {
+    AppendError::Db(e.to_string())
+}
+
+fn span_exists(conn: &Connection, id: &str) -> Result<bool, AppendError> {
+    conn.query_row("SELECT EXISTS (SELECT 1 FROM spans WHERE id = ?1)", [id], |r| r.get(0)).map_err(db_err)
+}
+
+/// One acknowledged record. Idempotent: a retry of a record that was stored changes nothing.
+fn apply(conn: &Connection, record: &Record) -> Result<u64, AppendError> {
+    match record {
+        Record::Start(s) => {
+            write_start(conn, s, true).map_err(db_err)?;
+            Ok(0)
+        }
+        Record::Finish(f) => {
+            if !span_exists(conn, &f.id)? {
+                return Err(AppendError::NoSuchSpan);
+            }
+            write_finish(conn, f).map_err(db_err)?;
+            Ok(0)
+        }
+        Record::Payload(p) => {
+            if !span_exists(conn, &p.span_id)? {
+                return Err(AppendError::NoSuchSpan);
+            }
+            conn.execute(
+                "INSERT INTO payloads (span_id, role, key_id, ciphertext, created_at)
+                 SELECT ?1, ?2, ?3, ?4, ?5
+                 WHERE NOT EXISTS (SELECT 1 FROM payloads WHERE span_id = ?1 AND role = ?2 AND ciphertext = ?4)",
+                rusqlite::params![p.span_id, p.role, p.key_id, p.ciphertext, p.created_at],
+            )
+            .map_err(db_err)?;
+            Ok(0)
+        }
+        Record::AdminAction(a) => {
+            conn.execute(
+                "INSERT OR IGNORE INTO admin_actions (id, at, service, category, action, outcome, detail_json) VALUES (?1,?2,?3,?4,?5,?6,?7)",
+                rusqlite::params![a.id, a.at, a.service, a.category, a.action, a.outcome, a.detail_json],
+            )
+            .map_err(db_err)?;
+            Ok(0)
+        }
+        Record::Hello { service, boot_id } => {
+            let n = conn
+                .execute(
+                    "UPDATE spans SET status = 'interrupted', ended_at = ?1, error_code = COALESCE(error_code, 'interrupted')
+                     WHERE service = ?2 AND status = 'running' AND COALESCE(boot_id, '') <> ?3",
+                    rusqlite::params![now_secs(), service, boot_id],
+                )
+                .map_err(db_err)?;
+            Ok(n as u64)
+        }
+        Record::Setting { key, value } => {
+            conn.execute(
+                "INSERT INTO settings (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                [key, value],
+            )
+            .map_err(db_err)?;
+            Ok(0)
+        }
+    }
 }
 
 fn write_payload(conn: &Connection, p: &PayloadWrite) -> rusqlite::Result<()> {
@@ -764,10 +1099,13 @@ fn write_payload(conn: &Connection, p: &PayloadWrite) -> rusqlite::Result<()> {
     Ok(())
 }
 
-fn write_start(conn: &Connection, s: &SpanStart) -> rusqlite::Result<()> {
+fn write_start(conn: &Connection, s: &SpanStart, ignore_duplicate: bool) -> rusqlite::Result<usize> {
     conn.execute(
-        "INSERT INTO spans (id, trace_id, parent_id, kind, name, status, started_at, provider_id, model, user_id, client_id, attrs_json)
-         VALUES (?1, ?2, ?3, ?4, ?5, 'running', ?6, ?7, ?8, ?9, ?10, json_patch(COALESCE(?11, '{}'), json_object('started_ms', ?12)))",
+        &format!(
+            "INSERT {} INTO spans (id, trace_id, parent_id, kind, name, status, started_at, provider_id, model, user_id, client_id, attrs_json, service, boot_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, 'running', ?6, ?7, ?8, ?9, ?10, json_patch(COALESCE(?11, '{{}}'), json_object('started_ms', ?12)), ?13, ?14)",
+            if ignore_duplicate { "OR IGNORE" } else { "" }
+        ),
         rusqlite::params![
             s.id,
             s.trace_id,
@@ -780,10 +1118,11 @@ fn write_start(conn: &Connection, s: &SpanStart) -> rusqlite::Result<()> {
             s.user_id,
             s.client_id,
             s.attrs_json,
-            s.started_ms
+            s.started_ms,
+            s.service,
+            s.boot_id
         ],
-    )?;
-    Ok(())
+    )
 }
 
 fn write_finish(conn: &Connection, f: &SpanFinish) -> rusqlite::Result<()> {
@@ -830,7 +1169,7 @@ mod tests {
     #[test]
     fn open_creates_the_schema() {
         let db = AuditDb::open_in_memory().unwrap();
-        assert_eq!(tables(&db), ["payloads", "spans"]);
+        assert_eq!(tables(&db), ["admin_actions", "payloads", "prunes", "settings", "spans", "sqlite_sequence"]);
         assert_eq!(
             columns(&db, "spans"),
             [
@@ -851,9 +1190,13 @@ mod tests {
                 "error_code",
                 "user_id",
                 "client_id",
-                "attrs_json"
+                "attrs_json",
+                "service",
+                "boot_id"
             ]
         );
+        assert_eq!(columns(&db, "admin_actions"), ["id", "at", "service", "category", "action", "outcome", "detail_json"]);
+        assert_eq!(columns(&db, "prunes"), ["id", "at", "cutoff", "spans", "payloads"]);
         assert_eq!(columns(&db, "payloads"), ["span_id", "role", "key_id", "ciphertext", "created_at"]);
         let v: i64 = db.conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
         assert_eq!(v as usize, MIGRATIONS.len());
@@ -1235,5 +1578,257 @@ mod tests {
         rec.flush().await;
         assert!(rec.healthy());
         assert_eq!(rec.dropped(), 0);
+    }
+
+    // ------------------------------------------------------------ the auditor's side (ADR 0051)
+
+    fn temp_recorder(capacity: usize) -> (Recorder, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("askbar-audit-ack-{}", ulid::Ulid::new()));
+        let db = AuditDb::open(&dir.join("audit.db")).unwrap();
+        (Recorder::spawn(db, capacity), dir)
+    }
+
+    fn started(id: &str, trace: &str, kind: &str, service: &str, boot: &str) -> SpanStart {
+        SpanStart {
+            id: id.into(),
+            trace_id: trace.into(),
+            kind: kind.into(),
+            name: "n".into(),
+            started_at: now_secs(),
+            started_ms: now_ms(),
+            service: Some(service.into()),
+            boot_id: Some(boot.into()),
+            ..Default::default()
+        }
+    }
+
+    fn count(rec: &Recorder, sql: &str) -> i64 {
+        rec.reader().unwrap().query_row(sql, [], |r| r.get(0)).unwrap()
+    }
+
+    #[tokio::test]
+    async fn an_acknowledged_append_is_committed_when_it_answers_and_a_retry_records_it_once() {
+        let (rec, dir) = temp_recorder(64);
+        let start = started("s1", "t1", "turn", "server", "b1");
+        assert_eq!(rec.append(Record::Start(start.clone())).await, Ok(0));
+        // Committed already: a separate reader sees it, with no flush in between.
+        assert_eq!(count(&rec, "SELECT COUNT(*) FROM spans WHERE id = 's1' AND service = 'server' AND boot_id = 'b1'"), 1);
+        assert_eq!(rec.append(Record::Start(start)).await, Ok(0), "a retry of a stored record is fine");
+        assert_eq!(count(&rec, "SELECT COUNT(*) FROM spans"), 1);
+
+        let finish = SpanFinish { tokens_in: Some(5), ..SpanFinish::new("s1", "done") };
+        assert_eq!(rec.append(Record::Finish(finish.clone())).await, Ok(0));
+        assert_eq!(rec.append(Record::Finish(finish)).await, Ok(0));
+        assert_eq!(count(&rec, "SELECT COUNT(*) FROM spans WHERE status = 'done' AND tokens_in = 5"), 1);
+
+        let payload = PayloadWrite {
+            span_id: "s1".into(),
+            role: "reply".into(),
+            key_id: "k".into(),
+            ciphertext: vec![1, 2, 3],
+            created_at: now_secs(),
+        };
+        assert_eq!(rec.append(Record::Payload(payload.clone())).await, Ok(0));
+        assert_eq!(rec.append(Record::Payload(payload)).await, Ok(0));
+        assert_eq!(count(&rec, "SELECT COUNT(*) FROM payloads"), 1, "the same sealed bytes twice are one payload");
+
+        assert_eq!(rec.append(Record::Finish(SpanFinish::new("nope", "done"))).await, Err(AppendError::NoSuchSpan));
+        let orphan =
+            PayloadWrite { span_id: "nope".into(), role: "reply".into(), key_id: "k".into(), ciphertext: vec![9], created_at: now_secs() };
+        assert_eq!(rec.append(Record::Payload(orphan)).await, Err(AppendError::NoSuchSpan));
+        assert_eq!(count(&rec, "SELECT COUNT(*) FROM payloads"), 1);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn hello_ends_that_services_earlier_running_spans_and_nobody_elses() {
+        let (rec, dir) = temp_recorder(64);
+        for (id, svc, boot) in [("a1", "server", "b1"), ("a2", "server", "b1"), ("a3", "server", "b2"), ("g1", "model-gateway", "b1")] {
+            rec.append(Record::Start(started(id, "t", "gate", svc, boot))).await.unwrap();
+        }
+        rec.append(Record::Finish(SpanFinish::new("a2", "done"))).await.unwrap();
+        let hello = |svc: &str, boot: &str| Record::Hello { service: svc.into(), boot_id: boot.into() };
+        assert_eq!(rec.append(hello("server", "b2")).await, Ok(1), "only a1: a2 is finished, a3 is this process's");
+        assert_eq!(count(&rec, "SELECT COUNT(*) FROM spans WHERE id = 'a1' AND status = 'interrupted' AND error_code = 'interrupted'"), 1);
+        assert_eq!(count(&rec, "SELECT COUNT(*) FROM spans WHERE status = 'running'"), 2, "a3 and the gateway's g1");
+        assert_eq!(rec.append(hello("server", "b2")).await, Ok(0), "a second hello ends nothing");
+        assert_eq!(rec.append(hello("model-gateway", "b9")).await, Ok(1));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn what_is_queued_together_is_committed_together_and_every_caller_is_answered() {
+        let (rec, dir) = temp_recorder(64);
+        rec.stall_writer().await;
+        let tasks: Vec<_> = (0..20)
+            .map(|i| {
+                let rec = rec.clone();
+                tokio::spawn(async move { rec.append(Record::Start(started(&format!("s{i:02}"), "t", "gate", "server", "b"))).await })
+            })
+            .collect();
+        // Not committed while the writer is held.
+        for _ in 0..50 {
+            if rec.backlog().queued >= 21 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(count(&rec, "SELECT COUNT(*) FROM spans"), 0);
+        rec.pause_writer(false);
+        for t in tasks {
+            assert_eq!(t.await.unwrap(), Ok(0));
+        }
+        assert_eq!(count(&rec, "SELECT COUNT(*) FROM spans"), 20);
+        assert_eq!(rec.backlog().queued, 0);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn the_backlog_counts_queued_records_and_how_long_the_oldest_has_waited() {
+        let (rec, dir) = temp_recorder(8);
+        assert_eq!(rec.backlog(), Backlog { queued: 0, oldest: Duration::ZERO });
+        rec.stall_writer().await;
+        let held = rec.clone();
+        let task = tokio::spawn(async move { held.append(Record::Start(started("s1", "t", "gate", "server", "b"))).await });
+        for _ in 0..100 {
+            if rec.backlog().queued >= 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(120)).await;
+        let b = rec.backlog();
+        assert_eq!(b.queued, 2, "the event the writer holds and the one behind it");
+        assert!(b.oldest >= Duration::from_millis(100), "{b:?}");
+        rec.pause_writer(false);
+        assert_eq!(task.await.unwrap(), Ok(0));
+        assert_eq!(rec.backlog().queued, 0);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn a_full_queue_refuses_an_append_and_records_nothing() {
+        let (rec, dir) = temp_recorder(2);
+        rec.stall_writer().await;
+        let tasks: Vec<_> = (0..2)
+            .map(|i| {
+                let rec = rec.clone();
+                tokio::spawn(async move { rec.append(Record::Start(started(&format!("s{i}"), "t", "gate", "server", "b"))).await })
+            })
+            .collect();
+        for _ in 0..100 {
+            if !rec.healthy() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert_eq!(rec.append(Record::Start(started("s9", "t", "gate", "server", "b"))).await, Err(AppendError::Full));
+        rec.pause_writer(false);
+        for t in tasks {
+            assert_eq!(t.await.unwrap(), Ok(0));
+        }
+        assert_eq!(count(&rec, "SELECT COUNT(*) FROM spans WHERE id = 's9'"), 0);
+        assert_eq!(count(&rec, "SELECT COUNT(*) FROM spans"), 2);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn an_admin_action_is_stored_once_with_its_caller_and_can_never_be_changed_or_deleted() {
+        let (rec, dir) = temp_recorder(16);
+        let action = AdminActionWrite {
+            id: "01A".into(),
+            at: now_secs(),
+            service: "admin".into(),
+            category: "settings".into(),
+            action: "kill switch on".into(),
+            outcome: "done".into(),
+            detail_json: Some(r#"{"kill_switch":true}"#.into()),
+        };
+        assert_eq!(rec.append(Record::AdminAction(action.clone())).await, Ok(0));
+        assert_eq!(rec.append(Record::AdminAction(action)).await, Ok(0));
+        let conn = rec.reader().unwrap();
+        let rows = list_admin_actions(&conn, None, None).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!((rows[0]["service"].clone(), rows[0]["detail"]["kill_switch"].clone()), ("admin".into(), true.into()));
+        // The store itself refuses a change or a delete, for any connection.
+        let db = AuditDb::open(&dir.join("audit.db")).unwrap();
+        assert!(db.conn().execute("UPDATE admin_actions SET outcome = 'done' WHERE id = '01A'", []).is_err());
+        assert!(db.conn().execute("DELETE FROM admin_actions", []).is_err());
+        rec.prune(30, now_secs()).await.unwrap();
+        assert!(db.conn().execute("UPDATE prunes SET spans = 99", []).is_err(), "a prune record cannot be changed");
+        assert!(db.conn().execute("DELETE FROM prunes", []).is_err(), "nor deleted");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn a_prune_writes_its_record_with_the_delete_and_the_record_stays() {
+        let dir = std::env::temp_dir().join(format!("askbar-audit-prune-{}", ulid::Ulid::new()));
+        let db = AuditDb::open(&dir.join("audit.db")).unwrap();
+        let old = now_secs() - 40 * 86_400;
+        db.conn
+            .execute("INSERT INTO spans (id, trace_id, kind, name, status, started_at) VALUES ('old','t','turn','n','done',?1)", [old])
+            .unwrap();
+        db.conn
+            .execute("INSERT INTO payloads (span_id, role, key_id, ciphertext, created_at) VALUES ('old','reply','k',x'01',?1)", [old])
+            .unwrap();
+        db.conn
+            .execute(
+                "INSERT INTO spans (id, trace_id, kind, name, status, started_at) VALUES ('young','t','turn','n','done',?1)",
+                [now_secs()],
+            )
+            .unwrap();
+        let rec = Recorder::spawn(db, 16);
+        assert_eq!(rec.prune(30, now_secs()).await, Ok((1, 1)));
+        assert_eq!(count(&rec, "SELECT COUNT(*) FROM spans"), 1, "only the young one is left");
+        let prunes = list_prunes(&rec.reader().unwrap()).unwrap();
+        assert_eq!(prunes.len(), 1);
+        assert_eq!((prunes[0]["spans"].clone(), prunes[0]["payloads"].clone()), (1.into(), 1.into()));
+        assert!(prunes[0]["cutoff"].as_i64().unwrap() <= now_secs() - 29 * 86_400);
+        // Nothing to delete is still a prune, and still has its record.
+        assert_eq!(rec.prune(30, now_secs()).await, Ok((0, 0)));
+        assert_eq!(list_prunes(&rec.reader().unwrap()).unwrap().len(), 2);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn token_counts_group_by_the_provider_and_model_of_the_last_attempt_and_hold_no_prices() {
+        let (rec, dir) = temp_recorder(64);
+        let mut n = 0;
+        for (prov, model, tin, tout) in [("p1", "m1", 10, 20), ("p1", "m1", 5, 5), ("p2", "m9", 1, 2)] {
+            n += 1;
+            let (turn, attempt) = (format!("t{n}"), format!("a{n}"));
+            rec.append(Record::Start(started(&turn, &turn, "turn", "model-gateway", "b"))).await.unwrap();
+            let mut a = started(&attempt, &turn, "attempt", "model-gateway", "b");
+            a.provider_id = Some(prov.into());
+            a.model = Some(model.into());
+            rec.append(Record::Start(a)).await.unwrap();
+            rec.append(Record::Finish(SpanFinish {
+                tokens_in: Some(tin),
+                tokens_out: Some(tout),
+                tokens_cached: Some(0),
+                ..SpanFinish::new(&turn, "done")
+            }))
+            .await
+            .unwrap();
+        }
+        let rows = token_counts(&rec.reader().unwrap(), 0).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(
+            rows[0],
+            serde_json::json!({ "provider_id": "p1", "model": "m1", "requests": 2, "tokens_in": 15, "tokens_out": 25, "tokens_cached": 0 })
+        );
+        assert_eq!(rows[1]["provider_id"], "p2");
+        assert!(rows.iter().all(|r| r.get("cost").is_none()), "the auditor holds no prices");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn a_setting_is_stored_through_the_writer_and_replaced() {
+        let (rec, dir) = temp_recorder(8);
+        assert_eq!(get_setting(&rec.reader().unwrap(), "retention_days").unwrap(), None);
+        rec.append(Record::Setting { key: "retention_days".into(), value: "45".into() }).await.unwrap();
+        rec.append(Record::Setting { key: "retention_days".into(), value: "60".into() }).await.unwrap();
+        assert_eq!(get_setting(&rec.reader().unwrap(), "retention_days").unwrap().as_deref(), Some("60"));
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

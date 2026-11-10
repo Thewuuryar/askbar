@@ -1,0 +1,768 @@
+openapi: 3.1.0
+info:
+  title: Askbar audit API
+  version: 1.0.0
+  summary: What services and the admin call on the auditor. Internal.
+  description: |
+    The API under `/api/audit/v1`, served by the `auditor` on a port reachable only from the `audit-*` networks,
+    one for each caller. **It is never public**: Caddy has no route to it. It is documented so the services and
+    the auditor can be changed with confidence, not for outside callers (ADR 0051, ADR 0010).
+
+    Every request except `GET /health` carries `Authorization: Bearer <token>`. There is one token for each
+    link: `server-auditor`, `model-gateway-auditor`, `admin-auditor-append` and `admin-auditor-read`. The
+    auditor holds only each token's SHA-256, in `auditor-token/accept/<link>.sha256`, read on every request.
+    A link may call only its own routes (`403 forbidden` otherwise), and **the caller of a record is the one its
+    token belongs to, never anything in a body**.
+
+    - Service links (`server-auditor`, `model-gateway-auditor`): `hello`, spans, finish and payload records.
+      Only `model-gateway-auditor` opens model-call spans (`turn`, `attempt`, `tool`, `agent_step`); the
+      server's link opens `gate` spans only.
+    - `admin-auditor-append`: `hello` and admin action records. It reads and changes nothing.
+    - `admin-auditor-read`: every read, and retention. It appends nothing.
+    - No token changes or deletes a record; there is no such route.
+
+    An append is answered after the record is committed. Appending the same record twice records it once,
+    so a caller whose answer was lost sends it again. When the auditor is behind its backlog limit (1,000
+    queued records, or the oldest waiting over 5 s), every append is refused, and below 256 MiB free disk a new
+    span is refused: `503 audit_backlog` with `Retry-After`, and nothing is recorded. Model work stops rather
+    than go unrecorded (ADR 0010 rule 3).
+
+    Content only ever arrives and leaves sealed (ADR 0011): the auditor has no key, and no route returns text.
+
+    Every error is a problem (`application/problem+json`), and none echoes what it was sent. See
+    [docs/architecture.md](../architecture.md).
+servers:
+  - url: http://auditor:8083
+    description: The auditor on whichever `audit-*` network the caller shares with it.
+security:
+  - linkToken: []
+paths:
+  /api/audit/v1/health:
+    get:
+      operationId: getHealth
+      summary: The auditor is up. Needs no token and carries nothing.
+      security: []
+      responses:
+        '200':
+          description: OK.
+  /api/audit/v1/status:
+    get:
+      operationId: getStatus
+      summary: Which process this is.
+      description: >-
+        `boot_id` is new on every start of the process. `config_version` is always null: the auditor takes no
+        pushed configuration. Any link may call it.
+      responses:
+        '200':
+          description: Status.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [config_version, boot_id]
+                properties:
+                  config_version:
+                    type: 'null'
+                  boot_id:
+                    type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/audit/v1/hello:
+    post:
+      operationId: hello
+      summary: A service announces the boot ID of the process now talking.
+      description: >-
+        That service's earlier unfinished spans (from other processes) end as `interrupted` (ADR 0010 rule 6).
+        Spans it appends afterwards carry this boot ID. Service and admin append links.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Hello'
+      responses:
+        '200':
+          description: How many spans were interrupted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HelloResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/Backlog'
+  /api/audit/v1/spans:
+    post:
+      operationId: startSpan
+      summary: A span has begun. Acknowledged after the commit.
+      description: >-
+        The id is the caller's, so a retry records it once. `model-gateway-auditor` may open any kind; the
+        server's link only `gate` (`403` otherwise). Refused below the disk floor as well as at the backlog limit.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SpanStart'
+      responses:
+        '201':
+          $ref: '#/components/responses/Appended'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/Backlog'
+  /api/audit/v1/spans/{id}/finish:
+    post:
+      operationId: finishSpan
+      summary: How a span ended. Only the first finish of a span counts.
+      parameters:
+        - $ref: '#/components/parameters/SpanId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SpanFinish'
+      responses:
+        '201':
+          $ref: '#/components/responses/Appended'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/Backlog'
+  /api/audit/v1/spans/{id}/payloads:
+    post:
+      operationId: addPayload
+      summary: Sealed content for a span. Ciphertext only.
+      description: Service links. The same sealed bytes for the same span and role are one payload.
+      parameters:
+        - $ref: '#/components/parameters/SpanId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SealedPayload'
+      responses:
+        '201':
+          $ref: '#/components/responses/Appended'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/Backlog'
+    get:
+      operationId: getPayloads
+      summary: The sealed payloads of one span, as stored.
+      description: Ciphertext in base64. Only the holder of the audit passphrase can open it, and not here. `admin-auditor-read` only.
+      parameters:
+        - $ref: '#/components/parameters/SpanId'
+      responses:
+        '200':
+          description: The payloads, oldest first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/StoredPayload'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/audit/v1/admin-actions:
+    post:
+      operationId: addAdminAction
+      summary: Something the admin did, or refused to do. `admin-auditor-append` only.
+      description: >-
+        A claim: the services that applied a change record it themselves (ADR 0010). The caller recorded is
+        the token's, not the body's. Never changed or deleted afterwards.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminActionStart'
+      responses:
+        '201':
+          $ref: '#/components/responses/Appended'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/Backlog'
+    get:
+      operationId: listAdminActions
+      summary: Admin action records, newest first. `admin-auditor-read` only.
+      parameters:
+        - name: before
+          in: query
+          description: The id of the last record already seen.
+          schema:
+            type: string
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: The records.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AdminActionRecord'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/audit/v1/traces:
+    get:
+      operationId: listTraces
+      summary: One summary per generation, newest first. `admin-auditor-read` only.
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: provider
+          in: query
+          schema:
+            type: string
+        - name: before
+          in: query
+          description: >-
+            Only traces older than this trace id (ids sort by time). The cursor for "load more".
+          schema:
+            type: string
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: The traces.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TraceSummary'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/audit/v1/traces/{id}:
+    get:
+      operationId: getTrace
+      summary: Every span of one generation, in the order they began.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The trace (generation) id.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The spans.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Span'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/audit/v1/stats:
+    get:
+      operationId: getStats
+      summary: Counts, error rate, latency percentiles and token totals since a time. Every cost is null.
+      description: The auditor holds no prices; the admin applies them. `since` defaults to the last 24 hours.
+      parameters:
+        - $ref: '#/components/parameters/Since'
+      responses:
+        '200':
+          description: The figures.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/audit/v1/token-counts:
+    get:
+      operationId: getTokenCounts
+      summary: What was used since a time, by provider and model. Counts only.
+      parameters:
+        - $ref: '#/components/parameters/Since'
+      responses:
+        '200':
+          description: One row for each provider and model.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TokenCount'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/audit/v1/prunes:
+    get:
+      operationId: listPrunes
+      summary: Every time retention deleted records, oldest first.
+      description: Each prune is recorded in the same transaction as its delete.
+      responses:
+        '200':
+          description: The prunes.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PruneRecord'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/audit/v1/retention:
+    get:
+      operationId: getRetention
+      summary: How long sealed content is kept. `admin-auditor-read` only.
+      responses:
+        '200':
+          description: The setting and its floor.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Retention'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    put:
+      operationId: setRetention
+      summary: Set how long records are kept. Never below 7 days.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Retention'
+      responses:
+        '200':
+          description: The setting now.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Retention'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/Backlog'
+components:
+  securitySchemes:
+    linkToken:
+      type: http
+      scheme: bearer
+      description: The token of one link. Only its SHA-256 is on the auditor.
+  parameters:
+    SpanId:
+      name: id
+      in: path
+      required: true
+      description: The span id, as the caller chose it.
+      schema:
+        type: string
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+    Since:
+      name: since
+      in: query
+      description: Unix seconds.
+      schema:
+        type: integer
+  responses:
+    Appended:
+      description: Committed. The id it is stored under.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Appended'
+    BadRequest:
+      description: The body or a parameter could not be used (`bad_request`). The answer does not repeat it.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Unauthorized:
+      description: Missing or unknown token (`unauthorized`).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Forbidden:
+      description: This link may not call this route, or open this kind of span (`forbidden`).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    NotFound:
+      description: No such span or trace (`not_found`). Also any unknown path.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Backlog:
+      description: >-
+        The auditor is behind its backlog limit, or low on disk for a new span (`audit_backlog`). Nothing was
+        recorded; try again after `Retry-After`.
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+  schemas:
+    Problem:
+      type: object
+      description: >-
+        An error, as RFC 9457 problem details (application/problem+json). Branch on `error`, never on
+        `detail`.
+      required: [type, title, status, detail, error]
+      additionalProperties: true
+      properties:
+        type:
+          type: string
+          description: A URN, `urn:askbar:problem:<error>`; nothing is hosted at it.
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+          description: A sentence for a person.
+        error:
+          type: string
+          description: The stable code.
+          enum:
+          - queue_full
+          - budget_exceeded
+          - kill_switch
+          - audit_key_missing
+          - audit_backlog
+          - client_too_old
+          - client_version_missing
+          - unauthorized
+          - forbidden
+          - not_found
+          - method_not_allowed
+          - bad_request
+          - payload_too_large
+          - too_many_attempts
+          - api_key_exists
+          - setup_required
+          - not_configured
+          - password_change_required
+          - server_unavailable
+          - conflict
+          - internal
+    SpanKind:
+      type: string
+      enum: [turn, gate, attempt, tool, agent_step]
+    Hello:
+      type: object
+      required: [boot_id]
+      properties:
+        boot_id:
+          type: string
+    HelloResult:
+      type: object
+      required: [interrupted]
+      properties:
+        interrupted:
+          type: integer
+    Appended:
+      type: object
+      required: [id]
+      properties:
+        id:
+          type: string
+    SpanStart:
+      type: object
+      required: [id, trace_id, kind, name, started_at, started_ms]
+      properties:
+        id:
+          type: string
+        trace_id:
+          type: string
+          description: The generation id; every span of one reply shares it.
+        parent_id:
+          type: string
+        kind:
+          $ref: '#/components/schemas/SpanKind'
+        name:
+          type: string
+        started_at:
+          type: integer
+          description: Unix seconds.
+        started_ms:
+          type: integer
+          description: Unix milliseconds.
+        provider_id:
+          type: string
+        model:
+          type: string
+        user_id:
+          type: string
+        client_id:
+          type: string
+        attrs:
+          type: object
+          additionalProperties: true
+          description: Small metadata only (at most 16 KB).
+    SpanFinish:
+      type: object
+      required: [status, ended_at, ended_ms]
+      properties:
+        status:
+          type: string
+          description: Anything but `running`.
+        ended_at:
+          type: integer
+        ended_ms:
+          type: integer
+        provider_id:
+          type: string
+        model:
+          type: string
+        tokens_in:
+          type: integer
+        tokens_out:
+          type: integer
+        tokens_cached:
+          type: integer
+        ttft_ms:
+          type: integer
+        error_code:
+          type: string
+        attrs:
+          type: object
+          additionalProperties: true
+    SealedPayload:
+      type: object
+      required: [role, key_id, ciphertext_b64]
+      properties:
+        role:
+          type: string
+        key_id:
+          type: string
+        ciphertext_b64:
+          type: string
+          contentEncoding: base64
+    StoredPayload:
+      type: object
+      required: [role, key_id, ciphertext_b64]
+      properties:
+        role:
+          type: string
+        key_id:
+          type: string
+        ciphertext_b64:
+          type: string
+          contentEncoding: base64
+    AdminActionStart:
+      type: object
+      required: [id, at, category, action, outcome]
+      properties:
+        id:
+          type: string
+        at:
+          type: integer
+        category:
+          type: string
+        action:
+          type: string
+        outcome:
+          type: string
+          enum: [done, refused]
+        detail:
+          type: object
+          additionalProperties: true
+          description: Metadata about the change, never a secret or message content.
+    AdminActionRecord:
+      type: object
+      required: [id, at, service, category, action, outcome, detail]
+      properties:
+        id:
+          type: string
+        at:
+          type: integer
+        service:
+          type: string
+          description: Which token appended it.
+        category:
+          type: string
+        action:
+          type: string
+        outcome:
+          type: string
+        detail:
+          type: [object, 'null']
+          additionalProperties: true
+    Retention:
+      type: object
+      required: [days]
+      properties:
+        days:
+          type: integer
+          minimum: 7
+          maximum: 3650
+        floor_days:
+          type: integer
+          description: The least it can be set to. Returned, not sent.
+    TraceSummary:
+      type: object
+      required: [trace_id, span_id, status, started_at]
+      additionalProperties: true
+      properties:
+        trace_id:
+          type: string
+        span_id:
+          type: string
+        status:
+          type: string
+        started_at:
+          type: integer
+        ended_at:
+          type: [integer, 'null']
+        user_id:
+          type: [string, 'null']
+        client_id:
+          type: [string, 'null']
+        tokens_in:
+          type: [integer, 'null']
+        tokens_out:
+          type: [integer, 'null']
+        tokens_cached:
+          type: [integer, 'null']
+        error_code:
+          type: [string, 'null']
+        provider_id:
+          type: [string, 'null']
+        model:
+          type: [string, 'null']
+        ttft_ms:
+          type: [integer, 'null']
+        latency_ms:
+          type: [integer, 'null']
+    Span:
+      type: object
+      required: [id, kind, name, status, started_at, sealed]
+      additionalProperties: true
+      properties:
+        id:
+          type: string
+        parent_id:
+          type: [string, 'null']
+        kind:
+          $ref: '#/components/schemas/SpanKind'
+        name:
+          type: string
+        status:
+          type: string
+        started_at:
+          type: integer
+        ended_at:
+          type: [integer, 'null']
+        provider_id:
+          type: [string, 'null']
+        model:
+          type: [string, 'null']
+        tokens_in:
+          type: [integer, 'null']
+        tokens_out:
+          type: [integer, 'null']
+        tokens_cached:
+          type: [integer, 'null']
+        ttft_ms:
+          type: [integer, 'null']
+        error_code:
+          type: [string, 'null']
+        user_id:
+          type: [string, 'null']
+        client_id:
+          type: [string, 'null']
+        attrs:
+          type: [object, 'null']
+          additionalProperties: true
+        sealed:
+          type: integer
+          description: How many sealed payloads it has.
+    TokenCount:
+      type: object
+      required: [provider_id, model, requests, tokens_in, tokens_out, tokens_cached]
+      properties:
+        provider_id:
+          type: [string, 'null']
+        model:
+          type: [string, 'null']
+        requests:
+          type: integer
+        tokens_in:
+          type: integer
+        tokens_out:
+          type: integer
+        tokens_cached:
+          type: integer
+    PruneRecord:
+      type: object
+      required: [at, cutoff, spans, payloads]
+      properties:
+        at:
+          type: integer
+        cutoff:
+          type: integer
+        spans:
+          type: integer
+        payloads:
+          type: integer

@@ -144,6 +144,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "askbar-auditor"
+version = "0.6.0"
+dependencies = [
+ "askbar-audit",
+ "askbar-proto",
+ "askbar-service",
+ "axum",
+ "base64 0.22.1",
+ "reqwest",
+ "serde",
+ "serde-saphyr",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "ulid",
+]
+
+[[package]]
 name = "askbar-bootstrap"
 version = "0.6.0"
 dependencies = [

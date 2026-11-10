@@ -153,8 +153,8 @@ EDGE_IP=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$EDGE\").IPAdd
 [ "$(http_status "$EDGE" "$EDGE_IP:8082")" = 0 ] && pass "nothing on the edge network answers on 8082" || fail "the server port answers on the edge network"
 [ "$(http_status "$EDGE" "$SERVER_API")" = 0 ] && pass "a container on edge cannot reach the server API address" || fail "the server API address is reachable from edge"
 admin_nets=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$ADMIN" | tr ' ' '\n' | grep . | sort | tr '\n' ' ')
-[ "$admin_nets" = "${PROJECT}_cpa-admin ${PROJECT}_server-api " ] && pass "the admin is on server-api and cpa-admin only (both internal: no route out, never edge)" || fail "the admin's networks are: $admin_nets"
-for n in server-api cpa-admin; do
+[ "$admin_nets" = "${PROJECT}_audit-admin ${PROJECT}_cpa-admin ${PROJECT}_server-api " ] && pass "the admin is on server-api, cpa-admin and audit-admin only (all internal: no route out, never edge)" || fail "the admin's networks are: $admin_nets"
+for n in server-api cpa-admin audit-admin; do
   [ "$(docker network inspect -f '{{.Internal}}' "${PROJECT}_$n" 2>/dev/null)" = true ] && pass "the $n network is internal" || fail "the $n network is not internal"
 done
 
@@ -233,7 +233,7 @@ echo "== 3d2. Container hardening (ADR 0032)"
 # Every service: read-only root, no capabilities but Caddy's NET_BIND_SERVICE and bootstrap's CHOWN (ADR 0032
 # rule 6), no privilege gain, process and memory limits, a private /tmp, and no host-gateway alias. Bootstrap has
 # exited by now, so it is looked up with -a.
-for svc in bootstrap server admin caddy cpa mock-llm; do
+for svc in bootstrap server admin caddy cpa auditor mock-llm; do
   c=$(docker compose -p "$PROJECT" ps -aq "$svc" 2>/dev/null | head -1)
   [ -n "$c" ] || { echo "SKIP  $svc is not running"; continue; }
   want_add=""; [ "$svc" = caddy ] && want_add="NET_BIND_SERVICE"; [ "$svc" = bootstrap ] && want_add="CHOWN"
@@ -253,7 +253,7 @@ EOF_H
   [ -z "$bad" ] && pass "$svc is hardened" || fail "$svc is not hardened:$bad"
 done
 # Each hardened service is writing only to its volumes: its root filesystem refuses a write.
-for c in $SERVER $ADMIN $CADDY; do
+for c in $SERVER $ADMIN $CADDY askbar-auditor; do
   refused "$c cannot write its root filesystem" docker exec "$c" sh -c 'echo x > /hardening-probe'
 done
 
@@ -264,7 +264,7 @@ if [ -z "$BOOT" ]; then fail "there is no bootstrap container"; else
   [ "$(docker inspect -f '{{.State.Status}} {{.State.ExitCode}}' "$BOOT")" = "exited 0" ] && pass "bootstrap ran once and exited 0" || fail "bootstrap is $(docker inspect -f '{{.State.Status}} {{.State.ExitCode}}' "$BOOT")"
   [ "$(docker inspect -f '{{.Config.User}}' "$BOOT")" = 0 ] && pass "bootstrap runs as root, with CHOWN only (checked above)" || fail "bootstrap does not run as root"
   bmounts=$(docker inspect -f '{{range .Mounts}}{{.Name}}={{.RW}} {{end}}' "$BOOT" | tr ' ' '\n' | grep . | sort | tr '\n' ' ')
-  [ "$bmounts" = "${PROJECT}_admin-token=true ${PROJECT}_server-token=true " ] && pass "bootstrap mounts the credential volumes only" || fail "bootstrap mounts: $bmounts"
+  [ "$bmounts" = "${PROJECT}_admin-token=true ${PROJECT}_auditor-token=true ${PROJECT}_server-token=true " ] && pass "bootstrap mounts the credential volumes only" || fail "bootstrap mounts: $bmounts"
 fi
 # Each service mounts its own credential volume, read-only, and no other service's.
 for pair in "$SERVER:server-token" "$ADMIN:admin-token"; do
@@ -293,7 +293,7 @@ case "$admin_token" in mgt_*) pass "the admin's token has the admin-server prefi
 # file it has already given away. After a rotation the admin and the server read the new files on restart.
 before=$(docker exec "$ADMIN" sh -c 'cat /admin-token/call/admin-server.token' 2>/dev/null)
 out=$(docker compose -p "$PROJECT" run --rm --no-deps bootstrap 2>/dev/null)
-[ "$out" = "kept admin-server" ] && [ "$(docker exec "$ADMIN" cat /admin-token/call/admin-server.token 2>/dev/null)" = "$before" ] \
+[ "$out" = "$(printf 'kept admin-server\nkept admin-auditor-append\nkept admin-auditor-read')" ] && [ "$(docker exec "$ADMIN" cat /admin-token/call/admin-server.token 2>/dev/null)" = "$before" ] \
   && pass "a second bootstrap run keeps the token" || fail "a second bootstrap run: $out"
 out=$(docker compose -p "$PROJECT" run --rm --no-deps bootstrap rotate admin-server 2>/dev/null)
 printf '%s' "$out" | grep -q '^rotated admin-server$' && printf '%s' "$out" | grep -q '^Restart from the admin: admin, server$' \
@@ -310,6 +310,86 @@ for c in "$SERVER" "$ADMIN"; do
   [ "$(docker inspect -f '{{.State.Health.Status}}' "$c")" = healthy ] && pass "$c is healthy after the restart" || fail "$c is not healthy after the rotation"
 done
 HASH=$(docker exec "$SERVER" cat /server-token/accept/admin-server.sha256 2>/dev/null | tr -d '[:space:]')
+
+echo "== 3d4. The auditor (ADR 0051)"
+AUDITOR=askbar-auditor
+if [ "$(docker inspect -f '{{.State.Running}}' "$AUDITOR" 2>/dev/null)" != true ]; then fail "the auditor is not running"; else
+  for i in $(seq 1 30); do [ "$(docker inspect -f '{{.State.Health.Status}}' "$AUDITOR")" = healthy ] && break; sleep 2; done
+  [ "$(docker inspect -f '{{.State.Health.Status}}' "$AUDITOR")" = healthy ] && pass "the auditor is healthy" || fail "the auditor is not healthy"
+  [ "$(docker exec "$AUDITOR" id -u)" = 10003 ] && pass "the auditor runs as uid 10003" || fail "the auditor does not run as uid 10003"
+  # No capability at all, and no exception to the shared hardening.
+  capeff=$(docker exec "$AUDITOR" sh -c 'grep CapEff /proc/1/status' 2>/dev/null | awk '{print $2}')
+  [ "$capeff" = 0000000000000000 ] && pass "the auditor's CapEff is 0" || fail "the auditor's CapEff is '${capeff:-unknown}', expected 0"
+  [ -z "$(docker inspect -f '{{join .HostConfig.CapAdd ","}}' "$AUDITOR")" ] && pass "the auditor adds no capability" || fail "the auditor adds a capability"
+  # Its networks are exactly the audit-* ones, and each is internal: no route out.
+  anets=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$AUDITOR" | tr ' ' '\n' | grep . | sort | tr '\n' ' ')
+  [ "$anets" = "${PROJECT}_audit-admin " ] && pass "the auditor is on the audit-* networks only (audit-admin)" || fail "the auditor's networks are: $anets"
+  case "$anets" in *edge*|*server-api*|*cpa-admin*) fail "the auditor shares a network that is not an audit-* one";; esac
+  for n in $anets; do
+    [ "$(docker network inspect -f '{{.Internal}}' "$n" 2>/dev/null)" = true ] && pass "$n is internal" || fail "$n is not internal"
+  done
+  docker exec "$AUDITOR" bash -c 'timeout 4 bash -c "echo > /dev/tcp/1.1.1.1/443"' >/dev/null 2>&1 \
+    && fail "the auditor reached the internet" || pass "the auditor has no route out"
+  docker exec "$AUDITOR" bash -c 'timeout 4 getent hosts example.com' >/dev/null 2>&1 \
+    && fail "the auditor resolved an outside name" || pass "the auditor cannot resolve an outside name"
+  # Who is on audit-admin: the admin and the auditor, nothing else.
+  members=$(docker network inspect -f '{{range .Containers}}{{.Name}} {{end}}' "${PROJECT}_audit-admin" | tr ' ' '\n' | grep . | sort | tr '\n' ' ')
+  [ "$members" = "$ADMIN $AUDITOR " ] && pass "audit-admin joins the admin and the auditor only" || fail "audit-admin members: $members"
+  # Mounts: its own data (read-write) and its credential volume (read-only), and nothing else; nobody else has them.
+  amounts=$(docker inspect -f '{{range .Mounts}}{{.Name}}={{.RW}} {{end}}' "$AUDITOR" | tr ' ' '\n' | grep . | sort | tr '\n' ' ')
+  [ "$amounts" = "${PROJECT}_auditor-data=true ${PROJECT}_auditor-token=false " ] && pass "the auditor mounts auditor-data and auditor-token (read-only) only" || fail "the auditor mounts: $amounts"
+  for c in $SERVER $ADMIN $CADDY; do
+    case " $(docker inspect -f '{{range .Mounts}}{{.Name}} {{end}}' "$c")" in
+      *" ${PROJECT}_auditor-data "*|*" ${PROJECT}_auditor-token "*) fail "$c mounts an auditor volume";; *) pass "$c mounts no auditor volume";;
+    esac
+  done
+  owned "$AUDITOR" /auditor-token/accept/admin-auditor-append.sha256 "10003 444" "the auditor's append hash file (owner, mode)"
+  owned "$AUDITOR" /auditor-token/accept/admin-auditor-read.sha256 "10003 444" "the auditor's read hash file (owner, mode)"
+  for d in /auditor-token /auditor-token/accept; do owned "$AUDITOR" "$d" "10003 500" "the auditor's $d"; done
+  # The API, from a throwaway container on audit-admin with the admin's own tokens: only the right token reaches each route.
+  AUD_APPEND=$(docker exec "$ADMIN" cat /admin-token/call/admin-auditor-append.token 2>/dev/null)
+  AUD_READ=$(docker exec "$ADMIN" cat /admin-token/call/admin-auditor-read.token 2>/dev/null)
+  [ -n "$AUD_APPEND" ] && [ -n "$AUD_READ" ] || fail "the admin holds no auditor tokens"
+  out=$(py --network "${PROJECT}_audit-admin" -e "AA=$AUD_APPEND" -e "AR=$AUD_READ" -- "
+import os, json, urllib.request, urllib.error
+def call(method, path, token=None, body=None):
+    req = urllib.request.Request('http://auditor:8083/api/audit/v1' + path, method=method, data=None if body is None else json.dumps(body).encode())
+    if token: req.add_header('authorization', 'Bearer ' + token)
+    if body is not None: req.add_header('content-type', 'application/json')
+    try: return urllib.request.urlopen(req, timeout=5).status
+    except urllib.error.HTTPError as e: return e.code
+    except Exception: return 0
+aa, ar = os.environ['AA'], os.environ['AR']
+act = {'id': 'isolation1', 'at': 1, 'category': 'isolation', 'action': 'check', 'outcome': 'done'}
+print('health-no-token', call('GET', '/health'))
+print('status-no-token', call('GET', '/status'))
+print('status-wrong', call('GET', '/status', 'wrong'))
+print('read-reads', call('GET', '/traces', ar))
+print('append-reads', call('GET', '/traces', aa))
+print('append-appends', call('POST', '/admin-actions', aa, act))
+print('read-appends', call('POST', '/admin-actions', ar, act))
+print('append-spans', call('POST', '/spans', aa, {}))
+print('read-retention-low', call('PUT', '/retention', ar, {'days': 3}))
+print('deletes', call('DELETE', '/admin-actions', ar))
+" 2>&1)
+  want="health-no-token 200
+status-no-token 401
+status-wrong 401
+read-reads 200
+append-reads 403
+append-appends 201
+read-appends 403
+append-spans 403
+read-retention-low 400
+deletes 403"
+  [ "$out" = "$want" ] && pass "the auditor's tokens each reach only their own routes (no token or a wrong one: 401, the other link's route: 403, retention below 7 days: 400, a delete is refused: no token may change or delete a record)" || fail "the auditor's API answered: $out"
+  # Nothing but the admin's network reaches it: a container on the edge network cannot.
+  AUD_IP=$(docker inspect -f "{{(index .NetworkSettings.Networks \"${PROJECT}_audit-admin\").IPAddress}}" "$AUDITOR")
+  [ "$(py --network "$EDGE" -- "
+import urllib.request
+try: print(urllib.request.urlopen('http://$AUD_IP:8083/api/audit/v1/health', timeout=4).status)
+except Exception: print(0)")" = 0 ] && pass "a container on edge cannot reach the auditor" || fail "the auditor is reachable from edge"
+fi
 
 echo "== 3e. No Docker socket"
 # There is no controller (ADR 0005): no container of the project mounts the Docker socket, and none is left
