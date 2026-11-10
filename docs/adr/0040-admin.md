@@ -44,3 +44,4 @@ Not recorded: the admin predates this record.
 - 2026-11-10: the Settings page sets how much history is sent with each question, pushed as `history_turns` (plan step 1.13).
 - 2026-11-10: the Settings page sets whether conversations show newest first (`newest_first` in the display defaults; plan step 1.13).
 - 2026-11-10: reads its server API token from `admin-token/call/admin-server.token`, made by `bootstrap`, instead of making one; it mounts `admin-token` read-only and no longer mounts `server-token` (plan step 2.1, [0049](0049-bootstrap.md)).
+- 2026-11-10: a `401` from the server flags the link: one log line naming `admin-server`, and a banner with the rotate command until the server accepts the token again; the status endpoint gains `token_rejected` (plan step 2.2, [0024](0024-rejected-token-alert.md)).
