@@ -153,8 +153,8 @@ EDGE_IP=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$EDGE\").IPAdd
 [ "$(http_status "$EDGE" "$EDGE_IP:8082")" = 0 ] && pass "nothing on the edge network answers on 8082" || fail "the server port answers on the edge network"
 [ "$(http_status "$EDGE" "$SERVER_API")" = 0 ] && pass "a container on edge cannot reach the server API address" || fail "the server API address is reachable from edge"
 admin_nets=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$ADMIN" | tr ' ' '\n' | grep . | sort | tr '\n' ' ')
-[ "$admin_nets" = "${PROJECT}_cpa-admin ${PROJECT}_server-api " ] && pass "the admin is on server-api and cpa-admin only (both internal: no route out, never edge)" || fail "the admin's networks are: $admin_nets"
-for n in server-api cpa-admin; do
+[ "$admin_nets" = "${PROJECT}_audit-admin ${PROJECT}_cpa-admin ${PROJECT}_server-api " ] && pass "the admin is on server-api, cpa-admin and audit-admin only (all internal: no route out, never edge)" || fail "the admin's networks are: $admin_nets"
+for n in server-api cpa-admin audit-admin; do
   [ "$(docker network inspect -f '{{.Internal}}' "${PROJECT}_$n" 2>/dev/null)" = true ] && pass "the $n network is internal" || fail "the $n network is not internal"
 done
 
