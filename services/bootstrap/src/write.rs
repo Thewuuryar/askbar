@@ -288,10 +288,33 @@ mod tests {
     fn a_rerun_changes_nothing() {
         let root = temp();
         let first = apply(&ctx(&root), &links(), false).unwrap();
-        assert_eq!(first.written, ["admin-server", "admin-auditor-append", "admin-auditor-read"]);
+        assert_eq!(
+            first.written,
+            [
+                "admin-server",
+                "admin-auditor-append",
+                "admin-auditor-read",
+                "server-model-gateway",
+                "admin-model-gateway",
+                "model-gateway-auditor"
+            ]
+        );
         let before = all(&root);
         let again = apply(&ctx(&root), &links(), false).unwrap();
-        assert_eq!(again, Report { written: vec![], kept: vec!["admin-server", "admin-auditor-append", "admin-auditor-read"] });
+        assert_eq!(
+            again,
+            Report {
+                written: vec![],
+                kept: vec![
+                    "admin-server",
+                    "admin-auditor-append",
+                    "admin-auditor-read",
+                    "server-model-gateway",
+                    "admin-model-gateway",
+                    "model-gateway-auditor"
+                ]
+            }
+        );
         assert_eq!(all(&root), before);
     }
 
