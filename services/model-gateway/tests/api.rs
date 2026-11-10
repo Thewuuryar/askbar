@@ -433,7 +433,9 @@ async fn a_provider_error_reaches_the_server_as_a_code_and_the_auditor_as_sealed
         .unwrap();
     let opened = String::from_utf8(crypto_box::SecretKey::from(AUDIT_SECRET).unseal(&blob).unwrap()).unwrap();
     assert!(opened.contains("401"), "the provider's own words, sealed: {opened}");
-    let attempt = rig.rows("SELECT status, error_code FROM spans WHERE trace_id = 'gen-401' AND kind = 'attempt'");
+    // The payload is queued before the finish record, so wait for the finish too.
+    let attempt =
+        rig.wait_rows("SELECT status, error_code FROM spans WHERE trace_id = 'gen-401' AND kind = 'attempt' AND status != 'running'").await;
     assert_eq!(attempt[0], vec![json!("error"), json!("http_401")]);
 }
 
