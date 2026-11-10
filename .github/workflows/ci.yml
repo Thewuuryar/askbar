@@ -5,6 +5,11 @@
 # Actions are pinned to commit hashes and gitleaks to a checksum (ADR 0017); Renovate proposes updates.
 # Rust is pinned too, so that a new release's lints never turn every pull request red at once: raise
 # RUST_VERSION in its own pull request and fix what it finds.
+#
+# Speed: the desktop client's system libraries, Playwright's Chromium and the image layers are cached,
+# so a run downloads little when nothing changed and a slow Ubuntu mirror cannot stall it for long.
+# `npm test` runs as two parallel jobs, test-services and test-desktop (package.json test:services
+# and test:desktop); only the desktop half needs the WebKit libraries.
 name: ci
 
 on:
@@ -27,17 +32,38 @@ concurrency:
 env:
   RUST_VERSION: "1.97.0"
   CARGO_TERM_COLOR: always
+  # Line numbers in backtraces, without full debug info: smaller caches and faster builds.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
   # The desktop client's system libraries (README, "Build and run").
   TAURI_LIBS: build-essential libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev
+  # A stalled mirror download gives up after 10 s and is retried, instead of waiting 30 s or more.
+  APT_OPTS: -o Acquire::http::Timeout=10 -o Acquire::Retries=3 -o Dir::Cache::Archives=/home/runner/apt-archives
 
 jobs:
   lint:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The downloaded packages, per runner image and version of this file; an older set is a fallback
+      # (autoclean drops the packages it no longer needs).
+      - name: Runner image
+        id: image
+        run: echo "id=$ImageOS-$ImageVersion" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/apt-archives
+          key: apt-${{ steps.image.outputs.id }}-${{ hashFiles('.github/workflows/ci.yml') }}
+          restore-keys: apt-
       - name: System libraries
-        run: sudo apt-get update && sudo apt-get install -y $TAURI_LIBS
+        run: |
+          mkdir -p ~/apt-archives/partial
+          sudo apt-get $APT_OPTS update
+          sudo apt-get $APT_OPTS install -y --no-install-recommends $TAURI_LIBS
+          sudo apt-get $APT_OPTS autoclean
+          sudo chown -R "$USER" ~/apt-archives
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch
         with:
           toolchain: ${{ env.RUST_VERSION }}
@@ -56,45 +82,102 @@ jobs:
           cargo clippy --workspace --all-targets --locked -- -D warnings
           (cd clients/desktop && cargo clippy --workspace --all-targets --locked -- -D warnings)
 
-  test:
+  # The services, crates, docs checks, admin browser test, mock LLM and smoke test. No system libraries.
+  test-services:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json', 'clients/desktop/package-lock.json') }}
+      - name: JS dependencies and the browser for the admin test
+        run: |
+          npm ci
+          npx playwright install chromium
+      - name: npm run test:services (docs checks, cargo tests, admin browser test, mock LLM)
+        run: npm run test:services
+      - name: Smoke test
+        run: scripts/smoke.sh
+
+  # The desktop client: its cargo tests, the Markdown renderer and the popup browser test.
+  test-desktop:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The downloaded packages, per runner image and version of this file; an older set is a fallback
+      # (autoclean drops the packages it no longer needs).
+      - name: Runner image
+        id: image
+        run: echo "id=$ImageOS-$ImageVersion" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/apt-archives
+          key: apt-${{ steps.image.outputs.id }}-${{ hashFiles('.github/workflows/ci.yml') }}
+          restore-keys: apt-
       - name: System libraries
-        run: sudo apt-get update && sudo apt-get install -y $TAURI_LIBS
+        run: |
+          mkdir -p ~/apt-archives/partial
+          sudo apt-get $APT_OPTS update
+          sudo apt-get $APT_OPTS install -y --no-install-recommends $TAURI_LIBS
+          sudo apt-get $APT_OPTS autoclean
+          sudo chown -R "$USER" ~/apt-archives
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch
         with:
           toolchain: ${{ env.RUST_VERSION }}
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          workspaces: |
-            .
-            clients/desktop
+          workspaces: clients/desktop
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
-      - name: JS dependencies and the browser for the UI tests
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json', 'clients/desktop/package-lock.json') }}
+      - name: JS dependencies and the browser for the popup test
         run: |
           npm ci
           npm --prefix clients/desktop ci
-          npx playwright install --with-deps chromium
-      - name: npm test (docs checks, cargo tests, admin and popup browser tests)
-        run: npm test
-      - name: Smoke test
-        run: scripts/smoke.sh
+          npx playwright install chromium
+      - name: npm run test:desktop (cargo tests, Markdown renderer, popup browser test)
+        run: npm run test:desktop
 
   isolation:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      # Builds the images compose.yaml names, from this checkout, reusing unchanged layers from
+      # GitHub's cache (Caddy's plugin build, the Rust dependency layer, the base images).
+      - name: Build the images
+        uses: docker/bake-action@59cb1203cd42bcefd40a1b6d73b589e48c86040e # v7.5.0
+        with:
+          source: .
+          files: compose.yaml
+          load: true
+          set: |
+            *.cache-from=type=gha,scope=askbar-images
+            *.cache-to=type=gha,mode=max,scope=askbar-images
       - name: Start a throwaway stack
         run: |
           cp .env.example .env
           mkdir -p data
           sudo chown 10002:10002 data
-          docker compose up -d --build --wait --wait-timeout 300
+          docker compose up -d --no-build --wait --wait-timeout 300
       - name: Isolation checks
         run: scripts/check-isolation.sh
       - name: Container logs
@@ -106,6 +189,7 @@ jobs:
 
   dependencies:
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # cargo-deny finds deny.toml beside the manifest or in a parent directory, so both runs use the root one.
@@ -131,6 +215,7 @@ jobs:
   secrets:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     env:
       GITLEAKS_VERSION: "8.30.1"
       GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
