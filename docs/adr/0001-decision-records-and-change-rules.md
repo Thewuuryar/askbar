@@ -19,7 +19,7 @@ Askbar needs one place to record decisions that a later contributor, person or A
 
 3. **Required for:**
    - any change to a boundary, container, network, volume, API audience or hard rule;
-   - any new dependency that is an image or a service, or is outside the license allowlist ([0026](0026-dependency-license-check.md)).
+   - any new dependency that is an image or a service, or is outside the license allowlist ([0017](0017-dependencies-and-patches.md), Licenses).
 
    A library inside the allowlist needs a reason in the pull request instead.
 4. **A change to a security rule** brings its docs and isolation tests in the same pull request.
