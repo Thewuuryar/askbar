@@ -14,7 +14,7 @@ crypto_box = { version = "0.9", features = ["seal"] }
 axum = "0.8"
 chacha20poly1305 = "0.10"
 base64 = "0.22"
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
