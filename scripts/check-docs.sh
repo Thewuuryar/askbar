@@ -4,8 +4,7 @@
 #   2. every ADR in docs/adr/ has a row in docs/adr/README.md, and the row's Status matches the ADR's "Status:" line;
 #   3. ADR 0001: every ADR but a stub has an Amendments section; a Kind is component or register; a Retired or
 #      Deferred ADR says when and why; a "Merged into NNNN" stub has a Merged: line and names an ADR that exists,
-#      is not a stub and lists it in its Amendments; "Amends:" lines and "amended by" statuses (older partial
-#      amendments, until they are folded in) name ADRs that exist and that name each other back.
+#      is not a stub and lists it in its Amendments; no ADR has an "Amends:" line or an "amended by" status.
 # Covers every tracked *.md file (all *.md files outside node_modules and target when git is not available).
 # Usage: scripts/check-docs.sh
 cd "$(dirname "$0")/.." || exit 2
@@ -107,20 +106,9 @@ if os.path.exists("docs/adr/README.md"):
         for word in ("Retired", "Deferred"):
             if status.startswith(word) and not re.search(rf"^{word}:\s*\S", text, re.M):
                 print(f"{where}: Status {word} needs a '{word}:' line with the date and the reason"); bad += 1
-        for by in re.findall(r"amended by ([0-9, and]+)", status):
-            for m in sorted(set(re.findall(r"\d{4}", by))):
-                other = adrs.get(m)
-                if not other:
-                    print(f"{where}: amended by {m}, which does not exist"); bad += 1
-                elif not re.search(rf"^Amends:.*\b{n}\b", other[1], re.M):
-                    print(f"{where}: amended by {m}, but {other[0]} has no 'Amends:' line naming {n}"); bad += 1
-        for line in re.findall(r"^Amends:(.*)$", text, re.M):
-            for m in sorted(set(re.findall(r"\b\d{4}\b", line))):
-                other = adrs.get(m)
-                if not other:
-                    print(f"{where}: amends {m}, which does not exist"); bad += 1
-                elif not re.search(rf"^Status:.*amended by[^\n]*\b{n}\b", other[1], re.M):
-                    print(f"{where}: amends {m}, but {other[0]}'s status does not say 'amended by {n}'"); bad += 1
+        # Partial amendments are gone (0001 rule 13): a change is made in the ADR itself.
+        if re.search(r"^Amends:", text, re.M) or "amended by" in status:
+            print(f"{where}: has an 'Amends:' line or an 'amended by' status; amend the ADR in place instead (ADR 0001)"); bad += 1
     if nums and nums != list(range(1, len(nums) + 1)):
         print("docs/adr: numbers are not contiguous from 0001"); bad += 1
     for n in rows:
