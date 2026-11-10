@@ -337,7 +337,9 @@ async fn a_backed_up_audit_writer_refuses_new_generations_with_503_and_retry_aft
     };
 
     assert!(recorder.healthy());
-    recorder.pause_writer(true); // the writer stalls
+    // The writer stalls, holding one event: from here the queue holds exactly its capacity, however slowly the
+    // writer's thread got going (a paused writer takes one event first, and the queue has room again).
+    recorder.stall_writer().await;
     let running = send("hello").expect("accepted while the queue has room");
     for _ in 0..50 {
         if !recorder.healthy() {
