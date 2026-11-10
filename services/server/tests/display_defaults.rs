@@ -48,7 +48,15 @@ impl T {
 }
 
 fn look(theme: &str, width: u32, hide: bool) -> DisplaySettings {
-    DisplaySettings { theme: theme.into(), width, max_height: 700, history_width: 300, top_percent: 0.3, hide_on_blur: hide }
+    DisplaySettings {
+        theme: theme.into(),
+        width,
+        max_height: 700,
+        history_width: 300,
+        top_percent: 0.3,
+        hide_on_blur: hide,
+        newest_first: false,
+    }
 }
 
 #[tokio::test]

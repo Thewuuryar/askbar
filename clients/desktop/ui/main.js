@@ -49,7 +49,8 @@
     historyOpen: false,
     conversations: [],
     armed: null,         // { id, timer } for two-step delete
-    pinned: true,        // thread follows new output until the user scrolls up
+    pinned: true,        // thread follows new output until the user scrolls away from it
+    newestFirst: false,  // the display setting: newest turn first, under the bar
   };
 
   // ------------------------------------------------------------ helpers
@@ -85,7 +86,24 @@
 
   // The window is sized to the card plus the transparent shadow margin.
   let lastSize = { w: 0, h: 0 };
+  // Newest first: the latest turn sits just under the bar. A turn is a question and what follows it
+  // (its reply, its error line), and keeps that order inside; only the turns are reversed. Done with
+  // the flex `order` of each row, so the rows themselves stay in time order.
+  function orderTurns() {
+    let turn = 0;
+    for (const row of el.thread.children) {
+      if (row.matches('.msg.user')) turn += 1;
+      row.style.order = state.newestFirst ? String(-turn) : '';
+    }
+  }
+
+  // Keeps the newest output in view: the bottom of the thread, or its top when newest is first.
+  function followNewest() {
+    el.thread.scrollTop = state.newestFirst ? 0 : el.thread.scrollHeight;
+  }
+
   function layout() {
+    orderTurns();
     const w = Math.ceil(el.card.offsetWidth) + PAD * 2;
     const h = Math.ceil(el.card.offsetHeight) + PAD * 2;
     if (w !== lastSize.w || h !== lastSize.h) {
@@ -100,6 +118,9 @@
     root.style.setProperty('--card-w', ui.width + 'px');
     root.style.setProperty('--hist-w', ui.history_width + 'px');
     root.style.setProperty('--card-max-h', ui.max_height + 'px');
+    state.newestFirst = !!ui.newest_first;
+    el.thread.dataset.order = state.newestFirst ? 'newest' : 'oldest';
+    orderTurns();
   }
 
   function syncChrome() {
@@ -257,7 +278,7 @@
   function render(msg) {
     msg.bodyNode.innerHTML = msg.role === 'assistant' ? window.renderMarkdown(msg.content) : '';
     if (msg.role === 'user') msg.bodyNode.textContent = msg.content;
-    if (state.pinned) el.thread.scrollTop = el.thread.scrollHeight;
+    if (state.pinned) followNewest();
   }
 
   let renderQueued = new Set();
@@ -357,7 +378,7 @@
       node.appendChild(btn);
     }
     el.thread.appendChild(node);
-    if (state.pinned) el.thread.scrollTop = el.thread.scrollHeight;
+    if (state.pinned) followNewest();
     el.thread.hidden = false;
     el.foot.hidden = false;
     el.card.dataset.thread = 'open';
@@ -547,7 +568,7 @@
       el.thread.hidden = false;
       el.foot.hidden = false;
       el.card.dataset.thread = 'open';
-      if (state.pinned) el.thread.scrollTop = el.thread.scrollHeight;
+      if (state.pinned) followNewest();
     }
     layout();
   }
@@ -757,7 +778,7 @@
       markFailed(msgs[i], r.failed.message, next);
     });
     state.pinned = true;
-    el.thread.scrollTop = el.thread.scrollHeight;
+    followNewest();
     renderHistory();
     el.input.focus();
     syncUnsent();
@@ -812,7 +833,7 @@
 
   el.thread.addEventListener('scroll', () => {
     const t = el.thread;
-    state.pinned = t.scrollHeight - t.scrollTop - t.clientHeight < 40;
+    state.pinned = state.newestFirst ? t.scrollTop < 40 : t.scrollHeight - t.scrollTop - t.clientHeight < 40;
   });
 
   el.thread.addEventListener('click', (e) => {

@@ -450,6 +450,16 @@ async function waitForPort(port) {
     await openSettings();
     await page.waitForFunction(() => document.getElementById('s-history-turns').value === '4');
   });
+  await step('newest first: off by default, saves across a reload', async () => {
+    await openSettings();
+    assert.equal(await page.isChecked('#s-newest-first'), false);
+    await page.check('#s-newest-first');
+    await page.click('#settings-form button[type=submit]');
+    await page.waitForSelector('#flash:not([hidden])');
+    await page.uncheck('#s-newest-first'); // unsaved: only a reload from the server brings it back
+    await openSettings();
+    assert.equal(await page.isChecked('#s-newest-first'), true);
+  });
   await step('kill switch: off by default, aborts running replies by default; both save and reload', async () => {
     await openSettings();
     await page.waitForFunction(() => document.getElementById('s-gen-timeout').value === '120');

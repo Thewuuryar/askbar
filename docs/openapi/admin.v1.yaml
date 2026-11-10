@@ -1475,6 +1475,11 @@ components:
           type: number
         hide_on_blur:
           type: boolean
+        newest_first:
+          type: boolean
+          description: >-
+            Show a conversation newest first, just under the input bar, each question still above
+            its reply. False (oldest first) when absent.
     AdminSettings:
       type: object
       required: [system_prompt, display]

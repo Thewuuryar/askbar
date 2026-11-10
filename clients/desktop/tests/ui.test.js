@@ -546,6 +546,49 @@ async function waitIdle(page) {
   });
   await page.context().close();
 
+  // ------------------------------------------------- newest first
+  page = await open(browser, { serverUi: { newest_first: true } });
+  // The top edge of each row, in the order the rows are drawn.
+  const drawn = (p) => p.evaluate(() => [...document.querySelectorAll('#thread > .msg')]
+    .map((n) => ({ y: n.getBoundingClientRect().top, cls: n.className, text: n.querySelector('.body').innerText }))
+    .sort((a, b) => a.y - b.y));
+  await step('newest first: the latest turn is under the bar, each question above its reply', async () => {
+    assert.equal(await page.getAttribute('#thread', 'data-order'), 'newest');
+    for (const q of ['First question', 'Second question']) {
+      await ask(page, q);
+      await waitIdle(page);
+    }
+    await ask(page, 'Third, please fail');
+    await page.waitForSelector('.msg.error');
+    await waitIdle(page);
+    const rows = await drawn(page);
+    const kinds = rows.map((r) => (r.cls.includes('user') ? 'Q:' + r.text : r.cls.includes('error') ? 'error' : 'reply'));
+    assert.deepEqual(kinds, ['Q:Third, please fail', 'error', 'Q:Second question', 'reply', 'Q:First question', 'reply']);
+    assert.equal(await page.evaluate(() => document.getElementById('thread').scrollTop), 0, 'the newest stays in view');
+    // The rows themselves stay in time order: copying and the shortcuts read them as before.
+    const dom = await page.evaluate(() => [...document.querySelectorAll('#thread > .msg.user .body')].map((n) => n.innerText));
+    assert.deepEqual(dom, ['First question', 'Second question', 'Third, please fail']);
+  });
+  await step('newest first holds after reopening', async () => {
+    await page.click('#history-toggle');
+    await page.locator('.conv .open', { hasText: 'First question' }).click();
+    await page.click('#history-toggle');
+    const rows = await drawn(page);
+    assert.equal(rows[0].text, 'Third, please fail');
+    assert.equal(rows[rows.length - 1].cls.includes('assistant'), true, 'the oldest reply is last');
+  });
+  await step('a local override of the order wins over the server default', async () => {
+    await page.evaluate(() => { window.__opts.override = { newest_first: false }; });
+    await page.evaluate(() => window.__listeners['askbar:shown']());
+    await page.waitForFunction(() => document.getElementById('thread').dataset.order === 'oldest');
+    const rows = await drawn(page);
+    assert.equal(rows[0].text, 'First question', 'oldest first again');
+  });
+  await step('no JavaScript errors with newest first', async () => {
+    assert.deepEqual(page.errors, []);
+  });
+  await page.context().close();
+
   // ------------------------------------------------- notice + dark theme
   page = await open(browser, { notice: 'Welcome. Add your API key in /home/u/.config/askbar/config.yaml, then ask away.', theme: 'dark' });
   await step('first-run notice appears, offers the config, and dismisses', async () => {
