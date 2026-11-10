@@ -223,6 +223,28 @@ async fn status_reports_a_server_that_is_there() {
 }
 
 #[tokio::test]
+async fn status_says_when_the_server_rejects_the_admins_token_and_stops_saying_it_when_it_accepts_it_again() {
+    use std::os::unix::fs::PermissionsExt;
+    let t = start(true).await;
+    let (_, status) = t.call(M::GET, "/api/admin/v1/status", None).await;
+    assert_eq!(status["token_rejected"], json!(false));
+
+    // The server's side is rotated (its directories are read-only, as bootstrap leaves them).
+    let hash_file = t.dir.join("server-token/accept/admin-server.sha256");
+    let good = std::fs::read_to_string(&hash_file).unwrap();
+    std::fs::set_permissions(hash_file.parent().unwrap(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::fs::remove_file(&hash_file).unwrap();
+    std::fs::write(&hash_file, server_link::sha256_hex("mgt_some-other-token")).unwrap();
+    let (_, status) = t.call(M::GET, "/api/admin/v1/status", None).await;
+    assert_eq!(status["token_rejected"], json!(true), "{status}");
+
+    std::fs::write(&hash_file, good).unwrap();
+    let (_, status) = t.call(M::GET, "/api/admin/v1/status", None).await;
+    assert_eq!(status["token_rejected"], json!(false), "{status}");
+    assert_eq!(status["server_online"], json!(true));
+}
+
+#[tokio::test]
 async fn a_pairing_string_pairs_a_client_which_can_then_be_revoked() {
     let t = start(true).await;
     let (st, out) = t.call(M::POST, "/api/admin/v1/users/U1/pairing-keys", Some(json!({ "name": "Work laptop" }))).await;

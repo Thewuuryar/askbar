@@ -153,7 +153,9 @@
   async function checkServer() {
     try {
       const st = await api('GET', '/api/admin/v1/status');
-      show($('offline'), !st.server_online);
+      // A refused token is the more useful message: the server is there, but it does not accept this admin.
+      show($('rejected'), !!st.token_rejected);
+      show($('offline'), !st.server_online && !st.token_rejected);
     } catch (_) { /* signed out, or the admin itself is away */ }
   }
 

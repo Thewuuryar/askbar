@@ -453,6 +453,9 @@ paths:
                     type: boolean
                   error:
                     type: [string, 'null']
+                  token_rejected:
+                    type: boolean
+                    description: The server answers 401 to this admin's token. Clears with the next answer that is not a 401.
         '401':
           $ref: '#/components/responses/Unauthorized'
   /api/admin/v1/providers:

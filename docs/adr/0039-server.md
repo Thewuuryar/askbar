@@ -49,3 +49,4 @@ Not recorded: the server predates this record.
 - 2026-11-10: a question whose turn failed keeps why, in the server's own words, never a provider's error text (space migration 3; plan step 1.13).
 - 2026-11-10: the snapshot's `history_turns` limits how many earlier questions, with their replies, are sent with a new one (0 = all; plan step 1.13).
 - 2026-11-10: reads its accepted hash from `server-token/accept/admin-server.sha256`, made by `bootstrap`, and refuses to start without it; an install with only the old `token.sha256` is told to run `docker compose up -d` (plan step 2.1, [0049](0049-bootstrap.md)).
+- 2026-11-10: counts tokens that match no link on the server API and logs once when five arrive within ten minutes, naming the link, never the token (plan step 2.2, [0024](0024-rejected-token-alert.md)).

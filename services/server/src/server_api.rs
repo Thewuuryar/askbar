@@ -100,7 +100,7 @@ pub fn check_not_wildcard(addr: &SocketAddr) -> Result<(), String> {
 /// only its own routes here.
 pub fn links(hash_file: PathBuf) -> askbar_service::links::Links {
     use askbar_service::links::{Allow, Link, Links};
-    Links::new(vec![Link { caller: "admin", hash_file, allow: vec![Allow::any("/**")] }])
+    Links::new(vec![Link { caller: "admin", hash_file, allow: vec![Allow::any("/**")] }]).named("server")
 }
 
 /// Replace the configuration snapshot. The version in the body is ignored; the server

@@ -38,3 +38,13 @@ fn with_no_file_at_all_it_says_bootstrap_makes_it() {
     assert!(e.contains("bootstrap") && e.contains("docker compose up"), "{e}");
     assert!(!e.contains("old token.sha256"), "{e}");
 }
+
+#[test]
+fn repeated_invalid_tokens_on_the_server_api_are_reported_once_naming_its_link_and_never_a_token() {
+    let d = temp();
+    let links = askbar_server::server_api::links(d.join("accept/admin-server.sha256"));
+    let now = std::time::Instant::now();
+    let lines: Vec<String> = (0..12).filter_map(|i| links.note_invalid(now + std::time::Duration::from_secs(i))).collect();
+    assert_eq!(lines.len(), 1, "one report for the episode: {lines:?}");
+    assert!(lines[0].contains("5 invalid tokens in 10 minutes") && lines[0].contains("admin-server"), "{}", lines[0]);
+}
