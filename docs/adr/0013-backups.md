@@ -22,7 +22,7 @@ V1 has manual and scheduled backups, encrypted with age.
 
 **Rotation**
 
-- Rotating the audit passphrase doesn't affect backups or restore. Backups hold sealed content as ciphertext, and content sealed under an old passphrase still needs that passphrase ([0030](0030-sealed-audit-content.md)). A restore never needs an audit passphrase.
+- Rotating the audit passphrase doesn't affect backups or restore. Backups hold sealed content as ciphertext, and content sealed under an old passphrase still needs that passphrase ([0011](0011-sealed-content-access.md)). A restore never needs an audit passphrase.
 - Rotating the backup passphrase makes a new key pair. Each backup carries the key protected by the passphrase in force when it was made, so older backups need the old passphrase.
 - After a backup passphrase rotation, the admin takes a new backup at once. Keep older backups only until the new ones cover the retention window, and delete them if the rotation followed a suspected compromise.
 

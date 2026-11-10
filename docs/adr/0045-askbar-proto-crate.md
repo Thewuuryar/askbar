@@ -7,7 +7,7 @@ Source: plan step 1.14 ([plan-v1.md](../plan-v1.md)); owner rule that every comp
 
 ## Context
 
-The server, the admin and the desktop client must agree on every type and path they exchange, and an error code must mean the same thing on both ends. The crate existed before the rule that each component has its own ADR; its name was kept on purpose ([architecture.md](../architecture.md), "Considered and not changed"). This record describes it as it is on `main` after plan step 1.11. It follows [0022](0022-api-path-conventions.md), [0023](0023-api-error-format.md), [0033](0033-repository-layout.md) and [0034](0034-self-signed-https-and-certificate-pinning.md).
+The server, the admin and the desktop client must agree on every type and path they exchange, and an error code must mean the same thing on both ends. The crate existed before the rule that each component has its own ADR; its name was kept on purpose ([architecture.md](../architecture.md), "Considered and not changed"). This record describes it as it is on `main` after plan step 1.11. It follows [0022](0022-api-path-conventions.md), [0023](0023-api-error-format.md), [0033](0033-repository-layout.md) and [0015](0015-certificates.md).
 
 ## Decision
 
@@ -17,7 +17,7 @@ The server, the admin and the desktop client must agree on every type and path t
   - `paths`: every API prefix, `/api/{name}/v{major}` ([0022](0022-api-path-conventions.md));
   - `problem`: the problem-details shape and `ErrorCode`, the registry of error codes ([0023](0023-api-error-format.md));
   - `sse`: the incremental Server-Sent Events parser the server uses for provider streams and the client for the chat stream;
-  - the pairing key's encoding, including the certificate pin ([0034](0034-self-signed-https-and-certificate-pinning.md)), and the client version header and its parser.
+  - the pairing key's encoding, including the certificate pin ([0015](0015-certificates.md)), and the client version header and its parser.
 - **Dependencies:** `serde`, `serde_json` and `base64`. `axum` only behind the `axum` feature, which the server and the admin turn on for their `ApiError` response type; the desktop client builds without it.
 - **Users:** the server, the admin, `askbar-service` ([0036](0036-askbar-service-crate.md)) and the desktop client.
 - **Rule:** within `/api/client/v1` after 1.0, a field, type or error code is only added, never renamed or removed (AGENTS.md).

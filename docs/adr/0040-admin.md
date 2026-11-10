@@ -7,15 +7,15 @@ Source: plan step 1.14 ([plan-v1.md](../plan-v1.md)); owner rule that every comp
 
 ## Context
 
-The admin existed before the rule that each component has its own ADR. This record describes it as it is on `main` after plan step 1.11. It follows [0003](0003-v1-service-layout.md), [0005](0005-no-controller-and-self-restart.md), [0007](0007-first-run-and-admin-sign-in.md), [0022](0022-api-path-conventions.md), [0028](0028-service-boundaries-and-config-delivery.md), [0029](0029-shared-origin-protections.md), [0032](0032-container-hardening.md) and [0034](0034-self-signed-https-and-certificate-pinning.md), and links them instead of repeating them.
+The admin existed before the rule that each component has its own ADR. This record describes it as it is on `main` after plan step 1.11. It follows [0003](0003-v1-service-layout.md), [0005](0005-no-controller-and-self-restart.md), [0007](0007-first-run-and-admin-sign-in.md), [0022](0022-api-path-conventions.md), [0028](0028-service-boundaries-and-config-delivery.md), [0029](0029-shared-origin-protections.md), [0032](0032-container-hardening.md) and [0015](0015-certificates.md), and links them instead of repeating them.
 
 ## Decision
 
 - **What it is:** `services/admin`, binary and image `askbar-admin`, the Dockerfile's `admin` target. It runs as uid and gid 10001. It serves the admin site at `/admin` and its API at `/api/admin/v1`, on a unix socket only (`/run/admin/admin.sock`); it opens no TCP port. The site is one page per section, `/admin/<section>/`, rendered once at start from Askama templates compiled into the binary; the static files are served with an `ETag` (plan step 1.16).
 - **What it holds:**
-  - `admin.db`: the admin's password hash, admin API key hashes, users, providers (no keys except the managed `cpa` one, below), settings, display defaults, budgets and the kill switch, network settings (the Cloudflare token encrypted with `admin.key`), pairing-code hashes, the audit keyring (public keys and salts only, [0030](0030-sealed-audit-content.md)) and its record of who opened sealed content;
+  - `admin.db`: the admin's password hash, admin API key hashes, users, providers (no keys except the managed `cpa` one, below), settings, display defaults, budgets and the kill switch, network settings (the Cloudflare token encrypted with `admin.key`), pairing-code hashes, the audit keyring (public keys and salts only, [0011](0011-sealed-content-access.md)) and its record of who opened sealed content;
   - in `admin-secrets`: `admin.key`, the server API token, and `cpa`'s API key and control secret;
-  - in `caddy-secrets`: the install's own certificate and key ([0034](0034-self-signed-https-and-certificate-pinning.md)) and the Cloudflare token file Caddy reads.
+  - in `caddy-secrets`: the install's own certificate and key ([0015](0015-certificates.md)) and the Cloudflare token file Caddy reads.
 - **Volumes:** `admin-data`, `admin-secrets`, `server-token` (it writes the token's hash for the server), `admin-run` (its socket, for Caddy), `caddy-run` (Caddy's admin socket), `caddy-secrets`, and `cpa-config` (it writes `cpa`'s config and restart requests, [0037](0037-askbar-cpa-image-and-supervisor.md)).
 - **Networks:** `server-api` and `cpa-admin`, with addresses Docker assigns; it calls the server at `http://server-api-host:8082`. Both are `internal`, so the admin has no route out. Caddy reaches it only through its socket.
 - **Links:** it calls the server API with its token, pushes Caddy's configuration through Caddy's admin socket, and calls `cpa`'s management API with the control secret. Nothing calls it except Caddy, for a person's browser or a script with an admin API key.

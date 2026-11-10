@@ -33,7 +33,7 @@ The owner accepted the third list on November 4, 2026, and amended it on Novembe
 | --- | --- | --- |
 | Admin or pairing brute force | Recommended passkeys, allowlist, rate limits, attempt cap, identical errors | Limit and lockout tests |
 | Compromised admin, which holds live secrets | Fresh sign-in for sensitive changes, independent audit, alerts | Admin can't alter records; alerts fire |
-| Unknown changes to the audit log | Hash chain, with the admin checking the latest chain head against the auditor ([0025](0025-audit-record-reliability.md)) | Tamper test |
+| Unknown changes to the audit log | Hash chain, with the admin checking the latest chain head against the auditor ([0010](0010-auditor.md)) | Tamper test |
 | False or missing records after a server compromise | `model-gateway` records each call and refuses the call when the auditor doesn't acknowledge the span start; Caddy sends access logs to the auditor; alerts when a component that appends goes silent. Add mismatch alerts if time allows | A call is refused and recorded when the auditor doesn't acknowledge the span start; a silent component triggers an alert |
 | Backup theft | Encrypted exports, a passphrase of at least 20 characters, and alerts on public key changes | Restore without the passphrase fails; the admin can't read exports; a key change sends an alert |
 | Vulnerable or changed dependency | Pinned images, scheduled CVE scans of dependencies and images, and alerts on new CVEs and dependency updates | A known vulnerable test dependency fails CI and sends an alert |
