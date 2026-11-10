@@ -471,6 +471,10 @@ except Exception: print(0)
   # appears nowhere it must not: not in a response, a log, the gateway's files, the admin's database in the clear,
   # or the auditor's store.
   MARK="sk-isolation-marker-$(head -c 12 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9')"
+  # The gateway runs nothing without the audit key (it could not record what a provider says), so a fresh install
+  # needs one first; an install that has one keeps it (this call is then refused, which is fine).
+  admin_script "$(admin_login)
+call('PUT', '/api/admin/v1/setup/audit-key', {'passphrase': 'isolation check passphrase, long enough', 'confirm': 'isolation check passphrase, long enough'})" >/dev/null 2>&1
   pid=$(admin_script "$(admin_login)
 s, body = call('POST', '/api/admin/v1/providers', {'name': 'Isolation marker', 'type': 'openai', 'base_url': 'http://mock-llm:8765/v1', 'model': 'm', 'api_key': '$MARK'})
 print(json.loads(body).get('id', '') if s == 201 else 'failed')" 2>&1 | tail -1)
