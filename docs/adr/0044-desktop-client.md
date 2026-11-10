@@ -39,3 +39,4 @@ The app's Rust tests run against a real server built from this repository and th
 ## Amendments
 
 - 2026-11-08: each message shows its date and time, and each reply the model and provider that wrote it (plan step 1.13).
+- 2026-11-10: a failed question stays marked, live and after reopening, with Try again and Edit for every failure kind (plan step 1.13).
