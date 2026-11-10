@@ -1,6 +1,6 @@
 //! Askbar server: the client API and, on its own listener, the server API the admin service uses.
 
-pub mod audit;
+pub use askbar_audit as audit;
 pub mod auth;
 pub mod backup;
 pub mod chat;

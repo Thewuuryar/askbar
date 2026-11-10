@@ -255,19 +255,16 @@ fn percentile(sorted: &[i64], p: f64) -> Option<i64> {
     Some(sorted[rank.min(sorted.len()) - 1])
 }
 
-/// Prices by provider id, as the snapshot has them now. `None` for a provider it does not know.
-pub type PriceOf<'a> = &'a dyn Fn(&str) -> Option<crate::cost::Prices>;
+/// Works out the cost of a set of tokens: `(provider_id, input, output, cached)` to a cost, or
+/// `None` when it cannot be known. The audit store holds only token counts; the caller owns prices.
+pub type CostFn<'a> = &'a dyn Fn(Option<&str>, Option<i64>, Option<i64>, Option<i64>) -> Option<f64>;
 
-/// The cost of a set of tokens reported by `provider_id`, or `None` when it cannot be known: the
-/// provider is gone from the snapshot, or a price that matters is missing.
-pub fn cost_of(price_of: PriceOf, provider_id: Option<&str>, input: Option<i64>, output: Option<i64>, cached: Option<i64>) -> Option<f64> {
-    // No token counts at all (a request that failed before any reply): nothing to put a price on.
-    if input.is_none() && output.is_none() {
-        return None;
-    }
-    let prices = price_of(provider_id?)?;
-    let n = |v: Option<i64>| v.unwrap_or(0).max(0) as u64;
-    crate::cost::cost(crate::cost::Tokens { input: n(input), output: n(output), cached: n(cached) }, prices)
+/// A sealed payload and the id of the key it was sealed to, so the right key can be chosen to
+/// read it even after the key has been rotated.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Sealed {
+    pub key_id: String,
+    pub bytes: Vec<u8>,
 }
 
 /// A sum of costs that is unknown if any part of it is.
@@ -306,8 +303,8 @@ fn utc_day(t: i64) -> String {
 
 /// Counts, error rate, latency percentiles, token totals and cost for generations that began at or
 /// after `since` (unix seconds), with a breakdown by provider and by day. Cost is computed here
-/// from the prices `price_of` gives now (see `cost`): it is null when a needed price is missing.
-pub fn stats(conn: &Connection, since: i64, price_of: PriceOf) -> rusqlite::Result<serde_json::Value> {
+/// from the prices `cost_of` applies now: it is null when a needed price is missing.
+pub fn stats(conn: &Connection, since: i64, cost_of: CostFn) -> rusqlite::Result<serde_json::Value> {
     let mut by_status = serde_json::Map::new();
     let mut requests = 0i64;
     {
@@ -360,7 +357,7 @@ pub fn stats(conn: &Connection, since: i64, price_of: PriceOf) -> rusqlite::Resu
         for row in rows {
             let (started, tin, tout, tcached, provider) = row?;
             let has_tokens = tin.is_some() || tout.is_some();
-            let cost = cost_of(price_of, provider.as_deref(), tin, tout, tcached);
+            let cost = cost_of(provider.as_deref(), tin, tout, tcached);
             total.add(cost, has_tokens);
             for (map, key) in [(&mut by_provider, provider.clone().unwrap_or_default()), (&mut by_day, utc_day(started))] {
                 let g = map.entry(key).or_insert_with(|| Group { requests: 0, tokens: (0, 0, 0), cost: CostSum::default() });
@@ -504,7 +501,7 @@ impl SpanStart {
     /// A span in trace `trace_id` (the generation id), starting now, with a fresh id.
     pub fn new(trace_id: &str, kind: Kind, name: &str) -> SpanStart {
         SpanStart {
-            id: crate::ids::new_id(),
+            id: askbar_service::ids::new_id(),
             trace_id: trace_id.to_string(),
             kind: kind.as_str().to_string(),
             name: name.to_string(),
@@ -690,7 +687,7 @@ impl Recorder {
     }
 
     /// Records sealed content for a span. Only ciphertext ever gets here.
-    pub fn payload(&self, span_id: &str, role: &str, sealed: crate::seal::Sealed) {
+    pub fn payload(&self, span_id: &str, role: &str, sealed: Sealed) {
         self.send(Event::Payload(PayloadWrite {
             span_id: span_id.to_string(),
             role: role.to_string(),
@@ -1092,7 +1089,7 @@ mod tests {
         span("a3", "T", "attempt", Some("p1"), "done", r#"{"retry_index":2}"#);
         span("t2", "U", "turn", None, "error", "{}");
         span("b1", "U", "attempt", Some("p2"), "error", r#"{"retry_index":0}"#);
-        let v = stats(&db.conn, now - 10, &|_| None).unwrap();
+        let v = stats(&db.conn, now - 10, &|_, _, _, _| None).unwrap();
         let by = |p: &str| {
             v["by_provider"].as_array().unwrap().iter().find(|x| x["provider_id"] == p).cloned().unwrap_or_else(|| panic!("no row for {p}"))
         };
@@ -1101,7 +1098,7 @@ mod tests {
         assert_eq!(nums(&by("p2")), [1, 0, 1], "p2 had one try, and it failed");
         assert!(by("p1").get("fallbacks").is_none(), "there is no fallback to count");
         // Outside the window nothing counts.
-        let later = stats(&db.conn, now + 100, &|_| None).unwrap();
+        let later = stats(&db.conn, now + 100, &|_, _, _, _| None).unwrap();
         assert!(later["by_provider"].as_array().unwrap().is_empty());
     }
 
