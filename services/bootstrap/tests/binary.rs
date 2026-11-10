@@ -26,16 +26,16 @@ fn it_creates_keeps_lists_and_rotates() {
 
     let first = run(&root, &[]);
     assert!(first.status.success());
-    assert_eq!(out(&first), "created admin-server\n");
+    assert_eq!(out(&first), "created admin-server\ncreated admin-auditor-append\ncreated admin-auditor-read\n");
     let token = std::fs::read_to_string(&token_file).unwrap();
     assert!(token.starts_with("mgt_"));
     assert_eq!(std::fs::read_to_string(&hash_file).unwrap().trim().len(), 64);
 
     let again = run(&root, &[]);
-    assert_eq!(out(&again), "kept admin-server\n");
+    assert_eq!(out(&again), "kept admin-server\nkept admin-auditor-append\nkept admin-auditor-read\n");
     assert_eq!(std::fs::read_to_string(&token_file).unwrap(), token, "a rerun keeps the token");
 
-    assert_eq!(out(&run(&root, &["list"])), "admin-server\n");
+    assert_eq!(out(&run(&root, &["list"])), "admin-server\nadmin-auditor-append\nadmin-auditor-read\n");
 
     let rotated = run(&root, &["rotate", "admin-server"]);
     assert!(rotated.status.success());

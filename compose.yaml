@@ -44,6 +44,7 @@ services:
     volumes:
       - server-token:/server-token
       - admin-token:/admin-token
+      - auditor-token:/auditor-token
 
   server:
     build:
@@ -206,6 +207,8 @@ volumes:
   audit-data:
   server-token:
   admin-token:
+  # The auditor's credential volume (ADR 0049, 0051): the hashes of the tokens it accepts. Only bootstrap writes it.
+  auditor-token:
   # Held the retired controller's token hash (ADR 0005). Nothing mounts it now; kept declared until 1.0
   # so no install loses a volume by surprise (plan-v1.md: data volumes are never renamed or dropped pre-1.0).
   control-token:
