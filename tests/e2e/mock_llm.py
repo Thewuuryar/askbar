@@ -3,7 +3,8 @@
     python3 tests/e2e/mock_llm.py 8765
 
 Then point a provider at http://127.0.0.1:8765/v1 (any key). Say "slow" in a
-message to get a long, slow reply (handy for testing Stop), or "fail" to get
+message to get a long, slow reply (handy for testing Stop; about a minute), "brisk" for the
+same text in about 4 seconds (for tests that need the whole long reply), or "fail" to get
 an HTTP 401 error. "429" answers HTTP 429 with Retry-After: 1 and "500" answers
 HTTP 500. The same words in the model name ("m-429", "m-fail", "m-reset") work too. "429once" answers 429 (Retry-After: 1) the first time it sees that exact
 message and succeeds after, and "reset" sends two deltas then resets the connection (a failure
@@ -170,7 +171,8 @@ class Handler(BaseHTTPRequestHandler):
             self.close_connection = True
             return
 
-        slow = "slow" in last.lower()
+        brisk = "brisk" in last.lower()
+        slow = brisk or "slow" in last.lower()
         text = SLOW if slow else REPLY
         self.send_response(200)
         self.send_header("content-type", "text/event-stream")
@@ -182,7 +184,7 @@ class Handler(BaseHTTPRequestHandler):
             step = 6 if not slow else 4
             for i in range(0, len(text), step):
                 self.delta(anthropic, text[i:i + step])
-                time.sleep(0.15 if slow else 0.012)
+                time.sleep(0.01 if brisk else 0.15 if slow else 0.012)
             if anthropic:
                 self.sse("content_block_stop", {"type": "content_block_stop", "index": 0})
                 self.sse("message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn"},

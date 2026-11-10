@@ -287,7 +287,7 @@ python3 tests/e2e/mock_llm.py 8765   # fake OpenAI-compatible server to try the 
 
 The UI and admin tests need `npm install && npm --prefix clients/desktop install && npx playwright install chromium`.
 
-Every pull request runs `.github/workflows/ci.yml` on Linux: rustfmt and clippy in both workspaces, `npm test`, the smoke test, the isolation checks against a stack it builds, `cargo deny` and the npm license and advisory checks, and a gitleaks scan of the history. The same advisory checks run weekly. `build.yml` builds and tests macOS and Windows, by hand.
+Every pull request runs `.github/workflows/ci.yml` on Linux: rustfmt and clippy in both workspaces, `npm test` (as two parallel jobs, `test:services` and `test:desktop`), the smoke test, the isolation checks against a stack it builds, `cargo deny` and the npm license and advisory checks, and a gitleaks scan of the history. The same advisory checks run weekly. `build.yml` builds and tests macOS and Windows, by hand.
 
 ## Verified, and not
 

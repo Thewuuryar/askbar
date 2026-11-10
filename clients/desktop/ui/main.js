@@ -672,9 +672,40 @@
       if (state.armed && state.armed.id === c.id) del.classList.add('armed');
       del.setAttribute('aria-label', 'Delete conversation: ' + c.title);
 
-      row.append(open, del);
+      const copy = document.createElement('button');
+      copy.type = 'button';
+      copy.className = 'copy-conv';
+      copy.title = 'Copy conversation';
+      copy.setAttribute('aria-label', 'Copy conversation: ' + c.title);
+
+      row.append(open, copy, del);
       el.histList.appendChild(row);
     }
+  }
+
+  // A whole conversation as Markdown: its title, then each message in order with who wrote it and
+  // when; a reply also names its model and provider, and a failed question says why.
+  function conversationMarkdown(title, rows) {
+    const parts = ['# ' + title];
+    for (const r of rows) {
+      let head = (r.role === 'user' ? '**You**' : '**Assistant**') + ' · ' + formatTime(r.created_at);
+      if (r.provider) head += ' · ' + r.provider.model + ' via ' + r.provider.name;
+      parts.push(head, r.content);
+      if (r.failed) parts.push('> Failed: ' + r.failed.message);
+    }
+    return parts.join('\n\n') + '\n';
+  }
+
+  async function copyConversation(id, button) {
+    let rows;
+    try {
+      rows = await invoke('load_conversation', { id });
+    } catch (e) {
+      showNotice(String(e));
+      return;
+    }
+    const c = state.conversations.find((x) => String(x.id) === id);
+    await copyText(conversationMarkdown(c ? c.title : 'Conversation', rows), button);
   }
 
   async function refreshHistory() {
@@ -816,6 +847,7 @@
     if (!row) return;
     const id = row.dataset.id;
     if (t.closest('.del')) onDelete(id);
+    else if (t.closest('.copy-conv')) copyConversation(id, t.closest('.copy-conv'));
     else if (t.closest('.open')) openConversation(id);
   });
 

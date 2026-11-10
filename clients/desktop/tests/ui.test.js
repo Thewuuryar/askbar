@@ -410,6 +410,32 @@ async function waitIdle(page) {
     await page.click('#history-toggle');
   });
 
+  await step('the history panel copies a whole conversation as Markdown, with who, when, model and failures', async () => {
+    await page.evaluate(() => { window.__copied = []; });
+    await page.keyboard.press('Control+n');
+    const shown = await page.locator('.msg').count();
+    await page.click('#history-toggle');
+    const row = page.locator('.conv', { hasText: 'this will timeout' });
+    await row.hover();
+    const btn = row.locator('.copy-conv');
+    assert.equal(await btn.getAttribute('aria-label'), 'Copy conversation: this will timeout');
+    await btn.click();
+    await page.waitForFunction(() => window.__copied.length === 1);
+    const md = (await page.evaluate(() => window.__copied))[0];
+    const parts = md.trim().split('\n\n');
+    assert.equal(parts[0], '# this will timeout');
+    assert.match(parts[1], /^\*\*You\*\* · \S/);
+    assert.equal(parts[2], 'this will timeout');
+    assert.equal(parts[3], '> Failed: Stopped after 5 minutes', 'a failed question says why, under it');
+    assert.match(parts[4], /^\*\*Assistant\*\* · .+ · mock-1 via Mock AI$/);
+    assert.equal(parts[5], 'Partial answer');
+    assert.equal(md.split('**You**').length - 1, 2, 'every question, in order');
+    assert.equal(await btn.innerText(), 'Copied');
+    // Copying does not change what the window shows.
+    assert.equal(await page.locator('.msg').count(), shown);
+    await page.click('#history-toggle');
+  });
+
   await step('a provider event never adds an "Answered by" line (there is no fallback)', async () => {
     await page.keyboard.press('Control+n');
     await ask(page, 'announce another provider please');
