@@ -11,7 +11,7 @@ Askbar's tests and the Mac check need a model provider that answers fast, costs 
 
 ## Decision
 
-- **What it is:** `tests/e2e/mock_llm.py`, one Python file with no dependencies beyond the standard library. It answers the OpenAI-compatible `/v1/models` and streaming `/v1/chat/completions`, and Anthropic's `/v1/messages`, with a fixed Markdown reply. Words in the message or the model name choose a behaviour: `slow`, `fail` (401), `429`, `429once`, `500`, `reset`, `hang`, `drop`, and `cached` (usage with cached tokens). `tests/e2e/mock_llm_test.py` tests it.
+- **What it is:** `tests/e2e/mock_llm.py`, one Python file with no dependencies beyond the standard library. It answers the OpenAI-compatible `/v1/models` and streaming `/v1/chat/completions`, and Anthropic's `/v1/messages`, with a fixed Markdown reply. Words in the message or the model name choose a behaviour: `slow`, `brisk` (the slow reply's text in about 4 seconds), `fail` (401), `429`, `429once`, `500`, `reset`, `hang`, `drop`, and `cached` (usage with cached tokens). `tests/e2e/mock_llm_test.py` tests it.
 - **Test use, not in the stack:** the Rust tests of the server, the admin and the desktop client, `tests/e2e/*.js` and `scripts/smoke.sh` start it as a local process on a free port of `127.0.0.1`.
 - **Dev profile:** `compose.yaml` runs it as the `mock-llm` service only under `--profile dev`, for the Mac check. The image is `python:3.12-slim`, pinned by digest ([0017](0017-dependencies-and-patches.md)); the script is bind-mounted read-only from the repository; it listens on `0.0.0.0:8765` inside the container (`MOCK_LLM_HOST`), on the `edge` network, with no published port. Providers reach it at `http://mock-llm:8765/v1`.
 - **What it holds and reaches:** nothing. It keeps only an in-memory set of the `429once` messages it has seen, has no volume of its own, calls nothing and receives no secret (any key is accepted).
@@ -33,3 +33,4 @@ Tests and the Mac check run without a provider account or network access. A prov
 ## Amendments
 
 - 2026-11-08: the dev image `python:3.12-slim` is pinned by digest, so the 0017 mismatch is gone (Thewuuryar/askbar#26).
+- 2026-11-10: `brisk` sends the slow reply's text in about 4 seconds, for tests that need the whole long reply (the faster-CI pull request).

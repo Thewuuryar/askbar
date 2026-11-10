@@ -229,7 +229,7 @@ async fn client_disconnect_does_not_cut_the_reply_short() {
 async fn a_reply_keeps_generating_after_the_client_disconnects() {
     let t = start().await;
     let http = client_builder().pool_max_idle_per_host(0).build().unwrap();
-    let r = t.chat(&http, None, "p1", "please be slow").await;
+    let r = t.chat(&http, None, "p1", "please be brisk").await;
     assert_eq!(r.status(), 200);
     let mut stream = r.bytes_stream();
     let mut got = String::new();
@@ -240,9 +240,9 @@ async fn a_reply_keeps_generating_after_the_client_disconnects() {
     drop(http);
 
     let full = "Streaming slowly so you can press Stop. ".repeat(40);
-    // The mock takes about a minute to send the whole slow reply.
+    // "brisk" is the slow reply's text sent in about 4 seconds, so the reply outlives the client.
     let saved =
-        wait_for_secs(120, "the full slow reply to be saved", || t.messages().into_iter().find(|(r, c)| r == "assistant" && c == &full));
+        wait_for_secs(30, "the full slow reply to be saved", || t.messages().into_iter().find(|(r, c)| r == "assistant" && c == &full));
     assert_eq!(saved.1, full);
     assert!(
         !t.mock.log.lock().unwrap().iter().any(|l| l.contains("client disconnected")),
