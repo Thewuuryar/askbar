@@ -739,7 +739,10 @@ impl Recorder {
         if tx.send(Event::Flush(done)).await.is_err() {
             return;
         }
+        // A writer that never takes it (its thread has died) fails the test here instead of hanging it.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while tx.capacity() < tx.max_capacity() {
+            assert!(std::time::Instant::now() < deadline, "the audit writer did not take its event within 5 s");
             tokio::time::sleep(std::time::Duration::from_millis(1)).await;
         }
     }
