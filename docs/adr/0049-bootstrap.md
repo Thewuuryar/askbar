@@ -50,3 +50,4 @@ The admin no longer mounts any of the server's volumes. A missing or wrongly own
 ## Amendments
 
 - 2026-11-10: trimmed: the alternatives and consequences that 0004 and 0032 already record are linked, not restated, and links to the merged 0050 point to 0032. No decision changed.
+- 2026-11-10: built in plan step 2.1 (PR: feat/bootstrap). Built so: with every capability dropped, root cannot read or stat another uid's directory, so `bootstrap` takes each credential volume over (owner itself, mode 0700), writes, then gives every file and directory to its reader. A link is complete only when its token and its hash both exist; otherwise both are made again. `ASKBAR_BOOTSTRAP_ROOT` (development runs only) puts the volumes under a directory owned by the current user.
