@@ -191,6 +191,16 @@ pub fn normalize(messages: &[ChatMessage]) -> Vec<ChatMessage> {
     out
 }
 
+/// Of a `normalize`d history (question, reply, ..., the new question), the new question and the
+/// `turns` question-and-reply pairs before it. 0 keeps everything.
+pub fn last_turns(messages: Vec<ChatMessage>, turns: u32) -> Vec<ChatMessage> {
+    let keep = (turns as usize).saturating_mul(2).saturating_add(1);
+    if turns == 0 || messages.len() <= keep {
+        return messages;
+    }
+    messages[messages.len() - keep..].to_vec()
+}
+
 // ---------------------------------------------------------------- requests
 
 fn messages_url(p: &Provider) -> String {
@@ -601,6 +611,26 @@ mod tests {
     fn base_url_defaults_per_kind() {
         assert_eq!(provider(ProviderKind::OpenAi).effective_base_url(), "https://api.openai.com/v1");
         assert_eq!(provider(ProviderKind::Anthropic).effective_base_url(), "https://api.anthropic.com");
+    }
+
+    #[test]
+    fn last_turns_keeps_the_new_question_and_the_pairs_before_it() {
+        let conv = || vec![m("user", "q1"), m("assistant", "a1"), m("user", "q2"), m("assistant", "a2"), m("user", "q3")];
+        assert_eq!(last_turns(conv(), 0), conv(), "0 sends everything");
+        assert_eq!(last_turns(conv(), 1), vec![m("user", "q2"), m("assistant", "a2"), m("user", "q3")]);
+        assert_eq!(last_turns(conv(), 2), conv());
+        assert_eq!(last_turns(conv(), 1000), conv(), "more than there is sends all");
+        assert_eq!(last_turns(vec![m("user", "only")], 1), vec![m("user", "only")], "the new question is always sent");
+        // After normalize, a failed question takes no place in the count.
+        let h = normalize(&[
+            m("user", "q1"),
+            m("assistant", "a1"),
+            m("user", "failed"),
+            m("user", "q2"),
+            m("assistant", "a2"),
+            m("user", "q3"),
+        ]);
+        assert_eq!(last_turns(h, 1), vec![m("user", "q2"), m("assistant", "a2"), m("user", "q3")]);
     }
 
     #[test]

@@ -438,6 +438,18 @@ async function waitForPort(port) {
     await page.waitForFunction(() => document.getElementById('s-gen-timeout').value === '120');
     assert.equal(await page.inputValue('#s-gen-timeout'), '120', 'the refused value was not saved');
   });
+  await step('history sent with each question: 0 (all) by default, saves 4 across a reload', async () => {
+    await openSettings();
+    await page.waitForFunction(() => document.getElementById('s-history-turns').value === '0');
+    assert.equal(await page.getAttribute('#s-history-turns', 'min'), '0');
+    assert.equal(await page.getAttribute('#s-history-turns', 'max'), '1000');
+    await page.fill('#s-history-turns', '4');
+    await page.click('#settings-form button[type=submit]');
+    await page.waitForSelector('#flash:not([hidden])');
+    await page.fill('#s-history-turns', '9'); // unsaved: only a reload from the server brings back 4
+    await openSettings();
+    await page.waitForFunction(() => document.getElementById('s-history-turns').value === '4');
+  });
   await step('kill switch: off by default, aborts running replies by default; both save and reload', async () => {
     await openSettings();
     await page.waitForFunction(() => document.getElementById('s-gen-timeout').value === '120');

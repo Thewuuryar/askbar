@@ -199,6 +199,10 @@ pub struct Snapshot {
     /// Seconds a generation may run before it is stopped (30 to 3600). Read when it starts.
     #[serde(default = "default_generation_timeout_secs")]
     pub generation_timeout_secs: u32,
+    /// How many earlier questions, each with its reply, are sent with a new question (0 to
+    /// 1000). 0 sends the whole conversation, which is also what a snapshot without it means.
+    #[serde(default)]
+    pub history_turns: u32,
     /// The public key the server seals audit content to. Only ever the public half: the private
     /// key does not exist anywhere outside the administrator's passphrase. `None` until the admin
     /// has made one; the server then refuses to start replies.
@@ -651,6 +655,14 @@ mod tests {
         assert_eq!(s.generation_timeout_secs, DEFAULT_GENERATION_TIMEOUT_SECS);
         let s: Snapshot = serde_json::from_str(r#"{"audit_retention_days": 30, "generation_timeout_secs": 90}"#).unwrap();
         assert_eq!(s.generation_timeout_secs, 90);
+    }
+
+    #[test]
+    fn a_snapshot_without_a_history_limit_sends_the_whole_conversation() {
+        let s: Snapshot = serde_json::from_str(r#"{"audit_retention_days": 30}"#).unwrap();
+        assert_eq!(s.history_turns, 0);
+        let s: Snapshot = serde_json::from_str(r#"{"audit_retention_days": 30, "history_turns": 5}"#).unwrap();
+        assert_eq!(s.history_turns, 5);
     }
 
     #[test]
