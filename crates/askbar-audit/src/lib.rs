@@ -3,6 +3,7 @@
 //! independent of `control.db` and the space files. Phase 4 stores metadata only; message content is added in
 //! Phase 5, sealed.
 
+pub use rusqlite;
 use rusqlite::Connection;
 use std::collections::VecDeque;
 use std::path::Path;

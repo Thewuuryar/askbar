@@ -208,6 +208,17 @@ pub struct AdminActionRecord {
     pub detail: Option<Value>,
 }
 
+/// One row of `GET /prunes`, oldest first: retention deleted records. Each prune is recorded in the same
+/// transaction as its delete, so a deletion that is not retention shows as a gap with no record.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PruneRecord {
+    pub at: i64,
+    /// Records that started before this were due to go.
+    pub cutoff: i64,
+    pub spans: i64,
+    pub payloads: i64,
+}
+
 /// One row of `GET /token-counts`: what was used, by provider and model. The auditor holds no prices; the
 /// admin applies them.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -273,6 +284,7 @@ mod tests {
             outcome: "done".into(),
             detail: Some(json!({ "kill_switch": true })),
         });
+        round_trip(&PruneRecord { at: 9, cutoff: 5, spans: 2, payloads: 3 });
         round_trip(&Hello { boot_id: "01B".into() });
         round_trip(&Appended { id: "01H".into() });
         round_trip(&HelloResult { interrupted: 2 });
