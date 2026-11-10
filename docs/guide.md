@@ -110,19 +110,20 @@ docker compose up -d --build
 
 To stop it, or before rebuilding after an update, use `docker compose --profile dev down --remove-orphans`. With `--profile dev`, the mock LLM is removed as well; without it, a dev container left behind can point at a network that no longer exists.
 
-That starts three containers on two networks:
+That starts these containers, with `bootstrap` (no network, exits when it has made the tokens) before them:
 
 | Container | Runs as | Network | Published |
 |---|---|---|---|
 | `askbar-caddy` | root (group 10001) | `edge` | **443, 80** |
 | `askbar-server` | uid 10002 | `edge`, `server-api` | nothing |
-| `askbar-admin` | uid 10001 | `server-api` only | nothing (a unix socket) |
+| `askbar-admin` | uid 10001 | `server-api`, `cpa-admin`, `audit-admin` | nothing (a unix socket) |
+| `askbar-auditor` | uid 10003 | `audit-admin` only | nothing |
 
 `server-api` is an `internal` network shared by the admin and the server's server API. No address is fixed: the server has the alias `server-api-host` on that network only, listens on the address it resolves to (port 8082), and the admin calls `http://server-api-host:8082`. So the server API answers on `server-api` and nowhere else. Caddy is the only thing the outside world can reach.
 
 ### Docker networks
 
-Askbar gives each link between two services its own network, so a service reaches only the services it has to ([architecture.md](architecture.md#links)). The stack has three networks today and about fifteen once the auditor, `model-gateway` and the alerter are added. Each network takes a subnet from Docker's address pools, and with Docker's default settings a host has about 30 to share between all its Compose projects. When they run out, `docker compose up` fails with:
+Askbar gives each link between two services its own network, so a service reaches only the services it has to ([architecture.md](architecture.md#links)). The stack has four networks today and about fifteen once the server, `model-gateway` and the alerter reach the auditor on networks of their own. Each network takes a subnet from Docker's address pools, and with Docker's default settings a host has about 30 to share between all its Compose projects. When they run out, `docker compose up` fails with:
 
 ```text
 could not find an available, non-overlapping IPv4 address pool among the defaults to assign to the network
@@ -248,6 +249,18 @@ Each link between two services has its own token ([ADR 0004](adr/0004-bootstrap-
 - **A rejected token.** If the server stops accepting a token that worked (its hash file was replaced, say, or only one side was rotated), the admin site shows a banner with the commands and stops showing "server offline": the server is there, it just refuses this admin. Run `docker compose run --rm bootstrap rotate admin-server`, then `docker compose restart server admin`. The admin cannot restart the server itself, because the server refuses its calls. It logs one line naming the link, never the token, and the banner goes away when the server accepts the token again. The server logs one line when five invalid tokens arrive on its server API within ten minutes, naming the link (`admin-server`) and the count, then stays quiet until the count has dropped below five again ([ADR 0024](adr/0024-rejected-token-alert.md)); the alerter sends these as alerts once it exists (phase 4).
 - **Backup.** The credential volumes need none: if they are lost, `bootstrap` makes them again and you restart the services.
 
+### The auditor
+
+The audit store has its own container, `askbar-auditor` ([ADR 0051](adr/0051-auditor.md), [ADR 0010](adr/0010-auditor.md)). It holds `audit.db` on its own volume, `auditor-data`, runs as uid 10003 with no capabilities, and has no route out: it joins only `audit-*` networks, each shared with one caller. Today there is one, `audit-admin`, shared with the admin. Its API is `/api/audit/v1` ([docs/openapi/audit.v1.yaml](openapi/audit.v1.yaml)) and it is never public.
+
+**Nothing sends it records yet.** The server still records to its own `audit.db` on the `audit-data` volume, and the Audit pages still read it through the server. The step that adds `model-gateway` moves the server over, and a later step moves the Audit pages to the auditor. Until then the auditor starts empty and stays that way. When the server moves, `audit-data` stays on disk untouched and the auditor starts with its own empty `auditor-data`, so earlier records stay only in the old volume: copy it (`docker run --rm -v askbar_audit-data:/a -v "$PWD":/b alpine cp -a /a/. /b/audit-backup/`) or delete it once you no longer want them.
+
+- **Tokens.** Each link has its own, made by `bootstrap` ([Tokens between services](#tokens-between-services)). The auditor holds only their hashes, in `auditor-token`. Today `admin-auditor-append` (admin action records) and `admin-auditor-read` (reads and retention) exist; the server's and `model-gateway`'s come with them. A link may call only its own routes, and the caller of a record is the one its token belongs to. No token can change or delete a record.
+- **Retention.** Records are kept 30 days by default and never less than 7. The admin read token sets it; the auditor prunes once a day, and each prune leaves a record of its own.
+- **When it refuses.** Past its backlog limit (1,000 queued records, or the oldest waiting over 5 seconds) it refuses every append, and below 256 MiB free disk it refuses a new span, with `503 audit_backlog`. A model call that cannot be recorded does not start. That is deliberate: model work stops rather than go unrecorded.
+- **Acknowledgment time.** `cargo test -p askbar-auditor --test latency -- --nocapture` measures it (about 1.5 ms at the 95th percentile on a development machine, against a 20 ms target). It is not a gate until the ship checks.
+- **Upgrade.** `docker compose up -d --build`. `bootstrap` makes the two new tokens, the auditor starts empty, and nothing else changes.
+
 ### Starting and stopping services
 
 The admin site's **Services** page shows whether the server, the admin, Caddy and CLIProxyAPI answer, and can restart each (it asks first and says what that will interrupt). No service has the Docker socket ([ADR 0005](adr/0005-no-controller-and-self-restart.md)): the server and the admin restart themselves through their own endpoints and Docker's restart policy starts them again (the server is back within a minute; you sign in to the admin again), Caddy has its configuration pushed again, and CLIProxyAPI is restarted by a small supervisor in its image (`askbar-cpa`, [ADR 0037](adr/0037-askbar-cpa-image-and-supervisor.md)), which also restarts it when its config changes or it crashes. A service refuses a restart in its first 30 seconds, and the server and admin also restart themselves if their own health check fails three times in a row. Starting or stopping a service is done from the host (`docker compose stop server`). Only a signed-in person can restart, not an admin API key; each attempt is recorded, and six a minute is the limit. See [SECURITY.md](../SECURITY.md) for what this trusts.
@@ -256,7 +269,7 @@ The admin site's **Services** page shows whether the server, the admin, Caddy an
 
 **Upgrading an install that used `cpa-init` / `cpa-login`:** CLIProxyAPI's config volume was root-owned; the admin (uid 10001) must be able to read and write it once: `docker compose run --rm --no-deps --user root --entrypoint chown admin -R 10001:10001 /cpa-config`, then `docker compose up -d --build`. The admin keeps your existing API key (so the provider and your logins carry on), replaces CLIProxyAPI's control secret and restarts it. If the admin cannot read the config it says so in its log and leaves CLIProxyAPI alone.
 
-**Server environment** (already set in `compose.yaml`; useful without Docker): `ASKBAR_CLIENT_API_ADDR`, `ASKBAR_SERVER_API_ADDR` (`ip:port`, or `host:port` resolved once at start-up to exactly one address; never `0.0.0.0`), `ASKBAR_SERVER_TOKEN_HASH_FILE`, `ASKBAR_DATA_DIR`, `ASKBAR_SECRETS_DIR` or `ASKBAR_MASTER_KEY_FILE`. **Admin:** `ASKBAR_ADMIN_SOCKET`, `ASKBAR_ADMIN_DATA_DIR`, `ASKBAR_ADMIN_SECRETS_DIR`, `ASKBAR_ADMIN_TOKEN_DIR`, `ASKBAR_SERVER_API_URL`, `ASKBAR_CADDY_SOCKET`, `ASKBAR_CADDY_SECRETS_DIR`, `ASKBAR_PUBLIC_URL`.
+**Server environment** (already set in `compose.yaml`; useful without Docker): `ASKBAR_CLIENT_API_ADDR`, `ASKBAR_SERVER_API_ADDR` (`ip:port`, or `host:port` resolved once at start-up to exactly one address; never `0.0.0.0`), `ASKBAR_SERVER_TOKEN_HASH_FILE`, `ASKBAR_DATA_DIR`, `ASKBAR_SECRETS_DIR` or `ASKBAR_MASTER_KEY_FILE`. **Admin:** `ASKBAR_ADMIN_SOCKET`, `ASKBAR_ADMIN_DATA_DIR`, `ASKBAR_ADMIN_SECRETS_DIR`, `ASKBAR_ADMIN_TOKEN_DIR`, `ASKBAR_SERVER_API_URL`, `ASKBAR_CADDY_SOCKET`, `ASKBAR_CADDY_SECRETS_DIR`, `ASKBAR_PUBLIC_URL`. **Auditor:** `ASKBAR_AUDIT_API_ADDR` (default `0.0.0.0:8083`), `ASKBAR_AUDIT_DIR`, `ASKBAR_AUDITOR_TOKEN_DIR`.
 
 ### Backup and recovery
 
@@ -277,6 +290,7 @@ crates/askbar-proto/   request/response and snapshot types shared by the server,
 crates/askbar-service/ what every service shares: per-link token checks, GET /status, the not-configured gate
 crates/askbar-audit/   the audit store (spans and sealed payloads in audit.db); the server links it today
 services/bootstrap/    makes the per-link tokens and exits; rotates them from the host
+services/auditor/      the audit store as its own container: /api/audit/v1, tokens per link, retention, limits
 services/server/       the server: client API, server API, database, chat/LLM streaming, secrets
 services/admin/        the admin service: admin site (src/ui/), admin.db, snapshot push, Caddy configuration (unix only)
 services/cpa-supervisor/ runs CLIProxyAPI in the askbar-cpa image and restarts it on a config change, a request or a crash
