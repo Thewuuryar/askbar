@@ -1,6 +1,6 @@
 # 0054. The `model-gateway` component
 
-Status: Proposed
+Status: Accepted
 Date: 2026-11-10
 Kind: component
 Source: plan step 3.1 ([plan-v1.md](../plan-v1.md)); owner rule that every component has an ADR of its own (2026-11-07); owner's order of 2026-11-10 (`model-gateway` before the server sends records to the auditor)
