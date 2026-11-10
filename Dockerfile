@@ -50,8 +50,8 @@ ENTRYPOINT ["askbar-bootstrap"]
 # socket that only Caddy is given. Runs as uid 10001.
 FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc AS admin
 RUN groupadd --system --gid 10001 askbar-admin && useradd --system --uid 10001 --gid 10001 --home-dir /admin-data --shell /usr/sbin/nologin askbar-admin \
- && mkdir /admin-data /admin-secrets /server-token /cpa-config /caddy-secrets /run/admin /caddy-run \
- && chown askbar-admin:askbar-admin /admin-data /admin-secrets /server-token /cpa-config /caddy-secrets /run/admin /caddy-run \
+ && mkdir /admin-data /admin-secrets /admin-token /cpa-config /caddy-secrets /run/admin /caddy-run \
+ && chown askbar-admin:askbar-admin /admin-data /admin-secrets /admin-token /cpa-config /caddy-secrets /run/admin /caddy-run \
  && chmod 700 /admin-secrets \
  && chmod 770 /caddy-run
 COPY --from=build /src/target/release/askbar-admin /usr/local/bin/askbar-admin
@@ -59,7 +59,7 @@ USER askbar-admin
 ENV ASKBAR_ADMIN_DATA_DIR=/admin-data \
     ASKBAR_ADMIN_SECRETS_DIR=/admin-secrets \
     ASKBAR_ADMIN_SOCKET=/run/admin/admin.sock \
-    ASKBAR_SERVER_TOKEN_DIR=/server-token \
+    ASKBAR_ADMIN_TOKEN_DIR=/admin-token \
     ASKBAR_CPA_CONFIG_DIR=/cpa-config \
     ASKBAR_CADDY_SOCKET=/caddy-run/admin.sock \
     ASKBAR_CADDY_SECRETS_DIR=/caddy-secrets
@@ -105,7 +105,7 @@ ENV ASKBAR_DATA_DIR=/data \
     ASKBAR_SECRETS_DIR=/secrets \
     ASKBAR_AUDIT_DIR=/audit \
     ASKBAR_CLIENT_API_ADDR=0.0.0.0:8080 \
-    ASKBAR_SERVER_TOKEN_HASH_FILE=/server-token/token.sha256
+    ASKBAR_SERVER_TOKEN_HASH_FILE=/server-token/accept/admin-server.sha256
 # ASKBAR_SERVER_API_ADDR has no default: it must be one specific address (the compose file sets it).
 VOLUME /data /secrets /audit
 EXPOSE 8080

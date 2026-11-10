@@ -4,6 +4,7 @@ use crate::links::{Link, LINKS};
 use crate::write::{apply, Ctx};
 use std::collections::BTreeSet;
 use std::io::{Result, Write};
+use std::path::Path;
 
 pub const USAGE: &str = "usage: askbar-bootstrap [list | rotate [--service <name> | <link>]]";
 
@@ -94,8 +95,10 @@ pub fn run(ctx: &Ctx, table: &'static [Link], cmd: Command, out: &mut impl Write
 /// What `main` runs.
 pub fn main_with(args: &[String]) -> std::result::Result<(), String> {
     let cmd = parse(args)?;
+    // Development only (`scripts/smoke.sh`, the browser tests): the volumes are under this directory and
+    // belong to the user running this, since only root can give files to another uid.
     let ctx = match std::env::var("ASKBAR_BOOTSTRAP_ROOT").ok().filter(|r| !r.is_empty()) {
-        Some(root) => Ctx { root: root.into(), ..Ctx::container() },
+        Some(root) => Ctx::current_user(Path::new(&root)).map_err(|e| e.to_string())?,
         None => Ctx::container(),
     };
     run(&ctx, LINKS, cmd, &mut std::io::stdout())
@@ -105,7 +108,6 @@ pub fn main_with(args: &[String]) -> std::result::Result<(), String> {
 mod tests {
     use super::*;
     use std::os::unix::fs::MetadataExt;
-    use std::path::Path;
 
     static TABLE: [Link; 3] = [
         Link { name: "admin-server", caller: "admin", receiver: "server", prefix: "mgt_" }, // names-ok: test fixture

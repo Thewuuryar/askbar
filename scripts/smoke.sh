@@ -32,7 +32,7 @@ PIDS=()
 cleanup() {
   for p in "${PIDS[@]:-}"; do [ -n "$p" ] && kill "$p" 2>/dev/null; done
   wait 2>/dev/null
-  rm -rf "$WORK"
+  chmod -R u+rwx "$WORK" 2>/dev/null; rm -rf "$WORK"
 }
 trap cleanup EXIT
 
@@ -65,19 +65,23 @@ if [ -z "$URL" ]; then
   if [ ! -x "$BIN" ]; then cargo build -q -p askbar-server || { fail "build the server"; exit 1; }; fi
   ABIN="${ASKBAR_ADMIN_BIN:-target/debug/askbar-admin}"
   if [ ! -x "$ABIN" ]; then cargo build -q -p askbar-admin || { fail "build the admin"; exit 1; }; fi
+  BBIN="${ASKBAR_BOOTSTRAP_BIN:-target/debug/askbar-bootstrap}"
+  if [ ! -x "$BBIN" ]; then cargo build -q -p askbar-bootstrap || { fail "build bootstrap"; exit 1; }; fi
   API_PORT=$(free_port); SERVER_API_PORT=$(free_port); MOCK_PORT=$(free_port)
   URL="http://127.0.0.1:$API_PORT"
   SOCK="$WORK/admin-run/admin.sock"
   mkdir -p "$WORK/data" "$WORK/secrets" "$WORK/admin-run"
+  # The tokens come from bootstrap, as in the stack (ADR 0049); here its volumes are plain directories.
+  ASKBAR_BOOTSTRAP_ROOT="$WORK/credentials" "$BBIN" >/dev/null || { fail "bootstrap makes the tokens"; exit 1; }
   python3 -u tests/e2e/mock_llm.py "$MOCK_PORT" >/dev/null 2>&1 & PIDS+=($!)
   # The admin service: its own database and secrets, a unix socket and no TCP port.
   ASKBAR_ADMIN_SOCKET="$SOCK" ASKBAR_ADMIN_DATA_DIR="$WORK/admin-data" ASKBAR_ADMIN_SECRETS_DIR="$WORK/admin-secrets" \
-    ASKBAR_SERVER_TOKEN_DIR="$WORK/server-token" ASKBAR_SERVER_API_URL="http://127.0.0.1:$SERVER_API_PORT" ASKBAR_PUBLIC_URL="$URL" \
+    ASKBAR_ADMIN_TOKEN_DIR="$WORK/credentials/admin-token" ASKBAR_SERVER_API_URL="http://127.0.0.1:$SERVER_API_PORT" ASKBAR_PUBLIC_URL="$URL" \
     "$ABIN" >"$WORK/admin.log" 2>&1 & PIDS+=($!)
   for _ in $(seq 100); do [ -S "$SOCK" ] && break; sleep 0.1; done
   # The server: the API, and a server listener that only the admin's token opens.
   ASKBAR_CLIENT_API_ADDR="127.0.0.1:$API_PORT" \
-    ASKBAR_SERVER_API_ADDR="127.0.0.1:$SERVER_API_PORT" ASKBAR_SERVER_TOKEN_HASH_FILE="$WORK/server-token/token.sha256" \
+    ASKBAR_SERVER_API_ADDR="127.0.0.1:$SERVER_API_PORT" ASKBAR_SERVER_TOKEN_HASH_FILE="$WORK/credentials/server-token/accept/admin-server.sha256" \
     ASKBAR_DATA_DIR="$WORK/data" ASKBAR_SECRETS_DIR="$WORK/secrets" \
     ASKBAR_PUBLIC_URL="$URL" "$BIN" >"$WORK/server.log" 2>&1 & PIDS+=($!)
 fi

@@ -1,14 +1,12 @@
 //! The admin service's side of the server API: the token, the snapshot it builds from
 //! `admin.db`, and the pusher that keeps the server's copy current.
 //!
-//! The raw token lives only in the admin's own secrets directory (mode 0600). The server is
-//! given only its SHA-256, in a separate directory it mounts read-only, so it can check a
-//! caller but can never act as one.
+//! The token comes from `bootstrap` (ADR 0049): the admin reads it from its own credential volume,
+//! mounted read-only, and never makes one. The server holds only the SHA-256, in its own volume, so it
+//! can check a caller but can never act as one.
 
 use crate::db::AdminDb;
 use askbar_proto::{Budget, DisplaySettings, Snapshot, SnapshotPairCode, SnapshotProvider};
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-use chacha20poly1305::aead::{rand_core::RngCore, OsRng};
 use rusqlite::OptionalExtension;
 use sha2::{Digest, Sha256};
 use std::future::Future;
@@ -20,10 +18,10 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
 
-pub const TOKEN_FILE: &str = "server.token";
-pub const HASH_FILE: &str = "token.sha256";
+/// The link this module is the caller of, as `bootstrap` names it (ADR 0049).
+pub const LINK: &str = "admin-server";
 
-/// Where the raw token is kept: `ASKBAR_ADMIN_SECRETS_DIR`, default `/admin-secrets`.
+/// Where the secrets of the admin's own are kept: `ASKBAR_ADMIN_SECRETS_DIR`, default `/admin-secrets`.
 pub fn secrets_dir() -> PathBuf {
     std::env::var("ASKBAR_ADMIN_SECRETS_DIR")
         .ok()
@@ -32,13 +30,18 @@ pub fn secrets_dir() -> PathBuf {
         .unwrap_or_else(|| "/admin-secrets".into())
 }
 
-/// Where the token's hash is written for the server: `ASKBAR_SERVER_TOKEN_DIR`, default `/server-token`.
+/// The admin's credential volume, read-only: `ASKBAR_ADMIN_TOKEN_DIR`, default `/admin-token`.
 pub fn token_dir() -> PathBuf {
-    std::env::var("ASKBAR_SERVER_TOKEN_DIR")
+    std::env::var("ASKBAR_ADMIN_TOKEN_DIR")
         .ok()
         .filter(|p| !p.trim().is_empty())
         .map(PathBuf::from)
-        .unwrap_or_else(|| "/server-token".into())
+        .unwrap_or_else(|| "/admin-token".into())
+}
+
+/// The token this admin sends to the server, made by `bootstrap`.
+pub fn token_file(token_dir: &Path) -> PathBuf {
+    token_dir.join("call").join(format!("{LINK}.token"))
 }
 
 /// The server's server API: `ASKBAR_SERVER_API_URL`, default `http://server:8082`.
@@ -65,44 +68,33 @@ pub(crate) fn write_atomic(path: &Path, contents: &str, mode: u32) -> std::io::R
     std::fs::rename(&tmp, path).map_err(|e| io_err(path, e))
 }
 
-/// Make sure the token exists (created once, 32 random bytes, mode 0600, never overwritten)
-/// and that the server's hash file matches it. Returns the raw token.
-pub fn ensure_token(secrets_dir: &Path, token_dir: &Path) -> std::io::Result<String> {
-    ensure_token_as(secrets_dir, token_dir, TOKEN_FILE, "mgt_") // names-ok: the token prefix already issued
+/// The token `bootstrap` made for this link. The admin never makes one: a missing or empty file means
+/// `bootstrap` has not run, and the error says what to do (ADR 0049).
+pub fn read_token(token_dir: &Path) -> std::io::Result<String> {
+    let path = token_file(token_dir);
+    let missing = |why: &str| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("{} {why}; run `docker compose up -d`, which runs bootstrap first", path.display()),
+        )
+    };
+    match std::fs::read_to_string(&path) {
+        Ok(t) if !t.trim().is_empty() => Ok(t.trim().to_string()),
+        Ok(_) => Err(missing("is empty")),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(missing("is missing")),
+        Err(e) => Err(io_err(&path, e)),
+    }
 }
 
-/// The same for any service the admin calls: the raw token in `secrets_dir/token_file`, its hash in `token_dir`.
-pub fn ensure_token_as(secrets_dir: &Path, token_dir: &Path, token_file: &str, prefix: &str) -> std::io::Result<String> {
-    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-    std::fs::create_dir_all(secrets_dir).map_err(|e| io_err(secrets_dir, e))?;
-    std::fs::set_permissions(secrets_dir, std::fs::Permissions::from_mode(0o700)).map_err(|e| io_err(secrets_dir, e))?;
-    let path = secrets_dir.join(token_file);
-    let token = match std::fs::read_to_string(&path) {
-        Ok(t) if !t.trim().is_empty() => t.trim().to_string(),
-        Ok(_) => {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("{} is empty; delete it to make a new token", path.display()),
-            ))
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            let mut raw = [0u8; 32];
-            OsRng.fill_bytes(&mut raw);
-            let token = format!("{prefix}{}", URL_SAFE_NO_PAD.encode(raw));
-            let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path).map_err(|e| io_err(&path, e))?;
-            std::io::Write::write_all(&mut f, token.as_bytes()).and_then(|_| f.sync_all()).map_err(|e| io_err(&path, e))?;
-            token
-        }
-        Err(e) => return Err(io_err(&path, e)),
-    };
-    std::fs::create_dir_all(token_dir).map_err(|e| io_err(token_dir, e))?;
-    let hash_path = token_dir.join(HASH_FILE);
-    let hash = sha256_hex(&token);
-    if std::fs::read_to_string(&hash_path).map(|h| h.trim() != hash).unwrap_or(true) {
-        // Readable by the server's user, which is not ours.
-        write_atomic(&hash_path, &format!("{hash}\n"), 0o644)?;
+/// The file the admin kept the server token in before `bootstrap` (ADR 0049): removed on start, so no
+/// copy of a token that no longer works stays on the volume. Returns whether there was one.
+pub fn remove_old_token(secrets_dir: &Path) -> std::io::Result<bool> {
+    let path = secrets_dir.join("server.token");
+    match std::fs::remove_file(&path) {
+        Ok(()) => Ok(true),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(io_err(&path, e)),
     }
-    Ok(token)
 }
 
 // ------------------------------------------------------------------ the snapshot

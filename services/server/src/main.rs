@@ -171,7 +171,9 @@ async fn main() {
     askbar_service::restart::start_watchdog(healthy);
     tokio::spawn(audit_retention_daily(state.clone()));
     tokio::spawn(prune_generations_hourly(state.clone()));
-    let server_api_app = askbar_server::server_api::router(state.clone(), askbar_server::server_api::token_hash_path());
+    let token_hash = askbar_server::server_api::token_hash_path();
+    askbar_server::server_api::check_token_hash_file(&token_hash).unwrap_or_else(|e| die(e, 1));
+    let server_api_app = askbar_server::server_api::router(state.clone(), token_hash);
     let result = tokio::try_join!(serve(api, askbar_server::client_router(state)), serve(server_api, server_api_app));
     if let Err(e) = result {
         eprintln!("error: {e}");

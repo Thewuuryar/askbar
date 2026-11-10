@@ -40,6 +40,15 @@ impl Ctx {
         Ctx { root: "/".into(), taker: 0, uid_of: Box::new(links::uid_of) }
     }
 
+    /// Volumes under `root` that belong to the user running this: for a development run and for tests,
+    /// where nobody may give files to another uid.
+    pub fn current_user(root: &Path) -> Result<Ctx> {
+        use std::os::unix::fs::MetadataExt;
+        std::fs::create_dir_all(root).map_err(|e| io_err(root, e))?;
+        let me = std::fs::metadata(root).map_err(|e| io_err(root, e))?.uid();
+        Ok(Ctx { root: root.to_path_buf(), taker: me, uid_of: Box::new(move |_| Some(me)) })
+    }
+
     fn volume(&self, service: &str) -> PathBuf {
         self.root.join(format!("{service}-token"))
     }

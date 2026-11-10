@@ -28,8 +28,13 @@ async fn main() {
     if askbar_admin::web::ensure_default_credentials(&db).unwrap_or_else(|e| die(e, 1)) {
         tracing::warn!("first start: the admin password is the published one; sign in and change it now");
     }
-    let token = askbar_admin::server_link::ensure_token(&askbar_admin::server_link::secrets_dir(), &askbar_admin::server_link::token_dir())
-        .unwrap_or_else(|e| die(e, 1));
+    // The server token is made by bootstrap. The admin kept its own before that; it is no longer used.
+    match askbar_admin::server_link::remove_old_token(&askbar_admin::server_link::secrets_dir()) {
+        Ok(true) => tracing::info!("removed the admin's old server token; bootstrap makes it now"),
+        Ok(false) => {}
+        Err(e) => die(e, 1),
+    }
+    let token = askbar_admin::server_link::read_token(&askbar_admin::server_link::token_dir()).unwrap_or_else(|e| die(e, 1));
     let link = askbar_admin::server_link::ServerLink::new(&askbar_admin::server_link::server_url(), token);
     let secrets =
         askbar_admin::secrets::AdminSecrets::load_or_create(&askbar_admin::server_link::secrets_dir()).unwrap_or_else(|e| die(e, 1));

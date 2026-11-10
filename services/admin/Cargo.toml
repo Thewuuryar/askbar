@@ -33,6 +33,7 @@ rcgen = { version = "0.14.10", default-features = false, features = ["ring", "pe
 serde-saphyr = { version = "2.1", default-features = false, features = ["deserialize"] }
 futures-util = "0.3"
 askbar-server = { path = "../server" }
+askbar-bootstrap = { path = "../bootstrap" }
 
 [lints]
 workspace = true

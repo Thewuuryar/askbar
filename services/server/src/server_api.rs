@@ -22,13 +22,29 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-/// Where the SHA-256 (hex) of the server token is.
+/// Where the SHA-256 (hex) of the admin's token is: the one `bootstrap` made for the `admin-server` link.
 pub fn token_hash_path() -> PathBuf {
     std::env::var("ASKBAR_SERVER_TOKEN_HASH_FILE")
         .ok()
         .filter(|p| !p.trim().is_empty())
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/server-token/token.sha256"))
+        .unwrap_or_else(|| PathBuf::from("/server-token/accept/admin-server.sha256"))
+}
+
+/// Start-up check: the hash file `bootstrap` makes must be there. An install from before `bootstrap` has
+/// only `token.sha256`, which nothing reads now; the message says what to run (ADR 0049).
+pub fn check_token_hash_file(path: &std::path::Path) -> Result<(), String> {
+    if path.is_file() {
+        return Ok(());
+    }
+    let old = path.parent().and_then(|accept| accept.parent()).map(|volume| volume.join("token.sha256"));
+    if old.as_ref().is_some_and(|o| o.exists()) {
+        return Err(format!(
+            "{} is missing: this install has only the old token.sha256, which is no longer read. Run `docker compose up -d`: bootstrap makes the new file and the admin picks up its token",
+            path.display()
+        ));
+    }
+    Err(format!("{} is missing: bootstrap makes it. Run `docker compose up -d`, which runs bootstrap first", path.display()))
 }
 
 /// The server listener's address from `ASKBAR_SERVER_API_ADDR`: `host:port` or `ip:port`. A host
