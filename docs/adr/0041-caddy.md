@@ -7,7 +7,7 @@ Source: plan step 1.14 ([plan-v1.md](../plan-v1.md)); owner rule that every comp
 
 ## Context
 
-Caddy, a third-party web server, is the stack's only entry point. It existed before the rule that each component has its own ADR. This record describes it as it is on `main` after plan step 1.11. It follows [0003](0003-v1-service-layout.md), [0015](0015-certificates.md), [0022](0022-api-path-conventions.md), [0029](0029-shared-origin-protections.md), [0032](0032-container-hardening.md) and [0034](0034-self-signed-https-and-certificate-pinning.md), and links them instead of repeating them.
+Caddy, a third-party web server, is the stack's only entry point. It existed before the rule that each component has its own ADR. This record describes it as it is on `main` after plan step 1.11. It follows [0003](0003-v1-service-layout.md), [0015](0015-certificates.md), [0022](0022-api-path-conventions.md), [0029](0029-shared-origin-protections.md) and [0032](0032-container-hardening.md), and links them instead of repeating them.
 
 ## Decision
 
@@ -16,7 +16,7 @@ Caddy, a third-party web server, is the stack's only entry point. It existed bef
   - `/admin` and `/api/admin` to the admin's unix socket, open to private addresses by default (`remote_ip` allowlist);
   - `/api/client` (and the old `/api/v1`, which the server answers with 426) to `server:8080`, unbuffered for the chat stream;
   - a `not_found` problem for every other path.
-- **Certificates:** until a host name with a real certificate is set, port 443 answers on every address with the install's own certificate, made by the admin ([0034](0034-self-signed-https-and-certificate-pinning.md)). With a host name it gets one from Let's Encrypt over the Cloudflare DNS challenge, reading the token from a file ([0015](0015-certificates.md)). Port 80 only redirects.
+- **Certificates:** until a host name with a real certificate is set, port 443 answers on every address with the install's own certificate, made by the admin. With a host name it gets one from Let's Encrypt over the Cloudflare DNS challenge, reading the token from a file ([0015](0015-certificates.md)). Port 80 only redirects.
 - **What it holds:** its certificates and state in `caddy-data` and `caddy-config`. It reads the install's certificate, key and Cloudflare token from `caddy-secrets`, read-only.
 - **Volumes:** `caddy-data`, `caddy-config`, `caddy-run` (its admin socket, shared with the admin), `admin-run` (the admin's socket) and `caddy-secrets` (read-only).
 - **Networks and ports:** `edge` only. It publishes 80 and 443, the one exception in the stack ([0003](0003-v1-service-layout.md)).
