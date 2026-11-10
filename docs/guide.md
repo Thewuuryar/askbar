@@ -146,7 +146,7 @@ Every container has a read-only root filesystem, no Linux capabilities (Caddy ke
 
 - The **server** serves the client API, which accepts only `Authorization: Bearer <client token>`. Chat replies stream as Server-Sent Events (`meta`, `provider`, `delta`, `done`, `error`) and can be resumed after a dropped connection. Client tokens are random, shown once, and stored as SHA-256 hashes. See [docs/wire-contract.md](wire-contract.md).
 - The **admin** listens on a unix socket only. Caddy proxies the site (`<hostname>/admin`) and its API (`<hostname>/api/admin/v1`) to it, and the admin owns `admin.db`. Each section of the site is its own page with its own address (`/admin/providers/`, `/admin/services/`, `/admin/clients/`, `/admin/audit/`, `/admin/backup/`, `/admin/network/`, `/admin/security/`, `/admin/settings/`; `/admin` opens the first), so a page can be bookmarked and Back works. Every change is made in `admin.db` and pushed to the server as one snapshot; if the server is down the change is refused ("The server is offline. Nothing was changed.") rather than half applied. With the server stopped the admin still loads and shows an offline banner.
-- The **server API** requires a bearer token. The admin keeps the token in its own secrets volume (mode 600); the server holds only its SHA-256 (`token.sha256`, read per request, compared in constant time, and the API refuses everything when the file is missing).
+- The **server API** requires a bearer token. `bootstrap` makes it ([Tokens between services](#tokens-between-services)): the admin reads it from its own volume, `admin-token`, and the server holds only its SHA-256 (`accept/admin-server.sha256` in `server-token`, read per request, compared in constant time, and the API refuses everything when the file is missing).
 - **Provider API keys** are encrypted at rest (ChaCha20-Poly1305) with a master key that the server creates on its first start in the `askbar-secrets` volume. They are sent to the server by the admin, stored only in the server's `control.db`, and never returned by any endpoint. The Cloudflare token is encrypted in `admin.db` with the admin's own key (`admin-secrets`), separate from the server's, and written to a file only Caddy reads.
 
 ### First run
@@ -228,6 +228,25 @@ The admin makes CLIProxyAPI's config and API key itself (nobody copies a key any
 
 **Compose profiles:** the services (server, admin, Caddy, CLIProxyAPI) are always on. `dev` adds a mock LLM (`tests/e2e/mock_llm.py`).
 
+### Tokens between services
+
+Each link between two services has its own token ([ADR 0004](adr/0004-bootstrap-and-per-link-tokens.md)). A one-shot container, `bootstrap` ([ADR 0049](adr/0049-bootstrap.md)), makes them: it has no network, runs as root with one capability (`CHOWN`), mounts only the credential volumes, and exits. `server` and `admin` start after it has finished. Today there is one link, `admin-server`.
+
+- **Where they are.** One volume per service, `<service>-token`: `server-token` (the server's, as before) and `admin-token` (new). Inside, `call/<link>.token` is a token the service sends and `accept/<link>.sha256` is the hash of a token it checks. A token is mode 400 and its caller's; a hash is mode 444 and its receiver's. Each service mounts only its own volume, read-only.
+- **Install.** Nothing to do: `docker compose up -d` runs `bootstrap` first. A second run changes nothing.
+- **Upgrade from a build before `bootstrap`.** `docker compose up -d --build`. `bootstrap` makes a new `admin-server` token; the admin reads it and deletes its old `server.token` on start, and the server reads the new hash. Nothing for you to do, and no one is signed out or re-paired. The old `token.sha256` in `server-token` is no longer read; the server refuses to start without the new file and says to run `docker compose up -d`.
+- **Rotate** from the Docker host, then restart what it names from the admin site's **Services** page:
+
+  ```sh
+  docker compose run --rm bootstrap list                   # the link names
+  docker compose run --rm bootstrap rotate admin-server    # one link
+  docker compose run --rm bootstrap rotate --service admin # every link of one service, after a suspected compromise
+  docker compose run --rm bootstrap rotate                 # every link
+  ```
+
+  The old token stops working when the receiver is restarted. Until then, and until the caller is restarted, calls between the two fail.
+- **Backup.** The credential volumes need none: if they are lost, `bootstrap` makes them again and you restart the services.
+
 ### Starting and stopping services
 
 The admin site's **Services** page shows whether the server, the admin, Caddy and CLIProxyAPI answer, and can restart each (it asks first and says what that will interrupt). No service has the Docker socket ([ADR 0005](adr/0005-no-controller-and-self-restart.md)): the server and the admin restart themselves through their own endpoints and Docker's restart policy starts them again (the server is back within a minute; you sign in to the admin again), Caddy has its configuration pushed again, and CLIProxyAPI is restarted by a small supervisor in its image (`askbar-cpa`, [ADR 0037](adr/0037-askbar-cpa-image-and-supervisor.md)), which also restarts it when its config changes or it crashes. A service refuses a restart in its first 30 seconds, and the server and admin also restart themselves if their own health check fails three times in a row. Starting or stopping a service is done from the host (`docker compose stop server`). Only a signed-in person can restart, not an admin API key; each attempt is recorded, and six a minute is the limit. See [SECURITY.md](../SECURITY.md) for what this trusts.
@@ -236,7 +255,7 @@ The admin site's **Services** page shows whether the server, the admin, Caddy an
 
 **Upgrading an install that used `cpa-init` / `cpa-login`:** CLIProxyAPI's config volume was root-owned; the admin (uid 10001) must be able to read and write it once: `docker compose run --rm --no-deps --user root --entrypoint chown admin -R 10001:10001 /cpa-config`, then `docker compose up -d --build`. The admin keeps your existing API key (so the provider and your logins carry on), replaces CLIProxyAPI's control secret and restarts it. If the admin cannot read the config it says so in its log and leaves CLIProxyAPI alone.
 
-**Server environment** (already set in `compose.yaml`; useful without Docker): `ASKBAR_CLIENT_API_ADDR`, `ASKBAR_SERVER_API_ADDR` (`ip:port`, or `host:port` resolved once at start-up to exactly one address; never `0.0.0.0`), `ASKBAR_SERVER_TOKEN_HASH_FILE`, `ASKBAR_DATA_DIR`, `ASKBAR_SECRETS_DIR` or `ASKBAR_MASTER_KEY_FILE`. **Admin:** `ASKBAR_ADMIN_SOCKET`, `ASKBAR_ADMIN_DATA_DIR`, `ASKBAR_ADMIN_SECRETS_DIR`, `ASKBAR_SERVER_TOKEN_DIR`, `ASKBAR_SERVER_API_URL`, `ASKBAR_CADDY_SOCKET`, `ASKBAR_CADDY_SECRETS_DIR`, `ASKBAR_PUBLIC_URL`.
+**Server environment** (already set in `compose.yaml`; useful without Docker): `ASKBAR_CLIENT_API_ADDR`, `ASKBAR_SERVER_API_ADDR` (`ip:port`, or `host:port` resolved once at start-up to exactly one address; never `0.0.0.0`), `ASKBAR_SERVER_TOKEN_HASH_FILE`, `ASKBAR_DATA_DIR`, `ASKBAR_SECRETS_DIR` or `ASKBAR_MASTER_KEY_FILE`. **Admin:** `ASKBAR_ADMIN_SOCKET`, `ASKBAR_ADMIN_DATA_DIR`, `ASKBAR_ADMIN_SECRETS_DIR`, `ASKBAR_ADMIN_TOKEN_DIR`, `ASKBAR_SERVER_API_URL`, `ASKBAR_CADDY_SOCKET`, `ASKBAR_CADDY_SECRETS_DIR`, `ASKBAR_PUBLIC_URL`.
 
 ### Backup and recovery
 
@@ -255,6 +274,8 @@ If you restore a raw copy of `data/` that still holds encrypted provider keys on
 ```
 crates/askbar-proto/   request/response and snapshot types shared by the server, admin and client
 crates/askbar-service/ what every service shares: per-link token checks, GET /status, the not-configured gate
+crates/askbar-audit/   the audit store (spans and sealed payloads in audit.db); the server links it today
+services/bootstrap/    makes the per-link tokens and exits; rotates them from the host
 services/server/       the server: client API, server API, database, chat/LLM streaming, secrets
 services/admin/        the admin service: admin site (src/ui/), admin.db, snapshot push, Caddy configuration (unix only)
 services/cpa-supervisor/ runs CLIProxyAPI in the askbar-cpa image and restarts it on a config change, a request or a crash
