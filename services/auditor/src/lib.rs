@@ -129,6 +129,18 @@ const ADMIN_READ: Routes = &[
     ("PUT", "/retention"),
 ];
 
+/// The server's read token (temporary, plan step 3.1 PR G, until the admin reads the audit store itself in step 2.5):
+/// the server reads traces, spans and sealed payloads for the admin's Audit pages and adds its prices. It appends
+/// nothing with it, and cannot read the admin's own records, retention or prunes.
+const SERVER_READ: Routes = &[
+    ("GET", "/status"),
+    ("GET", "/traces"),
+    ("GET", "/traces/*"),
+    ("GET", "/spans/*/payloads"),
+    ("GET", "/stats"),
+    ("GET", "/token-counts"),
+];
+
 /// Every link the auditor knows: its name as `bootstrap` names it (the file `accept/<name>.sha256`), the
 /// caller it stands for, and what it may call. A link whose hash file is not there accepts nothing, so a link
 /// is live from the day `bootstrap` makes its file.
@@ -137,6 +149,7 @@ pub const LINKS: &[(&str, &str, Routes)] = &[
     ("model-gateway-auditor", "model-gateway", SERVICE_APPEND),
     ("admin-auditor-append", "admin", ADMIN_APPEND),
     ("admin-auditor-read", "admin-read", ADMIN_READ),
+    ("server-auditor-read", "server-read", SERVER_READ),
 ];
 
 fn method(m: &str) -> Method {
