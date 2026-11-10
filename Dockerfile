@@ -12,10 +12,22 @@
 FROM rust:1-bookworm@sha256:e6f2cff35d0f309acf8433b4f05878ed77092602c5065cc81801177da0bb3a9c AS build
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
+# Dependencies first, in a layer of their own: it is rebuilt only when a manifest or Cargo.lock changes,
+# not on every source change. Each member gets stub sources; a new workspace member needs its line here.
+COPY crates/askbar-proto/Cargo.toml crates/askbar-proto/
+COPY crates/askbar-service/Cargo.toml crates/askbar-service/
+COPY services/server/Cargo.toml services/server/
+COPY services/admin/Cargo.toml services/admin/
+COPY services/cpa-supervisor/Cargo.toml services/cpa-supervisor/
+RUN for d in crates/* services/*; do mkdir -p "$d/src" && touch "$d/src/lib.rs" && echo 'fn main() {}' > "$d/src/main.rs"; done \
+ && cargo build --release --locked -p askbar-server -p askbar-admin -p askbar-cpa-supervisor \
+ && rm -rf crates/*/src services/*/src target/release/.fingerprint/askbar-*
+# The real sources. Removing the members' fingerprints above makes cargo rebuild them, whatever the
+# copied files' timestamps.
 COPY crates crates
 COPY services services
 # The desktop client is its own workspace (clients/desktop) and is not part of any image.
-RUN cargo build --release -p askbar-server -p askbar-admin -p askbar-cpa-supervisor
+RUN cargo build --release --locked -p askbar-server -p askbar-admin -p askbar-cpa-supervisor
 
 # ------------------------------------------------------------------ admin
 # The admin service: the admin site and its own database. No TCP port: it listens on a unix
