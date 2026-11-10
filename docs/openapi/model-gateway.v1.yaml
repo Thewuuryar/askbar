@@ -1,0 +1,391 @@
+openapi: 3.1.0
+info:
+  title: Askbar model-gateway API
+  version: 1.0.0
+  summary: What the server and the admin call on `model-gateway`. Internal.
+  description: |
+    The API under `/api/model-gateway/v1`, served by `model-gateway` on two listeners, one on the network it shares
+    with the server (`gateway-server`) and one on the network it shares with the admin (`gateway-admin`). **It is
+    never public**: Caddy has no route to it, and the gateway joins no network Caddy is on. It is documented so
+    the services can be changed with confidence, not for outside callers (ADR 0054, ADR 0014).
+
+    Every request except `GET /health` carries `Authorization: Bearer <token>`. There is one token for each link:
+    `server-model-gateway` and `admin-model-gateway`. The gateway holds only each token's SHA-256, in
+    `model-gateway-token/accept/<link>.sha256`, read on every request. Each listener takes only its own link's
+    token and serves only its own routes:
+
+    - the server's listener: `POST /chat`;
+    - the admin's listener: `GET /status`, `PUT /config`, `POST /restart`.
+
+    **Keys.** The admin pushes provider keys in `PUT /config`. The gateway keeps them in memory only. No route
+    returns one, and no error repeats one. A restart is how a key leaves memory; the admin pushes again when it
+    sees the new boot ID in `GET /status` or in the auditor (ADR 0028).
+
+    **A reply.** `POST /chat` appends the turn span to the auditor and waits for its acknowledgment (one second at
+    most) before it calls a provider. With no acknowledgment it answers `503 audit_backlog` and calls nothing.
+    The answer is a Server-Sent Events stream: one `span` event, then `delta` and `usage` events, then one `done`
+    or one `error`. The server adds its sealed payloads and the turn's finish record to the span it was given.
+    Provider error text is never in the stream: the gateway seals it to the audit public key and sends it to the
+    auditor (ADR 0011). The stream's `error` event carries a code and a class only.
+
+    Every error is a problem (`application/problem+json`), and none echoes what it was sent. See
+    [docs/architecture.md](../architecture.md).
+servers:
+  - url: http://gateway-server-host:8084
+    description: The gateway on the network it shares with the server.
+  - url: http://gateway-admin-host:8084
+    description: The gateway on the network it shares with the admin.
+security:
+  - linkToken: []
+paths:
+  /api/model-gateway/v1/health:
+    get:
+      operationId: getHealth
+      summary: The gateway is up. Needs no token and carries nothing. Both listeners.
+      security: []
+      responses:
+        '200':
+          description: OK.
+  /api/model-gateway/v1/status:
+    get:
+      operationId: getStatus
+      summary: Which configuration this process runs, and which process it is. The admin's listener.
+      description: >-
+        `config_version` is null until the admin has pushed. `boot_id` is new on every start of the process. The
+        admin pushes again when either is not what it expects.
+      responses:
+        '200':
+          description: Status.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [config_version, boot_id]
+                properties:
+                  config_version:
+                    type: [integer, 'null']
+                  boot_id:
+                    type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/model-gateway/v1/config:
+    put:
+      operationId: putConfig
+      summary: Replace the configuration, provider keys included. The admin's listener.
+      description: >-
+        Replaces the whole of the earlier configuration. The keys are held in memory only. The answer holds none.
+        A body that cannot be used (no audit public key, a key id that is not the key's, a duplicate provider id, a
+        type other than `openai` or `anthropic`) is refused and changes nothing.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GatewayConfig'
+      responses:
+        '200':
+          description: Applied.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [version]
+                properties:
+                  version:
+                    type: integer
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/model-gateway/v1/restart:
+    post:
+      operationId: restart
+      summary: Stop the process; Docker starts it again. The admin's listener.
+      description: >-
+        The answer is `202` with the boot ID of the process that is about to stop. A restart within 30 seconds of
+        a start is refused with `429 too_many_attempts`. Nothing is on disk, so the keys leave memory with it.
+      responses:
+        '202':
+          description: Stopping.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [boot_id]
+                properties:
+                  boot_id:
+                    type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          description: Started too recently (`too_many_attempts`).
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+  /api/model-gateway/v1/chat:
+    post:
+      operationId: chat
+      summary: One generation, streamed. The server's listener.
+      description: >-
+        The turn span is on record before a provider is called. Each try at a provider is an attempt span, also on
+        record before it. A failing provider is tried up to three times in all when the failure is the kind that
+        can clear, and never once text has been sent. Closing the connection cancels the request in flight.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatRequest'
+      responses:
+        '200':
+          description: >-
+            A Server-Sent Events stream. The `event:` line names the event and `data:` holds the JSON of the
+            matching `ChatEvent`.
+          content:
+            text/event-stream:
+              schema:
+                $ref: '#/components/schemas/ChatEvent'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          description: >-
+            Nothing was called. Either the gateway has no configuration yet (`not_configured`), or the audit record
+            could not be made in time (`audit_backlog`: the auditor is unreachable, did not acknowledge in one
+            second, or refused). Try again after `Retry-After`.
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+components:
+  securitySchemes:
+    linkToken:
+      type: http
+      scheme: bearer
+      description: The token of one link. Only its SHA-256 is on the gateway.
+  responses:
+    BadRequest:
+      description: The body could not be used (`bad_request`). The answer does not repeat it.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Unauthorized:
+      description: Missing or unknown token (`unauthorized`).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    NotFound:
+      description: No such provider (`not_found`). Also any unknown path.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+  schemas:
+    Problem:
+      type: object
+      description: >-
+        An error, as RFC 9457 problem details (application/problem+json). Branch on `error`, never on
+        `detail`.
+      required: [type, title, status, detail, error]
+      additionalProperties: true
+      properties:
+        type:
+          type: string
+          description: A URN, `urn:askbar:problem:<error>`; nothing is hosted at it.
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+          description: A sentence for a person.
+        error:
+          type: string
+          description: The stable code.
+          enum:
+          - queue_full
+          - budget_exceeded
+          - kill_switch
+          - audit_key_missing
+          - audit_backlog
+          - client_too_old
+          - client_version_missing
+          - unauthorized
+          - forbidden
+          - not_found
+          - method_not_allowed
+          - bad_request
+          - payload_too_large
+          - too_many_attempts
+          - api_key_exists
+          - setup_required
+          - not_configured
+          - password_change_required
+          - server_unavailable
+          - conflict
+          - internal
+    GatewayProvider:
+      type: object
+      description: One provider. `api_key` is write-only, and no route returns it.
+      required: [id, name, type, model]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        type:
+          type: string
+          enum: [openai, anthropic]
+        base_url:
+          type: string
+        model:
+          type: string
+        max_tokens:
+          type: [integer, 'null']
+        temperature:
+          type: [number, 'null']
+        headers:
+          type: object
+          additionalProperties:
+            type: string
+        api_key:
+          type: string
+          writeOnly: true
+          maxLength: 4096
+          description: Empty for a provider that needs none (a local server).
+    AuditKey:
+      type: object
+      required: [key_id, public_key]
+      properties:
+        key_id:
+          type: string
+          description: The first 8 bytes of the SHA-256 of the key, in hex.
+        public_key:
+          type: string
+          description: The 32-byte X25519 public key, 64 hex characters.
+    GatewayConfig:
+      type: object
+      required: [version, providers, audit_public_key]
+      properties:
+        version:
+          type: integer
+          description: Which configuration this is; `GET /status` reports it back.
+        providers:
+          type: array
+          items:
+            $ref: '#/components/schemas/GatewayProvider'
+        audit_public_key:
+          $ref: '#/components/schemas/AuditKey'
+        generation_timeout_secs:
+          type: integer
+          description: >-
+            How long a generation may run. A turn the server has not finished 60 seconds after that is finished
+            as `interrupted` by the gateway.
+    ChatMessage:
+      type: object
+      required: [role, content]
+      properties:
+        role:
+          type: string
+          enum: [user, assistant]
+        content:
+          type: string
+    ChatRequest:
+      type: object
+      required: [provider_id, user_id, generation_id, system, messages]
+      properties:
+        provider_id:
+          type: string
+        user_id:
+          type: string
+        client_id:
+          type: [string, 'null']
+        space_id:
+          type: [string, 'null']
+        conversation_id:
+          type: [string, 'null']
+        generation_id:
+          type: string
+          description: The trace id of every span of this reply. 1 to 64 letters, digits, `-` or `_`.
+        system:
+          type: string
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChatMessage'
+    FailureClass:
+      type: string
+      enum: [retryable, auth_failed, fatal]
+    ChatEvent:
+      description: One event of the stream, in the order `span`, `delta`/`usage`, then `done` or `error`.
+      oneOf:
+        - type: object
+          required: [event, span_id, trace_id]
+          properties:
+            event:
+              const: span
+            span_id:
+              type: string
+            trace_id:
+              type: string
+        - type: object
+          required: [event, text]
+          properties:
+            event:
+              const: delta
+            text:
+              type: string
+        - type: object
+          required: [event, estimated]
+          properties:
+            event:
+              const: usage
+            input:
+              type: [integer, 'null']
+            output:
+              type: [integer, 'null']
+            cache_read:
+              type: [integer, 'null']
+            cache_write:
+              type: [integer, 'null']
+            estimated:
+              type: boolean
+        - type: object
+          required: [event, attempts]
+          properties:
+            event:
+              const: done
+            finish_reason:
+              type: [string, 'null']
+            ttft_ms:
+              type: [integer, 'null']
+            attempts:
+              type: integer
+        - type: object
+          required: [event, code, class, attempts]
+          properties:
+            event:
+              const: error
+            code:
+              type: string
+              description: '`config`, `connect`, `stream`, `http_<status>` or `audit_backlog`. Never the provider''s words.'
+            class:
+              $ref: '#/components/schemas/FailureClass'
+            retry_after_secs:
+              type: [integer, 'null']
+            attempts:
+              type: integer

@@ -4,6 +4,7 @@
 //! | Service | State from | Restart |
 //! | --- | --- | --- |
 //! | `server` | `GET /api/server/v1/status` | `POST /api/server/v1/restart`, then wait for a new boot ID |
+//! | `model-gateway` | `GET /api/model-gateway/v1/status` | `POST /api/model-gateway/v1/restart`, wait for a new boot ID, push the configuration again |
 //! | `admin` | this process | exit after answering; Docker starts it again |
 //! | `caddy` | its admin socket | push its configuration again (a live reload) |
 //! | `cpa` | its management API (accounts) | ask its supervisor through `restart-request`, wait for `restart-done` and the API |
@@ -30,7 +31,7 @@ type St = State<Arc<AdminState>>;
 type Failure = ApiError;
 
 /// The services the Services tab shows and may restart.
-pub const SERVICES: [&str; 4] = ["server", "admin", "caddy", "cpa"];
+pub const SERVICES: [&str; 5] = ["server", "model-gateway", "admin", "caddy", "cpa"];
 /// At most this many actions in `WINDOW_SECS`.
 const MAX_ACTIONS: usize = 6;
 const WINDOW_SECS: i64 = 60;
@@ -51,6 +52,20 @@ async fn server_state(state: &Arc<AdminState>) -> Value {
         Some((Some(v), _)) => card("server", true, format!("Answers; configuration version {v}.")),
         Some((None, _)) => card("server", true, "Answers, but has not received its configuration yet."),
         None => card("server", false, "Does not answer."),
+    }
+}
+
+async fn gateway_state(state: &Arc<AdminState>) -> Value {
+    let Some(link) = state.gateway.get().cloned() else { return card("model-gateway", false, "No link to the gateway is set up.") };
+    match link.status_now().await {
+        Some((Some(_), _)) => card("model-gateway", true, "Answers and runs the configuration it was given."),
+        Some((None, _)) => card(
+            "model-gateway",
+            true,
+            link.last_error()
+                .unwrap_or_else(|| "Answers, but has not received its configuration yet. The admin gives it one within seconds.".into()),
+        ),
+        None => card("model-gateway", false, link.last_error().unwrap_or_else(|| "Does not answer.".into())),
     }
 }
 
@@ -85,10 +100,10 @@ fn recent(db: &crate::AdminDb) -> Value {
 
 /// `GET /api/admin/v1/services`: how each service is doing, and the last ten actions.
 pub async fn list(State(state): St) -> Result<Json<Value>, Failure> {
-    let (server, caddy, cpa) = tokio::join!(server_state(&state), caddy_state(&state), cpa_state(&state));
+    let (server, gateway, caddy, cpa) = tokio::join!(server_state(&state), gateway_state(&state), caddy_state(&state), cpa_state(&state));
     let admin = card("admin", true, "This page is served by it.");
     let recent = recent(&*state.db.lock().await);
-    Ok(Json(json!({ "services": [server, admin, caddy, cpa], "recent": recent })))
+    Ok(Json(json!({ "services": [server, gateway, admin, caddy, cpa], "recent": recent })))
 }
 
 /// `POST /api/admin/v1/services/{name}/restart`.
@@ -119,6 +134,7 @@ pub async fn restart(State(state): St, Path(name): Path<String>) -> Result<(Stat
     tracing::info!(service = %name, "restart asked from the admin site");
     let result = match name.as_str() {
         "server" => restart_server(&state).await,
+        "model-gateway" => restart_gateway(&state).await,
         "admin" => restart_admin(&state).await,
         "caddy" => restart_caddy(&state).await,
         _ => restart_cpa(&state).await,
@@ -163,6 +179,31 @@ async fn restart_server(state: &Arc<AdminState>) -> Result<(StatusCode, Json<Val
         }
     }
     Err(unreachable("The server was asked to restart but has not come back within a minute. Check it from the host."))
+}
+
+/// Ask the gateway to restart, wait for a new process, then give it its configuration again: its keys were in the
+/// memory that just went.
+async fn restart_gateway(state: &Arc<AdminState>) -> Result<(StatusCode, Json<Value>), Failure> {
+    let link = state.gateway.get().cloned().ok_or_else(|| unreachable("No link to the gateway is set up."))?;
+    let old = link.restart().await?;
+    let started = Instant::now();
+    while started.elapsed() < SERVER_BACK_WITHIN {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        if let Some((_, boot)) = link.status_now().await {
+            if boot != old {
+                let pushed = link.sync(state).await;
+                let secs = started.elapsed().as_secs();
+                let said = match pushed {
+                    crate::gateway_link::Sync::Pushed(_) | crate::gateway_link::Sync::Current => {
+                        format!("Restarted; back after {secs}s, with its keys.")
+                    }
+                    _ => format!("Restarted; back after {secs}s. It has no configuration yet; the admin keeps trying."),
+                };
+                return Ok((StatusCode::OK, Json(card("model-gateway", true, said))));
+            }
+        }
+    }
+    Err(unreachable("The gateway was asked to restart but has not come back within a minute. Check it from the host."))
 }
 
 /// Answer, then exit; Docker starts the admin again. This page reconnects when it is back.

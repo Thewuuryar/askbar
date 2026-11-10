@@ -13,17 +13,20 @@ pub struct Link {
     pub prefix: &'static str,
 }
 
-/// Only links whose receiver exists: `admin-server` (step 2.1), the auditor's two admin links (2.4);
-/// `model-gateway` links come in phase 3 and `alerter` in phase 4. The auditor's other links (`server-auditor`,
-/// `model-gateway-auditor`) come with the services that call it.
+/// Only links whose receiver exists: `admin-server` (step 2.1), the auditor's two admin links (2.4), and the
+/// three `model-gateway` links (3.1, ADR 0054); `alerter` links come in phase 4. The auditor's `server-auditor` link
+/// comes with the server's switch to the auditor.
 pub const LINKS: &[Link] = &[
     Link { name: "admin-server", caller: "admin", receiver: "server", prefix: "mgt_" }, // names-ok: the token prefix already issued
     Link { name: "admin-auditor-append", caller: "admin", receiver: "auditor", prefix: "audapp_" },
     Link { name: "admin-auditor-read", caller: "admin", receiver: "auditor", prefix: "audrd_" },
+    Link { name: "server-model-gateway", caller: "server", receiver: "model-gateway", prefix: "srvgw_" },
+    Link { name: "admin-model-gateway", caller: "admin", receiver: "model-gateway", prefix: "admgw_" },
+    Link { name: "model-gateway-auditor", caller: "model-gateway", receiver: "auditor", prefix: "gwaud_" },
 ];
 
 /// A service with a credential volume `<name>-token`, and the uid that reads it (ADR 0003).
-pub const SERVICES: &[(&str, u32)] = &[("admin", 10001), ("server", 10002), ("auditor", 10003)];
+pub const SERVICES: &[(&str, u32)] = &[("admin", 10001), ("server", 10002), ("auditor", 10003), ("model-gateway", 10004)];
 
 pub fn link(name: &str) -> Option<&'static Link> {
     LINKS.iter().find(|l| l.name == name)

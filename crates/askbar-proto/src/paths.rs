@@ -16,6 +16,10 @@ pub const SERVER_V1: &str = "/api/server/v1";
 pub const AUDIT_V1: &str = "/api/audit/v1";
 /// Every version of the audit API.
 pub const AUDIT: &str = "/api/audit";
+/// What the server and the admin call on `model-gateway`. Served only on its two internal listeners (ADR 0054).
+pub const MODEL_GATEWAY_V1: &str = "/api/model-gateway/v1";
+/// Every version of the model-gateway API.
+pub const MODEL_GATEWAY: &str = "/api/model-gateway";
 /// Every version of the server API, as Caddy blocks it.
 pub const SERVER: &str = "/api/server";
 /// Every version of the client API.
@@ -35,7 +39,20 @@ mod tests {
 
     #[test]
     fn every_prefix_is_audience_first_then_the_version_and_has_no_trailing_slash() {
-        for p in [ADMIN, ADMIN_API, ADMIN_V1, CLIENT_V1, SERVER_V1, SERVER, CLIENT, TOMBSTONE_V1, AUDIT_V1, AUDIT] {
+        for p in [
+            ADMIN,
+            ADMIN_API,
+            ADMIN_V1,
+            CLIENT_V1,
+            SERVER_V1,
+            SERVER,
+            CLIENT,
+            TOMBSTONE_V1,
+            AUDIT_V1,
+            AUDIT,
+            MODEL_GATEWAY_V1,
+            MODEL_GATEWAY,
+        ] {
             assert!(p.starts_with('/') && !p.ends_with('/'), "{p}");
         }
         // The versioned prefixes sit under their audience prefix, with the version after it.
@@ -43,6 +60,7 @@ mod tests {
         assert!(SERVER_V1.starts_with(&format!("{SERVER}/v")));
         assert!(ADMIN_V1.starts_with(&format!("{ADMIN_API}/v")));
         assert!(AUDIT_V1.starts_with(&format!("{AUDIT}/v")));
+        assert!(MODEL_GATEWAY_V1.starts_with(&format!("{MODEL_GATEWAY}/v")));
         assert!(!ADMIN_API.starts_with(ADMIN), "the admin API is not under the site's path");
     }
 
@@ -55,6 +73,7 @@ mod tests {
         // The audit API is internal like the server API, and never under a public prefix.
         for other in [CLIENT, ADMIN_API, SERVER] {
             assert!(!AUDIT_V1.starts_with(other) && !other.starts_with(AUDIT));
+            assert!(!MODEL_GATEWAY_V1.starts_with(other) && !other.starts_with(MODEL_GATEWAY));
         }
     }
 

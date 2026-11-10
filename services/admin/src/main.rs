@@ -74,6 +74,12 @@ async fn main() {
         })
     };
     tokio::spawn(link.run(state.db.clone(), resend));
+    // The provider keys go to model-gateway too (ADR 0054): it holds them in memory, so it is given them again
+    // whenever it starts.
+    let gateway_token = askbar_admin::gateway_link::read_token(&askbar_admin::server_link::token_dir()).unwrap_or_else(|e| die(e, 1));
+    let gateway = askbar_admin::gateway_link::GatewayLink::new(&askbar_admin::gateway_link::gateway_url(), gateway_token);
+    let _ = state.gateway.set(gateway.clone());
+    tokio::spawn(gateway.run(state.clone()));
     if let Err(e) = askbar_admin::serve_unix(&askbar_admin::socket_path(), askbar_admin::router(state)).await {
         die(e, 1);
     }

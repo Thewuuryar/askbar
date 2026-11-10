@@ -1,5 +1,5 @@
 //! The Services tab without a controller (ADR 0005): each service's state comes from the service
-//! itself, and a restart is session-only, recorded, rate limited, and limited to the four services.
+//! itself, and a restart is session-only, recorded, rate limited, and limited to the five services.
 
 mod common;
 
@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 #[tokio::test]
-async fn the_four_services_are_listed_from_the_services_themselves() {
+async fn the_five_services_are_listed_from_the_services_themselves() {
     let t = start(true).await;
     let (s, v) = t.call(M::GET, "/api/admin/v1/services", json!(null)).await;
     assert_eq!(s, 200, "{v}");
@@ -33,11 +33,12 @@ async fn the_four_services_are_listed_from_the_services_themselves() {
         by,
         [
             ("server".into(), "running".into()),
+            ("model-gateway".into(), "unreachable".into()),
             ("admin".into(), "running".into()),
             ("caddy".into(), "running".into()),
             ("cpa".into(), "unreachable".into())
         ],
-        "the server answers /status, Caddy its socket; CLIProxyAPI is not set up in this test"
+        "the server answers /status, Caddy its socket; the gateway and CLIProxyAPI are not set up in this test"
     );
     assert!(v["services"][0]["status"].as_str().unwrap().contains("not received its configuration"), "{v}");
     assert_eq!(v["recent"], json!([]));
@@ -45,7 +46,8 @@ async fn the_four_services_are_listed_from_the_services_themselves() {
     // With Caddy's socket silent, it reads as unreachable.
     let t = start(false).await;
     let (_, v) = t.call(M::GET, "/api/admin/v1/services", json!(null)).await;
-    assert_eq!(v["services"][2]["state"], "unreachable");
+    let caddy = v["services"].as_array().unwrap().iter().find(|c| c["name"] == "caddy").unwrap();
+    assert_eq!(caddy["state"], "unreachable");
 }
 
 /// A server stand-in: boot ID "A" until it is asked to restart, then "B" (a new process). `refuse`
@@ -157,7 +159,7 @@ async fn caddy_is_restarted_by_pushing_its_configuration_again() {
 }
 
 #[tokio::test]
-async fn only_the_four_services_can_be_restarted_and_start_and_stop_are_gone() {
+async fn only_the_five_services_can_be_restarted_and_start_and_stop_are_gone() {
     let t = start(true).await;
     for name in ["controller", "caddy%2F..", "mock-llm", "auditor"] {
         assert_eq!(t.call(M::POST, &format!("/api/admin/v1/services/{name}/restart"), json!(null)).await.0, 404, "{name}");
