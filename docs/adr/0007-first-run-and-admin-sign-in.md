@@ -35,8 +35,6 @@ V1 has one admin account, and no other users have admin access. A domain is need
 
 - Caddy checks the connection's real source, never a forwarded header. Test each supported Docker mode, because source addresses can be rewritten.
 - The docs warn that a router or proxy that rewrites the source can make public traffic look private.
-- The admin recommends a passkey, but doesn't require one.
-- If a passkey is set up, recovery codes replace the password as the backup.
 - Each admin reset is recorded in the audit log.
 
 ## Alternatives considered
@@ -49,3 +47,5 @@ V1 has one admin account, and no other users have admin access. A domain is need
 Until the password changes, any machine on a private network can sign in with the default login, so change it as soon as you deploy. This risk is accepted ([0016](0016-risk-register.md)). If the single admin loses access, recovery codes or the host reset command restore it.
 
 ## Amendments
+
+- 2026-11-10: two requirements that repeated the passkey rule and first-run step 6 are removed. No decision changed.

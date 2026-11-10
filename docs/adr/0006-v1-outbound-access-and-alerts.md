@@ -20,11 +20,12 @@ V1 needs provider access, certificates, and alerts, but the egress proxy, a dead
 ## Alternatives considered
 
 - **Sending alerts directly from the auditor:** rejected, because the auditor stays offline.
-- **Including the egress proxy in v1:** rejected to keep v1 smaller.
-- **Including a dead-man monitor and an off-host audit hash in v1:** rejected to keep v1 smaller.
+- **The egress proxy, a dead-man monitor or an off-host audit hash in v1:** rejected to keep v1 smaller.
 
 ## Consequences
 
 A compromised `model-gateway` or `cpa` can send data directly until the egress proxy ships. Without the monitor and the off-host hash, nothing outside the host notices a silent system or a rewritten audit chain. These risks are accepted for v1 ([0016](0016-risk-register.md)).
 
 ## Amendments
+
+- 2026-11-10: two alternatives with the same reason are one line. No decision changed.

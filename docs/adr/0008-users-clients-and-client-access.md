@@ -15,8 +15,7 @@ Users need simple client setup and private access away from home.
 - **Chats:** chats are processed on the server and sent to clients when complete.
 - **Live updates:** live sync happens only on the client that started the chat, or it shows a processing message with a short description of what the chat is doing.
 - **Network access:** clients use the local network or Tailscale by default. Public access can be a deployer option.
-- **Platforms:** macOS, Windows, and Linux. iOS is preferred, but can be deferred.
-- **Testing:** a person tests the client on macOS, Windows, and Linux before v1 ships.
+- **Platforms:** macOS, Windows and Linux, each tested by a person before v1 ships ([0002](0002-v1-scope-limits-and-ship-criteria.md)). iOS is preferred, but can be deferred.
 
 ## Alternatives considered
 
@@ -28,3 +27,5 @@ Users need simple client setup and private access away from home.
 The default deployment has a smaller attack surface. Clients other than the one that started a chat receive it when it's complete. A lost or stolen client must be revocable ([0016](0016-risk-register.md)).
 
 ## Amendments
+
+- 2026-11-10: the platform and testing lines are one, linking 0002's ship checklist. No decision changed.
