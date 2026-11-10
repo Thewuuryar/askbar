@@ -4,10 +4,10 @@
 
 use askbar_audit::{AuditDb, Recorder};
 use askbar_auditor::{disk::FreeSpace, Auditor, Limits};
-use askbar_model_gateway::audit::AuditClient;
 use askbar_model_gateway::{admin_links, admin_router, server_links, server_router, Gateway};
 use askbar_proto::gateway::{ChatEvent, ChatMessage, ChatRequest, FailureClass, GatewayConfig, GatewayProvider};
 use askbar_proto::{AuditKey, SseParser};
+use askbar_service::audit_client::AuditClient;
 use askbar_service::restart::Restarter;
 use askbar_service::status::BootId;
 use futures_util::StreamExt;
@@ -130,7 +130,7 @@ async fn rig_with(auditor_up: bool) -> Rig {
         format!("http://127.0.0.1:{dead}")
     };
 
-    let client = AuditClient::new(&audit_url, gw_tokens.clone());
+    let client = AuditClient::new(&audit_url, gw_tokens.clone(), "model-gateway-auditor");
     let boot = BootId::new();
     let exited = Arc::new(AtomicBool::new(false));
     let e = exited.clone();

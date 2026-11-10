@@ -11,7 +11,6 @@
 //! - **No provider words.** The server gets a code and a class. The provider's error text is sealed to the audit
 //!   public key and goes to the auditor as a payload; the gateway holds no private key.
 
-pub mod audit;
 pub mod llm;
 pub mod router;
 pub mod seal;
@@ -21,10 +20,10 @@ use askbar_proto::gateway::{ChatEvent, ChatRequest, FailureClass, GatewayConfig}
 use askbar_proto::http::ApiError;
 use askbar_proto::paths::{self, MODEL_GATEWAY_V1};
 use askbar_proto::ErrorCode;
+use askbar_service::audit_client::{AuditClient, Refused};
 use askbar_service::links::{Allow, Caller, Link, Links};
 use askbar_service::restart::Restarter;
 use askbar_service::status::BootId;
-use audit::{AuditClient, Refused};
 use axum::extract::{DefaultBodyLimit, State};
 use axum::http::Method;
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -49,11 +48,7 @@ pub const MAX_ERROR_PAYLOAD_BYTES: usize = 4096;
 /// A turn the server has not finished this long after the generation time limit is finished as interrupted.
 pub const STALE_TURN_GRACE: Duration = Duration::from_secs(60);
 
-/// Unix seconds and milliseconds now.
-pub fn now_parts() -> (i64, i64) {
-    let d = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
-    (d.as_secs() as i64, d.as_millis() as i64)
-}
+pub use askbar_service::audit_client::now_parts;
 
 /// What a `PUT /config` put in place.
 struct Applied {
@@ -467,7 +462,7 @@ async fn run_attempts(
             Err(e) => {
                 // The provider's own words go to the auditor sealed, cut at 4 KB, and nowhere else.
                 if let Ok(sealed) = seal::seal(&cfg.audit_key, cut(&e.error.to_string(), MAX_ERROR_PAYLOAD_BYTES).as_bytes()) {
-                    gw.audit.payload(&attempt_id, "error", &sealed);
+                    gw.audit.payload(&attempt_id, "error", &sealed.key_id, &sealed.bytes);
                 }
                 let code = router::error_code(&e.error);
                 end.status = "error".into();

@@ -1,5 +1,5 @@
-use askbar_model_gateway::audit::AuditClient;
 use askbar_model_gateway::{admin_links, admin_router, server_links, server_router, token_dir, Gateway};
+use askbar_service::audit_client::AuditClient;
 use askbar_service::status::BootId;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::time::Duration;
@@ -69,7 +69,7 @@ async fn main() {
     }
     let audit_url =
         std::env::var("ASKBAR_AUDIT_API_URL").ok().filter(|u| !u.trim().is_empty()).unwrap_or_else(|| "http://auditor:8083".into());
-    let audit = AuditClient::new(&audit_url, dir.clone());
+    let audit = AuditClient::new(&audit_url, dir.clone(), "model-gateway-auditor");
     let boot_id = BootId::new();
     // Nothing is held that needs saving: a restart is how a key leaves memory.
     let restarter = askbar_service::restart::Restarter::new(boot_id.clone(), || {});
