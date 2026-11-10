@@ -1,28 +1,8 @@
 # 0025. Audit record reliability
 
-Status: Accepted
+Status: Merged into 0010
 Date: 2026-11-04
 Source: recommendation accepted after the clean copy
+Merged: 2026-11-10, into [0010](0010-auditor.md), "Record reliability", rules 5 to 7
 
-## Context
-
-A crash or brief outage can leave audit spans unfinished, and local tampering must be noticed.
-
-## Decision
-
-These rules cover the services the project builds that append to the auditor ([0003](0003-v1-service-layout.md)). Caddy's access logs are outside them.
-
-1. **Finish records:** a service queues finish and payload records, and retries them until the auditor acknowledges them.
-2. **Boot IDs:** a service announces a new boot ID when it connects. The auditor ends that service's earlier unfinished spans as interrupted.
-3. **Chain head check:** the admin stores the latest hash chain head at intervals and checks it against the auditor. A rollback, deletion, or edit appears in the admin and sends an alert.
-
-## Alternatives considered
-
-- **Dropping unfinished records:** rejected, because it would leave gaps in investigations.
-- **An off-host copy of the chain head in v1:** rejected to keep v1 smaller ([0006](0006-v1-outbound-access-and-alerts.md)). Without it, only the admin check notices tampering.
-
-## Consequences
-
-Services need a bounded retry queue. A fully compromised admin and auditor, or host root, could still agree on false data. This risk is accepted for v1 ([0016](0016-risk-register.md)).
-
-## Amendments
+Its rules on finish records, boot IDs and the chain-head check are now part of 0010. Its old rules 1 to 3 are 0010 rules 5 to 7. The text as accepted is in git history.

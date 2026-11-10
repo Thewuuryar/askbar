@@ -28,13 +28,13 @@ This set records the decisions from the original Askbar architecture plan (kept 
 | [0022](0022-api-path-conventions.md) | API path conventions | Accepted | Added recommendation |
 | [0023](0023-api-error-format.md) | API error format | Accepted | Added recommendation |
 | [0024](0024-rejected-token-alert.md) | Rejected token alert | Accepted | Added recommendation |
-| [0025](0025-audit-record-reliability.md) | Audit record reliability | Accepted | Added recommendation |
+| [0025](0025-audit-record-reliability.md) | Audit record reliability | Merged into 0010 | Added recommendation |
 | [0026](0026-dependency-license-check.md) | Dependency license check | Merged into 0017 | Added recommendation |
 | [0027](0027-adr-format-and-numbering.md) | ADR format and numbering | Merged into 0001 | Added recommendation |
 | [0028](0028-service-boundaries-and-config-delivery.md) | Service boundaries and config delivery | Accepted | Required by v1 decisions |
 | [0029](0029-shared-origin-protections.md) | Shared origin protections | Accepted | Required by v1 decisions |
 | [0030](0030-sealed-audit-content.md) | Sealed audit content | Merged into 0011 | Required by v1 decisions |
-| [0031](0031-audit-span-start-and-backlog.md) | Audit span start and backlog | Accepted | Required by v1 decisions |
+| [0031](0031-audit-span-start-and-backlog.md) | Audit span start and backlog | Merged into 0010 | Required by v1 decisions |
 | [0032](0032-container-hardening.md) | Container hardening | Accepted | Required by v1 decisions |
 | [0033](0033-repository-layout.md) | Repository layout | Accepted | Owner request with the v1 plan |
 | [0034](0034-self-signed-https-and-certificate-pinning.md) | Self-signed HTTPS and certificate pinning | Merged into 0015 | Required by 0007; owner choice in the v1 plan |
