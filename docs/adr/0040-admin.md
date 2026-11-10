@@ -43,3 +43,4 @@ Not recorded: the admin predates this record.
 - 2026-11-08: no fixed address on `server-api`; it calls the server by the alias `server-api-host` (PR #32).
 - 2026-11-08: the site is one page per section, from one Askama template, instead of one page with tabs (plan step 1.16).
 - 2026-11-10: the Settings page sets how much history is sent with each question, pushed as `history_turns` (plan step 1.13).
+- 2026-11-10: the Settings page sets whether conversations show newest first (`newest_first` in the display defaults; plan step 1.13).
