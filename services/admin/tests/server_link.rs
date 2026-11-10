@@ -67,6 +67,8 @@ fn without_a_token_file_the_admin_says_to_run_bootstrap_and_never_makes_one() {
     let (_, _) = d.install();
     let file = server_link::token_file(&token_dir);
     std::fs::set_permissions(file.parent().unwrap(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    // The file is 0400 as bootstrap makes it; the directory is open now, so replace the file.
+    std::fs::remove_file(&file).unwrap();
     std::fs::write(&file, "  \n").unwrap();
     assert!(server_link::read_token(&token_dir).unwrap_err().to_string().contains("is empty"));
 }
