@@ -124,8 +124,9 @@ SERVER_API="$SERVER_API_IP:8082"
 [ -n "$SERVER_API_IP" ] && pass "the server has an address on server-api ($SERVER_API_IP)" || fail "the server has no address on server-api"
 [ "$(http_status "$SERVER_API_NET" server-api-host:8082)" = 401 ] && pass "the admin's address for it, server-api-host, reaches the server API" || fail "server-api-host:8082 does not reach the server API"
 refused "compose.yaml pins no subnet or address (docs/guide.md, Docker networks)" grep -En '^[[:space:]]*(ipv[46]_address|subnet|ip_range):' "$(dirname "$0")/../compose.yaml"
-HASH=$(docker exec "$ADMIN" cat /server-token/token.sha256 2>/dev/null | tr -d '[:space:]')
-[ -n "$HASH" ] || fail "could not read the token hash from the admin's /server-token"
+# The hash is the server's (the admin mounts no server-token any more): bootstrap made it (ADR 0049).
+HASH=$(docker exec "$SERVER" cat /server-token/accept/admin-server.sha256 2>/dev/null | tr -d '[:space:]')
+[ -n "$HASH" ] || fail "could not read the token hash from the server's /server-token/accept"
 [ "$(http_status "$SERVER_API_NET" "$SERVER_API")" = 401 ] && pass "401 without a token" || fail "no token should give 401"
 [ "$(http_status "$SERVER_API_NET" "$SERVER_API" "$HASH")" = 401 ] && pass "401 with the token's hash instead of the token" || fail "the hash must not work as the token"
 [ "$(http_status "$SERVER_API_NET" "$SERVER_API" wrong)" = 401 ] && pass "401 with a wrong token" || fail "a wrong token should give 401"
@@ -134,10 +135,16 @@ HASH=$(docker exec "$ADMIN" cat /server-token/token.sha256 2>/dev/null | tr -d '
 docker rm -f askbar-check-nohash >/dev/null 2>&1
 docker run -d --name askbar-check-nohash --network "$SERVER_API_NET" --network-alias askbar-check-nohash-host \
   -e ASKBAR_SERVER_API_ADDR=askbar-check-nohash-host:8082 -e ASKBAR_CLIENT_API_ADDR=127.0.0.1:8080 \
-  -e ASKBAR_SERVER_TOKEN_HASH_FILE=/nowhere/token.sha256 "$(docker inspect -f '{{.Config.Image}}' "$SERVER")" >/dev/null
+  -e ASKBAR_SERVER_TOKEN_HASH_FILE=/nowhere/admin-server.sha256 "$(docker inspect -f '{{.Config.Image}}' "$SERVER")" >/dev/null
 sleep 3
-code=$(http_status "$SERVER_API_NET" askbar-check-nohash-host:8082 "$HASH")
-case "$code" in 401|403|503) pass "fails closed with no hash file ($code)";; *) fail "no hash file: got $code, expected a refusal";; esac
+# Since bootstrap (ADR 0049) the server does not even start without its hash file; a server that did start would
+# have to refuse every call.
+if [ "$(docker inspect -f '{{.State.Running}}' askbar-check-nohash)" = false ] && [ "$(docker inspect -f '{{.State.ExitCode}}' askbar-check-nohash)" != 0 ]; then
+  docker logs askbar-check-nohash 2>&1 | grep -q 'docker compose up' && pass "refuses to start with no hash file, and says what to run" || fail "no hash file: the server stopped without saying what to run"
+else
+  code=$(http_status "$SERVER_API_NET" askbar-check-nohash-host:8082 "$HASH")
+  case "$code" in 401|403|503) pass "fails closed with no hash file ($code)";; *) fail "no hash file: got $code, expected a refusal";; esac
+fi
 docker rm -f askbar-check-nohash >/dev/null 2>&1
 
 docker exec "$CADDY" sh -c "wget -q -T3 -O /dev/null http://$SERVER_API/api/server/v1/health" >/dev/null 2>&1 \
@@ -223,12 +230,13 @@ else
 fi
 
 echo "== 3d2. Container hardening (ADR 0032)"
-# Every running service: read-only root, no capabilities but Caddy's NET_BIND_SERVICE, no privilege gain,
-# process and memory limits, a private /tmp, and no host-gateway alias.
-for svc in server admin caddy cpa mock-llm; do
-  c=$(docker compose -p "$PROJECT" ps -q "$svc" 2>/dev/null | head -1)
+# Every service: read-only root, no capabilities but Caddy's NET_BIND_SERVICE and bootstrap's CHOWN (ADR 0032
+# rule 6), no privilege gain, process and memory limits, a private /tmp, and no host-gateway alias. Bootstrap has
+# exited by now, so it is looked up with -a.
+for svc in bootstrap server admin caddy cpa mock-llm; do
+  c=$(docker compose -p "$PROJECT" ps -aq "$svc" 2>/dev/null | head -1)
   [ -n "$c" ] || { echo "SKIP  $svc is not running"; continue; }
-  want_add=""; [ "$svc" = caddy ] && want_add="NET_BIND_SERVICE"
+  want_add=""; [ "$svc" = caddy ] && want_add="NET_BIND_SERVICE"; [ "$svc" = bootstrap ] && want_add="CHOWN"
   got=$(docker inspect -f '{{.HostConfig.ReadonlyRootfs}}|{{join .HostConfig.CapDrop ","}}|{{join .HostConfig.CapAdd ","}}|{{join .HostConfig.SecurityOpt ","}}|{{if .HostConfig.PidsLimit}}{{.HostConfig.PidsLimit}}{{end}}|{{.HostConfig.Memory}}|{{range $k, $v := .HostConfig.Tmpfs}}{{$k}}{{end}}|{{join .HostConfig.ExtraHosts ","}}' "$c")
   IFS='|' read -r ro drop add sec pids mem tmp hosts <<EOF_H
 $got
@@ -248,6 +256,60 @@ done
 for c in $SERVER $ADMIN $CADDY; do
   refused "$c cannot write its root filesystem" docker exec "$c" sh -c 'echo x > /hardening-probe'
 done
+
+echo "== 3d3. Bootstrap and the credential volumes (ADR 0049)"
+BOOT=$(docker compose -p "$PROJECT" ps -aq bootstrap 2>/dev/null | head -1)
+if [ -z "$BOOT" ]; then fail "there is no bootstrap container"; else
+  [ "$(docker inspect -f '{{.HostConfig.NetworkMode}}' "$BOOT")" = none ] && pass "bootstrap has no network" || fail "bootstrap has a network"
+  [ "$(docker inspect -f '{{.State.Status}} {{.State.ExitCode}}' "$BOOT")" = "exited 0" ] && pass "bootstrap ran once and exited 0" || fail "bootstrap is $(docker inspect -f '{{.State.Status}} {{.State.ExitCode}}' "$BOOT")"
+  [ "$(docker inspect -f '{{.Config.User}}' "$BOOT")" = 0 ] && pass "bootstrap runs as root, with CHOWN only (checked above)" || fail "bootstrap does not run as root"
+  bmounts=$(docker inspect -f '{{range .Mounts}}{{.Name}}={{.RW}} {{end}}' "$BOOT" | tr ' ' '\n' | grep . | sort | tr '\n' ' ')
+  [ "$bmounts" = "${PROJECT}_admin-token=true ${PROJECT}_server-token=true " ] && pass "bootstrap mounts the credential volumes only" || fail "bootstrap mounts: $bmounts"
+fi
+# Each service mounts its own credential volume, read-only, and no other service's.
+for pair in "$SERVER:server-token" "$ADMIN:admin-token"; do
+  c=${pair%%:*}; own=${pair#*:}
+  mounts=$(docker inspect -f '{{range .Mounts}}{{.Name}}={{.RW}} {{end}}' "$c" | tr ' ' '\n' | grep -- '-token=' | sort | tr '\n' ' ')
+  [ "$mounts" = "${PROJECT}_$own=false " ] && pass "$c mounts $own read-only and no other credential volume" || fail "$c credential mounts: $mounts"
+done
+refused "the admin has no server-token" docker exec "$ADMIN" test -e /server-token
+refused "the server has no admin-token" docker exec "$SERVER" test -e /admin-token
+refused "the admin keeps no server.token in admin-secrets" docker exec "$ADMIN" test -e /admin-secrets/server.token
+# Owners and modes: a token is its caller's and 0400, a hash its receiver's and 0444, directories 0500.
+owned() { # container path want("uid mode") description
+  local got; got=$(docker exec "$1" stat -c '%u %a' "$2" 2>/dev/null)
+  [ "$got" = "$3" ] && pass "$4 is '$3'" || fail "$4 is '${got:-missing}', expected '$3'"
+}
+owned "$ADMIN" /admin-token/call/admin-server.token "10001 400" "the admin's token file (owner, mode)"
+owned "$SERVER" /server-token/accept/admin-server.sha256 "10002 444" "the server's hash file (owner, mode)"
+for d in /admin-token /admin-token/call /admin-token/accept; do owned "$ADMIN" "$d" "10001 500" "the admin's $d"; done
+for d in /server-token /server-token/call /server-token/accept; do owned "$SERVER" "$d" "10002 500" "the server's $d"; done
+admin_token=$(docker exec "$ADMIN" cat /admin-token/call/admin-server.token 2>/dev/null)
+[ "$(printf '%s' "$admin_token" | sha256sum | cut -d' ' -f1)" = "$HASH" ] && pass "the server's hash is the hash of the admin's token" || fail "the server's hash does not match the admin's token"
+case "$admin_token" in mgt_*) pass "the admin's token has the admin-server prefix";; *) fail "the admin's token has the wrong prefix";; esac
+
+# A second run changes nothing, and a rotation makes a new token and a matching hash. Both run in the real
+# container, where root has no capability but CHOWN: only there is it clear that bootstrap can still change a
+# file it has already given away. After a rotation the admin and the server read the new files on restart.
+before=$(docker exec "$ADMIN" sh -c 'cat /admin-token/call/admin-server.token' 2>/dev/null)
+out=$(docker compose -p "$PROJECT" run --rm --no-deps bootstrap 2>/dev/null)
+[ "$out" = "kept admin-server" ] && [ "$(docker exec "$ADMIN" cat /admin-token/call/admin-server.token 2>/dev/null)" = "$before" ] \
+  && pass "a second bootstrap run keeps the token" || fail "a second bootstrap run: $out"
+out=$(docker compose -p "$PROJECT" run --rm --no-deps bootstrap rotate admin-server 2>/dev/null)
+printf '%s' "$out" | grep -q '^rotated admin-server$' && printf '%s' "$out" | grep -q '^Restart from the admin: admin, server$' \
+  && pass "rotate admin-server says what to restart" || fail "rotate output: $out"
+after=$(docker exec "$ADMIN" cat /admin-token/call/admin-server.token 2>/dev/null)
+[ -n "$after" ] && [ "$after" != "$before" ] && pass "rotation made a new token" || fail "rotation did not change the token"
+[ "$(printf '%s' "$after" | sha256sum | cut -d' ' -f1)" = "$(docker exec "$SERVER" cat /server-token/accept/admin-server.sha256 2>/dev/null | tr -d '[:space:]')" ] \
+  && pass "the hash matches the new token" || fail "the hash does not match the new token"
+owned "$ADMIN" /admin-token/call/admin-server.token "10001 400" "the admin's token file after a rotation (owner, mode)"
+owned "$SERVER" /server-token/accept/admin-server.sha256 "10002 444" "the server's hash file after a rotation (owner, mode)"
+docker restart "$SERVER" "$ADMIN" >/dev/null
+for c in "$SERVER" "$ADMIN"; do
+  for i in $(seq 1 30); do [ "$(docker inspect -f '{{.State.Health.Status}}' "$c")" = healthy ] && break; sleep 2; done
+  [ "$(docker inspect -f '{{.State.Health.Status}}' "$c")" = healthy ] && pass "$c is healthy after the restart" || fail "$c is not healthy after the rotation"
+done
+HASH=$(docker exec "$SERVER" cat /server-token/accept/admin-server.sha256 2>/dev/null | tr -d '[:space:]')
 
 echo "== 3e. No Docker socket"
 # There is no controller (ADR 0005): no container of the project mounts the Docker socket, and none is left
@@ -317,7 +379,7 @@ case " $(docker inspect -f '{{range .Mounts}}{{.Name}} {{end}}' "$ADMIN")" in
 esac
 refused "the admin has no /secrets" docker exec "$ADMIN" test -e /secrets
 modes_ok=1
-for f in "$ADMIN:/admin-secrets/admin.key" "$ADMIN:/admin-secrets/server.token" "$SERVER:/secrets/master.key"; do
+for f in "$ADMIN:/admin-secrets/admin.key" "$SERVER:/secrets/master.key"; do
   m=$(docker exec "${f%%:*}" stat -c %a "${f#*:}" 2>/dev/null)
   [ "$m" = 600 ] || { fail "${f#*:} has mode ${m:-missing}, expected 600"; modes_ok=0; }
 done
