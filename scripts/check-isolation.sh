@@ -467,6 +467,43 @@ except Exception: print(0)
   [ "$(gw_call "$GW_SRV_NET" "$GW_SRV_IP" POST /chat "$GW_ADM_TOK" '{}')" = 401 ] && pass "the admin's token does not open the server's listener" || fail "the admin's token opened the server's listener"
   [ "$(gw_call "$GW_SRV_NET" "$GW_SRV_IP" PUT /config "$GW_SRV_TOK" '{}')" = 404 ] && pass "the server's listener has no config route" || fail "the server's listener serves /config"
   [ "$(gw_call "$EDGE" "$GW_SRV_IP" GET /health)" = 0 ] && pass "a container on edge cannot reach the gateway" || fail "the gateway is reachable from edge"
+  # A marker key entered in the admin reaches the gateway, survives its restart (the admin pushes it again), and
+  # appears nowhere it must not: not in a response, a log, the gateway's files, the admin's database in the clear,
+  # or the auditor's store.
+  MARK="sk-isolation-marker-$(head -c 12 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9')"
+  pid=$(admin_script "$(admin_login)
+s, body = call('POST', '/api/admin/v1/providers', {'name': 'Isolation marker', 'type': 'openai', 'base_url': 'http://mock-llm:8765/v1', 'model': 'm', 'api_key': '$MARK'})
+print(json.loads(body).get('id', '') if s == 201 else 'failed')" 2>&1 | tail -1)
+  case "$pid" in failed|"") fail "could not add the marker provider: $pid";; *) pass "a provider with a marker key was added through the admin";; esac
+  gw_version() { gw_call "$GW_NET" "$GW_ADMIN_IP" GET /status "$GW_ADM_TOK" >/dev/null; py --network "$GW_NET" -- "
+import urllib.request, json
+req = urllib.request.Request('http://$GW_ADMIN_IP:8084/api/model-gateway/v1/status', headers={'authorization': 'Bearer $GW_ADM_TOK'})
+print(json.load(urllib.request.urlopen(req, timeout=4))['config_version'])"; }
+  have=None
+  for i in $(seq 1 20); do have=$(gw_version 2>/dev/null | tail -1); [ -n "$have" ] && [ "$have" != None ] && break; sleep 2; done
+  [ -n "$have" ] && [ "$have" != None ] && pass "the admin pushed its configuration, the marker key included, to the gateway" || fail "the gateway has no configuration: '$have'"
+  # Restart it: the key was only in memory, so the admin has to push it again.
+  rs=$(admin_script "$(admin_login)
+print(call('POST', '/api/admin/v1/services/model-gateway/restart')[0])" 2>&1 | tail -1)
+  [ "$rs" = 200 ] && pass "the admin restarted the gateway and waited for it" || fail "restarting the gateway through the admin answered '$rs'"
+  have=None
+  for i in $(seq 1 30); do have=$(gw_version 2>/dev/null | tail -1); [ -n "$have" ] && [ "$have" != None ] && break; sleep 2; done
+  [ -n "$have" ] && [ "$have" != None ] && pass "after the restart the gateway has its configuration again, with no command" || fail "the restarted gateway has no configuration: '$have'"
+  # Where the marker must not be.
+  for c in $GW $SERVER $ADMIN $AUDITOR $CADDY; do
+    docker logs "$c" 2>&1 | grep -q -- "$MARK" && fail "$c's log holds the marker key" || pass "$c's log holds no marker key"
+  done
+  docker exec "$GW" sh -c "grep -rIl -- '$MARK' /tmp /model-gateway-token /etc /home /var 2>/dev/null | head -1" | grep -q . \
+    && fail "the gateway's filesystem holds the marker key" || pass "the gateway's filesystem holds no marker key"
+  docker exec "$AUDITOR" sh -c "grep -rl -- '$MARK' /audit 2>/dev/null | head -1" | grep -q . && fail "the auditor's store holds the marker key" || pass "the auditor's store holds no marker key"
+  docker exec "$ADMIN" sh -c "grep -rl -- '$MARK' /admin-data 2>/dev/null | head -1" | grep -q . && fail "the admin's database holds the marker key in the clear" || pass "the admin's database holds the marker key encrypted only"
+  resp=$(admin_script "$(admin_login)
+for p in ('/api/admin/v1/providers', '/api/admin/v1/services', '/api/admin/v1/status'):
+    print(call('GET', p)[1])" 2>&1)
+  printf '%s' "$resp" | grep -q -- "$MARK" && fail "an admin response returned the marker key" || pass "no admin response returns the marker key"
+  [ "$(gw_call "$GW_NET" "$GW_ADMIN_IP" GET /config "$GW_ADM_TOK")" != 200 ] && pass "the gateway has no route that returns its configuration" || fail "GET /config answers"
+  admin_script "$(admin_login)
+print(call('DELETE', '/api/admin/v1/providers/$pid')[0])" >/dev/null 2>&1
 fi
 
 echo "== 3e. No Docker socket"
@@ -480,7 +517,7 @@ docker container inspect askbar-controller >/dev/null 2>&1 && fail "a controller
 docker network inspect "${PROJECT}_control" >/dev/null 2>&1 && fail "the control network still exists" || pass "there is no control network"
 out=$(admin_script "$(admin_login)
 print(call('POST', '/api/admin/v1/services/controller/restart')[0], call('POST', '/api/admin/v1/services/server/stop')[0], call('POST', '/api/admin/v1/services/server/kill')[0])" 2>&1 | tail -1)
-[ "$out" = "404 404 404" ] && pass "only the four services can be restarted, and nothing else can be done to them" || fail "service actions accepted a bad name or action: $out"
+[ "$out" = "404 404 404" ] && pass "only the five services can be restarted, and nothing else can be done to them" || fail "service actions accepted a bad name or action: $out"
 
 echo "== 4. The allowlist"
 caddy_config() { # prints the admin site's route from Caddy's loaded config

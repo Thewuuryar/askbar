@@ -78,6 +78,12 @@ pub(crate) async fn mutate<T>(
             return Err(e);
         }
     };
+    // The keys are kept here too, encrypted, so `model-gateway` can be given them (ADR 0054). In the same
+    // transaction: a change the server refuses takes its keys back out with the rest.
+    if let Err(e) = crate::gateway_link::keep_keys(conn, &state.secrets, &keys) {
+        rollback(conn);
+        return Err(e);
+    }
     let snapshot = match build_snapshot(conn) {
         Ok(s) => s,
         Err(e) => {
@@ -99,6 +105,10 @@ pub(crate) async fn mutate<T>(
         let _ = db.conn().execute("UPDATE providers SET has_key = 1 WHERE id = ?1", [&id]);
     }
     db.conn().execute_batch("COMMIT").map_err(internal)?;
+    // The gateway gets the new truth now, not at its next check.
+    if let Some(g) = state.gateway.get() {
+        g.mark_dirty();
+    }
     Ok(out)
 }
 

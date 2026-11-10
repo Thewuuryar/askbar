@@ -136,6 +136,14 @@ const MIGRATIONS: &[&str] = &[
          name       TEXT    NOT NULL UNIQUE,
          created_at INTEGER NOT NULL
      );",
+    // v13: the provider keys the admin keeps so it can hand them to `model-gateway` (ADR 0054), each encrypted
+    // with the admin's own key (`admin.key`). Write-only like the rest: no endpoint returns one. A key the server
+    // held before this version is not here, because the admin could never read it; it is entered again.
+    "CREATE TABLE provider_keys (
+         provider_id TEXT PRIMARY KEY,
+         key_enc     BLOB    NOT NULL,
+         updated_at  INTEGER NOT NULL
+     );",
 ];
 
 /// The schema steps, in order (for the upgrade tests).

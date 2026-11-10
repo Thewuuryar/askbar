@@ -104,6 +104,8 @@ services:
         condition: service_completed_successfully
     environment:
       ASKBAR_SERVER_API_URL: http://server-api-host:8082
+      # model-gateway's listener for the admin, on gateway-admin (ADR 0054): the admin gives it the provider keys.
+      ASKBAR_GATEWAY_URL: http://gateway-admin-host:8084
       ASKBAR_PUBLIC_URL: ${ASKBAR_PUBLIC_URL:-}
     networks:
       server-api: {}
@@ -126,8 +128,8 @@ services:
 
   # The audit store as its own container (ADR 0051): /api/audit/v1 on 8083, reachable only on the audit-* networks,
   # one for each caller, and with no route out. No exception to the hardening above. Runs as uid 10003 from the
-  # image; /audit belongs to that uid there, so Docker makes a new auditor-data volume the same. Nothing sends it
-  # records yet (plan step 3.1 switches the server); the admin reaches it on audit-admin.
+  # image; /audit belongs to that uid there, so Docker makes a new auditor-data volume the same. The gateway appends
+  # to it on audit-model-gateway; the server does not yet (plan step 3.1, second half); the admin reaches it on audit-admin.
   auditor:
     build:
       context: .

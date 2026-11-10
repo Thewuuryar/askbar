@@ -329,13 +329,16 @@ async function waitForPort(port) {
     await page.click('.card[data-name="dead"] [data-action="delete"]');
     await page.waitForFunction(() => !document.querySelector('.card[data-name="dead"]'));
   });
-  await step('Services: the four services show whether they answer, and Restart asks first and then acts', async () => {
+  await step('Services: the five services show whether they answer, and Restart asks first and then acts', async () => {
     // No controller (ADR 0005): each state comes from the service. Here the server and the admin run;
-    // Caddy and CLIProxyAPI do not.
+    // the gateway, Caddy and CLIProxyAPI do not.
     await openPage('services');
     await page.waitForSelector('#services .card[data-name="cpa"]');
-    assert.deepEqual(await page.$$eval('#services .card', (c) => c.map((x) => x.dataset.name)), ['server', 'admin', 'caddy', 'cpa']);
+    assert.deepEqual(await page.$$eval('#services .card', (c) => c.map((x) => x.dataset.name)), ['server', 'model-gateway', 'admin', 'caddy', 'cpa']);
     assert.match(await page.innerText('#services .card[data-name="server"]'), /running/);
+    // The gateway is not running in this test, so it reads as unreachable, with a Restart button like the rest.
+    assert.match(await page.innerText('#services .card[data-name="model-gateway"]'), /unreachable/);
+    assert.deepEqual(await page.$$eval('#services .card[data-name="model-gateway"] button', (b) => b.map((x) => x.dataset.action)), ['restart']);
     assert.match(await page.innerText('#services .card[data-name="caddy"]'), /unreachable/);
     assert.deepEqual(await page.$$eval('#services .card[data-name="server"] button', (b) => b.map((x) => x.dataset.action)), ['restart'], 'only Restart: there is no start or stop');
     let asked = '';

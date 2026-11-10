@@ -10,6 +10,7 @@ pub mod auth;
 pub mod caddy;
 pub mod cpa;
 pub mod db;
+pub mod gateway_link;
 pub mod network;
 pub mod pages;
 pub mod routes;
@@ -48,6 +49,8 @@ pub struct AdminState {
     pub proxy: std::sync::Mutex<caddy::ProxyStatus>,
     /// What `POST /api/admin/v1/services/admin/restart` does; set once by `main` (tests set their own).
     pub restarter: std::sync::OnceLock<askbar_service::restart::Restarter>,
+    /// The link to `model-gateway` (ADR 0054); set once by `main`. Tests that have none leave it unset.
+    pub gateway: std::sync::OnceLock<Arc<gateway_link::GatewayLink>>,
     /// The link to CLIProxyAPI, once its config exists.
     pub cpa: std::sync::Mutex<Option<Arc<cpa::CpaLink>>>,
     /// Logins started and not finished: state -> (provider, expiry in unix seconds).
@@ -75,6 +78,7 @@ impl AdminState {
             caddy: std::sync::Mutex::new(caddy::CaddyLink::default()),
             proxy: std::sync::Mutex::new(caddy::ProxyStatus::default()),
             restarter: Default::default(),
+            gateway: Default::default(),
             cpa: std::sync::Mutex::new(None),
             cpa_logins: std::sync::Mutex::new(Default::default()),
             service_actions: std::sync::Mutex::new(Default::default()),

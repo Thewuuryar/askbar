@@ -337,7 +337,7 @@ paths:
         required: true
         schema:
           type: string
-          enum: [server, admin, caddy, cpa]
+          enum: [server, model-gateway, admin, caddy, cpa]
     post:
       operationId: restartService
       summary: Restart a service, without a controller (ADR 0005).
@@ -345,14 +345,16 @@ paths:
         Session-only: an admin API key cannot do this. Every attempt is recorded first, and at most 6 are allowed
         per minute (429 `too_many_attempts`). `server`: asks the server's own `POST /restart` and waits until a new
         process answers (a new boot ID), at most a minute; replies being written end as interrupted, and the
-        server's 30-second cooldown after it starts is passed on as 429. `admin`: answers 202 and exits; this page
+        server's 30-second cooldown after it starts is passed on as 429. `model-gateway` (ADR 0054): asks its
+        `POST /restart`, waits for a new boot ID, then pushes its configuration, provider keys included, since they
+        were in the memory that went; its cooldown is passed on the same way. `admin`: answers 202 and exits; this page
         reconnects when Docker has started it again. `caddy`: pushes its configuration again, which Caddy applies
         live. `cpa`: asks its supervisor (ADR 0037) and waits for CLIProxyAPI to answer again, at most a minute.
       security:
         - adminSession: []
       responses:
         '200':
-          description: The service after the restart (server, caddy, cpa).
+          description: The service after the restart (server, model-gateway, caddy, cpa).
           content:
             application/json:
               schema:
@@ -1249,7 +1251,7 @@ components:
       properties:
         name:
           type: string
-          enum: [server, admin, caddy, cpa]
+          enum: [server, model-gateway, admin, caddy, cpa]
         state:
           type: string
           description: Whether it answers (`running`), does not (`unreachable`), or is restarting itself (`restarting`, the admin only).
