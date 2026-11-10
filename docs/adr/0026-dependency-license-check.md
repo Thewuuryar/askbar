@@ -1,26 +1,8 @@
 # 0026. Dependency license check
 
-Status: Accepted 
+Status: Merged into 0017
 Date: 2026-11-04
 Source: recommendation accepted after the clean copy
+Merged: 2026-11-10, into [0017](0017-dependencies-and-patches.md), "Licenses"
 
-## Context
-
-Askbar is licensed under `AGPL-3.0-or-later`. Code built into Askbar must have a license that's compatible with it.
-
-## Decision
-
-- CI uses a license allowlist in `cargo deny` for Rust crates.
-- CI uses a similar license check for npm packages.
-- A dependency outside the allowlist needs an ADR before it's added ([0001](0001-decision-records-and-change-rules.md)). A library inside the allowlist needs a reason in the pull request.
-- The docs state that anyone who modifies Askbar and offers it over a network must follow the AGPL's source offer requirement.
-
-## Alternatives considered
-
-- **Reviewing licenses by hand:** rejected, because it's easy to miss transitive dependencies.
-
-## Consequences
-
-An incompatible dependency fails CI before it's merged. The check doesn't replace legal advice, and third-party images still need their own license notices when published.
-
-## Amendments
+Its license allowlist and checks are now part of 0017. The text as accepted is in git history.
