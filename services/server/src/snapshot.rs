@@ -14,6 +14,8 @@ pub const MIN_AUDIT_RETENTION_DAYS: u32 = 7;
 /// A generation may be given between 30 seconds and an hour.
 pub const MIN_GENERATION_TIMEOUT_SECS: u32 = 30;
 pub const MAX_GENERATION_TIMEOUT_SECS: u32 = 3600;
+/// The most earlier questions a snapshot may ask to send with each new one (0 means all).
+pub const MAX_HISTORY_TURNS: u32 = 1000;
 
 fn check_display(d: &DisplaySettings, whose: &str) -> Result<(), String> {
     let in_range = |v: u32, lo: u32, hi: u32| (lo..=hi).contains(&v);
@@ -55,6 +57,9 @@ pub fn validate(s: &Snapshot) -> Result<(), String> {
     }
     if !(MIN_GENERATION_TIMEOUT_SECS..=MAX_GENERATION_TIMEOUT_SECS).contains(&s.generation_timeout_secs) {
         return Err(format!("generation_timeout_secs must be between {MIN_GENERATION_TIMEOUT_SECS} and {MAX_GENERATION_TIMEOUT_SECS}"));
+    }
+    if s.history_turns > MAX_HISTORY_TURNS {
+        return Err(format!("history_turns must be between 0 and {MAX_HISTORY_TURNS}"));
     }
     if let Some(k) = &s.audit_public_key {
         check_audit_key(k)?;
@@ -237,5 +242,16 @@ mod tests {
             let e = validate(&s).unwrap_err();
             assert!(e.contains("generation_timeout_secs") && e.contains("30") && e.contains("3600"), "{bad}: {e}");
         }
+    }
+
+    #[test]
+    fn the_history_limit_is_0_to_1000() {
+        let mut s = crate::testing::empty_snapshot();
+        for ok in [0, 1, 1000] {
+            s.history_turns = ok;
+            assert_eq!(validate(&s), Ok(()), "{ok} is allowed");
+        }
+        s.history_turns = 1001;
+        assert!(validate(&s).unwrap_err().contains("history_turns"));
     }
 }

@@ -10,6 +10,9 @@
       {% call b::hint("A reply still running after this long is stopped and the text so far is kept. The default is 300 seconds (5 minutes); allowed 30 to 3600. A message that waits in the queue is timed from when it starts.") %}{% endcall %}
       <label>Generation timeout (seconds) <input id="s-gen-timeout" type="number" min="30" max="3600" step="1"></label>
       <p id="s-gen-timeout-min" class="hint"></p>
+      <h3>History sent with each question</h3>
+      {% call b::hint("A new question goes to the model with this many earlier questions and their replies. 0 sends the whole conversation (the default). A shorter history uses fewer tokens; the model does not see what is left out. A question that got no reply is never sent again.") %}{% endcall %}
+      <label>Earlier questions sent (0 = all) <input id="s-history-turns" type="number" min="0" max="1000" step="1"></label>
       <h3>Kill switch</h3>
       {% call b::hint("Switched on, the server starts no new replies and clears the messages waiting in queues. Clients see a clear message.") %}{% endcall %}
       <label class="check"><input id="s-kill-switch" type="checkbox"> Switch off all replies</label>

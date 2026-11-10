@@ -158,6 +158,7 @@ fn snapshot() -> Snapshot {
         kill_switch_aborts_running: true,
         audit_retention_days: 30,
         generation_timeout_secs: 300,
+        history_turns: 0,
         audit_public_key: None,
     }
 }

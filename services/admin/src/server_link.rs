@@ -207,6 +207,8 @@ pub fn build_snapshot(conn: &rusqlite::Connection) -> rusqlite::Result<Snapshot>
         generation_timeout_secs: setting(conn, "generation_timeout_secs")?
             .and_then(|s| s.trim().parse().ok())
             .unwrap_or(askbar_proto::DEFAULT_GENERATION_TIMEOUT_SECS),
+        // Absent or unreadable: 0, the whole conversation, as before the setting existed.
+        history_turns: setting(conn, "history_turns")?.and_then(|s| s.trim().parse().ok()).unwrap_or(0),
         // Public half only; the keyring holds nothing else.
         audit_public_key: active_audit_key(conn)?
             .map(|k| askbar_proto::AuditKey { key_id: k.key_id, public_key: k.public_key.iter().map(|b| format!("{b:02x}")).collect() }),

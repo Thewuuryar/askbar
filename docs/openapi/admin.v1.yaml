@@ -1487,6 +1487,13 @@ components:
           type: integer
           minimum: 30
           maximum: 3600
+        history_turns:
+          type: integer
+          minimum: 0
+          maximum: 1000
+          description: >-
+            How many earlier questions, each with its reply, are sent with a new one; 0 sends the
+            whole conversation (the default). Left out of a save, the stored value is kept.
         kill_switch:
           type: boolean
         kill_switch_aborts_running:
