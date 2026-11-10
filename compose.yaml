@@ -9,6 +9,10 @@
 #   server-api  the admin and the server's server API, nothing else. `internal`, so it has no route out.
 #   audit-admin  the admin and the auditor, nothing else. `internal`, so it has no route out. Each caller of the
 #               auditor gets a network like it, shared with the auditor alone (ADR 0051).
+#   gateway-admin  the admin and model-gateway, nothing else. `internal`. (gateway-server, the server's, comes when
+#               the server calls the gateway; audit-model-gateway is the gateway's and the auditor's.)
+#   outbound  model-gateway, and in the dev profile the mock LLM. The one network besides `edge` with a route out
+#               (ADR 0006, ADR 0054); nothing else joins it.
 # No network pins a subnet or an address; Docker assigns them (docs/guide.md, "Docker networks").
 # The admin joins no network but server-api. Caddy reaches it only through its unix socket (volume admin-run),
 # for /admin. One host serves the admin (/admin), the client API (/api/client) and a 404 for the rest: over HTTPS
@@ -107,6 +111,8 @@ services:
       cpa-admin: {}
       # The auditor's API (append and read), on a network of the two of them with no route out.
       audit-admin: {}
+      # The gateway's API (status, configuration, restart), on a network of the two of them with no route out.
+      gateway-admin: {}
     volumes:
       # CLIProxyAPI's config: the admin makes it (API key and control secret) before CPA starts.
       - cpa-config:/cpa-config
@@ -136,12 +142,45 @@ services:
         condition: service_completed_successfully
     networks:
       audit-admin: {}
+      audit-model-gateway: {}
     volumes:
       # audit.db: the audit store. Only the auditor mounts it. Starts empty; the server's own audit-data is not
       # copied (see the guide).
       - auditor-data:/audit
       # The hashes of the tokens it accepts, made by bootstrap. Read-only.
       - auditor-token:/auditor-token:ro
+
+  # Provider calls and provider keys (ADR 0054): /api/model-gateway/v1 on two listeners, one on gateway-server for the
+  # server and one on gateway-admin for the admin, each on the address its alias gives and never a wildcard. The
+  # keys are pushed by the admin and held in memory only, so there is no data volume: its one volume is its credential
+  # volume, read-only. It reaches the auditor on audit-model-gateway and the providers on `outbound`. No exception to
+  # the hardening above. The server does not call it yet (plan step 3.1, second half).
+  model-gateway:
+    build:
+      context: .
+      target: model-gateway
+    image: askbar-model-gateway:latest
+    container_name: askbar-model-gateway
+    restart: unless-stopped
+    <<: *hardening
+    mem_limit: 256m
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+    environment:
+      ASKBAR_GATEWAY_SERVER_ADDR: gateway-server-host:8084
+      ASKBAR_GATEWAY_ADMIN_ADDR: gateway-admin-host:8084
+      ASKBAR_AUDIT_API_URL: http://auditor:8083
+    networks:
+      gateway-server:
+        aliases: [gateway-server-host]
+      gateway-admin:
+        aliases: [gateway-admin-host]
+      audit-model-gateway: {}
+      outbound: {}
+    volumes:
+      # The hashes of the tokens it accepts and the token it sends the auditor, made by bootstrap. Read-only.
+      - model-gateway-token:/model-gateway-token:ro
 
   mock-llm:
     profiles: ["dev"]
@@ -154,6 +193,8 @@ services:
     command: ["python", "/app/mock_llm.py", "8765"]
     networks:
       - edge
+      # The gateway reaches it here: it is the "provider" in the dev profile.
+      - outbound
     volumes:
       - ./tests/e2e/mock_llm.py:/app/mock_llm.py:ro
 
@@ -234,6 +275,18 @@ networks:
   # The admin and the auditor, nothing else. No route out. No subnet is pinned.
   audit-admin:
     internal: true
+  # The auditor and model-gateway, nothing else. No route out.
+  audit-model-gateway:
+    internal: true
+  # model-gateway's listener for the admin. The admin and the gateway, nothing else. No route out.
+  gateway-admin:
+    internal: true
+  # model-gateway's listener for the server, which joins it when it calls the gateway. No route out.
+  gateway-server:
+    internal: true
+  # The providers. Not internal: the one network, besides `edge`, with a route out. Only model-gateway (and in the
+  # dev profile the mock LLM) joins it.
+  outbound:
 
 volumes:
   askbar-secrets:
