@@ -3,6 +3,7 @@
 #
 # One target per service:
 #   docker build --target server     -t askbar-server .
+#   docker build --target bootstrap  -t askbar-bootstrap .
 #   docker build --target admin      -t askbar-admin  .
 #   docker build --target caddy      -t askbar-caddy  .
 #   docker build --target cpa        -t askbar-cpa    .
@@ -24,15 +25,25 @@ COPY crates/askbar-audit/Cargo.toml crates/askbar-audit/
 COPY services/server/Cargo.toml services/server/
 COPY services/admin/Cargo.toml services/admin/
 COPY services/cpa-supervisor/Cargo.toml services/cpa-supervisor/
+COPY services/bootstrap/Cargo.toml services/bootstrap/
 RUN for d in crates/* services/*; do mkdir -p "$d/src" && touch "$d/src/lib.rs" && echo 'fn main() {}' > "$d/src/main.rs"; done \
- && cargo build --release --locked -p askbar-server -p askbar-admin -p askbar-cpa-supervisor \
+ && cargo build --release --locked -p askbar-server -p askbar-admin -p askbar-cpa-supervisor -p askbar-bootstrap \
  && rm -rf crates/*/src services/*/src target/release/.fingerprint/askbar-*
 # The real sources. Removing the members' fingerprints above makes cargo rebuild them, whatever the
 # copied files' timestamps.
 COPY crates crates
 COPY services services
 # The desktop client is its own workspace (clients/desktop) and is not part of any image.
-RUN cargo build --release --locked -p askbar-server -p askbar-admin -p askbar-cpa-supervisor
+RUN cargo build --release --locked -p askbar-server -p askbar-admin -p askbar-cpa-supervisor -p askbar-bootstrap
+
+# --------------------------------------------------------------- bootstrap
+# Creates the per-link tokens and exits (ADR 0049). Runs as root with CHOWN as its only capability, no
+# network, and mounts the credential volumes only. No user is made: it must own a directory it writes
+# to, then give it to the service that reads it.
+FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc AS bootstrap
+RUN mkdir /server-token /admin-token
+COPY --from=build /src/target/release/askbar-bootstrap /usr/local/bin/askbar-bootstrap
+ENTRYPOINT ["askbar-bootstrap"]
 
 # ------------------------------------------------------------------ admin
 # The admin service: the admin site and its own database. No TCP port: it listens on a unix

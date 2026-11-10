@@ -25,6 +25,28 @@ x-hardening: &hardening
     - /tmp
 
 services:
+  # Creates the per-link tokens and exits (ADR 0049). Root with CHOWN and nothing else (ADR 0032 rule 6): it
+  # takes a credential volume over, writes the files, and gives each to the service that reads it. No
+  # network. Rotate from the host: docker compose run --rm bootstrap rotate [link].
+  # Profile "bootstrap" is a stopgap for one commit: the services do not read its files yet, and it would
+  # take server-token away from the admin that still writes into it. The next commit removes it.
+  bootstrap:
+    profiles: ["bootstrap"]
+    build:
+      context: .
+      target: bootstrap
+    image: askbar-bootstrap:latest
+    container_name: askbar-bootstrap
+    restart: "no"
+    <<: *hardening
+    user: "0"
+    cap_add: [CHOWN]
+    network_mode: none
+    mem_limit: 64m
+    volumes:
+      - server-token:/server-token
+      - admin-token:/admin-token
+
   server:
     build:
       context: .
@@ -177,6 +199,7 @@ volumes:
   askbar-secrets:
   audit-data:
   server-token:
+  admin-token:
   # Held the retired controller's token hash (ADR 0005). Nothing mounts it now; kept declared until 1.0
   # so no install loses a volume by surprise (plan-v1.md: data volumes are never renamed or dropped pre-1.0).
   control-token:
