@@ -12,6 +12,8 @@
 //!   public key and goes to the auditor as a payload; the gateway holds no private key.
 
 pub mod llm;
+pub mod models;
+pub mod provider_test;
 pub mod router;
 pub mod seal;
 
@@ -85,6 +87,15 @@ impl Gateway {
         self.config.read().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
+    /// The provider with this id, as configured (key included), if there is one.
+    pub fn provider(&self, id: &str) -> Option<Provider> {
+        self.applied()?.providers.get(id).cloned()
+    }
+
+    pub fn http(&self) -> &llm::HttpClient {
+        &self.http
+    }
+
     pub fn config_version(&self) -> Option<u64> {
         self.applied().map(|a| a.version)
     }
@@ -138,7 +149,8 @@ fn finish(status: &str) -> SpanFinish {
 type Routes = &'static [(&'static str, &'static str)];
 
 const SERVER_ROUTES: Routes = &[("POST", "/chat")];
-const ADMIN_ROUTES: Routes = &[("GET", "/status"), ("PUT", "/config"), ("POST", "/restart")];
+const ADMIN_ROUTES: Routes =
+    &[("GET", "/status"), ("PUT", "/config"), ("POST", "/restart"), ("POST", "/models"), ("POST", "/providers/*/test")];
 
 /// The two links: name as `bootstrap` names it (the file `accept/<name>.sha256`), the caller, and the routes.
 pub const LINKS: &[(&str, &str, Routes)] =
@@ -206,6 +218,8 @@ pub fn admin_router(gw: Arc<Gateway>, links: Links) -> Router {
     let protected = Router::new()
         .route(&full("/status"), get(status))
         .route(&full("/config"), put(put_config))
+        .route(&full("/models"), post(list_models))
+        .route(&full("/providers/{id}/test"), post(test_provider))
         .route(&full("/restart"), post(askbar_service::restart::handler).with_state(restart))
         .layer(axum::middleware::from_fn_with_state(links, askbar_service::links::require));
     shell(gw, protected)
@@ -228,6 +242,21 @@ fn bad(detail: impl Into<String>) -> Failure {
 
 async fn status(State(gw): State<Arc<Gateway>>) -> Json<serde_json::Value> {
     Json(askbar_service::status::body(gw.config_version(), &gw.boot_id))
+}
+
+// ------------------------------------------------------------------ models and the provider test
+
+/// `POST /models`: the models a provider offers. Always `200`; `ok: false` and a sentence when it could not say.
+async fn list_models(State(gw): State<Arc<Gateway>>, Json(req): Json<models::ModelsRequest>) -> Json<models::ModelsResult> {
+    Json(models::run(&gw, req).await)
+}
+
+/// `POST /providers/{id}/test`: one short message through the provider, and how it went.
+async fn test_provider(
+    State(gw): State<Arc<Gateway>>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<Json<provider_test::TestResult>, Failure> {
+    provider_test::run(&gw, &id).await.map(Json).ok_or_else(|| ApiError::new(ErrorCode::NotFound, "No such provider."))
 }
 
 // ------------------------------------------------------------------ PUT /config

@@ -15,7 +15,8 @@ info:
     token and serves only its own routes:
 
     - the server's listener: `POST /chat`;
-    - the admin's listener: `GET /status`, `PUT /config`, `POST /restart`.
+    - the admin's listener: `GET /status`, `PUT /config`, `POST /restart`, `POST /models` and
+      `POST /providers/{id}/test` (they moved here from the server, which has no keys and no route out).
 
     **Keys.** The admin pushes provider keys in `PUT /config`. The gateway keeps them in memory only. No route
     returns one, and no error repeats one. A restart is how a key leaves memory; the admin pushes again when it
@@ -127,6 +128,55 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/Problem'
+  /api/model-gateway/v1/models:
+    post:
+      operationId: listModels
+      summary: The models a provider offers. The admin's listener.
+      description: >-
+        Asks the provider's own model list, from here, where the keys and the route out are. Always `200`: when it
+        could not say, `ok` is false and `message` says why in a sentence that never holds the key. A saved
+        provider's key is used only when the request names it and gives no key, and only for the address saved with
+        it, so the key can never be sent somewhere the saved provider does not point.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ModelsRequest'
+      responses:
+        '200':
+          description: The list, or why there is none.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModelsResult'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/model-gateway/v1/providers/{id}/test:
+    post:
+      operationId: testProvider
+      summary: One short message through a saved provider, and how it went. The admin's listener.
+      description: >-
+        Sends one short message through the provider as configured (30 seconds at most). Always `200` for a provider
+        that exists; `ok` is false with a sentence that never holds the key when it failed.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The provider id.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: How it went.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TestResult'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
   /api/model-gateway/v1/chat:
     post:
       operationId: chat
@@ -238,6 +288,51 @@ components:
           - server_unavailable
           - conflict
           - internal
+    ModelsRequest:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [openai, anthropic]
+        base_url:
+          type: string
+          description: Empty for the provider's own address.
+        api_key:
+          type: string
+          writeOnly: true
+          description: Used once for this request; never stored or logged.
+        provider_id:
+          type: string
+          description: A saved provider whose key may be used.
+    ModelsResult:
+      type: object
+      required: [ok, message, models]
+      properties:
+        ok:
+          type: boolean
+        message:
+          type: string
+          description: On failure, why. Never holds the key.
+        models:
+          type: array
+          items:
+            type: object
+            required: [id]
+            properties:
+              id:
+                type: string
+              label:
+                type: string
+    TestResult:
+      type: object
+      required: [ok, message]
+      properties:
+        ok:
+          type: boolean
+        message:
+          type: string
+          description: The start of the reply on success, or why not. Never holds the key.
     GatewayProvider:
       type: object
       description: One provider. `api_key` is write-only, and no route returns it.
