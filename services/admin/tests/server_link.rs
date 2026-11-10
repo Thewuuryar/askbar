@@ -309,3 +309,108 @@ async fn the_status_check_asks_for_a_push_when_the_server_is_unconfigured_or_out
     let dead = ServerLink::new(&format!("http://{}", free_port().await), token);
     assert_eq!(dead.poll().await, None);
 }
+
+// ------------------------------------------------------------------ a token the server stops accepting (ADR 0024)
+
+/// What the tests log, collected. `tracing`'s default subscriber is per thread here: the tests below run on
+/// one thread, so the guard sees everything the link logs.
+#[derive(Clone, Default)]
+struct Captured(Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for Captured {
+    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(b);
+        Ok(b.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Captured {
+    fn text(&self) -> String {
+        String::from_utf8_lossy(&self.0.lock().unwrap()).into_owned()
+    }
+}
+
+fn capture_logs() -> (Captured, tracing::subscriber::DefaultGuard) {
+    let log = Captured::default();
+    let writer = log.clone();
+    let sub = tracing_subscriber::fmt().with_writer(move || writer.clone()).with_ansi(false).finish();
+    (log, tracing::subscriber::set_default(sub))
+}
+
+/// Puts `contents` in the server's hash file, as a rotation on the server's side would. Bootstrap's
+/// directories are read-only, so this opens the directory first.
+fn replace_hash(hash_file: &std::path::Path, contents: &str) {
+    std::fs::set_permissions(hash_file.parent().unwrap(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let _ = std::fs::remove_file(hash_file);
+    std::fs::write(hash_file, contents).unwrap();
+}
+
+#[tokio::test]
+async fn a_token_the_server_stops_accepting_is_flagged_and_logged_once_and_clears_on_the_next_success() {
+    let (log, _guard) = capture_logs();
+    let d = Dirs::new("rejected");
+    let (token, hash_file) = d.install();
+    let good_hash = std::fs::read_to_string(&hash_file).unwrap();
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = l.local_addr().unwrap();
+    serve_on(l, server_state(), hash_file.clone()).await;
+    let link = ServerLink::new(&format!("http://{addr}"), token.clone());
+
+    assert_eq!(link.poll().await, Some(true));
+    assert!(!link.token_rejected(), "the token works");
+
+    // The server's side is rotated: it no longer accepts the token it accepted a moment ago.
+    replace_hash(&hash_file, &server_link::sha256_hex("mgt_some-other-token"));
+    for _ in 0..4 {
+        assert_eq!(link.poll().await, None);
+    }
+    assert!(link.token_rejected(), "the link is flagged");
+    let snap = server_link::build_snapshot(AdminDb::open_in_memory().unwrap().conn()).unwrap();
+    assert!(matches!(link.push(&snap).await, Err(server_link::PushError::Refused { status: 401, .. })));
+    assert!(link.token_rejected());
+
+    let logged = log.text();
+    assert_eq!(logged.matches("the server rejected this admin's token").count(), 1, "one line for the episode: {logged}");
+    assert!(logged.contains("admin-server") && logged.contains("it accepted it before"), "{logged}");
+    assert!(!logged.contains(&token) && !logged.contains(token.trim_start_matches("mgt_")), "never the token");
+
+    // The server takes the token again: the flag goes at the next answer.
+    replace_hash(&hash_file, &good_hash);
+    assert!(link.poll().await.is_some());
+    assert!(!link.token_rejected(), "cleared by the next success");
+
+    // A second episode is a second line.
+    replace_hash(&hash_file, &server_link::sha256_hex("mgt_another"));
+    assert_eq!(link.poll().await, None);
+    assert!(link.token_rejected());
+    assert_eq!(log.text().matches("the server rejected this admin's token").count(), 2);
+}
+
+#[tokio::test]
+async fn a_token_the_server_never_accepted_is_flagged_too_and_says_so() {
+    let (log, _guard) = capture_logs();
+    let d = Dirs::new("never");
+    let (_, hash_file) = d.install();
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = l.local_addr().unwrap();
+    serve_on(l, server_state(), hash_file).await;
+    let link = ServerLink::new(&format!("http://{addr}"), "mgt_not-the-token".into());
+    assert_eq!(link.poll().await, None);
+    assert!(link.token_rejected());
+    let logged = log.text();
+    assert!(logged.contains("admin-server") && logged.contains("has not accepted it since this admin started"), "{logged}");
+    assert!(!logged.contains("mgt_not-the-token"));
+}
+
+#[tokio::test]
+async fn an_unreachable_server_is_not_a_rejected_token() {
+    let d = Dirs::new("not-rejected");
+    let (token, _) = d.install();
+    let dead = free_port().await;
+    let link = ServerLink::new(&format!("http://{dead}"), token);
+    assert_eq!(link.poll().await, None);
+    assert!(!link.token_rejected(), "nothing answered, so nothing was rejected");
+}

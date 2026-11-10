@@ -53,6 +53,14 @@ pub fn sha256_hex(s: &str) -> String {
     Sha256::digest(s.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// The one log line when the server stops accepting the token (ADR 0024). Names the link, never a token.
+fn rejection_line(previously_accepted: bool) -> String {
+    format!(
+        "the server rejected this admin's token on the link {LINK} ({}); rotate it with `docker compose run --rm bootstrap rotate {LINK}`, then restart the server and the admin",
+        if previously_accepted { "it accepted it before" } else { "it has not accepted it since this admin started" }
+    )
+}
+
 fn io_err(path: &Path, e: std::io::Error) -> std::io::Error {
     std::io::Error::new(e.kind(), format!("{}: {e}", path.display()))
 }
@@ -259,6 +267,10 @@ pub struct ServerLink {
     wake: Notify,
     /// The server process the last status came from (its boot ID), to see a restart.
     last_boot: StdMutex<Option<String>>,
+    /// The server has accepted this admin's token at least once since this process started.
+    accepted: AtomicBool,
+    /// The server's last answer to a call was `401`: it does not accept this token (ADR 0024).
+    rejected: AtomicBool,
 }
 
 impl ServerLink {
@@ -278,7 +290,29 @@ impl ServerLink {
             dirty: AtomicBool::new(true),
             wake: Notify::new(),
             last_boot: StdMutex::new(None),
+            accepted: AtomicBool::new(false),
+            rejected: AtomicBool::new(false),
         })
+    }
+
+    /// True while the server answers `401` to this admin's token. Cleared by the next answer that is not.
+    pub fn token_rejected(&self) -> bool {
+        self.rejected.load(Ordering::Relaxed)
+    }
+
+    /// What the server's answer to a call says about the token (ADR 0024). `401` is the only answer that
+    /// means the token was not accepted: any other status, an error included, came after the check. The
+    /// first `401` of an episode logs one line naming the link, never the token; the next answer that is
+    /// not a `401` ends the episode.
+    fn saw(&self, status: u16) {
+        if status != 401 {
+            self.accepted.store(true, Ordering::Relaxed);
+            self.rejected.store(false, Ordering::Relaxed);
+            return;
+        }
+        if !self.rejected.swap(true, Ordering::Relaxed) {
+            tracing::warn!("{}", rejection_line(self.accepted.load(Ordering::Relaxed)));
+        }
     }
 
     /// True if the last contact with the server worked.
@@ -337,6 +371,7 @@ impl ServerLink {
                 .await
                 .map_err(|e| PushError::Unreachable(e.to_string()))?;
             let status = resp.status();
+            self.saw(status.as_u16());
             let body = resp.text().await.unwrap_or_default();
             if !status.is_success() {
                 return Err(PushError::Refused { status: status.as_u16(), body });
@@ -366,6 +401,7 @@ impl ServerLink {
         match req.send().await {
             Ok(resp) => {
                 let status = resp.status().as_u16();
+                self.saw(status);
                 let bytes = resp.bytes().await.map_err(|e| PushError::Unreachable(e.to_string()))?;
                 self.online.store(true, Ordering::Relaxed);
                 Ok((status, bytes.to_vec()))
@@ -424,6 +460,7 @@ impl ServerLink {
                 .send()
                 .await
                 .ok()?;
+            self.saw(r.status().as_u16());
             if !r.status().is_success() {
                 return None;
             }

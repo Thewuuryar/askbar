@@ -104,16 +104,16 @@ pub(crate) async fn mutate<T>(
 
 // ------------------------------------------------------------------- status
 
-/// For the "server offline" banner.
+/// For the "server offline" and "token rejected" banners.
 pub async fn status(State(state): St) -> Json<serde_json::Value> {
-    let (online, pending, error) = match &state.server {
+    let (online, pending, error, rejected) = match &state.server {
         Some(l) => {
             l.check().await;
-            (l.server_online(), l.pending(), l.last_error())
+            (l.server_online(), l.pending(), l.last_error(), l.token_rejected())
         }
-        None => (false, false, None),
+        None => (false, false, None, false),
     };
-    Json(serde_json::json!({ "server_online": online, "pending": pending, "error": error }))
+    Json(serde_json::json!({ "server_online": online, "pending": pending, "error": error, "token_rejected": rejected }))
 }
 
 // ---------------------------------------------------------------- providers

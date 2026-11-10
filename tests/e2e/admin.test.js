@@ -1142,6 +1142,21 @@ async function waitForPort(port) {
     await page.click('#provider-form button[type=submit]');
     await page.waitForSelector('.card[data-name="after-return"]');
   });
+  await step('a token the server stops accepting gets its own banner with the command, and it clears when the server accepts it again', async () => {
+    const good = fs.readFileSync(hashFile, 'utf8');
+    // The server's side is rotated: its hash file now holds the hash of some other token (read per request).
+    fs.chmodSync(path.dirname(hashFile), 0o700);
+    fs.rmSync(hashFile);
+    fs.writeFileSync(hashFile, 'f'.repeat(64) + '\n');
+    await page.waitForSelector('#rejected:not([hidden])', { timeout: 20000 });
+    const banner = await page.innerText('#rejected');
+    assert.match(banner, /rejected this admin's token/);
+    assert.match(banner, /bootstrap rotate admin-server/);
+    assert.match(banner, /docker compose restart server admin/);
+    assert.equal(await page.isVisible('#offline'), false, 'one message, the useful one');
+    fs.writeFileSync(hashFile, good);
+    await page.waitForSelector('#rejected', { state: 'hidden', timeout: 20000 });
+  });
   await step('no JavaScript errors', async () => { assert.deepEqual(errors, []); });
 
   await browser.close();
