@@ -1,6 +1,6 @@
 # 0053. Amending any ADR in place
 
-Status: Proposed
+Status: Accepted
 Date: 2026-11-10
 Source: owner request, 2026-11-10
 
