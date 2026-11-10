@@ -12,6 +12,10 @@ pub const ADMIN_V1: &str = "/api/admin/v1";
 pub const CLIENT_V1: &str = "/api/client/v1";
 /// What the admin calls on the server. Served only on the internal listener; Caddy answers 404.
 pub const SERVER_V1: &str = "/api/server/v1";
+/// What services and the admin call on the auditor. Served only on the `audit-*` networks.
+pub const AUDIT_V1: &str = "/api/audit/v1";
+/// Every version of the audit API.
+pub const AUDIT: &str = "/api/audit";
 /// Every version of the server API, as Caddy blocks it.
 pub const SERVER: &str = "/api/server";
 /// Every version of the client API.
@@ -31,13 +35,14 @@ mod tests {
 
     #[test]
     fn every_prefix_is_audience_first_then_the_version_and_has_no_trailing_slash() {
-        for p in [ADMIN, ADMIN_API, ADMIN_V1, CLIENT_V1, SERVER_V1, SERVER, CLIENT, TOMBSTONE_V1] {
+        for p in [ADMIN, ADMIN_API, ADMIN_V1, CLIENT_V1, SERVER_V1, SERVER, CLIENT, TOMBSTONE_V1, AUDIT_V1, AUDIT] {
             assert!(p.starts_with('/') && !p.ends_with('/'), "{p}");
         }
         // The versioned prefixes sit under their audience prefix, with the version after it.
         assert!(CLIENT_V1.starts_with(&format!("{CLIENT}/v")));
         assert!(SERVER_V1.starts_with(&format!("{SERVER}/v")));
         assert!(ADMIN_V1.starts_with(&format!("{ADMIN_API}/v")));
+        assert!(AUDIT_V1.starts_with(&format!("{AUDIT}/v")));
         assert!(!ADMIN_API.starts_with(ADMIN), "the admin API is not under the site's path");
     }
 
@@ -47,6 +52,10 @@ mod tests {
         for other in [CLIENT, SERVER] {
             assert!(!ADMIN_V1.starts_with(other) && !other.starts_with(ADMIN_API));
         }
+        // The audit API is internal like the server API, and never under a public prefix.
+        for other in [CLIENT, ADMIN_API, SERVER] {
+            assert!(!AUDIT_V1.starts_with(other) && !other.starts_with(AUDIT));
+        }
     }
 
     #[test]
@@ -54,5 +63,6 @@ mod tests {
         assert_eq!(join(CLIENT_V1, "/chat"), "/api/client/v1/chat");
         assert_eq!(join(SERVER_V1, "/snapshot"), "/api/server/v1/snapshot");
         assert_eq!(join(ADMIN_V1, "/providers"), "/api/admin/v1/providers");
+        assert_eq!(join(AUDIT_V1, "/spans"), "/api/audit/v1/spans");
     }
 }
