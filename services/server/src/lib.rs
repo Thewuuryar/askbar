@@ -9,7 +9,7 @@ pub mod cost;
 pub mod db;
 pub mod error;
 pub mod generation;
-pub mod ids;
+pub use askbar_service::ids;
 pub mod llm;
 pub mod models;
 pub mod provider_test;
