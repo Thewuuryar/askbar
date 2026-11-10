@@ -56,4 +56,4 @@ This set records the decisions from the original Askbar architecture plan (kept 
 | [0050](0050-bootstrap-chown-exception.md) | A `CHOWN` exception for `bootstrap` | Accepted | Owner review of the open questions in 0049 |
 | [0051](0051-auditor.md) | The `auditor` component | Accepted | Plan steps 2.4 to 2.9; owner rule for component ADRs |
 | [0052](0052-askbar-audit-crate.md) | The `askbar-audit` crate | Accepted | Plan step 2.3; owner rule for component ADRs |
-| [0053](0053-amending-adrs-in-place.md) | Amending any ADR in place | Proposed | Owner request, 2026-11-10 |
+| [0053](0053-amending-adrs-in-place.md) | Amending any ADR in place | Accepted | Owner request, 2026-11-10 |
