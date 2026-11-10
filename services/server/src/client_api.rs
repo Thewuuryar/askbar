@@ -114,6 +114,7 @@ pub async fn conversation(MemberSpace(space): MemberSpace, Path((_, id)): Path<(
             content: m.content,
             created_at: m.created_at,
             provider: m.by.map(|b| askbar_proto::ReplyProvider { id: b.provider_id, name: b.provider_name, model: b.model }),
+            failed: m.failed.map(|f| askbar_proto::MessageFailure { code: f.code, message: f.message }),
         })
         .collect();
     let pending = db.list_active_generations().map_err(internal)?.into_iter().filter(|g| g.conversation_id == id).map(pending_of).collect();

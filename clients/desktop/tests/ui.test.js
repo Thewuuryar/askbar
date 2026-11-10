@@ -332,6 +332,44 @@ async function waitIdle(page) {
     assert.equal((await calls(page, 'open_config')).length, 1);
   });
 
+  await step('a question that got no reply is tinted, and its error line offers Edit and Try again', async () => {
+    const q = page.locator('.msg.user');
+    assert.equal(await q.count(), 1);
+    assert.match(await q.getAttribute('class'), /\bfailed\b/);
+    // The error line comes right after the question it belongs to.
+    assert.equal(await q.evaluate((n) => n.nextElementSibling.matches('.msg.error')), true);
+    const tint = await q.locator('.body').evaluate((n) => getComputedStyle(n).backgroundColor);
+    assert.notEqual(tint, 'rgba(0, 0, 0, 0)', 'the question has a tint');
+
+    await page.locator('.msg.error .edit-question').click();
+    assert.equal(await page.inputValue('#input'), 'please fail', 'Edit puts the text back in the box');
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'input');
+    await page.fill('#input', '');
+
+    const before = (await calls(page, 'ask')).length;
+    await page.locator('.msg.error .retry-reply').click();
+    await waitIdle(page);
+    const asks = await calls(page, 'ask');
+    assert.equal(asks.length, before + 1);
+    assert.equal(asks[asks.length - 1].text, 'please fail');
+    assert.deepEqual(await page.locator('.msg.user .body').allInnerTexts(), ['please fail', 'please fail'], 'asked again below');
+    assert.equal(await page.locator('.msg.user.failed').count(), 2, 'the first stays marked: it did fail');
+    assert.equal(await page.locator('.msg.error').count(), 2);
+  });
+
+  await step('after reopening, a failed question shows the same tint, line and buttons', async () => {
+    await page.click('#history-toggle');
+    await page.locator('.conv .open', { hasText: 'please fail' }).click();
+    assert.equal(await page.locator('.msg.user.failed').count(), 2);
+    const lines = page.locator('.msg.error');
+    assert.deepEqual(await lines.locator('.body').allInnerTexts(), ['The provider could not answer.', 'The provider could not answer.'],
+      "a reopened chat shows the server's sentence");
+    assert.equal(await lines.first().locator('.retry-reply').count(), 1);
+    assert.equal(await lines.first().locator('.edit-question').count(), 1);
+    assert.equal(await page.locator('.msg.user').first().evaluate((n) => n.nextElementSibling.matches('.msg.error')), true);
+    await page.click('#history-toggle');
+  });
+
   await step('a timeout error after two deltas keeps the text shown and adds the message', async () => {
     await page.keyboard.press('Control+n');
     await ask(page, 'this will timeout');
@@ -343,7 +381,13 @@ async function waitIdle(page) {
     assert.equal(await page.isVisible('#input'), true);
   });
 
-  await step('Try again after a timeout asks the same question as a new reply and keeps the partial one', async () => {
+  await step('a question cut off by a timeout is not tinted: its line follows the partial reply', async () => {
+    assert.equal(await page.locator('.msg.user.failed').count(), 0, 'part of a reply came');
+    assert.equal(await page.locator('.msg.assistant').evaluate((n) => n.nextElementSibling.matches('.msg.error')), true);
+    assert.equal(await page.locator('.msg.error .edit-question').count(), 1);
+  });
+
+  await step('Try again after a timeout asks the same question again and keeps the partial reply', async () => {
     const before = (await calls(page, 'ask')).length;
     await page.locator('.msg.error .retry-reply').click();
     await waitIdle(page);
@@ -352,6 +396,18 @@ async function waitIdle(page) {
     assert.equal(asks[asks.length - 1].text, 'this will timeout');
     assert.equal(await page.locator('.msg.assistant').count(), 2, 'the partial reply stays and a new one begins');
     assert.equal(await page.locator('.msg.assistant .body').first().innerText(), 'Partial answer');
+    // The question is shown again, as the server stores it and a reopened chat shows it.
+    assert.deepEqual(await page.locator('.msg.user .body').allInnerTexts(), ['this will timeout', 'this will timeout']);
+  });
+
+  await step('after reopening, the timed-out question keeps its line after the partial reply', async () => {
+    await page.click('#history-toggle');
+    await page.locator('.conv .open', { hasText: 'this will timeout' }).click();
+    assert.equal(await page.locator('.msg.user.failed').count(), 0);
+    const first = page.locator('.msg.assistant').first();
+    assert.equal(await first.evaluate((n) => n.nextElementSibling.matches('.msg.error')), true);
+    assert.equal(await page.locator('.msg.error .body').first().innerText(), 'Stopped after 5 minutes');
+    await page.click('#history-toggle');
   });
 
   await step('a provider event never adds an "Answered by" line (there is no fallback)', async () => {

@@ -116,12 +116,17 @@ Paths below are relative to `/api/client/v1/spaces/{space_id}`.
 - `GET /conversations` returns `[{"id", "title", "updated_at", "message_count"}]`,
   newest first, every conversation in the space.
 - `GET /conversations/{id}` returns the same fields plus
-  `"messages": [{"id", "role": "user"|"assistant", "content", "created_at", "provider"}]`, oldest first,
+  `"messages": [{"id", "role": "user"|"assistant", "content", "created_at", "provider", "failed"}]`, oldest first,
   and, only while something is unfinished, `"pending"`: the replies still running in this
   conversation and the messages waiting behind them (see *Generations* below).
   `"provider"` is on replies only: `{"id", "name", "model"}`, the provider and model that wrote it, copied
   when the reply was stored (renaming or deleting the provider later does not change it). It is absent on
   questions and on replies stored before servers recorded it.
+  `"failed"` is on questions only: `{"code", "message"}`, why the question's turn failed (it got no reply,
+  or only part of one). `code` is the stream's `error` code (`timed_out`, `interrupted`, `kill_switch`,
+  `provider_error`, `internal`); `message` is a sentence for a person, always the server's own words,
+  never a provider's error text. It is absent when the turn did not fail, after a Stop, and on questions
+  stored before servers recorded it.
 - `DELETE /conversations/{id}` returns `204`, or `404` if there is no such conversation in the space.
   A reply still running in it is stopped and the messages waiting in it are dropped first.
 - `GET /search?q=<words>` returns up to 20

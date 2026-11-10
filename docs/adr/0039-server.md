@@ -47,3 +47,4 @@ Not recorded: the server predates this record.
 
 - 2026-11-08: the server API binds the address of the alias `server-api-host` instead of the fixed `172.30.0.2`; no subnet or address is pinned (PR #32, [0051](0051-auditor.md)).
 - 2026-11-08: each reply in a space file keeps a copy of the provider and model that wrote it (space migration 2; plan step 1.13).
+- 2026-11-10: a question whose turn failed keeps why, in the server's own words, never a provider's error text (space migration 3; plan step 1.13).

@@ -323,24 +323,31 @@
     return msg;
   }
 
-  function addError(message, retry) {
+  // An error line in the thread. With `question`, it belongs to that failed question and offers
+  // Edit (its text back in the box) and Try again (asks it again, below).
+  function addError(message, question) {
     const node = document.createElement('div');
     node.className = 'msg error';
     const body = document.createElement('div');
     body.className = 'body';
     body.textContent = message;
     node.appendChild(body);
-    if (retry) {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'text-btn retry-reply';
-      btn.textContent = 'Try again';
-      btn.addEventListener('click', () => {
-        if (state.streaming) return;
-        node.remove();
-        retry();
+    if (question !== undefined) {
+      const mk = (cls, label, aria, fn) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'text-btn ' + cls;
+        btn.textContent = label;
+        btn.setAttribute('aria-label', aria);
+        btn.addEventListener('click', fn);
+        node.appendChild(btn);
+      };
+      mk('retry-reply', 'Try again', 'Ask this question again', () => { if (!state.streaming) askText(question); });
+      mk('edit-question', 'Edit', 'Edit this question in the box', () => {
+        el.input.value = question;
+        autosize();
+        el.input.focus();
       });
-      node.appendChild(btn);
     }
     if (/config\.yaml|API key/i.test(message)) {
       const btn = document.createElement('button');
@@ -355,6 +362,15 @@
     el.foot.hidden = false;
     el.card.dataset.thread = 'open';
     layout();
+    return node;
+  }
+
+  // A question whose turn failed stays in the thread as it was asked: tinted when no reply came, and
+  // followed by its error line (after the part of a reply that was kept, if any).
+  function markFailed(userMsg, message, replyMsg) {
+    if (!replyMsg) userMsg.node.classList.add('failed');
+    const line = addError(message, userMsg.content);
+    (replyMsg || userMsg).node.after(line);
   }
 
   function clearThread() {
@@ -410,14 +426,17 @@
           case 'cancelled':
             finish();
             break;
-          case 'error':
-            if (!reply.content.trim()) removeMessage(reply);
-            // A reply that ran out of time keeps what it wrote; trying again asks the same question
-            // as a new reply, below this one.
-            addError(m.message, m.kind === 'timed_out' && userMsg ? () => retryAsked(userMsg.content) : undefined);
+          case 'error': {
+            // A reply that was cut short keeps what it wrote. A question the server took is marked
+            // failed, as a reopened conversation will show it; one it never took moves to "Not sent".
+            const partial = reply.content.trim() !== '';
+            if (!partial) removeMessage(reply);
+            if (accepted && userMsg) markFailed(userMsg, m.message, partial ? reply : null);
+            else addError(m.message);
             checkStatus();
             finish();
             break;
+          }
         }
       };
 
@@ -442,20 +461,18 @@
     syncPending(); // messages that were waiting behind this reply may be running now
   }
 
-  async function retryAsked(text) {
-    state.pinned = true;
-    const reply = addMessage('assistant', '', { streaming: true });
-    await streamInto(reply, (channel) => invoke('ask', { conversationId: state.convId, text, onEvent: channel }), null);
-  }
-
   async function send() {
     const text = el.input.value.trim();
     if (!text || state.streaming) return;
     el.input.value = '';
     autosize();
+    await askText(text);
+  }
+
+  // Asks `text` in the open conversation: the question, then its reply as it streams.
+  async function askText(text) {
     hideNotice();
     state.pinned = true;
-
     const userMsg = addMessage('user', text);
     const reply = addMessage('assistant', '', { streaming: true });
     await streamInto(reply, (channel) => invoke('ask', { conversationId: state.convId, text, onEvent: channel }), userMsg);
@@ -702,7 +719,12 @@
     hideNotice();
     clearThread();
     state.convId = id;
-    for (const r of rows) addMessage(r.role, r.content, { createdAt: r.created_at, provider: r.provider });
+    const msgs = rows.map((r) => addMessage(r.role, r.content, { createdAt: r.created_at, provider: r.provider }));
+    rows.forEach((r, i) => {
+      if (r.role !== 'user' || !r.failed) return;
+      const next = rows[i + 1] && rows[i + 1].role === 'assistant' ? msgs[i + 1] : null;
+      markFailed(msgs[i], r.failed.message, next);
+    });
     state.pinned = true;
     el.thread.scrollTop = el.thread.scrollHeight;
     renderHistory();

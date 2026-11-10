@@ -102,6 +102,14 @@ impl T {
         let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).unwrap().map(Result::unwrap).collect();
         rows
     }
+    /// (content, failed_code, failed_message) of every question, oldest first.
+    fn questions(&self) -> Vec<(String, Option<String>, Option<String>)> {
+        let db = self.space.lock();
+        let mut stmt =
+            db.conn().prepare("SELECT content, failed_code, failed_message FROM messages WHERE role = 'user' ORDER BY id").unwrap();
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap().map(Result::unwrap).collect();
+        rows
+    }
     fn messages(&self) -> Vec<(String, String)> {
         let db = self.space.lock();
         let mut stmt = db.conn().prepare("SELECT role, content FROM messages ORDER BY id").unwrap();
@@ -184,6 +192,7 @@ async fn complete_reply_is_streamed_and_saved_in_full() {
         .unwrap();
     let msgs = detail["messages"].as_array().unwrap();
     assert!(msgs[0].get("provider").is_none(), "a question has no provider: {}", msgs[0]);
+    assert!(msgs.iter().all(|m| m.get("failed").is_none()), "nothing failed: {msgs:?}");
     assert_eq!(msgs[1]["provider"], serde_json::json!({ "id": "p1", "name": "mock", "model": "m" }));
     assert!(msgs.iter().all(|m| m["created_at"].as_i64().unwrap() > 0), "every message has its time");
 
@@ -254,6 +263,35 @@ async fn provider_failure_becomes_an_error_event_and_keeps_the_question() {
     assert!(message.contains("401"));
     assert!(!message.contains("sk-test"));
     assert_eq!(t.messages(), [("user".to_string(), "please fail".to_string())]);
+}
+
+/// The question keeps why it failed, in the server's own words: the provider's error text (here a
+/// 401 and its body) stays out of the conversation (plan step 1.13; AGENTS.md).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_provider_failure_marks_the_question_with_our_sentence_not_the_providers() {
+    let t = start().await;
+    let http = client();
+    let events = parse_events(&t.chat(&http, None, "p1", "please fail").await.text().await.unwrap().replace("\r\n", "\n"));
+    let ChatEvent::Meta { conversation_id, .. } = &events[0].1 else { panic!("first event must be meta") };
+    assert_eq!(
+        t.questions(),
+        [("please fail".to_string(), Some("provider_error".to_string()), Some("The provider could not answer.".to_string()))]
+    );
+    let body = http
+        .get(format!("http://{}{}", t.addr, t.sp(&format!("/conversations/{conversation_id}"))))
+        .bearer_auth(&t.token)
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    let detail: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(
+        detail["messages"][0]["failed"],
+        serde_json::json!({ "code": "provider_error", "message": "The provider could not answer." })
+    );
+    assert!(!body.contains("401"), "the provider's words are not in the conversation: {body}");
 }
 
 /// A question that got no reply is not sent again with the next one: a question the provider refuses
@@ -646,6 +684,7 @@ async fn cancel_stops_the_upstream_keeps_the_partial_text_and_is_repeatable() {
     assert!(rest.contains("event: done"), "got {rest:?}");
     assert_eq!(t.cancel_with(&t.token, &id).await.status(), 204);
     assert_eq!(t.generations()[0].0, "cancelled", "a repeat changes nothing");
+    assert_eq!(t.questions()[0].1, None, "a Stop by the person is not a failure");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -976,6 +1015,8 @@ async fn deleting_a_conversation_mid_reply_stops_it_and_starts_nothing_queued() 
     assert!(rest.contains("event: done"));
 }
 
+const INTERRUPTED_WORDS: &str = "The server restarted before the reply finished.";
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn shutdown_saves_the_partial_reply_marks_it_interrupted_and_writes_it_once() {
     let t = start().await;
@@ -1004,6 +1045,7 @@ async fn shutdown_saves_the_partial_reply_marks_it_interrupted_and_writes_it_onc
     assert_eq!(assistant.len(), 1, "the partial reply is written once");
     assert!(assistant[0].starts_with("Streaming sl"), "got {:?}", assistant[0]);
     assert!(t.messages().iter().all(|m| m.1 != "waiting"), "the queued message was not run or stored");
+    assert_eq!(t.questions(), [("please be slow".into(), Some("interrupted".into()), Some(INTERRUPTED_WORDS.into()))]);
     assert_eq!(t.mock.log.lock().unwrap().iter().filter(|l| l.starts_with("POST")).count(), 1, "nothing new started");
 }
 
@@ -1103,6 +1145,10 @@ async fn a_generation_that_runs_out_of_time_keeps_its_text_reports_it_and_the_qu
     assert_eq!(rows.iter().map(|r| r.0.as_str()).collect::<Vec<_>>(), ["timed_out", "done"]);
     let roles: Vec<String> = t.messages().into_iter().map(|m| m.0).collect();
     assert_eq!(roles, ["user", "assistant", "user", "assistant"]);
+    // The first question is marked, though part of a reply was kept; the second is not.
+    let q = t.questions();
+    assert_eq!((q[0].1.as_deref(), q[0].2.as_deref()), (Some("timed_out"), Some("Timed out after 2 seconds")));
+    assert_eq!(q[1].1, None);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

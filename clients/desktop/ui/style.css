@@ -248,6 +248,10 @@ button { font: inherit; color: inherit; }
   overflow-wrap: anywhere;
 }
 .msg.error .text-btn { color: var(--danger); padding-left: 0; }
+.msg.error .text-btn + .text-btn { margin-left: 8px; }
+
+/* A question whose turn failed: a light danger tint; the error line after it says why in words. */
+.msg.user.failed .body { background: var(--danger-soft); }
 
 .msg.assistant .body { overflow-wrap: anywhere; }
 .msg.streaming .body:empty::after,
