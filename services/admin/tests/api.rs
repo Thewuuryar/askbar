@@ -68,15 +68,15 @@ async fn fake_llm() -> String {
 /// `reachable = false` points the admin at an address where nothing listens.
 async fn start(reachable: bool) -> T {
     let dir = std::env::temp_dir().join(format!("askbar-adminapi-{}", ulid::Ulid::new()));
-    let (secrets, token_dir) = (dir.join("admin-secrets"), dir.join("server-token"));
-    let token = server_link::ensure_token(&secrets, &token_dir).unwrap();
+    let (token_file, hash_file) = askbar_bootstrap::install_for_tests(&dir);
+    let token = std::fs::read_to_string(token_file).unwrap();
 
     let sdb = askbar_server::Db::open_in_memory().unwrap();
     sdb.seed_server().unwrap();
     let server = AppState::new(sdb, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), askbar_server::MIN_CLIENT);
     let api = serve(askbar_server::client_router(server.clone())).await;
     let server_api_url = if reachable {
-        serve(askbar_server::server_api::router(server.clone(), token_dir.join(server_link::HASH_FILE))).await
+        serve(askbar_server::server_api::router(server.clone(), hash_file.clone())).await
     } else {
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         format!("http://{}", l.local_addr().unwrap()) // dropped: nothing listens

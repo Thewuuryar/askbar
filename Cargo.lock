@@ -106,6 +106,7 @@ version = "0.6.0"
 dependencies = [
  "argon2",
  "askama",
+ "askbar-bootstrap",
  "askbar-proto",
  "askbar-server",
  "askbar-service",
@@ -140,6 +141,14 @@ dependencies = [
  "tokio",
  "tracing",
  "ulid",
+]
+
+[[package]]
+name = "askbar-bootstrap"
+version = "0.6.0"
+dependencies = [
+ "base64 0.22.1",
+ "sha2",
 ]
 
 [[package]]

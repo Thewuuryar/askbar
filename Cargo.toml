@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/askbar-proto", "crates/askbar-service", "crates/askbar-audit", "services/server", "services/admin", "services/cpa-supervisor"]
+members = ["crates/askbar-proto", "crates/askbar-service", "crates/askbar-audit", "services/server", "services/admin", "services/cpa-supervisor", "services/bootstrap"]
 resolver = "2"
 
 [profile.release]

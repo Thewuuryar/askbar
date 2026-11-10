@@ -1,9 +1,9 @@
-// Run: node tests/e2e/admin.test.js   (needs `cargo build -p askbar-server -p askbar-admin` and `playwright` with Chromium)
+// Run: node tests/e2e/admin.test.js   (needs `cargo build -p askbar-server -p askbar-admin -p askbar-bootstrap` and `playwright` with Chromium)
 // Starts the real server, the real admin service and tests/e2e/mock_llm.py, then drives the admin site in a browser.
 // The admin listens on a unix socket only, so the test puts a small TCP forwarder in front of it for the browser.
 const { chromium } = require('playwright');
 const assert = require('node:assert/strict');
-const { spawn } = require('node:child_process');
+const { spawn, spawnSync, execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const net = require('node:net');
 const http = require('node:http');
@@ -39,24 +39,30 @@ async function waitForPort(port) {
   const dirs = {
     serverData: path.join(data, 'data'), serverSecrets: path.join(data, 'data', 'secrets'),
     adminData: path.join(data, 'admin-data'), adminSecrets: path.join(data, 'admin-secrets'),
-    serverToken: path.join(data, 'server-token'), run: path.join(data, 'admin-run'),
+    creds: path.join(data, 'credentials'), run: path.join(data, 'admin-run'),
   };
   fs.mkdirSync(dirs.run, { recursive: true });
+  // The tokens come from bootstrap, as in the stack (ADR 0049); here its volumes are plain directories.
+  const hashFile = path.join(dirs.creds, 'server-token', 'accept', 'admin-server.sha256');
+  const bootstrapBin = path.join(ROOT, 'target/debug/askbar-bootstrap');
+  if (!fs.existsSync(bootstrapBin)) execFileSync('cargo', ['build', '-q', '-p', 'askbar-bootstrap'], { cwd: ROOT, stdio: 'inherit' });
+  execFileSync(bootstrapBin, [], { env: { ...process.env, ASKBAR_BOOTSTRAP_ROOT: dirs.creds }, stdio: 'inherit' });
   const sock = path.join(dirs.run, 'admin.sock');
   const children = [];
   const run = (cmd, args, env) => { const c = spawn(cmd, args, { env: { ...process.env, ...env }, stdio: 'ignore' }); children.push(c); return c; };
   let forwarder = null;
-  const cleanup = () => { for (const c of children) c.kill(); if (forwarder) forwarder.close(); fs.rmSync(data, { recursive: true, force: true }); };
+  // bootstrap's directories are read-only, as they are in the stack: open them up before removing.
+  const cleanup = () => { for (const c of children) c.kill(); if (forwarder) forwarder.close(); spawnSync('chmod', ['-R', 'u+rwx', data]); fs.rmSync(data, { recursive: true, force: true }); };
 
   const startServer = () => run(path.join(ROOT, 'target/debug/askbar-server'), [], {
     ASKBAR_CLIENT_API_ADDR: '127.0.0.1:' + api,
-    ASKBAR_SERVER_API_ADDR: '127.0.0.1:' + serverApiPort, ASKBAR_SERVER_TOKEN_HASH_FILE: path.join(dirs.serverToken, 'token.sha256'),
+    ASKBAR_SERVER_API_ADDR: '127.0.0.1:' + serverApiPort, ASKBAR_SERVER_TOKEN_HASH_FILE: hashFile,
     ASKBAR_DATA_DIR: dirs.serverData, ASKBAR_SECRETS_DIR: dirs.serverSecrets,
   });
   run('python3', ['-u', path.join(ROOT, 'tests/e2e/mock_llm.py'), String(mockPort)], {});
   run(path.join(ROOT, 'target/debug/askbar-admin'), [], {
     ASKBAR_ADMIN_SOCKET: sock, ASKBAR_ADMIN_DATA_DIR: dirs.adminData, ASKBAR_ADMIN_SECRETS_DIR: dirs.adminSecrets,
-    ASKBAR_SERVER_TOKEN_DIR: dirs.serverToken, ASKBAR_SERVER_API_URL: 'http://127.0.0.1:' + serverApiPort,
+    ASKBAR_ADMIN_TOKEN_DIR: path.join(dirs.creds, 'admin-token'), ASKBAR_SERVER_API_URL: 'http://127.0.0.1:' + serverApiPort,
     ASKBAR_PUBLIC_URL: 'http://localhost:' + api,
     ASKBAR_CPA_CONFIG_DIR: path.join(data, 'cpa-config'), ASKBAR_CPA_URL: 'http://127.0.0.1:' + await freePort(),
   });

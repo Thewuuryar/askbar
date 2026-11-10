@@ -174,12 +174,14 @@ fn the_binary_serves_a_socket_and_opens_no_tcp_port() {
     let sock = dir.join("admin.sock");
     let bin = env!("CARGO_BIN_EXE_askbar-admin");
     // The secrets and token directories default to absolute container paths a normal user cannot create.
-    let (secrets, server_api) = (dir.join("secrets"), dir.join("server-token"));
+    // What bootstrap made: the admin reads its token from here and never makes one.
+    askbar_bootstrap::install_for_tests(&dir);
+    let (secrets, token_dir) = (dir.join("secrets"), dir.join("admin-token"));
     let envs = [
         ("ASKBAR_ADMIN_SOCKET", sock.to_str().unwrap()),
         ("ASKBAR_ADMIN_DATA_DIR", dir.to_str().unwrap()),
         ("ASKBAR_ADMIN_SECRETS_DIR", secrets.to_str().unwrap()),
-        ("ASKBAR_SERVER_TOKEN_DIR", server_api.to_str().unwrap()),
+        ("ASKBAR_ADMIN_TOKEN_DIR", token_dir.to_str().unwrap()),
     ];
     let mut child =
         std::process::Command::new(bin).envs(envs).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn().unwrap();

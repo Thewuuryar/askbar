@@ -3,7 +3,7 @@
 
 use askbar_admin::caddy::CaddyLink;
 use askbar_admin::secrets::AdminSecrets;
-use askbar_admin::server_link::{self, ServerLink};
+use askbar_admin::server_link::ServerLink;
 use askbar_admin::{web, AdminDb, AdminState};
 use askbar_server::{secrets::Secrets, AppState};
 use axum::{
@@ -66,8 +66,8 @@ pub async fn serve(app: Router) -> String {
 pub async fn start(caddy_up: bool) -> T {
     let dir = std::env::temp_dir().join(format!("ab-{}", &ulid::Ulid::new().to_string()[16..]));
     std::fs::create_dir_all(&dir).unwrap();
-    let (admin_secrets, token_dir) = (dir.join("admin-secrets"), dir.join("server-token"));
-    let token = server_link::ensure_token(&admin_secrets, &token_dir).unwrap();
+    let (token_file, hash_file) = askbar_bootstrap::install_for_tests(&dir);
+    let token = std::fs::read_to_string(token_file).unwrap();
 
     let sdb = askbar_server::Db::open_in_memory().unwrap();
     sdb.seed_server().unwrap();
@@ -75,7 +75,7 @@ pub async fn start(caddy_up: bool) -> T {
     let (recorder, _audit_dir) = askbar_server::testing::audit_recorder();
     let server =
         AppState::new(sdb, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), askbar_server::MIN_CLIENT).with_audit(recorder);
-    let server_api_url = serve(askbar_server::server_api::router(server.clone(), token_dir.join(server_link::HASH_FILE))).await;
+    let server_api_url = serve(askbar_server::server_api::router(server.clone(), hash_file)).await;
 
     let fake = Arc::new(FakeCaddy::default());
     let caddy_socket = dir.join("c").join("a.sock");

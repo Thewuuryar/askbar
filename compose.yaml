@@ -25,6 +25,26 @@ x-hardening: &hardening
     - /tmp
 
 services:
+  # Creates the per-link tokens and exits (ADR 0049). Root with CHOWN and nothing else (ADR 0032 rule 6): it
+  # takes a credential volume over, writes the files, and gives each to the service that reads it. No
+  # network. Rotate from the host: docker compose run --rm bootstrap rotate [link].
+  # The server and the admin start only after it has finished.
+  bootstrap:
+    build:
+      context: .
+      target: bootstrap
+    image: askbar-bootstrap:latest
+    container_name: askbar-bootstrap
+    restart: "no"
+    <<: *hardening
+    user: "0"
+    cap_add: [CHOWN]
+    network_mode: none
+    mem_limit: 64m
+    volumes:
+      - server-token:/server-token
+      - admin-token:/admin-token
+
   server:
     build:
       context: .
@@ -34,6 +54,9 @@ services:
     restart: unless-stopped
     <<: *hardening
     mem_limit: 512m
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
     environment:
       # The server's own address on server-api: the alias below exists on that network only, so the
       # server API listens there and nowhere else. The server refuses a wildcard, or a name that resolves
@@ -55,7 +78,8 @@ services:
       # The audit store (audit.db): a trace of every reply. Only the server mounts it; the admin reads
       # it through the server API, never from disk. Back it up by copying the volume.
       - audit-data:/audit
-      # The admin's token hash (token.sha256). Read-only: the server can check the token, never mint one.
+      # The hash of the admin's token (accept/admin-server.sha256), made by bootstrap. Read-only: the server
+      # can check the token, never mint one.
       - server-token:/server-token:ro
 
   admin:
@@ -67,6 +91,9 @@ services:
     restart: unless-stopped
     <<: *hardening
     mem_limit: 256m
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
     environment:
       ASKBAR_SERVER_API_URL: http://server-api-host:8082
       ASKBAR_PUBLIC_URL: ${ASKBAR_PUBLIC_URL:-}
@@ -79,7 +106,8 @@ services:
       - cpa-config:/cpa-config
       - admin-data:/admin-data
       - admin-secrets:/admin-secrets
-      - server-token:/server-token
+      # The token this admin sends to the server (call/admin-server.token), made by bootstrap. Read-only.
+      - admin-token:/admin-token:ro
       - admin-run:/run/admin
       - caddy-run:/caddy-run
       - caddy-secrets:/caddy-secrets
@@ -177,6 +205,7 @@ volumes:
   askbar-secrets:
   audit-data:
   server-token:
+  admin-token:
   # Held the retired controller's token hash (ADR 0005). Nothing mounts it now; kept declared until 1.0
   # so no install loses a volume by surprise (plan-v1.md: data volumes are never renamed or dropped pre-1.0).
   control-token:

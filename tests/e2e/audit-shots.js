@@ -5,7 +5,7 @@
 // checks each for sideways overflow and unreadably small text. Prints what it finds; exits 1 if the
 // page itself scrolls sideways or text is smaller than 11px.
 const { chromium } = require('playwright');
-const { spawn } = require('node:child_process');
+const { spawn, spawnSync, execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const net = require('node:net');
 const os = require('node:os');
@@ -30,20 +30,21 @@ async function waitForPort(port) {
   fs.mkdirSync(OUT, { recursive: true });
   const [api, adminPort, serverApiPort, mockPort] = [await freePort(), await freePort(), await freePort(), await freePort()];
   const data = fs.mkdtempSync(path.join(os.tmpdir(), 'askbar-shots-'));
-  const d = { serverData: path.join(data, 'data'), serverSecrets: path.join(data, 'data', 'secrets'), adminData: path.join(data, 'admin-data'), adminSecrets: path.join(data, 'admin-secrets'), serverToken: path.join(data, 'serverToken'), run: path.join(data, 'run') };
+  const d = { serverData: path.join(data, 'data'), serverSecrets: path.join(data, 'data', 'secrets'), adminData: path.join(data, 'admin-data'), adminSecrets: path.join(data, 'admin-secrets'), creds: path.join(data, 'credentials'), run: path.join(data, 'run') };
   fs.mkdirSync(d.run, { recursive: true });
+  execFileSync(path.join(ROOT, 'target/debug/askbar-bootstrap'), [], { env: { ...process.env, ASKBAR_BOOTSTRAP_ROOT: d.creds }, stdio: 'inherit' });
   const sock = path.join(d.run, 'admin.sock');
   const children = [];
   const run = (cmd, args, env) => { const c = spawn(cmd, args, { env: { ...process.env, ...env }, stdio: 'ignore' }); children.push(c); return c; };
   let forwarder;
-  const cleanup = () => { for (const c of children) c.kill(); if (forwarder) forwarder.close(); fs.rmSync(data, { recursive: true, force: true }); };
+  const cleanup = () => { for (const c of children) c.kill(); if (forwarder) forwarder.close(); spawnSync('chmod', ['-R', 'u+rwx', data]); fs.rmSync(data, { recursive: true, force: true }); };
   process.on('exit', cleanup);
 
   run('python3', ['-u', path.join(ROOT, 'tests/e2e/mock_llm.py'), String(mockPort)], {});
-  run(path.join(ROOT, 'target/debug/askbar-admin'), [], { ASKBAR_ADMIN_SOCKET: sock, ASKBAR_ADMIN_DATA_DIR: d.adminData, ASKBAR_ADMIN_SECRETS_DIR: d.adminSecrets, ASKBAR_SERVER_TOKEN_DIR: d.serverToken, ASKBAR_SERVER_API_URL: 'http://127.0.0.1:' + serverApiPort, ASKBAR_PUBLIC_URL: 'http://localhost:' + api });
+  run(path.join(ROOT, 'target/debug/askbar-admin'), [], { ASKBAR_ADMIN_SOCKET: sock, ASKBAR_ADMIN_DATA_DIR: d.adminData, ASKBAR_ADMIN_SECRETS_DIR: d.adminSecrets, ASKBAR_ADMIN_TOKEN_DIR: path.join(d.creds, 'admin-token'), ASKBAR_SERVER_API_URL: 'http://127.0.0.1:' + serverApiPort, ASKBAR_PUBLIC_URL: 'http://localhost:' + api });
   for (let i = 0; i < 100 && !fs.existsSync(sock); i++) await new Promise((r) => setTimeout(r, 50));
   forwarder = net.createServer((c) => { const u = net.connect(sock); c.pipe(u); u.pipe(c); c.on('error', () => u.destroy()); u.on('error', () => c.destroy()); }).listen(adminPort, '127.0.0.1');
-  run(path.join(ROOT, 'target/debug/askbar-server'), [], { ASKBAR_CLIENT_API_ADDR: '127.0.0.1:' + api, ASKBAR_SERVER_API_ADDR: '127.0.0.1:' + serverApiPort, ASKBAR_SERVER_TOKEN_HASH_FILE: path.join(d.serverToken, 'token.sha256'), ASKBAR_DATA_DIR: d.serverData, ASKBAR_SECRETS_DIR: d.serverSecrets, ASKBAR_AUDIT_DIR: path.join(data, 'audit') });
+  run(path.join(ROOT, 'target/debug/askbar-server'), [], { ASKBAR_CLIENT_API_ADDR: '127.0.0.1:' + api, ASKBAR_SERVER_API_ADDR: '127.0.0.1:' + serverApiPort, ASKBAR_SERVER_TOKEN_HASH_FILE: path.join(d.creds, 'server-token', 'accept', 'admin-server.sha256'), ASKBAR_DATA_DIR: d.serverData, ASKBAR_SECRETS_DIR: d.serverSecrets, ASKBAR_AUDIT_DIR: path.join(data, 'audit') });
   await Promise.all([waitForPort(adminPort), waitForPort(api), waitForPort(mockPort)]);
 
   const base = `http://127.0.0.1:${adminPort}`;

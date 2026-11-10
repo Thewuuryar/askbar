@@ -17,20 +17,19 @@ fn temp(tag: &str) -> PathBuf {
     dir
 }
 
-fn mode(p: &std::path::Path) -> u32 {
-    std::fs::metadata(p).unwrap().permissions().mode() & 0o777
-}
-
 struct Dirs {
     root: PathBuf,
-    secrets: PathBuf,
-    server_api: PathBuf,
 }
 
 impl Dirs {
     fn new(tag: &str) -> Dirs {
-        let root = temp(tag);
-        Dirs { secrets: root.join("admin-secrets"), server_api: root.join("server-token"), root }
+        Dirs { root: temp(tag) }
+    }
+
+    /// What bootstrap makes (ADR 0049): the admin's token and the server's hash of it.
+    fn install(&self) -> (String, PathBuf) {
+        let (token, hash) = askbar_bootstrap::install_for_tests(&self.root);
+        (std::fs::read_to_string(token).unwrap(), hash)
     }
 }
 
@@ -43,40 +42,48 @@ impl Drop for Dirs {
 // ------------------------------------------------------------------ the token
 
 #[test]
-fn the_token_is_private_the_server_gets_only_its_hash_and_nothing_is_overwritten() {
+fn the_admin_reads_the_token_bootstrap_made_and_the_server_holds_only_its_hash() {
     let d = Dirs::new("token");
-    let token = server_link::ensure_token(&d.secrets, &d.server_api).unwrap();
+    let (token, hash_file) = d.install();
+    let token_dir = d.root.join("admin-token");
 
-    let token_file = d.secrets.join(server_link::TOKEN_FILE);
-    assert_eq!(mode(&token_file), 0o600, "the raw token is private to the admin");
-    assert_eq!(mode(&d.secrets), 0o700);
-    assert_eq!(std::fs::read_to_string(&token_file).unwrap(), token);
-    let raw = URL_SAFE_NO_PAD.decode(token.strip_prefix("mgt_").expect("prefixed")).unwrap();
-    assert_eq!(raw.len(), 32, "32 random bytes");
-
-    let hash_file = d.server_api.join(server_link::HASH_FILE);
+    assert_eq!(server_link::read_token(&token_dir).unwrap(), token);
+    assert_eq!(server_link::token_file(&token_dir), token_dir.join("call/admin-server.token"));
+    assert!(token.starts_with("mgt_"));
+    assert_eq!(URL_SAFE_NO_PAD.decode(token.trim_start_matches("mgt_")).unwrap().len(), 32, "32 random bytes");
     let hash = std::fs::read_to_string(&hash_file).unwrap();
     assert_eq!(hash.trim(), server_link::sha256_hex(&token));
-    assert_eq!(hash.trim().len(), 64);
-    assert!(!hash.contains(&token) && !hash.contains(token.trim_start_matches("mgt_")), "the hash file holds no raw token");
-    assert!(
-        std::fs::read_dir(&d.server_api).unwrap().all(|e| e.unwrap().file_name() == server_link::HASH_FILE),
-        "only the hash is in the server's directory"
-    );
-    assert_ne!(mode(&hash_file) & 0o044, 0, "the server's user can read the hash");
+    assert!(!hash.contains(token.trim_start_matches("mgt_")), "the hash file holds no raw token");
+}
 
-    // A restart keeps the token; a damaged hash file is put right; a second token is never made.
-    assert_eq!(server_link::ensure_token(&d.secrets, &d.server_api).unwrap(), token);
-    std::fs::write(&hash_file, "tampered").unwrap();
-    assert_eq!(server_link::ensure_token(&d.secrets, &d.server_api).unwrap(), token);
-    assert_eq!(std::fs::read_to_string(&hash_file).unwrap().trim(), server_link::sha256_hex(&token));
-    std::fs::remove_file(&hash_file).unwrap();
-    server_link::ensure_token(&d.secrets, &d.server_api).unwrap();
-    assert!(hash_file.exists(), "a lost hash file is written again");
+#[test]
+fn without_a_token_file_the_admin_says_to_run_bootstrap_and_never_makes_one() {
+    let d = Dirs::new("missing");
+    let token_dir = d.root.join("admin-token");
+    let e = server_link::read_token(&token_dir).unwrap_err();
+    assert!(e.to_string().contains("docker compose up"), "{e}");
+    assert!(!token_dir.exists(), "nothing was made");
 
-    // An empty token file is an error, not a reason to make a new token silently.
-    std::fs::write(&token_file, "").unwrap();
-    assert!(server_link::ensure_token(&d.secrets, &d.server_api).is_err());
+    let (_, _) = d.install();
+    let file = server_link::token_file(&token_dir);
+    std::fs::set_permissions(file.parent().unwrap(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    // The file is 0400 as bootstrap makes it; the directory is open now, so replace the file.
+    std::fs::remove_file(&file).unwrap();
+    std::fs::write(&file, "  \n").unwrap();
+    assert!(server_link::read_token(&token_dir).unwrap_err().to_string().contains("is empty"));
+}
+
+#[test]
+fn the_old_token_file_is_removed_once() {
+    let d = Dirs::new("old");
+    let secrets = d.root.join("admin-secrets");
+    std::fs::create_dir_all(&secrets).unwrap();
+    std::fs::write(secrets.join("server.token"), "mgt_old").unwrap();
+    std::fs::write(secrets.join("master.key"), "keep").unwrap();
+    assert!(server_link::remove_old_token(&secrets).unwrap());
+    assert!(!secrets.join("server.token").exists());
+    assert!(secrets.join("master.key").exists(), "nothing else is touched");
+    assert!(!server_link::remove_old_token(&secrets).unwrap(), "a second start has nothing to remove");
 }
 
 // ------------------------------------------------------------------ the server
@@ -181,11 +188,11 @@ fn the_generation_timeout_defaults_to_300_when_never_set_and_follows_the_setting
 #[tokio::test]
 async fn a_push_applies_on_the_server() {
     let d = Dirs::new("push");
-    let token = server_link::ensure_token(&d.secrets, &d.server_api).unwrap();
+    let (token, hash_file) = d.install();
     let state = server_state();
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = l.local_addr().unwrap();
-    serve_on(l, state.clone(), d.server_api.join(server_link::HASH_FILE)).await;
+    serve_on(l, state.clone(), hash_file).await;
 
     let link = ServerLink::new(&format!("http://{addr}"), token);
     assert!(!link.server_online(), "unknown until it has been in touch");
@@ -202,7 +209,7 @@ async fn a_push_applies_on_the_server() {
 #[tokio::test]
 async fn an_unreachable_server_is_reported_as_offline_and_a_wrong_token_as_a_refusal() {
     let d = Dirs::new("offline");
-    let token = server_link::ensure_token(&d.secrets, &d.server_api).unwrap();
+    let (token, hash_file) = d.install();
     let dead = free_port().await;
     let link = ServerLink::new(&format!("http://{dead}"), token.clone());
     let snap = server_link::build_snapshot(AdminDb::open_in_memory().unwrap().conn()).unwrap();
@@ -213,7 +220,7 @@ async fn an_unreachable_server_is_reported_as_offline_and_a_wrong_token_as_a_ref
 
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = l.local_addr().unwrap();
-    serve_on(l, server_state(), d.server_api.join(server_link::HASH_FILE)).await;
+    serve_on(l, server_state(), hash_file).await;
     let wrong = ServerLink::new(&format!("http://{addr}"), "mgt_not-the-token".into());
     match wrong.push(&snap).await {
         Err(server_link::PushError::Refused { status, .. }) => assert_eq!(status, 401),
@@ -226,7 +233,7 @@ async fn an_unreachable_server_is_reported_as_offline_and_a_wrong_token_as_a_ref
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn pushing_retries_until_the_server_is_up_and_follows_later_changes() {
     let d = Dirs::new("retry");
-    let token = server_link::ensure_token(&d.secrets, &d.server_api).unwrap();
+    let (token, hash_file) = d.install();
     let addr = free_port().await; // nothing listens here yet
     let link = ServerLink::new(&format!("http://{addr}"), token);
     let db = Arc::new(Mutex::new(admin_db_with_data()));
@@ -238,7 +245,7 @@ async fn pushing_retries_until_the_server_is_up_and_follows_later_changes() {
     // The server comes up on that address.
     let state = server_state();
     let l = tokio::net::TcpListener::bind(addr).await.unwrap();
-    serve_on(l, state.clone(), d.server_api.join(server_link::HASH_FILE)).await;
+    serve_on(l, state.clone(), hash_file).await;
     let applied =
         |want: usize| askbar_server::snapshot::current(&state.db.lock().unwrap()).ok().flatten().is_some_and(|s| s.providers.len() == want);
     for _ in 0..80 {
@@ -270,8 +277,7 @@ async fn pushing_retries_until_the_server_is_up_and_follows_later_changes() {
 async fn the_status_check_asks_for_a_push_when_the_server_is_unconfigured_or_out_of_date() {
     // ADR 0028 rule 4: read GET /status, and push when unconfigured, out of date, or a new process.
     let d = Dirs::new("status");
-    let token = server_link::ensure_token(&d.secrets, &d.server_api).unwrap();
-    let hash = d.server_api.join(server_link::HASH_FILE);
+    let (token, hash) = d.install();
     let db = admin_db_with_data();
     let snap = || server_link::build_snapshot(db.conn()).unwrap();
     let state = server_state();

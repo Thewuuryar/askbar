@@ -20,9 +20,9 @@ The server existed before the rule that each component has its own ADR. This rec
   - one file per space under `spaces/` ([0009](0009-spaces-and-storage.md)), holding its conversations. Each reply keeps a copy of the provider name and model that wrote it, and a question whose turn failed keeps why, in the server's own words;
   - provider API keys, encrypted with its master key;
   - `audit.db`, the audit store, holding sealed content and only the public half of the audit key ([0011](0011-sealed-content-access.md)).
-- **Volumes:** `DATA_DIR` (a host directory, `./data` by default) at `/data`; `askbar-secrets` at `/secrets` (`master.key`); `audit-data` at `/audit`; `server-token` read-only at `/server-token` (the admin's token hash).
+- **Volumes:** `DATA_DIR` (a host directory, `./data` by default) at `/data`; `askbar-secrets` at `/secrets` (`master.key`); `audit-data` at `/audit`; `server-token` read-only at `/server-token` (the hash of the admin's token, `accept/admin-server.sha256`, made by `bootstrap`).
 - **Networks:** `edge` and `server-api`. It publishes no port.
-- **Links:** Caddy calls the client API with a client token. The admin calls the server API with its token, checked against `server-token/token.sha256` through `askbar-service` ([0036](0036-askbar-service-crate.md)). The server calls model providers and `cpa` itself. It never calls the admin.
+- **Links:** Caddy calls the client API with a client token. The admin calls the server API with its token, checked against `server-token/accept/admin-server.sha256` through `askbar-service` ([0036](0036-askbar-service-crate.md)). The server calls model providers and `cpa` itself. It never calls the admin.
 - **Configuration:** it answers `503 not_configured` until the admin pushes a snapshot, then keeps it in `control.db` ([0028](0028-service-boundaries-and-config-delivery.md)). The snapshot's settings apply as each reply starts: the time limit, and `history_turns`, how many earlier questions go with a new one. It restarts itself on `POST /api/server/v1/restart` and when its own health check keeps failing ([0005](0005-no-controller-and-self-restart.md)).
 - **Hardening:** the shared defaults of [0032](0032-container-hardening.md), with no exception; memory limit 512 MB.
 
@@ -38,7 +38,6 @@ Not recorded: the server predates this record.
 
 - [0003](0003-v1-service-layout.md) and [0014](0014-model-gateway-and-providers.md): the server stores provider keys and calls providers itself, and `edge` has an outbound route. In v1, `model-gateway` holds the keys and makes the calls, and the server has no outbound route (plan phase 3).
 - [0010](0010-auditor.md): the audit store is inside the server, which opens its own model-call spans. In v1 the auditor keeps it and only `model-gateway` opens those spans (phases 2 and 3).
-- [0004](0004-bootstrap-and-per-link-tokens.md): the admin makes the server API token; `bootstrap` is not built yet (plan step 2.1).
 - [0003](0003-v1-service-layout.md) (no host bind mounts): the data directory is a host bind mount.
 - [0013](0013-backups.md): the backup export is not encrypted, so it leaves secrets out (phase 6).
 - [0028](0028-service-boundaries-and-config-delivery.md) rule 5: the server does not record the configuration version it applied in an auditor, because there is no auditor yet.
@@ -49,3 +48,4 @@ Not recorded: the server predates this record.
 - 2026-11-08: each reply in a space file keeps a copy of the provider and model that wrote it (space migration 2; plan step 1.13).
 - 2026-11-10: a question whose turn failed keeps why, in the server's own words, never a provider's error text (space migration 3; plan step 1.13).
 - 2026-11-10: the snapshot's `history_turns` limits how many earlier questions, with their replies, are sent with a new one (0 = all; plan step 1.13).
+- 2026-11-10: reads its accepted hash from `server-token/accept/admin-server.sha256`, made by `bootstrap`, and refuses to start without it; an install with only the old `token.sha256` is told to run `docker compose up -d` (plan step 2.1, [0049](0049-bootstrap.md)).

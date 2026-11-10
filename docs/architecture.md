@@ -140,7 +140,7 @@ Each service has its own data and credential volumes and user ID, with no shared
 | Control database and space files | `server` |
 | Audit store | `auditor` |
 | Admin data and secrets | `admin` |
-| Per-link token files and hashes | `bootstrap` once, then the service that owns each file |
+| Per-link token files and hashes: one volume per service, `server-token`, `admin-token` and so on | `bootstrap` read-write, its own service read-only |
 | Certificates and Caddy state | `caddy` |
 | `cpa` config | `cpa`, written by `admin` |
 | `cpa` logins | `cpa` |
