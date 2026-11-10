@@ -14,7 +14,7 @@ This set records the decisions from the original Askbar architecture plan (kept 
 | [0008](0008-users-clients-and-client-access.md) | Users, clients, and client access | Accepted | 28, 29, 31 |
 | [0009](0009-spaces-and-storage.md) | Spaces and storage | Accepted | 8, 30 |
 | [0010](0010-auditor.md) | Auditor | Accepted | 10, 11 |
-| [0011](0011-sealed-content-access.md) | Sealed content access | Accepted | 11, 22 |
+| [0011](0011-sealed-content-access.md) | Sealed audit content and access | Accepted | 11, 22 |
 | [0012](0012-consent-notices-and-deletion.md) | Consent, notices, and deletion | Accepted | 22 |
 | [0013](0013-backups.md) | Backups | Accepted | 9 |
 | [0014](0014-model-gateway-and-providers.md) | `model-gateway` and providers | Accepted | 4, 20 |
@@ -28,16 +28,16 @@ This set records the decisions from the original Askbar architecture plan (kept 
 | [0022](0022-api-path-conventions.md) | API path conventions | Accepted | Added recommendation |
 | [0023](0023-api-error-format.md) | API error format | Accepted | Added recommendation |
 | [0024](0024-rejected-token-alert.md) | Rejected token alert | Accepted | Added recommendation |
-| [0025](0025-audit-record-reliability.md) | Audit record reliability | Accepted | Added recommendation |
-| [0026](0026-dependency-license-check.md) | Dependency license check | Accepted | Added recommendation |
+| [0025](0025-audit-record-reliability.md) | Audit record reliability | Merged into 0010 | Added recommendation |
+| [0026](0026-dependency-license-check.md) | Dependency license check | Merged into 0017 | Added recommendation |
 | [0027](0027-adr-format-and-numbering.md) | ADR format and numbering | Merged into 0001 | Added recommendation |
 | [0028](0028-service-boundaries-and-config-delivery.md) | Service boundaries and config delivery | Accepted | Required by v1 decisions |
 | [0029](0029-shared-origin-protections.md) | Shared origin protections | Accepted | Required by v1 decisions |
-| [0030](0030-sealed-audit-content.md) | Sealed audit content | Accepted | Required by v1 decisions |
-| [0031](0031-audit-span-start-and-backlog.md) | Audit span start and backlog | Accepted | Required by v1 decisions |
+| [0030](0030-sealed-audit-content.md) | Sealed audit content | Merged into 0011 | Required by v1 decisions |
+| [0031](0031-audit-span-start-and-backlog.md) | Audit span start and backlog | Merged into 0010 | Required by v1 decisions |
 | [0032](0032-container-hardening.md) | Container hardening | Accepted | Required by v1 decisions |
 | [0033](0033-repository-layout.md) | Repository layout | Accepted | Owner request with the v1 plan |
-| [0034](0034-self-signed-https-and-certificate-pinning.md) | Self-signed HTTPS and certificate pinning | Accepted | Required by 0007; owner choice in the v1 plan |
+| [0034](0034-self-signed-https-and-certificate-pinning.md) | Self-signed HTTPS and certificate pinning | Merged into 0015 | Required by 0007; owner choice in the v1 plan |
 | [0035](0035-editorial-edits-to-accepted-adrs.md) | Editorial edits to accepted ADRs | Merged into 0001 | Owner review of the v1 layout change |
 | [0036](0036-askbar-service-crate.md) | The `askbar-service` crate | Accepted | Plan step 1.3; owner rule for component ADRs |
 | [0037](0037-askbar-cpa-image-and-supervisor.md) | The `askbar-cpa` image and its supervisor | Accepted | Plan step 1.4; owner choice of a supervisor for `cpa` |
