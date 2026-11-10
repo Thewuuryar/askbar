@@ -219,10 +219,10 @@ button { font: inherit; color: inherit; }
   cursor: pointer;
   box-shadow: 0 0 0 1px var(--line);
 }
-.copy-msg:hover, .copy-code:hover, .by:hover { color: var(--fg); }
+.copy-msg:hover, .copy-code:hover, .by:hover, .copy-conv:hover { color: var(--fg); }
 
-/* The copy button is an icon (two sheets); after a copy it says so beside the icon. */
-.copy-msg {
+/* The copy buttons are an icon (two sheets); after a copy they say so beside the icon. */
+.copy-msg, .copy-conv {
   position: relative;
   height: 20px;
   min-width: 24px;
@@ -231,7 +231,7 @@ button { font: inherit; color: inherit; }
   box-shadow: none;
   background: transparent;
 }
-.copy-msg::before, .copy-msg::after {
+.copy-msg::before, .copy-msg::after, .copy-conv::before, .copy-conv::after {
   content: '';
   position: absolute;
   width: 7px;
@@ -240,8 +240,8 @@ button { font: inherit; color: inherit; }
   border-radius: 2px;
   background: var(--card);
 }
-.copy-msg::before { left: 6px; top: 6px; }
-.copy-msg::after { left: 9px; top: 3px; }
+.copy-msg::before, .copy-conv::before { left: 6px; top: 6px; }
+.copy-msg::after, .copy-conv::after { left: 9px; top: 3px; }
 
 .msg.error .body {
   color: var(--danger);
@@ -366,7 +366,9 @@ button { font: inherit; color: inherit; }
   border-radius: 6px;
   opacity: 0;
 }
-.conv:hover .del, .conv:focus-within .del, .conv .del.armed { opacity: 1; }
+.conv .copy-conv { flex: none; color: var(--muted); cursor: pointer; border: 0; opacity: 0; }
+.conv:hover .del, .conv:focus-within .del, .conv .del.armed,
+.conv:hover .copy-conv, .conv:focus-within .copy-conv { opacity: 1; }
 .conv .del:hover { color: var(--danger); }
 .conv .del.armed { color: var(--danger); font-weight: 600; }
 
