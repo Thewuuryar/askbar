@@ -22,6 +22,9 @@ pub const TOKEN_MODE: u32 = 0o400;
 pub const HASH_MODE: u32 = 0o444;
 pub const DIR_MODE: u32 = 0o500;
 
+/// The uid that reads a service's volume, by service name.
+pub type UidOf = Box<dyn Fn(&str) -> Option<u32>>;
+
 /// Where the volumes are and whose they become.
 pub struct Ctx {
     /// The directory holding `<service>-token`: `/` in the container.
@@ -29,7 +32,7 @@ pub struct Ctx {
     /// The owner of a directory while `bootstrap` works in it: root in the container.
     pub taker: u32,
     /// The uid that reads a service's volume.
-    pub uid_of: Box<dyn Fn(&str) -> Option<u32>>,
+    pub uid_of: UidOf,
 }
 
 impl Ctx {
