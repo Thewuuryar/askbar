@@ -162,16 +162,20 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       # Builds the images compose.yaml names, from this checkout, reusing unchanged layers from
-      # GitHub's cache (Caddy's plugin build, the Rust dependency layer, the base images).
+      # GitHub's cache (Caddy's plugin build, the Rust dependency layer and the rest of the build stage).
       - name: Build the images
         uses: docker/bake-action@59cb1203cd42bcefd40a1b6d73b589e48c86040e # v7.5.0
         with:
           source: .
           files: compose.yaml
           load: true
+          # One cache scope per exporter: targets writing to a shared scope overwrite each other's
+          # index. server exports the Rust build stage, which admin and cpa reuse; Caddy has its own.
           set: |
-            *.cache-from=type=gha,scope=askbar-images
-            *.cache-to=type=gha,mode=max,scope=askbar-images
+            *.cache-from=type=gha,scope=askbar-build
+            server.cache-to=type=gha,mode=max,scope=askbar-build
+            caddy.cache-from=type=gha,scope=askbar-caddy
+            caddy.cache-to=type=gha,mode=max,scope=askbar-caddy
       - name: Start a throwaway stack
         run: |
           cp .env.example .env
