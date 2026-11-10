@@ -245,6 +245,7 @@ Each link between two services has its own token ([ADR 0004](adr/0004-bootstrap-
   ```
 
   The old token stops working when the receiver is restarted. Until then, and until the caller is restarted, calls between the two fail.
+- **A rejected token.** If the server stops accepting a token that worked (its hash file was replaced, say, or only one side was rotated), the admin site shows a banner with the commands and stops showing "server offline": the server is there, it just refuses this admin. Run `docker compose run --rm bootstrap rotate admin-server`, then `docker compose restart server admin`. The admin cannot restart the server itself, because the server refuses its calls. It logs one line naming the link, never the token, and the banner goes away when the server accepts the token again. The server logs one line when five invalid tokens arrive on its server API within ten minutes, naming the link (`admin-server`) and the count, then stays quiet until the count has dropped below five again ([ADR 0024](adr/0024-rejected-token-alert.md)); the alerter sends these as alerts once it exists (phase 4).
 - **Backup.** The credential volumes need none: if they are lost, `bootstrap` makes them again and you restart the services.
 
 ### Starting and stopping services
