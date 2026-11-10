@@ -100,6 +100,17 @@ class Modes(unittest.TestCase):
         self.assertEqual(data.count('"content"'), 2)
         self.assertNotIn("[DONE]", data)
 
+    def test_brisk_sends_the_whole_slow_reply_quickly(self):
+        import time
+        started = time.monotonic()
+        _, r = self.srv.post("brisk")
+        self.assertEqual(r.status, 200)
+        text = "".join(json.loads(l[6:])["choices"][0]["delta"].get("content", "")
+                       for l in r.read().decode().splitlines()
+                       if l.startswith("data: ") and l != "data: [DONE]" and '"choices": []' not in l)
+        self.assertEqual(text, "Streaming slowly so you can press Stop. " * 40)
+        self.assertLess(time.monotonic() - started, 15)
+
     def usage_chunk(self, text, extra):
         _, r = self.srv.post(text, extra=extra)
         events = [json.loads(l[6:]) for l in r.read().decode().splitlines()

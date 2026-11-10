@@ -5,7 +5,9 @@
   "license": "AGPL-3.0-or-later",
   "description": "Askbar: services, checks and end-to-end tests. The desktop client is in clients/desktop.",
   "scripts": {
-    "test": "scripts/check-docs.sh && scripts/check-ui-tokens.sh && cargo test --workspace && node tests/e2e/admin.test.js && python3 tests/e2e/mock_llm_test.py && npm --prefix clients/desktop test",
+    "test": "npm run test:services && npm run test:desktop",
+    "test:services": "scripts/check-docs.sh && scripts/check-ui-tokens.sh && cargo test --workspace && node tests/e2e/admin.test.js && python3 tests/e2e/mock_llm_test.py",
+    "test:desktop": "npm --prefix clients/desktop test",
     "mock": "python3 tests/e2e/mock_llm.py 8765",
     "docs": "scripts/check-docs.sh"
   },
