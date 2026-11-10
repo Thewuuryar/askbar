@@ -47,6 +47,11 @@ async function waitForPort(port) {
   const bootstrapBin = path.join(ROOT, 'target/debug/askbar-bootstrap');
   if (!fs.existsSync(bootstrapBin)) execFileSync('cargo', ['build', '-q', '-p', 'askbar-bootstrap'], { cwd: ROOT, stdio: 'inherit' });
   execFileSync(bootstrapBin, [], { env: { ...process.env, ASKBAR_BOOTSTRAP_ROOT: dirs.creds }, stdio: 'inherit' });
+  // The gateway holds the provider keys and does the model lists and provider tests (ADR 0054). It has no auditor here:
+  // the admin site never needs one.
+  const gatewayBin = path.join(ROOT, 'target/debug/askbar-model-gateway');
+  if (!fs.existsSync(gatewayBin)) execFileSync('cargo', ['build', '-q', '-p', 'askbar-model-gateway'], { cwd: ROOT, stdio: 'inherit' });
+  const gatewayAdminPort = await freePort();
   const sock = path.join(dirs.run, 'admin.sock');
   const children = [];
   const run = (cmd, args, env) => { const c = spawn(cmd, args, { env: { ...process.env, ...env }, stdio: 'ignore' }); children.push(c); return c; };
@@ -60,9 +65,14 @@ async function waitForPort(port) {
     ASKBAR_DATA_DIR: dirs.serverData, ASKBAR_SECRETS_DIR: dirs.serverSecrets,
   });
   run('python3', ['-u', path.join(ROOT, 'tests/e2e/mock_llm.py'), String(mockPort)], {});
+  run(gatewayBin, [], {
+    ASKBAR_GATEWAY_SERVER_ADDR: '127.0.0.1:' + await freePort(), ASKBAR_GATEWAY_ADMIN_ADDR: '127.0.0.1:' + gatewayAdminPort,
+    ASKBAR_GATEWAY_TOKEN_DIR: path.join(dirs.creds, 'model-gateway-token'), ASKBAR_AUDIT_API_URL: 'http://127.0.0.1:' + await freePort(),
+  });
   run(path.join(ROOT, 'target/debug/askbar-admin'), [], {
     ASKBAR_ADMIN_SOCKET: sock, ASKBAR_ADMIN_DATA_DIR: dirs.adminData, ASKBAR_ADMIN_SECRETS_DIR: dirs.adminSecrets,
     ASKBAR_ADMIN_TOKEN_DIR: path.join(dirs.creds, 'admin-token'), ASKBAR_SERVER_API_URL: 'http://127.0.0.1:' + serverApiPort,
+    ASKBAR_GATEWAY_URL: 'http://127.0.0.1:' + gatewayAdminPort,
     ASKBAR_PUBLIC_URL: 'http://localhost:' + api,
     ASKBAR_CPA_CONFIG_DIR: path.join(data, 'cpa-config'), ASKBAR_CPA_URL: 'http://127.0.0.1:' + await freePort(),
   });
@@ -330,14 +340,14 @@ async function waitForPort(port) {
     await page.waitForFunction(() => !document.querySelector('.card[data-name="dead"]'));
   });
   await step('Services: the five services show whether they answer, and Restart asks first and then acts', async () => {
-    // No controller (ADR 0005): each state comes from the service. Here the server and the admin run;
-    // the gateway, Caddy and CLIProxyAPI do not.
+    // No controller (ADR 0005): each state comes from the service. Here the server, the gateway and the admin run;
+    // Caddy and CLIProxyAPI do not.
     await openPage('services');
     await page.waitForSelector('#services .card[data-name="cpa"]');
     assert.deepEqual(await page.$$eval('#services .card', (c) => c.map((x) => x.dataset.name)), ['server', 'model-gateway', 'admin', 'caddy', 'cpa']);
     assert.match(await page.innerText('#services .card[data-name="server"]'), /running/);
-    // The gateway is not running in this test, so it reads as unreachable, with a Restart button like the rest.
-    assert.match(await page.innerText('#services .card[data-name="model-gateway"]'), /unreachable/);
+    // The gateway runs here too, and it has a Restart button like the rest.
+    assert.match(await page.innerText('#services .card[data-name="model-gateway"]'), /running/);
     assert.deepEqual(await page.$$eval('#services .card[data-name="model-gateway"] button', (b) => b.map((x) => x.dataset.action)), ['restart']);
     assert.match(await page.innerText('#services .card[data-name="caddy"]'), /unreachable/);
     assert.deepEqual(await page.$$eval('#services .card[data-name="server"] button', (b) => b.map((x) => x.dataset.action)), ['restart'], 'only Restart: there is no start or stop');

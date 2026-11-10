@@ -107,6 +107,7 @@ dependencies = [
  "argon2",
  "askama",
  "askbar-bootstrap",
+ "askbar-model-gateway",
  "askbar-proto",
  "askbar-server",
  "askbar-service",

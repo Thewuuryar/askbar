@@ -64,7 +64,7 @@ async fn fake_config(State(f): State<Fake>, h: HeaderMap, Json(body): Json<Value
 }
 
 async fn rig() -> (T, Fake, Arc<GatewayLink>) {
-    let t = common::start(true).await;
+    let t = common::start_with(true, false).await;
     let fake = Fake::default();
     let app = Router::new()
         .route("/api/model-gateway/v1/status", get(fake_status))
@@ -196,7 +196,7 @@ async fn without_an_audit_key_nothing_is_pushed_and_it_says_why() {
 
 #[tokio::test]
 async fn a_gateway_that_does_not_answer_or_refuses_is_reported_and_never_stops_a_change() {
-    let t = common::start(true).await;
+    let t = common::start_with(true, false).await;
     // Nothing listens here.
     let dead = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
     let link = GatewayLink::new(&format!("http://127.0.0.1:{dead}"), GATEWAY_TOKEN.into());
@@ -210,7 +210,7 @@ async fn a_gateway_that_does_not_answer_or_refuses_is_reported_and_never_stops_a
 
     let (_, fake, link) = rig().await;
     *fake.refuse.lock().unwrap() = true;
-    let t2 = common::start(true).await;
+    let t2 = common::start_with(true, false).await;
     t2.admin.gateway.set(link.clone()).ok().unwrap();
     set_audit_key(&t2).await;
     let Sync::Refused(why) = link.sync(&t2.admin).await else { panic!("a refusal is reported") };

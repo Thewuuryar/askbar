@@ -53,6 +53,10 @@ fn from_push(e: PushError) -> Failure {
     }
 }
 
+fn gateway(state: &AdminState) -> Result<&Arc<crate::gateway_link::GatewayLink>, Failure> {
+    state.gateway.get().ok_or_else(|| err(StatusCode::BAD_GATEWAY, "No link to the gateway is set up."))
+}
+
 fn link(state: &AdminState) -> Result<&Arc<ServerLink>, Failure> {
     state.server.as_ref().ok_or_else(offline)
 }
@@ -362,12 +366,10 @@ pub async fn test_provider(State(state): St, Path(id): Path<String>) -> Result<R
     if !known {
         return Err(err(StatusCode::NOT_FOUND, "No such provider."));
     }
-    let (status, body) = link(&state)?
-        .request(reqwest::Method::POST, &format!("{}/providers/{id}/test", askbar_proto::paths::SERVER_V1), None)
-        .await
-        .map_err(from_push)?;
+    // The gateway holds the keys and has the route out (ADR 0054).
+    let (status, body) = gateway(&state)?.call(&state, reqwest::Method::POST, &format!("/providers/{id}/test"), None, true).await?;
     if status != 200 {
-        return Err(err(StatusCode::BAD_GATEWAY, &format!("The server answered {status}.")));
+        return Err(err(StatusCode::BAD_GATEWAY, &format!("The gateway answered {status}.")));
     }
     json_response(body)
 }
@@ -378,26 +380,24 @@ pub struct ModelsInput {
     kind: String,
     #[serde(default)]
     base_url: String,
-    /// Write-only, used once by the server for this request.
+    /// Write-only, used once by the gateway for this request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     api_key: Option<String>,
-    /// A saved provider whose stored key the server may use.
+    /// A saved provider whose key the gateway may use.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     provider_id: Option<String>,
 }
 
-/// Ask the server which models a provider offers (it has the keys and the network). Nothing is saved.
+/// Ask the gateway which models a provider offers (it has the keys and the route out). Nothing is saved.
 pub async fn list_models(State(state): St, ApiJson(i): ApiJson<ModelsInput>) -> Result<Response, Failure> {
     if !matches!(i.kind.as_str(), "openai" | "anthropic") {
         return Err(bad("Type must be openai or anthropic."));
     }
     let body = serde_json::to_value(&i).map_err(internal)?;
-    let (status, bytes) = link(&state)?
-        .request(reqwest::Method::POST, &askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/models"), Some(&body))
-        .await
-        .map_err(from_push)?;
+    let needs_config = i.provider_id.is_some();
+    let (status, bytes) = gateway(&state)?.call(&state, reqwest::Method::POST, "/models", Some(&body), needs_config).await?;
     if status != 200 {
-        return Err(err(StatusCode::BAD_GATEWAY, &format!("The server answered {status}.")));
+        return Err(err(StatusCode::BAD_GATEWAY, &format!("The gateway answered {status}.")));
     }
     json_response(bytes)
 }

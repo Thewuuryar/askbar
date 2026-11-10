@@ -33,12 +33,12 @@ async fn the_five_services_are_listed_from_the_services_themselves() {
         by,
         [
             ("server".into(), "running".into()),
-            ("model-gateway".into(), "unreachable".into()),
+            ("model-gateway".into(), "running".into()),
             ("admin".into(), "running".into()),
             ("caddy".into(), "running".into()),
             ("cpa".into(), "unreachable".into())
         ],
-        "the server answers /status, Caddy its socket; the gateway and CLIProxyAPI are not set up in this test"
+        "the server and the gateway answer /status, Caddy its socket; CLIProxyAPI is not set up in this test"
     );
     assert!(v["services"][0]["status"].as_str().unwrap().contains("not received its configuration"), "{v}");
     assert_eq!(v["recent"], json!([]));

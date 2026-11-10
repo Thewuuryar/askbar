@@ -2,6 +2,7 @@
 //! The admin site's API against a real in-process server: changes land in `admin.db` and on
 //! the server together, or not at all.
 
+mod common;
 use askbar_admin::server_link::{self, ServerLink};
 use askbar_admin::{web, AdminDb, AdminState};
 use askbar_server::{secrets::Secrets, AppState};
@@ -21,6 +22,8 @@ struct T {
     admin: Arc<AdminState>,
     server: Arc<AppState>,
     dir: PathBuf,
+    #[allow(dead_code)]
+    gateway: Arc<askbar_model_gateway::Gateway>,
 }
 
 impl Drop for T {
@@ -88,6 +91,10 @@ async fn start(reachable: bool) -> T {
     db.conn().execute("INSERT INTO users (id, name, created_at) VALUES ('U1', 'tester', 0)", []).unwrap();
     let link = ServerLink::new(&server_api_url, token);
     let admin = AdminState::with_server(db, link);
+    // The gateway holds the keys the admin gives it and does the model lists and provider tests (ADR 0054); with
+    // `reachable` false it is down too.
+    let (gateway, gateway_link) = common::start_gateway(&dir, reachable).await;
+    admin.gateway.set(gateway_link).ok().unwrap();
     let adm = serve(askbar_admin::router(admin.clone())).await;
     let http = reqwest::Client::new();
     let r = http
@@ -98,7 +105,7 @@ async fn start(reachable: bool) -> T {
         .await
         .unwrap();
     let cookie = r.headers()["set-cookie"].to_str().unwrap().split(';').next().unwrap().to_string();
-    T { adm, api, cookie, http, admin, server, dir }
+    T { adm, api, cookie, http, admin, server, dir, gateway }
 }
 
 impl T {
@@ -110,6 +117,12 @@ impl T {
         let resp = r.send().await.unwrap();
         let st = resp.status().as_u16();
         (st, serde_json::from_str(&resp.text().await.unwrap()).unwrap_or(Value::Null))
+    }
+    /// The gateway runs nothing without the audit key, so a test that tries a saved provider sets one first.
+    async fn set_audit_key(&self) {
+        let pass = "a long enough passphrase for tests";
+        let (st, _) = self.call(M::PUT, "/api/admin/v1/setup/audit-key", Some(json!({ "passphrase": pass, "confirm": pass }))).await;
+        assert_eq!(st, 200);
     }
     fn snapshot(&self) -> Option<askbar_proto::Snapshot> {
         askbar_server::snapshot::current(&self.server.db.lock().unwrap()).unwrap()
@@ -130,6 +143,7 @@ fn provider(name: &str, base: &str, key: Option<&str>) -> Value {
 #[tokio::test]
 async fn providers_are_saved_here_pushed_to_the_server_and_the_key_goes_only_to_the_server() {
     let t = start(true).await;
+    t.set_audit_key().await;
     let llm = fake_llm().await;
     let (st, created) = t.call(M::POST, "/api/admin/v1/providers", Some(provider("mock", &llm, Some(KEY)))).await;
     assert_eq!(st, 201);
@@ -158,7 +172,7 @@ async fn providers_are_saved_here_pushed_to_the_server_and_the_key_goes_only_to_
     let snapshot_text = serde_json::to_string(&snap).unwrap();
     assert!(!snapshot_text.contains(KEY), "the snapshot carries no key");
 
-    // Test goes through the server, which has the key.
+    // Test goes through the gateway, which holds the key the admin gave it.
     let (st, res) = t.call(M::POST, &format!("/api/admin/v1/providers/{id}/test"), None).await;
     assert_eq!((st, res["ok"].clone(), res["message"].as_str()), (200, json!(true), Some("ok")));
     assert!(!res.to_string().contains(KEY));
@@ -666,8 +680,9 @@ async fn the_key_routes_need_a_session_and_a_key_cannot_make_or_revoke_keys() {
 }
 
 #[tokio::test]
-async fn models_are_listed_by_the_server_with_a_typed_key_or_the_saved_one() {
+async fn models_are_listed_by_the_gateway_with_a_typed_key_or_the_saved_one() {
     let t = start(true).await;
+    t.set_audit_key().await;
     let llm = fake_llm().await;
     let ask = |body: Value| t.call(M::POST, "/api/admin/v1/providers/models", Some(body));
 
@@ -692,7 +707,7 @@ async fn models_are_listed_by_the_server_with_a_typed_key_or_the_saved_one() {
 }
 
 #[tokio::test]
-async fn models_get_502_when_the_server_is_down() {
+async fn models_get_502_when_the_gateway_is_down() {
     let t = start(false).await;
     let (st, _) = t.call(M::POST, "/api/admin/v1/providers/models", Some(json!({ "type": "openai" }))).await;
     assert_eq!(st, 502);

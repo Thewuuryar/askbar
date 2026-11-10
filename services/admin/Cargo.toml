@@ -34,6 +34,7 @@ serde-saphyr = { version = "2.1", default-features = false, features = ["deseria
 futures-util = "0.3"
 askbar-server = { path = "../server" }
 askbar-bootstrap = { path = "../bootstrap" }
+askbar-model-gateway = { path = "../model-gateway" }
 
 [lints]
 workspace = true

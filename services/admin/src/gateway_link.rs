@@ -195,6 +195,26 @@ impl GatewayLink {
         Ok((status, bytes.to_vec()))
     }
 
+    /// A call on the gateway for the admin API: what it answered, after giving it the configuration if it has none (a
+    /// provider saved a moment ago is not in its memory yet). A gateway that does not answer is a `502` with a sentence.
+    pub async fn call(
+        &self,
+        state: &AdminState,
+        method: reqwest::Method,
+        path: &str,
+        body: Option<&serde_json::Value>,
+        needs_config: bool,
+    ) -> Result<(u16, Vec<u8>), ApiError> {
+        let unreachable = || ApiError::new(ErrorCode::ServerUnavailable, "The gateway did not answer. Check it on the Services page.");
+        match self.sync(state).await {
+            Sync::Unreachable => return Err(unreachable()),
+            // A saved provider is only in the gateway once it has a configuration, and that needs the audit key.
+            Sync::NotReady(why) if needs_config => return Err(ApiError::new(ErrorCode::AuditKeyMissing, why)),
+            _ => {}
+        }
+        self.request(method, path, body).await.map_err(|()| unreachable())
+    }
+
     /// `GET /status`: the configuration version the gateway runs (none while unconfigured) and its boot ID. `None`
     /// if it did not answer or did not take the token.
     pub async fn status_now(&self) -> Option<(Option<u64>, String)> {

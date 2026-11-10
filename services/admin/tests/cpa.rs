@@ -220,25 +220,15 @@ async fn the_admin_hands_the_cpa_key_to_the_server_again_when_the_server_has_los
     t.call(M::POST, "/api/admin/v1/cpa/logins", json!({ "provider": "anthropic" })).await;
     t.call(M::POST, "/api/admin/v1/cpa/logins/STATE-1/callback", json!({ "redirect_url": GOOD })).await;
     let id = t.call(M::GET, "/api/admin/v1/cpa/logins/STATE-1", json!(null)).await.1["provider_id"].as_str().unwrap().to_string();
-    let models = || {
-        t.call(
-            M::POST,
-            "/api/admin/v1/providers/models",
-            json!({ "type": "openai", "base_url": t.admin.cpa.lock().unwrap().as_ref().unwrap().provider_url(), "provider_id": id }),
-        )
-    };
-    assert_eq!(models().await.1["ok"], json!(true), "set up: the key is there");
+    assert_eq!(server_key(&t, &id).as_deref(), Some(API_KEY), "set up: the key is there");
 
-    // The server's database was replaced: the provider is known (from the snapshot), its key is gone, and CPA answers 401.
+    // The server's database was replaced: the provider is known (from the snapshot) and its key is gone.
     lose_server_key(&t, &id);
     assert_eq!(server_key(&t, &id), None);
-    let (_, res) = models().await;
-    assert_eq!(res["ok"], json!(false), "CPA refuses without the key: {res}");
 
     // Opening the Services tab (which reads /cpa) puts it back.
     t.call(M::GET, "/api/admin/v1/cpa", json!(null)).await;
     assert_eq!(server_key(&t, &id).as_deref(), Some(API_KEY));
-    assert_eq!(models().await.1["ok"], json!(true));
 
     // And so does the push loop, with nobody opening anything: after a push, the key follows.
     lose_server_key(&t, &id);
@@ -258,5 +248,4 @@ async fn the_admin_hands_the_cpa_key_to_the_server_again_when_the_server_has_los
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
     assert_eq!(server_key(&t, &id).as_deref(), Some(API_KEY), "the key came back after the push");
-    assert_eq!(models().await.1["ok"], json!(true));
 }
