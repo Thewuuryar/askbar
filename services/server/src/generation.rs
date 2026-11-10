@@ -878,14 +878,14 @@ fn spawn_run(
                 .flatten()
                 .map(|provider| Candidate { id: provider_id.clone(), provider });
             let system = store::chat_system_prompt(&db).ok();
+            let turns = crate::snapshot::current(&db).ok().flatten().map(|s| s.history_turns).unwrap_or(0);
             drop(db);
-            // History from this conversation's own space only.
-            let history: Option<Vec<ChatMessage>> = fin
-                .space
-                .lock()
-                .get_messages(&fin.conversation_id)
-                .ok()
-                .map(|ms| ms.iter().map(|m| ChatMessage::new(&m.role, &m.content)).collect());
+            // History from this conversation's own space only, cut to the admin's limit. Cut here,
+            // so the audit record of what was sent is what was sent.
+            let history: Option<Vec<ChatMessage>> = fin.space.lock().get_messages(&fin.conversation_id).ok().map(|ms| {
+                let all: Vec<ChatMessage> = ms.iter().map(|m| ChatMessage::new(&m.role, &m.content)).collect();
+                crate::llm::last_turns(crate::llm::normalize(&all), turns)
+            });
             candidate.zip(system).zip(history)
         };
         let Some(((candidate, system), history)) = prepared else {

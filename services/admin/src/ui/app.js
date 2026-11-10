@@ -860,6 +860,7 @@
     $('s-kill-aborts').checked = s.kill_switch_aborts_running !== false;
     $('s-gen-timeout').value = s.generation_timeout_secs == null ? 300 : s.generation_timeout_secs;
     showTimeoutMinutes();
+    $('s-history-turns').value = s.history_turns == null ? 0 : s.history_turns;
     $('s-prompt').value = s.system_prompt;
     $('s-theme').value = s.display.theme;
     $('s-width').value = s.display.width;
@@ -878,6 +879,7 @@
       await api('PUT', '/api/admin/v1/settings', {
         system_prompt: $('s-prompt').value,
         generation_timeout_secs: parseInt($('s-gen-timeout').value, 10),
+        history_turns: parseInt($('s-history-turns').value, 10),
         audit_retention_days: parseInt($('s-retention').value, 10),
         kill_switch: $('s-kill-switch').checked,
         kill_switch_aborts_running: $('s-kill-aborts').checked,

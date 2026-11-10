@@ -967,6 +967,10 @@ pub struct AdminSettings {
     /// the stored value is kept.
     #[serde(default)]
     generation_timeout_secs: Option<u32>,
+    /// How many earlier questions, each with its reply, go with a new one (0 to 1000; 0 sends the
+    /// whole conversation). Always present when read; when a save leaves it out, it is kept.
+    #[serde(default)]
+    history_turns: Option<u32>,
     /// The kill switch: while on, the server starts no replies. Always present when read; when a
     /// save leaves it out, the stored value is kept.
     #[serde(default)]
@@ -989,6 +993,7 @@ const MAX_AUDIT_RETENTION_DAYS: u32 = 3650;
 /// The same bounds the server enforces on the snapshot.
 const MIN_GENERATION_TIMEOUT_SECS: u32 = 30;
 const MAX_GENERATION_TIMEOUT_SECS: u32 = 3600;
+const MAX_HISTORY_TURNS: u32 = 1000;
 
 fn check_display(d: &DisplaySettings) -> Result<(), Failure> {
     if !matches!(d.theme.as_str(), "auto" | "light" | "dark") {
@@ -1019,6 +1024,7 @@ pub async fn get_settings(State(state): St) -> Json<AdminSettings> {
                 .and_then(|s| s.trim().parse().ok())
                 .unwrap_or(askbar_proto::DEFAULT_GENERATION_TIMEOUT_SECS),
         ),
+        history_turns: Some(setting(c, "history_turns").and_then(|s| s.trim().parse().ok()).unwrap_or(0)),
         kill_switch: Some(
             c.query_row("SELECT kill_switch FROM budgets WHERE id = 1", [], |r| r.get::<_, i64>(0)).map(|v| v != 0).unwrap_or(false),
         ),
@@ -1044,6 +1050,10 @@ pub async fn put_settings(State(state): St, ApiJson(s): ApiJson<AdminSettings>) 
     }
     let display = serde_json::to_string(&s.display).map_err(|_| bad("Invalid display settings."))?;
     let timeout = s.generation_timeout_secs.map(|n| n.to_string());
+    if s.history_turns.is_some_and(|n| n > MAX_HISTORY_TURNS) {
+        return Err(bad(&format!("History sent with each question must be between 0 and {MAX_HISTORY_TURNS} questions.")));
+    }
+    let turns = s.history_turns.map(|n| n.to_string());
     if let Some(days) = s.audit_retention_days {
         if days < MIN_AUDIT_RETENTION_DAYS {
             return Err(bad(&format!("Audit records are kept for at least {MIN_AUDIT_RETENTION_DAYS} days.")));
@@ -1059,6 +1069,9 @@ pub async fn put_settings(State(state): St, ApiJson(s): ApiJson<AdminSettings>) 
         let mut pairs = vec![("system_prompt", s.system_prompt.as_str()), ("display", display.as_str())];
         if let Some(t) = timeout.as_deref() {
             pairs.push(("generation_timeout_secs", t));
+        }
+        if let Some(n) = turns.as_deref() {
+            pairs.push(("history_turns", n));
         }
         if let Some(a) = aborts {
             pairs.push(("kill_switch_aborts_running", a));

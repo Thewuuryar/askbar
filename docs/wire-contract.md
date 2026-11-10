@@ -243,6 +243,11 @@ this ([ADR 0022](adr/0022-api-path-conventions.md)); after 1.0, `v1` changes are
 
 ## Routing, retries and gates
 
+- What the model is sent: the system prompt, then the conversation, oldest first, ending with the
+  new question. A question that got no reply is left out, and two replies in a row are joined. The
+  snapshot's `history_turns` (0 to 1000, set on the admin's Settings page) keeps only the new
+  question and that many question-and-reply pairs before it; 0, or a snapshot without it, sends
+  the whole conversation.
 - Only the provider asked for (`ChatRequest.provider`) serves the reply. There is no automatic
   fallback to another provider ([ADR 0014](adr/0014-model-gateway-and-providers.md)): if it fails,
   the reply ends with an `error` event, and the administrator adds or selects another provider.

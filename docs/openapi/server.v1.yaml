@@ -640,6 +640,13 @@ components:
           type: integer
           minimum: 30
           maximum: 3600
+        history_turns:
+          type: integer
+          minimum: 0
+          maximum: 1000
+          description: >-
+            How many earlier questions, each with its reply, are sent with a new one. 0, or absent,
+            sends the whole conversation.
         audit_public_key:
           type: [object, 'null']
           properties:

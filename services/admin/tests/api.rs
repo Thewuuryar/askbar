@@ -326,6 +326,31 @@ async fn provider_billing_and_prices_round_trip_reach_the_server_and_are_validat
 }
 
 #[tokio::test]
+async fn the_history_limit_round_trips_reaches_the_server_and_is_range_checked() {
+    let t = start(true).await;
+    let disp = serde_json::to_value(askbar_proto::DisplaySettings::default()).unwrap();
+    let get = || async { t.call(M::GET, "/api/admin/v1/settings", None).await.1["history_turns"].clone() };
+    assert_eq!(get().await, json!(0), "the whole conversation until one is set");
+
+    let save = |n: serde_json::Value| json!({ "system_prompt": "x", "display": disp, "history_turns": n });
+    assert_eq!(t.call(M::PUT, "/api/admin/v1/settings", Some(save(json!(5)))).await.0, 204);
+    assert_eq!(get().await, json!(5));
+    assert_eq!(t.snapshot().unwrap().history_turns, 5, "pushed to the server");
+
+    assert_eq!(t.call(M::PUT, "/api/admin/v1/settings", Some(save(json!(1001)))).await.0, 400);
+    assert_eq!(t.call(M::PUT, "/api/admin/v1/settings", Some(save(json!(-1)))).await.0, 400);
+    assert_eq!(get().await, json!(5), "a refused save changes nothing");
+
+    // A save that leaves it out keeps it; 0 and 1000 are fine.
+    assert_eq!(t.call(M::PUT, "/api/admin/v1/settings", Some(json!({ "system_prompt": "y", "display": disp }))).await.0, 204);
+    assert_eq!(get().await, json!(5));
+    for ok in [0, 1000] {
+        assert_eq!(t.call(M::PUT, "/api/admin/v1/settings", Some(save(json!(ok)))).await.0, 204, "{ok}");
+    }
+    assert_eq!(t.snapshot().unwrap().history_turns, 1000);
+}
+
+#[tokio::test]
 async fn the_generation_timeout_round_trips_reaches_the_server_and_is_range_checked() {
     let t = start(true).await;
     let disp = serde_json::to_value(askbar_proto::DisplaySettings::default()).unwrap();

@@ -157,6 +157,16 @@ fn the_snapshot_carries_the_active_audit_public_key_and_only_that() {
 }
 
 #[test]
+fn the_history_limit_defaults_to_the_whole_conversation_and_follows_the_setting() {
+    let db = AdminDb::open_in_memory().unwrap();
+    assert_eq!(server_link::build_snapshot(db.conn()).unwrap().history_turns, 0);
+    db.conn().execute("INSERT INTO settings VALUES ('history_turns', '3')", []).unwrap();
+    assert_eq!(server_link::build_snapshot(db.conn()).unwrap().history_turns, 3);
+    db.conn().execute("UPDATE settings SET value = 'some' WHERE key = 'history_turns'", []).unwrap();
+    assert_eq!(server_link::build_snapshot(db.conn()).unwrap().history_turns, 0);
+}
+
+#[test]
 fn the_generation_timeout_defaults_to_300_when_never_set_and_follows_the_setting() {
     let db = AdminDb::open_in_memory().unwrap();
     // An install that predates the setting: no key, so the default, with no migration.

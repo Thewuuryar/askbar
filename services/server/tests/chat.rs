@@ -265,6 +265,36 @@ async fn provider_failure_becomes_an_error_event_and_keeps_the_question() {
     assert_eq!(t.messages(), [("user".to_string(), "please fail".to_string())]);
 }
 
+/// The admin's history limit: with 1, the third question goes with the second question and its
+/// reply only; with 0, with the whole conversation (plan step 1.13).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_history_limit_sends_only_the_last_turns_with_a_new_question() {
+    let t = start().await;
+    let http = client();
+    let ask = |conv: Option<String>, text: &'static str| {
+        let (t, http) = (&t, &http);
+        async move {
+            let events = parse_events(&t.chat(http, conv.as_deref(), "p1", text).await.text().await.unwrap().replace("\r\n", "\n"));
+            let ChatEvent::Meta { conversation_id, .. } = events[0].1.clone() else { panic!("first event must be meta") };
+            assert_eq!(events.last().unwrap().0, "done", "{events:?}");
+            conversation_id
+        }
+    };
+    let last_post = || t.mock.log.lock().unwrap().iter().rfind(|l| l.starts_with("POST")).cloned().unwrap();
+
+    askbar_server::testing::update_snapshot(&t.state.db.lock().unwrap(), |s| s.history_turns = 1);
+    let c = ask(None, "first").await;
+    ask(Some(c.clone()), "second").await;
+    ask(Some(c.clone()), "third").await;
+    // The system prompt, then "second", its reply and "third".
+    assert!(last_post().contains("msgs=4"), "{}", last_post());
+
+    askbar_server::testing::update_snapshot(&t.state.db.lock().unwrap(), |s| s.history_turns = 0);
+    ask(Some(c.clone()), "fourth").await;
+    // The system prompt and all seven messages.
+    assert!(last_post().contains("msgs=8"), "{}", last_post());
+}
+
 /// The question keeps why it failed, in the server's own words: the provider's error text (here a
 /// 401 and its body) stays out of the conversation (plan step 1.13; AGENTS.md).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
