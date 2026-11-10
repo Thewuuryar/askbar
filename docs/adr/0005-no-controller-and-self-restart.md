@@ -21,7 +21,7 @@ Neither v1 nor v2 has a controller, and no service gets the Docker socket for re
 
 Each endpoint has authentication, an audit event, a cooldown, a shutdown limit, and restart-loop alerts. Services the project builds also get an internal watchdog, because Docker marks a failed health check unhealthy but doesn't restart the container.
 
-**Token rotation:** a host command re-runs `bootstrap` for one link or all links. It writes new tokens and hashes, and the admin restarts the affected services so they read them. The admin can't rotate tokens itself ([0010](0010-auditor.md)).
+**Token rotation** is a host command that re-runs `bootstrap` ([0004](0004-bootstrap-and-per-link-tokens.md)); the admin then restarts the affected services, and can't rotate tokens itself.
 
 ## Alternatives considered
 
@@ -33,3 +33,5 @@ Each endpoint has authentication, an audit event, a cooldown, a shutdown limit, 
 A hung service, a failed admin, or the auditor needs host recovery. The admin also can't pull images, so updates run from the host ([0017](0017-dependencies-and-patches.md)). Docker, and any DNS or router settings, must exist before deployment.
 
 ## Amendments
+
+- 2026-11-10: the token-rotation paragraph links 0004 instead of restating it. No decision changed.
