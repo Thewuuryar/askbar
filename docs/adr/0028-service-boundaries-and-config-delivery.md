@@ -13,7 +13,7 @@ The server handles untrusted text and must not be able to change settings. `mode
 1. **Separate programs:** the admin and server have separate containers, images, user IDs, and volumes. The server image contains no admin code.
 2. **One direction:** the server never calls the admin, and never reads or writes the admin's data or settings. A model, tool, or reply can't change settings.
 3. **Unconfigured start:** a service that needs configuration answers `503 not_configured` until it has it.
-4. **Status and push:** the admin checks each service's `GET /status`, which reports its configuration version, every 10 to 15 seconds. It pushes configuration when a service is unconfigured or out of date, including after a restart. It also pushes as soon as it sees a service's new boot ID in the auditor ([0025](0025-audit-record-reliability.md)).
+4. **Status and push:** the admin checks each service's `GET /status`, which reports its configuration version, every 10 to 15 seconds. It pushes configuration when a service is unconfigured or out of date, including after a restart. It also pushes as soon as it sees a service's new boot ID in the auditor ([0010](0010-auditor.md)).
 5. **Records:** each configured service the project builds records the configuration version it applied in the auditor. Caddy and `cpa` are third-party and write no such record.
 6. **Service down:** if a service the admin must push to can't be reached, the admin refuses the change with a sentence for the person and applies nothing. It doesn't queue the change. When the service returns, the admin pushes the saved state.
 
