@@ -33,3 +33,5 @@ A deployer can't patch code they don't maintain, so maintainers and deployers ne
 ## Consequences
 
 Installing a patch takes a host command unless a deployer chooses automation. An image rollback doesn't undo a migration, so these releases need manual handling.
+
+## Amendments

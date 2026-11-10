@@ -24,3 +24,5 @@ The risk register relies on hardened containers to limit a compromised service, 
 ## Consequences
 
 Each service must work with a read-only root filesystem and limited memory, so limits need testing on the real host. A setting doesn't count until the stack has run with it. Hardening doesn't stop a kernel or container escape, which is an accepted risk ([0016](0016-risk-register.md)).
+
+## Amendments

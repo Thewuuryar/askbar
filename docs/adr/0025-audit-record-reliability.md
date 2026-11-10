@@ -24,3 +24,5 @@ These rules cover the services the project builds that append to the auditor ([0
 ## Consequences
 
 Services need a bounded retry queue. A fully compromised admin and auditor, or host root, could still agree on false data. This risk is accepted for v1 ([0016](0016-risk-register.md)).
+
+## Amendments

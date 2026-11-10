@@ -47,3 +47,5 @@ The server runs the agent loop, so each tool action passes through a single audi
 ## Consequences
 
 The judge can be prompt-injected, so these deterministic controls must stand on their own. An egress allowlist doesn't stop data leaving through a URL when the tool must reach the open web. Judge usage counts toward model budgets. This work doesn't block v1.
+
+## Amendments

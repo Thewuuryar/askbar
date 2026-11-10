@@ -23,3 +23,5 @@ Services must connect automatically, with no manual commands, on one Docker host
 ## Consequences
 
 Setup needs no manual wiring, and the admin's downtime can't expire a service credential. A stolen token works until it's rotated, and a compromised service can use its own token ([0016](0016-risk-register.md)).
+
+## Amendments

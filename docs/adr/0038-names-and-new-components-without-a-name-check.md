@@ -28,3 +28,5 @@ Everything in 0021 stands except the script:
 ## Consequences
 
 Retired words for Askbar's own roles can come back only through review. The glossary in [docs/architecture.md](../architecture.md#glossary) stays the one list of names.
+
+## Amendments

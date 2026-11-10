@@ -23,3 +23,5 @@ More components are planned after v1. If one role has several names, the code, A
 ## Consequences
 
 Adding a service takes a small amount of paperwork up front. The check script enforces retired words, and reviewers enforce the ADR requirement.
+
+## Amendments

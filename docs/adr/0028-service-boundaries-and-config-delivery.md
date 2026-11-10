@@ -25,3 +25,5 @@ The server handles untrusted text and must not be able to change settings. `mode
 ## Consequences
 
 After a reboot, services return on their own once the admin is running, which supports the no-commands target. The admin must read its own secrets unattended, so a stolen disk remains an accepted risk unless the host disk is encrypted. `check-isolation.sh` tests these boundaries.
+
+## Amendments

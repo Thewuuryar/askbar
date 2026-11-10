@@ -27,3 +27,5 @@ Not recorded.
 ## Consequences
 
 A new failure mode needs a code, a status, a title, and an OpenAPI entry in the same commit. OpenAPI tests fail if the files and the registry drift.
+
+## Amendments

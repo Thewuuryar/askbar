@@ -32,3 +32,5 @@ Not recorded.
 ## Consequences
 
 If the auditor is down, model work stops. Records sent after a server or admin compromise can be false or missing, so [0016](0016-risk-register.md) adds independent records and alerts.
+
+## Amendments

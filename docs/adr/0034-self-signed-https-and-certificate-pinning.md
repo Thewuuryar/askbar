@@ -27,3 +27,5 @@ Invariants a test checks: the certificate is made once and kept; the key file is
 ## Consequences
 
 A fresh install pairs over HTTPS by address with no domain. Browsers still warn on the admin site until a real certificate exists. Replacing the certificate (deleting it from the volume) means pairing every pinned client again. Clients paired with a pin keep it after a real certificate is set, until they are paired again. Enforced by tests in `services/admin` (`self_cert`, pairing) and the desktop client (`pinned_tls`, pairing), and by section 6 of `scripts/check-isolation.sh`.
+
+## Amendments

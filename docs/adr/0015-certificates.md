@@ -27,3 +27,5 @@ Add other DNS plugins or the acme-dns module only when someone needs them.
 ## Consequences
 
 Private deployments that want a real certificate use Cloudflare DNS. Without a real certificate, the self-signed certificate from [0007](0007-first-run-and-admin-sign-in.md) stays in use.
+
+## Amendments

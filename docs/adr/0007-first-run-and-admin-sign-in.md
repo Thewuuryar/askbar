@@ -47,3 +47,5 @@ V1 has one admin account, and no other users have admin access. A domain is need
 ## Consequences
 
 Until the password changes, any machine on a private network can sign in with the default login, so change it as soon as you deploy. This risk is accepted ([0016](0016-risk-register.md)). If the single admin loses access, recovery codes or the host reset command restore it.
+
+## Amendments

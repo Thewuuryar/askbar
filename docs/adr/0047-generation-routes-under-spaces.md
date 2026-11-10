@@ -39,3 +39,5 @@ Everything else in 0022 stands.
 - The space route list matches the code. The OpenAPI test (`services/server/tests/openapi.rs`) fails if a registered route and `docs/openapi/client.v1.yaml` disagree, which keeps the code and the OpenAPI file in step; no test compares this list to either.
 - 0022 shows `Accepted; amended by 0047` once the owner accepts this ADR.
 - If the owner drops `POST .../conversations`, a follow-up edit to this list removes that line.
+
+## Amendments

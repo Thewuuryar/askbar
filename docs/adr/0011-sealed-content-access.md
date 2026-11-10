@@ -28,3 +28,5 @@ Opening sealed content is its own permission. In v1, only the single admin has i
 ## Consequences
 
 If the admin is compromised during a session, an attacker can read all sealed content and may capture the key. Rotate the passphrase after any suspected compromise. A captured key could decrypt content without triggering the normal alert.
+
+## Amendments

@@ -1,6 +1,6 @@
 # NNNN. Title
 
-Status: Proposed | Accepted | Superseded by NNNN | Rejected
+Status: Proposed | Accepted | Rejected | Superseded by NNNN | Merged into NNNN | Deferred | Retired
 Date: YYYY-MM-DD
 
 ## Context
@@ -18,3 +18,7 @@ Each with the reason it lost. Write "Not recorded" if the reasoning is unknown.
 ## Consequences
 
 What gets easier, what gets harder, what must now be true. How it is enforced (test, script, CI), or "not enforced yet".
+
+## Amendments
+
+One line per amendment: the date, what changed and why, and the pull request ([0001](0001-decision-records-and-change-rules.md) rule 13). Empty until the first.

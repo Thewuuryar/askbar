@@ -32,3 +32,5 @@ The service layout must limit what a compromise can reach while staying small en
 ## Consequences
 
 A compromised service reaches only its own volumes and approved links. Host root can still read everything ([0016](0016-risk-register.md)).
+
+## Amendments
