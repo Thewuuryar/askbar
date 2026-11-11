@@ -76,7 +76,9 @@ async fn main() {
     let auditor_token = askbar_admin::auditor_link::read_token(&askbar_admin::server_link::token_dir()).unwrap_or_else(|e| die(e, 1));
     let auditor = askbar_admin::auditor_link::AuditorLink::new(&askbar_admin::auditor_link::auditor_url(), auditor_token);
     let _ = state.auditor.set(auditor.clone());
-    tokio::spawn(auditor.run(state.clone()));
+    tokio::spawn(auditor.clone().run(state.clone()));
+    // The head of the audit chain is compared with the one stored, every few minutes (ADR 0010 rule 7).
+    tokio::spawn(askbar_admin::chain_check::run(state.clone(), auditor));
     if let Err(e) = askbar_admin::serve_unix(&askbar_admin::socket_path(), askbar_admin::router(state)).await {
         die(e, 1);
     }

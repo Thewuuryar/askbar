@@ -144,6 +144,14 @@ const MIGRATIONS: &[&str] = &[
          key_enc     BLOB    NOT NULL,
          updated_at  INTEGER NOT NULL
      );",
+    // The newest entry of the auditor's hash chain the admin has seen and checked (ADR 0010 rule 7): the one place the
+    // chain's head is kept apart from the auditor, which is what lets a rollback be noticed.
+    "CREATE TABLE audit_chain_head (
+         id         INTEGER PRIMARY KEY CHECK (id = 1),
+         seq        INTEGER NOT NULL,
+         hash       TEXT    NOT NULL,
+         checked_at INTEGER NOT NULL
+     );",
 ];
 
 /// The schema steps, in order (for the upgrade tests).

@@ -458,6 +458,24 @@ paths:
                   token_rejected:
                     type: boolean
                     description: The server answers 401 to this admin's token. Clears with the next answer that is not a 401.
+                  audit_chain:
+                    type: object
+                    description: >-
+                      What the admin's check of the auditor's hash chain found (ADR 0010 rule 7). The check compares the
+                      chain's head with the one the admin stored, every five minutes, and asks for a full check of every
+                      record about once an hour.
+                    required: [state, detail]
+                    properties:
+                      state:
+                        type: string
+                        enum: [unknown, ok, rollback, rewritten, edited]
+                        description: >-
+                          `unknown` before the first check or while the auditor has not answered; `rollback` when the
+                          chain is shorter than the stored head; `rewritten` when the stored entry is gone or has another
+                          hash; `edited` when records no longer match their entries.
+                      detail:
+                        type: string
+                        description: A sentence for the banner; empty unless something is wrong. It never holds a record's content.
         '401':
           $ref: '#/components/responses/Unauthorized'
   /api/admin/v1/providers:
