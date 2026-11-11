@@ -46,6 +46,8 @@ pub struct T {
     pub http: reqwest::Client,
     pub admin: Arc<AdminState>,
     pub server: Arc<AppState>,
+    /// Where the server's API listens, for a test that builds a second admin in front of it.
+    pub server_api_url: String,
     pub fake: Arc<FakeCaddy>,
     pub dir: PathBuf,
     pub secrets_dir: PathBuf,
@@ -150,7 +152,7 @@ pub async fn start_with(caddy_up: bool, with_gateway: bool) -> T {
         .await
         .unwrap();
     let cookie = r.headers()["set-cookie"].to_str().unwrap().split(';').next().unwrap().to_string();
-    T { rig, gateway, adm, cookie, http, admin, server, fake, dir, secrets_dir, caddy_socket }
+    T { rig, gateway, adm, cookie, http, admin, server, server_api_url, fake, dir, secrets_dir, caddy_socket }
 }
 
 impl T {

@@ -104,7 +104,15 @@ impl ActionLog {
 
     /// An action the admin takes itself, with no request to hang it on (a configuration push, a reset): a `requested`
     /// record first, `f` only if it was appended, then `done` or `failed` (best effort). `Err` means nothing was done.
-    pub async fn around<T, E, F>(&self, category: &str, action: &str, detail: Value, f: F) -> Result<Result<T, E>, NotRecorded>
+    /// `extra` adds to the end record what the result shows (the version a push was given, say).
+    pub async fn around<T, E, F>(
+        &self,
+        category: &str,
+        action: &str,
+        detail: Value,
+        f: F,
+        extra: impl FnOnce(&Result<T, E>) -> Value,
+    ) -> Result<Result<T, E>, NotRecorded>
     where
         F: std::future::Future<Output = Result<T, E>>,
     {
@@ -122,6 +130,9 @@ impl ActionLog {
         let mut end = detail;
         if let Value::Object(m) = &mut end {
             m.insert("request".into(), json!(request));
+            if let Value::Object(more) = extra(&result) {
+                m.extend(more);
+            }
         }
         let outcome = if result.is_ok() { "done" } else { "failed" };
         if let Err(why) = self.record(&start(&ulid::Ulid::new().to_string(), outcome, end)).await {

@@ -277,7 +277,32 @@ impl GatewayLink {
             return Sync::NotReady(why);
         }
         let body = serde_json::to_value(&config).unwrap_or_default();
-        match self.request(reqwest::Method::PUT, askbar_service::routes::CONFIG, Some(&body)).await {
+        // A push is an action of its own: recorded before it is made, and not made when it cannot be (ADR 0010). The
+        // next round tries again, so a record that failed is not a lost configuration.
+        let sent = async {
+            match state.actions.get() {
+                None => Ok(self.request(reqwest::Method::PUT, askbar_service::routes::CONFIG, Some(&body)).await),
+                Some(log) => {
+                    log.around(
+                        "config_push",
+                        "model-gateway",
+                        serde_json::json!({ "target": "model-gateway", "version": config.version }),
+                        self.request(reqwest::Method::PUT, askbar_service::routes::CONFIG, Some(&body)),
+                        |r| serde_json::json!({ "status": r.as_ref().ok().map(|(s, _)| *s) }),
+                    )
+                    .await
+                }
+            }
+        }
+        .await;
+        let sent = match sent {
+            Ok(result) => result,
+            Err(why) => {
+                self.set_error(Some(why.sentence().to_string()));
+                return Sync::NotReady(why.sentence().to_string());
+            }
+        };
+        match sent {
             Ok((200, _)) => {
                 self.set_error(None);
                 tracing::info!(version = config.version, providers = config.providers.len(), "pushed the configuration to the gateway");

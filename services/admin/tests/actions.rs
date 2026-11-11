@@ -270,11 +270,20 @@ async fn the_auditors_answer_decides_which_sentence_the_person_gets() {
 async fn an_action_the_admin_takes_itself_is_recorded_first_and_is_not_done_without_it() {
     let (url, seen) = stub(201).await;
     let log = ActionLog::new(&url, "t".into());
-    let done = log.around("config_push", "gateway", json!({ "version": 3 }), async { Ok::<_, ()>(5) }).await;
+    let done = log
+        .around(
+            "config_push",
+            "gateway",
+            json!({ "target": "gateway" }),
+            async { Ok::<_, ()>(5) },
+            |r| json!({ "version": r.as_ref().ok() }),
+        )
+        .await;
     assert_eq!(done, Ok(Ok(5)));
     let outcomes: Vec<String> = seen.lock().unwrap().iter().map(|b| b["outcome"].as_str().unwrap().to_string()).collect();
     assert_eq!(outcomes, ["requested", "done"]);
-    let failed = log.around("config_push", "gateway", json!({}), async { Err::<(), _>("no") }).await;
+    assert_eq!(seen.lock().unwrap()[1]["detail"]["version"], 5, "the end record carries what the result shows");
+    let failed = log.around("config_push", "gateway", json!({}), async { Err::<(), _>("no") }, |_| json!({})).await;
     assert_eq!(failed, Ok(Err("no")));
     assert_eq!(seen.lock().unwrap().last().unwrap()["outcome"], "failed");
 
@@ -285,11 +294,111 @@ async fn an_action_the_admin_takes_itself_is_recorded_first_and_is_not_done_with
     let ran = Arc::new(Mutex::new(false));
     let flag = ran.clone();
     let blocked = ActionLog::new(&dead, "t".into())
-        .around("config_push", "gateway", json!({}), async move {
-            *flag.lock().unwrap() = true;
-            Ok::<_, ()>(())
-        })
+        .around(
+            "config_push",
+            "gateway",
+            json!({}),
+            async move {
+                *flag.lock().unwrap() = true;
+                Ok::<_, ()>(())
+            },
+            |_| json!({}),
+        )
         .await;
     assert_eq!(blocked, Err(NotRecorded::Unreachable));
     assert!(!*ran.lock().unwrap(), "the action did not run");
+}
+
+#[tokio::test]
+async fn a_push_to_the_server_and_one_to_the_gateway_are_actions_of_their_own() {
+    let t = common::start(true).await;
+    assert_eq!(t.call(M::POST, "/api/admin/v1/users", json!({ "name": "Alice" })).await.0, 201);
+    let rows = actions(&t);
+    let push =
+        |outcome: &str| rows.iter().find(|r| r["category"] == "config_push" && r["action"] == "server" && r["outcome"] == outcome).cloned();
+    let (asked, done) = (push("requested").expect("requested"), push("done").expect("done"));
+    assert_eq!(done["detail"]["request"], asked["id"]);
+    assert!(done["detail"]["version"].as_u64().is_some(), "the end names the version the server was given: {done}");
+    // The push came after the change was requested and before it was done.
+    let order: Vec<(&str, &str)> = rows
+        .iter()
+        .filter(|r| r["category"] != "config")
+        .map(|r| (r["category"].as_str().unwrap(), r["outcome"].as_str().unwrap()))
+        .collect();
+    assert_eq!(order, [("users", "requested"), ("config_push", "requested"), ("config_push", "done"), ("users", "done")], "{rows:#?}");
+
+    // The gateway is given its configuration by the admin's own loop, which is also an action.
+    t.call(
+        M::PUT,
+        "/api/admin/v1/setup/audit-key",
+        json!({ "passphrase": "a passphrase of at least twenty", "confirm": "a passphrase of at least twenty" }),
+    )
+    .await;
+    let sync = t.admin.gateway.get().unwrap().sync(&t.admin).await;
+    assert!(matches!(sync, askbar_admin::gateway_link::Sync::Pushed(_)), "{sync:?}");
+    let rows = actions(&t);
+    let gw: Vec<&str> = rows
+        .iter()
+        .filter(|r| r["category"] == "config_push" && r["action"] == "model-gateway")
+        .map(|r| r["outcome"].as_str().unwrap())
+        .collect();
+    assert_eq!(gw, ["requested", "done"], "{rows:#?}");
+}
+
+#[tokio::test]
+async fn a_push_to_the_gateway_waits_when_it_cannot_be_recorded_and_is_made_when_it_can() {
+    use std::sync::atomic::{AtomicU16, Ordering};
+    let t = common::start(true).await;
+    // An auditor whose answer the test chooses, in front of an admin of its own (so the real one is not disturbed).
+    let status = Arc::new(AtomicU16::new(201));
+    let s = status.clone();
+    let stub = common::serve(Router::new().route(
+        "/api/audit/v1/admin-actions",
+        post(move || {
+            let s = s.clone();
+            async move { StatusCode::from_u16(s.load(Ordering::Relaxed)).unwrap() }
+        }),
+    ))
+    .await;
+    let server_token = askbar_admin::server_link::read_token(&t.dir.join("admin-token")).unwrap();
+    let admin = askbar_admin::AdminState::build(
+        askbar_admin::AdminDb::open_in_memory().unwrap(),
+        Some(askbar_admin::server_link::ServerLink::new(&t.server_api_url, server_token)),
+        askbar_admin::secrets::AdminSecrets::ephemeral(),
+    );
+    askbar_admin::web::init_password(&*admin.db.lock().await, common::PW).unwrap();
+    admin.actions.set(ActionLog::new(&stub, "t".into())).ok().unwrap();
+    // The admin has an audit key (it is what the gateway cannot run without), and a link to the gateway of the first.
+    let adm = common::serve(askbar_admin::router(admin.clone())).await;
+    let http = reqwest::Client::new();
+    let r = http
+        .post(format!("{adm}/api/admin/v1/session"))
+        .header("x-askbar-admin", "1")
+        .json(&json!({ "password": common::PW }))
+        .send()
+        .await
+        .unwrap();
+    let cookie = r.headers()["set-cookie"].to_str().unwrap().split(';').next().unwrap().to_string();
+    let key = json!({ "passphrase": "a passphrase of at least twenty", "confirm": "a passphrase of at least twenty" });
+    let r = http
+        .put(format!("{adm}/api/admin/v1/setup/audit-key"))
+        .header("x-askbar-admin", "1")
+        .header("cookie", cookie)
+        .json(&key)
+        .send()
+        .await
+        .unwrap();
+    assert!(r.status().is_success(), "{}", r.status());
+    let gateway = t.admin.gateway.get().unwrap().clone();
+
+    // The auditor takes nothing: the push is not made and the gateway runs nothing.
+    status.store(503, Ordering::Relaxed);
+    let sync = gateway.sync(&admin).await;
+    assert!(matches!(sync, askbar_admin::gateway_link::Sync::NotReady(_)), "{sync:?}");
+    assert!(t.gateway.config_version().is_none(), "the gateway was given nothing");
+    // The auditor takes it again: the next round pushes.
+    status.store(201, Ordering::Relaxed);
+    let sync = gateway.sync(&admin).await;
+    assert!(matches!(sync, askbar_admin::gateway_link::Sync::Pushed(_)), "{sync:?}");
+    assert!(t.gateway.config_version().is_some());
 }
