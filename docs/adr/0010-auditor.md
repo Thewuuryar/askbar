@@ -25,7 +25,7 @@ Audit records must survive a compromised server or admin, and their credentials 
 
 - **Admin actions:** settings (including providers, models, budgets, users, clients and pairing keys), restarts, configuration pushes, secret, retention and backup key changes, backups and restores, provider tests, admin resets, and sealed-content sessions ([0011](0011-sealed-content-access.md)). The admin refuses an action if its record can't be appended.
 - **Admin records are claims.** For a service the project builds, an admin action with no matching record from the service that applied it ([0028](0028-service-boundaries-and-config-delivery.md)) raises a mismatch alert. Caddy and `cpa` write no such record, so a change to them raises none. Mismatch alerts can be deferred past v1 ([0002](0002-v1-scope-limits-and-ship-criteria.md), [0016](0016-risk-register.md)).
-- **The store:** the auditor accepts appends only, and chains records by hash. Sealed content is kept 30 days by default, never less than 7.
+- **The store:** the auditor accepts appends only, and chains records by hash. The one exception is a restore into an empty store ([0013](0013-backups.md), [0051](0051-auditor.md)). Its disk early warning is below 1 GiB free (re-armed above 1.25 GiB) and its critical alert below 256 MiB, which is also where new spans are refused. Sealed content is kept 30 days by default, never less than 7.
 
 **Span start and backlog** (model calls)
 
@@ -38,7 +38,7 @@ Audit records must survive a compromised server or admin, and their credentials 
 
 5. **Finish records:** a service queues finish and payload records, and retries them until the auditor acknowledges them.
 6. **Boot IDs:** a service announces a new boot ID when it connects. The auditor ends that service's earlier unfinished spans as interrupted.
-7. **Chain-head check:** the admin stores the latest chain head at intervals and checks it against the auditor. A rollback, deletion or edit appears in the admin and sends an alert.
+7. **Chain-head check:** the admin stores the latest chain head at intervals and checks it against the auditor. A rollback, deletion or edit appears in the admin and sends a `chain_mismatch` alert (once per finding). After a restore of the auditor's store the admin re-anchors its stored head, so the restore is not read as a rollback ([0013](0013-backups.md)). The admin-claim mismatch alerts above stay deferred (phase 8); they are not `chain_mismatch`.
 
 ## Alternatives considered
 
@@ -59,3 +59,4 @@ Audit records must survive a compromised server or admin, and their credentials 
 ## Amendments
 
 - 2026-11-10: merged in 0031 (audit span start and backlog), as "Span start and backlog", rules 1 to 4, and 0025 (audit record reliability), as "Record reliability", rules 5 to 7, with their alternatives and consequences. The rule on model-call spans, which 0010 had restated from 0031, is now said once (rule 2).
+- 2026-11-11: disk alert thresholds and the re-anchor after a restore (#70, D6 and D25): the early warning and critical alert, and the restore into an empty store as the one exception to append-only. The admin-claim mismatch alerts stay deferred.
