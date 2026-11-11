@@ -36,7 +36,9 @@ async fn mock_cpa() -> (String, Arc<Cpa>) {
     async fn url(State(c): State<Arc<Cpa>>, h: HeaderMap, Query(q): Query<HashMap<String, String>>) -> Json<Value> {
         assert!(authed(&h) && q.get("is_webui").map(String::as_str) == Some("true"));
         *c.pending.lock().unwrap() = Some("STATE-1".into());
-        Json(json!({ "status": "ok", "url": "https://claude.example/authorize?x=1", "state": "STATE-1" }))
+        Json(
+            json!({ "status": "ok", "url": "https://claude.example/authorize?x=1&redirect_uri=http%3A%2F%2Flocalhost%3A54545%2Fcallback", "state": "STATE-1" }),
+        )
     }
     async fn status(State(c): State<Arc<Cpa>>, h: HeaderMap) -> Json<Value> {
         assert!(authed(&h));
@@ -113,6 +115,9 @@ async fn connecting_an_account_from_the_page_makes_the_cpa_provider_with_the_key
 
     let (s, _) = t.call(M::POST, "/api/admin/v1/cpa/logins/STATE-1/callback", json!({ "redirect_url": GOOD })).await;
     assert_eq!(s, 200);
+    // The pasted address holds the one-time code: it is on no record the admin keeps (ADR 0010 rule on content).
+    let actions: String = t.rig.rows("SELECT detail_json FROM admin_actions").iter().map(|r| r[0].to_string()).collect();
+    assert!(actions.contains("cpa_login_finish") && !actions.contains("THECODE"), "the code is in no admin record: {actions}");
     let sent = cpa.callbacks.lock().unwrap()[0].clone();
     assert_eq!(
         (sent["provider"].as_str(), sent["code"].as_str(), sent["state"].as_str()),
@@ -150,6 +155,9 @@ async fn a_bad_address_is_explained_and_costs_nothing_but_a_good_one_works_once(
         "https://evil.example/cb?code=c&state=STATE-1",
         "http://localhost:1/cb?code=c&state=OTHER",
         "http://localhost:1/cb?state=STATE-1",
+        // A local address with this login's state, but not the one the login sends the browser back to.
+        "http://localhost:1/cb?code=c&state=STATE-1",
+        "http://localhost:54545/elsewhere?code=c&state=STATE-1",
     ] {
         let (s, v) = t.call(M::POST, path, json!({ "redirect_url": bad })).await;
         assert_eq!((s, v["error"].as_str()), (400, Some("bad_request")), "{bad}");

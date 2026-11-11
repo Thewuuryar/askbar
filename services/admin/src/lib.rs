@@ -40,6 +40,15 @@ use tokio::sync::Mutex;
 pub use db::AdminDb;
 pub use routes::Routes;
 
+/// A login waiting for its address: which provider, when it expires (unix seconds) and the address the browser is sent back
+/// to, taken from the login's own URL, which the pasted address has to match.
+#[derive(Clone, Debug)]
+pub struct CpaLogin {
+    pub provider: String,
+    pub expires: i64,
+    pub redirect: Option<String>,
+}
+
 pub struct AdminState {
     /// Async lock: a change holds it while it waits for the server to accept the new snapshot.
     pub db: Arc<Mutex<AdminDb>>,
@@ -69,7 +78,7 @@ pub struct AdminState {
     /// The link to CLIProxyAPI, once its config exists.
     pub cpa: std::sync::Mutex<Option<Arc<cpa::CpaLink>>>,
     /// Logins started and not finished: state -> (provider, expiry in unix seconds).
-    pub cpa_logins: std::sync::Mutex<std::collections::HashMap<String, (String, i64)>>,
+    pub cpa_logins: std::sync::Mutex<std::collections::HashMap<String, CpaLogin>>,
     /// When recent service actions happened (unix seconds), for the rate limit.
     pub service_actions: std::sync::Mutex<std::collections::VecDeque<i64>>,
 }

@@ -1,9 +1,9 @@
 //! CLIProxyAPI (CPA): the admin makes its configuration and API key, connects Claude and ChatGPT accounts
 //! through CPA's own control API (no terminal), and keeps one "managed" provider pointing at it.
 //!
-//! NOTE: the control API paths and shapes below are written from CPA's documentation as remembered and are
-//! not yet checked against the pinned image (`eceasy/cli-proxy-api:v8.0.51`, the base of the `askbar-cpa` image). They are all in this file, and
-//! `tests/mock_cpa` in `askbar-admin/tests/cpa.rs` states what is assumed.
+//! The control API paths and shapes below are checked against the pinned image (`eceasy/cli-proxy-api:v8.0.51`, the
+//! base of the `askbar-cpa` image) by `scripts/check-cpa-image.sh`; run it after changing the pinned digest. They are all
+//! in this file, and `tests/mock_cpa` in `askbar-admin/tests/cpa.rs` states what is assumed.
 //!
 //! Secrets: the CPA API key and CPA's control secret are made here and kept as files in the admin's secrets
 //! directory (mode 0600). The control secret goes into CPA's config in the shared `cpa-config` volume, which
@@ -366,13 +366,18 @@ pub async fn start_login(State(state): St, ApiJson(i): ApiJson<LoginInput>) -> R
     let now = crate::auth::now();
     {
         let mut p = state.cpa_logins.lock().unwrap_or_else(|e| e.into_inner());
-        p.retain(|_, (_, exp)| *exp > now);
+        p.retain(|_, l| l.expires > now);
         if p.len() >= MAX_PENDING {
             return Err(ApiError::new(ErrorCode::TooManyAttempts, "Too many logins are waiting. Finish or wait for them to expire."));
         }
     }
     let (url, st) = l.auth_url(&i.provider).await.map_err(down)?;
-    state.cpa_logins.lock().unwrap_or_else(|e| e.into_inner()).insert(st.clone(), (i.provider, now + LOGIN_TTL_SECS));
+    let redirect = redirect_of(&url);
+    state
+        .cpa_logins
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(st.clone(), crate::CpaLogin { provider: i.provider, expires: now + LOGIN_TTL_SECS, redirect });
     Ok(Json(json!({ "url": url, "state": st, "expires_in": LOGIN_TTL_SECS })))
 }
 
@@ -381,12 +386,34 @@ pub struct CallbackInput {
     redirect_url: String,
 }
 
-/// What a pasted address must be: a `localhost` or `127.0.0.1` address carrying the `code` and the `state` of this login.
-fn check_redirect(raw: &str, state: &str) -> Result<String, &'static str> {
+/// The address a login sends the browser back to: the `redirect_uri` in the login's own URL.
+fn redirect_of(login_url: &str) -> Option<String> {
+    let u = reqwest::Url::parse(login_url).ok()?;
+    let found = u.query_pairs().find(|(k, _)| k == "redirect_uri").map(|(_, v)| v.into_owned());
+    found.filter(|v| !v.is_empty())
+}
+
+/// Whether `pasted` is at the address the login expects: the same scheme, host, port and path (its query is the answer).
+fn same_place(pasted: &reqwest::Url, expected: &str) -> bool {
+    let Ok(e) = reqwest::Url::parse(expected) else { return false };
+    pasted.scheme() == e.scheme()
+        && pasted.host_str() == e.host_str()
+        && pasted.port_or_known_default() == e.port_or_known_default()
+        && pasted.path() == e.path()
+}
+
+/// What a pasted address must be: the address the login sends the browser back to (a `localhost` or `127.0.0.1` one, when
+/// the login does not say), carrying the `code` and the `state` of this login.
+fn check_redirect(raw: &str, state: &str, expected: Option<&str>) -> Result<String, &'static str> {
     let u =
         reqwest::Url::parse(raw.trim()).map_err(|_| "That is not an address. Paste the whole address from the browser's address bar.")?;
     if !matches!(u.scheme(), "http" | "https") || !matches!(u.host_str(), Some("localhost" | "127.0.0.1" | "[::1]")) {
         return Err("That address does not start with http://localhost. Paste the address the browser ended up on after you approved.");
+    }
+    if expected.is_some_and(|e| !same_place(&u, e)) {
+        return Err(
+            "That is not the address this login sends the browser back to. Paste the address the browser ended up on after you approved.",
+        );
     }
     let q: std::collections::HashMap<_, _> = u.query_pairs().collect();
     if q.get("state").map(|s| s.as_ref()) != Some(state) {
@@ -403,24 +430,25 @@ pub async fn finish_login(State(state): St, Path(st): Path<String>, ApiJson(i): 
     let l = link(&state)?;
     let now = crate::auth::now();
     // Single use: the login is taken out now, so a pasted address cannot be replayed.
-    let (provider, exp) = state
+    let login = state
         .cpa_logins
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .remove(&st)
         .ok_or_else(|| ApiError::new(ErrorCode::NotFound, "No such login, or it was already used."))?;
-    if exp <= now {
+    if login.expires <= now {
         return Err(ApiError::new(ErrorCode::NotFound, "This login expired. Start it again."));
     }
-    let code = match check_redirect(&i.redirect_url, &st) {
+    let code = match check_redirect(&i.redirect_url, &st, login.redirect.as_deref()) {
         Ok(c) => c,
         Err(why) => {
             // A typo should not cost the login: put it back.
-            state.cpa_logins.lock().unwrap_or_else(|e| e.into_inner()).insert(st, (provider, exp));
+            let provider = login.provider.clone();
+            state.cpa_logins.lock().unwrap_or_else(|e| e.into_inner()).insert(st, crate::CpaLogin { provider, ..login });
             return Err(ApiError::new(ErrorCode::BadRequest, why));
         }
     };
-    l.callback(&provider, i.redirect_url.trim(), &code, &st).await.map_err(down)?;
+    l.callback(&login.provider, i.redirect_url.trim(), &code, &st).await.map_err(down)?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -471,13 +499,40 @@ mod tests {
 
     #[test]
     fn a_pasted_address_must_be_local_and_carry_this_logins_state_and_a_code() {
-        assert_eq!(check_redirect("http://localhost:54545/callback?code=abc&state=S1", "S1"), Ok("abc".into()));
-        assert_eq!(check_redirect(" http://127.0.0.1:1455/auth/callback?state=S1&code=xyz ", "S1"), Ok("xyz".into()));
-        assert!(check_redirect("http://localhost:1/cb?code=abc&state=OTHER", "S1").is_err(), "another login's state");
-        assert!(check_redirect("http://localhost:1/cb?state=S1", "S1").is_err(), "no code");
-        assert!(check_redirect("https://evil.example/cb?code=abc&state=S1", "S1").is_err(), "not local");
-        assert!(check_redirect("http://localhost.evil.example/cb?code=abc&state=S1", "S1").is_err(), "a look-alike host");
-        assert!(check_redirect("not an address", "S1").is_err());
+        assert_eq!(check_redirect("http://localhost:54545/callback?code=abc&state=S1", "S1", None), Ok("abc".into()));
+        assert_eq!(check_redirect(" http://127.0.0.1:1455/auth/callback?state=S1&code=xyz ", "S1", None), Ok("xyz".into()));
+        assert!(check_redirect("http://localhost:1/cb?code=abc&state=OTHER", "S1", None).is_err(), "another login's state");
+        assert!(check_redirect("http://localhost:1/cb?state=S1", "S1", None).is_err(), "no code");
+        assert!(check_redirect("https://evil.example/cb?code=abc&state=S1", "S1", None).is_err(), "not local");
+        assert!(check_redirect("http://localhost.evil.example/cb?code=abc&state=S1", "S1", None).is_err(), "a look-alike host");
+        assert!(check_redirect("not an address", "S1", None).is_err());
+    }
+
+    #[test]
+    fn the_address_has_to_be_the_one_the_login_sends_the_browser_back_to() {
+        // As the pinned image gives them (CLIProxyAPI v8.0.51), one per provider.
+        let claude = "https://claude.ai/oauth/authorize?client_id=x&redirect_uri=http%3A%2F%2Flocalhost%3A54545%2Fcallback&state=S1";
+        let codex = "https://auth.openai.com/oauth/authorize?redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback&state=S1";
+        assert_eq!(redirect_of(claude).as_deref(), Some("http://localhost:54545/callback"));
+        assert_eq!(redirect_of(codex).as_deref(), Some("http://localhost:1455/auth/callback"));
+        assert_eq!(
+            redirect_of("https://x.example/authorize?state=S1"),
+            None,
+            "a login that names none falls back to the local-address rule"
+        );
+
+        let want = redirect_of(claude);
+        let ok = |raw: &str| check_redirect(raw, "S1", want.as_deref());
+        assert_eq!(ok("http://localhost:54545/callback?code=c&state=S1"), Ok("c".into()));
+        for wrong in [
+            "http://localhost:54546/callback?code=c&state=S1",     // another port
+            "http://localhost:54545/other?code=c&state=S1",        // another path
+            "https://localhost:54545/callback?code=c&state=S1",    // another scheme
+            "http://127.0.0.1:54545/callback?code=c&state=S1",     // another host, though local
+            "http://localhost:1455/auth/callback?code=c&state=S1", // the other provider's address
+        ] {
+            assert!(ok(wrong).is_err(), "{wrong}");
+        }
     }
 
     #[test]
