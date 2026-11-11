@@ -12,7 +12,7 @@
 pub mod disk;
 pub mod ingest;
 
-use askbar_audit::{AdminActionWrite, AppendError, PayloadWrite, Record, Recorder};
+use askbar_audit::{AdminActionWrite, AlertDeliveryWrite, AppendError, PayloadWrite, Record, Recorder};
 use askbar_proto::audit as wire;
 use askbar_proto::http::ApiError;
 use askbar_proto::paths::{self, AUDIT_V1};
@@ -66,6 +66,9 @@ pub struct Auditor {
     /// The boot ID each service last announced, to tag the spans it appends with it.
     boots: Mutex<HashMap<String, String>>,
     boot_id: BootId,
+    /// When each link last made a request (unix seconds), by the caller its token stands for: what the alert rules read to
+    /// tell a silent link from a quiet one (plan step 4.2, ADR 0055). In memory only: a restart starts it empty.
+    last_request: Mutex<HashMap<&'static str, i64>>,
     /// Lines on the ingest listener that were not taken: not Caddy's, or too long (plan step 2.9).
     pub access_refused: std::sync::atomic::AtomicU64,
 }
@@ -78,8 +81,19 @@ impl Auditor {
             free_space,
             boots: Mutex::new(HashMap::new()),
             boot_id: BootId::new(),
+            last_request: Mutex::new(HashMap::new()),
             access_refused: Default::default(),
         })
+    }
+
+    /// Notes a request on a link, at `at` (unix seconds).
+    pub fn note_request(&self, caller: &'static str, at: i64) {
+        self.last_request.lock().unwrap_or_else(|e| e.into_inner()).insert(caller, at);
+    }
+
+    /// When each link last made a request, by caller.
+    pub fn last_requests(&self) -> std::collections::BTreeMap<&'static str, i64> {
+        self.last_request.lock().unwrap_or_else(|e| e.into_inner()).iter().map(|(k, v)| (*k, *v)).collect()
     }
 
     /// The retention setting now, as stored (default 30).
@@ -129,6 +143,9 @@ const SERVICE_APPEND: Routes = &[
     ("POST", "/config-applied"),
     ("GET", "/status"),
 ];
+/// The alerter's append token (plan step 4.1, ADR 0055): the outcome of each alert, and the same hello, status and
+/// configuration record any service has. It opens no span and reads nothing.
+const ALERTER_APPEND: Routes = &[("POST", "/hello"), ("POST", "/config-applied"), ("POST", "/alert-deliveries"), ("GET", "/status")];
 /// The admin's append token: admin action records, and its boot ID. No read, no change, no delete.
 const ADMIN_APPEND: Routes = &[("POST", "/hello"), ("POST", "/admin-actions"), ("GET", "/status")];
 /// The admin's read token: records, metadata and retention. It appends nothing.
@@ -140,6 +157,7 @@ const ADMIN_READ: Routes = &[
     ("GET", "/stats"),
     ("GET", "/token-counts"),
     ("GET", "/admin-actions"),
+    ("GET", "/alert-deliveries"),
     ("GET", "/prunes"),
     ("GET", "/access-logs"),
     ("GET", "/chain/head"),
@@ -162,6 +180,7 @@ pub const LINKS: &[(&str, &str, Routes)] = &[
     ("admin-auditor-append", "admin", ADMIN_APPEND),
     ("admin-auditor-read", "admin-read", ADMIN_READ),
     ("model-gateway-auditor-read", "model-gateway-read", GATEWAY_READ),
+    ("alerter-auditor", "alerter", ALERTER_APPEND),
 ];
 
 fn method(m: &str) -> Method {
@@ -222,6 +241,7 @@ pub fn router(auditor: Arc<Auditor>, links: Links) -> Router {
         .route(&full("/spans/{id}/payloads"), post(add_payload).get(get_payloads))
         .route(&full("/admin-actions"), post(add_admin_action).get(list_admin_actions))
         .route(&full("/config-applied"), post(add_config_applied))
+        .route(&full("/alert-deliveries"), post(add_alert_delivery).get(list_alert_deliveries))
         .route(&full("/traces"), get(traces))
         .route(&full("/traces/{id}"), get(trace))
         .route(&full("/stats"), get(stats))
@@ -233,6 +253,8 @@ pub fn router(auditor: Arc<Auditor>, links: Links) -> Router {
         .route(&full("/chain/verify"), get(chain_verify))
         .route(&full("/retention"), get(get_retention).put(put_retention))
         .route(&full("/status"), get(status))
+        // Inside the token check, so only a request that passed it is noted, and with the caller the token stands for.
+        .layer(axum::middleware::from_fn_with_state(auditor.clone(), note_request))
         .layer(axum::middleware::from_fn_with_state(links, askbar_service::links::require));
     Router::new()
         .route(&full("/health"), get(|| async { "ok" }))
@@ -240,6 +262,14 @@ pub fn router(auditor: Arc<Auditor>, links: Links) -> Router {
         .fallback(|| async { ApiError::code(ErrorCode::NotFound) })
         .layer(DefaultBodyLimit::max(MAX_BODY))
         .with_state(auditor)
+}
+
+/// Notes the time of each request that passed the token check, by link (plan step 4.2, D2).
+async fn note_request(State(a): St, req: axum::extract::Request, next: axum::middleware::Next) -> axum::response::Response {
+    if let Some(Caller(caller)) = req.extensions().get::<Caller>().copied() {
+        a.note_request(caller, now());
+    }
+    next.run(req).await
 }
 
 type St = State<Arc<Auditor>>;
@@ -481,6 +511,46 @@ async fn add_config_applied(
     Ok(created(id))
 }
 
+/// The alerter says how an alert ended. Stored with the caller from the token, chained with the record. Only the
+/// outcome is kept: the kind from a fixed shape, the channel and outcome from short lists, and a count.
+async fn add_alert_delivery(
+    State(a): St,
+    Extension(Caller(caller)): Extension<Caller>,
+    body: Bytes,
+) -> Result<(StatusCode, Json<wire::Appended>), Failure> {
+    let r: wire::AlertDeliveryStart = parse(&body)?;
+    ident(&r.id, "The record id")?;
+    short(&r.kind, "The kind", 64)?;
+    if !r.kind.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_') {
+        return Err(bad("The kind is lower case letters, digits and underscores."));
+    }
+    if !["ntfy", "email"].contains(&r.channel.as_str()) {
+        return Err(bad("The channel is ntfy or email."));
+    }
+    if !["sent", "failed", "suppressed"].contains(&r.outcome.as_str()) {
+        return Err(bad("The outcome is sent, failed or suppressed."));
+    }
+    if r.attempts > 1000 {
+        return Err(bad("The attempts are at most 1,000."));
+    }
+    gate(&a, false)?;
+    let id = r.id.clone();
+    append(
+        &a,
+        Record::AlertDelivery(AlertDeliveryWrite {
+            id: r.id,
+            at: r.at,
+            caller: caller.to_string(),
+            kind: r.kind,
+            channel: r.channel,
+            outcome: r.outcome,
+            attempts: i64::from(r.attempts),
+        }),
+    )
+    .await?;
+    Ok(created(id))
+}
+
 // ------------------------------------------------------------------ reads
 
 /// Runs `f` on a read-only connection, off the async threads.
@@ -564,6 +634,11 @@ async fn list_admin_actions(State(a): St, Query(q): Query<ActionsQuery>) -> Resu
     Ok(Json(serde_json::Value::Array(rows)))
 }
 
+async fn list_alert_deliveries(State(a): St, Query(q): Query<ActionsQuery>) -> Result<Json<serde_json::Value>, Failure> {
+    let rows = read(&a, move |conn| askbar_audit::list_alert_deliveries(conn, q.before.as_deref(), q.limit)).await?;
+    Ok(Json(serde_json::Value::Array(rows)))
+}
+
 /// The newest entry of the hash chain: what the admin keeps and checks later.
 async fn chain_head(State(a): St) -> Result<Json<askbar_audit::chain::Head>, Failure> {
     Ok(Json(read(&a, askbar_audit::chain::head).await?))
@@ -622,6 +697,8 @@ async fn status(State(a): St) -> Json<serde_json::Value> {
     // How many of Caddy's lines were not kept: dropped because the queue was busy, or not an access line (plan step 2.9).
     body["access_lines_dropped"] = a.recorder.access_dropped().into();
     body["access_lines_refused"] = a.access_refused.load(std::sync::atomic::Ordering::Relaxed).into();
+    // When each link last called, by caller, so the rules can tell a silent link from a quiet one (D2).
+    body["last_requests"] = serde_json::json!(a.last_requests());
     Json(body)
 }
 

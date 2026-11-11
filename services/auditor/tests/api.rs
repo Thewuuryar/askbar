@@ -17,6 +17,7 @@ const GATEWAY: &str = "model-gateway-auditor";
 const ADMIN_APPEND: &str = "admin-auditor-append";
 const ADMIN_READ: &str = "admin-auditor-read";
 const GATEWAY_READ: &str = "model-gateway-auditor-read";
+const ALERTER: &str = "alerter-auditor";
 
 struct T {
     url: String,
@@ -48,7 +49,7 @@ async fn start_with(limits: Limits) -> T {
     let dir = std::env::temp_dir().join(format!("askbar-auditor-{}", ulid::Ulid::new()));
     let accept = dir.join("tokens/accept");
     std::fs::create_dir_all(&accept).unwrap();
-    for link in [SERVER, GATEWAY, ADMIN_APPEND, ADMIN_READ, GATEWAY_READ] {
+    for link in [SERVER, GATEWAY, ADMIN_APPEND, ADMIN_READ, GATEWAY_READ, ALERTER] {
         std::fs::write(accept.join(format!("{link}.sha256")), format!("{}\n", hex(&token(link)))).unwrap();
     }
     let recorder = Recorder::spawn(AuditDb::open(&dir.join("data/audit.db")).unwrap(), limits.max_queued);
@@ -699,4 +700,113 @@ async fn the_gateways_read_link_reads_the_token_counts_and_nothing_else() {
     for link in [SERVER, GATEWAY, ADMIN_APPEND] {
         assert_eq!(t.as_(link, M::GET, "/token-counts", None).await.status, 403, "{link}");
     }
+}
+
+fn delivery(id: &str) -> Value {
+    json!({ "id": id, "at": now(), "kind": "unsealed", "channel": "ntfy", "outcome": "sent", "attempts": 1 })
+}
+
+#[tokio::test]
+async fn the_alerters_delivery_record_is_stored_with_the_caller_from_its_token_and_read_by_the_admin() {
+    let t = start().await;
+    // The body cannot name another caller: an unknown field is refused, and the caller is the token's.
+    let mut forged = delivery("01D0");
+    forged["caller"] = json!("admin");
+    assert_eq!(t.as_(ALERTER, M::POST, "/alert-deliveries", Some(forged)).await.status, 400);
+    let r = t.as_(ALERTER, M::POST, "/alert-deliveries", Some(delivery("01D1"))).await;
+    assert_eq!((r.status, r.body["id"].as_str()), (201, Some("01D1")));
+    // Sent again, it is one record.
+    assert_eq!(t.as_(ALERTER, M::POST, "/alert-deliveries", Some(delivery("01D1"))).await.status, 201);
+    let rows = t.as_(ADMIN_READ, M::GET, "/alert-deliveries", None).await;
+    assert_eq!(rows.status, 200);
+    let rows = rows.body.as_array().unwrap().clone();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        (rows[0]["caller"].as_str(), rows[0]["kind"].as_str(), rows[0]["attempts"].as_i64()),
+        (Some("alerter"), Some("unsealed"), Some(1))
+    );
+    // It is in the chain, and the chain is whole.
+    assert_eq!(t.sql::<i64>("SELECT COUNT(*) FROM chain WHERE kind = 'alert_delivery'"), 1);
+    let v = t.as_(ADMIN_READ, M::GET, "/chain/verify", None).await;
+    assert_eq!(v.body["ok"], json!(true), "{}", v.body);
+}
+
+#[tokio::test]
+async fn a_delivery_record_takes_only_what_it_should() {
+    let t = start().await;
+    for (field, value) in [
+        ("kind", json!("Not A Kind")),
+        ("kind", json!("")),
+        ("kind", json!("x".repeat(65))),
+        ("channel", json!("sms")),
+        ("outcome", json!("maybe")),
+        ("attempts", json!(1001)),
+        ("attempts", json!(-1)),
+        ("id", json!("")),
+    ] {
+        let mut d = delivery("01D2");
+        d[field] = value.clone();
+        let r = t.as_(ALERTER, M::POST, "/alert-deliveries", Some(d)).await;
+        assert_eq!(r.status, 400, "{field} = {value}");
+    }
+    assert_eq!(t.sql::<i64>("SELECT COUNT(*) FROM alert_deliveries"), 0);
+}
+
+#[tokio::test]
+async fn the_alerters_link_reaches_its_own_routes_and_nothing_else_and_nobody_else_reaches_them() {
+    let t = start().await;
+    // Its own: hello, a configuration record and the status.
+    assert_eq!(t.as_(ALERTER, M::POST, "/hello", Some(json!({ "boot_id": "b1" }))).await.status, 200);
+    assert_eq!(t.as_(ALERTER, M::POST, "/config-applied", Some(json!({ "id": "01C1", "at": now(), "version": 3 }))).await.status, 201);
+    assert_eq!(t.as_(ALERTER, M::GET, "/status", None).await.status, 200);
+    // Everything else is 403: no span, no admin record, no read of any kind, no retention, no chain.
+    for (m, path, body) in [
+        (M::POST, "/spans", Some(span("s1", "t1", "gate"))),
+        (M::POST, "/spans/s1/finish", Some(finish("done"))),
+        (M::POST, "/spans/s1/payloads", Some(json!({}))),
+        (M::POST, "/admin-actions", Some(json!({ "id": "a1", "at": now(), "category": "c", "action": "a", "outcome": "done" }))),
+        (M::GET, "/admin-actions", None),
+        (M::GET, "/alert-deliveries", None),
+        (M::GET, "/traces", None),
+        (M::GET, "/stats", None),
+        (M::GET, "/token-counts", None),
+        (M::GET, "/access-logs", None),
+        (M::GET, "/chain/head", None),
+        (M::GET, "/chain/verify", None),
+        (M::GET, "/retention", None),
+        (M::PUT, "/retention", Some(json!({ "days": 7 }))),
+    ] {
+        assert_eq!(t.as_(ALERTER, m.clone(), path, body).await.status, 403, "{m} {path}");
+    }
+    // And no other link may record a delivery or read the alerter's.
+    for link in [SERVER, GATEWAY, ADMIN_APPEND, GATEWAY_READ] {
+        assert_eq!(t.as_(link, M::POST, "/alert-deliveries", Some(delivery("01D3"))).await.status, 403, "{link}");
+    }
+    for link in [SERVER, GATEWAY, ADMIN_APPEND, GATEWAY_READ] {
+        assert_eq!(t.as_(link, M::GET, "/alert-deliveries", None).await.status, 403, "{link}");
+    }
+    assert_eq!(t.call(None, M::POST, "/alert-deliveries", Some(delivery("01D4"))).await.status, 401);
+    assert_eq!(t.call(Some("tok_wrong"), M::GET, "/alert-deliveries", None).await.status, 401);
+    // The admin's read link cannot write a delivery.
+    assert_eq!(t.as_(ADMIN_READ, M::POST, "/alert-deliveries", Some(delivery("01D5"))).await.status, 403);
+    assert_eq!(t.sql::<i64>("SELECT COUNT(*) FROM alert_deliveries"), 0);
+}
+
+#[tokio::test]
+async fn the_status_shows_when_each_link_last_called_and_a_refused_call_is_not_one() {
+    let t = start().await;
+    let before = now();
+    assert_eq!(t.as_(SERVER, M::GET, "/status", None).await.status, 200);
+    // A wrong token and a route the link may not call do not count as that link being alive.
+    assert_eq!(t.call(Some("tok_wrong"), M::GET, "/status", None).await.status, 401);
+    let st = t.as_(GATEWAY, M::GET, "/status", None).await;
+    let last = st.body["last_requests"].as_object().unwrap().clone();
+    assert!(last["server"].as_i64().unwrap() >= before);
+    assert!(last["model-gateway"].as_i64().unwrap() >= before);
+    assert!(!last.contains_key("alerter"), "the alerter has not called: {last:?}");
+    assert!(!last.contains_key("admin"));
+    // The alerter's own call shows from then on.
+    assert_eq!(t.as_(ALERTER, M::GET, "/status", None).await.status, 200);
+    let st = t.as_(SERVER, M::GET, "/status", None).await;
+    assert!(st.body["last_requests"]["alerter"].as_i64().unwrap() >= before);
 }

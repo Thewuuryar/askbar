@@ -205,6 +205,36 @@ pub struct ConfigApplied {
     pub version: i64,
 }
 
+/// `POST /alert-deliveries`: how one alert ended (ADR 0055). Metadata only: no sentence, no field of the event. The
+/// caller is the token's, never the body's.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AlertDeliveryStart {
+    pub id: String,
+    pub at: i64,
+    /// The kind of alert, as the alerter's list names it (`unsealed`, `audit_disk_low`, ...): lower case, digits and `_`.
+    pub kind: String,
+    /// `ntfy` or `email`.
+    pub channel: String,
+    /// `sent`, `failed` or `suppressed`.
+    pub outcome: String,
+    /// How many tries it took, at most 1,000.
+    pub attempts: u32,
+}
+
+/// One row of `GET /alert-deliveries`, newest first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AlertDeliveryRecord {
+    pub id: String,
+    pub at: i64,
+    /// Which token appended it: the caller, from the token.
+    pub caller: String,
+    pub kind: String,
+    pub channel: String,
+    pub outcome: String,
+    pub attempts: i64,
+}
+
 /// One row of `GET /admin-actions`, newest first.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AdminActionRecord {
