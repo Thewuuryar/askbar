@@ -1,4 +1,4 @@
-//! The gateway's link to the auditor (ADR 0054, ADR 0010 rules 1 to 3).
+//! A service's link to the auditor (ADR 0054, ADR 0010 rules 1 to 3), shared by `model-gateway` and the server.
 //!
 //! - A span that must be on record before a provider is called is appended and **acknowledged**
 //!   ([`AuditClient::open`]): one second at most, and no answer in time is a refusal.
@@ -8,6 +8,7 @@
 //!
 //! Content never passes through here in the clear: payloads arrive sealed.
 
+use crate::ids;
 use askbar_proto::audit::{Hello, SealedPayload, SpanFinish, SpanKind, SpanStart};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::Serialize;
@@ -23,8 +24,6 @@ pub const ACK_TIMEOUT: Duration = Duration::from_secs(1);
 /// How many records the queue keeps; past it the oldest is dropped, and the drops are counted and recorded.
 pub const QUEUE_LIMIT: usize = 1000;
 const SEND_TIMEOUT: Duration = Duration::from_secs(5);
-/// The link name `bootstrap` gives the gateway's token for the auditor.
-pub const LINK: &str = "model-gateway-auditor";
 
 /// Why a span could not be opened.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,30 +54,36 @@ pub struct AuditClient {
     http: reqwest::Client,
     base: String,
     token_dir: PathBuf,
+    /// The link, as `bootstrap` names it (`model-gateway-auditor`, `server-auditor`): its token is `call/<link>.token`.
+    link: &'static str,
     queue: Mutex<Queue>,
     wake: Notify,
     /// The auditor has our boot ID: spans opened from now on belong to this process.
     hello_done: AtomicBool,
     /// Records sent after waiting in the queue, for the tests and the status.
     sent: AtomicU64,
+    /// Whether the last request reached the auditor and was not refused for its backlog.
+    last_ok: AtomicBool,
 }
 
 impl AuditClient {
-    pub fn new(base: &str, token_dir: PathBuf) -> Arc<AuditClient> {
+    pub fn new(base: &str, token_dir: PathBuf, link: &'static str) -> Arc<AuditClient> {
         Arc::new(AuditClient {
             http: reqwest::Client::builder().connect_timeout(Duration::from_secs(2)).build().expect("reqwest client"),
             base: base.trim_end_matches('/').to_string(),
             token_dir,
+            link,
             queue: Mutex::new(Queue::default()),
             wake: Notify::new(),
             hello_done: AtomicBool::new(false),
             sent: AtomicU64::new(0),
+            last_ok: AtomicBool::new(true),
         })
     }
 
     /// The token `bootstrap` made for this link, read each time: a rotated token works without a restart.
     fn token(&self) -> Option<String> {
-        let t = std::fs::read_to_string(self.token_dir.join("call").join(format!("{LINK}.token"))).ok()?;
+        let t = std::fs::read_to_string(self.token_dir.join("call").join(format!("{}.token", self.link))).ok()?;
         Some(t.trim().to_string()).filter(|t| !t.is_empty())
     }
 
@@ -89,8 +94,17 @@ impl AuditClient {
     /// One request; what the auditor answered with, or `None` if nothing reached it.
     async fn send<T: Serialize>(&self, path: &str, body: &T, timeout: Duration) -> Result<u16, ()> {
         let token = self.token().ok_or(())?;
-        let r = self.http.post(self.url(path)).bearer_auth(token).timeout(timeout).json(body).send().await.map_err(|_| ())?;
-        Ok(r.status().as_u16())
+        let sent = self.http.post(self.url(path)).bearer_auth(token).timeout(timeout).json(body).send().await;
+        let status = sent.map(|r| r.status().as_u16()).map_err(|_| ());
+        self.last_ok.store(matches!(status, Ok(s) if s != 503 && s != 429), Ordering::Relaxed);
+        status
+    }
+
+    /// Whether this service may start a new piece of work that must be recorded: the auditor has its boot ID, the last
+    /// request reached it and was not refused for its backlog, and the queue is not nearly full. A service that cannot
+    /// record answers `503 audit_backlog` rather than work unrecorded (ADR 0010 rule 3).
+    pub fn healthy(&self) -> bool {
+        self.ready() && self.last_ok.load(Ordering::Relaxed) && self.queued() < QUEUE_LIMIT * 9 / 10
     }
 
     /// Whether the auditor has been told this process's boot ID.
@@ -144,11 +158,17 @@ impl AuditClient {
         self.push(Item::Finish(id.to_string(), f));
     }
 
-    /// Queue a sealed payload for a span.
-    pub fn payload(&self, id: &str, role: &str, sealed: &crate::seal::Sealed) {
+    /// Queue a span start that needs no acknowledgment: the server's own gate spans (ADR 0010 rule 2 lets its link open
+    /// those and nothing else). Behind the queue, so it reaches the auditor before the span's finish record.
+    pub fn start(&self, start: SpanStart) {
+        self.push(Item::Start(start));
+    }
+
+    /// Queue a sealed payload for a span: the id of the key it was sealed to, and the ciphertext.
+    pub fn payload(&self, id: &str, role: &str, key_id: &str, ciphertext: &[u8]) {
         self.push(Item::Payload(
             id.to_string(),
-            SealedPayload { role: role.to_string(), key_id: sealed.key_id.clone(), ciphertext_b64: STANDARD.encode(&sealed.bytes) },
+            SealedPayload { role: role.to_string(), key_id: key_id.to_string(), ciphertext_b64: STANDARD.encode(ciphertext) },
         ));
     }
 
@@ -217,8 +237,8 @@ impl AuditClient {
         if dropped == 0 {
             return;
         }
-        let (now, ms) = crate::now_parts();
-        let id = askbar_service::ids::new_id();
+        let (now, ms) = now_parts();
+        let id = ids::new_id();
         let start = SpanStart {
             id: id.clone(),
             trace_id: id.clone(),
@@ -251,4 +271,10 @@ impl AuditClient {
         q.items.push_back(Item::Start(start));
         q.items.push_back(Item::Finish(id, finish));
     }
+}
+
+/// Unix seconds and milliseconds now.
+pub fn now_parts() -> (i64, i64) {
+    let d = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    (d.as_secs() as i64, d.as_millis() as i64)
 }

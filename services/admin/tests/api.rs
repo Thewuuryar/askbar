@@ -2,9 +2,10 @@
 //! The admin site's API against a real in-process server: changes land in `admin.db` and on
 //! the server together, or not at all.
 
+mod common;
 use askbar_admin::server_link::{self, ServerLink};
 use askbar_admin::{web, AdminDb, AdminState};
-use askbar_server::{secrets::Secrets, AppState};
+use askbar_server::AppState;
 use reqwest::Method as M;
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -21,6 +22,8 @@ struct T {
     admin: Arc<AdminState>,
     server: Arc<AppState>,
     dir: PathBuf,
+    #[allow(dead_code)]
+    gateway: Arc<askbar_model_gateway::Gateway>,
 }
 
 impl Drop for T {
@@ -73,7 +76,7 @@ async fn start(reachable: bool) -> T {
 
     let sdb = askbar_server::Db::open_in_memory().unwrap();
     sdb.seed_server().unwrap();
-    let server = AppState::new(sdb, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), askbar_server::MIN_CLIENT);
+    let server = AppState::new(sdb, askbar_server::MIN_CLIENT);
     let api = serve(askbar_server::client_router(server.clone())).await;
     let server_api_url = if reachable {
         serve(askbar_server::server_api::router(server.clone(), hash_file.clone())).await
@@ -88,6 +91,10 @@ async fn start(reachable: bool) -> T {
     db.conn().execute("INSERT INTO users (id, name, created_at) VALUES ('U1', 'tester', 0)", []).unwrap();
     let link = ServerLink::new(&server_api_url, token);
     let admin = AdminState::with_server(db, link);
+    // The gateway holds the keys the admin gives it and does the model lists and provider tests (ADR 0054); with
+    // `reachable` false it is down too.
+    let (gateway, gateway_link) = common::start_gateway(&dir, reachable).await;
+    admin.gateway.set(gateway_link).ok().unwrap();
     let adm = serve(askbar_admin::router(admin.clone())).await;
     let http = reqwest::Client::new();
     let r = http
@@ -98,7 +105,7 @@ async fn start(reachable: bool) -> T {
         .await
         .unwrap();
     let cookie = r.headers()["set-cookie"].to_str().unwrap().split(';').next().unwrap().to_string();
-    T { adm, api, cookie, http, admin, server, dir }
+    T { adm, api, cookie, http, admin, server, dir, gateway }
 }
 
 impl T {
@@ -110,6 +117,12 @@ impl T {
         let resp = r.send().await.unwrap();
         let st = resp.status().as_u16();
         (st, serde_json::from_str(&resp.text().await.unwrap()).unwrap_or(Value::Null))
+    }
+    /// The gateway runs nothing without the audit key, so a test that tries a saved provider sets one first.
+    async fn set_audit_key(&self) {
+        let pass = "a long enough passphrase for tests";
+        let (st, _) = self.call(M::PUT, "/api/admin/v1/setup/audit-key", Some(json!({ "passphrase": pass, "confirm": pass }))).await;
+        assert_eq!(st, 200);
     }
     fn snapshot(&self) -> Option<askbar_proto::Snapshot> {
         askbar_server::snapshot::current(&self.server.db.lock().unwrap()).unwrap()
@@ -128,21 +141,32 @@ fn provider(name: &str, base: &str, key: Option<&str>) -> Value {
 }
 
 #[tokio::test]
-async fn providers_are_saved_here_pushed_to_the_server_and_the_key_goes_only_to_the_server() {
+async fn providers_are_saved_here_pushed_to_the_server_and_the_key_goes_only_to_the_gateway() {
     let t = start(true).await;
+    t.set_audit_key().await;
     let llm = fake_llm().await;
     let (st, created) = t.call(M::POST, "/api/admin/v1/providers", Some(provider("mock", &llm, Some(KEY)))).await;
     assert_eq!(st, 201);
     let id = created["id"].as_str().unwrap().to_string();
 
-    // The server has the provider in its snapshot and the key, encrypted.
+    // The server has the provider in its snapshot.
     let snap = t.snapshot().unwrap();
     assert_eq!((snap.providers.len(), snap.providers[0].id.as_str(), snap.providers[0].name.as_str()), (1, id.as_str(), "mock"));
-    let enc: Vec<u8> =
-        t.server.db.lock().unwrap().conn().query_row("SELECT api_key_enc FROM providers WHERE id = ?1", [&id], |r| r.get(0)).unwrap();
-    assert_eq!(t.server.secrets().decrypt(&enc).unwrap(), KEY);
+    // The server holds no key at all (ADR 0054); the admin keeps it encrypted and the gateway has it in memory.
+    let server_keys: i64 = t
+        .server
+        .db
+        .lock()
+        .unwrap()
+        .conn()
+        .query_row("SELECT COUNT(*) FROM providers WHERE api_key_enc IS NOT NULL", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(server_keys, 0);
+    let held: Vec<u8> =
+        t.admin.db.lock().await.conn().query_row("SELECT key_enc FROM provider_keys WHERE provider_id = ?1", [&id], |r| r.get(0)).unwrap();
+    assert!(!held.windows(KEY.len()).any(|w| w == KEY.as_bytes()), "encrypted at rest");
 
-    // This side never holds the key: not in admin.db, not in the list.
+    // The list never shows the key, and the rest of admin.db holds none.
     let (_, list) = t.call(M::GET, "/api/admin/v1/providers", None).await;
     assert_eq!((list[0]["name"].as_str(), list[0]["has_key"].clone()), (Some("mock"), json!(true)));
     assert!(!list.to_string().contains(KEY));
@@ -158,7 +182,7 @@ async fn providers_are_saved_here_pushed_to_the_server_and_the_key_goes_only_to_
     let snapshot_text = serde_json::to_string(&snap).unwrap();
     assert!(!snapshot_text.contains(KEY), "the snapshot carries no key");
 
-    // Test goes through the server, which has the key.
+    // Test goes through the gateway, which holds the key the admin gave it.
     let (st, res) = t.call(M::POST, &format!("/api/admin/v1/providers/{id}/test"), None).await;
     assert_eq!((st, res["ok"].clone(), res["message"].as_str()), (200, json!(true), Some("ok")));
     assert!(!res.to_string().contains(KEY));
@@ -666,8 +690,9 @@ async fn the_key_routes_need_a_session_and_a_key_cannot_make_or_revoke_keys() {
 }
 
 #[tokio::test]
-async fn models_are_listed_by_the_server_with_a_typed_key_or_the_saved_one() {
+async fn models_are_listed_by_the_gateway_with_a_typed_key_or_the_saved_one() {
     let t = start(true).await;
+    t.set_audit_key().await;
     let llm = fake_llm().await;
     let ask = |body: Value| t.call(M::POST, "/api/admin/v1/providers/models", Some(body));
 
@@ -692,7 +717,7 @@ async fn models_are_listed_by_the_server_with_a_typed_key_or_the_saved_one() {
 }
 
 #[tokio::test]
-async fn models_get_502_when_the_server_is_down() {
+async fn models_get_502_when_the_gateway_is_down() {
     let t = start(false).await;
     let (st, _) = t.call(M::POST, "/api/admin/v1/providers/models", Some(json!({ "type": "openai" }))).await;
     assert_eq!(st, 502);
@@ -764,7 +789,7 @@ async fn an_install_from_before_takes_over_the_servers_users_so_its_clients_keep
 }
 
 #[tokio::test]
-async fn a_provider_whose_key_the_server_lost_says_so_until_the_key_is_entered_again() {
+async fn a_provider_whose_key_the_admin_never_held_says_so_until_the_key_is_entered_again() {
     let t = start(true).await;
     let llm = fake_llm().await;
     let (_, created) = t.call(M::POST, "/api/admin/v1/providers", Some(provider("mock", &llm, Some(KEY)))).await;
@@ -780,8 +805,9 @@ async fn a_provider_whose_key_the_server_lost_says_so_until_the_key_is_entered_a
     };
     assert_eq!(flags().await, [("keyless".to_string(), false), ("mock".to_string(), false)]);
 
-    // The server's database was replaced: it lists the provider (the snapshot) but holds no key.
-    t.server.db.lock().unwrap().conn().execute("UPDATE providers SET api_key_enc = NULL WHERE id = ?1", [&id]).unwrap();
+    // An install from before the gateway: the server held the key, the admin could never read it. The row of its own
+    // key is not there, though the old column says one was entered (ADR 0054).
+    t.admin.db.lock().await.conn().execute("DELETE FROM provider_keys WHERE provider_id = ?1", [&id]).unwrap();
     assert_eq!(flags().await, [("keyless".to_string(), false), ("mock".to_string(), true)], "only the one the admin sent a key for");
 
     // Entering the key again (an edit with a key) clears it.

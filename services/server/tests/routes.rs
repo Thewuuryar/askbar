@@ -1,7 +1,7 @@
 //! The route tables the server records while it builds its routers are the routers: every entry
 //! answers (a 401 or a 400 counts, a 404 or 405 does not), and an unregistered method is a 405.
 use askbar_server::routes::{client_routes, server_routes, RouteEntry};
-use askbar_server::{secrets::Secrets, AppState};
+use askbar_server::AppState;
 use std::collections::BTreeSet;
 
 fn concrete(path: &str) -> String {
@@ -31,7 +31,7 @@ async fn serve(app: axum::Router) -> String {
 fn state() -> std::sync::Arc<AppState> {
     let db = askbar_server::Db::open_in_memory().unwrap();
     db.seed_server().unwrap();
-    AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), askbar_server::MIN_CLIENT)
+    AppState::new(db, askbar_server::MIN_CLIENT)
 }
 
 fn assert_unique_under(table: &[RouteEntry], prefix: &str, also: &[&str]) {

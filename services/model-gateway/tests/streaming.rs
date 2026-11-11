@@ -1,7 +1,7 @@
 //! End-to-end streaming tests against a local mock server speaking just enough
 //! HTTP + SSE to stand in for OpenAI-compatible and Anthropic endpoints.
 
-use askbar_server::llm::{http_client, stream_chat, ChatError, ChatMessage, Provider, ProviderKind, StreamOutcome};
+use askbar_model_gateway::llm::{http_client, stream_chat, ChatError, ChatMessage, Provider, ProviderKind, StreamOutcome};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -82,7 +82,6 @@ fn provider(kind: ProviderKind, base: &str, key: &str) -> Provider {
         kind,
         base_url: base.to_string(),
         api_key: key.to_string(),
-        api_key_env: String::new(),
         model: "m".into(),
         max_tokens: (kind == ProviderKind::Anthropic).then_some(4096),
         temperature: None,

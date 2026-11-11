@@ -7,12 +7,14 @@
 //! - [`restart`]: `POST /restart` (exit cleanly; Docker's restart policy starts the service again)
 //!   and the watchdog that exits a service whose own health check keeps failing (ADR 0005).
 //! - [`ids`]: server-generated ULIDs.
+//! - [`audit_client`]: the link to the auditor, with its queue of records to send (ADR 0010, ADR 0054).
 //! - [`tar`]: the archive a backup export is written in.
 //!
 //! The common internal routes are the same in every service (ADR 0022): `GET /health`,
 //! `GET /status`, `PUT /config`, `POST /restart` (and later `POST /exports`). Their paths are in
 //! [`routes`].
 
+pub mod audit_client;
 pub mod configured;
 pub mod ids;
 pub mod links;

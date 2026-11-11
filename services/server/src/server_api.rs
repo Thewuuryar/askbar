@@ -131,85 +131,15 @@ fn fail(status: StatusCode, msg: &str) -> Failure {
     ApiError::from(status).detail(msg)
 }
 
-#[derive(serde::Deserialize)]
-struct KeyInput {
-    key: String,
-}
-
-const MAX_KEY_CHARS: usize = 4096;
-
-/// Store a provider's API key, encrypted with the master key. Write-only: no endpoint
-/// ever returns it, and this one answers `204` with no body.
-async fn put_provider_key(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-    ApiJson(input): ApiJson<KeyInput>,
-) -> Result<StatusCode, Failure> {
-    let key = input.key.trim();
-    if key.is_empty() || key.chars().count() > MAX_KEY_CHARS {
-        return Err(fail(StatusCode::BAD_REQUEST, "The key must be 1 to 4096 characters."));
-    }
-    let enc = state.secrets().encrypt(key);
-    let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
-    let internal = |_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not store the key.");
-    // Only a provider the snapshot lists can have a key.
-    let listed = crate::snapshot::current(&db).map_err(internal)?.is_some_and(|s| s.providers.iter().any(|p| p.id == id));
-    if !listed {
-        return Err(fail(StatusCode::NOT_FOUND, "No such provider."));
-    }
-    db.conn()
-        .execute(
-            "INSERT INTO providers (id, api_key_enc) VALUES (?1, ?2) ON CONFLICT(id) DO UPDATE SET api_key_enc = excluded.api_key_enc",
-            rusqlite::params![id, enc],
-        )
-        .map_err(internal)?;
-    // A new key deserves a fresh start: whatever flagged the old one is cleared.
-    let _ = db.clear_provider_health(&id);
-    Ok(StatusCode::NO_CONTENT)
-}
-
-/// `GET /api/server/v1/providers/health`: providers the router has found unusable, so the admin can say
-/// so. Only providers with a problem are listed; the reason is a code, never the provider's text.
-/// `missing_key` lists the providers in the current configuration that hold no key here (never set, or lost
-/// when the database was replaced), so the admin can ask for it again.
+/// `GET /api/server/v1/providers/health`: providers the gateway has found unusable (it refused their key), so the admin
+/// can say so. Only providers with a problem are listed; the reason is a code, never the provider's text. The server
+/// holds no keys (ADR 0054), so whether one is missing is the admin's to say.
 async fn providers_health(State(state): State<Arc<AppState>>) -> Result<Json<serde_json::Value>, Failure> {
     let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
     let rows = db.provider_health().map_err(|_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not read provider health."))?;
-    let internal = |_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not read provider keys.");
-    let keyed: std::collections::HashSet<String> = {
-        let mut stmt =
-            db.conn().prepare("SELECT id FROM providers WHERE api_key_enc IS NOT NULL AND length(api_key_enc) > 0").map_err(internal)?;
-        let ids = stmt.query_map([], |r| r.get::<_, String>(0)).map_err(internal)?.collect::<Result<_, _>>().map_err(internal)?;
-        ids
-    };
-    let missing: Vec<String> = crate::snapshot::current(&db)
-        .map_err(internal)?
-        .map(|s| s.providers.into_iter().map(|p| p.id).filter(|id| !keyed.contains(id)).collect())
-        .unwrap_or_default();
     Ok(Json(serde_json::json!({
         "providers": rows.into_iter().map(|(id, status, since, code)| serde_json::json!({ "provider_id": id, "status": status, "since": since, "error_code": code })).collect::<Vec<_>>(),
-        "missing_key": missing,
     })))
-}
-
-/// Send one short message through the provider and report what happened.
-async fn test_provider(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-) -> Result<Json<crate::provider_test::TestResult>, Failure> {
-    crate::provider_test::run(&state, &id)
-        .await
-        .map_err(|_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not run the test."))?
-        .map(Json)
-        .ok_or_else(|| fail(StatusCode::NOT_FOUND, "No such provider."))
-}
-
-/// Ask a provider which models it offers. A failure at the provider is a 200 with `ok: false`, like the test.
-async fn list_models(
-    State(state): State<Arc<AppState>>,
-    ApiJson(req): ApiJson<crate::models::ModelsRequest>,
-) -> Result<Json<crate::models::ModelsResult>, Failure> {
-    crate::models::run(&state, req).await.map(Json).map_err(|_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not list the models."))
 }
 
 /// The users, oldest first: `[{"id", "name"}]`. Pairing codes are made for one of these.
@@ -233,7 +163,32 @@ async fn list_clients(State(state): State<Arc<AppState>>) -> Result<Json<Vec<cra
 // ------------------------------------------------------------------------ audit
 
 fn no_audit() -> Failure {
-    fail(StatusCode::SERVICE_UNAVAILABLE, "No audit store is recording on this server.")
+    fail(StatusCode::SERVICE_UNAVAILABLE, "The audit store cannot be reached.")
+}
+
+/// One read of the audit store, through the auditor (ADR 0051), as JSON. `404` stays `404`; anything else the auditor
+/// answers, or no answer, is `503`: the pages say the store cannot be read, never what it said.
+async fn audit_read(state: &AppState, path_and_query: &str) -> Result<serde_json::Value, Failure> {
+    let reader = state.audit_reader.clone().ok_or_else(no_audit)?;
+    match reader.get(path_and_query).await {
+        Some((200, body)) => Ok(body),
+        Some((404, _)) => Err(fail(StatusCode::NOT_FOUND, "No such record.")),
+        _ => Err(no_audit()),
+    }
+}
+
+/// `path` with the query pairs that have a value.
+fn with_query(path: &str, pairs: &[(&str, Option<String>)]) -> String {
+    let mut url = reqwest::Url::parse("http://audit.invalid/").expect("a URL");
+    for (k, v) in pairs {
+        if let Some(v) = v {
+            url.query_pairs_mut().append_pair(k, v);
+        }
+    }
+    match url.query() {
+        Some(q) => format!("{path}?{q}"),
+        None => path.to_string(),
+    }
 }
 
 #[derive(serde::Deserialize)]
@@ -265,29 +220,30 @@ async fn audit_traces(
     State(state): State<Arc<AppState>>,
     axum::extract::Query(q): axum::extract::Query<TracesQuery>,
 ) -> Result<Json<serde_json::Value>, Failure> {
-    let conn = state.audit.reader().ok_or_else(no_audit)?;
-    let filter = crate::audit::TraceFilter { status: q.status, provider: q.provider, before: q.before, limit: q.limit };
-    let mut rows = crate::audit::list_traces(&conn, &filter)
-        .map_err(|_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not read the audit store."))?;
+    let path = with_query(
+        "/traces",
+        &[("status", q.status), ("provider", q.provider), ("before", q.before), ("limit", q.limit.map(|l| l.to_string()))],
+    );
+    let mut rows = audit_read(&state, &path).await?;
     let price_of = price_lookup(&state);
-    rows.iter_mut().for_each(|r| add_cost(r, &price_of));
+    rows.as_array_mut().into_iter().flatten().for_each(|r| add_cost(r, &price_of));
     Ok(Json(serde_json::json!({ "traces": rows })))
 }
 
 /// `GET /api/server/v1/audit/traces/{id}`: all spans of one generation.
 async fn audit_trace(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Result<Json<serde_json::Value>, Failure> {
-    let conn = state.audit.reader().ok_or_else(no_audit)?;
-    let mut spans =
-        crate::audit::trace_spans(&conn, &id).map_err(|_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not read the audit store."))?;
-    if spans.is_empty() {
+    let path = with_query(&format!("/traces/{}", id.replace(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_'), "")), &[]);
+    let mut spans = audit_read(&state, &path).await?;
+    let list = spans.as_array_mut().ok_or_else(no_audit)?;
+    if list.is_empty() {
         return Err(fail(StatusCode::NOT_FOUND, "No such trace."));
     }
     let price_of = price_lookup(&state);
     // Each attempt is priced by its own provider; the trace as a whole by the provider that served it.
-    spans.iter_mut().for_each(|s| add_cost(s, &price_of));
-    let final_provider = spans.iter().rev().find(|s| s["kind"] == "attempt").and_then(|s| s["provider_id"].as_str().map(str::to_string));
+    list.iter_mut().for_each(|s| add_cost(s, &price_of));
+    let final_provider = list.iter().rev().find(|s| s["kind"] == "attempt").and_then(|s| s["provider_id"].as_str().map(str::to_string));
     let mut cost = None;
-    if let Some(turn) = spans.iter().find(|s| s["kind"] == "turn") {
+    if let Some(turn) = list.iter().find(|s| s["kind"] == "turn") {
         let n = |k: &str| turn[k].as_i64();
         cost = crate::cost::cost_of(&price_of, final_provider.as_deref(), n("tokens_in"), n("tokens_out"), n("tokens_cached"));
     }
@@ -297,18 +253,73 @@ async fn audit_trace(State(state): State<Arc<AppState>>, Path(id): Path<String>)
 /// `GET /api/server/v1/audit/payloads/{span_id}`: the sealed content of one span, as ciphertext.
 /// Only the admin, with the passphrase, can turn it into text; this endpoint cannot.
 async fn audit_payloads(State(state): State<Arc<AppState>>, Path(span_id): Path<String>) -> Result<Json<serde_json::Value>, Failure> {
-    let conn = state.audit.reader().ok_or_else(no_audit)?;
-    match crate::audit::span_payloads(&conn, &span_id)
-        .map_err(|_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not read the audit store."))?
-    {
-        Some(list) => Ok(Json(serde_json::Value::Array(list))),
-        None => Err(fail(StatusCode::NOT_FOUND, "No such span.")),
-    }
+    let id = span_id.replace(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_'), "");
+    audit_read(&state, &format!("/spans/{id}/payloads")).await.map(Json)
 }
 
 #[derive(serde::Deserialize)]
 struct StatsQuery {
     since: Option<i64>,
+}
+
+/// The cost of one group of requests (one provider, perhaps one day): known, or unknown with how many requests it
+/// leaves unknown. A group with no counts costs nothing to price.
+fn group_cost(price_of: crate::cost::PriceOf, provider: Option<&str>, tokens: &serde_json::Value, with_tokens: i64) -> (Option<f64>, i64) {
+    if with_tokens == 0 {
+        return (Some(0.0), 0);
+    }
+    let n = |k: &str| tokens[k].as_i64();
+    match crate::cost::cost_of(price_of, provider, n("in"), n("out"), n("cached")) {
+        Some(c) => (Some(c), 0),
+        None => (None, with_tokens),
+    }
+}
+
+/// The auditor's figures with this server's prices applied: it holds none, so every cost it sends is null. Each
+/// provider and each day is priced from its tokens, so a corrected price changes every figure at once.
+fn price_stats(mut v: serde_json::Value, price_of: crate::cost::PriceOf) -> serde_json::Value {
+    let (mut total_known, mut total_unknown) = (0.0, 0);
+    if let Some(rows) = v["by_provider"].as_array_mut() {
+        for r in rows {
+            let (cost, unknown) =
+                group_cost(price_of, r["provider_id"].as_str(), &r["tokens"], r["requests_with_tokens"].as_i64().unwrap_or(0));
+            r["cost"] = serde_json::json!(cost);
+            r["cost_unknown_requests"] = unknown.into();
+            total_known += cost.unwrap_or(0.0);
+            total_unknown += unknown;
+        }
+    }
+    v["cost"] = serde_json::json!((total_unknown == 0).then_some(total_known));
+    v["cost_unknown_requests"] = total_unknown.into();
+    let groups = v["by_day_provider"].as_array().cloned().unwrap_or_default();
+    if let Some(days) = v["by_day"].as_array_mut() {
+        for d in days {
+            let (mut known, mut unknown) = (0.0, 0);
+            for g in groups.iter().filter(|g| g["day"] == d["day"]) {
+                let (cost, u) =
+                    group_cost(price_of, g["provider_id"].as_str(), &g["tokens"], g["requests_with_tokens"].as_i64().unwrap_or(0));
+                known += cost.unwrap_or(0.0);
+                unknown += u;
+            }
+            d["cost"] = serde_json::json!((unknown == 0).then_some(known));
+            d["cost_unknown_requests"] = unknown.into();
+        }
+    }
+    // The pieces the pages never needed: they are the auditor's working figures.
+    if let Some(o) = v.as_object_mut() {
+        o.remove("by_day_provider");
+    }
+    if let Some(rows) = v["by_provider"].as_array_mut() {
+        rows.iter_mut().for_each(|r| {
+            r.as_object_mut().map(|o| o.remove("requests_with_tokens"));
+        });
+    }
+    if let Some(rows) = v["by_day"].as_array_mut() {
+        rows.iter_mut().for_each(|r| {
+            r.as_object_mut().map(|o| o.remove("requests_with_tokens"));
+        });
+    }
+    v
 }
 
 /// `GET /api/server/v1/audit/stats?since=<unix seconds>`: counts, error rate, latency percentiles
@@ -317,12 +328,10 @@ async fn audit_stats(
     State(state): State<Arc<AppState>>,
     axum::extract::Query(q): axum::extract::Query<StatsQuery>,
 ) -> Result<Json<serde_json::Value>, Failure> {
-    let conn = state.audit.reader().ok_or_else(no_audit)?;
-    let since = q.since.unwrap_or_else(|| crate::auth::now() - 24 * 3600);
+    let path = with_query("/stats", &[("since", q.since.map(|s| s.to_string()))]);
+    let v = audit_read(&state, &path).await?;
     let price_of = price_lookup(&state);
-    crate::audit::stats(&conn, since, &|p, i, o, c| crate::cost::cost_of(&price_of, p, i, o, c))
-        .map(Json)
-        .map_err(|_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not read the audit store."))
+    Ok(Json(price_stats(v, &price_of)))
 }
 
 /// Counts for the admin service's overview. Users, clients and tokens come from the control
@@ -383,11 +392,7 @@ pub fn routes() -> crate::routes::Routes {
         .get(&v1(askbar_service::routes::STATUS), status)
         .put(&v1(askbar_service::routes::CONFIG), put_snapshot)
         .post(&v1(askbar_service::routes::RESTART), restart)
-        .put(&v1("/providers/{id}/key"), put_provider_key)
         .get(&v1("/providers/health"), providers_health)
-        .post(&v1("/providers/{id}/test"), test_provider)
-        // POST, not GET: the request can carry a provider key, which must not go in a URL.
-        .post(&v1("/models"), list_models)
         .get(&v1("/users"), list_users)
         .get(&v1("/clients"), list_clients)
         .get(&v1("/usage"), usage)

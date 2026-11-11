@@ -11,8 +11,9 @@
 //! - **No provider words.** The server gets a code and a class. The provider's error text is sealed to the audit
 //!   public key and goes to the auditor as a payload; the gateway holds no private key.
 
-pub mod audit;
 pub mod llm;
+pub mod models;
+pub mod provider_test;
 pub mod router;
 pub mod seal;
 
@@ -21,10 +22,10 @@ use askbar_proto::gateway::{ChatEvent, ChatRequest, FailureClass, GatewayConfig}
 use askbar_proto::http::ApiError;
 use askbar_proto::paths::{self, MODEL_GATEWAY_V1};
 use askbar_proto::ErrorCode;
+use askbar_service::audit_client::{AuditClient, Refused};
 use askbar_service::links::{Allow, Caller, Link, Links};
 use askbar_service::restart::Restarter;
 use askbar_service::status::BootId;
-use audit::{AuditClient, Refused};
 use axum::extract::{DefaultBodyLimit, State};
 use axum::http::Method;
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -49,11 +50,7 @@ pub const MAX_ERROR_PAYLOAD_BYTES: usize = 4096;
 /// A turn the server has not finished this long after the generation time limit is finished as interrupted.
 pub const STALE_TURN_GRACE: Duration = Duration::from_secs(60);
 
-/// Unix seconds and milliseconds now.
-pub fn now_parts() -> (i64, i64) {
-    let d = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
-    (d.as_secs() as i64, d.as_millis() as i64)
-}
+pub use askbar_service::audit_client::now_parts;
 
 /// What a `PUT /config` put in place.
 struct Applied {
@@ -88,6 +85,15 @@ impl Gateway {
 
     fn applied(&self) -> Option<Arc<Applied>> {
         self.config.read().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// The provider with this id, as configured (key included), if there is one.
+    pub fn provider(&self, id: &str) -> Option<Provider> {
+        self.applied()?.providers.get(id).cloned()
+    }
+
+    pub fn http(&self) -> &llm::HttpClient {
+        &self.http
     }
 
     pub fn config_version(&self) -> Option<u64> {
@@ -143,7 +149,8 @@ fn finish(status: &str) -> SpanFinish {
 type Routes = &'static [(&'static str, &'static str)];
 
 const SERVER_ROUTES: Routes = &[("POST", "/chat")];
-const ADMIN_ROUTES: Routes = &[("GET", "/status"), ("PUT", "/config"), ("POST", "/restart")];
+const ADMIN_ROUTES: Routes =
+    &[("GET", "/status"), ("PUT", "/config"), ("POST", "/restart"), ("POST", "/models"), ("POST", "/providers/*/test")];
 
 /// The two links: name as `bootstrap` names it (the file `accept/<name>.sha256`), the caller, and the routes.
 pub const LINKS: &[(&str, &str, Routes)] =
@@ -211,6 +218,8 @@ pub fn admin_router(gw: Arc<Gateway>, links: Links) -> Router {
     let protected = Router::new()
         .route(&full("/status"), get(status))
         .route(&full("/config"), put(put_config))
+        .route(&full("/models"), post(list_models))
+        .route(&full("/providers/{id}/test"), post(test_provider))
         .route(&full("/restart"), post(askbar_service::restart::handler).with_state(restart))
         .layer(axum::middleware::from_fn_with_state(links, askbar_service::links::require));
     shell(gw, protected)
@@ -233,6 +242,21 @@ fn bad(detail: impl Into<String>) -> Failure {
 
 async fn status(State(gw): State<Arc<Gateway>>) -> Json<serde_json::Value> {
     Json(askbar_service::status::body(gw.config_version(), &gw.boot_id))
+}
+
+// ------------------------------------------------------------------ models and the provider test
+
+/// `POST /models`: the models a provider offers. Always `200`; `ok: false` and a sentence when it could not say.
+async fn list_models(State(gw): State<Arc<Gateway>>, Json(req): Json<models::ModelsRequest>) -> Json<models::ModelsResult> {
+    Json(models::run(&gw, req).await)
+}
+
+/// `POST /providers/{id}/test`: one short message through the provider, and how it went.
+async fn test_provider(
+    State(gw): State<Arc<Gateway>>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<Json<provider_test::TestResult>, Failure> {
+    provider_test::run(&gw, &id).await.map(Json).ok_or_else(|| ApiError::new(ErrorCode::NotFound, "No such provider."))
 }
 
 // ------------------------------------------------------------------ PUT /config
@@ -273,17 +297,26 @@ fn check_config(c: &GatewayConfig) -> Result<Applied, String> {
     Ok(Applied { version: c.version, providers, audit_key: bytes, timeout: Duration::from_secs(u64::from(c.generation_timeout_secs)) })
 }
 
+impl Gateway {
+    /// Put `c` in place of the configuration, or say why not (a sentence for a person). The keys it carries are held in
+    /// memory and nowhere else.
+    pub fn apply_config(&self, c: &GatewayConfig) -> Result<(), String> {
+        let applied = check_config(c)?;
+        let version = applied.version;
+        *self.config.write().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(applied));
+        tracing::info!(version, providers = c.providers.len(), "configuration applied");
+        Ok(())
+    }
+}
+
 /// Replace the configuration. The keys it carries are held in memory and nowhere else; the answer holds none.
 async fn put_config(
     State(gw): State<Arc<Gateway>>,
     Extension(Caller(_)): Extension<Caller>,
     Json(c): Json<GatewayConfig>,
 ) -> Result<Json<serde_json::Value>, Failure> {
-    let applied = check_config(&c).map_err(bad)?;
-    let version = applied.version;
-    *gw.config.write().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(applied));
-    tracing::info!(version, providers = c.providers.len(), "configuration applied");
-    Ok(Json(serde_json::json!({ "version": version })))
+    gw.apply_config(&c).map_err(bad)?;
+    Ok(Json(serde_json::json!({ "version": c.version })))
 }
 
 // ------------------------------------------------------------------ POST /chat
@@ -467,7 +500,7 @@ async fn run_attempts(
             Err(e) => {
                 // The provider's own words go to the auditor sealed, cut at 4 KB, and nowhere else.
                 if let Ok(sealed) = seal::seal(&cfg.audit_key, cut(&e.error.to_string(), MAX_ERROR_PAYLOAD_BYTES).as_bytes()) {
-                    gw.audit.payload(&attempt_id, "error", &sealed);
+                    gw.audit.payload(&attempt_id, "error", &sealed.key_id, &sealed.bytes);
                 }
                 let code = router::error_code(&e.error);
                 end.status = "error".into();

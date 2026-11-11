@@ -53,12 +53,17 @@ fn from_push(e: PushError) -> Failure {
     }
 }
 
+fn gateway(state: &AdminState) -> Result<&Arc<crate::gateway_link::GatewayLink>, Failure> {
+    state.gateway.get().ok_or_else(|| err(StatusCode::BAD_GATEWAY, "No link to the gateway is set up."))
+}
+
 fn link(state: &AdminState) -> Result<&Arc<ServerLink>, Failure> {
     state.server.as_ref().ok_or_else(offline)
 }
 
-/// Apply `apply` to `admin.db`, send the server the resulting snapshot, then send it each of
-/// `keys` (provider id, API key), and commit only if all of that worked.
+/// Apply `apply` to `admin.db` and keep each of `keys` (provider id, API key), encrypted, send the server the resulting
+/// snapshot, and commit only if that worked. The keys go to the gateway, not the server (ADR 0054): the gateway is
+/// given them after the commit.
 pub(crate) async fn mutate<T>(
     state: &AdminState,
     keys: Vec<(String, String)>,
@@ -94,15 +99,6 @@ pub(crate) async fn mutate<T>(
     if let Err(e) = link.push(&snapshot).await {
         rollback(db.conn());
         return Err(from_push(e));
-    }
-    for (id, key) in keys {
-        if let Err(e) = link.put_key(&id, &key).await {
-            rollback(db.conn());
-            // The server already has the snapshot with this change; send the truth again.
-            link.mark_dirty();
-            return Err(from_push(e));
-        }
-        let _ = db.conn().execute("UPDATE providers SET has_key = 1 WHERE id = ?1", [&id]);
     }
     db.conn().execute_batch("COMMIT").map_err(internal)?;
     // The gateway gets the new truth now, not at its next check.
@@ -217,21 +213,11 @@ fn clash_or_internal(e: rusqlite::Error) -> Failure {
     }
 }
 
-/// The providers the server says hold no key. Empty if the server cannot be asked: the list still works.
-async fn server_missing_keys(state: &AdminState) -> std::collections::HashSet<String> {
-    let Some(server) = state.server.as_ref() else { return Default::default() };
-    let path = askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/providers/health");
-    let Ok((200, body)) = server.request(reqwest::Method::GET, &path, None).await else { return Default::default() };
-    let v: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
-    v["missing_key"].as_array().map(|a| a.iter().filter_map(|i| i.as_str().map(String::from)).collect()).unwrap_or_default()
-}
-
 pub async fn list_providers(State(state): St) -> Result<Json<Vec<ProviderRow>>, Failure> {
-    let missing = server_missing_keys(&state).await;
     let db = state.db.lock().await;
     let mut stmt = db
         .conn()
-        .prepare("SELECT id, name, type, base_url, model, max_tokens, temperature, has_key, billing, price_in, price_out, price_cached_in, managed FROM providers ORDER BY name")
+        .prepare("SELECT id, name, type, base_url, model, max_tokens, temperature, EXISTS (SELECT 1 FROM provider_keys k WHERE k.provider_id = providers.id), billing, price_in, price_out, price_cached_in, managed, has_key FROM providers ORDER BY name")
         .map_err(internal)?;
     let rows = stmt
         .query_map([], |r| {
@@ -249,13 +235,17 @@ pub async fn list_providers(State(state): St) -> Result<Json<Vec<ProviderRow>>, 
                 price_out: r.get(10)?,
                 price_cached_in: r.get(11)?,
                 managed: r.get::<_, i64>(12)? != 0,
-                key_missing: false,
+                // A key the server held before the gateway existed (the old column says so) that the admin cannot read:
+                // it is entered again (ADR 0054).
+                key_missing: r.get::<_, i64>(7)? == 0 && r.get::<_, i64>(13)? != 0,
             })
         })
         .map_err(internal)?
         .collect::<Result<Vec<_>, _>>()
         .map_err(internal)?;
-    let rows = rows.into_iter().map(|p| ProviderRow { key_missing: p.has_key && !p.managed && missing.contains(&p.id), ..p }).collect();
+    // The managed provider's key is the admin's own file: never missing.
+    let rows =
+        rows.into_iter().map(|p| ProviderRow { has_key: p.has_key || p.managed, key_missing: p.key_missing && !p.managed, ..p }).collect();
     Ok(Json(rows))
 }
 
@@ -362,12 +352,10 @@ pub async fn test_provider(State(state): St, Path(id): Path<String>) -> Result<R
     if !known {
         return Err(err(StatusCode::NOT_FOUND, "No such provider."));
     }
-    let (status, body) = link(&state)?
-        .request(reqwest::Method::POST, &format!("{}/providers/{id}/test", askbar_proto::paths::SERVER_V1), None)
-        .await
-        .map_err(from_push)?;
+    // The gateway holds the keys and has the route out (ADR 0054).
+    let (status, body) = gateway(&state)?.call(&state, reqwest::Method::POST, &format!("/providers/{id}/test"), None, true).await?;
     if status != 200 {
-        return Err(err(StatusCode::BAD_GATEWAY, &format!("The server answered {status}.")));
+        return Err(err(StatusCode::BAD_GATEWAY, &format!("The gateway answered {status}.")));
     }
     json_response(body)
 }
@@ -378,26 +366,24 @@ pub struct ModelsInput {
     kind: String,
     #[serde(default)]
     base_url: String,
-    /// Write-only, used once by the server for this request.
+    /// Write-only, used once by the gateway for this request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     api_key: Option<String>,
-    /// A saved provider whose stored key the server may use.
+    /// A saved provider whose key the gateway may use.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     provider_id: Option<String>,
 }
 
-/// Ask the server which models a provider offers (it has the keys and the network). Nothing is saved.
+/// Ask the gateway which models a provider offers (it has the keys and the route out). Nothing is saved.
 pub async fn list_models(State(state): St, ApiJson(i): ApiJson<ModelsInput>) -> Result<Response, Failure> {
     if !matches!(i.kind.as_str(), "openai" | "anthropic") {
         return Err(bad("Type must be openai or anthropic."));
     }
     let body = serde_json::to_value(&i).map_err(internal)?;
-    let (status, bytes) = link(&state)?
-        .request(reqwest::Method::POST, &askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/models"), Some(&body))
-        .await
-        .map_err(from_push)?;
+    let needs_config = i.provider_id.is_some();
+    let (status, bytes) = gateway(&state)?.call(&state, reqwest::Method::POST, "/models", Some(&body), needs_config).await?;
     if status != 200 {
-        return Err(err(StatusCode::BAD_GATEWAY, &format!("The server answered {status}.")));
+        return Err(err(StatusCode::BAD_GATEWAY, &format!("The gateway answered {status}.")));
     }
     json_response(bytes)
 }

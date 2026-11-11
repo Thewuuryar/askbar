@@ -9,7 +9,8 @@ info:
     the auditor can be changed with confidence, not for outside callers (ADR 0051, ADR 0010).
 
     Every request except `GET /health` carries `Authorization: Bearer <token>`. There is one token for each
-    link: `server-auditor`, `model-gateway-auditor`, `admin-auditor-append` and `admin-auditor-read`. The
+    link: `server-auditor`, `model-gateway-auditor`, `admin-auditor-append`, `admin-auditor-read` and, until the Audit pages
+    read the store from the admin (plan step 2.5), `server-auditor-read`. The
     auditor holds only each token's SHA-256, in `auditor-token/accept/<link>.sha256`, read on every request.
     A link may call only its own routes (`403 forbidden` otherwise), and **the caller of a record is the one its
     token belongs to, never anything in a body**.
@@ -19,6 +20,8 @@ info:
       server's link opens `gate` spans only.
     - `admin-auditor-append`: `hello` and admin action records. It reads and changes nothing.
     - `admin-auditor-read`: every read, and retention. It appends nothing.
+    - `server-auditor-read` (temporary): the reads of the Audit pages (traces, spans' sealed payloads, stats, token
+      counts) so the server can add its prices. It appends nothing and cannot read admin actions, prunes or retention.
     - No token changes or deletes a record; there is no such route.
 
     An append is answered after the record is committed. Appending the same record twice records it once,
@@ -301,7 +304,10 @@ paths:
     get:
       operationId: getStats
       summary: Counts, error rate, latency percentiles and token totals since a time. Every cost is null.
-      description: The auditor holds no prices; the admin applies them. `since` defaults to the last 24 hours.
+      description: >-
+        The auditor holds no prices; whoever shows cost applies them. `since` defaults to the last 24 hours. Each row
+        of `by_provider` and `by_day` has `requests_with_tokens` (how many of its requests have counts), and
+        `by_day_provider` gives the tokens for each day and provider, so each day can be priced exactly.
       parameters:
         - $ref: '#/components/parameters/Since'
       responses:

@@ -45,7 +45,8 @@ fn refs(v: &Value, out: &mut Vec<String>) {
 fn the_model_gateway_api_file_describes_exactly_the_gateways_routes() {
     let spec = load();
     assert!(spec["openapi"].as_str().is_some_and(|v| v.starts_with("3.1.")), "model-gateway.v1.yaml must declare OpenAPI 3.1");
-    let routes: BTreeSet<(String, String)> = askbar_model_gateway::routes().into_iter().map(|r| (r.method.to_string(), r.path)).collect();
+    let routes: BTreeSet<(String, String)> =
+        askbar_model_gateway::routes().into_iter().map(|r| (r.method.to_string(), r.path.replace('*', "{id}"))).collect();
     let ops = operations(&spec);
     let missing_from_spec: Vec<_> = routes.difference(&ops).collect();
     let missing_from_gateway: Vec<_> = ops.difference(&routes).collect();

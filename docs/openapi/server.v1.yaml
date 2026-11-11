@@ -112,43 +112,13 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '500':
           $ref: '#/components/responses/Internal'
-  /api/server/v1/providers/{id}/key:
-    put:
-      operationId: putProviderKey
-      summary: Store a provider's API key, encrypted. Write-only.
-      description: No endpoint ever returns the key.
-      parameters:
-        - $ref: '#/components/parameters/ProviderId'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [key]
-              properties:
-                key:
-                  type: string
-                  minLength: 1
-                  maxLength: 4096
-      responses:
-        '204':
-          description: Stored.
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/Internal'
   /api/server/v1/providers/health:
     get:
       operationId: getProvidersHealth
-      summary: Providers the router found unusable (bad credentials).
+      summary: Providers the gateway found unusable (bad credentials).
       description: >
         Only flagged providers are listed; the reason is a code such as `http_401`, never the provider's own text.
-        `missing_key` lists the providers in the current configuration that hold no key on the server.
+        The server holds no provider keys (ADR 0054), so whether one is missing is the admin's to say.
       responses:
         '200':
           description: Flagged providers.
@@ -156,12 +126,8 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [providers, missing_key]
+                required: [providers]
                 properties:
-                  missing_key:
-                    type: array
-                    items:
-                      type: string
                   providers:
                     type: array
                     items:
@@ -179,87 +145,6 @@ paths:
                           type: [string, 'null']
         '401':
           $ref: '#/components/responses/Unauthorized'
-  /api/server/v1/providers/{id}/test:
-    post:
-      operationId: testProvider
-      summary: Send a tiny message through the provider and say what came back.
-      parameters:
-        - $ref: '#/components/parameters/ProviderId'
-      responses:
-        '200':
-          description: The result.
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [ok, message]
-                properties:
-                  ok:
-                    type: boolean
-                  message:
-                    type: string
-                    description: The start of the reply, or the error. Never contains the key.
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/Internal'
-  /api/server/v1/models:
-    post:
-      operationId: listModels
-      summary: Ask a provider which models it offers.
-      description: >
-        POST, not GET, because the request may carry a provider key, which must not go in a URL. Sent from the server, where the network and the keys are. Either give `api_key` (used once, never stored
-        or logged) or a saved `provider_id`; a saved key is used only when the type and address match the saved
-        provider. A failure at the provider is a 200 with `ok: false`.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [type]
-              properties:
-                type:
-                  type: string
-                  enum: [openai, anthropic]
-                base_url:
-                  type: string
-                api_key:
-                  type: string
-                provider_id:
-                  type: string
-      responses:
-        '200':
-          description: The result.
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [ok, message, models]
-                properties:
-                  ok:
-                    type: boolean
-                  message:
-                    type: string
-                    description: Why it failed. Never contains the key.
-                  models:
-                    type: array
-                    items:
-                      type: object
-                      required: [id]
-                      properties:
-                        id:
-                          type: string
-                        label:
-                          type: string
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '500':
-          $ref: '#/components/responses/Internal'
   /api/server/v1/users:
     get:
       operationId: listUsers

@@ -107,6 +107,7 @@ dependencies = [
  "argon2",
  "askama",
  "askbar-bootstrap",
+ "askbar-model-gateway",
  "askbar-proto",
  "askbar-server",
  "askbar-service",
@@ -218,21 +219,22 @@ name = "askbar-server"
 version = "0.6.0"
 dependencies = [
  "askbar-audit",
+ "askbar-auditor",
+ "askbar-model-gateway",
  "askbar-proto",
+ "askbar-server",
  "askbar-service",
  "axum",
  "base64 0.22.1",
  "chacha20poly1305",
  "crypto_box",
  "futures-util",
- "hkdf",
  "reqwest",
  "rusqlite",
  "serde",
  "serde-saphyr",
  "serde_json",
  "sha2",
- "subtle",
  "thiserror",
  "tokio",
  "tokio-stream",
@@ -247,7 +249,9 @@ version = "0.6.0"
 dependencies = [
  "askbar-proto",
  "axum",
+ "base64 0.22.1",
  "reqwest",
+ "serde",
  "serde_json",
  "sha2",
  "subtle",
@@ -852,24 +856,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a596f1b20ed2cc5ecac41a164aaebc7258057060f06c0cf7a2ba3991ee7990fb"
 dependencies = [
  "hashbrown",
-]
-
-[[package]]
-name = "hkdf"
-version = "0.12.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b5f8eb2ad728638ea2c7d47a21db23b7b58a72ed6a38256b8a1849f15fbbdf7"
-dependencies = [
- "hmac",
-]
-
-[[package]]
-name = "hmac"
-version = "0.12.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6c49c37c09c17a53d937dfbb742eb3a961d65a994e6bcdcf37e7399d0cc8ab5e"
-dependencies = [
- "digest",
 ]
 
 [[package]]

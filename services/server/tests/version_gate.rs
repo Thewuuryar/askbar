@@ -1,11 +1,11 @@
-use askbar_server::{secrets::Secrets, AppState};
+use askbar_server::AppState;
 
 async fn start(min: &str) -> String {
     let db = askbar_server::Db::open_in_memory().unwrap();
     db.seed_server().unwrap();
     // Configured, as after the admin's first push, so a request past the version gate reaches auth.
     askbar_server::testing::update_snapshot(&db, |_| {});
-    let state = AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), min);
+    let state = AppState::new(db, min);
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = l.local_addr().unwrap();
     let app = askbar_server::client_router(state);

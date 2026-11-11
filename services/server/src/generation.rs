@@ -6,10 +6,11 @@
 use crate::audit::{Kind, SpanFinish, SpanStart};
 use crate::chat::{sse_event, sse_event_with_id};
 use crate::client_api::MemberSpace;
-use crate::llm::{stream_chat_report, ChatMessage, StreamOutcome, Usage};
+use crate::llm::{ChatMessage, Usage};
 use crate::space::{NewGeneration, Space, SpaceStore};
 use crate::store;
 use crate::AppState;
+use askbar_proto::gateway::{ChatEvent as GatewayEvent, ChatMessage as GatewayMessage, ChatRequest as GatewayRequest, FailureClass};
 use askbar_proto::ChatEvent;
 use axum::{
     extract::{Path, Query, State},
@@ -388,23 +389,6 @@ enum Outcome {
     Error(String),
 }
 
-/// What an attempt span records beyond its columns: which try it was, the whole latency, the HTTP status, whether the counts were estimated, why the provider
-/// says it stopped, and whether the request was cut. `report` is `None` for an attempt that never
-/// finished (a timeout).
-fn attempt_attrs(r: Option<&crate::llm::StreamReport>, info: &AttemptInfo) -> serde_json::Value {
-    let mut attrs = serde_json::json!({ "retry_index": info.retry_index });
-    if let Some(r) = r {
-        attrs["latency_ms"] = (r.total.as_millis() as u64).into();
-        attrs["http_status"] = serde_json::json!(r.http_status);
-        attrs["usage_estimated"] = serde_json::json!(r.usage.map(|u| u.estimated));
-        attrs["finish_reason"] = serde_json::json!(r.finish_reason);
-    }
-    if info.request_truncated {
-        attrs["truncated"] = true.into();
-    }
-    attrs
-}
-
 /// The public bytes of the key content is sealed to now, from the current snapshot.
 fn current_audit_key(state: &AppState) -> Option<Vec<u8>> {
     let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
@@ -414,9 +398,6 @@ fn current_audit_key(state: &AppState) -> Option<Vec<u8>> {
 
 /// Sealed payloads (request, reply) are cut at this many bytes; the span is marked `truncated`.
 pub const MAX_PAYLOAD_BYTES: usize = 256 * 1024;
-
-/// Provider error text kept with an attempt is cut here.
-pub const MAX_ERROR_PAYLOAD_BYTES: usize = 4096;
 
 /// `text` cut to at most `max` bytes at a character boundary.
 fn cut(text: &str, max: usize) -> &str {
@@ -428,17 +409,6 @@ fn cut(text: &str, max: usize) -> &str {
         end -= 1;
     }
     &text[..end]
-}
-
-/// A short stable code for why a request failed, for the audit trail.
-fn error_code(e: &crate::llm::ChatError) -> String {
-    use crate::llm::ChatError;
-    match e {
-        ChatError::Config(_) => "config".into(),
-        ChatError::Connect { .. } => "connect".into(),
-        ChatError::Api { status, .. } => format!("http_{status}"),
-        ChatError::Stream(_) => "stream".into(),
-    }
 }
 
 /// "Timed out after 5 minutes", or in seconds when the limit is not a whole number of minutes.
@@ -473,6 +443,8 @@ struct Finisher {
     /// The public key content is sealed to, as it was when this generation started (None: the
     /// snapshot had none, which `submit` normally prevents).
     audit_key: Option<Vec<u8>>,
+    /// The request payload was cut at `MAX_PAYLOAD_BYTES`.
+    request_truncated: bool,
     error_code: Option<String>,
     saved: bool,
     /// Progress is flushed to the row about once a second, or every 2 KB.
@@ -548,6 +520,11 @@ impl Finisher {
     }
 
     fn finish_turn_span(&self, status: &str) {
+        // The gateway opens the turn span; a generation that never got one (it refused, or could not be reached) has
+        // nothing to finish, and the gateway recorded the refusal.
+        if self.turn_span.is_empty() {
+            return;
+        }
         // The reply, sealed, whatever way this ended (an empty reply has nothing to keep).
         let mut truncated = false;
         if let (Some(key), false) = (&self.audit_key, self.text.is_empty()) {
@@ -558,9 +535,13 @@ impl Finisher {
             }
         }
         let mut f = SpanFinish::new(&self.turn_span, status);
-        if truncated {
+        if truncated || self.request_truncated {
             // Replaces the start attributes, so they are repeated.
-            f.attrs_json = Some(turn_attrs(&self.space.id, &self.conversation_id, true).to_string());
+            let mut attrs = turn_attrs(&self.space.id, &self.conversation_id, truncated);
+            if self.request_truncated {
+                attrs["request_truncated"] = true.into();
+            }
+            f.attrs_json = Some(attrs.to_string());
         }
         f.error_code = self.error_code.clone();
         if let Some(u) = self.usage {
@@ -746,7 +727,7 @@ pub fn submit(state: &Arc<AppState>, s: Submit) -> Result<Submitted, SubmitError
     fn internal<E>(_: E) -> SubmitError {
         SubmitError::Internal
     }
-    store::load_provider(&db, &state.secrets(), &s.provider_id).map_err(internal)?.ok_or(SubmitError::NotFound)?;
+    store::provider_meta(&db, &s.provider_id).map_err(internal)?.ok_or(SubmitError::NotFound)?;
     let snapshot = crate::snapshot::current(&db).map_err(internal)?;
     // Nothing runs unless what it says can be kept sealed: no audit key, no generation.
     if snapshot.as_ref().and_then(|snap| snap.audit_public_key.as_ref()).is_none() {
@@ -842,18 +823,15 @@ fn spawn_run(
     timeout: Duration,
     live: Arc<Live>,
 ) {
-    let turn_span = state.audit.start_span(SpanStart::new(id, Kind::Turn, "chat").who(user_id, client_id).attrs(&turn_attrs(
-        &space.id,
-        conversation_id,
-        false,
-    )));
     let audit_key = current_audit_key(state);
     let mut fin = Finisher {
         state: state.clone(),
         space: space.clone(),
         live,
-        turn_span,
+        // The gateway opens the turn span and says its id in the first event (ADR 0054).
+        turn_span: String::new(),
         audit_key,
+        request_truncated: false,
         error_code: None,
         id: id.to_string(),
         user_id: user_id.to_string(),
@@ -869,14 +847,11 @@ fn spawn_run(
     };
     let (state, provider_id) = (state.clone(), provider_id.to_string());
     tokio::spawn(async move {
-        // The provider asked for, loaded with its key. It is the only one tried: there is no
-        // automatic fallback to another provider (ADR 0014).
+        // The provider asked for, as the snapshot describes it (no key: the gateway holds those). It is the only one
+        // tried: there is no automatic fallback to another provider (ADR 0014).
         let prepared = {
             let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
-            let candidate = store::load_provider(&db, &state.secrets(), &provider_id)
-                .ok()
-                .flatten()
-                .map(|provider| Candidate { id: provider_id.clone(), provider });
+            let provider = store::provider_meta(&db, &provider_id).ok().flatten();
             let system = store::chat_system_prompt(&db).ok();
             let turns = crate::snapshot::current(&db).ok().flatten().map(|s| s.history_turns).unwrap_or(0);
             drop(db);
@@ -886,19 +861,17 @@ fn spawn_run(
                 let all: Vec<ChatMessage> = ms.iter().map(|m| ChatMessage::new(&m.role, &m.content)).collect();
                 crate::llm::last_turns(crate::llm::normalize(&all), turns)
             });
-            candidate.zip(system).zip(history)
+            provider.zip(system).zip(history)
         };
-        let Some(((candidate, system), history)) = prepared else {
+        let Some(((provider, system), history)) = prepared else {
             fin.finish(Outcome::Error("The provider is no longer available.".into()));
             return;
         };
 
-        // Race the whole sequence of attempts against the deadline. Dropping it on expiry closes
-        // the request in flight; the text that had arrived is already in `fin`.
-        let started = Instant::now();
-        let open_attempt: Mutex<Option<OpenAttempt>> = Mutex::new(None);
+        // Race the gateway's stream against the deadline. Dropping it on expiry closes the request in flight, which
+        // cancels the provider call; the text that had arrived is already in `fin`.
         let ended = {
-            let run = attempts(&state, &mut fin, &candidate, &system, &history, started, timeout, &open_attempt);
+            let run = via_gateway(&state, &mut fin, &provider, &system, &history);
             tokio::pin!(run);
             tokio::select! {
                 r = &mut run => Some(r),
@@ -906,9 +879,8 @@ fn spawn_run(
             }
         };
         let (outcome, usage) = match ended {
-            Some(Ended::Done(report)) => (Outcome::Done, report.usage),
-            Some(Ended::Cancelled(report)) => {
-                let usage = report.and_then(|r| r.usage);
+            Some(Ended::Done(usage)) => (Outcome::Done, usage),
+            Some(Ended::Cancelled(usage)) => {
                 if fin.live.cancel_reason().as_deref() == Some("kill_switch") {
                     fin.error_code = Some("kill_switch".into());
                     (Outcome::Killed, usage)
@@ -916,18 +888,11 @@ fn spawn_run(
                     (Outcome::Cancelled, usage)
                 }
             }
-            Some(Ended::Failed(e)) => {
-                fin.error_code = Some(error_code(&e.error));
-                (Outcome::Error(e.error.to_string()), e.report.usage)
+            Some(Ended::Failed(f)) => {
+                fin.error_code = Some(f.code);
+                (Outcome::Error(f.message), f.usage)
             }
             None => {
-                // The attempt in flight when time ran out never got to say how it ended.
-                if let Some(open) = open_attempt.lock().unwrap_or_else(|e| e.into_inner()).take() {
-                    let mut end = SpanFinish::new(&open.span, "timed_out");
-                    end.error_code = Some("timeout".into());
-                    end.attrs_json = Some(attempt_attrs(None, &open.info).to_string());
-                    state.audit.finish_span(end);
-                }
                 fin.error_code = Some("timeout".into());
                 (Outcome::TimedOut(timed_out_message(timeout)), None)
             }
@@ -937,175 +902,147 @@ fn spawn_run(
     });
 }
 
-/// The provider to try.
-struct Candidate {
-    id: String,
-    provider: crate::llm::Provider,
-}
-
-/// Retries, and the wait before each (when the provider names none).
-const MAX_RETRIES: u32 = 2;
-const RETRY_BACKOFF: [Duration; 2] = [Duration::from_millis(250), Duration::from_secs(1)];
-
-/// How a run of attempts ended.
+/// How a call to the gateway ended.
 enum Ended {
-    Done(crate::llm::StreamReport),
-    Cancelled(Option<crate::llm::StreamReport>),
-    Failed(crate::llm::ReportedError),
+    Done(Option<Usage>),
+    Cancelled(Option<Usage>),
+    Failed(Failed),
 }
 
-/// What identifies an attempt in the audit trail.
-#[derive(Clone)]
-struct AttemptInfo {
-    retry_index: u32,
-    request_truncated: bool,
+/// A call that did not end in a reply: a code for the audit trail and the stored row, and a sentence for the person.
+struct Failed {
+    code: String,
+    message: String,
+    usage: Option<Usage>,
 }
 
-/// The attempt span in flight, so a timeout can close it.
-struct OpenAttempt {
-    span: String,
-    info: AttemptInfo,
+impl Failed {
+    fn new(code: &str, message: &str) -> Failed {
+        Failed { code: code.into(), message: message.into(), usage: None }
+    }
 }
 
-/// Tries the provider, and up to `MAX_RETRIES` more times when the failure is worth it. Nothing is
-/// retried once a delta has been sent: the person has seen text, so the failure ends the
-/// generation. A cancel ends it at once, also while it waits to retry.
-#[allow(clippy::too_many_arguments)]
-async fn attempts(
+/// What the person is told when the gateway took no request (it called no provider).
+fn gateway_failure(e: crate::gateway::GatewayError) -> Failed {
+    use crate::gateway::GatewayError as E;
+    match e {
+        E::AuditBacklog => Failed::new(
+            "audit_backlog",
+            "The audit record could not be made, so nothing was sent to the provider. Try again in a few seconds.",
+        ),
+        E::NotConfigured | E::NoSuchProvider => Failed::new(
+            "gateway_not_configured",
+            "The model gateway is starting up and has not received its settings yet. Try again in a few seconds.",
+        ),
+        E::Rejected => Failed::new(
+            "gateway_rejected",
+            "The model gateway did not accept this server. The administrator should check the link's token.",
+        ),
+        E::Unreachable => Failed::new("gateway_unavailable", "The model gateway does not answer. Try again in a moment."),
+        E::Other(_) => Failed::new("gateway_error", "The model gateway could not take the request."),
+    }
+}
+
+/// Sends the generation to the gateway and follows its events until the reply ends. Nothing is retried here: the gateway
+/// tries the provider up to three times and says how it ended. A cancel ends it at once, and dropping the stream
+/// cancels the request in flight.
+async fn via_gateway(
     state: &Arc<AppState>,
     fin: &mut Finisher,
-    cand: &Candidate,
+    provider: &askbar_proto::SnapshotProvider,
     system: &str,
     history: &[ChatMessage],
-    started: Instant,
-    timeout: Duration,
-    open_attempt: &Mutex<Option<OpenAttempt>>,
 ) -> Ended {
-    use crate::router::{classify, Failure};
     let live = fin.live.clone();
-    let mut retry_index = 0;
+    if live.cancel_was_asked() {
+        return Ended::Cancelled(None);
+    }
+    // The row says which provider is serving it, and with which model, as they are now: the reply is labelled with
+    // these, even if it is written after a restart.
+    fin.provider_id = provider.id.clone();
+    let by = crate::ReplyBy { provider_id: provider.id.clone(), provider_name: provider.name.clone(), model: provider.model.clone() };
+    let _ = fin.space.lock().set_generation_provider(&fin.id, &by);
+    fin.by = Some(by);
+    live.set_provider(&provider.id, &provider.name, &provider.model);
+    let Some(client) = state.gateway.clone() else {
+        return Ended::Failed(Failed::new("gateway_unavailable", "No model gateway is set up on this server."));
+    };
+    let messages: Vec<GatewayMessage> =
+        history.iter().map(|m| GatewayMessage { role: m.role.clone(), content: m.content.clone() }).collect();
+    let request = GatewayRequest {
+        provider_id: provider.id.clone(),
+        user_id: fin.user_id.clone(),
+        client_id: fin.client_id.clone(),
+        space_id: Some(fin.space.id.clone()),
+        conversation_id: Some(fin.conversation_id.clone()),
+        generation_id: fin.id.clone(),
+        system: system.to_string(),
+        messages,
+    };
+    let mut stream = tokio::select! {
+        r = client.chat(&request) => match r {
+            Ok(s) => s,
+            Err(e) => return Ended::Failed(gateway_failure(e)),
+        },
+        _ = live.cancel_asked() => return Ended::Cancelled(None),
+    };
+    let mut usage: Option<Usage> = None;
     loop {
-        {
-            let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
-            live.set_cancel(cancel_tx);
-            if live.cancel_was_asked() {
-                return Ended::Cancelled(None);
+        let event = tokio::select! {
+            e = stream.next() => e,
+            _ = live.cancel_asked() => return Ended::Cancelled(usage),
+        };
+        match event {
+            Some(GatewayEvent::Span { span_id, .. }) => {
+                fin.turn_span = span_id;
+                seal_request(state, fin, system, history);
             }
-            if retry_index == 0 {
-                // The row says which provider is serving it, and with which model, as they are now: the
-                // reply is labelled with these, even if it is written after a restart.
-                fin.provider_id = cand.id.clone();
-                let by = crate::ReplyBy {
-                    provider_id: cand.id.clone(),
-                    provider_name: cand.provider.name.clone(),
-                    model: cand.provider.model.clone(),
+            Some(GatewayEvent::Delta { text }) => fin.push(&text),
+            Some(GatewayEvent::Usage { input, output, cache_read, cache_write, estimated }) => {
+                usage.get_or_insert_with(Usage::default).merge(&Usage { input, output, cache_read, cache_write, estimated });
+            }
+            Some(GatewayEvent::Done { .. }) => {
+                // It worked, so whatever was wrong with its credentials no longer is.
+                let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+                let _ = db.clear_provider_health(&provider.id);
+                return Ended::Done(usage);
+            }
+            Some(GatewayEvent::Error { code, class, .. }) => {
+                let message = match class {
+                    FailureClass::AuthFailed => "The provider did not accept its key. The administrator has been told.",
+                    FailureClass::Retryable => "The provider could not answer right now. Try again in a moment.",
+                    FailureClass::Fatal => "The provider refused the request.",
                 };
-                let _ = fin.space.lock().set_generation_provider(&fin.id, &by);
-                fin.by = Some(by);
-            }
-            live.set_provider(&cand.id, &cand.provider.name, &cand.provider.model);
-            let span = state.audit.start_span(
-                SpanStart::new(&fin.id, Kind::Attempt, &cand.provider.name)
-                    .parent(&fin.turn_span)
-                    .provider(&cand.id, &cand.provider.model)
-                    .attrs(&serde_json::json!({ "retry_index": retry_index })),
-            );
-            let mut info = AttemptInfo { retry_index, request_truncated: false };
-            // What was sent, sealed: the system prompt and the history, as the provider will see them.
-            if let Some(key) = &fin.audit_key {
-                let request = serde_json::json!({
-                    "system": system,
-                    "messages": history.iter().map(|m| serde_json::json!({ "role": m.role, "content": m.content })).collect::<Vec<_>>(),
-                })
-                .to_string();
-                let kept = cut(&request, MAX_PAYLOAD_BYTES);
-                info.request_truncated = kept.len() < request.len();
-                if let Ok(sealed) = crate::seal::seal(key, kept.as_bytes()) {
-                    state.audit.payload(&span, "request", sealed);
-                }
-            }
-            *open_attempt.lock().unwrap_or_else(|e| e.into_inner()) = Some(OpenAttempt { span: span.clone(), info: info.clone() });
-
-            let result = stream_chat_report(&state.http, &cand.provider, system, history, cancel_rx, |delta| fin.push(delta)).await;
-
-            // The attempt is over; say how it went.
-            open_attempt.lock().unwrap_or_else(|e| e.into_inner()).take();
-            let mut end = SpanFinish::new(&span, "done");
-            match &result {
-                Ok(r) => {
-                    end.status = match r.outcome {
-                        StreamOutcome::Completed => "done",
-                        StreamOutcome::Cancelled => "cancelled",
-                    }
-                    .into();
-                    if r.outcome == StreamOutcome::Cancelled {
-                        end.error_code = live.cancel_reason();
-                    }
-                    end.ttft_ms = r.time_to_first_token.map(|d| d.as_millis() as u64);
-                    end.attrs_json = Some(attempt_attrs(Some(r), &info).to_string());
-                    if let Some(u) = r.usage {
-                        (end.tokens_in, end.tokens_out, end.tokens_cached) = (u.input, u.output, u.cache_read);
-                    }
-                }
-                Err(e) => {
-                    // The provider's own words about the failure, sealed, cut at 4 KB.
-                    if let Some(key) = &fin.audit_key {
-                        let message = e.error.to_string();
-                        if let Ok(sealed) = crate::seal::seal(key, cut(&message, MAX_ERROR_PAYLOAD_BYTES).as_bytes()) {
-                            state.audit.payload(&span, "error", sealed);
-                        }
-                    }
-                    end.status = "error".into();
-                    end.error_code = Some(error_code(&e.error));
-                    end.ttft_ms = e.report.time_to_first_token.map(|d| d.as_millis() as u64);
-                    end.attrs_json = Some(attempt_attrs(Some(&e.report), &info).to_string());
-                }
-            }
-            state.audit.finish_span(end);
-
-            let e = match result {
-                Ok(r) => {
-                    // It worked, so whatever was wrong with its credentials no longer is.
-                    if r.outcome == StreamOutcome::Completed {
-                        let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
-                        let _ = db.clear_provider_health(&cand.id);
-                    }
-                    return match r.outcome {
-                        StreamOutcome::Completed => Ended::Done(r),
-                        StreamOutcome::Cancelled => Ended::Cancelled(Some(r)),
-                    };
-                }
-                Err(e) => e,
-            };
-            let class = classify(&e.error);
-            // Text already sent, or a request the provider refuses: the failure stands.
-            if !fin.text.is_empty() || class == Failure::Fatal {
-                return Ended::Failed(e);
-            }
-            match class {
-                // Bad credentials: another try cannot help. The administrator is told through the
-                // provider's health flag.
-                Failure::AuthFailed => {
+                if class == FailureClass::AuthFailed {
+                    // Bad credentials: the administrator is told through the provider's health flag.
                     let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
-                    let _ = db.flag_provider_auth_failed(&cand.id, &error_code(&e.error));
-                    return Ended::Failed(e);
+                    let _ = db.flag_provider_auth_failed(&provider.id, &code);
                 }
-                _ if retry_index >= MAX_RETRIES => return Ended::Failed(e),
-                _ => {
-                    // The provider's Retry-After replaces our backoff when it fits in the time left.
-                    let remaining = timeout.saturating_sub(started.elapsed());
-                    let wait = match e.report.retry_after {
-                        Some(ra) if ra < remaining => ra,
-                        _ => RETRY_BACKOFF[retry_index as usize],
-                    };
-                    tokio::select! {
-                        _ = tokio::time::sleep(wait) => {}
-                        _ = live.cancel_asked() => return Ended::Cancelled(None),
-                    }
-                }
+                return Ended::Failed(Failed { code, message: message.into(), usage });
+            }
+            None => {
+                return Ended::Failed(Failed {
+                    code: "stream".into(),
+                    message: "The model gateway stopped answering before the reply was complete.".into(),
+                    usage,
+                })
             }
         }
-        retry_index += 1;
+    }
+}
+
+/// What was sent, sealed, on the turn span: the system prompt and the history, as the provider will see them.
+fn seal_request(state: &AppState, fin: &mut Finisher, system: &str, history: &[ChatMessage]) {
+    let Some(key) = &fin.audit_key else { return };
+    let request = serde_json::json!({
+        "system": system,
+        "messages": history.iter().map(|m| serde_json::json!({ "role": m.role, "content": m.content })).collect::<Vec<_>>(),
+    })
+    .to_string();
+    let kept = cut(&request, MAX_PAYLOAD_BYTES);
+    fin.request_truncated = kept.len() < request.len();
+    if let Ok(sealed) = crate::seal::seal(key, kept.as_bytes()) {
+        state.audit.payload(&fin.turn_span, "request", sealed);
     }
 }
 
@@ -1483,7 +1420,7 @@ mod tests {
     fn error_text_is_cut_at_a_character_boundary_within_4_kb() {
         assert_eq!(cut("short", 4096), "short");
         let long = "é".repeat(3000); // 6000 bytes
-        let c = cut(&long, MAX_ERROR_PAYLOAD_BYTES);
+        let c = cut(&long, 4096);
         assert!(c.len() <= 4096 && c.len() >= 4094, "{}", c.len());
         assert!(c.chars().all(|ch| ch == 'é'), "never half a character");
         assert_eq!(cut("abc", 0), "");

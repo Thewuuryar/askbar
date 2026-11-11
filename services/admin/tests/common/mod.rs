@@ -5,7 +5,7 @@ use askbar_admin::caddy::CaddyLink;
 use askbar_admin::secrets::AdminSecrets;
 use askbar_admin::server_link::ServerLink;
 use askbar_admin::{web, AdminDb, AdminState};
-use askbar_server::{secrets::Secrets, AppState};
+use askbar_server::AppState;
 use axum::{
     extract::State,
     http::{HeaderMap, StatusCode},
@@ -37,6 +37,10 @@ async fn load(State(f): State<Arc<FakeCaddy>>, headers: HeaderMap, body: String)
 }
 
 pub struct T {
+    /// The in-process auditor and gateway the server records to and reads from.
+    pub rig: askbar_server::testing::Rig,
+    /// The in-process gateway the admin pushes to and asks for models and provider tests (ADR 0054).
+    pub gateway: Arc<askbar_model_gateway::Gateway>,
     pub adm: String,
     pub cookie: String,
     pub http: reqwest::Client,
@@ -61,9 +65,42 @@ pub async fn serve(app: Router) -> String {
     addr
 }
 
+/// A real gateway on the admin's listener, with the token and hash files `bootstrap` made under `dir`, and the
+/// admin's link to it. Nothing records to an auditor here: the routes the admin uses (configuration, models, the
+/// provider test) need none. `up = false` leaves the link pointing where nothing listens.
+pub async fn start_gateway(
+    dir: &std::path::Path,
+    up: bool,
+) -> (Arc<askbar_model_gateway::Gateway>, Arc<askbar_admin::gateway_link::GatewayLink>) {
+    let gw_tokens = dir.join("model-gateway-token");
+    let boot = askbar_service::status::BootId::new();
+    let audit = askbar_service::audit_client::AuditClient::new("http://127.0.0.1:1", gw_tokens.clone(), "model-gateway-auditor");
+    let restarter = askbar_service::restart::Restarter::for_tests(
+        boot.clone(),
+        std::time::Duration::ZERO,
+        std::time::Duration::from_secs(1),
+        || {},
+        || {},
+    );
+    let gateway = askbar_model_gateway::Gateway::new(audit, boot, restarter);
+    let url = if up {
+        serve(askbar_model_gateway::admin_router(gateway.clone(), askbar_model_gateway::admin_links(&gw_tokens))).await
+    } else {
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        format!("http://{}", l.local_addr().unwrap()) // dropped: nothing listens
+    };
+    let token = askbar_admin::gateway_link::read_token(&dir.join("admin-token")).unwrap();
+    (gateway, askbar_admin::gateway_link::GatewayLink::new(&url, token))
+}
+
 /// An admin wired to a real in-process server and a fake Caddy. `caddy_up = false` leaves the
 /// Caddy socket path in place with nothing listening on it.
 pub async fn start(caddy_up: bool) -> T {
+    start_with(caddy_up, true).await
+}
+
+/// `with_gateway = false` leaves the admin's gateway link unset, for a test that sets its own.
+pub async fn start_with(caddy_up: bool, with_gateway: bool) -> T {
     let dir = std::env::temp_dir().join(format!("ab-{}", &ulid::Ulid::new().to_string()[16..]));
     std::fs::create_dir_all(&dir).unwrap();
     let (token_file, hash_file) = askbar_bootstrap::install_for_tests(&dir);
@@ -71,10 +108,9 @@ pub async fn start(caddy_up: bool) -> T {
 
     let sdb = askbar_server::Db::open_in_memory().unwrap();
     sdb.seed_server().unwrap();
-    // The server records to a temp audit.db, so tests can put sealed content there and open it.
-    let (recorder, _audit_dir) = askbar_server::testing::audit_recorder();
-    let server =
-        AppState::new(sdb, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), askbar_server::MIN_CLIENT).with_audit(recorder);
+    // The server reads an in-process auditor, so tests can put sealed content there and open it (`rig.seed`).
+    let rig = askbar_server::testing::Rig::start().await;
+    let server = rig.attach(AppState::new(sdb, askbar_server::MIN_CLIENT)).await;
     let server_api_url = serve(askbar_server::server_api::router(server.clone(), hash_file)).await;
 
     let fake = Arc::new(FakeCaddy::default());
@@ -88,10 +124,15 @@ pub async fn start(caddy_up: bool) -> T {
     }
     let secrets_dir = dir.join("caddy-secrets");
 
+    let (gateway, gateway_link) = start_gateway(&dir, true).await;
+
     let db = AdminDb::open_in_memory().unwrap();
     web::init_password(&db, PW).unwrap();
     db.conn().execute("INSERT INTO users (id, name, created_at) VALUES ('U1', 'tester', 0)", []).unwrap();
     let admin = AdminState::build(db, Some(ServerLink::new(&server_api_url, token)), AdminSecrets::ephemeral());
+    if with_gateway {
+        admin.gateway.set(gateway_link).ok().unwrap();
+    }
     admin.set_caddy(CaddyLink { socket: Some(caddy_socket.clone()), secrets_dir: Some(secrets_dir.clone()) });
     let adm = serve(askbar_admin::router(admin.clone())).await;
     let http = reqwest::Client::new();
@@ -103,7 +144,7 @@ pub async fn start(caddy_up: bool) -> T {
         .await
         .unwrap();
     let cookie = r.headers()["set-cookie"].to_str().unwrap().split(';').next().unwrap().to_string();
-    T { adm, cookie, http, admin, server, fake, dir, secrets_dir, caddy_socket }
+    T { rig, gateway, adm, cookie, http, admin, server, fake, dir, secrets_dir, caddy_socket }
 }
 
 impl T {

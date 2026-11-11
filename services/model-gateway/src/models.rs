@@ -1,8 +1,8 @@
-//! "Which models does this provider offer?" Asks the provider's own model list, from the server (where the
-//! keys are and the network is), so the admin can offer a dropdown. Shared by the server API.
+//! "Which models does this provider offer?" Asks the provider's own model list, from the gateway (where the keys
+//! are and the outbound route is), so the admin can offer a dropdown (moved from the server, ADR 0054).
 
 use crate::llm::{Provider, ProviderKind};
-use crate::{store, AppState};
+use crate::Gateway;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::time::Duration;
@@ -156,26 +156,21 @@ async fn fetch(http: &reqwest::Client, p: &Provider, key: &str) -> Result<Vec<Mo
 
 /// List the models for `req`. A saved provider's key is used only when no key was given and the address is
 /// the one saved with it, so the key can never be sent somewhere the saved provider does not point.
-pub async fn run(state: &AppState, req: ModelsRequest) -> rusqlite::Result<ModelsResult> {
+pub async fn run(gw: &Gateway, req: ModelsRequest) -> ModelsResult {
     let kind = match req.kind.as_str() {
         "openai" => ProviderKind::OpenAi,
         "anthropic" => ProviderKind::Anthropic,
-        _ => return Ok(ModelsResult::fail("Type must be openai or anthropic.")),
+        _ => return ModelsResult::fail("Type must be openai or anthropic."),
     };
     let url = req.base_url.trim();
     if !url.is_empty() && !(url.starts_with("http://") || url.starts_with("https://")) {
-        return Ok(ModelsResult::fail("Base URL must start with http:// or https://."));
+        return ModelsResult::fail("Base URL must start with http:// or https://.");
     }
     let mut key = req.api_key.as_deref().map(str::trim).unwrap_or("").to_string();
     let mut headers = Default::default();
     if let Some(id) = req.provider_id.as_deref() {
-        let saved = {
-            let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
-            let secrets = state.secrets();
-            store::load_provider(&db, &secrets, id)?
-        };
-        let Some(saved) = saved else {
-            return Ok(ModelsResult::fail("No such provider."));
+        let Some(saved) = gw.provider(id) else {
+            return ModelsResult::fail("No such provider.");
         };
         let same = saved.kind == kind
             && same_url(&saved.effective_base_url(), &Provider { base_url: url.to_string(), kind, ..saved.clone() }.effective_base_url());
@@ -191,17 +186,16 @@ pub async fn run(state: &AppState, req: ModelsRequest) -> rusqlite::Result<Model
         kind,
         base_url: url.to_string(),
         api_key: key.clone(),
-        api_key_env: String::new(),
         model: String::new(),
         max_tokens: None,
         temperature: None,
         headers,
     };
-    Ok(match fetch(&state.http, &p, &key).await {
+    match fetch(gw.http(), &p, &key).await {
         Ok(models) if models.is_empty() => ModelsResult::fail("The provider lists no models."),
         Ok(models) => ModelsResult { ok: true, message: String::new(), models },
         Err(e) => ModelsResult::fail(redact(&e, &key)),
-    })
+    }
 }
 
 #[cfg(test)]
@@ -236,7 +230,6 @@ mod tests {
             kind,
             base_url: base.into(),
             api_key: String::new(),
-            api_key_env: String::new(),
             model: String::new(),
             max_tokens: None,
             temperature: None,

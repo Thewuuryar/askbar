@@ -433,11 +433,15 @@ pub fn stats(conn: &Connection, since: i64, cost_of: CostFn) -> rusqlite::Result
     // Cost, per provider and per day, from each generation's tokens and the provider that served it.
     struct Group {
         requests: i64,
+        /// How many of them have token counts (the rest cost nothing to price, and nothing to know).
+        with_tokens: i64,
         tokens: (i64, i64, i64),
         cost: CostSum,
     }
     let mut by_provider: std::collections::BTreeMap<String, Group> = Default::default();
     let mut by_day: std::collections::BTreeMap<String, Group> = Default::default();
+    // Per day and provider, with the tokens and no cost, so whoever holds the prices can price each day exactly.
+    let mut by_day_provider: std::collections::BTreeMap<(String, String), Group> = Default::default();
     let mut total = CostSum::default();
     {
         let mut stmt = conn.prepare(
@@ -460,11 +464,22 @@ pub fn stats(conn: &Connection, since: i64, cost_of: CostFn) -> rusqlite::Result
             let cost = cost_of(provider.as_deref(), tin, tout, tcached);
             total.add(cost, has_tokens);
             for (map, key) in [(&mut by_provider, provider.clone().unwrap_or_default()), (&mut by_day, utc_day(started))] {
-                let g = map.entry(key).or_insert_with(|| Group { requests: 0, tokens: (0, 0, 0), cost: CostSum::default() });
+                let g =
+                    map.entry(key).or_insert_with(|| Group { requests: 0, with_tokens: 0, tokens: (0, 0, 0), cost: CostSum::default() });
                 g.requests += 1;
+                g.with_tokens += i64::from(has_tokens);
                 g.tokens = (g.tokens.0 + tin.unwrap_or(0), g.tokens.1 + tout.unwrap_or(0), g.tokens.2 + tcached.unwrap_or(0));
                 g.cost.add(cost, has_tokens);
             }
+            let g = by_day_provider.entry((utc_day(started), provider.clone().unwrap_or_default())).or_insert_with(|| Group {
+                requests: 0,
+                with_tokens: 0,
+                tokens: (0, 0, 0),
+                cost: CostSum::default(),
+            });
+            g.requests += 1;
+            g.with_tokens += i64::from(has_tokens);
+            g.tokens = (g.tokens.0 + tin.unwrap_or(0), g.tokens.1 + tout.unwrap_or(0), g.tokens.2 + tcached.unwrap_or(0));
         }
     }
     // How the router treated each provider: every try (attempt span) it served or failed, the retries
@@ -486,7 +501,7 @@ pub fn stats(conn: &Connection, since: i64, cost_of: CostFn) -> rusqlite::Result
     }
     // A provider that only ever failed (no request ended on it) still has a row, so its failures show.
     for k in routing.keys() {
-        by_provider.entry(k.clone()).or_insert_with(|| Group { requests: 0, tokens: (0, 0, 0), cost: CostSum::default() });
+        by_provider.entry(k.clone()).or_insert_with(|| Group { requests: 0, with_tokens: 0, tokens: (0, 0, 0), cost: CostSum::default() });
     }
     let group_json = |key_name: &str, map: std::collections::BTreeMap<String, Group>| -> Vec<serde_json::Value> {
         map.into_iter()
@@ -494,6 +509,7 @@ pub fn stats(conn: &Connection, since: i64, cost_of: CostFn) -> rusqlite::Result
                 let mut v = serde_json::json!({
                     key_name: if key.is_empty() { serde_json::Value::Null } else { key.clone().into() },
                     "requests": g.requests,
+                    "requests_with_tokens": g.with_tokens,
                     "tokens": { "in": g.tokens.0, "out": g.tokens.1, "cached": g.tokens.2 },
                     "cost": g.cost.total(),
                     "cost_unknown_requests": g.cost.unknown,
@@ -508,6 +524,18 @@ pub fn stats(conn: &Connection, since: i64, cost_of: CostFn) -> rusqlite::Result
             })
             .collect()
     };
+    let by_day_provider: Vec<serde_json::Value> = by_day_provider
+        .into_iter()
+        .map(|((day, provider), g)| {
+            serde_json::json!({
+                "day": day,
+                "provider_id": if provider.is_empty() { serde_json::Value::Null } else { provider.into() },
+                "requests": g.requests,
+                "requests_with_tokens": g.with_tokens,
+                "tokens": { "in": g.tokens.0, "out": g.tokens.1, "cached": g.tokens.2 },
+            })
+        })
+        .collect();
     Ok(serde_json::json!({
         "since": since,
         "requests": requests,
@@ -515,6 +543,7 @@ pub fn stats(conn: &Connection, since: i64, cost_of: CostFn) -> rusqlite::Result
         "cost_unknown_requests": total.unknown,
         "by_provider": group_json("provider_id", by_provider),
         "by_day": group_json("day", by_day),
+        "by_day_provider": by_day_provider,
         "by_status": by_status,
         "error_rate": if requests > 0 { errors as f64 / requests as f64 } else { 0.0 },
         "latency_ms": { "p50": percentile(&latency, 50.0), "p95": percentile(&latency, 95.0) },
@@ -1465,6 +1494,41 @@ mod tests {
         // Outside the window nothing counts.
         let later = stats(&db.conn, now + 100, &|_, _, _, _| None).unwrap();
         assert!(later["by_provider"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn stats_give_tokens_by_day_and_provider_so_whoever_has_the_prices_can_price_each_day() {
+        let db = AuditDb::open_in_memory().unwrap();
+        let now = now_secs();
+        let turn = |id: &str, trace: &str, tin: Option<i64>, tout: Option<i64>| {
+            db.conn
+                .execute(
+                    "INSERT INTO spans (id, trace_id, kind, name, status, started_at, tokens_in, tokens_out) VALUES (?1,?2,'turn','n','done',?3,?4,?5)",
+                    rusqlite::params![id, trace, now, tin, tout],
+                )
+                .unwrap();
+            db.conn
+                .execute(
+                    "INSERT INTO spans (id, trace_id, kind, name, status, started_at, provider_id) VALUES (?1,?2,'attempt','n','done',?3,?4)",
+                    rusqlite::params![format!("a-{id}"), trace, now, if trace == "T3" { "p2" } else { "p1" }],
+                )
+                .unwrap();
+        };
+        turn("t1", "T1", Some(100), Some(10));
+        turn("t2", "T2", Some(50), Some(5));
+        turn("t3", "T3", None, None); // no counts: nothing to price
+        let v = stats(&db.conn, now - 10, &|_, _, _, _| None).unwrap();
+        let rows = v["by_day_provider"].as_array().unwrap();
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        let p1 = rows.iter().find(|r| r["provider_id"] == "p1").unwrap();
+        assert_eq!((p1["requests"].as_i64(), p1["requests_with_tokens"].as_i64()), (Some(2), Some(2)));
+        assert_eq!((p1["tokens"]["in"].as_i64(), p1["tokens"]["out"].as_i64()), (Some(150), Some(15)));
+        assert_eq!(p1["day"].as_str().unwrap().len(), 10, "YYYY-MM-DD");
+        let p2 = rows.iter().find(|r| r["provider_id"] == "p2").unwrap();
+        assert_eq!((p2["requests"].as_i64(), p2["requests_with_tokens"].as_i64()), (Some(1), Some(0)));
+        // The existing groups say how many of their requests had counts too.
+        assert_eq!(v["by_provider"].as_array().unwrap().iter().map(|r| r["requests_with_tokens"].as_i64().unwrap()).sum::<i64>(), 2);
+        assert_eq!(v["by_day"][0]["requests_with_tokens"], 2);
     }
 
     #[tokio::test]

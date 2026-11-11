@@ -4,10 +4,10 @@
 
 use askbar_audit::{AuditDb, Recorder};
 use askbar_auditor::{disk::FreeSpace, Auditor, Limits};
-use askbar_model_gateway::audit::AuditClient;
 use askbar_model_gateway::{admin_links, admin_router, server_links, server_router, Gateway};
 use askbar_proto::gateway::{ChatEvent, ChatMessage, ChatRequest, FailureClass, GatewayConfig, GatewayProvider};
 use askbar_proto::{AuditKey, SseParser};
+use askbar_service::audit_client::AuditClient;
 use askbar_service::restart::Restarter;
 use askbar_service::status::BootId;
 use futures_util::StreamExt;
@@ -104,6 +104,15 @@ async fn rig() -> Rig {
 
 /// `auditor_up` false points the gateway at an address nothing listens on.
 async fn rig_with(auditor_up: bool) -> Rig {
+    rig_full(auditor_up, None).await
+}
+
+/// A rig whose auditor sits behind a proxy that holds each `POST /spans` for as many milliseconds as `delay_ms` says.
+async fn rig_slow(delay_ms: Arc<AtomicU64>) -> Rig {
+    rig_full(true, Some(delay_ms)).await
+}
+
+async fn rig_full(auditor_up: bool, delay_ms: Option<Arc<AtomicU64>>) -> Rig {
     let dir = std::env::temp_dir().join(format!("askbar-gateway-{}", ulid::Ulid::new()));
     let audit_tokens = dir.join("audit/tokens");
     let gw_tokens = dir.join("gw/tokens");
@@ -124,13 +133,17 @@ async fn rig_with(auditor_up: bool) -> Rig {
     let free_space: FreeSpace = Arc::new(move || Some(f.load(Ordering::Relaxed)));
     let auditor = Auditor::new(recorder, limits, free_space);
     let audit_url = if auditor_up {
-        serve(askbar_auditor::router(auditor.clone(), askbar_auditor::links(&audit_tokens))).await
+        let real = serve(askbar_auditor::router(auditor.clone(), askbar_auditor::links(&audit_tokens))).await;
+        match delay_ms {
+            Some(d) => slow_proxy(real, d).await,
+            None => real,
+        }
     } else {
         let dead = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
         format!("http://127.0.0.1:{dead}")
     };
 
-    let client = AuditClient::new(&audit_url, gw_tokens.clone());
+    let client = AuditClient::new(&audit_url, gw_tokens.clone(), "model-gateway-auditor");
     let boot = BootId::new();
     let exited = Arc::new(AtomicBool::new(false));
     let e = exited.clone();
@@ -150,6 +163,33 @@ async fn rig_with(auditor_up: bool) -> Rig {
         }
     }
     rig
+}
+
+/// A proxy in front of `real` that holds `POST /spans` for `delay_ms` before passing it on: a slow acknowledgment.
+async fn slow_proxy(real: String, delay_ms: Arc<AtomicU64>) -> String {
+    use axum::body::Bytes;
+    use axum::extract::{Request, State};
+    use axum::http::StatusCode;
+    async fn forward(State((real, delay)): State<(String, Arc<AtomicU64>)>, req: Request) -> (StatusCode, Bytes) {
+        let (parts, body) = req.into_parts();
+        let bytes = axum::body::to_bytes(body, usize::MAX).await.unwrap();
+        let path = parts.uri.path_and_query().map(|p| p.as_str().to_string()).unwrap_or_default();
+        if parts.method == axum::http::Method::POST && path.ends_with("/spans") {
+            tokio::time::sleep(Duration::from_millis(delay.load(Ordering::Relaxed))).await;
+        }
+        let mut r = reqwest::Client::new().request(parts.method, format!("{real}{path}")).body(bytes);
+        if let Some(a) = parts.headers.get("authorization") {
+            r = r.header("authorization", a);
+        }
+        if let Some(c) = parts.headers.get("content-type") {
+            r = r.header("content-type", c);
+        }
+        match r.send().await {
+            Ok(resp) => (StatusCode::from_u16(resp.status().as_u16()).unwrap(), resp.bytes().await.unwrap_or_default()),
+            Err(_) => (StatusCode::BAD_GATEWAY, Bytes::new()),
+        }
+    }
+    serve(axum::Router::new().fallback(forward).with_state((real, delay_ms))).await
 }
 
 fn provider(rig: &Rig, id: &str, model: &str) -> GatewayProvider {
@@ -552,4 +592,24 @@ async fn bad_requests_are_refused_before_anything_is_recorded() {
     assert_eq!(rig.chat_raw(&r).await.status(), 400, "nothing to send");
     assert_eq!(rig.rows("SELECT * FROM spans WHERE kind = 'turn'").len(), 0);
     assert_eq!(rig.provider_calls(), 0);
+}
+
+#[tokio::test]
+async fn an_acknowledgment_slower_than_a_second_is_a_refusal_and_no_provider_is_called() {
+    let delay = Arc::new(AtomicU64::new(1500));
+    let rig = rig_slow(delay.clone()).await;
+    rig.push(&config(&rig, 1, &[("p", "m")])).await;
+    let started = Instant::now();
+    let r = rig.chat_raw(&rig.request("p", "gen-slow", "hello")).await;
+    assert_eq!(r.status(), 503);
+    assert_eq!(r.json::<Value>().await.unwrap()["error"], "audit_backlog");
+    assert!(started.elapsed() < Duration::from_millis(1400), "it gave up at one second, not when the answer came: {:?}", started.elapsed());
+    assert_eq!(rig.provider_calls(), 0, "no provider was called");
+
+    // The auditor catches up: the same request works, and the span the slow append left behind is the same one the
+    // retry of a lost answer would make, so nothing is recorded twice.
+    delay.store(0, Ordering::Relaxed);
+    let events = rig.chat(&rig.request("p", "gen-slow-2", "hello again")).await;
+    assert!(matches!(events.last(), Some(ChatEvent::Done { .. })), "{events:?}");
+    assert_eq!(rig.provider_calls(), 1);
 }

@@ -1,4 +1,4 @@
-use askbar_server::{secrets::Secrets, server_api, AppState};
+use askbar_server::{server_api, AppState};
 use sha2::{Digest, Sha256};
 
 const TOKEN: &str = "mgt_this-is-the-raw-server-token";
@@ -29,7 +29,7 @@ async fn start(write_hash: bool) -> T {
     }
     let db = askbar_server::Db::open_in_memory().unwrap();
     db.seed_server().unwrap();
-    let state = AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), askbar_server::MIN_CLIENT);
+    let state = AppState::new(db, askbar_server::MIN_CLIENT);
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", l.local_addr().unwrap());
     let app = server_api::router(state, hash_file.clone());
@@ -166,21 +166,30 @@ fn snapshot() -> Snapshot {
 struct S {
     t: T,
     state: std::sync::Arc<AppState>,
+    rig: askbar_server::testing::Rig,
 }
 
 async fn start_with_state() -> S {
+    start_state(true).await
+}
+
+/// `with_rig = false`: a state that sends no records and reads no audit store, as one started with no auditor is.
+async fn start_state(with_rig: bool) -> S {
     let dir = std::env::temp_dir().join(format!("server-token-{}", ulid::Ulid::new()));
     std::fs::create_dir_all(&dir).unwrap();
     let hash_file = dir.join("token.sha256");
     std::fs::write(&hash_file, hex(TOKEN)).unwrap();
     let db = askbar_server::Db::open_in_memory().unwrap();
     db.seed_server().unwrap();
-    let state = AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), askbar_server::MIN_CLIENT);
+    // Replies go through an in-process gateway and auditor (ADR 0054).
+    let rig = askbar_server::testing::Rig::start().await;
+    let state = AppState::new(db, askbar_server::MIN_CLIENT);
+    let state = if with_rig { rig.attach(state).await } else { state };
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", l.local_addr().unwrap());
     let app = server_api::router(state.clone(), hash_file.clone());
     tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
-    S { t: T { url, hash_file, dir, http: reqwest::Client::new() }, state }
+    S { t: T { url, hash_file, dir, http: reqwest::Client::new() }, state, rig }
 }
 
 impl S {
@@ -308,34 +317,7 @@ async fn other_invalid_snapshots_are_rejected_and_the_endpoint_needs_the_token()
     assert!(askbar_server::snapshot::current(&s.state.db.lock().unwrap()).unwrap().is_none(), "nothing was stored");
 }
 
-// --------------------------------------------------------------- provider keys
-
 const KEY: &str = "sk-live-VERY-SECRET-123";
-
-/// An OpenAI-style endpoint that answers only to `KEY`, and echoes a rejected key back in its error.
-async fn fake_llm() -> String {
-    use axum::{http::HeaderMap, response::IntoResponse, routing::post};
-    let app = axum::Router::new().route(
-        "/v1/chat/completions",
-        post(|headers: HeaderMap| async move {
-            let auth = headers.get("authorization").and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
-            if auth == format!("Bearer {KEY}") {
-                ([("content-type", "text/event-stream")], "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n")
-                    .into_response()
-            } else {
-                (
-                    axum::http::StatusCode::UNAUTHORIZED,
-                    format!("{{\"error\":{{\"message\":\"Incorrect API key provided: {}\"}}}}", auth.trim_start_matches("Bearer ")),
-                )
-                    .into_response()
-            }
-        }),
-    );
-    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("http://{}/v1", l.local_addr().unwrap());
-    tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
-    url
-}
 
 impl S {
     async fn call(&self, method: reqwest::Method, path: &str, body: Option<serde_json::Value>) -> (u16, String) {
@@ -351,82 +333,6 @@ impl S {
         snap.providers[0].base_url = base_url.into();
         assert_eq!(self.put(&serde_json::to_value(snap).unwrap(), Some(TOKEN)).await.0, 200);
     }
-    fn stored(&self, id: &str) -> Option<Vec<u8>> {
-        self.state.db.lock().unwrap().conn().query_row("SELECT api_key_enc FROM providers WHERE id = ?1", [id], |r| r.get(0)).ok()
-    }
-}
-
-#[tokio::test]
-async fn a_key_is_stored_encrypted_and_never_returned() {
-    use reqwest::Method as M;
-    let s = start_with_state().await;
-    s.push_provider("http://x/v1").await;
-
-    let (st, body) = s.call(M::PUT, "/api/server/v1/providers/p1/key", Some(json!({ "key": KEY }))).await;
-    assert_eq!((st, body.as_str()), (204, ""), "nothing comes back");
-    let stored = s.stored("p1").expect("a row was made from the snapshot");
-    assert!(!stored.windows(KEY.len()).any(|w| w == KEY.as_bytes()), "not stored in the clear");
-    assert_eq!(s.state.secrets().decrypt(&stored).unwrap(), KEY, "encrypted with the master key");
-
-    // Replacing it replaces. The row holds the id and the key and nothing else.
-    let (st, _) = s.call(M::PUT, "/api/server/v1/providers/p1/key", Some(json!({ "key": "sk-second-key-456" }))).await;
-    assert_eq!(st, 204);
-    assert_eq!(s.state.secrets().decrypt(&s.stored("p1").unwrap()).unwrap(), "sk-second-key-456");
-    let rows: i64 =
-        s.state.db.lock().unwrap().conn().query_row("SELECT COUNT(*) FROM providers WHERE id = 'p1'", [], |r| r.get(0)).unwrap();
-    assert_eq!(rows, 1);
-
-    // Errors do not echo the key either.
-    for (path, body, want) in [
-        ("/api/server/v1/providers/unknown/key", json!({ "key": KEY }), 404),
-        ("/api/server/v1/providers/p2/key", json!({ "key": "   " }), 400),
-        ("/api/server/v1/providers/p2/key", json!({ "key": "x".repeat(5000) }), 400),
-    ] {
-        let (st, text) = s.call(M::PUT, path, Some(body)).await;
-        assert_eq!(st, want, "{path}");
-        assert!(!text.contains(KEY));
-    }
-    assert!(s.stored("unknown").is_none());
-    // There is no way to read it back.
-    for (m, p) in
-        [(M::GET, "/api/server/v1/providers/p1/key"), (M::GET, "/api/server/v1/providers/p1"), (M::GET, "/api/server/v1/providers")]
-    {
-        let (st, text) = s.call(m, p, None).await;
-        assert!(st == 404 || st == 405, "{p}: {st}");
-        assert!(!text.contains("sk-"));
-    }
-    // Both endpoints need the token.
-    let r = s.t.http.put(format!("{}/api/server/v1/providers/p1/key", s.t.url)).json(&json!({ "key": KEY })).send().await.unwrap();
-    assert_eq!(r.status(), 401);
-}
-
-#[tokio::test]
-async fn the_test_endpoint_runs_a_provider_and_hides_the_key() {
-    use reqwest::Method as M;
-    let s = start_with_state().await;
-    let llm = fake_llm().await;
-    s.push_provider(&llm).await;
-
-    // No key yet: the provider is known (it is in the snapshot) but rejects the empty credential.
-    let (st, body) = s.call(M::POST, "/api/server/v1/providers/p1/test", None).await;
-    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
-    assert_eq!((st, &v["ok"]), (200, &json!(false)), "{body}");
-
-    s.call(M::PUT, "/api/server/v1/providers/p1/key", Some(json!({ "key": KEY }))).await;
-    let (st, body) = s.call(M::POST, "/api/server/v1/providers/p1/test", None).await;
-    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
-    assert_eq!((st, &v["ok"], v["message"].as_str()), (200, &json!(true), Some("ok")));
-    assert!(!body.contains(KEY));
-
-    // A wrong key: the provider's error echoes it, and the response must not.
-    let wrong = "sk-the-wrong-key-999";
-    s.call(M::PUT, "/api/server/v1/providers/p1/key", Some(json!({ "key": wrong }))).await;
-    let (st, body) = s.call(M::POST, "/api/server/v1/providers/p1/test", None).await;
-    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
-    assert_eq!((st, &v["ok"]), (200, &json!(false)));
-    assert!(!body.contains(wrong) && body.contains("[key hidden]"), "{body}");
-
-    assert_eq!(s.call(M::POST, "/api/server/v1/providers/nope/test", None).await.0, 404);
 }
 
 // ------------------------------------------------------- clients, usage, backup
@@ -486,11 +392,9 @@ async fn clients_and_usage_are_listed_over_the_server_api() {
 
 #[tokio::test]
 async fn the_backup_has_the_data_and_none_of_the_secrets() {
-    use reqwest::Method as M;
     let s = start_with_state().await;
     let llm = "http://x/v1";
     s.push_provider(llm).await;
-    s.call(M::PUT, "/api/server/v1/providers/p1/key", Some(json!({ "key": KEY }))).await;
     let code_hash = "ab".repeat(32); // the snapshot lists this pair-code hash
     let space_id = {
         let user: String = s.state.db.lock().unwrap().conn().query_row("SELECT id FROM users", [], |r| r.get(0)).unwrap();
@@ -561,7 +465,7 @@ async fn the_backup_has_the_data_and_none_of_the_secrets() {
 }
 
 #[tokio::test]
-async fn users_are_listed_and_a_provider_dropped_from_the_snapshot_loses_its_key() {
+async fn users_are_listed_and_the_server_holds_no_provider_key_nor_a_route_to_set_or_use_one() {
     use reqwest::Method as M;
     let s = start_with_state().await;
     let (st, body) = s.call(M::GET, "/api/server/v1/users", None).await;
@@ -569,17 +473,19 @@ async fn users_are_listed_and_a_provider_dropped_from_the_snapshot_loses_its_key
     assert_eq!((st, users.as_array().unwrap().len(), users[0]["name"].as_str()), (200, 1, Some("owner")));
     assert!(users[0]["id"].as_str().unwrap().len() == 26);
 
+    // Provider keys live in the gateway, which the admin gives them (ADR 0054): the server has no route that takes a
+    // key, tries a provider or lists its models, and its provider health says nothing about keys.
     s.push_provider("http://x/v1").await;
-    s.call(M::PUT, "/api/server/v1/providers/p1/key", Some(json!({ "key": KEY }))).await;
-    s.call(M::PUT, "/api/server/v1/providers/p2/key", Some(json!({ "key": "sk-other-key-777" }))).await;
-    assert!(s.stored("p1").is_some() && s.stored("p2").is_some());
-
-    // The admin drops p2: its stored key goes with it, p1's stays.
-    let mut next = snapshot();
-    next.providers.retain(|p| p.id == "p1");
-    assert_eq!(s.put(&serde_json::to_value(next).unwrap(), Some(TOKEN)).await.0, 200);
-    assert!(s.stored("p2").is_none(), "no key left behind for a deleted provider");
-    assert!(s.stored("p1").is_some());
+    for (m, p) in
+        [(M::PUT, "/api/server/v1/providers/p1/key"), (M::POST, "/api/server/v1/providers/p1/test"), (M::POST, "/api/server/v1/models")]
+    {
+        let (st, body) = s.call(m.clone(), p, Some(json!({ "key": KEY }))).await;
+        assert_eq!(st, 404, "{m} {p}");
+        assert!(!body.contains(KEY));
+    }
+    let (st, body) = s.call(M::GET, "/api/server/v1/providers/health", None).await;
+    assert_eq!(st, 200);
+    assert!(serde_json::from_str::<serde_json::Value>(&body).unwrap().get("missing_key").is_none(), "{body}");
 }
 
 #[tokio::test]
@@ -628,13 +534,14 @@ async fn a_generation_with_the_mocks_usage_adds_to_the_overview_totals() {
             &db,
             askbar_server::testing::provider("p1", "mock", &format!("http://127.0.0.1:{port}/v1"), "m"),
         );
-        askbar_server::testing::store_key(&db, &s.state.secrets(), "p1", "sk-test");
         let user: String = db.conn().query_row("SELECT id FROM users", [], |r| r.get(0)).unwrap();
         let code = askbar_server::testing::add_pair_code(&db, &user, "laptop");
         askbar_server::auth::redeem_pair_code(&db, &code).unwrap().unwrap();
         let client: String = db.conn().query_row("SELECT id FROM clients", [], |r| r.get(0)).unwrap();
         (user, client)
     };
+    s.rig.set_key("p1", "sk-test");
+    s.rig.sync(&s.state); // the gateway gets the provider and its key
     let sub = askbar_server::generation::submit(
         &s.state,
         askbar_server::generation::Submit {
@@ -694,7 +601,7 @@ async fn audit_stack() -> AuditStack {
     out.read_line(&mut line).unwrap();
     std::thread::spawn(move || for _ in out.lines() {});
 
-    let (state, dir) = askbar_server::testing::state_with_audit(&format!("http://127.0.0.1:{port}/v1"));
+    let (state, dir, _rig) = askbar_server::testing::state_with_audit(&format!("http://127.0.0.1:{port}/v1")).await;
     let hash_file = dir.join("token.sha256");
     std::fs::write(&hash_file, hex(TOKEN)).unwrap();
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -792,9 +699,10 @@ async fn one_trace_returns_all_its_spans_and_unknown_ones_are_404() {
     assert_eq!(v["spans"][0]["name"], "kill_switch");
     assert_eq!(v["spans"][2]["parent_id"], v["spans"][1]["id"]);
     assert_eq!(v["spans"][2]["attrs"]["http_status"], 200);
-    // How many sealed items each span has: the attempt its request, the turn its reply, a gate none.
+    // How many sealed items each span has: the turn its request and its reply (the server adds both to the span the
+    // gateway opened), the attempt none (nothing went wrong), a gate none.
     let sealed: Vec<i64> = v["spans"].as_array().unwrap().iter().map(|s| s["sealed"].as_i64().unwrap()).collect();
-    assert_eq!(sealed, [0, 1, 1]);
+    assert_eq!(sealed, [0, 2, 0]);
     assert_eq!(a.get("/api/server/v1/audit/traces/no-such-trace").await.0, 404);
 }
 
@@ -831,8 +739,8 @@ async fn the_audit_endpoints_need_the_server_token_and_a_recording_store() {
         let r = a.http.get(format!("{}{p}", a.url)).send().await.unwrap();
         assert_eq!(r.status(), 401, "{p}");
     }
-    // A server with no audit store says so instead of pretending the trail is empty.
-    let s = start_with_state().await;
+    // A server with no way to read the audit store says so instead of pretending the trail is empty.
+    let s = start_state(false).await;
     let (st, _) = s.call(reqwest::Method::GET, "/api/server/v1/audit/stats", None).await;
     assert_eq!(st, 503);
 }
@@ -847,11 +755,12 @@ async fn sealed_payloads_are_served_as_ciphertext_only_and_unknown_spans_are_404
     let span_of =
         |kind: &str| spans["spans"].as_array().unwrap().iter().find(|s| s["kind"] == kind).unwrap()["id"].as_str().unwrap().to_string();
 
-    let (st, body) = a.get(&format!("/api/server/v1/audit/payloads/{}", span_of("attempt"))).await;
+    let (st, body) = a.get(&format!("/api/server/v1/audit/payloads/{}", span_of("turn"))).await;
     assert_eq!(st, 200);
     assert!(!body.contains("SECRET-WORD") && !body.contains("Anything else?"), "no plaintext: {body}");
     let list: serde_json::Value = serde_json::from_str(&body).unwrap();
-    assert_eq!(list.as_array().unwrap().len(), 1);
+    assert_eq!(list.as_array().unwrap().len(), 2, "the request and the reply");
+    let list = serde_json::json!([list.as_array().unwrap().iter().find(|p| p["role"] == "request").unwrap()]);
     assert_eq!(list[0]["role"], "request");
     assert_eq!(list[0]["key_id"], askbar_server::testing::test_audit_key().key_id.as_str());
     let ct = base64::engine::general_purpose::STANDARD.decode(list[0]["ciphertext_b64"].as_str().unwrap()).unwrap();
@@ -863,7 +772,7 @@ async fn sealed_payloads_are_served_as_ciphertext_only_and_unknown_spans_are_404
 
     let (_, body) = a.get(&format!("/api/server/v1/audit/payloads/{}", span_of("turn"))).await;
     let turn: serde_json::Value = serde_json::from_str(&body).unwrap();
-    assert_eq!(turn[0]["role"], "reply");
+    assert!(turn.as_array().unwrap().iter().any(|p| p["role"] == "reply"), "{turn}");
     assert!(!body.contains("Anything else?"));
 
     // A span that exists but has nothing sealed is an empty list; one that does not exist is 404.
@@ -1005,7 +914,7 @@ async fn server_api_failures_are_problems_with_a_code_and_a_sentence() {
     let p: askbar_proto::Problem = r.json().await.unwrap();
     assert_eq!(p.error, "bad_request");
     assert!(p.detail.contains("at least 7"), "{}", p.detail);
-    // Unknown provider key target, and the audit endpoints with no store recording.
+    // A route that is not there, such as the old way to set a provider key (the server holds none, ADR 0054).
     check(
         t.http
             .put(url("/api/server/v1/providers/nope/key"))

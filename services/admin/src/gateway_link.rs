@@ -69,7 +69,11 @@ pub(crate) fn keep_keys(conn: &Connection, secrets: &AdminSecrets, keys: &[(Stri
         )
         .map_err(|_| fail())?;
     }
+    for (id, _) in keys {
+        let _ = conn.execute("UPDATE providers SET has_key = 1 WHERE id = ?1", [id]);
+    }
     conn.execute("DELETE FROM provider_keys WHERE provider_id NOT IN (SELECT id FROM providers)", []).map_err(|_| fail())?;
+    // The old column says only that a key was entered once; the list reads `provider_keys` for whether one is held now.
     Ok(())
 }
 
@@ -193,6 +197,26 @@ impl GatewayLink {
         let status = resp.status().as_u16();
         let bytes = resp.bytes().await.map_err(|_| ())?;
         Ok((status, bytes.to_vec()))
+    }
+
+    /// A call on the gateway for the admin API: what it answered, after giving it the configuration if it has none (a
+    /// provider saved a moment ago is not in its memory yet). A gateway that does not answer is a `502` with a sentence.
+    pub async fn call(
+        &self,
+        state: &AdminState,
+        method: reqwest::Method,
+        path: &str,
+        body: Option<&serde_json::Value>,
+        needs_config: bool,
+    ) -> Result<(u16, Vec<u8>), ApiError> {
+        let unreachable = || ApiError::new(ErrorCode::ServerUnavailable, "The gateway did not answer. Check it on the Services page.");
+        match self.sync(state).await {
+            Sync::Unreachable => return Err(unreachable()),
+            // A saved provider is only in the gateway once it has a configuration, and that needs the audit key.
+            Sync::NotReady(why) if needs_config => return Err(ApiError::new(ErrorCode::AuditKeyMissing, why)),
+            _ => {}
+        }
+        self.request(method, path, body).await.map_err(|()| unreachable())
     }
 
     /// `GET /status`: the configuration version the gateway runs (none while unconfigured) and its boot ID. `None`

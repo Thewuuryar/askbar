@@ -6,8 +6,6 @@ use crate::{auth, ids, snapshot, Db};
 use askbar_proto::{Budget, DisplaySettings, Snapshot, SnapshotPairCode, SnapshotProvider};
 use sha2::{Digest, Sha256};
 
-pub const TEST_MASTER_KEY: &str = "0123456789abcdef0123456789abcdef";
-
 /// The secret half of the test audit key (the tests that read what was sealed use it).
 pub const TEST_AUDIT_SECRET: [u8; 32] = [9; 32];
 
@@ -73,16 +71,6 @@ pub fn add_provider(db: &Db, p: SnapshotProvider) {
     });
 }
 
-/// Store an API key for a provider the way the server API would.
-pub fn store_key(db: &Db, secrets: &crate::secrets::Secrets, provider_id: &str, key: &str) {
-    db.conn()
-        .execute(
-            "INSERT INTO providers (id, api_key_enc) VALUES (?1, ?2) ON CONFLICT(id) DO UPDATE SET api_key_enc = excluded.api_key_enc",
-            rusqlite::params![provider_id, secrets.encrypt(key)],
-        )
-        .unwrap();
-}
-
 /// A one-time pairing code for `user_id`, listed in the snapshot (valid for ten minutes).
 pub fn add_pair_code(db: &Db, user_id: &str, client_name: &str) -> String {
     add_pair_code_expiring(db, user_id, client_name, 600)
@@ -105,27 +93,7 @@ pub fn add_pair_code_expiring(db: &Db, user_id: &str, client_name: &str, ttl_sec
 
 /// An `AppState` over an empty in-memory database, for unit tests.
 pub fn state_for_tests() -> std::sync::Arc<crate::AppState> {
-    crate::AppState::new(Db::open_in_memory().unwrap(), crate::secrets::Secrets::new(TEST_MASTER_KEY).unwrap(), crate::MIN_CLIENT)
-}
-
-/// A recorder writing `audit.db` in a fresh temp directory, which is returned too. For tests.
-pub fn audit_recorder() -> (crate::audit::Recorder, std::path::PathBuf) {
-    let dir = std::env::temp_dir().join(format!("askbar-audit-test-{}", ids::new_id()));
-    let db = crate::audit::AuditDb::open(&dir.join("audit.db")).expect("audit.db opens");
-    (crate::audit::Recorder::spawn(db, 1024), dir)
-}
-
-/// An `AppState` over an in-memory database with a provider "p1" pointing at `base_url` (its key
-/// stored), a user, and a recorder writing a temp `audit.db`; returns the state and that
-/// directory. For tests.
-pub fn state_with_audit(base_url: &str) -> (std::sync::Arc<crate::AppState>, std::path::PathBuf) {
-    let db = Db::open_in_memory().unwrap();
-    db.seed_server().unwrap();
-    let secrets = crate::secrets::Secrets::new(TEST_MASTER_KEY).unwrap();
-    add_provider(&db, provider("p1", "mock", base_url, "m"));
-    store_key(&db, &secrets, "p1", "sk-test");
-    let (recorder, dir) = audit_recorder();
-    (crate::AppState::new(db, secrets, crate::MIN_CLIENT).with_audit(recorder), dir)
+    crate::AppState::new(Db::open_in_memory().unwrap(), crate::MIN_CLIENT)
 }
 
 /// `user_id`'s personal space, made if need be, as `GET /spaces` would list it. For tests that call
@@ -141,26 +109,31 @@ pub fn override_generation_timeout(state: &crate::AppState, d: std::time::Durati
     state.set_generation_timeout_override(Some(d));
 }
 
+#[cfg(feature = "test-rig")]
+pub mod rig;
+#[cfg(feature = "test-rig")]
+pub use rig::Rig;
+/// `state_with_audit` of old: a state with the provider "p1" at `base_url`, attached to a rig (see `Rig::state_with_provider`).
+#[cfg(feature = "test-rig")]
+pub async fn state_with_audit(base_url: &str) -> (std::sync::Arc<crate::AppState>, std::path::PathBuf, &'static Rig) {
+    Rig::state_with_provider(base_url).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::time::Duration;
 
     #[test]
-    fn new_records_nothing_and_with_audit_gives_a_state_its_recorder() {
+    fn a_state_records_nothing_until_it_is_given_an_auditor() {
         let plain = state_for_tests();
-        assert!(plain.audit.healthy() && plain.audit.dropped() == 0, "the default recorder is a healthy no-op");
-        let (state, dir) = state_with_audit("http://127.0.0.1:1/v1");
-        assert!(dir.join("audit.db").exists(), "the audit store is opened beside the state");
-        assert!(state.audit.healthy());
-        assert!(crate::store::load_provider(&state.db.lock().unwrap(), &state.secrets(), "p1").unwrap().is_some(), "with its provider");
-        let _ = std::fs::remove_dir_all(dir);
+        assert!(plain.audit.healthy(), "the default recorder is a healthy no-op");
+        assert!(plain.gateway.is_none() && plain.audit_reader.is_none());
     }
 
     #[test]
     fn the_timeout_override_can_be_set_read_back_and_cleared() {
-        let state =
-            crate::AppState::new(Db::open_in_memory().unwrap(), crate::secrets::Secrets::new(TEST_MASTER_KEY).unwrap(), crate::MIN_CLIENT);
+        let state = crate::AppState::new(Db::open_in_memory().unwrap(), crate::MIN_CLIENT);
         assert_eq!(state.generation_timeout_override(), None);
         override_generation_timeout(&state, Duration::from_secs(2));
         assert_eq!(state.generation_timeout_override(), Some(Duration::from_secs(2)));

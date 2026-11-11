@@ -11,14 +11,15 @@ This page describes the code on `main`. The accepted v1 target differs: see [arc
 - **History** you can toggle (Ctrl+H), reopen and delete. Stored on your server, shared by every app you pair.
 - **Copy in and out.** Paste anything into the bar. Copy a whole reply, a single code block, or the last reply (Ctrl+Shift+C).
 - **Replies run on the server.** Close the window or lose the connection and the reply keeps going; reopen the app and it is there.
-- **Keys stay on the server.** The desktop app is a thin client; provider API keys never reach it.
+- **Keys stay off the desktop.** The desktop app is a thin client; provider API keys never reach it, or the server.
 
 ## How it fits together
 
 Askbar is three programs:
 
 - **Desktop client** (Tauri): the popup. It pairs with one server and holds only its address, a hotkey and a client token (in the OS keychain).
-- **`askbar-server`**: the client API. It stores conversations, runs the chat against your providers and keeps provider keys encrypted. It has no web UI and no login.
+- **`askbar-server`**: the client API. It stores conversations and asks `model-gateway` for each reply; it holds no provider key and has no route to the internet. It has no web UI and no login.
+- **`askbar-model-gateway`**: holds the provider keys in memory and calls the providers ([ADR 0054](adr/0054-model-gateway.md)).
 - **`askbar-admin`**: the admin site. It owns all configuration (providers, system prompt, display defaults, pairing codes, clients, network and HTTPS settings, limits and the kill switch) and pushes it to the server over a private server API. Its **Audit** page shows what the server recorded about every reply.
 
 There is no standalone mode: the client always talks to a server.
@@ -114,17 +115,17 @@ That starts these containers, with `bootstrap` (no network, exits when it has ma
 
 | Container | Runs as | Network | Published |
 |---|---|---|---|
-| `askbar-caddy` | root (group 10001) | `edge` | **443, 80** |
-| `askbar-server` | uid 10002 | `edge`, `server-api` | nothing |
+| `askbar-caddy` | root (group 10001) | `edge`, `client-api` | **443, 80** |
+| `askbar-server` | uid 10002 | `client-api`, `server-api`, `gateway-server`, `audit-server` | nothing |
 | `askbar-admin` | uid 10001 | `server-api`, `cpa-admin`, `audit-admin`, `gateway-admin` | nothing (a unix socket) |
-| `askbar-auditor` | uid 10003 | `audit-admin`, `audit-model-gateway` only | nothing |
-| `askbar-model-gateway` | uid 10004 | `gateway-server`, `gateway-admin`, `audit-model-gateway`, `outbound` | nothing |
+| `askbar-auditor` | uid 10003 | `audit-admin`, `audit-model-gateway`, `audit-server` only | nothing |
+| `askbar-model-gateway` | uid 10004 | `gateway-server`, `gateway-admin`, `audit-model-gateway`, `cpa-gateway`, `outbound` | nothing |
 
 `server-api` is an `internal` network shared by the admin and the server's server API. No address is fixed: the server has the alias `server-api-host` on that network only, listens on the address it resolves to (port 8082), and the admin calls `http://server-api-host:8082`. So the server API answers on `server-api` and nowhere else. Caddy is the only thing the outside world can reach.
 
 ### Docker networks
 
-Askbar gives each link between two services its own network, so a service reaches only the services it has to ([architecture.md](architecture.md#links)). The stack has eight networks today (`edge`, `server-api`, `cpa-admin`, `audit-admin`, `audit-model-gateway`, `gateway-admin`, `gateway-server` and `outbound`) and about fifteen once the server and the alerter reach the auditor and the gateway on networks of their own. Each network takes a subnet from Docker's address pools, and with Docker's default settings a host has about 30 to share between all its Compose projects. When they run out, `docker compose up` fails with:
+Askbar gives each link between two services its own network, so a service reaches only the services it has to ([architecture.md](architecture.md#links)). The stack has eleven networks today (`edge`, `client-api`, `server-api`, `cpa-admin`, `cpa-gateway`, `audit-admin`, `audit-model-gateway`, `audit-server`, `gateway-admin`, `gateway-server` and `outbound`) and a few more once the alerter and the other callers get theirs. Each network takes a subnet from Docker's address pools, and with Docker's default settings a host has about 30 to share between all its Compose projects. When they run out, `docker compose up` fails with:
 
 ```text
 could not find an available, non-overlapping IPv4 address pool among the defaults to assign to the network
@@ -149,7 +150,7 @@ Every container has a read-only root filesystem, no Linux capabilities (Caddy ke
 - The **server** serves the client API, which accepts only `Authorization: Bearer <client token>`. Chat replies stream as Server-Sent Events (`meta`, `provider`, `delta`, `done`, `error`) and can be resumed after a dropped connection. Client tokens are random, shown once, and stored as SHA-256 hashes. See [docs/wire-contract.md](wire-contract.md).
 - The **admin** listens on a unix socket only. Caddy proxies the site (`<hostname>/admin`) and its API (`<hostname>/api/admin/v1`) to it, and the admin owns `admin.db`. Each section of the site is its own page with its own address (`/admin/providers/`, `/admin/services/`, `/admin/clients/`, `/admin/audit/`, `/admin/backup/`, `/admin/network/`, `/admin/security/`, `/admin/settings/`; `/admin` opens the first), so a page can be bookmarked and Back works. Every change is made in `admin.db` and pushed to the server as one snapshot; if the server is down the change is refused ("The server is offline. Nothing was changed.") rather than half applied. With the server stopped the admin still loads and shows an offline banner.
 - The **server API** requires a bearer token. `bootstrap` makes it ([Tokens between services](#tokens-between-services)): the admin reads it from its own volume, `admin-token`, and the server holds only its SHA-256 (`accept/admin-server.sha256` in `server-token`, read per request, compared in constant time, and the API refuses everything when the file is missing).
-- **Provider API keys** are encrypted at rest (ChaCha20-Poly1305) with a master key that the server creates on its first start in the `askbar-secrets` volume. They are sent to the server by the admin, stored only in the server's `control.db`, and never returned by any endpoint. The Cloudflare token is encrypted in `admin.db` with the admin's own key (`admin-secrets`), separate from the server's, and written to a file only Caddy reads.
+- **Provider API keys** are kept by the admin, encrypted at rest (ChaCha20-Poly1305) with the admin's own key (`admin-secrets`), and pushed to `model-gateway`, which holds them in memory only ([model-gateway](#model-gateway)). The server holds none. No endpoint returns one. The Cloudflare token is encrypted in `admin.db` with the admin's own key (`admin-secrets`), separate from the server's, and written to a file only Caddy reads.
 
 ### First run
 
@@ -186,7 +187,7 @@ The **content** of messages (prompts, replies, provider errors) is *sealed*: the
 - Records older than **Keep audit records for (days)** (default 30, at least 7) are deleted once a day. Nothing younger than 7 days can be deleted.
 - Until a key exists the server refuses to start replies (`503`), rather than record them unsealed.
 
-The trace lives in `audit.db`, in the `audit-data` volume, which only the server mounts; the admin reads it through the server API.
+The trace lives in the auditor's `audit.db` (`auditor-data` volume). The server records its part of it and reads it for the admin through the auditor, with prices applied; the admin's Audit pages still read it through the server API until the pages move to the admin.
 
 ### CLIProxyAPI
 
@@ -196,7 +197,7 @@ Lets a Claude or ChatGPT subscription act as an OpenAI-compatible provider. It s
 2. Open the address and approve. The browser then lands on an address starting `http://localhost` that will not load if the admin is on another machine. Copy that whole address from the address bar and paste it into the box. **Finish**.
 3. A provider named **CPA** appears on the Providers page, already holding the key the admin made for CLIProxyAPI. Choose its model from the dropdown. Its name, address and key are fixed.
 
-The admin makes CLIProxyAPI's config and API key itself (nobody copies a key anywhere). CLIProxyAPI joins the `edge` network (the server reaches it there) and `cpa-admin` (the admin runs logins there); its API is never published. See [deploy/cpa/README.md](../deploy/cpa/README.md).
+The admin makes CLIProxyAPI's config and API key itself (nobody copies a key anywhere). CLIProxyAPI joins `cpa-gateway` (`model-gateway` reaches it there), `cpa-admin` (the admin runs logins there) and `edge`; its API is never published. See [deploy/cpa/README.md](../deploy/cpa/README.md).
 
 ### Configuration reference
 
@@ -217,7 +218,7 @@ The admin makes CLIProxyAPI's config and API key itself (nobody copies a key any
 
 **Upgrading from 0.4 to 0.5** (stop the stack, pull, rebuild, update the app):
 
-1. Back up first: `data/`, the `askbar-secrets`, `admin-data`, `admin-secrets` and `audit-data` volumes (see *Backup and recovery*).
+1. Back up first: `data/`, and the `askbar-secrets`, `admin-data`, `admin-secrets` and `audit-data` volumes (see *Backup and recovery*).
 2. `docker compose down` (not `-v`), `git pull`, `docker compose up -d --build`. The databases migrate themselves on the first start (the `devices` table becomes `clients`; paired apps and their tokens are kept). <!-- names-ok: the old names are the point of this note -->
 3. What moved: the admin is at `https://<hostname>/admin` (the `admin.<hostname>` name and its DNS record are no longer used; before HTTPS was set up 0.5 used `http://127.0.0.1:8081/admin/` on the Docker host; that page is gone, see *First run*). The old token volume `askbar-mgmt` and network `mgmt` are replaced by `server-token` and `server-api`; the admin makes a new server token and writes its hash there on first start, so the old volume can be removed. Data volumes keep their names. CLIProxyAPI now starts with the stack (it idles until you log in). <!-- names-ok: the old names are the point of this note --> If you ran an earlier build of this branch, remove its leftover network first: `docker network rm askbar_setup` (the first-run page now uses `askbar_admin-setup`).
 4. Update the Askbar app to 0.5.0. Paired apps keep their tokens, so nothing needs pairing again; an older app says it is too old for the server.
@@ -254,7 +255,7 @@ Each link between two services has its own token ([ADR 0004](adr/0004-bootstrap-
 
 The audit store has its own container, `askbar-auditor` ([ADR 0051](adr/0051-auditor.md), [ADR 0010](adr/0010-auditor.md)). It holds `audit.db` on its own volume, `auditor-data`, runs as uid 10003 with no capabilities, and has no route out: it joins only `audit-*` networks, each shared with one caller. Today there are two: `audit-admin`, shared with the admin, and `audit-model-gateway`, shared with `model-gateway`. Its API is `/api/audit/v1` ([docs/openapi/audit.v1.yaml](openapi/audit.v1.yaml)) and it is never public.
 
-**Only `model-gateway` sends it records so far, and only for replies that go through it, which none do yet.** The server still records to its own `audit.db` on the `audit-data` volume, and the Audit pages still read it through the server. The step that makes the server call `model-gateway` moves the server over, and a later step moves the Audit pages to the auditor. Until then the auditor holds what the gateway sends it (nothing, until the server calls the gateway). When the server moves, `audit-data` stays on disk untouched and the auditor starts with its own empty `auditor-data`, so earlier records stay only in the old volume: copy it (`docker run --rm -v askbar_audit-data:/a -v "$PWD":/b alpine cp -a /a/. /b/audit-backup/`) or delete it once you no longer want them.
+**The server and `model-gateway` send it their records** (the gateway opens each reply's turn and try spans and waits for the acknowledgment before it calls a provider; the server adds the gates it passed, its sealed request and reply, and how the reply ended). The server's own `audit.db` is gone: `audit-data` stays on disk untouched and the auditor starts with its own empty `auditor-data`, so records from before the upgrade stay only in the old volume. Copy it (`docker run --rm -v askbar_audit-data:/a -v "$PWD":/b alpine cp -a /a/. /b/audit-backup/`) or delete it once you no longer want them. The admin's Audit pages read the auditor through the server until a later step moves them to the admin.
 
 - **Tokens.** Each link has its own, made by `bootstrap` ([Tokens between services](#tokens-between-services)). The auditor holds only their hashes, in `auditor-token`. Today `admin-auditor-append` (admin action records), `admin-auditor-read` (reads and retention) and `model-gateway-auditor` (the gateway's spans, finish records and sealed payloads) exist; the server's comes when it calls the gateway. A link may call only its own routes, and the caller of a record is the one its token belongs to. No token can change or delete a record.
 - **Retention.** Records are kept 30 days by default and never less than 7. The admin read token sets it; the auditor prunes once a day, and each prune leaves a record of its own.
@@ -266,10 +267,10 @@ The audit store has its own container, `askbar-auditor` ([ADR 0051](adr/0051-aud
 
 Provider calls and provider keys have their own container, `askbar-model-gateway` ([ADR 0054](adr/0054-model-gateway.md), [ADR 0014](adr/0014-model-gateway-and-providers.md)). It runs as uid 10004 with no capabilities and no data volume: **the keys live in its memory only.** Its API is `/api/model-gateway/v1` ([docs/openapi/model-gateway.v1.yaml](openapi/model-gateway.v1.yaml)) and it is never public. It has two listeners, one on each network it shares with a caller, each on the address its alias gives (`gateway-server-host`, `gateway-admin-host`, port 8084) and never a wildcard, because it also joins `outbound`, the one network besides `edge` with a route out. Direct outbound access is how v1 reaches providers ([ADR 0006](adr/0006-v1-outbound-access-and-alerts.md)).
 
-**The server does not call it yet.** Replies still go from the server to the provider with the key the server holds. This step builds the gateway on its own and gives it the keys; the next one makes the server use it and drops the server's keys and outbound route.
+**The server asks it for every reply**, on `gateway-server`, with its own token, and has no key and no route to a provider. If the gateway has no configuration yet (it just started) or the auditor cannot take the record, the reply fails with a sentence and nothing is sent to a provider; ask again in a few seconds.
 
 - **Keys.** You enter a provider's key in the admin site as before. The admin now keeps it too, encrypted with its own key (`admin.key`, in the `admin-secrets` volume), and pushes it to the gateway in `PUT /config`; no page or endpoint shows it again. The admin checks the gateway every 12 seconds and pushes whenever it has no configuration or another one, so **a restarted gateway, or a rebooted host, gets its keys back with no command**, once the admin is running. The **Services** page shows the gateway and can restart it.
-- **Keys entered before this version.** The server holds them and the admin cannot read them, so the gateway does not have them. **Enter each provider's key again** (Providers, then Edit) before you upgrade to the version in which the server calls the gateway: from then on the gateway is the only one that can call a provider, and a provider without a key there fails with a sentence that says so. Nothing breaks until then.
+- **Upgrading: enter each provider's key again.** Before this version the server held the keys and the admin could not read them, so after the upgrade no provider has a key in the gateway. The Providers page marks each one **key missing**; open it, choose Edit and enter its key again. Until you do, replies on that provider fail with a sentence saying the provider did not accept its key. The CLIProxyAPI provider needs nothing: the admin's own file holds its key. The old keys stay encrypted in the server's database (`data/control.db`, with `master.key` in the `askbar-secrets` volume) and nothing reads them; delete them with those volumes if you wish.
 - **What it records.** Before it calls a provider it appends the turn span to the auditor and waits for the acknowledgment (one second at most); with none it answers `503 audit_backlog` and calls nothing. Each try at a provider is a span of its own, acknowledged the same way. A provider's error text goes to the auditor sealed to your audit key, never to a log and never to the server. A turn the server does not finish is ended as `interrupted` a minute after the generation time limit.
 - **Tokens.** `server-model-gateway` (the server calls it) and `admin-model-gateway` (the admin pushes and restarts) are made by `bootstrap`, and `model-gateway-auditor` (it appends to the auditor). Each listener takes only its own link's token. The admin will not start without its token: run `docker compose up -d`, which runs `bootstrap` first.
 - **Upgrade.** `docker compose up -d --build`. `bootstrap` makes the three new tokens, the admin keeps working with the keys it has, and the gateway starts with none until the admin pushes (seconds). `docker compose --profile dev` also puts the mock LLM on `outbound`.
@@ -282,19 +283,19 @@ The admin site's **Services** page shows whether the server, `model-gateway`, th
 
 **Upgrading an install that used `cpa-init` / `cpa-login`:** CLIProxyAPI's config volume was root-owned; the admin (uid 10001) must be able to read and write it once: `docker compose run --rm --no-deps --user root --entrypoint chown admin -R 10001:10001 /cpa-config`, then `docker compose up -d --build`. The admin keeps your existing API key (so the provider and your logins carry on), replaces CLIProxyAPI's control secret and restarts it. If the admin cannot read the config it says so in its log and leaves CLIProxyAPI alone.
 
-**Server environment** (already set in `compose.yaml`; useful without Docker): `ASKBAR_CLIENT_API_ADDR`, `ASKBAR_SERVER_API_ADDR` (`ip:port`, or `host:port` resolved once at start-up to exactly one address; never `0.0.0.0`), `ASKBAR_SERVER_TOKEN_HASH_FILE`, `ASKBAR_DATA_DIR`, `ASKBAR_SECRETS_DIR` or `ASKBAR_MASTER_KEY_FILE`. **Admin:** `ASKBAR_ADMIN_SOCKET`, `ASKBAR_ADMIN_DATA_DIR`, `ASKBAR_ADMIN_SECRETS_DIR`, `ASKBAR_ADMIN_TOKEN_DIR`, `ASKBAR_SERVER_API_URL`, `ASKBAR_CADDY_SOCKET`, `ASKBAR_CADDY_SECRETS_DIR`, `ASKBAR_PUBLIC_URL`. **Auditor:** `ASKBAR_AUDIT_API_ADDR` (default `0.0.0.0:8083`), `ASKBAR_AUDIT_DIR`, `ASKBAR_AUDITOR_TOKEN_DIR`.
+**Server environment** (already set in `compose.yaml`; useful without Docker): `ASKBAR_CLIENT_API_ADDR`, `ASKBAR_SERVER_API_ADDR` (`ip:port`, or `host:port` resolved once at start-up to exactly one address; never `0.0.0.0`), `ASKBAR_SERVER_TOKEN_HASH_FILE`, `ASKBAR_DATA_DIR`, `ASKBAR_SERVER_TOKEN_DIR` (its tokens for the gateway and the auditor), `ASKBAR_GATEWAY_URL` and `ASKBAR_AUDIT_API_URL`. **Model-gateway:** `ASKBAR_GATEWAY_SERVER_ADDR`, `ASKBAR_GATEWAY_ADMIN_ADDR`, `ASKBAR_GATEWAY_TOKEN_DIR`, `ASKBAR_AUDIT_API_URL`. **Admin:** `ASKBAR_ADMIN_SOCKET`, `ASKBAR_ADMIN_DATA_DIR`, `ASKBAR_ADMIN_SECRETS_DIR`, `ASKBAR_ADMIN_TOKEN_DIR`, `ASKBAR_SERVER_API_URL`, `ASKBAR_CADDY_SOCKET`, `ASKBAR_CADDY_SECRETS_DIR`, `ASKBAR_PUBLIC_URL`. **Auditor:** `ASKBAR_AUDIT_API_ADDR` (default `0.0.0.0:8083`), `ASKBAR_AUDIT_DIR`, `ASKBAR_AUDITOR_TOKEN_DIR`.
 
 ### Backup and recovery
 
 Four things to back up, **separately**:
 
-- **`data/`** (the server's `control.db`: users, paired clients, spaces and the provider keys *encrypted*; and `spaces/`, one file per space with its conversations) and the **`admin-data`** volume (the admin's database).
-- **The `askbar-secrets` volume** (`master.key`) and the **`admin-secrets`** volume (`admin.key`). Keep these somewhere other than your database backups: anyone holding both can read the stored keys. For example: `docker run --rm -v askbar_askbar-secrets:/s -v "$PWD":/b alpine cp /s/master.key /b/master.key`, then store the copy in a password manager.
+- **`data/`** (the server's `control.db`: users, paired clients and spaces; and `spaces/`, one file per space with its conversations) and the **`admin-data`** volume (the admin's database).
+- **The `admin-secrets` volume** (`admin.key`). Keep it somewhere other than your database backups: anyone holding both it and `admin-data` can read the stored provider keys. For example: `docker run --rm -v askbar_admin-secrets:/s -v "$PWD":/b alpine cp /s/admin.key /b/admin.key`, then store the copy in a password manager. (`askbar-secrets`, which held the server's old master key, is no longer used.)
 - Admin site > **Backup** downloads one `.tar` with `server/control.db`, `server/spaces/<space id>.db` for every space, and `admin.db`. It is consistent (`VACUUM INTO`) and leaves out provider API keys, pair codes, the Cloudflare token and the admin password hash, so after restoring it you enter those again.
 
-- **The `audit-data` volume** (`audit.db`, the trace of replies) is **not** in the admin site's Backup `.tar`. Copy the whole volume if you want it (stop the server first, or copy `audit.db`, `audit.db-wal` and `audit.db-shm` together): `docker run --rm -v askbar_audit-data:/a -v "$PWD":/b alpine cp -a /a/. /b/audit-backup/`. A copy holds sealed content only, which is useless without the audit passphrase.
+- **The `auditor-data` volume** (`audit.db`, the trace of replies) is **not** in the admin site's Backup `.tar`. Copy the whole volume if you want it (stop the auditor first, or copy `audit.db`, `audit.db-wal` and `audit.db-shm` together): `docker run --rm -v askbar_auditor-data:/a -v "$PWD":/b alpine cp -a /a/. /b/audit-backup/`. A copy holds sealed content only, which is useless without the audit passphrase. (`audit-data` is the server's old store; see [The auditor](#the-auditor).)
 
-If you restore a raw copy of `data/` that still holds encrypted provider keys onto a **new** `askbar-secrets` volume, the server refuses to start rather than create a new key, and names the volume: restore `master.key` into it first. A new, empty `data/` with a new `askbar-secrets` is a normal fresh install. The server never replaces an existing `master.key`, and there is no key rotation.
+A restored `data/` needs no key volume: the server holds no provider key. After a restore, enter the provider keys again on the Providers page if the admin's database was restored without `admin-secrets`.
 
 ## Layout
 

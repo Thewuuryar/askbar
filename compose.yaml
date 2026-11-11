@@ -5,14 +5,17 @@
 # Services and networks. There is no controller and no service has the Docker socket: the admin restarts
 # the server and itself through their own endpoints, Caddy by a config reload and CLIProxyAPI by rewriting
 # its config (ADR 0005); Docker's restart policy starts a service that exits.
-#   edge  Caddy and the server (the client API on 8080). Caddy is the only service with published ports.
+#   edge  Caddy, CLIProxyAPI and the mock LLM in dev. Caddy is the only service with published ports. The server is not
+#         on it: it has no route out.
+#   client-api  Caddy and the server's client API on 8080, nothing else. `internal`.
 #   server-api  the admin and the server's server API, nothing else. `internal`, so it has no route out.
 #   audit-admin  the admin and the auditor, nothing else. `internal`, so it has no route out. Each caller of the
 #               auditor gets a network like it, shared with the auditor alone (ADR 0051).
-#   gateway-admin  the admin and model-gateway, nothing else. `internal`. (gateway-server, the server's, comes when
-#               the server calls the gateway; audit-model-gateway is the gateway's and the auditor's.)
+#   gateway-admin  the admin and model-gateway, nothing else. `internal`. gateway-server (the server and the gateway) and
+#               audit-server (the server and the auditor) are the same; audit-model-gateway is the gateway's and the auditor's.
 #   outbound  model-gateway, and in the dev profile the mock LLM. The one network besides `edge` with a route out
 #               (ADR 0006, ADR 0054); nothing else joins it.
+#   cpa-gateway  model-gateway and CLIProxyAPI, nothing else. `internal`.
 # No network pins a subnet or an address; Docker assigns them (docs/guide.md, "Docker networks").
 # The admin joins no network but server-api. Caddy reaches it only through its unix socket (volume admin-run),
 # for /admin. One host serves the admin (/admin), the client API (/api/client) and a 404 for the rest: over HTTPS
@@ -70,24 +73,21 @@ services:
       # server API listens there and nowhere else. The server refuses a wildcard, or a name that resolves
       # to more than one address.
       ASKBAR_SERVER_API_ADDR: server-api-host:8082
-      # audit.db lives on its own volume, mounted into the server and nothing else.
-      ASKBAR_AUDIT_DIR: /audit
     networks:
-      edge: {}
+      # Caddy reaches the client API here, on a network of the two of them: `edge` has a route out, and the server has
+      # none (ADR 0006, ADR 0054).
+      client-api: {}
       server-api:
         aliases: [server-api-host]
+      # The gateway (replies) and the auditor (records) each get a network of their own with the server (ADR 0054, 0051).
+      gateway-server: {}
+      audit-server: {}
     volumes:
       # The bind-mounted DATA_DIR must be writable by uid 10002.
       - ${DATA_DIR:-./data}:/data
-      # The master key (created on first start) lives here, alone: backups of DATA_DIR never contain it.
-      # Back this volume up separately; without master.key the server will not start against a database
-      # that holds encrypted provider keys.
-      - askbar-secrets:/secrets
-      # The audit store (audit.db): a trace of every reply. Only the server mounts it; the admin reads
-      # it through the server API, never from disk. Back it up by copying the volume.
-      - audit-data:/audit
-      # The hash of the admin's token (accept/admin-server.sha256), made by bootstrap. Read-only: the server
-      # can check the token, never mint one.
+      # The hash of the admin's token (accept/admin-server.sha256) and the server's own tokens for the gateway and the
+      # auditor (call/), made by bootstrap. Read-only: the server can check and use a token, never mint one. It holds no
+      # provider key and no audit store (ADR 0054, ADR 0051): `askbar-secrets` and `audit-data` stay declared, unmounted.
       - server-token:/server-token:ro
 
   admin:
@@ -128,8 +128,8 @@ services:
 
   # The audit store as its own container (ADR 0051): /api/audit/v1 on 8083, reachable only on the audit-* networks,
   # one for each caller, and with no route out. No exception to the hardening above. Runs as uid 10003 from the
-  # image; /audit belongs to that uid there, so Docker makes a new auditor-data volume the same. The gateway appends
-  # to it on audit-model-gateway; the server does not yet (plan step 3.1, second half); the admin reaches it on audit-admin.
+  # image; /audit belongs to that uid there, so Docker makes a new auditor-data volume the same. The gateway and the server
+  # append to it on audit-model-gateway and audit-server; the admin reaches it on audit-admin.
   auditor:
     build:
       context: .
@@ -145,6 +145,7 @@ services:
     networks:
       audit-admin: {}
       audit-model-gateway: {}
+      audit-server: {}
     volumes:
       # audit.db: the audit store. Only the auditor mounts it. Starts empty; the server's own audit-data is not
       # copied (see the guide).
@@ -156,7 +157,7 @@ services:
   # server and one on gateway-admin for the admin, each on the address its alias gives and never a wildcard. The
   # keys are pushed by the admin and held in memory only, so there is no data volume: its one volume is its credential
   # volume, read-only. It reaches the auditor on audit-model-gateway and the providers on `outbound`. No exception to
-  # the hardening above. The server does not call it yet (plan step 3.1, second half).
+  # the hardening above. The server calls it for every reply (plan step 3.1).
   model-gateway:
     build:
       context: .
@@ -179,6 +180,8 @@ services:
       gateway-admin:
         aliases: [gateway-admin-host]
       audit-model-gateway: {}
+      # CLIProxyAPI's, for a subscription provider; a network of the two of them with no route out.
+      cpa-gateway: {}
       outbound: {}
     volumes:
       # The hashes of the tokens it accepts and the token it sends the auditor, made by bootstrap. Read-only.
@@ -223,6 +226,8 @@ services:
         condition: service_healthy
     networks:
       - edge
+      # The client API, on a network of Caddy and the server.
+      - client-api
     # 80 only redirects to 443. Until a host name is set, 443 answers on every address with the install's own
     # certificate (made by the admin in caddy-secrets), and the admin site is open to private addresses only.
     ports:
@@ -238,7 +243,7 @@ services:
   # --- CLIProxyAPI: use a ChatGPT/Claude subscription as an OpenAI-compatible provider. ---
   # Starts with the stack and idles until an account is connected on the admin site's Services tab. The admin
   # makes its config and API key (it must be healthy first) and runs the logins; there is no terminal step.
-  # Its API port is NOT published; only containers on its networks can reach it: the server (edge) and the
+  # Its API port is NOT published; only containers on its networks can reach it: the gateway (cpa-gateway) and the
   # admin (cpa-admin).
   cpa:
     # CLIProxyAPI (pinned by digest in the Dockerfile's `cpa` target) under a small supervisor of ours, which
@@ -263,6 +268,8 @@ services:
     networks:
       - edge
       - cpa-admin
+      # The gateway reaches it here, on a network of the two of them (ADR 0054; step 3.5 builds the rest of CPA's side).
+      - cpa-gateway
     volumes:
       - cpa-config:/cpa-config
       - cpa-auth:/root/.cli-proxy-api
@@ -283,15 +290,27 @@ networks:
   # model-gateway's listener for the admin. The admin and the gateway, nothing else. No route out.
   gateway-admin:
     internal: true
-  # model-gateway's listener for the server, which joins it when it calls the gateway. No route out.
+  # The auditor and the server, nothing else. No route out.
+  audit-server:
+    internal: true
+  # model-gateway's listener for the server. The server and the gateway, nothing else. No route out.
   gateway-server:
+    internal: true
+  # Caddy and the server's client API, nothing else. No route out: the server has none.
+  client-api:
+    internal: true
+  # model-gateway and CLIProxyAPI, nothing else. No route out.
+  cpa-gateway:
     internal: true
   # The providers. Not internal: the one network, besides `edge`, with a route out. Only model-gateway (and in the
   # dev profile the mock LLM) joins it.
   outbound:
 
 volumes:
+  # Held the server's master key and provider keys (ADR 0014, 0054). Nothing mounts it now; kept declared until 1.0 so no
+  # install loses a volume by surprise (plan-v1.md: data volumes are never renamed or dropped pre-1.0).
   askbar-secrets:
+  # Held the server's own audit.db before the auditor. Nothing mounts it now; earlier records stay in it (see the guide).
   audit-data:
   # The auditor's audit.db (ADR 0051). Docker makes it empty and owned by uid 10003, as the image's /audit is.
   auditor-data:

@@ -1,8 +1,7 @@
-//! "Test" for a provider: send one short message through it and report what happened.
-//! Shared by the admin site and the server API.
+//! "Test" for a provider: send one short message through it and report what happened (moved from the server, ADR 0054).
 
 use crate::llm::{stream_chat, ChatMessage};
-use crate::{store, AppState};
+use crate::Gateway;
 use serde::Serialize;
 use std::time::Duration;
 use tokio::sync::oneshot;
@@ -14,32 +13,25 @@ pub struct TestResult {
     pub message: String,
 }
 
-/// `Ok(None)` if there is no provider with this id.
-pub async fn run(state: &AppState, id: &str) -> rusqlite::Result<Option<TestResult>> {
-    let provider = {
-        let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
-        let secrets = state.secrets();
-        match store::load_provider(&db, &secrets, id)? {
-            Some(p) => p,
-            None => return Ok(None),
-        }
-    };
+/// `None` if there is no provider with this id.
+pub async fn run(gw: &Gateway, id: &str) -> Option<TestResult> {
+    let provider = gw.provider(id)?;
     let key = provider.api_key.clone();
     let (_keep, cancel) = oneshot::channel::<()>();
     let mut reply = String::new();
     let prompt = [ChatMessage::new("user", "Reply with the single word: ok")];
-    let run = stream_chat(&state.http, &provider, "", &prompt, cancel, |d| {
+    let run = stream_chat(gw.http(), &provider, "", &prompt, cancel, |d| {
         if reply.len() < 200 {
             reply.push_str(d);
         }
     });
     let outcome = tokio::time::timeout(Duration::from_secs(30), run).await;
-    Ok(Some(match outcome {
+    Some(match outcome {
         Ok(Ok(_)) if !reply.trim().is_empty() => TestResult { ok: true, message: reply.trim().chars().take(120).collect() },
         Ok(Ok(_)) => TestResult { ok: false, message: "The provider answered but sent no text.".into() },
         Ok(Err(e)) => TestResult { ok: false, message: redact(&e.to_string(), &key) },
         Err(_) => TestResult { ok: false, message: "Timed out after 30 seconds.".into() },
-    }))
+    })
 }
 
 /// Errors sometimes echo the credential back; never pass that on.
