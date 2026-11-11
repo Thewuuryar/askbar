@@ -18,7 +18,7 @@ info:
       Only `model-gateway-auditor` opens model-call spans (`turn`, `attempt`, `tool`, `agent_step`); the
       server's link opens `gate` spans only.
     - `admin-auditor-append`: `hello` and admin action records. It reads and changes nothing.
-    - `admin-auditor-read`: every read, and retention. It appends nothing.
+    - `admin-auditor-read`: every read, the chain head and its check, and retention. It appends nothing.
     - No token changes or deletes a record; there is no such route.
 
     An append is answered after the record is committed. Appending the same record twice records it once,
@@ -352,6 +352,67 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/PruneRecord'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/audit/v1/chain/head:
+    get:
+      operationId: getChainHead
+      summary: The newest entry of the hash chain. `admin-auditor-read` only.
+      description: >-
+        The number and hash of the newest entry (`0` and 64 zeros for an empty chain). The admin keeps it and checks it
+        against the auditor later (ADR 0010 rule 7).
+      responses:
+        '200':
+          description: The head.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChainEntry'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/audit/v1/chain/entries/{id}:
+    get:
+      operationId: getChainEntry
+      summary: The hash of one entry of the chain. `admin-auditor-read` only.
+      description: A hash that is not the one the admin stored for this number means the chain was rewritten.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The entry's number.
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: The entry.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChainEntry'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/audit/v1/chain/verify:
+    get:
+      operationId: verifyChain
+      summary: A full check of the chain and of every record against it. `admin-auditor-read` only.
+      description: >-
+        Reads the whole store: every link, every record against its digest, records with no entry, and records that are
+        gone with no prune to explain them. At most 20 problems are listed; `more` says whether there were others.
+      responses:
+        '200':
+          description: What the check found. `ok` is false when there is at least one problem.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChainReport'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -757,6 +818,43 @@ components:
           type: integer
         tokens_cached:
           type: integer
+    ChainEntry:
+      type: object
+      required: [seq, hash]
+      properties:
+        seq:
+          type: integer
+        hash:
+          type: string
+          description: 64 hex characters.
+    ChainReport:
+      type: object
+      required: [ok, entries, head, problems, more]
+      properties:
+        ok:
+          type: boolean
+        entries:
+          type: integer
+        head:
+          $ref: '#/components/schemas/ChainEntry'
+        problems:
+          type: array
+          items:
+            type: object
+            required: [seq, kind, ref, reason]
+            properties:
+              seq:
+                type: [integer, 'null']
+                description: The entry, or null for a record that has none.
+              kind:
+                type: string
+                enum: [span_start, span_finish, payload, admin_action, prune]
+              ref:
+                type: string
+              reason:
+                type: string
+        more:
+          type: boolean
     PruneRecord:
       type: object
       required: [at, cutoff, spans, payloads]

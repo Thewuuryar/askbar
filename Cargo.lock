@@ -106,6 +106,8 @@ version = "0.6.0"
 dependencies = [
  "argon2",
  "askama",
+ "askbar-audit",
+ "askbar-auditor",
  "askbar-bootstrap",
  "askbar-model-gateway",
  "askbar-proto",
@@ -137,7 +139,9 @@ dependencies = [
  "askbar-service",
  "base64 0.22.1",
  "rusqlite",
+ "serde",
  "serde_json",
+ "sha2",
  "thiserror",
  "tokio",
  "tracing",

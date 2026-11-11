@@ -1173,6 +1173,28 @@ async function waitForPort(port) {
     fs.writeFileSync(hashFile, good);
     await page.waitForSelector('#rejected', { state: 'hidden', timeout: 20000 });
   });
+  await step('audit chain: a rollback, a rewrite and an edit each get a banner with its sentence, and it clears', async () => {
+    const real = await page.evaluate(async () => (await fetch('/api/admin/v1/status')).json());
+    assert.equal(real.audit_chain.state === 'ok' || real.audit_chain.state === 'unknown', true, 'nothing is wrong with the real chain');
+    const withChain = async (audit_chain) => {
+      await page.unroute('**/api/admin/v1/status');
+      await page.route('**/api/admin/v1/status', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ...real, audit_chain }) }));
+      await page.reload();
+      await page.waitForSelector('#app:not([hidden])');
+    };
+    await withChain({ state: 'rollback', detail: 'The audit trail is shorter than it was: <b>x</b>' });
+    await page.waitForSelector('#chain-alert:not([hidden])');
+    assert.equal(await page.innerText('#chain-alert'), 'The audit trail is shorter than it was: <b>x</b>', 'the sentence is shown as text');
+    assert.equal(await page.locator('#chain-alert b').count(), 0);
+    await withChain({ state: 'rewritten', detail: 'The audit trail was rewritten.' });
+    await page.waitForSelector('#chain-alert:not([hidden])');
+    assert.match(await page.innerText('#chain-alert'), /rewritten/);
+    await withChain({ state: 'edited', detail: 'Records in the audit trail do not match their entries.' });
+    await page.waitForSelector('#chain-alert:not([hidden])');
+    await withChain({ state: 'ok', detail: '' });
+    await page.waitForSelector('#chain-alert', { state: 'hidden' });
+    await page.unroute('**/api/admin/v1/status');
+  });
   await step('no JavaScript errors', async () => { assert.deepEqual(errors, []); });
 
   await browser.close();

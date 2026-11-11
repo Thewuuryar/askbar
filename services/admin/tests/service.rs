@@ -33,11 +33,12 @@ fn migrations_apply_and_the_defaults_are_safe() {
         "audit_access",
         "users",
         "provider_keys",
+        "audit_chain_head",
     ] {
         assert!(tables.iter().any(|x| x == t), "missing {t}");
     }
     let v: i64 = db.conn().query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-    assert_eq!(v, 13);
+    assert_eq!(v, 14);
     // No password until the admin's first start stores the published one (ADR 0007); no limits; the IP
     // allowlist and HTTPS start switched off.
     let creds: i64 = db.conn().query_row("SELECT COUNT(*) FROM admin_credentials", [], |r| r.get(0)).unwrap();

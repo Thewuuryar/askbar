@@ -156,6 +156,11 @@
       // A refused token is the more useful message: the server is there, but it does not accept this admin.
       show($('rejected'), !!st.token_rejected);
       show($('offline'), !st.server_online && !st.token_rejected);
+      // The audit chain no longer matches what this admin stored (ADR 0010 rule 7). The sentence is the admin's, text only.
+      const chain = st.audit_chain || {};
+      const bad = ['rollback', 'rewritten', 'edited'].includes(chain.state);
+      $('chain-alert').textContent = bad ? chain.detail : '';
+      show($('chain-alert'), bad);
     } catch (_) { /* signed out, or the admin itself is away */ }
   }
 
