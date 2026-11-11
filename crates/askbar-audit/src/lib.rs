@@ -119,6 +119,46 @@ const MIGRATIONS: &[&str] = &[
      BEGIN SELECT RAISE(ABORT, 'chain entries cannot be changed'); END;
      CREATE TRIGGER chain_is_never_deleted BEFORE DELETE ON chain
      BEGIN SELECT RAISE(ABORT, 'chain entries cannot be deleted'); END;",
+    // v5: Caddy's access logs (plan step 2.9, ADR 0051). One row for each request Caddy handled, kept to a short list of
+    // fields: no header and no query string, which can carry a secret. Never changed; nothing younger than 7 days is
+    // deleted; retention prunes the rest. Each row has an entry in the chain, so the chain's kinds grow by `access_log`:
+    // a CHECK cannot be altered, so the chain table is made again (its entries are copied as they are).
+    "CREATE TABLE access_logs (
+         id          INTEGER PRIMARY KEY AUTOINCREMENT,
+         at          INTEGER NOT NULL,
+         method      TEXT    NOT NULL,
+         host        TEXT    NOT NULL,
+         path        TEXT    NOT NULL,
+         status      INTEGER NOT NULL,
+         bytes       INTEGER NOT NULL,
+         duration_ms INTEGER NOT NULL,
+         remote_ip   TEXT    NOT NULL,
+         proto       TEXT    NOT NULL,
+         user_agent  TEXT
+     );
+     CREATE INDEX idx_access_logs_at ON access_logs(at DESC, id DESC);
+     CREATE TRIGGER access_logs_are_never_changed BEFORE UPDATE ON access_logs
+     BEGIN SELECT RAISE(ABORT, 'access log rows cannot be changed'); END;
+     CREATE TRIGGER access_logs_keep_a_week BEFORE DELETE ON access_logs
+     WHEN old.at > CAST(strftime('%s','now') AS INTEGER) - 7 * 86400
+     BEGIN SELECT RAISE(ABORT, 'access log rows younger than 7 days cannot be deleted'); END;
+     CREATE TABLE chain_next (
+         seq       INTEGER PRIMARY KEY,
+         kind      TEXT    NOT NULL CHECK (kind IN ('span_start','span_finish','payload','admin_action','prune','access_log')),
+         ref       TEXT    NOT NULL,
+         row_at    INTEGER NOT NULL,
+         digest    TEXT    NOT NULL,
+         prev_hash TEXT    NOT NULL,
+         hash      TEXT    NOT NULL
+     );
+     INSERT INTO chain_next SELECT seq, kind, ref, row_at, digest, prev_hash, hash FROM chain;
+     DROP TABLE chain;
+     ALTER TABLE chain_next RENAME TO chain;
+     CREATE INDEX idx_chain_ref ON chain(kind, ref);
+     CREATE TRIGGER chain_is_never_changed BEFORE UPDATE ON chain
+     BEGIN SELECT RAISE(ABORT, 'chain entries cannot be changed'); END;
+     CREATE TRIGGER chain_is_never_deleted BEFORE DELETE ON chain
+     BEGIN SELECT RAISE(ABORT, 'chain entries cannot be deleted'); END;",
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -385,6 +425,24 @@ pub fn get_setting(conn: &Connection, key: &str) -> rusqlite::Result<Option<Stri
 }
 
 /// Every prune so far, oldest first: when, the cutoff, and how many spans and payloads it deleted.
+/// Caddy's access lines, newest first. `before` is the id of the last row already seen.
+pub fn list_access_logs(conn: &Connection, before: Option<i64>, limit: Option<usize>) -> rusqlite::Result<Vec<serde_json::Value>> {
+    let limit = limit.unwrap_or(100).clamp(1, 500) as i64;
+    let mut stmt = conn.prepare(
+        "SELECT id, at, method, host, path, status, bytes, duration_ms, remote_ip, proto, user_agent FROM access_logs
+         WHERE id < COALESCE(?1, 9223372036854775807) ORDER BY id DESC LIMIT ?2",
+    )?;
+    let rows = stmt.query_map(rusqlite::params![before, limit], |r| {
+        Ok(serde_json::json!({
+            "id": r.get::<_, i64>(0)?, "at": r.get::<_, i64>(1)?, "method": r.get::<_, String>(2)?, "host": r.get::<_, String>(3)?,
+            "path": r.get::<_, String>(4)?, "status": r.get::<_, i64>(5)?, "bytes": r.get::<_, i64>(6)?,
+            "duration_ms": r.get::<_, i64>(7)?, "remote_ip": r.get::<_, String>(8)?, "proto": r.get::<_, String>(9)?,
+            "user_agent": r.get::<_, Option<String>>(10)?,
+        }))
+    })?;
+    rows.collect()
+}
+
 pub fn list_prunes(conn: &Connection) -> rusqlite::Result<Vec<serde_json::Value>> {
     let mut stmt = conn.prepare("SELECT at, cutoff, spans, payloads FROM prunes ORDER BY id")?;
     let rows = stmt.query_map([], |r| {
@@ -751,6 +809,22 @@ pub struct AdminActionWrite {
     pub detail_json: Option<String>,
 }
 
+/// One request Caddy handled, as the auditor keeps it (plan step 2.9): no header and no query string.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccessLogWrite {
+    /// Unix seconds.
+    pub at: i64,
+    pub method: String,
+    pub host: String,
+    pub path: String,
+    pub status: i64,
+    pub bytes: i64,
+    pub duration_ms: i64,
+    pub remote_ip: String,
+    pub proto: String,
+    pub user_agent: Option<String>,
+}
+
 /// What can be appended and acknowledged (see [`Recorder::append`]). The acknowledgment comes after the
 /// record is committed, and appending the same record twice records it once.
 #[derive(Debug, Clone)]
@@ -802,6 +876,8 @@ enum Event {
     },
     /// A record whose caller waits for it to be committed.
     Acked(Record, Ack),
+    /// One of Caddy's access lines: best effort, never acknowledged.
+    Access(AccessLogWrite),
 }
 
 /// Records are never kept for less than this many days, whatever the setting says.
@@ -848,12 +924,24 @@ pub struct Recorder {
     /// When each queued record was queued, oldest first. Pushed under the same lock that sends it and
     /// popped by the writer when it takes it, so the two never disagree.
     queued: Arc<Mutex<VecDeque<Instant>>>,
+    /// The queue length, so access lines can be kept to half of it.
+    capacity: usize,
+    /// Access lines dropped because the queue was half full.
+    access_dropped: Arc<AtomicU64>,
 }
 
 impl Recorder {
     /// Records nothing. The default, so a server without an audit store behaves as before.
     pub fn noop() -> Recorder {
-        Recorder { tx: None, path: None, pause: Arc::default(), dropped: Arc::default(), queued: Arc::default() }
+        Recorder {
+            tx: None,
+            path: None,
+            pause: Arc::default(),
+            dropped: Arc::default(),
+            queued: Arc::default(),
+            capacity: 0,
+            access_dropped: Arc::default(),
+        }
     }
 
     /// Takes ownership of `db` and writes to it from one thread. `capacity` is the queue length.
@@ -891,7 +979,7 @@ impl Recorder {
                 }
             })
             .expect("audit writer thread");
-        Recorder { tx: Some(tx), path, pause, dropped: Arc::default(), queued }
+        Recorder { tx: Some(tx), path, pause, dropped: Arc::default(), queued, capacity: capacity.max(1), access_dropped: Arc::default() }
     }
 
     /// Queues `event` if there is room. The queue time is noted under the lock that sends it.
@@ -917,6 +1005,22 @@ impl Recorder {
         permit.send(event);
         queued.push_back(Instant::now());
         Ok(())
+    }
+
+    /// Queues one access line if the queue is less than half full: they are best effort, and a flood of them must never
+    /// crowd out the records that fail closed. Returns whether it was queued; a dropped line is counted.
+    pub fn access_log(&self, line: AccessLogWrite) -> bool {
+        let room = self.tx.as_ref().is_some_and(|tx| tx.capacity() > self.capacity / 2);
+        if room && self.try_enqueue(Event::Access(line)).is_ok() {
+            return true;
+        }
+        self.access_dropped.fetch_add(1, Ordering::Relaxed);
+        false
+    }
+
+    /// How many access lines were dropped since the process started.
+    pub fn access_dropped(&self) -> u64 {
+        self.access_dropped.load(Ordering::Relaxed)
     }
 
     /// Appends `record` and answers once it is committed: how many spans a `Hello` interrupted, else 0.
@@ -1042,6 +1146,7 @@ impl Recorder {
 /// matter, and the sweep handles the strays.
 fn prune(conn: &Connection, cutoff: i64) -> rusqlite::Result<(usize, usize)> {
     let tx = conn.unchecked_transaction()?;
+    tx.execute("DELETE FROM access_logs WHERE at < ?1", [cutoff])?;
     let payloads = tx.execute("DELETE FROM payloads WHERE created_at < ?1", [cutoff])?;
     let spans = tx.execute("DELETE FROM spans WHERE started_at < ?1 AND status <> 'running'", [cutoff])?;
     tx.execute(
@@ -1089,6 +1194,11 @@ fn run_batch(conn: &Connection, batch: Vec<Event>) {
             Event::Finish(f) => {
                 if let Err(e) = write_finish(conn, &f) {
                     tracing::warn!("audit: could not finish a span: {e}");
+                }
+            }
+            Event::Access(a) => {
+                if let Err(e) = write_access_log(conn, &a) {
+                    tracing::warn!("audit: could not write an access line: {e}");
                 }
             }
             Event::Flush(done) => dones.push(done),
@@ -1171,6 +1281,14 @@ fn apply(conn: &Connection, record: &Record) -> Result<u64, AppendError> {
             Ok(0)
         }
     }
+}
+
+fn write_access_log(conn: &Connection, a: &AccessLogWrite) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO access_logs (at, method, host, path, status, bytes, duration_ms, remote_ip, proto, user_agent) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+        rusqlite::params![a.at, a.method, a.host, a.path, a.status, a.bytes, a.duration_ms, a.remote_ip, a.proto, a.user_agent],
+    )?;
+    chain::record(conn, "access_log", &conn.last_insert_rowid().to_string())
 }
 
 fn write_payload(conn: &Connection, p: &PayloadWrite) -> rusqlite::Result<()> {
@@ -1258,7 +1376,7 @@ mod tests {
     #[test]
     fn open_creates_the_schema() {
         let db = AuditDb::open_in_memory().unwrap();
-        assert_eq!(tables(&db), ["admin_actions", "chain", "payloads", "prunes", "settings", "spans", "sqlite_sequence"]);
+        assert_eq!(tables(&db), ["access_logs", "admin_actions", "chain", "payloads", "prunes", "settings", "spans", "sqlite_sequence"]);
         assert_eq!(
             columns(&db, "spans"),
             [
