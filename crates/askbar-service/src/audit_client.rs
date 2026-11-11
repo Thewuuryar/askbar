@@ -24,6 +24,8 @@ pub const ACK_TIMEOUT: Duration = Duration::from_secs(1);
 /// How many records the queue keeps; past it the oldest is dropped, and the drops are counted and recorded.
 pub const QUEUE_LIMIT: usize = 1000;
 const SEND_TIMEOUT: Duration = Duration::from_secs(5);
+/// How often a service calls the auditor's `GET /status`, so its link is never silent while it is alive.
+pub const STATUS_EVERY: Duration = Duration::from_secs(60);
 
 /// Why a span could not be opened.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,6 +44,7 @@ enum Item {
     Finish(String, SpanFinish),
     Payload(String, SealedPayload),
     Config(askbar_proto::audit::ConfigApplied),
+    AlertDelivery(askbar_proto::audit::AlertDeliveryStart),
 }
 
 #[derive(Default)]
@@ -179,6 +182,34 @@ impl AuditClient {
         self.push(Item::Config(askbar_proto::audit::ConfigApplied { id: ids::new_id(), at: now_parts().0, version }));
     }
 
+    /// Queue the outcome of one alert (`alerter-auditor` only, ADR 0055): metadata, never the alert's sentence.
+    pub fn alert_delivery(&self, kind: &str, channel: &str, outcome: &str, attempts: u32) {
+        self.push(Item::AlertDelivery(askbar_proto::audit::AlertDeliveryStart {
+            id: ids::new_id(),
+            at: now_parts().0,
+            kind: kind.to_string(),
+            channel: channel.to_string(),
+            outcome: outcome.to_string(),
+            attempts,
+        }));
+    }
+
+    /// Call the auditor's `GET /status` once a minute for as long as the process runs. The auditor notes the time of each
+    /// request on a link, and a link is silent when nothing has come over it for five minutes (ADR 0051): a service that is
+    /// alive but has nothing to record is not silent, because of this call. Nothing in the answer is used.
+    pub async fn status_every_minute(self: Arc<Self>) {
+        loop {
+            self.ping().await;
+            tokio::time::sleep(STATUS_EVERY).await;
+        }
+    }
+
+    /// One `GET /status` to the auditor, for the time it notes. The result is of no use to the caller.
+    pub async fn ping(&self) {
+        let Some(token) = self.token() else { return };
+        let _ = self.http.get(self.url("/status")).bearer_auth(token).timeout(SEND_TIMEOUT).send().await;
+    }
+
     /// Queue the record of a request this gateway refused: a span that began and ended at once.
     pub fn refusal(&self, start: SpanStart, finish: SpanFinish) {
         let id = start.id.clone();
@@ -215,6 +246,7 @@ impl AuditClient {
                 Item::Finish(id, f) => self.send(&format!("/spans/{id}/finish"), f, SEND_TIMEOUT).await,
                 Item::Payload(id, p) => self.send(&format!("/spans/{id}/payloads"), p, SEND_TIMEOUT).await,
                 Item::Config(c) => self.send("/config-applied", c, SEND_TIMEOUT).await,
+                Item::AlertDelivery(d) => self.send("/alert-deliveries", d, SEND_TIMEOUT).await,
             };
             match status {
                 Ok(200 | 201) => {
@@ -285,4 +317,86 @@ impl AuditClient {
 pub fn now_parts() -> (i64, i64) {
     let d = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
     (d.as_secs() as i64, d.as_millis() as i64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+
+    /// A stand-in auditor that counts what it is asked, and with which token.
+    async fn auditor(seen: Arc<Mutex<Vec<(String, String, String)>>>, count: Arc<AtomicUsize>) -> String {
+        let app = axum::Router::new().fallback(move |req: axum::extract::Request| {
+            let (seen, count) = (seen.clone(), count.clone());
+            async move {
+                let auth = req.headers().get("authorization").and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
+                seen.lock().unwrap().push((req.method().to_string(), req.uri().path().to_string(), auth));
+                count.fetch_add(1, Ordering::SeqCst);
+                axum::Json(serde_json::json!({ "interrupted": 0 }))
+            }
+        });
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", l.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
+        url
+    }
+
+    fn dir_with_token(link: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("askbar-auditclient-{}", ulid::Ulid::new()));
+        std::fs::create_dir_all(d.join("call")).unwrap();
+        std::fs::write(d.join("call").join(format!("{link}.token")), "tok_secret\n").unwrap();
+        d
+    }
+
+    #[tokio::test]
+    async fn the_status_call_goes_to_the_auditors_status_route_with_the_links_own_token_and_does_not_need_a_boot_id() {
+        let (seen, count) = (Arc::new(Mutex::new(Vec::new())), Arc::new(AtomicUsize::new(0)));
+        let url = auditor(seen.clone(), count.clone()).await;
+        let dir = dir_with_token("alerter-auditor");
+        let client = AuditClient::new(&url, dir.clone(), "alerter-auditor");
+        assert!(!client.ready(), "no hello yet");
+        client.ping().await;
+        assert_eq!(
+            seen.lock().unwrap().as_slice(),
+            [("GET".to_string(), "/api/audit/v1/status".to_string(), "Bearer tok_secret".to_string())]
+        );
+        // It runs for as long as the process does: the first call comes at once and the next after the interval.
+        let task = tokio::spawn(client.clone().status_every_minute());
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(count.load(Ordering::SeqCst), 2, "the loop's first call is immediate");
+        task.abort();
+        assert_eq!(STATUS_EVERY, Duration::from_secs(60));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn a_missing_token_means_no_call_rather_than_an_unauthenticated_one() {
+        let (seen, count) = (Arc::new(Mutex::new(Vec::new())), Arc::new(AtomicUsize::new(0)));
+        let url = auditor(seen, count.clone()).await;
+        let dir = std::env::temp_dir().join(format!("askbar-auditclient-none-{}", ulid::Ulid::new()));
+        std::fs::create_dir_all(&dir).unwrap();
+        AuditClient::new(&url, dir.clone(), "alerter-auditor").ping().await;
+        assert_eq!(count.load(Ordering::SeqCst), 0);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn an_alert_delivery_is_queued_behind_the_rest_and_sent_to_its_own_route_as_metadata_only() {
+        let (seen, count) = (Arc::new(Mutex::new(Vec::new())), Arc::new(AtomicUsize::new(0)));
+        let url = auditor(seen.clone(), count.clone()).await;
+        let dir = dir_with_token("alerter-auditor");
+        let client = AuditClient::new(&url, dir.clone(), "alerter-auditor");
+        tokio::spawn(client.clone().hello_until_done("boot".into()));
+        tokio::spawn(client.clone().drain_forever());
+        client.alert_delivery("unsealed", "ntfy", "sent", 1);
+        for _ in 0..100 {
+            if seen.lock().unwrap().iter().any(|(_, p, _)| p.ends_with("/alert-deliveries")) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let paths: Vec<String> = seen.lock().unwrap().iter().map(|(m, p, _)| format!("{m} {p}")).collect();
+        assert_eq!(paths, ["POST /api/audit/v1/hello", "POST /api/audit/v1/alert-deliveries"]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }

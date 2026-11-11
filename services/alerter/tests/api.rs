@@ -1,0 +1,478 @@
+//! The alerter's API against a real in-process auditor and a stand-in ntfy server: tokens and their scopes, `503 not_configured`,
+//! what each link may send, delivery with its priority, repeat limiting, retries, the test alert, the ledger across a restart,
+//! and that no secret leaves (ADR 0055).
+
+use askbar_alerter::{admin_links, admin_router, auditor_links, auditor_router, Alerter, Timing};
+use askbar_audit::{AuditDb, Recorder};
+use askbar_auditor::{disk::FreeSpace, Auditor, Limits};
+use askbar_service::audit_client::AuditClient;
+use askbar_service::status::BootId;
+use reqwest::Method as M;
+use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+const MARKER_TOPIC: &str = "marker-topic-4f9a";
+const MARKER_TOKEN: &str = "marker-token-7c21";
+
+fn hex(s: &str) -> String {
+    Sha256::digest(s.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn token(link: &str) -> String {
+    format!("tok_{link}_secret")
+}
+
+fn now() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64
+}
+
+/// What the stand-in ntfy server saw.
+#[derive(Debug, Clone)]
+struct Seen {
+    path: String,
+    priority: String,
+    title: String,
+    tags: String,
+    authorization: String,
+    body: String,
+}
+
+struct Sink {
+    url: String,
+    seen: Arc<Mutex<Vec<Seen>>>,
+    /// The status it answers with; `fail_first` of the requests get 500 before it.
+    status: Arc<AtomicU16>,
+    fail_first: Arc<AtomicUsize>,
+}
+
+async fn sink() -> Sink {
+    let seen: Arc<Mutex<Vec<Seen>>> = Default::default();
+    let status = Arc::new(AtomicU16::new(200));
+    let fail_first = Arc::new(AtomicUsize::new(0));
+    let (s, st, ff) = (seen.clone(), status.clone(), fail_first.clone());
+    let app = axum::Router::new().fallback(move |req: axum::extract::Request| {
+        let (s, st, ff) = (s.clone(), st.clone(), ff.clone());
+        async move {
+            let (path, priority, title, tags, authorization) = {
+                let h = |n: &str| req.headers().get(n).and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
+                (req.uri().path().to_string(), h("priority"), h("title"), h("tags"), h("authorization"))
+            };
+            let body = String::from_utf8_lossy(&axum::body::to_bytes(req.into_body(), 1 << 20).await.unwrap()).into_owned();
+            s.lock().unwrap().push(Seen { path, priority, title, tags, authorization, body });
+            let code = if ff.load(Ordering::SeqCst) > 0 {
+                ff.fetch_sub(1, Ordering::SeqCst);
+                500
+            } else {
+                st.load(Ordering::SeqCst)
+            };
+            axum::http::StatusCode::from_u16(code).unwrap()
+        }
+    });
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", l.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
+    Sink { url, seen, status, fail_first }
+}
+
+struct T {
+    auditor_url: String,
+    admin_url: String,
+    events_url: String,
+    dir: PathBuf,
+    alerter: Arc<Alerter>,
+    auditor: Arc<Auditor>,
+    http: reqwest::Client,
+    sink: Sink,
+}
+
+impl Drop for T {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+struct Reply {
+    status: u16,
+    body: Value,
+    text: String,
+}
+
+impl Reply {
+    fn code(&self) -> String {
+        self.body["error"].as_str().unwrap_or("").to_string()
+    }
+}
+
+async fn serve(app: axum::Router) -> String {
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", l.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
+    url
+}
+
+async fn start() -> T {
+    let dir = std::env::temp_dir().join(format!("askbar-alerter-{}", ulid::Ulid::new()));
+    start_in(dir, sink().await).await
+}
+
+/// An alerter and an auditor in `dir`; a second alerter in the same `dir` is a restart.
+async fn start_in(dir: PathBuf, sink: Sink) -> T {
+    // The auditor, with the alerter's link: `alerter-auditor`.
+    let accept = dir.join("auditor-tokens/accept");
+    std::fs::create_dir_all(&accept).unwrap();
+    std::fs::write(accept.join("alerter-auditor.sha256"), format!("{}\n", hex(&token("alerter-auditor")))).unwrap();
+    std::fs::write(accept.join("admin-auditor-read.sha256"), format!("{}\n", hex(&token("admin-auditor-read")))).unwrap();
+    let limits = Limits::default();
+    let recorder = Recorder::spawn(AuditDb::open(&dir.join("audit/audit.db")).unwrap(), limits.max_queued);
+    let free: FreeSpace = Arc::new(|| Some(100 * 1024 * 1024 * 1024));
+    let auditor = Auditor::new(recorder, limits, free);
+    let auditor_url = serve(askbar_auditor::router(auditor.clone(), askbar_auditor::links(&dir.join("auditor-tokens")))).await;
+    // The alerter's own credential volume: the hashes it accepts, and the token it sends the auditor.
+    let tokens = dir.join("alerter-token");
+    std::fs::create_dir_all(tokens.join("accept")).unwrap();
+    std::fs::create_dir_all(tokens.join("call")).unwrap();
+    for link in ["auditor-alerter", "admin-alerter"] {
+        std::fs::write(tokens.join("accept").join(format!("{link}.sha256")), format!("{}\n", hex(&token(link)))).unwrap();
+    }
+    std::fs::write(tokens.join("call/alerter-auditor.token"), token("alerter-auditor")).unwrap();
+    let audit = AuditClient::new(&auditor_url, tokens.clone(), "alerter-auditor");
+    let boot = BootId::new();
+    let restarter = askbar_service::restart::Restarter::for_tests(boot.clone(), Duration::ZERO, Duration::from_millis(50), || {}, || {});
+    let timing = Timing { backoff: vec![Duration::from_millis(20), Duration::from_millis(20)] };
+    let alerter = Alerter::new(audit.clone(), boot.clone(), restarter, &dir.join("alerter-data"), timing);
+    tokio::spawn(audit.clone().hello_until_done(boot.as_str().to_string()));
+    tokio::spawn(audit.clone().drain_forever());
+    tokio::spawn(alerter.clone().deliver_forever());
+    let events_url = serve(auditor_router(alerter.clone(), auditor_links(&tokens))).await;
+    let admin_url = serve(admin_router(alerter.clone(), admin_links(&tokens))).await;
+    T { auditor_url, admin_url, events_url, dir, alerter, auditor, http: reqwest::Client::new(), sink }
+}
+
+impl T {
+    async fn call(&self, base: &str, token: Option<&str>, m: M, path: &str, body: Option<Value>) -> Reply {
+        let mut r = self.http.request(m, format!("{base}/api/alerter/v1{path}"));
+        if let Some(t) = token {
+            r = r.bearer_auth(t);
+        }
+        if let Some(b) = body {
+            r = r.json(&b);
+        }
+        let resp = r.send().await.unwrap();
+        let status = resp.status().as_u16();
+        let text = resp.text().await.unwrap();
+        Reply { status, body: serde_json::from_str(&text).unwrap_or(Value::Null), text }
+    }
+
+    /// As the admin, on its listener.
+    async fn admin(&self, m: M, path: &str, body: Option<Value>) -> Reply {
+        self.call(&self.admin_url, Some(&token("admin-alerter")), m, path, body).await
+    }
+
+    /// As the auditor, on its listener.
+    async fn auditor(&self, m: M, path: &str, body: Option<Value>) -> Reply {
+        self.call(&self.events_url, Some(&token("auditor-alerter")), m, path, body).await
+    }
+
+    async fn configure(&self) {
+        let c = json!({ "version": 1, "ntfy": { "server": self.sink.url, "topic": MARKER_TOPIC, "token": MARKER_TOKEN } });
+        assert_eq!(self.admin(M::PUT, "/config", Some(c)).await.status, 200);
+    }
+
+    /// Waits for `n` requests at the sink.
+    async fn sink_has(&self, n: usize) -> Vec<Seen> {
+        for _ in 0..200 {
+            if self.sink.seen.lock().unwrap().len() >= n {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        self.sink.seen.lock().unwrap().clone()
+    }
+
+    /// The auditor's alert delivery records, once `n` are there.
+    async fn deliveries(&self, n: usize) -> Vec<Value> {
+        let mut rows = Vec::new();
+        for _ in 0..200 {
+            rows = self.auditor.recorder.reader().map(|c| askbar_audit::list_alert_deliveries(&c, None, None).unwrap()).unwrap_or_default();
+            if rows.len() >= n {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        rows
+    }
+}
+
+fn unsealed() -> Value {
+    json!({ "kind": "unsealed", "severity": "warning", "at": now() })
+}
+
+#[tokio::test]
+async fn every_route_needs_its_own_links_token_and_a_token_of_the_other_listener_is_no_good() {
+    let t = start().await;
+    let (a, b) = (&t.admin_url, &t.events_url);
+    assert_eq!(t.call(a, None, M::GET, "/status", None).await.status, 401);
+    assert_eq!(t.call(a, Some("tok_wrong"), M::GET, "/status", None).await.status, 401);
+    // The auditor's token on the admin's listener, and the admin's on the auditor's, are unknown there.
+    assert_eq!(t.call(a, Some(&token("auditor-alerter")), M::GET, "/status", None).await.status, 401);
+    assert_eq!(t.call(b, Some(&token("admin-alerter")), M::POST, "/events", Some(unsealed())).await.status, 401);
+    // The auditor's listener has no other route: the admin's routes do not exist there, so the auditor's token finds nothing.
+    for (m, p) in [(M::GET, "/status"), (M::PUT, "/config"), (M::POST, "/restart"), (M::POST, "/test")] {
+        assert_eq!(t.call(b, Some(&token("auditor-alerter")), m.clone(), p, Some(json!({}))).await.status, 404, "{m} {p}");
+    }
+    // On the admin's listener the auditor's token is unknown, so every route is 401 to it.
+    for (m, p) in [(M::PUT, "/config"), (M::POST, "/restart"), (M::POST, "/test"), (M::POST, "/events")] {
+        assert_eq!(t.call(a, Some(&token("auditor-alerter")), m.clone(), p, Some(json!({}))).await.status, 401, "{m} {p}");
+    }
+    // The health check needs no token, on both.
+    for base in [a, b] {
+        assert_eq!(t.http.get(format!("{base}/api/alerter/v1/health")).send().await.unwrap().status(), 200);
+    }
+}
+
+#[tokio::test]
+async fn it_answers_503_not_configured_until_the_admin_pushes_and_the_status_says_so() {
+    let t = start().await;
+    let st = t.admin(M::GET, "/status", None).await;
+    assert_eq!((st.status, st.body["config_version"].clone()), (200, Value::Null));
+    for (m, p, body) in [(M::POST, "/events", Some(unsealed())), (M::POST, "/test", None)] {
+        let r = t.admin(m.clone(), p, body).await;
+        assert_eq!((r.status, r.code()), (503, "not_configured".to_string()), "{m} {p}");
+    }
+    assert_eq!(t.auditor(M::POST, "/events", Some(unsealed())).await.status, 503);
+    t.configure().await;
+    assert_eq!(t.admin(M::GET, "/status", None).await.body["config_version"], 1);
+    assert_eq!(t.auditor(M::POST, "/events", Some(unsealed())).await.status, 202);
+}
+
+#[tokio::test]
+async fn a_configuration_that_cannot_be_used_is_refused_and_changes_nothing() {
+    let t = start().await;
+    for bad in [
+        json!({ "version": 1, "ntfy": { "server": "not a url", "topic": "t" } }),
+        json!({ "version": 1, "ntfy": { "server": "https://ntfy.example.com", "topic": "a b" } }),
+        json!({ "version": 1, "smtp": {} }),
+        json!({ "ntfy": null }),
+    ] {
+        let r = t.admin(M::PUT, "/config", Some(bad)).await;
+        assert_eq!((r.status, r.code()), (400, "bad_request".to_string()));
+    }
+    assert_eq!(t.admin(M::GET, "/status", None).await.body["config_version"], Value::Null);
+}
+
+#[tokio::test]
+async fn an_event_is_delivered_with_its_fixed_sentence_and_the_priority_of_its_severity() {
+    let t = start().await;
+    t.configure().await;
+    assert_eq!(t.auditor(M::POST, "/events", Some(unsealed())).await.status, 202);
+    let crit = json!({ "kind": "audit_disk_critical", "severity": "critical", "at": now(), "fields": { "free_mb": 200 } });
+    assert_eq!(t.auditor(M::POST, "/events", Some(crit)).await.status, 202);
+    let seen = t.sink_has(2).await;
+    assert_eq!(seen.len(), 2);
+    assert_eq!(seen[0].path, format!("/{MARKER_TOPIC}"));
+    assert_eq!((seen[0].priority.as_str(), seen[0].tags.as_str()), ("4", "warning"));
+    assert_eq!(seen[0].title, "Audit content opened");
+    assert!(seen[0].body.starts_with("The administrator unsealed audit content."), "{}", seen[0].body);
+    assert_eq!((seen[1].priority.as_str(), seen[1].tags.as_str()), ("5", "rotating_light"));
+    assert!(seen[1].body.contains("200 MB free"), "{}", seen[1].body);
+    // The token goes as a bearer token, to the server that was configured.
+    assert_eq!(seen[0].authorization, format!("Bearer {MARKER_TOKEN}"));
+    // Each outcome is on record with the auditor: the kind, the channel and a count, and nothing else.
+    let rows = t.deliveries(2).await;
+    assert_eq!(rows.len(), 2);
+    for r in &rows {
+        assert_eq!(
+            (r["caller"].as_str(), r["channel"].as_str(), r["outcome"].as_str(), r["attempts"].as_i64()),
+            (Some("alerter"), Some("ntfy"), Some("sent"), Some(1))
+        );
+    }
+    let mut kinds: Vec<&str> = rows.iter().map(|r| r["kind"].as_str().unwrap()).collect();
+    kinds.sort();
+    assert_eq!(kinds, ["audit_disk_critical", "unsealed"]);
+}
+
+#[tokio::test]
+async fn each_link_may_send_only_its_own_kinds_and_only_what_a_kind_takes() {
+    let t = start().await;
+    t.configure().await;
+    let chain = json!({ "kind": "chain_mismatch", "severity": "critical", "at": now() });
+    // The auditor may not send the admin's kind, nor the admin the auditor's.
+    assert_eq!((t.auditor(M::POST, "/events", Some(chain.clone())).await.status,), (403,));
+    assert_eq!(t.admin(M::POST, "/events", Some(unsealed())).await.status, 403);
+    assert_eq!(t.admin(M::POST, "/events", Some(chain)).await.status, 202);
+    // The alerter's own kinds come over no link.
+    for (k, fields) in [("test", json!({})), ("release_available", json!({ "version": "1.0.0" }))] {
+        let e = json!({ "kind": k, "severity": "info", "at": now(), "fields": fields });
+        assert_eq!(t.auditor(M::POST, "/events", Some(e.clone())).await.status, 403, "{k}");
+        assert_eq!(t.admin(M::POST, "/events", Some(e)).await.status, 403, "{k}");
+    }
+    // Free text, a dedupe key, an unknown kind or field, the wrong severity, a missing or an extra field: 400, and nothing is sent.
+    for bad in [
+        json!({ "kind": "unsealed", "severity": "warning", "at": now(), "message": "hello" }),
+        json!({ "kind": "unsealed", "severity": "warning", "at": now(), "dedupe_key": "x" }),
+        json!({ "kind": "unsealed", "severity": "warning", "at": now(), "fields": { "text": "hi" } }),
+        json!({ "kind": "kill_switch_changed", "severity": "warning", "at": now() }),
+        json!({ "kind": "unsealed", "severity": "critical", "at": now() }),
+        json!({ "kind": "audit_disk_low", "severity": "warning", "at": now() }),
+        json!({ "kind": "unsealed", "severity": "warning", "at": now(), "fields": { "count": 1 } }),
+        json!({ "kind": "component_silent", "severity": "critical", "at": now(), "fields": { "link": "<script>", "minutes": 5 } }),
+    ] {
+        let r = t.auditor(M::POST, "/events", Some(bad.clone())).await;
+        assert_eq!((r.status, r.code()), (400, "bad_request".to_string()), "{bad}");
+    }
+    // Only the admin's chain_mismatch got through.
+    let seen = t.sink_has(1).await;
+    assert_eq!(seen.len(), 1);
+    assert_eq!(seen[0].title, "The audit chain does not match");
+}
+
+#[tokio::test]
+async fn a_repeat_within_the_hour_is_held_back_counted_and_recorded_as_suppressed() {
+    let t = start().await;
+    t.configure().await;
+    let silent = |minutes| json!({ "kind": "component_silent", "severity": "critical", "at": now(), "fields": { "link": "server-auditor", "minutes": minutes } });
+    assert_eq!(t.auditor(M::POST, "/events", Some(silent(5))).await.body["suppressed"], false);
+    // The same condition with a larger number is still the same alert.
+    assert_eq!(t.auditor(M::POST, "/events", Some(silent(35))).await.body["suppressed"], true);
+    // Another link is another alert.
+    let other = json!({ "kind": "component_silent", "severity": "critical", "at": now(), "fields": { "link": "model-gateway-auditor", "minutes": 5 } });
+    assert_eq!(t.auditor(M::POST, "/events", Some(other)).await.body["suppressed"], false);
+    let seen = t.sink_has(2).await;
+    assert_eq!(seen.len(), 2, "two deliveries, not three");
+    let rows = t.deliveries(3).await;
+    let mut outcomes: Vec<&str> = rows.iter().map(|r| r["outcome"].as_str().unwrap()).collect();
+    outcomes.sort();
+    assert_eq!(outcomes, ["sent", "sent", "suppressed"]);
+}
+
+#[tokio::test]
+async fn the_ledger_survives_a_restart_so_the_count_does_not_start_again() {
+    let t = start().await;
+    t.configure().await;
+    assert_eq!(t.auditor(M::POST, "/events", Some(unsealed())).await.body["suppressed"], false);
+    t.sink_has(1).await;
+    let (dir, sink) = (t.dir.clone(), sink_again(&t));
+    // A new process on the same data directory.
+    std::mem::forget(t);
+    let t2 = start_in(dir, sink).await;
+    t2.configure().await;
+    assert_eq!(t2.auditor(M::POST, "/events", Some(unsealed())).await.body["suppressed"], true, "held back by the ledger");
+}
+
+/// A sink for a restarted alerter (the old one's address is not needed again).
+fn sink_again(t: &T) -> Sink {
+    Sink { url: t.sink.url.clone(), seen: t.sink.seen.clone(), status: t.sink.status.clone(), fail_first: t.sink.fail_first.clone() }
+}
+
+#[tokio::test]
+async fn a_failed_delivery_is_retried_with_backoff_and_the_tries_are_recorded() {
+    let t = start().await;
+    t.configure().await;
+    t.sink.fail_first.store(2, Ordering::SeqCst);
+    assert_eq!(t.auditor(M::POST, "/events", Some(unsealed())).await.status, 202);
+    assert_eq!(t.sink_has(3).await.len(), 3, "two failures and then the delivery");
+    let rows = t.deliveries(1).await;
+    assert_eq!((rows[0]["outcome"].as_str(), rows[0]["attempts"].as_i64()), (Some("sent"), Some(3)));
+    let st = t.admin(M::GET, "/status", None).await.body;
+    assert!(st["last_delivery_ok_at"].as_i64().is_some() && st["last_delivery_failed_at"].as_i64().is_some(), "{st}");
+}
+
+#[tokio::test]
+async fn an_alert_that_never_gets_through_is_given_up_and_recorded_as_failed() {
+    let t = start().await;
+    t.configure().await;
+    t.sink.status.store(500, Ordering::SeqCst);
+    assert_eq!(t.auditor(M::POST, "/events", Some(unsealed())).await.status, 202);
+    let rows = t.deliveries(1).await;
+    assert_eq!((rows[0]["outcome"].as_str(), rows[0]["attempts"].as_i64()), (Some("failed"), Some(3)));
+    assert_eq!(t.sink.seen.lock().unwrap().len(), 3);
+}
+
+#[tokio::test]
+async fn the_test_alert_says_what_each_channel_really_did() {
+    let t = start().await;
+    t.configure().await;
+    let ok = t.admin(M::POST, "/test", None).await;
+    assert_eq!(
+        (ok.status, ok.body["results"][0]["channel"].clone(), ok.body["results"][0]["ok"].clone()),
+        (200, json!("ntfy"), json!(true))
+    );
+    assert_eq!(t.sink.seen.lock().unwrap()[0].title, "Askbar test alert");
+    assert_eq!(t.sink.seen.lock().unwrap()[0].priority, "3");
+    for (code, problem) in [(401u16, "unauthorized"), (403, "unauthorized"), (500, "refused"), (404, "refused")] {
+        t.sink.status.store(code, Ordering::SeqCst);
+        let r = t.admin(M::POST, "/test", None).await;
+        assert_eq!((r.body["results"][0]["ok"].clone(), r.body["results"][0]["problem"].as_str()), (json!(false), Some(problem)), "{code}");
+    }
+    // A server that is not there.
+    let c = json!({ "version": 2, "ntfy": { "server": "http://127.0.0.1:9", "topic": MARKER_TOPIC } });
+    assert_eq!(t.admin(M::PUT, "/config", Some(c)).await.status, 200);
+    let r = t.admin(M::POST, "/test", None).await;
+    assert_eq!(r.body["results"][0]["problem"], "unreachable");
+    // With no channel at all, the result is empty.
+    assert_eq!(t.admin(M::PUT, "/config", Some(json!({ "version": 3 }))).await.status, 200);
+    assert_eq!(t.admin(M::POST, "/test", None).await.body["results"], json!([]));
+}
+
+#[tokio::test]
+async fn a_marker_secret_is_in_no_response_no_ledger_and_no_audit_record() {
+    let t = start().await;
+    t.configure().await;
+    let mut bodies = vec![t.admin(M::GET, "/status", None).await.text];
+    bodies.push(t.admin(M::POST, "/test", None).await.text);
+    bodies.push(t.auditor(M::POST, "/events", Some(unsealed())).await.text);
+    // A refusal does not repeat a value it was sent.
+    let bad = json!({ "version": 9, "ntfy": { "server": "https://x.example.com", "topic": MARKER_TOPIC, "token": "has a space", "extra": MARKER_TOKEN } });
+    bodies.push(t.admin(M::PUT, "/config", Some(bad)).await.text);
+    bodies.push(
+        t.admin(
+            M::PUT,
+            "/config",
+            Some(json!({ "version": 1, "ntfy": { "server": t.sink.url, "topic": MARKER_TOPIC, "token": MARKER_TOKEN } })),
+        )
+        .await
+        .text,
+    );
+    t.sink_has(1).await;
+    t.deliveries(1).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    for b in &bodies {
+        assert!(!b.contains(MARKER_TOPIC) && !b.contains(MARKER_TOKEN), "a response held a secret: {b}");
+    }
+    // Nothing the alerter wrote to disk, and nothing the auditor stored, holds either.
+    fn grep(dir: &std::path::Path, needles: &[&str], found: &mut Vec<String>) {
+        for e in std::fs::read_dir(dir).unwrap().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                grep(&p, needles, found);
+            } else if let Ok(bytes) = std::fs::read(&p) {
+                let text = String::from_utf8_lossy(&bytes);
+                for n in needles {
+                    if text.contains(n) {
+                        found.push(format!("{} holds {n}", p.display()));
+                    }
+                }
+            }
+        }
+    }
+    let mut found = Vec::new();
+    grep(&t.dir.join("alerter-data"), &[MARKER_TOPIC, MARKER_TOKEN], &mut found);
+    grep(&t.dir.join("audit"), &[MARKER_TOPIC, MARKER_TOKEN], &mut found);
+    assert!(found.is_empty(), "{found:?}");
+    // The sentence the sink got never held a token or a name an event could not carry.
+    for s in t.sink.seen.lock().unwrap().iter() {
+        assert!(!s.body.contains(MARKER_TOKEN) && !s.title.contains(MARKER_TOKEN));
+    }
+    let _ = (&t.auditor_url, &t.alerter);
+}
+
+#[tokio::test]
+async fn the_admin_can_restart_it_even_before_it_is_configured() {
+    let t = start().await;
+    let r = t.admin(M::POST, "/restart", None).await;
+    assert_eq!(r.status, 202, "{}", r.text);
+}

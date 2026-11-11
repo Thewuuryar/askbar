@@ -8,6 +8,7 @@ Answer directly. Use Markdown when it helps. You cannot access the user's comput
 mod sse;
 pub use sse::{SseEvent, SseParser};
 
+pub mod alerter;
 pub mod audit;
 pub mod gateway;
 pub mod paths;

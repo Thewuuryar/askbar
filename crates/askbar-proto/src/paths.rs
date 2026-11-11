@@ -20,6 +20,10 @@ pub const AUDIT: &str = "/api/audit";
 pub const MODEL_GATEWAY_V1: &str = "/api/model-gateway/v1";
 /// Every version of the model-gateway API.
 pub const MODEL_GATEWAY: &str = "/api/model-gateway";
+/// What the auditor and the admin call on the alerter. Served only on its two internal listeners (ADR 0055).
+pub const ALERTER_V1: &str = "/api/alerter/v1";
+/// Every version of the alerter API.
+pub const ALERTER: &str = "/api/alerter";
 /// Every version of the server API, as Caddy blocks it.
 pub const SERVER: &str = "/api/server";
 /// Every version of the client API.
@@ -52,6 +56,8 @@ mod tests {
             AUDIT,
             MODEL_GATEWAY_V1,
             MODEL_GATEWAY,
+            ALERTER_V1,
+            ALERTER,
         ] {
             assert!(p.starts_with('/') && !p.ends_with('/'), "{p}");
         }
@@ -61,6 +67,7 @@ mod tests {
         assert!(ADMIN_V1.starts_with(&format!("{ADMIN_API}/v")));
         assert!(AUDIT_V1.starts_with(&format!("{AUDIT}/v")));
         assert!(MODEL_GATEWAY_V1.starts_with(&format!("{MODEL_GATEWAY}/v")));
+        assert!(ALERTER_V1.starts_with(&format!("{ALERTER}/v")));
         assert!(!ADMIN_API.starts_with(ADMIN), "the admin API is not under the site's path");
     }
 
@@ -74,6 +81,7 @@ mod tests {
         for other in [CLIENT, ADMIN_API, SERVER] {
             assert!(!AUDIT_V1.starts_with(other) && !other.starts_with(AUDIT));
             assert!(!MODEL_GATEWAY_V1.starts_with(other) && !other.starts_with(MODEL_GATEWAY));
+            assert!(!ALERTER_V1.starts_with(other) && !other.starts_with(ALERTER));
         }
     }
 

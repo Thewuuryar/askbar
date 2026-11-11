@@ -138,6 +138,8 @@ async fn main() {
     let state = askbar_server::AppState::new(db, askbar_server::MIN_CLIENT);
     tokio::spawn(audit_client.clone().hello_until_done(state.boot_id.as_str().to_string()));
     tokio::spawn(audit_client.clone().drain_forever());
+    // The auditor notes the time of each request on a link; this keeps the link from looking silent while the server is quiet (ADR 0051).
+    tokio::spawn(audit_client.clone().status_every_minute());
     let state = state.with_spaces(spaces).with_audit(askbar_server::audit::Recorder::new(audit_client)).with_gateway(
         askbar_server::gateway::GatewayClient::new(&env_url("ASKBAR_GATEWAY_URL", "http://gateway-server-host:8084"), token_dir),
     );
