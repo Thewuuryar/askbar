@@ -119,17 +119,18 @@ const PASS: &str = "a passphrase long enough to use";
 /// A trace on the server with a sealed reply, after the admin made its key from `PASS`.
 /// Returns the span id that holds the payload and the text sealed into it.
 async fn server_with_sealed_reply(t: &T) -> (String, String) {
-    use askbar_server::audit::{Kind, SpanFinish, SpanStart};
+    use askbar_server::audit::Kind;
     let (st, _) = t.call(M::PUT, "/api/admin/v1/setup/audit-key", json!({ "passphrase": PASS, "confirm": PASS })).await;
     assert_eq!(st, 200);
     // The server seals with the public key the admin pushed in the snapshot.
     let key = askbar_server::snapshot::current(&t.server.db.lock().unwrap()).unwrap().unwrap().audit_public_key.unwrap();
     let public = askbar_server::snapshot::parse_hex(&key.public_key).unwrap();
     let text = "The reply the server sealed and cannot read.";
-    let span = t.server.audit.start_span(SpanStart::new("trace-1", Kind::Turn, "chat"));
-    t.server.audit.payload(&span, "reply", askbar_server::seal::seal(&public, text.as_bytes()).unwrap());
-    t.server.audit.finish_span(SpanFinish::new(&span, "done"));
-    t.server.audit.flush().await;
+    // A turn span, as the gateway opens it (the server may open gates only), with the reply sealed on it.
+    let span = t
+        .rig
+        .seed("trace-1", Kind::Turn, "chat", Some(("reply", askbar_server::seal::seal(&public, text.as_bytes()).unwrap())), true)
+        .await;
     (span, text.to_string())
 }
 
@@ -229,11 +230,10 @@ async fn five_wrong_passphrases_lock_opening_out_even_for_the_right_one_and_unkn
 
 #[tokio::test]
 async fn a_span_with_nothing_sealed_opens_to_an_empty_list_without_a_record() {
-    use askbar_server::audit::{Kind, SpanStart};
+    use askbar_server::audit::Kind;
     let t = common::start(true).await;
     server_with_sealed_reply(&t).await;
-    let bare = t.server.audit.start_span(SpanStart::new("trace-2", Kind::Gate, "queue"));
-    t.server.audit.flush().await;
+    let bare = t.rig.seed("trace-2", Kind::Gate, "queue", None, false).await;
     let (st, body) = t.call(M::POST, &format!("/api/admin/v1/audit/payloads/{bare}/open"), json!({ "passphrase": "x" })).await;
     assert_eq!((st, body["payloads"].as_array().map(Vec::len)), (200, Some(0)));
     assert!(access_rows(&t).await.is_empty());
@@ -241,7 +241,7 @@ async fn a_span_with_nothing_sealed_opens_to_an_empty_list_without_a_record() {
 
 #[tokio::test]
 async fn rotation_adds_a_key_retires_the_old_one_and_each_payload_opens_with_its_own_passphrase() {
-    use askbar_server::audit::{Kind, SpanStart};
+    use askbar_server::audit::Kind;
     let t = common::start(true).await;
     let (old_span, old_text) = server_with_sealed_reply(&t).await;
     let old_key = t.admin.db.lock().await.active_audit_key().unwrap().unwrap();
@@ -277,9 +277,10 @@ async fn rotation_adds_a_key_retires_the_old_one_and_each_payload_opens_with_its
     // New content is sealed with the new key. Old content stays sealed with the old one.
     let public = askbar_server::snapshot::parse_hex(&pushed.public_key).unwrap();
     let new_text = "A reply sealed after the rotation.";
-    let new_span = t.server.audit.start_span(SpanStart::new("trace-9", Kind::Turn, "chat"));
-    t.server.audit.payload(&new_span, "reply", askbar_server::seal::seal(&public, new_text.as_bytes()).unwrap());
-    t.server.audit.flush().await;
+    let new_span = t
+        .rig
+        .seed("trace-9", Kind::Turn, "chat", Some(("reply", askbar_server::seal::seal(&public, new_text.as_bytes()).unwrap())), false)
+        .await;
 
     let open = |span: &str, pass: &str| {
         let (path, body) = (format!("/api/admin/v1/audit/payloads/{span}/open"), json!({ "passphrase": pass }));

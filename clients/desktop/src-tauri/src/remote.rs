@@ -837,7 +837,11 @@ mod tests {
             askbar_server::testing::provider("p", "mock", &format!("http://127.0.0.1:{mock_port}/v1"), "mock-model"),
         );
         let code = askbar_server::testing::add_pair_code(&db, &user, "test");
-        let state: Arc<AppState> = AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), "0.1.0");
+        // Replies go through an in-process gateway and auditor, as in the stack (ADR 0054); the rig lives as long as the test.
+        let rig = askbar_server::testing::Rig::start().await;
+        let state: Arc<AppState> = rig.attach(AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), "0.1.0")).await;
+        rig.sync(&state);
+        Box::leak(Box::new(rig));
         let token = auth::redeem_pair_code(&state.db.lock().unwrap(), &code).unwrap().unwrap();
         let app = askbar_server::client_router(state);
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1393,8 +1397,15 @@ mod tests {
             askbar_server::testing::provider("p", "mock", &format!("http://127.0.0.1:{mock_port}/v1"), "mock-model"),
         );
         let code = askbar_server::testing::add_pair_code(&db, &user, "test");
-        let state: Arc<AppState> = AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), "0.1.0")
-            .with_spaces(askbar_server::Spaces::on_disk(dir.join("spaces")));
+        let rig = askbar_server::testing::Rig::start().await;
+        let state: Arc<AppState> = rig
+            .attach(
+                AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), "0.1.0")
+                    .with_spaces(askbar_server::Spaces::on_disk(dir.join("spaces"))),
+            )
+            .await;
+        rig.sync(&state);
+        Box::leak(Box::new(rig));
         let token = auth::redeem_pair_code(&state.db.lock().unwrap(), &code).unwrap().unwrap();
         let space = askbar_server::testing::personal_space(&state, &user);
         let (url, server) = serve_state(state.clone()).await;

@@ -62,6 +62,8 @@ pub struct AuditClient {
     hello_done: AtomicBool,
     /// Records sent after waiting in the queue, for the tests and the status.
     sent: AtomicU64,
+    /// Whether the last request reached the auditor and was not refused for its backlog.
+    last_ok: AtomicBool,
 }
 
 impl AuditClient {
@@ -75,6 +77,7 @@ impl AuditClient {
             wake: Notify::new(),
             hello_done: AtomicBool::new(false),
             sent: AtomicU64::new(0),
+            last_ok: AtomicBool::new(true),
         })
     }
 
@@ -91,8 +94,17 @@ impl AuditClient {
     /// One request; what the auditor answered with, or `None` if nothing reached it.
     async fn send<T: Serialize>(&self, path: &str, body: &T, timeout: Duration) -> Result<u16, ()> {
         let token = self.token().ok_or(())?;
-        let r = self.http.post(self.url(path)).bearer_auth(token).timeout(timeout).json(body).send().await.map_err(|_| ())?;
-        Ok(r.status().as_u16())
+        let sent = self.http.post(self.url(path)).bearer_auth(token).timeout(timeout).json(body).send().await;
+        let status = sent.map(|r| r.status().as_u16()).map_err(|_| ());
+        self.last_ok.store(matches!(status, Ok(s) if s != 503 && s != 429), Ordering::Relaxed);
+        status
+    }
+
+    /// Whether this service may start a new piece of work that must be recorded: the auditor has its boot ID, the last
+    /// request reached it and was not refused for its backlog, and the queue is not nearly full. A service that cannot
+    /// record answers `503 audit_backlog` rather than work unrecorded (ADR 0010 rule 3).
+    pub fn healthy(&self) -> bool {
+        self.ready() && self.last_ok.load(Ordering::Relaxed) && self.queued() < QUEUE_LIMIT * 9 / 10
     }
 
     /// Whether the auditor has been told this process's boot ID.

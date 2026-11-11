@@ -297,17 +297,26 @@ fn check_config(c: &GatewayConfig) -> Result<Applied, String> {
     Ok(Applied { version: c.version, providers, audit_key: bytes, timeout: Duration::from_secs(u64::from(c.generation_timeout_secs)) })
 }
 
+impl Gateway {
+    /// Put `c` in place of the configuration, or say why not (a sentence for a person). The keys it carries are held in
+    /// memory and nowhere else.
+    pub fn apply_config(&self, c: &GatewayConfig) -> Result<(), String> {
+        let applied = check_config(c)?;
+        let version = applied.version;
+        *self.config.write().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(applied));
+        tracing::info!(version, providers = c.providers.len(), "configuration applied");
+        Ok(())
+    }
+}
+
 /// Replace the configuration. The keys it carries are held in memory and nowhere else; the answer holds none.
 async fn put_config(
     State(gw): State<Arc<Gateway>>,
     Extension(Caller(_)): Extension<Caller>,
     Json(c): Json<GatewayConfig>,
 ) -> Result<Json<serde_json::Value>, Failure> {
-    let applied = check_config(&c).map_err(bad)?;
-    let version = applied.version;
-    *gw.config.write().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(applied));
-    tracing::info!(version, providers = c.providers.len(), "configuration applied");
-    Ok(Json(serde_json::json!({ "version": version })))
+    gw.apply_config(&c).map_err(bad)?;
+    Ok(Json(serde_json::json!({ "version": c.version })))
 }
 
 // ------------------------------------------------------------------ POST /chat

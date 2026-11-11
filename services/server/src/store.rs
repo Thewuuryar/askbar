@@ -30,3 +30,8 @@ pub fn load_provider(db: &Db, secrets: &Secrets, id: &str) -> rusqlite::Result<O
 pub fn chat_system_prompt(db: &Db) -> rusqlite::Result<String> {
     Ok(crate::snapshot::current(db)?.and_then(|s| s.system_prompt).unwrap_or_else(|| DEFAULT_SYSTEM_PROMPT.to_string()))
 }
+
+/// A provider by id, as the current snapshot describes it. It holds no key: the gateway does (ADR 0054).
+pub fn provider_meta(db: &Db, id: &str) -> rusqlite::Result<Option<askbar_proto::SnapshotProvider>> {
+    Ok(crate::snapshot::current(db)?.and_then(|s| s.providers.into_iter().find(|p| p.id == id)))
+}

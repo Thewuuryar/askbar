@@ -219,7 +219,10 @@ name = "askbar-server"
 version = "0.6.0"
 dependencies = [
  "askbar-audit",
+ "askbar-auditor",
+ "askbar-model-gateway",
  "askbar-proto",
+ "askbar-server",
  "askbar-service",
  "axum",
  "base64 0.22.1",

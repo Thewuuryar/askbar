@@ -57,6 +57,9 @@ struct Stack {
     m2: Mock,
     user: String,
     _dir: std::path::PathBuf,
+    /// The in-process gateway and auditor the state's replies go through (kept for `sync` when a test changes a provider).
+    #[allow(dead_code)]
+    rig: &'static askbar_server::testing::Rig,
 }
 
 fn provider(id: &str, port: u16, model: &str, extra: serde_json::Value) -> askbar_proto::SnapshotProvider {
@@ -69,7 +72,7 @@ fn provider(id: &str, port: u16, model: &str, extra: serde_json::Value) -> askba
 
 async fn stack(model1: &str, model2: &str, p2_extra: serde_json::Value) -> Stack {
     let (m1, m2) = (Mock::start(), Mock::start());
-    let (state, dir) = askbar_server::testing::state_with_audit(&format!("http://127.0.0.1:{}/v1", m1.port));
+    let (state, dir, rig) = askbar_server::testing::state_with_audit(&format!("http://127.0.0.1:{}/v1", m1.port)).await;
     let user = {
         let db = state.db.lock().unwrap();
         let secrets = state.secrets();
@@ -79,7 +82,9 @@ async fn stack(model1: &str, model2: &str, p2_extra: serde_json::Value) -> Stack
         askbar_server::testing::store_key(&db, &secrets, "p2", "sk-2");
         db.seed_server().unwrap()
     };
-    Stack { state, m1, m2, user, _dir: dir }
+    // The gateway holds the keys and the providers: give it what was just stored (ADR 0054).
+    rig.sync(&state);
+    Stack { state, m1, m2, user, _dir: dir, rig }
 }
 
 impl Stack {

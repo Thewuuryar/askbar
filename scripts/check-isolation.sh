@@ -323,7 +323,7 @@ if [ "$(docker inspect -f '{{.State.Running}}' "$AUDITOR" 2>/dev/null)" != true 
   [ -z "$(docker inspect -f '{{join .HostConfig.CapAdd ","}}' "$AUDITOR")" ] && pass "the auditor adds no capability" || fail "the auditor adds a capability"
   # Its networks are exactly the audit-* ones, and each is internal: no route out.
   anets=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$AUDITOR" | tr ' ' '\n' | grep . | sort | tr '\n' ' ')
-  [ "$anets" = "${PROJECT}_audit-admin ${PROJECT}_audit-model-gateway " ] && pass "the auditor is on the audit-* networks only (audit-admin, audit-model-gateway)" || fail "the auditor's networks are: $anets"
+  [ "$anets" = "${PROJECT}_audit-admin ${PROJECT}_audit-model-gateway ${PROJECT}_audit-server " ] && pass "the auditor is on the audit-* networks only (audit-admin, audit-model-gateway, audit-server)" || fail "the auditor's networks are: $anets"
   case "$anets" in *edge*|*server-api*|*cpa-admin*) fail "the auditor shares a network that is not an audit-* one";; esac
   for n in $anets; do
     [ "$(docker network inspect -f '{{.Internal}}' "$n" 2>/dev/null)" = true ] && pass "$n is internal" || fail "$n is not internal"
@@ -413,7 +413,7 @@ if [ "$(docker inspect -f '{{.State.Running}}' "$GW" 2>/dev/null)" != true ]; th
   members() { docker network inspect -f '{{range .Containers}}{{.Name}} {{end}}' "$1" | tr ' ' '\n' | grep . | sort | tr '\n' ' '; }
   [ "$(members "$GW_NET")" = "$ADMIN $GW " ] && pass "gateway-admin joins the admin and the gateway only" || fail "gateway-admin members: $(members "$GW_NET")"
   [ "$(members "$GW_AUD")" = "$AUDITOR $GW " ] && pass "audit-model-gateway joins the auditor and the gateway only" || fail "audit-model-gateway members: $(members "$GW_AUD")"
-  case "$(members "$GW_SRV_NET")" in "$GW "|"$GW $SERVER "|"$SERVER $GW ") pass "gateway-server joins the gateway and, once it calls the gateway, the server";; *) fail "gateway-server members: $(members "$GW_SRV_NET")";; esac
+  [ "$(members "$GW_SRV_NET")" = "$GW $SERVER " ] && pass "gateway-server joins the gateway and the server only" || fail "gateway-server members: $(members "$GW_SRV_NET")"
   case "$(members "$GW_OUT")" in "$GW "|"askbar-mock-llm-1 $GW ") pass "outbound joins the gateway (and the mock LLM in dev) only";; *) fail "outbound members: $(members "$GW_OUT")";; esac
   # The gateway reaches the auditor and nothing of ours but that.
   docker exec "$GW" bash -c 'exec 3<>/dev/tcp/auditor/8083' >/dev/null 2>&1 && pass "model-gateway reaches the auditor" || fail "model-gateway cannot reach the auditor"

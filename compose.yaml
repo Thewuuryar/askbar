@@ -9,8 +9,8 @@
 #   server-api  the admin and the server's server API, nothing else. `internal`, so it has no route out.
 #   audit-admin  the admin and the auditor, nothing else. `internal`, so it has no route out. Each caller of the
 #               auditor gets a network like it, shared with the auditor alone (ADR 0051).
-#   gateway-admin  the admin and model-gateway, nothing else. `internal`. (gateway-server, the server's, comes when
-#               the server calls the gateway; audit-model-gateway is the gateway's and the auditor's.)
+#   gateway-admin  the admin and model-gateway, nothing else. `internal`. gateway-server (the server and the gateway) and
+#               audit-server (the server and the auditor) are the same; audit-model-gateway is the gateway's and the auditor's.
 #   outbound  model-gateway, and in the dev profile the mock LLM. The one network besides `edge` with a route out
 #               (ADR 0006, ADR 0054); nothing else joins it.
 # No network pins a subnet or an address; Docker assigns them (docs/guide.md, "Docker networks").
@@ -76,6 +76,9 @@ services:
       edge: {}
       server-api:
         aliases: [server-api-host]
+      # The gateway (replies) and the auditor (records) each get a network of their own with the server (ADR 0054, 0051).
+      gateway-server: {}
+      audit-server: {}
     volumes:
       # The bind-mounted DATA_DIR must be writable by uid 10002.
       - ${DATA_DIR:-./data}:/data
@@ -128,8 +131,8 @@ services:
 
   # The audit store as its own container (ADR 0051): /api/audit/v1 on 8083, reachable only on the audit-* networks,
   # one for each caller, and with no route out. No exception to the hardening above. Runs as uid 10003 from the
-  # image; /audit belongs to that uid there, so Docker makes a new auditor-data volume the same. The gateway appends
-  # to it on audit-model-gateway; the server does not yet (plan step 3.1, second half); the admin reaches it on audit-admin.
+  # image; /audit belongs to that uid there, so Docker makes a new auditor-data volume the same. The gateway and the server
+  # append to it on audit-model-gateway and audit-server; the admin reaches it on audit-admin.
   auditor:
     build:
       context: .
@@ -145,6 +148,7 @@ services:
     networks:
       audit-admin: {}
       audit-model-gateway: {}
+      audit-server: {}
     volumes:
       # audit.db: the audit store. Only the auditor mounts it. Starts empty; the server's own audit-data is not
       # copied (see the guide).
@@ -156,7 +160,7 @@ services:
   # server and one on gateway-admin for the admin, each on the address its alias gives and never a wildcard. The
   # keys are pushed by the admin and held in memory only, so there is no data volume: its one volume is its credential
   # volume, read-only. It reaches the auditor on audit-model-gateway and the providers on `outbound`. No exception to
-  # the hardening above. The server does not call it yet (plan step 3.1, second half).
+  # the hardening above. The server calls it for every reply (plan step 3.1).
   model-gateway:
     build:
       context: .
@@ -283,7 +287,10 @@ networks:
   # model-gateway's listener for the admin. The admin and the gateway, nothing else. No route out.
   gateway-admin:
     internal: true
-  # model-gateway's listener for the server, which joins it when it calls the gateway. No route out.
+  # The auditor and the server, nothing else. No route out.
+  audit-server:
+    internal: true
+  # model-gateway's listener for the server. The server and the gateway, nothing else. No route out.
   gateway-server:
     internal: true
   # The providers. Not internal: the one network, besides `edge`, with a route out. Only model-gateway (and in the

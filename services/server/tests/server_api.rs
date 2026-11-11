@@ -166,21 +166,30 @@ fn snapshot() -> Snapshot {
 struct S {
     t: T,
     state: std::sync::Arc<AppState>,
+    rig: askbar_server::testing::Rig,
 }
 
 async fn start_with_state() -> S {
+    start_state(true).await
+}
+
+/// `with_rig = false`: a state that sends no records and reads no audit store, as one started with no auditor is.
+async fn start_state(with_rig: bool) -> S {
     let dir = std::env::temp_dir().join(format!("server-token-{}", ulid::Ulid::new()));
     std::fs::create_dir_all(&dir).unwrap();
     let hash_file = dir.join("token.sha256");
     std::fs::write(&hash_file, hex(TOKEN)).unwrap();
     let db = askbar_server::Db::open_in_memory().unwrap();
     db.seed_server().unwrap();
+    // Replies go through an in-process gateway and auditor (ADR 0054).
+    let rig = askbar_server::testing::Rig::start().await;
     let state = AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), askbar_server::MIN_CLIENT);
+    let state = if with_rig { rig.attach(state).await } else { state };
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", l.local_addr().unwrap());
     let app = server_api::router(state.clone(), hash_file.clone());
     tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
-    S { t: T { url, hash_file, dir, http: reqwest::Client::new() }, state }
+    S { t: T { url, hash_file, dir, http: reqwest::Client::new() }, state, rig }
 }
 
 impl S {
@@ -635,6 +644,7 @@ async fn a_generation_with_the_mocks_usage_adds_to_the_overview_totals() {
         let client: String = db.conn().query_row("SELECT id FROM clients", [], |r| r.get(0)).unwrap();
         (user, client)
     };
+    s.rig.sync(&s.state); // the gateway gets the provider and its key
     let sub = askbar_server::generation::submit(
         &s.state,
         askbar_server::generation::Submit {
@@ -694,7 +704,7 @@ async fn audit_stack() -> AuditStack {
     out.read_line(&mut line).unwrap();
     std::thread::spawn(move || for _ in out.lines() {});
 
-    let (state, dir) = askbar_server::testing::state_with_audit(&format!("http://127.0.0.1:{port}/v1"));
+    let (state, dir, _rig) = askbar_server::testing::state_with_audit(&format!("http://127.0.0.1:{port}/v1")).await;
     let hash_file = dir.join("token.sha256");
     std::fs::write(&hash_file, hex(TOKEN)).unwrap();
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -792,9 +802,10 @@ async fn one_trace_returns_all_its_spans_and_unknown_ones_are_404() {
     assert_eq!(v["spans"][0]["name"], "kill_switch");
     assert_eq!(v["spans"][2]["parent_id"], v["spans"][1]["id"]);
     assert_eq!(v["spans"][2]["attrs"]["http_status"], 200);
-    // How many sealed items each span has: the attempt its request, the turn its reply, a gate none.
+    // How many sealed items each span has: the turn its request and its reply (the server adds both to the span the
+    // gateway opened), the attempt none (nothing went wrong), a gate none.
     let sealed: Vec<i64> = v["spans"].as_array().unwrap().iter().map(|s| s["sealed"].as_i64().unwrap()).collect();
-    assert_eq!(sealed, [0, 1, 1]);
+    assert_eq!(sealed, [0, 2, 0]);
     assert_eq!(a.get("/api/server/v1/audit/traces/no-such-trace").await.0, 404);
 }
 
@@ -831,8 +842,8 @@ async fn the_audit_endpoints_need_the_server_token_and_a_recording_store() {
         let r = a.http.get(format!("{}{p}", a.url)).send().await.unwrap();
         assert_eq!(r.status(), 401, "{p}");
     }
-    // A server with no audit store says so instead of pretending the trail is empty.
-    let s = start_with_state().await;
+    // A server with no way to read the audit store says so instead of pretending the trail is empty.
+    let s = start_state(false).await;
     let (st, _) = s.call(reqwest::Method::GET, "/api/server/v1/audit/stats", None).await;
     assert_eq!(st, 503);
 }
@@ -847,11 +858,12 @@ async fn sealed_payloads_are_served_as_ciphertext_only_and_unknown_spans_are_404
     let span_of =
         |kind: &str| spans["spans"].as_array().unwrap().iter().find(|s| s["kind"] == kind).unwrap()["id"].as_str().unwrap().to_string();
 
-    let (st, body) = a.get(&format!("/api/server/v1/audit/payloads/{}", span_of("attempt"))).await;
+    let (st, body) = a.get(&format!("/api/server/v1/audit/payloads/{}", span_of("turn"))).await;
     assert_eq!(st, 200);
     assert!(!body.contains("SECRET-WORD") && !body.contains("Anything else?"), "no plaintext: {body}");
     let list: serde_json::Value = serde_json::from_str(&body).unwrap();
-    assert_eq!(list.as_array().unwrap().len(), 1);
+    assert_eq!(list.as_array().unwrap().len(), 2, "the request and the reply");
+    let list = serde_json::json!([list.as_array().unwrap().iter().find(|p| p["role"] == "request").unwrap()]);
     assert_eq!(list[0]["role"], "request");
     assert_eq!(list[0]["key_id"], askbar_server::testing::test_audit_key().key_id.as_str());
     let ct = base64::engine::general_purpose::STANDARD.decode(list[0]["ciphertext_b64"].as_str().unwrap()).unwrap();
@@ -863,7 +875,7 @@ async fn sealed_payloads_are_served_as_ciphertext_only_and_unknown_spans_are_404
 
     let (_, body) = a.get(&format!("/api/server/v1/audit/payloads/{}", span_of("turn"))).await;
     let turn: serde_json::Value = serde_json::from_str(&body).unwrap();
-    assert_eq!(turn[0]["role"], "reply");
+    assert!(turn.as_array().unwrap().iter().any(|p| p["role"] == "reply"), "{turn}");
     assert!(!body.contains("Anything else?"));
 
     // A span that exists but has nothing sealed is an empty list; one that does not exist is 404.

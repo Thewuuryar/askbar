@@ -53,6 +53,8 @@ struct T {
     mock: Mock,
     /// The user's personal space, where these tests chat.
     space: Arc<askbar_server::Space>,
+    /// The in-process gateway and auditor the replies go through (ADR 0054).
+    _rig: askbar_server::testing::Rig,
 }
 
 async fn start() -> T {
@@ -66,14 +68,16 @@ async fn start() -> T {
     );
     askbar_server::testing::store_key(&db, &secrets, "p1", "sk-test");
     let code = askbar_server::testing::add_pair_code(&db, &user, "t");
-    let state = AppState::new(db, secrets, askbar_server::MIN_CLIENT);
+    let rig = askbar_server::testing::Rig::start().await;
+    let state = rig.attach(AppState::new(db, secrets, askbar_server::MIN_CLIENT)).await;
+    rig.sync(&state);
     let token = auth::redeem_pair_code(&state.db.lock().unwrap(), &code).unwrap().unwrap();
     let space = askbar_server::testing::personal_space(&state, &user);
     let app = askbar_server::client_router(state.clone());
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = l.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
-    T { addr, state, token, mock, space }
+    T { addr, state, token, mock, space, _rig: rig }
 }
 
 impl T {
@@ -260,8 +264,9 @@ async fn provider_failure_becomes_an_error_event_and_keeps_the_question() {
     let (name, ChatEvent::Error { message, code }) = events.last().unwrap() else { panic!("{events:?}") };
     assert_eq!(name, "error");
     assert_eq!(code.as_deref(), Some("provider_error"), "a program branches on the code, not the words");
-    assert!(message.contains("401"));
-    assert!(!message.contains("sk-test"));
+    // The provider's own words stay with the gateway, sealed in the audit (ADR 0054): the client gets our sentence.
+    assert!(message.contains("did not accept its key"), "{message}");
+    assert!(!message.contains("401") && !message.contains("Incorrect API key") && !message.contains("sk-test"), "{message}");
     assert_eq!(t.messages(), [("user".to_string(), "please fail".to_string())]);
 }
 
@@ -529,7 +534,8 @@ async fn a_failed_generation_row_is_an_error_row() {
     let rows = t.generations();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].0, "error");
-    assert!(rows[0].2.as_deref().unwrap_or("").contains("Incorrect API key"), "got {:?}", rows[0].2);
+    // Our sentence, not the provider's words (those are sealed in the audit, ADR 0054).
+    assert!(rows[0].2.as_deref().unwrap_or("").contains("did not accept its key"), "got {:?}", rows[0].2);
     assert_eq!(rows[0].3, None, "no reply text, so no assistant message");
 }
 

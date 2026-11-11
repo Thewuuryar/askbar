@@ -37,6 +37,8 @@ async fn load(State(f): State<Arc<FakeCaddy>>, headers: HeaderMap, body: String)
 }
 
 pub struct T {
+    /// The in-process auditor and gateway the server records to and reads from.
+    pub rig: askbar_server::testing::Rig,
     /// The in-process gateway the admin pushes to and asks for models and provider tests (ADR 0054).
     pub gateway: Arc<askbar_model_gateway::Gateway>,
     pub adm: String,
@@ -106,10 +108,9 @@ pub async fn start_with(caddy_up: bool, with_gateway: bool) -> T {
 
     let sdb = askbar_server::Db::open_in_memory().unwrap();
     sdb.seed_server().unwrap();
-    // The server records to a temp audit.db, so tests can put sealed content there and open it.
-    let (recorder, _audit_dir) = askbar_server::testing::audit_recorder();
-    let server =
-        AppState::new(sdb, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), askbar_server::MIN_CLIENT).with_audit(recorder);
+    // The server reads an in-process auditor, so tests can put sealed content there and open it (`rig.seed`).
+    let rig = askbar_server::testing::Rig::start().await;
+    let server = rig.attach(AppState::new(sdb, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), askbar_server::MIN_CLIENT)).await;
     let server_api_url = serve(askbar_server::server_api::router(server.clone(), hash_file)).await;
 
     let fake = Arc::new(FakeCaddy::default());
@@ -143,7 +144,7 @@ pub async fn start_with(caddy_up: bool, with_gateway: bool) -> T {
         .await
         .unwrap();
     let cookie = r.headers()["set-cookie"].to_str().unwrap().split(';').next().unwrap().to_string();
-    T { gateway, adm, cookie, http, admin, server, fake, dir, secrets_dir, caddy_socket }
+    T { rig, gateway, adm, cookie, http, admin, server, fake, dir, secrets_dir, caddy_socket }
 }
 
 impl T {

@@ -1,6 +1,6 @@
 //! Askbar server: the client API and, on its own listener, the server API the admin service uses.
 
-pub use askbar_audit as audit;
+pub mod audit;
 pub mod auth;
 pub mod backup;
 pub mod chat;
@@ -8,6 +8,7 @@ pub mod client_api;
 pub mod cost;
 pub mod db;
 pub mod error;
+pub mod gateway;
 pub mod generation;
 pub use askbar_service::ids;
 pub mod llm;
@@ -56,6 +57,10 @@ pub struct AppState {
     pub generations: generation::Generations,
     /// Where generations leave their audit trace. Records nothing unless `with_audit` set one.
     pub audit: audit::Recorder,
+    /// Where replies come from (ADR 0054). Without one, a generation fails and says there is no gateway.
+    pub gateway: Option<Arc<gateway::GatewayClient>>,
+    /// How the admin's Audit pages read the audit store (temporary, until plan step 2.5). Without one, they say so.
+    pub audit_reader: Option<Arc<audit::AuditReader>>,
     /// Tests only: replaces the configured generation timeout (see `testing`).
     generation_timeout_override: Mutex<Option<std::time::Duration>>,
     /// New on every start of the process, so the admin can tell a restart from a long silence
@@ -75,6 +80,8 @@ impl AppState {
             min_client: min_client.to_string(),
             generations: Default::default(),
             audit: audit::Recorder::noop(),
+            gateway: None,
+            audit_reader: None,
             generation_timeout_override: Mutex::new(None),
             boot_id: askbar_service::status::BootId::new(),
             restarter: Default::default(),
@@ -86,6 +93,20 @@ impl AppState {
     pub fn with_audit(self: Arc<Self>, recorder: audit::Recorder) -> Arc<AppState> {
         let mut state = Arc::try_unwrap(self).unwrap_or_else(|_| panic!("with_audit is for a state nothing else holds yet"));
         state.audit = recorder;
+        Arc::new(state)
+    }
+
+    /// Gives a fresh state the link to the gateway; without one no reply can be made.
+    pub fn with_gateway(self: Arc<Self>, gateway: Arc<gateway::GatewayClient>) -> Arc<AppState> {
+        let mut state = Arc::try_unwrap(self).unwrap_or_else(|_| panic!("with_gateway is for a state nothing else holds yet"));
+        state.gateway = Some(gateway);
+        Arc::new(state)
+    }
+
+    /// Gives a fresh state the link the Audit pages read the audit store through.
+    pub fn with_audit_reader(self: Arc<Self>, reader: Arc<audit::AuditReader>) -> Arc<AppState> {
+        let mut state = Arc::try_unwrap(self).unwrap_or_else(|_| panic!("with_audit_reader is for a state nothing else holds yet"));
+        state.audit_reader = Some(reader);
         Arc::new(state)
     }
 

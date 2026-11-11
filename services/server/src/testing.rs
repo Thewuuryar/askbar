@@ -108,26 +108,6 @@ pub fn state_for_tests() -> std::sync::Arc<crate::AppState> {
     crate::AppState::new(Db::open_in_memory().unwrap(), crate::secrets::Secrets::new(TEST_MASTER_KEY).unwrap(), crate::MIN_CLIENT)
 }
 
-/// A recorder writing `audit.db` in a fresh temp directory, which is returned too. For tests.
-pub fn audit_recorder() -> (crate::audit::Recorder, std::path::PathBuf) {
-    let dir = std::env::temp_dir().join(format!("askbar-audit-test-{}", ids::new_id()));
-    let db = crate::audit::AuditDb::open(&dir.join("audit.db")).expect("audit.db opens");
-    (crate::audit::Recorder::spawn(db, 1024), dir)
-}
-
-/// An `AppState` over an in-memory database with a provider "p1" pointing at `base_url` (its key
-/// stored), a user, and a recorder writing a temp `audit.db`; returns the state and that
-/// directory. For tests.
-pub fn state_with_audit(base_url: &str) -> (std::sync::Arc<crate::AppState>, std::path::PathBuf) {
-    let db = Db::open_in_memory().unwrap();
-    db.seed_server().unwrap();
-    let secrets = crate::secrets::Secrets::new(TEST_MASTER_KEY).unwrap();
-    add_provider(&db, provider("p1", "mock", base_url, "m"));
-    store_key(&db, &secrets, "p1", "sk-test");
-    let (recorder, dir) = audit_recorder();
-    (crate::AppState::new(db, secrets, crate::MIN_CLIENT).with_audit(recorder), dir)
-}
-
 /// `user_id`'s personal space, made if need be, as `GET /spaces` would list it. For tests that call
 /// `generation::submit` or read a space's store directly.
 pub fn personal_space(state: &crate::AppState, user_id: &str) -> std::sync::Arc<crate::Space> {
@@ -141,20 +121,26 @@ pub fn override_generation_timeout(state: &crate::AppState, d: std::time::Durati
     state.set_generation_timeout_override(Some(d));
 }
 
+#[cfg(feature = "test-rig")]
+pub mod rig;
+#[cfg(feature = "test-rig")]
+pub use rig::Rig;
+/// `state_with_audit` of old: a state with the provider "p1" at `base_url`, attached to a rig (see `Rig::state_with_provider`).
+#[cfg(feature = "test-rig")]
+pub async fn state_with_audit(base_url: &str) -> (std::sync::Arc<crate::AppState>, std::path::PathBuf, &'static Rig) {
+    Rig::state_with_provider(base_url).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::time::Duration;
 
     #[test]
-    fn new_records_nothing_and_with_audit_gives_a_state_its_recorder() {
+    fn a_state_records_nothing_until_it_is_given_an_auditor() {
         let plain = state_for_tests();
-        assert!(plain.audit.healthy() && plain.audit.dropped() == 0, "the default recorder is a healthy no-op");
-        let (state, dir) = state_with_audit("http://127.0.0.1:1/v1");
-        assert!(dir.join("audit.db").exists(), "the audit store is opened beside the state");
-        assert!(state.audit.healthy());
-        assert!(crate::store::load_provider(&state.db.lock().unwrap(), &state.secrets(), "p1").unwrap().is_some(), "with its provider");
-        let _ = std::fs::remove_dir_all(dir);
+        assert!(plain.audit.healthy(), "the default recorder is a healthy no-op");
+        assert!(plain.gateway.is_none() && plain.audit_reader.is_none());
     }
 
     #[test]

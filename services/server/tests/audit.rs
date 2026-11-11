@@ -10,8 +10,9 @@ use std::path::{Path, PathBuf};
 
 /// A server state whose audit recorder writes `audit.db` in a fresh temp directory, with a
 /// provider pointing at the mock on `mock_port`.
-fn audit_state(mock_port: u16) -> (std::sync::Arc<askbar_server::AppState>, PathBuf) {
-    askbar_server::testing::state_with_audit(&format!("http://127.0.0.1:{mock_port}/v1"))
+async fn audit_state(mock_port: u16) -> (std::sync::Arc<askbar_server::AppState>, PathBuf) {
+    let (state, dir, _rig) = askbar_server::testing::state_with_audit(&format!("http://127.0.0.1:{mock_port}/v1")).await;
+    (state, dir)
 }
 
 /// Runs one chat to the end through the generation code and returns its generation id.
@@ -40,12 +41,6 @@ async fn run_chat(state: &std::sync::Arc<askbar_server::AppState>, prompt: &str)
     .expect("the generation starts");
     let _: Vec<_> = sub.live.subscribe(0).collect().await; // to the end
     sub.generation_id
-}
-
-/// Opens `audit.db` in `dir` the way the server does at start-up: migrations, then the sweep of
-/// spans left `running`.
-fn start_up_audit(dir: &Path) {
-    askbar_server::audit::AuditDb::open(&dir.join("audit.db")).unwrap().sweep_running().unwrap();
 }
 
 fn read(dir: &Path) -> Connection {
@@ -79,7 +74,7 @@ fn start_mock() -> (Mock, u16) {
 #[tokio::test]
 async fn a_finished_generation_leaves_one_turn_span_with_its_final_status() {
     let (_mock, port) = start_mock();
-    let (state, dir) = audit_state(port);
+    let (state, dir) = audit_state(port).await;
     let trace = run_chat(&state, "hello").await;
     state.audit.flush().await;
     let db = read(&dir);
@@ -102,7 +97,7 @@ async fn a_finished_generation_leaves_one_turn_span_with_its_final_status() {
 #[tokio::test]
 async fn the_turn_span_names_the_space_and_the_conversation() {
     let (_mock, port) = start_mock();
-    let (state, dir) = audit_state(port);
+    let (state, dir) = audit_state(port).await;
     let trace = run_chat(&state, "hello").await;
     state.audit.flush().await;
     let attrs: String =
@@ -118,7 +113,7 @@ async fn the_turn_span_names_the_space_and_the_conversation() {
 #[tokio::test]
 async fn a_failed_generation_ends_its_turn_span_with_an_error_code() {
     let (_mock, port) = start_mock();
-    let (state, dir) = audit_state(port);
+    let (state, dir) = audit_state(port).await;
     let trace = run_chat(&state, "please fail").await;
     state.audit.flush().await;
     let (status, code): (String, Option<String>) = read(&dir)
@@ -130,7 +125,7 @@ async fn a_failed_generation_ends_its_turn_span_with_an_error_code() {
 #[tokio::test]
 async fn a_finished_generation_leaves_one_attempt_span_under_its_turn() {
     let (_mock, port) = start_mock();
-    let (state, dir) = audit_state(port);
+    let (state, dir) = audit_state(port).await;
     let trace = run_chat(&state, "hello").await;
     state.audit.flush().await;
     let db = read(&dir);
@@ -164,7 +159,7 @@ async fn a_finished_generation_leaves_one_attempt_span_under_its_turn() {
 #[tokio::test]
 async fn a_failed_attempt_records_its_error_code_and_status() {
     let (_mock, port) = start_mock();
-    let (state, dir) = audit_state(port);
+    let (state, dir) = audit_state(port).await;
     let trace = run_chat(&state, "please fail").await;
     state.audit.flush().await;
     let (status, code, attrs): (String, Option<String>, String) = read(&dir)
@@ -179,7 +174,7 @@ async fn a_failed_attempt_records_its_error_code_and_status() {
 #[tokio::test]
 async fn audit_db_contains_none_of_the_prompt_or_reply_text() {
     let (_mock, port) = start_mock();
-    let (state, dir) = audit_state(port);
+    let (state, dir) = audit_state(port).await;
     run_chat(&state, "SECRET-PROMPT-MARKER-7731 please").await;
     state.audit.flush().await;
     // The database file and its write-ahead log, byte for byte.
@@ -192,59 +187,11 @@ async fn audit_db_contains_none_of_the_prompt_or_reply_text() {
     }
 }
 
-#[test]
-fn a_span_still_running_at_startup_becomes_interrupted() {
-    let dir = std::env::temp_dir().join(format!("askbar-audit-sweep-{}", ulid::Ulid::new()));
-    std::fs::create_dir_all(&dir).unwrap();
-    start_up_audit(&dir); // creates the schema
-    {
-        let db = read(&dir);
-        db.execute(
-            "INSERT INTO spans (id, trace_id, kind, name, status, started_at) VALUES ('s1', 't1', 'turn', 'chat', 'running', 1)",
-            [],
-        )
-        .unwrap();
-        db.execute(
-            "INSERT INTO spans (id, trace_id, kind, name, status, started_at, ended_at) VALUES ('s2', 't1', 'attempt', 'x', 'done', 1, 2)",
-            [],
-        )
-        .unwrap();
-    }
-    start_up_audit(&dir); // a restart
-    let db = read(&dir);
-    let status = |id: &str| -> String { db.query_row("SELECT status FROM spans WHERE id = ?1", [id], |r| r.get(0)).unwrap() };
-    assert_eq!((status("s1").as_str(), status("s2").as_str()), ("interrupted", "done"));
-    let _ = std::fs::remove_dir_all(dir);
-}
-
-#[test]
-fn deleting_a_span_younger_than_seven_days_fails() {
-    let dir = std::env::temp_dir().join(format!("askbar-audit-del-{}", ulid::Ulid::new()));
-    std::fs::create_dir_all(&dir).unwrap();
-    start_up_audit(&dir);
-    let db = read(&dir);
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
-    db.execute(
-        "INSERT INTO spans (id, trace_id, kind, name, status, started_at, ended_at) VALUES ('new', 't', 'turn', 'chat', 'done', ?1, ?1)",
-        [now],
-    )
-    .unwrap();
-    db.execute(
-        "INSERT INTO spans (id, trace_id, kind, name, status, started_at, ended_at) VALUES ('old', 't', 'turn', 'chat', 'done', ?1, ?1)",
-        [now - 8 * 86400],
-    )
-    .unwrap();
-    let e = db.execute("DELETE FROM spans WHERE id = 'new'", []).unwrap_err();
-    assert!(e.to_string().contains("7 days"), "{e}");
-    assert_eq!(db.execute("DELETE FROM spans WHERE id = 'old'", []).unwrap(), 1, "older than a week may go");
-    let _ = std::fs::remove_dir_all(dir);
-}
-
 #[tokio::test]
 async fn a_queued_message_records_a_gate_span_named_queue_from_enqueue_to_start() {
     use futures_util::StreamExt;
     let (_mock, port) = start_mock();
-    let (state, dir) = audit_state(port);
+    let (state, dir) = audit_state(port).await;
     let (user, client) = {
         let db = state.db.lock().unwrap();
         let user = db.seed_server().unwrap();
@@ -307,69 +254,6 @@ async fn a_queued_message_records_a_gate_span_named_queue_from_enqueue_to_start(
     assert_eq!(names[3].0, "attempt");
 }
 
-#[tokio::test]
-async fn a_backed_up_audit_writer_refuses_new_generations_with_503_and_retry_after_but_lets_running_ones_finish() {
-    use askbar_server::audit::{AuditDb, Recorder};
-    use axum::response::IntoResponse;
-    use futures_util::StreamExt;
-    let (_mock, port) = start_mock();
-    let dir = std::env::temp_dir().join(format!("askbar-audit-backlog-{}", ulid::Ulid::new()));
-    let recorder = Recorder::spawn(AuditDb::open(&dir.join("audit.db")).unwrap(), 2); // a tiny queue
-    let db = askbar_server::Db::open_in_memory().unwrap();
-    let user = db.seed_server().unwrap();
-    let secrets = askbar_server::secrets::Secrets::new(askbar_server::testing::TEST_MASTER_KEY).unwrap();
-    askbar_server::testing::add_provider(&db, askbar_server::testing::provider("p1", "mock", &format!("http://127.0.0.1:{port}/v1"), "m"));
-    askbar_server::testing::store_key(&db, &secrets, "p1", "sk-test");
-    let state = askbar_server::AppState::new(db, secrets, askbar_server::MIN_CLIENT).with_audit(recorder.clone());
-    let send = |prompt: &str| {
-        askbar_server::generation::submit(
-            &state,
-            askbar_server::generation::Submit {
-                space: askbar_server::testing::personal_space(&state, &user),
-                user_id: user.clone(),
-                client_id: "d1".into(),
-                conversation_id: None,
-                provider_id: "p1".into(),
-                prompt: prompt.into(),
-                client_request_id: None,
-            },
-        )
-    };
-
-    assert!(recorder.healthy());
-    // The writer stalls, holding one event: from here the queue holds exactly its capacity, however slowly the
-    // writer's thread got going (a paused writer takes one event first, and the queue has room again).
-    recorder.stall_writer().await;
-    let running = send("hello").expect("accepted while the queue has room");
-    for _ in 0..50 {
-        if !recorder.healthy() {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    }
-    assert!(!recorder.healthy(), "the stalled writer let the queue fill");
-
-    let refused = send("one more").err().expect("refused");
-    assert_eq!(refused, askbar_server::generation::SubmitError::AuditBacklog);
-    let response = refused.into_response();
-    assert_eq!(response.status(), 503);
-    assert_eq!(response.headers()["retry-after"], askbar_server::generation::AUDIT_BACKLOG_RETRY_SECS.to_string());
-
-    // The one that was running finishes normally, whatever the audit store is doing.
-    let events: Vec<_> = running.live.subscribe(0).collect().await;
-    assert!(matches!(events.last(), Some(askbar_server::generation::GenEvent::Done)));
-    let space = askbar_server::testing::personal_space(&state, &user);
-    let status: String = space.lock().conn().query_row("SELECT status FROM generations", [], |r| r.get(0)).unwrap();
-    assert_eq!(status, "done");
-
-    // Once the writer catches up, new generations are accepted again.
-    recorder.pause_writer(false);
-    recorder.flush().await;
-    assert!(recorder.healthy());
-    assert!(send("and now").is_ok());
-    let _ = std::fs::remove_dir_all(dir);
-}
-
 // ------------------------------------------------------------------ sealed content (Phase 5)
 
 /// Gives `state` the test audit key, as the admin's snapshot would, and returns the matching secret
@@ -386,7 +270,7 @@ fn install_audit_key(state: &std::sync::Arc<askbar_server::AppState>) -> [u8; 32
 #[tokio::test]
 async fn sealed_content_is_stored_but_a_marker_never_appears_in_the_bytes_of_audit_db_or_its_wal() {
     let (_mock, port) = start_mock();
-    let (state, dir) = audit_state(port);
+    let (state, dir) = audit_state(port).await;
     let _secret = install_audit_key(&state);
     let trace = run_chat(&state, "SECRET-PROMPT-MARKER-5512 tell me something").await;
     state.audit.flush().await;
@@ -406,7 +290,7 @@ async fn sealed_content_is_stored_but_a_marker_never_appears_in_the_bytes_of_aud
 async fn a_generation_with_no_audit_key_is_refused_with_503_audit_key_missing() {
     use axum::response::IntoResponse;
     let (_mock, port) = start_mock();
-    let (state, _dir) = audit_state(port);
+    let (state, _dir) = audit_state(port).await;
     askbar_server::testing::update_snapshot(&state.db.lock().unwrap(), |s| s.audit_public_key = None); // the admin has not made a key
     let (user, client) = {
         let db = state.db.lock().unwrap();
@@ -473,7 +357,7 @@ fn open_payloads(dir: &Path, trace: &str, secret: [u8; 32]) -> Vec<(String, Stri
 #[tokio::test]
 async fn the_request_and_the_reply_are_stored_sealed_on_their_spans_and_open_with_the_key() {
     let (_mock, port) = start_mock();
-    let (state, dir) = audit_state(port);
+    let (state, dir) = audit_state(port).await;
     let secret = install_audit_key(&state);
     let trace = run_chat(&state, "What is the capital of Atlantis?").await;
     state.audit.flush().await;
@@ -482,7 +366,7 @@ async fn the_request_and_the_reply_are_stored_sealed_on_their_spans_and_open_wit
     let key_id = askbar_server::testing::test_audit_key().key_id;
     assert!(opened.iter().all(|p| p.2 == key_id), "each payload names the key that sealed it");
     let request = opened.iter().find(|p| p.1 == "request").expect("a request payload");
-    assert_eq!(request.0, "attempt", "the request belongs to the attempt");
+    assert_eq!(request.0, "turn", "the request belongs to the turn the gateway opened: the server only knows that span");
     let request: serde_json::Value = serde_json::from_str(&request.3).unwrap();
     assert!(request["system"].as_str().is_some_and(|s| !s.is_empty()));
     assert_eq!(request["messages"][0]["content"], "What is the capital of Atlantis?");
@@ -495,7 +379,7 @@ async fn the_request_and_the_reply_are_stored_sealed_on_their_spans_and_open_wit
 #[tokio::test]
 async fn a_provider_failure_seals_its_error_text_on_the_attempt() {
     let (_mock, port) = start_mock();
-    let (state, dir) = audit_state(port);
+    let (state, dir) = audit_state(port).await;
     let secret = install_audit_key(&state);
     let trace = run_chat(&state, "please fail").await;
     state.audit.flush().await;
@@ -509,9 +393,9 @@ async fn a_provider_failure_seals_its_error_text_on_the_attempt() {
 }
 
 #[tokio::test]
-async fn an_oversized_prompt_is_cut_at_256_kb_and_the_attempt_is_marked_truncated() {
+async fn an_oversized_prompt_is_cut_at_256_kb_and_the_turn_is_marked_request_truncated() {
     let (_mock, port) = start_mock();
-    let (state, dir) = audit_state(port);
+    let (state, dir) = audit_state(port).await;
     let secret = install_audit_key(&state);
     let prompt = format!("{}{}", "word ".repeat(70_000), "END-OF-PROMPT"); // 350 KB
     let trace = run_chat(&state, &prompt).await;
@@ -526,22 +410,22 @@ async fn an_oversized_prompt_is_cut_at_256_kb_and_the_attempt_is_marked_truncate
             read(&dir).query_row("SELECT attrs_json FROM spans WHERE trace_id = ?1 AND kind = ?2", [&trace, kind], |r| r.get(0)).unwrap();
         serde_json::from_str(&a.unwrap()).unwrap()
     };
-    assert_eq!(attrs("attempt")["truncated"], true);
-    assert_eq!(attrs("attempt")["http_status"], 200, "the other attributes are still there");
+    assert_eq!(attrs("turn")["request_truncated"], true);
+    assert_eq!(attrs("attempt")["http_status"], 200, "the attempt's own attributes (the gateway's) are still there");
     assert!(attrs("turn").get("truncated").is_none(), "the reply was small");
 
     // A normal prompt is not marked.
     let small = run_chat(&state, "short").await;
     state.audit.flush().await;
     let a: Option<String> =
-        read(&dir).query_row("SELECT attrs_json FROM spans WHERE trace_id = ?1 AND kind = 'attempt'", [&small], |r| r.get(0)).unwrap();
+        read(&dir).query_row("SELECT attrs_json FROM spans WHERE trace_id = ?1 AND kind = 'turn'", [&small], |r| r.get(0)).unwrap();
     assert!(!a.unwrap().contains("truncated"));
 }
 
 #[tokio::test]
 async fn each_try_is_an_attempt_span_with_its_retry_index() {
     let (_mock, port) = start_mock();
-    let (state, dir) = audit_state(port);
+    let (state, dir) = audit_state(port).await;
     let trace = run_chat(&state, "hello 429once audit-retry").await;
     state.audit.flush().await;
     let db = read(&dir);

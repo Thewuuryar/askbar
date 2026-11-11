@@ -15,12 +15,6 @@ fn data_dir() -> std::path::PathBuf {
     std::path::PathBuf::from(std::env::var("ASKBAR_DATA_DIR").unwrap_or_else(|_| "data".into()))
 }
 
-/// Where `audit.db` lives: `ASKBAR_AUDIT_DIR`, else the data directory. In the compose setup this
-/// is a volume only the server mounts.
-fn audit_dir() -> std::path::PathBuf {
-    std::env::var("ASKBAR_AUDIT_DIR").map(std::path::PathBuf::from).unwrap_or_else(|_| data_dir())
-}
-
 fn die(e: impl std::fmt::Display, code: i32) -> ! {
     eprintln!("error: {e}");
     std::process::exit(code)
@@ -65,25 +59,6 @@ async fn stop_on_signal(state: std::sync::Arc<askbar_server::AppState>) {
     tracing::info!("stopping: saving running replies");
     askbar_server::generation::shutdown(&state);
     std::process::exit(0);
-}
-
-/// Once a day (and shortly after start-up): delete audit records older than `audit_retention_days`
-/// from the snapshot. The setting is read each time, so a change applies the next day.
-async fn audit_retention_daily(state: std::sync::Arc<askbar_server::AppState>) {
-    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-    let mut tick = tokio::time::interval(std::time::Duration::from_secs(24 * 3600));
-    loop {
-        tick.tick().await;
-        let days = {
-            let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
-            askbar_server::snapshot::current(&db).ok().flatten().map(|s| s.audit_retention_days).unwrap_or(30)
-        };
-        match state.audit.prune(days, askbar_server::auth::now()).await {
-            Ok((0, 0)) => {}
-            Ok((spans, payloads)) => tracing::info!(spans, payloads, days, "removed audit records past retention"),
-            Err(e) => tracing::warn!("audit retention failed: {e}"),
-        }
-    }
 }
 
 /// Finished generation rows are only kept for a day; the messages they produced stay.
@@ -152,15 +127,27 @@ async fn main() {
             Err(e) => die(format!("could not clean up generations in space {}: {e}", space.id), 1),
         }
     }
-    let audit_db = askbar_server::audit::AuditDb::open(&audit_dir().join("audit.db")).unwrap_or_else(|e| die(e, 1));
-    match audit_db.sweep_running() {
-        Ok(0) => {}
-        Ok(n) => tracing::warn!(spans = n, "marked audit spans from the previous run as interrupted"),
-        Err(e) => die(format!("could not clean up the audit store: {e}"), 1),
-    }
-    let state = askbar_server::AppState::new(db, secrets, askbar_server::MIN_CLIENT)
+    // Records go to the auditor and replies come from the gateway, each over its own link (ADR 0010, ADR 0054). The
+    // auditor ends the spans an earlier process left running when this one says its boot ID.
+    let token_dir = std::env::var("ASKBAR_SERVER_TOKEN_DIR")
+        .ok()
+        .filter(|p| !p.trim().is_empty())
+        .map_or_else(|| "/server-token".into(), std::path::PathBuf::from);
+    let env_url =
+        |var: &str, default: &str| std::env::var(var).ok().filter(|u| !u.trim().is_empty()).unwrap_or_else(|| default.to_string());
+    let audit_url = env_url("ASKBAR_AUDIT_API_URL", "http://auditor:8083");
+    let audit_client = askbar_service::audit_client::AuditClient::new(&audit_url, token_dir.clone(), "server-auditor");
+    let state = askbar_server::AppState::new(db, secrets, askbar_server::MIN_CLIENT);
+    tokio::spawn(audit_client.clone().hello_until_done(state.boot_id.as_str().to_string()));
+    tokio::spawn(audit_client.clone().drain_forever());
+    let state = state
         .with_spaces(spaces)
-        .with_audit(askbar_server::audit::Recorder::spawn(audit_db, 4096));
+        .with_audit(askbar_server::audit::Recorder::new(audit_client))
+        .with_gateway(askbar_server::gateway::GatewayClient::new(
+            &env_url("ASKBAR_GATEWAY_URL", "http://gateway-server-host:8084"),
+            token_dir.clone(),
+        ))
+        .with_audit_reader(askbar_server::audit::AuditReader::new(&audit_url, token_dir));
     tokio::spawn(stop_on_signal(state.clone()));
     // POST /api/server/v1/restart saves running replies, as a stop does, then exits (ADR 0005).
     let on_stop = state.clone();
@@ -169,7 +156,6 @@ async fn main() {
         .set(askbar_service::restart::Restarter::new(state.boot_id.clone(), move || askbar_server::generation::shutdown(&on_stop)));
     // Docker does not restart an unhealthy container; the watchdog does, by exiting (ADR 0005).
     askbar_service::restart::start_watchdog(healthy);
-    tokio::spawn(audit_retention_daily(state.clone()));
     tokio::spawn(prune_generations_hourly(state.clone()));
     let token_hash = askbar_server::server_api::token_hash_path();
     askbar_server::server_api::check_token_hash_file(&token_hash).unwrap_or_else(|e| die(e, 1));

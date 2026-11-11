@@ -10,6 +10,8 @@ description = "Askbar server: history, providers and settings behind an HTTP API
 askbar-proto = { path = "../../crates/askbar-proto", features = ["axum"] }
 askbar-service = { path = "../../crates/askbar-service" }
 askbar-audit = { path = "../../crates/askbar-audit" }
+askbar-model-gateway = { path = "../model-gateway", optional = true }
+askbar-auditor = { path = "../auditor", optional = true }
 axum = "0.8"
 serde = { version = "1", features = ["derive"] }
 futures-util = "0.3"
@@ -29,7 +31,13 @@ thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = "0.3"
 
+[features]
+# Tests only: an in-process gateway and auditor (`testing::rig`), so a test of the server makes a reply the way the stack
+# does. Off in every image: the server carries no provider code (ADR 0054).
+test-rig = ["dep:askbar-model-gateway", "dep:askbar-auditor"]
+
 [dev-dependencies]
+askbar-server = { path = ".", features = ["test-rig"] }
 # YAML in safe Rust, to read our own OpenAPI files (it replaced serde_yaml_ng, built on the unmaintained unsafe-libyaml).
 serde-saphyr = { version = "2.1", default-features = false, features = ["deserialize"] }
 serde_json = "1"

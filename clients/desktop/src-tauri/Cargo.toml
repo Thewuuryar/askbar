@@ -35,7 +35,7 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 sha2 = "0.10"
 
 [dev-dependencies]
-askbar-server = { path = "../../../services/server" }
+askbar-server = { path = "../../../services/server", features = ["test-rig"] }
 axum = "0.8"
 rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }
 tokio = { version = "1", features = ["sync", "time", "macros", "rt-multi-thread", "net", "io-util"] }
