@@ -297,8 +297,7 @@ mod tests {
                 "server-model-gateway",
                 "admin-model-gateway",
                 "model-gateway-auditor",
-                "server-auditor",
-                "server-auditor-read"
+                "server-auditor"
             ]
         );
         let before = all(&root);
@@ -314,8 +313,7 @@ mod tests {
                     "server-model-gateway",
                     "admin-model-gateway",
                     "model-gateway-auditor",
-                    "server-auditor",
-                    "server-auditor-read"
+                    "server-auditor"
                 ]
             }
         );

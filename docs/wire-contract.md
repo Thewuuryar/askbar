@@ -278,25 +278,26 @@ this ([ADR 0022](adr/0022-api-path-conventions.md)); after 1.0, `v1` changes are
 - Cost is computed whenever it is read, from the provider's prices in the snapshot at that moment:
   uncached input x `price_in` + cached x `price_cached_in` + output x `price_out`, per million
   tokens (OpenAI-style input counts include the cached tokens; Anthropic's do not). A subscription
-  provider costs 0. A needed price that is missing gives `null`. The audit endpoints below carry it.
+  provider costs 0. A needed price that is missing gives `null`. The admin's audit endpoints below carry it.
 - Anthropic request bodies mark the system prompt and the older history cacheable; the cached
   tokens a provider reports are recorded on the attempt.
 
-## Audit (server API)
+## Audit (the admin reads the auditor)
 
-The admin service reads what the server recorded through three endpoints on the server API
-listener. They are not part of the client API: they need the server token, the client API
-has no such routes (`404`), and the admin never opens `audit.db` itself. Everything they return
-is **metadata** apart from the sealed payloads below, which are ciphertext the server cannot read.
-A server with no audit store answers `503`.
+The admin's Audit pages read the audit store from the auditor ([ADR 0051](adr/0051-auditor.md)) with the admin's own read
+token, over `audit-admin`; the server has no route for it (they were removed with plan step 2.5). The auditor holds no
+prices, so the admin applies its own and adds `cost` to what the auditor returns. The pages' routes are the admin's:
+`GET /api/admin/v1/audit/traces`, `.../traces/{id}` and `.../stats`, and each forwards only the query parameters named
+below. Everything they return is **metadata** apart from the sealed payloads, which are ciphertext the admin opens only
+with the passphrase. An auditor that cannot be reached is `503`.
 
-- `GET /api/server/v1/audit/traces?status=&provider=&before=&limit=`: one summary per generation,
+- `GET /api/admin/v1/audit/traces?status=&provider=&before=&limit=`: one summary per generation,
   newest first: `{"traces": [{"trace_id", "span_id", "status", "started_at", "ended_at", "user_id",
   "client_id", "tokens_in", "tokens_out", "tokens_cached", "error_code", "provider_id", "model",
   "ttft_ms", "latency_ms", "cost"}]}`. `status` filters on the turn's status, `provider` on the provider of
   its last attempt, `before` is a `trace_id` (only older traces, for paging), `limit` is 1 to 200
   (default 50). `trace_id` is the generation id.
-- `GET /api/server/v1/audit/traces/{id}`: `{"trace_id", "cost", "spans": [...]}`, every span of that
+- `GET /api/admin/v1/audit/traces/{id}`: `{"trace_id", "cost", "spans": [...]}`, every span of that
   generation in the order they began (`404` if there is none). A span has `id`, `parent_id`,
   `kind`, `name`, `status`, `started_at`, `ended_at`, `provider_id`, `model`,
   `tokens_in|out|cached`, `ttft_ms`, `error_code`, `user_id`, `client_id`, `cost` and `attrs` (a
@@ -304,7 +305,7 @@ A server with no audit store answers `503`.
   version may also carry `fallback_from`).
   `gate` spans (`kill_switch`, `budget`, `queue`) end `done` when they let it through and `blocked`
   when they refused it.
-- `GET /api/server/v1/audit/stats?since=<unix seconds>` (default: the last 24 hours):
+- `GET /api/admin/v1/audit/stats?since=<unix seconds>` (default: the last 24 hours):
   `{"since", "requests", "by_status": {...}, "error_rate", "latency_ms": {"p50","p95"},
   "ttft_ms": {"p50","p95"}, "tokens": {"in","out","cached"}, "cost", "cost_unknown_requests",
   "by_provider": [...], "by_day": [...]}` over generations that began at or after `since`.
@@ -312,7 +313,7 @@ A server with no audit store answers `503`.
   have `requests`, `tokens` and `cost`. A cost is `null`, and `cost_unknown_requests` says how many
   requests are the reason, when a price that was needed is missing.
 
-- `GET /api/server/v1/audit/payloads/{span_id}`: `[{"role", "key_id", "ciphertext_b64"}]`, the sealed
+- The auditor's `GET /api/audit/v1/spans/{span_id}/payloads` (the admin calls it when a passphrase opens a span): `[{"role", "key_id", "ciphertext_b64"}]`, the sealed
   content of one span exactly as stored (`404` for a span that does not exist, `[]` for one with
   nothing sealed). `role` is `request` (on an attempt: the system prompt and history as JSON),
   `reply` (on a turn) or `error` (on an attempt: the provider's error text, cut at 4 KB). Request

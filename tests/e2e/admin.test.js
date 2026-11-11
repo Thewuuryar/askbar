@@ -81,7 +81,7 @@ async function waitForPort(port) {
   run(path.join(ROOT, 'target/debug/askbar-admin'), [], {
     ASKBAR_ADMIN_SOCKET: sock, ASKBAR_ADMIN_DATA_DIR: dirs.adminData, ASKBAR_ADMIN_SECRETS_DIR: dirs.adminSecrets,
     ASKBAR_ADMIN_TOKEN_DIR: path.join(dirs.creds, 'admin-token'), ASKBAR_SERVER_API_URL: 'http://127.0.0.1:' + serverApiPort,
-    ASKBAR_GATEWAY_URL: 'http://127.0.0.1:' + gatewayAdminPort,
+    ASKBAR_GATEWAY_URL: 'http://127.0.0.1:' + gatewayAdminPort, ASKBAR_AUDIT_API_URL: 'http://127.0.0.1:' + auditPort,
     ASKBAR_PUBLIC_URL: 'http://localhost:' + api,
     ASKBAR_CPA_CONFIG_DIR: path.join(data, 'cpa-config'), ASKBAR_CPA_URL: 'http://127.0.0.1:' + await freePort(),
   });

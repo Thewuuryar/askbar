@@ -128,7 +128,7 @@ mod tests {
     fn a_state_records_nothing_until_it_is_given_an_auditor() {
         let plain = state_for_tests();
         assert!(plain.audit.healthy(), "the default recorder is a healthy no-op");
-        assert!(plain.gateway.is_none() && plain.audit_reader.is_none());
+        assert!(plain.gateway.is_none());
     }
 
     #[test]

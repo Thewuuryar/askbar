@@ -67,7 +67,6 @@ impl Rig {
             std::fs::write(token_dir.join("call").join(format!("{name}.token")), format!("{token}\n")).unwrap();
         };
         link("server-auditor", &audit_tokens, &server_tokens);
-        link("server-auditor-read", &audit_tokens, &server_tokens);
         link("model-gateway-auditor", &audit_tokens, &gw_tokens);
         link("server-model-gateway", &gw_tokens, &server_tokens);
         link("admin-auditor-read", &audit_tokens, &admin_tokens);
@@ -126,10 +125,7 @@ impl Rig {
         }
         // `flush` waits for the gateway's records too: a reply's spans come from both.
         let recorder = crate::audit::Recorder::new(client).also_flush(self.gateway.audit().clone());
-        state
-            .with_audit(recorder)
-            .with_gateway(crate::gateway::GatewayClient::new(&self.gateway_url, self.server_tokens.clone()))
-            .with_audit_reader(crate::audit::AuditReader::new(&self.audit_url, self.server_tokens.clone()))
+        state.with_audit(recorder).with_gateway(crate::gateway::GatewayClient::new(&self.gateway_url, self.server_tokens.clone()))
     }
 
     /// Remember `key` as the one to give the gateway for provider `id`, at the next `sync`.

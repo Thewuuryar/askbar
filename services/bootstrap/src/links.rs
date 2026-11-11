@@ -14,7 +14,7 @@ pub struct Link {
 }
 
 /// Only links whose receiver exists: `admin-server` (step 2.1), the auditor's two admin links (2.4), and the
-/// three `model-gateway` links (3.1, ADR 0054), and the server's two links to the auditor (3.1, second half);
+/// three `model-gateway` links (3.1, ADR 0054), and the server's link to the auditor (3.1, second half);
 /// `alerter` links come in phase 4.
 pub const LINKS: &[Link] = &[
     Link { name: "admin-server", caller: "admin", receiver: "server", prefix: "mgt_" }, // names-ok: the token prefix already issued
@@ -24,9 +24,6 @@ pub const LINKS: &[Link] = &[
     Link { name: "admin-model-gateway", caller: "admin", receiver: "model-gateway", prefix: "admgw_" },
     Link { name: "model-gateway-auditor", caller: "model-gateway", receiver: "auditor", prefix: "gwaud_" },
     Link { name: "server-auditor", caller: "server", receiver: "auditor", prefix: "srvaud_" },
-    // Temporary (plan step 3.1, PR G, until step 2.5 moves the Audit pages to the admin): the server reads the audit
-    // store for the admin's Audit pages and adds its prices, as it did when the store was its own.
-    Link { name: "server-auditor-read", caller: "server", receiver: "auditor", prefix: "srvrd_" },
 ];
 
 /// A service with a credential volume `<name>-token`, and the uid that reads it (ADR 0003).

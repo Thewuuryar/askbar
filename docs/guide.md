@@ -178,7 +178,7 @@ The admin allowlist is **off by default**: anyone who can reach `https://<hostna
 
 ### The Audit page
 
-The server records a trace of every reply: when, for whom, through which provider, how long each step took, how many tokens it used, which providers were tried and how it ended. The admin site's **Audit** page (`/admin/audit/`) shows it as an overview, a list of requests, a timeline for each one, routing (which providers answered and how often they failed), and an access history. The address follows the view, so one request can be bookmarked or sent: `/admin/audit/?view=trace&id=<trace id>`.
+The stack records a trace of every reply (the auditor keeps it; the admin reads it): when, for whom, through which provider, how long each step took, how many tokens it used, which providers were tried and how it ended. The admin site's **Audit** page (`/admin/audit/`) shows it as an overview, a list of requests, a timeline for each one, routing (which providers answered and how often they failed), and an access history. The address follows the view, so one request can be bookmarked or sent: `/admin/audit/?view=trace&id=<trace id>`.
 
 The **content** of messages (prompts, replies, provider errors) is *sealed*: the server encrypts it with a public key that is made from your audit passphrase (Argon2id to an X25519 key) and never holds the passphrase or the private key. It cannot read what it recorded. To read content, open a request on the Audit page and type the passphrase; the admin derives the key in memory, opens that one item, and the opening is written to the access history (the request, the key and the time, never the content).
 
