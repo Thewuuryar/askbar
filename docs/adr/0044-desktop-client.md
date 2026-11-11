@@ -19,6 +19,8 @@ The desktop app is how a person uses Askbar: a popup opened with a hotkey that a
   - `client.yaml` in the user's config directory: the server address, the certificate pin, the hotkey and local display overrides. It holds no secret;
   - the outbox, in the app's data directory: the text of messages sent and not yet taken by the server, so a message is never lost. There is no offline chat.
 - **Replies:** a reply runs on the server, so the app can close mid-reply and reattach with `?after=` from the last delta it saw. Stop asks the server to cancel.
+- **From plan step 5.1 (notice and warning):** the snapshot's `policy` reaches the client; the popup shows the privacy notice after pairing and whenever its version (a hash of its text and the retention days) changes, and the AI warning above the input box, both as text. If 0012 requires it, it records the acknowledgment through an additive route ([0012](0012-consent-notices-and-deletion.md)).
+- **From plan step 5.2 (links, images, Trusted Types):** a confirm bar shows the full URL before a link opens; `open_url` opens `http` and `https` only; remote image syntax renders as a link, so no remote resource is fetched. The popup's CSP requires Trusted Types, with one policy around the single `innerHTML` in `main.js` ([0016](0016-risk-register.md)).
 - **Rendering:** the popup's content security policy allows only its own scripts. Only the output of `renderMarkdown` reaches `innerHTML`; everything else is set as text. Under each message a meta row shows its date and time and, on a reply, a chip whose tooltip names the model and provider that wrote it.
 
 ## Alternatives considered
@@ -42,3 +44,4 @@ The app's Rust tests run against a real server built from this repository and th
 - 2026-11-10: a failed question stays marked, live and after reopening, with Try again and Edit for every failure kind (plan step 1.13).
 - 2026-11-10: the history panel copies a whole conversation as Markdown (plan step 1.13).
 - 2026-11-10: the popup can show a conversation newest first, under the input bar (`newest_first`; plan step 1.13).
+- 2026-11-11: design for plan steps 5.1 and 5.2 (#70, D15, D17, D18): the privacy notice and the AI warning, the link confirm bar, http(s)-only `open_url`, images as links, and Trusted Types. The code PRs add the 'built' lines.
