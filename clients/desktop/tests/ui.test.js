@@ -48,9 +48,9 @@ async function waitIdle(page) {
   // ------------------------------------------------------------ basics
   let page = await open(browser);
 
-  await step('starts as a bare input bar with focus', async () => {
+  await step('starts as an input bar with its footer, and focus', async () => {
     assert.equal(await page.isHidden('#thread'), true);
-    assert.equal(await page.isHidden('#foot'), true);
+    assert.equal(await page.isVisible('#foot'), true, 'the footer is always shown');
     assert.equal(await page.isHidden('#history'), true);
     assert.equal(await page.evaluate(() => document.activeElement.id), 'input');
     await shot(page, '01-idle');
@@ -629,7 +629,7 @@ async function waitIdle(page) {
     page = await open(browser, { models, activeModel: 'p1/gpt-x' });
     await step('several approved models: a picker shows them, with the one in use selected; the plain label is hidden', async () => {
       await page.waitForSelector('#model-picker:not([hidden])');
-      assert.equal(await page.isVisible('#foot'), true, 'the footer is there before the first question, so the model can be picked');
+      assert.equal(await page.isVisible('#foot'), true, 'the footer is always shown, so the model can be picked before the first question');
       assert.deepEqual(await page.$$eval('#model-picker option', (o) => o.map((x) => x.value)), ['p1/gpt-x', 'p1/gpt-y', 'p2/claude-z']);
       assert.equal(await page.inputValue('#model-picker'), 'p1/gpt-x');
       assert.equal(await page.isHidden('#model-label'), true);
@@ -669,7 +669,7 @@ async function waitIdle(page) {
     await page.context().close();
     page = await open(browser, { models: [models[0]] });
     await step('one approved model: no picker, just the label once there is a thread', async () => {
-      assert.equal(await page.isHidden('#foot'), true, 'nothing to choose, so nothing shows before the first question');
+      assert.equal(await page.isVisible('#foot'), true, 'the footer is always shown');
       await ask(page, 'hello');
       await waitIdle(page);
       await page.waitForSelector('#model-label:not([hidden])');

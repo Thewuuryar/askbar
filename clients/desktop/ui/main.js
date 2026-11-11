@@ -129,8 +129,7 @@
   function syncChrome() {
     const hasThread = state.messages.length > 0;
     el.thread.hidden = !hasThread;
-    // The footer holds the model picker too, so with a choice of models it is there before the first question.
-    el.foot.hidden = !hasThread && el.modelPicker.hidden;
+    el.foot.hidden = false; // always shown: it holds the model and the key hints
     el.card.dataset.thread = hasThread ? 'open' : 'empty';
     el.card.dataset.history = state.historyOpen ? 'open' : 'closed';
     el.history.hidden = !state.historyOpen;
