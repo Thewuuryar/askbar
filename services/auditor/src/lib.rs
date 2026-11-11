@@ -10,6 +10,7 @@
 //! - **No content.** Prompts and replies arrive sealed and leave sealed. The auditor has no key.
 
 pub mod disk;
+pub mod ingest;
 
 use askbar_audit::{AdminActionWrite, AppendError, PayloadWrite, Record, Recorder};
 use askbar_proto::audit as wire;
@@ -65,11 +66,20 @@ pub struct Auditor {
     /// The boot ID each service last announced, to tag the spans it appends with it.
     boots: Mutex<HashMap<String, String>>,
     boot_id: BootId,
+    /// Lines on the ingest listener that were not taken: not Caddy's, or too long (plan step 2.9).
+    pub access_refused: std::sync::atomic::AtomicU64,
 }
 
 impl Auditor {
     pub fn new(recorder: Recorder, limits: Limits, free_space: disk::FreeSpace) -> Arc<Auditor> {
-        Arc::new(Auditor { recorder, limits, free_space, boots: Mutex::new(HashMap::new()), boot_id: BootId::new() })
+        Arc::new(Auditor {
+            recorder,
+            limits,
+            free_space,
+            boots: Mutex::new(HashMap::new()),
+            boot_id: BootId::new(),
+            access_refused: Default::default(),
+        })
     }
 
     /// The retention setting now, as stored (default 30).
@@ -131,6 +141,7 @@ const ADMIN_READ: Routes = &[
     ("GET", "/token-counts"),
     ("GET", "/admin-actions"),
     ("GET", "/prunes"),
+    ("GET", "/access-logs"),
     ("GET", "/chain/head"),
     ("GET", "/chain/entries/*"),
     ("GET", "/chain/verify"),
@@ -211,6 +222,7 @@ pub fn router(auditor: Arc<Auditor>, links: Links) -> Router {
         .route(&full("/stats"), get(stats))
         .route(&full("/token-counts"), get(token_counts))
         .route(&full("/prunes"), get(prunes))
+        .route(&full("/access-logs"), get(list_access_logs))
         .route(&full("/chain/head"), get(chain_head))
         .route(&full("/chain/entries/{seq}"), get(chain_entry))
         .route(&full("/chain/verify"), get(chain_verify))
@@ -567,6 +579,18 @@ async fn chain_verify(State(a): St) -> Result<Json<askbar_audit::chain::Report>,
     Ok(Json(read(&a, askbar_audit::chain::verify).await?))
 }
 
+#[derive(serde::Deserialize)]
+struct AccessQuery {
+    before: Option<i64>,
+    limit: Option<usize>,
+}
+
+/// Caddy's access lines, newest first.
+async fn list_access_logs(State(a): St, Query(q): Query<AccessQuery>) -> Result<Json<serde_json::Value>, Failure> {
+    let rows = read(&a, move |conn| askbar_audit::list_access_logs(conn, q.before, q.limit)).await?;
+    Ok(Json(serde_json::Value::Array(rows)))
+}
+
 async fn prunes(State(a): St) -> Result<Json<serde_json::Value>, Failure> {
     Ok(Json(serde_json::Value::Array(read(&a, askbar_audit::list_prunes).await?)))
 }
@@ -589,7 +613,11 @@ async fn put_retention(State(a): St, body: Bytes) -> Result<Json<wire::Retention
 }
 
 async fn status(State(a): St) -> Json<serde_json::Value> {
-    Json(askbar_service::status::body(None, &a.boot_id))
+    let mut body = askbar_service::status::body(None, &a.boot_id);
+    // How many of Caddy's lines were not kept: dropped because the queue was busy, or not an access line (plan step 2.9).
+    body["access_lines_dropped"] = a.recorder.access_dropped().into();
+    body["access_lines_refused"] = a.access_refused.load(std::sync::atomic::Ordering::Relaxed).into();
+    Json(body)
 }
 
 /// Where the hash files are: `ASKBAR_AUDITOR_TOKEN_DIR`, default `/auditor-token`.
