@@ -6,6 +6,7 @@
 #   docker build --target bootstrap  -t askbar-bootstrap .
 #   docker build --target auditor    -t askbar-auditor .
 #   docker build --target model-gateway -t askbar-model-gateway .
+#   docker build --target alerter    -t askbar-alerter .
 #   docker build --target admin      -t askbar-admin  .
 #   docker build --target caddy      -t askbar-caddy  .
 #   docker build --target cpa        -t askbar-cpa    .
@@ -32,21 +33,21 @@ COPY services/auditor/Cargo.toml services/auditor/
 COPY services/model-gateway/Cargo.toml services/model-gateway/
 COPY services/alerter/Cargo.toml services/alerter/
 RUN for d in crates/* services/*; do mkdir -p "$d/src" && touch "$d/src/lib.rs" && echo 'fn main() {}' > "$d/src/main.rs"; done \
- && cargo build --release --locked -p askbar-server -p askbar-admin -p askbar-cpa-supervisor -p askbar-bootstrap -p askbar-auditor -p askbar-model-gateway \
+ && cargo build --release --locked -p askbar-server -p askbar-admin -p askbar-cpa-supervisor -p askbar-bootstrap -p askbar-auditor -p askbar-model-gateway -p askbar-alerter \
  && rm -rf crates/*/src services/*/src target/release/.fingerprint/askbar-*
 # The real sources. Removing the members' fingerprints above makes cargo rebuild them, whatever the
 # copied files' timestamps.
 COPY crates crates
 COPY services services
 # The desktop client is its own workspace (clients/desktop) and is not part of any image.
-RUN cargo build --release --locked -p askbar-server -p askbar-admin -p askbar-cpa-supervisor -p askbar-bootstrap -p askbar-auditor -p askbar-model-gateway
+RUN cargo build --release --locked -p askbar-server -p askbar-admin -p askbar-cpa-supervisor -p askbar-bootstrap -p askbar-auditor -p askbar-model-gateway -p askbar-alerter
 
 # --------------------------------------------------------------- bootstrap
 # Creates the per-link tokens and exits (ADR 0049). Runs as root with CHOWN as its only capability, no
 # network, and mounts the credential volumes only. No user is made: it must own a directory it writes
 # to, then give it to the service that reads it.
 FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc AS bootstrap
-RUN mkdir /server-token /admin-token /auditor-token /model-gateway-token
+RUN mkdir /server-token /admin-token /auditor-token /model-gateway-token /alerter-token
 COPY --from=build /src/target/release/askbar-bootstrap /usr/local/bin/askbar-bootstrap
 ENTRYPOINT ["askbar-bootstrap"]
 
@@ -130,6 +131,22 @@ ENV ASKBAR_GATEWAY_TOKEN_DIR=/model-gateway-token
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD ["askbar-model-gateway", "healthcheck"]
 ENTRYPOINT ["askbar-model-gateway"]
+
+# ----------------------------------------------------------------- alerter
+# Alert delivery (ADR 0055): /api/alerter/v1 on two listeners, one for the auditor and one for the admin, each on the address its
+# network alias gives (compose sets them). Runs as uid 10005 from its first instruction, with no capabilities. Two volumes: its
+# data volume `alerter-data` (the repeat ledger: keys, times and counts, no secret and no content), and the credential volume
+# `alerter-token`, mounted read-only. The delivery settings are the admin's and held in memory only. Docker makes a new
+# `alerter-data` volume owned by uid 10005, as /alerter-data is here.
+FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc AS alerter
+RUN groupadd --system --gid 10005 askbar-alerter && useradd --system --uid 10005 --gid 10005 --home-dir /alerter-data --shell /usr/sbin/nologin askbar-alerter \
+ && mkdir /alerter-data /alerter-token && chown askbar-alerter:askbar-alerter /alerter-data /alerter-token
+COPY --from=build /src/target/release/askbar-alerter /usr/local/bin/askbar-alerter
+USER askbar-alerter
+ENV ASKBAR_ALERTER_TOKEN_DIR=/alerter-token ASKBAR_ALERTER_DATA_DIR=/alerter-data
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD ["askbar-alerter", "healthcheck"]
+ENTRYPOINT ["askbar-alerter"]
 
 # ----------------------------------------------------------------- server
 # The server: the client API on 8080 and the server API on its own address. Runs as uid 10002,
