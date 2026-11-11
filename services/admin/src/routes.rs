@@ -84,6 +84,13 @@ impl Routes {
         self
     }
 
+    /// Everything registered so far that changes something is recorded before it is done, and refused when its record
+    /// cannot be appended (`actions`). Put it before the sign-in layer, so only a request that is let in is recorded.
+    pub fn audited(mut self, state: &Arc<AdminState>) -> Routes {
+        self.router = self.router.route_layer(middleware::from_fn_with_state(state.clone(), crate::actions::record_changes));
+        self
+    }
+
     /// Everything registered so far, being open, still wants the browser header on a change.
     pub fn browser_header(mut self) -> Routes {
         self.router = self.router.route_layer(middleware::from_fn(crate::web::require_admin_header));
