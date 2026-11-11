@@ -224,6 +224,30 @@ async function waitForPort(port) {
     assert.match(await page.innerText('.card[data-name="mock"]'), /key set/);
     assert.equal(await page.isHidden('#provider-form'), true);
   });
+  await step('approved models: none at first; pick two from the provider\'s list, choose the default, save, and it persists', async () => {
+    assert.match(await page.innerText('#catalog-approved'), /No model is approved yet/);
+    await page.selectOption('#catalog-provider', { label: 'mock' });
+    await page.click('#catalog-load');
+    await page.waitForSelector('#catalog-offered input[type=checkbox]');
+    assert.deepEqual((await page.$$eval('#catalog-offered span', (s) => s.map((x) => x.textContent.trim()))), ['mock-model', 'mock-model-2']);
+    await page.check('#catalog-offered label:nth-child(1) input');
+    assert.match(await page.innerText('#catalog-approved'), /mock \/ mock-model \(default\)/, 'the first one approved becomes the default');
+    await page.check('#catalog-offered label:nth-child(2) input');
+    await page.check('#catalog-approved [data-model$="/mock-model-2"] input[type=radio]');
+    assert.match(await page.innerText('#catalog-approved'), /mock \/ mock-model-2 \(default\)/);
+    await page.click('#catalog-save');
+    await page.waitForFunction(() => document.getElementById('catalog-status').textContent === 'Saved.');
+    await page.reload();
+    await page.waitForSelector('#catalog-approved [data-model]');
+    assert.equal(await page.locator('#catalog-approved [data-model]').count(), 2);
+    assert.match(await page.innerText('#catalog-approved'), /mock \/ mock-model-2 \(default\)/, 'the default persisted');
+    // Removing the default leaves the next one as the default, never none.
+    await page.click('#catalog-approved [data-model$="/mock-model-2"] button');
+    assert.match(await page.innerText('#catalog-approved'), /mock \/ mock-model \(default\)/);
+    await page.click('#catalog-discard');
+    await page.waitForFunction(() => document.querySelectorAll('#catalog-approved [data-model]').length === 2);
+    assert.equal(await page.locator('#catalog-approved [data-model]').count(), 2, 'discarding goes back to what is saved');
+  });
   await step('Test sends a message through the provider and shows success', async () => {
     await page.click('.card[data-name="mock"] [data-action="test"]');
     await page.waitForFunction(() => /Success|Failed/.test(document.querySelector('.card[data-name="mock"] .test-result').textContent));
@@ -368,9 +392,9 @@ async function waitForPort(port) {
     await page.click('#services .card[data-name="caddy"] [data-action="restart"]');
     await page.waitForFunction(() => /restart caddy · failed/.test(document.getElementById('services-recent').textContent));
   });
-  await step('clients see the provider without its key', async () => {
+  await step('clients see the approved models only with a token', async () => {
     // The API is the other listener; without a token it must refuse.
-    const r = await fetch(`http://127.0.0.1:${api}/api/client/v1/providers`, { headers: { 'x-askbar-client-version': '0.6.0' } });
+    const r = await fetch(`http://127.0.0.1:${api}/api/client/v1/models`, { headers: { 'x-askbar-client-version': '0.6.0' } });
     assert.equal(r.status, 401);
   });
   await step('clients: add a user, generate a pairing key for them, pair with it, then revoke the client', async () => {
@@ -596,17 +620,29 @@ async function waitForPort(port) {
     const h = { 'content-type': 'application/json', 'x-askbar-client-version': '0.6.0' };
     const { token } = await (await fetch(`http://127.0.0.1:${api}/api/client/v1/pairings`, { method: 'POST', headers: h, body: JSON.stringify({ code }) })).json();
     const auth = { ...h, authorization: 'Bearer ' + token };
-    const providers = await (await fetch(`http://127.0.0.1:${api}/api/client/v1/providers`, { headers: auth })).json();
-    const provider = providers.find((p) => p.name === providerName) || providers[0];
+    // The catalog reaches the gateway a moment after the admin saves it, and the server keeps it for a few seconds.
+    let model;
+    for (let i = 0; i < 40 && !model; i++) {
+      const list = await (await fetch(`http://127.0.0.1:${api}/api/client/v1/models`, { headers: auth })).json();
+      model = (list.models || []).find((m) => m.provider_name === providerName);
+      if (!model) await new Promise((r) => setTimeout(r, 500));
+    }
+    assert.ok(model, 'the approved model is offered to clients');
     const spaces = await (await fetch(`http://127.0.0.1:${api}/api/client/v1/spaces`, { headers: auth })).json();
     const space = spaces.find((s) => s.kind === 'personal').id;
-    const body = await (await fetch(`http://127.0.0.1:${api}/api/client/v1/spaces/${space}/chat`, { method: 'POST', headers: auth, body: JSON.stringify({ provider: provider.id, text }) })).text();
+    const body = await (await fetch(`http://127.0.0.1:${api}/api/client/v1/spaces/${space}/chat`, { method: 'POST', headers: auth, body: JSON.stringify({ model: model.id, text }) })).text();
     assert.match(body, /event: done/);
     return body;
   }
   await step('audit: the tab loads, has its five views and counts a real request', async () => {
     await page.evaluate(async ({ xss, mockUrl }) => {
-      await fetch('/api/admin/v1/providers', { method: 'POST', headers: { 'x-askbar-admin': '1', 'content-type': 'application/json' }, body: JSON.stringify({ name: xss, type: 'openai', base_url: mockUrl, model: xss, api_key: 'sk-audit' }) });
+      const H = { 'x-askbar-admin': '1', 'content-type': 'application/json' };
+      const made = await (await fetch('/api/admin/v1/providers', { method: 'POST', headers: H, body: JSON.stringify({ name: xss, type: 'openai', base_url: mockUrl, model: xss, api_key: 'sk-audit' }) })).json();
+      // The model is approved like any other (ADR 0014), next to the ones already approved.
+      const cat = await (await fetch('/api/admin/v1/catalog', { headers: H })).json();
+      cat.models.push({ provider_id: made.id, model: xss });
+      const saved = await fetch('/api/admin/v1/catalog', { method: 'PUT', headers: H, body: JSON.stringify(cat) });
+      if (!saved.ok) throw new Error('the catalog was refused: ' + saved.status);
     }, { xss: XSS, mockUrl: `http://127.0.0.1:${mockPort}/v1` });
     await auditChat('audit question', XSS);
     await openPage('audit');

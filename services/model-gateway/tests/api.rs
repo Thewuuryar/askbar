@@ -6,7 +6,7 @@ use askbar_audit::{AuditDb, Recorder};
 use askbar_auditor::{disk::FreeSpace, Auditor, Limits};
 use askbar_model_gateway::{admin_links, admin_router, server_links, server_router, Gateway};
 use askbar_proto::gateway::{ChatEvent, ChatMessage, ChatRequest, FailureClass, GatewayConfig, GatewayProvider};
-use askbar_proto::{AuditKey, SseParser};
+use askbar_proto::{model_id, AuditKey, CatalogEntry, ModelList, SseParser};
 use askbar_service::audit_client::AuditClient;
 use askbar_service::restart::Restarter;
 use askbar_service::status::BootId;
@@ -220,6 +220,18 @@ fn config(rig: &Rig, version: u64, models: &[(&str, &str)]) -> GatewayConfig {
         kill_switch: false,
         kill_switch_aborts_running: true,
         paused_users: vec![],
+        // Every pair is approved, the first the default (ADR 0014).
+        catalog: models.iter().map(|(id, m)| CatalogEntry { provider_id: (*id).into(), model: (*m).into() }).collect(),
+        default_model: models.first().map(|(id, m)| model_id(id, m)),
+    }
+}
+
+/// The model the tests' configurations approve for a provider id.
+fn model_of(provider_id: &str) -> &'static str {
+    match provider_id {
+        "bad" => "m-fail",
+        "down" => "m-500",
+        _ => "m",
     }
 }
 
@@ -231,6 +243,7 @@ impl Rig {
     fn request(&self, provider_id: &str, generation: &str, text: &str) -> ChatRequest {
         ChatRequest {
             provider_id: provider_id.into(),
+            model: model_of(provider_id).into(),
             user_id: "user1".into(),
             client_id: Some("client1".into()),
             space_id: Some("space1".into()),
@@ -826,4 +839,88 @@ async fn a_kill_switch_set_not_to_stop_running_replies_lets_them_finish_and_refu
         events.extend(parser.feed(&chunk.unwrap()).into_iter().map(|ev| serde_json::from_str::<ChatEvent>(&ev.data).unwrap()));
     }
     assert!(matches!(events.last(), Some(ChatEvent::Done { .. })), "the running one finished: {events:?}");
+}
+
+// ------------------------------------------------------------------ the model catalog (ADR 0014)
+
+async fn catalog_of(rig: &Rig, base: &str, token: &str) -> reqwest::Response {
+    rig.http.get(format!("{base}/api/model-gateway/v1/catalog")).bearer_auth(token).send().await.unwrap()
+}
+
+#[tokio::test]
+async fn the_catalog_is_served_to_the_server_with_its_default() {
+    let rig = rig().await;
+    assert_eq!(catalog_of(&rig, &rig.server, SRV).await.status(), 503, "no settings yet, no catalog");
+    let mut cfg = config(&rig, 1, &[("p", "m"), ("bad", "m-fail")]);
+    cfg.default_model = Some(model_id("bad", "m-fail"));
+    assert_eq!(rig.push(&cfg).await.status(), 200);
+    let list: ModelList = catalog_of(&rig, &rig.server, SRV).await.json().await.unwrap();
+    assert_eq!(list.default.as_deref(), Some("bad/m-fail"));
+    let ids: Vec<_> = list.models.iter().map(|m| (m.id.as_str(), m.provider_name.as_str(), m.model.as_str())).collect();
+    assert_eq!(ids, [("p/m", "mock-p", "m"), ("bad/m-fail", "mock-bad", "m-fail")]);
+    // The admin's listener has no such route: it pushes the catalog, the server reads it.
+    assert_eq!(catalog_of(&rig, &rig.admin, ADM).await.status(), 404);
+}
+
+#[tokio::test]
+async fn a_catalog_needs_a_default_that_is_in_it_and_only_names_known_providers() {
+    let rig = rig().await;
+    let mut no_default = config(&rig, 1, &[("p", "m")]);
+    no_default.default_model = None;
+    let mut outside = config(&rig, 1, &[("p", "m")]);
+    outside.default_model = Some("p/other".into());
+    let mut stranger = config(&rig, 1, &[("p", "m")]);
+    stranger.catalog.push(CatalogEntry { provider_id: "nobody".into(), model: "m".into() });
+    let mut twice = config(&rig, 1, &[("p", "m")]);
+    twice.catalog.push(CatalogEntry { provider_id: "p".into(), model: "m".into() });
+    let mut empty_with_default = config(&rig, 1, &[("p", "m")]);
+    empty_with_default.catalog.clear();
+    let mut blank = config(&rig, 1, &[("p", "m")]);
+    blank.catalog[0].model = "  ".into();
+    for (why, bad) in [
+        ("no default", no_default),
+        ("a default outside the catalog", outside),
+        ("an unknown provider", stranger),
+        ("a model listed twice", twice),
+        ("a default with nothing approved", empty_with_default),
+        ("a blank model", blank),
+    ] {
+        assert_eq!(rig.push(&bad).await.status(), 400, "{why}");
+    }
+    // Nothing approved at all is allowed: it is how an install starts, and every reply is refused until the admin chooses.
+    let mut none = config(&rig, 2, &[("p", "m")]);
+    none.catalog.clear();
+    none.default_model = None;
+    assert_eq!(rig.push(&none).await.status(), 200);
+    let (status, body) = problem_of(rig.chat_raw(&rig.request("p", "gen-nothing-approved", "hello")).await).await;
+    assert_eq!((status, body["error"].as_str()), (400, Some("model_not_approved")));
+}
+
+#[tokio::test]
+async fn a_model_outside_the_catalog_is_refused_with_a_gate_span_and_no_provider_call() {
+    let rig = rig().await;
+    rig.push(&config(&rig, 1, &[("p", "m")])).await;
+    let mut req = rig.request("p", "gen-unapproved", "hello");
+    req.model = "m-other".into();
+    let (status, body) = problem_of(rig.chat_raw(&req).await).await;
+    assert_eq!((status, body["error"].as_str()), (400, Some("model_not_approved")));
+    assert_eq!(rig.provider_calls(), 0, "no provider was called");
+    let rows = rig.wait_rows("SELECT kind, name, status, error_code FROM spans WHERE trace_id = 'gen-unapproved'").await;
+    assert_eq!(rows[0], vec![json!("gate"), json!("model_catalog"), json!("blocked"), json!("model_not_approved")]);
+    assert_eq!(rig.rows("SELECT COUNT(*) FROM spans WHERE trace_id = 'gen-unapproved' AND kind IN ('turn', 'attempt')")[0][0], 0);
+    // The approved one still works.
+    assert!(matches!(rig.chat(&rig.request("p", "gen-approved", "hello")).await.last(), Some(ChatEvent::Done { .. })));
+}
+
+#[tokio::test]
+async fn the_model_called_is_the_one_asked_for_not_the_providers_own() {
+    let rig = rig().await;
+    let mut cfg = config(&rig, 1, &[("p", "m")]);
+    cfg.catalog.push(CatalogEntry { provider_id: "p".into(), model: "m-second".into() });
+    assert_eq!(rig.push(&cfg).await.status(), 200);
+    let mut req = rig.request("p", "gen-second", "hello");
+    req.model = "m-second".into();
+    assert!(matches!(rig.chat(&req).await.last(), Some(ChatEvent::Done { .. })));
+    let rows = rig.wait_rows("SELECT DISTINCT model FROM spans WHERE trace_id = 'gen-second' AND kind IN ('turn', 'attempt')").await;
+    assert_eq!(rows, vec![vec![json!("m-second")]]);
 }

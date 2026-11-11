@@ -121,7 +121,7 @@ pub fn client_routes(state: &Arc<AppState>) -> routes::Routes {
     let protected = Routes::new()
         // Lets a client check that its token is still accepted.
         .get(&v1("/me"), || async { StatusCode::NO_CONTENT })
-        .get(&v1("/providers"), client_api::providers)
+        .get(&v1("/models"), client_api::models)
         .get(&v1("/me/prefs"), client_api::get_prefs)
         .put(&v1("/me/prefs"), client_api::put_prefs)
         .get(&v1("/me/display-defaults"), client_api::display_defaults)

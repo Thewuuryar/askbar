@@ -309,6 +309,7 @@ components:
           - budget_exceeded
           - kill_switch
           - user_paused
+          - model_not_approved
           - audit_key_missing
           - audit_backlog
           - client_too_old

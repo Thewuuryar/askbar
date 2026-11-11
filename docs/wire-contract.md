@@ -66,23 +66,27 @@ Tests check that each file lists exactly the routes the code registers.
    user; a sixth is `429 too_many_attempts` with `Retry-After`. The server keeps only the code's hash.
 4. An administrator can revoke a client; its token then gets `401`.
 
-## Providers
+## Models
 
-`GET /api/client/v1/providers` returns a list of
-`{"id": "<ULID>", "name": "...", "type": "openai" | "anthropic", "model": "..."}`,
-the default provider first, then the rest by name. Keys never appear.
+`GET /api/client/v1/models` returns `{"models": [{"id", "provider_id", "provider_name", "model"}], "default": "<id>" | null}`:
+the models the administrator approved (the catalog, [ADR 0014](adr/0014-model-gateway-and-providers.md)), which the
+server asks the model gateway for. Keys never appear. An install that has approved nothing answers an empty list and
+`null`, and no send is accepted until it does.
 
-**Providers are addressed by `id`, never by name.** `ChatRequest.provider` and the
-active-provider preference hold an id; a name is not accepted in place of one (`404`).
+**Models are addressed by `provider/model`**: the provider's id, a slash, and the model's own name (which may contain
+slashes, so split at the first one). `ChatRequest.model` and the model preference hold such an id; a name is not
+accepted in place of one. A send that names no model uses `default`. Anything the catalog does not approve is
+`400 model_not_approved`, from the server and again from the gateway, whose copy decides. A conversation stores the
+model of its latest message (`Conversation.model`), so a client can show it next time; each message may name another.
 
 ## Preferences and display defaults
 
 Both follow the signed-in user, so all of a user's clients see the same values.
 
-- `GET /api/client/v1/me/prefs` returns `{"active_provider_id": "<id>" | null}`. `null` means
-  nothing was chosen; clients then use the first provider in the list.
-- `PUT /api/client/v1/me/prefs` with the same shape replaces it and returns it. An id that is
-  not a provider is `404` and changes nothing.
+- `GET /api/client/v1/me/prefs` returns `{"active_model": "<provider/model>" | null}`. `null` means
+  nothing was chosen; clients then use the catalog's default.
+- `PUT /api/client/v1/me/prefs` with the same shape replaces it and returns it. A model the catalog
+  does not approve is `400 model_not_approved` and changes nothing.
 - `GET /api/client/v1/me/display-defaults` (read-only) returns
   `{"theme": "auto"|"light"|"dark", "width", "max_height", "history_width", "top_percent", "hide_on_blur", "newest_first"}`:
   the user's own defaults if the administrator set them, otherwise the server-wide ones.

@@ -48,9 +48,9 @@ async function waitIdle(page) {
   // ------------------------------------------------------------ basics
   let page = await open(browser);
 
-  await step('starts as a bare input bar with focus', async () => {
+  await step('starts as an input bar with its footer, and focus', async () => {
     assert.equal(await page.isHidden('#thread'), true);
-    assert.equal(await page.isHidden('#foot'), true);
+    assert.equal(await page.isVisible('#foot'), true, 'the footer is always shown');
     assert.equal(await page.isHidden('#history'), true);
     assert.equal(await page.evaluate(() => document.activeElement.id), 'input');
     await shot(page, '01-idle');
@@ -619,12 +619,71 @@ async function waitIdle(page) {
   });
   await page.context().close();
 
+  // ------------------------------------------------- the model picker (ADR 0014)
+  {
+    const models = [
+      { id: 'p1/gpt-x', label: 'gpt-x via OpenAI' },
+      { id: 'p1/gpt-y', label: 'gpt-y via OpenAI' },
+      { id: 'p2/claude-z', label: 'claude-z via Anthropic' },
+    ];
+    page = await open(browser, { models, activeModel: 'p1/gpt-x' });
+    await step('several approved models: a picker shows them, with the one in use selected; the plain label is hidden', async () => {
+      await page.waitForSelector('#model-picker:not([hidden])');
+      assert.equal(await page.isVisible('#foot'), true, 'the footer is always shown, so the model can be picked before the first question');
+      assert.deepEqual(await page.$$eval('#model-picker option', (o) => o.map((x) => x.value)), ['p1/gpt-x', 'p1/gpt-y', 'p2/claude-z']);
+      assert.equal(await page.inputValue('#model-picker'), 'p1/gpt-x');
+      assert.equal(await page.isHidden('#model-label'), true);
+    });
+    await step('picking a model is remembered for new chats, and the next send names it', async () => {
+      await page.selectOption('#model-picker', 'p2/claude-z');
+      assert.deepEqual(await calls(page, 'set_active_model'), [{ id: 'p2/claude-z' }]);
+      await ask(page, 'first question');
+      await waitIdle(page);
+      const asks = await calls(page, 'ask');
+      assert.equal(asks[asks.length - 1].model, 'p2/claude-z');
+    });
+    await step('each message may pick another; the conversation remembers its latest, and a new chat starts from the chosen model', async () => {
+      await page.selectOption('#model-picker', 'p1/gpt-y');
+      await ask(page, 'second question');
+      await waitIdle(page);
+      let asks = await calls(page, 'ask');
+      assert.equal(asks[asks.length - 1].model, 'p1/gpt-y');
+      assert.equal(await page.evaluate(() => window.__db.convs[0].model), 'p1/gpt-y', 'the conversation stored it');
+      // Another chat, with another model, then back to the first: the picker follows each conversation.
+      await page.keyboard.press('Control+n');
+      await page.selectOption('#model-picker', 'p1/gpt-x');
+      await ask(page, 'a different chat');
+      await waitIdle(page);
+      await page.keyboard.press('Control+h');
+      await page.waitForSelector('#history .conv');
+      await page.locator('#history .conv').filter({ hasText: 'first question' }).locator('.open').click();
+      await page.waitForFunction(() => document.querySelectorAll('.msg.user').length === 2);
+      assert.equal(await page.inputValue('#model-picker'), 'p1/gpt-y', 'the first chat shows its own latest model');
+      await ask(page, 'back in the first');
+      await waitIdle(page);
+      asks = await calls(page, 'ask');
+      assert.equal(asks[asks.length - 1].model, 'p1/gpt-y', 'and sends with it');
+      await page.keyboard.press('Control+n');
+      assert.equal(await page.inputValue('#model-picker'), 'p1/gpt-x', 'a new chat uses the model chosen last for new chats');
+    });
+    await page.context().close();
+    page = await open(browser, { models: [models[0]] });
+    await step('one approved model: no picker, just the label once there is a thread', async () => {
+      assert.equal(await page.isVisible('#foot'), true, 'the footer is always shown');
+      await ask(page, 'hello');
+      await waitIdle(page);
+      await page.waitForSelector('#model-label:not([hidden])');
+      assert.equal(await page.isHidden('#model-picker'), true);
+    });
+    await page.context().close();
+  }
+
   // ------------------------------------------------- server states
   const STATES = {
     offline: { kind: 'offline', message: 'Server offline. Could not reach http://localhost:8080. Check that it is running and that you are on the right network.' },
     rejected: { kind: 'rejected', message: 'Token rejected. The server no longer accepts this app; it may have been revoked.' },
     update_needed: { kind: 'update_needed', message: 'Update needed. This version of Askbar is too old for the server.' },
-    provider_missing: { kind: 'provider_missing', message: 'The provider you picked no longer exists on the server. Pick another.', providers: [{ id: 'p1', name: 'alpha' }, { id: 'p2', name: 'beta' }] },
+    model_missing: { kind: 'model_missing', message: 'The model you picked is not approved any more. Pick another.', models: [{ id: 'p1/m', label: 'm via alpha' }, { id: 'p2/m', label: 'm via beta' }] },
   };
 
   page = await open(browser);
@@ -642,7 +701,7 @@ async function waitIdle(page) {
       assert.equal(await page.isVisible('#status-actions [data-action="retry"]'), true);
       await shot(page, `09-status-${kind}`);
     });
-    if (kind !== 'provider_missing') {
+    if (kind !== 'model_missing') {
       await step(`${kind}: sending fails visibly, and Retry clears the banner once the server is back`, async () => {
         await ask(page, 'hello');
         await waitIdle(page);
@@ -726,14 +785,14 @@ async function waitIdle(page) {
     await p3.context().close();
   }
 
-  page = await open(browser, { status: STATES.provider_missing });
-  await step('provider_missing: picking another provider fixes it and updates the label', async () => {
+  page = await open(browser, { status: STATES.model_missing });
+  await step('model_missing: picking another model fixes it and updates the label', async () => {
     await page.waitForSelector('#status:not([hidden])');
-    const labels = await page.locator('#status-actions [data-action="provider"]').allInnerTexts();
-    assert.deepEqual(labels, ['Use alpha', 'Use beta']);
-    await page.click('#status-actions [data-action="provider"] >> text=Use beta');
+    const labels = await page.locator('#status-actions [data-action="model"]').allInnerTexts();
+    assert.deepEqual(labels, ['Use m via alpha', 'Use m via beta']);
+    await page.click('#status-actions [data-action="model"] >> text=Use m via beta');
     await page.waitForSelector('#status', { state: 'hidden' });
-    assert.deepEqual(await calls(page, 'set_active_provider'), [{ id: 'p2' }]);
+    assert.deepEqual(await calls(page, 'set_active_model'), [{ id: 'p2/m' }]);
     await ask(page, 'works now');
     await waitIdle(page);
     assert.match(await page.innerText('#model-label'), /via beta/);

@@ -9,6 +9,7 @@ use crate::AppState;
 use askbar_audit::{AuditDb, Recorder};
 use askbar_auditor::{disk::FreeSpace, Auditor, Limits};
 use askbar_proto::gateway::{GatewayConfig, GatewayProvider};
+use askbar_proto::CatalogEntry;
 use askbar_service::audit_client::AuditClient;
 use askbar_service::restart::Restarter;
 use askbar_service::status::BootId;
@@ -159,6 +160,15 @@ impl Rig {
                 billing: p.billing,
             })
             .collect();
+        let mut ordered: Vec<_> = snap.providers.iter().collect();
+        ordered.sort_by(|a, b| a.name.cmp(&b.name));
+        if let Some(pos) = snap.default_provider_id.as_ref().and_then(|id| ordered.iter().position(|p| &p.id == id)) {
+            let first = ordered.remove(pos);
+            ordered.insert(0, first);
+        }
+        let catalog: Vec<CatalogEntry> =
+            ordered.iter().map(|p| CatalogEntry { provider_id: p.id.clone(), model: p.model.clone() }).collect();
+        let default_model = catalog.first().map(CatalogEntry::id);
         let config = GatewayConfig {
             version: snap.version,
             providers,
@@ -168,6 +178,9 @@ impl Rig {
             kill_switch: snap.kill_switch,
             kill_switch_aborts_running: snap.kill_switch_aborts_running,
             paused_users: snap.paused_user_ids,
+            // Every provider's own model is approved, and the snapshot's default provider's is the default (else the first by name).
+            catalog,
+            default_model,
         };
         self.gateway.apply_config(&config).expect("the snapshot makes a usable gateway configuration");
     }

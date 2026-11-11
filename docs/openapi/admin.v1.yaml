@@ -584,7 +584,10 @@ paths:
           $ref: '#/components/responses/ServerUnavailable'
     delete:
       operationId: deleteProvider
-      summary: Delete a provider.
+      summary: Delete a provider. Its approved models leave the catalog with it.
+      description: >
+        Refused with `409 conflict` while the provider's model is the catalog's default and other models are approved:
+        choose another default first.
       security:
         - adminSession: []
         - adminApiKey: []
@@ -595,6 +598,57 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '502':
+          $ref: '#/components/responses/ServerUnavailable'
+  /api/admin/v1/catalog:
+    get:
+      operationId: getCatalog
+      summary: The approved models and the default.
+      description: >
+        The models people may use (ADR 0014), in the order they were saved, and the one that answers when a message
+        names none. A new install has none approved, and nothing answers until some are.
+      security:
+        - adminSession: []
+        - adminApiKey: []
+      responses:
+        '200':
+          description: The catalog.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Catalog'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    put:
+      operationId: putCatalog
+      summary: Replace the approved models and the default.
+      description: >
+        One change: the whole list and its default. Every model names an existing provider, none is listed twice, and a
+        catalog with any model needs a default that is one of them (`400` otherwise). Pick models from what
+        `POST /providers/models` returns for each provider. The gateway has the new catalog within a moment; the
+        change is recorded like every other.
+      security:
+        - adminSession: []
+        - adminApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Catalog'
+      responses:
+        '200':
+          description: Saved. The catalog as it now is.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Catalog'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '502':
           $ref: '#/components/responses/ServerUnavailable'
   /api/admin/v1/providers/models:
@@ -1455,6 +1509,7 @@ components:
           - budget_exceeded
           - kill_switch
           - user_paused
+          - model_not_approved
           - audit_key_missing
           - audit_backlog
           - client_too_old
@@ -1559,6 +1614,24 @@ components:
         key_missing:
           type: boolean
           description: The server reports it holds no key for this provider, though one was sent. Enter the key again. Never true for the managed provider.
+    Catalog:
+      type: object
+      required: [models, default]
+      properties:
+        models:
+          type: array
+          items:
+            type: object
+            required: [provider_id, model]
+            properties:
+              provider_id:
+                type: string
+              model:
+                type: string
+                description: The model's own name, 1 to 200 characters. It may contain slashes.
+        default:
+          type: [string, 'null']
+          description: "`provider/model` of one of `models`. Present exactly when `models` is not empty."
     ProviderInput:
       type: object
       required: [name, type, model]

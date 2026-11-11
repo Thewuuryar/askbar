@@ -44,6 +44,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 pub const DEFAULT_PORT: u16 = 8084;
 const MAX_BODY: usize = 4 * 1024 * 1024;
 const MAX_KEY_CHARS: usize = 4096;
+const MAX_MODEL_CHARS: usize = 200;
 const MAX_RETRIES: u32 = 2;
 const RETRY_BACKOFF: [Duration; 2] = [Duration::from_millis(250), Duration::from_secs(1)];
 /// Provider error text kept with an attempt is cut here (ADR 0011).
@@ -66,6 +67,10 @@ struct Applied {
     kill_switch: bool,
     aborts_running: bool,
     paused: BTreeSet<String>,
+    /// The approved models, `(provider id, model)`; a reply asks for one of these or is refused (ADR 0014).
+    catalog: BTreeSet<(String, String)>,
+    /// The same, as the server is shown it, with the default.
+    choices: askbar_proto::ModelList,
 }
 
 /// A reply that is running, so a stop can reach it: whose it is, and the channel that says why it must end.
@@ -209,7 +214,7 @@ fn finish(status: &str) -> SpanFinish {
 /// What one link may call: methods and paths after `/api/model-gateway/v1`.
 type Routes = &'static [(&'static str, &'static str)];
 
-const SERVER_ROUTES: Routes = &[("POST", "/chat")];
+const SERVER_ROUTES: Routes = &[("POST", "/chat"), ("GET", "/catalog")];
 const ADMIN_ROUTES: Routes =
     &[("GET", "/status"), ("PUT", "/config"), ("POST", "/restart"), ("POST", "/models"), ("POST", "/providers/*/test")];
 
@@ -268,8 +273,10 @@ pub fn routes() -> Vec<RouteEntry> {
 
 /// The server's listener.
 pub fn server_router(gw: Arc<Gateway>, links: Links) -> Router {
-    let protected =
-        Router::new().route(&full("/chat"), post(chat)).layer(axum::middleware::from_fn_with_state(links, askbar_service::links::require));
+    let protected = Router::new()
+        .route(&full("/chat"), post(chat))
+        .route(&full("/catalog"), get(catalog))
+        .layer(axum::middleware::from_fn_with_state(links, askbar_service::links::require));
     shell(gw, protected)
 }
 
@@ -306,6 +313,15 @@ async fn status(State(gw): State<Arc<Gateway>>) -> Json<serde_json::Value> {
 }
 
 // ------------------------------------------------------------------ models and the provider test
+
+/// `GET /catalog`: the approved models and the default, for the server to offer clients and to check a send against.
+async fn catalog(State(gw): State<Arc<Gateway>>) -> Result<Json<askbar_proto::ModelList>, Failure> {
+    let Some(cfg) = gw.applied() else {
+        return Err(ApiError::new(ErrorCode::NotConfigured, "The gateway has not received its settings yet. Try again in a few seconds.")
+            .retry_after(5));
+    };
+    Ok(Json(cfg.choices.clone()))
+}
 
 /// `POST /models`: the models a provider offers. Always `200`; `ok: false` and a sentence when it could not say.
 async fn list_models(State(gw): State<Arc<Gateway>>, Json(req): Json<models::ModelsRequest>) -> Json<models::ModelsResult> {
@@ -362,6 +378,36 @@ fn check_config(c: &GatewayConfig) -> Result<Applied, String> {
     if c.paused_users.len() > 10_000 || c.paused_users.iter().any(|u| !valid_id(u)) {
         return Err("A paused user is an id of 1 to 64 letters, digits, - or _ (at most 10,000 of them).".into());
     }
+    let mut catalog = BTreeSet::new();
+    let mut choices = Vec::new();
+    for e in &c.catalog {
+        let Some(p) = providers.get(&e.provider_id) else {
+            return Err("The catalog names a provider that is not in the configuration.".into());
+        };
+        if e.model.trim().is_empty() || e.model.chars().count() > MAX_MODEL_CHARS || e.model.chars().any(char::is_control) {
+            return Err(format!("A model name is 1 to {MAX_MODEL_CHARS} characters, with no control characters."));
+        }
+        if !catalog.insert((e.provider_id.clone(), e.model.clone())) {
+            return Err("The catalog lists a model twice.".into());
+        }
+        choices.push(askbar_proto::ModelChoice {
+            id: e.id(),
+            provider_id: e.provider_id.clone(),
+            provider_name: p.name.clone(),
+            model: e.model.clone(),
+        });
+    }
+    // One default, in the catalog, whenever there is a catalog (ADR 0014); none for an empty one.
+    match (&c.default_model, catalog.is_empty()) {
+        (None, true) => {}
+        (None, false) => return Err("The catalog needs a default model.".into()),
+        (Some(_), true) => return Err("An empty catalog has no default model.".into()),
+        (Some(d), false) => {
+            if !choices.iter().any(|m| &m.id == d) {
+                return Err("The default model is not in the catalog.".into());
+            }
+        }
+    }
     Ok(Applied {
         version: c.version,
         providers,
@@ -372,6 +418,8 @@ fn check_config(c: &GatewayConfig) -> Result<Applied, String> {
         kill_switch: c.kill_switch,
         aborts_running: c.kill_switch_aborts_running,
         paused: c.paused_users.iter().cloned().collect(),
+        catalog,
+        choices: askbar_proto::ModelList { models: choices, default: c.default_model.clone() },
     })
 }
 
@@ -472,6 +520,12 @@ impl Gateway {
             refuse_at_gate(self, req, "user_pause", "user_paused", serde_json::json!({ "paused": true }));
             return Err(ApiError::new(ErrorCode::UserPaused, "Replies are paused for this user by the administrator."));
         }
+        // Only an approved model is called, whatever the server asked (ADR 0014). The model's name is not recorded in the
+        // gate: it is the caller's text, and the catalog already says what is approved.
+        if !cfg.catalog.contains(&(req.provider_id.clone(), req.model.clone())) {
+            refuse_at_gate(self, req, "model_catalog", "model_not_approved", serde_json::json!({ "approved": false }));
+            return Err(ApiError::new(ErrorCode::ModelNotApproved, "That model is not approved. Pick another one."));
+        }
         let (daily, monthly) = (cfg.budget.daily_tokens, cfg.budget.monthly_tokens);
         if (daily.is_none() && monthly.is_none()) || cfg.free.contains(&req.provider_id) {
             return Ok(());
@@ -555,9 +609,11 @@ async fn chat(
     if !valid_id(&req.generation_id) || !valid_id(&req.user_id) {
         return Err(bad("generation_id and user_id are 1 to 64 letters, digits, - or _."));
     }
-    let Some(provider) = cfg.providers.get(&req.provider_id).cloned() else {
+    let Some(mut provider) = cfg.providers.get(&req.provider_id).cloned() else {
         return Err(ApiError::new(ErrorCode::NotFound, "No such provider."));
     };
+    // The model asked for; `gates` below refuses it unless the catalog approves it for this provider.
+    provider.model = req.model.clone();
     let messages: Vec<ChatMessage> = req.messages.iter().map(|m| ChatMessage::new(&m.role, &m.content)).collect();
     if llm::normalize(&messages).is_empty() {
         return Err(bad("There is nothing to send."));

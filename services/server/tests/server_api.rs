@@ -556,6 +556,7 @@ async fn a_generation_with_the_mocks_usage_adds_to_the_overview_totals() {
             client_id: client,
             conversation_id: None,
             provider_id: "p1".into(),
+            model: "m".into(),
             prompt: "hello".into(),
             client_request_id: None,
         },

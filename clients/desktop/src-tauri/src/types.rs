@@ -103,22 +103,30 @@ impl From<crate::outbox::OutboxEntry> for UnsentMessage {
 /// Something wrong between this client and its backend, with a way forward in the UI.
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct ClientStatus {
-    /// "offline", "rejected", "not_paired", "update_needed", "provider_missing" or "problem".
+    /// "offline", "rejected", "not_paired", "update_needed", "model_missing" or "problem".
     pub kind: String,
     pub message: String,
-    /// For "provider_missing": the providers the user can pick instead.
-    pub providers: Vec<ProviderChoice>,
+    /// For "model_missing": the approved models the user can pick instead.
+    pub models: Vec<ModelOption>,
 }
 
+/// An approved model, for a button or a list: its id (`provider/model`) and the words that name it.
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
-pub struct ProviderChoice {
+pub struct ModelOption {
     pub id: String,
-    pub name: String,
+    pub label: String,
+}
+
+/// The models to pick from and the one in use: what the person chose if it is still approved, else the default.
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct ModelPicker {
+    pub models: Vec<ModelOption>,
+    pub active: Option<String>,
 }
 
 impl ClientStatus {
     pub fn new(kind: &str, message: impl Into<String>) -> ClientStatus {
-        ClientStatus { kind: kind.into(), message: message.into(), providers: Vec::new() }
+        ClientStatus { kind: kind.into(), message: message.into(), models: Vec::new() }
     }
 }
 

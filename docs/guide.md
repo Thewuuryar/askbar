@@ -67,7 +67,7 @@ ui:                            # optional; anything left out follows the server'
   width: 640
 ```
 
-The active provider and your other preferences are stored on the server per user. Tray icon > **Reload config** applies `hotkey` and `ui` changes.
+The model you chose for new chats and your other preferences are stored on the server per user. Tray icon > **Reload config** applies `hotkey` and `ui` changes.
 
 ## Using it
 

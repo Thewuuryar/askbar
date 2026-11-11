@@ -354,6 +354,8 @@ pub async fn delete_provider(State(state): St, Path(id): Path<String>) -> Result
                 "This provider is kept by the admin and cannot be deleted. Disconnect the accounts on the Services tab instead.",
             ));
         }
+        // Its approved models go with it, and not while it holds the default of a catalog that has others.
+        crate::catalog::drop_provider(c, &id)?;
         let n = c.execute("DELETE FROM providers WHERE id = ?1", [&id]).map_err(internal)?;
         if n == 0 {
             return Err(err(StatusCode::NOT_FOUND, "No such provider."));

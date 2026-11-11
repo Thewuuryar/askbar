@@ -4,7 +4,7 @@
 //! (`POST /chat`, a Server-Sent Events stream). A provider's error text is not here: the server gets a
 //! code and a class, and the text goes to the auditor sealed.
 
-use crate::{AuditKey, Billing, Budget};
+use crate::{AuditKey, Billing, Budget, CatalogEntry};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
@@ -71,6 +71,14 @@ pub struct GatewayConfig {
     /// replies are stopped too.
     #[serde(default)]
     pub paused_users: Vec<String>,
+    /// The approved models (ADR 0014): a reply may use one of these and nothing else, so an empty catalog approves
+    /// nothing. The gateway serves it to the server (`GET /catalog`).
+    #[serde(default)]
+    pub catalog: Vec<CatalogEntry>,
+    /// The catalog's default, `provider/model`: what a send that names no model uses. Present exactly when the catalog
+    /// is not empty.
+    #[serde(default)]
+    pub default_model: Option<String>,
 }
 
 fn yes() -> bool {
@@ -92,6 +100,8 @@ pub struct ChatMessage {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ChatRequest {
     pub provider_id: String,
+    /// The model to call, one the catalog approves for this provider.
+    pub model: String,
     pub user_id: String,
     #[serde(default)]
     pub client_id: Option<String>,
@@ -176,6 +186,8 @@ mod tests {
             kill_switch: false,
             kill_switch_aborts_running: true,
             paused_users: vec![],
+            catalog: vec![],
+            default_model: None,
         };
         for shown in [format!("{p:?}"), format!("{p:#?}"), format!("{cfg:?}")] {
             assert!(!shown.contains("sk-marker-secret"), "{shown}");
@@ -190,6 +202,7 @@ mod tests {
             (cfg.budget, cfg.kill_switch, cfg.kill_switch_aborts_running, cfg.paused_users),
             (Budget::default(), false, true, vec![])
         );
+        assert_eq!((cfg.catalog, cfg.default_model), (vec![], None), "no catalog approves no model");
         let p: GatewayProvider = serde_json::from_str(r#"{"id":"p","name":"n","type":"openai","model":"m"}"#).unwrap();
         assert_eq!(p.billing, Billing::Metered, "metered unless it says it is a subscription");
     }

@@ -318,6 +318,15 @@ button { font: inherit; color: inherit; }
   color: var(--muted);
 }
 .foot .hints { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.model-picker {
+  max-width: 55%;
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 1px 4px;
+}
 
 /* ------------------------------------------------------------- history */
 

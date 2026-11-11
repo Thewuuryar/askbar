@@ -56,6 +56,8 @@ struct Stack {
     m1: Mock,
     m2: Mock,
     user: String,
+    /// The model each provider approves (the catalog has just that one): p1's, then p2's.
+    models: [String; 2],
     _dir: std::path::PathBuf,
     /// The in-process gateway and auditor the state's replies go through (kept for `sync` when a test changes a provider).
     #[allow(dead_code)]
@@ -83,7 +85,7 @@ async fn stack(model1: &str, model2: &str, p2_extra: serde_json::Value) -> Stack
     };
     // The gateway holds the keys and the providers: give it what was just stored (ADR 0054).
     rig.sync(&state);
-    Stack { state, m1, m2, user, _dir: dir, rig }
+    Stack { state, m1, m2, user, models: [model1.to_string(), model2.to_string()], _dir: dir, rig }
 }
 
 impl Stack {
@@ -100,6 +102,7 @@ impl Stack {
                 client_id: "d1".into(),
                 conversation_id: None,
                 provider_id: provider_id.into(),
+                model: self.models[usize::from(provider_id == "p2")].clone(),
                 prompt: prompt.into(),
                 client_request_id: None,
             },
@@ -436,6 +439,7 @@ async fn turning_the_kill_switch_on_with_abort_stops_running_replies_and_clears_
             client_id: "d1".into(),
             conversation_id: Some(first.conversation_id.clone()),
             provider_id: "p1".into(),
+            model: s.models[0].clone(),
             prompt: "waiting".into(),
             client_request_id: None,
         },
@@ -490,6 +494,7 @@ async fn turning_it_on_without_abort_lets_running_replies_finish_but_still_clear
             client_id: "d1".into(),
             conversation_id: Some(first.conversation_id.clone()),
             provider_id: "p1".into(),
+            model: s.models[0].clone(),
             prompt: "waiting".into(),
             client_request_id: None,
         },

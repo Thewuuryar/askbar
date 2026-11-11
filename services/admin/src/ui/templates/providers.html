@@ -13,7 +13,8 @@
         <select id="p-type"><option value="openai">openai (OpenAI-compatible)</option><option value="anthropic">anthropic</option></select>
       </label>
       <label>Base URL <input id="p-base-url" placeholder="https://api.openai.com/v1"></label>
-      <label>Model
+      {% call b::hint("The model the Test button asks. Which models people may use is chosen under Approved models, below.") %}{% endcall %}
+      <label>Test model
         <input id="p-model" required>
         <select id="p-model-list" hidden aria-label="Model"></select>
       </label>
@@ -37,4 +38,20 @@
       </div>
       {% call b::error_line("provider-error") %}{% endcall %}
     </form>
+    <section id="catalog-section">
+      <h3>Approved models</h3>
+      {% call b::hint("People can only use the models approved here, and a message that names none uses the default. A new install has none approved, so nothing answers until you approve some: pick a provider, load its models, tick the ones to approve, choose the default and save.") %}{% endcall %}
+      <div id="catalog-approved"></div>
+      <div class="row">
+        <label>Provider <select id="catalog-provider"></select></label>
+        <button type="button" id="catalog-load" class="secondary">Load models</button>
+        <span id="catalog-status" class="hint" role="status"></span>
+      </div>
+      <div id="catalog-offered"></div>
+      <div class="row">
+        <button type="button" id="catalog-save">Save approved models</button>
+        <button type="button" id="catalog-discard" class="secondary">Discard changes</button>
+      </div>
+      {% call b::error_line("catalog-error") %}{% endcall %}
+    </section>
 {% endblock %}

@@ -3,9 +3,9 @@
 use crate::client_config::{check_server_url, merge_ui, ClientConfig};
 use crate::outbox::{Outbox, OutboxEntry};
 use crate::tokens::TokenStore;
-use crate::types::{ClientStatus, Emit, PendingReply, ProviderChoice, Settings, StreamEvent};
+use crate::types::{ClientStatus, Emit, ModelOption, ModelPicker, PendingReply, Settings, StreamEvent};
 use askbar_proto::{
-    ChatEvent, ChatRequest, Conversation, ConversationDetail, DisplaySettings, Message, PendingGeneration, Prefs, ProviderInfo, SpaceInfo,
+    ChatEvent, ChatRequest, Conversation, ConversationDetail, DisplaySettings, Message, ModelList, PendingGeneration, Prefs, SpaceInfo,
     SseParser,
 };
 use futures_util::{FutureExt, StreamExt};
@@ -376,14 +376,25 @@ impl Inner {
         resp.json().await.map_err(|e| format!("The server sent an unexpected reply: {e}"))
     }
 
-    async fn active_provider(&self) -> Result<String, String> {
+    /// The model the person chose for their chats (`provider/model`), or an empty string when they chose none, which the
+    /// server answers with the catalog's default.
+    async fn active_model(&self) -> Result<String, String> {
         let prefs: Prefs = self.get_json(&askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, "/me/prefs")).await?;
-        if let Some(id) = prefs.active_provider_id.filter(|id| !id.trim().is_empty()) {
-            return Ok(id);
-        }
-        let list: Vec<ProviderInfo> = self.get_json(&askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, "/providers")).await?;
-        list.into_iter().next().map(|p| p.id).ok_or_else(|| "The server has no providers configured yet.".into())
+        Ok(prefs.active_model.map(|m| m.trim().to_string()).unwrap_or_default())
     }
+}
+
+/// The model in use: the one the person chose if it is still approved, else the default.
+fn in_use<'a>(list: &'a ModelList, chosen: Option<&str>) -> Option<&'a askbar_proto::ModelChoice> {
+    let chosen = chosen.map(str::trim).unwrap_or("");
+    list.models
+        .iter()
+        .find(|m| !chosen.is_empty() && m.id == chosen)
+        .or_else(|| list.models.iter().find(|m| Some(&m.id) == list.default.as_ref()))
+}
+
+fn option_of(m: &askbar_proto::ModelChoice) -> ModelOption {
+    ModelOption { id: m.id.clone(), label: format!("{} via {}", m.model, m.provider_name) }
 }
 
 /// A send the server did not take, told the way the window can act on it.
@@ -429,6 +440,10 @@ fn refusal_for(p: &Seen, retry_after: Option<u64>) -> Option<Refusal> {
         "user_paused" => (
             "user_paused",
             "Replies are paused for you by the administrator. Your message is kept; send it again when they are back.".to_string(),
+        ),
+        "model_not_approved" => (
+            "model_not_approved",
+            "That model is not approved (any more). Pick another one. Your message is kept.".to_string(),
         ),
         "audit_key_missing" => (
             "audit_key_missing",
@@ -530,20 +545,19 @@ impl Remote {
             },
             Err(_) => Prefs::default(),
         };
-        let providers: Vec<ProviderInfo> = match quick(&askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, "/providers")) {
+        let models: ModelList = match quick(&askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, "/models")) {
             Ok(req) => match i.send(req).await {
                 Ok(r) => r.json().await.unwrap_or_default(),
-                Err(_) => Vec::new(),
+                Err(_) => ModelList::default(),
             },
-            Err(_) => Vec::new(),
+            Err(_) => ModelList::default(),
         };
-        let wanted = prefs.active_provider_id.as_deref().unwrap_or("").trim();
-        let active = providers.iter().find(|p| wanted.is_empty() || p.id == wanted);
+        let active = in_use(&models, prefs.active_model.as_deref());
         Ok(Settings {
             ui: merge_ui(&display, &cfg.ui),
             hotkey: cfg.hotkey.clone(),
-            provider: active.map(|p| p.name.clone()).unwrap_or_default(),
-            model: active.map(|p| p.model.clone()).unwrap_or_default(),
+            provider: active.map(|m| m.provider_name.clone()).unwrap_or_default(),
+            model: active.map(|m| m.model.clone()).unwrap_or_default(),
         })
     }
 
@@ -586,34 +600,42 @@ impl Remote {
             Ok(StatusCode::SERVICE_UNAVAILABLE) => return Some(ClientStatus::new("problem", SETUP_PENDING)),
             Ok(s) => return Some(ClientStatus::new("problem", format!("The server answered {s}."))),
         }
-        let providers: Vec<ProviderInfo> =
-            i.get_json(&askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, "/providers")).await.ok()?;
+        let models: ModelList = i.get_json(&askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, "/models")).await.ok()?;
         let prefs: Prefs = i.get_json(&askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, "/me/prefs")).await.ok()?;
-        let wanted = prefs.active_provider_id.unwrap_or_default();
+        let wanted = prefs.active_model.unwrap_or_default();
         let wanted = wanted.trim();
-        if providers.is_empty() {
-            return Some(ClientStatus::new("problem", "The server has no providers yet. Add one on its admin page."));
+        if models.models.is_empty() {
+            return Some(ClientStatus::new(
+                "problem",
+                "No model is approved on the server yet. The administrator can approve some on its admin page.",
+            ));
         }
-        if !wanted.is_empty() && !providers.iter().any(|p| p.id == wanted) {
-            let mut st = ClientStatus::new("provider_missing", "The provider you picked no longer exists on the server. Pick another.");
-            st.providers = providers.into_iter().map(|p| ProviderChoice { id: p.id, name: p.name }).collect();
+        if !wanted.is_empty() && !models.models.iter().any(|m| m.id == wanted) {
+            let mut st = ClientStatus::new("model_missing", "The model you picked is not approved any more. Pick another.");
+            st.models = models.models.iter().map(option_of).collect();
             return Some(st);
         }
         None
     }
 
-    pub async fn set_active_provider(&self, id: String) -> Result<(), String> {
+    /// Remembers the model this person's chats use, on the server, so every app of theirs follows. The server refuses
+    /// one that is not approved.
+    pub async fn set_active_model(&self, id: String) -> Result<(), String> {
         let i = self.inner()?;
         let req = i
             .request(Method::PUT, &askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, "/me/prefs"))?
             .timeout(REQUEST_TIMEOUT)
-            .json(&Prefs { active_provider_id: Some(id) });
+            .json(&Prefs { active_model: Some(id) });
         i.send(req).await.map(|_| ())
     }
 
-    #[cfg(test)]
-    pub async fn list_providers(&self) -> Result<Vec<ProviderInfo>, String> {
-        self.inner()?.get_json(&askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, "/providers")).await
+    /// The approved models and the one in use, for the picker in the popup.
+    pub async fn list_models(&self) -> Result<ModelPicker, String> {
+        let i = self.inner()?;
+        let models: ModelList = i.get_json(&askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, "/models")).await?;
+        let prefs: Prefs = i.get_json(&askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, "/me/prefs")).await.unwrap_or_default();
+        let active = in_use(&models, prefs.active_model.as_deref()).map(|m| m.id.clone());
+        Ok(ModelPicker { models: models.models.iter().map(option_of).collect(), active })
     }
 
     /// "Pair another app" (ADR 0008): ask the server for a one-time code for this user, and build the
@@ -686,16 +708,33 @@ impl Remote {
 
     /// Sends a new message. It goes into the outbox first and leaves it when the server's `meta`
     /// arrives, so whatever happens before that, the text is not lost.
+    #[cfg(test)]
     pub async fn ask(&self, conversation_id: Option<String>, text: String, cancel: oneshot::Receiver<()>, emit: Emit<'_>) {
+        self.ask_with(None, conversation_id, text, cancel, emit).await
+    }
+
+    /// Like `ask`, with the model this chat picked (`provider/model`). With none, the model the person chose for their
+    /// chats is used, and if they chose none the server's default answers.
+    pub async fn ask_with(
+        &self,
+        model: Option<String>,
+        conversation_id: Option<String>,
+        text: String,
+        cancel: oneshot::Receiver<()>,
+        emit: Emit<'_>,
+    ) {
         let i = match self.inner() {
             Ok(i) => i,
             Err(e) => return emit(StreamEvent::error(e)),
         };
-        // If the provider cannot be looked up (server unreachable), the entry still keeps the text;
-        // sending it later looks the provider up again.
-        let provider = i.active_provider().await;
-        let entry = i.outbox.add(conversation_id, provider.as_deref().unwrap_or(""), &text);
-        if let Err(e) = provider {
+        // If the choice cannot be looked up (server unreachable), the entry still keeps the text; sending it later looks
+        // it up again.
+        let model = match model.map(|m| m.trim().to_string()).filter(|m| !m.is_empty()) {
+            Some(m) => Ok(m),
+            None => i.active_model().await,
+        };
+        let entry = i.outbox.add(conversation_id, model.as_deref().unwrap_or(""), &text);
+        if let Err(e) = model {
             return emit(StreamEvent::error(e));
         }
         self.send_entry(entry, cancel, emit).await;
@@ -759,18 +798,18 @@ impl Remote {
         };
         let emit: Emit<'_> = &emit;
         let fail = |message: String| emit(StreamEvent::error(message));
-        let provider = if entry.provider.is_empty() {
-            match i.active_provider().await {
-                Ok(p) => p,
+        let model = if entry.model.is_empty() {
+            match i.active_model().await {
+                Ok(m) => m,
                 Err(e) => return fail(e),
             }
         } else {
-            entry.provider.clone()
+            entry.model.clone()
         };
         let req = match i.space_path("/chat").await.and_then(|p| i.request(Method::POST, &p)) {
             Ok(r) => r.header("accept", "text/event-stream").json(&ChatRequest {
                 conversation_id: entry.conversation_id.clone(),
-                provider,
+                model: Some(model).filter(|m| !m.is_empty()),
                 text: entry.text.clone(),
                 client_request_id: Some(entry.client_request_id.clone()),
             }),
@@ -948,7 +987,7 @@ mod tests {
         .map(|(id, name, data)| sse(name, *id, data))
         .collect();
         let app = Router::new()
-            .route("/api/client/v1/me/prefs", get(|| async { r#"{"active_provider_id":"p"}"# }))
+            .route("/api/client/v1/me/prefs", get(|| async { r#"{"active_model":"p/m"}"# }))
             .route(
                 "/api/client/v1/spaces",
                 get(|| async {
@@ -1196,8 +1235,8 @@ mod tests {
         let fake = fake_server(vec![(200, sse("done", None, r#"{"event":"done"}"#))]).await;
         let remote = remote_for(&fake.url, Some("t"), PathBuf::new()).with_backoff_unit(Duration::from_millis(2));
         let i = remote.inner().unwrap();
-        let had = i.outbox.add(None, "p", "the server has this one");
-        let missing = i.outbox.add(Some("c5".into()), "p", "this one never arrived");
+        let had = i.outbox.add(None, "p/m", "the server has this one");
+        let missing = i.outbox.add(Some("c5".into()), "p/m", "this one never arrived");
         *fake.seen.running.lock().unwrap() = format!(
             r#"[{{"generation_id":"g7","conversation_id":"c1","status":"queued","text":"","prompt":"x","client_request_id":"{}"}},
                 {{"generation_id":"g8","conversation_id":"c1","status":"running","text":"","prompt":"y"}}]"#,
@@ -1217,8 +1256,8 @@ mod tests {
         assert_eq!(chats.len(), 1);
         assert_eq!(chats[0]["client_request_id"], missing.client_request_id.as_str());
         assert_eq!(
-            (chats[0]["text"].as_str(), chats[0]["conversation_id"].as_str(), chats[0]["provider"].as_str()),
-            (Some("this one never arrived"), Some("c5"), Some("p"))
+            (chats[0]["text"].as_str(), chats[0]["conversation_id"].as_str(), chats[0]["model"].as_str()),
+            (Some("this one never arrived"), Some("c5"), Some("p/m"))
         );
         assert!(remote.unsent().await.unwrap().is_empty(), "the server took it (meta arrived)");
 
@@ -1234,7 +1273,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn unsent_messages_are_listed_as_they_are_when_the_server_cannot_be_asked() {
         let remote = remote_for("http://127.0.0.1:9", Some("t"), PathBuf::new());
-        let e = remote.inner().unwrap().outbox.add(None, "p", "still here");
+        let e = remote.inner().unwrap().outbox.add(None, "p/m", "still here");
         assert_eq!(remote.unsent().await.unwrap(), [e]);
     }
 
@@ -1286,13 +1325,14 @@ mod tests {
     }
 
     /// The refusals the server can answer a send with, and the kind each should be told as.
-    const REFUSALS: [(&str, u16, &str, &str); 6] = [
+    const REFUSALS: [(&str, u16, &str, &str); 7] = [
         ("queue_full", 409, "", r#"{"error":"queue_full"}"#), // the 409 now carries its code; a bare 409 is no longer read as a full queue
         ("budget_exceeded", 429, "", r#"{"error":"budget_exceeded","period":"daily"}"#),
         ("kill_switch", 503, "", r#"{"error":"kill_switch"}"#),
         ("audit_key_missing", 503, "", r#"{"error":"audit_key_missing"}"#),
         ("busy", 503, "5", r#"{"error":"audit_backlog"}"#),
         ("user_paused", 403, "", r#"{"error":"user_paused"}"#),
+        ("model_not_approved", 400, "", r#"{"error":"model_not_approved"}"#),
     ];
 
     #[tokio::test]
@@ -1318,6 +1358,7 @@ mod tests {
         assert!(seen_messages[3].to_lowercase().contains("audit"), "{}", seen_messages[3]);
         assert!(seen_messages[4].contains('5'), "the wait is named: {}", seen_messages[4]);
         assert!(seen_messages[5].to_lowercase().contains("paused"), "{}", seen_messages[5]);
+        assert!(seen_messages[6].to_lowercase().contains("not approved"), "{}", seen_messages[6]);
     }
 
     #[tokio::test]
@@ -1421,7 +1462,12 @@ mod tests {
                 .bearer_auth(&token)
                 .header(askbar_proto::CLIENT_VERSION_HEADER, VERSION)
                 .header("accept", "text/event-stream")
-                .json(&ChatRequest { conversation_id: None, provider: "p".into(), text: text.into(), client_request_id: None })
+                .json(&ChatRequest {
+                    conversation_id: None,
+                    model: Some("p/mock-model".into()),
+                    text: text.into(),
+                    client_request_id: None,
+                })
         };
 
         // 1. Drop the client after a few deltas, resume after what was received (twice, to be sure),
@@ -1551,7 +1597,12 @@ mod tests {
 
         let s = remote.settings().await.unwrap();
         assert_eq!((s.provider.as_str(), s.model.as_str()), ("mock", "mock-model"));
-        assert_eq!(remote.list_providers().await.unwrap().len(), 1);
+        let picker = remote.list_models().await.unwrap();
+        assert_eq!(
+            (picker.models, picker.active),
+            (vec![ModelOption { id: "p/mock-model".into(), label: "mock-model via mock".into() }], Some("p/mock-model".into())),
+            "one approved model, in use because it is the default"
+        );
         assert!(remote.list_conversations().await.unwrap().is_empty());
 
         let events = Mutex::new(Vec::new());
@@ -1599,7 +1650,11 @@ mod tests {
             askbar_server::testing::add_provider(&db, askbar_server::testing::provider(&format!("p{n}"), name, "http://x/v1", "m"));
         }
         let code = askbar_server::testing::add_pair_code(&db, &user, "test");
-        let state = AppState::new(db, min_client);
+        // The approved models come from the gateway (ADR 0014): each provider approves its own model "m", alpha first.
+        let rig = askbar_server::testing::Rig::start().await;
+        let state = rig.attach(AppState::new(db, min_client)).await;
+        rig.sync(&state);
+        Box::leak(Box::new(rig));
         let token = auth::redeem_pair_code(&state.db.lock().unwrap(), &code).unwrap().unwrap();
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", l.local_addr().unwrap());
@@ -1608,14 +1663,14 @@ mod tests {
         (url, token, state)
     }
 
-    /// The signed-in user's chosen provider lives on the server, so tests set it there.
-    fn choose_provider(state: &Arc<askbar_server::AppState>, id: &str) {
+    /// The signed-in user's chosen model lives on the server, so tests set it there.
+    fn choose_model(state: &Arc<askbar_server::AppState>, id: &str) {
         state
             .db
             .lock()
             .unwrap()
             .conn()
-            .execute("INSERT OR REPLACE INTO user_prefs (user_id, active_provider_id) SELECT id, ?1 FROM users", [id])
+            .execute("INSERT OR REPLACE INTO user_prefs (user_id, active_model) SELECT id, ?1 FROM users", [id])
             .unwrap();
     }
 
@@ -1653,22 +1708,22 @@ mod tests {
         let (url, token, state) = status_server("0.1.0").await;
 
         assert_eq!(kind(&remote_for(&url, Some(&token), PathBuf::new())).await, None);
-        choose_provider(&state, "p0");
-        assert_eq!(kind(&remote_for(&url, Some(&token), PathBuf::new())).await, None, "a provider that exists is fine");
+        choose_model(&state, "p0/m");
+        assert_eq!(kind(&remote_for(&url, Some(&token), PathBuf::new())).await, None, "a model that is approved is fine");
         assert_eq!(kind(&remote_for(&url, None, PathBuf::new())).await.as_deref(), Some("not_paired"));
         assert_eq!(kind(&remote_for(&url, Some("abt_wrong"), PathBuf::new())).await.as_deref(), Some("rejected"));
 
-        choose_provider(&state, "gone");
+        choose_model(&state, "gone/m");
         let missing = remote_for(&url, Some(&token), PathBuf::new()).status().await.unwrap();
-        assert_eq!(missing.kind, "provider_missing");
-        assert!(missing.message.contains("no longer exists") && missing.message.contains("Pick another"));
+        assert_eq!(missing.kind, "model_missing");
+        assert!(missing.message.contains("not approved") && missing.message.contains("Pick another"));
         assert_eq!(
-            missing.providers,
-            [ProviderChoice { id: "p0".into(), name: "alpha".into() }, ProviderChoice { id: "p1".into(), name: "beta".into() }]
+            missing.models,
+            [ModelOption { id: "p0/m".into(), label: "m via alpha".into() }, ModelOption { id: "p1/m".into(), label: "m via beta".into() }]
         );
 
         // Revoking the client turns "ok" into "rejected".
-        choose_provider(&state, "p0");
+        choose_model(&state, "p0/m");
         let r = remote_for(&url, Some(&token), PathBuf::new());
         assert_eq!(kind(&r).await, None);
         state.db.lock().unwrap().conn().execute("UPDATE clients SET revoked_at = 1", []).unwrap();
@@ -1713,26 +1768,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn picking_another_provider_is_saved_on_the_server_and_clears_the_state() {
+    async fn picking_another_model_is_saved_on_the_server_and_clears_the_state() {
         let (url, token, state) = status_server("0.1.0").await;
         let dir = std::env::temp_dir().join(format!("askbar-pick-{}", std::process::id()));
         let path = dir.join("client.yaml");
-        choose_provider(&state, "gone");
+        choose_model(&state, "gone/m");
         let r = remote_for(&url, Some(&token), path.clone());
-        assert_eq!(kind(&r).await.as_deref(), Some("provider_missing"));
-        r.set_active_provider("p1".into()).await.unwrap();
+        assert_eq!(kind(&r).await.as_deref(), Some("model_missing"));
+        r.set_active_model("p1/m".into()).await.unwrap();
         assert_eq!(kind(&r).await, None);
-        let stored: String =
-            state.db.lock().unwrap().conn().query_row("SELECT active_provider_id FROM user_prefs", [], |r| r.get(0)).unwrap();
-        assert_eq!(stored, "p1");
+        let stored: String = state.db.lock().unwrap().conn().query_row("SELECT active_model FROM user_prefs", [], |r| r.get(0)).unwrap();
+        assert_eq!(stored, "p1/m");
         // Nothing about the choice is written to client.yaml (it isn't even created).
         assert!(!path.exists());
-        assert!(r.set_active_provider("nope".into()).await.is_err(), "an unknown provider is refused");
+        assert!(r.set_active_model("nope/m".into()).await.is_err(), "a model nobody approved is refused");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]
-    async fn the_active_provider_follows_the_user_across_clients() {
+    async fn the_active_model_follows_the_user_across_clients() {
         let (url, token, state) = status_server("0.1.0").await;
         let second_token = {
             let db = state.db.lock().unwrap();
@@ -1741,9 +1795,10 @@ mod tests {
             askbar_server::auth::redeem_pair_code(&db, &code).unwrap().unwrap()
         };
         let (laptop, desktop) = (remote_for(&url, Some(&token), PathBuf::new()), remote_for(&url, Some(&second_token), PathBuf::new()));
-        assert_eq!(desktop.settings().await.unwrap().provider, "alpha", "the first provider until one is picked");
-        laptop.set_active_provider("p1".into()).await.unwrap();
+        assert_eq!(desktop.settings().await.unwrap().provider, "alpha", "the default until one is picked");
+        laptop.set_active_model("p1/m".into()).await.unwrap();
         assert_eq!(desktop.settings().await.unwrap().provider, "beta", "picked on one client, used on the other");
+        assert_eq!(desktop.list_models().await.unwrap().active.as_deref(), Some("p1/m"));
     }
 
     #[tokio::test]
@@ -1806,7 +1861,7 @@ mod tests {
         // The new profile works end to end, and the code can't be used twice.
         let r = Remote::new(Ok(cfg), path.clone(), Box::new(MemoryTokens::with(&token)));
         assert_eq!(kind(&r).await, None);
-        assert!(r.list_providers().await.unwrap().len() == 2);
+        assert!(r.list_models().await.unwrap().models.len() == 2);
         assert!(pair(&s, &path, &MemoryTokens::default()).await.unwrap_err().contains("already used"));
 
         // Re-pairing updates the server but keeps hand-edited settings.

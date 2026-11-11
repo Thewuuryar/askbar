@@ -99,6 +99,10 @@ const SPACE_MIGRATIONS: &[&str] = &[
     // shows it. The message is always the server's own words, never a provider's error text.
     "ALTER TABLE messages ADD COLUMN failed_code TEXT;
      ALTER TABLE messages ADD COLUMN failed_message TEXT;",
+    // 4: the model (`provider/model`, ADR 0014) a conversation's latest message asked for, which the picker shows next.
+    // The generation's own `model` column holds what each send asked for from the start (it used to be filled in only
+    // once a provider served the reply, with the same value).
+    "ALTER TABLE conversations ADD COLUMN model TEXT;",
 ];
 
 /// The provider and model that wrote a reply, as they were when it was written.
@@ -122,6 +126,8 @@ pub struct ConversationSummary {
     pub title: String,
     pub updated_at: i64,
     pub message_count: i64,
+    /// The model the latest message asked for, `provider/model`.
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -156,6 +162,8 @@ pub struct Generation {
     pub assistant_message_id: Option<String>,
     pub client_request_id: Option<String>,
     pub provider_id: Option<String>,
+    /// The model asked for, one the catalog approved when the message was sent.
+    pub model: Option<String>,
     pub status: String,
     pub prompt: String,
     pub text: String,
@@ -175,13 +183,14 @@ pub struct NewGeneration<'a> {
     pub user_message_id: Option<&'a str>,
     pub client_request_id: Option<&'a str>,
     pub provider_id: Option<&'a str>,
+    pub model: Option<&'a str>,
     pub status: &'a str,
     pub prompt: &'a str,
     pub deadline_at: Option<i64>,
 }
 
 const GENERATION_COLUMNS: &str = "id, user_id, client_id, conversation_id, user_message_id, assistant_message_id, \
-     client_request_id, provider_id, status, prompt, text, error, queued_at, started_at, deadline_at, ended_at";
+     client_request_id, provider_id, model, status, prompt, text, error, queued_at, started_at, deadline_at, ended_at";
 
 fn read_generation(r: &rusqlite::Row<'_>) -> rusqlite::Result<Generation> {
     Ok(Generation {
@@ -193,14 +202,15 @@ fn read_generation(r: &rusqlite::Row<'_>) -> rusqlite::Result<Generation> {
         assistant_message_id: r.get(5)?,
         client_request_id: r.get(6)?,
         provider_id: r.get(7)?,
-        status: r.get(8)?,
-        prompt: r.get(9)?,
-        text: r.get(10)?,
-        error: r.get(11)?,
-        queued_at: r.get(12)?,
-        started_at: r.get(13)?,
-        deadline_at: r.get(14)?,
-        ended_at: r.get(15)?,
+        model: r.get(8)?,
+        status: r.get(9)?,
+        prompt: r.get(10)?,
+        text: r.get(11)?,
+        error: r.get(12)?,
+        queued_at: r.get(13)?,
+        started_at: r.get(14)?,
+        deadline_at: r.get(15)?,
+        ended_at: r.get(16)?,
     })
 }
 
@@ -315,12 +325,12 @@ impl SpaceStore {
     pub fn list_conversations(&self) -> Result<Vec<ConversationSummary>, DbError> {
         let mut stmt = self.conn.prepare(
             "SELECT c.id, c.title, c.updated_at,
-                    (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id)
+                    (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id), c.model
              FROM conversations c
              ORDER BY c.updated_at DESC, c.id DESC",
         )?;
         let rows = stmt.query_map([], |r| {
-            Ok(ConversationSummary { id: r.get(0)?, title: r.get(1)?, updated_at: r.get(2)?, message_count: r.get(3)? })
+            Ok(ConversationSummary { id: r.get(0)?, title: r.get(1)?, updated_at: r.get(2)?, message_count: r.get(3)?, model: r.get(4)? })
         })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
@@ -331,12 +341,27 @@ impl SpaceStore {
             .conn
             .query_row(
                 "SELECT c.id, c.title, c.updated_at,
-                        (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id)
+                        (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id), c.model
                  FROM conversations c WHERE c.id = ?1",
                 params![id],
-                |r| Ok(ConversationSummary { id: r.get(0)?, title: r.get(1)?, updated_at: r.get(2)?, message_count: r.get(3)? }),
+                |r| {
+                    Ok(ConversationSummary {
+                        id: r.get(0)?,
+                        title: r.get(1)?,
+                        updated_at: r.get(2)?,
+                        message_count: r.get(3)?,
+                        model: r.get(4)?,
+                    })
+                },
             )
             .optional()?)
+    }
+
+    /// Remembers the model (`provider/model`) the latest message asked for. It does not change `updated_at`: the
+    /// message that follows does.
+    pub fn set_conversation_model(&self, id: &str, model: &str) -> Result<(), DbError> {
+        self.conn.execute("UPDATE conversations SET model = ?2 WHERE id = ?1", params![id, model])?;
+        Ok(())
     }
 
     /// Oldest first. Empty if there is no such conversation.
@@ -405,8 +430,8 @@ impl SpaceStore {
         let started = (g.status == "running").then_some(t);
         self.conn.execute(
             "INSERT INTO generations (id, user_id, client_id, conversation_id, user_message_id, client_request_id,
-                                      provider_id, status, prompt, queued_at, started_at, deadline_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                                      provider_id, model, status, prompt, queued_at, started_at, deadline_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?13, ?8, ?9, ?10, ?11, ?12)",
             params![
                 id,
                 g.user_id,
@@ -419,7 +444,8 @@ impl SpaceStore {
                 g.prompt,
                 t,
                 started,
-                g.deadline_at
+                g.deadline_at,
+                g.model
             ],
         )?;
         Ok(id)
@@ -864,6 +890,7 @@ mod tests {
             user_message_id: None,
             client_request_id: None,
             provider_id: Some("p"),
+            model: Some("m"),
             status,
             prompt: "hello",
             deadline_at: None,

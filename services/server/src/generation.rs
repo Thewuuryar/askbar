@@ -308,6 +308,8 @@ pub struct Submit {
     pub client_id: String,
     pub conversation_id: Option<String>,
     pub provider_id: String,
+    /// The model to call, which the handler has checked against the catalog (ADR 0014).
+    pub model: String,
     pub prompt: String,
     pub client_request_id: Option<String>,
 }
@@ -316,6 +318,8 @@ pub struct Submit {
 pub enum SubmitError {
     /// The conversation or provider does not exist (or is someone else's).
     NotFound,
+    /// The model is not one the catalog approves (ADR 0014).
+    ModelNotApproved,
     /// The conversation already has `MAX_QUEUED` messages waiting.
     QueueFull,
     /// The administrator has switched generations off.
@@ -339,6 +343,7 @@ impl From<SubmitError> for crate::error::ApiError {
         use askbar_proto::problem::ErrorCode as C;
         match e {
             SubmitError::NotFound => ApiError::new(C::NotFound, "That conversation or provider was not found."),
+            SubmitError::ModelNotApproved => ApiError::new(C::ModelNotApproved, MODEL_NOT_APPROVED),
             SubmitError::QueueFull => ApiError::new(
                 C::QueueFull,
                 "Five messages are already waiting in this conversation. Wait for one to finish, or remove a waiting message.",
@@ -763,6 +768,8 @@ pub fn submit(state: &Arc<AppState>, s: Submit) -> Result<Submitted, SubmitError
         }
         None => (store.create_conversation(&s.user_id, &crate::make_title(&s.prompt)).map_err(internal)?, false),
     };
+    // The picker shows the model of the latest message next time.
+    store.set_conversation_model(&conversation_id, &askbar_proto::model_id(&s.provider_id, &s.model)).map_err(internal)?;
     let new = |status, user_message_id| NewGeneration {
         user_id: &s.user_id,
         client_id: Some(&s.client_id),
@@ -770,6 +777,7 @@ pub fn submit(state: &Arc<AppState>, s: Submit) -> Result<Submitted, SubmitError
         user_message_id,
         client_request_id: s.client_request_id.as_deref(),
         provider_id: Some(&s.provider_id),
+        model: Some(&s.model),
         status,
         prompt: &s.prompt,
         deadline_at: None,
@@ -797,7 +805,7 @@ pub fn submit(state: &Arc<AppState>, s: Submit) -> Result<Submitted, SubmitError
     state.generations.insert(&id, live.clone(), &space);
     drop(store);
     drop(db);
-    spawn_run(state, &space, &id, &s.user_id, Some(&s.client_id), &conversation_id, &s.provider_id, timeout, live.clone());
+    spawn_run(state, &space, &id, &s.user_id, Some(&s.client_id), &conversation_id, (&s.provider_id, &s.model), timeout, live.clone());
     Ok(Submitted { generation_id: id, conversation_id, live, queued: false })
 }
 
@@ -811,7 +819,7 @@ fn spawn_run(
     user_id: &str,
     client_id: Option<&str>,
     conversation_id: &str,
-    provider_id: &str,
+    (provider_id, model): (&str, &str),
     timeout: Duration,
     live: Arc<Live>,
 ) {
@@ -837,7 +845,7 @@ fn spawn_run(
         last_flush: Instant::now(),
         unflushed: 0,
     };
-    let (state, provider_id) = (state.clone(), provider_id.to_string());
+    let (state, provider_id, model) = (state.clone(), provider_id.to_string(), model.to_string());
     tokio::spawn(async move {
         // The provider asked for, as the snapshot describes it (no key: the gateway holds those). It is the only one
         // tried: there is no automatic fallback to another provider (ADR 0014).
@@ -863,7 +871,7 @@ fn spawn_run(
         // Race the gateway's stream against the deadline. Dropping it on expiry closes the request in flight, which
         // cancels the provider call; the text that had arrived is already in `fin`.
         let ended = {
-            let run = via_gateway(&state, &mut fin, &provider, &system, &history);
+            let run = via_gateway(&state, &mut fin, &provider, &model, &system, &history);
             tokio::pin!(run);
             tokio::select! {
                 r = &mut run => Some(r),
@@ -929,6 +937,7 @@ fn gateway_failure(e: crate::gateway::GatewayError) -> Failed {
         ),
         E::KillSwitch => Failed::new("kill_switch", KILLED),
         E::UserPaused => Failed::new("user_paused", PAUSED),
+        E::ModelNotApproved => Failed::new("model_not_approved", MODEL_NOT_APPROVED),
         E::BudgetExceeded(period) => Failed::new(
             "budget_exceeded",
             if period == "monthly" {
@@ -957,6 +966,7 @@ async fn via_gateway(
     state: &Arc<AppState>,
     fin: &mut Finisher,
     provider: &askbar_proto::SnapshotProvider,
+    model: &str,
     system: &str,
     history: &[ChatMessage],
 ) -> Ended {
@@ -967,10 +977,10 @@ async fn via_gateway(
     // The row says which provider is serving it, and with which model, as they are now: the reply is labelled with
     // these, even if it is written after a restart.
     fin.provider_id = provider.id.clone();
-    let by = crate::ReplyBy { provider_id: provider.id.clone(), provider_name: provider.name.clone(), model: provider.model.clone() };
+    let by = crate::ReplyBy { provider_id: provider.id.clone(), provider_name: provider.name.clone(), model: model.to_string() };
     let _ = fin.space.lock().set_generation_provider(&fin.id, &by);
     fin.by = Some(by);
-    live.set_provider(&provider.id, &provider.name, &provider.model);
+    live.set_provider(&provider.id, &provider.name, model);
     let Some(client) = state.gateway.clone() else {
         return Ended::Failed(Failed::new("gateway_unavailable", "No model gateway is set up on this server."));
     };
@@ -978,6 +988,7 @@ async fn via_gateway(
         history.iter().map(|m| GatewayMessage { role: m.role.clone(), content: m.content.clone() }).collect();
     let request = GatewayRequest {
         provider_id: provider.id.clone(),
+        model: model.to_string(),
         user_id: fin.user_id.clone(),
         client_id: fin.client_id.clone(),
         space_id: Some(fin.space.id.clone()),
@@ -1102,7 +1113,7 @@ fn start_next(state: &Arc<AppState>, space: &Arc<Space>, conversation_id: &str) 
                 &next.user_id,
                 next.client_id.as_deref(),
                 &next.conversation_id,
-                next.provider_id.as_deref().unwrap_or(""),
+                (next.provider_id.as_deref().unwrap_or(""), next.model.as_deref().unwrap_or("")),
                 timeout,
                 live,
             );
@@ -1115,6 +1126,7 @@ fn start_next(state: &Arc<AppState>, space: &Arc<Space>, conversation_id: &str) 
 }
 
 const KILLED: &str = "Generations were switched off by the administrator.";
+const MODEL_NOT_APPROVED: &str = "That model is not approved. Pick another one.";
 const PAUSED: &str = "Replies are paused for you by the administrator. Your message is kept; send it again when they are back.";
 /// What a failed question says when the provider failed; its own words stay sealed in the audit.
 const PROVIDER_FAILED: &str = "The provider could not answer.";
@@ -1480,6 +1492,7 @@ mod tests {
                 user_message_id: None,
                 client_request_id: None,
                 provider_id: None,
+                model: None,
                 status,
                 prompt: "q",
                 deadline_at: None,

@@ -202,7 +202,7 @@ async fn bootstrap(state: State<'_, AppState>) -> Result<Bootstrap, String> {
     Ok(Bootstrap { ui: cfg.ui, hotkey: cfg.hotkey, provider: cfg.provider, model: cfg.model, notice })
 }
 
-/// `null` when the backend is fine; otherwise what is wrong and (for a missing provider) the alternatives.
+/// `null` when the backend is fine; otherwise what is wrong and (for a missing model) the alternatives.
 #[tauri::command]
 async fn server_status(state: State<'_, AppState>) -> Result<Option<types::ClientStatus>, String> {
     Ok(state.backend().status().await)
@@ -231,9 +231,16 @@ async fn new_pairing_key(state: State<'_, AppState>, name: String) -> Result<Str
     state.backend().new_pairing_key(name).await
 }
 
+/// Remembers the model this person's chats use (`provider/model`), on the server.
 #[tauri::command]
-async fn set_active_provider(state: State<'_, AppState>, id: String) -> Result<(), String> {
-    state.backend().set_active_provider(id).await
+async fn set_active_model(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    state.backend().set_active_model(id).await
+}
+
+/// The approved models and the one in use, for the picker.
+#[tauri::command]
+async fn list_models(state: State<'_, AppState>) -> Result<types::ModelPicker, String> {
+    state.backend().list_models().await
 }
 
 #[tauri::command]
@@ -256,6 +263,7 @@ async fn ask(
     state: State<'_, AppState>,
     conversation_id: Option<String>,
     text: String,
+    model: Option<String>,
     on_event: Channel<StreamEvent>,
 ) -> Result<(), String> {
     let text = text.trim().to_string();
@@ -266,7 +274,7 @@ async fn ask(
     *lock(&state.cancel) = Some(tx);
     state
         .backend()
-        .ask(conversation_id, text, rx, &|e| {
+        .ask_with(model, conversation_id, text, rx, &|e| {
             let _ = on_event.send(e);
         })
         .await;
@@ -488,7 +496,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             bootstrap,
             server_status,
-            set_active_provider,
+            set_active_model,
+            list_models,
             pair,
             new_pairing_key,
             list_conversations,

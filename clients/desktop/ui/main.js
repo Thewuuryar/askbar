@@ -39,11 +39,14 @@
     statusText: $('status-text'),
     statusActions: $('status-actions'),
     modelLabel: $('model-label'),
+    modelPicker: $('model-picker'),
   };
 
   const state = {
     ui: null,
     convId: null,
+    models: [],          // the approved models, { id, label }
+    model: null,         // the model this chat picked (`provider/model`); null means the one chosen for new chats
     messages: [],        // { role, content, node, bodyNode }
     streaming: false,
     historyOpen: false,
@@ -126,7 +129,7 @@
   function syncChrome() {
     const hasThread = state.messages.length > 0;
     el.thread.hidden = !hasThread;
-    el.foot.hidden = !hasThread;
+    el.foot.hidden = false; // always shown: it holds the model and the key hints
     el.card.dataset.thread = hasThread ? 'open' : 'empty';
     el.card.dataset.history = state.historyOpen ? 'open' : 'closed';
     el.history.hidden = !state.historyOpen;
@@ -169,12 +172,13 @@
     }
     el.status.dataset.kind = st.kind;
     el.statusText.textContent = st.message;
-    for (const p of st.providers || []) {
-      el.statusActions.appendChild(actionButton('Use ' + p.name, async () => {
-        try { await invoke('set_active_provider', { id: p.id }); } catch (e) { showNotice(String(e)); }
+    for (const m of st.models || []) {
+      el.statusActions.appendChild(actionButton('Use ' + m.label, async () => {
+        try { await invoke('set_active_model', { id: m.id }); } catch (e) { showNotice(String(e)); }
+        state.model = null;
         await refreshBootstrap().catch(() => {});
         await checkStatus();
-      }, 'provider'));
+      }, 'model'));
     }
     if (st.kind === 'rejected' || st.kind === 'not_paired') {
       el.statusActions.appendChild(actionButton('Pair this app', () => openPairing(), 'pair'));
@@ -496,7 +500,7 @@
     state.pinned = true;
     const userMsg = addMessage('user', text);
     const reply = addMessage('assistant', '', { streaming: true });
-    await streamInto(reply, (channel) => invoke('ask', { conversationId: state.convId, text, onEvent: channel }), userMsg);
+    await streamInto(reply, (channel) => invoke('ask', { conversationId: state.convId, text, model: state.model, onEvent: channel }), userMsg);
   }
 
   // ------------------------------------------------------- messages not sent
@@ -771,6 +775,10 @@
     hideNotice();
     clearThread();
     state.convId = id;
+    // The conversation remembers the model its latest message asked for (if it is still approved).
+    const chat = state.conversations.find((x) => String(x.id) === String(id));
+    state.model = chat && state.models.some((m) => m.id === chat.model) ? chat.model : null;
+    syncModelPicker();
     const msgs = rows.map((r) => addMessage(r.role, r.content, { createdAt: r.created_at, provider: r.provider }));
     rows.forEach((r, i) => {
       if (r.role !== 'user' || !r.failed) return;
@@ -788,6 +796,8 @@
   function newChat() {
     if (state.streaming) return;
     state.convId = null;
+    state.model = null;
+    syncModelPicker();
     clearThread();
     hideNotice();
     renderHistory();
@@ -887,6 +897,38 @@
 
   // ---------------------------------------------------------------- boot
 
+  // The model picker (ADR 0014): shown when there is a choice, with the model this chat uses selected. A chat that
+  // picked none uses the one chosen for new chats, which the server remembers for all of the person's apps.
+  async function refreshModels() {
+    let picker;
+    try { picker = await invoke('list_models'); } catch (_) { return; }
+    state.models = picker.models || [];
+    state.activeModel = picker.active || null;
+    if (state.model && !state.models.some((m) => m.id === state.model)) state.model = null;
+    el.modelPicker.textContent = '';
+    for (const m of state.models) {
+      const o = document.createElement('option');
+      o.value = m.id;
+      o.textContent = m.label;
+      el.modelPicker.appendChild(o);
+    }
+    syncModelPicker();
+  }
+
+  function syncModelPicker() {
+    const several = state.models.length > 1;
+    el.modelPicker.hidden = !several;
+    el.modelLabel.hidden = several;
+    if (several) el.modelPicker.value = state.model || state.activeModel || state.models[0].id;
+    syncChrome();
+  }
+
+  el.modelPicker.addEventListener('change', async () => {
+    state.model = el.modelPicker.value;
+    // Also what new chats use from now on, on every app of this person.
+    try { await invoke('set_active_model', { id: state.model }); state.activeModel = state.model; } catch (e) { showNotice(String(e)); }
+  });
+
   async function refreshBootstrap() {
     const b = await invoke('bootstrap');
     state.ui = b.ui;
@@ -894,6 +936,7 @@
     state.provider = b.provider;
     el.modelLabel.textContent = b.model ? b.model + ' via ' + b.provider : '';
     if (b.notice) showNotice(b.notice);
+    await refreshModels();
   }
 
   async function onShown() {

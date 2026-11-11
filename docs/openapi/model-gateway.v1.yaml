@@ -177,6 +177,32 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
+  /api/model-gateway/v1/catalog:
+    get:
+      operationId: getCatalog
+      summary: The approved models and the default. The server's listener.
+      description: >-
+        What the administrator approved (ADR 0014), as the server offers it to clients and checks a send against. An
+        install that has approved nothing yet answers with an empty list and no default.
+      responses:
+        '200':
+          description: The approved models.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModelList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          description: The gateway has no configuration yet (`not_configured`). Try again after `Retry-After`.
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
   /api/model-gateway/v1/chat:
     post:
       operationId: chat
@@ -201,7 +227,14 @@ paths:
               schema:
                 $ref: '#/components/schemas/ChatEvent'
         '400':
-          $ref: '#/components/responses/BadRequest'
+          description: >-
+            The body could not be used (`bad_request`), or the model is not one the catalog approves for this provider
+            (`model_not_approved`). Nothing was called. The second is a `blocked` `model_catalog` gate span in the
+            generation's trace.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -289,6 +322,7 @@ components:
           - budget_exceeded
           - kill_switch
           - user_paused
+          - model_not_approved
           - audit_key_missing
           - audit_backlog
           - client_too_old
@@ -432,6 +466,48 @@ components:
           description: Users whose replies are refused (`403 user_paused`) and whose running replies are stopped (error code `user_paused`).
           items:
             type: string
+        catalog:
+          type: array
+          description: >-
+            The approved models (ADR 0014). A reply may use one of these and nothing else, so an empty catalog approves
+            nothing. Each names a provider in this configuration, and no model twice.
+          items:
+            $ref: '#/components/schemas/CatalogEntry'
+        default_model:
+          type: [string, 'null']
+          description: The catalog's default, `provider/model`. Present exactly when the catalog is not empty, and one of its models.
+    CatalogEntry:
+      type: object
+      required: [provider_id, model]
+      properties:
+        provider_id:
+          type: string
+        model:
+          type: string
+          description: The model's own name, 1 to 200 characters. It may contain slashes.
+    ModelChoice:
+      type: object
+      required: [id, provider_id, provider_name, model]
+      properties:
+        id:
+          type: string
+          description: "`provider/model`: the provider's id, a slash, and the model's name."
+        provider_id:
+          type: string
+        provider_name:
+          type: string
+        model:
+          type: string
+    ModelList:
+      type: object
+      required: [models, default]
+      properties:
+        models:
+          type: array
+          items:
+            $ref: '#/components/schemas/ModelChoice'
+        default:
+          type: [string, 'null']
     ChatMessage:
       type: object
       required: [role, content]
@@ -443,10 +519,13 @@ components:
           type: string
     ChatRequest:
       type: object
-      required: [provider_id, user_id, generation_id, system, messages]
+      required: [provider_id, model, user_id, generation_id, system, messages]
       properties:
         provider_id:
           type: string
+        model:
+          type: string
+          description: The model to call. The catalog must approve it for this provider (`400 model_not_approved`).
         user_id:
           type: string
         client_id:
