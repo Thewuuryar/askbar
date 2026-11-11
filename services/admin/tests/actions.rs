@@ -21,7 +21,9 @@ fn every_route_that_changes_something_has_a_category_and_no_other_route_does() {
     let mut classified = BTreeSet::new();
     for r in &table {
         let method: Method = r.method.parse().unwrap();
-        let changes = method != Method::GET || r.path == "/api/admin/v1/backup";
+        // Reads that are recorded: the backup, and the content of a sealed span (each item viewed, ADR 0011 rule 12).
+        let changes =
+            method != Method::GET || ["/api/admin/v1/backup", "/api/admin/v1/audit/payloads/{span_id}"].contains(&r.path.as_str());
         let exempt = NOT_CHANGES.contains(&(r.method.as_str(), r.path.as_str()));
         match (changes && !exempt, classify(&method, &r.path)) {
             (true, Some(_)) => {

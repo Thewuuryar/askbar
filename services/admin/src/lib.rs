@@ -19,6 +19,7 @@ pub mod gateway_link;
 pub mod network;
 pub mod pages;
 pub mod routes;
+pub mod sealed;
 pub mod secrets;
 pub mod self_cert;
 pub mod server_link;
@@ -60,6 +61,8 @@ pub struct AdminState {
     pub auditor: std::sync::OnceLock<Arc<auditor_link::AuditorLink>>,
     /// Where the admin's action records go (ADR 0010); set once by `main`. Tests that have none record nothing.
     pub actions: std::sync::OnceLock<Arc<actions::ActionLog>>,
+    /// The sealed-content session, if one is open (ADR 0011 rules 8 to 13).
+    pub sealed: sealed::Sealed,
     /// What the last check of the audit chain found (ADR 0010 rule 7).
     pub chain: chain_check::ChainWatch,
     /// The link to CLIProxyAPI, once its config exists.
@@ -92,6 +95,7 @@ impl AdminState {
             gateway: Default::default(),
             auditor: Default::default(),
             actions: Default::default(),
+            sealed: Default::default(),
             chain: Default::default(),
             cpa: std::sync::Mutex::new(None),
             cpa_logins: std::sync::Mutex::new(Default::default()),
@@ -156,7 +160,6 @@ pub fn routes(state: &Arc<AdminState>) -> Routes {
         .get(&v1("/audit/provider-health"), admin_api::audit_provider_health)
         .get(&v1("/audit/access"), admin_api::audit_access)
         .post(&v1("/audit/rotate-key"), admin_api::rotate_audit_key)
-        .post(&v1("/audit/payloads/{span_id}/open"), admin_api::open_audit_payloads)
         .get(&v1("/settings"), admin_api::get_settings)
         .put(&v1("/settings"), admin_api::put_settings)
         .put(&v1("/users/{id}/display-defaults"), admin_api::put_user_display)
@@ -178,6 +181,11 @@ pub fn routes(state: &Arc<AdminState>) -> Routes {
         .delete(&v1("/cpa/accounts/{name}"), cpa::remove_account)
         .get(&v1("/services"), services::list)
         .post(&v1("/services/{name}/restart"), services::restart)
+        // Sealed content is the person's alone: no admin API key can start a session or look into one (ADR 0011).
+        .get(&v1("/audit/session"), admin_api::get_unseal_session)
+        .post(&v1("/audit/session"), admin_api::start_unseal_session)
+        .delete(&v1("/audit/session"), admin_api::end_unseal_session)
+        .get(&v1("/audit/payloads/{span_id}"), admin_api::view_audit_payloads)
         .post(&v1("/keys"), admin_api::create_key)
         .get(&v1("/keys"), admin_api::list_keys)
         .delete(&v1("/keys/{id}"), admin_api::revoke_key)

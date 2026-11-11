@@ -46,6 +46,33 @@ impl AdminAuth {
         s.contains_key(&sha(token))
     }
 
+    /// The stable name of a session token that is safe to keep in memory: what `sessions` is keyed by.
+    pub fn hash_token(token: &str) -> String {
+        sha(token)
+    }
+
+    /// Whether the session with this hash (see `hash_token`) is still valid.
+    pub fn valid_hash(&self, hash: &str) -> bool {
+        let mut s = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
+        let t = now();
+        s.retain(|_, exp| *exp > t);
+        s.contains_key(hash)
+    }
+
+    /// Seconds since this session was started (`None` if it is not valid): how fresh the sign-in is.
+    pub fn session_age_secs(&self, token: &str) -> Option<i64> {
+        let s = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
+        s.get(&sha(token)).map(|exp| now() - (exp - SESSION_TTL_SECS))
+    }
+
+    /// Tests only: make the session look `secs` older than it is.
+    #[doc(hidden)]
+    pub fn backdate_session(&self, token: &str, secs: i64) {
+        if let Some(exp) = self.sessions.lock().unwrap_or_else(|e| e.into_inner()).get_mut(&sha(token)) {
+            *exp -= secs;
+        }
+    }
+
     pub fn end_session(&self, token: &str) {
         self.sessions.lock().unwrap_or_else(|e| e.into_inner()).remove(&sha(token));
     }

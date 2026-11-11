@@ -333,11 +333,18 @@ holds the private key and has no code to open a sealed payload.
 - **The snapshot** carries `audit_public_key: {"key_id", "public_key"}` (32 bytes as 64 hex
   characters; the server checks that the id matches the key). Without it the server refuses new
   generations: `503 {"error":"audit_key_missing"}`.
-- **Reading.** `POST /api/admin/v1/audit/payloads/{span_id}/open` with `{"passphrase"}`: the admin
-  fetches the ciphertext, derives the key, opens the content and forgets the key. An
-  `audit_access` row (span, key id, time, whether the passphrase was right) is written before any
-  content is returned. A wrong passphrase is `403` and recorded; five wrong ones in 15 minutes lock
-  opening out for 15 minutes (`429`).
+- **Reading is a session** (ADR 0011 rules 8 to 13). `POST /api/admin/v1/audit/session` with `{"passphrase"}`, entered
+  within ten minutes of signing in, derives one key for each key in the registry that the passphrase makes, keeps them in
+  the admin's memory only, and answers `201` with the time left (`200` when a passphrase for an older key adds to the
+  session that is open). `GET /api/admin/v1/audit/payloads/{span_id}` then opens one span's content with those keys,
+  with no more prompts; a payload sealed with a key the session does not hold has `text: null` and names the key with its
+  created and retired dates. The session ends after 15 minutes without use or an hour in all (Settings: up to 12 hours
+  each), on `DELETE /api/admin/v1/audit/session` (Seal), on sign-out or when the admin restarts. Only the person's own
+  browser session may do any of this: an admin API key gets `401`. An `audit_access` row (span or `(session)`, key id,
+  time, whether it worked) is written before any content is returned. A wrong passphrase is `403` and recorded; five wrong
+  ones in 15 minutes lock unsealing out for 15 minutes (`429`). The unseal, each view and Seal are recorded in the auditor
+  before they happen, so one that cannot be recorded is refused (`503`); the end by a timeout or a sign-out is recorded
+  with its reason. An unseal and a change of the timeouts are alerts: a log line and a banner.
 - **Rotation.** `POST /api/admin/v1/audit/rotate-key` with `current`, `new` and `confirm`: a new key is
   made and pushed, the old one is retired but kept. Content is never re-sealed: each payload names
   its `key_id` and opens with the passphrase that made that key.

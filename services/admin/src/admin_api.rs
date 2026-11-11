@@ -127,7 +127,7 @@ pub(crate) async fn mutate<T>(
 // ------------------------------------------------------------------- status
 
 /// For the "server offline", "token rejected" and audit chain banners.
-pub async fn status(State(state): St) -> Json<serde_json::Value> {
+pub async fn status(State(state): St, headers: axum::http::HeaderMap) -> Json<serde_json::Value> {
     let (online, pending, error, rejected) = match &state.server {
         Some(l) => {
             l.check().await;
@@ -141,6 +141,7 @@ pub async fn status(State(state): St) -> Json<serde_json::Value> {
         "error": error,
         "token_rejected": rejected,
         "audit_chain": state.chain.status(),
+        "sealed_content": banner_status(&state, &headers),
     }))
 }
 
@@ -743,7 +744,7 @@ pub fn audit_retention_days(conn: &Connection) -> u32 {
     setting(conn, "audit_retention_days").and_then(|s| s.trim().parse().ok()).unwrap_or(30)
 }
 
-fn auditor(state: &AdminState) -> Result<&Arc<crate::auditor_link::AuditorLink>, Failure> {
+pub(crate) fn auditor(state: &AdminState) -> Result<&Arc<crate::auditor_link::AuditorLink>, Failure> {
     state.auditor.get().ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "No link to the auditor is set up."))
 }
 
@@ -933,27 +934,145 @@ pub async fn rotate_audit_key(State(state): St, ApiJson(b): ApiJson<RotateKey>) 
 
 #[derive(Deserialize)]
 pub struct OpenRequest {
-    passphrase: String,
+    pub(crate) passphrase: String,
 }
 
-/// `POST /api/admin/v1/audit/payloads/{span_id}/open`: fetch the sealed content of one span from the
-/// auditor, derive the key from the passphrase in the body, open it, and drop the key. The
-/// passphrase is never stored or logged. Before any content is returned an `audit_access` row is
-/// written; a wrong passphrase is recorded too, answers 403, and is rate limited (429).
-pub async fn open_audit_payloads(
+/// What the page and the banner need to know about the sealed-content session, for the browser that asks: whether one is
+/// open and for how long, and the key registry with which keys it holds.
+async fn session_status(state: &AdminState, headers: &axum::http::HeaderMap) -> serde_json::Value {
+    use crate::sealed::{limits, FRESH_SIGNIN_SECS};
+    let token = crate::web::session_cookie(headers);
+    let browser = token.as_deref().map(crate::auth::AdminAuth::hash_token);
+    let view = browser.as_deref().and_then(|b| state.sealed.view(b));
+    let (idle, total) = limits(state.db.lock().await.conn());
+    let keys = state.db.lock().await.audit_keys().unwrap_or_default();
+    let held: Vec<String> = view.as_ref().map(|v| v.key_ids.clone()).unwrap_or_default();
+    let fresh_left = token.as_deref().and_then(|t| state.auth.session_age_secs(t)).map(|age| (FRESH_SIGNIN_SECS - age).max(0));
+    serde_json::json!({
+        "open": view.is_some(),
+        "idle_left_secs": view.as_ref().map(|v| v.idle_left_secs),
+        "total_left_secs": view.as_ref().map(|v| v.total_left_secs),
+        "idle_limit_secs": view.as_ref().map_or(idle.as_secs(), |v| v.idle_limit_secs),
+        "total_limit_secs": view.as_ref().map_or(total.as_secs(), |v| v.total_limit_secs),
+        "fresh_signin_secs_left": fresh_left,
+        "keys": keys.iter().map(|k| serde_json::json!({
+            "key_id": k.key_id, "created_at": k.created_at, "retired_at": k.retired_at, "open": held.contains(&k.key_id),
+        })).collect::<Vec<_>>(),
+    })
+}
+
+/// The banner's part of the status: whether this browser has a session and how long it has left, and the alerts of the
+/// last day. Nothing here names a key or content.
+pub(crate) fn banner_status(state: &AdminState, headers: &axum::http::HeaderMap) -> serde_json::Value {
+    let browser = crate::web::session_cookie(headers).map(|t| crate::auth::AdminAuth::hash_token(&t));
+    let view = browser.as_deref().and_then(|b| state.sealed.view(b));
+    serde_json::json!({
+        "open": view.is_some(),
+        "idle_left_secs": view.as_ref().map(|v| v.idle_left_secs),
+        "total_left_secs": view.as_ref().map(|v| v.total_left_secs),
+        "alerts": state.sealed.alerts().iter().map(|a| serde_json::json!({ "kind": a.kind, "at": a.at, "text": a.text })).collect::<Vec<_>>(),
+    })
+}
+
+/// `GET /api/admin/v1/audit/session`: is sealed content open for this browser, and for how long.
+pub async fn get_unseal_session(State(state): St, headers: axum::http::HeaderMap) -> Json<serde_json::Value> {
+    // A session that is due ends now, and says so in the record, before anyone is told it is open.
+    crate::sealed::sweep(&state).await;
+    Json(session_status(&state, &headers).await)
+}
+
+/// `POST /api/admin/v1/audit/session`: the passphrase, entered after a fresh sign-in, opens sealed content for a
+/// while (ADR 0011 rule 8). The keys it derives live in this process's memory only. The request is recorded before it
+/// is handled, so an unseal that cannot be recorded does not happen.
+pub async fn start_unseal_session(
     State(state): St,
-    Path(span_id): Path<String>,
+    headers: axum::http::HeaderMap,
     ApiJson(b): ApiJson<OpenRequest>,
-) -> Result<Json<serde_json::Value>, Failure> {
-    use crate::audit_key::{derive, key_id, open_sealed, KdfParams};
-    use base64::Engine;
+) -> Result<(StatusCode, Json<serde_json::Value>), Failure> {
+    use crate::audit_key::{derive, KdfParams};
+    use crate::sealed::{is_that_key, limits, FRESH_SIGNIN_SECS};
     let now = crate::auth::now();
+    let token = crate::web::session_cookie(&headers).ok_or_else(|| err(StatusCode::UNAUTHORIZED, "Sign in again."))?;
+    if state.auth.session_age_secs(&token).is_none_or(|age| age > FRESH_SIGNIN_SECS) {
+        return Err(err(
+            StatusCode::FORBIDDEN,
+            &format!(
+                "Sealed content needs a fresh sign-in: sign out, sign in again and enter the passphrase within {} minutes.",
+                FRESH_SIGNIN_SECS / 60
+            ),
+        ));
+    }
     if let Some(wait) = state.audit_opens.locked_for(now) {
         return Err(err(StatusCode::TOO_MANY_REQUESTS, &format!("Too many wrong passphrases. Try again in {} minutes.", (wait + 59) / 60))
             .retry_after(wait.max(1) as u64));
     }
+    let rows = state.db.lock().await.audit_keys().map_err(internal)?;
+    if rows.is_empty() {
+        return Err(err(StatusCode::CONFLICT, "There is no audit key yet."));
+    }
+    // One key for each key in the registry that this passphrase makes; each is derived once and kept only in the session.
+    let mut keys = std::collections::BTreeMap::new();
+    for row in &rows {
+        let (pass, salt, params) = (b.passphrase.clone(), row.salt, KdfParams::parse(&row.argon_params).unwrap_or(KdfParams::CURRENT));
+        let kp = tokio::task::spawn_blocking(move || derive(&pass, &salt, params)).await.map_err(internal)?.map_err(internal)?;
+        if is_that_key(&row.key_id, &kp) {
+            keys.insert(row.key_id.clone(), kp);
+        }
+    }
+    // Written before anything is opened; if it cannot be written, nothing is.
+    {
+        let db = state.db.lock().await;
+        let named = keys.keys().next().cloned().or_else(|| rows.last().map(|r| r.key_id.clone())).unwrap_or_default();
+        crate::db::record_audit_access(db.conn(), "(session)", &named, now, !keys.is_empty()).map_err(internal)?;
+    }
+    if keys.is_empty() {
+        state.audit_opens.record_wrong(now);
+        // 403, not 401: the page treats 401 as "signed out".
+        return Err(err(StatusCode::FORBIDDEN, "That passphrase does not open any audit key."));
+    }
+    state.audit_opens.record_right();
+    let (idle, total) = limits(state.db.lock().await.conn());
+    let browser = crate::auth::AdminAuth::hash_token(&token);
+    let count = keys.len();
+    let fresh = state.sealed.start(&browser, keys, idle, total);
+    state.sealed.alert(
+        "unsealed",
+        format!(
+            "Sealed audit content was {} ({} key{}); it is sealed again after {} minutes without use or {} in all.",
+            if fresh { "unsealed" } else { "unsealed with another passphrase" },
+            count,
+            if count == 1 { "" } else { "s" },
+            idle.as_secs() / 60,
+            total.as_secs() / 60
+        ),
+    );
+    let status = session_status(&state, &headers).await;
+    Ok((if fresh { StatusCode::CREATED } else { StatusCode::OK }, Json(status)))
+}
+
+/// `DELETE /api/admin/v1/audit/session`: Seal. Drops the keys. The request is its record.
+pub async fn end_unseal_session(State(state): St) -> StatusCode {
+    state.end_sealed(crate::sealed::Ended::Seal, false).await;
+    StatusCode::NO_CONTENT
+}
+
+/// `GET /api/admin/v1/audit/payloads/{span_id}`: the content of one span, opened with the session's keys. Each view is
+/// recorded before it is made (so one that cannot be recorded is refused), and counts as use. Without a session there is
+/// nothing to open with: `403`.
+pub async fn view_audit_payloads(
+    State(state): St,
+    headers: axum::http::HeaderMap,
+    Path(span_id): Path<String>,
+) -> Result<Json<serde_json::Value>, Failure> {
+    use base64::Engine;
     if span_id.is_empty() || span_id.len() > 64 || !span_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
         return Err(err(StatusCode::NOT_FOUND, "No such span."));
+    }
+    let token = crate::web::session_cookie(&headers).ok_or_else(|| err(StatusCode::UNAUTHORIZED, "Sign in again."))?;
+    let browser = crate::auth::AdminAuth::hash_token(&token);
+    crate::sealed::sweep(&state).await;
+    if !state.sealed.touch(&browser) {
+        return Err(err(StatusCode::FORBIDDEN, "Sealed content is sealed. Enter the audit passphrase to open it."));
     }
     let body = match auditor(&state)?.get(&format!("/spans/{span_id}/payloads")).await {
         Some((200, body)) => body,
@@ -966,49 +1085,25 @@ pub async fn open_audit_payloads(
     if list.is_empty() {
         return Ok(Json(serde_json::json!({ "span_id": span_id, "payloads": [] })));
     }
-
-    // One key per key id the payloads name; each is derived once and dropped when this returns.
-    let mut keys: std::collections::BTreeMap<String, Option<crate::audit_key::AuditKeypair>> = std::collections::BTreeMap::new();
-    let passphrase = b.passphrase;
-    let mut all_right = true;
-    for p in &list {
-        let kid = p["key_id"].as_str().unwrap_or("").to_string();
-        if keys.contains_key(&kid) {
-            continue;
-        }
-        let row = state.db.lock().await.audit_key(&kid).map_err(internal)?;
-        let derived = match row {
-            None => None,
-            Some(row) => {
-                let (pass, salt, params) =
-                    (passphrase.clone(), row.salt, KdfParams::parse(&row.argon_params).unwrap_or(KdfParams::CURRENT));
-                let kp = tokio::task::spawn_blocking(move || derive(&pass, &salt, params)).await.map_err(internal)?.map_err(internal)?;
-                // Right passphrase only if it gives back the very key the payload names.
-                (key_id(&kp.public_bytes()) == kid).then_some(kp)
-            }
-        };
-        all_right &= derived.is_some();
-        keys.insert(kid, derived);
-    }
-    let first_key = list[0]["key_id"].as_str().unwrap_or("").to_string();
-    // The access is written before anything is returned; if it cannot be written, nothing is.
-    {
-        let db = state.db.lock().await;
-        crate::db::record_audit_access(db.conn(), &span_id, &first_key, now, all_right).map_err(internal)?;
-    }
-    if !all_right {
-        state.audit_opens.record_wrong(now);
-        // 403, not 401: the page treats 401 as "signed out".
-        return Err(err(StatusCode::FORBIDDEN, "That passphrase does not open this content."));
-    }
-    state.audit_opens.record_right();
+    let registry = state.db.lock().await.audit_keys().map_err(internal)?;
     let mut out = Vec::new();
+    let mut any = false;
     for p in &list {
         let kid = p["key_id"].as_str().unwrap_or("");
         let ct = base64::engine::general_purpose::STANDARD.decode(p["ciphertext_b64"].as_str().unwrap_or("")).map_err(internal)?;
-        let kp = keys.get(kid).and_then(|k| k.as_ref()).ok_or_else(|| internal(()))?;
-        let text = open_sealed(&kp.secret, &ct).map(|b| String::from_utf8_lossy(&b).into_owned());
-        out.push(serde_json::json!({ "role": p["role"], "key_id": kid, "text": text }));
+        let text = state.sealed.open_one(&browser, kid, &ct).map(|b| String::from_utf8_lossy(&b).into_owned());
+        any |= text.is_some();
+        // A payload the session has no key for names the key, so the person knows which passphrase it needs.
+        let named = registry.iter().find(|k| k.key_id == kid);
+        out.push(serde_json::json!({
+            "role": p["role"], "key_id": kid, "text": text,
+            "key_created_at": named.map(|k| k.created_at), "key_retired_at": named.and_then(|k| k.retired_at),
+        }));
+    }
+    {
+        let first = list[0]["key_id"].as_str().unwrap_or("").to_string();
+        let db = state.db.lock().await;
+        crate::db::record_audit_access(db.conn(), &span_id, &first, crate::auth::now(), any).map_err(internal)?;
     }
     Ok(Json(serde_json::json!({ "span_id": span_id, "payloads": out })))
 }
@@ -1037,6 +1132,13 @@ pub struct AdminSettings {
     /// Days audit records are kept (7 to 3650). Always present when read; left out on a save keeps it.
     #[serde(default)]
     audit_retention_days: Option<u32>,
+    /// Minutes without use before sealed content seals itself (1 to 720). Always present when read; a save that leaves it
+    /// out keeps it.
+    #[serde(default)]
+    unseal_idle_minutes: Option<u32>,
+    /// Minutes in all before it seals itself (1 to 720), however it is used.
+    #[serde(default)]
+    unseal_total_minutes: Option<u32>,
     /// The id of the key the server seals with now. Read-only: changing it is the rotate action.
     #[serde(default, skip_deserializing)]
     audit_key_id: Option<String>,
@@ -1065,7 +1167,7 @@ fn check_display(d: &DisplaySettings) -> Result<(), Failure> {
     Ok(())
 }
 
-fn setting(conn: &Connection, key: &str) -> Option<String> {
+pub(crate) fn setting(conn: &Connection, key: &str) -> Option<String> {
     conn.query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| r.get(0)).ok()
 }
 
@@ -1088,6 +1190,8 @@ pub async fn get_settings(State(state): St) -> Json<AdminSettings> {
             setting(c, "kill_switch_aborts_running").map(|v| !matches!(v.trim(), "0" | "false")).unwrap_or(true),
         ),
         audit_retention_days: Some(setting(c, "audit_retention_days").and_then(|s| s.trim().parse().ok()).unwrap_or(30)),
+        unseal_idle_minutes: Some((crate::sealed::limits(c).0.as_secs() / 60) as u32),
+        unseal_total_minutes: Some((crate::sealed::limits(c).1.as_secs() / 60) as u32),
         audit_key_id: crate::db::active_audit_key(c).ok().flatten().map(|k| k.key_id),
     })
 }
@@ -1105,6 +1209,12 @@ pub async fn put_settings(
         }
         if let Some(on) = s.kill_switch {
             n.add("kill_switch", serde_json::json!(on));
+        }
+        if let Some(m) = s.unseal_idle_minutes {
+            n.add("unseal_idle_minutes", serde_json::json!(m));
+        }
+        if let Some(m) = s.unseal_total_minutes {
+            n.add("unseal_total_minutes", serde_json::json!(m));
         }
     }
     if s.system_prompt.chars().count() > MAX_PROMPT_CHARS {
@@ -1133,6 +1243,19 @@ pub async fn put_settings(
         }
     }
     let retention = s.audit_retention_days.map(|n| n.to_string());
+    // How long sealed content stays open (ADR 0011 rule 11): up to 12 hours each, and the idle time may not exceed the total.
+    let (old_idle, old_total) = crate::sealed::limits(state.db.lock().await.conn());
+    let (old_idle_m, old_total_m) = ((old_idle.as_secs() / 60) as u32, (old_total.as_secs() / 60) as u32);
+    let (idle_m, total_m) = (s.unseal_idle_minutes.unwrap_or(old_idle_m), s.unseal_total_minutes.unwrap_or(old_total_m));
+    for (n, what) in [(idle_m, "The idle time"), (total_m, "The total time")] {
+        if !(1..=crate::sealed::MAX_MINUTES).contains(&n) {
+            return Err(bad(&format!("{what} for sealed content must be between 1 and {} minutes.", crate::sealed::MAX_MINUTES)));
+        }
+    }
+    if idle_m > total_m {
+        return Err(bad("Sealed content cannot stay open longer without use than in all."));
+    }
+    let (idle_text, total_text) = (idle_m.to_string(), total_m.to_string());
     let aborts = s.kill_switch_aborts_running.map(|b| if b { "1" } else { "0" });
     let kill = s.kill_switch;
     mutate(&state, vec![], move |c| {
@@ -1149,6 +1272,8 @@ pub async fn put_settings(
         if let Some(r) = retention.as_deref() {
             pairs.push(("audit_retention_days", r));
         }
+        pairs.push(("unseal_idle_minutes", idle_text.as_str()));
+        pairs.push(("unseal_total_minutes", total_text.as_str()));
         if let Some(k) = kill {
             c.execute("UPDATE budgets SET kill_switch = ?1 WHERE id = 1", [k as i64]).map_err(internal)?;
         }
@@ -1165,6 +1290,16 @@ pub async fn put_settings(
     // The auditor keeps the records for as long as this says: give it the setting now, not at its next round.
     if let Some(a) = state.auditor.get() {
         a.mark_dirty();
+    }
+    // A change of how long content stays unsealed is an alert, and applies to a session that is open (ADR 0011 rule 12).
+    if (idle_m, total_m) != (old_idle_m, old_total_m) {
+        state
+            .sealed
+            .set_limits(std::time::Duration::from_secs(u64::from(idle_m) * 60), std::time::Duration::from_secs(u64::from(total_m) * 60));
+        state.sealed.alert(
+            "timeouts_changed",
+            format!("The time sealed content stays open was changed: {idle_m} minutes without use, {total_m} in all (it was {old_idle_m} and {old_total_m})."),
+        );
     }
     Ok(StatusCode::NO_CONTENT)
 }

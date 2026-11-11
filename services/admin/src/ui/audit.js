@@ -15,7 +15,7 @@
     for (const s of SUBS) show($('audit-' + s), s === name);
     keepInAddress();
     if (name === 'routing' && window.askbarAudit) window.askbarAudit.loadRouting();
-    if (name === 'content' && window.askbarAudit) window.askbarAudit.loadAccess();
+    if (name === 'content' && window.askbarAudit) { window.askbarAudit.loadAccess(); window.askbarAudit.loadSession(); }
   }
 
   // The address names the view, and the request on the Trace view, so it can be bookmarked or shared:
@@ -389,7 +389,7 @@
   // ---------------------------------------------------------------- content
 
   // The spans of the open request that have sealed content, each with a View button. Nothing is
-  // fetched until View is clicked and a passphrase is typed.
+  // fetched until View is clicked, and only while a session is open.
   function renderSealed(trace) {
     const box = $('audit-sealed');
     box.textContent = '';
@@ -403,7 +403,7 @@
       const view = el('button', 'secondary view-btn', 'View');
       view.type = 'button';
       view.dataset.span = s.id;
-      view.addEventListener('click', () => askPassphrase(s));
+      view.addEventListener('click', () => viewSpan(s));
       row.appendChild(view);
       box.appendChild(row);
     }
@@ -430,65 +430,108 @@
     }
   }
 
-  const dialog = $('audit-pass-dialog');
-  let plainTimer = null;
+  // ------------------------------------------------------------ the session
+
+  // Sealed content is opened with a session (ADR 0011): one passphrase, then it stays open until it seals itself, Seal,
+  // or sign-out. Nothing opened stays on the page once it is sealed. The server keeps the time; the page counts down.
+  const session = { open: false, idleLeft: 0, totalLeft: 0, keys: [] };
 
   // Wipes whatever was opened, and the passphrase field, from the page.
   function wipe() {
-    clearTimeout(plainTimer);
-    plainTimer = null;
-    $('audit-plain').textContent = '';
+    $('audit-viewed').textContent = '';
     $('audit-pass').value = '';
   }
 
-  function closeDialog() {
-    wipe();
-    if (dialog.open) dialog.close();
+  function renderSession() {
+    show($('audit-unseal-form'), !session.open);
+    show($('audit-open'), session.open);
+    if (!session.open) { wipe(); return; }
+    const left = Math.min(session.idleLeft, session.totalLeft);
+    const mins = Math.max(1, Math.ceil(left / 60));
+    const held = session.keys.filter((k) => k.open).map((k) => k.key_id);
+    $('audit-open-state').textContent = 'Unsealed. It seals itself in about ' + mins + ' minute' + (mins === 1 ? '' : 's') + ' (sooner if it is not used; ' + Math.max(1, Math.ceil(session.totalLeft / 60)) + ' at most). Keys open: ' + (held.length ? held.join(', ') : 'none') + '.';
   }
 
-  function askPassphrase(span) {
-    wipe();
-    state.opening = span;
-    $('audit-pass-what').textContent = span.kind + ' · ' + span.name + ' (' + span.sealed + (span.sealed === 1 ? ' sealed item' : ' sealed items') + ')';
-    show($('audit-pass-error'), false);
-    show($('audit-ask'), true);
-    $('audit-pass-ok').hidden = false;
-    $('audit-pass-cancel').textContent = 'Cancel';
-    if (!dialog.open) dialog.showModal();
-    $('audit-pass').focus();
+  function applySession(r) {
+    session.open = !!r.open;
+    session.idleLeft = r.idle_left_secs || 0;
+    session.totalLeft = r.total_left_secs || 0;
+    session.keys = r.keys || [];
+    renderSession();
   }
 
-  $('audit-pass-cancel').addEventListener('click', closeDialog);
-  dialog.addEventListener('close', wipe);
+  // The status poll tells the tab when the session ended on its own (a timeout, a sign-out elsewhere, a restart).
+  function sessionFromStatus(s) {
+    if (!s.open && session.open) applySession({ open: false });
+    else if (s.open && !session.open) loadSession();
+  }
 
-  $('audit-pass-form').addEventListener('submit', async (e) => {
+  async function loadSession() {
+    const r = await read('/api/admin/v1/audit/session');
+    if (r) applySession(r);
+  }
+
+  setInterval(() => {
+    if (!session.open) return;
+    session.idleLeft = Math.max(0, session.idleLeft - 1);
+    session.totalLeft = Math.max(0, session.totalLeft - 1);
+    if (Math.min(session.idleLeft, session.totalLeft) === 0) loadSession();
+    else renderSession();
+  }, 1000);
+
+  $('audit-unseal-form').addEventListener('submit', async (e) => {
     e.preventDefault();
-    if (!state.opening) return;
     const passphrase = $('audit-pass').value;
     $('audit-pass').value = ''; // gone from the field the moment it is sent, whatever the answer
     show($('audit-pass-error'), false);
     try {
-      const r = await api('POST', '/api/admin/v1/audit/payloads/' + encodeURIComponent(state.opening.id) + '/open', { passphrase }).finally(loadAccess);
-      const plain = $('audit-plain');
-      plain.textContent = '';
-      for (const p of r.payloads) {
-        plain.appendChild(el('strong', '', p.role + ' (key ' + p.key_id + ')'));
-        plain.appendChild(document.createTextNode('\n' + (p.text == null ? '(could not be opened)' : p.text) + '\n\n'));
-      }
-      if (!r.payloads.length) plain.textContent = 'Nothing is sealed on this span.';
-      show($('audit-ask'), false);
-      $('audit-pass-ok').hidden = true;
-      $('audit-pass-cancel').textContent = 'Close';
-      // What was opened does not stay on the page: a minute at most.
-      clearTimeout(plainTimer);
-      plainTimer = setTimeout(closeDialog, state.plainMs || 60000);
+      applySession(await api('POST', '/api/admin/v1/audit/session', { passphrase }).finally(loadAccess));
     } catch (ex) {
-      if (ex.message === 'Signed out') { closeDialog(); return; }
+      if (ex.message === 'Signed out') return;
       $('audit-pass-error').textContent = ex.message;
       show($('audit-pass-error'), true);
       $('audit-pass').focus();
     }
   });
+
+  $('audit-seal').addEventListener('click', async () => {
+    try { await api('DELETE', '/api/admin/v1/audit/session'); } catch (_) { /* signed out */ }
+    applySession({ open: false });
+  });
+
+  // View: opens one span with the session's keys. Without a session it sends you to the passphrase field.
+  async function viewSpan(span) {
+    show($('audit-pass-error'), false);
+    if (!session.open) {
+      $('audit-pass-error').textContent = 'Sealed. Enter the audit passphrase above to open it.';
+      show($('audit-pass-error'), true);
+      $('audit-pass').focus();
+      return;
+    }
+    try {
+      const r = await api('GET', '/api/admin/v1/audit/payloads/' + encodeURIComponent(span.id)).finally(loadAccess);
+      const box = $('audit-viewed');
+      for (const old of box.querySelectorAll('[data-span="' + CSS.escape(span.id) + '"]')) old.remove();
+      const block = el('div', 'viewed');
+      block.dataset.span = span.id;
+      block.appendChild(el('h4', '', span.kind + ' · ' + span.name));
+      const plain = el('pre', 'plain');
+      for (const p of r.payloads) {
+        plain.appendChild(el('strong', '', p.role + ' (key ' + p.key_id + ')'));
+        let text = p.text;
+        if (text == null) text = '(not opened: this session has no key for it' + (p.key_created_at ? '; key ' + p.key_id + ' was made ' + new Date(p.key_created_at * 1000).toLocaleDateString() + (p.key_retired_at ? ' and retired ' + new Date(p.key_retired_at * 1000).toLocaleDateString() : '') : '') + '. Enter the passphrase it was made with.)';
+        plain.appendChild(document.createTextNode('\n' + text + '\n\n'));
+      }
+      if (!r.payloads.length) plain.textContent = 'Nothing is sealed on this span.';
+      block.appendChild(plain);
+      box.appendChild(block);
+    } catch (ex) {
+      if (ex.message === 'Signed out') return;
+      loadSession();
+      $('audit-pass-error').textContent = ex.message;
+      show($('audit-pass-error'), true);
+    }
+  }
 
   // Opens one request on the Trace view.
   async function openTrace(id) {
@@ -520,6 +563,6 @@
     if (b) setSub(b.dataset.sub);
   });
 
-  window.askbarAudit = { setSub, read, banner, state, renderOverview, requestsQuery, openTrace, layout, renderTrace, loadRouting, failureClass, renderSealed, loadAccess };
+  window.askbarAudit = { setSub, read, banner, state, renderOverview, requestsQuery, openTrace, layout, renderTrace, loadRouting, failureClass, renderSealed, loadAccess, loadSession, sessionFromStatus, session };
   registerTab({ id: 'audit', load });
 })();

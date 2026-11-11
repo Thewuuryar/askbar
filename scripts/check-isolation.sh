@@ -214,13 +214,13 @@ if command -v cargo >/dev/null 2>&1 && [ -f Cargo.toml ]; then
 else
   fail "cargo (and the workspace) is needed to check the server's dependencies"
 fi
-# After opening sealed content, the admin's logs hold no passphrase. A made-up one is used for a
-# failed open, which is the case that would be easiest to log by mistake.
+# After a try at unsealing content, the admin's logs hold no passphrase. A made-up one is used for a
+# failed unseal, which is the case that would be easiest to log by mistake.
 LOGPASS="isolation-check-passphrase-$(head -c 6 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 admin_script "$(admin_login)
-call('POST', '/api/admin/v1/audit/payloads/no-such-span/open', {'passphrase': '$LOGPASS'})
+call('POST', '/api/admin/v1/audit/session', {'passphrase': '$LOGPASS'})
 call('POST', '/api/admin/v1/audit/rotate-key', {'current': '$LOGPASS', 'new': '$LOGPASS-new', 'confirm': '$LOGPASS-new'})" >/dev/null 2>&1
-docker logs "$ADMIN" 2>&1 | grep -q "$LOGPASS" && fail "the admin's logs contain a passphrase" || pass "the admin's logs contain no passphrase after open and rotate attempts"
+docker logs "$ADMIN" 2>&1 | grep -q "$LOGPASS" && fail "the admin's logs contain a passphrase" || pass "the admin's logs contain no passphrase after unseal and rotate attempts"
 docker logs "$SERVER" 2>&1 | grep -q "$LOGPASS" && fail "the server's logs contain a passphrase" || pass "the server's logs contain no passphrase"
 
 echo "== 3d. CLIProxyAPI"
