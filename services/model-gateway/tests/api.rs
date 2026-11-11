@@ -450,7 +450,8 @@ async fn no_provider_is_called_when_the_auditor_cannot_be_reached() {
     assert_eq!(r.status(), 503);
     assert_eq!(r.json::<Value>().await.unwrap()["error"], "audit_backlog");
     assert_eq!(rig.provider_calls(), 0);
-    assert_eq!(rig.gw.audit().queued(), 2, "the refusal waits for the auditor");
+    // The configuration it applied (ADR 0028 rule 5) and the refusal (a span that began and ended) wait for the auditor.
+    assert_eq!(rig.gw.audit().queued(), 3, "the applied version and the refusal wait for the auditor");
     let _ = &rig.audit_url;
 }
 
