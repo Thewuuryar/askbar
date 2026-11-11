@@ -14,8 +14,8 @@ pub struct Link {
 }
 
 /// Only links whose receiver exists: `admin-server` (step 2.1), the auditor's two admin links (2.4), and the
-/// three `model-gateway` links (3.1, ADR 0054), and the server's link to the auditor (3.1, second half);
-/// `alerter` links come in phase 4.
+/// three `model-gateway` links (3.1, ADR 0054), the server's link to the auditor (3.1, second half), and the
+/// alerter's three links (4.1, ADR 0055).
 pub const LINKS: &[Link] = &[
     Link { name: "admin-server", caller: "admin", receiver: "server", prefix: "mgt_" }, // names-ok: the token prefix already issued
     Link { name: "admin-auditor-append", caller: "admin", receiver: "auditor", prefix: "audapp_" },
@@ -27,10 +27,16 @@ pub const LINKS: &[Link] = &[
     // The gateway reads the day's and month's token counts to hold the budget (plan step 3.2, ADR 0014): `GET /token-counts`
     // and nothing else.
     Link { name: "model-gateway-auditor-read", caller: "model-gateway", receiver: "auditor", prefix: "gwrd_" },
+    // The alerter (plan step 4.1, ADR 0055): the auditor sends it events, the admin configures it and sends its own events,
+    // and it appends the outcome of each alert to the auditor.
+    Link { name: "auditor-alerter", caller: "auditor", receiver: "alerter", prefix: "audalr_" },
+    Link { name: "admin-alerter", caller: "admin", receiver: "alerter", prefix: "admalr_" },
+    Link { name: "alerter-auditor", caller: "alerter", receiver: "auditor", prefix: "alraud_" },
 ];
 
 /// A service with a credential volume `<name>-token`, and the uid that reads it (ADR 0003).
-pub const SERVICES: &[(&str, u32)] = &[("admin", 10001), ("server", 10002), ("auditor", 10003), ("model-gateway", 10004)];
+pub const SERVICES: &[(&str, u32)] =
+    &[("admin", 10001), ("server", 10002), ("auditor", 10003), ("model-gateway", 10004), ("alerter", 10005)];
 
 pub fn link(name: &str) -> Option<&'static Link> {
     LINKS.iter().find(|l| l.name == name)

@@ -125,7 +125,7 @@ That starts these containers, with `bootstrap` (no network, exits when it has ma
 
 ### Docker networks
 
-Askbar gives each link between two services its own network, so a service reaches only the services it has to ([architecture.md](architecture.md#links)). The stack has twelve networks today (`edge`, `client-api`, `server-api`, `cpa-admin`, `cpa-gateway`, `audit-admin`, `audit-caddy`, `audit-model-gateway`, `audit-server`, `gateway-admin`, `gateway-server` and `outbound`) and a few more once the alerter and the other callers get theirs. Each network takes a subnet from Docker's address pools, and with Docker's default settings a host has about 30 to share between all its Compose projects. When they run out, `docker compose up` fails with:
+Askbar gives each link between two services its own network, so a service reaches only the services it has to ([architecture.md](architecture.md#links)). The stack has fifteen networks (`edge`, `client-api`, `server-api`, `cpa-admin`, `cpa-gateway`, `audit-admin`, `audit-alerter`, `audit-caddy`, `audit-model-gateway`, `audit-server`, `alerter-admin`, `alerter-outbound`, `gateway-admin`, `gateway-server` and `outbound`). Each network takes a subnet from Docker's address pools, and with Docker's default settings a host has about 30 to share between all its Compose projects. When they run out, `docker compose up` fails with:
 
 ```text
 could not find an available, non-overlapping IPv4 address pool among the defaults to assign to the network
@@ -229,13 +229,13 @@ The admin makes CLIProxyAPI's config and API key itself (nobody copies a key any
 
 **Set in the admin site** instead of in files: admin password, hostname, Cloudflare token, allowlist, the Let's Encrypt staging switch, the system prompt, display defaults and per-user defaults.
 
-**Compose profiles:** the services (server, `model-gateway`, auditor, admin, Caddy, CLIProxyAPI) are always on; `bootstrap` runs once at each start. `dev` adds a mock LLM (`tests/e2e/mock_llm.py`).
+**Compose profiles:** the services (server, `model-gateway`, auditor, alerter, admin, Caddy, CLIProxyAPI) are always on; `bootstrap` runs once at each start. `dev` adds a mock LLM (`tests/e2e/mock_llm.py`).
 
 ### Tokens between services
 
-Each link between two services has its own token ([ADR 0004](adr/0004-bootstrap-and-per-link-tokens.md)). A one-shot container, `bootstrap` ([ADR 0049](adr/0049-bootstrap.md)), makes them: it has no network, runs as root with one capability (`CHOWN`), mounts only the credential volumes, and exits. `server` and `admin` start after it has finished. Today there is one link, `admin-server`.
+Each link between two services has its own token ([ADR 0004](adr/0004-bootstrap-and-per-link-tokens.md)). A one-shot container, `bootstrap` ([ADR 0049](adr/0049-bootstrap.md)), makes them: it has no network, runs as root with one capability (`CHOWN`), mounts only the credential volumes, and exits. The services start after it has finished. Every link and the prefix of its tokens is in `services/bootstrap/src/links.rs`, which a test checks against the Links table in [architecture.md](architecture.md#links); `docker compose run --rm bootstrap list` prints them.
 
-- **Where they are.** One volume per service, `<service>-token`: `server-token` (the server's, as before), `admin-token`, `auditor-token` and `model-gateway-token`. Inside, `call/<link>.token` is a token the service sends and `accept/<link>.sha256` is the hash of a token it checks. A token is mode 400 and its caller's; a hash is mode 444 and its receiver's. Each service mounts only its own volume, read-only.
+- **Where they are.** One volume per service, `<service>-token`: `server-token` (the server's, as before), `admin-token`, `auditor-token`, `model-gateway-token` and `alerter-token`. Inside, `call/<link>.token` is a token the service sends and `accept/<link>.sha256` is the hash of a token it checks. A token is mode 400 and its caller's; a hash is mode 444 and its receiver's. Each service mounts only its own volume, read-only.
 - **Install.** Nothing to do: `docker compose up -d` runs `bootstrap` first. A second run changes nothing.
 - **Upgrade from a build before `bootstrap`.** `docker compose up -d --build`. `bootstrap` makes a new `admin-server` token; the admin reads it and deletes its old `server.token` on start, and the server reads the new hash. Nothing for you to do, and no one is signed out or re-paired. The old `token.sha256` in `server-token` is no longer read; the server refuses to start without the new file and says to run `docker compose up -d`.
 - **Rotate** from the Docker host, then restart what it names from the admin site's **Services** page:
@@ -279,6 +279,17 @@ Provider calls and provider keys have their own container, `askbar-model-gateway
 - **Tokens.** `server-model-gateway` (the server calls it) and `admin-model-gateway` (the admin pushes and restarts) are made by `bootstrap`, and `model-gateway-auditor` (it appends to the auditor). Each listener takes only its own link's token. The admin will not start without its token: run `docker compose up -d`, which runs `bootstrap` first.
 - **Upgrade.** `docker compose up -d --build`. `bootstrap` makes the new tokens (and, from the budget step, the gateway's auditor read token), the admin keeps working with the keys it has, and the gateway starts with none until the admin pushes (seconds). `docker compose --profile dev` also puts the mock LLM on `outbound`.
 
+### The alerter
+
+Alerts have their own container, `askbar-alerter` ([ADR 0055](adr/0055-alerter.md), [ADR 0006](adr/0006-v1-outbound-access-and-alerts.md)), so the auditor can stay offline. It runs as uid 10005 with no capabilities and 128 MB, and does one thing: it takes an event (a kind from a fixed list, a severity, a time and a few typed fields, never free text) from the auditor or the admin and delivers it, with its own sentence for that kind. It decides no rule and never reads the audit store. The API is [alerter.v1.yaml](openapi/alerter.v1.yaml); it is never public.
+
+**What is in the stack so far.** The container, its networks and its tokens. Nothing sends it events or settings yet: the admin's delivery settings and the rules that make events come in later steps, so until then it answers `503 not_configured` to anything but its status, and sends no alert.
+
+- **Networks.** `audit-alerter` (with the auditor) and `alerter-admin` (with the admin), both `internal`, and `alerter-outbound`, which only the alerter joins and which is the alerter's one route out (it is not `outbound`, where `model-gateway` sits, so nothing else shares a network with it that can reach the internet). Its two listeners are on the addresses of the two internal networks, never on `alerter-outbound`.
+- **Volumes.** `alerter-data` (the repeat ledger: which alerts were sent when and how many repeats were held back, no secret and no content) and `alerter-token` (its credential volume, read-only). The delivery settings, including a ntfy topic and token, are the admin's and will be pushed to it and kept in its memory, never on a volume.
+- **Tokens.** `auditor-alerter` (the auditor sends events), `admin-alerter` (the admin configures it and sends its own events) and `alerter-auditor` (it appends the outcome of each alert to the auditor, as metadata only), made by `bootstrap`.
+- **Upgrade.** `docker compose up -d --build`. `bootstrap` makes the three new tokens, and Docker makes the two new volumes and three new networks. Nothing to do, and nothing is lost. If `docker compose up` fails with the address-pool error ([Docker networks](#docker-networks)), the stack now needs three more networks than before.
+
 ### Starting and stopping services
 
 The admin site's **Services** page shows whether the server, `model-gateway`, the admin, Caddy and CLIProxyAPI answer, and can restart each (it asks first and says what that will interrupt). No service has the Docker socket ([ADR 0005](adr/0005-no-controller-and-self-restart.md)): the server and the admin restart themselves through their own endpoints and Docker's restart policy starts them again (the server is back within a minute; you sign in to the admin again), Caddy has its configuration pushed again, and CLIProxyAPI is restarted by a small supervisor in its image (`askbar-cpa`, [ADR 0037](adr/0037-askbar-cpa-image-and-supervisor.md)), which also restarts it when its config changes or it crashes. A service refuses a restart in its first 30 seconds, and the server and admin also restart themselves if their own health check fails three times in a row. Starting or stopping a service is done from the host (`docker compose stop server`). Only a signed-in person can restart, not an admin API key; each attempt is recorded, and six a minute is the limit. See [SECURITY.md](../SECURITY.md) for what this trusts.
@@ -309,6 +320,7 @@ crates/askbar-service/ what every service shares: per-link token checks, GET /st
 crates/askbar-audit/   the audit store (spans, sealed payloads, the hash chain); the auditor links it, the server only in its tests
 services/bootstrap/    makes the per-link tokens and exits; rotates them from the host
 services/auditor/      the audit store as its own container: /api/audit/v1, tokens per link, retention, limits
+services/alerter/      alert delivery as its own container: /api/alerter/v1, templates, repeat limits, ntfy
 services/server/       the server: client API, server API, database, spaces, chat streaming through the gateway
 services/model-gateway/ the provider keys in memory, every provider call, budgets and the model catalog
 services/admin/        the admin service: admin site (src/ui/), admin.db, snapshot push, Caddy configuration (unix only)
@@ -319,10 +331,10 @@ clients/desktop/       the desktop client, its own Cargo workspace and package.j
   tests/               markdown and UI tests for the popup, icon generator
 deploy/caddy/          Caddy's bootstrap config
 deploy/cpa/            notes on CLIProxyAPI
-compose.yaml           bootstrap, server, model-gateway, auditor, admin, caddy, cpa (CLIProxyAPI), plus the dev profile
-Dockerfile             one target per service: `bootstrap`, `server`, `model-gateway`, `auditor`, `admin`, `caddy` (Caddy with the Cloudflare DNS module) and `cpa` (the pinned CLIProxyAPI with our supervisor)
+compose.yaml           bootstrap, server, model-gateway, auditor, alerter, admin, caddy, cpa (CLIProxyAPI), plus the dev profile
+Dockerfile             one target per service: `bootstrap`, `server`, `model-gateway`, `auditor`, `alerter`, `admin`, `caddy` (Caddy with the Cloudflare DNS module) and `cpa` (the pinned CLIProxyAPI with our supervisor)
 scripts/               smoke.sh (end-to-end), check-isolation.sh (container isolation checks) and check-docs.sh
-docs/                  architecture.md, wire-contract.md, adr/, style/, openapi/ (client, server, admin, audit, model-gateway), refactor-log.md
+docs/                  architecture.md, wire-contract.md, adr/, style/, openapi/ (client, server, admin, audit, model-gateway, alerter), refactor-log.md
 tests/e2e/             the admin-site browser test and the mock LLM server
 ```
 

@@ -18,6 +18,10 @@
 #   outbound  model-gateway, and in the dev profile the mock LLM. The one network besides `edge` with a route out
 #               (ADR 0006, ADR 0054); nothing else joins it.
 #   cpa-gateway  model-gateway and CLIProxyAPI, nothing else. `internal`.
+#   audit-alerter  the auditor and the alerter, nothing else. `internal`. The auditor sends its alert events on it, and the
+#               alerter appends the outcome of each alert (ADR 0055); alerter-admin (the admin and the alerter) is the same.
+#   alerter-outbound  the alerter alone. Not `internal`: its route out is for delivering alerts (ntfy, later email) and
+#               checking for releases. It is not `outbound`, where model-gateway sits, so nothing else is on it (ADR 0055).
 # No network pins a subnet or an address; Docker assigns them (docs/guide.md, "Docker networks").
 # The admin joins no network but server-api. Caddy reaches it only through its unix socket (volume admin-run),
 # for /admin. One host serves the admin (/admin), the client API (/api/client) and a 404 for the rest: over HTTPS
@@ -57,6 +61,7 @@ services:
       - admin-token:/admin-token
       - auditor-token:/auditor-token
       - model-gateway-token:/model-gateway-token
+      - alerter-token:/alerter-token
 
   server:
     build:
@@ -108,6 +113,7 @@ services:
       ASKBAR_SERVER_API_URL: http://server-api-host:8082
       # model-gateway's listener for the admin, on gateway-admin (ADR 0054): the admin gives it the provider keys.
       ASKBAR_GATEWAY_URL: http://gateway-admin-host:8084
+      ASKBAR_ALERTER_URL: http://alerter-admin-host:8085
       # The auditor, on audit-admin (ADR 0051): the Audit pages read it with the admin's read token.
       ASKBAR_AUDIT_API_URL: http://auditor:8083
       ASKBAR_PUBLIC_URL: ${ASKBAR_PUBLIC_URL:-}
@@ -119,6 +125,8 @@ services:
       audit-admin: {}
       # The gateway's API (status, configuration, restart), on a network of the two of them with no route out.
       gateway-admin: {}
+      # The alerter's API (delivery settings, test, status, restart, its own events), the same way (ADR 0055).
+      alerter-admin: {}
     volumes:
       # CLIProxyAPI's config: the admin makes it (API key and control secret) before CPA starts.
       - cpa-config:/cpa-config
@@ -149,7 +157,7 @@ services:
     environment:
       # The token API on the address its alias has on each of the three networks of its callers, never a wildcard, so
       # nothing on audit-caddy reaches it; the ingest listener for Caddy's access lines on audit-caddy alone (ADR 0051).
-      ASKBAR_AUDIT_API_ADDRS: auditor-admin-host:8083,auditor-model-gateway-host:8083,auditor-server-host:8083
+      ASKBAR_AUDIT_API_ADDRS: auditor-admin-host:8083,auditor-model-gateway-host:8083,auditor-server-host:8083,auditor-alerter-host:8083
       ASKBAR_AUDIT_INGEST_ADDR: auditor-ingest-host:8086
     networks:
       audit-admin:
@@ -158,6 +166,9 @@ services:
         aliases: [auditor-model-gateway-host]
       audit-server:
         aliases: [auditor-server-host]
+      # The alerter appends the outcome of each alert here, and the auditor sends its events to the alerter on it (ADR 0055).
+      audit-alerter:
+        aliases: [auditor-alerter-host]
       # Caddy's access lines. The ingest listener only; the token API is not on this network.
       audit-caddy:
         aliases: [auditor-ingest-host]
@@ -201,6 +212,39 @@ services:
     volumes:
       # The hashes of the tokens it accepts and the token it sends the auditor, made by bootstrap. Read-only.
       - model-gateway-token:/model-gateway-token:ro
+
+  # Alert delivery (ADR 0055): /api/alerter/v1 on two listeners, one on audit-alerter for the auditor and one on alerter-admin
+  # for the admin, each on the address its alias gives and never a wildcard, because it also sits on alerter-outbound. Runs as
+  # uid 10005 from the image, with no exception to the hardening above, and 128 MB. Two volumes: alerter-data (the repeat
+  # ledger: keys, times and counts, no secret and no content) and its credential volume, read-only. The delivery settings are
+  # the admin's, pushed in memory (nothing secret is on a volume). alerter-outbound is the only network with a route out
+  # that it joins, and the only one with nothing else on it.
+  alerter:
+    build:
+      context: .
+      target: alerter
+    image: askbar-alerter:latest
+    container_name: askbar-alerter
+    restart: unless-stopped
+    <<: *hardening
+    mem_limit: 128m
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+    environment:
+      ASKBAR_ALERTER_AUDITOR_ADDR: alerter-auditor-host:8085
+      ASKBAR_ALERTER_ADMIN_ADDR: alerter-admin-host:8085
+      ASKBAR_AUDIT_API_URL: http://auditor:8083
+    networks:
+      audit-alerter:
+        aliases: [alerter-auditor-host]
+      alerter-admin:
+        aliases: [alerter-admin-host]
+      alerter-outbound: {}
+    volumes:
+      - alerter-data:/alerter-data
+      # The hashes of the tokens it accepts and the token it sends the auditor, made by bootstrap. Read-only.
+      - alerter-token:/alerter-token:ro
 
   mock-llm:
     profiles: ["dev"]
@@ -325,6 +369,16 @@ networks:
   # model-gateway and CLIProxyAPI, nothing else. No route out.
   cpa-gateway:
     internal: true
+  # The auditor and the alerter, nothing else. No route out.
+  audit-alerter:
+    internal: true
+  # The alerter's listener for the admin. The admin and the alerter, nothing else. No route out.
+  alerter-admin:
+    internal: true
+  # The alerter's route out, for delivering alerts and checking for releases (ADR 0055, ADR 0006). Not internal. The alerter
+  # alone joins it, so nothing shares a network with it that has a route out, and its listeners are bound to the addresses
+  # of its two internal networks, so it answers nothing here.
+  alerter-outbound:
   # The providers. Not internal: the one network, besides `edge`, with a route out. Only model-gateway and CLIProxyAPI
   # (and in the dev profile the mock LLM) join it. Their listeners are bound to the addresses of their own internal
   # networks, so neither answers on this one.
@@ -345,6 +399,12 @@ volumes:
   # The gateway's credential volume (ADR 0049, 0054): the hashes of the tokens it accepts, and the token it sends the
   # auditor. Only bootstrap writes it.
   model-gateway-token:
+  # The alerter's repeat ledger (ADR 0055): keys, times and counts. No secret, no content. Docker makes it empty and owned by
+  # uid 10005, as the image's /alerter-data is.
+  alerter-data:
+  # The alerter's credential volume (ADR 0049, 0055): the hashes of the tokens it accepts, and the token it sends the auditor.
+  # Only bootstrap writes it.
+  alerter-token:
   # Held the retired controller's token hash (ADR 0005). Nothing mounts it now; kept declared until 1.0
   # so no install loses a volume by surprise (plan-v1.md: data volumes are never renamed or dropped pre-1.0).
   control-token:
