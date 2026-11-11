@@ -124,7 +124,7 @@ Paths below are relative to `/api/client/v1/spaces/{space_id}`.
   when the reply was stored (renaming or deleting the provider later does not change it). It is absent on
   questions and on replies stored before servers recorded it.
   `"failed"` is on questions only: `{"code", "message"}`, why the question's turn failed (it got no reply,
-  or only part of one). `code` is the stream's `error` code (`timed_out`, `interrupted`, `kill_switch`,
+  or only part of one). `code` is the stream's `error` code (`timed_out`, `interrupted`, `kill_switch`, `user_paused`, `budget_exceeded`,
   `provider_error`, `internal`); `message` is a sentence for a person, always the server's own words,
   never a provider's error text. It is absent when the turn did not fail, after a Stop, and on questions
   stored before servers recorded it.
@@ -145,7 +145,7 @@ the caller is not a member of is `404`; a conversation that already has five mes
 the server cannot take the message it refuses before anything starts, with a problem (see
 *Errors*) whose `error` says why (the typed text is never lost; the client keeps it):
 
-The refusals are 409 `queue_full`, 429 `budget_exceeded` (with `period`), 503 `kill_switch`,
+The refusals are 409 `queue_full`, 429 `budget_exceeded` (with `period`), 503 `kill_switch`, 403 `user_paused`,
 503 `audit_key_missing` and 503 `audit_backlog` (with `Retry-After`); the OpenAPI file lists them on
 `POST /spaces/{space_id}/chat`.
 
@@ -270,8 +270,16 @@ this ([ADR 0022](adr/0022-api-path-conventions.md)); after 1.0, `v1` changes are
   are stopped (ending `cancelled`, `error_code: kill_switch`) when `kill_switch_aborts_running` is
   true (the default) or left to finish when false. `budget`: the tokens used since the start of the
   UTC day and month by metered providers are compared with `budget.daily_tokens` and
-  `budget.monthly_tokens`; subscription providers count as zero. Each gate leaves a `gate` span
-  (`done`, or `blocked` for a refusal, which gets a trace of its own).
+  `budget.monthly_tokens`; subscription providers count as zero. `user_pause`: a user the admin paused
+  (`paused_user_ids`) gets `403 user_paused` before the budget, and the gateway stops the replies that user has
+  running. Each gate leaves a `gate` span (`done`, or `blocked` for a refusal, which gets a trace of its own).
+  **The gateway holds the same gates with its own, authoritative copy** (ADR 0014): the server's is the early
+  refusal. The gateway refuses a new reply with `503 kill_switch`, `403 user_paused` or `429 budget_exceeded`
+  before any call, as a `blocked` gate span in the generation's trace, and a change of its configuration stops the
+  replies already running (the kill switch when it is set to, and a paused user's), ending with that error code.
+  It holds the budget against the larger of what the auditor recorded for the period (read with its own read-only
+  link, `GET /token-counts`, at start and every minute) and what it counted since, so a restart cannot reset it; until it
+  has read the auditor it answers `503 audit_backlog` to a request a budget applies to.
 - `GET /api/server/v1/providers/health` (server token): `{"providers": [{"provider_id", "status":
   "auth_failed", "since", "error_code"}]}`; only flagged providers are listed, and the reason is a
   code (e.g. `http_401`), never the provider's own text.
@@ -406,7 +414,7 @@ until the admin's next status check (every 12 s) pushes it.
 ## What the desktop client does with them
 
 - The app tells a refusal by its `error` code, never by its words: `queue_full`,
-  `budget_exceeded` (`period` picks "today" or "this month"), `kill_switch` and
+  `budget_exceeded` (`period` picks "today" or "this month"), `kill_switch`, `user_paused` and
   `audit_key_missing` each show their own sentence and keep the message in the outbox; nothing is
   retried by itself.
 - `audit_backlog` and `not_configured` (with `Retry-After`) are tried once more after that many
