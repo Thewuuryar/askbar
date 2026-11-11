@@ -40,5 +40,5 @@ Kind: component
 ## Amendments
 
 - 2026-11-08: marked as a component ADR, so it is amended in place ([0046](0046-component-and-register-adrs-and-partial-amendments.md)). Nothing else changed.
-- 2026-11-11: body brought up to date with the code on `main`: the auditor and `model-gateway` use the crate, and it holds the shared auditor client, self-restart, ids, budget periods and the archive writer. No decision changed.
+- 2026-11-11: body brought up to date with the code on `main`: the auditor and `model-gateway` use the crate, and it holds the shared auditor client, self-restart, ids, budget periods and the archive writer. No decision changed (#70).
 - 2026-11-11: design for plan steps 4.1, 4.2 and 6.1 (#70): `alert_client`, the 60-second `GET /status` call of `AuditClient`, the `backup` feature with `age`, and `/exports`. The code PRs add the 'built' lines.

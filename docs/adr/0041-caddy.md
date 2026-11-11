@@ -38,5 +38,5 @@ Not recorded: Caddy predates this record.
 ## Amendments
 
 - 2026-11-08: both Caddy images are pinned by digest and the Cloudflare plugin to v0.2.4, so the 0017 mismatch is gone (Thewuuryar/askbar#26).
-- 2026-11-11: body brought up to date with the code on `main`: the networks `edge`, `client-api` and `audit-caddy`, and the access lines to the auditor; the 'no auditor yet' disagreement with 0010 is removed. No decision changed.
+- 2026-11-11: body brought up to date with the code on `main`: the networks `edge`, `client-api` and `audit-caddy`, and the access lines to the auditor; the 'no auditor yet' disagreement with 0010 is removed. No decision changed (#70).
 - 2026-11-11: design for plan step 5.3 (#70, D19): HTTP-01 beside the DNS challenge, chosen by `acme_challenge`; port 80 also serves the challenge. The code PR adds the 'built' line.

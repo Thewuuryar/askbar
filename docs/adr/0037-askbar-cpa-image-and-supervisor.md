@@ -43,5 +43,5 @@ Kind: component
 - 2026-11-08: marked as a component ADR, so it is amended in place ([0046](0046-component-and-register-adrs-and-partial-amendments.md)). Nothing else changed.
 - 2026-11-08: records the supervisor's two `unsafe` libc calls, now that the workspace denies `unsafe_code` (contributor guidelines rollout step 3). The code did not change.
 - 2026-11-12: `cpa` is on `cpa-gateway`, `cpa-admin` and `outbound`, not `edge` (plan step 3.5, [0042](0042-cpa.md)); the rest of "as today" stands.
-- 2026-11-11: body brought up to date with the code on `main`: the supervisor is built and the admin restarts `cpa`; the 'today the admin cannot restart it' wording and the reference to step 3.5 are removed. No decision changed.
+- 2026-11-11: body brought up to date with the code on `main`: the supervisor is built and the admin restarts `cpa`; the 'today the admin cannot restart it' wording and the reference to step 3.5 are removed. No decision changed (#70).
 - 2026-11-11: design for plan step 6.2 (#70, D26): export and import through request files on `cpa-config`, handled by the supervisor, with no port. The code PR adds the 'built' line.
