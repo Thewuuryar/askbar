@@ -89,6 +89,12 @@ async fn main() {
     let gateway = askbar_admin::gateway_link::GatewayLink::new(&askbar_admin::gateway_link::gateway_url(), gateway_token);
     let _ = state.gateway.set(gateway.clone());
     tokio::spawn(gateway.run(state.clone()));
+    // Alerts are delivered by the alerter (ADR 0055): it holds the delivery settings in memory, so it is given them again
+    // whenever it starts.
+    let alerter_token = askbar_admin::alerter_link::read_token(&askbar_admin::server_link::token_dir()).unwrap_or_else(|e| die(e, 1));
+    let alerter = askbar_admin::alerter_link::AlerterLink::new(&askbar_admin::alerter_link::alerter_url(), alerter_token);
+    let _ = state.alerter.set(alerter.clone());
+    tokio::spawn(alerter.run(state.clone()));
     // The Audit pages read the auditor, and the retention setting goes to it (ADR 0051).
     let auditor_token = askbar_admin::auditor_link::read_token(&askbar_admin::server_link::token_dir()).unwrap_or_else(|e| die(e, 1));
     let auditor = askbar_admin::auditor_link::AuditorLink::new(&askbar_admin::auditor_link::auditor_url(), auditor_token);

@@ -5,6 +5,7 @@
 //! | --- | --- | --- |
 //! | `server` | `GET /api/server/v1/status` | `POST /api/server/v1/restart`, then wait for a new boot ID |
 //! | `model-gateway` | `GET /api/model-gateway/v1/status` | `POST /api/model-gateway/v1/restart`, wait for a new boot ID, push the configuration again |
+//! | `alerter` | `GET /api/alerter/v1/status` | `POST /api/alerter/v1/restart`, wait for a new boot ID, push the settings again |
 //! | `admin` | this process | exit after answering; Docker starts it again |
 //! | `caddy` | its admin socket | push its configuration again (a live reload) |
 //! | `cpa` | its management API (accounts) | ask its supervisor through `restart-request`, wait for `restart-done` and the API |
@@ -31,7 +32,7 @@ type St = State<Arc<AdminState>>;
 type Failure = ApiError;
 
 /// The services the Services tab shows and may restart.
-pub const SERVICES: [&str; 5] = ["server", "model-gateway", "admin", "caddy", "cpa"];
+pub const SERVICES: [&str; 6] = ["server", "model-gateway", "alerter", "admin", "caddy", "cpa"];
 /// At most this many actions in `WINDOW_SECS`.
 const MAX_ACTIONS: usize = 6;
 const WINDOW_SECS: i64 = 60;
@@ -69,6 +70,26 @@ async fn gateway_state(state: &Arc<AdminState>) -> Value {
     }
 }
 
+async fn alerter_state(state: &Arc<AdminState>) -> Value {
+    let Some(link) = state.alerter.get().cloned() else { return card("alerter", false, "No link to the alerter is set up.") };
+    match link.status_now().await {
+        Some(st) if st.config_version.is_some() => {
+            let delivery = match (st.last_delivery_ok_at, st.last_delivery_failed_at) {
+                (_, Some(failed)) if st.last_delivery_ok_at.is_none_or(|ok| failed > ok) => " Its last delivery failed.",
+                _ => "",
+            };
+            card("alerter", true, format!("Answers and runs the settings it was given.{delivery}"))
+        }
+        Some(_) => card(
+            "alerter",
+            true,
+            link.last_error()
+                .unwrap_or_else(|| "Answers, but has not received its settings yet. The admin gives it them within seconds.".into()),
+        ),
+        None => card("alerter", false, link.last_error().unwrap_or_else(|| "Does not answer.".into())),
+    }
+}
+
 async fn caddy_state(state: &Arc<AdminState>) -> Value {
     if crate::caddy::reachable(state).await {
         card("caddy", true, "Its admin socket answers.")
@@ -100,10 +121,11 @@ fn recent(db: &crate::AdminDb) -> Value {
 
 /// `GET /api/admin/v1/services`: how each service is doing, and the last ten actions.
 pub async fn list(State(state): St) -> Result<Json<Value>, Failure> {
-    let (server, gateway, caddy, cpa) = tokio::join!(server_state(&state), gateway_state(&state), caddy_state(&state), cpa_state(&state));
+    let (server, gateway, alerter, caddy, cpa) =
+        tokio::join!(server_state(&state), gateway_state(&state), alerter_state(&state), caddy_state(&state), cpa_state(&state));
     let admin = card("admin", true, "This page is served by it.");
     let recent = recent(&*state.db.lock().await);
-    Ok(Json(json!({ "services": [server, gateway, admin, caddy, cpa], "recent": recent })))
+    Ok(Json(json!({ "services": [server, gateway, alerter, admin, caddy, cpa], "recent": recent })))
 }
 
 /// `POST /api/admin/v1/services/{name}/restart`.
@@ -135,6 +157,7 @@ pub async fn restart(State(state): St, Path(name): Path<String>) -> Result<(Stat
     let result = match name.as_str() {
         "server" => restart_server(&state).await,
         "model-gateway" => restart_gateway(&state).await,
+        "alerter" => restart_alerter(&state).await,
         "admin" => restart_admin(&state).await,
         "caddy" => restart_caddy(&state).await,
         _ => restart_cpa(&state).await,
@@ -204,6 +227,30 @@ async fn restart_gateway(state: &Arc<AdminState>) -> Result<(StatusCode, Json<Va
         }
     }
     Err(unreachable("The gateway was asked to restart but has not come back within a minute. Check it from the host."))
+}
+
+/// Ask the alerter to restart, wait for a new process, then give it its settings again: they were in the memory that just went.
+async fn restart_alerter(state: &Arc<AdminState>) -> Result<(StatusCode, Json<Value>), Failure> {
+    let link = state.alerter.get().cloned().ok_or_else(|| unreachable("No link to the alerter is set up."))?;
+    let old = link.restart().await?;
+    let started = Instant::now();
+    while started.elapsed() < SERVER_BACK_WITHIN {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        if let Some(st) = link.status_now().await {
+            if st.boot_id != old {
+                let pushed = link.sync(state).await;
+                let secs = started.elapsed().as_secs();
+                let said = match pushed {
+                    crate::alerter_link::Sync::Pushed(_) | crate::alerter_link::Sync::Current => {
+                        format!("Restarted; back after {secs}s, with its settings.")
+                    }
+                    _ => format!("Restarted; back after {secs}s. It has no settings yet; the admin keeps trying."),
+                };
+                return Ok((StatusCode::OK, Json(card("alerter", true, said))));
+            }
+        }
+    }
+    Err(unreachable("The alerter was asked to restart but has not come back within a minute. Check it from the host."))
 }
 
 /// Answer, then exit; Docker starts the admin again. This page reconnects when it is back.

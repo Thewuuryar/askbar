@@ -185,6 +185,8 @@ pub fn classify(method: &Method, template: &str) -> Option<(&'static str, &'stat
         ("PUT", "/network") => ("network", "update"),
         ("POST", "/network/apply") => ("config_push", "network_apply"),
         ("PUT", "/password") => ("secret", "admin_password_change"),
+        ("PUT", "/alerts") => ("alerts", "update"),
+        ("POST", "/alerts/test") => ("alerts", "test"),
         ("POST", "/cpa/logins") => ("providers", "cpa_login_start"),
         ("POST", "/cpa/logins/{state}/callback") => ("providers", "cpa_login_finish"),
         ("DELETE", "/cpa/accounts/{name}") => ("providers", "cpa_account_remove"),

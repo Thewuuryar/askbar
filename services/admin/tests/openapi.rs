@@ -126,6 +126,10 @@ async fn what_the_file_says_about_a_key_is_what_the_admin_does() {
         ("DELETE", "/keys/{id}"),
         ("GET", "/services"),
         ("POST", "/services/{name}/restart"),
+        // How alerts are delivered: secrets, and a test alert reaches outside (ADR 0055).
+        ("GET", "/alerts"),
+        ("PUT", "/alerts"),
+        ("POST", "/alerts/test"),
         ("GET", "/cpa"),
         ("POST", "/cpa/logins"),
         ("GET", "/cpa/logins/{state}"),

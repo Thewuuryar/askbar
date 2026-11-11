@@ -5,6 +5,8 @@
 
 pub mod actions;
 pub mod admin_api;
+pub mod alerter_link;
+pub mod alerts;
 pub mod api_key;
 pub mod audit_key;
 pub mod audit_read;
@@ -67,6 +69,8 @@ pub struct AdminState {
     pub restarter: std::sync::OnceLock<askbar_service::restart::Restarter>,
     /// The link to `model-gateway` (ADR 0054); set once by `main`. Tests that have none leave it unset.
     pub gateway: std::sync::OnceLock<Arc<gateway_link::GatewayLink>>,
+    /// The link to the alerter (ADR 0055); set once by `main`. Tests that have none leave it unset.
+    pub alerter: std::sync::OnceLock<Arc<alerter_link::AlerterLink>>,
     /// The link to the auditor (ADR 0051); set once by `main`. Tests that have none leave it unset.
     pub auditor: std::sync::OnceLock<Arc<auditor_link::AuditorLink>>,
     /// Where the admin's action records go (ADR 0010); set once by `main`. Tests that have none record nothing.
@@ -103,6 +107,7 @@ impl AdminState {
             proxy: std::sync::Mutex::new(caddy::ProxyStatus::default()),
             restarter: Default::default(),
             gateway: Default::default(),
+            alerter: Default::default(),
             auditor: Default::default(),
             actions: Default::default(),
             sealed: Default::default(),
@@ -186,6 +191,11 @@ pub fn routes(state: &Arc<AdminState>) -> Routes {
     // What only the person's own session may do: the password, the API key, and looking at or ending the session.
     let session_only = Routes::new()
         .put(&v1("/password"), web::change_password)
+        // How alerts are delivered (ADR 0055): the settings are secrets and sending a test alert reaches outside, so only a
+        // person's own session may do either (a script's API key may not redirect or silence the alerts).
+        .get(&v1("/alerts"), alerts::get_alerts)
+        .put(&v1("/alerts"), alerts::put_alerts)
+        .post(&v1("/alerts/test"), alerts::test_alerts)
         .get(&v1("/session"), || async { StatusCode::NO_CONTENT })
         .delete(&v1("/session"), web::logout)
         .get(&v1("/cpa"), cpa::status)

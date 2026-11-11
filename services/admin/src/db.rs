@@ -163,6 +163,17 @@ const MIGRATIONS: &[&str] = &[
          position    INTEGER NOT NULL,
          PRIMARY KEY (provider_id, model)
      );",
+    // How alerts are delivered (plan step 4.1, ADR 0055): the ntfy server, topic and access token, each encrypted with the
+    // admin's own key (`admin.key`), in one row. Write-only like the provider keys: no endpoint returns one, and the API
+    // answers with booleans. The alerter holds them in memory only; the admin pushes them again whenever it starts. No row
+    // means no channel is set up.
+    "CREATE TABLE alert_settings (
+         id             INTEGER PRIMARY KEY CHECK (id = 1),
+         ntfy_server_enc BLOB    NOT NULL,
+         ntfy_topic_enc  BLOB    NOT NULL,
+         ntfy_token_enc  BLOB,
+         updated_at      INTEGER NOT NULL
+     );",
 ];
 
 /// The schema steps, in order (for the upgrade tests).
