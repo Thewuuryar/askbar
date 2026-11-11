@@ -13,7 +13,7 @@ Every API, module, environment variable, UI label and document uses these names 
 | **client** | one paired app instance and its token; belongs to exactly one user | `/api/client/v1` | `askbar-server` | the app |
 | **server** | the Askbar server: chats, spaces, and its control and inspection interface | `/api/server/v1` | `askbar-server`, internal listener only | `askbar-admin` |
 | **admin** | the admin site and its control interface | `/api/admin/v1` | `askbar-admin` | the admin site (session cookie) or a script (admin API key) |
-| **auditor** | the container that keeps the audit store: services and the admin append to it, and the admin reads it | `/api/audit/v1` | `askbar-auditor`, internal only | services and `askbar-admin` (append), `askbar-admin` (read) |
+| **auditor** | the container that keeps the audit store: services, the alerter and the admin append to it, the admin reads it, and the admin restores an empty store through a link of its own | `/api/audit/v1` | `askbar-auditor`, internal only | services, `askbar-alerter` and `askbar-admin` (append), `askbar-admin` (read and restore) |
 | **model-gateway** | the container that holds provider keys in memory, enforces budgets, the kill switch and the approved model list, opens each model call's audit span, and calls providers | `/api/model-gateway/v1` | `askbar-model-gateway`, internal only | `askbar-server`, `askbar-admin` |
 | **alerter** | the small container that delivers alerts and checks for new releases | `/api/alerter/v1` | `askbar-alerter`, internal only | `askbar-auditor`, `askbar-admin` |
 | **bootstrap** | the container that creates per-link tokens on first start and rotates them when run from the host | none | none | none |
@@ -57,8 +57,8 @@ flowchart TB
     end
 
     providers["<b>Model providers</b><br/>Cloud APIs and<br/>the GPU desktop"]
-    alerts["<b>Alert services</b><br/>ntfy or email, release source"]
-    backup["<b>Backup storage</b><br/>/backup volume or<br/>SMB or NFS share volume"]
+    alerts["<b>Alert services</b><br/>ntfy, then email<br/>GitHub releases"]
+    backup["<b>Backup storage</b><br/>one /backup volume<br/>(the host may mount a NAS over it)"]
 
     clients -->|"HTTPS, client token<br/>local network or Tailscale"| caddy
     adminUser -->|"HTTPS, session cookie or API key"| caddy
@@ -85,7 +85,7 @@ flowchart TB
     class modelGateway key
 ```
 
-`server`, `model-gateway`, the admin (its action records) and, in phase 4, `alerter` append to the auditor with their own tokens, and Caddy appends only its access logs, with no token, to a listener that answers nothing. `cpa` and `bootstrap` don't append. Caddy is the only service with published ports. The server stores no provider keys or admin data, only its own link tokens, and has no outbound route.
+`server`, `model-gateway`, the admin (its action records) and, in phase 4, `alerter` (delivery records) append to the auditor with their own tokens, and Caddy appends only its access logs, with no token, to a listener that answers nothing. `cpa` and `bootstrap` don't append. Caddy is the only service with published ports. The server stores no provider keys or admin data, only its own link tokens, and has no outbound route.
 
 ## Routes
 
@@ -119,14 +119,18 @@ Every link has its own authenticated path and uses separate networks, so a missi
 | Caddy | `admin` | Admin site and API, over a unix socket | Admin credential at the admin |
 | `admin` | Caddy | Configuration, over Caddy's admin socket | Socket permissions |
 | `admin` | `server`, `model-gateway`, `cpa` | Status, configuration, restarts, logins | Per-link token |
-| `admin` | Each exporting service | Encrypted backup exports | Per-link token |
+| `admin` | `server`, `alerter`, `auditor` | Encrypted backup exports and imports (`POST /exports` and `/imports`; the auditor's `GET /export`); `model-gateway` has none | Per-link token |
+| `admin` | `cpa` | Export and import, through request files on `cpa-config` that the supervisor handles | Volume permissions |
+| `admin` | `auditor` | Backup public key (`PUT /backup-key`), export, and restore into an empty store (`admin-auditor-restore`) | Admin read and restore tokens |
+| `admin` | `server` | Imports, delete user, policy | Per-link token |
 | `admin` | `auditor` | Read logs and set retention | Admin read token |
 | `admin` | `auditor` | Append admin action records | Admin append token |
-| `admin` | `alerter` | Read release results | Per-link token |
-| `server`, `model-gateway`, `alerter` | `auditor` | Append records, including `model-gateway` span starts | Service append token |
+| `admin` | `alerter` | Config, events, status, test alert, restart, release results and exports | Per-link token |
+| `alerter` | `auditor` | Delivery records (`alert-deliveries`) | Alerter append token |
+| `server`, `model-gateway` | `auditor` | Append records, including `model-gateway` span starts | Service append token |
 | Caddy | `auditor` | Append access logs, to the ingest listener | None: a network of the two, and the listener answers nothing |
 | `model-gateway` | `auditor` | Read token counts, to hold the budget | Read token (`GET /token-counts` only) |
-| `auditor` | `alerter` | Alert events | Per-link token |
+| `auditor` | `alerter` | Alert events (`auditor-alerter`) | Per-link token |
 | `server` | `model-gateway` | Model calls and the approved model list | Per-link token |
 | `model-gateway` | `cpa` | Subscription providers | `cpa` API key |
 
@@ -147,7 +151,7 @@ Each service has its own data and credential volumes and user ID, with no shared
 | `cpa` logins | `cpa` |
 | `alerter` state: the repeat ledger and release results (delivery secrets are held by `admin` and pushed, [ADR 0055](adr/0055-alerter.md)) | `alerter` |
 | Admin and Caddy unix sockets | `admin` and `caddy` |
-| `/backup` or SMB/NFS share volume, defined in Compose | `admin` |
+| `backup`, one volume at `/backup`; the host mounts a NAS over it | `admin` |
 
 ## Why each boundary exists
 
@@ -163,7 +167,9 @@ Each service has its own data and credential volumes and user ID, with no shared
 - **One origin for client and admin.** The client API serves JSON or its documented event stream, and the admin cookie uses `Path=/api/admin`, `HttpOnly` and `SameSite=Strict`, with a CSRF header, `Sec-Fetch-Site` checks and a strict CSP ([ADR 0029](adr/0029-shared-origin-protections.md)).
 - **No Docker socket.** Docker access could mount any volume, so services restart themselves through their own endpoints ([ADR 0005](adr/0005-no-controller-and-self-restart.md)).
 - **Container hardening.** Every service uses a read-only root filesystem, dropped capabilities and limits ([ADR 0032](adr/0032-container-hardening.md)).
-- **Encrypted exports.** Each service encrypts its backup export, so the admin bundles files it can't read ([ADR 0013](adr/0013-backups.md)).
+- **Encrypted exports.** Each service that has data encrypts its backup export (`model-gateway` has none), so the admin bundles files it can't read ([ADR 0013](adr/0013-backups.md)).
+- **The auditor's restore exception.** The auditor otherwise accepts appends only; a restore reaches it through a link of its own, `admin-auditor-restore`, which works only on an empty store and verifies the chain first. The admin then re-anchors its stored chain head ([ADR 0013](adr/0013-backups.md), [ADR 0051](adr/0051-auditor.md)).
+- **Trusted Types.** The popup's and the admin's CSP both require Trusted Types, so a missed escape cannot become script ([ADR 0016](adr/0016-risk-register.md), [ADR 0029](adr/0029-shared-origin-protections.md)).
 
 ## Decisions
 
