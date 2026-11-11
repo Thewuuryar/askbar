@@ -80,6 +80,8 @@ async fn main() {
     askbar_service::restart::start_watchdog(healthy);
     tokio::spawn(audit.clone().hello_until_done(boot_id.as_str().to_string()));
     tokio::spawn(audit.clone().drain_forever());
+    // Keeps the link from looking silent to the auditor while the gateway has nothing to record (ADR 0051).
+    tokio::spawn(audit.clone().status_every_minute());
     tokio::spawn(gw.clone().watch_turns());
     tokio::spawn(gw.clone().watch_usage());
     let server_app = server_router(gw.clone(), server_links(&dir));
