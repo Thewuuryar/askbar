@@ -82,6 +82,16 @@ fn not_found_body() -> String {
     String::from_utf8(p.to_json_bytes()).expect("a problem is UTF-8 JSON")
 }
 
+/// Where Caddy sends its access lines: the auditor's ingest listener on `audit-caddy`, a network of Caddy and the auditor
+/// alone (ADR 0051). `soft_start` lets Caddy start, and load a config, while the auditor is not there yet: it keeps
+/// trying, and a line it cannot send is lost, never a reason to stop serving.
+pub const ACCESS_LOG_ADDRESS: &str = "tcp/auditor-ingest-host:8086";
+
+/// The `log` block of a site: every request Caddy handles is one JSON line to the auditor.
+fn access_log() -> String {
+    format!("\tlog {{\n\t\toutput net {ACCESS_LOG_ADDRESS} {{\n\t\t\tdial_timeout 2s\n\t\t\tsoft_start\n\t\t}}\n\t\tformat json\n\t}}\n")
+}
+
 /// The three kinds of path on the one host: the admin site (`/admin`) and the admin API
 /// (`/api/admin`) go to the admin's unix socket (behind `allowed`, when it is not empty); the client API (and `/api/v1`, which the server answers with
 /// "update the app") goes to the server's client listener. The match names those two prefixes and
@@ -90,7 +100,8 @@ fn not_found_body() -> String {
 fn routes(allowed: &[String]) -> String {
     use askbar_proto::paths;
     let (admin, admin_api, client, old) = (paths::ADMIN, paths::ADMIN_API, paths::CLIENT, paths::TOMBSTONE_V1);
-    let mut out = format!("\t@admin path {admin} {admin}/* {admin_api}/*\n\thandle @admin {{\n");
+    let mut out = access_log();
+    out.push_str(&format!("\t@admin path {admin} {admin}/* {admin_api}/*\n\thandle @admin {{\n"));
     if !allowed.is_empty() {
         out.push_str(&format!("\t\t@outside not remote_ip {}\n\t\tabort @outside\n", allowed.join(" ")));
     }
@@ -282,6 +293,17 @@ mod tests {
     const NOT_FOUND: &str = r#"{"type":"urn:askbar:problem:not_found","title":"Not found","status":404,"detail":"There is nothing at this address.","error":"not_found"}"#;
 
     #[test]
+    fn every_site_sends_its_access_lines_to_the_auditor_and_caddy_still_starts_without_it() {
+        for n in [net(true, false, false), net(false, false, false)] {
+            let c = caddyfile(&n, &[]);
+            assert_eq!(c.matches("output net tcp/auditor-ingest-host:8086").count(), 1, "one site, one log: {c}");
+            assert!(c.contains("soft_start") && c.contains("format json"), "{c}");
+            assert!(c.contains("dial_timeout 2s"), "an unreachable auditor does not hold Caddy up");
+        }
+        assert_eq!(ACCESS_LOG_ADDRESS, "tcp/auditor-ingest-host:8086");
+    }
+
+    #[test]
     fn staging_adds_the_test_ca_and_nothing_else() {
         let prod = caddyfile(&net(true, false, false), &[]);
         let staging = caddyfile(&net(true, true, false), &[]);
@@ -301,6 +323,13 @@ mod tests {
 
 :443 {{
 \ttls /caddy-secrets/self.crt /caddy-secrets/self.key
+\tlog {{
+\t\toutput net tcp/auditor-ingest-host:8086 {{
+\t\t\tdial_timeout 2s
+\t\t\tsoft_start
+\t\t}}
+\t\tformat json
+\t}}
 \t@admin path /admin /admin/* /api/admin/*
 \thandle @admin {{
 \t\t@outside not remote_ip 127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 ::1/128 fc00::/7 fe80::/10
@@ -375,6 +404,13 @@ http:// {{
 }}
 
 askbar.orraitu.com {{
+\tlog {{
+\t\toutput net tcp/auditor-ingest-host:8086 {{
+\t\t\tdial_timeout 2s
+\t\t\tsoft_start
+\t\t}}
+\t\tformat json
+\t}}
 \t@admin path /admin /admin/* /api/admin/*
 \thandle @admin {{
 \t\treverse_proxy unix//run/admin/admin.sock

@@ -9,6 +9,8 @@
 #         on it: it has no route out.
 #   client-api  Caddy and the server's client API on 8080, nothing else. `internal`.
 #   server-api  the admin and the server's server API, nothing else. `internal`, so it has no route out.
+#   audit-caddy  Caddy and the auditor, nothing else. `internal`. Caddy's access lines go to the auditor's ingest listener on it
+#               (ADR 0051); the auditor's token API is not bound there.
 #   audit-admin  the admin and the auditor, nothing else. `internal`, so it has no route out. Each caller of the
 #               auditor gets a network like it, shared with the auditor alone (ADR 0051).
 #   gateway-admin  the admin and model-gateway, nothing else. `internal`. gateway-server (the server and the gateway) and
@@ -144,10 +146,21 @@ services:
     depends_on:
       bootstrap:
         condition: service_completed_successfully
+    environment:
+      # The token API on the address its alias has on each of the three networks of its callers, never a wildcard, so
+      # nothing on audit-caddy reaches it; the ingest listener for Caddy's access lines on audit-caddy alone (ADR 0051).
+      ASKBAR_AUDIT_API_ADDRS: auditor-admin-host:8083,auditor-model-gateway-host:8083,auditor-server-host:8083
+      ASKBAR_AUDIT_INGEST_ADDR: auditor-ingest-host:8086
     networks:
-      audit-admin: {}
-      audit-model-gateway: {}
-      audit-server: {}
+      audit-admin:
+        aliases: [auditor-admin-host]
+      audit-model-gateway:
+        aliases: [auditor-model-gateway-host]
+      audit-server:
+        aliases: [auditor-server-host]
+      # Caddy's access lines. The ingest listener only; the token API is not on this network.
+      audit-caddy:
+        aliases: [auditor-ingest-host]
     volumes:
       # audit.db: the audit store. Only the auditor mounts it. Starts empty; the server's own audit-data is not
       # copied (see the guide).
@@ -226,10 +239,14 @@ services:
         condition: service_healthy
       admin:
         condition: service_healthy
+      auditor:
+        condition: service_healthy
     networks:
       - edge
       # The client API, on a network of Caddy and the server.
       - client-api
+      # Its access lines, to the auditor's ingest listener (ADR 0051). Nothing else is on it but the auditor.
+      - audit-caddy
     # 80 only redirects to 443. Until a host name is set, 443 answers on every address with the install's own
     # certificate (made by the admin in caddy-secrets), and the admin site is open to private addresses only.
     ports:
@@ -294,6 +311,9 @@ networks:
     internal: true
   # The auditor and the server, nothing else. No route out.
   audit-server:
+    internal: true
+  # The auditor and Caddy, nothing else. No route out. Caddy's access lines go to the auditor's ingest listener on it.
+  audit-caddy:
     internal: true
   # model-gateway's listener for the server. The server and the gateway, nothing else. No route out.
   gateway-server:

@@ -328,7 +328,7 @@ if [ "$(docker inspect -f '{{.State.Running}}' "$AUDITOR" 2>/dev/null)" != true 
   [ -z "$(docker inspect -f '{{join .HostConfig.CapAdd ","}}' "$AUDITOR")" ] && pass "the auditor adds no capability" || fail "the auditor adds a capability"
   # Its networks are exactly the audit-* ones, and each is internal: no route out.
   anets=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$AUDITOR" | tr ' ' '\n' | grep . | sort | tr '\n' ' ')
-  [ "$anets" = "${PROJECT}_audit-admin ${PROJECT}_audit-model-gateway ${PROJECT}_audit-server " ] && pass "the auditor is on the audit-* networks only (audit-admin, audit-model-gateway, audit-server)" || fail "the auditor's networks are: $anets"
+  [ "$anets" = "${PROJECT}_audit-admin ${PROJECT}_audit-caddy ${PROJECT}_audit-model-gateway ${PROJECT}_audit-server " ] && pass "the auditor is on the audit-* networks only (audit-admin, audit-caddy, audit-model-gateway, audit-server)" || fail "the auditor's networks are: $anets"
   case "$anets" in *edge*|*server-api*|*cpa-admin*) fail "the auditor shares a network that is not an audit-* one";; esac
   for n in $anets; do
     [ "$(docker network inspect -f '{{.Internal}}' "$n" 2>/dev/null)" = true ] && pass "$n is internal" || fail "$n is not internal"
@@ -340,6 +340,8 @@ if [ "$(docker inspect -f '{{.State.Running}}' "$AUDITOR" 2>/dev/null)" != true 
   # Who is on audit-admin: the admin and the auditor, nothing else.
   members=$(docker network inspect -f '{{range .Containers}}{{.Name}} {{end}}' "${PROJECT}_audit-admin" | tr ' ' '\n' | grep . | sort | tr '\n' ' ')
   [ "$members" = "$ADMIN $AUDITOR " ] && pass "audit-admin joins the admin and the auditor only" || fail "audit-admin members: $members"
+  members=$(docker network inspect -f '{{range .Containers}}{{.Name}} {{end}}' "${PROJECT}_audit-caddy" | tr ' ' '\n' | grep . | sort | tr '\n' ' ')
+  [ "$members" = "$AUDITOR $CADDY " ] && pass "audit-caddy joins the auditor and Caddy only" || fail "audit-caddy members: $members"
   # Mounts: its own data (read-write) and its credential volume (read-only), and nothing else; nobody else has them.
   amounts=$(docker inspect -f '{{range .Mounts}}{{.Name}}={{.RW}} {{end}}' "$AUDITOR" | tr ' ' '\n' | grep . | sort | tr '\n' ' ')
   [ "$amounts" = "${PROJECT}_auditor-data=true ${PROJECT}_auditor-token=false " ] && pass "the auditor mounts auditor-data and auditor-token (read-only) only" || fail "the auditor mounts: $amounts"
@@ -394,6 +396,50 @@ deletes 403"
 import urllib.request
 try: print(urllib.request.urlopen('http://$AUD_IP:8083/api/audit/v1/health', timeout=4).status)
 except Exception: print(0)")" = 0 ] && pass "a container on edge cannot reach the auditor" || fail "the auditor is reachable from edge"
+  # Caddy's network reaches the ingest listener and nothing else of the auditor: the token API is not bound there.
+  out=$(py --network "${PROJECT}_audit-caddy" -- "
+import socket
+def can(host, port):
+    try: socket.create_connection((host, port), timeout=4).close(); return 'open'
+    except Exception: return 'closed'
+print('ingest', can('auditor-ingest-host', 8086))
+print('api-by-alias', can('auditor-ingest-host', 8083))
+print('api-by-name', can('auditor', 8083))
+" 2>&1)
+  [ "$out" = "ingest open
+api-by-alias closed
+api-by-name closed" ] && pass "on audit-caddy the auditor's ingest listener answers and its token API does not exist" || fail "on audit-caddy the auditor answered: $out"
+  # The ingest listener alone cannot be asked for anything: it answers nothing, whatever is sent to it.
+  out=$(py --network "${PROJECT}_audit-caddy" -- "
+import socket
+s = socket.create_connection(('auditor-ingest-host', 8086), timeout=4)
+s.sendall(b'GET /api/audit/v1/traces HTTP/1.0\r\n\r\n'); s.settimeout(2)
+try: got = s.recv(100)
+except Exception: got = b''
+print(len(got))
+" 2>&1)
+  [ "$out" = 0 ] && pass "the ingest listener answers nothing, so Caddy cannot read through it" || fail "the ingest listener answered $out bytes"
+  # A request through Caddy becomes an access line, with its path and none of its query.
+  MARK="isolation-access-$(head -c 4 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+  py --network "$EDGE" -- "
+import ssl, urllib.request, urllib.error
+ctx = ssl.create_default_context(); ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE
+try: urllib.request.urlopen('https://caddy/$MARK?secret=QUERY-$MARK', timeout=8, context=ctx)
+except urllib.error.HTTPError: pass
+" >/dev/null 2>&1
+  got=""
+  for i in $(seq 1 15); do
+    got=$(py --network "${PROJECT}_audit-admin" -e "AR=$AUD_READ" -- "
+import os, json, urllib.request
+req = urllib.request.Request('http://auditor:8083/api/audit/v1/access-logs?limit=50')
+req.add_header('authorization', 'Bearer ' + os.environ['AR'])
+rows = json.load(urllib.request.urlopen(req, timeout=5))
+print(json.dumps(rows))
+" 2>&1)
+    case "$got" in *"/$MARK"*) break;; esac; sleep 2
+  done
+  case "$got" in *"/$MARK"*) pass "a request through Caddy is an access line in the auditor";; *) fail "no access line for a request through Caddy: $got";; esac
+  case "$got" in *"QUERY-$MARK"*|*"secret="*) fail "an access line kept a query string";; *) pass "the access line keeps the path and not the query string";; esac
 fi
 
 echo "== 3d5. model-gateway (ADR 0054)"
