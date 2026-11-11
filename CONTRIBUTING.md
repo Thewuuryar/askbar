@@ -19,7 +19,7 @@ check for the retired names `mgmt`, `management` and `device` in Askbar's own ro
 | `crates/askbar-service/` | What every service shares: the per-link bearer check (`links.rs`), boot ID and `GET /status` body (`status.rs`), the `503 not_configured` gate (`configured.rs`). |
 | `services/server/` | The server: client API (`client_api.rs`), server API (`server_api.rs`), chat and generations, audit store. |
 | `services/admin/` | The admin service: the admin API (`admin_api.rs`), the site (`src/ui/`), Caddy configuration, API keys. Unix only. |
-| `services/cpa-supervisor/` | The supervisor in the `askbar-cpa` image: runs CLIProxyAPI and restarts it on a config change, a restart request or a crash ([ADR 0037](docs/adr/0037-askbar-cpa-image-and-supervisor.md)). |
+| `services/cpa-supervisor/` | The supervisor in the `askbar-cpa` image: runs CLIProxyAPI, restarts it on a config change, a restart request or a crash, and handles the export and import request files for backups ([ADR 0037](docs/adr/0037-askbar-cpa-image-and-supervisor.md)). |
 | `clients/desktop/` | The desktop app, its own Cargo workspace: `src-tauri/` (Cargo package `askbar-client`, program `askbar`), the popup in `ui/` (no build step) and its `tests/`. |
 | `deploy/caddy/`, `deploy/cpa/` | Caddy's bootstrap config; notes on CLIProxyAPI. |
 | `docs/` | `architecture.md`, `adr/` (decisions), `style/`, `wire-contract.md` (prose), `openapi/` (one file per API), `refactor-log.md`. |
@@ -53,7 +53,7 @@ when you have changed them (the admin site's files are compiled in).
    (`POST .../cancel`) only for something that is not a plain create, update or delete. The rules are in
    [ADR 0022](docs/adr/0022-api-path-conventions.md).
 2. **Who may call it.** Client API: behind the token and the version gate. Admin API: decide whether an API key may
-   call it (the `signed_in_or_key` group) or only a person's session (`signed_in`: keys, the password, the session).
+   call it (the `signed_in_or_key` group) or only a person's session (`signed_in`: keys, the password, the session). An API key can never do the actions that need a fresh sign-in (set or rotate the backup key, restore, delete a user, lower retention, create a key, change the password).
 3. **Errors.** Return `ApiError` (`askbar_proto::http`), never a bare `StatusCode`. Use an existing `ErrorCode` if one
    fits; if not, add it to `crates/askbar-proto/src/problem.rs` (codes are only ever added) with its status and title.
    Give a sentence for a person in `detail`.

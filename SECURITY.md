@@ -24,15 +24,15 @@ Prompts, replies and provider errors are recorded in the audit store only as cip
 - **Clients:** they use the local network or Tailscale by default. Public access is a deployer option.
 - **Port forwarding:** a router or proxy that rewrites the source can make public traffic look private. Don't forward the admin page to the internet.
 - **First run:** the published login works from private addresses until you change the password. Change it as soon as you deploy.
-- **Sign-in:** passkeys are optional but recommended, and they need a real domain. Once you create one, recovery codes replace the password as the backup.
+- **Sign-in:** a password. There are no passkeys and no recovery codes in v1; if you lose the password, the host reset command restores access. Setting or rotating the backup key, restoring, deleting a user, lowering retention, creating an API key and changing the password each need a sign-in within the last 10 minutes.
 
 ## What a leaked admin API key can do
 
-It can use the admin API like the site: read audit metadata, change providers and settings, make pairing keys, download an encrypted backup, and turn the kill switch on or off. It **cannot** make or revoke keys, change the admin password, open a session, or open sealed audit content. Revoke it in the admin site, Security tab; it stops working at once. Only its hash is stored. Wrong keys count toward the same lockout as wrong passwords.
+It can use the admin API like the site: read audit metadata, change providers and settings, make pairing keys, download an encrypted backup, and turn the kill switch on or off. It **cannot** make or revoke keys, change the admin password, open a session, open sealed audit content, or do anything that needs a fresh sign-in (set or rotate the backup key, restore, delete a user, lower retention). Revoke it in the admin site, Security tab; it stops working at once. Only its hash is stored. Wrong keys count toward the same lockout as wrong passwords.
 
 ## Backups
 
-Backups contain secrets, encrypted with age. Each service encrypts its own export, and the admin bundles the encrypted exports without being able to read them. Your backup passphrase protects the private key stored in each backup, so anyone with a stolen file can try to guess it offline. Use a long, random passphrase and keep it safe; it can't be recovered. Each backup needs the passphrase that was current when it was made, and a restore never needs the audit passphrase. See [ADR 0013](docs/adr/0013-backups.md).
+Backups contain secrets, encrypted with age. Each service encrypts its own export (the server, the auditor, the alerter, `cpa` through its supervisor, and the admin itself; `model-gateway` has none), and the admin bundles the encrypted exports without being able to read the others. Your backup passphrase protects the private key stored in each backup, so anyone with a stolen file can try to guess it offline. Use a long, random passphrase and keep it safe; it can't be recovered. Each backup needs the passphrase that was current when it was made, and a restore never needs the audit passphrase. See [ADR 0013](docs/adr/0013-backups.md).
 
 ## Who is responsible
 
