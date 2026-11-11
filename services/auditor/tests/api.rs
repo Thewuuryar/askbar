@@ -173,8 +173,13 @@ async fn each_link_may_call_only_its_own_routes_and_anything_else_is_403() {
     }
 
     // The admin's read token: reads and retention, no append of any kind.
-    for p in ["/traces", "/stats", "/token-counts", "/admin-actions", "/prunes", "/retention", "/status"] {
+    for p in ["/traces", "/stats", "/token-counts", "/admin-actions", "/prunes", "/retention", "/status", "/chain/head", "/chain/verify"] {
         ok(t.as_(ADMIN_READ, M::GET, p, None).await, 200, p);
+    }
+    for link in [SERVER, GATEWAY, ADMIN_APPEND] {
+        for p in ["/chain/head", "/chain/verify", "/chain/entries/1"] {
+            assert_eq!(t.as_(link, M::GET, p, None).await.status, 403, "{link} {p}");
+        }
     }
     ok(t.as_(ADMIN_READ, M::PUT, "/retention", Some(json!({ "days": 45 }))).await, 200, "retention");
     for (m, p) in [
@@ -549,4 +554,37 @@ async fn every_route_in_the_table_is_one_the_router_answers() {
             assert_ne!(r.body["detail"], json!(default_not_found), "{} {} is not registered", route.method, route.path);
         }
     }
+}
+
+#[tokio::test]
+async fn the_chain_head_moves_with_every_record_and_a_full_check_finds_an_edit() {
+    let t = start().await;
+    let head0 = t.as_(ADMIN_READ, M::GET, "/chain/head", None).await.body;
+    assert_eq!((head0["seq"].as_i64(), head0["hash"].as_str().map(str::len)), (Some(0), Some(64)));
+    assert_eq!(t.as_(ADMIN_READ, M::GET, "/chain/entries/1", None).await.status, 404, "an empty chain has no entry");
+
+    assert_eq!(t.as_(SERVER, M::POST, "/spans", Some(span("c1", "tc", "gate"))).await.status, 201);
+    let action = json!({ "id": "ca", "at": now(), "category": "settings", "action": "x", "outcome": "done" });
+    assert_eq!(t.as_(ADMIN_APPEND, M::POST, "/admin-actions", Some(action)).await.status, 201);
+    let head = t.as_(ADMIN_READ, M::GET, "/chain/head", None).await.body;
+    assert_eq!(head["seq"], 2);
+    let entry = t.as_(ADMIN_READ, M::GET, "/chain/entries/2", None).await.body;
+    assert_eq!(entry, head, "the head is the entry with its number");
+    assert_eq!(t.as_(ADMIN_READ, M::GET, "/chain/entries/x", None).await.status, 400);
+
+    let report = t.as_(ADMIN_READ, M::GET, "/chain/verify", None).await.body;
+    assert_eq!(
+        (report["ok"].as_bool(), report["entries"].as_i64(), report["problems"].as_array().map(Vec::len)),
+        (Some(true), Some(2), Some(0))
+    );
+
+    // Someone edits a row in the file behind the auditor's back (the store's own triggers are the first thing to go).
+    let conn = askbar_audit::rusqlite::Connection::open(t.dir.join("data/audit.db")).unwrap();
+    conn.execute_batch("DROP TRIGGER admin_actions_are_never_changed; UPDATE admin_actions SET outcome = 'refused' WHERE id = 'ca';")
+        .unwrap();
+    let report = t.as_(ADMIN_READ, M::GET, "/chain/verify", None).await.body;
+    assert_eq!(report["ok"], false);
+    assert_eq!(report["problems"][0]["kind"], "admin_action");
+    assert_eq!(report["problems"][0]["ref"], "ca");
+    assert_eq!(report["head"], head, "the chain itself is whole: only the record was edited");
 }

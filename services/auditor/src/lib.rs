@@ -125,6 +125,9 @@ const ADMIN_READ: Routes = &[
     ("GET", "/token-counts"),
     ("GET", "/admin-actions"),
     ("GET", "/prunes"),
+    ("GET", "/chain/head"),
+    ("GET", "/chain/entries/*"),
+    ("GET", "/chain/verify"),
     ("GET", "/retention"),
     ("PUT", "/retention"),
 ];
@@ -201,6 +204,9 @@ pub fn router(auditor: Arc<Auditor>, links: Links) -> Router {
         .route(&full("/stats"), get(stats))
         .route(&full("/token-counts"), get(token_counts))
         .route(&full("/prunes"), get(prunes))
+        .route(&full("/chain/head"), get(chain_head))
+        .route(&full("/chain/entries/{seq}"), get(chain_entry))
+        .route(&full("/chain/verify"), get(chain_verify))
         .route(&full("/retention"), get(get_retention).put(put_retention))
         .route(&full("/status"), get(status))
         .layer(axum::middleware::from_fn_with_state(links, askbar_service::links::require));
@@ -505,6 +511,26 @@ struct ActionsQuery {
 async fn list_admin_actions(State(a): St, Query(q): Query<ActionsQuery>) -> Result<Json<serde_json::Value>, Failure> {
     let rows = read(&a, move |conn| askbar_audit::list_admin_actions(conn, q.before.as_deref(), q.limit)).await?;
     Ok(Json(serde_json::Value::Array(rows)))
+}
+
+/// The newest entry of the hash chain: what the admin keeps and checks later.
+async fn chain_head(State(a): St) -> Result<Json<askbar_audit::chain::Head>, Failure> {
+    Ok(Json(read(&a, askbar_audit::chain::head).await?))
+}
+
+/// The hash of one entry, so the admin can check that the entry it stored is still where it was.
+async fn chain_entry(State(a): St, Path(seq): Path<i64>) -> Result<Json<askbar_audit::chain::Head>, Failure> {
+    let hash = read(&a, move |conn| askbar_audit::chain::entry_hash(conn, seq)).await?;
+    match hash {
+        Some(hash) => Ok(Json(askbar_audit::chain::Head { seq, hash })),
+        None => Err(ApiError::new(ErrorCode::NotFound, "No such entry.")),
+    }
+}
+
+/// A full check of the chain: every link, every record against its digest. It reads the whole store, so the admin
+/// asks for it now and then, not every few minutes.
+async fn chain_verify(State(a): St) -> Result<Json<askbar_audit::chain::Report>, Failure> {
+    Ok(Json(read(&a, askbar_audit::chain::verify).await?))
 }
 
 async fn prunes(State(a): St) -> Result<Json<serde_json::Value>, Failure> {
