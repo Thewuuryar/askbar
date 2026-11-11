@@ -7,7 +7,7 @@ Kind: component
 
 ## Context
 
-[0028](0028-service-boundaries-and-config-delivery.md) gives every service the project builds the same duties: answer `503 not_configured` until configured, report its configuration version on `GET /status`, and let the admin see a restart. [0004](0004-bootstrap-and-per-link-tokens.md) gives each link its own token, checked against a hash. [0022](0022-api-path-conventions.md) gives them the same internal routes. The server has these today, and the auditor, `model-gateway` and `alerter` will need the same code. Written once per service, the copies would drift, and a security check would be fixed in one copy and not the others.
+[0028](0028-service-boundaries-and-config-delivery.md) gives every service the project builds the same duties: answer `503 not_configured` until configured, report its configuration version on `GET /status`, and let the admin see a restart. [0004](0004-bootstrap-and-per-link-tokens.md) gives each link its own token, checked against a hash. [0022](0022-api-path-conventions.md) gives them the same internal routes. The server, the auditor and `model-gateway` use this code, and `alerter` will. Written once per service, the copies would drift, and a security check would be fixed in one copy and not the others.
 
 ## Decision
 
@@ -16,7 +16,10 @@ Kind: component
   - `links`: the per-link bearer check. A link names the caller, the file holding its token's SHA-256, and the routes it may call. A missing, unreadable or malformed hash file accepts nothing. No or a wrong token is `401 unauthorized`; a known token on another link's route is `403 forbidden`.
   - `status`: the boot ID (new on every start) and the `GET /status` body, `{"config_version", "boot_id"}`.
   - `configured`: the gate that answers `503 not_configured` with `Retry-After` until configuration has arrived.
-  - `routes`: the common internal paths (`/health`, `/status`, `/config`; `/restart` and `/exports` join when built).
+  - `routes`: the common internal paths (`/health`, `/status`, `/config` and `/restart`; `/exports` joins when built).
+  - `restart`: self-restart with a cooldown, a shutdown limit and a watchdog ([0005](0005-no-controller-and-self-restart.md)).
+  - `audit_client`: the link to the auditor that the server and `model-gateway` share: an acknowledged open, and a bounded queue for everything else ([0010](0010-auditor.md)).
+  - `ids`, `periods` (the day and month a budget counts over, in UTC) and `tar` (the minimal archive of backup exports).
 - It depends only on libraries already in the workspace and on `askbar-proto`. It has no admin code, no database code and no provider code, so the server image still carries no admin code ([0028](0028-service-boundaries-and-config-delivery.md) rule 1).
 - Anything one service alone needs stays in that service.
 
@@ -35,3 +38,4 @@ Kind: component
 ## Amendments
 
 - 2026-11-08: marked as a component ADR, so it is amended in place ([0046](0046-component-and-register-adrs-and-partial-amendments.md)). Nothing else changed.
+- 2026-11-11: body brought up to date with the code on `main`: the auditor and `model-gateway` use the crate, and it holds the shared auditor client, self-restart, ids, budget periods and the archive writer. No decision changed.
