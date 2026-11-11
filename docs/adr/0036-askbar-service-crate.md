@@ -19,6 +19,8 @@ Kind: component
   - `routes`: the common internal paths (`/health`, `/status`, `/config` and `/restart`; `/exports` joins when built).
   - `restart`: self-restart with a cooldown, a shutdown limit and a watchdog ([0005](0005-no-controller-and-self-restart.md)).
   - `audit_client`: the link to the auditor that the server and `model-gateway` share: an acknowledged open, and a bounded queue for everything else ([0010](0010-auditor.md)).
+  - **from plan step 4.1,** `alert_client`: the alerter's counterpart of `audit_client`, a bounded queue that sends events to `alerter` over a link ([0055](0055-alerter.md)). `AuditClient` also calls `GET /status` on the auditor every 60 seconds, so the auditor can tell a quiet link from a silent one ([0051](0051-auditor.md));
+  - **from plan step 6.1,** a `backup` feature (off by default, on for the services that export) with the `age` crate: encrypt a stream to a public key and parse a recipient. `routes` gains `/exports`, and the server, the alerter and the admin implement it ([0013](0013-backups.md));
   - `ids`, `periods` (the day and month a budget counts over, in UTC) and `tar` (the minimal archive of backup exports).
 - It depends only on libraries already in the workspace and on `askbar-proto`. It has no admin code, no database code and no provider code, so the server image still carries no admin code ([0028](0028-service-boundaries-and-config-delivery.md) rule 1).
 - Anything one service alone needs stays in that service.
@@ -39,3 +41,4 @@ Kind: component
 
 - 2026-11-08: marked as a component ADR, so it is amended in place ([0046](0046-component-and-register-adrs-and-partial-amendments.md)). Nothing else changed.
 - 2026-11-11: body brought up to date with the code on `main`: the auditor and `model-gateway` use the crate, and it holds the shared auditor client, self-restart, ids, budget periods and the archive writer. No decision changed.
+- 2026-11-11: design for plan steps 4.1, 4.2 and 6.1 (#70): `alert_client`, the 60-second `GET /status` call of `AuditClient`, the `backup` feature with `age`, and `/exports`. The code PRs add the 'built' lines.
