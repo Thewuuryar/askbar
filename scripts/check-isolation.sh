@@ -153,8 +153,8 @@ CLIENT_IP=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$CLIENT_NET\
 [ "$(http_status "$CLIENT_NET" "$CLIENT_IP:8082")" = 0 ] && pass "nothing on the client-api network answers on 8082" || fail "the server port answers on the client-api network"
 [ "$(http_status "$EDGE" "$SERVER_API")" = 0 ] && pass "a container on edge cannot reach the server API address" || fail "the server API address is reachable from edge"
 admin_nets=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$ADMIN" | tr ' ' '\n' | grep . | sort | tr '\n' ' ')
-[ "$admin_nets" = "${PROJECT}_audit-admin ${PROJECT}_cpa-admin ${PROJECT}_gateway-admin ${PROJECT}_server-api " ] && pass "the admin is on server-api, cpa-admin, audit-admin and gateway-admin only (all internal: no route out, never edge)" || fail "the admin's networks are: $admin_nets"
-for n in server-api cpa-admin audit-admin gateway-admin; do
+[ "$admin_nets" = "${PROJECT}_alerter-admin ${PROJECT}_audit-admin ${PROJECT}_cpa-admin ${PROJECT}_gateway-admin ${PROJECT}_server-api " ] && pass "the admin is on server-api, cpa-admin, audit-admin, gateway-admin and alerter-admin only (all internal: no route out, never edge)" || fail "the admin's networks are: $admin_nets"
+for n in server-api cpa-admin audit-admin gateway-admin alerter-admin; do
   [ "$(docker network inspect -f '{{.Internal}}' "${PROJECT}_$n" 2>/dev/null)" = true ] && pass "the $n network is internal" || fail "the $n network is not internal"
 done
 
@@ -239,7 +239,7 @@ echo "== 3d2. Container hardening (ADR 0032)"
 # Every service: read-only root, no capabilities but Caddy's NET_BIND_SERVICE and bootstrap's CHOWN (ADR 0032
 # rule 6), no privilege gain, process and memory limits, a private /tmp, and no host-gateway alias. Bootstrap has
 # exited by now, so it is looked up with -a.
-for svc in bootstrap server admin caddy cpa auditor mock-llm; do
+for svc in bootstrap server admin caddy cpa auditor model-gateway alerter mock-llm; do
   c=$(docker compose -p "$PROJECT" ps -aq "$svc" 2>/dev/null | head -1)
   [ -n "$c" ] || { echo "SKIP  $svc is not running"; continue; }
   want_add=""; [ "$svc" = caddy ] && want_add="NET_BIND_SERVICE"; [ "$svc" = bootstrap ] && want_add="CHOWN"
@@ -259,7 +259,7 @@ EOF_H
   [ -z "$bad" ] && pass "$svc is hardened" || fail "$svc is not hardened:$bad"
 done
 # Each hardened service is writing only to its volumes: its root filesystem refuses a write.
-for c in $SERVER $ADMIN $CADDY askbar-auditor askbar-model-gateway; do
+for c in $SERVER $ADMIN $CADDY askbar-auditor askbar-model-gateway askbar-alerter; do
   refused "$c cannot write its root filesystem" docker exec "$c" sh -c 'echo x > /hardening-probe'
 done
 
@@ -270,7 +270,7 @@ if [ -z "$BOOT" ]; then fail "there is no bootstrap container"; else
   [ "$(docker inspect -f '{{.State.Status}} {{.State.ExitCode}}' "$BOOT")" = "exited 0" ] && pass "bootstrap ran once and exited 0" || fail "bootstrap is $(docker inspect -f '{{.State.Status}} {{.State.ExitCode}}' "$BOOT")"
   [ "$(docker inspect -f '{{.Config.User}}' "$BOOT")" = 0 ] && pass "bootstrap runs as root, with CHOWN only (checked above)" || fail "bootstrap does not run as root"
   bmounts=$(docker inspect -f '{{range .Mounts}}{{.Name}}={{.RW}} {{end}}' "$BOOT" | tr ' ' '\n' | grep . | sort | tr '\n' ' ')
-  [ "$bmounts" = "${PROJECT}_admin-token=true ${PROJECT}_auditor-token=true ${PROJECT}_model-gateway-token=true ${PROJECT}_server-token=true " ] && pass "bootstrap mounts the credential volumes only" || fail "bootstrap mounts: $bmounts"
+  [ "$bmounts" = "${PROJECT}_admin-token=true ${PROJECT}_alerter-token=true ${PROJECT}_auditor-token=true ${PROJECT}_model-gateway-token=true ${PROJECT}_server-token=true " ] && pass "bootstrap mounts the credential volumes only" || fail "bootstrap mounts: $bmounts"
 fi
 # Each service mounts its own credential volume, read-only, and no other service's.
 for pair in "$SERVER:server-token" "$ADMIN:admin-token"; do
@@ -299,7 +299,7 @@ case "$admin_token" in mgt_*) pass "the admin's token has the admin-server prefi
 # file it has already given away. After a rotation the admin and the server read the new files on restart.
 before=$(docker exec "$ADMIN" sh -c 'cat /admin-token/call/admin-server.token' 2>/dev/null)
 out=$(docker compose -p "$PROJECT" run --rm --no-deps bootstrap 2>/dev/null)
-[ "$out" = "$(printf 'kept admin-server\nkept admin-auditor-append\nkept admin-auditor-read\nkept server-model-gateway\nkept admin-model-gateway\nkept model-gateway-auditor\nkept server-auditor\nkept model-gateway-auditor-read')" ] && [ "$(docker exec "$ADMIN" cat /admin-token/call/admin-server.token 2>/dev/null)" = "$before" ] \
+[ "$out" = "$(printf 'kept admin-server\nkept admin-auditor-append\nkept admin-auditor-read\nkept server-model-gateway\nkept admin-model-gateway\nkept model-gateway-auditor\nkept server-auditor\nkept model-gateway-auditor-read\nkept auditor-alerter\nkept admin-alerter\nkept alerter-auditor')" ] && [ "$(docker exec "$ADMIN" cat /admin-token/call/admin-server.token 2>/dev/null)" = "$before" ] \
   && pass "a second bootstrap run keeps the token" || fail "a second bootstrap run: $out"
 out=$(docker compose -p "$PROJECT" run --rm --no-deps bootstrap rotate admin-server 2>/dev/null)
 printf '%s' "$out" | grep -q '^rotated admin-server$' && printf '%s' "$out" | grep -q '^Restart from the admin: admin, server$' \
@@ -329,7 +329,7 @@ if [ "$(docker inspect -f '{{.State.Running}}' "$AUDITOR" 2>/dev/null)" != true 
   [ -z "$(docker inspect -f '{{join .HostConfig.CapAdd ","}}' "$AUDITOR")" ] && pass "the auditor adds no capability" || fail "the auditor adds a capability"
   # Its networks are exactly the audit-* ones, and each is internal: no route out.
   anets=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$AUDITOR" | tr ' ' '\n' | grep . | sort | tr '\n' ' ')
-  [ "$anets" = "${PROJECT}_audit-admin ${PROJECT}_audit-caddy ${PROJECT}_audit-model-gateway ${PROJECT}_audit-server " ] && pass "the auditor is on the audit-* networks only (audit-admin, audit-caddy, audit-model-gateway, audit-server)" || fail "the auditor's networks are: $anets"
+  [ "$anets" = "${PROJECT}_audit-admin ${PROJECT}_audit-alerter ${PROJECT}_audit-caddy ${PROJECT}_audit-model-gateway ${PROJECT}_audit-server " ] && pass "the auditor is on the audit-* networks only (audit-admin, audit-alerter, audit-caddy, audit-model-gateway, audit-server)" || fail "the auditor's networks are: $anets"
   case "$anets" in *edge*|*server-api*|*cpa-admin*) fail "the auditor shares a network that is not an audit-* one";; esac
   for n in $anets; do
     [ "$(docker network inspect -f '{{.Internal}}' "$n" 2>/dev/null)" = true ] && pass "$n is internal" || fail "$n is not internal"
@@ -589,6 +589,107 @@ if [ "$(docker inspect -f '{{.State.Running}}' "$SERVER" 2>/dev/null)" != true ]
       && fail "the server's filesystem holds the marker key" || pass "the server's filesystem holds no marker key"
     docker exec "$SERVER" sh -c "grep -rl -- '$MARK' /data 2>/dev/null | head -1" | grep -q . && fail "the server's database holds the marker key" || pass "the server's database holds no marker key"
   fi
+fi
+
+echo "== 3d7. The alerter (ADR 0055)"
+ALERTER=askbar-alerter
+AL_ADMIN="${PROJECT}_alerter-admin"; AL_AUD="${PROJECT}_audit-alerter"; AL_OUT="${PROJECT}_alerter-outbound"
+if [ "$(docker inspect -f '{{.State.Running}}' "$ALERTER" 2>/dev/null)" != true ]; then fail "the alerter is not running"; else
+  for i in $(seq 1 30); do [ "$(docker inspect -f '{{.State.Health.Status}}' "$ALERTER")" = healthy ] && break; sleep 2; done
+  [ "$(docker inspect -f '{{.State.Health.Status}}' "$ALERTER")" = healthy ] && pass "the alerter is healthy" || fail "the alerter is not healthy"
+  [ "$(docker exec "$ALERTER" id -u)" = 10005 ] && pass "the alerter runs as uid 10005" || fail "the alerter does not run as uid 10005"
+  capeff=$(docker exec "$ALERTER" sh -c 'grep CapEff /proc/1/status' 2>/dev/null | awk '{print $2}')
+  [ "$capeff" = 0000000000000000 ] && pass "the alerter's CapEff is 0" || fail "the alerter's CapEff is '${capeff:-unknown}', expected 0"
+  [ -z "$(docker inspect -f '{{join .HostConfig.CapAdd ","}}' "$ALERTER")" ] && pass "the alerter adds no capability" || fail "the alerter adds a capability"
+  [ "$(docker inspect -f '{{.HostConfig.ReadonlyRootfs}} {{.HostConfig.Memory}}' "$ALERTER")" = "true 134217728" ] && pass "the alerter has a read-only root and 128 MB" || fail "the alerter's root or memory limit is not as set"
+  # Its networks are exactly these three, and only alerter-outbound has a route out.
+  alnets=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$ALERTER" | tr ' ' '\n' | grep . | sort | tr '\n' ' ')
+  [ "$alnets" = "$AL_ADMIN $AL_OUT $AL_AUD " ] && pass "the alerter is on alerter-admin, alerter-outbound and audit-alerter only" || fail "the alerter's networks are: $alnets"
+  for n in $AL_ADMIN $AL_AUD; do
+    [ "$(docker network inspect -f '{{.Internal}}' "$n" 2>/dev/null)" = true ] && pass "$n is internal" || fail "$n is not internal"
+  done
+  [ "$(docker network inspect -f '{{.Internal}}' "$AL_OUT" 2>/dev/null)" = false ] && pass "alerter-outbound is the alerter's one network with a route out" || fail "alerter-outbound is internal: no alert could be delivered"
+  # Who is on each network: the alerter shares none with a service that has a route out, and `outbound` does not include it.
+  members() { docker network inspect -f '{{range .Containers}}{{.Name}} {{end}}' "$1" | tr ' ' '\n' | grep . | sort | tr '\n' ' '; }
+  [ "$(members "$AL_ADMIN")" = "$ADMIN $ALERTER " ] && pass "alerter-admin joins the admin and the alerter only" || fail "alerter-admin members: $(members "$AL_ADMIN")"
+  [ "$(members "$AL_AUD")" = "$ALERTER $AUDITOR " ] && pass "audit-alerter joins the alerter and the auditor only" || fail "audit-alerter members: $(members "$AL_AUD")"
+  [ "$(members "$AL_OUT")" = "$ALERTER " ] && pass "alerter-outbound joins the alerter alone" || fail "alerter-outbound members: $(members "$AL_OUT")"
+  case "$(members "${PROJECT}_outbound")" in *"$ALERTER"*) fail "the alerter is on outbound, with the gateway";; *) pass "outbound does not include the alerter";; esac
+  for c in $SERVER $GW $CADDY askbar-cpa; do
+    shared=""
+    for n in $alnets; do case " $(members "$n")" in *" $c "*) shared="$shared $n";; esac; done
+    [ -z "$shared" ] && pass "$c shares no network with the alerter" || fail "$c shares a network with the alerter:$shared"
+  done
+  # The server and the auditor still have no route out (3d4, 3d6); the gateway's is `outbound`, which the alerter is not on.
+  # It reaches the auditor on audit-alerter, and nothing else of ours.
+  docker exec "$ALERTER" bash -c 'exec 3<>/dev/tcp/auditor/8083' >/dev/null 2>&1 && pass "the alerter reaches the auditor" || fail "the alerter cannot reach the auditor"
+  for h in caddy server askbar-model-gateway cpa; do
+    docker exec "$ALERTER" bash -c "getent hosts $h" >/dev/null 2>&1 && fail "the alerter resolves $h" || pass "the alerter cannot resolve $h"
+  done
+  # Mounts: its data (read-write) and its credential volume (read-only), and nothing else; nobody else has them.
+  almounts=$(docker inspect -f '{{range .Mounts}}{{.Name}}={{.RW}} {{end}}' "$ALERTER" | tr ' ' '\n' | grep . | sort | tr '\n' ' ')
+  [ "$almounts" = "${PROJECT}_alerter-data=true ${PROJECT}_alerter-token=false " ] && pass "the alerter mounts alerter-data and alerter-token (read-only) only" || fail "the alerter mounts: $almounts"
+  for c in $SERVER $ADMIN $CADDY $AUDITOR $GW askbar-cpa; do
+    case " $(docker inspect -f '{{range .Mounts}}{{.Name}} {{end}}' "$c")" in
+      *" ${PROJECT}_alerter-token "*|*" ${PROJECT}_alerter-data "*) fail "$c mounts an alerter volume";; *) pass "$c mounts no alerter volume";;
+    esac
+  done
+  # Token files: owners, modes and prefixes.
+  owned "$ALERTER" /alerter-token/accept/auditor-alerter.sha256 "10005 444" "the alerter's auditor hash file (owner, mode)"
+  owned "$ALERTER" /alerter-token/accept/admin-alerter.sha256 "10005 444" "the alerter's admin hash file (owner, mode)"
+  owned "$ALERTER" /alerter-token/call/alerter-auditor.token "10005 400" "the alerter's auditor token file (owner, mode)"
+  for d in /alerter-token /alerter-token/call /alerter-token/accept; do owned "$ALERTER" "$d" "10005 500" "the alerter's $d"; done
+  owned "$AUDITOR" /auditor-token/accept/alerter-auditor.sha256 "10003 444" "the auditor's alerter hash file (owner, mode)"
+  owned "$AUDITOR" /auditor-token/call/auditor-alerter.token "10003 400" "the auditor's alerter token file (owner, mode)"
+  owned "$ADMIN" /admin-token/call/admin-alerter.token "10001 400" "the admin's alerter token file (owner, mode)"
+  AL_ADM_TOK=$(docker exec "$ADMIN" cat /admin-token/call/admin-alerter.token 2>/dev/null)
+  AL_AUD_TOK=$(docker exec "$AUDITOR" cat /auditor-token/call/auditor-alerter.token 2>/dev/null)
+  AL_OWN_TOK=$(docker exec "$ALERTER" cat /alerter-token/call/alerter-auditor.token 2>/dev/null)
+  case "$AL_ADM_TOK" in admalr_*) pass "the admin's alerter token has its prefix";; *) fail "the admin's alerter token has the wrong prefix";; esac
+  case "$AL_AUD_TOK" in audalr_*) pass "the auditor's alerter token has its prefix";; *) fail "the auditor's alerter token has the wrong prefix";; esac
+  case "$AL_OWN_TOK" in alraud_*) pass "the alerter's auditor token has its prefix";; *) fail "the alerter's auditor token has the wrong prefix";; esac
+  # Each listener is on its own network's address and nowhere else, and only its own link's token opens it.
+  AL_ADMIN_IP=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$AL_ADMIN\").IPAddress}}" "$ALERTER")
+  AL_AUD_IP=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$AL_AUD\").IPAddress}}" "$ALERTER")
+  AL_OUT_IP=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$AL_OUT\").IPAddress}}" "$ALERTER")
+  al_call() { # network ip method path [token] [json] -> status, 0 = no connection
+    py --network "$1" -- "
+import urllib.request, urllib.error
+req = urllib.request.Request('http://$2:8085/api/alerter/v1$4', method='$3', data=(b'${6:-}' if '${6:-}' else None))
+if '${5:-}': req.add_header('authorization', 'Bearer ${5:-}')
+if '${6:-}': req.add_header('content-type', 'application/json')
+try: print(urllib.request.urlopen(req, timeout=4).status)
+except urllib.error.HTTPError as e: print(e.code)
+except Exception: print(0)
+"
+  }
+  [ "$(al_call "$AL_ADMIN" "$AL_ADMIN_IP" GET /health)" = 200 ] && pass "the admin's listener answers on alerter-admin" || fail "the admin's listener does not answer on alerter-admin"
+  [ "$(al_call "$AL_AUD" "$AL_AUD_IP" GET /health)" = 200 ] && pass "the auditor's listener answers on audit-alerter" || fail "the auditor's listener does not answer on audit-alerter"
+  [ "$(al_call "$AL_OUT" "$AL_OUT_IP" GET /health)" = 0 ] && pass "nothing answers on alerter-outbound" || fail "the alerter answers on alerter-outbound"
+  [ "$(al_call "$AL_ADMIN" "$AL_ADMIN_IP" GET /status)" = 401 ] && pass "no token: 401 on the admin's listener" || fail "the admin's listener answers without a token"
+  [ "$(al_call "$AL_ADMIN" "$AL_ADMIN_IP" GET /status "wrong-token")" = 401 ] && pass "a wrong token: 401 on the admin's listener" || fail "a wrong token opened the admin's listener"
+  [ "$(al_call "$AL_ADMIN" "$AL_ADMIN_IP" GET /status "$AL_AUD_TOK")" = 401 ] && pass "the auditor's token does not open the admin's listener" || fail "the auditor's token opened the admin's listener"
+  [ "$(al_call "$AL_ADMIN" "$AL_ADMIN_IP" GET /status "$AL_ADM_TOK")" = 200 ] && pass "the admin's token opens GET /status" || fail "the admin's token does not open GET /status"
+  [ "$(al_call "$AL_AUD" "$AL_AUD_IP" POST /events "" '{}')" = 401 ] && pass "no token: 401 on the auditor's listener" || fail "the auditor's listener answers without a token"
+  [ "$(al_call "$AL_AUD" "$AL_AUD_IP" POST /events "$AL_ADM_TOK" '{}')" = 401 ] && pass "the admin's token does not open the auditor's listener" || fail "the admin's token opened the auditor's listener"
+  [ "$(al_call "$AL_AUD" "$AL_AUD_IP" GET /status "$AL_AUD_TOK")" = 404 ] && pass "the auditor's listener has no status route" || fail "the auditor's listener serves /status"
+  [ "$(al_call "$AL_AUD" "$AL_AUD_IP" PUT /config "$AL_AUD_TOK" '{}')" = 404 ] && pass "the auditor's listener has no config route" || fail "the auditor's listener serves /config"
+  [ "$(al_call "$EDGE" "$AL_AUD_IP" GET /health)" = 0 ] && pass "a container on edge cannot reach the alerter" || fail "the alerter is reachable from edge"
+  # Until the admin pushes settings it answers 503 not_configured (nothing in this stack pushes them yet), and a restart is allowed.
+  [ "$(al_call "$AL_ADMIN" "$AL_ADMIN_IP" POST /test "$AL_ADM_TOK")" = 503 ] && pass "unconfigured, POST /test is 503" || fail "an unconfigured alerter did not answer 503 to POST /test"
+  [ "$(al_call "$AL_AUD" "$AL_AUD_IP" POST /events "$AL_AUD_TOK" '{"kind":"unsealed","severity":"warning","at":1}')" = 503 ] && pass "unconfigured, an event is 503" || fail "an unconfigured alerter did not answer 503 to an event"
+  # Its own link to the auditor works end to end: its token is accepted there, and the auditor notes its request.
+  ar=$(py --network "$AL_AUD" -- "
+import urllib.request, json
+req = urllib.request.Request('http://auditor-alerter-host:8083/api/audit/v1/status', headers={'authorization': 'Bearer $AL_OWN_TOK'})
+print('alerter' in json.load(urllib.request.urlopen(req, timeout=4)).get('last_requests', {}))" 2>&1 | tail -1)
+  [ "$ar" = True ] && pass "the alerter's token opens the auditor on audit-alerter, which has noted a request from it" || fail "the alerter's link to the auditor: '$ar'"
+  ar=$(py --network "$AL_AUD" -- "
+import urllib.request, urllib.error
+req = urllib.request.Request('http://auditor-alerter-host:8083/api/audit/v1/traces', headers={'authorization': 'Bearer $AL_OWN_TOK'})
+try: print(urllib.request.urlopen(req, timeout=4).status)
+except urllib.error.HTTPError as e: print(e.code)" 2>&1 | tail -1)
+  [ "$ar" = 403 ] && pass "the alerter's token cannot read the auditor's records" || fail "the alerter's token read the auditor's records: '$ar'"
 fi
 
 echo "== 3e. No Docker socket"
