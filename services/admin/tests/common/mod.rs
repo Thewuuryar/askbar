@@ -46,6 +46,8 @@ pub struct T {
     pub http: reqwest::Client,
     pub admin: Arc<AdminState>,
     pub server: Arc<AppState>,
+    /// Where the server's API listens, for a test that builds a second admin in front of it.
+    pub server_api_url: String,
     pub fake: Arc<FakeCaddy>,
     pub dir: PathBuf,
     pub secrets_dir: PathBuf,
@@ -136,6 +138,9 @@ pub async fn start_with(caddy_up: bool, with_gateway: bool) -> T {
     // The Audit pages read the in-process auditor with the admin's read token (ADR 0051).
     let auditor_token = askbar_admin::auditor_link::read_token(&rig.admin_tokens).unwrap();
     admin.auditor.set(askbar_admin::auditor_link::AuditorLink::new(&rig.audit_url, auditor_token)).ok().unwrap();
+    // Every change is recorded in the rig's auditor before it is made, as it is in the stack (ADR 0010).
+    let append_token = askbar_admin::actions::append_token(&rig.admin_tokens).unwrap();
+    admin.actions.set(askbar_admin::actions::ActionLog::new(&rig.audit_url, append_token)).ok().unwrap();
     admin.set_caddy(CaddyLink { socket: Some(caddy_socket.clone()), secrets_dir: Some(secrets_dir.clone()) });
     let adm = serve(askbar_admin::router(admin.clone())).await;
     let http = reqwest::Client::new();
@@ -147,7 +152,7 @@ pub async fn start_with(caddy_up: bool, with_gateway: bool) -> T {
         .await
         .unwrap();
     let cookie = r.headers()["set-cookie"].to_str().unwrap().split(';').next().unwrap().to_string();
-    T { rig, gateway, adm, cookie, http, admin, server, fake, dir, secrets_dir, caddy_socket }
+    T { rig, gateway, adm, cookie, http, admin, server, server_api_url, fake, dir, secrets_dir, caddy_socket }
 }
 
 impl T {

@@ -3,6 +3,7 @@
 //! only through the server's server API. It listens on a unix socket, never on a TCP port.
 #![cfg(unix)]
 
+pub mod actions;
 pub mod admin_api;
 pub mod api_key;
 pub mod audit_key;
@@ -57,6 +58,8 @@ pub struct AdminState {
     pub gateway: std::sync::OnceLock<Arc<gateway_link::GatewayLink>>,
     /// The link to the auditor (ADR 0051); set once by `main`. Tests that have none leave it unset.
     pub auditor: std::sync::OnceLock<Arc<auditor_link::AuditorLink>>,
+    /// Where the admin's action records go (ADR 0010); set once by `main`. Tests that have none record nothing.
+    pub actions: std::sync::OnceLock<Arc<actions::ActionLog>>,
     /// What the last check of the audit chain found (ADR 0010 rule 7).
     pub chain: chain_check::ChainWatch,
     /// The link to CLIProxyAPI, once its config exists.
@@ -88,6 +91,7 @@ impl AdminState {
             restarter: Default::default(),
             gateway: Default::default(),
             auditor: Default::default(),
+            actions: Default::default(),
             chain: Default::default(),
             cpa: std::sync::Mutex::new(None),
             cpa_logins: std::sync::Mutex::new(Default::default()),
@@ -160,6 +164,7 @@ pub fn routes(state: &Arc<AdminState>) -> Routes {
         .get(&v1("/network"), network::get_network)
         .put(&v1("/network"), network::put_network)
         .post(&v1("/network/apply"), network::apply_network)
+        .audited(state)
         .signed_in_or_key(state);
     // What only the person's own session may do: the password, the API key, and looking at or ending the session.
     let session_only = Routes::new()
@@ -176,6 +181,7 @@ pub fn routes(state: &Arc<AdminState>) -> Routes {
         .post(&v1("/keys"), admin_api::create_key)
         .get(&v1("/keys"), admin_api::list_keys)
         .delete(&v1("/keys/{id}"), admin_api::revoke_key)
+        .audited(state)
         .signed_in(state);
     // Open, but a change still wants the browser header.
     let open = Routes::new().post(&v1("/session"), web::login).browser_header();

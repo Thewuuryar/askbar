@@ -61,6 +61,22 @@ fn link(state: &AdminState) -> Result<&Arc<ServerLink>, Failure> {
     state.server.as_ref().ok_or_else(offline)
 }
 
+/// Send the server the snapshot. The push is an action of its own (`config_push`): recorded before it is made, and not
+/// made when it cannot be recorded (ADR 0010). The server records the version it applied itself (ADR 0028 rule 5).
+async fn push_snapshot(state: &AdminState, link: &ServerLink, snapshot: &askbar_proto::Snapshot) -> Result<u64, Failure> {
+    let Some(log) = state.actions.get() else { return link.push(snapshot).await.map_err(from_push) };
+    let done = log
+        .around("config_push", "server", serde_json::json!({ "target": "server" }), link.push(snapshot), |r| match r {
+            Ok(v) => serde_json::json!({ "version": v }),
+            Err(_) => serde_json::json!({}),
+        })
+        .await;
+    match done {
+        Err(why) => Err(err(StatusCode::SERVICE_UNAVAILABLE, why.sentence())),
+        Ok(pushed) => pushed.map_err(from_push),
+    }
+}
+
 /// Apply `apply` to `admin.db` and keep each of `keys` (provider id, API key), encrypted, send the server the resulting
 /// snapshot, and commit only if that worked. The keys go to the gateway, not the server (ADR 0054): the gateway is
 /// given them after the commit.
@@ -96,9 +112,9 @@ pub(crate) async fn mutate<T>(
             return Err(internal(e));
         }
     };
-    if let Err(e) = link.push(&snapshot).await {
+    if let Err(e) = push_snapshot(state, link, &snapshot).await {
         rollback(db.conn());
-        return Err(from_push(e));
+        return Err(e);
     }
     db.conn().execute_batch("COMMIT").map_err(internal)?;
     // The gateway gets the new truth now, not at its next check.
@@ -1076,7 +1092,21 @@ pub async fn get_settings(State(state): St) -> Json<AdminSettings> {
     })
 }
 
-pub async fn put_settings(State(state): St, ApiJson(s): ApiJson<AdminSettings>) -> Result<StatusCode, Failure> {
+pub async fn put_settings(
+    State(state): St,
+    notes: Option<axum::Extension<crate::actions::ActionNotes>>,
+    ApiJson(s): ApiJson<AdminSettings>,
+) -> Result<StatusCode, Failure> {
+    // What is worth keeping in the record of this change: the two settings that change what the stack does at once.
+    // The prompt and the display are not copied into it.
+    if let Some(axum::Extension(n)) = &notes {
+        if let Some(days) = s.audit_retention_days {
+            n.add("audit_retention_days", serde_json::json!(days));
+        }
+        if let Some(on) = s.kill_switch {
+            n.add("kill_switch", serde_json::json!(on));
+        }
+    }
     if s.system_prompt.chars().count() > MAX_PROMPT_CHARS {
         return Err(bad("The system prompt is too long."));
     }

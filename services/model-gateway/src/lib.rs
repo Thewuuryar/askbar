@@ -305,6 +305,7 @@ impl Gateway {
         let version = applied.version;
         *self.config.write().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(applied));
         tracing::info!(version, providers = c.providers.len(), "configuration applied");
+        self.audit.config_applied(version as i64);
         Ok(())
     }
 }

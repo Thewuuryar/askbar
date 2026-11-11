@@ -112,7 +112,10 @@ async fn put_snapshot(State(state): State<Arc<AppState>>, ApiJson(s): ApiJson<Sn
         crate::generation::apply_kill_switch(&state, s.kill_switch_aborts_running);
     }
     match applied {
-        Ok(version) => Ok(Json(serde_json::json!({ "version": version }))),
+        Ok(version) => {
+            state.audit.config_applied(version as i64);
+            Ok(Json(serde_json::json!({ "version": version })))
+        }
         Err(crate::snapshot::ApplyError::Invalid(why)) => Err(ApiError::new(ErrorCode::BadRequest, why)),
         Err(crate::snapshot::ApplyError::Store(_)) => Err(ApiError::new(ErrorCode::Internal, "Could not store the snapshot.")),
     }

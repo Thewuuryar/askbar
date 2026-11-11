@@ -175,6 +175,13 @@ impl Recorder {
         self.client.as_ref().is_none_or(|c| c.healthy())
     }
 
+    /// Record the configuration version this server now runs, for the auditor (ADR 0028 rule 5).
+    pub fn config_applied(&self, version: i64) {
+        if let Some(c) = &self.client {
+            c.config_applied(version);
+        }
+    }
+
     /// The client, for the tasks that run it (hello, draining the queue).
     pub fn client(&self) -> Option<&Arc<AuditClient>> {
         self.client.as_ref()

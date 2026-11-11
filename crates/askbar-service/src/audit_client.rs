@@ -41,6 +41,7 @@ enum Item {
     Start(SpanStart),
     Finish(String, SpanFinish),
     Payload(String, SealedPayload),
+    Config(askbar_proto::audit::ConfigApplied),
 }
 
 #[derive(Default)]
@@ -172,6 +173,12 @@ impl AuditClient {
         ));
     }
 
+    /// Queue the record of the configuration version this service now runs (ADR 0028 rule 5). Behind the rest of the
+    /// queue, and retried until the auditor takes it.
+    pub fn config_applied(&self, version: i64) {
+        self.push(Item::Config(askbar_proto::audit::ConfigApplied { id: ids::new_id(), at: now_parts().0, version }));
+    }
+
     /// Queue the record of a request this gateway refused: a span that began and ended at once.
     pub fn refusal(&self, start: SpanStart, finish: SpanFinish) {
         let id = start.id.clone();
@@ -207,6 +214,7 @@ impl AuditClient {
                 Item::Start(s) => self.send("/spans", s, SEND_TIMEOUT).await,
                 Item::Finish(id, f) => self.send(&format!("/spans/{id}/finish"), f, SEND_TIMEOUT).await,
                 Item::Payload(id, p) => self.send(&format!("/spans/{id}/payloads"), p, SEND_TIMEOUT).await,
+                Item::Config(c) => self.send("/config-applied", c, SEND_TIMEOUT).await,
             };
             match status {
                 Ok(200 | 201) => {

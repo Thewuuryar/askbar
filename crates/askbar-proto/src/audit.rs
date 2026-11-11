@@ -105,7 +105,8 @@ pub struct AdminActionStart {
     /// What kind of change: `settings`, `restart`, `config_push`, `secret`, `retention`, `backup`, ...
     pub category: String,
     pub action: String,
-    /// `done` or `refused`.
+    /// `requested` (written before the change, so a record that cannot be written refuses the change), then `done`,
+    /// `refused` (the admin said no) or `failed` (it tried and did not succeed), the later ones naming the request in `detail`.
     pub outcome: String,
     /// Metadata about the change, never a secret or message content.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -193,6 +194,15 @@ pub struct StoredPayload {
     pub role: String,
     pub key_id: String,
     pub ciphertext_b64: String,
+}
+
+/// `POST /config-applied`: a service says which configuration version it now runs (ADR 0028 rule 5). Stored with the
+/// admin action records, as category `config`, action `applied`, and the caller is the token's.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConfigApplied {
+    pub id: String,
+    pub at: i64,
+    pub version: i64,
 }
 
 /// One row of `GET /admin-actions`, newest first.
@@ -284,6 +294,7 @@ mod tests {
             outcome: "done".into(),
             detail: Some(json!({ "kill_switch": true })),
         });
+        round_trip(&ConfigApplied { id: "01C".into(), at: 7, version: 12 });
         round_trip(&PruneRecord { at: 9, cutoff: 5, spans: 2, payloads: 3 });
         round_trip(&Hello { boot_id: "01B".into() });
         round_trip(&Appended { id: "01H".into() });
