@@ -38,12 +38,19 @@
       hotkey: 'Ctrl+Shift+Space', provider: window.__opts.provider || 'mock', model: 'mock-model',
       notice: window.__opts.notice || null,
     }),
-    // opts.status stands for the server's state: { kind, message, providers? } or absent when healthy.
+    // opts.status stands for the server's state: { kind, message, models? } or absent when healthy.
     server_status: () => (window.__opts.status ? JSON.parse(JSON.stringify(window.__opts.status)) : null),
-    set_active_provider: ({ id }) => {
-      const chosen = ((window.__opts.status || {}).providers || []).find((p) => p.id === id);
-      window.__opts.provider = chosen ? chosen.name : id;
-      if (window.__opts.status && window.__opts.status.kind === 'provider_missing') window.__opts.status = null;
+    // The approved models (opts.models, { id, label }) and the one in use (opts.activeModel, else the first).
+    list_models: () => {
+      const models = window.__opts.models || [{ id: 'p1/mock-model', label: 'mock-model via mock' }];
+      return { models, active: window.__opts.activeModel || (models[0] && models[0].id) || null };
+    },
+    set_active_model: ({ id }) => {
+      const models = window.__opts.models || [];
+      const chosen = models.find((m) => m.id === id) || ((window.__opts.status || {}).models || []).find((m) => m.id === id);
+      window.__opts.provider = chosen ? chosen.label.split(' via ')[1] : id;
+      window.__opts.activeModel = id;
+      if (window.__opts.status && window.__opts.status.kind === 'model_missing') window.__opts.status = null;
     },
     // A pairing key is accepted when it starts with the prefix and the code is not "bad".
     pair: ({ pairing }) => {
@@ -58,7 +65,7 @@
     },
     list_conversations: () =>
       db.convs.slice().sort((a, b) => b.updated_at - a.updated_at || Number(b.id) - Number(a.id))
-        .map((c) => ({ id: c.id, title: c.title, updated_at: c.updated_at, message_count: c.messages.length })),
+        .map((c) => ({ id: c.id, title: c.title, updated_at: c.updated_at, message_count: c.messages.length, model: c.model })),
     load_conversation: ({ id }) => db.convs.find((c) => c.id === id).messages,
     // Replies the server is still working on, per conversation: conv.pending is a list of
     // { generationId, status: 'running' | 'queued', prompt, text, replyText } set by a test.
@@ -108,7 +115,7 @@
       const u = db.unsent.find((x) => x.clientRequestId === clientRequestId);
       if (!u) { onEvent.onmessage({ event: 'error', message: 'That message is no longer waiting to be sent.' }); return; }
       const st = window.__opts.status;
-      if (!(st && st.kind !== 'provider_missing')) db.unsent = db.unsent.filter((x) => x !== u);
+      if (!(st && st.kind !== 'model_missing')) db.unsent = db.unsent.filter((x) => x !== u);
       return handlers.ask({ conversationId: u.conversationId, text: u.text, onEvent, fromOutbox: true });
     },
     delete_conversation: ({ id }) => { db.convs = db.convs.filter((c) => c.id !== id); },
@@ -117,10 +124,10 @@
     hide_window: () => {},
     open_config: () => {},
     open_url: () => {},
-    ask: async ({ conversationId, text, onEvent, fromOutbox }) => {
+    ask: async ({ conversationId, text, model, onEvent, fromOutbox }) => {
       cancelFlag = false;
       const st = window.__opts.status;
-      if (st && st.kind !== 'provider_missing') {
+      if (st && st.kind !== 'model_missing') {
         if (!fromOutbox) {
           db.unsent.push({ clientRequestId: 'req-' + db.nextReq++, conversationId: conversationId || null, text, createdAt: db.clock });
         }
@@ -134,6 +141,8 @@
       }
       const question = { id: String(db.nextMsg++), role: 'user', content: text, created_at: db.clock };
       conv.messages.push(question);
+      // Like the server, the conversation remembers the model its latest message asked for.
+      conv.model = model || window.__opts.activeModel || ((window.__opts.models || [])[0] || {}).id || 'p1/mock-model';
       onEvent.onmessage({ event: 'started', conversationId: conv.id });
 
       // Like the server: the provider and model serving the reply, before any text; replies are stored with them.

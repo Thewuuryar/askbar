@@ -13,8 +13,10 @@ pub struct OutboxEntry {
     /// Sent with the chat request; the server uses it to recognise a repeat of the same send.
     pub client_request_id: String,
     pub conversation_id: Option<String>,
-    /// Id of the provider the message was sent to.
-    pub provider: String,
+    /// The model (`provider/model`) the message asks for; empty means the one the app would pick now (the catalog's
+    /// default, or what the person chose last). An entry saved before models were chosen has none, and takes that too.
+    #[serde(default)]
+    pub model: String,
     pub text: String,
     pub created_at: i64,
 }
@@ -51,11 +53,11 @@ impl Outbox {
     }
 
     /// Adds a message with a fresh random request id and saves the file. Returns the entry.
-    pub fn add(&self, conversation_id: Option<String>, provider: &str, text: &str) -> OutboxEntry {
+    pub fn add(&self, conversation_id: Option<String>, model: &str, text: &str) -> OutboxEntry {
         let entry = OutboxEntry {
             client_request_id: uuid::Uuid::new_v4().to_string(),
             conversation_id,
-            provider: provider.to_string(),
+            model: model.to_string(),
             text: text.to_string(),
             created_at: now(),
         };
@@ -138,7 +140,7 @@ mod tests {
         assert_eq!(uuid::Uuid::parse_str(&a.client_request_id).unwrap().get_version_num(), 4);
         assert_eq!(o.list(), [a.clone(), b.clone()]);
         assert_eq!(o.get(&b.client_request_id), Some(b));
-        assert_eq!((a.conversation_id, a.provider.as_str(), a.text.as_str()), (None, "p1", "first"));
+        assert_eq!((a.conversation_id, a.model.as_str(), a.text.as_str()), (None, "p1", "first"));
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 

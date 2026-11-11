@@ -65,6 +65,11 @@ async function waitForPort(port) {
   await mk('Backup provider with a really quite long display name to test wrapping', { model: 'm-backup-model-with-a-long-name', price_in: 1, price_out: 4 });
   const providers = (await admin('GET', '/api/admin/v1/providers')).body;
   const pid = (n) => providers.find((p) => p.name.startsWith(n)).id;
+  // Nothing answers until a model is approved (ADR 0014).
+  await admin('PUT', '/api/admin/v1/catalog', {
+    models: [{ provider_id: pid('Primary'), model: 'mock-model' }, { provider_id: pid('Backup'), model: 'm-backup-model-with-a-long-name' }],
+    default: pid('Primary') + '/mock-model',
+  });
   await admin('PUT', '/api/admin/v1/settings', { system_prompt: 'x', display: (await admin('GET', '/api/admin/v1/settings')).body.display });
 
   const user = (await admin('POST', '/api/admin/v1/users', { name: 'shots' })).body.id;
@@ -74,7 +79,9 @@ async function waitForPort(port) {
   const { token } = await (await fetch(`http://127.0.0.1:${api}/api/client/v1/pairings`, { method: 'POST', headers: h, body: JSON.stringify({ code }) })).json();
   const spaces = await (await fetch(`http://127.0.0.1:${api}/api/client/v1/spaces`, { headers: { ...h, authorization: 'Bearer ' + token } })).json();
   const space = spaces.find((s) => s.kind === 'personal').id;
-  const chat = async (provider, text) => (await fetch(`http://127.0.0.1:${api}/api/client/v1/spaces/${space}/chat`, { method: 'POST', headers: { ...h, authorization: 'Bearer ' + token }, body: JSON.stringify({ provider, text }) })).text();
+  const chat = async (provider, text) => (await fetch(`http://127.0.0.1:${api}/api/client/v1/spaces/${space}/chat`, { method: 'POST', headers: { ...h, authorization: 'Bearer ' + token }, body: JSON.stringify({ model: provider + '/mock-model', text }) })).text();
+  // The catalog reaches the gateway, and the server's copy of it, within a few seconds.
+  await new Promise((r) => setTimeout(r, 6000));
   await chat(pid('Primary'), 'hello there');
   await chat(pid('Primary'), 'a cached prompt about caching');
   await chat(pid('Primary'), 'hello 429once screenshot');

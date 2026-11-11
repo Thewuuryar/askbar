@@ -129,10 +129,18 @@ if [ $LOCAL = 1 ]; then
     fail "audit key setup"
   fi
   if admin POST /api/admin/v1/providers \
-      "{\"name\":\"mock\",\"type\":\"openai\",\"base_url\":\"http://127.0.0.1:$MOCK_PORT/v1\",\"model\":\"mock-model\",\"api_key\":\"sk-smoke\"}" >/dev/null; then
+      "{\"name\":\"mock\",\"type\":\"openai\",\"base_url\":\"http://127.0.0.1:$MOCK_PORT/v1\",\"model\":\"mock-model\",\"api_key\":\"sk-smoke\"}" >"$WORK/provider.json"; then
     pass "add a provider that points at the mock LLM"
   else
     fail "add a provider that points at the mock LLM"
+  fi
+  # Nothing answers until a model is approved (ADR 0014): approve the mock's model and make it the default.
+  PROVIDER_ID=$(json "$WORK/provider.json" 'd["id"]')
+  if admin PUT /api/admin/v1/catalog \
+      "{\"models\":[{\"provider_id\":\"$PROVIDER_ID\",\"model\":\"mock-model\"}],\"default\":\"$PROVIDER_ID/mock-model\"}" >/dev/null; then
+    pass "approve the mock's model and make it the default"
+  else
+    fail "approve the mock's model and make it the default"
   fi
   # A pairing key belongs to a user, made in the admin (ADR 0008).
   if admin POST /api/admin/v1/users '{"name":"smoke test user"}' >"$WORK/user.json" \
@@ -180,16 +188,29 @@ if [ -n "$TOKEN" ]; then
     fail "a paired app pairs another app of its user"
   fi
 
-  # 6. Providers.
-  api "$URL/api/client/v1/providers" >"$WORK/providers.json"
-  PROVIDER=$(json "$WORK/providers.json" 'd[0]["id"]')
-  if [ -n "$PROVIDER" ]; then pass "the server lists a provider ($(json "$WORK/providers.json" 'd[0]["name"]'))"; else fail "the server lists a provider"; fi
+  # 6. The approved models (ADR 0014). The gateway has the catalog a moment after the admin saves it.
+  MODEL=""
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    api "$URL/api/client/v1/models" >"$WORK/models.json" 2>/dev/null || true
+    MODEL=$(json "$WORK/models.json" 'd["default"] or ""' 2>/dev/null || true)
+    [ -n "$MODEL" ] && break
+    sleep 1
+  done
+  if [ -n "$MODEL" ]; then pass "the server lists the approved model ($(json "$WORK/models.json" 'd["models"][0]["provider_name"]') / $(json "$WORK/models.json" 'd["models"][0]["model"]'))"; else fail "the server lists the approved model"; fi
 
   # 6b. Spaces (ADR 0009): the user has a personal space, listed first; the routes below are under it.
   api "$URL/api/client/v1/spaces" >"$WORK/spaces.json"
   SPACE=$(json "$WORK/spaces.json" 'next(s["id"] for s in d if s["kind"]=="personal")')
   if [ -n "$SPACE" ]; then pass "the user has a personal space"; else fail "the user has a personal space"; fi
   SP="$URL/api/client/v1/spaces/$SPACE"
+  # A model nobody approved is refused, with its own error code, before anything starts.
+  api -o "$WORK/unapproved.json" -w '%{http_code}' -X POST -H 'content-type: application/json' \
+    -d '{"model":"nobody/not-approved","text":"hi"}' "$SP/chat" >"$WORK/unapproved.code" 2>/dev/null
+  if [ "$(cat "$WORK/unapproved.code")" = "400" ] && [ "$(json "$WORK/unapproved.json" 'd["error"]')" = "model_not_approved" ]; then
+    pass "a model nobody approved is refused (model_not_approved)"
+  else
+    fail "a model nobody approved is refused (model_not_approved)" "$(cat "$WORK/unapproved.code" 2>/dev/null) $(head -c 200 "$WORK/unapproved.json" 2>/dev/null)"
+  fi
   if [ $LOCAL = 1 ]; then
     if [ -f "$WORK/data/control.db" ] && [ -f "$WORK/data/spaces/$SPACE.db" ] && [ ! -e "$WORK/data/askbar.db" ]; then
       pass "the server keeps control.db and one file per space"
@@ -201,7 +222,7 @@ if [ -n "$TOKEN" ]; then
   # 7. Chat: read the streamed reply.
   QUESTION="smoke question zebra"
   api -N --max-time 60 -X POST -H 'content-type: application/json' \
-    -d "{\"provider\":\"$PROVIDER\",\"text\":\"$QUESTION\"}" "$SP/chat" >"$WORK/chat.sse" 2>/dev/null
+    -d "{\"model\":\"$MODEL\",\"text\":\"$QUESTION\"}" "$SP/chat" >"$WORK/chat.sse" 2>/dev/null
   CHAT=$(py 'import json,sys
 events=[]; name=None
 for line in open(sys.argv[1], encoding="utf-8"):
@@ -240,7 +261,7 @@ print("ok" if ok else "bad", conv, len(text))' "$WORK/chat.sse" 2>/dev/null)
   # 10. Retries: the mock refuses this message with a 429 (Retry-After: 1) the first time; the
   # server waits and tries again, and the reply still completes.
   api -N --max-time 60 -X POST -H 'content-type: application/json' \
-    -d "{\"provider\":\"$PROVIDER\",\"text\":\"smoke 429once retry\"}" "$SP/chat" >"$WORK/retry.sse" 2>/dev/null
+    -d "{\"model\":\"$MODEL\",\"text\":\"smoke 429once retry\"}" "$SP/chat" >"$WORK/retry.sse" 2>/dev/null
   RETRY=$(py 'import sys
 text=open(sys.argv[1], encoding="utf-8").read()
 print("ok" if "event: delta" in text and text.rstrip().endswith("data: {\"event\":\"done\"}") and "event: error" not in text else "bad")' "$WORK/retry.sse" 2>/dev/null)
