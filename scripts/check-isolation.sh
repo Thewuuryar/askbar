@@ -224,13 +224,14 @@ docker logs "$ADMIN" 2>&1 | grep -q "$LOGPASS" && fail "the admin's logs contain
 docker logs "$SERVER" 2>&1 | grep -q "$LOGPASS" && fail "the server's logs contain a passphrase" || pass "the server's logs contain no passphrase"
 
 echo "== 3d. CLIProxyAPI"
-# It starts with the stack, on the edge network only, and publishes nothing.
+# It starts with the stack, on its own internal networks plus the route out, and publishes nothing.
 CPA=$(docker compose -p "$PROJECT" ps -q cpa 2>/dev/null | head -1)
 if [ -z "$CPA" ]; then
   echo "SKIP  cpa is not running"
 else
   cpa_nets=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$CPA" | tr ' ' '\n' | grep . | sort | tr '\n' ' ')
-  [ "$cpa_nets" = "${PROJECT}_cpa-admin ${PROJECT}_cpa-gateway ${EDGE} " ] && pass "cpa is on edge, cpa-admin and cpa-gateway only" || fail "cpa's networks are: $cpa_nets"
+  [ "$cpa_nets" = "${PROJECT}_cpa-admin ${PROJECT}_cpa-gateway ${PROJECT}_outbound " ] && pass "cpa is on cpa-admin, cpa-gateway and outbound only (never edge)" || fail "cpa's networks are: $cpa_nets"
+  case "$(docker network inspect -f '{{range .Containers}}{{.Name}} {{end}}' "$EDGE")" in *askbar-cpa*) fail "cpa is on edge, with Caddy";; *) pass "cpa shares no network with Caddy";; esac
   [ -z "$(docker inspect -f '{{range $p, $b := .NetworkSettings.Ports}}{{if $b}}{{$p}} {{end}}{{end}}' "$CPA")" ] && pass "cpa publishes no port" || fail "cpa publishes a port"
 fi
 
@@ -461,13 +462,13 @@ if [ "$(docker inspect -f '{{.State.Running}}' "$GW" 2>/dev/null)" != true ]; th
     [ "$(docker network inspect -f '{{.Internal}}' "$n" 2>/dev/null)" = true ] && pass "$n is internal" || fail "$n is not internal"
   done
   [ "$(docker network inspect -f '{{.Internal}}' "$GW_OUT" 2>/dev/null)" = false ] && pass "outbound is the one network with a route out" || fail "outbound is internal: no provider could be reached"
-  # Who shares each network: no caller of another link, and only the gateway (and in dev the mock LLM) on outbound.
+  # Who shares each network: no caller of another link, and only the gateway and cpa (and in dev the mock LLM) on outbound.
   members() { docker network inspect -f '{{range .Containers}}{{.Name}} {{end}}' "$1" | tr ' ' '\n' | grep . | sort | tr '\n' ' '; }
   [ "$(members "$GW_NET")" = "$ADMIN $GW " ] && pass "gateway-admin joins the admin and the gateway only" || fail "gateway-admin members: $(members "$GW_NET")"
   [ "$(members "${PROJECT}_cpa-gateway")" = "askbar-cpa $GW " ] && pass "cpa-gateway joins CLIProxyAPI and the gateway only" || fail "cpa-gateway members: $(members "${PROJECT}_cpa-gateway")"
   [ "$(members "$GW_AUD")" = "$AUDITOR $GW " ] && pass "audit-model-gateway joins the auditor and the gateway only" || fail "audit-model-gateway members: $(members "$GW_AUD")"
   [ "$(members "$GW_SRV_NET")" = "$GW $SERVER " ] && pass "gateway-server joins the gateway and the server only" || fail "gateway-server members: $(members "$GW_SRV_NET")"
-  case "$(members "$GW_OUT")" in "$GW "|"askbar-mock-llm-1 $GW ") pass "outbound joins the gateway (and the mock LLM in dev) only";; *) fail "outbound members: $(members "$GW_OUT")";; esac
+  case "$(members "$GW_OUT")" in "askbar-cpa $GW "|"askbar-cpa askbar-mock-llm-1 $GW ") pass "outbound joins the gateway and CLIProxyAPI (and the mock LLM in dev) only";; *) fail "outbound members: $(members "$GW_OUT")";; esac
   # The gateway reaches the auditor and nothing of ours but that.
   docker exec "$GW" bash -c 'exec 3<>/dev/tcp/auditor/8083' >/dev/null 2>&1 && pass "model-gateway reaches the auditor" || fail "model-gateway cannot reach the auditor"
   # (The admin, the server and cpa share a network with it, so their names do resolve there.)
