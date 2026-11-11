@@ -1,0 +1,385 @@
+openapi: 3.1.0
+info:
+  title: Askbar alerter API
+  version: 1.0.0
+  summary: What the auditor and the admin call on the `alerter`. Internal.
+  description: |
+    The API under `/api/alerter/v1`, served by the `alerter` on two listeners, one on the network it shares with the
+    auditor (`audit-alerter`) and one on the network it shares with the admin (`alerter-admin`). **It is never public**:
+    Caddy has no route to it. It is documented so the services can be changed with confidence, not for outside callers
+    (ADR 0055, ADR 0006).
+
+    Every request except `GET /health` carries `Authorization: Bearer <token>`. There is one token for each link:
+    `auditor-alerter` and `admin-alerter`. The alerter holds only each token's SHA-256, in
+    `alerter-token/accept/<link>.sha256`, read on every request. Each listener takes only its own link's token and
+    serves only its own routes:
+
+    - the auditor's listener: `POST /events`;
+    - the admin's listener: `GET /status`, `PUT /config`, `POST /restart`, `POST /events` and `POST /test`.
+
+    **An event** is `{kind, severity, at, fields}`: a kind from a fixed list, a severity, a time and typed fields. There is
+    no free text and no dedupe key. The alerter turns a kind into one of its own sentences and derives the repeat key from
+    the kind and the fields, so a compromised sender cannot make it say anything else. Each link may send only its own
+    kinds (the auditor's, the admin's; `restart_loop` is both's), a kind takes only the fields listed for it, and a body
+    with an unknown kind or field is `400 bad_request`; a kind this link may not send is `403 forbidden`.
+
+    **Delivery settings** are pushed in `PUT /config` and held in memory only. No route returns one, and no error repeats
+    one. Until they arrive every route but `GET /status`, `PUT /config`, `POST /restart` and `GET /health` answers
+    `503 not_configured`. A restart is how they leave memory; the admin pushes again when it sees the new boot ID.
+
+    Every error is a problem (`application/problem+json`), and none echoes what it was sent.
+servers:
+  - url: http://alerter-auditor-host:8085
+    description: The alerter on the network it shares with the auditor.
+  - url: http://alerter-admin-host:8085
+    description: The alerter on the network it shares with the admin.
+security:
+  - linkToken: []
+paths:
+  /api/alerter/v1/health:
+    get:
+      operationId: getHealth
+      summary: The alerter is up. Needs no token and carries nothing. Both listeners.
+      security: []
+      responses:
+        '200':
+          description: OK.
+  /api/alerter/v1/status:
+    get:
+      operationId: getStatus
+      summary: Which configuration this process runs, which process it is, and how delivery is going. The admin's listener.
+      description: >-
+        `config_version` is null until the admin has pushed. `boot_id` is new on every start of the process. The admin
+        pushes again when either is not what it expects, and shows a banner when delivery has not worked for a while
+        (`last_delivery_ok_at` and `last_delivery_failed_at`).
+      responses:
+        '200':
+          description: Status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Status'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/alerter/v1/config:
+    put:
+      operationId: putConfig
+      summary: Replace the delivery settings. The admin's listener.
+      description: >-
+        The whole of the earlier settings is replaced. They are checked first, and nothing changes if they are refused.
+        The answer holds none of them.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Config'
+      responses:
+        '200':
+          description: Applied.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [version]
+                properties:
+                  version:
+                    type: integer
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/alerter/v1/restart:
+    post:
+      operationId: restart
+      summary: Restart this process. The admin's listener.
+      description: >-
+        Answers, finishes what it must within a time limit and exits; Docker's restart policy starts it again with a new
+        boot ID (ADR 0005). Refused with `429` for a short time after start-up.
+      responses:
+        '202':
+          description: Restarting.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          description: Too soon after the last start (`too_many_attempts`).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+  /api/alerter/v1/events:
+    post:
+      operationId: addEvent
+      summary: An alert. Both listeners.
+      description: >-
+        Checked against what the link may send, then queued for delivery. A repeat within an hour is counted and answers
+        `suppressed: true`, which is not an error. The outcome of each alert goes to the auditor, with no content.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Event'
+      responses:
+        '202':
+          description: Taken.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [suppressed]
+                properties:
+                  suppressed:
+                    type: boolean
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/NotConfigured'
+  /api/alerter/v1/test:
+    post:
+      operationId: testDelivery
+      summary: Send a test alert now and say what each channel did. The admin's listener.
+      description: >-
+        Not limited and not queued: it is sent through every channel that is set up, and the answer is the real result,
+        so the owner learns that delivery is broken when they set it up. `problem` is the alerter's own word, never the
+        server's. With no channel set up `results` is empty.
+      responses:
+        '200':
+          description: One result for each channel that is set up.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TestResult'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/NotConfigured'
+components:
+  securitySchemes:
+    linkToken:
+      type: http
+      scheme: bearer
+      description: The token of one link. Only its SHA-256 is on the alerter.
+  responses:
+    BadRequest:
+      description: The body could not be used (`bad_request`). The answer does not repeat it.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Unauthorized:
+      description: Missing or unknown token (`unauthorized`).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Forbidden:
+      description: A known token on another link's route, or a kind this link may not send (`forbidden`).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    NotConfigured:
+      description: The admin has not pushed the settings yet (`not_configured`), with `Retry-After`.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+  schemas:
+    Problem:
+      type: object
+      description: >-
+        An error, as RFC 9457 problem details (application/problem+json). Branch on `error`, never on
+        `detail`.
+      required: [type, title, status, detail, error]
+      additionalProperties: true
+      properties:
+        type:
+          type: string
+          description: A URN, `urn:askbar:problem:<error>`; nothing is hosted at it.
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+          description: A sentence for a person.
+        error:
+          type: string
+          description: The stable code.
+          enum:
+          - queue_full
+          - budget_exceeded
+          - kill_switch
+          - user_paused
+          - model_not_approved
+          - audit_key_missing
+          - audit_backlog
+          - client_too_old
+          - client_version_missing
+          - unauthorized
+          - forbidden
+          - not_found
+          - method_not_allowed
+          - bad_request
+          - payload_too_large
+          - too_many_attempts
+          - api_key_exists
+          - setup_required
+          - not_configured
+          - password_change_required
+          - server_unavailable
+          - conflict
+          - internal
+    Severity:
+      type: string
+      enum: [info, warning, critical]
+      description: The ntfy priority is 3, 4 and 5.
+    Kind:
+      type: string
+      description: >-
+        The auditor sends `unsealed`, `unseal_timeouts_changed`, `retention_changed`, `backup_key_changed`,
+        `audit_disk_low`, `audit_disk_critical`, `component_silent`, `caddy_silent` and `restart_loop` (the admin's, from
+        its hellos). The admin sends `chain_mismatch`, `rejected_token`, `restart_loop` (the other services'),
+        `budget_threshold`, `backup_failed`, `backup_missed` and `restore_performed`. `release_available` and `test` are
+        the alerter's own and come over no link.
+      enum:
+          - unsealed
+          - unseal_timeouts_changed
+          - retention_changed
+          - backup_key_changed
+          - audit_disk_low
+          - audit_disk_critical
+          - component_silent
+          - caddy_silent
+          - restart_loop
+          - chain_mismatch
+          - rejected_token
+          - budget_threshold
+          - backup_failed
+          - backup_missed
+          - restore_performed
+          - release_available
+          - test
+    Fields:
+      type: object
+      additionalProperties: false
+      description: The only content an event has. A kind takes exactly the fields it lists, and none other.
+      properties:
+        link:
+          type: string
+          maxLength: 64
+          pattern: '^[A-Za-z0-9._-]+$'
+        service:
+          type: string
+          maxLength: 64
+          pattern: '^[A-Za-z0-9._-]+$'
+        period:
+          type: string
+          enum: [day, month]
+        percent:
+          type: integer
+          enum: [80, 100]
+        count:
+          type: integer
+          minimum: 0
+        minutes:
+          type: integer
+          minimum: 0
+        free_mb:
+          type: integer
+          minimum: 0
+        version:
+          type: string
+          maxLength: 64
+          pattern: '^[A-Za-z0-9._-]+$'
+    Event:
+      type: object
+      additionalProperties: false
+      required: [kind, severity, at]
+      properties:
+        kind:
+          $ref: '#/components/schemas/Kind'
+        severity:
+          $ref: '#/components/schemas/Severity'
+        at:
+          type: integer
+          description: Unix seconds.
+        fields:
+          $ref: '#/components/schemas/Fields'
+    Config:
+      type: object
+      additionalProperties: false
+      required: [version]
+      properties:
+        version:
+          type: integer
+          description: A hash of the settings' content, so the same settings give the same version.
+        ntfy:
+          type: object
+          additionalProperties: false
+          required: [server, topic]
+          properties:
+            server:
+              type: string
+              description: An http or https address of the ntfy server.
+            topic:
+              type: string
+              writeOnly: true
+              description: >-
+                1 to 64 letters, digits, `-` and `_`. A secret, never returned or logged.
+            token:
+              type: string
+              writeOnly: true
+              description: An optional access token. Never returned or logged.
+    Status:
+      type: object
+      required: [config_version, boot_id, last_delivery_ok_at, last_delivery_failed_at, queued, dropped]
+      properties:
+        config_version:
+          type: [integer, 'null']
+        boot_id:
+          type: string
+        last_delivery_ok_at:
+          type: [integer, 'null']
+        last_delivery_failed_at:
+          type: [integer, 'null']
+        queued:
+          type: integer
+          description: Alerts waiting to be delivered (at most 200).
+        dropped:
+          type: integer
+          description: Alerts dropped from a full queue since the start.
+    TestResult:
+      type: object
+      required: [results]
+      properties:
+        results:
+          type: array
+          items:
+            type: object
+            required: [channel, ok]
+            properties:
+              channel:
+                type: string
+                enum: [ntfy, email]
+              ok:
+                type: boolean
+              problem:
+                type: string
+                enum: [unreachable, refused, unauthorized, timeout]
+    Outcome:
+      type: string
+      enum: [sent, failed, suppressed]
