@@ -67,22 +67,34 @@ if [ -z "$URL" ]; then
   if [ ! -x "$ABIN" ]; then cargo build -q -p askbar-admin || { fail "build the admin"; exit 1; }; fi
   BBIN="${ASKBAR_BOOTSTRAP_BIN:-target/debug/askbar-bootstrap}"
   if [ ! -x "$BBIN" ]; then cargo build -q -p askbar-bootstrap || { fail "build bootstrap"; exit 1; }; fi
+  AUBIN="${ASKBAR_AUDITOR_BIN:-target/debug/askbar-auditor}"
+  if [ ! -x "$AUBIN" ]; then cargo build -q -p askbar-auditor || { fail "build the auditor"; exit 1; }; fi
+  GBIN="${ASKBAR_GATEWAY_BIN:-target/debug/askbar-model-gateway}"
+  if [ ! -x "$GBIN" ]; then cargo build -q -p askbar-model-gateway || { fail "build the gateway"; exit 1; }; fi
   API_PORT=$(free_port); SERVER_API_PORT=$(free_port); MOCK_PORT=$(free_port)
+  AUDIT_PORT=$(free_port); GW_SERVER_PORT=$(free_port); GW_ADMIN_PORT=$(free_port)
   URL="http://127.0.0.1:$API_PORT"
   SOCK="$WORK/admin-run/admin.sock"
-  mkdir -p "$WORK/data" "$WORK/secrets" "$WORK/admin-run"
+  mkdir -p "$WORK/data" "$WORK/admin-run" "$WORK/audit"
   # The tokens come from bootstrap, as in the stack (ADR 0049); here its volumes are plain directories.
   ASKBAR_BOOTSTRAP_ROOT="$WORK/credentials" "$BBIN" >/dev/null || { fail "bootstrap makes the tokens"; exit 1; }
   python3 -u tests/e2e/mock_llm.py "$MOCK_PORT" >/dev/null 2>&1 & PIDS+=($!)
+  # The auditor and the gateway (ADR 0051, ADR 0054): every reply is recorded before a provider is called.
+  ASKBAR_AUDIT_API_ADDR="127.0.0.1:$AUDIT_PORT" ASKBAR_AUDIT_DIR="$WORK/audit" ASKBAR_AUDITOR_TOKEN_DIR="$WORK/credentials/auditor-token" \
+    "$AUBIN" >"$WORK/auditor.log" 2>&1 & PIDS+=($!)
+  ASKBAR_GATEWAY_SERVER_ADDR="127.0.0.1:$GW_SERVER_PORT" ASKBAR_GATEWAY_ADMIN_ADDR="127.0.0.1:$GW_ADMIN_PORT" \
+    ASKBAR_GATEWAY_TOKEN_DIR="$WORK/credentials/model-gateway-token" ASKBAR_AUDIT_API_URL="http://127.0.0.1:$AUDIT_PORT" \
+    "$GBIN" >"$WORK/gateway.log" 2>&1 & PIDS+=($!)
   # The admin service: its own database and secrets, a unix socket and no TCP port.
   ASKBAR_ADMIN_SOCKET="$SOCK" ASKBAR_ADMIN_DATA_DIR="$WORK/admin-data" ASKBAR_ADMIN_SECRETS_DIR="$WORK/admin-secrets" \
     ASKBAR_ADMIN_TOKEN_DIR="$WORK/credentials/admin-token" ASKBAR_SERVER_API_URL="http://127.0.0.1:$SERVER_API_PORT" ASKBAR_PUBLIC_URL="$URL" \
-    "$ABIN" >"$WORK/admin.log" 2>&1 & PIDS+=($!)
+    ASKBAR_GATEWAY_URL="http://127.0.0.1:$GW_ADMIN_PORT" "$ABIN" >"$WORK/admin.log" 2>&1 & PIDS+=($!)
   for _ in $(seq 100); do [ -S "$SOCK" ] && break; sleep 0.1; done
   # The server: the API, and a server listener that only the admin's token opens.
   ASKBAR_CLIENT_API_ADDR="127.0.0.1:$API_PORT" \
     ASKBAR_SERVER_API_ADDR="127.0.0.1:$SERVER_API_PORT" ASKBAR_SERVER_TOKEN_HASH_FILE="$WORK/credentials/server-token/accept/admin-server.sha256" \
-    ASKBAR_DATA_DIR="$WORK/data" ASKBAR_SECRETS_DIR="$WORK/secrets" \
+    ASKBAR_DATA_DIR="$WORK/data" ASKBAR_SERVER_TOKEN_DIR="$WORK/credentials/server-token" \
+    ASKBAR_GATEWAY_URL="http://127.0.0.1:$GW_SERVER_PORT" ASKBAR_AUDIT_API_URL="http://127.0.0.1:$AUDIT_PORT" \
     ASKBAR_PUBLIC_URL="$URL" "$BIN" >"$WORK/server.log" 2>&1 & PIDS+=($!)
 fi
 URL="${URL%/}"
