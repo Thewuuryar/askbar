@@ -85,7 +85,7 @@ flowchart TB
     class modelGateway key
 ```
 
-`server`, `model-gateway` and `alerter` append to the auditor with their own tokens, and Caddy appends only its access logs. `cpa` and `bootstrap` don't append. Caddy is the only service with published ports. The server stores no provider keys or admin data, only its own link tokens, and has no outbound route.
+`server`, `model-gateway`, the admin (its action records) and, in phase 4, `alerter` append to the auditor with their own tokens, and Caddy appends only its access logs, with no token, to a listener that answers nothing. `cpa` and `bootstrap` don't append. Caddy is the only service with published ports. The server stores no provider keys or admin data, only its own link tokens, and has no outbound route.
 
 ## Routes
 
@@ -124,7 +124,7 @@ Every link has its own authenticated path and uses separate networks, so a missi
 | `admin` | `auditor` | Append admin action records | Admin append token |
 | `admin` | `alerter` | Read release results | Per-link token |
 | `server`, `model-gateway`, `alerter` | `auditor` | Append records, including `model-gateway` span starts | Service append token |
-| Caddy | `auditor` | Append access logs | Designed in plan step 2.9 (Caddy's log writer sends no token) |
+| Caddy | `auditor` | Append access logs, to the ingest listener | None: a network of the two, and the listener answers nothing |
 | `model-gateway` | `auditor` | Read token counts, to hold the budget | Read token (`GET /token-counts` only) |
 | `auditor` | `alerter` | Alert events | Per-link token |
 | `server` | `model-gateway` | Model calls and the approved model list | Per-link token |
