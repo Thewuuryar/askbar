@@ -19,7 +19,10 @@ info:
       Only `model-gateway-auditor` opens model-call spans (`turn`, `attempt`, `tool`, `agent_step`); the
       server's link opens `gate` spans only.
     - `admin-auditor-append`: `hello` and admin action records. It reads and changes nothing.
-    - `admin-auditor-read`: every read, the chain head and its check, and retention. It appends nothing.
+    - `admin-auditor-read`: every read, the chain head and its check, Caddy's access lines, and retention. It appends nothing.
+    - **Caddy's access lines** do not use this API or a token. Caddy's `net` log writer cannot send one, so the auditor takes
+      them on an ingest listener of its own, bound to its address on `audit-caddy`, a network of Caddy and the auditor alone
+      (ADR 0051). The listener reads newline-delimited JSON and never answers. This API is not bound on that network.
     - No token changes or deletes a record; there is no such route.
 
     An append is answered after the record is committed. Appending the same record twice records it once,
@@ -359,6 +362,34 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/TokenCount'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/audit/v1/access-logs:
+    get:
+      operationId: listAccessLogs
+      summary: Caddy's access lines, newest first. `admin-auditor-read` only.
+      description: >-
+        One row for each request Caddy handled, taken on the ingest listener (not part of this API, see the top of this
+        file): the time, method, host, path without its query, status, bytes, duration, client address, protocol and a cut
+        user agent. No header and no query string is kept.
+      parameters:
+        - name: before
+          in: query
+          description: The id of the last row already seen.
+          schema:
+            type: integer
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: The lines.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AccessLog'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -893,6 +924,32 @@ components:
                 type: string
         more:
           type: boolean
+    AccessLog:
+      type: object
+      required: [id, at, method, host, path, status, bytes, duration_ms, remote_ip, proto, user_agent]
+      properties:
+        id:
+          type: integer
+        at:
+          type: integer
+        method:
+          type: string
+        host:
+          type: string
+        path:
+          type: string
+        status:
+          type: integer
+        bytes:
+          type: integer
+        duration_ms:
+          type: integer
+        remote_ip:
+          type: string
+        proto:
+          type: string
+        user_agent:
+          type: [string, 'null']
     PruneRecord:
       type: object
       required: [at, cutoff, spans, payloads]

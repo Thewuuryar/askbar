@@ -173,11 +173,22 @@ async fn each_link_may_call_only_its_own_routes_and_anything_else_is_403() {
     }
 
     // The admin's read token: reads and retention, no append of any kind.
-    for p in ["/traces", "/stats", "/token-counts", "/admin-actions", "/prunes", "/retention", "/status", "/chain/head", "/chain/verify"] {
+    for p in [
+        "/traces",
+        "/stats",
+        "/token-counts",
+        "/admin-actions",
+        "/prunes",
+        "/retention",
+        "/status",
+        "/chain/head",
+        "/chain/verify",
+        "/access-logs",
+    ] {
         ok(t.as_(ADMIN_READ, M::GET, p, None).await, 200, p);
     }
     for link in [SERVER, GATEWAY, ADMIN_APPEND] {
-        for p in ["/chain/head", "/chain/verify", "/chain/entries/1"] {
+        for p in ["/chain/head", "/chain/verify", "/chain/entries/1", "/access-logs"] {
             assert_eq!(t.as_(link, M::GET, p, None).await.status, 403, "{link} {p}");
         }
     }
@@ -624,4 +635,39 @@ async fn an_admin_action_has_a_request_and_then_how_it_ended() {
     }
     let body = json!({ "id": "a5", "at": now(), "category": "settings", "action": "x", "outcome": "maybe" });
     assert_eq!(t.as_(ADMIN_APPEND, M::POST, "/admin-actions", Some(body)).await.status, 400);
+}
+
+#[tokio::test]
+async fn caddys_access_lines_are_read_newest_first_by_the_admin_read_link_only() {
+    let t = start().await;
+    for (i, path) in ["/one", "/two", "/three"].iter().enumerate() {
+        assert!(t.auditor.recorder.access_log(askbar_audit::AccessLogWrite {
+            at: now(),
+            method: "GET".into(),
+            host: "h".into(),
+            path: (*path).into(),
+            status: 200 + i as i64,
+            bytes: 1,
+            duration_ms: 2,
+            remote_ip: "203.0.113.1".into(),
+            proto: "HTTP/2.0".into(),
+            user_agent: None,
+        }));
+    }
+    t.auditor.recorder.flush().await;
+    let all = t.as_(ADMIN_READ, M::GET, "/access-logs", None).await.body;
+    assert_eq!(all.as_array().unwrap().iter().map(|r| r["path"].as_str().unwrap()).collect::<Vec<_>>(), ["/three", "/two", "/one"]);
+    let first = all[0]["id"].as_i64().unwrap();
+    let page = t.as_(ADMIN_READ, M::GET, &format!("/access-logs?before={first}&limit=1"), None).await.body;
+    assert_eq!(page.as_array().unwrap().len(), 1);
+    assert_eq!(page[0]["path"], "/two");
+    for link in [SERVER, GATEWAY, ADMIN_APPEND] {
+        assert_eq!(t.as_(link, M::GET, "/access-logs", None).await.status, 403, "{link}");
+    }
+    // The status says how many lines were not kept.
+    let status = t.as_(ADMIN_READ, M::GET, "/status", None).await.body;
+    assert_eq!(
+        (status["access_lines_dropped"].clone(), status["access_lines_refused"].clone()),
+        (serde_json::json!(0), serde_json::json!(0))
+    );
 }

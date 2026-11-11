@@ -76,3 +76,4 @@ Each Defend control is a ship requirement. A new accepted risk needs the owner's
 ## Amendments
 
 - 2026-11-08: marked as a register ADR, so it is amended in place ([0046](0046-component-and-register-adrs-and-partial-amendments.md)). Nothing else changed.
+- 2026-11-11: design of "Caddy sends access logs to the auditor" (plan step 2.9, owner's choice of 2026-11-11; the built form is in [0051](0051-auditor.md)). Caddy's `net` log writer cannot carry a token, so the auditor takes the lines on an ingest listener of its own, on a new `internal` network `audit-caddy` shared by Caddy and the auditor alone, instead of a log-forwarding sidecar (which would be a new container and need its own ADR). The network is the only control on that listener: a compromised Caddy can append false lines but cannot read, change or delete anything. Access lines are best effort, not fail-closed like model calls: when the auditor is behind, lines are dropped and counted.

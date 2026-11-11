@@ -181,6 +181,34 @@ fn row_digest(conn: &Connection, kind: &str, reference: &str) -> rusqlite::Resul
                 ))
             })
             .optional(),
+        "access_log" => conn
+            .query_row(
+                "SELECT at, method, host, path, status, bytes, duration_ms, remote_ip, proto, user_agent FROM access_logs WHERE id = CAST(?1 AS INTEGER)",
+                [reference],
+                |r| {
+                    let at: i64 = r.get(0)?;
+                    let (method, host, path): (String, String, String) = (r.get(1)?, r.get(2)?, r.get(3)?);
+                    let (status, bytes, ms): (i64, i64, i64) = (r.get(4)?, r.get(5)?, r.get(6)?);
+                    let (ip, proto): (String, String) = (r.get(7)?, r.get(8)?);
+                    let agent: Option<String> = r.get(9)?;
+                    Ok((
+                        digest(&[
+                            Part::Int(at),
+                            Part::Text(&method),
+                            Part::Text(&host),
+                            Part::Text(&path),
+                            Part::Int(status),
+                            Part::Int(bytes),
+                            Part::Int(ms),
+                            Part::Text(&ip),
+                            Part::Text(&proto),
+                            text(&agent),
+                        ]),
+                        at,
+                    ))
+                },
+            )
+            .optional(),
         "prune" => conn
             .query_row("SELECT at, cutoff, spans, payloads FROM prunes WHERE id = CAST(?1 AS INTEGER)", [reference], |r| {
                 let (at, cutoff, spans, payloads): (i64, i64, i64, i64) = (r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?);
@@ -248,6 +276,18 @@ pub(crate) fn backfill(conn: &Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
+/// Tests only: chain what a hand-made file holds, as the migration does.
+#[doc(hidden)]
+pub fn backfill_for_tests(conn: &Connection) -> rusqlite::Result<()> {
+    backfill(conn)
+}
+
+/// Tests only: add the entry for a record a test wrote by hand.
+#[doc(hidden)]
+pub fn record_for_tests(conn: &Connection, kind: &str, reference: &str) -> rusqlite::Result<()> {
+    record(conn, kind, reference)
+}
+
 /// A full check: the links, every record against its digest, a record with no entry, and an entry with no record that
 /// no prune explains.
 pub fn verify(conn: &Connection) -> rusqlite::Result<Report> {
@@ -291,7 +331,7 @@ pub fn verify(conn: &Connection) -> rusqlite::Result<Report> {
             Some((d, _)) if d != recorded => note(bad("the record was changed after it was written"), &mut problems),
             Some(_) => {}
             None => {
-                let pruned = matches!(kind.as_str(), "span_start" | "span_finish" | "payload")
+                let pruned = matches!(kind.as_str(), "span_start" | "span_finish" | "payload" | "access_log")
                     && prunes.iter().any(|(ps, cutoff)| *ps > seq && *cutoff > row_at);
                 if !pruned {
                     note(bad("the record is gone and no prune explains it"), &mut problems);
@@ -310,6 +350,7 @@ pub fn verify(conn: &Connection) -> rusqlite::Result<Report> {
         ("span_finish", "SELECT id FROM spans s WHERE s.status <> 'running' AND NOT EXISTS (SELECT 1 FROM chain c WHERE c.kind = 'span_finish' AND c.ref = s.id)"),
         ("payload", "SELECT CAST(rowid AS TEXT) FROM payloads p WHERE NOT EXISTS (SELECT 1 FROM chain c WHERE c.kind = 'payload' AND c.ref = CAST(p.rowid AS TEXT))"),
         ("admin_action", "SELECT id FROM admin_actions a WHERE NOT EXISTS (SELECT 1 FROM chain c WHERE c.kind = 'admin_action' AND c.ref = a.id)"),
+        ("access_log", "SELECT CAST(id AS TEXT) FROM access_logs a WHERE NOT EXISTS (SELECT 1 FROM chain c WHERE c.kind = 'access_log' AND c.ref = CAST(a.id AS TEXT))"),
         ("prune", "SELECT CAST(id AS TEXT) FROM prunes p WHERE NOT EXISTS (SELECT 1 FROM chain c WHERE c.kind = 'prune' AND c.ref = CAST(p.id AS TEXT))"),
     ] {
         let mut stmt = conn.prepare(sql)?;

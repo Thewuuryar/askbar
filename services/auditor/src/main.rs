@@ -8,12 +8,39 @@ fn die(e: impl std::fmt::Display, code: i32) -> ! {
     std::process::exit(code)
 }
 
-/// `ASKBAR_AUDIT_API_ADDR`, default `0.0.0.0:8083`: every interface, which is safe because the auditor joins only
-/// `audit-*` networks, each shared with one caller.
-fn listen_addr() -> SocketAddr {
+/// Resolves `raw` (`host:port`, a name or an address) to exactly one socket address.
+fn resolve_one(var: &str, raw: &str) -> SocketAddr {
+    use std::net::ToSocketAddrs;
+    let found: Vec<SocketAddr> = raw
+        .to_socket_addrs()
+        .unwrap_or_else(|e| die(format!("{var} has an address this service cannot resolve: {raw} ({e})"), 1))
+        .collect();
+    match found.as_slice() {
+        [one] => *one,
+        [] => die(format!("{var}: {raw} resolved to no address"), 1),
+        many => die(format!("{var}: {raw} must resolve to one address, but gives {}", many.len()), 1),
+    }
+}
+
+/// Where the token API listens. `ASKBAR_AUDIT_API_ADDRS` is a comma-separated list of `host:port`, each resolved to
+/// the address its alias has on one network, so nothing on `audit-caddy` can reach it (ADR 0051). Without it,
+/// `ASKBAR_AUDIT_API_ADDR`, default `0.0.0.0:8083` (a development run, with no networks to keep apart).
+fn api_addrs() -> Vec<SocketAddr> {
+    if let Some(list) = std::env::var("ASKBAR_AUDIT_API_ADDRS").ok().filter(|v| !v.trim().is_empty()) {
+        return list.split(',').map(|raw| resolve_one("ASKBAR_AUDIT_API_ADDRS", raw.trim())).collect();
+    }
     let raw = std::env::var("ASKBAR_AUDIT_API_ADDR").unwrap_or_else(|_| format!("0.0.0.0:{DEFAULT_PORT}"));
-    raw.parse()
-        .unwrap_or_else(|_| die(format!("ASKBAR_AUDIT_API_ADDR is not a socket address: {raw} (example: 0.0.0.0:{DEFAULT_PORT})"), 1))
+    vec![raw
+        .parse()
+        .unwrap_or_else(|_| die(format!("ASKBAR_AUDIT_API_ADDR is not a socket address: {raw} (example: 0.0.0.0:{DEFAULT_PORT})"), 1))]
+}
+
+/// `ASKBAR_AUDIT_INGEST_ADDR`: where Caddy's access lines are taken (`host:port`, one address). Unset: no ingest.
+fn ingest_addr() -> Option<SocketAddr> {
+    std::env::var("ASKBAR_AUDIT_INGEST_ADDR")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .map(|raw| resolve_one("ASKBAR_AUDIT_INGEST_ADDR", raw.trim()))
 }
 
 fn audit_dir() -> PathBuf {
@@ -23,10 +50,12 @@ fn audit_dir() -> PathBuf {
 /// `askbar-auditor healthcheck`: GET the health route locally; exit 0 on a 200.
 fn healthy() -> bool {
     use std::io::{Read, Write};
-    let port = listen_addr().port();
+    let first = api_addrs()[0];
+    // A wildcard address is reached on the loopback; an address of one network is reached on itself.
+    let target = if first.ip().is_unspecified() { SocketAddr::from(([127, 0, 0, 1], first.port())) } else { first };
     let timeout = Duration::from_secs(2);
     (|| -> std::io::Result<bool> {
-        let mut s = std::net::TcpStream::connect_timeout(&SocketAddr::from(([127, 0, 0, 1], port)), timeout)?;
+        let mut s = std::net::TcpStream::connect_timeout(&target, timeout)?;
         s.set_read_timeout(Some(timeout))?;
         s.write_all(b"GET /api/audit/v1/health HTTP/1.0\r\nHost: localhost\r\n\r\n")?;
         let mut head = [0u8; 12];
@@ -60,12 +89,25 @@ async fn main() {
             1,
         );
     }
+    // Caddy's access lines, on a listener of their own that nothing else shares (ADR 0051).
+    if let Some(addr) = ingest_addr() {
+        let listener =
+            tokio::net::TcpListener::bind(addr).await.unwrap_or_else(|e| die(format!("cannot listen on {addr} for access lines: {e}"), 1));
+        tracing::info!(%addr, "the auditor takes Caddy's access lines");
+        tokio::spawn(askbar_auditor::ingest::serve(listener, auditor.clone()));
+    }
     let app = askbar_auditor::router(auditor, askbar_auditor::links(&token_dir));
-    let addr = listen_addr();
-    let listener = tokio::net::TcpListener::bind(addr).await.unwrap_or_else(|e| die(format!("cannot listen on {addr}: {e}"), 1));
-    tracing::info!(%addr, "the auditor is listening");
-    if let Err(e) = axum::serve(listener, app).with_graceful_shutdown(stop_signal()).await {
-        die(e, 1);
+    let mut servers = tokio::task::JoinSet::new();
+    for addr in api_addrs() {
+        let listener = tokio::net::TcpListener::bind(addr).await.unwrap_or_else(|e| die(format!("cannot listen on {addr}: {e}"), 1));
+        tracing::info!(%addr, "the auditor is listening");
+        let app = app.clone();
+        servers.spawn(async move { axum::serve(listener, app).with_graceful_shutdown(stop_signal()).await });
+    }
+    while let Some(done) = servers.join_next().await {
+        if let Err(e) = done.map_err(|e| e.to_string()).and_then(|r| r.map_err(|e| e.to_string())) {
+            die(e, 1);
+        }
     }
 }
 
