@@ -309,6 +309,7 @@ The owner decided D1 to D36 on 2026-11-11 and set no time budget: everything bel
 ## Phase 7 — Ship gates
 
 **7.1 `ci: pull-request workflow`** (M, owner approval) — the pull-request workflow exists. PR AU checks that every test named in ADR 0016's Defend table exists (`pending` is allowed until AW); PR AR [WORKFLOW] adds the Trivy image scan (pinned by commit hash, a dated ignore file) and a known-vulnerable fixture that must fail `cargo deny` (D30). The owner turns on Dependabot alerts and branch protection; the CVE alert is GitHub's email for a failed scheduled run. The owner sees the workflow diff before AR is opened.
+- **Built so, AU (2026-11-11, #71):** `scripts/check-docs.sh` checks ADR 0016's Defend table: every Defend row has a row in the test table, and every backticked test name exists in a tracked non-markdown file (a word match, not a run); `pending, PR <letter>` is allowed until AW removes it from the script. The rows that had tests name them.
 
 **7.2 `test: three simultaneous users and the latency budget`** (M) — PR AS [ADR 0002](adr/0002-v1-scope-limits-and-ship-criteria.md), 0031
 - 3 concurrent replies in `cargo test`, the mock's own time subtracted; it fails only if the 95th percentile exceeds 200 ms in two runs; the auditor's acknowledgment stays under 20 ms (D31).
