@@ -25,13 +25,13 @@ Audit records must support investigations. Reading their content must take an ex
 
 **Opening sealed content.** This is its own permission. In v1 only the single admin has it. Admin API keys and regular users can't open sealed content, and adding admins later won't grant it automatically.
 
-8. **Start:** the audit passphrase, entered after a fresh sign-in (with the passkey if one is set up).
+8. **Start:** the audit passphrase, entered after a fresh sign-in (within the last 10 minutes).
 9. **Session:** content stays visible without further prompts until the session ends.
 10. **The key** is held in the admin's memory only: never on disk, in logs or in backups.
 11. **Ending:** after 15 minutes idle or 1 hour in total by default (the admin can set both, up to 12 hours), or on Seal, sign-out or an admin restart.
 12. **Records and alerts:**
     - the start, the end and each item viewed are sent to the auditor;
-    - every unseal and every timeout change sends an alert;
+    - every unseal and every timeout change sends an alert, which the auditor sends from the admin's action records (`unsealed`, `unseal_timeouts_changed`, [0055](0055-alerter.md));
     - an unseal is refused if its record can't be written.
 13. **Export:** no bulk export in v1.
 
@@ -51,3 +51,4 @@ Audit records must support investigations. Reading their content must take an ex
 
 - 2026-11-10: merged in 0030 (sealed audit content), as "Sealing", rules 1 to 7, with its alternatives and consequences; the title now covers both.
 - 2026-11-11: built in plan step 2.8. Built so: a passphrase entered within ten minutes of signing in opens one session, bound to that browser session, whose keys (one for each key in the registry that the passphrase makes) live in the admin's memory only; a passphrase for an older key adds to it without restarting its clock. It ends after 15 minutes idle or an hour in all (Settings, up to 12 hours each, idle at most total), on Seal, on sign-out, when its browser session is gone, or when the admin restarts. Admin API keys cannot start or use one. The start, each item viewed and Seal are recorded before they happen and refused if they cannot be (through the admin's action records, [0040](0040-admin.md)); the end by a timeout or a sign-out is recorded with its reason. An unseal and a change of the timeouts are alerts as a log line and a banner until the alerter exists (phase 4). The passkey of rule 8 waits: v1 has none.
+- 2026-11-11: no passkey in v1 (#70, D20, a decision change): rule 8 asks for a fresh sign-in with the password only; and the auditor is named as the sender of the unseal and timeout alerts (D1).
