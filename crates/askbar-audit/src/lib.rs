@@ -3,6 +3,8 @@
 //! independent of `control.db` and the space files. Phase 4 stores metadata only; message content is added in
 //! Phase 5, sealed.
 
+pub mod chain;
+
 pub use rusqlite;
 use rusqlite::Connection;
 use std::collections::VecDeque;
@@ -99,6 +101,24 @@ const MIGRATIONS: &[&str] = &[
      CREATE TRIGGER prunes_are_never_deleted BEFORE DELETE ON prunes
      BEGIN SELECT RAISE(ABORT, 'prune records cannot be deleted'); END;
      CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+    // v4: the hash chain (ADR 0010 rule 7, ADR 0052). One entry for each record taken: a span's start, a span's finish, a
+    // payload, an admin action, a prune. Each holds a digest of its record, the hash of the entry before it and its own
+    // hash over all of that. Entries are never changed or deleted, a prune included: they hold digests, not content.
+    // What the file held before is chained by `chain::backfill` as this migration is applied.
+    "CREATE TABLE chain (
+         seq       INTEGER PRIMARY KEY,
+         kind      TEXT    NOT NULL CHECK (kind IN ('span_start','span_finish','payload','admin_action','prune')),
+         ref       TEXT    NOT NULL,
+         row_at    INTEGER NOT NULL,
+         digest    TEXT    NOT NULL,
+         prev_hash TEXT    NOT NULL,
+         hash      TEXT    NOT NULL
+     );
+     CREATE INDEX idx_chain_ref ON chain(kind, ref);
+     CREATE TRIGGER chain_is_never_changed BEFORE UPDATE ON chain
+     BEGIN SELECT RAISE(ABORT, 'chain entries cannot be changed'); END;
+     CREATE TRIGGER chain_is_never_deleted BEFORE DELETE ON chain
+     BEGIN SELECT RAISE(ABORT, 'chain entries cannot be deleted'); END;",
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -150,6 +170,9 @@ impl AuditDb {
         for (i, sql) in MIGRATIONS.iter().enumerate().skip(current as usize) {
             let tx = self.conn.transaction()?;
             tx.execute_batch(sql)?;
+            if i == 3 {
+                chain::backfill(&tx)?;
+            }
             if i == 0 {
                 tx.execute_batch(&format!("PRAGMA application_id = {APPLICATION_ID}"))?;
             }
@@ -167,11 +190,37 @@ impl AuditDb {
     /// off. Marking it `interrupted` is the one change the triggers allow to a running span.
     /// Returns how many there were.
     pub fn sweep_running(&self) -> Result<usize, AuditError> {
-        Ok(self.conn.execute(
-            "UPDATE spans SET status = 'interrupted', ended_at = ?1, error_code = COALESCE(error_code, 'interrupted') WHERE status = 'running'",
-            [now_secs()],
-        )?)
+        let tx = self.conn.unchecked_transaction()?;
+        let n = interrupt_running(&tx, "", [])?;
+        tx.commit()?;
+        Ok(n)
     }
+
+    /// The newest entry of the hash chain.
+    pub fn chain_head(&self) -> Result<chain::Head, AuditError> {
+        Ok(chain::head(&self.conn)?)
+    }
+}
+
+/// Marks the spans still `running` that match `condition` (SQL starting with ` AND `, or empty) as interrupted, and
+/// chains each one's finish. Returns how many.
+fn interrupt_running<P: rusqlite::Params + Clone>(conn: &Connection, condition: &str, params: P) -> rusqlite::Result<usize> {
+    let ids: Vec<String> = {
+        let mut stmt = conn.prepare(&format!("SELECT id FROM spans WHERE status = 'running'{condition}"))?;
+        let rows = stmt.query_map(params.clone(), |r| r.get(0))?;
+        rows.collect::<rusqlite::Result<_>>()?
+    };
+    conn.execute(
+        &format!(
+            "UPDATE spans SET status = 'interrupted', ended_at = {}, error_code = COALESCE(error_code, 'interrupted') WHERE status = 'running'{condition}",
+            now_secs()
+        ),
+        params,
+    )?;
+    for id in &ids {
+        chain::record(conn, "span_finish", id)?;
+    }
+    Ok(ids.len())
 }
 
 // ------------------------------------------------------------------------ reading
@@ -999,6 +1048,7 @@ fn prune(conn: &Connection, cutoff: i64) -> rusqlite::Result<(usize, usize)> {
         "INSERT INTO prunes (at, cutoff, spans, payloads) VALUES (?1, ?2, ?3, ?4)",
         rusqlite::params![now_secs(), cutoff, spans as i64, payloads as i64],
     )?;
+    chain::record(&tx, "prune", &tx.last_insert_rowid().to_string())?;
     tx.commit()?;
     Ok((spans, payloads))
 }
@@ -1082,30 +1132,33 @@ fn apply(conn: &Connection, record: &Record) -> Result<u64, AppendError> {
             if !span_exists(conn, &p.span_id)? {
                 return Err(AppendError::NoSuchSpan);
             }
-            conn.execute(
-                "INSERT INTO payloads (span_id, role, key_id, ciphertext, created_at)
-                 SELECT ?1, ?2, ?3, ?4, ?5
-                 WHERE NOT EXISTS (SELECT 1 FROM payloads WHERE span_id = ?1 AND role = ?2 AND ciphertext = ?4)",
-                rusqlite::params![p.span_id, p.role, p.key_id, p.ciphertext, p.created_at],
-            )
-            .map_err(db_err)?;
+            let n = conn
+                .execute(
+                    "INSERT INTO payloads (span_id, role, key_id, ciphertext, created_at)
+                     SELECT ?1, ?2, ?3, ?4, ?5
+                     WHERE NOT EXISTS (SELECT 1 FROM payloads WHERE span_id = ?1 AND role = ?2 AND ciphertext = ?4)",
+                    rusqlite::params![p.span_id, p.role, p.key_id, p.ciphertext, p.created_at],
+                )
+                .map_err(db_err)?;
+            if n > 0 {
+                chain::record(conn, "payload", &conn.last_insert_rowid().to_string()).map_err(db_err)?;
+            }
             Ok(0)
         }
         Record::AdminAction(a) => {
-            conn.execute(
-                "INSERT OR IGNORE INTO admin_actions (id, at, service, category, action, outcome, detail_json) VALUES (?1,?2,?3,?4,?5,?6,?7)",
-                rusqlite::params![a.id, a.at, a.service, a.category, a.action, a.outcome, a.detail_json],
-            )
-            .map_err(db_err)?;
+            let n = conn
+                .execute(
+                    "INSERT OR IGNORE INTO admin_actions (id, at, service, category, action, outcome, detail_json) VALUES (?1,?2,?3,?4,?5,?6,?7)",
+                    rusqlite::params![a.id, a.at, a.service, a.category, a.action, a.outcome, a.detail_json],
+                )
+                .map_err(db_err)?;
+            if n > 0 {
+                chain::record(conn, "admin_action", &a.id).map_err(db_err)?;
+            }
             Ok(0)
         }
         Record::Hello { service, boot_id } => {
-            let n = conn
-                .execute(
-                    "UPDATE spans SET status = 'interrupted', ended_at = ?1, error_code = COALESCE(error_code, 'interrupted')
-                     WHERE service = ?2 AND status = 'running' AND COALESCE(boot_id, '') <> ?3",
-                    rusqlite::params![now_secs(), service, boot_id],
-                )
+            let n = interrupt_running(conn, " AND service = ?1 AND COALESCE(boot_id, '') <> ?2", rusqlite::params![service, boot_id])
                 .map_err(db_err)?;
             Ok(n as u64)
         }
@@ -1125,11 +1178,11 @@ fn write_payload(conn: &Connection, p: &PayloadWrite) -> rusqlite::Result<()> {
         "INSERT INTO payloads (span_id, role, key_id, ciphertext, created_at) VALUES (?1,?2,?3,?4,?5)",
         rusqlite::params![p.span_id, p.role, p.key_id, p.ciphertext, p.created_at],
     )?;
-    Ok(())
+    chain::record(conn, "payload", &conn.last_insert_rowid().to_string())
 }
 
 fn write_start(conn: &Connection, s: &SpanStart, ignore_duplicate: bool) -> rusqlite::Result<usize> {
-    conn.execute(
+    let n = conn.execute(
         &format!(
             "INSERT {} INTO spans (id, trace_id, parent_id, kind, name, status, started_at, provider_id, model, user_id, client_id, attrs_json, service, boot_id)
              VALUES (?1, ?2, ?3, ?4, ?5, 'running', ?6, ?7, ?8, ?9, ?10, json_patch(COALESCE(?11, '{{}}'), json_object('started_ms', ?12)), ?13, ?14)",
@@ -1151,12 +1204,16 @@ fn write_start(conn: &Connection, s: &SpanStart, ignore_duplicate: bool) -> rusq
             s.service,
             s.boot_id
         ],
-    )
+    )?;
+    if n > 0 {
+        chain::record(conn, "span_start", &s.id)?;
+    }
+    Ok(n)
 }
 
 fn write_finish(conn: &Connection, f: &SpanFinish) -> rusqlite::Result<()> {
     // `AND status = 'running'`: a span finishes once; a second finish changes nothing.
-    conn.execute(
+    let n = conn.execute(
         "UPDATE spans SET status = ?2, ended_at = ?3,
              provider_id = COALESCE(?4, provider_id), model = COALESCE(?5, model),
              tokens_in = ?6, tokens_out = ?7, tokens_cached = ?8, ttft_ms = ?9,
@@ -1178,6 +1235,9 @@ fn write_finish(conn: &Connection, f: &SpanFinish) -> rusqlite::Result<()> {
             f.ended_ms
         ],
     )?;
+    if n > 0 {
+        chain::record(conn, "span_finish", &f.id)?;
+    }
     Ok(())
 }
 
@@ -1198,7 +1258,7 @@ mod tests {
     #[test]
     fn open_creates_the_schema() {
         let db = AuditDb::open_in_memory().unwrap();
-        assert_eq!(tables(&db), ["admin_actions", "payloads", "prunes", "settings", "spans", "sqlite_sequence"]);
+        assert_eq!(tables(&db), ["admin_actions", "chain", "payloads", "prunes", "settings", "spans", "sqlite_sequence"]);
         assert_eq!(
             columns(&db, "spans"),
             [
