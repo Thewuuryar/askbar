@@ -245,7 +245,7 @@ async function waitForPort(port) {
     await page.click('#catalog-approved [data-model$="/mock-model-2"] button');
     assert.match(await page.innerText('#catalog-approved'), /mock \/ mock-model \(default\)/);
     await page.click('#catalog-discard');
-    await page.waitForSelector('#catalog-approved [data-model]');
+    await page.waitForFunction(() => document.querySelectorAll('#catalog-approved [data-model]').length === 2);
     assert.equal(await page.locator('#catalog-approved [data-model]').count(), 2, 'discarding goes back to what is saved');
   });
   await step('Test sends a message through the provider and shows success', async () => {
@@ -392,9 +392,9 @@ async function waitForPort(port) {
     await page.click('#services .card[data-name="caddy"] [data-action="restart"]');
     await page.waitForFunction(() => /restart caddy · failed/.test(document.getElementById('services-recent').textContent));
   });
-  await step('clients see the provider without its key', async () => {
+  await step('clients see the approved models only with a token', async () => {
     // The API is the other listener; without a token it must refuse.
-    const r = await fetch(`http://127.0.0.1:${api}/api/client/v1/providers`, { headers: { 'x-askbar-client-version': '0.6.0' } });
+    const r = await fetch(`http://127.0.0.1:${api}/api/client/v1/models`, { headers: { 'x-askbar-client-version': '0.6.0' } });
     assert.equal(r.status, 401);
   });
   await step('clients: add a user, generate a pairing key for them, pair with it, then revoke the client', async () => {
