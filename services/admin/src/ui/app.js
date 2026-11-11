@@ -778,10 +778,40 @@
     userNames = Object.fromEntries(users.map((u) => [u.id, u.name]));
     const box = $('users');
     box.textContent = '';
-    const p = document.createElement('p');
-    p.className = 'hint';
-    p.textContent = users.length ? users.map((u) => u.name).join(' · ') : 'No users yet. Add one to pair an app for them.';
-    box.appendChild(p);
+    if (!users.length) {
+      const p = document.createElement('p');
+      p.className = 'hint';
+      p.textContent = 'No users yet. Add one to pair an app for them.';
+      box.appendChild(p);
+    }
+    // One row for each user, with the emergency stop for that person: Pause stops their replies (new and running) until
+    // Resume. Everything is set as text.
+    for (const u of users) {
+      const row = document.createElement('div');
+      row.className = 'sealed-row';
+      row.dataset.user = u.id;
+      const what = document.createElement('span');
+      what.className = 'what';
+      what.textContent = u.name + (u.paused ? ' · replies paused' : '');
+      row.appendChild(what);
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'secondary';
+      b.dataset.action = u.paused ? 'resume' : 'pause';
+      b.textContent = u.paused ? 'Resume replies' : 'Pause replies';
+      b.addEventListener('click', async () => {
+        show($('user-error'), false);
+        try {
+          await api('POST', '/api/admin/v1/users/' + encodeURIComponent(u.id) + '/' + (u.paused ? 'resume' : 'pause'));
+          await loadUsers();
+        } catch (ex) {
+          $('user-error').textContent = ex.message;
+          show($('user-error'), true);
+        }
+      });
+      row.appendChild(b);
+      box.appendChild(row);
+    }
     const sel = $('d-user');
     const keep = sel.value;
     sel.textContent = '';

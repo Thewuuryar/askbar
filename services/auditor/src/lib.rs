@@ -149,6 +149,10 @@ const ADMIN_READ: Routes = &[
     ("PUT", "/retention"),
 ];
 
+/// The gateway's read token (plan step 3.2, ADR 0014): the token counts it holds the budget against, and nothing else. It
+/// appends nothing with it and reads no trace, no content and no admin record.
+const GATEWAY_READ: Routes = &[("GET", "/status"), ("GET", "/token-counts")];
+
 /// Every link the auditor knows: its name as `bootstrap` names it (the file `accept/<name>.sha256`), the
 /// caller it stands for, and what it may call. A link whose hash file is not there accepts nothing, so a link
 /// is live from the day `bootstrap` makes its file.
@@ -157,6 +161,7 @@ pub const LINKS: &[(&str, &str, Routes)] = &[
     ("model-gateway-auditor", "model-gateway", SERVICE_APPEND),
     ("admin-auditor-append", "admin", ADMIN_APPEND),
     ("admin-auditor-read", "admin-read", ADMIN_READ),
+    ("model-gateway-auditor-read", "model-gateway-read", GATEWAY_READ),
 ];
 
 fn method(m: &str) -> Method {

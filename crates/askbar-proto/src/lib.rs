@@ -186,6 +186,9 @@ pub struct Snapshot {
     // `revoked_device_ids` is the old key, still read from a snapshot stored by an earlier version. names-ok
     #[serde(default, alias = "revoked_device_ids")] // names-ok
     pub revoked_client_ids: Vec<String>,
+    /// Users the admin paused: no new reply starts for them, and the gateway stops the ones running (plan step 3.2).
+    #[serde(default)]
+    pub paused_user_ids: Vec<String>,
     #[serde(default)]
     pub budget: Budget,
     /// When true the server refuses new chats.

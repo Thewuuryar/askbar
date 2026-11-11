@@ -119,12 +119,13 @@ async fn rig_full(auditor_up: bool, delay_ms: Option<Arc<AtomicU64>>) -> Rig {
     std::fs::create_dir_all(audit_tokens.join("accept")).unwrap();
     std::fs::create_dir_all(gw_tokens.join("accept")).unwrap();
     std::fs::create_dir_all(gw_tokens.join("call")).unwrap();
-    for link in ["server-auditor", "model-gateway-auditor", "admin-auditor-append", "admin-auditor-read"] {
+    for link in ["server-auditor", "model-gateway-auditor", "model-gateway-auditor-read", "admin-auditor-append", "admin-auditor-read"] {
         std::fs::write(audit_tokens.join("accept").join(format!("{link}.sha256")), format!("{}\n", hex(&format!("tok_{link}")))).unwrap();
     }
     std::fs::write(gw_tokens.join("accept/server-model-gateway.sha256"), format!("{}\n", hex(SRV))).unwrap();
     std::fs::write(gw_tokens.join("accept/admin-model-gateway.sha256"), format!("{}\n", hex(ADM))).unwrap();
     std::fs::write(gw_tokens.join("call/model-gateway-auditor.token"), "tok_model-gateway-auditor\n").unwrap();
+    std::fs::write(gw_tokens.join("call/model-gateway-auditor-read.token"), "tok_model-gateway-auditor-read\n").unwrap();
 
     let limits = Limits::default();
     let recorder = Recorder::spawn(AuditDb::open(&dir.join("audit/audit.db")).unwrap(), limits.max_queued);
@@ -150,6 +151,8 @@ async fn rig_full(auditor_up: bool, delay_ms: Option<Arc<AtomicU64>>) -> Rig {
     let restarter =
         Restarter::for_tests(boot.clone(), Duration::ZERO, Duration::from_secs(1), || {}, move || e.store(true, Ordering::SeqCst));
     let gw = Gateway::new(client.clone(), boot.clone(), restarter);
+    // The budget is read from the auditor on request here (`refresh_usage`), so a test says when the gateway knows.
+    gw.set_usage_reader(askbar_model_gateway::usage::Reader::new(&audit_url, gw_tokens.clone()));
     tokio::spawn(client.clone().hello_until_done(boot.as_str().to_string()));
     tokio::spawn(client.drain_forever());
     let server = serve(server_router(gw.clone(), server_links(&gw_tokens))).await;
@@ -203,6 +206,7 @@ fn provider(rig: &Rig, id: &str, model: &str) -> GatewayProvider {
         temperature: None,
         headers: Default::default(),
         api_key: MARKER_KEY.into(),
+        billing: Default::default(),
     }
 }
 
@@ -212,6 +216,10 @@ fn config(rig: &Rig, version: u64, models: &[(&str, &str)]) -> GatewayConfig {
         providers: models.iter().map(|(id, m)| provider(rig, id, m)).collect(),
         audit_public_key: Some(audit_key()),
         generation_timeout_secs: 300,
+        budget: Default::default(),
+        kill_switch: false,
+        kill_switch_aborts_running: true,
+        paused_users: vec![],
     }
 }
 
@@ -618,4 +626,204 @@ async fn an_acknowledgment_slower_than_a_second_is_a_refusal_and_no_provider_is_
     let events = rig.chat(&rig.request("p", "gen-slow-2", "hello again")).await;
     assert!(matches!(events.last(), Some(ChatEvent::Done { .. })), "{events:?}");
     assert_eq!(rig.provider_calls(), 1);
+}
+
+// ------------------------------------------------------------------ the stops and the budget (plan step 3.2)
+
+fn as_user(mut req: ChatRequest, user: &str) -> ChatRequest {
+    req.user_id = user.into();
+    req
+}
+
+async fn problem_of(r: reqwest::Response) -> (u16, Value) {
+    let status = r.status().as_u16();
+    (status, r.json().await.unwrap_or(Value::Null))
+}
+
+#[tokio::test]
+async fn the_kill_switch_refuses_a_new_reply_before_any_call_and_leaves_a_gate_span() {
+    let rig = rig().await;
+    let mut cfg = config(&rig, 1, &[("p", "m")]);
+    cfg.kill_switch = true;
+    assert_eq!(rig.push(&cfg).await.status(), 200);
+    let (status, body) = problem_of(rig.chat_raw(&rig.request("p", "gen-killed", "hello")).await).await;
+    assert_eq!((status, body["error"].as_str()), (503, Some("kill_switch")));
+    assert_eq!(rig.provider_calls(), 0, "no provider was called");
+    let rows = rig.wait_rows("SELECT kind, name, status, error_code, user_id FROM spans WHERE trace_id = 'gen-killed'").await;
+    assert_eq!(rows[0], vec![json!("gate"), json!("kill_switch"), json!("blocked"), json!("kill_switch"), json!("user1")]);
+    assert_eq!(
+        rig.rows("SELECT COUNT(*) FROM spans WHERE trace_id = 'gen-killed' AND kind IN ('turn', 'attempt')")[0][0],
+        0,
+        "no turn was opened"
+    );
+
+    // Off again, and the next one runs.
+    cfg.kill_switch = false;
+    cfg.version = 2;
+    assert_eq!(rig.push(&cfg).await.status(), 200);
+    assert!(matches!(rig.chat(&rig.request("p", "gen-back", "hello")).await.last(), Some(ChatEvent::Done { .. })));
+}
+
+#[tokio::test]
+async fn a_paused_user_is_refused_and_everyone_else_is_not() {
+    let rig = rig().await;
+    let mut cfg = config(&rig, 1, &[("p", "m")]);
+    cfg.paused_users = vec!["user1".into()];
+    assert_eq!(rig.push(&cfg).await.status(), 200);
+    let (status, body) = problem_of(rig.chat_raw(&rig.request("p", "gen-paused", "hello")).await).await;
+    assert_eq!((status, body["error"].as_str()), (403, Some("user_paused")));
+    assert_eq!(rig.provider_calls(), 0);
+    let rows = rig.wait_rows("SELECT name, status, error_code FROM spans WHERE trace_id = 'gen-paused'").await;
+    assert_eq!(rows[0], vec![json!("user_pause"), json!("blocked"), json!("user_paused")]);
+    assert!(
+        matches!(rig.chat(&as_user(rig.request("p", "gen-other", "hello"), "user2")).await.last(), Some(ChatEvent::Done { .. })),
+        "another user is not paused"
+    );
+}
+
+#[tokio::test]
+async fn a_budget_is_held_against_what_the_gateway_served_and_a_subscription_is_never_counted() {
+    let rig = rig().await;
+    let mut cfg = config(&rig, 1, &[("p", "m"), ("flat", "m")]);
+    cfg.providers[1].billing = askbar_proto::Billing::Subscription;
+    cfg.budget.daily_tokens = Some(100);
+    assert_eq!(rig.push(&cfg).await.status(), 200);
+
+    // Before it has read how much was used, it cannot hold a budget: ask again, and nothing is called.
+    let r = rig.chat_raw(&rig.request("p", "gen-unknown", "hello")).await;
+    assert_eq!(r.headers()["retry-after"], "5");
+    let (status, body) = problem_of(r).await;
+    assert_eq!((status, body["error"].as_str()), (503, Some("audit_backlog")));
+    assert_eq!(rig.provider_calls(), 0);
+    assert!(rig.gw.refresh_usage().await, "the auditor answers the gateway's read link");
+
+    // Under the limit it runs (the mock reports 150 tokens), and then the 150 it served are over the 100 allowed.
+    assert!(matches!(rig.chat(&rig.request("p", "gen-1", "hello")).await.last(), Some(ChatEvent::Done { .. })));
+    let (status, body) = problem_of(rig.chat_raw(&rig.request("p", "gen-2", "hello")).await).await;
+    assert_eq!((status, body["error"].as_str(), body["period"].as_str()), (429, Some("budget_exceeded"), Some("daily")));
+    assert_eq!(rig.provider_calls(), 1, "the second was refused before any call");
+    let rows = rig.wait_rows("SELECT status, error_code, attrs_json FROM spans WHERE trace_id = 'gen-2' AND name = 'budget'").await;
+    assert_eq!((rows[0][0].clone(), rows[0][1].clone()), (json!("blocked"), json!("budget_exceeded")));
+    assert!(
+        rows[0][2].as_str().unwrap().contains("\"daily_used\":150") && rows[0][2].as_str().unwrap().contains("\"daily_limit\":100"),
+        "{:?}",
+        rows[0][2]
+    );
+
+    // A subscription costs nothing per token, so the budget does not apply to it.
+    assert!(matches!(rig.chat(&rig.request("flat", "gen-flat", "hello")).await.last(), Some(ChatEvent::Done { .. })));
+    // And more room is more room.
+    cfg.budget.daily_tokens = Some(10_000);
+    cfg.version = 2;
+    assert_eq!(rig.push(&cfg).await.status(), 200);
+    assert!(matches!(rig.chat(&rig.request("p", "gen-3", "hello")).await.last(), Some(ChatEvent::Done { .. })));
+}
+
+#[tokio::test]
+async fn a_restart_cannot_reset_a_budget_because_the_auditor_remembers_what_was_used() {
+    use askbar_audit::{Record, SpanFinish, SpanStart};
+    let rig = rig().await;
+    // The auditor already holds a turn that used 100 tokens today (what an earlier run of the gateway served).
+    let now = askbar_service::audit_client::now_parts().0;
+    let mut start = SpanStart::new("earlier", askbar_audit::Kind::Turn, "chat");
+    start.id = "earlier-turn".into();
+    start.started_at = now;
+    rig.auditor.recorder.append(Record::Start(start)).await.unwrap();
+    let mut end = SpanFinish::new("earlier-turn", "done");
+    end.tokens_in = Some(90);
+    end.tokens_out = Some(10);
+    rig.auditor.recorder.append(Record::Finish(end)).await.unwrap();
+
+    let mut cfg = config(&rig, 1, &[("p", "m")]);
+    cfg.budget.daily_tokens = Some(100);
+    assert_eq!(rig.push(&cfg).await.status(), 200);
+    assert!(rig.gw.refresh_usage().await);
+    let (status, body) = problem_of(rig.chat_raw(&rig.request("p", "gen-after-restart", "hello")).await).await;
+    assert_eq!(
+        (status, body["error"].as_str()),
+        (429, Some("budget_exceeded")),
+        "the gateway itself has served nothing, and still refuses"
+    );
+    assert_eq!(rig.provider_calls(), 0);
+}
+
+#[tokio::test]
+async fn a_pause_and_the_kill_switch_stop_the_replies_that_are_running_and_say_why() {
+    let rig = rig().await;
+    let mut cfg = config(&rig, 1, &[("p", "m")]);
+    assert_eq!(rig.push(&cfg).await.status(), 200);
+
+    // Start a slow reply and read its first words.
+    let resp = rig.chat_raw(&rig.request("p", "gen-running", "slow please")).await;
+    assert_eq!(resp.status(), 200);
+    let mut stream = resp.bytes_stream();
+    let mut parser = SseParser::default();
+    let mut events: Vec<ChatEvent> = Vec::new();
+    let read_until = |events: &Vec<ChatEvent>, want: fn(&ChatEvent) -> bool| events.iter().any(want);
+    while !read_until(&events, |e| matches!(e, ChatEvent::Delta { .. })) {
+        let chunk = stream.next().await.expect("the stream goes on").unwrap();
+        events.extend(parser.feed(&chunk).into_iter().map(|ev| serde_json::from_str::<ChatEvent>(&ev.data).unwrap()));
+    }
+    // The user is paused: the reply ends at once, with the reason.
+    cfg.paused_users = vec!["user1".into()];
+    cfg.version = 2;
+    let paused_at = Instant::now();
+    assert_eq!(rig.push(&cfg).await.status(), 200);
+    while let Some(chunk) = stream.next().await {
+        events.extend(parser.feed(&chunk.unwrap()).into_iter().map(|ev| serde_json::from_str::<ChatEvent>(&ev.data).unwrap()));
+    }
+    assert!(paused_at.elapsed() < Duration::from_secs(5), "it was stopped, not waited out: {:?}", paused_at.elapsed());
+    assert!(
+        matches!(events.last(), Some(ChatEvent::Error { code, class: FailureClass::Fatal, .. }) if code == "user_paused"),
+        "{events:?}"
+    );
+    let rows = rig
+        .wait_rows("SELECT status, error_code FROM spans WHERE trace_id = 'gen-running' AND kind = 'attempt' AND status != 'running'")
+        .await;
+    assert_eq!(rows[0], vec![json!("cancelled"), json!("user_paused")]);
+
+    // The kill switch, set to stop what is running.
+    cfg.paused_users.clear();
+    cfg.version = 3;
+    assert_eq!(rig.push(&cfg).await.status(), 200);
+    let resp = rig.chat_raw(&rig.request("p", "gen-running-2", "slow please")).await;
+    let mut stream = resp.bytes_stream();
+    let mut events: Vec<ChatEvent> = Vec::new();
+    let mut parser = SseParser::default();
+    while !events.iter().any(|e| matches!(e, ChatEvent::Delta { .. })) {
+        let chunk = stream.next().await.unwrap().unwrap();
+        events.extend(parser.feed(&chunk).into_iter().map(|ev| serde_json::from_str::<ChatEvent>(&ev.data).unwrap()));
+    }
+    cfg.kill_switch = true;
+    cfg.version = 4;
+    assert_eq!(rig.push(&cfg).await.status(), 200);
+    while let Some(chunk) = stream.next().await {
+        events.extend(parser.feed(&chunk.unwrap()).into_iter().map(|ev| serde_json::from_str::<ChatEvent>(&ev.data).unwrap()));
+    }
+    assert!(matches!(events.last(), Some(ChatEvent::Error { code, .. }) if code == "kill_switch"), "{events:?}");
+}
+
+#[tokio::test]
+async fn a_kill_switch_set_not_to_stop_running_replies_lets_them_finish_and_refuses_new_ones() {
+    let rig = rig().await;
+    let mut cfg = config(&rig, 1, &[("p", "m")]);
+    assert_eq!(rig.push(&cfg).await.status(), 200);
+    let resp = rig.chat_raw(&rig.request("p", "gen-finishes", "brisk please")).await;
+    let mut stream = resp.bytes_stream();
+    let mut parser = SseParser::default();
+    let mut events: Vec<ChatEvent> = Vec::new();
+    while !events.iter().any(|e| matches!(e, ChatEvent::Delta { .. })) {
+        let chunk = stream.next().await.unwrap().unwrap();
+        events.extend(parser.feed(&chunk).into_iter().map(|ev| serde_json::from_str::<ChatEvent>(&ev.data).unwrap()));
+    }
+    cfg.kill_switch = true;
+    cfg.kill_switch_aborts_running = false;
+    cfg.version = 2;
+    assert_eq!(rig.push(&cfg).await.status(), 200);
+    let (status, body) = problem_of(rig.chat_raw(&rig.request("p", "gen-refused", "hello")).await).await;
+    assert_eq!((status, body["error"].as_str()), (503, Some("kill_switch")), "new ones are refused");
+    while let Some(chunk) = stream.next().await {
+        events.extend(parser.feed(&chunk.unwrap()).into_iter().map(|ev| serde_json::from_str::<ChatEvent>(&ev.data).unwrap()));
+    }
+    assert!(matches!(events.last(), Some(ChatEvent::Done { .. })), "the running one finished: {events:?}");
 }

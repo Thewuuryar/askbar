@@ -325,7 +325,11 @@ async fn a_provider_failure_marks_the_question_with_our_sentence_not_the_provide
         detail["messages"][0]["failed"],
         serde_json::json!({ "code": "provider_error", "message": "The provider could not answer." })
     );
-    assert!(!body.contains("401"), "the provider's words are not in the conversation: {body}");
+    // (Not a bare "401": a timestamp contains it for a few days, which made this test fail by the clock.)
+    assert!(
+        !body.contains("http_401") && !body.contains("Unauthorized") && !body.contains("status 401"),
+        "the provider's words are not in the conversation: {body}"
+    );
 }
 
 /// A question that got no reply is not sent again with the next one: a question the provider refuses

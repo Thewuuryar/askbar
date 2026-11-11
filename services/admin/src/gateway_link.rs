@@ -105,6 +105,7 @@ pub fn build_config(conn: &Connection, secrets: &AdminSecrets, managed: Option<&
                 temperature: p.temperature,
                 headers: p.headers,
                 api_key,
+                billing: p.billing,
             }
         })
         .collect();
@@ -113,6 +114,10 @@ pub fn build_config(conn: &Connection, secrets: &AdminSecrets, managed: Option<&
         providers,
         audit_public_key: snap.audit_public_key,
         generation_timeout_secs: snap.generation_timeout_secs,
+        budget: snap.budget,
+        kill_switch: snap.kill_switch,
+        kill_switch_aborts_running: snap.kill_switch_aborts_running,
+        paused_users: snap.paused_user_ids,
     };
     config.version = version_of(&config);
     Ok(config)

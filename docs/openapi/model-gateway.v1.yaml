@@ -204,13 +204,31 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: >-
+            The administrator paused replies for this user (`user_paused`). Nothing was called. The refusal is a `blocked`
+            `user_pause` gate span in the generation's trace.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '404':
           $ref: '#/components/responses/NotFound'
+        '429':
+          description: >-
+            A token budget is used up (`budget_exceeded`, with `period`: `daily` or `monthly`). The gateway's own copy of
+            the budget is the authoritative one; the server holds a copy to refuse early. Nothing was called, and the
+            refusal is a `blocked` `budget` gate span with the numbers.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '503':
           description: >-
-            Nothing was called. Either the gateway has no configuration yet (`not_configured`), or the audit record
-            could not be made in time (`audit_backlog`: the auditor is unreachable, did not acknowledge in one
-            second, or refused). Try again after `Retry-After`.
+            Nothing was called. Either the gateway has no configuration yet (`not_configured`), the kill switch is on
+            (`kill_switch`), or the audit record could not be made in time (`audit_backlog`: the auditor is unreachable,
+            did not acknowledge in one second, or refused; also when the gateway has not yet read how many tokens were
+            used and a budget applies). Try again after `Retry-After`.
           headers:
             Retry-After:
               schema:
@@ -270,6 +288,7 @@ components:
           - queue_full
           - budget_exceeded
           - kill_switch
+          - user_paused
           - audit_key_missing
           - audit_backlog
           - client_too_old
@@ -362,6 +381,10 @@ components:
           writeOnly: true
           maxLength: 4096
           description: Empty for a provider that needs none (a local server).
+        billing:
+          type: string
+          enum: [metered, subscription]
+          description: How it is paid for. A subscription's tokens do not count toward the budget.
     AuditKey:
       type: object
       required: [key_id, public_key]
@@ -390,6 +413,25 @@ components:
           description: >-
             How long a generation may run. A turn the server has not finished 60 seconds after that is finished
             as `interrupted` by the gateway.
+        budget:
+          type: object
+          description: The token budget, authoritative here (ADR 0014). A subscription provider's tokens do not count.
+          properties:
+            daily_tokens:
+              type: [integer, 'null']
+            monthly_tokens:
+              type: [integer, 'null']
+        kill_switch:
+          type: boolean
+          description: While on, the gateway starts no reply (`503 kill_switch`).
+        kill_switch_aborts_running:
+          type: boolean
+          description: When the switch is on, also stop the replies already running (the default). They end with the error code `kill_switch`.
+        paused_users:
+          type: array
+          description: Users whose replies are refused (`403 user_paused`) and whose running replies are stopped (error code `user_paused`).
+          items:
+            type: string
     ChatMessage:
       type: object
       required: [role, content]

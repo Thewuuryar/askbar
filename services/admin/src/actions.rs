@@ -173,6 +173,8 @@ pub fn classify(method: &Method, template: &str) -> Option<(&'static str, &'stat
         ("POST", "/users") => ("users", "create"),
         ("PUT", "/users/{id}/display-defaults") => ("users", "display_defaults"),
         ("POST", "/users/{id}/pairing-keys") => ("pairing_keys", "create"),
+        ("POST", "/users/{id}/pause") => ("users", "pause"),
+        ("POST", "/users/{id}/resume") => ("users", "resume"),
         ("PUT", "/setup/audit-key") => ("secret", "audit_key_setup"),
         ("POST", "/audit/rotate-key") => ("secret", "audit_key_rotate"),
         ("POST", "/audit/session") => ("sealed_content", "unseal"),

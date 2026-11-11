@@ -153,6 +153,8 @@ pub fn routes(state: &Arc<AdminState>) -> Routes {
         .get(&v1("/users"), admin_api::list_users)
         .post(&v1("/users"), admin_api::create_user)
         .post(&v1("/users/{id}/pairing-keys"), admin_api::create_pairing_key)
+        .post(&v1("/users/{id}/pause"), admin_api::pause_user)
+        .post(&v1("/users/{id}/resume"), admin_api::resume_user)
         .put(&v1("/setup/audit-key"), admin_api::setup_audit_key)
         .get(&v1("/audit/traces"), admin_api::audit_traces)
         .get(&v1("/audit/traces/{id}"), admin_api::audit_trace)

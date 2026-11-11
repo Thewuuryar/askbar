@@ -18,6 +18,7 @@ pub mod audit_client;
 pub mod configured;
 pub mod ids;
 pub mod links;
+pub mod periods;
 pub mod restart;
 pub mod status;
 pub mod tar;

@@ -68,6 +68,7 @@ impl Rig {
         };
         link("server-auditor", &audit_tokens, &server_tokens);
         link("model-gateway-auditor", &audit_tokens, &gw_tokens);
+        link("model-gateway-auditor-read", &audit_tokens, &gw_tokens);
         link("server-model-gateway", &gw_tokens, &server_tokens);
         link("admin-auditor-read", &audit_tokens, &admin_tokens);
         link("admin-auditor-append", &audit_tokens, &admin_tokens);
@@ -84,6 +85,8 @@ impl Rig {
         let boot = BootId::new();
         let restarter = Restarter::for_tests(boot.clone(), Duration::ZERO, Duration::from_secs(1), || {}, || {});
         let gateway = askbar_model_gateway::Gateway::new(client.clone(), boot.clone(), restarter);
+        gateway.set_usage_reader(askbar_model_gateway::usage::Reader::new(&audit_url, gw_tokens.clone()));
+        tokio::spawn(gateway.clone().watch_usage());
         tokio::spawn(client.clone().hello_until_done(boot.as_str().to_string()));
         tokio::spawn(client.clone().drain_forever());
         let gateway_url = serve(askbar_model_gateway::server_router(gateway.clone(), askbar_model_gateway::server_links(&gw_tokens))).await;
@@ -153,6 +156,7 @@ impl Rig {
                 temperature: p.temperature,
                 headers: p.headers.clone(),
                 api_key: keys.get(&p.id).cloned().unwrap_or_default(),
+                billing: p.billing,
             })
             .collect();
         let config = GatewayConfig {
@@ -160,6 +164,10 @@ impl Rig {
             providers,
             audit_public_key: snap.audit_public_key,
             generation_timeout_secs: snap.generation_timeout_secs,
+            budget: snap.budget,
+            kill_switch: snap.kill_switch,
+            kill_switch_aborts_running: snap.kill_switch_aborts_running,
+            paused_users: snap.paused_user_ids,
         };
         self.gateway.apply_config(&config).expect("the snapshot makes a usable gateway configuration");
     }

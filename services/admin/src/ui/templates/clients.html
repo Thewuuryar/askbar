@@ -4,7 +4,7 @@
 {% block content %}
     <form id="user-form" class="panel">
       <h3>Users</h3>
-      {% call b::hint("Each person who uses Askbar is a user. A user's apps share their conversations; another user never sees them.") %}{% endcall %}
+      {% call b::hint("Each person who uses Askbar is a user. A user's apps share their conversations; another user never sees them. Pause replies is the emergency stop for one person: no new reply starts for them and the ones running are stopped, until you resume.") %}{% endcall %}
       <div id="users"></div>
       <label>New user <input id="u-name" placeholder="Alice" maxlength="60" required></label>
       <div class="row"><button type="submit">Add user</button></div>

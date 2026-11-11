@@ -426,6 +426,10 @@ fn refusal_for(p: &Seen, retry_after: Option<u64>) -> Option<Refusal> {
             },
         ),
         "kill_switch" => ("kill_switch", "Replies have been switched off by the administrator for now. Your message is kept; send it again when they are back.".to_string()),
+        "user_paused" => (
+            "user_paused",
+            "Replies are paused for you by the administrator. Your message is kept; send it again when they are back.".to_string(),
+        ),
         "audit_key_missing" => (
             "audit_key_missing",
             "The server is not ready to answer yet: the administrator has to finish setting up the audit key in the admin site. Your message is kept.".to_string(),
@@ -1282,12 +1286,13 @@ mod tests {
     }
 
     /// The refusals the server can answer a send with, and the kind each should be told as.
-    const REFUSALS: [(&str, u16, &str, &str); 5] = [
+    const REFUSALS: [(&str, u16, &str, &str); 6] = [
         ("queue_full", 409, "", r#"{"error":"queue_full"}"#), // the 409 now carries its code; a bare 409 is no longer read as a full queue
         ("budget_exceeded", 429, "", r#"{"error":"budget_exceeded","period":"daily"}"#),
         ("kill_switch", 503, "", r#"{"error":"kill_switch"}"#),
         ("audit_key_missing", 503, "", r#"{"error":"audit_key_missing"}"#),
         ("busy", 503, "5", r#"{"error":"audit_backlog"}"#),
+        ("user_paused", 403, "", r#"{"error":"user_paused"}"#),
     ];
 
     #[tokio::test]
@@ -1312,6 +1317,7 @@ mod tests {
         assert!(seen_messages[2].to_lowercase().contains("switched off"), "{}", seen_messages[2]);
         assert!(seen_messages[3].to_lowercase().contains("audit"), "{}", seen_messages[3]);
         assert!(seen_messages[4].contains('5'), "the wait is named: {}", seen_messages[4]);
+        assert!(seen_messages[5].to_lowercase().contains("paused"), "{}", seen_messages[5]);
     }
 
     #[tokio::test]

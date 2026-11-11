@@ -46,7 +46,7 @@ pub enum StreamEvent {
     },
     Done,
     Cancelled,
-    /// `kind` names a refusal the window can act on (`queue_full`, `budget_exceeded`, `kill_switch`,
+    /// `kind` names a refusal the window can act on (`queue_full`, `budget_exceeded`, `kill_switch`, `user_paused`,
     /// `audit_key_missing`, `busy`, `timed_out`); plain failures have none.
     Error {
         message: String,

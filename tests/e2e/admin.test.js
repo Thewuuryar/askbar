@@ -409,6 +409,24 @@ async function waitForPort(port) {
     assert.equal(await page.locator('#clients [data-action="revoke"]').count(), 0);
     assert.equal(await whoami(), 401);
   });
+  await step('users: Pause replies is the emergency stop for one person, shown as text, and Resume undoes it', async () => {
+    await openPage('clients');
+    await page.waitForSelector('#users [data-user]');
+    const row = '#users [data-user]';
+    assert.equal(await page.innerText(row + ' .what'), 'Ann');
+    assert.equal(await page.innerText(row + ' button'), 'Pause replies');
+    await page.click(row + ' button');
+    await page.waitForFunction(() => /replies paused/.test(document.querySelector('#users [data-user] .what').textContent));
+    assert.equal(await page.innerText(row + ' button'), 'Resume replies');
+    // It is on the server's side too: the admin API says so, and a reload shows it.
+    await openPage('providers');
+    await openPage('clients');
+    await page.waitForFunction(() => /replies paused/.test(document.querySelector('#users [data-user] .what').textContent));
+    await page.click(row + ' button');
+    await page.waitForFunction(() => document.querySelector('#users [data-user] .what').textContent === 'Ann');
+    assert.equal(await page.innerText(row + ' button'), 'Pause replies');
+    assert.equal(await page.locator('#users b').count(), 0, 'names are text');
+  });
   await step('settings page saves the system prompt and display defaults', async () => {
     await openPage('settings');
     await page.waitForSelector('#settings-form');

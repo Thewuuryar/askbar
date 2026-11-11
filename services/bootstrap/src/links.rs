@@ -24,6 +24,9 @@ pub const LINKS: &[Link] = &[
     Link { name: "admin-model-gateway", caller: "admin", receiver: "model-gateway", prefix: "admgw_" },
     Link { name: "model-gateway-auditor", caller: "model-gateway", receiver: "auditor", prefix: "gwaud_" },
     Link { name: "server-auditor", caller: "server", receiver: "auditor", prefix: "srvaud_" },
+    // The gateway reads the day's and month's token counts to hold the budget (plan step 3.2, ADR 0014): `GET /token-counts`
+    // and nothing else.
+    Link { name: "model-gateway-auditor-read", caller: "model-gateway", receiver: "auditor", prefix: "gwrd_" },
 ];
 
 /// A service with a credential volume `<name>-token`, and the uid that reads it (ADR 0003).

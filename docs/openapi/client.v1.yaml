@@ -351,7 +351,8 @@ paths:
         the same client in the same space attach to the first instead of starting a second.
 
         Before anything starts the server may refuse, with a problem: 409 `queue_full` (five messages
-        already wait), 429 `budget_exceeded` (`period`: daily or monthly), 503 `kill_switch`, 503
+        already wait), 429 `budget_exceeded` (`period`: daily or monthly), 503 `kill_switch`, 403 `user_paused` (the administrator
+        paused replies for this user), 503
         `audit_key_missing`, 503 `audit_backlog` (with `Retry-After: 5`). The typed text is never lost; the app keeps it.
       parameters:
         - $ref: '#/components/parameters/ClientVersion'
@@ -379,6 +380,12 @@ paths:
                 $ref: '#/components/schemas/Problem'
         '426':
           $ref: '#/components/responses/TooOld'
+        '403':
+          description: The administrator paused replies for this user (`user_paused`). Their message is kept.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '429':
           description: A token budget is used up (`budget_exceeded`, with `period`).
           content:
@@ -574,6 +581,7 @@ components:
           - queue_full
           - budget_exceeded
           - kill_switch
+          - user_paused
           - audit_key_missing
           - audit_backlog
           - client_too_old
@@ -681,7 +689,7 @@ components:
       properties:
         code:
           type: string
-          enum: [timed_out, interrupted, kill_switch, provider_error, internal]
+          enum: [timed_out, interrupted, kill_switch, user_paused, budget_exceeded, provider_error, internal]
         message:
           type: string
     ReplyProvider:
@@ -842,4 +850,4 @@ components:
               type: string
             code:
               type: string
-              enum: [timed_out, interrupted, kill_switch, provider_error, internal]
+              enum: [timed_out, interrupted, kill_switch, user_paused, budget_exceeded, provider_error, internal]

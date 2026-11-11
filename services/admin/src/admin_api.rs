@@ -571,11 +571,15 @@ pub struct UserRow {
     id: String,
     name: String,
     created_at: i64,
+    /// Replies are stopped for this user (the emergency stop for one person, plan step 3.2).
+    paused: bool,
 }
 
 fn read_users(c: &Connection) -> rusqlite::Result<Vec<UserRow>> {
-    let mut stmt = c.prepare("SELECT id, name, created_at FROM users ORDER BY created_at, name")?;
-    let rows = stmt.query_map([], |r| Ok(UserRow { id: r.get(0)?, name: r.get(1)?, created_at: r.get(2)? }))?.collect();
+    let mut stmt = c.prepare("SELECT id, name, created_at, paused FROM users ORDER BY created_at, name")?;
+    let rows = stmt
+        .query_map([], |r| Ok(UserRow { id: r.get(0)?, name: r.get(1)?, created_at: r.get(2)?, paused: r.get::<_, i64>(3)? != 0 }))?
+        .collect();
     rows
 }
 
@@ -629,6 +633,29 @@ pub async fn create_user(State(state): St, ApiJson(i): ApiJson<UserInput>) -> Re
     })
     .await?;
     Ok((StatusCode::CREATED, Json(serde_json::json!({ "id": id }))))
+}
+
+/// `POST /users/{id}/pause` and `/resume`: the emergency stop for one person. A paused user gets no new reply, the
+/// gateway stops the ones running, and queued messages are refused when they come up. It is pushed to the server and the
+/// gateway like every change, and recorded like every change.
+async fn set_paused(state: &AdminState, user: String, paused: bool) -> Result<StatusCode, Failure> {
+    mutate(state, vec![], move |c| {
+        let n = c.execute("UPDATE users SET paused = ?2 WHERE id = ?1", params![user, paused as i64]).map_err(internal)?;
+        if n == 0 {
+            return Err(err(StatusCode::NOT_FOUND, "No such user."));
+        }
+        Ok(())
+    })
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn pause_user(State(state): St, Path(user): Path<String>) -> Result<StatusCode, Failure> {
+    set_paused(&state, user, true).await
+}
+
+pub async fn resume_user(State(state): St, Path(user): Path<String>) -> Result<StatusCode, Failure> {
+    set_paused(&state, user, false).await
 }
 
 /// `POST /users/{id}/pairing-keys`: a pairing key that registers one client for this user.

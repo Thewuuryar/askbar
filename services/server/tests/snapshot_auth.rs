@@ -73,6 +73,7 @@ impl T {
                 })
                 .collect(),
             revoked_client_ids: revoked.iter().map(|s| s.to_string()).collect(),
+            paused_user_ids: vec![],
             budget: Budget::default(),
             kill_switch: false,
             kill_switch_aborts_running: true,

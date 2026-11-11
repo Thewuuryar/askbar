@@ -226,10 +226,11 @@ async fn an_exhausted_token_budget_refuses_new_generations_with_429() {
 #[tokio::test]
 async fn every_chat_refusal_is_a_problem_with_its_code_status_and_retry_after() {
     use askbar_server::generation::SubmitError as E;
-    let cases: [(E, u16, &str, Option<&str>); 7] = [
+    let cases: [(E, u16, &str, Option<&str>); 8] = [
         (E::NotFound, 404, "not_found", None),
         (E::QueueFull, 409, "queue_full", None),
         (E::KillSwitch, 503, "kill_switch", None),
+        (E::UserPaused, 403, "user_paused", None),
         (E::AuditKeyMissing, 503, "audit_key_missing", None),
         (E::AuditBacklog, 503, "audit_backlog", Some("5")),
         (E::BudgetExceeded("monthly"), 429, "budget_exceeded", None),
@@ -584,4 +585,35 @@ async fn cached_tokens_an_anthropic_provider_reports_reach_the_attempt_span_and_
     let turn_cached: i64 =
         db.query_row("SELECT tokens_cached FROM spans WHERE trace_id = ?1 AND kind = 'turn'", [&trace], |r| r.get(0)).unwrap();
     assert_eq!(turn_cached, 64);
+}
+
+#[tokio::test]
+async fn a_paused_user_is_refused_early_with_a_gate_span_and_others_are_not() {
+    let s = stack("m", "m", serde_json::json!({})).await;
+    assert!(is_done(&s.run("works before").await));
+    let user = s.state.db.lock().unwrap().seed_server().unwrap();
+    askbar_server::testing::update_snapshot(&s.state.db.lock().unwrap(), |snap| snap.paused_user_ids = vec![user.clone()]);
+    let refused = s.submit("and now").err().expect("refused");
+    assert_eq!(refused, SubmitError::UserPaused);
+    let response = SubmitError::UserPaused.into_response();
+    assert_eq!(response.status(), 403);
+    let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+    let p: askbar_proto::Problem = serde_json::from_slice(&body).unwrap();
+    assert_eq!(p.error, "user_paused");
+    assert!(p.detail.contains("paused for you"), "{}", p.detail);
+    assert_eq!(s.m1.requests(), 1, "nothing more was sent upstream");
+
+    s.state.audit.flush().await;
+    let db = rusqlite::Connection::open(s._dir.join("audit.db")).unwrap();
+    let blocked: (String, Option<String>, String) = db
+        .query_row("SELECT status, error_code, attrs_json FROM spans WHERE kind = 'gate' AND name = 'user_pause'", [], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        })
+        .unwrap();
+    assert_eq!((blocked.0.as_str(), blocked.1.as_deref()), ("blocked", Some("user_paused")));
+    assert!(blocked.2.contains(r#""paused":true"#));
+
+    // Pausing somebody else does not stop this user, and resuming does.
+    askbar_server::testing::update_snapshot(&s.state.db.lock().unwrap(), |snap| snap.paused_user_ids = vec!["someone-else".into()]);
+    assert!(is_done(&s.run("works again").await));
 }

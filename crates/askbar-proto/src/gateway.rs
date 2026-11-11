@@ -4,7 +4,7 @@
 //! (`POST /chat`, a Server-Sent Events stream). A provider's error text is not here: the server gets a
 //! code and a class, and the text goes to the auditor sealed.
 
-use crate::AuditKey;
+use crate::{AuditKey, Billing, Budget};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
@@ -29,6 +29,9 @@ pub struct GatewayProvider {
     /// any endpoint.
     #[serde(default)]
     pub api_key: String,
+    /// How it is paid for: a subscription's tokens do not count toward the budget (plan step 3.2).
+    #[serde(default)]
+    pub billing: Billing,
 }
 
 impl fmt::Debug for GatewayProvider {
@@ -55,6 +58,23 @@ pub struct GatewayConfig {
     /// How long a generation may run, so a turn the server never finishes is ended 60 seconds after it.
     #[serde(default = "default_timeout")]
     pub generation_timeout_secs: u32,
+    /// The token budget, authoritative here (ADR 0014): the server holds a copy to refuse early and to show usage.
+    #[serde(default)]
+    pub budget: Budget,
+    /// While on, the gateway starts no reply.
+    #[serde(default)]
+    pub kill_switch: bool,
+    /// When the switch goes on, also stop the replies already running (the default).
+    #[serde(default = "yes")]
+    pub kill_switch_aborts_running: bool,
+    /// Users whose replies are stopped, whatever else is allowed: the emergency stop for one person. Their running
+    /// replies are stopped too.
+    #[serde(default)]
+    pub paused_users: Vec<String>,
+}
+
+fn yes() -> bool {
+    true
 }
 
 fn default_timeout() -> u32 {
@@ -145,12 +165,33 @@ mod tests {
             temperature: None,
             headers: Default::default(),
             api_key: "sk-marker-secret".into(),
+            billing: Billing::Metered,
         };
-        let cfg = GatewayConfig { version: 1, providers: vec![p.clone()], audit_public_key: None, generation_timeout_secs: 300 };
+        let cfg = GatewayConfig {
+            version: 1,
+            providers: vec![p.clone()],
+            audit_public_key: None,
+            generation_timeout_secs: 300,
+            budget: Budget::default(),
+            kill_switch: false,
+            kill_switch_aborts_running: true,
+            paused_users: vec![],
+        };
         for shown in [format!("{p:?}"), format!("{p:#?}"), format!("{cfg:?}")] {
             assert!(!shown.contains("sk-marker-secret"), "{shown}");
             assert!(shown.contains("(set)"));
         }
+    }
+
+    #[test]
+    fn a_configuration_from_before_the_budget_has_no_limits_no_stop_and_aborts_running_ones() {
+        let cfg: GatewayConfig = serde_json::from_str(r#"{"version":1,"providers":[],"audit_public_key":null}"#).unwrap();
+        assert_eq!(
+            (cfg.budget, cfg.kill_switch, cfg.kill_switch_aborts_running, cfg.paused_users),
+            (Budget::default(), false, true, vec![])
+        );
+        let p: GatewayProvider = serde_json::from_str(r#"{"id":"p","name":"n","type":"openai","model":"m"}"#).unwrap();
+        assert_eq!(p.billing, Billing::Metered, "metered unless it says it is a subscription");
     }
 
     #[test]
