@@ -144,7 +144,7 @@ Each service has its own data and credential volumes and user ID, with no shared
 | Certificates and Caddy state | `caddy` |
 | `cpa` config | `cpa`, written by `admin` |
 | `cpa` logins | `cpa` |
-| `alerter` state and delivery settings | `alerter` |
+| `alerter` state: the repeat ledger and release results (delivery secrets are held by `admin` and pushed, [ADR 0055](adr/0055-alerter.md)) | `alerter` |
 | Admin and Caddy unix sockets | `admin` and `caddy` |
 | `/backup` or SMB/NFS share volume, defined in Compose | `admin` |
 
