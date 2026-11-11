@@ -24,6 +24,12 @@ pub enum GatewayError {
     AuditBacklog,
     /// The gateway has no configuration yet (it just started, and the admin has not given it its keys).
     NotConfigured,
+    /// The gateway refused: the kill switch is on there (the authoritative copy).
+    KillSwitch,
+    /// The gateway refused: this user is paused there.
+    UserPaused,
+    /// The gateway refused: a token budget is used up for its period (`daily` or `monthly`).
+    BudgetExceeded(String),
     /// The gateway has no such provider (a key was never given to it for one that exists here).
     NoSuchProvider,
     /// The gateway does not accept this server's token, or this server could not read it.
@@ -72,7 +78,11 @@ impl GatewayClient {
         let status = resp.status().as_u16();
         if status != 200 {
             let problem: Option<Problem> = resp.json().await.ok();
+            let period = problem.as_ref().and_then(|p| p.extra.get("period")).and_then(|v| v.as_str()).unwrap_or("daily").to_string();
             return Err(match (status, problem.and_then(|p| p.code())) {
+                (503, Some(askbar_proto::ErrorCode::KillSwitch)) => GatewayError::KillSwitch,
+                (403, Some(askbar_proto::ErrorCode::UserPaused)) => GatewayError::UserPaused,
+                (429, Some(askbar_proto::ErrorCode::BudgetExceeded)) => GatewayError::BudgetExceeded(period),
                 (503, Some(askbar_proto::ErrorCode::AuditBacklog)) => GatewayError::AuditBacklog,
                 (503, Some(askbar_proto::ErrorCode::NotConfigured)) => GatewayError::NotConfigured,
                 (404, _) => GatewayError::NoSuchProvider,
@@ -178,6 +188,17 @@ mod tests {
         assert_eq!(client_for(app).await.chat(&request()).await.err(), Some(GatewayError::NoSuchProvider));
         let app = axum::Router::new().route("/api/model-gateway/v1/chat", post(|| async { ApiError::new(ErrorCode::Unauthorized, "no") }));
         assert_eq!(client_for(app).await.chat(&request()).await.err(), Some(GatewayError::Rejected));
+        // The gateway's own copy of the stops and the budget (plan step 3.2).
+        let app = axum::Router::new().route("/api/model-gateway/v1/chat", post(|| async { ApiError::new(ErrorCode::KillSwitch, "off") }));
+        assert_eq!(client_for(app).await.chat(&request()).await.err(), Some(GatewayError::KillSwitch));
+        let app =
+            axum::Router::new().route("/api/model-gateway/v1/chat", post(|| async { ApiError::new(ErrorCode::UserPaused, "paused") }));
+        assert_eq!(client_for(app).await.chat(&request()).await.err(), Some(GatewayError::UserPaused));
+        let app = axum::Router::new().route(
+            "/api/model-gateway/v1/chat",
+            post(|| async { ApiError::new(ErrorCode::BudgetExceeded, "used up").with("period", "monthly") }),
+        );
+        assert_eq!(client_for(app).await.chat(&request()).await.err(), Some(GatewayError::BudgetExceeded("monthly".into())));
         let dead = GatewayClient::new("http://127.0.0.1:1", std::env::temp_dir());
         assert_eq!(dead.chat(&request()).await.err(), Some(GatewayError::Rejected), "no token file here");
     }

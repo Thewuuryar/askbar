@@ -153,6 +153,7 @@ fn snapshot() -> Snapshot {
             expires_at: 4_000_000_000,
         }],
         revoked_client_ids: vec!["d9".into()],
+        paused_user_ids: vec![],
         budget: Budget { daily_tokens: Some(1000), monthly_tokens: None },
         kill_switch: false,
         kill_switch_aborts_running: true,

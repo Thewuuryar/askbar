@@ -28,6 +28,7 @@ pub fn empty_snapshot() -> Snapshot {
         users: vec![],
         pair_codes: vec![],
         revoked_client_ids: vec![],
+        paused_user_ids: vec![],
         budget: Budget::default(),
         kill_switch: false,
         kill_switch_aborts_running: true,

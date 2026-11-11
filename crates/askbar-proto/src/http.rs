@@ -58,6 +58,7 @@ pub fn default_detail(code: ErrorCode) -> &'static str {
         ErrorCode::QueueFull => "Five messages are already waiting in this conversation.",
         ErrorCode::BudgetExceeded => "A usage limit has been reached.",
         ErrorCode::KillSwitch => "Replies have been switched off by the administrator.",
+        ErrorCode::UserPaused => "Replies are paused for you by the administrator.",
         ErrorCode::AuditKeyMissing => "The administrator has not set up the audit key yet.",
         ErrorCode::AuditBacklog => "The server is busy recording and asked for a short wait.",
         ErrorCode::ClientTooOld => "This version of Askbar is too old for the server. Update the app.",

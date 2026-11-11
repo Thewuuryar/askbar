@@ -760,7 +760,7 @@ paths:
                 type: array
                 items:
                   type: object
-                  required: [id, name, created_at]
+                  required: [id, name, created_at, paused]
                   properties:
                     id:
                       type: string
@@ -768,6 +768,9 @@ paths:
                       type: string
                     created_at:
                       type: integer
+                    paused:
+                      type: boolean
+                      description: Replies are stopped for this user (the emergency stop for one person).
         '401':
           $ref: '#/components/responses/Unauthorized'
     post:
@@ -806,6 +809,57 @@ paths:
           $ref: '#/components/responses/Conflict'
         '502':
           $ref: '#/components/responses/ServerUnavailable'
+  /api/admin/v1/users/{id}/pause:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      operationId: pauseUser
+      summary: Stop one person's replies, new and running (the emergency stop for one person).
+      description: >-
+        Pushed to the server (which refuses new replies early) and to the gateway (which is authoritative and stops the
+        replies running). Recorded like every change. Nothing the person has is deleted; resume undoes it.
+      security:
+        - adminSession: []
+        - adminApiKey: []
+      responses:
+        '204':
+          description: Paused.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '502':
+          $ref: '#/components/responses/ServerUnavailable'
+        '503':
+          $ref: '#/components/responses/AuditorUnavailable'
+  /api/admin/v1/users/{id}/resume:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      operationId: resumeUser
+      summary: Undo a pause so the person's replies work again.
+      security:
+        - adminSession: []
+        - adminApiKey: []
+      responses:
+        '204':
+          description: Resumed.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '502':
+          $ref: '#/components/responses/ServerUnavailable'
+        '503':
+          $ref: '#/components/responses/AuditorUnavailable'
   /api/admin/v1/users/{id}/pairing-keys:
     parameters:
       - name: id
@@ -1400,6 +1454,7 @@ components:
           - queue_full
           - budget_exceeded
           - kill_switch
+          - user_paused
           - audit_key_missing
           - audit_backlog
           - client_too_old

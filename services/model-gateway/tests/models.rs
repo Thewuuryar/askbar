@@ -98,12 +98,17 @@ async fn gateway(up: &str) -> G {
         temperature: None,
         headers: Default::default(),
         api_key: key.into(),
+        billing: Default::default(),
     };
     let cfg = GatewayConfig {
         version: 1,
         providers: vec![mk("saved", "Saved", KEY, format!("{up}/v1")), mk("wrong", "Wrong key", "good-not", format!("{up}/v1"))],
         audit_public_key: Some(audit_key()),
         generation_timeout_secs: 300,
+        budget: Default::default(),
+        kill_switch: false,
+        kill_switch_aborts_running: true,
+        paused_users: vec![],
     };
     let r = http.put(format!("{url}/api/model-gateway/v1/config")).bearer_auth(ADM).json(&cfg).send().await.unwrap();
     assert_eq!(r.status(), 200);

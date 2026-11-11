@@ -203,6 +203,7 @@ fn provider(rig: &Rig, id: &str, model: &str) -> GatewayProvider {
         temperature: None,
         headers: Default::default(),
         api_key: MARKER_KEY.into(),
+        billing: Default::default(),
     }
 }
 
@@ -212,6 +213,10 @@ fn config(rig: &Rig, version: u64, models: &[(&str, &str)]) -> GatewayConfig {
         providers: models.iter().map(|(id, m)| provider(rig, id, m)).collect(),
         audit_public_key: Some(audit_key()),
         generation_timeout_secs: 300,
+        budget: Default::default(),
+        kill_switch: false,
+        kill_switch_aborts_running: true,
+        paused_users: vec![],
     }
 }
 

@@ -152,6 +152,9 @@ const MIGRATIONS: &[&str] = &[
          hash       TEXT    NOT NULL,
          checked_at INTEGER NOT NULL
      );",
+    // The emergency stop for one person (plan step 3.2, ADR 0014): a paused user's replies are refused, and the gateway
+    // stops the ones running.
+    "ALTER TABLE users ADD COLUMN paused INTEGER NOT NULL DEFAULT 0 CHECK (paused IN (0, 1));",
 ];
 
 /// The schema steps, in order (for the upgrade tests).

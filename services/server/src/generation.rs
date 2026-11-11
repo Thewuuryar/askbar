@@ -320,6 +320,8 @@ pub enum SubmitError {
     QueueFull,
     /// The administrator has switched generations off.
     KillSwitch,
+    /// The administrator has paused this user's replies (the emergency stop for one person).
+    UserPaused,
     /// A token budget has been used up for its period (`"daily"` or `"monthly"`).
     BudgetExceeded(&'static str),
     /// The audit writer is not keeping up: nothing new starts until it catches up.
@@ -352,6 +354,7 @@ impl From<SubmitError> for crate::error::ApiError {
             )
             .with("period", period),
             SubmitError::KillSwitch => ApiError::new(C::KillSwitch, "Replies have been switched off by the administrator for now."),
+            SubmitError::UserPaused => ApiError::new(C::UserPaused, PAUSED),
             SubmitError::AuditKeyMissing => ApiError::new(
                 C::AuditKeyMissing,
                 "The administrator has to finish setting up the audit key in the admin site before replies can start.",
@@ -736,6 +739,18 @@ pub fn submit(state: &Arc<AppState>, s: Submit) -> Result<Submitted, SubmitError
     // The kill switch gate. It leaves a span either way: a refusal has no generation, so it gets a
     // trace of its own; a pass goes into the trace of the generation it lets through (below).
     let kill_switch = snapshot.as_ref().is_some_and(|snap| snap.kill_switch);
+    // The emergency stop for one person comes before the budget. The gateway holds the authoritative copy; this is the
+    // early refusal, with its gate span.
+    if !kill_switch && snapshot.as_ref().is_some_and(|snap| snap.paused_user_ids.contains(&s.user_id)) {
+        let trace = crate::ids::new_id();
+        let span = state.audit.start_span(
+            SpanStart::new(&trace, Kind::Gate, "user_pause")
+                .who(&s.user_id, Some(&s.client_id))
+                .attrs(&serde_json::json!({ "paused": true })),
+        );
+        state.audit.finish_span(SpanFinish::new(&span, "blocked").error_code("user_paused"));
+        return Err(SubmitError::UserPaused);
+    }
     let mut budget_note = serde_json::Value::Null;
     if let Some(snap) = snapshot.as_ref().filter(|_| !kill_switch) {
         match budget_gate(&db, snap, &s.provider_id, crate::auth::now()) {
@@ -888,6 +903,11 @@ fn spawn_run(
                     (Outcome::Cancelled, usage)
                 }
             }
+            Some(Ended::Failed(f)) if f.code == "kill_switch" => {
+                // The gateway's switch was on: the same ending as the server's own.
+                fin.error_code = Some(f.code);
+                (Outcome::Killed, f.usage)
+            }
             Some(Ended::Failed(f)) => {
                 fin.error_code = Some(f.code);
                 (Outcome::Error(f.message), f.usage)
@@ -929,6 +949,16 @@ fn gateway_failure(e: crate::gateway::GatewayError) -> Failed {
         E::AuditBacklog => Failed::new(
             "audit_backlog",
             "The audit record could not be made, so nothing was sent to the provider. Try again in a few seconds.",
+        ),
+        E::KillSwitch => Failed::new("kill_switch", KILLED),
+        E::UserPaused => Failed::new("user_paused", PAUSED),
+        E::BudgetExceeded(period) => Failed::new(
+            "budget_exceeded",
+            if period == "monthly" {
+                "The usage limit for this month has been reached. Try again next month, or ask the administrator to raise it."
+            } else {
+                "The usage limit for today has been reached. Try again tomorrow, or ask the administrator to raise it."
+            },
         ),
         E::NotConfigured | E::NoSuchProvider => Failed::new(
             "gateway_not_configured",
@@ -1008,6 +1038,15 @@ async fn via_gateway(
                 return Ended::Done(usage);
             }
             Some(GatewayEvent::Error { code, class, .. }) => {
+                // A stop from the gateway's authoritative copy while the reply ran: the kill switch or this user's pause.
+                let stop = match code.as_str() {
+                    "kill_switch" => Some(KILLED),
+                    "user_paused" => Some(PAUSED),
+                    _ => None,
+                };
+                if let Some(message) = stop {
+                    return Ended::Failed(Failed { code, message: message.into(), usage });
+                }
                 let message = match class {
                     FailureClass::AuthFailed => "The provider did not accept its key. The administrator has been told.",
                     FailureClass::Retryable => "The provider could not answer right now. Try again in a moment.",
@@ -1099,6 +1138,7 @@ fn start_next(state: &Arc<AppState>, space: &Arc<Space>, conversation_id: &str) 
 }
 
 const KILLED: &str = "Generations were switched off by the administrator.";
+const PAUSED: &str = "Replies are paused for you by the administrator. Your message is kept; send it again when they are back.";
 /// What a failed question says when the provider failed; its own words stay sealed in the audit.
 const PROVIDER_FAILED: &str = "The provider could not answer.";
 const STOPPED: &str = "The reply stopped unexpectedly.";

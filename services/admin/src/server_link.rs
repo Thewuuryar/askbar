@@ -174,6 +174,11 @@ pub fn build_snapshot(conn: &rusqlite::Connection) -> rusqlite::Result<Snapshot>
         let ids = stmt.query_map([], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
         ids
     };
+    let paused_user_ids = {
+        let mut stmt = conn.prepare("SELECT id FROM users WHERE paused = 1 ORDER BY id")?;
+        let ids = stmt.query_map([], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
+        ids
+    };
     let (daily, monthly, kill): (Option<i64>, Option<i64>, i64) =
         conn.query_row("SELECT daily_tokens, monthly_tokens, kill_switch FROM budgets WHERE id = 1", [], |r| {
             Ok((r.get(0)?, r.get(1)?, r.get(2)?))
@@ -194,6 +199,7 @@ pub fn build_snapshot(conn: &rusqlite::Connection) -> rusqlite::Result<Snapshot>
         user_display_defaults,
         pair_codes,
         revoked_client_ids,
+        paused_user_ids,
         budget: Budget { daily_tokens: daily.map(|v| v as u64), monthly_tokens: monthly.map(|v| v as u64) },
         kill_switch: kill != 0,
         // Absent means the safer default: the switch really stops running replies.

@@ -610,6 +610,7 @@ components:
           - queue_full
           - budget_exceeded
           - kill_switch
+          - user_paused
           - audit_key_missing
           - audit_backlog
           - client_too_old

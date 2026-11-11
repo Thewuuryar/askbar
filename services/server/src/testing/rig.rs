@@ -154,6 +154,7 @@ impl Rig {
                 temperature: p.temperature,
                 headers: p.headers.clone(),
                 api_key: keys.get(&p.id).cloned().unwrap_or_default(),
+                billing: p.billing,
             })
             .collect();
         let config = GatewayConfig {
@@ -161,6 +162,10 @@ impl Rig {
             providers,
             audit_public_key: snap.audit_public_key,
             generation_timeout_secs: snap.generation_timeout_secs,
+            budget: snap.budget,
+            kill_switch: snap.kill_switch,
+            kill_switch_aborts_running: snap.kill_switch_aborts_running,
+            paused_users: snap.paused_user_ids,
         };
         self.gateway.apply_config(&config).expect("the snapshot makes a usable gateway configuration");
     }
