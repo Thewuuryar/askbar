@@ -13,8 +13,7 @@ info:
     holds only its SHA-256, in a file it mounts read-only, read on every request. A missing or unreadable
     hash file refuses everything (fail closed).
 
-    Every error is a problem (`application/problem+json`). See [docs/architecture.md](../architecture.md)
-    and, for the audit endpoints, [docs/wire-contract.md](../wire-contract.md).
+    Every error is a problem (`application/problem+json`). See [docs/architecture.md](../architecture.md).
 servers:
   - url: http://server-api-host:8082
     description: The server's address on the internal network, as set in compose.yaml.
@@ -243,146 +242,6 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '500':
           $ref: '#/components/responses/Internal'
-  /api/server/v1/audit/traces:
-    get:
-      operationId: listTraces
-      summary: One summary per generation, newest first. Metadata only.
-      parameters:
-        - name: status
-          in: query
-          description: Filter on the turn's status.
-          schema:
-            type: string
-        - name: provider
-          in: query
-          description: Filter on the provider of the last attempt.
-          schema:
-            type: string
-        - name: before
-          in: query
-          description: A trace id; only older traces (for paging).
-          schema:
-            type: string
-        - name: limit
-          in: query
-          schema:
-            type: integer
-            minimum: 1
-            maximum: 200
-            default: 50
-      responses:
-        '200':
-          description: Traces.
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [traces]
-                properties:
-                  traces:
-                    type: array
-                    items:
-                      type: object
-                      description: Trace id, status, times, user and client ids, token counts, error code, provider, model, time to first token, latency and cost (null when a needed price is missing).
-                      additionalProperties: true
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '503':
-          $ref: '#/components/responses/NoAudit'
-  /api/server/v1/audit/traces/{id}:
-    get:
-      operationId: getTrace
-      summary: Every span of one generation, in the order they began.
-      parameters:
-        - name: id
-          in: path
-          required: true
-          description: The generation id.
-          schema:
-            type: string
-      responses:
-        '200':
-          description: The spans.
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [trace_id, spans]
-                properties:
-                  trace_id:
-                    type: string
-                  cost:
-                    type: [number, 'null']
-                  spans:
-                    type: array
-                    items:
-                      type: object
-                      description: Span id, parent, kind (turn, gate, attempt, tool, agent_step), name, status, times, provider, model, token counts, time to first token, error code, user and client ids, cost, and `attrs`.
-                      additionalProperties: true
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '503':
-          $ref: '#/components/responses/NoAudit'
-  /api/server/v1/audit/stats:
-    get:
-      operationId: getStats
-      summary: Counts, error rate, latency percentiles, tokens and cost since a time.
-      parameters:
-        - name: since
-          in: query
-          description: Unix seconds. Default is the last 24 hours.
-          schema:
-            type: integer
-      responses:
-        '200':
-          description: Statistics.
-          content:
-            application/json:
-              schema:
-                type: object
-                description: since, requests, by_status, error_rate, latency_ms and ttft_ms (p50, p95), tokens, cost, cost_unknown_requests, by_provider, by_day.
-                additionalProperties: true
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '503':
-          $ref: '#/components/responses/NoAudit'
-  /api/server/v1/audit/payloads/{span_id}:
-    get:
-      operationId: getPayloads
-      summary: The sealed content of one span, as ciphertext only.
-      description: The server holds only the public half of the audit key and cannot open these. `role` is `request`, `reply` or `error`.
-      parameters:
-        - name: span_id
-          in: path
-          required: true
-          schema:
-            type: string
-      responses:
-        '200':
-          description: Sealed payloads (empty if nothing is sealed for the span).
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  type: object
-                  required: [role, key_id, ciphertext_b64]
-                  properties:
-                    role:
-                      type: string
-                      enum: [request, reply, error]
-                    key_id:
-                      type: string
-                    ciphertext_b64:
-                      type: string
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '503':
-          $ref: '#/components/responses/NoAudit'
 components:
   securitySchemes:
     serverToken:
@@ -417,12 +276,6 @@ components:
             $ref: '#/components/schemas/Problem'
     Internal:
       description: The server failed (`internal`).
-      content:
-        application/problem+json:
-          schema:
-            $ref: '#/components/schemas/Problem'
-    NoAudit:
-      description: No audit store is recording on this server (`setup_required`).
       content:
         application/problem+json:
           schema:

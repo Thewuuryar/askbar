@@ -132,7 +132,8 @@ mod tests {
 
     #[test]
     fn prices_come_from_the_snapshot_provider_and_anthropic_input_excludes_cached() {
-        let mut p = crate::testing::provider("p", "p", "http://x", "m");
+        let mut p: askbar_proto::SnapshotProvider =
+            serde_json::from_value(serde_json::json!({ "id": "p", "name": "p", "type": "openai", "model": "m" })).unwrap();
         p.price_in = Some(1.0);
         let prices = Prices::of(&p);
         assert_eq!((prices.input, prices.output, prices.includes_cached), (Some(1.0), None, true));

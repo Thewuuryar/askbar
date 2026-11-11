@@ -88,7 +88,7 @@ if [ -z "$URL" ]; then
   # The admin service: its own database and secrets, a unix socket and no TCP port.
   ASKBAR_ADMIN_SOCKET="$SOCK" ASKBAR_ADMIN_DATA_DIR="$WORK/admin-data" ASKBAR_ADMIN_SECRETS_DIR="$WORK/admin-secrets" \
     ASKBAR_ADMIN_TOKEN_DIR="$WORK/credentials/admin-token" ASKBAR_SERVER_API_URL="http://127.0.0.1:$SERVER_API_PORT" ASKBAR_PUBLIC_URL="$URL" \
-    ASKBAR_GATEWAY_URL="http://127.0.0.1:$GW_ADMIN_PORT" "$ABIN" >"$WORK/admin.log" 2>&1 & PIDS+=($!)
+    ASKBAR_GATEWAY_URL="http://127.0.0.1:$GW_ADMIN_PORT" ASKBAR_AUDIT_API_URL="http://127.0.0.1:$AUDIT_PORT" "$ABIN" >"$WORK/admin.log" 2>&1 & PIDS+=($!)
   for _ in $(seq 100); do [ -S "$SOCK" ] && break; sleep 0.1; done
   # The server: the API, and a server listener that only the admin's token opens.
   ASKBAR_CLIENT_API_ADDR="127.0.0.1:$API_PORT" \

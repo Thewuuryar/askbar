@@ -138,14 +138,9 @@ async fn main() {
     let state = askbar_server::AppState::new(db, askbar_server::MIN_CLIENT);
     tokio::spawn(audit_client.clone().hello_until_done(state.boot_id.as_str().to_string()));
     tokio::spawn(audit_client.clone().drain_forever());
-    let state = state
-        .with_spaces(spaces)
-        .with_audit(askbar_server::audit::Recorder::new(audit_client))
-        .with_gateway(askbar_server::gateway::GatewayClient::new(
-            &env_url("ASKBAR_GATEWAY_URL", "http://gateway-server-host:8084"),
-            token_dir.clone(),
-        ))
-        .with_audit_reader(askbar_server::audit::AuditReader::new(&audit_url, token_dir));
+    let state = state.with_spaces(spaces).with_audit(askbar_server::audit::Recorder::new(audit_client)).with_gateway(
+        askbar_server::gateway::GatewayClient::new(&env_url("ASKBAR_GATEWAY_URL", "http://gateway-server-host:8084"), token_dir),
+    );
     tokio::spawn(stop_on_signal(state.clone()));
     // POST /api/server/v1/restart saves running replies, as a stop does, then exits (ADR 0005).
     let on_stop = state.clone();

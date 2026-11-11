@@ -195,6 +195,7 @@ Order (owner, 2026-11-08), before phase 2: message actions on hover with the mod
 
 **2.5 `refactor(admin): read the audit trail from the auditor`** (M)
 - Admin Audit tab reads via the admin read token; remove `/api/server/v1/audit/*` and its OpenAPI paths.
+- **Built so (2026-11-11): the admin reads the auditor.** The plan's PR H, under [ADR 0051](adr/0051-auditor.md). **Admin:** `auditor_link.rs` holds the read token and the URL (`ASKBAR_AUDIT_API_URL`, default `http://auditor:8083`); the Audit routes pass on only the query parameters they know, price the figures with the admin's providers (`cost.rs` and `audit_read.rs`, moved from the server) and answer `503` when the auditor is away. The retention setting goes to the auditor every 30 seconds and after a change. **Gone:** the server's `/audit/*` routes and OpenAPI paths, `AuditReader`, `cost.rs`, the server's audit tests, and the `server-auditor-read` link (`bootstrap`, the auditor's route set, the rig, the isolation list). **Still on the server:** provider health. **Tests:** `audit_reads.rs` in the admin; the binary test and `install_for_tests` now need the admin's read token. **Not done:** the chain (2.6) and the admin's own records (2.7).
 
 **2.6 `feat(auditor): hash chain and chain-head check`** (M) — [ADR 0025](adr/0025-audit-record-reliability.md), 0016
 - Each record carries the previous hash; admin stores the head periodically and flags rollback/edit; tamper test.

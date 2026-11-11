@@ -16,7 +16,6 @@ const SERVER: &str = "server-auditor";
 const GATEWAY: &str = "model-gateway-auditor";
 const ADMIN_APPEND: &str = "admin-auditor-append";
 const ADMIN_READ: &str = "admin-auditor-read";
-const SERVER_READ: &str = "server-auditor-read";
 
 struct T {
     url: String,
@@ -48,7 +47,7 @@ async fn start_with(limits: Limits) -> T {
     let dir = std::env::temp_dir().join(format!("askbar-auditor-{}", ulid::Ulid::new()));
     let accept = dir.join("tokens/accept");
     std::fs::create_dir_all(&accept).unwrap();
-    for link in [SERVER, GATEWAY, ADMIN_APPEND, ADMIN_READ, SERVER_READ] {
+    for link in [SERVER, GATEWAY, ADMIN_APPEND, ADMIN_READ] {
         std::fs::write(accept.join(format!("{link}.sha256")), format!("{}\n", hex(&token(link)))).unwrap();
     }
     let recorder = Recorder::spawn(AuditDb::open(&dir.join("data/audit.db")).unwrap(), limits.max_queued);
@@ -187,25 +186,8 @@ async fn each_link_may_call_only_its_own_routes_and_anything_else_is_403() {
     ] {
         assert_eq!(t.as_(ADMIN_READ, m.clone(), p, Some(json!({}))).await.status, 403, "admin read {m} {p}");
     }
-    // The server's read token (temporary, until the admin reads the audit store itself): the Audit pages' reads, no
-    // append, and nothing of the admin's own records, retention or prunes.
-    for p in ["/traces", "/stats", "/token-counts", "/status"] {
-        ok(t.as_(SERVER_READ, M::GET, p, None).await, 200, p);
-    }
-    for (m, p) in [
-        (M::POST, "/spans"),
-        (M::POST, "/hello"),
-        (M::POST, "/admin-actions"),
-        (M::POST, "/spans/g1/finish"),
-        (M::GET, "/admin-actions"),
-        (M::GET, "/prunes"),
-        (M::GET, "/retention"),
-        (M::PUT, "/retention"),
-    ] {
-        assert_eq!(t.as_(SERVER_READ, m.clone(), p, Some(json!({}))).await.status, 403, "server read {m} {p}");
-    }
     // Nothing deletes or changes a record: there is no such route for any token.
-    for link in [SERVER, GATEWAY, ADMIN_APPEND, ADMIN_READ, SERVER_READ] {
+    for link in [SERVER, GATEWAY, ADMIN_APPEND, ADMIN_READ] {
         for (m, p) in [
             (M::DELETE, "/spans/g1"),
             (M::PUT, "/spans/g1"),

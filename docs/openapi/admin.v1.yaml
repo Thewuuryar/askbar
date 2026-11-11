@@ -975,7 +975,7 @@ paths:
   /api/admin/v1/audit/traces:
     get:
       operationId: listTraces
-      summary: One summary per generation, newest first (from the server API; metadata only).
+      summary: One summary per generation, newest first (from the auditor; metadata only).
       security:
         - adminSession: []
         - adminApiKey: []
@@ -989,8 +989,8 @@ paths:
                 additionalProperties: true
         '401':
           $ref: '#/components/responses/Unauthorized'
-        '502':
-          $ref: '#/components/responses/ServerUnavailable'
+        '503':
+          $ref: '#/components/responses/AuditorUnavailable'
   /api/admin/v1/audit/traces/{id}:
     parameters:
       - name: id
@@ -1016,8 +1016,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
-        '502':
-          $ref: '#/components/responses/ServerUnavailable'
+        '503':
+          $ref: '#/components/responses/AuditorUnavailable'
   /api/admin/v1/audit/stats:
     get:
       operationId: getStats
@@ -1035,8 +1035,8 @@ paths:
                 additionalProperties: true
         '401':
           $ref: '#/components/responses/Unauthorized'
-        '502':
-          $ref: '#/components/responses/ServerUnavailable'
+        '503':
+          $ref: '#/components/responses/AuditorUnavailable'
   /api/admin/v1/audit/provider-health:
     get:
       operationId: getProviderHealth
@@ -1165,8 +1165,8 @@ paths:
           $ref: '#/components/responses/NotFound'
         '429':
           $ref: '#/components/responses/TooMany'
-        '502':
-          $ref: '#/components/responses/ServerUnavailable'
+        '503':
+          $ref: '#/components/responses/AuditorUnavailable'
 components:
   securitySchemes:
     adminSession:
@@ -1223,6 +1223,12 @@ components:
             $ref: '#/components/schemas/Problem'
     ServerUnavailable:
       description: The admin cannot reach the Askbar server (`server_unavailable`); nothing was changed.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    AuditorUnavailable:
+      description: The admin cannot reach the auditor, so the audit trail cannot be read now (`setup_required`); nothing was changed.
       content:
         application/problem+json:
           schema:

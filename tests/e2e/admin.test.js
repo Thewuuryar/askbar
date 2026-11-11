@@ -81,7 +81,7 @@ async function waitForPort(port) {
   run(path.join(ROOT, 'target/debug/askbar-admin'), [], {
     ASKBAR_ADMIN_SOCKET: sock, ASKBAR_ADMIN_DATA_DIR: dirs.adminData, ASKBAR_ADMIN_SECRETS_DIR: dirs.adminSecrets,
     ASKBAR_ADMIN_TOKEN_DIR: path.join(dirs.creds, 'admin-token'), ASKBAR_SERVER_API_URL: 'http://127.0.0.1:' + serverApiPort,
-    ASKBAR_GATEWAY_URL: 'http://127.0.0.1:' + gatewayAdminPort,
+    ASKBAR_GATEWAY_URL: 'http://127.0.0.1:' + gatewayAdminPort, ASKBAR_AUDIT_API_URL: 'http://127.0.0.1:' + auditPort,
     ASKBAR_PUBLIC_URL: 'http://localhost:' + api,
     ASKBAR_CPA_CONFIG_DIR: path.join(data, 'cpa-config'), ASKBAR_CPA_URL: 'http://127.0.0.1:' + await freePort(),
   });
@@ -1122,10 +1122,10 @@ async function waitForPort(port) {
     await page.waitForSelector('#app:not([hidden])');
     await page.waitForSelector('#offline:not([hidden])');
   });
-  await step('audit: with the server away the tab explains instead of failing, and the views are still there', async () => {
+  await step('audit: with the server away the trail still reads from the auditor, and the views are there', async () => {
     await openPage('audit');
-    await page.waitForSelector('#audit-error:not([hidden])');
-    assert.match(await page.innerText('#audit-error'), /server is offline/i);
+    await page.waitForSelector('#audit-overview');
+    assert.equal(await page.isHidden('#audit-error'), true, 'the auditor is up, so there is nothing to explain');
     for (const sub of ['overview', 'requests', 'trace', 'routing', 'content']) {
       await page.click(`#audit-nav [data-sub="${sub}"]`);
       assert.equal(await page.isVisible(`#audit-${sub}`), true, sub);

@@ -716,14 +716,22 @@ pub async fn setup_audit_key(State(state): St, ApiJson(b): ApiJson<SetupAuditKey
 /// Query keys the audit endpoints understand; anything else is dropped rather than passed on.
 const AUDIT_QUERY_KEYS: [&str; 5] = ["status", "provider", "before", "limit", "since"];
 
-/// Asks the server's server API for `path` (one of its `/api/server/v1/audit/...` endpoints) with
-/// the allowed query parameters, and hands back what it answered. The admin never reads
-/// `audit.db` itself and never pushes anything about it: it only pulls, and only metadata.
-async fn audit_get(
+/// The retention the admin has set, in days (30 until it is changed).
+pub fn audit_retention_days(conn: &Connection) -> u32 {
+    setting(conn, "audit_retention_days").and_then(|s| s.trim().parse().ok()).unwrap_or(30)
+}
+
+fn auditor(state: &AdminState) -> Result<&Arc<crate::auditor_link::AuditorLink>, Failure> {
+    state.auditor.get().ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "No link to the auditor is set up."))
+}
+
+/// One read of the audit store, through the auditor (ADR 0051): the whitelisted query parameters only, and what it
+/// answered. The admin never reads `audit.db` itself and never pushes anything about it but the retention.
+async fn audit_read(
     state: &AdminState,
     path: &str,
     query: &std::collections::HashMap<String, String>,
-) -> Result<Json<serde_json::Value>, Failure> {
+) -> Result<serde_json::Value, Failure> {
     let mut url = reqwest::Url::parse("http://x/").map_err(internal)?;
     url.set_path(path);
     {
@@ -738,23 +746,32 @@ async fn audit_get(
         Some(q) => format!("{}?{q}", url.path()),
         None => url.path().to_string(),
     };
-    let (status, body) = link(state)?.request(reqwest::Method::GET, &target, None).await.map_err(from_push)?;
-    match status {
-        200 => serde_json::from_slice(&body).map(Json).map_err(internal),
-        404 => Err(err(StatusCode::NOT_FOUND, &server_detail(&body).unwrap_or_else(|| "No such trace.".into()))),
-        503 => Err(err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            &server_detail(&body).unwrap_or_else(|| "The server has no audit store recording.".into()),
-        )),
-        s => Err(err(StatusCode::BAD_GATEWAY, &format!("The server answered {s}."))),
+    match auditor(state)?.get(&target).await {
+        Some((200, body)) => Ok(body),
+        Some((404, _)) => Err(err(StatusCode::NOT_FOUND, "No such record.")),
+        Some(_) | None => {
+            Err(err(StatusCode::SERVICE_UNAVAILABLE, "The auditor cannot be reached, so the audit trail cannot be read now."))
+        }
     }
+}
+
+/// The providers as they are now, for prices: read per request, so a corrected price changes every figure at once.
+async fn price_of(state: &AdminState) -> Result<impl Fn(&str) -> Option<crate::cost::Prices>, Failure> {
+    let providers = {
+        let db = state.db.lock().await;
+        build_snapshot(db.conn()).map_err(internal)?.providers
+    };
+    Ok(crate::audit_read::price_lookup(providers))
 }
 
 pub async fn audit_traces(
     State(state): St,
     axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, Failure> {
-    audit_get(&state, &askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/audit/traces"), &q).await
+    let mut rows = audit_read(&state, "/traces", &q).await?;
+    let price_of = price_of(&state).await?;
+    rows.as_array_mut().into_iter().flatten().for_each(|r| crate::audit_read::add_cost(r, &price_of));
+    Ok(Json(serde_json::json!({ "traces": rows })))
 }
 
 pub async fn audit_trace(State(state): St, Path(id): Path<String>) -> Result<Json<serde_json::Value>, Failure> {
@@ -762,12 +779,30 @@ pub async fn audit_trace(State(state): St, Path(id): Path<String>) -> Result<Jso
     if id.is_empty() || id.len() > 64 || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
         return Err(err(StatusCode::NOT_FOUND, "No such trace."));
     }
-    audit_get(&state, &format!("{}/audit/traces/{id}", askbar_proto::paths::SERVER_V1), &Default::default()).await
+    let mut spans = audit_read(&state, &format!("/traces/{id}"), &Default::default()).await?;
+    let list = spans.as_array_mut().filter(|l| !l.is_empty()).ok_or_else(|| err(StatusCode::NOT_FOUND, "No such trace."))?;
+    let price_of = price_of(&state).await?;
+    // Each attempt is priced by its own provider; the trace as a whole by the provider that served it.
+    list.iter_mut().for_each(|s| crate::audit_read::add_cost(s, &price_of));
+    let final_provider = list.iter().rev().find(|s| s["kind"] == "attempt").and_then(|s| s["provider_id"].as_str().map(str::to_string));
+    let mut cost = None;
+    if let Some(turn) = list.iter().find(|s| s["kind"] == "turn") {
+        let n = |k: &str| turn[k].as_i64();
+        cost = crate::cost::cost_of(&price_of, final_provider.as_deref(), n("tokens_in"), n("tokens_out"), n("tokens_cached"));
+    }
+    Ok(Json(serde_json::json!({ "trace_id": id, "cost": cost, "spans": spans })))
 }
 
-/// Providers the router found unusable (bad credentials), from the server.
+/// Providers the gateway found unusable (bad credentials), from the server.
 pub async fn audit_provider_health(State(state): St) -> Result<Json<serde_json::Value>, Failure> {
-    audit_get(&state, &askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/providers/health"), &Default::default()).await
+    let (status, body) = link(&state)?
+        .request(reqwest::Method::GET, &askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/providers/health"), None)
+        .await
+        .map_err(from_push)?;
+    match status {
+        200 => serde_json::from_slice(&body).map(Json).map_err(internal),
+        s => Err(err(StatusCode::BAD_GATEWAY, &format!("The server answered {s}."))),
+    }
 }
 
 #[derive(Deserialize)]
@@ -800,7 +835,9 @@ pub async fn audit_stats(
     State(state): St,
     axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, Failure> {
-    audit_get(&state, &askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/audit/stats"), &q).await
+    let v = audit_read(&state, "/stats", &q).await?;
+    let price_of = price_of(&state).await?;
+    Ok(Json(crate::audit_read::price_stats(v, &price_of)))
 }
 
 // ------------------------------------------------------------------ rotation
@@ -878,7 +915,7 @@ pub struct OpenRequest {
 }
 
 /// `POST /api/admin/v1/audit/payloads/{span_id}/open`: fetch the sealed content of one span from the
-/// server, derive the key from the passphrase in the body, open it, and drop the key. The
+/// auditor, derive the key from the passphrase in the body, open it, and drop the key. The
 /// passphrase is never stored or logged. Before any content is returned an `audit_access` row is
 /// written; a wrong passphrase is recorded too, answers 403, and is rate limited (429).
 pub async fn open_audit_payloads(
@@ -893,16 +930,17 @@ pub async fn open_audit_payloads(
         return Err(err(StatusCode::TOO_MANY_REQUESTS, &format!("Too many wrong passphrases. Try again in {} minutes.", (wait + 59) / 60))
             .retry_after(wait.max(1) as u64));
     }
-    let (status, body) = link(&state)?
-        .request(reqwest::Method::GET, &format!("{}/audit/payloads/{span_id}", askbar_proto::paths::SERVER_V1), None)
-        .await
-        .map_err(from_push)?;
-    match status {
-        200 => {}
-        404 => return Err(err(StatusCode::NOT_FOUND, "No such span.")),
-        s => return Err(err(StatusCode::BAD_GATEWAY, &format!("The server answered {s}."))),
+    if span_id.is_empty() || span_id.len() > 64 || !span_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        return Err(err(StatusCode::NOT_FOUND, "No such span."));
     }
-    let list: Vec<serde_json::Value> = serde_json::from_slice(&body).map_err(internal)?;
+    let body = match auditor(&state)?.get(&format!("/spans/{span_id}/payloads")).await {
+        Some((200, body)) => body,
+        Some((404, _)) => return Err(err(StatusCode::NOT_FOUND, "No such span.")),
+        Some(_) | None => {
+            return Err(err(StatusCode::SERVICE_UNAVAILABLE, "The auditor cannot be reached, so the sealed content cannot be read now."))
+        }
+    };
+    let list: Vec<serde_json::Value> = serde_json::from_value(body).map_err(internal)?;
     if list.is_empty() {
         return Ok(Json(serde_json::json!({ "span_id": span_id, "payloads": [] })));
     }
@@ -1088,6 +1126,10 @@ pub async fn put_settings(State(state): St, ApiJson(s): ApiJson<AdminSettings>) 
         Ok(())
     })
     .await?;
+    // The auditor keeps the records for as long as this says: give it the setting now, not at its next round.
+    if let Some(a) = state.auditor.get() {
+        a.mark_dirty();
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 

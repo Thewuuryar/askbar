@@ -39,6 +39,8 @@ pub struct Rig {
     /// What the auditor thinks its disk has free; set low to make it refuse new spans.
     pub free: Arc<AtomicU64>,
     server_tokens: PathBuf,
+    /// The admin's token directory: its `admin-auditor-read` token, for tests of the admin's Audit pages.
+    pub admin_tokens: PathBuf,
     /// The key to give the gateway for each provider (the server holds none; ADR 0054).
     keys: std::sync::Mutex<std::collections::BTreeMap<String, String>>,
 }
@@ -53,7 +55,8 @@ impl Rig {
     pub async fn start() -> Rig {
         let dir = std::env::temp_dir().join(format!("askbar-rig-{}", crate::ids::new_id()));
         let (audit_tokens, gw_tokens, server_tokens) = (dir.join("audit-token"), dir.join("gateway-token"), dir.join("server-token"));
-        for d in [&audit_tokens, &gw_tokens, &server_tokens] {
+        let admin_tokens = dir.join("admin-token");
+        for d in [&audit_tokens, &gw_tokens, &server_tokens, &admin_tokens] {
             std::fs::create_dir_all(d.join("accept")).unwrap();
             std::fs::create_dir_all(d.join("call")).unwrap();
         }
@@ -64,9 +67,9 @@ impl Rig {
             std::fs::write(token_dir.join("call").join(format!("{name}.token")), format!("{token}\n")).unwrap();
         };
         link("server-auditor", &audit_tokens, &server_tokens);
-        link("server-auditor-read", &audit_tokens, &server_tokens);
         link("model-gateway-auditor", &audit_tokens, &gw_tokens);
         link("server-model-gateway", &gw_tokens, &server_tokens);
+        link("admin-auditor-read", &audit_tokens, &admin_tokens);
 
         let limits = Limits::default();
         let recorder = Recorder::spawn(AuditDb::open(&dir.join("audit/audit.db")).unwrap(), limits.max_queued);
@@ -88,7 +91,7 @@ impl Rig {
             assert!(Instant::now() < deadline, "the gateway never said hello");
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        Rig { dir, auditor, audit_url, gateway, gateway_url, free, server_tokens, keys: Default::default() }
+        Rig { dir, auditor, audit_url, gateway, gateway_url, free, server_tokens, admin_tokens, keys: Default::default() }
     }
 
     /// A state like the old `state_with_audit`: an in-memory database with the provider "p1" at `base_url` (its key
@@ -122,10 +125,7 @@ impl Rig {
         }
         // `flush` waits for the gateway's records too: a reply's spans come from both.
         let recorder = crate::audit::Recorder::new(client).also_flush(self.gateway.audit().clone());
-        state
-            .with_audit(recorder)
-            .with_gateway(crate::gateway::GatewayClient::new(&self.gateway_url, self.server_tokens.clone()))
-            .with_audit_reader(crate::audit::AuditReader::new(&self.audit_url, self.server_tokens.clone()))
+        state.with_audit(recorder).with_gateway(crate::gateway::GatewayClient::new(&self.gateway_url, self.server_tokens.clone()))
     }
 
     /// Remember `key` as the one to give the gateway for provider `id`, at the next `sync`.

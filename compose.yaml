@@ -106,6 +106,8 @@ services:
       ASKBAR_SERVER_API_URL: http://server-api-host:8082
       # model-gateway's listener for the admin, on gateway-admin (ADR 0054): the admin gives it the provider keys.
       ASKBAR_GATEWAY_URL: http://gateway-admin-host:8084
+      # The auditor, on audit-admin (ADR 0051): the Audit pages read it with the admin's read token.
+      ASKBAR_AUDIT_API_URL: http://auditor:8083
       ASKBAR_PUBLIC_URL: ${ASKBAR_PUBLIC_URL:-}
     networks:
       server-api: {}

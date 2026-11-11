@@ -181,40 +181,6 @@ impl Recorder {
     }
 }
 
-/// How the Audit pages read the audit store while the server still serves them (plan step 3.1, until step 2.5 moves them
-/// to the admin): `GET`s to the auditor with the server's read token.
-pub struct AuditReader {
-    http: reqwest::Client,
-    base: String,
-    token_dir: std::path::PathBuf,
-}
-
-/// The link the read token belongs to, as `bootstrap` names it.
-pub const READ_LINK: &str = "server-auditor-read";
-
-impl AuditReader {
-    pub fn new(base: &str, token_dir: std::path::PathBuf) -> Arc<AuditReader> {
-        Arc::new(AuditReader {
-            http: reqwest::Client::builder()
-                .connect_timeout(std::time::Duration::from_secs(2))
-                .timeout(std::time::Duration::from_secs(10))
-                .build()
-                .expect("reqwest client"),
-            base: base.trim_end_matches('/').to_string(),
-            token_dir,
-        })
-    }
-
-    /// `GET /api/audit/v1{path_and_query}`: the status and the JSON body, or `None` if nothing answered.
-    pub async fn get(&self, path_and_query: &str) -> Option<(u16, serde_json::Value)> {
-        let token = std::fs::read_to_string(self.token_dir.join("call").join(format!("{READ_LINK}.token"))).ok()?;
-        let url = format!("{}{}{path_and_query}", self.base, askbar_proto::paths::AUDIT_V1);
-        let resp = self.http.get(url).bearer_auth(token.trim()).send().await.ok()?;
-        let status = resp.status().as_u16();
-        Some((status, resp.json().await.unwrap_or(serde_json::Value::Null)))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
