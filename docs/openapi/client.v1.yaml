@@ -94,25 +94,32 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '426':
           $ref: '#/components/responses/TooOld'
-  /api/client/v1/providers:
+  /api/client/v1/models:
     get:
-      operationId: listProviders
-      summary: The providers this app may use, the default first. Keys never appear.
+      operationId: listModels
+      summary: The approved models and the default. Keys never appear.
+      description: >-
+        What the administrator approved (ADR 0014), as the model gateway serves it. An install that has approved nothing
+        yet answers with an empty list and no default, and no send is accepted until it does.
       parameters:
         - $ref: '#/components/parameters/ClientVersion'
       responses:
         '200':
-          description: Providers.
+          description: The models.
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/ProviderInfo'
+                $ref: '#/components/schemas/ModelList'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '426':
           $ref: '#/components/responses/TooOld'
+        '503':
+          description: The model gateway has no settings yet (`not_configured`) or does not answer (`server_unavailable`).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
   /api/client/v1/spaces:
     get:
       operationId: listSpaces
@@ -350,7 +357,8 @@ paths:
         `GET /spaces/{space_id}/generations/{id}/stream?after=N`. `client_request_id` makes a repeat send from
         the same client in the same space attach to the first instead of starting a second.
 
-        Before anything starts the server may refuse, with a problem: 409 `queue_full` (five messages
+        Before anything starts the server may refuse, with a problem: 400 `model_not_approved` (the model is not in the
+        catalog, or nothing is approved yet), 409 `queue_full` (five messages
         already wait), 429 `budget_exceeded` (`period`: daily or monthly), 503 `kill_switch`, 403 `user_paused` (the administrator
         paused replies for this user), 503
         `audit_key_missing`, 503 `audit_backlog` (with `Retry-After: 5`). The typed text is never lost; the app keeps it.
@@ -367,7 +375,11 @@ paths:
         '200':
           $ref: '#/components/responses/EventStream'
         '400':
-          $ref: '#/components/responses/BadRequest'
+          description: The message is empty (`bad_request`), or the model is not approved (`model_not_approved`). Their message is kept.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
@@ -582,6 +594,7 @@ components:
           - budget_exceeded
           - kill_switch
           - user_paused
+          - model_not_approved
           - audit_key_missing
           - audit_backlog
           - client_too_old
@@ -622,20 +635,30 @@ components:
         token:
           type: string
           description: Starts with `abt_`. Shown once.
-    ProviderInfo:
+    ModelChoice:
       type: object
-      required: [id, name, type, model]
+      required: [id, provider_id, provider_name, model]
       properties:
         id:
           type: string
-          description: Stable. Chats and preferences refer to a provider by this, never by name.
-        name:
+          description: "`provider/model`: the provider's id, a slash, and the model's own name (which may contain slashes). Chats and preferences refer to a model by this, never by name."
+        provider_id:
           type: string
-        type:
+        provider_name:
           type: string
-          enum: [openai, anthropic]
         model:
           type: string
+    ModelList:
+      type: object
+      required: [models, default]
+      properties:
+        models:
+          type: array
+          items:
+            $ref: '#/components/schemas/ModelChoice'
+        default:
+          type: [string, 'null']
+          description: The model a send that names none uses. Present whenever the list is not empty.
     SpaceInfo:
       type: object
       required: [id, kind, name]
@@ -654,6 +677,9 @@ components:
       properties:
         id:
           type: string
+        model:
+          type: string
+          description: The model (`provider/model`) the latest message asked for, which the picker shows next. Left out until a message has been sent.
         title:
           type: string
         updated_at:
@@ -689,7 +715,7 @@ components:
       properties:
         code:
           type: string
-          enum: [timed_out, interrupted, kill_switch, user_paused, budget_exceeded, provider_error, internal]
+          enum: [timed_out, interrupted, kill_switch, user_paused, model_not_approved, budget_exceeded, provider_error, internal]
         message:
           type: string
     ReplyProvider:
@@ -741,11 +767,11 @@ components:
                 $ref: '#/components/schemas/PendingGeneration'
     Prefs:
       type: object
-      required: [active_provider_id]
+      required: [active_model]
       properties:
-        active_provider_id:
+        active_model:
           type: [string, 'null']
-          description: The provider new chats use; null means the first one listed.
+          description: The model (`provider/model`) new chats use; null means the catalog's default. A model the catalog does not approve is refused (`400 model_not_approved`).
     DisplaySettings:
       type: object
       properties:
@@ -788,14 +814,14 @@ components:
           type: integer
     ChatRequest:
       type: object
-      required: [provider, text]
+      required: [text]
       properties:
         conversation_id:
           type: string
           description: Omit to start a new conversation.
-        provider:
+        model:
           type: string
-          description: A provider id.
+          description: The approved model to answer with, `provider/model`. Omit it and the catalog's default answers.
         text:
           type: string
           description: Not empty.
@@ -850,4 +876,4 @@ components:
               type: string
             code:
               type: string
-              enum: [timed_out, interrupted, kill_switch, user_paused, budget_exceeded, provider_error, internal]
+              enum: [timed_out, interrupted, kill_switch, user_paused, model_not_approved, budget_exceeded, provider_error, internal]

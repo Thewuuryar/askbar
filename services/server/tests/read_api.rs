@@ -1,4 +1,4 @@
-use askbar_proto::{Conversation, ConversationDetail, Prefs, ProviderInfo, SearchHit, Settings};
+use askbar_proto::{Conversation, ConversationDetail, ModelChoice, ModelList, Prefs, SearchHit, Settings};
 use askbar_server::{auth, AppState};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -13,6 +13,7 @@ struct T {
     http: reqwest::Client,
     /// The user's personal space.
     space: String,
+    _rig: askbar_server::testing::Rig,
 }
 
 /// A conversation in `user`'s personal space.
@@ -31,14 +32,17 @@ async fn start() -> T {
     let user = db.seed_server().unwrap();
     askbar_server::testing::add_provider(&db, askbar_server::testing::provider("p1", "mock", "http://x/v1", "m1"));
     let code = askbar_server::testing::add_pair_code(&db, &user, "t");
-    let state = AppState::new(db, askbar_server::MIN_CLIENT);
+    // The catalog comes from the gateway (ADR 0014), so these tests run with one.
+    let rig = askbar_server::testing::Rig::start().await;
+    let state = rig.attach(AppState::new(db, askbar_server::MIN_CLIENT)).await;
+    rig.sync(&state);
     let token = auth::redeem_pair_code(&state.db.lock().unwrap(), &code).unwrap().unwrap();
     let app = askbar_server::client_router(state.clone());
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = l.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
     let space = askbar_server::testing::personal_space(&state, &user).id.clone();
-    T { addr, state, user, token, http: client(), space }
+    T { addr, state, user, token, http: client(), space, _rig: rig }
 }
 
 impl T {
@@ -80,8 +84,14 @@ async fn endpoints_return_scoped_data() {
     let n: i64 = theirs.lock().conn().query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0)).unwrap();
     assert_eq!(n, 1, "other user's rows untouched");
 
-    let providers: Vec<ProviderInfo> = serde_json::from_str(&t.get_text("/api/client/v1/providers").await.1).unwrap();
-    assert_eq!(providers, [ProviderInfo { id: "p1".into(), name: "mock".into(), kind: "openai".into(), model: "m1".into() }]);
+    let models: ModelList = serde_json::from_str(&t.get_text("/api/client/v1/models").await.1).unwrap();
+    assert_eq!(
+        models,
+        ModelList {
+            models: vec![ModelChoice { id: "p1/m1".into(), provider_id: "p1".into(), provider_name: "mock".into(), model: "m1".into() }],
+            default: Some("p1/m1".into()),
+        }
+    );
 }
 
 #[tokio::test]
@@ -112,7 +122,7 @@ async fn no_response_contains_provider_key_material() {
     for p in [
         "/api/client/v1/health",
         "/api/client/v1/me",
-        "/api/client/v1/providers",
+        "/api/client/v1/models",
         &t.sp("/conversations"),
         &t.sp(&format!("/conversations/{c1}")),
         &t.sp("/conversations/nope"),
@@ -130,7 +140,7 @@ async fn no_response_contains_provider_key_material() {
 #[tokio::test]
 async fn read_endpoints_require_a_token() {
     let t = start().await;
-    for p in ["/api/client/v1/providers", &t.sp("/conversations"), &t.sp("/conversations/C1"), "/api/client/v1/settings"] {
+    for p in ["/api/client/v1/models", &t.sp("/conversations"), &t.sp("/conversations/C1"), "/api/client/v1/settings"] {
         let r = t.http.get(format!("http://{}{p}", t.addr)).send().await.unwrap();
         assert_eq!(r.status(), 401, "{p}");
     }
@@ -182,25 +192,21 @@ async fn prefs_are_shared_by_a_users_clients_and_not_by_other_users() {
     };
 
     let put =
-        t.req(reqwest::Method::PUT, "/api/client/v1/me/prefs").json(&Prefs { active_provider_id: Some("p1".into()) }).send().await.unwrap();
+        t.req(reqwest::Method::PUT, "/api/client/v1/me/prefs").json(&Prefs { active_model: Some("p1/m1".into()) }).send().await.unwrap();
     assert_eq!(put.status(), 200);
     for token in [t.token.clone(), second] {
         let p: Prefs = serde_json::from_str(&get(token).await.text().await.unwrap()).unwrap();
-        assert_eq!(p.active_provider_id.as_deref(), Some("p1"), "every client of the user sees it");
+        assert_eq!(p.active_model.as_deref(), Some("p1/m1"), "every client of the user sees it");
     }
     let p: Prefs = serde_json::from_str(&get(other.clone()).await.text().await.unwrap()).unwrap();
     assert_eq!(p, Prefs::default(), "another user does not");
 
-    // An unknown provider is refused and changes nothing; null clears the choice.
-    let bad = t
-        .req(reqwest::Method::PUT, "/api/client/v1/me/prefs")
-        .json(&Prefs { active_provider_id: Some("nope".into()) })
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(bad.status(), 404);
+    // A model the catalog does not approve is refused and changes nothing; null clears the choice.
+    let bad =
+        t.req(reqwest::Method::PUT, "/api/client/v1/me/prefs").json(&Prefs { active_model: Some("p1/nope".into()) }).send().await.unwrap();
+    assert_eq!(bad.status(), 400);
     let still: Prefs = serde_json::from_str(&get(t.token.clone()).await.text().await.unwrap()).unwrap();
-    assert_eq!(still.active_provider_id.as_deref(), Some("p1"));
+    assert_eq!(still.active_model.as_deref(), Some("p1/m1"));
     t.req(reqwest::Method::PUT, "/api/client/v1/me/prefs").json(&Prefs::default()).send().await.unwrap();
     let cleared: Prefs = serde_json::from_str(&get(t.token.clone()).await.text().await.unwrap()).unwrap();
     assert_eq!(cleared, Prefs::default());
@@ -220,7 +226,7 @@ async fn read_api_failures_are_problems_with_a_code_and_a_sentence() {
         (reqwest::Method::GET, t.sp("/generations/nope/stream"), 404, "not_found"),
         (reqwest::Method::POST, t.sp("/generations/nope/cancel"), 404, "not_found"),
         (reqwest::Method::GET, "/api/client/v1/no-such-endpoint".into(), 404, "not_found"),
-        (reqwest::Method::DELETE, "/api/client/v1/providers".into(), 405, "method_not_allowed"),
+        (reqwest::Method::DELETE, "/api/client/v1/models".into(), 405, "method_not_allowed"),
     ];
     for (method, path, status, code) in cases {
         let r = t.req(method.clone(), &path).send().await.unwrap();
@@ -232,10 +238,10 @@ async fn read_api_failures_are_problems_with_a_code_and_a_sentence() {
     }
     let r = t
         .req(reqwest::Method::PUT, "/api/client/v1/me/prefs")
-        .json(&Prefs { active_provider_id: Some("no-such-provider".into()) })
+        .json(&Prefs { active_model: Some("no-such-provider/m".into()) })
         .send()
         .await
         .unwrap();
-    assert_eq!(r.status(), 404);
-    assert_eq!(r.json::<askbar_proto::Problem>().await.unwrap().error, "not_found");
+    assert_eq!(r.status(), 400);
+    assert_eq!(r.json::<askbar_proto::Problem>().await.unwrap().error, "model_not_approved");
 }

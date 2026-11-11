@@ -226,6 +226,9 @@ const MIGRATIONS: &[&str] = &[
          PRIMARY KEY (space_id, user_id)
      );
      CREATE INDEX idx_space_members_user ON space_members(user_id);",
+    // v9: a user's chosen model, `provider/model` from the catalog (ADR 0014), in place of the provider they used to
+    // choose. `active_provider_id` stays in the table, unused.
+    "ALTER TABLE user_prefs ADD COLUMN active_model TEXT;",
 ];
 
 /// A provider whose credentials were refused: its id, status, since when (unix seconds) and error code.

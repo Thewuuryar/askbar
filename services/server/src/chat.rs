@@ -68,6 +68,14 @@ pub async fn chat(
         }
     }
 
+    // The model asked for, or the catalog's default, and it must be approved (the gateway checks again: its copy decides).
+    let list = crate::client_api::catalog(&state).await.map_err(IntoResponse::into_response)?;
+    let wanted = req.model.clone().or_else(|| list.default.clone());
+    let Some(chosen) = wanted.as_deref().and_then(|id| list.models.iter().find(|m| m.id == id)) else {
+        return Err(ApiError::new(ErrorCode::ModelNotApproved, "That model is not approved. Pick another one.").into_response());
+    };
+    let (provider_id, model) = (chosen.provider_id.clone(), chosen.model.clone());
+
     let sub = generation::submit(
         &state,
         generation::Submit {
@@ -75,7 +83,8 @@ pub async fn chat(
             user_id: auth.user_id,
             client_id: auth.client_id,
             conversation_id: req.conversation_id,
-            provider_id: req.provider,
+            provider_id,
+            model,
             prompt: text,
             client_request_id: req.client_request_id,
         },

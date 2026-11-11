@@ -102,18 +102,6 @@ pub fn validate(s: &Snapshot) -> Result<(), String> {
     Ok(())
 }
 
-/// The providers in the order clients should offer them: the default, then the rest by name.
-pub fn in_client_order(s: &Snapshot) -> Vec<askbar_proto::SnapshotProvider> {
-    let mut rest: Vec<_> = s.providers.clone();
-    rest.sort_by(|a, b| a.name.cmp(&b.name));
-    let mut out = Vec::new();
-    if let Some(pos) = s.default_provider_id.as_ref().and_then(|id| rest.iter().position(|p| &p.id == id)) {
-        out.push(rest.remove(pos));
-    }
-    out.extend(rest);
-    out
-}
-
 /// True once the admin service has pushed a snapshot. Cheaper than `current`: nothing is parsed.
 pub fn exists(db: &Db) -> bool {
     db.conn().query_row("SELECT 1 FROM config_snapshot WHERE id = 1", [], |_| Ok(())).optional().ok().flatten().is_some()

@@ -40,7 +40,6 @@ async fn the_client_api_answers_at_its_new_paths() {
     assert_eq!(t.get("/api/client/v1/me").send().await.unwrap().status(), 204, "who am I: a token that is still accepted");
     let s = &t.space;
     for path in [
-        "/api/client/v1/providers".to_string(),
         "/api/client/v1/spaces".to_string(),
         format!("/api/client/v1/spaces/{s}/conversations"),
         "/api/client/v1/me/prefs".to_string(),

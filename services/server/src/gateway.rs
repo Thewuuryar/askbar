@@ -30,6 +30,8 @@ pub enum GatewayError {
     UserPaused,
     /// The gateway refused: a token budget is used up for its period (`daily` or `monthly`).
     BudgetExceeded(String),
+    /// The gateway refused: the model is not in its catalog (the authoritative copy).
+    ModelNotApproved,
     /// The gateway has no such provider (a key was never given to it for one that exists here).
     NoSuchProvider,
     /// The gateway does not accept this server's token, or this server could not read it.
@@ -40,10 +42,15 @@ pub enum GatewayError {
     Other(u16),
 }
 
+/// How long the catalog the gateway gave is used before it is asked again. The gateway checks every send itself, so a
+/// change the administrator makes reaches the server's own check, and the clients' list, within this time.
+const CATALOG_TTL: Duration = Duration::from_secs(5);
+
 pub struct GatewayClient {
     http: reqwest::Client,
     base: String,
     token_dir: PathBuf,
+    catalog: std::sync::Mutex<Option<(std::time::Instant, askbar_proto::ModelList)>>,
 }
 
 impl GatewayClient {
@@ -53,7 +60,38 @@ impl GatewayClient {
             http: reqwest::Client::builder().connect_timeout(Duration::from_secs(3)).build().expect("reqwest client"),
             base: base.trim_end_matches('/').to_string(),
             token_dir,
+            catalog: std::sync::Mutex::new(None),
         })
+    }
+
+    /// The approved models and the default, as the gateway serves them (ADR 0014), kept for `CATALOG_TTL`.
+    pub async fn catalog(&self) -> Result<askbar_proto::ModelList, GatewayError> {
+        if let Some((at, list)) = self.catalog.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+            if at.elapsed() < CATALOG_TTL {
+                return Ok(list.clone());
+            }
+        }
+        let token = self.token().ok_or(GatewayError::Rejected)?;
+        let url = format!("{}{}/catalog", self.base, askbar_proto::paths::MODEL_GATEWAY_V1);
+        let resp =
+            self.http.get(url).bearer_auth(token).timeout(Duration::from_secs(5)).send().await.map_err(|_| GatewayError::Unreachable)?;
+        let status = resp.status().as_u16();
+        if status != 200 {
+            let code = resp.json::<Problem>().await.ok().and_then(|p| p.code());
+            return Err(match (status, code) {
+                (503, Some(askbar_proto::ErrorCode::NotConfigured)) => GatewayError::NotConfigured,
+                (401 | 403, _) => GatewayError::Rejected,
+                (other, _) => GatewayError::Other(other),
+            });
+        }
+        let list: askbar_proto::ModelList = resp.json().await.map_err(|_| GatewayError::Other(status))?;
+        *self.catalog.lock().unwrap_or_else(|e| e.into_inner()) = Some((std::time::Instant::now(), list.clone()));
+        Ok(list)
+    }
+
+    /// Forget the catalog held, so the next question asks the gateway (it said a model is not approved).
+    pub fn forget_catalog(&self) {
+        *self.catalog.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
 
     fn token(&self) -> Option<String> {
@@ -82,6 +120,7 @@ impl GatewayClient {
             return Err(match (status, problem.and_then(|p| p.code())) {
                 (503, Some(askbar_proto::ErrorCode::KillSwitch)) => GatewayError::KillSwitch,
                 (403, Some(askbar_proto::ErrorCode::UserPaused)) => GatewayError::UserPaused,
+                (400, Some(askbar_proto::ErrorCode::ModelNotApproved)) => GatewayError::ModelNotApproved,
                 (429, Some(askbar_proto::ErrorCode::BudgetExceeded)) => GatewayError::BudgetExceeded(period),
                 (503, Some(askbar_proto::ErrorCode::AuditBacklog)) => GatewayError::AuditBacklog,
                 (503, Some(askbar_proto::ErrorCode::NotConfigured)) => GatewayError::NotConfigured,
@@ -135,6 +174,7 @@ mod tests {
     fn request() -> ChatRequest {
         ChatRequest {
             provider_id: "p".into(),
+            model: "m".into(),
             user_id: "u".into(),
             client_id: None,
             space_id: None,

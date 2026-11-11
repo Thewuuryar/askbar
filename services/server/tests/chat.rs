@@ -90,7 +90,8 @@ impl T {
             .bearer_auth(&self.token)
             .json(&ChatRequest {
                 conversation_id: conv.map(String::from),
-                provider: provider.into(),
+                // The tests' providers each approve the model "m"; a test may also pass a model id of its own.
+                model: Some(if provider.contains('/') { provider.to_string() } else { format!("{provider}/m") }),
                 text: text.into(),
                 client_request_id: None,
             })
@@ -357,15 +358,15 @@ async fn a_failed_question_is_not_sent_again_with_the_next_one() {
 async fn bad_requests_are_plain_http_errors() {
     let t = start().await;
     let http = client();
-    assert_eq!(t.chat(&http, None, "nope", "hi").await.status(), 404);
+    assert_eq!(t.chat(&http, None, "nope", "hi").await.status(), 400, "a model the catalog does not approve");
     assert_eq!(t.chat(&http, Some("01NOSUCH"), "p1", "hi").await.status(), 404);
     assert_eq!(t.chat(&http, None, "p1", "   ").await.status(), 400);
-    // Providers are addressed by id; the name "mock" is not accepted in place of one.
-    assert_eq!(t.chat(&http, None, "mock", "hi").await.status(), 404);
+    // Models are addressed by `provider/model` with the provider's id; its name "mock" is not accepted in place of it.
+    assert_eq!(t.chat(&http, None, "mock", "hi").await.status(), 400);
     assert!(t.messages().is_empty());
     let r = http
         .post(format!("http://{}{}", t.addr, t.sp("/chat")))
-        .json(&ChatRequest { conversation_id: None, provider: "p1".into(), text: "hi".into(), client_request_id: None })
+        .json(&ChatRequest { conversation_id: None, model: Some("p1/m".into()), text: "hi".into(), client_request_id: None })
         .send()
         .await
         .unwrap();
@@ -438,7 +439,7 @@ async fn another_user_cannot_read_or_continue_my_conversation() {
             .bearer_auth(&token_b)
             .json(&ChatRequest {
                 conversation_id: Some(conversation_id.clone()),
-                provider: "p1".into(),
+                model: Some("p1/m".into()),
                 text: "intrusion".into(),
                 client_request_id: None,
             })
@@ -794,7 +795,7 @@ async fn two_posts_with_one_client_request_id_make_one_generation_and_one_user_m
                 .bearer_auth(token)
                 .json(&ChatRequest {
                     conversation_id: None,
-                    provider: "p1".into(),
+                    model: Some("p1/m".into()),
                     text: text.into(),
                     client_request_id: Some("req-1".into()),
                 })
@@ -823,7 +824,7 @@ async fn two_posts_with_one_client_request_id_make_one_generation_and_one_user_m
         .bearer_auth(&other)
         .json(&ChatRequest {
             conversation_id: None,
-            provider: "p1".into(),
+            model: Some("p1/m".into()),
             text: "Hello there".into(),
             client_request_id: Some("req-1".into()),
         })
@@ -859,7 +860,7 @@ async fn a_repeat_while_the_reply_runs_attaches_to_it() {
             .bearer_auth(&t.token)
             .json(&ChatRequest {
                 conversation_id: None,
-                provider: "p1".into(),
+                model: Some("p1/m".into()),
                 text: "please be slow".into(),
                 client_request_id: Some("r".into()),
             })

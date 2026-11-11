@@ -24,7 +24,7 @@ async fn status(url: &str, path: &str, version: Option<&str>) -> u16 {
 #[tokio::test]
 async fn too_old_is_426_before_auth_is_even_checked() {
     let url = start(askbar_server::MIN_CLIENT).await;
-    for p in ["/api/client/v1/providers", "/api/client/v1/spaces", "/api/client/v1/me", "/api/client/v1/settings"] {
+    for p in ["/api/client/v1/models", "/api/client/v1/spaces", "/api/client/v1/me", "/api/client/v1/settings"] {
         assert_eq!(status(&url, p, Some("0.2.9")).await, 426, "{p}");
     }
     let r = reqwest::Client::new()
