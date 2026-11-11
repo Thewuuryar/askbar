@@ -588,3 +588,40 @@ async fn the_chain_head_moves_with_every_record_and_a_full_check_finds_an_edit()
     assert_eq!(report["problems"][0]["ref"], "ca");
     assert_eq!(report["head"], head, "the chain itself is whole: only the record was edited");
 }
+
+#[tokio::test]
+async fn a_service_records_the_configuration_version_it_applied_and_only_a_service_may() {
+    let t = start().await;
+    let rec = |id: &str, v: i64| json!({ "id": id, "at": now(), "version": v });
+    assert_eq!(t.as_(SERVER, M::POST, "/config-applied", Some(rec("cfg1", 7))).await.status, 201);
+    assert_eq!(t.as_(GATEWAY, M::POST, "/config-applied", Some(rec("cfg2", 7))).await.status, 201);
+    // The same record again (a retry) is one record.
+    assert_eq!(t.as_(SERVER, M::POST, "/config-applied", Some(rec("cfg1", 7))).await.status, 201);
+    for link in [ADMIN_APPEND, ADMIN_READ] {
+        assert_eq!(t.as_(link, M::POST, "/config-applied", Some(rec("x", 1))).await.status, 403, "{link}");
+    }
+    assert_eq!(t.as_(SERVER, M::POST, "/config-applied", Some(json!({ "id": "bad id!", "at": 1, "version": 1 }))).await.status, 400);
+    assert_eq!(t.as_(SERVER, M::POST, "/config-applied", Some(json!({ "id": "c3", "at": 1 }))).await.status, 400, "no version");
+
+    let rows = t.as_(ADMIN_READ, M::GET, "/admin-actions", None).await.body;
+    let rows = rows.as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+    for r in rows {
+        assert_eq!((r["category"].as_str(), r["action"].as_str(), r["outcome"].as_str()), (Some("config"), Some("applied"), Some("done")));
+        assert_eq!(r["detail"]["version"], 7);
+    }
+    let mut who: Vec<&str> = rows.iter().map(|r| r["service"].as_str().unwrap()).collect();
+    who.sort();
+    assert_eq!(who, ["model-gateway", "server"], "the caller is the token's, never the body's");
+}
+
+#[tokio::test]
+async fn an_admin_action_has_a_request_and_then_how_it_ended() {
+    let t = start().await;
+    for (id, outcome) in [("a1", "requested"), ("a2", "done"), ("a3", "refused"), ("a4", "failed")] {
+        let body = json!({ "id": id, "at": now(), "category": "settings", "action": "x", "outcome": outcome });
+        assert_eq!(t.as_(ADMIN_APPEND, M::POST, "/admin-actions", Some(body)).await.status, 201, "{outcome}");
+    }
+    let body = json!({ "id": "a5", "at": now(), "category": "settings", "action": "x", "outcome": "maybe" });
+    assert_eq!(t.as_(ADMIN_APPEND, M::POST, "/admin-actions", Some(body)).await.status, 400);
+}

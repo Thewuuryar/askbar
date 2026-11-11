@@ -111,8 +111,14 @@ fn full(rest: &str) -> String {
 type Routes = &'static [(&'static str, &'static str)];
 
 /// A service that appends records: its own spans, their finish and payload records, and its boot ID.
-const SERVICE_APPEND: Routes =
-    &[("POST", "/hello"), ("POST", "/spans"), ("POST", "/spans/*/finish"), ("POST", "/spans/*/payloads"), ("GET", "/status")];
+const SERVICE_APPEND: Routes = &[
+    ("POST", "/hello"),
+    ("POST", "/spans"),
+    ("POST", "/spans/*/finish"),
+    ("POST", "/spans/*/payloads"),
+    ("POST", "/config-applied"),
+    ("GET", "/status"),
+];
 /// The admin's append token: admin action records, and its boot ID. No read, no change, no delete.
 const ADMIN_APPEND: Routes = &[("POST", "/hello"), ("POST", "/admin-actions"), ("GET", "/status")];
 /// The admin's read token: records, metadata and retention. It appends nothing.
@@ -199,6 +205,7 @@ pub fn router(auditor: Arc<Auditor>, links: Links) -> Router {
         .route(&full("/spans/{id}/finish"), post(finish_span))
         .route(&full("/spans/{id}/payloads"), post(add_payload).get(get_payloads))
         .route(&full("/admin-actions"), post(add_admin_action).get(list_admin_actions))
+        .route(&full("/config-applied"), post(add_config_applied))
         .route(&full("/traces"), get(traces))
         .route(&full("/traces/{id}"), get(trace))
         .route(&full("/stats"), get(stats))
@@ -408,8 +415,8 @@ async fn add_admin_action(
     ident(&r.id, "The record id")?;
     short(&r.category, "The category", 64)?;
     short(&r.action, "The action", 200)?;
-    if r.outcome != "done" && r.outcome != "refused" {
-        return Err(bad("The outcome is done or refused."));
+    if !["requested", "done", "refused", "failed"].contains(&r.outcome.as_str()) {
+        return Err(bad("The outcome is requested, done, refused or failed."));
     }
     let detail = attrs_json(&r.detail)?;
     gate(&a, false)?;
@@ -424,6 +431,33 @@ async fn add_admin_action(
             action: r.action,
             outcome: r.outcome,
             detail_json: detail,
+        }),
+    )
+    .await?;
+    Ok(created(id))
+}
+
+/// A service says which configuration version it now runs. It is stored as an admin action record whose service is the
+/// caller (from the token), so the admin's claim of a push and the service's record of applying it sit side by side.
+async fn add_config_applied(
+    State(a): St,
+    Extension(Caller(caller)): Extension<Caller>,
+    body: Bytes,
+) -> Result<(StatusCode, Json<wire::Appended>), Failure> {
+    let r: wire::ConfigApplied = parse(&body)?;
+    ident(&r.id, "The record id")?;
+    gate(&a, false)?;
+    let id = r.id.clone();
+    append(
+        &a,
+        Record::AdminAction(AdminActionWrite {
+            id: r.id,
+            at: r.at,
+            service: caller.to_string(),
+            category: "config".into(),
+            action: "applied".into(),
+            outcome: "done".into(),
+            detail_json: Some(serde_json::json!({ "version": r.version }).to_string()),
         }),
     )
     .await?;

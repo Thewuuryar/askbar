@@ -320,6 +320,11 @@ async fn it_answers_not_configured_until_the_admin_pushes_and_status_says_which_
     assert_eq!(rig.push(&config(&rig, 7, &[("p", "m")])).await.status(), 200);
     let s: Value = status(ADM).await.json().await.unwrap();
     assert_eq!(s["config_version"], 7);
+    // The gateway records the version it now runs, with its own token (ADR 0028 rule 5).
+    let rows = rig.wait_rows("SELECT service, category, action, outcome, detail_json FROM admin_actions").await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0][..4], [json!("model-gateway"), json!("config"), json!("applied"), json!("done")]);
+    assert_eq!(rows[0][4], json!("{\"version\":7}"));
     assert_eq!(rig.http.get(format!("{}/api/model-gateway/v1/health", rig.server)).send().await.unwrap().status(), 200);
 }
 

@@ -212,6 +212,11 @@ async fn a_pushed_snapshot_is_stored_and_the_version_goes_up() {
     assert_eq!((st, &body["version"]), (200, &json!(1)));
     let stored = askbar_server::snapshot::current(&s.state.db.lock().unwrap()).unwrap().unwrap();
     assert_eq!(stored, Snapshot { version: 1, ..snapshot() }, "stored as sent, with the server's version");
+    // The server records the version it now runs, with its own token (ADR 0028 rule 5).
+    let rows = s.rig.wait_rows("SELECT service, category, action, outcome, detail_json FROM admin_actions").await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0][..4], [json!("server"), json!("config"), json!("applied"), json!("done")]);
+    assert_eq!(rows[0][4], json!("{\"version\":1}"));
 
     // Pushing again replaces it and bumps the version; a version in the body is ignored.
     let mut next = snapshot();

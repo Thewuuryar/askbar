@@ -14,7 +14,8 @@ info:
     A link may call only its own routes (`403 forbidden` otherwise), and **the caller of a record is the one its
     token belongs to, never anything in a body**.
 
-    - Service links (`server-auditor`, `model-gateway-auditor`): `hello`, spans, finish and payload records.
+    - Service links (`server-auditor`, `model-gateway-auditor`): `hello`, spans, finish and payload records, and the
+      configuration version a service applied.
       Only `model-gateway-auditor` opens model-call spans (`turn`, `attempt`, `tool`, `agent_step`); the
       server's link opens `gate` spans only.
     - `admin-auditor-append`: `hello` and admin action records. It reads and changes nothing.
@@ -191,6 +192,30 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+  /api/audit/v1/config-applied:
+    post:
+      operationId: addConfigApplied
+      summary: The configuration version a service now runs. `server-auditor` and `model-gateway-auditor` only.
+      description: >-
+        Stored with the admin action records, as category `config`, action `applied`, outcome `done`, with the version
+        in `detail`. The caller recorded is the token's (ADR 0028 rule 5).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConfigApplied'
+      responses:
+        '201':
+          $ref: '#/components/responses/Appended'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/Backlog'
   /api/audit/v1/admin-actions:
     post:
       operationId: addAdminAction
@@ -688,11 +713,24 @@ components:
           type: string
         outcome:
           type: string
-          enum: [done, refused]
+          enum: [requested, done, refused, failed]
+          description: >-
+            `requested` is written before the change, so a record that cannot be written refuses it; `done`, `refused`
+            (the admin said no) or `failed` (it tried and did not succeed) follow and name the request in `detail`.
         detail:
           type: object
           additionalProperties: true
           description: Metadata about the change, never a secret or message content.
+    ConfigApplied:
+      type: object
+      required: [id, at, version]
+      properties:
+        id:
+          type: string
+        at:
+          type: integer
+        version:
+          type: integer
     AdminActionRecord:
       type: object
       required: [id, at, service, category, action, outcome, detail]
