@@ -35,7 +35,7 @@ A component is anything the stack or the repository ships as its own unit: a con
 - **New component:** its ADR is proposed in its own `docs(adr):` PR, and the owner accepts it before the PR that creates the component merges. Numbers are taken in order when the ADR is written, never reserved.
 - **Changed component:** its ADR is amended in place, in the PR with the code (ADR 0001 rule 13).
 - **Retired component:** its ADR's status becomes `Retired`, with a `Retired:` line giving the date and the reason (ADR 0001 rule 11). The index in [adr/README.md](adr/README.md) follows.
-- **Existing components** get retroactive ADRs once phase 1 is done (step 1.14), all Proposed, so the owner reviews what is there before phases 2 to 4 add more.
+- **Existing components** got retroactive ADRs once phase 1 was done (step 1.14); they are Accepted, and each is amended in place as its component changes.
 
 Steps that create or retire a component say which ADR they need. Estimate: about 1 h per component ADR.
 
@@ -87,24 +87,7 @@ Order change (owner approved 2026-11-07): the remaining steps keep their numbers
 
 Bootstrap tokens (2.1) stay in phase 2: nothing in phase 1 needs per-link tokens beyond the one admin→server token that exists.
 
-### Budget
-
-Midpoints S = 1.5 h, M = 4 h, L = 8 h. Required work left (excluding 1.12, 1.13 and phase 8):
-
-| Phase | Hours |
-| --- | --- |
-| 1 (1.1–1.5, 1.8–1.11) | 32.5 |
-| Component ADRs (1.14, and one each for bootstrap, `askbar-audit`, auditor, `model-gateway`, alerter) | ≈ 9 |
-| 1.15 `askbar-cpa` supervisor and the name check removal (added 2026-11-07) | ≈ 3.5 |
-| 2 | 35 |
-| 3 | 21.5 |
-| 4 | 9.5 |
-| 5 | 11 |
-| 6 | 17.5 |
-| 7 | 12.5 |
-| **Total** | **≈ 152** |
-
-That is about 52 h over the ~100 h budget before any backlog item (the component ADRs and the `cpa` supervisor, added 2026-11-07, are about 12 h of it). Proposed cuts, first to last: phase 8 (iOS, memory, mismatch alerts); 1.13 summarizing (L, ~8 h); the rest of 1.13 (~12 h) and 1.16 (~6 h); 6.4 multiple destinations (one daily destination stays: it is the ship criterion for data loss in [ADR 0002](adr/0002-v1-scope-limits-and-ship-criteria.md)); 1.12 shared spaces; 5.4 passkey (optional, after 1.0); 4.3 release check. Those cuts save about 8 h of required work (5.4, 4.3, part of 6.4), leaving ≈ 142 h. The owner kept the budget unchanged (2026-11-07); the gap is recorded here so cuts can be made in this order if hours run out.
+### Deferred and backlog items
 
 **1.12 `feat: shared spaces`** (M) — [ADR 0009](adr/0009-spaces-and-storage.md) (deferrable, last in [ADR 0002](adr/0002-v1-scope-limits-and-ship-criteria.md) order)
 - Admin create/rename/delete (with confirmation), add/remove members with the "new members see history" notice; client space picker.
@@ -113,9 +96,9 @@ That is about 52 h over the ~100 h budget before any backlog item (the component
 
 Order (owner, 2026-11-08), before phase 2: message actions on hover with the model and provider per reply; then failed questions stay marked with Edit and Try again; then copy the whole conversation; then the history length limit; then newest at the top or bottom. Summarizing is deferred to after 3.1. Anything a reopened conversation must show is stored on the message: finished generations are pruned.
 - **Edit and Try again on a failed line** (S): the failed question in the window gets **Edit** (puts its text back in the box) and **Try again** (resends it), for every failure kind, not only timeouts.
-- **History length limit** (S): an admin setting for how much history is sent with each question. Today the whole conversation is sent every turn, with no limit.
+- **History length limit** (S): an admin setting for how much history is sent with each question. Before this step the whole conversation was sent every turn, with no limit.
 - **Summarize when the context would overflow** (L): when a conversation is expected to exceed the model's context length, the server summarizes (compacts) the older part and sends the summary instead; the client shows "Summarizing the conversation…" with a progress bar while it runs. Needs a design note first: which model summarizes, where the summary is stored, and how the extra model call is audited (it goes through `model-gateway` like any other, phase 3).
-- **Failed questions stay marked** (S/M): a question that got no reply is shown with a coloured background (a `--danger` tint that passes contrast in both themes) and its error text, live and after reopening the chat. Today the error line exists only in the live window; a reopened conversation shows just the unanswered questions. Needs the client API to say which questions failed and why: an additive field on each message in the conversation detail (for example `failed: {code, message}` from the turn's generation, linked by `user_message_id`), the OpenAPI file and wire contract, and the popup rendering. Pairs with Edit and Try again.
+- **Failed questions stay marked** (S/M): a question that got no reply is shown with a coloured background (a `--danger` tint that passes contrast in both themes) and its error text, live and after reopening the chat. Before this step the error line existed only in the live window; a reopened conversation showed just the unanswered questions. Needs the client API to say which questions failed and why: an additive field on each message in the conversation detail (for example `failed: {code, message}` from the turn's generation, linked by `user_message_id`), the OpenAPI file and wire contract, and the popup rendering. Pairs with Edit and Try again.
 - **Newest at the top or bottom** (S): show the conversation newest-first, with the input box following it, or oldest-first as now. The admin sets the default (a new display-defaults field, server-wide and per user, edited in the admin site); a client can override it locally (`client.yaml` `ui`), as with the other display defaults.
 - **Copy the whole conversation** (S): a copy button on each conversation in the history panel, next to its delete button, that copies every question and reply, in order, as Markdown with who said what.
 - **Message actions on hover** (S/M): under each question and each reply, a copy icon (replacing today's Copy text button) and the date and time it was sent, both shown when the pointer is over that message or it has keyboard focus. Each message keeps the padding for them at all times, so nothing moves when they appear. Needs each message's time in the popup (`created_at` is stored; check it reaches the window).
@@ -134,7 +117,7 @@ Order (owner, 2026-11-08), before phase 2: message actions on hover with the mod
 - **Built so (2026-11-10), copy the whole conversation:** client only. Each row in the history panel has a copy icon before Delete, shown like Delete on hover or keyboard focus. It reads the conversation (`load_conversation`) without opening it and copies Markdown: `# <title>`, then for each message `**You**` or `**Assistant**`, its date and time, and on a reply `<model> via <provider>`, then the text; a failed question is followed by `> Failed: <why>`.
 - **Built so (2026-11-10), newest at the top or bottom:** a new display default, `newest_first` (false, oldest first, as before), set server-wide on the admin's Settings page and per user through the display-defaults API, and overridable in `client.yaml` (`ui.newest_first`). Newest first keeps the input bar at the top (owner's choice, 2026-11-10) and puts the latest turn just under it; each question stays above its reply and error line. The popup reverses whole turns with each row's flex `order`, so the rows stay in time order for copying and the shortcuts, and it keeps the top of the thread in view instead of the bottom. An error line now has a 12 px gap under it, like the meta row under other messages.
 
-**1.16 `feat(admin): a page and a URL for every admin section, from one template`** (M–L ≈ 6 h; owner request, 2026-11-07; deferrable with the 1.13 backlog, so outside the required total). Today the admin site is one page whose tabs don't change the address, so a section can't be linked, bookmarked or reached with Back.
+**1.16 `feat(admin): a page and a URL for every admin section, from one template`** (M–L ≈ 6 h; owner request, 2026-11-07; deferrable with the 1.13 backlog, so outside the required total). Before this step the admin site was one page whose tabs didn't change the address, so a section couldn't be linked, bookmarked or reached with Back.
 - **Pages:** `/admin/providers/`, `/admin/services/`, `/admin/clients/`, `/admin/users/` (from 1.9), `/admin/audit/`, `/admin/backup/`, `/admin/network/`, `/admin/security/`, `/admin/settings/`. `/admin` and `/admin/` redirect to the first. Unknown `/admin/...` paths stay 404.
 - **One list of pages:** `services/admin/src/pages.rs` holds `PAGES: [(slug, label, template)]`. The routes in `lib.rs` (replacing the single `/admin/` route), the nav, and the route-table test all come from it.
 - **One template (Askama):** `ui/templates/base.html` holds the frame, written once:
@@ -153,9 +136,9 @@ Order (owner, 2026-11-08), before phase 2: message actions on hover with the mod
   - The first-run "next steps" links become page links.
 - **Unchanged:** the API; the session cookie (`Path=/api/admin`); the CSP (`script-src 'self'`, no inline script); `textContent`-only rendering in scripts. Askama escapes by default, and templates hold only static text and the page list.
 - **Weight and speed:** browsers get plain pre-rendered HTML, with no framework or client-side rendering.
-  - **Today:** every visit loads about 92 KB (the 24 KB page with all sections, 35 KB `app.js`, 23 KB `audit.js`, 10 KB CSS).
+  - **Before:** every visit loaded about 92 KB (the 24 KB page with all sections, 35 KB `app.js`, 23 KB `audit.js`, 10 KB CSS).
   - **After:** a page carries only its own section.
-  - **Caching:** `security_headers` (`web.rs`) sends `no-store` on everything today. Static files get `no-cache` with an `ETag` instead, so a click costs one small page plus 304s. Pages and the API stay `no-store`.
+  - **Caching:** `security_headers` (`web.rs`) sent `no-store` on everything before this step. Static files get `no-cache` with an `ETag` instead, so a click costs one small page plus 304s. Pages and the API stay `no-store`.
   - **Devices:** this keeps it fast on an old laptop or a Raspberry Pi's browser. An ESP32 can neither host Askbar nor run a browser, whatever the design.
 - **New dependency:** `askama` (MIT OR Apache-2.0, inside the license allowlist, so a reason in the PR is enough, [ADR 0026](adr/0026-dependency-license-check.md)). The reason: compile-time checked templates, escaping by default, and no template files to read at run time.
 - **Tests:**
@@ -237,56 +220,107 @@ Order (owner, 2026-11-08), before phase 2: message actions on hover with the mod
 - `cpa` on a gateway-only network; first start writes its config and adds it as a provider; paste-URL login: matches address and state, 10 min, single use, never logged. Test both providers against the pinned image.
 - **Built so (2026-11-12): `cpa` connected to the gateway.** The plan's PR P, with the owner's choice of 2026-11-12 for its route out. Most of the step was already there from steps 1.14, 1.15 and 3.1 (the supervisor, the config the admin writes, the managed provider, logins with a 10-minute single-use paste, `cpa-gateway`); this step finishes it. **Networks:** `cpa` leaves `edge` and joins the existing `outbound` beside `cpa-gateway` and `cpa-admin`, so it shares no network with Caddy; the isolation script checks that, and that only the gateway and `cpa` (and in dev the mock LLM) are on `outbound`. **Paste-URL login:** the pasted address must be the one the login's own URL (`redirect_uri`) sends the browser back to, with the login's state, within 10 minutes and once; a test checks that the one-time code is in no admin record. **The pinned image:** `scripts/check-cpa-image.sh` runs `eceasy/cli-proxy-api:v8.0.51` and checks what the admin depends on: both providers' login URLs and where each sends the browser back (`http://localhost:54545/callback` for Claude, `http://localhost:1455/auth/callback` for ChatGPT), the refusals for a wrong state, an unknown state and no secret, and the account list; all 11 checks passed. **Not done:** a real login for either provider (it needs an account and a person; the paths and shapes were checked, the exchange was not); the provider is still made after the first account is connected, not at first start, because CPA lists no model before that.
 
+## Phases 4 to 7 as decided (owner, 2026-11-11)
+
+The owner decided D1 to D36 on 2026-11-11 and set no time budget: everything below is built and nothing is cut for time. The decisions are recorded in the ADRs named for each step; the code PRs follow one PR at a time, in this order, each adding only "built" amendments and its "Built so" note. Tags: [COMPOSE] [NETWORK] [VOLUME] [DEPENDENCY] [WORKFLOW] [MIGRATION] [API]. Each PR also fills its rows of the Defend table in [ADR 0016](adr/0016-risk-register.md); the letters below are the ones that table uses.
+
+| PR order | Letter and branch | Phase |
+| --- | --- | --- |
+| 1 | the decisions and current docs (`docs/v1-decisions-and-current-docs`) | all |
+| 2 | AU `test/defend-map` | 7 |
+| 3 | T `feat/auditor-alert-records` | 4 |
+| 4 | S `feat/alerter-service` | 4 |
+| 5 | U `feat/alerter-stack` | 4 |
+| 6 | V `feat/alerter-admin` | 4 |
+| 7 | AB `feat/admin-fresh-signin-and-delete-user` | 5 |
+| 8 | W `feat/admin-alert-events` | 4 |
+| 9 | X `feat/auditor-alert-rules` | 4 |
+| 10 | AC `feat/privacy-notice` | 5 |
+| 11 | Z `feat/alerter-smtp` | 4 |
+| 12 | AA `feat/alerter-releases` | 4 |
+| 13 | AE `feat/markdown-payloads` | 5 |
+| 14 | AG `feat/caddy-http01` | 5 |
+| 15 | AS `test/load` | 7 |
+| 16 | AI `feat/backup-key` | 6 |
+| 17 | AJ `feat/encrypted-backup` | 6 |
+| 18 | AK `feat/backup-exports-cpa-alerter` | 6 |
+| 19 | AL `feat/auditor-export` | 6 |
+| 20 | AM `feat/restore` | 6 |
+| 21 | AN `feat/auditor-restore` | 6 |
+| 22 | AP `feat/scheduled-backups` | 6 |
+| 23 | AR `ci/image-scan` | 7 |
+| 24 | AT `test/drills` | 7 |
+| 25 | AV `docs/v1-pass` | 7 |
+| 26 | AW `chore/release-1.0` | 7 |
+
 ## Phase 4 — Add the alerter
 
-**4.1 `feat(alerter): deliver alerts through ntfy or email`** (M) — [ADR 0006](adr/0006-v1-outbound-access-and-alerts.md), 0038
-- Before the code: a component ADR for the `alerter` (its settings volume, outbound for delivery only, its links), proposed in its own PR and accepted.
-- `services/alerter`: `/api/alerter/v1`, delivery settings on its own volume, auditor → alerter events, outbound only for delivery; admin configures delivery and sends a test alert.
+[ADR 0055](adr/0055-alerter.md) (accepted) holds the design. Decisions D1 to D11.
 
-**4.2 `feat: alert rules`** (M) — [ADR 0010](adr/0010-auditor.md), 0011, 0016, 0024, 0005
-- Unseal and timeout change, retention change, backup key change, rejected/invalid tokens, silent appending component, auditor disk early warning, restart loops, budget thresholds; repeat limiting.
+**4.1 `feat(alerter): deliver alerts through ntfy`** (L) — PRs T, S, U, V [API] [MIGRATION] [COMPOSE] [NETWORK] [VOLUME]
+- **T (auditor delivery records):** the `alert_deliveries` table, chained in the same transaction ([ADR 0052](adr/0052-askbar-audit-crate.md)); the `alerter-auditor` link and `POST /alert-deliveries`; the last request on each link in `GET /status`; `GET /alert-deliveries` on the admin read link.
+- **S (alerter crate):** `paths::ALERTER_V1` and the alerter types in `askbar-proto`; `docs/openapi/alerter.v1.yaml`; the skeleton modelled on `model-gateway` (two routers behind `links::require`, `/status`, `/restart`, `PUT /config` with a content-hash version, `503 not_configured`); one fixed sentence per kind from typed fields only; repeat limiting (60 minutes per derived key, 20 an hour with one summary) and an atomic JSON ledger; ntfy delivery with a queue of 200; outcomes to the auditor; `AuditClient` calls `GET /status` every 60 seconds.
+- **U (alerter in the stack):** three links, uid 10005, the `alerter` image, `audit-alerter`, `alerter-admin` and `alerter-outbound`, the volumes `alerter-data` and `alerter-token`, and `check-isolation.sh` section 3d7.
+- **V (alerter in the admin):** the `alert_settings` migration (write-only, encrypted), `alerter_link.rs`, `GET` and `PUT /alerts` and `POST /alerts/test`, the Services page card, the settings panel and the delivery banner, with an ntfy sink in the tests.
 
-**4.3 `feat(alerter): check for new releases`** (S) — [ADR 0017](adr/0017-dependencies-and-patches.md)
-- Release source polled without user data; admin reads the result and shows it.
+**4.2 `feat: alert rules`** (M) — PRs W, X [ADR 0010](adr/0010-auditor.md), 0011, 0016, 0024, 0005
+- **W (the admin's events):** `alert_client`, `chain_mismatch`, `rejected_token`, `restart_loop` for the services it polls, and `budget_threshold` from `GET /token-counts` every 60 seconds (80% and 100%, once per period, subscriptions excluded, D5).
+- **X (the auditor's rules):** `unsealed`, `unseal_timeouts_changed`, `backup_key_changed`, `retention_changed`, disk low and critical with hysteresis (D6), `component_silent` and `caddy_silent` (D2, D3), and the admin's `restart_loop` (D4).
+- Mismatch alerts stay in phase 8.
+
+**4.2b `feat(alerter): deliver alerts through email`** (M) — PR Z [DEPENDENCY]: `lettre` with exact features, `cargo deny` first (stop if it fails); `deliver/smtp.rs`, email settings in the admin (a new migration), an SMTP sink in the tests.
+
+**4.3 `feat(alerter): check for new releases`** (S) — PR AA [ADR 0017](adr/0017-dependencies-and-patches.md)
+- A daily poll of GitHub's latest-release API with a fixed `User-Agent` (D11); `release_available`; `GET /releases`, shown on the Services page. Until 1.0 it is tested only against a mock.
 
 ## Phase 5 — Remaining defend controls and client policy
 
-**5.1 `feat: privacy notice and AI warning`** (S) — [ADR 0012](adr/0012-consent-notices-and-deletion.md)
-- Notice at pairing and when relevant settings change (default on, editable); AI warning above the chat box (default on, editable); deleting a user deletes the personal space file.
+**5.1 `feat: privacy notice, AI warning, fresh sign-in and deleting a user`** (M) — PRs AB, AC [ADR 0012](adr/0012-consent-notices-and-deletion.md) [API]
+- **AB:** `require_fresh_signin` (10 minutes) on the password change, API key creation and lowering retention (D21; the backup key and restore join in phase 6), and deleting a user (D16): the server route removes the space file, the clients, their hashes and the user row; the admin route is session-only with the user's name typed to confirm. Audit records stay.
+- **AC:** the policy in the snapshot and the settings (additive, `MIN_CLIENT` unchanged): the notice shows the retention days, its version is a hash of its text and the retention, and the AI warning has 0012's text; both are on by default and editable; the popup shows them as text. If 0012 requires consent to be recorded, an additive acknowledgment route (D15).
 
-**5.2 `test: malicious markdown payload library`** (M) — [ADR 0016](adr/0016-risk-register.md)
-- Block remote images/media, safe links with destination shown, Trusted Types where supported; payload library run against the popup and admin views; browser test proves no network request or script.
+**5.2 `test: malicious markdown payload library and Trusted Types`** (L) — PR AE [ADR 0016](adr/0016-risk-register.md)
+- About 40 payloads run through `renderMarkdown`; remote image syntax becomes a link; a confirm bar shows the full URL before a link opens, and `open_url` opens http(s) only (D18); a browser test proves no network request and no script; the admin views stay inert; Trusted Types in the popup's and the admin's CSP (D17), tested in Chromium, with macOS and Linux on the person-run checklist.
 
-**5.3 `feat(caddy): HTTP-01 certificates`** (S) — [ADR 0015](adr/0015-certificates.md)
+**5.3 `feat(caddy): HTTP-01 certificates`** (S) — PR AG [ADR 0015](adr/0015-certificates.md) [MIGRATION]
+- The setting `acme_challenge` (`dns` or `http`) on `network_settings`; the Network page offers the choice with a warning (D19).
 
-**5.4 `feat(admin): optional passkey with recovery codes`** (M) — [ADR 0007](adr/0007-first-run-and-admin-sign-in.md) (needs a domain; can slip after 1.0 since "optional")
+(5.4, the optional passkey with recovery codes, is cut from v1: D20.)
 
 ## Phase 6 — Backups
 
-**6.1 `feat(admin): backup passphrase and age key pair`** (S) — [ADR 0013](adr/0013-backups.md)
-- Wizard step, ≥20 chars, private key encrypted with it, public key pushed to each service; key change audited and alerted.
+[ADR 0013](adr/0013-backups.md) holds the design. Decisions D21 to D29.
 
-**6.2 `feat: encrypted exports from each service`** (L)
-- `POST /exports` on server, auditor (read-only), model-gateway, alerter, admin; a `cpa` export wrapper; admin bundles with a manifest (hashes, release version), browser download. Test: admin cannot decrypt an export.
+**6.1 `feat(admin): backup passphrase and age key pair`** (M) — PR AI [DEPENDENCY] [MIGRATION]
+- `age` behind a `backup` feature of `askbar-service` (`cargo deny` first, stop if it fails); a `backup_keys` migration; `PUT /setup/backup-key` (at least 20 characters, not the audit passphrase, fresh sign-in) and `POST /backup/rotate-key`; the public key goes to the server (snapshot) and the alerter (`PUT /config`); the auditor and `cpa` get it with their exports.
 
-**6.3 `feat(admin): restore into an empty install`** (M)
-- Version check before the passphrase; refuse newer releases; CI restore test with a throwaway key and no audit passphrase.
+**6.2 `feat: encrypted exports from each service`** (L) — PRs AJ, AK, AL
+- **AJ:** the server's `/exports`, the admin's own export, and the bundle (manifest, release, key fingerprint, `backup-key.age`; the admin's export first, the auditor's last); the admin cannot decrypt it.
+- **AK:** the alerter's `POST /exports`, and the supervisor's request files for `cpa` (D26).
+- **AL:** the auditor's `PUT /backup-key`, `snapshot_to` and `GET /export` (D23, D25). `model-gateway` has no export (D24).
 
-**6.4 `feat(admin): scheduled backups, destinations and retention`** (M)
-- `/backup` volume and SMB/NFS volume in compose; writable check, same-disk warning; schedule; 5 files / 30 days, newest kept; missed-backup alert; 90-day drill reminder. Test an unavailable share does not keep the admin down.
+**6.3 `feat(admin): restore into an empty install`** (L) — PRs AM, AN
+- **AM:** version check first (`409 backup_newer_release`), then a fresh sign-in, decryption in memory, `POST /imports` on the server and the alerter (`409 not_empty`), the admin restores itself last, and the isolation check becomes "no plaintext".
+- **AN:** the `admin-auditor-restore` link and `POST /restore` into an empty store with a chain verify; the admin re-anchors its chain head (D25).
+
+**6.4 `feat(admin): scheduled backups and retention`** (L) — PR AP [COMPOSE] [VOLUME] [MIGRATION]
+- The `backup` volume at `/backup` (the host mounts a NAS over it, D27, D28); writable check and same-disk warning; daily at 03:30 UTC, written to a temporary file and renamed; 5 files or 30 days, the newest kept; `backup_failed` and `backup_missed` (no backup within 26 hours); a 90-day drill reminder; an unavailable destination does not keep the admin down (D29).
 
 ## Phase 7 — Ship gates
 
-**7.1 `ci: pull-request workflow`** (M, owner approval) — rustfmt (`style/rustfmt` first), clippy, `npm test`, smoke, `check-isolation.sh`, `cargo deny` + npm license check ([ADR 0026](adr/0026-dependency-license-check.md)), gitleaks, Dependabot/Renovate, scheduled CVE scan of crates and images ([ADR 0017](adr/0017-dependencies-and-patches.md)).
+**7.1 `ci: pull-request workflow`** (M, owner approval) — the pull-request workflow exists. PR AU checks that every test named in ADR 0016's Defend table exists (`pending` is allowed until AW); PR AR [WORKFLOW] adds the Trivy image scan (pinned by commit hash, a dated ignore file) and a known-vulnerable fixture that must fail `cargo deny` (D30). The owner turns on Dependabot alerts and branch protection; the CVE alert is GitHub's email for a failed scheduled run. The owner sees the workflow diff before AR is opened.
 
-**7.2 `test(e2e): three simultaneous users and the latency budget`** (M) — [ADR 0002](adr/0002-v1-scope-limits-and-ship-criteria.md), 0031
-- `tests/e2e` load target: 3 concurrent replies against the mock; p95 < 200 ms before first token excluding the provider; auditor ack p95 < 20 ms.
+**7.2 `test: three simultaneous users and the latency budget`** (M) — PR AS [ADR 0002](adr/0002-v1-scope-limits-and-ship-criteria.md), 0031
+- 3 concurrent replies in `cargo test`, the mock's own time subtracted; it fails only if the 95th percentile exceeds 200 ms in two runs; the auditor's acknowledgment stays under 20 ms (D31).
 
-**7.3 `test: reboot, restart and failure drills`** (S) — reboot comes back with no commands; auditor and admin failure tests.
+**7.3 `test: reboot, restart and failure drills`** (M) — PR AT
+- Sections of `check-isolation.sh`: a full restart, the auditor down, the admin down, a tiny auditor disk and the alerter down (D32).
 
-**7.4 `docs: v1 documentation pass`** (S) — README describes v1, architecture diagram matches shipped services, component matrix, failure table, network map ([ADR 0003](adr/0003-v1-service-layout.md)), AGPL note.
+**7.4 `docs: v1 documentation pass`** (M) — PR AV
+- README describes v1, the architecture diagram, component matrix, failure table and network map ([ADR 0003](adr/0003-v1-service-layout.md)), the AGPL note and third-party notices; leftover "Today" text removed.
 
-**7.5 `chore: release 1.0`** — tags, GHCR images pinned by digest, staging compose project ([ADR 0018](adr/0018-releases-and-migrations.md)). Person-run items from the [ADR 0002](adr/0002-v1-scope-limits-and-ship-criteria.md) checklist: real certificate, restore drill under 30 min, client on macOS/Windows/Linux, risk sign-off.
+**7.5 `chore: release 1.0`** (L, owner approval) — PR AW [WORKFLOW] [COMPOSE] [ADR 0018](adr/0018-releases-and-migrations.md)
+- A release workflow with GHCR images, a compose file pinned by digest, a staging override and an SBOM; the three retired volume declarations removed (D34); version 1.0.0 with `MIN_CLIENT` unchanged; release notes and the person-run checklist from [ADR 0002](adr/0002-v1-scope-limits-and-ship-criteria.md); `pending` leaves `check-docs.sh`. Signing comes after 1.0 (D33).
 
 ## Phase 8 — Deferrable (cut first if hours run out)
 

@@ -6,11 +6,11 @@ Plan decisions: 20, 34
 
 ## Context
 
-A deployment may use a private address or a public host. A domain isn't required, except for a passkey. [0007](0007-first-run-and-admin-sign-in.md) serves HTTPS from first boot, before any host name or DNS exists. Clients then reach the host by its address, so no public CA can vouch for it, and the desktop client refuses an untrusted certificate.
+A deployment may use a private address or a public host. A domain isn't required. [0007](0007-first-run-and-admin-sign-in.md) serves HTTPS from first boot, before any host name or DNS exists. Clients then reach the host by its address, so no public CA can vouch for it, and the desktop client refuses an untrusted certificate.
 
 ## Decision
 
-**Real certificates.** V1 keeps Caddy's Cloudflare DNS plugin and adds HTTP-01:
+**Real certificates.** V1 keeps Caddy's Cloudflare DNS plugin and adds HTTP-01, chosen by the setting `acme_challenge` (`dns` or `http`) on the Network page, which warns that HTTP-01 needs public port 80:
 
 | Option | Works with | Needs | Private address |
 | --- | --- | --- | --- |
@@ -53,3 +53,4 @@ Invariants a test checks:
 ## Amendments
 
 - 2026-11-10: merged in 0034 (self-signed HTTPS and certificate pinning), as "Until then, a self-signed certificate, pinned at pairing", with its alternatives and consequences.
+- 2026-11-11: no passkey in v1 (#70, D20, a decision change): a domain is no longer mentioned as needed for one; and HTTP-01 is chosen by the setting `acme_challenge` (D19), built in plan step 5.3.

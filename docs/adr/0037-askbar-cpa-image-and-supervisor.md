@@ -7,7 +7,7 @@ Kind: component
 
 ## Context
 
-[0005](0005-no-controller-and-self-restart.md) restarts `cpa` (CLIProxyAPI, a third-party image pinned by digest) without a controller: "Test its reload behavior first, and add a small supervisor process only if needed." Plan step 1.4 tested it on the stack with v8.0.51: a new API key written to its config file, by atomic rename or in place, was refused until the container restarted, and comment or `debug` changes were not picked up either. It reads its config only at start. So today the admin cannot restart it and the person must run `docker compose restart cpa` on the host. Step 3.5 (connect `cpa` to `model-gateway` by writing its config) has the same problem. The owner chose the supervisor.
+[0005](0005-no-controller-and-self-restart.md) restarts `cpa` (CLIProxyAPI, a third-party image pinned by digest) without a controller: "Test its reload behavior first, and add a small supervisor process only if needed." Plan step 1.4 tested it on the stack with v8.0.51: a new API key written to its config file, by atomic rename or in place, was refused until the container restarted, and comment or `debug` changes were not picked up either. It reads its config only at start. Without a supervisor the admin could not restart it and the person would have to run `docker compose restart cpa` on the host, and connecting `cpa` to `model-gateway` by writing its config would have the same problem. The owner chose the supervisor.
 
 ## Decision
 
@@ -19,8 +19,9 @@ Kind: component
   - after each start, writes the request value it acted on to `/cpa-config/restart-done`, so the admin can tell the restart happened;
   - on `SIGTERM` or `SIGINT`, passes the signal to the child, waits up to 10 seconds, and exits.
 - **Unsafe code:** the only `unsafe` in the services' workspace, in two functions that each allow it: `kill(2)` to send `SIGTERM` to its own child (`std` can send only `SIGKILL`) and `signal(2)` to install a handler that only sets an atomic (`std` has no signal API). Both go through `libc`, with a `SAFETY:` comment. The workspace denies `unsafe_code` everywhere else.
+- **From plan step 6.2, export and import:** the admin writes a request file (`export-request` or `import-request`, with the backup public key for an export) to `cpa-config`; the supervisor archives the auth files from `cpa-auth`, encrypts them to that key (`age`) and writes the result to `cpa-config`, or unpacks an import into `cpa-auth` and restarts CLIProxyAPI, and writes a `-done` file naming the request, as it does for a restart. No port, no token ([0013](0013-backups.md), [0042](0042-cpa.md)).
 - **No new way in:** the supervisor opens no port and holds no token. The trigger is a file on the `cpa-config` volume, which only the admin and `cpa` mount, as today. A compromised admin could restart `cpa` this way, which it can already do from the Services tab.
-- **Everything else is as today:** same container name, the `edge` and `cpa-admin` networks, no published port, the `cpa-config` and `cpa-auth` volumes, the [0032](0032-container-hardening.md) hardening (root, as CLIProxyAPI writes `/root/.cli-proxy-api` on its volume).
+- **Everything else is unchanged:** same container name, the networks `cpa-admin`, `cpa-gateway` and `outbound` ([0042](0042-cpa.md)), no published port, the `cpa-config` and `cpa-auth` volumes, the [0032](0032-container-hardening.md) hardening (root, as CLIProxyAPI writes `/root/.cli-proxy-api` on its volume).
 - **Admin:** Restart on the Services tab writes a random value to `restart-request`, then waits up to a minute for `restart-done` to show it and for CLIProxyAPI's API to answer. The admin no longer asks for a host restart when it replaces CLIProxyAPI's control secret: the config change restarts it.
 
 ## Alternatives considered
@@ -32,8 +33,8 @@ Kind: component
 
 ## Consequences
 
-- The admin restarts `cpa` from the Services tab again, and writing its config (the control secret now, `model-gateway` settings in 3.5) takes effect without a host step.
-- The project builds and ships one more image (`askbar-cpa`); its only code of ours is the supervisor. `check-isolation.sh` checks that the `cpa` container runs the supervisor as its main process, still publishes nothing and is on the same networks, and that a restart from the admin site restarts CLIProxyAPI without restarting the container.
+- The admin restarts `cpa` from the Services tab, and writing its config (the control secret, and the API key `model-gateway` uses) takes effect without a host step.
+- The project builds and ships one more image (`askbar-cpa`); its only code of ours is the supervisor. `check-isolation.sh` checks that the `cpa` container runs the supervisor as its main process, still publishes nothing and is on its own networks only, and that a restart from the admin site restarts CLIProxyAPI without restarting the container.
 - The supervisor's tests cover restart on a config change, on a request, after a crash (with backoff), the 5-second limit, and stop-signal forwarding.
 - A `cpa` component ADR written in step 1.14 links this ADR for its image and restart.
 
@@ -42,3 +43,5 @@ Kind: component
 - 2026-11-08: marked as a component ADR, so it is amended in place ([0046](0046-component-and-register-adrs-and-partial-amendments.md)). Nothing else changed.
 - 2026-11-08: records the supervisor's two `unsafe` libc calls, now that the workspace denies `unsafe_code` (contributor guidelines rollout step 3). The code did not change.
 - 2026-11-12: `cpa` is on `cpa-gateway`, `cpa-admin` and `outbound`, not `edge` (plan step 3.5, [0042](0042-cpa.md)); the rest of "as today" stands.
+- 2026-11-11: body brought up to date with the code on `main`: the supervisor is built and the admin restarts `cpa`; the 'today the admin cannot restart it' wording and the reference to step 3.5 are removed. No decision changed (#70).
+- 2026-11-11: design for plan step 6.2 (#70, D26): export and import through request files on `cpa-config`, handled by the supervisor, with no port. The code PR adds the 'built' line.

@@ -20,8 +20,8 @@ A deployer can't patch code they don't maintain, so maintainers and deployers ne
 
 - **Pinning:** pin images and GitHub Actions to digests or commit hashes, the Caddy plugin to a version, and Rust and npm packages through committed lockfiles.
 - **Updates:** Dependabot handles security alerts, and Renovate handles version update pull requests.
-- **Checks:** require the `cargo deny` check and scheduled CVE scans.
-- **Patch alerts:** a new release appears in the admin and sends an alert. `alerter` checks for new releases without sending user data, and the admin reads the result from it.
+- **Checks:** require the `cargo deny` check and scheduled CVE scans: `cargo deny` for dependencies, and a Trivy scan of the images (pinned by commit hash, with an ignore file whose entries carry dates). A known-vulnerable fixture must fail `cargo deny`. The CVE alert is GitHub's email for a failed scheduled run. The owner turns on Dependabot alerts and branch protection in the repository settings.
+- **Patch alerts:** a new release appears in the admin and sends an alert. `alerter` polls `https://api.github.com/repos/Thewuuryar/askbar/releases/latest` once a day with a fixed `User-Agent` and no install data (`release_available`), and the admin reads the result from it ([0055](0055-alerter.md)).
 - **Installation:** the deployment admin pulls updated images from the host, or can automate this via a third party service. 
 - **Migrations:** releases with a database migration need a backup first and are marked for manual installation.
 - **Patch targets:** internet-facing critical issues within 7 days, and other security updates within 30 days.
@@ -43,3 +43,4 @@ Installing a patch takes a host command unless a deployer chooses automation. An
 ## Amendments
 
 - 2026-11-10: merged in 0026 (dependency license check), as "Licenses", with its alternative and consequences.
+- 2026-11-11: CI and repository settings, and the release check (#70, D30 a decision change, D11): a Trivy image scan, a vulnerable fixture, the failed-run email as the CVE alert, Dependabot alerts turned on by the owner, and a daily poll of GitHub's latest-release API. Built in plan steps 4.3 and 7.1.
