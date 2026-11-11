@@ -26,8 +26,8 @@
     history.replaceState(null, '', location.pathname + '?' + q.toString());
   }
 
-  // One banner for anything that stops the tab reading the audit store: the server away (502), or a
-  // server with no audit store (503). The views keep their "nothing yet" text underneath.
+  // One banner for anything that stops the tab reading: the auditor away (503), or the server away (502), which
+  // only provider health needs. The views keep their "nothing yet" text underneath.
   function banner(message) {
     const el = $('audit-error');
     el.textContent = message || '';
@@ -35,8 +35,8 @@
   }
 
   function explain(e) {
-    if (e.status === 502) return 'The server is offline, so the audit store cannot be read right now. Nothing is lost: it is recorded again as soon as the server is back.';
-    if (e.status === 503) return 'The server has no audit store recording.';
+    if (e.status === 502) return 'The server is offline, so provider health cannot be read right now.';
+    if (e.status === 503) return 'The auditor cannot be reached, so the audit trail cannot be read right now. Nothing is lost: records wait and are sent when it is back.';
     return e.message;
   }
 

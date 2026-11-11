@@ -1122,10 +1122,10 @@ async function waitForPort(port) {
     await page.waitForSelector('#app:not([hidden])');
     await page.waitForSelector('#offline:not([hidden])');
   });
-  await step('audit: with the server away the tab explains instead of failing, and the views are still there', async () => {
+  await step('audit: with the server away the trail still reads from the auditor, and the views are there', async () => {
     await openPage('audit');
-    await page.waitForSelector('#audit-error:not([hidden])');
-    assert.match(await page.innerText('#audit-error'), /server is offline/i);
+    await page.waitForSelector('#audit-overview');
+    assert.equal(await page.isHidden('#audit-error'), true, 'the auditor is up, so there is nothing to explain');
     for (const sub of ['overview', 'requests', 'trace', 'routing', 'content']) {
       await page.click(`#audit-nav [data-sub="${sub}"]`);
       assert.equal(await page.isVisible(`#audit-${sub}`), true, sub);
