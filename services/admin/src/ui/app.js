@@ -148,6 +148,31 @@
     $('password').focus();
   }
 
+  // Sealed content (ADR 0011): a banner with the time left and a Seal button while it is open, and the alerts of the last
+  // day (an unseal, a change of the timeouts). Everything is set as text.
+  let sealedLeft = 0;
+  function minutes(secs) { return Math.max(1, Math.ceil(secs / 60)); }
+  function showSealed(s) {
+    const open = !!s.open;
+    sealedLeft = open ? Math.min(s.idle_left_secs || 0, s.total_left_secs || 0) : 0;
+    $('unsealed-text').textContent = open ? 'Sealed content is open for about ' + minutes(sealedLeft) + ' more minute' + (minutes(sealedLeft) === 1 ? '' : 's') + ' (less if it is not used).' : '';
+    show($('unsealed-banner'), open);
+    const box = $('sealed-alerts');
+    box.textContent = '';
+    for (const a of s.alerts || []) {
+      const p = document.createElement('p');
+      p.className = 'flash';
+      p.dataset.kind = a.kind;
+      p.textContent = new Date(a.at * 1000).toLocaleString() + ' · ' + a.text;
+      box.appendChild(p);
+    }
+    if (window.askbarAudit && window.askbarAudit.sessionFromStatus) window.askbarAudit.sessionFromStatus(s);
+  }
+  $('unsealed-seal').addEventListener('click', async () => {
+    try { await api('DELETE', '/api/admin/v1/audit/session'); } catch (_) { /* signed out */ }
+    checkServer();
+  });
+
   // The "server offline" banner: ask the admin how its link to the server is, now and then.
   let statusTimer = null;
   async function checkServer() {
@@ -161,6 +186,7 @@
       const bad = ['rollback', 'rewritten', 'edited'].includes(chain.state);
       $('chain-alert').textContent = bad ? chain.detail : '';
       show($('chain-alert'), bad);
+      showSealed(st.sealed_content || {});
     } catch (_) { /* signed out, or the admin itself is away */ }
   }
 
@@ -863,6 +889,8 @@
   async function loadSettings() {
     const s = await api('GET', '/api/admin/v1/settings');
     $('s-retention').value = s.audit_retention_days == null ? 30 : s.audit_retention_days;
+    $('s-unseal-idle').value = s.unseal_idle_minutes == null ? 15 : s.unseal_idle_minutes;
+    $('s-unseal-total').value = s.unseal_total_minutes == null ? 60 : s.unseal_total_minutes;
     $('s-key-id').textContent = s.audit_key_id || 'none';
     $('s-kill-switch').checked = !!s.kill_switch;
     $('s-kill-aborts').checked = s.kill_switch_aborts_running !== false;
@@ -890,6 +918,8 @@
         generation_timeout_secs: parseInt($('s-gen-timeout').value, 10),
         history_turns: parseInt($('s-history-turns').value, 10),
         audit_retention_days: parseInt($('s-retention').value, 10),
+        unseal_idle_minutes: parseInt($('s-unseal-idle').value, 10),
+        unseal_total_minutes: parseInt($('s-unseal-total').value, 10),
         kill_switch: $('s-kill-switch').checked,
         kill_switch_aborts_running: $('s-kill-aborts').checked,
         display: {

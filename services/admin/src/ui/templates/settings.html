@@ -20,6 +20,9 @@
       <h3>Audit</h3>
       {% call b::hint("How long the audit records are kept before they are deleted (7 days at least, always; the audit database itself refuses to delete anything younger).") %}{% endcall %}
       <label>Keep audit records for (days) <input id="s-retention" type="number" min="7" max="3650" step="1"></label>
+      {% call b::hint("How long sealed content stays open once the passphrase has unsealed it: it seals itself after this many minutes without use, or this many in all, whichever comes first (1 to 720). Changing either is an alert.") %}{% endcall %}
+      <label>Seal after this many idle minutes <input id="s-unseal-idle" type="number" min="1" max="720" step="1"></label>
+      <label>Seal after this many minutes in all <input id="s-unseal-total" type="number" min="1" max="720" step="1"></label>
       <p class="hint">Sealing key: <code id="s-key-id">none</code></p>
       <h3>Display defaults</h3>
       {% call b::hint("Clients use these unless their own client.yaml overrides them.") %}{% endcall %}

@@ -624,31 +624,46 @@ async function waitForPort(port) {
     await page.waitForSelector('#audit-sealed .sealed-row');
     await nothingRan('content');
   });
-  await step('audit: content stays sealed until View is clicked and the passphrase is typed', async () => {
+  await step('audit: content stays sealed until the passphrase opens a session, and Seal closes it again', async () => {
     const asked = [];
     page.on('request', (r) => { if (/audit\/payloads/.test(r.url())) asked.push(r.url()); });
     await page.click('#audit-nav [data-sub="content"]');
     assert.match(await page.innerText('#audit-content'), /Sealed/);
-    assert.equal(await page.innerText('#audit-plain').catch(() => ''), '');
-    assert.equal(asked.length, 0, 'nothing is fetched until View is clicked');
-    await page.click('#audit-content .view-btn');
-    await page.waitForSelector('#audit-pass-dialog');
     assert.equal(await page.getAttribute('#audit-pass', 'type'), 'password');
-    await page.fill('#audit-pass', 'not the passphrase at all!!');
-    await page.click('#audit-pass-ok');
+    assert.equal(asked.length, 0, 'nothing is fetched until a session is open');
+    // View while sealed sends you to the passphrase: nothing is fetched.
+    await page.click('#audit-content .view-btn');
     await page.waitForSelector('#audit-pass-error:not([hidden])');
-    assert.equal((await page.innerText('#audit-plain')).trim(), '', 'a wrong passphrase shows nothing');
+    assert.match(await page.innerText('#audit-pass-error'), /Sealed/);
+    assert.equal(asked.length, 0);
+    // A wrong passphrase opens nothing; the field is emptied.
+    await page.fill('#audit-pass', 'not the passphrase at all!!');
+    await page.click('#audit-unseal');
+    await page.waitForFunction(() => /does not open any audit key/.test(document.getElementById('audit-pass-error').textContent));
+    assert.equal(await page.inputValue('#audit-pass'), '');
+    assert.equal(await page.isHidden('#unsealed-banner'), true);
+    // The right one opens a session: a banner with the time left and a Seal button, and no more prompts.
     await page.fill('#audit-pass', AUDIT_PASS);
-    await page.click('#audit-pass-ok');
-    await page.waitForFunction(() => /Anything else\?/.test(document.getElementById('audit-plain')?.textContent || ''));
-    assert.equal(await page.inputValue('#audit-pass').catch(() => ''), '', 'the passphrase field is cleared after use');
-    assert.equal(await page.evaluate(() => JSON.stringify(Object.entries(localStorage)).includes('passphrase')), false);
-    // The access history shows the failed and the successful try as text, and nothing ran.
-    await page.click('#audit-pass-cancel');
+    await page.click('#audit-unseal');
+    await page.waitForSelector('#audit-open:not([hidden])');
+    assert.match(await page.innerText('#audit-open-state'), /Unsealed\. It seals itself in about/);
+    assert.equal(await page.inputValue('#audit-pass'), '', 'the passphrase field is cleared after use');
+    await page.waitForSelector('#unsealed-banner:not([hidden])', { timeout: 15000 });
+    assert.match(await page.innerText('#unsealed-text'), /Sealed content is open/);
+    await page.click('#audit-content .view-btn');
+    await page.waitForFunction(() => /Anything else\?/.test(document.getElementById('audit-viewed')?.textContent || ''));
+    assert.equal(await page.evaluate(() => JSON.stringify([...Object.entries(localStorage), ...Object.entries(sessionStorage)]).includes('passphrase')), false);
+    // The unseal is an alert in the banner area.
+    await page.waitForFunction(() => /Sealed audit content was unsealed/.test(document.getElementById('sealed-alerts').textContent), null, { timeout: 15000 });
+    // The access history: the view, the unseal, and the wrong guess, as text.
     await page.waitForSelector('#audit-access-rows tr');
     const results = await page.$$eval('#audit-access-rows tr td:last-child', (c) => c.map((x) => x.textContent));
-    assert.deepEqual(results, ['opened', 'wrong passphrase'], 'newest first');
-    assert.equal((await page.content()).includes('Anything else?'), false, 'the opened text is gone from the page once closed');
+    assert.deepEqual(results, ['opened', 'opened', 'wrong passphrase'], 'newest first');
+    // Seal: the text is gone from the page, the form is back, the banner goes.
+    await page.click('#audit-seal');
+    await page.waitForSelector('#audit-unseal-form:not([hidden])');
+    assert.equal((await page.content()).includes('Anything else?'), false, 'the opened text is gone from the page once sealed');
+    await page.waitForSelector('#unsealed-banner', { state: 'hidden', timeout: 15000 }).catch(async () => { await page.reload(); });
     assert.equal(await page.locator('#tab-audit img').count(), 0);
     assert.equal(await page.evaluate(() => window.__pwned), undefined);
   });
@@ -853,19 +868,33 @@ async function waitForPort(port) {
     await page.unroute('**/api/admin/v1/audit/stats*');
     await page.unroute('**/api/admin/v1/audit/provider-health');
   });
-  await step('audit content: sealed until View, a wrong passphrase shows only the error, the right one shows text that is wiped on close', async () => {
+  await step('audit content (canned): sealed until the passphrase, then View shows text as text, and a session that ends wipes the page', async () => {
     const spans = [
       { id: 'sp-turn', parent_id: null, kind: 'turn', name: 'chat', status: 'done', started_at: 1000, ended_at: 1001, sealed: 1, attrs: {} },
       { id: 'sp-attempt', parent_id: 'sp-turn', kind: 'attempt', name: 'prov', status: 'done', started_at: 1000, ended_at: 1001, sealed: 2, attrs: {} },
       { id: 'sp-gate', parent_id: null, kind: 'gate', name: 'kill_switch', status: 'done', started_at: 1000, ended_at: 1000, sealed: 0, attrs: {} },
     ];
-    const opened = [];
+    let open = false;
+    const viewed = [];
+    const sent = [];
+    const sessionBody = () => ({ open, idle_left_secs: open ? 900 : null, total_left_secs: open ? 3600 : null, idle_limit_secs: 900, total_limit_secs: 3600, keys: [{ key_id: 'k1', created_at: 1000, retired_at: null, open }] });
     await page.route('**/api/admin/v1/audit/traces/SEAL1', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ trace_id: 'SEAL1', cost: null, spans }) }));
-    await page.route('**/api/admin/v1/audit/payloads/*/open', (route) => {
-      const body = JSON.parse(route.request().postData());
-      opened.push({ url: route.request().url(), passphrase: body.passphrase });
-      if (body.passphrase !== 'the right passphrase here') return route.fulfill({ status: 403, contentType: 'application/json', body: JSON.stringify({ error: 'That passphrase does not open this content.' }) });
-      route.fulfill({ contentType: 'application/json', body: JSON.stringify({ span_id: 'sp-attempt', payloads: [{ role: 'request', key_id: 'k1', text: 'the <b>question</b> that was asked' }, { role: 'error', key_id: 'k1', text: null }] }) });
+    await page.route('**/api/admin/v1/audit/session', (route) => {
+      const m = route.request().method();
+      if (m === 'POST') {
+        const body = JSON.parse(route.request().postData());
+        sent.push(body.passphrase);
+        if (body.passphrase !== 'the right passphrase here') return route.fulfill({ status: 403, contentType: 'application/json', body: JSON.stringify({ error: 'forbidden', detail: 'That passphrase does not open any audit key.' }) });
+        open = true;
+        return route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify(sessionBody()) });
+      }
+      if (m === 'DELETE') { open = false; return route.fulfill({ status: 204 }); }
+      route.fulfill({ contentType: 'application/json', body: JSON.stringify(sessionBody()) });
+    });
+    await page.route('**/api/admin/v1/audit/payloads/*', (route) => {
+      viewed.push(route.request().url());
+      if (!open) return route.fulfill({ status: 403, contentType: 'application/json', body: JSON.stringify({ error: 'forbidden', detail: 'Sealed content is sealed.' }) });
+      route.fulfill({ contentType: 'application/json', body: JSON.stringify({ span_id: 'sp-attempt', payloads: [{ role: 'request', key_id: 'k1', text: 'the <b>question</b> that was asked' }, { role: 'error', key_id: 'k0', text: null, key_created_at: 500, key_retired_at: 900 }] }) });
     });
     await openPage('providers');
     await openPage('audit');
@@ -876,58 +905,57 @@ async function waitForPort(port) {
     assert.equal(await page.locator('#audit-sealed .sealed-row').count(), 2);
     assert.match(await page.innerText('#audit-sealed'), /Sealed \(1 item\)/);
     assert.match(await page.innerText('#audit-sealed'), /Sealed \(2 items\)/);
-    assert.equal(opened.length, 0, 'nothing is fetched before View');
-    assert.equal(await page.isVisible('#audit-pass-dialog'), false);
+    assert.equal(viewed.length, 0, 'nothing is fetched before a session is open');
+    assert.equal(await page.isVisible('#audit-unseal-form'), true);
 
-    // View asks for the passphrase in a dialog (a password field).
+    // View while sealed: the way to the passphrase, and still nothing fetched.
     await page.click('#audit-sealed [data-span="sp-attempt"] .view-btn');
-    await page.waitForSelector('#audit-pass-dialog[open]');
-    assert.equal(await page.getAttribute('#audit-pass', 'type'), 'password');
-    assert.equal(opened.length, 0, 'still nothing until the passphrase is sent');
+    assert.match(await page.innerText('#audit-pass-error'), /Enter the audit passphrase/);
+    assert.equal(viewed.length, 0);
 
-    // Wrong: the error, and nothing else on the page; the field is emptied.
+    // Wrong: the server's sentence, nothing opened, the field emptied.
     await page.fill('#audit-pass', 'a wrong passphrase of length');
-    await page.click('#audit-pass-ok');
-    await page.waitForSelector('#audit-pass-error:not([hidden])');
-    assert.match(await page.innerText('#audit-pass-error'), /does not open this content/);
-    assert.equal((await page.innerText('#audit-plain')).trim(), '');
+    await page.click('#audit-unseal');
+    await page.waitForFunction(() => /does not open any audit key/.test(document.getElementById('audit-pass-error').textContent));
     assert.equal(await page.inputValue('#audit-pass'), '', 'the passphrase field is cleared after use');
-    assert.equal(await page.isVisible('#audit-pass-dialog'), true, 'the dialog stays, to try again');
+    assert.equal(await page.isVisible('#audit-open'), false);
 
-    // Right: the text, as text (never HTML), under the role and key; the dialog turns to Close.
+    // Right: the session opens, with the keys it holds; no prompt for each item from here.
     await page.fill('#audit-pass', 'the right passphrase here');
-    await page.click('#audit-pass-ok');
-    await page.waitForFunction(() => /that was asked/.test(document.getElementById('audit-plain').textContent));
-    const plain = await page.innerText('#audit-plain');
+    await page.click('#audit-unseal');
+    await page.waitForSelector('#audit-open:not([hidden])');
+    assert.match(await page.innerText('#audit-open-state'), /Keys open: k1\./);
+    assert.equal(await page.isVisible('#audit-unseal-form'), false);
+    await page.click('#audit-sealed [data-span="sp-attempt"] .view-btn');
+    await page.waitForFunction(() => /that was asked/.test(document.getElementById('audit-viewed').textContent));
+    const plain = await page.innerText('#audit-viewed');
     assert.match(plain, /request \(key k1\)/);
     assert.match(plain, /the <b>question<\/b> that was asked/, 'markup is shown as typed');
-    assert.equal(await page.locator('#audit-plain b').count(), 0);
-    assert.match(plain, /\(could not be opened\)/);
-    assert.equal(await page.inputValue('#audit-pass'), '');
-    assert.equal(await page.innerText('#audit-pass-cancel'), 'Close');
-    assert.ok(opened.every((o) => /sp-attempt\/open$/.test(o.url)));
+    assert.equal(await page.locator('#audit-viewed b').count(), 0);
+    assert.match(plain, /not opened: this session has no key for it; key k0 was made .* and retired/);
+    assert.ok(viewed.every((u) => /sp-attempt$/.test(u)));
+    assert.deepEqual(sent, ['a wrong passphrase of length', 'the right passphrase here']);
 
-    // Closing wipes it from the page.
-    await page.click('#audit-pass-cancel');
-    assert.equal(await page.isVisible('#audit-pass-dialog'), false);
-    assert.equal((await page.$eval('#audit-plain', (n) => n.textContent)), '');
-    assert.equal((await page.content()).includes('that was asked'), false);
-
-    // And after a minute on its own (shortened here), and with Escape.
-    await page.evaluate(() => { window.askbarAudit.state.plainMs = 400; });
+    // The session ends on its own (a timeout, sign-out elsewhere): the page is wiped and asks again.
+    open = false;
+    await page.evaluate(() => window.askbarAudit.sessionFromStatus({ open: false }));
+    assert.equal(await page.isVisible('#audit-unseal-form'), true);
+    assert.equal((await page.content()).includes('that was asked'), false, 'wiped when the session ended');
+    // A view that finds it sealed says so and shows the passphrase field again.
+    await page.evaluate(() => { window.askbarAudit.session.open = true; });
     await page.click('#audit-sealed [data-span="sp-attempt"] .view-btn');
+    await page.waitForFunction(() => /sealed/i.test(document.getElementById('audit-pass-error').textContent));
+    // Seal from the page.
     await page.fill('#audit-pass', 'the right passphrase here');
-    await page.click('#audit-pass-ok');
-    await page.waitForFunction(() => /that was asked/.test(document.getElementById('audit-plain').textContent));
-    await page.waitForFunction(() => !document.getElementById('audit-pass-dialog').open, null, { timeout: 5000 });
-    assert.equal((await page.$eval('#audit-plain', (n) => n.textContent)), '', 'wiped by the timer');
-    await page.evaluate(() => { window.askbarAudit.state.plainMs = 60000; });
-    await page.click('#audit-sealed [data-span="sp-attempt"] .view-btn');
-    await page.keyboard.press('Escape');
-    assert.equal(await page.isVisible('#audit-pass-dialog'), false);
+    await page.click('#audit-unseal');
+    await page.waitForSelector('#audit-open:not([hidden])');
+    await page.click('#audit-seal');
+    await page.waitForSelector('#audit-unseal-form:not([hidden])');
+    assert.equal(open, false, 'Seal reached the server');
     assert.equal(await page.evaluate(() => JSON.stringify([...Object.entries(localStorage), ...Object.entries(sessionStorage)]).includes('passphrase')), false, 'never stored');
     await page.unroute('**/api/admin/v1/audit/traces/SEAL1');
-    await page.unroute('**/api/admin/v1/audit/payloads/*/open');
+    await page.unroute('**/api/admin/v1/audit/session');
+    await page.unroute('**/api/admin/v1/audit/payloads/*');
   });
   await step('audit access history: rows are listed newest first as text, and a new open adds one', async () => {
     let rows = [
