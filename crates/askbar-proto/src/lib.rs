@@ -25,15 +25,45 @@ pub struct Health {
     pub min_client: String,
 }
 
-/// A configured provider as seen by clients. Never carries key material.
+/// One approved model, as clients see it (`GET /api/client/v1/models`, ADR 0014). The `id` is `provider/model`:
+/// the provider's id, a slash, and the model's own name (which may contain slashes itself).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ProviderInfo {
-    /// Stable id; chats and preferences refer to a provider by this, never by name.
+pub struct ModelChoice {
     pub id: String,
-    pub name: String,
-    #[serde(rename = "type")]
-    pub kind: String,
+    pub provider_id: String,
+    pub provider_name: String,
     pub model: String,
+}
+
+/// `GET /api/client/v1/models`: the approved models, and the one used when a send names none.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelList {
+    pub models: Vec<ModelChoice>,
+    pub default: Option<String>,
+}
+
+/// One approved model in the catalog the admin pushes: a provider and one of its models.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct CatalogEntry {
+    pub provider_id: String,
+    pub model: String,
+}
+
+impl CatalogEntry {
+    /// The provider-qualified id, `provider/model`.
+    pub fn id(&self) -> String {
+        model_id(&self.provider_id, &self.model)
+    }
+}
+
+/// The provider-qualified id of a model: `provider/model`.
+pub fn model_id(provider_id: &str, model: &str) -> String {
+    format!("{provider_id}/{model}")
+}
+
+/// Splits a provider-qualified id at its first slash: a provider id has none, a model name may.
+pub fn split_model_id(id: &str) -> Option<(&str, &str)> {
+    id.split_once('/').filter(|(p, m)| !p.is_empty() && !m.is_empty())
 }
 
 /// A space the caller is a member of (`GET /api/client/v1/spaces`, ADR 0009). Each user has one
@@ -53,6 +83,10 @@ pub struct Conversation {
     pub title: String,
     pub updated_at: i64,
     pub message_count: i64,
+    /// The model (`provider/model`) the latest message asked for, which the picker shows next. Left out for a
+    /// conversation that has none yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -237,8 +271,9 @@ fn default_generation_timeout_secs() -> u32 {
 /// A user's preferences, shared by all of their clients.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Prefs {
-    /// Id of the provider new chats use; `None` means "the server's default".
-    pub active_provider_id: Option<String>,
+    /// The model (`provider/model`) new chats use; `None` means "the catalog's default".
+    #[serde(default)]
+    pub active_model: Option<String>,
 }
 
 /// One message that matched a history search.
@@ -315,8 +350,9 @@ pub struct Settings {
 pub struct ChatRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conversation_id: Option<String>,
-    /// Id of the provider to answer with.
-    pub provider: String,
+    /// The approved model to answer with, `provider/model`; left out, the catalog's default answers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
     pub text: String,
     /// Chosen by the client for each send. A repeat from the same client attaches to the
     /// generation it started instead of starting another, so a retry never doubles a message.
@@ -492,9 +528,23 @@ mod tests {
     }
 
     #[test]
-    fn provider_info_uses_type_key() {
-        let p = ProviderInfo { id: "p1".into(), name: "a".into(), kind: "openai".into(), model: "m".into() };
-        assert_eq!(serde_json::to_string(&p).unwrap(), r#"{"id":"p1","name":"a","type":"openai","model":"m"}"#);
+    fn a_model_id_is_the_provider_a_slash_and_the_model_and_splits_at_the_first_slash() {
+        let e = CatalogEntry { provider_id: "p1".into(), model: "meta/llama-3".into() };
+        assert_eq!(e.id(), "p1/meta/llama-3");
+        assert_eq!(split_model_id(&e.id()), Some(("p1", "meta/llama-3")));
+        assert_eq!(model_id("p", "m"), "p/m");
+        for bad in ["", "p", "/m", "p/"] {
+            assert_eq!(split_model_id(bad), None, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn a_conversation_without_a_model_reads_and_leaves_it_out() {
+        let c: Conversation = serde_json::from_str(r#"{"id":"c","title":"t","updated_at":1,"message_count":0}"#).unwrap();
+        assert_eq!(c.model, None);
+        assert!(!serde_json::to_string(&c).unwrap().contains("model"));
+        let old: Prefs = serde_json::from_str(r#"{"active_provider_id":"p"}"#).unwrap();
+        assert_eq!(old, Prefs::default(), "a preference from before the catalog is ignored");
     }
 
     #[test]
@@ -560,7 +610,7 @@ mod tests {
     #[test]
     fn pending_is_left_out_when_empty_and_optional_to_read() {
         let d = ConversationDetail {
-            conversation: Conversation { id: "c".into(), title: "t".into(), updated_at: 1, message_count: 0 },
+            conversation: Conversation { id: "c".into(), title: "t".into(), updated_at: 1, message_count: 0, model: None },
             messages: vec![],
             pending: vec![],
         };
@@ -701,7 +751,7 @@ mod tests {
 
     #[test]
     fn chat_request_conversation_optional() {
-        let r: ChatRequest = serde_json::from_str(r#"{"provider":"p","text":"t"}"#).unwrap();
+        let r: ChatRequest = serde_json::from_str(r#"{"text":"t"}"#).unwrap();
         assert_eq!(r.conversation_id, None);
         assert_eq!(r.client_request_id, None);
     }

@@ -20,6 +20,7 @@ pub enum ErrorCode {
     BudgetExceeded,
     KillSwitch,
     UserPaused,
+    ModelNotApproved,
     AuditKeyMissing,
     AuditBacklog,
     ClientTooOld,
@@ -41,11 +42,12 @@ pub enum ErrorCode {
 }
 
 impl ErrorCode {
-    pub const ALL: [ErrorCode; 22] = [
+    pub const ALL: [ErrorCode; 23] = [
         ErrorCode::QueueFull,
         ErrorCode::BudgetExceeded,
         ErrorCode::KillSwitch,
         ErrorCode::UserPaused,
+        ErrorCode::ModelNotApproved,
         ErrorCode::AuditKeyMissing,
         ErrorCode::AuditBacklog,
         ErrorCode::ClientTooOld,
@@ -73,6 +75,7 @@ impl ErrorCode {
             ErrorCode::BudgetExceeded => "budget_exceeded",
             ErrorCode::KillSwitch => "kill_switch",
             ErrorCode::UserPaused => "user_paused",
+            ErrorCode::ModelNotApproved => "model_not_approved",
             ErrorCode::AuditKeyMissing => "audit_key_missing",
             ErrorCode::AuditBacklog => "audit_backlog",
             ErrorCode::ClientTooOld => "client_too_old",
@@ -105,7 +108,7 @@ impl ErrorCode {
             | ErrorCode::SetupRequired
             | ErrorCode::NotConfigured => 503,
             ErrorCode::ClientTooOld => 426,
-            ErrorCode::ClientVersionMissing | ErrorCode::BadRequest => 400,
+            ErrorCode::ClientVersionMissing | ErrorCode::BadRequest | ErrorCode::ModelNotApproved => 400,
             ErrorCode::Unauthorized => 401,
             ErrorCode::Forbidden | ErrorCode::PasswordChangeRequired | ErrorCode::UserPaused => 403,
             ErrorCode::NotFound => 404,
@@ -123,6 +126,7 @@ impl ErrorCode {
             ErrorCode::BudgetExceeded => "A usage limit has been reached",
             ErrorCode::KillSwitch => "Replies are switched off",
             ErrorCode::UserPaused => "Replies are paused for this user",
+            ErrorCode::ModelNotApproved => "That model is not approved",
             ErrorCode::AuditKeyMissing => "The audit key has not been set up",
             ErrorCode::AuditBacklog => "The server is busy recording",
             ErrorCode::ClientTooOld => "This app is too old for the server",
@@ -249,6 +253,7 @@ mod tests {
         assert_eq!(status(ErrorCode::ClientTooOld), 426);
         assert_eq!(status(ErrorCode::ClientVersionMissing), 400);
         assert_eq!(status(ErrorCode::UserPaused), 403);
+        assert_eq!(status(ErrorCode::ModelNotApproved), 400);
         assert_eq!(status(ErrorCode::Unauthorized), 401);
         assert_eq!(status(ErrorCode::NotFound), 404);
         assert_eq!(status(ErrorCode::TooManyAttempts), 429);
@@ -267,6 +272,7 @@ mod tests {
                 | ErrorCode::BudgetExceeded
                 | ErrorCode::KillSwitch
                 | ErrorCode::UserPaused
+                | ErrorCode::ModelNotApproved
                 | ErrorCode::AuditKeyMissing
                 | ErrorCode::AuditBacklog
                 | ErrorCode::ClientTooOld
@@ -287,6 +293,6 @@ mod tests {
                 | ErrorCode::Internal => {}
             }
         }
-        assert_eq!(ErrorCode::ALL.len(), 22);
+        assert_eq!(ErrorCode::ALL.len(), 23);
     }
 }
