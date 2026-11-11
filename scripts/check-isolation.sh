@@ -18,7 +18,7 @@
 set -u
 
 PROJECT="${COMPOSE_PROJECT_NAME:-askbar}"
-EDGE="${PROJECT}_edge"; SERVER_API_NET="${PROJECT}_server-api"
+EDGE="${PROJECT}_edge"; CLIENT_NET="${PROJECT}_client-api"; SERVER_API_NET="${PROJECT}_server-api"
 SERVER=askbar-server; ADMIN=askbar-admin; CADDY=askbar-caddy
 PYIMG="${ASKBAR_CHECK_IMAGE:-python:3.12-slim@sha256:4840d514c583a4d3d8cad3940e68dee6f0f6f3635c12fcd0a3d74c21a5b93a54}"
 PW="${ASKBAR_ADMIN_PASSWORD:-$(head -c 24 /dev/urandom | base64 | tr -d '/+=')}"
@@ -149,8 +149,8 @@ docker rm -f askbar-check-nohash >/dev/null 2>&1
 
 docker exec "$CADDY" sh -c "wget -q -T3 -O /dev/null http://$SERVER_API/api/server/v1/health" >/dev/null 2>&1 \
   && fail "Caddy reached the server port" || pass "Caddy cannot reach the server port"
-EDGE_IP=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$EDGE\").IPAddress}}" "$SERVER")
-[ "$(http_status "$EDGE" "$EDGE_IP:8082")" = 0 ] && pass "nothing on the edge network answers on 8082" || fail "the server port answers on the edge network"
+CLIENT_IP=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$CLIENT_NET\").IPAddress}}" "$SERVER")
+[ "$(http_status "$CLIENT_NET" "$CLIENT_IP:8082")" = 0 ] && pass "nothing on the client-api network answers on 8082" || fail "the server port answers on the client-api network"
 [ "$(http_status "$EDGE" "$SERVER_API")" = 0 ] && pass "a container on edge cannot reach the server API address" || fail "the server API address is reachable from edge"
 admin_nets=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$ADMIN" | tr ' ' '\n' | grep . | sort | tr '\n' ' ')
 [ "$admin_nets" = "${PROJECT}_audit-admin ${PROJECT}_cpa-admin ${PROJECT}_gateway-admin ${PROJECT}_server-api " ] && pass "the admin is on server-api, cpa-admin, audit-admin and gateway-admin only (all internal: no route out, never edge)" || fail "the admin's networks are: $admin_nets"
@@ -170,11 +170,17 @@ refused "the server cannot write to /server-token (read-only)" docker exec "$SER
 [ "$(docker exec "$SERVER" id -u)" != "$(docker exec "$ADMIN" id -u)" ] && pass "the server and the admin run as different users" || fail "the server and the admin share a user"
 # Even as the admin's own uid, the server container has nothing of the admin's to open.
 refused "the admin's database is not in the server" docker exec -u "$(docker exec "$ADMIN" id -u)" "$SERVER" sh -c 'ls /admin-data/admin.db'
-refused "the admin cannot read the server's master key" docker exec "$ADMIN" sh -c 'cat /secrets/master.key'
+refused "the admin cannot read a master key in the server" docker exec "$ADMIN" sh -c 'cat /secrets/master.key'
+# The server holds no provider key and no audit store (ADR 0054, ADR 0051).
+for v in askbar-secrets audit-data; do
+  case " $VOLS" in *" ${PROJECT}_$v "*) fail "the server mounts $v";; *) pass "the server does not mount $v";; esac
+done
+refused "the server has no /secrets" docker exec "$SERVER" test -e /secrets
+refused "the server has no master.key anywhere" docker exec "$SERVER" sh -c 'find / -xdev -name "master.key*" 2>/dev/null | grep -q .'
+refused "the server has no audit.db anywhere" docker exec "$SERVER" sh -c 'find / -xdev -name "audit.db*" 2>/dev/null | grep -q .'
 
 echo "== 3b. The audit store"
-# audit.db is the server's alone: its own volume, mounted nowhere else.
-case " $VOLS" in *" ${PROJECT}_audit-data "*) pass "the server mounts audit-data";; *) fail "the server does not mount audit-data";; esac
+# audit.db is the auditor's alone (section 3d4); the server's old audit-data volume stays declared and mounted nowhere.
 case " $(docker inspect -f '{{range .Mounts}}{{.Name}} {{end}}' "$ADMIN")" in
   *" ${PROJECT}_audit-data "*) fail "the admin mounts audit-data";; *) pass "the admin does not mount audit-data";;
 esac
@@ -183,7 +189,6 @@ refused "no audit.db anywhere in the admin container" docker exec "$ADMIN" sh -c
 # The server's data (ADR 0009): control.db and one file per space, mounted by the server only.
 refused "the admin container has no server data (/data)" docker exec "$ADMIN" test -e /data
 refused "no control.db or space file anywhere in the admin container" docker exec "$ADMIN" sh -c 'find / -xdev \( -name "control.db*" -o -path "*/spaces/*.db" \) 2>/dev/null | grep -q .'
-check "audit.db exists in the server" docker exec "$SERVER" test -s /audit/audit.db
 # The client API (port 8080, reachable from the edge network) has no audit and no server routes.
 http_get() { # network host:port path -> status; 0 = no connection
   py --network "$1" -- "
@@ -194,7 +199,7 @@ except Exception: print(0)
 "
 }
 for path in /audit /api/client/v1/audit /api/client/v1/audit/traces /api/client/v1/audit/stats /api/server/v1/health /api/server/v1/audit/traces /api/server/v1/audit/stats; do
-  [ "$(http_get "$EDGE" "$EDGE_IP:8080" "$path")" = 404 ] && pass "the client API has no $path (404)" || fail "the client API answers $path"
+  [ "$(http_get "$CLIENT_NET" "$CLIENT_IP:8080" "$path")" = 404 ] && pass "the client API has no $path (404)" || fail "the client API answers $path"
 done
 
 echo "== 3c. The server holds no secret for the audit key"
@@ -225,7 +230,7 @@ if [ -z "$CPA" ]; then
   echo "SKIP  cpa is not running"
 else
   cpa_nets=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$CPA" | tr ' ' '\n' | grep . | sort | tr '\n' ' ')
-  [ "$cpa_nets" = "${PROJECT}_cpa-admin ${EDGE} " ] && pass "cpa is on edge and cpa-admin only" || fail "cpa's networks are: $cpa_nets"
+  [ "$cpa_nets" = "${PROJECT}_cpa-admin ${PROJECT}_cpa-gateway ${EDGE} " ] && pass "cpa is on edge, cpa-admin and cpa-gateway only" || fail "cpa's networks are: $cpa_nets"
   [ -z "$(docker inspect -f '{{range $p, $b := .NetworkSettings.Ports}}{{if $b}}{{$p}} {{end}}{{end}}' "$CPA")" ] && pass "cpa publishes no port" || fail "cpa publishes a port"
 fi
 
@@ -404,21 +409,22 @@ if [ "$(docker inspect -f '{{.State.Running}}' "$GW" 2>/dev/null)" != true ]; th
   [ "$(docker inspect -f '{{.HostConfig.ReadonlyRootfs}} {{.HostConfig.Memory}}' "$GW")" = "true 268435456" ] && pass "model-gateway has a read-only root and 256 MB" || fail "model-gateway's root or memory limit is not as set"
   # Its networks are exactly these four, and only `outbound` has a route out.
   gnets=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$GW" | tr ' ' '\n' | grep . | sort | tr '\n' ' ')
-  [ "$gnets" = "$GW_AUD $GW_NET $GW_SRV_NET $GW_OUT " ] && pass "model-gateway is on audit-model-gateway, gateway-admin, gateway-server and outbound only" || fail "model-gateway's networks are: $gnets"
-  for n in $GW_AUD $GW_NET $GW_SRV_NET; do
+  [ "$gnets" = "$GW_AUD ${PROJECT}_cpa-gateway $GW_NET $GW_SRV_NET $GW_OUT " ] && pass "model-gateway is on audit-model-gateway, cpa-gateway, gateway-admin, gateway-server and outbound only" || fail "model-gateway's networks are: $gnets"
+  for n in $GW_AUD ${PROJECT}_cpa-gateway $GW_NET $GW_SRV_NET; do
     [ "$(docker network inspect -f '{{.Internal}}' "$n" 2>/dev/null)" = true ] && pass "$n is internal" || fail "$n is not internal"
   done
   [ "$(docker network inspect -f '{{.Internal}}' "$GW_OUT" 2>/dev/null)" = false ] && pass "outbound is the one network with a route out" || fail "outbound is internal: no provider could be reached"
   # Who shares each network: no caller of another link, and only the gateway (and in dev the mock LLM) on outbound.
   members() { docker network inspect -f '{{range .Containers}}{{.Name}} {{end}}' "$1" | tr ' ' '\n' | grep . | sort | tr '\n' ' '; }
   [ "$(members "$GW_NET")" = "$ADMIN $GW " ] && pass "gateway-admin joins the admin and the gateway only" || fail "gateway-admin members: $(members "$GW_NET")"
+  [ "$(members "${PROJECT}_cpa-gateway")" = "askbar-cpa $GW " ] && pass "cpa-gateway joins CLIProxyAPI and the gateway only" || fail "cpa-gateway members: $(members "${PROJECT}_cpa-gateway")"
   [ "$(members "$GW_AUD")" = "$AUDITOR $GW " ] && pass "audit-model-gateway joins the auditor and the gateway only" || fail "audit-model-gateway members: $(members "$GW_AUD")"
   [ "$(members "$GW_SRV_NET")" = "$GW $SERVER " ] && pass "gateway-server joins the gateway and the server only" || fail "gateway-server members: $(members "$GW_SRV_NET")"
   case "$(members "$GW_OUT")" in "$GW "|"askbar-mock-llm-1 $GW ") pass "outbound joins the gateway (and the mock LLM in dev) only";; *) fail "outbound members: $(members "$GW_OUT")";; esac
   # The gateway reaches the auditor and nothing of ours but that.
   docker exec "$GW" bash -c 'exec 3<>/dev/tcp/auditor/8083' >/dev/null 2>&1 && pass "model-gateway reaches the auditor" || fail "model-gateway cannot reach the auditor"
-  # (The admin shares gateway-admin with it, so its name does resolve there.)
-  for h in server caddy cpa; do
+  # (The admin, the server and cpa share a network with it, so their names do resolve there.)
+  for h in caddy; do
     docker exec "$GW" bash -c "getent hosts $h" >/dev/null 2>&1 && fail "model-gateway resolves $h" || pass "model-gateway cannot resolve $h"
   done
   # Mounts: its credential volume, read-only, and nothing else; nobody else has it.
@@ -510,6 +516,32 @@ for p in ('/api/admin/v1/providers', '/api/admin/v1/services', '/api/admin/v1/st
 print(call('DELETE', '/api/admin/v1/providers/$pid')[0])" >/dev/null 2>&1
 fi
 
+echo "== 3d6. The server has no route out and no key (ADR 0054)"
+if [ "$(docker inspect -f '{{.State.Running}}' "$SERVER" 2>/dev/null)" != true ]; then fail "the server is not running"; else
+  snets=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$SERVER" | tr ' ' '\n' | grep . | sort | tr '\n' ' ')
+  [ "$snets" = "${PROJECT}_audit-server ${PROJECT}_client-api ${PROJECT}_gateway-server ${PROJECT}_server-api " ] \
+    && pass "the server is on audit-server, client-api, gateway-server and server-api only" || fail "the server's networks are: $snets"
+  for n in $snets; do
+    [ "$(docker network inspect -f '{{.Internal}}' "$n" 2>/dev/null)" = true ] && pass "$n is internal: no route out" || fail "$n is not internal"
+  done
+  members() { docker network inspect -f '{{range .Containers}}{{.Name}} {{end}}' "$1" | tr ' ' '\n' | grep . | sort | tr '\n' ' '; }
+  [ "$(members "$CLIENT_NET")" = "$CADDY $SERVER " ] && pass "client-api joins Caddy and the server only" || fail "client-api members: $(members "$CLIENT_NET")"
+  [ "$(members "${PROJECT}_audit-server")" = "$AUDITOR $SERVER " ] && pass "audit-server joins the auditor and the server only" || fail "audit-server members: $(members "${PROJECT}_audit-server")"
+  docker exec "$SERVER" bash -c 'timeout 4 bash -c "echo > /dev/tcp/1.1.1.1/443"' >/dev/null 2>&1 && fail "the server reached the internet" || pass "the server has no route out"
+  docker exec "$SERVER" bash -c 'timeout 4 getent hosts example.com' >/dev/null 2>&1 && fail "the server resolved an outside name" || pass "the server cannot resolve an outside name"
+  for h in cpa mock-llm; do
+    docker exec "$SERVER" bash -c "getent hosts $h" >/dev/null 2>&1 && fail "the server resolves $h" || pass "the server cannot resolve $h"
+  done
+  docker exec "$SERVER" bash -c 'exec 3<>/dev/tcp/gateway-server-host/8084' >/dev/null 2>&1 && pass "the server reaches the gateway" || fail "the server cannot reach the gateway"
+  docker exec "$SERVER" bash -c 'exec 3<>/dev/tcp/auditor/8083' >/dev/null 2>&1 && pass "the server reaches the auditor" || fail "the server cannot reach the auditor"
+  # A key given to the gateway reaches the server nowhere: not its files, not its database.
+  if [ -n "${MARK:-}" ]; then
+    docker exec "$SERVER" sh -c "grep -rIl -- '$MARK' /data /tmp /etc /home /var 2>/dev/null | head -1" | grep -q . \
+      && fail "the server's filesystem holds the marker key" || pass "the server's filesystem holds no marker key"
+    docker exec "$SERVER" sh -c "grep -rl -- '$MARK' /data 2>/dev/null | head -1" | grep -q . && fail "the server's database holds the marker key" || pass "the server's database holds no marker key"
+  fi
+fi
+
 echo "== 3e. No Docker socket"
 # There is no controller (ADR 0005): no container of the project mounts the Docker socket, and none is left
 # of the controller or its network.
@@ -578,7 +610,7 @@ case " $(docker inspect -f '{{range .Mounts}}{{.Name}} {{end}}' "$ADMIN")" in
 esac
 refused "the admin has no /secrets" docker exec "$ADMIN" test -e /secrets
 modes_ok=1
-for f in "$ADMIN:/admin-secrets/admin.key" "$SERVER:/secrets/master.key"; do
+for f in "$ADMIN:/admin-secrets/admin.key"; do
   m=$(docker exec "${f%%:*}" stat -c %a "${f#*:}" 2>/dev/null)
   [ "$m" = 600 ] || { fail "${f#*:} has mode ${m:-missing}, expected 600"; modes_ok=0; }
 done
