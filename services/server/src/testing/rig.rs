@@ -85,6 +85,8 @@ impl Rig {
         let boot = BootId::new();
         let restarter = Restarter::for_tests(boot.clone(), Duration::ZERO, Duration::from_secs(1), || {}, || {});
         let gateway = askbar_model_gateway::Gateway::new(client.clone(), boot.clone(), restarter);
+        gateway.set_usage_reader(askbar_model_gateway::usage::Reader::new(&audit_url, gw_tokens.clone()));
+        tokio::spawn(gateway.clone().watch_usage());
         tokio::spawn(client.clone().hello_until_done(boot.as_str().to_string()));
         tokio::spawn(client.clone().drain_forever());
         let gateway_url = serve(askbar_model_gateway::server_router(gateway.clone(), askbar_model_gateway::server_links(&gw_tokens))).await;

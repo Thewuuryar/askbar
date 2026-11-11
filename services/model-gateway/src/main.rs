@@ -74,11 +74,14 @@ async fn main() {
     // Nothing is held that needs saving: a restart is how a key leaves memory.
     let restarter = askbar_service::restart::Restarter::new(boot_id.clone(), || {});
     let gw = Gateway::new(audit.clone(), boot_id.clone(), restarter);
+    // The budget is held against what the auditor recorded, read with this gateway's own read-only token.
+    gw.set_usage_reader(askbar_model_gateway::usage::Reader::new(&audit_url, dir.clone()));
     // Docker does not restart an unhealthy container; the watchdog does, by exiting (ADR 0005).
     askbar_service::restart::start_watchdog(healthy);
     tokio::spawn(audit.clone().hello_until_done(boot_id.as_str().to_string()));
     tokio::spawn(audit.clone().drain_forever());
     tokio::spawn(gw.clone().watch_turns());
+    tokio::spawn(gw.clone().watch_usage());
     let server_app = server_router(gw.clone(), server_links(&dir));
     let admin_app = admin_router(gw, admin_links(&dir));
     let serve = |addr: SocketAddr, app: axum::Router, what: &'static str| async move {

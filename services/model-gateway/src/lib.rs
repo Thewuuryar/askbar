@@ -16,6 +16,7 @@ pub mod models;
 pub mod provider_test;
 pub mod router;
 pub mod seal;
+pub mod usage;
 
 use askbar_proto::audit::{SpanFinish, SpanKind, SpanStart};
 use askbar_proto::gateway::{ChatEvent, ChatRequest, FailureClass, GatewayConfig};
@@ -32,12 +33,12 @@ use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::routing::{get, post, put};
 use axum::{Extension, Json, Router};
 use llm::{ChatMessage, Provider, ProviderKind, StreamOutcome};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
 use std::path::{Path as FsPath, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 
 /// The port both listeners use, on the address each caller's network gives them.
 pub const DEFAULT_PORT: u16 = 8084;
@@ -58,6 +59,20 @@ struct Applied {
     providers: BTreeMap<String, Provider>,
     audit_key: [u8; 32],
     timeout: Duration,
+    /// The token budget, authoritative here (ADR 0014).
+    budget: askbar_proto::Budget,
+    /// The providers whose tokens do not count toward it (subscriptions).
+    free: BTreeSet<String>,
+    kill_switch: bool,
+    aborts_running: bool,
+    paused: BTreeSet<String>,
+}
+
+/// A reply that is running, so a stop can reach it: whose it is, and the channel that says why it must end.
+struct Running {
+    user_id: String,
+    id: String,
+    stop: watch::Sender<Option<&'static str>>,
 }
 
 struct OpenTurn {
@@ -72,11 +87,57 @@ pub struct Gateway {
     config: RwLock<Option<Arc<Applied>>>,
     turns: Mutex<Vec<OpenTurn>>,
     pub restarter: Restarter,
+    /// What the budget is held against (plan step 3.2).
+    usage: usage::Book,
+    reader: std::sync::OnceLock<Arc<usage::Reader>>,
+    /// The replies running now, for the kill switch and a user's pause to stop.
+    running: Mutex<Vec<Running>>,
 }
 
 impl Gateway {
     pub fn new(audit: Arc<AuditClient>, boot_id: BootId, restarter: Restarter) -> Arc<Gateway> {
-        Arc::new(Gateway { boot_id, audit, http: llm::http_client(), config: RwLock::new(None), turns: Mutex::new(Vec::new()), restarter })
+        Arc::new(Gateway {
+            boot_id,
+            audit,
+            http: llm::http_client(),
+            config: RwLock::new(None),
+            turns: Mutex::new(Vec::new()),
+            restarter,
+            usage: usage::Book::default(),
+            reader: std::sync::OnceLock::new(),
+            running: Mutex::new(Vec::new()),
+        })
+    }
+
+    /// Where the gateway reads the day's and month's token counts. Without one a budget can never be read, so a request
+    /// that a budget applies to is refused.
+    pub fn set_usage_reader(&self, reader: usage::Reader) {
+        let _ = self.reader.set(Arc::new(reader));
+    }
+
+    /// Read the auditor's totals for the day and the month now. Returns whether it did.
+    pub async fn refresh_usage(&self) -> bool {
+        let (Some(reader), Some(cfg)) = (self.reader.get(), self.applied()) else { return false };
+        let now = askbar_service::audit_client::now_parts().0;
+        let (daily, monthly) = tokio::join!(
+            reader.metered_total(askbar_service::periods::day_start(now), &cfg.free),
+            reader.metered_total(askbar_service::periods::month_start(now), &cfg.free)
+        );
+        match (daily, monthly) {
+            (Some(d), Some(m)) => {
+                self.usage.set_view(now, d, m);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Keep the view fresh for as long as the process runs: soon after start (and again until it works), then every minute.
+    pub async fn watch_usage(self: Arc<Self>) {
+        loop {
+            let ok = self.refresh_usage().await;
+            tokio::time::sleep(if ok { usage::REFRESH_EVERY } else { Duration::from_secs(3) }).await;
+        }
     }
 
     pub fn audit(&self) -> &Arc<AuditClient> {
@@ -268,6 +329,7 @@ fn check_config(c: &GatewayConfig) -> Result<Applied, String> {
         return Err("audit_public_key.key_id does not match the key".into());
     }
     let mut providers = BTreeMap::new();
+    let mut free = BTreeSet::new();
     for p in &c.providers {
         if p.id.is_empty() || p.id.len() > 64 {
             return Err("A provider id must be 1 to 64 characters.".into());
@@ -293,8 +355,24 @@ fn check_config(c: &GatewayConfig) -> Result<Applied, String> {
         if providers.insert(p.id.clone(), provider).is_some() {
             return Err("Two providers have the same id.".into());
         }
+        if p.billing == askbar_proto::Billing::Subscription {
+            free.insert(p.id.clone());
+        }
     }
-    Ok(Applied { version: c.version, providers, audit_key: bytes, timeout: Duration::from_secs(u64::from(c.generation_timeout_secs)) })
+    if c.paused_users.len() > 10_000 || c.paused_users.iter().any(|u| !valid_id(u)) {
+        return Err("A paused user is an id of 1 to 64 letters, digits, - or _ (at most 10,000 of them).".into());
+    }
+    Ok(Applied {
+        version: c.version,
+        providers,
+        audit_key: bytes,
+        timeout: Duration::from_secs(u64::from(c.generation_timeout_secs)),
+        budget: c.budget.clone(),
+        free,
+        kill_switch: c.kill_switch,
+        aborts_running: c.kill_switch_aborts_running,
+        paused: c.paused_users.iter().cloned().collect(),
+    })
 }
 
 impl Gateway {
@@ -303,7 +381,18 @@ impl Gateway {
     pub fn apply_config(&self, c: &GatewayConfig) -> Result<(), String> {
         let applied = check_config(c)?;
         let version = applied.version;
+        // The stops reach the replies already running (the kill switch if it is set to, and each paused user's), the
+        // moment the configuration is in place, so a stop does not wait for the next request.
+        let stop_all = applied.kill_switch && applied.aborts_running;
+        let paused = applied.paused.clone();
         *self.config.write().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(applied));
+        for r in self.running.lock().unwrap_or_else(|e| e.into_inner()).iter() {
+            if stop_all {
+                let _ = r.stop.send(Some("kill_switch"));
+            } else if paused.contains(&r.user_id) {
+                let _ = r.stop.send(Some("user_paused"));
+            }
+        }
         tracing::info!(version, providers = c.providers.len(), "configuration applied");
         self.audit.config_applied(version as i64);
         Ok(())
@@ -360,6 +449,97 @@ fn start_of(id: &str, trace: &str, parent: Option<&str>, kind: SpanKind, name: &
     }
 }
 
+/// A refusal at a gate, on record when the auditor is back: a span that began and ended at once, `blocked`.
+fn refuse_at_gate(gw: &Gateway, req: &ChatRequest, name: &str, error_code: &str, attrs: serde_json::Value) {
+    let id = askbar_service::ids::new_id();
+    let mut start = start_of(&id, &req.generation_id, None, SpanKind::Gate, name);
+    start.user_id = Some(req.user_id.clone());
+    start.client_id = req.client_id.clone();
+    start.attrs = Some(attrs);
+    let mut f = finish("blocked");
+    f.error_code = Some(error_code.into());
+    gw.audit.refusal(start, f);
+}
+
+impl Gateway {
+    /// The kill switch, the user's pause and the budget, in that order. `Err` is the refusal to answer with.
+    fn gates(&self, cfg: &Applied, req: &ChatRequest) -> Result<(), Failure> {
+        if cfg.kill_switch {
+            refuse_at_gate(self, req, "kill_switch", "kill_switch", serde_json::json!({ "kill_switch": true }));
+            return Err(ApiError::new(ErrorCode::KillSwitch, "Replies have been switched off by the administrator for now."));
+        }
+        if cfg.paused.contains(&req.user_id) {
+            refuse_at_gate(self, req, "user_pause", "user_paused", serde_json::json!({ "paused": true }));
+            return Err(ApiError::new(ErrorCode::UserPaused, "Replies are paused for this user by the administrator."));
+        }
+        let (daily, monthly) = (cfg.budget.daily_tokens, cfg.budget.monthly_tokens);
+        if (daily.is_none() && monthly.is_none()) || cfg.free.contains(&req.provider_id) {
+            return Ok(());
+        }
+        let used = self.usage.used(now_parts().0);
+        // A budget that cannot be read cannot be held: ask again in a few seconds, with no provider called.
+        if (daily.is_some() && used.daily.is_none()) || (monthly.is_some() && used.monthly.is_none()) {
+            return Err(ApiError::new(
+                ErrorCode::AuditBacklog,
+                "The gateway has not read how many tokens have been used yet, so no model was called. Try again in a few seconds.",
+            )
+            .retry_after(5));
+        }
+        let note = serde_json::json!({
+            "daily_used": used.daily, "daily_limit": daily, "monthly_used": used.monthly, "monthly_limit": monthly,
+        });
+        for (period, limit, used) in [("daily", daily, used.daily), ("monthly", monthly, used.monthly)] {
+            if limit.zip(used).is_some_and(|(limit, used)| used >= limit) {
+                refuse_at_gate(self, req, "budget", "budget_exceeded", note);
+                return Err(ApiError::new(
+                    ErrorCode::BudgetExceeded,
+                    if period == "monthly" {
+                        "The usage limit for this month has been reached."
+                    } else {
+                        "The usage limit for today has been reached."
+                    },
+                )
+                .with("period", period));
+            }
+        }
+        Ok(())
+    }
+
+    /// Registers a reply that is about to run, so a stop can reach it. A stop that came in since the gate is delivered at
+    /// once, so there is no moment in which a reply is neither refused nor stoppable.
+    fn register(self: &Arc<Self>, user_id: &str, id: &str) -> (Registered, watch::Receiver<Option<&'static str>>) {
+        let (stop, rx) = watch::channel(None);
+        self.running.lock().unwrap_or_else(|e| e.into_inner()).push(Running { user_id: user_id.to_string(), id: id.to_string(), stop });
+        if let Some(cfg) = self.applied() {
+            let reason = if cfg.kill_switch {
+                Some("kill_switch")
+            } else if cfg.paused.contains(user_id) {
+                Some("user_paused")
+            } else {
+                None
+            };
+            if let Some(reason) = reason {
+                if let Some(r) = self.running.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|r| r.id == id) {
+                    let _ = r.stop.send(Some(reason));
+                }
+            }
+        }
+        (Registered { gw: self.clone(), id: id.to_string() }, rx)
+    }
+}
+
+/// Takes a reply off the running list when it ends, however it ends.
+struct Registered {
+    gw: Arc<Gateway>,
+    id: String,
+}
+
+impl Drop for Registered {
+    fn drop(&mut self) {
+        self.gw.running.lock().unwrap_or_else(|e| e.into_inner()).retain(|r| r.id != self.id);
+    }
+}
+
 fn valid_id(s: &str) -> bool {
     !s.is_empty() && s.len() <= 64 && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
@@ -382,6 +562,9 @@ async fn chat(
     if llm::normalize(&messages).is_empty() {
         return Err(bad("There is nothing to send."));
     }
+    // The stops and the budget, from this gateway's own copy: the authoritative one (ADR 0014). Each refusal is a gate span
+    // in the generation's trace, and nothing of a call is on record before it.
+    gw.gates(&cfg, &req)?;
 
     // The turn span, on record before any provider is called (ADR 0010 rules 1 to 3).
     let turn_id = askbar_service::ids::new_id();
@@ -405,7 +588,8 @@ async fn chat(
 
     let (tx, rx) = mpsc::unbounded_channel::<ChatEvent>();
     let _ = tx.send(ChatEvent::Span { span_id: turn_id.clone(), trace_id: req.generation_id.clone() });
-    tokio::spawn(run_attempts(gw.clone(), cfg, provider, req, turn_id, messages, tx));
+    let (registered, stop_rx) = gw.register(&req.user_id, &turn_id);
+    tokio::spawn(run_attempts(gw.clone(), cfg, provider, req, turn_id, messages, tx, stop_rx, registered));
     let stream = futures_util::StreamExt::map(tokio_stream::wrappers::UnboundedReceiverStream::new(rx), |e: ChatEvent| {
         Ok::<_, Infallible>(Event::default().event(e.name()).json_data(&e).expect("an event is JSON"))
     });
@@ -414,6 +598,7 @@ async fn chat(
 
 /// Tries the provider, and up to `MAX_RETRIES` more times when the failure is worth it. Nothing is retried once
 /// text has gone to the caller. The caller going away (its stream closing) cancels the request in flight.
+#[allow(clippy::too_many_arguments)]
 async fn run_attempts(
     gw: Arc<Gateway>,
     cfg: Arc<Applied>,
@@ -422,11 +607,23 @@ async fn run_attempts(
     turn_id: String,
     messages: Vec<ChatMessage>,
     tx: mpsc::UnboundedSender<ChatEvent>,
+    stop_rx: watch::Receiver<Option<&'static str>>,
+    _registered: Registered,
 ) {
     let mut sent_text = false;
     let mut retry_index = 0u32;
     let system = req.system.clone();
     loop {
+        // A stop that came while the last try waited, or before the first: no more tries (and no provider is called).
+        if let Some(reason) = *stop_rx.borrow() {
+            let _ = tx.send(ChatEvent::Error {
+                code: reason.into(),
+                class: FailureClass::Fatal,
+                retry_after_secs: None,
+                attempts: retry_index,
+            });
+            return;
+        }
         let attempt_id = askbar_service::ids::new_id();
         let mut start = start_of(&attempt_id, &req.generation_id, Some(&turn_id), SpanKind::Attempt, &provider.name);
         start.provider_id = Some(req.provider_id.clone());
@@ -447,10 +644,30 @@ async fn run_attempts(
 
         // The caller going away cancels the request: a watcher holds the cancel sender until then.
         let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
+        // ...and so does a stop from the gateway's own copy (the kill switch, or this user's pause), which says why.
+        let stopped: Arc<Mutex<Option<&'static str>>> = Arc::default();
         let watcher = {
             let tx = tx.clone();
+            let mut rx = stop_rx.clone();
+            let stopped = stopped.clone();
             tokio::spawn(async move {
-                tx.closed().await;
+                loop {
+                    tokio::select! {
+                        _ = tx.closed() => break,
+                        changed = rx.changed() => {
+                            if changed.is_err() {
+                                // The sender is gone: nothing will stop this reply but its caller.
+                                tx.closed().await;
+                                break;
+                            }
+                            let reason = *rx.borrow();
+                            if reason.is_some() {
+                                *stopped.lock().unwrap_or_else(|e| e.into_inner()) = reason;
+                                break;
+                            }
+                        }
+                    }
+                }
                 let _ = cancel_tx.send(());
             })
         };
@@ -463,6 +680,7 @@ async fn run_attempts(
         .await;
         watcher.abort();
         sent_text |= text_this_try;
+        let stopped_by = *stopped.lock().unwrap_or_else(|e| e.into_inner());
 
         let mut end = finish("done");
         end.provider_id = Some(req.provider_id.clone());
@@ -479,8 +697,24 @@ async fn run_attempts(
                     (end.tokens_in, end.tokens_out, end.tokens_cached) = (u.input, u.output, u.cache_read);
                 }
                 end.attrs = Some(attempt_attrs(&r, retry_index));
+                if let (StreamOutcome::Cancelled, Some(reason)) = (r.outcome, stopped_by) {
+                    // Stopped by the kill switch or this user's pause: say why, here and to the caller.
+                    end.error_code = Some(reason.into());
+                    gw.audit.finish(&attempt_id, end);
+                    let _ = tx.send(ChatEvent::Error {
+                        code: reason.into(),
+                        class: FailureClass::Fatal,
+                        retry_after_secs: None,
+                        attempts: retry_index + 1,
+                    });
+                    return;
+                }
                 gw.audit.finish(&attempt_id, end);
                 if r.outcome == StreamOutcome::Completed {
+                    // What this reply used counts toward the budget, unless the provider is a subscription.
+                    if let Some(u) = r.usage.filter(|_| !cfg.free.contains(&req.provider_id)) {
+                        gw.usage.count(now_parts().0, u.input.unwrap_or(0) + u.output.unwrap_or(0));
+                    }
                     if let Some(u) = r.usage {
                         let _ = tx.send(ChatEvent::Usage {
                             input: u.input,

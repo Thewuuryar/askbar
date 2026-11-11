@@ -644,30 +644,7 @@ fn pass_budget_gate(state: &AppState, generation_id: &str, s: &Submit, note: &se
     state.audit.finish_span(SpanFinish::new(&span, "done"));
 }
 
-/// Midnight UTC at the start of the day containing `t` (unix seconds).
-pub fn day_start(t: i64) -> i64 {
-    t - t.rem_euclid(86_400)
-}
-
-/// Midnight UTC on the first of the month containing `t` (unix seconds).
-pub fn month_start(t: i64) -> i64 {
-    // Civil date from days since 1970-01-01 and back (Howard Hinnant's algorithms).
-    let z = t.div_euclid(86_400) + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = yoe + era * 400 + i64::from(month <= 2);
-    // Days since 1970-01-01 of day 1 of that month.
-    let y = year - i64::from(month <= 2);
-    let era = y.div_euclid(400);
-    let yoe = y.rem_euclid(400);
-    let doy = (153 * (if month > 2 { month - 3 } else { month + 9 }) + 2) / 5;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    (era * 146_097 + doe - 719_468) * 86_400
-}
+pub use askbar_service::periods::{day_start, month_start};
 
 /// The token budget gate. Counts the tokens used since the start of the day and of the month by
 /// providers that are paid per token (a subscription provider costs nothing, so its tokens do not
