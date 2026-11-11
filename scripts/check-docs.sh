@@ -5,6 +5,7 @@
 #   3. ADR 0001: every ADR but a stub has an Amendments section; a Kind is component or register; a Retired or
 #      Deferred ADR says when and why; a "Merged into NNNN" stub has a Merged: line and names an ADR that exists,
 #      is not a stub and lists it in its Amendments; no ADR has an "Amends:" line or an "amended by" status.
+#   4. ADR 0016: every Defend row has a row in the test table, and every test named there exists (`pending` is allowed until 1.0).
 # Covers every tracked *.md file (all *.md files outside node_modules and target when git is not available).
 # Usage: scripts/check-docs.sh
 cd "$(dirname "$0")/.." || exit 2
@@ -114,6 +115,43 @@ if os.path.exists("docs/adr/README.md"):
     for n in rows:
         if int(n) not in nums:
             print(f"docs/adr/README.md: row for ADR {n} has no file"); bad += 1
+
+# Defend table (ADR 0016, D36): every Defend row has a row in "Where each Defend row is tested", and every test
+# named there (in backticks) exists in a tracked file that is not markdown. "pending, PR <letter>" is allowed until 1.0.
+adr16 = "docs/adr/0016-risk-register.md"
+if os.path.exists(adr16):
+    t16 = open(adr16, encoding="utf-8").read()
+    def first_cells(block):
+        return [m.group(1).strip() for m in re.finditer(r"^\|\s*([^|]+?)\s*\|", block, re.M) if not set(m.group(1).strip()) <= set("-: ") and m.group(1).strip() not in ("Risk", "Defend row")]
+    dm = re.search(r"\*\*Defend in v1\*\*(.*?)\*\*Accepted for v1\*\*", t16, re.S)
+    tm = re.search(r"\*\*Where each Defend row is tested\.\*\*(.*?)^## ", t16, re.S | re.M)
+    if dm and tm:
+        tested = {}
+        for m in re.finditer(r"^\|\s*([^|]+?)\s*\|\s*(.*?)\s*\|\s*$", tm.group(1), re.M):
+            if m.group(1) not in ("Defend row",) and not set(m.group(1)) <= set("-: "):
+                tested[m.group(1)] = m.group(2)
+        for row in first_cells(dm.group(1)):
+            if row not in tested:
+                print(f"{adr16}: Defend row {row!r} has no row in the test table"); bad += 1
+        try:
+            code = subprocess.run(["git", "ls-files", "--", ".", ":!*.md"], capture_output=True, text=True, check=True).stdout.split()
+        except (OSError, subprocess.CalledProcessError):
+            code = []
+        blob = ""
+        for f in code:
+            try:
+                blob += open(f, encoding="utf-8", errors="ignore").read() + "\n"
+            except OSError:
+                pass
+        for row, cell in tested.items():
+            names = re.findall(r"`([^`]+)`", cell)
+            if not names and "pending" not in cell:
+                print(f"{adr16}: Defend row {row!r} names no test and is not pending"); bad += 1
+            for name in names:
+                if not re.search(r"\b" + re.escape(name) + r"\b", blob):
+                    print(f"{adr16}: Defend row {row!r} names test {name!r}, which does not exist"); bad += 1
+    else:
+        print(f"{adr16}: cannot find the Defend table or the test table"); bad += 1
 
 print("docs ok" if not bad else f"{bad} problem(s)")
 sys.exit(1 if bad else 0)

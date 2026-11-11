@@ -69,16 +69,16 @@ The owner accepted the third list on November 4, 2026, and amended it on Novembe
 
 | Defend row | Tests |
 | --- | --- |
-| Admin or pairing brute force | pending, PR AU (names the existing limit and lockout tests) |
-| Compromised admin | pending, PR AB (fresh sign-in), PR V and PR W (alerts), PR AU (the existing admin-record tests) |
-| Unknown changes to the audit log | pending, PR AU (the existing chain tamper tests) |
-| False or missing records | pending, PR X (silence rules), PR AU (the existing refusal tests) |
+| Admin or pairing brute force | `wrong_password_is_401_then_locks_out_even_the_right_one`, `wrong_keys_count_toward_the_same_lockout_as_wrong_passwords`, `a_wrong_username_and_a_wrong_password_get_the_same_answer_and_both_count_toward_the_lockout` |
+| Compromised admin, which holds live secrets | `an_unseal_and_a_view_are_refused_when_their_record_cannot_be_written`, `a_key_cannot_open_a_session_change_the_password_or_stand_in_for_one`; pending, PR AB (fresh sign-in), PR V and PR W (alerts) |
+| Unknown changes to the audit log | `a_shorter_chain_is_a_rollback_and_the_stored_head_stays_where_it_was`, `an_entry_with_another_hash_or_no_entry_at_all_is_a_rewrite`, `the_chain_head_moves_with_every_record_and_a_full_check_finds_an_edit` |
+| False or missing records after a server compromise | `no_provider_is_called_when_the_auditor_refuses_and_the_refusal_is_recorded_later`, `an_acknowledgment_slower_than_a_second_is_a_refusal_and_no_provider_is_called`; pending, PR X (silence rules) |
 | Backup theft | pending, PR AI, AJ, AL and AM |
 | Vulnerable or changed dependency | pending, PR AR |
-| Malicious model output | pending, PR AE |
-| Lost or stolen client | pending, PR AU (the existing revocation tests) |
-| Auditor down or disk full | pending, PR X (disk rules), PR AT (drills) |
-| Unwanted sealed content access | pending, PR X, PR AU (the existing session tests) |
+| Malicious model output in a client or admin page | pending, PR AE |
+| Lost or stolen client | `revoked_token_is_401`, `a_client_the_snapshot_lists_as_revoked_is_refused` |
+| Auditor down or disk full | `below_the_disk_floor_a_new_span_is_refused_but_the_records_of_open_spans_are_not`, `no_provider_is_called_when_the_auditor_cannot_be_reached`; pending, PR X (disk alerts), PR AT (drills) |
+| Unwanted sealed content access | `an_unseal_and_a_view_are_refused_when_their_record_cannot_be_written`; pending, PR X (alerts) |
 
 ## Alternatives considered
 
@@ -93,3 +93,4 @@ Each Defend control is a ship requirement. A new accepted risk needs the owner's
 - 2026-11-08: marked as a register ADR, so it is amended in place ([0046](0046-component-and-register-adrs-and-partial-amendments.md)). Nothing else changed.
 - 2026-11-11: design of "Caddy sends access logs to the auditor" (plan step 2.9, owner's choice of 2026-11-11; the built form is in [0051](0051-auditor.md)). Caddy's `net` log writer cannot carry a token, so the auditor takes the lines on an ingest listener of its own, on a new `internal` network `audit-caddy` shared by Caddy and the auditor alone, instead of a log-forwarding sidecar (which would be a new container and need its own ADR). The network is the only control on that listener: a compromised Caddy can append false lines but cannot read, change or delete anything. Access lines are best effort, not fail-closed like model calls: when the auditor is behind, lines are dropped and counted.
 - 2026-11-11: controls decided for v1 (#70, owner's decisions; **decision changes** D17, D18, D20, D21 and D30): no passkeys (D20); the fresh sign-in list (D21); silence rules (D2, D3); Trusted Types required in both CSPs (D17); links and images (D18); CVE alerts by failed-run email and Trivy (D30); budget thresholds (D5); disk thresholds (D6); the sender of each alert (D1); and a table that maps each Defend row to its tests, checked by `check-docs.sh` (D36).
+- 2026-11-11: the Defend test table names the existing tests for the rows that have them, and `scripts/check-docs.sh` checks that each named test exists and that every Defend row has a row (plan PR AU). No decision changed.
