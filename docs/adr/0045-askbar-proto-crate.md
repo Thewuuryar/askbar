@@ -39,3 +39,4 @@ A change to a shared type changes every user at once, and the OpenAPI tests in `
 
 None yet.
 - 2026-11-11: design for plan steps 4.1, 5.1, 6.2 and 6.3 (#70): `ALERTER_V1` and the alerter types, the policy type, the auditor's backup and restore types, and the alerter among its users. The code PRs add the 'built' lines.
+- 2026-11-11: built `paths::ALERTER_V1` and the alerter types (plan step 4.1, PR S, #73): `alerter::{Kind, Severity, Sender, Event, Fields, AlerterConfig, NtfyConfig, AlerterStatus, TestResult}`, with `Kind::ALL`, each kind's severity, senders and fields, and `Event::check`. Every type refuses a field it does not know, and `NtfyConfig`'s `Debug` shows no server, topic or token. The audit crate's `AlertDeliveryStart` and `AlertDeliveryRecord` came with PR T. The policy type and the backup and restore types are not built yet.
