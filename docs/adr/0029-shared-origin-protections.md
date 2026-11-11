@@ -14,7 +14,7 @@ The admin and client API share one host name, and so one browser origin. Somethi
 2. **Changes:** the admin requires a CSRF header on changes, and refuses cross-site requests using `Sec-Fetch-Site`.
 3. **Content:** nothing on this host serves user-controlled content as HTML or script.
 4. **Client API:** it returns JSON or its documented event stream, with `X-Content-Type-Options: nosniff`.
-5. **Admin site:** it keeps a strict CSP.
+5. **Admin site:** it keeps a strict CSP, which requires Trusted Types (`require-trusted-types-for 'script'`), as does the desktop popup's ([0044](0044-desktop-client.md)).
 6. **Routing:** Caddy answers 404 for anything except `/admin`, `/api/admin`, and `/api/client`.
 
 ## Alternatives considered
@@ -26,3 +26,4 @@ The admin and client API share one host name, and so one browser origin. Somethi
 The admin and client API can stay on one URL, but these rules become part of the security boundary. Browser and API tests must cover each rule, and a new route that serves content needs a review against them.
 
 ## Amendments
+- 2026-11-11: Trusted Types required in the admin CSP (#70, D17, a decision change); built in plan step 5.2.
