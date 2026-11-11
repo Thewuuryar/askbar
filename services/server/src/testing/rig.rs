@@ -68,6 +68,7 @@ impl Rig {
         };
         link("server-auditor", &audit_tokens, &server_tokens);
         link("model-gateway-auditor", &audit_tokens, &gw_tokens);
+        link("model-gateway-auditor-read", &audit_tokens, &gw_tokens);
         link("server-model-gateway", &gw_tokens, &server_tokens);
         link("admin-auditor-read", &audit_tokens, &admin_tokens);
         link("admin-auditor-append", &audit_tokens, &admin_tokens);

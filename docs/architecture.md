@@ -125,6 +125,7 @@ Every link has its own authenticated path and uses separate networks, so a missi
 | `admin` | `alerter` | Read release results | Per-link token |
 | `server`, `model-gateway`, `alerter` | `auditor` | Append records, including `model-gateway` span starts | Service append token |
 | Caddy | `auditor` | Append access logs | Designed in plan step 2.9 (Caddy's log writer sends no token) |
+| `model-gateway` | `auditor` | Read token counts, to hold the budget | Read token (`GET /token-counts` only) |
 | `auditor` | `alerter` | Alert events | Per-link token |
 | `server` | `model-gateway` | Model calls and the approved model list | Per-link token |
 | `model-gateway` | `cpa` | Subscription providers | `cpa` API key |

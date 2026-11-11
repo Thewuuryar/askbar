@@ -16,6 +16,7 @@ const SERVER: &str = "server-auditor";
 const GATEWAY: &str = "model-gateway-auditor";
 const ADMIN_APPEND: &str = "admin-auditor-append";
 const ADMIN_READ: &str = "admin-auditor-read";
+const GATEWAY_READ: &str = "model-gateway-auditor-read";
 
 struct T {
     url: String,
@@ -47,7 +48,7 @@ async fn start_with(limits: Limits) -> T {
     let dir = std::env::temp_dir().join(format!("askbar-auditor-{}", ulid::Ulid::new()));
     let accept = dir.join("tokens/accept");
     std::fs::create_dir_all(&accept).unwrap();
-    for link in [SERVER, GATEWAY, ADMIN_APPEND, ADMIN_READ] {
+    for link in [SERVER, GATEWAY, ADMIN_APPEND, ADMIN_READ, GATEWAY_READ] {
         std::fs::write(accept.join(format!("{link}.sha256")), format!("{}\n", hex(&token(link)))).unwrap();
     }
     let recorder = Recorder::spawn(AuditDb::open(&dir.join("data/audit.db")).unwrap(), limits.max_queued);
@@ -670,4 +671,32 @@ async fn caddys_access_lines_are_read_newest_first_by_the_admin_read_link_only()
         (status["access_lines_dropped"].clone(), status["access_lines_refused"].clone()),
         (serde_json::json!(0), serde_json::json!(0))
     );
+}
+
+#[tokio::test]
+async fn the_gateways_read_link_reads_the_token_counts_and_nothing_else() {
+    let t = start().await;
+    for p in ["/token-counts", "/token-counts?since=0", "/status"] {
+        assert_eq!(t.as_(GATEWAY_READ, M::GET, p, None).await.status, 200, "{p}");
+    }
+    for (m, p) in [
+        (M::GET, "/traces"),
+        (M::GET, "/stats"),
+        (M::GET, "/admin-actions"),
+        (M::GET, "/prunes"),
+        (M::GET, "/retention"),
+        (M::GET, "/chain/head"),
+        (M::GET, "/access-logs"),
+        (M::PUT, "/retention"),
+        (M::POST, "/spans"),
+        (M::POST, "/hello"),
+        (M::POST, "/config-applied"),
+        (M::POST, "/admin-actions"),
+    ] {
+        assert_eq!(t.as_(GATEWAY_READ, m.clone(), p, Some(json!({}))).await.status, 403, "{m} {p}");
+    }
+    // And no other link may use its token's routes the other way round.
+    for link in [SERVER, GATEWAY, ADMIN_APPEND] {
+        assert_eq!(t.as_(link, M::GET, "/token-counts", None).await.status, 403, "{link}");
+    }
 }

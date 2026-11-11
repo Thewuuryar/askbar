@@ -9,7 +9,7 @@ info:
     the auditor can be changed with confidence, not for outside callers (ADR 0051, ADR 0010).
 
     Every request except `GET /health` carries `Authorization: Bearer <token>`. There is one token for each
-    link: `server-auditor`, `model-gateway-auditor`, `admin-auditor-append` and `admin-auditor-read`. The
+    link: `server-auditor`, `model-gateway-auditor`, `model-gateway-auditor-read`, `admin-auditor-append` and `admin-auditor-read`. The
     auditor holds only each token's SHA-256, in `auditor-token/accept/<link>.sha256`, read on every request.
     A link may call only its own routes (`403 forbidden` otherwise), and **the caller of a record is the one its
     token belongs to, never anything in a body**.
@@ -18,6 +18,8 @@ info:
       configuration version a service applied.
       Only `model-gateway-auditor` opens model-call spans (`turn`, `attempt`, `tool`, `agent_step`); the
       server's link opens `gate` spans only.
+    - `model-gateway-auditor-read`: `GET /token-counts` and `GET /status`, so the gateway can hold the budget against what
+      was used. It appends nothing and reads no trace, content or admin record.
     - `admin-auditor-append`: `hello` and admin action records. It reads and changes nothing.
     - `admin-auditor-read`: every read, the chain head and its check, Caddy's access lines, and retention. It appends nothing.
     - **Caddy's access lines** do not use this API or a token. Caddy's `net` log writer cannot send one, so the auditor takes
@@ -350,7 +352,7 @@ paths:
   /api/audit/v1/token-counts:
     get:
       operationId: getTokenCounts
-      summary: What was used since a time, by provider and model. Counts only.
+      summary: What was used since a time, by provider and model. Counts only. `admin-auditor-read` and `model-gateway-auditor-read`.
       parameters:
         - $ref: '#/components/parameters/Since'
       responses:

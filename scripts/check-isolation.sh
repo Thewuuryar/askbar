@@ -298,7 +298,7 @@ case "$admin_token" in mgt_*) pass "the admin's token has the admin-server prefi
 # file it has already given away. After a rotation the admin and the server read the new files on restart.
 before=$(docker exec "$ADMIN" sh -c 'cat /admin-token/call/admin-server.token' 2>/dev/null)
 out=$(docker compose -p "$PROJECT" run --rm --no-deps bootstrap 2>/dev/null)
-[ "$out" = "$(printf 'kept admin-server\nkept admin-auditor-append\nkept admin-auditor-read\nkept server-model-gateway\nkept admin-model-gateway\nkept model-gateway-auditor\nkept server-auditor')" ] && [ "$(docker exec "$ADMIN" cat /admin-token/call/admin-server.token 2>/dev/null)" = "$before" ] \
+[ "$out" = "$(printf 'kept admin-server\nkept admin-auditor-append\nkept admin-auditor-read\nkept server-model-gateway\nkept admin-model-gateway\nkept model-gateway-auditor\nkept server-auditor\nkept model-gateway-auditor-read')" ] && [ "$(docker exec "$ADMIN" cat /admin-token/call/admin-server.token 2>/dev/null)" = "$before" ] \
   && pass "a second bootstrap run keeps the token" || fail "a second bootstrap run: $out"
 out=$(docker compose -p "$PROJECT" run --rm --no-deps bootstrap rotate admin-server 2>/dev/null)
 printf '%s' "$out" | grep -q '^rotated admin-server$' && printf '%s' "$out" | grep -q '^Restart from the admin: admin, server$' \
@@ -352,6 +352,7 @@ if [ "$(docker inspect -f '{{.State.Running}}' "$AUDITOR" 2>/dev/null)" != true 
   done
   owned "$AUDITOR" /auditor-token/accept/admin-auditor-append.sha256 "10003 444" "the auditor's append hash file (owner, mode)"
   owned "$AUDITOR" /auditor-token/accept/admin-auditor-read.sha256 "10003 444" "the auditor's read hash file (owner, mode)"
+  owned "$AUDITOR" /auditor-token/accept/model-gateway-auditor-read.sha256 "10003 444" "the auditor's gateway read hash file (owner, mode)"
   for d in /auditor-token /auditor-token/accept; do owned "$AUDITOR" "$d" "10003 500" "the auditor's $d"; done
   # The API, from a throwaway container on audit-admin with the admin's own tokens: only the right token reaches each route.
   AUD_APPEND=$(docker exec "$ADMIN" cat /admin-token/call/admin-auditor-append.token 2>/dev/null)
@@ -484,6 +485,7 @@ if [ "$(docker inspect -f '{{.State.Running}}' "$GW" 2>/dev/null)" != true ]; th
   owned "$GW" /model-gateway-token/accept/server-model-gateway.sha256 "10004 444" "the gateway's server hash file (owner, mode)"
   owned "$GW" /model-gateway-token/accept/admin-model-gateway.sha256 "10004 444" "the gateway's admin hash file (owner, mode)"
   owned "$GW" /model-gateway-token/call/model-gateway-auditor.token "10004 400" "the gateway's auditor token file (owner, mode)"
+  owned "$GW" /model-gateway-token/call/model-gateway-auditor-read.token "10004 400" "the gateway's auditor read token file (owner, mode)"
   for d in /model-gateway-token /model-gateway-token/call /model-gateway-token/accept; do owned "$GW" "$d" "10004 500" "the gateway's $d"; done
   owned "$AUDITOR" /auditor-token/accept/model-gateway-auditor.sha256 "10003 444" "the auditor's gateway hash file (owner, mode)"
   owned "$SERVER" /server-token/call/server-model-gateway.token "10002 400" "the server's gateway token file (owner, mode)"
