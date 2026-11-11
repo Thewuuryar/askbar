@@ -72,6 +72,11 @@ async fn main() {
     let gateway = askbar_admin::gateway_link::GatewayLink::new(&askbar_admin::gateway_link::gateway_url(), gateway_token);
     let _ = state.gateway.set(gateway.clone());
     tokio::spawn(gateway.run(state.clone()));
+    // The Audit pages read the auditor, and the retention setting goes to it (ADR 0051).
+    let auditor_token = askbar_admin::auditor_link::read_token(&askbar_admin::server_link::token_dir()).unwrap_or_else(|e| die(e, 1));
+    let auditor = askbar_admin::auditor_link::AuditorLink::new(&askbar_admin::auditor_link::auditor_url(), auditor_token);
+    let _ = state.auditor.set(auditor.clone());
+    tokio::spawn(auditor.run(state.clone()));
     if let Err(e) = askbar_admin::serve_unix(&askbar_admin::socket_path(), askbar_admin::router(state)).await {
         die(e, 1);
     }

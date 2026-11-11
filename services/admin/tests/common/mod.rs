@@ -133,6 +133,9 @@ pub async fn start_with(caddy_up: bool, with_gateway: bool) -> T {
     if with_gateway {
         admin.gateway.set(gateway_link).ok().unwrap();
     }
+    // The Audit pages read the in-process auditor with the admin's read token (ADR 0051).
+    let auditor_token = askbar_admin::auditor_link::read_token(&rig.admin_tokens).unwrap();
+    admin.auditor.set(askbar_admin::auditor_link::AuditorLink::new(&rig.audit_url, auditor_token)).ok().unwrap();
     admin.set_caddy(CaddyLink { socket: Some(caddy_socket.clone()), secrets_dir: Some(secrets_dir.clone()) });
     let adm = serve(askbar_admin::router(admin.clone())).await;
     let http = reqwest::Client::new();
