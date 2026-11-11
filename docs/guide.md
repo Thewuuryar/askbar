@@ -20,15 +20,15 @@ Askbar is three programs:
 - **Desktop client** (Tauri): the popup. It pairs with one server and holds only its address, a hotkey and a client token (in the OS keychain).
 - **`askbar-server`**: the client API. It stores conversations and asks `model-gateway` for each reply; it holds no provider key and has no route to the internet. It has no web UI and no login.
 - **`askbar-model-gateway`**: holds the provider keys in memory and calls the providers ([ADR 0054](adr/0054-model-gateway.md)).
-- **`askbar-admin`**: the admin site. It owns all configuration (providers, system prompt, display defaults, pairing codes, clients, network and HTTPS settings, limits and the kill switch) and pushes it to the server over a private server API. Its **Audit** page shows what the server recorded about every reply.
+- **`askbar-admin`**: the admin site. It owns all configuration (providers, system prompt, display defaults, pairing codes, clients, network and HTTPS settings, limits and the kill switch) and pushes it to the server over a private server API. Its **Audit** page shows what the auditor recorded about every reply.
 
 There is no standalone mode: the client always talks to a server.
 
 ```
- desktop app --HTTPS, bearer token--> Caddy :443 --> askbar-server :8080 --> your providers
+ desktop app --HTTPS, bearer token--> Caddy :443 --> askbar-server :8080 --> askbar-model-gateway --> your providers
  browser     --HTTPS, session cookie-> Caddy :443 --unix socket--> askbar-admin
-                                                                      |  server API (token, own network)
-                                                                      +--> askbar-server
+                                                                      |  server API, gateway and auditor (a token and a network for each)
+                                                                      +--> askbar-server, askbar-model-gateway, askbar-auditor
 ```
 
 How the pieces fit, and why, is in [architecture.md](architecture.md); the HTTP APIs are described in [openapi/](openapi/) (client, server, admin); contributing is in [CONTRIBUTING.md](../CONTRIBUTING.md) and security in [SECURITY.md](../SECURITY.md).
@@ -90,7 +90,7 @@ A reply is produced by the server, not by the window. The question is saved firs
 - **Stop** (Esc or the Stop button) tells the server to stop the reply; the text so far is kept.
 - **Time limit.** A reply that runs longer than **300 seconds** is stopped; the text that arrived stays, the window says "Stopped after 5 minutes" and offers **Try again**. The limit is the **Generation timeout** in the admin site's Settings (30 to 3600 seconds).
 - **Restarts.** If the server is restarted mid-reply, the reply ends as interrupted and keeps the text it had.
-- **Refusals.** When the administrator has switched replies off (the kill switch in Settings), a daily or monthly token limit is used up, or the audit key has not been made yet, the window says so in words and keeps what you typed. A busy server is tried once more by itself.
+- **Refusals.** When the administrator has switched replies off (the kill switch in Settings), a daily or monthly token limit is used up, or the audit key has not been made yet, your account is paused, or the model you chose is not approved, the window says so in words and keeps what you typed. A busy server is tried once more by itself.
 - **Failed questions are not resent.** A question that got no reply stays in the conversation but is not sent to the model with your next one, so a question the provider refuses can't stick the conversation. To retry it, send it again (or **Try again** after a timeout).
 - If another provider than the one you chose answered (the server fell back), the reply says "Answered by ...".
 
@@ -213,7 +213,7 @@ The admin makes CLIProxyAPI's config and API key itself (nobody copies a key any
 1. `docker compose --profile dev down` (not `-v`: no volume is removed or renamed).
 2. Empty the server's data directory: `rm -rf ./data/*` (or your `DATA_DIR`). The server no longer reads `askbar.db`; if one is left it says so in its log and leaves it alone.
 3. `docker compose --profile dev up -d --build`.
-4. In the admin site, **Providers** shows "key missing on the server" for each provider whose key went with the data: edit it and enter the key again.
+4. In the admin site, **Providers** shows "key missing" for each provider whose key went with the data: edit it and enter the key again.
 5. Update the Askbar app to 0.6.0 (a 0.5 app is told it is too old), create a pairing key for each user in the admin site, and pair each app again.
 
 **Upgrading from 0.4 to 0.5** (stop the stack, pull, rebuild, update the app):
@@ -229,7 +229,7 @@ The admin makes CLIProxyAPI's config and API key itself (nobody copies a key any
 
 **Set in the admin site** instead of in files: admin password, hostname, Cloudflare token, allowlist, the Let's Encrypt staging switch, the system prompt, display defaults and per-user defaults.
 
-**Compose profiles:** the services (server, admin, Caddy, CLIProxyAPI) are always on. `dev` adds a mock LLM (`tests/e2e/mock_llm.py`).
+**Compose profiles:** the services (server, `model-gateway`, auditor, admin, Caddy, CLIProxyAPI) are always on; `bootstrap` runs once at each start. `dev` adds a mock LLM (`tests/e2e/mock_llm.py`).
 
 ### Tokens between services
 
@@ -253,11 +253,11 @@ Each link between two services has its own token ([ADR 0004](adr/0004-bootstrap-
 
 ### The auditor
 
-The audit store has its own container, `askbar-auditor` ([ADR 0051](adr/0051-auditor.md), [ADR 0010](adr/0010-auditor.md)). It holds `audit.db` on its own volume, `auditor-data`, runs as uid 10003 with no capabilities, and has no route out: it joins only `audit-*` networks, each shared with one caller. Today there are two: `audit-admin`, shared with the admin, and `audit-model-gateway`, shared with `model-gateway`. Its API is `/api/audit/v1` ([docs/openapi/audit.v1.yaml](openapi/audit.v1.yaml)) and it is never public.
+The audit store has its own container, `askbar-auditor` ([ADR 0051](adr/0051-auditor.md), [ADR 0010](adr/0010-auditor.md)). It holds `audit.db` on its own volume, `auditor-data`, runs as uid 10003 with no capabilities, and has no route out: it joins only `audit-*` networks, each shared with one caller. There are four: `audit-admin` (the admin), `audit-server` (the server), `audit-model-gateway` (`model-gateway`) and `audit-caddy` (Caddy's access lines). Its API is `/api/audit/v1` ([docs/openapi/audit.v1.yaml](openapi/audit.v1.yaml)) and it is never public.
 
-**The server and `model-gateway` send it their records** (the gateway opens each reply's turn and try spans and waits for the acknowledgment before it calls a provider; the server adds the gates it passed, its sealed request and reply, and how the reply ended). The server's own `audit.db` is gone: `audit-data` stays on disk untouched and the auditor starts with its own empty `auditor-data`, so records from before the upgrade stay only in the old volume. Copy it (`docker run --rm -v askbar_audit-data:/a -v "$PWD":/b alpine cp -a /a/. /b/audit-backup/`) or delete it once you no longer want them. The admin's Audit pages read the auditor through the server until a later step moves them to the admin.
+**The server and `model-gateway` send it their records** (the gateway opens each reply's turn and try spans and waits for the acknowledgment before it calls a provider; the server adds the gates it passed, its sealed request and reply, and how the reply ended). The server's own `audit.db` is gone: `audit-data` stays on disk untouched and the auditor starts with its own empty `auditor-data`, so records from before the upgrade stay only in the old volume. Copy it (`docker run --rm -v askbar_audit-data:/a -v "$PWD":/b alpine cp -a /a/. /b/audit-backup/`) or delete it once you no longer want them.
 
-- **Tokens.** Each link has its own, made by `bootstrap` ([Tokens between services](#tokens-between-services)). The auditor holds only their hashes, in `auditor-token`. Today `admin-auditor-append` (admin action records), `admin-auditor-read` (reads and retention) and `model-gateway-auditor` (the gateway's spans, finish records and sealed payloads) exist; the server's comes when it calls the gateway. A link may call only its own routes, and the caller of a record is the one its token belongs to. No token can change or delete a record.
+- **Tokens.** Each link has its own, made by `bootstrap` ([Tokens between services](#tokens-between-services)). The auditor holds only their hashes, in `auditor-token`. These exist: `server-auditor` (the server's gate spans, sealed payloads and finish records), `model-gateway-auditor` (the gateway's spans, finish records and sealed payloads), `admin-auditor-append` (admin action records), `admin-auditor-read` (reads and retention) and `model-gateway-auditor-read` (token counts only, so the gateway can hold the budget). A link may call only its own routes, and the caller of a record is the one its token belongs to. No token can change or delete a record.
 - **The hash chain.** Every record the auditor takes (a span's start and finish, a sealed payload, an admin action, a prune) is chained: its entry holds a digest of the record and the hash of the entry before it, so changing or removing a record or an entry breaks the chain from there on. The entries are never deleted, not even by retention (they hold digests, not content). **The admin keeps the newest chain head** it has checked, every five minutes compares it with the auditor's, and about once an hour asks the auditor to check every record against its entry. A red banner on every admin page says what it found: **rollback** (the chain is shorter than the admin saw: an older copy of `audit.db` may have been put back, or records removed), **rewritten** (the entry the admin stored is gone or has another hash) or **edited** (records no longer match their entries). The sentence gives numbers and the kind of record, never its content, and it is also logged (`ALERT audit chain`). The banner goes away by itself when the auditor's chain is the one the admin stored again. The chain shows that records were changed; it does not show that a service told the truth. **Restoring `audit.db` from a backup on purpose** shows as a rollback, and the banner stays until there is a way to accept the restored chain (it comes with recording the admin's own actions, plan step 2.7). Records from before the chain existed are chained when the auditor first starts with it, so the chain proves nothing about them before that day.
 - **What the admin does is recorded, and refused without a record.** Every change an administrator makes in the admin site or through an admin API key is appended to the auditor **before** it is made: settings (the retention and the kill switch are named in the record, the prompt is not), providers and their tests, users, clients, pairing keys, API keys, the audit key, the admin password, restarts, the network settings, Cloudflare and CLIProxyAPI accounts, and the backup download. The configuration pushes to the server and to the gateway are recorded as actions of their own. If the auditor cannot take the record, the change is refused with a sentence ("The auditor cannot be reached, and every change is recorded first, so nothing was changed") and nothing is saved; reading still works. How each change ended (`done`, `refused` or `failed`) is appended afterwards. A record holds the route, whether a session or a key asked, the ids in the path and a few facts, never what was typed, a secret or message content. `askbar-admin reset` is recorded too, and does not reset the password when the auditor cannot take the record: bring the auditor back first. **The server and the gateway record the configuration version they apply** with their own tokens (`config` / `applied`), so the admin's claim of a push and the service's record sit side by side; a mismatch alert comes later. Sealed-content sessions are recorded too (see the Audit page above). Not recorded yet: signing in and out, and restores (there is no restore route; it is a manual procedure).
 - **Caddy's access lines.** Every request Caddy handles is also one line to the auditor, on a network of its own, `audit-caddy`, shared by Caddy and the auditor alone. Caddy's log writer cannot carry a token, so the auditor takes the lines on an ingest listener (`auditor-ingest-host:8086`) that reads and never answers: from `audit-caddy`, Caddy can add lines and nothing else, and the token API is not bound on that network at all (the API listens on one address for each of its callers' networks, not on every interface). A line keeps the time, method, host, path **without its query string**, status, size, duration, the client address, the protocol and a cut user agent: no header and no query string is kept, because either can carry a secret. The lines are chained and pruned with the other records, and the admin read token reads them (`GET /access-logs`); there is no page for them yet. They are best effort, unlike model calls: Caddy starts and serves while the auditor is away (`soft_start`), a line that cannot be sent is lost, and when the auditor is busy it drops lines (never more than half its queue) and counts them in its status (`access_lines_dropped`, `access_lines_refused`). **Upgrading:** `docker compose up -d --build` adds the network and the listener, and the auditor's first start applies migration 5, which makes the chain table again with the new kind and keeps every entry.
@@ -287,7 +287,7 @@ The admin site's **Services** page shows whether the server, `model-gateway`, th
 
 **Upgrading an install that used `cpa-init` / `cpa-login`:** CLIProxyAPI's config volume was root-owned; the admin (uid 10001) must be able to read and write it once: `docker compose run --rm --no-deps --user root --entrypoint chown admin -R 10001:10001 /cpa-config`, then `docker compose up -d --build`. The admin keeps your existing API key (so the provider and your logins carry on), replaces CLIProxyAPI's control secret and restarts it. If the admin cannot read the config it says so in its log and leaves CLIProxyAPI alone.
 
-**Server environment** (already set in `compose.yaml`; useful without Docker): `ASKBAR_CLIENT_API_ADDR`, `ASKBAR_SERVER_API_ADDR` (`ip:port`, or `host:port` resolved once at start-up to exactly one address; never `0.0.0.0`), `ASKBAR_SERVER_TOKEN_HASH_FILE`, `ASKBAR_DATA_DIR`, `ASKBAR_SERVER_TOKEN_DIR` (its tokens for the gateway and the auditor), `ASKBAR_GATEWAY_URL` and `ASKBAR_AUDIT_API_URL`. **Model-gateway:** `ASKBAR_GATEWAY_SERVER_ADDR`, `ASKBAR_GATEWAY_ADMIN_ADDR`, `ASKBAR_GATEWAY_TOKEN_DIR`, `ASKBAR_AUDIT_API_URL`. **Admin:** `ASKBAR_ADMIN_SOCKET`, `ASKBAR_ADMIN_DATA_DIR`, `ASKBAR_ADMIN_SECRETS_DIR`, `ASKBAR_ADMIN_TOKEN_DIR`, `ASKBAR_SERVER_API_URL`, `ASKBAR_CADDY_SOCKET`, `ASKBAR_CADDY_SECRETS_DIR`, `ASKBAR_PUBLIC_URL`. **Auditor:** `ASKBAR_AUDIT_API_ADDR` (default `0.0.0.0:8083`), `ASKBAR_AUDIT_DIR`, `ASKBAR_AUDITOR_TOKEN_DIR`.
+**Server environment** (already set in `compose.yaml`; useful without Docker): `ASKBAR_CLIENT_API_ADDR`, `ASKBAR_SERVER_API_ADDR` (`ip:port`, or `host:port` resolved once at start-up to exactly one address; never `0.0.0.0`), `ASKBAR_SERVER_TOKEN_HASH_FILE`, `ASKBAR_DATA_DIR`, `ASKBAR_SERVER_TOKEN_DIR` (its tokens for the gateway and the auditor), `ASKBAR_GATEWAY_URL` and `ASKBAR_AUDIT_API_URL`. **Model-gateway:** `ASKBAR_GATEWAY_SERVER_ADDR`, `ASKBAR_GATEWAY_ADMIN_ADDR`, `ASKBAR_GATEWAY_TOKEN_DIR`, `ASKBAR_AUDIT_API_URL`. **Admin:** `ASKBAR_ADMIN_SOCKET`, `ASKBAR_ADMIN_DATA_DIR`, `ASKBAR_ADMIN_SECRETS_DIR`, `ASKBAR_ADMIN_TOKEN_DIR`, `ASKBAR_SERVER_API_URL`, `ASKBAR_GATEWAY_URL`, `ASKBAR_AUDIT_API_URL`, `ASKBAR_CADDY_SOCKET`, `ASKBAR_CADDY_SECRETS_DIR`, `ASKBAR_PUBLIC_URL`. **Auditor:** `ASKBAR_AUDIT_API_ADDRS` (one `host:port` for each network, such as `auditor-admin-host:8083`), `ASKBAR_AUDIT_INGEST_ADDR` (`auditor-ingest-host:8086`, Caddy's access lines), `ASKBAR_AUDIT_DIR`, `ASKBAR_AUDITOR_TOKEN_DIR`.
 
 ### Backup and recovery
 
@@ -306,10 +306,11 @@ A restored `data/` needs no key volume: the server holds no provider key. After 
 ```
 crates/askbar-proto/   request/response and snapshot types shared by the server, admin and client
 crates/askbar-service/ what every service shares: per-link token checks, GET /status, the not-configured gate
-crates/askbar-audit/   the audit store (spans and sealed payloads in audit.db); the server links it today
+crates/askbar-audit/   the audit store (spans, sealed payloads, the hash chain); the auditor links it, the server only in its tests
 services/bootstrap/    makes the per-link tokens and exits; rotates them from the host
 services/auditor/      the audit store as its own container: /api/audit/v1, tokens per link, retention, limits
-services/server/       the server: client API, server API, database, chat/LLM streaming, secrets
+services/server/       the server: client API, server API, database, spaces, chat streaming through the gateway
+services/model-gateway/ the provider keys in memory, every provider call, budgets and the model catalog
 services/admin/        the admin service: admin site (src/ui/), admin.db, snapshot push, Caddy configuration (unix only)
 services/cpa-supervisor/ runs CLIProxyAPI in the askbar-cpa image and restarts it on a config change, a request or a crash
 clients/desktop/       the desktop client, its own Cargo workspace and package.json:
@@ -318,10 +319,10 @@ clients/desktop/       the desktop client, its own Cargo workspace and package.j
   tests/               markdown and UI tests for the popup, icon generator
 deploy/caddy/          Caddy's bootstrap config
 deploy/cpa/            notes on CLIProxyAPI
-compose.yaml           server, admin, caddy, cpa (CLIProxyAPI), plus the dev profile
-Dockerfile             one target per service: `server`, `admin`, `caddy` (Caddy with the Cloudflare DNS module) and `cpa` (the pinned CLIProxyAPI with our supervisor)
+compose.yaml           bootstrap, server, model-gateway, auditor, admin, caddy, cpa (CLIProxyAPI), plus the dev profile
+Dockerfile             one target per service: `bootstrap`, `server`, `model-gateway`, `auditor`, `admin`, `caddy` (Caddy with the Cloudflare DNS module) and `cpa` (the pinned CLIProxyAPI with our supervisor)
 scripts/               smoke.sh (end-to-end), check-isolation.sh (container isolation checks) and check-docs.sh
-docs/                  architecture.md, wire-contract.md, adr/, style/, openapi/ (client, server, admin), refactor-log.md
+docs/                  architecture.md, wire-contract.md, adr/, style/, openapi/ (client, server, admin, audit, model-gateway), refactor-log.md
 tests/e2e/             the admin-site browser test and the mock LLM server
 ```
 
