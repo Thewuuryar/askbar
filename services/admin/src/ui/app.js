@@ -398,6 +398,31 @@
 
   let editing = null; // provider id, or null when adding
 
+  // The details of a provider test, folded away until asked for: the request's method and path, the status, the error
+  // type and the timings. The server never sends a key, a reply or a provider's own words, and this shows only text.
+  function testDetails(d) {
+    const box = document.createElement('details');
+    box.className = 'test-details';
+    const sum = document.createElement('summary');
+    sum.textContent = 'Details';
+    const dl = document.createElement('dl');
+    const row = (k, v) => {
+      if (v === null || v === undefined) return;
+      const dt = document.createElement('dt');
+      dt.textContent = k;
+      const dd = document.createElement('dd');
+      dd.textContent = String(v);
+      dl.append(dt, dd);
+    };
+    row('Request', d.method + ' ' + d.path);
+    row('Status', d.status);
+    row('Error type', d.error_type);
+    row('Time to first text', d.ttft_ms === null || d.ttft_ms === undefined ? null : d.ttft_ms + ' ms');
+    row('Total time', d.total_ms + ' ms');
+    box.append(sum, dl);
+    return box;
+  }
+
   function providerCard(p) {
     const card = document.createElement('div');
     card.className = 'card';
@@ -426,7 +451,12 @@
       try {
         const r = await api('POST', '/api/admin/v1/providers/' + encodeURIComponent(p.id) + '/test');
         result.className = 'test-result ' + (r.ok ? 'ok' : 'error');
-        result.textContent = r.ok ? 'Success: ' + r.message : 'Failed: ' + r.message;
+        result.textContent = '';
+        const line = document.createElement('span');
+        line.className = 'test-line';
+        line.textContent = (r.ok ? 'Success: ' : 'Failed: ') + r.message;
+        result.appendChild(line);
+        if (r.details) result.appendChild(testDetails(r.details));
       } catch (ex) {
         result.className = 'test-result error';
         result.textContent = 'Failed: ' + ex.message;

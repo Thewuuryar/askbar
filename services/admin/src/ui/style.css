@@ -29,6 +29,10 @@ form#provider-form, form.panel { background: var(--card); border: 1px solid var(
 .ok { color: var(--good); }
 .flash { padding: 8px 12px; border-radius: 8px; background: var(--card); border: 1px solid var(--line); overflow-wrap: anywhere; }
 .test-result { font-size: 13px; margin-top: 6px; overflow-wrap: anywhere; }
+.test-details { margin-top: 4px; }
+.test-details dl { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; margin: 4px 0 0; }
+.test-details dt { color: var(--muted, inherit); }
+.test-details dd { margin: 0; }
 @media (max-width: 560px) { .top { flex-wrap: wrap; } }
 label.check { display: flex; gap: 8px; align-items: center; color: var(--fg); }
 label.check input { width: auto; margin: 0; }

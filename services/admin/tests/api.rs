@@ -93,7 +93,9 @@ async fn start(reachable: bool) -> T {
     let admin = AdminState::with_server(db, link);
     // The gateway holds the keys the admin gives it and does the model lists and provider tests (ADR 0054); with
     // `reachable` false it is down too.
-    let (gateway, gateway_link) = common::start_gateway(&dir, reachable).await;
+    // The provider test is on record before the provider is called, so this gateway has an auditor (kept for the test).
+    let rig: &'static askbar_server::testing::Rig = Box::leak(Box::new(askbar_server::testing::Rig::start().await));
+    let (gateway, gateway_link) = common::start_gateway(&dir, reachable, rig).await;
     admin.gateway.set(gateway_link).ok().unwrap();
     let adm = serve(askbar_admin::router(admin.clone())).await;
     let http = reqwest::Client::new();
@@ -184,7 +186,9 @@ async fn providers_are_saved_here_pushed_to_the_server_and_the_key_goes_only_to_
 
     // Test goes through the gateway, which holds the key the admin gave it.
     let (st, res) = t.call(M::POST, &format!("/api/admin/v1/providers/{id}/test"), None).await;
-    assert_eq!((st, res["ok"].clone(), res["message"].as_str()), (200, json!(true), Some("ok")));
+    assert_eq!((st, res["ok"].clone()), (200, json!(true)), "{res}");
+    assert!(res["message"].as_str().unwrap().starts_with("Streaming works"), "{res}");
+    assert!(res["ttft_ms"].is_u64() && res["details"]["path"] == "/v1/chat/completions", "{res}");
     assert!(!res.to_string().contains(KEY));
 
     // Editing keeps the key unless a new one comes; renaming reaches the server.

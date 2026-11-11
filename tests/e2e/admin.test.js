@@ -251,7 +251,15 @@ async function waitForPort(port) {
   await step('Test sends a message through the provider and shows success', async () => {
     await page.click('.card[data-name="mock"] [data-action="test"]');
     await page.waitForFunction(() => /Success|Failed/.test(document.querySelector('.card[data-name="mock"] .test-result').textContent));
-    assert.match(await page.innerText('.card[data-name="mock"] .test-result'), /^Success:/);
+    assert.match(await page.innerText('.card[data-name="mock"] .test-result'), /^Success: Streaming works\. The first text came after \d+ ms\./);
+    // The details are folded away until asked for, and are text: the request, the status and the timings, nothing else.
+    assert.equal(await page.isVisible('.card[data-name="mock"] .test-details dl'), false);
+    await page.click('.card[data-name="mock"] .test-details summary');
+    const details = await page.innerText('.card[data-name="mock"] .test-details dl');
+    assert.match(details, /Request\s+POST \/v1\/chat\/completions/);
+    assert.match(details, /Status\s+200/);
+    assert.match(details, /Time to first text\s+\d+ ms/);
+    assert.equal(details.includes(SECRET_KEY), false);
   });
   await step('after a reload the key is not displayed anywhere', async () => {
     await page.reload();
@@ -328,7 +336,7 @@ async function waitForPort(port) {
     await page.waitForSelector('.card[data-name="dead"]');
     await page.click('.card[data-name="dead"] [data-action="test"]');
     await page.waitForFunction(() => /Failed/.test(document.querySelector('.card[data-name="dead"] .test-result').textContent));
-    assert.match(await page.innerText('.card[data-name="dead"] .test-result'), /could not reach/);
+    assert.match(await page.innerText('.card[data-name="dead"] .test-result'), /Could not reach the provider.s address/);
   });
   await step('a duplicate name is explained', async () => {
     await page.click('#add-provider');

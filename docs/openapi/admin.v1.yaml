@@ -717,7 +717,12 @@ paths:
           type: string
     post:
       operationId: testProvider
-      summary: Send a tiny message through the provider.
+      summary: Stream a short fixed message through the provider and report how it went.
+      description: >
+        Pass or fail, the time to the first text, and a details view of the request: its method and path, the status
+        code, an error type and the timings. The message is always the gateway's own words: the reply, a provider's error
+        text and the key are never in it. Nothing of the result is stored; the audit record is metadata only (a turn
+        span named `provider_test`). A test that could not be recorded in time sends nothing (`error_type: audit`).
       security:
         - adminSession: []
         - adminApiKey: []
@@ -727,12 +732,7 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  ok:
-                    type: boolean
-                  message:
-                    type: string
+                $ref: '#/components/schemas/ProviderTest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
@@ -1614,6 +1614,37 @@ components:
         key_missing:
           type: boolean
           description: The server reports it holds no key for this provider, though one was sent. Enter the key again. Never true for the managed provider.
+    ProviderTest:
+      type: object
+      required: [ok, message, ttft_ms, details]
+      properties:
+        ok:
+          type: boolean
+        message:
+          type: string
+          description: A sentence of the gateway's own. Never the reply, a provider's words or the key.
+        ttft_ms:
+          type: [integer, 'null']
+          description: Milliseconds from sending the request to the first text, on a pass.
+        details:
+          type: object
+          required: [method, path, status, error_type, ttft_ms, total_ms]
+          properties:
+            method:
+              type: string
+            path:
+              type: string
+              description: The request's path only, with no host, query or credentials.
+            status:
+              type: [integer, 'null']
+              description: The HTTP status of the answer, when there was one.
+            error_type:
+              type: [string, 'null']
+              enum: [connect, auth, not_found, rate_limited, rejected, provider_error, http_error, stream, config, empty, timeout, audit, null]
+            ttft_ms:
+              type: [integer, 'null']
+            total_ms:
+              type: integer
     Catalog:
       type: object
       required: [models, default]
