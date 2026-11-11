@@ -16,7 +16,7 @@ Caddy, a third-party web server, is the stack's only entry point. It existed bef
   - `/admin` and `/api/admin` to the admin's unix socket, open to private addresses by default (`remote_ip` allowlist);
   - `/api/client` (and the old `/api/v1`, which the server answers with 426) to `server:8080`, unbuffered for the chat stream;
   - a `not_found` problem for every other path.
-- **Certificates:** until a host name with a real certificate is set, port 443 answers on every address with the install's own certificate, made by the admin. With a host name it gets one from Let's Encrypt over the Cloudflare DNS challenge, reading the token from a file ([0015](0015-certificates.md)). Port 80 only redirects.
+- **Certificates:** until a host name with a real certificate is set, port 443 answers on every address with the install's own certificate, made by the admin. With a host name it gets one from Let's Encrypt over the Cloudflare DNS challenge, reading the token from a file ([0015](0015-certificates.md)). Port 80 only redirects. **From plan step 5.3,** the setting `acme_challenge` (`dns` or `http`) chooses the challenge: with `http`, Caddy leaves out the Cloudflare DNS challenge and port 80 also answers the HTTP-01 challenge for the host name ([0015](0015-certificates.md)).
 - **What it holds:** its certificates and state in `caddy-data` and `caddy-config`. It reads the install's certificate, key and Cloudflare token from `caddy-secrets`, read-only.
 - **Volumes:** `caddy-data`, `caddy-config`, `caddy-run` (its admin socket, shared with the admin), `admin-run` (the admin's socket) and `caddy-secrets` (read-only).
 - **Networks and ports:** `edge` (the public side, with a route out), `client-api` (the server's client API, shared with the server alone) and `audit-caddy` (`internal`, shared with the auditor alone). It publishes 80 and 443, the one exception in the stack ([0003](0003-v1-service-layout.md)).
@@ -33,9 +33,10 @@ Not recorded: Caddy predates this record.
 
 **Where the code and an accepted ADR disagree:**
 
-- [0015](0015-certificates.md) adds HTTP-01 next to the DNS challenge; only the DNS challenge is configured (plan phase 5).
+- [0015](0015-certificates.md) adds HTTP-01 next to the DNS challenge; only the DNS challenge is configured (plan step 5.3, `acme_challenge`).
 
 ## Amendments
 
 - 2026-11-08: both Caddy images are pinned by digest and the Cloudflare plugin to v0.2.4, so the 0017 mismatch is gone (Thewuuryar/askbar#26).
 - 2026-11-11: body brought up to date with the code on `main`: the networks `edge`, `client-api` and `audit-caddy`, and the access lines to the auditor; the 'no auditor yet' disagreement with 0010 is removed. No decision changed.
+- 2026-11-11: design for plan step 5.3 (#70, D19): HTTP-01 beside the DNS challenge, chosen by `acme_challenge`; port 80 also serves the challenge. The code PR adds the 'built' line.
