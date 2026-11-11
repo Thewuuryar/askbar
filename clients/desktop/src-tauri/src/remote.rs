@@ -1398,12 +1398,8 @@ mod tests {
         );
         let code = askbar_server::testing::add_pair_code(&db, &user, "test");
         let rig = askbar_server::testing::Rig::start().await;
-        let state: Arc<AppState> = rig
-            .attach(
-                AppState::new(db, "0.1.0")
-                    .with_spaces(askbar_server::Spaces::on_disk(dir.join("spaces"))),
-            )
-            .await;
+        let state: Arc<AppState> =
+            rig.attach(AppState::new(db, "0.1.0").with_spaces(askbar_server::Spaces::on_disk(dir.join("spaces")))).await;
         rig.sync(&state);
         Box::leak(Box::new(rig));
         let token = auth::redeem_pair_code(&state.db.lock().unwrap(), &code).unwrap().unwrap();
@@ -1470,8 +1466,7 @@ mod tests {
         for s in spaces.open_all(&restarted_db).unwrap() {
             askbar_server::generation::sweep_on_start(&s.lock()).unwrap();
         }
-        let state2: Arc<AppState> =
-            AppState::new(restarted_db, "0.1.0").with_spaces(spaces);
+        let state2: Arc<AppState> = AppState::new(restarted_db, "0.1.0").with_spaces(spaces);
         let (url2, _server2) = serve_state(state2.clone()).await;
         let space2 = askbar_server::testing::personal_space(&state2, &user);
         let resumed = http
