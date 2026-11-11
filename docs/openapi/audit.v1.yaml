@@ -57,7 +57,10 @@ paths:
       summary: Which process this is.
       description: >-
         `boot_id` is new on every start of the process. `config_version` is always null: the auditor takes no
-        pushed configuration. Any link may call it.
+        pushed configuration. `last_requests` is when each link last made a request that passed the token check, in
+        unix seconds, by the caller its token stands for (`server`, `model-gateway`, `admin`, `admin-read`,
+        `model-gateway-read`, `alerter`); a link that has not called since the auditor started is absent. It is how
+        the alert rules tell a silent link from a quiet one, and it is in memory only. Any link may call it.
       responses:
         '200':
           description: Status.
@@ -71,6 +74,14 @@ paths:
                     type: 'null'
                   boot_id:
                     type: string
+                  last_requests:
+                    type: object
+                    additionalProperties:
+                      type: integer
+                  access_lines_dropped:
+                    type: integer
+                  access_lines_refused:
+                    type: integer
         '401':
           $ref: '#/components/responses/Unauthorized'
   /api/audit/v1/hello:
@@ -200,7 +211,7 @@ paths:
   /api/audit/v1/config-applied:
     post:
       operationId: addConfigApplied
-      summary: The configuration version a service now runs. `server-auditor` and `model-gateway-auditor` only.
+      summary: The configuration version a service now runs. `server-auditor`, `model-gateway-auditor` and `alerter-auditor` only.
       description: >-
         Stored with the admin action records, as category `config`, action `applied`, outcome `done`, with the version
         in `detail`. The caller recorded is the token's (ADR 0028 rule 5).
@@ -264,6 +275,55 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/AdminActionRecord'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/audit/v1/alert-deliveries:
+    post:
+      operationId: addAlertDelivery
+      summary: How one alert ended. `alerter-auditor` only.
+      description: >-
+        Metadata only (ADR 0055): the kind, the channel (`ntfy` or `email`), the outcome (`sent`, `failed` or
+        `suppressed`) and how many tries it took. Never the alert's sentence or its fields. The caller recorded is the
+        token's, not the body's, and a body with another field is refused. The same id twice is one record. Never
+        changed or deleted, and chained with the record.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AlertDeliveryStart'
+      responses:
+        '201':
+          $ref: '#/components/responses/Appended'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/Backlog'
+    get:
+      operationId: listAlertDeliveries
+      summary: Alert delivery records, newest first. `admin-auditor-read` only.
+      parameters:
+        - name: before
+          in: query
+          description: The id of the last record already seen.
+          schema:
+            type: string
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: The records.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AlertDeliveryRecord'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -765,6 +825,49 @@ components:
         at:
           type: integer
         version:
+          type: integer
+    AlertDeliveryStart:
+      type: object
+      additionalProperties: false
+      required: [id, at, kind, channel, outcome, attempts]
+      properties:
+        id:
+          type: string
+        at:
+          type: integer
+        kind:
+          type: string
+          maxLength: 64
+          pattern: '^[a-z0-9_]+$'
+          description: The kind of alert, as the alerter names it.
+        channel:
+          type: string
+          enum: [ntfy, email]
+        outcome:
+          type: string
+          enum: [sent, failed, suppressed]
+        attempts:
+          type: integer
+          minimum: 0
+          maximum: 1000
+    AlertDeliveryRecord:
+      type: object
+      required: [id, at, caller, kind, channel, outcome, attempts]
+      properties:
+        id:
+          type: string
+        at:
+          type: integer
+        caller:
+          type: string
+          description: Which token appended it.
+        kind:
+          type: string
+        channel:
+          type: string
+        outcome:
+          type: string
+        attempts:
           type: integer
     AdminActionRecord:
       type: object

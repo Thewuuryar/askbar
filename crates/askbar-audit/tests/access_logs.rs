@@ -125,6 +125,7 @@ fn a_version_4_file_with_its_chain_upgrades_and_the_chain_stays_whole() {
         chain::backfill_for_tests(c).unwrap();
         c.execute_batch(
             "DROP TRIGGER chain_is_never_deleted; DROP TRIGGER chain_is_never_changed; DROP TRIGGER access_logs_are_never_changed; DROP TRIGGER access_logs_keep_a_week;
+             DROP TRIGGER alert_deliveries_are_never_changed; DROP TRIGGER alert_deliveries_are_never_deleted; DROP TABLE alert_deliveries;
              DROP TABLE access_logs; ALTER TABLE chain RENAME TO chain_wide;
              CREATE TABLE chain (seq INTEGER PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN ('span_start','span_finish','payload','admin_action','prune')),
                ref TEXT NOT NULL, row_at INTEGER NOT NULL, digest TEXT NOT NULL, prev_hash TEXT NOT NULL, hash TEXT NOT NULL);
@@ -143,7 +144,7 @@ fn a_version_4_file_with_its_chain_upgrades_and_the_chain_stays_whole() {
     let db = AuditDb::open(&path).unwrap();
     let c = db.conn();
     let v: i64 = c.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-    assert_eq!(v, 5);
+    assert_eq!(v, 6, "migrations 5 and 6 both ran");
     assert_eq!(chain::head(c).unwrap(), before, "every entry was copied as it was");
     assert!(chain::verify(c).unwrap().ok);
     // The new kind is accepted, and the chain still refuses to be changed.
