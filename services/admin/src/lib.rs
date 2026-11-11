@@ -11,6 +11,7 @@ pub mod audit_read;
 pub mod auditor_link;
 pub mod auth;
 pub mod caddy;
+pub mod catalog;
 pub mod chain_check;
 pub mod cost;
 pub mod cpa;
@@ -148,6 +149,8 @@ pub fn routes(state: &Arc<AdminState>) -> Routes {
         .delete(&v1("/providers/{id}"), admin_api::delete_provider)
         .post(&v1("/providers/{id}/test"), admin_api::test_provider)
         .post(&v1("/providers/models"), admin_api::list_models)
+        .get(&v1("/catalog"), catalog::get_catalog)
+        .put(&v1("/catalog"), catalog::put_catalog)
         .get(&v1("/clients"), admin_api::list_clients)
         .post(&v1("/clients/{id}/revoke"), admin_api::revoke_client)
         .get(&v1("/users"), admin_api::list_users)

@@ -483,7 +483,130 @@
       box.appendChild(p);
     }
     for (const p of list) box.appendChild(providerCard(p));
+    providersById = new Map(list.map((p) => [p.id, p]));
+    await loadCatalog();
   }
+
+  // ---- approved models (ADR 0014): the models people may use, and the default. A draft is edited here and saved whole.
+  let providersById = new Map();
+  let catalogDraft = { models: [], default: null };
+  let catalogOffered = null; // { providerId, models: [name] } after "Load models"
+
+  const modelId = (m) => m.provider_id + '/' + m.model;
+  const providerName = (id) => (providersById.get(id) ? providersById.get(id).name : 'a provider that is gone');
+
+  async function loadCatalog() {
+    if (!$('catalog-section')) return;
+    catalogDraft = await api('GET', '/api/admin/v1/catalog');
+    catalogOffered = null;
+    const sel = $('catalog-provider');
+    const keep = sel.value;
+    sel.textContent = '';
+    for (const p of providersById.values()) {
+      const o = document.createElement('option');
+      o.value = p.id;
+      o.textContent = p.name;
+      sel.appendChild(o);
+    }
+    if (keep && providersById.has(keep)) sel.value = keep;
+    show($('catalog-error'), false);
+    $('catalog-status').textContent = '';
+    renderCatalog();
+  }
+
+  function setApproved(m, approved) {
+    const id = modelId(m);
+    const has = catalogDraft.models.some((x) => modelId(x) === id);
+    if (approved && !has) catalogDraft.models.push({ provider_id: m.provider_id, model: m.model });
+    if (!approved && has) catalogDraft.models = catalogDraft.models.filter((x) => modelId(x) !== id);
+    // One default whenever anything is approved: the first one if there was none (or it was just removed).
+    if (!catalogDraft.models.length) catalogDraft.default = null;
+    else if (!catalogDraft.models.some((x) => modelId(x) === catalogDraft.default)) catalogDraft.default = modelId(catalogDraft.models[0]);
+    renderCatalog();
+  }
+
+  function renderCatalog() {
+    const box = $('catalog-approved');
+    box.textContent = '';
+    if (!catalogDraft.models.length) {
+      const p = document.createElement('p');
+      p.className = 'hint';
+      p.textContent = 'No model is approved yet, so nothing answers. Load a provider\'s models below and tick the ones to approve.';
+      box.appendChild(p);
+    }
+    for (const m of catalogDraft.models) {
+      const row = document.createElement('div');
+      row.className = 'row';
+      row.dataset.model = modelId(m);
+      const label = document.createElement('label');
+      const radio = document.createElement('input');
+      radio.type = 'radio';
+      radio.name = 'catalog-default';
+      radio.checked = catalogDraft.default === modelId(m);
+      radio.addEventListener('change', () => { catalogDraft.default = modelId(m); renderCatalog(); });
+      const text = document.createElement('span');
+      text.textContent = ' ' + providerName(m.provider_id) + ' / ' + m.model + (radio.checked ? ' (default)' : '');
+      label.append(radio, text);
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'secondary';
+      remove.textContent = 'Remove';
+      remove.addEventListener('click', () => setApproved(m, false));
+      row.append(label, remove);
+      box.appendChild(row);
+    }
+    const offered = $('catalog-offered');
+    offered.textContent = '';
+    if (catalogOffered) {
+      for (const name of catalogOffered.models) {
+        const m = { provider_id: catalogOffered.providerId, model: name };
+        const label = document.createElement('label');
+        label.className = 'row';
+        const box1 = document.createElement('input');
+        box1.type = 'checkbox';
+        box1.checked = catalogDraft.models.some((x) => modelId(x) === modelId(m));
+        box1.addEventListener('change', () => setApproved(m, box1.checked));
+        const text = document.createElement('span');
+        text.textContent = ' ' + name;
+        label.append(box1, text);
+        offered.appendChild(label);
+      }
+    }
+  }
+
+  on('catalog-load', 'click', async () => {
+    const p = providersById.get($('catalog-provider').value);
+    const status = $('catalog-status');
+    if (!p) { status.textContent = 'Add a provider first.'; return; }
+    status.textContent = 'Loading models...';
+    let res;
+    try { res = await api('POST', '/api/admin/v1/providers/models', { type: p.type, base_url: p.base_url, provider_id: p.id }); }
+    catch (ex) { res = { ok: false, message: ex.message }; }
+    if (res.ok && res.models.length) {
+      catalogOffered = { providerId: p.id, models: res.models.map((m) => m.id) };
+      status.textContent = res.models.length + ' models offered by ' + p.name + '.';
+    } else {
+      catalogOffered = null;
+      status.textContent = res.message || 'The provider listed no models.';
+    }
+    renderCatalog();
+  });
+
+  on('catalog-save', 'click', async () => {
+    const err = $('catalog-error');
+    show(err, false);
+    try {
+      await api('PUT', '/api/admin/v1/catalog', catalogDraft);
+      flash('');
+      await loadCatalog();
+      $('catalog-status').textContent = 'Saved.';
+    } catch (ex) {
+      err.textContent = ex.message;
+      show(err, true);
+    }
+  });
+
+  on('catalog-discard', 'click', () => { loadCatalog(); });
 
   // ---- model list: once the provider can be reached, the model is chosen from what it offers.
   const MANUAL = '__manual__';

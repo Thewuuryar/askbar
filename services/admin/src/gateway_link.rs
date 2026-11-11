@@ -109,6 +109,7 @@ pub fn build_config(conn: &Connection, secrets: &AdminSecrets, managed: Option<&
             }
         })
         .collect();
+    let catalog = crate::catalog::read(conn)?;
     let mut config = GatewayConfig {
         version: 0,
         providers,
@@ -118,6 +119,8 @@ pub fn build_config(conn: &Connection, secrets: &AdminSecrets, managed: Option<&
         kill_switch: snap.kill_switch,
         kill_switch_aborts_running: snap.kill_switch_aborts_running,
         paused_users: snap.paused_user_ids,
+        catalog: catalog.models,
+        default_model: catalog.default,
     };
     config.version = version_of(&config);
     Ok(config)

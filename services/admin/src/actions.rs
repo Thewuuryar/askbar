@@ -169,6 +169,7 @@ pub fn classify(method: &Method, template: &str) -> Option<(&'static str, &'stat
         ("DELETE", "/providers/{id}") => ("providers", "delete"),
         ("POST", "/providers/{id}/test") => ("provider_test", "test"),
         ("POST", "/providers/models") => ("provider_test", "list_models"),
+        ("PUT", "/catalog") => ("providers", "catalog_update"),
         ("POST", "/clients/{id}/revoke") => ("clients", "revoke"),
         ("POST", "/users") => ("users", "create"),
         ("PUT", "/users/{id}/display-defaults") => ("users", "display_defaults"),

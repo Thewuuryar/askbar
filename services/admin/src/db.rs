@@ -155,6 +155,14 @@ const MIGRATIONS: &[&str] = &[
     // The emergency stop for one person (plan step 3.2, ADR 0014): a paused user's replies are refused, and the gateway
     // stops the ones running.
     "ALTER TABLE users ADD COLUMN paused INTEGER NOT NULL DEFAULT 0 CHECK (paused IN (0, 1));",
+    // The approved model catalog (plan step 3.3, ADR 0014): the models of each provider people may use, in the order the
+    // administrator saved them. The default is the `default_model` setting. An install starts with none approved.
+    "CREATE TABLE catalog_models (
+         provider_id TEXT    NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+         model       TEXT    NOT NULL,
+         position    INTEGER NOT NULL,
+         PRIMARY KEY (provider_id, model)
+     );",
 ];
 
 /// The schema steps, in order (for the upgrade tests).
