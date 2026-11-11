@@ -190,7 +190,7 @@ pub fn last_turns(messages: Vec<ChatMessage>, turns: u32) -> Vec<ChatMessage> {
 
 // ---------------------------------------------------------------- requests
 
-fn messages_url(p: &Provider) -> String {
+pub(crate) fn messages_url(p: &Provider) -> String {
     let base = p.effective_base_url();
     match p.kind {
         ProviderKind::OpenAi => format!("{base}/chat/completions"),

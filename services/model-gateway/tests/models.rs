@@ -22,7 +22,8 @@ const ADM: &str = "tok_admgw_models";
 const KEY: &str = "good";
 
 /// A fake provider: `/v1/models` needs the bearer `good`; `/anthropic/v1/models` needs `x-api-key: good` and pages;
-/// `/chat/completions` streams `ok` for the right key and 401s, echoing the key, for any other.
+/// `/chat/completions` streams `ok` for the right key and 401s, echoing the key, for any other (the provider test
+/// is in api.rs, where an auditor records it).
 async fn provider() -> String {
     async fn openai(h: HeaderMap) -> Result<Json<Value>, (axum::http::StatusCode, Json<Value>)> {
         if h.get("authorization").and_then(|v| v.to_str().ok()) != Some("Bearer good") {
@@ -122,11 +123,6 @@ impl G {
         let r = self.http.post(format!("{}/api/model-gateway/v1/models", self.url)).bearer_auth(ADM).json(&body).send().await.unwrap();
         (r.status().as_u16(), r.json().await.unwrap())
     }
-
-    async fn test(&self, id: &str) -> (u16, Value) {
-        let r = self.http.post(format!("{}/api/model-gateway/v1/providers/{id}/test", self.url)).bearer_auth(ADM).send().await.unwrap();
-        (r.status().as_u16(), r.json().await.unwrap())
-    }
 }
 
 #[tokio::test]
@@ -184,17 +180,4 @@ async fn bad_input_and_empty_lists_are_ok_false_and_the_admin_token_is_required(
     assert_eq!(g.list(json!({"type": "openai", "provider_id": "nope"})).await.1["message"], "No such provider.");
     let r = g.http.post(format!("{}/api/model-gateway/v1/models", g.url)).json(&json!({"type": "openai"})).send().await.unwrap();
     assert_eq!(r.status(), 401);
-}
-
-#[tokio::test]
-async fn the_provider_test_says_ok_with_the_right_key_and_never_repeats_a_wrong_one() {
-    let up = provider().await;
-    let g = gateway(&up).await;
-    let (s, v) = g.test("saved").await;
-    assert_eq!((s, v["ok"].as_bool(), v["message"].as_str()), (200, Some(true), Some("ok")), "{v}");
-    let (s, v) = g.test("wrong").await;
-    assert_eq!((s, v["ok"].as_bool()), (200, Some(false)), "{v}");
-    assert!(v["message"].as_str().unwrap().contains("401"), "{v}");
-    assert!(!v["message"].as_str().unwrap().contains("good-not"), "the provider echoed the key; the answer must not: {v}");
-    assert_eq!(g.test("nobody").await.0, 404);
 }

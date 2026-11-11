@@ -68,15 +68,23 @@ pub async fn serve(app: Router) -> String {
 }
 
 /// A real gateway on the admin's listener, with the token and hash files `bootstrap` made under `dir`, and the
-/// admin's link to it. Nothing records to an auditor here: the routes the admin uses (configuration, models, the
-/// provider test) need none. `up = false` leaves the link pointing where nothing listens.
+/// admin's link to it. It records to `rig`'s auditor with the rig's own gateway tokens, because a provider test is on
+/// record before the provider is called. `up = false` leaves the link pointing where nothing listens.
 pub async fn start_gateway(
     dir: &std::path::Path,
     up: bool,
+    rig: &askbar_server::testing::Rig,
 ) -> (Arc<askbar_model_gateway::Gateway>, Arc<askbar_admin::gateway_link::GatewayLink>) {
     let gw_tokens = dir.join("model-gateway-token");
     let boot = askbar_service::status::BootId::new();
-    let audit = askbar_service::audit_client::AuditClient::new("http://127.0.0.1:1", gw_tokens.clone(), "model-gateway-auditor");
+    let audit = askbar_service::audit_client::AuditClient::new(&rig.audit_url, rig.gateway_tokens(), "model-gateway-auditor");
+    tokio::spawn(audit.clone().hello_until_done(boot.as_str().to_string()));
+    tokio::spawn(audit.clone().drain_forever());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !audit.ready() {
+        assert!(std::time::Instant::now() < deadline, "the test gateway never said hello to the auditor");
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
     let restarter = askbar_service::restart::Restarter::for_tests(
         boot.clone(),
         std::time::Duration::ZERO,
@@ -126,7 +134,7 @@ pub async fn start_with(caddy_up: bool, with_gateway: bool) -> T {
     }
     let secrets_dir = dir.join("caddy-secrets");
 
-    let (gateway, gateway_link) = start_gateway(&dir, true).await;
+    let (gateway, gateway_link) = start_gateway(&dir, true, &rig).await;
 
     let db = AdminDb::open_in_memory().unwrap();
     web::init_password(&db, PW).unwrap();
