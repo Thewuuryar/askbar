@@ -181,6 +181,24 @@ fn row_digest(conn: &Connection, kind: &str, reference: &str) -> rusqlite::Resul
                 ))
             })
             .optional(),
+        "alert_delivery" => conn
+            .query_row("SELECT id, at, caller, kind, channel, outcome, attempts FROM alert_deliveries WHERE id = ?1", [reference], |r| {
+                let (id, at, caller, kind, channel, outcome, attempts): (String, i64, String, String, String, String, i64) =
+                    (r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?);
+                Ok((
+                    digest(&[
+                        Part::Text(&id),
+                        Part::Int(at),
+                        Part::Text(&caller),
+                        Part::Text(&kind),
+                        Part::Text(&channel),
+                        Part::Text(&outcome),
+                        Part::Int(attempts),
+                    ]),
+                    at,
+                ))
+            })
+            .optional(),
         "access_log" => conn
             .query_row(
                 "SELECT at, method, host, path, status, bytes, duration_ms, remote_ip, proto, user_agent FROM access_logs WHERE id = CAST(?1 AS INTEGER)",
@@ -350,6 +368,7 @@ pub fn verify(conn: &Connection) -> rusqlite::Result<Report> {
         ("span_finish", "SELECT id FROM spans s WHERE s.status <> 'running' AND NOT EXISTS (SELECT 1 FROM chain c WHERE c.kind = 'span_finish' AND c.ref = s.id)"),
         ("payload", "SELECT CAST(rowid AS TEXT) FROM payloads p WHERE NOT EXISTS (SELECT 1 FROM chain c WHERE c.kind = 'payload' AND c.ref = CAST(p.rowid AS TEXT))"),
         ("admin_action", "SELECT id FROM admin_actions a WHERE NOT EXISTS (SELECT 1 FROM chain c WHERE c.kind = 'admin_action' AND c.ref = a.id)"),
+        ("alert_delivery", "SELECT id FROM alert_deliveries d WHERE NOT EXISTS (SELECT 1 FROM chain c WHERE c.kind = 'alert_delivery' AND c.ref = d.id)"),
         ("access_log", "SELECT CAST(id AS TEXT) FROM access_logs a WHERE NOT EXISTS (SELECT 1 FROM chain c WHERE c.kind = 'access_log' AND c.ref = CAST(a.id AS TEXT))"),
         ("prune", "SELECT CAST(id AS TEXT) FROM prunes p WHERE NOT EXISTS (SELECT 1 FROM chain c WHERE c.kind = 'prune' AND c.ref = CAST(p.id AS TEXT))"),
     ] {

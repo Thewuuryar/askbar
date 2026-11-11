@@ -260,7 +260,7 @@ fn a_file_from_before_the_chain_is_chained_when_it_is_opened() {
             [t],
         )
         .unwrap();
-        c.execute_batch("DROP TRIGGER chain_is_never_deleted; DELETE FROM chain; DROP TABLE chain; DROP TRIGGER access_logs_are_never_changed; DROP TRIGGER access_logs_keep_a_week; DROP TABLE access_logs; PRAGMA user_version = 3;").unwrap();
+        c.execute_batch("DROP TRIGGER chain_is_never_deleted; DELETE FROM chain; DROP TABLE chain; DROP TRIGGER access_logs_are_never_changed; DROP TRIGGER access_logs_keep_a_week; DROP TABLE access_logs; DROP TRIGGER alert_deliveries_are_never_changed; DROP TRIGGER alert_deliveries_are_never_deleted; DROP TABLE alert_deliveries; PRAGMA user_version = 3;").unwrap();
     }
     let db = AuditDb::open(&path).unwrap();
     let c = db.conn();

@@ -159,6 +159,41 @@ const MIGRATIONS: &[&str] = &[
      BEGIN SELECT RAISE(ABORT, 'chain entries cannot be changed'); END;
      CREATE TRIGGER chain_is_never_deleted BEFORE DELETE ON chain
      BEGIN SELECT RAISE(ABORT, 'chain entries cannot be deleted'); END;",
+    // v6: the outcome of each alert the alerter delivered (plan step 4.1, ADR 0055): which kind, over which channel, how it
+    // ended and after how many tries. No content: the alerter's sentences are not sent here. Never changed or deleted,
+    // like the admin action records, and each row has an entry in the chain, so the chain's kinds grow by
+    // `alert_delivery` (the chain table is made again, as in v5, since a CHECK cannot be altered).
+    "CREATE TABLE alert_deliveries (
+         id       TEXT PRIMARY KEY,
+         caller   TEXT    NOT NULL,
+         at       INTEGER NOT NULL,
+         kind     TEXT    NOT NULL,
+         channel  TEXT    NOT NULL,
+         outcome  TEXT    NOT NULL,
+         attempts INTEGER NOT NULL
+     );
+     CREATE INDEX idx_alert_deliveries_at ON alert_deliveries(at DESC, id DESC);
+     CREATE TRIGGER alert_deliveries_are_never_changed BEFORE UPDATE ON alert_deliveries
+     BEGIN SELECT RAISE(ABORT, 'alert delivery records cannot be changed'); END;
+     CREATE TRIGGER alert_deliveries_are_never_deleted BEFORE DELETE ON alert_deliveries
+     BEGIN SELECT RAISE(ABORT, 'alert delivery records cannot be deleted'); END;
+     CREATE TABLE chain_next (
+         seq       INTEGER PRIMARY KEY,
+         kind      TEXT    NOT NULL CHECK (kind IN ('span_start','span_finish','payload','admin_action','prune','access_log','alert_delivery')),
+         ref       TEXT    NOT NULL,
+         row_at    INTEGER NOT NULL,
+         digest    TEXT    NOT NULL,
+         prev_hash TEXT    NOT NULL,
+         hash      TEXT    NOT NULL
+     );
+     INSERT INTO chain_next SELECT seq, kind, ref, row_at, digest, prev_hash, hash FROM chain;
+     DROP TABLE chain;
+     ALTER TABLE chain_next RENAME TO chain;
+     CREATE INDEX idx_chain_ref ON chain(kind, ref);
+     CREATE TRIGGER chain_is_never_changed BEFORE UPDATE ON chain
+     BEGIN SELECT RAISE(ABORT, 'chain entries cannot be changed'); END;
+     CREATE TRIGGER chain_is_never_deleted BEFORE DELETE ON chain
+     BEGIN SELECT RAISE(ABORT, 'chain entries cannot be deleted'); END;",
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -389,6 +424,27 @@ pub fn list_admin_actions(conn: &Connection, before: Option<&str>, limit: Option
             "action": r.get::<_, String>(4)?,
             "outcome": r.get::<_, String>(5)?,
             "detail": detail.and_then(|d| serde_json::from_str::<serde_json::Value>(&d).ok()),
+        }))
+    })?;
+    rows.collect()
+}
+
+/// Alert delivery records, newest first. `before` is the id of the last one already seen (ids sort by time).
+pub fn list_alert_deliveries(conn: &Connection, before: Option<&str>, limit: Option<usize>) -> rusqlite::Result<Vec<serde_json::Value>> {
+    let limit = limit.unwrap_or(DEFAULT_TRACE_LIMIT).clamp(1, MAX_TRACE_LIMIT);
+    let mut stmt = conn.prepare(
+        "SELECT id, at, caller, kind, channel, outcome, attempts FROM alert_deliveries
+         WHERE (?1 IS NULL OR id < ?1) ORDER BY id DESC LIMIT ?2",
+    )?;
+    let rows = stmt.query_map(rusqlite::params![before, limit as i64], |r| {
+        Ok(serde_json::json!({
+            "id": r.get::<_, String>(0)?,
+            "at": r.get::<_, i64>(1)?,
+            "caller": r.get::<_, String>(2)?,
+            "kind": r.get::<_, String>(3)?,
+            "channel": r.get::<_, String>(4)?,
+            "outcome": r.get::<_, String>(5)?,
+            "attempts": r.get::<_, i64>(6)?,
         }))
     })?;
     rows.collect()
@@ -809,6 +865,19 @@ pub struct AdminActionWrite {
     pub detail_json: Option<String>,
 }
 
+/// The outcome of one alert the alerter delivered (ADR 0055), as stored: metadata only.
+#[derive(Debug, Clone)]
+pub struct AlertDeliveryWrite {
+    pub id: String,
+    pub at: i64,
+    /// The caller, from its token.
+    pub caller: String,
+    pub kind: String,
+    pub channel: String,
+    pub outcome: String,
+    pub attempts: i64,
+}
+
 /// One request Caddy handled, as the auditor keeps it (plan step 2.9): no header and no query string.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccessLogWrite {
@@ -833,6 +902,7 @@ pub enum Record {
     Finish(SpanFinish),
     Payload(PayloadWrite),
     AdminAction(AdminActionWrite),
+    AlertDelivery(AlertDeliveryWrite),
     /// A service's process announces itself: that service's spans from other processes that are still
     /// running end as interrupted. Acknowledged with how many.
     Hello {
@@ -1267,6 +1337,18 @@ fn apply(conn: &Connection, record: &Record) -> Result<u64, AppendError> {
             }
             Ok(0)
         }
+        Record::AlertDelivery(d) => {
+            let n = conn
+                .execute(
+                    "INSERT OR IGNORE INTO alert_deliveries (id, caller, at, kind, channel, outcome, attempts) VALUES (?1,?2,?3,?4,?5,?6,?7)",
+                    rusqlite::params![d.id, d.caller, d.at, d.kind, d.channel, d.outcome, d.attempts],
+                )
+                .map_err(db_err)?;
+            if n > 0 {
+                chain::record(conn, "alert_delivery", &d.id).map_err(db_err)?;
+            }
+            Ok(0)
+        }
         Record::Hello { service, boot_id } => {
             let n = interrupt_running(conn, " AND service = ?1 AND COALESCE(boot_id, '') <> ?2", rusqlite::params![service, boot_id])
                 .map_err(db_err)?;
@@ -1376,7 +1458,10 @@ mod tests {
     #[test]
     fn open_creates_the_schema() {
         let db = AuditDb::open_in_memory().unwrap();
-        assert_eq!(tables(&db), ["access_logs", "admin_actions", "chain", "payloads", "prunes", "settings", "spans", "sqlite_sequence"]);
+        assert_eq!(
+            tables(&db),
+            ["access_logs", "admin_actions", "alert_deliveries", "chain", "payloads", "prunes", "settings", "spans", "sqlite_sequence"]
+        );
         assert_eq!(
             columns(&db, "spans"),
             [
@@ -1999,6 +2084,78 @@ mod tests {
         rec.prune(30, now_secs()).await.unwrap();
         assert!(db.conn().execute("UPDATE prunes SET spans = 99", []).is_err(), "a prune record cannot be changed");
         assert!(db.conn().execute("DELETE FROM prunes", []).is_err(), "nor deleted");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn an_alert_delivery_is_stored_once_with_its_caller_chained_and_can_never_be_changed_or_deleted() {
+        let (rec, dir) = temp_recorder(16);
+        let d = AlertDeliveryWrite {
+            id: "01D".into(),
+            at: now_secs(),
+            caller: "alerter".into(),
+            kind: "unsealed".into(),
+            channel: "ntfy".into(),
+            outcome: "sent".into(),
+            attempts: 2,
+        };
+        assert_eq!(rec.append(Record::AlertDelivery(d.clone())).await, Ok(0));
+        assert_eq!(rec.append(Record::AlertDelivery(d)).await, Ok(0), "the same id twice is one record");
+        let conn = rec.reader().unwrap();
+        let rows = list_alert_deliveries(&conn, None, None).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            (rows[0]["caller"].clone(), rows[0]["kind"].clone(), rows[0]["attempts"].clone()),
+            ("alerter".into(), "unsealed".into(), 2.into())
+        );
+        let chained: i64 =
+            conn.query_row("SELECT COUNT(*) FROM chain WHERE kind = 'alert_delivery' AND ref = '01D'", [], |r| r.get(0)).unwrap();
+        assert_eq!(chained, 1, "it has one entry in the chain, written with it");
+        let report = chain::verify(&conn).unwrap();
+        assert!(report.ok, "{:?}", report.problems);
+        let db = AuditDb::open(&dir.join("audit.db")).unwrap();
+        assert!(db.conn().execute("UPDATE alert_deliveries SET outcome = 'failed'", []).is_err());
+        assert!(db.conn().execute("DELETE FROM alert_deliveries", []).is_err());
+        // A row with no entry in the chain is a problem the check finds.
+        db.conn()
+            .execute("INSERT INTO alert_deliveries (id, caller, at, kind, channel, outcome, attempts) VALUES ('01E','alerter',1,'x','ntfy','sent',1)", [])
+            .unwrap();
+        assert!(!chain::verify(&conn).unwrap().ok);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn migration_6_adds_alert_deliveries_and_keeps_the_chain_a_file_from_migration_5_had() {
+        let dir = std::env::temp_dir().join(format!("askbar-audit-m6-{}", ulid::Ulid::new()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("audit.db");
+        {
+            // A file as version 5 left it: the first five migrations, an admin action and its chain entry.
+            let conn = Connection::open(&path).unwrap();
+            for (i, sql) in MIGRATIONS.iter().take(5).enumerate() {
+                conn.execute_batch(sql).unwrap();
+                if i == 3 {
+                    chain::backfill(&conn).unwrap();
+                }
+                if i == 0 {
+                    conn.execute_batch(&format!("PRAGMA application_id = {APPLICATION_ID}")).unwrap();
+                }
+            }
+            conn.execute_batch("PRAGMA user_version = 5").unwrap();
+            conn.execute(
+                "INSERT INTO admin_actions (id, at, service, category, action, outcome) VALUES ('01A', 1, 'admin', 'settings', 'x', 'done')",
+                [],
+            )
+            .unwrap();
+            chain::record(&conn, "admin_action", "01A").unwrap();
+        }
+        let db = AuditDb::open(&path).unwrap();
+        let version: i64 = db.conn().query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(version as usize, MIGRATIONS.len());
+        assert!(MIGRATIONS.len() >= 6);
+        assert_eq!(db.conn().query_row("SELECT COUNT(*) FROM alert_deliveries", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
+        assert_eq!(db.conn().query_row("SELECT COUNT(*) FROM chain WHERE kind = 'admin_action'", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
+        assert!(chain::verify(db.conn()).unwrap().ok, "the old entry still verifies");
         let _ = std::fs::remove_dir_all(dir);
     }
 
