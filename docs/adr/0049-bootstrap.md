@@ -31,7 +31,7 @@ Source: plan step 2.1 ([plan-v1.md](../plan-v1.md)); owner rule that every compo
   - `rotate`: every link; `list`: the link names.
   - It then prints the services to restart, and the admin restarts them ([0005](0005-no-controller-and-self-restart.md)).
 - **Replaces** the admin's token. The upgrade mints a fresh `admin-server` token (`bootstrap` does not mount `admin-secrets`); the admin reads it from `admin-token`, deletes its old file on start, and no longer mounts `server-token`.
-- **Not in scope: the `cpa` API key.** CLIProxyAPI compares the plain key, not a hash, so the admin keeps writing it into `cpa`'s config. Phase 3 decides whether `bootstrap` takes it over, so that the admin holds no credential for a link it is not part of.
+- **Not in scope: the `cpa` API key.** CLIProxyAPI compares the plain key, not a hash, so the admin keeps it in `admin-secrets` (`cpa-api.key`), writes it into `cpa`'s config and pushes it to `model-gateway` with the managed provider ([0042](0042-cpa.md), plan step 3.5). `bootstrap` does not take it over, so the admin still holds one credential for a link it is not part of.
 - **Volumes:** the credential volumes only. **Networks:** none (`network_mode: none`); it makes and accepts no connection.
 - **Hardening:** [0032](0032-container-hardening.md)'s defaults with its rule 6. `check-isolation.sh` checks that `CHOWN` is its only capability, that it has no network, and each token and hash file's owner and mode.
 
@@ -55,3 +55,4 @@ The admin no longer mounts any of the server's volumes. A missing or wrongly own
 - 2026-11-11: the links `server-auditor` (`srvaud_`, the server's appends) and `server-auditor-read` (`srvrd_`, temporary: the reads the Audit pages need, removed with the pages' move to the admin in plan step 2.5) are made (plan step 3.1, [0054](0054-model-gateway.md), [0051](0051-auditor.md)).
 - 2026-11-11: the link `server-auditor-read` is removed (plan step 2.5): the admin reads the audit store with `admin-auditor-read`. A stack from before keeps the old files in its volumes, which nothing reads; `bootstrap` leaves them.
 - 2026-11-11: the link `model-gateway-auditor-read` (`gwrd_`) is made, so the gateway can read the token counts it holds the budget against (plan step 3.2, [0014](0014-model-gateway-and-providers.md), [0054](0054-model-gateway.md)).
+- 2026-11-11: the `cpa` API key stays with the admin: plan step 3.5 decided against `bootstrap` taking it over. No decision changed; the open question is closed.
