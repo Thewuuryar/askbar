@@ -20,7 +20,10 @@ Source: plan steps 2.4 to 2.9 ([plan-v1.md](../plan-v1.md)); owner rule that eve
   - `server-auditor` and `model-gateway-auditor` (service append): `POST /hello`, `/spans`, `/spans/*/finish`, `/spans/*/payloads` and `/config-applied`, and `GET /status`. The server's link opens `gate` spans only; the gateway's any kind;
   - `admin-auditor-append` (admin append): `POST /hello` and `/admin-actions`, and `GET /status`;
   - `admin-auditor-read` (admin read): `GET /status`, `/traces`, `/traces/*`, `/spans/*/payloads`, `/stats`, `/token-counts`, `/admin-actions`, `/prunes`, `/access-logs`, `/chain/head`, `/chain/entries/*` and `/chain/verify`, and `GET` and `PUT /retention`;
-  - `model-gateway-auditor-read` (`gwrd_`, caller `model-gateway-read`): `GET /status` and `/token-counts`, so the gateway can hold its budget against what was used. It appends nothing.
+  - `model-gateway-auditor-read` (`gwrd_`, caller `model-gateway-read`): `GET /status` and `/token-counts`, so the gateway can hold its budget against what was used. It appends nothing;
+  - **from plan step 4.1:** `alerter-auditor` (`alraud_`, caller `alerter`): `POST /hello`, `/config-applied` and `/alert-deliveries` (the outcome of each alert, metadata only, chained), and `GET /status`;
+  - **from plan steps 4.1 and 6.2:** `admin-auditor-read` also gets `GET /alert-deliveries`, `PUT /backup-key` (the backup public key, recorded as a chained admin action record) and `GET /export` (an encrypted snapshot, streamed);
+  - **from plan step 6.3:** `admin-auditor-restore` (`audrs_`, caller `admin-restore`): `POST /restore` and nothing else. It works only on an empty store and verifies the chain first ([0010](0010-auditor.md)'s one exception to append-only, [0013](0013-backups.md)).
   - Each token hash maps to one caller and the routes it may call; anything else is `403`. The caller comes from the token, never from the body.
   - No token changes or deletes a record.
   - The wire types live in `askbar-proto` ([0045](0045-askbar-proto-crate.md)).
@@ -28,7 +31,11 @@ Source: plan steps 2.4 to 2.9 ([plan-v1.md](../plan-v1.md)); owner rule that eve
   - **Prune records:** each prune is a chained record, written in the same transaction as the delete. It holds the cutoff and the counts of spans and payloads removed. The chain entry of the prune is what a chain check finds in place of the deleted records, and the admin sees every prune.
   - **Token counts:** it serves them by provider and model to the admin read token. The admin applies prices; the auditor holds none.
   - **No key registry:** the admin keeps it and appends each key's creation and retirement as admin action records, so its history is in the chain ([0011](0011-sealed-content-access.md) rule 6).
-  - **In phase 4 ([0055](0055-alerter.md)):** alert events to `alerter` (phase 4), and a read-only backup export (phase 6).
+  - **Alert rules (from plan step 4.2, [0055](0055-alerter.md)):** a rules engine fed after each append, after each request on a link and every 30 seconds sends events to `alerter` over `auditor-alerter` (`audalr_`, `call/auditor-alerter.token` in `auditor-token`), with typed fields only. Its kinds: `unsealed`, `unseal_timeouts_changed` and `backup_key_changed` (from the admin action records), `retention_changed` (from `PUT /retention`), `audit_disk_low` and `audit_disk_critical`, `component_silent`, `caddy_silent`, and `restart_loop` for the admin (from its hellos).
+  - **Silence:** it records the time of the last request on each link. A link is silent when nothing has come over it for 5 minutes; `AuditClient` ([0036](0036-askbar-service-crate.md)) calls `GET /status` every 60 seconds, so a quiet but alive service is not silent. Caddy is silent when a turn was recorded in the last 15 minutes and Caddy sent no access line in that time. The last request on each link is in `GET /status`.
+  - **Restart loop:** three boot-ID changes within 10 minutes. Caddy and `cpa` are excluded.
+  - **Disk:** `audit_disk_low` below 1 GiB free, re-armed above 1.25 GiB; `audit_disk_critical` below 256 MiB.
+  - **From plan step 6.2:** a read-only encrypted export, made with `snapshot_to` (`VACUUM INTO` on its own volume, after a free-space check) and encrypted to the backup public key the admin puts with `PUT /backup-key`; and, from plan step 6.3, a restore into an empty store.
   - **Hash chain and Caddy's access logs:** every record, including each prune and each access line, has a chain entry ([0052](0052-askbar-audit-crate.md)); the admin reads the chain on `admin-auditor-read`.
 - **Starting limits,** tuned by the load test of plan step 7.2:
 
@@ -36,7 +43,7 @@ Source: plan steps 2.4 to 2.9 ([plan-v1.md](../plan-v1.md)); owner rule that eve
   | --- | --- |
   | Acknowledgment timeout at `model-gateway` | 1 s |
   | Backlog limit | 1,000 queued records, or the oldest older than 5 s |
-  | Disk early warning (alerted from phase 4) | below 1 GiB free |
+  | Disk early warning (alerted from plan step 4.2) | below 1 GiB free, re-armed above 1.25 GiB; critical below 256 MiB |
   | Refuse new spans | below 256 MiB free, leaving room for the finish and payload records of open spans |
 
 - **Volumes:**
@@ -44,11 +51,12 @@ Source: plan steps 2.4 to 2.9 ([plan-v1.md](../plan-v1.md)); owner rule that eve
   - `auditor-token`: its credential volume, read-only.
   - The server's old `audit-data` is neither renamed nor mounted. It stays declared until 1.0 and holds the pre-2.4 records until the owner copies or deletes it (the guide says how).
 - **Who it runs as:** uid 10003 ([0003](0003-v1-service-layout.md)), from its first instruction, with no capabilities.
-- **Networks:** internal only, with no outbound route. There is one network per caller, shared with the auditor alone: `audit-admin`, `audit-server`, `audit-model-gateway` and `audit-caddy` (Caddy's access lines). In phase 4, `audit-alerter` joins them. No subnet is pinned ([guide](../guide.md#docker-networks)).
-- **Listener:** one API address for each token network, so a caller reaches only its own: `auditor-admin-host`, `auditor-server-host` and `auditor-model-gateway-host`, all on port 8083 (`ASKBAR_AUDIT_API_ADDRS`). A second listener, `auditor-ingest-host:8086` on `audit-caddy`, takes Caddy's access lines, sends no token and answers nothing (`ASKBAR_AUDIT_INGEST_ADDR`). Nothing on `audit-caddy` reaches the API.
+- **Networks:** internal only, with no outbound route. There is one network per caller, shared with the auditor alone: `audit-admin`, `audit-server`, `audit-model-gateway` and `audit-caddy` (Caddy's access lines). From plan step 4.1, `audit-alerter` joins them, with the alias `auditor-alerter-host`. No subnet is pinned ([guide](../guide.md#docker-networks)).
+- **Listener:** one API address for each token network, so a caller reaches only its own: `auditor-admin-host`, `auditor-server-host` and `auditor-model-gateway-host` and, from plan step 4.1, `auditor-alerter-host`, all on port 8083 (`ASKBAR_AUDIT_API_ADDRS`). A second listener, `auditor-ingest-host:8086` on `audit-caddy`, takes Caddy's access lines, sends no token and answers nothing (`ASKBAR_AUDIT_INGEST_ADDR`). Nothing on `audit-caddy` reaches the API.
 - **Links** ([architecture.md](../architecture.md), Links):
   - in: from the server, `model-gateway` (append and read), the admin (append and read), and Caddy (access lines to the ingest listener, no token);
-  - out: in phase 4, only to `alerter`.
+  - in, from plan step 4.1: the alerter (`alerter-auditor`); and, from plan step 6.3, the admin's restore link;
+  - out: from plan step 4.2, only to `alerter` (`auditor-alerter`).
 - **Hardening:** [0032](0032-container-hardening.md)'s defaults, with no exception. `check-isolation.sh` checks:
   - `CapEff` is 0;
   - there is no route out;
@@ -84,3 +92,4 @@ The decisions behind the auditor itself (its own container, synchronous acknowle
 - 2026-11-11: Caddy's access logs (plan step 2.9, design; built in the same plan step): a second listener, `ingest`, on `auditor-ingest-host:8086` on a new `internal` network `audit-caddy` (Caddy and the auditor alone, no route out). It takes newline-delimited JSON from Caddy's `net` log writer, which has no token, and answers nothing. It keeps only the time, method, host, path **without its query**, status, bytes, duration, client address, protocol and a cut user agent, never a header or a query string, and it refuses a line over 16 KiB. Each line is an append-only `access_logs` row with an entry in the hash chain, pruned with the other records by retention (nothing younger than 7 days). It is best effort: a full queue drops lines and the status says how many. `admin-auditor-read` gets `GET /access-logs`. To keep Caddy from reaching the token API on `audit-caddy`, the API listener no longer binds every interface: it binds one address for each of its token networks (`auditor-admin-host`, `auditor-server-host`, `auditor-model-gateway-host`, port 8083), as the gateway's listeners do. The list under Listener above is superseded by this (#64).
 - 2026-11-11: a read link for the gateway, `model-gateway-auditor-read` (`gwrd_`, caller `model-gateway-read`): `GET /token-counts` and `GET /status` and nothing else, so the gateway can hold the budget against what was used, since it has no data volume of its own (plan step 3.2, owner's choice of 2026-11-11). It appends nothing and reads no trace, content or admin record (#66).
 - 2026-11-11: body brought up to date with the code on `main` (context, API by link, prune record, networks, listeners, links); the 'Changes elsewhere when built' bullet is gone because those changes are built. No decision changed.
+- 2026-11-11: design for plan steps 4.1, 4.2, 6.2 and 6.3 (#70, owner's decisions of 2026-11-11): the `alerter-auditor` link (`POST /hello`, `/config-applied`, `/alert-deliveries`, `GET /status`) and the `auditor-alerter` link, the network `audit-alerter` and its alias `auditor-alerter-host`, the rules engine and the silence, restart-loop and disk rules, the time of the last request on each link, `GET /alert-deliveries`, `PUT /backup-key` and `GET /export` on `admin-auditor-read`, and `admin-auditor-restore` with `POST /restore` into an empty store only. The code PRs add the 'built' lines.
