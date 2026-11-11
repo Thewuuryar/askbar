@@ -16,7 +16,24 @@ async fn main() {
     // `docker compose run --rm admin reset` while the admin is stopped): the published password again,
     // to be changed at the next sign-in (ADR 0007).
     if std::env::args().nth(1).as_deref() == Some("reset") {
-        askbar_admin::web::reset_to_default(&db).unwrap_or_else(|e| die(e, 1));
+        // A reset is an admin action like any other: recorded first, and not made when it cannot be (ADR 0010). The
+        // auditor is what the stack stops without anyway, so bring it back first.
+        let token = askbar_admin::actions::append_token(&askbar_admin::server_link::token_dir()).unwrap_or_else(|e| die(e, 1));
+        let log = askbar_admin::actions::ActionLog::new(&askbar_admin::auditor_link::auditor_url(), token);
+        let done = log
+            .around(
+                "admin_reset",
+                "password_reset",
+                serde_json::json!({ "by": "command line" }),
+                async { askbar_admin::web::reset_to_default(&db) },
+                |_| serde_json::json!({}),
+            )
+            .await;
+        match done {
+            Err(why) => die(format!("{} The password was not reset.", why.sentence()), 1),
+            Ok(Err(e)) => die(e, 1),
+            Ok(Ok(_)) => {}
+        }
         println!(
             "The admin password is the published one again ({}/{}); you must change it at the next sign-in.",
             askbar_admin::web::ADMIN_USERNAME,

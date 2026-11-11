@@ -1092,7 +1092,21 @@ pub async fn get_settings(State(state): St) -> Json<AdminSettings> {
     })
 }
 
-pub async fn put_settings(State(state): St, ApiJson(s): ApiJson<AdminSettings>) -> Result<StatusCode, Failure> {
+pub async fn put_settings(
+    State(state): St,
+    notes: Option<axum::Extension<crate::actions::ActionNotes>>,
+    ApiJson(s): ApiJson<AdminSettings>,
+) -> Result<StatusCode, Failure> {
+    // What is worth keeping in the record of this change: the two settings that change what the stack does at once.
+    // The prompt and the display are not copied into it.
+    if let Some(axum::Extension(n)) = &notes {
+        if let Some(days) = s.audit_retention_days {
+            n.add("audit_retention_days", serde_json::json!(days));
+        }
+        if let Some(on) = s.kill_switch {
+            n.add("kill_switch", serde_json::json!(on));
+        }
+    }
     if s.system_prompt.chars().count() > MAX_PROMPT_CHARS {
         return Err(bad("The system prompt is too long."));
     }

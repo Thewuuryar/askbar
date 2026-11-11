@@ -402,3 +402,68 @@ async fn a_push_to_the_gateway_waits_when_it_cannot_be_recorded_and_is_made_when
     assert!(matches!(sync, askbar_admin::gateway_link::Sync::Pushed(_)), "{sync:?}");
     assert!(t.gateway.config_version().is_some());
 }
+
+#[tokio::test]
+async fn a_settings_change_records_the_retention_and_the_kill_switch_but_not_the_prompt() {
+    let t = common::start(true).await;
+    let body = json!({ "system_prompt": "NOT-IN-THE-RECORD", "display": askbar_proto::DisplaySettings::default(), "audit_retention_days": 45, "kill_switch": true });
+    assert_eq!(t.call(M::PUT, "/api/admin/v1/settings", body).await.0, 204);
+    let rows = actions(&t);
+    let done = rows.iter().find(|r| r["category"] == "settings" && r["outcome"] == "done").unwrap();
+    assert_eq!((done["detail"]["audit_retention_days"].clone(), done["detail"]["kill_switch"].clone()), (json!(45), json!(true)));
+    assert!(!serde_json::to_string(&rows).unwrap().contains("NOT-IN-THE-RECORD"));
+}
+
+/// `askbar-admin reset` run as a program, with its own data directory and a token directory `bootstrap` made.
+fn run_reset(dir: &std::path::Path, auditor_url: &str) -> (bool, String) {
+    let bin = env!("CARGO_BIN_EXE_askbar-admin");
+    let out = std::process::Command::new(bin)
+        .arg("reset")
+        .env("ASKBAR_ADMIN_DATA_DIR", dir)
+        .env("ASKBAR_ADMIN_TOKEN_DIR", dir.join("admin-token"))
+        .env("ASKBAR_ADMIN_SECRETS_DIR", dir.join("secrets"))
+        .env("ASKBAR_AUDIT_API_URL", auditor_url)
+        .output()
+        .unwrap();
+    (out.status.success(), format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)))
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_reset_from_the_command_line_is_recorded_first_and_not_made_without_the_record() {
+    let dir = std::env::temp_dir().join(format!("ab-reset-{}", &ulid::Ulid::new().to_string()[16..]));
+    std::fs::create_dir_all(&dir).unwrap();
+    askbar_bootstrap::install_for_tests(&dir);
+    {
+        // An admin that has already changed its password: no reset is pending.
+        let db = askbar_admin::AdminDb::open(&dir.join("admin.db")).unwrap();
+        askbar_admin::web::init_password(&db, common::PW).unwrap();
+        db.conn().execute("UPDATE admin_credentials SET must_change = 0", []).unwrap();
+    }
+    let must_change = || {
+        let db = askbar_admin::AdminDb::open(&dir.join("admin.db")).unwrap();
+        db.conn().query_row("SELECT must_change FROM admin_credentials WHERE id = 1", [], |r| r.get::<_, i64>(0)).unwrap()
+    };
+
+    // The auditor is away: nothing is reset, and the sentence says why.
+    let dead = {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        format!("http://{}", l.local_addr().unwrap())
+    };
+    let d = dir.clone();
+    let (ok, said) = tokio::task::spawn_blocking(move || run_reset(&d, &dead)).await.unwrap();
+    assert!(!ok);
+    assert!(said.contains("nothing was changed") && said.contains("not reset"), "{said}");
+    assert_eq!(must_change(), 0, "the password was left as it was");
+
+    // The auditor takes the record: the reset is made, and its end is recorded.
+    let (url, seen) = stub(201).await;
+    let d = dir.clone();
+    let (ok, said) = tokio::task::spawn_blocking(move || run_reset(&d, &url)).await.unwrap();
+    assert!(ok, "{said}");
+    assert_eq!(must_change(), 1);
+    let seen = seen.lock().unwrap();
+    let ends: Vec<(&str, &str)> = seen.iter().map(|b| (b["category"].as_str().unwrap(), b["outcome"].as_str().unwrap())).collect();
+    assert_eq!(ends, [("admin_reset", "requested"), ("admin_reset", "done")]);
+    assert_eq!(seen[0]["detail"], json!({ "by": "command line" }), "the record says who, and nothing about the password");
+    let _ = std::fs::remove_dir_all(&dir);
+}
