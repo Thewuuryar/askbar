@@ -117,7 +117,7 @@ async fn connecting_an_account_from_the_page_makes_the_cpa_provider_with_the_key
     assert_eq!(s, 200);
     // The pasted address holds the one-time code: it is on no record the admin keeps (ADR 0010 rule on content).
     let actions: String = t.rig.rows("SELECT detail_json FROM admin_actions").iter().map(|r| r[0].to_string()).collect();
-    assert!(actions.contains("cpa_login_finish") && !actions.contains("THECODE"), "the code is in no admin record: {actions}");
+    assert!(actions.contains("/callback") && !actions.contains("THECODE"), "the code is in no admin record: {actions}");
     let sent = cpa.callbacks.lock().unwrap()[0].clone();
     assert_eq!(
         (sent["provider"].as_str(), sent["code"].as_str(), sent["state"].as_str()),
