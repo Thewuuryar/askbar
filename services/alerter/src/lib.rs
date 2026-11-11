@@ -1,0 +1,456 @@
+//! `alerter` (ADR 0055, ADR 0006): alert delivery in its own container, behind `/api/alerter/v1`.
+//!
+//! - **It decides no rule.** The auditor and the admin send events: a kind from a fixed list, a severity, a time and typed
+//!   fields. The alerter turns a kind into one of its own sentences, so a sender cannot make it say anything else.
+//! - **Secrets in memory only.** The admin pushes the delivery settings in `PUT /config`; they are never written to disk, a log,
+//!   an error or a response. Until they arrive every route but the status, the config and the restart answers `503 not_configured`.
+//! - **Two listeners, two links.** The auditor may send its own kinds; the admin may send its own, push the configuration, read
+//!   the status, test delivery and ask for a restart. A token of one is no good on the other's routes or network.
+//! - **Repeats are limited and remembered** ([`limits`], [`ledger`]), and each alert's outcome goes to the auditor as metadata.
+
+pub mod deliver;
+pub mod ledger;
+pub mod limits;
+pub mod templates;
+
+use askbar_proto::alerter::{
+    AlerterConfig, AlerterStatus, Channel, ChannelResult, Event, EventTaken, Kind, NtfyConfig, Refusal, Sender, Severity, TestResult,
+};
+use askbar_proto::http::ApiError;
+use askbar_proto::paths::{self, ALERTER_V1};
+use askbar_proto::ErrorCode;
+use askbar_service::audit_client::{now_parts, AuditClient};
+use askbar_service::configured::Gate;
+use askbar_service::links::{Allow, Caller, Link, Links};
+use askbar_service::restart::Restarter;
+use askbar_service::status::BootId;
+use axum::body::Bytes;
+use axum::extract::{DefaultBodyLimit, State};
+use axum::http::Method;
+use axum::routing::{get, post, put};
+use axum::{Extension, Json, Router};
+use deliver::Problem;
+use serde::de::DeserializeOwned;
+use std::collections::VecDeque;
+use std::path::{Path as FsPath, PathBuf};
+use std::sync::{Arc, Mutex, RwLock};
+use std::time::{Duration, Instant};
+use templates::Rendered;
+use tokio::sync::Notify;
+
+/// The port both listeners use, on the address each caller's network gives them.
+pub const DEFAULT_PORT: u16 = 8085;
+const MAX_BODY: usize = 64 * 1024;
+/// How many alerts wait to be delivered; past it the oldest is dropped, and the drops are counted.
+pub const QUEUE_LIMIT: usize = 200;
+
+/// How long the alerter waits between tries and how long it gives up after. Tests shorten it.
+#[derive(Debug, Clone)]
+pub struct Timing {
+    /// The wait before each retry; one more try than there are entries.
+    pub backoff: Vec<Duration>,
+}
+
+impl Default for Timing {
+    fn default() -> Timing {
+        Timing { backoff: [2, 10, 30, 120, 300, 600].into_iter().map(Duration::from_secs).collect() }
+    }
+}
+
+/// What a `PUT /config` put in place.
+struct Applied {
+    version: u64,
+    ntfy: Option<NtfyConfig>,
+}
+
+/// One alert waiting to be delivered.
+struct Pending {
+    /// The kind's name, for the auditor's record (`alert_summary` for the cap's summary).
+    kind: &'static str,
+    severity: Severity,
+    rendered: Rendered,
+    attempts: u32,
+    due: Instant,
+}
+
+#[derive(Default)]
+struct Queue {
+    items: VecDeque<Pending>,
+    dropped: u64,
+}
+
+pub struct Alerter {
+    pub boot_id: BootId,
+    audit: Arc<AuditClient>,
+    http: reqwest::Client,
+    config: RwLock<Option<Arc<Applied>>>,
+    state: Mutex<limits::State>,
+    ledger: ledger::Ledger,
+    queue: Mutex<Queue>,
+    wake: Notify,
+    timing: Timing,
+    pub restarter: Restarter,
+}
+
+impl Alerter {
+    pub fn new(audit: Arc<AuditClient>, boot_id: BootId, restarter: Restarter, data_dir: &FsPath, timing: Timing) -> Arc<Alerter> {
+        let ledger = ledger::Ledger::new(data_dir);
+        let state = ledger.load();
+        Arc::new(Alerter {
+            boot_id,
+            audit,
+            http: reqwest::Client::builder().connect_timeout(Duration::from_secs(5)).build().expect("reqwest client"),
+            config: RwLock::new(None),
+            state: Mutex::new(state),
+            ledger,
+            queue: Mutex::new(Queue::default()),
+            wake: Notify::new(),
+            timing,
+            restarter,
+        })
+    }
+
+    fn applied(&self) -> Option<Arc<Applied>> {
+        self.config.read().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    pub fn is_configured(&self) -> bool {
+        self.applied().is_some()
+    }
+
+    pub fn config_version(&self) -> Option<u64> {
+        self.applied().map(|a| a.version)
+    }
+
+    /// Replaces the delivery settings. They are checked first, and nothing changes if they are refused.
+    pub fn apply_config(&self, c: &AlerterConfig) -> Result<(), &'static str> {
+        if let Some(n) = &c.ntfy {
+            deliver::ntfy::validate(n)?;
+        }
+        *self.config.write().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(Applied { version: c.version, ntfy: c.ntfy.clone() }));
+        tracing::info!(version = c.version, ntfy = c.ntfy.is_some(), "configuration applied");
+        self.audit.config_applied(c.version as i64);
+        self.wake.notify_one();
+        Ok(())
+    }
+
+    /// Saves the limiter's state; a failure is logged and never stops an alert.
+    fn save(&self, state: &limits::State) {
+        if let Err(e) = self.ledger.save(state) {
+            tracing::warn!("the repeat ledger could not be saved: {}", e.kind());
+        }
+    }
+
+    fn enqueue(&self, kind: &'static str, severity: Severity, rendered: Rendered) {
+        {
+            let mut q = self.queue.lock().unwrap_or_else(|e| e.into_inner());
+            if q.items.len() >= QUEUE_LIMIT {
+                q.items.pop_front();
+                q.dropped += 1;
+            }
+            q.items.push_back(Pending { kind, severity, rendered, attempts: 0, due: Instant::now() });
+        }
+        self.wake.notify_one();
+    }
+
+    /// Takes an event from `from`: checks it against its kind, limits repeats, and queues it for delivery. A repeat is
+    /// counted and recorded as suppressed, and is not an error.
+    pub fn submit(&self, event: &Event, from: Sender) -> Result<EventTaken, Refusal> {
+        event.check(from)?;
+        let now = now_parts().0;
+        let (admit, snapshot) = {
+            let mut st = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            let admit = st.admit(event, now);
+            (admit, st.clone())
+        };
+        self.save(&snapshot);
+        let channel = self.applied().and_then(|a| a.ntfy.as_ref().map(|_| "ntfy"));
+        match admit {
+            limits::Admit::Send { suppressed } => {
+                let mut r = templates::render(event);
+                if suppressed > 0 {
+                    r.body.push_str(&format!(" ({suppressed} more like this were held back.)"));
+                }
+                self.enqueue(event.kind.name(), event.severity, r);
+                Ok(EventTaken { suppressed: false })
+            }
+            limits::Admit::Summary { held } => {
+                let body = format!(
+                    "Alerts are coming faster than {} an hour, so later ones are held back until the hour ends. {held} have been held back so far.",
+                    limits::HOURLY_CAP
+                );
+                self.enqueue("alert_summary", Severity::Warning, Rendered { title: "Many alerts".into(), body });
+                Ok(EventTaken { suppressed: true })
+            }
+            limits::Admit::Suppress => {
+                if let Some(c) = channel {
+                    self.audit.alert_delivery(event.kind.name(), c, "suppressed", 0);
+                }
+                Ok(EventTaken { suppressed: true })
+            }
+            limits::Admit::Drop => Ok(EventTaken { suppressed: true }),
+        }
+    }
+
+    fn note_result(&self, ok: bool) {
+        let snapshot = {
+            let mut st = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            let now = Some(now_parts().0);
+            if ok {
+                st.last_ok = now;
+            } else {
+                st.last_failed = now;
+            }
+            st.clone()
+        };
+        self.save(&snapshot);
+    }
+
+    /// Delivers alerts for as long as the process runs: each as soon as it is due, retried with backoff, and recorded with the
+    /// auditor when it has been sent or given up on.
+    pub async fn deliver_forever(self: Arc<Self>) {
+        loop {
+            let Some(cfg) = self.applied() else {
+                let _ = tokio::time::timeout(Duration::from_secs(1), self.wake.notified()).await;
+                continue;
+            };
+            let next = {
+                let mut q = self.queue.lock().unwrap_or_else(|e| e.into_inner());
+                let now = Instant::now();
+                match q.items.iter().position(|p| p.due <= now) {
+                    Some(i) => Ok(q.items.remove(i).expect("an item at that position")),
+                    None => Err(q.items.iter().map(|p| p.due).min()),
+                }
+            };
+            let mut item = match next {
+                Ok(item) => item,
+                Err(due) => {
+                    let wait =
+                        due.map_or(Duration::from_secs(1), |d| d.saturating_duration_since(Instant::now()).min(Duration::from_secs(1)));
+                    let _ = tokio::time::timeout(wait.max(Duration::from_millis(5)), self.wake.notified()).await;
+                    continue;
+                }
+            };
+            let Some(ntfy) = &cfg.ntfy else {
+                // No channel is set up: there is nowhere to send it. The admin's banner says delivery is not set up.
+                tracing::info!(kind = item.kind, "an alert was not delivered: no delivery channel is set up");
+                continue;
+            };
+            item.attempts += 1;
+            match deliver::ntfy::send(&self.http, ntfy, item.severity, &item.rendered).await {
+                Ok(()) => {
+                    self.note_result(true);
+                    self.audit.alert_delivery(item.kind, "ntfy", "sent", item.attempts);
+                }
+                Err(problem) => {
+                    self.note_result(false);
+                    tracing::warn!(kind = item.kind, attempt = item.attempts, problem = problem.as_str(), "an alert was not delivered");
+                    match self.timing.backoff.get(item.attempts as usize - 1) {
+                        Some(wait) => {
+                            item.due = Instant::now() + *wait;
+                            let mut q = self.queue.lock().unwrap_or_else(|e| e.into_inner());
+                            if q.items.len() >= QUEUE_LIMIT {
+                                q.items.pop_front();
+                                q.dropped += 1;
+                            }
+                            q.items.push_back(item);
+                        }
+                        None => self.audit.alert_delivery(item.kind, "ntfy", "failed", item.attempts),
+                    }
+                }
+            }
+        }
+    }
+
+    /// Sends a test alert now, through every channel that is set up, and says what each did. It is not limited and not queued.
+    pub async fn test(&self) -> TestResult {
+        let mut results = Vec::new();
+        if let Some(ntfy) = self.applied().and_then(|a| a.ntfy.clone()) {
+            let event = Event { kind: Kind::Test, severity: Severity::Info, at: now_parts().0, fields: Default::default() };
+            let outcome = deliver::ntfy::send(&self.http, &ntfy, event.severity, &templates::render(&event)).await;
+            self.note_result(outcome.is_ok());
+            self.audit.alert_delivery("test", "ntfy", if outcome.is_ok() { "sent" } else { "failed" }, 1);
+            results.push(ChannelResult {
+                channel: Channel::Ntfy,
+                ok: outcome.is_ok(),
+                problem: outcome.err().map(Problem::as_str).unwrap_or_default().to_string(),
+            });
+        }
+        TestResult { results }
+    }
+
+    pub fn status(&self) -> AlerterStatus {
+        let st = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let q = self.queue.lock().unwrap_or_else(|e| e.into_inner());
+        AlerterStatus {
+            config_version: self.config_version(),
+            boot_id: self.boot_id.as_str().to_string(),
+            last_delivery_ok_at: st.last_ok,
+            last_delivery_failed_at: st.last_failed,
+            queued: q.items.len() as u32,
+            dropped: q.dropped,
+        }
+    }
+}
+
+// ------------------------------------------------------------------ the links
+
+/// What one link may call: methods and paths after `/api/alerter/v1`.
+type Routes = &'static [(&'static str, &'static str)];
+
+const AUDITOR_ROUTES: Routes = &[("POST", "/events")];
+const ADMIN_ROUTES: Routes = &[("GET", "/status"), ("PUT", "/config"), ("POST", "/restart"), ("POST", "/events"), ("POST", "/test")];
+
+/// The two links: name as `bootstrap` names it (the file `accept/<name>.sha256`), the caller, and the routes.
+pub const LINKS: &[(&str, &str, Routes)] = &[("auditor-alerter", "auditor", AUDITOR_ROUTES), ("admin-alerter", "admin", ADMIN_ROUTES)];
+
+fn full(rest: &str) -> String {
+    paths::join(ALERTER_V1, rest)
+}
+
+fn links_for(token_dir: &FsPath, link: &'static (&'static str, &'static str, Routes)) -> Links {
+    let (name, caller, routes) = link;
+    Links::new(vec![Link {
+        caller,
+        hash_file: token_dir.join("accept").join(format!("{name}.sha256")),
+        allow: routes.iter().map(|(m, p)| Allow::method(Method::from_bytes(m.as_bytes()).expect("a method"), &full(p))).collect(),
+    }])
+    .named("alerter")
+}
+
+/// The check on the auditor's listener: only the auditor's token, only `POST /events`.
+pub fn auditor_links(token_dir: &FsPath) -> Links {
+    links_for(token_dir, &LINKS[0])
+}
+
+/// The check on the admin's listener: only the admin's token.
+pub fn admin_links(token_dir: &FsPath) -> Links {
+    links_for(token_dir, &LINKS[1])
+}
+
+/// The credential volume, read-only: `ASKBAR_ALERTER_TOKEN_DIR`, default `/alerter-token`.
+pub fn token_dir() -> PathBuf {
+    std::env::var("ASKBAR_ALERTER_TOKEN_DIR").ok().filter(|p| !p.trim().is_empty()).map_or_else(|| "/alerter-token".into(), PathBuf::from)
+}
+
+/// The data volume: `ASKBAR_ALERTER_DATA_DIR`, default `/alerter-data`.
+pub fn data_dir() -> PathBuf {
+    std::env::var("ASKBAR_ALERTER_DATA_DIR").ok().filter(|p| !p.trim().is_empty()).map_or_else(|| "/alerter-data".into(), PathBuf::from)
+}
+
+// ------------------------------------------------------------------ the routes
+
+/// One route, for the table the OpenAPI test reads.
+pub struct RouteEntry {
+    pub method: &'static str,
+    pub path: String,
+}
+
+/// Every route, method and full path, across both listeners. The OpenAPI file describes exactly these.
+pub fn routes() -> Vec<RouteEntry> {
+    let mut out = vec![RouteEntry { method: "GET", path: full("/health") }];
+    let mut seen = std::collections::BTreeSet::new();
+    for (_, _, rs) in LINKS {
+        for (m, p) in rs.iter() {
+            if seen.insert((*m, *p)) {
+                out.push(RouteEntry { method: m, path: full(p) });
+            }
+        }
+    }
+    out
+}
+
+/// The routes that answer before the alerter has been configured.
+fn open_before_config(path: &str) -> bool {
+    [full("/health"), full("/status"), full("/config"), full("/restart")].iter().any(|p| p == path)
+}
+
+/// The auditor's listener.
+pub fn auditor_router(a: Arc<Alerter>, links: Links) -> Router {
+    let gate = gate(&a);
+    let protected = Router::new()
+        .route(&full("/events"), post(events))
+        .layer(axum::middleware::from_fn_with_state(gate, askbar_service::configured::require))
+        .layer(axum::middleware::from_fn_with_state(links, askbar_service::links::require));
+    shell(a, protected)
+}
+
+/// The admin's listener.
+pub fn admin_router(a: Arc<Alerter>, links: Links) -> Router {
+    let restart = a.restarter.clone();
+    let gate = gate(&a);
+    let protected = Router::new()
+        .route(&full("/status"), get(status))
+        .route(&full("/config"), put(put_config))
+        .route(&full("/restart"), post(askbar_service::restart::handler).with_state(restart))
+        .route(&full("/events"), post(events))
+        .route(&full("/test"), post(test))
+        .layer(axum::middleware::from_fn_with_state(gate, askbar_service::configured::require))
+        .layer(axum::middleware::from_fn_with_state(links, askbar_service::links::require));
+    shell(a, protected)
+}
+
+fn gate(a: &Arc<Alerter>) -> Gate {
+    let a = a.clone();
+    Gate::new(move || a.is_configured(), open_before_config)
+}
+
+fn shell(a: Arc<Alerter>, protected: Router<Arc<Alerter>>) -> Router {
+    Router::new()
+        .route(&full("/health"), get(|| async { "ok" }))
+        .merge(protected)
+        .fallback(|| async { ApiError::code(ErrorCode::NotFound) })
+        .layer(DefaultBodyLimit::max(MAX_BODY))
+        .with_state(a)
+}
+
+type Failure = ApiError;
+type St = State<Arc<Alerter>>;
+
+fn bad(detail: impl Into<String>) -> Failure {
+    ApiError::new(ErrorCode::BadRequest, detail)
+}
+
+/// A body of JSON, refused with a sentence that names no value (a serde message can quote one).
+fn parse<T: DeserializeOwned>(body: &Bytes) -> Result<T, Failure> {
+    serde_json::from_slice(body)
+        .map_err(|_| bad("The body is not what this route takes: an unknown kind, severity or field, or a value out of range."))
+}
+
+async fn status(State(a): St) -> Json<AlerterStatus> {
+    Json(a.status())
+}
+
+/// Replace the delivery settings. The answer holds none of them.
+async fn put_config(State(a): St, body: Bytes) -> Result<Json<serde_json::Value>, Failure> {
+    let c: AlerterConfig = parse(&body)?;
+    a.apply_config(&c).map_err(bad)?;
+    Ok(Json(serde_json::json!({ "version": c.version })))
+}
+
+fn sender(caller: &str) -> Sender {
+    if caller == "auditor" {
+        Sender::Auditor
+    } else {
+        Sender::Admin
+    }
+}
+
+/// An event from the auditor or the admin, checked against what that link may send.
+async fn events(
+    State(a): St,
+    Extension(Caller(caller)): Extension<Caller>,
+    body: Bytes,
+) -> Result<(axum::http::StatusCode, Json<EventTaken>), Failure> {
+    let e: Event = parse(&body)?;
+    match a.submit(&e, sender(caller)) {
+        Ok(taken) => Ok((axum::http::StatusCode::ACCEPTED, Json(taken))),
+        Err(Refusal::NotYours) => Err(ApiError::new(ErrorCode::Forbidden, Refusal::NotYours.to_string())),
+        Err(r) => Err(bad(r.to_string())),
+    }
+}
+
+/// Send a test alert through every channel that is set up and say what each did.
+async fn test(State(a): St) -> Json<TestResult> {
+    Json(a.test().await)
+}

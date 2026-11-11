@@ -1,0 +1,30 @@
+[package]
+name = "askbar-alerter"
+license = "AGPL-3.0-or-later"
+publish = false
+version = "0.6.0"
+edition = "2021"
+description = "Alert delivery in its own container: /api/alerter/v1 (ADR 0055)"
+
+[dependencies]
+askbar-proto = { path = "../../crates/askbar-proto", features = ["axum"] }
+askbar-service = { path = "../../crates/askbar-service" }
+axum = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+[dev-dependencies]
+# The tests run a real auditor in the process, and read what it stored.
+askbar-audit = { path = "../../crates/askbar-audit" }
+askbar-auditor = { path = "../auditor" }
+sha2 = "0.10"
+ulid = "1"
+# YAML in safe Rust, to read our own OpenAPI files (as the server, the auditor and the gateway do).
+serde-saphyr = { version = "2.1", default-features = false, features = ["deserialize"] }
+
+[lints]
+workspace = true

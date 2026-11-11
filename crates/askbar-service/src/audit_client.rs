@@ -24,6 +24,8 @@ pub const ACK_TIMEOUT: Duration = Duration::from_secs(1);
 /// How many records the queue keeps; past it the oldest is dropped, and the drops are counted and recorded.
 pub const QUEUE_LIMIT: usize = 1000;
 const SEND_TIMEOUT: Duration = Duration::from_secs(5);
+/// How often a service calls the auditor's `GET /status`, so its link is never silent while it is alive.
+pub const STATUS_EVERY: Duration = Duration::from_secs(60);
 
 /// Why a span could not be opened.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,6 +44,7 @@ enum Item {
     Finish(String, SpanFinish),
     Payload(String, SealedPayload),
     Config(askbar_proto::audit::ConfigApplied),
+    AlertDelivery(askbar_proto::audit::AlertDeliveryStart),
 }
 
 #[derive(Default)]
@@ -179,6 +182,34 @@ impl AuditClient {
         self.push(Item::Config(askbar_proto::audit::ConfigApplied { id: ids::new_id(), at: now_parts().0, version }));
     }
 
+    /// Queue the outcome of one alert (`alerter-auditor` only, ADR 0055): metadata, never the alert's sentence.
+    pub fn alert_delivery(&self, kind: &str, channel: &str, outcome: &str, attempts: u32) {
+        self.push(Item::AlertDelivery(askbar_proto::audit::AlertDeliveryStart {
+            id: ids::new_id(),
+            at: now_parts().0,
+            kind: kind.to_string(),
+            channel: channel.to_string(),
+            outcome: outcome.to_string(),
+            attempts,
+        }));
+    }
+
+    /// Call the auditor's `GET /status` once a minute for as long as the process runs. The auditor notes the time of each
+    /// request on a link, and a link is silent when nothing has come over it for five minutes (ADR 0051): a service that is
+    /// alive but has nothing to record is not silent, because of this call. Nothing in the answer is used.
+    pub async fn status_every_minute(self: Arc<Self>) {
+        loop {
+            self.ping().await;
+            tokio::time::sleep(STATUS_EVERY).await;
+        }
+    }
+
+    /// One `GET /status` to the auditor, for the time it notes. The result is of no use to the caller.
+    pub async fn ping(&self) {
+        let Some(token) = self.token() else { return };
+        let _ = self.http.get(self.url("/status")).bearer_auth(token).timeout(SEND_TIMEOUT).send().await;
+    }
+
     /// Queue the record of a request this gateway refused: a span that began and ended at once.
     pub fn refusal(&self, start: SpanStart, finish: SpanFinish) {
         let id = start.id.clone();
@@ -215,6 +246,7 @@ impl AuditClient {
                 Item::Finish(id, f) => self.send(&format!("/spans/{id}/finish"), f, SEND_TIMEOUT).await,
                 Item::Payload(id, p) => self.send(&format!("/spans/{id}/payloads"), p, SEND_TIMEOUT).await,
                 Item::Config(c) => self.send("/config-applied", c, SEND_TIMEOUT).await,
+                Item::AlertDelivery(d) => self.send("/alert-deliveries", d, SEND_TIMEOUT).await,
             };
             match status {
                 Ok(200 | 201) => {
