@@ -76,3 +76,4 @@ V1 has manual and scheduled backups, encrypted with age.
 A stolen backup can be attacked offline, so the passphrase length matters. A lost passphrase makes backups unusable. A backup needs the backup passphrase that was current when it was made. A share on the same site doesn't protect against a fire or theft that affects both machines.
 
 ## Amendments
+- 2026-11-11: the alerter's backup holds its state (the repeat ledger and release results), not delivery settings: the admin keeps the delivery secrets and pushes them, so they come back with the admin's own backup ([0055](0055-alerter.md)).
