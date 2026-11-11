@@ -155,10 +155,13 @@ paths:
   /api/model-gateway/v1/providers/{id}/test:
     post:
       operationId: testProvider
-      summary: One short message through a saved provider, and how it went. The admin's listener.
+      summary: A short fixed message, streamed through a saved provider, and how it went. The admin's listener.
       description: >-
-        Sends one short message through the provider as configured (30 seconds at most). Always `200` for a provider
-        that exists; `ok` is false with a sentence that never holds the key when it failed.
+        Streams one short fixed message through the provider as configured (30 seconds at most) with the provider's own
+        model, and reports pass or fail, the time to the first text and a details view of the request. Always `200` for
+        a provider that exists. Nothing of the reply, a provider's error text or the key is in the answer, and nothing
+        of it is stored: the audit record is a metadata-only turn span named `provider_test`, on record before the
+        provider is called (when it cannot be made in time, nothing is sent and `error_type` is `audit`).
       parameters:
         - name: id
           in: path
@@ -379,13 +382,34 @@ components:
                 type: string
     TestResult:
       type: object
-      required: [ok, message]
+      required: [ok, message, ttft_ms, details]
       properties:
         ok:
           type: boolean
         message:
           type: string
-          description: The start of the reply on success, or why not. Never holds the key.
+          description: A sentence of the gateway's own. Never the reply, a provider's own words or the key.
+        ttft_ms:
+          type: [integer, 'null']
+          description: Milliseconds from sending the request to the first text, on a pass.
+        details:
+          type: object
+          required: [method, path, status, error_type, ttft_ms, total_ms]
+          properties:
+            method:
+              type: string
+            path:
+              type: string
+              description: The request's path only, with no host, query or credentials.
+            status:
+              type: [integer, 'null']
+            error_type:
+              type: [string, 'null']
+              enum: [connect, auth, not_found, rate_limited, rejected, provider_error, http_error, stream, config, empty, timeout, audit, null]
+            ttft_ms:
+              type: [integer, 'null']
+            total_ms:
+              type: integer
     GatewayProvider:
       type: object
       description: One provider. `api_key` is write-only, and no route returns it.

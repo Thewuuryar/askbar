@@ -924,3 +924,64 @@ async fn the_model_called_is_the_one_asked_for_not_the_providers_own() {
     let rows = rig.wait_rows("SELECT DISTINCT model FROM spans WHERE trace_id = 'gen-second' AND kind IN ('turn', 'attempt')").await;
     assert_eq!(rows, vec![vec![json!("m-second")]]);
 }
+
+// ------------------------------------------------------------------ the provider test (plan step 3.4, ADR 0014)
+
+impl Rig {
+    async fn provider_test(&self, id: &str) -> (u16, Value) {
+        let r = self.http.post(format!("{}/api/model-gateway/v1/providers/{id}/test", self.admin)).bearer_auth(ADM).send().await.unwrap();
+        (r.status().as_u16(), r.json().await.unwrap_or(Value::Null))
+    }
+}
+
+#[tokio::test]
+async fn a_passing_test_streams_reports_the_time_to_first_text_and_keeps_the_reply_to_itself() {
+    let rig = rig().await;
+    rig.push(&config(&rig, 1, &[("p", "m")])).await;
+    let (status, v) = rig.provider_test("p").await;
+    assert_eq!(status, 200, "{v}");
+    assert_eq!(v["ok"], true, "{v}");
+    assert!(v["ttft_ms"].is_u64() && v["message"].as_str().unwrap().starts_with("Streaming works"), "{v}");
+    assert_eq!(
+        (v["details"]["method"].as_str(), v["details"]["path"].as_str(), v["details"]["status"].as_u64()),
+        (Some("POST"), Some("/v1/chat/completions"), Some(200))
+    );
+    assert!(v["details"]["error_type"].is_null() && v["details"]["total_ms"].is_u64() && v["details"]["ttft_ms"].is_u64(), "{v}");
+    // Nothing the provider said is in the answer, and neither is the key.
+    let wire = v.to_string();
+    assert!(!wire.contains("quick answer") && !wire.contains(MARKER_KEY), "{wire}");
+
+    // On record: one turn span for the test, finished with the first-text time, and no payload of any kind.
+    let rows = rig.wait_rows("SELECT status, provider_id, model, ttft_ms IS NOT NULL, error_code FROM spans WHERE name = 'provider_test' AND status = 'done'").await;
+    assert_eq!(rows[0], vec![json!("done"), json!("p"), json!("m"), json!(1), Value::Null]);
+    assert_eq!(rig.rows("SELECT COUNT(*) FROM payloads")[0][0], 0, "metadata only");
+}
+
+#[tokio::test]
+async fn a_failing_test_says_why_in_our_words_and_never_repeats_the_providers() {
+    let rig = rig().await;
+    rig.push(&config(&rig, 1, &[("bad", "m-fail")])).await;
+    let (status, v) = rig.provider_test("bad").await;
+    assert_eq!(status, 200, "{v}");
+    assert_eq!((v["ok"].as_bool(), v["message"].as_str()), (Some(false), Some("The provider refused the key.")), "{v}");
+    assert_eq!((v["details"]["status"].as_u64(), v["details"]["error_type"].as_str()), (Some(401), Some("auth")));
+    assert!(v["ttft_ms"].is_null());
+    let wire = v.to_string();
+    assert!(!wire.contains("Incorrect") && !wire.contains(MARKER_KEY), "the provider's own words stay out: {wire}");
+    let rows = rig.wait_rows("SELECT status, error_code, ttft_ms FROM spans WHERE name = 'provider_test' AND status = 'error'").await;
+    assert_eq!(rows[0], vec![json!("error"), json!("auth"), Value::Null]);
+    assert_eq!(rig.rows("SELECT COUNT(*) FROM payloads")[0][0], 0, "not even the error text is kept");
+}
+
+#[tokio::test]
+async fn a_test_waits_for_the_auditor_like_any_model_call_and_an_unknown_provider_is_404() {
+    let rig = rig_with(false).await;
+    rig.push(&config(&rig, 1, &[("p", "m")])).await;
+    let (status, v) = rig.provider_test("p").await;
+    assert_eq!((status, v["ok"].as_bool(), v["details"]["error_type"].as_str()), (200, Some(false), Some("audit")), "{v}");
+    assert_eq!(rig.provider_calls(), 0, "the provider was not called");
+    assert_eq!(rig.provider_test("nobody").await.0, 404);
+    // Only the admin's listener has the route.
+    let on_server = rig.http.post(format!("{}/api/model-gateway/v1/providers/p/test", rig.server)).bearer_auth(SRV).send().await.unwrap();
+    assert_eq!(on_server.status(), 404);
+}

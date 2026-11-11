@@ -133,6 +133,12 @@ impl Rig {
         state.with_audit(recorder).with_gateway(crate::gateway::GatewayClient::new(&self.gateway_url, self.server_tokens.clone()))
     }
 
+    /// The directory holding the gateway's own tokens (its `model-gateway-auditor` token among them), so a test can build
+    /// another gateway that records to this rig's auditor.
+    pub fn gateway_tokens(&self) -> PathBuf {
+        self.dir.join("gateway-token")
+    }
+
     /// Remember `key` as the one to give the gateway for provider `id`, at the next `sync`.
     pub fn set_key(&self, id: &str, key: &str) {
         self.keys.lock().unwrap_or_else(|e| e.into_inner()).insert(id.to_string(), key.to_string());
