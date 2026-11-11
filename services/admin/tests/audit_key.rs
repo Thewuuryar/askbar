@@ -141,21 +141,42 @@ async fn access_rows(t: &T) -> Vec<(String, String, bool)> {
     rows
 }
 
+/// The passphrase opens a sealed-content session (ADR 0011 rule 8).
+async fn unseal(t: &T, pass: &str) -> (u16, serde_json::Value) {
+    t.call(M::POST, "/api/admin/v1/audit/session", json!({ "passphrase": pass })).await
+}
+
+/// The content of one span, opened with the session's keys.
+async fn view(t: &T, span: &str) -> (u16, serde_json::Value) {
+    t.call(M::GET, &format!("/api/admin/v1/audit/payloads/{span}"), json!(null)).await
+}
+
 #[tokio::test]
-async fn the_right_passphrase_opens_the_content_and_leaves_an_access_record() {
+async fn the_right_passphrase_opens_a_session_and_each_view_leaves_an_access_record() {
     let t = common::start(true).await;
     let (span, text) = server_with_sealed_reply(&t).await;
     assert!(access_rows(&t).await.is_empty());
+    assert_eq!(view(&t, &span).await.0, 403, "sealed until the passphrase is entered");
 
-    let (st, body) = t.call(M::POST, &format!("/api/admin/v1/audit/payloads/{span}/open"), json!({ "passphrase": PASS })).await;
+    let (st, status) = unseal(&t, PASS).await;
+    assert_eq!(st, 201, "{status}");
+    assert_eq!(status["open"], true);
+    assert_eq!(status["keys"][0]["open"], true);
+    let (st, body) = view(&t, &span).await;
     assert_eq!(st, 200, "{body}");
     assert_eq!(body["payloads"][0]["role"], "reply");
     assert_eq!(body["payloads"][0]["text"], text.as_str());
     let key_id = body["payloads"][0]["key_id"].as_str().unwrap().to_string();
+    // No more prompts while it is open.
+    assert_eq!(view(&t, &span).await.0, 200);
 
     let rows = access_rows(&t).await;
-    assert_eq!(rows, [(span.clone(), key_id, true)], "one record, written for the successful open");
-    // Nothing the admin keeps holds the passphrase or the opened text.
+    assert_eq!(
+        rows,
+        [("(session)".into(), key_id.clone(), true), (span.clone(), key_id.clone(), true), (span.clone(), key_id, true)],
+        "the start, then each view"
+    );
+    // Nothing the admin keeps holds the passphrase, a key or the opened text.
     let db = t.admin.db.lock().await;
     let mut all = String::new();
     for table in ["audit_access", "audit_keys", "settings"] {
@@ -174,13 +195,13 @@ async fn the_right_passphrase_opens_the_content_and_leaves_an_access_record() {
 }
 
 #[tokio::test]
-async fn a_wrong_passphrase_is_403_is_recorded_and_returns_no_content() {
+async fn a_wrong_passphrase_is_403_is_recorded_and_opens_nothing() {
     let t = common::start(true).await;
     let (span, text) = server_with_sealed_reply(&t).await;
     let wrong = "another passphrase of good length";
     let r = t
         .http
-        .post(format!("{}/api/admin/v1/audit/payloads/{span}/open", t.adm))
+        .post(format!("{}/api/admin/v1/audit/session", t.adm))
         .header("x-askbar-admin", "1")
         .header("cookie", &t.cookie)
         .json(&json!({ "passphrase": wrong }))
@@ -193,25 +214,22 @@ async fn a_wrong_passphrase_is_403_is_recorded_and_returns_no_content() {
     let rows = access_rows(&t).await;
     assert_eq!(rows.len(), 1);
     assert!(!rows[0].2, "recorded as a failure");
+    assert_eq!(view(&t, &span).await.0, 403, "still sealed");
+    assert_eq!(t.call(M::GET, "/api/admin/v1/audit/session", json!(null)).await.1["open"], false);
 }
 
 #[tokio::test]
-async fn five_wrong_passphrases_lock_opening_out_even_for_the_right_one_and_unknown_spans_are_404() {
+async fn five_wrong_passphrases_lock_unsealing_out_even_for_the_right_one_and_unknown_spans_are_404() {
     let t = common::start(true).await;
-    let (span, _) = server_with_sealed_reply(&t).await;
-    let open = |pass: &str| {
-        let (path, pass) = (format!("/api/admin/v1/audit/payloads/{span}/open"), pass.to_string());
-        let t = &t;
-        async move { t.call(M::POST, &path, json!({ "passphrase": pass })).await }
-    };
+    server_with_sealed_reply(&t).await;
     for i in 0..5 {
-        assert_eq!(open(&format!("wrong passphrase number {i}, long enough")).await.0, 403);
+        assert_eq!(unseal(&t, &format!("wrong passphrase number {i}, long enough")).await.0, 403);
     }
-    let (st, body) = open(PASS).await;
+    let (st, body) = unseal(&t, PASS).await;
     assert_eq!(st, 429, "locked out, even with the right one: {body}");
     assert!(body["detail"].as_str().unwrap_or("").contains("Try again"), "{body}");
     assert_eq!(body["error"], "too_many_attempts");
-    assert_eq!(access_rows(&t).await.len(), 5, "a refused attempt is not an open, so nothing more is recorded");
+    assert_eq!(access_rows(&t).await.len(), 5, "a refused attempt is not an unseal, so nothing more is recorded");
     // The login is a different lock: signing in still works.
     let r = t
         .http
@@ -225,22 +243,25 @@ async fn five_wrong_passphrases_lock_opening_out_even_for_the_right_one_and_unkn
 
     let t2 = common::start(true).await;
     server_with_sealed_reply(&t2).await;
-    assert_eq!(t2.call(M::POST, "/api/admin/v1/audit/payloads/no-such-span/open", json!({ "passphrase": PASS })).await.0, 404);
+    assert_eq!(unseal(&t2, PASS).await.0, 201);
+    assert_eq!(view(&t2, "no-such-span").await.0, 404);
+    assert_eq!(view(&t2, "bad%20id").await.0, 404);
 }
 
 #[tokio::test]
-async fn a_span_with_nothing_sealed_opens_to_an_empty_list_without_a_record() {
+async fn a_span_with_nothing_sealed_opens_to_an_empty_list_without_an_access_record() {
     use askbar_server::audit::Kind;
     let t = common::start(true).await;
     server_with_sealed_reply(&t).await;
+    unseal(&t, PASS).await;
     let bare = t.rig.seed("trace-2", Kind::Gate, "queue", None, false).await;
-    let (st, body) = t.call(M::POST, &format!("/api/admin/v1/audit/payloads/{bare}/open"), json!({ "passphrase": "x" })).await;
+    let (st, body) = view(&t, &bare).await;
     assert_eq!((st, body["payloads"].as_array().map(Vec::len)), (200, Some(0)));
-    assert!(access_rows(&t).await.is_empty());
+    assert_eq!(access_rows(&t).await.len(), 1, "only the start");
 }
 
 #[tokio::test]
-async fn rotation_adds_a_key_retires_the_old_one_and_each_payload_opens_with_its_own_passphrase() {
+async fn rotation_adds_a_key_retires_the_old_one_and_each_passphrase_opens_what_its_own_key_sealed() {
     use askbar_server::audit::Kind;
     let t = common::start(true).await;
     let (old_span, old_text) = server_with_sealed_reply(&t).await;
@@ -282,24 +303,23 @@ async fn rotation_adds_a_key_retires_the_old_one_and_each_payload_opens_with_its
         .seed("trace-9", Kind::Turn, "chat", Some(("reply", askbar_server::seal::seal(&public, new_text.as_bytes()).unwrap())), false)
         .await;
 
-    let open = |span: &str, pass: &str| {
-        let (path, body) = (format!("/api/admin/v1/audit/payloads/{span}/open"), json!({ "passphrase": pass }));
-        let t = &t;
-        async move { t.call(M::POST, &path, body).await }
-    };
-    let (st, b) = open(&new_span, new_pass).await;
-    assert_eq!((st, b["payloads"][0]["text"].as_str()), (200, Some(new_text)));
-    assert_eq!(b["payloads"][0]["key_id"], new_id.as_str());
-    let (st, b) = open(&old_span, PASS).await;
-    assert_eq!(
-        (st, b["payloads"][0]["text"].as_str()),
-        (200, Some(old_text.as_str())),
-        "the old content still opens, with the old passphrase"
-    );
+    // The new passphrase opens a session that holds the new key only: the old content names the key it needs.
+    let (st, s) = unseal(&t, new_pass).await;
+    assert_eq!(st, 201, "{s}");
+    let (_, b) = view(&t, &new_span).await;
+    assert_eq!((b["payloads"][0]["text"].as_str(), b["payloads"][0]["key_id"].as_str()), (Some(new_text), Some(new_id.as_str())));
+    let (st, b) = view(&t, &old_span).await;
+    assert_eq!(st, 200);
+    assert_eq!(b["payloads"][0]["text"], json!(null), "this session has no key for it");
     assert_eq!(b["payloads"][0]["key_id"], old_key.key_id.as_str());
-    // A passphrase opens only what its own key sealed.
-    assert_eq!(open(&old_span, new_pass).await.0, 403);
-    assert_eq!(open(&new_span, PASS).await.0, 403);
+    assert!(b["payloads"][0]["key_retired_at"].as_i64().is_some(), "it says the key is retired, so the person knows which passphrase");
+
+    // The old passphrase adds the old key to the same session (it is not restarted).
+    let (st, s) = unseal(&t, PASS).await;
+    assert_eq!(st, 200, "added, not a new session: {s}");
+    assert_eq!(s["keys"].as_array().unwrap().iter().filter(|k| k["open"] == true).count(), 2);
+    let (_, b) = view(&t, &old_span).await;
+    assert_eq!(b["payloads"][0]["text"].as_str(), Some(old_text.as_str()), "the old content opens with the old passphrase's key");
 }
 
 #[tokio::test]
@@ -335,7 +355,7 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LogBuf {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn no_passphrase_reaches_the_admin_logs_when_opening_content_or_rotating() {
+async fn no_passphrase_reaches_the_admin_logs_when_unsealing_content_or_rotating() {
     let logs = LogBuf::default();
     let sub = tracing_subscriber::fmt().with_max_level(tracing::Level::TRACE).with_writer(logs.clone()).finish();
     let _guard = tracing::subscriber::set_default(sub);
@@ -345,8 +365,9 @@ async fn no_passphrase_reaches_the_admin_logs_when_opening_content_or_rotating()
     let wrong = "a wrong passphrase that is long enough";
     let new_pass = "the new passphrase after rotating";
     for pass in [PASS, wrong] {
-        t.call(M::POST, &format!("/api/admin/v1/audit/payloads/{span}/open"), json!({ "passphrase": pass })).await;
+        unseal(&t, pass).await;
     }
+    view(&t, &span).await;
     t.call(M::POST, "/api/admin/v1/audit/rotate-key", json!({ "current": PASS, "new": new_pass, "confirm": new_pass })).await;
     t.call(M::POST, "/api/admin/v1/audit/rotate-key", json!({ "current": wrong, "new": new_pass, "confirm": new_pass })).await;
     let log = String::from_utf8_lossy(&logs.0.lock().unwrap()).into_owned();
@@ -356,32 +377,30 @@ async fn no_passphrase_reaches_the_admin_logs_when_opening_content_or_rotating()
 }
 
 #[tokio::test]
-async fn the_access_history_lists_every_open_newest_first_without_content_and_needs_a_session() {
+async fn the_access_history_lists_every_unseal_and_view_newest_first_without_content_and_needs_a_session() {
     let t = common::start(true).await;
     let (span, text) = server_with_sealed_reply(&t).await;
     let (st, empty) = t.call(M::GET, "/api/admin/v1/audit/access", json!({})).await;
     assert_eq!((st, empty["access"].as_array().map(Vec::len)), (200, Some(0)));
 
-    let open = |pass: &str| {
-        let (path, body) = (format!("/api/admin/v1/audit/payloads/{span}/open"), json!({ "passphrase": pass }));
-        let t = &t;
-        async move { t.call(M::POST, &path, body).await }
-    };
-    assert_eq!(open("a wrong passphrase of enough length").await.0, 403);
-    assert_eq!(open(PASS).await.0, 200);
-    assert_eq!(open(PASS).await.0, 200);
+    assert_eq!(unseal(&t, "a wrong passphrase of enough length").await.0, 403);
+    assert_eq!(unseal(&t, PASS).await.0, 201);
+    assert_eq!(view(&t, &span).await.0, 200);
+    assert_eq!(view(&t, &span).await.0, 200);
 
     let (st, list) = t.call(M::GET, "/api/admin/v1/audit/access", json!({})).await;
     assert_eq!(st, 200);
     let rows = list["access"].as_array().unwrap();
     assert_eq!(
         rows.iter().map(|r| r["ok"].as_bool().unwrap()).collect::<Vec<_>>(),
-        [true, true, false],
+        [true, true, true, false],
         "newest first; the wrong guess is there too"
     );
-    assert!(rows
-        .iter()
-        .all(|r| r["span_id"] == span.as_str() && r["key_id"].as_str().unwrap().len() == 16 && r["opened_at"].as_i64().unwrap() > 0));
+    assert_eq!(
+        rows.iter().map(|r| r["span_id"].as_str().unwrap()).collect::<Vec<_>>(),
+        [span.as_str(), span.as_str(), "(session)", "(session)"]
+    );
+    assert!(rows.iter().all(|r| r["key_id"].as_str().unwrap().len() == 16 && r["opened_at"].as_i64().unwrap() > 0));
     let body = list.to_string();
     assert!(!body.contains(&text) && !body.contains(PASS) && !body.contains("passphrase"), "no content, no passphrase: {body}");
     assert!(rows[0]["id"].as_i64().unwrap() > rows[1]["id"].as_i64().unwrap());

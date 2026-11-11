@@ -323,6 +323,15 @@ impl AdminDb {
             .optional()?)
     }
 
+    /// Every key ever made, oldest first: the registry the sealed-content session opens with one passphrase.
+    pub fn audit_keys(&self) -> Result<Vec<AuditKeyRow>, DbError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT key_id, public_key, salt, argon_params, created_at, retired_at FROM audit_keys ORDER BY created_at, key_id")?;
+        let rows = stmt.query_map([], read_key)?.collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     /// The key the server seals with now, if one has been made.
     pub fn active_audit_key(&self) -> Result<Option<AuditKeyRow>, DbError> {
         Ok(active_audit_key(&self.conn)?)

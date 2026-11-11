@@ -156,8 +156,9 @@ impl ActionNotes {
     }
 }
 
-/// The category and action of a route that changes something, or `None` for one that does not. Reading is not recorded
-/// (except the backup, which hands over every record the admin holds). Signing in and out are not changes, and the
+/// The category and action of a route that changes something, or `None` for one that does not. Reading is not recorded,
+/// except the backup (which hands over every record the admin holds) and the content of a sealed span (ADR 0011 rule 12:
+/// each item viewed). Signing in and out are not changes, and the
 /// first goes through its own route that this layer is never put on.
 pub fn classify(method: &Method, template: &str) -> Option<(&'static str, &'static str)> {
     let v1 = askbar_proto::paths::ADMIN_V1;
@@ -174,7 +175,9 @@ pub fn classify(method: &Method, template: &str) -> Option<(&'static str, &'stat
         ("POST", "/users/{id}/pairing-keys") => ("pairing_keys", "create"),
         ("PUT", "/setup/audit-key") => ("secret", "audit_key_setup"),
         ("POST", "/audit/rotate-key") => ("secret", "audit_key_rotate"),
-        ("POST", "/audit/payloads/{span_id}/open") => ("sealed_content", "open"),
+        ("POST", "/audit/session") => ("sealed_content", "unseal"),
+        ("DELETE", "/audit/session") => ("sealed_content", "seal"),
+        ("GET", "/audit/payloads/{span_id}") => ("sealed_content", "view"),
         ("PUT", "/settings") => ("settings", "update"),
         ("PUT", "/network") => ("network", "update"),
         ("POST", "/network/apply") => ("config_push", "network_apply"),

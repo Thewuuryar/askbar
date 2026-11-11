@@ -102,7 +102,7 @@ fn change_first() -> ApiError {
     ApiError::code(ErrorCode::PasswordChangeRequired).no_challenge()
 }
 
-fn session_cookie(headers: &HeaderMap) -> Option<String> {
+pub(crate) fn session_cookie(headers: &HeaderMap) -> Option<String> {
     let raw = headers.get(header::COOKIE)?.to_str().ok()?;
     raw.split(';').find_map(|kv| {
         let (k, v) = kv.trim().split_once('=')?;
@@ -292,6 +292,8 @@ pub async fn login(State(state): State<Arc<AdminState>>, ApiJson(body): ApiJson<
 pub async fn logout(State(state): State<Arc<AdminState>>, headers: HeaderMap) -> Response {
     if let Some(t) = session_cookie(&headers) {
         state.auth.end_session(&t);
+        // Signing out seals what was unsealed with this sign-in (ADR 0011 rule 11).
+        state.end_sealed(crate::sealed::Ended::SignOut, true).await;
     }
     let mut r = StatusCode::NO_CONTENT.into_response();
     r.headers_mut().insert(header::SET_COOKIE, set_cookie("", 0));

@@ -131,6 +131,11 @@ async fn what_the_file_says_about_a_key_is_what_the_admin_does() {
         ("GET", "/cpa/logins/{state}"),
         ("POST", "/cpa/logins/{state}/callback"),
         ("DELETE", "/cpa/accounts/{name}"),
+        // Sealed content is the person's alone (ADR 0011).
+        ("GET", "/audit/session"),
+        ("POST", "/audit/session"),
+        ("DELETE", "/audit/session"),
+        ("GET", "/audit/payloads/{span_id}"),
     ]
     .into_iter()
     .map(|(m, p)| (m.to_string(), format!("/api/admin/v1{p}")))

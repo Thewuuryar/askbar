@@ -96,6 +96,8 @@ async fn main() {
     tokio::spawn(auditor.clone().run(state.clone()));
     // The head of the audit chain is compared with the one stored, every few minutes (ADR 0010 rule 7).
     tokio::spawn(askbar_admin::chain_check::run(state.clone(), auditor));
+    // Sealed content seals itself when its time is up or its sign-in is gone (ADR 0011 rule 11).
+    tokio::spawn(askbar_admin::sealed::run(state.clone()));
     // Every change is recorded with this token before it is made (ADR 0010); the admin does not start without it.
     let append_token = askbar_admin::actions::append_token(&askbar_admin::server_link::token_dir()).unwrap_or_else(|e| die(e, 1));
     let _ = state.actions.set(askbar_admin::actions::ActionLog::new(&askbar_admin::auditor_link::auditor_url(), append_token));

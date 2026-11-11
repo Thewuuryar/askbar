@@ -15,7 +15,7 @@ info:
       (403 `forbidden`), whatever it carries (ADR 0029).
     - *An admin API key* (scripts): make one in the site (Security tab); it is shown once. Send it as
       `Authorization: Bearer <key>`. No cookie and no `X-Askbar-Admin` header. A key can use every operation
-      that lists `adminApiKey` below. The operations marked session-only (the session, the password, the keys)
+      that lists `adminApiKey` below. The operations marked session-only (the session, the password, the keys, sealed content)
       refuse a key, so a leaked key cannot make more keys or lock you out. One key is active at a time; revoke
       it from the site. A wrong key counts toward the same lockout as a wrong password.
 
@@ -458,6 +458,29 @@ paths:
                   token_rejected:
                     type: boolean
                     description: The server answers 401 to this admin's token. Clears with the next answer that is not a 401.
+                  sealed_content:
+                    type: object
+                    description: >-
+                      The banner's part, which is whether this browser has a sealed-content session and how long it has
+                      left, and the alerts of the last day (an unseal, a change of the timeouts). Never a key or content.
+                    properties:
+                      open:
+                        type: boolean
+                      idle_left_secs:
+                        type: [integer, 'null']
+                      total_left_secs:
+                        type: [integer, 'null']
+                      alerts:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            kind:
+                              type: string
+                            at:
+                              type: integer
+                            text:
+                              type: string
                   audit_chain:
                     type: object
                     description: >-
@@ -1138,26 +1161,94 @@ paths:
           $ref: '#/components/responses/TooMany'
         '502':
           $ref: '#/components/responses/ServerUnavailable'
-  /api/admin/v1/audit/payloads/{span_id}/open:
-    parameters:
-      - name: span_id
-        in: path
-        required: true
-        schema:
-          type: string
-    post:
-      operationId: openAuditPayloads
-      summary: Open the sealed content of one span with the audit passphrase.
-      description: The passphrase is used to derive the key in memory and then forgotten. An access row is written before any content is returned. A wrong passphrase is 403 and recorded; five wrong ones in 15 minutes lock opening out (429).
+  /api/admin/v1/audit/session:
+    get:
+      operationId: getUnsealSession
+      summary: Whether sealed content is open for this browser, and for how long.
+      description: >-
+        Not an unseal and not a use: asking does not keep a session alive. The session belongs to the browser session
+        that started it; an admin API key has none (ADR 0011).
       security:
         - adminSession: []
-        - adminApiKey: []
+      responses:
+        '200':
+          description: The state of the session and the key registry.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnsealSession'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      operationId: startUnsealSession
+      summary: Open sealed content with the audit passphrase, after a fresh sign-in.
+      description: >-
+        The passphrase must be entered within ten minutes of signing in (`403` otherwise). Each key in the registry the
+        passphrase makes is derived and kept in memory for the session; nothing is stored. A wrong passphrase is `403`,
+        recorded in the access history, and five wrong ones in 15 minutes lock unsealing out (`429`). The request is
+        recorded in the auditor before it is handled; if that fails the answer is `503` and nothing is opened. A
+        passphrase for an older key, given during a session, adds that key (`200`) without restarting its clock.
+      security:
+        - adminSession: []
       requestBody:
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/OpenRequest'
+      responses:
+        '200':
+          description: Keys were added to the session that was already open.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnsealSession'
+        '201':
+          description: A session was opened.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnsealSession'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/TooMany'
+        '503':
+          $ref: '#/components/responses/AuditorUnavailable'
+    delete:
+      operationId: sealAgain
+      summary: Seal. Drops the keys at once.
+      security:
+        - adminSession: []
+      responses:
+        '204':
+          description: Sealed (also when nothing was open).
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          $ref: '#/components/responses/AuditorUnavailable'
+  /api/admin/v1/audit/payloads/{span_id}:
+    parameters:
+      - name: span_id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: viewAuditPayloads
+      summary: The content of one span, opened with the session's keys.
+      description: >-
+        Needs an open session (`403` when sealed). Each view counts as use, is written to the access history, and is
+        recorded in the auditor before it is made. A payload sealed with a key the session does not hold has
+        `text: null` and names the key with its created and retired dates, so the person knows which passphrase it needs.
+      security:
+        - adminSession: []
       responses:
         '200':
           description: The plain content.
@@ -1173,16 +1264,12 @@ paths:
                     items:
                       type: object
                       additionalProperties: true
-        '400':
-          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
-        '429':
-          $ref: '#/components/responses/TooMany'
         '503':
           $ref: '#/components/responses/AuditorUnavailable'
 components:
@@ -1482,6 +1569,38 @@ components:
           minLength: 20
         confirm:
           type: string
+    UnsealSession:
+      type: object
+      required: [open, keys]
+      properties:
+        open:
+          type: boolean
+        idle_left_secs:
+          type: [integer, 'null']
+        total_left_secs:
+          type: [integer, 'null']
+        idle_limit_secs:
+          type: integer
+        total_limit_secs:
+          type: integer
+        fresh_signin_secs_left:
+          type: [integer, 'null']
+          description: How long this sign-in can still start a session.
+        keys:
+          type: array
+          description: The key registry, oldest first, and which keys the session holds.
+          items:
+            type: object
+            required: [key_id, created_at, open]
+            properties:
+              key_id:
+                type: string
+              created_at:
+                type: integer
+              retired_at:
+                type: [integer, 'null']
+              open:
+                type: boolean
     OpenRequest:
       type: object
       required: [passphrase]
@@ -1536,6 +1655,16 @@ components:
           type: integer
           minimum: 7
           maximum: 3650
+        unseal_idle_minutes:
+          type: integer
+          minimum: 1
+          maximum: 720
+          description: Minutes without use before sealed content seals itself (default 15). May not exceed the total. Changing it is an alert.
+        unseal_total_minutes:
+          type: integer
+          minimum: 1
+          maximum: 720
+          description: Minutes in all before sealed content seals itself, however it is used (default 60). Changing it is an alert.
         audit_key_id:
           type: [string, 'null']
           readOnly: true
