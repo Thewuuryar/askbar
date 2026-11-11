@@ -1,7 +1,7 @@
 //! Chat streaming against the real tests/mock_llm.py.
 
 use askbar_proto::{ChatEvent, ChatRequest};
-use askbar_server::{auth, secrets::Secrets, AppState};
+use askbar_server::{auth, AppState};
 use futures_util::StreamExt;
 use std::io::{BufRead, BufReader};
 use std::net::SocketAddr;
@@ -61,15 +61,14 @@ async fn start() -> T {
     let mock = start_mock();
     let db = askbar_server::Db::open_in_memory().unwrap();
     let user = db.seed_server().unwrap();
-    let secrets = Secrets::new("0123456789abcdef0123456789abcdef").unwrap();
     askbar_server::testing::add_provider(
         &db,
         askbar_server::testing::provider("p1", "mock", &format!("http://127.0.0.1:{}/v1", mock.port), "m"),
     );
-    askbar_server::testing::store_key(&db, &secrets, "p1", "sk-test");
     let code = askbar_server::testing::add_pair_code(&db, &user, "t");
     let rig = askbar_server::testing::Rig::start().await;
-    let state = rig.attach(AppState::new(db, secrets, askbar_server::MIN_CLIENT)).await;
+    let state = rig.attach(AppState::new(db, askbar_server::MIN_CLIENT)).await;
+    rig.set_key("p1", "sk-test");
     rig.sync(&state);
     let token = auth::redeem_pair_code(&state.db.lock().unwrap(), &code).unwrap().unwrap();
     let space = askbar_server::testing::personal_space(&state, &user);

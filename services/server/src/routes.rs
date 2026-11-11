@@ -99,7 +99,7 @@ impl Default for Routes {
 
 fn throwaway_state() -> Arc<AppState> {
     let db = crate::Db::open_in_memory().expect("an in-memory database opens");
-    AppState::new(db, crate::secrets::Secrets::new("0123456789abcdef0123456789abcdef").expect("a 32-character key"), crate::MIN_CLIENT)
+    AppState::new(db, crate::MIN_CLIENT)
 }
 
 /// Every route the client API registers (including the one `ANY` for the old prefix), sorted.

@@ -65,15 +65,7 @@ async fn main() {
     let socket = askbar_admin::socket_path();
     askbar_service::restart::start_watchdog(move || askbar_admin::healthcheck(&socket));
     askbar_admin::caddy::apply_at_startup(state.clone());
-    // The CPA key is the admin's own; the server gets it again after every push (a server with an empty database lost it).
-    let resend: askbar_admin::server_link::Resend = {
-        let state = state.clone();
-        std::sync::Arc::new(move || {
-            let state = state.clone();
-            Box::pin(async move { askbar_admin::cpa::managed_key(&state).await.into_iter().collect() })
-        })
-    };
-    tokio::spawn(link.run(state.db.clone(), resend));
+    tokio::spawn(link.run(state.db.clone()));
     // The provider keys go to model-gateway too (ADR 0054): it holds them in memory, so it is given them again
     // whenever it starts.
     let gateway_token = askbar_admin::gateway_link::read_token(&askbar_admin::server_link::token_dir()).unwrap_or_else(|e| die(e, 1));

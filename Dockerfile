@@ -135,16 +135,15 @@ ENTRYPOINT ["askbar-model-gateway"]
 # so it shares no file ownership with the admin.
 FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc AS server
 RUN groupadd --system --gid 10002 askbar && useradd --system --uid 10002 --gid 10002 --home-dir /data --shell /usr/sbin/nologin askbar \
- && mkdir /data /secrets /audit && chown askbar:askbar /data /secrets /audit
+ && mkdir /data && chown askbar:askbar /data
 COPY --from=build /src/target/release/askbar-server /usr/local/bin/askbar-server
 USER askbar
 ENV ASKBAR_DATA_DIR=/data \
-    ASKBAR_SECRETS_DIR=/secrets \
-    ASKBAR_AUDIT_DIR=/audit \
     ASKBAR_CLIENT_API_ADDR=0.0.0.0:8080 \
+    ASKBAR_SERVER_TOKEN_DIR=/server-token \
     ASKBAR_SERVER_TOKEN_HASH_FILE=/server-token/accept/admin-server.sha256
 # ASKBAR_SERVER_API_ADDR has no default: it must be one specific address (the compose file sets it).
-VOLUME /data /secrets /audit
+VOLUME /data
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD ["askbar-server", "healthcheck"]

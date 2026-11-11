@@ -5,7 +5,7 @@
 mod common;
 use askbar_admin::server_link::{self, ServerLink};
 use askbar_admin::{web, AdminDb, AdminState};
-use askbar_server::{secrets::Secrets, AppState};
+use askbar_server::AppState;
 use reqwest::Method as M;
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -76,7 +76,7 @@ async fn start(reachable: bool) -> T {
 
     let sdb = askbar_server::Db::open_in_memory().unwrap();
     sdb.seed_server().unwrap();
-    let server = AppState::new(sdb, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), askbar_server::MIN_CLIENT);
+    let server = AppState::new(sdb, askbar_server::MIN_CLIENT);
     let api = serve(askbar_server::client_router(server.clone())).await;
     let server_api_url = if reachable {
         serve(askbar_server::server_api::router(server.clone(), hash_file.clone())).await
@@ -141,7 +141,7 @@ fn provider(name: &str, base: &str, key: Option<&str>) -> Value {
 }
 
 #[tokio::test]
-async fn providers_are_saved_here_pushed_to_the_server_and_the_key_goes_only_to_the_server() {
+async fn providers_are_saved_here_pushed_to_the_server_and_the_key_goes_only_to_the_gateway() {
     let t = start(true).await;
     t.set_audit_key().await;
     let llm = fake_llm().await;
@@ -149,14 +149,24 @@ async fn providers_are_saved_here_pushed_to_the_server_and_the_key_goes_only_to_
     assert_eq!(st, 201);
     let id = created["id"].as_str().unwrap().to_string();
 
-    // The server has the provider in its snapshot and the key, encrypted.
+    // The server has the provider in its snapshot.
     let snap = t.snapshot().unwrap();
     assert_eq!((snap.providers.len(), snap.providers[0].id.as_str(), snap.providers[0].name.as_str()), (1, id.as_str(), "mock"));
-    let enc: Vec<u8> =
-        t.server.db.lock().unwrap().conn().query_row("SELECT api_key_enc FROM providers WHERE id = ?1", [&id], |r| r.get(0)).unwrap();
-    assert_eq!(t.server.secrets().decrypt(&enc).unwrap(), KEY);
+    // The server holds no key at all (ADR 0054); the admin keeps it encrypted and the gateway has it in memory.
+    let server_keys: i64 = t
+        .server
+        .db
+        .lock()
+        .unwrap()
+        .conn()
+        .query_row("SELECT COUNT(*) FROM providers WHERE api_key_enc IS NOT NULL", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(server_keys, 0);
+    let held: Vec<u8> =
+        t.admin.db.lock().await.conn().query_row("SELECT key_enc FROM provider_keys WHERE provider_id = ?1", [&id], |r| r.get(0)).unwrap();
+    assert!(!held.windows(KEY.len()).any(|w| w == KEY.as_bytes()), "encrypted at rest");
 
-    // This side never holds the key: not in admin.db, not in the list.
+    // The list never shows the key, and the rest of admin.db holds none.
     let (_, list) = t.call(M::GET, "/api/admin/v1/providers", None).await;
     assert_eq!((list[0]["name"].as_str(), list[0]["has_key"].clone()), (Some("mock"), json!(true)));
     assert!(!list.to_string().contains(KEY));
@@ -779,7 +789,7 @@ async fn an_install_from_before_takes_over_the_servers_users_so_its_clients_keep
 }
 
 #[tokio::test]
-async fn a_provider_whose_key_the_server_lost_says_so_until_the_key_is_entered_again() {
+async fn a_provider_whose_key_the_admin_never_held_says_so_until_the_key_is_entered_again() {
     let t = start(true).await;
     let llm = fake_llm().await;
     let (_, created) = t.call(M::POST, "/api/admin/v1/providers", Some(provider("mock", &llm, Some(KEY)))).await;
@@ -795,8 +805,9 @@ async fn a_provider_whose_key_the_server_lost_says_so_until_the_key_is_entered_a
     };
     assert_eq!(flags().await, [("keyless".to_string(), false), ("mock".to_string(), false)]);
 
-    // The server's database was replaced: it lists the provider (the snapshot) but holds no key.
-    t.server.db.lock().unwrap().conn().execute("UPDATE providers SET api_key_enc = NULL WHERE id = ?1", [&id]).unwrap();
+    // An install from before the gateway: the server held the key, the admin could never read it. The row of its own
+    // key is not there, though the old column says one was entered (ADR 0054).
+    t.admin.db.lock().await.conn().execute("DELETE FROM provider_keys WHERE provider_id = ?1", [&id]).unwrap();
     assert_eq!(flags().await, [("keyless".to_string(), false), ("mock".to_string(), true)], "only the one the admin sent a key for");
 
     // Entering the key again (an edit with a key) clears it.

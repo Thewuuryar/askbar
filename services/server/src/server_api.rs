@@ -131,85 +131,15 @@ fn fail(status: StatusCode, msg: &str) -> Failure {
     ApiError::from(status).detail(msg)
 }
 
-#[derive(serde::Deserialize)]
-struct KeyInput {
-    key: String,
-}
-
-const MAX_KEY_CHARS: usize = 4096;
-
-/// Store a provider's API key, encrypted with the master key. Write-only: no endpoint
-/// ever returns it, and this one answers `204` with no body.
-async fn put_provider_key(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-    ApiJson(input): ApiJson<KeyInput>,
-) -> Result<StatusCode, Failure> {
-    let key = input.key.trim();
-    if key.is_empty() || key.chars().count() > MAX_KEY_CHARS {
-        return Err(fail(StatusCode::BAD_REQUEST, "The key must be 1 to 4096 characters."));
-    }
-    let enc = state.secrets().encrypt(key);
-    let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
-    let internal = |_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not store the key.");
-    // Only a provider the snapshot lists can have a key.
-    let listed = crate::snapshot::current(&db).map_err(internal)?.is_some_and(|s| s.providers.iter().any(|p| p.id == id));
-    if !listed {
-        return Err(fail(StatusCode::NOT_FOUND, "No such provider."));
-    }
-    db.conn()
-        .execute(
-            "INSERT INTO providers (id, api_key_enc) VALUES (?1, ?2) ON CONFLICT(id) DO UPDATE SET api_key_enc = excluded.api_key_enc",
-            rusqlite::params![id, enc],
-        )
-        .map_err(internal)?;
-    // A new key deserves a fresh start: whatever flagged the old one is cleared.
-    let _ = db.clear_provider_health(&id);
-    Ok(StatusCode::NO_CONTENT)
-}
-
-/// `GET /api/server/v1/providers/health`: providers the router has found unusable, so the admin can say
-/// so. Only providers with a problem are listed; the reason is a code, never the provider's text.
-/// `missing_key` lists the providers in the current configuration that hold no key here (never set, or lost
-/// when the database was replaced), so the admin can ask for it again.
+/// `GET /api/server/v1/providers/health`: providers the gateway has found unusable (it refused their key), so the admin
+/// can say so. Only providers with a problem are listed; the reason is a code, never the provider's text. The server
+/// holds no keys (ADR 0054), so whether one is missing is the admin's to say.
 async fn providers_health(State(state): State<Arc<AppState>>) -> Result<Json<serde_json::Value>, Failure> {
     let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
     let rows = db.provider_health().map_err(|_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not read provider health."))?;
-    let internal = |_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not read provider keys.");
-    let keyed: std::collections::HashSet<String> = {
-        let mut stmt =
-            db.conn().prepare("SELECT id FROM providers WHERE api_key_enc IS NOT NULL AND length(api_key_enc) > 0").map_err(internal)?;
-        let ids = stmt.query_map([], |r| r.get::<_, String>(0)).map_err(internal)?.collect::<Result<_, _>>().map_err(internal)?;
-        ids
-    };
-    let missing: Vec<String> = crate::snapshot::current(&db)
-        .map_err(internal)?
-        .map(|s| s.providers.into_iter().map(|p| p.id).filter(|id| !keyed.contains(id)).collect())
-        .unwrap_or_default();
     Ok(Json(serde_json::json!({
         "providers": rows.into_iter().map(|(id, status, since, code)| serde_json::json!({ "provider_id": id, "status": status, "since": since, "error_code": code })).collect::<Vec<_>>(),
-        "missing_key": missing,
     })))
-}
-
-/// Send one short message through the provider and report what happened.
-async fn test_provider(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-) -> Result<Json<crate::provider_test::TestResult>, Failure> {
-    crate::provider_test::run(&state, &id)
-        .await
-        .map_err(|_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not run the test."))?
-        .map(Json)
-        .ok_or_else(|| fail(StatusCode::NOT_FOUND, "No such provider."))
-}
-
-/// Ask a provider which models it offers. A failure at the provider is a 200 with `ok: false`, like the test.
-async fn list_models(
-    State(state): State<Arc<AppState>>,
-    ApiJson(req): ApiJson<crate::models::ModelsRequest>,
-) -> Result<Json<crate::models::ModelsResult>, Failure> {
-    crate::models::run(&state, req).await.map(Json).map_err(|_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not list the models."))
 }
 
 /// The users, oldest first: `[{"id", "name"}]`. Pairing codes are made for one of these.
@@ -462,11 +392,7 @@ pub fn routes() -> crate::routes::Routes {
         .get(&v1(askbar_service::routes::STATUS), status)
         .put(&v1(askbar_service::routes::CONFIG), put_snapshot)
         .post(&v1(askbar_service::routes::RESTART), restart)
-        .put(&v1("/providers/{id}/key"), put_provider_key)
         .get(&v1("/providers/health"), providers_health)
-        .post(&v1("/providers/{id}/test"), test_provider)
-        // POST, not GET: the request can carry a provider key, which must not go in a URL.
-        .post(&v1("/models"), list_models)
         .get(&v1("/users"), list_users)
         .get(&v1("/clients"), list_clients)
         .get(&v1("/usage"), usage)

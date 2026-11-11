@@ -75,11 +75,10 @@ async fn stack(model1: &str, model2: &str, p2_extra: serde_json::Value) -> Stack
     let (state, dir, rig) = askbar_server::testing::state_with_audit(&format!("http://127.0.0.1:{}/v1", m1.port)).await;
     let user = {
         let db = state.db.lock().unwrap();
-        let secrets = state.secrets();
         askbar_server::testing::add_provider(&db, provider("p1", m1.port, model1, serde_json::json!({})));
         askbar_server::testing::add_provider(&db, provider("p2", m2.port, model2, p2_extra));
-        askbar_server::testing::store_key(&db, &secrets, "p1", "sk-1");
-        askbar_server::testing::store_key(&db, &secrets, "p2", "sk-2");
+        rig.set_key("p1", "sk-1");
+        rig.set_key("p2", "sk-2");
         db.seed_server().unwrap()
     };
     // The gateway holds the keys and the providers: give it what was just stored (ADR 0054).
@@ -279,7 +278,7 @@ async fn the_audit_trail_shows_every_try_on_the_one_provider() {
 }
 
 #[tokio::test]
-async fn the_flag_clears_on_the_next_success_and_when_a_new_key_is_saved_and_the_endpoint_lists_it() {
+async fn the_flag_clears_on_the_next_success_and_the_endpoint_lists_it() {
     use askbar_server::server_api;
     let s = stack("m-fail", "m", serde_json::json!({})).await;
     assert!(matches!(s.run("hello there").await.last(), Some(GenEvent::Error { .. })));
@@ -315,33 +314,6 @@ async fn the_flag_clears_on_the_next_success_and_when_a_new_key_is_saved_and_the
     assert!(!v.to_string().contains("Incorrect API key"), "the provider's own words are not kept: {v}");
     let r = http.get(format!("{url}/api/server/v1/providers/health")).send().await.unwrap();
     assert_eq!(r.status(), 401, "needs the server token");
-
-    // Saving a new key for p1 clears the flag.
-    let r = http
-        .put(format!("{url}/api/server/v1/providers/p1/key"))
-        .bearer_auth(token)
-        .json(&serde_json::json!({ "key": "sk-new" }))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(r.status(), 204);
-    assert!(get().await["providers"].as_array().unwrap().is_empty());
-
-    // A provider the configuration lists but that holds no key is reported as missing its key, and is not once it has one.
-    s.state.db.lock().unwrap().conn().execute("UPDATE providers SET api_key_enc = NULL WHERE id = 'p1'", []).unwrap();
-    let missing = |v: &serde_json::Value| {
-        v["missing_key"].as_array().unwrap().iter().filter_map(|i| i.as_str().map(String::from)).collect::<Vec<_>>()
-    };
-    assert!(missing(&get().await).contains(&"p1".to_string()), "p1 lost its key");
-    let r = http
-        .put(format!("{url}/api/server/v1/providers/p1/key"))
-        .bearer_auth(token)
-        .json(&serde_json::json!({ "key": "sk-newer" }))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(r.status(), 204);
-    assert!(!missing(&get().await).contains(&"p1".to_string()), "p1 has a key again");
 
     // A flagged provider that then works is cleared by the success.
     s.state.db.lock().unwrap().flag_provider_auth_failed("p2", "http_403").unwrap();

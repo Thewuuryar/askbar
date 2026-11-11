@@ -70,8 +70,6 @@ services:
       # server API listens there and nowhere else. The server refuses a wildcard, or a name that resolves
       # to more than one address.
       ASKBAR_SERVER_API_ADDR: server-api-host:8082
-      # audit.db lives on its own volume, mounted into the server and nothing else.
-      ASKBAR_AUDIT_DIR: /audit
     networks:
       edge: {}
       server-api:
@@ -82,15 +80,9 @@ services:
     volumes:
       # The bind-mounted DATA_DIR must be writable by uid 10002.
       - ${DATA_DIR:-./data}:/data
-      # The master key (created on first start) lives here, alone: backups of DATA_DIR never contain it.
-      # Back this volume up separately; without master.key the server will not start against a database
-      # that holds encrypted provider keys.
-      - askbar-secrets:/secrets
-      # The audit store (audit.db): a trace of every reply. Only the server mounts it; the admin reads
-      # it through the server API, never from disk. Back it up by copying the volume.
-      - audit-data:/audit
-      # The hash of the admin's token (accept/admin-server.sha256), made by bootstrap. Read-only: the server
-      # can check the token, never mint one.
+      # The hash of the admin's token (accept/admin-server.sha256) and the server's own tokens for the gateway and the
+      # auditor (call/), made by bootstrap. Read-only: the server can check and use a token, never mint one. It holds no
+      # provider key and no audit store (ADR 0054, ADR 0051): `askbar-secrets` and `audit-data` stay declared, unmounted.
       - server-token:/server-token:ro
 
   admin:
@@ -298,7 +290,10 @@ networks:
   outbound:
 
 volumes:
+  # Held the server's master key and provider keys (ADR 0014, 0054). Nothing mounts it now; kept declared until 1.0 so no
+  # install loses a volume by surprise (plan-v1.md: data volumes are never renamed or dropped pre-1.0).
   askbar-secrets:
+  # Held the server's own audit.db before the auditor. Nothing mounts it now; earlier records stay in it (see the guide).
   audit-data:
   # The auditor's audit.db (ADR 0051). Docker makes it empty and owned by uid 10003, as the image's /audit is.
   auditor-data:

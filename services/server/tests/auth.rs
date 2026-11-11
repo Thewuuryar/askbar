@@ -1,4 +1,4 @@
-use askbar_server::{secrets::Secrets, AppState};
+use askbar_server::AppState;
 use axum::Router;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -21,7 +21,7 @@ async fn start_with(configured: bool) -> Server {
     if configured {
         askbar_server::testing::update_snapshot(&db, |_| {});
     }
-    let state = AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), askbar_server::MIN_CLIENT);
+    let state = AppState::new(db, askbar_server::MIN_CLIENT);
     let app: Router = askbar_server::client_router(state.clone());
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = l.local_addr().unwrap();

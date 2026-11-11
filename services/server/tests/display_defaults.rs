@@ -1,7 +1,7 @@
 //! Per-user display defaults: they arrive in the snapshot and clients read their own.
 
 use askbar_proto::DisplaySettings;
-use askbar_server::{auth, secrets::Secrets, testing, AppState};
+use askbar_server::{auth, testing, AppState};
 use std::sync::Arc;
 
 struct T {
@@ -18,7 +18,7 @@ async fn start() -> T {
     let user_a = db.seed_server().unwrap();
     db.conn().execute("INSERT INTO users (id, name, created_at) VALUES ('B','other',0)", []).unwrap();
     let (ca, cb) = (testing::add_pair_code(&db, &user_a, "a"), testing::add_pair_code(&db, "B", "b"));
-    let state = AppState::new(db, Secrets::new(testing::TEST_MASTER_KEY).unwrap(), askbar_server::MIN_CLIENT);
+    let state = AppState::new(db, askbar_server::MIN_CLIENT);
     let (token_a, token_b) = {
         let db = state.db.lock().unwrap();
         (auth::redeem_pair_code(&db, &ca).unwrap().unwrap(), auth::redeem_pair_code(&db, &cb).unwrap().unwrap())

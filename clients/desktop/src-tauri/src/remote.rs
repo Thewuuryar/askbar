@@ -829,7 +829,7 @@ mod tests {
 
     /// Server with one mock provider; returns its URL and a fresh client token.
     async fn start_server(mock_port: u16) -> (String, String) {
-        use askbar_server::{auth, secrets::Secrets, AppState};
+        use askbar_server::{auth, AppState};
         let db = askbar_server::Db::open_in_memory().unwrap();
         let user = db.seed_server().unwrap();
         askbar_server::testing::add_provider(
@@ -839,7 +839,7 @@ mod tests {
         let code = askbar_server::testing::add_pair_code(&db, &user, "test");
         // Replies go through an in-process gateway and auditor, as in the stack (ADR 0054); the rig lives as long as the test.
         let rig = askbar_server::testing::Rig::start().await;
-        let state: Arc<AppState> = rig.attach(AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), "0.1.0")).await;
+        let state: Arc<AppState> = rig.attach(AppState::new(db, "0.1.0")).await;
         rig.sync(&state);
         Box::leak(Box::new(rig));
         let token = auth::redeem_pair_code(&state.db.lock().unwrap(), &code).unwrap().unwrap();
@@ -1385,7 +1385,7 @@ mod tests {
     /// written, the reply ends `interrupted`, and the stored text is that same partial text.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_dropped_client_resumes_with_after_and_a_restart_ends_the_reply_interrupted() {
-        use askbar_server::{auth, secrets::Secrets, AppState};
+        use askbar_server::{auth, AppState};
         let (_mock, mock_port) = start_mock();
         let dir = std::env::temp_dir().join(format!("askbar-8-5-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -1400,7 +1400,7 @@ mod tests {
         let rig = askbar_server::testing::Rig::start().await;
         let state: Arc<AppState> = rig
             .attach(
-                AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), "0.1.0")
+                AppState::new(db, "0.1.0")
                     .with_spaces(askbar_server::Spaces::on_disk(dir.join("spaces"))),
             )
             .await;
@@ -1471,7 +1471,7 @@ mod tests {
             askbar_server::generation::sweep_on_start(&s.lock()).unwrap();
         }
         let state2: Arc<AppState> =
-            AppState::new(restarted_db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), "0.1.0").with_spaces(spaces);
+            AppState::new(restarted_db, "0.1.0").with_spaces(spaces);
         let (url2, _server2) = serve_state(state2.clone()).await;
         let space2 = askbar_server::testing::personal_space(&state2, &user);
         let resumed = http
@@ -1591,14 +1591,14 @@ mod tests {
 
     /// A real server with a mock-less provider list; `min_client` lets a test make the client too old.
     async fn status_server(min_client: &str) -> (String, String, Arc<askbar_server::AppState>) {
-        use askbar_server::{auth, secrets::Secrets, AppState};
+        use askbar_server::{auth, AppState};
         let db = askbar_server::Db::open_in_memory().unwrap();
         let user = db.seed_server().unwrap();
         for (n, name) in ["alpha", "beta"].iter().enumerate() {
             askbar_server::testing::add_provider(&db, askbar_server::testing::provider(&format!("p{n}"), name, "http://x/v1", "m"));
         }
         let code = askbar_server::testing::add_pair_code(&db, &user, "test");
-        let state = AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), min_client);
+        let state = AppState::new(db, min_client);
         let token = auth::redeem_pair_code(&state.db.lock().unwrap(), &code).unwrap().unwrap();
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", l.local_addr().unwrap());
@@ -1876,14 +1876,14 @@ mod tests {
     /// (again through the snapshot), and the client says "rejected".
     #[tokio::test]
     async fn revoking_a_client_shows_token_rejected() {
-        use askbar_server::{secrets::Secrets, testing, AppState};
+        use askbar_server::{testing, AppState};
         let db = askbar_server::Db::open_in_memory().unwrap();
         let user = db.seed_server().unwrap();
         testing::add_provider(&db, testing::provider("p", "alpha", "http://x/v1", "m"));
         let code = testing::add_pair_code(&db, &user, "test client");
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let api_url = format!("http://{}", l.local_addr().unwrap());
-        let state = AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), "0.1.0");
+        let state = AppState::new(db, "0.1.0");
         let app = askbar_server::client_router(state.clone());
         tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
 

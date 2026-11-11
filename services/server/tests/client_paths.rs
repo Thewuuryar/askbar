@@ -1,6 +1,6 @@
 //! The client API lives at /api/client/v1; /api/v1 is gone except for one answer that tells an old app to update.
 use askbar_proto::Problem;
-use askbar_server::{auth, secrets::Secrets, AppState};
+use askbar_server::{auth, AppState};
 
 struct T {
     url: String,
@@ -16,7 +16,7 @@ async fn start() -> T {
     let user = db.seed_server().unwrap();
     let code = askbar_server::testing::add_pair_code(&db, &user, "laptop");
     let code2 = askbar_server::testing::add_pair_code(&db, &user, "second");
-    let state = AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), askbar_server::MIN_CLIENT);
+    let state = AppState::new(db, askbar_server::MIN_CLIENT);
     let token = auth::redeem_pair_code(&state.db.lock().unwrap(), &code).unwrap().unwrap();
     let space = askbar_server::testing::personal_space(&state, &user).id.clone();
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

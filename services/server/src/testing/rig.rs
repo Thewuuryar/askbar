@@ -39,6 +39,8 @@ pub struct Rig {
     /// What the auditor thinks its disk has free; set low to make it refuse new spans.
     pub free: Arc<AtomicU64>,
     server_tokens: PathBuf,
+    /// The key to give the gateway for each provider (the server holds none; ADR 0054).
+    keys: std::sync::Mutex<std::collections::BTreeMap<String, String>>,
 }
 
 impl Drop for Rig {
@@ -86,7 +88,7 @@ impl Rig {
             assert!(Instant::now() < deadline, "the gateway never said hello");
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        Rig { dir, auditor, audit_url, gateway, gateway_url, free, server_tokens }
+        Rig { dir, auditor, audit_url, gateway, gateway_url, free, server_tokens, keys: Default::default() }
     }
 
     /// A state like the old `state_with_audit`: an in-memory database with the provider "p1" at `base_url` (its key
@@ -96,10 +98,9 @@ impl Rig {
         let rig = Rig::start().await;
         let db = crate::Db::open_in_memory().unwrap();
         db.seed_server().unwrap();
-        let secrets = crate::secrets::Secrets::new(super::TEST_MASTER_KEY).unwrap();
         super::add_provider(&db, super::provider("p1", "mock", base_url, "m"));
-        super::store_key(&db, &secrets, "p1", "sk-test");
-        let state = rig.attach(AppState::new(db, secrets, crate::MIN_CLIENT)).await;
+        rig.set_key("p1", "sk-test");
+        let state = rig.attach(AppState::new(db, crate::MIN_CLIENT)).await;
         rig.sync(&state);
         let dir = rig.dir.join("audit");
         let rig: &'static Rig = Box::leak(Box::new(rig));
@@ -127,29 +128,30 @@ impl Rig {
             .with_audit_reader(crate::audit::AuditReader::new(&self.audit_url, self.server_tokens.clone()))
     }
 
-    /// Give the gateway what `state`'s snapshot describes: its providers, each with the key stored for it, and its audit
+    /// Remember `key` as the one to give the gateway for provider `id`, at the next `sync`.
+    pub fn set_key(&self, id: &str, key: &str) {
+        self.keys.lock().unwrap_or_else(|e| e.into_inner()).insert(id.to_string(), key.to_string());
+    }
+
+    /// Give the gateway what `state`'s snapshot describes: its providers, each with the key `set_key` gave it, and its audit
     /// key. A state with no audit key gives the gateway nothing (it runs nothing without one).
     pub fn sync(&self, state: &AppState) {
         let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
         let Some(snap) = crate::snapshot::current(&db).ok().flatten() else { return };
-        let secrets = state.secrets();
+        let keys = self.keys.lock().unwrap_or_else(|e| e.into_inner()).clone();
         let providers = snap
             .providers
             .iter()
-            .map(|p| {
-                let enc: Option<Vec<u8>> =
-                    db.conn().query_row("SELECT api_key_enc FROM providers WHERE id = ?1", [&p.id], |r| r.get(0)).ok().flatten();
-                GatewayProvider {
-                    id: p.id.clone(),
-                    name: p.name.clone(),
-                    kind: p.kind.clone(),
-                    base_url: p.base_url.clone(),
-                    model: p.model.clone(),
-                    max_tokens: p.max_tokens,
-                    temperature: p.temperature,
-                    headers: p.headers.clone(),
-                    api_key: enc.and_then(|e| secrets.decrypt(&e).ok()).unwrap_or_default(),
-                }
+            .map(|p| GatewayProvider {
+                id: p.id.clone(),
+                name: p.name.clone(),
+                kind: p.kind.clone(),
+                base_url: p.base_url.clone(),
+                model: p.model.clone(),
+                max_tokens: p.max_tokens,
+                temperature: p.temperature,
+                headers: p.headers.clone(),
+                api_key: keys.get(&p.id).cloned().unwrap_or_default(),
             })
             .collect();
         let config = GatewayConfig {

@@ -2,7 +2,7 @@
 //! redeemed; clients the snapshot lists as revoked are refused.
 
 use askbar_proto::{Budget, DisplaySettings, Snapshot, SnapshotPairCode};
-use askbar_server::{secrets::Secrets, server_api, AppState};
+use askbar_server::{server_api, AppState};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
@@ -42,7 +42,7 @@ async fn start() -> T {
     std::fs::write(dir.join("token.sha256"), hex(SERVER_TOKEN)).unwrap();
     let db = askbar_server::Db::open_in_memory().unwrap();
     let user = db.seed_server().unwrap();
-    let state = AppState::new(db, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), askbar_server::MIN_CLIENT);
+    let state = AppState::new(db, askbar_server::MIN_CLIENT);
     T {
         api: serve(askbar_server::client_router(state.clone())).await,
         server_api: serve(server_api::router(state.clone(), dir.join("token.sha256"))).await,

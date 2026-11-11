@@ -69,7 +69,11 @@ pub(crate) fn keep_keys(conn: &Connection, secrets: &AdminSecrets, keys: &[(Stri
         )
         .map_err(|_| fail())?;
     }
+    for (id, _) in keys {
+        let _ = conn.execute("UPDATE providers SET has_key = 1 WHERE id = ?1", [id]);
+    }
     conn.execute("DELETE FROM provider_keys WHERE provider_id NOT IN (SELECT id FROM providers)", []).map_err(|_| fail())?;
+    // The old column says only that a key was entered once; the list reads `provider_keys` for whether one is held now.
     Ok(())
 }
 

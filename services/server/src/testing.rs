@@ -6,8 +6,6 @@ use crate::{auth, ids, snapshot, Db};
 use askbar_proto::{Budget, DisplaySettings, Snapshot, SnapshotPairCode, SnapshotProvider};
 use sha2::{Digest, Sha256};
 
-pub const TEST_MASTER_KEY: &str = "0123456789abcdef0123456789abcdef";
-
 /// The secret half of the test audit key (the tests that read what was sealed use it).
 pub const TEST_AUDIT_SECRET: [u8; 32] = [9; 32];
 
@@ -73,16 +71,6 @@ pub fn add_provider(db: &Db, p: SnapshotProvider) {
     });
 }
 
-/// Store an API key for a provider the way the server API would.
-pub fn store_key(db: &Db, secrets: &crate::secrets::Secrets, provider_id: &str, key: &str) {
-    db.conn()
-        .execute(
-            "INSERT INTO providers (id, api_key_enc) VALUES (?1, ?2) ON CONFLICT(id) DO UPDATE SET api_key_enc = excluded.api_key_enc",
-            rusqlite::params![provider_id, secrets.encrypt(key)],
-        )
-        .unwrap();
-}
-
 /// A one-time pairing code for `user_id`, listed in the snapshot (valid for ten minutes).
 pub fn add_pair_code(db: &Db, user_id: &str, client_name: &str) -> String {
     add_pair_code_expiring(db, user_id, client_name, 600)
@@ -105,7 +93,7 @@ pub fn add_pair_code_expiring(db: &Db, user_id: &str, client_name: &str, ttl_sec
 
 /// An `AppState` over an empty in-memory database, for unit tests.
 pub fn state_for_tests() -> std::sync::Arc<crate::AppState> {
-    crate::AppState::new(Db::open_in_memory().unwrap(), crate::secrets::Secrets::new(TEST_MASTER_KEY).unwrap(), crate::MIN_CLIENT)
+    crate::AppState::new(Db::open_in_memory().unwrap(), crate::MIN_CLIENT)
 }
 
 /// `user_id`'s personal space, made if need be, as `GET /spaces` would list it. For tests that call
@@ -145,8 +133,7 @@ mod tests {
 
     #[test]
     fn the_timeout_override_can_be_set_read_back_and_cleared() {
-        let state =
-            crate::AppState::new(Db::open_in_memory().unwrap(), crate::secrets::Secrets::new(TEST_MASTER_KEY).unwrap(), crate::MIN_CLIENT);
+        let state = crate::AppState::new(Db::open_in_memory().unwrap(), crate::MIN_CLIENT);
         assert_eq!(state.generation_timeout_override(), None);
         override_generation_timeout(&state, Duration::from_secs(2));
         assert_eq!(state.generation_timeout_override(), Some(Duration::from_secs(2)));

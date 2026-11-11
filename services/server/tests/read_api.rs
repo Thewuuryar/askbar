@@ -1,9 +1,8 @@
 use askbar_proto::{Conversation, ConversationDetail, Prefs, ProviderInfo, SearchHit, Settings};
-use askbar_server::{auth, secrets::Secrets, AppState};
+use askbar_server::{auth, AppState};
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-const KEY: &str = "0123456789abcdef0123456789abcdef";
 const PROVIDER_SECRET: &str = "sk-live-VERY-SECRET-123";
 
 struct T {
@@ -30,11 +29,9 @@ fn add_conversation(state: &AppState, user: &str, title: &str, msgs: &[(&str, &s
 async fn start() -> T {
     let db = askbar_server::Db::open_in_memory().unwrap();
     let user = db.seed_server().unwrap();
-    let secrets = Secrets::new(KEY).unwrap();
     askbar_server::testing::add_provider(&db, askbar_server::testing::provider("p1", "mock", "http://x/v1", "m1"));
-    askbar_server::testing::store_key(&db, &secrets, "p1", PROVIDER_SECRET);
     let code = askbar_server::testing::add_pair_code(&db, &user, "t");
-    let state = AppState::new(db, secrets, askbar_server::MIN_CLIENT);
+    let state = AppState::new(db, askbar_server::MIN_CLIENT);
     let token = auth::redeem_pair_code(&state.db.lock().unwrap(), &code).unwrap().unwrap();
     let app = askbar_server::client_router(state.clone());
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -110,13 +107,8 @@ async fn settings_have_defaults_and_no_system_prompt() {
 async fn no_response_contains_provider_key_material() {
     let t = start().await;
     let c1 = add_conversation(&t.state, &t.user, "c", &[("user", "hi")]);
-    let enc: Vec<u8> = t.state.db.lock().unwrap().conn().query_row("SELECT api_key_enc FROM providers", [], |r| r.get(0)).unwrap();
-    use base64::{
-        engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
-        Engine,
-    };
-    let hex: String = enc.iter().map(|b| format!("{b:02x}")).collect();
-    let needles = [PROVIDER_SECRET.to_string(), STANDARD.encode(&enc), URL_SAFE_NO_PAD.encode(&enc), hex, "api_key".to_string()];
+    // The server holds no provider key at all now (ADR 0054); nothing it serves may name one or look like one.
+    let needles = [PROVIDER_SECRET.to_string(), "api_key".to_string()];
     for p in [
         "/api/client/v1/health",
         "/api/client/v1/me",

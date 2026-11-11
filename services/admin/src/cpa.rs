@@ -290,20 +290,16 @@ pub async fn managed_key(state: &AdminState) -> Option<(String, String)> {
 /// `openai`, pointing at CPA with the API key the admin made, billed as a subscription. The model starts as
 /// the first one CPA lists (Claude's, if any) and is changed from the dropdown like any other.
 pub async fn ensure_managed_provider(state: &AdminState, link: &CpaLink) -> Result<Option<String>, String> {
-    let server = state.server.as_ref().ok_or("The server is not linked.")?;
+    let gateway = state.gateway.get().ok_or("The gateway is not linked.")?;
+    // The gateway holds the route and the key (ADR 0054); it needs no saved provider to ask CPA what it offers.
     if let Some(id) = managed_id(state.db.lock().await.conn()) {
-        // The server's copy of the key can be gone (its database was replaced); the admin is the one that has it.
-        // Handing it over again changes nothing when it is there, so opening Services repairs a broken provider.
-        if let Err(e) = server.put_key(&id, link.api_key()).await {
-            tracing::warn!("could not hand the CPA key to the server again: {e}");
-        }
         return Ok(Some(id));
     }
     let body = json!({ "type": "openai", "base_url": link.provider_url(), "api_key": link.api_key() });
-    let (status, bytes) = server
-        .request(reqwest::Method::POST, &askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/models"), Some(&body))
+    let (status, bytes) = gateway
+        .call(state, reqwest::Method::POST, "/models", Some(&body), false)
         .await
-        .map_err(|_| "The server is offline.".to_string())?;
+        .map_err(|_| "The gateway is offline.".to_string())?;
     let list: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
     let ids: Vec<&str> = list["models"].as_array().map(|a| a.iter().filter_map(|m| m["id"].as_str()).collect()).unwrap_or_default();
     if status != 200 || ids.is_empty() {

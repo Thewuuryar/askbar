@@ -5,7 +5,7 @@ use askbar_admin::caddy::CaddyLink;
 use askbar_admin::secrets::AdminSecrets;
 use askbar_admin::server_link::ServerLink;
 use askbar_admin::{web, AdminDb, AdminState};
-use askbar_server::{secrets::Secrets, AppState};
+use askbar_server::AppState;
 use axum::{
     extract::State,
     http::{HeaderMap, StatusCode},
@@ -110,7 +110,7 @@ pub async fn start_with(caddy_up: bool, with_gateway: bool) -> T {
     sdb.seed_server().unwrap();
     // The server reads an in-process auditor, so tests can put sealed content there and open it (`rig.seed`).
     let rig = askbar_server::testing::Rig::start().await;
-    let server = rig.attach(AppState::new(sdb, Secrets::new("0123456789abcdef0123456789abcdef").unwrap(), askbar_server::MIN_CLIENT)).await;
+    let server = rig.attach(AppState::new(sdb, askbar_server::MIN_CLIENT)).await;
     let server_api_url = serve(askbar_server::server_api::router(server.clone(), hash_file)).await;
 
     let fake = Arc::new(FakeCaddy::default());

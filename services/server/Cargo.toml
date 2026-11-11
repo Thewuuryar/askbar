@@ -9,7 +9,7 @@ description = "Askbar server: history, providers and settings behind an HTTP API
 [dependencies]
 askbar-proto = { path = "../../crates/askbar-proto", features = ["axum"] }
 askbar-service = { path = "../../crates/askbar-service" }
-askbar-audit = { path = "../../crates/askbar-audit" }
+askbar-audit = { path = "../../crates/askbar-audit", optional = true }
 askbar-model-gateway = { path = "../model-gateway", optional = true }
 askbar-auditor = { path = "../auditor", optional = true }
 axum = "0.8"
@@ -22,11 +22,9 @@ rusqlite = { version = "0.41", features = ["bundled"] }
 serde_json = "1"
 ulid = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time", "fs"] }
-chacha20poly1305 = "0.10"
-hkdf = "0.12"
 sha2 = "0.10"
+chacha20poly1305 = "0.10"
 crypto_box = { version = "0.9", features = ["seal"] }
-subtle = "2"
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = "0.3"
@@ -34,7 +32,7 @@ tracing-subscriber = "0.3"
 [features]
 # Tests only: an in-process gateway and auditor (`testing::rig`), so a test of the server makes a reply the way the stack
 # does. Off in every image: the server carries no provider code (ADR 0054).
-test-rig = ["dep:askbar-model-gateway", "dep:askbar-auditor"]
+test-rig = ["dep:askbar-model-gateway", "dep:askbar-auditor", "dep:askbar-audit"]
 
 [dev-dependencies]
 askbar-server = { path = ".", features = ["test-rig"] }

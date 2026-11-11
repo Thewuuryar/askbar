@@ -1,6 +1,6 @@
 //! `stream_chat_report` against the real tests/mock_llm.py: timings, statuses and Retry-After.
 
-use askbar_server::llm::{http_client, stream_chat_report, ChatMessage, Provider, ProviderKind, StreamOutcome, Usage};
+use askbar_model_gateway::llm::{http_client, stream_chat_report, ChatMessage, Provider, ProviderKind, StreamOutcome, Usage};
 use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -47,7 +47,6 @@ pub fn provider(mock: &Mock, kind: ProviderKind) -> Provider {
         kind,
         base_url: format!("http://127.0.0.1:{}{}", mock.port, if kind == ProviderKind::OpenAi { "/v1" } else { "" }),
         api_key: "sk-test".into(),
-        api_key_env: String::new(),
         model: "m".into(),
         max_tokens: None,
         temperature: None,
@@ -162,7 +161,7 @@ async fn a_connection_that_cannot_be_made_has_no_status() {
     let (_k, cancel) = oneshot::channel::<()>();
     let e = stream_chat_report(&http_client(), &p, "", &[ChatMessage::new("user", "hi")], cancel, |_| {}).await.unwrap_err();
     assert_eq!(e.report.http_status, None);
-    assert!(matches!(e.error, askbar_server::llm::ChatError::Connect { .. }));
+    assert!(matches!(e.error, askbar_model_gateway::llm::ChatError::Connect { .. }));
 }
 
 #[tokio::test]
@@ -240,7 +239,6 @@ async fn canned_provider(body: &'static str) -> Provider {
         kind: ProviderKind::OpenAi,
         base_url: format!("http://127.0.0.1:{port}/v1"),
         api_key: "k".into(),
-        api_key_env: String::new(),
         model: "m".into(),
         max_tokens: None,
         temperature: None,

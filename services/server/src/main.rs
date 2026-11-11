@@ -97,7 +97,6 @@ async fn main() {
         }
     };
     // The server API is for the admin service only: `parse_addr` gives one specific address, never a wildcard.
-    let key_path = askbar_server::secrets::key_path();
     // The control database and one file per space (ADR 0009). The single `askbar.db` of earlier
     // versions is never opened, read or deleted: pre-1.0 storage changes wipe and re-pair (ADR 0018).
     let old = data_dir().join("askbar.db");
@@ -105,7 +104,6 @@ async fn main() {
         tracing::warn!(path = %old.display(), "this database is from an earlier version and is not used; it can be deleted");
     }
     let db = askbar_server::Db::open(&data_dir().join("control.db")).unwrap_or_else(|e| die(e, 1));
-    let secrets = askbar_server::secrets::ensure_key_file(&key_path, &db).unwrap_or_else(|e| die(e, 2));
     // Users come from the admin's configuration (ADR 0008); the server no longer makes one of its own.
     tracing::info!("database ready");
     match askbar_server::snapshot::current(&db) {
@@ -137,7 +135,7 @@ async fn main() {
         |var: &str, default: &str| std::env::var(var).ok().filter(|u| !u.trim().is_empty()).unwrap_or_else(|| default.to_string());
     let audit_url = env_url("ASKBAR_AUDIT_API_URL", "http://auditor:8083");
     let audit_client = askbar_service::audit_client::AuditClient::new(&audit_url, token_dir.clone(), "server-auditor");
-    let state = askbar_server::AppState::new(db, secrets, askbar_server::MIN_CLIENT);
+    let state = askbar_server::AppState::new(db, askbar_server::MIN_CLIENT);
     tokio::spawn(audit_client.clone().hello_until_done(state.boot_id.as_str().to_string()));
     tokio::spawn(audit_client.clone().drain_forever());
     let state = state
