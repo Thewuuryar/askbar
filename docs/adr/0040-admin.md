@@ -7,19 +7,19 @@ Source: plan step 1.14 ([plan-v1.md](../plan-v1.md)); owner rule that every comp
 
 ## Context
 
-The admin existed before the rule that each component has its own ADR. This record describes it as it is on `main` after plan step 1.11. It follows [0003](0003-v1-service-layout.md), [0005](0005-no-controller-and-self-restart.md), [0007](0007-first-run-and-admin-sign-in.md), [0022](0022-api-path-conventions.md), [0028](0028-service-boundaries-and-config-delivery.md), [0029](0029-shared-origin-protections.md), [0032](0032-container-hardening.md) and [0015](0015-certificates.md), and links them instead of repeating them.
+The admin existed before the rule that each component has its own ADR. This record describes it as it is on `main` after plan phase 3. It follows [0003](0003-v1-service-layout.md), [0005](0005-no-controller-and-self-restart.md), [0007](0007-first-run-and-admin-sign-in.md), [0022](0022-api-path-conventions.md), [0028](0028-service-boundaries-and-config-delivery.md), [0029](0029-shared-origin-protections.md), [0032](0032-container-hardening.md) and [0015](0015-certificates.md), and links them instead of repeating them.
 
 ## Decision
 
 - **What it is:** `services/admin`, binary and image `askbar-admin`, the Dockerfile's `admin` target. It runs as uid and gid 10001. It serves the admin site at `/admin` and its API at `/api/admin/v1`, on a unix socket only (`/run/admin/admin.sock`); it opens no TCP port. The site is one page per section, `/admin/<section>/`, rendered once at start from Askama templates compiled into the binary; the static files are served with an `ETag` (plan step 1.16).
 - **What it holds:**
-  - `admin.db`: the admin's password hash, admin API key hashes, users, providers (no keys except the managed `cpa` one, below), settings, display defaults, budgets and the kill switch, network settings (the Cloudflare token encrypted with `admin.key`), pairing-code hashes, the audit keyring (public keys and salts only, [0011](0011-sealed-content-access.md)) and its record of who opened sealed content;
+  - `admin.db`: the admin's password hash, admin API key hashes, users, providers, their API keys in `provider_keys` (encrypted with `admin.key`, write-only: no endpoint returns one), settings, display defaults, budgets and the kill switch, network settings (the Cloudflare token encrypted with `admin.key`), pairing-code hashes, the audit keyring (public keys and salts only, [0011](0011-sealed-content-access.md)) and its record of who opened sealed content;
   - in `admin-secrets`: `admin.key`, and `cpa`'s API key and control secret (the server API token is `bootstrap`'s, in `admin-token`);
   - in `caddy-secrets`: the install's own certificate and key ([0015](0015-certificates.md)) and the Cloudflare token file Caddy reads.
 - **Volumes:** `admin-data`, `admin-secrets`, `admin-token` (read-only: the token `bootstrap` made for the server API), `admin-run` (its socket, for Caddy), `caddy-run` (Caddy's admin socket), `caddy-secrets`, and `cpa-config` (it writes `cpa`'s config and restart requests, [0037](0037-askbar-cpa-image-and-supervisor.md)).
-- **Networks:** `server-api` and `cpa-admin`, with addresses Docker assigns; it calls the server at `http://server-api-host:8082`. Both are `internal`, so the admin has no route out. Caddy reaches it only through its socket.
-- **Links:** it calls the server API with its token, pushes Caddy's configuration through Caddy's admin socket, and calls `cpa`'s management API with the control secret. Nothing calls it except Caddy, for a person's browser or a script with an admin API key.
-- **Configuration push:** every change is saved in `admin.db` and pushed to the server as one snapshot; if the server cannot be reached the change is refused and nothing is saved ([0028](0028-service-boundaries-and-config-delivery.md)). It polls the server's status and pushes again after a restart.
+- **Networks:** `server-api`, `cpa-admin`, `audit-admin` and `gateway-admin`, with addresses Docker assigns; it calls the server at `http://server-api-host:8082`, `model-gateway` at `http://gateway-admin-host:8084` and the auditor at `http://auditor:8083`. All are `internal`, so the admin has no route out. Caddy reaches it only through its socket.
+- **Links:** it calls the server API with its token (`admin-server`) and `model-gateway` with `admin-model-gateway`; it appends its action records with `admin-auditor-append` and reads the audit store with `admin-auditor-read` ([0051](0051-auditor.md)); it pushes Caddy's configuration through Caddy's admin socket, and calls `cpa`'s management API with the control secret. Nothing calls it except Caddy, for a person's browser or a script with an admin API key.
+- **Configuration push:** every change is saved in `admin.db` and pushed to the server as one snapshot, and to `model-gateway` as its configuration (keys included); if the server cannot be reached the change is refused and nothing is saved ([0028](0028-service-boundaries-and-config-delivery.md)). It polls the server's status and pushes again after a restart.
 - **Hardening:** the shared defaults of [0032](0032-container-hardening.md), with no exception; memory limit 256 MB.
 
 ## Alternatives considered
@@ -28,14 +28,12 @@ Not recorded: the admin predates this record.
 
 ## Consequences
 
-`check-isolation.sh` tests that the admin works with the server stopped, that the server cannot reach its files or socket, and that its backup holds no secret. Its own tests and `tests/e2e/admin.test.js` cover the site and API.
+`check-isolation.sh` tests that the admin works with the server stopped, that the server cannot reach its files or socket, and that its backup holds no secret (phase 6 changes that check). Its own tests and `tests/e2e/admin.test.js` cover the site and API.
 
 **Where the code and an accepted ADR disagree.** Each is a later plan step, not a decision to keep it:
 
-- [0010](0010-auditor.md): the admin does not record its own actions in an auditor, and so cannot refuse an action whose record fails; there is no auditor yet (plan phase 2). It records who opened sealed content in `admin.db` only.
-- [0014](0014-model-gateway-and-providers.md): the admin does not store ordinary providers' keys; it passes them to the server, which stores them. In v1 the admin stores them and `model-gateway` holds them in memory (phase 3).
 - [0013](0013-backups.md): the backup is an unencrypted tar that the admin can read, so secrets are left out (phase 6).
-- [0003](0003-v1-service-layout.md) (no shared volumes): the admin shares `caddy-run`, `caddy-secrets` and `admin-run` with Caddy, and `cpa-config` with `cpa`. These carry tokens, sockets and configuration, not another service's data; the target layout keeps the Caddy and `cpa` ones, and the token moved to `bootstrap` in plan step 2.1.
+- [0003](0003-v1-service-layout.md) (no shared volumes): the admin shares `caddy-run`, `caddy-secrets` and `admin-run` with Caddy, and `cpa-config` with `cpa`. These carry tokens, sockets and configuration, not another service's data; the target layout keeps the Caddy and `cpa` ones.
 
 ## Amendments
 
@@ -52,3 +50,4 @@ Not recorded: the admin predates this record.
 - 2026-11-11: records every change in the auditor before it makes it, with `admin-auditor-append`, and refuses the change with a sentence when the record cannot be appended; how it ended is appended after (plan step 2.7, [0010](0010-auditor.md)). One layer on the routes does it and a test fails for a changing route with no category. Each configuration push to the server and to the gateway is an action of its own, and `askbar-admin reset` is recorded first too. The admin does not start without its append token. Signing in and out are not recorded.
 - 2026-11-11: sealed-content sessions (plan step 2.8, [0011](0011-sealed-content-access.md)): `POST`, `GET` and `DELETE /audit/session` and `GET /audit/payloads/{span_id}` (session-only: an API key gets `401`) replace the passphrase prompt for each item; the keys live in memory for 15 minutes idle or an hour in all (Settings: `unseal_idle_minutes`, `unseal_total_minutes`, up to 12 hours), and a sweeper ends the session and records why. The status endpoint carries `sealed_content` (this browser's session and the alerts of the last day) for the banner.
 - 2026-11-11: pauses and resumes a user (`POST /users/{id}/pause` and `/resume`, `users.paused`, migration 15; plan step 3.2): the flag goes to the server in the snapshot (`paused_user_ids`) and to the gateway in `PUT /config` (`paused_users`), as an admin action recorded first. The gateway's configuration now also carries the budget, the kill switch, whether it stops running replies and each provider's billing.
+- 2026-11-11: body brought up to date with the code on `main`: provider keys encrypted in `provider_keys`, the four networks, the links to the gateway and the auditor; the resolved 0010 and 0014 disagreements are removed. No decision changed.
