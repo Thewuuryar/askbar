@@ -41,3 +41,4 @@ Kind: component
 
 - 2026-11-08: marked as a component ADR, so it is amended in place ([0046](0046-component-and-register-adrs-and-partial-amendments.md)). Nothing else changed.
 - 2026-11-08: records the supervisor's two `unsafe` libc calls, now that the workspace denies `unsafe_code` (contributor guidelines rollout step 3). The code did not change.
+- 2026-11-12: `cpa` is on `cpa-gateway`, `cpa-admin` and `outbound`, not `edge` (plan step 3.5, [0042](0042-cpa.md)); the rest of "as today" stands.

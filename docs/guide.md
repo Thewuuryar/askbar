@@ -197,7 +197,7 @@ Lets a Claude or ChatGPT subscription act as an OpenAI-compatible provider. It s
 2. Open the address and approve. The browser then lands on an address starting `http://localhost` that will not load if the admin is on another machine. Copy that whole address from the address bar and paste it into the box. **Finish**.
 3. A provider named **CPA** appears on the Providers page, already holding the key the admin made for CLIProxyAPI. Choose its model from the dropdown. Its name, address and key are fixed.
 
-The admin makes CLIProxyAPI's config and API key itself (nobody copies a key anywhere). CLIProxyAPI joins `cpa-gateway` (`model-gateway` reaches it there), `cpa-admin` (the admin runs logins there) and `edge`; its API is never published. See [deploy/cpa/README.md](../deploy/cpa/README.md).
+The admin makes CLIProxyAPI's config and API key itself (nobody copies a key anywhere). CLIProxyAPI joins `cpa-gateway` (`model-gateway` reaches it there), `cpa-admin` (the admin runs logins there) and `outbound` (its route out, the same network `model-gateway` uses; it is not on `edge`); its API is never published. See [deploy/cpa/README.md](../deploy/cpa/README.md).
 
 ### Configuration reference
 
@@ -268,7 +268,7 @@ The audit store has its own container, `askbar-auditor` ([ADR 0051](adr/0051-aud
 
 ### model-gateway
 
-Provider calls and provider keys have their own container, `askbar-model-gateway` ([ADR 0054](adr/0054-model-gateway.md), [ADR 0014](adr/0014-model-gateway-and-providers.md)). It runs as uid 10004 with no capabilities and no data volume: **the keys live in its memory only.** Its API is `/api/model-gateway/v1` ([docs/openapi/model-gateway.v1.yaml](openapi/model-gateway.v1.yaml)) and it is never public. It has two listeners, one on each network it shares with a caller, each on the address its alias gives (`gateway-server-host`, `gateway-admin-host`, port 8084) and never a wildcard, because it also joins `outbound`, the one network besides `edge` with a route out. Direct outbound access is how v1 reaches providers ([ADR 0006](adr/0006-v1-outbound-access-and-alerts.md)).
+Provider calls and provider keys have their own container, `askbar-model-gateway` ([ADR 0054](adr/0054-model-gateway.md), [ADR 0014](adr/0014-model-gateway-and-providers.md)). It runs as uid 10004 with no capabilities and no data volume: **the keys live in its memory only.** Its API is `/api/model-gateway/v1` ([docs/openapi/model-gateway.v1.yaml](openapi/model-gateway.v1.yaml)) and it is never public. It has two listeners, one on each network it shares with a caller, each on the address its alias gives (`gateway-server-host`, `gateway-admin-host`, port 8084) and never a wildcard, because it also joins `outbound`, the one network besides `edge` with a route out (`cpa` joins it too, for the same reason). Direct outbound access is how v1 reaches providers ([ADR 0006](adr/0006-v1-outbound-access-and-alerts.md)).
 
 **The server asks it for every reply**, on `gateway-server`, with its own token, and has no key and no route to a provider. If the gateway has no configuration yet (it just started) or the auditor cannot take the record, the reply fails with a sentence and nothing is sent to a provider; ask again in a few seconds.
 
