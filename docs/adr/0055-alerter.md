@@ -1,6 +1,6 @@
 # 0055. The `alerter` component
 
-Status: Proposed
+Status: Accepted
 Date: 2026-11-11
 Kind: component
 Source: plan steps 4.1 to 4.3 ([plan-v1.md](../plan-v1.md)); owner rule that every component has an ADR of its own (2026-11-07); owner's request of 2026-11-11 to submit this record after the Caddy access-log step
@@ -11,7 +11,7 @@ Source: plan steps 4.1 to 4.3 ([plan-v1.md](../plan-v1.md)); owner rule that eve
 
 ## Decision
 
-- **What it is:** `services/alerter`, image `askbar-alerter`, serving `/api/alerter/v1`. It links `askbar-service` ([0036](0036-askbar-service-crate.md)) and `askbar-proto` ([0045](0045-askbar-proto-crate.md)), and reaches the auditor over HTTP, so it links no store code. It adds no third-party dependency beyond an SMTP client **(proposed: needs the owner's yes under the dependency rule)**; ntfy is an HTTPS `POST` with the HTTP client the workspace already has.
+- **What it is:** `services/alerter`, image `askbar-alerter`, serving `/api/alerter/v1`. It links `askbar-service` ([0036](0036-askbar-service-crate.md)) and `askbar-proto` ([0045](0045-askbar-proto-crate.md)), and reaches the auditor over HTTP, so it links no store code. It adds no third-party dependency beyond an SMTP client; ntfy is an HTTPS `POST` with the HTTP client the workspace already has.
 - **What it does:** it delivers alerts and checks for new releases, and nothing else. It decides no rule. It never reads audit content or the audit store.
 - **Who sends it an event, and what an event is:**
   - the auditor, which sees every record, evaluates the rules that need records (a silent appending component, the disk early warning, an unseal or a retention change as the admin recorded it) and sends an event;
@@ -22,7 +22,7 @@ Source: plan steps 4.1 to 4.3 ([plan-v1.md](../plan-v1.md)); owner rule that eve
 - **Delivery that fails:** it retries with backoff from a bounded queue in memory (200 events; the oldest is dropped and counted). Each alert's outcome (sent, failed, suppressed) is appended to the auditor with its own append token, as a record with no content. `GET /status` carries the time of the last good and last failed delivery, and the admin shows a banner when delivery has not worked for a while. Nothing outside the host notices if the alerter itself is down; that dead-man monitor is out of v1 ([0006](0006-v1-outbound-access-and-alerts.md), [0016](0016-risk-register.md)), and the admin's banner is the only signal.
 - **What it holds:**
   - **A data volume, `alerter-data`:** the repeat ledger, the last release check and the last delivery results. No secret and no content.
-  - **Delivery settings and their secrets** (the ntfy topic and token, the SMTP password) are **not on its volume (proposed)**. The admin keeps them encrypted with its own key ([0040](0040-admin.md)) and pushes them in `PUT /config`, as it does the provider keys; the alerter holds them in memory only, answers `503 not_configured` until they arrive and asks again on a new boot ID ([0028](0028-service-boundaries-and-config-delivery.md) rules 3 to 5). [architecture.md](../architecture.md) lists "`alerter` state and delivery settings" on its volume, which this amends.
+  - **Delivery settings and their secrets** (the ntfy topic and token, the SMTP password) are **not on its volume**. The admin keeps them encrypted with its own key ([0040](0040-admin.md)) and pushes them in `PUT /config`, as it does the provider keys; the alerter holds them in memory only, answers `503 not_configured` until they arrive and asks again on a new boot ID ([0028](0028-service-boundaries-and-config-delivery.md) rules 3 to 5). [architecture.md](../architecture.md) lists "`alerter` state and delivery settings" on its volume, which this amends.
   - **Credentials:** its own volume, `alerter-token`, written by `bootstrap` ([0049](0049-bootstrap.md)): the hashes it accepts and the token it sends the auditor.
 - **Its API, by link** (each token hash maps to one caller and its routes; anything else is `403`):
   - `auditor-alerter` (the auditor calls it): `POST /events` with the auditor's kinds;
@@ -32,7 +32,7 @@ Source: plan steps 4.1 to 4.3 ([plan-v1.md](../plan-v1.md)); owner rule that eve
 - **Releases** (step 4.3): once a day it asks the project's public release feed for the newest version, sending no identifier of the install and a fixed `User-Agent`, and keeps the answer for the admin to read ([0017](0017-dependencies-and-patches.md)). A new release is an alert.
 - **Networks and outbound** ([0006](0006-v1-outbound-access-and-alerts.md)): direct outbound in v1, no egress proxy. One network for each link, shared with the alerter alone, none pinned to a subnet:
   - `audit-alerter` and `alerter-admin`, `internal`;
-  - **`alerter-outbound`, not `internal` (proposed):** the one network the alerter shares with no one. It is not `outbound` ([0054](0054-model-gateway.md)): the gateway and the mock LLM sit there, and a peer on a network with a route out should have no other component to reach.
+  - **`alerter-outbound`, not `internal`:** the one network the alerter shares with no one. It is not `outbound` ([0054](0054-model-gateway.md)): the gateway and the mock LLM sit there, and a peer on a network with a route out should have no other component to reach.
 - **Listeners:** two, one on each caller's network, each bound to the address its alias resolves to (`alerter-auditor-host`, `alerter-admin-host`) and never a wildcard, because the alerter also sits on a network with a route out.
 - **Who it runs as:** uid 10005 ([0003](0003-v1-service-layout.md)), from its first instruction.
 - **Hardening:** [0032](0032-container-hardening.md)'s defaults with no exception: read-only root, no capabilities, a private `/tmp`, memory 128 MB. `check-isolation.sh` checks:
@@ -53,7 +53,7 @@ Source: plan steps 4.1 to 4.3 ([plan-v1.md](../plan-v1.md)); owner rule that eve
 - **The admin delivering alerts itself:** rejected. The admin is a likely target and would be silencing its own alarms, and it has no route out.
 - **The alerter reading the auditor to find its own events:** rejected. It would need a read token over everything in the store. The auditor already holds the records and pushes a narrow event.
 - **Events with free text from the sender:** rejected, because a compromised sender could then use the alerter to carry anything out, and a mistake could put a secret in a message.
-- **Delivery secrets on the alerter's volume:** rejected **(proposed)** for the reason [0028](0028-service-boundaries-and-config-delivery.md) gives against secrets in each service: a stolen volume would hold them. The cost is one more dependency on the admin after a restart, which already pushes everything.
+- **Delivery secrets on the alerter's volume:** rejected for the reason [0028](0028-service-boundaries-and-config-delivery.md) gives against secrets in each service: a stolen volume would hold them. The cost is one more dependency on the admin after a restart, which already pushes everything.
 - **Sharing `outbound` with the gateway:** rejected, for the reason above.
 - **A dead-man monitor in v1:** out of scope ([0006](0006-v1-outbound-access-and-alerts.md)).
 
