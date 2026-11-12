@@ -225,6 +225,12 @@ async fn with_the_server_down_changes_get_502_and_nothing_is_saved() {
         (M::PUT, "/api/admin/v1/settings", Some(json!({ "system_prompt": "x", "display": askbar_proto::DisplaySettings::default() }))),
         (M::GET, "/api/admin/v1/backup", None),
         (M::POST, "/api/admin/v1/clients/d1/revoke", None),
+        // The backup key's public half goes to the server in the snapshot, so with the server down it is not kept (ADR 0013).
+        (
+            M::PUT,
+            "/api/admin/v1/setup/backup-key",
+            Some(json!({ "passphrase": "a backup passphrase of its own", "confirm": "a backup passphrase of its own" })),
+        ),
     ] {
         let (st, res) = t.call(m, path, body).await;
         assert_eq!(st, 502, "{path}");
@@ -235,6 +241,7 @@ async fn with_the_server_down_changes_get_502_and_nothing_is_saved() {
     assert_eq!(t.admin_rows("SELECT COUNT(*) FROM providers").await, 0, "no half-saved provider");
     assert_eq!(t.admin_rows("SELECT COUNT(*) FROM pair_codes").await, 0);
     assert_eq!(t.admin_rows("SELECT COUNT(*) FROM settings").await, 0);
+    assert_eq!(t.admin_rows("SELECT COUNT(*) FROM backup_keys").await, 0, "no backup key was kept");
 
     // Reading what this side owns still works, and the status says why the rest does not.
     assert_eq!(t.call(M::GET, "/api/admin/v1/providers", None).await, (200, json!([])));

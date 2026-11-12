@@ -55,6 +55,9 @@ paths:
                     description: The published first-run password (ADR 0007) is still in use and must be changed.
                   audit_key_set:
                     type: boolean
+                  backup_key_set:
+                    type: boolean
+                    description: A backup key has been set (ADR 0013). The first-run setup asks for one after the audit key.
   /api/admin/v1/session:
     post:
       operationId: signIn
@@ -1105,6 +1108,93 @@ paths:
           $ref: '#/components/responses/Conflict'
         '502':
           $ref: '#/components/responses/ServerUnavailable'
+  /api/admin/v1/setup/backup-key:
+    put:
+      operationId: setupBackupKey
+      summary: "First run: make the backup key from a passphrase (at least 20 characters, not the audit passphrase). Needs a fresh sign-in."
+      description: >-
+        ADR 0013, D22. The passphrase is turned into an age key pair; the admin keeps the public key (`age1...`) and the private key
+        encrypted with the passphrase (`backup-key.age`, which every backup carries), and forgets the passphrase: it is stored,
+        logged and recorded nowhere. The public key goes to the server and the alerter. The admin's action record names the key by
+        its fingerprint. A browser session only, signed in within the last 10 minutes: an admin API key cannot call it (403). 400
+        if the passphrases differ, are under 20 characters, or are an audit passphrase (any audit key's, the retired ones
+        too); 409 if a key exists (rotation is its own action); 502 if the server cannot be reached, and then nothing is kept.
+      security:
+        - adminSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BackupPassphrase'
+      responses:
+        '200':
+          description: The new key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BackupKey'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '502':
+          $ref: '#/components/responses/ServerUnavailable'
+  /api/admin/v1/backup/key:
+    get:
+      operationId: getBackupKey
+      summary: Whether a backup key is set, and its public name.
+      description: The public key is what every component encrypts its export to, so it is not secret. The protected private key is not returned.
+      security:
+        - adminSession: []
+        - adminApiKey: []
+      responses:
+        '200':
+          description: The backup key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BackupKey'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/admin/v1/backup/rotate-key:
+    post:
+      operationId: rotateBackupKey
+      summary: Make a new backup key from a new passphrase. Needs a fresh sign-in.
+      description: >-
+        A new key pair; the old one is retired but kept listed, because each backup carries the protected key of the passphrase in
+        force when it was made, so an older backup opens with its own, older passphrase. The old passphrase is not asked for. The same
+        rules as `PUT /setup/backup-key`, and 409 if there is no key to rotate. The new public key goes to the server and the alerter.
+        The admin's action record names the new and the retired key by fingerprint. Take a new backup at once (ADR 0013).
+      security:
+        - adminSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BackupPassphrase'
+      responses:
+        '200':
+          description: The new key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BackupKey'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '502':
+          $ref: '#/components/responses/ServerUnavailable'
   /api/admin/v1/settings:
     get:
       operationId: getSettings
@@ -1935,6 +2025,35 @@ components:
           minLength: 20
         confirm:
           type: string
+    BackupPassphrase:
+      type: object
+      additionalProperties: false
+      required: [passphrase, confirm]
+      properties:
+        passphrase:
+          type: string
+          writeOnly: true
+          minLength: 20
+        confirm:
+          type: string
+          writeOnly: true
+    BackupKey:
+      type: object
+      required: [set, fingerprint, recipient, created_at, keys]
+      properties:
+        set:
+          type: boolean
+        fingerprint:
+          type: [string, 'null']
+          description: A short name for the public key, 16 hex digits in four groups (`1a2b-3c4d-5e6f-7a8b`).
+        recipient:
+          type: [string, 'null']
+          description: The public key, `age1...`.
+        created_at:
+          type: [integer, 'null']
+        keys:
+          type: integer
+          description: How many keys there have been, the active one included.
     RotateKey:
       type: object
       required: [current, new]

@@ -209,6 +209,8 @@ pub fn classify(method: &Method, template: &str) -> Option<(&'static str, &'stat
         ("POST", "/users/{id}/resume") => ("users", "resume"),
         ("PUT", "/setup/audit-key") => ("secret", "audit_key_setup"),
         ("POST", "/audit/rotate-key") => ("secret", "audit_key_rotate"),
+        ("PUT", "/setup/backup-key") => ("secret", "backup_key_setup"),
+        ("POST", "/backup/rotate-key") => ("secret", "backup_key_rotate"),
         ("POST", "/audit/session") => ("sealed_content", "unseal"),
         ("DELETE", "/audit/session") => ("sealed_content", "seal"),
         ("GET", "/audit/payloads/{span_id}") => ("sealed_content", "view"),

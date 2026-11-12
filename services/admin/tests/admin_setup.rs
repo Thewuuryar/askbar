@@ -64,7 +64,7 @@ impl T {
 #[tokio::test]
 async fn first_run_signs_in_with_the_published_password_and_must_change_it_before_anything_else() {
     let t = fresh().await;
-    assert_eq!(t.status().await, json!({ "password_change_required": true, "audit_key_set": false }));
+    assert_eq!(t.status().await, json!({ "password_change_required": true, "audit_key_set": false, "backup_key_set": false }));
     let stored: String = t.state.db.lock().await.conn().query_row("SELECT password_hash FROM admin_credentials", [], |r| r.get(0)).unwrap();
     assert!(stored.starts_with("$argon2") && !stored.contains(DEFAULT));
 

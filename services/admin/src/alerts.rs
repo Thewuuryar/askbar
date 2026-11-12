@@ -202,7 +202,11 @@ pub async fn put_alerts(State(state): St, ApiJson(input): ApiJson<Input>) -> Res
         Some(None) => None,
         Some(Some(m)) => Some(email_from(m, stored_email.as_ref())?),
     };
-    let mut config = AlerterConfig { version: 0, ntfy, email };
+    let backup_public_key = {
+        let db = state.db.lock().await;
+        crate::db::active_backup_key(db.conn()).ok().flatten().map(|k| k.recipient)
+    };
+    let mut config = AlerterConfig { version: 0, ntfy, email, backup_public_key };
     config.version = alerter_link::version_of(&config);
     match link.put_config(&state, &config).await {
         Ok(()) => {}

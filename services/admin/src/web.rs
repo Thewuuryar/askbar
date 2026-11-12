@@ -322,8 +322,15 @@ pub async fn logout(State(state): State<Arc<AdminState>>, headers: HeaderMap) ->
 
 /// What the setup page needs to decide which screen to show. Booleans only.
 pub async fn setup_status(State(state): State<Arc<AdminState>>) -> Json<serde_json::Value> {
-    let audit_key_set = state.db.lock().await.active_audit_key().ok().flatten().is_some();
-    Json(serde_json::json!({ "password_change_required": password_change_required(&state).await, "audit_key_set": audit_key_set }))
+    let (audit_key_set, backup_key_set) = {
+        let db = state.db.lock().await;
+        (db.active_audit_key().ok().flatten().is_some(), crate::db::active_backup_key(db.conn()).ok().flatten().is_some())
+    };
+    Json(serde_json::json!({
+        "password_change_required": password_change_required(&state).await,
+        "audit_key_set": audit_key_set,
+        "backup_key_set": backup_key_set
+    }))
 }
 
 #[derive(Deserialize)]

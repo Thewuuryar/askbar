@@ -12,6 +12,7 @@ pub mod audit_key;
 pub mod audit_read;
 pub mod auditor_link;
 pub mod auth;
+pub mod backup_key;
 pub mod budget_watch;
 pub mod caddy;
 pub mod catalog;
@@ -181,6 +182,7 @@ pub fn routes(state: &Arc<AdminState>) -> Routes {
         .post(&v1("/users/{id}/pause"), admin_api::pause_user)
         .post(&v1("/users/{id}/resume"), admin_api::resume_user)
         .put(&v1("/setup/audit-key"), admin_api::setup_audit_key)
+        .get(&v1("/backup/key"), backup_key::get_key)
         .get(&v1("/audit/traces"), admin_api::audit_traces)
         .get(&v1("/audit/traces/{id}"), admin_api::audit_trace)
         .get(&v1("/audit/stats"), admin_api::audit_stats)
@@ -203,6 +205,9 @@ pub fn routes(state: &Arc<AdminState>) -> Routes {
         .delete(&v1("/users/{id}"), admin_api::delete_user)
         // How alerts are delivered (ADR 0055): the settings are secrets and sending a test alert reaches outside, so only a
         // person's own session may do either (a script's API key may not redirect or silence the alerts).
+        // The backup key (ADR 0013, D21): setting or rotating it needs a person's own, freshly signed-in session, never an API key.
+        .put(&v1("/setup/backup-key"), backup_key::setup_key)
+        .post(&v1("/backup/rotate-key"), backup_key::rotate_key)
         .get(&v1("/alerts"), alerts::get_alerts)
         .put(&v1("/alerts"), alerts::put_alerts)
         .post(&v1("/alerts/test"), alerts::test_alerts)

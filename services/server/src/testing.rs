@@ -20,6 +20,7 @@ pub fn test_audit_key() -> askbar_proto::AuditKey {
 pub fn empty_snapshot() -> Snapshot {
     Snapshot {
         policy: None,
+        backup_public_key: None,
         version: 0,
         providers: vec![],
         default_provider_id: None,
