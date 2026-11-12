@@ -49,3 +49,4 @@ Until the password changes, any machine on a private network can sign in with th
 
 - 2026-11-10: two requirements that repeated the passkey rule and first-run step 6 are removed. No decision changed.
 - 2026-11-11: no passkey in v1 (#70, owner's decision D20, a decision change): first-run step 6 and the recovery-code text are removed, and the host reset command stays the recovery path; the certificate step names the HTTP-01 choice (D19, [0015](0015-certificates.md)). Passkeys move to the post-v1 list.
+- 2026-11-12: first-run step 4 is built for the backup passphrase (plan step 6.1, PR AI, #86): the wizard asks for it after the audit passphrase, shows the key's fingerprint, and an install from before it is asked on its next visit. See [0013](0013-backups.md).
