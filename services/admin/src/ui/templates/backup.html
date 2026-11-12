@@ -4,12 +4,13 @@
 {% block content %}
     <div class="panel">
       <p>Download an <strong>encrypted</strong> backup: one <code>.tar</code> file with the server's data (settings, paired clients and every space's conversations) and this admin's own (its database, its secret keys and the install's certificate). Each part is encrypted so that only your backup passphrase opens it: this admin cannot read it, and it holds everything one restore needs, secrets included.</p>
-      <p class="hint">The file holds <code>manifest.json</code> (which release made it and what is in it), <code>backup-key.age</code> (the private key, protected by your passphrase) and the encrypted parts. With the file and the passphrase, the <code>age</code> tool opens it; the guide says how. The audit store is not in it: copy the auditor's volume separately (the guide says how). Without a backup passphrase set, nothing can be backed up.</p>
+      <p class="hint">The file holds <code>manifest.json</code> (which release made it and what is in it), <code>backup-key.age</code> (the private key, protected by your passphrase) and the encrypted parts. With the file and the passphrase, the <code>age</code> tool opens it; the guide says how. The auditor's store is in it too (<code>audit.age</code>, last). Without a backup passphrase set, nothing can be backed up.</p>
       <p><a class="button" id="backup-link" href="/api/admin/v1/backup" download>Download backup</a></p>
+      <p class="hint">To put a backup back, see <a href="/admin/restore/">Restore</a>: it is for a new, empty install.</p>
     </div>
     <form id="backup-key-form" class="panel">
       <h3>Backup key</h3>
-      {% call b::hint("Encrypted backups (coming in the next steps) are made to this key, so only the backup passphrase opens them. This admin keeps the key's public half and the private half protected by the passphrase, never the passphrase itself.") %}{% endcall %}
+      {% call b::hint("Encrypted backups are made to this key, so only the backup passphrase opens them. This admin keeps the key's public half and the private half protected by the passphrase, never the passphrase itself.") %}{% endcall %}
       <p>Fingerprint: <code id="bk-fingerprint">none yet</code> <span class="hint" id="bk-count"></span></p>
       <p class="hint">Rotating makes a new key from a new passphrase. Backups made before it still open with the passphrase they were made under, so keep the old passphrase until the new backups cover the retention window; if the old one may be known to someone, delete the old backups. Rotating needs a sign-in within the last 10 minutes.</p>
       <label>New backup passphrase (at least 20 characters, not the audit passphrase) <input id="bk-pass" type="password" autocomplete="new-password" minlength="20" required></label>

@@ -192,6 +192,14 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     assert.equal(await page.isHidden('#setup-password-form'), true);
     assert.equal(await page.getAttribute('#setup-audit', 'type'), 'password');
     assert.match(await page.innerText('#setup-audit-form'), /cannot be recovered/);
+    // A new install can be set up from a backup instead: the link opens the Restore page without finishing the setup screens.
+    await page.click('#setup-restore-link');
+    await page.waitForURL('**/admin/restore/**');
+    await page.waitForSelector('#app:not([hidden])');
+    await page.waitForSelector('#restore-upload-form:not([hidden])');
+    assert.equal(await page.isHidden('#setup'), true);
+    await page.goto(base);
+    await page.waitForSelector('#setup-audit-form:not([hidden])');
   });
   await step('setup: the audit passphrase must match, be 20+ characters and be confirmed as stored', async () => {
     await page.evaluate(() => document.getElementById('setup-audit-form').noValidate = true);
@@ -907,6 +915,19 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       assert.equal(bytes.includes(secret), false, 'the bundle holds ' + secret);
     }
   });
+  await step('restore: this install is not empty, so the backup it just made is refused with a sentence and nothing changes (ADR 0013)', async () => {
+    // A restore is for a new install: the bundle from the step above is checked, and the used install refuses it.
+    await openPage('restore');
+    assert.equal(await page.isHidden('#restore-form'), true, 'the passphrase is not asked for before the backup is checked');
+    await page.setInputFiles('#restore-file', path.join(data, 'downloaded.tar'));
+    await page.click('#restore-upload-form button[type=submit]');
+    await page.waitForSelector('#restore-error:not([hidden])');
+    assert.match(await page.innerText('#restore-error'), /only be restored into an empty install/);
+    assert.equal(await page.isHidden('#restore-form'), true);
+    // The Backup page points here, and the first-run screen has the same link (the audit step shows it).
+    await openPage('backup');
+    assert.equal(await page.locator('#tab-backup a[href="/admin/restore/"]').count(), 1);
+  });
   // ------------------------------------------------------------------ the Audit tab
   // Against the real server: a provider whose name and model are markup, one real chat through it,
   // then the Audit tab (#tab-audit, #audit-nav, the Requests rows, the waterfall, the Content view).
@@ -1524,7 +1545,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
   await step('pages: each section has its own URL, the nav marks it, Back works and the frame is the same', async () => {
     // Plan step 1.16: a page and a URL for every admin section, from one template.
     const slugs = await page.$$eval('#nav a', (as) => as.map((a) => a.dataset.tab));
-    assert.deepEqual(slugs, ['providers', 'services', 'clients', 'audit', 'backup', 'network', 'security', 'settings']);
+    assert.deepEqual(slugs, ['providers', 'services', 'clients', 'audit', 'backup', 'restore', 'network', 'security', 'settings']);
     for (const slug of slugs) {
       await page.goto(`http://127.0.0.1:${adminPort}/admin/${slug}/`);
       await page.waitForSelector('#app:not([hidden])');
