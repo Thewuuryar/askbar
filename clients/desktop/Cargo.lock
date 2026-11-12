@@ -156,6 +156,7 @@ dependencies = [
  "askbar-service",
  "axum",
  "base64 0.22.1",
+ "futures-util",
  "serde",
  "serde_json",
  "tokio",
