@@ -114,6 +114,42 @@ async fn settings_have_defaults_and_no_system_prompt() {
 }
 
 #[tokio::test]
+async fn the_policy_is_the_defaults_until_the_admin_pushes_one_and_then_what_it_pushed() {
+    use askbar_proto::{notice_version, Policy, DEFAULT_PRIVACY_NOTICE};
+    let t = start().await;
+    let served = |body: &str| serde_json::from_str::<Settings>(body).unwrap().policy;
+    // A snapshot with no policy (an older admin): both on, the default wording, and the retention the snapshot has.
+    askbar_server::testing::update_snapshot(&t.state.db.lock().unwrap(), |s| {
+        s.policy = None;
+        s.audit_retention_days = 45;
+    });
+    let (st, body) = t.get_text("/api/client/v1/settings").await;
+    assert_eq!(st, 200);
+    let p = served(&body);
+    assert_eq!(p, Policy::default_for(45));
+    assert_eq!((p.notice.retention_days, p.notice.text.as_str()), (45, DEFAULT_PRIVACY_NOTICE));
+    // What the admin pushed is served as it is: its wording, its version, whether each is on.
+    let own = Policy::new(false, "Our own words.", true, "Be careful.", 7);
+    askbar_server::testing::update_snapshot(&t.state.db.lock().unwrap(), |s| s.policy = Some(own.clone()));
+    let (_, body) = t.get_text("/api/client/v1/settings").await;
+    assert_eq!(served(&body), own);
+    assert_eq!(served(&body).notice.version, notice_version("Our own words.", 7));
+    // The names a client reads, and text (never markup) in both.
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["policy"]["notice"]["enabled"], false);
+    assert_eq!(json["policy"]["ai_warning"]["text"], "Be careful.");
+    // It is part of what any paired client may read, and needs the same token as the rest.
+    let r = t
+        .http
+        .get(format!("http://{}/api/client/v1/settings", t.addr))
+        .header("x-askbar-client-version", askbar_server::MIN_CLIENT)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 401);
+}
+
+#[tokio::test]
 async fn no_response_contains_provider_key_material() {
     let t = start().await;
     let c1 = add_conversation(&t.state, &t.user, "c", &[("user", "hi")]);

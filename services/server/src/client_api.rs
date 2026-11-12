@@ -5,7 +5,9 @@
 use crate::error::{ApiError, ApiJson};
 use crate::{auth::ClientAuth, AppState};
 use askbar_proto::problem::ErrorCode;
-use askbar_proto::{Conversation, ConversationDetail, DisplaySettings, Message, PendingGeneration, Prefs, SearchHit, Settings, SpaceInfo};
+use askbar_proto::{
+    Conversation, ConversationDetail, DisplaySettings, Message, PendingGeneration, Policy, Prefs, SearchHit, Settings, SpaceInfo,
+};
 use axum::{
     extract::{FromRequestParts, Path, Query, RawPathParams, State},
     http::{request::Parts, StatusCode},
@@ -246,7 +248,17 @@ pub async fn display_defaults(State(state): St, Extension(auth): Extension<Clien
     Ok(Json(served_display(&db, Some(&auth.user_id)).map_err(internal)?))
 }
 
+/// The privacy notice and the AI warning as the admin pushed them (ADR 0012). A snapshot from an admin that did not send a policy
+/// gets the defaults for its retention, and no snapshot at all gets the defaults for 30 days: a person is told what is recorded
+/// before the administrator has chosen anything.
+pub fn served_policy(db: &crate::Db) -> rusqlite::Result<Policy> {
+    Ok(match crate::snapshot::current(db)? {
+        Some(s) => s.policy.unwrap_or_else(|| Policy::default_for(s.audit_retention_days)),
+        None => Policy::default(),
+    })
+}
+
 pub async fn settings(State(state): St) -> Res<Settings> {
     let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
-    Ok(Json(Settings { display: served_display(&db, None).map_err(internal)?, policy: Default::default() }))
+    Ok(Json(Settings { display: served_display(&db, None).map_err(internal)?, policy: served_policy(&db).map_err(internal)? }))
 }

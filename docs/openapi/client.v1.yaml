@@ -798,6 +798,43 @@ components:
       properties:
         display:
           $ref: '#/components/schemas/DisplaySettings'
+        policy:
+          $ref: '#/components/schemas/Policy'
+    Policy:
+      type: object
+      required: [notice, ai_warning]
+      description: >-
+        What the app tells its person about the service (ADR 0012). Added in 1.0; an app that does not know it ignores it, and
+        a response without it reads as both on with the default wording. Consent is assumed when the administrator makes a
+        user, so there is no acknowledgment route: the app remembers the last notice `version` it showed.
+      properties:
+        notice:
+          type: object
+          required: [enabled, text, retention_days, version]
+          properties:
+            enabled:
+              type: boolean
+              description: False when the administrator turned the notice off.
+            text:
+              type: string
+              description: The wording, as text (never markup).
+            retention_days:
+              type: integer
+              description: How many days audit records are kept; shown with the wording.
+            version:
+              type: string
+              description: >-
+                A hash of the wording and the retention. Show the notice after pairing and whenever this differs from the
+                last one shown.
+        ai_warning:
+          type: object
+          required: [enabled, text]
+          properties:
+            enabled:
+              type: boolean
+            text:
+              type: string
+              description: Shown above the input box.
     SearchHit:
       type: object
       required: [conversation_id, message_id, role, snippet, created_at]
