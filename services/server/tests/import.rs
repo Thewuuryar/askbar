@@ -85,6 +85,9 @@ impl Srv {
     }
 }
 
+/// The files of an export, as a test edits them.
+type Files = Vec<(String, Vec<u8>)>;
+
 async fn problem(r: reqwest::Response) -> (u16, String) {
     let status = r.status().as_u16();
     let body: serde_json::Value = r.json().await.unwrap_or_default();
@@ -173,7 +176,7 @@ async fn a_backup_from_a_newer_release_or_one_that_is_not_whole_is_refused_and_c
     assert_eq!(problem(target.post("/imports", newer).await).await, (409, "backup_newer_release".into()));
     unchanged(&target);
     // A file that is not ours, a missing space, and an extra one.
-    let build = |f: &dyn Fn(&mut Vec<(String, Vec<u8>)>)| {
+    let build = |f: &dyn Fn(&mut Files)| {
         let mut e = askbar_service::tar::read(&tar).unwrap();
         f(&mut e);
         let mut t = Vec::new();
