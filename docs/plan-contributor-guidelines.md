@@ -6,12 +6,13 @@ Status: tracker for decisions not yet made and work not yet done. Decisions that
 
 - Merging: squash small PRs; rebase-merge a stepwise series and say so in the PR (2026-11-03).
 - rustfmt now: `max_width = 140`, `use_small_heuristics = "Max"`, one reformat commit (branch `style/rustfmt`) (2026-11-03).
+- Commit format (#1): Conventional Commits with the scopes in AGENTS.md, and a PR title that is a commit subject (2026-11-12, proposal made a rule in the v1 docs pass; the owner may drop it).
 - Branch names: `<type>/<short-kebab-description>` for everyone, including agent harnesses (2026-11-05).
 - clippy and `unsafe` (#5, #13): lints in `[workspace.lints]` in both workspaces, and `cargo clippy --workspace --all-targets -- -D warnings` clean in each. `result_large_err` is allowed, with the reason in `Cargo.toml`. `unsafe_code` is `deny` in the services' workspace, where `cpa-supervisor` allows it on its two libc calls ([ADR 0037](adr/0037-askbar-cpa-image-and-supervisor.md)), and `forbid` in the desktop client (2026-11-08).
 
 ## Open decisions
 
-Recommendation first. "Tool" lists the usual choices; check each one's current state before adopting. #2, #3, #4, #5 and #13 are decided (above).
+Recommendation first. "Tool" lists the usual choices; check each one's current state before adopting. #1, #2, #3, #4, #5 and #13 are decided (above).
 
 | # | Question | Recommendation | Tool |
 | --- | --- | --- | --- |
@@ -55,7 +56,7 @@ Each step is its own PR. Stop after any step; the earlier ones stand alone.
 3. **Done (2026-11-08). clippy** (#5, #13): `[workspace.lints]`, fix or explicitly allow each baseline warning with a reason. Verify: `cargo clippy --workspace --all-targets -- -D warnings` clean.
 4. **In review (2026-11-08): CI on pull requests** (#7, #8, #9): `ci.yml`, `deny.toml`, Dependabot, Renovate, gitleaks. Verify: open a draft PR and watch it run; the 0.5.0 hand-off notes that `build.yml` has never run, so expect first-run failures.
 5. **Branch protection** (#10) last, once the checks are known to pass; otherwise it blocks every merge.
-6. **Update AGENTS.md** to drop the `(proposed)` tags and add the new commands.
+6. **Done (2026-11-12).** Update AGENTS.md to drop the `(proposed)` tags and add the new commands.
 7. **Delete this file** once steps 2 to 6 are done and the open decisions are settled or moved to issues.
 
 ## Keeping it alive

@@ -4,7 +4,7 @@ Two separate records, with different readers and different rules. Never use one 
 
 ## Operational logs
 
-What a person running the stack reads in `docker compose logs`. Written with `tracing`. Existing code uses `info` and `warn`; the levels below are the **(proposed)** standard for all new code.
+What a person running the stack reads in `docker compose logs`. Written with `tracing`. Existing code uses `info` and `warn`; the levels below are the standard for all new code.
 
 - **Metadata only.** Ids, counts, durations, status codes, versions, addresses. Never message content (prompts, replies, provider errors), provider keys, tokens, the audit passphrase, pasted login addresses, the Cloudflare token or the admin password. Do not log query strings or headers. Alerts never include a token ([ADR 0024](../adr/0024-rejected-token-alert.md)).
 - **Structured fields, short message.** Put values in fields and keep the message a fixed phrase, as the existing lines do: `info!(%addr, "listening")`, `info!(version = v, "snapshot pushed")`.

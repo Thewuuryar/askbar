@@ -116,10 +116,10 @@ The whole API is [docs/openapi/admin.v1.yaml](docs/openapi/admin.v1.yaml).
 
 - **Branches.** `<type>/<short-kebab-description>`; type is one of `feat`, `fix`, `docs`, `refactor`, `test`, `chore`,
   `ci`. Branch from `main`; never push to it.
-- **Commits (proposed).** [Conventional Commits](https://www.conventionalcommits.org/): `type(scope): subject`, imperative, lower
+- **Commits.** [Conventional Commits](https://www.conventionalcommits.org/): `type(scope): subject`, imperative, lower
   case, 72 characters or fewer. The scopes are listed in [AGENTS.md](AGENTS.md#branches-and-commits). The body says why, lists any deviation from a plan, and says when a test was changed. A breaking
   change has `!` after the scope and a `BREAKING CHANGE:` footer. One concern per commit; tests and docs ride with the code.
-- **Pull requests (proposed).** The title is a commit subject. Fill in the template: what was verified, and what was not.
+- **Pull requests.** The title is a commit subject. Fill in the template: what was verified, and what was not.
 - **Merging.** Squash by default. A stepwise series where each commit stands alone is rebase-merged; say so in the PR.
 - **A boundary change needs an ADR.** If a change moves a boundary (crate, container, network, volume, API audience),
   adds a container, image or service or a dependency outside the license allowlist, changes a hard rule in [AGENTS.md](AGENTS.md), or changes or reverses an ADR on `main`, write an

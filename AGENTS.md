@@ -6,8 +6,6 @@ Rules for AI coding agents working on Askbar (Claude Code, Codex, Cursor, Copilo
 
 This file, [SECURITY.md](SECURITY.md) and [docs/architecture.md](docs/architecture.md) describe Askbar v1. Check each [ADR](docs/adr/README.md)'s status. Follow these rules for new work, and do not change a boundary without the owner's approval.
 
-Items marked **(proposed)** await a decision; see [docs/plan-contributor-guidelines.md](docs/plan-contributor-guidelines.md).
-
 ## Precedence
 
 When rules conflict, the higher one wins:
@@ -76,7 +74,7 @@ Before you finish: `npm test` and `scripts/smoke.sh` pass, and clippy is clean i
 ## Branches and commits
 
 - Branch: `<type>/<short-kebab-description>`, type one of `feat fix docs refactor test chore ci`.
-- Commit **(proposed)**: [Conventional Commits](https://www.conventionalcommits.org/): `type(scope): subject`. Imperative, lower case, no full stop, 72 characters or fewer. Scope is one of `proto server admin auditor model-gateway alerter client ui compose docs ci deps`.
-- Body **(proposed)**: why, not what. List any deviation from the plan or any test you changed. Breaking change: `!` after the scope and a `BREAKING CHANGE:` footer.
-- Pull request title **(proposed)** is a commit subject. Fill in the PR template.
+- Commit: [Conventional Commits](https://www.conventionalcommits.org/): `type(scope): subject`. Imperative, lower case, no full stop, 72 characters or fewer. Scope is one of `proto server admin auditor model-gateway alerter client ui compose docs ci deps`.
+- Body: why, not what. List any deviation from the plan or any test you changed. Breaking change: `!` after the scope and a `BREAKING CHANGE:` footer.
+- Pull request title is a commit subject. Fill in the PR template.
 - Merging: squash by default. A stepwise series, where each commit stands alone, is rebase-merged; say so in the PR.
