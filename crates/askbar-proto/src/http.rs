@@ -62,6 +62,8 @@ pub fn default_detail(code: ErrorCode) -> &'static str {
         ErrorCode::ModelNotApproved => "That model is not approved. Pick another one.",
         ErrorCode::AuditKeyMissing => "The administrator has not set up the audit key yet.",
         ErrorCode::BackupKeyMissing => "The administrator has not set up the backup key yet, so nothing can be backed up.",
+        ErrorCode::BackupNewerRelease => "This backup was made by a newer release of Askbar. Install that release to restore it.",
+        ErrorCode::NotEmpty => "A backup can only be restored into an empty install.",
         ErrorCode::AuditBacklog => "The server is busy recording and asked for a short wait.",
         ErrorCode::ClientTooOld => "This version of Askbar is too old for the server. Update the app.",
         ErrorCode::ClientVersionMissing => "The request did not say which version of Askbar sent it.",

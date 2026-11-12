@@ -348,6 +348,8 @@ components:
           - model_not_approved
           - audit_key_missing
           - backup_key_missing
+          - backup_newer_release
+          - not_empty
           - audit_backlog
           - client_too_old
           - client_version_missing
