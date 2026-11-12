@@ -1007,6 +1007,50 @@ async function waitIdle(page) {
   });
 
 
+  // ----------------------------------------------- hostile replies (ADR 0016, plan step 5.2)
+  await step('a hostile reply makes no network request and runs no script, and shows only allowlisted markup (every payload)', async () => {
+    const payloads = require('../../../tests/payloads/lib.js');
+    const ctx = await browser.newContext({ viewport: { width: 900, height: 760 } });
+    await ctx.addInitScript({ path: path.join(ROOT, 'tests/mock-tauri.js') });
+    const p = await ctx.newPage();
+    const requests = [];
+    const errors = [];
+    p.on('request', (r) => { if (!r.url().startsWith('file://')) requests.push(r.url()); });
+    p.on('pageerror', (e) => errors.push(e.message));
+    p.on('dialog', (d) => { errors.push('a dialog opened: ' + d.message()); d.dismiss(); });
+    await p.goto('file://' + path.join(ROOT, 'ui/index.html'));
+    await p.waitForFunction(() => window.__calls.some((c) => c[0] === 'list_conversations'));
+    const rules = payloads.ATTRS;
+    const tags = [...payloads.TAGS];
+    const failures = [];
+    for (const c of payloads.cases()) {
+      if (c.input.length > 100000) continue; // the size cases are the renderer's, and are in markdown.test.js
+      await p.evaluate((r) => { window.__nextReply = r; window.__pwned = undefined; }, c.input);
+      await p.press('#input', 'Control+n');
+      await ask(p, 'go');
+      await waitIdle(p);
+      const bad = await p.evaluate(({ rules, tags }) => {
+        const out = [];
+        const body = [...document.querySelectorAll('.msg.assistant .body')].pop();
+        for (const e of body.querySelectorAll('*')) {
+          const name = e.tagName.toLowerCase();
+          if (!tags.includes(name)) out.push('element <' + name + '>');
+          for (const a of e.attributes) {
+            const pattern = (rules[name] || {})[a.name];
+            if (!pattern || !new RegExp(pattern).test(a.value)) out.push('<' + name + ' ' + a.name + '="' + a.value.slice(0, 40) + '">');
+          }
+        }
+        if (window.__pwned !== undefined) out.push('a script ran');
+        return out;
+      }, { rules, tags });
+      if (bad.length) failures.push(c.name + ': ' + bad.join(', '));
+    }
+    assert.deepEqual(failures, []);
+    assert.deepEqual(requests, [], 'a request left the page');
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  });
+
   await browser.close();
   console.log(failures ? `\n${failures} step(s) failed` : '\nall UI steps passed');
   process.exit(failures ? 1 : 0);
