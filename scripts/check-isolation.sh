@@ -299,7 +299,7 @@ case "$admin_token" in mgt_*) pass "the admin's token has the admin-server prefi
 # file it has already given away. After a rotation the admin and the server read the new files on restart.
 before=$(docker exec "$ADMIN" sh -c 'cat /admin-token/call/admin-server.token' 2>/dev/null)
 out=$(docker compose -p "$PROJECT" run --rm --no-deps bootstrap 2>/dev/null)
-[ "$out" = "$(printf 'kept admin-server\nkept admin-auditor-append\nkept admin-auditor-read\nkept server-model-gateway\nkept admin-model-gateway\nkept model-gateway-auditor\nkept server-auditor\nkept model-gateway-auditor-read\nkept auditor-alerter\nkept admin-alerter\nkept alerter-auditor')" ] && [ "$(docker exec "$ADMIN" cat /admin-token/call/admin-server.token 2>/dev/null)" = "$before" ] \
+[ "$out" = "$(printf 'kept admin-server\nkept admin-auditor-append\nkept admin-auditor-read\nkept server-model-gateway\nkept admin-model-gateway\nkept model-gateway-auditor\nkept server-auditor\nkept model-gateway-auditor-read\nkept auditor-alerter\nkept admin-alerter\nkept alerter-auditor\nkept admin-auditor-restore')" ] && [ "$(docker exec "$ADMIN" cat /admin-token/call/admin-server.token 2>/dev/null)" = "$before" ] \
   && pass "a second bootstrap run keeps the token" || fail "a second bootstrap run: $out"
 out=$(docker compose -p "$PROJECT" run --rm --no-deps bootstrap rotate admin-server 2>/dev/null)
 printf '%s' "$out" | grep -q '^rotated admin-server$' && printf '%s' "$out" | grep -q '^Restart from the admin: admin, server$' \
@@ -354,6 +354,7 @@ if [ "$(docker inspect -f '{{.State.Running}}' "$AUDITOR" 2>/dev/null)" != true 
   owned "$AUDITOR" /auditor-token/accept/admin-auditor-append.sha256 "10003 444" "the auditor's append hash file (owner, mode)"
   owned "$AUDITOR" /auditor-token/accept/admin-auditor-read.sha256 "10003 444" "the auditor's read hash file (owner, mode)"
   owned "$AUDITOR" /auditor-token/accept/model-gateway-auditor-read.sha256 "10003 444" "the auditor's gateway read hash file (owner, mode)"
+  owned "$AUDITOR" /auditor-token/accept/admin-auditor-restore.sha256 "10003 444" "the auditor's restore hash file (owner, mode)"
   for d in /auditor-token /auditor-token/accept; do owned "$AUDITOR" "$d" "10003 500" "the auditor's $d"; done
   # The API, from a throwaway container on audit-admin with the admin's own tokens: only the right token reaches each route.
   AUD_APPEND=$(docker exec "$ADMIN" cat /admin-token/call/admin-auditor-append.token 2>/dev/null)

@@ -15,7 +15,7 @@ pub struct Link {
 
 /// Only links whose receiver exists: `admin-server` (step 2.1), the auditor's two admin links (2.4), and the
 /// three `model-gateway` links (3.1, ADR 0054), the server's link to the auditor (3.1, second half), and the
-/// alerter's three links (4.1, ADR 0055).
+/// alerter's three links (4.1, ADR 0055) and the auditor's restore link (6.3, ADR 0013).
 pub const LINKS: &[Link] = &[
     Link { name: "admin-server", caller: "admin", receiver: "server", prefix: "mgt_" }, // names-ok: the token prefix already issued
     Link { name: "admin-auditor-append", caller: "admin", receiver: "auditor", prefix: "audapp_" },
@@ -32,6 +32,9 @@ pub const LINKS: &[Link] = &[
     Link { name: "auditor-alerter", caller: "auditor", receiver: "alerter", prefix: "audalr_" },
     Link { name: "admin-alerter", caller: "admin", receiver: "alerter", prefix: "admalr_" },
     Link { name: "alerter-auditor", caller: "alerter", receiver: "auditor", prefix: "alraud_" },
+    // The one way records reach the auditor other than an append (plan step 6.3, ADR 0013, ADR 0010): `POST /restore` and nothing else,
+    // into an empty store. The admin holds this token and uses it only for a restore.
+    Link { name: "admin-auditor-restore", caller: "admin", receiver: "auditor", prefix: "audrs_" },
 ];
 
 /// A service with a credential volume `<name>-token`, and the uid that reads it (ADR 0003).

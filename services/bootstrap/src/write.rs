@@ -301,7 +301,8 @@ mod tests {
                 "model-gateway-auditor-read",
                 "auditor-alerter",
                 "admin-alerter",
-                "alerter-auditor"
+                "alerter-auditor",
+                "admin-auditor-restore"
             ]
         );
         let before = all(&root);
@@ -321,7 +322,8 @@ mod tests {
                     "model-gateway-auditor-read",
                     "auditor-alerter",
                     "admin-alerter",
-                    "alerter-auditor"
+                    "alerter-auditor",
+                    "admin-auditor-restore"
                 ]
             }
         );
