@@ -246,6 +246,14 @@ print("ok" if ok else "bad", conv, len(text))' "$WORK/chat.sse" 2>/dev/null)
   read -r CHAT_OK CONV_ID CHAT_LEN <<<"$CHAT"
   if [ "$CHAT_OK" = "ok" ]; then pass "chat streams meta, deltas and done ($CHAT_LEN characters)"; else fail "chat streams meta, deltas and done"; fi
 
+  # 7b. Three replies at once (plan step 7.2): they all finish, and the time to the first text is printed. A measurement here, with the
+  # mock model's own time in it; the gate, which subtracts it, is `cargo test -p askbar-server --test load`.
+  if LOADOUT=$(python3 -I tests/e2e/load_scenario.py "$URL" --token "$TOKEN" --rounds 4 2>&1); then
+    pass "three replies at once all finish: $LOADOUT"
+  else
+    fail "three replies at once all finish" "$LOADOUT"
+  fi
+
   # 8. History holds the exchange.
   if [ -n "${CONV_ID:-}" ]; then
     api "$SP/conversations/$CONV_ID" >"$WORK/conv.json"
