@@ -1,7 +1,7 @@
-//! How long an acknowledged append takes, measured and printed (ADR 0010 rule 4: a 20 ms 95th percentile target
-//! for the acknowledgment, inside the 200 ms budget). **Not a gate.** Plan step 7.2 makes it one, on the
-//! reference machine; this test only says what it is today, so the number can be watched from now on. It fails
-//! only if an append fails or the acknowledgment is slower than the 1 s a caller waits for it.
+//! How long an acknowledged append takes, measured and printed, and **a gate** (ADR 0010 rule 4: a 20 ms 95th percentile for the
+//! acknowledgment, inside the 200 ms budget; plan step 7.2, D31). It used to fail only above the 1 s a caller waits for it; it now
+//! fails if the 95th percentile is 20 ms or more, for one caller and for four at once. As the load test does, it fails only if a
+//! second measurement, made at once, is over the limit too: one slow run on a busy machine is noise, two are not.
 //!
 //! Run it with `cargo test -p askbar-auditor --test latency -- --nocapture` to see the figures.
 
@@ -68,23 +68,38 @@ async fn measure(url: &str, clients: usize, each: usize) -> Vec<Duration> {
     all
 }
 
+/// The acknowledgment's 95th percentile must stay under this.
+const LIMIT: Duration = Duration::from_millis(20);
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn the_acknowledgment_of_an_append_is_measured_and_printed() {
+async fn the_acknowledgment_of_an_append_stays_under_20_ms_at_the_95th_percentile() {
     let (url, auditor, dir) = start().await;
     // Warm up: the first connections and the first transaction are not what a model call sees.
     measure(&url, 1, 20).await;
     for (label, clients, each) in [("one caller", 1, 400), ("four callers at once", 4, 150)] {
-        let all = measure(&url, clients, each).await;
-        let (p50, p95, p99, max) = (percentile(&all, 50.0), percentile(&all, 95.0), percentile(&all, 99.0), *all.last().unwrap());
-        println!(
-            "acknowledgment of an append, {label}: {} requests, p50 {:.2} ms, p95 {:.2} ms (target 20 ms, not yet a gate), p99 {:.2} ms, max {:.2} ms",
-            all.len(),
-            p50.as_secs_f64() * 1000.0,
-            p95.as_secs_f64() * 1000.0,
-            p99.as_secs_f64() * 1000.0,
-            max.as_secs_f64() * 1000.0
+        let mut over = Vec::new();
+        for attempt in 1..=2 {
+            let all = measure(&url, clients, each).await;
+            let (p50, p95, p99, max) = (percentile(&all, 50.0), percentile(&all, 95.0), percentile(&all, 99.0), *all.last().unwrap());
+            println!(
+                "acknowledgment of an append, {label} (run {attempt}): {} requests, p50 {:.2} ms, p95 {:.2} ms (limit {} ms), p99 {:.2} ms, max {:.2} ms",
+                all.len(),
+                p50.as_secs_f64() * 1000.0,
+                p95.as_secs_f64() * 1000.0,
+                LIMIT.as_millis(),
+                p99.as_secs_f64() * 1000.0,
+                max.as_secs_f64() * 1000.0
+            );
+            if p95 < LIMIT {
+                break;
+            }
+            over.push(p95);
+        }
+        assert!(
+            over.len() < 2,
+            "{label}: the 95th percentile of the acknowledgment was {} ms or more in two runs: {over:?}",
+            LIMIT.as_millis()
         );
-        assert!(p95 < Duration::from_secs(1), "{label}: the 95th percentile is over the 1 s a caller waits");
     }
     assert!(auditor.recorder.backlog().queued == 0, "everything acknowledged is written");
     let _ = std::fs::remove_dir_all(dir);
