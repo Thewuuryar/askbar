@@ -251,13 +251,20 @@ paths:
   /api/server/v1/exports:
     post:
       operationId: createExport
-      summary: Consistent copies of the control database and of every space's file, with everything secret taken out.
-      description: Unencrypted until encrypted exports arrive (ADR 0013, plan phase 6). A tar with `control.db` (provider API keys and pairing-code hashes removed; settings and paired-client records, token hashes only, stay) and `spaces/<space id>.db` for every space (ADR 0009).
+      summary: The server's data, encrypted to the backup public key and streamed.
+      description: >-
+        ADR 0013. Consistent copies (`VACUUM INTO`) of the control database and of every space's file, as a tar with `control.db` and
+        `spaces/<space id>.db` for every space (ADR 0009), encrypted with age to the backup public key in the last snapshot and written
+        to the response as it is made. The export is complete, secrets included (client token hashes, pairing codes), because only the
+        owner's passphrase opens it. The response has no length: a transfer that ends early ends the connection badly, which is how the
+        admin knows it is not whole (it cannot decrypt to check). Work files are on the data volume, one copy at a time, and are
+        removed however the export ends. With no backup key in the snapshot (or one that is not a public key) nothing is exported:
+        503 `backup_key_missing`.
       responses:
         '200':
-          description: A tar of SQLite files.
+          description: An age file that opens to a tar of SQLite files.
           content:
-            application/x-tar:
+            application/octet-stream:
               schema:
                 type: string
                 format: binary
@@ -265,6 +272,12 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '500':
           $ref: '#/components/responses/Internal'
+        '503':
+          description: There is no backup key (`backup_key_missing`), or the server has no settings yet (`not_configured`).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
 components:
   securitySchemes:
     serverToken:

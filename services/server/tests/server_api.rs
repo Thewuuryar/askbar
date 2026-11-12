@@ -398,11 +398,32 @@ async fn clients_and_usage_are_listed_over_the_server_api() {
     }
 }
 
+/// A backup key made quickly (the work factor is low), and what a test needs to open what is encrypted to it.
+fn backup_key() -> (askbar_service::backup::Key, age::x25519::Identity) {
+    let key = askbar_service::backup::generate_with("a backup passphrase of its own", 10).unwrap();
+    let identity = askbar_service::backup::unlock(&key.protected, "a backup passphrase of its own").unwrap();
+    (key, identity)
+}
+
+impl S {
+    /// Pushes the test snapshot with `recipient` as the backup public key (or none).
+    async fn push_with_key(&self, llm: &str, recipient: Option<&str>) {
+        let mut snap = snapshot();
+        snap.providers[0].base_url = llm.into();
+        snap.backup_public_key = recipient.map(String::from);
+        assert_eq!(self.put(&serde_json::to_value(snap).unwrap(), Some(TOKEN)).await.0, 200);
+    }
+
+    async fn export(&self) -> reqwest::Response {
+        self.t.http.post(format!("{}/api/server/v1/exports", self.t.url)).bearer_auth(TOKEN).send().await.unwrap()
+    }
+}
+
 #[tokio::test]
-async fn the_backup_has_the_data_and_none_of_the_secrets() {
+async fn the_export_is_encrypted_to_the_backup_key_streamed_and_holds_all_the_data_secrets_included() {
     let s = start_with_state().await;
-    let llm = "http://x/v1";
-    s.push_provider(llm).await;
+    let (key, identity) = backup_key();
+    s.push_with_key("http://x/v1", Some(&key.recipient)).await;
     let code_hash = "ab".repeat(32); // the snapshot lists this pair-code hash
     let space_id = {
         let user: String = s.state.db.lock().unwrap().conn().query_row("SELECT id FROM users", [], |r| r.get(0)).unwrap();
@@ -410,12 +431,12 @@ async fn the_backup_has_the_data_and_none_of_the_secrets() {
         let c = space.lock().create_conversation(&user, "kept conversation").unwrap();
         space.lock().add_message(&user, &c, "user", "question one").unwrap();
         let db = s.state.db.lock().unwrap();
-        let code = askbar_server::testing::add_pair_code(&db, &user, "pending");
         db.conn().execute("INSERT INTO redeemed_codes (hash, client_id, redeemed_at) VALUES ('used-hash-123', NULL, 0)", []).unwrap();
-        let _ = code;
-        // A paired client asks for a code to pair another app of its user (step 1.9).
         db.conn()
-            .execute("INSERT INTO clients (id, user_id, name, hash, created_at) VALUES ('C1', ?1, 'laptop', 'token-hash', 0)", [&user])
+            .execute(
+                "INSERT INTO clients (id, user_id, name, hash, created_at) VALUES ('C1', ?1, 'laptop', 'token-hash-marker', 0)",
+                [&user],
+            )
             .unwrap();
         let auth = askbar_server::auth::ClientAuth { user_id: user.clone(), client_id: "C1".into() };
         askbar_server::auth::new_client_pair_code(&db, &auth, "phone").unwrap().expect("a code");
@@ -424,13 +445,31 @@ async fn the_backup_has_the_data_and_none_of_the_secrets() {
     let client_code_hash: String =
         s.state.db.lock().unwrap().conn().query_row("SELECT hash FROM client_pair_codes", [], |r| r.get(0)).unwrap();
 
-    let r = s.t.http.post(format!("{}/api/server/v1/exports", s.t.url)).bearer_auth(TOKEN).send().await.unwrap();
+    let r = s.export().await;
     assert_eq!(r.status(), 200);
-    assert_eq!(r.headers()["content-type"], "application/x-tar");
+    assert_eq!(r.headers()["content-type"], "application/octet-stream");
     assert!(r.headers()["content-disposition"].to_str().unwrap().contains("askbar-server-backup-"));
-    let bytes = r.bytes().await.unwrap();
-    // The control database and one file per space (ADR 0009 mechanism 4).
-    let files = askbar_service::tar::read(&bytes).expect("a tar");
+    assert!(r.headers().get("content-length").is_none(), "streamed: the length is not known until it ends");
+    let sealed = r.bytes().await.unwrap();
+
+    // Ciphertext only: none of the data, and none of the things that used to be taken out, is in it.
+    let has = |hay: &[u8], needle: &[u8]| hay.windows(needle.len()).any(|w| w == needle);
+    for marker in [
+        &b"SQLite format 3"[..],
+        b"kept conversation",
+        b"question one",
+        b"used-hash-123",
+        b"token-hash-marker",
+        code_hash.as_bytes(),
+        client_code_hash.as_bytes(),
+    ] {
+        assert!(!has(&sealed, marker), "{} is in the clear", String::from_utf8_lossy(marker));
+    }
+    assert!(sealed.starts_with(b"age-encryption.org/v1\n"), "an age file, so the age tool opens it");
+
+    // With the key it opens to the tar of the control database and one file per space (ADR 0009 mechanism 4).
+    let tar = askbar_service::backup::decrypt(&identity, &sealed).expect("the key opens it");
+    let files = askbar_service::tar::read(&tar).expect("a tar");
     let mut expected = vec!["control.db".to_string()];
     expected.extend(s.state.db.lock().unwrap().space_ids().unwrap().iter().map(|id| format!("spaces/{id}.db")));
     assert_eq!(files.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>(), expected);
@@ -438,38 +477,106 @@ async fn the_backup_has_the_data_and_none_of_the_secrets() {
         assert_eq!(&data[..15], b"SQLite format 3", "{name}");
     }
     let space_index = files.iter().position(|(n, _)| n == &format!("spaces/{space_id}.db")).expect("the user's space is in it");
-    let has = |needle: &[u8]| bytes.windows(needle.len()).any(|w| w == needle);
-    assert!(!has(KEY.as_bytes()), "no provider key");
-    assert!(!has(code_hash.as_bytes()), "the snapshot's pair-code hashes are gone");
-    assert!(!has(b"used-hash-123"), "so are redeemed-code hashes");
-    assert!(!has(client_code_hash.as_bytes()), "and the hashes of codes a client asked for");
 
     let dir = std::env::temp_dir().join(format!("server-token-backup-{}", ulid::Ulid::new()));
     std::fs::create_dir_all(&dir).unwrap();
-    let file = dir.join("b.db");
-    std::fs::write(&file, &files[0].1).unwrap();
-    let c = rusqlite::Connection::open(&file).unwrap();
+    std::fs::write(dir.join("b.db"), &files[0].1).unwrap();
+    let c = rusqlite::Connection::open(dir.join("b.db")).unwrap();
     let one = |sql: &str| c.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap();
-    assert_eq!(one("SELECT COUNT(*) FROM providers WHERE api_key_enc IS NOT NULL"), 0);
-    assert_eq!(one("SELECT COUNT(*) FROM redeemed_codes"), 0);
-    assert_eq!(one("SELECT COUNT(*) FROM client_pair_codes"), 0);
+    // Everything a restore needs is there, since only the owner's passphrase opens it.
+    assert_eq!(one("SELECT COUNT(*) FROM redeemed_codes WHERE hash = 'used-hash-123'"), 1);
+    assert_eq!(one("SELECT COUNT(*) FROM client_pair_codes"), 1);
+    assert_eq!(one("SELECT COUNT(*) FROM clients WHERE hash = 'token-hash-marker'"), 1);
     std::fs::write(dir.join("s.db"), &files[space_index].1).unwrap();
     let space_db = rusqlite::Connection::open(dir.join("s.db")).unwrap();
     let kept: i64 = space_db.query_row("SELECT COUNT(*) FROM conversations WHERE title = 'kept conversation'", [], |r| r.get(0)).unwrap();
     assert_eq!(kept, 1, "the space's history is in its own file");
     let doc: String = c.query_row("SELECT body FROM config_snapshot", [], |r| r.get(0)).unwrap();
     let doc: serde_json::Value = serde_json::from_str(&doc).unwrap();
-    assert_eq!(doc["pair_codes"], json!([]));
-    assert_eq!(doc["providers"].as_array().unwrap().len(), 2, "the rest of the snapshot stays");
+    assert_eq!(doc["providers"].as_array().unwrap().len(), 2, "the snapshot is in it, whole");
+    assert_eq!(doc["backup_public_key"], key.recipient.as_str());
     let _ = std::fs::remove_dir_all(&dir);
     // The live database is untouched by taking a backup.
-    assert_eq!(
-        askbar_server::snapshot::current(&s.state.db.lock().unwrap()).unwrap().unwrap().pair_codes.len(),
-        2,
-        "both listed codes are still there"
-    );
-    let live: i64 = s.state.db.lock().unwrap().conn().query_row("SELECT COUNT(*) FROM client_pair_codes", [], |r| r.get(0)).unwrap();
-    assert_eq!(live, 1, "and so is the client's code");
+    assert_eq!(askbar_server::snapshot::current(&s.state.db.lock().unwrap()).unwrap().unwrap().pair_codes.len(), 1);
+}
+
+#[tokio::test]
+async fn with_no_backup_key_nothing_is_exported_and_the_answer_says_why() {
+    let s = start_with_state().await;
+    // Before any snapshot the server is not configured at all; after one with no key, it is the key that is missing.
+    s.push_with_key("http://x/v1", None).await;
+    for _ in 0..2 {
+        let r = s.export().await;
+        assert_eq!(r.status(), 503);
+        let body: serde_json::Value = r.json().await.unwrap();
+        assert_eq!(body["error"], "backup_key_missing", "{body}");
+    }
+    // A value that is not a public key is no key.
+    for bad in ["", "not a key", "AGE-SECRET-KEY-1ABC", "age1short"] {
+        s.push_with_key("http://x/v1", Some(bad)).await;
+        let r = s.export().await;
+        assert_eq!(r.status(), 503, "{bad:?}");
+        assert_eq!(r.json::<serde_json::Value>().await.unwrap()["error"], "backup_key_missing");
+    }
+    // And it needs the admin's token as before.
+    let r = s.t.http.post(format!("{}/api/server/v1/exports", s.t.url)).send().await.unwrap();
+    assert_eq!(r.status(), 401);
+}
+
+#[tokio::test]
+async fn an_export_that_ends_or_is_abandoned_leaves_no_work_file_behind() {
+    let s = start_with_state().await;
+    let (key, _) = backup_key();
+    s.push_with_key("http://x/v1", Some(&key.recipient)).await;
+    let leftovers = || -> usize {
+        std::fs::read_dir(std::env::temp_dir())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|e| e.file_name().to_string_lossy().starts_with(".export-"))
+            .count()
+    };
+    let before = leftovers();
+    // Three whole ones.
+    for _ in 0..3 {
+        let r = s.export().await;
+        assert_eq!(r.status(), 200);
+        r.bytes().await.unwrap();
+    }
+    // And one the client drops after its first bytes: the export stops writing and cleans up.
+    let mut r = s.export().await;
+    assert!(r.chunk().await.unwrap().is_some());
+    drop(r);
+    for _ in 0..60 {
+        if leftovers() <= before {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(leftovers() <= before, "work files were left behind");
+}
+
+#[tokio::test]
+async fn a_big_space_is_streamed_without_the_response_waiting_for_the_whole_export() {
+    let s = start_with_state().await;
+    let (key, identity) = backup_key();
+    s.push_with_key("http://x/v1", Some(&key.recipient)).await;
+    let user: String = s.state.db.lock().unwrap().conn().query_row("SELECT id FROM users", [], |r| r.get(0)).unwrap();
+    let space = askbar_server::testing::personal_space(&s.state, &user);
+    let c = space.lock().create_conversation(&user, "big").unwrap();
+    let text = "a long message that repeats ".repeat(400);
+    for _ in 0..300 {
+        space.lock().add_message(&user, &c, "user", &text).unwrap();
+    }
+    let mut r = s.export().await;
+    let mut chunks = 0;
+    let mut sealed = Vec::new();
+    while let Some(chunk) = r.chunk().await.unwrap() {
+        chunks += 1;
+        sealed.extend_from_slice(&chunk);
+    }
+    assert!(chunks > 4, "it came in pieces, not in one: {chunks}");
+    let files = askbar_service::tar::read(&askbar_service::backup::decrypt(&identity, &sealed).unwrap()).unwrap();
+    assert!(files.iter().any(|(n, d)| n.starts_with("spaces/") && d.len() > 1_000_000), "the large space is in it");
 }
 
 #[tokio::test]
@@ -494,32 +601,6 @@ async fn users_are_listed_and_the_server_holds_no_provider_key_nor_a_route_to_se
     let (st, body) = s.call(M::GET, "/api/server/v1/providers/health", None).await;
     assert_eq!(st, 200);
     assert!(serde_json::from_str::<serde_json::Value>(&body).unwrap().get("missing_key").is_none(), "{body}");
-}
-
-#[tokio::test]
-async fn taking_a_backup_leaves_no_temporary_file_behind() {
-    let s = start_with_state().await;
-    let leftovers = || -> usize {
-        std::fs::read_dir(std::env::temp_dir())
-            .unwrap()
-            .filter_map(Result::ok)
-            .filter(|e| e.file_name().to_string_lossy().starts_with("askbar-backup-"))
-            .count()
-    };
-    let before = leftovers();
-    for _ in 0..3 {
-        let r = s.t.http.post(format!("{}/api/server/v1/exports", s.t.url)).bearer_auth(TOKEN).send().await.unwrap();
-        assert_eq!(r.status(), 200);
-        r.bytes().await.unwrap();
-    }
-    // The file is removed when the download ends; give the stream a moment to drop.
-    for _ in 0..40 {
-        if leftovers() <= before {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    }
-    assert!(leftovers() <= before, "backup files were left in the temp directory");
 }
 
 #[tokio::test]
