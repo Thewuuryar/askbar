@@ -1323,14 +1323,23 @@ paths:
   /api/admin/v1/backup:
     get:
       operationId: getBackup
-      summary: One .tar with the server's files (server/control.db, server/spaces/<space id>.db) and admin.db, consistent and without secrets.
-      description: Provider API keys, pairing-code hashes, the Cloudflare token, the admin password hash and the API key hash are left out.
+      summary: "The encrypted backup: one .tar bundle of exports encrypted to the backup public key."
+      description: >-
+        ADR 0013. The bundle holds `manifest.json` (in the clear: the format, the release that made it, the key's fingerprint, and each
+        export's name, SHA-256 and size), `backup-key.age` (the private key protected by the backup passphrase), then the exports, the
+        admin's own first: `admin.age` (`admin.db`, `admin-secrets/`, `caddy-secrets/`) and `server.age` (`control.db`, `spaces/<id>.db`).
+        Each export is an age file made to the backup public key, so the admin that sends it cannot read it, and it is complete, secrets
+        included. With the file and the passphrase alone, the `age` tool opens it. Each export is staged in a work file on the admin's
+        data volume as it arrives and the bundle is streamed from them with a known length; the work files are removed however the
+        download ends. 503 `backup_key_missing` if no backup key is set (the Backup page, or the first-run setup), also when the
+        server has not been given it yet; 502 if the server is offline or its export is cut short, and then nothing is sent. Recorded
+        (the key's fingerprint and the parts), like every backup.
       security:
         - adminSession: []
         - adminApiKey: []
       responses:
         '200':
-          description: A tar file.
+          description: The bundle, a tar file.
           content:
             application/x-tar:
               schema:
@@ -1340,6 +1349,12 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '502':
           $ref: '#/components/responses/ServerUnavailable'
+        '503':
+          description: No backup key is set (`backup_key_missing`).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
   /api/admin/v1/audit/traces:
     get:
       operationId: listTraces

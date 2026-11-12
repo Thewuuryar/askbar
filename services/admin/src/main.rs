@@ -56,6 +56,7 @@ async fn main() {
     let secrets =
         askbar_admin::secrets::AdminSecrets::load_or_create(&askbar_admin::server_link::secrets_dir()).unwrap_or_else(|e| die(e, 1));
     let state = askbar_admin::AdminState::build(db, Some(link.clone()), secrets);
+    *state.admin_secrets_dir.lock().unwrap() = Some(askbar_admin::server_link::secrets_dir());
     link.set_notifier(state.notifier.clone());
     let caddy = askbar_admin::caddy::CaddyLink::from_env();
     if let Err(e) = caddy.share_socket_dir() {

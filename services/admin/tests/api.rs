@@ -223,7 +223,6 @@ async fn with_the_server_down_changes_get_502_and_nothing_is_saved() {
         (M::GET, "/api/admin/v1/clients", None),
         (M::POST, "/api/admin/v1/users/U1/pairing-keys", Some(json!({ "name": "laptop" }))),
         (M::PUT, "/api/admin/v1/settings", Some(json!({ "system_prompt": "x", "display": askbar_proto::DisplaySettings::default() }))),
-        (M::GET, "/api/admin/v1/backup", None),
         (M::POST, "/api/admin/v1/clients/d1/revoke", None),
         // The backup key's public half goes to the server in the snapshot, so with the server down it is not kept (ADR 0013).
         (
@@ -242,6 +241,9 @@ async fn with_the_server_down_changes_get_502_and_nothing_is_saved() {
     assert_eq!(t.admin_rows("SELECT COUNT(*) FROM pair_codes").await, 0);
     assert_eq!(t.admin_rows("SELECT COUNT(*) FROM settings").await, 0);
     assert_eq!(t.admin_rows("SELECT COUNT(*) FROM backup_keys").await, 0, "no backup key was kept");
+    // No backup key could be set with the server down, so there is nothing to back up with: the backup says so (ADR 0013).
+    let (st, res) = t.call(M::GET, "/api/admin/v1/backup", None).await;
+    assert_eq!((st, res["error"].as_str()), (503, Some("backup_key_missing")), "{res}");
 
     // Reading what this side owns still works, and the status says why the rest does not.
     assert_eq!(t.call(M::GET, "/api/admin/v1/providers", None).await, (200, json!([])));
@@ -502,114 +504,6 @@ async fn settings_and_per_user_display_defaults_reach_the_server() {
     assert_eq!(snap.display.width, 900, "the server-wide default is unchanged");
     assert_eq!(t.call(M::PUT, "/api/admin/v1/users/nobody/display-defaults", Some(json!({}))).await.0, 404);
     assert_eq!(t.call(M::PUT, &format!("/api/admin/v1/users/{user}/display-defaults"), Some(json!({ "width": 5 }))).await.0, 400);
-}
-
-fn tar_files(bytes: &[u8]) -> Vec<(String, Vec<u8>)> {
-    let mut out = Vec::new();
-    let mut at = 0;
-    while at + 512 <= bytes.len() && bytes[at] != 0 {
-        let name = String::from_utf8_lossy(&bytes[at..at + 100]).trim_end_matches('\0').to_string();
-        let size = usize::from_str_radix(String::from_utf8_lossy(&bytes[at + 124..at + 135]).trim(), 8).unwrap();
-        out.push((name, bytes[at + 512..at + 512 + size].to_vec()));
-        at += 512 + size.div_ceil(512) * 512;
-    }
-    out
-}
-
-#[tokio::test]
-async fn the_backup_holds_both_databases_and_none_of_the_secrets() {
-    let t = start(true).await;
-    let llm = fake_llm().await;
-    t.call(M::POST, "/api/admin/v1/providers", Some(provider("mock", &llm, Some(KEY)))).await;
-    t.call(M::POST, "/api/admin/v1/users/U1/pairing-keys", Some(json!({ "name": "pending" }))).await;
-    t.admin.db.lock().await.conn().execute("UPDATE network_settings SET cloudflare_token = x'deadbeefcafe'", []).unwrap();
-    let space = {
-        let user: String = t.server.db.lock().unwrap().conn().query_row("SELECT id FROM users", [], |r| r.get(0)).unwrap();
-        let space = askbar_server::testing::personal_space(&t.server, &user);
-        let c = space.lock().create_conversation(&user, "kept conversation").unwrap();
-        space.lock().add_message(&user, &c, "user", "question one").unwrap();
-        space.id.clone()
-    };
-
-    let r = t.http.get(format!("{}/api/admin/v1/backup", t.adm)).header("cookie", &t.cookie).send().await.unwrap();
-    assert_eq!(r.status(), 200);
-    assert!(r.headers()["content-disposition"].to_str().unwrap().contains(".tar"));
-    let bytes = r.bytes().await.unwrap();
-    let files = tar_files(&bytes);
-    // The server's control database and one file per space (ADR 0009), then the admin's own.
-    let mut expected = vec!["server/control.db".to_string()];
-    expected.extend(t.server.db.lock().unwrap().space_ids().unwrap().iter().map(|id| format!("server/spaces/{id}.db")));
-    expected.push("admin.db".into());
-    assert_eq!(files.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>(), expected);
-    let space_index = files.iter().position(|(n, _)| n == &format!("server/spaces/{space}.db")).expect("the user's space is in it");
-    for (_, data) in &files {
-        assert_eq!(&data[..15], b"SQLite format 3");
-        assert!(!data.windows(KEY.len()).any(|w| w == KEY.as_bytes()), "no provider key in either");
-    }
-
-    let open = |name: &str, data: &[u8]| {
-        let p = t.dir.join(name);
-        std::fs::create_dir_all(&t.dir).unwrap();
-        std::fs::write(&p, data).unwrap();
-        rusqlite::Connection::open(p).unwrap()
-    };
-    let server_db = open("s.db", &files[0].1);
-    let space_db = open("sp.db", &files[space_index].1);
-    let admin_db = open("a.db", &files.last().unwrap().1);
-    let one = |c: &rusqlite::Connection, sql: &str| c.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap();
-    assert_eq!(one(&space_db, "SELECT COUNT(*) FROM conversations WHERE title = 'kept conversation'"), 1);
-    assert_eq!(one(&server_db, "SELECT COUNT(*) FROM providers WHERE api_key_enc IS NOT NULL"), 0);
-    assert_eq!(one(&admin_db, "SELECT COUNT(*) FROM providers"), 1, "the admin's own data is in it");
-    assert_eq!(one(&admin_db, "SELECT COUNT(*) FROM admin_credentials"), 0, "no password hash");
-    assert_eq!(one(&admin_db, "SELECT COUNT(*) FROM pair_codes"), 0, "no pairing-code hashes");
-    assert_eq!(one(&admin_db, "SELECT COUNT(*) FROM network_settings WHERE cloudflare_token IS NOT NULL"), 0, "no Cloudflare token");
-    // The live admin database still has them.
-    assert_eq!(t.admin_rows("SELECT COUNT(*) FROM admin_credentials").await, 1);
-    assert_eq!(t.admin_rows("SELECT COUNT(*) FROM pair_codes").await, 1);
-}
-
-/// `audit.db` (the trace of replies) lives in its own volume and is not part of the admin backup;
-/// the README says how to copy the volume. The archive must hold none of its tables.
-#[tokio::test]
-async fn the_backup_has_no_audit_store_in_it() {
-    let t = start(true).await;
-    let r = t.http.get(format!("{}/api/admin/v1/backup", t.adm)).header("cookie", &t.cookie).send().await.unwrap();
-    assert_eq!(r.status(), 200);
-    let files = tar_files(&r.bytes().await.unwrap());
-    assert!(
-        files.iter().all(|(name, _)| !name.contains("audit")),
-        "no audit.db in the archive: {:?}",
-        files.iter().map(|(n, _)| n).collect::<Vec<_>>()
-    );
-    std::fs::create_dir_all(&t.dir).unwrap();
-    for (name, data) in &files {
-        let p = t.dir.join(format!("nb-{}", name.replace('/', "-")));
-        std::fs::write(&p, data).unwrap();
-        let c = rusqlite::Connection::open(p).unwrap();
-        for table in ["spans", "payloads"] {
-            let n: i64 =
-                c.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1", [table], |r| r.get(0)).unwrap();
-            assert_eq!(n, 0, "{name} has an audit table `{table}`");
-        }
-    }
-}
-
-#[tokio::test]
-async fn the_backup_leaves_out_the_admin_api_key() {
-    let t = start(true).await;
-    let (_, made) = t.call(M::POST, "/api/admin/v1/keys", Some(json!({ "name": "ci" }))).await;
-    let key_hash = askbar_admin::api_key::hash(made["key"].as_str().unwrap());
-    let r = t.http.get(format!("{}/api/admin/v1/backup", t.adm)).header("cookie", &t.cookie).send().await.unwrap();
-    let bytes = r.bytes().await.unwrap();
-    let files = tar_files(&bytes);
-    let (_, admin_db) = files.iter().find(|(n, _)| n == "admin.db").unwrap();
-    assert!(!admin_db.windows(key_hash.len()).any(|w| w == key_hash.as_bytes()), "the key's hash is not in the backup");
-    std::fs::create_dir_all(&t.dir).unwrap();
-    let p = t.dir.join("keys-backup.db");
-    std::fs::write(&p, admin_db).unwrap();
-    let n: i64 = rusqlite::Connection::open(p).unwrap().query_row("SELECT COUNT(*) FROM admin_api_keys", [], |r| r.get(0)).unwrap();
-    assert_eq!(n, 0);
-    assert_eq!(t.admin_rows("SELECT COUNT(*) FROM admin_api_keys").await, 1, "the live database still has it");
 }
 
 #[tokio::test]

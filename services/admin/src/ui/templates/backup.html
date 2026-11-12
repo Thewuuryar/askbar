@@ -3,8 +3,8 @@
 {% block hint %}A manual backup of the server's data and this admin's settings.{% endblock %}
 {% block content %}
     <div class="panel">
-      <p>Download a backup of the server's data (settings, paired clients and every space's conversations) and this admin's own settings, as one <code>.tar</code> file: <code>server/control.db</code>, one file per space in <code>server/spaces/</code>, and <code>admin.db</code>.</p>
-      <p class="hint">Provider API keys, the Cloudflare token, the admin password and pairing codes are left out. After restoring, enter the keys again on the Providers page. The server's master key is not in this file: back up its <code>askbar-secrets</code> volume separately.</p>
+      <p>Download an <strong>encrypted</strong> backup: one <code>.tar</code> file with the server's data (settings, paired clients and every space's conversations) and this admin's own (its database, its secret keys and the install's certificate). Each part is encrypted so that only your backup passphrase opens it: this admin cannot read it, and it holds everything one restore needs, secrets included.</p>
+      <p class="hint">The file holds <code>manifest.json</code> (which release made it and what is in it), <code>backup-key.age</code> (the private key, protected by your passphrase) and the encrypted parts. With the file and the passphrase, the <code>age</code> tool opens it; the guide says how. The audit store is not in it: copy the auditor's volume separately (the guide says how). Without a backup passphrase set, nothing can be backed up.</p>
       <p><a class="button" id="backup-link" href="/api/admin/v1/backup" download>Download backup</a></p>
     </div>
     <form id="backup-key-form" class="panel">

@@ -156,10 +156,19 @@ async fn the_backup_download_is_recorded_and_other_reads_are_not() {
     assert_eq!(get("/api/admin/v1/providers").await, 200);
     assert_eq!(get("/api/admin/v1/settings").await, 200);
     assert!(actions(&t).is_empty());
+    // A backup needs a backup key (ADR 0013): without one it is refused (503, which the record calls failed), and that is on record too.
+    assert_eq!(get("/api/admin/v1/backup").await, 503);
+    let pass = "a backup passphrase of its own 1";
+    assert_eq!(t.call(M::PUT, "/api/admin/v1/setup/backup-key", json!({ "passphrase": pass, "confirm": pass })).await.0, 200);
+    let before = actions(&t).len();
     assert_eq!(get("/api/admin/v1/backup").await, 200);
     let rows = actions(&t);
     assert_eq!(
-        rows.iter().map(|r| (r["category"].as_str().unwrap(), r["outcome"].as_str().unwrap())).collect::<Vec<_>>(),
+        rows[..2].iter().map(|r| (r["category"].as_str().unwrap(), r["outcome"].as_str().unwrap())).collect::<Vec<_>>(),
+        [("backup", "requested"), ("backup", "failed")]
+    );
+    assert_eq!(
+        rows[before..].iter().map(|r| (r["category"].as_str().unwrap(), r["outcome"].as_str().unwrap())).collect::<Vec<_>>(),
         [("backup", "requested"), ("backup", "done")]
     );
 }

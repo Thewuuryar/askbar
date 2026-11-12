@@ -100,37 +100,6 @@ fn write_export<W: Write>(state: &AppState, dir: &Path, recipient: &str, out: W)
     Ok(())
 }
 
-/// A writer that sends what it is given to the response, in chunks. When the client has gone, writing fails, so the export stops.
-struct ChunkWriter {
-    tx: tokio::sync::mpsc::Sender<Result<axum::body::Bytes, std::io::Error>>,
-    buf: Vec<u8>,
-}
-
-const CHUNK: usize = 64 * 1024;
-
-impl ChunkWriter {
-    fn send(&mut self) -> std::io::Result<()> {
-        if self.buf.is_empty() {
-            return Ok(());
-        }
-        let chunk = axum::body::Bytes::from(std::mem::take(&mut self.buf));
-        self.tx.blocking_send(Ok(chunk)).map_err(|_| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "the client went away"))
-    }
-}
-
-impl Write for ChunkWriter {
-    fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
-        self.buf.extend_from_slice(data);
-        if self.buf.len() >= CHUNK {
-            self.send()?;
-        }
-        Ok(data.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        self.send()
-    }
-}
-
 /// The backup public key the admin gave in the snapshot, if there is one that is a key.
 fn backup_recipient(state: &AppState) -> Option<String> {
     let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
@@ -138,30 +107,28 @@ fn backup_recipient(state: &AppState) -> Option<String> {
 }
 
 pub async fn response(state: Arc<AppState>) -> Result<axum::response::Response, ApiError> {
-    use axum::{body::Body, http::header};
+    use axum::http::header;
     let recipient = backup_recipient(&state).ok_or_else(|| ApiError::code(ErrorCode::BackupKeyMissing))?;
     let parent = state.spaces.scratch_dir().unwrap_or_else(std::env::temp_dir);
     clear_stale(&parent);
     let dir = parent.join(format!("{PREFIX}{}", crate::ids::new_id()));
     let guard = TempDir(dir.clone());
-    let (tx, rx) = tokio::sync::mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(4);
+    let (mut writer, body) = askbar_service::stream::body();
     let st = state.clone();
     tokio::task::spawn_blocking(move || {
         let _guard = guard; // the work directory goes when this ends, a failure or a vanished client included
-        let mut writer = ChunkWriter { tx: tx.clone(), buf: Vec::new() };
         let done = write_export(&st, &dir, &recipient, &mut writer).and_then(|_| writer.flush().map_err(Into::into));
         if let Err(e) = done {
             tracing::warn!("a backup export did not finish: {e}");
             // An error in the body ends the connection badly: the admin sees an export that is not whole.
-            let _ = tx.blocking_send(Err(std::io::Error::other("the export did not finish")));
+            writer.fail();
         }
     });
-    let stream = futures_util::stream::unfold(rx, |mut rx| async move { rx.recv().await.map(|item| (item, rx)) });
     let filename = format!("askbar-server-backup-{}.tar.age", stamp(crate::auth::now()));
     axum::response::Response::builder()
         .header(header::CONTENT_TYPE, "application/octet-stream")
         .header(header::CONTENT_DISPOSITION, format!("attachment; filename=\"{filename}\""))
-        .body(Body::from_stream(stream))
+        .body(body)
         .map_err(internal_error)
 }
 

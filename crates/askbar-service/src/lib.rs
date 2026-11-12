@@ -25,6 +25,7 @@ pub mod periods;
 pub mod restart;
 pub mod restart_loop;
 pub mod status;
+pub mod stream;
 pub mod tar;
 
 /// The common internal routes, after a service's own `/api/{name}/v1` prefix.
