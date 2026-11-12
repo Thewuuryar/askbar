@@ -43,6 +43,7 @@ async function waitForPort(port) {
   };
   fs.mkdirSync(dirs.run, { recursive: true });
   fs.mkdirSync(path.join(data, 'audit'), { recursive: true });
+  fs.mkdirSync(path.join(data, 'alerter-data'), { recursive: true });
   // The tokens come from bootstrap, as in the stack (ADR 0049); here its volumes are plain directories.
   const hashFile = path.join(dirs.creds, 'server-token', 'accept', 'admin-server.sha256');
   const bootstrapBin = path.join(ROOT, 'target/debug/askbar-bootstrap');
@@ -53,6 +54,10 @@ async function waitForPort(port) {
   if (!fs.existsSync(gatewayBin)) execFileSync('cargo', ['build', '-q', '-p', 'askbar-model-gateway'], { cwd: ROOT, stdio: 'inherit' });
   const gatewayAdminPort = await freePort();
   const [gatewayServerPort, auditPort] = [await freePort(), await freePort()];
+  // The alerter delivers alerts (ADR 0055), here to a stand-in ntfy server.
+  const alerterBin = path.join(ROOT, 'target/debug/askbar-alerter');
+  if (!fs.existsSync(alerterBin)) execFileSync('cargo', ['build', '-q', '-p', 'askbar-alerter'], { cwd: ROOT, stdio: 'inherit' });
+  const [alerterAuditorPort, alerterAdminPort, ntfyPort] = [await freePort(), await freePort(), await freePort()];
   const auditorBin = path.join(ROOT, 'target/debug/askbar-auditor');
   if (!fs.existsSync(auditorBin)) execFileSync('cargo', ['build', '-q', '-p', 'askbar-auditor'], { cwd: ROOT, stdio: 'inherit' });
   const sock = path.join(dirs.run, 'admin.sock');
@@ -74,6 +79,12 @@ async function waitForPort(port) {
     ASKBAR_AUDIT_API_ADDR: '127.0.0.1:' + auditPort, ASKBAR_AUDIT_DIR: path.join(data, 'audit'),
     ASKBAR_AUDITOR_TOKEN_DIR: path.join(dirs.creds, 'auditor-token'),
   });
+  run('python3', ['-u', path.join(ROOT, 'tests/e2e/ntfy_sink.py'), String(ntfyPort)], {});
+  run(alerterBin, [], {
+    ASKBAR_ALERTER_AUDITOR_ADDR: '127.0.0.1:' + alerterAuditorPort, ASKBAR_ALERTER_ADMIN_ADDR: '127.0.0.1:' + alerterAdminPort,
+    ASKBAR_ALERTER_TOKEN_DIR: path.join(dirs.creds, 'alerter-token'), ASKBAR_ALERTER_DATA_DIR: path.join(data, 'alerter-data'),
+    ASKBAR_AUDIT_API_URL: 'http://127.0.0.1:' + auditPort,
+  });
   run(gatewayBin, [], {
     ASKBAR_GATEWAY_SERVER_ADDR: '127.0.0.1:' + gatewayServerPort, ASKBAR_GATEWAY_ADMIN_ADDR: '127.0.0.1:' + gatewayAdminPort,
     ASKBAR_GATEWAY_TOKEN_DIR: path.join(dirs.creds, 'model-gateway-token'), ASKBAR_AUDIT_API_URL: 'http://127.0.0.1:' + auditPort,
@@ -82,6 +93,7 @@ async function waitForPort(port) {
     ASKBAR_ADMIN_SOCKET: sock, ASKBAR_ADMIN_DATA_DIR: dirs.adminData, ASKBAR_ADMIN_SECRETS_DIR: dirs.adminSecrets,
     ASKBAR_ADMIN_TOKEN_DIR: path.join(dirs.creds, 'admin-token'), ASKBAR_SERVER_API_URL: 'http://127.0.0.1:' + serverApiPort,
     ASKBAR_GATEWAY_URL: 'http://127.0.0.1:' + gatewayAdminPort, ASKBAR_AUDIT_API_URL: 'http://127.0.0.1:' + auditPort,
+    ASKBAR_ALERTER_URL: 'http://127.0.0.1:' + alerterAdminPort,
     ASKBAR_PUBLIC_URL: 'http://localhost:' + api,
     ASKBAR_CPA_CONFIG_DIR: path.join(data, 'cpa-config'), ASKBAR_CPA_URL: 'http://127.0.0.1:' + await freePort(),
   });
@@ -375,12 +387,15 @@ async function waitForPort(port) {
     await page.click('.card[data-name="dead"] [data-action="delete"]');
     await page.waitForFunction(() => !document.querySelector('.card[data-name="dead"]'));
   });
-  await step('Services: the five services show whether they answer, and Restart asks first and then acts', async () => {
+  await step('Services: the six services show whether they answer, and Restart asks first and then acts', async () => {
     // No controller (ADR 0005): each state comes from the service. Here the server, the gateway and the admin run;
     // Caddy and CLIProxyAPI do not.
     await openPage('services');
     await page.waitForSelector('#services .card[data-name="cpa"]');
-    assert.deepEqual(await page.$$eval('#services .card', (c) => c.map((x) => x.dataset.name)), ['server', 'model-gateway', 'admin', 'caddy', 'cpa']);
+    assert.deepEqual(await page.$$eval('#services .card', (c) => c.map((x) => x.dataset.name)), ['server', 'model-gateway', 'alerter', 'admin', 'caddy', 'cpa']);
+    // The alerter runs here too (ADR 0055), so it joins the list between the gateway and the admin.
+    assert.match(await page.innerText('#services .card[data-name="alerter"]'), /running/);
+    assert.deepEqual(await page.$$eval('#services .card[data-name="alerter"] button', (b) => b.map((x) => x.dataset.action)), ['restart']);
     assert.match(await page.innerText('#services .card[data-name="server"]'), /running/);
     // The gateway runs here too, and it has a Restart button like the rest.
     assert.match(await page.innerText('#services .card[data-name="model-gateway"]'), /running/);
@@ -553,6 +568,54 @@ async function waitForPort(port) {
     await page.check('#s-kill-aborts');
     await page.click('#settings-form button[type=submit]');
     await page.waitForSelector('#flash:not([hidden])');
+  });
+  await step('alerts: not set up shows a banner; ntfy settings are saved, tested and removed, and never shown again (ADR 0055)', async () => {
+    const TOPIC = 'e2e-topic-' + 'q7x9k2';
+    const TOKEN = 'e2e-token-' + 'm4p8z1';
+    const sink = (p, method = 'GET') => new Promise((resolve, reject) => {
+      const req = http.request({ host: '127.0.0.1', port: ntfyPort, path: p, method }, (res) => { let b = ''; res.on('data', (c) => (b += c)); res.on('end', () => resolve(b)); });
+      req.on('error', reject); req.end();
+    });
+    await openSettings();
+    await page.waitForSelector('#alerts-form');
+    await page.waitForFunction(() => !document.getElementById('alerts-banner').hidden);
+    assert.match(await page.innerText('#alerts-banner'), /Alerts are not set up/);
+    assert.equal(await page.innerText('#a-held-topic'), 'no');
+    // A test with nothing set up says so, and sends nothing.
+    await page.click('#a-test');
+    await page.waitForFunction(() => /No delivery channel is set up/.test(document.getElementById('a-result').textContent));
+    // Save: the fields are secrets, so they are emptied and only a yes/no is shown afterwards.
+    await page.fill('#a-server', 'http://127.0.0.1:' + ntfyPort);
+    await page.fill('#a-topic', TOPIC);
+    await page.fill('#a-token', TOKEN);
+    await page.click('#alerts-form button[type=submit]');
+    await page.waitForFunction(() => document.getElementById('a-held-topic').textContent === 'yes');
+    assert.equal(await page.innerText('#a-held-token'), 'yes');
+    assert.equal(await page.inputValue('#a-topic'), '');
+    assert.equal(await page.inputValue('#a-token'), '');
+    await page.waitForFunction(() => document.getElementById('alerts-banner').hidden);
+    // A test alert is delivered to the sink, on the topic, with the token, and the page says so.
+    await page.click('#a-test');
+    await page.waitForFunction(() => /ntfy: delivered/.test(document.getElementById('a-result').textContent));
+    const seen = JSON.parse(await sink('/_seen'));
+    assert.equal(seen.length, 1);
+    assert.deepEqual([seen[0].path, seen[0].title, seen[0].authorization], ['/' + TOPIC, 'Askbar test alert', 'Bearer ' + TOKEN]);
+    // The sink refuses it: the page says what went wrong in its own words, not the server's.
+    await sink('/_status/401', 'POST');
+    await page.click('#a-test');
+    await page.waitForFunction(() => /the token was not accepted/.test(document.getElementById('a-result').textContent));
+    await sink('/_status/200', 'POST');
+    // Nothing on the page, in a field or in the status the page polls holds the topic or the token.
+    const shown = await page.evaluate(() => document.documentElement.innerText + [...document.querySelectorAll('input')].map((i) => i.value).join(' '));
+    assert.ok(!shown.includes(TOPIC) && !shown.includes(TOKEN), 'a secret is on the page');
+    const status = await page.evaluate(async () => (await fetch('/api/admin/v1/status', { headers: { 'x-askbar-admin': '1' } })).text());
+    assert.ok(!status.includes(TOPIC) && !status.includes(TOKEN), 'the status holds a secret');
+    // Remove: it asks first, and the banner comes back.
+    page.once('dialog', (d) => d.accept());
+    await page.click('#a-remove');
+    await page.waitForFunction(() => document.getElementById('a-held-topic').textContent === 'no');
+    await page.waitForFunction(() => !document.getElementById('alerts-banner').hidden);
+    assert.match(await page.innerText('#alerts-banner'), /Alerts are not set up/);
   });
   await step('network: hostname, token and networks are saved; the token is write-only', async () => {
     const CF = 'cf_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
