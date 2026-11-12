@@ -8,20 +8,21 @@ Everything else (how it fits together, configuration, HTTPS, the audit trail, up
 
 ## V1 features
 
-Version 1.0 is the scope of [ADR 0002](docs/adr/0002-v1-scope-limits-and-ship-criteria.md), built in the order of [docs/plan-v1.md](docs/plan-v1.md). Built today unless marked *planned*.
+Version 1.0 is the scope of [ADR 0002](docs/adr/0002-v1-scope-limits-and-ship-criteria.md). Everything below is built unless marked *planned* or *deferrable*.
 
 - **Conversation only.** Text in, text out: no tools, no shell, no file access.
 - **A desktop popup** for macOS, Windows and Linux, opened with a global hotkey.
 - **Any model provider:** Anthropic, anything OpenAI-compatible (OpenAI, OpenRouter, Ollama, LM Studio, vLLM, ...), or a Claude or ChatGPT subscription through CLIProxyAPI.
 - **Replies run on the server.** Close the window or lose the network and the reply carries on; reopen and it is there. Messages can wait their turn, and Stop keeps the text so far.
-- **History and search**, in a personal space per user, each kept in its own database file. *Planned:* shared spaces for a family (plan step 1.12).
+- **History and search**, in a personal space per user, each kept in its own database file. *Deferrable:* shared spaces for a family ([ADR 0009](docs/adr/0009-spaces-and-storage.md)).
 - **Users and pairing keys:** the admin makes users, and a pairing key pairs an app over HTTPS, trusting exactly this server's certificate. A paired app can pair another.
 - **An admin site** at `/admin`: first-run setup, providers, users, settings, token budgets and a kill switch.
 - **An audit trail** of every reply, with prompts and replies sealed by a passphrase only the owner knows.
 - **HTTPS from the first start** with the install's own certificate, then Let's Encrypt for your own host name.
-- **Hardened, separated containers:** only Caddy publishes ports, and no service has the Docker socket. *Planned:* per-link tokens and a separate auditor (phase 2), and a `model-gateway` that alone holds provider keys and an approved model catalog (phase 3).
-- *Planned:* alerts by ntfy or email (phase 4), and scheduled backups and a restore (phase 6). A manual, encrypted backup works today.
-- *Deferrable:* memory and an iOS app (phase 8).
+- **Hardened, separated containers:** only Caddy publishes ports, and no service has the Docker socket. Each link between services has its own token and network. A separate **auditor** keeps the audit store, and a **`model-gateway`** alone holds the provider keys and the approved model list ([architecture](docs/architecture.md#components-at-a-glance)).
+- **Alerts** by ntfy or email, from a small `alerter` container that also checks for new releases.
+- **Encrypted backups,** by hand or on a schedule, and a restore.
+- *Deferrable:* memory and an iOS app.
 
 ## Quick start: deploy the server
 
@@ -79,4 +80,4 @@ Ctrl is used on macOS too. On Wayland, bind a shortcut to the command `askbar` i
 
 ## License
 
-[AGPL-3.0-or-later](LICENSE). Source: <https://github.com/Thewuuryar/askbar>; see the [guide](docs/guide.md#license).
+[AGPL-3.0-or-later](LICENSE). Source: <https://github.com/Thewuuryar/askbar>; see the [guide](docs/guide.md#license). The admin site shows the same notice and source link, so anyone using a server over the network can find the source.
