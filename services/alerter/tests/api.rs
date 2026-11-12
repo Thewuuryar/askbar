@@ -1,4 +1,4 @@
-//! The alerter's API against a real in-process auditor and a stand-in ntfy server: tokens and their scopes, `503 not_configured`,
+//! The alerter's API against a real in-process auditor, a stand-in ntfy server and a stand-in mail server: tokens and their scopes, `503 not_configured`,
 //! what each link may send, delivery with its priority, repeat limiting, retries, the test alert, the ledger across a restart,
 //! and that no secret leaves (ADR 0055).
 
@@ -17,6 +17,8 @@ use std::time::Duration;
 
 const MARKER_TOPIC: &str = "marker-topic-4f9a";
 const MARKER_TOKEN: &str = "marker-token-7c21";
+const MARKER_MAIL_PASSWORD: &str = "marker-mail-password-91be";
+const MARKER_MAIL_USER: &str = "marker-mail-user-5d3a";
 
 fn hex(s: &str) -> String {
     Sha256::digest(s.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
@@ -78,6 +80,85 @@ async fn sink() -> Sink {
     Sink { url, seen, status, fail_first }
 }
 
+/// One message the stand-in mail server took.
+#[derive(Debug, Clone)]
+struct Mail {
+    from: String,
+    to: String,
+    data: String,
+}
+
+/// A mail server on raw sockets: no TLS, no login. `reject` makes it refuse every recipient with the code it holds (0 accepts).
+struct MailSink {
+    port: u16,
+    seen: Arc<Mutex<Vec<Mail>>>,
+    reject: Arc<AtomicU16>,
+}
+
+async fn mail_sink() -> MailSink {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    let seen: Arc<Mutex<Vec<Mail>>> = Default::default();
+    let reject = Arc::new(AtomicU16::new(0));
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = l.local_addr().unwrap().port();
+    let (s, r) = (seen.clone(), reject.clone());
+    tokio::spawn(async move {
+        loop {
+            let Ok((sock, _)) = l.accept().await else { return };
+            let (s, r) = (s.clone(), r.clone());
+            tokio::spawn(async move {
+                let (rd, mut wr) = sock.into_split();
+                let mut rd = BufReader::new(rd);
+                let _ = wr.write_all(b"220 sink ready\r\n").await;
+                let (mut from, mut to, mut line) = (String::new(), String::new(), String::new());
+                loop {
+                    line.clear();
+                    if rd.read_line(&mut line).await.unwrap_or(0) == 0 {
+                        return;
+                    }
+                    let up = line.to_ascii_uppercase();
+                    let reply: String = if up.starts_with("EHLO") || up.starts_with("HELO") {
+                        "250 sink\r\n".into()
+                    } else if up.starts_with("MAIL FROM") {
+                        from = line.trim().to_string();
+                        "250 ok\r\n".into()
+                    } else if up.starts_with("RCPT TO") {
+                        match r.load(Ordering::SeqCst) {
+                            0 => {
+                                to = line.trim().to_string();
+                                "250 ok\r\n".into()
+                            }
+                            code => format!("{code} no\r\n"),
+                        }
+                    } else if up.starts_with("DATA") {
+                        let _ = wr.write_all(b"354 go\r\n").await;
+                        let mut data = String::new();
+                        loop {
+                            line.clear();
+                            if rd.read_line(&mut line).await.unwrap_or(0) == 0 {
+                                return;
+                            }
+                            if line == ".\r\n" {
+                                break;
+                            }
+                            data.push_str(&line);
+                        }
+                        s.lock().unwrap().push(Mail { from: from.clone(), to: to.clone(), data });
+                        "250 queued\r\n".into()
+                    } else if up.starts_with("QUIT") {
+                        let _ = wr.write_all(b"221 bye\r\n").await;
+                        return;
+                    } else {
+                        "250 ok\r\n".into()
+                    };
+                    let _ = wr.write_all(reply.as_bytes()).await;
+                }
+            });
+        }
+    });
+    MailSink { port, seen, reject }
+}
+
 struct T {
     auditor_url: String,
     admin_url: String,
@@ -87,6 +168,7 @@ struct T {
     auditor: Arc<Auditor>,
     http: reqwest::Client,
     sink: Sink,
+    mail: MailSink,
 }
 
 impl Drop for T {
@@ -149,7 +231,7 @@ async fn start_in(dir: PathBuf, sink: Sink) -> T {
     tokio::spawn(alerter.clone().deliver_forever());
     let events_url = serve(auditor_router(alerter.clone(), auditor_links(&tokens))).await;
     let admin_url = serve(admin_router(alerter.clone(), admin_links(&tokens))).await;
-    T { auditor_url, admin_url, events_url, dir, alerter, auditor, http: reqwest::Client::new(), sink }
+    T { auditor_url, admin_url, events_url, dir, alerter, auditor, http: reqwest::Client::new(), sink, mail: mail_sink().await }
 }
 
 impl T {
@@ -180,6 +262,27 @@ impl T {
     async fn configure(&self) {
         let c = json!({ "version": 1, "ntfy": { "server": self.sink.url, "topic": MARKER_TOPIC, "token": MARKER_TOKEN } });
         assert_eq!(self.admin(M::PUT, "/config", Some(c)).await.status, 200);
+    }
+
+    /// Both channels: ntfy at its sink and email at the mail sink (no TLS, no login).
+    async fn configure_both(&self, version: u64) {
+        let c = json!({
+            "version": version,
+            "ntfy": { "server": self.sink.url, "topic": MARKER_TOPIC, "token": MARKER_TOKEN },
+            "email": { "host": "127.0.0.1", "port": self.mail.port, "tls": "none", "from": "askbar@example.com", "to": "owner@example.com" }
+        });
+        assert_eq!(self.admin(M::PUT, "/config", Some(c)).await.status, 200);
+    }
+
+    /// Waits for `n` messages at the mail sink.
+    async fn mail_has(&self, n: usize) -> Vec<Mail> {
+        for _ in 0..200 {
+            if self.mail.seen.lock().unwrap().len() >= n {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        self.mail.seen.lock().unwrap().clone()
     }
 
     /// Waits for `n` requests at the sink.
@@ -475,4 +578,131 @@ async fn the_admin_can_restart_it_even_before_it_is_configured() {
     let t = start().await;
     let r = t.admin(M::POST, "/restart", None).await;
     assert_eq!(r.status, 202, "{}", r.text);
+}
+
+#[tokio::test]
+async fn an_alert_goes_to_every_channel_that_is_set_up_as_one_message_with_its_own_sentence() {
+    let t = start().await;
+    t.configure_both(1).await;
+    assert_eq!(t.auditor(M::POST, "/events", Some(unsealed())).await.status, 202);
+    let ntfy = t.sink_has(1).await;
+    let mail = t.mail_has(1).await;
+    assert_eq!((ntfy.len(), mail.len()), (1, 1));
+    assert!(mail[0].from.contains("askbar@example.com") && mail[0].to.contains("owner@example.com"), "{mail:?}");
+    assert!(mail[0].data.contains("Subject: [warning] ") && mail[0].data.contains(&ntfy[0].title), "{}", mail[0].data);
+    // The body is quoted-printable: undo its soft line breaks to compare.
+    let unwrapped = mail[0].data.replace("=\r\n", "");
+    assert!(unwrapped.contains(&ntfy[0].body), "the same sentence goes to both: {}", mail[0].data);
+    // Each channel's outcome is its own record at the auditor.
+    let rows = t.deliveries(2).await;
+    let mut channels: Vec<String> = rows.iter().map(|r| r["channel"].as_str().unwrap().to_string()).collect();
+    channels.sort();
+    assert_eq!((channels, rows[0]["outcome"].clone()), (vec!["email".to_string(), "ntfy".to_string()], json!("sent")));
+}
+
+#[tokio::test]
+async fn email_alone_works_and_a_channel_that_fails_does_not_hold_up_the_other() {
+    let t = start().await;
+    let c = json!({ "version": 1, "email": { "host": "127.0.0.1", "port": t.mail.port, "tls": "none", "from": "a@example.com", "to": "b@example.com" } });
+    assert_eq!(t.admin(M::PUT, "/config", Some(c)).await.status, 200);
+    t.auditor(M::POST, "/events", Some(unsealed())).await;
+    assert_eq!(t.mail_has(1).await.len(), 1);
+    assert!(t.sink.seen.lock().unwrap().is_empty(), "no ntfy channel is set up");
+    // ntfy is down, email is not: the email arrives at once, and ntfy is retried on its own.
+    t.sink.status.store(500, Ordering::SeqCst);
+    t.configure_both(2).await;
+    t.auditor(M::POST, "/events", Some(json!({ "kind": "unseal_timeouts_changed", "severity": "warning", "at": now() }))).await;
+    assert_eq!(t.mail_has(2).await.len(), 2);
+    assert!(t.sink_has(2).await.len() >= 2, "ntfy was tried again");
+    assert_eq!(t.mail.seen.lock().unwrap().len(), 2, "a retry of one channel does not send the other again");
+}
+
+#[tokio::test]
+async fn the_test_alert_covers_email_and_names_why_it_failed_in_the_alerters_words() {
+    let t = start().await;
+    t.configure_both(1).await;
+    let r = t.admin(M::POST, "/test", None).await;
+    let by = |r: &Reply, ch: &str| r.body["results"].as_array().unwrap().iter().find(|x| x["channel"] == ch).cloned().unwrap();
+    assert_eq!((by(&r, "email")["ok"].clone(), by(&r, "ntfy")["ok"].clone()), (json!(true), json!(true)));
+    assert!(t.mail.seen.lock().unwrap()[0].data.contains("Askbar test alert"));
+    // The server refuses the recipient.
+    t.mail.reject.store(550, Ordering::SeqCst);
+    let r = t.admin(M::POST, "/test", None).await;
+    assert_eq!((by(&r, "email")["ok"].clone(), by(&r, "email")["problem"].clone()), (json!(false), json!("refused")));
+    // Nothing listens.
+    let down =
+        json!({ "version": 2, "email": { "host": "127.0.0.1", "port": 9, "tls": "none", "from": "a@example.com", "to": "b@example.com" } });
+    assert_eq!(t.admin(M::PUT, "/config", Some(down)).await.status, 200);
+    let r = t.admin(M::POST, "/test", None).await;
+    assert_eq!(by(&r, "email")["problem"], "unreachable");
+    // TLS is required and the server does not offer it, so it is not sent in the clear.
+    let tls = json!({ "version": 3, "email": { "host": "127.0.0.1", "port": t.mail.port, "tls": "starttls", "from": "a@example.com", "to": "b@example.com" } });
+    t.mail.reject.store(0, Ordering::SeqCst);
+    let before = t.mail.seen.lock().unwrap().len();
+    assert_eq!(t.admin(M::PUT, "/config", Some(tls)).await.status, 200);
+    let r = t.admin(M::POST, "/test", None).await;
+    assert_eq!(
+        (by(&r, "email")["ok"].clone(), by(&r, "email")["problem"].clone()),
+        (json!(false), json!("refused")),
+        "a server without STARTTLS is refused: {}",
+        r.text
+    );
+    assert_eq!(t.mail.seen.lock().unwrap().len(), before, "nothing was sent without TLS");
+}
+
+#[tokio::test]
+async fn an_email_configuration_that_cannot_be_used_is_refused_without_repeating_a_value() {
+    let t = start().await;
+    let mail = |m: Value| json!({ "version": 1, "email": m });
+    let ok = json!({ "host": "mail.example.com", "port": 587, "tls": "starttls", "user": MARKER_MAIL_USER, "password": MARKER_MAIL_PASSWORD, "from": "a@example.com", "to": "b@example.com" });
+    let mut bodies = Vec::new();
+    for (change, why) in [
+        (json!({ "tls": "none" }), "a password without TLS"),
+        (json!({ "password": null }), "a user without a password"),
+        (json!({ "host": "bad host" }), "a host with a space"),
+        (json!({ "to": "a@example.com, b@example.com" }), "two recipients"),
+        (json!({ "from": "nobody" }), "no address"),
+        (json!({ "port": 0 }), "port 0"),
+        (json!({ "port": 70000 }), "port out of range"),
+        (json!({ "tls": "ssl" }), "an unknown TLS mode"),
+        (json!({ "extra": MARKER_MAIL_PASSWORD }), "an unknown field"),
+    ] {
+        let mut m = ok.clone();
+        for (k, v) in change.as_object().unwrap() {
+            m[k] = v.clone();
+        }
+        let r = t.admin(M::PUT, "/config", Some(mail(m))).await;
+        assert_eq!((r.status, r.code()), (400, "bad_request".to_string()), "{why}: {}", r.text);
+        bodies.push(r.text);
+    }
+    assert!(!t.alerter.is_configured(), "a refused configuration changes nothing");
+    // A good one is taken, and neither it nor anything after it shows the password or the user name.
+    bodies.push(t.admin(M::PUT, "/config", Some(mail(ok))).await.text);
+    bodies.push(t.admin(M::GET, "/status", None).await.text);
+    bodies.push(t.admin(M::POST, "/test", None).await.text);
+    t.auditor(M::POST, "/events", Some(unsealed())).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    for b in &bodies {
+        assert!(!b.contains(MARKER_MAIL_PASSWORD) && !b.contains(MARKER_MAIL_USER) && !b.contains("mail.example.com"), "{b}");
+    }
+    let mut found = Vec::new();
+    for dir in ["alerter-data", "audit"] {
+        fn walk(d: &std::path::Path, found: &mut Vec<String>) {
+            for e in std::fs::read_dir(d).unwrap().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    walk(&p, found);
+                } else if let Ok(b) = std::fs::read(&p) {
+                    let text = String::from_utf8_lossy(&b);
+                    for n in [MARKER_MAIL_PASSWORD, MARKER_MAIL_USER, "mail.example.com", "b@example.com"] {
+                        if text.contains(n) {
+                            found.push(format!("{} holds {n}", p.display()));
+                        }
+                    }
+                }
+            }
+        }
+        walk(&t.dir.join(dir), &mut found);
+    }
+    assert!(found.is_empty(), "{found:?}");
 }

@@ -14,7 +14,8 @@ pub mod limits;
 pub mod templates;
 
 use askbar_proto::alerter::{
-    AlerterConfig, AlerterStatus, Channel, ChannelResult, Event, EventTaken, Kind, NtfyConfig, Refusal, Sender, Severity, TestResult,
+    AlerterConfig, AlerterStatus, Channel, ChannelResult, Event, EventTaken, Kind, NtfyConfig, Refusal, Sender, Severity, SmtpConfig,
+    TestResult,
 };
 use askbar_proto::http::ApiError;
 use askbar_proto::paths::{self, ALERTER_V1};
@@ -61,6 +62,21 @@ impl Default for Timing {
 struct Applied {
     version: u64,
     ntfy: Option<NtfyConfig>,
+    email: Option<SmtpConfig>,
+}
+
+impl Applied {
+    /// The channels that are set up.
+    fn channels(&self) -> Vec<Channel> {
+        [self.ntfy.as_ref().map(|_| Channel::Ntfy), self.email.as_ref().map(|_| Channel::Email)].into_iter().flatten().collect()
+    }
+}
+
+fn channel_name(c: Channel) -> &'static str {
+    match c {
+        Channel::Ntfy => "ntfy",
+        Channel::Email => "email",
+    }
 }
 
 /// One alert waiting to be delivered.
@@ -69,6 +85,8 @@ struct Pending {
     kind: &'static str,
     severity: Severity,
     rendered: Rendered,
+    /// Each channel has its own copy, so one that fails does not hold up or repeat the other.
+    channel: Channel,
     attempts: u32,
     due: Instant,
 }
@@ -127,8 +145,12 @@ impl Alerter {
         if let Some(n) = &c.ntfy {
             deliver::ntfy::validate(n)?;
         }
-        *self.config.write().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(Applied { version: c.version, ntfy: c.ntfy.clone() }));
-        tracing::info!(version = c.version, ntfy = c.ntfy.is_some(), "configuration applied");
+        if let Some(m) = &c.email {
+            deliver::smtp::validate(m)?;
+        }
+        *self.config.write().unwrap_or_else(|e| e.into_inner()) =
+            Some(Arc::new(Applied { version: c.version, ntfy: c.ntfy.clone(), email: c.email.clone() }));
+        tracing::info!(version = c.version, ntfy = c.ntfy.is_some(), email = c.email.is_some(), "configuration applied");
         self.audit.config_applied(c.version as i64);
         self.wake.notify_one();
         Ok(())
@@ -141,14 +163,23 @@ impl Alerter {
         }
     }
 
+    /// Queues the alert for every channel that is set up now. With none, nothing is queued and the log says so.
     fn enqueue(&self, kind: &'static str, severity: Severity, rendered: Rendered) {
+        let channels = self.applied().map(|a| a.channels()).unwrap_or_default();
+        if channels.is_empty() {
+            // The admin's banner says delivery is not set up.
+            tracing::info!(kind, "an alert was not delivered: no delivery channel is set up");
+            return;
+        }
         {
             let mut q = self.queue.lock().unwrap_or_else(|e| e.into_inner());
-            if q.items.len() >= QUEUE_LIMIT {
-                q.items.pop_front();
-                q.dropped += 1;
+            for channel in channels {
+                if q.items.len() >= QUEUE_LIMIT {
+                    q.items.pop_front();
+                    q.dropped += 1;
+                }
+                q.items.push_back(Pending { kind, severity, rendered: rendered.clone(), channel, attempts: 0, due: Instant::now() });
             }
-            q.items.push_back(Pending { kind, severity, rendered, attempts: 0, due: Instant::now() });
         }
         self.wake.notify_one();
     }
@@ -164,7 +195,7 @@ impl Alerter {
             (admit, st.clone())
         };
         self.save(&snapshot);
-        let channel = self.applied().and_then(|a| a.ntfy.as_ref().map(|_| "ntfy"));
+        let channels = self.applied().map(|a| a.channels()).unwrap_or_default();
         match admit {
             limits::Admit::Send { suppressed } => {
                 let mut r = templates::render(event);
@@ -183,8 +214,8 @@ impl Alerter {
                 Ok(EventTaken { suppressed: true })
             }
             limits::Admit::Suppress => {
-                if let Some(c) = channel {
-                    self.audit.alert_delivery(event.kind.name(), c, "suppressed", 0);
+                for c in channels {
+                    self.audit.alert_delivery(event.kind.name(), channel_name(c), "suppressed", 0);
                 }
                 Ok(EventTaken { suppressed: true })
             }
@@ -231,20 +262,27 @@ impl Alerter {
                     continue;
                 }
             };
-            let Some(ntfy) = &cfg.ntfy else {
-                // No channel is set up: there is nowhere to send it. The admin's banner says delivery is not set up.
-                tracing::info!(kind = item.kind, "an alert was not delivered: no delivery channel is set up");
+            if !cfg.channels().contains(&item.channel) {
+                // The channel was taken away since the alert was queued: there is nowhere to send it now.
+                tracing::info!(kind = item.kind, "an alert was not delivered: its channel is no longer set up");
                 continue;
-            };
+            }
+            let channel = channel_name(item.channel);
             item.attempts += 1;
-            match deliver::ntfy::send(&self.http, ntfy, item.severity, &item.rendered).await {
+            match self.send(&cfg, item.channel, item.severity, &item.rendered).await {
                 Ok(()) => {
                     self.note_result(true);
-                    self.audit.alert_delivery(item.kind, "ntfy", "sent", item.attempts);
+                    self.audit.alert_delivery(item.kind, channel, "sent", item.attempts);
                 }
                 Err(problem) => {
                     self.note_result(false);
-                    tracing::warn!(kind = item.kind, attempt = item.attempts, problem = problem.as_str(), "an alert was not delivered");
+                    tracing::warn!(
+                        kind = item.kind,
+                        channel,
+                        attempt = item.attempts,
+                        problem = problem.as_str(),
+                        "an alert was not delivered"
+                    );
                     match self.timing.backoff.get(item.attempts as usize - 1) {
                         Some(wait) => {
                             item.due = Instant::now() + *wait;
@@ -255,23 +293,34 @@ impl Alerter {
                             }
                             q.items.push_back(item);
                         }
-                        None => self.audit.alert_delivery(item.kind, "ntfy", "failed", item.attempts),
+                        None => self.audit.alert_delivery(item.kind, channel, "failed", item.attempts),
                     }
                 }
             }
         }
     }
 
+    /// One delivery through one channel of `cfg`.
+    async fn send(&self, cfg: &Applied, channel: Channel, severity: Severity, r: &Rendered) -> Result<(), Problem> {
+        match (channel, &cfg.ntfy, &cfg.email) {
+            (Channel::Ntfy, Some(n), _) => deliver::ntfy::send(&self.http, n, severity, r).await,
+            (Channel::Email, _, Some(m)) => deliver::smtp::send(m, severity, r).await,
+            _ => Err(Problem::Unreachable),
+        }
+    }
+
     /// Sends a test alert now, through every channel that is set up, and says what each did. It is not limited and not queued.
     pub async fn test(&self) -> TestResult {
         let mut results = Vec::new();
-        if let Some(ntfy) = self.applied().and_then(|a| a.ntfy.clone()) {
-            let event = Event { kind: Kind::Test, severity: Severity::Info, at: now_parts().0, fields: Default::default() };
-            let outcome = deliver::ntfy::send(&self.http, &ntfy, event.severity, &templates::render(&event)).await;
+        let Some(cfg) = self.applied() else { return TestResult { results } };
+        let event = Event { kind: Kind::Test, severity: Severity::Info, at: now_parts().0, fields: Default::default() };
+        let rendered = templates::render(&event);
+        for channel in cfg.channels() {
+            let outcome = self.send(&cfg, channel, event.severity, &rendered).await;
             self.note_result(outcome.is_ok());
-            self.audit.alert_delivery("test", "ntfy", if outcome.is_ok() { "sent" } else { "failed" }, 1);
+            self.audit.alert_delivery("test", channel_name(channel), if outcome.is_ok() { "sent" } else { "failed" }, 1);
             results.push(ChannelResult {
-                channel: Channel::Ntfy,
+                channel,
                 ok: outcome.is_ok(),
                 problem: outcome.err().map(Problem::as_str).unwrap_or_default().to_string(),
             });

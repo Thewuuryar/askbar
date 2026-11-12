@@ -350,6 +350,42 @@ components:
               type: string
               writeOnly: true
               description: An optional access token. Never returned or logged.
+        email:
+          type: object
+          additionalProperties: false
+          required: [host, port, tls, from, to]
+          description: >-
+            An SMTP server and one recipient. Every value is a secret, never returned or logged. `user` and `password` go
+            together, and are refused with `tls: none`.
+          properties:
+            host:
+              type: string
+              writeOnly: true
+              description: A host name or address, without spaces or a scheme.
+            port:
+              type: integer
+              minimum: 1
+              maximum: 65535
+            tls:
+              type: string
+              enum: [starttls, tls, none]
+              description: >-
+                `starttls` upgrades the connection and refuses to go on without it (usually port 587); `tls` is TLS from the first
+                byte (usually 465); `none` is for a relay on the local network.
+            user:
+              type: string
+              writeOnly: true
+            password:
+              type: string
+              writeOnly: true
+            from:
+              type: string
+              writeOnly: true
+              description: A bare email address.
+            to:
+              type: string
+              writeOnly: true
+              description: One bare email address.
     Status:
       type: object
       required: [config_version, boot_id, last_delivery_ok_at, last_delivery_failed_at, queued, dropped]
@@ -385,7 +421,7 @@ components:
                 type: boolean
               problem:
                 type: string
-                enum: [unreachable, refused, unauthorized, timeout]
+                enum: [unreachable, refused, unauthorized, timeout, tls]
     Outcome:
       type: string
       enum: [sent, failed, suppressed]

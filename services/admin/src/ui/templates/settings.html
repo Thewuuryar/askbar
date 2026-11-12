@@ -46,19 +46,47 @@
     </form>
     <form id="alerts-form" class="panel">
       <h3>Alerts</h3>
-      {% call b::hint("Where Askbar sends an alert when something needs attention: an unseal, a changed retention, a failing token, a full audit disk. It uses ntfy (ntfy.sh or your own server). The server address, topic and token are secrets: they are kept encrypted, never shown again, and never leave the admin except to the alerter. Leave the token empty to keep the one that is stored.") %}{% endcall %}
+      {% call b::hint("Where Askbar sends an alert when something needs attention: an unseal, a changed retention, a failing token, a full audit disk. It uses ntfy (ntfy.sh or your own server), email, or both. Every value below is a secret: it is kept encrypted, never shown again, and never leaves the admin except to the alerter. Leave a token or a password empty to keep the one that is stored.") %}{% endcall %}
       <p class="hint">Held now: server <strong id="a-held-server">no</strong>, topic <strong id="a-held-topic">no</strong>, token <strong id="a-held-token">no</strong></p>
       <label>ntfy server <input id="a-server" type="url" autocomplete="off" placeholder="https://ntfy.example.com"></label>
       <label>Topic <input id="a-topic" type="password" autocomplete="off" placeholder="a long, hard-to-guess name"></label>
       <label>Access token (optional) <input id="a-token" type="password" autocomplete="off" placeholder="leave empty to keep the stored token"></label>
       <label class="check"><input id="a-token-clear" type="checkbox"> Remove the stored token</label>
       <div class="row">
-        <button type="submit">Save alert settings</button>
-        <button type="button" id="a-test" class="secondary">Send a test alert</button>
-        <button type="button" id="a-remove" class="secondary">Remove alert delivery</button>
+        <button type="submit">Save ntfy settings</button>
+        <button type="button" id="a-remove" class="secondary">Remove ntfy</button>
       </div>
-      <p id="a-result" class="hint" role="status"></p>
       {% call b::error_line("a-error") %}{% endcall %}
+    </form>
+    <form id="email-form" class="panel">
+      <h3>Alerts by email</h3>
+      {% call b::hint("Mail goes from the alerter to your mail server. Choose STARTTLS or TLS for a server on the internet: a password is not sent without TLS. A relay on your own network may use no TLS and no login.") %}{% endcall %}
+      <p class="hint">Held now: server <strong id="m-held-host">no</strong>, login <strong id="m-held-login">no</strong>, addresses <strong id="m-held-addr">no</strong></p>
+      <label>Mail server <input id="m-host" type="text" autocomplete="off" placeholder="smtp.example.com"></label>
+      <label>Port <input id="m-port" type="number" min="1" max="65535" value="587"></label>
+      <label>TLS
+        <select id="m-tls">
+          <option value="starttls">STARTTLS (usually port 587)</option>
+          <option value="tls">TLS (usually port 465)</option>
+          <option value="none">No TLS (a relay on your own network)</option>
+        </select>
+      </label>
+      <label>User name (optional) <input id="m-user" type="password" autocomplete="off" placeholder="leave empty to keep the stored one"></label>
+      <label>Password (optional) <input id="m-password" type="password" autocomplete="off" placeholder="leave empty to keep the stored one"></label>
+      <label class="check"><input id="m-login-clear" type="checkbox"> Remove the stored user name and password</label>
+      <label>From address <input id="m-from" type="email" autocomplete="off" placeholder="askbar@example.com"></label>
+      <label>To address <input id="m-to" type="email" autocomplete="off" placeholder="you@example.com"></label>
+      <div class="row">
+        <button type="submit">Save email settings</button>
+        <button type="button" id="m-remove" class="secondary">Remove email</button>
+      </div>
+      {% call b::error_line("m-error") %}{% endcall %}
+    </form>
+    <form id="alerts-test-form" class="panel">
+      <h3>Test alert</h3>
+      <div class="row"><button type="button" id="a-test" class="secondary">Send a test alert</button></div>
+      <p id="a-result" class="hint" role="status"></p>
+      {% call b::error_line("a-test-error") %}{% endcall %}
     </form>
     <form id="rotate-form" class="panel">
       <h3>Rotate the audit key</h3>

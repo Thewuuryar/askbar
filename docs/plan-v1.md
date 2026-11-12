@@ -277,6 +277,7 @@ The owner decided D1 to D36 on 2026-11-11 and set no time budget: everything bel
 - Mismatch alerts stay in phase 8.
 
 **4.2b `feat(alerter): deliver alerts through email`** (M) — PR Z [DEPENDENCY]: `lettre` with exact features, `cargo deny` first (stop if it fails); `deliver/smtp.rs`, email settings in the admin (a new migration), an SMTP sink in the tests.
+- **Built so, Z (2026-11-12, #81):** `lettre` 0.11.23 with default features off and `builder`, `smtp-transport`, `tokio1-rustls-tls` (`cargo deny` and the npm license check pass; new crates: `lettre`, `email-encoding`, `email_address`, `quoted_printable`, `fastrand`, `async-trait`, `nom`); `deliver/smtp.rs` (STARTTLS required, TLS, or none without a password); one queued copy of each alert per channel; `email` in `AlerterConfig`, `alerter.v1.yaml` and `admin.v1.yaml`; the admin's migration 18, `PUT /alerts` that leaves an absent channel alone, a second Settings panel; a mail server on raw sockets in the Rust tests and `tests/e2e/smtp_sink.py` for the browser test. One recipient, not a list. The delivery status (and so the banner) counts a success on either channel.
 
 **4.3 `feat(alerter): check for new releases`** (S) — PR AA [ADR 0017](adr/0017-dependencies-and-patches.md)
 - A daily poll of GitHub's latest-release API with a fixed `User-Agent` (D11); `release_available`; `GET /releases`, shown on the Services page. Until 1.0 it is tested only against a mock.

@@ -351,6 +351,47 @@ impl fmt::Debug for NtfyConfig {
     }
 }
 
+/// How the alerter secures its connection to the mail server.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SmtpTls {
+    /// The connection starts in the clear and is upgraded with STARTTLS, which is required (usually port 587).
+    Starttls,
+    /// TLS from the first byte (usually port 465).
+    Tls,
+    /// No TLS, for a relay on the local network. A user name and password are refused with it.
+    None,
+}
+
+/// Email: an SMTP server and who the mail is from and to. Holds a password and addresses: no `Debug` output shows any of
+/// them, and no endpoint returns them.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SmtpConfig {
+    pub host: String,
+    pub port: u16,
+    pub tls: SmtpTls,
+    /// The user name and the password go together, or neither is given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
+    pub from: String,
+    pub to: String,
+}
+
+impl fmt::Debug for SmtpConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SmtpConfig")
+            .field("host", &"(set)")
+            .field("port", &self.port)
+            .field("tls", &self.tls)
+            .field("user", &if self.user.is_some() { "(set)" } else { "(none)" })
+            .field("password", &if self.password.is_some() { "(set)" } else { "(none)" })
+            .finish_non_exhaustive()
+    }
+}
+
 /// `PUT /config`: the delivery settings. Replaces the whole of the earlier one. The alerter holds them in memory only.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -360,6 +401,8 @@ pub struct AlerterConfig {
     pub version: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ntfy: Option<NtfyConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub email: Option<SmtpConfig>,
 }
 
 /// One delivery channel, as the alerter names it.
@@ -502,5 +545,14 @@ mod tests {
         let shown = format!("{cfg:?}");
         assert!(!shown.contains("marker-topic") && !shown.contains("marker-token") && !shown.contains("ntfy.example.com"), "{shown}");
         assert!(serde_json::from_str::<AlerterConfig>(r#"{"version":1,"smtp":{}}"#).is_err());
+        let mail = r#"{"version":2,"email":{"host":"marker-host.example.com","port":587,"tls":"starttls","user":"marker-user","password":"marker-password","from":"a@example.com","to":"marker-to@example.com"}}"#;
+        let cfg: AlerterConfig = serde_json::from_str(mail).unwrap();
+        let shown = format!("{cfg:?}");
+        for m in ["marker-host", "marker-user", "marker-password", "marker-to", "a@example.com"] {
+            assert!(!shown.contains(m), "{shown}");
+        }
+        assert_eq!(serde_json::from_str::<AlerterConfig>(&serde_json::to_string(&cfg).unwrap()).unwrap(), cfg);
+        assert!(serde_json::from_str::<AlerterConfig>(&mail.replace("starttls", "ssl")).is_err());
+        assert!(serde_json::from_str::<AlerterConfig>(&mail.replace(r#""port":587,"#, "")).is_err());
     }
 }
