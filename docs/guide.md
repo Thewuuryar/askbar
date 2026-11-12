@@ -164,18 +164,20 @@ From the first start Caddy serves HTTPS on port 443 of every address of the host
    - **Locked out?** On the host, `docker compose exec admin askbar-admin reset` puts the published login back (you must change it again at the next sign-in) and records the reset on the Services tab; then `docker compose restart admin` to sign out every session. If the admin is not running, use `docker compose run --rm admin reset` instead.
 3. **Audit passphrase.** Setup asks for one: at least 20 characters. See *The Audit page* below; write it down.
 4. **Providers** > add one (Anthropic or OpenAI-compatible: after you enter the address and key, **Model** becomes a dropdown of what the provider offers) and press **Test**: it streams a short fixed message and shows pass or fail and the time to the first text; **Details** shows the request's path, the status and the timings, never the reply or a provider's error text. For a Claude or ChatGPT subscription use **Services** instead: *Connect Claude* / *Connect ChatGPT* (see *CLIProxyAPI*); no terminal is needed.
-5. **Network** > hostname, Cloudflare token and, if you want it, the allowlist (see below).
+5. **Network** > hostname, how to prove it is yours (the Cloudflare token, or HTTP-01) and, if you want it, the allowlist (see below).
 6. **Clients** > add a user, then generate a pairing key for them.
 
 No secret ever goes in `.env`, so nothing sensitive can be committed by accident.
 
 ### HTTPS with your own hostname
 
-Certificates come from Let's Encrypt using a DNS challenge on Cloudflare, so the hostname may point at a private address.
+Certificates come from Let's Encrypt. You choose how Caddy proves the hostname is yours (**Network** > the challenge):
 
-1. In Cloudflare, add an `A` record for your hostname (for a private server, its LAN address), and create an API token with **Zone:DNS:Edit** and **Zone:Zone:Read**.
-2. Admin site > **Network**: tick HTTPS, enter the hostname and the Cloudflare token. Leave **staging** on for the first try, then turn it off for a trusted certificate.
-3. The apps reach the server at `https://<hostname>` and the admin site is at `https://<hostname>/admin`. One name, one certificate; every other path is a 404.
+- **DNS challenge through Cloudflare** (the default): works for a hostname that points at a private address. In Cloudflare, add an `A` record for your hostname (for a private server, its LAN address), and create an API token with **Zone:DNS:Edit** and **Zone:Zone:Read**.
+- **HTTP-01**: works with any DNS provider and needs no token, but **port 80 on this machine must be reachable from the internet** (forward it on your router; Caddy answers Let's Encrypt there, and redirects everything else on port 80 to HTTPS) and the hostname must point at your public address. It cannot work for a name that only resolves inside your network (`.local`, `.lan`, `.internal` and the like are refused).
+
+1. Admin site > **Network**: tick HTTPS, enter the hostname and choose the challenge (with DNS, enter the Cloudflare token). Leave **staging** on for the first try, then turn it off for a trusted certificate; Let's Encrypt limits failed attempts.
+2. The apps reach the server at `https://<hostname>` and the admin site is at `https://<hostname>/admin`. One name, one certificate; every other path is a 404.
 
 The admin allowlist is **off by default**: anyone who can reach `https://<hostname>/admin` can try to log in (login is rate limited). Tick **Only let these addresses open the admin site over HTTPS** and list addresses or CIDRs (for example `192.168.1.0/24`) to make Caddy drop every other address before it reaches the admin. If you reach the admin from the same machine through Docker, the connection can appear to come from the Docker gateway (for example `172.x`), so include that range.
 
@@ -230,7 +232,7 @@ The admin makes CLIProxyAPI's config and API key itself (nobody copies a key any
 
 **Upgrading from 0.2:** the server image now runs as uid 10002 (it was 10001; 10001 is the admin). `chown -R 10002 $DATA_DIR` before starting. The old single-server layout (admin site on :8081, `ASKBAR_UID`/`ASKBAR_GID`, `ASKBAR_API_PORT`, the `tls` profile and Caddy on 8443/9443) is gone, and the first start migrates the database (providers, settings and pairing codes now live in the admin; re-enter them there).
 
-**Set in the admin site** instead of in files: admin password, hostname, Cloudflare token, allowlist, the Let's Encrypt staging switch, the system prompt, display defaults and per-user defaults.
+**Set in the admin site** instead of in files: admin password, hostname, certificate challenge, Cloudflare token, allowlist, the Let's Encrypt staging switch, the system prompt, display defaults and per-user defaults.
 
 **Compose profiles:** the services (server, `model-gateway`, auditor, alerter, admin, Caddy, CLIProxyAPI) are always on; `bootstrap` runs once at each start. `dev` adds a mock LLM (`tests/e2e/mock_llm.py`).
 

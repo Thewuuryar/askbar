@@ -119,8 +119,10 @@ fn routes(allowed: &[String]) -> String {
 
 /// The full Caddyfile for the current settings.
 ///
-/// - **Host name and HTTPS on:** one site for that name, with a certificate from Let's Encrypt
-///   through Cloudflare DNS. The admin allowlist applies only when it is switched on.
+/// - **Host name and HTTPS on:** one site for that name, with a certificate from Let's Encrypt:
+///   through Cloudflare DNS (the `dns` challenge), or, with the `http` challenge, with no DNS
+///   plugin at all, so Caddy answers Let's Encrypt's HTTP-01 request on port 80 itself and also
+///   redirects the rest of port 80 to HTTPS. The admin allowlist applies only when it is switched on.
 /// - **Otherwise (from the first run):** every address on port 443, with this install's own
 ///   certificate (`self_cert`), handed out whatever name the client asks for, so clients reach it
 ///   by address. The admin site is open to `allowed` if the allowlist is on, else to
@@ -131,7 +133,9 @@ fn routes(allowed: &[String]) -> String {
 pub fn caddyfile(n: &Network, allowed: &[String]) -> String {
     let mut out = format!("{{\n\tadmin {CADDY_ADMIN_LISTEN}\n");
     if n.tls_enabled && !n.hostname.is_empty() {
-        out.push_str(&format!("\tacme_dns cloudflare {{file.{CADDY_TOKEN_PATH}}}\n"));
+        if n.acme_challenge == crate::network::AcmeChallenge::Dns {
+            out.push_str(&format!("\tacme_dns cloudflare {{file.{CADDY_TOKEN_PATH}}}\n"));
+        }
         if n.acme_staging {
             out.push_str(&format!("\tacme_ca {STAGING_CA}\n"));
         }
@@ -210,11 +214,13 @@ async fn apply_inner(state: &Arc<AdminState>) -> ProxyStatus {
     let Some(allowed) = allowed else {
         return status(false, "The allowed addresses setting is not valid.");
     };
-    if enabled && token.is_none() {
+    let dns = net.acme_challenge == network::AcmeChallenge::Dns;
+    if enabled && dns && token.is_none() {
         return status(false, "HTTPS is on but no Cloudflare token is stored (or it can't be read).");
     }
     if let Some(dir) = &link.secrets_dir {
-        let wanted = if enabled { token.as_deref() } else { None };
+        // Caddy sees the token only when the DNS challenge uses it.
+        let wanted = if enabled && dns { token.as_deref() } else { None };
         if let Err(e) = sync_token_file(dir, wanted) {
             return status(false, format!("Could not write the token file for Caddy: {e}"));
         }
@@ -287,6 +293,7 @@ mod tests {
             admin_cidr: String::new(),
             acme_staging: staging,
             allowlist_enabled: allowlist,
+            acme_challenge: crate::network::AcmeChallenge::Dns,
         }
     }
 
@@ -385,6 +392,26 @@ http:// {{
             caddyfile(&net(false, false, false), &[]).starts_with(bootstrap_caddyfile().trim_end_matches("}\n")),
             "every config keeps Caddy's admin socket"
         );
+    }
+
+    #[test]
+    fn the_http_challenge_has_no_dns_plugin_and_no_token_and_the_dns_challenge_keeps_both() {
+        let mut http = net(true, false, false);
+        http.acme_challenge = crate::network::AcmeChallenge::Http;
+        let got = caddyfile(&http, &[]);
+        assert!(!got.contains("acme_dns") && !got.contains("cf_token") && !got.contains("cloudflare"), "{got}");
+        // Everything else is as it is with the DNS challenge: the same site, routes and auditor log.
+        let dns = caddyfile(&net(true, false, false), &[]);
+        assert_eq!(got, dns.replace("\tacme_dns cloudflare {file./caddy-secrets/cf_token}\n", ""));
+        assert!(got.contains("\naskbar.orraitu.com {") && got.contains("@admin path /admin"), "{got}");
+        // The staging CA still applies, and the allowlist.
+        http.acme_staging = true;
+        assert!(caddyfile(&http, &["10.0.0.1/32".into()]).contains(&format!("acme_ca {STAGING_CA}")));
+        assert!(caddyfile(&http, &["10.0.0.1/32".into()]).contains("remote_ip 10.0.0.1/32"));
+        // Without HTTPS the challenge is not used at all: the install's own certificate.
+        http.tls_enabled = false;
+        let own = caddyfile(&http, &[]);
+        assert!(own.contains("http:// {\n\tredir https://{host}{uri} permanent") && !own.contains("acme"), "{own}");
     }
 
     #[test]

@@ -892,6 +892,8 @@
     $('n-cidr').value = n.admin_cidr;
     $('n-allow').checked = !!n.allowlist_enabled;
     $('n-staging').checked = n.acme_staging;
+    $('n-challenge').value = n.acme_challenge || 'dns';
+    showChallenge();
     $('n-token').value = '';
     $('n-token').placeholder = n.has_token ? 'unchanged (write-only)' : 'write-only';
     $('n-clear').checked = false;
@@ -901,6 +903,14 @@
     showProxy(n.proxy);
     show($('network-error'), false);
   }
+
+  // With HTTP-01 there is no token to enter, and the warning about port 80 shows.
+  function showChallenge() {
+    const http = $('n-challenge').value === 'http';
+    show($('n-http-note'), http);
+    show($('n-dns-box'), !http);
+  }
+  on('n-challenge', 'change', showChallenge);
 
   function showProxy(p) {
     const el = $('n-proxy');
@@ -923,6 +933,7 @@
         admin_cidr: $('n-cidr').value.trim(),
         allowlist_enabled: $('n-allow').checked,
         acme_staging: $('n-staging').checked,
+        acme_challenge: $('n-challenge').value,
         cloudflare_token: $('n-token').value,
         clear_token: $('n-clear').checked,
       });

@@ -33,10 +33,11 @@ Not recorded: Caddy predates this record.
 
 **Where the code and an accepted ADR disagree:**
 
-- [0015](0015-certificates.md) adds HTTP-01 next to the DNS challenge; only the DNS challenge is configured (plan step 5.3, `acme_challenge`).
+- [0015](0015-certificates.md) adds HTTP-01 next to the DNS challenge; both are configured, chosen by `acme_challenge`.
 
 ## Amendments
 
 - 2026-11-08: both Caddy images are pinned by digest and the Cloudflare plugin to v0.2.4, so the 0017 mismatch is gone (Thewuuryar/askbar#26).
 - 2026-11-11: body brought up to date with the code on `main`: the networks `edge`, `client-api` and `audit-caddy`, and the access lines to the auditor; the 'no auditor yet' disagreement with 0010 is removed. No decision changed (#70).
 - 2026-11-11: design for plan step 5.3 (#70, D19): HTTP-01 beside the DNS challenge, chosen by `acme_challenge`; port 80 also serves the challenge. The code PR adds the 'built' line.
+- 2026-11-12: built HTTP-01 (plan step 5.3, PR AG, #84). Built so: with `acme_challenge` = `http` the Caddyfile has no `acme_dns` line, so Caddy's own automatic HTTPS answers Let's Encrypt's HTTP-01 request on port 80 (already published) and redirects the rest of port 80 to HTTPS; the token file Caddy could read is not written when the DNS challenge is not chosen. The staging CA and the admin allowlist apply to both challenges. The compose file is unchanged.

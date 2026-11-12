@@ -2079,9 +2079,19 @@ components:
           type: boolean
         allowlist_enabled:
           type: boolean
+        acme_challenge:
+          type: string
+          enum: [dns, http]
+          default: dns
+          description: >-
+            How Caddy proves to Let's Encrypt that it owns the host name (ADR 0015). `dns` is the Cloudflare DNS challenge: it
+            needs the stored token and works for a name that is not reachable from the internet. `http` is HTTP-01: it needs
+            no token and public port 80, and the name must be reachable from the internet (a local or private suffix such as
+            `.local`, `.lan` or `.internal` is refused with 400). Absent keeps the default, as every earlier client sent it.
+            With HTTPS on, `dns` needs a stored token (400 otherwise, naming `http` as the way out).
         cloudflare_token:
           type: string
-          description: Write-only. Missing or empty keeps the stored token.
+          description: Write-only. Missing or empty keeps the stored token. Kept while `http` is chosen, and not given to Caddy then.
         clear_token:
           type: boolean
     NetworkView:
