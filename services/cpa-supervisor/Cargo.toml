@@ -9,6 +9,9 @@ description = "Runs CLIProxyAPI and restarts it on a config change, a restart re
 [dependencies]
 # Signals: pass SIGTERM/SIGINT on to CLIProxyAPI and stop it cleanly (std has no signal API).
 libc = "0.2"
+# Export (ADR 0013): the archive of login files is encrypted to the backup public key with the same age code every service uses.
+askbar-service = { path = "../../crates/askbar-service", features = ["backup"] }
+serde_json = "1"
 
 [lints]
 workspace = true

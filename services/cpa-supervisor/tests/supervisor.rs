@@ -31,6 +31,7 @@ fn start(script: &str, grace: Duration) -> T {
     let log = dir.join("log");
     std::fs::write(dir.join("config.yaml"), "port: 1\n").unwrap();
     let mut s = Settings::for_dir(dir.to_str().unwrap(), vec!["sh".into(), "-c".into(), script.replace("$LOG", log.to_str().unwrap())]);
+    s.transfer = askbar_cpa_supervisor::transfer::Paths::for_dirs(&dir, &dir.join("auth"));
     s.poll = Duration::from_millis(50);
     s.min_gap = Duration::from_millis(400);
     s.grace = grace;
@@ -123,4 +124,108 @@ fn a_child_that_ignores_sigterm_is_killed_after_the_grace_time() {
     t.handle.take().unwrap().join().unwrap();
     let took = t0.elapsed();
     assert!(took >= Duration::from_millis(280) && took < Duration::from_secs(2), "killed at the limit: {took:?}");
+}
+
+// ---- export and import (ADR 0013, ADR 0037)
+
+const PASS: &str = "a long backup passphrase 1";
+
+fn wait_done(t: &T, path: &std::path::Path, id: &str) -> serde_json::Value {
+    let t0 = Instant::now();
+    loop {
+        if let Ok(b) = std::fs::read(path) {
+            if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&b) {
+                if v["id"] == id {
+                    return v;
+                }
+            }
+        }
+        assert!(t0.elapsed() < Duration::from_secs(5), "timed out; log: {:?}", std::fs::read_to_string(&t.log));
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn an_export_is_the_auth_files_encrypted_to_the_key_and_the_child_is_not_restarted() {
+    use askbar_service::{backup, tar};
+    let t = start(LOOP, Duration::from_secs(2));
+    t.wait_for("the first start", |t| t.starts() == 1);
+    let p = &t.settings.transfer;
+    std::fs::create_dir_all(&p.auth).unwrap();
+    std::fs::write(p.auth.join("claude-a.json"), r#"{"token":"first"}"#).unwrap();
+    std::fs::write(p.auth.join("codex-b.json"), r#"{"token":"second"}"#).unwrap();
+    std::fs::create_dir_all(p.auth.join("subdir")).unwrap(); // not a login file: left out
+    let key = backup::generate_with(PASS, 10).unwrap();
+    std::fs::write(&p.export_request, serde_json::json!({"id": "e1", "recipient": key.recipient}).to_string()).unwrap();
+    let done = wait_done(&t, &p.export_done, "e1");
+    assert_eq!(done["ok"], true);
+    let bytes = std::fs::read(&p.export_file).unwrap();
+    assert_eq!(done["bytes"], bytes.len() as u64);
+    assert!(!String::from_utf8_lossy(&bytes).contains("first"), "encrypted");
+    let identity = backup::unlock(&key.protected, PASS).unwrap();
+    let files = tar::read(&backup::decrypt(&identity, &bytes).unwrap()).unwrap();
+    assert_eq!(
+        files,
+        vec![
+            ("claude-a.json".to_string(), br#"{"token":"first"}"#.to_vec()),
+            ("codex-b.json".to_string(), br#"{"token":"second"}"#.to_vec())
+        ]
+    );
+    // Acted on once: a new file is not exported again for the same request id.
+    std::fs::write(p.auth.join("later.json"), "{}").unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(std::fs::read(&p.export_file).unwrap(), bytes);
+    assert_eq!(t.starts(), 1, "an export does not restart CLIProxyAPI");
+}
+
+#[test]
+fn an_export_to_a_bad_key_fails_and_leaves_no_file() {
+    let t = start(LOOP, Duration::from_secs(2));
+    let p = &t.settings.transfer;
+    std::fs::write(&p.export_request, r#"{"id":"e2","recipient":"not-a-key"}"#).unwrap();
+    assert_eq!(wait_done(&t, &p.export_done, "e2")["ok"], false);
+    assert!(!p.export_file.exists());
+    // A request with no recipient fails the same way.
+    std::fs::write(&p.export_request, r#"{"id":"e3"}"#).unwrap();
+    assert_eq!(wait_done(&t, &p.export_done, "e3")["ok"], false);
+}
+
+#[test]
+fn an_import_unpacks_the_files_restarts_the_child_and_removes_the_archive() {
+    let t = start(LOOP, Duration::from_secs(2));
+    t.wait_for("the first start", |t| t.starts() == 1);
+    let p = &t.settings.transfer;
+    std::fs::create_dir_all(&p.auth).unwrap();
+    std::fs::write(p.auth.join("old.json"), "old").unwrap();
+    let mut archive = Vec::new();
+    askbar_service::tar::append(&mut archive, "claude-a.json", br#"{"token":"first"}"#, 0);
+    askbar_service::tar::finish(&mut archive);
+    std::fs::write(&p.import_file, &archive).unwrap();
+    std::fs::write(&p.import_request, r#"{"id":"i1"}"#).unwrap();
+    assert_eq!(wait_done(&t, &p.import_done, "i1")["ok"], true);
+    assert_eq!(std::fs::read_to_string(p.auth.join("claude-a.json")).unwrap(), r#"{"token":"first"}"#);
+    assert_eq!(std::fs::read_to_string(p.auth.join("old.json")).unwrap(), "old", "files not in the archive are left alone");
+    assert!(!p.import_file.exists(), "the plain archive does not stay on the volume");
+    t.wait_for("a restart after the import", |t| t.starts() == 2);
+    assert_eq!(t.terms(), 1);
+}
+
+#[test]
+fn a_bad_import_changes_nothing_and_says_so() {
+    let t = start(LOOP, Duration::from_secs(2));
+    let p = &t.settings.transfer;
+    std::fs::create_dir_all(&p.auth).unwrap();
+    std::fs::write(p.auth.join("keep.json"), "keep").unwrap();
+    let mut archive = Vec::new();
+    askbar_service::tar::append(&mut archive, "sub/x.json", b"{}", 0); // a directory part: not an auth file
+    askbar_service::tar::finish(&mut archive);
+    std::fs::write(&p.import_file, &archive).unwrap();
+    std::fs::write(&p.import_request, r#"{"id":"i2"}"#).unwrap();
+    assert_eq!(wait_done(&t, &p.import_done, "i2")["ok"], false);
+    assert_eq!(std::fs::read_to_string(p.auth.join("keep.json")).unwrap(), "keep");
+    assert!(!p.auth.join("sub").exists());
+    assert!(!p.import_file.exists());
+    // No archive at all: also a failure.
+    std::fs::write(&p.import_request, r#"{"id":"i3"}"#).unwrap();
+    assert_eq!(wait_done(&t, &p.import_done, "i3")["ok"], false);
 }
