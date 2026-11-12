@@ -9,8 +9,10 @@
 //!   `503 audit_backlog` and records nothing, so model work stops rather than go unrecorded (ADR 0010 rule 3).
 //! - **No content.** Prompts and replies arrive sealed and leave sealed. The auditor has no key.
 
+pub mod alert_link;
 pub mod disk;
 pub mod ingest;
+pub mod rules;
 
 use askbar_audit::{AdminActionWrite, AlertDeliveryWrite, AppendError, PayloadWrite, Record, Recorder};
 use askbar_proto::audit as wire;
@@ -71,6 +73,8 @@ pub struct Auditor {
     last_request: Mutex<HashMap<&'static str, i64>>,
     /// Lines on the ingest listener that were not taken: not Caddy's, or too long (plan step 2.9).
     pub access_refused: std::sync::atomic::AtomicU64,
+    /// What decides when to alert (plan step 4.2). Unset in the test rigs that do not look at alerts.
+    rules: std::sync::OnceLock<rules::Rules>,
 }
 
 impl Auditor {
@@ -83,12 +87,28 @@ impl Auditor {
             boot_id: BootId::new(),
             last_request: Mutex::new(HashMap::new()),
             access_refused: Default::default(),
+            rules: Default::default(),
         })
+    }
+
+    /// Gives the auditor the rules that send alerts, over `alerts` (set once, by `main`). `Auditor::new` keeps its signature,
+    /// so every rig that does not care about alerts is as it was.
+    pub fn with_alerts(self: Arc<Self>, alerts: Arc<dyn rules::Alerts>) -> Arc<Self> {
+        let _ = self.rules.set(rules::Rules::new(alerts));
+        self
+    }
+
+    /// The rules, if there are any.
+    pub fn rules(&self) -> Option<&rules::Rules> {
+        self.rules.get()
     }
 
     /// Notes a request on a link, at `at` (unix seconds).
     pub fn note_request(&self, caller: &'static str, at: i64) {
         self.last_request.lock().unwrap_or_else(|e| e.into_inner()).insert(caller, at);
+        if let Some(r) = self.rules() {
+            r.seen(caller, at);
+        }
     }
 
     /// When each link last made a request, by caller.
@@ -105,9 +125,27 @@ impl Auditor {
             .map_or(DEFAULT_RETENTION_DAYS, |d: u32| d.max(askbar_audit::MIN_RETENTION_DAYS))
     }
 
+    /// Runs the time-based rules once: disk, and links that have gone quiet. Nothing happens without rules.
+    pub fn tick_rules(&self, now: i64) {
+        if let Some(rules) = self.rules() {
+            rules.tick(now, (self.free_space)(), &self.last_requests());
+        }
+    }
+
     /// Deletes what is past retention, and records the prune. Returns (spans, payloads).
     pub async fn prune_once(&self, now: i64) -> Result<(usize, usize), String> {
         self.recorder.prune(self.retention_days(), now).await
+    }
+}
+
+/// How often the time-based rules run.
+pub const RULES_EVERY: Duration = Duration::from_secs(30);
+
+/// Runs the time-based alert rules every [`RULES_EVERY`], for as long as the process runs.
+pub async fn rules_every_30_seconds(auditor: Arc<Auditor>) {
+    loop {
+        tokio::time::sleep(RULES_EVERY).await;
+        auditor.tick_rules(now());
     }
 }
 
@@ -343,11 +381,17 @@ fn gate(a: &Auditor, new_span: bool) -> Result<(), Failure> {
 }
 
 async fn append(a: &Auditor, record: Record) -> Result<u64, Failure> {
-    a.recorder.append(record).await.map_err(|e| match e {
+    // The rules hear of a record once it is committed, never before: an alert about something that was not recorded is false.
+    let fed = a.rules().and_then(|_| rules::fed_of(&record));
+    let appended = a.recorder.append(record).await.map_err(|e| match e {
         AppendError::Full | AppendError::Stopped => refuse("The audit store is behind; nothing was recorded. Try again in a moment."),
         AppendError::NoSuchSpan => ApiError::new(ErrorCode::NotFound, "No such span."),
         AppendError::Db(_) => internal(()),
-    })
+    })?;
+    if let (Some(rules), Some(fed)) = (a.rules(), fed) {
+        rules.fed(&fed, now());
+    }
+    Ok(appended)
 }
 
 fn created(id: String) -> (StatusCode, Json<wire::Appended>) {

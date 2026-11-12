@@ -76,6 +76,11 @@ async fn main() {
     let limits = Limits::default();
     let recorder = askbar_audit::Recorder::spawn(db, limits.max_queued);
     let auditor = Auditor::new(recorder, limits, disk::free_space_of(&dir, Duration::from_secs(2)));
+    // The rules that send alerts (plan step 4.2, ADR 0055), over the link to the alerter. Without its token nothing is sent.
+    let alerts = askbar_auditor::alert_link::client(&askbar_auditor::token_dir());
+    tokio::spawn(alerts.clone().drain_forever());
+    let auditor = auditor.with_alerts(alerts);
+    tokio::spawn(askbar_auditor::rules_every_30_seconds(auditor.clone()));
     // Docker does not restart an unhealthy container; the watchdog does, by exiting (ADR 0005).
     askbar_service::restart::start_watchdog(healthy);
     tokio::spawn(askbar_auditor::retention_daily(auditor.clone()));

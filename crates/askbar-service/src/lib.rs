@@ -21,6 +21,7 @@ pub mod ids;
 pub mod links;
 pub mod periods;
 pub mod restart;
+pub mod restart_loop;
 pub mod status;
 pub mod tar;
 

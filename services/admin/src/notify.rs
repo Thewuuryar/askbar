@@ -8,6 +8,7 @@
 use crate::sealed::Alert;
 use askbar_proto::alerter::{Fields, Kind, Period, Severity};
 use askbar_service::alert_client::AlertClient;
+use askbar_service::restart_loop::RestartLoop;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -123,30 +124,18 @@ impl TokenWatch {
     }
 }
 
-/// Three restarts within ten minutes are a restart loop (ADR 0051).
-pub const LOOP_CHANGES: usize = 3;
-pub const LOOP_WINDOW_SECS: i64 = 10 * 60;
-
-#[derive(Default)]
-struct Boots {
-    last: Option<String>,
-    /// When the boot ID changed, within the window.
-    changes: VecDeque<i64>,
-    alerted_at: Option<i64>,
-}
-
-/// Watches the boot ID a polled service reports: each change is a restart. Three within ten minutes is a `restart_loop`
-/// alert, and one is sent for a loop however long it goes on (another only after a quiet window). The first boot ID seen
-/// is where the count starts, not a restart. Only services the admin polls are watched; the auditor reports the admin's.
+/// Watches the boot ID a polled service reports: each change is a restart, and three within ten minutes is a `restart_loop`
+/// alert (the rule is `askbar_service::restart_loop`, shared with the auditor). Only services the admin polls are watched; the
+/// auditor reports the admin's own.
 pub struct RestartWatch {
     service: &'static str,
-    boots: Mutex<Boots>,
+    rule: Mutex<RestartLoop>,
     notifier: OnceLock<Arc<Notifier>>,
 }
 
 impl RestartWatch {
     pub fn new(service: &'static str) -> RestartWatch {
-        RestartWatch { service, boots: Mutex::default(), notifier: OnceLock::new() }
+        RestartWatch { service, rule: Mutex::default(), notifier: OnceLock::new() }
     }
 
     pub fn set_notifier(&self, n: Arc<Notifier>) {
@@ -159,35 +148,15 @@ impl RestartWatch {
     }
 
     pub fn saw_at(&self, boot_id: &str, now: i64) {
-        if boot_id.is_empty() {
-            return;
-        }
-        let count = {
-            let mut b = self.boots.lock().unwrap_or_else(|e| e.into_inner());
-            let changed = b.last.as_deref().is_some_and(|last| last != boot_id);
-            b.last = Some(boot_id.to_string());
-            if !changed {
-                return;
-            }
-            b.changes.push_back(now);
-            while b.changes.front().is_some_and(|t| *t <= now - LOOP_WINDOW_SECS) {
-                b.changes.pop_front();
-            }
-            let quiet = b.alerted_at.is_none_or(|t| now - t >= LOOP_WINDOW_SECS);
-            if b.changes.len() < LOOP_CHANGES || !quiet {
-                return;
-            }
-            b.alerted_at = Some(now);
-            b.changes.len() as u32
-        };
-        if let Some(n) = self.notifier.get() {
+        let begun = self.rule.lock().unwrap_or_else(|e| e.into_inner()).saw(boot_id, now);
+        if let (Some(count), Some(n)) = (begun, self.notifier.get()) {
             n.notify(
                 Kind::RestartLoop,
                 Severity::Warning,
                 Fields {
                     service: Some(self.service.to_string()),
                     count: Some(count),
-                    minutes: Some((LOOP_WINDOW_SECS / 60) as u32),
+                    minutes: Some((askbar_service::restart_loop::WINDOW_SECS / 60) as u32),
                     ..Fields::default()
                 },
             );
