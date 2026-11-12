@@ -31,6 +31,8 @@ struct FakeAlerter {
     last_failed: Mutex<Option<i64>>,
     /// What `POST /test` answers.
     test: Mutex<Option<Value>>,
+    /// What `GET /releases` answers (404 until set).
+    releases: Mutex<Option<Value>>,
 }
 
 type Fake = Arc<FakeAlerter>;
@@ -85,6 +87,13 @@ async fn fake_test(State(f): State<Fake>, h: HeaderMap) -> Result<Json<Value>, S
     Ok(Json(f.test.lock().unwrap().clone().unwrap_or_else(|| json!({ "results": [{ "channel": "ntfy", "ok": true }] }))))
 }
 
+async fn fake_releases(State(f): State<Fake>, h: HeaderMap) -> Result<Json<Value>, StatusCode> {
+    if !authorized(&h) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    f.releases.lock().unwrap().clone().map(Json).ok_or(StatusCode::NOT_FOUND)
+}
+
 async fn rig() -> (T, Fake, Arc<AlerterLink>) {
     let t = common::start_with(true, false).await;
     let fake = Fake::default();
@@ -93,6 +102,7 @@ async fn rig() -> (T, Fake, Arc<AlerterLink>) {
         .route("/api/alerter/v1/config", put(fake_config))
         .route("/api/alerter/v1/restart", post(fake_restart))
         .route("/api/alerter/v1/test", post(fake_test))
+        .route("/api/alerter/v1/releases", get(fake_releases))
         .with_state(fake.clone());
     let url = serve(app).await;
     let link = AlerterLink::new(&url, ALERTER_TOKEN.into());
@@ -376,4 +386,27 @@ async fn the_test_alert_names_the_email_channel_too() {
     *fake.test.lock().unwrap() = Some(json!({ "results": [{ "channel": "email", "ok": false, "problem": "tls" }] }));
     let (st, body) = t.call(M::POST, "/api/admin/v1/alerts/test", json!(null)).await;
     assert_eq!((st, body["results"][0]["channel"].clone(), body["results"][0]["problem"].clone()), (200, json!("email"), json!("tls")));
+}
+
+#[tokio::test]
+async fn the_alerters_card_says_when_a_newer_release_is_available_and_nothing_else_it_was_not_told() {
+    let (t, fake, link) = rig().await;
+    link.sync(&t.admin).await;
+    let card = |list: &Value| {
+        list["services"].as_array().unwrap().iter().find(|s| s["name"] == "alerter").unwrap()["status"].as_str().unwrap().to_string()
+    };
+    let (_, list) = t.call(M::GET, "/api/admin/v1/services", json!(null)).await;
+    assert!(!card(&list).contains("Askbar "), "no release answer: nothing about releases: {}", card(&list));
+    *fake.releases.lock().unwrap() =
+        Some(json!({ "current": "0.6.0", "latest": "1.2.0", "newer": true, "checked_at": 5, "failed_at": null }));
+    let (_, list) = t.call(M::GET, "/api/admin/v1/services", json!(null)).await;
+    assert!(card(&list).contains("Askbar 1.2.0 is available; this install runs 0.6.0."), "{}", card(&list));
+    *fake.releases.lock().unwrap() =
+        Some(json!({ "current": "0.6.0", "latest": "0.6.0", "newer": false, "checked_at": 5, "failed_at": null }));
+    let (_, list) = t.call(M::GET, "/api/admin/v1/services", json!(null)).await;
+    assert!(card(&list).contains("Askbar is up to date (0.6.0)."), "{}", card(&list));
+    *fake.releases.lock().unwrap() =
+        Some(json!({ "current": "0.6.0", "latest": null, "newer": false, "checked_at": null, "failed_at": 9 }));
+    let (_, list) = t.call(M::GET, "/api/admin/v1/services", json!(null)).await;
+    assert!(card(&list).contains("did not work"), "{}", card(&list));
 }

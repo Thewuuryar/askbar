@@ -1606,7 +1606,9 @@ components:
           enum: [running, unreachable, restarting]
         status:
           type: string
-          description: A sentence for a person.
+          description: >-
+            A sentence for a person. For `alerter` it also says whether a newer Askbar release is available, from the alerter's
+            daily check of GitHub's latest release (ADR 0055); the version in it is a plain `1.2.3`.
         health:
           type: 'null'
           description: Always null; kept so the shape stays the same.

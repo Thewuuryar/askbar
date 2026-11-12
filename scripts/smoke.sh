@@ -90,7 +90,8 @@ if [ -z "$URL" ]; then
     "$GBIN" >"$WORK/gateway.log" 2>&1 & PIDS+=($!)
   # The alerter (ADR 0055) and a stand-in ntfy server it delivers to. The admin gives it its settings once they are entered.
   python3 -u tests/e2e/ntfy_sink.py "$NTFY_PORT" >/dev/null 2>&1 & PIDS+=($!)
-  ASKBAR_ALERTER_AUDITOR_ADDR="127.0.0.1:$AL_AUDITOR_PORT" ASKBAR_ALERTER_ADMIN_ADDR="127.0.0.1:$AL_ADMIN_PORT" \
+  # No release check: smoke makes no request to the internet.
+  ASKBAR_ALERTER_RELEASES_URL=off ASKBAR_ALERTER_AUDITOR_ADDR="127.0.0.1:$AL_AUDITOR_PORT" ASKBAR_ALERTER_ADMIN_ADDR="127.0.0.1:$AL_ADMIN_PORT" \
     ASKBAR_ALERTER_TOKEN_DIR="$WORK/credentials/alerter-token" ASKBAR_ALERTER_DATA_DIR="$WORK/alerter-data" ASKBAR_AUDIT_API_URL="http://127.0.0.1:$AUDIT_PORT" \
     "$ALBIN" >"$WORK/alerter.log" 2>&1 & PIDS+=($!)
   # The admin service: its own database and secrets, a unix socket and no TCP port.

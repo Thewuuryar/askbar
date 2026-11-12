@@ -109,6 +109,8 @@ pub struct Alerter {
     pub releases: releases::Checker,
     queue: Mutex<Queue>,
     wake: Notify,
+    /// Wakes the release check when the settings change, so a channel set up after a release was found hears of it at once.
+    release_wake: Notify,
     timing: Timing,
     pub restarter: Restarter,
 }
@@ -127,6 +129,7 @@ impl Alerter {
             releases: releases::Checker::new(data_dir, release_url(), env!("CARGO_PKG_VERSION").to_string()),
             queue: Mutex::new(Queue::default()),
             wake: Notify::new(),
+            release_wake: Notify::new(),
             timing,
             restarter,
         })
@@ -157,6 +160,7 @@ impl Alerter {
         tracing::info!(version = c.version, ntfy = c.ntfy.is_some(), email = c.email.is_some(), "configuration applied");
         self.audit.config_applied(c.version as i64);
         self.wake.notify_one();
+        self.release_wake.notify_one();
         Ok(())
     }
 
@@ -362,7 +366,8 @@ impl Alerter {
         loop {
             self.release_round().await;
             let wait = self.releases.due_in(now_parts().0).clamp(1, 3600);
-            tokio::time::sleep(Duration::from_secs(wait.min(self.releases.source().retry.as_secs().max(1)))).await;
+            let wait = Duration::from_secs(wait.min(self.releases.source().retry.as_secs().max(1)));
+            let _ = tokio::time::timeout(wait, self.release_wake.notified()).await;
         }
     }
 

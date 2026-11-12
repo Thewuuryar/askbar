@@ -44,3 +44,4 @@ Installing a patch takes a host command unless a deployer chooses automation. An
 
 - 2026-11-10: merged in 0026 (dependency license check), as "Licenses", with its alternative and consequences.
 - 2026-11-11: CI and repository settings, and the release check (#70, D30 a decision change, D11): a Trivy image scan, a vulnerable fixture, the failed-run email as the CVE alert, Dependabot alerts turned on by the owner, and a daily poll of GitHub's latest-release API. Built in plan steps 4.3 and 7.1.
+- 2026-11-12: built the release check (plan step 4.3, PR AA, #82): see [0055](0055-alerter.md). The request carries a fixed `User-Agent` and no install data; the answer is trusted only as a plain version; tested against a mock.

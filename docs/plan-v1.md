@@ -281,6 +281,7 @@ The owner decided D1 to D36 on 2026-11-11 and set no time budget: everything bel
 
 **4.3 `feat(alerter): check for new releases`** (S) — PR AA [ADR 0017](adr/0017-dependencies-and-patches.md)
 - A daily poll of GitHub's latest-release API with a fixed `User-Agent` (D11); `release_available`; `GET /releases`, shown on the Services page. Until 1.0 it is tested only against a mock.
+- **Built so, AA (2026-11-12, #82):** `releases.rs` and `releases.json` on `alerter-data`; a check once a day, an hour after a failure, and when the settings change; one `release_available` alert per version when a channel is set up; `GET /releases` on `admin-alerter`; one sentence on the alerter's Services card; `ASKBAR_ALERTER_RELEASES_URL` (`off` for none, which smoke uses). The e2e rig has `tests/e2e/releases_mock.py`. No new dependency, no compose change.
 
 ## Phase 5 — Remaining defend controls and client policy
 

@@ -889,3 +889,29 @@ async fn with_the_check_off_nothing_is_asked() {
     t.alerter.release_round().await;
     assert!(mock.asked.lock().unwrap().is_empty() && t.sink.seen.lock().unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn the_running_check_announces_at_once_when_a_channel_is_set_up_after_the_release_was_found() {
+    let t = start().await;
+    let mock = release_mock("v1.2.0").await;
+    t.alerter.releases.set_source(askbar_alerter::releases::Source {
+        url: mock.url.clone(),
+        current: "0.6.0".into(),
+        every: Duration::from_secs(86_400),
+        retry: Duration::from_secs(3600),
+    });
+    tokio::spawn(t.alerter.clone().releases_forever());
+    // No channel: the check runs, finds it, and waits (an hour, if nothing wakes it).
+    assert_eq!(t.admin(M::PUT, "/config", Some(json!({ "version": 1 }))).await.status, 200);
+    for _ in 0..100 {
+        if t.alerter.release_status().latest.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(t.alerter.release_status().latest.as_deref(), Some("1.2.0"));
+    assert!(t.sink.seen.lock().unwrap().is_empty());
+    t.configure().await;
+    assert_eq!(t.sink_has(1).await[0].body, "Askbar 1.2.0 is available.", "the new settings woke the check");
+    assert_eq!(mock.asked.lock().unwrap().len(), 1, "and it did not ask again");
+}
