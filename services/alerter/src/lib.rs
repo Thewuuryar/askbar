@@ -65,6 +65,8 @@ struct Applied {
     version: u64,
     ntfy: Option<NtfyConfig>,
     email: Option<SmtpConfig>,
+    /// The key the export is encrypted to (public; ADR 0013). `None` until the admin has made one.
+    backup_public_key: Option<String>,
 }
 
 impl Applied {
@@ -106,6 +108,7 @@ pub struct Alerter {
     config: RwLock<Option<Arc<Applied>>>,
     state: Mutex<limits::State>,
     ledger: ledger::Ledger,
+    data_dir: PathBuf,
     pub releases: releases::Checker,
     queue: Mutex<Queue>,
     wake: Notify,
@@ -126,6 +129,7 @@ impl Alerter {
             config: RwLock::new(None),
             state: Mutex::new(state),
             ledger,
+            data_dir: data_dir.to_path_buf(),
             releases: releases::Checker::new(data_dir, release_url(), env!("CARGO_PKG_VERSION").to_string()),
             queue: Mutex::new(Queue::default()),
             wake: Notify::new(),
@@ -155,8 +159,12 @@ impl Alerter {
         if let Some(m) = &c.email {
             deliver::smtp::validate(m)?;
         }
-        *self.config.write().unwrap_or_else(|e| e.into_inner()) =
-            Some(Arc::new(Applied { version: c.version, ntfy: c.ntfy.clone(), email: c.email.clone() }));
+        *self.config.write().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(Applied {
+            version: c.version,
+            ntfy: c.ntfy.clone(),
+            email: c.email.clone(),
+            backup_public_key: c.backup_public_key.clone().filter(|k| askbar_service::backup::is_recipient(k)),
+        }));
         tracing::info!(version = c.version, ntfy = c.ntfy.is_some(), email = c.email.is_some(), "configuration applied");
         self.audit.config_applied(c.version as i64);
         self.wake.notify_one();
@@ -395,8 +403,15 @@ impl Alerter {
 type Routes = &'static [(&'static str, &'static str)];
 
 const AUDITOR_ROUTES: Routes = &[("POST", "/events")];
-const ADMIN_ROUTES: Routes =
-    &[("GET", "/status"), ("PUT", "/config"), ("POST", "/restart"), ("POST", "/events"), ("POST", "/test"), ("GET", "/releases")];
+const ADMIN_ROUTES: Routes = &[
+    ("GET", "/status"),
+    ("PUT", "/config"),
+    ("POST", "/restart"),
+    ("POST", "/events"),
+    ("POST", "/test"),
+    ("GET", "/releases"),
+    ("POST", "/exports"),
+];
 
 /// The two links: name as `bootstrap` names it (the file `accept/<name>.sha256`), the caller, and the routes.
 pub const LINKS: &[(&str, &str, Routes)] = &[("auditor-alerter", "auditor", AUDITOR_ROUTES), ("admin-alerter", "admin", ADMIN_ROUTES)];
@@ -489,6 +504,7 @@ pub fn admin_router(a: Arc<Alerter>, links: Links) -> Router {
         .route(&full("/events"), post(events))
         .route(&full("/test"), post(test))
         .route(&full("/releases"), get(releases))
+        .route(&full("/exports"), post(export))
         .layer(axum::middleware::from_fn_with_state(gate, askbar_service::configured::require))
         .layer(axum::middleware::from_fn_with_state(links, askbar_service::links::require));
     shell(a, protected)
@@ -557,6 +573,34 @@ async fn events(
 /// Send a test alert through every channel that is set up and say what each did.
 async fn test(State(a): St) -> Json<TestResult> {
     Json(a.test().await)
+}
+
+/// `POST /exports` (ADR 0013): what the alerter keeps on its volume (the repeat ledger and the release state), as a tar encrypted
+/// to the backup public key the admin pushed. Both files are small, so this is built in memory. It holds no secret: the delivery
+/// settings are never on disk. With no key, nothing is made: `503 backup_key_missing`.
+async fn export(State(a): St) -> Result<axum::response::Response, Failure> {
+    let Some(recipient) = a.applied().and_then(|c| c.backup_public_key.clone()) else {
+        return Err(ApiError::code(ErrorCode::BackupKeyMissing));
+    };
+    let dir = a.data_dir.clone();
+    let now = now_parts().0;
+    let made = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, ApiError> {
+        let internal = || ApiError::code(ErrorCode::Internal);
+        let mut tar = Vec::new();
+        for name in [ledger::FILE, releases::FILE] {
+            if let Ok(data) = std::fs::read(dir.join(name)) {
+                askbar_service::tar::append(&mut tar, name, &data, now);
+            }
+        }
+        askbar_service::tar::finish(&mut tar);
+        askbar_service::backup::encrypt(&recipient, &tar).map_err(|_| internal())
+    })
+    .await
+    .map_err(|_| ApiError::code(ErrorCode::Internal))??;
+    axum::response::Response::builder()
+        .header(axum::http::header::CONTENT_TYPE, "application/octet-stream")
+        .body(axum::body::Body::from(made))
+        .map_err(|_| ApiError::code(ErrorCode::Internal))
 }
 
 /// What the daily release check found.

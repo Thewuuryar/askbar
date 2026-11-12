@@ -8,7 +8,8 @@ description = "Alert delivery in its own container: /api/alerter/v1 (ADR 0055)"
 
 [dependencies]
 askbar-proto = { path = "../../crates/askbar-proto", features = ["axum"] }
-askbar-service = { path = "../../crates/askbar-service" }
+# The `backup` feature: the age encryption the export is made with (ADR 0013).
+askbar-service = { path = "../../crates/askbar-service", features = ["backup"] }
 axum = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 # Email (ADR 0055): SMTP over rustls (ring, webpki roots), as reqwest does it. No native-tls, no pool, no hostname lookup.

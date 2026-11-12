@@ -18,7 +18,7 @@ pub const DEFAULT_URL: &str = "https://api.github.com/repos/Thewuuryar/askbar/re
 pub const OFF: &str = "off";
 /// The same for every install, and never anything about it.
 pub const USER_AGENT: &str = "askbar-release-check";
-const FILE: &str = "releases.json";
+pub const FILE: &str = "releases.json";
 const TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_BODY: usize = 256 * 1024;
 /// A check that worked is repeated after a day, and one that failed after an hour.

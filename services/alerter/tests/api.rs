@@ -915,3 +915,42 @@ async fn the_running_check_announces_at_once_when_a_channel_is_set_up_after_the_
     assert_eq!(t.sink_has(1).await[0].body, "Askbar 1.2.0 is available.", "the new settings woke the check");
     assert_eq!(mock.asked.lock().unwrap().len(), 1, "and it did not ask again");
 }
+
+#[tokio::test]
+async fn the_export_is_the_ledger_and_release_state_encrypted_to_the_pushed_key_and_needs_one() {
+    use askbar_service::backup;
+    let t = start().await;
+    // Before the settings arrive: not configured. With settings but no key: no export.
+    assert_eq!(t.admin(M::POST, "/exports", None).await.code(), "not_configured");
+    t.configure().await;
+    let r = t.admin(M::POST, "/exports", None).await;
+    assert_eq!((r.status, r.code().as_str()), (503, "backup_key_missing"));
+    // A key that is not a public key is no key.
+    let c = json!({ "version": 2, "backup_public_key": "not-a-key" });
+    assert_eq!(t.admin(M::PUT, "/config", Some(c)).await.status, 200);
+    assert_eq!(t.admin(M::POST, "/exports", None).await.code(), "backup_key_missing");
+    // Put some state on the volume: a held-back alert writes the ledger.
+    t.configure().await;
+    t.auditor(M::POST, "/events", Some(unsealed())).await;
+    t.sink_has(1).await;
+    let key = backup::generate_with("a long backup passphrase 1", 10).unwrap();
+    let c = json!({ "version": 3, "ntfy": { "server": t.sink.url, "topic": MARKER_TOPIC, "token": MARKER_TOKEN }, "backup_public_key": key.recipient });
+    assert_eq!(t.admin(M::PUT, "/config", Some(c)).await.status, 200);
+    let resp = t.http.post(format!("{}/api/alerter/v1/exports", t.admin_url)).bearer_auth(token("admin-alerter")).send().await.unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+    assert_eq!(resp.headers()["content-type"], "application/octet-stream");
+    let bytes = resp.bytes().await.unwrap();
+    let plain_marker = [MARKER_TOKEN, MARKER_TOPIC];
+    assert!(plain_marker.iter().all(|m| !String::from_utf8_lossy(&bytes).contains(m)));
+    let identity = backup::unlock(&key.protected, "a long backup passphrase 1").unwrap();
+    let files = askbar_service::tar::read(&backup::decrypt(&identity, &bytes).unwrap()).unwrap();
+    let names: Vec<&str> = files.iter().map(|(n, _)| n.as_str()).collect();
+    assert!(names.contains(&"ledger.json"), "{names:?}");
+    // What is in it holds no delivery secret.
+    for (_, data) in &files {
+        let text = String::from_utf8_lossy(data);
+        assert!(!text.contains(MARKER_TOKEN) && !text.contains(MARKER_TOPIC));
+    }
+    // It is not on the auditor's listener at all.
+    assert_eq!(t.auditor(M::POST, "/exports", None).await.status, 404);
+}
