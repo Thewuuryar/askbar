@@ -56,6 +56,24 @@ async function waitIdle(page) {
     await shot(page, '01-idle');
   });
 
+  await step("the footer's source link asks first, shows the address, and opens only through the backend (AGPL notice)", async () => {
+    const lp = await open(browser);
+    assert.equal(await lp.locator('#foot #source-link').count(), 1, 'the link is in the footer');
+    assert.equal(await lp.getAttribute('#source-link', 'href'), 'https://github.com/Thewuuryar/askbar');
+    const picker = await lp.evaluate(() => { const r = document.getElementById('model-picker').getBoundingClientRect(); return [r.left, r.width]; });
+    await lp.click('#source-link');
+    assert.equal(await lp.isVisible('#link-confirm'), true);
+    assert.equal(await lp.innerText('#link-confirm-url'), 'https://github.com/Thewuuryar/askbar');
+    assert.equal((await calls(lp, 'open_url')).length, 0, 'nothing opened yet');
+    assert.ok(lp.url().endsWith('ui/index.html'), 'the page did not navigate');
+    await lp.click('#link-open');
+    assert.equal(await lp.isHidden('#link-confirm'), true);
+    assert.deepEqual(await calls(lp, 'open_url'), [{ url: 'https://github.com/Thewuuryar/askbar' }], 'opened through the backend, once');
+    const after = await lp.evaluate(() => { const r = document.getElementById('model-picker').getBoundingClientRect(); return [r.left, r.width]; });
+    assert.deepEqual(after, picker, 'the link does not move the model picker');
+    await lp.context().close();
+  });
+
   await step('window is sized to the card plus the shadow margin', async () => {
     const r = await calls(page, 'resize_window');
     const last = r[r.length - 1];

@@ -128,8 +128,9 @@ mod tests {
         assert_eq!((l.remote_ip.as_str(), l.proto.as_str()), ("203.0.113.7", "HTTP/2.0"), "the client address, not the proxy's");
         assert_eq!(l.user_agent.as_deref(), Some("Askbar/1.0"), "control characters are dropped");
         let all = format!("{l:?}");
-        for secret in ["SECRET-CODE", "SECRET-TOKEN", "SECRET-COOKIE", "SECRET-SET", "frag"] {
-            assert!(!all.contains(secret), "{secret} was kept");
+        // The failure message names the fixture's number, never its text (AGENTS.md: no secret in test output).
+        for (i, secret) in ["SECRET-CODE", "SECRET-TOKEN", "SECRET-COOKIE", "SECRET-SET", "frag"].iter().enumerate() {
+            assert!(!all.contains(secret), "fixture {i} was kept");
         }
     }
 
