@@ -675,9 +675,18 @@ except Exception: print(0)
   [ "$(al_call "$AL_AUD" "$AL_AUD_IP" GET /status "$AL_AUD_TOK")" = 404 ] && pass "the auditor's listener has no status route" || fail "the auditor's listener serves /status"
   [ "$(al_call "$AL_AUD" "$AL_AUD_IP" PUT /config "$AL_AUD_TOK" '{}')" = 404 ] && pass "the auditor's listener has no config route" || fail "the auditor's listener serves /config"
   [ "$(al_call "$EDGE" "$AL_AUD_IP" GET /health)" = 0 ] && pass "a container on edge cannot reach the alerter" || fail "the alerter is reachable from edge"
-  # Until the admin pushes settings it answers 503 not_configured (nothing in this stack pushes them yet), and a restart is allowed.
-  [ "$(al_call "$AL_ADMIN" "$AL_ADMIN_IP" POST /test "$AL_ADM_TOK")" = 503 ] && pass "unconfigured, POST /test is 503" || fail "an unconfigured alerter did not answer 503 to POST /test"
-  [ "$(al_call "$AL_AUD" "$AL_AUD_IP" POST /events "$AL_AUD_TOK" '{"kind":"unsealed","severity":"warning","at":1}')" = 503 ] && pass "unconfigured, an event is 503" || fail "an unconfigured alerter did not answer 503 to an event"
+  # The admin gives it its settings with no command (an alerter with no channel is given an empty set, so that it answers): after a
+  # few seconds the status shows a configuration, and a test alert says that nothing is set up.
+  have=null
+  for i in $(seq 1 20); do
+    have=$(py --network "$AL_ADMIN" -- "
+import urllib.request, json
+req = urllib.request.Request('http://$AL_ADMIN_IP:8085/api/alerter/v1/status', headers={'authorization': 'Bearer $AL_ADM_TOK'})
+print(json.load(urllib.request.urlopen(req, timeout=4))['config_version'])" 2>/dev/null | tail -1)
+    [ -n "$have" ] && [ "$have" != None ] && break; sleep 2
+  done
+  [ -n "$have" ] && [ "$have" != None ] && pass "the admin gave the alerter its settings, with no command" || fail "the alerter has no configuration: '$have'"
+  [ "$(al_call "$AL_ADMIN" "$AL_ADMIN_IP" POST /test "$AL_ADM_TOK")" = 200 ] && pass "configured, POST /test answers" || fail "a configured alerter did not answer POST /test"
   # Its own link to the auditor works end to end: its token is accepted there, and the auditor notes its request.
   ar=$(py --network "$AL_AUD" -- "
 import urllib.request, json
@@ -690,6 +699,64 @@ req = urllib.request.Request('http://auditor-alerter-host:8083/api/audit/v1/trac
 try: print(urllib.request.urlopen(req, timeout=4).status)
 except urllib.error.HTTPError as e: print(e.code)" 2>&1 | tail -1)
   [ "$ar" = 403 ] && pass "the alerter's token cannot read the auditor's records" || fail "the alerter's token read the auditor's records: '$ar'"
+  # A stand-in ntfy server on alerter-outbound (for this check only), a marker topic and token entered in the admin, a test alert that
+  # reaches the sink with them, a restart that needs no command to bring the settings back, and the marker nowhere it must not be.
+  docker rm -f askbar-ntfy-sink >/dev/null 2>&1
+  SINK_PY="$(cd "$(dirname "$0")/.." && pwd)/tests/e2e/ntfy_sink.py"
+  if docker run -d --rm --name askbar-ntfy-sink --network "$AL_OUT" -v "$SINK_PY:/sink.py:ro" "$PYIMG" python -I /sink.py 8080 0.0.0.0 >/dev/null 2>&1; then
+    sleep 2
+    ALMARK="isolation-marker-$(head -c 12 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9')"
+    ALTOK="isolation-token-$(head -c 12 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9')"
+    sink_seen() { py --network "$AL_OUT" -- "import urllib.request; print(urllib.request.urlopen('http://askbar-ntfy-sink:8080/_seen', timeout=4).read().decode())" 2>/dev/null; }
+    out=$(admin_script "$(admin_login)
+s, body = call('PUT', '/api/admin/v1/alerts', {'ntfy': {'server': 'http://askbar-ntfy-sink:8080', 'topic': '$ALMARK', 'token': '$ALTOK'}})
+print(s)" 2>&1 | tail -1)
+    [ "$out" = 200 ] && pass "alert delivery settings with a marker topic and token were entered in the admin" || fail "entering the alert settings answered '$out'"
+    ok=""
+    for i in $(seq 1 10); do
+      ok=$(admin_script "$(admin_login)
+s, body = call('POST', '/api/admin/v1/alerts/test')
+print(json.loads(body)['results'][0]['ok'] if s == 200 and json.loads(body)['results'] else 'no')" 2>&1 | tail -1)
+      [ "$ok" = True ] && break; sleep 2
+    done
+    [ "$ok" = True ] && pass "a test alert is delivered through the alerter, over alerter-outbound" || fail "the test alert: '$ok'"
+    seen=$(sink_seen)
+    case "$seen" in *"/$ALMARK"*"Bearer $ALTOK"*) pass "the sink received the test alert on the topic, with the token";; *) fail "the sink did not get the test alert as expected: $seen";; esac
+    # A restart: the settings were only in memory, so the admin has to push them again, with no command.
+    rs=""
+    for i in $(seq 1 12); do
+      rs=$(admin_script "$(admin_login)
+print(call('POST', '/api/admin/v1/services/alerter/restart')[0])" 2>&1 | tail -1)
+      [ "$rs" = 200 ] && break; sleep 5
+    done
+    [ "$rs" = 200 ] && pass "the admin restarted the alerter and waited for it" || fail "restarting the alerter through the admin answered '$rs'"
+    ok=""
+    for i in $(seq 1 15); do
+      ok=$(admin_script "$(admin_login)
+s, body = call('POST', '/api/admin/v1/alerts/test')
+print(json.loads(body)['results'][0]['ok'] if s == 200 and json.loads(body)['results'] else 'no')" 2>&1 | tail -1)
+      [ "$ok" = True ] && break; sleep 2
+    done
+    [ "$ok" = True ] && pass "after the restart the alerter delivers again: the admin gave it its settings back" || fail "after the restart: '$ok'"
+    # Where the marker must not be.
+    for c in $ALERTER $SERVER $ADMIN $AUDITOR $GW $CADDY; do
+      docker logs "$c" 2>&1 | grep -q -e "$ALMARK" -e "$ALTOK" && fail "$c's log holds the marker topic or token" || pass "$c's log holds no marker topic or token"
+    done
+    docker exec "$ALERTER" sh -c "grep -rIl -e '$ALMARK' -e '$ALTOK' /alerter-data /alerter-token /tmp /etc /home /var 2>/dev/null | head -1" | grep -q . \
+      && fail "the alerter's filesystem holds the marker" || pass "the alerter's filesystem holds no marker (the settings are in memory only)"
+    docker exec "$AUDITOR" sh -c "grep -rl -e '$ALMARK' -e '$ALTOK' /audit 2>/dev/null | head -1" | grep -q . && fail "the auditor's store holds the marker" || pass "the auditor's store holds no marker"
+    docker exec "$ADMIN" sh -c "grep -rl -e '$ALMARK' -e '$ALTOK' /admin-data 2>/dev/null | head -1" | grep -q . && fail "the admin's database holds the marker in the clear" || pass "the admin's database holds the marker encrypted only"
+    resp=$(admin_script "$(admin_login)
+for p in ('/api/admin/v1/alerts', '/api/admin/v1/services', '/api/admin/v1/status', '/api/admin/v1/settings'):
+    print(call('GET', p)[1])" 2>&1)
+    printf '%s' "$resp" | grep -q -e "$ALMARK" -e "$ALTOK" && fail "an admin response returned the marker" || pass "no admin response returns the marker topic or token"
+    # Put it back: no channel, and the sink gone.
+    admin_script "$(admin_login)
+print(call('PUT', '/api/admin/v1/alerts', {'ntfy': None})[0])" >/dev/null 2>&1
+    docker rm -f askbar-ntfy-sink >/dev/null 2>&1
+  else
+    fail "could not start the stand-in ntfy server on alerter-outbound"
+  fi
 fi
 
 echo "== 3e. No Docker socket"
@@ -703,7 +770,7 @@ docker container inspect askbar-controller >/dev/null 2>&1 && fail "a controller
 docker network inspect "${PROJECT}_control" >/dev/null 2>&1 && fail "the control network still exists" || pass "there is no control network"
 out=$(admin_script "$(admin_login)
 print(call('POST', '/api/admin/v1/services/controller/restart')[0], call('POST', '/api/admin/v1/services/server/stop')[0], call('POST', '/api/admin/v1/services/server/kill')[0])" 2>&1 | tail -1)
-[ "$out" = "404 404 404" ] && pass "only the five services can be restarted, and nothing else can be done to them" || fail "service actions accepted a bad name or action: $out"
+[ "$out" = "404 404 404" ] && pass "only the six services can be restarted, and nothing else can be done to them" || fail "service actions accepted a bad name or action: $out"
 
 echo "== 4. The allowlist"
 caddy_config() { # prints the admin site's route from Caddy's loaded config
