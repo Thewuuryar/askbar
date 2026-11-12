@@ -5,9 +5,19 @@
     <form id="network-form" class="panel">
       <label class="check"><input id="n-tls" type="checkbox"> Serve over HTTPS (through the Caddy front end)</label>
       <label>Hostname <input id="n-host" placeholder="askbar.example.com" autocomplete="off" spellcheck="false"></label>
-      <label>Cloudflare API token <input id="n-token" type="password" autocomplete="off" placeholder="write-only"></label>
-      <p class="hint">Used only to prove ownership of the hostname to Let's Encrypt (permissions Zone:DNS:Edit and Zone:Zone:Read). It is stored encrypted and never shown again. The apps reach the server at the hostname, and this admin site is at <code>/admin</code> on the same hostname.</p>
-      <label class="check" id="n-clear-row" hidden><input id="n-clear" type="checkbox"> Remove the stored token</label>
+      <label>How to prove the hostname is yours to Let's Encrypt
+        <select id="n-challenge">
+          <option value="dns">DNS challenge through Cloudflare (works for a private address)</option>
+          <option value="http">HTTP-01 (any DNS provider, needs public port 80)</option>
+        </select>
+      </label>
+      <p class="hint" id="n-http-note" hidden><strong>HTTP-01 needs port 80 on this machine to be reachable from the internet</strong> (forward it on your router; port 443 is for the apps), and the hostname must point at your public address. It cannot work for a name that only resolves inside your network: use the DNS challenge for that. Let's Encrypt rate-limits failed attempts, so try the staging CA below first.</p>
+      <div id="n-dns-box">
+        <label>Cloudflare API token <input id="n-token" type="password" autocomplete="off" placeholder="write-only"></label>
+        <p class="hint">Used only to prove ownership of the hostname to Let's Encrypt (permissions Zone:DNS:Edit and Zone:Zone:Read). It is stored encrypted and never shown again.</p>
+        <label class="check" id="n-clear-row" hidden><input id="n-clear" type="checkbox"> Remove the stored token</label>
+      </div>
+      <p class="hint">The apps reach the server at the hostname, and this admin site is at <code>/admin</code> on the same hostname.</p>
       <label class="check"><input id="n-allow" type="checkbox"> Only let these addresses open the admin site over HTTPS (off: anyone who can reach it may try to sign in)</label>
       <label>Allowed addresses and networks <input id="n-cidr" placeholder="192.168.1.0/24 10.0.0.5" autocomplete="off" spellcheck="false"></label>
       <label class="check"><input id="n-staging" type="checkbox"> Use the Let's Encrypt staging CA (test certificates; browsers will warn)</label>

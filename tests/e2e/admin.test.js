@@ -788,6 +788,42 @@ async function waitForPort(port) {
     await page.click('#network-form button[type=submit]');
     await page.waitForFunction(() => /point at http:\/\/localhost/.test(document.getElementById('n-info').textContent));
   });
+  await step('network: HTTP-01 is chosen beside DNS, shows its warning, needs no token and refuses a private name (D19)', async () => {
+    await openPage('network');
+    await page.waitForFunction(() => /pairing keys point at/.test(document.getElementById('n-info').textContent));
+    assert.equal(await page.inputValue('#n-challenge'), 'dns', 'the DNS challenge is the default');
+    assert.equal(await page.isVisible('#n-dns-box'), true);
+    assert.equal(await page.isHidden('#n-http-note'), true);
+    await page.selectOption('#n-challenge', 'http');
+    assert.equal(await page.isHidden('#n-dns-box'), true, 'no token to enter');
+    assert.match(await page.innerText('#n-http-note'), /port 80/);
+    assert.match(await page.innerText('#n-http-note'), /cannot work for a name that only resolves inside your network/);
+    // A name that only resolves inside the network is refused, with the way out.
+    await page.check('#n-tls');
+    await page.fill('#n-host', 'nas.local');
+    await page.click('#network-form button[type=submit]');
+    await page.waitForSelector('#network-error:not([hidden])');
+    assert.match(await page.innerText('#network-error'), /looks private.*DNS challenge/);
+    // A public name is saved with no token entered, and the choice survives a reload.
+    await page.fill('#n-host', 'askbar.orraitu.com');
+    await page.click('#network-form button[type=submit]');
+    await page.waitForSelector('#flash:not([hidden])');
+    assert.match(await page.innerText('#n-info'), /admin site is at https:\/\/askbar\.orraitu\.com\/admin/);
+    await page.reload();
+    await openPage('network');
+    await page.waitForFunction(() => document.getElementById('n-host').value === 'askbar.orraitu.com');
+    assert.equal(await page.inputValue('#n-challenge'), 'http');
+    assert.equal(await page.isHidden('#n-dns-box'), true);
+    // Back to DNS: the token box is back, and the token stored earlier is still held.
+    await page.selectOption('#n-challenge', 'dns');
+    assert.equal(await page.isVisible('#n-dns-box'), true);
+    assert.match(await page.getAttribute('#n-token', 'placeholder'), /unchanged/);
+    // Leave things as the next steps expect: plain HTTP, the DNS challenge.
+    await page.uncheck('#n-tls');
+    await page.click('#network-form button[type=submit]');
+    await page.waitForFunction(() => /point at http:\/\/localhost/.test(document.getElementById('n-info').textContent));
+    assert.equal(await page.inputValue('#n-challenge'), 'dns');
+  });
   await step('backup downloads the server and admin databases without secrets', async () => {
     await openPage('backup');
     const [download] = await Promise.all([page.waitForEvent('download'), page.click('#backup-link')]);
