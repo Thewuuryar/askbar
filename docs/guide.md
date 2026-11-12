@@ -2,9 +2,9 @@
 
 The details behind the [README](../README.md): how Askbar is put together, how to run, configure, upgrade and back up the server, the desktop app in full, the tests, and what is and is not verified.
 
-This page describes the code on `main`. The accepted v1 target differs: see [architecture.md](architecture.md) and the [ADRs](adr/README.md). Where they disagree, build to the ADR.
+This page describes Askbar v1 as built. The design and the reasons for it are in [architecture.md](architecture.md) and the [ADRs](adr/README.md). Where they disagree, build to the ADR.
 
-## What Askbar does today
+## What Askbar does
 
 - **Conversation only.** The model gets text in and returns text out. There are no tools, no shell, no file access, and the window is granted no filesystem or network permissions (`clients/desktop/src-tauri/capabilities/default.json`). Only the Rust side talks to your provider.
 - **Any provider.** Anthropic, or anything that speaks the OpenAI `/chat/completions` protocol (OpenAI, OpenRouter, Ollama, LM Studio, vLLM, Groq, ...).
@@ -16,21 +16,67 @@ This page describes the code on `main`. The accepted v1 target differs: see [arc
 
 ## How it fits together
 
-Askbar is three programs:
+Askbar is a desktop client and a small set of containers:
 
 - **Desktop client** (Tauri): the popup. It pairs with one server and holds only its address, a hotkey and a client token (in the OS keychain).
 - **`askbar-server`**: the client API. It stores conversations and asks `model-gateway` for each reply; it holds no provider key and has no route to the internet. It has no web UI and no login.
 - **`askbar-model-gateway`**: holds the provider keys in memory and calls the providers ([ADR 0054](adr/0054-model-gateway.md)).
+- **`askbar-auditor`**: keeps the audit store and its hash chain; it has no route out ([The auditor](#the-auditor)).
+- **`askbar-alerter`**: delivers alerts and checks for new releases ([The alerter](#the-alerter)).
+- **`caddy`** and **`cpa`**: the HTTPS front end, and CLIProxyAPI for a Claude or ChatGPT subscription.
 - **`askbar-admin`**: the admin site. It owns all configuration (providers, system prompt, display defaults, pairing codes, clients, network and HTTPS settings, limits and the kill switch) and pushes it to the server over a private server API. Its **Audit** page shows what the auditor recorded about every reply.
 
 There is no standalone mode: the client always talks to a server.
 
+```mermaid
+---
+title: V1 keeps the server offline behind one model-gateway
+---
+flowchart TB
+    clients["Clients"]
+    adminUser["Admin user or script"]
+
+    subgraph host["Askbar host"]
+        caddy["<b>caddy</b><br/>Only published ports, with direct certificate access<br/>Admin limited to private addresses"]
+        server["<b>server</b><br/>Chats and space files<br/>No provider keys, no outbound route"]
+        auditor["<b>auditor</b><br/>Append-only log, hash chain<br/>No outbound route"]
+        admin["<b>admin</b><br/>Secrets, settings, pairing<br/>Backups and restart requests"]
+        modelGateway["<b>model-gateway</b><br/>Provider keys, budgets,<br/>kill switch, direct outbound"]
+        cpa["<b>cpa</b><br/>Optional subscription login<br/>Direct outbound"]
+        alerter["<b>alerter</b><br/>Sends alerts, checks releases<br/>Direct outbound"]
+        bootstrap["<b>bootstrap</b><br/>No network. Writes per-link tokens,<br/>then exits. Re-run from the host to rotate"]
+    end
+
+    providers["<b>Model providers</b><br/>Cloud APIs and<br/>the GPU desktop"]
+    alerts["<b>Alert services</b><br/>ntfy, then email<br/>GitHub releases"]
+    backup["<b>Backup storage</b><br/>one /backup volume<br/>(the host may mount a NAS over it)"]
+
+    clients -->|"HTTPS, client token<br/>local network or Tailscale"| caddy
+    adminUser -->|"HTTPS, session cookie or API key"| caddy
+    caddy -->|"/api/client/v1"| server
+    caddy -->|"/admin, /api/admin/v1<br/>unix socket"| admin
+    admin -->|"config"| caddy
+    caddy -->|"access logs"| auditor
+    server -->|"appends"| auditor
+    admin -->|"appends, reads"| auditor
+    modelGateway -->|"model-call spans"| auditor
+    alerter -->|"appends"| auditor
+    server -->|"model calls"| modelGateway
+    admin -->|"config, restarts"| server
+    admin -->|"config, restarts, keys, budgets"| modelGateway
+    modelGateway --> cpa
+    modelGateway --> providers
+    cpa --> providers
+    auditor -->|"alert events"| alerter
+    admin -->|"release check"| alerter
+    alerter --> alerts
+    admin -->|"encrypted backups"| backup
+
+    classDef key stroke-width:3px
+    class modelGateway key
 ```
- desktop app --HTTPS, bearer token--> Caddy :443 --> askbar-server :8080 --> askbar-model-gateway --> your providers
- browser     --HTTPS, session cookie-> Caddy :443 --unix socket--> askbar-admin
-                                                                      |  server API, gateway and auditor (a token and a network for each)
-                                                                      +--> askbar-server, askbar-model-gateway, askbar-auditor
-```
+
+The same picture is in [architecture.md](architecture.md#picture), with what each container holds, what a failure does and every link's network in the tables after it.
 
 How the pieces fit, and why, is in [architecture.md](architecture.md); the HTTP APIs are described in [openapi/](openapi/) (client, server, admin); contributing is in [CONTRIBUTING.md](../CONTRIBUTING.md) and security in [SECURITY.md](../SECURITY.md).
 
@@ -114,15 +160,17 @@ docker compose up -d --build
 
 To stop it, or before rebuilding after an update, use `docker compose --profile dev down --remove-orphans`. With `--profile dev`, the mock LLM is removed as well; without it, a dev container left behind can point at a network that no longer exists.
 
-That starts these containers, with `bootstrap` (no network, exits when it has made the tokens) before them:
+That starts these containers, with `bootstrap` (no network, exits when it has made the tokens) before them. The mock LLM of the `dev` profile is not listed:
 
 | Container | Runs as | Network | Published |
 |---|---|---|---|
 | `askbar-caddy` | root (group 10001) | `edge`, `client-api`, `audit-caddy` | **443, 80** |
 | `askbar-server` | uid 10002 | `client-api`, `server-api`, `gateway-server`, `audit-server` | nothing |
-| `askbar-admin` | uid 10001 | `server-api`, `cpa-admin`, `audit-admin`, `gateway-admin` | nothing (a unix socket) |
-| `askbar-auditor` | uid 10003 | `audit-admin`, `audit-caddy`, `audit-model-gateway`, `audit-server` only | nothing |
+| `askbar-admin` | uid 10001 | `server-api`, `cpa-admin`, `audit-admin`, `gateway-admin`, `alerter-admin` | nothing (a unix socket) |
+| `askbar-auditor` | uid 10003 | `audit-admin`, `audit-alerter`, `audit-caddy`, `audit-model-gateway`, `audit-server` only | nothing |
 | `askbar-model-gateway` | uid 10004 | `gateway-server`, `gateway-admin`, `audit-model-gateway`, `cpa-gateway`, `outbound` | nothing |
+| `askbar-alerter` | uid 10005 | `audit-alerter`, `alerter-admin`, `alerter-outbound` | nothing |
+| `askbar-cpa` | root (group 10001) | `cpa-admin`, `cpa-gateway`, `outbound` | nothing |
 
 `server-api` is an `internal` network shared by the admin and the server's server API. No address is fixed: the server has the alias `server-api-host` on that network only, listens on the address it resolves to (port 8082), and the admin calls `http://server-api-host:8082`. So the server API answers on `server-api` and nowhere else. Caddy is the only thing the outside world can reach.
 
@@ -254,7 +302,7 @@ Each link between two services has its own token ([ADR 0004](adr/0004-bootstrap-
   ```
 
   The old token stops working when the receiver is restarted. Until then, and until the caller is restarted, calls between the two fail.
-- **A rejected token.** If the server stops accepting a token that worked (its hash file was replaced, say, or only one side was rotated), the admin site shows a banner with the commands and stops showing "server offline": the server is there, it just refuses this admin. Run `docker compose run --rm bootstrap rotate admin-server`, then `docker compose restart server admin`. The admin cannot restart the server itself, because the server refuses its calls. It logs one line naming the link, never the token, and the banner goes away when the server accepts the token again. The server logs one line when five invalid tokens arrive on its server API within ten minutes, naming the link (`admin-server`) and the count, then stays quiet until the count has dropped below five again ([ADR 0024](adr/0024-rejected-token-alert.md)); the alerter sends these as alerts once it exists (phase 4).
+- **A rejected token.** If the server stops accepting a token that worked (its hash file was replaced, say, or only one side was rotated), the admin site shows a banner with the commands and stops showing "server offline": the server is there, it just refuses this admin. Run `docker compose run --rm bootstrap rotate admin-server`, then `docker compose restart server admin`. The admin cannot restart the server itself, because the server refuses its calls. It logs one line naming the link, never the token, and the banner goes away when the server accepts the token again. The server logs one line when five invalid tokens arrive on its server API within ten minutes, naming the link (`admin-server`) and the count, then stays quiet until the count has dropped below five again ([ADR 0024](adr/0024-rejected-token-alert.md)); the alerter delivers them as `rejected_token` alerts ([The alerter](#the-alerter)).
 - **Backup.** The credential volumes need none: if they are lost, `bootstrap` makes them again and you restart the services.
 
 ### The auditor
@@ -264,8 +312,8 @@ The audit store has its own container, `askbar-auditor` ([ADR 0051](adr/0051-aud
 **The server and `model-gateway` send it their records** (the gateway opens each reply's turn and try spans and waits for the acknowledgment before it calls a provider; the server adds the gates it passed, its sealed request and reply, and how the reply ended). The server's own `audit.db` is gone: `audit-data` stays on disk untouched and the auditor starts with its own empty `auditor-data`, so records from before the upgrade stay only in the old volume. Copy it (`docker run --rm -v askbar_audit-data:/a -v "$PWD":/b alpine cp -a /a/. /b/audit-backup/`) or delete it once you no longer want them.
 
 - **Tokens.** Each link has its own, made by `bootstrap` ([Tokens between services](#tokens-between-services)). The auditor holds only their hashes, in `auditor-token`. These exist: `server-auditor` (the server's gate spans, sealed payloads and finish records), `model-gateway-auditor` (the gateway's spans, finish records and sealed payloads), `admin-auditor-append` (admin action records), `admin-auditor-read` (reads and retention) and `model-gateway-auditor-read` (token counts only, so the gateway can hold the budget). A link may call only its own routes, and the caller of a record is the one its token belongs to. No token can change or delete a record.
-- **The hash chain.** Every record the auditor takes (a span's start and finish, a sealed payload, an admin action, a prune) is chained: its entry holds a digest of the record and the hash of the entry before it, so changing or removing a record or an entry breaks the chain from there on. The entries are never deleted, not even by retention (they hold digests, not content). **The admin keeps the newest chain head** it has checked, every five minutes compares it with the auditor's, and about once an hour asks the auditor to check every record against its entry. A red banner on every admin page says what it found: **rollback** (the chain is shorter than the admin saw: an older copy of `audit.db` may have been put back, or records removed), **rewritten** (the entry the admin stored is gone or has another hash) or **edited** (records no longer match their entries). The sentence gives numbers and the kind of record, never its content, and it is also logged (`ALERT audit chain`). The banner goes away by itself when the auditor's chain is the one the admin stored again. The chain shows that records were changed; it does not show that a service told the truth. **Restoring `audit.db` from a backup on purpose** shows as a rollback, and the banner stays until there is a way to accept the restored chain (it comes with recording the admin's own actions, plan step 2.7). Records from before the chain existed are chained when the auditor first starts with it, so the chain proves nothing about them before that day.
-- **What the admin does is recorded, and refused without a record.** Every change an administrator makes in the admin site or through an admin API key is appended to the auditor **before** it is made: settings (the retention and the kill switch are named in the record, the prompt is not), providers and their tests, users, clients, pairing keys, API keys, the audit key, the admin password, restarts, the network settings, Cloudflare and CLIProxyAPI accounts, and the backup download. The configuration pushes to the server and to the gateway are recorded as actions of their own. If the auditor cannot take the record, the change is refused with a sentence ("The auditor cannot be reached, and every change is recorded first, so nothing was changed") and nothing is saved; reading still works. How each change ended (`done`, `refused` or `failed`) is appended afterwards. A record holds the route, whether a session or a key asked, the ids in the path and a few facts, never what was typed, a secret or message content. `askbar-admin reset` is recorded too, and does not reset the password when the auditor cannot take the record: bring the auditor back first. **The server and the gateway record the configuration version they apply** with their own tokens (`config` / `applied`), so the admin's claim of a push and the service's record sit side by side; a mismatch alert comes later. Sealed-content sessions are recorded too (see the Audit page above). Not recorded yet: signing in and out, and restores (there is no restore route; it is a manual procedure).
+- **The hash chain.** Every record the auditor takes (a span's start and finish, a sealed payload, an admin action, a prune) is chained: its entry holds a digest of the record and the hash of the entry before it, so changing or removing a record or an entry breaks the chain from there on. The entries are never deleted, not even by retention (they hold digests, not content). **The admin keeps the newest chain head** it has checked, every five minutes compares it with the auditor's, and about once an hour asks the auditor to check every record against its entry. A red banner on every admin page says what it found: **rollback** (the chain is shorter than the admin saw: an older copy of `audit.db` may have been put back, or records removed), **rewritten** (the entry the admin stored is gone or has another hash) or **edited** (records no longer match their entries). The sentence gives numbers and the kind of record, never its content, and it is also logged (`ALERT audit chain`). The banner goes away by itself when the auditor's chain is the one the admin stored again. The chain shows that records were changed; it does not show that a service told the truth. **Restoring `audit.db` from a backup on purpose** shows as a rollback, and the banner stays until the restored chain is the one the admin stored again. Records from before the chain existed are chained when the auditor first starts with it, so the chain proves nothing about them before that day.
+- **What the admin does is recorded, and refused without a record.** Every change an administrator makes in the admin site or through an admin API key is appended to the auditor **before** it is made: settings (the retention and the kill switch are named in the record, the prompt is not), providers and their tests, users, clients, pairing keys, API keys, the audit key, the admin password, restarts, the network settings, Cloudflare and CLIProxyAPI accounts, and the backup download. The configuration pushes to the server and to the gateway are recorded as actions of their own. If the auditor cannot take the record, the change is refused with a sentence ("The auditor cannot be reached, and every change is recorded first, so nothing was changed") and nothing is saved; reading still works. How each change ended (`done`, `refused` or `failed`) is appended afterwards. A record holds the route, whether a session or a key asked, the ids in the path and a few facts, never what was typed, a secret or message content. `askbar-admin reset` is recorded too, and does not reset the password when the auditor cannot take the record: bring the auditor back first. **The server and the gateway record the configuration version they apply** with their own tokens (`config` / `applied`), so the admin's claim of a push and the service's record sit side by side; a mismatch alert comes later. Sealed-content sessions are recorded too (see the Audit page above). Restores are recorded too (`backup/restore_inspect` and `backup/restore`). Not recorded: signing in and out.
 - **Caddy's access lines.** Every request Caddy handles is also one line to the auditor, on a network of its own, `audit-caddy`, shared by Caddy and the auditor alone. Caddy's log writer cannot carry a token, so the auditor takes the lines on an ingest listener (`auditor-ingest-host:8086`) that reads and never answers: from `audit-caddy`, Caddy can add lines and nothing else, and the token API is not bound on that network at all (the API listens on one address for each of its callers' networks, not on every interface). A line keeps the time, method, host, path **without its query string**, status, size, duration, the client address, the protocol and a cut user agent: no header and no query string is kept, because either can carry a secret. The lines are chained and pruned with the other records, and the admin read token reads them (`GET /access-logs`); there is no page for them yet. They are best effort, unlike model calls: Caddy starts and serves while the auditor is away (`soft_start`), a line that cannot be sent is lost, and when the auditor is busy it drops lines (never more than half its queue) and counts them in its status (`access_lines_dropped`, `access_lines_refused`). **Upgrading:** `docker compose up -d --build` adds the network and the listener, and the auditor's first start applies migration 5, which makes the chain table again with the new kind and keeps every entry.
 - **Retention.** Records are kept 30 days by default and never less than 7. The admin read token sets it; the auditor prunes once a day, and each prune leaves a record of its own.
 - **When it refuses.** Past its backlog limit (1,000 queued records, or the oldest waiting over 5 seconds) it refuses every append, and below 256 MiB free disk it refuses a new span, with `503 audit_backlog`. A model call that cannot be recorded does not start. That is deliberate: model work stops rather than go unrecorded.
@@ -299,7 +347,7 @@ Alerts have their own container, `askbar-alerter` ([ADR 0055](adr/0055-alerter.m
 **What sends alerts.** The admin sends four: **chain mismatch** (the audit trail was rolled back, rewritten or edited; one alert for each finding), **rejected token** (a service refused the admin's token on a link; one for each episode, naming the link), **restart loop** (the server, `model-gateway` or the alerter restarted three times within ten minutes) and **budget threshold** (a day's or a month's token budget is 80% used, a warning, and 100%, critical; one of each for each period, subscription providers not counted, and only for a limit you have set). Each is also a line on every admin page for a day, and a log line with no secret in it. The auditor sends the others: **audit content opened** (an unseal), **unseal limits changed**, **retention changed** (and to how many days), **backup key changed**, **audit disk low** (under 1 GiB free, again only after it has been over 1.25 GiB) and **critical** (under 256 MiB), **a component has gone quiet** (nothing from the server, `model-gateway`, the alerter or the admin for five minutes) and **Caddy has gone quiet** (a reply began and, fifteen minutes later, Caddy has sent no access line since), and **the admin restarted three times in ten minutes**. None of them carries content, a key or a passphrase.
 
 - **Networks.** `audit-alerter` (with the auditor) and `alerter-admin` (with the admin), both `internal`, and `alerter-outbound`, which only the alerter joins and which is the alerter's one route out (it is not `outbound`, where `model-gateway` sits, so nothing else shares a network with it that can reach the internet). Its two listeners are on the addresses of the two internal networks, never on `alerter-outbound`.
-- **Volumes.** `alerter-data` (the repeat ledger: which alerts were sent when and how many repeats were held back, no secret and no content) and `alerter-token` (its credential volume, read-only). The delivery settings, including a ntfy topic and token, are the admin's and will be pushed to it and kept in its memory, never on a volume.
+- **Volumes.** `alerter-data` (the repeat ledger: which alerts were sent when and how many repeats were held back, no secret and no content) and `alerter-token` (its credential volume, read-only). The delivery settings, including a ntfy topic and token, are the admin's, pushed to it and kept in its memory, never on a volume.
 - **Tokens.** `auditor-alerter` (the auditor sends events), `admin-alerter` (the admin configures it and sends its own events) and `alerter-auditor` (it appends the outcome of each alert to the auditor, as metadata only), made by `bootstrap`.
 - **Upgrade.** `docker compose up -d --build`. `bootstrap` makes the three new tokens, and Docker makes the two new volumes and three new networks; the admin gets a new table for the delivery settings (and, with email, a second one). Nothing to do, and nothing is lost. Until you set up ntfy or email the banner says alerts are not set up. If `docker compose up` fails with the address-pool error ([Docker networks](#docker-networks)), the stack now needs three more networks than before.
 
@@ -319,7 +367,7 @@ Four things to back up, **separately**:
 
 - **`data/`** (the server's `control.db`: users, paired clients and spaces; and `spaces/`, one file per space with its conversations) and the **`admin-data`** volume (the admin's database).
 - **The `admin-secrets` volume** (`admin.key`). Keep it somewhere other than your database backups: anyone holding both it and `admin-data` can read the stored provider keys. For example: `docker run --rm -v askbar_admin-secrets:/s -v "$PWD":/b alpine cp /s/admin.key /b/admin.key`, then store the copy in a password manager. (`askbar-secrets`, which held the server's old master key, is no longer used.)
-- Admin site > **Backup** downloads one **encrypted** `.tar` bundle ([ADR 0013](adr/0013-backups.md)). It needs the backup key you made at setup (the Backup page shows its fingerprint); without one, nothing is backed up. Each part is encrypted with age to the backup public key, so the admin that sends it cannot read it, and it is complete, secrets included: the server's data (`control.db` and a file per space) and the admin's own (its database, `admin.key`, the CLIProxyAPI keys and the install's own certificate and key). The auditor's, the alerter's and `cpa`'s parts come in later versions. Each part is consistent (`VACUUM INTO`).
+- Admin site > **Backup** downloads one **encrypted** `.tar` bundle ([ADR 0013](adr/0013-backups.md)). It needs the backup key you made at setup (the Backup page shows its fingerprint); without one, nothing is backed up. Each part is encrypted with age to the backup public key, so the admin that sends it cannot read it, and it is complete, secrets included: the server's data (`control.db` and a file per space) and the admin's own (its database, `admin.key`, the CLIProxyAPI keys and the install's own certificate and key). Each part is consistent (`VACUUM INTO`).
 - **What is in the bundle.** `manifest.json` (in the clear: the format, the release that made it, the key's fingerprint, and each part's name, SHA-256 and size), `backup-key.age` (the private key, protected by your backup passphrase), then the parts, the admin's first: `admin.age`, `server.age`, `alerter.age` (the alerter's repeat counts and release check) `cpa.age` (the account logins of CLIProxyAPI) and `audit.age` last (the auditor's store: the trace of replies, sealed). Nothing in it is readable without the passphrase.
 - **Reading a backup by hand**, with the ordinary [`age`](https://github.com/FiloSottile/age) tool and nothing from Askbar. Unpack the bundle (`tar xf askbar-backup-<time>.tar`), then:
 
@@ -390,23 +438,29 @@ Every pull request runs `.github/workflows/ci.yml` on Linux: rustfmt and clippy 
 
 ## Verified, and not
 
-Verified on Linux (X11) by driving the real binary: hotkey show/hide, second-launch toggle, typing, streaming, Esc-to-stop (the server sees the disconnect and the partial reply is saved), deleting through real clicks, clipboard copy and paste, a bad hotkey, and hide-on-click-away (these were checked before the 0.3.0 split; the 0.3.0 client has been build- and test-verified, not driven by hand).
+What the automated checks cover is named by the CI job that runs it (`.github/workflows/ci.yml`; every pull request runs all of them on Linux; the guide's Tests section says how to run them yourself):
 
-Verified for 0.3.0 in containers: all three images build and report healthy; `scripts/check-isolation.sh` passes (server port token and fail-closed behaviour, network separation, what each container can read, the allowlist rules in Caddy's loaded configuration, secret file modes, no admin code in the server image, backups free of secrets); the admin applies configuration to Caddy through its unix socket.
+- **`lint`**: rustfmt and clippy.
+- **`test-services`**: `npm run test:services` (the docs checks of `scripts/check-docs.sh`, the Rust tests of the services and crates, the admin site in a real browser against the real server and admin) and then `scripts/smoke.sh`.
+- **`test-desktop`**: `npm run test:desktop` (the desktop app's Rust tests, its Markdown renderer, and the popup in a real browser against a mocked backend).
+- **`isolation`**: `scripts/check-isolation.sh` against a stack built in CI: what each container can reach and read, the allowlist in Caddy's loaded configuration, secret file modes, and the failure drills (every service stopped and started, the auditor down, a full auditor disk, the admin down, the alerter down).
+- **`dependencies`**: `cargo deny` for both workspaces, the npm license and advisory checks, and a known-vulnerable fixture that must fail.
+- **`images`**: every image builds and is scanned for known vulnerabilities. **`cpa-image`**: `scripts/check-cpa-image.sh` runs the pinned CLIProxyAPI image on its own and checks the parts of its management API the admin uses.
+- **`secrets`**: gitleaks over the whole history.
 
-Not verified: **Windows and macOS** runtime behaviour (`.github/workflows/build.yml`, run manually with *Run workflow*, builds and tests them), **Wayland**, a real certificate issued by this layout (the Let's Encrypt/Cloudflare path worked in 0.2 and the Caddy module is unchanged), a **desktop client paired to a 0.3.0 stack by a person**, and the live Anthropic and OpenAI APIs (both protocols are tested against a mock that follows their streaming formats). On macOS the dock icon is hidden by default; if Cmd+C or Cmd+V misbehave, set `ui.macos_hide_dock_icon: false`.
+The weekly scheduled run repeats them, so a new advisory fails a run you are told about ([ADR 0017](adr/0017-dependencies-and-patches.md)).
+
+**Not verified until the 1.0 checklist** ([ADR 0002](adr/0002-v1-scope-limits-and-ship-criteria.md)), because only a person can do them: a fresh deployment and a paired client working end to end; a real certificate issued through this layout (Let's Encrypt with the Cloudflare DNS challenge); a restore drill that meets the 30-minute target; the client on macOS, Windows and Linux, including on macOS and Linux that replies render under the Trusted Types policy, that a link asks first and shows its whole address, and that the webview's console shows no content security policy error; the owner's sign-off on the accepted risks; and that no ship-blocking finding is open. Also not tested: Wayland, and the live Anthropic and OpenAI APIs (both protocols are tested against a mock that follows their streaming formats). On macOS the dock icon is hidden by default; if Cmd+C or Cmd+V misbehave, set `ui.macos_hide_dock_icon: false`.
 
 ## Not built yet
 
 - **Projects**: group conversations, move them between projects (the database already has the tables).
-- **Deployment on a NAS, VPN access, arm64 images.**
-- **Self-improving memory**: after a conversation, a cheap model call proposes add/update/delete operations on a list of durable facts; the top matches are injected into the next system prompt; a periodic pass merges duplicates and drops stale entries; a view lets you edit or delete anything it learned. The schema has a migration slot ready.
+- **VPN access and arm64 images.** Keeping backups on a NAS is documented ([Backup and recovery](#backup-and-recovery)).
+- **Shared spaces, self-improving memory and an iOS app**, deferrable ([ADR 0002](adr/0002-v1-scope-limits-and-ship-criteria.md)).
 - Renaming conversations.
-
-in collaboration with thewuurbot
 
 ## License
 
 Askbar is licensed under the [GNU Affero General Public License v3.0 or later](../LICENSE) (AGPL-3.0-or-later).
 
-**Source code:** <https://github.com/Thewuuryar/askbar>. If you run a modified server for other people, section 13 of the AGPL requires offering them the corresponding source; the admin page links here for that reason. The Caddy and CLIProxyAPI containers are separate programs with their own licenses.
+**Source code:** <https://github.com/Thewuuryar/askbar>. Anyone who uses a modified server over a network must be offered its corresponding source (section 13 of the AGPL); the admin site shows the notice and this link for that reason. The Caddy and CLIProxyAPI containers are separate programs with their own licenses.

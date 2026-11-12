@@ -32,7 +32,7 @@ This table lists what is on `main`; the target layout is in [ADR 0033](docs/adr/
 
 ```sh
 cargo build --workspace            # server and admin (the app is built in clients/desktop)
-cargo fmt --all --check            # (proposed) required once the rustfmt PR lands
+cargo fmt --all --check            # CI runs it, here and in clients/desktop
 cargo test --workspace             # needs python3 (a mock LLM)
 npm install && npm --prefix clients/desktop install && npx playwright install chromium
 npm test                           # names and link checks, cargo tests (both workspaces), markdown, UI and admin browser tests, mock LLM
@@ -41,6 +41,8 @@ docker compose up -d --build && scripts/check-isolation.sh   # needs Docker; a t
 python3 tests/e2e/mock_llm.py 8765     # a fake OpenAI-compatible server to try things without a key
 npm --prefix clients/desktop install && npm --prefix clients/desktop run dev   # the desktop app
 ```
+
+**Third-party notices.** [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) lists what ships and its licenses. After you change a dependency (`Cargo.lock`, a lockfile) or an image's contents, run `scripts/third-party-notices.sh` and commit the result; `scripts/third-party-notices.sh --check` says whether it is out of date. It is not part of `scripts/check-docs.sh` or CI, because it needs the crates downloaded, so it cannot run without the network on a fresh checkout. The images section is written by hand in `scripts/third-party-notices.images.md`.
 
 The browser tests start the built `askbar-server` and `askbar-admin`; run `cargo build -p askbar-server -p askbar-admin` first
 when you have changed them (the admin site's files are compiled in).
@@ -114,10 +116,10 @@ The whole API is [docs/openapi/admin.v1.yaml](docs/openapi/admin.v1.yaml).
 
 - **Branches.** `<type>/<short-kebab-description>`; type is one of `feat`, `fix`, `docs`, `refactor`, `test`, `chore`,
   `ci`. Branch from `main`; never push to it.
-- **Commits (proposed).** [Conventional Commits](https://www.conventionalcommits.org/): `type(scope): subject`, imperative, lower
+- **Commits.** [Conventional Commits](https://www.conventionalcommits.org/): `type(scope): subject`, imperative, lower
   case, 72 characters or fewer. The scopes are listed in [AGENTS.md](AGENTS.md#branches-and-commits). The body says why, lists any deviation from a plan, and says when a test was changed. A breaking
   change has `!` after the scope and a `BREAKING CHANGE:` footer. One concern per commit; tests and docs ride with the code.
-- **Pull requests (proposed).** The title is a commit subject. Fill in the template: what was verified, and what was not.
+- **Pull requests.** The title is a commit subject. Fill in the template: what was verified, and what was not.
 - **Merging.** Squash by default. A stepwise series where each commit stands alone is rebase-merged; say so in the PR.
 - **A boundary change needs an ADR.** If a change moves a boundary (crate, container, network, volume, API audience),
   adds a container, image or service or a dependency outside the license allowlist, changes a hard rule in [AGENTS.md](AGENTS.md), or changes or reverses an ADR on `main`, write an

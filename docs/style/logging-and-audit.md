@@ -4,7 +4,7 @@ Two separate records, with different readers and different rules. Never use one 
 
 ## Operational logs
 
-What a person running the stack reads in `docker compose logs`. Written with `tracing`. Existing code uses `info` and `warn`; the levels below are the **(proposed)** standard for all new code.
+What a person running the stack reads in `docker compose logs`. Written with `tracing`. Existing code uses `info` and `warn`; the levels below are the standard for all new code.
 
 - **Metadata only.** Ids, counts, durations, status codes, versions, addresses. Never message content (prompts, replies, provider errors), provider keys, tokens, the audit passphrase, pasted login addresses, the Cloudflare token or the admin password. Do not log query strings or headers. Alerts never include a token ([ADR 0024](../adr/0024-rejected-token-alert.md)).
 - **Structured fields, short message.** Put values in fields and keep the message a fixed phrase, as the existing lines do: `info!(%addr, "listening")`, `info!(version = v, "snapshot pushed")`.
@@ -25,8 +25,8 @@ The record of what the system did with a reply, kept for investigation. Describe
 - **No key, no replies.** Until an audit key exists the server answers `503 audit_key_missing` rather than record unsealed.
 - **Auditor down or behind.** New replies are refused with `503 audit_backlog` ([ADR 0031](../adr/0031-audit-span-start-and-backlog.md)).
 - **Crashes.** A service queues finish and payload records and retries them. Spans left unfinished after a crash are marked interrupted when the service reconnects with a new boot ID ([ADR 0025](../adr/0025-audit-record-reliability.md)).
-- **Only the auditor mounts the audit store.** The admin reads it through the auditor API ([ADR 0010](../adr/0010-auditor.md)). On `main` the server still holds `audit.db`.
-- **Admin actions.** They are appended to the auditor in the categories in [ADR 0010](../adr/0010-auditor.md), and the admin refuses an action if its record can't be appended. **(proposed)** Each record says which credential made the change (a session or the API key). On `main`, starting, stopping or restarting a service writes a `service_actions` row in `admin.db` instead, without who did it.
+- **Only the auditor mounts the audit store.** The admin reads it through the auditor API ([ADR 0010](../adr/0010-auditor.md)). The server holds no audit store.
+- **Admin actions.** They are appended to the auditor in the categories in [ADR 0010](../adr/0010-auditor.md), and the admin refuses an action if its record can't be appended. Each record says which credential made the change (a session or an API key). The admin also keeps a `service_actions` row in `admin.db` for each restart, to rate-limit restarts and fill its Services page; that is not the audit record, and the server writes no such rows.
 
 ## Later
 

@@ -1,6 +1,6 @@
 # Naming
 
-Everything here is how the code already behaves on `main`, except items marked **(proposed)**.
+Everything here is how the code behaves.
 
 ## The words
 
@@ -39,9 +39,9 @@ Use the component names in the [glossary](../architecture.md#glossary) in paths,
 | Environment variables | `ASKBAR_<COMPONENT>_<THING>` with a kind suffix: `_ADDR`, `_URL`, `_DIR`, `_FILE`, `_SOCKET` | `ASKBAR_SERVER_API_ADDR`, `ASKBAR_ADMIN_SOCKET` |
 | Compose services | the role, lower case | `server`, `admin`, `auditor`, `model-gateway`, `caddy`, `cpa` |
 | Containers and images | `askbar-<service>` | `askbar-server` |
-| Networks | what they connect | `edge`, `control`, `cpa-admin`, `server-api` |
-| Volumes | kebab-case; **never renamed** | `askbar-secrets`, `audit-data` |
+| Networks | what they connect | `edge`, `cpa-admin`, `server-api` |
+| Volumes | kebab-case; **never renamed** | `auditor-data`, `admin-secrets` |
 
 ## Git
 
-Branches and commits: see "Branches and commits" in [AGENTS.md](../../AGENTS.md). The branch rule is decided; the commit format is still proposed.
+Branches and commits: see "Branches and commits" in [AGENTS.md](../../AGENTS.md). The branch and commit rules are decided.

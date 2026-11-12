@@ -1,6 +1,6 @@
 # Architecture
 
-This document is the proposed v1 target that the code will follow. The code on `main` doesn't fully match it yet, and each [ADR](adr/README.md) states whether it's Proposed or Accepted.
+This document describes how Askbar v1 is built. Each [ADR](adr/README.md) states whether it is Proposed or Accepted, and where code and this document disagree, one of them is a bug ([AGENTS.md](../AGENTS.md)).
 
 ## Glossary
 
@@ -85,7 +85,62 @@ flowchart TB
     class modelGateway key
 ```
 
-`server`, `model-gateway`, the admin (its action records) and, in phase 4, `alerter` (delivery records) append to the auditor with their own tokens, and Caddy appends only its access logs, with no token, to a listener that answers nothing. `cpa` and `bootstrap` don't append. Caddy is the only service with published ports. The server stores no provider keys or admin data, only its own link tokens, and has no outbound route.
+`server`, `model-gateway`, the admin (its action records) and `alerter` (delivery records) append to the auditor with their own tokens, and Caddy appends only its access logs, with no token, to a listener that answers nothing. `cpa` and `bootstrap` don't append. Caddy is the only service with published ports. The server stores no provider keys or admin data, only its own link tokens, and has no outbound route.
+
+## Components at a glance
+
+What each container holds, what it can reach, and what taking it over would give an attacker. Volumes and networks are the ones in `compose.yaml`; `scripts/check-isolation.sh` checks that the reach is no wider. The dev-only `mock-llm` (a stand-in model, profile `dev`) is left out.
+
+| Service | Holds | Can reach | If it is compromised |
+| --- | --- | --- | --- |
+| **bootstrap** | writes the credential volumes `server-token`, `admin-token`, `auditor-token`, `model-gateway-token`, `alerter-token`; runs once, as root with `CHOWN` only | nothing: no network | every link token could be minted, but it has no route to use them and has exited. Compromise needs a bad image |
+| **server** | `DATA_DIR` (the spaces and `control.db`); `server-token` read-only | `model-gateway` (`gateway-server`), the auditor (`audit-server`); Caddy and the admin reach it on `client-api` and `server-api` | every user's conversations, and appends and model calls under its own tokens. No provider key, no audit passphrase, no route out |
+| **admin** | `admin-data`, `admin-secrets` (provider keys, certificate key), `backup`, `cpa-config`; `admin-token` read-only; the sockets `admin-run`, `caddy-run`, `caddy-secrets` | the server (`server-api`), `model-gateway` (`gateway-admin`), the auditor (`audit-admin`), the alerter (`alerter-admin`), `cpa` (`cpa-admin`), Caddy by its admin socket. No route out | the provider keys, the settings and the user list, and it can push any configuration. Audit content stays sealed, backups stay encrypted to a key it cannot open, and it has no route out |
+| **auditor** | `auditor-data` (`audit.db`); `auditor-token` read-only | the alerter (`audit-alerter`). No route out | the sealed store: ciphertext, which it cannot open. It could delete or alter records, which the hash chain shows |
+| **model-gateway** | provider keys in memory only; `model-gateway-token` read-only | the auditor (`audit-model-gateway`), `cpa` (`cpa-gateway`), the providers (`outbound`) | the provider keys, and every prompt and reply in flight. It stores no history |
+| **alerter** | `alerter-data` (the repeat ledger); delivery settings in memory; `alerter-token` read-only | the auditor (`audit-alerter`), ntfy, the mail server and GitHub (`alerter-outbound`) | the alert credentials and the power to send or silence alerts. It never sees content |
+| **caddy** | `caddy-data`, `caddy-config`, `caddy-run`, `admin-run`, `caddy-secrets` (the certificate key, read-only) | the server (`client-api`), the admin socket, the auditor's ingest listener (`audit-caddy`), certificate authorities (`edge`) | the certificate key and all traffic in the clear: client tokens and admin sessions. Only Caddy publishes ports |
+| **cpa** | `cpa-config`, `cpa-auth` (the subscription logins) | the providers (`outbound`). It starts no other link: `model-gateway` and the admin call it on `cpa-gateway` and `cpa-admin` | the subscription logins and the prompts routed through it |
+
+## When a service is down
+
+Docker restarts a service that exits (`restart: unless-stopped`). This is what is seen until it is back. Alert kinds are the ones in `crates/askbar-proto/src/alerter.rs`. `scripts/check-isolation.sh` section 8 runs the drills marked *drilled*.
+
+| Service down | What happens | Alert | Recovery |
+| --- | --- | --- | --- |
+| **server** | Clients get an error from Caddy and cannot ask. The admin starts and shows the server offline (*drilled*) | `component_silent` for the server's link after five minutes with nothing from it | Docker restarts it; the admin pushes its settings again |
+| **admin** | Replies still finish (*drilled*). The admin site is gone, and no setting, user or key can change. After a gateway restart, model work waits until the admin pushes the keys again ([ADR 0054](adr/0054-model-gateway.md)) | `restart_loop` if it keeps restarting (from its hellos). None for a plain stop | Docker restarts it |
+| **auditor** | A new reply is refused: `503 audit_backlog`, or a `provider_error` event once the stream is open (*drilled*). Nothing is made unrecorded ([ADR 0010](adr/0010-auditor.md)) | none: the auditor is what raises alerts | Docker restarts it; replies work again at once (*drilled*) |
+| **auditor, disk full** | Below 256 MiB free a new span is refused (`503 audit_backlog`); spans already open still finish; the hello and status still answer (*drilled* on a 2 MB disk) | `audit_disk_low` below 1 GiB, `audit_disk_critical` below 256 MiB | free space on the host; nothing is lost |
+| **model-gateway** | A new reply fails with `gateway_unavailable`. After it restarts it answers `gateway_not_configured` until the admin pushes the keys | `component_silent` for its link after five minutes (*drilled*) | Docker restarts it; the admin pushes the keys |
+| **alerter** | No alert is delivered. The admin shows an "unreachable" banner on every page (*drilled*) | none outside the host: the dead-man monitor is out of v1 ([ADR 0055](adr/0055-alerter.md), [ADR 0016](adr/0016-risk-register.md)) | Docker restarts it; the banner clears (*drilled*) |
+| **cpa** | Replies through the CPA provider fail; other providers are untouched | none | Docker restarts it; accounts stay in `cpa-auth` |
+| **caddy** | Nothing can be reached from outside: no client, no admin site. The services keep running | none that reaches you: `caddy_silent` fires when replies run and Caddy logs no access lines, which needs Caddy up | Docker restarts it; it starts once the server, admin and auditor are healthy |
+
+## Network map
+
+Every link and the network it uses. Every network except `edge`, `outbound` and `alerter-outbound` is `internal`, with no route out. Two links use no network: Caddy and the admin reach each other through unix sockets on shared volumes.
+
+| Link | Network |
+| --- | --- |
+| client or admin user to Caddy | the host's published ports 443 and 80 (`edge`) |
+| Caddy to the server's client API | `client-api` |
+| Caddy to the admin site and API | unix socket on `admin-run` |
+| the admin's configuration of Caddy | Caddy's admin socket on `caddy-run` |
+| server to model-gateway (replies) | `gateway-server` |
+| server to the auditor (appends) | `audit-server` |
+| admin to the server (settings, restarts) | `server-api` |
+| admin to model-gateway (keys, budgets, restarts) | `gateway-admin` |
+| admin to the alerter (settings, status, the release check's answer) | `alerter-admin` |
+| admin to `cpa` (accounts, logins) | `cpa-admin` |
+| admin to the auditor (action records, reads, restore) | `audit-admin` |
+| model-gateway to the auditor (model-call spans) | `audit-model-gateway` |
+| alerter to the auditor (delivery records) and the auditor to the alerter (alert events) | `audit-alerter` |
+| Caddy to the auditor (access lines, no token) | `audit-caddy` |
+| Caddy to certificate authorities | `edge` |
+| model-gateway to `cpa` | `cpa-gateway` |
+| model-gateway and `cpa` to the providers | `outbound` |
+| the alerter to ntfy, the mail server and GitHub (the daily release poll) | `alerter-outbound` |
 
 ## Routes
 
