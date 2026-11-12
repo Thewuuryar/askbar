@@ -143,6 +143,9 @@ async fn main() {
     tokio::spawn(askbar_admin::chain_check::run(state.clone(), auditor.clone()));
     // What the day's and the month's tokens come to against the budget, once a minute (ADR 0055).
     tokio::spawn(askbar_admin::budget_watch::run(state.clone(), auditor));
+    // Scheduled backups: daily at 03:30 UTC, to /backup (ADR 0013, D29). Every call on the destination is time-boxed, so a share that has gone
+    // away does not keep the admin down.
+    tokio::spawn(askbar_admin::backup_schedule::run(state.clone()));
     // Sealed content seals itself when its time is up or its sign-in is gone (ADR 0011 rule 11).
     tokio::spawn(askbar_admin::sealed::run(state.clone()));
     // Every change is recorded with this token before it is made (ADR 0010); the admin does not start without it.

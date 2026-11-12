@@ -14,6 +14,7 @@ pub mod auditor_link;
 pub mod auth;
 pub mod backup_bundle;
 pub mod backup_key;
+pub mod backup_schedule;
 pub mod budget_watch;
 pub mod caddy;
 pub mod catalog;
@@ -98,6 +99,8 @@ pub struct AdminState {
     pub admin_secrets_dir: std::sync::Mutex<Option<std::path::PathBuf>>,
     /// A restore in progress: the bundle uploaded and checked, and the limit on guesses at its passphrase (ADR 0013).
     pub restore: restore::Restore,
+    /// Scheduled backups: where they go and what is stuck there (ADR 0013, D29).
+    pub backups: backup_schedule::Backups,
     /// Where work files go when the database is not a file (tests give each rig its own; a stack's are next to `admin.db`).
     pub work_dir: std::sync::Mutex<Option<std::path::PathBuf>>,
 }
@@ -134,6 +137,7 @@ impl AdminState {
             service_actions: std::sync::Mutex::new(Default::default()),
             admin_secrets_dir: std::sync::Mutex::new(None),
             restore: Default::default(),
+            backups: Default::default(),
             work_dir: std::sync::Mutex::new(None),
         })
     }
@@ -204,6 +208,10 @@ pub fn routes(state: &Arc<AdminState>) -> Routes {
         .put(&v1("/settings"), admin_api::put_settings)
         .put(&v1("/users/{id}/display-defaults"), admin_api::put_user_display)
         .get(&v1("/backup"), backup_bundle::download)
+        // Scheduled backups (ADR 0013, D29): the status, a backup to the destination now, and the restore drill's reminder.
+        .get(&v1("/backup/schedule"), backup_schedule::get_schedule)
+        .post(&v1("/backup/run"), backup_schedule::run_now)
+        .post(&v1("/backup/drill"), backup_schedule::drill_done)
         .get(&v1("/network"), network::get_network)
         .put(&v1("/network"), network::put_network)
         .post(&v1("/network/apply"), network::apply_network)
@@ -219,6 +227,8 @@ pub fn routes(state: &Arc<AdminState>) -> Routes {
         // The backup key (ADR 0013, D21): setting or rotating it needs a person's own, freshly signed-in session, never an API key.
         .put(&v1("/setup/backup-key"), backup_key::setup_key)
         .post(&v1("/backup/rotate-key"), backup_key::rotate_key)
+        // How many backups and how long to keep them: lowering them deletes backups, so a person's own, freshly signed-in session.
+        .put(&v1("/backup/schedule"), backup_schedule::put_schedule)
         // A restore (ADR 0013, D21): a person's own, freshly signed-in session, into an empty install, never an API key.
         .post(&v1("/restore/inspect"), restore::inspect)
         .post(&v1("/restore"), restore::restore)

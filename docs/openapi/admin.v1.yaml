@@ -1195,6 +1195,111 @@ paths:
           $ref: '#/components/responses/Conflict'
         '502':
           $ref: '#/components/responses/ServerUnavailable'
+  /api/admin/v1/backup/schedule:
+    get:
+      operationId: getBackupSchedule
+      summary: The backup destination, the limits, the last run and the reminders.
+      description: >-
+        ADR 0013, D27 to D29. The `backup` volume at `/backup` (the host may have mounted a NAS over it): whether a file can be written
+        there, whether it is on the same disk as the admin's own data (`st_dev`: a backup there does not survive the disk), and the backups
+        in it. Every call on it is time-boxed, so a destination that does not answer is reported (`problem`) and does not hold the answer up.
+        The next run (daily at 03:30 UTC; a failed one is tried again an hour later), the last success and failure (a sentence, never a path
+        or a reason from the share), `missed` (no success for 26 hours) and `drill_due` (the restore drill is due every 90 days).
+      security:
+        - adminSession: []
+        - adminApiKey: []
+      responses:
+        '200':
+          description: The schedule.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BackupSchedule'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    put:
+      operationId: putBackupSchedule
+      summary: How many backups and how long to keep them. Needs a fresh sign-in. Never an API key.
+      description: >-
+        At least 1 and at most 365 files, and at least 1 and at most 3650 days. Lowering them deletes backups at the next run, so it is a
+        person's own session, signed in within the last 10 minutes. The newest backup is always kept, whatever these say.
+      security:
+        - adminSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BackupLimits'
+      responses:
+        '200':
+          description: The schedule, with the new limits.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BackupSchedule'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/admin/v1/backup/run:
+    post:
+      operationId: runBackup
+      summary: Make a backup to the destination now.
+      description: >-
+        As the schedule makes one (the browser download is `GET /backup`): every part exported and encrypted to the backup public key,
+        written to a temporary file on the destination, synced and renamed, so it is all or nothing; then the limits are applied. Recorded
+        like every backup. 503 `backup_key_missing` without a key; 502 with a sentence if the destination does not answer or a part cannot be
+        made, and then nothing was backed up (and `backup_failed` is sent).
+      security:
+        - adminSession: []
+        - adminApiKey: []
+      responses:
+        '200':
+          description: The file made, its size and how many older backups the limits removed.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [file, bytes, removed]
+                properties:
+                  file:
+                    type: string
+                  bytes:
+                    type: integer
+                  removed:
+                    type: integer
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '502':
+          $ref: '#/components/responses/ServerUnavailable'
+        '503':
+          description: There is no backup key (`backup_key_missing`).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+  /api/admin/v1/backup/drill:
+    post:
+      operationId: backupDrillDone
+      summary: A restore drill was done; the 90 days start again.
+      description: >-
+        ADR 0013: a person restores a backup into a throwaway install before 1.0 and before each release with a migration, and the admin
+        reminds every 90 days (`drill_due`). Recorded.
+      security:
+        - adminSession: []
+        - adminApiKey: []
+      responses:
+        '200':
+          description: The schedule.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BackupSchedule'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
   /api/admin/v1/restore/inspect:
     post:
       operationId: inspectRestore
@@ -2122,6 +2227,75 @@ components:
           minLength: 20
         confirm:
           type: string
+    BackupLimits:
+      type: object
+      required: [keep_files, keep_days]
+      additionalProperties: false
+      properties:
+        keep_files:
+          type: integer
+          minimum: 1
+          maximum: 365
+        keep_days:
+          type: integer
+          minimum: 1
+          maximum: 3650
+    BackupSchedule:
+      type: object
+      required: [enabled, destination, keep_files, keep_days, missed, drill_due, drill_every_days]
+      properties:
+        enabled:
+          type: boolean
+          description: "False until a backup key is set: nothing is backed up and nothing is missed without one."
+        destination:
+          type: object
+          required: [path, writable, files]
+          properties:
+            path:
+              type: string
+            writable:
+              type: boolean
+            same_disk:
+              type: [boolean, 'null']
+              description: True if the destination is on the same disk as the admin's own data; null if that could not be told.
+            problem:
+              type: [string, 'null']
+            files:
+              type: array
+              items:
+                type: object
+                required: [name, bytes, made_at]
+                properties:
+                  name:
+                    type: string
+                  bytes:
+                    type: integer
+                  made_at:
+                    type: integer
+        keep_files:
+          type: integer
+        keep_days:
+          type: integer
+        next_run_at:
+          type: [integer, 'null']
+        last_attempt_at:
+          type: [integer, 'null']
+        last_success_at:
+          type: [integer, 'null']
+        last_success_name:
+          type: [string, 'null']
+        last_failure_at:
+          type: [integer, 'null']
+        last_failure_reason:
+          type: [string, 'null']
+        missed:
+          type: boolean
+        drill_done_at:
+          type: [integer, 'null']
+        drill_due:
+          type: boolean
+        drill_every_days:
+          type: integer
     RestoreInspection:
       type: object
       required: [restore_id, release, created_at, key_fingerprint, parts, valid_for_secs]

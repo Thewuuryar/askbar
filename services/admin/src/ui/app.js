@@ -47,7 +47,7 @@
     { id: 'settings', load: loadSettings },
     { id: 'network', load: loadNetwork },
     { id: 'security', load: loadKeys },
-    { id: 'backup', load: loadBackupKey },
+    { id: 'backup', load: loadBackup },
     { id: 'restore', load: loadRestore },
   ];
   let appShown = false;
@@ -929,6 +929,75 @@
   });
 
   // ------------------------------------------------------- backup key (ADR 0013)
+
+  // The Backup page: the key, and the scheduled backups (ADR 0013, D27 to D29). Text goes in by textContent.
+  async function loadBackup() {
+    await loadBackupKey();
+    await loadSchedule();
+  }
+
+  async function loadSchedule() {
+    const v = await api('GET', '/api/admin/v1/backup/schedule');
+    const d = v.destination;
+    $('sched-path').textContent = d.path;
+    $('sched-state').textContent = d.writable ? 'writable' : 'not writable';
+    const warn = $('sched-warn');
+    const problems = [];
+    if (d.problem) problems.push(d.problem);
+    if (d.same_disk) problems.push('This is on the same disk as Askbar, so these backups do not survive that disk. Mount a share or another disk over the backup volume (the guide says how).');
+    warn.textContent = problems.join(' ');
+    show(warn, problems.length > 0);
+    $('sched-last').textContent = !v.enabled
+      ? 'No backup key is set, so nothing is backed up.'
+      : 'Last backup: ' + (v.last_success_at ? when(v.last_success_at) + ' (' + v.last_success_name + ')' : 'none yet')
+        + (v.last_failure_at && (!v.last_success_at || v.last_failure_at > v.last_success_at) ? '. The last try failed (' + when(v.last_failure_at) + '): ' + (v.last_failure_reason || 'no reason given') : '')
+        + (v.missed ? '. No backup has succeeded for over 26 hours.' : '');
+    $('sched-next').textContent = v.enabled && v.next_run_at ? 'Next: ' + when(v.next_run_at) + ' (03:30 UTC daily).' : '';
+    const list = $('sched-files');
+    list.replaceChildren();
+    for (const f of d.files) {
+      const li = document.createElement('li');
+      li.textContent = f.name + ' · ' + (f.bytes / 1048576).toFixed(1) + ' MB · ' + when(f.made_at);
+      list.appendChild(li);
+    }
+    $('sched-keep-files').value = v.keep_files;
+    $('sched-keep-days').value = v.keep_days;
+    $('sched-run').disabled = !v.enabled;
+    show($('sched-reminder'), v.drill_due);
+    $('sched-reminder-text').textContent = 'Restore drill due: restore a backup into a throwaway install to be sure it works (every ' + v.drill_every_days + ' days). The guide says how.';
+    show($('sched-error'), false);
+  }
+
+  on('sched-run', 'click', async () => {
+    const err = $('sched-error');
+    show(err, false);
+    try {
+      const r = await api('POST', '/api/admin/v1/backup/run');
+      flash('Backup made: ' + r.file);
+    } catch (ex) {
+      err.textContent = ex.message;
+      show(err, true);
+    }
+    loadSchedule().catch((e) => flash(e.message));
+  });
+
+  on('sched-drill', 'click', async () => {
+    try { await api('POST', '/api/admin/v1/backup/drill'); await loadSchedule(); } catch (ex) { flash(ex.message); }
+  });
+
+  on('schedule-form', 'submit', async (e) => {
+    e.preventDefault();
+    const err = $('sched-limits-error');
+    show(err, false);
+    try {
+      await api('PUT', '/api/admin/v1/backup/schedule', { keep_files: Number($('sched-keep-files').value), keep_days: Number($('sched-keep-days').value) });
+      flash('Saved.');
+      await loadSchedule();
+    } catch (ex) {
+      err.textContent = ex.message;
+      show(err, true);
+    }
+  });
 
   // The fingerprint and the public name only: the passphrase is typed, sent and emptied, and nothing here ever holds it.
   async function loadBackupKey() {

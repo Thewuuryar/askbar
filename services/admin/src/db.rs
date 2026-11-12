@@ -205,6 +205,23 @@ const MIGRATIONS: &[&str] = &[
          retired_at  INTEGER
      );
      CREATE UNIQUE INDEX backup_keys_one_active ON backup_keys((1)) WHERE retired_at IS NULL;",
+    // Scheduled backups (plan step 6.4, ADR 0013, D29): one row. The limits (5 files or 30 days, the admin can change both), when the last
+    // backup was tried and how it ended, when an alert was last sent for a failure or a miss (so one is sent, not one a tick), and when the
+    // restore drill was last done (a reminder every 90 days). Nothing here is secret: no key, no passphrase, no content.
+    "CREATE TABLE backup_schedule (
+         id                  INTEGER PRIMARY KEY CHECK (id = 1),
+         keep_files          INTEGER NOT NULL DEFAULT 5  CHECK (keep_files BETWEEN 1 AND 365),
+         keep_days           INTEGER NOT NULL DEFAULT 30 CHECK (keep_days BETWEEN 1 AND 3650),
+         last_attempt_at     INTEGER,
+         last_success_at     INTEGER,
+         last_success_name   TEXT,
+         last_failure_at     INTEGER,
+         last_failure_reason TEXT,
+         failure_alerted_at  INTEGER,
+         missed_alerted_at   INTEGER,
+         drill_done_at       INTEGER
+     );
+     INSERT INTO backup_schedule (id) VALUES (1);",
 ];
 
 /// The schema steps, in order (for the upgrade tests).

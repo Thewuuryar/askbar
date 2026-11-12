@@ -8,6 +8,29 @@
       <p><a class="button" id="backup-link" href="/api/admin/v1/backup" download>Download backup</a></p>
       <p class="hint">To put a backup back, see <a href="/admin/restore/">Restore</a>: it is for a new, empty install.</p>
     </div>
+    <section class="panel" id="schedule-panel">
+      <h3>Scheduled backups</h3>
+      {% call b::hint("Every day at 03:30 UTC the admin makes an encrypted backup and keeps it on the backup volume (/backup). To keep backups on a NAS, mount the share on the Docker host over that volume's directory; the guide says how. A backup is written to a temporary file and renamed, so it is all or nothing.") %}{% endcall %}
+      <p id="sched-reminder" class="flash" role="status" hidden>
+        <span id="sched-reminder-text"></span>
+        <button type="button" id="sched-drill" class="secondary">Drill done</button>
+      </p>
+      <p id="sched-dest">Destination: <code id="sched-path"></code> <span id="sched-state"></span></p>
+      <p id="sched-warn" class="error" hidden></p>
+      <p id="sched-last"></p>
+      <p id="sched-next" class="hint"></p>
+      <ul id="sched-files" class="hint"></ul>
+      <div class="row"><button type="button" id="sched-run">Back up now</button></div>
+      {% call b::error_line("sched-error") %}{% endcall %}
+    </section>
+    <form id="schedule-form" class="panel">
+      <h3>How long backups are kept</h3>
+      {% call b::hint("The oldest are deleted after a new backup is made, once there are more than this many or one is older than this many days. The newest is always kept. Lowering these needs a sign-in within the last 10 minutes.") %}{% endcall %}
+      <label>Keep at most this many backups <input id="sched-keep-files" type="number" min="1" max="365" required></label>
+      <label>Delete backups older than this many days <input id="sched-keep-days" type="number" min="1" max="3650" required></label>
+      <div class="row"><button type="submit">Save</button></div>
+      {% call b::error_line("sched-limits-error") %}{% endcall %}
+    </form>
     <form id="backup-key-form" class="panel">
       <h3>Backup key</h3>
       {% call b::hint("Encrypted backups are made to this key, so only the backup passphrase opens them. This admin keeps the key's public half and the private half protected by the passphrase, never the passphrase itself.") %}{% endcall %}

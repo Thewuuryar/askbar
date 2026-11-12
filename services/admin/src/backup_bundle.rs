@@ -232,8 +232,45 @@ pub(crate) async fn work_parent(state: &AdminState) -> PathBuf {
         .unwrap_or_else(std::env::temp_dir)
 }
 
-/// `GET /api/admin/v1/backup`: the encrypted bundle, downloaded. Recorded like every backup (ADR 0010).
-pub async fn download(State(state): St, notes: Option<axum::Extension<crate::actions::ActionNotes>>) -> Result<Response, Failure> {
+/// A bundle ready to be written: every part staged in work files (removed when this is dropped), and the manifest.
+pub(crate) struct Built {
+    manifest_json: Vec<u8>,
+    protected: Vec<u8>,
+    parts: Vec<Staged>,
+    now: i64,
+    pub fingerprint: String,
+    pub part_names: Vec<String>,
+    _guard: TempDir,
+}
+
+impl Built {
+    /// The length of the whole tar, known before it is written.
+    pub fn length(&self) -> u64 {
+        entry_len(self.manifest_json.len() as u64)
+            + entry_len(self.protected.len() as u64)
+            + self.parts.iter().map(|p| entry_len(p.bytes)).sum::<u64>()
+            + 1024
+    }
+
+    /// The bundle as a tar: the manifest, the protected key, then each part, the admin's first and the auditor's last.
+    pub fn write<W: Write>(&self, w: &mut W) -> std::io::Result<()> {
+        askbar_service::tar::write_bytes(w, backup::MANIFEST_FILE, &self.manifest_json, self.now)?;
+        askbar_service::tar::write_bytes(w, backup::KEY_FILE, &self.protected, self.now)?;
+        for p in &self.parts {
+            askbar_service::tar::write_file(w, p.name, p.bytes, &mut std::fs::File::open(&p.path)?, self.now)?;
+        }
+        askbar_service::tar::write_end(w)?;
+        w.flush()
+    }
+
+    pub fn created_at(&self) -> i64 {
+        self.now
+    }
+}
+
+/// Makes every component's export and stages it: the work both the download and the scheduled backup do. Nothing is made without a backup
+/// key, and any part that cannot be made stops it.
+pub(crate) async fn build(state: &AdminState) -> Result<Built, Failure> {
     let key = state
         .db
         .lock()
@@ -250,7 +287,7 @@ pub async fn download(State(state): St, notes: Option<axum::Extension<crate::act
         ));
     };
     // Work files on the admin's data volume, next to admin.db (the volume is the admin's own and the root is read-only, ADR 0032).
-    let parent = work_parent(&state).await;
+    let parent = work_parent(state).await;
     let work = parent.join(format!(".backup-{}", ulid::Ulid::new()));
     std::fs::create_dir_all(&work).map_err(|_| internal())?;
     let guard = TempDir(work.clone());
@@ -266,13 +303,13 @@ pub async fn download(State(state): St, notes: Option<axum::Extension<crate::act
             .map_err(|_| internal())?
             .map_err(|_| internal())?
     };
-    let server_part = stage_server(&state, &work.join("server.age")).await?;
+    let server_part = stage_server(state, &work.join("server.age")).await?;
 
     // The admin's first and the auditor's last; the others in between.
     let mut parts = vec![admin_part, server_part];
-    parts.extend(stage_alerter(&state, &work.join("alerter.age")).await?);
-    parts.extend(stage_cpa(&state, &recipient, &work.join("cpa.age")).await?);
-    parts.extend(stage_auditor(&state, &recipient, &work.join("audit.age")).await?);
+    parts.extend(stage_alerter(state, &work.join("alerter.age")).await?);
+    parts.extend(stage_cpa(state, &recipient, &work.join("cpa.age")).await?);
+    parts.extend(stage_auditor(state, &recipient, &work.join("audit.age")).await?);
     let manifest = Manifest {
         format: backup::BUNDLE_FORMAT,
         release: env!("CARGO_PKG_VERSION").to_string(),
@@ -281,29 +318,22 @@ pub async fn download(State(state): St, notes: Option<axum::Extension<crate::act
         parts: parts.iter().map(Staged::part).collect(),
     };
     let manifest_json = serde_json::to_vec_pretty(&manifest).map_err(|_| internal())?;
-    let length = entry_len(manifest_json.len() as u64)
-        + entry_len(protected.len() as u64)
-        + parts.iter().map(|p| entry_len(p.bytes)).sum::<u64>()
-        + 1024;
+    let part_names = manifest.parts.iter().map(|p| p.name.clone()).collect();
+    Ok(Built { manifest_json, protected, parts, now, fingerprint, part_names, _guard: guard })
+}
 
+/// `GET /api/admin/v1/backup`: the encrypted bundle, downloaded. Recorded like every backup (ADR 0010).
+pub async fn download(State(state): St, notes: Option<axum::Extension<crate::actions::ActionNotes>>) -> Result<Response, Failure> {
+    let built = build(&state).await?;
     if let Some(axum::Extension(n)) = &notes {
-        n.add("fingerprint", serde_json::json!(fingerprint));
-        n.add("parts", serde_json::json!(manifest.parts.iter().map(|p| p.name.clone()).collect::<Vec<_>>()));
+        n.add("fingerprint", serde_json::json!(built.fingerprint));
+        n.add("parts", serde_json::json!(built.part_names));
     }
-
+    let (length, now) = (built.length(), built.created_at());
     let (mut writer, body) = askbar_service::stream::body();
     tokio::task::spawn_blocking(move || {
-        let _guard = guard; // the work files go when the bundle has been written, or the client has gone
-        let result = (|| -> std::io::Result<()> {
-            askbar_service::tar::write_bytes(&mut writer, backup::MANIFEST_FILE, &manifest_json, now)?;
-            askbar_service::tar::write_bytes(&mut writer, backup::KEY_FILE, &protected, now)?;
-            for p in &parts {
-                askbar_service::tar::write_file(&mut writer, p.name, p.bytes, &mut std::fs::File::open(&p.path)?, now)?;
-            }
-            askbar_service::tar::write_end(&mut writer)?;
-            writer.flush()
-        })();
-        if result.is_err() {
+        // The work files go when the bundle has been written, or the client has gone.
+        if built.write(&mut writer).is_err() {
             writer.fail();
         }
     });

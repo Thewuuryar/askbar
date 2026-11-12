@@ -160,7 +160,7 @@ done
 
 echo "== 3. What the server can see"
 VOLS=$(docker inspect -f '{{range .Mounts}}{{.Name}} {{end}}' "$SERVER")
-for v in admin-secrets admin-data admin-run caddy-run caddy-secrets control-token cpa-config; do
+for v in admin-secrets admin-data admin-run backup caddy-run caddy-secrets control-token cpa-config; do
   case " $VOLS" in *" ${PROJECT}_$v "*) fail "the server mounts $v";; *) pass "the server does not mount $v";; esac
 done
 refused "the server cannot list /admin-secrets" docker exec "$SERVER" ls /admin-secrets
@@ -909,6 +909,17 @@ for label, needle in (('plaintext database', 'SQLite format 3'), ('provider key'
     print(label, 'FOUND' if needle.encode() in raw else 'absent')
 call('DELETE', '/api/admin/v1/providers/' + provider_id)" 2>&1)
 printf '%s\n' "$out" | grep -q '^names manifest.json,backup-key.age,admin.age,server.age,alerter.age,cpa.age,audit.age$' && pass "the backup is a bundle of a manifest, the protected key and the admin's, the server's, the alerter's, cpa's and the auditor's encrypted exports" || fail "backup contents: $out"
+# Only the admin mounts the backup volume (ADR 0013, D27): it is where backups are kept, and where the host may mount a NAS share.
+BACKUP_HOLDERS=""
+ADMIN_ID=$(docker inspect -f '{{.Id}}' "$ADMIN")
+for c in $(docker compose -p "$PROJECT" ps -aq 2>/dev/null); do
+  case " $(docker inspect -f '{{range .Mounts}}{{.Name}} {{end}}' "$c") " in
+    *" ${PROJECT}_backup "*) BACKUP_HOLDERS="$BACKUP_HOLDERS $(docker inspect -f '{{.Id}}' "$c")";;
+  esac
+done
+[ "$BACKUP_HOLDERS" = " $ADMIN_ID" ] && pass "only the admin mounts the backup volume" || fail "the backup volume is mounted by:$BACKUP_HOLDERS (the admin is $ADMIN_ID)"
+check "the admin can write to /backup" docker exec "$ADMIN" sh -c 'touch /backup/.isolation-check && rm /backup/.isolation-check'
+[ "$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/backup"}}{{.RW}}{{end}}{{end}}' "$ADMIN")" = true ] && pass "/backup is mounted read-write in the admin" || fail "/backup is not writable in the admin"
 check "the server keeps control.db and a file per space under /data" docker exec "$SERVER" sh -c 'test -f /data/control.db && ls /data/spaces/*.db'
 refused "the server makes no askbar.db (the layout before spaces)" docker exec "$SERVER" test -e /data/askbar.db
 # The contract changed (plan step 6.2): the backup used to be a plain tar with the secrets taken out; it is now encrypted and

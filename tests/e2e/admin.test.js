@@ -112,9 +112,11 @@ async function waitForPort(port) {
     ASKBAR_GATEWAY_URL: 'http://127.0.0.1:' + gatewayAdminPort, ASKBAR_AUDIT_API_URL: 'http://127.0.0.1:' + auditPort,
     ASKBAR_ALERTER_URL: 'http://127.0.0.1:' + alerterAdminPort,
     ASKBAR_PUBLIC_URL: 'http://localhost:' + api,
+    ASKBAR_BACKUP_DIR: path.join(data, 'backup'),
     ASKBAR_CPA_CONFIG_DIR: path.join(data, 'cpa-config'), ASKBAR_CPA_URL: 'http://127.0.0.1:' + await freePort(),
   });
   for (let i = 0; i < 100 && !fs.existsSync(sock); i++) await new Promise((r) => setTimeout(r, 50));
+  fs.mkdirSync(path.join(data, 'backup'), { recursive: true });
   fs.mkdirSync(path.join(data, 'cpa-auth'), { recursive: true });
   fs.writeFileSync(path.join(data, 'cpa-auth', 'claude-e2e.json'), '{"access_token":"' + LOGIN_MARKER + '"}');
   run(supervisorBin, ['sleep', '100000'], { ASKBAR_CPA_CONFIG_DIR: path.join(data, 'cpa-config'), ASKBAR_CPA_AUTH_DIR: path.join(data, 'cpa-auth') });
@@ -927,6 +929,37 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     // The Backup page points here, and the first-run screen has the same link (the audit step shows it).
     await openPage('backup');
     assert.equal(await page.locator('#tab-backup a[href="/admin/restore/"]').count(), 1);
+  });
+  await step('backup: the destination, "Back up now", the limits and the drill reminder work and show only text (ADR 0013, D27 to D29)', async () => {
+    await openPage('backup');
+    await page.waitForFunction(() => document.getElementById('sched-path').textContent.endsWith('/backup'));
+    assert.match(await page.innerText('#sched-state'), /^writable$/);
+    // The test directory is on the same disk as the admin's data, and the page says so.
+    assert.match(await page.innerText('#sched-warn'), /same disk as Askbar/);
+    await page.click('#sched-run');
+    await page.waitForFunction(() => /^Backup made: askbar-backup-\d+\.tar$/.test(document.getElementById('flash').textContent));
+    await page.waitForFunction(() => document.querySelectorAll('#sched-files li').length >= 1);
+    assert.match(await page.innerText('#sched-last'), /Last backup: .*askbar-backup-\d+\.tar/);
+    assert.match(await page.innerText('#sched-next'), /03:30 UTC/);
+    const onDisk = fs.readdirSync(path.join(data, 'backup')).filter((f) => /^askbar-backup-\d+\.tar$/.test(f));
+    assert.ok(onDisk.length >= 1, 'a backup is on the volume');
+    assert.deepEqual(fs.readdirSync(path.join(data, 'backup')).filter((f) => f.endsWith('.partial')), [], 'no partial file is left');
+    // The limits: a value out of range is refused with a sentence; a good one is saved and read back.
+    await page.evaluate(() => { document.getElementById('schedule-form').noValidate = true; });
+    await page.fill('#sched-keep-files', '0');
+    await page.click('#schedule-form button[type=submit]');
+    await page.waitForSelector('#sched-limits-error:not([hidden])');
+    assert.match(await page.innerText('#sched-limits-error'), /between 1 and 365/);
+    await page.fill('#sched-keep-files', '3');
+    await page.fill('#sched-keep-days', '14');
+    await page.click('#schedule-form button[type=submit]');
+    await page.waitForFunction(() => document.getElementById('flash').textContent === 'Saved.');
+    await openPage('providers');
+    await openPage('backup');
+    await page.waitForFunction(() => document.getElementById('sched-keep-files').value === '3');
+    assert.equal(await page.inputValue('#sched-keep-days'), '14');
+    // The drill reminder shows when it is due and "Drill done" clears it.
+    assert.equal(await page.isHidden('#sched-reminder'), true, 'not due yet');
   });
   // ------------------------------------------------------------------ the Audit tab
   // Against the real server: a provider whose name and model are markup, one real chat through it,
