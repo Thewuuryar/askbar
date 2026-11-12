@@ -300,6 +300,6 @@ mod tests {
                 | ErrorCode::Internal => {}
             }
         }
-        assert_eq!(ErrorCode::ALL.len(), 23);
+        assert_eq!(ErrorCode::ALL.len(), 24);
     }
 }
