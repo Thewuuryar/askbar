@@ -112,6 +112,43 @@ impl AuditorLink {
         Some((status, resp.json().await.unwrap_or(serde_json::Value::Null)))
     }
 
+    /// `PUT /backup-key`: give the auditor the backup public key its export is encrypted to (ADR 0013). The admin gives it with each
+    /// export, so a rotation or an auditor that lost its volume leaves no old key behind. Nothing is read back but the status.
+    pub async fn put_backup_key(&self, recipient: &str) -> Result<(), u16> {
+        let url = format!("{}{}/backup-key", self.base, askbar_proto::paths::AUDIT_V1);
+        match self.http.put(url).bearer_auth(&self.token).json(&serde_json::json!({ "public_key": recipient })).send().await {
+            Ok(r) if r.status().is_success() => {
+                self.note(true, Some(r.status().as_u16()));
+                Ok(())
+            }
+            Ok(r) => {
+                self.note(true, Some(r.status().as_u16()));
+                Err(r.status().as_u16())
+            }
+            Err(_) => {
+                self.note(false, None);
+                Err(0)
+            }
+        }
+    }
+
+    /// `GET /export`, answered as it arrives (the store can be large): the auditor's store, encrypted to the backup public key. The
+    /// status is checked by the caller.
+    pub async fn export_stream(&self) -> Result<reqwest::Response, ()> {
+        let url = format!("{}{}/export", self.base, askbar_proto::paths::AUDIT_V1);
+        // The client's own limit is 15 seconds for the whole call, which a large store outlasts: this call may take an hour.
+        match self.http.get(url).bearer_auth(&self.token).timeout(Duration::from_secs(60 * 60)).send().await {
+            Ok(r) => {
+                self.note(true, Some(r.status().as_u16()));
+                Ok(r)
+            }
+            Err(_) => {
+                self.note(false, None);
+                Err(())
+            }
+        }
+    }
+
     /// Set the auditor's retention to `days`. `Ok(())` once it has taken it.
     pub async fn set_retention(&self, days: u32) -> Result<(), u16> {
         let url = format!("{}{}/retention", self.base, askbar_proto::paths::AUDIT_V1);

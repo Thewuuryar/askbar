@@ -888,7 +888,7 @@ print('names', ','.join(names))
 for label, needle in (('plaintext database', 'SQLite format 3'), ('provider key', '$MARK'), ('pair code', code), ('password hash', '\$argon2'), ('private key', 'AGE-SECRET-KEY')):
     print(label, 'FOUND' if needle.encode() in raw else 'absent')
 call('DELETE', '/api/admin/v1/providers/' + provider_id)" 2>&1)
-printf '%s\n' "$out" | grep -q '^names manifest.json,backup-key.age,admin.age,server.age,alerter.age,cpa.age$' && pass "the backup is a bundle of a manifest, the protected key and the admin's, the server's, the alerter's and cpa's encrypted exports" || fail "backup contents: $out"
+printf '%s\n' "$out" | grep -q '^names manifest.json,backup-key.age,admin.age,server.age,alerter.age,cpa.age,audit.age$' && pass "the backup is a bundle of a manifest, the protected key and the admin's, the server's, the alerter's, cpa's and the auditor's encrypted exports" || fail "backup contents: $out"
 check "the server keeps control.db and a file per space under /data" docker exec "$SERVER" sh -c 'test -f /data/control.db && ls /data/spaces/*.db'
 refused "the server makes no askbar.db (the layout before spaces)" docker exec "$SERVER" test -e /data/askbar.db
 # The contract changed (plan step 6.2): the backup used to be a plain tar with the secrets taken out; it is now encrypted and

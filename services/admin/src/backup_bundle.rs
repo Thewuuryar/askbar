@@ -6,7 +6,7 @@
 //! - **What is in the bundle.** `manifest.json` (in the clear: the release that made it, the key's fingerprint, and each export's
 //!   SHA-256 and size), `backup-key.age` (the private key protected by the passphrase), then the exports: the admin's own first
 //!   (`admin.age`) and the server's (`server.age`), then the alerter's (`alerter.age`: its ledger and release state) and `cpa`'s (`cpa.age`:
-//!   the account login files). The auditor's, last, follows in a later step. With the file and the passphrase alone, `age` opens it.
+//!   the account login files), and the auditor's last (`audit.age`: its store, sealed content only). With the file and the passphrase alone, `age` opens it.
 //! - **The admin's own export** is `admin.db` (a `VACUUM INTO` copy, complete: it is encrypted), `admin-secrets/` (`admin.key` and the
 //!   CLIProxyAPI keys it keeps), and `caddy-secrets/` (the install's own certificate and key).
 //! - **Streamed.** Each export goes to a work file on the admin's data volume as it arrives (never `/tmp`, never memory), then the
@@ -118,11 +118,10 @@ fn export_admin(
 
 /// The server's export, read from its link into a work file as it arrives. Not the admin's to open: it is already encrypted.
 async fn stage_server(state: &AdminState, out: &Path) -> Result<Staged, Failure> {
-    use tokio::io::AsyncWriteExt;
     let link = state.server.as_ref().ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "No link to the server is set up."))?;
     let path = askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, "/exports");
     let offline = || err(StatusCode::BAD_GATEWAY, "The server is offline. Nothing was backed up.");
-    let mut resp = link.request_stream(reqwest::Method::POST, &path).await.map_err(|_| offline())?;
+    let resp = link.request_stream(reqwest::Method::POST, &path).await.map_err(|_| offline())?;
     let status = resp.status().as_u16();
     if status == 503 {
         let body = resp.bytes().await.unwrap_or_default();
@@ -140,7 +139,14 @@ async fn stage_server(state: &AdminState, out: &Path) -> Result<Staged, Failure>
     if status != 200 {
         return Err(err(StatusCode::BAD_GATEWAY, &format!("The server answered {status}.")));
     }
-    let cut = || err(StatusCode::BAD_GATEWAY, "The server's export was cut short. Nothing was backed up.");
+    save_stream(resp, "server.age", "The server's export was cut short. Nothing was backed up.", out).await
+}
+
+/// A component's export, read from its link into a work file as it arrives. It is already encrypted, so it is not the admin's to open.
+/// One that ends early, or is empty, is a failure (`cut` says so), never a short bundle.
+async fn save_stream(mut resp: reqwest::Response, name: &'static str, cut: &'static str, out: &Path) -> Result<Staged, Failure> {
+    use tokio::io::AsyncWriteExt;
+    let cut = || err(StatusCode::BAD_GATEWAY, cut);
     let mut file = tokio::fs::File::create(out).await.map_err(|_| internal())?;
     let (mut sha, mut bytes) = (Sha256::new(), 0u64);
     while let Some(chunk) = resp.chunk().await.map_err(|_| cut())? {
@@ -152,7 +158,34 @@ async fn stage_server(state: &AdminState, out: &Path) -> Result<Staged, Failure>
     if bytes == 0 {
         return Err(cut());
     }
-    Ok(Staged { name: "server.age", path: out.to_path_buf(), sha256: hex(sha.finalize()), bytes })
+    Ok(Staged { name, path: out.to_path_buf(), sha256: hex(sha.finalize()), bytes })
+}
+
+/// The auditor's export, last in the bundle: the store as the auditor sealed it, encrypted to the key. The admin gives the auditor the
+/// key first (it keeps it only as a setting of its store). Left out only where the install has no auditor link, which a stack always has.
+async fn stage_auditor(state: &AdminState, recipient: &str, out: &Path) -> Result<Option<Staged>, Failure> {
+    let Some(link) = state.auditor.get() else { return Ok(None) };
+    let offline = || err(StatusCode::BAD_GATEWAY, "The auditor is offline. Nothing was backed up.");
+    link.put_backup_key(recipient).await.map_err(|status| {
+        if status == 0 {
+            offline()
+        } else {
+            err(StatusCode::BAD_GATEWAY, "The auditor did not take the backup key. Nothing was backed up.")
+        }
+    })?;
+    let resp = link.export_stream().await.map_err(|_| offline())?;
+    let status = resp.status().as_u16();
+    if status != 200 {
+        let body = resp.bytes().await.unwrap_or_default();
+        let code = serde_json::from_slice::<serde_json::Value>(&body).ok().and_then(|v| v["error"].as_str().map(String::from));
+        return Err(match (status, code.as_deref()) {
+            (503, Some("audit_backlog")) => {
+                err(StatusCode::BAD_GATEWAY, "The auditor has too little room to copy its store, or is busy. Nothing was backed up.")
+            }
+            _ => err(StatusCode::BAD_GATEWAY, "The auditor could not make its export. Nothing was backed up."),
+        });
+    }
+    save_stream(resp, "audit.age", "The auditor's export was cut short. Nothing was backed up.", out).await.map(Some)
 }
 
 /// Bytes already in memory (an export that is small, like the alerter's), written to a work file and hashed.
@@ -228,10 +261,11 @@ pub async fn download(State(state): St, notes: Option<axum::Extension<crate::act
     };
     let server_part = stage_server(&state, &work.join("server.age")).await?;
 
-    // The admin's first and the auditor's last (a later step); the others in between.
+    // The admin's first and the auditor's last; the others in between.
     let mut parts = vec![admin_part, server_part];
     parts.extend(stage_alerter(&state, &work.join("alerter.age")).await?);
     parts.extend(stage_cpa(&state, &recipient, &work.join("cpa.age")).await?);
+    parts.extend(stage_auditor(&state, &recipient, &work.join("audit.age")).await?);
     let manifest = Manifest {
         format: backup::BUNDLE_FORMAT,
         release: env!("CARGO_PKG_VERSION").to_string(),

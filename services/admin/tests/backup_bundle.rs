@@ -78,7 +78,10 @@ async fn the_bundle_holds_a_manifest_the_protected_key_and_the_encrypted_exports
 
     // The entries, in order: the manifest and the protected key, then the admin's own export first and the server's.
     let files = askbar_service::tar::read(&bytes).expect("a tar");
-    assert_eq!(files.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(), ["manifest.json", "backup-key.age", "admin.age", "server.age"]);
+    assert_eq!(
+        files.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
+        ["manifest.json", "backup-key.age", "admin.age", "server.age", "audit.age"]
+    );
     let get = |name: &str| files.iter().find(|(n, _)| n == name).unwrap().1.clone();
 
     // The manifest names the release and the key and says what each part is, by hash and size; it holds nothing secret.
@@ -86,7 +89,7 @@ async fn the_bundle_holds_a_manifest_the_protected_key_and_the_encrypted_exports
     let (_, key) = t.call(M::GET, "/api/admin/v1/backup/key", json!(null)).await;
     assert_eq!((manifest.format, manifest.release.as_str()), (backup::BUNDLE_FORMAT, env!("CARGO_PKG_VERSION")));
     assert_eq!(manifest.key_fingerprint, key["fingerprint"].as_str().unwrap());
-    assert_eq!(manifest.parts.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["admin.age", "server.age"]);
+    assert_eq!(manifest.parts.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["admin.age", "server.age", "audit.age"]);
     for p in &manifest.parts {
         let data = get(&p.name);
         assert_eq!((p.bytes, p.sha256.as_str()), (data.len() as u64, hex(Sha256::digest(&data)).as_str()), "{}", p.name);
@@ -110,7 +113,7 @@ async fn the_bundle_holds_a_manifest_the_protected_key_and_the_encrypted_exports
 }
 
 #[tokio::test]
-async fn the_file_and_the_passphrase_open_everything_the_admins_export_and_the_servers() {
+async fn the_file_and_the_passphrase_open_everything_the_admins_export_the_servers_and_the_auditors() {
     let t = common::start(true).await;
     set_key(&t).await;
     mark(&t).await;
@@ -154,10 +157,17 @@ async fn the_file_and_the_passphrase_open_everything_the_admins_export_and_the_s
         server.iter().any(|(_, d)| d.windows(CONVERSATION.len()).any(|w| w == CONVERSATION.as_bytes())),
         "the conversation is in a space file"
     );
+    // The auditor's store is whole (sealed content only): its admin records are there, and the key it was given.
+    let audit = askbar_service::tar::read(&backup::decrypt(&identity, &get("audit.age")).unwrap()).unwrap();
+    assert_eq!(audit.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(), ["audit.db"]);
+    std::fs::write(t.dir.join("restored-audit.db"), &audit[0].1).unwrap();
+    let a = rusqlite::Connection::open(t.dir.join("restored-audit.db")).unwrap();
+    assert!(a.query_row("SELECT COUNT(*) FROM admin_actions", [], |r| r.get::<_, i64>(0)).unwrap() > 0, "the admin's records");
     // A different key opens nothing.
     let other = backup::generate_with(PASS, 10).unwrap();
     let wrong = backup::unlock(&other.protected, PASS).unwrap();
     assert!(backup::decrypt(&wrong, &get("admin.age")).is_err() && backup::decrypt(&wrong, &get("server.age")).is_err());
+    assert!(backup::decrypt(&wrong, &get("audit.age")).is_err());
 }
 
 #[tokio::test]
@@ -183,7 +193,7 @@ async fn with_no_backup_key_nothing_is_made_and_a_rotated_key_is_the_one_used_af
 }
 
 #[tokio::test]
-async fn the_bundle_holds_no_audit_store_and_leaves_no_work_file_behind() {
+async fn the_auditors_store_is_last_in_the_bundle_and_no_work_file_is_left_behind() {
     let t = common::start(true).await;
     set_key(&t).await;
     let leftovers = || -> usize {
@@ -196,7 +206,8 @@ async fn the_bundle_holds_no_audit_store_and_leaves_no_work_file_behind() {
     let before = leftovers();
     for _ in 0..2 {
         let files = askbar_service::tar::read(&download(&t).await.bytes().await.unwrap()).unwrap();
-        assert!(files.iter().all(|(n, _)| !n.contains("audit")), "audit.db is the auditor's own volume, not in this bundle");
+        assert_eq!(files.last().unwrap().0, "audit.age", "the auditor's export goes last (ADR 0013)");
+        assert_eq!(files.iter().filter(|(n, _)| n.contains("audit")).count(), 1, "one export of the store, and nothing else of it");
     }
     // One the client drops after its first bytes.
     let mut r = download(&t).await;
@@ -340,10 +351,13 @@ async fn the_alerters_and_cpas_exports_follow_the_servers_and_the_passphrase_ope
     let bytes = download(&t).await.bytes().await.unwrap();
     let files = askbar_service::tar::read(&bytes).unwrap();
     let names: Vec<&str> = files.iter().map(|(n, _)| n.as_str()).collect();
-    assert_eq!(names, ["manifest.json", "backup-key.age", "admin.age", "server.age", "alerter.age", "cpa.age"]);
+    assert_eq!(names, ["manifest.json", "backup-key.age", "admin.age", "server.age", "alerter.age", "cpa.age", "audit.age"]);
     let get = |name: &str| files.iter().find(|(n, _)| n == name).unwrap().1.clone();
     let manifest: backup::Manifest = serde_json::from_slice(&get("manifest.json")).unwrap();
-    assert_eq!(manifest.parts.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["admin.age", "server.age", "alerter.age", "cpa.age"]);
+    assert_eq!(
+        manifest.parts.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
+        ["admin.age", "server.age", "alerter.age", "cpa.age", "audit.age"]
+    );
     for p in &manifest.parts {
         let data = get(&p.name);
         assert_eq!((p.bytes, p.sha256.as_str()), (data.len() as u64, hex(Sha256::digest(&data)).as_str()), "{}", p.name);

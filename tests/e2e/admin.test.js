@@ -889,19 +889,19 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       at += 512 + Math.ceil(size / 512) * 512;
     }
     // The manifest and the protected key, then the admin's own export first and the server's.
-    assert.deepEqual(entries.map(([n]) => n), ['manifest.json', 'backup-key.age', 'admin.age', 'server.age', 'alerter.age', 'cpa.age']);
+    assert.deepEqual(entries.map(([n]) => n), ['manifest.json', 'backup-key.age', 'admin.age', 'server.age', 'alerter.age', 'cpa.age', 'audit.age']);
     const get = (n) => entries.find(([name]) => name === n)[1];
     const manifest = JSON.parse(get('manifest.json').toString());
     assert.equal(manifest.format, 1);
     assert.match(manifest.release, /^\d+\.\d+\.\d+/);
     assert.match(manifest.key_fingerprint, /^[0-9a-f]{4}(-[0-9a-f]{4}){3}$/);
-    assert.deepEqual(manifest.parts.map((p) => p.name), ['admin.age', 'server.age', 'alerter.age', 'cpa.age']);
+    assert.deepEqual(manifest.parts.map((p) => p.name), ['admin.age', 'server.age', 'alerter.age', 'cpa.age', 'audit.age']);
     for (const p of manifest.parts) {
       assert.equal(p.bytes, get(p.name).length, p.name);
       assert.equal(p.sha256, require('node:crypto').createHash('sha256').update(get(p.name)).digest('hex'), p.name + ' hash');
     }
     // The key in the bundle is the protected private key (an age file made with the passphrase), and every export is an age file.
-    for (const n of ['backup-key.age', 'admin.age', 'server.age', 'alerter.age', 'cpa.age']) assert.equal(get(n).subarray(0, 21).toString(), 'age-encryption.org/v1', n);
+    for (const n of ['backup-key.age', 'admin.age', 'server.age', 'alerter.age', 'cpa.age', 'audit.age']) assert.equal(get(n).subarray(0, 21).toString(), 'age-encryption.org/v1', n);
     // Nothing is readable: no database header, no provider key, none of the passphrases or the password.
     for (const secret of ['SQLite format 3', LOGIN_MARKER, SECRET_KEY, BACKUP_PASS, BACKUP_PASS_2, AUDIT_PASS, PASSWORD, 'AGE-SECRET-KEY']) {
       assert.equal(bytes.includes(secret), false, 'the bundle holds ' + secret);
