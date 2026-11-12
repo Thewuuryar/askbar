@@ -236,7 +236,15 @@ async fn every_response_carries_the_locked_down_headers() {
     let h = r.headers();
     // ADR 0029 rule 5: a strict CSP, on the site and the API alike.
     let csp = h["content-security-policy"].to_str().unwrap();
-    for want in ["default-src 'none'", "script-src 'self'", "frame-ancestors 'none'", "base-uri 'none'"] {
+    // D17: Trusted Types are required and no policy can be made.
+    for want in [
+        "default-src 'none'",
+        "script-src 'self'",
+        "frame-ancestors 'none'",
+        "base-uri 'none'",
+        "require-trusted-types-for 'script'",
+        "trusted-types 'none'",
+    ] {
         assert!(csp.contains(want), "{want}: {csp}");
     }
     assert!(!csp.contains("unsafe-inline") && !csp.contains("unsafe-eval"), "{csp}");
