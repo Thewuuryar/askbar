@@ -10,7 +10,7 @@
 # carries no admin code, secret files are mode 600, a backup holds no secrets, and before a host
 # name is set Caddy serves HTTPS on 443 only, with the install's own certificate.
 #
-# Meant for a throwaway stack: it stops and restarts the server, and it sets the admin's
+# Meant for a throwaway stack: it stops and restarts the server (and, in the failure drills at the end, every service in turn), and it sets the admin's
 # network settings (a made-up hostname, no certificate is requested), then puts them back to a fresh
 # install's (no host name, allowlist off, the Cloudflare token cleared). Needs docker and the
 # python:3.12-slim image. Set ASKBAR_ADMIN_PASSWORD if the admin already has a password;
@@ -1082,6 +1082,183 @@ for i in $(seq 60); do
   sleep 1
 done
 case "$out" in "202 "*) [ "$back" = yes ] && pass "the admin restarts itself and answers again" || fail "the admin did not come back";; *) fail "admin restart answered: $out";; esac
+
+echo "== 8. Failure drills (plan step 7.3, D32)"
+# What the stack does when a part of it is gone, run for real against the throwaway stack: a full restart, the auditor down, the admin
+# down, a tiny auditor disk and the alerter down. Each drill leaves every service running again. They need python3 on this machine (a
+# chat goes in through Caddy, as in the latency block above) and the mock LLM, which the dev profile starts here if it is not running.
+drill_compose() { docker compose -p "$PROJECT" --profile dev "$@"; }
+drill_probe() { python3 tests/e2e/chat_probe.py "$@" --insecure 2>&1 | tail -1; }
+# Healthy by its own health check; Caddy and CLIProxyAPI have none, so for them running is what there is to ask.
+drill_healthy() { [ "$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{if .State.Running}}healthy{{end}}{{end}}' "$1" 2>/dev/null)" = healthy ]; }
+drill_wait_healthy() { # container seconds
+  local i; for i in $(seq 1 "$2"); do drill_healthy "$1" && return 0; sleep 1; done; return 1
+}
+drill_chat_ok() { # token seconds -> 0 when a reply finishes within the time; DRILL_LAST holds the last answer
+  local i; DRILL_LAST=""
+  for i in $(seq 1 $(( $2 / 3 + 1 ))); do
+    DRILL_LAST=$(drill_probe chat https://localhost "$1"); [ "$DRILL_LAST" = ok ] && return 0; sleep 3
+  done
+  return 1
+}
+DRILL_SERVICES="$SERVER $ADMIN $CADDY askbar-cpa askbar-auditor askbar-model-gateway askbar-alerter"
+DRILL_AUDITOR=askbar-auditor; DRILL_GW=askbar-model-gateway; DRILL_ALERTER=askbar-alerter
+drill_token=""; drill_pid=""
+if ! command -v python3 >/dev/null 2>&1; then
+  fail "the failure drills need python3 on this machine"
+else
+  # A provider the mock model answers for, an approved model, a person and a client, as the latency block makes.
+  drill_compose up -d --no-build mock-llm >/dev/null 2>&1
+  drill_set=$(admin_script "$(admin_login)
+import json, uuid
+s, body = call('POST', '/api/admin/v1/providers', {'name': 'drill-' + uuid.uuid4().hex[:6], 'type': 'openai', 'base_url': 'http://mock-llm:8765/v1', 'model': 'm', 'api_key': 'sk-drill-check'})
+assert s == 201, (s, body)
+pid = json.loads(body)['id']
+s, cat = call('GET', '/api/admin/v1/catalog'); cat = json.loads(cat)
+cat['models'].append({'provider_id': pid, 'model': 'm'}); cat['default'] = pid + '/m'
+s, body = call('PUT', '/api/admin/v1/catalog', cat); assert s == 200, (s, body)
+s, users = call('GET', '/api/admin/v1/users'); users = json.loads(users)
+if not users:
+    s, made = call('POST', '/api/admin/v1/users', {'name': 'drill user'}); users = [json.loads(made)]
+s, body = call('POST', '/api/admin/v1/users/' + users[0]['id'] + '/pairing-keys', {'name': 'drill client'})
+assert s == 200, (s, body)
+print('DRILL', pid, json.loads(body)['pairing'])" 2>&1 | grep '^DRILL ' | tail -1)
+  if [ -n "$drill_set" ]; then
+    drill_pid=$(printf '%s' "$drill_set" | cut -d' ' -f2)
+    drill_token=$(drill_probe pair https://localhost "$(printf '%s' "$drill_set" | cut -d' ' -f3)")
+  fi
+  if [ -z "$drill_token" ] || [ "${#drill_token}" -lt 20 ]; then
+    fail "the failure drills could not be set up (a provider, an approved model, a client): '${drill_token:-no token}'"
+    drill_token=""
+  elif drill_chat_ok "$drill_token" 90; then
+    pass "a chat through Caddy, the server, model-gateway and the auditor to the mock model works before the drills"
+  else
+    fail "a chat did not work before the drills: $DRILL_LAST"
+    drill_token=""
+  fi
+fi
+
+if [ -n "$drill_token" ]; then
+  echo "-- the stack comes back from a full restart"
+  convs_before=$(drill_probe conversations https://localhost "$drill_token")
+  drill_compose stop >/dev/null 2>&1
+  if drill_compose up -d --no-build --wait --wait-timeout 300 >/dev/null 2>&1; then
+    pass "every service stopped and started again, and the stack reports itself up"
+  else
+    fail "the stack did not come back up from a full stop"
+  fi
+  for c in $DRILL_SERVICES; do
+    drill_wait_healthy "$c" 90 || fail "$c is not healthy after the restart"
+  done
+  out=$(admin_script "$(admin_login)
+s, body = call('GET', '/api/admin/v1/providers')
+print('PROVIDER', '$drill_pid' in body)" 2>&1 | grep '^PROVIDER ' | tail -1)
+  [ "$out" = "PROVIDER True" ] && pass "after the restart the admin signs in with the same password and still has its provider" || fail "after the restart the admin: '$out'"
+  convs_after=$(drill_probe conversations https://localhost "$drill_token")
+  case "$convs_before:$convs_after" in
+    [0-9]*:[0-9]*) [ "$convs_after" -ge "$convs_before" ] && [ "$convs_after" -ge 1 ] && pass "the conversations the server held are still there ($convs_after)" || fail "conversations before the restart: $convs_before, after: $convs_after";;
+    *) fail "could not count conversations around the restart: '$convs_before' then '$convs_after'";;
+  esac
+  drill_chat_ok "$drill_token" 150 && pass "replies work again after the restart (the admin gave the services their settings again)" || fail "no reply after the restart: $DRILL_LAST"
+
+  echo "-- the auditor down: a new reply is refused with 503 audit_backlog, then recovery"
+  docker stop "$DRILL_AUDITOR" >/dev/null
+  out=$(drill_probe chat https://localhost "$drill_token")
+  case "$out" in
+    "refused "*" audit_backlog") pass "with the auditor down a reply is refused with audit_backlog, and no provider is called unrecorded ($out)";;
+    ok) fail "a reply was made while the auditor was down: nothing may be unrecorded";;
+    *) fail "with the auditor down the answer was '$out', not audit_backlog";;
+  esac
+  docker start "$DRILL_AUDITOR" >/dev/null
+  drill_wait_healthy "$DRILL_AUDITOR" 60 && pass "the auditor is healthy again" || fail "the auditor did not come back"
+  drill_chat_ok "$drill_token" 150 && pass "replies work again once the auditor is back" || fail "no reply after the auditor came back: $DRILL_LAST"
+
+  echo "-- the admin down: chat still works"
+  docker stop "$ADMIN" >/dev/null
+  drill_chat_ok "$drill_token" 30 && pass "with the admin stopped a reply still finishes (the server and the gateway hold what they need)" || fail "no reply with the admin stopped: $DRILL_LAST"
+  docker start "$ADMIN" >/dev/null
+  drill_wait_healthy "$ADMIN" 90 && pass "the admin is healthy again" || fail "the admin did not come back"
+  out=$(admin_script "$(admin_login)
+print('SIGNED IN')" 2>&1 | grep '^SIGNED IN' | tail -1)
+  [ "$out" = "SIGNED IN" ] && pass "the admin signs in again after it was down" || fail "the admin after it was down: '$out'"
+  drill_chat_ok "$drill_token" 60 && pass "replies still work with the admin back" || fail "no reply once the admin was back: $DRILL_LAST"
+
+  echo "-- a tiny auditor disk: a new span is refused"
+  # A second auditor, from the same image and with the real hardening, on a 2 MB memory disk: the real one is not touched. It takes the
+  # real hash files (read-only) and the gateway's own token, so what is asked of it is what the gateway asks of the real one.
+  drill_gw_tok=$(docker exec "$DRILL_GW" cat /model-gateway-token/call/model-gateway-auditor.token 2>/dev/null)
+  docker rm -f askbar-drill-auditor >/dev/null 2>&1
+  if [ -z "$drill_gw_tok" ]; then
+    fail "the tiny-disk drill could not read the gateway's token"
+  elif docker run -d --name askbar-drill-auditor --network "${PROJECT}_audit-model-gateway" --read-only --cap-drop ALL \
+      --security-opt no-new-privileges --tmpfs /audit:rw,size=2m,uid=10003,gid=10003,mode=0700 --tmpfs /tmp:rw,size=8m \
+      -v "${PROJECT}_auditor-token:/auditor-token:ro" -e ASKBAR_AUDIT_API_ADDR=0.0.0.0:8083 askbar-auditor:latest >/dev/null 2>&1 \
+      && drill_wait_healthy askbar-drill-auditor 60; then
+    out=$(py --network "${PROJECT}_audit-model-gateway" -- "
+import json, time, urllib.request, urllib.error
+def call(method, path, body=None):
+    req = urllib.request.Request('http://askbar-drill-auditor:8083/api/audit/v1' + path, method=method, data=None if body is None else json.dumps(body).encode())
+    req.add_header('authorization', 'Bearer $drill_gw_tok')
+    if body is not None: req.add_header('content-type', 'application/json')
+    try:
+        r = urllib.request.urlopen(req, timeout=5); return r.status, r.read().decode()
+    except urllib.error.HTTPError as e: return e.code, e.read().decode()
+    except Exception as e: return 0, type(e).__name__
+now = int(time.time())
+print('hello', call('POST', '/hello', {'boot_id': 'drill'})[0])
+s, body = call('POST', '/spans', {'id': 'drill-span', 'trace_id': 'drill-trace', 'kind': 'turn', 'name': 'drill', 'started_at': now, 'started_ms': now * 1000})
+try: code = json.loads(body).get('error')
+except Exception: code = body[:40]
+print('span', s, code)
+print('status', call('GET', '/status')[0])" 2>&1)
+    printf '%s' "$out" | grep -q '^span 503 audit_backlog$' && pass "an auditor on a 2 MB disk refuses a new span with audit_backlog" || fail "a new span on a tiny disk: $out"
+    printf '%s' "$out" | grep -q '^hello 200$' && printf '%s' "$out" | grep -q '^status 200$' && pass "and still answers its hello and its status, so the services can tell it is alive" || fail "the tiny auditor's hello and status: $out"
+  else
+    fail "the second auditor on a tiny disk did not start: $(docker logs askbar-drill-auditor 2>&1 | tail -2 | tr '\n' ' ')"
+  fi
+  docker rm -f askbar-drill-auditor >/dev/null 2>&1
+  drill_healthy "$DRILL_AUDITOR" && pass "the real auditor was not touched by it" || fail "the real auditor is not healthy"
+
+  echo "-- the alerter down: the admin shows its banner"
+  docker stop "$DRILL_ALERTER" >/dev/null
+  out=$(admin_script "$(admin_login)
+import time
+end = time.time() + 180
+state = None
+while time.time() < end:
+    s, body = call('GET', '/api/admin/v1/status')
+    state = json.loads(body).get('alerts') if s == 200 else 'status ' + str(s)
+    if state == 'unreachable': break
+    time.sleep(5)
+print('BANNER', state)" 2>&1 | grep '^BANNER ' | tail -1)
+  [ "$out" = "BANNER unreachable" ] && pass "with the alerter stopped the admin's status says alerts are unreachable (the banner on every page)" || fail "the admin's alert banner with the alerter down: '$out'"
+  docker start "$DRILL_ALERTER" >/dev/null
+  drill_wait_healthy "$DRILL_ALERTER" 90 && pass "the alerter is healthy again" || fail "the alerter did not come back"
+  out=$(admin_script "$(admin_login)
+import time
+end = time.time() + 150
+state = None
+while time.time() < end:
+    s, body = call('GET', '/api/admin/v1/status')
+    state = json.loads(body).get('alerts') if s == 200 else 'status ' + str(s)
+    if state != 'unreachable': break
+    time.sleep(5)
+print('BANNER', state)" 2>&1 | grep '^BANNER ' | tail -1)
+  case "$out" in "BANNER ok"|"BANNER not_set_up") pass "the banner goes away once the alerter answers ($out)";; *) fail "the banner after the alerter came back: '$out'";; esac
+
+  echo "-- the stack is whole again"
+  for c in $DRILL_SERVICES; do drill_healthy "$c" || fail "$c is not healthy at the end of the drills"; done
+  [ "$FAILS" -eq 0 ] && pass "every service is healthy at the end of the drills" || true
+  # The provider the drills made goes, and the catalog is put back as it was.
+  admin_script "$(admin_login)
+import json
+s, cat = call('GET', '/api/admin/v1/catalog'); cat = json.loads(cat)
+cat['models'] = [m for m in cat['models'] if m['provider_id'] != '$drill_pid']
+if (cat.get('default') or '').startswith('$drill_pid/'):
+    cat['default'] = (cat['models'][0]['provider_id'] + '/' + cat['models'][0]['model']) if cat['models'] else None
+call('PUT', '/api/admin/v1/catalog', cat)
+call('DELETE', '/api/admin/v1/providers/$drill_pid')" >/dev/null 2>&1 || note "the failure drills' provider could not be removed"
+fi
 
 echo
 if [ "$FAILS" -eq 0 ]; then echo "All isolation checks passed."; else echo "$FAILS isolation check(s) FAILED."; exit 1; fi
