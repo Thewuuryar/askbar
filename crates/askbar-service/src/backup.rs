@@ -202,6 +202,13 @@ pub fn decrypt(identity: &x25519::Identity, ciphertext: &[u8]) -> Result<Vec<u8>
     Ok(out)
 }
 
+/// A reader of what [`encrypt_to`] made, opened with the private key as it is read: for an export too large to hold in memory (a
+/// restore). A stream that was cut short fails when the read reaches the cut, never as a short success.
+pub fn decrypt_stream<R: Read>(identity: &x25519::Identity, source: R) -> Result<impl Read, Error> {
+    let decryptor = age::Decryptor::new(source).map_err(|_| Error::Invalid)?;
+    decryptor.decrypt(iter::once(identity as &dyn age::Identity)).map_err(|_| Error::WrongPassphrase)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -298,6 +305,21 @@ mod tests {
         bytes.extend_from_slice(&sealed[..sealed.len() / 2]);
         assert!(decrypt(&identity, &bytes).is_err());
         assert!(encrypt_to("not a key", Vec::new()).is_err());
+    }
+
+    #[test]
+    fn a_stream_is_opened_as_it_is_read_and_a_cut_one_fails_at_the_cut() {
+        let k = key();
+        let identity = unlock(&k.protected, PASS).unwrap();
+        let data = b"restore me ".repeat(30_000);
+        let sealed = encrypt(&k.recipient, &data).unwrap();
+        let mut out = Vec::new();
+        decrypt_stream(&identity, &sealed[..]).unwrap().read_to_end(&mut out).unwrap();
+        assert_eq!(out, data);
+        let mut cut = Vec::new();
+        let mut reader = decrypt_stream(&identity, &sealed[..sealed.len() - 100]).unwrap();
+        assert!(reader.read_to_end(&mut cut).is_err(), "a cut stream is an error, not a short success");
+        assert!(decrypt_stream(&unlock(&key().protected, PASS).unwrap(), &sealed[..]).is_err());
     }
 
     #[test]

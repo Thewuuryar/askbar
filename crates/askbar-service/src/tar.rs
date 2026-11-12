@@ -77,6 +77,92 @@ pub fn is_plain_name(name: &str) -> bool {
     name.len() <= 100 && !name.is_empty() && name.split('/').all(|seg| !seg.is_empty() && seg != "." && seg != "..")
 }
 
+/// One regular file's place in an archive: its name, where its data starts and how long it is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Entry {
+    pub name: String,
+    pub offset: u64,
+    pub size: u64,
+}
+
+/// What a header says: `None` for the end of the archive (an empty block), else the name and size. A header that is not a regular
+/// ustar file with a plain name is an error: a restore reads only what a backup writes.
+fn parse_header(h: &[u8; 512]) -> std::io::Result<Option<(String, u64)>> {
+    let bad = |what: &'static str| std::io::Error::new(std::io::ErrorKind::InvalidData, what);
+    if h.iter().all(|b| *b == 0) {
+        return Ok(None);
+    }
+    if &h[257..262] != b"ustar" || h[156] != b'0' {
+        return Err(bad("not an archive of regular files"));
+    }
+    let name = std::str::from_utf8(&h[..100]).map_err(|_| bad("a name that is not text"))?.trim_end_matches('\0').to_string();
+    let size = std::str::from_utf8(&h[124..135])
+        .ok()
+        .map(|t| t.trim_matches(|c| c == '\0' || c == ' '))
+        .and_then(|t| u64::from_str_radix(t, 8).ok())
+        .ok_or_else(|| bad("a size that is not a number"))?;
+    if !is_plain_name(&name) {
+        return Err(bad("a name that is not plain"));
+    }
+    Ok(Some((name, size)))
+}
+
+/// The files of an archive on disk, by place, without reading their data: for a bundle too large to hold in memory, whose parts
+/// are read one at a time with a seek. An archive that ends without its end marker, or whose last file runs past the end of the
+/// input, is an error (a download that stopped early is never taken for a whole one).
+pub fn index<R: std::io::Read + std::io::Seek>(r: &mut R) -> std::io::Result<Vec<Entry>> {
+    use std::io::SeekFrom;
+    let total = r.seek(SeekFrom::End(0))?;
+    r.seek(SeekFrom::Start(0))?;
+    let mut out = Vec::new();
+    let mut at = 0u64;
+    loop {
+        if at + 512 > total {
+            return Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "the archive has no end"));
+        }
+        r.seek(SeekFrom::Start(at))?;
+        let mut h = [0u8; 512];
+        r.read_exact(&mut h)?;
+        let Some((name, size)) = parse_header(&h)? else { return Ok(out) };
+        let offset = at + 512;
+        if offset + size > total {
+            return Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "a file runs past the end of the archive"));
+        }
+        out.push(Entry { name, offset, size });
+        at = offset + size.div_ceil(512) * 512;
+    }
+}
+
+/// Reads an archive as it arrives, calling `f` with each file's name, size and a reader of exactly its data (what `f` leaves
+/// unread is skipped). Nothing is held in memory but one buffer. An archive that ends before its end marker, or in the middle of
+/// a file, is an error: a stream that was cut short is never taken for a whole one.
+pub fn for_each<R: std::io::Read>(
+    r: &mut R,
+    mut f: impl FnMut(&str, u64, &mut dyn std::io::Read) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    use std::io::Read;
+    loop {
+        let mut h = [0u8; 512];
+        r.read_exact(&mut h)?;
+        let Some((name, size)) = parse_header(&h)? else { return Ok(()) };
+        let mut data = r.by_ref().take(size);
+        f(&name, size, &mut data)?;
+        // What the callback left, then the padding up to the block.
+        std::io::copy(&mut data, &mut std::io::sink())?;
+        if data.limit() != 0 {
+            return Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "a file was cut short"));
+        }
+        let pad = (512 - size % 512) % 512;
+        std::io::copy(&mut r.by_ref().take(pad), &mut std::io::sink()).and_then(|n| {
+            if n == pad {
+                Ok(())
+            } else {
+                Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "the archive was cut short"))
+            }
+        })?;
+    }
+}
+
 /// The files in an archive `append` wrote, in order. `None` if it is not one (a bad header, a
 /// name that is not plain, or a file that runs past the end).
 pub fn read(bytes: &[u8]) -> Option<Vec<(String, Vec<u8>)>> {
@@ -119,6 +205,38 @@ mod tests {
             [("control.db", 3), ("spaces/01J0000000000000000000000.db", 1500), ("empty", 0)]
         );
         assert_eq!(files[0].1, b"one");
+    }
+
+    #[test]
+    fn an_archive_is_indexed_and_streamed_and_one_that_stops_early_is_an_error() {
+        let mut t = Vec::new();
+        append(&mut t, "a.db", &vec![1u8; 700], 0);
+        append(&mut t, "dir/b.db", b"bee", 0);
+        append(&mut t, "empty", b"", 0);
+        finish(&mut t);
+        let entries = index(&mut std::io::Cursor::new(&t)).unwrap();
+        assert_eq!(entries.iter().map(|e| (e.name.as_str(), e.size)).collect::<Vec<_>>(), [("a.db", 700), ("dir/b.db", 3), ("empty", 0)]);
+        assert_eq!(&t[entries[1].offset as usize..][..3], b"bee");
+        // Streamed: each file's data, and a callback that reads nothing still moves on to the next file.
+        let mut seen = Vec::new();
+        for_each(&mut &t[..], |name, size, r| {
+            let mut data = Vec::new();
+            if name != "a.db" {
+                std::io::Read::read_to_end(r, &mut data)?;
+            }
+            seen.push((name.to_string(), size, data.len()));
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(seen, [("a.db".into(), 700, 0), ("dir/b.db".into(), 3, 3), ("empty".into(), 0, 0)]);
+        // Cut anywhere before the first empty block (the end), both ways refuse.
+        for cut in [0, 100, 512, 600, 1024 + 512, t.len() - 1024, t.len() - 1024 + 100] {
+            assert!(index(&mut std::io::Cursor::new(&t[..cut])).is_err(), "indexed a cut at {cut}");
+            assert!(for_each(&mut &t[..cut], |_, _, _| Ok(())).is_err(), "streamed a cut at {cut}");
+        }
+        let mut evil = t.clone();
+        evil[..4].copy_from_slice(b"../a");
+        assert!(index(&mut std::io::Cursor::new(&evil)).is_err() && for_each(&mut &evil[..], |_, _, _| Ok(())).is_err());
     }
 
     #[test]

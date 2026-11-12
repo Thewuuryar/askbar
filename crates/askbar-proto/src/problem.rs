@@ -112,11 +112,9 @@ impl ErrorCode {
     /// The HTTP status that goes with the code.
     pub fn status(self) -> u16 {
         match self {
-            ErrorCode::QueueFull
-            | ErrorCode::ApiKeyExists
-            | ErrorCode::Conflict
-            | ErrorCode::BackupNewerRelease
-            | ErrorCode::NotEmpty => 409,
+            ErrorCode::QueueFull | ErrorCode::ApiKeyExists | ErrorCode::Conflict | ErrorCode::BackupNewerRelease | ErrorCode::NotEmpty => {
+                409
+            }
             ErrorCode::BudgetExceeded | ErrorCode::TooManyAttempts => 429,
             ErrorCode::KillSwitch
             | ErrorCode::AuditKeyMissing
