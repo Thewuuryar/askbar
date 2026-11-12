@@ -390,6 +390,25 @@ impl AlerterLink {
         }
     }
 
+    /// `POST /exports`: the alerter's files, encrypted to the backup public key (ADR 0013). The admin cannot read them.
+    pub async fn export(&self) -> Result<Vec<u8>, ApiError> {
+        match self.request(reqwest::Method::POST, "/exports", None).await {
+            Ok((200, body)) if !body.is_empty() => Ok(body),
+            Ok((503, body))
+                if serde_json::from_slice::<serde_json::Value>(&body)
+                    .ok()
+                    .and_then(|v| v["error"].as_str().map(String::from))
+                    .as_deref()
+                    == Some("backup_key_missing") =>
+            {
+                Err(ApiError::new(ErrorCode::BackupKeyMissing, "The alerter has not been given the backup key yet. Try again in a moment."))
+            }
+            Ok(_) | Err(()) => {
+                Err(ApiError::new(ErrorCode::ServerUnavailable, "The alerter could not make its export. Nothing was backed up."))
+            }
+        }
+    }
+
     /// `PUT /config`, as an action of its own: recorded before it is made, and not made when it cannot be (ADR 0010).
     pub async fn put_config(&self, state: &AdminState, config: &AlerterConfig) -> Result<(), PushError> {
         let body = serde_json::to_value(config).unwrap_or_default();

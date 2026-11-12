@@ -149,6 +149,50 @@ pub fn request_restart(config_dir: &FsPath) -> std::io::Result<String> {
     Ok(value)
 }
 
+/// The export and import request files (ADR 0013, ADR 0037): the supervisor answers each request with a `-done` file naming its id.
+pub const EXPORT_REQUEST: &str = "export-request";
+pub const EXPORT_DONE: &str = "export-done";
+pub const EXPORT_FILE: &str = "export.age";
+pub const IMPORT_REQUEST: &str = "import-request";
+pub const IMPORT_DONE: &str = "import-done";
+pub const IMPORT_FILE: &str = "import.tar";
+
+/// Make the files the supervisor writes in place: mode 0660 in the admin's group, as for `restart-done` (it cannot create a file here).
+pub fn prepare_transfer_files(config_dir: &FsPath) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    for name in [EXPORT_DONE, EXPORT_FILE, IMPORT_DONE, IMPORT_FILE] {
+        let p = config_dir.join(name);
+        if !p.exists() {
+            std::fs::write(&p, "")?;
+        }
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o660))?;
+    }
+    Ok(())
+}
+
+/// Ask the supervisor for the account login files, encrypted to `recipient`, and wait for `export.age`. Returns its bytes; the
+/// copy on the shared volume is emptied. An `Err` means nothing usable was made (no answer in `wait`, or the supervisor said no).
+pub async fn export_logins(config_dir: &FsPath, recipient: &str, wait: Duration) -> Result<Vec<u8>, &'static str> {
+    prepare_transfer_files(config_dir).map_err(|_| "The account logins could not be asked for.")?;
+    let id = rand(24);
+    let request = json!({ "id": id, "recipient": recipient }).to_string();
+    write_atomic(&config_dir.join(EXPORT_REQUEST), &request, 0o644).map_err(|_| "The account logins could not be asked for.")?;
+    let until = std::time::Instant::now() + wait;
+    loop {
+        let done: Option<Value> = std::fs::read(config_dir.join(EXPORT_DONE)).ok().and_then(|b| serde_json::from_slice(&b).ok());
+        if let Some(d) = done.filter(|d| d["id"] == id.as_str()) {
+            let file = config_dir.join(EXPORT_FILE);
+            let bytes = std::fs::read(&file).unwrap_or_default();
+            let _ = std::fs::write(&file, []);
+            return if d["ok"] == true && !bytes.is_empty() { Ok(bytes) } else { Err("CLIProxyAPI could not export the account logins.") };
+        }
+        if std::time::Instant::now() >= until {
+            return Err("CLIProxyAPI did not answer the export request in time.");
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct Account {
     pub name: String,
@@ -161,6 +205,7 @@ pub struct CpaLink {
     http: reqwest::Client,
     base: String,
     keys: Keys,
+    config_dir: PathBuf,
 }
 
 /// The admin's name for a provider, as CPA's endpoints spell it.
@@ -176,12 +221,22 @@ const API: &str = "/v0/management"; // names-ok: CLIProxyAPI's own path
 
 impl CpaLink {
     pub fn new(base: &str, keys: Keys) -> Arc<CpaLink> {
+        CpaLink::in_dir(base, keys, config_dir())
+    }
+
+    /// As [`CpaLink::new`], with the shared config directory named (the tests give each rig its own).
+    pub fn in_dir(base: &str, keys: Keys, config_dir: PathBuf) -> Arc<CpaLink> {
         let http = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(3))
             .timeout(Duration::from_secs(20))
             .build()
             .expect("reqwest client");
-        Arc::new(CpaLink { http, base: base.trim_end_matches('/').to_string(), keys })
+        Arc::new(CpaLink { http, base: base.trim_end_matches('/').to_string(), keys, config_dir })
+    }
+
+    /// The directory shared with the supervisor.
+    pub fn config_dir(&self) -> &FsPath {
+        &self.config_dir
     }
 
     pub fn api_key(&self) -> &str {

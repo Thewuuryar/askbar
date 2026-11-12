@@ -184,7 +184,7 @@ fn an_export_to_a_bad_key_fails_and_leaves_no_file() {
     let p = &t.settings.transfer;
     std::fs::write(&p.export_request, r#"{"id":"e2","recipient":"not-a-key"}"#).unwrap();
     assert_eq!(wait_done(&t, &p.export_done, "e2")["ok"], false);
-    assert!(!p.export_file.exists());
+    assert_eq!(std::fs::read(&p.export_file).unwrap_or_default().len(), 0, "no export left");
     // A request with no recipient fails the same way.
     std::fs::write(&p.export_request, r#"{"id":"e3"}"#).unwrap();
     assert_eq!(wait_done(&t, &p.export_done, "e3")["ok"], false);
@@ -205,7 +205,7 @@ fn an_import_unpacks_the_files_restarts_the_child_and_removes_the_archive() {
     assert_eq!(wait_done(&t, &p.import_done, "i1")["ok"], true);
     assert_eq!(std::fs::read_to_string(p.auth.join("claude-a.json")).unwrap(), r#"{"token":"first"}"#);
     assert_eq!(std::fs::read_to_string(p.auth.join("old.json")).unwrap(), "old", "files not in the archive are left alone");
-    assert!(!p.import_file.exists(), "the plain archive does not stay on the volume");
+    assert_eq!(std::fs::read(&p.import_file).unwrap().len(), 0, "the plain archive does not stay on the volume");
     t.wait_for("a restart after the import", |t| t.starts() == 2);
     assert_eq!(t.terms(), 1);
 }
@@ -224,7 +224,7 @@ fn a_bad_import_changes_nothing_and_says_so() {
     assert_eq!(wait_done(&t, &p.import_done, "i2")["ok"], false);
     assert_eq!(std::fs::read_to_string(p.auth.join("keep.json")).unwrap(), "keep");
     assert!(!p.auth.join("sub").exists());
-    assert!(!p.import_file.exists());
+    assert_eq!(std::fs::read(&p.import_file).unwrap().len(), 0);
     // No archive at all: also a failure.
     std::fs::write(&p.import_request, r#"{"id":"i3"}"#).unwrap();
     assert_eq!(wait_done(&t, &p.import_done, "i3")["ok"], false);

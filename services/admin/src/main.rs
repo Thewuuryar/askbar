@@ -69,6 +69,9 @@ async fn main() {
             if let Err(e) = askbar_admin::cpa::prepare_restart_done(&askbar_admin::cpa::config_dir()) {
                 eprintln!("warning: CLIProxyAPI's supervisor cannot report restarts: {e}");
             }
+            if let Err(e) = askbar_admin::cpa::prepare_transfer_files(&askbar_admin::cpa::config_dir()) {
+                eprintln!("warning: CLIProxyAPI's supervisor cannot export or import account logins: {e}");
+            }
             state.set_cpa(askbar_admin::cpa::CpaLink::new(&askbar_admin::cpa::cpa_url(), keys));
             if secret_replaced {
                 // CPA reads its config only at start; its supervisor restarts it because the config

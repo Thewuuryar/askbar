@@ -5,8 +5,8 @@
 //!   counts and hashes the bytes it passes on.
 //! - **What is in the bundle.** `manifest.json` (in the clear: the release that made it, the key's fingerprint, and each export's
 //!   SHA-256 and size), `backup-key.age` (the private key protected by the passphrase), then the exports: the admin's own first
-//!   (`admin.age`) and the server's (`server.age`). The alerter's, `cpa`'s and the auditor's, the auditor's last, follow in later
-//!   steps. With the file and the passphrase alone, `age` opens it.
+//!   (`admin.age`) and the server's (`server.age`), then the alerter's (`alerter.age`: its ledger and release state) and `cpa`'s (`cpa.age`:
+//!   the account login files). The auditor's, last, follows in a later step. With the file and the passphrase alone, `age` opens it.
 //! - **The admin's own export** is `admin.db` (a `VACUUM INTO` copy, complete: it is encrypted), `admin-secrets/` (`admin.key` and the
 //!   CLIProxyAPI keys it keeps), and `caddy-secrets/` (the install's own certificate and key).
 //! - **Streamed.** Each export goes to a work file on the admin's data volume as it arrives (never `/tmp`, never memory), then the
@@ -155,6 +155,30 @@ async fn stage_server(state: &AdminState, out: &Path) -> Result<Staged, Failure>
     Ok(Staged { name: "server.age", path: out.to_path_buf(), sha256: hex(sha.finalize()), bytes })
 }
 
+/// Bytes already in memory (an export that is small, like the alerter's), written to a work file and hashed.
+fn stage_bytes(name: &'static str, data: &[u8], out: &Path) -> Result<Staged, Failure> {
+    std::fs::write(out, data).map_err(|_| internal())?;
+    Ok(Staged { name, path: out.to_path_buf(), sha256: hex(Sha256::digest(data)), bytes: data.len() as u64 })
+}
+
+/// The alerter's export, over its link. Left out only where the install has no alerter link at all (a stack always has one).
+async fn stage_alerter(state: &AdminState, out: &Path) -> Result<Option<Staged>, Failure> {
+    let Some(link) = state.alerter.get() else { return Ok(None) };
+    let bytes = link.export().await?;
+    stage_bytes("alerter.age", &bytes, out).map(Some)
+}
+
+/// `cpa`'s export: the account login files, which its supervisor encrypts to the key on request (ADR 0037). Left out only where
+/// CLIProxyAPI is not managed here.
+async fn stage_cpa(state: &AdminState, recipient: &str, out: &Path) -> Result<Option<Staged>, Failure> {
+    let link = state.cpa.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let Some(link) = link else { return Ok(None) };
+    let bytes = crate::cpa::export_logins(link.config_dir(), recipient, std::time::Duration::from_secs(60))
+        .await
+        .map_err(|why| err(StatusCode::BAD_GATEWAY, &format!("{why} Nothing was backed up.")))?;
+    stage_bytes("cpa.age", &bytes, out).map(Some)
+}
+
 /// The size of a tar entry for `size` bytes of data: its header and the data, padded to a block.
 fn entry_len(size: u64) -> u64 {
     512 + size.div_ceil(512) * 512
@@ -204,7 +228,10 @@ pub async fn download(State(state): St, notes: Option<axum::Extension<crate::act
     };
     let server_part = stage_server(&state, &work.join("server.age")).await?;
 
-    let parts = vec![admin_part, server_part];
+    // The admin's first and the auditor's last (a later step); the others in between.
+    let mut parts = vec![admin_part, server_part];
+    parts.extend(stage_alerter(&state, &work.join("alerter.age")).await?);
+    parts.extend(stage_cpa(&state, &recipient, &work.join("cpa.age")).await?);
     let manifest = Manifest {
         format: backup::BUNDLE_FORMAT,
         release: env!("CARGO_PKG_VERSION").to_string(),

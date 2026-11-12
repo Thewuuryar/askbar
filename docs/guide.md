@@ -320,14 +320,16 @@ Four things to back up, **separately**:
 - **`data/`** (the server's `control.db`: users, paired clients and spaces; and `spaces/`, one file per space with its conversations) and the **`admin-data`** volume (the admin's database).
 - **The `admin-secrets` volume** (`admin.key`). Keep it somewhere other than your database backups: anyone holding both it and `admin-data` can read the stored provider keys. For example: `docker run --rm -v askbar_admin-secrets:/s -v "$PWD":/b alpine cp /s/admin.key /b/admin.key`, then store the copy in a password manager. (`askbar-secrets`, which held the server's old master key, is no longer used.)
 - Admin site > **Backup** downloads one **encrypted** `.tar` bundle ([ADR 0013](adr/0013-backups.md)). It needs the backup key you made at setup (the Backup page shows its fingerprint); without one, nothing is backed up. Each part is encrypted with age to the backup public key, so the admin that sends it cannot read it, and it is complete, secrets included: the server's data (`control.db` and a file per space) and the admin's own (its database, `admin.key`, the CLIProxyAPI keys and the install's own certificate and key). The auditor's, the alerter's and `cpa`'s parts come in later versions. Each part is consistent (`VACUUM INTO`).
-- **What is in the bundle.** `manifest.json` (in the clear: the format, the release that made it, the key's fingerprint, and each part's name, SHA-256 and size), `backup-key.age` (the private key, protected by your backup passphrase), then the parts, the admin's first: `admin.age` and `server.age`. Nothing in it is readable without the passphrase.
+- **What is in the bundle.** `manifest.json` (in the clear: the format, the release that made it, the key's fingerprint, and each part's name, SHA-256 and size), `backup-key.age` (the private key, protected by your backup passphrase), then the parts, the admin's first: `admin.age`, `server.age`, `alerter.age` (the alerter's repeat counts and release check) and `cpa.age` (the account logins of CLIProxyAPI). Nothing in it is readable without the passphrase.
 - **Reading a backup by hand**, with the ordinary [`age`](https://github.com/FiloSottile/age) tool and nothing from Askbar. Unpack the bundle (`tar xf askbar-backup-<time>.tar`), then:
 
   ```sh
   age -d -o backup-key.txt backup-key.age        # asks for your backup passphrase
   age -d -i backup-key.txt -o admin.tar admin.age
   age -d -i backup-key.txt -o server.tar server.age
-  tar tf admin.tar server.tar                    # admin.db, admin-secrets/..., control.db, spaces/<id>.db
+  age -d -i backup-key.txt -o alerter.tar alerter.age
+  age -d -i backup-key.txt -o cpa.tar cpa.age
+  tar tf admin.tar server.tar alerter.tar cpa.tar   # admin.db, admin-secrets/..., control.db, spaces/<id>.db, ledger.json, <login>.json
   ```
 
   `backup-key.txt` is the private key: keep it only while you need it, and delete it afterwards. **If you lose the passphrase, every backup made with that key is unreadable for good;** the admin keeps only the public key and the protected private key, never the passphrase. After a key rotation, an older bundle opens with the passphrase it was made under (its own `backup-key.age`).

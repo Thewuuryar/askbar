@@ -3,13 +3,17 @@
 //! The admin asks by writing a request file to `cpa-config`; the supervisor answers with a `-done` file naming the request,
 //! as it does for a restart. No port, no token.
 //!
+//! - **The files are the admin's, written in place.** The supervisor runs as root in the admin's group with every capability dropped
+//!   (ADR 0032): it can write a file the admin made with the group bit (mode 0660) and cannot create or remove one in the admin's
+//!   directory. So the admin makes `export-done`, `export.age`, `import-done` and `import.tar` first, and the supervisor writes them
+//!   in place and "removes" `import.tar` by emptying it.
 //! - **Export.** `export-request` is JSON: `{"id": "<unique>", "recipient": "age1…"}`. The supervisor archives the regular
-//!   files directly in the auth directory (`tar`), encrypts the archive to the recipient and writes it to `export.age`
-//!   (a temporary file, then a rename), then writes `export-done`: `{"id": "<id>", "ok": true, "bytes": n}`, or
+//!   files directly in the auth directory (`tar`), encrypts the archive to the recipient and writes it to `export.age`,
+//!   then writes `export-done`: `{"id": "<id>", "ok": true, "bytes": n}`, or
 //!   `{"id": "<id>", "ok": false}`. The supervisor never holds the private key.
 //! - **Import.** `import-request` is JSON: `{"id": "<unique>"}`, with the plain archive of login files in `import.tar`
 //!   (the admin has opened it with the owner's key). The supervisor stops CLIProxyAPI, unpacks the files into the auth
-//!   directory, restarts it, removes `import.tar`, and writes `import-done` the same way.
+//!   directory, restarts it, empties `import.tar`, and writes `import-done` the same way.
 //! - A request is acted on once: it is done when its `id` is the one in the done file. Nothing about the files is logged.
 
 use std::path::{Path, PathBuf};
@@ -60,8 +64,7 @@ fn answer(done: &Path, id: &str, ok: bool, bytes: Option<u64>) {
     if let Some(b) = bytes {
         v["bytes"] = b.into();
     }
-    let tmp = done.with_extension("tmp");
-    if std::fs::write(&tmp, v.to_string()).and_then(|_| std::fs::rename(&tmp, done)).is_err() {
+    if std::fs::write(done, v.to_string()).is_err() {
         eprintln!("askbar-cpa-supervisor: could not write {}", done.display());
     }
 }
@@ -84,8 +87,7 @@ fn files_in(dir: &Path) -> std::io::Result<Vec<(String, PathBuf)>> {
 }
 
 fn export_to(p: &Paths, recipient: &str, now: i64) -> Result<u64, Box<dyn std::error::Error>> {
-    let tmp = p.export_file.with_extension("tmp");
-    let file = std::fs::File::create(&tmp)?;
+    let file = std::fs::File::create(&p.export_file)?;
     let mut enc = askbar_service::backup::encrypt_to(recipient, file)?;
     for (name, path) in files_in(&p.auth)? {
         let size = std::fs::metadata(&path)?.len();
@@ -94,16 +96,14 @@ fn export_to(p: &Paths, recipient: &str, now: i64) -> Result<u64, Box<dyn std::e
     askbar_service::tar::write_end(&mut enc)?;
     let file = enc.finish()?;
     file.sync_all()?;
-    let bytes = file.metadata()?.len();
-    std::fs::rename(&tmp, &p.export_file)?;
-    Ok(bytes)
+    Ok(file.metadata()?.len())
 }
 
 /// Acts on a pending export request. Returns whether there was one.
 pub fn export(p: &Paths, now: i64) -> bool {
     let Some(req) = pending(&p.export_request, &p.export_done) else { return false };
     let id = req["id"].as_str().unwrap_or_default().to_string();
-    let _ = std::fs::remove_file(&p.export_file);
+    let _ = std::fs::write(&p.export_file, []);
     match req["recipient"].as_str().map(|r| export_to(p, r, now)) {
         Some(Ok(bytes)) => answer(&p.export_done, &id, true, Some(bytes)),
         _ => {
@@ -119,7 +119,7 @@ pub fn import_pending(p: &Paths) -> Option<String> {
     pending(&p.import_request, &p.import_done).and_then(|r| r["id"].as_str().map(String::from))
 }
 
-/// Unpacks `import.tar` into the auth directory (the child is stopped by the caller). Returns whether it worked, and answers.
+/// Unpacks `import.tar` into the auth directory (the child is stopped by the caller). Empties the archive either way, answers, and returns whether it worked.
 pub fn import(p: &Paths, id: &str) -> bool {
     let ok = (|| -> Option<()> {
         let files = askbar_service::tar::read(&std::fs::read(&p.import_file).ok()?)?;
@@ -136,7 +136,7 @@ pub fn import(p: &Paths, id: &str) -> bool {
         Some(())
     })()
     .is_some();
-    let _ = std::fs::remove_file(&p.import_file);
+    let _ = std::fs::write(&p.import_file, []); // emptied: the plain archive does not stay on the volume
     if !ok {
         eprintln!("askbar-cpa-supervisor: the import failed");
     }
