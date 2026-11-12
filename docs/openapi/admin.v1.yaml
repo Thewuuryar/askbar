@@ -182,7 +182,7 @@ paths:
       summary: Send a test alert now and say what each channel did. Session-only.
       description: >-
         Asks the alerter to send a test alert through every channel that is set up, and answers with the real result: whether
-        each worked and, if not, one word for why (`unreachable`, `refused`, `unauthorized` or `timeout`), never the server's
+        each worked and, if not, one word for why (`unreachable`, `refused`, `unauthorized`, `timeout` or `tls`), never the server's
         words. With no channel set up `results` is empty.
       security:
         - adminSession: []
@@ -208,7 +208,7 @@ paths:
                           type: boolean
                         problem:
                           type: string
-                          enum: [unreachable, refused, unauthorized, timeout]
+                          enum: [unreachable, refused, unauthorized, timeout, tls]
         '401':
           $ref: '#/components/responses/Unauthorized'
         '502':

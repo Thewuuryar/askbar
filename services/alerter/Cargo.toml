@@ -11,6 +11,8 @@ askbar-proto = { path = "../../crates/askbar-proto", features = ["axum"] }
 askbar-service = { path = "../../crates/askbar-service" }
 axum = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+# Email (ADR 0055): SMTP over rustls (ring, webpki roots), as reqwest does it. No native-tls, no pool, no hostname lookup.
+lettre = { version = "0.11.23", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time"] }
