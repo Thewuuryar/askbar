@@ -132,9 +132,9 @@ These are settings on GitHub, not files, so no pull request can turn them on ([A
 [ADR 0018](docs/adr/0018-releases-and-migrations.md)). The workflows and `.github/dependabot.yml` are written for them.
 
 - **Dependabot alerts and Dependabot security updates** (Settings, Advanced Security). `.github/dependabot.yml` switches version
-  updates off (Renovate opens those) and leaves security updates on, for Cargo, npm, GitHub Actions and Docker.
+  updates off (Renovate opens those) and leaves security updates on, for Cargo, npm, GitHub Actions, Docker and Docker Compose.
 - **Branch protection (or a ruleset) on `main`:** require a pull request, require the checks to pass before merging
-  (`lint`, `test-services`, `test-desktop`, `isolation`, `dependencies`, `images` and `secrets` from `ci.yml`), and block force pushes
+  (`lint`, `test-services`, `test-desktop`, `isolation`, `dependencies`, `images`, `cpa-image` and `secrets` from `ci.yml`), and block force pushes
   and deletion. Without it nothing makes a failing check stop a merge.
 - **Email for failed workflow runs** (your profile's Settings, Notifications, Actions: "Send notifications for failed workflows only",
   by email). `ci.yml` also runs every Monday on `main`: a new advisory in a dependency (`cargo deny`, `npm audit`) or in an image

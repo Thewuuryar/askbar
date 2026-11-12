@@ -1,12 +1,12 @@
-# Builds and tests Askbar on all three desktop platforms, and builds the server and admin images.
-# Run by hand (workflow_dispatch): ci.yml runs the Linux checks on every pull request. Actions are pinned
-# to commit hashes (ADR 0017).
+# Builds and tests the desktop client on all three desktop platforms. Run by hand (workflow_dispatch): ci.yml
+# runs the Linux checks on every pull request, and it alone tests, builds and scans the services (they run
+# in Docker, on Linux only). Actions are pinned to commit hashes (ADR 0017).
 name: build
 
 on:
   workflow_dispatch:
 
-# Both jobs only check out code, build, test and upload build output: read access is enough.
+# The job only checks out code, builds, tests and uploads build output: read access is enough.
 permissions:
   contents: read
 
@@ -37,9 +37,11 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 20
+          node-version: 22 # as in ci.yml
 
+      # The services are Linux-only (unix sockets, signals): ci.yml tests them on every pull request.
       - name: Rust tests (services and crates)
+        if: runner.os == 'Linux'
         run: cargo test --workspace
 
       - name: Rust tests (desktop client)
@@ -52,7 +54,7 @@ jobs:
 
       - name: Install JS dependencies
         working-directory: clients/desktop
-        run: npm install
+        run: npm ci
 
       - name: Build the app
         working-directory: clients/desktop
@@ -63,28 +65,3 @@ jobs:
           name: askbar-${{ matrix.os }}
           path: |
             clients/desktop/target/release/bundle/**/*
-
-  images:
-    # The server and admin container images build, start and answer their own health checks.
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Build both images
-        run: |
-          docker build --target server -t askbar-server:ci .
-          docker build --target admin -t askbar-admin:ci .
-
-      - name: Each image answers its health check
-        run: |
-          docker run -d --name server -e ASKBAR_SERVER_API_ADDR=127.0.0.1:8082 askbar-server:ci
-          docker run -d --name admin askbar-admin:ci
-          for c in server admin; do
-            ok=no
-            for i in $(seq 20); do
-              if docker exec "$c" "askbar-$c" healthcheck; then ok=yes; break; fi
-              sleep 1
-            done
-            echo "$c healthy: $ok"
-            [ "$ok" = yes ] || { docker logs "$c"; exit 1; }
-          done
