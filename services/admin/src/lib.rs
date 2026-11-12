@@ -191,6 +191,8 @@ pub fn routes(state: &Arc<AdminState>) -> Routes {
     // What only the person's own session may do: the password, the API key, and looking at or ending the session.
     let session_only = Routes::new()
         .put(&v1("/password"), web::change_password)
+        // Deleting a person removes their space and clients for good: only a person's own, freshly signed-in session.
+        .delete(&v1("/users/{id}"), admin_api::delete_user)
         // How alerts are delivered (ADR 0055): the settings are secrets and sending a test alert reaches outside, so only a
         // person's own session may do either (a script's API key may not redirect or silence the alerts).
         .get(&v1("/alerts"), alerts::get_alerts)

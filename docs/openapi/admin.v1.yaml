@@ -958,6 +958,35 @@ paths:
           $ref: '#/components/responses/Conflict'
         '502':
           $ref: '#/components/responses/ServerUnavailable'
+  /api/admin/v1/users/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    delete:
+      operationId: deleteUser
+      summary: Delete a person for good, with their personal space and their clients.
+      description: >-
+        A person's own browser session only, signed in within the last 10 minutes (403 `forbidden` otherwise); an API
+        key cannot do this. The page asks for the person's name to be typed first. The server goes first (it removes the
+        personal space file, the clients, the hashes of their tokens and the user), then this database's rows for them and
+        a new snapshot. The audit records stay. If the server has deleted but the rest failed, the user is still listed:
+        delete again. Recorded like every change.
+      security:
+        - adminSession: []
+      responses:
+        '204':
+          description: Deleted.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '502':
+          $ref: '#/components/responses/ServerUnavailable'
   /api/admin/v1/users/{id}/pause:
     parameters:
       - name: id

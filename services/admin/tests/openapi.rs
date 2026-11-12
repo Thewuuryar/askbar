@@ -121,6 +121,8 @@ async fn what_the_file_says_about_a_key_is_what_the_admin_does() {
         ("GET", "/session"),
         ("DELETE", "/session"),
         ("PUT", "/password"),
+        // Deleting a person is for good: a freshly signed-in session only (ADR 0012).
+        ("DELETE", "/users/{id}"),
         ("GET", "/keys"),
         ("POST", "/keys"),
         ("DELETE", "/keys/{id}"),
