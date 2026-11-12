@@ -94,7 +94,13 @@ impl Auditor {
     /// Gives the auditor the rules that send alerts, over `alerts` (set once, by `main`). `Auditor::new` keeps its signature,
     /// so every rig that does not care about alerts is as it was.
     pub fn with_alerts(self: Arc<Self>, alerts: Arc<dyn rules::Alerts>) -> Arc<Self> {
-        let _ = self.rules.set(rules::Rules::new(alerts));
+        let rules = rules::Rules::new(alerts);
+        // What the admin last recorded for how long sealed content stays open, so a restart is not a change.
+        if let Some(conn) = self.recorder.reader() {
+            let (idle, total) = latest_unseal_limits(&conn);
+            rules.seed_unseal_limits(idle, total);
+        }
+        let _ = self.rules.set(rules);
         self
     }
 
@@ -136,6 +142,27 @@ impl Auditor {
     pub async fn prune_once(&self, now: i64) -> Result<(usize, usize), String> {
         self.recorder.prune(self.retention_days(), now).await
     }
+}
+
+/// The limits on how long sealed content stays open that the admin last recorded in a saved change (idle, total), in minutes.
+fn latest_unseal_limits(conn: &askbar_audit::rusqlite::Connection) -> (Option<u32>, Option<u32>) {
+    let Ok(mut stmt) = conn.prepare(
+        "SELECT detail_json FROM admin_actions WHERE category = 'settings' AND action = 'update' AND outcome = 'done' \
+         AND detail_json IS NOT NULL ORDER BY at DESC, rowid DESC LIMIT 200",
+    ) else {
+        return (None, None);
+    };
+    let Ok(rows) = stmt.query_map([], |r| r.get::<_, String>(0)) else { return (None, None) };
+    let (mut idle, mut total) = (None, None);
+    for detail in rows.flatten() {
+        let Ok(d) = serde_json::from_str::<serde_json::Value>(&detail) else { continue };
+        idle = idle.or(d.get("unseal_idle_minutes").and_then(|v| v.as_u64()).map(|v| v as u32));
+        total = total.or(d.get("unseal_total_minutes").and_then(|v| v.as_u64()).map(|v| v as u32));
+        if idle.is_some() && total.is_some() {
+            break;
+        }
+    }
+    (idle, total)
 }
 
 /// How often the time-based rules run.
