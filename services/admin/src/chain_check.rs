@@ -204,6 +204,12 @@ fn stored_head(conn: &rusqlite::Connection) -> Option<(i64, String)> {
     conn.query_row("SELECT seq, hash FROM audit_chain_head WHERE id = 1", [], |r| Ok((r.get(0)?, r.get(1)?))).ok()
 }
 
+/// Makes (`seq`, `hash`) the head this admin expects the auditor's chain to have: after a restore, which replaced the chain (ADR 0013,
+/// D25), so the next check finds the chain as it was left and raises no rollback or rewrite.
+pub fn anchor_head(conn: &rusqlite::Connection, seq: i64, hash: &str) {
+    store_head(conn, seq, hash)
+}
+
 fn store_head(conn: &rusqlite::Connection, seq: i64, hash: &str) {
     let now = crate::auth::now();
     let saved = conn.execute(

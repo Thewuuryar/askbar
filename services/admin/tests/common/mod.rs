@@ -145,7 +145,9 @@ pub async fn start_with(caddy_up: bool, with_gateway: bool) -> T {
     }
     // The Audit pages read the in-process auditor with the admin's read token (ADR 0051).
     let auditor_token = askbar_admin::auditor_link::read_token(&rig.admin_tokens).unwrap();
-    admin.auditor.set(askbar_admin::auditor_link::AuditorLink::new(&rig.audit_url, auditor_token)).ok().unwrap();
+    let auditor_link = askbar_admin::auditor_link::AuditorLink::new(&rig.audit_url, auditor_token);
+    auditor_link.set_restore_token(askbar_admin::auditor_link::read_restore_token(&rig.admin_tokens).unwrap());
+    admin.auditor.set(auditor_link).ok().unwrap();
     // Every change is recorded in the rig's auditor before it is made, as it is in the stack (ADR 0010).
     let append_token = askbar_admin::actions::append_token(&rig.admin_tokens).unwrap();
     admin.actions.set(askbar_admin::actions::ActionLog::new(&rig.audit_url, append_token)).ok().unwrap();

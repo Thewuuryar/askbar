@@ -133,6 +133,10 @@ async fn main() {
     let auditor_token = askbar_admin::auditor_link::read_token(&askbar_admin::server_link::token_dir()).unwrap_or_else(|e| die(e, 1));
     let auditor = askbar_admin::auditor_link::AuditorLink::new(&askbar_admin::auditor_link::auditor_url(), auditor_token);
     auditor.set_notifier(state.notifier.clone());
+    // The restore link's token is for a restore and nothing else (plan step 6.3).
+    auditor.set_restore_token(
+        askbar_admin::auditor_link::read_restore_token(&askbar_admin::server_link::token_dir()).unwrap_or_else(|e| die(e, 1)),
+    );
     let _ = state.auditor.set(auditor.clone());
     tokio::spawn(auditor.clone().run(state.clone()));
     // The head of the audit chain is compared with the one stored, every few minutes (ADR 0010 rule 7).

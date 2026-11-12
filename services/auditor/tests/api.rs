@@ -18,6 +18,7 @@ const ADMIN_APPEND: &str = "admin-auditor-append";
 const ADMIN_READ: &str = "admin-auditor-read";
 const GATEWAY_READ: &str = "model-gateway-auditor-read";
 const ALERTER: &str = "alerter-auditor";
+const RESTORE: &str = "admin-auditor-restore";
 
 struct T {
     url: String,
@@ -49,7 +50,7 @@ async fn start_with(limits: Limits) -> T {
     let dir = std::env::temp_dir().join(format!("askbar-auditor-{}", ulid::Ulid::new()));
     let accept = dir.join("tokens/accept");
     std::fs::create_dir_all(&accept).unwrap();
-    for link in [SERVER, GATEWAY, ADMIN_APPEND, ADMIN_READ, GATEWAY_READ, ALERTER] {
+    for link in [SERVER, GATEWAY, ADMIN_APPEND, ADMIN_READ, GATEWAY_READ, ALERTER, RESTORE] {
         std::fs::write(accept.join(format!("{link}.sha256")), format!("{}\n", hex(&token(link)))).unwrap();
     }
     let recorder = Recorder::spawn(AuditDb::open(&dir.join("data/audit.db")).unwrap(), limits.max_queued);
@@ -911,4 +912,166 @@ async fn an_export_with_too_little_room_or_while_another_runs_is_refused_and_mak
     // Room again: it works, and nothing was changed by the refusal.
     t.free.store(100 * 1024 * 1024 * 1024, Ordering::Relaxed);
     assert_eq!(t.export_as(ADMIN_READ).await.0, 200);
+}
+
+// ------------------------------------------------------------------ the restore (ADR 0013, D25, ADR 0010's one exception)
+
+impl T {
+    /// `POST /restore` as `link`, with `body` as the upload.
+    async fn restore_as(&self, link: &str, body: Vec<u8>) -> (u16, Value) {
+        let r = self.http.post(format!("{}/api/audit/v1/restore", self.url)).bearer_auth(token(link)).body(body).send().await.unwrap();
+        let status = r.status().as_u16();
+        (status, r.json().await.unwrap_or(Value::Null))
+    }
+
+    fn restore_leftovers(&self) -> usize {
+        std::fs::read_dir(self.dir.join("data"))
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|e| e.file_name().to_string_lossy().starts_with(".restore-"))
+            .count()
+    }
+
+    /// The store, as an export made it and the admin opened it: the plain tar of `audit.db`.
+    async fn plain_export(&self) -> Vec<u8> {
+        let key = askbar_service::backup::generate_with(BACKUP_PASS, 10).unwrap();
+        assert_eq!(self.as_(ADMIN_READ, M::PUT, "/backup-key", Some(json!({ "public_key": key.recipient }))).await.status, 200);
+        let (status, sealed) = self.export_as(ADMIN_READ).await;
+        assert_eq!(status, 200);
+        let identity = askbar_service::backup::unlock(&key.protected, BACKUP_PASS).unwrap();
+        askbar_service::backup::decrypt(&identity, &sealed).unwrap()
+    }
+
+    async fn head(&self) -> Value {
+        self.as_(ADMIN_READ, M::GET, "/chain/head", None).await.body
+    }
+}
+
+/// A source store with a model call, an admin action and some access: what a backup of a used install holds.
+async fn used_store() -> T {
+    let s = start().await;
+    let action = json!({ "id": "a1", "at": now(), "category": "settings", "action": "x", "outcome": "done" });
+    assert_eq!(s.as_(ADMIN_APPEND, M::POST, "/admin-actions", Some(action)).await.status, 201);
+    assert_eq!(s.as_(GATEWAY, M::POST, "/spans", Some(span("m1", "t1", "turn"))).await.status, 201);
+    assert_eq!(s.as_(GATEWAY, M::POST, "/spans/m1/finish", Some(finish("done"))).await.status, 201);
+    s
+}
+
+#[tokio::test]
+async fn only_the_restore_link_reaches_restore_and_it_reaches_nothing_else() {
+    let t = start().await;
+    for link in [SERVER, GATEWAY, ADMIN_APPEND, ADMIN_READ, GATEWAY_READ, ALERTER] {
+        assert_eq!(t.restore_as(link, vec![]).await.0, 403, "{link} may not restore");
+    }
+    let r = t.http.post(format!("{}/api/audit/v1/restore", t.url)).send().await.unwrap();
+    assert_eq!(r.status(), 401, "no token");
+    for (m, p) in [
+        (M::GET, "/status"),
+        (M::GET, "/traces"),
+        (M::GET, "/chain/head"),
+        (M::POST, "/hello"),
+        (M::POST, "/admin-actions"),
+        (M::PUT, "/retention"),
+        (M::GET, "/export"),
+    ] {
+        assert_eq!(t.as_(RESTORE, m.clone(), p, Some(json!({}))).await.status, 403, "the restore link may not {m} {p}");
+    }
+}
+
+#[tokio::test]
+async fn a_backup_restores_into_a_store_with_no_model_call_and_the_chain_carries_on() {
+    let source = used_store().await;
+    let tar = source.plain_export().await;
+    let source_head = source.head().await;
+
+    // The target has what a start leaves: a hello, an admin action (the restore's own request, a password change) and an access line.
+    let target = start().await;
+    assert_eq!(target.as_(ADMIN_APPEND, M::POST, "/hello", Some(json!({ "boot_id": "ab" }))).await.status, 200);
+    let action = json!({ "id": "own", "at": now(), "category": "restore", "action": "restore", "outcome": "requested" });
+    assert_eq!(target.as_(ADMIN_APPEND, M::POST, "/admin-actions", Some(action)).await.status, 201);
+    let (status, body) = target.restore_as(RESTORE, tar).await;
+    assert_eq!(status, 200, "{body}");
+    // The store is the backup's: its head, its records (and not the target's own), and a chain that checks.
+    assert_eq!(body["seq"], target.head().await["seq"]);
+    assert_eq!(target.head().await["hash"], body["hash"]);
+    assert!(body["seq"].as_i64().unwrap() >= source_head["seq"].as_i64().unwrap(), "{body} vs {source_head}");
+    let sql: i64 = target.sql("SELECT COUNT(*) FROM spans WHERE id = 'm1'");
+    assert_eq!(sql, 1, "the backup's model call");
+    let own: i64 = target.sql("SELECT COUNT(*) FROM admin_actions WHERE id = 'own'");
+    assert_eq!(own, 0, "what the new install recorded about itself is replaced");
+    let verify = target.as_(ADMIN_READ, M::GET, "/chain/verify", None).await;
+    assert_eq!(verify.body["problems"].as_array().map(Vec::len), Some(0), "{}", verify.body);
+    // It goes on appending, and the chain grows from where the backup's ended.
+    let action = json!({ "id": "after", "at": now(), "category": "settings", "action": "y", "outcome": "done" });
+    assert_eq!(target.as_(ADMIN_APPEND, M::POST, "/admin-actions", Some(action)).await.status, 201);
+    assert!(target.head().await["seq"].as_i64().unwrap() > body["seq"].as_i64().unwrap());
+    assert_eq!(target.as_(ADMIN_READ, M::GET, "/chain/verify", None).await.body["problems"].as_array().map(Vec::len), Some(0));
+    // The work directory is gone, and the store is used now: a second restore is refused.
+    for _ in 0..60 {
+        if target.restore_leftovers() == 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(target.restore_leftovers(), 0, "work files were left behind");
+    let again = source.plain_export().await;
+    let (status, body) = target.restore_as(RESTORE, again).await;
+    assert_eq!((status, body["error"].as_str()), (409, Some("not_empty")), "{body}");
+}
+
+#[tokio::test]
+async fn a_store_with_a_model_call_is_refused_and_keeps_everything() {
+    let source = used_store().await;
+    let tar = source.plain_export().await;
+    let target = used_store().await;
+    let (head, spans) = (target.head().await, target.sql::<i64>("SELECT COUNT(*) FROM spans"));
+    let (status, body) = target.restore_as(RESTORE, tar).await;
+    assert_eq!((status, body["error"].as_str()), (409, Some("not_empty")), "{body}");
+    assert_eq!((target.head().await, target.sql::<i64>("SELECT COUNT(*) FROM spans")), (head, spans));
+    assert_eq!(target.restore_leftovers(), 0);
+}
+
+#[tokio::test]
+async fn a_backup_that_is_damaged_newer_or_not_a_store_is_refused_and_changes_nothing() {
+    let source = used_store().await;
+    let tar = source.plain_export().await;
+    let target = start().await;
+    let head = target.head().await;
+    // Cut anywhere, junk, a stranger's file, two stores.
+    for cut in [0, 100, tar.len() / 2, tar.len() - 600] {
+        let (status, body) = target.restore_as(RESTORE, tar[..cut].to_vec()).await;
+        assert_eq!((status, body["error"].as_str()), (400, Some("bad_request")), "cut at {cut}");
+    }
+    assert_eq!(target.restore_as(RESTORE, b"not a tar".to_vec()).await.0, 400);
+    let mut stranger = Vec::new();
+    askbar_service::tar::append(&mut stranger, "admin.db", b"x", 0);
+    askbar_service::tar::finish(&mut stranger);
+    assert_eq!(target.restore_as(RESTORE, stranger).await.0, 400);
+    let files = askbar_service::tar::read(&tar).unwrap();
+    let rebuild = |db: &[u8]| {
+        let mut t = Vec::new();
+        askbar_service::tar::append(&mut t, "audit.db", db, 0);
+        askbar_service::tar::finish(&mut t);
+        t
+    };
+    assert_eq!(target.restore_as(RESTORE, rebuild(b"this is not sqlite")).await.0, 400);
+    // A store from a newer release.
+    let scratch = target.dir.join("edit.db");
+    std::fs::write(&scratch, &files[0].1).unwrap();
+    askbar_audit::rusqlite::Connection::open(&scratch).unwrap().execute_batch("PRAGMA user_version = 999").unwrap();
+    let (status, body) = target.restore_as(RESTORE, rebuild(&std::fs::read(&scratch).unwrap())).await;
+    assert_eq!((status, body["error"].as_str()), (409, Some("backup_newer_release")), "{body}");
+    // A chain that does not check: a record edited behind its entry (the triggers that forbid it are dropped in the copy).
+    std::fs::write(&scratch, &files[0].1).unwrap();
+    askbar_audit::rusqlite::Connection::open(&scratch)
+        .unwrap()
+        .execute_batch("DROP TRIGGER admin_actions_are_never_changed; UPDATE admin_actions SET action = 'edited'")
+        .unwrap();
+    let (status, body) = target.restore_as(RESTORE, rebuild(&std::fs::read(&scratch).unwrap())).await;
+    assert_eq!((status, body["error"].as_str()), (400, Some("bad_request")), "{body}");
+    assert!(body["detail"].as_str().unwrap().contains("chain"), "{body}");
+    // None of it changed the store, and the good one still restores afterwards.
+    assert_eq!(target.restore_leftovers(), 0);
+    assert_eq!(target.head().await, head);
+    assert_eq!(target.restore_as(RESTORE, tar).await.0, 200);
 }

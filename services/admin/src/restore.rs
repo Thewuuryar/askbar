@@ -15,8 +15,8 @@
 //! - **The admin restores itself last**: its decrypted export goes to a pending directory next to `admin.db`, then the admin restarts and
 //!   [`apply_pending`] swaps it in before the database is opened. The old database and secrets are kept beside as `*.before-restore`.
 //!
-//! The auditor's part (`audit.age`) is checked but not restored here: the auditor takes it through a link of its own (plan step 6.3, the next
-//! step), and the answer says so.
+//! The auditor's part (`audit.age`) goes through the link made for it (`admin-auditor-restore`), before the admin's own, and the admin keeps
+//! the head of the restored chain as the one it expects, so the check that compares it with the auditor raises nothing for a restore.
 
 use crate::actions::ActionNotes;
 use crate::web::{err, Failure};
@@ -308,7 +308,7 @@ fn streamed(job: &Job, identity: &Arc<backup::Identity>, name: &str) -> Result<r
 
 /// Writes the decrypted admin export to the pending directory next to `admin.db`: `admin.db` (opened once, so a database from a newer
 /// release is refused here, not after the restart) and the secret files, then `READY`.
-fn write_pending(parent: &Path, mut export: impl Read) -> Result<(), Failure> {
+fn write_pending(parent: &Path, mut export: impl Read, anchor: Option<(i64, String)>) -> Result<(), Failure> {
     let pending = parent.join(PENDING_DIR);
     let _ = std::fs::remove_dir_all(&pending);
     let result = (|| -> Result<(), Failure> {
@@ -341,7 +341,13 @@ fn write_pending(parent: &Path, mut export: impl Read) -> Result<(), Failure> {
             return Err(bad("The admin's part of the backup has no database."));
         }
         match crate::db::AdminDb::open(&pending.join("admin.db")) {
-            Ok(db) => drop(db),
+            Ok(db) => {
+                // The auditor's chain is the backup's now: this database expects its head, so the check after the swap finds it as it was.
+                if let Some((seq, hash)) = &anchor {
+                    crate::chain_check::anchor_head(db.conn(), *seq, hash);
+                }
+                drop(db)
+            }
             Err(crate::db::DbError::UnexpectedVersion { found, expected }) if found > expected as i64 => {
                 return Err(ApiError::code(ErrorCode::BackupNewerRelease))
             }
@@ -457,13 +463,27 @@ pub async fn restore(
             restored.push("cpa");
         }
     }
+    // The auditor's store, through the link made for it: the one way records reach it other than an append. Its chain is the backup's
+    // from here on, so this admin keeps that head as the one it expects (here, and in the set it swaps in), and the check that
+    // compares it with the auditor finds the chain as it was left: no rollback or rewrite is raised for a restore.
+    let mut anchor: Option<(i64, String)> = None;
+    if job.entry("audit.age").is_some() {
+        let link = state.auditor.get().cloned();
+        if let Some(link) = link {
+            let body = streamed(&job, &identity, "audit.age")?;
+            let (seq, hash) = link.restore(body).await.map_err(|e| stopped(&restored, e))?;
+            crate::chain_check::anchor_head(state.db.lock().await.conn(), seq, &hash);
+            anchor = Some((seq, hash));
+            restored.push("auditor");
+        }
+    }
     // The admin last: its own export becomes a pending set, and the swap happens at the restart.
     let parent = crate::backup_bundle::work_parent(&state).await;
     {
         let (j, id) = (job.clone(), identity.clone());
         tokio::task::spawn_blocking(move || {
             let reader = j.open(&id, "admin.age")?;
-            write_pending(&parent, reader)
+            write_pending(&parent, reader, anchor)
         })
         .await
         .map_err(internal)?
@@ -480,10 +500,15 @@ pub async fn restore(
         Some(r) => askbar_service::restart::handler(State(r)).await.is_ok(),
         None => false,
     };
+    let not_restored: Vec<&str> = [("server", "server.age"), ("alerter", "alerter.age"), ("cpa", "cpa.age"), ("auditor", "audit.age")]
+        .iter()
+        .filter(|(name, part)| job.entry(part).is_some() && !restored.contains(name))
+        .map(|(name, _)| *name)
+        .collect();
     Ok(Json(json!({
         "restored": restored,
-        // The auditor's store is restored through a link of its own (the next step of plan step 6.3).
-        "not_restored": job.parts.iter().filter(|p| p.as_str() == "audit.age").map(|_| "audit").collect::<Vec<_>>(),
+        // Parts the backup holds for a component this install has no link to.
+        "not_restored": not_restored,
         "restarting": restarting,
     })))
 }

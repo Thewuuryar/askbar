@@ -299,7 +299,7 @@ case "$admin_token" in mgt_*) pass "the admin's token has the admin-server prefi
 # file it has already given away. After a rotation the admin and the server read the new files on restart.
 before=$(docker exec "$ADMIN" sh -c 'cat /admin-token/call/admin-server.token' 2>/dev/null)
 out=$(docker compose -p "$PROJECT" run --rm --no-deps bootstrap 2>/dev/null)
-[ "$out" = "$(printf 'kept admin-server\nkept admin-auditor-append\nkept admin-auditor-read\nkept server-model-gateway\nkept admin-model-gateway\nkept model-gateway-auditor\nkept server-auditor\nkept model-gateway-auditor-read\nkept auditor-alerter\nkept admin-alerter\nkept alerter-auditor')" ] && [ "$(docker exec "$ADMIN" cat /admin-token/call/admin-server.token 2>/dev/null)" = "$before" ] \
+[ "$out" = "$(printf 'kept admin-server\nkept admin-auditor-append\nkept admin-auditor-read\nkept server-model-gateway\nkept admin-model-gateway\nkept model-gateway-auditor\nkept server-auditor\nkept model-gateway-auditor-read\nkept auditor-alerter\nkept admin-alerter\nkept alerter-auditor\nkept admin-auditor-restore')" ] && [ "$(docker exec "$ADMIN" cat /admin-token/call/admin-server.token 2>/dev/null)" = "$before" ] \
   && pass "a second bootstrap run keeps the token" || fail "a second bootstrap run: $out"
 out=$(docker compose -p "$PROJECT" run --rm --no-deps bootstrap rotate admin-server 2>/dev/null)
 printf '%s' "$out" | grep -q '^rotated admin-server$' && printf '%s' "$out" | grep -q '^Restart from the admin: admin, server$' \
@@ -354,12 +354,14 @@ if [ "$(docker inspect -f '{{.State.Running}}' "$AUDITOR" 2>/dev/null)" != true 
   owned "$AUDITOR" /auditor-token/accept/admin-auditor-append.sha256 "10003 444" "the auditor's append hash file (owner, mode)"
   owned "$AUDITOR" /auditor-token/accept/admin-auditor-read.sha256 "10003 444" "the auditor's read hash file (owner, mode)"
   owned "$AUDITOR" /auditor-token/accept/model-gateway-auditor-read.sha256 "10003 444" "the auditor's gateway read hash file (owner, mode)"
+  owned "$AUDITOR" /auditor-token/accept/admin-auditor-restore.sha256 "10003 444" "the auditor's restore hash file (owner, mode)"
   for d in /auditor-token /auditor-token/accept; do owned "$AUDITOR" "$d" "10003 500" "the auditor's $d"; done
   # The API, from a throwaway container on audit-admin with the admin's own tokens: only the right token reaches each route.
   AUD_APPEND=$(docker exec "$ADMIN" cat /admin-token/call/admin-auditor-append.token 2>/dev/null)
   AUD_READ=$(docker exec "$ADMIN" cat /admin-token/call/admin-auditor-read.token 2>/dev/null)
-  [ -n "$AUD_APPEND" ] && [ -n "$AUD_READ" ] || fail "the admin holds no auditor tokens"
-  out=$(py --network "${PROJECT}_audit-admin" -e "AA=$AUD_APPEND" -e "AR=$AUD_READ" -- "
+  AUD_RESTORE=$(docker exec "$ADMIN" cat /admin-token/call/admin-auditor-restore.token 2>/dev/null)
+  [ -n "$AUD_APPEND" ] && [ -n "$AUD_READ" ] && [ -n "$AUD_RESTORE" ] || fail "the admin holds no auditor tokens"
+  out=$(py --network "${PROJECT}_audit-admin" -e "AA=$AUD_APPEND" -e "AR=$AUD_READ" -e "AS=$AUD_RESTORE" -- "
 import os, json, urllib.request, urllib.error
 def call(method, path, token=None, body=None):
     req = urllib.request.Request('http://auditor:8083/api/audit/v1' + path, method=method, data=None if body is None else json.dumps(body).encode())
@@ -368,7 +370,7 @@ def call(method, path, token=None, body=None):
     try: return urllib.request.urlopen(req, timeout=5).status
     except urllib.error.HTTPError as e: return e.code
     except Exception: return 0
-aa, ar = os.environ['AA'], os.environ['AR']
+aa, ar, asr = os.environ['AA'], os.environ['AR'], os.environ['AS']
 act = {'id': 'isolation1', 'at': 1, 'category': 'isolation', 'action': 'check', 'outcome': 'done'}
 print('health-no-token', call('GET', '/health'))
 print('status-no-token', call('GET', '/status'))
@@ -380,6 +382,12 @@ print('read-appends', call('POST', '/admin-actions', ar, act))
 print('append-spans', call('POST', '/spans', aa, {}))
 print('read-retention-low', call('PUT', '/retention', ar, {'days': 3}))
 print('deletes', call('DELETE', '/admin-actions', ar))
+print('restore-reads', call('GET', '/traces', asr))
+print('restore-appends', call('POST', '/admin-actions', asr, act))
+print('read-restores', call('POST', '/restore', ar, {}))
+print('append-restores', call('POST', '/restore', aa, {}))
+# The restore link reaches its own route: a used store says 409 (not empty), an empty one 400 (not a backup). Never 401 or 403.
+print('restore-restores', 'ok' if call('POST', '/restore', asr, {}) in (400, 409) else 'refused')
 " 2>&1)
   want="health-no-token 200
 status-no-token 401
@@ -390,8 +398,13 @@ append-appends 201
 read-appends 403
 append-spans 403
 read-retention-low 400
-deletes 403"
-  [ "$out" = "$want" ] && pass "the auditor's tokens each reach only their own routes (no token or a wrong one: 401, the other link's route: 403, retention below 7 days: 400, a delete is refused: no token may change or delete a record)" || fail "the auditor's API answered: $out"
+deletes 403
+restore-reads 403
+restore-appends 403
+read-restores 403
+append-restores 403
+restore-restores ok"
+  [ "$out" = "$want" ] && pass "the auditor's tokens each reach only their own routes (no token or a wrong one: 401, the other link's route: 403, retention below 7 days: 400, a delete is refused: no token may change or delete a record; the restore token reaches only POST /restore and no other token reaches it)" || fail "the auditor's API answered: $out"
   # Nothing but the admin's network reaches it: a container on the edge network cannot.
   AUD_IP=$(docker inspect -f "{{(index .NetworkSettings.Networks \"${PROJECT}_audit-admin\").IPAddress}}" "$AUDITOR")
   [ "$(py --network "$EDGE" -- "

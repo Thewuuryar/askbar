@@ -73,6 +73,8 @@ pub struct Auditor {
     last_request: Mutex<HashMap<&'static str, i64>>,
     /// Lines on the ingest listener that were not taken: not Caddy's, or too long (plan step 2.9).
     pub access_refused: std::sync::atomic::AtomicU64,
+    /// Whether a restore is running: one at a time (ADR 0013).
+    restoring: std::sync::atomic::AtomicBool,
     /// Whether an export is being made: one at a time, since its copy is as large as the store (ADR 0013).
     exporting: std::sync::atomic::AtomicBool,
     /// What decides when to alert (plan step 4.2). Unset in the test rigs that do not look at alerts.
@@ -90,6 +92,7 @@ impl Auditor {
             last_request: Mutex::new(HashMap::new()),
             access_refused: Default::default(),
             exporting: Default::default(),
+            restoring: Default::default(),
             rules: Default::default(),
         })
     }
@@ -238,6 +241,10 @@ const ADMIN_READ: Routes = &[
     ("GET", "/export"),
 ];
 
+/// The admin's restore token (plan step 6.3, ADR 0013, ADR 0010): `POST /restore` and nothing else. The one way records reach the
+/// auditor other than an append, and only into a store with no audited model call.
+const ADMIN_RESTORE: Routes = &[("POST", "/restore")];
+
 /// The gateway's read token (plan step 3.2, ADR 0014): the token counts it holds the budget against, and nothing else. It
 /// appends nothing with it and reads no trace, no content and no admin record.
 const GATEWAY_READ: Routes = &[("GET", "/status"), ("GET", "/token-counts")];
@@ -252,6 +259,7 @@ pub const LINKS: &[(&str, &str, Routes)] = &[
     ("admin-auditor-read", "admin-read", ADMIN_READ),
     ("model-gateway-auditor-read", "model-gateway-read", GATEWAY_READ),
     ("alerter-auditor", "alerter", ALERTER_APPEND),
+    ("admin-auditor-restore", "admin-restore", ADMIN_RESTORE),
 ];
 
 fn method(m: &str) -> Method {
@@ -325,6 +333,7 @@ pub fn router(auditor: Arc<Auditor>, links: Links) -> Router {
         .route(&full("/retention"), get(get_retention).put(put_retention))
         .route(&full("/backup-key"), axum::routing::put(put_backup_key))
         .route(&full("/export"), get(export))
+        .route(&full("/restore"), post(restore))
         .route(&full("/status"), get(status))
         // Inside the token check, so only a request that passed it is noted, and with the caller the token stands for.
         .layer(axum::middleware::from_fn_with_state(auditor.clone(), note_request))
@@ -805,11 +814,17 @@ impl Drop for TempDir {
 
 /// Work directories older than an hour are leftovers of a crash.
 fn clear_stale(parent: &FsPath) {
+    clear_stale_with(parent, EXPORT_PREFIX)
+}
+
+const RESTORE_PREFIX: &str = ".restore-";
+
+fn clear_stale_with(parent: &FsPath, prefix: &str) {
     let Ok(entries) = std::fs::read_dir(parent) else { return };
     for e in entries.flatten() {
         let old =
             e.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|age| age > Duration::from_secs(3600));
-        if old && e.file_name().to_string_lossy().starts_with(EXPORT_PREFIX) {
+        if old && e.file_name().to_string_lossy().starts_with(prefix) {
             let _ = std::fs::remove_dir_all(e.path());
         }
     }
@@ -871,6 +886,113 @@ async fn export(State(a): St) -> Result<axum::response::Response, Failure> {
         .header(axum::http::header::CONTENT_TYPE, "application/octet-stream")
         .body(body)
         .map_err(|_| internal(()))
+}
+
+/// `POST /restore` (ADR 0013, D25): the store a backup holds, opened by the admin, into this one, which must have no audited model call.
+/// The body is the plain tar `GET /export` made, with `audit.db` and nothing else. It is written to a work directory on the audit
+/// volume, opened and migrated as a copy (a store from a newer release is `409 backup_newer_release`), its whole chain is checked (a
+/// store that does not check is `400` and changes nothing), and only then is it swapped in, in one step, by the writer, between batches.
+/// The answer is the chain's head, so the admin can keep it as the one it expects. A store that has an audited call is `409 not_empty`,
+/// checked before the body is read and again at the swap. One at a time.
+async fn restore(State(a): St, body: axum::body::Body) -> Result<Json<askbar_audit::chain::Head>, Failure> {
+    use futures_util::StreamExt;
+    use tokio::io::AsyncWriteExt;
+    let bad_body = |what: &str| bad(what.to_string());
+    gate(&a, false)?;
+    let empty = |a: &Auditor| {
+        a.recorder
+            .reader()
+            .map(|c| c.query_row("SELECT (SELECT COUNT(*) FROM spans) + (SELECT COUNT(*) FROM payloads)", [], |r| r.get::<_, i64>(0)))
+            .transpose()
+    };
+    if empty(&a).map_err(internal)?.unwrap_or(1) != 0 {
+        return Err(ApiError::code(ErrorCode::NotEmpty));
+    }
+    let file = a.recorder.path().map(FsPath::to_path_buf).ok_or_else(|| internal(()))?;
+    let parent = file.parent().map(FsPath::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
+    if a.restoring.compare_exchange(false, true, std::sync::atomic::Ordering::SeqCst, std::sync::atomic::Ordering::SeqCst).is_err() {
+        return Err(refuse("A restore is already running. Try again when it has finished."));
+    }
+    struct Slot(Arc<Auditor>);
+    impl Drop for Slot {
+        fn drop(&mut self) {
+            self.0.restoring.store(false, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+    let _slot = Slot(a.clone());
+    clear_stale_with(&parent, RESTORE_PREFIX);
+    let dir = parent.join(format!(
+        "{RESTORE_PREFIX}{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos())
+    ));
+    std::fs::create_dir_all(&dir).map_err(internal)?;
+    let _guard = TempDir(dir.clone());
+    let tar_path = dir.join("restore.tar");
+    let mut out = tokio::fs::File::create(&tar_path).await.map_err(internal)?;
+    let mut stream = body.into_data_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|_| bad_body("The upload stopped before the end."))?;
+        out.write_all(&chunk).await.map_err(internal)?;
+    }
+    out.sync_all().await.map_err(internal)?;
+    drop(out);
+    let size = std::fs::metadata(&tar_path).map(|m| m.len()).unwrap_or(0);
+    // The copy to check is as large as the upload: the same room as an export asks for, on the same volume.
+    if (a.free_space)().is_some_and(|free| free < size.saturating_add(a.limits.min_free_bytes)) {
+        return Err(refuse("The audit volume has too little room to check the backup. Nothing was restored."));
+    }
+    let staged = dir.join("audit.db");
+    let st = staged.clone();
+    // Unpack, open (which migrates the copy and refuses one that is not ours) and check the whole chain, off the async threads.
+    tokio::task::spawn_blocking(move || -> Result<(), Failure> {
+        let mut file = std::fs::File::open(&tar_path).map_err(internal)?;
+        let mut seen = false;
+        let mut refused: Option<&'static str> = None;
+        let read = askbar_service::tar::for_each(&mut file, |name, _size, data| {
+            if name != "audit.db" || std::mem::replace(&mut seen, true) {
+                refused = Some("The backup holds a file this auditor did not make.");
+                return Err(std::io::Error::other("refused"));
+            }
+            let mut f = std::fs::File::create(&st)?;
+            std::io::copy(data, &mut f)?;
+            f.sync_all()
+        });
+        if let Some(why) = refused {
+            return Err(bad(why));
+        }
+        read.map_err(|_| bad("The backup is not whole."))?;
+        if !seen {
+            return Err(bad("The backup has no audit store."));
+        }
+        let db = askbar_audit::AuditDb::open(&st).map_err(|e| match e {
+            askbar_audit::AuditError::UnexpectedVersion { found, expected } if found > expected as i64 => {
+                ApiError::code(ErrorCode::BackupNewerRelease)
+            }
+            _ => bad("The backup holds a store this auditor cannot read."),
+        })?;
+        let report = askbar_audit::chain::verify(db.conn()).map_err(internal)?;
+        if !report.problems.is_empty() {
+            return Err(bad("The audit chain in the backup does not check, so it was not restored."));
+        }
+        Ok(())
+    })
+    .await
+    .map_err(internal)??;
+    // The store the writer sees must not be touched by the checked copy's own write-ahead files.
+    for suffix in ["-wal", "-shm"] {
+        let mut p = staged.clone().into_os_string();
+        p.push(suffix);
+        let _ = std::fs::remove_file(p);
+    }
+    match a.recorder.restore(staged).await {
+        Ok(head) => Ok(Json(head)),
+        Err(askbar_audit::RestoreError::NotEmpty) => Err(ApiError::code(ErrorCode::NotEmpty)),
+        Err(askbar_audit::RestoreError::Db(e)) => {
+            tracing::warn!("an audit restore failed: {e}");
+            Err(internal(()))
+        }
+    }
 }
 
 /// Frees the one export slot when dropped.

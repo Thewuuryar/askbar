@@ -19,6 +19,7 @@ pub fn install_for_tests(root: &std::path::Path) -> (std::path::PathBuf, std::pa
         links::link("admin-auditor-read").expect("a link"),
         links::link("admin-auditor-append").expect("a link"),
         links::link("admin-alerter").expect("a link"),
+        links::link("admin-auditor-restore").expect("a link"),
     ];
     write::apply(&ctx, &links, false).expect("bootstrap writes its files");
     (root.join("admin-token/call/admin-server.token"), root.join("server-token/accept/admin-server.sha256"))

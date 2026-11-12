@@ -209,6 +209,16 @@ pub enum AuditError {
     UnexpectedVersion { found: i64, expected: usize },
 }
 
+/// Why a store could not be restored from another.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum RestoreError {
+    /// The store holds audited model calls: a restore never merges.
+    #[error("the store is not empty")]
+    NotEmpty,
+    #[error("{0}")]
+    Db(String),
+}
+
 pub struct AuditDb {
     conn: Connection,
     /// Where the file is, so readers can open their own connection (None for in-memory).
@@ -269,6 +279,29 @@ impl AuditDb {
         let n = interrupt_running(&tx, "", [])?;
         tx.commit()?;
         Ok(n)
+    }
+
+    /// Whether the store holds nothing a restore would lose: no span and no payload, that is, no model call has been audited. What
+    /// every start leaves (the services' hellos, the admin's own action records, Caddy's access lines, alert deliveries) does not
+    /// count: it is the install setting itself up, and a restore replaces it (ADR 0013, ADR 0010).
+    pub fn is_empty_of_content(&self) -> rusqlite::Result<bool> {
+        let n: i64 = self.conn.query_row("SELECT (SELECT COUNT(*) FROM spans) + (SELECT COUNT(*) FROM payloads)", [], |r| r.get(0))?;
+        Ok(n == 0)
+    }
+
+    /// Makes this store the one at `from` (a store of this release, already opened and checked by the caller), in one step with
+    /// SQLite's backup API: every table, trigger and the chain come over as they are. Refused unless the store is empty of content.
+    /// Gives the chain's head afterwards.
+    pub fn restore_from(&mut self, from: &Path) -> Result<chain::Head, RestoreError> {
+        if !self.is_empty_of_content().map_err(|e| RestoreError::Db(e.to_string()))? {
+            return Err(RestoreError::NotEmpty);
+        }
+        let src =
+            Connection::open_with_flags(from, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|e| RestoreError::Db(e.to_string()))?;
+        rusqlite::backup::Backup::new(&src, &mut self.conn)
+            .and_then(|b| b.run_to_completion(256, Duration::ZERO, None))
+            .map_err(|e| RestoreError::Db(e.to_string()))?;
+        chain::head(&self.conn).map_err(|e| RestoreError::Db(e.to_string()))
     }
 
     /// The newest entry of the hash chain.
@@ -948,6 +981,12 @@ enum Event {
     Acked(Record, Ack),
     /// One of Caddy's access lines: best effort, never acknowledged.
     Access(AccessLogWrite),
+    /// Make the store the one at `from` (a restore): answered with the chain's head, or why not. Everything queued before it is written
+    /// first, and what comes after is written to the restored store.
+    Restore {
+        from: std::path::PathBuf,
+        done: oneshot::Sender<Result<chain::Head, RestoreError>>,
+    },
 }
 
 /// Records are never kept for less than this many days, whatever the setting says.
@@ -1015,7 +1054,7 @@ impl Recorder {
     }
 
     /// Takes ownership of `db` and writes to it from one thread. `capacity` is the queue length.
-    pub fn spawn(db: AuditDb, capacity: usize) -> Recorder {
+    pub fn spawn(mut db: AuditDb, capacity: usize) -> Recorder {
         let path = db.path.clone();
         let (tx, mut rx) = mpsc::channel::<Event>(capacity.max(1));
         let pause = Arc::new(Pause::default());
@@ -1045,7 +1084,22 @@ impl Recorder {
                             q.pop_front();
                         }
                     }
-                    run_batch(db.conn(), batch);
+                    // A restore replaces the store under the writer's connection, so it is done here, between batches of records.
+                    let mut run = Vec::new();
+                    for event in batch {
+                        match event {
+                            Event::Restore { from, done } => {
+                                if !run.is_empty() {
+                                    run_batch(db.conn(), std::mem::take(&mut run));
+                                }
+                                let _ = done.send(db.restore_from(&from));
+                            }
+                            other => run.push(other),
+                        }
+                    }
+                    if !run.is_empty() {
+                        run_batch(db.conn(), run);
+                    }
                 }
             })
             .expect("audit writer thread");
@@ -1099,6 +1153,14 @@ impl Recorder {
         let (ack, wait) = oneshot::channel();
         self.try_enqueue(Event::Acked(record, ack))?;
         wait.await.map_err(|_| AppendError::Stopped)?
+    }
+
+    /// Makes the store the one at `from` (ADR 0013, D25): only into a store with no audited model call, with the chain of `from` as it
+    /// is. Gives the chain's head. The caller has opened `from`, checked its chain and kept it in place until this answers.
+    pub async fn restore(&self, from: std::path::PathBuf) -> Result<chain::Head, RestoreError> {
+        let (done, wait) = oneshot::channel();
+        self.enqueue(Event::Restore { from, done }).await.map_err(|_| RestoreError::Db("the audit writer has stopped".into()))?;
+        wait.await.map_err(|_| RestoreError::Db("the audit writer has stopped".into()))?
     }
 
     /// How far behind the writer is.
@@ -1287,6 +1349,10 @@ fn run_batch(conn: &Connection, batch: Vec<Event>) {
             Event::Acked(record, ack) => {
                 let result = apply(conn, &record);
                 acks.push((ack, result));
+            }
+            // Handled by the writer between batches (it needs the connection itself), so it never reaches here.
+            Event::Restore { done, .. } => {
+                let _ = done.send(Err(RestoreError::Db("a restore was queued in the wrong place".into())));
             }
             Event::Prune { cutoff, done } => {
                 commit(&mut in_txn, &mut acks, &mut dones);

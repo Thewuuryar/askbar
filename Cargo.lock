@@ -230,6 +230,7 @@ dependencies = [
  "askbar-service",
  "axum",
  "base64 0.22.1",
+ "futures-util",
  "reqwest",
  "serde",
  "serde-saphyr",
