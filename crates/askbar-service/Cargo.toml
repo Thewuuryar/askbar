@@ -6,7 +6,15 @@ version = "0.6.0"
 edition = "2021"
 description = "What every Askbar service shares: per-link token checks, status, and the not-configured gate"
 
+[features]
+# Backups (ADR 0013, D22): the age encryption the admin makes its backup key with, and every component encrypts its export with.
+# Off unless a service asks for it, so the others do not link the cryptography they never use.
+backup = ["dep:age"]
+
 [dependencies]
+# 0.11, not 0.12: 0.12 pulls crypto-bigint 0.5.5 (RUSTSEC-2026-0387, through P-256 support we never call), which cargo deny refuses.
+# No optional features (no ssh keys, no plugins, no armor): X25519 recipients and a passphrase (scrypt) recipient are in it.
+age = { version = "0.11", default-features = false, optional = true }
 askbar-proto = { path = "../askbar-proto", features = ["axum"] }
 axum = "0.8"
 base64 = "0.22"

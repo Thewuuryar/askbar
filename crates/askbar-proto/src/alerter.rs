@@ -403,6 +403,9 @@ pub struct AlerterConfig {
     pub ntfy: Option<NtfyConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub email: Option<SmtpConfig>,
+    /// The backup public key (`age1…`) the alerter encrypts its export to (ADR 0013). A public key, so no secret.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backup_public_key: Option<String>,
 }
 
 /// One delivery channel, as the alerter names it.

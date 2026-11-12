@@ -132,6 +132,9 @@ async fn what_the_file_says_about_a_key_is_what_the_admin_does() {
         ("GET", "/alerts"),
         ("PUT", "/alerts"),
         ("POST", "/alerts/test"),
+        // The backup key: setting or rotating it needs a person's own, freshly signed-in session (ADR 0013, D21).
+        ("PUT", "/setup/backup-key"),
+        ("POST", "/backup/rotate-key"),
         ("GET", "/cpa"),
         ("POST", "/cpa/logins"),
         ("GET", "/cpa/logins/{state}"),

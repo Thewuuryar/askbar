@@ -18,6 +18,11 @@ ignore = [
     # latest askama), which uses it at compile time to read our own services/admin/askama.toml; it is in
     # no binary. Revisit by 2027-02-01, or when askama moves to the toml crate.
     { id = "RUSTSEC-2026-0374", reason = "basic-toml in askama's compile-time macro, reading our own askama.toml; in no binary" },
+    # proc-macro-error2 is unmaintained, with no safe upgrade. It is a procedural-macro crate (compile time only, so in no binary): age
+    # 0.11 uses it through i18n-embed-fl to build its translated messages. Askbar uses age (the `backup` feature of askbar-service,
+    # ADR 0013) for X25519 and passphrase encryption. age 0.12 would drop it but pulls crypto-bigint 0.5.5 (RUSTSEC-2026-0387, a
+    # vulnerability, through P-256 support we never call), which is worse. Revisit by 2027-02-01, or when age moves on.
+    { id = "RUSTSEC-2026-0173", reason = "proc-macro-error2 via i18n-embed-fl in age 0.11's compile-time macros; in no binary" },
 ]
 
 [licenses]

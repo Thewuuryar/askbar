@@ -192,6 +192,19 @@ const MIGRATIONS: &[&str] = &[
     // needs the stored token and works for a private address) or `http` (HTTP-01, which needs public port 80 and no token). Every
     // install that had a certificate set up used the DNS challenge, so that is the default.
     "ALTER TABLE network_settings ADD COLUMN acme_challenge TEXT NOT NULL DEFAULT 'dns' CHECK (acme_challenge IN ('dns', 'http'));",
+    // The backup key (plan step 6.1, ADR 0013, D22): an age key pair. `recipient` is the public key (`age1...`) that every component
+    // encrypts its export to; `protected` is the private key encrypted with the owner's passphrase (the file `backup-key.age` that
+    // every backup carries), which only that passphrase opens. The passphrase is never stored. Rotating makes a new pair and retires
+    // the old one, which stays listed (older backups carry their own protected key). At most one key is active.
+    "CREATE TABLE backup_keys (
+         id          INTEGER PRIMARY KEY AUTOINCREMENT,
+         recipient   TEXT    NOT NULL UNIQUE CHECK (recipient LIKE 'age1%'),
+         fingerprint TEXT    NOT NULL,
+         protected   BLOB    NOT NULL CHECK (length(protected) > 0),
+         created_at  INTEGER NOT NULL,
+         retired_at  INTEGER
+     );
+     CREATE UNIQUE INDEX backup_keys_one_active ON backup_keys((1)) WHERE retired_at IS NULL;",
 ];
 
 /// The schema steps, in order (for the upgrade tests).
@@ -224,6 +237,54 @@ pub struct AuditKeyRow {
     pub argon_params: String,
     pub created_at: i64,
     pub retired_at: Option<i64>,
+}
+
+/// One row of the backup keyring (ADR 0013).
+#[derive(Clone, PartialEq, Eq)]
+pub struct BackupKeyRow {
+    pub recipient: String,
+    pub fingerprint: String,
+    /// The private key encrypted with the passphrase: `backup-key.age`.
+    pub protected: Vec<u8>,
+    pub created_at: i64,
+    pub retired_at: Option<i64>,
+}
+
+impl std::fmt::Debug for BackupKeyRow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BackupKeyRow").field("fingerprint", &self.fingerprint).finish_non_exhaustive()
+    }
+}
+
+/// The active backup key, if the owner has set one.
+pub fn active_backup_key(conn: &Connection) -> rusqlite::Result<Option<BackupKeyRow>> {
+    use rusqlite::OptionalExtension;
+    conn.query_row("SELECT recipient, fingerprint, protected, created_at, retired_at FROM backup_keys WHERE retired_at IS NULL", [], |r| {
+        Ok(BackupKeyRow {
+            recipient: r.get(0)?,
+            fingerprint: r.get(1)?,
+            protected: r.get(2)?,
+            created_at: r.get(3)?,
+            retired_at: r.get(4)?,
+        })
+    })
+    .optional()
+}
+
+/// How many backup keys there have been, the active one included.
+pub fn backup_key_count(conn: &Connection) -> rusqlite::Result<i64> {
+    conn.query_row("SELECT COUNT(*) FROM backup_keys", [], |r| r.get(0))
+}
+
+/// Retires the active backup key, if any, and makes `new` the active one, in the caller's transaction. The unique index settles two
+/// calls at once: one wins.
+pub fn replace_active_backup_key_in(conn: &Connection, new: &BackupKeyRow, now: i64) -> rusqlite::Result<()> {
+    conn.execute("UPDATE backup_keys SET retired_at = ?1 WHERE retired_at IS NULL", [now])?;
+    conn.execute(
+        "INSERT INTO backup_keys (recipient, fingerprint, protected, created_at, retired_at) VALUES (?1, ?2, ?3, ?4, NULL)",
+        rusqlite::params![new.recipient, new.fingerprint, new.protected, new.created_at],
+    )?;
+    Ok(())
 }
 
 pub struct AdminDb {
@@ -476,6 +537,56 @@ mod tests {
         for bad in ["tls-alpn", "", "HTTP"] {
             assert!(db.conn.execute("UPDATE network_settings SET acme_challenge = ?1", [bad]).is_err(), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn a_database_from_before_the_backup_key_gains_an_empty_keyring_that_allows_one_active_key() {
+        let conn = Connection::open_in_memory().unwrap();
+        let before = MIGRATIONS.iter().position(|m| m.contains("CREATE TABLE backup_keys")).expect("the backup key step");
+        for (i, sql) in MIGRATIONS.iter().take(before).enumerate() {
+            conn.execute_batch(sql).unwrap();
+            if i == 0 {
+                conn.execute_batch(&format!("PRAGMA application_id = {APPLICATION_ID}")).unwrap();
+            }
+        }
+        conn.execute_batch(&format!("PRAGMA user_version = {before}")).unwrap();
+        conn.execute_batch("UPDATE network_settings SET hostname = 'askbar.example.org'").unwrap();
+        assert!(conn.prepare("SELECT 1 FROM backup_keys").is_err(), "the table is not there before the step");
+        let db = AdminDb::init(conn).unwrap();
+        let v: i64 = db.conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(v as usize, MIGRATIONS.len());
+        let host: String = db.conn.query_row("SELECT hostname FROM network_settings", [], |r| r.get(0)).unwrap();
+        assert_eq!(host, "askbar.example.org", "nothing else changed");
+        assert_eq!(backup_key_count(&db.conn).unwrap(), 0);
+        assert!(active_backup_key(&db.conn).unwrap().is_none());
+        let row = |n: &str, at: i64| BackupKeyRow {
+            recipient: format!("age1{n}"),
+            fingerprint: "aaaa-bbbb-cccc-dddd".into(),
+            protected: vec![1, 2, 3],
+            created_at: at,
+            retired_at: None,
+        };
+        replace_active_backup_key_in(&db.conn, &row("one", 1), 1).unwrap();
+        replace_active_backup_key_in(&db.conn, &row("two", 2), 2).unwrap();
+        assert_eq!(backup_key_count(&db.conn).unwrap(), 2);
+        assert_eq!(active_backup_key(&db.conn).unwrap().unwrap().recipient, "age1two", "the newer one is active, the older retired");
+        // Two active keys at once, an empty protected key and a recipient that is not an age key are refused by the table.
+        assert!(db
+            .conn
+            .execute("INSERT INTO backup_keys (recipient, fingerprint, protected, created_at) VALUES ('age1three', 'f', x'01', 3)", [])
+            .is_err());
+        db.conn.execute("UPDATE backup_keys SET retired_at = 9", []).unwrap();
+        assert!(db
+            .conn
+            .execute("INSERT INTO backup_keys (recipient, fingerprint, protected, created_at) VALUES ('age1four', 'f', x'', 4)", [])
+            .is_err());
+        assert!(db
+            .conn
+            .execute("INSERT INTO backup_keys (recipient, fingerprint, protected, created_at) VALUES ('notage', 'f', x'01', 4)", [])
+            .is_err());
+        // A key's Debug output shows its fingerprint and nothing else.
+        let shown = format!("{:?}", row("secret", 1));
+        assert!(shown.contains("aaaa-bbbb") && !shown.contains("age1secret"), "{shown}");
     }
 
     fn key(id: &str, retired: Option<i64>) -> AuditKeyRow {

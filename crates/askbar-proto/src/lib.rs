@@ -252,6 +252,10 @@ pub struct Snapshot {
     /// above). Absent in a snapshot from an older admin: the server then serves the defaults for this retention.
     #[serde(default)]
     pub policy: Option<Policy>,
+    /// The backup public key (`age1…`), if the owner has set one (ADR 0013). The server encrypts its export to it, and refuses to
+    /// export while there is none. It is a public key: the snapshot holds no private half and no passphrase.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backup_public_key: Option<String>,
 }
 
 /// An audit public key and its id (the first 8 bytes of the SHA-256 of the key, in hex).

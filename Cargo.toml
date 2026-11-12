@@ -13,6 +13,17 @@ strip = true
 opt-level = 3
 [profile.dev.package.blake2]
 opt-level = 3
+# The same for the backup key's passphrase stretching (age's scrypt, ADR 0013): about a second when optimised, a minute when not.
+[profile.dev.package.scrypt]
+opt-level = 3
+[profile.dev.package.salsa20]
+opt-level = 3
+[profile.dev.package.pbkdf2]
+opt-level = 3
+[profile.dev.package.sha2]
+opt-level = 3
+[profile.dev.package.hmac]
+opt-level = 3
 
 # Lints for every member (each has `[lints] workspace = true`). CI runs clippy with `-D warnings`.
 [workspace.lints.rust]

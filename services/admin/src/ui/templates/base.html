@@ -36,13 +36,32 @@
       <h2>The audit key is ready</h2>
       <p>Key ID: <code id="setup-audit-keyid"></code></p>
       {% call b::hint("The key ID names the key; it is safe to write down next to the passphrase. Changing the passphrase later means rotating the key (Settings).") %}{% endcall %}
+      <button id="setup-audit-continue" type="button">Continue</button>
+    </div>
+    <form id="setup-backup-form" hidden>
+      <h2>Choose the backup passphrase</h2>
+      {% call b::hint("Backups are encrypted so that this admin cannot read them. Only this passphrase opens a backup. At least 20 characters, and different from the audit passphrase.") %}{% endcall %}
+      <p class="hint"><strong>It is never stored and cannot be recovered.</strong> If it is lost, every backup is unreadable for good. Without it a restore is impossible, so keep it somewhere safe that is not this server.</p>
+      <label>Passphrase <input id="setup-backup" type="password" autocomplete="new-password" minlength="20" required></label>
+      <label>Repeat passphrase <input id="setup-backup2" type="password" autocomplete="new-password" minlength="20" required></label>
+      <label class="check"><input id="setup-backup-stored" type="checkbox" required> I stored this passphrase; it cannot be recovered</label>
+      <div class="row">
+        <button type="submit">Create the backup key</button>
+        <button type="button" id="setup-backup-signout" class="secondary" hidden>Sign out</button>
+      </div>
+      {% call b::error_line("setup-backup-error") %}{% endcall %}
+    </form>
+    <div id="setup-backup-done" hidden>
+      <h2>The backup key is ready</h2>
+      <p>Fingerprint: <code id="setup-backup-fingerprint"></code></p>
+      {% call b::hint("The fingerprint names the key; it is safe to write down next to the passphrase. Changing the passphrase later means rotating the key (Backup).") %}{% endcall %}
       <h2>Next steps</h2>
       <ol id="setup-next" class="hint">
         <li><a href="/admin/network/" data-tab="network">Network</a> (optional): a host name and a real certificate.</li>
         <li><a href="/admin/providers/" data-tab="providers">Providers</a>: add at least one model provider.</li>
         <li><a href="/admin/clients/" data-tab="clients">Clients</a>: create a user, then a pairing key for them, and pair the Askbar app.</li>
       </ol>
-      <button id="setup-audit-continue" type="button">Continue</button>
+      <button id="setup-backup-continue" type="button">Continue</button>
     </div>
   </main>
 

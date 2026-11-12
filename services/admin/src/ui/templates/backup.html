@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{%- import "blocks.html" as b %}
 {% block hint %}A manual backup of the server's data and this admin's settings.{% endblock %}
 {% block content %}
     <div class="panel">
@@ -6,4 +7,15 @@
       <p class="hint">Provider API keys, the Cloudflare token, the admin password and pairing codes are left out. After restoring, enter the keys again on the Providers page. The server's master key is not in this file: back up its <code>askbar-secrets</code> volume separately.</p>
       <p><a class="button" id="backup-link" href="/api/admin/v1/backup" download>Download backup</a></p>
     </div>
+    <form id="backup-key-form" class="panel">
+      <h3>Backup key</h3>
+      {% call b::hint("Encrypted backups (coming in the next steps) are made to this key, so only the backup passphrase opens them. This admin keeps the key's public half and the private half protected by the passphrase, never the passphrase itself.") %}{% endcall %}
+      <p>Fingerprint: <code id="bk-fingerprint">none yet</code> <span class="hint" id="bk-count"></span></p>
+      <p class="hint">Rotating makes a new key from a new passphrase. Backups made before it still open with the passphrase they were made under, so keep the old passphrase until the new backups cover the retention window; if the old one may be known to someone, delete the old backups. Rotating needs a sign-in within the last 10 minutes.</p>
+      <label>New backup passphrase (at least 20 characters, not the audit passphrase) <input id="bk-pass" type="password" autocomplete="new-password" minlength="20" required></label>
+      <label>Repeat the new passphrase <input id="bk-pass2" type="password" autocomplete="new-password" minlength="20" required></label>
+      <label class="check"><input id="bk-stored" type="checkbox" required> I stored this passphrase; it cannot be recovered</label>
+      <div class="row"><button type="submit">Rotate the backup key</button></div>
+      {% call b::error_line("bk-error") %}{% endcall %}
+    </form>
 {% endblock %}

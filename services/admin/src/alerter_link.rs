@@ -162,7 +162,12 @@ pub fn write_email(conn: &Connection, secrets: &AdminSecrets, email: Option<&Smt
 
 /// What the alerter should run, from `admin.db`.
 pub fn build_config(conn: &Connection, secrets: &AdminSecrets) -> AlerterConfig {
-    let mut config = AlerterConfig { version: 0, ntfy: read_ntfy(conn, secrets), email: read_email(conn, secrets) };
+    let mut config = AlerterConfig {
+        version: 0,
+        ntfy: read_ntfy(conn, secrets),
+        email: read_email(conn, secrets),
+        backup_public_key: crate::db::active_backup_key(conn).ok().flatten().map(|k| k.recipient),
+    };
     config.version = version_of(&config);
     config
 }

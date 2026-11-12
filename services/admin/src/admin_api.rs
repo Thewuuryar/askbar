@@ -20,7 +20,7 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-type St = State<Arc<AdminState>>;
+pub(crate) type St = State<Arc<AdminState>>;
 
 const MAX_PROMPT_CHARS: usize = 20_000;
 const PAIR_CODE_TTL_SECS: i64 = 10 * 60;

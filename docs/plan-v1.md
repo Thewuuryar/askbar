@@ -304,6 +304,7 @@ The owner decided D1 to D36 on 2026-11-11 and set no time budget: everything bel
 [ADR 0013](adr/0013-backups.md) holds the design. Decisions D21 to D29.
 
 **6.1 `feat(admin): backup passphrase and age key pair`** (M) — PR AI [DEPENDENCY] [MIGRATION]
+- **Built so, AI (2026-11-12, #86):** `age` 0.11 behind `askbar-service/backup` (the owner chose 0.11 and one dated `deny.toml` ignore, RUSTSEC-2026-0173, over 0.12, which fails `cargo deny` on RUSTSEC-2026-0387); `backup.rs` (key pair, passphrase protection with a fixed scrypt work factor, fingerprint, encrypt and decrypt; the dev profile optimises scrypt, which was a minute per key unoptimised); migration 20 `backup_keys`; `PUT /setup/backup-key`, `POST /backup/rotate-key` (session-only, fresh sign-in) and `GET /backup/key`; the public key in the snapshot and `AlerterConfig`; a wizard step and a Backup page panel. The old passphrase is not asked for on rotation, to leave no way to guess it. The auditor and `cpa` get the key in PRs AL and AK.
 - `age` behind a `backup` feature of `askbar-service` (`cargo deny` first, stop if it fails); a `backup_keys` migration; `PUT /setup/backup-key` (at least 20 characters, not the audit passphrase, fresh sign-in) and `POST /backup/rotate-key`; the public key goes to the server (snapshot) and the alerter (`PUT /config`); the auditor and `cpa` get it with their exports.
 
 **6.2 `feat: encrypted exports from each service`** (L) — PRs AJ, AK, AL

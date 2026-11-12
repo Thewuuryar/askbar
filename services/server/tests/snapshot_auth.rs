@@ -57,6 +57,7 @@ impl T {
     fn snapshot(&self, codes: &[(&str, i64)], revoked: &[&str]) -> Snapshot {
         Snapshot {
             policy: None,
+            backup_public_key: None,
             version: 0,
             providers: vec![],
             default_provider_id: None,

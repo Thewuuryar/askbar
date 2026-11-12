@@ -140,6 +140,7 @@ fn provider(id: &str) -> SnapshotProvider {
 fn snapshot() -> Snapshot {
     Snapshot {
         policy: None,
+        backup_public_key: None,
         version: 0,
         providers: vec![provider("p1"), provider("p2")],
         default_provider_id: Some("p1".into()),
