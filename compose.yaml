@@ -132,6 +132,11 @@ services:
       - cpa-config:/cpa-config
       - admin-data:/admin-data
       - admin-secrets:/admin-secrets
+      # Where the admin keeps backups (ADR 0013, D27): scheduled ones, and a manual one when asked. Only the admin mounts it.
+      # To keep them on a NAS, mount the share on the HOST over this volume's directory (see the guide); there is no Docker SMB or
+      # NFS volume, the share's credentials stay in the host's mount configuration and never in this file, `.env` or the admin, and
+      # the admin needs no route to the local network and no mount privileges.
+      - backup:/backup
       # The token this admin sends to the server (call/admin-server.token), made by bootstrap. Read-only.
       - admin-token:/admin-token:ro
       - admin-run:/run/admin
@@ -410,6 +415,9 @@ volumes:
   control-token:
   admin-data:
   admin-secrets:
+  # The admin's backups (ADR 0013, D27). A new volume, empty, owned by uid 10001 as the image's /backup is. Never renamed or dropped:
+  # it holds the backups. The host may mount a NAS share over its directory (the guide says how).
+  backup:
   admin-run:
   caddy-run:
   caddy-secrets:

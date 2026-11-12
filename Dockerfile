@@ -56,8 +56,8 @@ ENTRYPOINT ["askbar-bootstrap"]
 # socket that only Caddy is given. Runs as uid 10001.
 FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc AS admin
 RUN groupadd --system --gid 10001 askbar-admin && useradd --system --uid 10001 --gid 10001 --home-dir /admin-data --shell /usr/sbin/nologin askbar-admin \
- && mkdir /admin-data /admin-secrets /admin-token /cpa-config /caddy-secrets /run/admin /caddy-run \
- && chown askbar-admin:askbar-admin /admin-data /admin-secrets /admin-token /cpa-config /caddy-secrets /run/admin /caddy-run \
+ && mkdir /admin-data /admin-secrets /admin-token /cpa-config /caddy-secrets /run/admin /caddy-run /backup \
+ && chown askbar-admin:askbar-admin /admin-data /admin-secrets /admin-token /cpa-config /caddy-secrets /run/admin /caddy-run /backup \
  && chmod 700 /admin-secrets \
  && chmod 770 /caddy-run
 COPY --from=build /src/target/release/askbar-admin /usr/local/bin/askbar-admin
@@ -68,8 +68,9 @@ ENV ASKBAR_ADMIN_DATA_DIR=/admin-data \
     ASKBAR_ADMIN_TOKEN_DIR=/admin-token \
     ASKBAR_CPA_CONFIG_DIR=/cpa-config \
     ASKBAR_CADDY_SOCKET=/caddy-run/admin.sock \
-    ASKBAR_CADDY_SECRETS_DIR=/caddy-secrets
-VOLUME /admin-data /admin-secrets
+    ASKBAR_CADDY_SECRETS_DIR=/caddy-secrets \
+    ASKBAR_BACKUP_DIR=/backup
+VOLUME /admin-data /admin-secrets /backup
 # Healthy when the admin socket answers; there is no port to probe.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD ["askbar-admin", "healthcheck"]
