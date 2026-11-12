@@ -323,9 +323,30 @@
 
   // ------------------------------------------------------------ messages
 
+  // Trusted Types (ADR 0044, D17). The CSP requires them, so the browser refuses a string for any HTML sink, and allows one policy:
+  // `askbar-markdown`, which turns Markdown into HTML with `renderMarkdown` and nothing else. The one `innerHTML` in this app is
+  // below; if it were ever handed anything but a policy's output, the browser would refuse it. A webview with no Trusted Types
+  // has no such rule, and `renderMarkdown`'s own escaping is what protects it. If the policy is refused, the reply is shown as
+  // plain text: readable, and never markup.
+  let markdownPolicy = null;
+  try {
+    if (window.trustedTypes) {
+      markdownPolicy = window.trustedTypes.createPolicy('askbar-markdown', { createHTML: (source) => window.renderMarkdown(source) });
+    }
+  } catch (_) { markdownPolicy = null; }
+
+  function setReply(node, markdown) {
+    if (window.trustedTypes && !markdownPolicy) {
+      node.textContent = markdown;
+      return;
+    }
+    // The one HTML sink in the app.
+    node.innerHTML = markdownPolicy ? markdownPolicy.createHTML(markdown) : window.renderMarkdown(markdown);
+  }
+
   function render(msg) {
-    msg.bodyNode.innerHTML = msg.role === 'assistant' ? window.renderMarkdown(msg.content) : '';
-    if (msg.role === 'user') msg.bodyNode.textContent = msg.content;
+    if (msg.role === 'assistant') setReply(msg.bodyNode, msg.content);
+    else msg.bodyNode.textContent = msg.content;
     if (state.pinned) followNewest();
   }
 
