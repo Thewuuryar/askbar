@@ -484,8 +484,13 @@ pub struct CreatedKey {
 }
 
 /// `POST /api/admin/v1/keys`: make the admin API key. 409 `api_key_exists` while one is active.
-pub async fn create_key(State(state): St, ApiJson(b): ApiJson<NewKey>) -> Result<(StatusCode, Json<CreatedKey>), Failure> {
+pub async fn create_key(
+    State(state): St,
+    headers: axum::http::HeaderMap,
+    ApiJson(b): ApiJson<NewKey>,
+) -> Result<(StatusCode, Json<CreatedKey>), Failure> {
     use crate::api_key::{create, CreateError};
+    crate::web::require_fresh_signin(&state, &headers)?;
     let db = state.db.lock().await;
     match create(db.conn(), &b.name, crate::auth::now()) {
         Ok((row, key)) => Ok((StatusCode::CREATED, Json(CreatedKey { row, key }))),
@@ -1229,6 +1234,7 @@ pub async fn get_settings(State(state): St) -> Json<AdminSettings> {
 
 pub async fn put_settings(
     State(state): St,
+    headers: axum::http::HeaderMap,
     notes: Option<axum::Extension<crate::actions::ActionNotes>>,
     ApiJson(s): ApiJson<AdminSettings>,
 ) -> Result<StatusCode, Failure> {
@@ -1272,6 +1278,11 @@ pub async fn put_settings(
         if days > MAX_AUDIT_RETENTION_DAYS {
             return Err(bad(&format!("Audit records are kept for at most {MAX_AUDIT_RETENTION_DAYS} days.")));
         }
+    }
+    // Keeping records for less time destroys evidence, so it takes a fresh sign-in and no API key (ADR 0040).
+    let current_days = audit_retention_days(state.db.lock().await.conn());
+    if s.audit_retention_days.is_some_and(|days| days < current_days) {
+        crate::web::require_fresh_signin(&state, &headers)?;
     }
     let retention = s.audit_retention_days.map(|n| n.to_string());
     // How long sealed content stays open (ADR 0011 rule 11): up to 12 hours each, and the idle time may not exceed the total.

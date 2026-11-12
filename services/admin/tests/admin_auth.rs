@@ -398,3 +398,80 @@ async fn wrong_keys_count_toward_the_same_lockout_as_wrong_passwords() {
     // The same lock stops a wrong password, which is the point of one lock.
     assert_eq!(t.login(PASSWORD).await.status(), 429);
 }
+
+// ------------------------------------------------------------------ a fresh sign-in (ADR 0040)
+
+impl T {
+    async fn change(&self, method: reqwest::Method, path: &str, cookie: &str, body: serde_json::Value) -> (u16, serde_json::Value) {
+        let r = self
+            .http
+            .request(method, format!("http://{}{path}", self.admin))
+            .header("cookie", cookie)
+            .header("x-askbar-admin", "1")
+            .json(&body)
+            .send()
+            .await
+            .unwrap();
+        (r.status().as_u16(), r.json().await.unwrap_or_default())
+    }
+    fn age(&self, cookie: &str, secs: i64) {
+        self.state.auth.backdate_session(cookie.split_once('=').unwrap().1, secs);
+    }
+}
+
+fn settings(days: u32) -> serde_json::Value {
+    serde_json::json!({ "system_prompt": "p", "display": askbar_proto::DisplaySettings::default(), "audit_retention_days": days })
+}
+
+#[tokio::test]
+async fn an_old_sign_in_cannot_change_the_password_make_a_key_or_lower_retention() {
+    let t = start(PASSWORD).await;
+    let c = t.session().await;
+    t.age(&c, 11 * 60);
+    let change = serde_json::json!({ "current": PASSWORD, "new": "another long password" });
+    for (method, path, body) in [
+        (reqwest::Method::PUT, "/api/admin/v1/password", change),
+        (reqwest::Method::POST, "/api/admin/v1/keys", serde_json::json!({ "name": "ci" })),
+        (reqwest::Method::PUT, "/api/admin/v1/settings", settings(7)),
+    ] {
+        let (status, problem) = t.change(method.clone(), path, &c, body).await;
+        assert_eq!(status, 403, "{method} {path}");
+        assert!(problem["detail"].as_str().unwrap().contains("fresh sign-in"), "{problem}");
+    }
+    // Nothing changed: the old password still works, there is no key, and the retention is what it was.
+    assert_eq!(t.login(PASSWORD).await.status(), 204);
+    let keys: i64 = t.state.db.lock().await.conn().query_row("SELECT COUNT(*) FROM admin_api_keys", [], |r| r.get(0)).unwrap();
+    assert_eq!((keys, askbar_admin::admin_api::audit_retention_days(t.state.db.lock().await.conn())), (0, 30));
+}
+
+#[tokio::test]
+async fn an_old_sign_in_may_still_raise_retention_and_a_fresh_one_does_all_three() {
+    let t = start(PASSWORD).await;
+    let old = t.session().await;
+    t.age(&old, 11 * 60);
+    // This rig has no server to push to, so a saved change ends in 502: what matters here is that it is not 403.
+    assert_ne!(t.change(reqwest::Method::PUT, "/api/admin/v1/settings", &old, settings(90)).await.0, 403, "more is safe");
+    assert_ne!(t.change(reqwest::Method::PUT, "/api/admin/v1/settings", &old, settings(30)).await.0, 403, "the same is safe");
+    let fresh = t.session().await;
+    assert_ne!(t.change(reqwest::Method::PUT, "/api/admin/v1/settings", &fresh, settings(14)).await.0, 403);
+    assert_eq!(t.change(reqwest::Method::POST, "/api/admin/v1/keys", &fresh, serde_json::json!({ "name": "ci" })).await.0, 201);
+    let change = serde_json::json!({ "current": PASSWORD, "new": "another long password" });
+    assert_eq!(t.change(reqwest::Method::PUT, "/api/admin/v1/password", &fresh, change).await.0, 204);
+}
+
+#[tokio::test]
+async fn an_api_key_cannot_lower_retention_even_beside_a_fresh_cookie() {
+    let t = start(PASSWORD).await;
+    let (_, key) = make_key(&t).await;
+    let c = t.session().await;
+    let put = |days: u32, cookie: Option<&str>| {
+        let mut r = t.http.put(format!("http://{}/api/admin/v1/settings", t.admin)).bearer_auth(&key).json(&settings(days));
+        if let Some(c) = cookie {
+            r = r.header("cookie", c).header("x-askbar-admin", "1");
+        }
+        async move { r.send().await.unwrap().status().as_u16() }
+    };
+    assert_eq!(put(7, None).await, 403);
+    assert_eq!(put(7, Some(&c)).await, 403, "the Authorization header alone is judged");
+    assert_ne!(put(60, None).await, 403, "a key may still raise it (no server here, so it ends in 502)");
+}
