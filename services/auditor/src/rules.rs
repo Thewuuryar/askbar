@@ -36,8 +36,25 @@ struct UnsealLimits {
     total: u32,
 }
 
+/// Where the audit volume is, as far as the alerts for it have said.
+#[derive(Default)]
+struct DiskState {
+    /// `audit_disk_low` was sent and the volume has not yet recovered.
+    low: bool,
+    /// `audit_disk_critical` was sent and the volume has not yet recovered.
+    critical: bool,
+}
+
+/// Below this much free, `audit_disk_low`; it is armed again above [`LOW_REARM`], so a volume that hovers is one alert.
+pub const LOW_BYTES: u64 = 1024 * 1024 * 1024;
+pub const LOW_REARM: u64 = LOW_BYTES * 5 / 4;
+/// Below this much free, `audit_disk_critical` (the auditor itself starts refusing new spans here: `Limits::min_free_bytes`).
+pub const CRITICAL_BYTES: u64 = 256 * 1024 * 1024;
+pub const CRITICAL_REARM: u64 = CRITICAL_BYTES * 5 / 4;
+
 struct State {
     unseal: UnsealLimits,
+    disk: DiskState,
 }
 
 impl Default for State {
@@ -47,6 +64,7 @@ impl Default for State {
                 idle: askbar_proto::audit::DEFAULT_UNSEAL_IDLE_MINUTES,
                 total: askbar_proto::audit::DEFAULT_UNSEAL_TOTAL_MINUTES,
             },
+            disk: DiskState::default(),
         }
     }
 }
@@ -120,7 +138,43 @@ impl Rules {
     /// Every 30 seconds: what is about time and disk. `free` is the bytes free where the store is, if it could be told;
     /// `last_requests` is when each link last called, by caller.
     pub fn tick(&self, now: i64, free: Option<u64>, last_requests: &std::collections::BTreeMap<&'static str, i64>) {
-        let _ = (now, free, last_requests);
+        let _ = (now, last_requests);
+        if let Some(free) = free {
+            self.disk(free);
+        }
+    }
+
+    /// The volume's free space. Critical below 256 MiB and low below 1 GiB, each said once, and said again only after the
+    /// volume has been above its re-arm line (320 MiB and 1.25 GiB): a volume that hovers is not a stream of alerts. Going
+    /// straight to critical says critical alone, because it already says everything low would.
+    fn disk(&self, free: u64) {
+        let (critical, low) = {
+            let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            let d = &mut s.disk;
+            let mut critical = false;
+            let mut low = false;
+            if free < CRITICAL_BYTES && !d.critical {
+                d.critical = true;
+                d.low = true;
+                critical = true;
+            } else if d.critical && free >= CRITICAL_REARM {
+                d.critical = false;
+            }
+            if free < LOW_BYTES && !d.low {
+                d.low = true;
+                low = true;
+            } else if d.low && !d.critical && free >= LOW_REARM {
+                d.low = false;
+            }
+            (critical, low)
+        };
+        let free_mb = Fields { free_mb: Some(free / (1024 * 1024)), ..Fields::default() };
+        if critical {
+            self.say(Kind::AuditDiskCritical, free_mb.clone());
+        }
+        if low {
+            self.say(Kind::AuditDiskLow, free_mb);
+        }
     }
 }
 
@@ -261,5 +315,55 @@ pub(crate) mod tests {
         r.retention_changed(30, 7);
         assert_eq!(c.kinds(), [Kind::RetentionChanged]);
         assert_eq!(c.0.lock().unwrap()[0].2, Fields { count: Some(7), ..Fields::default() });
+    }
+
+    const MIB: u64 = 1024 * 1024;
+
+    #[test]
+    fn low_disk_is_said_once_and_again_only_after_the_volume_was_above_its_rearm_line() {
+        let (r, c) = rules();
+        let tick = |free: u64| r.tick(0, Some(free), &Default::default());
+        tick(5 * 1024 * MIB);
+        tick(1025 * MIB);
+        assert!(c.kinds().is_empty(), "just over 1 GiB");
+        tick(1000 * MIB);
+        assert_eq!(c.kinds(), [Kind::AuditDiskLow]);
+        assert_eq!(c.0.lock().unwrap()[0].2, Fields { free_mb: Some(1000), ..Fields::default() });
+        tick(900 * MIB);
+        tick(1100 * MIB);
+        tick(1000 * MIB);
+        tick(1200 * MIB);
+        tick(990 * MIB);
+        assert_eq!(c.kinds().len(), 1, "hovering between 1 GiB and 1.25 GiB is one alert");
+        tick(1281 * MIB);
+        tick(999 * MIB);
+        assert_eq!(c.kinds().len(), 2, "above 1.25 GiB re-arms it");
+    }
+
+    #[test]
+    fn critical_disk_is_critical_alone_when_it_falls_straight_there_and_has_its_own_hysteresis() {
+        let (r, c) = rules();
+        let tick = |free: u64| r.tick(0, Some(free), &Default::default());
+        tick(10 * 1024 * MIB);
+        tick(200 * MIB);
+        assert_eq!(c.kinds(), [Kind::AuditDiskCritical], "straight to critical says critical only");
+        assert_eq!(c.0.lock().unwrap()[0].1, Severity::Critical);
+        tick(100 * MIB);
+        tick(300 * MIB);
+        tick(255 * MIB);
+        assert_eq!(c.kinds().len(), 1, "300 MiB is not yet recovered");
+        // Back over 320 MiB, still under 1 GiB: critical is armed again, low was already said.
+        tick(400 * MIB);
+        tick(200 * MIB);
+        assert_eq!(c.kinds(), [Kind::AuditDiskCritical, Kind::AuditDiskCritical]);
+        // A volume that fell from low into critical says both, low first of all.
+        let (r, c) = rules();
+        r.tick(0, Some(900 * MIB), &Default::default());
+        r.tick(0, Some(100 * MIB), &Default::default());
+        assert_eq!(c.kinds(), [Kind::AuditDiskLow, Kind::AuditDiskCritical]);
+        // A volume whose free space cannot be told says nothing.
+        let (r, c) = rules();
+        r.tick(0, None, &Default::default());
+        assert!(c.kinds().is_empty());
     }
 }

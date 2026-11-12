@@ -9,6 +9,7 @@ use reqwest::Method as M;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 const ADMIN_APPEND: &str = "admin-auditor-append";
@@ -33,6 +34,8 @@ struct T {
     auditor: Arc<Auditor>,
     http: reqwest::Client,
     sent: Arc<Collector>,
+    /// What the volume has free, by the byte.
+    free: Arc<AtomicU64>,
 }
 
 impl Drop for T {
@@ -60,14 +63,16 @@ async fn start_on(dir: PathBuf) -> T {
     }
     let limits = Limits::default();
     let recorder = Recorder::spawn(AuditDb::open(&dir.join("data/audit.db")).unwrap(), limits.max_queued);
-    let free_space: FreeSpace = Arc::new(|| Some(100 * GIB));
+    let free = Arc::new(AtomicU64::new(100 * GIB));
+    let f = free.clone();
+    let free_space: FreeSpace = Arc::new(move || Some(f.load(Ordering::Relaxed)));
     let sent = Arc::new(Collector::default());
     let auditor = Auditor::new(recorder, limits, free_space).with_alerts(sent.clone());
     let app = askbar_auditor::router(auditor.clone(), askbar_auditor::links(&dir.join("tokens")));
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", l.local_addr().unwrap());
     tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
-    T { url, dir, auditor, http: reqwest::Client::new(), sent }
+    T { url, dir, auditor, http: reqwest::Client::new(), sent, free }
 }
 
 async fn start() -> T {
@@ -170,4 +175,25 @@ async fn a_new_retention_is_an_alert_naming_its_days_and_pushing_the_same_one_ev
     // A refused change (under the floor) is no alert: nothing changed.
     assert_eq!(put(3).await, 400);
     assert_eq!(t.kinds().len(), 2);
+}
+
+#[tokio::test]
+async fn a_volume_running_out_of_room_is_an_alert_with_the_megabytes_left_each_time_the_time_rules_run() {
+    let t = start().await;
+    t.auditor.tick_rules(1_000);
+    assert!(t.kinds().is_empty(), "100 GiB free");
+    t.free.store(900 * 1024 * 1024, Ordering::Relaxed);
+    t.auditor.tick_rules(1_030);
+    t.auditor.tick_rules(1_060);
+    assert_eq!(
+        t.events().iter().map(|e| (e.kind, e.severity, e.fields.free_mb)).collect::<Vec<_>>(),
+        [(Kind::AuditDiskLow, Severity::Warning, Some(900))]
+    );
+    t.free.store(100 * 1024 * 1024, Ordering::Relaxed);
+    t.auditor.tick_rules(1_090);
+    assert_eq!(
+        t.events().last().map(|e| (e.kind, e.severity, e.fields.free_mb)),
+        Some((Kind::AuditDiskCritical, Severity::Critical, Some(100)))
+    );
+    assert_taken(&t.events());
 }
