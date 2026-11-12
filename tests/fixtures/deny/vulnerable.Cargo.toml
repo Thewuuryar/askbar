@@ -1,0 +1,16 @@
+# A crate that depends on a release with known RustSec advisories (regex 1.5.4: RUSTSEC-2022-0013, a denial of service). It is a
+# fixture for CI (ADR 0017, D30): `scripts/check-deny-fixture.sh` copies it to a throwaway directory as `Cargo.toml` and `cargo deny`
+# must fail on it. If it ever passes, `cargo deny` has stopped catching vulnerable dependencies, and the check on the real
+# dependencies means nothing. It is named so that no tool treats it as one of Askbar's manifests (Dependabot and Renovate look for
+# `Cargo.toml`), and the version is pinned on purpose: never update it.
+[package]
+name = "askbar-deny-fixture"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+regex = "=1.5.4"
+
+# Its own workspace, so cargo does not look for ours.
+[workspace]

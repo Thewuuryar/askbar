@@ -79,8 +79,10 @@ ENTRYPOINT ["askbar-admin"]
 # ------------------------------------------------------------------ caddy
 # Caddy with the Cloudflare DNS plugin, used to get certificates without opening port 80/443.
 # The builder's digest fixes the Caddy version it builds (v2.11.9); the plugin is pinned to a release.
+# golang.org/x/net is raised to 0.62.0, which fixes CVE-2026-78661 (a denial of service in its HTML parser) that Trivy found in the
+# 0.60.0 this Caddy release builds with (the image scan in ci.yml). Drop the --replace once a Caddy release at the pinned digest has it.
 FROM caddy:2-builder@sha256:3db11aead97f1fdff9c563d0dd8e7fba2e4c7031bef40f3e44fd1982f3e8366b AS caddy-build
-RUN xcaddy build --with github.com/caddy-dns/cloudflare@v0.2.4
+RUN xcaddy build --with github.com/caddy-dns/cloudflare@v0.2.4 --replace golang.org/x/net=golang.org/x/net@v0.62.0
 
 FROM caddy:2@sha256:ce773ec7a742ce15ee6bf2bb5f65882b9e2a4487b10733e6f1484f86e6b5d8bc AS caddy
 COPY --from=caddy-build /usr/bin/caddy /usr/bin/caddy

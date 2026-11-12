@@ -126,6 +126,27 @@ The whole API is [docs/openapi/admin.v1.yaml](docs/openapi/admin.v1.yaml).
   includes its docs and isolation tests in the same PR ([ADR 0001](docs/adr/0001-decision-records-and-change-rules.md)).
 - **Review.** The owner reviews every pull request. Changes to the paths that decide who can reach what get extra care.
 
+## Repository settings the owner turns on
+
+These are settings on GitHub, not files, so no pull request can turn them on ([ADR 0017](docs/adr/0017-dependencies-and-patches.md),
+[ADR 0018](docs/adr/0018-releases-and-migrations.md)). The workflows and `.github/dependabot.yml` are written for them.
+
+- **Dependabot alerts and Dependabot security updates** (Settings, Advanced Security). `.github/dependabot.yml` switches version
+  updates off (Renovate opens those) and leaves security updates on, for Cargo, npm, GitHub Actions and Docker.
+- **Branch protection (or a ruleset) on `main`:** require a pull request, require the checks to pass before merging
+  (`lint`, `test-services`, `test-desktop`, `isolation`, `dependencies`, `images` and `secrets` from `ci.yml`), and block force pushes
+  and deletion. Without it nothing makes a failing check stop a merge.
+- **Email for failed workflow runs** (your profile's Settings, Notifications, Actions: "Send notifications for failed workflows only",
+  by email). `ci.yml` also runs every Monday on `main`: a new advisory in a dependency (`cargo deny`, `npm audit`) or in an image
+  (the Trivy scan) fails that run, and **GitHub's email for a failed scheduled run is the CVE alert**; there is no other. GitHub stops
+  scheduled runs in a repository with no activity for 60 days, so push something now and then.
+- **The Renovate app** on the repository (`renovate.json`), which proposes the version updates and keeps Actions and images pinned.
+- **Secret scanning and push protection** (Settings, Advanced Security) are worth turning on beside the `gitleaks` job.
+
+An ignore for a vulnerable image package goes in `.trivyignore.yaml`, one with its ID, a statement and an expiry date
+(`scripts/check-docs.sh` refuses one without them); an ignore for a vulnerable crate goes in `deny.toml`, with its ID, a reason and a
+date to look again. `scripts/check-deny-fixture.sh` shows that `cargo deny` still fails on a crate pinned to a known-vulnerable release.
+
 ## Before you open a pull request
 
 Run `npm test` and `scripts/smoke.sh`. If you touched `compose.yaml`, `Dockerfile`s, Caddy or anything about who can

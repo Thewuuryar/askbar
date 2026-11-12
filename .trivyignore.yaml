@@ -1,0 +1,24 @@
+# Trivy's ignore file for the image scan in .github/workflows/ci.yml (ADR 0017, D30).
+#
+# A finding is ignored only with its ID, a statement that says why it does not matter here (or why nothing can be done yet), and a date
+# (`expired_at`) after which Trivy reports it again, so an ignore is a decision to look again, never a permanent one. Scripts/check-docs.sh
+# refuses an entry that lacks any of the three. Findings that have a fix fail the scan; ones with no fix yet are not reported at all
+# (`--ignore-unfixed`), so this list is for the others: a fix exists, but cannot be taken yet (say what is waiting for it).
+#
+# Example (remove the leading `#` from each line and fill it in):
+#   - id: CVE-2026-00000
+#     statement: in a package the image does not run; the base image's fix is waiting for Debian's next point release
+#     expired_at: 2026-12-31
+vulnerabilities:
+  # The `cpa` image is CLIProxyAPI's own (eceasy/cli-proxy-api, pinned by digest in the Dockerfile) with our supervisor added: Askbar can
+  # change neither its Debian packages nor its Go binary, only move the pin when upstream releases a fix (Renovate proposes it).
+  # Each is a month's ignore, to look again when the date comes.
+  - id: CVE-2026-109518
+    statement: apt in the third-party cpa image (Debian 12.15); the flaw is in apt's package download, which the container never runs (no apt command at runtime, and it installs nothing); the fix is Debian's apt 2.6.2 in the next base image of CLIProxyAPI's release
+    expired_at: 2026-12-12
+  - id: CVE-2026-63209
+    statement: klauspost/compress v1.17.4 inside CLIProxyAPI's binary in the third-party cpa image; a denial of service through a crafted compression dictionary, reachable only on the internal cpa-admin and cpa-gateway networks and from the providers it calls; the fix is in a CLIProxyAPI release, so the pin moves when one has it
+    expired_at: 2026-12-12
+  - id: CVE-2026-78661
+    statement: golang.org/x/net v0.60.0 inside CLIProxyAPI's binary in the third-party cpa image; a denial of service in the HTML parser; the fix is in a CLIProxyAPI release, so the pin moves when one has it (our own Caddy build has it raised in the Dockerfile)
+    expired_at: 2026-12-12
