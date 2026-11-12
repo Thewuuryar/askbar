@@ -40,6 +40,11 @@
     statusActions: $('status-actions'),
     modelLabel: $('model-label'),
     modelPicker: $('model-picker'),
+    aiWarning: $('ai-warning'),
+    privacy: $('privacy'),
+    privacyText: $('privacy-text'),
+    privacyDays: $('privacy-days'),
+    privacyOk: $('privacy-ok'),
   };
 
   const state = {
@@ -272,6 +277,8 @@
     el.pairInput.value = '';
     closePairing();
     newChat();
+    // A new pairing is the moment the notice is for: show it even if this app showed the same words to another account.
+    forgetVersion();
     await refreshBootstrap().catch(() => {});
     await checkStatus();
     await refreshHistory();
@@ -929,10 +936,51 @@
     try { await invoke('set_active_model', { id: state.model }); state.activeModel = state.model; } catch (e) { showNotice(String(e)); }
   });
 
+  // ------------------------------------------------- privacy notice, AI warning
+
+  // What the server tells this app to say about the service (ADR 0012). Consent is assumed when the administrator makes a user, so
+  // nothing is sent back: the app only remembers the version of the notice it last showed, here, and shows it again when the
+  // version differs and right after pairing. Everything goes in as text.
+  const NOTICE_KEY = 'askbar.privacyNoticeVersion';
+  function shownVersion() {
+    try { return window.localStorage.getItem(NOTICE_KEY); } catch (_) { return null; }
+  }
+  function rememberVersion(v) {
+    try { window.localStorage.setItem(NOTICE_KEY, v); } catch (_) { /* shown again next time */ }
+  }
+  function forgetVersion() {
+    try { window.localStorage.removeItem(NOTICE_KEY); } catch (_) { /* nothing to forget */ }
+  }
+
+  function applyPolicy(policy) {
+    if (!policy) return; // the server was not asked, or does not send one: keep what is shown
+    const w = policy.ai_warning;
+    const warn = !!(w && w.enabled && w.text);
+    el.aiWarning.textContent = warn ? w.text : '';
+    el.aiWarning.hidden = !warn;
+    const n = policy.notice;
+    const due = !!(n && n.enabled && n.text && n.version && n.version !== shownVersion());
+    if (due) {
+      el.privacyText.textContent = n.text;
+      el.privacyDays.textContent = 'Audit records are kept for ' + n.retention_days + (n.retention_days === 1 ? ' day.' : ' days.');
+      state.noticeVersion = n.version;
+    }
+    el.privacy.hidden = !due;
+    layout();
+  }
+
+  el.privacyOk.addEventListener('click', () => {
+    if (state.noticeVersion) rememberVersion(state.noticeVersion);
+    el.privacy.hidden = true;
+    layout();
+    el.input.focus();
+  });
+
   async function refreshBootstrap() {
     const b = await invoke('bootstrap');
     state.ui = b.ui;
     applyUi(b.ui);
+    applyPolicy(b.policy);
     state.provider = b.provider;
     el.modelLabel.textContent = b.model ? b.model + ' via ' + b.provider : '';
     if (b.notice) showNotice(b.notice);

@@ -183,7 +183,20 @@ pub fn build_snapshot(conn: &rusqlite::Connection) -> rusqlite::Result<Snapshot>
         conn.query_row("SELECT daily_tokens, monthly_tokens, kill_switch FROM budgets WHERE id = 1", [], |r| {
             Ok((r.get(0)?, r.get(1)?, r.get(2)?))
         })?;
+    // How long audit records are kept: the notice says so, and its version changes with it.
+    let audit_retention_days: u32 = setting(conn, "audit_retention_days")?.and_then(|s| s.parse().ok()).unwrap_or(30);
+    // The privacy notice and the AI warning (ADR 0012): on unless switched off, with the default wording unless the administrator
+    // wrote their own. The version of the notice is worked out here, from the wording and the retention.
+    let flag = |key: &str| -> rusqlite::Result<bool> { Ok(setting(conn, key)?.is_none_or(|v| v.trim() != "0")) };
+    let policy = askbar_proto::Policy::new(
+        flag("privacy_notice_enabled")?,
+        &setting(conn, "privacy_notice_text")?.unwrap_or_default(),
+        flag("ai_warning_enabled")?,
+        &setting(conn, "ai_warning_text")?.unwrap_or_default(),
+        audit_retention_days,
+    );
     Ok(Snapshot {
+        policy: Some(policy),
         version: 0,
         providers,
         default_provider_id,
@@ -206,7 +219,7 @@ pub fn build_snapshot(conn: &rusqlite::Connection) -> rusqlite::Result<Snapshot>
         kill_switch_aborts_running: setting(conn, "kill_switch_aborts_running")?
             .map(|v| !matches!(v.trim(), "0" | "false"))
             .unwrap_or(true),
-        audit_retention_days: setting(conn, "audit_retention_days")?.and_then(|s| s.parse().ok()).unwrap_or(30),
+        audit_retention_days,
         // Absent on installs that never set it: the default applies, no migration needed.
         generation_timeout_secs: setting(conn, "generation_timeout_secs")?
             .and_then(|s| s.trim().parse().ok())

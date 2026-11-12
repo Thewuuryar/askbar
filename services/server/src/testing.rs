@@ -19,6 +19,7 @@ pub fn test_audit_key() -> askbar_proto::AuditKey {
 /// A snapshot with nothing in it, apart from the test audit key.
 pub fn empty_snapshot() -> Snapshot {
     Snapshot {
+        policy: None,
         version: 0,
         providers: vec![],
         default_provider_id: None,

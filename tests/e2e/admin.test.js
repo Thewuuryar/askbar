@@ -517,6 +517,30 @@ async function waitForPort(port) {
     assert.equal(await page.inputValue('#s-prompt'), 'You are a pirate.');
     assert.equal(await page.inputValue('#s-theme'), 'dark');
   });
+  await step('settings: the privacy notice and the AI warning are on with their default words, and the changes are kept', async () => {
+    await openSettings();
+    await page.waitForFunction(() => /AI can make mistakes/.test(document.getElementById('s-warning-text').value));
+    assert.equal(await page.isChecked('#s-notice-on'), true);
+    assert.equal(await page.isChecked('#s-warning-on'), true);
+    assert.match(await page.inputValue('#s-notice-text'), /sealed copy of each goes to the audit record/);
+    await page.fill('#s-notice-text', 'We keep <b>everything</b> for the number of days below.');
+    await page.uncheck('#s-warning-on');
+    await page.click('#settings-form button[type=submit]');
+    await page.waitForSelector('#flash:not([hidden])');
+    assert.match(await page.innerText('#flash'), /Settings saved/);
+    await openSettings();
+    await page.waitForFunction(() => /everything/.test(document.getElementById('s-notice-text').value));
+    assert.equal(await page.inputValue('#s-notice-text'), 'We keep <b>everything</b> for the number of days below.', 'text, never markup');
+    assert.equal(await page.isChecked('#s-warning-on'), false);
+    assert.equal(await page.isChecked('#s-notice-on'), true);
+    // Put it back: the default words, and both on.
+    await page.fill('#s-notice-text', '');
+    await page.check('#s-warning-on');
+    await page.click('#settings-form button[type=submit]');
+    await page.waitForSelector('#flash:not([hidden])');
+    await openSettings();
+    await page.waitForFunction(() => /sealed copy of each goes to the audit record/.test(document.getElementById('s-notice-text').value));
+  });
   await step('an invalid setting shows the server message', async () => {
     await page.fill('#s-top', '0.5');
     await page.fill('#s-width', '100');

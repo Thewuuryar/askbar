@@ -876,6 +876,76 @@ async function waitIdle(page) {
   });
   await page.context().close();
 
+  // ------------------------------------------- privacy notice and AI warning (ADR 0012)
+  const policy = (over = {}) => ({
+    notice: Object.assign({ enabled: true, text: 'We keep <b>what you ask</b>.\nOnly the administrator can open it.', retention_days: 30, version: 'v1' }, over.notice || {}),
+    ai_warning: Object.assign({ enabled: true, text: 'AI can make mistakes. Check important information.' }, over.ai_warning || {}),
+  });
+  await step('the AI warning sits above the input box as text, and is hidden when switched off or when the server says nothing', async () => {
+    const p = await open(browser, { policy: policy({ ai_warning: { text: '<b>AI</b> can err & so can you' }, notice: { enabled: false } }) });
+    await p.waitForSelector('#ai-warning:not([hidden])');
+    assert.equal(await p.innerText('#ai-warning'), '<b>AI</b> can err & so can you');
+    assert.equal(await p.locator('#ai-warning b').count(), 0, 'text, never markup');
+    const [w, input] = await Promise.all([p.locator('#ai-warning').boundingBox(), p.locator('#input').boundingBox()]);
+    assert.ok(w.y + w.height <= input.y, 'above the input box');
+    assert.equal(await p.isHidden('#privacy'), true, 'the notice is off');
+    await shot(p, '12-ai-warning');
+    const off = await open(browser, { policy: policy({ ai_warning: { enabled: false }, notice: { enabled: false } }) });
+    assert.equal(await off.isHidden('#ai-warning'), true);
+    const none = await open(browser, {});
+    assert.equal(await none.isHidden('#ai-warning'), true);
+    assert.equal(await none.isHidden('#privacy'), true, 'an older server says nothing, so nothing is shown');
+    await p.context().close(); await off.context().close(); await none.context().close();
+  });
+  await step('the privacy notice shows its words as text and the retention, once, and again when the version changes', async () => {
+    const p = await open(browser, { policy: policy() });
+    await p.waitForSelector('#privacy:not([hidden])');
+    assert.equal(await p.innerText('#privacy-text'), 'We keep <b>what you ask</b>.\nOnly the administrator can open it.');
+    assert.equal(await p.locator('#privacy b').count(), 0, 'text, never markup');
+    assert.equal(await p.innerText('#privacy-days'), 'Audit records are kept for 30 days.');
+    await shot(p, '13-privacy-notice');
+    await p.click('#privacy-ok');
+    assert.equal(await p.isHidden('#privacy'), true);
+    // The app only remembers the version it showed: it sends nothing back (there is no command for it).
+    assert.deepEqual(await p.evaluate(() => window.__calls.map((c) => c[0]).filter((c) => /ack|consent|notice/i.test(c))), []);
+    // Shown again when the window opens with the same version: no.
+    await p.evaluate(() => window.__listeners['askbar:shown']());
+    await p.waitForFunction(() => window.__calls.filter((c) => c[0] === 'bootstrap').length >= 2);
+    assert.equal(await p.isHidden('#privacy'), true, 'the same version is not shown twice');
+    // And after a reload (the version was kept).
+    await p.reload();
+    await p.waitForFunction(() => window.__calls.some((c) => c[0] === 'list_conversations'));
+    assert.equal(await p.isHidden('#privacy'), true, 'it was kept across a restart');
+    // The administrator changes the retention: a new version, and the new number.
+    await p.evaluate((np) => { window.__opts.policy = np; }, policy({ notice: { version: 'v2', retention_days: 1 } }));
+    await p.evaluate(() => window.__listeners['askbar:shown']());
+    await p.waitForSelector('#privacy:not([hidden])');
+    assert.equal(await p.innerText('#privacy-days'), 'Audit records are kept for 1 day.');
+    // A response that says nothing leaves what is shown as it is.
+    await p.evaluate(() => { window.__opts.policy = null; });
+    await p.evaluate(() => window.__listeners['askbar:shown']());
+    await p.waitForFunction(() => window.__calls.filter((c) => c[0] === 'bootstrap').length >= 3);
+    assert.equal(await p.isVisible('#privacy'), true);
+    // Switched off by the administrator: gone, whatever the version.
+    await p.evaluate((np) => { window.__opts.policy = np; }, policy({ notice: { enabled: false, version: 'v3' } }));
+    await p.evaluate(() => window.__listeners['askbar:shown']());
+    await p.waitForSelector('#privacy', { state: 'hidden' });
+    await p.context().close();
+  });
+  await step('pairing shows the notice again, even for a version this app showed before', async () => {
+    const p = await open(browser, { policy: policy() });
+    await p.waitForSelector('#privacy:not([hidden])');
+    await p.click('#privacy-ok');
+    assert.equal(await p.isHidden('#privacy'), true);
+    await p.evaluate(() => window.__listeners['askbar:pair']());
+    await p.fill('#pair-input', 'askbar-pair:abc');
+    await p.press('#pair-input', 'Enter');
+    await p.waitForSelector('#pair', { state: 'hidden' });
+    await p.waitForSelector('#privacy:not([hidden])');
+    assert.equal(await p.innerText('#privacy-days'), 'Audit records are kept for 30 days.');
+    await p.context().close();
+  });
+
   await browser.close();
   console.log(failures ? `\n${failures} step(s) failed` : '\nall UI steps passed');
   process.exit(failures ? 1 : 0);

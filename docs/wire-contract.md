@@ -93,7 +93,14 @@ Both follow the signed-in user, so all of a user's clients see the same values.
   `newest_first` (absent from an older server: `false`) shows a conversation newest first.
   A client may override any field locally; a local override wins, and removing it returns
   the server's default.
-- `GET /api/client/v1/settings` (server-wide display defaults) remains for older callers.
+- `GET /api/client/v1/settings` returns `{"display": {...}, "policy": {...}}`: the server-wide display defaults, and the
+  **policy** (ADR 0012), which is what an app tells its person about the service. `policy.notice` is
+  `{"enabled", "text", "retention_days", "version"}`: the privacy notice, with how many days audit records are kept and a
+  `version` that is a hash of the wording and that number. An app shows it after pairing and whenever the `version` differs from
+  the last one it showed, and shows the text as text. It records no acknowledgment anywhere, because provisioning a user assumes
+  consent. `policy.ai_warning` is `{"enabled", "text"}`: shown above the input box. `policy` is absent from an older server (read it
+  as both on with the default wording, which an older app needs no change for) and unknown to an older app (ignored). Added in 1.0;
+  `MIN_CLIENT` does not change.
 
 ## Spaces
 

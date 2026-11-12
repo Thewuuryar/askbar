@@ -1993,6 +1993,25 @@ components:
         audit_key_id:
           type: [string, 'null']
           readOnly: true
+        privacy_notice_enabled:
+          type: boolean
+          description: >-
+            Whether clients show the privacy notice after pairing and whenever it changes (ADR 0012). On by default. Left out of a
+            save, the stored value is kept.
+        privacy_notice_text:
+          type: string
+          maxLength: 2000
+          description: >-
+            Its wording. Reads as the default wording until the administrator writes their own; a save of the default wording or of
+            nothing goes back to the default. The notice also shows the audit retention in days, so it is shown again when the
+            retention changes.
+        ai_warning_enabled:
+          type: boolean
+          description: Whether clients show the AI warning above the input box. On by default.
+        ai_warning_text:
+          type: string
+          maxLength: 300
+          description: Its wording ("AI can make mistakes. Check important information." by default).
     NetworkInput:
       type: object
       required: [tls_enabled, hostname, admin_cidr, acme_staging]

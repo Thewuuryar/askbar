@@ -1158,6 +1158,10 @@
     showTimeoutMinutes();
     $('s-history-turns').value = s.history_turns == null ? 0 : s.history_turns;
     $('s-prompt').value = s.system_prompt;
+    $('s-notice-on').checked = s.privacy_notice_enabled !== false;
+    $('s-notice-text').value = s.privacy_notice_text || '';
+    $('s-warning-on').checked = s.ai_warning_enabled !== false;
+    $('s-warning-text').value = s.ai_warning_text || '';
     $('s-theme').value = s.display.theme;
     $('s-width').value = s.display.width;
     $('s-max-height').value = s.display.max_height;
@@ -1235,6 +1239,10 @@
         unseal_total_minutes: parseInt($('s-unseal-total').value, 10),
         kill_switch: $('s-kill-switch').checked,
         kill_switch_aborts_running: $('s-kill-aborts').checked,
+        privacy_notice_enabled: $('s-notice-on').checked,
+        privacy_notice_text: $('s-notice-text').value,
+        ai_warning_enabled: $('s-warning-on').checked,
+        ai_warning_text: $('s-warning-text').value,
         display: {
           theme: $('s-theme').value,
           width: parseInt($('s-width').value, 10),

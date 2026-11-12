@@ -188,6 +188,8 @@ struct Bootstrap {
     provider: String,
     model: String,
     notice: Option<String>,
+    /// The privacy notice and the AI warning (ADR 0012), or `null` when the server was not asked or does not send them.
+    policy: Option<askbar_proto::Policy>,
 }
 
 #[tauri::command]
@@ -199,7 +201,7 @@ async fn bootstrap(state: State<'_, AppState>) -> Result<Bootstrap, String> {
     if let Some(n) = lock(&state.notice).take() {
         notice = Some(n);
     }
-    Ok(Bootstrap { ui: cfg.ui, hotkey: cfg.hotkey, provider: cfg.provider, model: cfg.model, notice })
+    Ok(Bootstrap { ui: cfg.ui, hotkey: cfg.hotkey, provider: cfg.provider, model: cfg.model, notice, policy: cfg.policy })
 }
 
 /// `null` when the backend is fine; otherwise what is wrong and (for a missing model) the alternatives.

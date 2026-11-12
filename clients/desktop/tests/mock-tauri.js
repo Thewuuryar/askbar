@@ -37,6 +37,8 @@
       ),
       hotkey: 'Ctrl+Shift+Space', provider: window.__opts.provider || 'mock', model: 'mock-model',
       notice: window.__opts.notice || null,
+      // opts.policy stands for what the server says about the privacy notice and the AI warning (ADR 0012); null is "not asked".
+      policy: window.__opts.policy || null,
     }),
     // opts.status stands for the server's state: { kind, message, models? } or absent when healthy.
     server_status: () => (window.__opts.status ? JSON.parse(JSON.stringify(window.__opts.status)) : null),
