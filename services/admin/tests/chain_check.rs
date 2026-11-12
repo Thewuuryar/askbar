@@ -296,3 +296,35 @@ async fn an_older_copy_of_audit_db_put_back_is_a_rollback() {
     a.chain.check(&a, &link, true).await;
     assert_eq!(a.chain.state(), State::Ok);
 }
+
+#[tokio::test]
+async fn a_finding_is_one_alert_however_many_checks_see_it_and_a_new_one_after_it_clears() {
+    let (url, s) = stub().await;
+    let a = admin(&url).await;
+    let link = a.auditor.get().unwrap().clone();
+    let alerts = || a.notifier.notes().iter().filter(|n| n.kind == "chain_mismatch").count();
+    s.grow_to(10);
+    a.chain.check(&a, &link, false).await;
+    assert_eq!(alerts(), 0, "a chain that only grows is not an alert");
+    // A rollback, seen by three checks in a row: one alert.
+    s.entries.lock().unwrap().retain(|n, _| *n <= 6);
+    *s.head.lock().unwrap() = (6, "h6".into());
+    for _ in 0..3 {
+        a.chain.check(&a, &link, false).await;
+    }
+    assert_eq!(alerts(), 1);
+    // It turns into a rewrite (the same fault, seen differently): still one.
+    s.grow_to(12);
+    s.entries.lock().unwrap().insert(10, "other".into());
+    a.chain.check(&a, &link, false).await;
+    assert_eq!(a.chain.state(), State::Rewritten { seq: 10 });
+    assert_eq!(alerts(), 1, "one fault is one alert");
+    // It clears, and a later one is a new alert.
+    s.entries.lock().unwrap().insert(10, "h10".into());
+    a.chain.check(&a, &link, false).await;
+    assert_eq!(a.chain.state(), State::Ok);
+    s.entries.lock().unwrap().retain(|n, _| *n <= 5);
+    *s.head.lock().unwrap() = (5, "h5".into());
+    a.chain.check(&a, &link, false).await;
+    assert_eq!(alerts(), 2);
+}

@@ -56,6 +56,7 @@ async fn main() {
     let secrets =
         askbar_admin::secrets::AdminSecrets::load_or_create(&askbar_admin::server_link::secrets_dir()).unwrap_or_else(|e| die(e, 1));
     let state = askbar_admin::AdminState::build(db, Some(link.clone()), secrets);
+    link.set_notifier(state.notifier.clone());
     let caddy = askbar_admin::caddy::CaddyLink::from_env();
     if let Err(e) = caddy.share_socket_dir() {
         eprintln!("warning: Caddy may not be able to make its admin socket: {e}");
@@ -87,26 +88,40 @@ async fn main() {
     // whenever it starts.
     let gateway_token = askbar_admin::gateway_link::read_token(&askbar_admin::server_link::token_dir()).unwrap_or_else(|e| die(e, 1));
     let gateway = askbar_admin::gateway_link::GatewayLink::new(&askbar_admin::gateway_link::gateway_url(), gateway_token);
+    gateway.set_notifier(state.notifier.clone());
     let _ = state.gateway.set(gateway.clone());
     tokio::spawn(gateway.run(state.clone()));
     // Alerts are delivered by the alerter (ADR 0055): it holds the delivery settings in memory, so it is given them again
     // whenever it starts.
     let alerter_token = askbar_admin::alerter_link::read_token(&askbar_admin::server_link::token_dir()).unwrap_or_else(|e| die(e, 1));
     let alerter = askbar_admin::alerter_link::AlerterLink::new(&askbar_admin::alerter_link::alerter_url(), alerter_token);
+    alerter.set_notifier(state.notifier.clone());
     let _ = state.alerter.set(alerter.clone());
+    // What the admin tells the alerter itself (ADR 0055): its own events, over the same link and token.
+    state.notifier.set_client(askbar_service::alert_client::AlertClient::new(
+        &askbar_admin::alerter_link::alerter_url(),
+        askbar_admin::server_link::token_dir(),
+        askbar_admin::alerter_link::LINK,
+    ));
+    tokio::spawn(state.notifier.alert_client().expect("just set").drain_forever());
     tokio::spawn(alerter.run(state.clone()));
     // The Audit pages read the auditor, and the retention setting goes to it (ADR 0051).
     let auditor_token = askbar_admin::auditor_link::read_token(&askbar_admin::server_link::token_dir()).unwrap_or_else(|e| die(e, 1));
     let auditor = askbar_admin::auditor_link::AuditorLink::new(&askbar_admin::auditor_link::auditor_url(), auditor_token);
+    auditor.set_notifier(state.notifier.clone());
     let _ = state.auditor.set(auditor.clone());
     tokio::spawn(auditor.clone().run(state.clone()));
     // The head of the audit chain is compared with the one stored, every few minutes (ADR 0010 rule 7).
-    tokio::spawn(askbar_admin::chain_check::run(state.clone(), auditor));
+    tokio::spawn(askbar_admin::chain_check::run(state.clone(), auditor.clone()));
+    // What the day's and the month's tokens come to against the budget, once a minute (ADR 0055).
+    tokio::spawn(askbar_admin::budget_watch::run(state.clone(), auditor));
     // Sealed content seals itself when its time is up or its sign-in is gone (ADR 0011 rule 11).
     tokio::spawn(askbar_admin::sealed::run(state.clone()));
     // Every change is recorded with this token before it is made (ADR 0010); the admin does not start without it.
     let append_token = askbar_admin::actions::append_token(&askbar_admin::server_link::token_dir()).unwrap_or_else(|e| die(e, 1));
-    let _ = state.actions.set(askbar_admin::actions::ActionLog::new(&askbar_admin::auditor_link::auditor_url(), append_token));
+    let actions = askbar_admin::actions::ActionLog::new(&askbar_admin::auditor_link::auditor_url(), append_token);
+    actions.set_notifier(state.notifier.clone());
+    let _ = state.actions.set(actions);
     if let Err(e) = askbar_admin::serve_unix(&askbar_admin::socket_path(), askbar_admin::router(state)).await {
         die(e, 1);
     }

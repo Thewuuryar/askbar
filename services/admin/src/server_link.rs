@@ -266,6 +266,10 @@ pub struct ServerLink {
     accepted: AtomicBool,
     /// The server's last answer to a call was `401`: it does not accept this token (ADR 0024).
     rejected: AtomicBool,
+    /// Turns the first `401` of an episode into an alert (`rejected_token`).
+    token_watch: crate::notify::TokenWatch,
+    /// Turns three boot-ID changes within ten minutes into an alert (`restart_loop`).
+    restarts: crate::notify::RestartWatch,
 }
 
 impl ServerLink {
@@ -287,7 +291,15 @@ impl ServerLink {
             last_boot: StdMutex::new(None),
             accepted: AtomicBool::new(false),
             rejected: AtomicBool::new(false),
+            token_watch: crate::notify::TokenWatch::new(LINK),
+            restarts: crate::notify::RestartWatch::new("server"),
         })
+    }
+
+    /// Where an alert about this link's token goes (set once by `main`).
+    pub fn set_notifier(&self, n: Arc<crate::notify::Notifier>) {
+        self.token_watch.set_notifier(n.clone());
+        self.restarts.set_notifier(n);
     }
 
     /// True while the server answers `401` to this admin's token. Cleared by the next answer that is not.
@@ -300,6 +312,7 @@ impl ServerLink {
     /// first `401` of an episode logs one line naming the link, never the token; the next answer that is
     /// not a `401` ends the episode.
     fn saw(&self, status: u16) {
+        self.token_watch.saw(status);
         if status != 401 {
             self.accepted.store(true, Ordering::Relaxed);
             self.rejected.store(false, Ordering::Relaxed);
@@ -446,6 +459,7 @@ impl ServerLink {
             r.json::<ServerStatus>().await.ok()
         }
         .await
+        .inspect(|st| self.restarts.saw(&st.boot_id))
     }
 
     /// `poll`, and mark the snapshot to be pushed when it should be. True if the server answered.

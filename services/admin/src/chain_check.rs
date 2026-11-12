@@ -5,13 +5,14 @@
 //! Now and then it also asks the auditor for a full check of every record against its entry, which finds an edit, an
 //! insertion or a deletion inside the file.
 //!
-//! What it finds is shown as a banner and logged once when it begins (never what a record held), until the alerter
-//! delivers it as well (phase 4). A finding is worked out again at every check, so it goes away when the auditor's chain
+//! What it finds is shown as a banner, logged once when it begins (never what a record held) and sent to the alerter as
+//! `chain_mismatch`, once for each finding: a finding that goes on, or changes from a rollback to an edit, is not sent again. A finding is worked out again at every check, so it goes away when the auditor's chain
 //! is the one the admin stored again, and stays while it is not. The stored head moves forward only after a check that
 //! found the chain as it was.
 
 use crate::auditor_link::AuditorLink;
 use crate::AdminState;
+use askbar_proto::alerter::{Fields, Kind, Severity};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -155,15 +156,20 @@ impl ChainWatch {
             drop(i);
             self.state()
         };
-        self.log_change(now_state);
+        if self.log_change(now_state) {
+            state.notifier.notify(Kind::ChainMismatch, Severity::Critical, Fields::default());
+        }
     }
 
-    /// One log line when a finding begins (and one when it ends), so one fault is one line.
-    fn log_change(&self, now: State) {
+    /// One log line when a finding begins (and one when it ends), so one fault is one line. True when a finding began: the
+    /// state is one, and the one before it was not (a finding that changes into another is still the same fault).
+    fn log_change(&self, now: State) -> bool {
         let mut i = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         if i.logged.as_ref() == Some(&now) {
-            return;
+            return false;
         }
+        let finding = |s: &State| matches!(s, State::Rollback { .. } | State::Rewritten { .. } | State::Edited { .. });
+        let began = finding(&now) && !i.logged.as_ref().is_some_and(finding);
         match &now {
             State::Rollback { stored, current } => {
                 tracing::error!(
@@ -182,6 +188,7 @@ impl ChainWatch {
             _ => {}
         }
         i.logged = Some(now);
+        began
     }
 }
 

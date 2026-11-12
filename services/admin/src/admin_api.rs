@@ -1041,11 +1041,16 @@ async fn session_status(state: &AdminState, headers: &axum::http::HeaderMap) -> 
 pub(crate) fn banner_status(state: &AdminState, headers: &axum::http::HeaderMap) -> serde_json::Value {
     let browser = crate::web::session_cookie(headers).map(|t| crate::auth::AdminAuth::hash_token(&t));
     let view = browser.as_deref().and_then(|b| state.sealed.view(b));
+    // What the sealed-content session raised and what the admin's own alerts raised, oldest first.
+    let mut all = state.sealed.alerts();
+    all.extend(state.notifier.notes());
+    all.sort_by_key(|a| a.at);
+    let alerts: Vec<_> = all.iter().map(|a| serde_json::json!({ "kind": a.kind, "at": a.at, "text": a.text })).collect();
     serde_json::json!({
         "open": view.is_some(),
         "idle_left_secs": view.as_ref().map(|v| v.idle_left_secs),
         "total_left_secs": view.as_ref().map(|v| v.total_left_secs),
-        "alerts": state.sealed.alerts().iter().map(|a| serde_json::json!({ "kind": a.kind, "at": a.at, "text": a.text })).collect::<Vec<_>>(),
+        "alerts": alerts,
     })
 }
 
