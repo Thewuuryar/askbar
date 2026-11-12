@@ -4,7 +4,7 @@ Rules for AI coding agents working on Askbar (Claude Code, Codex, Cursor, Copilo
 
 "Agent" here means a coding agent working on this repo. Askbar itself has none: the model gets text in and returns text out, and stays that way through 1.0 ([ADR 0002](docs/adr/0002-v1-scope-limits-and-ship-criteria.md)). Do not add tools, a shell or file access for the model.
 
-This file, [SECURITY.md](SECURITY.md) and [docs/architecture.md](docs/architecture.md) describe the proposed v1 target. Not everything here is accepted or built yet, and the code on `main` still differs. Check each [ADR](docs/adr/README.md)'s status. Follow these rules for new work, and do not treat a difference from `main` as permission to change a boundary without the owner's approval.
+This file, [SECURITY.md](SECURITY.md) and [docs/architecture.md](docs/architecture.md) describe Askbar v1. Check each [ADR](docs/adr/README.md)'s status. Follow these rules for new work, and do not change a boundary without the owner's approval.
 
 Items marked **(proposed)** await a decision; see [docs/plan-contributor-guidelines.md](docs/plan-contributor-guidelines.md).
 
@@ -23,7 +23,7 @@ If code and `docs/architecture.md` disagree on behavior the target has already r
 
 ```sh
 cargo build --workspace
-cargo fmt --all --check                # (proposed) required once the rustfmt PR lands
+cargo fmt --all --check                # CI runs it, here and in clients/desktop
 cargo clippy --workspace --all-targets -- -D warnings   # here and in clients/desktop
 cargo test --workspace                 # services and crates; needs python3 (mock LLM)
 npm install && npm --prefix clients/desktop install && npx playwright install chromium

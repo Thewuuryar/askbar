@@ -1,6 +1,6 @@
 # Security
 
-This document describes the proposed v1 target. The code on `main` doesn't fully match it yet, and each [ADR](docs/adr/README.md) states whether it's Proposed or Accepted.
+This document describes the security design of Askbar v1. Each [ADR](docs/adr/README.md) states whether it is Proposed or Accepted.
 
 ## What each part can read
 

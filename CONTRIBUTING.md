@@ -32,7 +32,7 @@ This table lists what is on `main`; the target layout is in [ADR 0033](docs/adr/
 
 ```sh
 cargo build --workspace            # server and admin (the app is built in clients/desktop)
-cargo fmt --all --check            # (proposed) required once the rustfmt PR lands
+cargo fmt --all --check            # CI runs it, here and in clients/desktop
 cargo test --workspace             # needs python3 (a mock LLM)
 npm install && npm --prefix clients/desktop install && npx playwright install chromium
 npm test                           # names and link checks, cargo tests (both workspaces), markdown, UI and admin browser tests, mock LLM
