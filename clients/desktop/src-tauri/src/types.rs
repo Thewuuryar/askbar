@@ -10,6 +10,9 @@ pub struct Settings {
     pub hotkey: String,
     pub provider: String,
     pub model: String,
+    /// The privacy notice and the AI warning the server told this app to show (ADR 0012). `None` when the server could not be
+    /// asked (offline, or an older server without it): the window then keeps what it last showed.
+    pub policy: Option<askbar_proto::Policy>,
 }
 
 impl Settings {
@@ -20,6 +23,7 @@ impl Settings {
             hotkey: crate::client_config::ClientConfig::default().hotkey,
             provider: String::new(),
             model: String::new(),
+            policy: None,
         }
     }
 }

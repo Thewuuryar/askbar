@@ -552,8 +552,23 @@ impl Remote {
             },
             Err(_) => ModelList::default(),
         };
+        // The notice and the warning come with the server-wide settings. A server that cannot be asked, or does not know them, says
+        // nothing, and the window keeps what it last showed.
+        let policy: Option<askbar_proto::Policy> = match quick(&askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, "/settings")) {
+            Ok(req) => match i.send(req).await {
+                Ok(r) => r
+                    .json::<serde_json::Value>()
+                    .await
+                    .ok()
+                    .and_then(|v| v.get("policy").cloned())
+                    .and_then(|p| serde_json::from_value(p).ok()),
+                Err(_) => None,
+            },
+            Err(_) => None,
+        };
         let active = in_use(&models, prefs.active_model.as_deref());
         Ok(Settings {
+            policy,
             ui: merge_ui(&display, &cfg.ui),
             hotkey: cfg.hotkey.clone(),
             provider: active.map(|m| m.provider_name.clone()).unwrap_or_default(),
@@ -1597,6 +1612,11 @@ mod tests {
 
         let s = remote.settings().await.unwrap();
         assert_eq!((s.provider.as_str(), s.model.as_str()), ("mock", "mock-model"));
+        // The privacy notice and the AI warning come with it: on, with the default wording, until the administrator chooses.
+        let policy = s.policy.expect("the server sends a policy");
+        assert!(policy.notice.enabled && policy.ai_warning.enabled);
+        assert_eq!(policy.ai_warning.text, askbar_proto::DEFAULT_AI_WARNING);
+        assert_eq!(policy.notice.version, askbar_proto::notice_version(&policy.notice.text, policy.notice.retention_days));
         let picker = remote.list_models().await.unwrap();
         assert_eq!(
             (picker.models, picker.active),
@@ -1761,6 +1781,7 @@ mod tests {
             assert_eq!(settings.hotkey, ClientConfig::default().hotkey);
             assert_eq!(settings.ui.width, crate::client_config::Ui::default().width);
             assert!(settings.model.is_empty());
+            assert!(settings.policy.is_none(), "a server that cannot be asked says nothing, so the window keeps what it showed");
         }
         // Asking for history fails with a message instead of hanging.
         let r = remote_for("http://127.0.0.1:1", Some("t"), PathBuf::new());
