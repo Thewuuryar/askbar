@@ -1,6 +1,6 @@
 # The checks every pull request must pass (contributor guidelines rollout step 4): formatting, clippy,
-# the tests, the smoke test, the isolation checks against a real stack, licenses and advisories, and a
-# secret scan. Linux only; build.yml covers macOS and Windows, by hand.
+# the tests, the smoke test, the isolation checks against a real stack, licenses and advisories (and a
+# known-vulnerable fixture that `cargo deny` must fail on), a Trivy scan of the images, and a secret scan. Linux only; build.yml covers macOS and Windows, by hand.
 #
 # Actions are pinned to commit hashes and gitleaks to a checksum (ADR 0017); Renovate proposes updates.
 # Rust is pinned too, so that a new release's lints never turn every pull request red at once: raise
@@ -209,6 +209,22 @@ jobs:
         with:
           manifest-path: clients/desktop/Cargo.toml
           command: check
+      # `cargo deny` must still fail on a known-vulnerable dependency (ADR 0017, D30): a crate pinned to one is made in .deny-fixture (from
+      # tests/fixtures/deny), and the step that checks it is expected to fail. If it passes, `cargo deny` has stopped catching them.
+      - name: Known-vulnerable fixture
+        run: scripts/check-deny-fixture.sh prepare
+      - name: cargo deny (the fixture must fail)
+        id: fixture
+        continue-on-error: true
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          manifest-path: .deny-fixture/Cargo.toml
+          command: check advisories
+      - name: The fixture failed, as it must
+        if: steps.fixture.outcome == 'success'
+        run: |
+          echo "cargo deny passed on a crate with a known vulnerability: it is not catching them" >&2
+          exit 1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
@@ -218,6 +234,41 @@ jobs:
         run: |
           npm audit --audit-level=high
           npm --prefix clients/desktop audit --audit-level=high
+
+  # Trivy scans every image the stack runs, built from this checkout, for known vulnerabilities in its operating system packages and
+  # libraries (ADR 0017, D30). A finding with a fix fails the job; one with no fix yet is not reported (--ignore-unfixed); an ignore is in
+  # .trivyignore.yaml with a statement and an expiry date. It also runs weekly (the `schedule` above): a new advisory fails that run, and
+  # GitHub's email for a failed scheduled run is the CVE alert (turn the notification on, see CONTRIBUTING.md). Trivy is installed by a
+  # pinned action at a pinned version; the mock LLM of the dev profile is not scanned (it is an image of Python's, for tests only).
+  images:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      # The same build as the isolation job, from the same cache, so a run that follows it builds little.
+      - name: Build the images
+        uses: docker/bake-action@59cb1203cd42bcefd40a1b6d73b589e48c86040e # v7.5.0
+        with:
+          source: .
+          files: compose.yaml
+          load: true
+          set: |
+            *.cache-from=type=gha,scope=askbar-build
+            caddy.cache-from=type=gha,scope=askbar-caddy
+      - uses: aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514 # v0.2.6
+        with:
+          version: v0.70.0
+          cache: true
+      - name: Scan the images
+        run: |
+          failed=0
+          for image in bootstrap server admin auditor model-gateway alerter caddy cpa; do
+            echo "== askbar-$image"
+            trivy image --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --ignorefile .trivyignore.yaml \
+              --exit-code 1 --no-progress "askbar-$image:latest" || failed=1
+          done
+          exit $failed
 
   secrets:
     if: github.event_name != 'schedule'

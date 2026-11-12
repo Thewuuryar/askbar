@@ -153,6 +153,35 @@ if os.path.exists(adr16):
     else:
         print(f"{adr16}: cannot find the Defend table or the test table"); bad += 1
 
+# check-trivyignore-dates (ADR 0017, D30): every entry of Trivy's ignore file has an ID, a statement and an expiry date, so no ignore is
+# permanent. The file is read line by line: an entry starts with "- id:" (a full YAML parser is not installed everywhere).
+try:
+    lines = open(".trivyignore.yaml", encoding="utf-8").read().splitlines()
+except OSError:
+    lines = None
+    print(".trivyignore.yaml: missing"); bad += 1
+if lines is not None:
+    entries, cur = [], None
+    for raw in lines:
+        line = raw.split("#", 1)[0].rstrip() if not raw.lstrip().startswith("- ") else raw.rstrip()
+        m = re.match(r"^\s*-\s+(\w+):\s*(.*)$", line)
+        if m and m.group(1) == "id":
+            cur = {"id": m.group(2).strip()}
+            entries.append(cur)
+        elif m and cur is not None:
+            cur[m.group(1)] = m.group(2).strip()
+        else:
+            k = re.match(r"^\s+(\w+):\s*(.*)$", line)
+            if k and cur is not None:
+                cur[k.group(1)] = k.group(2).strip()
+    for e in entries:
+        if not e.get("id"):
+            print(".trivyignore.yaml: an entry has no id"); bad += 1
+        if not e.get("statement"):
+            print(f".trivyignore.yaml: {e.get('id')} has no statement (why it is ignored)"); bad += 1
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", e.get("expired_at", "")):
+            print(f".trivyignore.yaml: {e.get('id')} has no expired_at date (YYYY-MM-DD)"); bad += 1
+
 print("docs ok" if not bad else f"{bad} problem(s)")
 sys.exit(1 if bad else 0)
 PY

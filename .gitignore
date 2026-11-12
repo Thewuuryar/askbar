@@ -7,3 +7,6 @@ clients/desktop/src-tauri/gen
 *.db-shm
 .env
 data/
+
+# The throwaway crate scripts/check-deny-fixture.sh makes
+.deny-fixture/
