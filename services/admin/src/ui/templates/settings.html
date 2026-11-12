@@ -38,6 +38,22 @@
       <div class="row"><button type="submit">Save settings</button></div>
       {% call b::error_line("settings-error") %}{% endcall %}
     </form>
+    <form id="alerts-form" class="panel">
+      <h3>Alerts</h3>
+      {% call b::hint("Where Askbar sends an alert when something needs attention: an unseal, a changed retention, a failing token, a full audit disk. It uses ntfy (ntfy.sh or your own server). The server address, topic and token are secrets: they are kept encrypted, never shown again, and never leave the admin except to the alerter. Leave the token empty to keep the one that is stored.") %}{% endcall %}
+      <p class="hint">Held now: server <strong id="a-held-server">no</strong>, topic <strong id="a-held-topic">no</strong>, token <strong id="a-held-token">no</strong></p>
+      <label>ntfy server <input id="a-server" type="url" autocomplete="off" placeholder="https://ntfy.example.com"></label>
+      <label>Topic <input id="a-topic" type="password" autocomplete="off" placeholder="a long, hard-to-guess name"></label>
+      <label>Access token (optional) <input id="a-token" type="password" autocomplete="off" placeholder="leave empty to keep the stored token"></label>
+      <label class="check"><input id="a-token-clear" type="checkbox"> Remove the stored token</label>
+      <div class="row">
+        <button type="submit">Save alert settings</button>
+        <button type="button" id="a-test" class="secondary">Send a test alert</button>
+        <button type="button" id="a-remove" class="secondary">Remove alert delivery</button>
+      </div>
+      <p id="a-result" class="hint" role="status"></p>
+      {% call b::error_line("a-error") %}{% endcall %}
+    </form>
     <form id="rotate-form" class="panel">
       <h3>Rotate the audit key</h3>
       <p class="hint">Makes a new key from a new passphrase; the server seals everything from then on with it. Content sealed before stays sealed with the old key, and still needs the <strong>old</strong> passphrase to open. Neither passphrase can be recovered.</p>

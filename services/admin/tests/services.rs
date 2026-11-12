@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 #[tokio::test]
-async fn the_five_services_are_listed_from_the_services_themselves() {
+async fn the_six_services_are_listed_from_the_services_themselves() {
     let t = start(true).await;
     let (s, v) = t.call(M::GET, "/api/admin/v1/services", json!(null)).await;
     assert_eq!(s, 200, "{v}");
@@ -34,11 +34,12 @@ async fn the_five_services_are_listed_from_the_services_themselves() {
         [
             ("server".into(), "running".into()),
             ("model-gateway".into(), "running".into()),
+            ("alerter".into(), "unreachable".into()),
             ("admin".into(), "running".into()),
             ("caddy".into(), "running".into()),
             ("cpa".into(), "unreachable".into())
         ],
-        "the server and the gateway answer /status, Caddy its socket; CLIProxyAPI is not set up in this test"
+        "the server and the gateway answer /status, Caddy its socket; the alerter and CLIProxyAPI are not set up in this test"
     );
     assert!(v["services"][0]["status"].as_str().unwrap().contains("not received its configuration"), "{v}");
     assert_eq!(v["recent"], json!([]));
@@ -159,7 +160,7 @@ async fn caddy_is_restarted_by_pushing_its_configuration_again() {
 }
 
 #[tokio::test]
-async fn only_the_five_services_can_be_restarted_and_start_and_stop_are_gone() {
+async fn only_the_six_services_can_be_restarted_and_start_and_stop_are_gone() {
     let t = start(true).await;
     for name in ["controller", "caddy%2F..", "mock-llm", "auditor"] {
         assert_eq!(t.call(M::POST, &format!("/api/admin/v1/services/{name}/restart"), json!(null)).await.0, 404, "{name}");

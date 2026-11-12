@@ -71,6 +71,7 @@
       <p id="offline" class="flash error" role="alert" hidden>Server offline. The admin can't reach the Askbar server, so changes, tests, clients and backups won't work until it is back. Nothing you change now is lost or half-saved.</p>
       <p id="rejected" class="flash error" role="alert" hidden>The server rejected this admin's token. Rotate it on the Docker host with <code>docker compose run --rm bootstrap rotate admin-server</code>, then restart both: <code>docker compose restart server admin</code>. Until then the admin can't change anything on the server. The banner goes away when the server accepts the token again.</p>
       <p id="chain-alert" class="flash error" role="alert" hidden></p>
+      <p id="alerts-banner" class="flash error" role="alert" hidden></p>
       <div id="unsealed-banner" class="flash" role="status" hidden>
         <span id="unsealed-text"></span>
         <button type="button" id="unsealed-seal" class="secondary">Seal</button>
