@@ -1154,7 +1154,14 @@ if [ -n "$drill_token" ]; then
 s, body = call('GET', '/api/admin/v1/providers')
 print('PROVIDER', '$drill_pid' in body)" 2>&1 | grep '^PROVIDER ' | tail -1)
   [ "$out" = "PROVIDER True" ] && pass "after the restart the admin signs in with the same password and still has its provider" || fail "after the restart the admin: '$out'"
-  convs_after=$(drill_probe conversations https://localhost "$drill_token")
+  # The server answers 503 not_configured until the admin has pushed its settings again, so the count is asked for until it
+  # is a number (up to 90 s), as the reply check below is.
+  convs_after=""
+  for _ in $(seq 1 30); do
+    convs_after=$(drill_probe conversations https://localhost "$drill_token")
+    case "$convs_after" in [0-9]*) break;; esac
+    sleep 3
+  done
   case "$convs_before:$convs_after" in
     [0-9]*:[0-9]*) [ "$convs_after" -ge "$convs_before" ] && [ "$convs_after" -ge 1 ] && pass "the conversations the server held are still there ($convs_after)" || fail "conversations before the restart: $convs_before, after: $convs_after";;
     *) fail "could not count conversations around the restart: '$convs_before' then '$convs_after'";;
