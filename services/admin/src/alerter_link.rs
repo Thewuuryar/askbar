@@ -181,6 +181,7 @@ pub struct AlerterLink {
     watch: Mutex<Watch>,
     dirty: Notify,
     token_watch: crate::notify::TokenWatch,
+    restarts: crate::notify::RestartWatch,
 }
 
 impl AlerterLink {
@@ -198,12 +199,14 @@ impl AlerterLink {
             watch: Mutex::new(Watch::default()),
             dirty: Notify::new(),
             token_watch: crate::notify::TokenWatch::new(LINK),
+            restarts: crate::notify::RestartWatch::new("alerter"),
         })
     }
 
     /// Where an alert about this link's token goes (set once by `main`).
     pub fn set_notifier(&self, n: Arc<crate::notify::Notifier>) {
-        self.token_watch.set_notifier(n);
+        self.token_watch.set_notifier(n.clone());
+        self.restarts.set_notifier(n);
     }
 
     pub fn online(&self) -> bool {
@@ -245,6 +248,9 @@ impl AlerterLink {
             _ => None,
         };
         self.online.store(ok.is_some(), Ordering::Relaxed);
+        if let Some(st) = &ok {
+            self.restarts.saw(&st.boot_id);
+        }
         let now = crate::auth::now();
         {
             let mut w = self.watch.lock().unwrap_or_else(|e| e.into_inner());

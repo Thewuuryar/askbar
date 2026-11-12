@@ -160,6 +160,7 @@ pub struct GatewayLink {
     last_error: Mutex<Option<String>>,
     dirty: Notify,
     token_watch: crate::notify::TokenWatch,
+    restarts: crate::notify::RestartWatch,
 }
 
 impl GatewayLink {
@@ -176,12 +177,14 @@ impl GatewayLink {
             last_error: Mutex::new(None),
             dirty: Notify::new(),
             token_watch: crate::notify::TokenWatch::new(LINK),
+            restarts: crate::notify::RestartWatch::new("model-gateway"),
         })
     }
 
     /// Where an alert about this link's token goes (set once by `main`).
     pub fn set_notifier(&self, n: Arc<crate::notify::Notifier>) {
-        self.token_watch.set_notifier(n);
+        self.token_watch.set_notifier(n.clone());
+        self.restarts.set_notifier(n);
     }
 
     pub fn online(&self) -> bool {
@@ -246,6 +249,9 @@ impl GatewayLink {
             _ => None,
         };
         self.online.store(ok.is_some(), Ordering::Relaxed);
+        if let Some((_, boot)) = &ok {
+            self.restarts.saw(boot);
+        }
         if ok.is_none() {
             self.set_error(Some(match result {
                 Ok((401, _)) => "The gateway does not accept this admin's token.".to_string(),

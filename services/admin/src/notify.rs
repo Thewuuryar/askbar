@@ -123,6 +123,78 @@ impl TokenWatch {
     }
 }
 
+/// Three restarts within ten minutes are a restart loop (ADR 0051).
+pub const LOOP_CHANGES: usize = 3;
+pub const LOOP_WINDOW_SECS: i64 = 10 * 60;
+
+#[derive(Default)]
+struct Boots {
+    last: Option<String>,
+    /// When the boot ID changed, within the window.
+    changes: VecDeque<i64>,
+    alerted_at: Option<i64>,
+}
+
+/// Watches the boot ID a polled service reports: each change is a restart. Three within ten minutes is a `restart_loop`
+/// alert, and one is sent for a loop however long it goes on (another only after a quiet window). The first boot ID seen
+/// is where the count starts, not a restart. Only services the admin polls are watched; the auditor reports the admin's.
+pub struct RestartWatch {
+    service: &'static str,
+    boots: Mutex<Boots>,
+    notifier: OnceLock<Arc<Notifier>>,
+}
+
+impl RestartWatch {
+    pub fn new(service: &'static str) -> RestartWatch {
+        RestartWatch { service, boots: Mutex::default(), notifier: OnceLock::new() }
+    }
+
+    pub fn set_notifier(&self, n: Arc<Notifier>) {
+        let _ = self.notifier.set(n);
+    }
+
+    /// The boot ID the service reported just now.
+    pub fn saw(&self, boot_id: &str) {
+        self.saw_at(boot_id, crate::auth::now());
+    }
+
+    pub fn saw_at(&self, boot_id: &str, now: i64) {
+        if boot_id.is_empty() {
+            return;
+        }
+        let count = {
+            let mut b = self.boots.lock().unwrap_or_else(|e| e.into_inner());
+            let changed = b.last.as_deref().is_some_and(|last| last != boot_id);
+            b.last = Some(boot_id.to_string());
+            if !changed {
+                return;
+            }
+            b.changes.push_back(now);
+            while b.changes.front().is_some_and(|t| *t <= now - LOOP_WINDOW_SECS) {
+                b.changes.pop_front();
+            }
+            let quiet = b.alerted_at.is_none_or(|t| now - t >= LOOP_WINDOW_SECS);
+            if b.changes.len() < LOOP_CHANGES || !quiet {
+                return;
+            }
+            b.alerted_at = Some(now);
+            b.changes.len() as u32
+        };
+        if let Some(n) = self.notifier.get() {
+            n.notify(
+                Kind::RestartLoop,
+                Severity::Warning,
+                Fields {
+                    service: Some(self.service.to_string()),
+                    count: Some(count),
+                    minutes: Some((LOOP_WINDOW_SECS / 60) as u32),
+                    ..Fields::default()
+                },
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -136,6 +208,37 @@ mod tests {
         assert_eq!(n.notes().len(), MAX_NOTES);
         n.notes.lock().unwrap().iter_mut().for_each(|a| a.at -= NOTE_SECS + 1);
         assert!(n.notes().is_empty());
+    }
+
+    #[test]
+    fn three_restarts_in_ten_minutes_are_a_loop_and_one_alert_until_it_goes_quiet() {
+        let n = Arc::new(Notifier::default());
+        let w = RestartWatch::new("server");
+        w.set_notifier(n.clone());
+        let loops = || n.notes().iter().filter(|a| a.kind == "restart_loop").count();
+        w.saw_at("a", 0);
+        w.saw_at("a", 30);
+        w.saw_at("b", 60);
+        w.saw_at("c", 120);
+        assert_eq!(loops(), 0, "the first boot ID is a start, and two restarts are not a loop");
+        w.saw_at("d", 180);
+        assert_eq!(loops(), 1, "the third change within ten minutes");
+        w.saw_at("e", 240);
+        w.saw_at("f", 300);
+        assert_eq!(loops(), 1, "a loop that goes on is one alert");
+        assert!(n.notes()[0].text.contains("server restarted 3 times in 10 minutes"));
+        // Slow restarts, one every five minutes, are never three within ten.
+        let slow = RestartWatch::new("model-gateway");
+        slow.set_notifier(n.clone());
+        for (i, id) in ["a", "b", "c", "d", "e", "f"].iter().enumerate() {
+            slow.saw_at(id, 10_000 + i as i64 * 301);
+        }
+        assert_eq!(loops(), 1);
+        // After a quiet window a new loop is a new alert.
+        for (i, id) in ["g", "h", "i", "j"].iter().enumerate() {
+            w.saw_at(id, 5_000 + i as i64);
+        }
+        assert_eq!(loops(), 2);
     }
 
     #[test]

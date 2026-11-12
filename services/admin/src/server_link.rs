@@ -268,6 +268,8 @@ pub struct ServerLink {
     rejected: AtomicBool,
     /// Turns the first `401` of an episode into an alert (`rejected_token`).
     token_watch: crate::notify::TokenWatch,
+    /// Turns three boot-ID changes within ten minutes into an alert (`restart_loop`).
+    restarts: crate::notify::RestartWatch,
 }
 
 impl ServerLink {
@@ -290,12 +292,14 @@ impl ServerLink {
             accepted: AtomicBool::new(false),
             rejected: AtomicBool::new(false),
             token_watch: crate::notify::TokenWatch::new(LINK),
+            restarts: crate::notify::RestartWatch::new("server"),
         })
     }
 
     /// Where an alert about this link's token goes (set once by `main`).
     pub fn set_notifier(&self, n: Arc<crate::notify::Notifier>) {
-        self.token_watch.set_notifier(n);
+        self.token_watch.set_notifier(n.clone());
+        self.restarts.set_notifier(n);
     }
 
     /// True while the server answers `401` to this admin's token. Cleared by the next answer that is not.
@@ -455,6 +459,7 @@ impl ServerLink {
             r.json::<ServerStatus>().await.ok()
         }
         .await
+        .inspect(|st| self.restarts.saw(&st.boot_id))
     }
 
     /// `poll`, and mark the snapshot to be pushed when it should be. True if the server answered.

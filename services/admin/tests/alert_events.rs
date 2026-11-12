@@ -204,3 +204,57 @@ notified!(
     askbar_admin::auditor_link::AuditorLink,
     askbar_admin::actions::ActionLog
 );
+
+/// A stand-in whose `GET /status` reports the boot ID in `boot` on every link a service's status has (ADR 0028).
+async fn reporting(boot: Arc<Mutex<String>>) -> String {
+    let app = axum::Router::new().fallback(move || {
+        let boot = boot.clone();
+        async move {
+            axum::Json(json!({
+                "config_version": 1, "boot_id": *boot.lock().unwrap(),
+                "last_delivery_ok_at": null, "last_delivery_failed_at": null, "queued": 0, "dropped": 0
+            }))
+        }
+    });
+    format!("http://{}", spawn(app).await)
+}
+
+#[tokio::test]
+async fn three_restarts_in_ten_minutes_of_a_polled_service_are_one_restart_loop_alert_for_it() {
+    use askbar_admin::{alerter_link::AlerterLink, gateway_link::GatewayLink, server_link::ServerLink};
+    let r = rig().await;
+    let boot = Arc::new(Mutex::new("boot-0".to_string()));
+    let url = reporting(boot.clone()).await;
+    let server = ServerLink::new(&url, "t".into());
+    let gateway = GatewayLink::new(&url, "t".into());
+    let alerter = AlerterLink::new(&url, "t".into());
+    for n in [&server as &dyn Notified, &gateway, &alerter] {
+        n.attach(r.state.notifier.clone());
+    }
+    let poll = || async {
+        server.check().await;
+        gateway.status_now().await;
+        alerter.status_now().await;
+    };
+    poll().await;
+    // Two restarts are not a loop. The same boot ID polled again is not a restart.
+    for id in ["boot-1", "boot-1", "boot-2"] {
+        *boot.lock().unwrap() = id.into();
+        poll().await;
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    assert!(r.seen.lock().unwrap().is_empty(), "two restarts are not a loop");
+    *boot.lock().unwrap() = "boot-3".into();
+    poll().await;
+    let events = r.events(3).await;
+    assert_admin_events(&events);
+    let mut services: Vec<&str> = events.iter().map(|e| e["fields"]["service"].as_str().unwrap()).collect();
+    services.sort();
+    assert_eq!(services, ["alerter", "model-gateway", "server"]);
+    assert!(events.iter().all(|e| e["kind"] == "restart_loop" && e["fields"]["count"] == 3 && e["fields"]["minutes"] == 10), "{events:?}");
+    // The loop going on is not another alert.
+    *boot.lock().unwrap() = "boot-4".into();
+    poll().await;
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    assert_eq!(r.seen.lock().unwrap().len(), 3);
+}
