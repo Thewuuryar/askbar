@@ -710,17 +710,20 @@ async fn an_email_configuration_that_cannot_be_used_is_refused_without_repeating
 
 /// A stand-in for GitHub's latest-release API: it answers with `body` and status, and keeps the header names and the
 /// `User-Agent` of each request it gets.
+/// The `User-Agent` and the header names of one request.
+type Asked = Arc<Mutex<Vec<(String, Vec<String>)>>>;
+
 struct ReleaseMock {
     url: String,
     body: Arc<Mutex<String>>,
     status: Arc<AtomicU16>,
-    asked: Arc<Mutex<Vec<(String, Vec<String>)>>>,
+    asked: Asked,
 }
 
 async fn release_mock(tag: &str) -> ReleaseMock {
     let body = Arc::new(Mutex::new(json!({ "tag_name": tag, "name": "x", "draft": false, "prerelease": false }).to_string()));
     let status = Arc::new(AtomicU16::new(200));
-    let asked: Arc<Mutex<Vec<(String, Vec<String>)>>> = Default::default();
+    let asked: Asked = Default::default();
     let (b, st, a) = (body.clone(), status.clone(), asked.clone());
     let app = axum::Router::new().route(
         "/repos/Thewuuryar/askbar/releases/latest",
