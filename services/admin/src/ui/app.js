@@ -47,6 +47,7 @@
     { id: 'settings', load: loadSettings },
     { id: 'network', load: loadNetwork },
     { id: 'security', load: loadKeys },
+    { id: 'backup', load: loadBackupKey },
   ];
   let appShown = false;
   function registerTab(tab) {
@@ -71,8 +72,7 @@
   function showPasswordChange() {
     hideAll();
     show($('setup'), true);
-    show($('setup-audit-form'), false);
-    show($('setup-audit-done'), false);
+    for (const id of ['setup-audit-form', 'setup-audit-done', 'setup-backup-form', 'setup-backup-done']) show($(id), false);
     show($('setup-password-form'), true);
     $('setup-current').focus();
   }
@@ -87,17 +87,59 @@
     // The audit passphrase is part of setup: without a key the server records nothing it may keep,
     // and refuses to start replies. An install from before audit keys is asked on its next visit.
     if (status.audit_key_set === false) return showAuditSetup();
+    // The backup passphrase is part of setup too (ADR 0013): without a key no backup can be encrypted. An install from before the
+    // backup key is asked on its next visit.
+    if (status.backup_key_set === false) return showBackupSetup();
     showApp();
   }
 
   function showAuditSetup() {
     hideAll();
     show($('setup'), true);
-    show($('setup-password-form'), false);
-    show($('setup-audit-done'), false);
+    for (const id of ['setup-password-form', 'setup-audit-done', 'setup-backup-form', 'setup-backup-done']) show($(id), false);
     show($('setup-audit-form'), true);
     $('setup-audit').focus();
   }
+
+  function showBackupSetup() {
+    hideAll();
+    show($('setup'), true);
+    for (const id of ['setup-password-form', 'setup-audit-form', 'setup-audit-done', 'setup-backup-done']) show($(id), false);
+    show($('setup-backup-signout'), false);
+    show($('setup-backup-form'), true);
+    $('setup-backup').focus();
+  }
+
+  // The backup passphrase (ADR 0013, D22): the same rules as the audit one, and it needs a sign-in within the last 10 minutes, so a
+  // slow first run is told to sign in again. The passphrase fields are emptied the moment it is sent.
+  on('setup-backup-form', 'submit', async (e) => {
+    e.preventDefault();
+    const err = $('setup-backup-error');
+    show(err, false);
+    const fail = (m) => { err.textContent = m; show(err, true); };
+    const pass = $('setup-backup').value;
+    if (pass !== $('setup-backup2').value) return fail('The two passphrases do not match.');
+    if ([...pass].length < 20) return fail('The passphrase must be at least 20 characters.');
+    if (!$('setup-backup-stored').checked) return fail('Confirm that you stored the passphrase: it cannot be recovered.');
+    try {
+      const r = await api('PUT', '/api/admin/v1/setup/backup-key', { passphrase: pass, confirm: $('setup-backup2').value });
+      $('setup-backup').value = '';
+      $('setup-backup2').value = '';
+      $('setup-backup-stored').checked = false;
+      $('setup-backup-fingerprint').textContent = r.fingerprint;
+      show($('setup-backup-form'), false);
+      show($('setup-backup-done'), true);
+    } catch (ex) {
+      fail(ex.message);
+      // A sign-in that is too old needs signing in again; the setup screen has no other way to sign out.
+      show($('setup-backup-signout'), ex.status === 403);
+    }
+  });
+  on('setup-backup-signout', 'click', async () => {
+    try { await api('DELETE', '/api/admin/v1/session'); } catch (_) { /* already signed out */ }
+    route();
+  });
+  on('setup-backup-continue', 'click', () => route());
 
   on('setup-audit-form', 'submit', async (e) => {
     e.preventDefault();
@@ -880,6 +922,37 @@
     } catch (ex) {
       $('key-error').textContent = ex.message;
       show($('key-error'), true);
+    }
+  });
+
+  // ------------------------------------------------------- backup key (ADR 0013)
+
+  // The fingerprint and the public name only: the passphrase is typed, sent and emptied, and nothing here ever holds it.
+  async function loadBackupKey() {
+    const k = await api('GET', '/api/admin/v1/backup/key');
+    $('bk-fingerprint').textContent = k.set ? k.fingerprint : 'none yet';
+    $('bk-count').textContent = k.set && k.keys > 1 ? '(' + (k.keys - 1) + ' earlier key' + (k.keys - 1 === 1 ? '' : 's') + ' retired)' : '';
+    show($('bk-error'), false);
+  }
+
+  on('backup-key-form', 'submit', async (e) => {
+    e.preventDefault();
+    const err = $('bk-error');
+    show(err, false);
+    const fail = (m) => { err.textContent = m; show(err, true); };
+    const pass = $('bk-pass').value;
+    if (pass !== $('bk-pass2').value) return fail('The two passphrases do not match.');
+    if ([...pass].length < 20) return fail('The passphrase must be at least 20 characters.');
+    if (!$('bk-stored').checked) return fail('Confirm that you stored the passphrase: it cannot be recovered.');
+    if (!confirm('Rotate the backup key? Backups made from now on need the new passphrase; older ones keep the old one.')) return;
+    try {
+      await api('POST', '/api/admin/v1/backup/rotate-key', { passphrase: pass, confirm: $('bk-pass2').value });
+      for (const id of ['bk-pass', 'bk-pass2']) $(id).value = '';
+      $('bk-stored').checked = false;
+      await loadBackupKey();
+      flash('Backup key rotated. Take a new backup now.');
+    } catch (ex) {
+      fail(ex.message);
     }
   });
 

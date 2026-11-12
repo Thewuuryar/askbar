@@ -162,6 +162,8 @@ async function waitForPort(port) {
     assert.equal(await page.isHidden('#app'), true, 'nothing else opens before the password is changed');
   });
   const AUDIT_PASS = 'correct horse battery staple 42';
+const BACKUP_PASS = 'e2e backup passphrase, its own 1';
+const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
   await step('setup: the published password must be changed, to something else, then the audit passphrase step opens', async () => {
     await page.fill('#setup-current', 'admin');
     await page.fill('#setup-password', PASSWORD);
@@ -205,7 +207,7 @@ async function waitForPort(port) {
     const st = await (await fetch(`http://127.0.0.1:${adminPort}/api/admin/v1/setup`, { headers: { 'x-askbar-admin': '1' } })).json();
     assert.equal(st.audit_key_set, false, 'no key yet');
   });
-  await step('setup: saving shows the key id, then Continue opens the app', async () => {
+  await step('setup: saving shows the key id, then Continue goes on to the backup passphrase', async () => {
     await page.check('#setup-audit-stored');
     await page.click('#setup-audit-form button[type=submit]');
     await page.waitForSelector('#setup-audit-done:not([hidden])');
@@ -213,8 +215,48 @@ async function waitForPort(port) {
     assert.match(keyId, /^[0-9a-f]{16}$/);
     assert.equal(await page.inputValue('#setup-audit').catch(() => ''), '', 'the passphrase field is cleared');
     assert.equal((await page.content()).includes(AUDIT_PASS), false, 'the passphrase is not left in the page');
-    assert.match(await page.innerText('#setup-next'), /Network[\s\S]*Providers[\s\S]*Clients/, 'the next steps, in order');
     await page.click('#setup-audit-continue');
+    await page.waitForSelector('#setup-backup-form:not([hidden])');
+    assert.equal(await page.isHidden('#app'), true, 'setup does not finish at the audit key');
+    assert.equal(await page.getAttribute('#setup-backup', 'type'), 'password');
+    assert.match(await page.innerText('#setup-backup-form'), /cannot be recovered/);
+  });
+  await step('setup: the backup passphrase must match, be 20+ characters, differ from the audit passphrase and be confirmed as stored (ADR 0013)', async () => {
+    await page.evaluate(() => document.getElementById('setup-backup-form').noValidate = true);
+    await page.fill('#setup-backup', BACKUP_PASS);
+    await page.fill('#setup-backup2', BACKUP_PASS + 'x');
+    await page.check('#setup-backup-stored');
+    await page.click('#setup-backup-form button[type=submit]');
+    assert.match(await page.innerText('#setup-backup-error'), /do not match/);
+    await page.fill('#setup-backup', 'too short');
+    await page.fill('#setup-backup2', 'too short');
+    await page.click('#setup-backup-form button[type=submit]');
+    assert.match(await page.innerText('#setup-backup-error'), /at least 20/);
+    // The audit passphrase is refused by the admin, which knows it can open an audit key.
+    await page.fill('#setup-backup', AUDIT_PASS);
+    await page.fill('#setup-backup2', AUDIT_PASS);
+    await page.click('#setup-backup-form button[type=submit]');
+    await page.waitForFunction(() => /different from the audit passphrase/.test(document.getElementById('setup-backup-error').textContent));
+    // Without the confirmation nothing is created, even with a good passphrase.
+    await page.fill('#setup-backup', BACKUP_PASS);
+    await page.fill('#setup-backup2', BACKUP_PASS);
+    await page.uncheck('#setup-backup-stored');
+    await page.click('#setup-backup-form button[type=submit]');
+    assert.match(await page.innerText('#setup-backup-error'), /stored the passphrase/);
+    assert.equal(await page.isHidden('#app'), true);
+    const st = await (await fetch(`http://127.0.0.1:${adminPort}/api/admin/v1/setup`, { headers: { 'x-askbar-admin': '1' } })).json();
+    assert.equal(st.backup_key_set, false, 'no backup key yet');
+  });
+  await step('setup: saving shows the fingerprint and the next steps, then Continue opens the app', async () => {
+    await page.check('#setup-backup-stored');
+    await page.click('#setup-backup-form button[type=submit]');
+    await page.waitForSelector('#setup-backup-done:not([hidden])');
+    assert.match(await page.innerText('#setup-backup-fingerprint'), /^[0-9a-f]{4}(-[0-9a-f]{4}){3}$/);
+    assert.equal(await page.inputValue('#setup-backup').catch(() => ''), '', 'the passphrase field is cleared');
+    assert.equal(await page.inputValue('#setup-backup2').catch(() => ''), '');
+    assert.equal((await page.content()).includes(BACKUP_PASS), false, 'the passphrase is not left in the page');
+    assert.match(await page.innerText('#setup-next'), /Network[\s\S]*Providers[\s\S]*Clients/, 'the next steps, in order');
+    await page.click('#setup-backup-continue');
     await page.waitForSelector('#app:not([hidden])');
     assert.equal(await page.isHidden('#setup'), true);
     assert.match(await page.innerText('#providers'), /No providers yet/);
@@ -941,6 +983,34 @@ async function waitForPort(port) {
     page.off('request', onRequest);
     assert.deepEqual(external, [], 'a request left the admin site');
     await openPage('providers');
+  });
+  await step('backup: the key is shown by its fingerprint, and rotating asks twice, confirms, retires the old key and never shows a passphrase (ADR 0013)', async () => {
+    await openPage('backup');
+    await page.waitForFunction(() => /^[0-9a-f]{4}(-[0-9a-f]{4}){3}$/.test(document.getElementById('bk-fingerprint').textContent));
+    const before = await page.innerText('#bk-fingerprint');
+    assert.equal(await page.innerText('#bk-count'), '', 'no earlier keys');
+    await page.evaluate(() => { document.getElementById('backup-key-form').noValidate = true; });
+    await page.fill('#bk-pass', BACKUP_PASS_2);
+    await page.fill('#bk-pass2', BACKUP_PASS_2 + 'x');
+    await page.check('#bk-stored');
+    await page.click('#backup-key-form button[type=submit]');
+    assert.match(await page.innerText('#bk-error'), /do not match/);
+    await page.fill('#bk-pass2', BACKUP_PASS_2);
+    await page.fill('#bk-pass', AUDIT_PASS);
+    await page.fill('#bk-pass2', AUDIT_PASS);
+    page.once('dialog', (d) => d.accept());
+    await page.click('#backup-key-form button[type=submit]');
+    await page.waitForFunction(() => /different from the audit passphrase/.test(document.getElementById('bk-error').textContent));
+    assert.equal(await page.innerText('#bk-fingerprint'), before, 'the refusal changed nothing');
+    await page.fill('#bk-pass', BACKUP_PASS_2);
+    await page.fill('#bk-pass2', BACKUP_PASS_2);
+    page.once('dialog', (d) => d.accept());
+    await page.click('#backup-key-form button[type=submit]');
+    await page.waitForFunction((was) => document.getElementById('bk-fingerprint').textContent !== was && /1 earlier key retired/.test(document.getElementById('bk-count').textContent), before);
+    assert.equal(await page.inputValue('#bk-pass'), '', 'the passphrase field is cleared');
+    assert.equal((await page.content()).includes(BACKUP_PASS_2), false, 'the passphrase is not left in the page');
+    const status = await page.evaluate(async () => (await fetch('/api/admin/v1/backup/key', { headers: { 'x-askbar-admin': '1' } })).text());
+    assert.ok(!status.includes('AGE-SECRET-KEY') && !status.includes('protected'), 'the protected key is not returned');
   });
   await step('audit: the tab loads, has its five views and counts a real request', async () => {
     await page.evaluate(async ({ xss, mockUrl }) => {
