@@ -14,6 +14,7 @@
 //! `GET /status`, `PUT /config`, `POST /restart` (and later `POST /exports`). Their paths are in
 //! [`routes`].
 
+pub mod alert_client;
 pub mod audit_client;
 pub mod configured;
 pub mod ids;
