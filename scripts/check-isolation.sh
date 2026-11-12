@@ -750,6 +750,30 @@ print(json.loads(body)['results'][0]['ok'] if s == 200 and json.loads(body)['res
 for p in ('/api/admin/v1/alerts', '/api/admin/v1/services', '/api/admin/v1/status', '/api/admin/v1/settings'):
     print(call('GET', p)[1])" 2>&1)
     printf '%s' "$resp" | grep -q -e "$ALMARK" -e "$ALTOK" && fail "an admin response returned the marker" || pass "no admin response returns the marker topic or token"
+    # The auditor's rules (ADR 0051, ADR 0055), end to end: an unseal reaches the sink and holds nothing of the passphrase, and a
+    # gateway that is stopped for more than five minutes is a `component_silent` that names its link. (The passphrase is the one the
+    # check set up for the audit key above; an install that already had a key refuses it and this says so.)
+    UNSEAL_PASS='isolation check passphrase, long enough'
+    out=$(admin_script "$(admin_login)
+s, body = call('POST', '/api/admin/v1/audit/session', {'passphrase': '$UNSEAL_PASS'})
+print(s)
+call('DELETE', '/api/admin/v1/audit/session')" 2>&1 | tail -1)
+    case "$out" in 200|201) pass "sealed content was opened through the admin (to see its alert)";; *) fail "the unseal for the alert check answered '$out'";; esac
+    got=""
+    for i in $(seq 1 15); do
+      seen=$(sink_seen); case "$seen" in *"Audit content opened"*) got=1; break;; esac; sleep 2
+    done
+    [ -n "$got" ] && pass "an unseal reached the sink as an alert" || fail "no unseal alert reached the sink"
+    case "$seen" in *"isolation check passphrase"*) fail "the unseal alert holds the passphrase";; *) pass "the unseal alert holds no passphrase";; esac
+    docker stop "$GW" >/dev/null 2>&1
+    got=""
+    for i in $(seq 1 60); do
+      seen=$(sink_seen); case "$seen" in *"Nothing has come from model-gateway-auditor"*) got=1; break;; esac; sleep 10
+    done
+    [ -n "$got" ] && pass "a gateway stopped for more than five minutes raised component_silent, naming its link" || fail "no component_silent reached the sink within ten minutes of stopping the gateway"
+    docker start "$GW" >/dev/null 2>&1
+    for i in $(seq 1 30); do [ "$(docker inspect -f '{{.State.Health.Status}}' "$GW")" = healthy ] && break; sleep 2; done
+    [ "$(docker inspect -f '{{.State.Health.Status}}' "$GW")" = healthy ] && pass "the gateway is healthy again" || fail "the gateway did not come back"
     # Put it back: no channel, and the sink gone.
     admin_script "$(admin_login)
 print(call('PUT', '/api/admin/v1/alerts', {'ntfy': None})[0])" >/dev/null 2>&1

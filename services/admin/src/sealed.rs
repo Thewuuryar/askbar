@@ -16,8 +16,8 @@ use std::collections::{BTreeMap, VecDeque};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-pub const DEFAULT_IDLE_MINUTES: u32 = 15;
-pub const DEFAULT_TOTAL_MINUTES: u32 = 60;
+pub const DEFAULT_IDLE_MINUTES: u32 = askbar_proto::audit::DEFAULT_UNSEAL_IDLE_MINUTES;
+pub const DEFAULT_TOTAL_MINUTES: u32 = askbar_proto::audit::DEFAULT_UNSEAL_TOTAL_MINUTES;
 pub const MAX_MINUTES: u32 = 12 * 60;
 /// A sign-in older than this does not start a session.
 pub const FRESH_SIGNIN_SECS: i64 = 10 * 60;

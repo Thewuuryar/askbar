@@ -4,6 +4,11 @@
 //! Sealed content is only ever ciphertext here: nothing in this file can hold a prompt or a reply as text.
 //! The caller of a request is the one its token belongs to; none of these bodies names one.
 
+/// How long sealed content stays open without use, and in all, until the admin says otherwise (ADR 0011 rule 11). The admin
+/// applies them, and the auditor, which sees the settings only as records, compares a change with them.
+pub const DEFAULT_UNSEAL_IDLE_MINUTES: u32 = 15;
+pub const DEFAULT_UNSEAL_TOTAL_MINUTES: u32 = 60;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 

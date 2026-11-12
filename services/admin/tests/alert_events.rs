@@ -351,3 +351,39 @@ async fn a_budget_at_eighty_and_at_a_hundred_percent_is_one_alert_each_for_the_p
         (json!("warning"), json!({ "period": "month", "percent": 80 }))
     );
 }
+
+#[tokio::test]
+async fn the_admin_tells_the_auditor_its_boot_id_with_its_own_token_and_keeps_trying_until_it_is_taken() {
+    use askbar_admin::actions::ActionLog;
+    let seen: Arc<Mutex<Vec<(String, Value)>>> = Arc::default();
+    let status = Arc::new(Mutex::new(503u16));
+    let app = axum::Router::new().fallback({
+        let (seen, status) = (seen.clone(), status.clone());
+        move |req: axum::extract::Request| {
+            let (seen, status) = (seen.clone(), status.clone());
+            async move {
+                let (path, auth) = (req.uri().path().to_string(), req.headers()["authorization"].to_str().unwrap().to_string());
+                let body = axum::body::to_bytes(req.into_body(), 1 << 12).await.unwrap();
+                seen.lock().unwrap().push((format!("{path} {auth}"), serde_json::from_slice(&body).unwrap_or_default()));
+                (StatusCode::from_u16(*status.lock().unwrap()).unwrap(), axum::Json(json!({ "interrupted": 0 })))
+            }
+        }
+    });
+    let url = format!("http://{}", spawn(app).await);
+    let task = tokio::spawn(ActionLog::new(&url, "admapp_secret".into()).hello_until_done("boot-xyz".into()));
+    for _ in 0..100 {
+        if !seen.lock().unwrap().is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(!task.is_finished(), "a 503 is tried again");
+    *status.lock().unwrap() = 200;
+    tokio::time::timeout(std::time::Duration::from_secs(5), task).await.expect("it stops once the auditor takes it").unwrap();
+    let seen = seen.lock().unwrap();
+    assert!(seen.len() >= 2);
+    assert!(
+        seen.iter().all(|(who, body)| who == "/api/audit/v1/hello Bearer admapp_secret" && body == &json!({ "boot_id": "boot-xyz" })),
+        "{seen:?}"
+    );
+}

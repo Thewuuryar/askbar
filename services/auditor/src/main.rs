@@ -76,6 +76,11 @@ async fn main() {
     let limits = Limits::default();
     let recorder = askbar_audit::Recorder::spawn(db, limits.max_queued);
     let auditor = Auditor::new(recorder, limits, disk::free_space_of(&dir, Duration::from_secs(2)));
+    // The rules that send alerts (plan step 4.2, ADR 0055), over the link to the alerter. Without its token nothing is sent.
+    let alerts = askbar_auditor::alert_link::client(&askbar_auditor::token_dir());
+    tokio::spawn(alerts.clone().drain_forever());
+    let auditor = auditor.with_alerts(alerts);
+    tokio::spawn(askbar_auditor::rules_every_30_seconds(auditor.clone()));
     // Docker does not restart an unhealthy container; the watchdog does, by exiting (ADR 0005).
     askbar_service::restart::start_watchdog(healthy);
     tokio::spawn(askbar_auditor::retention_daily(auditor.clone()));
@@ -94,6 +99,10 @@ async fn main() {
         let listener =
             tokio::net::TcpListener::bind(addr).await.unwrap_or_else(|e| die(format!("cannot listen on {addr} for access lines: {e}"), 1));
         tracing::info!(%addr, "the auditor takes Caddy's access lines");
+        // With a listener for them, a long stretch of replies and no access line is Caddy being silent (ADR 0051).
+        if let Some(rules) = auditor.rules() {
+            rules.watch_caddy();
+        }
         tokio::spawn(askbar_auditor::ingest::serve(listener, auditor.clone()));
     }
     let app = askbar_auditor::router(auditor, askbar_auditor::links(&token_dir));

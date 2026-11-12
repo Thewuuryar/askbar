@@ -96,6 +96,25 @@ impl ActionLog {
         self.token_watch.set_notifier(n);
     }
 
+    /// Tell the auditor which process this is (`POST /hello`), until it takes it. The auditor counts the admin's restarts from
+    /// these (three within ten minutes is a `restart_loop` alert, ADR 0051); the admin has no span to end, so it learns nothing.
+    /// Runs in the background and gives up only when it succeeds.
+    pub async fn hello_until_done(self: Arc<Self>, boot_id: String) {
+        let url = format!("{}{}/hello", self.base, askbar_proto::paths::AUDIT_V1);
+        let mut wait = Duration::from_millis(500);
+        loop {
+            let sent = self.http.post(&url).bearer_auth(&self.token).json(&json!({ "boot_id": boot_id })).send().await;
+            if let Ok(resp) = sent {
+                self.token_watch.saw(resp.status().as_u16());
+                if resp.status().is_success() {
+                    return;
+                }
+            }
+            tokio::time::sleep(wait).await;
+            wait = (wait * 2).min(Duration::from_secs(30));
+        }
+    }
+
     /// `POST /admin-actions`. `Ok` once the auditor has the record committed.
     pub async fn record(&self, r: &AdminActionStart) -> Result<(), NotRecorded> {
         let url = format!("{}{}/admin-actions", self.base, askbar_proto::paths::AUDIT_V1);

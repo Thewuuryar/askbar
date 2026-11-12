@@ -101,6 +101,9 @@ pub async fn read_lines<R: tokio::io::AsyncRead + Unpin>(stream: R, auditor: &Au
         match parse_line(&buf) {
             Some(line) => {
                 auditor.recorder.access_log(line);
+                if let Some(rules) = auditor.rules() {
+                    rules.fed(&crate::rules::Fed::AccessLine, crate::now());
+                }
             }
             None if buf.iter().all(u8::is_ascii_whitespace) => {}
             None => {

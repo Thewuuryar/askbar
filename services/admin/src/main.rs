@@ -78,7 +78,9 @@ async fn main() {
         Err(e) => eprintln!("warning: CLIProxyAPI is not managed here: {e}"),
     }
     // POST /api/admin/v1/services/admin/restart: answer, then exit; Docker starts the admin again.
-    let _ = state.restarter.set(askbar_service::restart::Restarter::new(askbar_service::status::BootId::new(), || {}));
+    let boot = askbar_service::status::BootId::new();
+    let boot_id = boot.as_str().to_string();
+    let _ = state.restarter.set(askbar_service::restart::Restarter::new(boot, || {}));
     // Docker does not restart an unhealthy container; the watchdog does, by exiting (ADR 0005).
     let socket = askbar_admin::socket_path();
     askbar_service::restart::start_watchdog(move || askbar_admin::healthcheck(&socket));
@@ -121,6 +123,8 @@ async fn main() {
     let append_token = askbar_admin::actions::append_token(&askbar_admin::server_link::token_dir()).unwrap_or_else(|e| die(e, 1));
     let actions = askbar_admin::actions::ActionLog::new(&askbar_admin::auditor_link::auditor_url(), append_token);
     actions.set_notifier(state.notifier.clone());
+    // Which process this is, so the auditor can tell when the admin keeps restarting (ADR 0051).
+    tokio::spawn(actions.clone().hello_until_done(boot_id));
     let _ = state.actions.set(actions);
     if let Err(e) = askbar_admin::serve_unix(&askbar_admin::socket_path(), askbar_admin::router(state)).await {
         die(e, 1);
