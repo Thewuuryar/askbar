@@ -127,6 +127,91 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '429':
           $ref: '#/components/responses/TooMany'
+  /api/admin/v1/alerts:
+    get:
+      operationId: getAlerts
+      summary: Which delivery settings are held, and how delivery is going. Session-only.
+      description: >-
+        The ntfy server, topic and access token are secrets (ADR 0055): stored encrypted with the admin's own key, never
+        returned, and never in an error. This answers with booleans.
+      security:
+        - adminSession: []
+      responses:
+        '200':
+          description: Which settings are held.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AlertsView'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    put:
+      operationId: putAlerts
+      summary: Set or remove how alerts are delivered. Session-only. The alerter takes the settings first.
+      description: >-
+        The settings go to the alerter, which checks them (the server address, the topic, the token); only if it takes them
+        are they saved. If it does not answer, nothing is changed (502 `server_unavailable`). `ntfy: null` removes the
+        channel. In `ntfy`, a `token` that is absent or null keeps the token already stored, an empty string removes it, and
+        anything else replaces it. Recorded like every change, without a value. An admin API key cannot call it, so a script
+        cannot redirect or silence the alerts.
+      security:
+        - adminSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AlertsInput'
+      responses:
+        '200':
+          description: Saved.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AlertsView'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '502':
+          $ref: '#/components/responses/ServerUnavailable'
+  /api/admin/v1/alerts/test:
+    post:
+      operationId: testAlerts
+      summary: Send a test alert now and say what each channel did. Session-only.
+      description: >-
+        Asks the alerter to send a test alert through every channel that is set up, and answers with the real result: whether
+        each worked and, if not, one word for why (`unreachable`, `refused`, `unauthorized` or `timeout`), never the server's
+        words. With no channel set up `results` is empty.
+      security:
+        - adminSession: []
+      responses:
+        '200':
+          description: One result for each channel that is set up.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [results]
+                properties:
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      required: [channel, ok]
+                      properties:
+                        channel:
+                          type: string
+                          enum: [ntfy, email]
+                        ok:
+                          type: boolean
+                        problem:
+                          type: string
+                          enum: [unreachable, refused, unauthorized, timeout]
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '502':
+          $ref: '#/components/responses/ServerUnavailable'
   /api/admin/v1/cpa:
     get:
       operationId: getCpa
@@ -294,8 +379,8 @@ paths:
   /api/admin/v1/services:
     get:
       operationId: listServices
-      summary: How the server, the admin, Caddy and CLIProxyAPI are doing, and the last ten restarts.
-      description: Session-only. Each state comes from the service itself (the server's status, Caddy's admin socket, CLIProxyAPI's API); there is no controller (ADR 0005).
+      summary: How the server, the model-gateway, the alerter, the admin, Caddy and CLIProxyAPI are doing, and the last ten restarts.
+      description: Session-only. Each state comes from the service itself (the server's, the gateway's and the alerter's status, Caddy's admin socket, CLIProxyAPI's API); there is no controller (ADR 0005).
       security:
         - adminSession: []
       responses:
@@ -337,7 +422,7 @@ paths:
         required: true
         schema:
           type: string
-          enum: [server, model-gateway, admin, caddy, cpa]
+          enum: [server, model-gateway, alerter, admin, caddy, cpa]
     post:
       operationId: restartService
       summary: Restart a service, without a controller (ADR 0005).
@@ -347,14 +432,15 @@ paths:
         process answers (a new boot ID), at most a minute; replies being written end as interrupted, and the
         server's 30-second cooldown after it starts is passed on as 429. `model-gateway` (ADR 0054): asks its
         `POST /restart`, waits for a new boot ID, then pushes its configuration, provider keys included, since they
-        were in the memory that went; its cooldown is passed on the same way. `admin`: answers 202 and exits; this page
+        were in the memory that went; its cooldown is passed on the same way. `alerter` (ADR 0055): the same, and the
+        delivery settings are pushed again. `admin`: answers 202 and exits; this page
         reconnects when Docker has started it again. `caddy`: pushes its configuration again, which Caddy applies
         live. `cpa`: asks its supervisor (ADR 0037) and waits for CLIProxyAPI to answer again, at most a minute.
       security:
         - adminSession: []
       responses:
         '200':
-          description: The service after the restart (server, model-gateway, caddy, cpa).
+          description: The service after the restart (server, model-gateway, alerter, caddy, cpa).
           content:
             application/json:
               schema:
@@ -458,6 +544,12 @@ paths:
                   token_rejected:
                     type: boolean
                     description: The server answers 401 to this admin's token. Clears with the next answer that is not a 401.
+                  alerts:
+                    type: string
+                    enum: [ok, not_set_up, failing, unreachable]
+                    description: >-
+                      Whether alerts are being delivered (ADR 0055): `not_set_up` when no channel is, `failing` when delivery has
+                      not worked for half an hour, `unreachable` when the alerter has not answered for a minute. The banner's text.
                   sealed_content:
                     type: object
                     description: >-
@@ -1470,7 +1562,7 @@ components:
       properties:
         name:
           type: string
-          enum: [server, model-gateway, admin, caddy, cpa]
+          enum: [server, model-gateway, alerter, admin, caddy, cpa]
         state:
           type: string
           description: Whether it answers (`running`), does not (`unreachable`), or is restarting itself (`restarting`, the admin only).
@@ -1537,6 +1629,43 @@ components:
           description: Optional; `admin` when given.
         password:
           type: string
+    AlertsView:
+      type: object
+      required: [ntfy, banner]
+      properties:
+        ntfy:
+          type: object
+          required: [server, topic, token]
+          properties:
+            server:
+              type: boolean
+            topic:
+              type: boolean
+            token:
+              type: boolean
+        banner:
+          type: string
+          enum: [ok, not_set_up, failing, unreachable]
+    AlertsInput:
+      type: object
+      additionalProperties: false
+      properties:
+        ntfy:
+          type: [object, 'null']
+          additionalProperties: false
+          required: [server, topic]
+          properties:
+            server:
+              type: string
+              writeOnly: true
+              description: An http or https address of the ntfy server.
+            topic:
+              type: string
+              writeOnly: true
+            token:
+              type: [string, 'null']
+              writeOnly: true
+              description: Absent or null keeps the stored token; an empty string removes it.
     ChangePassword:
       type: object
       required: [current, new]

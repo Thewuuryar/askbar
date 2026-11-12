@@ -173,6 +173,19 @@
     checkServer();
   });
 
+  // Alert delivery (ADR 0055): a banner when no channel is set up, when delivery has not worked for half an hour, or when the
+  // alerter does not answer. The sentences are the admin's own, set as text.
+  const ALERTS_BANNER = {
+    not_set_up: 'Alerts are not set up, so nothing will tell you when something needs attention. Set up ntfy under Settings, then send a test alert.',
+    failing: 'Alert delivery has not worked for half an hour. Check the ntfy settings under Settings and send a test alert.',
+    unreachable: 'The alerter does not answer, so no alert is delivered. Look at it on the Services page.',
+  };
+  function showAlertsBanner(state) {
+    const text = ALERTS_BANNER[state] || '';
+    $('alerts-banner').textContent = text;
+    show($('alerts-banner'), !!text);
+  }
+
   // The "server offline" banner: ask the admin how its link to the server is, now and then.
   let statusTimer = null;
   async function checkServer() {
@@ -186,6 +199,7 @@
       const bad = ['rollback', 'rewritten', 'edited'].includes(chain.state);
       $('chain-alert').textContent = bad ? chain.detail : '';
       show($('chain-alert'), bad);
+      showAlertsBanner(st.alerts);
       showSealed(st.sealed_content || {});
     } catch (_) { /* signed out, or the admin itself is away */ }
   }
@@ -221,6 +235,7 @@
 
   const SERVICE_INFO = {
     server: { title: 'Server', what: 'the Askbar server (chats, history, provider calls)', warn: 'Replies being written end as interrupted, and apps say "server offline" until it is back (under a minute).' },
+    alerter: { title: 'Alerter', what: 'the alerter (delivers alerts)', warn: 'Alerts wait or are lost for a few seconds, and the admin gives it its delivery settings again.' },
     'model-gateway': { title: 'Model gateway', what: 'the model gateway (provider calls and provider keys)', warn: 'Its provider keys leave its memory, and the admin gives them back within seconds.' },
     admin: { title: 'Admin', what: 'the admin (this site)', warn: 'This page stops answering for a few seconds, then reloads, and you sign in again.' },
     caddy: { title: 'Caddy (HTTPS front end)', what: 'the HTTPS front end', warn: 'Its configuration is pushed again; connections may drop for a moment.' },
@@ -1089,7 +1104,60 @@
     $('s-hide-on-blur').checked = !!s.display.hide_on_blur;
     $('s-newest-first').checked = !!s.display.newest_first;
     show($('settings-error'), false);
+    loadAlerts().catch(() => {});
   }
+
+  // ---- How alerts are delivered (ADR 0055). The values are secrets: they are never shown, so the fields are emptied after a
+  // save, and an empty token means "keep the one that is stored".
+  const yesNo = (held) => (held ? 'yes' : 'no');
+  async function loadAlerts() {
+    const a = await api('GET', '/api/admin/v1/alerts');
+    $('a-held-server').textContent = yesNo(a.ntfy.server);
+    $('a-held-topic').textContent = yesNo(a.ntfy.topic);
+    $('a-held-token').textContent = yesNo(a.ntfy.token);
+    $('a-token-clear').checked = false;
+    show($('a-error'), false);
+    showAlertsBanner(a.banner);
+  }
+  function alertsError(ex) {
+    $('a-error').textContent = ex.message;
+    show($('a-error'), true);
+  }
+  on('alerts-form', 'submit', async (e) => {
+    e.preventDefault();
+    show($('a-error'), false);
+    $('a-result').textContent = '';
+    const ntfy = { server: $('a-server').value.trim(), topic: $('a-topic').value.trim() };
+    if ($('a-token-clear').checked) ntfy.token = '';
+    else if ($('a-token').value.trim()) ntfy.token = $('a-token').value.trim();
+    try {
+      await api('PUT', '/api/admin/v1/alerts', { ntfy });
+      for (const id of ['a-server', 'a-topic', 'a-token']) $(id).value = '';
+      await loadAlerts();
+      flash('Alert settings saved. Send a test alert to check that it arrives.');
+    } catch (ex) { alertsError(ex); }
+  });
+  on('a-test', 'click', async () => {
+    show($('a-error'), false);
+    $('a-result').textContent = 'Sending a test alert...';
+    try {
+      const r = await api('POST', '/api/admin/v1/alerts/test');
+      const why = { unreachable: 'the server did not answer', refused: 'the server refused it', unauthorized: 'the token was not accepted', timeout: 'the server took too long' };
+      $('a-result').textContent = r.results.length
+        ? r.results.map((c) => c.channel + ': ' + (c.ok ? 'delivered, check your phone' : 'failed, ' + (why[c.problem] || 'unknown problem'))).join('. ')
+        : 'No delivery channel is set up, so nothing was sent.';
+    } catch (ex) { $('a-result').textContent = ''; alertsError(ex); }
+  });
+  on('a-remove', 'click', async () => {
+    if (!confirm('Stop delivering alerts? Nothing will tell you when something needs attention until you set it up again.')) return;
+    show($('a-error'), false);
+    try {
+      await api('PUT', '/api/admin/v1/alerts', { ntfy: null });
+      $('a-result').textContent = '';
+      await loadAlerts();
+      flash('Alert delivery removed.');
+    } catch (ex) { alertsError(ex); }
+  });
 
   on('settings-form', 'submit', async (e) => {
     e.preventDefault();

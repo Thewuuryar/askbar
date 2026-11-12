@@ -141,6 +141,8 @@ pub async fn status(State(state): St, headers: axum::http::HeaderMap) -> Json<se
         "error": error,
         "token_rejected": rejected,
         "audit_chain": state.chain.status(),
+        // Whether alerts are being delivered: `ok`, `not_set_up`, `failing` (for half an hour) or `unreachable` (ADR 0055).
+        "alerts": crate::alerts::view(&state).await.banner,
         "sealed_content": banner_status(&state, &headers),
     }))
 }

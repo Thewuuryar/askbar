@@ -71,11 +71,14 @@ if [ -z "$URL" ]; then
   if [ ! -x "$AUBIN" ]; then cargo build -q -p askbar-auditor || { fail "build the auditor"; exit 1; }; fi
   GBIN="${ASKBAR_GATEWAY_BIN:-target/debug/askbar-model-gateway}"
   if [ ! -x "$GBIN" ]; then cargo build -q -p askbar-model-gateway || { fail "build the gateway"; exit 1; }; fi
+  ALBIN="${ASKBAR_ALERTER_BIN:-target/debug/askbar-alerter}"
+  if [ ! -x "$ALBIN" ]; then cargo build -q -p askbar-alerter || { fail "build the alerter"; exit 1; }; fi
   API_PORT=$(free_port); SERVER_API_PORT=$(free_port); MOCK_PORT=$(free_port)
   AUDIT_PORT=$(free_port); GW_SERVER_PORT=$(free_port); GW_ADMIN_PORT=$(free_port)
+  AL_AUDITOR_PORT=$(free_port); AL_ADMIN_PORT=$(free_port); NTFY_PORT=$(free_port)
   URL="http://127.0.0.1:$API_PORT"
   SOCK="$WORK/admin-run/admin.sock"
-  mkdir -p "$WORK/data" "$WORK/admin-run" "$WORK/audit"
+  mkdir -p "$WORK/data" "$WORK/admin-run" "$WORK/audit" "$WORK/alerter-data"
   # The tokens come from bootstrap, as in the stack (ADR 0049); here its volumes are plain directories.
   ASKBAR_BOOTSTRAP_ROOT="$WORK/credentials" "$BBIN" >/dev/null || { fail "bootstrap makes the tokens"; exit 1; }
   python3 -u tests/e2e/mock_llm.py "$MOCK_PORT" >/dev/null 2>&1 & PIDS+=($!)
@@ -85,10 +88,15 @@ if [ -z "$URL" ]; then
   ASKBAR_GATEWAY_SERVER_ADDR="127.0.0.1:$GW_SERVER_PORT" ASKBAR_GATEWAY_ADMIN_ADDR="127.0.0.1:$GW_ADMIN_PORT" \
     ASKBAR_GATEWAY_TOKEN_DIR="$WORK/credentials/model-gateway-token" ASKBAR_AUDIT_API_URL="http://127.0.0.1:$AUDIT_PORT" \
     "$GBIN" >"$WORK/gateway.log" 2>&1 & PIDS+=($!)
+  # The alerter (ADR 0055) and a stand-in ntfy server it delivers to. The admin gives it its settings once they are entered.
+  python3 -u tests/e2e/ntfy_sink.py "$NTFY_PORT" >/dev/null 2>&1 & PIDS+=($!)
+  ASKBAR_ALERTER_AUDITOR_ADDR="127.0.0.1:$AL_AUDITOR_PORT" ASKBAR_ALERTER_ADMIN_ADDR="127.0.0.1:$AL_ADMIN_PORT" \
+    ASKBAR_ALERTER_TOKEN_DIR="$WORK/credentials/alerter-token" ASKBAR_ALERTER_DATA_DIR="$WORK/alerter-data" ASKBAR_AUDIT_API_URL="http://127.0.0.1:$AUDIT_PORT" \
+    "$ALBIN" >"$WORK/alerter.log" 2>&1 & PIDS+=($!)
   # The admin service: its own database and secrets, a unix socket and no TCP port.
   ASKBAR_ADMIN_SOCKET="$SOCK" ASKBAR_ADMIN_DATA_DIR="$WORK/admin-data" ASKBAR_ADMIN_SECRETS_DIR="$WORK/admin-secrets" \
     ASKBAR_ADMIN_TOKEN_DIR="$WORK/credentials/admin-token" ASKBAR_SERVER_API_URL="http://127.0.0.1:$SERVER_API_PORT" ASKBAR_PUBLIC_URL="$URL" \
-    ASKBAR_GATEWAY_URL="http://127.0.0.1:$GW_ADMIN_PORT" ASKBAR_AUDIT_API_URL="http://127.0.0.1:$AUDIT_PORT" "$ABIN" >"$WORK/admin.log" 2>&1 & PIDS+=($!)
+    ASKBAR_GATEWAY_URL="http://127.0.0.1:$GW_ADMIN_PORT" ASKBAR_ALERTER_URL="http://127.0.0.1:$AL_ADMIN_PORT" ASKBAR_AUDIT_API_URL="http://127.0.0.1:$AUDIT_PORT" "$ABIN" >"$WORK/admin.log" 2>&1 & PIDS+=($!)
   for _ in $(seq 100); do [ -S "$SOCK" ] && break; sleep 0.1; done
   # The server: the API, and a server listener that only the admin's token opens.
   ASKBAR_CLIENT_API_ADDR="127.0.0.1:$API_PORT" \
@@ -282,6 +290,30 @@ if [ $LOCAL = 1 ]; then
   else
     fail "make an admin API key"
   fi
+fi
+
+# 10c. Alerts (local, ADR 0055): the admin gives the alerter its delivery settings, a test alert reaches a stand-in ntfy server with the
+# token, and the topic and token are in no answer of the admin and no log.
+if [ $LOCAL = 1 ]; then
+  if admin PUT /api/admin/v1/alerts "{\"ntfy\":{\"server\":\"http://127.0.0.1:$NTFY_PORT\",\"topic\":\"smoke-topic-77\",\"token\":\"smoke-token-77\"}}" >"$WORK/alerts.json" 2>/dev/null \
+     && [ "$(json "$WORK/alerts.json" "d['ntfy']['topic'] and d['ntfy']['token']")" = "True" ]; then pass "the admin takes the alert delivery settings and the alerter accepts them"; else fail "the admin takes the alert delivery settings"; fi
+  if admin POST /api/admin/v1/alerts/test >"$WORK/alerts-test.json" 2>/dev/null && [ "$(json "$WORK/alerts-test.json" "d['results'][0]['ok']")" = "True" ]; then
+    pass "a test alert reports that it was delivered"
+  else
+    fail "a test alert reports that it was delivered" "$(cat "$WORK/alerts-test.json" 2>/dev/null)"
+  fi
+  curl -fsS "http://127.0.0.1:$NTFY_PORT/_seen" >"$WORK/ntfy-seen.json" 2>/dev/null || echo '[]' >"$WORK/ntfy-seen.json"
+  if [ "$(json "$WORK/ntfy-seen.json" "d[0]['title'] == 'Askbar test alert' and d[0]['authorization'] == 'Bearer smoke-token-77' and d[0]['path'] == '/smoke-topic-77'")" = "True" ]; then
+    pass "the stand-in ntfy server received the test alert, on the topic, with the token"
+  else
+    fail "the stand-in ntfy server received the test alert" "$(cat "$WORK/ntfy-seen.json")"
+  fi
+  LEAK=""
+  for f in "$WORK/alerts.json" "$WORK/alerts-test.json" "$WORK/admin.log" "$WORK/alerter.log" "$WORK/auditor.log"; do
+    grep -q -e 'smoke-topic-77' -e 'smoke-token-77' "$f" 2>/dev/null && LEAK="$LEAK $f"
+  done
+  admin GET /api/admin/v1/status 2>/dev/null | grep -q -e 'smoke-topic-77' -e 'smoke-token-77' && LEAK="$LEAK status"
+  if [ -z "$LEAK" ]; then pass "the alert topic and token are in no admin answer and no log"; else fail "the alert topic and token are in no admin answer and no log" "found in:$LEAK"; fi
 fi
 
 # 11. What only a person can check.
