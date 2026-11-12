@@ -936,8 +936,6 @@
     await loadSchedule();
   }
 
-  const when = (t) => (t ? new Date(t * 1000).toLocaleString() : 'never');
-
   async function loadSchedule() {
     const v = await api('GET', '/api/admin/v1/backup/schedule');
     const d = v.destination;
