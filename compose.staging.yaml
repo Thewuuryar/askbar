@@ -1,0 +1,38 @@
+# Runs a release candidate next to the real stack, on the same host (docs/guide.md, "Staging a release"). Use it from a checkout of the
+# candidate's tag, with that candidate's compose.release.yaml:
+#
+#   docker compose -p askbar-staging -f compose.release.yaml -f compose.staging.yaml --profile dev up -d
+#
+# It changes only what would collide with a stack that is already running:
+#   - every fixed container_name gets the askbar-staging- prefix (the project name -p askbar-staging already keeps the networks and
+#     volumes apart, but Docker allows a container name once on the host);
+#   - Caddy publishes 8443 and 80 -> 8080 instead of 443 and 80 (`!override` replaces the list; without it Compose would add to it,
+#     and Caddy would still ask for 443; it needs Docker Compose 2.24 or later);
+#   - the server's data directory is ./data-staging (STAGING_DATA_DIR), not ./data, so staging never opens the real data. It must be
+#     writable by uid 10002, like DATA_DIR. The two volumes of the server are repeated here, because `!override` replaces the list:
+#     keep them in step with compose.yaml (tests/staging-compose.test.sh checks it).
+# The `dev` profile adds the mock LLM, so a staged release can answer without a real provider (the guide says how to add it as a
+# provider). Nothing here changes an image, a network or a hardening setting.
+services:
+  bootstrap:
+    container_name: askbar-staging-bootstrap
+  server:
+    container_name: askbar-staging-server
+    volumes: !override
+      - ${STAGING_DATA_DIR:-./data-staging}:/data
+      - server-token:/server-token:ro
+  admin:
+    container_name: askbar-staging-admin
+  auditor:
+    container_name: askbar-staging-auditor
+  model-gateway:
+    container_name: askbar-staging-model-gateway
+  alerter:
+    container_name: askbar-staging-alerter
+  caddy:
+    container_name: askbar-staging-caddy
+    ports: !override
+      - "8443:443"
+      - "8080:80"
+  cpa:
+    container_name: askbar-staging-cpa

@@ -363,6 +363,32 @@ The admin site's **Services** page shows whether the server, `model-gateway`, th
 
 **Server environment** (already set in `compose.yaml`; useful without Docker): `ASKBAR_CLIENT_API_ADDR`, `ASKBAR_SERVER_API_ADDR` (`ip:port`, or `host:port` resolved once at start-up to exactly one address; never `0.0.0.0`), `ASKBAR_SERVER_TOKEN_HASH_FILE`, `ASKBAR_DATA_DIR`, `ASKBAR_SERVER_TOKEN_DIR` (its tokens for the gateway and the auditor), `ASKBAR_GATEWAY_URL` and `ASKBAR_AUDIT_API_URL`. **Model-gateway:** `ASKBAR_GATEWAY_SERVER_ADDR`, `ASKBAR_GATEWAY_ADMIN_ADDR`, `ASKBAR_GATEWAY_TOKEN_DIR`, `ASKBAR_AUDIT_API_URL`. **Admin:** `ASKBAR_ADMIN_SOCKET`, `ASKBAR_ADMIN_DATA_DIR`, `ASKBAR_ADMIN_SECRETS_DIR`, `ASKBAR_ADMIN_TOKEN_DIR`, `ASKBAR_SERVER_API_URL`, `ASKBAR_GATEWAY_URL`, `ASKBAR_AUDIT_API_URL`, `ASKBAR_CADDY_SOCKET`, `ASKBAR_CADDY_SECRETS_DIR`, `ASKBAR_PUBLIC_URL`. **Auditor:** `ASKBAR_AUDIT_API_ADDRS` (one `host:port` for each network, such as `auditor-admin-host:8083`), `ASKBAR_AUDIT_INGEST_ADDR` (`auditor-ingest-host:8086`, Caddy's access lines), `ASKBAR_AUDIT_DIR`, `ASKBAR_AUDITOR_TOKEN_DIR`.
 
+### Staging a release
+
+Before a release candidate goes further, run it next to the real stack on the same host, from a checkout of its tag, with `compose.staging.yaml`. The override changes only what would collide: container names (`askbar-staging-<service>`), Caddy's ports (**8443** and **8080**, so the real stack keeps 443 and 80), and the server's data directory (`./data-staging`, never `./data`). Networks and volumes are kept apart by the project name. It needs Docker Compose 2.24 or later (`docker compose version`), for the `!override` tag.
+
+1. Check out the candidate's tag and take its `compose.release.yaml` from the draft prerelease (verify its signature first; the guide says how under "Verifying images and files"):
+
+   ```sh
+   git clone --branch v1.0.0-rc.1 https://github.com/Thewuuryar/askbar askbar-staging
+   cd askbar-staging
+   cp .env.example .env
+   mkdir -p data-staging && sudo chown 10002:10002 data-staging
+   ```
+
+2. Start it. `ASKBAR_PUBLIC_URL` makes the pairing keys name the staging port:
+
+   ```sh
+   ASKBAR_PUBLIC_URL=https://<host>:8443 docker compose -p askbar-staging -f compose.release.yaml -f compose.staging.yaml --profile dev up -d
+   ```
+
+3. Open `https://<host>:8443/admin` and set it up as in [First run](#first-run). With the `dev` profile the mock model runs too: on **Providers** add an OpenAI-compatible provider with the address `http://mock-llm:8765/v1`, the model `m` and any key; then approve `m` under **Approved models** and make it the default. That is how the dev stack does it, and the failure drills in `scripts/check-isolation.sh` do the same.
+4. **Clients** > add a user, make a pairing key, and pair a client against `https://<host>:8443` (the key carries the address).
+5. Test what the [release checklist](adr/0002-v1-scope-limits-and-ship-criteria.md) asks for that a staged stack can show: a fresh deployment and a paired client working end to end, the backup and the restore drill (under 30 minutes), and the client on each platform. A real certificate by the HTTP-01 proof needs port 80, which staging does not publish (it is 8080), so test that with the Cloudflare proof or on the real host.
+6. Remove it: `docker compose -p askbar-staging -f compose.release.yaml -f compose.staging.yaml --profile dev down -v`, then `rm -rf data-staging`.
+
+`scripts/check-isolation.sh` is for the development stack only. It takes `COMPOSE_PROJECT_NAME` for networks and volumes, but names containers directly (`askbar-server`, `askbar-caddy` and the rest), so it cannot run against a staging project and is not meant to.
+
 ### Backup and recovery
 
 Four things to back up, **separately**:
