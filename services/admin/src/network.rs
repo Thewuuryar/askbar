@@ -10,6 +10,26 @@ use serde::{Deserialize, Serialize};
 use std::net::IpAddr;
 use std::sync::Arc;
 
+/// How Caddy proves to Let's Encrypt that it owns the host name (ADR 0015).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum AcmeChallenge {
+    /// The Cloudflare DNS challenge: needs the stored API token, and works for a host name that is not reachable from the internet.
+    #[default]
+    Dns,
+    /// HTTP-01: needs public port 80 and no token; the host name must be reachable from the internet.
+    Http,
+}
+
+impl AcmeChallenge {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AcmeChallenge::Dns => "dns",
+            AcmeChallenge::Http => "http",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct Network {
     pub tls_enabled: bool,
@@ -21,18 +41,26 @@ pub struct Network {
     /// When off (the default) anyone who can reach the admin site may try to log in.
     #[serde(default)]
     pub allowlist_enabled: bool,
+    /// `dns` (the default) or `http`. Absent in a body keeps the DNS challenge, as every earlier client sent it.
+    #[serde(default)]
+    pub acme_challenge: AcmeChallenge,
 }
 
 pub fn load(conn: &rusqlite::Connection) -> rusqlite::Result<Network> {
-    conn.query_row("SELECT tls_enabled, hostname, allowlist, staging_ca, allowlist_enabled FROM network_settings WHERE id = 1", [], |r| {
-        Ok(Network {
-            tls_enabled: r.get::<_, i64>(0)? != 0,
-            hostname: r.get(1)?,
-            admin_cidr: r.get(2)?,
-            acme_staging: r.get::<_, i64>(3)? != 0,
-            allowlist_enabled: r.get::<_, i64>(4)? != 0,
-        })
-    })
+    conn.query_row(
+        "SELECT tls_enabled, hostname, allowlist, staging_ca, allowlist_enabled, acme_challenge FROM network_settings WHERE id = 1",
+        [],
+        |r| {
+            Ok(Network {
+                tls_enabled: r.get::<_, i64>(0)? != 0,
+                hostname: r.get(1)?,
+                admin_cidr: r.get(2)?,
+                acme_staging: r.get::<_, i64>(3)? != 0,
+                allowlist_enabled: r.get::<_, i64>(4)? != 0,
+                acme_challenge: if r.get::<_, String>(5)? == "http" { AcmeChallenge::Http } else { AcmeChallenge::Dns },
+            })
+        },
+    )
 }
 
 /// The encrypted token as stored, if any.
@@ -41,6 +69,14 @@ pub fn stored_token(conn: &rusqlite::Connection) -> Option<Vec<u8>> {
         .ok()
         .flatten()
         .filter(|v| !v.is_empty())
+}
+
+/// Whether a host name can only be reached from inside a network (so HTTP-01, which Let's Encrypt runs from the internet, cannot
+/// work for it): a local, private or reserved suffix.
+pub fn looks_private(h: &str) -> bool {
+    ["local", "localhost", "localdomain", "lan", "home", "internal", "intranet", "corp", "private", "test", "example", "invalid", "arpa"]
+        .iter()
+        .any(|s| h == *s || h.ends_with(&format!(".{s}")))
 }
 
 /// A DNS name: dot-separated labels of letters, digits and hyphens. No scheme, port or path.
@@ -159,8 +195,14 @@ async fn save(state: &AdminState, input: NetworkInput) -> Result<(), Failure> {
         if n.hostname.is_empty() {
             return Err(bad("A hostname is required to turn on HTTPS."));
         }
-        if !token_after {
-            return Err(bad("A Cloudflare API token is required to turn on HTTPS."));
+        match n.acme_challenge {
+            AcmeChallenge::Dns if !token_after => {
+                return Err(bad("A Cloudflare API token is required to turn on HTTPS with the DNS challenge. Or choose the HTTP-01 challenge, which needs no token."));
+            }
+            AcmeChallenge::Http if looks_private(&n.hostname) => {
+                return Err(bad("HTTP-01 needs a host name that Let's Encrypt can reach from the internet, and this one looks private. Use the DNS challenge for it."));
+            }
+            _ => {}
         }
     }
     if n.allowlist_enabled && cidrs.is_none() {
@@ -172,8 +214,8 @@ async fn save(state: &AdminState, input: NetworkInput) -> Result<(), Failure> {
     let fail = |_| err(StatusCode::INTERNAL_SERVER_ERROR, "Could not save the network settings.");
     let tx = db.conn().unchecked_transaction().map_err(fail)?;
     tx.execute(
-        "UPDATE network_settings SET tls_enabled = ?1, hostname = ?2, allowlist = ?3, staging_ca = ?4, allowlist_enabled = ?5 WHERE id = 1",
-        rusqlite::params![n.tls_enabled, n.hostname, n.admin_cidr, n.acme_staging, n.allowlist_enabled],
+        "UPDATE network_settings SET tls_enabled = ?1, hostname = ?2, allowlist = ?3, staging_ca = ?4, allowlist_enabled = ?5, acme_challenge = ?6 WHERE id = 1",
+        rusqlite::params![n.tls_enabled, n.hostname, n.admin_cidr, n.acme_staging, n.allowlist_enabled, n.acme_challenge.as_str()],
     )
     .map_err(fail)?;
     if let Some(t) = new_token {

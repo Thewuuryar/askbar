@@ -157,3 +157,73 @@ async fn network_needs_a_session() {
         assert_eq!(r.status(), 401, "{p}");
     }
 }
+
+#[tokio::test]
+async fn the_dns_challenge_is_the_default_and_a_body_that_does_not_say_keeps_it() {
+    let t = start(true).await;
+    let (_, v) = t.call(M::GET, "/api/admin/v1/network", json!({})).await;
+    assert_eq!(v["acme_challenge"], "dns", "every install starts on the DNS challenge");
+    // What every client sent before the setting existed: no `acme_challenge`.
+    let (st, v) = t.save(full()).await;
+    assert_eq!((st, v["acme_challenge"].as_str()), (200, Some("dns")), "{v}");
+    assert!(t.stored_token().await.is_some());
+}
+
+#[tokio::test]
+async fn http_01_needs_no_token_and_is_saved_and_read_back() {
+    let t = start(true).await;
+    let http =
+        json!({ "tls_enabled": true, "hostname": "Askbar.Orraitu.com", "admin_cidr": "", "acme_staging": false, "acme_challenge": "http" });
+    let (st, v) = t.save(http.clone()).await;
+    assert_eq!(st, 200, "{v}");
+    assert_eq!(
+        (v["acme_challenge"].as_str(), v["has_token"].as_bool(), v["tls_enabled"].as_bool()),
+        (Some("http"), Some(false), Some(true))
+    );
+    let (_, again) = t.call(M::GET, "/api/admin/v1/network", json!({})).await;
+    assert_eq!(again["acme_challenge"], "http", "it persists");
+    // Back to the DNS challenge needs a token, and says what to do instead.
+    let mut dns = http.clone();
+    dns["acme_challenge"] = json!("dns");
+    let (st, e) = t.save(dns.clone()).await;
+    assert_eq!(st, 400);
+    assert!(e["detail"].as_str().unwrap().contains("HTTP-01"), "{e}");
+    assert_eq!(t.call(M::GET, "/api/admin/v1/network", json!({})).await.1["acme_challenge"], "http", "nothing changed");
+    dns["cloudflare_token"] = json!(TOKEN);
+    assert_eq!(t.save(dns).await.0, 200);
+    // A stored token stays while HTTP-01 is chosen (it can be chosen back without typing it again).
+    let mut back = http;
+    back.as_object_mut().unwrap().remove("cloudflare_token");
+    let (st, v) = t.save(back).await;
+    assert_eq!((st, v["has_token"].as_bool(), v["acme_challenge"].as_str()), (200, Some(true), Some("http")));
+}
+
+#[tokio::test]
+async fn http_01_is_refused_for_a_host_name_the_internet_cannot_reach_and_an_unknown_challenge_is_refused() {
+    let t = start(true).await;
+    for private in ["nas.local", "askbar.lan", "askbar.home.arpa", "box.internal", "askbar.home", "askbar.localdomain", "askbar.example"] {
+        let (st, e) = t
+            .save(json!({ "tls_enabled": true, "hostname": private, "admin_cidr": "", "acme_staging": false, "acme_challenge": "http" }))
+            .await;
+        assert_eq!(st, 400, "{private}: {e}");
+        assert!(e["detail"].as_str().unwrap().contains("DNS challenge"), "{e}");
+    }
+    // The DNS challenge works for them, and HTTP-01 with HTTPS off is not checked (nothing asks Let's Encrypt).
+    assert_eq!(
+        t.save(json!({ "tls_enabled": true, "hostname": "nas.local", "admin_cidr": "", "acme_staging": false, "cloudflare_token": TOKEN }))
+            .await
+            .0,
+        200
+    );
+    assert_eq!(
+        t.save(json!({ "tls_enabled": false, "hostname": "nas.local", "admin_cidr": "", "acme_staging": false, "acme_challenge": "http" }))
+            .await
+            .0,
+        200
+    );
+    for bad in ["tls-alpn", "HTTP", "", "none"] {
+        let (st, _) =
+            t.save(json!({ "tls_enabled": false, "hostname": "", "admin_cidr": "", "acme_staging": false, "acme_challenge": bad })).await;
+        assert!(st == 400 || st == 422, "{bad:?} gave {st}");
+    }
+}

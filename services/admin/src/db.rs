@@ -188,6 +188,10 @@ const MIGRATIONS: &[&str] = &[
          to_enc       BLOB    NOT NULL,
          updated_at   INTEGER NOT NULL
      );",
+    // How Caddy proves it owns the host name to Let's Encrypt (plan step 5.3, ADR 0015, D19): `dns` (the Cloudflare DNS challenge, which
+    // needs the stored token and works for a private address) or `http` (HTTP-01, which needs public port 80 and no token). Every
+    // install that had a certificate set up used the DNS challenge, so that is the default.
+    "ALTER TABLE network_settings ADD COLUMN acme_challenge TEXT NOT NULL DEFAULT 'dns' CHECK (acme_challenge IN ('dns', 'http'));",
 ];
 
 /// The schema steps, in order (for the upgrade tests).
@@ -407,7 +411,8 @@ mod tests {
     #[test]
     fn a_database_from_before_email_alerts_keeps_its_ntfy_settings_and_gains_an_empty_email_table() {
         let conn = Connection::open_in_memory().unwrap();
-        let before = MIGRATIONS.len() - 1;
+        // The database as it was just before the step that adds the email table (found by its text, so later steps do not move it).
+        let before = MIGRATIONS.iter().position(|m| m.contains("CREATE TABLE alert_email_settings")).expect("the email step");
         for (i, sql) in MIGRATIONS.iter().take(before).enumerate() {
             conn.execute_batch(sql).unwrap();
             if i == 0 {
@@ -432,6 +437,44 @@ mod tests {
                 rusqlite::params![port, tls],
             );
             assert!(r.is_err(), "{port} {tls}");
+        }
+    }
+
+    #[test]
+    fn a_database_from_before_the_challenge_setting_keeps_its_network_settings_and_stays_on_dns() {
+        let conn = Connection::open_in_memory().unwrap();
+        let before = MIGRATIONS.iter().position(|m| m.contains("ADD COLUMN acme_challenge")).expect("the challenge step");
+        for (i, sql) in MIGRATIONS.iter().take(before).enumerate() {
+            conn.execute_batch(sql).unwrap();
+            if i == 0 {
+                conn.execute_batch(&format!("PRAGMA application_id = {APPLICATION_ID}")).unwrap();
+            }
+        }
+        conn.execute_batch(&format!("PRAGMA user_version = {before}")).unwrap();
+        conn.execute_batch(
+            "UPDATE network_settings SET hostname = 'askbar.example.org', tls_enabled = 1, staging_ca = 1, cloudflare_token = x'0102'",
+        )
+        .unwrap();
+        assert!(conn.prepare("SELECT acme_challenge FROM network_settings").is_err(), "the column is not there before the step");
+        let db = AdminDb::init(conn).unwrap();
+        let v: i64 = db.conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(v as usize, MIGRATIONS.len());
+        let row: (String, i64, i64, String, Vec<u8>) = db
+            .conn
+            .query_row(
+                "SELECT hostname, tls_enabled, staging_ca, acme_challenge, cloudflare_token FROM network_settings WHERE id = 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            row,
+            ("askbar.example.org".to_string(), 1, 1, "dns".to_string(), vec![1, 2]),
+            "nothing changed, and it is still the DNS challenge"
+        );
+        db.conn.execute("UPDATE network_settings SET acme_challenge = 'http'", []).unwrap();
+        for bad in ["tls-alpn", "", "HTTP"] {
+            assert!(db.conn.execute("UPDATE network_settings SET acme_challenge = ?1", [bad]).is_err(), "{bad:?}");
         }
     }
 

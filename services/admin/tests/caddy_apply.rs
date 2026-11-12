@@ -178,3 +178,34 @@ async fn the_ui_is_served_with_its_security_headers() {
     assert_eq!(none.get(format!("{}/admin", t.adm)).send().await.unwrap().status(), 303);
     assert_eq!(none.get(format!("{}/", t.adm)).send().await.unwrap().status(), 404);
 }
+
+#[tokio::test]
+async fn with_http_01_caddy_gets_no_dns_plugin_and_no_token_file() {
+    let t = start(true).await;
+    // DNS first: the token file is there.
+    assert_eq!(t.save(settings(true)).await.0, 200);
+    assert_eq!(t.token_file().as_deref(), Some(TOKEN));
+    // Then HTTP-01: the config has no DNS plugin, and the file Caddy could read the token from is gone, though the token stays stored.
+    let mut http = settings(true);
+    http["acme_challenge"] = json!("http");
+    http.as_object_mut().unwrap().remove("cloudflare_token");
+    let (st, v) = t.save(http).await;
+    assert_eq!(
+        (st, v["proxy"]["ok"].clone(), v["has_token"].clone(), v["acme_challenge"].clone()),
+        (200, json!(true), json!(true), json!("http")),
+        "{v}"
+    );
+    let loads = t.fake.loads.lock().unwrap().clone();
+    let body = &loads.last().unwrap().1;
+    assert!(
+        body.contains("\naskbar.orraitu.com {") && !body.contains("acme_dns") && !body.contains("cloudflare") && !body.contains(TOKEN),
+        "{body}"
+    );
+    assert!(body.contains(STAGING_CA), "the staging CA still applies");
+    assert_eq!(t.token_file(), None, "Caddy cannot read the token when it does not use it");
+    // Back to DNS: the file comes back from the stored token, with no retyping.
+    let mut dns = settings(true);
+    dns.as_object_mut().unwrap().remove("cloudflare_token");
+    assert_eq!(t.save(dns).await.0, 200);
+    assert_eq!(t.token_file().as_deref(), Some(TOKEN));
+}
