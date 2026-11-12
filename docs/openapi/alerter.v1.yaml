@@ -188,6 +188,33 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '503':
           $ref: '#/components/responses/NotConfigured'
+  /api/alerter/v1/exports:
+    post:
+      operationId: createExport
+      summary: What the alerter keeps on its volume, encrypted to the backup public key. The admin's listener.
+      description: >-
+        ADR 0013. The repeat ledger (`ledger.json`) and the release state (`releases.json`), as a tar encrypted with age to the
+        backup public key the admin pushed in `PUT /config`. Neither holds a secret or a sentence: the delivery settings are never
+        on disk. With no key (none pushed, or one that is not a public key) nothing is made: 503 `backup_key_missing`. Until the
+        settings have arrived, 503 `not_configured`.
+      responses:
+        '200':
+          description: An age file that opens to a tar of the files that exist.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          description: There is no backup key (`backup_key_missing`), or the settings have not arrived (`not_configured`).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
 components:
   securitySchemes:
     linkToken:

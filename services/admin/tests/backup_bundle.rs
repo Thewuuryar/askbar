@@ -255,3 +255,141 @@ async fn the_real_age_tool_opens_the_bundle_with_the_passphrase_alone() {
     assert!(text.contains("admin.age: admin.db admin-secrets/admin.key admin-secrets/cpa-api.key admin-secrets/cpa-control.secret caddy-secrets/self.crt caddy-secrets/self.key"), "{text}");
     assert!(text.contains("server.age: control.db spaces/"), "{text}");
 }
+
+// ---- the alerter's and `cpa`'s parts (ADR 0013, plan step 6.2)
+
+const ALERTER_STATE: &str = "marker alerter ledger 2b8e4d71";
+const LOGIN: &str = "marker account login 6f03a9c5";
+const ALERTER_TOKEN: &str = "admalr_test_token";
+
+/// What a stand-in alerter answers `POST /exports` with.
+#[derive(Clone, Copy, PartialEq)]
+enum Alerter {
+    Works,
+    NoKey,
+    Broken,
+}
+
+/// A stand-in alerter: it encrypts a marker to the key the admin gives it (as the real one does with the key it was pushed),
+/// and takes only its own token.
+async fn fake_alerter(t: &common::T, how: Alerter) {
+    use axum::extract::State;
+    use axum::http::{HeaderMap, StatusCode};
+    let recipient = {
+        let db = t.admin.db.lock().await;
+        askbar_admin::db::active_backup_key(db.conn()).unwrap().unwrap().recipient
+    };
+    let handler = move |State((how, recipient)): State<(Alerter, String)>, h: HeaderMap| async move {
+        if h.get("authorization").and_then(|v| v.to_str().ok()) != Some(&format!("Bearer {ALERTER_TOKEN}")) {
+            return (StatusCode::UNAUTHORIZED, Vec::new());
+        }
+        match how {
+            Alerter::Works => {
+                let mut tar = Vec::new();
+                askbar_service::tar::append(&mut tar, "ledger.json", ALERTER_STATE.as_bytes(), 0);
+                askbar_service::tar::finish(&mut tar);
+                (StatusCode::OK, backup::encrypt(&recipient, &tar).unwrap())
+            }
+            Alerter::NoKey => (StatusCode::SERVICE_UNAVAILABLE, br#"{"error":"backup_key_missing"}"#.to_vec()),
+            Alerter::Broken => (StatusCode::INTERNAL_SERVER_ERROR, Vec::new()),
+        }
+    };
+    let app = axum::Router::new().route("/api/alerter/v1/exports", axum::routing::post(handler)).with_state((how, recipient));
+    let url = common::serve(app).await;
+    t.admin.alerter.set(askbar_admin::alerter_link::AlerterLink::new(&url, ALERTER_TOKEN.into())).ok().unwrap();
+}
+
+/// A thread for the supervisor in the `askbar-cpa` image: it answers an `export-request` by writing the marker, encrypted to the
+/// recipient in the request, to `export.age`, and a done file with the request's id. `ok = false` makes it say no.
+fn fake_supervisor(t: &common::T, ok: bool) {
+    let dir = t.dir.join("cpa-config");
+    std::fs::create_dir_all(&dir).unwrap();
+    t.admin.set_cpa(askbar_admin::cpa::CpaLink::in_dir(
+        "http://127.0.0.1:1",
+        askbar_admin::cpa::Keys { api_key: CPA_API.into(), control_secret: CPA_SECRET.into() },
+        dir.clone(),
+    ));
+    std::thread::spawn(move || {
+        let mut seen = String::new();
+        for _ in 0..600 {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            let Ok(text) = std::fs::read_to_string(dir.join("export-request")) else { continue };
+            let req: serde_json::Value = serde_json::from_str(&text).unwrap();
+            let id = req["id"].as_str().unwrap().to_string();
+            if id == seen {
+                continue;
+            }
+            seen = id.clone();
+            if ok {
+                let mut tar = Vec::new();
+                askbar_service::tar::append(&mut tar, "claude-a.json", LOGIN.as_bytes(), 0);
+                askbar_service::tar::finish(&mut tar);
+                std::fs::write(dir.join("export.age"), backup::encrypt(req["recipient"].as_str().unwrap(), &tar).unwrap()).unwrap();
+            }
+            std::fs::write(dir.join("export-done"), json!({ "id": id, "ok": ok }).to_string()).unwrap();
+        }
+    });
+}
+
+#[tokio::test]
+async fn the_alerters_and_cpas_exports_follow_the_servers_and_the_passphrase_opens_them() {
+    let t = common::start(true).await;
+    set_key(&t).await;
+    fake_alerter(&t, Alerter::Works).await;
+    fake_supervisor(&t, true);
+    let bytes = download(&t).await.bytes().await.unwrap();
+    let files = askbar_service::tar::read(&bytes).unwrap();
+    let names: Vec<&str> = files.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(names, ["manifest.json", "backup-key.age", "admin.age", "server.age", "alerter.age", "cpa.age"]);
+    let get = |name: &str| files.iter().find(|(n, _)| n == name).unwrap().1.clone();
+    let manifest: backup::Manifest = serde_json::from_slice(&get("manifest.json")).unwrap();
+    assert_eq!(manifest.parts.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["admin.age", "server.age", "alerter.age", "cpa.age"]);
+    for p in &manifest.parts {
+        let data = get(&p.name);
+        assert_eq!((p.bytes, p.sha256.as_str()), (data.len() as u64, hex(Sha256::digest(&data)).as_str()), "{}", p.name);
+    }
+    for marker in [ALERTER_STATE, LOGIN] {
+        assert!(!bytes.windows(marker.len()).any(|w| w == marker.as_bytes()), "{marker} is in the bundle in the clear");
+    }
+    let identity = backup::unlock(&get("backup-key.age"), PASS).unwrap();
+    let alerter = askbar_service::tar::read(&backup::decrypt(&identity, &get("alerter.age")).unwrap()).unwrap();
+    assert_eq!(alerter, vec![("ledger.json".to_string(), ALERTER_STATE.as_bytes().to_vec())]);
+    let cpa = askbar_service::tar::read(&backup::decrypt(&identity, &get("cpa.age")).unwrap()).unwrap();
+    assert_eq!(cpa, vec![("claude-a.json".to_string(), LOGIN.as_bytes().to_vec())]);
+    // The plain copies on the shared volume do not stay: the export file is emptied once it has been taken.
+    assert_eq!(std::fs::read(t.dir.join("cpa-config/export.age")).unwrap().len(), 0);
+    // The request names the key and nothing secret.
+    let request = std::fs::read_to_string(t.dir.join("cpa-config/export-request")).unwrap();
+    assert!(request.contains("age1") && !request.contains(LOGIN) && !request.contains(PASS), "{request}");
+}
+
+#[tokio::test]
+async fn a_part_that_cannot_be_made_stops_the_bundle_with_a_sentence_and_nothing_is_kept() {
+    // The alerter has not been given the key yet.
+    let t = common::start(true).await;
+    set_key(&t).await;
+    fake_alerter(&t, Alerter::NoKey).await;
+    let r = download(&t).await;
+    assert_eq!(r.status(), 503);
+    assert_eq!(r.json::<serde_json::Value>().await.unwrap()["error"], "backup_key_missing");
+
+    // The alerter fails.
+    let t = common::start(true).await;
+    set_key(&t).await;
+    fake_alerter(&t, Alerter::Broken).await;
+    let r = download(&t).await;
+    assert_eq!(r.status(), 502);
+    let body = r.text().await.unwrap();
+    assert!(body.contains("Nothing was backed up"), "{body}");
+
+    // The supervisor says no.
+    let t = common::start(true).await;
+    set_key(&t).await;
+    fake_alerter(&t, Alerter::Works).await;
+    fake_supervisor(&t, false);
+    let r = download(&t).await;
+    assert_eq!(r.status(), 502);
+    let body = r.text().await.unwrap();
+    assert!(body.contains("Nothing was backed up"), "{body}");
+    assert_eq!(std::fs::read(t.dir.join("cpa-config/export.age")).unwrap().len(), 0);
+}

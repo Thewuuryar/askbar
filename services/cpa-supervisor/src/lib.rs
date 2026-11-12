@@ -9,7 +9,9 @@
 //! At most one restart every `min_gap` (5 s); a change inside the gap waits for it. After each start
 //! it writes the request value it acted on to `restart-done`. On a stop (SIGTERM or SIGINT in the
 //! binary, `stop` here) it passes SIGTERM to the child, waits up to `grace`, kills it if needed, and
-//! returns. It opens no port and holds no secret.
+//! returns. It opens no port and holds no secret. It also answers export and import requests ([`transfer`], ADR 0013).
+
+pub mod transfer;
 
 use std::path::PathBuf;
 use std::process::{Child, Command};
@@ -27,6 +29,8 @@ pub struct Settings {
     pub request: PathBuf,
     /// Written here after each start: the request value acted on.
     pub done: PathBuf,
+    /// The export and import request files (ADR 0013).
+    pub transfer: transfer::Paths,
     pub poll: Duration,
     pub min_gap: Duration,
     pub grace: Duration,
@@ -40,11 +44,14 @@ impl Settings {
     /// The image's settings: the config and the trigger files under `dir`.
     pub fn for_dir(dir: &str, command: Vec<String>) -> Settings {
         let d = PathBuf::from(dir);
+        let auth =
+            std::env::var("ASKBAR_CPA_AUTH_DIR").ok().filter(|a| !a.trim().is_empty()).unwrap_or_else(|| "/root/.cli-proxy-api".into());
         Settings {
             command,
             config: d.join("config.yaml"),
             request: d.join("restart-request"),
             done: d.join("restart-done"),
+            transfer: transfer::Paths::for_dirs(&d, std::path::Path::new(&auth)),
             poll: Duration::from_secs(2),
             min_gap: Duration::from_secs(5),
             grace: Duration::from_secs(10),
@@ -65,6 +72,10 @@ fn write_done(s: &Settings, request: &[u8]) {
     if let Err(e) = std::fs::write(&s.done, request) {
         log(&format!("could not write {}: {e}", s.done.display()));
     }
+}
+
+fn unix_now() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
 
 fn log(msg: &str) {
@@ -145,6 +156,22 @@ pub fn run(s: &Settings, stop: &AtomicBool) {
             started = Instant::now();
             crashed_at = None;
             backoff = (backoff * 2).min(s.backoff_max);
+            write_done(s, &request);
+            continue;
+        }
+
+        // An export is answered at once; it does not touch the child.
+        transfer::export(&s.transfer, unix_now());
+
+        // An import stops the child, unpacks the files and starts it again (no waiting for the gap: the owner asked for it).
+        if let Some(id) = transfer::import_pending(&s.transfer) {
+            log("import requested; restarting CLIProxyAPI");
+            if let Some(c) = child.as_mut() {
+                stop_child(c, s.grace);
+            }
+            transfer::import(&s.transfer, &id);
+            child = spawn(s);
+            started = Instant::now();
             write_done(s, &request);
             continue;
         }

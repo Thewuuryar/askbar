@@ -68,6 +68,10 @@ async function waitForPort(port) {
   const [alerterAuditorPort, alerterAdminPort, ntfyPort, smtpPort, smtpSeenPort, releasesPort] = [await freePort(), await freePort(), await freePort(), await freePort(), await freePort(), await freePort()];
   const auditorBin = path.join(ROOT, 'target/debug/askbar-auditor');
   if (!fs.existsSync(auditorBin)) execFileSync('cargo', ['build', '-q', '-p', 'askbar-auditor'], { cwd: ROOT, stdio: 'inherit' });
+  const LOGIN_MARKER = 'marker-account-login-3e91d7a2';
+  // The supervisor from the `askbar-cpa` image answers the admin's export request (ADR 0013), here with a stand-in for CLIProxyAPI.
+  const supervisorBin = path.join(ROOT, 'target/debug/askbar-cpa-supervisor');
+  if (!fs.existsSync(supervisorBin)) execFileSync('cargo', ['build', '-q', '-p', 'askbar-cpa-supervisor'], { cwd: ROOT, stdio: 'inherit' });
   const sock = path.join(dirs.run, 'admin.sock');
   const children = [];
   const run = (cmd, args, env) => { const c = spawn(cmd, args, { env: { ...process.env, ...env }, stdio: 'ignore' }); children.push(c); return c; };
@@ -111,6 +115,9 @@ async function waitForPort(port) {
     ASKBAR_CPA_CONFIG_DIR: path.join(data, 'cpa-config'), ASKBAR_CPA_URL: 'http://127.0.0.1:' + await freePort(),
   });
   for (let i = 0; i < 100 && !fs.existsSync(sock); i++) await new Promise((r) => setTimeout(r, 50));
+  fs.mkdirSync(path.join(data, 'cpa-auth'), { recursive: true });
+  fs.writeFileSync(path.join(data, 'cpa-auth', 'claude-e2e.json'), '{"access_token":"' + LOGIN_MARKER + '"}');
+  run(supervisorBin, ['sleep', '100000'], { ASKBAR_CPA_CONFIG_DIR: path.join(data, 'cpa-config'), ASKBAR_CPA_AUTH_DIR: path.join(data, 'cpa-auth') });
   forwarder = net.createServer((c) => {
     const u = net.connect(sock);
     c.pipe(u); u.pipe(c);
@@ -882,21 +889,21 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       at += 512 + Math.ceil(size / 512) * 512;
     }
     // The manifest and the protected key, then the admin's own export first and the server's.
-    assert.deepEqual(entries.map(([n]) => n), ['manifest.json', 'backup-key.age', 'admin.age', 'server.age']);
+    assert.deepEqual(entries.map(([n]) => n), ['manifest.json', 'backup-key.age', 'admin.age', 'server.age', 'alerter.age', 'cpa.age']);
     const get = (n) => entries.find(([name]) => name === n)[1];
     const manifest = JSON.parse(get('manifest.json').toString());
     assert.equal(manifest.format, 1);
     assert.match(manifest.release, /^\d+\.\d+\.\d+/);
     assert.match(manifest.key_fingerprint, /^[0-9a-f]{4}(-[0-9a-f]{4}){3}$/);
-    assert.deepEqual(manifest.parts.map((p) => p.name), ['admin.age', 'server.age']);
+    assert.deepEqual(manifest.parts.map((p) => p.name), ['admin.age', 'server.age', 'alerter.age', 'cpa.age']);
     for (const p of manifest.parts) {
       assert.equal(p.bytes, get(p.name).length, p.name);
       assert.equal(p.sha256, require('node:crypto').createHash('sha256').update(get(p.name)).digest('hex'), p.name + ' hash');
     }
     // The key in the bundle is the protected private key (an age file made with the passphrase), and every export is an age file.
-    for (const n of ['backup-key.age', 'admin.age', 'server.age']) assert.equal(get(n).subarray(0, 21).toString(), 'age-encryption.org/v1', n);
+    for (const n of ['backup-key.age', 'admin.age', 'server.age', 'alerter.age', 'cpa.age']) assert.equal(get(n).subarray(0, 21).toString(), 'age-encryption.org/v1', n);
     // Nothing is readable: no database header, no provider key, none of the passphrases or the password.
-    for (const secret of ['SQLite format 3', SECRET_KEY, BACKUP_PASS, BACKUP_PASS_2, AUDIT_PASS, PASSWORD, 'AGE-SECRET-KEY']) {
+    for (const secret of ['SQLite format 3', LOGIN_MARKER, SECRET_KEY, BACKUP_PASS, BACKUP_PASS_2, AUDIT_PASS, PASSWORD, 'AGE-SECRET-KEY']) {
       assert.equal(bytes.includes(secret), false, 'the bundle holds ' + secret);
     }
   });

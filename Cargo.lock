@@ -253,7 +253,9 @@ dependencies = [
 name = "askbar-cpa-supervisor"
 version = "0.6.0"
 dependencies = [
+ "askbar-service",
  "libc",
+ "serde_json",
 ]
 
 [[package]]
