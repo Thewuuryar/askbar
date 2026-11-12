@@ -659,6 +659,25 @@ impl Spaces {
         control.space_ids()?.iter().map(|id| self.open(id)).collect()
     }
 
+    /// Closes and deletes the files of the spaces `ids` (a deleted user's personal space): the database, and the
+    /// `-wal` and `-shm` files beside it. A file that is already gone is not an error.
+    pub fn remove(&self, ids: &[String]) -> std::io::Result<()> {
+        let mut open = self.open.lock().unwrap_or_else(|e| e.into_inner());
+        for id in ids {
+            open.remove(id);
+            let Some(path) = self.path_of(id) else { continue };
+            for suffix in ["", "-wal", "-shm"] {
+                let mut name = path.clone().into_os_string();
+                name.push(suffix);
+                match std::fs::remove_file(&name) {
+                    Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
+                    _ => {}
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// The spaces open now (for work across spaces that only concerns what is running).
     pub fn opened(&self) -> Vec<Arc<Space>> {
         let mut v: Vec<_> = self.open.lock().unwrap_or_else(|e| e.into_inner()).values().cloned().collect();

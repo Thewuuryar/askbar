@@ -151,6 +151,36 @@ async fn list_users(State(state): State<Arc<AppState>>) -> Result<Json<serde_jso
     read().map(|v| Json(serde_json::Value::Array(v))).map_err(|_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not read the users."))
 }
 
+/// `DELETE /api/server/v1/users/{id}`: the user's personal space file, their clients, the hashes of their tokens and the
+/// user row (ADR 0012). Replies still running in that space are stopped first. Spaces the user shared with others stay.
+/// A client of theirs is refused (401) from then on. 404 if there is no such user.
+async fn delete_user(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<StatusCode, Failure> {
+    let personal: Vec<String> = {
+        let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+        db.conn()
+            .prepare("SELECT id FROM spaces WHERE kind = 'personal' AND owner_user_id = ?1")
+            .and_then(|mut stmt| stmt.query_map([&id], |r| r.get(0))?.collect::<Result<_, _>>())
+            .map_err(|_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not read the user's space."))?
+    };
+    for (_, live, space) in state.generations.unfinished() {
+        if personal.contains(&space.id) {
+            live.cancel_because("user_deleted");
+        }
+    }
+    let done = {
+        let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+        db.delete_user(&id, |ids| state.spaces.remove(ids))
+    };
+    match done {
+        Ok(Some(_)) => Ok(StatusCode::NO_CONTENT),
+        Ok(None) => Err(fail(StatusCode::NOT_FOUND, "No such user.")),
+        Err(_) => Err(fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not delete the user. Nothing was deleted.")),
+    }
+}
+
 /// Every paired client, newest first.
 async fn list_clients(State(state): State<Arc<AppState>>) -> Result<Json<Vec<crate::auth::ClientRow>>, Failure> {
     let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
@@ -217,6 +247,7 @@ pub fn routes() -> crate::routes::Routes {
         .post(&v1(askbar_service::routes::RESTART), restart)
         .get(&v1("/providers/health"), providers_health)
         .get(&v1("/users"), list_users)
+        .delete(&v1("/users/{id}"), delete_user)
         .get(&v1("/clients"), list_clients)
         .get(&v1("/usage"), usage)
         // Unencrypted until phase 6 makes exports encrypted (ADR 0013).

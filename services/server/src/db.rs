@@ -407,6 +407,27 @@ impl Db {
         )?)
     }
 
+    /// Deletes a user: the row, and with it (by the foreign keys) their clients and the hashes, pairing codes,
+    /// settings and personal space rows that name them (ADR 0012). `remove_files` gets the ids of the user's personal
+    /// spaces and runs before the change is committed, so a file that cannot be removed leaves everything as it was.
+    /// `None` when there is no such user.
+    pub fn delete_user(
+        &self,
+        user_id: &str,
+        remove_files: impl FnOnce(&[String]) -> std::io::Result<()>,
+    ) -> Result<Option<Vec<String>>, DbError> {
+        let tx = self.conn.unchecked_transaction()?;
+        let mut stmt = tx.prepare("SELECT id FROM spaces WHERE kind = 'personal' AND owner_user_id = ?1")?;
+        let personal = stmt.query_map([user_id], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
+        drop(stmt);
+        if tx.execute("DELETE FROM users WHERE id = ?1", [user_id])? == 0 {
+            return Ok(None);
+        }
+        remove_files(&personal).map_err(|source| DbError::Io { path: "a space file".into(), source })?;
+        tx.commit()?;
+        Ok(Some(personal))
+    }
+
     /// Every space's id, oldest first.
     pub fn space_ids(&self) -> Result<Vec<String>, DbError> {
         let mut stmt = self.conn.prepare("SELECT id FROM spaces ORDER BY id")?;
