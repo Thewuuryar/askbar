@@ -954,3 +954,58 @@ async fn the_export_is_the_ledger_and_release_state_encrypted_to_the_pushed_key_
     // It is not on the auditor's listener at all.
     assert_eq!(t.auditor(M::POST, "/exports", None).await.status, 404);
 }
+
+#[tokio::test]
+async fn an_export_restores_into_an_empty_alerter_before_its_settings_and_a_used_one_refuses() {
+    use askbar_service::backup;
+    // A source with something kept: a delivered alert leaves a repeat count.
+    let source = start().await;
+    let key = backup::generate_with("a long backup passphrase 1", 10).unwrap();
+    let c = json!({ "version": 1, "ntfy": { "server": source.sink.url, "topic": MARKER_TOPIC, "token": MARKER_TOKEN }, "backup_public_key": key.recipient });
+    assert_eq!(source.admin(M::PUT, "/config", Some(c)).await.status, 200);
+    assert_eq!(source.auditor(M::POST, "/events", Some(unsealed())).await.body["suppressed"], false);
+    source.sink_has(1).await;
+    let sealed = source
+        .http
+        .post(format!("{}/api/alerter/v1/exports", source.admin_url))
+        .bearer_auth(token("admin-alerter"))
+        .send()
+        .await
+        .unwrap()
+        .bytes()
+        .await
+        .unwrap();
+    let identity = backup::unlock(&key.protected, "a long backup passphrase 1").unwrap();
+    let tar = backup::decrypt(&identity, &sealed).unwrap();
+
+    let import = |t: &T, body: Vec<u8>| {
+        let req = t.http.post(format!("{}/api/alerter/v1/imports", t.admin_url)).bearer_auth(token("admin-alerter")).body(body);
+        async move {
+            let r = req.send().await.unwrap();
+            let status = r.status().as_u16();
+            (status, r.json::<Value>().await.unwrap_or(Value::Null))
+        }
+    };
+    // Bad bodies change nothing: not a tar, a stranger's file, a ledger that is not one.
+    let target = start().await;
+    assert_eq!(import(&target, b"not a tar".to_vec()).await.0, 400);
+    let mut stranger = Vec::new();
+    askbar_service::tar::append(&mut stranger, "admin.db", b"x", 0);
+    askbar_service::tar::finish(&mut stranger);
+    assert_eq!(import(&target, stranger).await.0, 400);
+    let mut junk = Vec::new();
+    askbar_service::tar::append(&mut junk, "ledger.json", b"{ not json", 0);
+    askbar_service::tar::finish(&mut junk);
+    assert_eq!(import(&target, junk).await.0, 400);
+    // Into an alerter that has no settings yet: it takes it.
+    assert!(!target.alerter.is_configured());
+    let (status, body) = import(&target, tar.clone()).await;
+    assert_eq!((status, body["files"].as_u64().unwrap() >= 1), (200, true), "{body}");
+    // The restored repeat count is in force: the same event is held back once the settings arrive.
+    target.configure().await;
+    assert_eq!(target.auditor(M::POST, "/events", Some(unsealed())).await.body["suppressed"], true);
+    // A used alerter refuses, and the auditor's listener does not have the route.
+    let (status, body) = import(&target, tar.clone()).await;
+    assert_eq!((status, body["error"].as_str()), (409, Some("not_empty")));
+    assert_eq!(target.auditor(M::POST, "/imports", None).await.status, 404);
+}

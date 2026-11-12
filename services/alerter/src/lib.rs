@@ -411,6 +411,7 @@ const ADMIN_ROUTES: Routes = &[
     ("POST", "/test"),
     ("GET", "/releases"),
     ("POST", "/exports"),
+    ("POST", "/imports"),
 ];
 
 /// The two links: name as `bootstrap` names it (the file `accept/<name>.sha256`), the caller, and the routes.
@@ -480,7 +481,7 @@ pub fn routes() -> Vec<RouteEntry> {
 
 /// The routes that answer before the alerter has been configured.
 fn open_before_config(path: &str) -> bool {
-    [full("/health"), full("/status"), full("/config"), full("/restart")].iter().any(|p| p == path)
+    [full("/health"), full("/status"), full("/config"), full("/restart"), full("/imports")].iter().any(|p| p == path)
 }
 
 /// The auditor's listener.
@@ -505,6 +506,7 @@ pub fn admin_router(a: Arc<Alerter>, links: Links) -> Router {
         .route(&full("/test"), post(test))
         .route(&full("/releases"), get(releases))
         .route(&full("/exports"), post(export))
+        .route(&full("/imports"), post(import))
         .layer(axum::middleware::from_fn_with_state(gate, askbar_service::configured::require))
         .layer(axum::middleware::from_fn_with_state(links, askbar_service::links::require));
     shell(a, protected)
@@ -601,6 +603,44 @@ async fn export(State(a): St) -> Result<axum::response::Response, Failure> {
         .header(axum::http::header::CONTENT_TYPE, "application/octet-stream")
         .body(axum::body::Body::from(made))
         .map_err(|_| ApiError::code(ErrorCode::Internal))
+}
+
+/// `POST /imports` (ADR 0013): what `POST /exports` made, opened by the admin, into an alerter that has kept nothing yet (an empty
+/// ledger and no release state), else `409 not_empty`. The body is the plain tar of `ledger.json` and `releases.json` (those that were
+/// there). Both are read and checked before either is kept, so a refused import changes nothing. It answers before the settings arrive:
+/// a restore comes first, and the admin pushes the settings after.
+async fn import(State(a): St, body: Bytes) -> Result<Json<serde_json::Value>, Failure> {
+    let files = askbar_service::tar::read(&body).ok_or_else(|| bad("The import is not a backup this alerter made."))?;
+    let (mut ledger_state, mut release_state) = (None, None);
+    for (name, data) in &files {
+        match name.as_str() {
+            ledger::FILE if ledger_state.is_none() => {
+                ledger_state = Some(
+                    serde_json::from_slice::<limits::State>(data)
+                        .map_err(|_| bad("The ledger in the import is not one this alerter made."))?,
+                )
+            }
+            releases::FILE if release_state.is_none() => {
+                release_state = Some(
+                    serde_json::from_slice::<releases::Saved>(data)
+                        .map_err(|_| bad("The release state in the import is not one this alerter made."))?,
+                )
+            }
+            _ => return Err(bad("The import holds a file this alerter did not make.")),
+        }
+    }
+    let mut state = a.state.lock().unwrap_or_else(|e| e.into_inner());
+    if *state != limits::State::default() || a.releases.saved() != releases::Saved::default() {
+        return Err(ApiError::code(ErrorCode::NotEmpty));
+    }
+    if let Some(l) = ledger_state {
+        a.ledger.save(&l).map_err(|_| ApiError::code(ErrorCode::Internal))?;
+        *state = l;
+    }
+    if let Some(r) = release_state {
+        a.releases.replace(r);
+    }
+    Ok(Json(serde_json::json!({ "files": files.len() })))
 }
 
 /// What the daily release check found.

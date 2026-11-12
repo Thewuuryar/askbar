@@ -215,6 +215,46 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/Problem'
+  /api/alerter/v1/imports:
+    post:
+      operationId: createImport
+      summary: Restore what an export made into an alerter that has kept nothing. The admin's listener.
+      description: >-
+        ADR 0013. The body is the tar `POST /exports` made, opened by the admin (the alerter never holds the key): `ledger.json` and
+        `releases.json`, those that were there. Both are read and checked before either is kept, so a refused import changes nothing.
+        409 `not_empty` if the alerter has already kept a repeat count or a release result. It answers before the settings have arrived,
+        because a restore comes first and the admin pushes the settings after. 400 `bad_request` for a body that is not a tar of those
+        files or holds a file that is not what the alerter makes.
+      requestBody:
+        required: true
+        content:
+          application/x-tar:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '200':
+          description: Restored.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [files]
+                properties:
+                  files:
+                    type: integer
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: The alerter has already kept state (`not_empty`).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
 components:
   securitySchemes:
     linkToken:
