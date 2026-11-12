@@ -115,9 +115,14 @@ async fn no_secret_and_no_body_is_in_a_record() {
     )
     .await;
     let all = serde_json::to_string(&actions(&t)).unwrap();
-    assert!(all.contains("audit_key_setup") && all.contains("api_key_create") && all.contains("\"settings\""), "{all}");
-    for secret in ["SECRET-PASSPHRASE", "sk-PROVIDER-KEY", "SCRIPT-NAME", "SYSTEM-PROMPT-TEXT"] {
-        assert!(!all.contains(secret), "{secret} is in the records");
+    assert!(
+        all.contains("audit_key_setup") && all.contains("api_key_create") && all.contains("\"settings\""),
+        "an expected action is missing from the {} bytes of records",
+        all.len()
+    );
+    // The failure message names the fixture's number, never its text (AGENTS.md: no secret in test output).
+    for (i, secret) in ["SECRET-PASSPHRASE", "sk-PROVIDER-KEY", "SCRIPT-NAME", "SYSTEM-PROMPT-TEXT"].iter().enumerate() {
+        assert!(!all.contains(secret), "fixture {i} is in the records");
     }
 }
 
