@@ -258,3 +258,96 @@ async fn three_restarts_in_ten_minutes_of_a_polled_service_are_one_restart_loop_
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     assert_eq!(r.seen.lock().unwrap().len(), 3);
 }
+
+// ------------------------------------------------------------------ the budget
+
+#[derive(Default)]
+struct Counts {
+    /// What `GET /token-counts?since=` answers for the day and for the month: `(provider, tokens_in, tokens_out)` rows.
+    day: Mutex<Vec<(String, i64, i64)>>,
+    month: Mutex<Vec<(String, i64, i64)>>,
+}
+
+const DAY_START: i64 = 1_793_232_000; // 2026-10-29 00:00 UTC
+const NOW: i64 = DAY_START + 8 * 3600;
+
+async fn auditor_counts(c: Arc<Counts>) -> String {
+    let app = axum::Router::new().route(
+        "/api/audit/v1/token-counts",
+        axum::routing::get(move |axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, i64>>| {
+            let c = c.clone();
+            async move {
+                let rows = if q["since"] >= DAY_START { c.day.lock().unwrap().clone() } else { c.month.lock().unwrap().clone() };
+                axum::Json(
+                    rows.into_iter()
+                        .map(|(p, i, o)| json!({ "provider_id": p, "model": "m", "requests": 1, "tokens_in": i, "tokens_out": o, "tokens_cached": 0 }))
+                        .collect::<Vec<_>>(),
+                )
+            }
+        }),
+    );
+    format!("http://{}", spawn(app).await)
+}
+
+#[tokio::test]
+async fn a_budget_at_eighty_and_at_a_hundred_percent_is_one_alert_each_for_the_period_and_a_subscription_is_not_counted() {
+    use askbar_admin::auditor_link::AuditorLink;
+    let r = rig().await;
+    let counts = Arc::new(Counts::default());
+    let link = AuditorLink::new(&auditor_counts(counts.clone()).await, "t".into());
+    {
+        let db = r.state.db.lock().await;
+        db.conn().execute("UPDATE budgets SET daily_tokens = 1000, monthly_tokens = 100000 WHERE id = 1", []).unwrap();
+        db.conn()
+            .execute(
+                "INSERT INTO providers (id, name, type, base_url, model, created_at, billing) VALUES ('sub', 'Subscription', 'openai', 'http://x', 'm', 0, 'subscription')",
+                [],
+            )
+            .unwrap();
+    }
+    let check = |now: i64| {
+        let (state, link) = (r.state.clone(), link.clone());
+        async move { state.budget.check_at(&state, &link, now).await }
+    };
+    // Under 80%: nothing. A subscription's tokens are not counted, however many.
+    *counts.day.lock().unwrap() = vec![("p".into(), 300, 400), ("sub".into(), 9_000_000, 9_000_000)];
+    *counts.month.lock().unwrap() = vec![("p".into(), 300, 400), ("sub".into(), 9_000_000, 9_000_000)];
+    check(NOW).await;
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    assert!(r.seen.lock().unwrap().is_empty());
+    // 80% of the day: one warning, and not again at the next check.
+    *counts.day.lock().unwrap() = vec![("p".into(), 400, 400)];
+    check(NOW).await;
+    check(NOW + 60).await;
+    let events = r.events(1).await;
+    assert_eq!(events[0]["kind"], "budget_threshold");
+    assert_eq!((events[0]["severity"].clone(), events[0]["fields"].clone()), (json!("warning"), json!({ "period": "day", "percent": 80 })));
+    // 100%: one critical.
+    *counts.day.lock().unwrap() = vec![("p".into(), 700, 400)];
+    check(NOW + 120).await;
+    check(NOW + 180).await;
+    let events = r.events(2).await;
+    assert_eq!(
+        (events[1]["severity"].clone(), events[1]["fields"].clone()),
+        (json!("critical"), json!({ "period": "day", "percent": 100 }))
+    );
+    assert_admin_events(&events);
+    // The next day starts at nothing, so nothing is sent; use over the limit again that day is a new alert, once.
+    *counts.day.lock().unwrap() = vec![];
+    check(NOW + 86_400).await;
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    assert_eq!(r.seen.lock().unwrap().len(), 2);
+    *counts.day.lock().unwrap() = vec![("p".into(), 700, 400)];
+    check(NOW + 86_400 + 60).await;
+    check(NOW + 86_400 + 120).await;
+    let events = r.events(3).await;
+    assert_eq!(events[2]["fields"], json!({ "period": "day", "percent": 100 }));
+    // The month is watched the same way: 80% of 100000 is a warning for the month.
+    *counts.month.lock().unwrap() = vec![("p".into(), 50_000, 31_000)];
+    check(NOW + 86_400 + 180).await;
+    let events = r.events(4).await;
+    assert_eq!(
+        (events[3]["severity"].clone(), events[3]["fields"].clone()),
+        (json!("warning"), json!({ "period": "month", "percent": 80 }))
+    );
+}

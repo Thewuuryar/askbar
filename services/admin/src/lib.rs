@@ -12,6 +12,7 @@ pub mod audit_key;
 pub mod audit_read;
 pub mod auditor_link;
 pub mod auth;
+pub mod budget_watch;
 pub mod caddy;
 pub mod catalog;
 pub mod chain_check;
@@ -80,6 +81,8 @@ pub struct AdminState {
     pub sealed: sealed::Sealed,
     /// What the last check of the audit chain found (ADR 0010 rule 7).
     pub chain: chain_check::ChainWatch,
+    /// Which token budget thresholds were already sent (ADR 0055).
+    pub budget: budget_watch::BudgetWatch,
     /// What the admin does when something is worth an alert: a log line, an event for the alerter, a note on the pages.
     pub notifier: Arc<notify::Notifier>,
     /// The link to CLIProxyAPI, once its config exists.
@@ -116,6 +119,7 @@ impl AdminState {
             sealed: Default::default(),
             chain: Default::default(),
             notifier: Default::default(),
+            budget: Default::default(),
             cpa: std::sync::Mutex::new(None),
             cpa_logins: std::sync::Mutex::new(Default::default()),
             service_actions: std::sync::Mutex::new(Default::default()),
