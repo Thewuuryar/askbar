@@ -248,6 +248,10 @@ pub struct Snapshot {
     /// has made one; the server then refuses to start replies.
     #[serde(default)]
     pub audit_public_key: Option<AuditKey>,
+    /// The privacy notice and the AI warning, as the admin worked them out (its version hashes the wording and the retention
+    /// above). Absent in a snapshot from an older admin: the server then serves the defaults for this retention.
+    #[serde(default)]
+    pub policy: Option<Policy>,
 }
 
 /// An audit public key and its id (the first 8 bytes of the SHA-256 of the key, in hex).
@@ -341,10 +345,96 @@ impl Default for DisplaySettings {
     }
 }
 
+/// The wording of the AI warning shown above the input box until the administrator changes it (ADR 0012).
+pub const DEFAULT_AI_WARNING: &str = "AI can make mistakes. Check important information.";
+
+/// The wording of the privacy notice until the administrator changes it (ADR 0012): what Askbar records, and who can open it.
+/// The notice also shows how many days audit records are kept; that number is not part of this text, so it follows the setting.
+pub const DEFAULT_PRIVACY_NOTICE: &str =
+    "Askbar saves your questions and the replies in your history on this server, where you can delete \
+them. A sealed copy of each goes to the audit record. Only the administrator can open it, with a passphrase that the server does not hold.";
+
+/// Audit records are kept this long unless the administrator says otherwise (ADR 0013, ADR 0051).
+pub const DEFAULT_AUDIT_RETENTION_DAYS: u32 = 30;
+
+/// The privacy notice a client shows after pairing and whenever it changes (ADR 0012). Consent is assumed when the
+/// administrator makes a user, so a client records no acknowledgment: it only remembers the last `version` it showed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Notice {
+    /// False when the administrator turned it off.
+    pub enabled: bool,
+    /// The wording: the default, or the administrator's.
+    pub text: String,
+    /// How long audit records are kept, shown with the wording.
+    pub retention_days: u32,
+    /// A hash of the wording and the retention, so the notice is shown again when either changes.
+    pub version: String,
+}
+
+/// The warning shown above the input box (ADR 0012).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AiWarning {
+    pub enabled: bool,
+    pub text: String,
+}
+
+/// What a client tells its person about the service: the privacy notice and the AI warning. The administrator sets the wording
+/// and whether each is shown; the admin computes it into the snapshot and the server serves it as it is.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Policy {
+    pub notice: Notice,
+    pub ai_warning: AiWarning,
+}
+
+/// A stable hash (64-bit FNV-1a, 16 hex characters) of the notice's wording and the retention. It is a version, not a secret:
+/// it needs to change when the content does, and to be the same on every machine.
+pub fn notice_version(text: &str, retention_days: u32) -> String {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in retention_days.to_string().bytes().chain(std::iter::once(b'\n')).chain(text.bytes()) {
+        h ^= u64::from(b);
+        h = h.wrapping_mul(0x0100_0000_01b3);
+    }
+    format!("{h:016x}")
+}
+
+impl Policy {
+    /// The policy for the given choices. Wording that is empty (after trimming) is the default's.
+    pub fn new(notice_enabled: bool, notice_text: &str, warning_enabled: bool, warning_text: &str, retention_days: u32) -> Policy {
+        let words = |text: &str, default: &str| {
+            let t = text.trim();
+            if t.is_empty() {
+                default.to_string()
+            } else {
+                t.to_string()
+            }
+        };
+        let text = words(notice_text, DEFAULT_PRIVACY_NOTICE);
+        Policy {
+            notice: Notice { enabled: notice_enabled, version: notice_version(&text, retention_days), text, retention_days },
+            ai_warning: AiWarning { enabled: warning_enabled, text: words(warning_text, DEFAULT_AI_WARNING) },
+        }
+    }
+
+    /// Both on, with the default wording: what a client is told when the administrator has chosen nothing.
+    pub fn default_for(retention_days: u32) -> Policy {
+        Policy::new(true, "", true, "", retention_days)
+    }
+}
+
+impl Default for Policy {
+    fn default() -> Policy {
+        Policy::default_for(DEFAULT_AUDIT_RETENTION_DAYS)
+    }
+}
+
 /// `GET /api/client/v1/settings`. The system prompt is deliberately not part of it.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct Settings {
     pub display: DisplaySettings,
+    /// The privacy notice and the AI warning. Added in 1.0 (additive: an older client ignores it, and a response without it,
+    /// from an older server, reads as the default).
+    #[serde(default)]
+    pub policy: Policy,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -489,6 +579,49 @@ pub fn decode_pairing(s: &str) -> Option<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_notice_version_is_a_stable_hash_of_the_wording_and_the_retention() {
+        // The same on every machine, today and later (clients compare it with the one they stored).
+        // FNV-1a 64 of "0\n" and of "30\nhello", worked out apart from this code.
+        assert_eq!(notice_version("", 0), "07fc1e07b4bd2c5f");
+        assert_eq!(notice_version("hello", 30), "c713610046f07ae4");
+        assert_eq!(notice_version("hello", 30), notice_version("hello", 30));
+        assert_ne!(notice_version("hello", 30), notice_version("hello", 31), "the retention is part of it");
+        assert_ne!(notice_version("hello", 30), notice_version("hello!", 30), "so is the wording");
+        assert_ne!(notice_version("1", 3), notice_version("", 13), "the retention cannot run into the wording");
+        assert_eq!(notice_version("x", 1).len(), 16);
+    }
+
+    #[test]
+    fn a_policy_is_on_with_the_default_wording_until_the_administrator_says_otherwise() {
+        let p = Policy::default_for(45);
+        assert!(p.notice.enabled && p.ai_warning.enabled);
+        assert_eq!((p.notice.text.as_str(), p.notice.retention_days), (DEFAULT_PRIVACY_NOTICE, 45));
+        assert_eq!(p.ai_warning.text, "AI can make mistakes. Check important information.");
+        assert_eq!(p.notice.version, notice_version(DEFAULT_PRIVACY_NOTICE, 45));
+        // Empty (or blank) wording is the default's; the administrator's is kept, trimmed; off is off.
+        let own = Policy::new(false, "  Our rules.  ", true, "   ", 7);
+        assert_eq!((own.notice.enabled, own.notice.text.as_str()), (false, "Our rules."));
+        assert_eq!(own.ai_warning.text, DEFAULT_AI_WARNING);
+        // Changing the retention or the wording changes the version, and nothing else does.
+        assert_ne!(Policy::default_for(30).notice.version, Policy::default_for(31).notice.version);
+        assert_eq!(Policy::new(true, "", true, "other warning", 30).notice.version, Policy::default_for(30).notice.version);
+        assert_eq!(Policy::default().notice.retention_days, DEFAULT_AUDIT_RETENTION_DAYS);
+    }
+
+    #[test]
+    fn a_settings_or_snapshot_from_before_the_policy_still_reads_and_says_the_default() {
+        let old: Settings = serde_json::from_str(r#"{"display":{}}"#).unwrap();
+        assert_eq!(old.policy, Policy::default());
+        let snap: Snapshot = serde_json::from_str(r#"{"audit_retention_days":30}"#).unwrap();
+        assert_eq!(snap.policy, None, "the server then serves the defaults for the snapshot's retention");
+        // And the policy round-trips on the wire with the names a client reads.
+        let wire = serde_json::to_value(Policy::default_for(30)).unwrap();
+        assert_eq!(wire["notice"]["retention_days"], 30);
+        assert_eq!(wire["ai_warning"]["enabled"], true);
+        assert!(wire["notice"]["version"].as_str().unwrap().len() == 16);
+    }
 
     #[test]
     fn versions() {

@@ -184,6 +184,7 @@ pub fn build_snapshot(conn: &rusqlite::Connection) -> rusqlite::Result<Snapshot>
             Ok((r.get(0)?, r.get(1)?, r.get(2)?))
         })?;
     Ok(Snapshot {
+        policy: None,
         version: 0,
         providers,
         default_provider_id,

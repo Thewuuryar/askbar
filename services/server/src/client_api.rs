@@ -248,5 +248,5 @@ pub async fn display_defaults(State(state): St, Extension(auth): Extension<Clien
 
 pub async fn settings(State(state): St) -> Res<Settings> {
     let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
-    Ok(Json(Settings { display: served_display(&db, None).map_err(internal)? }))
+    Ok(Json(Settings { display: served_display(&db, None).map_err(internal)?, policy: Default::default() }))
 }
