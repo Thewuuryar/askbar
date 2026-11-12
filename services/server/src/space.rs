@@ -626,6 +626,11 @@ impl Spaces {
         self.dir.as_ref().and_then(|d| d.parent()).map(|p| p.to_path_buf())
     }
 
+    /// The directory the space files are in, or `None` in memory.
+    pub fn dir(&self) -> Option<&Path> {
+        self.dir.as_deref()
+    }
+
     /// The file a space is kept in, or `None` in memory.
     pub fn path_of(&self, id: &str) -> Option<PathBuf> {
         self.dir.as_ref().filter(|_| is_space_id(id)).map(|d| d.join(format!("{id}.db")))

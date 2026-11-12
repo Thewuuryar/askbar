@@ -9,6 +9,7 @@ pub mod db;
 pub mod error;
 pub mod gateway;
 pub mod generation;
+pub mod import;
 pub use askbar_service::ids;
 pub mod llm;
 pub mod routes;

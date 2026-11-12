@@ -278,6 +278,50 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/Problem'
+  /api/server/v1/imports:
+    post:
+      operationId: createImport
+      summary: Restore what an export made into an empty install. The admin's link only.
+      description: >-
+        ADR 0013. The body is the tar `POST /exports` made, opened by the admin (the server never holds the key): `control.db` and
+        `spaces/<space id>.db`, nothing else, none twice. It is written to a work directory on the data volume, every file is opened and
+        migrated as a copy, and only a set that opens and agrees with itself (every space the control database lists has its file, and no
+        other) is swapped in, with no restart: the control database is copied into the open one and the space files are moved into place,
+        the seeded owner's removed. All or nothing: a refused import changes nothing. 409 `not_empty` if the install has more than its
+        seeded owner (another person, a paired client, a pairing code or a conversation), checked before the body is read. 409
+        `backup_newer_release` if a file is from a newer release than this server. 400 `bad_request` for a body that is cut short, holds a
+        file this server did not make, or does not agree with itself.
+      requestBody:
+        required: true
+        content:
+          application/x-tar:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '200':
+          description: Restored.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [spaces]
+                properties:
+                  spaces:
+                    type: integer
+                    description: How many space files were restored.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: The install is not empty (`not_empty`), or the backup is from a newer release (`backup_newer_release`).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '500':
+          $ref: '#/components/responses/Internal'
 components:
   securitySchemes:
     serverToken:
