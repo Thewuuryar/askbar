@@ -1,6 +1,7 @@
 # The checks every pull request must pass (contributor guidelines rollout step 4): formatting, clippy,
 # the tests, the smoke test, the isolation checks against a real stack, licenses and advisories (and a
-# known-vulnerable fixture that `cargo deny` must fail on), a Trivy scan of the images, and a secret scan. Linux only; build.yml covers macOS and Windows, by hand.
+# known-vulnerable fixture that `cargo deny` must fail on), a Trivy scan of the images, a check of the
+# pinned CLIProxyAPI image, and a secret scan. Linux only; build.yml covers macOS and Windows, by hand.
 #
 # Actions are pinned to commit hashes and gitleaks to a checksum (ADR 0017); Renovate proposes updates.
 # Rust is pinned too, so that a new release's lints never turn every pull request red at once: raise
@@ -106,6 +107,11 @@ jobs:
         run: |
           npm ci
           npx playwright install chromium
+      # The real `age` tool: the backup tests open a whole bundle with it (tests/e2e/age_interop.py), and skip when it is missing.
+      - name: age
+        run: |
+          sudo apt-get $APT_OPTS update
+          sudo apt-get $APT_OPTS install -y --no-install-recommends age
       - name: npm run test:services (docs checks, cargo tests, admin browser test, mock LLM)
         run: npm run test:services
       - name: Smoke test
@@ -269,6 +275,17 @@ jobs:
               --exit-code 1 --no-progress "askbar-$image:latest" || failed=1
           done
           exit $failed
+
+  # The management API of the pinned CLIProxyAPI image still answers as the admin expects (login addresses, wrong-state answers, the
+  # account list): `scripts/check-cpa-image.sh`, which its own header says to run after changing the pinned digest. No account is
+  # needed; it only pulls the image.
+  cpa-image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: The pinned CLIProxyAPI image
+        run: scripts/check-cpa-image.sh
 
   secrets:
     if: github.event_name != 'schedule'

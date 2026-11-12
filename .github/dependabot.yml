@@ -35,3 +35,12 @@ updates:
     open-pull-requests-limit: 0
     commit-message:
       prefix: "fix(deps)"
+
+  # compose.yaml's own image pin (the mock LLM of the dev profile); the Dockerfile's are the `docker` entry above.
+  - package-ecosystem: docker-compose
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    commit-message:
+      prefix: "fix(deps)"

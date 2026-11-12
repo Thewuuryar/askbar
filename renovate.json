@@ -1,15 +1,68 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "description": "Version updates (ADR 0017). Security alerts come from Dependabot. Images and Actions stay pinned to digests and commit hashes; Renovate updates the pin and the version comment together.",
+  "description": "Version updates (ADR 0017). Security alerts come from Dependabot. Images and Actions stay pinned to digests and commit hashes; Renovate updates the pin and the version comment together. The custom managers below cover the pins Renovate cannot see on its own: the Rust toolchain, Trivy, the image the isolation script uses, and the two Go modules the Caddy build names.",
   "extends": ["config:recommended", "helpers:pinGitHubActionDigests", "docker:pinDigests"],
   "dependencyDashboard": true,
   "prHourlyLimit": 2,
   "prConcurrentLimit": 5,
+  "ignorePaths": ["tests/fixtures/**"],
   "packageRules": [
     {
       "description": "Group Tauri's crates and its npm CLI, which must move together",
       "matchPackageNames": ["tauri", "tauri-build", "tauri-plugin-*", "@tauri-apps/*"],
       "groupName": "tauri"
+    },
+    {
+      "description": "The Rust toolchain moves in a pull request of its own (ci.yml says why): a new release's lints can turn clippy red, and that is fixed there",
+      "matchPackageNames": ["rust-lang/rust"],
+      "groupName": "rust toolchain",
+      "automerge": false
+    },
+    {
+      "description": "CLIProxyAPI is a third party's image and the admin depends on its management API: a new release is checked by hand, with scripts/check-cpa-image.sh, before the pin moves",
+      "matchPackageNames": ["eceasy/cli-proxy-api"],
+      "automerge": false,
+      "addLabels": ["cpa-image"],
+      "prBodyNotes": ["Run `scripts/check-cpa-image.sh` (it needs Docker): the admin depends on this image's management API (ADR 0014, ADR 0042). CI runs it too, in the `cpa-image` job."]
+    }
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "The Rust toolchain pinned in the workflows (RUST_VERSION in ci.yml, the toolchain of build.yml)",
+      "managerFilePatterns": ["/^\\.github/workflows/(ci|build)\\.yml$/"],
+      "matchStrings": [
+        "RUST_VERSION: \"(?<currentValue>\\d+\\.\\d+\\.\\d+)\"",
+        "toolchain: \"(?<currentValue>\\d+\\.\\d+\\.\\d+)\""
+      ],
+      "depNameTemplate": "rust-lang/rust",
+      "datasourceTemplate": "github-releases"
+    },
+    {
+      "customType": "regex",
+      "description": "Trivy, installed by setup-trivy at a version (ci.yml, the images job)",
+      "managerFilePatterns": ["/^\\.github/workflows/ci\\.yml$/"],
+      "matchStrings": ["uses: aquasecurity/setup-trivy@[^\\n]+\\n\\s+with:\\n\\s+version: (?<currentValue>v\\d+\\.\\d+\\.\\d+)"],
+      "depNameTemplate": "aquasecurity/trivy",
+      "datasourceTemplate": "github-releases"
+    },
+    {
+      "customType": "regex",
+      "description": "The image the isolation script runs its helper snippets in (the same pin as the mock LLM in compose.yaml)",
+      "managerFilePatterns": ["/^scripts/check-isolation\\.sh$/"],
+      "matchStrings": ["python:(?<currentValue>[0-9][^@\"}\\s]*)@(?<currentDigest>sha256:[a-f0-9]{64})"],
+      "depNameTemplate": "python",
+      "datasourceTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "description": "The Cloudflare DNS plugin and the golang.org/x/net floor that the Caddy build names (Dockerfile, the xcaddy line)",
+      "managerFilePatterns": ["/^Dockerfile$/"],
+      "matchStrings": [
+        "--with (?<depName>github\\.com/caddy-dns/cloudflare)@(?<currentValue>v\\d+\\.\\d+\\.\\d+)",
+        "--replace (?<depName>golang\\.org/x/net)=golang\\.org/x/net@(?<currentValue>v\\d+\\.\\d+\\.\\d+)"
+      ],
+      "datasourceTemplate": "go"
     }
   ]
 }
