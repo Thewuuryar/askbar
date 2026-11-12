@@ -27,3 +27,4 @@ The admin and client API can stay on one URL, but these rules become part of the
 
 ## Amendments
 - 2026-11-11: Trusted Types required in the admin CSP (#70, D17, a decision change); built in plan step 5.2.
+- 2026-11-12: built Trusted Types in the admin CSP (plan step 5.2, PR AE, #83): `require-trusted-types-for 'script'; trusted-types 'none'` on every response (`web.rs`), so no policy can be made. The admin's scripts have no HTML sink, so nothing in them changed. Chromium tests check that the admin refuses a string for an HTML sink, a policy, a created script and a string of code, and that every hostile payload shown as a user, client or provider name stays text.

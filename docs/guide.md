@@ -10,6 +10,7 @@ This page describes the code on `main`. The accepted v1 target differs: see [arc
 - **Any provider.** Anthropic, or anything that speaks the OpenAI `/chat/completions` protocol (OpenAI, OpenRouter, Ollama, LM Studio, vLLM, Groq, ...).
 - **History** you can toggle (Ctrl+H), reopen and delete. Stored on your server, shared by every app you pair.
 - **Copy in and out.** Paste anything into the bar. Copy a whole reply, a single code block, or the last reply (Ctrl+Shift+C).
+- **Links ask first.** A reply is shown as formatted text, and nothing in it can run or load anything. A link in a reply opens only after the popup shows its whole address (the words on a link can say anything) and you press Open; Esc or Cancel closes it. Only web addresses (`http` and `https`) open. A picture in a reply is shown as a link, so no remote image is ever fetched.
 - **Replies run on the server.** Close the window or lose the connection and the reply keeps going; reopen the app and it is there.
 - **Keys stay off the desktop.** The desktop app is a thin client; provider API keys never reach it, or the server.
 
@@ -337,14 +338,15 @@ services/cpa-supervisor/ runs CLIProxyAPI in the askbar-cpa image and restarts i
 clients/desktop/       the desktop client, its own Cargo workspace and package.json:
   src-tauri/           Cargo package askbar-client, program askbar: window, hotkey, tray, pairing
   ui/                  the popup: index.html, style.css, main.js, markdown.js (no build step)
-  tests/               markdown and UI tests for the popup, icon generator
+  tests/               markdown, UI and content-security-policy tests for the popup, icon generator
 deploy/caddy/          Caddy's bootstrap config
 deploy/cpa/            notes on CLIProxyAPI
 compose.yaml           bootstrap, server, model-gateway, auditor, alerter, admin, caddy, cpa (CLIProxyAPI), plus the dev profile
 Dockerfile             one target per service: `bootstrap`, `server`, `model-gateway`, `auditor`, `alerter`, `admin`, `caddy` (Caddy with the Cloudflare DNS module) and `cpa` (the pinned CLIProxyAPI with our supervisor)
 scripts/               smoke.sh (end-to-end), check-isolation.sh (container isolation checks) and check-docs.sh
 docs/                  architecture.md, wire-contract.md, adr/, style/, openapi/ (client, server, admin, audit, model-gateway, alerter), refactor-log.md
-tests/e2e/             the admin-site browser test and the mock LLM server
+tests/e2e/             the admin-site browser test, the mock LLM server and the stand-ins for ntfy, mail and GitHub
+tests/payloads/        hostile Markdown for the popup and the admin site (markdown.json) and what a safe rendering is (lib.js)
 ```
 
 The target layout is in [ADR 0033](adr/0033-repository-layout.md).

@@ -168,7 +168,8 @@
         return;
       }
       const slow = /slow/i.test(text);
-      const full = slow ? 'This reply keeps streaming until you stop it. '.repeat(30) : REPLY;
+      // A test can set `window.__nextReply` to the exact text the next reply streams.
+      const full = slow ? 'This reply keeps streaming until you stop it. '.repeat(30) : window.__nextReply != null ? window.__nextReply : REPLY;
       let sent = '';
       for (let i = 0; i < full.length; i += slow ? 5 : 8) {
         if (cancelFlag) break;

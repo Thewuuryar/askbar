@@ -45,6 +45,10 @@
     privacyText: $('privacy-text'),
     privacyDays: $('privacy-days'),
     privacyOk: $('privacy-ok'),
+    linkConfirm: $('link-confirm'),
+    linkUrl: $('link-confirm-url'),
+    linkOpen: $('link-open'),
+    linkCancel: $('link-cancel'),
   };
 
   const state = {
@@ -214,6 +218,39 @@
     el.pairInput.focus();
   }
 
+  // A link in a reply opens only after its whole address has been shown (ADR 0044, D18), and only if it is http or https. The
+  // label a reply puts on a link says nothing about where it goes. `open_url` checks the scheme again in the backend.
+  let pendingLink = null;
+
+  function openableUrl(u) {
+    return typeof u === 'string' && u.length <= 2048 && /^https?:\/\/[^\s\u0000-\u001f\u007f]+$/.test(u);
+  }
+
+  function askToOpen(url) {
+    if (!openableUrl(url)) return;
+    pendingLink = url;
+    el.linkUrl.textContent = url;
+    el.linkConfirm.hidden = false;
+    layout();
+    el.linkCancel.focus();
+  }
+
+  function closeLinkConfirm() {
+    if (!pendingLink) return false;
+    pendingLink = null;
+    el.linkConfirm.hidden = true;
+    el.linkUrl.textContent = '';
+    layout();
+    el.input.focus();
+    return true;
+  }
+
+  function openPendingLink() {
+    const url = pendingLink;
+    closeLinkConfirm();
+    if (url) invoke('open_url', { url }).catch(() => {});
+  }
+
   function closePairing() {
     if (el.pair.hidden) return false;
     el.pair.hidden = true;
@@ -286,9 +323,30 @@
 
   // ------------------------------------------------------------ messages
 
+  // Trusted Types (ADR 0044, D17). The CSP requires them, so the browser refuses a string for any HTML sink, and allows one policy:
+  // `askbar-markdown`, which turns Markdown into HTML with `renderMarkdown` and nothing else. The one `innerHTML` in this app is
+  // below; if it were ever handed anything but a policy's output, the browser would refuse it. A webview with no Trusted Types
+  // has no such rule, and `renderMarkdown`'s own escaping is what protects it. If the policy is refused, the reply is shown as
+  // plain text: readable, and never markup.
+  let markdownPolicy = null;
+  try {
+    if (window.trustedTypes) {
+      markdownPolicy = window.trustedTypes.createPolicy('askbar-markdown', { createHTML: (source) => window.renderMarkdown(source) });
+    }
+  } catch (_) { markdownPolicy = null; }
+
+  function setReply(node, markdown) {
+    if (window.trustedTypes && !markdownPolicy) {
+      node.textContent = markdown;
+      return;
+    }
+    // The one HTML sink in the app.
+    node.innerHTML = markdownPolicy ? markdownPolicy.createHTML(markdown) : window.renderMarkdown(markdown);
+  }
+
   function render(msg) {
-    msg.bodyNode.innerHTML = msg.role === 'assistant' ? window.renderMarkdown(msg.content) : '';
-    if (msg.role === 'user') msg.bodyNode.textContent = msg.content;
+    if (msg.role === 'assistant') setReply(msg.bodyNode, msg.content);
+    else msg.bodyNode.textContent = msg.content;
     if (state.pinned) followNewest();
   }
 
@@ -832,7 +890,7 @@
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       e.preventDefault();
-      if (closePairing() || closeShare()) return;
+      if (closeLinkConfirm() || closePairing() || closeShare()) return;
       if (state.streaming) cancel(); else invoke('hide_window');
       return;
     }
@@ -874,9 +932,12 @@
     const link = t.closest('a[href]');
     if (link) {
       e.preventDefault();
-      invoke('open_url', { url: link.getAttribute('href') }).catch(() => {});
+      askToOpen(link.getAttribute('href'));
     }
   });
+
+  el.linkOpen.addEventListener('click', openPendingLink);
+  el.linkCancel.addEventListener('click', closeLinkConfirm);
 
   el.histList.addEventListener('click', (e) => {
     const t = e.target;

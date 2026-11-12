@@ -367,9 +367,17 @@ fn open_config() -> Result<(), String> {
     opener::open(&path).or_else(|_| opener::reveal(&path)).map_err(|e| format!("Could not open {}: {e}", path.display()))
 }
 
+/// Whether `url` may be handed to the system's browser: `http` or `https`, with something after the scheme, no space or control
+/// character, and not absurdly long. Anything else (`javascript:`, `file:`, `data:`, a custom scheme, a command-looking string)
+/// is refused here, whatever the page asked (ADR 0044, D18).
+fn is_openable(url: &str) -> bool {
+    let rest = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://"));
+    url.len() <= 2048 && rest.is_some_and(|r| !r.is_empty() && r.chars().all(|c| !c.is_whitespace() && !c.is_control()))
+}
+
 #[tauri::command]
 fn open_url(url: String) -> Result<(), String> {
-    if !(url.starts_with("https://") || url.starts_with("http://")) {
+    if !is_openable(&url) {
         return Err("Only http(s) links can be opened.".into());
     }
     opener::open_browser(&url).map_err(|e| e.to_string())
@@ -524,6 +532,37 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+    use super::is_openable;
+
+    #[test]
+    fn only_plain_http_and_https_addresses_are_opened() {
+        for ok in ["https://example.com", "http://example.com/a?b=1&c=2#d", "https://127.0.0.1:8080/x", "https://example.com/a%20b"] {
+            assert!(is_openable(ok), "{ok}");
+        }
+        for bad in [
+            "",
+            "https://",
+            "http://",
+            "javascript:alert(1)",
+            "JAVASCRIPT:alert(1)",
+            "data:text/html,<script>1</script>",
+            "file:///etc/passwd",
+            "ftp://example.com",
+            "ms-msdt:/id PCWDiagnostic",
+            "HTTPS://example.com",
+            " https://example.com",
+            "https://example.com/a b",
+            "https://example.com/\nx",
+            "https://example.com/\u{0}",
+            "-oProxyCommand=x",
+            "example.com",
+            "//example.com",
+        ] {
+            assert!(!is_openable(bad), "{bad:?}");
+        }
+        assert!(!is_openable(&format!("https://example.com/{}", "a".repeat(3000))), "too long");
+    }
+
     /// `apply_config` and `block_on` panic when called from an async command, which runs on a runtime
     /// worker. A test can't build an `AppHandle`, so this reads the source.
     #[test]

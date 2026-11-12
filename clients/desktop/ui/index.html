@@ -46,6 +46,15 @@
         <button type="button" class="text-btn" id="notice-close" aria-label="Dismiss">Dismiss</button>
       </div>
 
+      <div class="link-confirm" id="link-confirm" role="alertdialog" aria-labelledby="link-confirm-title" aria-describedby="link-confirm-url" hidden>
+        <p id="link-confirm-title">Open this link in your browser?</p>
+        <code class="link-url" id="link-confirm-url"></code>
+        <div class="link-actions">
+          <button type="button" class="text-btn" id="link-open">Open</button>
+          <button type="button" class="text-btn" id="link-cancel">Cancel</button>
+        </div>
+      </div>
+
       <div class="status" id="status" role="alert" hidden>
         <span id="status-text"></span>
         <span class="status-actions" id="status-actions"></span>

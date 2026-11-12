@@ -842,6 +842,70 @@ async function waitForPort(port) {
     assert.match(body, /event: done/);
     return body;
   }
+  await step('admin: Trusted Types are required, and the browser refuses every HTML sink, a policy, a script and a string of code (D17)', async () => {
+    // A page of its own, so the violations this makes are not counted as the admin's own errors.
+    const p = await page.context().newPage();
+    await p.goto(page.url());
+    await p.waitForSelector('#app:not([hidden])');
+    const csp = await p.evaluate(async () => (await fetch(location.href)).headers.get('content-security-policy'));
+    assert.match(csp, /require-trusted-types-for 'script'/);
+    assert.match(csp, /trusted-types 'none'/);
+    const r = await p.evaluate(async () => {
+      const tryIt = (f) => { try { f(); return 'allowed'; } catch (e) { return e.name; } };
+      return {
+        innerHTML: tryIt(() => { document.body.innerHTML = '<b>x</b>'; }),
+        insertAdjacentHTML: tryIt(() => document.body.insertAdjacentHTML('beforeend', '<b>x</b>')),
+        policy: tryIt(() => window.trustedTypes.createPolicy('x', { createHTML: (v) => v })),
+        script: tryIt(() => { const e = document.createElement('script'); e.textContent = 'window.__pwned = 1'; document.head.appendChild(e); }),
+        timer: await new Promise((resolve) => {
+          try { setTimeout('window.__pwned = 2', 0); } catch (e) { resolve(e.name); return; }
+          setTimeout(() => resolve(window.__pwned === undefined ? 'blocked' : 'ran'), 150);
+        }),
+      };
+    });
+    assert.deepEqual(r, { innerHTML: 'TypeError', insertAdjacentHTML: 'TypeError', policy: 'TypeError', script: 'TypeError', timer: 'TypeError' });
+    await p.close();
+  });
+  await step('admin: hostile text in user, client and provider names stays inert in every view (payload library)', async () => {
+    const payloads = require('../payloads/lib.js');
+    const hostile = payloads.cases().map((c) => c.input).filter((t) => t.length <= 1500);
+    const origin = new URL(page.url()).origin;
+    const external = [];
+    const onRequest = (r) => { if (new URL(r.url()).origin !== origin) external.push(r.url()); };
+    page.on('request', onRequest);
+    await page.evaluate(() => { window.__pwned = undefined; });
+    await page.route('**/api/admin/v1/users', (route) => route.request().method() === 'GET'
+      ? route.fulfill({ json: hostile.map((name, i) => ({ id: 'h' + i, name, paused: i % 2 === 0 })) }) : route.continue());
+    await page.route('**/api/admin/v1/clients', (route) => route.request().method() === 'GET'
+      ? route.fulfill({ json: hostile.map((name, i) => ({ id: 'c' + i, name, user_id: 'h' + i, revoked: i % 3 === 0, created_at: 1, last_seen: 2 })) }) : route.continue());
+    await page.route('**/api/admin/v1/providers', async (route) => {
+      if (route.request().method() !== 'GET') return route.continue();
+      const real = await (await route.fetch()).json();
+      return route.fulfill({ json: hostile.map((name, i) => ({ ...real[0], id: 'p' + i, name, model: name })) });
+    });
+    const NASTY = '#PANEL img, #PANEL iframe, #PANEL object, #PANEL embed, #PANEL svg, #PANEL style, #PANEL base, #PANEL meta, #PANEL form, #PANEL script, #PANEL a[href^="javascript"]';
+    const inert = async (panel, what) => {
+      const r = await page.evaluate((nasty) => ({ nasty: document.querySelectorAll(nasty).length, pwned: window.__pwned }), NASTY.replaceAll('#PANEL', panel));
+      assert.deepEqual(r, { nasty: 0, pwned: undefined }, what);
+      const shown = await page.innerText(panel);
+      assert.ok(shown.includes('<img src=x onerror=window.__pwned=1>'), what + ': the name is visible, as text');
+      assert.ok(shown.includes('<script>window.__pwned=1</script> hello'), what + ': so is the script tag');
+    };
+    await openPage('clients');
+    await page.waitForSelector('#users [data-user="h0"]');
+    await page.waitForSelector('#clients [data-client="c0"]');
+    await inert('#users', 'users');
+    await inert('#clients', 'clients');
+    await openPage('providers');
+    await page.waitForSelector('#providers .card[data-name]');
+    await inert('#providers', 'providers');
+    await page.unroute('**/api/admin/v1/users');
+    await page.unroute('**/api/admin/v1/clients');
+    await page.unroute('**/api/admin/v1/providers');
+    page.off('request', onRequest);
+    assert.deepEqual(external, [], 'a request left the admin site');
+    await openPage('providers');
+  });
   await step('audit: the tab loads, has its five views and counts a real request', async () => {
     await page.evaluate(async ({ xss, mockUrl }) => {
       const H = { 'x-askbar-admin': '1', 'content-type': 'application/json' };

@@ -113,4 +113,45 @@ t('every prefix of a rich document renders without throwing (streaming)', () => 
   for (let i = 0; i <= doc.length; i++) md(doc.slice(0, i));
 });
 
+
+// ---- Images are never fetched: image syntax is a link (D18, ADR 0044).
+t('remote image syntax is a link with the alt text, or the address, as its label', () => {
+  has(md('![a logo](https://example.com/i.png)'), '<a href="https://example.com/i.png">a logo</a>');
+  has(md('![](https://example.com/i.png)'), '<a href="https://example.com/i.png">https://example.com/i.png</a>');
+  lacks(md('![a](https://example.com/i.png)'), '<img');
+  lacks(md('![a](https://example.com/i.png)'), '!');
+});
+
+t('image syntax with another scheme is plain text, not a link', () => {
+  const h = md('![a](data:image/png;base64,AAAA) ![b](javascript:alert(1))');
+  lacks(h, '<a '); lacks(h, '<img');
+});
+
+t('the character that marks a stashed fragment cannot be sent in', () => {
+  const h = md('\u00000\u0000 `x` \u0000999\u0000');
+  lacks(h, 'undefined'); lacks(h, '\u0000');
+});
+
+t('blocks and lists nest to 20 levels and then show flat, without overflowing the stack', () => {
+  assert.doesNotThrow(() => md('>'.repeat(20000) + ' x'));
+  assert.doesNotThrow(() => md(Array.from({ length: 5000 }, (_, i) => ' '.repeat(i) + '- x').join('\n')));
+  assert.equal((md('>'.repeat(30) + ' x').match(/<blockquote>/g) || []).length, 20);
+});
+
+// ---- The hostile library (tests/payloads/markdown.json): every case, on the renderer's own output.
+const payloads = require('../../../tests/payloads/lib.js');
+for (const c of payloads.cases()) {
+  t('payload: ' + c.name, () => {
+    const started = Date.now();
+    const h = md(c.input);
+    const took = Date.now() - started;
+    assert.ok(took <= c.max_ms, `took ${took} ms, more than ${c.max_ms}`);
+    assert.deepEqual(payloads.problems(h), [], 'outside the allowlist');
+    for (const a of c.absent || []) lacks(h, a);
+    for (const v of c.visible || []) has(h, v);
+    if (c.links) for (const l of payloads.links(h)) assert.ok(c.links.includes(l), `unexpected link ${l}`);
+    for (const l of payloads.links(h)) assert.match(l, /^https?:\/\//);
+  });
+}
+
 console.log(passed + ' markdown tests passed' + (process.exitCode ? ' (with failures)' : ''));

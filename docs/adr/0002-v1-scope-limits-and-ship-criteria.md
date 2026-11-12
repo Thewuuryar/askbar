@@ -51,7 +51,7 @@ The README states that Askbar is an open-source project for personal hardware, w
 - Auditor and admin failure tests pass.
 - No known ship-blocking finding remains open.
 - Documentation is up to date with v1, including an architecture diagram that matches the shipped services and links.
-- A person tests the client on macOS, Windows, and Linux.
+- A person tests the client on macOS, Windows, and Linux. On macOS and Linux, whose webviews are not Chromium, this includes that the popup's replies still render under its Trusted Types policy, that a link asks first and shows its whole address, and that the webview's console shows no content security policy error ([0044](0044-desktop-client.md)).
 
 **Triage rule:** a new finding blocks v1 only if it allows remote access without authentication, exposure of another user's data, exposure of secrets, a bypass of audit recording, or failure of a Defend control. Anything else goes on the backlog with a target version.
 
@@ -64,3 +64,4 @@ Not recorded.
 Hardening continues in later versions, and new ideas that don't meet the triage rule don't delay v1. The v1 build still needs an estimate against the 100 hours.
 
 ## Amendments
+- 2026-11-12: the person-run macOS and Linux client check names the Trusted Types, link and CSP-error checks (plan step 5.2, PR AE, #83), because the Tauri webviews there are not Chromium and the automated CSP test runs in Chromium. Spells out the existing client item; no decision changed.
