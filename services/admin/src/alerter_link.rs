@@ -180,6 +180,7 @@ pub struct AlerterLink {
     last_error: Mutex<Option<String>>,
     watch: Mutex<Watch>,
     dirty: Notify,
+    token_watch: crate::notify::TokenWatch,
 }
 
 impl AlerterLink {
@@ -196,7 +197,13 @@ impl AlerterLink {
             last_error: Mutex::new(None),
             watch: Mutex::new(Watch::default()),
             dirty: Notify::new(),
+            token_watch: crate::notify::TokenWatch::new(LINK),
         })
+    }
+
+    /// Where an alert about this link's token goes (set once by `main`).
+    pub fn set_notifier(&self, n: Arc<crate::notify::Notifier>) {
+        self.token_watch.set_notifier(n);
     }
 
     pub fn online(&self) -> bool {
@@ -225,6 +232,7 @@ impl AlerterLink {
         }
         let resp = req.send().await.map_err(|_| ())?;
         let status = resp.status().as_u16();
+        self.token_watch.saw(status);
         let bytes = resp.bytes().await.map_err(|_| ())?;
         Ok((status, bytes.to_vec()))
     }

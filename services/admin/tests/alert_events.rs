@@ -130,3 +130,77 @@ async fn an_alert_is_an_event_with_typed_fields_and_a_note_on_the_pages() {
     assert_eq!(notes[0]["kind"], "rejected_token");
     assert!(notes[0]["text"].as_str().unwrap().contains("admin-model-gateway"));
 }
+
+/// A stand-in for any service on any admin link: answers every request with `status`.
+async fn answering(status: Arc<Mutex<u16>>) -> String {
+    let app = axum::Router::new().fallback(move || {
+        let status = status.clone();
+        async move { (StatusCode::from_u16(*status.lock().unwrap()).unwrap(), axum::Json(json!({}))) }
+    });
+    format!("http://{}", spawn(app).await)
+}
+
+#[tokio::test]
+async fn a_token_that_is_refused_on_any_admin_link_is_one_alert_naming_that_link_for_each_episode() {
+    use askbar_admin::{
+        actions::ActionLog, alerter_link::AlerterLink, auditor_link::AuditorLink, gateway_link::GatewayLink, server_link::ServerLink,
+    };
+    let r = rig().await;
+    let status = Arc::new(Mutex::new(401u16));
+    let url = answering(status.clone()).await;
+    let server = ServerLink::new(&url, "t".into());
+    let gateway = GatewayLink::new(&url, "t".into());
+    let alerter = AlerterLink::new(&url, "t".into());
+    let auditor = AuditorLink::new(&url, "t".into());
+    let actions = ActionLog::new(&url, "t".into());
+    for n in [&server as &dyn Notified, &gateway, &alerter, &auditor, &actions] {
+        n.attach(r.state.notifier.clone());
+    }
+    let record = askbar_proto::audit::AdminActionStart {
+        id: "a".into(),
+        at: 0,
+        category: "settings".into(),
+        action: "update".into(),
+        outcome: "requested".into(),
+        detail: None,
+    };
+    let touch = || async {
+        server.check().await;
+        gateway.status_now().await;
+        alerter.status_now().await;
+        auditor.get("/status").await;
+        let _ = actions.record(&record).await;
+    };
+    // Three refusals on every link: one alert for each link.
+    for _ in 0..3 {
+        touch().await;
+    }
+    let events = r.events(5).await;
+    assert_admin_events(&events);
+    let mut links: Vec<String> = events.iter().map(|e| e["fields"]["link"].as_str().unwrap().to_string()).collect();
+    links.sort();
+    assert_eq!(links, ["admin-alerter", "admin-auditor-append", "admin-auditor-read", "admin-model-gateway", "admin-server"]);
+    assert!(events.iter().all(|e| e["kind"] == "rejected_token" && e["severity"] == "warning"));
+    assert_eq!(r.notes().await.len(), 5);
+    // The token is accepted again, and refused again later: a new episode, a new alert (on each link).
+    *status.lock().unwrap() = 200;
+    touch().await;
+    *status.lock().unwrap() = 401;
+    touch().await;
+    assert_eq!(r.events(10).await.len(), 10);
+}
+
+/// Each link takes the notifier the same way.
+trait Notified {
+    fn attach(&self, n: Arc<askbar_admin::notify::Notifier>);
+}
+macro_rules! notified {
+    ($($t:ty),*) => {$(impl Notified for Arc<$t> { fn attach(&self, n: Arc<askbar_admin::notify::Notifier>) { self.set_notifier(n) } })*};
+}
+notified!(
+    askbar_admin::server_link::ServerLink,
+    askbar_admin::gateway_link::GatewayLink,
+    askbar_admin::alerter_link::AlerterLink,
+    askbar_admin::auditor_link::AuditorLink,
+    askbar_admin::actions::ActionLog
+);

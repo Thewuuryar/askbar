@@ -74,6 +74,7 @@ pub struct ActionLog {
     http: reqwest::Client,
     base: String,
     token: String,
+    token_watch: crate::notify::TokenWatch,
 }
 
 impl ActionLog {
@@ -86,13 +87,23 @@ impl ActionLog {
                 .expect("reqwest client"),
             base: base.trim_end_matches('/').to_string(),
             token,
+            token_watch: crate::notify::TokenWatch::new(APPEND_LINK),
         })
+    }
+
+    /// Where an alert about this link's token goes (set once by `main`).
+    pub fn set_notifier(&self, n: Arc<crate::notify::Notifier>) {
+        self.token_watch.set_notifier(n);
     }
 
     /// `POST /admin-actions`. `Ok` once the auditor has the record committed.
     pub async fn record(&self, r: &AdminActionStart) -> Result<(), NotRecorded> {
         let url = format!("{}{}/admin-actions", self.base, askbar_proto::paths::AUDIT_V1);
-        match self.http.post(url).bearer_auth(&self.token).json(r).send().await {
+        let sent = self.http.post(url).bearer_auth(&self.token).json(r).send().await;
+        if let Ok(resp) = &sent {
+            self.token_watch.saw(resp.status().as_u16());
+        }
+        match sent {
             Ok(resp) if resp.status().is_success() => Ok(()),
             Ok(resp) if resp.status() == StatusCode::SERVICE_UNAVAILABLE || resp.status() == StatusCode::TOO_MANY_REQUESTS => {
                 Err(NotRecorded::Backlog)

@@ -49,6 +49,7 @@ pub struct AuditorLink {
     online: AtomicBool,
     last_error: Mutex<Option<String>>,
     dirty: Notify,
+    token_watch: crate::notify::TokenWatch,
 }
 
 impl AuditorLink {
@@ -64,7 +65,13 @@ impl AuditorLink {
             online: AtomicBool::new(false),
             last_error: Mutex::new(None),
             dirty: Notify::new(),
+            token_watch: crate::notify::TokenWatch::new(READ_LINK),
         })
+    }
+
+    /// Where an alert about this link's token goes (set once by `main`).
+    pub fn set_notifier(&self, n: Arc<crate::notify::Notifier>) {
+        self.token_watch.set_notifier(n);
     }
 
     pub fn online(&self) -> bool {
@@ -82,6 +89,9 @@ impl AuditorLink {
 
     fn note(&self, reached: bool, status: Option<u16>) {
         self.online.store(reached, Ordering::Relaxed);
+        if let Some(status) = status {
+            self.token_watch.saw(status);
+        }
         *self.last_error.lock().unwrap_or_else(|e| e.into_inner()) = match (reached, status) {
             (false, _) => Some("The auditor does not answer.".into()),
             (true, Some(401)) => Some("The auditor does not accept this admin's read token.".into()),
