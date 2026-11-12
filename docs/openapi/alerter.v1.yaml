@@ -255,6 +255,12 @@ components:
         its hellos). The admin sends `chain_mismatch`, `rejected_token`, `restart_loop` (the other services'),
         `budget_threshold`, `backup_failed`, `backup_missed` and `restore_performed`. `release_available` and `test` are
         the alerter's own and come over no link.
+
+
+        As built, the admin sends `chain_mismatch` (no fields; once for each finding), `rejected_token` (`link`: the
+        admin's link whose token was refused, once for each episode), `restart_loop` (`service`, `count`, `minutes`:
+        three restarts within ten minutes of `server`, `model-gateway` or `alerter`) and `budget_threshold` (`period`,
+        `percent`: `warning` at 80 and `critical` at 100, once for each period, subscriptions not counted).
       enum:
           - unsealed
           - unseal_timeouts_changed
