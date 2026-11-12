@@ -99,6 +99,10 @@ async fn main() {
         let listener =
             tokio::net::TcpListener::bind(addr).await.unwrap_or_else(|e| die(format!("cannot listen on {addr} for access lines: {e}"), 1));
         tracing::info!(%addr, "the auditor takes Caddy's access lines");
+        // With a listener for them, a long stretch of replies and no access line is Caddy being silent (ADR 0051).
+        if let Some(rules) = auditor.rules() {
+            rules.watch_caddy();
+        }
         tokio::spawn(askbar_auditor::ingest::serve(listener, auditor.clone()));
     }
     let app = askbar_auditor::router(auditor, askbar_auditor::links(&token_dir));

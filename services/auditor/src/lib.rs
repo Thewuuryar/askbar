@@ -94,7 +94,7 @@ impl Auditor {
     /// Gives the auditor the rules that send alerts, over `alerts` (set once, by `main`). `Auditor::new` keeps its signature,
     /// so every rig that does not care about alerts is as it was.
     pub fn with_alerts(self: Arc<Self>, alerts: Arc<dyn rules::Alerts>) -> Arc<Self> {
-        let rules = rules::Rules::new(alerts);
+        let rules = rules::Rules::new(alerts, now());
         // What the admin last recorded for how long sealed content stays open, so a restart is not a change.
         if let Some(conn) = self.recorder.reader() {
             let (idle, total) = latest_unseal_limits(&conn);

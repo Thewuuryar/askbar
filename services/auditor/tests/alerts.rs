@@ -197,3 +197,73 @@ async fn a_volume_running_out_of_room_is_an_alert_with_the_megabytes_left_each_t
     );
     assert_taken(&t.events());
 }
+
+fn now() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64
+}
+
+#[tokio::test]
+async fn the_admin_restarting_three_times_in_ten_minutes_is_a_restart_loop_from_its_hellos() {
+    let t = start().await;
+    for boot in ["b1", "b2", "b3"] {
+        assert_eq!(t.as_(ADMIN_APPEND, M::POST, "/hello", Some(json!({ "boot_id": boot }))).await, 200);
+    }
+    assert!(t.kinds().is_empty(), "two restarts");
+    assert_eq!(t.as_(ADMIN_APPEND, M::POST, "/hello", Some(json!({ "boot_id": "b4" }))).await, 200);
+    assert_eq!(
+        t.events().iter().map(|e| (e.kind, e.fields.service.clone(), e.fields.count, e.fields.minutes)).collect::<Vec<_>>(),
+        [(Kind::RestartLoop, Some("admin".to_string()), Some(3), Some(10))]
+    );
+    assert_taken(&t.events());
+    // The server's hellos are not the auditor's to count.
+    for boot in ["s1", "s2", "s3", "s4", "s5"] {
+        assert_eq!(t.as_(SERVER, M::POST, "/hello", Some(json!({ "boot_id": boot }))).await, 200);
+    }
+    assert_eq!(t.kinds().len(), 1);
+}
+
+#[tokio::test]
+async fn links_that_say_nothing_for_five_minutes_are_silent_and_a_link_that_speaks_is_not() {
+    let t = start().await;
+    // The server and the admin's read link speak; the gateway and the alerter never do.
+    assert_eq!(t.as_(SERVER, M::GET, "/status", None).await, 200);
+    assert_eq!(t.as_(ADMIN_READ, M::GET, "/status", None).await, 200);
+    t.auditor.tick_rules(now() + 60);
+    assert!(t.kinds().is_empty(), "one minute");
+    t.auditor.tick_rules(now() + 301);
+    // Every link was last heard a moment ago on this clock, so all of them are past five minutes at +301: the rule is a
+    // comparison with the time of the last request, which the status route reports.
+    let silent: Vec<_> = t.events().iter().map(|e| (e.kind, e.severity, e.fields.minutes)).collect();
+    assert_eq!(silent.len(), 4, "{silent:?}");
+    assert!(silent.iter().all(|s| *s == (Kind::ComponentSilent, Severity::Critical, Some(5))));
+    assert_taken(&t.events());
+    let status: Value =
+        t.http.get(format!("{}/api/audit/v1/status", t.url)).bearer_auth(token(SERVER)).send().await.unwrap().json().await.unwrap();
+    assert!(status["last_requests"]["server"].is_i64(), "the time of each link's last request is what it compares");
+}
+
+#[tokio::test]
+async fn a_reply_with_no_access_line_for_fifteen_minutes_is_caddy_silent_and_a_line_that_comes_is_not() {
+    let t = start().await;
+    t.auditor.rules().unwrap().watch_caddy();
+    assert_eq!(t.as_(GATEWAY, M::POST, "/hello", Some(json!({ "boot_id": "g" }))).await, 200);
+    let chat = json!({ "id": "t1", "trace_id": "t1", "kind": "turn", "name": "chat", "started_at": now(), "started_ms": now() * 1000 });
+    assert_eq!(t.as_(GATEWAY, M::POST, "/spans", Some(chat)).await, 201);
+    // The server and the others keep calling, so only Caddy is quiet; a minute at a time up to the fifteenth.
+    let start_at = now();
+    for minute in 1..15 {
+        t.auditor.tick_rules(start_at + minute * 60);
+    }
+    let caddy = |t: &T| t.kinds().iter().filter(|k| **k == Kind::CaddySilent).count();
+    assert_eq!(caddy(&t), 0);
+    t.auditor.tick_rules(start_at + 15 * 60 + 1);
+    assert_eq!(caddy(&t), 1);
+    let e = t.events().into_iter().find(|e| e.kind == Kind::CaddySilent).unwrap();
+    assert_eq!((e.severity, e.fields.minutes), (Severity::Warning, Some(15)));
+    assert_taken(&[e]);
+    // Caddy's line arrives (the way Caddy sends it: a line on the ingest stream), and the next reply is judged afresh.
+    let line = r#"{"ts":1.0,"request":{"method":"POST","host":"h","uri":"/api/client/v1/x"},"status":200}"#;
+    askbar_auditor::ingest::read_lines(std::io::Cursor::new(format!("{line}\n").into_bytes()), &t.auditor).await;
+    t.auditor.tick_rules(start_at + 20 * 60);
+    assert_eq!(caddy(&t), 1, "it spoke; nothing new");
+}
