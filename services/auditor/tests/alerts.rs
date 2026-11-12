@@ -152,3 +152,22 @@ async fn a_new_or_replaced_backup_key_is_an_alert() {
     assert_eq!(t.kinds(), [Kind::BackupKeyChanged, Kind::BackupKeyChanged]);
     assert_taken(&t.events());
 }
+
+#[tokio::test]
+async fn a_new_retention_is_an_alert_naming_its_days_and_pushing_the_same_one_every_half_minute_is_not() {
+    let t = start().await;
+    let put = |days: u32| t.as_(ADMIN_READ, M::PUT, "/retention", Some(json!({ "days": days })));
+    assert_eq!(put(30).await, 200, "the default again");
+    assert!(t.kinds().is_empty());
+    assert_eq!(put(90).await, 200);
+    assert_eq!(put(90).await, 200);
+    assert_eq!(put(7).await, 200);
+    assert_eq!(
+        t.events().iter().map(|e| (e.kind, e.fields.count)).collect::<Vec<_>>(),
+        [(Kind::RetentionChanged, Some(90)), (Kind::RetentionChanged, Some(7))]
+    );
+    assert_taken(&t.events());
+    // A refused change (under the floor) is no alert: nothing changed.
+    assert_eq!(put(3).await, 400);
+    assert_eq!(t.kinds().len(), 2);
+}

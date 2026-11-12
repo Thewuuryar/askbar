@@ -759,7 +759,11 @@ async fn put_retention(State(a): St, body: Bytes) -> Result<Json<wire::Retention
         return Err(bad(format!("Records are kept at most {MAX_RETENTION_DAYS} days.")));
     }
     gate(&a, false)?;
+    let old = a.retention_days();
     append(&a, Record::Setting { key: RETENTION_KEY.into(), value: r.days.to_string() }).await?;
+    if let Some(rules) = a.rules() {
+        rules.retention_changed(old, r.days);
+    }
     Ok(Json(wire::Retention { days: r.days, floor_days: Some(askbar_audit::MIN_RETENTION_DAYS) }))
 }
 

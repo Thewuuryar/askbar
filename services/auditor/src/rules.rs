@@ -73,6 +73,13 @@ impl Rules {
         self.alerts.send(kind, kind.severity(), fields);
     }
 
+    /// The retention was set to `days`, from `old`. Only a change is an alert: the admin pushes the setting every half minute.
+    pub fn retention_changed(&self, old: u32, days: u32) {
+        if old != days {
+            self.say(Kind::RetentionChanged, Fields { count: Some(days), ..Fields::default() });
+        }
+    }
+
     /// A record was appended (`now` in unix seconds).
     pub fn fed(&self, fed: &Fed, now: i64) {
         let _ = now;
@@ -244,5 +251,15 @@ pub(crate) mod tests {
         r.fed(&done("secret", "audit_key_rotate", None), 0);
         r.fed(&done("secret", "api_key_create", None), 0);
         assert_eq!(c.kinds(), [Kind::BackupKeyChanged, Kind::BackupKeyChanged]);
+    }
+
+    #[test]
+    fn a_new_retention_is_an_alert_with_its_days_and_the_same_one_pushed_again_is_not() {
+        let (r, c) = rules();
+        r.retention_changed(30, 30);
+        assert!(c.kinds().is_empty());
+        r.retention_changed(30, 7);
+        assert_eq!(c.kinds(), [Kind::RetentionChanged]);
+        assert_eq!(c.0.lock().unwrap()[0].2, Fields { count: Some(7), ..Fields::default() });
     }
 }
