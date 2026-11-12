@@ -9,7 +9,7 @@ info:
     the auditor can be changed with confidence, not for outside callers (ADR 0051, ADR 0010).
 
     Every request except `GET /health` carries `Authorization: Bearer <token>`. There is one token for each
-    link: `server-auditor`, `model-gateway-auditor`, `model-gateway-auditor-read`, `admin-auditor-append` and `admin-auditor-read`. The
+    link: `server-auditor`, `model-gateway-auditor`, `model-gateway-auditor-read`, `admin-auditor-append`, `admin-auditor-read` and `admin-auditor-restore`. The
     auditor holds only each token's SHA-256, in `auditor-token/accept/<link>.sha256`, read on every request.
     A link may call only its own routes (`403 forbidden` otherwise), and **the caller of a record is the one its
     token belongs to, never anything in a body**.
@@ -21,6 +21,7 @@ info:
     - `model-gateway-auditor-read`: `GET /token-counts` and `GET /status`, so the gateway can hold the budget against what
       was used. It appends nothing and reads no trace, content or admin record.
     - `admin-auditor-append`: `hello` and admin action records. It reads and changes nothing.
+    - `admin-auditor-restore`: `POST /restore` and nothing else: the one way records reach the auditor other than an append, into a store with no audited model call.
     - `admin-auditor-read`: every read, the chain head and its check, Caddy's access lines, retention, the backup public key and the encrypted export. It appends nothing.
     - **Caddy's access lines** do not use this API or a token. Caddy's `net` log writer cannot send one, so the auditor takes
       them on an ingest listener of its own, bound to its address on `audit-caddy`, a network of Caddy and the auditor alone
@@ -626,6 +627,48 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/Backlog'
+  /api/audit/v1/restore:
+    post:
+      operationId: restoreStore
+      summary: Make the store the one a backup holds. `admin-auditor-restore` only. Only into a store with no audited model call.
+      description: >-
+        ADR 0013, D25, and the one exception to the auditor being append-only (ADR 0010). The body is the tar `GET /export` made, opened
+        by the admin (the auditor never holds the key): `audit.db` and nothing else. It is written to a work directory on the audit volume,
+        opened and migrated as a copy (a store from a newer release is 409 `backup_newer_release`), and its whole hash chain is checked: a
+        store whose chain does not check, a body that is cut short, or a file that is not an audit store is 400 `bad_request`, and nothing
+        changes. Only then is it swapped in, in one step, by the writer between batches of records. 409 `not_empty` if the store holds an
+        audited model call (a span or a payload), checked before the body is read and again at the swap: what a start leaves (hellos, the
+        admin's own action records, Caddy's access lines, alert deliveries) does not count, and a restore replaces it. 503 `audit_backlog`
+        when the store is behind, or the volume has too little room for the copy. One at a time. The answer is the head of the chain after
+        the swap, which the admin keeps as the one it expects.
+      requestBody:
+        required: true
+        content:
+          application/x-tar:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '200':
+          description: Restored; the chain's head.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChainEntry'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: The store has audited model calls (`not_empty`), or the backup is from a newer release (`backup_newer_release`).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '503':
           $ref: '#/components/responses/Backlog'
 components:
