@@ -80,6 +80,7 @@ async fn main() {
     tokio::spawn(audit.clone().drain_forever());
     tokio::spawn(audit.clone().status_every_minute());
     tokio::spawn(alerter.clone().deliver_forever());
+    tokio::spawn(alerter.clone().releases_forever());
     let auditor_app = auditor_router(alerter.clone(), auditor_links(&dir));
     let admin_app = admin_router(alerter, admin_links(&dir));
     let serve = |addr: SocketAddr, app: axum::Router, what: &'static str| async move {

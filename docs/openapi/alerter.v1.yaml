@@ -166,6 +166,28 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '503':
           $ref: '#/components/responses/NotConfigured'
+  /api/alerter/v1/releases:
+    get:
+      operationId: getReleases
+      summary: What the daily release check found. The admin's listener.
+      description: >-
+        Once a day the alerter asks GitHub's latest-release API for the newest version (D11). The request has a fixed
+        `User-Agent` and nothing about the install. Only a plain release version (`1.2.3`) is kept: a pre-release, a draft or
+        any other tag is not a release. A check that failed is tried again after an hour. A newer version is announced once,
+        as a `release_available` alert, when a channel is set up. The state is on `alerter-data`.
+      responses:
+        '200':
+          description: The version this install runs and the newest release found, if any.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReleaseStatus'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/NotConfigured'
 components:
   securitySchemes:
     linkToken:
@@ -404,6 +426,25 @@ components:
         dropped:
           type: integer
           description: Alerts dropped from a full queue since the start.
+    ReleaseStatus:
+      type: object
+      required: [current, latest, newer, checked_at, failed_at]
+      properties:
+        current:
+          type: string
+          description: The version this install runs.
+        latest:
+          type: [string, 'null']
+          description: The newest release the last successful check found.
+        newer:
+          type: boolean
+          description: Whether `latest` is newer than `current`.
+        checked_at:
+          type: [integer, 'null']
+          description: Unix seconds of the last check that worked.
+        failed_at:
+          type: [integer, 'null']
+          description: Unix seconds of the last check that failed.
     TestResult:
       type: object
       required: [results]

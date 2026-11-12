@@ -460,7 +460,6 @@ async fn the_ledger_survives_a_restart_so_the_count_does_not_start_again() {
     t.sink_has(1).await;
     let (dir, sink) = (t.dir.clone(), sink_again(&t));
     // A new process on the same data directory.
-    std::mem::forget(t);
     let t2 = start_in(dir, sink).await;
     t2.configure().await;
     assert_eq!(t2.auditor(M::POST, "/events", Some(unsealed())).await.body["suppressed"], true, "held back by the ledger");
@@ -705,4 +704,185 @@ async fn an_email_configuration_that_cannot_be_used_is_refused_without_repeating
         walk(&t.dir.join(dir), &mut found);
     }
     assert!(found.is_empty(), "{found:?}");
+}
+
+// ------------------------------------------------------------------ the release check (ADR 0055, D11)
+
+/// A stand-in for GitHub's latest-release API: it answers with `body` and status, and keeps the header names and the
+/// `User-Agent` of each request it gets.
+struct ReleaseMock {
+    url: String,
+    body: Arc<Mutex<String>>,
+    status: Arc<AtomicU16>,
+    asked: Arc<Mutex<Vec<(String, Vec<String>)>>>,
+}
+
+async fn release_mock(tag: &str) -> ReleaseMock {
+    let body = Arc::new(Mutex::new(json!({ "tag_name": tag, "name": "x", "draft": false, "prerelease": false }).to_string()));
+    let status = Arc::new(AtomicU16::new(200));
+    let asked: Arc<Mutex<Vec<(String, Vec<String>)>>> = Default::default();
+    let (b, st, a) = (body.clone(), status.clone(), asked.clone());
+    let app = axum::Router::new().route(
+        "/repos/Thewuuryar/askbar/releases/latest",
+        axum::routing::get(move |h: axum::http::HeaderMap| {
+            let (b, st, a) = (b.clone(), st.clone(), a.clone());
+            async move {
+                let ua = h.get("user-agent").and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
+                a.lock().unwrap().push((ua, h.keys().map(|k| k.as_str().to_string()).collect()));
+                (axum::http::StatusCode::from_u16(st.load(Ordering::SeqCst)).unwrap(), b.lock().unwrap().clone())
+            }
+        }),
+    );
+    let url = format!("{}/repos/Thewuuryar/askbar/releases/latest", serve(app).await);
+    ReleaseMock { url, body, status, asked }
+}
+
+fn point_at(t: &T, mock: &ReleaseMock) {
+    t.alerter.releases.set_source(askbar_alerter::releases::Source {
+        url: mock.url.clone(),
+        current: "0.6.0".into(),
+        every: Duration::from_millis(50),
+        retry: Duration::from_millis(50),
+    });
+}
+
+#[tokio::test]
+async fn a_newer_release_is_announced_once_with_nothing_about_the_install_in_the_request() {
+    let t = start().await;
+    t.configure().await;
+    let mock = release_mock("v1.2.0").await;
+    point_at(&t, &mock);
+    t.alerter.release_round().await;
+    let seen = t.sink_has(1).await;
+    assert_eq!(
+        (seen.len(), seen[0].title.as_str(), seen[0].body.as_str(), seen[0].priority.as_str()),
+        (1, "A new Askbar release", "Askbar 1.2.0 is available.", "3")
+    );
+    // Rounds after that, and a check that finds the same version, say nothing more.
+    for _ in 0..3 {
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        t.alerter.release_round().await;
+    }
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert_eq!(t.sink.seen.lock().unwrap().len(), 1, "one alert for one version");
+    assert!(mock.asked.lock().unwrap().len() >= 2, "it did ask again");
+    // The request: a fixed User-Agent, and no header that names the install (no cookie, no authorization, no custom header).
+    for (ua, headers) in mock.asked.lock().unwrap().iter() {
+        assert_eq!(ua, "askbar-release-check");
+        for h in headers {
+            assert!(["host", "user-agent", "accept"].contains(&h.as_str()), "an unexpected header: {h}");
+        }
+    }
+    // A later release is announced too, and the admin can read what was found.
+    *mock.body.lock().unwrap() = json!({ "tag_name": "v1.3.0" }).to_string();
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    t.alerter.release_round().await;
+    assert_eq!(t.sink_has(2).await[1].body, "Askbar 1.3.0 is available.");
+    let r = t.admin(M::GET, "/releases", None).await;
+    assert_eq!(
+        (r.status, r.body["current"].clone(), r.body["latest"].clone(), r.body["newer"].clone()),
+        (200, json!("0.6.0"), json!("1.3.0"), json!(true)),
+        "{}",
+        r.text
+    );
+    assert!(r.body["checked_at"].is_i64());
+}
+
+#[tokio::test]
+async fn the_release_route_is_the_admins_alone_and_waits_for_the_configuration() {
+    let t = start().await;
+    assert_eq!(t.admin(M::GET, "/releases", None).await.code(), "not_configured");
+    t.configure().await;
+    let r = t.admin(M::GET, "/releases", None).await;
+    assert_eq!((r.status, r.body["latest"].clone(), r.body["newer"].clone()), (200, Value::Null, json!(false)));
+    assert_eq!(
+        t.call(&t.events_url, Some(&token("auditor-alerter")), M::GET, "/releases", None).await.status,
+        404,
+        "the auditor's listener has no such route"
+    );
+    assert_eq!(t.call(&t.admin_url, Some("wrong"), M::GET, "/releases", None).await.status, 401);
+}
+
+#[tokio::test]
+async fn the_same_version_an_older_one_a_failure_and_an_answer_that_is_not_a_release_announce_nothing() {
+    let t = start().await;
+    t.configure().await;
+    let mock = release_mock("v0.6.0").await;
+    point_at(&t, &mock);
+    t.alerter.release_round().await;
+    assert_eq!(t.admin(M::GET, "/releases", None).await.body["newer"], json!(false), "the same version");
+    for (status, body, why) in [
+        (200, json!({ "tag_name": "v0.5.0" }).to_string(), "an older version"),
+        (500, "{}".to_string(), "an error"),
+        (404, json!({ "message": "Not Found" }).to_string(), "no release"),
+        (200, "not json".to_string(), "not JSON"),
+        (200, json!({ "tag_name": "v2.0.0", "prerelease": true }).to_string(), "a pre-release"),
+        (200, json!({ "tag_name": "v2.0.0", "draft": true }).to_string(), "a draft"),
+        (200, json!({ "tag_name": "v2.0.0-rc1" }).to_string(), "a version with a suffix"),
+        (200, json!({ "tag_name": "v2.0.0 <script>alert(1)</script>" }).to_string(), "a tag with markup"),
+        (200, json!({ "tag_name": "v1.0.0\nInjected: yes" }).to_string(), "a tag with a line break"),
+    ] {
+        t.mock_status(&mock, status, &body);
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        t.alerter.release_round().await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(t.sink.seen.lock().unwrap().is_empty(), "{why}: an alert was sent");
+        let r = t.admin(M::GET, "/releases", None).await;
+        assert!(["0.5.0", "0.6.0"].contains(&r.body["latest"].as_str().unwrap_or("0.6.0")), "{why}: {}", r.text);
+        assert_eq!(r.body["newer"], json!(false), "{why}");
+    }
+    assert!(t.admin(M::GET, "/releases", None).await.body["failed_at"].is_i64(), "a failure is remembered");
+}
+
+impl T {
+    fn mock_status(&self, mock: &ReleaseMock, status: u16, body: &str) {
+        mock.status.store(status, Ordering::SeqCst);
+        *mock.body.lock().unwrap() = body.to_string();
+    }
+}
+
+#[tokio::test]
+async fn a_release_is_announced_when_a_channel_is_set_up_later_and_not_again_after_a_restart() {
+    let t = start().await;
+    let mock = release_mock("v1.2.0").await;
+    point_at(&t, &mock);
+    // Configured with no channel: the release is found but there is nowhere to say so, and nothing is marked as said.
+    assert_eq!(t.admin(M::PUT, "/config", Some(json!({ "version": 1 }))).await.status, 200);
+    t.alerter.release_round().await;
+    assert_eq!(t.admin(M::GET, "/releases", None).await.body["latest"], json!("1.2.0"));
+    assert!(t.sink.seen.lock().unwrap().is_empty());
+    t.configure().await;
+    t.alerter.release_round().await;
+    assert_eq!(t.sink_has(1).await.len(), 1);
+    // A restart on the same volume knows it has said so and when it asked.
+    let asked = mock.asked.lock().unwrap().len();
+    let dir = t.dir.clone();
+    let sink = sink_again(&t);
+    let again = start_in(dir.clone(), sink).await;
+    again.alerter.releases.set_source(askbar_alerter::releases::Source {
+        url: mock.url.clone(),
+        current: "0.6.0".into(),
+        every: Duration::from_secs(86_400),
+        retry: Duration::from_secs(3600),
+    });
+    again.configure().await;
+    again.alerter.release_round().await;
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert_eq!(again.sink.seen.lock().unwrap().len(), 1, "not announced a second time");
+    assert_eq!(mock.asked.lock().unwrap().len(), asked, "and not asked again before a day is up");
+}
+
+#[tokio::test]
+async fn with_the_check_off_nothing_is_asked() {
+    let t = start().await;
+    t.configure().await;
+    let mock = release_mock("v9.0.0").await;
+    t.alerter.releases.set_source(askbar_alerter::releases::Source {
+        url: "off".into(),
+        current: "0.6.0".into(),
+        every: Duration::from_millis(1),
+        retry: Duration::from_millis(1),
+    });
+    t.alerter.release_round().await;
+    assert!(mock.asked.lock().unwrap().is_empty() && t.sink.seen.lock().unwrap().is_empty());
 }
