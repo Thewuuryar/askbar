@@ -38,6 +38,24 @@ pub fn err(status: StatusCode, msg: &str) -> Failure {
     ApiError::from(status).detail(msg).no_challenge()
 }
 
+/// A change that needs the person to have signed in within the last `FRESH_SIGNIN_SECS` (10 minutes; ADR 0040): the
+/// password, the API key, lowering the audit retention. Only a browser session counts: a request with an
+/// `Authorization` header is an API key's, however fresh a cookie it also carries, and a key cannot do these.
+pub fn require_fresh_signin(state: &AdminState, headers: &HeaderMap) -> Result<(), Failure> {
+    let fresh = !headers.contains_key(header::AUTHORIZATION)
+        && session_cookie(headers).and_then(|t| state.auth.session_age_secs(&t)).is_some_and(|age| age <= crate::sealed::FRESH_SIGNIN_SECS);
+    if fresh {
+        return Ok(());
+    }
+    Err(err(
+        StatusCode::FORBIDDEN,
+        &format!(
+            "This needs a fresh sign-in, from the admin site: sign out, sign in again and do it within {} minutes.",
+            crate::sealed::FRESH_SIGNIN_SECS / 60
+        ),
+    ))
+}
+
 fn hash_password(password: &str) -> Result<String, argon2::password_hash::Error> {
     let salt = SaltString::generate(&mut OsRng);
     Ok(Argon2::default().hash_password(password.as_bytes(), &salt)?.to_string())
@@ -318,6 +336,7 @@ pub async fn change_password(
     headers: HeaderMap,
     ApiJson(body): ApiJson<ChangePassword>,
 ) -> Result<StatusCode, Failure> {
+    require_fresh_signin(&state, &headers)?;
     if state.auth.lockout_remaining().is_some() {
         return Err(ApiError::code(ErrorCode::TooManyAttempts).no_challenge());
     }

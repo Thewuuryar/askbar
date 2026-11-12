@@ -642,3 +642,89 @@ async fn server_api_failures_are_problems_with_a_code_and_a_sentence() {
     )
     .await;
 }
+
+#[tokio::test]
+async fn deleting_a_user_removes_their_space_file_clients_and_row_and_leaves_everyone_else() {
+    use reqwest::Method as M;
+    let dir = std::env::temp_dir().join(format!("server-delete-user-{}", ulid::Ulid::new()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let hash_file = dir.join("token.sha256");
+    std::fs::write(&hash_file, hex(TOKEN)).unwrap();
+    let db = askbar_server::Db::open_in_memory().unwrap();
+    db.seed_server().unwrap();
+    let state = AppState::new(db, askbar_server::MIN_CLIENT).with_spaces(askbar_server::Spaces::on_disk(dir.join("spaces")));
+    std::fs::create_dir_all(dir.join("spaces")).unwrap();
+    let (gone, kept, gone_token, kept_token, gone_space, kept_space) = {
+        let db = state.db.lock().unwrap();
+        let gone: String = db.conn().query_row("SELECT id FROM users", [], |r| r.get(0)).unwrap();
+        let kept = ulid::Ulid::new().to_string();
+        db.conn().execute("INSERT INTO users (id, name, created_at) VALUES (?1, 'Other', 0)", [&kept]).unwrap();
+        let token = |user: &str| {
+            let code = askbar_server::testing::add_pair_code_expiring(&db, user, "laptop", 600);
+            askbar_server::auth::redeem_pair_code(&db, &code).unwrap().unwrap()
+        };
+        let (gone_token, kept_token) = (token(&gone), token(&kept));
+        let (gone_space, kept_space) = (db.ensure_personal_space(&gone).unwrap(), db.ensure_personal_space(&kept).unwrap());
+        (gone, kept, gone_token, kept_token, gone_space, kept_space)
+    };
+    // A conversation in each space, so the files exist and have something in them.
+    for (user, space) in [(&gone, &gone_space), (&kept, &kept_space)] {
+        let db = state.db.lock().unwrap();
+        let s = state.spaces.for_member(&db, user, space).unwrap().unwrap();
+        let store = s.lock();
+        let c = store.create_conversation(user, "chat").unwrap();
+        store.add_message(user, &c, "user", "hello").unwrap();
+    }
+    let file = |id: &str| dir.join("spaces").join(format!("{id}.db"));
+    assert!(file(&gone_space).exists() && file(&kept_space).exists());
+
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", l.local_addr().unwrap());
+    let app = server_api::router(state.clone(), hash_file.clone());
+    tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let client_url = format!("http://{}", l.local_addr().unwrap());
+    let app = askbar_server::client_router(state.clone());
+    tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
+    let http = reqwest::Client::new();
+    let list = |token: String, space: String| {
+        let (http, client_url) = (http.clone(), client_url.clone());
+        async move {
+            http.get(format!("{client_url}/api/client/v1/spaces/{space}/conversations"))
+                .bearer_auth(token)
+                .header("x-askbar-client-version", askbar_server::MIN_CLIENT)
+                .send()
+                .await
+                .unwrap()
+                .status()
+                .as_u16()
+        }
+    };
+    assert_eq!(list(gone_token.clone(), gone_space.clone()).await, 200, "the client works before");
+
+    // The route needs the server token, and a user that is not there is 404.
+    let path = |id: &str| format!("{url}/api/server/v1/users/{id}");
+    assert_eq!(http.delete(path(&gone)).send().await.unwrap().status(), 401);
+    assert_eq!(http.delete(path(&ulid::Ulid::new().to_string())).bearer_auth(TOKEN).send().await.unwrap().status(), 404);
+    assert!(file(&gone_space).exists(), "a refused request deletes nothing");
+
+    let r = http.request(M::DELETE, path(&gone)).bearer_auth(TOKEN).send().await.unwrap();
+    assert_eq!(r.status(), 204);
+    assert!(!file(&gone_space).exists(), "the space file is gone");
+    for suffix in ["-wal", "-shm"] {
+        assert!(!dir.join("spaces").join(format!("{gone_space}.db{suffix}")).exists(), "{suffix}");
+    }
+    assert_eq!(list(gone_token, gone_space).await, 401, "their client is refused");
+    {
+        let db = state.db.lock().unwrap();
+        let n = |sql: &str, id: &str| db.conn().query_row(sql, [id], |r| r.get::<_, i64>(0)).unwrap();
+        assert_eq!(n("SELECT COUNT(*) FROM users WHERE id = ?1", &gone), 0);
+        assert_eq!(n("SELECT COUNT(*) FROM clients WHERE user_id = ?1", &gone), 0);
+        assert_eq!(n("SELECT COUNT(*) FROM spaces WHERE owner_user_id = ?1", &gone), 0);
+    }
+    // The other user is untouched, and deleting twice is a 404.
+    assert!(file(&kept_space).exists());
+    assert_eq!(list(kept_token, kept_space).await, 200);
+    assert_eq!(http.delete(path(&gone)).bearer_auth(TOKEN).send().await.unwrap().status(), 404);
+    let _ = std::fs::remove_dir_all(&dir);
+}

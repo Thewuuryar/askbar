@@ -174,6 +174,7 @@ pub fn classify(method: &Method, template: &str) -> Option<(&'static str, &'stat
         ("POST", "/users") => ("users", "create"),
         ("PUT", "/users/{id}/display-defaults") => ("users", "display_defaults"),
         ("POST", "/users/{id}/pairing-keys") => ("pairing_keys", "create"),
+        ("DELETE", "/users/{id}") => ("users", "delete"),
         ("POST", "/users/{id}/pause") => ("users", "pause"),
         ("POST", "/users/{id}/resume") => ("users", "resume"),
         ("PUT", "/setup/audit-key") => ("secret", "audit_key_setup"),

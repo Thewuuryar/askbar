@@ -484,8 +484,13 @@ pub struct CreatedKey {
 }
 
 /// `POST /api/admin/v1/keys`: make the admin API key. 409 `api_key_exists` while one is active.
-pub async fn create_key(State(state): St, ApiJson(b): ApiJson<NewKey>) -> Result<(StatusCode, Json<CreatedKey>), Failure> {
+pub async fn create_key(
+    State(state): St,
+    headers: axum::http::HeaderMap,
+    ApiJson(b): ApiJson<NewKey>,
+) -> Result<(StatusCode, Json<CreatedKey>), Failure> {
     use crate::api_key::{create, CreateError};
+    crate::web::require_fresh_signin(&state, &headers)?;
     let db = state.db.lock().await;
     match create(db.conn(), &b.name, crate::auth::now()) {
         Ok((row, key)) => Ok((StatusCode::CREATED, Json(CreatedKey { row, key }))),
@@ -637,6 +642,45 @@ pub async fn create_user(State(state): St, ApiJson(i): ApiJson<UserInput>) -> Re
     })
     .await?;
     Ok((StatusCode::CREATED, Json(serde_json::json!({ "id": id }))))
+}
+
+/// `DELETE /users/{id}`: the person is gone from everywhere (ADR 0012, D16). The server goes first, because it holds
+/// what is worth deleting (the personal space, the clients and their token hashes); then this database's rows for
+/// them, in the same step as the snapshot that no longer names them. The audit records stay. A person's own browser
+/// session only, signed in within the last 10 minutes: a key cannot do it. The page asks for the name to be typed.
+///
+/// If the server is deleted from but the rest fails, the user is still listed here: do it again. The server answers
+/// 404 for a user it no longer has, which counts as done.
+pub async fn delete_user(State(state): St, headers: axum::http::HeaderMap, Path(user): Path<String>) -> Result<StatusCode, Failure> {
+    crate::web::require_fresh_signin(&state, &headers)?;
+    let link = link(&state)?;
+    let known = state
+        .db
+        .lock()
+        .await
+        .conn()
+        .query_row("SELECT 1 FROM users WHERE id = ?1", [&user], |_| Ok(()))
+        .map(|_| true)
+        .or_else(|e| if e == rusqlite::Error::QueryReturnedNoRows { Ok(false) } else { Err(e) })
+        .map_err(internal)?;
+    if !known {
+        return Err(err(StatusCode::NOT_FOUND, "No such user."));
+    }
+    let path = askbar_proto::paths::join(askbar_proto::paths::SERVER_V1, &format!("/users/{user}"));
+    match link.request(reqwest::Method::DELETE, &path, None).await {
+        Ok((204 | 404, _)) => {}
+        Ok((status, _)) => return Err(err(StatusCode::BAD_GATEWAY, &format!("The server answered {status}. Nothing was deleted."))),
+        Err(_) => return Err(offline()),
+    }
+    let id = user.clone();
+    mutate(&state, vec![], move |c| {
+        c.execute("DELETE FROM display_defaults WHERE user_id = ?1", [&id]).map_err(internal)?;
+        c.execute("DELETE FROM pair_codes WHERE user_id = ?1", [&id]).map_err(internal)?;
+        c.execute("DELETE FROM users WHERE id = ?1", [&id]).map_err(internal)?;
+        Ok(())
+    })
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// `POST /users/{id}/pause` and `/resume`: the emergency stop for one person. A paused user gets no new reply, the
@@ -1229,6 +1273,7 @@ pub async fn get_settings(State(state): St) -> Json<AdminSettings> {
 
 pub async fn put_settings(
     State(state): St,
+    headers: axum::http::HeaderMap,
     notes: Option<axum::Extension<crate::actions::ActionNotes>>,
     ApiJson(s): ApiJson<AdminSettings>,
 ) -> Result<StatusCode, Failure> {
@@ -1272,6 +1317,11 @@ pub async fn put_settings(
         if days > MAX_AUDIT_RETENTION_DAYS {
             return Err(bad(&format!("Audit records are kept for at most {MAX_AUDIT_RETENTION_DAYS} days.")));
         }
+    }
+    // Keeping records for less time destroys evidence, so it takes a fresh sign-in and no API key (ADR 0040).
+    let current_days = audit_retention_days(state.db.lock().await.conn());
+    if s.audit_retention_days.is_some_and(|days| days < current_days) {
+        crate::web::require_fresh_signin(&state, &headers)?;
     }
     let retention = s.audit_retention_days.map(|n| n.to_string());
     // How long sealed content stays open (ADR 0011 rule 11): up to 12 hours each, and the idle time may not exceed the total.

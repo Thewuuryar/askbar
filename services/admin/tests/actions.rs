@@ -469,3 +469,51 @@ async fn a_reset_from_the_command_line_is_recorded_first_and_not_made_without_th
     assert_eq!(seen[0]["detail"], json!({ "by": "command line" }), "the record says who, and nothing about the password");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[tokio::test]
+async fn deleting_a_user_asks_the_server_first_then_removes_it_here_and_is_recorded_requested_then_done() {
+    let t = common::start(true).await;
+    let (_, made) = t.call(M::POST, "/api/admin/v1/users", json!({ "name": "Alice" })).await;
+    let alice = made["id"].as_str().unwrap().to_string();
+    let (_, bob) = t.call(M::POST, "/api/admin/v1/users", json!({ "name": "Bob" })).await;
+    let bob = bob["id"].as_str().unwrap().to_string();
+    let server_count = |sql: &str, id: &str| t.server.db.lock().unwrap().conn().query_row(sql, [id], |r| r.get::<_, i64>(0)).unwrap();
+    {
+        let db = t.server.db.lock().unwrap();
+        let code = askbar_server::testing::add_pair_code_expiring(&db, &alice, "laptop", 600);
+        askbar_server::auth::redeem_pair_code(&db, &code).unwrap().unwrap();
+    }
+    assert_eq!(server_count("SELECT COUNT(*) FROM clients WHERE user_id = ?1", &alice), 1);
+    let path = |id: &str| format!("/api/admin/v1/users/{id}");
+
+    // An old sign-in is refused and nothing is deleted anywhere.
+    let token = t.cookie.split_once('=').unwrap().1.to_string();
+    t.admin.auth.backdate_session(&token, 11 * 60);
+    assert_eq!(t.call(M::DELETE, &path(&alice), json!(null)).await.0, 403);
+    assert_eq!(server_count("SELECT COUNT(*) FROM users WHERE id = ?1", &alice), 1);
+    t.admin.auth.backdate_session(&token, -11 * 60);
+
+    assert_eq!(t.call(M::DELETE, &path("01HZZZZZZZZZZZZZZZZZZZZZZZ"), json!(null)).await.0, 404);
+    let (st, _) = t.call(M::DELETE, &path(&alice), json!(null)).await;
+    assert_eq!(st, 204);
+    // Gone from the server (the user, the client) and from the admin's list; Bob is untouched.
+    assert_eq!(server_count("SELECT COUNT(*) FROM users WHERE id = ?1", &alice), 0);
+    assert_eq!(server_count("SELECT COUNT(*) FROM clients WHERE user_id = ?1", &alice), 0);
+    let (_, users) = t.call(M::GET, "/api/admin/v1/users", json!(null)).await;
+    let names: Vec<_> = users.as_array().unwrap().iter().map(|u| u["name"].as_str().unwrap().to_string()).collect();
+    assert!(names.contains(&"Bob".to_string()) && !names.contains(&"Alice".to_string()), "{names:?}");
+    assert_eq!(server_count("SELECT COUNT(*) FROM users WHERE id = ?1", &bob), 1);
+    assert_eq!(t.call(M::DELETE, &path(&alice), json!(null)).await.0, 404, "already gone");
+
+    let rows = actions(&t);
+    let of = |outcome: &str| {
+        rows.iter().filter(|r| r["category"] == "users" && r["action"] == "delete" && r["outcome"] == outcome).collect::<Vec<_>>()
+    };
+    // Four attempts were recorded as asked: the old sign-in, an unknown user, the real one, and the repeat. One was done.
+    let done = of("done");
+    assert_eq!((of("requested").len(), done.len(), of("refused").len()), (4, 1, 3), "{rows:#?}");
+    let asked = rows.iter().find(|r| r["id"] == done[0]["detail"]["request"]).expect("the end names a request");
+    assert_eq!((asked["outcome"].clone(), asked["detail"]["params"]["id"].clone()), (json!("requested"), json!(alice)));
+    let pos = |r: &Value| rows.iter().position(|x| x["id"] == r["id"]).unwrap();
+    assert!(pos(asked) < pos(done[0]), "requested comes first");
+}
