@@ -24,6 +24,12 @@
       <label>Seal after this many idle minutes <input id="s-unseal-idle" type="number" min="1" max="720" step="1"></label>
       <label>Seal after this many minutes in all <input id="s-unseal-total" type="number" min="1" max="720" step="1"></label>
       <p class="hint">Sealing key: <code id="s-key-id">none</code></p>
+      <h3>What people are told</h3>
+      {% call b::hint("The privacy notice is shown in the app after pairing and again whenever its wording or the audit retention above changes, with the number of days records are kept. The AI warning is shown above the input box. Both are on by default, with the wording below. Provisioning a person here assumes their consent, so the app records no acknowledgment. You are responsible for consent, notice and the law where you are (for minors, employees and other countries).") %}{% endcall %}
+      <label class="check"><input id="s-notice-on" type="checkbox"> Show the privacy notice</label>
+      <label>Privacy notice <textarea id="s-notice-text" rows="5" maxlength="2000"></textarea></label>
+      <label class="check"><input id="s-warning-on" type="checkbox"> Show the AI warning above the input box</label>
+      <label>AI warning <input id="s-warning-text" type="text" maxlength="300"></label>
       <h3>Display defaults</h3>
       {% call b::hint("Clients use these unless their own client.yaml overrides them.") %}{% endcall %}
       <label>Theme

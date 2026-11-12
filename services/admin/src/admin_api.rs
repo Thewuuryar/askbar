@@ -1222,6 +1222,33 @@ pub struct AdminSettings {
     /// The id of the key the server seals with now. Read-only: changing it is the rotate action.
     #[serde(default, skip_deserializing)]
     audit_key_id: Option<String>,
+    /// The privacy notice clients show after pairing and whenever it changes (ADR 0012): on unless switched off. Always present
+    /// when read; a save that leaves it out keeps it.
+    #[serde(default)]
+    privacy_notice_enabled: Option<bool>,
+    /// Its wording. Reads as the default wording until the administrator writes their own; a save of the default wording, or of
+    /// nothing, goes back to the default.
+    #[serde(default)]
+    privacy_notice_text: Option<String>,
+    /// The warning shown above the input box: on unless switched off.
+    #[serde(default)]
+    ai_warning_enabled: Option<bool>,
+    #[serde(default)]
+    ai_warning_text: Option<String>,
+}
+
+/// The most characters the wording of the notice and of the warning may have.
+const MAX_NOTICE_CHARS: usize = 2000;
+const MAX_WARNING_CHARS: usize = 300;
+
+/// The value to keep for a wording: what the administrator wrote, trimmed, or nothing when it is empty or is the default.
+fn wording_to_keep(text: &str, default: &str) -> String {
+    let t = text.trim();
+    if t == default {
+        String::new()
+    } else {
+        t.to_string()
+    }
 }
 
 /// The same floor the server enforces (and the audit database's own trigger): a week.
@@ -1245,6 +1272,11 @@ fn check_display(d: &DisplaySettings) -> Result<(), Failure> {
         return Err(bad("Top percent must be between 0 and 0.8."));
     }
     Ok(())
+}
+
+/// The wording to show: the one stored, or the default when none (or an empty one) is.
+fn wording_or_default(stored: Option<String>, default: &str) -> String {
+    stored.filter(|t| !t.trim().is_empty()).unwrap_or_else(|| default.to_string())
 }
 
 pub(crate) fn setting(conn: &Connection, key: &str) -> Option<String> {
@@ -1273,6 +1305,10 @@ pub async fn get_settings(State(state): St) -> Json<AdminSettings> {
         unseal_idle_minutes: Some((crate::sealed::limits(c).0.as_secs() / 60) as u32),
         unseal_total_minutes: Some((crate::sealed::limits(c).1.as_secs() / 60) as u32),
         audit_key_id: crate::db::active_audit_key(c).ok().flatten().map(|k| k.key_id),
+        privacy_notice_enabled: Some(setting(c, "privacy_notice_enabled").is_none_or(|v| v.trim() != "0")),
+        privacy_notice_text: Some(wording_or_default(setting(c, "privacy_notice_text"), askbar_proto::DEFAULT_PRIVACY_NOTICE)),
+        ai_warning_enabled: Some(setting(c, "ai_warning_enabled").is_none_or(|v| v.trim() != "0")),
+        ai_warning_text: Some(wording_or_default(setting(c, "ai_warning_text"), askbar_proto::DEFAULT_AI_WARNING)),
     })
 }
 
@@ -1297,7 +1333,24 @@ pub async fn put_settings(
         if let Some(m) = s.unseal_total_minutes {
             n.add("unseal_total_minutes", serde_json::json!(m));
         }
+        // Whether each is on is worth keeping; the wording is not copied into the record (it is in the settings).
+        if let Some(on) = s.privacy_notice_enabled {
+            n.add("privacy_notice_enabled", serde_json::json!(on));
+        }
+        if let Some(on) = s.ai_warning_enabled {
+            n.add("ai_warning_enabled", serde_json::json!(on));
+        }
     }
+    if s.privacy_notice_text.as_deref().is_some_and(|t| t.chars().count() > MAX_NOTICE_CHARS) {
+        return Err(bad(&format!("The privacy notice is at most {MAX_NOTICE_CHARS} characters.")));
+    }
+    if s.ai_warning_text.as_deref().is_some_and(|t| t.chars().count() > MAX_WARNING_CHARS) {
+        return Err(bad(&format!("The AI warning is at most {MAX_WARNING_CHARS} characters.")));
+    }
+    let notice_text = s.privacy_notice_text.as_deref().map(|t| wording_to_keep(t, askbar_proto::DEFAULT_PRIVACY_NOTICE));
+    let warning_text = s.ai_warning_text.as_deref().map(|t| wording_to_keep(t, askbar_proto::DEFAULT_AI_WARNING));
+    let (notice_on, warning_on) =
+        (s.privacy_notice_enabled.map(|b| if b { "1" } else { "0" }), s.ai_warning_enabled.map(|b| if b { "1" } else { "0" }));
     if s.system_prompt.chars().count() > MAX_PROMPT_CHARS {
         return Err(bad("The system prompt is too long."));
     }
@@ -1357,6 +1410,16 @@ pub async fn put_settings(
         }
         if let Some(r) = retention.as_deref() {
             pairs.push(("audit_retention_days", r));
+        }
+        for (key, value) in [
+            ("privacy_notice_enabled", notice_on),
+            ("privacy_notice_text", notice_text.as_deref()),
+            ("ai_warning_enabled", warning_on),
+            ("ai_warning_text", warning_text.as_deref()),
+        ] {
+            if let Some(v) = value {
+                pairs.push((key, v));
+            }
         }
         pairs.push(("unseal_idle_minutes", idle_text.as_str()));
         pairs.push(("unseal_total_minutes", total_text.as_str()));
