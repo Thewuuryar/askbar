@@ -31,6 +31,7 @@
       <label class="check"><input id="setup-audit-stored" type="checkbox" required> I stored this passphrase; it cannot be recovered</label>
       <button type="submit">Create the key</button>
       {% call b::error_line("setup-audit-error") %}{% endcall %}
+      <p class="hint">Setting up a new install from a backup? <a href="/admin/restore/" id="setup-restore-link">Restore it instead</a>, before anything else is set up.</p>
     </form>
     <div id="setup-audit-done" hidden>
       <h2>The audit key is ready</h2>

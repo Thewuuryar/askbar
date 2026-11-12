@@ -11,6 +11,20 @@ async fn main() {
         std::process::exit(if askbar_admin::healthcheck(&askbar_admin::socket_path()) { 0 } else { 1 });
     }
     tracing_subscriber::fmt().with_target(false).init();
+    // A restore leaves its own export beside the database and restarts the admin; the swap is made before the database is opened (ADR 0013).
+    let restored = match askbar_admin::restore::apply_pending(
+        &askbar_admin::db_path(),
+        &askbar_admin::server_link::secrets_dir(),
+        askbar_admin::caddy::CaddyLink::from_env().secrets_dir.as_deref(),
+    ) {
+        Ok(done) => done,
+        Err(e) => die(format!("a restore could not be put in place: {e}"), 1),
+    };
+    if restored {
+        tracing::warn!(
+            "a restore was put in place: the admin's database and secrets are the backup's; the old ones are kept as *.before-restore"
+        );
+    }
     let db = askbar_admin::AdminDb::open(&askbar_admin::db_path()).unwrap_or_else(|e| die(e, 1));
     // `askbar-admin reset` (on the host: `docker compose exec admin askbar-admin reset`, or
     // `docker compose run --rm admin reset` while the admin is stopped): the published password again,
@@ -110,6 +124,10 @@ async fn main() {
         askbar_admin::alerter_link::LINK,
     ));
     tokio::spawn(state.notifier.alert_client().expect("just set").drain_forever());
+    // The restore that put the database in place is told to the owner once (ADR 0055: `restore_performed`).
+    if askbar_admin::restore::take_done_marker(&askbar_admin::db_path()) {
+        state.notifier.notify(askbar_proto::alerter::Kind::RestorePerformed, askbar_proto::alerter::Severity::Warning, Default::default());
+    }
     tokio::spawn(alerter.run(state.clone()));
     // The Audit pages read the auditor, and the retention setting goes to it (ADR 0051).
     let auditor_token = askbar_admin::auditor_link::read_token(&askbar_admin::server_link::token_dir()).unwrap_or_else(|e| die(e, 1));

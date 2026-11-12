@@ -454,6 +454,24 @@ impl ServerLink {
         }
     }
 
+    /// A server call with a body that is sent as it is made (a restore, ADR 0013): the plain tar of an export, read from the
+    /// bundle and decrypted as it goes, so it is never held in memory. The status is checked by the caller.
+    pub async fn post_stream(&self, path: &str, body: reqwest::Body) -> Result<reqwest::Response, PushError> {
+        let call = self.http.post(format!("{}{path}", self.base)).bearer_auth(&self.token).body(body).timeout(Duration::from_secs(60 * 60));
+        match call.send().await {
+            Ok(resp) => {
+                self.saw(resp.status().as_u16());
+                self.online.store(true, Ordering::Relaxed);
+                Ok(resp)
+            }
+            Err(e) => {
+                self.online.store(false, Ordering::Relaxed);
+                *self.last_error.lock().unwrap_or_else(|e| e.into_inner()) = Some(e.to_string());
+                Err(PushError::Unreachable(e.to_string()))
+            }
+        }
+    }
+
     /// Is the server there, and does it run what was pushed? Reads `GET /status` (ADR 0028
     /// rule 4). `None` if the server did not answer (or refused the token); otherwise whether the
     /// snapshot should be pushed again (see `needs_push`). Updates the online state.

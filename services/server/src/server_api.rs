@@ -235,6 +235,11 @@ async fn backup(State(state): State<Arc<AppState>>) -> Result<Response, ApiError
     crate::backup::response(state).await
 }
 
+/// `POST /api/server/v1/imports`: what an export made, opened by the admin, into an empty install (ADR 0013).
+async fn import(State(state): State<Arc<AppState>>, body: axum::body::Body) -> Result<Response, ApiError> {
+    crate::import::response(state, body).await
+}
+
 /// All of the server API's routes, with the list of what was registered (see `routes`).
 pub fn routes() -> crate::routes::Routes {
     use crate::routes::Routes;
@@ -252,6 +257,7 @@ pub fn routes() -> crate::routes::Routes {
         .get(&v1("/usage"), usage)
         // Unencrypted until phase 6 makes exports encrypted (ADR 0013).
         .post(&v1("/exports"), backup)
+        .post(&v1("/imports"), import)
 }
 
 /// The server API's routes behind the token check.

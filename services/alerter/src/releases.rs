@@ -108,6 +108,11 @@ impl Checker {
         self.source().url != OFF
     }
 
+    /// Makes `s` the state, kept and in memory (a restore, ADR 0013).
+    pub fn replace(&self, s: Saved) {
+        self.update(|saved| *saved = s);
+    }
+
     fn update(&self, f: impl FnOnce(&mut Saved)) {
         let snapshot = {
             let mut s = self.saved.lock().unwrap_or_else(|e| e.into_inner());

@@ -24,6 +24,10 @@ pub enum ErrorCode {
     AuditKeyMissing,
     /// No backup key is set (ADR 0013): an export cannot be encrypted, so none is made. 503.
     BackupKeyMissing,
+    /// A backup was made by a newer release than this one (ADR 0013): restoring it is refused, naming the release to install. 409.
+    BackupNewerRelease,
+    /// A restore needs an empty install, and this one has data in it (ADR 0013). 409.
+    NotEmpty,
     AuditBacklog,
     ClientTooOld,
     ClientVersionMissing,
@@ -44,7 +48,7 @@ pub enum ErrorCode {
 }
 
 impl ErrorCode {
-    pub const ALL: [ErrorCode; 24] = [
+    pub const ALL: [ErrorCode; 26] = [
         ErrorCode::QueueFull,
         ErrorCode::BudgetExceeded,
         ErrorCode::KillSwitch,
@@ -52,6 +56,8 @@ impl ErrorCode {
         ErrorCode::ModelNotApproved,
         ErrorCode::AuditKeyMissing,
         ErrorCode::BackupKeyMissing,
+        ErrorCode::BackupNewerRelease,
+        ErrorCode::NotEmpty,
         ErrorCode::AuditBacklog,
         ErrorCode::ClientTooOld,
         ErrorCode::ClientVersionMissing,
@@ -81,6 +87,8 @@ impl ErrorCode {
             ErrorCode::ModelNotApproved => "model_not_approved",
             ErrorCode::AuditKeyMissing => "audit_key_missing",
             ErrorCode::BackupKeyMissing => "backup_key_missing",
+            ErrorCode::BackupNewerRelease => "backup_newer_release",
+            ErrorCode::NotEmpty => "not_empty",
             ErrorCode::AuditBacklog => "audit_backlog",
             ErrorCode::ClientTooOld => "client_too_old",
             ErrorCode::ClientVersionMissing => "client_version_missing",
@@ -104,7 +112,9 @@ impl ErrorCode {
     /// The HTTP status that goes with the code.
     pub fn status(self) -> u16 {
         match self {
-            ErrorCode::QueueFull | ErrorCode::ApiKeyExists | ErrorCode::Conflict => 409,
+            ErrorCode::QueueFull | ErrorCode::ApiKeyExists | ErrorCode::Conflict | ErrorCode::BackupNewerRelease | ErrorCode::NotEmpty => {
+                409
+            }
             ErrorCode::BudgetExceeded | ErrorCode::TooManyAttempts => 429,
             ErrorCode::KillSwitch
             | ErrorCode::AuditKeyMissing
@@ -134,6 +144,8 @@ impl ErrorCode {
             ErrorCode::ModelNotApproved => "That model is not approved",
             ErrorCode::AuditKeyMissing => "The audit key has not been set up",
             ErrorCode::BackupKeyMissing => "The backup key has not been set up",
+            ErrorCode::BackupNewerRelease => "The backup is from a newer release",
+            ErrorCode::NotEmpty => "The install is not empty",
             ErrorCode::AuditBacklog => "The server is busy recording",
             ErrorCode::ClientTooOld => "This app is too old for the server",
             ErrorCode::ClientVersionMissing => "The app version is missing",
@@ -256,6 +268,8 @@ mod tests {
         for c in [ErrorCode::KillSwitch, ErrorCode::AuditKeyMissing, ErrorCode::AuditBacklog, ErrorCode::SetupRequired] {
             assert_eq!(status(c), 503, "{c:?}");
         }
+        assert_eq!(status(ErrorCode::BackupNewerRelease), 409);
+        assert_eq!(status(ErrorCode::NotEmpty), 409);
         assert_eq!(status(ErrorCode::ClientTooOld), 426);
         assert_eq!(status(ErrorCode::ClientVersionMissing), 400);
         assert_eq!(status(ErrorCode::UserPaused), 403);
@@ -281,6 +295,8 @@ mod tests {
                 | ErrorCode::ModelNotApproved
                 | ErrorCode::AuditKeyMissing
                 | ErrorCode::BackupKeyMissing
+                | ErrorCode::BackupNewerRelease
+                | ErrorCode::NotEmpty
                 | ErrorCode::AuditBacklog
                 | ErrorCode::ClientTooOld
                 | ErrorCode::ClientVersionMissing
@@ -300,6 +316,6 @@ mod tests {
                 | ErrorCode::Internal => {}
             }
         }
-        assert_eq!(ErrorCode::ALL.len(), 24);
+        assert_eq!(ErrorCode::ALL.len(), 26);
     }
 }

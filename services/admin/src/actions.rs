@@ -227,6 +227,8 @@ pub fn classify(method: &Method, template: &str) -> Option<(&'static str, &'stat
         ("POST", "/keys") => ("secret", "api_key_create"),
         ("DELETE", "/keys/{id}") => ("secret", "api_key_revoke"),
         ("GET", "/backup") => ("backup", "download"),
+        ("POST", "/restore/inspect") => ("backup", "restore_inspect"),
+        ("POST", "/restore") => ("backup", "restore"),
         _ => return None,
     })
 }

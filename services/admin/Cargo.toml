@@ -20,7 +20,9 @@ serde_json = "1"
 sha2 = "0.10"
 # Admin pages: compile-time checked templates, escaping by default, nothing read at run time (plan step 1.16).
 askama = "0.16"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+# The restore reads an upload as a stream (already in the lock file: the server uses it too).
+futures-util = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json"] }
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time", "fs", "io-util"] }
 tracing = "0.1"

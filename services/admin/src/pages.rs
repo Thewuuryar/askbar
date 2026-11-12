@@ -41,6 +41,7 @@ page!(Services, services, "services", "services.html", "Services");
 page!(Clients, clients, "clients", "clients.html", "Clients");
 page!(Audit, audit, "audit", "audit.html", "Audit");
 page!(Backup, backup, "backup", "backup.html", "Backup");
+page!(Restore, restore, "restore", "restore.html", "Restore");
 page!(Network, network, "network", "network.html", "Network");
 page!(Security, security, "security", "security.html", "Security");
 page!(Settings, settings, "settings", "settings.html", "Settings");
@@ -52,6 +53,7 @@ pub static PAGES: &[Page] = &[
     Page { slug: "clients", label: "Clients", render: clients },
     Page { slug: "audit", label: "Audit", render: audit },
     Page { slug: "backup", label: "Backup", render: backup },
+    Page { slug: "restore", label: "Restore", render: restore },
     Page { slug: "network", label: "Network", render: network },
     Page { slug: "security", label: "Security", render: security },
     Page { slug: "settings", label: "Settings", render: settings },

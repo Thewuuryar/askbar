@@ -321,6 +321,14 @@ impl Db {
         Ok(())
     }
 
+    /// Makes this database's content `from`'s, in place and in one step (SQLite's backup API), so the open connection, and everything
+    /// holding the lock on it, carries on with the restored data. `from` must be a database this release opened (migrated).
+    pub fn replace_with(&mut self, from: &Db) -> Result<(), DbError> {
+        let backup = rusqlite::backup::Backup::new(from.conn(), &mut self.conn)?;
+        backup.run_to_completion(256, std::time::Duration::ZERO, None)?;
+        Ok(())
+    }
+
     /// Raw connection, for the server's own queries.
     pub fn conn(&self) -> &Connection {
         &self.conn

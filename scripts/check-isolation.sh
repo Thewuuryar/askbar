@@ -674,6 +674,13 @@ except Exception: print(0)
   [ "$(al_call "$AL_AUD" "$AL_AUD_IP" POST /events "$AL_ADM_TOK" '{}')" = 401 ] && pass "the admin's token does not open the auditor's listener" || fail "the admin's token opened the auditor's listener"
   [ "$(al_call "$AL_AUD" "$AL_AUD_IP" GET /status "$AL_AUD_TOK")" = 404 ] && pass "the auditor's listener has no status route" || fail "the auditor's listener serves /status"
   [ "$(al_call "$AL_AUD" "$AL_AUD_IP" PUT /config "$AL_AUD_TOK" '{}')" = 404 ] && pass "the auditor's listener has no config route" || fail "the auditor's listener serves /config"
+  # A backup's export and a restore's import are the admin's link alone (ADR 0013): no token and the auditor's token are refused on the
+  # admin's listener, and the auditor's listener has neither route.
+  for route in /exports /imports; do
+    [ "$(al_call "$AL_ADMIN" "$AL_ADMIN_IP" POST "$route")" = 401 ] && pass "no token: 401 on POST $route" || fail "POST $route answers without a token"
+    [ "$(al_call "$AL_ADMIN" "$AL_ADMIN_IP" POST "$route" "$AL_AUD_TOK")" = 401 ] && pass "the auditor's token does not open POST $route" || fail "the auditor's token opened POST $route"
+    [ "$(al_call "$AL_AUD" "$AL_AUD_IP" POST "$route" "$AL_AUD_TOK")" = 404 ] && pass "the auditor's listener has no $route route" || fail "the auditor's listener serves $route"
+  done
   [ "$(al_call "$EDGE" "$AL_AUD_IP" GET /health)" = 0 ] && pass "a container on edge cannot reach the alerter" || fail "the alerter is reachable from edge"
   # The admin gives it its settings with no command (an alerter with no channel is given an empty set, so that it answers): after a
   # few seconds the status shows a configuration, and a test alert says that nothing is set up.

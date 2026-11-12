@@ -48,6 +48,7 @@
     { id: 'network', load: loadNetwork },
     { id: 'security', load: loadKeys },
     { id: 'backup', load: loadBackupKey },
+    { id: 'restore', load: loadRestore },
   ];
   let appShown = false;
   function registerTab(tab) {
@@ -86,6 +87,8 @@
     if (status.password_change_required) return showPasswordChange();
     // The audit passphrase is part of setup: without a key the server records nothing it may keep,
     // and refuses to start replies. An install from before audit keys is asked on its next visit.
+    // The Restore page is the way out of the setup screens: a restore is for an install nothing has been set up in.
+    if (page === 'restore' && (status.audit_key_set === false || status.backup_key_set === false)) return showApp();
     if (status.audit_key_set === false) return showAuditSetup();
     // The backup passphrase is part of setup too (ADR 0013): without a key no backup can be encrypted. An install from before the
     // backup key is asked on its next visit.
@@ -953,6 +956,85 @@
       flash('Backup key rotated. Take a new backup now.');
     } catch (ex) {
       fail(ex.message);
+    }
+  });
+
+  // ----------------------------------------------------------- restore
+
+  // A restore (ADR 0013): the file is sent as it is (a stream the admin keeps as ciphertext), checked, and only then is the passphrase
+  // asked for. The passphrase is typed, sent and emptied; nothing here keeps it. Text goes in by textContent.
+  let restoreId = null;
+
+  async function loadRestore() {
+    for (const id of ['restore-error', 'restore-pass-error']) show($(id), false);
+  }
+
+  async function uploadBundle(file) {
+    const res = await fetch('/api/admin/v1/restore/inspect', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'X-Askbar-Admin': '1', 'Content-Type': 'application/x-tar' },
+      body: file,
+    });
+    if (res.status === 401) { showLogin(); throw new Error('Signed out'); }
+    const text = await res.text();
+    let data = null;
+    try { data = JSON.parse(text); } catch (_) { data = null; }
+    if (!res.ok) {
+      const err = new Error((data && (data.detail || data.error)) || ('Request failed (' + res.status + ')'));
+      err.status = res.status;
+      err.code = (data && data.error) || null;
+      throw err;
+    }
+    return data;
+  }
+
+  on('restore-upload-form', 'submit', async (e) => {
+    e.preventDefault();
+    const err = $('restore-error');
+    show(err, false);
+    const file = $('restore-file').files[0];
+    if (!file) return;
+    try {
+      const v = await uploadBundle(file);
+      restoreId = v.restore_id;
+      $('restore-release').textContent = v.release;
+      $('restore-date').textContent = new Date(v.created_at * 1000).toLocaleString();
+      $('restore-fingerprint').textContent = v.key_fingerprint;
+      $('restore-parts').textContent = v.parts.map((p) => p.replace(/\.age$/, '')).join(', ');
+      show($('restore-form'), true);
+      $('restore-pass').focus();
+    } catch (ex) {
+      restoreId = null;
+      show($('restore-form'), false);
+      err.textContent = ex.message;
+      show(err, true);
+    }
+  });
+
+  on('restore-form', 'submit', async (e) => {
+    e.preventDefault();
+    const err = $('restore-pass-error');
+    show(err, false);
+    if (!restoreId) return;
+    if (!confirm('Restore this backup? It replaces what this install holds, and the admin restarts.')) return;
+    const pass = $('restore-pass').value;
+    try {
+      const r = await api('POST', '/api/admin/v1/restore', { restore_id: restoreId, passphrase: pass });
+      $('restore-pass').value = '';
+      restoreId = null;
+      show($('restore-upload-form'), false);
+      show($('restore-form'), false);
+      $('restore-summary').textContent = 'Restored: ' + r.restored.join(', ') + '.'
+        + (r.not_restored.length ? ' Not restored yet: ' + r.not_restored.join(', ') + '.' : '');
+      $('restore-note').textContent = r.restarting
+        ? 'The admin is restarting. Sign in again with the password the backup\'s install had.'
+        : 'Restart the admin (docker compose restart admin) to finish: its own data is swapped in at the restart.';
+      show($('restore-done'), true);
+    } catch (ex) {
+      $('restore-pass').value = '';
+      err.textContent = ex.message;
+      show(err, true);
     }
   });
 

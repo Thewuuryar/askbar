@@ -25,6 +25,7 @@ pub mod gateway_link;
 pub mod network;
 pub mod notify;
 pub mod pages;
+pub mod restore;
 pub mod routes;
 pub mod sealed;
 pub mod secrets;
@@ -95,6 +96,10 @@ pub struct AdminState {
     pub service_actions: std::sync::Mutex<std::collections::VecDeque<i64>>,
     /// The admin's secrets directory (`admin.key` and the CLIProxyAPI keys), which its backup export holds; set at start-up (ADR 0013).
     pub admin_secrets_dir: std::sync::Mutex<Option<std::path::PathBuf>>,
+    /// A restore in progress: the bundle uploaded and checked, and the limit on guesses at its passphrase (ADR 0013).
+    pub restore: restore::Restore,
+    /// Where work files go when the database is not a file (tests give each rig its own; a stack's are next to `admin.db`).
+    pub work_dir: std::sync::Mutex<Option<std::path::PathBuf>>,
 }
 
 impl AdminState {
@@ -128,6 +133,8 @@ impl AdminState {
             cpa_logins: std::sync::Mutex::new(Default::default()),
             service_actions: std::sync::Mutex::new(Default::default()),
             admin_secrets_dir: std::sync::Mutex::new(None),
+            restore: Default::default(),
+            work_dir: std::sync::Mutex::new(None),
         })
     }
 
@@ -212,6 +219,9 @@ pub fn routes(state: &Arc<AdminState>) -> Routes {
         // The backup key (ADR 0013, D21): setting or rotating it needs a person's own, freshly signed-in session, never an API key.
         .put(&v1("/setup/backup-key"), backup_key::setup_key)
         .post(&v1("/backup/rotate-key"), backup_key::rotate_key)
+        // A restore (ADR 0013, D21): a person's own, freshly signed-in session, into an empty install, never an API key.
+        .post(&v1("/restore/inspect"), restore::inspect)
+        .post(&v1("/restore"), restore::restore)
         .get(&v1("/alerts"), alerts::get_alerts)
         .put(&v1("/alerts"), alerts::put_alerts)
         .post(&v1("/alerts/test"), alerts::test_alerts)

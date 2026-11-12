@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{%- import "blocks.html" as b %}
+{% block hint %}Put a backup back into a new, empty install.{% endblock %}
+{% block content %}
+    <div class="panel">
+      <p>A restore is for the start of a new install: it replaces the server's data and this admin's own with the backup's, and it is refused once anything has been set up here (a provider, a person, an API key or the audit passphrase). It needs a sign-in within the last 10 minutes.</p>
+      <p class="hint">Choose the <code>.tar</code> file you downloaded from the Backup page. It is checked first (which release made it, and that no part is damaged) and a backup from a newer release is refused before the passphrase is asked for. Then enter the backup passphrase, the one that was set when the backup key was made: it opens the backup here and is never stored.</p>
+    </div>
+    <form id="restore-upload-form" class="panel">
+      <h3>1. The backup file</h3>
+      <label>Backup file <input id="restore-file" type="file" accept=".tar,application/x-tar" required></label>
+      <div class="row"><button type="submit">Check the backup</button></div>
+      {% call b::error_line("restore-error") %}{% endcall %}
+    </form>
+    <form id="restore-form" class="panel" hidden>
+      <h3>2. Restore it</h3>
+      <p>Made by Askbar <code id="restore-release"></code> on <span id="restore-date"></span>. Backup key fingerprint: <code id="restore-fingerprint"></code>. It holds: <span id="restore-parts"></span>.</p>
+      <p class="hint">The fingerprint is the one the Backup page of the install that made it showed. The admin restarts when the restore is done; sign in again with the password the backup's install had.</p>
+      <label>Backup passphrase <input id="restore-pass" type="password" autocomplete="off" required></label>
+      <div class="row"><button type="submit">Restore the backup</button></div>
+      {% call b::error_line("restore-pass-error") %}{% endcall %}
+    </form>
+    <div id="restore-done" class="panel" hidden>
+      <h3>Restored</h3>
+      <p id="restore-summary"></p>
+      <p class="hint" id="restore-note"></p>
+    </div>
+{% endblock %}

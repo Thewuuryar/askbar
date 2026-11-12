@@ -217,6 +217,21 @@ fn entry_len(size: u64) -> u64 {
     512 + size.div_ceil(512) * 512
 }
 
+/// Where work files go: the admin's data volume, next to `admin.db` (its own, and the root is read-only, ADR 0032); the system's
+/// temporary directory for a database that is not a file (tests).
+pub(crate) async fn work_parent(state: &AdminState) -> PathBuf {
+    if let Some(dir) = state.work_dir.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+        return dir;
+    }
+    let db = state.db.lock().await;
+    let at = db.conn().path().map(|p| p.to_string()).unwrap_or_default();
+    Path::new(&at)
+        .parent()
+        .filter(|p| !at.is_empty() && !p.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(std::env::temp_dir)
+}
+
 /// `GET /api/admin/v1/backup`: the encrypted bundle, downloaded. Recorded like every backup (ADR 0010).
 pub async fn download(State(state): St, notes: Option<axum::Extension<crate::actions::ActionNotes>>) -> Result<Response, Failure> {
     let key = state
@@ -235,15 +250,7 @@ pub async fn download(State(state): St, notes: Option<axum::Extension<crate::act
         ));
     };
     // Work files on the admin's data volume, next to admin.db (the volume is the admin's own and the root is read-only, ADR 0032).
-    let parent = {
-        let db = state.db.lock().await;
-        let at = db.conn().path().map(|p| p.to_string()).unwrap_or_default();
-        Path::new(&at)
-            .parent()
-            .filter(|p| !at.is_empty() && !p.as_os_str().is_empty())
-            .map(Path::to_path_buf)
-            .unwrap_or_else(std::env::temp_dir)
-    };
+    let parent = work_parent(&state).await;
     let work = parent.join(format!(".backup-{}", ulid::Ulid::new()));
     std::fs::create_dir_all(&work).map_err(|_| internal())?;
     let guard = TempDir(work.clone());
