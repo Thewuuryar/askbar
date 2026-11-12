@@ -21,7 +21,7 @@ info:
     - `model-gateway-auditor-read`: `GET /token-counts` and `GET /status`, so the gateway can hold the budget against what
       was used. It appends nothing and reads no trace, content or admin record.
     - `admin-auditor-append`: `hello` and admin action records. It reads and changes nothing.
-    - `admin-auditor-read`: every read, the chain head and its check, Caddy's access lines, and retention. It appends nothing.
+    - `admin-auditor-read`: every read, the chain head and its check, Caddy's access lines, retention, the backup public key and the encrypted export. It appends nothing.
     - **Caddy's access lines** do not use this API or a token. Caddy's `net` log writer cannot send one, so the auditor takes
       them on an ingest listener of its own, bound to its address on `audit-caddy`, a network of Caddy and the auditor alone
       (ADR 0051). The listener reads newline-delimited JSON and never answers. This API is not bound on that network.
@@ -574,6 +574,60 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '503':
           $ref: '#/components/responses/Backlog'
+  /api/audit/v1/backup-key:
+    put:
+      operationId: setBackupKey
+      summary: Give the auditor the backup public key its export is encrypted to. `admin-auditor-read` only.
+      description: >-
+        ADR 0013. The key is a public one (`age1...`), kept as a setting of the store; the same key again records nothing. The admin
+        gives it with each export, so a rotation or a restart leaves no old key behind. A value that is not a backup public key is
+        400 `bad_request`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BackupKey'
+      responses:
+        '200':
+          description: The key was taken (or was already the key).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BackupKeyTaken'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/Backlog'
+  /api/audit/v1/export:
+    get:
+      operationId: getExport
+      summary: The store, encrypted to the backup public key and streamed. `admin-auditor-read` only.
+      description: >-
+        ADR 0013. A tar with one file, `audit.db`: a consistent copy (`VACUUM INTO`, taken from a read-only connection so the writer is
+        never blocked), encrypted with age to the backup public key and written to the response as it is made. It holds sealed content
+        only. The response has no length: a transfer that ends early ends the connection badly, which is how the admin knows it is not
+        whole. The copy is made on the audit volume, one export at a time, and removed however the export ends. With no key,
+        503 `backup_key_missing`. With less room than the copy needs plus the floor kept for open spans, or while another export runs,
+        503 `audit_backlog` and nothing is made.
+      responses:
+        '200':
+          description: An age file that opens to a tar of `audit.db`.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/Backlog'
 components:
   securitySchemes:
     linkToken:
@@ -901,6 +955,23 @@ components:
         floor_days:
           type: integer
           description: The least it can be set to. Returned, not sent.
+    BackupKey:
+      type: object
+      required: [public_key]
+      properties:
+        public_key:
+          type: string
+          description: The backup public key, `age1...`.
+    BackupKeyTaken:
+      type: object
+      required: [fingerprint, changed]
+      properties:
+        fingerprint:
+          type: string
+          description: The key's short name (four groups of four hex digits).
+        changed:
+          type: boolean
+          description: False if the auditor already had this key.
     TraceSummary:
       type: object
       required: [trace_id, span_id, status, started_at]

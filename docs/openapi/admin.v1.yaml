@@ -1327,12 +1327,12 @@ paths:
       description: >-
         ADR 0013. The bundle holds `manifest.json` (in the clear: the format, the release that made it, the key's fingerprint, and each
         export's name, SHA-256 and size), `backup-key.age` (the private key protected by the backup passphrase), then the exports, the
-        admin's own first: `admin.age` (`admin.db`, `admin-secrets/`, `caddy-secrets/`) `server.age` (`control.db`, `spaces/<id>.db`), `alerter.age` (`ledger.json`, `releases.json`) and `cpa.age` (the account login files).
+        admin's own first: `admin.age` (`admin.db`, `admin-secrets/`, `caddy-secrets/`) `server.age` (`control.db`, `spaces/<id>.db`), `alerter.age` (`ledger.json`, `releases.json`), `cpa.age` (the account login files) and, last, `audit.age` (`audit.db`, the auditor's store; sealed content only).
         Each export is an age file made to the backup public key, so the admin that sends it cannot read it, and it is complete, secrets
         included. With the file and the passphrase alone, the `age` tool opens it. Each export is staged in a work file on the admin's
         data volume as it arrives and the bundle is streamed from them with a known length; the work files are removed however the
         download ends. 503 `backup_key_missing` if no backup key is set (the Backup page, or the first-run setup), also when the
-        server has not been given it yet; 502 if the server is offline or its export is cut short, or the alerter or CLIProxyAPI cannot make its export, and then nothing is sent. Recorded
+        server has not been given it yet; 502 if the server is offline or its export is cut short, or the alerter, CLIProxyAPI or the auditor cannot make its export, and then nothing is sent. Recorded
         (the key's fingerprint and the parts), like every backup.
       security:
         - adminSession: []

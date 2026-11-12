@@ -73,6 +73,8 @@ pub struct Auditor {
     last_request: Mutex<HashMap<&'static str, i64>>,
     /// Lines on the ingest listener that were not taken: not Caddy's, or too long (plan step 2.9).
     pub access_refused: std::sync::atomic::AtomicU64,
+    /// Whether an export is being made: one at a time, since its copy is as large as the store (ADR 0013).
+    exporting: std::sync::atomic::AtomicBool,
     /// What decides when to alert (plan step 4.2). Unset in the test rigs that do not look at alerts.
     rules: std::sync::OnceLock<rules::Rules>,
 }
@@ -87,6 +89,7 @@ impl Auditor {
             boot_id: BootId::new(),
             last_request: Mutex::new(HashMap::new()),
             access_refused: Default::default(),
+            exporting: Default::default(),
             rules: Default::default(),
         })
     }
@@ -230,6 +233,9 @@ const ADMIN_READ: Routes = &[
     ("GET", "/chain/verify"),
     ("GET", "/retention"),
     ("PUT", "/retention"),
+    // Plan step 6.2 (ADR 0013): the backup public key, and the store encrypted to it.
+    ("PUT", "/backup-key"),
+    ("GET", "/export"),
 ];
 
 /// The gateway's read token (plan step 3.2, ADR 0014): the token counts it holds the budget against, and nothing else. It
@@ -317,6 +323,8 @@ pub fn router(auditor: Arc<Auditor>, links: Links) -> Router {
         .route(&full("/chain/entries/{seq}"), get(chain_entry))
         .route(&full("/chain/verify"), get(chain_verify))
         .route(&full("/retention"), get(get_retention).put(put_retention))
+        .route(&full("/backup-key"), axum::routing::put(put_backup_key))
+        .route(&full("/export"), get(export))
         .route(&full("/status"), get(status))
         // Inside the token check, so only a request that passed it is noted, and with the caller the token stands for.
         .layer(axum::middleware::from_fn_with_state(auditor.clone(), note_request))
@@ -765,6 +773,112 @@ async fn put_retention(State(a): St, body: Bytes) -> Result<Json<wire::Retention
         rules.retention_changed(old, r.days);
     }
     Ok(Json(wire::Retention { days: r.days, floor_days: Some(askbar_audit::MIN_RETENTION_DAYS) }))
+}
+
+// ------------------------------------------------------------------ the backup export (ADR 0013)
+
+const BACKUP_KEY: &str = "backup_public_key";
+const EXPORT_PREFIX: &str = ".export-";
+
+/// `PUT /backup-key`: the public key the export is encrypted to. Kept as a setting of the store; the same key again records nothing.
+async fn put_backup_key(State(a): St, body: Bytes) -> Result<Json<wire::BackupKeyTaken>, Failure> {
+    let k: wire::BackupKey = parse(&body)?;
+    if !askbar_service::backup::is_recipient(&k.public_key) {
+        return Err(bad("That is not a backup public key."));
+    }
+    gate(&a, false)?;
+    let current = a.recorder.reader().and_then(|conn| askbar_audit::get_setting(&conn, BACKUP_KEY).ok().flatten());
+    let changed = current.as_deref() != Some(k.public_key.as_str());
+    if changed {
+        append(&a, Record::Setting { key: BACKUP_KEY.into(), value: k.public_key.clone() }).await?;
+    }
+    Ok(Json(wire::BackupKeyTaken { fingerprint: askbar_service::backup::fingerprint(&k.public_key), changed }))
+}
+
+/// Removes the export's work directory however it ends.
+struct TempDir(PathBuf);
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Work directories older than an hour are leftovers of a crash.
+fn clear_stale(parent: &FsPath) {
+    let Ok(entries) = std::fs::read_dir(parent) else { return };
+    for e in entries.flatten() {
+        let old =
+            e.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|age| age > Duration::from_secs(3600));
+        if old && e.file_name().to_string_lossy().starts_with(EXPORT_PREFIX) {
+            let _ = std::fs::remove_dir_all(e.path());
+        }
+    }
+}
+
+/// `GET /export`: the store as a tar of one consistent copy (`audit.db`), encrypted with age to the backup public key and streamed
+/// as it is made. It holds sealed content only, so it is as safe as the store; nothing is made without a key (`503
+/// backup_key_missing`), and not when the volume has less room than the copy needs plus the floor for open spans (`503
+/// audit_backlog`). Work files are on the audit volume, one export at a time, and are removed however it ends.
+async fn export(State(a): St) -> Result<axum::response::Response, Failure> {
+    let recipient = a
+        .recorder
+        .reader()
+        .and_then(|conn| askbar_audit::get_setting(&conn, BACKUP_KEY).ok().flatten())
+        .filter(|k| askbar_service::backup::is_recipient(k))
+        .ok_or_else(|| ApiError::code(ErrorCode::BackupKeyMissing))?;
+    let file = a.recorder.path().map(FsPath::to_path_buf).ok_or_else(|| internal(()))?;
+    let parent = file.parent().map(FsPath::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
+    let size = std::fs::metadata(&file).map(|m| m.len()).unwrap_or(0);
+    if (a.free_space)().is_some_and(|free| free < size.saturating_add(a.limits.min_free_bytes)) {
+        return Err(refuse("The audit volume has too little room for a copy of the store. Nothing was exported."));
+    }
+    // One export at a time: the copy is as large as the store.
+    let running = a.exporting.compare_exchange(false, true, std::sync::atomic::Ordering::SeqCst, std::sync::atomic::Ordering::SeqCst);
+    if running.is_err() {
+        return Err(refuse("An export is already running. Try again when it has finished."));
+    }
+    let release = ExportSlot(a.clone());
+    clear_stale(&parent);
+    let dir = parent.join(format!(
+        "{EXPORT_PREFIX}{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos())
+    ));
+    let guard = TempDir(dir.clone());
+    let (mut writer, body) = askbar_service::stream::body();
+    let st = a.clone();
+    tokio::task::spawn_blocking(move || {
+        let (_guard, _release) = (guard, release); // the copy and the slot go when this ends, a vanished client included
+        let result = (|| -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+            use std::io::Write;
+            std::fs::create_dir_all(&dir)?;
+            let copy = dir.join("audit.db");
+            st.recorder.snapshot_to(&copy)?;
+            let mut tar = askbar_service::backup::encrypt_to(&recipient, &mut writer).map_err(|e| e.to_string())?;
+            let len = std::fs::metadata(&copy)?.len();
+            askbar_service::tar::write_file(&mut tar, "audit.db", len, &mut std::fs::File::open(&copy)?, now())?;
+            askbar_service::tar::write_end(&mut tar)?;
+            tar.finish()?;
+            writer.flush()?;
+            Ok(())
+        })();
+        if let Err(e) = result {
+            tracing::warn!("an audit export did not finish: {e}");
+            writer.fail();
+        }
+    });
+    axum::response::Response::builder()
+        .header(axum::http::header::CONTENT_TYPE, "application/octet-stream")
+        .body(body)
+        .map_err(|_| internal(()))
+}
+
+/// Frees the one export slot when dropped.
+struct ExportSlot(Arc<Auditor>);
+impl Drop for ExportSlot {
+    fn drop(&mut self) {
+        self.0.exporting.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
 }
 
 async fn status(State(a): St) -> Json<serde_json::Value> {

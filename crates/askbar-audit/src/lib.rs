@@ -1119,6 +1119,18 @@ impl Recorder {
         Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX).ok()
     }
 
+    /// The audit file's path, if it is a file (the export makes its work files next to it, on the same volume).
+    pub fn path(&self) -> Option<&Path> {
+        self.path.as_deref()
+    }
+
+    /// A complete, consistent copy of the store at `dest` (`VACUUM INTO`, from a read-only connection, so the writer is never
+    /// blocked and the copy is of one moment). Fails if `dest` exists. The copy holds sealed content only, like the store.
+    pub fn snapshot_to(&self, dest: &Path) -> Result<(), String> {
+        let conn = self.reader().ok_or("there is no audit file to copy")?;
+        conn.execute("VACUUM INTO ?1", [dest.to_string_lossy().as_ref()]).map(|_| ()).map_err(|e| e.to_string())
+    }
+
     /// How many events were dropped because the queue was full.
     pub fn dropped(&self) -> u64 {
         self.dropped.load(Ordering::Relaxed)
