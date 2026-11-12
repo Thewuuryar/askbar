@@ -295,6 +295,7 @@ The owner decided D1 to D36 on 2026-11-11 and set no time budget: everything bel
 
 **5.3 `feat(caddy): HTTP-01 certificates`** (S) — PR AG [ADR 0015](adr/0015-certificates.md) [MIGRATION]
 - The setting `acme_challenge` (`dns` or `http`) on `network_settings`; the Network page offers the choice with a warning (D19).
+- **Built so, AG (2026-11-12, #84):** migration 19 (`acme_challenge`, default `dns`); `caddyfile` leaves out `acme_dns` for `http`; no token needed, and no token file written, for `http`; `http` refused for a host name with a private suffix; the Network page's select, with the port 80 warning and the token box hidden; tests in `caddy.rs`, `admin_network.rs`, `caddy_apply.rs`, `db.rs` and the browser test. No compose change (80 was published already). No real certificate was issued: that needs a public host name and goes on the person-run checklist (a real certificate through this layout).
 
 (5.4, the optional passkey with recovery codes, is cut from v1: D20.)
 
