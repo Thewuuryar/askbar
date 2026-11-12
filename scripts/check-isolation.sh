@@ -1161,13 +1161,15 @@ print('PROVIDER', '$drill_pid' in body)" 2>&1 | grep '^PROVIDER ' | tail -1)
   esac
   drill_chat_ok "$drill_token" 150 && pass "replies work again after the restart (the admin gave the services their settings again)" || fail "no reply after the restart: $DRILL_LAST"
 
-  echo "-- the auditor down: a new reply is refused with 503 audit_backlog, then recovery"
+  echo "-- the auditor down: a new reply is refused, then recovery"
   docker stop "$DRILL_AUDITOR" >/dev/null
   out=$(drill_probe chat https://localhost "$drill_token")
   case "$out" in
-    "refused "*" audit_backlog") pass "with the auditor down a reply is refused with audit_backlog, and no provider is called unrecorded ($out)";;
+    # The gateway's 503 audit_backlog reaches the client as an error event with the code provider_error
+    # once the stream is open (wire contract: the server's own words); before it, as the HTTP 503.
+    "refused 503 audit_backlog"|"refused sse provider_error") pass "with the auditor down a reply is refused, never made unrecorded ($out)";;
     ok) fail "a reply was made while the auditor was down: nothing may be unrecorded";;
-    *) fail "with the auditor down the answer was '$out', not audit_backlog";;
+    *) fail "with the auditor down the answer was '$out', not a refusal (audit_backlog or provider_error)";;
   esac
   docker start "$DRILL_AUDITOR" >/dev/null
   drill_wait_healthy "$DRILL_AUDITOR" 60 && pass "the auditor is healthy again" || fail "the auditor did not come back"
