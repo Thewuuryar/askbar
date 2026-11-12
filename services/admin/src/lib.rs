@@ -20,6 +20,7 @@ pub mod cpa;
 pub mod db;
 pub mod gateway_link;
 pub mod network;
+pub mod notify;
 pub mod pages;
 pub mod routes;
 pub mod sealed;
@@ -79,6 +80,8 @@ pub struct AdminState {
     pub sealed: sealed::Sealed,
     /// What the last check of the audit chain found (ADR 0010 rule 7).
     pub chain: chain_check::ChainWatch,
+    /// What the admin does when something is worth an alert: a log line, an event for the alerter, a note on the pages.
+    pub notifier: Arc<notify::Notifier>,
     /// The link to CLIProxyAPI, once its config exists.
     pub cpa: std::sync::Mutex<Option<Arc<cpa::CpaLink>>>,
     /// Logins started and not finished: state -> (provider, expiry in unix seconds).
@@ -112,6 +115,7 @@ impl AdminState {
             actions: Default::default(),
             sealed: Default::default(),
             chain: Default::default(),
+            notifier: Default::default(),
             cpa: std::sync::Mutex::new(None),
             cpa_logins: std::sync::Mutex::new(Default::default()),
             service_actions: std::sync::Mutex::new(Default::default()),

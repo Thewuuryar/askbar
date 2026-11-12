@@ -94,6 +94,13 @@ async fn main() {
     let alerter_token = askbar_admin::alerter_link::read_token(&askbar_admin::server_link::token_dir()).unwrap_or_else(|e| die(e, 1));
     let alerter = askbar_admin::alerter_link::AlerterLink::new(&askbar_admin::alerter_link::alerter_url(), alerter_token);
     let _ = state.alerter.set(alerter.clone());
+    // What the admin tells the alerter itself (ADR 0055): its own events, over the same link and token.
+    state.notifier.set_client(askbar_service::alert_client::AlertClient::new(
+        &askbar_admin::alerter_link::alerter_url(),
+        askbar_admin::server_link::token_dir(),
+        askbar_admin::alerter_link::LINK,
+    ));
+    tokio::spawn(state.notifier.alert_client().expect("just set").drain_forever());
     tokio::spawn(alerter.run(state.clone()));
     // The Audit pages read the auditor, and the retention setting goes to it (ADR 0051).
     let auditor_token = askbar_admin::auditor_link::read_token(&askbar_admin::server_link::token_dir()).unwrap_or_else(|e| die(e, 1));
