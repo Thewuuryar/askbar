@@ -810,3 +810,105 @@ async fn the_status_shows_when_each_link_last_called_and_a_refused_call_is_not_o
     let st = t.as_(SERVER, M::GET, "/status", None).await;
     assert!(st.body["last_requests"]["alerter"].as_i64().unwrap() >= before);
 }
+
+// ------------------------------------------------------------------ the backup export (ADR 0013, plan step 6.2)
+
+const BACKUP_PASS: &str = "an auditor backup passphrase 1";
+
+impl T {
+    /// `GET /export` as `link`: the status and the bytes.
+    async fn export_as(&self, link: &str) -> (u16, Vec<u8>) {
+        let r = self.http.get(format!("{}/api/audit/v1/export", self.url)).bearer_auth(token(link)).send().await.unwrap();
+        (r.status().as_u16(), r.bytes().await.unwrap().to_vec())
+    }
+
+    fn leftovers(&self) -> usize {
+        std::fs::read_dir(self.dir.join("data"))
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|e| e.file_name().to_string_lossy().starts_with(".export-"))
+            .count()
+    }
+}
+
+#[tokio::test]
+async fn the_backup_key_is_taken_once_and_only_a_public_key_and_only_on_the_read_link() {
+    let t = start().await;
+    let key = askbar_service::backup::generate_with(BACKUP_PASS, 10).unwrap();
+    for bad in ["", "not-a-key", "AGE-SECRET-KEY-1QQQ", "age1short"] {
+        let r = t.as_(ADMIN_READ, M::PUT, "/backup-key", Some(json!({ "public_key": bad }))).await;
+        assert_eq!((r.status, r.code()), (400, "bad_request".into()), "{bad:?}");
+        assert!(!r.body.to_string().contains(bad) || bad.is_empty(), "the answer repeats a value");
+    }
+    let r = t.as_(ADMIN_READ, M::PUT, "/backup-key", Some(json!({ "public_key": key.recipient }))).await;
+    assert_eq!((r.status, r.body["changed"].clone(), r.body["fingerprint"].clone()), (200, json!(true), json!(key.fingerprint)));
+    let head = t.as_(ADMIN_READ, M::GET, "/chain/head", None).await.body["seq"].clone();
+    let again = t.as_(ADMIN_READ, M::PUT, "/backup-key", Some(json!({ "public_key": key.recipient }))).await;
+    assert_eq!(again.body["changed"], json!(false), "the same key again");
+    assert_eq!(t.as_(ADMIN_READ, M::GET, "/chain/head", None).await.body["seq"], head, "and records nothing");
+    for link in [SERVER, GATEWAY, ADMIN_APPEND, GATEWAY_READ, ALERTER] {
+        let r = t.as_(link, M::PUT, "/backup-key", Some(json!({ "public_key": key.recipient }))).await;
+        assert_eq!(r.status, 403, "{link} may not give the key");
+        assert_eq!(t.export_as(link).await.0, 403, "{link} may not export");
+    }
+}
+
+#[tokio::test]
+async fn the_export_is_the_store_encrypted_to_the_key_complete_and_leaves_no_work_file() {
+    let t = start().await;
+    // No key: nothing is made.
+    let (status, body) = t.export_as(ADMIN_READ).await;
+    assert_eq!(status, 503);
+    assert!(String::from_utf8_lossy(&body).contains("backup_key_missing"));
+    let key = askbar_service::backup::generate_with(BACKUP_PASS, 10).unwrap();
+    assert_eq!(t.as_(ADMIN_READ, M::PUT, "/backup-key", Some(json!({ "public_key": key.recipient }))).await.status, 200);
+    // Some records, so the copy has something to hold.
+    let action = json!({ "id": "a1", "at": now(), "category": "settings", "action": "x", "outcome": "done" });
+    assert_eq!(t.as_(ADMIN_APPEND, M::POST, "/admin-actions", Some(action)).await.status, 201);
+    assert_eq!(t.as_(SERVER, M::POST, "/spans", Some(span("g1", "t1", "gate"))).await.status, 201);
+
+    let (status, bytes) = t.export_as(ADMIN_READ).await;
+    assert_eq!(status, 200);
+    assert!(bytes.starts_with(b"age-encryption.org/v1\n"), "an age file");
+    assert!(!bytes.windows(13).any(|w| w == b"SQLite format"), "nothing readable");
+    // The right key opens it, to one file that is the store: the same chain head, and a chain that checks.
+    let identity = askbar_service::backup::unlock(&key.protected, BACKUP_PASS).unwrap();
+    let files = askbar_service::tar::read(&askbar_service::backup::decrypt(&identity, &bytes).unwrap()).unwrap();
+    assert_eq!(files.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(), ["audit.db"]);
+    let copy = t.dir.join("restored-copy.db");
+    std::fs::write(&copy, &files[0].1).unwrap();
+    let db = AuditDb::open(&copy).unwrap();
+    let live = t.auditor.recorder.reader().unwrap();
+    let head = askbar_audit::chain::head(&live).unwrap();
+    assert_eq!(db.chain_head().unwrap(), head, "the copy holds every record up to the moment it was made");
+    assert!(head.seq > 0);
+    assert!(askbar_audit::chain::verify(db.conn()).unwrap().problems.is_empty(), "and its chain checks");
+    assert_eq!(askbar_audit::get_setting(db.conn(), "backup_public_key").unwrap().as_deref(), Some(key.recipient.as_str()));
+    // Another key does not open it.
+    let other = askbar_service::backup::generate_with(BACKUP_PASS, 10).unwrap();
+    let wrong = askbar_service::backup::unlock(&other.protected, BACKUP_PASS).unwrap();
+    assert!(askbar_service::backup::decrypt(&wrong, &bytes).is_err());
+    // The work directory is gone (the task may need a moment after the last byte).
+    for _ in 0..60 {
+        if t.leftovers() == 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(t.leftovers(), 0, "work files were left behind");
+}
+
+#[tokio::test]
+async fn an_export_with_too_little_room_or_while_another_runs_is_refused_and_makes_nothing() {
+    let t = start().await;
+    let key = askbar_service::backup::generate_with(BACKUP_PASS, 10).unwrap();
+    assert_eq!(t.as_(ADMIN_READ, M::PUT, "/backup-key", Some(json!({ "public_key": key.recipient }))).await.status, 200);
+    t.free.store(1024, Ordering::Relaxed);
+    let (status, body) = t.export_as(ADMIN_READ).await;
+    assert_eq!(status, 503);
+    assert!(String::from_utf8_lossy(&body).contains("audit_backlog"), "{}", String::from_utf8_lossy(&body));
+    assert_eq!(t.leftovers(), 0);
+    // Room again: it works, and nothing was changed by the refusal.
+    t.free.store(100 * 1024 * 1024 * 1024, Ordering::Relaxed);
+    assert_eq!(t.export_as(ADMIN_READ).await.0, 200);
+}

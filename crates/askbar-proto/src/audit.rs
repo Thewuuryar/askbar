@@ -148,6 +148,20 @@ pub struct Retention {
     pub floor_days: Option<u32>,
 }
 
+/// `PUT /backup-key`: the backup public key the export is encrypted to (ADR 0013).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BackupKey {
+    /// `age1…`, an X25519 public key.
+    pub public_key: String,
+}
+
+/// The answer to `PUT /backup-key`: the key's fingerprint, so the admin can check it was taken, and whether it was new.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BackupKeyTaken {
+    pub fingerprint: String,
+    pub changed: bool,
+}
+
 /// One row of `GET /traces`: a generation, newest first, with the provider and timings of its last attempt.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TraceSummary {

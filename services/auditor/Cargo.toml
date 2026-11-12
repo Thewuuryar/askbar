@@ -9,7 +9,8 @@ description = "The audit store as its own container: /api/audit/v1 (ADR 0051)"
 [dependencies]
 askbar-audit = { path = "../../crates/askbar-audit" }
 askbar-proto = { path = "../../crates/askbar-proto", features = ["axum"] }
-askbar-service = { path = "../../crates/askbar-service" }
+# The `backup` feature: the age encryption the export is made with (ADR 0013).
+askbar-service = { path = "../../crates/askbar-service", features = ["backup"] }
 axum = "0.8"
 base64 = "0.22"
 serde = { version = "1", features = ["derive"] }
