@@ -70,15 +70,15 @@ The owner accepted the third list on November 4, 2026, and amended it on Novembe
 | Defend row | Tests |
 | --- | --- |
 | Admin or pairing brute force | `wrong_password_is_401_then_locks_out_even_the_right_one`, `wrong_keys_count_toward_the_same_lockout_as_wrong_passwords`, `a_wrong_username_and_a_wrong_password_get_the_same_answer_and_both_count_toward_the_lockout` |
-| Compromised admin, which holds live secrets | `an_unseal_and_a_view_are_refused_when_their_record_cannot_be_written`, `a_key_cannot_open_a_session_change_the_password_or_stand_in_for_one`, `an_old_sign_in_cannot_change_the_password_make_a_key_or_lower_retention`, `an_api_key_cannot_lower_retention_even_beside_a_fresh_cookie`; `a_token_that_is_refused_on_any_admin_link_is_one_alert_naming_that_link_for_each_episode`, `a_finding_is_one_alert_however_many_checks_see_it_and_a_new_one_after_it_clears`; pending, PR X (the auditor's unseal and timeout alerts) |
+| Compromised admin, which holds live secrets | `an_unseal_and_a_view_are_refused_when_their_record_cannot_be_written`, `a_key_cannot_open_a_session_change_the_password_or_stand_in_for_one`, `an_old_sign_in_cannot_change_the_password_make_a_key_or_lower_retention`, `an_api_key_cannot_lower_retention_even_beside_a_fresh_cookie`; `a_token_that_is_refused_on_any_admin_link_is_one_alert_naming_that_link_for_each_episode`, `a_finding_is_one_alert_however_many_checks_see_it_and_a_new_one_after_it_clears`; `an_unseal_is_an_alert_once_it_is_recorded_and_the_request_that_began_it_is_not`, `changing_how_long_content_stays_unsealed_is_an_alert_and_saving_the_same_is_not`, `a_new_or_replaced_backup_key_is_an_alert` |
 | Unknown changes to the audit log | `a_shorter_chain_is_a_rollback_and_the_stored_head_stays_where_it_was`, `an_entry_with_another_hash_or_no_entry_at_all_is_a_rewrite`, `the_chain_head_moves_with_every_record_and_a_full_check_finds_an_edit` |
-| False or missing records after a server compromise | `no_provider_is_called_when_the_auditor_refuses_and_the_refusal_is_recorded_later`, `an_acknowledgment_slower_than_a_second_is_a_refusal_and_no_provider_is_called`; pending, PR X (silence rules) |
+| False or missing records after a server compromise | `no_provider_is_called_when_the_auditor_refuses_and_the_refusal_is_recorded_later`, `an_acknowledgment_slower_than_a_second_is_a_refusal_and_no_provider_is_called`, `links_that_say_nothing_for_five_minutes_are_silent_and_a_link_that_speaks_is_not`, `a_reply_with_no_access_line_for_fifteen_minutes_is_caddy_silent_and_a_line_that_comes_is_not` |
 | Backup theft | pending, PR AI, AJ, AL and AM |
 | Vulnerable or changed dependency | pending, PR AR |
 | Malicious model output in a client or admin page | pending, PR AE |
 | Lost or stolen client | `revoked_token_is_401`, `a_client_the_snapshot_lists_as_revoked_is_refused` |
-| Auditor down or disk full | `below_the_disk_floor_a_new_span_is_refused_but_the_records_of_open_spans_are_not`, `no_provider_is_called_when_the_auditor_cannot_be_reached`; pending, PR X (disk alerts), PR AT (drills) |
-| Unwanted sealed content access | `an_unseal_and_a_view_are_refused_when_their_record_cannot_be_written`; pending, PR X (alerts) |
+| Auditor down or disk full | `below_the_disk_floor_a_new_span_is_refused_but_the_records_of_open_spans_are_not`, `no_provider_is_called_when_the_auditor_cannot_be_reached`, `a_volume_running_out_of_room_is_an_alert_with_the_megabytes_left_each_time_the_time_rules_run`; pending, PR AT (drills) |
+| Unwanted sealed content access | `an_unseal_and_a_view_are_refused_when_their_record_cannot_be_written`, `an_unseal_is_an_alert_once_it_is_recorded_and_the_request_that_began_it_is_not` |
 
 ## Alternatives considered
 
