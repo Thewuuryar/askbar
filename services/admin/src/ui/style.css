@@ -84,6 +84,8 @@ pre.plain:empty { display: none; }
 #audit-viewed .viewed h4 { margin: 12px 0 4px; }
 #unsealed-banner { display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
 .sealed-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.confirm-delete { flex-basis: 100%; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.confirm-delete p { flex-basis: 100%; margin: 0; }
 .sealed-row .what { flex: 1; min-width: 160px; overflow-wrap: anywhere; }
 #tab-audit h3 { margin-top: 22px; }
 

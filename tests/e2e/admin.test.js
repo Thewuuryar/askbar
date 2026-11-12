@@ -474,6 +474,34 @@ async function waitForPort(port) {
     assert.equal(await page.innerText(row + ' button'), 'Pause replies');
     assert.equal(await page.locator('#users b').count(), 0, 'names are text');
   });
+  await step('users: deleting a person needs their name typed, then removes them and nothing else', async () => {
+    await openPage('clients');
+    await page.waitForSelector('#users [data-user]');
+    await page.fill('#u-name', 'Zed');
+    await page.click('#user-form button[type=submit]');
+    await page.waitForFunction(() => /Zed/.test(document.getElementById('users').textContent));
+    const zed = '#users [data-user]:has(.what:text-is("Zed"))';
+    await page.click(zed + ' [data-action="delete"]');
+    const confirm = zed + ' [data-confirm]';
+    await page.waitForSelector(confirm);
+    assert.match(await page.innerText(confirm), /cannot be undone/);
+    const go = confirm + ' button.danger';
+    assert.equal(await page.isDisabled(go), true, 'nothing to confirm yet');
+    await page.fill(confirm + ' input', 'zed');
+    assert.equal(await page.isDisabled(go), true, 'the name must match exactly');
+    // Cancel closes it and deletes nothing.
+    await page.click(confirm + ' button.secondary');
+    assert.equal(await page.locator(confirm).count(), 0);
+    assert.equal(await page.locator(zed).count(), 1);
+    await page.click(zed + ' [data-action="delete"]');
+    await page.fill(confirm + ' input', 'Zed');
+    assert.equal(await page.isDisabled(go), false);
+    await page.click(go);
+    await page.waitForFunction(() => !/Zed/.test(document.getElementById('users').textContent));
+    assert.match(await page.innerText('#users'), /Ann/, 'the other person stays');
+    const left = await page.evaluate(async () => (await (await fetch('/api/admin/v1/users')).json()).map((u) => u.name));
+    assert.ok(left.includes('Ann') && !left.includes('Zed'), JSON.stringify(left));
+  });
   await step('settings page saves the system prompt and display defaults', async () => {
     await openPage('settings');
     await page.waitForSelector('#settings-form');

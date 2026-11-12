@@ -978,6 +978,13 @@
         }
       });
       row.appendChild(b);
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'secondary danger';
+      del.dataset.action = 'delete';
+      del.textContent = 'Delete…';
+      del.addEventListener('click', () => askToDelete(row, u, del));
+      row.appendChild(del);
       box.appendChild(row);
     }
     const sel = $('d-user');
@@ -991,6 +998,61 @@
     }
     if (users.some((u) => u.id === keep)) sel.value = keep;
     $('pair-form').querySelector('button[type=submit]').disabled = users.length === 0;
+  }
+
+  // Deleting a person removes their personal space, their clients and their sign-ins for good (the audit records stay).
+  // The name is typed to confirm, and the server wants a sign-in from the last 10 minutes.
+  function askToDelete(row, u, opener) {
+    opener.disabled = true;
+    const box = document.createElement('div');
+    box.className = 'confirm-delete';
+    box.dataset.confirm = u.id;
+    const warn = document.createElement('p');
+    warn.className = 'hint';
+    warn.textContent =
+      'This deletes ' + u.name + "'s space, with every conversation in it, and signs out their apps. It cannot be undone. " +
+      'Audit records stay. Type the name to confirm.';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.autocomplete = 'off';
+    input.setAttribute('aria-label', 'Type ' + u.name + ' to confirm');
+    const go = document.createElement('button');
+    go.type = 'button';
+    go.className = 'danger';
+    go.textContent = 'Delete ' + u.name;
+    go.disabled = true;
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'secondary';
+    cancel.textContent = 'Cancel';
+    const err = document.createElement('p');
+    err.className = 'error';
+    err.setAttribute('role', 'alert');
+    err.hidden = true;
+    input.addEventListener('input', () => {
+      go.disabled = input.value !== u.name;
+    });
+    cancel.addEventListener('click', () => {
+      box.remove();
+      opener.disabled = false;
+    });
+    go.addEventListener('click', async () => {
+      if (input.value !== u.name) return;
+      go.disabled = true;
+      err.hidden = true;
+      try {
+        await api('DELETE', '/api/admin/v1/users/' + encodeURIComponent(u.id));
+        await loadUsers();
+        await loadClients();
+      } catch (ex) {
+        err.textContent = ex.message;
+        err.hidden = false;
+        go.disabled = input.value !== u.name;
+      }
+    });
+    for (const el of [warn, input, go, cancel, err]) box.appendChild(el);
+    row.appendChild(box);
+    input.focus();
   }
 
   on('user-form', 'submit', async (e) => {
