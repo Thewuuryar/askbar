@@ -1195,6 +1195,85 @@ paths:
           $ref: '#/components/responses/Conflict'
         '502':
           $ref: '#/components/responses/ServerUnavailable'
+  /api/admin/v1/restore/inspect:
+    post:
+      operationId: inspectRestore
+      summary: Upload a backup and say what it is. Needs a fresh sign-in. Never an API key.
+      description: >-
+        ADR 0013, D21. The body is the bundle `GET /backup` made, as a stream. It is kept as ciphertext in a work directory on the admin's
+        data volume for 30 minutes (one at a time: a new upload replaces it), and its manifest and the hash of every part are checked. A
+        backup from a newer release than this one is refused here, before the passphrase is asked for: 409 `backup_newer_release`, naming the
+        release to install in `release`. A used install is refused before the upload is read (409 `not_empty`): a restore is for an empty,
+        unconfigured install (no provider, no person, no API key, no audit key). 400 `bad_request` for a body that is not a backup, is not
+        whole or is damaged. The answer holds nothing secret.
+      security:
+        - adminSession: []
+      requestBody:
+        required: true
+        content:
+          application/x-tar:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '200':
+          description: What the backup is, and the id to restore it with.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RestoreInspection'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /api/admin/v1/restore:
+    post:
+      operationId: restore
+      summary: Restore the uploaded backup with its passphrase. Needs a fresh sign-in. Never an API key.
+      description: >-
+        ADR 0013, D21. The passphrase opens the protected key in the backup (about a second), in memory, and the key goes when the call ends.
+        Every part is then read to the end, so a damaged backup fails with nothing changed. The server and the alerter take theirs through
+        `POST /imports` (409 `not_empty` if they have data), `cpa` through its supervisor, and the admin's own export becomes a pending set
+        next to `admin.db`: the admin restarts and swaps it in before its database is opened, keeping the old database and secrets as
+        `*.before-restore`. The auditor's store is checked but not restored here: it goes through a link of its own (`not_restored`). A wrong
+        passphrase is 403; five in fifteen minutes lock it for fifteen (429 `too_many_attempts`, with `Retry-After`). A step that fails after
+        others worked says which did in `restored`. Recorded as `backup/restore`, with the parts and never the passphrase; the owner is
+        sent `restore_performed` after the restart.
+      security:
+        - adminSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RestoreRequest'
+      responses:
+        '200':
+          description: Restored; the admin restarts if it can.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RestoreResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          description: Too many wrong passphrases (`too_many_attempts`), with `Retry-After`.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '502':
+          $ref: '#/components/responses/ServerUnavailable'
   /api/admin/v1/settings:
     get:
       operationId: getSettings
@@ -2043,6 +2122,53 @@ components:
           minLength: 20
         confirm:
           type: string
+    RestoreInspection:
+      type: object
+      required: [restore_id, release, created_at, key_fingerprint, parts, valid_for_secs]
+      properties:
+        restore_id:
+          type: string
+        release:
+          type: string
+          description: The Askbar release that made the backup.
+        created_at:
+          type: integer
+        key_fingerprint:
+          type: string
+          description: The fingerprint of the backup key it is encrypted to, to check against the one the Backup page showed.
+        parts:
+          type: array
+          items:
+            type: string
+        valid_for_secs:
+          type: integer
+    RestoreRequest:
+      type: object
+      required: [restore_id, passphrase]
+      additionalProperties: false
+      properties:
+        restore_id:
+          type: string
+        passphrase:
+          type: string
+          description: The backup passphrase. Never stored, logged or recorded.
+    RestoreResult:
+      type: object
+      required: [restored, not_restored, restarting]
+      properties:
+        restored:
+          type: array
+          items:
+            type: string
+          description: The parts that were restored (`server`, `alerter`, `cpa`, then `admin`, which takes effect at the restart).
+        not_restored:
+          type: array
+          items:
+            type: string
+          description: Parts the backup holds that this step does not restore (`audit`).
+        restarting:
+          type: boolean
+          description: Whether the admin is restarting to swap its own part in.
     BackupPassphrase:
       type: object
       additionalProperties: false

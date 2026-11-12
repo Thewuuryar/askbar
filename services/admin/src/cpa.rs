@@ -193,6 +193,29 @@ pub async fn export_logins(config_dir: &FsPath, recipient: &str, wait: Duration)
     }
 }
 
+/// Give the supervisor the account login files, opened, to put back in `cpa-auth` (a restore, ADR 0013): the plain tar goes in
+/// `import.tar` (a file the admin made, 0660, that the supervisor empties again) and a request names it. Waits for the answer.
+pub async fn import_logins(config_dir: &FsPath, tar: &[u8], wait: Duration) -> Result<(), &'static str> {
+    prepare_transfer_files(config_dir).map_err(|_| "The account logins could not be handed over.")?;
+    std::fs::write(config_dir.join(IMPORT_FILE), tar).map_err(|_| "The account logins could not be handed over.")?;
+    let id = rand(24);
+    write_atomic(&config_dir.join(IMPORT_REQUEST), &json!({ "id": id }).to_string(), 0o644)
+        .map_err(|_| "The account logins could not be handed over.")?;
+    let until = std::time::Instant::now() + wait;
+    loop {
+        let done: Option<Value> = std::fs::read(config_dir.join(IMPORT_DONE)).ok().and_then(|b| serde_json::from_slice(&b).ok());
+        if let Some(d) = done.filter(|d| d["id"] == id.as_str()) {
+            let _ = std::fs::write(config_dir.join(IMPORT_FILE), []);
+            return if d["ok"] == true { Ok(()) } else { Err("CLIProxyAPI could not take the account logins.") };
+        }
+        if std::time::Instant::now() >= until {
+            let _ = std::fs::write(config_dir.join(IMPORT_FILE), []);
+            return Err("CLIProxyAPI did not answer the import request in time.");
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct Account {
     pub name: String,

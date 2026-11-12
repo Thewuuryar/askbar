@@ -409,6 +409,20 @@ impl AlerterLink {
         }
     }
 
+    /// `POST /imports`: give the alerter what its export held, opened (a restore, ADR 0013). `409 not_empty` is its answer to one
+    /// that has kept something already.
+    pub async fn import(&self, tar: Vec<u8>) -> Result<(), ApiError> {
+        let url = format!("{}{}/imports", self.base, askbar_proto::paths::ALERTER_V1);
+        let sent = self.http.post(url).bearer_auth(&self.token).body(tar).send().await;
+        match sent {
+            Ok(r) if r.status().is_success() => Ok(()),
+            Ok(r) if r.status().as_u16() == 409 => {
+                Err(ApiError::new(ErrorCode::NotEmpty, "The alerter has already kept state, so it is not empty."))
+            }
+            Ok(_) | Err(_) => Err(ApiError::new(ErrorCode::ServerUnavailable, "The alerter did not take its part of the backup.")),
+        }
+    }
+
     /// `PUT /config`, as an action of its own: recorded before it is made, and not made when it cannot be (ADR 0010).
     pub async fn put_config(&self, state: &AdminState, config: &AlerterConfig) -> Result<(), PushError> {
         let body = serde_json::to_value(config).unwrap_or_default();

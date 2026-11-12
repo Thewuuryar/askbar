@@ -47,6 +47,9 @@ impl std::fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
+/// The private key opened from `backup-key.age`: what decrypts an export. Held only for as long as a restore runs.
+pub type Identity = x25519::Identity;
+
 /// A new backup key, as the admin keeps it.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Key {
