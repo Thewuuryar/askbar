@@ -1,0 +1,429 @@
+{
+ "about": "Hostile Markdown for renderMarkdown (ADR 0016, plan step 5.2). Every case is run through the renderer in Node (clients/desktop/tests/markdown.test.js), through the popup in Chromium (clients/desktop/tests/ui.test.js) and, as text, through the admin's views (tests/e2e/admin.test.js). Fields: name; input, or generate (repeat, indented_list); visible: substrings the output must contain; absent: substrings it must not; links: the addresses the output may link to (every link must be one of these, if given); max_ms: how long it may take (default 2000). Every case also has to pass the allowlist in lib.js.",
+ "cases": [
+  {
+   "name": "script tag",
+   "input": "<script>window.__pwned=1</script> hello",
+   "absent": [
+    "<script"
+   ],
+   "visible": [
+    "&lt;script&gt;"
+   ]
+  },
+  {
+   "name": "script in an entity-encoded form",
+   "input": "&lt;script&gt;window.__pwned=1&lt;/script&gt;",
+   "absent": [
+    "<script",
+    "&lt;script"
+   ],
+   "visible": [
+    "&amp;lt;script"
+   ]
+  },
+  {
+   "name": "img with onerror",
+   "input": "<img src=x onerror=\"window.__pwned=1\">",
+   "absent": [
+    "<img"
+   ]
+  },
+  {
+   "name": "img that tracks the reader",
+   "input": "<img src=\"https://evil.example/track.png?u=1\">",
+   "absent": [
+    "<img"
+   ],
+   "links": [
+    "https://evil.example/track.png?u=1"
+   ]
+  },
+  {
+   "name": "svg with onload",
+   "input": "<svg onload=\"window.__pwned=1\"><circle/></svg>",
+   "absent": [
+    "<svg"
+   ]
+  },
+  {
+   "name": "iframe with srcdoc",
+   "input": "<iframe srcdoc=\"<script>window.__pwned=1</script>\"></iframe>",
+   "absent": [
+    "<iframe"
+   ]
+  },
+  {
+   "name": "object and embed",
+   "input": "<object data=\"https://evil.example/x.swf\"></object><embed src=\"https://evil.example/x\">",
+   "absent": [
+    "<object",
+    "<embed"
+   ]
+  },
+  {
+   "name": "style tag that imports",
+   "input": "<style>@import url(https://evil.example/a.css); body{display:none}</style>",
+   "absent": [
+    "<style"
+   ]
+  },
+  {
+   "name": "style attribute with a remote url",
+   "input": "<div style=\"background:url(https://evil.example/x)\">hi</div>",
+   "absent": [
+    "<div style"
+   ]
+  },
+  {
+   "name": "base and meta refresh",
+   "input": "<base href=\"https://evil.example/\"><meta http-equiv=\"refresh\" content=\"0;url=https://evil.example/\">",
+   "absent": [
+    "<base",
+    "<meta"
+   ]
+  },
+  {
+   "name": "form that posts away",
+   "input": "<form action=\"https://evil.example/\"><input name=a><button>go</button></form>",
+   "absent": [
+    "<form",
+    "<input"
+   ]
+  },
+  {
+   "name": "raw anchor with a javascript target",
+   "input": "<a href=\"javascript:window.__pwned=1\" target=\"_blank\">click</a>",
+   "absent": [
+    "<a href=\"javascript"
+   ]
+  },
+  {
+   "name": "html comment and CDATA",
+   "input": "<!-- hidden --><![CDATA[<script>window.__pwned=1</script>]]>",
+   "absent": [
+    "<!--",
+    "<script"
+   ]
+  },
+  {
+   "name": "carriage returns inside a tag name",
+   "input": "<scr\r\nipt>window.__pwned=1</scr\r\nipt>",
+   "absent": [
+    "<script",
+    "<scr"
+   ]
+  },
+  {
+   "name": "javascript link",
+   "input": "[click](javascript:window.__pwned=1)",
+   "absent": [
+    "href=\"javascript"
+   ]
+  },
+  {
+   "name": "javascript link in mixed case",
+   "input": "[click](JaVaScRiPt:window.__pwned=1)",
+   "absent": [
+    "href=\"JaVa",
+    "href=\"java"
+   ]
+  },
+  {
+   "name": "javascript link split by a tab",
+   "input": "[click](java\tscript:window.__pwned=1)",
+   "absent": [
+    "href=\"java"
+   ]
+  },
+  {
+   "name": "data link",
+   "input": "[click](data:text/html,<script>window.__pwned=1</script>)",
+   "absent": [
+    "href=\"data"
+   ]
+  },
+  {
+   "name": "vbscript and file links",
+   "input": "[a](vbscript:msgbox(1)) [b](file:///etc/passwd)",
+   "absent": [
+    "href=\"vbscript",
+    "href=\"file"
+   ]
+  },
+  {
+   "name": "link label with html",
+   "input": "[<img src=x onerror=window.__pwned=1>](https://example.com/a)",
+   "links": [
+    "https://example.com/a"
+   ],
+   "absent": [
+    "<img"
+   ]
+  },
+  {
+   "name": "link address that breaks out of its attribute",
+   "input": "[x](https://example.com/\"onmouseover=\"window.__pwned=1)",
+   "absent": [
+    "\" onmouseover",
+    "\"onmouseover=\"window"
+   ],
+   "links": [
+    "https://example.com/\"onmouseover=\"window.__pwned=1"
+   ]
+  },
+  {
+   "name": "bare address with a quote and a tag",
+   "input": "https://example.com/\"><script>window.__pwned=1</script>",
+   "absent": [
+    "<script"
+   ]
+  },
+  {
+   "name": "a label that names a different address",
+   "input": "[https://bank.example/login](https://evil.example/phish)",
+   "links": [
+    "https://evil.example/phish"
+   ]
+  },
+  {
+   "name": "a right-to-left override in a label",
+   "input": "[‮txt.exe](https://example.com/a)",
+   "links": [
+    "https://example.com/a"
+   ]
+  },
+  {
+   "name": "markers inside an address",
+   "input": "[a](https://example.com/*b*/__c__/~~d~~) https://example.com/_x_/**y**",
+   "absent": [
+    "<em>b",
+    "<strong>y"
+   ]
+  },
+  {
+   "name": "half a link while streaming",
+   "input": "see [the docs](https://exam",
+   "absent": [
+    "<a href=\"https://exam\">the docs"
+   ],
+   "links": [
+    "https://exam"
+   ]
+  },
+  {
+   "name": "half a scheme while streaming",
+   "input": "see [the docs](http",
+   "absent": [
+    "<a "
+   ]
+  },
+  {
+   "name": "remote image",
+   "input": "![logo](https://evil.example/logo.png)",
+   "absent": [
+    "<img",
+    "src="
+   ],
+   "links": [
+    "https://evil.example/logo.png"
+   ],
+   "visible": [
+    ">logo</a>"
+   ]
+  },
+  {
+   "name": "remote image with no alt text",
+   "input": "![](https://evil.example/pixel.gif)",
+   "absent": [
+    "<img"
+   ],
+   "links": [
+    "https://evil.example/pixel.gif"
+   ]
+  },
+  {
+   "name": "image with a data address",
+   "input": "![x](data:image/svg+xml;base64,PHN2ZyBvbmxvYWQ9YWxlcnQoMSk+)",
+   "absent": [
+    "<img",
+    "href=\"data"
+   ]
+  },
+  {
+   "name": "image with a javascript address",
+   "input": "![x](javascript:window.__pwned=1)",
+   "absent": [
+    "<img",
+    "href=\"javascript"
+   ]
+  },
+  {
+   "name": "image whose alt text tries to leave the attribute",
+   "input": "![x\" onerror=\"window.__pwned=1](https://example.com/i.png)",
+   "absent": [
+    "<img",
+    "\" onerror"
+   ],
+   "links": [
+    "https://example.com/i.png"
+   ]
+  },
+  {
+   "name": "an image inside a link",
+   "input": "[![a](https://evil.example/i.png)](https://example.com/page)",
+   "absent": [
+    "<img"
+   ],
+   "links": [
+    "https://evil.example/i.png",
+    "https://example.com/page"
+   ]
+  },
+  {
+   "name": "reference-style image",
+   "input": "![a][1]\n\n[1]: https://evil.example/i.png",
+   "absent": [
+    "<img"
+   ],
+   "links": [
+    "https://evil.example/i.png"
+   ]
+  },
+  {
+   "name": "fence language that is a tag",
+   "input": "```<img src=x onerror=window.__pwned=1>\ncode\n```",
+   "absent": [
+    "<img"
+   ]
+  },
+  {
+   "name": "fence language that leaves its attribute",
+   "input": "```js\" onclick=\"window.__pwned=1\ncode\n```",
+   "absent": [
+    "onclick=\""
+   ]
+  },
+  {
+   "name": "an unclosed fence with a script while streaming",
+   "input": "```html\n<script>window.__pwned=1</script>",
+   "absent": [
+    "<script"
+   ],
+   "visible": [
+    "&lt;script&gt;"
+   ]
+  },
+  {
+   "name": "heading with html",
+   "input": "# <img src=x onerror=window.__pwned=1> title",
+   "absent": [
+    "<img"
+   ]
+  },
+  {
+   "name": "list with html and a nested script",
+   "input": "- <b>one</b>\n  - <script>window.__pwned=1</script>\n- two",
+   "absent": [
+    "<script",
+    "<b>"
+   ]
+  },
+  {
+   "name": "block quote with a script",
+   "input": "> <script>window.__pwned=1</script>\n> > <iframe src=x></iframe>",
+   "absent": [
+    "<script",
+    "<iframe"
+   ]
+  },
+  {
+   "name": "table with html cells",
+   "input": "| <img src=x onerror=window.__pwned=1> | b |\n|---|:-:|\n| <script>window.__pwned=1</script> | [x](javascript:1) |",
+   "absent": [
+    "<img",
+    "<script",
+    "href=\"javascript"
+   ]
+  },
+  {
+   "name": "table alignment that tries to carry an attribute",
+   "input": "| a |\n|:--\" onclick=\"window.__pwned=1 --|\n| b |",
+   "absent": [
+    "onclick=\"window"
+   ]
+  },
+  {
+   "name": "the marker character that stands for a stashed fragment",
+   "input": "\u00000\u0000 `code` \u0000999\u0000 [a](https://example.com/)",
+   "absent": [
+    "undefined",
+    "\u0000"
+   ],
+   "links": [
+    "https://example.com/"
+   ]
+  },
+  {
+   "name": "a block quote nested 5000 deep",
+   "generate": {
+    "repeat": {
+     "unit": ">",
+     "times": 5000,
+     "suffix": " <script>window.__pwned=1</script>"
+    }
+   },
+   "absent": [
+    "<script"
+   ],
+   "max_ms": 1500
+  },
+  {
+   "name": "a list nested 3000 deep",
+   "generate": {
+    "indented_list": 3000
+   },
+   "max_ms": 1500
+  },
+  {
+   "name": "300000 open brackets",
+   "generate": {
+    "repeat": {
+     "unit": "[",
+     "times": 300000
+    }
+   },
+   "max_ms": 2000
+  },
+  {
+   "name": "150000 image openers",
+   "generate": {
+    "repeat": {
+     "unit": "![",
+     "times": 150000
+    }
+   },
+   "max_ms": 2000
+  },
+  {
+   "name": "100000 emphasis markers",
+   "generate": {
+    "repeat": {
+     "unit": "*a ",
+     "times": 100000
+    }
+   },
+   "max_ms": 2000
+  },
+  {
+   "name": "one megabyte on one line",
+   "generate": {
+    "repeat": {
+     "unit": "a",
+     "times": 1000000
+    }
+   },
+   "max_ms": 2000
+  }
+ ]
+}

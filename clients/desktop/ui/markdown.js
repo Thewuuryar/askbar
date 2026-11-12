@@ -4,6 +4,13 @@
 // fenced code (with copy button), links, block quotes, nested lists, tables,
 // horizontal rules. Tolerates half-finished input, since it re-renders while
 // a reply is still streaming.
+//
+// What it can produce (ADR 0016, ADR 0044), and nothing else: the tags p br strong em del
+// code pre h1-h6 ul ol li blockquote hr a table thead tbody tr th td div span button; the
+// attributes href (on a, http(s) only), style (on th and td, a text-align only), class (on
+// div, span and button, from a fixed set) and type="button". No image, no media, no remote
+// resource: image syntax becomes a link. tests/payloads/markdown.json holds the hostile
+// inputs this is tested against.
 (function (root) {
   'use strict';
 
@@ -16,6 +23,9 @@
   }
 
   const SENTINEL = '\u0000';
+  // Blocks and lists nest this deep and no further, so a hostile reply cannot overflow the stack
+  // while it streams; what is deeper is shown flat.
+  const MAX_DEPTH = 20;
 
   function inline(text) {
     const stash = [];
@@ -24,9 +34,12 @@
     // Code spans first: nothing inside them is formatted.
     text = text.replace(/`([^`\n]+)`/g, (_, c) => keep('<code>' + esc(c) + '</code>'));
 
+    // Images are never fetched: ![alt](https://...) is a link whose label is the alt text, or the address.
+    text = text.replace(/!\[([^\]\n]{0,500})\]\((https?:\/\/[^\s)]+)\)/g, (_, alt, url) => '[' + (alt.trim() || url) + '](' + url + ')');
+
     // Links: [label](https://...) and bare URLs. Only http(s) is linkable.
     text = text.replace(
-      /\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<>"]*[^\s<>"'.,;:!?)\]])/g,
+      /\[([^\]\n]{1,500})\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<>"]*[^\s<>"'.,;:!?)\]])/g,
       (m, label, url, bare) => {
         const href = url || bare;
         const shown = label || bare;
@@ -85,19 +98,19 @@
 
   function buildList(items) {
     let pos = 0;
-    function level(base) {
+    function level(base, depth) {
       const tag = items[pos].ordered ? 'ol' : 'ul';
       let out = '<' + tag + '>';
       while (pos < items.length && items[pos].indent >= base) {
         const it = items[pos++];
         let body = inline(it.text);
-        if (pos < items.length && items[pos].indent > it.indent) body += level(items[pos].indent);
+        if (depth < MAX_DEPTH && pos < items.length && items[pos].indent > it.indent) body += level(items[pos].indent, depth + 1);
         out += '<li>' + body + '</li>';
       }
       return out + '</' + tag + '>';
     }
     let html = '';
-    while (pos < items.length) html += level(items[pos].indent);
+    while (pos < items.length) html += level(items[pos].indent, 1);
     return html;
   }
 
@@ -112,7 +125,7 @@
     );
   }
 
-  function render(src) {
+  function render(src, depth) {
     const lines = String(src).replace(/\r\n?/g, '\n').split('\n');
     let html = '';
     let i = 0;
@@ -143,10 +156,10 @@
 
       if (RE_HR.test(line)) { html += '<hr>'; i++; continue; }
 
-      if (/^\s*>/.test(line)) {
+      if (depth < MAX_DEPTH && /^\s*>/.test(line)) {
         const buf = [];
         while (i < lines.length && /^\s*>/.test(lines[i])) buf.push(lines[i++].replace(/^\s*>\s?/, ''));
-        html += '<blockquote>' + render(buf.join('\n')) + '</blockquote>';
+        html += '<blockquote>' + render(buf.join('\n'), depth + 1) + '</blockquote>';
         continue;
       }
 
@@ -184,6 +197,11 @@
     return html;
   }
 
-  root.renderMarkdown = render;
-  if (typeof module !== 'undefined' && module.exports) module.exports = { renderMarkdown: render };
+  // The NUL character marks a stashed fragment while a line is formatted, so no input may carry one.
+  function renderMarkdown(src) {
+    return render(String(src).replace(/\u0000/g, '\ufffd'), 0);
+  }
+
+  root.renderMarkdown = renderMarkdown;
+  if (typeof module !== 'undefined' && module.exports) module.exports = { renderMarkdown };
 })(typeof window !== 'undefined' ? window : globalThis);
