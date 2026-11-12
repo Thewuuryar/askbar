@@ -78,7 +78,13 @@ async fn alerter_state(state: &Arc<AdminState>) -> Value {
                 (_, Some(failed)) if st.last_delivery_ok_at.is_none_or(|ok| failed > ok) => " Its last delivery failed.",
                 _ => "",
             };
-            card("alerter", true, format!("Answers and runs the settings it was given.{delivery}"))
+            let release = match link.releases().await {
+                Some(r) if r.newer => format!(" Askbar {} is available; this install runs {}.", r.latest.unwrap_or_default(), r.current),
+                Some(r) if r.latest.is_some() => format!(" Askbar is up to date ({}).", r.current),
+                Some(r) if r.failed_at.is_some() => " The last check for a new release did not work.".to_string(),
+                _ => String::new(),
+            };
+            card("alerter", true, format!("Answers and runs the settings it was given.{delivery}{release}"))
         }
         Some(_) => card(
             "alerter",

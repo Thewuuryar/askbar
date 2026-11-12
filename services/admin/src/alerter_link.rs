@@ -11,7 +11,7 @@
 
 use crate::secrets::AdminSecrets;
 use crate::AdminState;
-use askbar_proto::alerter::{AlerterConfig, AlerterStatus, NtfyConfig, SmtpConfig, SmtpTls, TestResult};
+use askbar_proto::alerter::{AlerterConfig, AlerterStatus, NtfyConfig, ReleaseStatus, SmtpConfig, SmtpTls, TestResult};
 use askbar_proto::http::ApiError;
 use askbar_proto::ErrorCode;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -358,6 +358,14 @@ impl AlerterLink {
             Banner::NotSetUp
         } else {
             Banner::Ok
+        }
+    }
+
+    /// `GET /releases`: what the alerter's daily release check found. `None` if it did not answer or has no settings yet.
+    pub async fn releases(&self) -> Option<ReleaseStatus> {
+        match self.request(reqwest::Method::GET, "/releases", None).await {
+            Ok((200, body)) => serde_json::from_slice(&body).ok(),
+            _ => None,
         }
     }
 

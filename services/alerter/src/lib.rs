@@ -6,16 +6,18 @@
 //!   an error or a response. Until they arrive every route but the status, the config and the restart answers `503 not_configured`.
 //! - **Two listeners, two links.** The auditor may send its own kinds; the admin may send its own, push the configuration, read
 //!   the status, test delivery and ask for a restart. A token of one is no good on the other's routes or network.
+//! - **It checks for new releases once a day** ([`releases`]) and announces a newer one once.
 //! - **Repeats are limited and remembered** ([`limits`], [`ledger`]), and each alert's outcome goes to the auditor as metadata.
 
 pub mod deliver;
 pub mod ledger;
 pub mod limits;
+pub mod releases;
 pub mod templates;
 
 use askbar_proto::alerter::{
-    AlerterConfig, AlerterStatus, Channel, ChannelResult, Event, EventTaken, Kind, NtfyConfig, Refusal, Sender, Severity, SmtpConfig,
-    TestResult,
+    AlerterConfig, AlerterStatus, Channel, ChannelResult, Event, EventTaken, Fields, Kind, NtfyConfig, Refusal, ReleaseStatus, Sender,
+    Severity, SmtpConfig, TestResult,
 };
 use askbar_proto::http::ApiError;
 use askbar_proto::paths::{self, ALERTER_V1};
@@ -104,8 +106,11 @@ pub struct Alerter {
     config: RwLock<Option<Arc<Applied>>>,
     state: Mutex<limits::State>,
     ledger: ledger::Ledger,
+    pub releases: releases::Checker,
     queue: Mutex<Queue>,
     wake: Notify,
+    /// Wakes the release check when the settings change, so a channel set up after a release was found hears of it at once.
+    release_wake: Notify,
     timing: Timing,
     pub restarter: Restarter,
 }
@@ -121,8 +126,10 @@ impl Alerter {
             config: RwLock::new(None),
             state: Mutex::new(state),
             ledger,
+            releases: releases::Checker::new(data_dir, release_url(), env!("CARGO_PKG_VERSION").to_string()),
             queue: Mutex::new(Queue::default()),
             wake: Notify::new(),
+            release_wake: Notify::new(),
             timing,
             restarter,
         })
@@ -153,6 +160,7 @@ impl Alerter {
         tracing::info!(version = c.version, ntfy = c.ntfy.is_some(), email = c.email.is_some(), "configuration applied");
         self.audit.config_applied(c.version as i64);
         self.wake.notify_one();
+        self.release_wake.notify_one();
         Ok(())
     }
 
@@ -328,6 +336,45 @@ impl Alerter {
         TestResult { results }
     }
 
+    /// One round of the release check: ask if a check is due, then announce a newer version that has not been announced, once,
+    /// when a channel is there to carry it (so a channel set up later still hears of it).
+    pub async fn release_round(&self) {
+        if !self.releases.enabled() {
+            return;
+        }
+        let now = now_parts().0;
+        if self.releases.due_in(now) == 0 {
+            self.releases.check(&self.http, now).await;
+        }
+        let Some(version) = self.releases.to_announce() else { return };
+        if self.applied().is_none_or(|a| a.channels().is_empty()) {
+            return;
+        }
+        let event = Event {
+            kind: Kind::ReleaseAvailable,
+            severity: Severity::Info,
+            at: now,
+            fields: Fields { version: Some(version.clone()), ..Default::default() },
+        };
+        if self.submit(&event, Sender::Alerter).is_ok() {
+            self.releases.mark_announced(&version);
+        }
+    }
+
+    /// Checks for new releases for as long as the process runs: a round every hour at most, and a check when one is due.
+    pub async fn releases_forever(self: Arc<Self>) {
+        loop {
+            self.release_round().await;
+            let wait = self.releases.due_in(now_parts().0).clamp(1, 3600);
+            let wait = Duration::from_secs(wait.min(self.releases.source().retry.as_secs().max(1)));
+            let _ = tokio::time::timeout(wait, self.release_wake.notified()).await;
+        }
+    }
+
+    pub fn release_status(&self) -> ReleaseStatus {
+        self.releases.status()
+    }
+
     pub fn status(&self) -> AlerterStatus {
         let st = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let q = self.queue.lock().unwrap_or_else(|e| e.into_inner());
@@ -348,7 +395,8 @@ impl Alerter {
 type Routes = &'static [(&'static str, &'static str)];
 
 const AUDITOR_ROUTES: Routes = &[("POST", "/events")];
-const ADMIN_ROUTES: Routes = &[("GET", "/status"), ("PUT", "/config"), ("POST", "/restart"), ("POST", "/events"), ("POST", "/test")];
+const ADMIN_ROUTES: Routes =
+    &[("GET", "/status"), ("PUT", "/config"), ("POST", "/restart"), ("POST", "/events"), ("POST", "/test"), ("GET", "/releases")];
 
 /// The two links: name as `bootstrap` names it (the file `accept/<name>.sha256`), the caller, and the routes.
 pub const LINKS: &[(&str, &str, Routes)] = &[("auditor-alerter", "auditor", AUDITOR_ROUTES), ("admin-alerter", "admin", ADMIN_ROUTES)];
@@ -375,6 +423,12 @@ pub fn auditor_links(token_dir: &FsPath) -> Links {
 /// The check on the admin's listener: only the admin's token.
 pub fn admin_links(token_dir: &FsPath) -> Links {
     links_for(token_dir, &LINKS[1])
+}
+
+/// Where the release check asks: `ASKBAR_ALERTER_RELEASES_URL` (an address, for a mock or a mirror; `off` for no check),
+/// otherwise GitHub's latest-release API for the public repository.
+fn release_url() -> String {
+    std::env::var("ASKBAR_ALERTER_RELEASES_URL").ok().filter(|u| !u.trim().is_empty()).unwrap_or_else(|| releases::DEFAULT_URL.into())
 }
 
 /// The credential volume, read-only: `ASKBAR_ALERTER_TOKEN_DIR`, default `/alerter-token`.
@@ -434,6 +488,7 @@ pub fn admin_router(a: Arc<Alerter>, links: Links) -> Router {
         .route(&full("/restart"), post(askbar_service::restart::handler).with_state(restart))
         .route(&full("/events"), post(events))
         .route(&full("/test"), post(test))
+        .route(&full("/releases"), get(releases))
         .layer(axum::middleware::from_fn_with_state(gate, askbar_service::configured::require))
         .layer(axum::middleware::from_fn_with_state(links, askbar_service::links::require));
     shell(a, protected)
@@ -502,4 +557,9 @@ async fn events(
 /// Send a test alert through every channel that is set up and say what each did.
 async fn test(State(a): St) -> Json<TestResult> {
     Json(a.test().await)
+}
+
+/// What the daily release check found.
+async fn releases(State(a): St) -> Json<ReleaseStatus> {
+    Json(a.release_status())
 }

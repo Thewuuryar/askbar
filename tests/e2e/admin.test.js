@@ -20,6 +20,14 @@ async function step(name, fn) {
   catch (e) { failures++; console.error('FAIL ' + name + '\n     ' + String(e.message).split('\n').join('\n     ')); }
 }
 
+// Waits until something listens on the port: a process started a moment ago may not be yet.
+const listening = async (port) => {
+  for (let i = 0; i < 100; i++) {
+    if (await new Promise((resolve) => { const c = net.connect(port, '127.0.0.1', () => { c.destroy(); resolve(true); }); c.on('error', () => resolve(false)); })) return;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  throw new Error('nothing listens on port ' + port);
+};
 const freePort = () => new Promise((resolve) => {
   const s = net.createServer().listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => resolve(p)); });
 });
@@ -57,7 +65,7 @@ async function waitForPort(port) {
   // The alerter delivers alerts (ADR 0055), here to a stand-in ntfy server and a stand-in mail server.
   const alerterBin = path.join(ROOT, 'target/debug/askbar-alerter');
   if (!fs.existsSync(alerterBin)) execFileSync('cargo', ['build', '-q', '-p', 'askbar-alerter'], { cwd: ROOT, stdio: 'inherit' });
-  const [alerterAuditorPort, alerterAdminPort, ntfyPort, smtpPort, smtpSeenPort] = [await freePort(), await freePort(), await freePort(), await freePort(), await freePort()];
+  const [alerterAuditorPort, alerterAdminPort, ntfyPort, smtpPort, smtpSeenPort, releasesPort] = [await freePort(), await freePort(), await freePort(), await freePort(), await freePort(), await freePort()];
   const auditorBin = path.join(ROOT, 'target/debug/askbar-auditor');
   if (!fs.existsSync(auditorBin)) execFileSync('cargo', ['build', '-q', '-p', 'askbar-auditor'], { cwd: ROOT, stdio: 'inherit' });
   const sock = path.join(dirs.run, 'admin.sock');
@@ -81,9 +89,13 @@ async function waitForPort(port) {
   });
   run('python3', ['-u', path.join(ROOT, 'tests/e2e/ntfy_sink.py'), String(ntfyPort)], {});
   run('python3', ['-u', path.join(ROOT, 'tests/e2e/smtp_sink.py'), String(smtpPort), String(smtpSeenPort)], {});
+  run('python3', ['-u', path.join(ROOT, 'tests/e2e/releases_mock.py'), String(releasesPort)], {});
+  // The alerter asks it as soon as it starts, and a check that fails is tried again only after an hour.
+  await listening(releasesPort);
   run(alerterBin, [], {
     ASKBAR_ALERTER_AUDITOR_ADDR: '127.0.0.1:' + alerterAuditorPort, ASKBAR_ALERTER_ADMIN_ADDR: '127.0.0.1:' + alerterAdminPort,
     ASKBAR_ALERTER_TOKEN_DIR: path.join(dirs.creds, 'alerter-token'), ASKBAR_ALERTER_DATA_DIR: path.join(data, 'alerter-data'),
+    ASKBAR_ALERTER_RELEASES_URL: 'http://127.0.0.1:' + releasesPort + '/repos/Thewuuryar/askbar/releases/latest',
     ASKBAR_AUDIT_API_URL: 'http://127.0.0.1:' + auditPort,
   });
   run(gatewayBin, [], {
@@ -396,6 +408,10 @@ async function waitForPort(port) {
     assert.deepEqual(await page.$$eval('#services .card', (c) => c.map((x) => x.dataset.name)), ['server', 'model-gateway', 'alerter', 'admin', 'caddy', 'cpa']);
     // The alerter runs here too (ADR 0055), so it joins the list between the gateway and the admin.
     assert.match(await page.innerText('#services .card[data-name="alerter"]'), /running/);
+    // Its daily release check asked the stand-in GitHub, with a fixed User-Agent and nothing else about the install, and the card says so (ADR 0055).
+    await page.waitForFunction(() => /Askbar is up to date \(/.test(document.querySelector('#services .card[data-name="alerter"]').innerText), null, { timeout: 15000 });
+    const releaseRequests = JSON.parse(await new Promise((resolve, reject) => { http.get({ host: '127.0.0.1', port: releasesPort, path: '/_seen' }, (res) => { let b = ''; res.on('data', (c) => (b += c)); res.on('end', () => resolve(b)); }).on('error', reject); }));
+    assert.ok(releaseRequests.length >= 1 && releaseRequests.every((r) => r.user_agent === 'askbar-release-check' && r.headers.every((h) => ['host', 'user-agent', 'accept'].includes(h))), JSON.stringify(releaseRequests));
     assert.deepEqual(await page.$$eval('#services .card[data-name="alerter"] button', (b) => b.map((x) => x.dataset.action)), ['restart']);
     assert.match(await page.innerText('#services .card[data-name="server"]'), /running/);
     // The gateway runs here too, and it has a Restart button like the rest.

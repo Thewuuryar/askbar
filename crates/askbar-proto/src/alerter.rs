@@ -451,6 +451,20 @@ pub struct AlerterStatus {
     pub dropped: u64,
 }
 
+/// `GET /releases`: what the alerter's daily check found. A version is `1.2.3`, never free text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReleaseStatus {
+    /// The version this install runs.
+    pub current: String,
+    /// The newest release the last successful check found, if there has been one.
+    pub latest: Option<String>,
+    /// Whether `latest` is newer than `current`.
+    pub newer: bool,
+    /// Unix seconds of the last check that worked and of the last that failed, if any.
+    pub checked_at: Option<i64>,
+    pub failed_at: Option<i64>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
