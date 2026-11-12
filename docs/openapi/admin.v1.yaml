@@ -133,8 +133,8 @@ paths:
       operationId: getAlerts
       summary: Which delivery settings are held, and how delivery is going. Session-only.
       description: >-
-        The ntfy server, topic and access token are secrets (ADR 0055): stored encrypted with the admin's own key, never
-        returned, and never in an error. This answers with booleans.
+        The ntfy server, topic and access token, and the mail server, login and addresses, are secrets (ADR 0055): stored encrypted with the admin's own key, never
+        returned, and never in an error. This answers with booleans (and the mail port and TLS mode, which are not secret).
       security:
         - adminSession: []
       responses:
@@ -151,9 +151,9 @@ paths:
       summary: Set or remove how alerts are delivered. Session-only. The alerter takes the settings first.
       description: >-
         The settings go to the alerter, which checks them (the server address, the topic, the token); only if it takes them
-        are they saved. If it does not answer, nothing is changed (502 `server_unavailable`). `ntfy: null` removes the
-        channel. In `ntfy`, a `token` that is absent or null keeps the token already stored, an empty string removes it, and
-        anything else replaces it. Recorded like every change, without a value. An admin API key cannot call it, so a script
+        are they saved. If it does not answer, nothing is changed (502 `server_unavailable`). A channel that is left out of the
+        body stays as it is; `ntfy: null` or `email: null` removes that channel. In `ntfy`, a `token` that is absent or null keeps the token already stored, an empty string removes it, and
+        anything else replaces it; in `email`, `user` and `password` work the same way. Recorded like every change, without a value. An admin API key cannot call it, so a script
         cannot redirect or silence the alerts.
       security:
         - adminSession: []
@@ -1668,8 +1668,28 @@ components:
           type: string
     AlertsView:
       type: object
-      required: [ntfy, banner]
+      required: [ntfy, email, banner]
       properties:
+        email:
+          type: object
+          required: [host, port, tls, user, password, from, to]
+          description: Whether each secret is held, and the port and TLS mode, which are not secret (null when email is not set up).
+          properties:
+            host:
+              type: boolean
+            port:
+              type: [integer, 'null']
+            tls:
+              type: [string, 'null']
+              enum: [starttls, tls, none, null]
+            user:
+              type: boolean
+            password:
+              type: boolean
+            from:
+              type: boolean
+            to:
+              type: boolean
         ntfy:
           type: object
           required: [server, topic, token]
@@ -1687,6 +1707,36 @@ components:
       type: object
       additionalProperties: false
       properties:
+        email:
+          type: [object, 'null']
+          additionalProperties: false
+          required: [host, port, tls, from, to]
+          description: >-
+            An SMTP server and one recipient. `user` and `password` go together and are refused with `tls: none`. Absent or null
+            keeps the stored value; an empty string removes it.
+          properties:
+            host:
+              type: string
+              writeOnly: true
+            port:
+              type: integer
+              minimum: 1
+              maximum: 65535
+            tls:
+              type: string
+              enum: [starttls, tls, none]
+            user:
+              type: [string, 'null']
+              writeOnly: true
+            password:
+              type: [string, 'null']
+              writeOnly: true
+            from:
+              type: string
+              writeOnly: true
+            to:
+              type: string
+              writeOnly: true
         ntfy:
           type: [object, 'null']
           additionalProperties: false

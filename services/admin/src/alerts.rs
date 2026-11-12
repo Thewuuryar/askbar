@@ -1,5 +1,5 @@
-//! How alerts are delivered, from the admin site (ADR 0055): the ntfy server, topic and access token, a test alert, and the state
-//! of delivery for the banner.
+//! How alerts are delivered, from the admin site (ADR 0055): the ntfy server, topic and access token, the email settings, a test
+//! alert, and the state of delivery for the banner.
 //!
 //! The settings are write-only: they are stored encrypted with `admin.key`, no route returns one, and `GET /alerts` answers with
 //! booleans. A change goes to the alerter first, which checks it; only if it takes the settings are they saved, and if it cannot be
@@ -8,7 +8,7 @@
 use crate::alerter_link::{self, AlerterLink, Banner, PushError};
 use crate::web::Failure;
 use crate::AdminState;
-use askbar_proto::alerter::{AlerterConfig, NtfyConfig, TestResult};
+use askbar_proto::alerter::{AlerterConfig, NtfyConfig, SmtpConfig, SmtpTls, TestResult};
 use askbar_proto::http::{ApiError, ApiJson};
 use askbar_proto::ErrorCode;
 use axum::{extract::State, Json};
@@ -25,6 +25,7 @@ fn alerter(state: &AdminState) -> Result<&Arc<AlerterLink>, Failure> {
 #[derive(Debug, Serialize, PartialEq, Eq)]
 pub struct View {
     pub ntfy: NtfyView,
+    pub email: EmailView,
     /// `ok`, `not_set_up`, `failing` or `unreachable`.
     pub banner: &'static str,
 }
@@ -36,12 +37,58 @@ pub struct NtfyView {
     pub token: bool,
 }
 
+/// What `GET /alerts` says about email: which secrets are held, and the two settings that are not secret.
+#[derive(Debug, Serialize, PartialEq, Eq)]
+pub struct EmailView {
+    pub host: bool,
+    pub port: Option<u16>,
+    pub tls: Option<SmtpTls>,
+    pub user: bool,
+    pub password: bool,
+    pub from: bool,
+    pub to: bool,
+}
+
+/// Tells a field that is absent (keep what is stored) from one that is null (remove it).
+fn present<'de, D, T>(d: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(d).map(Some)
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Input {
-    /// The channel, or null to remove it.
+    /// Absent keeps the channel as it is, null removes it, an object replaces it.
+    #[serde(default, deserialize_with = "present")]
+    pub ntfy: Option<Option<NtfyInput>>,
+    /// The same for email.
+    #[serde(default, deserialize_with = "present")]
+    pub email: Option<Option<EmailInput>>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EmailInput {
+    pub host: String,
+    pub port: u16,
+    pub tls: SmtpTls,
+    /// Absent or null keeps the user name already stored, an empty string removes it, anything else replaces it.
     #[serde(default)]
-    pub ntfy: Option<NtfyInput>,
+    pub user: Option<String>,
+    /// The same for the password.
+    #[serde(default)]
+    pub password: Option<String>,
+    pub from: String,
+    pub to: String,
+}
+
+impl std::fmt::Debug for EmailInput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EmailInput").finish_non_exhaustive()
+    }
 }
 
 #[derive(Deserialize)]
@@ -66,11 +113,24 @@ pub async fn view(state: &AdminState) -> View {
         let db = state.db.lock().await;
         alerter_link::read_ntfy(db.conn(), &state.secrets)
     };
+    let email = {
+        let db = state.db.lock().await;
+        alerter_link::read_email(db.conn(), &state.secrets)
+    };
     let banner = match state.alerter.get() {
-        Some(link) => link.banner(ntfy.is_some(), crate::auth::now()),
+        Some(link) => link.banner(ntfy.is_some() || email.is_some(), crate::auth::now()),
         None => Banner::Unreachable,
     };
     View {
+        email: EmailView {
+            host: email.is_some(),
+            port: email.as_ref().map(|m| m.port),
+            tls: email.as_ref().map(|m| m.tls),
+            user: email.as_ref().is_some_and(|m| m.user.is_some()),
+            password: email.as_ref().is_some_and(|m| m.password.is_some()),
+            from: email.is_some(),
+            to: email.is_some(),
+        },
         ntfy: NtfyView { server: ntfy.is_some(), topic: ntfy.is_some(), token: ntfy.as_ref().is_some_and(|n| n.token.is_some()) },
         banner: banner.as_str(),
     }
@@ -85,32 +145,64 @@ fn bad(detail: &str) -> Failure {
     ApiError::new(ErrorCode::BadRequest, detail)
 }
 
-/// `PUT /api/admin/v1/alerts`: the alerter takes the settings first (it checks them), then they are saved.
+/// A kept-or-replaced optional secret: absent or null keeps `stored`, an empty string removes it.
+fn merge(given: Option<String>, stored: Option<String>) -> Option<String> {
+    match given {
+        None => stored,
+        Some(v) if v.trim().is_empty() => None,
+        Some(v) => Some(v.trim().to_string()),
+    }
+}
+
+fn ntfy_from(input: NtfyInput, stored: Option<&NtfyConfig>) -> Result<NtfyConfig, Failure> {
+    let (server, topic) = (input.server.trim().to_string(), input.topic.trim().to_string());
+    if server.is_empty() || topic.is_empty() {
+        return Err(bad("The ntfy server and the topic are both needed."));
+    }
+    if server.len() > 2048 || topic.len() > 64 {
+        return Err(bad("The ntfy server or the topic is too long."));
+    }
+    Ok(NtfyConfig { server, topic, token: merge(input.token, stored.and_then(|s| s.token.clone())) })
+}
+
+fn email_from(input: EmailInput, stored: Option<&SmtpConfig>) -> Result<SmtpConfig, Failure> {
+    let (host, from, to) = (input.host.trim().to_string(), input.from.trim().to_string(), input.to.trim().to_string());
+    if host.is_empty() || from.is_empty() || to.is_empty() {
+        return Err(bad("The mail server, the from address and the to address are all needed."));
+    }
+    if host.len() > 253 || from.len() > 254 || to.len() > 254 {
+        return Err(bad("The mail server or an address is too long."));
+    }
+    Ok(SmtpConfig {
+        host,
+        port: input.port,
+        tls: input.tls,
+        user: merge(input.user, stored.and_then(|s| s.user.clone())),
+        password: merge(input.password, stored.and_then(|s| s.password.clone())),
+        from,
+        to,
+    })
+}
+
+/// `PUT /api/admin/v1/alerts`: the alerter takes the settings first (it checks them), then they are saved. A channel that is not
+/// in the body stays as it is.
 pub async fn put_alerts(State(state): St, ApiJson(input): ApiJson<Input>) -> Result<Json<View>, Failure> {
     let link = alerter(&state)?.clone();
-    let stored = {
+    let (stored_ntfy, stored_email) = {
         let db = state.db.lock().await;
-        alerter_link::read_ntfy(db.conn(), &state.secrets)
+        (alerter_link::read_ntfy(db.conn(), &state.secrets), alerter_link::read_email(db.conn(), &state.secrets))
     };
     let ntfy = match input.ntfy {
-        None => None,
-        Some(n) => {
-            let (server, topic) = (n.server.trim().to_string(), n.topic.trim().to_string());
-            if server.is_empty() || topic.is_empty() {
-                return Err(bad("The ntfy server and the topic are both needed."));
-            }
-            if server.len() > 2048 || topic.len() > 64 {
-                return Err(bad("The ntfy server or the topic is too long."));
-            }
-            let token = match n.token {
-                None => stored.and_then(|s| s.token),
-                Some(t) if t.trim().is_empty() => None,
-                Some(t) => Some(t.trim().to_string()),
-            };
-            Some(NtfyConfig { server, topic, token })
-        }
+        None => stored_ntfy,
+        Some(None) => None,
+        Some(Some(n)) => Some(ntfy_from(n, stored_ntfy.as_ref())?),
     };
-    let mut config = AlerterConfig { version: 0, ntfy };
+    let email = match input.email {
+        None => stored_email,
+        Some(None) => None,
+        Some(Some(m)) => Some(email_from(m, stored_email.as_ref())?),
+    };
+    let mut config = AlerterConfig { version: 0, ntfy, email };
     config.version = alerter_link::version_of(&config);
     match link.put_config(&state, &config).await {
         Ok(()) => {}
@@ -120,10 +212,10 @@ pub async fn put_alerts(State(state): St, ApiJson(input): ApiJson<Input>) -> Res
                 "The alerter did not answer. Check it on the Services page. Nothing was changed.",
             ))
         }
-        // The alerter checks the server address, the topic and the token, and says only that it did not take them.
+        // The alerter checks every value, and says only that it did not take them.
         Err(PushError::Refused(400)) => {
             return Err(bad(
-                "The alerter did not accept those settings: check the ntfy server address, the topic and the token. Nothing was changed.",
+                "The alerter did not accept those settings: check the ntfy server address, topic and token, or the mail server, port, TLS mode, login and addresses. Nothing was changed.",
             ))
         }
         Err(PushError::Refused(_)) => {
@@ -134,6 +226,7 @@ pub async fn put_alerts(State(state): St, ApiJson(input): ApiJson<Input>) -> Res
     {
         let db = state.db.lock().await;
         alerter_link::write_ntfy(db.conn(), &state.secrets, config.ntfy.as_ref())
+            .and_then(|()| alerter_link::write_email(db.conn(), &state.secrets, config.email.as_ref()))
             .map_err(|_| ApiError::new(ErrorCode::Internal, "The admin could not store the settings."))?;
     }
     link.mark_dirty();

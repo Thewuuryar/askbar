@@ -1,6 +1,6 @@
 //! The admin's link to the `alerter` (ADR 0055, ADR 0028).
 //!
-//! The admin keeps the delivery settings (the ntfy server, topic and access token), each encrypted with its own key, and pushes
+//! The admin keeps the delivery settings (the ntfy server, topic and access token, and the mail server, login and addresses), each encrypted with its own key, and pushes
 //! them in `PUT /config`; the alerter holds them in memory only, so a restarted alerter is unconfigured until the admin pushes
 //! again. The admin checks the alerter's `GET /status` every 12 seconds and pushes when it is unconfigured or runs another
 //! configuration; a restart is the same case, because the new process reports no configuration. A setting that no channel
@@ -11,7 +11,7 @@
 
 use crate::secrets::AdminSecrets;
 use crate::AdminState;
-use askbar_proto::alerter::{AlerterConfig, AlerterStatus, NtfyConfig, TestResult};
+use askbar_proto::alerter::{AlerterConfig, AlerterStatus, NtfyConfig, SmtpConfig, SmtpTls, TestResult};
 use askbar_proto::http::ApiError;
 use askbar_proto::ErrorCode;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -99,9 +99,70 @@ pub fn write_ntfy(conn: &Connection, secrets: &AdminSecrets, ntfy: Option<&NtfyC
     }
 }
 
+/// The email settings as stored, decrypted. `None` when email is not set up (or a value cannot be read: the key changed).
+pub fn read_email(conn: &Connection, secrets: &AdminSecrets) -> Option<SmtpConfig> {
+    type Row = (Vec<u8>, i64, String, Option<Vec<u8>>, Option<Vec<u8>>, Vec<u8>, Vec<u8>);
+    let row: Row = conn
+        .query_row("SELECT host_enc, port, tls, user_enc, password_enc, from_enc, to_enc FROM alert_email_settings WHERE id = 1", [], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?))
+        })
+        .optional()
+        .ok()??;
+    let opt = |blob: Option<Vec<u8>>| -> Option<Option<String>> {
+        match blob {
+            Some(b) => secrets.decrypt(&b).map(Some),
+            None => Some(None),
+        }
+    };
+    Some(SmtpConfig {
+        host: secrets.decrypt(&row.0)?,
+        port: u16::try_from(row.1).ok()?,
+        tls: match row.2.as_str() {
+            "starttls" => SmtpTls::Starttls,
+            "tls" => SmtpTls::Tls,
+            "none" => SmtpTls::None,
+            _ => return None,
+        },
+        user: opt(row.3)?,
+        password: opt(row.4)?,
+        from: secrets.decrypt(&row.5)?,
+        to: secrets.decrypt(&row.6)?,
+    })
+}
+
+/// Keep `email` (or remove the channel), each secret value encrypted.
+pub fn write_email(conn: &Connection, secrets: &AdminSecrets, email: Option<&SmtpConfig>) -> rusqlite::Result<()> {
+    let Some(m) = email else {
+        return conn.execute("DELETE FROM alert_email_settings WHERE id = 1", []).map(|_| ());
+    };
+    let tls = match m.tls {
+        SmtpTls::Starttls => "starttls",
+        SmtpTls::Tls => "tls",
+        SmtpTls::None => "none",
+    };
+    conn.execute(
+        "INSERT INTO alert_email_settings (id, host_enc, port, tls, user_enc, password_enc, from_enc, to_enc, updated_at)
+         VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+         ON CONFLICT(id) DO UPDATE SET host_enc = excluded.host_enc, port = excluded.port, tls = excluded.tls,
+           user_enc = excluded.user_enc, password_enc = excluded.password_enc, from_enc = excluded.from_enc,
+           to_enc = excluded.to_enc, updated_at = excluded.updated_at",
+        params![
+            secrets.encrypt(&m.host),
+            m.port,
+            tls,
+            m.user.as_deref().map(|u| secrets.encrypt(u)),
+            m.password.as_deref().map(|p| secrets.encrypt(p)),
+            secrets.encrypt(&m.from),
+            secrets.encrypt(&m.to),
+            crate::auth::now()
+        ],
+    )
+    .map(|_| ())
+}
+
 /// What the alerter should run, from `admin.db`.
 pub fn build_config(conn: &Connection, secrets: &AdminSecrets) -> AlerterConfig {
-    let mut config = AlerterConfig { version: 0, ntfy: read_ntfy(conn, secrets) };
+    let mut config = AlerterConfig { version: 0, ntfy: read_ntfy(conn, secrets), email: read_email(conn, secrets) };
     config.version = version_of(&config);
     config
 }
@@ -375,7 +436,12 @@ impl AlerterLink {
         match self.put_config(state, &config).await {
             Ok(()) => {
                 self.set_error(None);
-                tracing::info!(version = config.version, channel = config.ntfy.is_some(), "pushed the settings to the alerter");
+                tracing::info!(
+                    version = config.version,
+                    ntfy = config.ntfy.is_some(),
+                    email = config.email.is_some(),
+                    "pushed the settings to the alerter"
+                );
                 Sync::Pushed(config.version)
             }
             Err(PushError::NotRecorded(why)) => {

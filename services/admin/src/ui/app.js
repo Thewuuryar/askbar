@@ -1182,12 +1182,18 @@
     $('a-held-topic').textContent = yesNo(a.ntfy.topic);
     $('a-held-token').textContent = yesNo(a.ntfy.token);
     $('a-token-clear').checked = false;
-    show($('a-error'), false);
+    const m = a.email;
+    $('m-held-host').textContent = yesNo(m.host);
+    $('m-held-login').textContent = m.user || m.password ? 'yes' : 'no';
+    $('m-held-addr').textContent = yesNo(m.from && m.to);
+    if (m.host) { $('m-port').value = m.port; $('m-tls').value = m.tls; }
+    $('m-login-clear').checked = false;
+    for (const id of ['a-error', 'm-error', 'a-test-error']) show($(id), false);
     showAlertsBanner(a.banner);
   }
-  function alertsError(ex) {
-    $('a-error').textContent = ex.message;
-    show($('a-error'), true);
+  function alertsError(ex, id = 'a-error') {
+    $(id).textContent = ex.message;
+    show($(id), true);
   }
   on('alerts-form', 'submit', async (e) => {
     e.preventDefault();
@@ -1203,25 +1209,53 @@
       flash('Alert settings saved. Send a test alert to check that it arrives.');
     } catch (ex) { alertsError(ex); }
   });
+  // Email. The channel not in the body stays as it is, so saving one never touches the other. A user name or password left empty
+  // keeps the stored one; the box removes both.
+  on('email-form', 'submit', async (e) => {
+    e.preventDefault();
+    show($('m-error'), false);
+    $('a-result').textContent = '';
+    const email = { host: $('m-host').value.trim(), port: parseInt($('m-port').value, 10), tls: $('m-tls').value, from: $('m-from').value.trim(), to: $('m-to').value.trim() };
+    if ($('m-login-clear').checked) { email.user = ''; email.password = ''; }
+    else {
+      if ($('m-user').value.trim()) email.user = $('m-user').value.trim();
+      if ($('m-password').value.trim()) email.password = $('m-password').value.trim();
+    }
+    try {
+      await api('PUT', '/api/admin/v1/alerts', { email });
+      for (const id of ['m-host', 'm-user', 'm-password', 'm-from', 'm-to']) $(id).value = '';
+      await loadAlerts();
+      flash('Email settings saved. Send a test alert to check that it arrives.');
+    } catch (ex) { alertsError(ex, 'm-error'); }
+  });
+  on('m-remove', 'click', async () => {
+    if (!confirm('Stop delivering alerts by email?')) return;
+    show($('m-error'), false);
+    try {
+      await api('PUT', '/api/admin/v1/alerts', { email: null });
+      await loadAlerts();
+      flash('Email delivery removed.');
+    } catch (ex) { alertsError(ex, 'm-error'); }
+  });
   on('a-test', 'click', async () => {
-    show($('a-error'), false);
+    show($('a-test-error'), false);
     $('a-result').textContent = 'Sending a test alert...';
     try {
       const r = await api('POST', '/api/admin/v1/alerts/test');
-      const why = { unreachable: 'the server did not answer', refused: 'the server refused it', unauthorized: 'the token was not accepted', timeout: 'the server took too long' };
+      const why = { unreachable: 'the server did not answer', refused: 'the server refused it', unauthorized: 'the token or login was not accepted', timeout: 'the server took too long', tls: 'the secure connection could not be made' };
       $('a-result').textContent = r.results.length
-        ? r.results.map((c) => c.channel + ': ' + (c.ok ? 'delivered, check your phone' : 'failed, ' + (why[c.problem] || 'unknown problem'))).join('. ')
+        ? r.results.map((c) => c.channel + ': ' + (c.ok ? 'delivered, check ' + (c.channel === 'email' ? 'your inbox' : 'your phone') : 'failed, ' + (why[c.problem] || 'unknown problem'))).join('. ')
         : 'No delivery channel is set up, so nothing was sent.';
-    } catch (ex) { $('a-result').textContent = ''; alertsError(ex); }
+    } catch (ex) { $('a-result').textContent = ''; alertsError(ex, 'a-test-error'); }
   });
   on('a-remove', 'click', async () => {
-    if (!confirm('Stop delivering alerts? Nothing will tell you when something needs attention until you set it up again.')) return;
+    if (!confirm('Stop delivering alerts through ntfy? Unless email is set up, nothing will tell you when something needs attention until you set it up again.')) return;
     show($('a-error'), false);
     try {
       await api('PUT', '/api/admin/v1/alerts', { ntfy: null });
       $('a-result').textContent = '';
       await loadAlerts();
-      flash('Alert delivery removed.');
+      flash('ntfy delivery removed.');
     } catch (ex) { alertsError(ex); }
   });
 

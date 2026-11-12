@@ -268,3 +268,112 @@ async fn restarting_the_alerter_from_the_services_page_gives_it_its_settings_aga
     assert!(fake.pushes.lock().unwrap().len() > before, "the settings were pushed to the new process");
     assert_eq!(*fake.boot.lock().unwrap(), 1);
 }
+
+const MAIL_HOST: &str = "smtp.marker-host.example";
+const MAIL_USER: &str = "marker-mail-user-3e1c";
+const MAIL_PASSWORD: &str = "marker-mail-password-77d0";
+const MAIL_TO: &str = "marker-owner@marker-host.example";
+
+fn email() -> Value {
+    json!({ "email": { "host": MAIL_HOST, "port": 587, "tls": "starttls", "user": MAIL_USER, "password": MAIL_PASSWORD,
+                       "from": "askbar@marker-host.example", "to": MAIL_TO } })
+}
+
+#[tokio::test]
+async fn email_settings_go_to_the_alerter_are_saved_encrypted_and_no_answer_returns_them() {
+    let (t, fake, _link) = rig().await;
+    let (st, view) = t.call(M::PUT, "/api/admin/v1/alerts", email()).await;
+    assert_eq!(st, 200, "{view}");
+    // Booleans for the secrets, and the two settings that are not secret.
+    assert_eq!(
+        view["email"],
+        json!({ "host": true, "port": 587, "tls": "starttls", "user": true, "password": true, "from": true, "to": true })
+    );
+    let pushed = fake.pushes.lock().unwrap().last().cloned().unwrap();
+    assert_eq!(
+        (pushed["email"]["host"].as_str(), pushed["email"]["password"].as_str(), pushed["email"]["to"].as_str()),
+        (Some(MAIL_HOST), Some(MAIL_PASSWORD), Some(MAIL_TO))
+    );
+    {
+        let db = t.admin.db.lock().await;
+        let row: Vec<Vec<u8>> = db
+            .conn()
+            .query_row("SELECT host_enc, user_enc, password_enc, from_enc, to_enc FROM alert_email_settings", [], |r| {
+                Ok((0..5).map(|i| r.get::<_, Vec<u8>>(i).unwrap()).collect())
+            })
+            .unwrap();
+        for (blob, plain) in row.iter().zip([MAIL_HOST, MAIL_USER, MAIL_PASSWORD, "askbar@marker-host.example", MAIL_TO]) {
+            assert!(!blob.windows(plain.len()).any(|w| w == plain.as_bytes()), "{plain} is in the clear");
+            assert_eq!(t.admin.secrets.decrypt(blob).as_deref(), Some(plain));
+        }
+    }
+    for path in ["/api/admin/v1/alerts", "/api/admin/v1/services", "/api/admin/v1/status", "/api/admin/v1/settings"] {
+        let text = t.call(M::GET, path, json!(null)).await.1.to_string();
+        for m in [MAIL_HOST, MAIL_USER, MAIL_PASSWORD, MAIL_TO] {
+            assert!(!text.contains(m), "{path} returned a secret: {text}");
+        }
+    }
+    // The banner counts email as a channel.
+    let (_, status) = t.call(M::GET, "/api/admin/v1/status", json!(null)).await;
+    assert_ne!(status["alerts"], "not_set_up");
+}
+
+#[tokio::test]
+async fn a_channel_left_out_is_kept_a_login_left_out_is_kept_and_null_removes_email() {
+    let (t, fake, _link) = rig().await;
+    t.call(M::PUT, "/api/admin/v1/alerts", settings()).await;
+    t.call(M::PUT, "/api/admin/v1/alerts", email()).await;
+    // Saving email did not touch ntfy.
+    assert_eq!(fake.pushes.lock().unwrap().last().unwrap()["ntfy"]["topic"], TOPIC);
+    // Change the port and say nothing about the login: it stays.
+    let mut change = email();
+    change["email"]["port"] = json!(465);
+    change["email"]["tls"] = json!("tls");
+    change["email"].as_object_mut().unwrap().remove("user");
+    change["email"].as_object_mut().unwrap().remove("password");
+    let (st, view) = t.call(M::PUT, "/api/admin/v1/alerts", change).await;
+    assert_eq!((st, view["email"]["port"].clone(), view["email"]["password"].clone()), (200, json!(465), json!(true)), "{view}");
+    let pushed = fake.pushes.lock().unwrap().last().cloned().unwrap();
+    assert_eq!((pushed["email"]["user"].as_str(), pushed["email"]["password"].as_str()), (Some(MAIL_USER), Some(MAIL_PASSWORD)));
+    // An empty user and password remove the login.
+    let mut none = email();
+    none["email"]["user"] = json!("");
+    none["email"]["password"] = json!("");
+    let (_, view) = t.call(M::PUT, "/api/admin/v1/alerts", none).await;
+    assert_eq!((view["email"]["user"].clone(), view["email"]["password"].clone()), (json!(false), json!(false)));
+    // ntfy alone, with no mention of email, leaves email as it is.
+    t.call(M::PUT, "/api/admin/v1/alerts", json!({ "ntfy": { "server": SERVER, "topic": "t2" } })).await;
+    assert_eq!(t.call(M::GET, "/api/admin/v1/alerts", json!(null)).await.1["email"]["host"], true);
+    // Null removes email, and only email.
+    let (_, view) = t.call(M::PUT, "/api/admin/v1/alerts", json!({ "email": null })).await;
+    assert_eq!((view["email"]["host"].clone(), view["ntfy"]["server"].clone()), (json!(false), json!(true)));
+    assert!(fake.pushes.lock().unwrap().last().unwrap().get("email").is_none());
+    // An unknown TLS mode, a missing address and a port out of range are refused.
+    for (k, v) in [("tls", json!("ssl")), ("to", json!("")), ("port", json!(70000)), ("extra", json!(1))] {
+        let mut bad = email();
+        bad["email"][k] = v;
+        let (st, _) = t.call(M::PUT, "/api/admin/v1/alerts", bad).await;
+        assert!(st == 400 || st == 422, "{k} gave {st}");
+    }
+}
+
+#[tokio::test]
+async fn email_the_alerter_refuses_is_not_saved_and_the_answer_names_no_value() {
+    let (t, fake, _link) = rig().await;
+    *fake.answer.lock().unwrap() = Some(400);
+    let (st, body) = t.call(M::PUT, "/api/admin/v1/alerts", email()).await;
+    assert_eq!((st, body["error"].as_str()), (400, Some("bad_request")), "{body}");
+    for m in [MAIL_HOST, MAIL_USER, MAIL_PASSWORD, MAIL_TO] {
+        assert!(!body.to_string().contains(m), "{body}");
+    }
+    assert_eq!(t.call(M::GET, "/api/admin/v1/alerts", json!(null)).await.1["email"]["host"], false, "nothing was saved");
+}
+
+#[tokio::test]
+async fn the_test_alert_names_the_email_channel_too() {
+    let (t, fake, _link) = rig().await;
+    t.call(M::PUT, "/api/admin/v1/alerts", email()).await;
+    *fake.test.lock().unwrap() = Some(json!({ "results": [{ "channel": "email", "ok": false, "problem": "tls" }] }));
+    let (st, body) = t.call(M::POST, "/api/admin/v1/alerts/test", json!(null)).await;
+    assert_eq!((st, body["results"][0]["channel"].clone(), body["results"][0]["problem"].clone()), (200, json!("email"), json!("tls")));
+}

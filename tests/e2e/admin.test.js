@@ -54,10 +54,10 @@ async function waitForPort(port) {
   if (!fs.existsSync(gatewayBin)) execFileSync('cargo', ['build', '-q', '-p', 'askbar-model-gateway'], { cwd: ROOT, stdio: 'inherit' });
   const gatewayAdminPort = await freePort();
   const [gatewayServerPort, auditPort] = [await freePort(), await freePort()];
-  // The alerter delivers alerts (ADR 0055), here to a stand-in ntfy server.
+  // The alerter delivers alerts (ADR 0055), here to a stand-in ntfy server and a stand-in mail server.
   const alerterBin = path.join(ROOT, 'target/debug/askbar-alerter');
   if (!fs.existsSync(alerterBin)) execFileSync('cargo', ['build', '-q', '-p', 'askbar-alerter'], { cwd: ROOT, stdio: 'inherit' });
-  const [alerterAuditorPort, alerterAdminPort, ntfyPort] = [await freePort(), await freePort(), await freePort()];
+  const [alerterAuditorPort, alerterAdminPort, ntfyPort, smtpPort, smtpSeenPort] = [await freePort(), await freePort(), await freePort(), await freePort(), await freePort()];
   const auditorBin = path.join(ROOT, 'target/debug/askbar-auditor');
   if (!fs.existsSync(auditorBin)) execFileSync('cargo', ['build', '-q', '-p', 'askbar-auditor'], { cwd: ROOT, stdio: 'inherit' });
   const sock = path.join(dirs.run, 'admin.sock');
@@ -80,6 +80,7 @@ async function waitForPort(port) {
     ASKBAR_AUDITOR_TOKEN_DIR: path.join(dirs.creds, 'auditor-token'),
   });
   run('python3', ['-u', path.join(ROOT, 'tests/e2e/ntfy_sink.py'), String(ntfyPort)], {});
+  run('python3', ['-u', path.join(ROOT, 'tests/e2e/smtp_sink.py'), String(smtpPort), String(smtpSeenPort)], {});
   run(alerterBin, [], {
     ASKBAR_ALERTER_AUDITOR_ADDR: '127.0.0.1:' + alerterAuditorPort, ASKBAR_ALERTER_ADMIN_ADDR: '127.0.0.1:' + alerterAdminPort,
     ASKBAR_ALERTER_TOKEN_DIR: path.join(dirs.creds, 'alerter-token'), ASKBAR_ALERTER_DATA_DIR: path.join(data, 'alerter-data'),
@@ -655,7 +656,7 @@ async function waitForPort(port) {
     // The sink refuses it: the page says what went wrong in its own words, not the server's.
     await sink('/_status/401', 'POST');
     await page.click('#a-test');
-    await page.waitForFunction(() => /the token was not accepted/.test(document.getElementById('a-result').textContent));
+    await page.waitForFunction(() => /the token or login was not accepted/.test(document.getElementById('a-result').textContent));
     await sink('/_status/200', 'POST');
     // Nothing on the page, in a field or in the status the page polls holds the topic or the token.
     const shown = await page.evaluate(() => document.documentElement.innerText + [...document.querySelectorAll('input')].map((i) => i.value).join(' '));
@@ -668,6 +669,74 @@ async function waitForPort(port) {
     await page.waitForFunction(() => document.getElementById('a-held-topic').textContent === 'no');
     await page.waitForFunction(() => !document.getElementById('alerts-banner').hidden);
     assert.match(await page.innerText('#alerts-banner'), /Alerts are not set up/);
+  });
+  await step('alerts: email is saved, tested, kept when ntfy changes, and the password is never shown again (ADR 0055)', async () => {
+    const PASSWORD = 'e2e-mail-pass-' + 'v5c2n8';
+    const USER = 'e2e-mail-user-' + 'h3t6w0';
+    const mail = (p, method = 'GET') => new Promise((resolve, reject) => {
+      const req = http.request({ host: '127.0.0.1', port: smtpSeenPort, path: p, method }, (res) => { let b = ''; res.on('data', (c) => (b += c)); res.on('end', () => resolve(b)); });
+      req.on('error', reject); req.end();
+    });
+    await openSettings();
+    await page.waitForSelector('#email-form');
+    assert.equal(await page.innerText('#m-held-host'), 'no');
+    // ntfy is set up again first, so a test goes through both channels.
+    await page.fill('#a-server', 'http://127.0.0.1:' + ntfyPort);
+    await page.fill('#a-topic', 'e2e-topic-q7x9k2');
+    await page.click('#alerts-form button[type=submit]');
+    await page.waitForFunction(() => document.getElementById('a-held-topic').textContent === 'yes');
+    // A password without TLS is refused, and the sentence names no value.
+    await page.fill('#m-host', '127.0.0.1');
+    await page.fill('#m-port', String(smtpPort));
+    await page.selectOption('#m-tls', 'none');
+    await page.fill('#m-user', USER);
+    await page.fill('#m-password', PASSWORD);
+    await page.fill('#m-from', 'askbar@example.com');
+    await page.fill('#m-to', 'owner@example.com');
+    await page.click('#email-form button[type=submit]');
+    await page.waitForFunction(() => !document.getElementById('m-error').hidden);
+    const refusal = await page.innerText('#m-error');
+    assert.ok(!refusal.includes(PASSWORD) && !refusal.includes(USER), 'the refusal repeats a value');
+    assert.equal(await page.innerText('#m-held-host'), 'no', 'nothing was saved');
+    // Without the login it is saved; the fields empty and the page shows a yes or a no.
+    await page.fill('#m-user', '');
+    await page.fill('#m-password', '');
+    await page.click('#email-form button[type=submit]');
+    await page.waitForFunction(() => document.getElementById('m-held-host').textContent === 'yes');
+    assert.equal(await page.innerText('#m-held-login'), 'no');
+    assert.equal(await page.inputValue('#m-host'), '');
+    assert.equal(await page.inputValue('#m-port'), String(smtpPort), 'the port and the mode are not secret, so they stay');
+    // A test goes to both channels, and the mail arrives.
+    await mail('/_seen', 'DELETE');
+    await page.click('#a-test');
+    await page.waitForFunction(() => /email: delivered/.test(document.getElementById('a-result').textContent) && /ntfy: delivered/.test(document.getElementById('a-result').textContent));
+    const seen = JSON.parse(await mail('/_seen'));
+    assert.equal(seen.length, 1);
+    assert.match(seen[0].data, /Subject: Askbar test alert/);
+    assert.ok(seen[0].to.includes('owner@example.com'));
+    // The server refuses the recipient: the page says so in its own words.
+    await mail('/_reject/550', 'POST');
+    await page.click('#a-test');
+    await page.waitForFunction(() => /email: failed, the server refused it/.test(document.getElementById('a-result').textContent));
+    await mail('/_reject/0', 'POST');
+    // Saving ntfy again does not touch email.
+    await page.fill('#a-server', 'http://127.0.0.1:' + ntfyPort);
+    await page.fill('#a-topic', 'e2e-topic-q7x9k2');
+    await page.click('#alerts-form button[type=submit]');
+    await page.waitForFunction(() => document.getElementById('a-held-topic').textContent === 'yes');
+    assert.equal(await page.innerText('#m-held-host'), 'yes');
+    // Nothing on the page holds the password or the user name.
+    const shown = await page.evaluate(() => document.documentElement.innerText + [...document.querySelectorAll('input')].map((i) => i.value).join(' '));
+    assert.ok(!shown.includes(PASSWORD) && !shown.includes(USER));
+    // Remove email: it asks first, and ntfy stays.
+    page.once('dialog', (d) => d.accept());
+    await page.click('#m-remove');
+    await page.waitForFunction(() => document.getElementById('m-held-host').textContent === 'no');
+    assert.equal(await page.innerText('#a-held-topic'), 'yes');
+    // Leave the settings as the next steps expect them: no channel.
+    page.once('dialog', (d) => d.accept());
+    await page.click('#a-remove');
+    await page.waitForFunction(() => document.getElementById('a-held-topic').textContent === 'no');
   });
   await step('network: hostname, token and networks are saved; the token is write-only', async () => {
     const CF = 'cf_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';

@@ -174,6 +174,20 @@ const MIGRATIONS: &[&str] = &[
          ntfy_token_enc  BLOB,
          updated_at      INTEGER NOT NULL
      );",
+    // Email as a second way to deliver alerts (plan step 4.2b, ADR 0055): the mail server, who the mail is from and to, and the
+    // login, each value that names or unlocks something encrypted with `admin.key` like the ntfy settings. The port and the TLS
+    // mode are not secrets. One row; no row means email is not set up.
+    "CREATE TABLE alert_email_settings (
+         id           INTEGER PRIMARY KEY CHECK (id = 1),
+         host_enc     BLOB    NOT NULL,
+         port         INTEGER NOT NULL CHECK (port BETWEEN 1 AND 65535),
+         tls          TEXT    NOT NULL CHECK (tls IN ('starttls', 'tls', 'none')),
+         user_enc     BLOB,
+         password_enc BLOB,
+         from_enc     BLOB    NOT NULL,
+         to_enc       BLOB    NOT NULL,
+         updated_at   INTEGER NOT NULL
+     );",
 ];
 
 /// The schema steps, in order (for the upgrade tests).
@@ -389,6 +403,37 @@ mod tests {
         assert_eq!(name, "Work laptop");
     }
     use super::*;
+
+    #[test]
+    fn a_database_from_before_email_alerts_keeps_its_ntfy_settings_and_gains_an_empty_email_table() {
+        let conn = Connection::open_in_memory().unwrap();
+        let before = MIGRATIONS.len() - 1;
+        for (i, sql) in MIGRATIONS.iter().take(before).enumerate() {
+            conn.execute_batch(sql).unwrap();
+            if i == 0 {
+                conn.execute_batch(&format!("PRAGMA application_id = {APPLICATION_ID}")).unwrap();
+            }
+        }
+        conn.execute_batch(&format!("PRAGMA user_version = {before}")).unwrap();
+        conn.execute_batch("INSERT INTO alert_settings (id, ntfy_server_enc, ntfy_topic_enc, updated_at) VALUES (1, x'01', x'02', 7)")
+            .unwrap();
+        assert!(conn.prepare("SELECT 1 FROM alert_email_settings").is_err(), "the table is not there before the step");
+        let db = AdminDb::init(conn).unwrap();
+        let v: i64 = db.conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(v as usize, MIGRATIONS.len());
+        let kept: i64 = db.conn.query_row("SELECT updated_at FROM alert_settings WHERE id = 1", [], |r| r.get(0)).unwrap();
+        assert_eq!(kept, 7);
+        let rows: i64 = db.conn.query_row("SELECT COUNT(*) FROM alert_email_settings", [], |r| r.get(0)).unwrap();
+        assert_eq!(rows, 0);
+        // The table refuses a TLS mode it does not know and a port out of range.
+        for (port, tls) in [(0, "tls"), (70000, "tls"), (587, "ssl")] {
+            let r = db.conn.execute(
+                "INSERT INTO alert_email_settings (id, host_enc, port, tls, from_enc, to_enc, updated_at) VALUES (1, x'01', ?1, ?2, x'02', x'03', 1)",
+                rusqlite::params![port, tls],
+            );
+            assert!(r.is_err(), "{port} {tls}");
+        }
+    }
 
     fn key(id: &str, retired: Option<i64>) -> AuditKeyRow {
         AuditKeyRow {
