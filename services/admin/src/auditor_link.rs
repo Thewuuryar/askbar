@@ -6,6 +6,8 @@
 //! at once after a change, so an auditor that was away gets it back.
 
 use crate::AdminState;
+use askbar_proto::http::ApiError;
+use askbar_proto::ErrorCode;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -19,6 +21,30 @@ const CHECK_EVERY: Duration = Duration::from_secs(30);
 /// The auditor's address: `ASKBAR_AUDIT_API_URL`, default `http://auditor:8083`.
 pub fn auditor_url() -> String {
     std::env::var("ASKBAR_AUDIT_API_URL").ok().filter(|p| !p.trim().is_empty()).unwrap_or_else(|| "http://auditor:8083".into())
+}
+
+/// The restore link's name (plan step 6.3): `POST /restore` and nothing else.
+pub const RESTORE_LINK: &str = "admin-auditor-restore";
+
+pub fn restore_token_file(token_dir: &Path) -> PathBuf {
+    token_dir.join("call").join(format!("{RESTORE_LINK}.token"))
+}
+
+/// The restore token `bootstrap` made. A missing or empty file means `bootstrap` has not run.
+pub fn read_restore_token(token_dir: &Path) -> std::io::Result<String> {
+    let path = restore_token_file(token_dir);
+    match std::fs::read_to_string(&path) {
+        Ok(t) if !t.trim().is_empty() => Ok(t.trim().to_string()),
+        Ok(_) => Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("{} is empty; run `docker compose up -d`, which runs bootstrap first", path.display()),
+        )),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("{} is missing; run `docker compose up -d`, which runs bootstrap first", path.display()),
+        )),
+        Err(e) => Err(e),
+    }
 }
 
 pub fn token_file(token_dir: &Path) -> PathBuf {
@@ -46,6 +72,8 @@ pub struct AuditorLink {
     http: reqwest::Client,
     base: String,
     token: String,
+    /// The token of the restore link, used for a restore and nothing else; set once by `main`.
+    restore_token: Mutex<Option<String>>,
     online: AtomicBool,
     last_error: Mutex<Option<String>>,
     dirty: Notify,
@@ -62,11 +90,41 @@ impl AuditorLink {
                 .expect("reqwest client"),
             base: base.trim_end_matches('/').to_string(),
             token,
+            restore_token: Mutex::new(None),
             online: AtomicBool::new(false),
             last_error: Mutex::new(None),
             dirty: Notify::new(),
             token_watch: crate::notify::TokenWatch::new(READ_LINK),
         })
+    }
+
+    /// The token for `POST /restore` (the `admin-auditor-restore` link).
+    pub fn set_restore_token(&self, token: String) {
+        *self.restore_token.lock().unwrap_or_else(|e| e.into_inner()) = Some(token);
+    }
+
+    /// `POST /restore`: the plain tar of an audit store, streamed (a restore, ADR 0013, D25). Gives the head of the chain after the
+    /// swap, to be the one the admin expects. `409 not_empty` and `409 backup_newer_release` are the auditor's own answers.
+    pub async fn restore(&self, body: reqwest::Body) -> Result<(i64, String), ApiError> {
+        let token = self.restore_token.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let Some(token) = token else {
+            return Err(ApiError::new(ErrorCode::ServerUnavailable, "This admin holds no token for the auditor's restore link."));
+        };
+        let url = format!("{}{}/restore", self.base, askbar_proto::paths::AUDIT_V1);
+        let sent = self.http.post(url).bearer_auth(token).body(body).timeout(Duration::from_secs(60 * 60)).send().await;
+        let unavailable = || ApiError::new(ErrorCode::ServerUnavailable, "The auditor did not take its part of the backup.");
+        let resp = sent.map_err(|_| unavailable())?;
+        let status = resp.status().as_u16();
+        let body: serde_json::Value = resp.json().await.unwrap_or_default();
+        match (status, body["error"].as_str()) {
+            (200, _) => match (body["seq"].as_i64(), body["hash"].as_str()) {
+                (Some(seq), Some(hash)) => Ok((seq, hash.to_string())),
+                _ => Err(unavailable()),
+            },
+            (409, Some("backup_newer_release")) => Err(ApiError::code(ErrorCode::BackupNewerRelease)),
+            (409, _) => Err(ApiError::new(ErrorCode::NotEmpty, "The auditor already holds audited model calls, so it is not empty.")),
+            _ => Err(unavailable()),
+        }
     }
 
     /// Where an alert about this link's token goes (set once by `main`).

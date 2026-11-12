@@ -73,6 +73,7 @@ impl Rig {
         link("server-model-gateway", &gw_tokens, &server_tokens);
         link("admin-auditor-read", &audit_tokens, &admin_tokens);
         link("admin-auditor-append", &audit_tokens, &admin_tokens);
+        link("admin-auditor-restore", &audit_tokens, &admin_tokens);
 
         let limits = Limits::default();
         let recorder = Recorder::spawn(AuditDb::open(&dir.join("audit/audit.db")).unwrap(), limits.max_queued);

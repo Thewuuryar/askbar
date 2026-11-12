@@ -1239,7 +1239,7 @@ paths:
         Every part is then read to the end, so a damaged backup fails with nothing changed. The server and the alerter take theirs through
         `POST /imports` (409 `not_empty` if they have data), `cpa` through its supervisor, and the admin's own export becomes a pending set
         next to `admin.db`: the admin restarts and swaps it in before its database is opened, keeping the old database and secrets as
-        `*.before-restore`. The auditor's store is checked but not restored here: it goes through a link of its own (`not_restored`). A wrong
+        `*.before-restore`. The auditor's store goes through a link of its own (`admin-auditor-restore`), before the admin's part, and the admin keeps the restored chain's head as the one it expects, so the chain check raises nothing; `not_restored` names a part the backup holds for a component this install has no link to. A wrong
         passphrase is 403; five in fifteen minutes lock it for fifteen (429 `too_many_attempts`, with `Retry-After`). A step that fails after
         others worked says which did in `restored`. Recorded as `backup/restore`, with the parts and never the passphrase; the owner is
         sent `restore_performed` after the restart.
@@ -2160,12 +2160,12 @@ components:
           type: array
           items:
             type: string
-          description: The parts that were restored (`server`, `alerter`, `cpa`, then `admin`, which takes effect at the restart).
+          description: The parts that were restored (`server`, `alerter`, `cpa`, `auditor`, then `admin`, which takes effect at the restart).
         not_restored:
           type: array
           items:
             type: string
-          description: Parts the backup holds that this step does not restore (`audit`).
+          description: Parts the backup holds for a component this install has no link to (normally empty).
         restarting:
           type: boolean
           description: Whether the admin is restarting to swap its own part in.

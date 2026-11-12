@@ -169,8 +169,8 @@ async fn a_backup_restores_part_by_part_and_the_admins_own_export_waits_for_the_
 
     let (status, done) = target.restore(&id, PASS).await;
     assert_eq!(status, 200, "{done}");
-    assert_eq!(done["restored"], json!(["server", "alerter", "cpa", "admin"]));
-    assert_eq!(done["not_restored"], json!(["audit"]), "the auditor takes its store through its own link, in the next step");
+    assert_eq!(done["restored"], json!(["server", "alerter", "cpa", "auditor", "admin"]));
+    assert_eq!(done["not_restored"], json!([]));
     assert_eq!(done["restarting"], json!(false), "no restarter in this rig");
     // The server is the backed-up one; the alerter and cpa were handed their parts, opened.
     let owner: String = target
@@ -187,6 +187,10 @@ async fn a_backup_restores_part_by_part_and_the_admins_own_export_waits_for_the_
     let cpa = askbar_service::tar::read(&std::fs::read(target.dir.join("cpa-config/imported-copy")).unwrap()).unwrap();
     assert_eq!(cpa, vec![("claude-a.json".to_string(), LOGIN.as_bytes().to_vec())]);
     assert_eq!(std::fs::read(target.dir.join("cpa-config/import.tar")).unwrap().len(), 0, "the opened logins do not stay on the volume");
+    // The auditor's store is the backup's: the source's own record of its download is in it.
+    let downloads: i64 =
+        target.rig.rows("SELECT COUNT(*) FROM admin_actions WHERE category = 'backup' AND action = 'download'").len() as i64;
+    assert!(downloads >= 1, "the source's records came over");
     // The admin's own set is pending, whole, next to where its database is, and nothing else of the upload is kept.
     let pending = target.dir.join("work").join(askbar_admin::restore::PENDING_DIR);
     assert!(pending.join("admin.db").is_file() && pending.join("READY").is_file());
@@ -354,4 +358,33 @@ fn an_incomplete_pending_set_is_removed_and_nothing_is_swapped() {
     assert!(!pending.exists());
     assert!(!askbar_admin::restore::apply_pending(&db, &dir.join("secrets"), None).unwrap(), "nothing pending is fine");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn the_admin_expects_the_restored_chain_so_a_restore_raises_no_rollback_or_rewrite() {
+    let (_source, bundle) = source_bundle().await;
+    let target = empty_target().await;
+    // The install's own earlier records: the chain the admin has seen is the one that is about to be replaced.
+    let link = target.admin.auditor.get().cloned().unwrap();
+    target.admin.chain.check(&target.admin, &link, true).await;
+    let (_, view) = target.upload(bundle).await;
+    let (status, done) = target.restore(view["restore_id"].as_str().unwrap(), PASS).await;
+    assert_eq!(status, 200, "{done}");
+    assert!(done["restored"].as_array().unwrap().iter().any(|p| p == "auditor"), "{done}");
+    // The stored head is the restored chain's: the next check finds it as it was left, and raises nothing.
+    target.admin.chain.check(&target.admin, &link, true).await;
+    assert_eq!(target.admin.chain.status()["state"], "ok", "{}", target.admin.chain.status());
+    assert!(target.admin.notifier.notes().iter().all(|n| n.kind != "chain_mismatch"), "{:?}", target.admin.notifier.notes());
+    // The set the admin swaps in at its restart expects it too.
+    let pending = target.dir.join("work").join(askbar_admin::restore::PENDING_DIR).join("admin.db");
+    let db = askbar_admin::AdminDb::open(&pending).unwrap();
+    let (seq, hash): (i64, String) =
+        db.conn().query_row("SELECT seq, hash FROM audit_chain_head WHERE id = 1", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+    // It is an entry of the auditor's chain as it stands (the chain has grown since: the restore's own record).
+    let (code, entry) = link.get(&format!("/chain/entries/{seq}")).await.unwrap();
+    assert_eq!((code, entry["hash"].as_str()), (200, Some(hash.as_str())), "the pending database expects an entry the auditor has");
+    // And it is the anchor that does it: a head the admin expected from before is a rewrite.
+    target.admin.db.lock().await.conn().execute("UPDATE audit_chain_head SET hash = 'a-hash-from-the-old-chain' WHERE id = 1", []).unwrap();
+    target.admin.chain.check(&target.admin, &link, true).await;
+    assert_eq!(target.admin.chain.status()["state"], "rewritten");
 }
