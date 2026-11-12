@@ -137,19 +137,6 @@ async fn http_mode_saves_without_a_token_and_pairing_follows_the_setting() {
 }
 
 #[tokio::test]
-async fn the_backup_leaves_out_the_token_but_keeps_the_rest() {
-    let t = start(true).await;
-    t.save(full()).await;
-    let r = t.http.get(format!("{}/api/admin/v1/backup", t.adm)).header("cookie", &t.cookie).send().await.unwrap();
-    assert_eq!(r.status(), 200);
-    let bytes = r.bytes().await.unwrap();
-    let has = |needle: &[u8]| bytes.windows(needle.len()).any(|w| w == needle);
-    let stored = t.stored_token().await.unwrap();
-    assert!(!has(&stored) && !has(TOKEN.as_bytes()), "neither the ciphertext nor the token is in the backup");
-    assert!(has(b"askbar.orraitu.com"), "non-secret network settings are in the backup");
-}
-
-#[tokio::test]
 async fn network_needs_a_session() {
     let t = start(true).await;
     for (m, p) in [(M::GET, "/api/admin/v1/network"), (M::PUT, "/api/admin/v1/network"), (M::POST, "/api/admin/v1/network/apply")] {

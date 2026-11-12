@@ -620,6 +620,12 @@ impl Spaces {
         Spaces { dir: None, open: Mutex::new(HashMap::new()) }
     }
 
+    /// A directory on the data volume for work files, next to the space files (their parent), or `None` in memory. An export
+    /// copies every database here, not to `/tmp`, which is small and may be memory (ADR 0013).
+    pub fn scratch_dir(&self) -> Option<PathBuf> {
+        self.dir.as_ref().and_then(|d| d.parent()).map(|p| p.to_path_buf())
+    }
+
     /// The file a space is kept in, or `None` in memory.
     pub fn path_of(&self, id: &str) -> Option<PathBuf> {
         self.dir.as_ref().filter(|_| is_space_id(id)).map(|d| d.join(format!("{id}.db")))

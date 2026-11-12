@@ -866,7 +866,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.waitForFunction(() => /point at http:\/\/localhost/.test(document.getElementById('n-info').textContent));
     assert.equal(await page.inputValue('#n-challenge'), 'dns');
   });
-  await step('backup downloads the server and admin databases without secrets', async () => {
+  await step('backup downloads an encrypted bundle: a manifest, the protected key and the admin\'s and the server\'s exports, none of it readable (ADR 0013)', async () => {
     await openPage('backup');
     const [download] = await Promise.all([page.waitForEvent('download'), page.click('#backup-link')]);
     assert.match(download.suggestedFilename(), /^askbar-backup-\d+\.tar$/);
@@ -874,20 +874,30 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await download.saveAs(file);
     const bytes = fs.readFileSync(file);
     // A minimal tar reader: 512-byte headers, name at 0, octal size at 124.
-    const files = {};
+    const entries = [];
     for (let at = 0; at + 512 <= bytes.length && bytes[at] !== 0;) {
       const name = bytes.subarray(at, at + 100).toString().replace(/\0.*$/, '');
       const size = parseInt(bytes.subarray(at + 124, at + 135).toString(), 8);
-      files[name] = bytes.subarray(at + 512, at + 512 + size);
+      entries.push([name, bytes.subarray(at + 512, at + 512 + size)]);
       at += 512 + Math.ceil(size / 512) * 512;
     }
-    // The server's control database and one file per space (ADR 0009), then the admin's own.
-    const names = Object.keys(files).sort();
-    assert.deepEqual(names.filter((n) => !n.startsWith('server/spaces/')), ['admin.db', 'server/control.db']);
-    for (const n of names.filter((n) => n.startsWith('server/spaces/'))) assert.match(n, /^server\/spaces\/[0-9A-Z]{26}\.db$/);
-    for (const [name, data] of Object.entries(files)) {
-      assert.equal(data.subarray(0, 15).toString(), 'SQLite format 3', name);
-      assert.equal(data.includes(SECRET_KEY), false, name + ' has the provider key');
+    // The manifest and the protected key, then the admin's own export first and the server's.
+    assert.deepEqual(entries.map(([n]) => n), ['manifest.json', 'backup-key.age', 'admin.age', 'server.age']);
+    const get = (n) => entries.find(([name]) => name === n)[1];
+    const manifest = JSON.parse(get('manifest.json').toString());
+    assert.equal(manifest.format, 1);
+    assert.match(manifest.release, /^\d+\.\d+\.\d+/);
+    assert.match(manifest.key_fingerprint, /^[0-9a-f]{4}(-[0-9a-f]{4}){3}$/);
+    assert.deepEqual(manifest.parts.map((p) => p.name), ['admin.age', 'server.age']);
+    for (const p of manifest.parts) {
+      assert.equal(p.bytes, get(p.name).length, p.name);
+      assert.equal(p.sha256, require('node:crypto').createHash('sha256').update(get(p.name)).digest('hex'), p.name + ' hash');
+    }
+    // The key in the bundle is the protected private key (an age file made with the passphrase), and every export is an age file.
+    for (const n of ['backup-key.age', 'admin.age', 'server.age']) assert.equal(get(n).subarray(0, 21).toString(), 'age-encryption.org/v1', n);
+    // Nothing is readable: no database header, no provider key, none of the passphrases or the password.
+    for (const secret of ['SQLite format 3', SECRET_KEY, BACKUP_PASS, BACKUP_PASS_2, AUDIT_PASS, PASSWORD, 'AGE-SECRET-KEY']) {
+      assert.equal(bytes.includes(secret), false, 'the bundle holds ' + secret);
     }
   });
   // ------------------------------------------------------------------ the Audit tab

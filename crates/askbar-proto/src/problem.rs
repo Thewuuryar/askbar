@@ -22,6 +22,8 @@ pub enum ErrorCode {
     UserPaused,
     ModelNotApproved,
     AuditKeyMissing,
+    /// No backup key is set (ADR 0013): an export cannot be encrypted, so none is made. 503.
+    BackupKeyMissing,
     AuditBacklog,
     ClientTooOld,
     ClientVersionMissing,
@@ -42,13 +44,14 @@ pub enum ErrorCode {
 }
 
 impl ErrorCode {
-    pub const ALL: [ErrorCode; 23] = [
+    pub const ALL: [ErrorCode; 24] = [
         ErrorCode::QueueFull,
         ErrorCode::BudgetExceeded,
         ErrorCode::KillSwitch,
         ErrorCode::UserPaused,
         ErrorCode::ModelNotApproved,
         ErrorCode::AuditKeyMissing,
+        ErrorCode::BackupKeyMissing,
         ErrorCode::AuditBacklog,
         ErrorCode::ClientTooOld,
         ErrorCode::ClientVersionMissing,
@@ -77,6 +80,7 @@ impl ErrorCode {
             ErrorCode::UserPaused => "user_paused",
             ErrorCode::ModelNotApproved => "model_not_approved",
             ErrorCode::AuditKeyMissing => "audit_key_missing",
+            ErrorCode::BackupKeyMissing => "backup_key_missing",
             ErrorCode::AuditBacklog => "audit_backlog",
             ErrorCode::ClientTooOld => "client_too_old",
             ErrorCode::ClientVersionMissing => "client_version_missing",
@@ -104,6 +108,7 @@ impl ErrorCode {
             ErrorCode::BudgetExceeded | ErrorCode::TooManyAttempts => 429,
             ErrorCode::KillSwitch
             | ErrorCode::AuditKeyMissing
+            | ErrorCode::BackupKeyMissing
             | ErrorCode::AuditBacklog
             | ErrorCode::SetupRequired
             | ErrorCode::NotConfigured => 503,
@@ -128,6 +133,7 @@ impl ErrorCode {
             ErrorCode::UserPaused => "Replies are paused for this user",
             ErrorCode::ModelNotApproved => "That model is not approved",
             ErrorCode::AuditKeyMissing => "The audit key has not been set up",
+            ErrorCode::BackupKeyMissing => "The backup key has not been set up",
             ErrorCode::AuditBacklog => "The server is busy recording",
             ErrorCode::ClientTooOld => "This app is too old for the server",
             ErrorCode::ClientVersionMissing => "The app version is missing",
@@ -274,6 +280,7 @@ mod tests {
                 | ErrorCode::UserPaused
                 | ErrorCode::ModelNotApproved
                 | ErrorCode::AuditKeyMissing
+                | ErrorCode::BackupKeyMissing
                 | ErrorCode::AuditBacklog
                 | ErrorCode::ClientTooOld
                 | ErrorCode::ClientVersionMissing
@@ -293,6 +300,6 @@ mod tests {
                 | ErrorCode::Internal => {}
             }
         }
-        assert_eq!(ErrorCode::ALL.len(), 23);
+        assert_eq!(ErrorCode::ALL.len(), 24);
     }
 }

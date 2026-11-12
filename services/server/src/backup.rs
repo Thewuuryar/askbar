@@ -1,9 +1,21 @@
-//! The server's backup export: consistent copies of the control database (with everything secret
-//! taken out) and of every space's file, in one tar. The admin fetches it over the server API.
+//! The server's backup export (ADR 0013): consistent copies of the control database and of every space's file, in one tar, encrypted
+//! to the backup public key from the snapshot and streamed to the admin as it is made.
+//!
+//! - **Encrypted, so complete.** The export holds everything a restore needs, secrets included (client token hashes, pairing codes),
+//!   because only the owner's passphrase opens it; the admin that receives it cannot. With no backup key in the snapshot it is
+//!   refused (`503 backup_key_missing`): nothing is ever exported in the clear.
+//! - **Streamed.** The tar is written through the encryption into the response as each file is read, so no database is held in
+//!   memory. The response has no length: a transfer that ends early (the server stopping, an error) ends the connection badly, which
+//!   is how the admin knows it is incomplete, since it cannot decrypt to check.
+//! - **Work files on the data volume**, in `<data>/.export-<id>/`, one copy at a time, removed when the export ends however it ends
+//!   (a client that goes away included). Leftovers from a crash are removed at the next export.
 
 use crate::error::ApiError;
 use crate::AppState;
 use askbar_proto::problem::ErrorCode;
+use askbar_service::backup;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 fn internal_error<E>(_: E) -> ApiError {
@@ -11,10 +23,25 @@ fn internal_error<E>(_: E) -> ApiError {
 }
 
 /// Deletes the working directory, whatever way the export ends.
-struct TempDir(std::path::PathBuf);
+struct TempDir(PathBuf);
 impl Drop for TempDir {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Work directories older than this are leftovers of a crash.
+const STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+const PREFIX: &str = ".export-";
+
+/// Removes leftover work directories from an export that did not end cleanly.
+fn clear_stale(parent: &Path) {
+    let Ok(entries) = std::fs::read_dir(parent) else { return };
+    for e in entries.flatten() {
+        let old = e.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|age| age > STALE_AFTER);
+        if old && e.file_name().to_string_lossy().starts_with(PREFIX) {
+            let _ = std::fs::remove_dir_all(e.path());
+        }
     }
 }
 
@@ -33,75 +60,75 @@ fn stamp(unix: i64) -> String {
     format!("{year:04}{month:02}{day:02}-{:02}{:02}{:02}", secs / 3600, secs % 3600 / 60, secs % 60)
 }
 
-/// A consistent copy (`VACUUM INTO`) of the control database with everything secret taken out:
-/// provider API keys and pairing-code hashes (the admin's, the ones clients asked for, and used
-/// ones). Settings and paired-client records (token hashes only) stay. Until exports are encrypted
-/// (ADR 0013), a backup holds no secret.
-fn control_copy(state: &AppState, path: &std::path::Path) -> rusqlite::Result<()> {
-    {
-        let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
-        db.conn().execute("VACUUM INTO ?1", [path.to_string_lossy().as_ref()])?;
-    }
-    let snap = rusqlite::Connection::open(path)?;
-    // The snapshot document lists unredeemed pairing-code hashes; take those out too.
-    let body: Option<String> = snap.query_row("SELECT body FROM config_snapshot WHERE id = 1", [], |r| r.get(0)).ok();
-    if let Some(mut doc) = body.and_then(|b| serde_json::from_str::<serde_json::Value>(&b).ok()) {
-        doc["pair_codes"] = serde_json::json!([]);
-        snap.execute("UPDATE config_snapshot SET body = ?1 WHERE id = 1", [doc.to_string()])?;
-    }
-    snap.execute_batch(
-        "UPDATE providers SET api_key_enc = NULL;
-         DELETE FROM redeemed_codes;
-         DELETE FROM client_pair_codes;
-         PRAGMA journal_mode = DELETE;
-         VACUUM;", // rewrite the file so the removed values don't linger in free pages
-    )?;
+/// A consistent copy (`VACUUM INTO`) of the control database.
+fn control_copy(state: &AppState, path: &Path) -> rusqlite::Result<()> {
+    let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+    db.conn().execute("VACUUM INTO ?1", [path.to_string_lossy().as_ref()])?;
     Ok(())
 }
 
-/// A consistent copy of one space's file. It holds no secrets.
-fn space_copy(space: &crate::Space, path: &std::path::Path) -> rusqlite::Result<()> {
+/// A consistent copy of one space's file.
+fn space_copy(space: &crate::Space, path: &Path) -> rusqlite::Result<()> {
     space.lock().conn().execute("VACUUM INTO ?1", [path.to_string_lossy().as_ref()])?;
-    rusqlite::Connection::open(path)?.execute_batch("PRAGMA journal_mode = DELETE;")?;
     Ok(())
 }
 
-/// The export: a tar with `control.db` and `spaces/<space id>.db` for every space (ADR 0009
-/// mechanism 4). Copies are made one at a time under `dir`, read in, and deleted.
-fn make_export(state: &AppState, dir: &std::path::Path) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
+/// One file of the export, streamed into the tar, then deleted.
+fn add_file<W: Write>(tar: &mut W, name: &str, path: &Path, mtime: i64) -> std::io::Result<()> {
+    let size = std::fs::metadata(path)?.len();
+    askbar_service::tar::write_file(tar, name, size, &mut std::fs::File::open(path)?, mtime)?;
+    std::fs::remove_file(path)
+}
+
+/// Writes the export: a tar with `control.db` and `spaces/<space id>.db` for every space (ADR 0009 mechanism 4), through the
+/// encryption, into `out`. Copies are made one at a time under `dir`.
+fn write_export<W: Write>(state: &AppState, dir: &Path, recipient: &str, out: W) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     std::fs::create_dir_all(dir)?;
     let now = crate::auth::now();
-    let mut tar = Vec::new();
+    let mut tar = backup::encrypt_to(recipient, out).map_err(|e| e.to_string())?;
     let control = dir.join("control.db");
     control_copy(state, &control)?;
-    askbar_service::tar::append(&mut tar, "control.db", &std::fs::read(&control)?, now);
-    std::fs::remove_file(&control)?;
+    add_file(&mut tar, "control.db", &control, now)?;
     let spaces = state.spaces.open_all(&state.db.lock().unwrap_or_else(|e| e.into_inner()))?;
     for space in spaces {
         let path = dir.join(format!("{}.db", space.id));
         space_copy(&space, &path)?;
-        askbar_service::tar::append(&mut tar, &format!("spaces/{}.db", space.id), &std::fs::read(&path)?, now);
-        std::fs::remove_file(&path)?;
+        add_file(&mut tar, &format!("spaces/{}.db", space.id), &path, now)?;
     }
-    askbar_service::tar::finish(&mut tar);
-    Ok(tar)
+    askbar_service::tar::write_end(&mut tar)?;
+    tar.finish()?;
+    Ok(())
+}
+
+/// The backup public key the admin gave in the snapshot, if there is one that is a key.
+fn backup_recipient(state: &AppState) -> Option<String> {
+    let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+    crate::snapshot::current(&db).ok().flatten()?.backup_public_key.filter(|k| backup::is_recipient(k))
 }
 
 pub async fn response(state: Arc<AppState>) -> Result<axum::response::Response, ApiError> {
-    use axum::{body::Body, http::header};
-    let mut raw = [0u8; 8];
-    chacha20poly1305::aead::rand_core::RngCore::fill_bytes(&mut chacha20poly1305::aead::OsRng, &mut raw);
-    let name: String = raw.iter().map(|b| format!("{b:02x}")).collect();
-    let dir = std::env::temp_dir().join(format!("askbar-backup-{name}"));
+    use axum::http::header;
+    let recipient = backup_recipient(&state).ok_or_else(|| ApiError::code(ErrorCode::BackupKeyMissing))?;
+    let parent = state.spaces.scratch_dir().unwrap_or_else(std::env::temp_dir);
+    clear_stale(&parent);
+    let dir = parent.join(format!("{PREFIX}{}", crate::ids::new_id()));
     let guard = TempDir(dir.clone());
+    let (mut writer, body) = askbar_service::stream::body();
     let st = state.clone();
-    let tar = tokio::task::spawn_blocking(move || make_export(&st, &guard.0)).await.map_err(internal_error)?.map_err(internal_error)?;
-    let filename = format!("askbar-server-backup-{}.tar", stamp(crate::auth::now()));
+    tokio::task::spawn_blocking(move || {
+        let _guard = guard; // the work directory goes when this ends, a failure or a vanished client included
+        let done = write_export(&st, &dir, &recipient, &mut writer).and_then(|_| writer.flush().map_err(Into::into));
+        if let Err(e) = done {
+            tracing::warn!("a backup export did not finish: {e}");
+            // An error in the body ends the connection badly: the admin sees an export that is not whole.
+            writer.fail();
+        }
+    });
+    let filename = format!("askbar-server-backup-{}.tar.age", stamp(crate::auth::now()));
     axum::response::Response::builder()
-        .header(header::CONTENT_TYPE, "application/x-tar")
-        .header(header::CONTENT_LENGTH, tar.len())
+        .header(header::CONTENT_TYPE, "application/octet-stream")
         .header(header::CONTENT_DISPOSITION, format!("attachment; filename=\"{filename}\""))
-        .body(Body::from(tar))
+        .body(body)
         .map_err(internal_error)
 }
 

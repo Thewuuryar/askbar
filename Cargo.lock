@@ -295,6 +295,7 @@ dependencies = [
 name = "askbar-server"
 version = "0.6.0"
 dependencies = [
+ "age",
  "askbar-audit",
  "askbar-auditor",
  "askbar-model-gateway",
@@ -328,6 +329,7 @@ dependencies = [
  "askbar-proto",
  "axum",
  "base64 0.22.1",
+ "futures-util",
  "reqwest",
  "serde",
  "serde_json",

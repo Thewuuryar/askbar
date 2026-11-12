@@ -12,6 +12,7 @@ pub mod audit_key;
 pub mod audit_read;
 pub mod auditor_link;
 pub mod auth;
+pub mod backup_bundle;
 pub mod backup_key;
 pub mod budget_watch;
 pub mod caddy;
@@ -92,6 +93,8 @@ pub struct AdminState {
     pub cpa_logins: std::sync::Mutex<std::collections::HashMap<String, CpaLogin>>,
     /// When recent service actions happened (unix seconds), for the rate limit.
     pub service_actions: std::sync::Mutex<std::collections::VecDeque<i64>>,
+    /// The admin's secrets directory (`admin.key` and the CLIProxyAPI keys), which its backup export holds; set at start-up (ADR 0013).
+    pub admin_secrets_dir: std::sync::Mutex<Option<std::path::PathBuf>>,
 }
 
 impl AdminState {
@@ -124,6 +127,7 @@ impl AdminState {
             cpa: std::sync::Mutex::new(None),
             cpa_logins: std::sync::Mutex::new(Default::default()),
             service_actions: std::sync::Mutex::new(Default::default()),
+            admin_secrets_dir: std::sync::Mutex::new(None),
         })
     }
 
@@ -192,7 +196,7 @@ pub fn routes(state: &Arc<AdminState>) -> Routes {
         .get(&v1("/settings"), admin_api::get_settings)
         .put(&v1("/settings"), admin_api::put_settings)
         .put(&v1("/users/{id}/display-defaults"), admin_api::put_user_display)
-        .get(&v1("/backup"), admin_api::backup)
+        .get(&v1("/backup"), backup_bundle::download)
         .get(&v1("/network"), network::get_network)
         .put(&v1("/network"), network::put_network)
         .post(&v1("/network/apply"), network::apply_network)

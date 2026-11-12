@@ -436,6 +436,24 @@ impl ServerLink {
         }
     }
 
+    /// A server call whose answer is read as it arrives (a large export), not held in memory. The status is checked by the caller.
+    pub async fn request_stream(&self, method: reqwest::Method, path: &str) -> Result<reqwest::Response, PushError> {
+        // The client's own limit is 15 seconds for the whole call, which a large export outlasts: this call may take an hour.
+        let call = self.http.request(method, format!("{}{path}", self.base)).bearer_auth(&self.token).timeout(Duration::from_secs(60 * 60));
+        match call.send().await {
+            Ok(resp) => {
+                self.saw(resp.status().as_u16());
+                self.online.store(true, Ordering::Relaxed);
+                Ok(resp)
+            }
+            Err(e) => {
+                self.online.store(false, Ordering::Relaxed);
+                *self.last_error.lock().unwrap_or_else(|e| e.into_inner()) = Some(e.to_string());
+                Err(PushError::Unreachable(e.to_string()))
+            }
+        }
+    }
+
     /// Is the server there, and does it run what was pushed? Reads `GET /status` (ADR 0028
     /// rule 4). `None` if the server did not answer (or refused the token); otherwise whether the
     /// snapshot should be pushed again (see `needs_push`). Updates the online state.

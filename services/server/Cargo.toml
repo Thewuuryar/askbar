@@ -8,7 +8,7 @@ description = "Askbar server: history, providers and settings behind an HTTP API
 
 [dependencies]
 askbar-proto = { path = "../../crates/askbar-proto", features = ["axum"] }
-askbar-service = { path = "../../crates/askbar-service" }
+askbar-service = { path = "../../crates/askbar-service", features = ["backup"] }
 askbar-audit = { path = "../../crates/askbar-audit", optional = true }
 askbar-model-gateway = { path = "../model-gateway", optional = true }
 askbar-auditor = { path = "../auditor", optional = true }
@@ -38,6 +38,8 @@ test-rig = ["dep:askbar-model-gateway", "dep:askbar-auditor", "dep:askbar-audit"
 askbar-server = { path = ".", features = ["test-rig"] }
 # YAML in safe Rust, to read our own OpenAPI files (it replaced serde_yaml_ng, built on the unmaintained unsafe-libyaml).
 serde-saphyr = { version = "2.1", default-features = false, features = ["deserialize"] }
+# The tests open the exports with the age key they were encrypted to.
+age = { version = "0.11", default-features = false }
 serde_json = "1"
 
 [lints]

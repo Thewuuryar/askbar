@@ -121,6 +121,67 @@ pub fn fingerprint(recipient: &str) -> String {
     format!("{}-{}-{}-{}", &hex[0..4], &hex[4..8], &hex[8..12], &hex[12..16])
 }
 
+/// An age encryption of whatever is written to it, going to `W` as it is written: for an export too large to hold in memory.
+/// Call [`Encrypting::finish`] at the end; without it the file is cut short and cannot be opened.
+pub struct Encrypting<W: Write> {
+    inner: age::stream::StreamWriter<W>,
+}
+
+impl<W: Write> Write for Encrypting<W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.inner.write(buf)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+impl<W: Write> Encrypting<W> {
+    /// Ends the encryption and gives back the writer.
+    pub fn finish(self) -> std::io::Result<W> {
+        self.inner.finish()
+    }
+}
+
+/// Starts encrypting to `recipient`, writing to `out`.
+pub fn encrypt_to<W: Write>(recipient: &str, out: W) -> Result<Encrypting<W>, Error> {
+    let recipient = x25519::Recipient::from_str(recipient).map_err(|_| Error::Invalid)?;
+    let encryptor = age::Encryptor::with_recipients(iter::once(&recipient as &dyn age::Recipient)).map_err(|_| Error::Crypto)?;
+    Ok(Encrypting { inner: encryptor.wrap_output(out).map_err(|_| Error::Crypto)? })
+}
+
+/// The file names in a backup bundle (ADR 0013), and its manifest.
+pub const MANIFEST_FILE: &str = "manifest.json";
+/// The private key protected by the backup passphrase, in the bundle.
+pub const KEY_FILE: &str = "backup-key.age";
+/// The bundle's format version; a restore refuses one it does not know.
+pub const BUNDLE_FORMAT: u32 = 1;
+
+/// One encrypted export in a bundle.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Part {
+    /// The file's name in the bundle, such as `admin.age`.
+    pub name: String,
+    /// The SHA-256 of the file as it is in the bundle (the ciphertext), in hex.
+    pub sha256: String,
+    pub bytes: u64,
+}
+
+/// What a bundle says about itself, in the clear: which release made it, with which key, and what is in it. It holds no secret and no
+/// name of anything inside an export; a restore reads it first, to refuse a backup from a newer release before asking for the passphrase.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Manifest {
+    pub format: u32,
+    /// The Askbar release that made the backup (`1.0.0`).
+    pub release: String,
+    /// Unix seconds.
+    pub created_at: i64,
+    /// The fingerprint of the public key the exports are encrypted to.
+    pub key_fingerprint: String,
+    /// The exports in the order they are in the bundle: the admin's first and the auditor's last.
+    pub parts: Vec<Part>,
+}
+
 /// `plaintext` encrypted to `recipient`.
 pub fn encrypt(recipient: &str, plaintext: &[u8]) -> Result<Vec<u8>, Error> {
     let recipient = x25519::Recipient::from_str(recipient).map_err(|_| Error::Invalid)?;
@@ -214,6 +275,44 @@ mod tests {
         let shown = format!("{k:?}");
         assert!(!shown.contains(&k.recipient) && !shown.contains("age-encryption"), "{shown}");
         assert!(shown.contains(&k.fingerprint));
+    }
+
+    #[test]
+    fn a_stream_encrypts_as_it_goes_opens_with_the_key_and_opens_with_no_other() {
+        let k = key();
+        let identity = unlock(&k.protected, PASS).unwrap();
+        let data = b"streamed export ".repeat(20_000);
+        let mut w = encrypt_to(&k.recipient, Vec::new()).unwrap();
+        for chunk in data.chunks(7_000) {
+            w.write_all(chunk).unwrap();
+        }
+        let sealed = w.finish().unwrap();
+        assert!(!sealed.windows(16).any(|w| w == &data[..16]), "no plaintext in the stream");
+        assert_eq!(decrypt(&identity, &sealed).unwrap(), data);
+        assert!(decrypt(&unlock(&key().protected, PASS).unwrap(), &sealed).is_err(), "another key does not open it");
+        // A stream that was not finished is cut short and does not open.
+        let mut cut = encrypt_to(&k.recipient, Vec::new()).unwrap();
+        cut.write_all(&data).unwrap();
+        let mut bytes = Vec::new();
+        drop(cut);
+        bytes.extend_from_slice(&sealed[..sealed.len() / 2]);
+        assert!(decrypt(&identity, &bytes).is_err());
+        assert!(encrypt_to("not a key", Vec::new()).is_err());
+    }
+
+    #[test]
+    fn a_manifest_round_trips_and_refuses_what_it_does_not_know() {
+        let m = Manifest {
+            format: BUNDLE_FORMAT,
+            release: "1.0.0".into(),
+            created_at: 5,
+            key_fingerprint: "aaaa-bbbb-cccc-dddd".into(),
+            parts: vec![Part { name: "admin.age".into(), sha256: "00".repeat(32), bytes: 9 }],
+        };
+        let text = serde_json::to_string(&m).unwrap();
+        assert_eq!(serde_json::from_str::<Manifest>(&text).unwrap(), m);
+        assert!(!text.contains("AGE-SECRET-KEY") && !text.contains("passphrase"));
+        assert!(serde_json::from_str::<Manifest>("{}").is_err());
     }
 
     #[test]
