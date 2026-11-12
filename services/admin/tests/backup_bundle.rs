@@ -228,3 +228,30 @@ async fn an_api_key_may_download_it_since_it_is_encrypted_and_the_download_is_re
     assert!(text.contains("requested") && text.contains("done") && text.contains("admin.age") && text.contains("fingerprint"), "{text}");
     assert!(!text.contains("AGE-SECRET-KEY") && !text.contains(PASS));
 }
+
+/// The documented way to read a backup (ADR 0013, the guide): the real `age` tool opens the protected key with the passphrase, and the
+/// key opens each export. Skipped, with a note, where `age` is not installed.
+#[tokio::test]
+async fn the_real_age_tool_opens_the_bundle_with_the_passphrase_alone() {
+    let t = common::start(true).await;
+    set_key(&t).await;
+    mark(&t).await;
+    let bytes = download(&t).await.bytes().await.unwrap();
+    let dir = t.dir.join("age-interop");
+    std::fs::create_dir_all(&dir).unwrap();
+    for (name, data) in askbar_service::tar::read(&bytes).unwrap() {
+        if name.ends_with(".age") {
+            std::fs::write(dir.join(&name), data).unwrap();
+        }
+    }
+    let script = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/e2e/age_interop.py");
+    let out = std::process::Command::new("python3").args(["-I", script, dir.to_str().unwrap(), PASS]).output().expect("python3 is needed");
+    if out.status.code() == Some(2) {
+        eprintln!("skipped: the age command-line tool is not installed here");
+        return;
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "age could not open the bundle: {text} {}", String::from_utf8_lossy(&out.stderr));
+    assert!(text.contains("admin.age: admin.db admin-secrets/admin.key admin-secrets/cpa-api.key admin-secrets/cpa-control.secret caddy-secrets/self.crt caddy-secrets/self.key"), "{text}");
+    assert!(text.contains("server.age: control.db spaces/"), "{text}");
+}

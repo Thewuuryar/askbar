@@ -20,7 +20,7 @@ Version 1.0 is the scope of [ADR 0002](docs/adr/0002-v1-scope-limits-and-ship-cr
 - **An audit trail** of every reply, with prompts and replies sealed by a passphrase only the owner knows.
 - **HTTPS from the first start** with the install's own certificate, then Let's Encrypt for your own host name.
 - **Hardened, separated containers:** only Caddy publishes ports, and no service has the Docker socket. *Planned:* per-link tokens and a separate auditor (phase 2), and a `model-gateway` that alone holds provider keys and an approved model catalog (phase 3).
-- *Planned:* alerts by ntfy or email (phase 4), and encrypted, scheduled backups (phase 6). A manual backup without secrets works today.
+- *Planned:* alerts by ntfy or email (phase 4), and scheduled backups and a restore (phase 6). A manual, encrypted backup works today.
 - *Deferrable:* memory and an iOS app (phase 8).
 
 ## Quick start: deploy the server
