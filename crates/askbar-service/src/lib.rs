@@ -16,6 +16,8 @@
 
 pub mod alert_client;
 pub mod audit_client;
+#[cfg(feature = "backup")]
+pub mod backup;
 pub mod configured;
 pub mod ids;
 pub mod links;
