@@ -936,6 +936,15 @@
     }
   });
 
+  // The footer's "Source" link (the AGPL notice) asks first like every other link: the thread's handler above does not
+  // cover the footer, so this one sends it to the same bar.
+  el.foot.addEventListener('click', (e) => {
+    const link = e.target instanceof Element ? e.target.closest('a[href]') : null;
+    if (!link) return;
+    e.preventDefault();
+    askToOpen(link.getAttribute('href'));
+  });
+
   el.linkOpen.addEventListener('click', openPendingLink);
   el.linkCancel.addEventListener('click', closeLinkConfirm);
 
