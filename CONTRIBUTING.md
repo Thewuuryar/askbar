@@ -42,6 +42,8 @@ python3 tests/e2e/mock_llm.py 8765     # a fake OpenAI-compatible server to try 
 npm --prefix clients/desktop install && npm --prefix clients/desktop run dev   # the desktop app
 ```
 
+**Third-party notices.** [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) lists what ships and its licenses. After you change a dependency (`Cargo.lock`, a lockfile) or an image's contents, run `scripts/third-party-notices.sh` and commit the result; `scripts/third-party-notices.sh --check` says whether it is out of date. It is not part of `scripts/check-docs.sh` or CI, because it needs the crates downloaded, so it cannot run without the network on a fresh checkout. The images section is written by hand in `scripts/third-party-notices.images.md`.
+
 The browser tests start the built `askbar-server` and `askbar-admin`; run `cargo build -p askbar-server -p askbar-admin` first
 when you have changed them (the admin site's files are compiled in).
 
