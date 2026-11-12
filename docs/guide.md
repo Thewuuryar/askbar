@@ -129,6 +129,8 @@ The model you chose for new chats and your other preferences are stored on the s
 
 **What the app tells you.** Above the input box a line says "AI can make mistakes. Check important information." After you pair, and again whenever it changes, the app shows a **privacy notice**: what Askbar records, who can open it, and how many days audit records are kept, with a **Got it** button. The app does not send anything back: your administrator made you a user, which assumes your consent, so it only remembers which version of the notice it last showed. The administrator can change the wording of either, or turn either off, in **Settings > What people are told**; changing the wording or the audit retention shows the notice again. Each deployer is responsible for consent, notice and the law where they are (for minors, employees and other countries): the default wording is a start, not legal advice.
 
+The footer shows the model for this chat, the five key hints and a **Source** link to the project's source code (Askbar is free software under the AGPL-3.0-or-later). The link asks first, like every link: the bar shows its whole address, and nothing opens until you press Open.
+
 In the history panel, click a conversation to reopen it. Delete needs two clicks ("Delete" then "Delete?"), and removes the conversation and its messages. Ctrl is used on macOS too, since Cmd+H and Cmd+N belong to the system.
 
 ## Replies run on the server
