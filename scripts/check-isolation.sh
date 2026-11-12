@@ -973,6 +973,52 @@ if s == 429:
     time.sleep(31); s, body = call('POST', '/api/admin/v1/services/$1/restart')
 print(s, round(time.time() - t, 1))" 2>&1 | tail -1
 }
+# Three replies at once, through Caddy (plan step 7.2, D31). PRINTED, NOT A GATE: the gate is
+# `cargo test -p askbar-server --test load`, which subtracts the mock model's own time. Here the same scenario runs through the
+# real stack (Caddy, the server, model-gateway, the auditor) to the mock model, and the mock's own time is measured inside its
+# container and printed beside it. Nothing in this block can fail the run: a problem prints a NOTE line and the block moves on.
+note() { printf 'NOTE  %s\n' "$1"; }
+LOAD_MOCK="${PROJECT}-mock-llm-1"
+if ! command -v python3 >/dev/null 2>&1; then
+  note "latency through Caddy: python3 is not on this machine"
+elif [ "$(docker inspect -f '{{.State.Running}}' "$LOAD_MOCK" 2>/dev/null)" != true ]; then
+  note "latency through Caddy: $LOAD_MOCK is not running (it is in the dev profile)"
+else
+  load_set=$(admin_script "$(admin_login)
+import json, uuid
+s, body = call('POST', '/api/admin/v1/providers', {'name': 'load-' + uuid.uuid4().hex[:6], 'type': 'openai', 'base_url': 'http://mock-llm:8765/v1', 'model': 'm', 'api_key': 'sk-load-check'})
+assert s == 201, (s, body)
+pid = json.loads(body)['id']
+s, cat = call('GET', '/api/admin/v1/catalog'); cat = json.loads(cat)
+cat['models'].append({'provider_id': pid, 'model': 'm'}); cat['default'] = pid + '/m'
+s, body = call('PUT', '/api/admin/v1/catalog', cat); assert s == 200, (s, body)
+s, users = call('GET', '/api/admin/v1/users'); users = json.loads(users)
+if not users:
+    s, made = call('POST', '/api/admin/v1/users', {'name': 'load user'}); users = [json.loads(made)]
+s, body = call('POST', '/api/admin/v1/users/' + users[0]['id'] + '/pairing-keys', {'name': 'load client'})
+assert s == 200, (s, body)
+print('LOAD', pid, json.loads(body)['pairing'])" 2>&1 | grep '^LOAD ' | tail -1)
+  if [ -z "$load_set" ]; then
+    note "latency through Caddy: could not set up a provider, an approved model and a client"
+  else
+    load_pid=$(printf '%s' "$load_set" | cut -d' ' -f2); load_pairing=$(printf '%s' "$load_set" | cut -d' ' -f3)
+    sleep 2   # the gateway has the catalog a moment after the admin saves it
+    out=$(python3 -I tests/e2e/load_scenario.py https://localhost --pairing "$load_pairing" --insecure --rounds 10 2>&1) \
+      && note "$out" || note "latency through Caddy did not run: $out"
+    out=$(docker exec -i "$LOAD_MOCK" python3 - mock http://127.0.0.1:8765/v1 --rounds 10 < tests/e2e/load_scenario.py 2>&1) \
+      && note "$out" || note "the mock model's own latency did not run: $out"
+    # Put the catalog back as it was and take the provider away again.
+    admin_script "$(admin_login)
+import json
+s, cat = call('GET', '/api/admin/v1/catalog'); cat = json.loads(cat)
+cat['models'] = [m for m in cat['models'] if m['provider_id'] != '$load_pid']
+if (cat.get('default') or '').startswith('$load_pid/'):
+    cat['default'] = (cat['models'][0]['provider_id'] + '/' + cat['models'][0]['model']) if cat['models'] else None
+call('PUT', '/api/admin/v1/catalog', cat)
+call('DELETE', '/api/admin/v1/providers/$load_pid')" >/dev/null 2>&1 || note "latency through Caddy: the provider it made could not be removed"
+  fi
+fi
+
 before=$(docker inspect -f '{{.State.StartedAt}}' "$SERVER")
 out=$(restart server)
 after=$(docker inspect -f '{{.State.StartedAt}}' "$SERVER")
