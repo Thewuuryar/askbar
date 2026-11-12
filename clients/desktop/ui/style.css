@@ -139,6 +139,25 @@ button { font: inherit; color: inherit; }
 }
 .notice span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 
+/* Before a link in a reply opens, its full address is shown (ADR 0044, D18): the label a reply gives a link is not the address. */
+.link-confirm {
+  padding: 9px 12px 9px 20px;
+  background: var(--accent-soft);
+  font-size: 13.5px;
+  border-bottom: 1px solid var(--line);
+}
+.link-confirm p { margin: 0 0 4px; }
+.link-confirm .link-url {
+  display: block;
+  max-height: 7.5em;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+}
+.link-confirm .link-actions { display: flex; gap: 6px; margin-top: 6px; }
+
 /* The backend is unreachable, rejected us, or lost the provider: say so, offer a way forward. */
 .status {
   display: flex;

@@ -133,11 +133,71 @@ async function waitIdle(page) {
     await page.evaluate(() => document.getElementById('input').dispatchEvent(new Event('input')));
   });
 
-  await step('links open through the backend, not the webview', async () => {
+  await step('a link asks first: its full address is shown, and nothing opens until Open (D18)', async () => {
     await page.locator('.msg.assistant a').first().click();
+    assert.equal(await page.isVisible('#link-confirm'), true);
+    assert.equal(await page.innerText('#link-confirm-url'), 'https://example.com/docs');
+    assert.equal((await calls(page, 'open_url')).length, 0, 'nothing opened yet');
+    assert.ok(page.url().endsWith('ui/index.html'), 'the page did not navigate');
+    await page.click('#link-open');
+    assert.equal(await page.isHidden('#link-confirm'), true);
     const opens = await calls(page, 'open_url');
-    assert.deepEqual(opens[0], { url: 'https://example.com/docs' });
-    assert.ok(page.url().endsWith('ui/index.html'), 'page did not navigate');
+    assert.deepEqual(opens, [{ url: 'https://example.com/docs' }], 'opened through the backend, once');
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'input');
+  });
+
+  await step('Cancel and Esc close the bar and open nothing, and Esc does not also hide the window', async () => {
+    const hides = (await calls(page, 'hide_window')).length;
+    await page.locator('.msg.assistant a').first().click();
+    await page.click('#link-cancel');
+    assert.equal(await page.isHidden('#link-confirm'), true);
+    await page.locator('.msg.assistant a').first().click();
+    assert.equal(await page.isVisible('#link-confirm'), true);
+    await page.keyboard.press('Escape');
+    assert.equal(await page.isHidden('#link-confirm'), true);
+    assert.equal((await calls(page, 'open_url')).length, 1, 'still only the one that was confirmed');
+    assert.equal((await calls(page, 'hide_window')).length, hides, 'the first Esc closed the bar only');
+  });
+
+  await step('the bar shows where a link really goes, whatever its label says, and a very long address in full', async () => {
+    const lp = await open(browser);
+    const long = 'https://example.com/' + 'a'.repeat(1900);
+    await lp.evaluate((r) => { window.__nextReply = r; }, `[https://bank.example/login](https://evil.example/phish?x=1&y=2) and [docs](${long})`);
+    await lp.press('#input', 'Control+n');
+    await ask(lp, 'links please');
+    await waitIdle(lp);
+    await lp.locator('.msg.assistant a', { hasText: 'https://bank.example/login' }).click();
+    assert.equal(await lp.innerText('#link-confirm-url'), 'https://evil.example/phish?x=1&y=2', 'the address, not the label');
+    await lp.click('#link-cancel');
+    await lp.locator('.msg.assistant a', { hasText: 'docs' }).click();
+    assert.equal(await lp.evaluate(() => document.getElementById('link-confirm-url').textContent), long, 'in full, not cut');
+    assert.equal(await lp.isVisible('#link-open'), true, 'the buttons stay on screen');
+    await lp.keyboard.press('Escape');
+    await lp.context().close();
+  });
+
+  await step('a link that is not http or https never reaches the bar, and image syntax is a link, not a picture', async () => {
+    const lp = await open(browser);
+    await lp.evaluate((r) => { window.__nextReply = r; }, '<a href="javascript:window.__pwned=1">raw</a> [js](javascript:window.__pwned=1) ![pic](https://example.com/i.png)');
+    await lp.press('#input', 'Control+n');
+    await ask(lp, 'odd links');
+    await waitIdle(lp);
+    assert.equal(await lp.locator('.msg.assistant a').count(), 1, 'only the image-as-link is a link');
+    assert.equal(await lp.locator('.msg.assistant img').count(), 0);
+    await lp.locator('.msg.assistant a').click();
+    assert.equal(await lp.innerText('#link-confirm-url'), 'https://example.com/i.png');
+    await lp.keyboard.press('Escape');
+    // Even a link made after the fact, with a scheme the renderer would never write, is refused before the bar.
+    await lp.evaluate(() => {
+      const a = document.createElement('a');
+      a.setAttribute('href', 'javascript:window.__pwned=1');
+      a.textContent = 'planted';
+      document.querySelector('.msg.assistant .body').appendChild(a);
+    });
+    await lp.locator('.msg.assistant a', { hasText: 'planted' }).click();
+    assert.equal(await lp.isHidden('#link-confirm'), true);
+    assert.equal(await lp.evaluate(() => window.__pwned), undefined);
+    await lp.context().close();
   });
 
   // ----------------------------------------------------------- history
@@ -945,6 +1005,7 @@ async function waitIdle(page) {
     assert.equal(await p.innerText('#privacy-days'), 'Audit records are kept for 30 days.');
     await p.context().close();
   });
+
 
   await browser.close();
   console.log(failures ? `\n${failures} step(s) failed` : '\nall UI steps passed');

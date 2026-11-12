@@ -45,6 +45,10 @@
     privacyText: $('privacy-text'),
     privacyDays: $('privacy-days'),
     privacyOk: $('privacy-ok'),
+    linkConfirm: $('link-confirm'),
+    linkUrl: $('link-confirm-url'),
+    linkOpen: $('link-open'),
+    linkCancel: $('link-cancel'),
   };
 
   const state = {
@@ -212,6 +216,39 @@
     el.pair.hidden = false;
     layout();
     el.pairInput.focus();
+  }
+
+  // A link in a reply opens only after its whole address has been shown (ADR 0044, D18), and only if it is http or https. The
+  // label a reply puts on a link says nothing about where it goes. `open_url` checks the scheme again in the backend.
+  let pendingLink = null;
+
+  function openableUrl(u) {
+    return typeof u === 'string' && u.length <= 2048 && /^https?:\/\/[^\s\u0000-\u001f\u007f]+$/.test(u);
+  }
+
+  function askToOpen(url) {
+    if (!openableUrl(url)) return;
+    pendingLink = url;
+    el.linkUrl.textContent = url;
+    el.linkConfirm.hidden = false;
+    layout();
+    el.linkCancel.focus();
+  }
+
+  function closeLinkConfirm() {
+    if (!pendingLink) return false;
+    pendingLink = null;
+    el.linkConfirm.hidden = true;
+    el.linkUrl.textContent = '';
+    layout();
+    el.input.focus();
+    return true;
+  }
+
+  function openPendingLink() {
+    const url = pendingLink;
+    closeLinkConfirm();
+    if (url) invoke('open_url', { url }).catch(() => {});
   }
 
   function closePairing() {
@@ -832,7 +869,7 @@
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       e.preventDefault();
-      if (closePairing() || closeShare()) return;
+      if (closeLinkConfirm() || closePairing() || closeShare()) return;
       if (state.streaming) cancel(); else invoke('hide_window');
       return;
     }
@@ -874,9 +911,12 @@
     const link = t.closest('a[href]');
     if (link) {
       e.preventDefault();
-      invoke('open_url', { url: link.getAttribute('href') }).catch(() => {});
+      askToOpen(link.getAttribute('href'));
     }
   });
+
+  el.linkOpen.addEventListener('click', openPendingLink);
+  el.linkCancel.addEventListener('click', closeLinkConfirm);
 
   el.histList.addEventListener('click', (e) => {
     const t = e.target;

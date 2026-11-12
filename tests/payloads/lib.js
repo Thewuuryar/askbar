@@ -24,14 +24,14 @@ function cases() {
 // What renderMarkdown may produce, and nothing else (see the comment at the top of ui/markdown.js).
 const TAGS = new Set('p br strong em del code pre h1 h2 h3 h4 h5 h6 ul ol li blockquote hr a table thead tbody tr th td div span button'.split(' '));
 const unescape = (v) => v.replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
-// For each tag, each attribute it may have, and what its value must be.
+// For each tag, each attribute it may have, and a pattern its value must match (as a string, so a browser test can use it too).
 const ATTRS = {
-  a: { href: (v) => /^https?:\/\/[^\s\u0000-\u001f\u007f]+$/.test(unescape(v)) },
-  th: { style: (v) => /^text-align:(left|right|center)$/.test(v) },
-  td: { style: (v) => /^text-align:(left|right|center)$/.test(v) },
-  div: { class: (v) => ['code', 'code-head', 'table-wrap'].includes(v) },
-  span: { class: (v) => v === 'code-lang' },
-  button: { class: (v) => v === 'copy-code', type: (v) => v === 'button' },
+  a: { href: '^https?://[^\\s\\u0000-\\u001f\\u007f]+$' },
+  th: { style: '^text-align:(left|right|center)$' },
+  td: { style: '^text-align:(left|right|center)$' },
+  div: { class: '^(code|code-head|table-wrap)$' },
+  span: { class: '^code-lang$' },
+  button: { class: '^copy-code$', type: '^button$' },
 };
 
 /**
@@ -49,9 +49,9 @@ function problems(html) {
     const re = /\s+([a-z-]+)="([^"]*)"/g;
     let a;
     while ((a = re.exec(attrs))) {
-      const check = (ATTRS[name] || {})[a[1]];
-      if (!check) out.push(`<${name}> may not have ${a[1]}`);
-      else if (!check(a[2])) out.push(`<${name} ${a[1]}="${a[2].slice(0, 60)}"> is not a value the renderer makes`);
+      const pattern = (ATTRS[name] || {})[a[1]];
+      if (!pattern) out.push(`<${name}> may not have ${a[1]}`);
+      else if (!new RegExp(pattern).test(a[1] === 'href' ? unescape(a[2]) : a[2])) out.push(`<${name} ${a[1]}="${a[2].slice(0, 60)}"> is not a value the renderer makes`);
     }
   }
   const text = html.replace(tag, '');
