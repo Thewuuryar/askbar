@@ -877,20 +877,24 @@ assert s == 200, (s, body)
 pairing = json.loads(body)['pairing']
 b = pairing.split(':', 1)[1]
 code = json.loads(base64.urlsafe_b64decode(b + '=' * (-len(b) % 4)))['code']
+# A backup needs a backup key (ADR 0013); make one if the install has none (a 409 means it has).
+call('PUT', '/api/admin/v1/setup/backup-key', {'passphrase': 'isolation backup passphrase, long enough', 'confirm': 'isolation backup passphrase, long enough'})
 c.request('GET', '/api/admin/v1/backup', headers={'x-askbar-admin': '1', 'cookie': cookie})
 r = c.getresponse(); raw = r.read()
-assert r.status == 200, r.status
-names = sorted(m.name for m in tarfile.open(fileobj=io.BytesIO(raw)).getmembers())
-blob = b''.join(tarfile.open(fileobj=io.BytesIO(raw)).extractfile(n).read() for n in names)
+assert r.status == 200, (r.status, raw[:200])
+names = [m.name for m in tarfile.open(fileobj=io.BytesIO(raw)).getmembers()]
 print('names', ','.join(names))
-for label, needle in (('provider key', '$MARK'), ('pair code', code), ('password hash', '\$argon2')):
-    print(label, 'FOUND' if needle.encode() in blob else 'absent')
+# The whole bundle is ciphertext: no database header, no provider key, no pair code, no password hash, no private key.
+for label, needle in (('plaintext database', 'SQLite format 3'), ('provider key', '$MARK'), ('pair code', code), ('password hash', '\$argon2'), ('private key', 'AGE-SECRET-KEY')):
+    print(label, 'FOUND' if needle.encode() in raw else 'absent')
 call('DELETE', '/api/admin/v1/providers/' + provider_id)" 2>&1)
-printf '%s\n' "$out" | grep -q '^names admin.db,server/control.db,server/spaces/[0-9A-Z]\{26\}\.db' && pass "the backup holds admin.db, the server's control.db and its space files" || fail "backup contents: $out"
+printf '%s\n' "$out" | grep -q '^names manifest.json,backup-key.age,admin.age,server.age$' && pass "the backup is a bundle of a manifest, the protected key and the admin's and the server's encrypted exports" || fail "backup contents: $out"
 check "the server keeps control.db and a file per space under /data" docker exec "$SERVER" sh -c 'test -f /data/control.db && ls /data/spaces/*.db'
 refused "the server makes no askbar.db (the layout before spaces)" docker exec "$SERVER" test -e /data/askbar.db
-for what in "provider key" "pair code" "password hash"; do
-  printf '%s\n' "$out" | grep -q "^$what absent" && pass "the backup holds no $what" || fail "the backup holds the $what ($out)"
+# The contract changed (plan step 6.2): the backup used to be a plain tar with the secrets taken out; it is now encrypted and
+# holds them, so the check is that nothing is readable, not that nothing secret is there.
+for what in "plaintext database" "provider key" "pair code" "password hash" "private key"; do
+  printf '%s\n' "$out" | grep -q "^$what absent" && pass "the backup holds no $what in the clear" || fail "the backup holds the $what in the clear ($out)"
 done
 
 echo "== 6. HTTPS before a host name is set"
