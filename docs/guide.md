@@ -363,6 +363,85 @@ The admin site's **Services** page shows whether the server, `model-gateway`, th
 
 **Server environment** (already set in `compose.yaml`; useful without Docker): `ASKBAR_CLIENT_API_ADDR`, `ASKBAR_SERVER_API_ADDR` (`ip:port`, or `host:port` resolved once at start-up to exactly one address; never `0.0.0.0`), `ASKBAR_SERVER_TOKEN_HASH_FILE`, `ASKBAR_DATA_DIR`, `ASKBAR_SERVER_TOKEN_DIR` (its tokens for the gateway and the auditor), `ASKBAR_GATEWAY_URL` and `ASKBAR_AUDIT_API_URL`. **Model-gateway:** `ASKBAR_GATEWAY_SERVER_ADDR`, `ASKBAR_GATEWAY_ADMIN_ADDR`, `ASKBAR_GATEWAY_TOKEN_DIR`, `ASKBAR_AUDIT_API_URL`. **Admin:** `ASKBAR_ADMIN_SOCKET`, `ASKBAR_ADMIN_DATA_DIR`, `ASKBAR_ADMIN_SECRETS_DIR`, `ASKBAR_ADMIN_TOKEN_DIR`, `ASKBAR_SERVER_API_URL`, `ASKBAR_GATEWAY_URL`, `ASKBAR_AUDIT_API_URL`, `ASKBAR_CADDY_SOCKET`, `ASKBAR_CADDY_SECRETS_DIR`, `ASKBAR_PUBLIC_URL`. **Auditor:** `ASKBAR_AUDIT_API_ADDRS` (one `host:port` for each network, such as `auditor-admin-host:8083`), `ASKBAR_AUDIT_INGEST_ADDR` (`auditor-ingest-host:8086`, Caddy's access lines), `ASKBAR_AUDIT_DIR`, `ASKBAR_AUDITOR_TOKEN_DIR`.
 
+### Release channels
+
+Everything comes from one trunk, `main`. Pre-built images are published to the GitHub Container Registry as `ghcr.io/thewuuryar/askbar-<service>` for the eight built services (`bootstrap`, `server`, `admin`, `auditor`, `model-gateway`, `alerter`, `caddy`, `cpa`) by `.github/workflows/images.yml`.
+
+| Channel | Comes from | Image tags | GitHub environment |
+| --- | --- | --- | --- |
+| dev | feature and fix branches and their pull requests (CI only) | none | none |
+| edge | each push to `main` whose `ci` run passed | `:main`, `:sha-<7>` | none |
+| staging | a tag `vX.Y.Z-rc.N` | `:X.Y.Z-rc.N` | `staging` |
+| production | a tag `vX.Y.Z` | `:X.Y.Z`, `:X.Y`, `:X`, `:latest` | `production` (the owner approves) |
+
+Use a release for a server you rely on. Edge is `main` as it stands: it passed CI, but no person has tried it. Edge images pile up in the registry; the owner removes old ones by hand in the package's settings. Each release has a GitHub release (a draft until the owner publishes it) holding `compose.release.yaml`, an SBOM for each image and the desktop installers, each with a cosign signature (`<file>.sigstore.json`).
+
+### Using pre-built images
+
+Instead of building the images, pull them. Set the two variables in `.env` (see `.env.example`) and pull:
+
+```sh
+ASKBAR_IMAGE_REGISTRY=ghcr.io/thewuuryar/
+ASKBAR_IMAGE_TAG=1.0.0
+```
+
+```sh
+docker compose pull && docker compose up -d --no-build
+```
+
+The registry ends with a slash. The tag is `main` (edge), an exact release such as `1.0.0`, or `1.0` or `1` to follow a minor or major version. With both unset the images are built from the checkout and named `askbar-<service>:latest`, as before.
+
+For a release, the exact way is a checkout of its tag with `compose.release.yaml` from its GitHub release in place of `compose.yaml`. That file names every image by digest, so it pulls exactly what was published and signed. It still uses files from the checkout (the data directory, `.env` and, in the `dev` profile, the mock model), so do not deploy it from a bare download:
+
+```sh
+git clone --branch v1.0.0 https://github.com/Thewuuryar/askbar && cd askbar
+cp .env.example .env && mkdir -p data && sudo chown 10002:10002 data
+docker compose -f compose.release.yaml pull && docker compose -f compose.release.yaml up -d
+```
+
+### Verifying images and files
+
+Every image is signed by digest with keyless [cosign](https://docs.sigstore.dev/): there is no key to steal, only the identity of the workflow run that signed it. Check that an image was signed by this repository's `images.yml`, from `main` or a release tag (use the digest from `docker compose -f compose.release.yaml config`, or `docker buildx imagetools inspect`):
+
+```sh
+cosign verify ghcr.io/thewuuryar/askbar-server@sha256:<digest> \
+  --certificate-identity-regexp '^https://github.com/Thewuuryar/askbar/\.github/workflows/images\.yml@refs/(heads/main|tags/v.*)$' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+cosign verify-blob --bundle compose.release.yaml.sigstore.json \
+  --certificate-identity-regexp '^https://github.com/Thewuuryar/askbar/\.github/workflows/images\.yml@refs/tags/v.*$' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com compose.release.yaml
+```
+
+The second command works the same for each SBOM and each installer: change the bundle and file names. An edge image is signed by a run that `ci` started, so its identity names `refs/heads/main`; a release is signed from its tag. (This identity was worked out from the workflow, not yet from a real run: the owner checks what cosign records on the first edge run and corrects the expression if it differs.)
+
+The desktop installers are **not signed by Apple or Microsoft**, which needs a developer ID and a certificate that v1 does not have. The cosign bundle proves where an installer came from; it does not stop the operating system's first-open warning. On macOS, open it with a right click and **Open**, or allow it in System Settings > Privacy & Security. On Windows, SmartScreen says "Windows protected your PC": choose **More info** and **Run anyway**.
+
+### Staging a release
+
+Before a release candidate goes further, run it next to the real stack on the same host, from a checkout of its tag, with `compose.staging.yaml`. The override changes only what would collide: container names (`askbar-staging-<service>`), Caddy's ports (**8443** and **8080**, so the real stack keeps 443 and 80), and the server's data directory (`./data-staging`, never `./data`). Networks and volumes are kept apart by the project name. It needs Docker Compose 2.24 or later (`docker compose version`), for the `!override` tag.
+
+1. Check out the candidate's tag and take its `compose.release.yaml` from the draft prerelease ([verify it first](#verifying-images-and-files)):
+
+   ```sh
+   git clone --branch v1.0.0-rc.1 https://github.com/Thewuuryar/askbar askbar-staging
+   cd askbar-staging
+   cp .env.example .env
+   mkdir -p data-staging && sudo chown 10002:10002 data-staging
+   ```
+
+2. Start it. `ASKBAR_PUBLIC_URL` makes the pairing keys name the staging port:
+
+   ```sh
+   ASKBAR_PUBLIC_URL=https://<host>:8443 docker compose -p askbar-staging -f compose.release.yaml -f compose.staging.yaml --profile dev up -d
+   ```
+
+3. Open `https://<host>:8443/admin` and set it up as in [First run](#first-run). With the `dev` profile the mock model runs too: on **Providers** add an OpenAI-compatible provider with the address `http://mock-llm:8765/v1`, the model `m` and any key; then approve `m` under **Approved models** and make it the default. That is how the dev stack does it, and the failure drills in `scripts/check-isolation.sh` do the same.
+4. **Clients** > add a user, make a pairing key, and pair a client against `https://<host>:8443` (the key carries the address).
+5. Test what the [release checklist](adr/0002-v1-scope-limits-and-ship-criteria.md) asks for that a staged stack can show: a fresh deployment and a paired client working end to end, the backup and the restore drill (under 30 minutes), and the client on each platform. A real certificate by the HTTP-01 proof needs port 80, which staging does not publish (it is 8080), so test that with the Cloudflare proof or on the real host.
+6. Remove it: `docker compose -p askbar-staging -f compose.release.yaml -f compose.staging.yaml --profile dev down -v`, then `rm -rf data-staging`.
+
+`scripts/check-isolation.sh` is for the development stack only. It takes `COMPOSE_PROJECT_NAME` for networks and volumes, but names containers directly (`askbar-server`, `askbar-caddy` and the rest), so it cannot run against a staging project and is not meant to.
+
 ### Backup and recovery
 
 Four things to back up, **separately**:

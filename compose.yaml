@@ -27,6 +27,10 @@
 # for /admin. One host serves the admin (/admin), the client API (/api/client) and a 404 for the rest: over HTTPS
 # from the first start, with the install's own certificate until a host name with a real one is set.
 
+# Image names. With ASKBAR_IMAGE_REGISTRY and ASKBAR_IMAGE_TAG unset they are exactly `askbar-<service>:latest`, built here.
+# Set them in .env to pull pre-built images instead (`docker compose pull && docker compose up -d --no-build`): the
+# registry with its trailing slash, for example `ghcr.io/thewuuryar/`, and a tag from the guide's "Release channels".
+
 # Every service starts from these settings (ADR 0032): a read-only root, no capabilities, no privilege gain,
 # caps on processes and memory, and a private /tmp. A service writes only to its own volumes. Exceptions are
 # listed on the service that needs them.
@@ -48,7 +52,7 @@ services:
     build:
       context: .
       target: bootstrap
-    image: askbar-bootstrap:latest
+    image: ${ASKBAR_IMAGE_REGISTRY:-}askbar-bootstrap:${ASKBAR_IMAGE_TAG:-latest}
     container_name: askbar-bootstrap
     restart: "no"
     <<: *hardening
@@ -67,7 +71,7 @@ services:
     build:
       context: .
       target: server
-    image: askbar-server:latest
+    image: ${ASKBAR_IMAGE_REGISTRY:-}askbar-server:${ASKBAR_IMAGE_TAG:-latest}
     container_name: askbar-server
     restart: unless-stopped
     <<: *hardening
@@ -101,7 +105,7 @@ services:
     build:
       context: .
       target: admin
-    image: askbar-admin:latest
+    image: ${ASKBAR_IMAGE_REGISTRY:-}askbar-admin:${ASKBAR_IMAGE_TAG:-latest}
     container_name: askbar-admin
     restart: unless-stopped
     <<: *hardening
@@ -151,7 +155,7 @@ services:
     build:
       context: .
       target: auditor
-    image: askbar-auditor:latest
+    image: ${ASKBAR_IMAGE_REGISTRY:-}askbar-auditor:${ASKBAR_IMAGE_TAG:-latest}
     container_name: askbar-auditor
     restart: unless-stopped
     <<: *hardening
@@ -193,7 +197,7 @@ services:
     build:
       context: .
       target: model-gateway
-    image: askbar-model-gateway:latest
+    image: ${ASKBAR_IMAGE_REGISTRY:-}askbar-model-gateway:${ASKBAR_IMAGE_TAG:-latest}
     container_name: askbar-model-gateway
     restart: unless-stopped
     <<: *hardening
@@ -228,7 +232,7 @@ services:
     build:
       context: .
       target: alerter
-    image: askbar-alerter:latest
+    image: ${ASKBAR_IMAGE_REGISTRY:-}askbar-alerter:${ASKBAR_IMAGE_TAG:-latest}
     container_name: askbar-alerter
     restart: unless-stopped
     <<: *hardening
@@ -272,7 +276,7 @@ services:
     build:
       context: .
       target: caddy
-    image: askbar-caddy:latest
+    image: ${ASKBAR_IMAGE_REGISTRY:-}askbar-caddy:${ASKBAR_IMAGE_TAG:-latest}
     container_name: askbar-caddy
     restart: unless-stopped
     <<: *hardening
@@ -319,7 +323,7 @@ services:
     build:
       context: .
       target: cpa
-    image: askbar-cpa:latest
+    image: ${ASKBAR_IMAGE_REGISTRY:-}askbar-cpa:${ASKBAR_IMAGE_TAG:-latest}
     container_name: askbar-cpa
     # Root, as CLIProxyAPI writes /root/.cli-proxy-api, in the admin's group (10001) like Caddy: with every
     # capability dropped, the supervisor writes the admin's restart-done (mode 0660) through the group bit.

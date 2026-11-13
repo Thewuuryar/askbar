@@ -1,0 +1,303 @@
+# Publishes the Askbar images to GHCR, signed, with an SBOM and provenance, and drafts a release from a tag (ADR 0018).
+# Release channels, all from one trunk (docs/guide.md, "Release channels"):
+#   edge        each push to `main` whose `ci` run passed       :main and :sha-<7>              no environment
+#   staging     a tag vX.Y.Z-rc.N                               :X.Y.Z-rc.N                     `staging`
+#   production  a tag vX.Y.Z                                    :X.Y.Z, :X.Y, :X and :latest    `production` (the owner approves)
+# A feature or fix branch only runs ci.yml and publishes nothing. `workflow_dispatch` is a dry run: it builds every image and
+# pushes, signs and releases nothing (it works only once this file is on `main`).
+#
+# What each run does, in order: build the eight images (docker/bake-action, ci.yml's pin) with SBOM and provenance attestations
+# and OCI labels, push them, scan every pushed digest with Trivy (ci.yml's flags and .trivyignore.yaml), then sign every digest with
+# keyless cosign (the run's OIDC identity; no key is stored). Only a tag goes on: scripts/release-compose.sh writes
+# compose.release.yaml, build.yml builds the installers, each file is signed with `cosign sign-blob`, and a DRAFT release holds them
+# all. Nothing here publishes a release: the owner does, after the checklist in docs/releases/.
+#
+# `askbar-cpa` contains CLIProxyAPI (MIT; its notice is in THIRD_PARTY_NOTICES.md); the other images hold Askbar's AGPL-3.0-or-later
+# code, so every image is labelled AGPL-3.0-or-later and says so there.
+#
+# Actions are pinned to commit hashes (ADR 0017). Nothing from an event is put into a script directly: it goes through `env`.
+name: images
+
+on:
+  # Edge: after the ci run of a push to main. The job checks out that run's commit, never the branch's tip.
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [main]
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+
+# Each job asks for what it needs.
+permissions: {}
+
+concurrency:
+  group: images-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io/thewuuryar/
+  SERVICES: bootstrap server admin auditor model-gateway alerter caddy cpa
+
+jobs:
+  # Decides the channel, the commit, the tags and the environment. No checkout and no token.
+  plan:
+    # An edge run only for a push to main whose ci run passed (not its weekly scheduled run, not a manual one).
+    if: github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    outputs:
+      channel: ${{ steps.plan.outputs.channel }}
+      environment: ${{ steps.plan.outputs.environment }}
+      version: ${{ steps.plan.outputs.version }}
+      ref: ${{ steps.plan.outputs.ref }}
+      tags: ${{ steps.plan.outputs.tags }}
+      publish: ${{ steps.plan.outputs.publish }}
+      tag_release: ${{ steps.plan.outputs.tag_release }}
+      prerelease: ${{ steps.plan.outputs.prerelease }}
+    steps:
+      - id: plan
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          REF_NAME: ${{ github.ref_name }}
+          GITHUB_SHA_VALUE: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          out() { printf '%s=%s\n' "$1" "$2" >> "$GITHUB_OUTPUT"; }
+          case "$EVENT_NAME" in
+            workflow_run)
+              [[ "$RUN_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "unexpected commit: $RUN_HEAD_SHA" >&2; exit 1; }
+              out channel edge; out environment ""; out version main; out ref "$RUN_HEAD_SHA"
+              out tags "main sha-${RUN_HEAD_SHA:0:7}"; out publish true; out tag_release false; out prerelease false
+              ;;
+            push)
+              [[ "$REF_NAME" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)(-rc\.[0-9]+)?$ ]] || { echo "not a release tag: $REF_NAME" >&2; exit 1; }
+              major=${BASH_REMATCH[1]}; minor=${BASH_REMATCH[2]}; patch=${BASH_REMATCH[3]}; rc=${BASH_REMATCH[4]}
+              version="$major.$minor.$patch$rc"
+              out version "$version"; out ref "$GITHUB_SHA_VALUE"; out publish true; out tag_release true
+              if [ -n "$rc" ]; then
+                out channel staging; out environment staging; out tags "$version"; out prerelease true
+              else
+                out channel production; out environment production; out prerelease false
+                out tags "$version $major.$minor $major latest"
+              fi
+              ;;
+            *)
+              out channel dry-run; out environment ""; out version dry-run; out ref "$GITHUB_SHA_VALUE"
+              out tags dry-run; out publish false; out tag_release false; out prerelease false
+              ;;
+          esac
+
+  publish:
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    # `production` waits for the owner's approval; `staging` and edge have none. An empty name means no environment.
+    environment: ${{ needs.plan.outputs.environment }}
+    permissions:
+      contents: read
+      packages: write  # push the images
+      id-token: write  # keyless cosign: the run's OIDC identity
+    env:
+      CHANNEL: ${{ needs.plan.outputs.channel }}
+      VERSION: ${{ needs.plan.outputs.version }}
+      TAGS: ${{ needs.plan.outputs.tags }}
+      PUBLISH: ${{ needs.plan.outputs.publish }}
+      TAG_RELEASE: ${{ needs.plan.outputs.tag_release }}
+      COMMIT: ${{ needs.plan.outputs.ref }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.plan.outputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      # A release tag must be on main (a commit that passed ci), whoever pushed it.
+      - name: A tag is on main
+        if: env.TAG_RELEASE == 'true'
+        run: |
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$COMMIT" FETCH_HEAD || { echo "the tag's commit is not on main" >&2; exit 1; }
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Log in to GHCR
+        if: env.PUBLISH == 'true'
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # One name for each tag of each image, in a file bake reads after compose.yaml (a bake override of `tags`).
+      - name: Image names
+        run: |
+          python3 - <<'PY' > "$RUNNER_TEMP/tags.json"
+          import json, os
+          tags = os.environ["TAGS"].split()
+          reg = os.environ["REGISTRY"]
+          print(json.dumps({"target": {s: {"tags": [f"{reg}askbar-{s}:{t}" for t in tags]} for s in os.environ["SERVICES"].split()}}))
+          PY
+          echo "ASKBAR_FIRST_TAG=${TAGS%% *}" >> "$GITHUB_ENV"
+      - name: Build, and push with SBOM and provenance
+        id: bake
+        if: env.PUBLISH == 'true'
+        uses: docker/bake-action@59cb1203cd42bcefd40a1b6d73b589e48c86040e # v7.5.0
+        env:
+          ASKBAR_IMAGE_REGISTRY: ${{ env.REGISTRY }}
+          ASKBAR_IMAGE_TAG: ${{ env.ASKBAR_FIRST_TAG }}
+        with:
+          source: .
+          files: |
+            compose.yaml
+            ${{ runner.temp }}/tags.json
+          targets: ${{ env.SERVICES }}
+          push: true
+          set: |
+            *.cache-from=type=gha,scope=askbar-build
+            caddy.cache-from=type=gha,scope=askbar-caddy
+            *.attest=type=sbom
+            *.attest=type=provenance,mode=max
+            *.labels.org.opencontainers.image.source=https://github.com/Thewuuryar/askbar
+            *.labels.org.opencontainers.image.version=${{ env.VERSION }}
+            *.labels.org.opencontainers.image.revision=${{ env.COMMIT }}
+            *.labels.org.opencontainers.image.licenses=AGPL-3.0-or-later
+      # The dry run builds the same images and keeps them nowhere (attestations need a push).
+      - name: Build only (dry run)
+        if: env.PUBLISH != 'true'
+        uses: docker/bake-action@59cb1203cd42bcefd40a1b6d73b589e48c86040e # v7.5.0
+        env:
+          ASKBAR_IMAGE_REGISTRY: ${{ env.REGISTRY }}
+          ASKBAR_IMAGE_TAG: ${{ env.ASKBAR_FIRST_TAG }}
+        with:
+          source: .
+          files: |
+            compose.yaml
+            ${{ runner.temp }}/tags.json
+          targets: ${{ env.SERVICES }}
+          set: |
+            *.cache-from=type=gha,scope=askbar-build
+            caddy.cache-from=type=gha,scope=askbar-caddy
+      # The digest of each pushed image, from bake's metadata. A missing or malformed one stops the run.
+      - name: Digests
+        if: env.PUBLISH == 'true'
+        env:
+          METADATA: ${{ steps.bake.outputs.metadata }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$METADATA" > "$RUNNER_TEMP/metadata.json"
+          python3 - "$RUNNER_TEMP/metadata.json" > "$RUNNER_TEMP/digests.txt" <<'PY'
+          import json, os, re, sys
+          meta = json.load(open(sys.argv[1]))
+          for s in os.environ["SERVICES"].split():
+              d = (meta.get(s) or {}).get("containerimage.digest", "")
+              if not re.fullmatch(r"sha256:[0-9a-f]{64}", d):
+                  sys.exit(f"no digest for {s}")
+              print(s, d)
+          PY
+          cat "$RUNNER_TEMP/digests.txt"
+      # Before signing, so nothing with a known fix outstanding is signed: ci.yml's flags and ignore file.
+      - uses: aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514 # v0.2.6
+        if: env.PUBLISH == 'true'
+        with:
+          version: v0.70.0
+          cache: true
+      - name: Scan the pushed digests
+        if: env.PUBLISH == 'true'
+        env:
+          TRIVY_USERNAME: ${{ github.actor }}
+          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          failed=0
+          while read -r service digest; do
+            echo "== askbar-$service@$digest"
+            trivy image --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --ignorefile .trivyignore.yaml \
+              --exit-code 1 --no-progress "${REGISTRY}askbar-$service@$digest" || failed=1
+          done < "$RUNNER_TEMP/digests.txt"
+          exit $failed
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        if: env.PUBLISH == 'true'
+      # Only a digest is signed, never a tag name (a tag can move).
+      - name: Sign every pushed digest
+        if: env.PUBLISH == 'true'
+        run: |
+          while read -r service digest; do
+            cosign sign --yes "${REGISTRY}askbar-$service@$digest"
+          done < "$RUNNER_TEMP/digests.txt"
+      # For a tag: what the release draft needs, from the pushed images (the SBOM of each is read back from the registry).
+      - name: Release inputs
+        if: env.TAG_RELEASE == 'true'
+        run: |
+          set -euo pipefail
+          mkdir release-inputs
+          cp "$RUNNER_TEMP/metadata.json" release-inputs/bake-metadata.json
+          cp "$RUNNER_TEMP/digests.txt" release-inputs/digests.txt
+          while read -r service digest; do
+            docker buildx imagetools inspect "${REGISTRY}askbar-$service@$digest" --format '{{ json .SBOM.SPDX }}' \
+              > "release-inputs/askbar-$service.sbom.spdx.json"
+            [ "$(jq -r type "release-inputs/askbar-$service.sbom.spdx.json")" = object ] || { echo "no SBOM for $service" >&2; exit 1; }
+          done < "$RUNNER_TEMP/digests.txt"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: env.TAG_RELEASE == 'true'
+        with:
+          name: release-inputs
+          path: release-inputs/
+          if-no-files-found: error
+
+  # The desktop installers (build.yml, Linux, Windows and macOS), after the images passed. Not signed by Apple or Microsoft.
+  installers:
+    needs: [plan, publish]
+    if: needs.plan.outputs.tag_release == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/build.yml
+
+  release:
+    needs: [plan, publish, installers]
+    if: needs.plan.outputs.tag_release == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write  # the draft release
+      id-token: write  # keyless cosign for the files
+    env:
+      TAG: ${{ github.ref_name }}
+      VERSION: ${{ needs.plan.outputs.version }}
+      PRERELEASE: ${{ needs.plan.outputs.prerelease }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-inputs
+          path: release-inputs
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: askbar-*
+          path: installer-artifacts
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: Collect the files
+        run: |
+          set -euo pipefail
+          mkdir assets
+          scripts/release-compose.sh release-inputs/bake-metadata.json assets/compose.release.yaml
+          cp release-inputs/askbar-*.sbom.spdx.json assets/
+          # Installers only: not the unpacked app folders next to them.
+          find installer-artifacts -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' -o -name '*.dmg' -o -name '*.msi' -o -name '*.exe' \) \
+            -exec cp {} assets/ \;
+          ls -l assets
+      - name: Sign each file
+        run: |
+          set -euo pipefail
+          cd assets
+          for f in *; do
+            cosign sign-blob --yes --bundle "$f.sigstore.json" "$f"
+          done
+      - name: Draft the release (it is never published here)
+        run: |
+          set -euo pipefail
+          notes="docs/releases/${VERSION%%-*}.md"
+          args=(--draft --verify-tag --title "Askbar $VERSION")
+          [ "$PRERELEASE" = true ] && args+=(--prerelease)
+          if [ -f "$notes" ]; then args+=(--notes-file "$notes"); else args+=(--generate-notes); fi
+          gh release create "$TAG" "${args[@]}" assets/*

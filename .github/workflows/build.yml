@@ -1,10 +1,15 @@
-# Builds and tests the desktop client on all three desktop platforms. Run by hand (workflow_dispatch): ci.yml
+# Builds and tests the desktop client on all three desktop platforms. Run by hand (workflow_dispatch) or by images.yml on a
+# release tag (workflow_call): ci.yml
 # runs the Linux checks on every pull request, and it alone tests, builds and scans the services (they run
 # in Docker, on Linux only). Actions are pinned to commit hashes (ADR 0017).
 name: build
 
 on:
   workflow_dispatch:
+  # Called by images.yml on a release tag. The installers are the `askbar-<os>` artifacts uploaded at the end, which the
+  # calling workflow downloads in the same run. They are not signed by Apple or Microsoft (that needs a developer ID and a
+  # certificate, not in v1); images.yml signs each with cosign instead.
+  workflow_call:
 
 # The job only checks out code, builds, tests and uploads build output: read access is enough.
 permissions:
