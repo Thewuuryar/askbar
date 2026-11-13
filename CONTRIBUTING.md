@@ -251,7 +251,7 @@ After `.github/workflows/codeql.yml` is on `main`. It replaces GitHub's *default
 1. **Settings → Security → Code security** (or *Advanced Security*) → **CodeQL analysis** → the **⋯** menu → **Switch to advanced**. Confirm.
 2. Check that the next pull request shows `Analyze (javascript-typescript)`, `(python)` and `(actions)` from the `codeql` workflow, and that the next push to `main` also shows `Analyze (rust)`.
 
-Alerts that are open stay open: both setups use the same result category for each language (`/language:<language>`). A pull request no longer shows new Rust alerts before merge; they appear on `main` after it.
+Alerts that are open stay open: both setups use the same result category for each language (`/language:<language>`). They are listed under the repository's Security tab, Code scanning. A pull request no longer shows new Rust alerts before merge; they appear on `main` after it.
 
 **The Renovate app** on the repository (`renovate.json`) proposes the version updates and keeps Actions and images pinned.
 
