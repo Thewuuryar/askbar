@@ -126,12 +126,13 @@ The whole API is [docs/openapi/admin.v1.yaml](docs/openapi/admin.v1.yaml).
   ADR or amend one in place, with a line in its Amendments, in [docs/adr/](docs/adr/) in the same PR. Only the owner
   accepts an ADR or approves a change to a decision. A change to a security rule
   includes its docs and isolation tests in the same PR ([ADR 0001](docs/adr/0001-decision-records-and-change-rules.md)).
-- **What CI runs for a pull request.** `ci.yml` always runs `lint`, `test-services`, `dependencies` and `secrets`. A pull request that
-  changes only documentation (`docs/`, a `*.md` file at the top, `LICENSE`) skips `isolation`, `images`, `cpa-image` and `test-desktop`;
-  one that changes only `clients/desktop/` skips `isolation`, `images` and `cpa-image`, because no image contains the client. A skipped job
-  counts as passing for the required checks. A push to `main`, a manual run and the weekly run run everything, including the
-  five-minute alert check in `scripts/check-isolation.sh` (`ASKBAR_SLOW_CHECKS=1`). If you are unsure, change the path lists in the `changes`
-  job of `ci.yml`, never the required checks.
+- **What CI runs for a pull request.** `ci.yml` always runs `lint` (which includes `scripts/check-docs.sh` and `scripts/check-ui-tokens.sh`),
+  `dependencies` and `secrets`. A pull request that changes only documentation (`docs/`, a `*.md` file at the top, `LICENSE`) skips
+  `isolation`, `images`, `cpa-image` and `test-desktop`, and also `test-services` unless it touches a file the service tests read
+  (`docs/openapi/`, `docs/wire-contract.md`) or any file that is not Markdown. One that changes only `clients/desktop/` skips `isolation`,
+  `images` and `cpa-image`, because no image contains the client. A skipped job counts as passing for the required checks. A push to `main`,
+  a manual run and the weekly run run everything, including the five-minute alert check in `scripts/check-isolation.sh`
+  (`ASKBAR_SLOW_CHECKS=1`). If you are unsure, change the path lists in the `changes` job of `ci.yml`, never the required checks.
 - **Review.** The owner reviews every pull request. Changes to the paths that decide who can reach what get extra care.
 
 ## Repository settings the owner turns on
