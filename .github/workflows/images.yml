@@ -255,11 +255,21 @@ jobs:
             python3 - "$RUNNER_TEMP/sbom-raw.json" "release-inputs/askbar-$service.sbom.spdx.json" "$service" <<'PY'
           import json, sys
           raw, out, service = sys.argv[1:4]
-          by_platform = json.load(open(raw))
-          entry = by_platform.get("linux/amd64") if isinstance(by_platform, dict) else None
-          spdx = entry.get("SPDX") if isinstance(entry, dict) else None
-          if not isinstance(spdx, dict):
-              sys.exit(f"no SPDX SBOM for {service}")
+          data = json.load(open(raw))
+          # Keyed by platform for a multi-platform image; one {"SPDX": ...} document for a single-platform one.
+          spdx = None
+          if isinstance(data, dict):
+              if isinstance(data.get("SPDX"), dict):
+                  spdx = data["SPDX"]
+              else:
+                  for key in sorted(data, key=lambda k: k != "linux/amd64"):
+                      entry = data[key]
+                      if isinstance(entry, dict) and isinstance(entry.get("SPDX"), dict):
+                          spdx = entry["SPDX"]
+                          break
+          if spdx is None:
+              shape = sorted(data) if isinstance(data, dict) else type(data).__name__
+              sys.exit(f"no SPDX SBOM for {service} (top-level: {shape})")
           json.dump(spdx, open(out, "w"))
           PY
           done < "$RUNNER_TEMP/digests.txt"
