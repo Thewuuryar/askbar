@@ -567,7 +567,8 @@ mod tests {
     /// worker. A test can't build an `AppHandle`, so this reads the source.
     #[test]
     fn async_commands_never_block_on_the_runtime() {
-        let src = include_str!("main.rs");
+        // Windows checks files out with CRLF line endings; the searches below look for "\n".
+        let src = include_str!("main.rs").replace("\r\n", "\n");
         // Everything before the test module, so this test's own strings are not scanned.
         let src = &src[..src.find("#[cfg(test)]\nmod tests").expect("the test module")];
         let mut checked = 0;
