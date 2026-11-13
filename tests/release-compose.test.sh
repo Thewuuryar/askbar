@@ -28,6 +28,8 @@ for s in "${SERVICES[@]}"; do
   expect "$s is set to an image by digest" grep -Eq "^    image: ghcr\.io/thewuuryar/askbar-$s@sha256:[0-9a-f]{64}$" "$T/out.yaml"
 done
 expect "exactly eight Askbar images are set by digest" count_is 8 '^    image: ghcr.io/thewuuryar/askbar-.*@sha256:' "$T/out.yaml"
+refuse "the file has no comment lines" grep -Eq '^[[:space:]]*#' "$T/out.yaml"
+refuse "and no two blank lines in a row" awk 'BEGIN{b=0} /^[ ]*$/{if(b)f=1;b=1;next}{b=0} END{exit !f}' "$T/out.yaml"
 refuse "no image line has a variable left" grep -q '^    image: .*ASKBAR_IMAGE_' "$T/out.yaml"
 expect "every container_name is kept" count_is "$(grep -c '^    container_name:' compose.yaml)" '^    container_name:' "$T/out.yaml"
 expect "the dev profile's mock model image is untouched" grep -q 'image: python:3.12-slim@sha256:' "$T/out.yaml"
