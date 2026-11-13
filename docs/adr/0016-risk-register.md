@@ -66,7 +66,7 @@ The owner accepted the third list on November 4, 2026, and amended it on Novembe
 | Provider, DNS, or home internet outage | No uptime promise | Provider list; manual recovery |
 | `cpa` account or terms change | Third-party dependency | Keep `cpa` optional and keep direct providers working |
 
-**Where each Defend row is tested.** `scripts/check-docs.sh` checks that every test named here exists (`git grep` for its name). `pending, PR <letter>` is allowed until the 1.0 release PR (PR AW); the letters are the PRs of the plan in [plan-v1.md](../plan-v1.md).
+**Where each Defend row is tested.** `scripts/check-docs.sh` checks that every test named here exists (`git grep` for its name) and that every Defend row names at least one. Nothing is `pending`.
 
 | Defend row | Tests |
 | --- | --- |
