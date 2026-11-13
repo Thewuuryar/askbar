@@ -43,12 +43,66 @@ env:
   APT_OPTS: -o Acquire::http::Timeout=10 -o Acquire::Retries=3
 
 jobs:
+  # Which heavy jobs a pull request needs, from the files it changes. A job skipped by `if` counts as passing for the `main`
+  # ruleset's required checks, so this fails open: if it cannot tell, or itself fails, every job runs.
+  #   stack    the images and the isolation check: anything but documentation and the desktop client (which no image contains);
+  #   desktop  the desktop client's tests: anything but documentation (it depends on crates/ and services/server);
+  #   services the cargo tests, the admin browser test and the smoke test: anything but Markdown outside docs/openapi/ and
+  #   docs/wire-contract.md (the OpenAPI tests read those).
+  # `lint` (which holds the docs and UI-token checks), `dependencies` and `secrets` always run. A push, a manual run and the weekly run run everything.
+  changes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      stack: ${{ steps.diff.outputs.stack }}
+      desktop: ${{ steps.diff.outputs.desktop }}
+      services: ${{ steps.diff.outputs.services }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - id: diff
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -uo pipefail
+          all() { printf '%s\n' stack=true desktop=true services=true >> "$GITHUB_OUTPUT"; echo "$1: everything runs"; exit 0; }
+          [ "$EVENT_NAME" = pull_request ] || all "not a pull request"
+          # The pull request's merge commit: its first parent is the base, so this is exactly what the pull request changes.
+          files=$(git diff --name-only HEAD^1 HEAD) || all "could not list the changed files"
+          [ -n "$files" ] || all "no changed files"
+          echo "$files"
+          docs='^(docs/|[^/]+\.md$|LICENSE$|\.github/pull_request_template\.md$)'
+          # Markdown that no test reads. The OpenAPI files and the wire contract are the contract the service tests check, so a change
+          # to them (or to any file that is not Markdown) runs test-services; the docs check itself runs in lint on every pull request.
+          prose='^(docs/[^ ]*\.md|[^/]+\.md|LICENSE|\.github/pull_request_template\.md)$'
+          contract='^docs/(openapi/|wire-contract\.md$)'
+          stack=false; desktop=false; services=false
+          while IFS= read -r f; do
+            if [[ "$f" =~ $docs ]]; then
+              # Documentation never needs the images or the desktop client; it needs the service tests only if they read it.
+              if [[ "$f" =~ $contract ]] || ! [[ "$f" =~ $prose ]]; then services=true; fi
+              continue
+            fi
+            services=true; desktop=true
+            [[ "$f" =~ ^clients/desktop/ ]] || stack=true
+          done <<< "$files"
+          printf '%s\n' "stack=$stack" "desktop=$desktop" "services=$services" >> "$GITHUB_OUTPUT"
+          echo "stack=$stack desktop=$desktop services=$services"
+
   lint:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Quick and needing nothing installed, so they come first and fail fast. They also run in `npm run test:services`, for people who run
+      # it by hand; test-services is skipped for a Markdown-only pull request, so this is where they run for every pull request.
+      - name: Docs and UI token checks
+        run: |
+          scripts/check-docs.sh
+          scripts/check-ui-tokens.sh
       # The downloaded packages, per runner image and version of this file; an older set is a fallback
       # (autoclean drops the packages it no longer needs).
       - name: Runner image
@@ -85,9 +139,11 @@ jobs:
           cargo clippy --workspace --all-targets --locked -- -D warnings
           (cd clients/desktop && cargo clippy --workspace --all-targets --locked -- -D warnings)
 
-  # The services, crates, docs checks, admin browser test, mock LLM and smoke test. No system libraries.
+  # The services, crates, admin browser test, mock LLM and smoke test (and the docs checks again, as part of `npm run test:services`).
+  # Skipped for a pull request that changes only Markdown outside the contract files. No system libraries.
   test-services:
-    if: github.event_name != 'schedule'
+    needs: changes
+    if: ${{ !cancelled() && github.event_name != 'schedule' && needs.changes.outputs.services != 'false' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -119,7 +175,8 @@ jobs:
 
   # The desktop client: its cargo tests, the Markdown renderer and the popup browser test.
   test-desktop:
-    if: github.event_name != 'schedule'
+    needs: changes
+    if: ${{ !cancelled() && github.event_name != 'schedule' && needs.changes.outputs.desktop != 'false' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -164,7 +221,8 @@ jobs:
         run: npm run test:desktop
 
   isolation:
-    if: github.event_name != 'schedule'
+    needs: changes
+    if: ${{ !cancelled() && github.event_name != 'schedule' && needs.changes.outputs.stack != 'false' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -191,7 +249,11 @@ jobs:
           mkdir -p data
           sudo chown 10002:10002 data
           docker compose up -d --no-build --wait --wait-timeout 300
+      # The check that waits five minutes for a stopped gateway to raise component_silent runs on a push to main and on a manual
+      # run, not on a pull request (it is about half of this job; its header says why that is safe).
       - name: Isolation checks
+        env:
+          ASKBAR_SLOW_CHECKS: ${{ github.event_name == 'pull_request' && '0' || '1' }}
         run: scripts/check-isolation.sh
       - name: Container logs
         if: failure()
@@ -247,6 +309,8 @@ jobs:
   # GitHub's email for a failed scheduled run is the CVE alert (turn the notification on, see CONTRIBUTING.md). Trivy is installed by a
   # pinned action at a pinned version; the mock LLM of the dev profile is not scanned (it is an image of Python's, for tests only).
   images:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.stack != 'false' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -280,6 +344,8 @@ jobs:
   # account list): `scripts/check-cpa-image.sh`, which its own header says to run after changing the pinned digest. No account is
   # needed; it only pulls the image.
   cpa-image:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.stack != 'false' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
