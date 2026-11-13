@@ -909,6 +909,14 @@ for label, needle in (('plaintext database', 'SQLite format 3'), ('provider key'
     print(label, 'FOUND' if needle.encode() in raw else 'absent')
 call('DELETE', '/api/admin/v1/providers/' + provider_id)" 2>&1)
 printf '%s\n' "$out" | grep -q '^names manifest.json,backup-key.age,admin.age,server.age,alerter.age,cpa.age,audit.age$' && pass "the backup is a bundle of a manifest, the protected key and the admin's, the server's, the alerter's, cpa's and the auditor's encrypted exports" || fail "backup contents: $out"
+# The cpa part of a bundle waits up to 60 s for the supervisor to answer. Once, in CI, it did not (502 server_unavailable "CLIProxyAPI did not
+# answer the export request in time") with the supervisor otherwise alive; nothing in the logs said why. So when that happens, say what
+# the transfer files looked like and what cpa had said, with times, so the next one can be explained.
+if printf '%s' "$out" | grep -q 'did not answer the export request'; then
+  echo "-- diagnostics: cpa did not answer the backup export ($(date -u +%H:%M:%S))"
+  docker exec "$ADMIN" sh -c 'ls -l --time-style=full-iso /cpa-config 2>&1' | head -20
+  docker logs --timestamps --tail 40 askbar-cpa 2>&1 | cut -c1-200
+fi
 # Only the admin mounts the backup volume (ADR 0013, D27): it is where backups are kept, and where the host may mount a NAS share.
 BACKUP_HOLDERS=""
 ADMIN_ID=$(docker inspect -f '{{.Id}}' "$ADMIN")
