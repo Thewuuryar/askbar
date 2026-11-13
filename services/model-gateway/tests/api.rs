@@ -45,23 +45,26 @@ impl Drop for Mock {
 }
 
 fn start_mock() -> Mock {
-    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
     let script = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/e2e/mock_llm.py");
-    let mut child =
-        Command::new("python3").args(["-u", script, &port.to_string()]).stdout(Stdio::piped()).spawn().expect("python3 is needed");
+    let mut child = Command::new("python3").args(["-u", script, "0"]).stdout(Stdio::piped()).spawn().expect("python3 is needed");
     let log = Arc::new(Mutex::new(Vec::new()));
-    let out = BufReader::new(child.stdout.take().unwrap());
+    let mut out = BufReader::new(child.stdout.take().unwrap());
+    // Port 0: the mock binds a free port itself and names it on its first line, which it prints only once it is bound. Nothing
+    // is picked and released here, so no other test can take the port in between (and a probe cannot reach another test's mock).
+    let mut first = String::new();
+    out.read_line(&mut first).unwrap();
+    let port = first
+        .trim()
+        .rsplit(':')
+        .next()
+        .and_then(|p| p.trim_end_matches("/v1").parse::<u16>().ok())
+        .unwrap_or_else(|| panic!("the mock did not say where it listens: {first:?}"));
     let l = log.clone();
     std::thread::spawn(move || {
         for line in out.lines().map_while(Result::ok) {
             l.lock().unwrap().push(line);
         }
     });
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while std::net::TcpStream::connect(("127.0.0.1", port)).is_err() {
-        assert!(Instant::now() < deadline, "mock did not start");
-        std::thread::sleep(Duration::from_millis(50));
-    }
     Mock { child, port, log }
 }
 

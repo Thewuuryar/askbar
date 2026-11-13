@@ -220,5 +220,6 @@ if __name__ == "__main__":
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8765
     # Bind before announcing: callers wait for this line and then connect straight away.
     server = Server((os.environ.get("MOCK_LLM_HOST", "127.0.0.1"), port), Handler)
-    print(f"mock LLM on http://127.0.0.1:{port}/v1", flush=True)
+    # The port the socket really has: the one asked for, or the one the system chose when asked for 0.
+    print(f"mock LLM on http://127.0.0.1:{server.server_port}/v1", flush=True)
     server.serve_forever()

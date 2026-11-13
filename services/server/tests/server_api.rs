@@ -608,13 +608,17 @@ async fn a_generation_with_the_mocks_usage_adds_to_the_overview_totals() {
     use reqwest::Method as M;
     use std::io::{BufRead, BufReader};
     use std::process::{Command, Stdio};
-    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
     let script = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/e2e/mock_llm.py");
-    let mut child =
-        Command::new("python3").args(["-u", script, &port.to_string()]).stdout(Stdio::piped()).spawn().expect("python3 is needed");
+    let mut child = Command::new("python3").args(["-u", script, "0"]).stdout(Stdio::piped()).spawn().expect("python3 is needed");
     let mut out = BufReader::new(child.stdout.take().unwrap());
     let mut first = String::new();
-    out.read_line(&mut first).unwrap(); // "mock LLM on ..."
+    out.read_line(&mut first).unwrap(); // "mock LLM on http://127.0.0.1:<port>/v1", printed once it is bound (port 0: it picks one)
+    let port = first
+        .trim()
+        .rsplit(':')
+        .next()
+        .and_then(|p| p.trim_end_matches("/v1").parse::<u16>().ok())
+        .unwrap_or_else(|| panic!("the mock did not say where it listens: {first:?}"));
 
     let s = start_with_state().await;
     let (user, client) = {

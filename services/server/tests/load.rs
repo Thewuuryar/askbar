@@ -31,13 +31,18 @@ impl Drop for Mock {
 fn start_mock() -> (Mock, u16) {
     use std::io::{BufRead, BufReader};
     use std::process::{Command, Stdio};
-    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
     let script = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/e2e/mock_llm.py");
-    let mut child =
-        Command::new("python3").args(["-u", script, &port.to_string()]).stdout(Stdio::piped()).spawn().expect("python3 is needed");
+    let mut child = Command::new("python3").args(["-u", script, "0"]).stdout(Stdio::piped()).spawn().expect("python3 is needed");
     let mut out = BufReader::new(child.stdout.take().unwrap());
     let mut line = String::new();
     out.read_line(&mut line).unwrap();
+    // Port 0: the mock binds a free port itself and names it on this first line, printed only once it is bound.
+    let port = line
+        .trim()
+        .rsplit(':')
+        .next()
+        .and_then(|p| p.trim_end_matches("/v1").parse::<u16>().ok())
+        .unwrap_or_else(|| panic!("the mock did not say where it listens: {line:?}"));
     // Keep reading: the mock logs every request, and a closed pipe would break it.
     std::thread::spawn(move || for _ in out.lines() {});
     (Mock(child), port)
