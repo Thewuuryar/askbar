@@ -20,7 +20,7 @@ Nothing needs migrating before 1.0. After 1.0, `main` is a stable version that a
 - **Staging:** run a second Compose project (a staging project of the release compose file) with test data and the existing mock model. A person tests each release there before tagging.
 - **Migrations:** use forward-only migrations with an automatic backup first. Roll back by restoring that backup into the previous version.
 - **API:** keep `/api/client/v1` additive after 1.0; `MIN_CLIENT` does not change for 1.0.
-- **Repository settings:** the owner turns on a ruleset for `main` (pull requests, passing CI, linear history, no force push) and one for release tags (only the owner creates, moves or deletes them), and makes the two environments. CONTRIBUTING.md lists each setting.
+- **Repository settings:** the owner turns on a ruleset for `main` (pull requests, passing CI, linear history, no force push) and one for release tags (only the owner creates, moves or deletes them), and makes the two environments.
 
 ## Alternatives considered
 
