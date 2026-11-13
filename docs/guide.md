@@ -345,7 +345,7 @@ Everything comes from one trunk, `main`. Pre-built images are published to the G
 | staging | a tag `vX.Y.Z-rc.N` | `:X.Y.Z-rc.N` | `staging` |
 | production | a tag `vX.Y.Z` | `:X.Y.Z`, `:X.Y`, `:X`, `:latest` | `production` (the owner approves) |
 
-Use a release for a server you rely on. Edge is `main` as it stands: it passed CI, but no person has tried it. Edge images pile up in the registry; the owner removes old ones by hand in the package's settings. Each release has a GitHub release (a draft until the owner publishes it) holding `compose.release.yaml`, an SBOM for each image and the desktop installers, each with a cosign signature (`<file>.sigstore.json`).
+Use a release for a server you rely on. Edge is `main` as it stands: it passed CI, but no person has tried it. Edge images pile up in the registry; the owner removes old ones by hand in the package's settings. Each release has a GitHub release (a draft until the owner publishes it) holding `compose.release.yaml`, the desktop installers, a tar of the SBOMs (one for each image), and `SHA256SUMS` with its cosign signature (`SHA256SUMS.sigstore.json`). The release text is `docs/releases/<tag>.md` and the changelog is in `docs/releases/changelog/`.
 
 ### Using pre-built images
 
@@ -380,12 +380,13 @@ Every image is signed by digest with keyless [cosign](https://docs.sigstore.dev/
 cosign verify ghcr.io/thewuuryar/askbar-server@sha256:<digest> \
   --certificate-identity-regexp '^https://github.com/Thewuuryar/askbar/\.github/workflows/images\.yml@refs/(heads/main|tags/v.*)$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
-cosign verify-blob --bundle compose.release.yaml.sigstore.json \
+cosign verify-blob --bundle SHA256SUMS.sigstore.json \
   --certificate-identity-regexp '^https://github.com/Thewuuryar/askbar/\.github/workflows/images\.yml@refs/tags/v.*$' \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com compose.release.yaml
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com SHA256SUMS
+sha256sum --check --ignore-missing SHA256SUMS
 ```
 
-The second command works the same for each SBOM and each installer: change the bundle and file names. An edge image is signed by a run that `ci` started, so its identity names `refs/heads/main`; a release is signed from its tag. (The identity was derived from the workflow, not confirmed against a signed image: if verification fails, look at the identity cosign reports and open an issue.)
+The second command checks that `SHA256SUMS` was signed by this repository's release run; the third checks each file you downloaded (the compose file, the SBOM tar and the installers) against it. Download `SHA256SUMS`, its `.sigstore.json` and the files into one folder first. An edge image is signed by a run that `ci` started, so its identity names `refs/heads/main`; a release is signed from its tag. (The identity was derived from the workflow, not confirmed against a signed image: if verification fails, look at the identity cosign reports and open an issue.)
 
 The desktop installers are **not signed by Apple or Microsoft**, which needs a developer ID and a certificate that v1 does not have. The cosign bundle proves where an installer came from; it does not stop the operating system's first-open warning. On macOS, open it with a right click and **Open**, or allow it in System Settings > Privacy & Security. On Windows, SmartScreen says "Windows protected your PC": choose **More info** and **Run anyway**.
 
@@ -411,7 +412,7 @@ Before a release candidate goes further, run it next to the real stack on the sa
 
 3. Open `https://<host>:8443/admin` and set it up as in [First run](#first-run). With the `dev` profile the mock model runs too: on **Providers** add an OpenAI-compatible provider with the address `http://mock-llm:8765/v1`, the model `m` and any key; then approve `m` under **Approved models** and make it the default. That is how the dev stack does it, and the failure drills in `scripts/check-isolation.sh` do the same.
 4. **Clients** > add a user, make a pairing key, and pair a client against `https://<host>:8443` (the key carries the address).
-5. Test what the [release checklist](releases/1.0.0.md) asks for that a staged stack can show: a fresh deployment and a paired client working end to end, the backup and the restore drill (under 30 minutes), and the client on each platform. A real certificate by the HTTP-01 proof needs port 80, which staging does not publish (it is 8080), so test that with the Cloudflare proof or on the real host.
+5. Test what a staged stack can show: a fresh deployment and a paired client working end to end, the backup and the restore drill (under 30 minutes), and the client on each platform. A real certificate by the HTTP-01 proof needs port 80, which staging does not publish (it is 8080), so test that with the Cloudflare proof or on the real host.
 6. Remove it: `docker compose -p askbar-staging -f compose.release.yaml -f compose.staging.yaml --profile dev down -v`, then `rm -rf data-staging`.
 
 `scripts/check-isolation.sh` is for the development stack only. It takes `COMPOSE_PROJECT_NAME` for networks and volumes, but names containers directly (`askbar-server`, `askbar-caddy` and the rest), so it cannot run against a staging project and is not meant to.

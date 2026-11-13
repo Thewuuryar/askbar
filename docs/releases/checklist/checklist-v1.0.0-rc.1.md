@@ -1,40 +1,17 @@
-# Askbar 1.0.0
+# Checklist for v1.0.0-rc.1
 
-Askbar is a Spotlight-style AI popup. You press a hotkey, a bar appears, you type a question, read the answer and press Esc. Your own server holds the conversations and the provider keys, and the desktop app is a thin client that pairs with it. It is an open-source project for personal hardware (AGPL-3.0-or-later), with no support or uptime guarantee.
+For the owner, not part of the release notes. Done by a person, not by CI.
 
-1.0.0 is the scope of [ADR 0002](../adr/0002-v1-scope-limits-and-ship-criteria.md): conversation only (text in, text out: no tools, no shell, no file access), on a server split into separated containers.
+## The checklist
 
-## What is in it
-
-- A desktop popup for macOS, Windows and Linux, opened with a global hotkey, and an admin site at `/admin`.
-- Any model provider: Anthropic, anything OpenAI-compatible, or a Claude or ChatGPT subscription through CLIProxyAPI.
-- Replies run on the server and carry on if the window closes. History and search, in a personal space for each user.
-- Users and pairing keys; HTTPS from the first start with the install's own certificate, then Let's Encrypt for your own host name.
-- Separated, hardened containers: `server`, `admin`, `auditor`, `model-gateway`, `alerter`, `caddy` and `cpa`, with `bootstrap` creating the per-link tokens. Only Caddy publishes ports, and no service has the Docker socket ([architecture](../architecture.md)).
-- An audit trail of every reply, with prompts and replies sealed by a passphrase only the owner knows; alerts by ntfy or email; encrypted backups, by hand or on a schedule, and a restore.
-
-## Known limits
-
-- **Size.** There is no fixed limit on users. The tested size is three active users, three simultaneous replies against the mock model, and about 200 ms of added latency at the 95th percentile before the first token (the provider excluded).
-- **No guarantees.** No support and no uptime guarantee. A restart from the admin takes under a minute; the target for a restore on a clean host is under 30 minutes (a person times it: see the checklist below).
-- **Not in 1.0.** Shared spaces for a family, memory and an iOS app (deferrable, [ADR 0002](../adr/0002-v1-scope-limits-and-ship-criteria.md)); projects, VPN access, arm64 images and renaming conversations ([the guide](../guide.md#not-built-yet)).
-- **The desktop client** has no offline mode, and it cannot register a global hotkey on Wayland (bind a shortcut to the command `askbar` instead). The installers are not signed by Apple or Microsoft, so macOS and Windows show a first-open warning ([Verifying images and files](../guide.md#verifying-images-and-files)).
-- **Alerts.** Nothing outside the host notices if the alerter itself is down ([ADR 0016](../adr/0016-risk-register.md)); the admin site shows a banner.
-
-## The files of this release
-
-Attached to the GitHub release: `compose.release.yaml` (every image by digest), an SBOM for each image, and the desktop installers, each with a cosign signature (`<file>.sigstore.json`). The commands to verify the images and each file, and the identity to expect, are in [Verifying images and files](../guide.md#verifying-images-and-files).
-
-## Before this is a release: the checklist
-
-These are done by a person, not by CI. Each box stays empty until the owner has done it, on the release candidate that is to become 1.0.0 ([Staging a release](../guide.md#staging-a-release)). A fix gets its own pull request and a new candidate.
+These are done by a person, not by CI. Each box stays empty until the owner has done it, on the release candidate that is to become 1.0.0 ([Staging a release](../../guide.md#staging-a-release)). A fix gets its own pull request and a new candidate.
 
 - [ ] A fresh deployment and one paired client work end to end, tested by a person.
 - [ ] A real certificate is issued through this layout.
 - [ ] A person completes a restore drill from a backup and meets the recovery target (under 30 minutes on a clean host).
-- [ ] A person tests the client on macOS, Windows and Linux. On macOS and Linux, whose webviews are not Chromium, this includes that the popup's replies still render under its Trusted Types policy, that a link asks first and shows its whole address, and that the webview's console shows no content security policy error ([ADR 0044](../adr/0044-desktop-client.md)).
-- [ ] The owner has signed off on the accepted risks ([ADR 0016](../adr/0016-risk-register.md)).
-- [ ] No known ship-blocking finding remains open (the triage rule is in [ADR 0002](../adr/0002-v1-scope-limits-and-ship-criteria.md)).
+- [ ] A person tests the client on macOS, Windows and Linux. On macOS and Linux, whose webviews are not Chromium, this includes that the popup's replies still render under its Trusted Types policy, that a link asks first and shows its whole address, and that the webview's console shows no content security policy error ([ADR 0044](../../adr/0044-desktop-client.md)).
+- [ ] The owner has signed off on the accepted risks ([ADR 0016](../../adr/0016-risk-register.md)).
+- [ ] No known ship-blocking finding remains open (the triage rule is in [ADR 0002](../../adr/0002-v1-scope-limits-and-ship-criteria.md)).
 
 The GitHub settings the release depends on are listed under [GitHub settings](#github-settings) at the end.
 
