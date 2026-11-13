@@ -21,7 +21,7 @@ Prompts, replies and provider errors reach the audit store only as ciphertext, s
 ## Exposure
 
 - **Admin:** private addresses only by default; settings can add Tailscale or widen the allowlist. Caddy checks the connection's real source, never a forwarded header. Do not forward the admin page to the internet: a router or proxy that rewrites the source can make public traffic look private.
-- **Clients:** the local network or Tailscale by default. Public access is the deployer's choice.
+- **Clients:** Caddy applies no address limit to the client API (it does to the admin). The client token and the version gate protect it, and it stays on your local network or Tailscale only if you do not forward port 443 to the internet.
 - **First run:** the published login works from private addresses until you change the password. Change it as soon as you deploy.
 - **Sign-in:** a password only. There are no passkeys or recovery codes; if you lose it, the host reset command restores access. Setting or rotating the backup key, restoring, deleting a user, lowering retention, creating an API key and changing the password each need a sign-in within the last 10 minutes.
 

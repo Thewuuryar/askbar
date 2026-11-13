@@ -1,6 +1,6 @@
 # Architecture
 
-This document describes how Askbar v1 is built. Each [ADR](adr/README.md) states whether it is Proposed or Accepted, and where code and this document disagree, one of them is a bug ([AGENTS.md](../AGENTS.md)).
+This document describes how Askbar v1 is built. Each [ADR](adr/README.md) states its status (Proposed, Accepted, Superseded, Merged and so on). Where code and this document disagree on behavior the target has already reached, one of them is a bug ([AGENTS.md](../AGENTS.md)).
 
 ## Glossary
 
@@ -18,7 +18,7 @@ Every API, module, environment variable, UI label and document uses these names 
 | **alerter** | the small container that delivers alerts and checks for new releases | `/api/alerter/v1` | `askbar-alerter`, internal only | `askbar-auditor`, `askbar-admin` |
 | **bootstrap** | the container that creates per-link tokens on first start and rotates them when run from the host | none | none | none |
 
-Third-party components keep their product name (`caddy`, `cpa`). After v1, these names are added: **egress proxy**, **MCP gateway**, **judge**, **executor**, **`executor-link`** and `searxng` ([ADR 0019](adr/0019-post-v1-order-and-tools.md), [ADR 0020](adr/0020-remote-executor-and-ca-triggers.md)).
+Third-party components keep their product name (`caddy`, `cpa`). These names are reserved for work after 1.0, and nothing in the code uses them yet: **egress proxy**, **MCP gateway**, **judge**, **executor**, **`executor-link`** and `searxng` ([ADR 0019](adr/0019-post-v1-order-and-tools.md), [ADR 0020](adr/0020-remote-executor-and-ca-triggers.md)).
 
 ### Other terms
 
@@ -33,7 +33,7 @@ Third-party components keep their product name (`caddy`, `cpa`). After v1, these
 | **settings** / **snapshot** | settings: what the owner edits in the admin. Snapshot: the object pushed to a service |
 | **audit** / **trace** / **span** | audit: the feature. Trace: the record of one reply. Span: one step in it |
 
-Retired names for Askbar's own roles: "management" and "mgmt" (now **server**), "device" (now **client**). Reviewers check for them ([ADR 0038](adr/0038-names-and-new-components-without-a-name-check.md)); the words are fine in their ordinary meaning.
+Retired names for Askbar's own roles: "management" and "mgmt" (now **server**), "device" (now **client**). Reviewers check that changes use the glossary names; no script enforces it ([ADR 0038](adr/0038-names-and-new-components-without-a-name-check.md)). The words are fine in their ordinary meaning.
 
 ## Picture
 
@@ -60,7 +60,7 @@ flowchart TB
     alerts["<b>Alert services</b><br/>ntfy, then email<br/>GitHub releases"]
     backup["<b>Backup storage</b><br/>one /backup volume<br/>(the host may mount a NAS over it)"]
 
-    clients -->|"HTTPS, client token<br/>local network or Tailscale"| caddy
+    clients -->|"HTTPS, client token"| caddy
     adminUser -->|"HTTPS, session cookie or API key"| caddy
     caddy -->|"/api/client/v1"| server
     caddy -->|"/admin, /api/admin/v1<br/>unix socket"| admin
@@ -95,7 +95,7 @@ What each container holds, what it can reach, and what taking it over would give
 | --- | --- | --- | --- |
 | **bootstrap** | writes the credential volumes `server-token`, `admin-token`, `auditor-token`, `model-gateway-token`, `alerter-token`; runs once, as root with `CHOWN` only | nothing: no network | every link token could be minted, but it has no route to use them and has exited. Compromise needs a bad image |
 | **server** | `DATA_DIR` (the spaces and `control.db`); `server-token` read-only | `model-gateway` (`gateway-server`), the auditor (`audit-server`); Caddy and the admin reach it on `client-api` and `server-api` | every user's conversations, and appends and model calls under its own tokens. No provider key, no audit passphrase, no route out |
-| **admin** | `admin-data`, `admin-secrets` (provider keys, certificate key), `backup`, `cpa-config`; `admin-token` read-only; the sockets `admin-run`, `caddy-run`, `caddy-secrets` | the server (`server-api`), `model-gateway` (`gateway-admin`), the auditor (`audit-admin`), the alerter (`alerter-admin`), `cpa` (`cpa-admin`), Caddy by its admin socket. No route out | the provider keys, the settings and the user list, and it can push any configuration. Audit content stays sealed, backups stay encrypted to a key it cannot open, and it has no route out |
+| **admin** | `admin-data`, `admin-secrets` (provider keys, certificate key), `backup`, `cpa-config`; `admin-token` read-only; the sockets `admin-run` and `caddy-run`, and `caddy-secrets` (the certificate key, written here, read-only in Caddy) | the server (`server-api`), `model-gateway` (`gateway-admin`), the auditor (`audit-admin`), the alerter (`alerter-admin`), `cpa` (`cpa-admin`), Caddy by its admin socket. No route out | the provider keys, the settings and the user list, and it can push any configuration. Audit content stays sealed, backups stay encrypted to a key it cannot open, and it has no route out |
 | **auditor** | `auditor-data` (`audit.db`); `auditor-token` read-only | the alerter (`audit-alerter`). No route out | the sealed store: ciphertext, which it cannot open. It could delete or alter records, which the hash chain shows |
 | **model-gateway** | provider keys in memory only; `model-gateway-token` read-only | the auditor (`audit-model-gateway`), `cpa` (`cpa-gateway`), the providers (`outbound`) | the provider keys, and every prompt and reply in flight. It stores no history |
 | **alerter** | `alerter-data` (the repeat ledger); delivery settings in memory; `alerter-token` read-only | the auditor (`audit-alerter`), ntfy, the mail server and GitHub (`alerter-outbound`) | the alert credentials and the power to send or silence alerts. It never sees content |
@@ -108,11 +108,11 @@ Docker restarts a service that exits (`restart: unless-stopped`). This is what i
 
 | Service down | What happens | Alert | Recovery |
 | --- | --- | --- | --- |
-| **server** | Clients get an error from Caddy and cannot ask. The admin starts and shows the server offline (*drilled*) | `component_silent` for the server's link after five minutes with nothing from it | Docker restarts it; the admin pushes its settings again |
+| **server** | Clients get an error from Caddy and cannot ask. The admin starts and shows the server offline (*checked*, section 1) | `component_silent` for the server's link after five minutes with nothing from it | Docker restarts it; the admin pushes its settings again |
 | **admin** | Replies still finish (*drilled*). The admin site is gone, and no setting, user or key can change. After a gateway restart, model work waits until the admin pushes the keys again ([ADR 0054](adr/0054-model-gateway.md)) | `restart_loop` if it keeps restarting (from its hellos). None for a plain stop | Docker restarts it |
 | **auditor** | A new reply is refused: `503 audit_backlog`, or a `provider_error` event once the stream is open (*drilled*). Nothing is made unrecorded ([ADR 0010](adr/0010-auditor.md)) | none: the auditor is what raises alerts | Docker restarts it; replies work again at once (*drilled*) |
 | **auditor, disk full** | Below 256 MiB free a new span is refused (`503 audit_backlog`); spans already open still finish; the hello and status still answer (*drilled* on a 2 MB disk) | `audit_disk_low` below 1 GiB, `audit_disk_critical` below 256 MiB | free space on the host; nothing is lost |
-| **model-gateway** | A new reply fails with `gateway_unavailable`. After it restarts it answers `gateway_not_configured` until the admin pushes the keys | `component_silent` for its link after five minutes (*drilled*) | Docker restarts it; the admin pushes the keys |
+| **model-gateway** | A new reply fails with `gateway_unavailable`. After it restarts it answers `gateway_not_configured` until the admin pushes the keys | `component_silent` for its link after five minutes (*checked* in section 3d7, which is slow: `ASKBAR_SLOW_CHECKS=1`) | Docker restarts it; the admin pushes the keys |
 | **alerter** | No alert is delivered. The admin shows an "unreachable" banner on every page (*drilled*) | none outside the host: the dead-man monitor is out of v1 ([ADR 0055](adr/0055-alerter.md), [ADR 0016](adr/0016-risk-register.md)) | Docker restarts it; the banner clears (*drilled*) |
 | **cpa** | Replies through the CPA provider fail; other providers are untouched | none | Docker restarts it; accounts stay in `cpa-auth` |
 | **caddy** | Nothing can be reached from outside: no client, no admin site. The services keep running | none that reaches you: `caddy_silent` fires when replies run and Caddy logs no access lines, which needs Caddy up | Docker restarts it; it starts once the server, admin and auditor are healthy |
@@ -150,7 +150,8 @@ One host name. Every API uses `/api/{name}/v{major}` ([ADR 0022](adr/0022-api-pa
 | --- | --- | --- | --- |
 | `/admin`, `/admin/*` (site files) | admin unix socket | private addresses by default | `remote_ip` allowlist |
 | `/api/admin/*` (`/api/admin/v1`) | admin unix socket, the same Caddy route as the site | private addresses by default | session cookie (`__Secure-`, `Path=/api/admin`) with the CSRF header and `Sec-Fetch-Site` check on changes, or an admin API key; allowlist; login lockout |
-| `/api/client/v1/*` | `server` | local network or Tailscale by default | client bearer token plus the client-version gate |
+| `/api/client/v1/*` | `server` | any address that can reach port 443: Caddy applies no allowlist to it, so keep it on the local network or Tailscale by not forwarding the port ([ADR 0008](adr/0008-users-clients-and-client-access.md)) | client bearer token plus the client-version gate |
+| `/api/v1/*` (the old prefix) | `server` | the same | answered `426 client_too_old` |
 | everything else, including other `/api/*` paths | answered 404 by Caddy | n/a | n/a |
 
 From 1.0, within `/api/client/v1`, add only: never remove or rename a field, endpoint or error code. A change that needs one of those is a `v2` next to it.
@@ -161,7 +162,7 @@ Every failure is `application/problem+json` (RFC 9457) with `type` (`urn:askbar:
 
 ## Versions
 
-The version in the URL is the API version. `X-Askbar-Client-Version` and the 426 `client_too_old` response remain for one case only: the client is too old for this server. The header applies to the client API only.
+The version in the URL is the API version. `X-Askbar-Client-Version` and the 426 `client_too_old` response remain for one case only: the client is too old for this server. The header is required on the client API (and only there): a missing or unreadable one is answered `400 client_version_missing`.
 
 ## Links
 
@@ -173,7 +174,7 @@ Every link has its own authenticated path and uses separate networks, so a missi
 | Caddy | `server` | Client API | Client token at the server |
 | Caddy | `admin` | Admin site and API, over a unix socket | Admin credential at the admin |
 | `admin` | Caddy | Configuration, over Caddy's admin socket | Socket permissions |
-| `admin` | `server`, `model-gateway`, `cpa` | Status, configuration, restarts, logins | Per-link token |
+| `admin` | `server`, `model-gateway`, `cpa` | Status, configuration, restarts, logins | Per-link token to the server and `model-gateway`; for `cpa`, the API key and control secret the admin makes |
 | `admin` | `server`, `alerter`, `auditor` | Encrypted backup exports and imports (`POST /exports` and `/imports`; the auditor's `GET /export`); `model-gateway` has none | Per-link token |
 | `admin` | `cpa` | Export and import, through request files on `cpa-config` that the supervisor handles | Volume permissions |
 | `admin` | `auditor` | Backup public key (`PUT /backup-key`), export, and restore into an empty store (`admin-auditor-restore`) | Admin read and restore tokens |
@@ -184,7 +185,7 @@ Every link has its own authenticated path and uses separate networks, so a missi
 | `alerter` | `auditor` | Delivery records (`alert-deliveries`) | Alerter append token |
 | `server`, `model-gateway` | `auditor` | Append records, including `model-gateway` span starts | Service append token |
 | Caddy | `auditor` | Append access logs, to the ingest listener | None: a network of the two, and the listener answers nothing |
-| `model-gateway` | `auditor` | Read token counts, to hold the budget | Read token (`GET /token-counts` only) |
+| `model-gateway` | `auditor` | Read token counts, to hold the budget | Read token (`GET /status` and `GET /token-counts` only) |
 | `auditor` | `alerter` | Alert events (`auditor-alerter`) | Per-link token |
 | `server` | `model-gateway` | Model calls and the approved model list | Per-link token |
 | `model-gateway` | `cpa` | Subscription providers | `cpa` API key |
@@ -193,7 +194,7 @@ Every link has its own authenticated path and uses separate networks, so a missi
 
 ## Volumes
 
-Each service has its own data and credential volumes and user ID, with no shared data volumes or host bind mounts ([ADR 0003](adr/0003-v1-service-layout.md)). Data volumes must never be renamed: Compose would silently create an empty one.
+Each service has its own data and credential volumes and user ID, with no shared data volumes ([ADR 0003](adr/0003-v1-service-layout.md)). The one host bind mount is the server's data directory (`DATA_DIR`, `./data` by default, writable by uid 10002). Data volumes must never be renamed: Compose would silently create an empty one.
 
 | Holds | Mounted by |
 | --- | --- |
@@ -202,6 +203,7 @@ Each service has its own data and credential volumes and user ID, with no shared
 | Admin data and secrets | `admin` |
 | Per-link token files and hashes: one volume per service, `server-token`, `admin-token` and so on | `bootstrap` read-write, its own service read-only |
 | Certificates and Caddy state | `caddy` |
+| The install's own certificate key (`caddy-secrets`) | `admin` writes, `caddy` reads |
 | `cpa` config | `cpa`, written by `admin` |
 | `cpa` logins | `cpa` |
 | `alerter` state: the repeat ledger and release results (delivery secrets are held by `admin` and pushed, [ADR 0055](adr/0055-alerter.md)) | `alerter` |
@@ -228,7 +230,7 @@ Each service has its own data and credential volumes and user ID, with no shared
 
 ## Decisions
 
-- **Chat is `POST /api/client/v1/spaces/{space_id}/chat`.** It creates the conversation if needed, saves the question and starts a generation, with `client_request_id` idempotency. Chats are processed on the server and sent to clients when complete. Live sync happens only on the client that started the chat, or it shows a processing message ([ADR 0008](adr/0008-users-clients-and-client-access.md)).
+- **Chat is `POST /api/client/v1/spaces/{space_id}/chat`.** It creates the conversation if needed, saves the question and starts a generation, with `client_request_id` idempotency. A reply streams to the client as it is written and carries on if the client drops; the client resumes with `?after=<last id>`. Live sync happens only on the client that started the chat, or it shows a processing message ([ADR 0008](adr/0008-users-clients-and-client-access.md)).
 - **Model choice.** The admin approves models and sets one default. Clients choose from that list for each chat, and `model-gateway` refuses any other model ([ADR 0014](adr/0014-model-gateway-and-providers.md)).
 - **Old clients.** `/api/v1/*` answers one 426 `client_too_old`; nothing else of the old paths exists.
 - **The admin API is documented**, with its own OpenAPI file; scripts use an admin API key.
