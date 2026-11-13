@@ -98,7 +98,7 @@ services:
       - ${DATA_DIR:-./data}:/data
       # The hash of the admin's token (accept/admin-server.sha256) and the server's own tokens for the gateway and the
       # auditor (call/), made by bootstrap. Read-only: the server can check and use a token, never mint one. It holds no
-      # provider key and no audit store (ADR 0054, ADR 0051): `askbar-secrets` and `audit-data` stay declared, unmounted.
+      # provider key and no audit store (ADR 0054, ADR 0051).
       - server-token:/server-token:ro
 
   admin:
@@ -182,8 +182,8 @@ services:
       audit-caddy:
         aliases: [auditor-ingest-host]
     volumes:
-      # audit.db: the audit store. Only the auditor mounts it. Starts empty; the server's own audit-data is not
-      # copied (see the guide).
+      # audit.db: the audit store. Only the auditor mounts it. Starts empty; the old server audit.db is not copied
+      # (see the guide, "Deleting the retired volumes").
       - auditor-data:/audit
       # The hashes of the tokens it accepts, made by bootstrap. Read-only.
       - auditor-token:/auditor-token:ro
@@ -393,12 +393,9 @@ networks:
   # networks, so neither answers on this one.
   outbound:
 
+# The volumes of earlier versions `askbar-secrets`, `audit-data` and `control-token` are no longer declared (1.0). An install that has them
+# keeps them on disk, mounted by nothing; the guide ("Deleting the retired volumes") says how to remove them.
 volumes:
-  # Held the server's master key and provider keys (ADR 0014, 0054). Nothing mounts it now; kept declared until 1.0 so no
-  # install loses a volume by surprise (plan-v1.md: data volumes are never renamed or dropped pre-1.0).
-  askbar-secrets:
-  # Held the server's own audit.db before the auditor. Nothing mounts it now; earlier records stay in it (see the guide).
-  audit-data:
   # The auditor's audit.db (ADR 0051). Docker makes it empty and owned by uid 10003, as the image's /audit is.
   auditor-data:
   server-token:
@@ -414,9 +411,6 @@ volumes:
   # The alerter's credential volume (ADR 0049, 0055): the hashes of the tokens it accepts, and the token it sends the auditor.
   # Only bootstrap writes it.
   alerter-token:
-  # Held the retired controller's token hash (ADR 0005). Nothing mounts it now; kept declared until 1.0
-  # so no install loses a volume by surprise (plan-v1.md: data volumes are never renamed or dropped pre-1.0).
-  control-token:
   admin-data:
   admin-secrets:
   # The admin's backups (ADR 0013, D27). A new volume, empty, owned by uid 10001 as the image's /backup is. Never renamed or dropped:

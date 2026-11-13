@@ -164,7 +164,7 @@ done
 
 echo "== 3. What the server can see"
 VOLS=$(docker inspect -f '{{range .Mounts}}{{.Name}} {{end}}' "$SERVER")
-for v in admin-secrets admin-data admin-run backup caddy-run caddy-secrets control-token cpa-config; do
+for v in admin-secrets admin-data admin-run backup caddy-run caddy-secrets cpa-config; do
   case " $VOLS" in *" ${PROJECT}_$v "*) fail "the server mounts $v";; *) pass "the server does not mount $v";; esac
 done
 refused "the server cannot list /admin-secrets" docker exec "$SERVER" ls /admin-secrets
@@ -175,19 +175,18 @@ refused "the server cannot write to /server-token (read-only)" docker exec "$SER
 # Even as the admin's own uid, the server container has nothing of the admin's to open.
 refused "the admin's database is not in the server" docker exec -u "$(docker exec "$ADMIN" id -u)" "$SERVER" sh -c 'ls /admin-data/admin.db'
 refused "the admin cannot read a master key in the server" docker exec "$ADMIN" sh -c 'cat /secrets/master.key'
-# The server holds no provider key and no audit store (ADR 0054, ADR 0051).
-for v in askbar-secrets audit-data; do
-  case " $VOLS" in *" ${PROJECT}_$v "*) fail "the server mounts $v";; *) pass "the server does not mount $v";; esac
+# The server holds no provider key and no audit store (ADR 0054, ADR 0051). The three volumes of earlier versions that could have held
+# them are no longer declared (1.0), so a fresh stack has none and nothing can mount one; an install that has them keeps them on disk (the
+# guide says how to remove them).
+for v in askbar-secrets audit-data control-token; do
+  docker volume ls -q | grep -qx "${PROJECT}_$v" && fail "the stack has a $v volume (retired at 1.0)" || pass "the stack has no $v volume (retired at 1.0)"
 done
 refused "the server has no /secrets" docker exec "$SERVER" test -e /secrets
 refused "the server has no master.key anywhere" docker exec "$SERVER" sh -c 'find / -xdev -name "master.key*" 2>/dev/null | grep -q .'
 refused "the server has no audit.db anywhere" docker exec "$SERVER" sh -c 'find / -xdev -name "audit.db*" 2>/dev/null | grep -q .'
 
 echo "== 3b. The audit store"
-# audit.db is the auditor's alone (section 3d4); the server's old audit-data volume stays declared and mounted nowhere.
-case " $(docker inspect -f '{{range .Mounts}}{{.Name}} {{end}}' "$ADMIN")" in
-  *" ${PROJECT}_audit-data "*) fail "the admin mounts audit-data";; *) pass "the admin does not mount audit-data";;
-esac
+# audit.db is the auditor's alone (section 3d4); the server's old audit-data volume is gone from the stack (section 3).
 refused "the admin container has no /audit" docker exec "$ADMIN" test -e /audit
 refused "no audit.db anywhere in the admin container" docker exec "$ADMIN" sh -c 'find / -xdev -name "audit.db*" 2>/dev/null | grep -q .'
 # The server's data (ADR 0009): control.db and one file per space, mounted by the server only.
@@ -877,9 +876,6 @@ for needle in "Askbar admin" "app.js" "style.css" "x-askbar-admin" "Caddyfile" "
 done
 docker run --rm --entrypoint sh "$SERVER_IMG" -c 'test -e /usr/local/bin/askbar-admin' \
   && fail "the server image holds the admin binary" || pass "the server image holds no admin binary"
-case " $(docker inspect -f '{{range .Mounts}}{{.Name}} {{end}}' "$ADMIN")" in
-  *" ${PROJECT}_askbar-secrets "*) fail "the admin mounts askbar-secrets";; *) pass "the admin does not mount askbar-secrets";;
-esac
 refused "the admin has no /secrets" docker exec "$ADMIN" test -e /secrets
 modes_ok=1
 for f in "$ADMIN:/admin-secrets/admin.key"; do

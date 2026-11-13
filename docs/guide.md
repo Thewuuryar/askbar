@@ -311,7 +311,7 @@ Each link between two services has its own token ([ADR 0004](adr/0004-bootstrap-
 
 The audit store has its own container, `askbar-auditor` ([ADR 0051](adr/0051-auditor.md), [ADR 0010](adr/0010-auditor.md)). It holds `audit.db` on its own volume, `auditor-data`, runs as uid 10003 with no capabilities, and has no route out: it joins only `audit-*` networks, each shared with one caller. There are four: `audit-admin` (the admin), `audit-server` (the server), `audit-model-gateway` (`model-gateway`) and `audit-caddy` (Caddy's access lines). Its API is `/api/audit/v1` ([docs/openapi/audit.v1.yaml](openapi/audit.v1.yaml)) and it is never public.
 
-**The server and `model-gateway` send it their records** (the gateway opens each reply's turn and try spans and waits for the acknowledgment before it calls a provider; the server adds the gates it passed, its sealed request and reply, and how the reply ended). The server's own `audit.db` is gone: `audit-data` stays on disk untouched and the auditor starts with its own empty `auditor-data`, so records from before the upgrade stay only in the old volume. Copy it (`docker run --rm -v askbar_audit-data:/a -v "$PWD":/b alpine cp -a /a/. /b/audit-backup/`) or delete it once you no longer want them.
+**The server and `model-gateway` send it their records** (the gateway opens each reply's turn and try spans and waits for the acknowledgment before it calls a provider; the server adds the gates it passed, its sealed request and reply, and how the reply ended). The server's own `audit.db` is gone: `audit-data` stays on disk untouched and the auditor starts with its own empty `auditor-data`, so records from before the upgrade stay only in the old volume. Copy it (`docker run --rm -v askbar_audit-data:/a -v "$PWD":/b alpine cp -a /a/. /b/audit-backup/`) or delete it once you no longer want them; from 1.0 it is not declared any more, and [Deleting the retired volumes](#deleting-the-retired-volumes) says how.
 
 - **Tokens.** Each link has its own, made by `bootstrap` ([Tokens between services](#tokens-between-services)). The auditor holds only their hashes, in `auditor-token`. These exist: `server-auditor` (the server's gate spans, sealed payloads and finish records), `model-gateway-auditor` (the gateway's spans, finish records and sealed payloads), `admin-auditor-append` (admin action records), `admin-auditor-read` (reads and retention) and `model-gateway-auditor-read` (token counts only, so the gateway can hold the budget). A link may call only its own routes, and the caller of a record is the one its token belongs to. No token can change or delete a record.
 - **The hash chain.** Every record the auditor takes (a span's start and finish, a sealed payload, an admin action, a prune) is chained: its entry holds a digest of the record and the hash of the entry before it, so changing or removing a record or an entry breaks the chain from there on. The entries are never deleted, not even by retention (they hold digests, not content). **The admin keeps the newest chain head** it has checked, every five minutes compares it with the auditor's, and about once an hour asks the auditor to check every record against its entry. A red banner on every admin page says what it found: **rollback** (the chain is shorter than the admin saw: an older copy of `audit.db` may have been put back, or records removed), **rewritten** (the entry the admin stored is gone or has another hash) or **edited** (records no longer match their entries). The sentence gives numbers and the kind of record, never its content, and it is also logged (`ALERT audit chain`). The banner goes away by itself when the auditor's chain is the one the admin stored again. The chain shows that records were changed; it does not show that a service told the truth. **Restoring `audit.db` from a backup on purpose** shows as a rollback, and the banner stays until the restored chain is the one the admin stored again. Records from before the chain existed are chained when the auditor first starts with it, so the chain proves nothing about them before that day.
@@ -441,6 +441,31 @@ Before a release candidate goes further, run it next to the real stack on the sa
 6. Remove it: `docker compose -p askbar-staging -f compose.release.yaml -f compose.staging.yaml --profile dev down -v`, then `rm -rf data-staging`.
 
 `scripts/check-isolation.sh` is for the development stack only. It takes `COMPOSE_PROJECT_NAME` for networks and volumes, but names containers directly (`askbar-server`, `askbar-caddy` and the rest), so it cannot run against a staging project and is not meant to.
+
+### Deleting the retired volumes
+
+Three volumes of earlier versions are no longer declared in `compose.yaml` (1.0): `askbar-secrets`, `audit-data` and `control-token`. Nothing mounts them. A fresh install never has them. An install upgraded from an earlier version keeps them on disk, because Compose does not delete a volume that it no longer declares, and they only take up space. Removing them is optional. Each held:
+
+- **`askbar-secrets`**: the server's old master key, which encrypted the provider keys the server used to store. The admin and `model-gateway` hold keys now, so nothing reads it. Delete it once you have entered each provider's key again in the admin site (see *Upgrading: enter each provider's key again* under [model-gateway](#model-gateway)).
+- **`audit-data`**: the server's own `audit.db`, from before the auditor existed. The auditor starts with its own empty `auditor-data`, so this volume holds the **old, pre-auditor audit records** and nothing else has them. If you want to keep them, copy them out first (`docker run --rm -v askbar_audit-data:/a -v "$PWD":/b alpine cp -a /a/. /b/audit-backup/`, with your own project prefix).
+- **`control-token`**: the token hash of the retired controller ([ADR 0005](adr/0005-no-controller-and-self-restart.md)). Nothing uses it.
+
+To remove them:
+
+1. **Back up first** ([Backup and recovery](#backup-and-recovery)), and copy `audit-data` if you want the old records.
+2. List the volumes. Their names start with the Compose project name, `askbar_` unless you set another:
+
+   ```sh
+   docker volume ls | grep -E 'askbar-secrets|audit-data|control-token'
+   ```
+
+3. Stop the stack, then remove exactly those three, with your prefix (do **not** use `docker compose down -v`, which removes every volume of the stack, the backups and your data included):
+
+   ```sh
+   docker compose down
+   docker volume rm askbar_askbar-secrets askbar_audit-data askbar_control-token
+   docker compose up -d
+   ```
 
 ### Backup and recovery
 
