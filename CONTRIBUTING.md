@@ -1,32 +1,31 @@
 # Contributing
 
-Thanks for looking. This page is how to build, run and change Askbar. How the parts fit and why is in
-[docs/architecture.md](docs/architecture.md); read that first. Decisions and their reasons are in
-[docs/adr/](docs/adr/). If you are an AI agent, read [AGENTS.md](AGENTS.md) too; its rules apply to everyone.
+How to build, run and change Askbar. How the parts fit and why is in [docs/architecture.md](docs/architecture.md); read that first. Decisions and their reasons are in [docs/adr/](docs/adr/). AI agents also follow [AGENTS.md](AGENTS.md); its rules apply to everyone.
 
 ## The names
 
-The glossary in [docs/architecture.md](docs/architecture.md#glossary) is the list. Everything, from paths to variable names to UI text, says **client** (a paired app and its token), **server**
-(the Askbar server, and its interface for the admin) or **admin** (the admin site and its interface). Reviewers
-check for the retired names `mgmt`, `management` and `device` in Askbar's own roles; there is no script
-([ADR 0038](docs/adr/0038-names-and-new-components-without-a-name-check.md)).
+The [glossary](docs/architecture.md#glossary) is the list. Everything, from paths to variable names to UI text, says **client** (a paired app and its token), **server** (the Askbar server) or **admin** (the admin site and its interface). Reviewers check for the retired names `mgmt`, `management` and `device` in Askbar's own roles; there is no script ([ADR 0038](docs/adr/0038-names-and-new-components-without-a-name-check.md)).
 
 ## Layout
 
-| Directory | What |
+| Path | What |
 | --- | --- |
 | `crates/askbar-proto/` | Types shared by everything: wire types, the error registry (`problem.rs`), URL prefixes (`paths.rs`). |
-| `crates/askbar-service/` | What every service shares: the per-link bearer check (`links.rs`), boot ID and `GET /status` body (`status.rs`), the `503 not_configured` gate (`configured.rs`). |
-| `services/server/` | The server: client API (`client_api.rs`), server API (`server_api.rs`), chat and generations, audit store. |
-| `services/admin/` | The admin service: the admin API (`admin_api.rs`), the site (`src/ui/`), Caddy configuration, API keys. Unix only. |
-| `services/cpa-supervisor/` | The supervisor in the `askbar-cpa` image: runs CLIProxyAPI, restarts it on a config change, a restart request or a crash, and handles the export and import request files for backups ([ADR 0037](docs/adr/0037-askbar-cpa-image-and-supervisor.md)). |
-| `clients/desktop/` | The desktop app, its own Cargo workspace: `src-tauri/` (Cargo package `askbar-client`, program `askbar`), the popup in `ui/` (no build step) and its `tests/`. |
-| `deploy/caddy/`, `deploy/cpa/` | Caddy's bootstrap config; notes on CLIProxyAPI. |
-| `docs/` | `architecture.md`, `adr/` (decisions), `style/`, `wire-contract.md` (prose), `openapi/` (one file per API), `refactor-log.md`. |
-| `scripts/`, `tests/` | Smoke and isolation scripts, the checks, popup tests. |
-| `tests/e2e/` | The admin-site browser test, screenshots, a mock LLM. |
+| `crates/askbar-service/` | What every service shares: the per-link bearer check, boot ID and `GET /status`, the `503 not_configured` gate. |
+| `crates/askbar-audit/` | The audit store (`audit.db`): its migrations and the hash chain. |
+| `services/server/` | The server: client API, server API, chat and generations, spaces. |
+| `services/admin/` | The admin: its API, the site (`src/ui/`), Caddy configuration, API keys, backups. Unix only. |
+| `services/auditor/` | The audit store's container (`/api/audit/v1`) and its alert rules. |
+| `services/model-gateway/` | Provider keys (in memory) and every provider call; budgets, the kill switch, the model catalog. |
+| `services/alerter/` | Alert delivery and the daily release check. |
+| `services/bootstrap/` | Creates the per-link tokens on first start, then exits. |
+| `services/cpa-supervisor/` | The supervisor in the `askbar-cpa` image: runs CLIProxyAPI, restarts it, and handles backup export and import ([ADR 0037](docs/adr/0037-askbar-cpa-image-and-supervisor.md)). |
+| `clients/desktop/` | The desktop app, its own Cargo workspace: `src-tauri/` (package `askbar-client`, program `askbar`), the popup in `ui/` (no build step) and its `tests/`. |
+| `compose.yaml`, `compose.staging.yaml`, `Dockerfile`, `deploy/` | The stack, the staging override, the images, and Caddy's bootstrap config. |
+| `docs/` | `architecture.md`, `guide.md`, `adr/` (decisions), `style/`, `wire-contract.md`, `openapi/` (one file per API), `releases/`. |
+| `scripts/`, `tests/` | Smoke, isolation and docs checks; `tests/e2e/` has the admin browser test and the mock model. |
 
-This table lists what is on `main`; the target layout is in [ADR 0033](docs/adr/0033-repository-layout.md). The v1 target adds the `auditor`, `model-gateway`, `alerter` and `bootstrap` services ([ADR 0003](docs/adr/0003-v1-service-layout.md)); the controller is gone ([ADR 0005](docs/adr/0005-no-controller-and-self-restart.md)). A new service needs a name and an ADR first ([ADR 0038](docs/adr/0038-names-and-new-components-without-a-name-check.md)).
+The layout's rules are in [ADR 0033](docs/adr/0033-repository-layout.md). A new service needs a name and an ADR first ([ADR 0038](docs/adr/0038-names-and-new-components-without-a-name-check.md)).
 
 ## Build, run, test
 
@@ -38,19 +37,19 @@ npm install && npm --prefix clients/desktop install && npx playwright install ch
 npm test                           # names and link checks, cargo tests (both workspaces), markdown, UI and admin browser tests, mock LLM
 scripts/smoke.sh                   # server + admin + mock LLM, end to end, no Docker
 docker compose up -d --build && scripts/check-isolation.sh   # needs Docker; a throwaway stack. ASKBAR_SLOW_CHECKS=1 adds the five-minute alert check
-python3 tests/e2e/mock_llm.py 8765     # a fake OpenAI-compatible server to try things without a key
-npm --prefix clients/desktop install && npm --prefix clients/desktop run dev   # the desktop app
+python3 tests/e2e/mock_llm.py 8765     # a fake OpenAI-compatible server, to try things without a key
+npm --prefix clients/desktop run dev   # the desktop app
 ```
 
-**Third-party notices.** [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) lists what ships and its licenses. After you change a dependency (`Cargo.lock`, a lockfile) or an image's contents, run `scripts/third-party-notices.sh` and commit the result; `scripts/third-party-notices.sh --check` says whether it is out of date. It is not part of `scripts/check-docs.sh` or CI, because it needs the crates downloaded, so it cannot run without the network on a fresh checkout. The images section is written by hand in `scripts/third-party-notices.images.md`.
+The browser tests start the built `askbar-server` and `askbar-admin`; run `cargo build -p askbar-server -p askbar-admin` first after changing them (the admin site's files are compiled in).
 
-The browser tests start the built `askbar-server` and `askbar-admin`; run `cargo build -p askbar-server -p askbar-admin` first
-when you have changed them (the admin site's files are compiled in).
+**Third-party notices.** [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) lists what ships and its licenses. After you change a dependency or an image's contents, run `scripts/third-party-notices.sh` and commit the result (`--check` says whether it is out of date). CI does not run it, because it needs the crates downloaded. The images section is written by hand in `scripts/third-party-notices.images.md`.
 
 ## Adding an endpoint, end to end
 
 1. **Route.** Register it in the right table: `client_routes` in `services/server/src/lib.rs`, `routes()` in
-   `services/server/src/server_api.rs`, or `routes()` in `services/admin/src/lib.rs`. Build the path from
+   `services/server/src/server_api.rs`, `routes()` in `services/admin/src/lib.rs`, or `routes()` in the `src/lib.rs` of the auditor,
+   `model-gateway` or alerter. Build the path from
    `askbar_proto::paths` (never a new literal); use plural nouns, and a sub-resource action
    (`POST .../cancel`) only for something that is not a plain create, update or delete. The rules are in
    [ADR 0022](docs/adr/0022-api-path-conventions.md).
@@ -74,7 +73,7 @@ From 1.0, within `/api/client/v1`, add only: never remove or rename a field, end
 Schema changes append to `MIGRATIONS` in `services/server/src/db.rs` or `services/admin/src/db.rs`; never edit an
 earlier entry (its text is what made existing databases). Add a test that builds a database at the previous version,
 puts rows in it and opens it with the new code; the existing ones show how. The audit store has its own
-migrations in `services/server/src/audit.rs`.
+migrations in `crates/askbar-audit/src/lib.rs`.
 
 Every space file runs the same migrations ([ADR 0009](docs/adr/0009-spaces-and-storage.md)). A release with a migration
 needs a backup first and is installed by hand ([ADR 0017](docs/adr/0017-dependencies-and-patches.md),
@@ -97,13 +96,10 @@ The whole API is [docs/openapi/admin.v1.yaml](docs/openapi/admin.v1.yaml).
 
 ## Conventions
 
-- Tests land in the same commit as the code they test. Don't loosen or delete a test unless the contract changed,
-  and say so in the commit message.
+- Don't loosen or delete a test unless the contract changed, and say so in the commit message.
 - The admin site's text goes in through `textContent`, never `innerHTML` (its CSP forbids inline script and style).
 - `askbar-server` and `askbar-admin` each have their own copy of the small route-table builder (`routes.rs`), so
   neither crate depends on the other. Keep them alike.
-- Secrets never go in `.env`, logs or error messages, and go in backups only under the encryption in
-  [ADR 0013](docs/adr/0013-backups.md).
 - A new library inside the license allowlist needs a reason in the PR. A new container, image or service, or a dependency outside the allowlist, also needs an ADR. The allowlist is
   the `allow` list in [deny.toml](deny.toml). `cargo deny check` (in the root and in `clients/desktop`) and the npm
   license check (`node scripts/check-npm-licenses.js package-lock.json clients/desktop/package-lock.json`) must
@@ -126,21 +122,20 @@ The whole API is [docs/openapi/admin.v1.yaml](docs/openapi/admin.v1.yaml).
   ADR or amend one in place, with a line in its Amendments, in [docs/adr/](docs/adr/) in the same PR. Only the owner
   accepts an ADR or approves a change to a decision. A change to a security rule
   includes its docs and isolation tests in the same PR ([ADR 0001](docs/adr/0001-decision-records-and-change-rules.md)).
-- **What CI runs for a pull request.** `ci.yml` always runs `lint` (which includes `scripts/check-docs.sh` and `scripts/check-ui-tokens.sh`),
-  `dependencies` and `secrets`. A pull request that changes only documentation (`docs/`, a `*.md` file at the top, `LICENSE`) skips
-  `isolation`, `images`, `cpa-image` and `test-desktop`, and also `test-services` unless it touches a file the service tests read
-  (`docs/openapi/`, `docs/wire-contract.md`) or any file that is not Markdown. One that changes only `clients/desktop/` skips `isolation`,
-  `images` and `cpa-image`, because no image contains the client. A skipped job counts as passing for the required checks. A push to `main`,
-  a manual run and the weekly run run everything, including the five-minute alert check in `scripts/check-isolation.sh`
-  (`ASKBAR_SLOW_CHECKS=1`). If you are unsure, change the path lists in the `changes` job of `ci.yml`, never the required checks.
+- **What CI runs for a pull request.** `lint` (which includes the docs and UI-token checks), `dependencies` and `secrets` always run. A pull
+  request that changes only documentation skips `isolation`, `images`, `cpa-image` and `test-desktop`, and `test-services` too unless it
+  touches `docs/openapi/`, `docs/wire-contract.md` or a file that is not Markdown. One that changes only `clients/desktop/` skips `isolation`,
+  `images` and `cpa-image`. A skipped job counts as passing for the required checks. A push to `main`, a manual run and the weekly run run
+  everything, including the five-minute alert check in `scripts/check-isolation.sh` (`ASKBAR_SLOW_CHECKS=1`). To change what is skipped, edit
+  the `changes` job in `ci.yml`, never the required checks.
 - **Review.** The owner reviews every pull request. Changes to the paths that decide who can reach what get extra care.
 
 ## Repository settings the owner turns on
 
 These are settings on GitHub, not files, so no pull request can turn them on ([ADR 0017](docs/adr/0017-dependencies-and-patches.md),
 [ADR 0018](docs/adr/0018-releases-and-migrations.md)). The workflows and `.github/dependabot.yml` are written for them. The owner
-does these in the GitHub web UI; the agent never changes repository settings. Do them in order. Steps A to D can be done now. Step E needs
-`images.yml` merged, and its first run on `main`.
+does these in the GitHub web UI; the agent never changes repository settings. Do them in order. Step E needs the first `images.yml` run
+on `main`, and step H needs `codeql.yml` on `main`.
 
 ### A. Actions permissions
 
