@@ -2,7 +2,7 @@
 name = "askbar-cpa-supervisor"
 license = "AGPL-3.0-or-later"
 publish = false
-version = "0.6.0"
+version = "1.0.0"
 edition = "2021"
 description = "Runs CLIProxyAPI and restarts it on a config change, a restart request or a crash (ADR 0037)"
 

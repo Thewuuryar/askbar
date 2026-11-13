@@ -2,7 +2,7 @@
 name = "askbar-admin"
 license = "AGPL-3.0-or-later"
 publish = false
-version = "0.6.0"
+version = "1.0.0"
 edition = "2021"
 description = "Askbar admin service: the admin site and its own database, kept apart from the server"
 

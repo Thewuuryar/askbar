@@ -66,7 +66,7 @@ The owner accepted the third list on November 4, 2026, and amended it on Novembe
 | Provider, DNS, or home internet outage | No uptime promise | Provider list; manual recovery |
 | `cpa` account or terms change | Third-party dependency | Keep `cpa` optional and keep direct providers working |
 
-**Where each Defend row is tested.** `scripts/check-docs.sh` checks that every test named here exists (`git grep` for its name). `pending, PR <letter>` is allowed until the 1.0 release PR (PR AW); the letters are the PRs of the plan in [plan-v1.md](../plan-v1.md).
+**Where each Defend row is tested.** `scripts/check-docs.sh` checks that every test named here exists (`git grep` for its name) and that every Defend row names at least one. Nothing is `pending`.
 
 | Defend row | Tests |
 | --- | --- |
@@ -106,3 +106,4 @@ Each Defend control is a ship requirement. A new accepted risk needs the owner's
 - 2026-11-12: a new row, "Backups stop, land on the same disk, or a lost share hangs the admin", with its tests (plan step 6.4, PR AP): all-or-nothing writes, retention that keeps the newest, the failed and missed alerts, the drill reminder, and a real unavailable destination that does not hold up the admin. No decision changed.
 - 2026-11-12: the vulnerable-dependency row names its tests (plan step 7.1, PR AR): the fixture that `cargo deny` must fail on, the dated Trivy ignore file and the image scan. The weekly scheduled run's failure email is the alert, which only the owner's notification setting makes real (CONTRIBUTING.md). No decision changed.
 - 2026-11-12: the auditor-down-or-disk-full row names the failure drills (plan step 7.3, PR AT, D32): `scripts/check-isolation.sh` stops the auditor in the throwaway stack and shows a new reply refused (`503 audit_backlog`, or the `provider_error` event once the stream is open) and working again once it is back, and runs a second auditor on a 2 MB disk that refuses a new span. The same section runs a full restart, the admin down and the alerter down. No decision changed; no `pending` is left in this row.
+- 2026-11-13: no `pending` rows (plan step 7.5, PR AW2, #108): every Defend row names at least one test, and `scripts/check-docs.sh` now fails a row that names none; the allowance for `pending, PR <letter>` that was to end with the 1.0 release PR is removed from the script and from the sentence under the test table. No decision changed.

@@ -2,7 +2,7 @@
 name = "askbar-alerter"
 license = "AGPL-3.0-or-later"
 publish = false
-version = "0.6.0"
+version = "1.0.0"
 edition = "2021"
 description = "Alert delivery in its own container: /api/alerter/v1 (ADR 0055)"
 

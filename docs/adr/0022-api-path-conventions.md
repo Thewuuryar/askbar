@@ -67,8 +67,8 @@ Each internal service uses the same routes where they apply: `GET /health`, `GET
 
 **Versions and cleanup**
 
-- Each API has its own version. Before 1.0, paths can change to fit these rules. After 1.0, `/api/client/v1` changes stay additive.
-- Before 1.0, move `/admin/api/v1` to `/api/admin/v1`, replace `/api/server/v1/models/list` with `/api/server/v1/models`, and replace `/services/{name}/{action}` with literal actions.
+- Each API has its own version. Paths are fixed at 1.0: within `/api/client/v1`, add only, and never remove or rename a field, endpoint or error code.
+- Done before 1.0: `/admin/api/v1` moved to `/api/admin/v1`, `/api/server/v1/models/list` was replaced with `/api/server/v1/models`, and `/services/{name}/{action}` with literal actions.
 - `/api/client/v1/chat` becomes the space-scoped route above.
 
 ## Alternatives considered

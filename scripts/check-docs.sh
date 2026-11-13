@@ -5,7 +5,7 @@
 #   3. ADR 0001: every ADR but a stub has an Amendments section; a Kind is component or register; a Retired or
 #      Deferred ADR says when and why; a "Merged into NNNN" stub has a Merged: line and names an ADR that exists,
 #      is not a stub and lists it in its Amendments; no ADR has an "Amends:" line or an "amended by" status.
-#   4. ADR 0016: every Defend row has a row in the test table, and every test named there exists (`pending` is allowed until 1.0).
+#   4. ADR 0016: every Defend row has a row in the test table, and every test named there exists, and every row names at least one.
 # Covers every tracked *.md file (all *.md files outside node_modules and target when git is not available).
 # Usage: scripts/check-docs.sh
 cd "$(dirname "$0")/.." || exit 2
@@ -117,7 +117,7 @@ if os.path.exists("docs/adr/README.md"):
             print(f"docs/adr/README.md: row for ADR {n} has no file"); bad += 1
 
 # Defend table (ADR 0016, D36): every Defend row has a row in "Where each Defend row is tested", and every test
-# named there (in backticks) exists in a tracked file that is not markdown. "pending, PR <letter>" is allowed until 1.0.
+# named there (in backticks) exists in a tracked file that is not markdown. A row that names no test fails: nothing is "pending".
 adr16 = "docs/adr/0016-risk-register.md"
 if os.path.exists(adr16):
     t16 = open(adr16, encoding="utf-8").read()
@@ -145,8 +145,8 @@ if os.path.exists(adr16):
                 pass
         for row, cell in tested.items():
             names = re.findall(r"`([^`]+)`", cell)
-            if not names and "pending" not in cell:
-                print(f"{adr16}: Defend row {row!r} names no test and is not pending"); bad += 1
+            if not names:
+                print(f"{adr16}: Defend row {row!r} names no test"); bad += 1
             for name in names:
                 if not re.search(r"\b" + re.escape(name) + r"\b", blob):
                     print(f"{adr16}: Defend row {row!r} names test {name!r}, which does not exist"); bad += 1
