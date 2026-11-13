@@ -15,6 +15,10 @@
 # install's (no host name, allowlist off, the Cloudflare token cleared). Needs docker and the
 # python:3.12-slim image. Set ASKBAR_ADMIN_PASSWORD if the admin already has a password;
 # otherwise the first-run password is set to a random one.
+#
+# One check is slow and is skipped unless ASKBAR_SLOW_CHECKS=1: a gateway that stays stopped for more than five minutes must raise
+# component_silent (section 3d7), which takes about five minutes of waiting. Run it before changing the auditor's alert rules, the
+# alerter or the gateway's link; CI runs it on a push to main and on a manual run, not on a pull request.
 set -u
 
 PROJECT="${COMPOSE_PROJECT_NAME:-askbar}"
@@ -785,15 +789,22 @@ call('DELETE', '/api/admin/v1/audit/session')" 2>&1 | tail -1)
     done
     [ -n "$got" ] && pass "an unseal reached the sink as an alert" || fail "no unseal alert reached the sink"
     case "$seen" in *"isolation check passphrase"*) fail "the unseal alert holds the passphrase";; *) pass "the unseal alert holds no passphrase";; esac
-    docker stop "$GW" >/dev/null 2>&1
-    got=""
-    for i in $(seq 1 60); do
-      seen=$(sink_seen); case "$seen" in *"Nothing has come from model-gateway-auditor"*) got=1; break;; esac; sleep 10
-    done
-    [ -n "$got" ] && pass "a gateway stopped for more than five minutes raised component_silent, naming its link" || fail "no component_silent reached the sink within ten minutes of stopping the gateway"
-    docker start "$GW" >/dev/null 2>&1
-    for i in $(seq 1 30); do [ "$(docker inspect -f '{{.State.Health.Status}}' "$GW")" = healthy ] && break; sleep 2; done
-    [ "$(docker inspect -f '{{.State.Health.Status}}' "$GW")" = healthy ] && pass "the gateway is healthy again" || fail "the gateway did not come back"
+    # This one waits out the auditor's five minutes of silence, about half of the whole run, so it is slow: it runs when
+    # ASKBAR_SLOW_CHECKS=1 (ci.yml sets it on a push to main and on a manual run, not on a pull request). The rule itself is
+    # tested with a fake clock (services/auditor/src/rules.rs) and against a real auditor (services/auditor/tests/alerts.rs).
+    if [ "${ASKBAR_SLOW_CHECKS:-}" = 1 ]; then
+      docker stop "$GW" >/dev/null 2>&1
+      got=""
+      for i in $(seq 1 60); do
+        seen=$(sink_seen); case "$seen" in *"Nothing has come from model-gateway-auditor"*) got=1; break;; esac; sleep 10
+      done
+      [ -n "$got" ] && pass "a gateway stopped for more than five minutes raised component_silent, naming its link" || fail "no component_silent reached the sink within ten minutes of stopping the gateway"
+      docker start "$GW" >/dev/null 2>&1
+      for i in $(seq 1 30); do [ "$(docker inspect -f '{{.State.Health.Status}}' "$GW")" = healthy ] && break; sleep 2; done
+      [ "$(docker inspect -f '{{.State.Health.Status}}' "$GW")" = healthy ] && pass "the gateway is healthy again" || fail "the gateway did not come back"
+    else
+      echo "SKIP  a stopped gateway raising component_silent (about 5 minutes: set ASKBAR_SLOW_CHECKS=1 to run it)"
+    fi
     # Put it back: no channel, and the sink gone.
     admin_script "$(admin_login)
 print(call('PUT', '/api/admin/v1/alerts', {'ntfy': None})[0])" >/dev/null 2>&1

@@ -72,7 +72,7 @@ jobs:
             workflow_run)
               [[ "$RUN_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "unexpected commit: $RUN_HEAD_SHA" >&2; exit 1; }
               out channel edge; out environment ""; out version main; out ref "$RUN_HEAD_SHA"
-              out tags "main sha-${RUN_HEAD_SHA:0:7}"; out publish true; out tag_release false; out prerelease false
+              out tags "sha-${RUN_HEAD_SHA:0:7} main"; out publish true; out tag_release false; out prerelease false
               ;;
             push)
               [[ "$REF_NAME" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)(-rc\.[0-9]+)?$ ]] || { echo "not a release tag: $REF_NAME" >&2; exit 1; }
@@ -194,24 +194,25 @@ jobs:
           set: |
             *.cache-from=type=gha,scope=askbar-build
             caddy.cache-from=type=gha,scope=askbar-caddy
-      # The digest of each pushed image, from bake's metadata. A missing or malformed one stops the run.
+      # The digest of each pushed image, read back from the registry by the first tag, which is unique to this run (the commit's
+      # for edge, the version for a tag). Bake's own metadata is not used: with attestations it is too big for an environment
+      # variable ("Argument list too long", the second edge run). A missing or malformed digest stops the run.
       - name: Digests
         if: env.PUBLISH == 'true'
-        env:
-          METADATA: ${{ steps.bake.outputs.metadata }}
         run: |
           set -euo pipefail
-          printf '%s' "$METADATA" > "$RUNNER_TEMP/metadata.json"
-          python3 - "$RUNNER_TEMP/metadata.json" > "$RUNNER_TEMP/digests.txt" <<'PY'
-          import json, os, re, sys
-          meta = json.load(open(sys.argv[1]))
-          for s in os.environ["SERVICES"].split():
-              d = (meta.get(s) or {}).get("containerimage.digest", "")
-              if not re.fullmatch(r"sha256:[0-9a-f]{64}", d):
-                  sys.exit(f"no digest for {s}")
-              print(s, d)
-          PY
+          : > "$RUNNER_TEMP/digests.txt"
+          for service in $SERVICES; do
+            digest=$(docker buildx imagetools inspect "${REGISTRY}askbar-$service:${ASKBAR_FIRST_TAG}" --format '{{.Manifest.Digest}}')
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "no digest for $service: '$digest'" >&2; exit 1; }
+            echo "$service $digest" >> "$RUNNER_TEMP/digests.txt"
+          done
           cat "$RUNNER_TEMP/digests.txt"
+          # The shape scripts/release-compose.sh reads: one entry for each service with its "containerimage.digest".
+          python3 - "$RUNNER_TEMP/digests.txt" > "$RUNNER_TEMP/metadata.json" <<'PY'
+          import json, sys
+          print(json.dumps({s: {"containerimage.digest": d} for s, d in (l.split() for l in open(sys.argv[1]))}, indent=2))
+          PY
       # Before signing, so nothing with a known fix outstanding is signed: ci.yml's flags and ignore file.
       - uses: aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514 # v0.2.6
         if: env.PUBLISH == 'true'
@@ -249,9 +250,18 @@ jobs:
           cp "$RUNNER_TEMP/metadata.json" release-inputs/bake-metadata.json
           cp "$RUNNER_TEMP/digests.txt" release-inputs/digests.txt
           while read -r service digest; do
-            docker buildx imagetools inspect "${REGISTRY}askbar-$service@$digest" --format '{{ json .SBOM.SPDX }}' \
-              > "release-inputs/askbar-$service.sbom.spdx.json"
-            [ "$(jq -r type "release-inputs/askbar-$service.sbom.spdx.json")" = object ] || { echo "no SBOM for $service" >&2; exit 1; }
+            # `.SBOM` is keyed by platform ({"linux/amd64": {"SPDX": {...}}}); take the SPDX document of the one platform.
+            docker buildx imagetools inspect "${REGISTRY}askbar-$service@$digest" --format '{{ json .SBOM }}' > "$RUNNER_TEMP/sbom-raw.json"
+            python3 - "$RUNNER_TEMP/sbom-raw.json" "release-inputs/askbar-$service.sbom.spdx.json" "$service" <<'PY'
+          import json, sys
+          raw, out, service = sys.argv[1:4]
+          by_platform = json.load(open(raw))
+          entry = by_platform.get("linux/amd64") if isinstance(by_platform, dict) else None
+          spdx = entry.get("SPDX") if isinstance(entry, dict) else None
+          if not isinstance(spdx, dict):
+              sys.exit(f"no SPDX SBOM for {service}")
+          json.dump(spdx, open(out, "w"))
+          PY
           done < "$RUNNER_TEMP/digests.txt"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: env.TAG_RELEASE == 'true'
