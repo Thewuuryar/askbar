@@ -9,8 +9,9 @@
 # What each run does, in order: build the eight images (docker/bake-action, ci.yml's pin) with SBOM and provenance attestations
 # and OCI labels, push them, scan every pushed digest with Trivy (ci.yml's flags and .trivyignore.yaml), then sign every digest with
 # keyless cosign (the run's OIDC identity; no key is stored). Only a tag goes on: scripts/release-compose.sh writes
-# compose.release.yaml, build.yml builds the installers, each file is signed with `cosign sign-blob`, and a DRAFT release holds them
-# all. Nothing here publishes a release: the owner does, after the checklist in docs/releases/.
+# compose.release.yaml, build.yml builds the installers, SHA256SUMS lists every file and is signed once with `cosign sign-blob`, and a
+# DRAFT release holds them all, with docs/releases/<tag>.md as its text (scripts/release-notes.sh makes the links absolute and the
+# job checks each one). Nothing here publishes a release: the owner does.
 #
 # `askbar-cpa` contains CLIProxyAPI (MIT; its notice is in THIRD_PARTY_NOTICES.md); the other images hold Askbar's AGPL-3.0-or-later
 # code, so every image is labelled AGPL-3.0-or-later and says so there.
@@ -246,13 +247,13 @@ jobs:
         if: env.TAG_RELEASE == 'true'
         run: |
           set -euo pipefail
-          mkdir release-inputs
+          mkdir release-inputs "$RUNNER_TEMP/sboms"
           cp "$RUNNER_TEMP/metadata.json" release-inputs/bake-metadata.json
           cp "$RUNNER_TEMP/digests.txt" release-inputs/digests.txt
           while read -r service digest; do
             # `.SBOM` is keyed by platform ({"linux/amd64": {"SPDX": {...}}}); take the SPDX document of the one platform.
             docker buildx imagetools inspect "${REGISTRY}askbar-$service@$digest" --format '{{ json .SBOM }}' > "$RUNNER_TEMP/sbom-raw.json"
-            python3 - "$RUNNER_TEMP/sbom-raw.json" "release-inputs/askbar-$service.sbom.spdx.json" "$service" <<'PY'
+            python3 - "$RUNNER_TEMP/sbom-raw.json" "$RUNNER_TEMP/sboms/askbar-$service.sbom.spdx.json" "$service" <<'PY'
           import json, sys
           raw, out, service = sys.argv[1:4]
           data = json.load(open(raw))
@@ -273,6 +274,8 @@ jobs:
           json.dump(spdx, open(out, "w"))
           PY
           done < "$RUNNER_TEMP/digests.txt"
+          # One file for the release: askbar-<version>-sboms.tar.gz holds the SBOM of each image.
+          tar -czf "release-inputs/askbar-$VERSION-sboms.tar.gz" -C "$RUNNER_TEMP" sboms
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: env.TAG_RELEASE == 'true'
         with:
@@ -319,18 +322,19 @@ jobs:
           set -euo pipefail
           mkdir assets
           scripts/release-compose.sh release-inputs/bake-metadata.json assets/compose.release.yaml
-          cp release-inputs/askbar-*.sbom.spdx.json assets/
+          cp release-inputs/askbar-*-sboms.tar.gz assets/
           # Installers only: not the unpacked app folders next to them.
           find installer-artifacts -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' -o -name '*.dmg' -o -name '*.msi' -o -name '*.exe' \) \
             -exec cp {} assets/ \;
           ls -l assets
-      - name: Sign each file
+      # One checksum file lists every other file, and one signature covers it: verify the signature, then the checksums.
+      - name: Checksum and sign
         run: |
           set -euo pipefail
           cd assets
-          for f in *; do
-            cosign sign-blob --yes --bundle "$f.sigstore.json" "$f"
-          done
+          sha256sum -- * > SHA256SUMS
+          cosign sign-blob --yes --bundle SHA256SUMS.sigstore.json SHA256SUMS
+          cat SHA256SUMS
       - name: Draft the release (it is never published here)
         run: |
           set -euo pipefail
@@ -340,8 +344,12 @@ jobs:
             gh release upload "$TAG" assets/* --clobber
             exit 0
           fi
-          notes="docs/releases/${VERSION%%-*}.md"
-          args=(--draft --verify-tag --title "Askbar $VERSION")
+          # The text is docs/releases/<tag>.md with its links made absolute at the tag (scripts/release-notes.sh fails if the
+          # file is missing or a link points nowhere). Each link is then fetched at the tag, so a broken one stops the release.
+          scripts/release-notes.sh "$TAG" > "$RUNNER_TEMP/notes.md"
+          scripts/release-notes.sh "$TAG" --paths | while read -r path; do
+            gh api "repos/$GITHUB_REPOSITORY/contents/$path?ref=$TAG" --silent || { echo "the release notes link to $path, which is not at $TAG" >&2; exit 1; }
+          done
+          args=(--draft --verify-tag --title "Askbar $VERSION" --notes-file "$RUNNER_TEMP/notes.md")
           [ "$PRERELEASE" = true ] && args+=(--prerelease)
-          if [ -f "$notes" ]; then args+=(--notes-file "$notes"); else args+=(--generate-notes); fi
           gh release create "$TAG" "${args[@]}" assets/*
