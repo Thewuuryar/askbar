@@ -250,8 +250,9 @@ fields, endpoints and error codes. Anything else gets a `v2` beside it for one r
 0.4.0 changed the wire format (generation ids, delta ids, queued messages, new endpoints) and
 0.5.0 moved the paths (`/api/v1` to `/api/client/v1`, `/pair` to `/pairings`, `/whoami` to `/me`)
 and made every error a problem. 0.6.0 moved conversations, search, chat and generations under
-`/spaces/{space_id}` (*Spaces* above), so `min_client` is 0.6.0. Before 1.0 paths may change like
-this ([ADR 0022](adr/0022-api-path-conventions.md)); after 1.0, `v1` changes are additive only.
+`/spaces/{space_id}` (*Spaces* above), so `min_client` is 0.6.0. Those moves were made before 1.0
+([ADR 0022](adr/0022-api-path-conventions.md)). From 1.0, within `/api/client/v1`, add only: never remove or rename
+a field, endpoint or error code.
 
 ## Routing, retries and gates
 

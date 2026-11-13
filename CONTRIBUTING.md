@@ -66,8 +66,8 @@ when you have changed them (the admin site's files are compiled in).
 6. **Docs**, in the same commit: `docs/wire-contract.md` if the meaning needs words; `README.md` (the short
    version) or `docs/guide.md` (the details) if a person would notice. One place per fact: link, don't repeat.
 
-After 1.0, changes within `/api/client/v1` are additive only (new fields, endpoints, codes); anything else needs a `v2`
-beside it for a release. Before 1.0, paths can change to fit [ADR 0022](docs/adr/0022-api-path-conventions.md).
+From 1.0, within `/api/client/v1`, add only: never remove or rename a field, endpoint or error code (a hard rule in
+[AGENTS.md](AGENTS.md)); anything else needs a `v2` beside it for a release. Paths follow [ADR 0022](docs/adr/0022-api-path-conventions.md).
 
 ## Database changes
 

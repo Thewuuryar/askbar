@@ -153,7 +153,7 @@ One host name. Every API uses `/api/{name}/v{major}` ([ADR 0022](adr/0022-api-pa
 | `/api/client/v1/*` | `server` | local network or Tailscale by default | client bearer token plus the client-version gate |
 | everything else, including other `/api/*` paths | answered 404 by Caddy | n/a | n/a |
 
-Before 1.0, paths can change to fit the conventions. After 1.0, `/api/client/v1` changes are additive only.
+From 1.0, within `/api/client/v1`, add only: never remove or rename a field, endpoint or error code. A change that needs one of those is a `v2` next to it.
 
 ## Errors
 
