@@ -324,6 +324,12 @@ jobs:
       - name: Draft the release (it is never published here)
         run: |
           set -euo pipefail
+          # A release made by hand for this tag (the web page can create the tag only with one) keeps its title, notes and
+          # state: the files are added to it. Nothing here publishes or edits it.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" assets/* --clobber
+            exit 0
+          fi
           notes="docs/releases/${VERSION%%-*}.md"
           args=(--draft --verify-tag --title "Askbar $VERSION")
           [ "$PRERELEASE" = true ] && args+=(--prerelease)
