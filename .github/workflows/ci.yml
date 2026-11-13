@@ -191,7 +191,11 @@ jobs:
           mkdir -p data
           sudo chown 10002:10002 data
           docker compose up -d --no-build --wait --wait-timeout 300
+      # The check that waits five minutes for a stopped gateway to raise component_silent runs on a push to main and on a manual
+      # run, not on a pull request (it is about half of this job; its header says why that is safe).
       - name: Isolation checks
+        env:
+          ASKBAR_SLOW_CHECKS: ${{ github.event_name == 'pull_request' && '0' || '1' }}
         run: scripts/check-isolation.sh
       - name: Container logs
         if: failure()

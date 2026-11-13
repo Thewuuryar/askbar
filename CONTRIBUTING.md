@@ -37,7 +37,7 @@ cargo test --workspace             # needs python3 (a mock LLM)
 npm install && npm --prefix clients/desktop install && npx playwright install chromium
 npm test                           # names and link checks, cargo tests (both workspaces), markdown, UI and admin browser tests, mock LLM
 scripts/smoke.sh                   # server + admin + mock LLM, end to end, no Docker
-docker compose up -d --build && scripts/check-isolation.sh   # needs Docker; a throwaway stack
+docker compose up -d --build && scripts/check-isolation.sh   # needs Docker; a throwaway stack. ASKBAR_SLOW_CHECKS=1 adds the five-minute alert check
 python3 tests/e2e/mock_llm.py 8765     # a fake OpenAI-compatible server to try things without a key
 npm --prefix clients/desktop install && npm --prefix clients/desktop run dev   # the desktop app
 ```
