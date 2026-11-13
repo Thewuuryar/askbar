@@ -43,6 +43,43 @@ env:
   APT_OPTS: -o Acquire::http::Timeout=10 -o Acquire::Retries=3
 
 jobs:
+  # Which heavy jobs a pull request needs, from the files it changes. A job skipped by `if` counts as passing for the `main`
+  # ruleset's required checks, so this fails open: if it cannot tell, or itself fails, every job runs.
+  #   stack    the images and the isolation check: anything but documentation and the desktop client (which no image contains);
+  #   desktop  the desktop client's tests: anything but documentation (it depends on crates/ and services/server).
+  # `lint`, `test-services`, `dependencies` and `secrets` always run. A push, a manual run and the weekly run run everything.
+  changes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      stack: ${{ steps.diff.outputs.stack }}
+      desktop: ${{ steps.diff.outputs.desktop }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - id: diff
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -uo pipefail
+          all() { echo "stack=true" >> "$GITHUB_OUTPUT"; echo "desktop=true" >> "$GITHUB_OUTPUT"; echo "$1: everything runs"; exit 0; }
+          [ "$EVENT_NAME" = pull_request ] || all "not a pull request"
+          # The pull request's merge commit: its first parent is the base, so this is exactly what the pull request changes.
+          files=$(git diff --name-only HEAD^1 HEAD) || all "could not list the changed files"
+          [ -n "$files" ] || all "no changed files"
+          echo "$files"
+          docs='^(docs/|[^/]+\.md$|LICENSE$|\.github/pull_request_template\.md$)'
+          stack=false; desktop=false
+          while IFS= read -r f; do
+            [[ "$f" =~ $docs ]] && continue
+            desktop=true
+            [[ "$f" =~ ^clients/desktop/ ]] || stack=true
+          done <<< "$files"
+          echo "stack=$stack" >> "$GITHUB_OUTPUT"; echo "desktop=$desktop" >> "$GITHUB_OUTPUT"
+          echo "stack=$stack desktop=$desktop"
+
   lint:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-24.04
@@ -119,7 +156,8 @@ jobs:
 
   # The desktop client: its cargo tests, the Markdown renderer and the popup browser test.
   test-desktop:
-    if: github.event_name != 'schedule'
+    needs: changes
+    if: ${{ !cancelled() && github.event_name != 'schedule' && needs.changes.outputs.desktop != 'false' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -164,7 +202,8 @@ jobs:
         run: npm run test:desktop
 
   isolation:
-    if: github.event_name != 'schedule'
+    needs: changes
+    if: ${{ !cancelled() && github.event_name != 'schedule' && needs.changes.outputs.stack != 'false' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -251,6 +290,8 @@ jobs:
   # GitHub's email for a failed scheduled run is the CVE alert (turn the notification on, see CONTRIBUTING.md). Trivy is installed by a
   # pinned action at a pinned version; the mock LLM of the dev profile is not scanned (it is an image of Python's, for tests only).
   images:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.stack != 'false' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -284,6 +325,8 @@ jobs:
   # account list): `scripts/check-cpa-image.sh`, which its own header says to run after changing the pinned digest. No account is
   # needed; it only pulls the image.
   cpa-image:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.stack != 'false' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
