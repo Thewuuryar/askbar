@@ -37,6 +37,8 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io/thewuuryar/
+  # The built services, space-separated for the scripts below. The two bake steps list them one to a line (bake-action's `targets`
+  # is a list: one space-separated string is taken as a single target name); keep the three in step.
   SERVICES: bootstrap server admin auditor model-gateway alerter caddy cpa
 
 jobs:
@@ -149,7 +151,15 @@ jobs:
           files: |
             compose.yaml
             ${{ runner.temp }}/tags.json
-          targets: ${{ env.SERVICES }}
+          targets: |
+            bootstrap
+            server
+            admin
+            auditor
+            model-gateway
+            alerter
+            caddy
+            cpa
           push: true
           set: |
             *.cache-from=type=gha,scope=askbar-build
@@ -172,7 +182,15 @@ jobs:
           files: |
             compose.yaml
             ${{ runner.temp }}/tags.json
-          targets: ${{ env.SERVICES }}
+          targets: |
+            bootstrap
+            server
+            admin
+            auditor
+            model-gateway
+            alerter
+            caddy
+            cpa
           set: |
             *.cache-from=type=gha,scope=askbar-build
             caddy.cache-from=type=gha,scope=askbar-caddy
