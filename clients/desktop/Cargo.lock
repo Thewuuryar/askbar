@@ -134,7 +134,7 @@ checksum = "7d902e3d592a523def97af8f317b08ce16b7ab854c1985a0c671e6f15cebc236"
 
 [[package]]
 name = "askbar-audit"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "askbar-service",
  "base64 0.22.1",
@@ -149,7 +149,7 @@ dependencies = [
 
 [[package]]
 name = "askbar-auditor"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "askbar-audit",
  "askbar-proto",
@@ -166,7 +166,7 @@ dependencies = [
 
 [[package]]
 name = "askbar-client"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "askbar-proto",
  "askbar-server",
@@ -194,7 +194,7 @@ dependencies = [
 
 [[package]]
 name = "askbar-model-gateway"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "askbar-proto",
  "askbar-service",
@@ -216,7 +216,7 @@ dependencies = [
 
 [[package]]
 name = "askbar-proto"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -226,7 +226,7 @@ dependencies = [
 
 [[package]]
 name = "askbar-server"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "askbar-audit",
  "askbar-auditor",
@@ -253,7 +253,7 @@ dependencies = [
 
 [[package]]
 name = "askbar-service"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "age",
  "askbar-proto",

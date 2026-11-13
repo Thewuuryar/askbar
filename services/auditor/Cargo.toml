@@ -2,7 +2,7 @@
 name = "askbar-auditor"
 license = "AGPL-3.0-or-later"
 publish = false
-version = "0.6.0"
+version = "1.0.0"
 edition = "2021"
 description = "The audit store as its own container: /api/audit/v1 (ADR 0051)"
 

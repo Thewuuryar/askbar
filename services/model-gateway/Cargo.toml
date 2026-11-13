@@ -2,7 +2,7 @@
 name = "askbar-model-gateway"
 license = "AGPL-3.0-or-later"
 publish = false
-version = "0.6.0"
+version = "1.0.0"
 edition = "2021"
 description = "Provider calls and provider keys in their own container: /api/model-gateway/v1 (ADR 0054)"
 

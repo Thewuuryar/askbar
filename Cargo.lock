@@ -154,7 +154,7 @@ dependencies = [
 
 [[package]]
 name = "askbar-admin"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "argon2",
  "askama",
@@ -186,7 +186,7 @@ dependencies = [
 
 [[package]]
 name = "askbar-alerter"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "askbar-audit",
  "askbar-auditor",
@@ -207,7 +207,7 @@ dependencies = [
 
 [[package]]
 name = "askbar-audit"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "askbar-service",
  "base64 0.22.1",
@@ -223,7 +223,7 @@ dependencies = [
 
 [[package]]
 name = "askbar-auditor"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "askbar-audit",
  "askbar-proto",
@@ -244,7 +244,7 @@ dependencies = [
 
 [[package]]
 name = "askbar-bootstrap"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "base64 0.22.1",
  "sha2 0.10.9",
@@ -252,7 +252,7 @@ dependencies = [
 
 [[package]]
 name = "askbar-cpa-supervisor"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "askbar-service",
  "libc",
@@ -261,7 +261,7 @@ dependencies = [
 
 [[package]]
 name = "askbar-model-gateway"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "askbar-audit",
  "askbar-auditor",
@@ -286,7 +286,7 @@ dependencies = [
 
 [[package]]
 name = "askbar-proto"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -296,7 +296,7 @@ dependencies = [
 
 [[package]]
 name = "askbar-server"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "age",
  "askbar-audit",
@@ -326,7 +326,7 @@ dependencies = [
 
 [[package]]
 name = "askbar-service"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "age",
  "askbar-proto",
