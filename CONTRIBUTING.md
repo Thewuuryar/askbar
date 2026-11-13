@@ -126,6 +126,12 @@ The whole API is [docs/openapi/admin.v1.yaml](docs/openapi/admin.v1.yaml).
   ADR or amend one in place, with a line in its Amendments, in [docs/adr/](docs/adr/) in the same PR. Only the owner
   accepts an ADR or approves a change to a decision. A change to a security rule
   includes its docs and isolation tests in the same PR ([ADR 0001](docs/adr/0001-decision-records-and-change-rules.md)).
+- **What CI runs for a pull request.** `ci.yml` always runs `lint`, `test-services`, `dependencies` and `secrets`. A pull request that
+  changes only documentation (`docs/`, a `*.md` file at the top, `LICENSE`) skips `isolation`, `images`, `cpa-image` and `test-desktop`;
+  one that changes only `clients/desktop/` skips `isolation`, `images` and `cpa-image`, because no image contains the client. A skipped job
+  counts as passing for the required checks. A push to `main`, a manual run and the weekly run run everything, including the
+  five-minute alert check in `scripts/check-isolation.sh` (`ASKBAR_SLOW_CHECKS=1`). If you are unsure, change the path lists in the `changes`
+  job of `ci.yml`, never the required checks.
 - **Review.** The owner reviews every pull request. Changes to the paths that decide who can reach what get extra care.
 
 ## Repository settings the owner turns on
@@ -236,6 +242,15 @@ Go to **github.com/settings/notifications → System → Actions**.
 - Tick **Only notify for failed workflows**.
 
 The weekly scheduled `ci` run then emails you when a new advisory makes it fail. It is the CVE alert; there is no other. GitHub stops scheduled runs in a repository with no activity for 60 days, so push something now and then.
+
+### H. CodeQL
+
+After `.github/workflows/codeql.yml` is on `main`. It replaces GitHub's *default setup* for code scanning, because the default setup cannot analyse Rust only on pushes: a pull request analyses JavaScript, Python and the workflows (about one minute), and a push to `main` and the weekly run add Rust (about seven minutes). While the default setup is on, GitHub refuses the workflow's results, so switch:
+
+1. **Settings → Security → Code security** (or *Advanced Security*) → **CodeQL analysis** → the **⋯** menu → **Switch to advanced**. Confirm.
+2. Check that the next pull request shows `Analyze (javascript-typescript)`, `(python)` and `(actions)` from the `codeql` workflow, and that the next push to `main` also shows `Analyze (rust)`.
+
+Alerts that are open stay open: both setups use the same result category for each language (`/language:<language>`). A pull request no longer shows new Rust alerts before merge; they appear on `main` after it.
 
 **The Renovate app** on the repository (`renovate.json`) proposes the version updates and keeps Actions and images pinned.
 
