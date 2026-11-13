@@ -2,7 +2,7 @@
 
 Status: Accepted
 Date: 2026-11-07
-Source: plan step 1.3 ([plan-v1.md](../plan-v1.md)); owner rule that every new component gets an ADR before it is created
+Source: plan step 1.3 ([plan-v1.md](https://github.com/Thewuuryar/askbar/blob/504481bc62e9290bb20be6401dfcf379a3bdedb6/docs/plan-v1.md)); owner rule that every new component gets an ADR before it is created
 Kind: component
 
 ## Context

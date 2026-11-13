@@ -2,7 +2,7 @@
 
 Status: Accepted
 Date: 2026-11-06
-Source: owner request with the v1 plan ([plan-v1.md](../plan-v1.md))
+Source: owner request with the v1 plan ([plan-v1.md](https://github.com/Thewuuryar/askbar/blob/504481bc62e9290bb20be6401dfcf379a3bdedb6/docs/plan-v1.md))
 
 ## Context
 

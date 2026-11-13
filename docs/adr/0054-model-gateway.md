@@ -3,7 +3,7 @@
 Status: Accepted
 Date: 2026-11-10
 Kind: component
-Source: plan step 3.1 ([plan-v1.md](../plan-v1.md)); owner rule that every component has an ADR of its own (2026-11-07); owner's order of 2026-11-10 (`model-gateway` before the server sends records to the auditor)
+Source: plan step 3.1 ([plan-v1.md](https://github.com/Thewuuryar/askbar/blob/504481bc62e9290bb20be6401dfcf379a3bdedb6/docs/plan-v1.md)); owner rule that every component has an ADR of its own (2026-11-07); owner's order of 2026-11-10 (`model-gateway` before the server sends records to the auditor)
 
 ## Context
 

@@ -3,7 +3,7 @@
 Status: Accepted
 Date: 2026-11-08
 Kind: component
-Source: plan step 1.14 ([plan-v1.md](../plan-v1.md)); owner rule that every component has an ADR of its own (2026-11-07)
+Source: plan step 1.14 ([plan-v1.md](https://github.com/Thewuuryar/askbar/blob/504481bc62e9290bb20be6401dfcf379a3bdedb6/docs/plan-v1.md)); owner rule that every component has an ADR of its own (2026-11-07)
 
 ## Context
 
