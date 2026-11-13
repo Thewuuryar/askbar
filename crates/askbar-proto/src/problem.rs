@@ -2,7 +2,7 @@
 //!
 //! `error` is the stable code a program branches on; `title` is fixed per code; `detail` is the
 //! sentence for a person; extension members (for example `period`) ride alongside. Codes are only
-//! ever added, never renamed (see "Within v1" in docs/architecture.md).
+//! ever added, never renamed (see "Versions" in docs/architecture.md).
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};

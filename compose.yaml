@@ -20,7 +20,7 @@
 #   cpa-gateway  model-gateway and CLIProxyAPI, nothing else. `internal`.
 #   audit-alerter  the auditor and the alerter, nothing else. `internal`. The auditor sends its alert events on it, and the
 #               alerter appends the outcome of each alert (ADR 0055); alerter-admin (the admin and the alerter) is the same.
-#   alerter-outbound  the alerter alone. Not `internal`: its route out is for delivering alerts (ntfy, later email) and
+#   alerter-outbound  the alerter alone. Not `internal`: its route out is for delivering alerts (ntfy and email) and
 #               checking for releases. It is not `outbound`, where model-gateway sits, so nothing else is on it (ADR 0055).
 # No network pins a subnet or an address; Docker assigns them (docs/guide.md, "Docker networks").
 # The admin joins no network but server-api. Caddy reaches it only through its unix socket (volume admin-run),
