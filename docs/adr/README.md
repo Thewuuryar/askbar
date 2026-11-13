@@ -59,4 +59,3 @@ This set records the decisions from the original Askbar architecture plan (kept 
 | [0053](0053-amending-adrs-in-place.md) | Amending any ADR in place | Merged into 0001 | Owner request, 2026-11-10 |
 | [0054](0054-model-gateway.md) | The `model-gateway` component | Accepted | Plan step 3.1; owner rule for component ADRs |
 | [0055](0055-alerter.md) | The `alerter` component | Accepted | Plan steps 4.1 to 4.3; owner rule for component ADRs |
-| [0056](0056-one-image-two-run-modes.md) | One image, two run modes | Proposed | Owner request, 2026-11-13 |
