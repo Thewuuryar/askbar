@@ -1,6 +1,6 @@
-# Plan: after v1 and open repo work
+# Plan: after v1
 
-Status: tracker for work not yet built or decided. The order and rules for post-v1 work are decided in [ADR 0019](adr/0019-post-v1-order-and-tools.md) (egress proxy, then web research with the judge, then the executor) and [ADR 0020](adr/0020-remote-executor-and-ca-triggers.md) (executor pairing, tunnel, CA triggers). This file keeps the v2 picture and the repo work around it. Hardening work is in [plan-container-hardening.md](plan-container-hardening.md).
+Status: tracker for work after 1.0. The order and rules are decided in [ADR 0019](adr/0019-post-v1-order-and-tools.md) (egress proxy, then web research with the judge, then the executor) and [ADR 0020](adr/0020-remote-executor-and-ca-triggers.md) (executor pairing, tunnel, CA triggers). This file keeps the v2 picture and the repo decisions that are not yet an ADR. Container hardening proposals are in [plan-container-hardening.md](plan-container-hardening.md).
 
 ## V2 sketch
 
@@ -60,23 +60,11 @@ flowchart TB
 
 Thick outline and "(new)": new in v2.
 
-## Repo work
+## Open repo decisions
 
-- **Pinning gaps.** Done: the images are pinned to digests and the Caddy Cloudflare plugin to a release (the `Dockerfile`), the npm lockfiles are committed, and the GitHub Actions are pinned to commit hashes ([ADR 0017](adr/0017-dependencies-and-patches.md)).
-- **Update tools.** Done: `renovate.json` for version updates and `.github/dependabot.yml` for security updates only. Each takes effect once its app or setting is turned on for the repository.
-- **CI.** Done: `.github/workflows/ci.yml` runs `check-isolation.sh` on every pull request, with the other checks ([ADR 0018](adr/0018-releases-and-migrations.md)).
-- **Unverified paths.** The [guide](guide.md#verified-and-not) lists a real certificate through this layout and person-tested pairing as unverified. The `cpa` login endpoints have not been checked against the pinned image.
+Not decided anywhere yet. Each becomes an ADR, a rule in [AGENTS.md](../AGENTS.md) or [CONTRIBUTING.md](../CONTRIBUTING.md), or an issue.
 
-## Background: the first-run model
-
-[ADR 0007](adr/0007-first-run-and-admin-sign-in.md) follows the pfSense model: limit who can reach the admin page, and ship a published first credential with a forced change. The comparison it came from:
-
-| Area | pfSense | Askbar |
-| --- | --- | --- |
-| Who can reach it | [Default deny on WAN, default allow on LAN](https://docs.netgate.com/pfsense/en/latest/firewall/best-practices.html) | Private addresses only. The admin can add Tailscale later |
-| Encryption | [HTTPS with a self-signed certificate from first boot, and a redirect from port 80](https://docs.netgate.com/pfsense/en/latest/config/advanced-admin.html) | The same |
-| First credential | [Default login](https://docs.netgate.com/pfsense/en/latest/solutions/netgate-4200/initial-configuration.html), then a wizard password step | Published initial credentials, then a wizard password step |
-| After setup | [Anti-lockout rules keep the GUI reachable on LAN](https://docs.netgate.com/pfsense/en/latest/config/advanced-admin.html) | Allowlist stays on for private addresses, and can be widened in settings |
-| Recovery | [Console options reset the admin account or restore factory defaults](https://docs.netgate.com/pfsense/en/latest/config/console-menu.html) | A host or console command does both, and each reset is recorded in the audit log |
-
-The rule that rejects the default password or one matching the username follows [pfSense Plus](https://redmine.pfsense.org/issues/15266).
+- **Swift app conventions.** Decide when the iOS app starts: `swift-format` or `SwiftLint`, and the same error-code mapping as the desktop app.
+- **An accessibility baseline for the popup.** Not decided anywhere. Suggest: every action reachable by keyboard (already true), visible focus, and contrast checked in both themes (`scripts/check-ui-tokens.sh` already checks the token contrast).
+- **AI attribution.** Keep a `Co-authored-by:` trailer on agent commits so history shows it. Recommended; not written into CONTRIBUTING.md.
+- **Keeping the rules alive.** Add a rule only after something went wrong or was debated, and add the check that catches it in the same change. A rule with no command that verifies it belongs in a review checklist, not in AGENTS.md. Recommended; not written into CONTRIBUTING.md.
