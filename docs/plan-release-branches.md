@@ -46,7 +46,7 @@ Only the latest minor version gets fixes. When 1.1.0 ships, 1.0.x is no longer p
 
 ## Rules for working in parallel
 
-1. **A fix goes to `main` first, then to `release/1.0` with `git cherry-pick -x`.** Then 1.1 never lacks a 1.0 fix. A feature goes to `main` only.
+1. **A fix goes to `main` first, then to `release/1.0` with `git cherry-pick -x`.** Then 1.1 never lacks a 1.0 fix. A feature goes to `main` only. If the code has drifted so the cherry-pick conflicts, or the bug is easier to reproduce on 1.0, fix on `release/1.0` first and cherry-pick onto `main` (case 2 in the worked example). The fix must end up on both lines either way.
 2. **No database migration in a patch.** A 1.0.x migration would take the same number as a 1.1 one, and migrations are only ever appended. Solve the problem without one, or it is not a patch.
 3. **The API stays additive** (an existing rule), so 1.1 on `main` does not break a 1.0 client.
 4. **Versions.** `release/1.0` carries 1.0.x: a `chore: version 1.0.N` commit before each tag. `main` becomes 1.1.0 in the pull request that cuts the first 1.1 rc.
@@ -122,6 +122,19 @@ git worktree add ../askbar-1.0 release/1.0     # a second folder on release/1.0
    git cherry-pick -x <sha>                     # resolve a conflict if there is one, then git cherry-pick --continue
    git push -u origin fix/backup-date-1.0       # open a PR with base release/1.0, wait for ci, merge
    ```
+**Case 2: the code changed in 1.1.** If the 1.1 PRs already merged touch the code you are fixing, the backport in steps 1 and 2 conflicts, or the bug is easier to reproduce on 1.0. Fix on the release branch first, then copy the fix onto `main`, in the other order:
+
+```bash
+git fetch origin
+git switch -c fix/backup-date-1.0 origin/release/1.0
+# edit, add a test, commit, push, open a PR with base release/1.0, wait for ci, merge
+git switch -c fix/backup-date origin/main
+git cherry-pick -x <sha of the squashed commit on release/1.0>   # resolve conflicts here
+git push -u origin fix/backup-date          # open a PR into main, merge
+```
+
+The fix is then written and tested against the code it patches, and the port to `main` is where the conflicts are resolved. Either way, continue with step 3, and do not skip the second PR: without it 1.1 brings the bug back.
+
 3. **Prepare the release** in one more PR into `release/1.0`:
    - a `chore: version 1.0.1` commit (the same version files the 1.0.0 version commit changed);
    - `docs/releases/v1.0.1.md` and `docs/releases/changelog/CHANGELOG-v1.0.1.md` (a `## [1.0.1]` section with `### Fixed`).
