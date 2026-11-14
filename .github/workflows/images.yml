@@ -343,11 +343,12 @@ jobs:
           scripts/release-notes.sh "$TAG" --paths | while read -r path; do
             gh api "repos/$GITHUB_REPOSITORY/contents/$path?ref=$TAG" --silent || { echo "the release notes link to $path, which is not at $TAG" >&2; exit 1; }
           done
-          # A release that already exists for this tag (made by hand: the web page can create a tag only with a release, or left by
-          # an earlier run) gets its text replaced by the file's and the files added or replaced. Its title and its draft or
-          # published state stay as they are. Nothing here publishes a release.
+          # A release that already exists for this tag (the web page can create a tag only by publishing a release, or an earlier run
+          # left one) gets its text replaced by the file's and the files added or replaced, whether it is a draft or published.
+          # Its title stays; its pre-release mark is set from the tag (an rc is a pre-release, so it never shows as the latest
+          # release). Nothing here publishes a release. This needs GitHub's "immutable releases" setting to be off.
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release edit "$TAG" --notes-file "$RUNNER_TEMP/notes.md"
+            gh release edit "$TAG" --notes-file "$RUNNER_TEMP/notes.md" --prerelease="$PRERELEASE"
             gh release upload "$TAG" assets/* --clobber
             exit 0
           fi
