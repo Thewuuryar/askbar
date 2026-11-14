@@ -345,7 +345,7 @@ Everything comes from one trunk, `main`. Pre-built images are published to the G
 | staging | a tag `vX.Y.Z-rc.N` | `:X.Y.Z-rc.N` | `staging` |
 | production | a tag `vX.Y.Z` | `:X.Y.Z`, `:X.Y`, `:X`, `:latest` | `production` (the owner approves) |
 
-Use a release for a server you rely on. Edge is `main` as it stands: it passed CI, but no person has tried it. Edge images pile up in the registry; the owner removes old ones by hand in the package's settings. Each release has a GitHub release (a draft until the owner publishes it) holding `compose.release.yaml`, the desktop installers, a tar of the SBOMs (one for each image), and `SHA256SUMS` with its cosign signature (`SHA256SUMS.sigstore.json`). The release text is `docs/releases/<tag>.md` and the changelog is in `docs/releases/changelog/`.
+Use a release for a server you rely on. Edge is `main` as it stands: it passed CI, but no person has tried it. Edge images pile up in the registry; the owner removes old ones by hand in the package's settings. Each release has a GitHub release (a draft until the owner publishes it) holding `compose.release.yaml`, the desktop installers (named `Askbar_<version>_<os>_<architecture>.<extension>`), a tar of the SBOMs (one for each image), and `SHA256SUMS` with its cosign signature (`SHA256SUMS.sigstore.json`). The release text is `docs/releases/<tag>.md` and the changelog is in `docs/releases/changelog/`.
 
 ### Using pre-built images
 
