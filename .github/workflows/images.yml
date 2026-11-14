@@ -323,9 +323,8 @@ jobs:
           mkdir assets
           scripts/release-compose.sh release-inputs/bake-metadata.json assets/compose.release.yaml
           cp release-inputs/askbar-*-sboms.tar.gz assets/
-          # Installers only: not the unpacked app folders next to them.
-          find installer-artifacts -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' -o -name '*.dmg' -o -name '*.msi' -o -name '*.exe' \) \
-            -exec cp {} assets/ \;
+          # Installers only (not the unpacked app folders), named Askbar_<version>_<os>_<architecture>.<extension>.
+          scripts/name-installers.sh "$VERSION" installer-artifacts assets
           ls -l assets
       # One checksum file lists every other file, and one signature covers it: verify the signature, then the checksums.
       - name: Checksum and sign
@@ -338,18 +337,21 @@ jobs:
       - name: Draft the release (it is never published here)
         run: |
           set -euo pipefail
-          # A release made by hand for this tag (the web page can create the tag only with one) keeps its title, notes and
-          # state: the files are added to it. Nothing here publishes or edits it.
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" assets/* --clobber
-            exit 0
-          fi
           # The text is docs/releases/<tag>.md with its links made absolute at the tag (scripts/release-notes.sh fails if the
           # file is missing or a link points nowhere). Each link is then fetched at the tag, so a broken one stops the release.
           scripts/release-notes.sh "$TAG" > "$RUNNER_TEMP/notes.md"
           scripts/release-notes.sh "$TAG" --paths | while read -r path; do
             gh api "repos/$GITHUB_REPOSITORY/contents/$path?ref=$TAG" --silent || { echo "the release notes link to $path, which is not at $TAG" >&2; exit 1; }
           done
+          # A release that already exists for this tag (the web page can create a tag only by publishing a release, or an earlier run
+          # left one) gets its text replaced by the file's and the files added or replaced, whether it is a draft or published.
+          # Its title stays; its pre-release mark is set from the tag (an rc is a pre-release, so it never shows as the latest
+          # release). Nothing here publishes a release. This needs GitHub's "immutable releases" setting to be off.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --notes-file "$RUNNER_TEMP/notes.md" --prerelease="$PRERELEASE"
+            gh release upload "$TAG" assets/* --clobber
+            exit 0
+          fi
           args=(--draft --verify-tag --title "Askbar $VERSION" --notes-file "$RUNNER_TEMP/notes.md")
           [ "$PRERELEASE" = true ] && args+=(--prerelease)
           gh release create "$TAG" "${args[@]}" assets/*
