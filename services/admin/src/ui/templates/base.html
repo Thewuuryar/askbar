@@ -83,10 +83,10 @@
   <div id="app" class="app" hidden>
     <aside id="side-menu" class="side-menu" aria-label="Admin menu">
       <div class="sm-top">
-        <a class="sm-brand" href="/admin/{{ crate::constants::LANDING_PAGE }}/"><span class="sm-logo">{% call c::icon("logo") %}{% endcall %}</span><span class="sm-text">Askbar</span></a>
+        <a class="sm-brand" href="/admin/{{ crate::constants::LANDING_PAGE }}/" data-tip="Askbar"><span class="sm-logo">{% call c::icon("logo") %}{% endcall %}</span><span class="sm-text">Askbar</span></a>
         <button type="button" id="menu-collapse" class="btn btn-quiet btn-icon sm-toggle" aria-controls="side-menu" aria-expanded="true" aria-label="Collapse menu" data-tip="Collapse menu">{% call c::icon("collapse") %}{% endcall %}</button>
       </div>
-      <a class="sm-health" id="menu-health" href="/admin/services/"><span class="status status-pending" id="menu-health-status"><span class="status-sym" aria-hidden="true"></span><span class="status-word sm-text">Checking services</span></span></a>
+      <a class="sm-health" id="menu-health" href="/admin/services/" data-tip="Checking services"><span class="status status-pending" id="menu-health-status"><span class="status-sym" aria-hidden="true"></span><span class="status-word sm-text">Checking services</span></span></a>
       <nav id="nav" class="sm-nav" aria-label="Admin pages">
         {%- for g in menu %}
         {%- if g.nested %}

@@ -577,5 +577,65 @@
     ui.closePanel();
   });
 
+  // ------------------------------------------------------------- side menu
+
+  // The collapse button shrinks the menu to icons (rule 2). The choice is this browser's own, so it lives in
+  // localStorage; a store that is blocked or throws leaves the menu expanded and the page working. The class
+  // is set here, as the page loads and while #app is still hidden, so there is no inline script.
+  const MENU_KEY = 'askbar-admin.menu';
+  const stored = (() => { try { return localStorage.getItem(MENU_KEY); } catch (_) { return null; } })();
+  function setCollapsed(collapsed, remember) {
+    document.documentElement.classList.toggle('menu-collapsed', collapsed);
+    const b = $('menu-collapse');
+    if (b) {
+      const name = collapsed ? 'Expand menu' : 'Collapse menu';
+      b.setAttribute('aria-expanded', String(!collapsed));
+      b.setAttribute('aria-label', name);
+      b.dataset.tip = name;
+    }
+    if (remember) {
+      try { localStorage.setItem(MENU_KEY, collapsed ? 'collapsed' : 'expanded'); } catch (_) { /* kept for this page only */ }
+    }
+  }
+  setCollapsed(stored === 'collapsed', false);
+  document.addEventListener('click', (e) => {
+    if (e.target.closest('#menu-collapse')) setCollapsed(!document.documentElement.classList.contains('menu-collapsed'), true);
+  });
+
+  // The menu's names (rules 2, 42): an icon button's name, and every item's while the menu is collapsed, show
+  // beside it on hover and on keyboard focus. The menu scrolls, so a tooltip inside it would be clipped: one
+  // fixed tooltip outside it is placed next to the item instead. It only repeats the item's accessible name
+  // (aria-hidden), and Esc hides it (WCAG 1.4.13).
+  const menuTip = el('div', { id: 'menu-tip', class: 'menu-tip', 'aria-hidden': 'true', hidden: true });
+  function tipFor(target) {
+    const item = target && target.closest ? target.closest('.side-menu [data-tip]') : null;
+    if (!item) return null;
+    const collapsed = document.documentElement.classList.contains('menu-collapsed');
+    return item.classList.contains('btn-icon') || collapsed ? item : null;
+  }
+  let tipItem = null;
+  function showMenuTip(item) {
+    if (!menuTip.isConnected) document.body.append(menuTip);
+    tipItem = item;
+    const r = item.getBoundingClientRect();
+    const menuRight = item.closest('.side-menu').getBoundingClientRect().right;
+    menuTip.textContent = item.dataset.tip;
+    menuTip.hidden = false;
+    // Beside the menu; where that leaves the window (a phone's full-width menu), on the item's left instead.
+    const gap = parseFloat(getComputedStyle(menuTip).marginLeft) || 0;
+    let left = Math.max(r.right, menuRight);
+    if (left + gap + menuTip.offsetWidth > document.documentElement.clientWidth) left = r.left - menuTip.offsetWidth - 2 * gap;
+    menuTip.style.top = (r.top + r.height / 2) + 'px';
+    menuTip.style.left = left + 'px';
+  }
+  const hideMenuTip = () => { tipItem = null; menuTip.hidden = true; };
+  document.addEventListener('mouseover', (e) => { const item = tipFor(e.target); if (item) showMenuTip(item); });
+  document.addEventListener('mouseout', (e) => { if (tipFor(e.target) && !tipFor(e.relatedTarget)) hideMenuTip(); });
+  document.addEventListener('focusin', (e) => { const item = tipFor(e.target); if (item && item.matches(':focus-visible')) showMenuTip(item); else hideMenuTip(); });
+  document.addEventListener('focusout', hideMenuTip);
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !menuTip.hidden) hideMenuTip(); });
+  // Scrolling (focus can scroll the item into view) moves the tooltip with its item.
+  document.addEventListener('scroll', () => { if (tipItem) showMenuTip(tipItem); }, true);
+
   window.ui = ui;
 })();

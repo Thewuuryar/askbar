@@ -268,6 +268,7 @@
     } catch (_) { /* signed out, or the admin itself is away: say it is not checked */ }
     box.className = 'status status-' + state;
     box.querySelector('.status-word').textContent = text;
+    $('menu-health').dataset.tip = text;
   }
 
   let healthTimer = null;

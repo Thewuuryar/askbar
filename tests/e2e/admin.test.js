@@ -1991,9 +1991,65 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.focus('#nav a[data-tab="reference"]');
     await page.keyboard.press('Tab');
     assert.equal(await page.evaluate(() => document.activeElement.id), 'logout', 'Sign out follows the menu in the Tab order');
-    await page.waitForFunction(() => getComputedStyle(document.getElementById('logout'), '::after').opacity === '1');
+    await page.waitForSelector('#menu-tip:not([hidden])');
+    assert.equal(await page.innerText('#menu-tip'), 'Sign out');
+    await page.keyboard.press('Escape');
+    assert.equal(await page.isHidden('#menu-tip'), true, 'Esc hides the tooltip');
     await page.goto(base);
     await page.waitForSelector('#app:not([hidden])');
+  });
+  await step(isPhone ? 'side menu: the collapsed choice does not shrink the menu on a phone' : 'side menu: collapse shrinks it to icons, the choice survives a reload, names show on focus, and a blocked store leaves it working', async () => {
+    const menuWidth = () => page.evaluate(() => document.getElementById('side-menu').getBoundingClientRect().width);
+    const full = await menuWidth();
+    const mainLeft = () => page.evaluate(() => document.querySelector('#app > main').getBoundingClientRect().left);
+    const leftBefore = await mainLeft();
+    await page.click('#menu-collapse');
+    assert.equal(await page.getAttribute('#menu-collapse', 'aria-expanded'), 'false');
+    assert.equal(await page.getAttribute('#menu-collapse', 'aria-label'), 'Expand menu');
+    if (isPhone) {
+      await page.waitForTimeout(300);
+      assert.equal(await menuWidth(), full, 'a phone keeps its own menu');
+      await page.click('#menu-collapse');
+      return;
+    }
+    const collapsedW = await page.evaluate(() => parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--rail-w-collapsed')));
+    await page.waitForFunction((w) => document.getElementById('side-menu').getBoundingClientRect().width === w, collapsedW);
+    assert.ok(await mainLeft() < leftBefore, 'the page gains the width');
+    assert.equal(await page.evaluate(() => document.querySelector('#nav a[data-tab="providers"]').textContent.trim()), 'Providers', 'the name stays for screen readers');
+    await page.reload();
+    await page.waitForSelector('#app:not([hidden])');
+    assert.equal(await page.getAttribute('#menu-collapse', 'aria-expanded'), 'false', 'still collapsed after a reload');
+    assert.equal(await menuWidth(), collapsedW);
+    // Keyboard focus on a link shows its name beside it.
+    await page.focus('#nav a[data-tab="providers"]');
+    await page.keyboard.press('Tab');
+    await page.keyboard.press('Shift+Tab');
+    await page.waitForSelector('#menu-tip:not([hidden])');
+    assert.equal(await page.innerText('#menu-tip'), 'Providers');
+    assert.ok(await page.evaluate(() => document.getElementById('menu-tip').getBoundingClientRect().left >= document.getElementById('side-menu').getBoundingClientRect().right), 'beside the menu, not clipped by it');
+    await page.click('#menu-collapse');
+    assert.equal(await page.getAttribute('#menu-collapse', 'aria-expanded'), 'true');
+    await page.waitForFunction((w) => document.getElementById('side-menu').getBoundingClientRect().width === w, full);
+    // A browser that refuses localStorage still gets a working, expanded menu.
+    const blocked = await browser.newContext({ viewport, storageState: await ctx.storageState() });
+    await blocked.addInitScript(() => {
+      const no = () => { throw new Error('storage blocked'); };
+      Storage.prototype.getItem = no;
+      Storage.prototype.setItem = no;
+    });
+    const p = await blocked.newPage();
+    const errs = [];
+    p.on('pageerror', (e) => errs.push(e.message));
+    try {
+      await p.goto(base + 'providers/');
+      await p.waitForSelector('#app:not([hidden])');
+      assert.equal(await p.getAttribute('#menu-collapse', 'aria-expanded'), 'true');
+      await p.click('#menu-collapse');
+      assert.equal(await p.getAttribute('#menu-collapse', 'aria-expanded'), 'false', 'it still collapses, for this page');
+      assert.deepEqual(errs, []);
+    } finally {
+      await blocked.close();
+    }
   });
   await step('pages: an audit request opens directly from its address, and the address follows the view', async () => {
     const list = await page.evaluate(async () => (await fetch('/api/admin/v1/audit/traces', { credentials: 'same-origin' })).json());
