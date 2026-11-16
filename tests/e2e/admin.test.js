@@ -1887,6 +1887,49 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.goto(base);
     await page.waitForSelector('#app:not([hidden])');
   });
+  // axe-core (plan step 1.11): every page, signed in and signed out, at both widths. A violation whose rule is not in
+  // tests/e2e/axe-baseline.json for that page fails; the baseline only shrinks. AXE_BASELINE=write records what is found
+  // now (the union over both widths) instead of failing. axe is injected in a second context that bypasses the CSP, so
+  // the main page keeps its CSP and Trusted Types for every other step.
+  await step('accessibility: axe finds no violation beyond the baseline on any page', async () => {
+    const baselineFile = path.join(__dirname, 'axe-baseline.json');
+    const write = process.env.AXE_BASELINE === 'write';
+    const baseline = fs.existsSync(baselineFile) ? JSON.parse(fs.readFileSync(baselineFile, 'utf8')) : {};
+    const axeSource = fs.readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8');
+    const scan = async (context, url, key) => {
+      const p = await context.newPage();
+      try { return await scanPage(p, url, key); } finally { await p.close(); }
+    };
+    const scanPage = async (p, url, key) => {
+      await p.goto(url);
+      await p.waitForSelector(key === 'login' ? '#login:not([hidden])' : '#app:not([hidden])');
+      // A page that polls (Services) is never idle for long; give the loaders a moment and scan what is there.
+      await p.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
+      await p.addScriptTag({ content: axeSource });
+      const found = await p.evaluate(async () => {
+        const r = await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'] } });
+        return r.violations.map((v) => ({ id: v.id, nodes: v.nodes.map((n) => n.target.join(' ')).slice(0, 5) }));
+      });
+      return found;
+    };
+    const signedIn = await browser.newContext({ viewport, bypassCSP: true, storageState: await ctx.storageState() });
+    const signedOut = await browser.newContext({ viewport, bypassCSP: true });
+    const slugs = await page.$$eval('#nav a', (as) => as.map((a) => a.dataset.tab));
+    const extra = [];
+    try {
+      for (const key of [...slugs, 'login']) {
+        const found = key === 'login' ? await scan(signedOut, base, key) : await scan(signedIn, base + key + '/', key);
+        const known = new Set(baseline[key] || []);
+        if (write) baseline[key] = [...new Set([...known, ...found.map((v) => v.id)])].sort();
+        else for (const v of found) if (!known.has(v.id)) extra.push(key + ': ' + v.id + ' at ' + v.nodes.join(', '));
+      }
+    } finally {
+      await signedIn.close();
+      await signedOut.close();
+    }
+    if (write) fs.writeFileSync(baselineFile, JSON.stringify(baseline, null, 2) + '\n');
+    assert.deepEqual(extra, [], 'new axe violations (fix them; the baseline only shrinks)');
+  });
   await step('pages: each section has its own URL, the nav marks it, Back works and the frame is the same', async () => {
     // Plan step 1.16: a page and a URL for every admin section, from one template.
     const slugs = await page.$$eval('#nav a', (as) => as.map((a) => a.dataset.tab));

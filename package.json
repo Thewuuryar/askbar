@@ -12,6 +12,7 @@
     "docs": "scripts/check-docs.sh"
   },
   "devDependencies": {
+    "axe-core": "^4.10.3",
     "playwright": "^1"
   }
 }

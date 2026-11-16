@@ -18,7 +18,7 @@ strong, b { font-weight: var(--weight-bold); }
 .icon { width: var(--icon); height: var(--icon); flex: none; vertical-align: middle; }
 .hint { color: var(--muted); font-size: var(--text-xs); font-weight: var(--weight-regular); }
 label { display: block; margin: 8px 0; font-size: var(--text-s); font-weight: var(--weight-bold); color: var(--fg); }
-input, select, textarea { display: block; width: 100%; margin-top: 4px; padding: 8px 10px; font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; }
+input, select, textarea { display: block; width: 100%; margin-top: 4px; padding: 8px 10px; font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--field-border); border-radius: 8px; }
 [hidden] { display: none !important; }
 /* Buttons. Filled primary by default, outline secondary, red outline destructive. Heights come from tokens.
    The old names (bare button, .secondary, .danger, a.button) are aliases of the .btn-* classes. */

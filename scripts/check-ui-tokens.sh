@@ -1,7 +1,9 @@
 #!/bin/sh
 # Fails if the admin copy of tokens.css differs from clients/desktop/ui/tokens.css, or if --fg, --muted, --accent, --danger or --good is under
 # 4.5:1 contrast against --bg or --card, --accent-fg under 4.5:1 against --accent, or --fg under 4.5:1 on
-# --danger-soft (a failed question's tint) laid over --card, in either theme.
+# --danger-soft (a failed question's tint) laid over --card, --fg or --muted under 4.5:1 on --surface-2, an icon colour
+# (--fg, --muted, --accent, --danger, --good) under 3:1 on --bg, --card or --surface-2, or --field-border under 3:1
+# against --bg or --card, in either theme (rule 43).
 # Also fails if services/admin/src/ui/style.css sets a font-size other than one of the four --text-* tokens (or inherit),
 # a font-weight other than --weight-regular, --weight-bold or inherit, or a font: shorthand with a px, rem, em or pt size.
 # Usage: scripts/check-ui-tokens.sh
@@ -38,6 +40,22 @@ for theme, t in (("light", block(":root {")), ("dark", block(':root[data-theme="
             r = ratio(t[fg], t[bg])
             if r < 4.5:
                 print(f"{theme}: --{fg} on --{bg} is {r:.2f}:1 (needs 4.5)"); bad += 1
+    # Table headers and the hover fill sit on --surface-2: text there needs 4.5:1 too.
+    for fg in ("fg", "muted"):
+        r = ratio(t[fg], t["surface-2"])
+        if r < 4.5:
+            print(f"{theme}: --{fg} on --surface-2 is {r:.2f}:1 (needs 4.5)"); bad += 1
+    # Icons (drawn in currentColor) need 3:1 on every surface (rule 43).
+    for fg in ("fg", "muted", "accent", "danger", "good"):
+        for bg in ("bg", "card", "surface-2"):
+            r = ratio(t[fg], t[bg])
+            if r < 3:
+                print(f"{theme}: an icon in --{fg} on --{bg} is {r:.2f}:1 (needs 3)"); bad += 1
+    # A field's border against the field (--bg) and what it sits on (--bg, --card) needs 3:1 (rule 43).
+    for bg in ("bg", "card"):
+        r = ratio(t["field-border"], t[bg])
+        if r < 3:
+            print(f"{theme}: --field-border on --{bg} is {r:.2f}:1 (needs 3)"); bad += 1
     r = ratio(t["accent-fg"], t["accent"])
     if r < 4.5:
         print(f"{theme}: --accent-fg on --accent is {r:.2f}:1 (needs 4.5)"); bad += 1
