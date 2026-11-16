@@ -1,5 +1,6 @@
 <!doctype html>
 {%- import "blocks.html" as b %}
+{%- import "components.html" as c %}
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -7,7 +8,7 @@
   <title>{{ label }} · Askbar admin</title>
   <link rel="stylesheet" href="/admin/tokens.css">
   <link rel="stylesheet" href="/admin/style.css">
-  <script src="/admin/constants.js" defer></script>
+  <script src="/admin/components.js" defer></script>
   <script src="/admin/app.js" defer></script>
   {% block scripts %}{% endblock %}
 </head>
@@ -111,6 +112,9 @@
       </section>
     </main>
   </div>
+
+  {% call c::toast_region() %}{% endcall %}
+  {% call c::announcer() %}{% endcall %}
 
   <footer class="footer">Askbar is free software under the AGPL-3.0-or-later. <a href="https://github.com/Thewuuryar/askbar" rel="noreferrer">Source code</a></footer>
 

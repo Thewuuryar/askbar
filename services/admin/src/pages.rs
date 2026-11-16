@@ -5,7 +5,7 @@
 //!
 //! The templates hold only static text and this list (Askama escapes by default). They compile into
 //! the binary and are rendered once, at start, so serving a page costs what serving a file does.
-//! The static files (`app.js`, `audit.js`, the CSS) are served with an `ETag`, so a browser asks
+//! The static files (`components.js`, `app.js`, `audit.js`, the CSS) are served with an `ETag`, so a browser asks
 //! once and then gets 304s.
 
 use askama::Template;
@@ -118,10 +118,12 @@ mod tests {
             for id in ["login", "setup", "offline", "flash", "logout", "app"] {
                 assert!(html.contains(&format!(r#"id="{id}""#)), "{}: #{id}", p.slug);
             }
-            // The constants load before app.js, which waits for them (plan step 1.2).
-            let constants = html.find(r#"<script src="/admin/constants.js" defer></script>"#).expect("constants.js");
+            // The component builders (which load the constants) come before app.js, which waits for them (plan step 1.9).
+            let constants = html.find(r#"<script src="/admin/components.js" defer></script>"#).expect("components.js");
             let app = html.find(r#"<script src="/admin/app.js" defer></script>"#).expect("app.js");
-            assert!(constants < app, "{}: constants.js before app.js", p.slug);
+            assert!(constants < app, "{}: components.js before app.js", p.slug);
+            assert_eq!(html.matches(r#"id="announcer""#).count(), 1, "{}: one announcer", p.slug);
+            assert_eq!(html.matches(r#"id="toasts""#).count(), 1, "{}: one toast region", p.slug);
             assert_eq!(html.contains("/admin/audit.js"), p.slug == "audit", "{}: audit.js only on the Audit page", p.slug);
             assert!(!html.contains("{%") && !html.contains("{{"), "{}: no template syntax left", p.slug);
         }

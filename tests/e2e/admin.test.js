@@ -366,6 +366,167 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     assert.ok(near(type.help.size, 12) && type.help.weight === '400', JSON.stringify(type));
     assert.ok(near(type.body.size, 14) && type.body.weight === '400', JSON.stringify(type));
   });
+  // The component builders (plan step 1.9). No page uses them yet, so each step builds the server-rendered half of a
+  // component with createElement (the classes and data-* attributes the macros in components.html write) and drives
+  // it through window.ui, then removes it.
+  await step('components: a side panel docks with its own address; Esc asks before dropping typed input; Back and × close it', async () => {
+    await page.evaluate(() => {
+      const { el } = window.ui;
+      const opener = el('button', { type: 'button', id: 't-opener', class: 'btn', text: 'Open', onclick: () => window.ui.openPanel('t-panel') });
+      const panel = el('aside', { id: 't-panel', class: 'side-panel', hidden: true },
+        el('header', { class: 'side-panel-head' }, el('h2', { class: 'side-panel-title', text: 'Test panel' }),
+          el('button', { type: 'button', class: 'btn btn-quiet btn-icon', 'aria-label': 'Close', 'data-panel-close': true })),
+        el('div', { class: 'side-panel-body' }, el('label', { for: 't-in', text: 'Name' }), el('input', { id: 't-in', type: 'text' })));
+      document.querySelector('#app main').append(opener, panel);
+    });
+    const start = page.url();
+    await page.click('#t-opener');
+    await page.waitForSelector('#t-panel:not([hidden])');
+    assert.match(page.url(), /[?&]panel=t-panel/, 'the panel has its own address');
+    assert.equal(await page.evaluate(() => document.body.classList.contains('panel-open')), true);
+    if (!isPhone) assert.equal(await page.evaluate(() => getComputedStyle(document.getElementById('app')).marginRight), '440px', 'the page narrows, nothing covers it');
+    await page.fill('#t-in', 'typed');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('dialog[open] >> text=Discard your changes?');
+    await page.click('dialog[open] [data-confirm-cancel]');
+    assert.equal(await page.isVisible('#t-panel'), true, 'Keep editing keeps the panel');
+    assert.equal(await page.inputValue('#t-in'), 'typed');
+    await page.focus('#t-in');
+    await page.keyboard.press('Escape');
+    await page.click('dialog[open] [data-confirm-action]');
+    await page.waitForSelector('#t-panel', { state: 'hidden' });
+    assert.equal(page.url(), start, 'closing leaves the panel\'s address');
+    assert.equal(await page.evaluate(() => document.activeElement.id), 't-opener', 'focus returns to the opener');
+
+    await page.click('#t-opener');
+    await page.waitForSelector('#t-panel:not([hidden])');
+    await page.goBack();
+    await page.waitForSelector('#t-panel', { state: 'hidden' });
+    assert.equal(page.url(), start, 'Back closes the panel and stays on the page');
+    await page.click('#t-opener');
+    await page.waitForSelector('#t-panel:not([hidden])');
+    await page.click('#t-panel [data-panel-close]');
+    await page.waitForSelector('#t-panel', { state: 'hidden' });
+    assert.equal(page.url(), start);
+    assert.equal(await page.evaluate(() => document.body.classList.contains('panel-open')), false);
+    await page.evaluate(() => { document.getElementById('t-opener').remove(); document.getElementById('t-panel').remove(); });
+  });
+  await step('components: a menu opens on its first item, moves with the arrow keys, Home and End, and Esc returns to its button', async () => {
+    await page.evaluate(() => {
+      const { el } = window.ui;
+      window.tPicked = [];
+      const button = el('button', { type: 'button', id: 't-menu', class: 'btn', text: 'More' });
+      document.querySelector('#app main').append(el('div', { id: 't-menu-wrap' }, button));
+      window.ui.menu(button, [
+        { label: 'Edit', action: () => window.tPicked.push('edit') },
+        { label: 'Delete', danger: true, action: () => window.tPicked.push('delete') },
+      ]);
+    });
+    const focused = () => page.evaluate(() => document.activeElement.textContent);
+    await page.focus('#t-menu');
+    await page.keyboard.press('Enter');
+    assert.equal(await page.getAttribute('#t-menu', 'aria-expanded'), 'true');
+    assert.equal(await focused(), 'Edit');
+    await page.keyboard.press('ArrowDown');
+    assert.equal(await focused(), 'Delete');
+    await page.keyboard.press('ArrowDown');
+    assert.equal(await focused(), 'Edit', 'the arrows wrap');
+    await page.keyboard.press('End');
+    assert.equal(await focused(), 'Delete');
+    await page.keyboard.press('Home');
+    assert.equal(await focused(), 'Edit');
+    await page.keyboard.press('Escape');
+    assert.equal(await page.getAttribute('#t-menu', 'aria-expanded'), 'false');
+    assert.equal(await page.evaluate(() => document.activeElement.id), 't-menu', 'Esc returns focus to the button');
+    await page.keyboard.press('ArrowUp');
+    assert.equal(await focused(), 'Delete', 'ArrowUp opens on the last item');
+    await page.keyboard.press('Enter');
+    assert.deepEqual(await page.evaluate(() => window.tPicked), ['delete']);
+    assert.equal(await page.isHidden('#t-menu-wrap .menu'), true, 'choosing closes the menu');
+    await page.evaluate(() => document.getElementById('t-menu-wrap').remove());
+  });
+  await step('components: the length hint counts as you type, a typed-name confirm waits for the name, and a toast leaves after TOAST_SECS', async () => {
+    const min = await page.evaluate(() => window.ui.constants.MIN_PASSPHRASE_CHARS);
+    await page.evaluate((m) => {
+      const { el } = window.ui;
+      const input = el('input', { id: 't-pass', type: 'password' });
+      document.querySelector('#app main').append(el('div', { id: 't-len', class: 'field' }, input,
+        el('p', { class: 'hint', id: 't-pass-hint', 'data-length-hint': true, text: 'At least ' + m + ' characters' })));
+      window.ui.lengthHint(input, m);
+    }, min);
+    await page.fill('#t-pass', 'abc');
+    assert.equal(await page.innerText('#t-pass-hint'), '3 of at least ' + min + ' characters');
+    await page.fill('#t-pass', 'x'.repeat(min));
+    assert.equal(await page.innerText('#t-pass-hint'), min + ' characters');
+    await page.evaluate(() => document.getElementById('t-len').remove());
+
+    await page.evaluate(() => { window.tConfirm = window.ui.confirm({ title: 'Delete mock?', body: 'It cannot be undone.', action: 'Delete', typeName: 'mock' }); });
+    await page.waitForSelector('dialog[open] >> text=Delete mock?');
+    assert.equal(await page.isDisabled('dialog[open] [data-confirm-action]'), true, 'the action waits for the name');
+    await page.fill('dialog[open] input', 'moc');
+    assert.equal(await page.isDisabled('dialog[open] [data-confirm-action]'), true);
+    await page.fill('dialog[open] input', 'mock');
+    await page.click('dialog[open] [data-confirm-action]');
+    assert.equal(await page.evaluate(() => window.tConfirm), true);
+    assert.equal(await page.locator('dialog').count(), 0, 'the box is removed once answered');
+
+    const toastMs = await page.evaluate(() => window.ui.constants.TOAST_SECS * window.ui.MS);
+    await page.evaluate(() => window.ui.toast('Saved the test'));
+    assert.equal(await page.innerText('#toasts'), 'Saved the test');
+    await page.waitForFunction(() => document.getElementById('announcer').textContent === 'Saved the test');
+    await page.waitForTimeout(toastMs - 1000);
+    assert.equal(await page.locator('#toasts .toast').count(), 1, 'still there before TOAST_SECS');
+    await page.waitForSelector('#toasts .toast', { state: 'detached', timeout: 3000 });
+  });
+  await step('components: field errors, row confirmation, time, numbers and copy', async () => {
+    const r = await page.evaluate(async () => {
+      const { el } = window.ui;
+      const out = {};
+      document.querySelector('#app main').append(el('div', { id: 't-misc' },
+        el('input', { id: 't-f', type: 'text' }), el('p', { id: 't-f-error', hidden: true }),
+        el('div', { id: 't-row' }, el('button', { type: 'button', id: 't-restart', text: 'Restart' })),
+        el('code', { id: 't-secret', text: 'askbar-admin-xyz' }), el('button', { type: 'button', id: 't-copy', class: 'btn btn-icon', 'aria-label': 'Copy', 'data-copy': 't-secret' })));
+      window.ui.fieldError('t-f', 'Not a host name.');
+      out.invalid = document.getElementById('t-f').getAttribute('aria-invalid');
+      out.error = document.getElementById('t-f-error').hidden ? null : document.getElementById('t-f-error').textContent;
+      window.ui.fieldError('t-f', '');
+      out.cleared = document.getElementById('t-f').hasAttribute('aria-invalid') || !document.getElementById('t-f-error').hidden;
+      const t = window.ui.time(Date.now() / 1000 - 3 * 3600);
+      out.time = [t.tagName, t.textContent, !!t.title, t.getAttribute('datetime').endsWith('Z')];
+      out.num = window.ui.num(12345, 'tokens').textContent;
+      out.status = window.ui.status('ok', 'Running').textContent;
+      return out;
+    });
+    assert.equal(r.invalid, 'true');
+    assert.equal(r.error, 'Not a host name.');
+    assert.equal(r.cleared, false);
+    assert.deepEqual(r.time, ['TIME', '3 hours ago', true, true]);
+    assert.equal(r.num, '12,345 tokens');
+    assert.equal(r.status, 'Running');
+
+    await page.evaluate(() => {
+      window.tRestarted = 0;
+      const b = document.getElementById('t-restart');
+      b.addEventListener('click', () => window.ui.rowConfirm(document.getElementById('t-row'), {
+        text: 'Restart the server?', action: 'Restart', trigger: b, onConfirm: async () => { window.tRestarted++; },
+      }));
+    });
+    await page.click('#t-restart');
+    assert.equal(await page.isHidden('#t-restart'), true, 'the row\'s own button hides while it asks');
+    assert.equal(await page.innerText('#t-row .row-confirm-text'), 'Restart the server?');
+    await page.click('#t-row [data-row-cancel]');
+    assert.equal(await page.isVisible('#t-restart'), true, 'Cancel brings the button back');
+    assert.equal(await page.locator('#t-row .row-confirm').count(), 0);
+    await page.click('#t-restart');
+    await page.click('#t-row [data-row-action]');
+    await page.waitForFunction(() => window.tRestarted === 1);
+    assert.equal(await page.isVisible('#t-restart'), true);
+
+    await page.click('#t-copy');
+    await page.waitForFunction(() => document.getElementById('t-copy').getAttribute('aria-label') === 'Copied');
+    assert.equal(await page.evaluate(() => navigator.clipboard.readText()), 'askbar-admin-xyz');
+    await page.evaluate(() => document.getElementById('t-misc').remove());
+  });
   await step('approved models: none at first; pick two from the provider\'s list, choose the default, save, and it persists', async () => {
     assert.match(await page.innerText('#catalog-approved'), /No model is approved yet/);
     await page.selectOption('#catalog-provider', { label: 'mock' });

@@ -6,8 +6,8 @@
   const show = (node, visible) => { node.hidden = !visible; };
   // Each page holds only its own section (plan step 1.16), so wiring for another page's elements is skipped.
   const on = (id, event, fn) => { const el = $(id); if (el) el.addEventListener(event, fn); };
-  // The server's limits and intervals (constants.js). Set once at boot, before anything is shown.
-  const MS = window.askbarMsPerSec;
+  // The server's limits and intervals (ui.constants, from components.js). Set once at boot, before anything is shown.
+  const MS = window.ui.MS;
   let K = null;
 
   async function api(method, path, body) {
@@ -1552,7 +1552,7 @@
 
   (async () => {
     try {
-      K = await window.askbarConstantsReady;
+      K = await window.ui.ready;
     } catch (_) {
       flash('The admin could not load its settings. Reload the page.');
       return;
