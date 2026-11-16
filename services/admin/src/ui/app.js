@@ -7,7 +7,8 @@
   // Each page holds only its own section (plan step 1.16), so wiring for another page's elements is skipped.
   const on = (id, event, fn) => { const el = $(id); if (el) el.addEventListener(event, fn); };
   // The server's limits and intervals (ui.constants, from components.js). Set once at boot, before anything is shown.
-  const MS = window.ui.MS;
+  const { ui } = window;
+  const MS = ui.MS;
   let K = null;
 
   async function api(method, path, body) {
@@ -830,11 +831,11 @@
     e.preventDefault();
     const err = $('pw-error');
     show(err, false);
-    if ($('pw-new').value !== $('pw-new2').value) {
-      err.textContent = 'The two new passwords do not match.';
-      show(err, true);
-      return;
-    }
+    ui.formErrors(e.target, []);
+    const problems = [];
+    if ([...$('pw-new').value].length < K.MIN_PASSWORD_CHARS) problems.push({ id: 'pw-new', text: 'The new password must be at least ' + K.MIN_PASSWORD_CHARS + ' characters.' });
+    if ($('pw-new').value !== $('pw-new2').value) problems.push({ id: 'pw-new2', text: 'The two new passwords do not match.' });
+    if (problems.length) return ui.formErrors(e.target, problems);
     try {
       await api('PUT', '/api/admin/v1/password', { current: $('pw-current').value, new: $('pw-new').value });
       for (const id of ['pw-current', 'pw-new', 'pw-new2']) $(id).value = '';
@@ -1552,7 +1553,7 @@
 
   (async () => {
     try {
-      K = await window.ui.ready;
+      K = await ui.ready;
     } catch (_) {
       flash('The admin could not load its settings. Reload the page.');
       return;

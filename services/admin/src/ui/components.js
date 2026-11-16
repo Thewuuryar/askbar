@@ -145,6 +145,35 @@
     update();
   };
 
+  // A failed save (rule 26): each field gets its error line, a summary at the top of the form lists them as
+  // links, and focus moves to the first field with a problem. ui.formErrors(form, []) clears them all.
+  // errors = [{ id, text }]. A field without an error line (the field macro writes one) gets one.
+  ui.formErrors = (form, errors) => {
+    const old = form.querySelector('.error-summary');
+    if (old) old.remove();
+    for (const f of form.querySelectorAll('[aria-invalid="true"]')) ui.fieldError(f.id, '');
+    if (!errors.length) return;
+    const list = el('ul');
+    for (const e of errors) {
+      const input = $(e.id);
+      if (!input) continue;
+      if (!$(e.id + '-error')) {
+        input.after(el('p', { class: 'field-error error', id: e.id + '-error', hidden: true }));
+        const by = input.getAttribute('aria-describedby');
+        input.setAttribute('aria-describedby', (by ? by + ' ' : '') + e.id + '-error');
+      }
+      ui.fieldError(e.id, e.text);
+      list.append(el('li', {}, el('a', { href: '#' + e.id, text: e.text, onclick: (ev) => { ev.preventDefault(); input.focus(); } })));
+    }
+    const summary = el('div', { class: 'error-summary', role: 'alert' },
+      el('p', { class: 'error-summary-title', text: errors.length === 1 ? 'Fix this to save:' : 'Fix these ' + errors.length + ' things to save:' }),
+      list);
+    const heading = form.firstElementChild && /^H[1-6]$/.test(form.firstElementChild.tagName) ? form.firstElementChild : null;
+    if (heading) heading.after(summary); else form.prepend(summary);
+    const first = $(errors[0].id);
+    if (first) first.focus();
+  };
+
   // The values of a form's fields, by id (or name). Password fields count as changed once typed in.
   function fieldValues(root) {
     const out = new Map();
@@ -528,6 +557,17 @@
   });
 
   // ------------------------------------------------------------- keys
+
+  // "Skip to content" (rule 41) moves focus to whichever <main> is on screen: the app, sign-in or setup.
+  document.addEventListener('click', (e) => {
+    const skip = e.target.closest('a.skip-link');
+    if (!skip) return;
+    const main = [...document.querySelectorAll('main')].find((m) => !m.closest('[hidden]'));
+    if (!main) return;
+    e.preventDefault();
+    if (!main.hasAttribute('tabindex')) main.tabIndex = -1;
+    main.focus();
+  });
 
   // Esc closes the side panel when nothing on top of it (a box or a menu) took the key first.
   document.addEventListener('keydown', (e) => {

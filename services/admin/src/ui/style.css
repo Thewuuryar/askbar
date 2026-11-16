@@ -119,7 +119,7 @@ pre.plain:empty { display: none; }
 
 /* Components (plan step 1.8; markup in templates/components.html). Hairlines, not boxes (rule 7). */
 .visually-hidden { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
-.skip-link { position: absolute; left: var(--space-2); top: var(--space-2); z-index: 40; padding: var(--space-2) var(--space-3); border-radius: var(--radius-control); background: var(--fg); color: var(--bg); transform: translateY(-300%); }
+.skip-link { display: inline-flex; align-items: center; position: absolute; left: var(--space-2); top: var(--space-2); z-index: 40; padding: var(--space-2) var(--space-3); border-radius: var(--radius-control); background: var(--fg); color: var(--bg); transform: translateY(-300%); }
 .skip-link:focus-visible { transform: none; outline: 2px solid var(--accent); outline-offset: 2px; }
 .toasts { position: fixed; left: 50%; bottom: var(--space-4); transform: translateX(-50%); z-index: 30; display: flex; flex-direction: column; gap: var(--space-2); max-width: calc(100vw - 2 * var(--space-4)); }
 .toast { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-2) var(--space-3); border-radius: var(--radius-control); background: var(--fg); color: var(--bg); box-shadow: var(--shadow); }
@@ -225,3 +225,25 @@ dialog.box::backdrop { background: rgba(0, 0, 0, .4); }
 .status-error .status-sym:empty::before { content: "×"; font-weight: var(--weight-bold); }
 .status-warning { color: var(--fg); }
 .toast .btn { flex: none; }
+
+/* Shared accessibility behaviour (plan step 1.10; rules 26, 41-46) */
+/* A focused control is never hidden under the sticky status bar (step 3.1). */
+html { scroll-padding-top: calc(var(--status-h) + var(--space-2)); }
+main[tabindex="-1"]:focus { outline: none; }
+.error-summary { padding: var(--space-2) 0 var(--space-2) var(--space-3); border-left: 2px solid var(--danger); margin: var(--space-3) 0; color: var(--danger); }
+.error-summary-title { margin: 0 0 var(--space-1); font-weight: var(--weight-bold); }
+.error-summary ul { margin: 0; padding-left: var(--space-4); }
+.error-summary a { color: var(--danger); }
+/* Targets: at least 24 px on a desktop, 44 px on a phone (rule 44). Links inside a sentence are exempt. */
+.top nav a { display: inline-flex; align-items: center; min-height: var(--target-min); padding: 0 var(--space-2); border-radius: var(--radius-control); color: var(--fg); text-decoration: none; }
+.top nav a[aria-current="page"] { background: var(--bg); font-weight: var(--weight-bold); }
+label.check { min-height: var(--target-min); }
+input, select { min-height: var(--target-min); }
+.na-tag { min-height: var(--target-min); }
+@media (max-width: 560px) {
+  input:not([type="checkbox"]):not([type="radio"]), select, label.check, .top nav a, .na-tag, .skip-link { min-height: var(--btn-h-touch); }
+}
+/* Nothing moves under reduced motion (rule 46). */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}

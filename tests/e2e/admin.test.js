@@ -1794,6 +1794,99 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.waitForSelector('#key-form:not([hidden])');
     assert.equal((await call(key)).status, 401, 'revoked');
   });
+  // Shared accessibility behaviour (plan step 1.10; rules 26, 41-46).
+  await step('accessibility: Skip to content is the first Tab stop, and Enter moves focus to the page', async () => {
+    await page.goto(base + 'security/');
+    await page.waitForSelector('#app:not([hidden])');
+    await page.keyboard.press('Tab');
+    const first = await page.evaluate(() => {
+      const a = document.activeElement;
+      const r = a.getBoundingClientRect();
+      return { cls: a.className, text: a.textContent, onScreen: r.top >= 0 && r.bottom <= innerHeight && r.width > 0 };
+    });
+    assert.deepEqual(first, { cls: 'skip-link', text: 'Skip to content', onScreen: true });
+    await page.keyboard.press('Enter');
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'main');
+  });
+  await step('accessibility: a failed save shows a summary at the top and moves focus to the first field with a problem', async () => {
+    await page.fill('#pw-current', 'anything');
+    await page.fill('#pw-new', 'one new password');
+    await page.fill('#pw-new2', 'another password');
+    await page.click('#password-form button[type=submit]');
+    await page.waitForSelector('#password-form .error-summary[role=alert]');
+    assert.match(await page.innerText('#password-form .error-summary'), /do not match/);
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'pw-new2', 'focus is on the field to fix');
+    assert.equal(await page.getAttribute('#pw-new2', 'aria-invalid'), 'true');
+    assert.match(await page.innerText('#pw-new2-error'), /do not match/);
+    assert.ok((await page.getAttribute('#pw-new2', 'aria-describedby')).includes('pw-new2-error'), 'the error describes the field');
+    await page.fill('#pw-new2', 'one new password');
+    await page.fill('#pw-current', 'wrong');
+    await page.click('#password-form button[type=submit]');
+    await page.waitForSelector('#pw-error:not([hidden])');
+    assert.equal(await page.locator('#password-form .error-summary').count(), 0, 'the summary goes on the next try');
+    assert.equal(await page.getAttribute('#pw-new2', 'aria-invalid'), null);
+    for (const id of ['#pw-current', '#pw-new', '#pw-new2']) await page.fill(id, '');
+  });
+  await step('accessibility: one announcer reads updates without moving focus, assertive only when urgent', async () => {
+    const r = await page.evaluate(async () => {
+      const b = document.querySelector('#password-form button[type=submit]');
+      b.focus();
+      window.ui.announce('Polite news');
+      window.ui.announce('Urgent news', { urgent: true });
+      await new Promise((ok) => requestAnimationFrame(() => requestAnimationFrame(ok)));
+      return {
+        focus: document.activeElement === b,
+        polite: [document.getElementById('announcer').textContent, document.getElementById('announcer').getAttribute('aria-live')],
+        urgent: [document.getElementById('announcer-urgent').textContent, document.getElementById('announcer-urgent').getAttribute('aria-live')],
+        regions: document.querySelectorAll('[aria-live]').length,
+      };
+    });
+    assert.deepEqual(r, { focus: true, polite: ['Polite news', 'polite'], urgent: ['Urgent news', 'assertive'], regions: 2 });
+  });
+  await step('accessibility: focus scrolls clear of the status bar, and nothing moves under reduced motion', async () => {
+    const pad = await page.evaluate(() => getComputedStyle(document.documentElement).scrollPaddingTop);
+    const statusH = await page.evaluate(() => parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--status-h')));
+    assert.ok(parseFloat(pad) >= statusH, 'scroll-padding-top ' + pad + ' covers the ' + statusH + ' px status bar');
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    const still = await page.evaluate(() => {
+      const { el } = window.ui;
+      const probe = el('div', { id: 't-motion' }, el('span', { class: 'skeleton-row' }), el('button', { type: 'button', class: 'btn btn-icon', 'data-tip': 'Probe', 'aria-label': 'Probe' }));
+      document.querySelector('#app main').append(probe);
+      const out = {
+        animations: document.getAnimations().length,
+        skeleton: getComputedStyle(probe.querySelector('.skeleton-row')).animationName,
+        tip: getComputedStyle(probe.querySelector('.btn-icon'), '::after').transitionDuration,
+      };
+      probe.remove();
+      return out;
+    });
+    await page.emulateMedia({ reducedMotion: null });
+    assert.deepEqual(still, { animations: 0, skeleton: 'none', tip: '0s' });
+  });
+  await step(isPhone ? 'accessibility: every target on every page is at least 44 px on a phone' : 'accessibility: every target on every page is at least 24 px', async () => {
+    const min = isPhone ? 44 : 24;
+    const slugs = await page.$$eval('#nav a', (as) => as.map((a) => a.dataset.tab));
+    const small = [];
+    for (const slug of slugs) {
+      await page.goto(base + slug + '/');
+      await page.waitForSelector('#app:not([hidden])');
+      await page.waitForLoadState('networkidle');
+      small.push(...await page.evaluate((m) => {
+        // Controls a person aims at. A link inside running text is exempt (WCAG 2.5.8, inline); a checkbox is aimed at
+        // through its label, so the label is measured instead.
+        const sel = 'button, input:not([type=checkbox]):not([type=radio]):not([type=hidden]), select, textarea, label.check, nav a, a.button, a.btn, .skip-link, [tabindex="0"]';
+        return [...document.querySelectorAll(sel)].filter((n) => {
+          const r = n.getBoundingClientRect();
+          if (r.width === 0 && r.height === 0) return false;
+          if (n.matches('.skip-link')) return false;
+          return r.height < m - 0.5 || r.width < 24 - 0.5;
+        }).map((n) => location.pathname + ' ' + n.tagName.toLowerCase() + (n.id ? '#' + n.id : '') + '.' + n.className + ' ' + Math.round(n.getBoundingClientRect().width) + 'x' + Math.round(n.getBoundingClientRect().height));
+      }, min));
+    }
+    assert.deepEqual(small, []);
+    await page.goto(base);
+    await page.waitForSelector('#app:not([hidden])');
+  });
   await step('pages: each section has its own URL, the nav marks it, Back works and the frame is the same', async () => {
     // Plan step 1.16: a page and a URL for every admin section, from one template.
     const slugs = await page.$$eval('#nav a', (as) => as.map((a) => a.dataset.tab));
