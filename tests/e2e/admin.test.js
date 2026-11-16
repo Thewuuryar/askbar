@@ -151,7 +151,12 @@ async function runViewport(viewport) {
   const errors = [];
   // Each admin section is its own page (plan step 1.16): a nav link loads it, and its scripts run before
   // `load`, so wait for that before using the page.
+  // On a phone the menu is behind the Menu button (plan step 2.4): open it before using what is in it.
+  const openMenu = async () => {
+    if (isPhone && (await page.getAttribute('#menu-open', 'aria-expanded')) !== 'true') await page.click('#menu-open');
+  };
   const openPage = async (slug) => {
+    await openMenu();
     await page.click('#nav [data-tab="' + slug + '"]');
     await page.waitForURL('**/admin/' + slug + '/**');
     await page.waitForLoadState('load');
@@ -300,6 +305,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     assert.equal(await page.isHidden('#setup'), true);
   });
   await step('sign out, then a wrong password is refused and the right one signs in', async () => {
+    await openMenu();
     await page.click('#logout');
     await page.waitForSelector('#login:not([hidden])');
     await page.fill('#password', 'nope');
@@ -446,7 +452,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.evaluate(() => document.getElementById('t-menu-wrap').remove());
   });
   await step('components: the length hint counts as you type, a typed-name confirm waits for the name, and a toast leaves after TOAST_SECS', async () => {
-    const min = await page.evaluate(() => window.ui.constants.MIN_PASSPHRASE_CHARS);
+    const min = await page.evaluate(async () => (await window.ui.ready).MIN_PASSPHRASE_CHARS);
     await page.evaluate((m) => {
       const { el } = window.ui;
       const input = el('input', { id: 't-pass', type: 'password' });
@@ -470,7 +476,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     assert.equal(await page.evaluate(() => window.tConfirm), true);
     assert.equal(await page.locator('dialog').count(), 0, 'the box is removed once answered');
 
-    const toastMs = await page.evaluate(() => window.ui.constants.TOAST_SECS * window.ui.MS);
+    const toastMs = await page.evaluate(async () => (await window.ui.ready).TOAST_SECS * window.ui.MS);
     await page.evaluate(() => window.ui.toast('Saved the test'));
     assert.equal(await page.innerText('#toasts'), 'Saved the test');
     await page.waitForFunction(() => document.getElementById('announcer').textContent === 'Saved the test');
@@ -1957,7 +1963,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.goto(base);
   });
   await step('side menu: every page once, the current page and its group marked, the health line, licence and source from the constants', async () => {
-    const K = await page.evaluate(() => window.ui.constants);
+    const K = await page.evaluate(() => window.ui.ready);
     await page.goto(base + 'audit/sealed/');
     await page.waitForSelector('#app:not([hidden])');
     const menu = await page.evaluate(() => {
@@ -1988,6 +1994,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     assert.match(await page.getAttribute('#menu-health-status', 'class'), /status-(ok|warning)/);
     assert.equal(await page.getAttribute('#menu-health', 'href'), '/admin/services/');
     // The icon buttons show their names on keyboard focus, not only on hover (rule 42).
+    await openMenu();
     await page.focus('#nav a[data-tab="reference"]');
     await page.keyboard.press('Tab');
     assert.equal(await page.evaluate(() => document.activeElement.id), 'logout', 'Sign out follows the menu in the Tab order');
@@ -1995,10 +2002,21 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     assert.equal(await page.innerText('#menu-tip'), 'Sign out');
     await page.keyboard.press('Escape');
     assert.equal(await page.isHidden('#menu-tip'), true, 'Esc hides the tooltip');
+    if (isPhone) await page.keyboard.press('Escape'); // and a second Esc closes the phone menu
     await page.goto(base);
     await page.waitForSelector('#app:not([hidden])');
   });
-  await step(isPhone ? 'side menu: the collapsed choice does not shrink the menu on a phone' : 'side menu: collapse shrinks it to icons, the choice survives a reload, names show on focus, and a blocked store leaves it working', async () => {
+  await step(isPhone ? 'side menu: a phone has no collapse button, and a collapsed choice does not shrink its menu' : 'side menu: collapse shrinks it to icons, the choice survives a reload, names show on focus, and a blocked store leaves it working', async () => {
+    if (isPhone) {
+      await openMenu();
+      assert.equal(await page.isHidden('#menu-collapse'), true, 'no collapse button on a phone');
+      const before = await page.evaluate(() => document.getElementById('side-menu').getBoundingClientRect().width);
+      await page.evaluate(() => document.documentElement.classList.add('menu-collapsed'));
+      assert.equal(await page.evaluate(() => document.getElementById('side-menu').getBoundingClientRect().width), before);
+      await page.evaluate(() => document.documentElement.classList.remove('menu-collapsed'));
+      await page.keyboard.press('Escape');
+      return;
+    }
     const menuWidth = () => page.evaluate(() => document.getElementById('side-menu').getBoundingClientRect().width);
     const full = await menuWidth();
     const mainLeft = () => page.evaluate(() => document.querySelector('#app > main').getBoundingClientRect().left);
@@ -2006,12 +2024,6 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.click('#menu-collapse');
     assert.equal(await page.getAttribute('#menu-collapse', 'aria-expanded'), 'false');
     assert.equal(await page.getAttribute('#menu-collapse', 'aria-label'), 'Expand menu');
-    if (isPhone) {
-      await page.waitForTimeout(300);
-      assert.equal(await menuWidth(), full, 'a phone keeps its own menu');
-      await page.click('#menu-collapse');
-      return;
-    }
     const collapsedW = await page.evaluate(() => parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--rail-w-collapsed')));
     await page.waitForFunction((w) => document.getElementById('side-menu').getBoundingClientRect().width === w, collapsedW);
     assert.ok(await mainLeft() < leftBefore, 'the page gains the width');
@@ -2051,6 +2063,47 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       await blocked.close();
     }
   });
+  await step(isPhone ? 'phone menu: the Menu button opens every page full screen, Tab stays inside, Esc closes it and returns focus' : 'phone menu: no Menu button or phone bar on a desktop', async () => {
+    if (!isPhone) {
+      assert.equal(await page.isHidden('#menu-open'), true);
+      assert.equal(await page.isVisible('#side-menu'), true);
+      return;
+    }
+    await page.goto(base + 'network/');
+    await page.waitForSelector('#app:not([hidden])');
+    assert.equal(await page.isHidden('#side-menu'), true, 'the menu is closed at first');
+    const box = await page.locator('#menu-open').boundingBox();
+    assert.ok(box.height >= 44 && box.width >= 44, 'the Menu button is a 44 px target: ' + JSON.stringify(box));
+    await page.click('#menu-open');
+    assert.equal(await page.getAttribute('#menu-open', 'aria-expanded'), 'true');
+    assert.equal(await page.innerText('#menu-open'), 'Close');
+    const r = await page.evaluate(() => {
+      const m = document.getElementById('side-menu').getBoundingClientRect();
+      return {
+        full: m.left === 0 && Math.round(m.right) === document.documentElement.clientWidth && Math.round(m.bottom) === innerHeight,
+        visible: [...document.querySelectorAll('#nav a[data-tab]')].filter((a) => a.getClientRects().length > 0).map((a) => a.dataset.tab),
+        inert: document.querySelector('#app > main').inert,
+        inside: document.getElementById('side-menu').contains(document.activeElement),
+      };
+    });
+    const slugs = await page.$$eval('#nav a[data-tab]', (as) => as.map((a) => a.dataset.tab));
+    assert.deepEqual(r, { full: true, visible: slugs, inert: true, inside: true });
+    // Tab goes round the menu and its Close button, never into the page behind.
+    for (let i = 0; i < slugs.length + 12; i++) {
+      await page.keyboard.press('Tab');
+      assert.ok(await page.evaluate(() => document.getElementById('side-menu').contains(document.activeElement) || document.activeElement.id === 'menu-open'), 'Tab ' + i + ' stays in the menu');
+    }
+    await page.keyboard.press('Escape');
+    assert.equal(await page.isHidden('#side-menu'), true);
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'menu-open', 'focus goes back to the Menu button');
+    assert.equal(await page.evaluate(() => document.querySelector('#app > main').inert), false);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), true, 'no sideways scroll');
+    // A page from the menu.
+    await openPage('security');
+    assert.equal(await page.isHidden('#side-menu'), true, 'the new page opens with the menu closed');
+    await page.goto(base);
+    await page.waitForSelector('#app:not([hidden])');
+  });
   await step('pages: an audit request opens directly from its address, and the address follows the view', async () => {
     const list = await page.evaluate(async () => (await fetch('/api/admin/v1/audit/traces', { credentials: 'same-origin' })).json());
     const id = list.traces[0].trace_id;
@@ -2077,6 +2130,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     assert.equal(pageCache, 'no-store');
   });
   await step('sign out returns to the login form', async () => {
+    await openMenu();
     await page.click('#logout');
     await page.waitForSelector('#login:not([hidden])');
     await page.reload();
@@ -2096,6 +2150,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.waitForSelector('#offline:not([hidden])', { timeout: 15000 });
     assert.match(await page.innerText('#offline'), /Server offline/);
     // Sign out and in again with the server away: the admin has its own login.
+    await openMenu();
     await page.click('#logout');
     await page.waitForSelector('#login:not([hidden])');
     await page.fill('#password', 'brand new password 1');

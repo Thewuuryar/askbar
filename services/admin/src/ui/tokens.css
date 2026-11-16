@@ -47,6 +47,7 @@
 
   /* layout: the same in both themes */
   --status-h: 48px;
+  --phone-bar-h: 56px;
   --rail-w: 216px;
   --rail-w-collapsed: 64px;
   --panel-w: 440px;

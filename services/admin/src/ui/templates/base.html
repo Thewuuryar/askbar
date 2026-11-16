@@ -81,6 +81,10 @@
   </main>
 
   <div id="app" class="app" hidden>
+    <div class="phone-bar">
+      <a class="sm-brand" href="/admin/{{ crate::constants::LANDING_PAGE }}/"><span class="sm-logo">{% call c::icon("logo") %}{% endcall %}</span><span>Askbar</span></a>
+      <button type="button" id="menu-open" class="btn btn-secondary phone-menu-button" aria-controls="side-menu" aria-expanded="false"><span class="phone-menu-open">{% call c::icon("menu") %}{% endcall %}Menu</span><span class="phone-menu-close">{% call c::icon("close") %}{% endcall %}Close</span></button>
+    </div>
     <aside id="side-menu" class="side-menu" aria-label="Admin menu">
       <div class="sm-top">
         <a class="sm-brand" href="/admin/{{ crate::constants::LANDING_PAGE }}/" data-tip="Askbar"><span class="sm-logo">{% call c::icon("logo") %}{% endcall %}</span><span class="sm-text">Askbar</span></a>

@@ -633,7 +633,52 @@
   document.addEventListener('mouseout', (e) => { if (tipFor(e.target) && !tipFor(e.relatedTarget)) hideMenuTip(); });
   document.addEventListener('focusin', (e) => { const item = tipFor(e.target); if (item && item.matches(':focus-visible')) showMenuTip(item); else hideMenuTip(); });
   document.addEventListener('focusout', hideMenuTip);
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !menuTip.hidden) hideMenuTip(); });
+  // Esc with a tooltip showing only hides the tooltip; the next Esc reaches the menu or the panel.
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || menuTip.hidden) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    hideMenuTip();
+  });
+  // The phone menu (plan step 2.4, rule 2): the Menu button in the phone bar opens the same menu full screen.
+  // While it is open the page behind is inert and Tab stays in the menu and its button; Esc or Close shuts it
+  // and focus goes back to the button. The button is only shown on a phone, so "is it shown" is the check.
+  const phoneOpen = () => document.documentElement.classList.contains('menu-open');
+  function setPhoneMenu(open) {
+    const button = $('menu-open');
+    const main = document.querySelector('#app > main');
+    if (!button) return;
+    document.documentElement.classList.toggle('menu-open', open);
+    button.setAttribute('aria-expanded', String(open));
+    if (main) main.inert = open;
+    if (open) {
+      const first = [...$('side-menu').querySelectorAll('a[href], button')].find((n) => n.getClientRects().length > 0);
+      if (first) first.focus();
+    } else {
+      button.focus();
+    }
+  }
+  document.addEventListener('click', (e) => {
+    if (e.target.closest('#menu-open')) setPhoneMenu(!phoneOpen());
+    // Using anything in the open menu (a page, Sign out) closes it; signing out does not load a new page.
+    else if (phoneOpen() && e.target.closest('#side-menu a[href], #side-menu button')) setPhoneMenu(false);
+  });
+  document.addEventListener('keydown', (e) => {
+    if (!phoneOpen()) return;
+    if (e.key === 'Escape') { e.preventDefault(); setPhoneMenu(false); return; }
+    if (e.key !== 'Tab') return;
+    const stops = [$('menu-open'), ...$('side-menu').querySelectorAll('a[href], button')].filter((n) => n.getClientRects().length > 0);
+    const at = stops.indexOf(document.activeElement);
+    const next = e.shiftKey ? (at <= 0 ? stops.length - 1 : at - 1) : (at === stops.length - 1 ? 0 : at + 1);
+    e.preventDefault();
+    stops[next].focus();
+  });
+  // Grown past phone width with the menu open: the page is the desktop one again.
+  window.addEventListener('resize', () => {
+    const button = $('menu-open');
+    if (phoneOpen() && button && button.getClientRects().length === 0) setPhoneMenu(false);
+  });
+
   // Scrolling (focus can scroll the item into view) moves the tooltip with its item.
   document.addEventListener('scroll', () => { if (tipItem) showMenuTip(tipItem); }, true);
 

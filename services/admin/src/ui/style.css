@@ -284,11 +284,22 @@ input, select { min-height: var(--target-min); }
    (#menu-tip) beside the item instead (step 2.3). */
 .side-menu [data-tip]::after { display: none; }
 .menu-tip { position: fixed; z-index: 50; margin-left: var(--space-2); transform: translateY(-50%); padding: var(--space-1) var(--space-2); border-radius: var(--radius-control); background: var(--fg); color: var(--bg); font-size: var(--text-xs); line-height: 1.3; white-space: nowrap; pointer-events: none; }
+/* Phones (plan step 2.4, rules 2, 44): a top bar with the Menu button; the same menu opens full screen under
+   it, and the page behind is inert until it closes. */
+.phone-bar { display: none; }
+.phone-menu-close { display: none; }
+.phone-menu-open, .phone-menu-close { align-items: center; gap: var(--space-2); }
 @media (max-width: 560px) {
-  /* Until the phone top bar (step 2.4), the menu sits above the page. */
   .app { flex-direction: column; }
-  .side-menu { position: static; width: auto; height: auto; border-right: 0; border-bottom: 1px solid var(--line); }
-  .sm-item { min-height: var(--btn-h-touch); }
+  .phone-bar { position: sticky; top: 0; z-index: 40; display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); height: var(--phone-bar-h); padding: 0 var(--space-4); background: var(--bg); border-bottom: 1px solid var(--line); }
+  .phone-menu-open { display: inline-flex; }
+  .menu-open .phone-menu-open { display: none; }
+  .menu-open .phone-menu-close { display: inline-flex; }
+  .side-menu { display: none; }
+  .menu-open .side-menu { display: flex; position: fixed; inset: var(--phone-bar-h) 0 0 0; z-index: 40; width: auto; height: auto; border-right: 0; padding: var(--space-4); }
+  .menu-open, .menu-open body { overflow: hidden; }
+  .side-menu .sm-top { display: none; } /* the bar already shows the logo; a phone has no collapsed menu */
+  .sm-item, .sm-item.sm-sub { min-height: var(--btn-h-touch); font-size: var(--text-m); }
 }
 /* The collapsed menu (plan step 2.3, rule 2): icons only, names kept for screen readers and shown as tooltips.
    Desktop only: a phone gets its own menu. */
