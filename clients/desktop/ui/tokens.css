@@ -50,6 +50,10 @@
   --rail-w-collapsed: 64px;
   --panel-w: 440px;
   --icon: 16px;
+  --btn-h-s: 28px;
+  --btn-h: 32px;
+  --btn-h-l: 40px;
+  --btn-h-touch: 44px;
 
   color-scheme: light;
 }

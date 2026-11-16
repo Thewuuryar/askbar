@@ -53,7 +53,7 @@
       <label>Access token (optional) <input id="a-token" type="password" autocomplete="off" placeholder="leave empty to keep the stored token"></label>
       <label class="check"><input id="a-token-clear" type="checkbox"> Remove the stored token</label>
       <div class="row">
-        <button type="submit">Save ntfy settings</button>
+        <button type="submit" class="secondary">Save ntfy settings</button>
         <button type="button" id="a-remove" class="secondary">Remove ntfy</button>
       </div>
       {% call b::error_line("a-error") %}{% endcall %}
@@ -77,7 +77,7 @@
       <label>From address <input id="m-from" type="email" autocomplete="off" placeholder="askbar@example.com"></label>
       <label>To address <input id="m-to" type="email" autocomplete="off" placeholder="you@example.com"></label>
       <div class="row">
-        <button type="submit">Save email settings</button>
+        <button type="submit" class="secondary">Save email settings</button>
         <button type="button" id="m-remove" class="secondary">Remove email</button>
       </div>
       {% call b::error_line("m-error") %}{% endcall %}
@@ -94,7 +94,7 @@
       <label>Current passphrase <input id="r-current" type="password" autocomplete="off" required></label>
       <label>New passphrase (at least 20 characters) <input id="r-new" type="password" autocomplete="new-password" minlength="20" required></label>
       <label>Repeat the new passphrase <input id="r-new2" type="password" autocomplete="new-password" minlength="20" required></label>
-      <div class="row"><button type="submit">Rotate key</button></div>
+      <div class="row"><button type="submit" class="secondary">Rotate key</button></div>
       {% call b::error_line("rotate-error") %}{% endcall %}
     </form>
 {% endblock %}

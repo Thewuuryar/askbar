@@ -16,7 +16,7 @@
       <p class="hint">For scripts. Send it as <code>Authorization: Bearer &lt;key&gt;</code> to <code>/api/admin/v1</code>. It can do what this site can, except manage keys, change the password or sign in. One key at a time. It is shown once, when you make it.</p>
       <form id="key-form">
         <label>Name <input id="key-name" maxlength="60" placeholder="build server" autocomplete="off" required></label>
-        <div class="row"><button type="submit" id="key-create">Create key</button></div>
+        <div class="row"><button type="submit" id="key-create" class="secondary">Create key</button></div>
       </form>
       <div id="key-row" class="sealed-row" hidden>
         <span class="what"><strong id="key-row-name"></strong> <span id="key-row-times" class="hint"></span></span>

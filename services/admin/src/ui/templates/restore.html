@@ -9,7 +9,7 @@
     <form id="restore-upload-form" class="panel">
       <h3>1. The backup file</h3>
       <label>Backup file <input id="restore-file" type="file" accept=".tar,application/x-tar" required></label>
-      <div class="row"><button type="submit">Check the backup</button></div>
+      <div class="row"><button type="submit" class="secondary">Check the backup</button></div>
       {% call b::error_line("restore-error") %}{% endcall %}
     </form>
     <form id="restore-form" class="panel" hidden>

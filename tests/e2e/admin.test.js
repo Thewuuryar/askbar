@@ -308,6 +308,29 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     assert.match(await page.innerText('.card[data-name="mock"]'), /key set/);
     assert.equal(await page.isHidden('#provider-form'), true);
   });
+  // Buttons (rules 18-20): the default is 32 px, .btn-s 28 px and .btn-l 40 px. The probes are built with createElement.
+  // The 390-wide check (at least 44 px on phones) comes with step 1.7, which runs every step at both widths.
+  await step('buttons: a default button is 32 px high, .btn-s 28 px and .btn-l 40 px', async () => {
+    const heights = await page.evaluate(() => {
+      const probe = (cls) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = cls;
+        b.textContent = 'Probe';
+        document.body.appendChild(b);
+        const h = getComputedStyle(b).height;
+        b.remove();
+        return h;
+      };
+      return {
+        existing: getComputedStyle(document.querySelector('#add-provider')).height,
+        plain: probe('btn'),
+        small: probe('btn btn-s'),
+        large: probe('btn btn-l'),
+      };
+    });
+    assert.deepEqual(heights, { existing: '32px', plain: '32px', small: '28px', large: '40px' }, JSON.stringify(heights));
+  });
   await step('approved models: none at first; pick two from the provider\'s list, choose the default, save, and it persists', async () => {
     assert.match(await page.innerText('#catalog-approved'), /No model is approved yet/);
     await page.selectOption('#catalog-provider', { label: 'mock' });

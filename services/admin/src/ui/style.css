@@ -16,11 +16,32 @@ h3 { font-size: 15px; margin: 0 0 8px; }
 label { display: block; margin: 8px 0; font-size: 13px; color: var(--muted); }
 input, select, textarea { display: block; width: 100%; margin-top: 4px; padding: 8px 10px; font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; }
 [hidden] { display: none !important; }
-button { font: inherit; padding: 7px 14px; color: var(--accent-fg); background: var(--accent); border: 0; border-radius: 8px; cursor: pointer; }
-button.secondary { color: var(--fg); background: transparent; border: 1px solid var(--line); }
-button.danger { color: var(--danger); background: transparent; border: 1px solid var(--line); }
+/* Buttons. Filled primary by default, outline secondary, red outline destructive. Heights come from tokens.
+   The old names (bare button, .secondary, .danger, a.button) are aliases of the .btn-* classes. */
+button, a.button, .btn, .btn-primary {
+  display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2);
+  box-sizing: border-box; height: var(--btn-h); max-width: 100%; padding: 0 var(--space-4);
+  font: inherit; color: var(--accent-fg); background: var(--accent); border: 0; border-radius: var(--radius-control);
+  text-decoration: none; cursor: pointer;
+}
+button.secondary, .btn-secondary { color: var(--fg); background: transparent; border: 1px solid var(--line); }
+button.danger, .btn-danger { color: var(--danger); background: transparent; border: 1px solid var(--danger); }
+.btn-s { height: var(--btn-h-s); padding: 0 var(--space-3); }
+.btn-l { height: var(--btn-h-l); padding: 0 var(--space-5); }
+.btn-icon { position: relative; width: var(--btn-h); padding: 0; flex: none; }
+.btn-icon[data-tip]::after { content: attr(data-tip); position: absolute; top: calc(100% + var(--space-1)); left: 50%; transform: translateX(-50%); z-index: 20; padding: var(--space-1) var(--space-2); border-radius: var(--radius-control); background: var(--fg); color: var(--bg); font-size: var(--text-xs); line-height: 1.3; white-space: nowrap; pointer-events: none; opacity: 0; transition: opacity var(--motion); }
+.btn-icon[data-tip]:hover::after, .btn-icon[data-tip]:focus-visible::after { opacity: 1; }
+button:focus-visible, a.button:focus-visible, .btn:focus-visible, .btn-primary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button[aria-disabled="true"], a.button[aria-disabled="true"], .btn[aria-disabled="true"], .btn-primary[aria-disabled="true"], .btn-secondary[aria-disabled="true"], .btn-danger[aria-disabled="true"] {
+  color: var(--muted); background: var(--surface-2); box-shadow: inset 0 0 0 1px var(--line); cursor: not-allowed;
+}
 button.link { color: var(--accent); background: none; padding: 0; }
 button:disabled { opacity: .55; cursor: default; }
+@media (max-width: 560px) {
+  /* Phones: every button is at least 44 px high; the icon-only square is 44 px wide. */
+  button, a.button, .btn, .btn-primary, .btn-secondary, .btn-danger { min-height: var(--btn-h-touch); }
+  .btn-icon { width: var(--btn-h-touch); }
+}
 .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin: 10px 0; }
 .card .name { font-weight: 600; }
 .card .meta { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
@@ -38,7 +59,6 @@ form#provider-form, form.panel { background: var(--card); border: 1px solid var(
 label.check { display: flex; gap: 8px; align-items: center; color: var(--fg); }
 label.check input { width: auto; margin: 0; }
 textarea { resize: vertical; font-family: ui-monospace, monospace; }
-a.button { display: inline-block; padding: 7px 14px; color: var(--accent-fg); background: var(--accent); border-radius: 8px; text-decoration: none; }
 div.panel { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin: 14px 0; }
 .footer { max-width: 860px; margin: 0 auto; padding: 8px 16px 24px; font-size: 12.5px; color: var(--muted); }
 .footer a { color: var(--accent); }
