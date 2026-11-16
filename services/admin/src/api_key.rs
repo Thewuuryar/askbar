@@ -12,8 +12,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use sha2::{Digest, Sha256};
 
 /// What every key starts with, so one can be recognised (and a secret scanner can find it).
-pub const PREFIX: &str = "askbar-admin-";
-pub const MAX_NAME_CHARS: usize = 60;
+pub use crate::constants::{API_KEY_MAX_NAME_CHARS as MAX_NAME_CHARS, API_KEY_PREFIX as PREFIX};
 /// `last_used_at` is written at most this often.
 pub const TOUCH_EVERY_SECS: i64 = 60;
 

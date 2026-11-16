@@ -101,3 +101,17 @@ async fn every_registered_route_answers_and_a_method_that_is_not_registered_is_a
     let res = http.get(format!("{url}/api/admin/v1/no-such-thing")).send().await.unwrap();
     assert_eq!(res.status(), 404);
 }
+
+#[tokio::test]
+async fn constants_json_is_public_and_cached_by_etag() {
+    let url = start().await;
+    let http = reqwest::Client::new();
+    let res = http.get(format!("{url}/admin/constants.json")).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    assert!(res.headers()["content-type"].to_str().unwrap().starts_with("application/json"));
+    let etag = res.headers()["etag"].to_str().unwrap().to_string();
+    let v: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(v["MIN_PASSPHRASE_CHARS"], 20);
+    let again = http.get(format!("{url}/admin/constants.json")).header("if-none-match", &etag).send().await.unwrap();
+    assert_eq!(again.status(), 304);
+}

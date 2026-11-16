@@ -22,13 +22,10 @@ use std::sync::Arc;
 /// secure origin, and `Path=/api/admin` sends it to the admin API and nowhere else on the host.
 pub const COOKIE_NAME: &str = "__Secure-askbar_admin";
 pub const CSRF_HEADER: &str = "x-askbar-admin";
-pub const MIN_PASSWORD_CHARS: usize = 10;
-/// The one admin account's name (ADR 0007: v1 has one admin account).
-pub const ADMIN_USERNAME: &str = "admin";
+pub use crate::constants::{ADMIN_USERNAME, MAX_PASSWORD_CHARS, MIN_PASSWORD_CHARS};
 /// The published first-run password (ADR 0007). It works until it is changed, and nothing but the
 /// change is allowed while it is in use. Also what `askbar-admin reset` restores.
 pub const DEFAULT_PASSWORD: &str = "admin";
-const MAX_PASSWORD_CHARS: usize = 200;
 
 pub type Failure = ApiError;
 

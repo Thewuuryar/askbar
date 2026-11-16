@@ -19,6 +19,7 @@ pub mod budget_watch;
 pub mod caddy;
 pub mod catalog;
 pub mod chain_check;
+pub mod constants;
 pub mod cost;
 pub mod cpa;
 pub mod db;
@@ -172,6 +173,7 @@ pub fn db_path() -> PathBuf {
 }
 
 const JS: &str = "text/javascript; charset=utf-8";
+const JSON: &str = "application/json";
 const CSS: &str = "text/css; charset=utf-8";
 
 /// All of the admin's routes, with the list of what was registered (see `routes`).
@@ -266,6 +268,7 @@ pub fn routes(state: &Arc<AdminState>) -> Routes {
         .get("/admin/", || async { Redirect::to(&pages::path(&pages::PAGES[0])) })
         .get("/admin/app.js", |h: HeaderMap| async move { pages::static_file(&h, JS, include_str!("ui/app.js")) })
         .get("/admin/audit.js", |h: HeaderMap| async move { pages::static_file(&h, JS, include_str!("ui/audit.js")) })
+        .get("/admin/constants.json", |h: HeaderMap| async move { pages::static_file(&h, JSON, constants::json()) })
         .get("/admin/tokens.css", |h: HeaderMap| async move { pages::static_file(&h, CSS, include_str!("ui/tokens.css")) })
         .get("/admin/style.css", |h: HeaderMap| async move { pages::static_file(&h, CSS, include_str!("ui/style.css")) })
         .get(&v1("/health"), || async { (StatusCode::OK, "ok") })

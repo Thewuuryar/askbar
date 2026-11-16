@@ -23,7 +23,7 @@ use std::sync::Arc;
 pub(crate) type St = State<Arc<AdminState>>;
 
 const MAX_PROMPT_CHARS: usize = 20_000;
-const PAIR_CODE_TTL_SECS: i64 = 10 * 60;
+use crate::constants::PAIR_CODE_TTL_SECS;
 
 fn internal<E>(_: E) -> Failure {
     err(StatusCode::INTERNAL_SERVER_ERROR, "Something went wrong on the admin side.")
@@ -1238,8 +1238,7 @@ pub struct AdminSettings {
 }
 
 /// The most characters the wording of the notice and of the warning may have.
-const MAX_NOTICE_CHARS: usize = 2000;
-const MAX_WARNING_CHARS: usize = 300;
+use crate::constants::{MAX_NOTICE_CHARS, MAX_WARNING_CHARS};
 
 /// The value to keep for a wording: what the administrator wrote, trimmed, or nothing when it is empty or is the default.
 fn wording_to_keep(text: &str, default: &str) -> String {
@@ -1251,14 +1250,9 @@ fn wording_to_keep(text: &str, default: &str) -> String {
     }
 }
 
-/// The same floor the server enforces (and the audit database's own trigger): a week.
-const MIN_AUDIT_RETENTION_DAYS: u32 = 7;
-const MAX_AUDIT_RETENTION_DAYS: u32 = 3650;
-
-/// The same bounds the server enforces on the snapshot.
-const MIN_GENERATION_TIMEOUT_SECS: u32 = 30;
-const MAX_GENERATION_TIMEOUT_SECS: u32 = 3600;
-const MAX_HISTORY_TURNS: u32 = 1000;
+use crate::constants::{
+    MAX_AUDIT_RETENTION_DAYS, MAX_GENERATION_TIMEOUT_SECS, MAX_HISTORY_TURNS, MIN_AUDIT_RETENTION_DAYS, MIN_GENERATION_TIMEOUT_SECS,
+};
 
 fn check_display(d: &DisplaySettings) -> Result<(), Failure> {
     if !matches!(d.theme.as_str(), "auto" | "light" | "dark") {

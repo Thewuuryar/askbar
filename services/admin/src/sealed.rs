@@ -16,11 +16,10 @@ use std::collections::{BTreeMap, VecDeque};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-pub const DEFAULT_IDLE_MINUTES: u32 = askbar_proto::audit::DEFAULT_UNSEAL_IDLE_MINUTES;
-pub const DEFAULT_TOTAL_MINUTES: u32 = askbar_proto::audit::DEFAULT_UNSEAL_TOTAL_MINUTES;
-pub const MAX_MINUTES: u32 = 12 * 60;
-/// A sign-in older than this does not start a session.
-pub const FRESH_SIGNIN_SECS: i64 = 10 * 60;
+pub use crate::constants::{
+    DEFAULT_UNSEAL_IDLE_MINUTES as DEFAULT_IDLE_MINUTES, DEFAULT_UNSEAL_TOTAL_MINUTES as DEFAULT_TOTAL_MINUTES, FRESH_SIGNIN_SECS,
+    MAX_UNSEAL_MINUTES as MAX_MINUTES,
+};
 /// How long an alert stays in the banner.
 const ALERT_SECS: i64 = 24 * 60 * 60;
 const MAX_ALERTS: usize = 20;

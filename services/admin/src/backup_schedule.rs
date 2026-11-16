@@ -35,14 +35,10 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-/// 03:30 UTC, in seconds after midnight.
-pub const RUN_AT_SECS: i64 = 3 * 3600 + 30 * 60;
-/// No successful backup for this long is a missed one.
-pub const MISSED_AFTER_SECS: i64 = 26 * 3600;
-/// The restore drill is due this often.
-pub const DRILL_EVERY_SECS: i64 = 90 * 24 * 3600;
-/// After a failed run, the next try is this much later (until the next day's slot).
-const RETRY_AFTER_SECS: i64 = 3600;
+pub use crate::constants::{
+    BACKUP_MISSED_AFTER_SECS as MISSED_AFTER_SECS, BACKUP_RETRY_AFTER_SECS as RETRY_AFTER_SECS, BACKUP_RUN_AT_SECS as RUN_AT_SECS,
+    DRILL_EVERY_SECS,
+};
 /// A failure that goes on is alerted about once in this long.
 const FAILURE_ALERT_EVERY_SECS: i64 = 23 * 3600;
 const PREFIX: &str = "askbar-backup-";
