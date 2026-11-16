@@ -153,6 +153,7 @@ async fn the_ui_is_served_with_its_security_headers() {
     for (path, ctype) in [
         ("/admin/providers/", "text/html"),
         ("/admin/network/", "text/html"),
+        ("/admin/constants.js", "text/javascript"),
         ("/admin/app.js", "text/javascript"),
         ("/admin/audit.js", "text/javascript"),
         ("/admin/style.css", "text/css"),

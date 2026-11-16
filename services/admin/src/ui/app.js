@@ -6,6 +6,9 @@
   const show = (node, visible) => { node.hidden = !visible; };
   // Each page holds only its own section (plan step 1.16), so wiring for another page's elements is skipped.
   const on = (id, event, fn) => { const el = $(id); if (el) el.addEventListener(event, fn); };
+  // The server's limits and intervals (constants.js). Set once at boot, before anything is shown.
+  const MS = window.askbarMsPerSec;
+  let K = null;
 
   async function api(method, path, body) {
     const res = await fetch(path, {
@@ -122,7 +125,7 @@
     const fail = (m) => { err.textContent = m; show(err, true); };
     const pass = $('setup-backup').value;
     if (pass !== $('setup-backup2').value) return fail('The two passphrases do not match.');
-    if ([...pass].length < 20) return fail('The passphrase must be at least 20 characters.');
+    if ([...pass].length < K.MIN_PASSPHRASE_CHARS) return fail('The passphrase must be at least ' + K.MIN_PASSPHRASE_CHARS + ' characters.');
     if (!$('setup-backup-stored').checked) return fail('Confirm that you stored the passphrase: it cannot be recovered.');
     try {
       const r = await api('PUT', '/api/admin/v1/setup/backup-key', { passphrase: pass, confirm: $('setup-backup2').value });
@@ -151,7 +154,7 @@
     const fail = (m) => { err.textContent = m; show(err, true); };
     const pass = $('setup-audit').value;
     if (pass !== $('setup-audit2').value) return fail('The two passphrases do not match.');
-    if ([...pass].length < 20) return fail('The passphrase must be at least 20 characters.');
+    if ([...pass].length < K.MIN_PASSPHRASE_CHARS) return fail('The passphrase must be at least ' + K.MIN_PASSPHRASE_CHARS + ' characters.');
     if (!$('setup-audit-stored').checked) return fail('Confirm that you stored the passphrase: it cannot be recovered.');
     try {
       const r = await api('PUT', '/api/admin/v1/setup/audit-key', { passphrase: pass, confirm: $('setup-audit2').value });
@@ -255,7 +258,7 @@
     appShown = true;
     loadPage();
     checkServer();
-    if (!statusTimer) statusTimer = setInterval(() => { if (!$('app').hidden) checkServer(); }, 5000);
+    if (!statusTimer) statusTimer = setInterval(() => { if (!$('app').hidden) checkServer(); }, K.STATUS_EVERY_SECS * MS);
   }
 
   on('login-form', 'submit', async (e) => {
@@ -448,11 +451,6 @@
     cpaMessage('CLIProxyAPI has not confirmed yet. Check the accounts list in a moment.');
   });
 
-  // Keep the state fresh while the tab is on screen.
-  setInterval(() => {
-    const sec = document.querySelector('section[data-tab="services"]');
-    if (sec && !sec.hidden && !servicesBusy && !document.hidden) loadServices().catch(() => {});
-  }, 5000);
 
   // -------------------------------------------------------- providers
 
@@ -912,7 +910,7 @@
     const b = $('key-revoke');
     if (!revokeArmed) {
       b.textContent = 'Revoke? It stops working at once.';
-      revokeArmed = setTimeout(() => { revokeArmed = null; b.textContent = 'Revoke'; }, 5000);
+      revokeArmed = setTimeout(() => { revokeArmed = null; b.textContent = 'Revoke'; }, K.TOAST_SECS * MS);
       return;
     }
     clearTimeout(revokeArmed);
@@ -1014,7 +1012,7 @@
     const fail = (m) => { err.textContent = m; show(err, true); };
     const pass = $('bk-pass').value;
     if (pass !== $('bk-pass2').value) return fail('The two passphrases do not match.');
-    if ([...pass].length < 20) return fail('The passphrase must be at least 20 characters.');
+    if ([...pass].length < K.MIN_PASSPHRASE_CHARS) return fail('The passphrase must be at least ' + K.MIN_PASSPHRASE_CHARS + ' characters.');
     if (!$('bk-stored').checked) return fail('Confirm that you stored the passphrase: it cannot be recovered.');
     if (!confirm('Rotate the backup key? Backups made from now on need the new passphrase; older ones keep the old one.')) return;
     try {
@@ -1538,7 +1536,7 @@
     const cur = $('r-current').value;
     const next = $('r-new').value;
     if (next !== $('r-new2').value) return fail('The two new passphrases do not match.');
-    if ([...next].length < 20) return fail('The new passphrase must be at least 20 characters.');
+    if ([...next].length < K.MIN_PASSPHRASE_CHARS) return fail('The new passphrase must be at least ' + K.MIN_PASSPHRASE_CHARS + ' characters.');
     try {
       const r = await api('POST', '/api/admin/v1/audit/rotate-key', { current: cur, new: next, confirm: $('r-new2').value });
       for (const id of ['r-current', 'r-new', 'r-new2']) $(id).value = '';
@@ -1553,6 +1551,17 @@
   // ------------------------------------------------------------- boot
 
   (async () => {
+    try {
+      K = await window.askbarConstantsReady;
+    } catch (_) {
+      flash('The admin could not load its settings. Reload the page.');
+      return;
+    }
+    // Keep the state fresh while the tab is on screen.
+    setInterval(() => {
+      const sec = document.querySelector('section[data-tab="services"]');
+      if (sec && !sec.hidden && !servicesBusy && !document.hidden) loadServices().catch(() => {});
+    }, K.STATUS_EVERY_SECS * MS);
     route();
   })();
 })();

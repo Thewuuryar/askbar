@@ -118,7 +118,10 @@ mod tests {
             for id in ["login", "setup", "offline", "flash", "logout", "app"] {
                 assert!(html.contains(&format!(r#"id="{id}""#)), "{}: #{id}", p.slug);
             }
-            assert!(html.contains(r#"<script src="/admin/app.js" defer></script>"#));
+            // The constants load before app.js, which waits for them (plan step 1.2).
+            let constants = html.find(r#"<script src="/admin/constants.js" defer></script>"#).expect("constants.js");
+            let app = html.find(r#"<script src="/admin/app.js" defer></script>"#).expect("app.js");
+            assert!(constants < app, "{}: constants.js before app.js", p.slug);
             assert_eq!(html.contains("/admin/audit.js"), p.slug == "audit", "{}: audit.js only on the Audit page", p.slug);
             assert!(!html.contains("{%") && !html.contains("{{"), "{}: no template syntax left", p.slug);
         }
