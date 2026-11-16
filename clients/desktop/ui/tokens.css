@@ -6,6 +6,7 @@
   /* colour */
   --bg: #eceef2;
   --card: #f6f7f9;
+  --surface-2: #eff1f5;
   --fg: #181b22;
   --muted: #5d6779;
   --line: rgba(24, 32, 56, 0.12);
@@ -43,6 +44,12 @@
   /* motion: one duration, none under prefers-reduced-motion */
   --motion: 150ms;
 
+  /* layout: the same in both themes */
+  --status-h: 48px;
+  --rail-w: 216px;
+  --rail-w-collapsed: 64px;
+  --panel-w: 440px;
+
   color-scheme: light;
 }
 
@@ -50,6 +57,7 @@
   :root:not([data-theme="light"]) {
     --bg: #16181d;
     --card: #1b1d23;
+    --surface-2: #22252d;
     --fg: #e8eaef;
     --muted: #8c93a4;
     --line: rgba(255, 255, 255, 0.1);
@@ -67,6 +75,7 @@
 :root[data-theme="dark"] {
   --bg: #16181d;
   --card: #1b1d23;
+  --surface-2: #22252d;
   --fg: #e8eaef;
   --muted: #8c93a4;
   --line: rgba(255, 255, 255, 0.1);
