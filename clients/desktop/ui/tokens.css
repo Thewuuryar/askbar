@@ -54,6 +54,10 @@
   --btn-h: 32px;
   --btn-h-l: 40px;
   --btn-h-touch: 44px;
+  --box-w: 480px;
+  --menu-w: 200px;
+  --tip-w: 280px;
+  --bar-h: 12px;
 
   color-scheme: light;
 }

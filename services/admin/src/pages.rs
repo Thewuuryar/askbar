@@ -182,6 +182,175 @@ mod tests {
         assert!(!html.contains("<script"), "no script");
     }
 
+    /// Every macro in `ui/templates/components.html`. A macro added there without a name here fails
+    /// `every_component_macro_is_listed_and_called`.
+    const COMPONENTS: &[&str] = &[
+        "icon",
+        "skip_link",
+        "announcer",
+        "toast_region",
+        "banner_region",
+        "help",
+        "page_header",
+        "button",
+        "icon_button",
+        "tabs",
+        "menu",
+        "row_menu",
+        "field",
+        "new_secret",
+        "save_bar",
+        "notice",
+        "status",
+        "side_panel",
+        "dialog_box",
+        "row_confirm",
+        "secret",
+        "table_head",
+        "empty",
+        "skeleton",
+        "na",
+        "na_tag",
+    ];
+
+    #[derive(Template)]
+    #[template(
+        source = r#"{% import "components.html" as c %}<!--skip_link-->{% call c::skip_link() %}{% endcall %}<!--announcer-->{% call c::announcer() %}{% endcall %}<!--toast_region-->{% call c::toast_region() %}{% endcall %}<!--banner_region-->{% call c::banner_region() %}{% endcall %}<!--help-->{% call c::help("audit") %}{% endcall %}<!--page_header-->{% call c::page_header("Clients", "Phones and computers.", "clients", "") %}<a class="btn btn-primary">Pair</a>{% endcall %}<!--button-->{% call c::button("Save", "submit", "", "") %}{% endcall %}{% call c::button("Edit", "secondary", "s", "copy") %}{% endcall %}<!--icon_button-->{% call c::icon_button("close", "Close it") %}{% endcall %}<!--icon-->{% call c::icon("bell") %}{% endcall %}<!--tabs-->{% call c::tabs(["calls:Model calls", "admin:Admin actions"]) %}{% endcall %}<!--menu-->{% call c::menu("bell-menu") %}<button class="menu-item" role="menuitem">One</button>{% endcall %}<!--row_menu-->{% call c::row_menu(["edit:Edit", "!delete:Delete"]) %}{% endcall %}<!--field-->{% call c::field("Host name", "host", "Such as askbar.example.com.", "text", true) %}{% endcall %}{% call c::field("Pick", "pick", "", "slot", false) %}<select id="pick"></select>{% endcall %}<!--new_secret-->{% call c::new_secret("New password", "pw", 10) %}{% endcall %}<!--save_bar-->{% call c::save_bar("general-form") %}{% endcall %}<!--notice-->{% call c::notice("error", "No route.", "Check the address.") %}{% endcall %}<!--status-->{% call c::status("ok") %}Running{% endcall %}{% call c::status("paused") %}Paused{% endcall %}<!--side_panel-->{% call c::side_panel("add-panel", "Add provider", "providers") %}<p>Body</p>{% endcall %}<!--dialog_box-->{% call c::dialog_box("revoke-box", "Revoke?") %}<p>Sure?</p>{% endcall %}<!--row_confirm-->{% call c::row_confirm("restart-confirm", "Restart the server?", "Restart") %}{% endcall %}<!--secret-->{% call c::secret("pair-key") %}{% endcall %}<!--table_head-->{% call c::table_head(["Name", ">Cost", ""]) %}{% endcall %}<!--empty-->{% call c::empty("Nothing yet.", "Add one") %}{% endcall %}<!--skeleton-->{% call c::skeleton(3) %}{% endcall %}<!--na-->{% call c::na("the server cannot do it") %}<span class="btn btn-secondary">Export</span>{% endcall %}<!--na_tag-->{% call c::na_tag("later") %}{% endcall %}"#,
+        ext = "html"
+    )]
+    struct AllComponents;
+
+    /// The part of the output for one macro: from its marker to the next.
+    fn part<'a>(html: &'a str, name: &str) -> &'a str {
+        let start = html.find(&format!("<!--{name}-->")).unwrap_or_else(|| panic!("{name}: no output")) + name.len() + 7;
+        let rest = &html[start..];
+        &rest[..rest.find("<!--").unwrap_or(rest.len())]
+    }
+
+    #[test]
+    fn every_component_macro_is_listed_and_called() {
+        let source = include_str!("ui/templates/components.html");
+        let defined: Vec<&str> = source.split("{% macro ").skip(1).map(|m| m.split('(').next().unwrap()).collect();
+        for name in &defined {
+            assert!(COMPONENTS.contains(name), "macro {name} is in components.html but not in COMPONENTS (and the render test)");
+        }
+        for name in COMPONENTS {
+            assert!(defined.contains(name), "{name} is listed but not defined in components.html");
+        }
+        let html = AllComponents.render().expect("components render");
+        // Every macro but `icon` has its own marker in the render test; icon is exercised through the others.
+        for name in COMPONENTS {
+            assert!(html.contains(&format!("<!--{name}-->")), "{name}: called in the render test");
+        }
+    }
+
+    #[test]
+    fn components_render_what_the_plan_lists() {
+        let html = AllComponents.render().expect("components render");
+        assert!(!html.contains("{%") && !html.contains("{{"), "no template syntax left");
+        // CSP: no inline style, script or event handler in any component.
+        assert!(!html.contains("style="), "no inline style attribute");
+        assert!(!html.contains("<script"), "no script");
+        assert!(!html.contains(" onclick=") && !html.contains(" onload="), "no handler attributes");
+
+        assert!(html.contains(r##"<a class="skip-link" href="#main">Skip to content</a>"##));
+        let announcer = part(&html, "announcer");
+        assert!(announcer.contains(r#"id="announcer" class="visually-hidden" aria-live="polite""#));
+        assert!(announcer.contains(r#"id="announcer-urgent" class="visually-hidden" aria-live="assertive""#));
+        assert!(part(&html, "toast_region").contains(r#"id="toasts""#));
+        assert!(part(&html, "banner_region").contains(r#"id="banners""#));
+
+        let help = part(&html, "help");
+        assert!(help.contains(r#"class="btn btn-quiet btn-icon help""#) && help.contains(r#"data-help="audit""#));
+        assert!(help.contains(r#"aria-label="Help""#) && help.contains(r#"data-tip="Help""#) && help.contains("<svg"));
+
+        let header = part(&html, "page_header");
+        assert!(header.contains(r#"<h1 class="page-title">Clients</h1>"#), "title");
+        assert!(header.contains(r#"data-help="clients""#), "help button");
+        assert!(header.contains(r#"<p class="page-lede">Phones and computers.</p>"#), "lede");
+        assert!(header.contains(r#"<div class="page-actions"><a class="btn btn-primary">Pair</a></div>"#), "actions slot");
+
+        let buttons = part(&html, "button");
+        assert!(buttons.contains(r#"<button type="submit" class="btn btn-primary">Save</button>"#));
+        assert!(buttons.contains(r#"class="btn btn-secondary btn-s""#) && buttons.contains("<svg"));
+        let icon_button = part(&html, "icon_button");
+        assert!(icon_button.contains(r#"aria-label="Close it""#) && icon_button.contains(r#"data-tip="Close it""#));
+
+        let tabs = part(&html, "tabs");
+        assert!(
+            tabs.contains(r#"role="tablist""#) && tabs.contains(r#"id="tab-calls""#) && tabs.contains(r#"aria-controls="panel-admin""#)
+        );
+        assert_eq!(tabs.matches(r#"aria-selected="true""#).count(), 1, "one selected tab");
+
+        let menu = part(&html, "menu");
+        assert!(menu.contains(r#"id="bell-menu" class="menu" role="menu" hidden"#) && menu.contains("One"));
+        let row_menu = part(&html, "row_menu");
+        assert!(row_menu.contains(r#"aria-haspopup="menu""#) && row_menu.contains(r#"data-action="edit""#));
+        assert!(row_menu.contains(r#"menu-item menu-item-danger" role="menuitem" data-action="delete""#), "! marks the red item");
+        assert!(row_menu.find("Edit").unwrap() < row_menu.find("Delete").unwrap());
+
+        let field = part(&html, "field");
+        assert!(field.contains(r#"<label for="host">Host name <span class="optional">(optional)</span></label>"#));
+        assert!(field.contains(r#"<input type="text" id="host""#) && field.contains(r#"id="host-hint">Such as askbar.example.com.</p>"#));
+        assert!(field.contains(r#"id="host-error" hidden"#));
+        assert!(field.contains(r#"<select id="pick"></select>"#), "slot control");
+
+        let secret = part(&html, "new_secret");
+        assert_eq!(secret.matches(r#"type="password""#).count(), 2, "two fields");
+        assert_eq!(secret.matches(r#"autocomplete="new-password""#).count(), 2);
+        let (first, second, hint) =
+            (secret.find(r#"id="pw""#).unwrap(), secret.find(r#"id="pw2""#).unwrap(), secret.find("data-length-hint").unwrap());
+        assert!(first < hint && hint < second, "the length hint sits under the first field, before the second");
+        assert!(secret.contains(r#"data-length-hint data-min="10">At least 10 characters</p>"#));
+        assert_eq!(secret.matches(r#"minlength="10""#).count(), 2, "minlength comes from the argument");
+
+        let bar = part(&html, "save_bar");
+        assert!(bar.contains(r#"id="general-form-save-bar""#) && bar.contains("hidden") && bar.contains("Discard"));
+        assert!(bar.contains(r#"type="submit" class="btn btn-primary" form="general-form""#) && bar.contains(">Save</button>"));
+
+        let notice = part(&html, "notice");
+        assert!(notice.contains(r#"notice-error" role="alert""#) && notice.contains("No route.") && notice.contains("Check the address."));
+        assert!(notice.contains("<svg"), "a symbol, not colour alone");
+
+        let status = part(&html, "status");
+        assert!(status.contains("status-ok") && status.contains("<svg") && status.contains(r#"status-word">Running</span>"#));
+        assert!(status.contains("status-paused") && status.contains("Paused"));
+
+        let panel = part(&html, "side_panel");
+        assert!(panel.starts_with("<aside") && panel.contains(r#"id="add-panel" class="side-panel""#) && panel.contains(" hidden>"));
+        assert!(panel.contains("Add provider") && panel.contains(r#"data-help="providers""#));
+        assert!(panel.contains(r#"aria-label="Close""#) && panel.contains("data-panel-close") && panel.contains("<p>Body</p>"));
+        let boxed = part(&html, "dialog_box");
+        assert!(boxed.starts_with("<dialog") && boxed.contains("Revoke?") && boxed.contains("<p>Sure?</p>"));
+        assert!(!boxed.contains("data-help"), "no help button in a box");
+
+        let confirm = part(&html, "row_confirm");
+        assert!(
+            confirm.contains("Restart the server?")
+                && confirm.contains("data-row-cancel")
+                && confirm.contains(r#"data-row-action>Restart</button>"#)
+        );
+        let secret_box = part(&html, "secret");
+        assert!(secret_box.contains(r#"id="pair-key""#) && secret_box.contains(r#"data-copy="pair-key""#));
+
+        let head = part(&html, "table_head");
+        assert!(
+            head.contains(r#"<th scope="col">Name</th>"#)
+                && head.contains(r#"<th scope="col" class="num">Cost</th>"#)
+                && head.contains("Actions")
+        );
+        let empty = part(&html, "empty");
+        assert!(empty.contains("Nothing yet.") && empty.contains("data-empty-action>Add one</button>"));
+        assert_eq!(part(&html, "skeleton").matches("skeleton-row").count(), 3);
+
+        let na = part(&html, "na");
+        assert!(na.contains(r#"aria-disabled="true""#) && na.contains(r#"tabindex="0""#), "focusable and aria-disabled");
+        assert!(!na.contains(" disabled"), "never the disabled attribute");
+        assert!(na.contains("Not available yet: the server cannot do it") && na.contains("Export"));
+        let tag = part(&html, "na_tag");
+        assert!(tag.contains("Not available yet") && tag.contains("later") && !tag.contains(" disabled"));
+    }
+
     #[test]
     fn a_static_file_answers_304_when_unchanged() {
         let first = static_file(&HeaderMap::new(), "text/css", "body {}");
