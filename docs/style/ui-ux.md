@@ -77,8 +77,8 @@ None, or one transition of 150 ms or less (opacity or colour). Under `prefers-re
 
 Each section is its own page at `/admin/<slug>/`, pre-rendered HTML with no client-side routing (plan step 1.16).
 
-- **One list:** `PAGES` in `services/admin/src/pages.rs`. The routes, the nav and the route-table test all come from it.
-- **One frame:** `services/admin/src/ui/templates/base.html` (Askama) holds the head, the header with sign-out, the nav (`aria-current="page"` on the current page), the page heading and its one-line hint, the sign-in, first-run and offline screens, and the footer. Every page has the same frame.
+- **One list:** `PAGES` in `services/admin/src/pages.rs`, each page with its menu group (Audit, Settings, Reference) and icon. The routes, the side menu and the route-table test all come from it, and `PAGE_SLUGS` in `constants.rs` lists the same slugs.
+- **One frame:** `services/admin/src/ui/templates/base.html` (Askama) holds the head, the side menu (logo, services health line, the pages grouped under Audit and Settings with `aria-current="page"` on the current page and its group's heading bold, sign-out, and the licence and source link from the constants), the page heading and its one-line hint, the sign-in, first-run and offline screens, and the footer shown while signed out. Every page has the same frame.
 - **A new page** is one `PAGES` entry, one `page!` line, and one `ui/templates/<slug>.html` that extends `base.html` and fills `hint` and `content` (and `actions` for a button beside the heading, `scripts` for a page-only script). If it needs loading, add its loader to the `tabs` table in `app.js`.
 - **Building blocks** (`ui/templates/blocks.html`): `error_line(id)` for a form's or view's error line, and `hint(text)` for a plain-text hint. Use them rather than writing the markup again; add a block when the same markup is needed a third time.
 - Templates hold static text and the page list only; Askama escapes them. Everything that comes from the API goes in through `textContent` in the scripts, as before.

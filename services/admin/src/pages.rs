@@ -51,14 +51,15 @@ macro_rules! page {
         #[derive(Template)]
         #[template(path = $file)]
         struct $ty {
-            pages: &'static [Page],
             current: &'static str,
             label: &'static str,
             /// The page's section id: the slug with `/` as `-` (`tab-audit-calls`).
             section: String,
+            /// The side menu (rule 1), built from `PAGES`.
+            menu: &'static [MenuGroup],
         }
         fn $render() -> askama::Result<String> {
-            $ty { pages: PAGES, current: $slug, label: $label, section: section_id($slug) }.render()
+            $ty { current: $slug, label: $label, section: section_id($slug), menu: menu() }.render()
         }
     };
 }
@@ -85,20 +86,72 @@ page!(Reference, reference, "reference", "reference.html", "Reference");
 /// Every admin page, in menu order (rule 1). Its slugs equal `constants::PAGE_SLUGS`, which a test checks.
 /// `/admin` and `/admin/` go to `constants::LANDING_PAGE`.
 pub static PAGES: &[Page] = &[
-    Page { slug: "audit/calls", label: "Model calls", group: Group::Audit, icon: "audit", render: audit_calls },
-    Page { slug: "audit/admin", label: "Admin actions", group: Group::Audit, icon: "audit", render: audit_admin },
-    Page { slug: "audit/sealed", label: "Sealed access", group: Group::Audit, icon: "audit", render: audit_sealed },
-    Page { slug: "audit/routing", label: "Routing", group: Group::Audit, icon: "audit", render: audit_routing },
-    Page { slug: "providers", label: "Providers", group: Group::Settings, icon: "settings", render: providers },
-    Page { slug: "clients", label: "Clients", group: Group::Settings, icon: "settings", render: clients },
-    Page { slug: "services", label: "Services", group: Group::Settings, icon: "settings", render: services },
-    Page { slug: "network", label: "Network", group: Group::Settings, icon: "settings", render: network },
-    Page { slug: "security", label: "Security", group: Group::Settings, icon: "settings", render: security },
-    Page { slug: "backup", label: "Backup", group: Group::Settings, icon: "settings", render: backup },
-    Page { slug: "restore", label: "Restore", group: Group::Settings, icon: "settings", render: restore },
-    Page { slug: "settings", label: "Settings", group: Group::Settings, icon: "settings", render: settings },
+    Page { slug: "audit/calls", label: "Model calls", group: Group::Audit, icon: "calls", render: audit_calls },
+    Page { slug: "audit/admin", label: "Admin actions", group: Group::Audit, icon: "clipboard", render: audit_admin },
+    Page { slug: "audit/sealed", label: "Sealed access", group: Group::Audit, icon: "lock", render: audit_sealed },
+    Page { slug: "audit/routing", label: "Routing", group: Group::Audit, icon: "route", render: audit_routing },
+    Page { slug: "providers", label: "Providers", group: Group::Settings, icon: "cube", render: providers },
+    Page { slug: "clients", label: "Clients", group: Group::Settings, icon: "people", render: clients },
+    Page { slug: "services", label: "Services", group: Group::Settings, icon: "server", render: services },
+    Page { slug: "network", label: "Network", group: Group::Settings, icon: "globe", render: network },
+    Page { slug: "security", label: "Security", group: Group::Settings, icon: "shield", render: security },
+    Page { slug: "backup", label: "Backup", group: Group::Settings, icon: "archive", render: backup },
+    Page { slug: "restore", label: "Restore", group: Group::Settings, icon: "archive", render: restore },
+    Page { slug: "settings", label: "Settings", group: Group::Settings, icon: "sliders", render: settings },
     Page { slug: "reference", label: "Reference", group: Group::Reference, icon: "reference", render: reference },
 ];
+
+/// One entry of the side menu: a top-level page (Home, Alerts, Reference), or a group heading (Audit,
+/// Settings) with its pages under it. A group's heading links to its first page.
+pub struct MenuGroup {
+    pub label: &'static str,
+    pub icon: &'static str,
+    /// True for Audit and Settings, whose pages are listed under the heading.
+    pub nested: bool,
+    pub pages: Vec<&'static Page>,
+}
+
+impl MenuGroup {
+    /// Where the heading links: its first page.
+    pub fn href(&self) -> String {
+        path(self.pages[0])
+    }
+    /// Whether `slug` is one of this group's pages (its heading is then bold, rule 1).
+    pub fn holds(&self, slug: &str) -> bool {
+        self.pages.iter().any(|p| p.slug == slug)
+    }
+}
+
+/// The side menu, built once from `PAGES`: each Top or Reference page on its own, and each Audit or
+/// Settings run of pages under its group's heading.
+pub fn menu() -> &'static [MenuGroup] {
+    static MENU: OnceLock<Vec<MenuGroup>> = OnceLock::new();
+    MENU.get_or_init(|| {
+        let mut out: Vec<MenuGroup> = Vec::new();
+        for p in PAGES {
+            let nested = matches!(p.group, Group::Audit | Group::Settings);
+            match out.last_mut() {
+                Some(g) if nested && g.nested && g.label == p.group.label() => g.pages.push(p),
+                _ if nested => out.push(MenuGroup {
+                    label: p.group.label(),
+                    icon: match p.group {
+                        Group::Audit => "audit",
+                        _ => "settings",
+                    },
+                    nested,
+                    pages: vec![p],
+                }),
+                _ => out.push(MenuGroup { label: p.label, icon: p.icon, nested, pages: vec![p] }),
+            }
+        }
+        out
+    })
+}
+
+/// The first letter of a name, upper case, for the menu's avatar.
+pub fn initial(name: &str) -> String {
+    name.chars().next().map(|c| c.to_uppercase().collect()).unwrap_or_default()
+}
 
 /// The page `/admin` opens.
 pub fn landing() -> &'static Page {
@@ -155,10 +208,40 @@ mod tests {
             let html = &rendered()[i];
             assert!(html.contains(&format!(r#"<body data-page="{}">"#, p.slug)), "{}", p.slug);
             assert!(html.contains(&format!(r#"<section id="{}" data-tab="{}">"#, section_id(p.slug), p.slug)), "{}", p.slug);
-            assert!(html.contains(&format!(r#"<a href="/admin/{}/" data-tab="{}" aria-current="page">{}</a>"#, p.slug, p.slug, p.label)));
-            assert_eq!(html.matches(r#"aria-current="page""#).count(), 1, "{}: one current page", p.slug);
+            // The side menu (plan step 2.2, rule 1): one link per page, the current one marked, its group's
+            // heading bold, and no other heading.
+            let nav = &html[html.find(r#"<nav id="nav""#).expect("nav")..];
+            let nav = &nav[..nav.find("</nav>").unwrap()];
+            assert_eq!(nav.matches(r#"aria-current="page""#).count(), 1, "{}: one current page", p.slug);
+            assert_eq!(html.matches(r#"aria-current="page""#).count(), 1, "{}: and nothing else is current", p.slug);
+            let current = format!(r#"href="/admin/{}/" data-tab="{}" data-tip="{}" aria-current="page">"#, p.slug, p.slug, p.label);
+            assert!(nav.contains(&current), "{}: its link is current", p.slug);
             for other in PAGES {
-                assert!(html.contains(&format!(r#"<a href="/admin/{}/""#, other.slug)), "{} links {}", p.slug, other.slug);
+                assert_eq!(nav.matches(&format!(r#"data-tab="{}""#, other.slug)).count(), 1, "{} links {} once", p.slug, other.slug);
+            }
+            let parents = nav.matches("sm-item sm-parent").count();
+            match p.group {
+                Group::Audit | Group::Settings => {
+                    assert_eq!(parents, 1, "{}: its group's heading is bold", p.slug);
+                    let heading = &nav[nav.find("sm-item sm-parent").unwrap()..];
+                    let heading = &heading[..heading.find("</a>").unwrap()];
+                    assert!(heading.contains(&format!(">{}</span>", p.group.label())), "{}: the heading is {}", p.slug, p.group.label());
+                }
+                _ => assert_eq!(parents, 0, "{}: no heading is bold", p.slug),
+            }
+            assert!(!html.contains(r#"class="top""#), "{}: the old top nav is gone", p.slug);
+            // The licence and source link come from the constants; the icon buttons have names and tooltips.
+            assert!(html.contains(&format!(
+                r#"href="{}" rel="noreferrer">{}</a>"#,
+                crate::constants::LICENSE_URL,
+                crate::constants::LICENSE
+            )));
+            assert!(html.contains(&format!(
+                r#"href="{}" rel="noreferrer" aria-label="Source code" data-tip="Source code""#,
+                crate::constants::SOURCE_URL
+            )));
+            for name in ["Collapse menu", "Sign out"] {
+                assert!(html.contains(&format!(r#"aria-label="{name}" data-tip="{name}""#)), "{}: {name}", p.slug);
             }
             // The same frame on every page: sign-in, first run, banners, sign-out.
             for id in ["login", "setup", "offline", "flash", "logout", "app"] {
@@ -232,11 +315,24 @@ mod tests {
         "info",
         "code",
         "more",
+        "logo",
+        "calls",
+        "clipboard",
+        "lock",
+        "route",
+        "cube",
+        "people",
+        "server",
+        "globe",
+        "shield",
+        "archive",
+        "send",
+        "sliders",
     ];
 
     #[derive(Template)]
     #[template(
-        source = r#"{% import "icons.html" as i %}{% call i::home() %}{% endcall %}{% call i::bell() %}{% endcall %}{% call i::audit() %}{% endcall %}{% call i::settings() %}{% endcall %}{% call i::reference() %}{% endcall %}{% call i::collapse() %}{% endcall %}{% call i::close() %}{% endcall %}{% call i::copy() %}{% endcall %}{% call i::help() %}{% endcall %}{% call i::sign_out() %}{% endcall %}{% call i::search() %}{% endcall %}{% call i::menu() %}{% endcall %}{% call i::check() %}{% endcall %}{% call i::warning() %}{% endcall %}{% call i::critical() %}{% endcall %}{% call i::info() %}{% endcall %}{% call i::code() %}{% endcall %}{% call i::more() %}{% endcall %}"#,
+        source = r#"{% import "icons.html" as i %}{% call i::home() %}{% endcall %}{% call i::bell() %}{% endcall %}{% call i::audit() %}{% endcall %}{% call i::settings() %}{% endcall %}{% call i::reference() %}{% endcall %}{% call i::collapse() %}{% endcall %}{% call i::close() %}{% endcall %}{% call i::copy() %}{% endcall %}{% call i::help() %}{% endcall %}{% call i::sign_out() %}{% endcall %}{% call i::search() %}{% endcall %}{% call i::menu() %}{% endcall %}{% call i::check() %}{% endcall %}{% call i::warning() %}{% endcall %}{% call i::critical() %}{% endcall %}{% call i::info() %}{% endcall %}{% call i::code() %}{% endcall %}{% call i::more() %}{% endcall %}{% call i::logo() %}{% endcall %}{% call i::calls() %}{% endcall %}{% call i::clipboard() %}{% endcall %}{% call i::lock() %}{% endcall %}{% call i::route() %}{% endcall %}{% call i::cube() %}{% endcall %}{% call i::people() %}{% endcall %}{% call i::server() %}{% endcall %}{% call i::globe() %}{% endcall %}{% call i::shield() %}{% endcall %}{% call i::archive() %}{% endcall %}{% call i::send() %}{% endcall %}{% call i::sliders() %}{% endcall %}"#,
         ext = "html"
     )]
     struct AllIcons;

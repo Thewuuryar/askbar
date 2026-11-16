@@ -253,13 +253,33 @@
     } catch (_) { /* signed out, or the admin itself is away */ }
   }
 
+  // The side menu's health line (plan step 2.2): how many of the services answer, as a word and a symbol
+  // (rule 37), linking to the Services page. Read every LIVE_EVERY_SECS while signed in.
+  async function checkHealth() {
+    const box = $('menu-health-status');
+    if (!box) return;
+    let state = 'pending';
+    let text = 'Services not checked';
+    try {
+      const { services } = await api('GET', '/api/admin/v1/services');
+      const down = services.filter((s) => s.state !== 'running').length;
+      state = down ? 'warning' : 'ok';
+      text = down ? down + ' of ' + services.length + ' services not running' : 'All ' + services.length + ' services running';
+    } catch (_) { /* signed out, or the admin itself is away: say it is not checked */ }
+    box.className = 'status status-' + state;
+    box.querySelector('.status-word').textContent = text;
+  }
+
+  let healthTimer = null;
   function showApp() {
     hideAll();
     show($('app'), true);
     appShown = true;
     loadPage();
     checkServer();
+    checkHealth();
     if (!statusTimer) statusTimer = setInterval(() => { if (!$('app').hidden) checkServer(); }, K.STATUS_EVERY_SECS * MS);
+    if (!healthTimer) healthTimer = setInterval(() => { if (!$('app').hidden && !document.hidden) checkHealth(); }, K.LIVE_EVERY_SECS * MS);
   }
 
   on('login-form', 'submit', async (e) => {

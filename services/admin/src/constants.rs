@@ -17,6 +17,8 @@ pub const API_KEY_PREFIX: &str = "askbar-admin-";
 /// Where the source is (the AGPL notice links to it).
 pub const SOURCE_URL: &str = "https://github.com/Thewuuryar/askbar";
 pub const LICENSE: &str = "AGPL-3.0-or-later";
+/// The licence text, in the source repository.
+pub const LICENSE_URL: &str = "https://github.com/Thewuuryar/askbar/blob/main/LICENSE";
 /// Where the reference articles live, relative to the repository root.
 pub const REFERENCE_ROOT: &str = "docs/reference";
 
@@ -121,6 +123,7 @@ struct Constants {
     api_key_prefix: &'static str,
     source_url: &'static str,
     license: &'static str,
+    license_url: &'static str,
     reference_root: &'static str,
     min_password_chars: usize,
     max_password_chars: usize,
@@ -159,6 +162,7 @@ fn current() -> Constants {
         api_key_prefix: API_KEY_PREFIX,
         source_url: SOURCE_URL,
         license: LICENSE,
+        license_url: LICENSE_URL,
         reference_root: REFERENCE_ROOT,
         min_password_chars: MIN_PASSWORD_CHARS,
         max_password_chars: MAX_PASSWORD_CHARS,
@@ -228,6 +232,7 @@ mod tests {
             "HIGHLIGHT_SECS",
             "LANDING_PAGE",
             "LICENSE",
+            "LICENSE_URL",
             "LIVE_EVERY_SECS",
             "LOCKOUT_SECS",
             "MAX_FAILURES",
@@ -263,6 +268,7 @@ mod tests {
         assert_eq!(v["SERVICES"].as_array().unwrap().len(), SERVICES.len());
         assert_eq!(v["BACKOFF_SECS"], serde_json::json!([10, 20, 40, 60]));
         assert_eq!(v["REFERENCE_ROOT"], "docs/reference");
+        assert!(LICENSE_URL.starts_with(SOURCE_URL), "the licence is in the source repository");
     }
 
     #[test]

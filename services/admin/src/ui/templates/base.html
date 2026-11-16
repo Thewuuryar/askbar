@@ -80,16 +80,41 @@
     </form>
   </main>
 
-  <div id="app" hidden>
-    <header class="top">
-      <h1>Askbar admin</h1>
-      <nav id="nav" aria-label="Admin pages">
-        {%- for p in pages %}
-        <a href="/admin/{{ p.slug }}/" data-tab="{{ p.slug }}"{% if p.slug == current %} aria-current="page"{% endif %}>{{ p.label }}</a>
+  <div id="app" class="app" hidden>
+    <aside id="side-menu" class="side-menu" aria-label="Admin menu">
+      <div class="sm-top">
+        <a class="sm-brand" href="/admin/{{ crate::constants::LANDING_PAGE }}/"><span class="sm-logo">{% call c::icon("logo") %}{% endcall %}</span><span class="sm-text">Askbar</span></a>
+        <button type="button" id="menu-collapse" class="btn btn-quiet btn-icon sm-toggle" aria-controls="side-menu" aria-expanded="true" aria-label="Collapse menu" data-tip="Collapse menu">{% call c::icon("collapse") %}{% endcall %}</button>
+      </div>
+      <a class="sm-health" id="menu-health" href="/admin/services/"><span class="status status-pending" id="menu-health-status"><span class="status-sym" aria-hidden="true"></span><span class="status-word sm-text">Checking services</span></span></a>
+      <nav id="nav" class="sm-nav" aria-label="Admin pages">
+        {%- for g in menu %}
+        {%- if g.nested %}
+        <a class="sm-item{% if g.holds(current) %} sm-parent{% endif %}" href="{{ g.href() }}" data-tip="{{ g.label }}">{% call c::icon(g.icon) %}{% endcall %}<span class="sm-text">{{ g.label }}</span></a>
+        <div class="sm-subs">
+          {%- for p in g.pages %}
+          <a class="sm-item sm-sub" href="/admin/{{ p.slug }}/" data-tab="{{ p.slug }}" data-tip="{{ p.label }}"{% if p.slug == current %} aria-current="page"{% endif %}>{% call c::icon(p.icon) %}{% endcall %}<span class="sm-text">{{ p.label }}</span></a>
+          {%- endfor %}
+        </div>
+        {%- else %}
+        {%- for p in g.pages %}
+        <a class="sm-item" href="/admin/{{ p.slug }}/" data-tab="{{ p.slug }}" data-tip="{{ p.label }}"{% if p.slug == current %} aria-current="page"{% endif %}>{% call c::icon(p.icon) %}{% endcall %}<span class="sm-text">{{ p.label }}</span></a>
+        {%- endfor %}
+        {%- endif %}
         {%- endfor %}
       </nav>
-      <button type="button" id="logout" class="link">Sign out</button>
-    </header>
+      <div class="sm-bottom">
+        <div class="sm-foot">
+          <span class="sm-avatar" aria-hidden="true">{{ crate::pages::initial(crate::constants::ADMIN_USERNAME) }}</span>
+          <span class="sm-text sm-who">{{ crate::constants::ADMIN_USERNAME }}</span>
+          <button type="button" id="logout" class="btn btn-quiet btn-icon" aria-label="Sign out" data-tip="Sign out">{% call c::icon("sign_out") %}{% endcall %}</button>
+        </div>
+        <div class="sm-lic">
+          <a class="sm-text sm-lic-link" href="{{ crate::constants::LICENSE_URL }}" rel="noreferrer">{{ crate::constants::LICENSE }}</a>
+          <a class="btn btn-quiet btn-icon" href="{{ crate::constants::SOURCE_URL }}" rel="noreferrer" aria-label="Source code" data-tip="Source code">{% call c::icon("code") %}{% endcall %}</a>
+        </div>
+      </div>
+    </aside>
     <main id="main" tabindex="-1">
       <p id="offline" class="flash error" role="alert" hidden>Server offline. The admin can't reach the Askbar server, so changes, tests, clients and backups won't work until it is back. Nothing you change now is lost or half-saved.</p>
       <p id="rejected" class="flash error" role="alert" hidden>The server rejected this admin's token. Rotate it on the Docker host with <code>docker compose run --rm bootstrap rotate admin-server</code>, then restart both: <code>docker compose restart server admin</code>. Until then the admin can't change anything on the server. The banner goes away when the server accepts the token again.</p>
@@ -117,7 +142,7 @@
   {% call c::toast_region() %}{% endcall %}
   {% call c::announcer() %}{% endcall %}
 
-  <footer class="footer">Askbar is free software under the AGPL-3.0-or-later. <a href="https://github.com/Thewuuryar/askbar" rel="noreferrer">Source code</a></footer>
+  <footer class="footer">Askbar is free software under the {{ crate::constants::LICENSE }}. <a href="{{ crate::constants::SOURCE_URL }}" rel="noreferrer">Source code</a></footer>
 
 </body>
 </html>

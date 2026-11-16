@@ -1865,7 +1865,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
   });
   await step(isPhone ? 'accessibility: every target on every page is at least 44 px on a phone' : 'accessibility: every target on every page is at least 24 px', async () => {
     const min = isPhone ? 44 : 24;
-    const slugs = await page.$$eval('#nav a', (as) => as.map((a) => a.dataset.tab));
+    const slugs = await page.$$eval('#nav a[data-tab]', (as) => as.map((a) => a.dataset.tab));
     const small = [];
     for (const slug of slugs) {
       await page.goto(base + slug + '/');
@@ -1914,7 +1914,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     };
     const signedIn = await browser.newContext({ viewport, bypassCSP: true, storageState: await ctx.storageState() });
     const signedOut = await browser.newContext({ viewport, bypassCSP: true });
-    const slugs = await page.$$eval('#nav a', (as) => as.map((a) => a.dataset.tab));
+    const slugs = await page.$$eval('#nav a[data-tab]', (as) => as.map((a) => a.dataset.tab));
     const extra = [];
     try {
       for (const key of [...slugs, 'login']) {
@@ -1932,7 +1932,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
   });
   await step('pages: each section has its own URL, the nav marks it, Back works and the frame is the same', async () => {
     // Plan step 1.16: a page and a URL for every admin section, from one template.
-    const slugs = await page.$$eval('#nav a', (as) => as.map((a) => a.dataset.tab));
+    const slugs = await page.$$eval('#nav a[data-tab]', (as) => as.map((a) => a.dataset.tab));
     assert.deepEqual(slugs, ['audit/calls', 'audit/admin', 'audit/sealed', 'audit/routing', 'providers', 'clients', 'services', 'network', 'security', 'backup', 'restore', 'settings', 'reference']);
     for (const slug of slugs) {
       await page.goto(`http://127.0.0.1:${adminPort}/admin/${slug}/`);
@@ -1955,6 +1955,45 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     const missing = await page.goto(`http://127.0.0.1:${adminPort}/admin/nothing-here/`);
     assert.equal(missing.status(), 404, 'an unknown admin page is a 404');
     await page.goto(base);
+  });
+  await step('side menu: every page once, the current page and its group marked, the health line, licence and source from the constants', async () => {
+    const K = await page.evaluate(() => window.ui.constants);
+    await page.goto(base + 'audit/sealed/');
+    await page.waitForSelector('#app:not([hidden])');
+    const menu = await page.evaluate(() => {
+      const weight = (el) => getComputedStyle(el).fontWeight;
+      const current = document.querySelector('#nav a[aria-current="page"]');
+      const parent = document.querySelector('#nav .sm-parent');
+      return {
+        current: current.dataset.tab,
+        currentBold: weight(current),
+        parent: parent.textContent.trim(),
+        parentBold: weight(parent),
+        others: [...document.querySelectorAll('#nav > a.sm-item:not(.sm-parent)')].map((a) => weight(a)),
+        width: document.getElementById('side-menu').getBoundingClientRect().width,
+        licence: [document.querySelector('.sm-lic-link').textContent, document.querySelector('.sm-lic-link').href],
+        source: document.querySelector('.sm-lic a[aria-label="Source code"]').href,
+        footer: getComputedStyle(document.querySelector('.footer')).display,
+      };
+    });
+    assert.equal(menu.current, 'audit/sealed');
+    assert.equal(menu.currentBold, '600');
+    assert.deepEqual([menu.parent, menu.parentBold], ['Audit', '600'], 'the Audit heading is bold on its pages');
+    assert.ok(menu.others.every((w) => w === '400'), 'no other heading is bold: ' + menu.others);
+    if (!isPhone) assert.equal(menu.width, 216, 'the menu is --rail-w wide');
+    assert.deepEqual(menu.licence, [K.LICENSE, K.LICENSE_URL]);
+    assert.equal(menu.source, K.SOURCE_URL);
+    assert.equal(menu.footer, 'none', 'signed in, the menu carries the licence and the footer is hidden');
+    await page.waitForFunction(() => /services (running|not running)$/.test(document.querySelector('#menu-health-status .status-word').textContent));
+    assert.match(await page.getAttribute('#menu-health-status', 'class'), /status-(ok|warning)/);
+    assert.equal(await page.getAttribute('#menu-health', 'href'), '/admin/services/');
+    // The icon buttons show their names on keyboard focus, not only on hover (rule 42).
+    await page.focus('#nav a[data-tab="reference"]');
+    await page.keyboard.press('Tab');
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'logout', 'Sign out follows the menu in the Tab order');
+    await page.waitForFunction(() => getComputedStyle(document.getElementById('logout'), '::after').opacity === '1');
+    await page.goto(base);
+    await page.waitForSelector('#app:not([hidden])');
   });
   await step('pages: an audit request opens directly from its address, and the address follows the view', async () => {
     const list = await page.evaluate(async () => (await fetch('/api/admin/v1/audit/traces', { credentials: 'same-origin' })).json());

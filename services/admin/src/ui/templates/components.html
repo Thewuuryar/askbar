@@ -18,7 +18,8 @@
                                      size ""|"s"|"l", icon a name from icon() or "". Classes: btn btn-<kind> [btn-s|btn-l].
       icon_button(icon, label)       button.btn.btn-quiet.btn-icon[aria-label=label][data-tip=label] holding icon(icon).
       icon(name)                     one icon from icons.html by name (home bell audit settings reference collapse close copy
-                                     help sign_out search menu check warning critical info code more).
+                                     help sign_out search menu check warning critical info code more logo calls clipboard lock
+                                     route cube people server globe shield archive send sliders).
       tabs(items)                    items = ["id:Label", ...]: div.tabs[role=tablist] with button.tab[role=tab]#tab-<id>
                                      [aria-controls=panel-<id>]; the first is selected. Panels are the page's, id panel-<id>.
       menu(id)                       popup menu: div.menu#<id>[role=menu][hidden]; the call body holds button.menu-item[role=menuitem].
@@ -79,6 +80,19 @@
 {%- else if name == "info" %}{% call i::info() %}{% endcall %}
 {%- else if name == "code" %}{% call i::code() %}{% endcall %}
 {%- else if name == "more" %}{% call i::more() %}{% endcall %}
+{%- else if name == "logo" %}{% call i::logo() %}{% endcall %}
+{%- else if name == "calls" %}{% call i::calls() %}{% endcall %}
+{%- else if name == "clipboard" %}{% call i::clipboard() %}{% endcall %}
+{%- else if name == "lock" %}{% call i::lock() %}{% endcall %}
+{%- else if name == "route" %}{% call i::route() %}{% endcall %}
+{%- else if name == "cube" %}{% call i::cube() %}{% endcall %}
+{%- else if name == "people" %}{% call i::people() %}{% endcall %}
+{%- else if name == "server" %}{% call i::server() %}{% endcall %}
+{%- else if name == "globe" %}{% call i::globe() %}{% endcall %}
+{%- else if name == "shield" %}{% call i::shield() %}{% endcall %}
+{%- else if name == "archive" %}{% call i::archive() %}{% endcall %}
+{%- else if name == "send" %}{% call i::send() %}{% endcall %}
+{%- else if name == "sliders" %}{% call i::sliders() %}{% endcall %}
 {%- endif %}
 {%- endmacro %}
 

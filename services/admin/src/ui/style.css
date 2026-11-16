@@ -239,15 +239,52 @@ main[tabindex="-1"]:focus { outline: none; }
 .error-summary ul { margin: 0; padding-left: var(--space-4); }
 .error-summary a { color: var(--danger); }
 /* Targets: at least 24 px on a desktop, 44 px on a phone (rule 44). Links inside a sentence are exempt. */
-.top nav a { display: inline-flex; align-items: center; min-height: var(--target-min); padding: 0 var(--space-2); border-radius: var(--radius-control); color: var(--fg); text-decoration: none; }
-.top nav a[aria-current="page"] { background: var(--bg); font-weight: var(--weight-bold); }
 label.check { min-height: var(--target-min); }
 input, select { min-height: var(--target-min); }
 .na-tag { min-height: var(--target-min); }
 @media (max-width: 560px) {
-  input:not([type="checkbox"]):not([type="radio"]), select, label.check, .top nav a, .na-tag, .skip-link { min-height: var(--btn-h-touch); }
+  input:not([type="checkbox"]):not([type="radio"]), select, label.check, .sm-item, .na-tag, .skip-link { min-height: var(--btn-h-touch); }
 }
 /* Nothing moves under reduced motion (rule 46). */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}
+
+/* Side menu (plan step 2.2; rules 1, 20). The page is the menu and the content side by side. */
+.app { display: flex; align-items: stretch; min-height: 100vh; background: var(--card); }
+.app > main { flex: 1 1 auto; min-width: 0; }
+#app:not([hidden]) ~ .footer { display: none; } /* the menu carries the licence and source link once signed in */
+.side-menu { position: sticky; top: 0; flex: none; display: flex; flex-direction: column; gap: var(--space-4); width: var(--rail-w); height: 100vh; overflow-y: auto; padding: var(--space-4) var(--space-3); background: var(--bg); border-right: 1px solid var(--line); }
+.sm-top { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
+.sm-brand { display: flex; align-items: center; gap: var(--space-2); min-height: var(--btn-h); padding: 0 2px; color: var(--fg); font-size: var(--text-m); font-weight: var(--weight-bold); text-decoration: none; }
+.sm-logo { display: inline-flex; align-items: center; justify-content: center; flex: none; width: var(--btn-h-s); height: var(--btn-h-s); border-radius: var(--radius-control); background: var(--accent); color: var(--accent-fg); }
+.sm-health { display: flex; align-items: center; min-height: var(--btn-h); padding: 0 var(--space-2) var(--space-4); border-bottom: 1px solid var(--line); color: var(--fg); font-size: var(--text-xs); text-decoration: none; }
+.sm-health .status { font-size: var(--text-xs); white-space: normal; }
+.sm-health:hover .status-word { text-decoration: underline; }
+.sm-nav { display: flex; flex-direction: column; gap: var(--space-1); }
+.sm-subs { display: flex; flex-direction: column; margin: 0 0 0 var(--space-1); padding-left: var(--space-2); border-left: 1px solid var(--line); }
+.sm-item { position: relative; display: flex; align-items: center; gap: var(--space-3); min-height: var(--btn-h); padding: 0 var(--space-2); border-radius: var(--radius-control); color: var(--fg); font-size: var(--text-m); text-decoration: none; }
+.sm-item .icon { color: var(--muted); }
+.sm-item.sm-sub { gap: var(--space-2); font-size: var(--text-s); color: var(--muted); white-space: nowrap; }
+.sm-item:hover { background: var(--accent-soft); }
+/* The current page: accent tint and icon, its name in --fg (accent text on the tint is under 4.5:1). */
+.sm-item[aria-current="page"] { background: var(--accent-soft); color: var(--fg); font-weight: var(--weight-bold); }
+.sm-item[aria-current="page"] .icon { color: var(--accent); }
+.sm-item.sm-parent { font-weight: var(--weight-bold); }
+.sm-item:focus-visible, .sm-brand:focus-visible, .sm-health:focus-visible, .sm-lic a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.sm-bottom { margin-top: auto; display: flex; flex-direction: column; gap: var(--space-2); padding-top: var(--space-3); border-top: 1px solid var(--line); }
+.sm-foot, .sm-lic { display: flex; align-items: center; gap: var(--space-2); padding: 0 2px 0 var(--space-1); color: var(--muted); font-size: var(--text-xs); }
+.sm-avatar { display: inline-flex; align-items: center; justify-content: center; flex: none; width: var(--target-min); height: var(--target-min); border-radius: var(--radius-control); background: var(--accent-soft); color: var(--fg); font-weight: var(--weight-bold); }
+.sm-who { flex: 1; color: var(--fg); }
+.sm-lic { justify-content: space-between; }
+.sm-lic-link { color: var(--muted); }
+.sm-lic-link:hover { color: var(--fg); }
+.sm-foot .btn-icon, .sm-lic .btn-icon { color: var(--muted); }
+/* The tooltips of the buttons at the bottom open upwards, inside the window. */
+.sm-bottom .btn-icon[data-tip]::after { top: auto; bottom: calc(100% + var(--space-1)); }
+@media (max-width: 560px) {
+  /* Until the phone top bar (step 2.4), the menu sits above the page. */
+  .app { flex-direction: column; }
+  .side-menu { position: static; width: auto; height: auto; border-right: 0; border-bottom: 1px solid var(--line); }
+  .sm-item { min-height: var(--btn-h-touch); }
 }
