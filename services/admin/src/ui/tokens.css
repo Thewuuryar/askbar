@@ -57,7 +57,7 @@
   --box-w: 480px;
   --menu-w: 200px;
   --tip-w: 280px;
-  --bar-h: 12px;
+  --skeleton-h: 12px;
 
   color-scheme: light;
 }
