@@ -49,6 +49,7 @@
   --rail-w: 216px;
   --rail-w-collapsed: 64px;
   --panel-w: 440px;
+  --icon: 16px;
 
   color-scheme: light;
 }

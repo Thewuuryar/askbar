@@ -11,6 +11,7 @@ h3 { font-size: 15px; margin: 0 0 8px; }
 .top nav button[aria-current="page"] { background: var(--bg); font-weight: 600; }
 .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
 .spacer { flex: 1; }
+.icon { width: var(--icon); height: var(--icon); flex: none; vertical-align: middle; }
 .hint { color: var(--muted); font-size: 13px; }
 label { display: block; margin: 8px 0; font-size: 13px; color: var(--muted); }
 input, select, textarea { display: block; width: 100%; margin-top: 4px; padding: 8px 10px; font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; }

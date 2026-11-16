@@ -136,6 +136,52 @@ mod tests {
         }
     }
 
+    /// Every icon macro in `ui/templates/icons.html`, called once each. The list below and the
+    /// calls in the template are kept in step by the count check.
+    const ICONS: &[&str] = &[
+        "home",
+        "bell",
+        "audit",
+        "settings",
+        "reference",
+        "collapse",
+        "close",
+        "copy",
+        "help",
+        "sign_out",
+        "search",
+        "menu",
+        "check",
+        "warning",
+        "critical",
+        "info",
+        "code",
+        "more",
+    ];
+
+    #[derive(Template)]
+    #[template(
+        source = r#"{% import "icons.html" as i %}{% call i::home() %}{% endcall %}{% call i::bell() %}{% endcall %}{% call i::audit() %}{% endcall %}{% call i::settings() %}{% endcall %}{% call i::reference() %}{% endcall %}{% call i::collapse() %}{% endcall %}{% call i::close() %}{% endcall %}{% call i::copy() %}{% endcall %}{% call i::help() %}{% endcall %}{% call i::sign_out() %}{% endcall %}{% call i::search() %}{% endcall %}{% call i::menu() %}{% endcall %}{% call i::check() %}{% endcall %}{% call i::warning() %}{% endcall %}{% call i::critical() %}{% endcall %}{% call i::info() %}{% endcall %}{% call i::code() %}{% endcall %}{% call i::more() %}{% endcall %}"#,
+        ext = "html"
+    )]
+    struct AllIcons;
+
+    #[test]
+    fn every_icon_macro_renders_a_decorative_svg_under_csp() {
+        let html = AllIcons.render().expect("icons render");
+        assert_eq!(html.matches("<svg").count(), ICONS.len(), "one svg per icon in the list");
+        for (name, svg) in ICONS.iter().zip(html.split_inclusive("</svg>")) {
+            assert!(svg.starts_with("<svg"), "{name}: starts with an svg");
+            assert!(svg.contains(r#"aria-hidden="true""#), "{name}: aria-hidden");
+            assert!(svg.contains(r#"class="icon""#), "{name}: class icon");
+            assert!(svg.contains(r#"stroke="currentColor""#), "{name}: currentColor");
+            assert!(svg.len() > 60, "{name}: has a shape");
+        }
+        // CSP: no inline style attribute and no script anywhere in the icons.
+        assert!(!html.contains("style="), "no inline style attribute");
+        assert!(!html.contains("<script"), "no script");
+    }
+
     #[test]
     fn a_static_file_answers_304_when_unchanged() {
         let first = static_file(&HeaderMap::new(), "text/css", "body {}");
