@@ -14,10 +14,19 @@ const ROOT = path.resolve(__dirname, '../..');
 const PASSWORD = 'correct horse battery';
 const SECRET_KEY = 'sk-do-not-show-me-123';
 
+// Every step runs once per viewport (plan step 1.7): the whole sequence, on a fresh stack and data directory, at 1280 wide
+// and again at 390 wide. The names carry the viewport, so a failure says where it happened. The width is this test's own
+// parameter, not a constants.json value.
+const VIEWPORTS = [{ width: 1280, height: 800 }, { width: 390, height: 844 }];
+const PHONE_MAX_WIDTH = 600;
+let vpLabel = '';
+let isPhone = false;
 let failures = 0;
+const counts = {};
 async function step(name, fn) {
-  try { await fn(); console.log('ok   ' + name); }
-  catch (e) { failures++; console.error('FAIL ' + name + '\n     ' + String(e.message).split('\n').join('\n     ')); }
+  const full = '[' + vpLabel + '] ' + name;
+  try { await fn(); counts[vpLabel].ok++; console.log('ok   ' + full); }
+  catch (e) { failures++; counts[vpLabel].fail++; console.error('FAIL ' + full + '\n     ' + String(e.message).split('\n').join('\n     ')); }
 }
 
 // Waits until something listens on the port: a process started a moment ago may not be yet.
@@ -41,7 +50,10 @@ async function waitForPort(port) {
   throw new Error('port ' + port + ' never opened');
 }
 
-(async () => {
+async function runViewport(viewport) {
+  vpLabel = String(viewport.width);
+  isPhone = viewport.width <= PHONE_MAX_WIDTH;
+  counts[vpLabel] = { ok: 0, fail: 0 };
   const [api, adminPort, serverApiPort, mockPort] = [await freePort(), await freePort(), await freePort(), await freePort()];
   const data = fs.mkdtempSync(path.join(os.tmpdir(), 'askbar-admin-'));
   const dirs = {
@@ -78,6 +90,8 @@ async function waitForPort(port) {
   let forwarder = null;
   // bootstrap's directories are read-only, as they are in the stack: open them up before removing.
   const cleanup = () => { for (const c of children) c.kill(); if (forwarder) forwarder.close(); spawnSync('chmod', ['-R', 'u+rwx', data]); fs.rmSync(data, { recursive: true, force: true }); };
+  let browser = null;
+  try {
 
   const startServer = () => run(path.join(ROOT, 'target/debug/askbar-server'), [], {
     ASKBAR_CLIENT_API_ADDR: '127.0.0.1:' + api,
@@ -131,8 +145,8 @@ async function waitForPort(port) {
   await waitForPort(mockPort);
 
   const base = `http://127.0.0.1:${adminPort}/admin/`;
-  const browser = await chromium.launch();
-  const ctx = await browser.newContext({ viewport: { width: 900, height: 800 }, permissions: ['clipboard-read', 'clipboard-write'] });
+  browser = await chromium.launch();
+  const ctx = await browser.newContext({ viewport, permissions: ['clipboard-read', 'clipboard-write'] });
   const page = await ctx.newPage();
   const errors = [];
   // Each admin section is its own page (plan step 1.16): a nav link loads it, and its scripts run before
@@ -309,8 +323,8 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     assert.equal(await page.isHidden('#provider-form'), true);
   });
   // Buttons (rules 18-20): the default is 32 px, .btn-s 28 px and .btn-l 40 px. The probes are built with createElement.
-  // The 390-wide check (at least 44 px on phones) comes with step 1.7, which runs every step at both widths.
-  await step('buttons: a default button is 32 px high, .btn-s 28 px and .btn-l 40 px', async () => {
+  // On a phone (390 wide) every button is at least --btn-h-touch (44 px) high.
+  await step(isPhone ? 'buttons: a default, .btn-s and .btn-l button are each 44 px high on a phone' : 'buttons: a default button is 32 px high, .btn-s 28 px and .btn-l 40 px', async () => {
     const heights = await page.evaluate(() => {
       const probe = (cls) => {
         const b = document.createElement('button');
@@ -329,7 +343,11 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
         large: probe('btn btn-l'),
       };
     });
-    assert.deepEqual(heights, { existing: '32px', plain: '32px', small: '28px', large: '40px' }, JSON.stringify(heights));
+    if (isPhone) {
+      for (const [k, h] of Object.entries(heights)) assert.ok(parseFloat(h) >= 44, k + ' ' + JSON.stringify(heights));
+    } else {
+      assert.deepEqual(heights, { existing: '32px', plain: '32px', small: '28px', large: '40px' }, JSON.stringify(heights));
+    }
   });
   // Type scale (rules 14, 15, 23): the title is 1.3rem/600, a field label 0.875rem/600, help 0.75rem/400, body 0.875rem/400.
   await step('type scale: title 20.8px/600, label 14px/600, help 12px/400, body 14px/400', async () => {
@@ -1768,8 +1786,21 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
   });
   await step('no JavaScript errors', async () => { assert.deepEqual(errors, []); });
 
-  await browser.close();
-  cleanup();
+  } finally {
+    if (browser) await browser.close().catch(() => {});
+    cleanup();
+  }
+}
+
+// The viewports run one after the other, each on its own stack. A crash still cleans up (the finally above) and fails the run.
+(async () => {
+  const started = Date.now();
+  for (const vp of VIEWPORTS) {
+    try { await runViewport(vp); }
+    catch (e) { failures++; console.error('FAIL [' + vpLabel + '] the run stopped: ' + (e && e.stack || e)); }
+  }
+  for (const [w, c] of Object.entries(counts)) console.log(`[${w}] ${c.ok} ok, ${c.fail} failed`);
+  console.log(`${Math.round((Date.now() - started) / 1000)} s`);
   console.log(failures ? `\n${failures} step(s) failed` : '\nall admin steps passed');
   process.exit(failures ? 1 : 0);
-})().catch((e) => { console.error(e); process.exit(1); });
+})();
