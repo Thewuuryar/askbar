@@ -6,7 +6,9 @@
   const { api, registerTab, show, $ } = window.askbarAdmin;
 
   const SUBS = ['overview', 'requests', 'trace', 'routing', 'content'];
-  const state = { sub: 'overview' };
+  // Each Audit page opens on its own view (plan step 2.1); steps 6.1 and 6.2 give each page its own layout.
+  const OPENS_ON = { 'audit/calls': 'overview', 'audit/sealed': 'content', 'audit/routing': 'routing' };
+  const state = { sub: OPENS_ON[document.body.dataset.page] || 'overview' };
 
   function setSub(name) {
     if (!SUBS.includes(name)) return;
@@ -19,7 +21,7 @@
   }
 
   // The address names the view, and the request on the Trace view, so it can be bookmarked or shared:
-  // /admin/audit/?view=trace&id=<trace id> (plan step 1.16).
+  // /admin/audit/calls/?view=trace&id=<trace id> (plan steps 1.16 and 2.1).
   function keepInAddress() {
     const q = new URLSearchParams({ view: state.sub });
     if (state.sub === 'trace' && state.traceId) q.set('id', state.traceId);
@@ -564,5 +566,5 @@
   });
 
   window.askbarAudit = { setSub, read, banner, state, renderOverview, requestsQuery, openTrace, layout, renderTrace, loadRouting, failureClass, renderSealed, loadAccess, loadSession, sessionFromStatus, session };
-  registerTab({ id: 'audit', load });
+  for (const id of Object.keys(OPENS_ON)) registerTab({ id, load });
 })();

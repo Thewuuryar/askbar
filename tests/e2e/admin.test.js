@@ -1182,7 +1182,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
   });
   // ------------------------------------------------------------------ the Audit tab
   // Against the real server: a provider whose name and model are markup, one real chat through it,
-  // then the Audit tab (#tab-audit, #audit-nav, the Requests rows, the waterfall, the Content view).
+  // then the Audit tab (#tab-audit-calls, #audit-nav, the Requests rows, the waterfall, the Content view).
   const XSS = '<img src=x onerror="window.__pwned=1">';
   // One real chat through the server, so there is something to look at; returns once the reply is done.
   async function auditChat(text, providerName) {
@@ -1313,8 +1313,8 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       if (!saved.ok) throw new Error('the catalog was refused: ' + saved.status);
     }, { xss: XSS, mockUrl: `http://127.0.0.1:${mockPort}/v1` });
     await auditChat('audit question', XSS);
-    await openPage('audit');
-    await page.waitForSelector('#tab-audit:not([hidden])');
+    await openPage('audit/calls');
+    await page.waitForSelector('#tab-audit-calls:not([hidden])');
     const subs = await page.$$eval('#audit-nav button', (b) => b.map((x) => x.dataset.sub));
     assert.deepEqual(subs, ['overview', 'requests', 'trace', 'routing', 'content']);
     await page.waitForFunction(() => Number(document.querySelector('#audit-overview [data-stat="requests"]')?.textContent) >= 1);
@@ -1322,7 +1322,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
   });
   await step('audit: server strings are shown as text, never as HTML, in every table', async () => {
     const nothingRan = async (where) => {
-      assert.equal(await page.locator('#tab-audit img').count(), 0, where + ': no element was made from a name');
+      assert.equal(await page.locator('#tab-audit-calls img').count(), 0, where + ': no element was made from a name');
       assert.equal(await page.evaluate(() => window.__pwned), undefined, where + ': nothing ran');
     };
     await nothingRan('overview');
@@ -1386,7 +1386,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.waitForSelector('#audit-unseal-form:not([hidden])');
     assert.equal((await page.content()).includes('Anything else?'), false, 'the opened text is gone from the page once sealed');
     await page.waitForSelector('#unsealed-banner', { state: 'hidden', timeout: 15000 }).catch(async () => { await page.reload(); });
-    assert.equal(await page.locator('#tab-audit img').count(), 0);
+    assert.equal(await page.locator('#tab-audit-calls img').count(), 0);
     assert.equal(await page.evaluate(() => window.__pwned), undefined);
   });
   await step('audit overview: a canned stats payload fills the tiles, the day bars and the provider bars', async () => {
@@ -1400,7 +1400,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     const asked = [];
     await page.route('**/api/admin/v1/audit/stats*', (route) => { asked.push(route.request().url()); route.fulfill({ contentType: 'application/json', body: JSON.stringify(canned) }); });
     await openPage('providers');
-    await openPage('audit');
+    await openPage('audit/calls');
     await page.click('#audit-nav [data-sub="overview"]'); // the tab remembers the view it was last on
     await page.waitForSelector('#audit-overview [data-stat="requests"]');
     const stat = (k) => page.innerText(`#audit-overview [data-stat="${k}"]`);
@@ -1449,7 +1449,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       route.fulfill({ contentType: 'application/json', body: JSON.stringify({ traces }) });
     });
     await openPage('providers');
-    await openPage('audit');
+    await openPage('audit/calls');
     await page.click('#audit-nav [data-sub="requests"]');
     await page.waitForSelector('#audit-rows tr[data-trace]');
     assert.deepEqual(asked[asked.length - 1], { limit: '25' }, 'no filters, no cursor');
@@ -1527,7 +1527,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     const finished = spans.filter((x) => x.status !== 'running');
     await page.route('**/api/admin/v1/audit/traces/TRACE1', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ trace_id: 'TRACE1', cost: 0.0007, spans: finished }) }));
     await openPage('providers');
-    await openPage('audit');
+    await openPage('audit/calls');
     await page.evaluate(() => window.askbarAudit.openTrace('TRACE1'));
     await page.waitForSelector('#audit-waterfall .span-bar');
     assert.equal(await page.locator('#audit-waterfall .span-bar').count(), 4);
@@ -1565,7 +1565,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.route('**/api/admin/v1/audit/stats*', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify(stats) }));
     await page.route('**/api/admin/v1/audit/provider-health', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ providers: [{ provider_id: 'p1', status: 'auth_failed', since: 1793631845, error_code: 'http_401' }] }) }));
     await openPage('providers');
-    await openPage('audit');
+    await openPage('audit/calls');
     await page.evaluate(() => window.askbarAudit.openTrace('ROUTE1'));
     await page.waitForSelector('#audit-waterfall .span-bar');
     await page.click('#audit-nav [data-sub="routing"]');
@@ -1619,7 +1619,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       route.fulfill({ contentType: 'application/json', body: JSON.stringify({ span_id: 'sp-attempt', payloads: [{ role: 'request', key_id: 'k1', text: 'the <b>question</b> that was asked' }, { role: 'error', key_id: 'k0', text: null, key_created_at: 500, key_retired_at: 900 }] }) });
     });
     await openPage('providers');
-    await openPage('audit');
+    await openPage('audit/calls');
     await page.evaluate(() => window.askbarAudit.openTrace('SEAL1'));
     await page.waitForSelector('#audit-waterfall .span-bar');
     await page.click('#audit-nav [data-sub="content"]');
@@ -1686,7 +1686,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     ];
     await page.route('**/api/admin/v1/audit/access*', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ access: rows }) }));
     await openPage('providers');
-    await openPage('audit');
+    await openPage('audit/calls');
     await page.click('#audit-nav [data-sub="content"]');
     await page.waitForSelector('#audit-access-rows tr');
     const cells = await page.$$eval('#audit-access-rows tr', (r) => r.map((tr) => [...tr.children].map((td) => td.textContent).slice(1)));
@@ -1933,7 +1933,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
   await step('pages: each section has its own URL, the nav marks it, Back works and the frame is the same', async () => {
     // Plan step 1.16: a page and a URL for every admin section, from one template.
     const slugs = await page.$$eval('#nav a', (as) => as.map((a) => a.dataset.tab));
-    assert.deepEqual(slugs, ['providers', 'services', 'clients', 'audit', 'backup', 'restore', 'network', 'security', 'settings']);
+    assert.deepEqual(slugs, ['audit/calls', 'audit/admin', 'audit/sealed', 'audit/routing', 'providers', 'clients', 'services', 'network', 'security', 'backup', 'restore', 'settings', 'reference']);
     for (const slug of slugs) {
       await page.goto(`http://127.0.0.1:${adminPort}/admin/${slug}/`);
       await page.waitForSelector('#app:not([hidden])');
@@ -1965,7 +1965,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.waitForFunction((t) => window.askbarAudit.state.traceId === t && !!window.askbarAudit.state.trace, id);
     assert.match(page.url(), new RegExp('[?]view=trace&id=' + encodeURIComponent(id) + '$'), 'the address keeps the request');
     await page.click('#audit-nav [data-sub="requests"]');
-    assert.match(page.url(), /\/admin\/audit\/\?view=requests$/);
+    assert.match(page.url(), /\/admin\/audit\/calls\/\?view=requests$/, 'the old address opened Model calls');
     await openPage('providers');
   });
   await step('pages: a static file is kept and answers 304 when unchanged; pages are never stored', async () => {
@@ -2009,7 +2009,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.waitForSelector('#offline:not([hidden])');
   });
   await step('audit: with the server away the trail still reads from the auditor, and the views are there', async () => {
-    await openPage('audit');
+    await openPage('audit/calls');
     await page.waitForSelector('#audit-overview');
     assert.equal(await page.isHidden('#audit-error'), true, 'the auditor is up, so there is nothing to explain');
     for (const sub of ['overview', 'requests', 'trace', 'routing', 'content']) {

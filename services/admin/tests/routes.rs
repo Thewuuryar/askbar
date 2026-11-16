@@ -70,8 +70,27 @@ fn every_admin_page_has_a_route_and_a_nav_link() {
         let path = askbar_admin::pages::path(p);
         assert!(table.iter().any(|r| r.method == "GET" && r.path == path), "no route for {path}");
     }
-    let pages = table.iter().filter(|r| r.path.starts_with("/admin/") && r.path.ends_with('/') && r.path != "/admin/").count();
+    // The redirects are not pages: /admin/ (to the landing page) and /admin/audit/ (to Model calls, plan step 2.1).
+    const REDIRECTS: [&str; 2] = ["/admin/", "/admin/audit/"];
+    let pages =
+        table.iter().filter(|r| r.path.starts_with("/admin/") && r.path.ends_with('/') && !REDIRECTS.contains(&r.path.as_str())).count();
     assert_eq!(pages, askbar_admin::pages::PAGES.len(), "every page route comes from PAGES");
+}
+
+#[tokio::test]
+async fn the_old_audit_address_opens_model_calls_and_keeps_its_query() {
+    let url = start().await;
+    let http = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().unwrap();
+    for (from, to) in
+        [("/admin/audit/", "/admin/audit/calls/"), ("/admin/audit/?view=trace&id=abc", "/admin/audit/calls/?view=trace&id=abc")]
+    {
+        let res = http.get(format!("{url}{from}")).send().await.unwrap();
+        assert!(res.status().is_redirection(), "{from}: {}", res.status());
+        assert_eq!(res.headers()["location"], to, "{from}");
+    }
+    for slug in ["audit/calls", "audit/admin", "audit/sealed", "audit/routing", "reference"] {
+        assert_eq!(http.get(format!("{url}/admin/{slug}/")).send().await.unwrap().status(), 200, "{slug}");
+    }
 }
 
 #[tokio::test]

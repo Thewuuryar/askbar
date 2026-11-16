@@ -66,6 +66,26 @@ pub const BACKUP_RETRY_AFTER_SECS: i64 = 3600;
 /// The restore drill is due this often.
 pub const DRILL_EVERY_SECS: i64 = 90 * 24 * 3600;
 
+// Pages.
+/// Every admin page's slug (`/admin/<slug>/`), in menu order. `pages::PAGES` lists the same, which a test checks.
+pub const PAGE_SLUGS: [&str; 13] = [
+    "audit/calls",
+    "audit/admin",
+    "audit/sealed",
+    "audit/routing",
+    "providers",
+    "clients",
+    "services",
+    "network",
+    "security",
+    "backup",
+    "restore",
+    "settings",
+    "reference",
+];
+/// The page `/admin` opens.
+pub const LANDING_PAGE: &str = "providers";
+
 // UI timing.
 /// How often the status bar refreshes while the tab is visible.
 pub const STATUS_EVERY_SECS: u32 = 5;
@@ -129,6 +149,8 @@ struct Constants {
     backoff_secs: [u32; 4],
     highlight_secs: u32,
     toast_secs: u32,
+    page_slugs: [&'static str; 13],
+    landing_page: &'static str,
 }
 
 fn current() -> Constants {
@@ -169,6 +191,8 @@ fn current() -> Constants {
         backoff_secs: BACKOFF_SECS,
         highlight_secs: HIGHLIGHT_SECS,
         toast_secs: TOAST_SECS,
+        page_slugs: PAGE_SLUGS,
+        landing_page: LANDING_PAGE,
     }
 }
 
@@ -202,6 +226,7 @@ mod tests {
             "GENERATION_TIMEOUT_SECS",
             "HIDDEN_EVERY_SECS",
             "HIGHLIGHT_SECS",
+            "LANDING_PAGE",
             "LICENSE",
             "LIVE_EVERY_SECS",
             "LOCKOUT_SECS",
@@ -213,6 +238,7 @@ mod tests {
             "MAX_WARNING_CHARS",
             "MIN_PASSPHRASE_CHARS",
             "MIN_PASSWORD_CHARS",
+            "PAGE_SLUGS",
             "PAIR_CODE_TTL_SECS",
             "REFERENCE_ROOT",
             "SERVICES",

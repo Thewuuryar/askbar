@@ -44,7 +44,7 @@
         <label>Provider <select id="audit-f-provider"><option value="">Any</option></select></label>
       </div>
       <p class="hint empty" id="audit-requests-empty">No requests recorded yet.</p>
-      <div class="table-wrap">
+      <div class="table-wrap" tabindex="0" role="region" aria-label="Requests">
         <table id="audit-table" hidden>
           <thead><tr><th>Time</th><th>User</th><th>Provider</th><th>Model</th><th>Status</th><th>Latency</th><th>Tokens (in → out)</th><th>Cost</th></tr></thead>
           <tbody id="audit-rows"></tbody>
@@ -61,7 +61,7 @@
     <div id="audit-routing" data-subview="routing" hidden>
       <h3>This request</h3>
       <p class="hint empty" id="audit-routing-empty">Pick a request on the Requests view to see how it was routed.</p>
-      <div class="table-wrap">
+      <div class="table-wrap" tabindex="0" role="region" aria-label="Tries for this request">
         <table id="audit-attempts" hidden>
           <thead><tr><th>Provider</th><th>Try</th><th>Status</th><th>Kind of failure</th><th>Reason</th><th>Latency</th></tr></thead>
           <tbody id="audit-attempt-rows"></tbody>
@@ -69,7 +69,7 @@
       </div>
       <h3>Providers, in the chosen window</h3>
       <p class="hint empty" id="audit-routing-overall-empty">No tries recorded in this window yet.</p>
-      <div class="table-wrap">
+      <div class="table-wrap" tabindex="0" role="region" aria-label="Providers in the chosen window">
         <table id="audit-routing-table" hidden>
           <thead><tr><th>Provider</th><th>Tries</th><th>Retries</th><th>Failed tries</th><th>Credentials</th></tr></thead>
           <tbody id="audit-routing-rows"></tbody>
@@ -96,7 +96,7 @@
       <h3>Access history</h3>
       {% call b::hint("Every time sealed content was opened, or someone tried the wrong passphrase. It records the request, the key and the time, never the content.") %}{% endcall %}
       <p class="hint empty" id="audit-access-empty">Nothing has been opened yet.</p>
-      <div class="table-wrap">
+      <div class="table-wrap" tabindex="0" role="region" aria-label="Access history">
         <table id="audit-access" hidden>
           <thead><tr><th>Time</th><th>Span</th><th>Key</th><th>Result</th></tr></thead>
           <tbody id="audit-access-rows"></tbody>

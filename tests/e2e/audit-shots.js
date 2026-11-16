@@ -99,15 +99,15 @@ async function waitForPort(port) {
     await page.click('#login-form button');
     await page.waitForSelector('#app:not([hidden])');
     // Each admin section is its own page (plan step 1.16).
-    await page.click('#nav [data-tab="audit"]');
-    await page.waitForURL('**/admin/audit/**');
+    await page.click('#nav [data-tab="audit/calls"]');
+    await page.waitForURL('**/admin/audit/calls/**');
     await page.waitForSelector('#app:not([hidden])');
     await page.waitForFunction(() => Number(document.querySelector('[data-stat="requests"]')?.textContent) >= 1);
     const check = async (view) => {
       await page.waitForTimeout(250);
       const r = await page.evaluate(() => {
         const out = { sideways: document.documentElement.scrollWidth - window.innerWidth, small: [], clipped: [] };
-        for (const n of document.querySelectorAll('#tab-audit *')) {
+        for (const n of document.querySelectorAll('section[data-tab^="audit/"] *')) {
           if (n.offsetParent === null || !n.childNodes.length || ![...n.childNodes].some((c) => c.nodeType === 3 && c.textContent.trim())) continue;
           const fs = parseFloat(getComputedStyle(n).fontSize);
           if (fs < 11) out.small.push(n.tagName + ':' + n.textContent.trim().slice(0, 30) + ' ' + fs + 'px');

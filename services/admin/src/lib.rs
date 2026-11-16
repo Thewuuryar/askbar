@@ -37,6 +37,7 @@ pub mod services;
 pub mod web;
 
 use axum::{
+    extract::RawQuery,
     http::{HeaderMap, StatusCode},
     middleware,
     response::Redirect,
@@ -264,8 +265,16 @@ pub fn routes(state: &Arc<AdminState>) -> Routes {
     for (i, page) in pages::PAGES.iter().enumerate() {
         site = site.get(&pages::path(page), move || async move { pages::page_response(i) });
     }
-    site.get("/admin", || async { Redirect::to(&pages::path(&pages::PAGES[0])) })
-        .get("/admin/", || async { Redirect::to(&pages::path(&pages::PAGES[0])) })
+    site.get("/admin", || async { Redirect::to(&pages::path(pages::landing())) })
+        .get("/admin/", || async { Redirect::to(&pages::path(pages::landing())) })
+        // The Audit page became four (plan step 2.1); an old address opens Model calls, query and all,
+        // so a bookmarked /admin/audit/?view=trace&id=... still opens that request.
+        .get("/admin/audit/", |RawQuery(q): RawQuery| async move {
+            Redirect::to(&match q {
+                Some(q) if !q.is_empty() => format!("/admin/audit/calls/?{q}"),
+                _ => "/admin/audit/calls/".to_owned(),
+            })
+        })
         .get("/admin/app.js", |h: HeaderMap| async move { pages::static_file(&h, JS, include_str!("ui/app.js")) })
         .get("/admin/components.js", |h: HeaderMap| async move { pages::static_file(&h, JS, include_str!("ui/components.js")) })
         .get("/admin/audit.js", |h: HeaderMap| async move { pages::static_file(&h, JS, include_str!("ui/audit.js")) })

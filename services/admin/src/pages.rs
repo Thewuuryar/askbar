@@ -14,10 +14,35 @@ use axum::response::{IntoResponse, Response};
 use sha2::{Digest, Sha256};
 use std::sync::OnceLock;
 
-/// One admin page: its path segment (`/admin/<slug>/`), its nav label and heading, and how to render it.
+/// The menu group a page sits in (rule 1). Top-level pages have no parent; the others sit under
+/// their group's heading in the side menu.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Group {
+    Top,
+    Audit,
+    Settings,
+    Reference,
+}
+
+impl Group {
+    /// The group's name, as the menu and the breadcrumb show it.
+    pub fn label(self) -> &'static str {
+        match self {
+            Group::Top => "",
+            Group::Audit => "Audit",
+            Group::Settings => "Settings",
+            Group::Reference => "Reference",
+        }
+    }
+}
+
+/// One admin page: its path (`/admin/<slug>/`, where a slug may have one `/`), its menu label and
+/// heading, its group and icon (an icon macro's name), and how to render it.
 pub struct Page {
     pub slug: &'static str,
     pub label: &'static str,
+    pub group: Group,
+    pub icon: &'static str,
     render: fn() -> askama::Result<String>,
 }
 
@@ -29,35 +54,56 @@ macro_rules! page {
             pages: &'static [Page],
             current: &'static str,
             label: &'static str,
+            /// The page's section id: the slug with `/` as `-` (`tab-audit-calls`).
+            section: String,
         }
         fn $render() -> askama::Result<String> {
-            $ty { pages: PAGES, current: $slug, label: $label }.render()
+            $ty { pages: PAGES, current: $slug, label: $label, section: section_id($slug) }.render()
         }
     };
 }
 
+/// The id of a page's `<section>`: `tab-` and the slug, with `/` as `-`.
+pub fn section_id(slug: &str) -> String {
+    format!("tab-{}", slug.replace('/', "-"))
+}
+
+page!(AuditCalls, audit_calls, "audit/calls", "audit.html", "Model calls");
+page!(AuditAdmin, audit_admin, "audit/admin", "audit_admin.html", "Admin actions");
+page!(AuditSealed, audit_sealed, "audit/sealed", "audit.html", "Sealed access");
+page!(AuditRouting, audit_routing, "audit/routing", "audit.html", "Routing");
 page!(Providers, providers, "providers", "providers.html", "Providers");
-page!(Services, services, "services", "services.html", "Services");
 page!(Clients, clients, "clients", "clients.html", "Clients");
-page!(Audit, audit, "audit", "audit.html", "Audit");
-page!(Backup, backup, "backup", "backup.html", "Backup");
-page!(Restore, restore, "restore", "restore.html", "Restore");
+page!(Services, services, "services", "services.html", "Services");
 page!(Network, network, "network", "network.html", "Network");
 page!(Security, security, "security", "security.html", "Security");
+page!(Backup, backup, "backup", "backup.html", "Backup");
+page!(Restore, restore, "restore", "restore.html", "Restore");
 page!(Settings, settings, "settings", "settings.html", "Settings");
+page!(Reference, reference, "reference", "reference.html", "Reference");
 
-/// Every admin page, in nav order. `/admin` and `/admin/` go to the first.
+/// Every admin page, in menu order (rule 1). Its slugs equal `constants::PAGE_SLUGS`, which a test checks.
+/// `/admin` and `/admin/` go to `constants::LANDING_PAGE`.
 pub static PAGES: &[Page] = &[
-    Page { slug: "providers", label: "Providers", render: providers },
-    Page { slug: "services", label: "Services", render: services },
-    Page { slug: "clients", label: "Clients", render: clients },
-    Page { slug: "audit", label: "Audit", render: audit },
-    Page { slug: "backup", label: "Backup", render: backup },
-    Page { slug: "restore", label: "Restore", render: restore },
-    Page { slug: "network", label: "Network", render: network },
-    Page { slug: "security", label: "Security", render: security },
-    Page { slug: "settings", label: "Settings", render: settings },
+    Page { slug: "audit/calls", label: "Model calls", group: Group::Audit, icon: "audit", render: audit_calls },
+    Page { slug: "audit/admin", label: "Admin actions", group: Group::Audit, icon: "audit", render: audit_admin },
+    Page { slug: "audit/sealed", label: "Sealed access", group: Group::Audit, icon: "audit", render: audit_sealed },
+    Page { slug: "audit/routing", label: "Routing", group: Group::Audit, icon: "audit", render: audit_routing },
+    Page { slug: "providers", label: "Providers", group: Group::Settings, icon: "settings", render: providers },
+    Page { slug: "clients", label: "Clients", group: Group::Settings, icon: "settings", render: clients },
+    Page { slug: "services", label: "Services", group: Group::Settings, icon: "settings", render: services },
+    Page { slug: "network", label: "Network", group: Group::Settings, icon: "settings", render: network },
+    Page { slug: "security", label: "Security", group: Group::Settings, icon: "settings", render: security },
+    Page { slug: "backup", label: "Backup", group: Group::Settings, icon: "settings", render: backup },
+    Page { slug: "restore", label: "Restore", group: Group::Settings, icon: "settings", render: restore },
+    Page { slug: "settings", label: "Settings", group: Group::Settings, icon: "settings", render: settings },
+    Page { slug: "reference", label: "Reference", group: Group::Reference, icon: "reference", render: reference },
 ];
+
+/// The page `/admin` opens.
+pub fn landing() -> &'static Page {
+    PAGES.iter().find(|p| p.slug == crate::constants::LANDING_PAGE).expect("the landing page is in PAGES")
+}
 
 /// The path of a page: `/admin/<slug>/`.
 pub fn path(page: &Page) -> String {
@@ -108,7 +154,7 @@ mod tests {
         for (i, p) in PAGES.iter().enumerate() {
             let html = &rendered()[i];
             assert!(html.contains(&format!(r#"<body data-page="{}">"#, p.slug)), "{}", p.slug);
-            assert!(html.contains(&format!(r#"<section id="tab-{}" data-tab="{}">"#, p.slug, p.slug)), "{}", p.slug);
+            assert!(html.contains(&format!(r#"<section id="{}" data-tab="{}">"#, section_id(p.slug), p.slug)), "{}", p.slug);
             assert!(html.contains(&format!(r#"<a href="/admin/{}/" data-tab="{}" aria-current="page">{}</a>"#, p.slug, p.slug, p.label)));
             assert_eq!(html.matches(r#"aria-current="page""#).count(), 1, "{}: one current page", p.slug);
             for other in PAGES {
@@ -124,7 +170,12 @@ mod tests {
             assert!(constants < app, "{}: components.js before app.js", p.slug);
             assert_eq!(html.matches(r#"id="announcer""#).count(), 1, "{}: one announcer", p.slug);
             assert_eq!(html.matches(r#"id="toasts""#).count(), 1, "{}: one toast region", p.slug);
-            assert_eq!(html.contains("/admin/audit.js"), p.slug == "audit", "{}: audit.js only on the Audit page", p.slug);
+            assert_eq!(
+                html.contains("/admin/audit.js"),
+                ["audit/calls", "audit/sealed", "audit/routing"].contains(&p.slug),
+                "{}: audit.js only on the Audit pages that read the trail",
+                p.slug
+            );
             assert!(!html.contains("{%") && !html.contains("{{"), "{}: no template syntax left", p.slug);
         }
     }
@@ -133,9 +184,31 @@ mod tests {
     fn slugs_are_unique_plain_path_segments() {
         let mut seen = std::collections::HashSet::new();
         for p in PAGES {
-            assert!(!p.slug.is_empty() && p.slug.bytes().all(|b| b.is_ascii_lowercase()), "{}", p.slug);
+            let parts: Vec<&str> = p.slug.split('/').collect();
+            assert!(parts.len() <= 2, "{}: at most one /", p.slug);
+            for part in parts {
+                assert!(!part.is_empty() && part.bytes().all(|b| b.is_ascii_lowercase()), "{}", p.slug);
+            }
             assert!(seen.insert(p.slug), "{} twice", p.slug);
         }
+    }
+
+    #[test]
+    fn pages_match_the_constants_and_sit_in_their_groups() {
+        let slugs: Vec<&str> = PAGES.iter().map(|p| p.slug).collect();
+        assert_eq!(slugs, crate::constants::PAGE_SLUGS, "PAGES and constants::PAGE_SLUGS list the same pages in the same order");
+        assert_eq!(landing().slug, crate::constants::LANDING_PAGE);
+        for p in PAGES {
+            // An Audit page lives under /admin/audit/; nothing else does.
+            assert_eq!(p.group == Group::Audit, p.slug.starts_with("audit/"), "{}", p.slug);
+            assert!(ICONS.contains(&p.icon), "{}: icon {} is an icon macro", p.slug, p.icon);
+        }
+        // Rule 1: the groups come in menu order, each in one run.
+        let order = [Group::Top, Group::Audit, Group::Settings, Group::Reference];
+        let ranks: Vec<usize> = PAGES.iter().map(|p| order.iter().position(|g| *g == p.group).unwrap()).collect();
+        assert!(ranks.windows(2).all(|w| w[0] <= w[1]), "groups in menu order: {ranks:?}");
+        let audit: Vec<&str> = PAGES.iter().filter(|p| p.group == Group::Audit).map(|p| p.label).collect();
+        assert_eq!(audit, ["Model calls", "Admin actions", "Sealed access", "Routing"]);
     }
 
     /// Every icon macro in `ui/templates/icons.html`, called once each. The list below and the
