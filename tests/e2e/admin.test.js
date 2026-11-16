@@ -331,6 +331,23 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     });
     assert.deepEqual(heights, { existing: '32px', plain: '32px', small: '28px', large: '40px' }, JSON.stringify(heights));
   });
+  // Type scale (rules 14, 15, 23): the title is 1.3rem/600, a field label 0.875rem/600, help 0.75rem/400, body 0.875rem/400.
+  await step('type scale: title 20.8px/600, label 14px/600, help 12px/400, body 14px/400', async () => {
+    const type = await page.evaluate(() => {
+      const read = (el) => { const s = getComputedStyle(el); return { size: parseFloat(s.fontSize), weight: s.fontWeight }; };
+      return {
+        title: read(document.querySelector('section[data-tab] > .row > h2')),
+        label: read(document.querySelector('#provider-form label:not(.check)')),
+        help: read(document.querySelector('section[data-tab] > p.hint')),
+        body: read(document.body),
+      };
+    });
+    const near = (a, b) => Math.abs(a - b) <= 0.1;
+    assert.ok(near(type.title.size, 20.8) && type.title.weight === '600', JSON.stringify(type));
+    assert.ok(near(type.label.size, 14) && type.label.weight === '600', JSON.stringify(type));
+    assert.ok(near(type.help.size, 12) && type.help.weight === '400', JSON.stringify(type));
+    assert.ok(near(type.body.size, 14) && type.body.weight === '400', JSON.stringify(type));
+  });
   await step('approved models: none at first; pick two from the provider\'s list, choose the default, save, and it persists', async () => {
     assert.match(await page.innerText('#catalog-approved'), /No model is approved yet/);
     await page.selectOption('#catalog-provider', { label: 'mock' });

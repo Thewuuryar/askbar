@@ -2,6 +2,8 @@
 # Fails if the admin copy of tokens.css differs from clients/desktop/ui/tokens.css, or if --fg, --muted, --accent, --danger or --good is under
 # 4.5:1 contrast against --bg or --card, --accent-fg under 4.5:1 against --accent, or --fg under 4.5:1 on
 # --danger-soft (a failed question's tint) laid over --card, in either theme.
+# Also fails if services/admin/src/ui/style.css sets a font-size other than one of the four --text-* tokens (or inherit),
+# a font-weight other than --weight-regular, --weight-bold or inherit, or a font: shorthand with a px, rem, em or pt size.
 # Usage: scripts/check-ui-tokens.sh
 cd "$(dirname "$0")/.." || exit 2
 python3 - <<'PY'
@@ -42,6 +44,23 @@ for theme, t in (("light", block(":root {")), ("dark", block(':root[data-theme="
     r = ratio(t["fg"], over(t["danger-soft"], t["card"]))
     if r < 4.5:
         print(f"{theme}: --fg on --danger-soft over --card is {r:.2f}:1 (needs 4.5)"); bad += 1
+# Type scale (rules 14, 15): the admin stylesheet uses the four --text-* sizes and the two weights only.
+SIZES = {"var(--text-xs)", "var(--text-s)", "var(--text-m)", "var(--text-l)", "inherit"}
+WEIGHTS = {"var(--weight-regular)", "var(--weight-bold)", "inherit"}
+css = open("services/admin/src/ui/style.css", encoding="utf-8").read()
+for n, line in enumerate(css.splitlines(), 1):
+    problems = []
+    for v in re.findall(r"(?<![\w-])font-size\s*:\s*([^;}]+)", line):
+        if v.strip() not in SIZES:
+            problems.append(f"font-size: {v.strip()} is not a --text-* token")
+    for v in re.findall(r"(?<![\w-])font-weight\s*:\s*([^;}]+)", line):
+        if v.strip() not in WEIGHTS:
+            problems.append(f"font-weight: {v.strip()} is not --weight-regular or --weight-bold")
+    for v in re.findall(r"(?<![\w-])font\s*:\s*([^;}]+)", line):
+        if re.search(r"\d\s*(px|rem|em|pt)\b", v):
+            problems.append(f"font shorthand sets a literal size: {v.strip()}")
+    for p in problems:
+        print(f"style.css line {n}: {p}\n    {line.strip()}"); bad += 1
 print("ui tokens ok" if not bad else f"{bad} problem(s)")
 sys.exit(1 if bad else 0)
 PY
