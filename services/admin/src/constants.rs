@@ -84,7 +84,7 @@ pub const PAGE_SLUGS: [&str; 15] = [
     "security",
     "backup",
     "restore",
-    "settings",
+    "general",
     "reference",
 ];
 /// The page `/admin` opens.

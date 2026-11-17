@@ -172,7 +172,7 @@ async fn the_ui_is_served_with_its_security_headers() {
         !page.contains("setup-key") && !page.contains("setup-saved") && !page.contains("Rotate the master key"),
         "no master-key screens here"
     );
-    let settings = t.http.get(format!("{}/admin/settings/", t.adm)).send().await.unwrap().text().await.unwrap();
+    let settings = t.http.get(format!("{}/admin/general/", t.adm)).send().await.unwrap().text().await.unwrap();
     assert!(settings.contains("Rotate the audit key") && settings.contains("id=\"rotate-form\""));
     // /admin (no slash) goes to the page; the root is not the admin's (Caddy never forwards it), so it is a 404.
     let none = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().unwrap();

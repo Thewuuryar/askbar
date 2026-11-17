@@ -93,7 +93,7 @@ page!(Network, network, "network", "network.html", "Network");
 page!(Security, security, "security", "security.html", "Security");
 page!(Backup, backup, "backup", "backup.html", "Backup");
 page!(Restore, restore, "restore", "restore.html", "Restore");
-page!(Settings, settings, "settings", "settings.html", "Settings");
+page!(General, general, "general", "general.html", "General");
 page!(Reference, reference, "reference", "reference.html", "Reference");
 
 /// Every admin page, in menu order (rule 1). Its slugs equal `constants::PAGE_SLUGS`, which a test checks.
@@ -112,7 +112,7 @@ pub static PAGES: &[Page] = &[
     Page { slug: "security", label: "Security", group: Group::Settings, icon: "shield", render: security },
     Page { slug: "backup", label: "Backup", group: Group::Settings, icon: "archive", render: backup },
     Page { slug: "restore", label: "Restore", group: Group::Settings, icon: "archive", render: restore },
-    Page { slug: "settings", label: "Settings", group: Group::Settings, icon: "sliders", render: settings },
+    Page { slug: "general", label: "General", group: Group::Settings, icon: "sliders", render: general },
     Page { slug: "reference", label: "Reference", group: Group::Reference, icon: "reference", render: reference },
 ];
 
