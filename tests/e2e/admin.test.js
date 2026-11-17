@@ -2888,8 +2888,9 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await openSettings();
     await page.waitForFunction(() => document.getElementById('s-retention').value === '45');
 
-    // Rotation: each refusal in turn, then success.
-    await page.evaluate(() => document.getElementById('rotate-form').noValidate = true);
+    // Rotation (on the Security page): each refusal in turn, then success.
+    await openPage('security');
+    await page.waitForFunction((k) => document.getElementById('s-key-id').textContent === k, oldKey);
     const NEW_PASS = 'a different long passphrase 77';
     const rotate = async (cur, next, next2) => {
       await page.fill('#r-current', cur);
@@ -2898,9 +2899,10 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       await page.click('#rotate-form button[type=submit]');
     };
     await rotate(AUDIT_PASS, NEW_PASS, NEW_PASS + 'x');
-    assert.match(await page.innerText('#rotate-error'), /do not match/);
+    assert.match(await page.innerText('#rotate-form .error-summary'), /do not match/);
+    assert.match(await page.innerText('#r-new2-error'), /do not match/);
     await rotate(AUDIT_PASS, 'too short', 'too short');
-    assert.match(await page.innerText('#rotate-error'), /at least 20/);
+    assert.match(await page.innerText('#rotate-form .error-summary'), /at least 20/);
     await rotate('not the current passphrase!!', NEW_PASS, NEW_PASS);
     await page.waitForFunction(() => /current passphrase is wrong/.test(document.getElementById('rotate-error').textContent));
     assert.equal(await page.inputValue('#r-current'), '', 'the current passphrase is cleared after a try');
@@ -2914,6 +2916,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     for (const id of ['r-current', 'r-new', 'r-new2']) assert.equal(await page.inputValue('#' + id), '', id);
     assert.equal((await page.content()).includes(NEW_PASS), false);
     // Put the retention back so later steps see an ordinary server.
+    await openSettings();
     await page.fill('#s-retention', '30');
     await page.click('#settings-form button[type=submit]');
     await page.waitForSelector('#toasts .toast');
@@ -2961,6 +2964,104 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.click('#key-revoke');
     await page.waitForSelector('#key-form:not([hidden])');
     assert.equal((await call(key)).status, 401, 'revoked');
+  });
+  await step('security: the password pair shows a live count from constants and a mismatch blocks the request', async () => {
+    await openPage('security');
+    const min = await page.evaluate(async () => (await window.ui.ready).MIN_PASSWORD_CHARS);
+    assert.equal(await page.getAttribute('#pw-new', 'minlength'), String(min));
+    assert.equal((await page.innerText('#pw-new-hint')).trim(), 'At least ' + min + ' characters');
+    await page.fill('#pw-new', 'abc');
+    assert.equal((await page.innerText('#pw-new-hint')).trim(), '3 of at least ' + min + ' characters');
+    await page.fill('#pw-new', 'x'.repeat(min));
+    assert.equal((await page.innerText('#pw-new-hint')).trim(), min + ' characters');
+    assert.equal(await page.evaluate(() => document.getElementById('pw-new-hint').classList.contains('length-ok')), true);
+    const stacked = await page.evaluate(() => {
+      const a = document.getElementById('pw-new').getBoundingClientRect();
+      const b = document.getElementById('pw-new2').getBoundingClientRect();
+      return b.top > a.bottom && Math.abs(a.left - b.left) < 1 && Math.abs(a.width - b.width) < 1;
+    });
+    assert.equal(stacked, true, 'new and repeat are stacked at the same width');
+    let sent = 0;
+    const watch = (r) => { if (r.url().endsWith('/api/admin/v1/password')) sent++; };
+    page.on('request', watch);
+    await page.fill('#pw-current', 'anything');
+    await page.fill('#pw-new2', 'y'.repeat(min));
+    await page.click('#password-form button[type=submit]');
+    await page.waitForSelector('#pw-new2-error:not([hidden])');
+    assert.match(await page.innerText('#pw-new2-error'), /do not match/);
+    assert.equal(sent, 0, 'a mismatch sends nothing');
+    page.off('request', watch);
+    for (const id of ['#pw-current', '#pw-new', '#pw-new2']) await page.fill(id, '');
+  });
+  await step('security: the passkey and recovery codes are greyed with aria-disabled, reachable by Tab, inert on Enter and show no numbers', async () => {
+    await openPage('security');
+    const na = page.locator('#main .na');
+    assert.equal(await na.count(), 2);
+    assert.equal(await page.locator('#main .na[disabled], #main .na [disabled]').count(), 0, 'never the disabled attribute');
+    for (const [i, what] of [[0, /passkey/], [1, /recovery codes/]]) {
+      const one = na.nth(i);
+      assert.equal(await one.getAttribute('aria-disabled'), 'true');
+      assert.equal(await one.getAttribute('tabindex'), '0');
+      assert.match(await one.getAttribute('data-tip'), /^Not available yet: .*/);
+      assert.match(await one.getAttribute('data-tip'), what);
+      await one.focus();
+      assert.equal(await one.evaluate((e) => e === document.activeElement), true);
+      const url = page.url();
+      await page.keyboard.press('Enter');
+      assert.equal(page.url(), url);
+      assert.equal(await page.locator('dialog[open]').count(), 0, 'Enter does nothing');
+    }
+    for (const id of ['passkey-title', 'recovery-title']) {
+      const text = await page.evaluate((i) => document.getElementById(i).closest('section').innerText, id);
+      assert.ok(!/\d/.test(text), 'no invented numbers: ' + text);
+    }
+  });
+  await step('security: a new API key is shown once in a box and is gone from the page once the box closes (also by Escape)', async () => {
+    await openPage('security');
+    await page.waitForSelector('#key-form:not([hidden])');
+    const max = await page.evaluate(async () => (await window.ui.ready).API_KEY_MAX_NAME_CHARS);
+    assert.equal(await page.getAttribute('#key-name', 'maxlength'), String(max));
+    await page.fill('#key-name', 'second server');
+    await page.click('#key-create');
+    await page.waitForSelector('#key-dialog[open]');
+    const key = (await page.innerText('#key-value')).trim();
+    assert.match(key, /^askbar-admin-/);
+    assert.equal(await page.locator('#key-dialog [data-copy="key-value"]').count(), 1, 'a copy button sits beside the key');
+    assert.equal(await page.locator('#main code#key-value').count(), 1);
+    await page.keyboard.press('Escape');
+    assert.equal(await page.locator('#key-dialog[open]').count(), 0);
+    assert.equal(await page.evaluate(() => document.getElementById('key-value').textContent), '');
+    assert.ok(!(await page.content()).includes(key), 'the key is not in the page after the box closes');
+    await page.waitForSelector('#key-row:not([hidden])');
+    assert.match(await page.innerText('#key-table'), /second server/);
+    assert.equal(await page.locator('#key-table tbody tr').count(), 1, 'one key');
+    await page.click('#key-revoke');
+    await page.click('#key-revoke');
+    await page.waitForSelector('#key-form:not([hidden])');
+  });
+  await step('security: the sealed-content times are read from the settings and the audit key id shows', async () => {
+    await openPage('security');
+    const s = await page.evaluate(async () => (await fetch('/api/admin/v1/settings')).json());
+    await page.waitForFunction(() => document.getElementById('sec-seal-idle').textContent !== '');
+    const idle = await page.innerText('#sec-seal-idle');
+    const total = await page.innerText('#sec-seal-total');
+    assert.equal(parseInt(idle, 10), s.unseal_idle_minutes);
+    assert.equal(parseInt(total, 10), s.unseal_total_minutes);
+    assert.match(await page.innerText('#s-key-id'), /^[0-9a-f]{16}$/);
+    assert.equal(await page.locator('#rotate-form #r-new + .hint[data-length-hint]').count(), 1);
+    assert.equal(await page.getAttribute('#r-new', 'minlength'), String(await page.evaluate(async () => (await window.ui.ready).MIN_PASSPHRASE_CHARS)));
+  });
+  await step('security: nothing scrolls sideways and every target is 44 px tall on a phone', async () => {
+    await openPage('security');
+    await page.waitForSelector('#pw-title');
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'no sideways scroll');
+    if (isPhone) {
+      const small = await page.evaluate(() => [...document.querySelectorAll('#main button, #main input, #main a, #main .na')]
+        .filter((e) => e.offsetParent && !e.closest('[hidden]'))
+        .map((e) => [e.id || e.textContent.trim().slice(0, 20), e.getBoundingClientRect().height])
+        .filter(([, h]) => h > 0 && h < 44));
+      assert.deepEqual(small, []);
+    }
   });
   // Shared accessibility behaviour (plan step 1.10; rules 26, 41-46).
   await step('accessibility: Skip to content is the first Tab stop, and Enter moves focus to the page', async () => {

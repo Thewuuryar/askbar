@@ -69,7 +69,7 @@
     { id: 'people', load: loadClients },
     { id: 'general', load: loadSettings },
     { id: 'network', load: loadNetwork },
-    { id: 'security', load: loadKeys },
+    { id: 'security', load: loadSecurity },
     { id: 'backup', load: loadBackup },
     { id: 'notifications', load: loadAlerts },
   ];
@@ -1627,9 +1627,26 @@
     show($('key-form'), keyId === null);
     if (keyId !== null) {
       $('key-row-name').textContent = list[0].name;
-      $('key-row-times').textContent = 'made ' + new Date(list[0].created_at * 1000).toLocaleString() + ', ' + ago(list[0].last_used_at);
+      $('key-row-made').replaceChildren(ui.time(list[0].created_at));
+      $('key-row-used').replaceChildren(list[0].last_used_at ? ui.time(list[0].last_used_at) : 'Never');
     }
     show($('key-error'), false);
+  }
+
+  // The Security page: the keys, the sealed-content times and the current audit key (read-only here; the times are
+  // changed in General), and the live length counts under the two new-secret fields.
+  let securityWired = false;
+  async function loadSecurity() {
+    if (!securityWired) {
+      securityWired = true;
+      ui.lengthHint($('pw-new'), K.MIN_PASSWORD_CHARS);
+      ui.lengthHint($('r-new'), K.MIN_PASSPHRASE_CHARS);
+    }
+    const [, s] = await Promise.all([loadKeys(), api('GET', '/api/admin/v1/settings')]);
+    const mins = (n) => (n == null ? 'not set' : n + (n === 1 ? ' minute' : ' minutes'));
+    $('sec-seal-idle').textContent = mins(s.unseal_idle_minutes);
+    $('sec-seal-total').textContent = mins(s.unseal_total_minutes);
+    $('s-key-id').textContent = s.audit_key_id || 'none';
   }
 
   on('key-form', 'submit', async (e) => {
@@ -1640,7 +1657,7 @@
       const made = await api('POST', '/api/admin/v1/keys', { name: $('key-name').value });
       $('key-name').value = '';
       $('key-value').textContent = made.key; // the only time it is on the page
-      $('key-dialog').showModal();
+      ui.openBox('key-dialog');
       await loadKeys();
     } catch (ex) {
       err.textContent = ex.message;
@@ -1648,28 +1665,11 @@
     }
   });
 
-  function closeKeyDialog() {
-    $('key-value').textContent = '';
-    if ($('key-dialog').open) $('key-dialog').close();
-  }
-  on('key-close', 'click', closeKeyDialog);
-  on('key-dialog', 'cancel', () => { $('key-value').textContent = ''; });
-  on('key-copy', 'click', async () => {
-    const text = $('key-value').textContent;
-    try {
-      await navigator.clipboard.writeText(text);
-      $('key-copy').textContent = 'Copied';
-    } catch (_) {
-      // No clipboard here (plain http off localhost): select the text so Ctrl+C works.
-      const range = document.createRange();
-      range.selectNodeContents($('key-value'));
-      const sel = window.getSelection();
-      sel.removeAllRanges();
-      sel.addRange(range);
-      $('key-copy').textContent = 'Selected: press Ctrl+C';
-    }
-    setTimeout(() => { $('key-copy').textContent = 'Copy'; }, 3000);
-  });
+  // Once the box closes (button, Esc) the key is gone from the page; it cannot be read again.
+  const clearKey = () => { $('key-value').textContent = ''; };
+  on('key-close', 'click', () => { clearKey(); ui.closeBox('key-dialog'); });
+  on('key-dialog', 'cancel', clearKey);
+  on('key-dialog', 'close', clearKey);
 
   on('key-revoke', 'click', async () => {
     const b = $('key-revoke');
@@ -2417,8 +2417,11 @@
     const fail = (m) => { err.textContent = m; show(err, true); };
     const cur = $('r-current').value;
     const next = $('r-new').value;
-    if (next !== $('r-new2').value) return fail('The two new passphrases do not match.');
-    if ([...next].length < K.MIN_PASSPHRASE_CHARS) return fail('The new passphrase must be at least ' + K.MIN_PASSPHRASE_CHARS + ' characters.');
+    ui.formErrors(e.target, []);
+    const problems = [];
+    if ([...next].length < K.MIN_PASSPHRASE_CHARS) problems.push({ id: 'r-new', text: 'The new passphrase must be at least ' + K.MIN_PASSPHRASE_CHARS + ' characters.' });
+    if (next !== $('r-new2').value) problems.push({ id: 'r-new2', text: 'The two new passphrases do not match.' });
+    if (problems.length) return ui.formErrors(e.target, problems);
     try {
       const r = await api('POST', '/api/admin/v1/audit/rotate-key', { current: cur, new: next, confirm: $('r-new2').value });
       for (const id of ['r-current', 'r-new', 'r-new2']) $(id).value = '';

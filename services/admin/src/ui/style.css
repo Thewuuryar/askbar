@@ -596,3 +596,22 @@ input, select { min-height: var(--target-min); }
   .net-actions .btn { flex: 1 1 auto; min-height: var(--btn-h-touch); }
   .net-expiry .na { min-height: var(--btn-h-touch); }
 }
+
+/* Security: each section has its name and one line of help on the left, its controls on the right (stacked on a phone). */
+.sec-sec { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: var(--space-2) var(--space-5); padding: var(--space-4) 0; border-top: 1px solid var(--line); }
+.sec-sec:first-child { border-top: 0; padding-top: 0; }
+.sec-sec h3 { margin: 0; }
+.sec-lab .hint { margin: var(--space-1) 0 0; }
+.sec-fields { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; max-width: 640px; margin: 0; }
+.sec-fields .field { margin: 0; }
+.sec-fields .field input { margin-top: var(--space-1); }
+.sec-fields .new-secret { display: flex; flex-direction: column; gap: var(--space-2); }
+.sec-line, .sec-fields .hint { margin: 0; }
+.sec-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.sec-actions .na, .sec-fields > .hint a { display: inline-flex; align-items: center; min-height: var(--target-min); }
+.sec-actions .na[data-tip]::after { left: 0; }
+@media (max-width: 560px) {
+  .sec-sec { grid-template-columns: minmax(0, 1fr); }
+  .sec-actions .btn, .sec-actions .na, .sec-fields > .hint a { min-height: var(--btn-h-touch); }
+  #key-table .btn { min-height: var(--btn-h-touch); }
+}

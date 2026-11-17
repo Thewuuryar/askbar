@@ -173,7 +173,10 @@ async fn the_ui_is_served_with_its_security_headers() {
         "no master-key screens here"
     );
     let settings = t.http.get(format!("{}/admin/general/", t.adm)).send().await.unwrap().text().await.unwrap();
-    assert!(settings.contains("Rotate the audit key") && settings.contains("id=\"rotate-form\""));
+    // The audit key's rotation moved to Security (plan step 5.7c).
+    assert!(!settings.contains("id=\"rotate-form\""));
+    let security = t.http.get(format!("{}/admin/security/", t.adm)).send().await.unwrap().text().await.unwrap();
+    assert!(security.contains("Rotate the audit key") && security.contains("id=\"rotate-form\""));
     // The delivery forms are on Notifications, not General (plan step 5.2).
     assert!(!settings.contains("id=\"alerts-form\"") && !settings.contains("id=\"email-form\""));
     let notifications = t.http.get(format!("{}/admin/notifications/", t.adm)).send().await.unwrap().text().await.unwrap();
