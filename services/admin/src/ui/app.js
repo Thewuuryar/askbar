@@ -66,7 +66,7 @@
     { id: 'settings', load: loadOverview },
     { id: 'providers', load: loadProviders },
     { id: 'services', load: loadServices },
-    { id: 'clients', load: loadClients },
+    { id: 'people', load: loadClients },
     { id: 'general', load: loadSettings },
     { id: 'network', load: loadNetwork },
     { id: 'security', load: loadKeys },
@@ -452,8 +452,8 @@
     { key: 'no-provider', test: (d) => d.providers && d.providers.length === 0, text: 'No provider is set up, so nobody can ask anything yet.', fix: 'Add provider', href: '/admin/providers/#add-provider' },
     { key: 'no-model', test: (d) => d.providers && d.providers.length > 0 && d.catalog && d.catalog.models.length === 0, text: 'No model is approved, so clients have nothing to choose from.', fix: 'Approve models', href: '/admin/providers/#catalog-section' },
     { key: 'no-default-model', test: (d) => d.catalog && d.catalog.models.length > 0 && !d.catalog.default, text: 'No default model is chosen.', fix: 'Choose default', href: '/admin/providers/#catalog-section' },
-    { key: 'no-user', test: (d) => d.users && d.users.length === 0, text: 'No user exists yet, so there is nobody to pair an app for.', fix: 'Add user', href: '/admin/clients/#users' },
-    { key: 'no-client', test: (d) => d.users && d.users.length > 0 && d.clients && d.clients.length === 0, text: 'No client is paired yet.', fix: 'Pair a client', href: '/admin/clients/#d-user' },
+    { key: 'no-user', test: (d) => d.users && d.users.length === 0, text: 'No user exists yet, so there is nobody to pair an app for.', fix: 'Add user', href: '/admin/people/#add-user' },
+    { key: 'no-client', test: (d) => d.users && d.users.length > 0 && d.clients && d.clients.length === 0, text: 'No client is paired yet.', fix: 'Pair a client', href: '/admin/people/#pair-open' },
     { key: 'no-backup-key', test: (d) => d.schedule && !d.schedule.enabled, text: 'No backup key is set, so nothing is backed up.', fix: 'Open Backup', href: '/admin/backup/' },
     { key: 'backup-destination', test: (d) => d.schedule && d.schedule.enabled && (!d.schedule.destination.writable || !!d.schedule.destination.problem), text: 'The backup destination cannot be written to.', fix: 'Open Backup', href: '/admin/backup/' },
     { key: 'no-backup-yet', test: (d) => d.schedule && d.schedule.enabled && !d.schedule.last_success_at, text: 'No backup has been made yet.', fix: 'Open Backup', href: '/admin/backup/' },
@@ -671,7 +671,7 @@
   // itself does not answer). It always draws, so a banner another request raised (a 502) clears when the server is back.
   // A page with no live list shows "Reconnecting…" at the top of the page; a list shows its own next to the list.
   const appShownNow = () => !$('app').hidden;
-  const listPage = ['services', 'providers', 'clients'].includes(page);
+  const listPage = ['services', 'providers', 'people'].includes(page);
   const liveStatus = ui.live(() => api('GET', '/api/admin/v1/status', undefined, { etag: true }), {
     every: 'STATUS_EVERY_SECS',
     hidden: 'slow',
@@ -740,7 +740,7 @@
   const yesNoWord = (v) => (v ? 'on' : 'off');
   const OVERVIEW = {
     providers: { read: () => api('GET', '/api/admin/v1/providers', undefined, { etag: true }), line: (list) => plural(list.length, 'provider', 'providers') },
-    clients: {
+    people: {
       read: () => Promise.all([api('GET', '/api/admin/v1/users', undefined, { etag: true }), api('GET', '/api/admin/v1/clients', undefined, { etag: true })]),
       line: ([users, clients]) => plural(users.length, 'person', 'people') + ', ' + plural(clients.length, 'client', 'clients'),
     },
@@ -882,10 +882,10 @@
         return { title, where: where(slug), value, href: '/admin/' + slug + '/#' + id, icon: 'settings' };
       });
     }],
-    ['people', 'People', () => (search.data.users || []).map((u) => ({ title: u.name, where: 'Settings / Clients · users', value: u.paused ? 'paused' : '', href: '/admin/clients/#users', icon: 'people' }))],
+    ['people', 'People', () => (search.data.users || []).map((u) => ({ title: u.name, where: 'Settings / People & clients · users', value: u.paused ? 'paused' : '', href: '/admin/people/#users', icon: 'people' }))],
     ['clients', 'Clients', () => (search.data.clients || []).map((c) => {
       const user = (search.data.users || []).find((u) => u.id === c.user_id);
-      return { title: c.name, where: 'Settings / Clients' + (user ? ' · ' + user.name : ''), value: c.revoked ? 'revoked' : 'active', href: '/admin/clients/#clients', icon: 'people' };
+      return { title: c.name, where: 'Settings / People & clients' + (user ? ' · ' + user.name : ''), value: c.revoked ? 'revoked' : 'active', href: '/admin/people/#clients', icon: 'people' };
     })],
     ['providers', 'Providers', () => (search.data.providers || []).map((p) => ({ title: p.name, where: 'Settings / Providers · ' + p.kind, value: '', href: '/admin/providers/#providers', icon: 'providers' }))],
     ['models', 'Models', () => {
@@ -1962,7 +1962,7 @@
     }
   });
 
-  // ---------------------------------------------------------- clients
+  // ---------------------------------------------------------- people and clients (plan step 5.6)
 
   function when(ts) {
     return ts ? new Date(ts * 1000).toLocaleString() : 'never';
@@ -1970,31 +1970,39 @@
 
   // The users, their clients and the pairing box's "Connected": one live read of both lists, every LIVE_EVERY_SECS while the
   // tab is visible and right after the admin's own change (loadUsers, loadClients).
+  let userList = [];
   let userNames = {};
+  let clientList = [];
   let knownClients = [];
+  let editingUser = null;
   let pairing = null; // { user, known: Set of client ids before the key was made, done }
   const liveClients = ui.live(() => Promise.all([
     api('GET', '/api/admin/v1/users', undefined, { etag: true }),
     api('GET', '/api/admin/v1/clients', undefined, { etag: true }),
   ]), {
     when: appShownNow,
-    notice: $('users'),
+    notice: $('users-section'),
     render([users, clients], ctx) {
+      clientList = clients;
       renderUsers(users, ctx);
       renderClients(clients, ctx);
+      if (ctx.first) openPeopleFromAddress();
     },
     onError(ex) { if (ex.message !== 'Signed out') pageError(ex.message); },
   });
   const loadUsers = () => liveClients.refresh();
   function loadClients() { return liveClients.start(); }
 
+  const activeClientsOf = (id) => clientList.filter((d) => d.user_id === id && !d.revoked).length;
+
   function renderUsers(users, ctx) {
+    userList = users;
     userNames = Object.fromEntries(users.map((u) => [u.id, u.name]));
-    const box = $('users');
     // One row for each user, with the emergency stop for that person: Pause stops their replies (new and running) until
-    // Resume. Everything is set as text. A row with its delete confirmation open is left alone.
-    ui.rows(box, users, userRow, {
-      fresh: !ctx.first, force: ctx.force, noun: ['user', 'users'], keep: (row) => !!row.querySelector('.confirm-delete'),
+    // Resume. Everything is set as text.
+    ui.rows($('users'), users, userRow, {
+      fresh: !ctx.first, force: ctx.force, noun: ['user', 'users'],
+      sig: (u) => JSON.stringify([u, activeClientsOf(u.id)]),
       empty: 'No users yet. Add one to pair an app for them.',
     });
     const sel = $('d-user');
@@ -2007,159 +2015,219 @@
       sel.appendChild(o);
     }
     if (users.some((u) => u.id === keep)) sel.value = keep;
-    $('pair-form').querySelector('button[type=submit]').disabled = users.length === 0;
+    syncPairForm();
   }
 
   function userRow(u) {
-    const row = document.createElement('div');
-    row.className = 'sealed-row';
-    row.dataset.user = u.id;
-    const what = document.createElement('span');
-    what.className = 'what';
-    what.textContent = u.name + (u.paused ? ' · replies paused' : '');
-    row.appendChild(what);
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.className = 'secondary';
-    b.dataset.action = u.paused ? 'resume' : 'pause';
-    b.textContent = u.paused ? 'Resume replies' : 'Pause replies';
-    b.addEventListener('click', async () => {
-      show($('user-error'), false);
-      try {
-        await api('POST', '/api/admin/v1/users/' + encodeURIComponent(u.id) + '/' + (u.paused ? 'resume' : 'pause'));
-        await loadUsers();
-      } catch (ex) {
-        $('user-error').textContent = ex.message;
-        show($('user-error'), true);
-      }
+    const pauseBtn = ui.el('button', {
+      type: 'button', class: 'btn btn-secondary btn-s', 'data-action': u.paused ? 'resume' : 'pause',
+      text: u.paused ? 'Resume' : 'Pause', 'aria-label': (u.paused ? 'Resume replies for ' : 'Pause replies for ') + u.name,
+      onclick: () => setPaused(u, !u.paused),
     });
-    row.appendChild(b);
-    const del = document.createElement('button');
-    del.type = 'button';
-    del.className = 'secondary danger';
-    del.dataset.action = 'delete';
-    del.textContent = 'Delete…';
-    del.addEventListener('click', () => askToDelete(row, u, del));
-    row.appendChild(del);
-    return row;
+    const menu = $('row-menu-template').content.cloneNode(true);
+    const more = menu.querySelector('.row-menu-button');
+    more.setAttribute('aria-label', 'More actions for ' + u.name);
+    more.setAttribute('data-tip', 'More actions');
+    const holder = menu.firstElementChild;
+    ui.menu(more, (action) => { if (action === 'edit') openEdit(u); else if (action === 'delete') askToDelete(u); });
+    return ui.el('tr', { 'data-user': u.id },
+      ui.el('td', null, ui.el('strong', { class: 'name', text: u.name })),
+      ui.el('td', { class: 'num', text: String(activeClientsOf(u.id)) }),
+      ui.el('td', null, u.paused ? ui.status('paused', 'Replies paused') : ui.status('ok', 'Active')),
+      ui.el('td', { class: 'actions' }, ui.el('div', { class: 'row-actions' }, pauseBtn, holder)));
   }
+
+  // Pause stops a person's replies, new and running, until Resume. It is the one action here that needs no confirmation.
+  async function setPaused(u, paused) {
+    show($('user-error'), false);
+    try {
+      await api('POST', '/api/admin/v1/users/' + encodeURIComponent(u.id) + '/' + (paused ? 'pause' : 'resume'));
+      await loadUsers();
+      ui.announce(u.name + (paused ? ': replies paused' : ': replies resumed'));
+    } catch (ex) {
+      $('user-error').textContent = ex.message;
+      show($('user-error'), true);
+    }
+  }
+
+  // Opening a panel while one is open closes it first (it asks if there is typed input). Closing goes Back in history,
+  // so the next panel waits for that to finish.
+  async function openEdit(u) {
+    if (ui.panelOpen()) {
+      const back = history.state && history.state.panel === ui.panelOpen();
+      if (!(await ui.closePanel())) return;
+      if (back) await new Promise((res) => window.addEventListener('popstate', res, { once: true }));
+    }
+    editingUser = u;
+    $('user-panel-title').textContent = 'Edit ' + u.name;
+    $('e-paused').checked = !!u.paused;
+    $('edit-delete').setAttribute('aria-label', 'Delete ' + u.name);
+    show($('edit-error'), false);
+    await ui.openPanel('user-panel', { onClose: () => { editingUser = null; } });
+  }
+
+  on('edit-form', 'submit', async (e) => {
+    e.preventDefault();
+    const u = editingUser;
+    if (!u) return;
+    show($('edit-error'), false);
+    if ($('e-paused').checked === !!u.paused) { await ui.closePanel(); return; }
+    const done = ui.busy($('edit-save'), 'Saving…');
+    try {
+      await api('POST', '/api/admin/v1/users/' + encodeURIComponent(u.id) + '/' + ($('e-paused').checked ? 'pause' : 'resume'));
+      await ui.closePanel({ force: true });
+      await loadUsers();
+      ui.toast(u.name + ($('e-paused').checked ? ': replies paused.' : ': replies resumed.'));
+    } catch (ex) {
+      $('edit-error').textContent = ex.message;
+      show($('edit-error'), true);
+    } finally {
+      done();
+    }
+  });
+  on('edit-delete', 'click', () => { if (editingUser) askToDelete(editingUser); });
 
   // Deleting a person removes their personal space, their clients and their sign-ins for good (the audit records stay).
-  // The name is typed to confirm, and the server wants a sign-in from the last 10 minutes.
-  function askToDelete(row, u, opener) {
-    opener.disabled = true;
-    const box = document.createElement('div');
-    box.className = 'confirm-delete';
-    box.dataset.confirm = u.id;
-    const warn = document.createElement('p');
-    warn.className = 'hint';
-    warn.textContent =
-      'This deletes ' + u.name + "'s space, with every conversation in it, and signs out their apps. It cannot be undone. " +
-      'Audit records stay. Type the name to confirm.';
-    const input = document.createElement('input');
-    input.type = 'text';
-    input.autocomplete = 'off';
-    input.setAttribute('aria-label', 'Type ' + u.name + ' to confirm');
-    const go = document.createElement('button');
-    go.type = 'button';
-    go.className = 'danger';
-    go.textContent = 'Delete ' + u.name;
-    go.disabled = true;
-    const cancel = document.createElement('button');
-    cancel.type = 'button';
-    cancel.className = 'secondary';
-    cancel.textContent = 'Cancel';
-    const err = document.createElement('p');
-    err.className = 'error';
-    err.setAttribute('role', 'alert');
-    err.hidden = true;
-    input.addEventListener('input', () => {
-      go.disabled = input.value !== u.name;
+  // The name is typed to confirm, "Pause instead" is the gentler way out, and the server wants a sign-in from the last
+  // FRESH_SIGNIN_SECS.
+  async function askToDelete(u) {
+    const n = activeClientsOf(u.id);
+    const sure = await ui.confirm({
+      title: 'Delete ' + u.name + '?',
+      body: 'This cannot be undone. It removes ' + u.name + "'s personal space, with every conversation in it, signs out " + (n === 1 ? 'their 1 client' : 'their ' + n + ' clients') + ' at once and deletes their pairing keys. Audit records are kept.',
+      action: 'Delete ' + u.name,
+      typeName: u.name,
+      alt: u.paused ? null : { text: 'Might ' + u.name + ' need it back?', label: 'Pause instead', onClick: () => setPaused(u, true) },
     });
-    cancel.addEventListener('click', () => {
-      box.remove();
-      opener.disabled = false;
-    });
-    go.addEventListener('click', async () => {
-      if (input.value !== u.name) return;
-      go.disabled = true;
-      err.hidden = true;
-      try {
-        await api('DELETE', '/api/admin/v1/users/' + encodeURIComponent(u.id));
-        await loadUsers();
-      } catch (ex) {
-        err.textContent = ex.message;
-        err.hidden = false;
-        go.disabled = input.value !== u.name;
-      }
-    });
-    for (const el of [warn, input, go, cancel, err]) box.appendChild(el);
-    row.appendChild(box);
-    input.focus();
+    if (!sure) return;
+    try {
+      await api('DELETE', '/api/admin/v1/users/' + encodeURIComponent(u.id));
+      if (ui.panelOpen()) await ui.closePanel({ force: true });
+      await loadUsers();
+      ui.toast('Deleted ' + u.name + '.');
+    } catch (ex) {
+      pageError(ex.message);
+    }
   }
 
+  // ---- Add user
+  function openUserBox() {
+    $('u-name').maxLength = K.NAME_MAX_CHARS;
+    $('u-name').value = '';
+    ui.fieldError('u-name', '');
+    show($('user-add-error'), false);
+    ui.openBox('user-box');
+    $('u-name').focus();
+  }
+  on('add-user', 'click', openUserBox);
+  on('user-cancel', 'click', () => ui.closeBox('user-box'));
   on('user-form', 'submit', async (e) => {
     e.preventDefault();
-    const err = $('user-error');
+    const err = $('user-add-error');
     show(err, false);
+    const name = $('u-name').value.trim();
+    if (!name) { ui.fieldError('u-name', 'Enter a name.').focus(); return; }
+    ui.fieldError('u-name', '');
     try {
-      const r = await api('POST', '/api/admin/v1/users', { name: $('u-name').value.trim() });
-      $('u-name').value = '';
+      const r = await api('POST', '/api/admin/v1/users', { name });
+      ui.closeBox('user-box');
       await loadUsers();
       $('d-user').value = r.id;
+      ui.toast('Added ' + name + '.');
     } catch (ex) {
       err.textContent = ex.message;
       show(err, true);
     }
   });
 
+  // ---- Paired clients
   function renderClients(list, ctx) {
     knownClients = list;
-    ui.rows($('clients'), list, clientCard, {
+    ui.rows($('clients'), list, clientRow, {
       fresh: !ctx.first, force: ctx.force, noun: ['client', 'clients'], empty: 'No clients are paired yet.',
       sig: (d) => JSON.stringify([d, userNames[d.user_id]]),
     });
     // The pairing box: the key is used once, so a client that was not there when it was made, for that user, is the app.
     if (pairing && !pairing.done) {
       const hit = list.find((d) => !pairing.known.has(d.id) && d.user_id === pairing.user);
-      if (hit) { pairing.done = true; showPairing('ok', 'Connected', ' ' + hit.name + ' is paired.'); }
+      if (hit) {
+        pairing.done = true;
+        if ($('pair-box').open) showConnected(hit.name);
+        else ui.toast(hit.name + ' is paired.');
+      }
     }
   }
 
-  function clientCard(d) {
-    const card = document.createElement('div');
-    card.className = 'card';
-    card.dataset.client = d.id;
-    const head = document.createElement('div');
-    head.className = 'row';
-    const name = document.createElement('span');
-    name.className = 'name';
-    name.textContent = d.name;
-    const badge = document.createElement('span');
-    badge.className = 'badge';
-    badge.textContent = d.revoked ? 'revoked' : 'active';
-    const sp = document.createElement('span');
-    sp.className = 'spacer';
-    head.append(name, badge, sp);
-    if (!d.revoked) {
-      const revoke = button('Revoke', 'danger', async () => {
-        if (!confirm('Revoke "' + d.name + '"? It will be signed out and must be paired again.')) return;
-        try { await api('POST', '/api/admin/v1/clients/' + encodeURIComponent(d.id) + '/revoke'); await loadClients(); } catch (ex) { pageError(ex.message); }
-      });
-      revoke.dataset.action = 'revoke';
-      head.appendChild(revoke);
-    }
-    const meta = document.createElement('div');
-    meta.className = 'meta';
-    meta.textContent = (userNames[d.user_id] || 'unknown user') + ' · paired ' + when(d.created_at) + ' · last seen ' + when(d.last_seen);
-    card.append(head, meta);
-    return card;
+  function clientRow(d) {
+    const revoke = ui.el('button', {
+      type: 'button', class: 'btn btn-secondary btn-s', 'data-action': 'revoke', text: 'Revoke', 'aria-label': 'Revoke ' + d.name,
+      onclick: () => askToRevoke(d),
+    });
+    return ui.el('tr', { 'data-client': d.id },
+      ui.el('td', null, ui.el('strong', { class: 'name', text: d.name }), d.revoked ? ui.el('div', { class: 'sub', text: 'revoked' }) : null),
+      ui.el('td', { text: userNames[d.user_id] || 'unknown user' }),
+      ui.el('td', { class: 'col-seen' }, d.last_seen ? ui.time(d.last_seen) : ui.el('span', { text: 'never' })),
+      ui.el('td', { class: 'actions' }, d.revoked ? ui.status('off', 'Revoked') : revoke));
   }
 
-  // The state line of the pairing box: a word and a symbol (rule 37), read out politely.
+  async function askToRevoke(d) {
+    const sure = await ui.confirm({ title: 'Revoke ' + d.name + '?', body: 'It will be signed out and must be paired again.', action: 'Revoke' });
+    if (!sure) return;
+    show($('client-error'), false);
+    try {
+      await api('POST', '/api/admin/v1/clients/' + encodeURIComponent(d.id) + '/revoke');
+      await loadClients();
+      ui.toast('Revoked ' + d.name + '.');
+    } catch (ex) {
+      $('client-error').textContent = ex.message;
+      show($('client-error'), true);
+    }
+  }
+
+  // ---- The pairing box: the form, then the key (waiting), then Connected when the client shows in the live list.
+  // The state line is a word and a symbol (rule 37), read out politely.
   function showPairing(state, word, more) {
     $('pairing-status').replaceChildren(ui.status(state, word), more || '');
   }
+  function showConnected(name) {
+    show($('pairing-key'), false);
+    $('pairing-sum').textContent = 'The pairing key no longer works.';
+    showPairing('ok', 'Connected', ' ' + name + ' is paired.');
+    $('pairing-again').textContent = 'Pair another client';
+    ui.announce(name + ' is paired.');
+  }
+  function syncPairForm() {
+    const none = userList.length === 0;
+    $('pair-form').querySelector('button[type=submit]').disabled = none;
+    $('pair-error').textContent = none ? 'Add a user first, then pair an app for them.' : '';
+    show($('pair-error'), none);
+  }
+  function resetPairBox() {
+    pairing = null;
+    $('d-name').value = '';
+    $('pairing-string').textContent = '';
+    show($('pair-form'), true);
+    show($('pairing-out'), false);
+    show($('pairing-key'), true);
+    $('pairing-again').textContent = 'Make another key';
+    syncPairForm();
+  }
+  function openPairBox() {
+    $('d-name').maxLength = K.NAME_MAX_CHARS;
+    resetPairBox();
+    ui.openBox('pair-box');
+    (userList.length ? $('d-user') : $('pair-cancel')).focus();
+  }
+  on('pair-open', 'click', openPairBox);
+  on('pair-cancel', 'click', () => ui.closeBox('pair-box'));
+  on('pairing-done', 'click', () => ui.closeBox('pair-box'));
+  on('pairing-again', 'click', () => {
+    const user = $('d-user').value;
+    resetPairBox();
+    if (userList.some((u) => u.id === user)) $('d-user').value = user;
+    $('d-user').focus();
+  });
+  on('pair-box', 'close', () => { if (pairing && pairing.done) pairing = null; });
 
   on('pair-form', 'submit', async (e) => {
     e.preventDefault();
@@ -2167,23 +2235,33 @@
     show(err, false);
     try {
       const user = $('d-user').value;
+      const name = $('d-name').value.trim();
       const known = new Set(knownClients.map((d) => d.id));
-      const r = await api('POST', '/api/admin/v1/users/' + encodeURIComponent(user) + '/pairing-keys', { name: $('d-name').value.trim() });
-      $('pairing-string').value = r.pairing;
+      const r = await api('POST', '/api/admin/v1/users/' + encodeURIComponent(user) + '/pairing-keys', { name });
+      $('pairing-string').textContent = r.pairing;
       pairing = { user, known, done: false };
+      $('pairing-sum').textContent = 'For ' + (userNames[user] || 'this user') + (name ? ' · client name ' + name : '');
+      const mins = ui.constants.PAIR_CODE_TTL_SECS / 60;
+      $('pairing-meta').textContent = 'Works once · expires in ' + (Number.isInteger(mins) ? mins + (mins === 1 ? ' minute' : ' minutes') : ui.constants.PAIR_CODE_TTL_SECS + ' seconds') + ' · shown only here';
       showPairing('pending', 'Waiting for the app to pair');
+      show($('pair-form'), false);
       show($('pairing-out'), true);
+      $('pairing-done').focus();
     } catch (ex) {
       err.textContent = ex.message;
       show(err, true);
     }
   });
 
-  on('pairing-copy', 'click', async () => {
-    const t = $('pairing-string');
-    t.select();
-    try { await navigator.clipboard.writeText(t.value); ui.toast('Copied.'); } catch (_) { document.execCommand('copy'); ui.toast('Copied.'); }
-  });
+  // `#add-user` and `#pair-open` in the address (Home's quick action, the setup list, search) open their box, then leave
+  // the address.
+  function openPeopleFromAddress() {
+    const hash = location.hash;
+    if (hash !== '#add-user' && hash !== '#pair-open') return;
+    history.replaceState(null, '', location.pathname + location.search);
+    if (hash === '#add-user') openUserBox(); else openPairBox();
+  }
+  if (page === 'people') window.addEventListener('hashchange', openPeopleFromAddress);
 
   // --------------------------------------------------------- settings
 

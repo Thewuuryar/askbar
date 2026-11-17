@@ -283,12 +283,19 @@
   };
 
   // ui.confirm({ title, body, action, kind, typeName }) resolves true when confirmed. With typeName the action
-  // waits until the name is typed (rule 31). Built like the dialog_box macro; removed when closed.
+  // waits until the name is typed (rule 31). With alt = { text, label, onClick } a gentler way out is offered above the
+  // form ("Might Sam need it back? [Pause instead]"): it closes the box as a refusal and then runs onClick.
+  // Built like the dialog_box macro; removed when closed.
   ui.confirm = (opts) => new Promise((resolve) => {
     const id = 'confirm-' + Date.now().toString(36);
     const title = el('h2', { class: 'box-title', id: id + '-title', text: opts.title });
     const body = el('div', { class: 'box-body' });
     if (opts.body) body.append(el('p', { text: opts.body }));
+    const alt = opts.alt
+      ? el('p', { class: 'hint' }, opts.alt.text + ' ',
+        el('button', { type: 'button', class: 'btn btn-secondary btn-s', 'data-confirm-alt': true, text: opts.alt.label }))
+      : null;
+    if (alt) body.append(alt);
     const go = el('button', { type: 'submit', class: 'btn btn-' + (opts.kind || 'danger'), text: opts.action, 'data-confirm-action': true });
     const cancel = el('button', { type: 'button', class: 'btn btn-secondary', text: opts.cancel || 'Cancel', 'data-confirm-cancel': true });
     const form = el('form', { method: 'dialog' });
@@ -311,6 +318,7 @@
       box.close();
     });
     cancel.addEventListener('click', () => box.close());
+    if (alt) alt.querySelector('button').addEventListener('click', () => { box.close(); opts.alt.onClick(); });
     box.addEventListener('close', () => { box.remove(); resolve(result); });
     document.body.append(box);
     box.showModal();

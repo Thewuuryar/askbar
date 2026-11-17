@@ -50,6 +50,8 @@ pub const MAX_HISTORY_TURNS: u32 = 1000;
 pub const MAX_NOTICE_CHARS: usize = 2000;
 pub const MAX_WARNING_CHARS: usize = 300;
 pub const API_KEY_MAX_NAME_CHARS: usize = 60;
+/// The longest name of a user or a client (the API refuses more; the forms stop typing at it).
+pub const NAME_MAX_CHARS: usize = 60;
 
 // Pairing and services.
 pub const PAIR_CODE_TTL_SECS: i64 = 10 * 60;
@@ -79,7 +81,7 @@ pub const PAGE_SLUGS: [&str; 16] = [
     "audit/routing",
     "settings",
     "providers",
-    "clients",
+    "people",
     "services",
     "network",
     "security",
@@ -152,6 +154,7 @@ struct Constants {
     max_notice_chars: usize,
     max_warning_chars: usize,
     api_key_max_name_chars: usize,
+    name_max_chars: usize,
     pair_code_ttl_secs: i64,
     services: [&'static str; 6],
     max_restarts_per_minute: usize,
@@ -200,6 +203,7 @@ fn current() -> Constants {
         max_notice_chars: MAX_NOTICE_CHARS,
         max_warning_chars: MAX_WARNING_CHARS,
         api_key_max_name_chars: API_KEY_MAX_NAME_CHARS,
+        name_max_chars: NAME_MAX_CHARS,
         pair_code_ttl_secs: PAIR_CODE_TTL_SECS,
         services: SERVICES,
         max_restarts_per_minute: MAX_RESTARTS_PER_MINUTE,
@@ -243,6 +247,7 @@ mod tests {
             "ADMIN_USERNAME",
             "API_KEY_PREFIX",
             "API_KEY_MAX_NAME_CHARS",
+            "NAME_MAX_CHARS",
             "AUDIT_RETENTION_DAYS",
             "BACKOFF_SECS",
             "BACKUP_MISSED_AFTER_SECS",

@@ -296,7 +296,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     assert.equal(await page.inputValue('#setup-backup').catch(() => ''), '', 'the passphrase field is cleared');
     assert.equal(await page.inputValue('#setup-backup2').catch(() => ''), '');
     assert.equal((await page.content()).includes(BACKUP_PASS), false, 'the passphrase is not left in the page');
-    assert.match(await page.innerText('#setup-next'), /Network[\s\S]*Providers[\s\S]*Clients/, 'the next steps, in order');
+    assert.match(await page.innerText('#setup-next'), /Network[\s\S]*Providers[\s\S]*People & clients/, 'the next steps, in order');
     await page.click('#setup-backup-continue');
     await page.waitForSelector('#app:not([hidden])');
     assert.equal(await page.isHidden('#setup'), true);
@@ -853,22 +853,31 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     const r = await fetch(`http://127.0.0.1:${api}/api/client/v1/models`, { headers: { 'x-askbar-client-version': '0.6.0' } });
     assert.equal(r.status, 401);
   });
-  await step('clients: add a user, generate a pairing key for them, pair with it, then revoke the client', async () => {
-    await openPage('clients');
-    await page.waitForSelector('#pair-form');
+  await step('people: add a user, generate a pairing key for them, pair with it, then revoke the client', async () => {
+    await openPage('people');
+    await page.waitForSelector('#users');
     await page.waitForFunction(() => /No clients are paired yet/.test(document.getElementById('clients').textContent));
-    // A fresh install has no users, so nothing can be paired yet (ADR 0008).
+    // A fresh install has no users, so nothing can be paired yet (ADR 0008): the box says so and cannot make a key.
     await page.waitForFunction(() => /No users yet/.test(document.getElementById('users').textContent));
+    await page.click('#pair-open');
     assert.equal(await page.isDisabled('#pair-form button[type=submit]'), true);
+    assert.match(await page.innerText('#pair-error'), /Add a user first/);
+    await page.click('#pair-cancel');
+    await page.click('#add-user');
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'u-name', 'the name field has focus');
+    assert.equal(await page.getAttribute('#u-name', 'maxlength'), String(await page.evaluate(async () => (await window.ui.ready).NAME_MAX_CHARS)), 'the name limit comes from constants');
+    await page.click('#user-form button[type=submit]');
+    assert.match(await page.innerText('#u-name-error'), /Enter a name/, 'an empty name is refused where it is typed');
     await page.fill('#u-name', 'Ann');
     await page.click('#user-form button[type=submit]');
     await page.waitForFunction(() => /Ann/.test(document.getElementById('users').textContent));
+    await page.click('#pair-open');
     assert.equal(await page.inputValue('#d-user').then((v) => v.length > 0), true, 'the new user is picked');
     assert.equal(await page.isDisabled('#pair-form button[type=submit]'), false);
     await page.fill('#d-name', 'Test laptop');
     await page.click('#pair-form button[type=submit]');
     await page.waitForSelector('#pairing-out:not([hidden])');
-    const pairing = await page.inputValue('#pairing-string');
+    const pairing = (await page.innerText('#pairing-string')).trim();
     assert.match(pairing, /^askbar-pair:/);
     const { url, code } = JSON.parse(Buffer.from(pairing.slice('askbar-pair:'.length), 'base64url').toString());
     assert.equal(url, 'http://localhost:' + api);
@@ -878,56 +887,125 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     const { token } = await paired.json();
     const whoami = () => fetch(`http://127.0.0.1:${api}/api/client/v1/me`, { headers: { ...headers, authorization: 'Bearer ' + token } }).then((r) => r.status);
     assert.equal(await whoami(), 204);
+    await page.click('#pairing-done');
 
     await openPage('providers');
-    await openPage('clients');
-    await page.waitForSelector('#clients .card');
-    assert.match(await page.innerText('#clients .card'), /Test laptop[\s\S]*active[\s\S]*Ann · paired[\s\S]*last seen (?!never)/);
-    page.once('dialog', (d) => d.accept());
+    await openPage('people');
+    await page.waitForSelector('#clients [data-client]');
+    assert.match(await page.innerText('#clients [data-client]'), /Test laptop[\s\S]*Ann/);
+    assert.doesNotMatch(await page.textContent('#clients [data-client] .col-seen'), /never/, 'it has been seen');
+    assert.match(await page.innerText('#users [data-user]'), /Ann\s+1\s+Active/, 'the user row counts its client');
     await page.click('#clients [data-action="revoke"]');
-    await page.waitForFunction(() => /revoked/.test(document.querySelector('#clients .card').textContent));
+    await page.waitForSelector('dialog[open] [data-confirm-action]');
+    await page.click('dialog[open] [data-confirm-action]');
+    await page.waitForFunction(() => /Revoked/.test(document.querySelector('#clients [data-client]').textContent));
     assert.equal(await page.locator('#clients [data-action="revoke"]').count(), 0);
     assert.equal(await whoami(), 401);
   });
-  await step('users: Pause replies is the emergency stop for one person, shown as text, and Resume undoes it', async () => {
-    await openPage('clients');
+  await step('users: Pause is the emergency stop for one person, shown as a word and a symbol, and Resume undoes it', async () => {
+    await openPage('people');
     await page.waitForSelector('#users [data-user]');
     const row = '#users [data-user]';
-    assert.equal(await page.innerText(row + ' .what'), 'Ann');
-    assert.equal(await page.innerText(row + ' button'), 'Pause replies');
-    await page.click(row + ' button');
-    await page.waitForFunction(() => /replies paused/.test(document.querySelector('#users [data-user] .what').textContent));
-    assert.equal(await page.innerText(row + ' button'), 'Resume replies');
+    assert.equal(await page.innerText(row + ' .name'), 'Ann');
+    assert.equal(await page.innerText(row + ' [data-action="pause"]'), 'Pause');
+    assert.equal(await page.getAttribute(row + ' [data-action="pause"]', 'aria-label'), 'Pause replies for Ann');
+    await page.click(row + ' [data-action="pause"]');
+    await page.waitForFunction(() => /Replies paused/.test(document.querySelector('#users [data-user]').textContent));
+    assert.equal(await page.innerText(row + ' [data-action="resume"]'), 'Resume');
+    assert.equal(await page.locator(row + ' .status-paused').count(), 1, 'a word and a symbol');
     // It is on the server's side too: the admin API says so, and a reload shows it.
     await openPage('providers');
-    await openPage('clients');
-    await page.waitForFunction(() => /replies paused/.test(document.querySelector('#users [data-user] .what').textContent));
-    await page.click(row + ' button');
-    await page.waitForFunction(() => document.querySelector('#users [data-user] .what').textContent === 'Ann');
-    assert.equal(await page.innerText(row + ' button'), 'Pause replies');
+    await openPage('people');
+    await page.waitForFunction(() => /Replies paused/.test(document.querySelector('#users [data-user]').textContent));
+    await page.click(row + ' [data-action="resume"]');
+    await page.waitForFunction(() => /Active/.test(document.querySelector('#users [data-user]').textContent));
+    assert.equal(await page.innerText(row + ' [data-action="pause"]'), 'Pause');
     assert.equal(await page.locator('#users b').count(), 0, 'names are text');
   });
-  await step('users: deleting a person needs their name typed, then removes them and nothing else', async () => {
-    await openPage('clients');
+  await step('users: the row menu has Edit and Delete; Edit opens the side panel with the usage limits greyed, reachable by Tab and inert on Enter', async () => {
+    await openPage('people');
     await page.waitForSelector('#users [data-user]');
+    const more = '#users [data-user] .row-menu-button';
+    assert.equal(await page.getAttribute(more, 'aria-label'), 'More actions for Ann');
+    await page.click(more);
+    assert.deepEqual(await page.$$eval('#users [data-user] .menu [role="menuitem"]', (b) => b.map((x) => x.textContent.trim())), ['Edit', 'Delete']);
+    await page.click('#users [data-user] .menu [data-action="edit"]');
+    await page.waitForSelector('#user-panel:not([hidden])');
+    assert.equal(await page.innerText('#user-panel-title'), 'Edit Ann');
+    // The name and the usage limits are labels only: no number, no field, aria-disabled, never the disabled attribute.
+    const limits = await page.$$eval('#edit-form .na', (n) => n.map((x) => ({ text: x.textContent.replace(/\s+/g, ' ').trim(), aria: x.getAttribute('aria-disabled'), tab: x.tabIndex, tip: x.dataset.tip, controls: x.querySelectorAll('input, select, textarea, button').length })));
+    assert.equal(limits.length, 4, 'the name and the three limits');
+    for (const l of limits) {
+      assert.equal(l.aria, 'true');
+      assert.equal(l.tab, 0);
+      assert.match(l.tip, /^Not available yet: /);
+      assert.equal(l.controls, 0, 'no field behind it');
+      assert.doesNotMatch(l.text.replace(/Not available yet:.*$/, ''), /\d/, 'no number on a greyed item: ' + l.text);
+    }
+    assert.match(limits[1].text, /Monthly token cap/);
+    assert.equal(await page.locator('#edit-form [disabled]').count(), 0, 'aria-disabled, not disabled');
+    // Reachable by Tab, and Enter does nothing.
+    const snapshot = () => page.evaluate(() => ({ url: location.href, hidden: document.getElementById('user-panel').hidden, paused: document.getElementById('e-paused').checked, boxes: document.querySelectorAll('dialog[open]').length }));
+    await page.focus('#edit-form .na >> nth=1');
+    assert.match(await page.evaluate(() => document.activeElement.dataset.tip), /^Not available yet: the server does not track usage or caps per person\.$/);
+    const before = await snapshot();
+    await page.keyboard.press('Enter');
+    await page.keyboard.press('Space');
+    assert.deepEqual(await snapshot(), before, 'nothing happened');
+    let reached = 0;
+    await page.focus('#edit-form .na >> nth=0');
+    for (let i = 0; i < 6; i++) { await page.keyboard.press('Tab'); if (await page.evaluate(() => !!document.activeElement.closest('.na'))) reached++; }
+    assert.equal(reached, 3, 'Tab reaches the three other greyed items');
+    // Pause from the panel, then resume from it.
+    await page.check('#e-paused');
+    await page.click('#edit-save');
+    await page.waitForSelector('#user-panel', { state: 'hidden' });
+    await page.waitForFunction(() => /Replies paused/.test(document.querySelector('#users [data-user]').textContent));
+    await page.waitForFunction(() => !location.search.includes('panel='));
+    await page.click(more);
+    await page.click('#users [data-user] .menu [data-action="edit"]');
+    await page.waitForSelector('#user-panel:not([hidden])');
+    assert.equal(await page.isChecked('#e-paused'), true);
+    await page.uncheck('#e-paused');
+    await page.click('#edit-save');
+    await page.waitForSelector('#user-panel', { state: 'hidden' });
+    await page.waitForFunction(() => /Active/.test(document.querySelector('#users [data-user]').textContent));
+    await page.waitForFunction(() => !location.search.includes('panel='));
+  });
+  await step('users: Delete asks for the name and stays disabled until it matches; Pause instead pauses; then it removes the person and nothing else', async () => {
+    await openPage('people');
+    await page.waitForSelector('#users [data-user]');
+    await page.click('#add-user');
     await page.fill('#u-name', 'Zed');
     await page.click('#user-form button[type=submit]');
     await page.waitForFunction(() => /Zed/.test(document.getElementById('users').textContent));
-    const zed = '#users [data-user]:has(.what:text-is("Zed"))';
-    await page.click(zed + ' [data-action="delete"]');
-    const confirm = zed + ' [data-confirm]';
-    await page.waitForSelector(confirm);
-    assert.match(await page.innerText(confirm), /cannot be undone/);
-    const go = confirm + ' button.danger';
+    const zed = '#users [data-user]:has(.name:text-is("Zed"))';
+    const openDelete = async () => {
+      await page.click(zed + ' .row-menu-button');
+      await page.click(zed + ' .menu [data-action="delete"]');
+      await page.waitForSelector('dialog[open] [data-confirm-action]');
+    };
+    await openDelete();
+    const box = 'dialog[open]';
+    assert.match(await page.innerText(box), /cannot be undone/);
+    assert.match(await page.innerText(box + ' .box-title'), /Delete Zed\?/);
+    const go = box + ' [data-confirm-action]';
     assert.equal(await page.isDisabled(go), true, 'nothing to confirm yet');
-    await page.fill(confirm + ' input', 'zed');
+    await page.fill(box + ' input', 'zed');
     assert.equal(await page.isDisabled(go), true, 'the name must match exactly');
     // Cancel closes it and deletes nothing.
-    await page.click(confirm + ' button.secondary');
-    assert.equal(await page.locator(confirm).count(), 0);
+    await page.click(box + ' [data-confirm-cancel]');
+    assert.equal(await page.locator('dialog[open]').count(), 0);
     assert.equal(await page.locator(zed).count(), 1);
-    await page.click(zed + ' [data-action="delete"]');
-    await page.fill(confirm + ' input', 'Zed');
+    // Pause instead: the box closes, nothing is deleted, the person is paused.
+    await openDelete();
+    await page.click(box + ' [data-confirm-alt]');
+    await page.waitForFunction(() => [...document.querySelectorAll('#users [data-user]')].some((r) => /Zed/.test(r.textContent) && /Replies paused/.test(r.textContent)));
+    assert.equal(await page.locator('dialog[open]').count(), 0);
+    // A paused person has no "Pause instead" to offer.
+    await openDelete();
+    assert.equal(await page.locator(box + ' [data-confirm-alt]').count(), 0);
+    await page.fill(box + ' input', 'Zed');
     assert.equal(await page.isDisabled(go), false);
     await page.click(go);
     await page.waitForFunction(() => !/Zed/.test(document.getElementById('users').textContent));
@@ -935,9 +1013,32 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     const left = await page.evaluate(async () => (await (await fetch('/api/admin/v1/users')).json()).map((u) => u.name));
     assert.ok(left.includes('Ann') && !left.includes('Zed'), JSON.stringify(left));
   });
+  await step('users: Delete in the Edit panel asks the same way', async () => {
+    await openPage('people');
+    await page.waitForSelector('#users [data-user]');
+    await page.click('#users [data-user] .row-menu-button');
+    await page.click('#users [data-user] .menu [data-action="edit"]');
+    await page.waitForSelector('#user-panel:not([hidden])');
+    await page.click('#edit-delete');
+    await page.waitForSelector('dialog[open] [data-confirm-action]');
+    assert.equal(await page.isDisabled('dialog[open] [data-confirm-action]'), true);
+    await page.click('dialog[open] [data-confirm-cancel]');
+    assert.equal(await page.locator('#users [data-user]').count(), 1, 'nothing was deleted');
+    await page.click('#user-panel [data-panel-close]');
+    await page.waitForSelector('#user-panel', { state: 'hidden' });
+  });
+  await step('people: #add-user and #pair-open in the address open their box and leave the address clean', async () => {
+    for (const [hash, box] of [['#add-user', 'user-box'], ['#pair-open', 'pair-box']]) {
+      await page.goto(base + 'people/' + hash);
+      await page.waitForSelector('#' + box + '[open]');
+      await page.waitForFunction(() => location.hash === '');
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('#' + box, { state: 'hidden' });
+    }
+  });
   await step('live lists: new rows are highlighted and announced, then calm; scroll, focus and typing survive; an unchanged answer changes nothing', async () => {
     const K = await page.evaluate(() => window.ui.ready);
-    await openPage('clients');
+    await openPage('people');
     await page.waitForSelector('#users [data-user]');
     // The admin's users, plus whatever the test adds to the answer (no server state is made).
     let extra = [];
@@ -990,13 +1091,15 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       assert.equal(await page.evaluate(() => document.activeElement.dataset.mark), 'same', 'the focused control is the same node');
       // Either the scroll position is the same, or the browser kept what is on screen still: the view does not jump.
       assert.ok((await page.evaluate(() => window.scrollY)) === scrolled || (await place()) === y, 'the view does not jump');
-      // A row with a delete confirmation open keeps its typing while another row changes.
-      await page.click('#users [data-user="live-1"] [data-action="delete"]');
-      await page.fill('#users [data-user="live-1"] [data-confirm] input', 'Liv');
+      // A delete confirmation that is open keeps its typing while the list changes under it.
+      await page.click('#users [data-user="live-1"] .row-menu-button');
+      await page.click('#users [data-user="live-1"] .menu [data-action="delete"]');
+      await page.fill('dialog[open] input', 'Liv');
       extra = [fake(1), fake(2), fake(3)];
       await refresh();
-      assert.equal(await page.inputValue('#users [data-user="live-1"] [data-confirm] input'), 'Liv', 'typing is kept');
+      assert.equal(await page.inputValue('dialog[open] input'), 'Liv', 'typing is kept');
       assert.equal(await page.evaluate(() => document.activeElement.tagName), 'INPUT', 'and so is focus');
+      await page.click('dialog[open] [data-confirm-cancel]');
       // The same answer again: nothing in the page changes.
       await page.evaluate(() => {
         window.__muts = 0;
@@ -1014,7 +1117,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await openPage('providers');
   });
   await step('live lists: a 304 changes nothing, and the ETag is sent back', async () => {
-    await openPage('clients');
+    await openPage('people');
     await page.waitForSelector('#users [data-user]');
     const sent = [];
     await page.route('**/api/admin/v1/clients', async (route) => {
@@ -1027,7 +1130,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     try {
       await page.reload();
       await page.waitForSelector('#app:not([hidden])');
-      await page.waitForFunction(() => document.querySelector('#clients .card, #clients .empty-row'));
+      await page.waitForFunction(() => document.querySelector('#clients [data-client], #clients .empty-row'));
       await page.evaluate(() => {
         window.__muts = 0;
         new MutationObserver((m) => { window.__muts += m.length; }).observe(document.getElementById('clients'), { subtree: true, childList: true, attributes: true, characterData: true });
@@ -1104,7 +1207,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
   });
   await step('live lists: a failed check shows Reconnecting… next to the list and clears when the answer comes back', async () => {
     const K = await page.evaluate(() => window.ui.ready);
-    await openPage('clients');
+    await openPage('people');
     await page.waitForSelector('#users [data-user]');
     let down = true;
     await page.route('**/api/admin/v1/clients', async (route) => { if (down) await route.abort(); else await route.continue(); });
@@ -1137,14 +1240,17 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await openPage('providers');
   });
   await step('live lists: a client that pairs turns the pairing box to Connected; the tab title carries the alert count; polling is not an action and does not extend the sign-in', async () => {
-    await openPage('clients');
+    const K = await page.evaluate(() => window.ui.ready);
+    await openPage('people');
     await page.waitForSelector('#users [data-user]');
+    await page.click('#pair-open');
     await page.selectOption('#d-user', { label: 'Ann' });
     await page.fill('#d-name', 'Live laptop');
     await page.click('#pair-form button[type=submit]');
     await page.waitForSelector('#pairing-out:not([hidden])');
     assert.match(await page.innerText('#pairing-status'), /Waiting for the app to pair/);
-    const pairing = await page.inputValue('#pairing-string');
+    assert.match(await page.innerText('#pairing-meta'), new RegExp('expires in ' + K.PAIR_CODE_TTL_SECS / 60 + ' minutes'), 'the time limit is the constant');
+    const pairing = (await page.innerText('#pairing-string')).trim();
     const { code } = JSON.parse(Buffer.from(pairing.slice('askbar-pair:'.length), 'base64url').toString());
     const headers = { 'content-type': 'application/json', 'x-askbar-client-version': '0.6.0' };
     const paired = await fetch(`http://127.0.0.1:${api}/api/client/v1/pairings`, { method: 'POST', headers, body: JSON.stringify({ code }) });
@@ -1152,12 +1258,16 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     // The next check (or the admin's own change) shows it; nothing is clicked.
     await page.waitForFunction(() => /Connected/.test(document.getElementById('pairing-status').textContent), null, { timeout: 30000 });
     assert.match(await page.innerText('#pairing-status'), /Connected[\s\S]*Live laptop is paired/);
-    assert.equal(await page.locator('#clients .card:has-text("Live laptop")').count(), 1, 'and the list has it');
+    assert.equal(await page.isVisible('#pairing-key'), false, 'the key is gone: it no longer works');
+    assert.equal(await page.innerText('#pairing-again'), 'Pair another client');
+    assert.equal(await page.locator('#clients [data-client]:has-text("Live laptop")').count(), 1, 'and the list has it');
     assert.equal(await page.$eval('#pairing-status .status', (n) => n.classList.contains('status-ok')), true, 'a word and a symbol');
+    await page.click('#pairing-done');
     // (That a read is not an admin action and does not extend the sign-in is pinned in Rust: tests/actions.rs, tests/admin_auth.rs.)
-    page.once('dialog', (d) => d.accept());
-    await page.click('#clients .card:has-text("Live laptop") [data-action="revoke"]');
-    await page.waitForSelector('#clients .card:has-text("Live laptop"):has-text("revoked")');
+    await page.click('#clients [data-client]:has-text("Live laptop") [data-action="revoke"]');
+    await page.waitForSelector('dialog[open] [data-confirm-action]');
+    await page.click('dialog[open] [data-confirm-action]');
+    await page.waitForSelector('#clients [data-client]:has-text("Live laptop"):has-text("Revoked")');
   });
   await step('the tab title carries the alert count', async () => {
     const K = await page.evaluate(() => window.ui.ready);
@@ -1647,7 +1757,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       const real = await (await route.fetch()).json();
       return route.fulfill({ json: hostile.map((name, i) => ({ ...real[0], id: 'p' + i, name, model: name })) });
     });
-    const NASTY = '#PANEL img, #PANEL iframe, #PANEL object, #PANEL embed, #PANEL svg, #PANEL style, #PANEL base, #PANEL meta, #PANEL form, #PANEL script, #PANEL a[href^="javascript"]';
+    const NASTY = '#PANEL img, #PANEL iframe, #PANEL object, #PANEL embed, #PANEL svg:not(.row-menu-button svg), #PANEL style, #PANEL base, #PANEL meta, #PANEL form, #PANEL script, #PANEL a[href^="javascript"]';
     const inert = async (panel, what) => {
       const r = await page.evaluate((nasty) => ({ nasty: document.querySelectorAll(nasty).length, pwned: window.__pwned }), NASTY.replaceAll('#PANEL', panel));
       assert.deepEqual(r, { nasty: 0, pwned: undefined }, what);
@@ -1655,7 +1765,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       assert.ok(shown.includes('<img src=x onerror=window.__pwned=1>'), what + ': the name is visible, as text');
       assert.ok(shown.includes('<script>window.__pwned=1</script> hello'), what + ': so is the script tag');
     };
-    await openPage('clients');
+    await openPage('people');
     await page.waitForSelector('#users [data-user="h0"]');
     await page.waitForSelector('#clients [data-client="c0"]');
     await inert('#users', 'users');
@@ -2067,7 +2177,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       assert.equal(await page.locator('.btn-primary:visible, button.primary:visible').count(), 1, 'one filled primary');
       assert.equal(await page.locator('#quick-actions .btn-primary').count(), 1);
       assert.deepEqual(await page.$$eval('#quick-actions a', (a) => a.map((x) => [x.textContent.trim(), x.getAttribute('href')])),
-        [['Pair a client', '/admin/clients/#d-user'], ['Add provider', '/admin/providers/#add-provider'], ['Open audit', '/admin/audit/calls/']]);
+        [['Pair a client', '/admin/people/#pair-open'], ['Add provider', '/admin/providers/#add-provider'], ['Open audit', '/admin/audit/calls/']]);
       for (const sel of ['#quick-actions .btn']) {
         for (const box of await page.$$eval(sel, (a) => a.map((x) => { const r = x.getBoundingClientRect(); return [r.width, r.height]; }))) {
           assert.ok(box[0] >= (isPhone ? 44 : 24) - 0.5 && box[1] >= (isPhone ? 44 : 24) - 0.5, 'quick action target ' + box);
@@ -2133,7 +2243,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       fake = clean;
       await page.waitForFunction(() => document.querySelectorAll('#attention-list .arow').length === 4, null, { timeout: wait });
       assert.deepEqual(await page.$$eval('#attention-list .arow a', (a) => a.map((x) => x.getAttribute('href'))),
-        ['/admin/providers/#catalog-section', '/admin/clients/#users', '/admin/backup/', '/admin/backup/'], 'no approved model, no user (so no client rule), no backup yet, drill due');
+        ['/admin/providers/#catalog-section', '/admin/people/#add-user', '/admin/backup/', '/admin/backup/'], 'no approved model, no user (so no client rule), no backup yet, drill due');
       assert.equal(await page.locator('#attention-list .arow[data-source="alert"]').count(), 0);
       setup = healthy;
       await page.waitForFunction(() => document.querySelectorAll('#attention-list .arow').length === 0, null, { timeout: wait });
@@ -2239,7 +2349,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       assert.deepEqual(await page.$$eval('#backup-facts dt', (d) => d.map((x) => x.textContent)), ['Status', 'Last backup', 'Next backup']);
       assert.match(await page.innerText('#backup-facts'), /On schedule[\s\S]*2 hours ago[\s\S]*in 2 hours/);
       assert.deepEqual(await page.$$eval('#clients-facts dd', (d) => d.map((x) => x.textContent)), ['2', '3']);
-      assert.deepEqual(await page.$$eval('.home-link', (a) => a.map((x) => x.getAttribute('href'))), ['/admin/services/', '/admin/backup/', '/admin/clients/']);
+      assert.deepEqual(await page.$$eval('.home-link', (a) => a.map((x) => x.getAttribute('href'))), ['/admin/services/', '/admin/backup/', '/admin/people/']);
 
       // Greyed items: five of them, each reachable by Tab, silent on Enter, with the note on focus.
       const naSel = '.kpi .na, #numbers .na, .na-sec .na-tag, #home-services .na';
@@ -2933,7 +3043,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
   await step('pages: each section has its own URL, the nav marks it, Back works and the frame is the same', async () => {
     // Plan step 1.16: a page and a URL for every admin section, from one template.
     const slugs = await page.$$eval('#nav a[data-tab]', (as) => as.map((a) => a.dataset.tab));
-    assert.deepEqual(slugs, ['home', 'alerts', 'audit/calls', 'audit/admin', 'audit/sealed', 'audit/routing', 'settings', 'providers', 'clients', 'services', 'network', 'security', 'backup', 'notifications', 'general', 'reference']);
+    assert.deepEqual(slugs, ['home', 'alerts', 'audit/calls', 'audit/admin', 'audit/sealed', 'audit/routing', 'settings', 'providers', 'people', 'services', 'network', 'security', 'backup', 'notifications', 'general', 'reference']);
     for (const slug of slugs) {
       await page.goto(`http://127.0.0.1:${adminPort}/admin/${slug}/`);
       await page.waitForSelector('#app:not([hidden])');
@@ -2946,7 +3056,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       assert.match(await page.title(), / · Askbar admin$/);
     }
     await openPage('providers');
-    await openPage('clients');
+    await openPage('people');
     await page.goBack();
     await page.waitForURL('**/admin/providers/');
     await page.waitForSelector('#app:not([hidden])');
@@ -2962,7 +3072,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
   // Plan step 5.4: the Settings overview. One row per section, each a link with one line of state from its own read.
   const OVERVIEW_SHAPES = {
     providers: /^\d+ providers?$/,
-    clients: /^\d+ (person|people), \d+ (client|clients)$/,
+    people: /^\d+ (person|people), \d+ (client|clients)$/,
     services: /^(All \d+ services running|\d+ of \d+ services not running)$/,
     network: /^(No host name|\S.*)$/,
     security: /^(API key: \S.*|No API key)$/,
@@ -2978,7 +3088,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await openPage('settings');
     const rows = await page.$$eval('#settings-overview a.ov-row', (as) => as.map((a) => [a.getAttribute('href'), a.querySelector('.ov-name').textContent.trim()]));
     assert.deepEqual(rows, [
-      ['/admin/providers/', 'Providers'], ['/admin/clients/', 'Clients'], ['/admin/services/', 'Services'], ['/admin/network/', 'Network'],
+      ['/admin/providers/', 'Providers'], ['/admin/people/', 'People & clients'], ['/admin/services/', 'Services'], ['/admin/network/', 'Network'],
       ['/admin/security/', 'Security'], ['/admin/backup/', 'Backup'], ['/admin/notifications/', 'Notifications'], ['/admin/general/', 'General'],
     ]);
     for (const slug of Object.keys(OVERVIEW_SHAPES)) {
@@ -3030,7 +3140,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     assert.equal(await page.getAttribute('#nav a[data-tab="settings"]', 'aria-current'), 'page', 'the heading is current on the overview');
     assert.equal(await page.locator('#nav a[aria-current="page"]').count(), 1, 'one current item');
     const subs = await page.evaluate(() => [...document.querySelector('#nav a[data-tab="settings"]').nextElementSibling.querySelectorAll('a')].map((a) => a.dataset.tab));
-    assert.deepEqual(subs, ['providers', 'clients', 'services', 'network', 'security', 'backup', 'notifications', 'general']);
+    assert.deepEqual(subs, ['providers', 'people', 'services', 'network', 'security', 'backup', 'notifications', 'general']);
     assert.equal(await page.locator('#settings-overview').count(), 1, 'the overview is on the page');
   });
 

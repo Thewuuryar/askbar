@@ -88,7 +88,7 @@ page!(AuditSealed, audit_sealed, "audit/sealed", "audit.html", "Sealed access");
 page!(AuditRouting, audit_routing, "audit/routing", "audit.html", "Routing");
 page!(Settings, settings, "settings", "settings.html", "Settings");
 page!(Providers, providers, "providers", "providers.html", "Providers");
-page!(Clients, clients, "clients", "clients.html", "Clients");
+page!(People, people, "people", "people.html", "People & clients");
 page!(Services, services, "services", "services.html", "Services");
 page!(Network, network, "network", "network.html", "Network");
 page!(Security, security, "security", "security.html", "Security");
@@ -108,7 +108,7 @@ pub static PAGES: &[Page] = &[
     Page { slug: "audit/routing", label: "Routing", group: Group::Audit, icon: "route", render: audit_routing },
     Page { slug: "settings", label: "Settings", group: Group::Settings, icon: "settings", render: settings },
     Page { slug: "providers", label: "Providers", group: Group::Settings, icon: "cube", render: providers },
-    Page { slug: "clients", label: "Clients", group: Group::Settings, icon: "people", render: clients },
+    Page { slug: "people", label: "People & clients", group: Group::Settings, icon: "people", render: people },
     Page { slug: "services", label: "Services", group: Group::Settings, icon: "server", render: services },
     Page { slug: "network", label: "Network", group: Group::Settings, icon: "globe", render: network },
     Page { slug: "security", label: "Security", group: Group::Settings, icon: "shield", render: security },
@@ -266,9 +266,11 @@ mod tests {
             assert_eq!(html.matches(r#"aria-current="page""#).count(), 2, "{}: the menu's link and the breadcrumb, nothing else", p.slug);
             let crumb = &html[html.find(r#"<nav class="crumb" aria-label="Breadcrumb">"#).expect("breadcrumb")..];
             let crumb = &crumb[..crumb.find("</nav>").unwrap()];
+            // Labels are HTML-escaped in the page ("People & clients" is written `People &#38; clients`).
+            let label = p.label.replace('&', "&#38;");
             let expect = match crumb_group(p.slug) {
-                "" => format!(r#"<ol><li aria-current="page">{}</li></ol>"#, p.label),
-                g => format!(r#"<ol><li>{}</li><li aria-current="page">{}</li></ol>"#, g, p.label),
+                "" => format!(r#"<ol><li aria-current="page">{label}</li></ol>"#),
+                g => format!(r#"<ol><li>{}</li><li aria-current="page">{label}</li></ol>"#, g),
             };
             assert!(crumb.contains(&expect), "{}: breadcrumb is {}", p.slug, expect);
             assert_eq!(
@@ -314,7 +316,7 @@ mod tests {
             );
             assert_eq!(html.matches(r#"id="unseal-box""#).count(), 1, "{}", p.slug);
             assert_eq!(html.matches(r#"id="unseal-pass-error""#).count(), 1, "{}", p.slug);
-            let current = format!(r#"href="/admin/{}/" data-tab="{}" data-tip="{}" aria-current="page">"#, p.slug, p.slug, p.label);
+            let current = format!(r#"href="/admin/{}/" data-tab="{}" data-tip="{}" aria-current="page">"#, p.slug, p.slug, label);
             assert!(nav.contains(&current), "{}: its link is current", p.slug);
             for other in PAGES {
                 assert_eq!(nav.matches(&format!(r#"data-tab="{}""#, other.slug)).count(), 1, "{} links {} once", p.slug, other.slug);

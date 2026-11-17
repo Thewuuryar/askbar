@@ -3,7 +3,7 @@
 {% block hint %}What needs you now, and how Askbar is doing.{% endblock %}
 {% block content %}
     <div class="quick-actions" id="quick-actions">
-      <a class="btn btn-primary" href="/admin/clients/#d-user">{% call c::icon("send") %}{% endcall %}Pair a client</a>
+      <a class="btn btn-primary" href="/admin/people/#pair-open">{% call c::icon("send") %}{% endcall %}Pair a client</a>
       <a class="btn btn-secondary" href="/admin/providers/#add-provider">{% call c::icon("cube") %}{% endcall %}Add provider</a>
       <button type="button" class="btn btn-secondary" id="home-backup">{% call c::icon("archive") %}{% endcall %}Back up now</button>
       <a class="btn btn-secondary" href="/admin/audit/calls/">{% call c::icon("audit") %}{% endcall %}Open audit</a>
@@ -63,7 +63,7 @@
       <section id="home-clients-sum" class="home-sec" aria-labelledby="people-title">
         <div class="home-sec-head"><h3 id="people-title">Clients</h3></div>
         <dl class="facts-list" id="clients-facts"></dl>
-        <a class="home-link" href="/admin/clients/">Open Clients</a>
+        <a class="home-link" href="/admin/people/">Open People &amp; clients</a>
       </section>
     </div>
 {% endblock %}
