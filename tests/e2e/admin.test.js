@@ -803,6 +803,252 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     const left = await page.evaluate(async () => (await (await fetch('/api/admin/v1/users')).json()).map((u) => u.name));
     assert.ok(left.includes('Ann') && !left.includes('Zed'), JSON.stringify(left));
   });
+  await step('live lists: new rows are highlighted and announced, then calm; scroll, focus and typing survive; an unchanged answer changes nothing', async () => {
+    const K = await page.evaluate(() => window.ui.ready);
+    await openPage('clients');
+    await page.waitForSelector('#users [data-user]');
+    // The admin's users, plus whatever the test adds to the answer (no server state is made).
+    let extra = [];
+    let seen = 0;
+    await page.route('**/api/admin/v1/users', async (route) => {
+      if (route.request().method() !== 'GET') { await route.continue(); return; }
+      seen++;
+      const real = await (await route.fetch()).json();
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify([...real, ...extra]) });
+    });
+    // A hidden tab holds the lists; a visible one asks at once. (Emulated: the page reports hidden, then visible.)
+    const visibility = (hidden) => page.evaluate((h) => {
+      Object.defineProperty(document, 'hidden', { configurable: true, get: () => h });
+      Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => (h ? 'hidden' : 'visible') });
+      document.dispatchEvent(new Event('visibilitychange'));
+    }, hidden);
+    const refresh = async () => {
+      const before = seen;
+      await visibility(true);
+      await page.waitForTimeout(100);
+      assert.equal(seen, before, 'a hidden tab does not ask for the list');
+      await visibility(false);
+      for (let i = 0; i < 50 && seen === before; i++) await page.waitForTimeout(100);
+      assert.ok(seen > before, 'a tab that is visible again asks at once');
+      await page.waitForTimeout(300); // the answer is drawn
+    };
+    try {
+      const fake = (n) => ({ id: 'live-' + n, name: 'Live ' + n + ' <b>x</b>', paused: false });
+      // Room to scroll, and a control in the first row to focus.
+      await page.evaluate(() => { const d = document.createElement('div'); d.id = 't-tall'; d.style.height = '3000px'; document.getElementById('main').append(d); });
+      extra = [fake(1)];
+      await refresh();
+      assert.equal(await page.locator('#users [data-user="live-1"]').count(), 1, 'the new row is there');
+      assert.equal(await page.locator('#users [data-user="live-1"]').evaluate((n) => n.classList.contains('row-new')), true, 'and highlighted');
+      assert.equal(await page.locator('#users b').count(), 0, 'names are text');
+      assert.equal(await page.innerText('#announcer'), '1 new user');
+      await page.waitForTimeout(K.HIGHLIGHT_SECS * 1000 + 500);
+      assert.equal(await page.locator('#users .row-new').count(), 0, 'calm after HIGHLIGHT_SECS');
+      // Focus a button in a row and scroll; a refresh with another new row keeps both, on the same node.
+      await page.focus('#users [data-user="live-1"] button');
+      await page.evaluate(() => { document.activeElement.dataset.mark = 'same'; window.scrollTo(0, 400); });
+      // (A row added above the view makes the browser move scrollY to keep what is on screen still, so what stays is the
+      // place on screen of what is in view, here the block that gives the page room to scroll.)
+      const place = () => page.evaluate(() => Math.round(document.getElementById('t-tall').getBoundingClientRect().top));
+      const y = await place();
+      const scrolled = await page.evaluate(() => window.scrollY);
+      extra = [fake(1), fake(2)];
+      await refresh();
+      assert.equal(await page.locator('#users [data-user="live-2"].row-new').count(), 1);
+      assert.equal(await page.evaluate(() => document.activeElement.dataset.mark), 'same', 'the focused control is the same node');
+      // Either the scroll position is the same, or the browser kept what is on screen still: the view does not jump.
+      assert.ok((await page.evaluate(() => window.scrollY)) === scrolled || (await place()) === y, 'the view does not jump');
+      // A row with a delete confirmation open keeps its typing while another row changes.
+      await page.click('#users [data-user="live-1"] [data-action="delete"]');
+      await page.fill('#users [data-user="live-1"] [data-confirm] input', 'Liv');
+      extra = [fake(1), fake(2), fake(3)];
+      await refresh();
+      assert.equal(await page.inputValue('#users [data-user="live-1"] [data-confirm] input'), 'Liv', 'typing is kept');
+      assert.equal(await page.evaluate(() => document.activeElement.tagName), 'INPUT', 'and so is focus');
+      // The same answer again: nothing in the page changes.
+      await page.evaluate(() => {
+        window.__muts = 0;
+        const o = new MutationObserver((m) => { window.__muts += m.length; });
+        o.observe(document.getElementById('users'), { subtree: true, childList: true, attributes: true, characterData: true });
+        o.observe(document.getElementById('clients'), { subtree: true, childList: true, attributes: true, characterData: true });
+      });
+      await refresh();
+      await refresh();
+      assert.equal(await page.evaluate(() => window.__muts), 0, 'an unchanged answer changes nothing');
+    } finally {
+      await page.unroute('**/api/admin/v1/users');
+      await page.evaluate(() => { delete document.hidden; delete document.visibilityState; const d = document.getElementById('t-tall'); if (d) d.remove(); });
+    }
+    await openPage('providers');
+  });
+  await step('live lists: a 304 changes nothing, and the ETag is sent back', async () => {
+    await openPage('clients');
+    await page.waitForSelector('#users [data-user]');
+    const sent = [];
+    await page.route('**/api/admin/v1/clients', async (route) => {
+      const inm = route.request().headers()['if-none-match'];
+      sent.push(inm || null);
+      if (inm === '"v1"') { await route.fulfill({ status: 304, headers: { etag: '"v1"' } }); return; }
+      const real = await route.fetch();
+      await route.fulfill({ response: real, headers: { ...real.headers(), etag: '"v1"' } });
+    });
+    try {
+      await page.reload();
+      await page.waitForSelector('#app:not([hidden])');
+      await page.waitForFunction(() => document.querySelector('#clients .card, #clients .empty-row'));
+      await page.evaluate(() => {
+        window.__muts = 0;
+        new MutationObserver((m) => { window.__muts += m.length; }).observe(document.getElementById('clients'), { subtree: true, childList: true, attributes: true, characterData: true });
+        Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+        document.dispatchEvent(new Event('visibilitychange'));
+        Object.defineProperty(document, 'hidden', { configurable: true, get: () => false });
+        document.dispatchEvent(new Event('visibilitychange'));
+      });
+      for (let i = 0; i < 50 && sent.length < 2; i++) await page.waitForTimeout(100);
+      await page.waitForTimeout(300);
+      assert.deepEqual(sent.slice(0, 2), [null, '"v1"'], 'the second ask carries the ETag of the first answer');
+      assert.equal(await page.evaluate(() => window.__muts), 0, 'a 304 changes nothing');
+    } finally {
+      await page.unroute('**/api/admin/v1/clients');
+      await page.evaluate(() => { delete document.hidden; });
+    }
+    await openPage('providers');
+  });
+  await step('live lists: the interval follows the tab, a lost connection backs off along BACKOFF_SECS and says Reconnecting…, and the first answer clears it', async () => {
+    const out = await page.evaluate(async () => {
+      const K = await window.ui.ready;
+      const calls = [];
+      const timer = { set: (fn, ms) => { calls.push(ms); return calls.length; }, clear: () => {} };
+      let down = true;
+      const slot = document.getElementById('page-error');
+      const live = window.ui.live(async () => { if (down) throw new TypeError('Failed to fetch'); return { n: 1 }; }, { render: () => {}, notice: slot, timer });
+      const result = { K, delays: [], noteWhileDown: null, noteAfter: null };
+      await live.start();
+      result.delays.push(calls[calls.length - 1]);
+      result.noteWhileDown = document.querySelector('.live-note') && document.querySelector('.live-note').textContent;
+      result.polite = document.querySelector('.live-note').getAttribute('role');
+      for (let i = 0; i < 5; i++) { await live.refresh(); result.delays.push(calls[calls.length - 1]); }
+      down = false;
+      await live.refresh();
+      result.afterOk = calls[calls.length - 1];
+      result.noteAfter = document.querySelector('.live-note');
+      // A refusal is an answer, not a lost connection: no backoff, no notice.
+      down = false;
+      const refused = window.ui.live(async () => { const e = new Error('no'); e.status = 500; throw e; }, { render: () => {}, notice: slot, timer, onError: () => {} });
+      await refused.start();
+      result.refusedDelay = calls[calls.length - 1];
+      result.refusedNote = !!document.querySelector('.live-note');
+      // The tab hides: a list pauses (no timer), the status kind goes on at HIDDEN_EVERY_SECS.
+      const hide = (h) => { Object.defineProperty(document, 'hidden', { configurable: true, get: () => h }); document.dispatchEvent(new Event('visibilitychange')); };
+      const pause = window.ui.live(async () => ({ n: 1 }), { render: () => {}, timer });
+      const slow = window.ui.live(async () => ({ n: 1 }), { render: () => {}, timer, hidden: 'slow' });
+      await pause.start(); await slow.start();
+      hide(true);
+      result.hiddenPause = pause.state.delay;
+      result.hiddenSlow = slow.state.delay;
+      result.visibleSlowEvery = null;
+      const named = window.ui.live(async () => ({ n: 1 }), { render: () => {}, timer, every: 'STATUS_EVERY_SECS' });
+      hide(false);
+      await named.start();
+      result.visible = pause.state.delay;
+      result.named = named.state.delay;
+      for (const l of [live, refused, pause, slow, named]) l.stop();
+      delete document.hidden;
+      return result;
+    });
+    const K = out.K;
+    assert.deepEqual(K.BACKOFF_SECS, [10, 20, 40, 60]);
+    assert.deepEqual(out.delays, [10000, 20000, 40000, 60000, 60000, 60000], 'the schedule is BACKOFF_SECS, the last step repeating');
+    assert.match(out.noteWhileDown, /Reconnecting…/);
+    assert.equal(out.polite, 'status', 'announced politely, not as an alert');
+    assert.equal(out.afterOk, K.LIVE_EVERY_SECS * 1000, 'back to the normal interval after the first answer');
+    assert.equal(out.noteAfter, null, 'the notice clears');
+    assert.equal(out.refusedDelay, K.LIVE_EVERY_SECS * 1000, 'an answer, even a refusal, does not back off');
+    assert.equal(out.refusedNote, false);
+    assert.equal(out.hiddenPause, null, 'a hidden tab holds the list');
+    assert.equal(out.hiddenSlow, K.HIDDEN_EVERY_SECS * 1000, 'the bell and title go on at HIDDEN_EVERY_SECS');
+    assert.equal(out.visible, K.LIVE_EVERY_SECS * 1000);
+    assert.equal(out.named, K.STATUS_EVERY_SECS * 1000);
+  });
+  await step('live lists: a failed check shows Reconnecting… next to the list and clears when the answer comes back', async () => {
+    const K = await page.evaluate(() => window.ui.ready);
+    await openPage('clients');
+    await page.waitForSelector('#users [data-user]');
+    let down = true;
+    await page.route('**/api/admin/v1/clients', async (route) => { if (down) await route.abort(); else await route.continue(); });
+    try {
+      await page.evaluate(() => {
+        Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+        document.dispatchEvent(new Event('visibilitychange'));
+        Object.defineProperty(document, 'hidden', { configurable: true, get: () => false });
+        document.dispatchEvent(new Event('visibilitychange'));
+      });
+      await page.waitForSelector('.live-note');
+      assert.match(await page.innerText('.live-note'), /Reconnecting…/);
+      assert.equal(await page.locator('#banners [data-banner="reconnecting"]').count(), 0, 'not a banner');
+      assert.equal(await page.locator('#users [data-user]').count() > 0, true, 'the list stays as it was');
+      down = false;
+      // The next check is BACKOFF_SECS[0] away; a tab that comes back asks at once.
+      await page.evaluate(() => {
+        Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+        document.dispatchEvent(new Event('visibilitychange'));
+        Object.defineProperty(document, 'hidden', { configurable: true, get: () => false });
+        document.dispatchEvent(new Event('visibilitychange'));
+      });
+      await page.waitForSelector('.live-note', { state: 'detached', timeout: K.BACKOFF_SECS[0] * 1000 });
+    } finally {
+      // The aborted request is the point of the step: the browser logs it, so it is not a page error.
+      for (let i = errors.length - 1; i >= 0; i--) if (errors[i] === 'Failed to load resource: net::ERR_FAILED') errors.splice(i, 1);
+      await page.unroute('**/api/admin/v1/clients');
+      await page.evaluate(() => { delete document.hidden; });
+    }
+    await openPage('providers');
+  });
+  await step('live lists: a client that pairs turns the pairing box to Connected; the tab title carries the alert count; polling is not an action and does not extend the sign-in', async () => {
+    await openPage('clients');
+    await page.waitForSelector('#users [data-user]');
+    await page.selectOption('#d-user', { label: 'Ann' });
+    await page.fill('#d-name', 'Live laptop');
+    await page.click('#pair-form button[type=submit]');
+    await page.waitForSelector('#pairing-out:not([hidden])');
+    assert.match(await page.innerText('#pairing-status'), /Waiting for the app to pair/);
+    const pairing = await page.inputValue('#pairing-string');
+    const { code } = JSON.parse(Buffer.from(pairing.slice('askbar-pair:'.length), 'base64url').toString());
+    const headers = { 'content-type': 'application/json', 'x-askbar-client-version': '0.6.0' };
+    const paired = await fetch(`http://127.0.0.1:${api}/api/client/v1/pairings`, { method: 'POST', headers, body: JSON.stringify({ code }) });
+    assert.equal(paired.status, 200);
+    // The next check (or the admin's own change) shows it; nothing is clicked.
+    await page.waitForFunction(() => /Connected/.test(document.getElementById('pairing-status').textContent), null, { timeout: 30000 });
+    assert.match(await page.innerText('#pairing-status'), /Connected[\s\S]*Live laptop is paired/);
+    assert.equal(await page.locator('#clients .card:has-text("Live laptop")').count(), 1, 'and the list has it');
+    assert.equal(await page.$eval('#pairing-status .status', (n) => n.classList.contains('status-ok')), true, 'a word and a symbol');
+    // (That a read is not an admin action and does not extend the sign-in is pinned in Rust: tests/actions.rs, tests/admin_auth.rs.)
+    page.once('dialog', (d) => d.accept());
+    await page.click('#clients .card:has-text("Live laptop") [data-action="revoke"]');
+    await page.waitForSelector('#clients .card:has-text("Live laptop"):has-text("revoked")');
+  });
+  await step('the tab title carries the alert count', async () => {
+    const K = await page.evaluate(() => window.ui.ready);
+    const clean = { server_online: true, token_rejected: false, audit_chain: { state: 'ok' }, alerts: 'ok', sealed_content: { open: false, alerts: [] } };
+    let fake = { ...clean, server_online: false };
+    await page.route('**/api/admin/v1/status', async (route) => {
+      const real = await (await route.fetch()).json();
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ...real, ...fake }) });
+    });
+    try {
+      await page.goto(base + 'network/');
+      await page.waitForSelector('#app:not([hidden])');
+      await page.waitForFunction(() => /^\(1\) Network/.test(document.title), null, { timeout: K.STATUS_EVERY_SECS * 3000 });
+      assert.match(await page.title(), /^\(1\) Network · Askbar admin$/);
+      // The condition ends: the count leaves the title. (The hidden-tab interval for the status is checked above, with ui.live.)
+      fake = clean;
+      await page.waitForFunction(() => document.title === 'Network · Askbar admin', null, { timeout: K.STATUS_EVERY_SECS * 3000 });
+    } finally {
+      await page.unroute('**/api/admin/v1/status');
+    }
+    await page.goto(base + 'providers/');
+    await page.waitForSelector('#app:not([hidden])');
+  });
   await step('settings page saves the system prompt and display defaults', async () => {
     await openPage('settings');
     await page.waitForSelector('#settings-form');

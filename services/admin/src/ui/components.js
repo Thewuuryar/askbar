@@ -699,34 +699,155 @@
 
   // ------------------------------------------------------------- lists
 
-  // ui.rows(tbody, items, render, { key, empty }) replaces the rows: render(item) returns a <tr>, key(item) its
-  // stable id (default item.id). Focus inside a row that is still there stays on the same control.
-  ui.rows = (tbody, items, render, opts = {}) => {
+  // ui.rows(container, items, render, opts) merges a keyed list in place (rule 34). `container` is a <tbody> (render
+  // returns a <tr>) or any element whose children are the rows. A row is its `key(item)` (default item.id), kept in
+  // data-key, and its `sig(item)` (default the JSON of the item), kept in data-sig:
+  //   - a key that is still there with the same sig keeps its node, so scroll, focus, selection and typing stay;
+  //   - a changed sig builds a new node in its place (focus goes back to the same control, by position);
+  //   - a new key is built, and with opts.fresh gets the .row-new class for HIGHLIGHT_SECS and is announced politely
+  //     ("1 new client", opts.noun = ['client', 'clients']);
+  //   - a key that is gone is removed. opts.keep(node) holds a row as it is (a row with an open confirmation).
+  // opts.force rebuilds every row; opts.empty is the sentence shown when there are no items.
+  ui.rows = (container, items, render, opts = {}) => {
     const key = opts.key || ((x) => x.id);
+    const sigOf = opts.sig || ((x) => JSON.stringify(x));
+    const rowOf = (node) => (node && container.contains(node) ? node.closest('[data-key]') : null);
     const active = document.activeElement;
-    const activeRow = active && tbody.contains(active) ? active.closest('tr[data-key]') : null;
+    const activeRow = rowOf(active);
     let focusKey = null;
     let focusIndex = -1;
-    if (activeRow) {
-      focusKey = activeRow.dataset.key;
-      focusIndex = [...activeRow.querySelectorAll('button, a, input, select, textarea, [tabindex]')].indexOf(active);
+    const controls = (row) => [...row.querySelectorAll('button, a, input, select, textarea, [tabindex]')];
+    if (activeRow) { focusKey = activeRow.dataset.key; focusIndex = controls(activeRow).indexOf(active); }
+    const old = new Map([...container.children].filter((c) => c.dataset.key !== undefined).map((c) => [c.dataset.key, c]));
+    const rows = [];
+    const added = [];
+    for (const item of items) {
+      const k = String(key(item));
+      const sig = sigOf(item);
+      const prev = old.get(k);
+      if (prev && !opts.force && (prev.dataset.sig === sig || (opts.keep && opts.keep(prev)))) { rows.push(prev); continue; }
+      const node = render(item);
+      node.dataset.key = k;
+      node.dataset.sig = sig;
+      rows.push(node);
+      if (!prev) added.push(node);
     }
-    const rows = items.map((item) => {
-      const tr = render(item);
-      tr.dataset.key = String(key(item));
-      return tr;
-    });
     if (rows.length === 0 && opts.empty) {
-      const cols = tbody.closest('table') ? tbody.closest('table').querySelectorAll('thead th').length : 1;
-      rows.push(el('tr', { class: 'empty-row' }, el('td', { colspan: String(cols || 1) }, opts.empty)));
+      const cols = container.tagName === 'TBODY' && container.closest('table') ? container.closest('table').querySelectorAll('thead th').length : 1;
+      rows.push(container.tagName === 'TBODY'
+        ? el('tr', { class: 'empty-row' }, el('td', { colspan: String(cols || 1) }, opts.empty))
+        : el('p', { class: 'hint empty-row', text: opts.empty }));
     }
-    tbody.replaceChildren(...rows);
-    if (focusKey !== null) {
-      const again = rows.find((r) => r.dataset.key === focusKey);
-      const controls = again ? [...again.querySelectorAll('button, a, input, select, textarea, [tabindex]')] : [];
-      if (controls[focusIndex]) controls[focusIndex].focus();
+    const keep = new Set(rows);
+    for (const child of [...container.children]) if (!keep.has(child)) child.remove();
+    rows.forEach((row, i) => { if (container.children[i] !== row) container.insertBefore(row, container.children[i] || null); });
+    if (focusKey !== null && !(active && active.isConnected)) {
+      const again = rows.find((r) => r.dataset && r.dataset.key === focusKey);
+      const list = again ? controls(again) : [];
+      if (list[focusIndex]) list[focusIndex].focus();
+    }
+    if (opts.fresh && added.length) {
+      for (const row of added) row.classList.add('row-new');
+      setTimeout(() => { for (const row of added) row.classList.remove('row-new'); }, secs('HIGHLIGHT_SECS'));
+      const noun = opts.noun || ['item', 'items'];
+      ui.announce(added.length + ' new ' + noun[added.length === 1 ? 0 : 1]);
     }
     return rows;
+  };
+
+  // ui.live(load, opts) keeps a list current (rules 34 and 35). load() fetches and returns the data (the caller's fetch
+  // may send If-None-Match and hand back the data it kept on a 304); opts.render(data, { first, force }) draws it.
+  // The body is compared as JSON, so an unchanged answer changes nothing in the page (opts.always renders every time).
+  //   every     name of the interval constant while the tab is visible (default LIVE_EVERY_SECS)
+  //   hidden    'pause' (default: lists wait until the tab is visible again) or 'slow' (HIDDEN_EVERY_SECS: the bell,
+  //             the status and the tab title go on)
+  //   when()    false while there is nothing to refresh (signed out); skip() holds a check back (a restart is running)
+  //   notice    an element: "Reconnecting…" is shown just before it while checks fail; or a function(on) to show it
+  //             another way
+  //   onError(err) an answer that is not a network failure (a refusal, a 5xx), or a failed render
+  //   timer     { set(fn, ms), clear(id) } instead of setTimeout (tests)
+  // A network failure backs off along BACKOFF_SECS (the last step repeats) and is not an error to show; the first
+  // success clears the notice and goes back to the normal interval. start() loads now and keeps going; refresh() loads
+  // now (call it right after the admin's own change); refresh({ force: true }) also rebuilds every row.
+  ui.live = (load, opts = {}) => {
+    const timer = opts.timer || { set: (fn, ms) => setTimeout(fn, ms), clear: (id) => clearTimeout(id) };
+    let id = null;
+    let failures = 0;
+    let last = null;
+    let rendered = false;
+    let started = false;
+    let note = null;
+    let chain = Promise.resolve();
+    const state = { delay: null, failures: 0, polls: 0 };
+
+    const reconnecting = (on) => {
+      if (typeof opts.notice === 'function') { opts.notice(on); return; }
+      if (!opts.notice) return;
+      if (on && !note) {
+        note = ui.notice('warning', 'Reconnecting…');
+        note.classList.add('live-note');
+        opts.notice.before(note);
+      } else if (!on && note) { note.remove(); note = null; }
+    };
+    const delay = () => {
+      if (failures) { const steps = ui.constants.BACKOFF_SECS; return steps[Math.min(failures - 1, steps.length - 1)] * MS; }
+      if (!document.hidden) return secs(opts.every || 'LIVE_EVERY_SECS');
+      return opts.hidden === 'slow' ? secs('HIDDEN_EVERY_SECS') : null;
+    };
+    const schedule = () => {
+      if (id !== null) { timer.clear(id); id = null; }
+      state.delay = null;
+      if (!started) return;
+      const ms = delay();
+      state.delay = ms;
+      if (ms !== null) id = timer.set(tick, ms);
+    };
+    async function tick() {
+      id = null;
+      if ((opts.when && !opts.when()) || (opts.skip && opts.skip())) { schedule(); return; }
+      state.polls++;
+      await refresh();
+    }
+    async function run(o) {
+      let data;
+      try {
+        data = await load();
+      } catch (err) {
+        last = null;
+        // No answer at all (no status) is a lost connection; an answer, even a refusal or 5xx, is not.
+        const lost = err && err.status === undefined && err.message !== 'Signed out';
+        failures = lost ? failures + 1 : 0;
+        reconnecting(lost);
+        state.failures = failures;
+        if (opts.onError) opts.onError(err);
+        return;
+      }
+      failures = 0;
+      state.failures = 0;
+      reconnecting(false);
+      const body = JSON.stringify(data);
+      if (!o.force && !opts.always && rendered && body === last) return;
+      last = body;
+      try {
+        opts.render(data, { first: !rendered, force: !!o.force });
+        rendered = true;
+      } catch (err) {
+        last = null;
+        if (opts.onError) opts.onError(err);
+      }
+    }
+    function refresh(o = {}) {
+      chain = chain.then(() => run(o)).then(schedule, schedule);
+      return chain;
+    }
+    const seen = () => { if (started && !document.hidden) refresh(); else schedule(); };
+    document.addEventListener('visibilitychange', seen);
+    return {
+      state,
+      refresh,
+      start() { if (!started) { started = true; } return refresh(); },
+      stop() { started = false; schedule(); document.removeEventListener('visibilitychange', seen); reconnecting(false); },
+    };
   };
 
   // ------------------------------------------------------------- time, numbers, copy

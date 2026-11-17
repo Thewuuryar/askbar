@@ -411,3 +411,9 @@ input, select { min-height: var(--target-min); }
   html { scroll-padding-top: calc(var(--phone-bar-h) + var(--status-h) + var(--space-2)); }
   .side-panel { top: calc(var(--phone-bar-h) + var(--status-h)); }
 }
+
+/* Live lists (plan step 3.6, rule 34): a row that arrived since the last check is marked for HIGHLIGHT_SECS. The mark is a
+   tint and a bar (not colour alone); it fades unless motion is reduced, which the rule above turns off. */
+.row-new { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+.card, .sealed-row { transition: background-color var(--motion), box-shadow var(--motion); }
+.live-note { margin: var(--space-2) 0; }

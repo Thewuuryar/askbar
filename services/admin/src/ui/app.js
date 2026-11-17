@@ -11,18 +11,26 @@
   const MS = ui.MS;
   let K = null;
 
-  async function api(method, path, body) {
+  // A live list reads with `{ etag: true }`: the answer's ETag is kept, sent back as If-None-Match, and a 304 hands back
+  // the data kept with it. (The admin API sends no ETag on its lists today, so every answer is a full 200 and ui.live
+  // compares the bodies instead; this is ready for the day it does.) A read is never counted as the person's activity:
+  // the session has a fixed expiry that no request moves (auth.rs), and only changes are recorded (actions.rs).
+  const etags = new Map();
+  async function api(method, path, body, opts = {}) {
+    const known = opts.etag ? etags.get(path) : null;
     const res = await fetch(path, {
       method,
       credentials: 'same-origin',
-      headers: { 'X-Askbar-Admin': '1', ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}) },
+      headers: { 'X-Askbar-Admin': '1', ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}), ...(known ? { 'If-None-Match': known.tag } : {}) },
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
+    if (res.status === 304 && known) return known.data;
     if (res.status === 401 && !(method === 'POST' && path === '/api/admin/v1/session')) { showLogin(); throw new Error('Signed out'); }
     let data = null;
     const text = await res.text();
     if (text) { try { data = JSON.parse(text); } catch (_) { data = null; } }
     if (res.status === 502) ui.banner('offline', 'error', OFFLINE_TEXT);
+    if (opts.etag && res.ok && res.headers.get('ETag')) etags.set(path, { tag: res.headers.get('ETag'), data });
     if (!res.ok) {
       // A problem+json body: `detail` is the sentence for a person, `error` the stable code.
       const err = new Error((data && (data.detail || data.error)) || ('Request failed (' + res.status + ')'));
@@ -372,12 +380,16 @@
 
   // A critical row pops up once per tab: the keys already shown are kept in sessionStorage (a blocked store only means
   // a pop-up may come back after a reload). A key that is no longer critical is forgotten, so it can pop up again.
+  const baseTitle = document.title;
   const POPPED_KEY = 'askbar-admin.alert-pops';
   const popped = new Set();
   try { JSON.parse(sessionStorage.getItem(POPPED_KEY) || '[]').forEach((k) => popped.add(k)); } catch (_) { /* no storage */ }
   function showBell(st) {
     const items = bellItems(st);
     ui.bell(items);
+    // The tab title carries the count the badge shows (critical plus warning), so a hidden tab still says so.
+    const urgent = items.filter((i) => i.severity !== 'info').length;
+    document.title = (urgent ? '(' + urgent + ') ' : '') + baseTitle;
     const critical = items.filter((i) => i.severity === 'critical');
     for (const item of critical) {
       if (popped.has(item.key)) continue;
@@ -392,23 +404,33 @@
     try { sessionStorage.setItem(POPPED_KEY, JSON.stringify([...popped])); } catch (_) { /* no storage */ }
   }
 
-  // The "server offline" banner: ask the admin how its link to the server is, now and then.
-  let statusTimer = null;
-  async function checkServer() {
-    try {
-      const st = await api('GET', '/api/admin/v1/status');
-      // A refused token is the more useful message: the server is there, but it does not accept this admin.
-      ui.banner('rejected', 'error', st.token_rejected ? REJECTED_PARTS : null);
-      ui.banner('offline', 'error', !st.server_online && !st.token_rejected ? OFFLINE_TEXT : null);
-      // The audit chain no longer matches what this admin stored (ADR 0010 rule 7). The sentence is the admin's, text only.
-      const chain = st.audit_chain || {};
-      const bad = ['rollback', 'rewritten', 'edited'].includes(chain.state);
-      ui.banner('chain', 'error', bad ? chain.detail : null);
-      showAlertsBanner(st.alerts);
-      showSealed(st.sealed_content || {});
-      showBell(st);
-      checkKill();
-    } catch (_) { /* signed out, or the admin itself is away */ }
+  // The "server offline" banner: ask the admin how its link to the server is, now and then (ui.live: every
+  // STATUS_EVERY_SECS while the tab is visible, every HIDDEN_EVERY_SECS while it is hidden, backing off when the admin
+  // itself does not answer). It always draws, so a banner another request raised (a 502) clears when the server is back.
+  // A page with no live list shows "Reconnecting…" at the top of the page; a list shows its own next to the list.
+  const appShownNow = () => !$('app').hidden;
+  const listPage = ['services', 'providers', 'clients'].includes(page);
+  const liveStatus = ui.live(() => api('GET', '/api/admin/v1/status', undefined, { etag: true }), {
+    every: 'STATUS_EVERY_SECS',
+    hidden: 'slow',
+    always: true,
+    when: appShownNow,
+    notice: listPage ? null : $('page-error'),
+    render: showStatus,
+  });
+  const checkServer = () => liveStatus.refresh();
+  function showStatus(st) {
+    // A refused token is the more useful message: the server is there, but it does not accept this admin.
+    ui.banner('rejected', 'error', st.token_rejected ? REJECTED_PARTS : null);
+    ui.banner('offline', 'error', !st.server_online && !st.token_rejected ? OFFLINE_TEXT : null);
+    // The audit chain no longer matches what this admin stored (ADR 0010 rule 7). The sentence is the admin's, text only.
+    const chain = st.audit_chain || {};
+    const bad = ['rollback', 'rewritten', 'edited'].includes(chain.state);
+    ui.banner('chain', 'error', bad ? chain.detail : null);
+    showAlertsBanner(st.alerts);
+    showSealed(st.sealed_content || {});
+    showBell(st);
+    checkKill();
   }
 
   // The status bar's kill switch (plan step 3.1, rule 3): read-only, a word and a symbol (rule 37), from the same
@@ -428,24 +450,23 @@
   }
 
   // The side menu's health line (plan step 2.2): how many of the services answer, as a word and a symbol
-  // (rule 37), linking to the Services page. Read every LIVE_EVERY_SECS while signed in.
-  async function checkHealth() {
+  // (rule 37), linking to the Services page. Read every LIVE_EVERY_SECS while the tab is visible (ui.live).
+  function showHealth(state, text) {
     const box = $('menu-health-status');
     if (!box) return;
-    let state = 'pending';
-    let text = 'Services not checked';
-    try {
-      const { services } = await api('GET', '/api/admin/v1/services');
-      const down = services.filter((s) => s.state !== 'running').length;
-      state = down ? 'warning' : 'ok';
-      text = down ? down + ' of ' + services.length + ' services not running' : 'All ' + services.length + ' services running';
-    } catch (_) { /* signed out, or the admin itself is away: say it is not checked */ }
     box.className = 'status status-' + state;
     box.querySelector('.status-word').textContent = text;
     $('menu-health').dataset.tip = text;
   }
-
-  let healthTimer = null;
+  const liveHealth = ui.live(() => api('GET', '/api/admin/v1/services', undefined, { etag: true }), {
+    when: appShownNow,
+    render: ({ services }) => {
+      const down = services.filter((s) => s.state !== 'running').length;
+      showHealth(down ? 'warning' : 'ok', down ? down + ' of ' + services.length + ' services not running' : 'All ' + services.length + ' services running');
+    },
+    // Signed out, or the admin itself is away: say it is not checked.
+    onError: () => showHealth('pending', 'Services not checked'),
+  });
   function showApp() {
     hideAll();
     show($('app'), true);
@@ -453,10 +474,8 @@
     loadPage();
     focusHash();
     initSearch();
-    checkServer();
-    checkHealth();
-    if (!statusTimer) statusTimer = setInterval(() => { if (!$('app').hidden) checkServer(); }, K.STATUS_EVERY_SECS * MS);
-    if (!healthTimer) healthTimer = setInterval(() => { if (!$('app').hidden && !document.hidden) checkHealth(); }, K.LIVE_EVERY_SECS * MS);
+    liveStatus.start();
+    liveHealth.start();
   }
 
   on('login-form', 'submit', async (e) => {
@@ -722,32 +741,37 @@
       pageError(ex.message);
     }
     servicesBusy = false;
-    loadServices().catch((e) => pageError(e.message));
+    liveServices.refresh({ force: true });
   }
 
-  async function loadServices() {
-    const box = $('services');
-    let data;
-    try { data = await api('GET', '/api/admin/v1/services'); }
-    catch (ex) {
-      box.textContent = '';
+  // The service cards, kept current every STATUS_EVERY_SECS while the tab is visible, and paused while a restart runs.
+  // After the admin's own restart the cards are rebuilt (force), so "Working..." never lingers.
+  const liveServices = ui.live(() => api('GET', '/api/admin/v1/services', undefined, { etag: true }), {
+    every: 'STATUS_EVERY_SECS',
+    when: appShownNow,
+    skip: () => servicesBusy,
+    notice: $('services'),
+    render(data, ctx) {
+      ui.rows($('services'), data.services, serviceCard, { key: (svc) => svc.name, force: ctx.force, sig: (svc) => JSON.stringify([svc, servicesBusy]) });
+      loadCpa();
+      const rec = $('services-recent');
+      rec.textContent = data.recent.length ? '' : 'None yet.';
+      for (const r of data.recent) {
+        const line = document.createElement('div');
+        line.textContent = new Date(r.at * 1000).toLocaleString() + ' · ' + r.action + ' ' + r.service + (r.ok ? '' : ' · failed');
+        rec.appendChild(line);
+      }
+    },
+    onError(ex) {
+      if (ex.message === 'Signed out') return;
+      const box = $('services');
       const p = document.createElement('p');
       p.className = 'error';
       p.textContent = ex.message;
-      box.appendChild(p);
-      return;
-    }
-    box.textContent = '';
-    for (const svc of data.services) box.appendChild(serviceCard(svc));
-    loadCpa();
-    const rec = $('services-recent');
-    rec.textContent = data.recent.length ? '' : 'None yet.';
-    for (const r of data.recent) {
-      const line = document.createElement('div');
-      line.textContent = new Date(r.at * 1000).toLocaleString() + ' · ' + r.action + ' ' + r.service + (r.ok ? '' : ' · failed');
-      rec.appendChild(line);
-    }
-  }
+      box.replaceChildren(p);
+    },
+  });
+  function loadServices() { return liveServices.start(); }
   // ---- CLIProxyAPI accounts: connect Claude or ChatGPT without a terminal.
   let login = null; // { state } while a login is open
 
@@ -899,7 +923,7 @@
     edit.dataset.action = 'edit';
     const del = button('Delete', 'danger', async () => {
       if (!confirm('Delete provider "' + p.name + '"?')) return;
-      try { await api('DELETE', '/api/admin/v1/providers/' + encodeURIComponent(p.id)); loadProviders(); } catch (ex) { pageError(ex.message); }
+      try { await api('DELETE', '/api/admin/v1/providers/' + encodeURIComponent(p.id)); await loadProviders(); } catch (ex) { pageError(ex.message); }
     });
     del.dataset.action = 'delete';
     if (p.managed) {
@@ -933,18 +957,19 @@
     return b;
   }
 
+  // The provider cards, current every LIVE_EVERY_SECS while the tab is visible. The approved-models draft below is not
+  // touched by a check: it is read when the page opens and after the admin's own change (loadProviders).
+  const liveProviders = ui.live(() => api('GET', '/api/admin/v1/providers', undefined, { etag: true }), {
+    when: appShownNow,
+    notice: $('providers'),
+    render(list, ctx) {
+      providersById = new Map(list.map((p) => [p.id, p]));
+      ui.rows($('providers'), list, providerCard, { fresh: !ctx.first, force: ctx.force, noun: ['provider', 'providers'], empty: 'No providers yet. Add one so clients have something to talk to.' });
+    },
+    onError(ex) { if (ex.message !== 'Signed out') pageError(ex.message); },
+  });
   async function loadProviders() {
-    const list = await api('GET', '/api/admin/v1/providers');
-    const box = $('providers');
-    box.textContent = '';
-    if (!list.length) {
-      const p = document.createElement('p');
-      p.className = 'hint';
-      p.textContent = 'No providers yet. Add one so clients have something to talk to.';
-      box.appendChild(p);
-    }
-    for (const p of list) box.appendChild(providerCard(p));
-    providersById = new Map(list.map((p) => [p.id, p]));
+    await liveProviders.start();
     await loadCatalog();
   }
 
@@ -1546,53 +1571,35 @@
     return ts ? new Date(ts * 1000).toLocaleString() : 'never';
   }
 
+  // The users, their clients and the pairing box's "Connected": one live read of both lists, every LIVE_EVERY_SECS while the
+  // tab is visible and right after the admin's own change (loadUsers, loadClients).
   let userNames = {};
-  async function loadUsers() {
-    const users = await api('GET', '/api/admin/v1/users');
+  let knownClients = [];
+  let pairing = null; // { user, known: Set of client ids before the key was made, done }
+  const liveClients = ui.live(() => Promise.all([
+    api('GET', '/api/admin/v1/users', undefined, { etag: true }),
+    api('GET', '/api/admin/v1/clients', undefined, { etag: true }),
+  ]), {
+    when: appShownNow,
+    notice: $('users'),
+    render([users, clients], ctx) {
+      renderUsers(users, ctx);
+      renderClients(clients, ctx);
+    },
+    onError(ex) { if (ex.message !== 'Signed out') pageError(ex.message); },
+  });
+  const loadUsers = () => liveClients.refresh();
+  function loadClients() { return liveClients.start(); }
+
+  function renderUsers(users, ctx) {
     userNames = Object.fromEntries(users.map((u) => [u.id, u.name]));
     const box = $('users');
-    box.textContent = '';
-    if (!users.length) {
-      const p = document.createElement('p');
-      p.className = 'hint';
-      p.textContent = 'No users yet. Add one to pair an app for them.';
-      box.appendChild(p);
-    }
     // One row for each user, with the emergency stop for that person: Pause stops their replies (new and running) until
-    // Resume. Everything is set as text.
-    for (const u of users) {
-      const row = document.createElement('div');
-      row.className = 'sealed-row';
-      row.dataset.user = u.id;
-      const what = document.createElement('span');
-      what.className = 'what';
-      what.textContent = u.name + (u.paused ? ' · replies paused' : '');
-      row.appendChild(what);
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.className = 'secondary';
-      b.dataset.action = u.paused ? 'resume' : 'pause';
-      b.textContent = u.paused ? 'Resume replies' : 'Pause replies';
-      b.addEventListener('click', async () => {
-        show($('user-error'), false);
-        try {
-          await api('POST', '/api/admin/v1/users/' + encodeURIComponent(u.id) + '/' + (u.paused ? 'resume' : 'pause'));
-          await loadUsers();
-        } catch (ex) {
-          $('user-error').textContent = ex.message;
-          show($('user-error'), true);
-        }
-      });
-      row.appendChild(b);
-      const del = document.createElement('button');
-      del.type = 'button';
-      del.className = 'secondary danger';
-      del.dataset.action = 'delete';
-      del.textContent = 'Delete…';
-      del.addEventListener('click', () => askToDelete(row, u, del));
-      row.appendChild(del);
-      box.appendChild(row);
-    }
+    // Resume. Everything is set as text. A row with its delete confirmation open is left alone.
+    ui.rows(box, users, userRow, {
+      fresh: !ctx.first, force: ctx.force, noun: ['user', 'users'], keep: (row) => !!row.querySelector('.confirm-delete'),
+      empty: 'No users yet. Add one to pair an app for them.',
+    });
     const sel = $('d-user');
     const keep = sel.value;
     sel.textContent = '';
@@ -1604,6 +1611,40 @@
     }
     if (users.some((u) => u.id === keep)) sel.value = keep;
     $('pair-form').querySelector('button[type=submit]').disabled = users.length === 0;
+  }
+
+  function userRow(u) {
+    const row = document.createElement('div');
+    row.className = 'sealed-row';
+    row.dataset.user = u.id;
+    const what = document.createElement('span');
+    what.className = 'what';
+    what.textContent = u.name + (u.paused ? ' · replies paused' : '');
+    row.appendChild(what);
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'secondary';
+    b.dataset.action = u.paused ? 'resume' : 'pause';
+    b.textContent = u.paused ? 'Resume replies' : 'Pause replies';
+    b.addEventListener('click', async () => {
+      show($('user-error'), false);
+      try {
+        await api('POST', '/api/admin/v1/users/' + encodeURIComponent(u.id) + '/' + (u.paused ? 'resume' : 'pause'));
+        await loadUsers();
+      } catch (ex) {
+        $('user-error').textContent = ex.message;
+        show($('user-error'), true);
+      }
+    });
+    row.appendChild(b);
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'secondary danger';
+    del.dataset.action = 'delete';
+    del.textContent = 'Delete…';
+    del.addEventListener('click', () => askToDelete(row, u, del));
+    row.appendChild(del);
+    return row;
   }
 
   // Deleting a person removes their personal space, their clients and their sign-ins for good (the audit records stay).
@@ -1649,7 +1690,6 @@
       try {
         await api('DELETE', '/api/admin/v1/users/' + encodeURIComponent(u.id));
         await loadUsers();
-        await loadClients();
       } catch (ex) {
         err.textContent = ex.message;
         err.hidden = false;
@@ -1676,46 +1716,52 @@
     }
   });
 
-  async function loadClients() {
-    await loadUsers();
-    const list = await api('GET', '/api/admin/v1/clients');
-    const box = $('clients');
-    box.textContent = '';
-    if (!list.length) {
-      const p = document.createElement('p');
-      p.className = 'hint';
-      p.textContent = 'No clients are paired yet.';
-      box.appendChild(p);
+  function renderClients(list, ctx) {
+    knownClients = list;
+    ui.rows($('clients'), list, clientCard, {
+      fresh: !ctx.first, force: ctx.force, noun: ['client', 'clients'], empty: 'No clients are paired yet.',
+      sig: (d) => JSON.stringify([d, userNames[d.user_id]]),
+    });
+    // The pairing box: the key is used once, so a client that was not there when it was made, for that user, is the app.
+    if (pairing && !pairing.done) {
+      const hit = list.find((d) => !pairing.known.has(d.id) && d.user_id === pairing.user);
+      if (hit) { pairing.done = true; showPairing('ok', 'Connected', ' ' + hit.name + ' is paired.'); }
     }
-    for (const d of list) {
-      const card = document.createElement('div');
-      card.className = 'card';
-      card.dataset.client = d.id;
-      const head = document.createElement('div');
-      head.className = 'row';
-      const name = document.createElement('span');
-      name.className = 'name';
-      name.textContent = d.name;
-      const badge = document.createElement('span');
-      badge.className = 'badge';
-      badge.textContent = d.revoked ? 'revoked' : 'active';
-      const sp = document.createElement('span');
-      sp.className = 'spacer';
-      head.append(name, badge, sp);
-      if (!d.revoked) {
-        const revoke = button('Revoke', 'danger', async () => {
-          if (!confirm('Revoke "' + d.name + '"? It will be signed out and must be paired again.')) return;
-          try { await api('POST', '/api/admin/v1/clients/' + encodeURIComponent(d.id) + '/revoke'); loadClients(); } catch (ex) { pageError(ex.message); }
-        });
-        revoke.dataset.action = 'revoke';
-        head.appendChild(revoke);
-      }
-      const meta = document.createElement('div');
-      meta.className = 'meta';
-      meta.textContent = (userNames[d.user_id] || 'unknown user') + ' · paired ' + when(d.created_at) + ' · last seen ' + when(d.last_seen);
-      card.append(head, meta);
-      box.appendChild(card);
+  }
+
+  function clientCard(d) {
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.dataset.client = d.id;
+    const head = document.createElement('div');
+    head.className = 'row';
+    const name = document.createElement('span');
+    name.className = 'name';
+    name.textContent = d.name;
+    const badge = document.createElement('span');
+    badge.className = 'badge';
+    badge.textContent = d.revoked ? 'revoked' : 'active';
+    const sp = document.createElement('span');
+    sp.className = 'spacer';
+    head.append(name, badge, sp);
+    if (!d.revoked) {
+      const revoke = button('Revoke', 'danger', async () => {
+        if (!confirm('Revoke "' + d.name + '"? It will be signed out and must be paired again.')) return;
+        try { await api('POST', '/api/admin/v1/clients/' + encodeURIComponent(d.id) + '/revoke'); await loadClients(); } catch (ex) { pageError(ex.message); }
+      });
+      revoke.dataset.action = 'revoke';
+      head.appendChild(revoke);
     }
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    meta.textContent = (userNames[d.user_id] || 'unknown user') + ' · paired ' + when(d.created_at) + ' · last seen ' + when(d.last_seen);
+    card.append(head, meta);
+    return card;
+  }
+
+  // The state line of the pairing box: a word and a symbol (rule 37), read out politely.
+  function showPairing(state, word, more) {
+    $('pairing-status').replaceChildren(ui.status(state, word), more || '');
   }
 
   on('pair-form', 'submit', async (e) => {
@@ -1723,8 +1769,12 @@
     const err = $('pair-error');
     show(err, false);
     try {
-      const r = await api('POST', '/api/admin/v1/users/' + encodeURIComponent($('d-user').value) + '/pairing-keys', { name: $('d-name').value.trim() });
+      const user = $('d-user').value;
+      const known = new Set(knownClients.map((d) => d.id));
+      const r = await api('POST', '/api/admin/v1/users/' + encodeURIComponent(user) + '/pairing-keys', { name: $('d-name').value.trim() });
       $('pairing-string').value = r.pairing;
+      pairing = { user, known, done: false };
+      showPairing('pending', 'Waiting for the app to pair');
       show($('pairing-out'), true);
     } catch (ex) {
       err.textContent = ex.message;
@@ -1930,11 +1980,6 @@
       pageError('The admin could not load its settings. Reload the page.');
       return;
     }
-    // Keep the state fresh while the tab is on screen.
-    setInterval(() => {
-      const sec = document.querySelector('section[data-tab="services"]');
-      if (sec && !sec.hidden && !servicesBusy && !document.hidden) loadServices().catch(() => {});
-    }, K.STATUS_EVERY_SECS * MS);
     route();
   })();
 })();
