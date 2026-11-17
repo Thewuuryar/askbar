@@ -999,8 +999,8 @@
       'aria-label': 'Restart ' + info.title, disabled: servicesBusy,
     });
     const row = ui.el('tr', { 'data-name': svc.name },
-      ui.el('td', null, ui.el('strong', { class: 'name', text: info.title })),
-      ui.el('td', { text: info.does }),
+      ui.el('td', null, ui.el('strong', { class: 'name', text: info.title }), ui.el('div', { class: 'sub only-phone', text: info.does })),
+      ui.el('td', { class: 'col-does', text: info.does }),
       ui.el('td', null, ui.status(svc.state === 'running' ? 'ok' : 'warning', word), detail ? ui.el('div', { class: 'sub', text: detail }) : null),
       ui.el('td', { class: 'actions' }, restart));
     restart.addEventListener('click', () => ui.rowConfirm(row, {
@@ -2270,7 +2270,9 @@
     return secs + ' seconds = ' + shown + (shown === '1' ? ' minute' : ' minutes');
   }
   function showTimeoutMinutes() {
-    $('s-gen-timeout-min').textContent = minutesText(parseInt($('s-gen-timeout').value, 10));
+    // The hint already says the default in minutes, so the conversion shows only for another value.
+    const secs = parseInt($('s-gen-timeout').value, 10);
+    $('s-gen-timeout-min').textContent = secs === K.DEFAULT_GENERATION_TIMEOUT_SECS ? '' : minutesText(secs);
   }
   on('s-gen-timeout', 'input', showTimeoutMinutes);
 

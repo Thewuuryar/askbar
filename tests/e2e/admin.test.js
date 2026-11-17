@@ -849,6 +849,23 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     assert.equal(await page.locator('#cpa-panel, #cpa-accounts, #cpa-connect-anthropic').count(), 0, 'the Claude and ChatGPT accounts moved to Providers');
     assert.deepEqual(await page.$$eval('#services tr[data-name]', (c) => c.map((x) => x.dataset.name)), ['server', 'model-gateway', 'alerter', 'admin', 'caddy', 'cpa']);
     assert.equal(await page.locator('#services-recent').count(), 0, 'there is no list of recent restarts');
+    // Every visible cell has a visible header over it, and a service name never breaks mid-word.
+    const misaligned = await page.evaluate(() => {
+      const shown = (e) => e.getClientRects().length > 0;
+      const heads = [...document.querySelectorAll('#services-table thead th')].filter(shown);
+      const out = [];
+      for (const tr of document.querySelectorAll('#services tr[data-name]')) {
+        const cells = [...tr.children].filter(shown);
+        if (cells.length !== heads.length) { out.push(tr.dataset.name + ': ' + cells.length + ' cells, ' + heads.length + ' headers'); continue; }
+        cells.forEach((c, i) => { const a = c.getBoundingClientRect(); const h = heads[i].getBoundingClientRect(); if (Math.abs(a.left - h.left) > 1) out.push(tr.dataset.name + ' column ' + i); });
+        const n = tr.querySelector('.name');
+        const cell = n.closest('td');
+        if (getComputedStyle(n).overflowWrap !== 'normal' || getComputedStyle(n).wordBreak !== 'normal') out.push(tr.dataset.name + ' name may break mid-word');
+        if (cell.scrollWidth > cell.clientWidth + 1) out.push(tr.dataset.name + ' name does not fit');
+      }
+      return out;
+    });
+    assert.deepEqual(misaligned, []);
     // The alerter runs here too (ADR 0055), so it joins the list between the gateway and the admin.
     assert.match(await page.innerText('#services tr[data-name="alerter"]'), /running/i);
     // Its daily release check asked the stand-in GitHub, with a fixed User-Agent and nothing else about the install, and the row says so (ADR 0055).
@@ -1401,7 +1418,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.waitForFunction(() => document.getElementById('s-gen-timeout').value === '300');
     assert.equal(await page.getAttribute('#s-gen-timeout', 'min'), '30');
     assert.equal(await page.getAttribute('#s-gen-timeout', 'max'), '3600');
-    assert.equal(await page.innerText('#s-gen-timeout-min'), '300 seconds = 5 minutes');
+    assert.equal(await page.innerText('#s-gen-timeout-min'), '', 'the default is already in the hint, so nothing repeats it');
     await page.fill('#s-width', '900'); // the previous step left an invalid width in the form
     await page.fill('#s-gen-timeout', '120');
     assert.equal(await page.innerText('#s-gen-timeout-min'), '120 seconds = 2 minutes');
