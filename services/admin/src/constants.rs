@@ -40,15 +40,27 @@ pub const FRESH_SIGNIN_SECS: i64 = 10 * 60;
 /// The same bounds the server enforces on the snapshot.
 pub const MIN_GENERATION_TIMEOUT_SECS: u32 = 30;
 pub const MAX_GENERATION_TIMEOUT_SECS: u32 = 3600;
+pub const DEFAULT_GENERATION_TIMEOUT_SECS: u32 = askbar_proto::DEFAULT_GENERATION_TIMEOUT_SECS;
 /// The same floor the server enforces (and the audit database's own trigger): a week.
 pub const MIN_AUDIT_RETENTION_DAYS: u32 = 7;
 pub const MAX_AUDIT_RETENTION_DAYS: u32 = 3650;
 pub const DEFAULT_UNSEAL_IDLE_MINUTES: u32 = askbar_proto::audit::DEFAULT_UNSEAL_IDLE_MINUTES;
 pub const DEFAULT_UNSEAL_TOTAL_MINUTES: u32 = askbar_proto::audit::DEFAULT_UNSEAL_TOTAL_MINUTES;
+pub const MIN_UNSEAL_MINUTES: u32 = 1;
 pub const MAX_UNSEAL_MINUTES: u32 = 12 * 60;
+pub const MIN_HISTORY_TURNS: u32 = 0;
 pub const MAX_HISTORY_TURNS: u32 = 1000;
 pub const MAX_NOTICE_CHARS: usize = 2000;
 pub const MAX_WARNING_CHARS: usize = 300;
+// The display defaults' ranges (General). The server checks the same bounds on save.
+pub const MIN_DISPLAY_WIDTH_PX: u32 = 300;
+pub const MAX_DISPLAY_WIDTH_PX: u32 = 4000;
+pub const MIN_DISPLAY_MAX_HEIGHT_PX: u32 = 200;
+pub const MAX_DISPLAY_MAX_HEIGHT_PX: u32 = 4000;
+pub const MIN_DISPLAY_HISTORY_WIDTH_PX: u32 = 120;
+pub const MAX_DISPLAY_HISTORY_WIDTH_PX: u32 = 1000;
+pub const MIN_DISPLAY_TOP_PERCENT: f64 = 0.0;
+pub const MAX_DISPLAY_TOP_PERCENT: f64 = 0.8;
 pub const API_KEY_MAX_NAME_CHARS: usize = 60;
 /// The longest name of a user or a client (the API refuses more; the forms stop typing at it).
 pub const NAME_MAX_CHARS: usize = 60;
@@ -132,6 +144,7 @@ struct Range<T> {
 struct UnsealMinutes {
     default_idle: u32,
     default_total: u32,
+    min: u32,
     max: u32,
 }
 
@@ -153,11 +166,17 @@ struct Constants {
     lockout_secs: i64,
     fresh_signin_secs: i64,
     generation_timeout_secs: Range<u32>,
+    default_generation_timeout_secs: u32,
     audit_retention_days: Range<u32>,
     unseal_minutes: UnsealMinutes,
+    min_history_turns: u32,
     max_history_turns: u32,
     max_notice_chars: usize,
     max_warning_chars: usize,
+    display_width_px: Range<u32>,
+    display_max_height_px: Range<u32>,
+    display_history_width_px: Range<u32>,
+    display_top_percent: Range<f64>,
     api_key_max_name_chars: usize,
     name_max_chars: usize,
     pair_code_ttl_secs: i64,
@@ -200,15 +219,22 @@ fn current() -> Constants {
         lockout_secs: LOCKOUT_SECS,
         fresh_signin_secs: FRESH_SIGNIN_SECS,
         generation_timeout_secs: Range { min: MIN_GENERATION_TIMEOUT_SECS, max: MAX_GENERATION_TIMEOUT_SECS },
+        default_generation_timeout_secs: DEFAULT_GENERATION_TIMEOUT_SECS,
         audit_retention_days: Range { min: MIN_AUDIT_RETENTION_DAYS, max: MAX_AUDIT_RETENTION_DAYS },
         unseal_minutes: UnsealMinutes {
             default_idle: DEFAULT_UNSEAL_IDLE_MINUTES,
             default_total: DEFAULT_UNSEAL_TOTAL_MINUTES,
+            min: MIN_UNSEAL_MINUTES,
             max: MAX_UNSEAL_MINUTES,
         },
+        min_history_turns: MIN_HISTORY_TURNS,
         max_history_turns: MAX_HISTORY_TURNS,
         max_notice_chars: MAX_NOTICE_CHARS,
         max_warning_chars: MAX_WARNING_CHARS,
+        display_width_px: Range { min: MIN_DISPLAY_WIDTH_PX, max: MAX_DISPLAY_WIDTH_PX },
+        display_max_height_px: Range { min: MIN_DISPLAY_MAX_HEIGHT_PX, max: MAX_DISPLAY_MAX_HEIGHT_PX },
+        display_history_width_px: Range { min: MIN_DISPLAY_HISTORY_WIDTH_PX, max: MAX_DISPLAY_HISTORY_WIDTH_PX },
+        display_top_percent: Range { min: MIN_DISPLAY_TOP_PERCENT, max: MAX_DISPLAY_TOP_PERCENT },
         api_key_max_name_chars: API_KEY_MAX_NAME_CHARS,
         name_max_chars: NAME_MAX_CHARS,
         pair_code_ttl_secs: PAIR_CODE_TTL_SECS,
@@ -279,7 +305,13 @@ mod tests {
             "LIVE_EVERY_SECS",
             "LOCKOUT_SECS",
             "MAX_FAILURES",
+            "DEFAULT_GENERATION_TIMEOUT_SECS",
+            "DISPLAY_HISTORY_WIDTH_PX",
+            "DISPLAY_MAX_HEIGHT_PX",
+            "DISPLAY_TOP_PERCENT",
+            "DISPLAY_WIDTH_PX",
             "MAX_HISTORY_TURNS",
+            "MIN_HISTORY_TURNS",
             "MAX_NOTICE_CHARS",
             "MAX_PASSWORD_CHARS",
             "MAX_RESTARTS_PER_MINUTE",
@@ -309,6 +341,9 @@ mod tests {
         assert_eq!(v["GENERATION_TIMEOUT_SECS"]["min"], MIN_GENERATION_TIMEOUT_SECS);
         assert_eq!(v["AUDIT_RETENTION_DAYS"]["max"], MAX_AUDIT_RETENTION_DAYS);
         assert_eq!(v["UNSEAL_MINUTES"]["max"], 720);
+        assert_eq!(v["UNSEAL_MINUTES"]["min"], MIN_UNSEAL_MINUTES);
+        assert_eq!(v["DISPLAY_WIDTH_PX"]["min"], MIN_DISPLAY_WIDTH_PX);
+        assert_eq!(v["DISPLAY_TOP_PERCENT"]["max"], MAX_DISPLAY_TOP_PERCENT);
         assert_eq!(v["SERVICES"].as_array().unwrap().len(), SERVICES.len());
         assert_eq!(v["BACKOFF_SECS"], serde_json::json!([10, 20, 40, 60]));
         assert_eq!(v["REFERENCE_ROOT"], "docs/reference");

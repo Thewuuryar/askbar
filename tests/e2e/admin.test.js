@@ -1447,25 +1447,111 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await openSettings();
     assert.equal(await page.isChecked('#s-newest-first'), true);
   });
-  await step('kill switch: off by default, aborts running replies by default; both save and reload', async () => {
+  await step('general: the save bar counts the changed fields, Discard restores them, and Save sends one PUT', async () => {
+    await openSettings();
+    await page.waitForFunction(() => document.getElementById('s-gen-timeout').value !== '');
+    const bar = '#settings-form-save-bar';
+    const text = async () => page.innerText('#settings-form-save-bar [data-save-text]');
+    assert.equal(await page.isVisible(bar), false, 'no bar with nothing changed');
+    const prompt = await page.inputValue('#s-prompt');
+    const timeout = await page.inputValue('#s-gen-timeout');
+    const other = timeout === '130' ? '140' : '130';
+    await page.fill('#s-gen-timeout', other);
+    await page.waitForSelector(bar + ':not([hidden])');
+    assert.equal(await text(), '1 unsaved change: Generation timeout (seconds)');
+    await page.fill('#s-prompt', prompt + ' x');
+    assert.equal(await text(), '2 unsaved changes');
+    await page.fill('#s-prompt', prompt); // reverted by hand
+    assert.equal(await text(), '1 unsaved change: Generation timeout (seconds)');
+    await page.fill('#s-gen-timeout', timeout); // reverted by hand: back to none
+    assert.equal(await page.isVisible(bar), false, 'the bar goes when nothing differs');
+    // Discard puts every field back.
+    await page.fill('#s-gen-timeout', other);
+    await page.fill('#s-prompt', prompt + ' y');
+    await page.click(bar + ' [data-save-discard]');
+    assert.equal(await page.inputValue('#s-gen-timeout'), timeout);
+    assert.equal(await page.inputValue('#s-prompt'), prompt);
+    assert.equal(await page.isVisible(bar), false);
+    // Save sends one PUT, and the bar clears once the server has the values.
+    let puts = 0;
+    const count = (r) => { if (r.method() === 'PUT' && r.url().endsWith('/api/admin/v1/settings')) puts += 1; };
+    page.on('request', count);
+    try {
+      await page.fill('#s-gen-timeout', other);
+      await page.fill('#s-prompt', prompt + ' z');
+      await page.click('#settings-form-save-bar button[type=submit]');
+      await page.waitForSelector('#toasts .toast');
+      assert.equal(puts, 1, 'one PUT for the whole form');
+      assert.equal(await page.isVisible(bar), false, 'saved values are the new base');
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), true, 'no sideways scroll');
+    } finally {
+      page.off('request', count);
+    }
+    // Put the values back as they were.
+    await page.fill('#s-gen-timeout', timeout);
+    await page.fill('#s-prompt', prompt);
+    await page.click('#settings-form-save-bar button[type=submit]');
+    await page.waitForSelector('#toasts .toast');
+  });
+  await step('kill switch: off by default; it asks first and Cancel changes nothing; on and off save alone and the status bar follows', async () => {
+    const K = await page.evaluate(() => window.ui.ready);
     await openSettings();
     await page.waitForFunction(() => document.getElementById('s-gen-timeout').value === '120');
-    assert.equal(await page.isChecked('#s-kill-switch'), false);
+    assert.equal(await page.innerText('#s-kill-state'), 'off');
     assert.equal(await page.isChecked('#s-kill-aborts'), true);
-    await page.check('#s-kill-switch');
-    await page.uncheck('#s-kill-aborts');
-    await page.click('#settings-form button[type=submit]');
+    let puts = 0;
+    const count = (r) => { if (r.method() === 'PUT' && r.url().endsWith('/api/admin/v1/settings')) puts += 1; };
+    page.on('request', count);
+    const box = page.locator('dialog.box[open]');
+    try {
+      await page.click('#s-kill-switch');
+      await box.waitFor();
+      assert.match(await box.innerText(), /Turn on the kill switch\?/);
+      await box.locator('[data-confirm-cancel]').click();
+      await box.waitFor({ state: 'detached' });
+      assert.equal(await page.innerText('#s-kill-state'), 'off');
+      assert.equal(puts, 0, 'Cancel sends nothing');
+      // On: the box says what happens to the running replies, the switch saves, and the status bar follows within one poll.
+      await page.click('#s-kill-switch');
+      await box.waitFor();
+      assert.match(await box.innerText(), /The replies running now are stopped\./);
+      await box.locator('[data-confirm-action]').click();
+      await box.waitFor({ state: 'detached' });
+      await page.waitForFunction(() => document.getElementById('s-kill-state').textContent === 'on');
+      assert.equal(await page.innerText('#s-kill-switch'), 'Turn off kill switch');
+      assert.equal(puts, 1);
+      await page.waitForFunction(() => document.querySelector('#sb-kill .status-word').textContent === 'Kill switch: on', null, { timeout: K.STATUS_EVERY_SECS * 3000 });
+      // Unsaved edits in the form are not sent by the switch.
+      await page.uncheck('#s-kill-aborts');
+      await page.waitForSelector('#settings-form-save-bar:not([hidden])');
+      await page.click('#s-kill-switch');
+      await box.waitFor();
+      assert.match(await box.innerText(), /Replies start again for everyone\./);
+      await box.locator('[data-confirm-action]').click();
+      await box.waitFor({ state: 'detached' });
+      await page.waitForFunction(() => document.getElementById('s-kill-state').textContent === 'off');
+      await page.waitForFunction(() => document.querySelector('#sb-kill .status-word').textContent === 'Kill switch: off', null, { timeout: K.STATUS_EVERY_SECS * 3000 });
+      assert.equal(await page.isChecked('#s-kill-aborts'), false, 'the unsaved choice stays in the form');
+      assert.equal(await page.isVisible('#settings-form-save-bar'), true);
+      assert.equal(puts, 2);
+    } finally {
+      page.off('request', count);
+      // Whatever failed above, the switch is left off for the later steps.
+      await page.evaluate(async () => {
+        const h = { 'X-Askbar-Admin': '1', 'Content-Type': 'application/json' };
+        const s = await (await fetch('/api/admin/v1/settings', { headers: h })).json();
+        if (s.kill_switch) await fetch('/api/admin/v1/settings', { method: 'PUT', headers: h, body: JSON.stringify({ system_prompt: s.system_prompt, display: s.display, kill_switch: false }) });
+      });
+    }
+    // Save the choice (aborts off), then reload: it is kept, and the switch is still off.
+    await page.click('#settings-form-save-bar button[type=submit]');
     await page.waitForSelector('#toasts .toast');
-    await page.uncheck('#s-kill-switch'); // unsaved changes, undone by the reload below
-    await page.check('#s-kill-aborts');
     await openSettings();
-    await page.waitForFunction(() => document.getElementById('s-kill-switch').checked === true);
-    assert.equal(await page.isChecked('#s-kill-switch'), true);
-    assert.equal(await page.isChecked('#s-kill-aborts'), false);
-    // And back, so later steps see an ordinary server.
-    await page.uncheck('#s-kill-switch');
+    await page.waitForFunction(() => document.getElementById('s-kill-aborts').checked === false);
+    assert.equal(await page.innerText('#s-kill-state'), 'off');
+    // Back to the default: aborts on, saved.
     await page.check('#s-kill-aborts');
-    await page.click('#settings-form button[type=submit]');
+    await page.click('#settings-form-save-bar button[type=submit]');
     await page.waitForSelector('#toasts .toast');
   });
   await step('alerts: not set up shows a banner; ntfy settings are saved, tested and removed, and never shown again (ADR 0055)', async () => {

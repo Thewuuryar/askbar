@@ -2274,17 +2274,27 @@
   }
   on('s-gen-timeout', 'input', showTimeoutMinutes);
 
+  // The kill switch is not a field of the form: its own button changes it, after ui.confirm, and saves that alone.
+  // The other settings are left as they are (see the handler below).
+  let settingsTrack = null;
+  function showKill(on) {
+    $('s-kill-state').textContent = on ? 'on' : 'off';
+    $('s-kill-switch').textContent = on ? 'Turn off kill switch' : 'Turn on kill switch';
+    $('s-kill-switch').classList.toggle('btn-danger', !on);
+    $('s-kill-switch').classList.toggle('btn-secondary', on);
+  }
+  // The server always sends these when it is read, so the form takes them as they are.
   async function loadSettings() {
     const s = await api('GET', '/api/admin/v1/settings');
-    $('s-retention').value = s.audit_retention_days == null ? 30 : s.audit_retention_days;
-    $('s-unseal-idle').value = s.unseal_idle_minutes == null ? 15 : s.unseal_idle_minutes;
-    $('s-unseal-total').value = s.unseal_total_minutes == null ? 60 : s.unseal_total_minutes;
+    $('s-retention').value = s.audit_retention_days;
+    $('s-unseal-idle').value = s.unseal_idle_minutes;
+    $('s-unseal-total').value = s.unseal_total_minutes;
     $('s-key-id').textContent = s.audit_key_id || 'none';
-    $('s-kill-switch').checked = !!s.kill_switch;
+    showKill(!!s.kill_switch);
     $('s-kill-aborts').checked = s.kill_switch_aborts_running !== false;
-    $('s-gen-timeout').value = s.generation_timeout_secs == null ? 300 : s.generation_timeout_secs;
+    $('s-gen-timeout').value = s.generation_timeout_secs;
     showTimeoutMinutes();
-    $('s-history-turns').value = s.history_turns == null ? 0 : s.history_turns;
+    $('s-history-turns').value = s.history_turns;
     $('s-prompt').value = s.system_prompt;
     $('s-notice-on').checked = s.privacy_notice_enabled !== false;
     $('s-notice-text').value = s.privacy_notice_text || '';
@@ -2298,6 +2308,8 @@
     $('s-hide-on-blur').checked = !!s.display.hide_on_blur;
     $('s-newest-first').checked = !!s.display.newest_first;
     show($('settings-error'), false);
+    // The first load starts the save bar from these values; later loads (after a save) make them the new base.
+    if (settingsTrack) settingsTrack.saved(); else settingsTrack = ui.trackChanges($('settings-form'));
   }
 
   // ---- How alerts are delivered (ADR 0055). The values are secrets: they are never shown, so the fields are emptied after a
@@ -2400,7 +2412,6 @@
         audit_retention_days: parseInt($('s-retention').value, 10),
         unseal_idle_minutes: parseInt($('s-unseal-idle').value, 10),
         unseal_total_minutes: parseInt($('s-unseal-total').value, 10),
-        kill_switch: $('s-kill-switch').checked,
         kill_switch_aborts_running: $('s-kill-aborts').checked,
         privacy_notice_enabled: $('s-notice-on').checked,
         privacy_notice_text: $('s-notice-text').value,
@@ -2416,7 +2427,36 @@
           newest_first: $('s-newest-first').checked,
         },
       });
+      if (settingsTrack) settingsTrack.saved();
       ui.toast('Settings saved. Clients pick them up on their next message or when their window opens.');
+    } catch (ex) {
+      err.textContent = ex.message;
+      show(err, true);
+    }
+  });
+
+  // The kill switch: asks first (Cancel changes nothing), then saves only itself. The PUT carries the two fields the
+  // server always needs from the stored copy, so unsaved edits in the form are not sent.
+  on('s-kill-switch', 'click', async () => {
+    const err = $('settings-error');
+    show(err, false);
+    try {
+      const now = await api('GET', '/api/admin/v1/settings');
+      const turningOn = !now.kill_switch;
+      const ok = await ui.confirm(turningOn
+        ? {
+          title: 'Turn on the kill switch?',
+          body: 'No new replies start for anyone, and the messages waiting in queues are cleared. '
+            + (now.kill_switch_aborts_running !== false ? 'The replies running now are stopped.' : 'The replies running now finish.'),
+          action: 'Turn on kill switch',
+          kind: 'danger',
+        }
+        : { title: 'Turn off the kill switch?', body: 'Replies start again for everyone.', action: 'Turn off kill switch', kind: 'primary' });
+      if (!ok) return;
+      await api('PUT', '/api/admin/v1/settings', { system_prompt: now.system_prompt, display: now.display, kill_switch: turningOn });
+      showKill(turningOn);
+      checkKill();
+      ui.toast(turningOn ? 'The kill switch is on. No new replies start.' : 'The kill switch is off. Replies start again.');
     } catch (ex) {
       err.textContent = ex.message;
       show(err, true);

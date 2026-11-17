@@ -151,6 +151,7 @@ section[data-tab^="audit/"] h3 { margin-top: 22px; }
 /* Fields (rules 10, 22-24, 26) */
 .field { margin: var(--space-3) 0; }
 .field label { margin: 0; }
+.field > label { font-size: var(--text-s); font-weight: var(--weight-bold); }
 .field .optional { color: var(--muted); font-weight: var(--weight-regular); }
 .field .hint { margin: var(--space-1) 0 0; }
 .field-error { margin: var(--space-1) 0 0; font-size: var(--text-xs); }
@@ -601,6 +602,7 @@ input, select { min-height: var(--target-min); }
 .sec-sec { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: var(--space-2) var(--space-5); padding: var(--space-4) 0; border-top: 1px solid var(--line); }
 .sec-sec:first-child { border-top: 0; padding-top: 0; }
 .sec-sec h3 { margin: 0; }
+.danger-zone h3 { color: var(--danger); }
 .sec-lab .hint { margin: var(--space-1) 0 0; }
 .sec-fields { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; max-width: 640px; margin: 0; }
 .sec-fields .field { margin: 0; }
