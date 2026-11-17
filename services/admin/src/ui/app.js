@@ -70,6 +70,7 @@
     { id: 'network', load: loadNetwork },
     { id: 'security', load: loadKeys },
     { id: 'backup', load: loadBackup },
+    { id: 'notifications', load: loadAlerts },
     { id: 'restore', load: loadRestore },
   ];
   let appShown = false;
@@ -327,13 +328,13 @@
   // row per condition below. Severity: critical = the whole admin cannot do its job or the log cannot be trusted (server
   // offline, token rejected, audit chain broken); warning = something to fix soon (alert delivery not set up, failing or
   // unreachable; sealed content open); info = the day's recent `alerts` entries. `href` is where it is fixed. Only a
-  // critical row pops up. Delivery is fixed in Settings, where ntfy and email are set today (Notifications, step 5.x).
+  // critical row pops up. Delivery is fixed in Notifications, where ntfy and email are set.
   const BELL = {
     offline: { severity: 'critical', fix: 'Services', href: '/admin/services/', text: "The server is offline. Changes, tests, clients and backups won't work until it is back." },
     rejected: { severity: 'critical', fix: 'Services', href: '/admin/services/', text: "The server rejected this admin's token. Changes can't be saved until it is replaced." },
     chain: { severity: 'critical', fix: 'Audit', href: '/admin/audit/calls/', text: 'The audit records no longer match what the admin stored.' },
-    not_set_up: { severity: 'warning', fix: 'Settings', href: '/admin/general/#alerts-form', text: 'Alerts are not set up, so nothing will tell you when something needs attention.' },
-    failing: { severity: 'warning', fix: 'Settings', href: '/admin/general/#alerts-form', text: 'Alert delivery has not worked for half an hour.' },
+    not_set_up: { severity: 'warning', fix: 'Settings', href: '/admin/notifications/#alerts-form', text: 'Alerts are not set up, so nothing will tell you when something needs attention.' },
+    failing: { severity: 'warning', fix: 'Settings', href: '/admin/notifications/#alerts-form', text: 'Alert delivery has not worked for half an hour.' },
     unreachable: { severity: 'warning', fix: 'Services', href: '/admin/services/', text: 'The alerter does not answer, so no alert is delivered.' },
     sealed: { severity: 'warning', fix: 'Audit / Sealed access', href: '/admin/audit/sealed/', text: 'Sealed content is open.' },
   };
@@ -2086,7 +2087,6 @@
     $('s-hide-on-blur').checked = !!s.display.hide_on_blur;
     $('s-newest-first').checked = !!s.display.newest_first;
     show($('settings-error'), false);
-    loadAlerts().catch(() => {});
   }
 
   // ---- How alerts are delivered (ADR 0055). The values are secrets: they are never shown, so the fields are emptied after a

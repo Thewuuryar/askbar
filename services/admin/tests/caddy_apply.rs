@@ -174,6 +174,10 @@ async fn the_ui_is_served_with_its_security_headers() {
     );
     let settings = t.http.get(format!("{}/admin/general/", t.adm)).send().await.unwrap().text().await.unwrap();
     assert!(settings.contains("Rotate the audit key") && settings.contains("id=\"rotate-form\""));
+    // The delivery forms are on Notifications, not General (plan step 5.2).
+    assert!(!settings.contains("id=\"alerts-form\"") && !settings.contains("id=\"email-form\""));
+    let notifications = t.http.get(format!("{}/admin/notifications/", t.adm)).send().await.unwrap().text().await.unwrap();
+    assert!(notifications.contains("id=\"alerts-form\"") && notifications.contains("id=\"email-form\""));
     // /admin (no slash) goes to the page; the root is not the admin's (Caddy never forwards it), so it is a 404.
     let none = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().unwrap();
     assert_eq!(none.get(format!("{}/admin", t.adm)).send().await.unwrap().status(), 303);

@@ -94,7 +94,7 @@ async fn the_old_audit_address_opens_model_calls_and_keeps_its_query() {
         assert!(res.status().is_redirection(), "{from}: {}", res.status());
         assert_eq!(res.headers()["location"], to, "{from}");
     }
-    for slug in ["home", "alerts", "audit/calls", "audit/admin", "audit/sealed", "audit/routing", "reference"] {
+    for slug in ["home", "alerts", "audit/calls", "audit/admin", "audit/sealed", "audit/routing", "notifications", "reference"] {
         assert_eq!(http.get(format!("{url}/admin/{slug}/")).send().await.unwrap().status(), 200, "{slug}");
     }
 }

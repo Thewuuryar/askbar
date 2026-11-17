@@ -1177,7 +1177,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       const req = http.request({ host: '127.0.0.1', port: ntfyPort, path: p, method }, (res) => { let b = ''; res.on('data', (c) => (b += c)); res.on('end', () => resolve(b)); });
       req.on('error', reject); req.end();
     });
-    await openSettings();
+    await openPage('notifications');
     await page.waitForSelector('#alerts-form');
     await page.waitForSelector('#banners [data-banner="alerts"]');
     assert.match(await page.innerText('#banners [data-banner="alerts"]'), /Alerts are not set up/);
@@ -1225,7 +1225,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       const req = http.request({ host: '127.0.0.1', port: smtpSeenPort, path: p, method }, (res) => { let b = ''; res.on('data', (c) => (b += c)); res.on('end', () => resolve(b)); });
       req.on('error', reject); req.end();
     });
-    await openSettings();
+    await openPage('notifications');
     await page.waitForSelector('#email-form');
     assert.equal(await page.innerText('#m-held-host'), 'no');
     // ntfy is set up again first, so a test goes through both channels.
@@ -1285,6 +1285,14 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     page.once('dialog', (d) => d.accept());
     await page.click('#a-remove');
     await page.waitForFunction(() => document.getElementById('a-held-topic').textContent === 'no');
+  });
+  await step('notifications: General holds no delivery fields, and the menu lists Notifications after Backup', async () => {
+    await openPage('general');
+    await page.waitForSelector('#settings-form');
+    assert.equal(await page.locator('#alerts-form, #email-form, #alerts-test-form, #a-server, #m-host').count(), 0, 'General has no delivery fields');
+    const menu = await page.$$eval('#nav a[data-tab]', (as) => as.map((a) => [a.dataset.tab, a.textContent.trim()]));
+    const at = menu.findIndex(([slug]) => slug === 'backup');
+    assert.deepEqual(menu.slice(at, at + 2).map(([slug, label]) => [slug, label]), [['backup', 'Backup'], ['notifications', 'Notifications']]);
   });
   await step('network: hostname, token and networks are saved; the token is write-only', async () => {
     const CF = 'cf_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
@@ -1740,7 +1748,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       await page.click('#bell-button');
       assert.deepEqual(await page.$$eval('#bell-menu [role="group"]', (g) => g.map((x) => x.getAttribute('aria-label'))), ['Critical alerts', 'Warning alerts', 'Info alerts']);
       assert.deepEqual(await page.$$eval('#bell-menu a[role="menuitem"]', (a) => a.map((x) => x.getAttribute('href'))),
-        ['/admin/audit/calls/', '/admin/general/#alerts-form', '/admin/audit/sealed/', '/admin/audit/admin/', '/admin/audit/sealed/', '/admin/alerts/']);
+        ['/admin/audit/calls/', '/admin/notifications/#alerts-form', '/admin/audit/sealed/', '/admin/audit/admin/', '/admin/audit/sealed/', '/admin/alerts/']);
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'no horizontal scroll');
       const fit = await page.evaluate(() => { const r = document.getElementById('bell-menu').getBoundingClientRect(); return r.left >= 0 && r.right <= window.innerWidth; });
       assert.equal(fit, true, 'the menu fits the screen');
@@ -1765,7 +1773,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       await page.keyboard.press('ArrowDown');
       assert.equal(await page.evaluate(() => document.activeElement.getAttribute('href')), '/admin/audit/calls/');
       await page.keyboard.press('ArrowDown');
-      assert.equal(await page.evaluate(() => document.activeElement.getAttribute('href')), '/admin/general/#alerts-form');
+      assert.equal(await page.evaluate(() => document.activeElement.getAttribute('href')), '/admin/notifications/#alerts-form');
       await page.keyboard.press('End');
       assert.equal(await page.evaluate(() => document.activeElement.textContent.startsWith('See all alerts')), true);
       assert.equal(await page.evaluate(() => document.activeElement.getAttribute('href')), '/admin/alerts/', 'the last item is a link to the Alerts page');
@@ -1970,7 +1978,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       assert.equal(rows.every((r) => r.sym), true, 'a symbol with every word (rule 37)');
       assert.deepEqual(rows.slice(0, 3).map((r) => r.source), ['alert', 'alert', 'alert'], 'the alert rows come before the setup gaps');
       assert.deepEqual(rows.slice(3).map((r) => r.source), ['setup', 'setup', 'setup']);
-      assert.deepEqual(rows.map((r) => r.href), ['/admin/audit/calls/', '/admin/general/#alerts-form', '/admin/audit/sealed/', '/admin/providers/#add-provider', '/admin/backup/', '/admin/network/#n-host']);
+      assert.deepEqual(rows.map((r) => r.href), ['/admin/audit/calls/', '/admin/notifications/#alerts-form', '/admin/audit/sealed/', '/admin/providers/#add-provider', '/admin/backup/', '/admin/network/#n-host']);
       assert.equal(rows[0].text, 'An audit record was edited.');
       // The alert rows are the bell's: their count is the badge (info is in neither).
       await page.waitForFunction(() => document.getElementById('bell-badge').textContent === '3');
@@ -2791,7 +2799,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
   await step('pages: each section has its own URL, the nav marks it, Back works and the frame is the same', async () => {
     // Plan step 1.16: a page and a URL for every admin section, from one template.
     const slugs = await page.$$eval('#nav a[data-tab]', (as) => as.map((a) => a.dataset.tab));
-    assert.deepEqual(slugs, ['home', 'alerts', 'audit/calls', 'audit/admin', 'audit/sealed', 'audit/routing', 'providers', 'clients', 'services', 'network', 'security', 'backup', 'restore', 'general', 'reference']);
+    assert.deepEqual(slugs, ['home', 'alerts', 'audit/calls', 'audit/admin', 'audit/sealed', 'audit/routing', 'providers', 'clients', 'services', 'network', 'security', 'backup', 'notifications', 'restore', 'general', 'reference']);
     for (const slug of slugs) {
       await page.goto(`http://127.0.0.1:${adminPort}/admin/${slug}/`);
       await page.waitForSelector('#app:not([hidden])');
