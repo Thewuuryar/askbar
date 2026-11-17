@@ -408,7 +408,12 @@ input, select { min-height: var(--target-min); }
   .gs-pop { position: static; width: auto; max-width: none; margin-top: var(--space-2); box-shadow: none; }
   #gs-list { max-height: none; }
   .gs-row { min-height: var(--btn-h-touch); }
-  .facts { gap: var(--space-2); }
+  .facts { gap: var(--space-2); min-width: 0; flex: 0 1 auto; }
+  /* The breadcrumb's label keeps its own width: the facts fill in after the page loads (budget, kill switch, seal) and
+     must not squeeze it into a clip. The kill switch word is read by screen readers only on a phone, its symbol stays. */
+  .gs-left { flex: none; }
+  .gs-left .crumb { flex: none; }
+  #sb-kill .status-word { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
   .seal-toggle { gap: var(--space-1); }
   /* The bell stays in the status bar on a phone (44 px target); its menu and pop-ups span the screen under it. */
   .bell .menu { position: fixed; top: calc(var(--phone-bar-h) + var(--status-h)); left: var(--space-4); right: var(--space-4); width: auto; max-height: calc(100vh - var(--phone-bar-h) - var(--status-h) - var(--space-4)); }
