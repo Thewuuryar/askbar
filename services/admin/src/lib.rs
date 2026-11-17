@@ -277,6 +277,7 @@ pub fn routes(state: &Arc<AdminState>) -> Routes {
         .get("/admin/app.js", |h: HeaderMap| async move { pages::static_file(&h, JS, include_str!("ui/app.js")) })
         .get("/admin/components.js", |h: HeaderMap| async move { pages::static_file(&h, JS, include_str!("ui/components.js")) })
         .get("/admin/audit.js", |h: HeaderMap| async move { pages::static_file(&h, JS, include_str!("ui/audit.js")) })
+        .get("/admin/audit_calls.js", |h: HeaderMap| async move { pages::static_file(&h, JS, include_str!("ui/audit_calls.js")) })
         .get("/admin/constants.json", |h: HeaderMap| async move { pages::static_file(&h, JSON, constants::json()) })
         .get("/admin/tokens.css", |h: HeaderMap| async move { pages::static_file(&h, CSS, include_str!("ui/tokens.css")) })
         .get("/admin/style.css", |h: HeaderMap| async move { pages::static_file(&h, CSS, include_str!("ui/style.css")) })

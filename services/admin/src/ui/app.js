@@ -59,7 +59,7 @@
   // ------------------------------------------------------------- pages
 
   // One admin page per URL (plan step 1.16): the nav is plain links, and this script runs only the
-  // current page's loader. A page with no entry here needs none; audit.js registers the Audit page's.
+  // current page's loader. A page with no entry here needs none; audit_calls.js and audit.js register the Audit pages'.
   const page = document.body.dataset.page;
   const tabs = [
     { id: 'home', load: loadHome },
@@ -502,7 +502,7 @@
 
   // ------------------------------------------------------------- Home: numbers, chart and summaries (plan step 4.3)
 
-  // The one reader of GET /audit/stats on Home (audit.js reads the same document for its overview; it is not loaded here).
+  // The one reader of GET /audit/stats on Home (audit_calls.js reads the same document for its figures; it is not loaded here).
   // Every figure is a number or null; null is shown as "–", never as 0 (a cost the server could not price is "unknown").
   function statsFigures(s) {
     if (!s) return { requests: null, errorRate: null, tokens: null, cost: null, costUnknown: false, p95: null, days: [] };
@@ -853,11 +853,11 @@
     ['sched-keep-days', 'Delete backups older than this many days', 'backup', 'schedule', (r) => r.keep_days],
     ['bk-pass', 'Backup key', 'backup', 'backupKey', (r) => (r.set ? 'fingerprint ' + r.fingerprint : 'not set')],
   ];
-  // Audit has no filter in its address yet (audit.js reads only `view` and `id`), so these open the requests view and
-  // the row says so; the filter is then chosen there. Statuses are the Status filter's own words.
-  const AUDIT_STATUSES = ['done', 'error', 'cancelled', 'timed out', 'interrupted'];
-  const AUDIT_NOTE = 'Audit / Model calls · opens the requests view, pick the filter there';
-  const AUDIT_REQUESTS = '/admin/audit/calls/?view=requests';
+  // Model calls keeps its filters in the address (?status=, ?provider=, plan step 6.1), so a row here opens the list already
+  // filtered. A status is the auditor's own code (`timed_out`); the row shows its word.
+  const AUDIT_STATUSES = [['done', 'done'], ['error', 'error'], ['cancelled', 'cancelled'], ['timed_out', 'timed out'], ['interrupted', 'interrupted']];
+  const AUDIT_NOTE = 'Audit / Model calls · filters the list';
+  const AUDIT_CALLS = '/admin/audit/calls/';
 
   const search = { data: {}, at: 0, loading: null, combo: null, pages: [] };
 
@@ -894,8 +894,8 @@
       return c.models.map((m) => ({ title: m.model, where: 'Settings / Providers · ' + name(m.provider_id), value: c.default === m.provider_id + '/' + m.model ? 'default' : '', href: '/admin/providers/#catalog-approved', icon: 'providers' }));
     }],
     ['audit', 'Audit', () => [
-      ...AUDIT_STATUSES.map((w) => ({ title: 'Status: ' + w, where: AUDIT_NOTE, value: '', href: AUDIT_REQUESTS, icon: 'audit' })),
-      ...(search.data.providers || []).map((p) => ({ title: 'Provider: ' + p.name, where: AUDIT_NOTE, value: '', href: AUDIT_REQUESTS, icon: 'audit' })),
+      ...AUDIT_STATUSES.map(([code, word]) => ({ title: 'Status: ' + word, where: AUDIT_NOTE, value: '', href: AUDIT_CALLS + '?status=' + code, icon: 'audit' })),
+      ...(search.data.providers || []).map((p) => ({ title: 'Provider: ' + p.name, where: AUDIT_NOTE, value: '', href: AUDIT_CALLS + '?provider=' + encodeURIComponent(p.id), icon: 'audit' })),
     ]],
     // Step 7.4 fills this from the reference articles; until then the group has no rows and is not drawn.
     ['reference', 'Reference', () => []],

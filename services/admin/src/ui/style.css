@@ -621,3 +621,42 @@ input, select { min-height: var(--target-min); }
   .sec-actions .btn, .sec-actions .na, .sec-fields > .hint a { min-height: var(--btn-h-touch); }
   #key-table .btn { min-height: var(--btn-h-touch); }
 }
+
+/* Audit / Model calls (plan step 6.1): the figures, the filters, a one-line table and the trace in the docked panel.
+   Hairlines, not boxes (rule 7). The figures reuse Home's .kpis. */
+.calls-filters { gap: var(--space-3); margin: var(--space-3) 0; }
+.calls-filters label { display: flex; align-items: center; gap: var(--space-2); margin: 0; font-size: var(--text-xs); font-weight: var(--weight-regular); color: var(--muted); }
+.calls-filters select { width: auto; margin: 0; padding: 0 var(--space-2); height: var(--btn-h); font-size: var(--text-xs); }
+.filter-na { display: inline-flex; align-items: center; height: var(--btn-h); padding: 0 var(--space-3); border: 1px solid var(--line); border-radius: var(--radius-control); font-size: var(--text-xs); }
+.calls-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); margin: var(--space-2) 0; font-size: var(--text-xs); color: var(--muted); }
+.calls-toolbar .na[data-tip]::after { left: auto; right: 0; }
+.kpi .v.bad { color: var(--danger); }
+.calls-table td { padding: var(--space-2); white-space: nowrap; }
+.calls-table th { padding: var(--space-2); white-space: nowrap; }
+.calls-table td.clip { max-width: 14ch; overflow: hidden; text-overflow: ellipsis; }
+.calls-table td:first-child { padding-left: var(--space-1); }
+.calls-table tr.call-err > td { background: var(--danger-soft); }
+.calls-table tr.call-sel > td { font-weight: var(--weight-bold); }
+.calls-table tr.call-sel > td:first-child { box-shadow: inset 2px 0 0 var(--accent); }
+.row-link { justify-content: flex-start; padding: 0 var(--space-2); font-variant-numeric: tabular-nums; white-space: nowrap; font-weight: inherit; }
+.calls-table tr[data-trace] { cursor: pointer; }
+/* With the panel open the list has about 600 px: the least useful columns step aside. */
+body.panel-open .col-provider, body.panel-open .col-tokens { display: none; }
+.trace-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin: 0 0 var(--space-3); }
+.trace-head code { font-size: var(--text-xs); overflow-wrap: anywhere; }
+.trace-sec + .trace-sec { margin-top: var(--space-4); padding-top: var(--space-4); border-top: 1px solid var(--line); }
+section[data-tab^="audit/"] .trace-sec h3 { margin: 0 0 var(--space-2); font-size: var(--text-s); }
+dl.meta { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--space-1) var(--space-3); margin: 0; font-size: var(--text-xs); }
+dl.meta dt { color: var(--muted); }
+dl.meta dd { margin: 0; overflow-wrap: anywhere; }
+#trace-viewed .viewed h4 { margin: var(--space-3) 0 var(--space-1); }
+@media (max-width: 560px) {
+  .calls-filters label { width: 100%; justify-content: space-between; }
+  .calls-filters select { flex: 1; max-width: 70%; }
+  .calls-filters .na, .calls-toolbar .na { min-height: var(--btn-h-touch); }
+  /* A greyed filter takes the row, so its note (which opens to the right) stays inside the screen. */
+  .calls-filters .na { display: flex; width: 100%; }
+  .filter-na { flex: 1; height: var(--btn-h-touch); }
+  .col-user, .col-provider, .col-tokens, .col-duration { display: none; }
+  .row-link { min-height: var(--btn-h-touch); }
+}

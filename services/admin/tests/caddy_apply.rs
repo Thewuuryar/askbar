@@ -156,6 +156,7 @@ async fn the_ui_is_served_with_its_security_headers() {
         ("/admin/components.js", "text/javascript"),
         ("/admin/app.js", "text/javascript"),
         ("/admin/audit.js", "text/javascript"),
+        ("/admin/audit_calls.js", "text/javascript"),
         ("/admin/style.css", "text/css"),
     ] {
         let r = t.http.get(format!("{}{path}", t.adm)).send().await.unwrap();

@@ -82,7 +82,7 @@ pub fn section_id(slug: &str) -> String {
 
 page!(Home, home, "home", "home.html", "Home");
 page!(Alerts, alerts, "alerts", "alerts.html", "Alerts");
-page!(AuditCalls, audit_calls, "audit/calls", "audit.html", "Model calls");
+page!(AuditCalls, audit_calls, "audit/calls", "audit_calls.html", "Model calls");
 page!(AuditAdmin, audit_admin, "audit/admin", "audit_admin.html", "Admin actions");
 page!(AuditSealed, audit_sealed, "audit/sealed", "audit.html", "Sealed access");
 page!(AuditRouting, audit_routing, "audit/routing", "audit.html", "Routing");
@@ -388,12 +388,14 @@ mod tests {
             assert!(constants < app, "{}: components.js before app.js", p.slug);
             assert_eq!(html.matches(r#"id="announcer""#).count(), 1, "{}: one announcer", p.slug);
             assert_eq!(html.matches(r#"id="toasts""#).count(), 1, "{}: one toast region", p.slug);
+            // Model calls has its own script (plan step 6.1); Sealed access and Routing keep audit.js until step 6.2.
             assert_eq!(
                 html.contains("/admin/audit.js"),
-                ["audit/calls", "audit/sealed", "audit/routing"].contains(&p.slug),
-                "{}: audit.js only on the Audit pages that read the trail",
+                ["audit/sealed", "audit/routing"].contains(&p.slug),
+                "{}: audit.js only on the Audit pages that still use the old views",
                 p.slug
             );
+            assert_eq!(html.contains("/admin/audit_calls.js"), p.slug == "audit/calls", "{}: audit_calls.js only on Model calls", p.slug);
             assert!(!html.contains("{%") && !html.contains("{{"), "{}: no template syntax left", p.slug);
         }
     }

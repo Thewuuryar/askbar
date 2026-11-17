@@ -2051,8 +2051,8 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       if (!saved.ok) throw new Error('the catalog was refused: ' + saved.status);
     }, { xss: XSS, mockUrl: `http://127.0.0.1:${mockPort}/v1` });
     await auditChat('audit question', XSS);
-    await openPage('audit/calls');
-    await page.waitForSelector('#tab-audit-calls:not([hidden])');
+    await openPage('audit/sealed');
+    await page.waitForSelector('#tab-audit-sealed:not([hidden])');
     const subs = await page.$$eval('#audit-nav button', (b) => b.map((x) => x.dataset.sub));
     assert.deepEqual(subs, ['overview', 'requests', 'trace', 'routing', 'content']);
     await page.waitForFunction(() => Number(document.querySelector('#audit-overview [data-stat="requests"]')?.textContent) >= 1);
@@ -2060,7 +2060,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
   });
   await step('audit: server strings are shown as text, never as HTML, in every table', async () => {
     const nothingRan = async (where) => {
-      assert.equal(await page.locator('#tab-audit-calls img').count(), 0, where + ': no element was made from a name');
+      assert.equal(await page.locator('#tab-audit-sealed img').count(), 0, where + ': no element was made from a name');
       assert.equal(await page.evaluate(() => window.__pwned), undefined, where + ': nothing ran');
     };
     await nothingRan('overview');
@@ -2130,8 +2130,249 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.waitForSelector('#audit-unseal-form:not([hidden])');
     assert.equal((await page.content()).includes('Anything else?'), false, 'the opened text is gone from the page once sealed');
     await page.waitForSelector('#banners [data-banner="unsealed"]', { state: 'detached', timeout: 15000 }).catch(async () => { await page.reload(); });
-    assert.equal(await page.locator('#tab-audit-calls img').count(), 0);
+    assert.equal(await page.locator('#tab-audit-sealed img').count(), 0);
     assert.equal(await page.evaluate(() => window.__pwned), undefined);
+  });
+  await step('audit calls: figures and table come from the real trail as text, greyed filters are inert, a row opens its trace in the docked panel, Esc and Back close it, and ?id= opens it on load', async () => {
+    await openPage('audit/calls');
+    await page.waitForSelector('#calls-rows tr[data-trace]');
+    await page.waitForFunction(() => Number(document.getElementById('kpi-replies').textContent.replace(/,/g, '')) >= 1);
+    assert.deepEqual(await page.$$eval('#calls-kpis .kpi .k', (k) => k.map((x) => x.textContent)), ['Replies', 'Errors', 'Tokens', 'Latency, median', 'Latency, 95th percentile']);
+    assert.deepEqual(await page.$$eval('#calls-table th', (h) => h.map((x) => x.textContent)), ['Time', 'User', 'Provider', 'Model', 'Tokens in / out', 'Duration', 'Status']);
+    assert.match(await page.innerText('#calls-table'), /<img src=x/, 'the provider and model names are visible as text');
+    assert.equal(await page.locator('#tab-audit-calls img').count(), 0, 'no element was made from a name');
+    assert.equal(await page.evaluate(() => window.__pwned), undefined);
+    assert.equal(await page.isHidden('#trace-panel'), true, 'the panel is closed until a call is chosen');
+    // Every row is one line, and a status is a word with a symbol, never colour alone.
+    const tall = await page.$$eval('#calls-rows tr', (r) => r.filter((tr) => tr.getBoundingClientRect().height > tr.querySelector('.row-link').getBoundingClientRect().height + 24).length);
+    assert.equal(tall, 0, 'one-line cells');
+    assert.equal(await page.locator('#calls-rows tr:first-child .status .status-word').count(), 1);
+
+    // Filters the trail cannot apply are greyed: aria-disabled, never disabled; Tab reaches them; Enter does nothing.
+    const greyed = page.locator('#tab-audit-calls .calls-filters .na, #tab-audit-calls .calls-toolbar .na');
+    assert.equal(await greyed.count(), 4);
+    assert.deepEqual(await greyed.evaluateAll((n) => n.map((x) => [x.getAttribute('aria-disabled'), x.tabIndex, x.hasAttribute('disabled'), x.dataset.tip.startsWith('Not available yet: ')])), Array(4).fill(['true', 0, false, true]));
+    assert.equal(await page.locator('#tab-audit-calls [disabled]').count(), 0, 'no disabled attribute on the page');
+    const before = page.url();
+    await greyed.first().focus();
+    await page.keyboard.press('Enter');
+    await page.keyboard.press(' ');
+    assert.equal(page.url(), before, 'Enter on a greyed filter changes nothing');
+    assert.equal(await page.isHidden('#trace-panel'), true);
+    assert.match(await greyed.first().innerText(), /Not available yet/, 'the reason is there for a screen reader');
+
+    // A row opens the trace in the docked panel; the address holds the call.
+    const id = await page.getAttribute('#calls-rows tr[data-trace]', 'data-trace');
+    await page.click(`#calls-rows tr[data-trace="${id}"] .row-link`);
+    await page.waitForSelector('#trace-content:not([hidden])');
+    assert.equal(await page.isVisible('#trace-panel'), true);
+    assert.equal(new URL(page.url()).searchParams.get('id'), id);
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'trace-panel-title', 'focus moves to the panel');
+    assert.equal(await page.getAttribute(`#calls-rows tr[data-trace="${id}"] .row-link`, 'aria-current'), 'true');
+    assert.equal(await page.locator('#calls-rows tr.call-sel').count(), 1, 'one selected row');
+    assert.equal(await page.innerText('#trace-id'), id);
+    assert.ok(await page.locator('#trace-waterfall .span-bar').count() >= 2, 'the spans are drawn');
+    await page.focus('#trace-waterfall .span-bar[data-span] >> nth=-1');
+    assert.match(await page.innerText('#trace-span-details'), /<img src=x/, 'the details show the model as text');
+    assert.match(await page.innerText('#trace-meta'), /<img src=x/);
+    assert.equal(await page.locator('#trace-panel img').count(), 0);
+    assert.equal(await page.evaluate(() => window.__pwned), undefined);
+    assert.deepEqual(await page.evaluate(() => (document.documentElement.scrollWidth <= window.innerWidth ? [] : [...document.querySelectorAll('body *')].filter((e) => e.getBoundingClientRect().right > window.innerWidth + 1).slice(0, 5).map((e) => e.tagName + '#' + e.id + '.' + e.className))), [], 'no sideways scroll with the panel open');
+    // The old detail pane is gone from the page.
+    assert.equal(await page.locator('#audit-nav, #audit-trace, #audit-waterfall').count(), 0);
+
+    // Esc closes it, and the address forgets it.
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('#trace-panel', { state: 'hidden' });
+    await page.waitForFunction(() => !location.search.includes('id='));
+    assert.equal(await page.locator('#calls-rows tr.call-sel').count(), 0, 'nothing selected any more');
+    // Back closes it too.
+    await page.click(`#calls-rows tr[data-trace="${id}"] .row-link`);
+    await page.waitForSelector('#trace-content:not([hidden])');
+    await page.goBack();
+    await page.waitForSelector('#trace-panel', { state: 'hidden' });
+    assert.match(page.url(), /\/admin\/audit\/calls\/$/, 'Back stays on the page');
+    // The address alone opens it, and Esc closes it again.
+    await page.goto(base + 'audit/calls/?id=' + encodeURIComponent(id));
+    await page.waitForSelector('#app:not([hidden])');
+    await page.waitForSelector('#trace-content:not([hidden])');
+    assert.equal(await page.innerText('#trace-id'), id);
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('#trace-panel', { state: 'hidden' });
+    await page.waitForFunction(() => !location.search.includes('id='));
+    // A call that is not in the trail says so inside the panel.
+    await page.goto(base + 'audit/calls/?id=no-such-call');
+    await page.waitForSelector('#trace-error:not([hidden])');
+    assert.match(await page.innerText('#trace-error'), /not in the audit trail/);
+    await page.keyboard.press('Escape');
+    // The page keeps to the frame: targets are big enough (44 px on a phone).
+    await page.goto(base + 'audit/calls/?id=' + encodeURIComponent(id));
+    await page.waitForSelector('#trace-content:not([hidden])');
+    const small = await page.evaluate((min) => [...document.querySelectorAll('#tab-audit-calls button, #tab-audit-calls select, #tab-audit-calls .na, #trace-panel button')]
+      .map((t) => t.getBoundingClientRect()).filter((r) => r.height > 0 && (r.height < min || r.width < min)).length, isPhone ? 44 : 24);
+    assert.equal(small, 0, 'every target on this page is big enough');
+    // axe, with the panel open (a copy of the page in a context that lets axe in).
+    const axeCtx = await browser.newContext({ viewport, bypassCSP: true, storageState: await ctx.storageState() });
+    try {
+      const ap = await axeCtx.newPage();
+      await ap.goto(base + 'audit/calls/?id=' + encodeURIComponent(id));
+      await ap.waitForSelector('#trace-content:not([hidden])');
+      await ap.waitForSelector('#calls-rows tr[data-trace]');
+      await ap.addScriptTag({ content: fs.readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8') });
+      const found = await ap.evaluate(async () => (await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'] } })).violations.map((v) => v.id + ': ' + v.nodes.map((n) => n.target.join(' ')).join(', ')));
+      assert.deepEqual(found, [], 'axe on Model calls with the trace open');
+    } finally { await axeCtx.close(); }
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('#trace-panel', { state: 'hidden' });
+  });
+  await step('audit calls (canned): the figures, filters in the address, load more, and a live refresh that keeps the open panel and its row', async () => {
+    const K = await page.evaluate(() => window.ui.ready);
+    const now = Math.floor(Date.now() / 1000);
+    const row = (n, extra = {}) => ({ trace_id: 'T' + String(n).padStart(3, '0'), span_id: 's' + n, status: 'done', started_at: now - 60 - (200 - n), ended_at: now - 59 - (200 - n), user_id: 'user-1', client_id: 'd', tokens_in: 100, tokens_out: 50, tokens_cached: 0, error_code: null, provider_id: 'pA', model: 'model-' + n, ttft_ms: 200, latency_ms: 1500, cost: 0.0007, ...extra });
+    const size = K.AUDIT_PAGE_SIZE;
+    const first = Array.from({ length: size }, (_, i) => row(100 - i));
+    const second = Array.from({ length: 15 }, (_, i) => row(100 - size - i));
+    let head = [];
+    const askedList = [];
+    const askedStats = [];
+    const canned = { requests: 40, by_status: { done: 36, error: 2, timed_out: 1, cancelled: 1 }, error_rate: 0.075, latency_ms: { p50: 1200, p95: 5400 }, ttft_ms: { p50: 300, p95: 900 }, tokens: { in: 12345, out: 6789, cached: 2000 }, cost: 1.2345, cost_unknown_requests: 0, by_provider: [], by_day: [] };
+    await page.route('**/api/admin/v1/audit/stats*', (route) => { askedStats.push(route.request().url()); route.fulfill({ contentType: 'application/json', body: JSON.stringify(canned) }); });
+    await page.route('**/api/admin/v1/audit/traces?*', (route) => {
+      const q = new URL(route.request().url()).searchParams;
+      askedList.push(Object.fromEntries(q));
+      let traces = [...head, ...first];
+      if (q.get('before') === first[first.length - 1].trace_id) traces = second;
+      if (q.get('status') === 'error') traces = [row(5, { status: 'error', error_code: 'http_401', tokens_in: null, tokens_out: null, cost: null })];
+      route.fulfill({ contentType: 'application/json', body: JSON.stringify({ traces }) });
+    });
+    await page.route('**/api/admin/v1/audit/traces/*', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ trace_id: route.request().url().split('/').pop(), cost: null, spans: [{ id: 'x-turn', parent_id: null, kind: 'turn', name: 'chat', status: 'done', started_at: now - 10, ended_at: now - 9, user_id: 'user-1', tokens_in: 100, tokens_out: 50, attrs: {} }] }) }));
+    try {
+      // The filters in the address apply on load.
+      await page.goto(base + 'audit/calls/?status=error&provider=pA');
+      await page.waitForSelector('#app:not([hidden])');
+      await page.waitForSelector('#calls-rows tr[data-trace]');
+      assert.equal(await page.inputValue('#calls-status'), 'error');
+      assert.equal(await page.inputValue('#calls-provider'), 'pA', 'a provider named in the address filters even when it is not in the list');
+      assert.deepEqual(askedList[askedList.length - 1], { status: 'error', provider: 'pA', limit: String(size) });
+      assert.equal(await page.locator('#calls-rows tr').count(), 1);
+      const cells = await page.$$eval('#calls-rows tr:first-child td', (c) => c.map((x) => x.textContent.trim()));
+      assert.deepEqual([cells[1], cells[3], cells[4], cells[5], cells[6]], ['user-1', 'model-5', '–', '1.5 s', 'error']);
+      assert.equal(await page.locator('#calls-rows tr.call-err').count(), 1, 'a failed call is tinted');
+      assert.equal(await page.isHidden('#calls-more'), true, 'a short page means nothing more');
+      // The figures come from the stats read for the range.
+      assert.deepEqual(await page.$$eval('#calls-kpis .kpi .v', (v) => v.map((x) => x.textContent)), ['40', '3', '19,134', '1.2 s', '5.4 s']);
+      assert.equal(await page.locator('#kpi-errors.bad').count(), 1);
+      const since = (u) => Number(new URL(u).searchParams.get('since'));
+      assert.ok(Math.abs(Math.floor(Date.now() / 1000) - since(askedStats.at(-1)) - 86400) < 120, 'the first range is the last 24 hours');
+
+      // A filter changed on the page changes the address, and starts again from the newest call.
+      await page.selectOption('#calls-status', '');
+      await page.waitForFunction((n) => document.querySelectorAll('#calls-rows tr').length === n, size);
+      assert.equal(new URL(page.url()).searchParams.has('status'), false);
+      assert.equal(new URL(page.url()).searchParams.get('provider'), 'pA', 'the other filter stays');
+      assert.deepEqual(askedList[askedList.length - 1], { provider: 'pA', limit: String(size) });
+      assert.equal(await page.innerText('#calls-count'), 'Showing ' + size + ' calls');
+      await page.selectOption('#calls-status', 'timed_out');
+      assert.equal(new URL(page.url()).searchParams.get('status'), 'timed_out', 'the address holds the auditor\'s code');
+      await page.selectOption('#calls-status', '');
+      await page.waitForFunction((n) => document.querySelectorAll('#calls-rows tr').length === n, size);
+
+      // Load more asks for the page after the last row shown and appends; a short page ends it.
+      await page.click('#calls-more');
+      await page.waitForFunction((n) => document.querySelectorAll('#calls-rows tr').length === n, size + 15);
+      assert.equal(askedList[askedList.length - 1].before, first[first.length - 1].trace_id);
+      assert.equal(await page.isHidden('#calls-more'), true);
+      assert.equal(await page.innerText('#calls-count'), 'Showing ' + (size + 15) + ' calls');
+
+      // A live refresh keeps the open panel, its address and its row, and adds the new call.
+      await page.click('#calls-rows tr[data-trace="T099"] .row-link');
+      await page.waitForSelector('#trace-content:not([hidden])');
+      await page.evaluate(() => { window.__keptRow = document.querySelector('#calls-rows tr[data-trace="T099"]'); });
+      head = [row(150)];
+      await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+      await page.waitForSelector('#calls-rows tr[data-trace="T150"]');
+      assert.equal(await page.locator('#calls-rows tr').count(), size + 16, 'the loaded pages are kept under the new call');
+      assert.equal(await page.locator('#calls-rows tr.row-new').count(), 1, 'the new call is marked');
+      assert.equal(await page.isVisible('#trace-panel'), true, 'the panel stays open');
+      assert.equal(new URL(page.url()).searchParams.get('id'), 'T099');
+      assert.equal(await page.locator('#calls-rows tr.call-sel').getAttribute('data-trace'), 'T099', 'the selected row stays selected');
+      assert.equal(await page.evaluate(() => window.__keptRow === document.querySelector('#calls-rows tr[data-trace="T099"]')), true, 'and is the same row, not a rebuilt one');
+      // Another row while the panel is open replaces the address rather than adding to it.
+      // (On a phone the panel covers the list, so another row is chosen only after closing it.)
+      if (!isPhone) {
+        const length = await page.evaluate(() => history.length);
+        await page.click('#calls-rows tr[data-trace="T098"] .row-link');
+        await page.waitForFunction(() => new URL(location.href).searchParams.get('id') === 'T098');
+        assert.equal(await page.evaluate(() => history.length), length);
+        await page.waitForFunction(() => document.getElementById('trace-id').textContent === 'T098');
+        assert.equal(await page.locator('#calls-rows tr.call-sel').count(), 1);
+        assert.equal(new URL(page.url()).searchParams.get('provider'), 'pA', 'the filter stays in the address with the trace');
+      }
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('#trace-panel', { state: 'hidden' });
+      assert.equal(new URL(page.url()).searchParams.get('provider'), 'pA');
+      assert.equal(new URL(page.url()).searchParams.has('id'), false);
+
+      // The range asks for its own window.
+      head = [];
+      await page.selectOption('#calls-window', '7');
+      await page.waitForFunction(() => document.querySelectorAll('#calls-rows tr').length > 0);
+      assert.ok(Math.abs(Math.floor(Date.now() / 1000) - since(askedStats.at(-1)) - 7 * 86400) < 120, 'then the last 7 days');
+      // An empty answer says so instead of showing an empty table.
+      await page.unroute('**/api/admin/v1/audit/traces?*');
+      await page.route('**/api/admin/v1/audit/traces?*', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ traces: [] }) }));
+      await page.selectOption('#calls-window', '30');
+      await page.waitForSelector('#calls-empty:not([hidden])');
+      assert.match(await page.innerText('#calls-empty'), /No model calls match these filters/);
+      assert.equal(await page.isHidden('#calls-table'), true);
+    } finally {
+      await page.unroute('**/api/admin/v1/audit/stats*');
+      await page.unroute('**/api/admin/v1/audit/traces?*');
+      await page.unroute('**/api/admin/v1/audit/traces/*');
+    }
+  });
+  await step('audit calls: sealed content stays sealed in the trace panel until the status bar unseals it, then View shows it as text, and sealing wipes it', async () => {
+    const asked = [];
+    page.on('request', (r) => { if (/audit\/payloads/.test(r.url())) asked.push(r.url()); });
+    await openPage('audit/calls');
+    await page.waitForSelector('#calls-rows tr[data-trace]');
+    await page.click('#calls-rows tr[data-trace] .row-link');
+    await page.waitForSelector('#trace-sealed .sealed-row');
+    assert.match(await page.innerText('#trace-sealed-note'), /Sealed\. Opening needs the audit passphrase/);
+    assert.equal(await page.locator('#trace-panel input[type="password"]').count(), 0, 'the passphrase is asked for in the status bar box, not here');
+    assert.equal(asked.length, 0, 'nothing is fetched until a session is open');
+    // View while sealed sends you to the Unseal box: still nothing fetched.
+    await page.click('#trace-sealed .view-btn >> nth=0');
+    await page.waitForSelector('#unseal-box[open]');
+    assert.match(await page.innerText('#trace-sealed-error'), /Enter the audit passphrase/);
+    assert.equal(asked.length, 0);
+    // The right passphrase opens the session, and the item the person asked for opens with it.
+    await page.fill('#unseal-pass', AUDIT_PASS);
+    await page.click('#unseal-go');
+    await page.waitForSelector('#unseal-box', { state: 'hidden' });
+    await page.waitForFunction(() => /Anything else\?/.test(document.getElementById('trace-viewed').textContent));
+    assert.equal(await page.isHidden('#trace-sealed-error'), true);
+    assert.match(await page.innerText('#trace-sealed-note'), /Unsealed\. Each item you view is recorded/);
+    assert.ok(asked.length >= 1);
+    assert.equal(await page.locator('#trace-viewed b, #trace-viewed img').count(), 0, 'shown as text');
+    assert.equal(await page.evaluate(() => JSON.stringify([...Object.entries(localStorage), ...Object.entries(sessionStorage)]).includes('passphrase')), false);
+    // Closing the panel wipes what was opened; opening again asks nothing more while the session lasts.
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('#trace-panel', { state: 'hidden' });
+    assert.equal(await page.locator('#trace-viewed *').count(), 0, 'closing the panel wipes it');
+    await page.click('#calls-rows tr[data-trace] .row-link');
+    await page.waitForSelector('#trace-sealed .sealed-row');
+    await page.click('#trace-sealed .view-btn >> nth=0');
+    await page.waitForFunction(() => /Anything else\?/.test(document.getElementById('trace-viewed').textContent));
+    // Seal from the status bar: the text is gone from the page.
+    await page.click('#seal-button');
+    await page.waitForFunction(() => /^Sealed$/.test(document.getElementById('sb-seal-status').textContent));
+    await page.waitForFunction(() => document.getElementById('trace-viewed').children.length === 0);
+    assert.equal((await page.content()).includes('Anything else?'), false, 'the opened text is gone from the page once sealed');
+    assert.match(await page.innerText('#trace-sealed-note'), /^Sealed\./);
+    assert.equal(await page.locator('#tab-audit-calls img').count(), 0);
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('#banners [data-banner="unsealed"]', { state: 'detached', timeout: 15000 }).catch(async () => { await page.reload(); });
   });
   await step('seal toggle: unseal from another page, a wrong passphrase is an inline error, the countdown is the server\'s, Seal closes it', async () => {
     await openPage('network');
@@ -2693,12 +2934,20 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await input.fill('theme');
     await page.locator('#gs-list [role="option"]', { hasText: 'Theme' }).waitFor();
     assert.match(await page.locator('#gs-list [role="option"]', { hasText: 'Theme' }).first().innerText(), new RegExp(state.theme + '\\s*$'));
-    // Audit filters open the requests view; the row says the filter is chosen there.
+    // Audit filters open Model calls already filtered: the address holds the filter (plan step 6.1).
+    await input.fill('status: timed out');
+    const timedOut = page.locator('#gs-list [role="option"]', { hasText: 'Status: timed out' });
+    await timedOut.waitFor();
+    assert.match(await timedOut.getAttribute('href'), /\/admin\/audit\/calls\/\?status=timed_out$/, 'the address holds the auditor\'s code, not the word');
+    await input.fill('provider: ');
+    const prov = page.locator('#gs-list [role="option"]', { hasText: 'Provider: ' }).first();
+    await prov.waitFor();
+    assert.match(await prov.getAttribute('href'), /\/admin\/audit\/calls\/\?provider=[^&]+$/);
     await input.fill('status: error');
     const audit = page.locator('#gs-list [role="option"]', { hasText: 'Status: error' });
     await audit.waitFor();
-    assert.match(await audit.getAttribute('href'), /\/admin\/audit\/calls\/\?view=requests$/);
-    assert.match(await audit.innerText(), /pick the filter there/);
+    assert.match(await audit.getAttribute('href'), /\/admin\/audit\/calls\/\?status=error$/);
+    assert.match(await audit.innerText(), /filters the list/);
     // Esc closes the list and keeps the text; a second Esc clears it.
     await input.press('Escape');
     assert.equal(await input.getAttribute('aria-expanded'), 'false');
@@ -2742,7 +2991,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     const asked = [];
     await page.route('**/api/admin/v1/audit/stats*', (route) => { asked.push(route.request().url()); route.fulfill({ contentType: 'application/json', body: JSON.stringify(canned) }); });
     await openPage('providers');
-    await openPage('audit/calls');
+    await openPage('audit/sealed');
     await page.click('#audit-nav [data-sub="overview"]'); // the tab remembers the view it was last on
     await page.waitForSelector('#audit-overview [data-stat="requests"]');
     const stat = (k) => page.innerText(`#audit-overview [data-stat="${k}"]`);
@@ -2791,7 +3040,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       route.fulfill({ contentType: 'application/json', body: JSON.stringify({ traces }) });
     });
     await openPage('providers');
-    await openPage('audit/calls');
+    await openPage('audit/sealed');
     await page.click('#audit-nav [data-sub="requests"]');
     await page.waitForSelector('#audit-rows tr[data-trace]');
     assert.deepEqual(asked[asked.length - 1], { limit: '25' }, 'no filters, no cursor');
@@ -2869,7 +3118,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     const finished = spans.filter((x) => x.status !== 'running');
     await page.route('**/api/admin/v1/audit/traces/TRACE1', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ trace_id: 'TRACE1', cost: 0.0007, spans: finished }) }));
     await openPage('providers');
-    await openPage('audit/calls');
+    await openPage('audit/sealed');
     await page.evaluate(() => window.askbarAudit.openTrace('TRACE1'));
     await page.waitForSelector('#audit-waterfall .span-bar');
     assert.equal(await page.locator('#audit-waterfall .span-bar').count(), 4);
@@ -2907,7 +3156,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.route('**/api/admin/v1/audit/stats*', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify(stats) }));
     await page.route('**/api/admin/v1/audit/provider-health', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ providers: [{ provider_id: 'p1', status: 'auth_failed', since: 1793631845, error_code: 'http_401' }] }) }));
     await openPage('providers');
-    await openPage('audit/calls');
+    await openPage('audit/sealed');
     await page.evaluate(() => window.askbarAudit.openTrace('ROUTE1'));
     await page.waitForSelector('#audit-waterfall .span-bar');
     await page.click('#audit-nav [data-sub="routing"]');
@@ -2961,7 +3210,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       route.fulfill({ contentType: 'application/json', body: JSON.stringify({ span_id: 'sp-attempt', payloads: [{ role: 'request', key_id: 'k1', text: 'the <b>question</b> that was asked' }, { role: 'error', key_id: 'k0', text: null, key_created_at: 500, key_retired_at: 900 }] }) });
     });
     await openPage('providers');
-    await openPage('audit/calls');
+    await openPage('audit/sealed');
     await page.evaluate(() => window.askbarAudit.openTrace('SEAL1'));
     await page.waitForSelector('#audit-waterfall .span-bar');
     await page.click('#audit-nav [data-sub="content"]');
@@ -3028,7 +3277,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     ];
     await page.route('**/api/admin/v1/audit/access*', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ access: rows }) }));
     await openPage('providers');
-    await openPage('audit/calls');
+    await openPage('audit/sealed');
     await page.click('#audit-nav [data-sub="content"]');
     await page.waitForSelector('#audit-access-rows tr');
     const cells = await page.$$eval('#audit-access-rows tr', (r) => r.map((tr) => [...tr.children].map((td) => td.textContent).slice(1)));
@@ -3686,16 +3935,18 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     assert.ok(polls >= 2 && polls <= 3, 'status polled every STATUS_EVERY_SECS: ' + polls);
     await openPage('providers');
   });
-  await step('pages: an audit request opens directly from its address, and the address follows the view', async () => {
+  await step('pages: an audit request opens directly from its address, in the docked panel, and the address follows it', async () => {
     const list = await page.evaluate(async () => (await fetch('/api/admin/v1/audit/traces', { credentials: 'same-origin' })).json());
     const id = list.traces[0].trace_id;
     await page.goto(`http://127.0.0.1:${adminPort}/admin/audit/?view=trace&id=${encodeURIComponent(id)}`);
-    await page.waitForSelector('#audit-trace:not([hidden])');
-    assert.equal(await page.getAttribute('#audit-nav [data-sub="trace"]', 'aria-selected'), 'true');
-    await page.waitForFunction((t) => window.askbarAudit.state.traceId === t && !!window.askbarAudit.state.trace, id);
-    assert.match(page.url(), new RegExp('[?]view=trace&id=' + encodeURIComponent(id) + '$'), 'the address keeps the request');
-    await page.click('#audit-nav [data-sub="requests"]');
-    assert.match(page.url(), /\/admin\/audit\/calls\/\?view=requests$/, 'the old address opened Model calls');
+    // The old address opens Model calls, and its id opens the trace in the docked panel (the views are gone, plan step 6.1).
+    await page.waitForSelector('#trace-content:not([hidden])');
+    assert.match(page.url(), /\/admin\/audit\/calls\/\?/, 'the old address opened Model calls');
+    assert.equal(await page.innerText('#trace-id'), id);
+    assert.equal(new URL(page.url()).searchParams.get('id'), id, 'the address keeps the request');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('#trace-panel', { state: 'hidden' });
+    await page.waitForFunction(() => !location.search.includes('id='));
     await openPage('providers');
   });
   await step('pages: a static file is kept and answers 304 when unchanged; pages are never stored', async () => {
@@ -3742,7 +3993,11 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
   });
   await step('audit: with the server away the trail still reads from the auditor, and the views are there', async () => {
     await openPage('audit/calls');
-    await page.waitForSelector('#audit-overview');
+    await page.waitForSelector('#calls-rows tr[data-trace]');
+    assert.equal(await page.isHidden('#calls-error'), true, 'the auditor is up, so there is nothing to explain');
+    assert.ok(Number((await page.innerText('#kpi-replies')).replace(/,/g, '')) >= 1, 'the figures read from the auditor');
+    await openPage('audit/sealed'); // the old views stay on Sealed access until step 6.2
+    await page.waitForSelector('#audit-content'); // Sealed access opens on the Content view
     assert.equal(await page.isHidden('#audit-error'), true, 'the auditor is up, so there is nothing to explain');
     for (const sub of ['overview', 'requests', 'trace', 'routing', 'content']) {
       await page.click(`#audit-nav [data-sub="${sub}"]`);
@@ -3800,7 +4055,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
   });
   await step('audit chain: a rollback, a rewrite and an edit each get a banner with its sentence, and it clears', async () => {
     const real = await page.evaluate(async () => (await fetch('/api/admin/v1/status')).json());
-    assert.equal(real.audit_chain.state === 'ok' || real.audit_chain.state === 'unknown', true, 'nothing is wrong with the real chain');
+    assert.equal(real.audit_chain.state === 'ok' || real.audit_chain.state === 'unknown', true, 'nothing is wrong with the real chain: ' + JSON.stringify(real.audit_chain));
     const withChain = async (audit_chain) => {
       await page.unroute('**/api/admin/v1/status');
       await page.route('**/api/admin/v1/status', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ...real, audit_chain }) }));

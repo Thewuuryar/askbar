@@ -127,6 +127,8 @@ pub const TOAST_SECS: u32 = 5;
 pub const HOME_STATS_WINDOW_DAYS: u32 = 7;
 /// The same window in seconds (the `since` of the stats read).
 pub const HOME_STATS_WINDOW_SECS: i64 = HOME_STATS_WINDOW_DAYS as i64 * 24 * 3600;
+/// How many model calls the Audit list loads at a time (and each time Load more is chosen); the auditor's own cap is higher.
+pub const AUDIT_PAGE_SIZE: u32 = 25;
 /// How many rows each group of the global search shows; typing more narrows it.
 pub const SEARCH_RESULTS_PER_GROUP: usize = 5;
 /// How many times the Providers page asks CLIProxyAPI whether a Claude or ChatGPT login finished.
@@ -195,6 +197,7 @@ struct Constants {
     highlight_secs: u32,
     toast_secs: u32,
     search_results_per_group: usize,
+    audit_page_size: u32,
     cpa_login_polls: u32,
     cpa_login_poll_secs: u32,
     home_stats_window_days: u32,
@@ -253,6 +256,7 @@ fn current() -> Constants {
         highlight_secs: HIGHLIGHT_SECS,
         toast_secs: TOAST_SECS,
         search_results_per_group: SEARCH_RESULTS_PER_GROUP,
+        audit_page_size: AUDIT_PAGE_SIZE,
         cpa_login_polls: CPA_LOGIN_POLLS,
         cpa_login_poll_secs: CPA_LOGIN_POLL_SECS,
         home_stats_window_days: HOME_STATS_WINDOW_DAYS,
@@ -283,6 +287,7 @@ mod tests {
             "API_KEY_PREFIX",
             "API_KEY_MAX_NAME_CHARS",
             "NAME_MAX_CHARS",
+            "AUDIT_PAGE_SIZE",
             "AUDIT_RETENTION_DAYS",
             "BACKOFF_SECS",
             "BACKUP_KEEP_DAYS",

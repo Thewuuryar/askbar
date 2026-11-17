@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{%- import "blocks.html" as b %}
+{%- import "components.html" as c %}
+{% block hint %}What the server recorded about each reply: when, for whom, through which provider, how long it took and how it ended. Message content is sealed; opening it asks for the audit passphrase and is logged.{% endblock %}
+{% block scripts %}<script src="/admin/audit_calls.js" defer></script>{% endblock %}
+{% block content %}
+    {% call b::error_line("calls-error") %}{% endcall %}
+    <div id="calls-kpis" class="kpis" role="group" aria-label="Figures for the chosen range">
+      <div class="kpi"><div class="k">Replies</div><div class="v" id="kpi-replies">–</div></div>
+      <div class="kpi"><div class="k">Errors</div><div class="v" id="kpi-errors">–</div></div>
+      <div class="kpi"><div class="k">Tokens</div><div class="v" id="kpi-tokens">–</div></div>
+      <div class="kpi"><div class="k">Latency, median</div><div class="v" id="kpi-p50">–</div></div>
+      <div class="kpi"><div class="k">Latency, 95th percentile</div><div class="v" id="kpi-p95">–</div></div>
+    </div>
+    <div class="row calls-filters" role="group" aria-label="Filters">
+      <label>Range
+        <select id="calls-window">
+          <option value="1">Last 24 hours</option>
+          <option value="7">Last 7 days</option>
+          <option value="30">Last 30 days</option>
+        </select>
+      </label>
+      <label>Status
+        <select id="calls-status">
+          <option value="">Any</option>
+          <option value="done">done</option>
+          <option value="error">error</option>
+          <option value="cancelled">cancelled</option>
+          <option value="timed_out">timed out</option>
+          <option value="interrupted">interrupted</option>
+        </select>
+      </label>
+      <label>Provider <select id="calls-provider"><option value="">Any</option></select></label>
+      {% call c::na("model calls can only be filtered by range, status and provider.") %}<span class="filter-na">User</span>{% endcall %}
+      {% call c::na("model calls can only be filtered by range, status and provider.") %}<span class="filter-na">Model</span>{% endcall %}
+      {% call c::na("model calls can only be filtered by range, status and provider.") %}<span class="filter-na">Search</span>{% endcall %}
+    </div>
+    <div class="calls-toolbar">
+      <span id="calls-count" role="status"></span>
+      <span class="spacer"></span>
+      <span>Metadata only; content stays sealed</span>
+      {% call c::na("the audit log cannot be exported.") %}<span class="btn btn-secondary btn-s">Export CSV</span>{% endcall %}
+    </div>
+    <div id="calls-empty" hidden>{% call c::empty("No model calls recorded yet.", "") %}{% endcall %}</div>
+    <div class="table-wrap" tabindex="0" role="region" aria-label="Model calls">
+      <table class="table calls-table" id="calls-table" hidden>
+        <caption class="visually-hidden">Model calls, newest first. Choose a time to open its trace.</caption>
+        <thead><tr><th scope="col">Time</th><th scope="col" class="col-user">User</th><th scope="col" class="col-provider">Provider</th><th scope="col">Model</th><th scope="col" class="num col-tokens">Tokens in / out</th><th scope="col" class="num col-duration">Duration</th><th scope="col">Status</th></tr></thead>
+        <tbody id="calls-rows"></tbody>
+      </table>
+    </div>
+    <div class="row"><button type="button" id="calls-more" class="btn btn-secondary" hidden>Load more</button></div>
+
+    {% call c::side_panel("trace-panel", "Trace", "") %}
+      {% call b::error_line("trace-error") %}{% endcall %}
+      <div id="trace-loading" hidden>{% call c::skeleton(3) %}{% endcall %}</div>
+      <div id="trace-content" hidden>
+        <p class="trace-head"><span id="trace-state"></span> <code id="trace-id"></code></p>
+        <section class="trace-sec" aria-labelledby="trace-timing-title">
+          <h3 id="trace-timing-title">Timing <span id="trace-total" class="hint"></span></h3>
+          <div id="trace-waterfall" class="waterfall" role="list"></div>
+          <pre id="trace-span-details" class="span-details" aria-live="polite" hidden></pre>
+        </section>
+        <section class="trace-sec" aria-labelledby="trace-meta-title">
+          <h3 id="trace-meta-title">Details</h3>
+          <dl id="trace-meta" class="meta"></dl>
+        </section>
+        <section class="trace-sec" aria-labelledby="trace-sealed-title">
+          <h3 id="trace-sealed-title">Prompt and reply</h3>
+          <p class="hint" id="trace-sealed-note"></p>
+          <div id="trace-sealed"></div>
+          {% call b::error_line("trace-sealed-error") %}{% endcall %}
+          <div id="trace-viewed"></div>
+        </section>
+      </div>
+    {% endcall %}
+{% endblock %}
