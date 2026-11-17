@@ -252,7 +252,7 @@ input, select { min-height: var(--target-min); }
 
 /* Side menu (plan step 2.2; rules 1, 20). The page is the menu and the content side by side. */
 .app { display: flex; align-items: stretch; min-height: 100vh; background: var(--card); }
-.app > main { flex: 1 1 auto; min-width: 0; }
+.app > .content { flex: 1 1 auto; min-width: 0; }
 #app:not([hidden]) ~ .footer { display: none; } /* the menu carries the licence and source link once signed in */
 .side-menu { position: sticky; top: 0; flex: none; display: flex; flex-direction: column; gap: var(--space-4); width: var(--rail-w); height: 100vh; overflow-y: auto; padding: var(--space-4) var(--space-3); background: var(--bg); border-right: 1px solid var(--line); }
 .sm-top { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
@@ -315,4 +315,27 @@ input, select { min-height: var(--target-min); }
   .menu-collapsed .sm-foot { flex-direction: column; padding: 0; }
   .menu-collapsed .sm-lic { justify-content: center; padding: 0; }
   .menu-collapsed #menu-collapse .icon { transform: scaleX(-1); }
+}
+
+/* The status bar (plan step 3.1; rule 3): 48 px, sticky at the top of the content column, the breadcrumb at its
+   left and the facts (budget, kill switch; later search, seal toggle, bell) at its right. The title sits 24 px under it. */
+.status-bar { position: sticky; top: 0; z-index: 30; display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); height: var(--status-h); padding: 0 var(--space-5); background: var(--card); border-bottom: 1px solid var(--line); font-size: var(--text-xs); }
+.content > main { padding-top: var(--space-5); }
+.crumb { flex: 1 1 auto; min-width: 0; }
+.crumb ol { display: flex; align-items: center; margin: 0; padding: 0; list-style: none; color: var(--muted); }
+.crumb li { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.crumb li + li::before { content: "›"; margin: 0 var(--space-2); }
+.crumb li[aria-current="page"] { color: var(--fg); font-weight: var(--weight-bold); }
+.facts { display: flex; flex: none; align-items: center; gap: var(--space-4); color: var(--muted); }
+.facts b { color: var(--fg); font-weight: var(--weight-bold); }
+.facts .status { font-size: var(--text-xs); color: var(--fg); }
+.facts .status-pending { color: var(--muted); }
+.status-bar .na { min-height: var(--target-min); }
+.status-bar .na[data-tip]::after { left: auto; right: 0; }
+@media (max-width: 560px) {
+  /* Under the phone bar, same 48 px: the budget is dropped, the kill switch stays. */
+  .status-bar { top: var(--phone-bar-h); padding: 0 var(--space-4); }
+  .facts .na { display: none; }
+  html { scroll-padding-top: calc(var(--phone-bar-h) + var(--status-h) + var(--space-2)); }
+  .side-panel { top: calc(var(--phone-bar-h) + var(--status-h)); }
 }

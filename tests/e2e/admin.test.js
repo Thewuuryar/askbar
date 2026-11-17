@@ -2019,7 +2019,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     }
     const menuWidth = () => page.evaluate(() => document.getElementById('side-menu').getBoundingClientRect().width);
     const full = await menuWidth();
-    const mainLeft = () => page.evaluate(() => document.querySelector('#app > main').getBoundingClientRect().left);
+    const mainLeft = () => page.evaluate(() => document.querySelector('#main').getBoundingClientRect().left);
     const leftBefore = await mainLeft();
     await page.click('#menu-collapse');
     assert.equal(await page.getAttribute('#menu-collapse', 'aria-expanded'), 'false');
@@ -2082,7 +2082,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       return {
         full: m.left === 0 && Math.round(m.right) === document.documentElement.clientWidth && Math.round(m.bottom) === innerHeight,
         visible: [...document.querySelectorAll('#nav a[data-tab]')].filter((a) => a.getClientRects().length > 0).map((a) => a.dataset.tab),
-        inert: document.querySelector('#app > main').inert,
+        inert: document.querySelector('#main').inert,
         inside: document.getElementById('side-menu').contains(document.activeElement),
       };
     });
@@ -2096,13 +2096,69 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.keyboard.press('Escape');
     assert.equal(await page.isHidden('#side-menu'), true);
     assert.equal(await page.evaluate(() => document.activeElement.id), 'menu-open', 'focus goes back to the Menu button');
-    assert.equal(await page.evaluate(() => document.querySelector('#app > main').inert), false);
+    assert.equal(await page.evaluate(() => document.querySelector('#main').inert), false);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), true, 'no sideways scroll');
     // A page from the menu.
     await openPage('security');
     assert.equal(await page.isHidden('#side-menu'), true, 'the new page opens with the menu closed');
     await page.goto(base);
     await page.waitForSelector('#app:not([hidden])');
+  });
+  await step('status bar: 48 px and sticky, the breadcrumb names the page, the budget is greyed, the kill switch is a word, a focused field stays clear of it', async () => {
+    const K = await page.evaluate(() => window.ui.ready);
+    await page.goto(base + 'audit/sealed/');
+    await page.waitForSelector('#app:not([hidden])');
+    const crumb = () => page.evaluate(() => [...document.querySelectorAll('#status-bar .crumb li')].map((li) => [li.textContent, li.getAttribute('aria-current')]));
+    assert.deepEqual(await crumb(), [['Audit', null], ['Sealed access', 'page']], 'a grouped page shows group > page');
+    await page.goto(base + 'reference/');
+    await page.waitForSelector('#app:not([hidden])');
+    assert.deepEqual(await crumb(), [['Reference', 'page']], 'a top-level page shows just its label');
+    assert.equal(await page.locator('#status-bar [aria-current="page"]').count(), 1);
+    assert.equal(await page.locator('nav[aria-label="Breadcrumb"] ol').count(), 1);
+    await page.goto(base + 'settings/');
+    await page.waitForSelector('#app:not([hidden])');
+    // Budget: one greyed item that is aria-disabled, never `disabled`; kill switch: a word with a symbol, once.
+    const facts = await page.evaluate(() => ({
+      na: document.querySelectorAll('#status-bar .na[aria-disabled="true"]').length,
+      budgetDisabledAttr: document.querySelectorAll('#status-bar [disabled]').length,
+      budgetTip: document.querySelector('#status-bar .na').dataset.tip,
+      kill: document.querySelectorAll('#sb-kill').length,
+      killFields: document.querySelectorAll('#s-kill-switch').length,
+    }));
+    assert.deepEqual(facts, { na: 1, budgetDisabledAttr: 0, budgetTip: 'Not available yet: the server has no family budget setting', kill: 1, killFields: 1 });
+    await page.waitForFunction(() => /^Kill switch: (on|off)$/.test(document.querySelector('#sb-kill .status-word').textContent));
+    assert.match(await page.getAttribute('#sb-kill', 'class'), /status-(ok|error)/);
+    assert.equal(await page.evaluate(() => document.querySelector('#sb-kill .status-sym').getAttribute('aria-hidden')), 'true');
+    // Height is --status-h and the bar stays put while the page scrolls.
+    const bar = () => page.evaluate(() => {
+      const r = document.getElementById('status-bar').getBoundingClientRect();
+      return { top: Math.round(r.top), height: r.height, statusH: parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--status-h')), bottom: r.bottom, wide: document.documentElement.scrollWidth > document.documentElement.clientWidth };
+    });
+    const before = await bar();
+    assert.equal(before.height, before.statusH, 'the bar is --status-h high');
+    assert.equal(before.wide, false, 'no sideways scroll');
+    await page.evaluate(() => { document.querySelector('#main').append(Object.assign(document.createElement('div'), { id: 't-tall', textContent: 'x' })); document.getElementById('t-tall').style.height = '3000px'; });
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    const after = await bar();
+    assert.equal(after.top, before.top, 'the bar does not move while scrolling');
+    assert.equal(after.height, before.statusH);
+    // A field focused from far down scrolls into view below the bar, not under it.
+    const input = await page.evaluate(() => {
+      const i = document.querySelector('#main input:not([type=hidden]):not([type=checkbox]):not([type=radio])');
+      i.focus();
+      const bottom = document.getElementById('status-bar').getBoundingClientRect().bottom;
+      return { top: i.getBoundingClientRect().top, bottom, scrolled: window.scrollY };
+    });
+    assert.ok(input.top >= input.bottom, 'the focused field starts below the bar: ' + JSON.stringify(input));
+    await page.evaluate(() => document.getElementById('t-tall').remove());
+    // The status poll still runs every STATUS_EVERY_SECS.
+    let polls = 0;
+    const count = (r) => { if (r.url().endsWith('/api/admin/v1/status')) polls++; };
+    page.on('request', count);
+    await page.waitForTimeout(K.STATUS_EVERY_SECS * 2 * 1000 + 1500);
+    page.off('request', count);
+    assert.ok(polls >= 2 && polls <= 3, 'status polled every STATUS_EVERY_SECS: ' + polls);
+    await openPage('providers');
   });
   await step('pages: an audit request opens directly from its address, and the address follows the view', async () => {
     const list = await page.evaluate(async () => (await fetch('/api/admin/v1/audit/traces', { credentials: 'same-origin' })).json());

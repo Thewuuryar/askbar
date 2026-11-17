@@ -53,15 +53,26 @@ macro_rules! page {
         struct $ty {
             current: &'static str,
             label: &'static str,
+            /// The group's name for the breadcrumb; empty for a page that is its own group.
+            group: &'static str,
             /// The page's section id: the slug with `/` as `-` (`tab-audit-calls`).
             section: String,
             /// The side menu (rule 1), built from `PAGES`.
             menu: &'static [MenuGroup],
         }
         fn $render() -> askama::Result<String> {
-            $ty { current: $slug, label: $label, section: section_id($slug), menu: menu() }.render()
+            $ty { current: $slug, label: $label, group: crumb_group($slug), section: section_id($slug), menu: menu() }.render()
         }
     };
+}
+
+/// The breadcrumb's first item (rule 3): the page's group label, or empty when the page is top-level or
+/// is named like its group (Settings, Reference), where the breadcrumb shows just the page.
+pub fn crumb_group(slug: &str) -> &'static str {
+    match PAGES.iter().find(|p| p.slug == slug) {
+        Some(p) if p.group.label() != p.label => p.group.label(),
+        _ => "",
+    }
 }
 
 /// The id of a page's `<section>`: `tab-` and the slug, with `/` as `-`.
@@ -213,7 +224,30 @@ mod tests {
             let nav = &html[html.find(r#"<nav id="nav""#).expect("nav")..];
             let nav = &nav[..nav.find("</nav>").unwrap()];
             assert_eq!(nav.matches(r#"aria-current="page""#).count(), 1, "{}: one current page", p.slug);
-            assert_eq!(html.matches(r#"aria-current="page""#).count(), 1, "{}: and nothing else is current", p.slug);
+            // The breadcrumb (plan step 3.1) holds the one other `aria-current="page"`: the page's own label.
+            assert_eq!(html.matches(r#"aria-current="page""#).count(), 2, "{}: the menu's link and the breadcrumb, nothing else", p.slug);
+            let crumb = &html[html.find(r#"<nav class="crumb" aria-label="Breadcrumb">"#).expect("breadcrumb")..];
+            let crumb = &crumb[..crumb.find("</nav>").unwrap()];
+            let expect = match crumb_group(p.slug) {
+                "" => format!(r#"<ol><li aria-current="page">{}</li></ol>"#, p.label),
+                g => format!(r#"<ol><li>{}</li><li aria-current="page">{}</li></ol>"#, g, p.label),
+            };
+            assert!(crumb.contains(&expect), "{}: breadcrumb is {}", p.slug, expect);
+            assert_eq!(
+                crumb_group(p.slug).is_empty(),
+                matches!(p.group, Group::Top | Group::Reference) || p.group.label() == p.label,
+                "{}",
+                p.slug
+            );
+            // One status bar, holding the budget as a greyed item and the kill switch as a word with a symbol, once each.
+            assert_eq!(html.matches(r#"id="status-bar""#).count(), 1, "{}", p.slug);
+            assert_eq!(
+                html.matches("the server has no family budget setting").count(),
+                2,
+                "{}: the budget, once (tooltip and text)",
+                p.slug
+            );
+            assert_eq!(html.matches(r#"id="sb-kill""#).count(), 1, "{}", p.slug);
             let current = format!(r#"href="/admin/{}/" data-tab="{}" data-tip="{}" aria-current="page">"#, p.slug, p.slug, p.label);
             assert!(nav.contains(&current), "{}: its link is current", p.slug);
             for other in PAGES {

@@ -250,7 +250,24 @@
       show($('chain-alert'), bad);
       showAlertsBanner(st.alerts);
       showSealed(st.sealed_content || {});
+      checkKill();
     } catch (_) { /* signed out, or the admin itself is away */ }
+  }
+
+  // The status bar's kill switch (plan step 3.1, rule 3): read-only, a word and a symbol (rule 37), from the same
+  // settings the Settings page edits. The switch itself stays a field of that form.
+  async function checkKill() {
+    const box = $('sb-kill');
+    if (!box) return;
+    let state = 'pending';
+    let text = 'Kill switch: unknown';
+    try {
+      const s = await api('GET', '/api/admin/v1/settings');
+      state = s.kill_switch ? 'error' : 'ok';
+      text = s.kill_switch ? 'Kill switch: on' : 'Kill switch: off';
+    } catch (_) { /* signed out, or the admin itself is away */ }
+    box.className = 'status status-' + state;
+    box.querySelector('.status-word').textContent = text;
   }
 
   // The side menu's health line (plan step 2.2): how many of the services answer, as a word and a symbol

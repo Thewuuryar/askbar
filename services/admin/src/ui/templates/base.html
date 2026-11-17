@@ -119,6 +119,14 @@
         </div>
       </div>
     </aside>
+    <div class="content">
+    <div class="status-bar" id="status-bar">
+      <nav class="crumb" aria-label="Breadcrumb"><ol>{% if group != "" %}<li>{{ group }}</li>{% endif %}<li aria-current="page">{{ label }}</li></ol></nav>
+      <div class="facts" id="status-facts">
+        {% call c::na("the server has no family budget setting") %}Budget <b>not set</b>{% endcall %}
+        <span id="sb-kill" class="status status-pending"><span class="status-sym" aria-hidden="true"></span><span class="status-word">Kill switch: checking</span></span>
+      </div>
+    </div>
     <main id="main" tabindex="-1">
       <p id="offline" class="flash error" role="alert" hidden>Server offline. The admin can't reach the Askbar server, so changes, tests, clients and backups won't work until it is back. Nothing you change now is lost or half-saved.</p>
       <p id="rejected" class="flash error" role="alert" hidden>The server rejected this admin's token. Rotate it on the Docker host with <code>docker compose run --rm bootstrap rotate admin-server</code>, then restart both: <code>docker compose restart server admin</code>. Until then the admin can't change anything on the server. The banner goes away when the server accepts the token again.</p>
@@ -141,6 +149,7 @@
 {% block content %}{% endblock %}
       </section>
     </main>
+    </div>
   </div>
 
   {% call c::toast_region() %}{% endcall %}

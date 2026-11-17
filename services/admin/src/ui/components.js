@@ -646,7 +646,7 @@
   const phoneOpen = () => document.documentElement.classList.contains('menu-open');
   function setPhoneMenu(open) {
     const button = $('menu-open');
-    const main = document.querySelector('#app > main');
+    const main = document.querySelector('#main');
     if (!button) return;
     document.documentElement.classList.toggle('menu-open', open);
     button.setAttribute('aria-expanded', String(open));
