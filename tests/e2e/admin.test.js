@@ -474,7 +474,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.fill('dialog[open] input', 'mock');
     await page.click('dialog[open] [data-confirm-action]');
     assert.equal(await page.evaluate(() => window.tConfirm), true);
-    assert.equal(await page.locator('dialog').count(), 0, 'the box is removed once answered');
+    assert.equal(await page.locator('dialog:not(#unseal-box)').count(), 0, 'the box is removed once answered');
 
     const toastMs = await page.evaluate(async () => (await window.ui.ready).TOAST_SECS * window.ui.MS);
     await page.evaluate(() => window.ui.toast('Saved the test'));
@@ -1370,7 +1370,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.waitForFunction(() => /does not open any audit key/.test(document.getElementById('audit-pass-error').textContent));
     assert.equal(await page.inputValue('#audit-pass'), '');
     assert.equal(await page.locator('#banners [data-banner="unsealed"]').count(), 0);
-    // The right one opens a session: a banner with the time left and a Seal button, and no more prompts.
+    // The right one opens a session: a banner with the time left, the toggle says Unsealed, and no more prompts.
     await page.fill('#audit-pass', AUDIT_PASS);
     await page.click('#audit-unseal');
     await page.waitForSelector('#audit-open:not([hidden])');
@@ -1378,7 +1378,9 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     assert.equal(await page.inputValue('#audit-pass'), '', 'the passphrase field is cleared after use');
     await page.waitForSelector('#banners [data-banner="unsealed"]', { timeout: 15000 });
     assert.match(await page.innerText('#banners [data-banner="unsealed"]'), /Sealed content is open/);
-    assert.equal(await page.locator('#banners [data-banner="unsealed"] button').count(), 1, 'one fix action: Seal');
+    assert.equal(await page.locator('#banners [data-banner="unsealed"] button').count(), 0, 'sealing lives in the status bar toggle, not the banner');
+    assert.match(await page.innerText('#sb-seal-status'), /Unsealed/);
+    assert.equal(await page.innerText('#seal-button'), 'Seal');
     await page.click('#audit-content .view-btn');
     await page.waitForFunction(() => /Anything else\?/.test(document.getElementById('audit-viewed')?.textContent || ''));
     assert.equal(await page.evaluate(() => JSON.stringify([...Object.entries(localStorage), ...Object.entries(sessionStorage)]).includes('passphrase')), false);
@@ -1395,6 +1397,49 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.waitForSelector('#banners [data-banner="unsealed"]', { state: 'detached', timeout: 15000 }).catch(async () => { await page.reload(); });
     assert.equal(await page.locator('#tab-audit-calls img').count(), 0);
     assert.equal(await page.evaluate(() => window.__pwned), undefined);
+  });
+  await step('seal toggle: unseal from another page, a wrong passphrase is an inline error, the countdown is the server\'s, Seal closes it', async () => {
+    await openPage('network');
+    await page.waitForSelector('#seal-button:not([hidden])');
+    assert.match(await page.innerText('#sb-seal-status'), /^Sealed$/, 'the state is a word');
+    assert.equal(await page.locator('#sb-seal-status .status-sym').count(), 1, 'and a symbol');
+    assert.equal(await page.innerText('#seal-button'), 'Unseal');
+    assert.equal(await page.getAttribute('#seal-button', 'aria-label'), 'Unseal content', 'the toggle has a name');
+    const size = await page.locator('#seal-button').boundingBox();
+    assert.ok(size.height >= (isPhone ? 44 : 24) - 0.5, 'target size ' + size.height);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'no horizontal scroll');
+    await page.click('#seal-button');
+    await page.waitForSelector('#unseal-box[open]');
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'unseal-pass', 'focus starts in the passphrase field');
+    // A wrong passphrase: the error is inline in the box, and no toast.
+    await page.fill('#unseal-pass', 'not the passphrase at all!!');
+    await page.click('#unseal-go');
+    await page.waitForFunction(() => /does not open any audit key/.test(document.getElementById('unseal-pass-error').textContent));
+    assert.equal(await page.isVisible('#unseal-pass-error'), true);
+    assert.equal(await page.inputValue('#unseal-pass'), '', 'the field is emptied');
+    assert.equal(await page.locator('#toasts .toast').count(), 0, 'not a toast');
+    assert.equal(await page.evaluate(() => document.getElementById('unseal-box').open), true, 'the box stays open');
+    // The right one: the box closes and the toggle shows the state and the server's time left.
+    await page.fill('#unseal-pass', AUDIT_PASS);
+    await page.click('#unseal-go');
+    await page.waitForSelector('#unseal-box', { state: 'hidden' });
+    await page.waitForFunction(() => /^Unsealed/.test(document.getElementById('sb-seal-status').textContent));
+    const status = await page.evaluate(async () => (await (await fetch('/api/admin/v1/status', { headers: { 'X-Askbar-Admin': '1' } })).json()).sealed_content);
+    const serverMins = Math.max(1, Math.ceil(Math.min(status.idle_left_secs, status.total_left_secs) / 60));
+    assert.match(await page.innerText('#sb-seal-status'), new RegExp('^Unsealed \u00b7 ' + serverMins + ' min left$'));
+    assert.equal(await page.innerText('#seal-button'), 'Seal');
+    assert.equal(await page.getAttribute('#seal-button', 'aria-label'), 'Seal content now');
+    // The Audit content view sees the session the toggle opened, without asking for the passphrase again.
+    await page.goto(base + 'audit/sealed/');
+    await page.waitForSelector('#app:not([hidden])');
+    await page.waitForSelector('#audit-open:not([hidden])');
+    assert.equal(await page.isVisible('#audit-unseal-form'), false);
+    // Seal from the toggle closes the session everywhere.
+    await page.click('#seal-button');
+    await page.waitForFunction(() => /^Sealed$/.test(document.getElementById('sb-seal-status').textContent));
+    await page.waitForSelector('#audit-unseal-form:not([hidden])');
+    assert.equal(await page.innerText('#seal-button'), 'Unseal');
+    await page.waitForSelector('#banners [data-banner="unsealed"]', { state: 'detached', timeout: 15000 });
   });
   await step('audit overview: a canned stats payload fills the tiles, the day bars and the provider bars', async () => {
     const canned = {

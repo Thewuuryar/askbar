@@ -68,7 +68,7 @@
     tabs.push(tab);
     if (appShown && tab.id === page) loadPage();
   }
-  window.askbarAdmin = { api, pageError, registerTab, show, $ };
+  window.askbarAdmin = { api, pageError, registerTab, show, $, openSession, closeSession };
 
   function loadPage() {
     pageError('');
@@ -206,26 +206,96 @@
     $('password').focus();
   }
 
-  // Sealed content (ADR 0011): a banner with the time left and a Seal button while it is open (step 3.3 moves this
-  // into the status bar's seal toggle), and one banner per alert of the last day (an unseal, a change of the timeouts).
-  // Banners show every condition for now: there is no Notifications setting yet to choose the non-critical ones.
-  // Everything is set as text.
-  let sealedLeft = 0;
-  function minutes(secs) { return Math.max(1, Math.ceil(secs / 60)); }
-  async function sealNow() {
+  // Sealed content (ADR 0011). The one place the session is opened and closed: the status bar's seal toggle and the
+  // Audit page's Content view both call these. The server keeps the time (idle and total seconds left, from the status);
+  // the toggle counts down between status polls. Opening needs a sign-in no older than FRESH_SIGNIN_SECS: the server
+  // refuses an older one with a sentence that says so, and the box shows it inline. Everything is set as text.
+  const sealed = { open: false, left: 0 };
+  function openSession(passphrase) { return api('POST', '/api/admin/v1/audit/session', { passphrase }); }
+  async function closeSession() {
     try { await api('DELETE', '/api/admin/v1/audit/session'); } catch (_) { /* signed out */ }
-    checkServer();
   }
+  function minutes(secs) { return Math.max(1, Math.ceil(secs / 60)); }
+  const minuteText = (secs) => minutes(secs) + ' min';
+
+  // The toggle: a word and a symbol for the state (rule 37) and one button with its own name. Sealed: "Unseal" opens
+  // the box. Unsealed: the time left and "Seal", which closes the session at once.
+  function renderSealToggle() {
+    const status = $('sb-seal-status');
+    const button = $('seal-button');
+    if (!status || !button) return;
+    status.className = 'status status-' + (sealed.open ? 'warning' : 'ok');
+    status.querySelector('.status-word').textContent = sealed.open ? 'Unsealed · ' + minuteText(sealed.left) + ' left' : 'Sealed';
+    button.hidden = false;
+    button.textContent = sealed.open ? 'Seal' : 'Unseal';
+    button.setAttribute('aria-label', sealed.open ? 'Seal content now' : 'Unseal content');
+    button.setAttribute('aria-haspopup', sealed.open ? 'false' : 'dialog');
+  }
+  async function sealNow() {
+    await closeSession();
+    checkServer();
+    if (window.askbarAudit) window.askbarAudit.loadSession();
+    ui.announce('Sealed content is sealed.');
+  }
+  async function openUnsealBox() {
+    const form = $('unseal-form');
+    if (!form) return;
+    $('unseal-pass').value = '';
+    ui.fieldError('unseal-pass', '');
+    $('unseal-fresh').textContent = 'Your sign-in must be less than ' + Math.round(K.FRESH_SIGNIN_SECS / 60) + ' minutes old; if it is older, sign in again first.';
+    $('unseal-limits').textContent = 'Opening sends an alert, and every item you view is recorded.';
+    ui.openBox('unseal-box');
+    $('unseal-pass').focus();
+    try { // the limits are the server's settings; the box reads them, it does not copy them
+      const r = await api('GET', '/api/admin/v1/audit/session');
+      $('unseal-limits').textContent = 'Seals itself after ' + minutes(r.idle_limit_secs) + ' minutes idle or ' + minutes(r.total_limit_secs) + ' in all. Opening sends an alert, and every item you view is recorded.';
+    } catch (_) { /* the box works without it */ }
+  }
+  on('seal-button', 'click', () => { if (sealed.open) sealNow(); else openUnsealBox(); });
+  on('unseal-cancel', 'click', () => ui.closeBox('unseal-box'));
+  on('unseal-form', 'submit', async (e) => {
+    e.preventDefault();
+    const field = $('unseal-pass');
+    const passphrase = field.value;
+    field.value = ''; // gone from the field the moment it is sent, whatever the answer
+    ui.fieldError('unseal-pass', '');
+    if (!passphrase) { ui.fieldError('unseal-pass', 'Enter the audit passphrase.').focus(); return; }
+    const done = ui.busy($('unseal-go'), 'Unsealing…');
+    try {
+      await openSession(passphrase);
+    } catch (ex) {
+      done();
+      if (ex.message === 'Signed out') return;
+      ui.fieldError('unseal-pass', ex.message).focus();
+      return;
+    }
+    done();
+    ui.closeBox('unseal-box');
+    ui.announce('Sealed content is open.');
+    await checkServer();
+    if (window.askbarAudit) { window.askbarAudit.loadSession(); window.askbarAudit.loadAccess(); }
+  });
+  setInterval(() => {
+    if (!sealed.open) return;
+    sealed.left = Math.max(0, sealed.left - 1);
+    renderSealToggle();
+  }, ui.MS);
+
+  // The status poll's part: the toggle, one plain banner while it is open (no button: sealing lives in the toggle), and
+  // one banner per alert of the last day (an unseal, a change of the timeouts). Banners show every condition for now:
+  // there is no Notifications setting yet to choose the non-critical ones.
   function showSealed(s) {
     const open = !!s.open;
-    sealedLeft = open ? Math.min(s.idle_left_secs || 0, s.total_left_secs || 0) : 0;
-    ui.banner('unsealed', 'warning', open ? 'Sealed content is open for about ' + minutes(sealedLeft) + ' more minute' + (minutes(sealedLeft) === 1 ? '' : 's') + ' (less if it is not used).' : null,
-      { action: { label: 'Seal', onclick: sealNow }, live: true });
+    sealed.open = open;
+    sealed.left = open ? Math.min(s.idle_left_secs || 0, s.total_left_secs || 0) : 0;
+    renderSealToggle();
+    const mins = minutes(sealed.left);
+    ui.banner('unsealed', 'warning', open ? 'Sealed content is open for about ' + mins + ' more minute' + (mins === 1 ? '' : 's') + ' (less if it is not used).' : null, { live: true });
     const keep = new Set();
     (s.alerts || []).forEach((a, i) => {
       const key = 'sealed-' + i;
       keep.add(key);
-      ui.banner(key, 'info', new Date(a.at * 1000).toLocaleString() + ' \u00b7 ' + a.text);
+      ui.banner(key, 'info', new Date(a.at * 1000).toLocaleString() + ' · ' + a.text);
     });
     for (const b of document.querySelectorAll('#banners [data-banner^="sealed-"]')) {
       if (!keep.has(b.dataset.banner)) b.remove();

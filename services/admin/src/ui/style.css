@@ -336,11 +336,16 @@ input, select { min-height: var(--target-min); }
 .facts .status-pending { color: var(--muted); }
 .status-bar .na { min-height: var(--target-min); }
 .status-bar .na[data-tip]::after { left: auto; right: 0; }
+/* The seal toggle (plan step 3.3): the state as a word and a symbol, and one button that opens the unseal box or seals. */
+.seal-toggle { display: inline-flex; align-items: center; gap: var(--space-2); }
+.seal-toggle .status { color: var(--fg); }
 @media (max-width: 560px) {
   .banner { padding: var(--space-2) var(--space-4); }
   /* Under the phone bar, same 48 px: the budget is dropped, the kill switch stays. */
   .status-bar { top: var(--phone-bar-h); padding: 0 var(--space-4); }
   .facts .na { display: none; }
+  .facts { gap: var(--space-2); }
+  .seal-toggle { gap: var(--space-1); }
   html { scroll-padding-top: calc(var(--phone-bar-h) + var(--status-h) + var(--space-2)); }
   .side-panel { top: calc(var(--phone-bar-h) + var(--status-h)); }
 }

@@ -125,6 +125,7 @@
       <div class="facts" id="status-facts">
         {% call c::na("the server has no family budget setting") %}Budget <b>not set</b>{% endcall %}
         <span id="sb-kill" class="status status-pending"><span class="status-sym" aria-hidden="true"></span><span class="status-word">Kill switch: checking</span></span>
+        <span id="sb-seal" class="seal-toggle"><span id="sb-seal-status" class="status status-pending"><span class="status-sym" aria-hidden="true"></span><span class="status-word">Sealed: checking</span></span><button type="button" id="seal-button" class="btn btn-secondary btn-s" aria-haspopup="dialog" hidden>Unseal</button></span>
       </div>
     </div>
     {% call c::banner_region() %}{% endcall %}
@@ -144,6 +145,15 @@
     </div>
   </div>
 
+  {% call c::dialog_box("unseal-box", "Unseal content") %}
+    <form id="unseal-form" novalidate>
+      <p>Prompts and replies become readable in Audit, on every page, until you seal again.</p>
+      <p class="hint" id="unseal-limits"></p>
+      {% call c::field("Audit passphrase", "unseal-pass", "", "password", false) %}{% endcall %}
+      <p class="hint" id="unseal-fresh"></p>
+      <div class="actions"><button type="button" id="unseal-cancel" class="btn btn-secondary">Cancel</button><button type="submit" id="unseal-go" class="btn btn-primary">Unseal</button></div>
+    </form>
+  {% endcall %}
   {% call c::toast_region() %}{% endcall %}
   {% call c::announcer() %}{% endcall %}
 

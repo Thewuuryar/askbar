@@ -3,7 +3,7 @@
 // through textContent, never as HTML.
 (() => {
   'use strict';
-  const { api, registerTab, show, $ } = window.askbarAdmin;
+  const { api, registerTab, show, $, openSession, closeSession } = window.askbarAdmin;
 
   const SUBS = ['overview', 'requests', 'trace', 'routing', 'content'];
   // Each Audit page opens on its own view (plan step 2.1); steps 6.1 and 6.2 give each page its own layout.
@@ -487,7 +487,7 @@
     $('audit-pass').value = ''; // gone from the field the moment it is sent, whatever the answer
     show($('audit-pass-error'), false);
     try {
-      applySession(await api('POST', '/api/admin/v1/audit/session', { passphrase }).finally(loadAccess));
+      applySession(await openSession(passphrase).finally(loadAccess));
     } catch (ex) {
       if (ex.message === 'Signed out') return;
       $('audit-pass-error').textContent = ex.message;
@@ -497,7 +497,7 @@
   });
 
   $('audit-seal').addEventListener('click', async () => {
-    try { await api('DELETE', '/api/admin/v1/audit/session'); } catch (_) { /* signed out */ }
+    await closeSession();
     applySession({ open: false });
   });
 

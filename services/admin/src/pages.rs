@@ -248,6 +248,13 @@ mod tests {
                 p.slug
             );
             assert_eq!(html.matches(r#"id="sb-kill""#).count(), 1, "{}", p.slug);
+            // The seal toggle (step 3.3) sits in the facts: a status word and one named button, and the unseal box exists once.
+            let facts = &html[html.find(r#"id="status-facts""#).unwrap()..];
+            let facts = &facts[..facts.find(r#"id="banners""#).unwrap()];
+            assert_eq!(facts.matches(r#"id="sb-seal-status""#).count(), 1, "{}", p.slug);
+            assert_eq!(facts.matches(r#"id="seal-button""#).count(), 1, "{}", p.slug);
+            assert_eq!(html.matches(r#"id="unseal-box""#).count(), 1, "{}", p.slug);
+            assert_eq!(html.matches(r#"id="unseal-pass-error""#).count(), 1, "{}", p.slug);
             let current = format!(r#"href="/admin/{}/" data-tab="{}" data-tip="{}" aria-current="page">"#, p.slug, p.slug, p.label);
             assert!(nav.contains(&current), "{}: its link is current", p.slug);
             for other in PAGES {
