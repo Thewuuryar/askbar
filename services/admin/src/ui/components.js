@@ -501,7 +501,7 @@
   // ui.bell(items) draws the status bar's bell from a list of { key, severity: 'critical'|'warning'|'info', text,
   // href, fix (the page's name), at (Unix seconds, optional) }. The badge counts critical plus warning and is hidden
   // at 0; the button's name says the counts. The menu groups Critical, Warning, Info; each item is a link to where it
-  // is fixed. "See all alerts" waits for the Alerts page (step 4.4) and is greyed with the na pattern until then.
+  // is fixed. "See all alerts" links to the Alerts page (step 4.4).
   const SEVERITIES = [['critical', 'Critical'], ['warning', 'Warning'], ['info', 'Info']];
   // The severity icons are server-rendered into #alert-icons (components.html icon macro); copy, never build HTML.
   const alertIcon = (name) => {
@@ -509,7 +509,7 @@
     const src = holder && holder.content.querySelector('[data-icon="' + name + '"]');
     return src && src.firstElementChild ? src.firstElementChild.cloneNode(true) : null;
   };
-  const ALL_ALERTS_REASON = 'the Alerts page comes in a later step';
+  ui.alertIcon = alertIcon;
   let bell = null;
   let bellSignature = '';
   ui.bell = (items) => {
@@ -546,10 +546,7 @@
           el('span', { class: 'bell-text' }, el('span', { text: i.text }),
             el('small', {}, i.fix, i.at ? ' · ' : '', i.at ? ui.time(i.at) : null))))));
     }
-    // Greyed, not disabled: Tab and arrow keys reach it, Enter and a click do nothing (rule 40).
-    const all = el('span', { role: 'menuitem', class: 'bell-all', 'aria-disabled': 'true', tabindex: '-1' },
-      'See all alerts', ' ', el('small', { text: 'Not available yet: ' + ALL_ALERTS_REASON }));
-    all.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); });
+    const all = el('a', { role: 'menuitem', class: 'bell-all', href: '/admin/alerts/', tabindex: '-1', text: 'See all alerts' });
     menu.append(all);
     if (was >= 0) {
       const list = [...menu.querySelectorAll('[role="menuitem"]')];

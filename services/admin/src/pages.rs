@@ -81,6 +81,7 @@ pub fn section_id(slug: &str) -> String {
 }
 
 page!(Home, home, "home", "home.html", "Home");
+page!(Alerts, alerts, "alerts", "alerts.html", "Alerts");
 page!(AuditCalls, audit_calls, "audit/calls", "audit.html", "Model calls");
 page!(AuditAdmin, audit_admin, "audit/admin", "audit_admin.html", "Admin actions");
 page!(AuditSealed, audit_sealed, "audit/sealed", "audit.html", "Sealed access");
@@ -99,6 +100,7 @@ page!(Reference, reference, "reference", "reference.html", "Reference");
 /// `/admin` and `/admin/` go to `constants::LANDING_PAGE`.
 pub static PAGES: &[Page] = &[
     Page { slug: "home", label: "Home", group: Group::Top, icon: "home", render: home },
+    Page { slug: "alerts", label: "Alerts", group: Group::Top, icon: "bell", render: alerts },
     Page { slug: "audit/calls", label: "Model calls", group: Group::Audit, icon: "calls", render: audit_calls },
     Page { slug: "audit/admin", label: "Admin actions", group: Group::Audit, icon: "clipboard", render: audit_admin },
     Page { slug: "audit/sealed", label: "Sealed access", group: Group::Audit, icon: "lock", render: audit_sealed },
@@ -353,6 +355,8 @@ mod tests {
         // Home is the first page and the landing page: it sits alone in the Top group (plan step 4.1).
         assert_eq!(PAGES[0].slug, "home");
         assert_eq!(PAGES[0].group, Group::Top);
+        // Alerts follows Home, also on its own in the Top group (plan step 4.4).
+        assert_eq!((PAGES[1].slug, PAGES[1].group, PAGES[1].icon), ("alerts", Group::Top, "bell"));
         for p in PAGES {
             // An Audit page lives under /admin/audit/; nothing else does.
             assert_eq!(p.group == Group::Audit, p.slug.starts_with("audit/"), "{}", p.slug);

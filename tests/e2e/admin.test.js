@@ -1715,7 +1715,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       await page.click('#bell-button');
       assert.equal(await page.getAttribute('#bell-button', 'aria-expanded'), 'true');
       assert.deepEqual(await page.$$eval('#bell-menu [role="menuitem"]', (a) => a.map((x) => [x.textContent.replace(/\s+/g, ' ').trim(), x.getAttribute('aria-disabled')])),
-        [['No alerts', 'true'], ['See all alerts Not available yet: the Alerts page comes in a later step', 'true']], 'empty state, and the Alerts page is greyed');
+        [['No alerts', 'true'], ['See all alerts', null]], 'empty state, and a live link to the Alerts page (step 4.4: it was greyed until then)');
       await page.keyboard.press('Escape');
 
       // One critical (chain), two warnings (delivery not set up, sealed open), two infos.
@@ -1740,7 +1740,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       await page.click('#bell-button');
       assert.deepEqual(await page.$$eval('#bell-menu [role="group"]', (g) => g.map((x) => x.getAttribute('aria-label'))), ['Critical alerts', 'Warning alerts', 'Info alerts']);
       assert.deepEqual(await page.$$eval('#bell-menu a[role="menuitem"]', (a) => a.map((x) => x.getAttribute('href'))),
-        ['/admin/audit/calls/', '/admin/settings/#alerts-form', '/admin/audit/sealed/', '/admin/audit/admin/', '/admin/audit/sealed/']);
+        ['/admin/audit/calls/', '/admin/settings/#alerts-form', '/admin/audit/sealed/', '/admin/audit/admin/', '/admin/audit/sealed/', '/admin/alerts/']);
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'no horizontal scroll');
       const fit = await page.evaluate(() => { const r = document.getElementById('bell-menu').getBoundingClientRect(); return r.left >= 0 && r.right <= window.innerWidth; });
       assert.equal(fit, true, 'the menu fits the screen');
@@ -1768,9 +1768,8 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       assert.equal(await page.evaluate(() => document.activeElement.getAttribute('href')), '/admin/settings/#alerts-form');
       await page.keyboard.press('End');
       assert.equal(await page.evaluate(() => document.activeElement.textContent.startsWith('See all alerts')), true);
-      assert.equal(await page.evaluate(() => document.activeElement.getAttribute('aria-disabled')), 'true');
-      await page.keyboard.press('Enter');
-      assert.equal(await page.getAttribute('#bell-button', 'aria-expanded'), 'true', 'Enter on the greyed item does nothing');
+      assert.equal(await page.evaluate(() => document.activeElement.getAttribute('href')), '/admin/alerts/', 'the last item is a link to the Alerts page');
+      assert.equal(await page.evaluate(() => document.activeElement.hasAttribute('aria-disabled')), false, 'and it is no longer greyed');
       await page.keyboard.press('Escape');
       assert.equal(await page.evaluate(() => document.activeElement.id), 'bell-button');
       assert.equal(await page.getAttribute('#bell-button', 'aria-expanded'), 'false');
@@ -1793,6 +1792,103 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       await page.waitForSelector('#alert-pops .alert-pop', { state: 'detached', timeout: wait });
     } finally {
       await page.unroute('**/api/admin/v1/status');
+    }
+  });
+  await step('alerts: Critical, Warning and Info in order with the bell\'s counts, columns that line up, Info dismissed at once and kept on reload, none for the others, "ongoing" without a time, the empty state', async () => {
+    const K = await page.evaluate(() => window.ui.ready);
+    const wait = K.STATUS_EVERY_SECS * 2 * 1000 + 3000;
+    const clean = { server_online: true, token_rejected: false, audit_chain: { state: 'ok' }, alerts: 'ok', sealed_content: { open: false, alerts: [] } };
+    const now = Math.floor(Date.now() / 1000);
+    let fake = clean;
+    const fakeStatus = async (p) => p.route('**/api/admin/v1/status', async (route) => {
+      const real = await (await route.fetch()).json();
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ...real, ...fake }) });
+    });
+    await fakeStatus(page);
+    try {
+      await page.goto(base + 'alerts/');
+      await page.evaluate(() => { try { localStorage.removeItem('askbar-admin.dismissed-alerts'); } catch (_) { /* none */ } });
+      await page.reload();
+      await page.waitForSelector('#app:not([hidden])');
+      assert.equal(await page.getAttribute('#nav a[data-tab="alerts"]', 'aria-current'), 'page');
+      assert.equal(await page.locator('#app .footer, #tab-alerts .ap-foot').count(), 0, 'no footer text');
+      await page.waitForSelector('#alerts-empty .empty-state', { timeout: wait });
+      assert.equal(await page.innerText('#alerts-empty'), 'No alerts');
+      assert.equal(await page.locator('#alerts-body .alerts-group:not([hidden])').count(), 0, 'no group when there is nothing');
+
+      // One critical (chain), two warnings (delivery not set up, sealed open), two infos.
+      fake = { ...clean, alerts: 'not_set_up', audit_chain: { state: 'edited', detail: 'An audit record was edited.' },
+        sealed_content: { open: true, idle_left_secs: 600, total_left_secs: 900, alerts: [
+          { kind: 'unsealed', at: now - 120, text: 'Sealed content was opened.' }, { kind: 'retention_changed', at: now - 60, text: 'Retention was changed.' }] } };
+      await page.waitForSelector('#alerts-info .alerts-row', { timeout: wait });
+      assert.equal(await page.isHidden('#alerts-empty'), true);
+      assert.deepEqual(await page.$$eval('#alerts-body .alerts-group:not([hidden]) > h3', (h) => h.map((x) => x.textContent.replace(/\s+/g, ' ').trim())), ['Critical · 1', 'Warning · 2', 'Info · 2'], 'groups in order, with counts');
+      assert.equal(await page.innerText('#alerts-sum'), '1 critical, 2 warnings, 2 info');
+      // The counts are the bell's, by construction: the badge is critical plus warning, the menu has the same rows.
+      const rows = await page.$$eval('#alerts-body .alerts-row', (r) => r.map((x) => ({
+        cls: x.className.replace('alerts-row ', ''), word: x.querySelector('.status-word').textContent, sym: !!x.querySelector('.status-sym'),
+        time: x.querySelector('.alerts-time').textContent, fix: x.querySelector('a.alerts-fix').getAttribute('href'), dismiss: x.querySelectorAll('button').length,
+      })));
+      assert.deepEqual(rows.map((r) => r.word), ['Critical', 'Warning', 'Warning', 'Info', 'Info']);
+      assert.equal(rows.every((r) => r.sym), true, 'a symbol with every word (rule 37)');
+      assert.deepEqual(rows.map((r) => r.dismiss), [0, 0, 0, 1, 1], 'only Info can be dismissed');
+      assert.deepEqual(rows.map((r) => r.time === 'ongoing'), [true, true, true, false, false], 'a condition says ongoing; an entry has its time');
+      assert.equal(await page.locator('#alerts-info time[title]').count(), 2, 'the full date is on hover');
+      await page.waitForFunction(() => document.getElementById('bell-badge').textContent === '3');
+      assert.equal(await page.locator('#alerts-critical .alerts-row, #alerts-warning .alerts-row').count(), Number(await page.innerText('#bell-badge')), 'critical plus warning match the badge');
+      assert.equal(await page.getAttribute('#bell-button', 'aria-label'), 'Alerts: 1 critical, 2 warning, 2 info');
+      // Columns line up across groups: the same x for the text, time, link and action cells.
+      const xs = await page.$$eval('#alerts-body .alerts-row', (r) => r.map((x) => [...x.children].map((c) => Math.round(c.getBoundingClientRect().left))));
+      if (!isPhone) {
+        assert.equal(new Set(xs.map((r) => r.join())).size, 1, 'every row has its cells at the same x, in every group: ' + JSON.stringify(xs));
+      } else {
+        const stacked = await page.$$eval('#alerts-body .alerts-row', (r) => r.map((x) => new Set([...x.children].map((c) => Math.round(c.getBoundingClientRect().left))).size));
+        assert.deepEqual(stacked, stacked.map(() => 1), 'at phone width every cell stacks at the same left edge');
+      }
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'no horizontal scroll');
+      const min = isPhone ? 44 : 24;
+      for (const [w, h] of await page.$$eval('#alerts-body a, #alerts-body button', (a) => a.map((x) => { const r = x.getBoundingClientRect(); return [r.width, r.height]; }))) {
+        assert.ok(w >= min - 0.5 && h >= min - 0.5, 'target ' + w + 'x' + h);
+      }
+      // axe with all three groups showing.
+      const axeCtx = await browser.newContext({ viewport, bypassCSP: true, storageState: await ctx.storageState() });
+      try {
+        const ap = await axeCtx.newPage();
+        await fakeStatus(ap);
+        await ap.goto(base + 'alerts/');
+        await ap.waitForSelector('#alerts-info .alerts-row', { timeout: wait });
+        await ap.addScriptTag({ content: fs.readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8') });
+        const found = await ap.evaluate(async () => (await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'] } })).violations.map((v) => v.id + ': ' + v.nodes.map((n) => n.target.join(' ')).join(', ')));
+        assert.deepEqual(found, [], 'axe on the Alerts page');
+      } finally { await axeCtx.close(); }
+
+      // Dismiss the first Info row (the newest): it goes at once, from the bell too, and does not come back on a reload.
+      const first = await page.locator('#alerts-info .alerts-row >> nth=0').innerText();
+      assert.match(first, /Retention was changed\./, 'newest first');
+      await page.click('#alerts-info .alerts-row >> nth=0 >> button');
+      assert.equal(await page.locator('#alerts-info .alerts-row').count(), 1, 'removed at once');
+      assert.equal((await page.textContent('#alerts-info > h3')).replace(/\s+/g, ' ').trim(), 'Info · 1');
+      assert.equal(await page.getAttribute('#bell-button', 'aria-label'), 'Alerts: 1 critical, 2 warning, 1 info', 'the bell counts it too');
+      assert.equal(await page.evaluate(() => !!document.activeElement.closest('#alerts-info')), true, 'focus moves to the next Info row');
+      assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('askbar-admin.dismissed-alerts')).length), 1);
+      await page.reload();
+      await page.waitForSelector('#alerts-info .alerts-row', { timeout: wait });
+      assert.equal(await page.locator('#alerts-info .alerts-row').count(), 1, 'it does not return on a reload');
+      assert.doesNotMatch(await page.innerText('#alerts-info'), /Retention was changed/);
+      await page.click('#bell-button');
+      assert.doesNotMatch(await page.innerText('#bell-menu [aria-label="Info alerts"]'), /Retention was changed/, 'and it is gone from the bell');
+      await page.keyboard.press('Escape');
+      // New alerts arrive by themselves (ui.live), highlighted and announced; the conditions end and the rows go.
+      fake = { ...fake, sealed_content: { ...fake.sealed_content, alerts: [...fake.sealed_content.alerts, { kind: 'backup_failed', at: now, text: 'The backup failed.' }] } };
+      await page.waitForFunction(() => document.querySelectorAll('#alerts-info .alerts-row').length === 2, null, { timeout: wait });
+      assert.equal(await page.getAttribute('#alerts-info .alerts-row >> nth=0', 'data-key'), 'alert-backup_failed-' + now);
+      assert.equal(await page.locator('#alerts-info .alerts-row[data-key="alert-backup_failed-' + now + '"] a').getAttribute('href'), '/admin/backup/');
+      fake = clean;
+      await page.waitForSelector('#alerts-empty .empty-state', { timeout: wait });
+      assert.equal(await page.locator('#alerts-body .alerts-group:not([hidden])').count(), 0);
+    } finally {
+      await page.unroute('**/api/admin/v1/status');
+      await page.evaluate(() => { try { localStorage.removeItem('askbar-admin.dismissed-alerts'); } catch (_) { /* none */ } });
     }
   });
   await step('home: quick actions (one filled primary), Needs attention from the bell items plus setup gaps, each linking to its fix, and the empty state', async () => {
@@ -2695,7 +2791,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
   await step('pages: each section has its own URL, the nav marks it, Back works and the frame is the same', async () => {
     // Plan step 1.16: a page and a URL for every admin section, from one template.
     const slugs = await page.$$eval('#nav a[data-tab]', (as) => as.map((a) => a.dataset.tab));
-    assert.deepEqual(slugs, ['home', 'audit/calls', 'audit/admin', 'audit/sealed', 'audit/routing', 'providers', 'clients', 'services', 'network', 'security', 'backup', 'restore', 'settings', 'reference']);
+    assert.deepEqual(slugs, ['home', 'alerts', 'audit/calls', 'audit/admin', 'audit/sealed', 'audit/routing', 'providers', 'clients', 'services', 'network', 'security', 'backup', 'restore', 'settings', 'reference']);
     for (const slug of slugs) {
       await page.goto(`http://127.0.0.1:${adminPort}/admin/${slug}/`);
       await page.waitForSelector('#app:not([hidden])');

@@ -357,6 +357,21 @@
   // the two cannot disagree.
   const urgentOf = (items) => items.filter((i) => i.severity !== 'info');
 
+  // Dismissed Info alerts (Alerts page): there is no server API for it, so the keys (kind + at) are kept in this browser's
+  // localStorage. A blocked store only means a dismissal lasts until the page is reloaded.
+  const DISMISSED_KEY = 'askbar-admin.dismissed-alerts';
+  const DISMISSED_MAX = 200;
+  const dismissed = [];
+  try { dismissed.push(...JSON.parse(localStorage.getItem(DISMISSED_KEY) || '[]')); } catch (_) { /* no storage */ }
+  function dismissAlert(key) {
+    if (dismissed.includes(key)) return;
+    dismissed.push(key);
+    if (dismissed.length > DISMISSED_MAX) dismissed.splice(0, dismissed.length - DISMISSED_MAX);
+    try { localStorage.setItem(DISMISSED_KEY, JSON.stringify(dismissed)); } catch (_) { /* no storage */ }
+  }
+
+  // The one builder of alert rows: the bell, Home's Needs attention and the Alerts page all read what it returns, so their
+  // counts cannot differ. A dismissed Info alert is left out everywhere.
   function bellItems(st) {
     const items = [];
     const add = (key, text) => items.push({ key, ...BELL[key], ...(text ? { text } : {}) });
@@ -367,11 +382,62 @@
     if (BELL[st.alerts] && st.alerts !== 'ok') add(st.alerts);
     if (sealed.open) add('sealed', 'Sealed content is open for about ' + minutes(sealed.left) + ' more minute' + (minutes(sealed.left) === 1 ? '' : 's') + '.');
     const recent = (st.sealed_content && st.sealed_content.alerts) || [];
-    recent.filter((a) => !BELL_SKIP_KINDS.includes(a.kind)).sort((a, b) => b.at - a.at).forEach((a) => {
+    recent.filter((a) => !BELL_SKIP_KINDS.includes(a.kind) && !dismissed.includes('alert-' + a.kind + '-' + a.at)).sort((a, b) => b.at - a.at).forEach((a) => {
       items.push({ key: 'alert-' + a.kind + '-' + a.at, severity: 'info', ...(BELL_KIND_FIX[a.kind] || BELL_KIND_DEFAULT), text: a.text, at: a.at });
     });
     const order = ['critical', 'warning', 'info'];
     return items.sort((a, b) => order.indexOf(a.severity) - order.indexOf(b.severity));
+  }
+
+  // ------------------------------------------------------------- Alerts page (plan step 4.4, rules 33, 34, 36, 37, 38)
+
+  // The bell's items, grouped Critical, Warning, Info, drawn as rows on one grid (see .alerts-row). A condition has no time
+  // (offline, rejected, ...): it says "ongoing" rather than a made-up time. Only Info can be dismissed; the others clear
+  // themselves when the condition ends. Redrawn by showBell, which ui.live calls with every changed status.
+  const ALERT_GROUPS = [['critical', 'Critical', 'error'], ['warning', 'Warning', 'warning'], ['info', 'Info', 'info']];
+  let alertsShown = false;
+  let lastStatus = null;
+  function alertTime(i) {
+    const t = i.at ? ui.time(i.at) : ui.el('span', { text: 'ongoing' });
+    t.classList.add('alerts-time');
+    return t;
+  }
+  function renderAlertsPage(items) {
+    const body = $('alerts-body');
+    if (!body) return;
+    const count = (sev) => items.filter((i) => i.severity === sev).length;
+    $('alerts-sum').textContent = items.length
+      ? count('critical') + ' critical, ' + count('warning') + (count('warning') === 1 ? ' warning, ' : ' warnings, ') + count('info') + ' info'
+      : '';
+    for (const [sev, word, state] of ALERT_GROUPS) {
+      const group = items.filter((i) => i.severity === sev);
+      const section = $('alerts-' + sev);
+      section.hidden = group.length === 0;
+      section.querySelector('.alerts-n').textContent = '· ' + group.length;
+      ui.rows(section.querySelector('.alerts-list'), group, (i) => ui.el('div', { class: 'alerts-row alerts-row-' + sev },
+        ui.status(state, word),
+        ui.el('span', { class: 'alerts-text', text: i.text }),
+        alertTime(i),
+        ui.el('a', { class: 'alerts-fix', href: i.href, text: i.fix }),
+        ui.el('span', { class: 'alerts-act' }, sev === 'info'
+          ? ui.el('button', { type: 'button', class: 'btn btn-quiet btn-icon', 'aria-label': 'Dismiss: ' + i.text, 'data-tip': 'Dismiss', 'data-dismiss': i.key,
+            onclick: () => dismissInfo(i.key) }, ui.alertIcon('close'))
+          : 'Clears itself when fixed')),
+      { key: (i) => i.key, fresh: alertsShown, noun: ['alert', 'alerts'] });
+    }
+    alertsShown = true;
+    const empty = $('alerts-empty');
+    empty.hidden = items.length > 0;
+    if (!empty.firstChild) empty.append(ui.empty('No alerts'));
+  }
+  // The row goes at once; focus moves to the next Info row's button, or to the summary line.
+  function dismissInfo(key) {
+    const buttons = [...document.querySelectorAll('#alerts-info [data-dismiss]')];
+    const at = buttons.findIndex((b) => b.dataset.dismiss === key);
+    dismissAlert(key);
+    if (lastStatus) showBell(lastStatus);
+    const rest = [...document.querySelectorAll('#alerts-info [data-dismiss]')];
+    (rest[Math.min(at, rest.length - 1)] || $('alerts-sum')).focus();
   }
 
   // ------------------------------------------------------------- Home: Needs attention (plan step 4.2, rules 7, 8, 12)
@@ -575,10 +641,12 @@
   const popped = new Set();
   try { JSON.parse(sessionStorage.getItem(POPPED_KEY) || '[]').forEach((k) => popped.add(k)); } catch (_) { /* no storage */ }
   function showBell(st) {
+    lastStatus = st;
     const items = bellItems(st);
     ui.bell(items);
     bellNow = items;
     renderAttention();
+    renderAlertsPage(items);
     // The tab title carries the count the badge shows (critical plus warning), so a hidden tab still says so.
     const urgent = urgentOf(items).length;
     document.title = (urgent ? '(' + urgent + ') ' : '') + baseTitle;
@@ -607,7 +675,7 @@
     hidden: 'slow',
     always: true,
     when: appShownNow,
-    notice: listPage ? null : $('page-error'),
+    notice: listPage ? null : page === 'alerts' ? $('alerts-body') : $('page-error'),
     render: showStatus,
   });
   const checkServer = () => liveStatus.refresh();

@@ -232,6 +232,8 @@ dialog.box::backdrop { background: rgba(0, 0, 0, .4); }
 .status-warning .status-sym:empty::before { content: "!"; font-weight: var(--weight-bold); }
 .status-error .status-sym:empty::before { content: "×"; font-weight: var(--weight-bold); }
 .status-warning { color: var(--fg); }
+.status-info { color: var(--muted); }
+.status-info .status-sym:empty::before { content: "i"; font-weight: var(--weight-bold); }
 .toast .btn { flex: none; }
 
 /* Shared accessibility behaviour (plan step 1.10; rules 26, 41-46) */
@@ -382,7 +384,8 @@ input, select { min-height: var(--target-min); }
 .bell-warning .bell-icon { color: var(--fg); }
 .bell-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
 .bell-text small, .bell-all small { font-size: var(--text-xs); color: var(--muted); }
-.bell-all { flex-direction: column; gap: 2px; margin-top: var(--space-1); border-top: 1px solid var(--line); cursor: not-allowed; opacity: .6; }
+.bell-all { flex-direction: column; gap: 2px; margin-top: var(--space-1); border-top: 1px solid var(--line); }
+.bell-all:hover { background: var(--surface-2); }
 .bell-empty { color: var(--muted); }
 .alert-pops { position: fixed; top: calc(var(--status-h) + var(--space-3)); right: var(--space-5); z-index: 35; display: flex; flex-direction: column; gap: var(--space-2); width: calc(var(--menu-w) * 2 - var(--space-5)); max-width: calc(100vw - 2 * var(--space-4)); pointer-events: none; }
 .alert-pop { display: flex; align-items: flex-start; gap: var(--space-3); padding: var(--space-4); background: var(--card); border: 1px solid var(--line); border-radius: var(--radius-card); box-shadow: var(--shadow); font-size: var(--text-s); pointer-events: auto; }
@@ -474,4 +477,25 @@ input, select { min-height: var(--target-min); }
   .cols, .cols.even { grid-template-columns: minmax(0, 1fr); }
   .home-link, .home-sec-head .na, .home-sec-head .na-tag, .kpi .sub .na { min-height: var(--btn-h-touch); }
   .srow { min-height: var(--btn-h-touch); }
+}
+
+/* The Alerts page (plan step 4.4; rules 33, 36, 37, 38). One grid for every row of every group, so the time, the fix link and
+   the action line up from group to group. Hairlines, not boxes. At phone width a row stacks: status, text, time, link, action. */
+.alerts-sum { margin: var(--space-3) 0 0; color: var(--muted); }
+.alerts-group { margin-top: var(--space-4); }
+.alerts-head { display: flex; align-items: baseline; gap: var(--space-2); margin: 0; padding-bottom: var(--space-2); border-bottom: 1px solid var(--line); font-size: var(--text-s); font-weight: var(--weight-bold); color: var(--muted); }
+.alerts-head-critical { color: var(--danger); }
+.alerts-n { font-weight: var(--weight-regular); }
+.alerts-row { display: grid; grid-template-columns: 96px minmax(0, 1fr) 120px 200px 136px; align-items: center; gap: var(--space-3) var(--space-4); min-height: 48px; padding: var(--space-2) 0; border-bottom: 1px solid var(--line); }
+.alerts-row-critical { background: var(--danger-soft); margin: 0 calc(-1 * var(--space-3)); padding-left: var(--space-3); padding-right: var(--space-3); border-radius: var(--radius-control); border-bottom-color: transparent; }
+.alerts-text { min-width: 0; overflow-wrap: anywhere; }
+.alerts-time { font-size: var(--text-xs); color: var(--muted); }
+.alerts-fix { display: inline-flex; align-items: center; min-height: var(--target-min); }
+.alerts-act { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-2); font-size: var(--text-xs); color: var(--muted); }
+@media (max-width: 560px) {
+  .alerts-row { grid-template-columns: minmax(0, 1fr); gap: var(--space-1); padding: var(--space-3) 0; }
+  .alerts-row-critical { padding-left: var(--space-3); padding-right: var(--space-3); }
+  .alerts-fix { min-height: var(--btn-h-touch); }
+  .alerts-act { justify-content: flex-start; }
+  .alerts-act .btn { min-height: var(--btn-h-touch); }
 }
