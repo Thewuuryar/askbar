@@ -2803,7 +2803,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
   await step('pages: each section has its own URL, the nav marks it, Back works and the frame is the same', async () => {
     // Plan step 1.16: a page and a URL for every admin section, from one template.
     const slugs = await page.$$eval('#nav a[data-tab]', (as) => as.map((a) => a.dataset.tab));
-    assert.deepEqual(slugs, ['home', 'alerts', 'audit/calls', 'audit/admin', 'audit/sealed', 'audit/routing', 'providers', 'clients', 'services', 'network', 'security', 'backup', 'notifications', 'general', 'reference']);
+    assert.deepEqual(slugs, ['home', 'alerts', 'audit/calls', 'audit/admin', 'audit/sealed', 'audit/routing', 'settings', 'providers', 'clients', 'services', 'network', 'security', 'backup', 'notifications', 'general', 'reference']);
     for (const slug of slugs) {
       await page.goto(`http://127.0.0.1:${adminPort}/admin/${slug}/`);
       await page.waitForSelector('#app:not([hidden])');
@@ -2829,6 +2829,81 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     assert.equal(missing.status(), 404, 'an unknown admin page is a 404');
     await page.goto(base);
   });
+  // Plan step 5.4: the Settings overview. One row per section, each a link with one line of state from its own read.
+  const OVERVIEW_SHAPES = {
+    providers: /^\d+ providers?$/,
+    clients: /^\d+ (person|people), \d+ (client|clients)$/,
+    services: /^(All \d+ services running|\d+ of \d+ services not running)$/,
+    network: /^(No host name|\S.*)$/,
+    security: /^(API key: \S.*|No API key)$/,
+    backup: /^(Never|Last backup .+)$/,
+    notifications: /^ntfy (on|off), email (on|off)$/,
+    general: /^Kill switch (on|off)$/,
+  };
+  const overviewFilled = (slug) => page.waitForFunction((id) => {
+    const t = document.getElementById(id).textContent.trim();
+    return t !== '' && t !== 'Loading…';
+  }, 'ov-' + slug);
+  await step('settings overview: eight section rows in menu order, each a link with its state line filled', async () => {
+    await openPage('settings');
+    const rows = await page.$$eval('#settings-overview a.ov-row', (as) => as.map((a) => [a.getAttribute('href'), a.querySelector('.ov-name').textContent.trim()]));
+    assert.deepEqual(rows, [
+      ['/admin/providers/', 'Providers'], ['/admin/clients/', 'Clients'], ['/admin/services/', 'Services'], ['/admin/network/', 'Network'],
+      ['/admin/security/', 'Security'], ['/admin/backup/', 'Backup'], ['/admin/notifications/', 'Notifications'], ['/admin/general/', 'General'],
+    ]);
+    for (const slug of Object.keys(OVERVIEW_SHAPES)) {
+      await overviewFilled(slug);
+      const text = (await page.textContent('#ov-' + slug)).trim();
+      assert.match(text, OVERVIEW_SHAPES[slug], slug + ' shows its state: ' + text);
+    }
+    const sizes = await page.$$eval('#settings-overview a.ov-row', (as) => as.map((a) => a.getBoundingClientRect().height));
+    assert.ok(sizes.every((h) => h >= (isPhone ? 44 : 24)), 'every row is a large target: ' + sizes.join(','));
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), true, 'no sideways scroll');
+    for (const [href] of rows) {
+      await page.goto(base + 'settings/');
+      await page.waitForSelector('#app:not([hidden])');
+      await page.click(`#settings-overview a[href="${href}"]`);
+      await page.waitForURL('**' + href + '**');
+      await page.waitForSelector('#app:not([hidden])');
+      assert.equal(await page.getAttribute(`#nav a[data-tab="${href.split('/')[2]}"]`, 'aria-current'), 'page', href + ' opens its page');
+    }
+  });
+  await step('settings overview: a failed read shows Unavailable on its row only, and the row fills again when the read works', async () => {
+    await page.goto(base + 'settings/');
+    await page.waitForSelector('#app:not([hidden])');
+    const seen = errors.length;
+    await page.route('**/api/admin/v1/network', (route) => route.fulfill({ status: 500, contentType: 'application/json', body: '{"error":"internal","detail":"faked by the test"}' }));
+    try {
+      await page.reload();
+      await page.waitForSelector('#app:not([hidden])');
+      await page.waitForFunction(() => document.getElementById('ov-network').textContent === 'Unavailable');
+      for (const slug of Object.keys(OVERVIEW_SHAPES).filter((s) => s !== 'network')) {
+        await overviewFilled(slug);
+        assert.match((await page.textContent('#ov-' + slug)).trim(), OVERVIEW_SHAPES[slug], slug + ' still fills');
+      }
+    } finally {
+      await page.unroute('**/api/admin/v1/network');
+    }
+    // The 500 is the fault this step made: its console line is not a page error.
+    for (let i = errors.length - 1; i >= seen; i--) if (/status of 500/.test(errors[i])) errors.splice(i, 1);
+    await page.reload();
+    await page.waitForSelector('#app:not([hidden])');
+    await page.waitForFunction(() => { const t = document.getElementById('ov-network').textContent.trim(); return t !== '' && t !== 'Loading…' && t !== 'Unavailable'; });
+    assert.match((await page.textContent('#ov-network')).trim(), OVERVIEW_SHAPES.network, 'the network row fills again');
+  });
+  await step('settings overview: the menu heading opens it and marks it current there; no sub-item repeats it', async () => {
+    await openPage('providers');
+    assert.equal(await page.locator('#nav .sm-subs a[data-tab="settings"]').count(), 0, 'the overview is not a sub-item');
+    assert.equal(await page.getAttribute('#nav a[data-tab="settings"]', 'aria-current'), null, 'the heading is not current on another Settings page');
+    assert.match(await page.getAttribute('#nav a[data-tab="settings"]', 'class'), /sm-parent/, 'the Settings heading is bold under Settings');
+    await openPage('settings');
+    assert.equal(await page.getAttribute('#nav a[data-tab="settings"]', 'aria-current'), 'page', 'the heading is current on the overview');
+    assert.equal(await page.locator('#nav a[aria-current="page"]').count(), 1, 'one current item');
+    const subs = await page.evaluate(() => [...document.querySelector('#nav a[data-tab="settings"]').nextElementSibling.querySelectorAll('a')].map((a) => a.dataset.tab));
+    assert.deepEqual(subs, ['providers', 'clients', 'services', 'network', 'security', 'backup', 'notifications', 'general']);
+    assert.equal(await page.locator('#settings-overview').count(), 1, 'the overview is on the page');
+  });
+
   await step('side menu: every page once, the current page and its group marked, the health line, licence and source from the constants', async () => {
     const K = await page.evaluate(() => window.ui.ready);
     await page.goto(base + 'audit/sealed/');

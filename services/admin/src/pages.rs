@@ -86,6 +86,7 @@ page!(AuditCalls, audit_calls, "audit/calls", "audit.html", "Model calls");
 page!(AuditAdmin, audit_admin, "audit/admin", "audit_admin.html", "Admin actions");
 page!(AuditSealed, audit_sealed, "audit/sealed", "audit.html", "Sealed access");
 page!(AuditRouting, audit_routing, "audit/routing", "audit.html", "Routing");
+page!(Settings, settings, "settings", "settings.html", "Settings");
 page!(Providers, providers, "providers", "providers.html", "Providers");
 page!(Clients, clients, "clients", "clients.html", "Clients");
 page!(Services, services, "services", "services.html", "Services");
@@ -105,6 +106,7 @@ pub static PAGES: &[Page] = &[
     Page { slug: "audit/admin", label: "Admin actions", group: Group::Audit, icon: "clipboard", render: audit_admin },
     Page { slug: "audit/sealed", label: "Sealed access", group: Group::Audit, icon: "lock", render: audit_sealed },
     Page { slug: "audit/routing", label: "Routing", group: Group::Audit, icon: "route", render: audit_routing },
+    Page { slug: "settings", label: "Settings", group: Group::Settings, icon: "settings", render: settings },
     Page { slug: "providers", label: "Providers", group: Group::Settings, icon: "cube", render: providers },
     Page { slug: "clients", label: "Clients", group: Group::Settings, icon: "people", render: clients },
     Page { slug: "services", label: "Services", group: Group::Settings, icon: "server", render: services },
@@ -116,13 +118,22 @@ pub static PAGES: &[Page] = &[
     Page { slug: "reference", label: "Reference", group: Group::Reference, icon: "reference", render: reference },
 ];
 
+/// A page is its group's overview when its slug is the group's name in lower case (`settings` in Settings).
+/// Its heading links to it and it is the heading itself in the menu, not a sub-item (plan step 5.4).
+pub fn is_overview(p: &Page) -> bool {
+    p.slug == p.group.label().to_lowercase()
+}
+
 /// One entry of the side menu: a top-level page (Home, Alerts, Reference), or a group heading (Audit,
-/// Settings) with its pages under it. A group's heading links to its first page.
+/// Settings) with its pages under it. A group's heading links to its first page; when that is the group's
+/// overview, the heading is the overview's link and the other pages are its sub-items.
 pub struct MenuGroup {
     pub label: &'static str,
     pub icon: &'static str,
     /// True for Audit and Settings, whose pages are listed under the heading.
     pub nested: bool,
+    /// True when the first page is the group's overview (see `is_overview`).
+    pub overview: bool,
     pub pages: Vec<&'static Page>,
 }
 
@@ -131,10 +142,32 @@ impl MenuGroup {
     pub fn href(&self) -> String {
         path(self.pages[0])
     }
+    /// The overview's slug, or empty when the group has none. The heading carries it as its `data-tab`.
+    pub fn overview_slug(&self) -> &'static str {
+        if self.overview {
+            self.pages[0].slug
+        } else {
+            ""
+        }
+    }
+    /// The pages listed under the heading: all of them, except an overview, which the heading already is.
+    pub fn subs(&self) -> &[&'static Page] {
+        if self.overview {
+            &self.pages[1..]
+        } else {
+            &self.pages
+        }
+    }
     /// Whether `slug` is one of this group's pages (its heading is then bold, rule 1).
     pub fn holds(&self, slug: &str) -> bool {
         self.pages.iter().any(|p| p.slug == slug)
     }
+}
+
+/// The pages of the Settings group that are sections (not its overview), in menu order: one row each on the
+/// Settings overview.
+pub fn settings_sections() -> Vec<&'static Page> {
+    PAGES.iter().filter(|p| p.group == Group::Settings && !is_overview(p)).collect()
 }
 
 /// The side menu, built once from `PAGES`: each Top or Reference page on its own, and each Audit or
@@ -154,9 +187,10 @@ pub fn menu() -> &'static [MenuGroup] {
                         _ => "settings",
                     },
                     nested,
+                    overview: is_overview(p),
                     pages: vec![p],
                 }),
-                _ => out.push(MenuGroup { label: p.label, icon: p.icon, nested, pages: vec![p] }),
+                _ => out.push(MenuGroup { label: p.label, icon: p.icon, nested, overview: false, pages: vec![p] }),
             }
         }
         out
@@ -292,6 +326,34 @@ mod tests {
                     let heading = &nav[nav.find("sm-item sm-parent").unwrap()..];
                     let heading = &heading[..heading.find("</a>").unwrap()];
                     assert!(heading.contains(&format!(">{}</span>", p.group.label())), "{}: the heading is {}", p.slug, p.group.label());
+                    // Plan step 5.4: a group whose first page is its overview (Settings) links its heading to that page,
+                    // which is then the current item, and no sub-item lists it again. Other groups' headings are never current.
+                    assert_eq!(
+                        heading.contains(r#"aria-current="page""#),
+                        is_overview(p),
+                        "{}: the heading is current only on the overview",
+                        p.slug
+                    );
+                    if is_overview(p) {
+                        assert!(
+                            heading.contains(&format!(
+                                r#"href="/admin/{}/" data-tab="{}" data-tip="Settings" aria-current="page">"#,
+                                p.slug, p.slug
+                            )),
+                            "{}: the overview's heading is its link, current",
+                            p.slug
+                        );
+                        // Every nested page that is not an overview is a sub-item: the Audit pages and the Settings sections.
+                        let subs = PAGES.iter().filter(|q| matches!(q.group, Group::Audit | Group::Settings) && !is_overview(q)).count();
+                        assert_eq!(nav.matches("sm-item sm-sub").count(), subs, "{}: every page but the overview is a sub-item", p.slug);
+                        assert_eq!(
+                            nav.matches(&format!(r#"href="/admin/{}/" data-tab="{}" data-tip="Settings""#, p.slug, p.slug)).count(),
+                            1,
+                            "{}: listed once",
+                            p.slug
+                        );
+                        assert!(!nav.contains(&format!(r#"sm-sub" href="/admin/{}/""#, p.slug)), "{}: not a sub-item too", p.slug);
+                    }
                 }
                 _ => assert_eq!(parents, 0, "{}: no heading is bold", p.slug),
             }

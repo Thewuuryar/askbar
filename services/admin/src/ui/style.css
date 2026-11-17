@@ -504,3 +504,17 @@ input, select { min-height: var(--target-min); }
   .alerts-act { justify-content: flex-start; }
   .alerts-act .btn { min-height: var(--btn-h-touch); }
 }
+
+/* The Settings overview (plan step 5.4): one row per section, hairlines between them (rule 7). Each row is a link of
+   at least 44 px (rule 44), its icon, its name and one line of state. On a phone the state drops under the name. */
+.ov-list { list-style: none; margin: var(--space-3) 0 0; padding: 0; border-top: 1px solid var(--line); }
+.ov-row { display: flex; align-items: center; gap: var(--space-3); min-height: var(--btn-h-touch); padding: var(--space-2) var(--space-2); border-bottom: 1px solid var(--line); color: var(--fg); text-decoration: none; }
+.ov-row:hover { background: var(--accent-soft); }
+.ov-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.ov-row .icon { flex: none; color: var(--muted); }
+.ov-name { flex: none; font-weight: var(--weight-bold); }
+.ov-state { min-width: 0; margin-left: auto; color: var(--muted); font-size: var(--text-s); text-align: right; }
+@media (max-width: 560px) {
+  .ov-row { flex-wrap: wrap; row-gap: var(--space-1); }
+  .ov-state { flex-basis: 100%; margin-left: 0; padding-left: calc(var(--icon) + var(--space-3)); text-align: left; }
+}

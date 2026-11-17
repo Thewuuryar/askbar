@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{%- import "components.html" as c %}
+{% block hint %}Every setting, by section. Each line shows what is set now.{% endblock %}
+{% block content %}
+    <ul class="ov-list" id="settings-overview">
+      {%- for p in crate::pages::settings_sections() %}
+      <li class="ov-item">
+        <a class="ov-row" href="{{ crate::pages::path(p) }}">{% call c::icon(p.icon) %}{% endcall %}<span class="ov-name">{{ p.label }}</span><span class="ov-state" id="ov-{{ p.slug }}">Loading…</span></a>
+      </li>
+      {%- endfor %}
+    </ul>
+{% endblock %}

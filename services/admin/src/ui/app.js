@@ -63,6 +63,7 @@
   const page = document.body.dataset.page;
   const tabs = [
     { id: 'home', load: loadHome },
+    { id: 'settings', load: loadOverview },
     { id: 'providers', load: loadProviders },
     { id: 'services', load: loadServices },
     { id: 'clients', load: loadClients },
@@ -719,15 +720,58 @@
     box.querySelector('.status-word').textContent = text;
     $('menu-health').dataset.tip = text;
   }
+  // The health line's state and words, from the service list. The Services row of the Settings overview shows the same words.
+  function healthOf(services) {
+    const down = services.filter((s) => s.state !== 'running').length;
+    return { state: down ? 'warning' : 'ok', text: down ? down + ' of ' + services.length + ' services not running' : 'All ' + services.length + ' services running' };
+  }
   const liveHealth = ui.live(() => api('GET', '/api/admin/v1/services', undefined, { etag: true }), {
     when: appShownNow,
     render: ({ services }) => {
-      const down = services.filter((s) => s.state !== 'running').length;
-      showHealth(down ? 'warning' : 'ok', down ? down + ' of ' + services.length + ' services not running' : 'All ' + services.length + ' services running');
+      const health = healthOf(services);
+      showHealth(health.state, health.text);
     },
     // Signed out, or the admin itself is away: say it is not checked.
     onError: () => showHealth('pending', 'Services not checked'),
   });
+  // ---- the Settings overview (plan step 5.4): one row per section, in menu order (the rows come from PAGES). Each row has
+  // its own live read of the endpoint named here, so a failed read shows "Unavailable" on that row only. Lines are text.
+  const plural = (n, one, many) => n + ' ' + (n === 1 ? one : many);
+  const yesNoWord = (v) => (v ? 'on' : 'off');
+  const OVERVIEW = {
+    providers: { read: () => api('GET', '/api/admin/v1/providers', undefined, { etag: true }), line: (list) => plural(list.length, 'provider', 'providers') },
+    clients: {
+      read: () => Promise.all([api('GET', '/api/admin/v1/users', undefined, { etag: true }), api('GET', '/api/admin/v1/clients', undefined, { etag: true })]),
+      line: ([users, clients]) => plural(users.length, 'person', 'people') + ', ' + plural(clients.length, 'client', 'clients'),
+    },
+    services: { read: () => api('GET', '/api/admin/v1/services', undefined, { etag: true }), line: ({ services }) => healthOf(services).text },
+    network: { read: () => api('GET', '/api/admin/v1/network'), line: (n) => n.hostname || 'No host name' },
+    security: { read: () => api('GET', '/api/admin/v1/keys'), line: (list) => (list.length ? 'API key: ' + list[0].name : 'No API key') },
+    backup: {
+      read: () => api('GET', '/api/admin/v1/backup/schedule'),
+      line: (v) => (v.last_success_at ? ['Last backup ', ui.time(v.last_success_at)] : 'Never'),
+    },
+    notifications: {
+      read: () => api('GET', '/api/admin/v1/alerts'),
+      line: (a) => 'ntfy ' + yesNoWord(a.ntfy.server && a.ntfy.topic) + ', email ' + yesNoWord(a.email.host && a.email.from && a.email.to),
+    },
+    general: { read: () => api('GET', '/api/admin/v1/settings'), line: (s) => 'Kill switch ' + yesNoWord(s.kill_switch) },
+  };
+  let overviewLives = null;
+  function loadOverview() {
+    if (!overviewLives) {
+      overviewLives = Object.entries(OVERVIEW).map(([slug, row]) => {
+        const box = $('ov-' + slug);
+        return ui.live(row.read, {
+          when: appShownNow,
+          render(data) { box.replaceChildren(...[].concat(row.line(data))); },
+          onError(ex) { if (ex.message !== 'Signed out') box.textContent = 'Unavailable'; },
+        });
+      });
+    }
+    return Promise.all(overviewLives.map((live) => live.start()));
+  }
+
   function showApp() {
     hideAll();
     show($('app'), true);
