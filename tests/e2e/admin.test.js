@@ -1795,6 +1795,138 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       await page.unroute('**/api/admin/v1/status');
     }
   });
+  await step('home: quick actions (one filled primary), Needs attention from the bell items plus setup gaps, each linking to its fix, and the empty state', async () => {
+    const K = await page.evaluate(() => window.ui.ready);
+    const wait = K.LIVE_EVERY_SECS * 2 * 1000 + 3000;
+    const clean = { server_online: true, token_rejected: false, audit_chain: { state: 'ok' }, alerts: 'ok', sealed_content: { open: false, alerts: [] } };
+    const healthy = {
+      providers: [{ id: 'p1', name: 'Main' }], catalog: { models: [{ provider_id: 'p1', model: 'm' }], default: 'p1/m' }, users: [{ id: 'u1', name: 'Ann' }],
+      clients: [{ id: 'c1' }], 'backup/schedule': { enabled: true, destination: { path: '/b', writable: true, problem: null, same_disk: false, files: [] }, last_success_at: 100, drill_due: false },
+      network: { tls_enabled: false, hostname: '' }, // plain HTTP with no host name is fine: no row
+    };
+    let fake = clean;
+    let setup = healthy;
+    await page.route('**/api/admin/v1/status', async (route) => {
+      const real = await (await route.fetch()).json();
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ...real, ...fake }) });
+    });
+    await page.route(/\/api\/admin\/v1\/(providers|catalog|users|clients|backup\/schedule|network)$/, async (route) => {
+      if (route.request().method() !== 'GET') { await route.continue(); return; }
+      const key = new URL(route.request().url()).pathname.replace('/api/admin/v1/', '');
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify(setup[key]) });
+    });
+    try {
+      await page.goto(base + 'home/');
+      await page.evaluate(() => { try { sessionStorage.removeItem('askbar-admin.alert-pops'); } catch (_) { /* none */ } });
+      await page.reload();
+      await page.waitForSelector('#app:not([hidden])');
+      // Nothing wrong: the empty state, and no rows.
+      await page.waitForSelector('#attention-empty:not([hidden]) .empty-state', { timeout: wait });
+      assert.equal((await page.innerText('#attention-empty')).trim(), 'Nothing needs attention');
+      assert.equal(await page.locator('#attention-list .arow').count(), 0);
+      assert.equal(await page.innerText('#attention-count'), '0 items');
+      // Quick actions: exactly one filled primary on the page; the rest are secondary; links go where they say.
+      assert.equal(await page.locator('.btn-primary:visible, button.primary:visible').count(), 1, 'one filled primary');
+      assert.equal(await page.locator('#quick-actions .btn-primary').count(), 1);
+      assert.deepEqual(await page.$$eval('#quick-actions a', (a) => a.map((x) => [x.textContent.trim(), x.getAttribute('href')])),
+        [['Pair a client', '/admin/clients/#d-user'], ['Add provider', '/admin/providers/#add-provider'], ['Open audit', '/admin/audit/calls/']]);
+      for (const sel of ['#quick-actions .btn']) {
+        for (const box of await page.$$eval(sel, (a) => a.map((x) => { const r = x.getBoundingClientRect(); return [r.width, r.height]; }))) {
+          assert.ok(box[0] >= (isPhone ? 44 : 24) - 0.5 && box[1] >= (isPhone ? 44 : 24) - 0.5, 'quick action target ' + box);
+        }
+      }
+      // Hairlines, not boxes (rule 7).
+      const look = await page.evaluate(() => {
+        const cs = (s) => getComputedStyle(document.querySelector(s));
+        const sec = cs('#attention');
+        return { box: ['Top', 'Right', 'Bottom', 'Left'].some((d) => parseFloat(sec['border' + d + 'Width']) > 0) || sec.boxShadow !== 'none' || sec.backgroundColor !== 'rgba(0, 0, 0, 0)', rule: parseFloat(cs('.home-sec-head').borderBottomWidth) };
+      });
+      assert.equal(look.box, false, 'the section is not a box');
+      assert.equal(look.rule, 1, 'a hairline under the heading');
+
+      // Back up now: success is a toast, a refusal is an inline line, and the button is busy meanwhile.
+      await page.route('**/api/admin/v1/backup/run', (route) => route.fulfill({ status: 409, contentType: 'application/problem+json', body: JSON.stringify({ error: 'backup_failed', detail: 'The destination is full.' }) }));
+      await page.click('#home-backup');
+      await page.waitForSelector('#home-error:not([hidden])');
+      assert.equal(await page.innerText('#home-error'), 'The destination is full.');
+      assert.equal(await page.locator('#toasts .toast').count(), 0, 'an error is not a toast');
+      await page.unroute('**/api/admin/v1/backup/run');
+      await page.route('**/api/admin/v1/backup/run', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ file: 'askbar-1.tar' }) }));
+      await page.click('#home-backup');
+      await page.waitForSelector('#toasts .toast');
+      assert.match(await page.innerText('#toasts .toast'), /Backup made: askbar-1\.tar/);
+      assert.equal(await page.isHidden('#home-error'), true, 'the error line clears');
+      assert.equal(await page.innerText('#home-backup'), 'Back up now', 'the button is back');
+      await page.unroute('**/api/admin/v1/backup/run');
+
+      // One critical (chain), two alert warnings (delivery not set up, sealed open), plus setup gaps: no provider, no backup key, and HTTPS on with no host name (HTTPS off with no host name, as in the healthy set, gives no row).
+      fake = { ...clean, alerts: 'not_set_up', audit_chain: { state: 'edited', detail: 'An audit record was edited.' },
+        sealed_content: { open: true, idle_left_secs: 600, total_left_secs: 900, alerts: [{ kind: 'retention_changed', at: Math.floor(Date.now() / 1000), text: 'Retention was changed.' }] } };
+      setup = { ...healthy, providers: [], 'backup/schedule': { ...healthy['backup/schedule'], enabled: false }, network: { tls_enabled: true, hostname: '' } };
+      await page.waitForFunction(() => document.querySelectorAll('#attention-list .arow').length === 6, null, { timeout: wait });
+      assert.equal(await page.isHidden('#attention-empty'), true);
+      assert.equal(await page.innerText('#attention-count'), '6 items');
+      const rows = await page.$$eval('#attention-list .arow', (r) => r.map((x) => ({
+        source: x.dataset.source, word: x.querySelector('.status-word').textContent, sym: !!x.querySelector('.status-sym'),
+        text: x.querySelector('.arow-text').textContent, href: x.querySelector('a').getAttribute('href'),
+      })));
+      assert.deepEqual(rows.map((r) => r.word), ['Critical', 'Warning', 'Warning', 'Warning', 'Warning', 'Warning'], 'critical first, then warnings');
+      assert.equal(rows.every((r) => r.sym), true, 'a symbol with every word (rule 37)');
+      assert.deepEqual(rows.slice(0, 3).map((r) => r.source), ['alert', 'alert', 'alert'], 'the alert rows come before the setup gaps');
+      assert.deepEqual(rows.slice(3).map((r) => r.source), ['setup', 'setup', 'setup']);
+      assert.deepEqual(rows.map((r) => r.href), ['/admin/audit/calls/', '/admin/settings/#alerts-form', '/admin/audit/sealed/', '/admin/providers/#add-provider', '/admin/backup/', '/admin/network/#n-host']);
+      assert.equal(rows[0].text, 'An audit record was edited.');
+      // The alert rows are the bell's: their count is the badge (info is in neither).
+      await page.waitForFunction(() => document.getElementById('bell-badge').textContent === '3');
+      assert.equal(await page.locator('#attention-list .arow[data-source="alert"]').count(), Number(await page.innerText('#bell-badge')), 'the alert rows match the bell badge');
+      assert.equal(await page.locator('.btn-primary:visible, button.primary:visible').count(), 1, 'still one filled primary');
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'no horizontal scroll');
+      for (const box of await page.$$eval('#attention-list .arow a', (a) => a.map((x) => { const r = x.getBoundingClientRect(); return [r.width, r.height]; }))) {
+        assert.ok(box[0] >= (isPhone ? 44 : 24) - 0.5 && box[1] >= (isPhone ? 44 : 24) - 0.5, 'row link target ' + box);
+      }
+      // Each link opens the page that fixes it.
+      await page.click('#attention-list .arow[data-source="setup"] a >> nth=0');
+      await page.waitForURL('**/admin/providers/**');
+
+      // The rest of the rule table, one read at a time: a gap goes when it is fixed, and a failed read invents none.
+      await page.goto(base + 'home/');
+      await page.waitForSelector('#app:not([hidden])');
+      setup = { ...healthy, catalog: { models: [], default: null }, users: [], clients: [], 'backup/schedule': { ...healthy['backup/schedule'], last_success_at: null, drill_due: true } };
+      fake = clean;
+      await page.waitForFunction(() => document.querySelectorAll('#attention-list .arow').length === 4, null, { timeout: wait });
+      assert.deepEqual(await page.$$eval('#attention-list .arow a', (a) => a.map((x) => x.getAttribute('href'))),
+        ['/admin/providers/#catalog-section', '/admin/clients/#users', '/admin/backup/', '/admin/backup/'], 'no approved model, no user (so no client rule), no backup yet, drill due');
+      assert.equal(await page.locator('#attention-list .arow[data-source="alert"]').count(), 0);
+      setup = healthy;
+      await page.waitForFunction(() => document.querySelectorAll('#attention-list .arow').length === 0, null, { timeout: wait });
+      assert.equal(await page.isVisible('#attention-empty .empty-state'), true, 'the empty state returns');
+
+      // axe with rows showing (a copy of the page in a context that lets axe in).
+      fake = { ...clean, alerts: 'not_set_up' };
+      setup = { ...healthy, providers: [] };
+      await page.waitForFunction(() => document.querySelectorAll('#attention-list .arow').length === 2, null, { timeout: wait });
+      const axeCtx = await browser.newContext({ viewport, bypassCSP: true, storageState: await ctx.storageState() });
+      try {
+        const ap = await axeCtx.newPage();
+        await ap.route('**/api/admin/v1/status', async (route) => {
+          const real = await (await route.fetch()).json();
+          await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ...real, ...fake }) });
+        });
+        await ap.route(/\/api\/admin\/v1\/(providers|catalog|users|clients|backup\/schedule|network)$/, async (route) => {
+          const key = new URL(route.request().url()).pathname.replace('/api/admin/v1/', '');
+          await route.fulfill({ contentType: 'application/json', body: JSON.stringify(setup[key]) });
+        });
+        await ap.goto(base + 'home/');
+        await ap.waitForFunction(() => document.querySelectorAll('#attention-list .arow').length === 2, null, { timeout: wait });
+        await ap.addScriptTag({ content: fs.readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8') });
+        const found = await ap.evaluate(async () => (await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'] } })).violations.map((v) => v.id + ': ' + v.nodes.map((n) => n.target.join(' ')).join(', ')));
+        assert.deepEqual(found, [], 'axe on Home with attention rows');
+      } finally { await axeCtx.close(); }
+    } finally {
+      await page.unroute('**/api/admin/v1/status');
+      await page.unroute(/\/api\/admin\/v1\/(providers|catalog|users|clients|backup\/schedule|network)$/);
+    }
+  });
   await step('global search: combobox and listbox, groups in rule 4 order with Reference last, "/" focuses it but not inside a field, a setting shows its value, Enter opens it, Esc closes then clears', async () => {
     const ORDER = ['Pages', 'Settings', 'People', 'Clients', 'Providers', 'Models', 'Audit', 'Reference'];
     const state = await page.evaluate(async () => {

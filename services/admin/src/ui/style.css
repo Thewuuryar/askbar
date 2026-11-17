@@ -420,3 +420,17 @@ input, select { min-height: var(--target-min); }
 .row-new { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
 .card, .sealed-row { transition: background-color var(--motion), box-shadow var(--motion); }
 .live-note { margin: var(--space-2) 0; }
+
+/* Home (plan steps 4.2 and 4.3): sections are separated by hairlines, not boxes (rule 7). */
+.quick-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: var(--space-3) 0 var(--space-4); }
+.quick-actions .btn { display: inline-flex; align-items: center; gap: var(--space-2); text-decoration: none; }
+.home-sec { margin-top: var(--space-4); }
+.home-sec-head { display: flex; justify-content: space-between; align-items: baseline; padding-bottom: var(--space-2); border-bottom: 1px solid var(--line); }
+.home-sec-head h3 { margin: 0; }
+.attn .arow { display: grid; grid-template-columns: 112px 1fr auto; align-items: center; gap: var(--space-3); min-height: 36px; padding: var(--space-1) 0; border-bottom: 1px solid var(--line); }
+.arow-text { min-width: 0; overflow-wrap: anywhere; }
+.arow-critical .arow-text { color: var(--danger); }
+@media (max-width: 560px) {
+  .attn .arow { grid-template-columns: 1fr; gap: var(--space-1); padding: var(--space-3) 0; }
+  .attn .arow .btn { justify-self: start; margin-top: var(--space-2); }
+}

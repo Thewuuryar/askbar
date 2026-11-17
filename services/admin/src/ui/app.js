@@ -62,6 +62,7 @@
   // current page's loader. A page with no entry here needs none; audit.js registers the Audit page's.
   const page = document.body.dataset.page;
   const tabs = [
+    { id: 'home', load: loadHome },
     { id: 'providers', load: loadProviders },
     { id: 'services', load: loadServices },
     { id: 'clients', load: loadClients },
@@ -352,6 +353,10 @@
   const BELL_KIND_DEFAULT = { fix: 'Admin actions', href: '/admin/audit/admin/' };
   const BELL_SKIP_KINDS = ['chain_mismatch', 'rejected_token'];
 
+  // What the badge counts, and what Home's Needs attention lists first: critical plus warning, never info. One function, so
+  // the two cannot disagree.
+  const urgentOf = (items) => items.filter((i) => i.severity !== 'info');
+
   function bellItems(st) {
     const items = [];
     const add = (key, text) => items.push({ key, ...BELL[key], ...(text ? { text } : {}) });
@@ -369,6 +374,84 @@
     return items.sort((a, b) => order.indexOf(a.severity) - order.indexOf(b.severity));
   }
 
+  // ------------------------------------------------------------- Home: Needs attention (plan step 4.2, rules 7, 8, 12)
+
+  // The list is the bell's critical and warning items (urgentOf(bellItems(status)), the same rows the badge counts, pushed
+  // here by showBell) followed by the setup gaps below (always warnings; Network is optional, so a missing host name counts only while HTTPS is on). No API is added: the gaps come from GETs the other
+  // pages already make. Each rule: `test(data)` is true when the gap exists; `data` holds the answers (a read that failed
+  // is null, and a rule that needs it is skipped, so a failed read never invents a gap). `fix` is the link's label.
+  const SETUP_GAPS = [
+    { key: 'no-provider', test: (d) => d.providers && d.providers.length === 0, text: 'No provider is set up, so nobody can ask anything yet.', fix: 'Add provider', href: '/admin/providers/#add-provider' },
+    { key: 'no-model', test: (d) => d.providers && d.providers.length > 0 && d.catalog && d.catalog.models.length === 0, text: 'No model is approved, so clients have nothing to choose from.', fix: 'Approve models', href: '/admin/providers/#catalog-section' },
+    { key: 'no-default-model', test: (d) => d.catalog && d.catalog.models.length > 0 && !d.catalog.default, text: 'No default model is chosen.', fix: 'Choose default', href: '/admin/providers/#catalog-section' },
+    { key: 'no-user', test: (d) => d.users && d.users.length === 0, text: 'No user exists yet, so there is nobody to pair an app for.', fix: 'Add user', href: '/admin/clients/#users' },
+    { key: 'no-client', test: (d) => d.users && d.users.length > 0 && d.clients && d.clients.length === 0, text: 'No client is paired yet.', fix: 'Pair a client', href: '/admin/clients/#d-user' },
+    { key: 'no-backup-key', test: (d) => d.schedule && !d.schedule.enabled, text: 'No backup key is set, so nothing is backed up.', fix: 'Open Backup', href: '/admin/backup/' },
+    { key: 'backup-destination', test: (d) => d.schedule && d.schedule.enabled && (!d.schedule.destination.writable || !!d.schedule.destination.problem), text: 'The backup destination cannot be written to.', fix: 'Open Backup', href: '/admin/backup/' },
+    { key: 'no-backup-yet', test: (d) => d.schedule && d.schedule.enabled && !d.schedule.last_success_at, text: 'No backup has been made yet.', fix: 'Open Backup', href: '/admin/backup/' },
+    { key: 'drill-due', test: (d) => d.schedule && d.schedule.enabled && d.schedule.drill_due, text: 'A restore drill is due: restore a backup into a throwaway install to be sure it works.', fix: 'Open Backup', href: '/admin/backup/' },
+    { key: 'no-hostname', test: (d) => d.network && d.network.tls_enabled && !d.network.hostname, text: 'HTTPS is on but no host name is set.', fix: 'Open Network', href: '/admin/network/#n-host' },
+  ];
+  const setupGapItems = (data) => SETUP_GAPS.filter((g) => g.test(data)).map((g) => ({ key: 'gap-' + g.key, severity: 'warning', source: 'setup', text: g.text, fix: g.fix, href: g.href }));
+
+  // Reads of the setup answers; a refusal (an answer with a status) leaves that part null, a lost connection throws so
+  // ui.live backs off and shows "Reconnecting…".
+  const GAP_READS = {
+    providers: '/api/admin/v1/providers', catalog: '/api/admin/v1/catalog', users: '/api/admin/v1/users', clients: '/api/admin/v1/clients',
+    schedule: '/api/admin/v1/backup/schedule', network: '/api/admin/v1/network',
+  };
+  async function readSetup() {
+    const entries = await Promise.all(Object.entries(GAP_READS).map(async ([key, path]) => {
+      try { return [key, await api('GET', path)]; } catch (ex) { if (ex.status === undefined) throw ex; return [key, null]; }
+    }));
+    return Object.fromEntries(entries);
+  }
+
+  let bellNow = null; // the bell's items, from the last status
+  let gapsNow = null; // the setup gaps, from the last read
+  let attentionShown = false;
+  function renderAttention() {
+    const list = $('attention-list');
+    if (!list || !bellNow || !gapsNow) return;
+    const rank = (i) => (i.severity === 'critical' ? 0 : 1);
+    const items = [...urgentOf(bellNow).map((i) => ({ ...i, source: 'alert' })), ...gapsNow].sort((a, b) => rank(a) - rank(b));
+    $('attention-count').textContent = items.length === 1 ? '1 item' : items.length + ' items';
+    ui.rows(list, items, (i) => ui.el('div', { class: 'arow arow-' + i.severity, 'data-source': i.source },
+      ui.status(i.severity === 'critical' ? 'error' : 'warning', i.severity === 'critical' ? 'Critical' : 'Warning'),
+      ui.el('span', { class: 'arow-text', text: i.text }),
+      ui.el('a', { class: 'btn btn-secondary btn-s', href: i.href, text: i.fix })), { key: (i) => i.key, fresh: attentionShown, noun: ['item needing attention', 'items needing attention'] });
+    attentionShown = true;
+    const empty = $('attention-empty');
+    empty.hidden = items.length > 0;
+    if (!empty.firstChild) empty.append(ui.empty('Nothing needs attention'));
+  }
+  let liveAttention = null;
+  function loadHome() {
+    if (!liveAttention) {
+      liveAttention = ui.live(readSetup, {
+        when: appShownNow,
+        notice: $('attention'),
+        render(data) { gapsNow = setupGapItems(data); renderAttention(); },
+        onError(ex) { if (ex.message !== 'Signed out') pageError(ex.message); },
+      });
+    }
+    return liveAttention.start();
+  }
+
+  // Quick actions: links to the page that does the work, and Back up now, which is the Backup page's own call.
+  on('home-backup', 'click', async (e) => {
+    const button = e.currentTarget;
+    const done = ui.busy(button, 'Backing up…');
+    inlineError('home-error', '');
+    try {
+      const r = await api('POST', '/api/admin/v1/backup/run');
+      ui.toast('Backup made: ' + r.file);
+      if (liveAttention) liveAttention.refresh();
+    } catch (ex) {
+      inlineError('home-error', ex.message);
+    } finally { done(); }
+  });
+
   // A critical row pops up once per tab: the keys already shown are kept in sessionStorage (a blocked store only means
   // a pop-up may come back after a reload). A key that is no longer critical is forgotten, so it can pop up again.
   const baseTitle = document.title;
@@ -378,8 +461,10 @@
   function showBell(st) {
     const items = bellItems(st);
     ui.bell(items);
+    bellNow = items;
+    renderAttention();
     // The tab title carries the count the badge shows (critical plus warning), so a hidden tab still says so.
-    const urgent = items.filter((i) => i.severity !== 'info').length;
+    const urgent = urgentOf(items).length;
     document.title = (urgent ? '(' + urgent + ') ' : '') + baseTitle;
     const critical = items.filter((i) => i.severity === 'critical');
     for (const item of critical) {
