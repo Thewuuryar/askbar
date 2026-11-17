@@ -1441,6 +1441,109 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     assert.equal(await page.innerText('#seal-button'), 'Unseal');
     await page.waitForSelector('#banners [data-banner="unsealed"]', { state: 'detached', timeout: 15000 });
   });
+  await step('alerts bell: the badge counts critical plus warning, the menu groups them with links, a new critical alert pops up once, arrows and Esc work', async () => {
+    const K = await page.evaluate(() => window.ui.ready);
+    const wait = K.STATUS_EVERY_SECS * 2 * 1000 + 3000;
+    const clean = { server_online: true, token_rejected: false, audit_chain: { state: 'ok' }, alerts: 'ok', sealed_content: { open: false, alerts: [] } };
+    let fake = clean;
+    await page.route('**/api/admin/v1/status', async (route) => {
+      const real = await (await route.fetch()).json();
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ...real, ...fake }) });
+    });
+    try {
+      await page.goto(base + 'network/');
+      await page.evaluate(() => { try { sessionStorage.removeItem('askbar-admin.alert-pops'); } catch (_) { /* none */ } });
+      await page.reload();
+      await page.waitForSelector('#app:not([hidden])');
+      const label = () => page.getAttribute('#bell-button', 'aria-label');
+      await page.waitForFunction(() => document.getElementById('bell-button').getAttribute('aria-label') === 'Alerts: none', null, { timeout: wait });
+      assert.equal(await page.isHidden('#bell-badge'), true, 'no badge at 0');
+      assert.equal(await page.locator('#alert-pops .alert-pop').count(), 0);
+      const box = await page.locator('#bell-button').boundingBox();
+      assert.ok(box.width >= (isPhone ? 44 : 24) - 0.5 && box.height >= (isPhone ? 44 : 24) - 0.5, 'bell target ' + box.width + 'x' + box.height);
+      await page.click('#bell-button');
+      assert.equal(await page.getAttribute('#bell-button', 'aria-expanded'), 'true');
+      assert.deepEqual(await page.$$eval('#bell-menu [role="menuitem"]', (a) => a.map((x) => [x.textContent.replace(/\s+/g, ' ').trim(), x.getAttribute('aria-disabled')])),
+        [['No alerts', 'true'], ['See all alerts Not available yet: the Alerts page comes in a later step', 'true']], 'empty state, and the Alerts page is greyed');
+      await page.keyboard.press('Escape');
+
+      // One critical (chain), two warnings (delivery not set up, sealed open), two infos.
+      const now = Math.floor(Date.now() / 1000);
+      fake = { ...clean, alerts: 'not_set_up', audit_chain: { state: 'edited', detail: 'An audit record was edited.' },
+        sealed_content: { open: true, idle_left_secs: 600, total_left_secs: 900, alerts: [
+          { kind: 'unsealed', at: now - 120, text: 'Sealed content was opened.' }, { kind: 'retention_changed', at: now - 60, text: 'Retention was changed.' },
+          { kind: 'chain_mismatch', at: now - 30, text: 'Not counted twice.' }] } };
+      await page.waitForFunction(() => document.getElementById('bell-button').getAttribute('aria-label') === 'Alerts: 1 critical, 2 warning, 2 info', null, { timeout: wait });
+      assert.equal(await page.innerText('#bell-badge'), '3', 'critical plus warning, not info');
+      assert.match(await page.getAttribute('#bell-badge', 'class'), /bell-badge-critical/);
+      assert.equal(await page.getAttribute('#bell-button', 'data-tip'), await label(), 'the tooltip says the same');
+      // The pop-up: once, with the text, a link and a close button; focus stays where it was and it was announced assertively.
+      await page.waitForSelector('#alert-pops .alert-pop');
+      assert.equal(await page.locator('#alert-pops .alert-pop').count(), 1);
+      assert.match(await page.innerText('#alert-pops .alert-pop'), /An audit record was edited\./);
+      assert.equal(await page.getAttribute('#alert-pops .alert-pop a', 'href'), '/admin/audit/calls/');
+      assert.equal(await page.evaluate(() => !!document.activeElement.closest('#alert-pops')), false, 'the pop-up does not take focus');
+      assert.match(await page.textContent('#announcer-urgent'), /Critical alert: An audit record was edited\./);
+      assert.equal(await page.locator('#toasts .toast').count(), 0, 'not a toast');
+      // The menu: groups in order, each item a link to where it is fixed.
+      await page.click('#bell-button');
+      assert.deepEqual(await page.$$eval('#bell-menu [role="group"]', (g) => g.map((x) => x.getAttribute('aria-label'))), ['Critical alerts', 'Warning alerts', 'Info alerts']);
+      assert.deepEqual(await page.$$eval('#bell-menu a[role="menuitem"]', (a) => a.map((x) => x.getAttribute('href'))),
+        ['/admin/audit/calls/', '/admin/settings/#alerts-form', '/admin/audit/sealed/', '/admin/audit/admin/', '/admin/audit/sealed/']);
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'no horizontal scroll');
+      const fit = await page.evaluate(() => { const r = document.getElementById('bell-menu').getBoundingClientRect(); return r.left >= 0 && r.right <= window.innerWidth; });
+      assert.equal(fit, true, 'the menu fits the screen');
+      // axe, with the menu and the pop-up showing (a copy of this page in a context that lets axe in).
+      const axeCtx = await browser.newContext({ viewport, bypassCSP: true, storageState: await ctx.storageState() });
+      try {
+        const ap = await axeCtx.newPage();
+        await ap.route('**/api/admin/v1/status', async (route) => {
+          const real = await (await route.fetch()).json();
+          await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ...real, ...fake }) });
+        });
+        await ap.goto(base + 'network/');
+        await ap.waitForSelector('#alert-pops .alert-pop', { timeout: wait });
+        await ap.click('#bell-button');
+        await ap.addScriptTag({ content: fs.readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8') });
+        const found = await ap.evaluate(async () => (await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'] } })).violations.map((v) => v.id + ': ' + v.nodes.map((n) => n.target.join(' ')).join(', ')));
+        assert.deepEqual(found, [], 'axe on the open menu and pop-up');
+      } finally { await axeCtx.close(); }
+      await page.keyboard.press('Escape');
+      // Keyboard: ArrowDown on the button opens on the first item, arrows move, End reaches the last, Esc returns to the button.
+      await page.focus('#bell-button');
+      await page.keyboard.press('ArrowDown');
+      assert.equal(await page.evaluate(() => document.activeElement.getAttribute('href')), '/admin/audit/calls/');
+      await page.keyboard.press('ArrowDown');
+      assert.equal(await page.evaluate(() => document.activeElement.getAttribute('href')), '/admin/settings/#alerts-form');
+      await page.keyboard.press('End');
+      assert.equal(await page.evaluate(() => document.activeElement.textContent.startsWith('See all alerts')), true);
+      assert.equal(await page.evaluate(() => document.activeElement.getAttribute('aria-disabled')), 'true');
+      await page.keyboard.press('Enter');
+      assert.equal(await page.getAttribute('#bell-button', 'aria-expanded'), 'true', 'Enter on the greyed item does nothing');
+      await page.keyboard.press('Escape');
+      assert.equal(await page.evaluate(() => document.activeElement.id), 'bell-button');
+      assert.equal(await page.getAttribute('#bell-button', 'aria-expanded'), 'false');
+      // Once only: closed, it does not come back on the next poll, nor after a reload in the same tab.
+      await page.click('#alert-pops .alert-pop button');
+      assert.equal(await page.locator('#alert-pops .alert-pop').count(), 0);
+      await page.waitForTimeout(K.STATUS_EVERY_SECS * 1000 + 1500);
+      assert.equal(await page.locator('#alert-pops .alert-pop').count(), 0, 'not again');
+      await page.reload();
+      await page.waitForFunction(() => document.getElementById('bell-button').getAttribute('aria-label') === 'Alerts: 1 critical, 2 warning, 2 info', null, { timeout: wait });
+      assert.equal(await page.locator('#alert-pops .alert-pop').count(), 0, 'not after a reload either');
+      // The condition ends: the count goes, and a later critical alert pops up again.
+      fake = clean;
+      await page.waitForFunction(() => document.getElementById('bell-button').getAttribute('aria-label') === 'Alerts: none', null, { timeout: wait });
+      assert.equal(await page.isHidden('#bell-badge'), true);
+      fake = { ...clean, token_rejected: true };
+      await page.waitForSelector('#alert-pops .alert-pop', { timeout: wait });
+      assert.equal(await label(), 'Alerts: 1 critical');
+      fake = clean;
+      await page.waitForSelector('#alert-pops .alert-pop', { state: 'detached', timeout: wait });
+    } finally {
+      await page.unroute('**/api/admin/v1/status');
+    }
+  });
   await step('audit overview: a canned stats payload fills the tiles, the day bars and the provider bars', async () => {
     const canned = {
       since: 0, requests: 40, by_status: { done: 36, error: 3, cancelled: 1 }, error_rate: 0.075,

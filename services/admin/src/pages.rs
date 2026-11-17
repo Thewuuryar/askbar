@@ -253,6 +253,13 @@ mod tests {
             let facts = &facts[..facts.find(r#"id="banners""#).unwrap()];
             assert_eq!(facts.matches(r#"id="sb-seal-status""#).count(), 1, "{}", p.slug);
             assert_eq!(facts.matches(r#"id="seal-button""#).count(), 1, "{}", p.slug);
+            assert_eq!(facts.matches(r#"id="bell-button""#).count(), 1, "{}: one bell", p.slug);
+            assert!(
+                facts.contains(r#"aria-label="Alerts: none""#) && facts.contains(r#"id="bell-menu""#),
+                "{}: the bell has a name and a menu",
+                p.slug
+            );
+            assert_eq!(html.matches(r#"id="alert-pops""#).count(), 1, "{}: one pop-up region", p.slug);
             assert_eq!(html.matches(r#"id="unseal-box""#).count(), 1, "{}", p.slug);
             assert_eq!(html.matches(r#"id="unseal-pass-error""#).count(), 1, "{}", p.slug);
             let current = format!(r#"href="/admin/{}/" data-tab="{}" data-tip="{}" aria-current="page">"#, p.slug, p.slug, p.label);

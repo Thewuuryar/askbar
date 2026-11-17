@@ -496,6 +496,91 @@
     return { menu, open, close };
   };
 
+  // ------------------------------------------------------------- alerts bell (plan step 3.4, rules 38, 45)
+
+  // ui.bell(items) draws the status bar's bell from a list of { key, severity: 'critical'|'warning'|'info', text,
+  // href, fix (the page's name), at (Unix seconds, optional) }. The badge counts critical plus warning and is hidden
+  // at 0; the button's name says the counts. The menu groups Critical, Warning, Info; each item is a link to where it
+  // is fixed. "See all alerts" waits for the Alerts page (step 4.4) and is greyed with the na pattern until then.
+  const SEVERITIES = [['critical', 'Critical'], ['warning', 'Warning'], ['info', 'Info']];
+  // The severity icons are server-rendered into #alert-icons (components.html icon macro); copy, never build HTML.
+  const alertIcon = (name) => {
+    const holder = $('alert-icons');
+    const src = holder && holder.content.querySelector('[data-icon="' + name + '"]');
+    return src && src.firstElementChild ? src.firstElementChild.cloneNode(true) : null;
+  };
+  const ALL_ALERTS_REASON = 'the Alerts page comes in a later step';
+  let bell = null;
+  let bellSignature = '';
+  ui.bell = (items) => {
+    const button = $('bell-button');
+    if (!button) return;
+    if (!bell) bell = ui.menu(button, () => {});
+    const count = (sev) => items.filter((i) => i.severity === sev).length;
+    const crit = count('critical');
+    const warn = count('warning');
+    const parts = SEVERITIES.map(([sev]) => [count(sev), sev]).filter(([n]) => n > 0).map(([n, sev]) => n + ' ' + sev);
+    const name = 'Alerts: ' + (parts.length ? parts.join(', ') : 'none');
+    button.setAttribute('aria-label', name);
+    button.dataset.tip = name;
+    const badge = $('bell-badge');
+    badge.hidden = crit + warn === 0;
+    badge.textContent = String(crit + warn);
+    badge.classList.toggle('bell-badge-critical', crit > 0);
+    const signature = JSON.stringify(items.map((i) => [i.key, i.severity, i.text, i.href, i.at || 0]));
+    if (signature === bellSignature) return;
+    bellSignature = signature;
+
+    const menu = bell.menu;
+    const inside = menu.contains(document.activeElement);
+    const was = inside ? [...menu.querySelectorAll('[role="menuitem"]')].indexOf(document.activeElement) : -1;
+    menu.replaceChildren();
+    if (!items.length) menu.append(el('span', { class: 'bell-empty', role: 'menuitem', 'aria-disabled': 'true', tabindex: '-1', text: 'No alerts' }));
+    for (const [sev, word] of SEVERITIES) {
+      const group = items.filter((i) => i.severity === sev);
+      if (!group.length) continue;
+      menu.append(el('div', { role: 'group', 'aria-label': word + ' alerts', class: 'bell-group' },
+        el('div', { class: 'bell-group-label bell-' + sev, 'aria-hidden': 'true', text: word + ' · ' + group.length }),
+        ...group.map((i) => el('a', { role: 'menuitem', class: 'bell-item bell-' + sev, href: i.href, tabindex: '-1', 'data-alert': i.key },
+          el('span', { class: 'bell-icon' }, alertIcon(sev)),
+          el('span', { class: 'bell-text' }, el('span', { text: i.text }),
+            el('small', {}, i.fix, i.at ? ' · ' : '', i.at ? ui.time(i.at) : null))))));
+    }
+    // Greyed, not disabled: Tab and arrow keys reach it, Enter and a click do nothing (rule 40).
+    const all = el('span', { role: 'menuitem', class: 'bell-all', 'aria-disabled': 'true', tabindex: '-1' },
+      'See all alerts', ' ', el('small', { text: 'Not available yet: ' + ALL_ALERTS_REASON }));
+    all.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); });
+    menu.append(all);
+    if (was >= 0) {
+      const list = [...menu.querySelectorAll('[role="menuitem"]')];
+      list[Math.min(was, list.length - 1)].focus();
+    }
+  };
+
+  // A critical alert pops up beside the bell the first time it appears (rule 38). It is not a toast (rule 32: toasts
+  // are success and Undo only): its own .alert-pop in #alert-pops, held until it is closed or the condition ends.
+  // It is read out assertively and never takes focus. Returns the element; ui.alertPopClear(key) removes it.
+  ui.alertPop = (alert) => {
+    const region = $('alert-pops');
+    if (!region || region.querySelector('[data-alert-pop="' + CSS.escape(alert.key) + '"]')) return null;
+    const close = el('button', { type: 'button', class: 'btn btn-quiet btn-icon', 'aria-label': 'Close alert', 'data-tip': 'Close', onclick: () => pop.remove() }, alertIcon('close'));
+    const pop = el('div', { class: 'alert-pop', role: 'group', 'aria-label': 'Critical alert', 'data-alert-pop': alert.key },
+      el('span', { class: 'alert-pop-icon' }, alertIcon('critical')),
+      el('div', { class: 'alert-pop-body' },
+        el('span', { class: 'alert-pop-sev', text: 'Critical' }),
+        el('p', { class: 'alert-pop-text', text: alert.text }),
+        el('a', { class: 'btn btn-secondary btn-s', href: alert.href, text: 'Open ' + alert.fix })),
+      close);
+    region.append(pop);
+    ui.announce('Critical alert: ' + alert.text, { urgent: true });
+    return pop;
+  };
+  ui.alertPopClear = (key) => {
+    const region = $('alert-pops');
+    const pop = region && region.querySelector('[data-alert-pop="' + CSS.escape(key) + '"]');
+    if (pop) pop.remove();
+  };
+
   // ------------------------------------------------------------- lists
 
   // ui.rows(tbody, items, render, { key, empty }) replaces the rows: render(item) returns a <tr>, key(item) its

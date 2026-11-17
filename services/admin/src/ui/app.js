@@ -323,6 +323,75 @@
     ". Until then the admin can't change anything on the server. The banner goes away when the server accepts the token again.",
   ];
 
+  // The alerts bell (plan step 3.4, rule 38). There is no alerts API: the list is built here from the status response, one
+  // row per condition below. Severity: critical = the whole admin cannot do its job or the log cannot be trusted (server
+  // offline, token rejected, audit chain broken); warning = something to fix soon (alert delivery not set up, failing or
+  // unreachable; sealed content open); info = the day's recent `alerts` entries. `href` is where it is fixed. Only a
+  // critical row pops up. Delivery is fixed in Settings, where ntfy and email are set today (Notifications, step 5.x).
+  const BELL = {
+    offline: { severity: 'critical', fix: 'Services', href: '/admin/services/', text: "The server is offline. Changes, tests, clients and backups won't work until it is back." },
+    rejected: { severity: 'critical', fix: 'Services', href: '/admin/services/', text: "The server rejected this admin's token. Changes can't be saved until it is replaced." },
+    chain: { severity: 'critical', fix: 'Audit', href: '/admin/audit/calls/', text: 'The audit records no longer match what the admin stored.' },
+    not_set_up: { severity: 'warning', fix: 'Settings', href: '/admin/settings/#alerts-form', text: 'Alerts are not set up, so nothing will tell you when something needs attention.' },
+    failing: { severity: 'warning', fix: 'Settings', href: '/admin/settings/#alerts-form', text: 'Alert delivery has not worked for half an hour.' },
+    unreachable: { severity: 'warning', fix: 'Services', href: '/admin/services/', text: 'The alerter does not answer, so no alert is delivered.' },
+    sealed: { severity: 'warning', fix: 'Audit / Sealed access', href: '/admin/audit/sealed/', text: 'Sealed content is open.' },
+  };
+  // Info rows come from `alerts` entries by kind (ADR 0055 names); a kind not listed goes to Admin actions. The two kinds
+  // that are conditions above are left out, so nothing is counted twice.
+  const BELL_KIND_FIX = {
+    unsealed: { fix: 'Audit / Sealed access', href: '/admin/audit/sealed/' },
+    audit_disk_low: { fix: 'Services', href: '/admin/services/' },
+    audit_disk_critical: { fix: 'Services', href: '/admin/services/' },
+    component_silent: { fix: 'Services', href: '/admin/services/' },
+    caddy_silent: { fix: 'Services', href: '/admin/services/' },
+    restart_loop: { fix: 'Services', href: '/admin/services/' },
+    backup_failed: { fix: 'Backup', href: '/admin/backup/' },
+    backup_missed: { fix: 'Backup', href: '/admin/backup/' },
+    restore_performed: { fix: 'Backup', href: '/admin/backup/' },
+  };
+  const BELL_KIND_DEFAULT = { fix: 'Admin actions', href: '/admin/audit/admin/' };
+  const BELL_SKIP_KINDS = ['chain_mismatch', 'rejected_token'];
+
+  function bellItems(st) {
+    const items = [];
+    const add = (key, text) => items.push({ key, ...BELL[key], ...(text ? { text } : {}) });
+    if (st.token_rejected) add('rejected');
+    else if (!st.server_online) add('offline');
+    const chain = st.audit_chain || {};
+    if (['rollback', 'rewritten', 'edited'].includes(chain.state)) add('chain', chain.detail);
+    if (BELL[st.alerts] && st.alerts !== 'ok') add(st.alerts);
+    if (sealed.open) add('sealed', 'Sealed content is open for about ' + minutes(sealed.left) + ' more minute' + (minutes(sealed.left) === 1 ? '' : 's') + '.');
+    const recent = (st.sealed_content && st.sealed_content.alerts) || [];
+    recent.filter((a) => !BELL_SKIP_KINDS.includes(a.kind)).sort((a, b) => b.at - a.at).forEach((a) => {
+      items.push({ key: 'alert-' + a.kind + '-' + a.at, severity: 'info', ...(BELL_KIND_FIX[a.kind] || BELL_KIND_DEFAULT), text: a.text, at: a.at });
+    });
+    const order = ['critical', 'warning', 'info'];
+    return items.sort((a, b) => order.indexOf(a.severity) - order.indexOf(b.severity));
+  }
+
+  // A critical row pops up once per tab: the keys already shown are kept in sessionStorage (a blocked store only means
+  // a pop-up may come back after a reload). A key that is no longer critical is forgotten, so it can pop up again.
+  const POPPED_KEY = 'askbar-admin.alert-pops';
+  const popped = new Set();
+  try { JSON.parse(sessionStorage.getItem(POPPED_KEY) || '[]').forEach((k) => popped.add(k)); } catch (_) { /* no storage */ }
+  function showBell(st) {
+    const items = bellItems(st);
+    ui.bell(items);
+    const critical = items.filter((i) => i.severity === 'critical');
+    for (const item of critical) {
+      if (popped.has(item.key)) continue;
+      popped.add(item.key);
+      ui.alertPop(item);
+    }
+    for (const key of [...popped]) {
+      if (critical.some((i) => i.key === key)) continue;
+      popped.delete(key);
+      ui.alertPopClear(key);
+    }
+    try { sessionStorage.setItem(POPPED_KEY, JSON.stringify([...popped])); } catch (_) { /* no storage */ }
+  }
+
   // The "server offline" banner: ask the admin how its link to the server is, now and then.
   let statusTimer = null;
   async function checkServer() {
@@ -337,6 +406,7 @@
       ui.banner('chain', 'error', bad ? chain.detail : null);
       showAlertsBanner(st.alerts);
       showSealed(st.sealed_content || {});
+      showBell(st);
       checkKill();
     } catch (_) { /* signed out, or the admin itself is away */ }
   }
