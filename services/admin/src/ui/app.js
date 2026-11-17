@@ -22,7 +22,7 @@
     let data = null;
     const text = await res.text();
     if (text) { try { data = JSON.parse(text); } catch (_) { data = null; } }
-    if (res.status === 502 && typeof show === 'function' && document.getElementById('offline')) show($('offline'), true);
+    if (res.status === 502) ui.banner('offline', 'error', OFFLINE_TEXT);
     if (!res.ok) {
       // A problem+json body: `detail` is the sentence for a person, `error` the stable code.
       const err = new Error((data && (data.detail || data.error)) || ('Request failed (' + res.status + ')'));
@@ -33,10 +33,19 @@
     return data;
   }
 
-  function flash(text) {
-    const f = $('flash');
-    f.textContent = text;
-    show(f, !!text);
+  // Success goes to a toast; an error stays on the page (rule 32): inline next to the action when the page has a
+  // line for it, else the one page-level line under the status bar. '' clears it.
+  const OFFLINE_TEXT = "Server offline. The admin can't reach the Askbar server, so changes, tests, clients and backups won't work until it is back. Nothing you change now is lost or half-saved.";
+  function pageError(text) {
+    const line = $('page-error');
+    line.textContent = text;
+    show(line, !!text);
+  }
+  function inlineError(id, text) {
+    const line = $(id);
+    if (!line) return pageError(text);
+    line.textContent = text;
+    show(line, !!text);
   }
 
   // ------------------------------------------------------------- pages
@@ -59,12 +68,12 @@
     tabs.push(tab);
     if (appShown && tab.id === page) loadPage();
   }
-  window.askbarAdmin = { api, flash, registerTab, show, $ };
+  window.askbarAdmin = { api, pageError, registerTab, show, $ };
 
   function loadPage() {
-    flash('');
+    pageError('');
     const t = tabs.find((x) => x.id === page);
-    if (t && t.load) t.load().catch((e) => flash(e.message));
+    if (t && t.load) t.load().catch((e) => pageError(e.message));
   }
 
   // ------------------------------------------------------------ login
@@ -197,30 +206,32 @@
     $('password').focus();
   }
 
-  // Sealed content (ADR 0011): a banner with the time left and a Seal button while it is open, and the alerts of the last
-  // day (an unseal, a change of the timeouts). Everything is set as text.
+  // Sealed content (ADR 0011): a banner with the time left and a Seal button while it is open (step 3.3 moves this
+  // into the status bar's seal toggle), and one banner per alert of the last day (an unseal, a change of the timeouts).
+  // Banners show every condition for now: there is no Notifications setting yet to choose the non-critical ones.
+  // Everything is set as text.
   let sealedLeft = 0;
   function minutes(secs) { return Math.max(1, Math.ceil(secs / 60)); }
+  async function sealNow() {
+    try { await api('DELETE', '/api/admin/v1/audit/session'); } catch (_) { /* signed out */ }
+    checkServer();
+  }
   function showSealed(s) {
     const open = !!s.open;
     sealedLeft = open ? Math.min(s.idle_left_secs || 0, s.total_left_secs || 0) : 0;
-    $('unsealed-text').textContent = open ? 'Sealed content is open for about ' + minutes(sealedLeft) + ' more minute' + (minutes(sealedLeft) === 1 ? '' : 's') + ' (less if it is not used).' : '';
-    show($('unsealed-banner'), open);
-    const box = $('sealed-alerts');
-    box.textContent = '';
-    for (const a of s.alerts || []) {
-      const p = document.createElement('p');
-      p.className = 'flash';
-      p.dataset.kind = a.kind;
-      p.textContent = new Date(a.at * 1000).toLocaleString() + ' · ' + a.text;
-      box.appendChild(p);
+    ui.banner('unsealed', 'warning', open ? 'Sealed content is open for about ' + minutes(sealedLeft) + ' more minute' + (minutes(sealedLeft) === 1 ? '' : 's') + ' (less if it is not used).' : null,
+      { action: { label: 'Seal', onclick: sealNow }, live: true });
+    const keep = new Set();
+    (s.alerts || []).forEach((a, i) => {
+      const key = 'sealed-' + i;
+      keep.add(key);
+      ui.banner(key, 'info', new Date(a.at * 1000).toLocaleString() + ' \u00b7 ' + a.text);
+    });
+    for (const b of document.querySelectorAll('#banners [data-banner^="sealed-"]')) {
+      if (!keep.has(b.dataset.banner)) b.remove();
     }
     if (window.askbarAudit && window.askbarAudit.sessionFromStatus) window.askbarAudit.sessionFromStatus(s);
   }
-  $('unsealed-seal').addEventListener('click', async () => {
-    try { await api('DELETE', '/api/admin/v1/audit/session'); } catch (_) { /* signed out */ }
-    checkServer();
-  });
 
   // Alert delivery (ADR 0055): a banner when no channel is set up, when delivery has not worked for half an hour, or when the
   // alerter does not answer. The sentences are the admin's own, set as text.
@@ -230,10 +241,17 @@
     unreachable: 'The alerter does not answer, so no alert is delivered. Look at it on the Services page.',
   };
   function showAlertsBanner(state) {
-    const text = ALERTS_BANNER[state] || '';
-    $('alerts-banner').textContent = text;
-    show($('alerts-banner'), !!text);
+    ui.banner('alerts', 'error', ALERTS_BANNER[state] || null);
   }
+
+  // The commands are shown as code (built as elements, never as HTML).
+  const REJECTED_PARTS = [
+    "The server rejected this admin's token. Rotate it on the Docker host with ",
+    { code: 'docker compose run --rm bootstrap rotate admin-server' },
+    ', then restart both: ',
+    { code: 'docker compose restart server admin' },
+    ". Until then the admin can't change anything on the server. The banner goes away when the server accepts the token again.",
+  ];
 
   // The "server offline" banner: ask the admin how its link to the server is, now and then.
   let statusTimer = null;
@@ -241,13 +259,12 @@
     try {
       const st = await api('GET', '/api/admin/v1/status');
       // A refused token is the more useful message: the server is there, but it does not accept this admin.
-      show($('rejected'), !!st.token_rejected);
-      show($('offline'), !st.server_online && !st.token_rejected);
+      ui.banner('rejected', 'error', st.token_rejected ? REJECTED_PARTS : null);
+      ui.banner('offline', 'error', !st.server_online && !st.token_rejected ? OFFLINE_TEXT : null);
       // The audit chain no longer matches what this admin stored (ADR 0010 rule 7). The sentence is the admin's, text only.
       const chain = st.audit_chain || {};
       const bad = ['rollback', 'rewritten', 'edited'].includes(chain.state);
-      $('chain-alert').textContent = bad ? chain.detail : '';
-      show($('chain-alert'), bad);
+      ui.banner('chain', 'error', bad ? chain.detail : null);
       showAlertsBanner(st.alerts);
       showSealed(st.sealed_content || {});
       checkKill();
@@ -382,13 +399,13 @@
           await new Promise((r) => setTimeout(r, 1000));
           try { const r = await fetch('/api/admin/v1/health'); if (r.ok && i > 1) { location.reload(); return; } } catch (_) { /* still down */ }
         }
-        flash('The admin has not come back within a minute. Check it from the host.');
+        pageError('The admin has not come back within a minute. Check it from the host.');
       }
     } catch (ex) {
-      flash(ex.message);
+      pageError(ex.message);
     }
     servicesBusy = false;
-    loadServices().catch((e) => flash(e.message));
+    loadServices().catch((e) => pageError(e.message));
   }
 
   async function loadServices() {
@@ -446,7 +463,7 @@
       b.textContent = 'Disconnect';
       b.addEventListener('click', async () => {
         if (!confirm('Disconnect ' + a.label + '? Replies through the CPA provider stop working until you connect again.')) return;
-        try { await api('DELETE', '/api/admin/v1/cpa/accounts/' + encodeURIComponent(a.name)); } catch (ex) { flash(ex.message); }
+        try { await api('DELETE', '/api/admin/v1/cpa/accounts/' + encodeURIComponent(a.name)); } catch (ex) { pageError(ex.message); }
         loadCpa();
       });
       row.append(label, b);
@@ -565,7 +582,7 @@
     edit.dataset.action = 'edit';
     const del = button('Delete', 'danger', async () => {
       if (!confirm('Delete provider "' + p.name + '"?')) return;
-      try { await api('DELETE', '/api/admin/v1/providers/' + encodeURIComponent(p.id)); loadProviders(); } catch (ex) { flash(ex.message); }
+      try { await api('DELETE', '/api/admin/v1/providers/' + encodeURIComponent(p.id)); loadProviders(); } catch (ex) { pageError(ex.message); }
     });
     del.dataset.action = 'delete';
     if (p.managed) {
@@ -724,7 +741,7 @@
     show(err, false);
     try {
       await api('PUT', '/api/admin/v1/catalog', catalogDraft);
-      flash('');
+      pageError('');
       await loadCatalog();
       $('catalog-status').textContent = 'Saved.';
     } catch (ex) {
@@ -877,7 +894,7 @@
     try {
       await api('PUT', '/api/admin/v1/password', { current: $('pw-current').value, new: $('pw-new').value });
       for (const id of ['pw-current', 'pw-new', 'pw-new2']) $(id).value = '';
-      flash('Password changed. Other browsers have been signed out.');
+      ui.toast('Password changed. Other browsers have been signed out.');
     } catch (ex) {
       err.textContent = ex.message;
       show(err, true);
@@ -957,7 +974,7 @@
     b.textContent = 'Revoke';
     try {
       await api('DELETE', '/api/admin/v1/keys/' + encodeURIComponent(keyId));
-      flash('The API key was revoked.');
+      ui.toast('The API key was revoked.');
       await loadKeys();
     } catch (ex) {
       $('key-error').textContent = ex.message;
@@ -1010,16 +1027,16 @@
     show(err, false);
     try {
       const r = await api('POST', '/api/admin/v1/backup/run');
-      flash('Backup made: ' + r.file);
+      ui.toast('Backup made: ' + r.file);
     } catch (ex) {
       err.textContent = ex.message;
       show(err, true);
     }
-    loadSchedule().catch((e) => flash(e.message));
+    loadSchedule().catch((e) => inlineError('sched-error', e.message));
   });
 
   on('sched-drill', 'click', async () => {
-    try { await api('POST', '/api/admin/v1/backup/drill'); await loadSchedule(); } catch (ex) { flash(ex.message); }
+    try { await api('POST', '/api/admin/v1/backup/drill'); await loadSchedule(); } catch (ex) { inlineError('sched-error', ex.message); }
   });
 
   on('schedule-form', 'submit', async (e) => {
@@ -1028,7 +1045,7 @@
     show(err, false);
     try {
       await api('PUT', '/api/admin/v1/backup/schedule', { keep_files: Number($('sched-keep-files').value), keep_days: Number($('sched-keep-days').value) });
-      flash('Saved.');
+      ui.toast('Saved.');
       await loadSchedule();
     } catch (ex) {
       err.textContent = ex.message;
@@ -1059,7 +1076,7 @@
       for (const id of ['bk-pass', 'bk-pass2']) $(id).value = '';
       $('bk-stored').checked = false;
       await loadBackupKey();
-      flash('Backup key rotated. Take a new backup now.');
+      ui.toast('Backup key rotated. Take a new backup now.');
     } catch (ex) {
       fail(ex.message);
     }
@@ -1180,7 +1197,7 @@
   }
 
   on('n-apply', 'click', async () => {
-    try { showProxy(await api('POST', '/api/admin/v1/network/apply')); } catch (ex) { flash(ex.message); }
+    try { showProxy(await api('POST', '/api/admin/v1/network/apply')); } catch (ex) { inlineError('network-error', ex.message); }
   });
 
   on('network-form', 'submit', async (e) => {
@@ -1199,7 +1216,7 @@
         clear_token: $('n-clear').checked,
       });
       await loadNetwork();
-      flash('Network settings saved.');
+      ui.toast('Network settings saved.');
     } catch (ex) {
       err.textContent = ex.message;
       show(err, true);
@@ -1371,7 +1388,7 @@
       if (!d.revoked) {
         const revoke = button('Revoke', 'danger', async () => {
           if (!confirm('Revoke "' + d.name + '"? It will be signed out and must be paired again.')) return;
-          try { await api('POST', '/api/admin/v1/clients/' + encodeURIComponent(d.id) + '/revoke'); loadClients(); } catch (ex) { flash(ex.message); }
+          try { await api('POST', '/api/admin/v1/clients/' + encodeURIComponent(d.id) + '/revoke'); loadClients(); } catch (ex) { pageError(ex.message); }
         });
         revoke.dataset.action = 'revoke';
         head.appendChild(revoke);
@@ -1401,7 +1418,7 @@
   on('pairing-copy', 'click', async () => {
     const t = $('pairing-string');
     t.select();
-    try { await navigator.clipboard.writeText(t.value); flash('Copied.'); } catch (_) { document.execCommand('copy'); flash('Copied.'); }
+    try { await navigator.clipboard.writeText(t.value); ui.toast('Copied.'); } catch (_) { document.execCommand('copy'); ui.toast('Copied.'); }
   });
 
   // --------------------------------------------------------- settings
@@ -1478,7 +1495,7 @@
       await api('PUT', '/api/admin/v1/alerts', { ntfy });
       for (const id of ['a-server', 'a-topic', 'a-token']) $(id).value = '';
       await loadAlerts();
-      flash('Alert settings saved. Send a test alert to check that it arrives.');
+      ui.toast('Alert settings saved. Send a test alert to check that it arrives.');
     } catch (ex) { alertsError(ex); }
   });
   // Email. The channel not in the body stays as it is, so saving one never touches the other. A user name or password left empty
@@ -1497,7 +1514,7 @@
       await api('PUT', '/api/admin/v1/alerts', { email });
       for (const id of ['m-host', 'm-user', 'm-password', 'm-from', 'm-to']) $(id).value = '';
       await loadAlerts();
-      flash('Email settings saved. Send a test alert to check that it arrives.');
+      ui.toast('Email settings saved. Send a test alert to check that it arrives.');
     } catch (ex) { alertsError(ex, 'm-error'); }
   });
   on('m-remove', 'click', async () => {
@@ -1506,7 +1523,7 @@
     try {
       await api('PUT', '/api/admin/v1/alerts', { email: null });
       await loadAlerts();
-      flash('Email delivery removed.');
+      ui.toast('Email delivery removed.');
     } catch (ex) { alertsError(ex, 'm-error'); }
   });
   on('a-test', 'click', async () => {
@@ -1527,7 +1544,7 @@
       await api('PUT', '/api/admin/v1/alerts', { ntfy: null });
       $('a-result').textContent = '';
       await loadAlerts();
-      flash('ntfy delivery removed.');
+      ui.toast('ntfy delivery removed.');
     } catch (ex) { alertsError(ex); }
   });
 
@@ -1559,7 +1576,7 @@
           newest_first: $('s-newest-first').checked,
         },
       });
-      flash('Settings saved. Clients pick them up on their next message or when their window opens.');
+      ui.toast('Settings saved. Clients pick them up on their next message or when their window opens.');
     } catch (ex) {
       err.textContent = ex.message;
       show(err, true);
@@ -1580,7 +1597,7 @@
       const r = await api('POST', '/api/admin/v1/audit/rotate-key', { current: cur, new: next, confirm: $('r-new2').value });
       for (const id of ['r-current', 'r-new', 'r-new2']) $(id).value = '';
       $('s-key-id').textContent = r.key_id;
-      flash('The audit key was rotated. New key id ' + r.key_id + '. Content sealed before still needs the old passphrase.');
+      ui.toast('The audit key was rotated. New key id ' + r.key_id + '. Content sealed before still needs the old passphrase.');
     } catch (ex) {
       $('r-current').value = '';
       fail(ex.message);
@@ -1593,7 +1610,7 @@
     try {
       K = await ui.ready;
     } catch (_) {
-      flash('The admin could not load its settings. Reload the page.');
+      pageError('The admin could not load its settings. Reload the page.');
       return;
     }
     // Keep the state fresh while the tab is on screen.

@@ -165,7 +165,7 @@ async fn the_ui_is_served_with_its_security_headers() {
     }
     // Each section is its own page (plan step 1.16); the network page holds the allowlist.
     let page = t.http.get(format!("{}/admin/network/", t.adm)).send().await.unwrap().text().await.unwrap();
-    assert!(page.contains("id=\"offline\"") && page.contains("id=\"n-allow\""));
+    assert!(page.contains("id=\"banners\"") && page.contains("id=\"n-allow\""));
     // The admin holds no master key (the server makes its own), so its screens are gone. (The audit
     // key's rotation, added in 5.13 and 7.10, is a different thing and is here.)
     assert!(

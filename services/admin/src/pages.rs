@@ -277,10 +277,15 @@ mod tests {
             for name in ["Collapse menu", "Sign out"] {
                 assert!(html.contains(&format!(r#"aria-label="{name}" data-tip="{name}""#)), "{}: {name}", p.slug);
             }
-            // The same frame on every page: sign-in, first run, banners, sign-out.
-            for id in ["login", "setup", "offline", "flash", "logout", "app"] {
+            // The same frame on every page: sign-in, first run, the banner area, the page-level error line, sign-out.
+            for id in ["login", "setup", "banners", "page-error", "logout", "app"] {
                 assert!(html.contains(&format!(r#"id="{id}""#)), "{}: #{id}", p.slug);
             }
+            // The old flash banners are gone: banners and toasts replace them.
+            for id in ["offline", "rejected", "chain-alert", "alerts-banner", "unsealed-banner", "sealed-alerts", "flash"] {
+                assert!(!html.contains(&format!(r#"id="{id}""#)), "{}: old #{id}", p.slug);
+            }
+            assert_eq!(html.matches(r#"id="banners""#).count(), 1, "{}: one banner area", p.slug);
             // The component builders (which load the constants) come before app.js, which waits for them (plan step 1.9).
             let constants = html.find(r#"<script src="/admin/components.js" defer></script>"#).expect("components.js");
             let app = html.find(r#"<script src="/admin/app.js" defer></script>"#).expect("app.js");

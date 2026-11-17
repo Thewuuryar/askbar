@@ -104,16 +104,34 @@
   };
 
   // Page-wide banners (rule 39): one per condition, keyed, no close button; they clear when the
-  // condition ends (ui.banner(key, null)). Read out assertively.
-  ui.banner = (key, kind, text) => {
+  // condition ends (ui.banner(key, kind, null)). Read out assertively. `text` is a sentence, or a list of
+  // parts where {code: 'cmd'} is shown as code; everything is set as text. opts.action = {label, onclick}
+  // adds one fix button. opts.live updates a banner that is already up in place, without a new announcement
+  // (a countdown), so a focused fix button stays focused.
+  const bannerText = (parts) => parts.map((p) => (typeof p === 'string' ? p : p.code)).join('');
+  const bannerParts = (parts) => parts.map((p) => (typeof p === 'string' ? p : el('code', { text: p.code })));
+  ui.banner = (key, kind, text, opts = {}) => {
     const region = $('banners');
     if (!region) return null;
     const old = region.querySelector('[data-banner="' + CSS.escape(key) + '"]');
-    if (!kind || !text) { if (old) old.remove(); return null; }
-    if (old && old.dataset.kind === kind && old.textContent === text) return old;
-    const banner = el('div', { class: 'banner banner-' + kind, 'data-banner': key, 'data-kind': kind, text });
+    const parts = Array.isArray(text) ? text : [text];
+    const flat = text ? bannerText(parts) : '';
+    if (!kind || !flat) { if (old) old.remove(); return null; }
+    if (old && old.dataset.kind === kind) {
+      if (old.dataset.text === flat) return old;
+      if (opts.live) {
+        old.querySelector('.banner-text').textContent = flat;
+        old.dataset.text = flat;
+        return old;
+      }
+    }
+    const banner = el('div', { class: 'banner banner-' + kind, 'data-banner': key, 'data-kind': kind, 'data-text': flat },
+      el('p', { class: 'banner-text' }, ...bannerParts(parts)));
+    if (opts.action) {
+      banner.append(el('button', { type: 'button', class: 'btn btn-secondary btn-s', 'data-banner-action': true, text: opts.action.label, onclick: opts.action.onclick }));
+    }
     if (old) old.replaceWith(banner); else region.append(banner);
-    ui.announce(text, { urgent: true });
+    ui.announce(flat, { urgent: true });
     return banner;
   };
 
