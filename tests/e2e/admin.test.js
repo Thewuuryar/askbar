@@ -1838,6 +1838,44 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     assert.deepEqual(external, [], 'a request left the admin site');
     await openPage('providers');
   });
+  await step('backup: the new passphrase counts live, a mismatched pair blocks submit with an inline error, and nothing is sent (ADR 0013)', async () => {
+    await openPage('backup');
+    const min = await page.evaluate(async () => (await window.ui.ready).MIN_PASSPHRASE_CHARS);
+    assert.equal(await page.innerText('#bk-pass-hint'), 'At least ' + min + ' characters');
+    await page.fill('#bk-pass', 'short');
+    assert.equal(await page.innerText('#bk-pass-hint'), '5 of at least ' + min + ' characters');
+    assert.equal(await page.getAttribute('#bk-pass-hint', 'class'), 'hint', 'not yet long enough');
+    await page.fill('#bk-pass', BACKUP_PASS_2);
+    assert.equal(await page.innerText('#bk-pass-hint'), BACKUP_PASS_2.length + ' characters');
+    assert.match(await page.getAttribute('#bk-pass-hint', 'class'), /length-ok/);
+    // A mismatch: the error sits under the second field and the summary at the top of the form; no rotate request leaves the page.
+    const sent = [];
+    const seen = (req) => { if (req.url().includes('/api/admin/v1/backup/rotate-key')) sent.push(req.url()); };
+    page.on('request', seen);
+    await page.fill('#bk-pass2', BACKUP_PASS_2 + 'x');
+    await page.check('#bk-stored');
+    await page.click('#backup-key-form button[type=submit]');
+    await page.waitForSelector('#bk-pass2-error:not([hidden])');
+    assert.match(await page.innerText('#bk-pass2-error'), /do not match/);
+    assert.equal(await page.getAttribute('#bk-pass2', 'aria-invalid'), 'true');
+    assert.equal(await page.locator('#backup-key-form .error-summary').count(), 1, 'a summary at the top of the form');
+    // The stored box is part of the same check.
+    await page.fill('#bk-pass2', BACKUP_PASS_2);
+    await page.uncheck('#bk-stored');
+    await page.click('#backup-key-form button[type=submit]');
+    await page.waitForSelector('#bk-stored-error:not([hidden])');
+    assert.match(await page.innerText('#bk-stored-error'), /stored the passphrase/);
+    page.off('request', seen);
+    assert.deepEqual(sent, [], 'a refused pair sends nothing');
+    // The page keeps to the frame: no sideways scroll, every target at least 44 px on a phone (24 px otherwise).
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'no horizontal scroll');
+    const small = await page.evaluate((min) => [...document.querySelectorAll('#tab-backup button, #tab-backup a.btn, #tab-backup input:not([type=checkbox]), #tab-backup label.check')]
+      .map((t) => t.getBoundingClientRect()).filter((r) => r.height > 0 && (r.height < min || r.width < min)).length, isPhone ? 44 : 24);
+    assert.equal(small, 0, 'every target on this page is big enough');
+    // Clear the pair again so the next step starts from empty fields.
+    for (const id of ['bk-pass', 'bk-pass2']) await page.fill('#' + id, '');
+    await page.uncheck('#bk-stored');
+  });
   await step('backup: the key is shown by its fingerprint, and rotating asks twice, confirms, retires the old key and never shows a passphrase (ADR 0013)', async () => {
     await openPage('backup');
     await page.waitForFunction(() => /^[0-9a-f]{4}(-[0-9a-f]{4}){3}$/.test(document.getElementById('bk-fingerprint').textContent));
@@ -1848,7 +1886,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.fill('#bk-pass2', BACKUP_PASS_2 + 'x');
     await page.check('#bk-stored');
     await page.click('#backup-key-form button[type=submit]');
-    assert.match(await page.innerText('#bk-error'), /do not match/);
+    assert.match(await page.innerText('#bk-pass2-error'), /do not match/);
     await page.fill('#bk-pass2', BACKUP_PASS_2);
     await page.fill('#bk-pass', AUDIT_PASS);
     await page.fill('#bk-pass2', AUDIT_PASS);

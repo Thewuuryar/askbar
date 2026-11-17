@@ -1694,7 +1694,15 @@
   // ------------------------------------------------------- backup key (ADR 0013)
 
   // The Backup page: the key, and the scheduled backups (ADR 0013, D27 to D29). Text goes in by textContent.
+  // A clock time from seconds after midnight (the run time comes from constants), written as HH:MM.
+  const utcClock = (secs) => [Math.floor(secs / 3600), Math.floor((secs % 3600) / 60)].map((n) => String(n).padStart(2, '0')).join(':');
+  // The live count under the new passphrase is wired once, as the Security page does for its fields.
+  let backupWired = false;
   async function loadBackup() {
+    if (!backupWired) {
+      backupWired = true;
+      ui.lengthHint($('bk-pass'), K.MIN_PASSPHRASE_CHARS);
+    }
     loadRestore();
     await loadBackupKey();
     await loadSchedule();
@@ -1715,8 +1723,8 @@
       ? 'No backup key is set, so nothing is backed up.'
       : 'Last backup: ' + (v.last_success_at ? when(v.last_success_at) + ' (' + v.last_success_name + ')' : 'none yet')
         + (v.last_failure_at && (!v.last_success_at || v.last_failure_at > v.last_success_at) ? '. The last try failed (' + when(v.last_failure_at) + '): ' + (v.last_failure_reason || 'no reason given') : '')
-        + (v.missed ? '. No backup has succeeded for over 26 hours.' : '');
-    $('sched-next').textContent = v.enabled && v.next_run_at ? 'Next: ' + when(v.next_run_at) + ' (03:30 UTC daily).' : '';
+        + (v.missed ? '. No backup has succeeded for over ' + K.BACKUP_MISSED_AFTER_SECS / 3600 + ' hours.' : '');
+    $('sched-next').textContent = v.enabled && v.next_run_at ? 'Next: ' + when(v.next_run_at) + ' (' + utcClock(K.BACKUP_RUN_AT_SECS) + ' UTC daily).' : '';
     const list = $('sched-files');
     list.replaceChildren();
     for (const f of d.files) {
@@ -1776,10 +1784,14 @@
     const err = $('bk-error');
     show(err, false);
     const fail = (m) => { err.textContent = m; show(err, true); };
+    // The pair and the stored box are checked here, and each problem sits under its own field (rule 26).
+    ui.formErrors(e.target, []);
     const pass = $('bk-pass').value;
-    if (pass !== $('bk-pass2').value) return fail('The two passphrases do not match.');
-    if ([...pass].length < K.MIN_PASSPHRASE_CHARS) return fail('The passphrase must be at least ' + K.MIN_PASSPHRASE_CHARS + ' characters.');
-    if (!$('bk-stored').checked) return fail('Confirm that you stored the passphrase: it cannot be recovered.');
+    const problems = [];
+    if ([...pass].length < K.MIN_PASSPHRASE_CHARS) problems.push({ id: 'bk-pass', text: 'The passphrase must be at least ' + K.MIN_PASSPHRASE_CHARS + ' characters.' });
+    if (pass !== $('bk-pass2').value) problems.push({ id: 'bk-pass2', text: 'The two passphrases do not match.' });
+    if (!$('bk-stored').checked) problems.push({ id: 'bk-stored', text: 'Confirm that you stored the passphrase: it cannot be recovered.' });
+    if (problems.length) return ui.formErrors(e.target, problems);
     if (!confirm('Rotate the backup key? Backups made from now on need the new passphrase; older ones keep the old one.')) return;
     try {
       await api('POST', '/api/admin/v1/backup/rotate-key', { passphrase: pass, confirm: $('bk-pass2').value });

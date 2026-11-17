@@ -69,6 +69,11 @@ pub const BACKUP_MISSED_AFTER_SECS: i64 = 26 * 3600;
 pub const BACKUP_RETRY_AFTER_SECS: i64 = 3600;
 /// The restore drill is due this often.
 pub const DRILL_EVERY_SECS: i64 = 90 * 24 * 3600;
+/// The Backup page's keep limits: how many backups, and how many days. The server checks the same ranges.
+pub const MIN_BACKUP_KEEP_FILES: u32 = 1;
+pub const MAX_BACKUP_KEEP_FILES: u32 = 365;
+pub const MIN_BACKUP_KEEP_DAYS: u32 = 1;
+pub const MAX_BACKUP_KEEP_DAYS: u32 = 3650;
 
 // Pages.
 /// Every admin page's slug (`/admin/<slug>/`), in menu order. `pages::PAGES` lists the same, which a test checks.
@@ -162,6 +167,8 @@ struct Constants {
     backup_missed_after_secs: i64,
     backup_retry_after_secs: i64,
     drill_every_secs: i64,
+    backup_keep_files: Range<u32>,
+    backup_keep_days: Range<u32>,
     status_every_secs: u32,
     live_every_secs: u32,
     hidden_every_secs: u32,
@@ -211,6 +218,8 @@ fn current() -> Constants {
         backup_missed_after_secs: BACKUP_MISSED_AFTER_SECS,
         backup_retry_after_secs: BACKUP_RETRY_AFTER_SECS,
         drill_every_secs: DRILL_EVERY_SECS,
+        backup_keep_files: Range { min: MIN_BACKUP_KEEP_FILES, max: MAX_BACKUP_KEEP_FILES },
+        backup_keep_days: Range { min: MIN_BACKUP_KEEP_DAYS, max: MAX_BACKUP_KEEP_DAYS },
         status_every_secs: STATUS_EVERY_SECS,
         live_every_secs: LIVE_EVERY_SECS,
         hidden_every_secs: HIDDEN_EVERY_SECS,
@@ -250,6 +259,8 @@ mod tests {
             "NAME_MAX_CHARS",
             "AUDIT_RETENTION_DAYS",
             "BACKOFF_SECS",
+            "BACKUP_KEEP_DAYS",
+            "BACKUP_KEEP_FILES",
             "BACKUP_MISSED_AFTER_SECS",
             "BACKUP_RETRY_AFTER_SECS",
             "BACKUP_RUN_AT_SECS",
