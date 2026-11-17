@@ -81,6 +81,12 @@ fn every_admin_page_has_a_route_and_a_nav_link() {
 async fn the_old_audit_address_opens_model_calls_and_keeps_its_query() {
     let url = start().await;
     let http = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().unwrap();
+    // The landing page (plan step 4.1): /admin and /admin/ open Home.
+    for (from, to) in [("/admin", "/admin/home/"), ("/admin/", "/admin/home/")] {
+        let res = http.get(format!("{url}{from}")).send().await.unwrap();
+        assert!(res.status().is_redirection(), "{from}: {}", res.status());
+        assert_eq!(res.headers()["location"], to, "{from}");
+    }
     for (from, to) in
         [("/admin/audit/", "/admin/audit/calls/"), ("/admin/audit/?view=trace&id=abc", "/admin/audit/calls/?view=trace&id=abc")]
     {
@@ -88,7 +94,7 @@ async fn the_old_audit_address_opens_model_calls_and_keeps_its_query() {
         assert!(res.status().is_redirection(), "{from}: {}", res.status());
         assert_eq!(res.headers()["location"], to, "{from}");
     }
-    for slug in ["audit/calls", "audit/admin", "audit/sealed", "audit/routing", "reference"] {
+    for slug in ["home", "audit/calls", "audit/admin", "audit/sealed", "audit/routing", "reference"] {
         assert_eq!(http.get(format!("{url}/admin/{slug}/")).send().await.unwrap().status(), 200, "{slug}");
     }
 }

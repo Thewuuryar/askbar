@@ -80,6 +80,7 @@ pub fn section_id(slug: &str) -> String {
     format!("tab-{}", slug.replace('/', "-"))
 }
 
+page!(Home, home, "home", "home.html", "Home");
 page!(AuditCalls, audit_calls, "audit/calls", "audit.html", "Model calls");
 page!(AuditAdmin, audit_admin, "audit/admin", "audit_admin.html", "Admin actions");
 page!(AuditSealed, audit_sealed, "audit/sealed", "audit.html", "Sealed access");
@@ -97,6 +98,7 @@ page!(Reference, reference, "reference", "reference.html", "Reference");
 /// Every admin page, in menu order (rule 1). Its slugs equal `constants::PAGE_SLUGS`, which a test checks.
 /// `/admin` and `/admin/` go to `constants::LANDING_PAGE`.
 pub static PAGES: &[Page] = &[
+    Page { slug: "home", label: "Home", group: Group::Top, icon: "home", render: home },
     Page { slug: "audit/calls", label: "Model calls", group: Group::Audit, icon: "calls", render: audit_calls },
     Page { slug: "audit/admin", label: "Admin actions", group: Group::Audit, icon: "clipboard", render: audit_admin },
     Page { slug: "audit/sealed", label: "Sealed access", group: Group::Audit, icon: "lock", render: audit_sealed },
@@ -348,6 +350,9 @@ mod tests {
         let slugs: Vec<&str> = PAGES.iter().map(|p| p.slug).collect();
         assert_eq!(slugs, crate::constants::PAGE_SLUGS, "PAGES and constants::PAGE_SLUGS list the same pages in the same order");
         assert_eq!(landing().slug, crate::constants::LANDING_PAGE);
+        // Home is the first page and the landing page: it sits alone in the Top group (plan step 4.1).
+        assert_eq!(PAGES[0].slug, "home");
+        assert_eq!(PAGES[0].group, Group::Top);
         for p in PAGES {
             // An Audit page lives under /admin/audit/; nothing else does.
             assert_eq!(p.group == Group::Audit, p.slug.starts_with("audit/"), "{}", p.slug);

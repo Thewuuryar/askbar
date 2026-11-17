@@ -295,6 +295,8 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.click('#setup-backup-continue');
     await page.waitForSelector('#app:not([hidden])');
     assert.equal(await page.isHidden('#setup'), true);
+    // The app opens on Home (the landing page, plan step 4.1); the providers are one click away.
+    await openPage('providers');
     assert.match(await page.innerText('#providers'), /No providers yet/);
     assert.equal(await page.locator('#setup-key, #setup-saved').count(), 0, 'the master key screens are gone');
   });
@@ -2430,7 +2432,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
   await step('pages: each section has its own URL, the nav marks it, Back works and the frame is the same', async () => {
     // Plan step 1.16: a page and a URL for every admin section, from one template.
     const slugs = await page.$$eval('#nav a[data-tab]', (as) => as.map((a) => a.dataset.tab));
-    assert.deepEqual(slugs, ['audit/calls', 'audit/admin', 'audit/sealed', 'audit/routing', 'providers', 'clients', 'services', 'network', 'security', 'backup', 'restore', 'settings', 'reference']);
+    assert.deepEqual(slugs, ['home', 'audit/calls', 'audit/admin', 'audit/sealed', 'audit/routing', 'providers', 'clients', 'services', 'network', 'security', 'backup', 'restore', 'settings', 'reference']);
     for (const slug of slugs) {
       await page.goto(`http://127.0.0.1:${adminPort}/admin/${slug}/`);
       await page.waitForSelector('#app:not([hidden])');
@@ -2449,7 +2451,9 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.waitForSelector('#app:not([hidden])');
     assert.equal(await page.getAttribute('#nav a[data-tab="providers"]', 'aria-current'), 'page', 'Back returns to the page before');
     await page.goto(`http://127.0.0.1:${adminPort}/admin`);
-    assert.match(page.url(), /\/admin\/providers\/$/, '/admin goes to the first page');
+    assert.match(page.url(), /\/admin\/home\/$/, '/admin goes to Home, the landing page');
+    assert.equal(await page.getAttribute('#nav a[data-tab]', 'data-tab'), 'home', 'Home is the first menu item');
+    assert.equal(await page.locator('#nav a[data-tab="home"] svg').count(), 1, 'Home has its icon');
     const missing = await page.goto(`http://127.0.0.1:${adminPort}/admin/nothing-here/`);
     assert.equal(missing.status(), 404, 'an unknown admin page is a 404');
     await page.goto(base);

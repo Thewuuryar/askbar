@@ -70,7 +70,8 @@ pub const DRILL_EVERY_SECS: i64 = 90 * 24 * 3600;
 
 // Pages.
 /// Every admin page's slug (`/admin/<slug>/`), in menu order. `pages::PAGES` lists the same, which a test checks.
-pub const PAGE_SLUGS: [&str; 13] = [
+pub const PAGE_SLUGS: [&str; 14] = [
+    "home",
     "audit/calls",
     "audit/admin",
     "audit/sealed",
@@ -86,7 +87,7 @@ pub const PAGE_SLUGS: [&str; 13] = [
     "reference",
 ];
 /// The page `/admin` opens.
-pub const LANDING_PAGE: &str = "providers";
+pub const LANDING_PAGE: &str = "home";
 
 // UI timing.
 /// How often the status bar refreshes while the tab is visible.
@@ -155,7 +156,7 @@ struct Constants {
     highlight_secs: u32,
     toast_secs: u32,
     search_results_per_group: usize,
-    page_slugs: [&'static str; 13],
+    page_slugs: [&'static str; 14],
     landing_page: &'static str,
 }
 
