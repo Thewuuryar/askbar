@@ -213,9 +213,9 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     assert.equal(await page.isHidden('#setup-password-form'), true);
     assert.equal(await page.getAttribute('#setup-audit', 'type'), 'password');
     assert.match(await page.innerText('#setup-audit-form'), /cannot be recovered/);
-    // A new install can be set up from a backup instead: the link opens the Restore page without finishing the setup screens.
+    // A new install can be set up from a backup instead: the link opens the Restore section of Backup without finishing the setup screens.
     await page.click('#setup-restore-link');
-    await page.waitForURL('**/admin/restore/**');
+    await page.waitForURL('**/admin/backup/#restore-section');
     await page.waitForSelector('#app:not([hidden])');
     await page.waitForSelector('#restore-upload-form:not([hidden])');
     assert.equal(await page.isHidden('#setup'), true);
@@ -1400,16 +1400,20 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
   });
   await step('restore: this install is not empty, so the backup it just made is refused with a sentence and nothing changes (ADR 0013)', async () => {
     // A restore is for a new install: the bundle from the step above is checked, and the used install refuses it.
-    await openPage('restore');
+    // Restore is a section of Backup now (plan step 5.3); the old address redirects there, query and all.
+    const old = await page.request.get(`http://127.0.0.1:${adminPort}/admin/restore/?from=old`, { maxRedirects: 0 });
+    assert.equal(old.status(), 303);
+    assert.equal(old.headers()['location'], '/admin/backup/?from=old');
+    await openPage('backup');
     assert.equal(await page.isHidden('#restore-form'), true, 'the passphrase is not asked for before the backup is checked');
     await page.setInputFiles('#restore-file', path.join(data, 'downloaded.tar'));
     await page.click('#restore-upload-form button[type=submit]');
     await page.waitForSelector('#restore-error:not([hidden])');
     assert.match(await page.innerText('#restore-error'), /only be restored into an empty install/);
     assert.equal(await page.isHidden('#restore-form'), true);
-    // The Backup page points here, and the first-run screen has the same link (the audit step shows it).
-    await openPage('backup');
-    assert.equal(await page.locator('#tab-backup a[href="/admin/restore/"]').count(), 1);
+    // The menu has no Restore item, and the Backup page's link opens the section (the first-run screen has the same link).
+    assert.equal(await page.locator('#nav a[data-tab="restore"]').count(), 0, 'no Restore item in the menu');
+    assert.equal(await page.locator('#tab-backup a[href="#restore-section"]').count(), 1);
   });
   await step('backup: the destination, "Back up now", the limits and the drill reminder work and show only text (ADR 0013, D27 to D29)', async () => {
     await openPage('backup');
@@ -2799,7 +2803,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
   await step('pages: each section has its own URL, the nav marks it, Back works and the frame is the same', async () => {
     // Plan step 1.16: a page and a URL for every admin section, from one template.
     const slugs = await page.$$eval('#nav a[data-tab]', (as) => as.map((a) => a.dataset.tab));
-    assert.deepEqual(slugs, ['home', 'alerts', 'audit/calls', 'audit/admin', 'audit/sealed', 'audit/routing', 'providers', 'clients', 'services', 'network', 'security', 'backup', 'notifications', 'restore', 'general', 'reference']);
+    assert.deepEqual(slugs, ['home', 'alerts', 'audit/calls', 'audit/admin', 'audit/sealed', 'audit/routing', 'providers', 'clients', 'services', 'network', 'security', 'backup', 'notifications', 'general', 'reference']);
     for (const slug of slugs) {
       await page.goto(`http://127.0.0.1:${adminPort}/admin/${slug}/`);
       await page.waitForSelector('#app:not([hidden])');

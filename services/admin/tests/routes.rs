@@ -70,15 +70,16 @@ fn every_admin_page_has_a_route_and_a_nav_link() {
         let path = askbar_admin::pages::path(p);
         assert!(table.iter().any(|r| r.method == "GET" && r.path == path), "no route for {path}");
     }
-    // The redirects are not pages: /admin/ (to the landing page) and /admin/audit/ (to Model calls, plan step 2.1).
-    const REDIRECTS: [&str; 2] = ["/admin/", "/admin/audit/"];
+    // The redirects are not pages: /admin/ (to the landing page), /admin/audit/ (to Model calls, plan step 2.1) and
+    // /admin/restore/ (to Backup, plan step 5.3).
+    const REDIRECTS: [&str; 3] = ["/admin/", "/admin/audit/", "/admin/restore/"];
     let pages =
         table.iter().filter(|r| r.path.starts_with("/admin/") && r.path.ends_with('/') && !REDIRECTS.contains(&r.path.as_str())).count();
     assert_eq!(pages, askbar_admin::pages::PAGES.len(), "every page route comes from PAGES");
 }
 
 #[tokio::test]
-async fn the_old_audit_address_opens_model_calls_and_keeps_its_query() {
+async fn the_old_addresses_redirect_and_keep_their_query() {
     let url = start().await;
     let http = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().unwrap();
     // The landing page (plan step 4.1): /admin and /admin/ open Home.
@@ -87,14 +88,18 @@ async fn the_old_audit_address_opens_model_calls_and_keeps_its_query() {
         assert!(res.status().is_redirection(), "{from}: {}", res.status());
         assert_eq!(res.headers()["location"], to, "{from}");
     }
-    for (from, to) in
-        [("/admin/audit/", "/admin/audit/calls/"), ("/admin/audit/?view=trace&id=abc", "/admin/audit/calls/?view=trace&id=abc")]
-    {
+    // Restore is a section of Backup now (plan step 5.3).
+    for (from, to) in [
+        ("/admin/audit/", "/admin/audit/calls/"),
+        ("/admin/audit/?view=trace&id=abc", "/admin/audit/calls/?view=trace&id=abc"),
+        ("/admin/restore/", "/admin/backup/"),
+        ("/admin/restore/?from=setup", "/admin/backup/?from=setup"),
+    ] {
         let res = http.get(format!("{url}{from}")).send().await.unwrap();
         assert!(res.status().is_redirection(), "{from}: {}", res.status());
         assert_eq!(res.headers()["location"], to, "{from}");
     }
-    for slug in ["home", "alerts", "audit/calls", "audit/admin", "audit/sealed", "audit/routing", "notifications", "reference"] {
+    for slug in ["home", "alerts", "audit/calls", "audit/admin", "audit/sealed", "audit/routing", "backup", "notifications", "reference"] {
         assert_eq!(http.get(format!("{url}/admin/{slug}/")).send().await.unwrap().status(), 200, "{slug}");
     }
 }

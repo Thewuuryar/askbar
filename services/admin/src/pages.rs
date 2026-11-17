@@ -93,7 +93,6 @@ page!(Network, network, "network", "network.html", "Network");
 page!(Security, security, "security", "security.html", "Security");
 page!(Backup, backup, "backup", "backup.html", "Backup");
 page!(Notifications, notifications, "notifications", "notifications.html", "Notifications");
-page!(Restore, restore, "restore", "restore.html", "Restore");
 page!(General, general, "general", "general.html", "General");
 page!(Reference, reference, "reference", "reference.html", "Reference");
 
@@ -113,7 +112,6 @@ pub static PAGES: &[Page] = &[
     Page { slug: "security", label: "Security", group: Group::Settings, icon: "shield", render: security },
     Page { slug: "backup", label: "Backup", group: Group::Settings, icon: "archive", render: backup },
     Page { slug: "notifications", label: "Notifications", group: Group::Settings, icon: "send", render: notifications },
-    Page { slug: "restore", label: "Restore", group: Group::Settings, icon: "archive", render: restore },
     Page { slug: "general", label: "General", group: Group::Settings, icon: "sliders", render: general },
     Page { slug: "reference", label: "Reference", group: Group::Reference, icon: "reference", render: reference },
 ];

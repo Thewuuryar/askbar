@@ -71,7 +71,6 @@
     { id: 'security', load: loadKeys },
     { id: 'backup', load: loadBackup },
     { id: 'notifications', load: loadAlerts },
-    { id: 'restore', load: loadRestore },
   ];
   let appShown = false;
   function registerTab(tab) {
@@ -110,8 +109,9 @@
     if (status.password_change_required) return showPasswordChange();
     // The audit passphrase is part of setup: without a key the server records nothing it may keep,
     // and refuses to start replies. An install from before audit keys is asked on its next visit.
-    // The Restore page is the way out of the setup screens: a restore is for an install nothing has been set up in.
-    if (page === 'restore' && (status.audit_key_set === false || status.backup_key_set === false)) return showApp();
+    // The Restore section of Backup (opened from the first-run screen by its address) is the way out of the setup screens: a restore
+    // is for an install nothing has been set up in.
+    if (page === 'backup' && location.hash === '#restore-section' && (status.audit_key_set === false || status.backup_key_set === false)) return showApp();
     if (status.audit_key_set === false) return showAuditSetup();
     // The backup passphrase is part of setup too (ADR 0013): without a key no backup can be encrypted. An install from before the
     // backup key is asked on its next visit.
@@ -1589,6 +1589,7 @@
 
   // The Backup page: the key, and the scheduled backups (ADR 0013, D27 to D29). Text goes in by textContent.
   async function loadBackup() {
+    loadRestore();
     await loadBackupKey();
     await loadSchedule();
   }

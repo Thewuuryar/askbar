@@ -269,12 +269,9 @@ pub fn routes(state: &Arc<AdminState>) -> Routes {
         .get("/admin/", || async { Redirect::to(&pages::path(pages::landing())) })
         // The Audit page became four (plan step 2.1); an old address opens Model calls, query and all,
         // so a bookmarked /admin/audit/?view=trace&id=... still opens that request.
-        .get("/admin/audit/", |RawQuery(q): RawQuery| async move {
-            Redirect::to(&match q {
-                Some(q) if !q.is_empty() => format!("/admin/audit/calls/?{q}"),
-                _ => "/admin/audit/calls/".to_owned(),
-            })
-        })
+        .get("/admin/audit/", |RawQuery(q): RawQuery| async move { moved_to("/admin/audit/calls/", q) })
+        // Restore moved into Backup (plan step 5.3); the query goes with it, as above.
+        .get("/admin/restore/", |RawQuery(q): RawQuery| async move { moved_to("/admin/backup/", q) })
         .get("/admin/app.js", |h: HeaderMap| async move { pages::static_file(&h, JS, include_str!("ui/app.js")) })
         .get("/admin/components.js", |h: HeaderMap| async move { pages::static_file(&h, JS, include_str!("ui/components.js")) })
         .get("/admin/audit.js", |h: HeaderMap| async move { pages::static_file(&h, JS, include_str!("ui/audit.js")) })
@@ -286,6 +283,14 @@ pub fn routes(state: &Arc<AdminState>) -> Routes {
         .merge(open)
         .merge(session_only)
         .merge(api)
+}
+
+/// An old admin address that moved: a redirect to `to`, keeping the old address's query (a bookmark's `?view=...` still works).
+fn moved_to(to: &str, query: Option<String>) -> Redirect {
+    Redirect::to(&match query {
+        Some(q) if !q.is_empty() => format!("{to}?{q}"),
+        _ => to.to_owned(),
+    })
 }
 
 pub fn router(state: Arc<AdminState>) -> Router {

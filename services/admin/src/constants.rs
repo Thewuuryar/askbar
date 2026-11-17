@@ -70,7 +70,7 @@ pub const DRILL_EVERY_SECS: i64 = 90 * 24 * 3600;
 
 // Pages.
 /// Every admin page's slug (`/admin/<slug>/`), in menu order. `pages::PAGES` lists the same, which a test checks.
-pub const PAGE_SLUGS: [&str; 16] = [
+pub const PAGE_SLUGS: [&str; 15] = [
     "home",
     "alerts",
     "audit/calls",
@@ -84,7 +84,6 @@ pub const PAGE_SLUGS: [&str; 16] = [
     "security",
     "backup",
     "notifications",
-    "restore",
     "general",
     "reference",
 ];
@@ -164,7 +163,7 @@ struct Constants {
     search_results_per_group: usize,
     home_stats_window_days: u32,
     home_stats_window_secs: i64,
-    page_slugs: [&'static str; 16],
+    page_slugs: [&'static str; 15],
     landing_page: &'static str,
 }
 
