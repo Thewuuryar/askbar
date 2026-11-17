@@ -162,6 +162,11 @@ async function runViewport(viewport) {
     await page.waitForLoadState('load');
     await page.waitForSelector('#app:not([hidden])');
   };
+  // A closed side panel has also left its address (Back runs a moment after the panel hides).
+  const panelClosed = async () => {
+    await page.waitForSelector('#provider-panel', { state: 'hidden' });
+    await page.waitForFunction(() => !location.search.includes('panel='));
+  };
   page.on('pageerror', (e) => errors.push(e.message));
   page.on('console', (m) => { if (m.type() === 'error' && !/status of (4\d\d|502)/.test(m.text())) errors.push(m.text()); });
 
@@ -319,16 +324,22 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.waitForSelector('#app:not([hidden])');
   });
 
-  await step('add the mock provider through the page', async () => {
+  await step('add the mock provider through the page: the panel saves it, then tests it', async () => {
     await page.click('#add-provider');
+    await page.waitForSelector('#provider-panel:not([hidden])');
+    assert.equal(await page.innerText('#provider-submit'), 'Add and test');
+    assert.match(page.url(), /[?&]panel=provider-panel/, 'the panel has its own address');
     await page.fill('#p-name', 'mock');
     await page.fill('#p-base-url', `http://127.0.0.1:${mockPort}/v1`);
     await page.fill('#p-model', 'mock-model');
     await page.fill('#p-key', SECRET_KEY);
     await page.click('#provider-form button[type=submit]');
-    await page.waitForSelector('.card[data-name="mock"]');
-    assert.match(await page.innerText('.card[data-name="mock"]'), /key set/);
-    assert.equal(await page.isHidden('#provider-form'), true);
+    await page.waitForSelector('tr[data-name="mock"]');
+    assert.match(await page.innerText('tr[data-name="mock"]'), /key set/);
+    await panelClosed();
+    // The test runs after the save, with no click on Test.
+    await page.waitForFunction(() => /OK/.test(document.querySelector('tr[data-name="mock"] .test-result').textContent), null, { timeout: 15000 });
+    assert.match(await page.innerText('tr[data-name="mock"] .test-result'), /Streaming works/);
   });
   // Buttons (rules 18-20): the default is 32 px, .btn-s 28 px and .btn-l 40 px. The probes are built with createElement.
   // On a phone (390 wide) every button is at least --btn-h-touch (44 px) high.
@@ -535,38 +546,48 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     assert.equal(await page.evaluate(() => navigator.clipboard.readText()), 'askbar-admin-xyz');
     await page.evaluate(() => document.getElementById('t-misc').remove());
   });
-  await step('approved models: none at first; pick two from the provider\'s list, choose the default, save, and it persists', async () => {
+  await step('approved models: none at first; tick two in the picker, choose the default, the save bar appears labelled Save, and it persists', async () => {
     assert.match(await page.innerText('#catalog-approved'), /No model is approved yet/);
-    await page.selectOption('#catalog-provider', { label: 'mock' });
+    assert.equal(await page.isHidden('#catalog-form-save-bar'), true, 'nothing changed, so no save bar');
+    assert.match(await page.innerText('#catalog-offered'), /Not loaded/, 'nothing is asked of a provider until Reload');
     await page.click('#catalog-load');
     await page.waitForSelector('#catalog-offered input[type=checkbox]');
-    assert.deepEqual((await page.$$eval('#catalog-offered span', (s) => s.map((x) => x.textContent.trim()))), ['mock-model', 'mock-model-2']);
-    await page.check('#catalog-offered label:nth-child(1) input');
-    assert.match(await page.innerText('#catalog-approved'), /mock \/ mock-model \(default\)/, 'the first one approved becomes the default');
-    await page.check('#catalog-offered label:nth-child(2) input');
-    await page.check('#catalog-approved [data-model$="/mock-model-2"] input[type=radio]');
-    assert.match(await page.innerText('#catalog-approved'), /mock \/ mock-model-2 \(default\)/);
-    await page.click('#catalog-save');
-    await page.waitForFunction(() => document.getElementById('catalog-status').textContent === 'Saved.');
+    assert.deepEqual(await page.$$eval('#catalog-offered code', (c) => c.map((x) => x.textContent.trim())), ['mock-model', 'mock-model-2']);
+    await page.click('#catalog-offered input[type=checkbox] >> nth=0');
+    await page.waitForSelector('#catalog-form-save-bar:not([hidden])');
+    assert.equal(await page.innerText('#catalog-form-save-bar [data-save-submit]'), 'Save');
+    assert.match(await page.innerText('#catalog-form-save-bar [data-save-text]'), /Unsaved changes: 1 added/);
+    const defaultModel = () => page.$eval('#catalog-approved .is-default', (r) => r.dataset.model);
+    assert.match(await defaultModel(), /\/mock-model$/, 'the first one approved becomes the default');
+    await page.click('#catalog-offered input[type=checkbox] >> nth=1');
+    await page.click('#catalog-approved [data-model$="/mock-model-2"] input[type=radio]');
+    assert.match(await defaultModel(), /\/mock-model-2$/);
+    assert.match(await page.innerText('#catalog-approved-title'), /· 2$/);
+    await page.click('#catalog-form-save-bar [data-save-submit]');
+    await page.waitForFunction(() => document.getElementById('catalog-form-save-bar').hidden);
     await page.reload();
     await page.waitForSelector('#catalog-approved [data-model]');
     assert.equal(await page.locator('#catalog-approved [data-model]').count(), 2);
-    assert.match(await page.innerText('#catalog-approved'), /mock \/ mock-model-2 \(default\)/, 'the default persisted');
+    assert.match(await defaultModel(), /\/mock-model-2$/, 'the default persisted');
+    assert.equal(await page.isHidden('#catalog-form-save-bar'), true);
     // Removing the default leaves the next one as the default, never none.
     await page.click('#catalog-approved [data-model$="/mock-model-2"] button');
-    assert.match(await page.innerText('#catalog-approved'), /mock \/ mock-model \(default\)/);
-    await page.click('#catalog-discard');
+    assert.match(await defaultModel(), /\/mock-model$/);
+    await page.waitForSelector('#catalog-form-save-bar:not([hidden])');
+    await page.click('#catalog-form-save-bar [data-save-discard]');
     await page.waitForFunction(() => document.querySelectorAll('#catalog-approved [data-model]').length === 2);
-    assert.equal(await page.locator('#catalog-approved [data-model]').count(), 2, 'discarding goes back to what is saved');
+    assert.match(await defaultModel(), /\/mock-model-2$/, 'discarding goes back to what is saved');
+    assert.equal(await page.isHidden('#catalog-form-save-bar'), true);
   });
   await step('Test sends a message through the provider and shows success', async () => {
-    await page.click('.card[data-name="mock"] [data-action="test"]');
-    await page.waitForFunction(() => /Success|Failed/.test(document.querySelector('.card[data-name="mock"] .test-result').textContent));
-    assert.match(await page.innerText('.card[data-name="mock"] .test-result'), /^Success: Streaming works\. The first text came after \d+ ms\./);
+    await page.click('tr[data-name="mock"] [data-action="test"]');
+    await page.waitForFunction(() => /OK|Failed/.test(document.querySelector('tr[data-name="mock"] .test-result').textContent));
+    assert.match(await page.innerText('tr[data-name="mock"] .test-result'), /^OK\s+Streaming works\. The first text came after \d+ ms\./);
+    assert.equal(await page.locator('tr[data-name="mock"] .test-result .status-ok').count(), 1, 'a word and a symbol, not colour alone');
     // The details are folded away until asked for, and are text: the request, the status and the timings, nothing else.
-    assert.equal(await page.isVisible('.card[data-name="mock"] .test-details dl'), false);
-    await page.click('.card[data-name="mock"] .test-details summary');
-    const details = await page.innerText('.card[data-name="mock"] .test-details dl');
+    assert.equal(await page.isVisible('tr[data-name="mock"] .test-details dl'), false);
+    await page.click('tr[data-name="mock"] .test-details summary');
+    const details = await page.innerText('tr[data-name="mock"] .test-details dl');
     assert.match(details, /Request\s+POST \/v1\/chat\/completions/);
     assert.match(details, /Status\s+200/);
     assert.match(details, /Time to first text\s+\d+ ms/);
@@ -574,40 +595,48 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
   });
   await step('after a reload the key is not displayed anywhere', async () => {
     await page.reload();
-    await page.waitForSelector('.card[data-name="mock"]');
+    await page.waitForSelector('tr[data-name="mock"]');
     assert.equal((await page.content()).includes(SECRET_KEY), false);
-    await page.click('.card[data-name="mock"] [data-action="edit"]');
+    await page.click('tr[data-name="mock"] [data-action="edit"]');
+    await page.waitForSelector('#provider-panel:not([hidden])');
     assert.equal(await page.inputValue('#p-key'), '');
-    assert.match(await page.getAttribute('#p-key', 'placeholder'), /unchanged/);
+    assert.match(await page.innerText('#p-key-hint'), /Empty keeps the current key/);
     assert.equal(await page.getAttribute('#p-key', 'type'), 'password');
+    assert.equal(await page.innerText('#provider-submit'), 'Save');
     const values = await page.$$eval('#provider-form input, #provider-form select', (els) => els.map((e) => e.value).join('|'));
     assert.equal(values.includes(SECRET_KEY), false);
   });
-  await step('editing a provider with a saved key turns the model into a dropdown of what it offers', async () => {
-    await page.waitForSelector('#p-model-list:not([hidden])');
-    assert.equal(await page.isHidden('#p-model'), true);
-    assert.deepEqual(await page.$$eval('#p-model-list option', (o) => o.map((x) => x.value)), ['mock-model', 'mock-model-2', '__manual__']);
-    assert.equal(await page.inputValue('#p-model-list'), 'mock-model', 'the saved model is selected');
+  await step('editing a provider with a saved key offers the models it lists under the test model field', async () => {
+    assert.equal(await page.locator('#p-model-options option').count(), 0, 'nothing is listed until Load models is pressed');
+    await page.click('#p-model-refresh');
+    await page.waitForFunction(() => document.querySelectorAll('#p-model-options option').length === 2);
+    assert.deepEqual(await page.$$eval('#p-model-options option', (o) => o.map((x) => x.value)), ['mock-model', 'mock-model-2']);
+    assert.equal(await page.inputValue('#p-model'), 'mock-model', 'the saved model is filled in');
+    assert.match(await page.innerText('#p-model-hint'), /2 models available/);
     assert.equal(await page.isHidden('#p-key'), false);
     assert.equal(await page.inputValue('#p-key'), '', 'the saved key was used by the server; the page never held it');
   });
-  await step('"Enter a name myself" brings back the text box', async () => {
-    await page.selectOption('#p-model-list', '__manual__');
-    assert.equal(await page.isVisible('#p-model'), true);
-    assert.equal(await page.isHidden('#p-model-list'), true);
-    await page.click('#p-model-refresh');
-    await page.waitForSelector('#p-model-list:not([hidden])');
+  await step('a model name can be typed even when the provider lists some', async () => {
+    await page.fill('#p-model', 'a-name-i-typed');
+    assert.equal(await page.inputValue('#p-model'), 'a-name-i-typed');
+    assert.equal(await page.locator('#p-model-options option').count(), 2, 'the list is only a help');
   });
   await step('editing without a new key keeps the old one working', async () => {
-    await page.selectOption('#p-model-list', 'mock-model-2');
+    await page.fill('#p-model', 'mock-model-2');
     await page.click('#provider-form button[type=submit]');
-    await page.waitForFunction(() => /mock-model-2/.test(document.querySelector('.card[data-name="mock"]')?.textContent || ''));
-    await page.click('.card[data-name="mock"] [data-action="test"]');
-    await page.waitForFunction(() => /Success|Failed/.test(document.querySelector('.card[data-name="mock"] .test-result').textContent));
-    assert.match(await page.innerText('.card[data-name="mock"] .test-result'), /^Success:/);
+    await panelClosed();
+    await page.click('tr[data-name="mock"] [data-action="edit"]');
+    await page.waitForSelector('#provider-panel:not([hidden])');
+    assert.equal(await page.inputValue('#p-model'), 'mock-model-2', 'the change was saved');
+    await page.click('#provider-cancel');
+    await panelClosed();
+    await page.click('tr[data-name="mock"] [data-action="test"]');
+    await page.waitForFunction(() => /OK|Failed/.test(document.querySelector('tr[data-name="mock"] .test-result').textContent));
+    assert.match(await page.innerText('tr[data-name="mock"] .test-result'), /^OK/);
   });
-  await step('provider billing: set a subscription with prices, see it on the card, refuse a negative price', async () => {
-    await page.click('.card[data-name="mock"] [data-action="edit"]');
+  await step('provider billing: set a subscription with prices, see it kept, refuse a negative price', async () => {
+    await page.click('tr[data-name="mock"] [data-action="edit"]');
+    await page.waitForSelector('#provider-panel:not([hidden])');
     assert.equal(await page.inputValue('#p-billing'), 'metered', 'the default');
     assert.equal(await page.locator('#p-fallback').count(), 0, 'there is no provider fallback (ADR 0014)');
     await page.selectOption('#p-billing', 'subscription');
@@ -615,48 +644,71 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.fill('#p-price-out', '10');
     await page.fill('#p-price-cached', '0.25');
     await page.click('#provider-form button[type=submit]');
-    await page.waitForFunction(() => /subscription/.test(document.querySelector('.card[data-name="mock"]')?.textContent || ''));
-    const card = await page.innerText('.card[data-name="mock"]');
-    assert.doesNotMatch(card, /fallback/);
-    assert.match(card, /in 2\.5, out 10, cached in 0\.25/);
+    await panelClosed();
     // It is kept: edit again, the values are back.
-    await page.click('.card[data-name="mock"] [data-action="edit"]');
+    await page.click('tr[data-name="mock"] [data-action="edit"]');
+    await page.waitForSelector('#provider-panel:not([hidden])');
     assert.equal(await page.inputValue('#p-billing'), 'subscription');
+    assert.equal(await page.inputValue('#p-price-in'), '2.5');
     assert.equal(await page.inputValue('#p-price-out'), '10');
+    assert.equal(await page.inputValue('#p-price-cached'), '0.25');
     // A negative price is refused with the server's rule, and nothing changes.
     await page.evaluate(() => document.getElementById('provider-form').noValidate = true);
     await page.fill('#p-price-in', '-1');
     await page.click('#provider-form button[type=submit]');
     await page.waitForSelector('#provider-error:not([hidden])');
     assert.match(await page.innerText('#provider-error'), /zero or more/);
+    assert.equal(await page.isVisible('#provider-panel'), true, 'the panel stays open with what was typed');
     // Put it back to an ordinary metered provider for the rest of the run.
     await page.fill('#p-price-in', '');
     await page.fill('#p-price-out', '');
     await page.fill('#p-price-cached', '');
     await page.selectOption('#p-billing', 'metered');
     await page.click('#provider-form button[type=submit]');
-    await page.waitForFunction(() => !/subscription/.test(document.querySelector('.card[data-name="mock"]')?.textContent || ''));
+    await panelClosed();
+    await page.click('tr[data-name="mock"] [data-action="edit"]');
+    await page.waitForSelector('#provider-panel:not([hidden])');
+    assert.equal(await page.inputValue('#p-billing'), 'metered');
+    assert.equal(await page.inputValue('#p-price-in'), '');
+    await page.click('#provider-cancel');
+    await panelClosed();
   });
-  await step('a provider that cannot be reached shows its error', async () => {
+  await step('a provider that cannot be reached shows its error, from the test that follows the add', async () => {
     const dead = await freePort();
     await page.click('#add-provider');
+    await page.waitForSelector('#provider-panel:not([hidden])');
     await page.fill('#p-name', 'dead');
     await page.fill('#p-base-url', `http://127.0.0.1:${dead}/v1`);
     await page.fill('#p-model', 'm');
     await page.click('#provider-form button[type=submit]');
-    await page.waitForSelector('.card[data-name="dead"]');
-    await page.click('.card[data-name="dead"] [data-action="test"]');
-    await page.waitForFunction(() => /Failed/.test(document.querySelector('.card[data-name="dead"] .test-result').textContent));
-    assert.match(await page.innerText('.card[data-name="dead"] .test-result'), /Could not reach the provider.s address/);
+    await page.waitForSelector('tr[data-name="dead"]');
+    await panelClosed();
+    await page.waitForFunction(() => /Failed/.test(document.querySelector('tr[data-name="dead"] .test-result').textContent), null, { timeout: 15000 });
+    assert.match(await page.innerText('tr[data-name="dead"] .test-result'), /Could not reach the provider.s address/);
+    assert.equal(await page.locator('tr[data-name="dead"] .test-result .status-error').count(), 1);
+    // Its models cannot be listed either: after Reload the picker says so next to a way to try again.
+    await page.click('#catalog-load');
+    await page.waitForSelector('#catalog-offered .picker-fail');
+    assert.match(await page.innerText('#catalog-offered .picker-fail'), /Could not load models/);
+    assert.equal(await page.locator('#catalog-offered .picker-fail button').count(), 1);
   });
-  await step('a duplicate name is explained', async () => {
+  await step('a duplicate name is explained, and Esc or Cancel with typed input asks before dropping it', async () => {
     await page.click('#add-provider');
+    await page.waitForSelector('#provider-panel:not([hidden])');
     await page.fill('#p-name', 'dead');
     await page.fill('#p-model', 'm');
     await page.click('#provider-form button[type=submit]');
     await page.waitForSelector('#provider-error:not([hidden])');
     assert.match(await page.innerText('#provider-error'), /already exists/);
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('dialog[open] >> text=Discard your changes?');
+    await page.click('dialog[open] [data-confirm-cancel]');
+    assert.equal(await page.isVisible('#provider-panel'), true, 'Keep editing keeps the panel and what was typed');
+    assert.equal(await page.inputValue('#p-name'), 'dead');
     await page.click('#provider-cancel');
+    await page.waitForSelector('dialog[open] >> text=Discard your changes?');
+    await page.click('dialog[open] [data-confirm-action]');
+    await panelClosed();
   });
   await step('a refusal reaches the page as a problem: a stable code and a sentence', async () => {
     const r = await page.evaluate(async () => {
@@ -668,29 +720,107 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     assert.equal(r.body.error, 'not_found');
     assert.ok(r.body.detail && r.body.title && r.body.type === 'urn:askbar:problem:not_found', JSON.stringify(r.body));
   });
-  await step('CLIProxyAPI: the accounts panel is on the Services tab, and says so when CLIProxyAPI is not answering', async () => {
-    await openPage('services');
+  await step('CLIProxyAPI: the accounts panel is on the Providers page, and says so when CLIProxyAPI is not answering', async () => {
+    await openPage('providers');
     await page.waitForSelector('#cpa-panel:not([hidden])');
     await page.waitForFunction(() => /not answering/.test(document.getElementById('cpa-message').textContent));
     await page.click('#cpa-connect-anthropic');
     await page.waitForFunction(() => /CLIProxyAPI did not answer/.test(document.getElementById('cpa-message').textContent));
     assert.equal(await page.isHidden('#cpa-login'), true, 'no login opens when CLIProxyAPI cannot start one');
     assert.equal(await page.locator('#add-cpa').count(), 0, 'the old preset button is gone');
-    await openPage('providers');
+  });
+  // The paste step is the address the browser lands on (http://localhost...). With no domain it is always needed; with a
+  // domain the admin waits for CLIProxyAPI to confirm, and the step shows only if the login did not finish.
+  await step('CLIProxyAPI sign-in: the localhost paste step shows with no domain, and with a domain only when the login did not finish', async () => {
+    const pollSecs = await page.evaluate(async () => (await window.ui.ready).CPA_LOGIN_POLL_SECS);
+    let hostname = '';
+    let loginStatus = { status: 'pending' };
+    const json = (route, body) => route.fulfill({ contentType: 'application/json', body: JSON.stringify(body) });
+    await page.route('**/api/admin/v1/network', (route) => (route.request().method() === 'GET' ? json(route, { hostname }) : route.continue()));
+    await page.route('**/api/admin/v1/cpa', (route) => json(route, { configured: true, reachable: true, accounts: [] }));
+    await page.route('**/api/admin/v1/cpa/logins', (route) => json(route, { url: 'https://login.example.test/authorize', state: 'st1', expires_in: 600 }));
+    await page.route('**/api/admin/v1/cpa/logins/st1', (route) => json(route, loginStatus));
+    await page.reload();
+    await page.waitForSelector('#cpa-panel:not([hidden])');
+    assert.equal(await page.isHidden('#cpa-paste'), true, 'no login, nothing to paste into');
+    assert.match(await page.innerText('#cpa-accounts'), /No account connected/);
+    // No domain: the login comes back to http://localhost, so the paste box is there from the start.
+    await page.click('#cpa-connect-openai');
+    await page.waitForSelector('#cpa-login:not([hidden])');
+    assert.equal(await page.isVisible('#cpa-paste'), true, 'no domain: the paste step shows');
+    assert.equal(await page.getAttribute('#cpa-login-link', 'href'), 'https://login.example.test/authorize');
+    await page.click('#cpa-cancel');
+    assert.equal(await page.isHidden('#cpa-login'), true);
+    assert.equal(await page.isHidden('#cpa-paste'), true);
+    // A domain, the login still going: the paste step stays away.
+    hostname = 'askbar.example.com';
+    await page.click('#cpa-connect-anthropic');
+    await page.waitForSelector('#cpa-login:not([hidden])');
+    assert.equal(await page.isHidden('#cpa-paste'), true, 'a domain is set and the login is not over: no paste step');
+    // The login does not finish: the step comes back as the way to finish by hand.
+    loginStatus = { status: 'error', message: 'timed out' };
+    await page.waitForSelector('#cpa-paste:not([hidden])', { timeout: (pollSecs + 5) * 1000 });
+    assert.match(await page.innerText('#cpa-message'), /did not finish: timed out/);
+    await page.click('#cpa-cancel');
+    // A domain and a login that finishes by itself: the box closes and the step never shows.
+    loginStatus = { status: 'ok', provider_id: null };
+    await page.click('#cpa-connect-anthropic');
+    await page.waitForSelector('#cpa-login:not([hidden])');
+    assert.equal(await page.isHidden('#cpa-paste'), true);
+    await page.waitForSelector('#cpa-login', { state: 'hidden', timeout: (pollSecs + 5) * 1000 });
+    assert.equal(await page.isHidden('#cpa-paste'), true, 'a domain and no login pending: hidden');
+    await page.unroute('**/api/admin/v1/network');
+    await page.unroute('**/api/admin/v1/cpa');
+    await page.unroute('**/api/admin/v1/cpa/logins');
+    await page.unroute('**/api/admin/v1/cpa/logins/st1');
+    await page.reload();
+    await page.waitForSelector('tr[data-name="mock"]');
   });
   await step('delete asks first, then removes the provider', async () => {
-    page.once('dialog', (d) => d.dismiss());
-    await page.click('.card[data-name="dead"] [data-action="delete"]');
-    assert.equal(await page.locator('.card[data-name="dead"]').count(), 1);
-    page.once('dialog', (d) => d.accept());
-    await page.click('.card[data-name="dead"] [data-action="delete"]');
-    await page.waitForFunction(() => !document.querySelector('.card[data-name="dead"]'));
+    await page.click('tr[data-name="dead"] [data-action="edit"]');
+    await page.waitForSelector('#provider-panel:not([hidden])');
+    assert.match(await page.innerText('#provider-panel-title'), /Edit dead/);
+    await page.click('#provider-delete');
+    await page.waitForSelector('dialog[open] >> text=Delete dead?');
+    await page.click('dialog[open] [data-confirm-cancel]');
+    assert.equal(await page.locator('tr[data-name="dead"]').count(), 1);
+    await page.click('#provider-delete');
+    await page.waitForSelector('dialog[open] >> text=Delete dead?');
+    await page.click('dialog[open] [data-confirm-action]');
+    await page.waitForFunction(() => !document.querySelector('tr[data-name="dead"]'));
+    await panelClosed();
+  });
+  await step('opening the Providers page asks no provider for its models', async () => {
+    const asked = [];
+    const onReq = (r) => { if (r.method() === 'POST' && /\/api\/admin\/v1\/providers\/models/.test(r.url())) asked.push(r.url()); };
+    page.on('request', onReq);
+    await page.goto(base + 'providers/');
+    await page.waitForSelector('tr[data-name="mock"]');
+    await page.waitForLoadState('networkidle');
+    page.off('request', onReq);
+    assert.deepEqual(asked, []);
+    assert.match(await page.innerText('#catalog-offered'), /Not loaded/);
+  });
+  await step('#add-provider in the address opens the Add panel, and leaves the address clean', async () => {
+    await page.goto(base + 'providers/#add-provider');
+    await page.waitForSelector('#provider-panel:not([hidden])');
+    assert.equal(await page.innerText('#provider-panel-title'), 'Add provider');
+    assert.equal(await page.innerText('#provider-submit'), 'Add and test');
+    assert.equal(new URL(page.url()).hash, '', 'the address no longer asks for it, so a reload does not reopen it');
+    await page.click('#provider-cancel');
+    await panelClosed();
+    // From the same page (a search result, a link) the same address opens it again.
+    await page.evaluate(() => { location.hash = '#add-provider'; });
+    await page.waitForSelector('#provider-panel:not([hidden])');
+    await page.click('#provider-cancel');
+    await panelClosed();
   });
   await step('Services: the six services show whether they answer, and Restart asks first and then acts', async () => {
     // No controller (ADR 0005): each state comes from the service. Here the server, the gateway and the admin run;
     // Caddy and CLIProxyAPI do not.
     await openPage('services');
     await page.waitForSelector('#services .card[data-name="cpa"]');
+    assert.equal(await page.locator('#cpa-panel, #cpa-accounts, #cpa-connect-anthropic').count(), 0, 'the Claude and ChatGPT accounts moved to Providers');
     assert.deepEqual(await page.$$eval('#services .card', (c) => c.map((x) => x.dataset.name)), ['server', 'model-gateway', 'alerter', 'admin', 'caddy', 'cpa']);
     // The alerter runs here too (ADR 0055), so it joins the list between the gateway and the admin.
     assert.match(await page.innerText('#services .card[data-name="alerter"]'), /running/);
@@ -1531,7 +1661,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await inert('#users', 'users');
     await inert('#clients', 'clients');
     await openPage('providers');
-    await page.waitForSelector('#providers .card[data-name]');
+    await page.waitForSelector('#providers tr[data-name]');
     await inert('#providers', 'providers');
     await page.unroute('**/api/admin/v1/users');
     await page.unroute('**/api/admin/v1/clients');
@@ -3183,25 +3313,30 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
   await step('a change while the server is away is refused with a clear message and saves nothing', async () => {
     await openPage('providers');
     await page.click('#add-provider');
+    await page.waitForSelector('#provider-panel:not([hidden])');
     await page.fill('#p-name', 'while-away');
     await page.fill('#p-model', 'm');
     await page.click('#provider-form button[type=submit]');
     await page.waitForSelector('#provider-error:not([hidden])');
     assert.match(await page.innerText('#provider-error'), /offline/i);
     await page.click('#provider-cancel');
-    assert.equal(await page.locator('.card[data-name="while-away"]').count(), 0);
+    await page.click('dialog[open] [data-confirm-action]');
+    await panelClosed();
+    assert.equal(await page.locator('tr[data-name="while-away"]').count(), 0);
     // What the admin owns can still be read.
-    assert.equal(await page.locator('.card[data-name="mock"]').count(), 1);
+    assert.equal(await page.locator('tr[data-name="mock"]').count(), 1);
   });
   await step('when the server is back the banner goes away and changes work again', async () => {
     serverProc = startServer();
     await waitForPort(api);
     await page.waitForSelector('#banners [data-banner="offline"]', { state: 'detached', timeout: 30000 });
     await page.click('#add-provider');
+    await page.waitForSelector('#provider-panel:not([hidden])');
     await page.fill('#p-name', 'after-return');
     await page.fill('#p-model', 'm');
     await page.click('#provider-form button[type=submit]');
-    await page.waitForSelector('.card[data-name="after-return"]');
+    await page.waitForSelector('tr[data-name="after-return"]');
+    await panelClosed();
   });
   await step('a token the server stops accepting gets its own banner with the command, and it clears when the server accepts it again', async () => {
     const good = fs.readFileSync(hashFile, 'utf8');

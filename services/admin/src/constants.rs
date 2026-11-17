@@ -110,6 +110,10 @@ pub const HOME_STATS_WINDOW_DAYS: u32 = 7;
 pub const HOME_STATS_WINDOW_SECS: i64 = HOME_STATS_WINDOW_DAYS as i64 * 24 * 3600;
 /// How many rows each group of the global search shows; typing more narrows it.
 pub const SEARCH_RESULTS_PER_GROUP: usize = 5;
+/// How many times the Providers page asks CLIProxyAPI whether a Claude or ChatGPT login finished.
+pub const CPA_LOGIN_POLLS: u32 = 30;
+/// The wait between those asks.
+pub const CPA_LOGIN_POLL_SECS: u32 = 2;
 
 #[derive(Serialize)]
 struct Range<T> {
@@ -162,6 +166,8 @@ struct Constants {
     highlight_secs: u32,
     toast_secs: u32,
     search_results_per_group: usize,
+    cpa_login_polls: u32,
+    cpa_login_poll_secs: u32,
     home_stats_window_days: u32,
     home_stats_window_secs: i64,
     page_slugs: [&'static str; 16],
@@ -208,6 +214,8 @@ fn current() -> Constants {
         highlight_secs: HIGHLIGHT_SECS,
         toast_secs: TOAST_SECS,
         search_results_per_group: SEARCH_RESULTS_PER_GROUP,
+        cpa_login_polls: CPA_LOGIN_POLLS,
+        cpa_login_poll_secs: CPA_LOGIN_POLL_SECS,
         home_stats_window_days: HOME_STATS_WINDOW_DAYS,
         home_stats_window_secs: HOME_STATS_WINDOW_SECS,
         page_slugs: PAGE_SLUGS,
@@ -240,6 +248,8 @@ mod tests {
             "BACKUP_MISSED_AFTER_SECS",
             "BACKUP_RETRY_AFTER_SECS",
             "BACKUP_RUN_AT_SECS",
+            "CPA_LOGIN_POLLS",
+            "CPA_LOGIN_POLL_SECS",
             "DRILL_EVERY_SECS",
             "FRESH_SIGNIN_SECS",
             "GENERATION_TIMEOUT_SECS",

@@ -1058,7 +1058,6 @@
     notice: $('services'),
     render(data, ctx) {
       ui.rows($('services'), data.services, serviceCard, { key: (svc) => svc.name, force: ctx.force, sig: (svc) => JSON.stringify([svc, servicesBusy]) });
-      loadCpa();
       const rec = $('services-recent');
       rec.textContent = data.recent.length ? '' : 'None yet.';
       for (const r of data.recent) {
@@ -1077,14 +1076,20 @@
     },
   });
   function loadServices() { return liveServices.start(); }
-  // ---- CLIProxyAPI accounts: connect Claude or ChatGPT without a terminal.
-  let login = null; // { state } while a login is open
+  // -------------------------------------------------------- providers and models (plan step 5.5)
+
+  // ---- Claude and ChatGPT accounts (CLIProxyAPI): connect an account without a terminal. The paste step (the
+  // address the browser lands on, http://localhost...) shows when no domain is set, or when a login started with a
+  // domain did not finish; with a domain set the admin first waits for CLIProxyAPI to confirm the login on its own.
+  let login = null; // { state, alive } while a login is open
 
   function cpaMessage(text) { $('cpa-message').textContent = text || ''; }
 
   function closeLogin() {
+    if (login) login.alive = false;
     login = null;
     $('cpa-redirect').value = '';
+    show($('cpa-paste'), false);
     show($('cpa-login'), false);
   }
 
@@ -1096,67 +1101,92 @@
     if (!c.configured) return;
     const box = $('cpa-accounts');
     box.textContent = '';
-    if (!c.reachable) cpaMessage('CLIProxyAPI is not answering. Start it with the card above.');
+    if (!c.reachable) cpaMessage('CLIProxyAPI is not answering. Check it on the Services page.');
     for (const a of c.accounts) {
-      const row = document.createElement('div');
-      row.className = 'row';
-      const label = document.createElement('span');
-      label.textContent = (a.provider === 'anthropic' ? 'Claude' : 'ChatGPT') + ' · ' + a.label;
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.className = 'secondary';
-      b.dataset.action = 'disconnect';
-      b.textContent = 'Disconnect';
-      b.addEventListener('click', async () => {
-        if (!confirm('Disconnect ' + a.label + '? Replies through the CPA provider stop working until you connect again.')) return;
-        try { await api('DELETE', '/api/admin/v1/cpa/accounts/' + encodeURIComponent(a.name)); } catch (ex) { pageError(ex.message); }
-        loadCpa();
-      });
-      row.append(label, b);
-      box.appendChild(row);
+      box.appendChild(ui.el('div', { class: 'row', 'data-account': a.name },
+        ui.el('span', { text: (a.provider === 'anthropic' ? 'Claude' : 'ChatGPT') + ' · ' + a.label }),
+        ui.el('span', { class: 'spacer' }),
+        ui.el('button', {
+          type: 'button', class: 'btn btn-secondary btn-s', 'data-action': 'disconnect', text: 'Disconnect', 'aria-label': 'Disconnect ' + a.label,
+          onclick: async () => {
+            const sure = await ui.confirm({ title: 'Disconnect ' + a.label + '?', body: 'Replies through the CPA provider stop working until you connect again.', action: 'Disconnect' });
+            if (!sure) return;
+            try { await api('DELETE', '/api/admin/v1/cpa/accounts/' + encodeURIComponent(a.name)); } catch (ex) { pageError(ex.message); }
+            loadCpa();
+          },
+        })));
     }
-    if (!c.accounts.length && c.reachable) { cpaMessage('No account connected yet.'); }
+    if (!c.accounts.length && c.reachable) {
+      box.appendChild(ui.el('p', { class: 'cpa-empty', text: 'No account connected, so the CPA provider cannot answer yet.' }));
+    }
   }
 
   async function connect(provider) {
     cpaMessage('');
+    let domain = '';
+    // Unknown counts as no domain: the paste step is the safe fallback.
+    try { domain = String((await api('GET', '/api/admin/v1/network')).hostname || '').trim(); } catch (_) { /* shown below if the login cannot start */ }
     try {
       const r = await api('POST', '/api/admin/v1/cpa/logins', { provider });
-      login = { state: r.state };
+      closeLogin();
+      login = { state: r.state, alive: true };
       const a = $('cpa-login-link');
       a.textContent = r.url;
       a.href = r.url;
+      show($('cpa-paste'), !domain);
       show($('cpa-login'), true);
-      $('cpa-redirect').focus();
+      (domain ? a : $('cpa-redirect')).focus();
+      watchLogin(login);
     } catch (ex) { cpaMessage(ex.message); }
   }
   on('cpa-connect-anthropic', 'click', () => connect('anthropic'));
   on('cpa-connect-openai', 'click', () => connect('openai'));
-  on('cpa-cancel', 'click', closeLogin);
+  on('cpa-cancel', 'click', () => { closeLogin(); cpaMessage(''); });
+
+  // Asks CLIProxyAPI every CPA_LOGIN_POLL_SECS whether the login finished, up to CPA_LOGIN_POLLS times. A login that
+  // fails or never confirms brings the paste step back, as the way to finish by hand.
+  async function watchLogin(l) {
+    const unfinished = (text) => { cpaMessage(text); show($('cpa-paste'), true); };
+    for (let i = 0; i < K.CPA_LOGIN_POLLS; i++) {
+      await new Promise((res) => setTimeout(res, K.CPA_LOGIN_POLL_SECS * MS));
+      if (!l.alive) return;
+      let r;
+      try { r = await api('GET', '/api/admin/v1/cpa/logins/' + encodeURIComponent(l.state)); } catch (ex) { if (l.alive) cpaMessage(ex.message); return; }
+      if (!l.alive) return;
+      if (r.status === 'ok') {
+        closeLogin();
+        ui.toast('Connected.');
+        cpaMessage(r.provider_id ? 'Connected. Pick the test model on the CPA provider.' : '');
+        loadCpa();
+        liveProviders.refresh();
+        return;
+      }
+      if (r.status === 'error') { unfinished('The sign-in did not finish' + (r.message ? ': ' + r.message : '.')); return; }
+    }
+    unfinished('CLIProxyAPI has not confirmed the sign-in yet.');
+  }
 
   on('cpa-finish', 'click', async () => {
     if (!login) return;
-    const state = login.state;
-    cpaMessage('Sending...');
+    const l = login;
+    const done = ui.busy($('cpa-finish'), 'Sending…');
     try {
-      await api('POST', '/api/admin/v1/cpa/logins/' + encodeURIComponent(state) + '/callback', { redirect_url: $('cpa-redirect').value.trim() });
-    } catch (ex) { cpaMessage(ex.message); return; }
-    closeLogin();
-    cpaMessage('Waiting for CLIProxyAPI to confirm...');
-    for (let i = 0; i < 30; i++) {
-      let r;
-      try { r = await api('GET', '/api/admin/v1/cpa/logins/' + encodeURIComponent(state)); } catch (ex) { cpaMessage(ex.message); return; }
-      if (r.status === 'ok') { cpaMessage('Connected.' + (r.provider_id ? ' Pick the model on the CPA provider (Providers tab).' : '')); loadCpa(); return; }
-      if (r.status === 'error') { cpaMessage('The login failed' + (r.message ? ': ' + r.message : '.')); return; }
-      await new Promise((res) => setTimeout(res, 2000));
-    }
-    cpaMessage('CLIProxyAPI has not confirmed yet. Check the accounts list in a moment.');
+      await api('POST', '/api/admin/v1/cpa/logins/' + encodeURIComponent(l.state) + '/callback', { redirect_url: $('cpa-redirect').value.trim() });
+    } catch (ex) { cpaMessage(ex.message); return; } finally { done(); }
+    cpaMessage('Waiting for CLIProxyAPI to confirm…');
+    l.alive = false;
+    login = { state: l.state, alive: true };
+    watchLogin(login);
   });
 
+  // ---- the providers table
 
-  // -------------------------------------------------------- providers
-
-  let editing = null; // provider id, or null when adding
+  const PROVIDER_PANEL = 'provider-panel';
+  let editing = null; // the provider being edited, or null when adding
+  let editingHasKey = false;
+  let providerList = [];
+  let providersById = new Map();
+  const testResults = new Map(); // provider id -> { testing } | { ok, message, details }
 
   // The details of a provider test, folded away until asked for: the request's method and path, the status, the error
   // type and the timings. The server never sends a key, a reply or a provider's own words, and this shows only text.
@@ -1183,76 +1213,6 @@
     return box;
   }
 
-  function providerCard(p) {
-    const card = document.createElement('div');
-    card.className = 'card';
-    card.dataset.name = p.name;
-
-    const head = document.createElement('div');
-    head.className = 'row';
-    const name = document.createElement('span');
-    name.className = 'name';
-    name.textContent = p.name;
-    const badge = document.createElement('span');
-    badge.className = 'badge';
-    badge.textContent = p.type;
-    const key = document.createElement('span');
-    key.className = 'badge';
-    key.textContent = p.key_missing ? 'key missing on the server, enter it again' : p.has_key ? 'key set' : 'no key';
-    if (p.key_missing) key.classList.add('error');
-    const sp = document.createElement('span');
-    sp.className = 'spacer';
-    head.append(name, badge, key, sp);
-
-    const test = button('Test', 'secondary', async () => {
-      result.className = 'test-result';
-      result.textContent = 'Testing…';
-      test.disabled = true;
-      try {
-        const r = await api('POST', '/api/admin/v1/providers/' + encodeURIComponent(p.id) + '/test');
-        result.className = 'test-result ' + (r.ok ? 'ok' : 'error');
-        result.textContent = '';
-        const line = document.createElement('span');
-        line.className = 'test-line';
-        line.textContent = (r.ok ? 'Success: ' : 'Failed: ') + r.message;
-        result.appendChild(line);
-        if (r.details) result.appendChild(testDetails(r.details));
-      } catch (ex) {
-        result.className = 'test-result error';
-        result.textContent = 'Failed: ' + ex.message;
-      }
-      test.disabled = false;
-    });
-    test.dataset.action = 'test';
-    const edit = button('Edit', 'secondary', () => openForm(p));
-    edit.dataset.action = 'edit';
-    const del = button('Delete', 'danger', async () => {
-      if (!confirm('Delete provider "' + p.name + '"?')) return;
-      try { await api('DELETE', '/api/admin/v1/providers/' + encodeURIComponent(p.id)); await loadProviders(); } catch (ex) { pageError(ex.message); }
-    });
-    del.dataset.action = 'delete';
-    if (p.managed) {
-      const m = document.createElement('span');
-      m.className = 'badge';
-      m.textContent = 'managed by the admin';
-      head.insertBefore(m, sp);
-      head.append(test, edit);
-    } else {
-      head.append(test, edit, del);
-    }
-
-    const meta = document.createElement('div');
-    meta.className = 'meta';
-    const prices = [['in', p.price_in], ['out', p.price_out], ['cached in', p.price_cached_in]].filter(([, v]) => v != null).map(([k, v]) => k + ' ' + v);
-    meta.textContent = p.model + (p.base_url ? ' · ' + p.base_url : '') +
-      ' · ' + (p.billing === 'subscription' ? 'subscription' : 'metered') +
-      (prices.length ? ' · per million: ' + prices.join(', ') : '');
-    const result = document.createElement('div');
-    result.className = 'test-result';
-    card.append(head, meta, result);
-    return card;
-  }
-
   function button(label, cls, onClick) {
     const b = document.createElement('button');
     b.type = 'button';
@@ -1262,47 +1222,120 @@
     return b;
   }
 
-  // The provider cards, current every LIVE_EVERY_SECS while the tab is visible. The approved-models draft below is not
-  // touched by a check: it is read when the page opens and after the admin's own change (loadProviders).
+  const approvedCount = (id) => catalogSaved.models.filter((m) => m.provider_id === id).length;
+
+  function providerRow(p) {
+    const r = testResults.get(p.id);
+    const sub = [p.managed ? 'managed by the admin' : null, p.key_missing ? 'key missing on the server, enter it again' : p.has_key ? 'key set' : 'no key'].filter(Boolean).join(' · ');
+    const result = ui.el('div', { class: 'test-result' });
+    if (!r) result.append(ui.el('span', { class: 'hint', 'aria-hidden': 'true', text: '—' }), ui.el('span', { class: 'visually-hidden', text: 'Not tested' }));
+    else if (r.testing) result.append(ui.status('pending', 'Testing…'));
+    else {
+      result.append(ui.status(r.ok ? 'ok' : 'error', r.ok ? 'OK' : 'Failed'), ' ', ui.el('span', { class: 'test-line', text: r.message }));
+      if (r.details) result.append(testDetails(r.details));
+    }
+    const n = approvedCount(p.id);
+    return ui.el('tr', { 'data-name': p.name },
+      ui.el('td', null, ui.el('strong', { class: 'name', text: p.name }), ui.el('div', { class: 'sub', text: sub })),
+      ui.el('td', { class: 'col-type' }, ui.el('code', { text: p.type })),
+      ui.el('td', null, result),
+      ui.el('td', { class: 'col-models num' }, n ? ui.el('span', { text: n + ' approved' }) : ui.el('span', { class: 'hint', 'aria-hidden': 'true', text: '—' }), n ? null : ui.el('span', { class: 'visually-hidden', text: 'None approved' })),
+      ui.el('td', { class: 'actions' }, ui.el('div', { class: 'row-actions' },
+        ui.el('button', { type: 'button', class: 'btn btn-secondary btn-s', 'data-action': 'test', text: 'Test', 'aria-label': 'Test ' + p.name, 'aria-disabled': r && r.testing ? 'true' : null, onclick: () => testProvider(p) }),
+        ui.el('button', { type: 'button', class: 'btn btn-secondary btn-s', 'data-action': 'edit', text: 'Edit', 'aria-label': 'Edit ' + p.name, onclick: () => openForm(p) }))));
+  }
+
+  function renderProviders(opts = {}) {
+    ui.rows($('providers'), providerList, providerRow, {
+      sig: (p) => JSON.stringify([p, testResults.get(p.id) || null, approvedCount(p.id)]),
+      fresh: !!opts.fresh, force: !!opts.force, noun: ['provider', 'providers'],
+      empty: 'No providers yet. Add one so clients have something to talk to.',
+    });
+  }
+
+  async function testProvider(p) {
+    const now = testResults.get(p.id);
+    if (now && now.testing) return;
+    testResults.set(p.id, { testing: true });
+    renderProviders();
+    let r;
+    try {
+      const res = await api('POST', '/api/admin/v1/providers/' + encodeURIComponent(p.id) + '/test');
+      r = { ok: !!res.ok, message: res.message, details: res.details || null };
+    } catch (ex) {
+      r = { ok: false, message: ex.message, details: null };
+    }
+    testResults.set(p.id, r);
+    renderProviders();
+    ui.announce(p.name + ': test ' + (r.ok ? 'passed' : 'failed'));
+  }
+
+  // The provider rows are current every LIVE_EVERY_SECS while the tab is visible. The approved-models draft below is not
+  // touched by a check: it is read when the page opens and after the admin's own change.
   const liveProviders = ui.live(() => api('GET', '/api/admin/v1/providers', undefined, { etag: true }), {
     when: appShownNow,
-    notice: $('providers'),
+    notice: $('providers-table') ? $('providers-table').parentElement : null,
     render(list, ctx) {
+      providerList = list;
       providersById = new Map(list.map((p) => [p.id, p]));
-      ui.rows($('providers'), list, providerCard, { fresh: !ctx.first, force: ctx.force, noun: ['provider', 'providers'], empty: 'No providers yet. Add one so clients have something to talk to.' });
+      for (const id of [...testResults.keys()]) if (!providersById.has(id)) testResults.delete(id);
+      renderProviders({ fresh: !ctx.first, force: ctx.force });
+      syncPicker();
     },
     onError(ex) { if (ex.message !== 'Signed out') pageError(ex.message); },
   });
+
+  let providersReady = false;
   async function loadProviders() {
+    if (!providersReady) { providersReady = true; initProvidersPage(); }
+    openFromAddress();
     await liveProviders.start();
     await loadCatalog();
+    loadCpa();
   }
 
-  // ---- approved models (ADR 0014): the models people may use, and the default. A draft is edited here and saved whole.
-  let providersById = new Map();
+  // ---- the model picker (ADR 0014): the models people may use, and the default. A draft is edited here and saved whole.
+  let catalogSaved = { models: [], default: null };
   let catalogDraft = { models: [], default: null };
-  let catalogOffered = null; // { providerId, models: [name] } after "Load models"
+  let catalogTracker = null;
+  let catalogFilterProvider = ''; // '' is every provider
+  const offered = new Map(); // provider id -> { state: 'loading' | 'ok' | 'error', models: [name], message }
 
   const modelId = (m) => m.provider_id + '/' + m.model;
   const providerName = (id) => (providersById.get(id) ? providersById.get(id).name : 'a provider that is gone');
+  const catalogSig = (c) => JSON.stringify([c.models.map(modelId).sort(), c.default]);
+  const cloneCatalog = (c) => ({ models: c.models.map((m) => ({ provider_id: m.provider_id, model: m.model })), default: c.default });
 
   async function loadCatalog() {
-    if (!$('catalog-section')) return;
-    catalogDraft = await api('GET', '/api/admin/v1/catalog');
-    catalogOffered = null;
-    const sel = $('catalog-provider');
-    const keep = sel.value;
-    sel.textContent = '';
-    for (const p of providersById.values()) {
-      const o = document.createElement('option');
-      o.value = p.id;
-      o.textContent = p.name;
-      sel.appendChild(o);
-    }
-    if (keep && providersById.has(keep)) sel.value = keep;
+    catalogSaved = await api('GET', '/api/admin/v1/catalog');
+    catalogDraft = cloneCatalog(catalogSaved);
+    $('catalog-state').value = catalogSig(catalogDraft);
+    if (catalogTracker) catalogTracker.saved();
     show($('catalog-error'), false);
-    $('catalog-status').textContent = '';
-    renderCatalog();
+    renderPicker();
+    renderProviders();
+  }
+
+  // The save bar text says what changed in the draft, since the tracked field is only a summary of it.
+  function describeDraft() {
+    const was = new Set(catalogSaved.models.map(modelId));
+    const now = new Set(catalogDraft.models.map(modelId));
+    const added = [...now].filter((id) => !was.has(id)).length;
+    const removed = [...was].filter((id) => !now.has(id)).length;
+    const parts = [];
+    if (added) parts.push(added + ' added');
+    if (removed) parts.push(removed + ' removed');
+    if (catalogDraft.default !== catalogSaved.default && catalogDraft.models.length) parts.push('default changed');
+    return parts.length ? 'Unsaved changes: ' + parts.join(', ') : null;
+  }
+
+  function draftChanged() {
+    renderPicker();
+    $('catalog-state').value = catalogSig(catalogDraft);
+    $('catalog-form').dispatchEvent(new Event('input'));
+    const text = describeDraft();
+    const line = $('catalog-form-save-bar').querySelector('[data-save-text]');
+    if (text && line) line.textContent = text;
   }
 
   function setApproved(m, approved) {
@@ -1313,158 +1346,174 @@
     // One default whenever anything is approved: the first one if there was none (or it was just removed).
     if (!catalogDraft.models.length) catalogDraft.default = null;
     else if (!catalogDraft.models.some((x) => modelId(x) === catalogDraft.default)) catalogDraft.default = modelId(catalogDraft.models[0]);
-    renderCatalog();
+    draftChanged();
   }
 
-  function renderCatalog() {
-    const box = $('catalog-approved');
-    box.textContent = '';
-    if (!catalogDraft.models.length) {
-      const p = document.createElement('p');
-      p.className = 'hint';
-      p.textContent = 'No model is approved yet, so nothing answers. Load a provider\'s models below and tick the ones to approve.';
-      box.appendChild(p);
-    }
-    for (const m of catalogDraft.models) {
-      const row = document.createElement('div');
-      row.className = 'row';
-      row.dataset.model = modelId(m);
-      const label = document.createElement('label');
-      const radio = document.createElement('input');
-      radio.type = 'radio';
-      radio.name = 'catalog-default';
-      radio.checked = catalogDraft.default === modelId(m);
-      radio.addEventListener('change', () => { catalogDraft.default = modelId(m); renderCatalog(); });
-      const text = document.createElement('span');
-      text.textContent = ' ' + providerName(m.provider_id) + ' / ' + m.model + (radio.checked ? ' (default)' : '');
-      label.append(radio, text);
-      const remove = document.createElement('button');
-      remove.type = 'button';
-      remove.className = 'secondary';
-      remove.textContent = 'Remove';
-      remove.addEventListener('click', () => setApproved(m, false));
-      row.append(label, remove);
-      box.appendChild(row);
-    }
-    const offered = $('catalog-offered');
-    offered.textContent = '';
-    if (catalogOffered) {
-      for (const name of catalogOffered.models) {
-        const m = { provider_id: catalogOffered.providerId, model: name };
-        const label = document.createElement('label');
-        label.className = 'row';
-        const box1 = document.createElement('input');
-        box1.type = 'checkbox';
-        box1.checked = catalogDraft.models.some((x) => modelId(x) === modelId(m));
-        box1.addEventListener('change', () => setApproved(m, box1.checked));
-        const text = document.createElement('span');
-        text.textContent = ' ' + name;
-        label.append(box1, text);
-        offered.appendChild(label);
+  function offeredRow(p, name) {
+    const m = { provider_id: p.id, model: name };
+    const id = modelId(m);
+    const on = catalogDraft.models.some((x) => modelId(x) === id);
+    const isNew = on && !catalogSaved.models.some((x) => modelId(x) === id);
+    const box = ui.el('input', { type: 'checkbox', checked: on, 'data-focus': 'opt:' + id, 'aria-label': name + ', ' + p.name });
+    box.addEventListener('change', () => setApproved(m, box.checked));
+    return ui.el('label', { class: 'check picker-opt' }, box, ui.el('code', { text: name }), isNew ? ui.el('span', { class: 'tag', text: 'Added' }) : null);
+  }
+
+  function renderOffered() {
+    const q = $('catalog-filter').value.trim().toLowerCase();
+    const nodes = [];
+    if (!providerList.length) nodes.push(ui.el('p', { class: 'hint', text: 'Add a provider first.' }));
+    for (const p of providerList) {
+      if (catalogFilterProvider && p.id !== catalogFilterProvider) continue;
+      const o = offered.get(p.id) || { state: 'idle', models: [] };
+      const names = o.state === 'ok' ? o.models.filter((n) => !q || n.toLowerCase().includes(q)) : [];
+      const approved = o.models.filter((n) => catalogDraft.models.some((x) => modelId(x) === p.id + '/' + n)).length;
+      nodes.push(ui.el('div', { class: 'picker-group' }, ui.el('span', { text: p.name }), ui.el('span', { class: 'hint', text: o.state === 'ok' ? approved + ' of ' + o.models.length + ' approved' : '' })));
+      if (o.state === 'idle') nodes.push(ui.el('p', { class: 'hint', text: 'Not loaded. Press Reload to ask this provider for its models.' }));
+      if (o.state === 'loading') nodes.push(ui.el('p', { class: 'hint', text: 'Loading models…' }));
+      if (o.state === 'error') {
+        nodes.push(ui.el('div', { class: 'picker-fail' }, ui.el('span', { class: 'error', text: o.message }),
+          ui.el('button', { type: 'button', class: 'btn btn-secondary btn-s', text: 'Try again', 'aria-label': 'Try again: ' + p.name, 'data-focus': 'retry:' + p.id, onclick: () => loadOffered(p) })));
       }
+      for (const n of names) nodes.push(offeredRow(p, n));
+      if (o.state === 'ok' && q && !names.length) nodes.push(ui.el('p', { class: 'hint', text: 'No model matches.' }));
+    }
+    $('catalog-offered').replaceChildren(...nodes);
+  }
+
+  function renderApproved() {
+    $('catalog-approved-title').textContent = 'Approved for everyone · ' + catalogDraft.models.length;
+    if (!catalogDraft.models.length) {
+      $('catalog-approved').replaceChildren(ui.el('p', { class: 'hint', text: 'No model is approved yet, so nothing answers. Tick models on the left.' }));
+      return;
+    }
+    $('catalog-approved').replaceChildren(...catalogDraft.models.map((m) => {
+      const id = modelId(m);
+      const isDef = catalogDraft.default === id;
+      const isNew = !catalogSaved.models.some((x) => modelId(x) === id);
+      const word = isDef ? 'Default' : 'Make default';
+      const radio = ui.el('input', { type: 'radio', name: 'catalog-default', checked: isDef, 'data-focus': 'def:' + id, 'aria-label': word + ': ' + m.model });
+      radio.addEventListener('change', () => { catalogDraft.default = id; draftChanged(); });
+      return ui.el('div', { class: 'picker-row' + (isDef ? ' is-default' : ''), 'data-model': id },
+        ui.el('span', { class: 'who' }, ui.el('code', { text: m.model }), ui.el('small', { class: 'hint', text: providerName(m.provider_id) + (isNew ? ' · Added' : '') })),
+        ui.el('label', { class: 'check picker-def' }, radio, ui.el('span', { text: word })),
+        ui.el('button', { type: 'button', class: 'btn btn-quiet btn-s', text: 'Remove', 'aria-label': 'Remove ' + m.model, 'data-focus': 'rm:' + id, onclick: () => setApproved(m, false) }));
+    }));
+  }
+
+  // A load that finishes while someone ticks a box redraws the lists; focus goes back to the same control.
+  function renderPicker() {
+    const active = document.activeElement;
+    const key = active && active.dataset ? active.dataset.focus : null;
+    renderOffered();
+    renderApproved();
+    if (key) {
+      const again = document.querySelector('[data-focus="' + CSS.escape(key) + '"]');
+      if (again && again !== document.activeElement) again.focus();
     }
   }
 
-  on('catalog-load', 'click', async () => {
-    const p = providersById.get($('catalog-provider').value);
-    const status = $('catalog-status');
-    if (!p) { status.textContent = 'Add a provider first.'; return; }
-    status.textContent = 'Loading models...';
+  function renderSegments() {
+    const seg = $('catalog-seg');
+    show(seg, providerList.length > 1);
+    seg.replaceChildren(...[{ id: '', name: 'All' }, ...providerList].map((p) => ui.el('button', {
+      type: 'button', class: 'btn btn-s', 'aria-pressed': String(catalogFilterProvider === p.id), text: p.name,
+      onclick: () => { catalogFilterProvider = p.id; renderSegments(); renderPicker(); },
+    })));
+  }
+
+  async function loadOffered(p) {
+    offered.set(p.id, { state: 'loading', models: [] });
+    renderPicker();
     let res;
     try { res = await api('POST', '/api/admin/v1/providers/models', { type: p.type, base_url: p.base_url, provider_id: p.id }); }
     catch (ex) { res = { ok: false, message: ex.message }; }
-    if (res.ok && res.models.length) {
-      catalogOffered = { providerId: p.id, models: res.models.map((m) => m.id) };
-      status.textContent = res.models.length + ' models offered by ' + p.name + '.';
-    } else {
-      catalogOffered = null;
-      status.textContent = res.message || 'The provider listed no models.';
-    }
-    renderCatalog();
-  });
+    if (!providersById.has(p.id)) return;
+    if (res.ok && res.models.length) offered.set(p.id, { state: 'ok', models: res.models.map((m) => m.id) });
+    else offered.set(p.id, { state: 'error', models: [], message: res.ok ? 'The provider listed no models.' : 'Could not load models: ' + (res.message || 'no answer') });
+    renderPicker();
+  }
 
-  on('catalog-save', 'click', async () => {
+  // Called whenever the provider list is drawn: a removed provider's models are dropped. Nothing is asked of a provider
+  // until the admin presses Reload (or Try again): opening the page sends no provider key anywhere.
+  function syncPicker() {
+    for (const id of [...offered.keys()]) if (!providersById.has(id)) offered.delete(id);
+    if (catalogFilterProvider && !providersById.has(catalogFilterProvider)) catalogFilterProvider = '';
+    renderSegments();
+    renderPicker();
+  }
+
+  on('catalog-load', 'click', () => {
+    for (const p of providerList) if (!catalogFilterProvider || p.id === catalogFilterProvider) loadOffered(p);
+  });
+  on('catalog-filter', 'input', renderPicker);
+
+  on('catalog-form', 'submit', async (e) => {
+    e.preventDefault();
     const err = $('catalog-error');
     show(err, false);
+    const done = ui.busy($('catalog-form-save-bar').querySelector('[data-save-submit]'), 'Saving…');
     try {
       await api('PUT', '/api/admin/v1/catalog', catalogDraft);
       pageError('');
       await loadCatalog();
-      $('catalog-status').textContent = 'Saved.';
+      ui.toast('Approved models saved.');
     } catch (ex) {
       err.textContent = ex.message;
       show(err, true);
-    }
+    } finally { done(); }
   });
 
-  on('catalog-discard', 'click', () => { loadCatalog(); });
-
-  // ---- model list: once the provider can be reached, the model is chosen from what it offers.
-  const MANUAL = '__manual__';
-  let editingHasKey = false;
+  // ---- Add and Edit: the docked side panel
   let modelSeq = 0;
+  const MODEL_HINT_ADD = 'Tested with a short reply when you add it.';
+  const MODEL_HINT_EDIT = 'The model the Test button asks.';
 
   function canListModels() {
     if ($('p-key').value.trim() !== '' || (editing && editingHasKey)) return true;
     return $('p-type').value === 'openai' && $('p-base-url').value.trim() !== '';
   }
 
-  function showModelInput() {
-    show($('p-model-list'), false);
-    show($('p-model'), true);
+  function fillModelOptions(models) {
+    $('p-model-options').replaceChildren(...models.map((m) => ui.el('option', { value: m.id, label: m.label || null })));
   }
 
-  function fillModelList(models) {
-    const sel = $('p-model-list');
-    const current = $('p-model').value.trim();
-    sel.textContent = '';
-    const add = (value, text) => { const o = document.createElement('option'); o.value = value; o.textContent = text; sel.appendChild(o); };
-    if (current && !models.some((m) => m.id === current)) add(current, current + ' (not in the provider\'s list)');
-    for (const m of models) add(m.id, m.label ? m.label + ' (' + m.id + ')' : m.id);
-    add(MANUAL, 'Enter a name myself...');
-    sel.value = current || models[0].id;
-    $('p-model').value = sel.value;
-    show($('p-model'), false);
-    show(sel, true);
-  }
-
+  // "Load models" asks the provider (with the key in the form, or the saved one) and offers what it lists under the
+  // field; a name can always be typed. Nothing is asked until the button is pressed.
   async function loadModels() {
-    const status = $('p-model-status');
-    if (!canListModels()) {
-      showModelInput();
-      status.textContent = 'Enter the address and key, then load the provider\'s models.';
-      return;
-    }
+    const hint = $('p-model-hint');
+    if (!canListModels()) { fillModelOptions([]); hint.textContent = 'Enter the address and key first, then load the models.'; return; }
     const seq = ++modelSeq;
-    status.textContent = 'Loading models...';
+    hint.textContent = 'Loading models…';
     const body = { type: $('p-type').value, base_url: $('p-base-url').value.trim() };
     if ($('p-key').value.trim() !== '') body.api_key = $('p-key').value.trim();
-    if (editing) body.provider_id = editing;
+    if (editing) body.provider_id = editing.id;
     let res;
     try { res = await api('POST', '/api/admin/v1/providers/models', body); }
     catch (ex) { res = { ok: false, message: ex.message }; }
     if (seq !== modelSeq) return; // a newer request replaced this one
     if (res.ok && res.models.length) {
-      fillModelList(res.models);
-      status.textContent = res.models.length + ' models available.';
+      fillModelOptions(res.models);
+      hint.textContent = res.models.length + ' models available: pick one or type a name.';
     } else {
-      showModelInput();
-      status.textContent = (res.message || 'No models listed.') + ' Type the model name instead.';
+      fillModelOptions([]);
+      hint.textContent = (res.message || 'No models listed.') + ' Type the model name instead.';
     }
   }
-
-  on('p-model-list', 'change', () => {
-    if ($('p-model-list').value === MANUAL) { showModelInput(); $('p-model').focus(); return; }
-    $('p-model').value = $('p-model-list').value;
-  });
   on('p-model-refresh', 'click', loadModels);
-  for (const id of ['p-type', 'p-base-url', 'p-key']) on(id, 'change', loadModels);
 
-  function openForm(p, preset) {
-    editing = p ? p.id : null;
+  // Opening a panel while one is open closes it first (it asks if there is typed input). Closing goes Back in history,
+  // so the next panel waits for that to finish.
+  async function openForm(p) {
+    if (ui.panelOpen()) {
+      const back = history.state && history.state.panel === ui.panelOpen();
+      if (!(await ui.closePanel())) return;
+      if (back) await new Promise((res) => window.addEventListener('popstate', res, { once: true }));
+    }
+    editing = p || null;
     editingHasKey = !!(p && p.has_key);
-    const v = p || preset || { name: '', type: 'openai', base_url: '', model: '' };
-    $('provider-form-title').textContent = p ? 'Edit ' + p.name : 'Add provider';
+    const v = p || { name: '', type: 'openai', base_url: '', model: '' };
+    $('provider-panel-title').textContent = p ? 'Edit ' + p.name : 'Add provider';
     $('p-name').value = v.name || '';
     $('p-type').value = v.type || 'openai';
     $('p-base-url').value = v.base_url || '';
@@ -1472,36 +1521,51 @@
     // A managed provider (CLIProxyAPI) keeps its name, type, address and key.
     for (const id of ['p-name', 'p-type', 'p-base-url', 'p-key']) $(id).disabled = !!(p && p.managed);
     $('p-key').value = ''; // never prefilled
-    $('p-key').placeholder = p && p.has_key ? 'unchanged (write-only)' : 'write-only';
+    $('p-key-hint').textContent = p && p.has_key ? 'Write-only. Empty keeps the current key.' : 'Write-only.';
     $('p-max-tokens').value = v.max_tokens || '';
     $('p-temperature').value = v.temperature == null ? '' : v.temperature;
+    $('p-advanced').open = !!(v.max_tokens || v.temperature != null);
     $('p-billing').value = v.billing || 'metered';
     $('p-price-in').value = v.price_in == null ? '' : v.price_in;
     $('p-price-out').value = v.price_out == null ? '' : v.price_out;
     $('p-price-cached').value = v.price_cached_in == null ? '' : v.price_cached_in;
-    show($('provider-error'), false);
-    $('p-hint').textContent = preset && preset.hint ? preset.hint : '';
-    show($('p-hint'), !!(preset && preset.hint));
-    show($('provider-form'), true);
+    $('p-model-hint').textContent = p ? MODEL_HINT_EDIT : MODEL_HINT_ADD;
+    fillModelOptions([]);
     modelSeq++;
-    showModelInput();
-    $('p-model-status').textContent = '';
-    if (p) loadModels();
-    $('p-name').focus();
+    $('provider-submit').textContent = p ? 'Save' : 'Add and test';
+    show($('provider-delete'), !!p && !p.managed);
+    show($('provider-error'), false);
+    await ui.openPanel(PROVIDER_PANEL, { onClose: () => { editing = null; modelSeq++; $('p-key').value = ''; } });
   }
 
-  function closeForm() {
-    editing = null;
-    modelSeq++;
-    $('p-key').value = '';
-    show($('provider-form'), false);
+  // `#add-provider` in the address (Home's quick action, the setup list) opens the Add panel, then leaves the address.
+  function openFromAddress() {
+    if (location.hash !== '#add-provider') return;
+    history.replaceState(null, '', location.pathname + location.search);
+    openForm(null);
+  }
+
+  function initProvidersPage() {
+    for (const id of ['p-name', 'p-model']) $(id).required = true;
+    $('p-model').setAttribute('list', 'p-model-options');
+    $('p-model').autocomplete = 'off';
+    $('p-key').autocomplete = 'off';
+    for (const id of ['p-price-in', 'p-price-out', 'p-price-cached', 'p-temperature']) $(id).step = 'any';
+    $('p-model-hint').setAttribute('role', 'status');
+    catalogTracker = ui.trackChanges($('catalog-form'));
+    $('catalog-form-save-bar').querySelector('[data-save-discard]').addEventListener('click', () => {
+      catalogDraft = cloneCatalog(catalogSaved);
+      renderPicker();
+    });
+    window.addEventListener('hashchange', openFromAddress);
   }
 
   on('add-provider', 'click', () => openForm(null));
-  on('provider-cancel', 'click', closeForm);
 
   on('provider-form', 'submit', async (e) => {
     e.preventDefault();
+    const err = $('provider-error');
+    show(err, false);
     const num = (id, parse) => ($(id).value.trim() === '' ? null : parse($(id).value));
     const body = {
       name: $('p-name').value.trim(),
@@ -1516,16 +1580,43 @@
       price_out: num('p-price-out', parseFloat),
       price_cached_in: num('p-price-cached', parseFloat),
     };
+    const adding = !editing;
+    const done = ui.busy($('provider-submit'), adding ? 'Adding…' : 'Saving…');
     try {
-      if (editing) await api('PUT', '/api/admin/v1/providers/' + encodeURIComponent(editing), body);
-      else await api('POST', '/api/admin/v1/providers', body);
-      closeForm();
-      loadProviders();
+      let saved;
+      if (adding) saved = await api('POST', '/api/admin/v1/providers', body);
+      else saved = await api('PUT', '/api/admin/v1/providers/' + encodeURIComponent(editing.id), body);
+      await ui.closePanel({ force: true });
+      testResults.delete(saved && saved.id);
+      await liveProviders.refresh({ force: true });
+      const p = (saved && providersById.get(saved.id)) || providerList.find((x) => x.name === body.name);
+      if (p) {
+        offered.delete(p.id); // what it offered may have changed; asked again on Reload
+        renderPicker();
+        if (adding) { ui.announce('Provider added. Testing it now.'); testProvider(p); }
+        else ui.toast('Provider saved.');
+      }
     } catch (ex) {
-      $('provider-error').textContent = ex.message;
-      show($('provider-error'), true);
-    }
+      err.textContent = ex.message;
+      show(err, true);
+    } finally { done(); }
   });
+
+  on('provider-delete', 'click', async () => {
+    const p = editing;
+    if (!p) return;
+    const sure = await ui.confirm({ title: 'Delete ' + p.name + '?', body: 'People can no longer use its models. This cannot be undone.', action: 'Delete' });
+    if (!sure) return;
+    try {
+      await api('DELETE', '/api/admin/v1/providers/' + encodeURIComponent(p.id));
+    } catch (ex) { err_(ex.message); return; }
+    await ui.closePanel({ force: true });
+    await liveProviders.refresh({ force: true });
+    // The saved list may have lost this provider's models; an unsaved draft is not thrown away for that.
+    if (!catalogTracker.dirty()) await loadCatalog();
+    ui.toast('Provider deleted.');
+  });
+  function err_(text) { $('provider-error').textContent = text; show($('provider-error'), true); }
 
   // --------------------------------------------------------- security (admin password)
 
