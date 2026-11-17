@@ -2318,6 +2318,8 @@
     for (const id of ['a-error', 'm-error', 'a-test-error']) show($(id), false);
     showAlertsBanner(a.banner);
   }
+  // The page-wide banner choices are shown but cannot be stored yet (Not available yet): a click does not change them.
+  for (const box of document.querySelectorAll('input[data-na-check]')) box.addEventListener('click', (e) => e.preventDefault());
   function alertsError(ex, id = 'a-error') {
     $(id).textContent = ex.message;
     show($(id), true);

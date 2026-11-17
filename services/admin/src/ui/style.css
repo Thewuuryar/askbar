@@ -607,6 +607,8 @@ input, select { min-height: var(--target-min); }
 .sec-fields .field input { margin-top: var(--space-1); }
 .sec-fields .new-secret { display: flex; flex-direction: column; gap: var(--space-2); }
 .sec-line, .sec-fields .hint { margin: 0; }
+.banner-choices { display: flex; flex-direction: column; gap: var(--space-1); width: 100%; }
+.banner-choices .hint { margin: 0; }
 .sec-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 .sec-actions .na, .sec-fields > .hint a { display: inline-flex; align-items: center; min-height: var(--target-min); }
 .sec-actions .na[data-tip]::after { left: 0; }

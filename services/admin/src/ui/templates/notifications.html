@@ -1,49 +1,79 @@
 {% extends "base.html" %}
 {%- import "blocks.html" as b %}
+{%- import "components.html" as c %}
 {% block hint %}Where Askbar sends an alert when something needs attention, and how to test it.{% endblock %}
 {% block content %}
-    <form id="alerts-form" class="panel">
-      <h3>Alerts</h3>
-      {% call b::hint("Where Askbar sends an alert when something needs attention: an unseal, a changed retention, a failing token, a full audit disk. It uses ntfy (ntfy.sh or your own server), email, or both. Every value below is a secret: it is kept encrypted, never shown again, and never leaves the admin except to the alerter. Leave a token or a password empty to keep the one that is stored.") %}{% endcall %}
-      <p class="hint">Held now: server <strong id="a-held-server">no</strong>, topic <strong id="a-held-topic">no</strong>, token <strong id="a-held-token">no</strong></p>
-      <label>ntfy server <input id="a-server" type="url" autocomplete="off" placeholder="https://ntfy.example.com"></label>
-      <label>Topic <input id="a-topic" type="password" autocomplete="off" placeholder="a long, hard-to-guess name"></label>
-      <label>Access token (optional) <input id="a-token" type="password" autocomplete="off" placeholder="leave empty to keep the stored token"></label>
-      <label class="check"><input id="a-token-clear" type="checkbox"> Remove the stored token</label>
-      <div class="row">
-        <button type="submit" class="secondary">Save ntfy settings</button>
-        <button type="button" id="a-remove" class="secondary">Remove ntfy</button>
+    <section class="sec-sec" aria-labelledby="ntfy-title">
+      <div class="sec-lab">
+        <h3 id="ntfy-title">ntfy</h3>
+        <p class="hint">Alerts go to ntfy.sh or your own ntfy server. Every value is secret: it is kept encrypted, never shown again, and leaves the admin only for the alerter.</p>
       </div>
-      {% call b::error_line("a-error") %}{% endcall %}
-    </form>
-    <form id="email-form" class="panel">
-      <h3>Alerts by email</h3>
-      {% call b::hint("Mail goes from the alerter to your mail server. Choose STARTTLS or TLS for a server on the internet: a password is not sent without TLS. A relay on your own network may use no TLS and no login.") %}{% endcall %}
-      <p class="hint">Held now: server <strong id="m-held-host">no</strong>, login <strong id="m-held-login">no</strong>, addresses <strong id="m-held-addr">no</strong></p>
-      <label>Mail server <input id="m-host" type="text" autocomplete="off" placeholder="smtp.example.com"></label>
-      <label>Port <input id="m-port" type="number" min="1" max="65535" value="587"></label>
-      <label>TLS
-        <select id="m-tls">
+      <form id="alerts-form" class="sec-fields">
+        <p class="sec-line">Held now: server <strong id="a-held-server">no</strong>, topic <strong id="a-held-topic">no</strong>, token <strong id="a-held-token">no</strong></p>
+        {% call c::field("ntfy server", "a-server", "The address of the ntfy server, starting with https://.", "slot", false) %}<input id="a-server" name="a-server" type="url" autocomplete="off" aria-describedby="a-server-hint a-server-error">{% endcall %}
+        {% call c::field("Topic", "a-topic", "The topic name. Use a long, hard-to-guess one.", "slot", false) %}<input id="a-topic" name="a-topic" type="password" autocomplete="off" aria-describedby="a-topic-hint a-topic-error">{% endcall %}
+        {% call c::field("Access token", "a-token", "Leave empty to keep the stored token.", "slot", true) %}<input id="a-token" name="a-token" type="password" autocomplete="off" aria-describedby="a-token-hint a-token-error">{% endcall %}
+        <label class="check"><input id="a-token-clear" type="checkbox"> Remove the stored token</label>
+        <div class="sec-actions">
+          <button type="submit" class="btn btn-secondary">Save ntfy settings</button>
+          <button type="button" id="a-remove" class="btn btn-secondary">Remove ntfy</button>
+        </div>
+        {% call b::error_line("a-error") %}{% endcall %}
+      </form>
+    </section>
+
+    <section class="sec-sec" aria-labelledby="email-title">
+      <div class="sec-lab">
+        <h3 id="email-title">Email</h3>
+        <p class="hint">Mail goes from the alerter to your mail server. A server on the internet needs STARTTLS or TLS, because a password is not sent without TLS.</p>
+      </div>
+      <form id="email-form" class="sec-fields">
+        <p class="sec-line">Held now: server <strong id="m-held-host">no</strong>, login <strong id="m-held-login">no</strong>, addresses <strong id="m-held-addr">no</strong></p>
+        {% call c::field("Mail server", "m-host", "The host name of your outgoing mail server.", "slot", false) %}<input id="m-host" name="m-host" type="text" autocomplete="off" aria-describedby="m-host-hint m-host-error">{% endcall %}
+        {% call c::field("Port", "m-port", "The port your mail server listens on.", "slot", false) %}<input id="m-port" name="m-port" type="number" inputmode="numeric" min="1" max="65535" value="587" aria-describedby="m-port-hint m-port-error">{% endcall %}
+        {% call c::field("TLS", "m-tls", "A relay on your own network may use no TLS and no login.", "slot", false) %}<select id="m-tls" name="m-tls" aria-describedby="m-tls-hint m-tls-error">
           <option value="starttls">STARTTLS (usually port 587)</option>
           <option value="tls">TLS (usually port 465)</option>
           <option value="none">No TLS (a relay on your own network)</option>
-        </select>
-      </label>
-      <label>User name (optional) <input id="m-user" type="password" autocomplete="off" placeholder="leave empty to keep the stored one"></label>
-      <label>Password (optional) <input id="m-password" type="password" autocomplete="off" placeholder="leave empty to keep the stored one"></label>
-      <label class="check"><input id="m-login-clear" type="checkbox"> Remove the stored user name and password</label>
-      <label>From address <input id="m-from" type="email" autocomplete="off" placeholder="askbar@example.com"></label>
-      <label>To address <input id="m-to" type="email" autocomplete="off" placeholder="you@example.com"></label>
-      <div class="row">
-        <button type="submit" class="secondary">Save email settings</button>
-        <button type="button" id="m-remove" class="secondary">Remove email</button>
+        </select>{% endcall %}
+        {% call c::field("User name", "m-user", "Leave empty to keep the stored user name.", "slot", true) %}<input id="m-user" name="m-user" type="password" autocomplete="off" aria-describedby="m-user-hint m-user-error">{% endcall %}
+        {% call c::field("Password", "m-password", "Leave empty to keep the stored password.", "slot", true) %}<input id="m-password" name="m-password" type="password" autocomplete="off" aria-describedby="m-password-hint m-password-error">{% endcall %}
+        <label class="check"><input id="m-login-clear" type="checkbox"> Remove the stored user name and password</label>
+        {% call c::field("From address", "m-from", "The address the alert is sent from.", "slot", false) %}<input id="m-from" name="m-from" type="email" autocomplete="off" aria-describedby="m-from-hint m-from-error">{% endcall %}
+        {% call c::field("To address", "m-to", "The address that receives the alert.", "slot", false) %}<input id="m-to" name="m-to" type="email" autocomplete="off" aria-describedby="m-to-hint m-to-error">{% endcall %}
+        <div class="sec-actions">
+          <button type="submit" class="btn btn-secondary">Save email settings</button>
+          <button type="button" id="m-remove" class="btn btn-secondary">Remove email</button>
+        </div>
+        {% call b::error_line("m-error") %}{% endcall %}
+      </form>
+    </section>
+
+    <section class="sec-sec" aria-labelledby="test-title">
+      <div class="sec-lab">
+        <h3 id="test-title">Test alert</h3>
+        <p class="hint">Sends a test alert to every channel that is set up.</p>
       </div>
-      {% call b::error_line("m-error") %}{% endcall %}
-    </form>
-    <form id="alerts-test-form" class="panel">
-      <h3>Test alert</h3>
-      <div class="row"><button type="button" id="a-test" class="secondary">Send a test alert</button></div>
-      <p id="a-result" class="hint" role="status"></p>
-      {% call b::error_line("a-test-error") %}{% endcall %}
-    </form>
+      <form id="alerts-test-form" class="sec-fields">
+        <div class="sec-actions"><button type="button" id="a-test" class="btn btn-secondary">Send a test alert</button></div>
+        <p id="a-result" class="hint" role="status"></p>
+        {% call b::error_line("a-test-error") %}{% endcall %}
+      </form>
+    </section>
+
+    <section class="sec-sec" aria-labelledby="banners-title">
+      <div class="sec-lab">
+        <h3 id="banners-title">Page-wide banners</h3>
+        <p class="hint">A banner across every page for these conditions. Critical ones are always shown.</p>
+      </div>
+      <div class="sec-fields">
+        {% call c::na("no admin setting stores this") %}<span class="banner-choices">
+          <label class="check"><input type="checkbox" id="bn-offline" data-na-check aria-disabled="true" tabindex="-1" checked> The server is offline <span class="hint">Critical, always shown</span></label>
+          <label class="check"><input type="checkbox" id="bn-rejected" data-na-check aria-disabled="true" tabindex="-1" checked> The server rejected this admin's token <span class="hint">Critical, always shown</span></label>
+          <label class="check"><input type="checkbox" id="bn-chain" data-na-check aria-disabled="true" tabindex="-1" checked> The audit records no longer match <span class="hint">Critical, always shown</span></label>
+          <label class="check"><input type="checkbox" id="bn-alerts" data-na-check aria-disabled="true" tabindex="-1" checked> Alert delivery is not set up or not working <span class="hint">Warning</span></label>
+          <label class="check"><input type="checkbox" id="bn-unsealed" data-na-check aria-disabled="true" tabindex="-1" checked> Sealed content is open <span class="hint">Warning</span></label>
+        </span>{% endcall %}
+      </div>
+    </section>
 {% endblock %}

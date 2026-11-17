@@ -1592,6 +1592,39 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     const at = menu.findIndex(([slug]) => slug === 'backup');
     assert.deepEqual(menu.slice(at, at + 2).map(([slug, label]) => [slug, label]), [['backup', 'Backup'], ['notifications', 'Notifications']]);
   });
+  await step('notifications: page-wide banners are greyed: critical ones checked and aria-disabled (not disabled), inert on click, Space and Enter', async () => {
+    await openPage('notifications');
+    await page.waitForSelector('#bn-offline');
+    const boxes = ['bn-offline', 'bn-rejected', 'bn-chain', 'bn-alerts', 'bn-unsealed'];
+    const read = () => page.evaluate((ids) => ids.map((id) => { const i = document.getElementById(id); return [id, i.checked, i.getAttribute('aria-disabled'), i.disabled]; }), boxes);
+    const critical = ['bn-offline', 'bn-rejected', 'bn-chain'];
+    const before = await read();
+    for (const [id, checked, aria, disabled] of before) {
+      assert.equal(aria, 'true', id + ' is aria-disabled');
+      assert.equal(disabled, false, id + ' is not disabled, so keyboard focus can stay on the group');
+      if (critical.includes(id)) assert.equal(checked, true, id + ' is checked (critical, always shown)');
+    }
+    const group = page.locator('section[aria-labelledby="banners-title"] .na');
+    assert.equal(await group.getAttribute('tabindex'), '0', 'the greyed section is a Tab stop');
+    assert.equal(await group.getAttribute('aria-disabled'), 'true');
+    await group.focus();
+    assert.equal(await page.evaluate(() => document.activeElement.classList.contains('na')), true, 'the greyed section takes focus');
+    await page.keyboard.press('Enter');
+    await page.keyboard.press(' ');
+    await page.click('#bn-offline', { force: true });
+    await page.click('label:has(#bn-alerts)', { force: true });
+    assert.deepEqual(await read(), before, 'nothing changes on Enter, Space or click');
+    await page.keyboard.press('Tab');
+    assert.equal(await page.evaluate(() => document.activeElement.matches('section[aria-labelledby="banners-title"] input')), false, 'Tab leaves the greyed section without stopping on its checkboxes');
+    const greyed = await page.$eval('section[aria-labelledby="banners-title"] .na', (n) => n.innerText);
+    assert.doesNotMatch(greyed, /\d/, 'no digits in greyed text');
+    const main = await page.$eval('#main', (m) => m.innerText);
+    assert.doesNotMatch(main, /audit_disk|backup_missed|restore_performed|component_silent|caddy_silent|restart_loop|chain_mismatch|rejected_token/, 'no alert-kind list on the page');
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), true, 'no sideways scroll');
+    const small = await page.evaluate((min) => [...document.querySelectorAll('#main button, #main a.btn, #main input:not([type=checkbox]), #main select, #main label.check')]
+      .map((t) => t.getBoundingClientRect()).filter((r) => r.height > 0 && (r.height < min || r.width < min)).length, isPhone ? 44 : 24);
+    assert.equal(small, 0, 'every target on the notifications page is big enough');
+  });
   await step('network: hostname, token and networks are saved; the token is write-only', async () => {
     const CF = 'cf_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     await openPage('network');
