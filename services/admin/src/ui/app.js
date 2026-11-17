@@ -400,8 +400,14 @@
     providers: '/api/admin/v1/providers', catalog: '/api/admin/v1/catalog', users: '/api/admin/v1/users', clients: '/api/admin/v1/clients',
     schedule: '/api/admin/v1/backup/schedule', network: '/api/admin/v1/network',
   };
+  // Home reads the same answers for its summaries, plus the stats of the window and the services (the menu's health data).
+  const homeReads = () => ({
+    ...GAP_READS,
+    stats: '/api/admin/v1/audit/stats?since=' + (Math.floor(Date.now() / MS) - K.HOME_STATS_WINDOW_SECS),
+    services: '/api/admin/v1/services',
+  });
   async function readSetup() {
-    const entries = await Promise.all(Object.entries(GAP_READS).map(async ([key, path]) => {
+    const entries = await Promise.all(Object.entries(homeReads()).map(async ([key, path]) => {
       try { return [key, await api('GET', path)]; } catch (ex) { if (ex.status === undefined) throw ex; return [key, null]; }
     }));
     return Object.fromEntries(entries);
@@ -425,13 +431,123 @@
     empty.hidden = items.length > 0;
     if (!empty.firstChild) empty.append(ui.empty('Nothing needs attention'));
   }
+
+  // ------------------------------------------------------------- Home: numbers, chart and summaries (plan step 4.3)
+
+  // The one reader of GET /audit/stats on Home (audit.js reads the same document for its overview; it is not loaded here).
+  // Every figure is a number or null; null is shown as "–", never as 0 (a cost the server could not price is "unknown").
+  function statsFigures(s) {
+    if (!s) return { requests: null, errorRate: null, tokens: null, cost: null, costUnknown: false, p95: null, days: [] };
+    const tokens = s.tokens || {};
+    return {
+      requests: s.requests == null ? null : s.requests,
+      errorRate: s.error_rate == null ? null : Math.round(s.error_rate * 1000) / 10,
+      tokens: s.tokens ? (tokens.in || 0) + (tokens.out || 0) : null,
+      cost: s.cost == null ? null : s.cost,
+      costUnknown: s.cost == null && s.cost_unknown_requests > 0,
+      p95: s.latency_ms && s.latency_ms.p95 != null ? s.latency_ms.p95 : null,
+      days: (s.by_day || []).map((d) => ({ day: d.day, requests: d.requests })),
+    };
+  }
+  const dash = () => ui.el('span', { class: 'num', text: '–' });
+  const dayLabel = (day) => new Date(day + 'T00:00:00Z').toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+  function latencyNum(ms) {
+    if (ms == null) return dash();
+    return ms >= MS ? ui.num(Math.round(ms / 100) / 10, 's') : ui.num(Math.round(ms), 'ms');
+  }
+
+  function renderKpis(f) {
+    const put = (id, node) => $(id).replaceChildren(node);
+    put('kpi-requests', f.requests == null ? dash() : ui.num(f.requests));
+    put('kpi-errors', f.errorRate == null ? dash() : ui.num(f.errorRate, '%'));
+    put('kpi-tokens', f.tokens == null ? dash() : ui.num(f.tokens, 'tokens'));
+    put('kpi-cost', f.cost != null ? ui.num(f.cost) : ui.el('span', { class: 'num', text: f.costUnknown ? 'unknown' : '–' }));
+    put('kpi-latency', latencyNum(f.p95));
+  }
+
+  // The chart is CSS bars (heights set through the CSSOM) in a role="img" whose label is the visible one-line summary; the
+  // same values are in a visually hidden table. A read that failed leaves the numbers as they were.
+  function renderChart(days) {
+    const summary = $('chart-summary');
+    const chart = $('home-chart');
+    const wrap = $('chart-table-wrap');
+    const span = K.HOME_STATS_WINDOW_DAYS;
+    chart.replaceChildren();
+    $('chart-table').tBodies[0].replaceChildren();
+    if (!days.length) {
+      summary.textContent = 'No requests in the last ' + span + ' days.';
+      chart.hidden = true; wrap.hidden = true;
+      chart.setAttribute('aria-label', '');
+      return;
+    }
+    const fmt = (n) => Number(n).toLocaleString();
+    const total = days.reduce((a, d) => a + d.requests, 0);
+    const peak = days.reduce((a, d) => (d.requests > a.requests ? d : a), days[0]);
+    const low = Math.min(...days.map((d) => d.requests));
+    const text = days.length === 1
+      ? fmt(total) + ' requests on ' + dayLabel(days[0].day) + '.'
+      : fmt(total) + ' requests over ' + days.length + ' days, from ' + fmt(low) + ' to ' + fmt(peak.requests) + ' a day, busiest on ' + dayLabel(peak.day) + '.';
+    summary.textContent = text;
+    chart.setAttribute('aria-label', text);
+    const max = peak.requests || 1;
+    const plot = ui.el('div', { class: 'chart-plot' });
+    for (const d of days) {
+      const bar = ui.el('div', { class: 'chart-bar', 'data-day': d.day, 'data-requests': d.requests }, ui.el('span', { class: 'chart-val', text: fmt(d.requests) }));
+      bar.style.height = (d.requests / max * 100) + '%';
+      plot.append(ui.el('div', { class: 'chart-col' }, bar));
+    }
+    const y = ui.el('div', { class: 'chart-y' }, ui.el('span', { text: fmt(max) }), ui.el('span', { text: '0' }));
+    y.children[0].style.bottom = '100%';
+    y.children[1].style.bottom = '0';
+    chart.append(y, plot, ui.el('div', { class: 'chart-x' }, ui.el('span', { text: dayLabel(days[0].day) }), days.length > 1 ? ui.el('span', { text: dayLabel(days[days.length - 1].day) }) : null));
+    chart.hidden = false;
+    $('chart-table').tBodies[0].append(...days.map((d) => ui.el('tr', {}, ui.el('td', { text: dayLabel(d.day) }), ui.el('td', { text: fmt(d.requests) }))));
+    wrap.hidden = false;
+  }
+
+  function renderServices(services) {
+    const list = $('home-services-list');
+    if (!services) { list.replaceChildren(ui.el('p', { class: 'hint', text: 'Services not checked.' })); return; }
+    const titleOf = (name) => (SERVICE_INFO[name] ? SERVICE_INFO[name].title : name);
+    ui.rows(list, services.services, (svc) => ui.el('div', { class: 'srow' },
+      ui.el('span', { text: titleOf(svc.name) }),
+      svc.state === 'running' ? ui.status('ok', 'Running') : ui.status('warning', svc.state.charAt(0).toUpperCase() + svc.state.slice(1))),
+    { key: (svc) => svc.name });
+  }
+
+  const fact = (dl, label, node) => dl.append(ui.el('dt', { text: label }), ui.el('dd', {}, node));
+  function renderBackupSummary(v) {
+    const dl = $('backup-facts');
+    dl.replaceChildren();
+    if (!v) { fact(dl, 'Backups', dash()); return; }
+    if (!v.enabled) { fact(dl, 'Backups', ui.status('warning', 'No backup key')); return; }
+    const failed = v.last_failure_at && (!v.last_success_at || v.last_failure_at > v.last_success_at);
+    fact(dl, 'Status', v.missed ? ui.status('warning', 'Overdue') : failed ? ui.status('error', 'Last try failed') : ui.status('ok', 'On schedule'));
+    fact(dl, 'Last backup', v.last_success_at ? ui.time(v.last_success_at) : document.createTextNode('none yet'));
+    fact(dl, 'Next backup', v.next_run_at ? ui.time(v.next_run_at) : dash());
+  }
+  function renderClientsSummary(d) {
+    const dl = $('clients-facts');
+    dl.replaceChildren();
+    fact(dl, 'Users', d.users ? ui.num(d.users.length) : dash());
+    fact(dl, 'Clients', d.clients ? ui.num(d.clients.length) : dash());
+  }
+
+  function renderHome(d) {
+    const f = statsFigures(d.stats);
+    renderKpis(f);
+    if (d.stats) renderChart(f.days); else $('chart-summary').textContent = 'The numbers could not be read.';
+    renderServices(d.services);
+    renderBackupSummary(d.schedule);
+    renderClientsSummary(d);
+  }
   let liveAttention = null;
   function loadHome() {
     if (!liveAttention) {
       liveAttention = ui.live(readSetup, {
         when: appShownNow,
         notice: $('attention'),
-        render(data) { gapsNow = setupGapItems(data); renderAttention(); },
+        render(data) { gapsNow = setupGapItems(data); renderAttention(); renderHome(data); },
         onError(ex) { if (ex.message !== 'Signed out') pageError(ex.message); },
       });
     }

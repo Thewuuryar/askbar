@@ -1927,6 +1927,137 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       await page.unroute(/\/api\/admin\/v1\/(providers|catalog|users|clients|backup\/schedule|network)$/);
     }
   });
+  await step('home: numbers with units right-aligned, the usage chart with a one-line summary and a hidden table of the same values, summaries that link, and greyed items that Tab reaches', async () => {
+    const K = await page.evaluate(() => window.ui.ready);
+    const wait = K.LIVE_EVERY_SECS * 2 * 1000 + 3000;
+    const now = Math.floor(Date.now() / 1000);
+    const days = [['2026-11-10', 98], ['2026-11-11', 160], ['2026-11-12', 87]];
+    let stats = {
+      requests: 345, error_rate: 0.021, cost: 7.6, cost_unknown_requests: 0, tokens: { in: 1000000, out: 280000, cached: 0 },
+      latency_ms: { p50: 900, p95: 6400 }, ttft_ms: { p50: 100, p95: 300 }, by_provider: [],
+      by_day: days.map(([day, requests]) => ({ day, requests, tokens: { in: 0, out: 0, cached: 0 }, cost: null })),
+    };
+    let sinceSeen = null;
+    const setup = {
+      providers: [{ id: 'p1', name: 'Main' }], catalog: { models: [{ provider_id: 'p1', model: 'm' }], default: 'p1/m' }, users: [{ id: 'u1' }, { id: 'u2' }],
+      clients: [{ id: 'c1' }, { id: 'c2' }, { id: 'c3' }],
+      'backup/schedule': { enabled: true, destination: { path: '/b', writable: true, problem: null, same_disk: false, files: [] }, last_success_at: now - 7200, next_run_at: now + 7200, drill_due: false, missed: false },
+      network: { tls_enabled: false, hostname: '' },
+    };
+    const services = { services: [{ name: 'server', state: 'running' }, { name: 'auditor', state: 'exited' }] };
+    const setupRe = /\/api\/admin\/v1\/(providers|catalog|users|clients|backup\/schedule|network)$/;
+    const install = async (target) => {
+      await target.route(setupRe, async (route) => {
+        if (route.request().method() !== 'GET') { await route.continue(); return; }
+        await route.fulfill({ contentType: 'application/json', body: JSON.stringify(setup[new URL(route.request().url()).pathname.replace('/api/admin/v1/', '')]) });
+      });
+      await target.route(/\/api\/admin\/v1\/audit\/stats\?/, async (route) => {
+        sinceSeen = Number(new URL(route.request().url()).searchParams.get('since'));
+        await route.fulfill({ contentType: 'application/json', body: JSON.stringify(stats) });
+      });
+      await target.route(/\/api\/admin\/v1\/services$/, (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify(services) }));
+    };
+    await install(page);
+    try {
+      await page.goto(base + 'home/');
+      await page.waitForSelector('#kpi-requests .num', { timeout: wait });
+      assert.equal(Math.abs(now - sinceSeen - K.HOME_STATS_WINDOW_SECS) < 120, true, 'the stats window is HOME_STATS_WINDOW_SECS');
+      assert.equal(K.HOME_STATS_WINDOW_DAYS * 86400, K.HOME_STATS_WINDOW_SECS);
+
+      // The numbers: units, right-aligned.
+      const kpis = await page.$$eval('#home-kpis .kpi', (list) => list.map((k) => ({ label: k.querySelector('.k').textContent, value: k.querySelector('.v').textContent, align: getComputedStyle(k).textAlign, num: !!k.querySelector('.v .num') })));
+      assert.deepEqual(kpis.map((k) => [k.label, k.value]), [['Requests', '345'], ['Error rate', '2.1 %'], ['Tokens', '1,280,000 tokens'], ['Cost', '7.6'], ['Latency, 95th percentile', '6.4 s']]);
+      assert.equal(kpis.every((k) => k.align === 'right' && k.num), true, 'every number is a right-aligned ui.num');
+
+      // The chart: role img, its label is the visible one-line summary, and the hidden table holds the same values.
+      const chart = await page.evaluate(() => {
+        const c = document.getElementById('home-chart');
+        const sum = document.getElementById('chart-summary').textContent;
+        const t = document.getElementById('chart-table-wrap');
+        const cs = getComputedStyle(document.querySelector('.chart-bar'));
+        return {
+          role: c.getAttribute('role'), label: c.getAttribute('aria-label'), sum, hidden: c.hidden,
+          tableRows: [...document.querySelectorAll('#chart-table tbody tr')].map((r) => [...r.children].map((x) => x.textContent)),
+          bars: [...document.querySelectorAll('.chart-bar')].map((b) => [b.dataset.day, Number(b.dataset.requests), b.style.height, b.querySelector('.chart-val').textContent]),
+          tableBox: t.getBoundingClientRect().width, tableClass: t.className,
+          anim: [cs.transitionDuration, cs.animationName],
+        };
+      });
+      assert.equal(chart.role, 'img');
+      assert.equal(chart.label, chart.sum, 'the aria-label is the summary line');
+      assert.equal(chart.sum, '345 requests over 3 days, from 87 to 160 a day, busiest on Nov 11.');
+      assert.deepEqual(chart.tableRows, [['Nov 10', '98'], ['Nov 11', '160'], ['Nov 12', '87']]);
+      assert.deepEqual(chart.bars.map((b) => [b[1], b[3]]), [[98, '98'], [160, '160'], [87, '87']], 'the bars hold the table values');
+      assert.deepEqual(chart.bars.map((b) => b[2]), ['61.25%', '100%', '54.375%'], 'heights are the share of the busiest day');
+      assert.equal(chart.tableClass, 'visually-hidden');
+      assert.equal(chart.anim[0], '0s', 'no transition on the bars');
+      assert.equal(chart.anim[1], 'none', 'no animation on the bars');
+      await page.emulateMedia({ reducedMotion: 'reduce' });
+      assert.equal(await page.evaluate(() => { const cs = getComputedStyle(document.querySelector('.chart-bar')); return cs.transitionDuration + '/' + cs.animationName; }), '0s/none', 'nothing moves under reduced motion');
+      await page.emulateMedia({ reducedMotion: null });
+
+      // Summaries: services (health data), backup, clients; each links to its page.
+      assert.deepEqual(await page.$$eval('#home-services-list .srow', (r) => r.map((x) => [x.firstChild.textContent, x.querySelector('.status-word').textContent, !!x.querySelector('.status-sym')])), [['Server', 'Running', true], ['auditor', 'Exited', true]]);
+      assert.deepEqual(await page.$$eval('#backup-facts dt', (d) => d.map((x) => x.textContent)), ['Status', 'Last backup', 'Next backup']);
+      assert.match(await page.innerText('#backup-facts'), /On schedule[\s\S]*2 hours ago[\s\S]*in 2 hours/);
+      assert.deepEqual(await page.$$eval('#clients-facts dd', (d) => d.map((x) => x.textContent)), ['2', '3']);
+      assert.deepEqual(await page.$$eval('.home-link', (a) => a.map((x) => x.getAttribute('href'))), ['/admin/services/', '/admin/backup/', '/admin/clients/']);
+
+      // Greyed items: five of them, each reachable by Tab, silent on Enter, with the note on focus.
+      const naSel = '.kpi .na, #numbers .na, .na-sec .na-tag, #home-services .na';
+      const notes = await page.$$eval(naSel, (n) => n.map((x) => [x.getAttribute('tabindex'), x.dataset.tip]));
+      assert.equal(notes.length, 5, 'latency by provider, budget, spend by person, models used, uptime');
+      assert.match(await page.innerText('.kpi .sub .na'), /^Family budget\s+not set/, 'the budget is a label and "not set", no invented figure');
+      assert.deepEqual(await page.$$eval('.na-sec, #home-services .home-sec-head .na, #numbers .home-sec-head .na', (n) => n.map((x) => /\d/.test(x.textContent))), [false, false, false, false], 'no figures in the greyed items');
+      assert.equal(notes.every(([t, tip]) => t === '0' && /^Not available yet: /.test(tip)), true);
+      await page.evaluate(() => document.getElementById('home-error').focus());
+      const reached = new Set();
+      const urlBefore = page.url();
+      for (let i = 0; i < 80 && reached.size < 5; i++) {
+        await page.keyboard.press('Tab');
+        const tip = await page.evaluate(() => (document.activeElement && document.activeElement.matches('[data-tip]:not(.side-menu *)') && /Not available yet/.test(document.activeElement.dataset.tip)) ? document.activeElement.dataset.tip : null);
+        if (tip && !reached.has(tip)) {
+          reached.add(tip);
+          await page.waitForFunction(() => getComputedStyle(document.activeElement, '::after').opacity === '1', null, { timeout: 2000 }).catch(() => { throw new Error('the note does not show on focus: ' + tip); });
+          await page.keyboard.press('Enter');
+          assert.equal(page.url(), urlBefore, 'Enter does nothing');
+          assert.equal(await page.locator('#toasts .toast').count(), 0);
+        }
+      }
+      assert.equal(reached.size, 5, 'Tab reaches every greyed item');
+
+      // Layout: no sideways scroll; targets.
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'no horizontal scroll');
+      for (const box of await page.$$eval('.home-link, #numbers .na, #home-services .na, .na-sec .na-tag', (a) => a.map((x) => { const r = x.getBoundingClientRect(); return [r.width, r.height]; }))) {
+        assert.ok(box[1] >= (isPhone ? 44 : 24) - 0.5 && box[0] >= 24 - 0.5, 'target ' + box);
+      }
+
+      // A quiet window: the summary says so, and there is no chart and no table.
+      stats = { ...stats, requests: 0, error_rate: null, cost: null, tokens: { in: 0, out: 0, cached: 0 }, latency_ms: null, by_day: [] };
+      await page.waitForFunction(() => document.getElementById('chart-summary').textContent === 'No requests in the last 7 days.', null, { timeout: wait });
+      assert.equal(await page.isHidden('#home-chart'), true);
+      assert.equal(await page.isHidden('#chart-table-wrap'), true);
+      assert.equal(await page.innerText('#kpi-requests'), '0');
+      assert.equal(await page.innerText('#kpi-latency'), '–', 'no latency is a dash, not 0');
+      stats = { ...stats, requests: 345, by_day: days.map(([day, requests]) => ({ day, requests, tokens: { in: 0, out: 0, cached: 0 }, cost: null })) };
+
+      // axe on a copy of the page that lets axe in.
+      const axeCtx = await browser.newContext({ viewport, bypassCSP: true, storageState: await ctx.storageState() });
+      try {
+        const ap = await axeCtx.newPage();
+        await install(ap);
+        await ap.goto(base + 'home/');
+        await ap.waitForSelector('#home-chart:not([hidden])', { timeout: wait });
+        await ap.addScriptTag({ content: fs.readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8') });
+        const found = await ap.evaluate(async () => (await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'] } })).violations.map((v) => v.id + ': ' + v.nodes.map((n) => n.target.join(' ')).join(', ')));
+        assert.deepEqual(found, [], 'axe on Home with numbers and chart');
+      } finally { await axeCtx.close(); }
+    } finally {
+      await page.unroute(setupRe);
+      await page.unroute(/\/api\/admin\/v1\/audit\/stats\?/);
+      await page.unroute(/\/api\/admin\/v1\/services$/);
+    }
+  });
   await step('global search: combobox and listbox, groups in rule 4 order with Reference last, "/" focuses it but not inside a field, a setting shows its value, Enter opens it, Esc closes then clears', async () => {
     const ORDER = ['Pages', 'Settings', 'People', 'Clients', 'Providers', 'Models', 'Audit', 'Reference'];
     const state = await page.evaluate(async () => {

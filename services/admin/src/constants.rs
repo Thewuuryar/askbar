@@ -102,6 +102,10 @@ pub const BACKOFF_SECS: [u32; 4] = [10, 20, 40, 60];
 pub const HIGHLIGHT_SECS: u32 = 3;
 /// How long a toast stays.
 pub const TOAST_SECS: u32 = 5;
+/// How many days of requests Home's numbers and usage chart cover.
+pub const HOME_STATS_WINDOW_DAYS: u32 = 7;
+/// The same window in seconds (the `since` of the stats read).
+pub const HOME_STATS_WINDOW_SECS: i64 = HOME_STATS_WINDOW_DAYS as i64 * 24 * 3600;
 /// How many rows each group of the global search shows; typing more narrows it.
 pub const SEARCH_RESULTS_PER_GROUP: usize = 5;
 
@@ -156,6 +160,8 @@ struct Constants {
     highlight_secs: u32,
     toast_secs: u32,
     search_results_per_group: usize,
+    home_stats_window_days: u32,
+    home_stats_window_secs: i64,
     page_slugs: [&'static str; 14],
     landing_page: &'static str,
 }
@@ -200,6 +206,8 @@ fn current() -> Constants {
         highlight_secs: HIGHLIGHT_SECS,
         toast_secs: TOAST_SECS,
         search_results_per_group: SEARCH_RESULTS_PER_GROUP,
+        home_stats_window_days: HOME_STATS_WINDOW_DAYS,
+        home_stats_window_secs: HOME_STATS_WINDOW_SECS,
         page_slugs: PAGE_SLUGS,
         landing_page: LANDING_PAGE,
     }
@@ -235,6 +243,8 @@ mod tests {
             "GENERATION_TIMEOUT_SECS",
             "HIDDEN_EVERY_SECS",
             "HIGHLIGHT_SECS",
+            "HOME_STATS_WINDOW_DAYS",
+            "HOME_STATS_WINDOW_SECS",
             "LANDING_PAGE",
             "LICENSE",
             "LICENSE_URL",
