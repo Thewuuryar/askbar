@@ -1,8 +1,19 @@
 {% extends "base.html" %}
 {%- import "blocks.html" as b %}
-{% block hint %}Restart a part of Askbar from here. Starting or stopping one is done from the host (<code>docker compose</code>).{% endblock %}
+{% block hint %}Restart a part of Askbar.{% endblock %}
 {% block content %}
-    <div id="services"></div>
-    <h3>Recent actions</h3>
-    <div id="services-recent" class="hint"></div>
+    <section id="services-section" aria-labelledby="services-title">
+      <div class="sect-head">
+        <h3 id="services-title">Running services</h3>
+        <span class="spacer"></span>
+        <span id="services-summary" class="hint" role="status"></span>
+      </div>
+      <div class="table-wrap">
+        <table class="table" id="services-table">
+          <caption class="visually-hidden">Services</caption>
+          <thead><tr><th scope="col">Service</th><th scope="col" class="col-does">What it does</th><th scope="col">Status</th><th scope="col" class="actions"><span class="visually-hidden">Actions</span></th></tr></thead>
+          <tbody id="services"></tbody>
+        </table>
+      </div>
+    </section>
 {% endblock %}

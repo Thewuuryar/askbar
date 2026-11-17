@@ -711,7 +711,10 @@
   //   - a changed sig builds a new node in its place (focus goes back to the same control, by position);
   //   - a new key is built, and with opts.fresh gets the .row-new class for HIGHLIGHT_SECS and is announced politely
   //     ("1 new client", opts.noun = ['client', 'clients']);
-  //   - a key that is gone is removed. opts.keep(node) holds a row as it is (a row with an open confirmation).
+  //   - a key that is gone is removed. opts.keep(node) holds a row as it is;
+  //   - a row with an open confirmation (ui.rowConfirm) is always held as it is, even on force, so a refresh never
+  //     closes the question while its button stays hidden. In a table the confirmation is the .row-confirm-row sibling
+  //     after the row: it has no key, is kept with its row, stays right after it when rows reorder, and goes with it.
   // opts.force rebuilds every row; opts.empty is the sentence shown when there are no items.
   ui.rows = (container, items, render, opts = {}) => {
     const key = opts.key || ((x) => x.id);
@@ -723,6 +726,11 @@
     let focusIndex = -1;
     const controls = (row) => [...row.querySelectorAll('button, a, input, select, textarea, [tabindex]')];
     if (activeRow) { focusKey = activeRow.dataset.key; focusIndex = controls(activeRow).indexOf(active); }
+    const confirmOf = (node) => {
+      const next = node.nextElementSibling;
+      return next && next.classList.contains('row-confirm-row') && next.dataset.key === undefined ? next : null;
+    };
+    const asking = (node) => !!(confirmOf(node) || node.querySelector(':scope > .row-confirm'));
     const old = new Map([...container.children].filter((c) => c.dataset.key !== undefined).map((c) => [c.dataset.key, c]));
     const rows = [];
     const added = [];
@@ -730,7 +738,12 @@
       const k = String(key(item));
       const sig = sigOf(item);
       const prev = old.get(k);
-      if (prev && !opts.force && (prev.dataset.sig === sig || (opts.keep && opts.keep(prev)))) { rows.push(prev); continue; }
+      if (prev && (asking(prev) || (!opts.force && (prev.dataset.sig === sig || (opts.keep && opts.keep(prev)))))) {
+        rows.push(prev);
+        const ask = confirmOf(prev);
+        if (ask) rows.push(ask);
+        continue;
+      }
       const node = render(item);
       node.dataset.key = k;
       node.dataset.sig = sig;

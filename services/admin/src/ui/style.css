@@ -227,6 +227,8 @@ dialog.box::backdrop { background: rgba(0, 0, 0, .4); }
 .menu-anchor > .menu { top: 100%; right: 0; }
 .hint.length-ok { color: var(--good); }
 .row-confirm-row > td { padding-top: 0; }
+.table tr:has(+ .row-confirm-row) > td, .table .row-confirm-row > td { background: var(--accent-soft); }
+.table tr:has(+ .row-confirm-row) > td { border-bottom-color: transparent; }
 /* A status built by ui.status has no icon markup: its symbol is a glyph, so it is never colour alone (rule 37). */
 .status-ok .status-sym:empty::before { content: "✓"; }
 .status-warning .status-sym:empty::before { content: "!"; font-weight: var(--weight-bold); }
@@ -571,3 +573,4 @@ input, select { min-height: var(--target-min); }
 .advanced summary { display: flex; align-items: center; min-height: var(--btn-h); cursor: pointer; font-weight: var(--weight-bold); }
 .panel-foot { position: sticky; bottom: calc(-1 * var(--space-4)); display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin: var(--space-4) calc(-1 * var(--space-4)) calc(-1 * var(--space-4)); padding: var(--space-3) var(--space-4); border-top: 1px solid var(--line); background: var(--card); }
 @media (max-width: 560px) { .advanced summary, .panel-form .na { min-height: var(--btn-h-touch); } .col-seen { display: none; } }
+@media (max-width: 560px) { .col-does { display: none; } }

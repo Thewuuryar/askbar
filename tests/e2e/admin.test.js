@@ -541,6 +541,32 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.waitForFunction(() => window.tRestarted === 1);
     assert.equal(await page.isVisible('#t-restart'), true);
 
+    // ui.rows holds a row with an open confirmation, and keeps its confirmation row right after it, on a refresh, a
+    // forced refresh and a reorder; both go when the row goes.
+    const r2 = await page.evaluate(() => {
+      const { el, rows, rowConfirm } = window.ui;
+      const tbody = el('tbody', { id: 't-body' });
+      document.getElementById('t-misc').append(el('table', null, tbody));
+      const draw = (names, opts = {}) => rows(tbody, names.map((n) => ({ id: n })), (i) => el('tr', null, el('td', null, el('button', { type: 'button', text: i.id }))), opts);
+      draw(['a', 'b', 'c']);
+      const b = tbody.querySelector('[data-key="b"]');
+      const trig = b.querySelector('button');
+      rowConfirm(b, { text: 'Restart b?', action: 'Restart', trigger: trig, onConfirm: async () => {} });
+      const order = () => [...tbody.children].map((x) => x.dataset.key || (x.classList.contains('row-confirm-row') ? '?' : '-')).join('');
+      const out = { before: order() };
+      draw(['a', 'b', 'c']);
+      out.refresh = order();
+      draw(['a', 'b', 'c'], { force: true });
+      out.force = order();
+      out.sameNode = tbody.querySelector('[data-key="b"]') === b;
+      draw(['c', 'b', 'a']);
+      out.reorder = order();
+      out.hidden = trig.hidden;
+      draw(['a', 'c']);
+      out.gone = order();
+      return out;
+    });
+    assert.deepEqual(r2, { before: 'ab?c', refresh: 'ab?c', force: 'ab?c', sameNode: true, reorder: 'cb?a', hidden: true, gone: 'ac' });
     await page.click('#t-copy');
     await page.waitForFunction(() => document.getElementById('t-copy').getAttribute('aria-label') === 'Copied');
     assert.equal(await page.evaluate(() => navigator.clipboard.readText()), 'askbar-admin-xyz');
@@ -819,34 +845,66 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     // No controller (ADR 0005): each state comes from the service. Here the server, the gateway and the admin run;
     // Caddy and CLIProxyAPI do not.
     await openPage('services');
-    await page.waitForSelector('#services .card[data-name="cpa"]');
+    await page.waitForSelector('#services tr[data-name="cpa"]');
     assert.equal(await page.locator('#cpa-panel, #cpa-accounts, #cpa-connect-anthropic').count(), 0, 'the Claude and ChatGPT accounts moved to Providers');
-    assert.deepEqual(await page.$$eval('#services .card', (c) => c.map((x) => x.dataset.name)), ['server', 'model-gateway', 'alerter', 'admin', 'caddy', 'cpa']);
+    assert.deepEqual(await page.$$eval('#services tr[data-name]', (c) => c.map((x) => x.dataset.name)), ['server', 'model-gateway', 'alerter', 'admin', 'caddy', 'cpa']);
+    assert.equal(await page.locator('#services-recent').count(), 0, 'there is no list of recent restarts');
     // The alerter runs here too (ADR 0055), so it joins the list between the gateway and the admin.
-    assert.match(await page.innerText('#services .card[data-name="alerter"]'), /running/);
-    // Its daily release check asked the stand-in GitHub, with a fixed User-Agent and nothing else about the install, and the card says so (ADR 0055).
-    await page.waitForFunction(() => /Askbar is up to date \(/.test(document.querySelector('#services .card[data-name="alerter"]').innerText), null, { timeout: 15000 });
+    assert.match(await page.innerText('#services tr[data-name="alerter"]'), /running/i);
+    // Its daily release check asked the stand-in GitHub, with a fixed User-Agent and nothing else about the install, and the row says so (ADR 0055).
+    await page.waitForFunction(() => /Askbar is up to date \(/.test(document.querySelector('#services tr[data-name="alerter"]').innerText), null, { timeout: 15000 });
     const releaseRequests = JSON.parse(await new Promise((resolve, reject) => { http.get({ host: '127.0.0.1', port: releasesPort, path: '/_seen' }, (res) => { let b = ''; res.on('data', (c) => (b += c)); res.on('end', () => resolve(b)); }).on('error', reject); }));
     assert.ok(releaseRequests.length >= 1 && releaseRequests.every((r) => r.user_agent === 'askbar-release-check' && r.headers.every((h) => ['host', 'user-agent', 'accept'].includes(h))), JSON.stringify(releaseRequests));
-    assert.deepEqual(await page.$$eval('#services .card[data-name="alerter"] button', (b) => b.map((x) => x.dataset.action)), ['restart']);
-    assert.match(await page.innerText('#services .card[data-name="server"]'), /running/);
+    assert.deepEqual(await page.$$eval('#services tr[data-name="alerter"] button', (b) => b.map((x) => x.dataset.action)), ['restart']);
+    assert.match(await page.innerText('#services tr[data-name="server"]'), /running/i);
     // The gateway runs here too, and it has a Restart button like the rest.
-    assert.match(await page.innerText('#services .card[data-name="model-gateway"]'), /running/);
-    assert.deepEqual(await page.$$eval('#services .card[data-name="model-gateway"] button', (b) => b.map((x) => x.dataset.action)), ['restart']);
-    assert.match(await page.innerText('#services .card[data-name="caddy"]'), /unreachable/);
-    assert.deepEqual(await page.$$eval('#services .card[data-name="server"] button', (b) => b.map((x) => x.dataset.action)), ['restart'], 'only Restart: there is no start or stop');
-    let asked = '';
-    page.once('dialog', (d) => { asked = d.message(); d.dismiss(); });
-    await page.click('#services .card[data-name="server"] [data-action="restart"]');
-    assert.match(asked, /Replies being written end as interrupted/);
-    await page.waitForFunction(() => /None yet/.test(document.getElementById('services-recent').textContent));
+    assert.match(await page.innerText('#services tr[data-name="model-gateway"]'), /running/i);
+    assert.deepEqual(await page.$$eval('#services tr[data-name="model-gateway"] button', (b) => b.map((x) => x.dataset.action)), ['restart']);
+    assert.match(await page.innerText('#services tr[data-name="caddy"]'), /unreachable/i);
+    assert.deepEqual(await page.$$eval('#services tr[data-name="server"] button', (b) => b.map((x) => x.dataset.action)), ['restart'], 'only Restart: there is no start or stop');
+    // Restart asks first, in the row: the question opens under it, and the row's own button hides until it closes.
+    const restartBtn = '#services tr[data-name="server"] [data-action="restart"]';
+    const ask = '#services .row-confirm-row';
+    await page.click(restartBtn);
+    await page.waitForSelector(ask);
+    assert.match(await page.innerText(ask + ' .row-confirm-text'), /^Restart Server\? .*Replies being written end as interrupted/);
+    assert.equal(await page.isHidden(restartBtn), true, 'the row\'s own button hides while it asks');
+    assert.deepEqual(await page.$$eval(ask + ' button', (b) => b.map((x) => x.textContent)), ['Cancel', 'Restart']);
+    // A refresh, even a forced one, with a service changing state meanwhile, leaves the question open.
+    let gatewayDown = false;
+    await page.route('**/api/admin/v1/services', async (route) => {
+      const res = await route.fetch({ headers: { ...route.request().headers(), 'if-none-match': '' } });
+      const body = await res.json();
+      if (gatewayDown) for (const s of body.services) if (s.name === 'model-gateway') s.state = 'exited';
+      await route.fulfill({ response: res, json: body, headers: { ...res.headers(), etag: '"x' + Date.now() + '"' } });
+    });
+    gatewayDown = true;
+    const every = await page.evaluate(async () => (await window.ui.ready).STATUS_EVERY_SECS);
+    await page.waitForFunction(() => /exited/i.test(document.querySelector('#services tr[data-name="model-gateway"]').innerText), null, { timeout: (every + 10) * 1000 });
+    assert.equal(await page.locator(ask).count(), 1, 'a refresh does not close the question');
+    assert.equal(await page.isHidden(restartBtn), true);
+    assert.equal(await page.locator('#services tr[data-name="server"] + .row-confirm-row').count(), 1, 'it stays right under its row');
+    await page.unroute('**/api/admin/v1/services');
+    // Cancel closes it, brings the button back and focuses it; so does Esc.
+    await page.click(ask + ' [data-row-cancel]');
+    assert.equal(await page.locator(ask).count(), 0);
+    assert.equal(await page.isVisible(restartBtn), true);
+    assert.equal(await page.evaluate(() => document.activeElement && document.activeElement.dataset.action), 'restart', 'Cancel focuses the button again');
+    await page.click(restartBtn);
+    await page.waitForSelector(ask);
+    await page.keyboard.press('Escape');
+    assert.equal(await page.locator(ask).count(), 0, 'Esc closes it');
+    assert.equal(await page.isVisible(restartBtn), true);
     // CLIProxyAPI is restarted through its supervisor (ADR 0037), so it has a Restart button too. (Not
     // clicked here: there is no supervisor in this test, and the admin would wait a minute for it.)
-    assert.deepEqual(await page.$$eval('#services .card[data-name="cpa"] button', (b) => b.map((x) => x.dataset.action)), ['restart']);
-    // Accepted: the attempt is made and recorded; Caddy is not running here, so it fails and says so.
-    page.once('dialog', (d) => d.accept());
-    await page.click('#services .card[data-name="caddy"] [data-action="restart"]');
-    await page.waitForFunction(() => /restart caddy · failed/.test(document.getElementById('services-recent').textContent));
+    assert.deepEqual(await page.$$eval('#services tr[data-name="cpa"] button', (b) => b.map((x) => x.dataset.action)), ['restart']);
+    // Confirmed: the attempt is made; Caddy is not running here, so it fails and the page error line says so.
+    await page.click('#services tr[data-name="caddy"] [data-action="restart"]');
+    await page.waitForSelector(ask);
+    await page.click(ask + ' [data-row-action]');
+    await page.waitForFunction(() => { const e = document.getElementById('page-error'); return !e.hidden && e.textContent.trim().length > 0; });
+    await page.waitForFunction(() => !document.querySelector('#services .row-confirm-row'));
+    assert.equal(await page.isVisible('#services tr[data-name="caddy"] [data-action="restart"]'), true);
   });
   await step('clients see the approved models only with a token', async () => {
     // The API is the other listener; without a token it must refuse.

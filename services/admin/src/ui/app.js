@@ -979,63 +979,46 @@
   // -------------------------------------------------------- services
 
   const SERVICE_INFO = {
-    server: { title: 'Server', what: 'the Askbar server (chats, history, provider calls)', warn: 'Replies being written end as interrupted, and apps say "server offline" until it is back (under a minute).' },
-    alerter: { title: 'Alerter', what: 'the alerter (delivers alerts)', warn: 'Alerts wait or are lost for a few seconds, and the admin gives it its delivery settings again.' },
-    'model-gateway': { title: 'Model gateway', what: 'the model gateway (provider calls and provider keys)', warn: 'Its provider keys leave its memory, and the admin gives them back within seconds.' },
-    admin: { title: 'Admin', what: 'the admin (this site)', warn: 'This page stops answering for a few seconds, then reloads, and you sign in again.' },
-    caddy: { title: 'Caddy (HTTPS front end)', what: 'the HTTPS front end', warn: 'Its configuration is pushed again; connections may drop for a moment.' },
-    cpa: { title: 'CLIProxyAPI', what: 'CLIProxyAPI', warn: 'Providers that use your Claude or ChatGPT login fail for a few seconds while it starts again.' },
+    server: { title: 'Server', does: 'Chats, history and provider calls', warn: 'Replies being written end as interrupted, and apps say "server offline" until it is back (under a minute).' },
+    alerter: { title: 'Alerter', does: 'Delivers alerts', warn: 'Alerts wait or are lost for a few seconds, and the admin gives it its delivery settings again.' },
+    'model-gateway': { title: 'Model gateway', does: 'Provider calls and provider keys', warn: 'Its provider keys leave its memory, and the admin gives them back within seconds.' },
+    admin: { title: 'Admin', does: 'This site', warn: 'This page stops answering for a few seconds, then reloads, and you sign in again.' },
+    caddy: { title: 'Caddy (HTTPS front end)', does: 'HTTPS front end', warn: 'Its configuration is pushed again; connections may drop for a moment.' },
+    cpa: { title: 'CLIProxyAPI', does: 'Claude and ChatGPT subscriptions', warn: 'Providers that use your Claude or ChatGPT login fail for a few seconds while it starts again.' },
   };
   let servicesBusy = false;
 
-  function serviceCard(svc) {
-    const info = SERVICE_INFO[svc.name] || { title: svc.name, what: svc.name, warn: '' };
-    const card = document.createElement('div');
-    card.className = 'card';
-    card.dataset.name = svc.name;
-    const head = document.createElement('div');
-    head.className = 'row';
-    const title = document.createElement('strong');
-    title.textContent = info.title;
-    const state = document.createElement('span');
-    state.className = 'svc-state';
-    state.textContent = svc.state + (svc.health ? ' · ' + svc.health : '');
-    head.append(title, state);
-    const meta = document.createElement('div');
-    meta.className = 'hint';
-    meta.textContent = svc.status || '';
-    const buttons = document.createElement('div');
-    buttons.className = 'row';
-    for (const action of ['restart']) {
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.className = 'secondary';
-      b.dataset.action = action;
-      b.textContent = action[0].toUpperCase() + action.slice(1);
-      b.disabled = servicesBusy;
-      b.addEventListener('click', () => serviceAction(svc.name, action, info));
-      buttons.appendChild(b);
-    }
-    const out = document.createElement('span');
-    out.className = 'svc-result hint';
-    buttons.appendChild(out);
-    card.append(head, meta, buttons);
-    return card;
+  // One row for each service: its name, what it does, its state (word and symbol) and Restart. Restart opens the
+  // question under the row (ui.rowConfirm); the row's own button hides until it closes.
+  function serviceRow(svc) {
+    const info = SERVICE_INFO[svc.name] || { title: svc.name, does: '', warn: '' };
+    const word = svc.state.charAt(0).toUpperCase() + svc.state.slice(1);
+    const detail = [svc.health, svc.status].filter(Boolean).join(' · ');
+    const restart = ui.el('button', {
+      type: 'button', class: 'btn btn-secondary btn-s', 'data-action': 'restart', text: 'Restart',
+      'aria-label': 'Restart ' + info.title, disabled: servicesBusy,
+    });
+    const row = ui.el('tr', { 'data-name': svc.name },
+      ui.el('td', null, ui.el('strong', { class: 'name', text: info.title })),
+      ui.el('td', { text: info.does }),
+      ui.el('td', null, ui.status(svc.state === 'running' ? 'ok' : 'warning', word), detail ? ui.el('div', { class: 'sub', text: detail }) : null),
+      ui.el('td', { class: 'actions' }, restart));
+    restart.addEventListener('click', () => ui.rowConfirm(row, {
+      text: 'Restart ' + info.title + '? ' + info.warn, action: 'Restart', busy: 'Restarting…', trigger: restart,
+      onConfirm: () => restartService(svc.name),
+    }));
+    return row;
   }
 
-  async function serviceAction(name, action, info) {
-    const sentence = 'Restart ' + info.what + '? ' + info.warn;
-    if (!confirm(sentence.trim())) return;
+  // The restart itself; a failure shows in the page error line. The list is read again once the question has closed.
+  async function restartService(name) {
     servicesBusy = true;
-    const card = document.querySelector('#services .card[data-name="' + name + '"]');
-    for (const b of document.querySelectorAll('#services button')) b.disabled = true;
-    const out = card && card.querySelector('.svc-result');
-    if (out) out.textContent = 'Working...';
+    for (const b of document.querySelectorAll('#services-table button[data-action]')) b.disabled = true;
+    pageError('');
     try {
-      await api('POST', '/api/admin/v1/services/' + encodeURIComponent(name) + '/' + action);
+      await api('POST', '/api/admin/v1/services/' + encodeURIComponent(name) + '/restart');
       if (name === 'admin') {
         // It exits after answering; wait until it answers again, then start the page afresh.
-        if (out) out.textContent = 'Restarting...';
         for (let i = 0; i < 60; i++) {
           await new Promise((r) => setTimeout(r, 1000));
           try { const r = await fetch('/api/admin/v1/health'); if (r.ok && i > 1) { location.reload(); return; } } catch (_) { /* still down */ }
@@ -1049,31 +1032,19 @@
     liveServices.refresh({ force: true });
   }
 
-  // The service cards, kept current every STATUS_EVERY_SECS while the tab is visible, and paused while a restart runs.
-  // After the admin's own restart the cards are rebuilt (force), so "Working..." never lingers.
+  // The service rows, kept current every STATUS_EVERY_SECS while the tab is visible, and paused while a restart runs.
+  // A row with its question open is held as it is (ui.rows), so a refresh never closes it.
   const liveServices = ui.live(() => api('GET', '/api/admin/v1/services', undefined, { etag: true }), {
     every: 'STATUS_EVERY_SECS',
     when: appShownNow,
     skip: () => servicesBusy,
-    notice: $('services'),
+    notice: $('services-table'),
     render(data, ctx) {
-      ui.rows($('services'), data.services, serviceCard, { key: (svc) => svc.name, force: ctx.force, sig: (svc) => JSON.stringify([svc, servicesBusy]) });
-      const rec = $('services-recent');
-      rec.textContent = data.recent.length ? '' : 'None yet.';
-      for (const r of data.recent) {
-        const line = document.createElement('div');
-        line.textContent = new Date(r.at * 1000).toLocaleString() + ' · ' + r.action + ' ' + r.service + (r.ok ? '' : ' · failed');
-        rec.appendChild(line);
-      }
+      ui.rows($('services'), data.services, serviceRow, { key: (svc) => svc.name, force: ctx.force });
+      const down = data.services.filter((s) => s.state !== 'running').length;
+      $('services-summary').textContent = down ? down + ' of ' + data.services.length + ' not running' : 'All running';
     },
-    onError(ex) {
-      if (ex.message === 'Signed out') return;
-      const box = $('services');
-      const p = document.createElement('p');
-      p.className = 'error';
-      p.textContent = ex.message;
-      box.replaceChildren(p);
-    },
+    onError(ex) { if (ex.message !== 'Signed out') pageError(ex.message); },
   });
   function loadServices() { return liveServices.start(); }
   // -------------------------------------------------------- providers and models (plan step 5.5)
