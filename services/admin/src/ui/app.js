@@ -289,9 +289,9 @@
     renderSealToggle();
   }, ui.MS);
 
-  // The status poll's part: the toggle, one plain banner while it is open (no button: sealing lives in the toggle), and
-  // one banner per alert of the last day (an unseal, a change of the timeouts). Banners show every condition for now:
-  // there is no Notifications setting yet to choose the non-critical ones.
+  // The status poll's part: the toggle, and one plain banner while it is open (no button: sealing lives in the toggle).
+  // The day's alerts (an unseal, a change of the timeouts) are not banners: they are history, listed in the bell's Info
+  // group (rule 39: page-wide banners are only for conditions that affect the whole admin).
   function showSealed(s) {
     const open = !!s.open;
     sealed.open = open;
@@ -299,15 +299,6 @@
     renderSealToggle();
     const mins = minutes(sealed.left);
     ui.banner('unsealed', 'warning', open ? 'Sealed content is open for about ' + mins + ' more minute' + (mins === 1 ? '' : 's') + ' (less if it is not used).' : null, { live: true });
-    const keep = new Set();
-    (s.alerts || []).forEach((a, i) => {
-      const key = 'sealed-' + i;
-      keep.add(key);
-      ui.banner(key, 'info', new Date(a.at * 1000).toLocaleString() + ' · ' + a.text);
-    });
-    for (const b of document.querySelectorAll('#banners [data-banner^="sealed-"]')) {
-      if (!keep.has(b.dataset.banner)) b.remove();
-    }
     if (window.askbarAudit && window.askbarAudit.sessionFromStatus) window.askbarAudit.sessionFromStatus(s);
   }
 

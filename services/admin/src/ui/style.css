@@ -395,6 +395,9 @@ input, select { min-height: var(--target-min); }
   /* Under the phone bar, same 48 px: the budget is dropped, the kill switch stays. */
   .status-bar { top: var(--phone-bar-h); padding: 0 var(--space-4); }
   .facts .na { display: none; }
+  /* The breadcrumb on a phone is the page's own label only: the group is left out, so the label is not cut short. */
+  .crumb li:not([aria-current="page"]) { display: none; }
+  .crumb li[aria-current="page"]::before { content: none; }
   /* The search sits in the phone menu: full width, 44 px, its results in the flow of the menu. */
   .side-menu .gs { flex: none; min-width: 0; width: 100%; }
   .gs-field { height: var(--btn-h-touch); }

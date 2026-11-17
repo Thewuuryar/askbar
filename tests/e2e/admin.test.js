@@ -1630,8 +1630,11 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.click('#audit-content .view-btn');
     await page.waitForFunction(() => /Anything else\?/.test(document.getElementById('audit-viewed')?.textContent || ''));
     assert.equal(await page.evaluate(() => JSON.stringify([...Object.entries(localStorage), ...Object.entries(sessionStorage)]).includes('passphrase')), false);
-    // The unseal is an alert in the banner area.
-    await page.waitForFunction(() => /Sealed audit content was unsealed/.test(document.getElementById('banners').textContent), null, { timeout: 15000 });
+    // The unseal is an alert in the bell's Info group, not a banner (rule 39: banners are for the whole admin).
+    await page.click('#bell-button');
+    await page.waitForFunction(() => /Sealed audit content was unsealed/.test(document.querySelector('#bell-menu [role="group"][aria-label="Info alerts"]')?.textContent || ''), null, { timeout: 15000 });
+    assert.equal(await page.locator('#banners [data-banner^="sealed-"]').count(), 0, 'no banner for a history alert');
+    await page.keyboard.press('Escape');
     // The access history: the view, the unseal, and the wrong guess, as text.
     await page.waitForSelector('#audit-access-rows tr');
     const results = await page.$$eval('#audit-access-rows tr td:last-child', (c) => c.map((x) => x.textContent));
@@ -2602,6 +2605,17 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.goto(base + 'reference/');
     await page.waitForSelector('#app:not([hidden])');
     assert.deepEqual(await crumb(), [['Reference', 'page']], 'a top-level page shows just its label');
+    if (isPhone) {
+      // On a phone the group is left out, so the label is whole: the visible text is exactly the page name, not clipped.
+      await page.goto(base + 'network/');
+      await page.waitForSelector('#app:not([hidden])');
+      const visible = await page.evaluate(() => {
+        const items = [...document.querySelectorAll('#status-bar .crumb li')].filter((li) => getComputedStyle(li).display !== 'none');
+        const cur = document.querySelector('#status-bar .crumb li[aria-current="page"]');
+        return { text: items.map((li) => li.textContent.trim()).join(' '), clipped: cur.scrollWidth > cur.clientWidth };
+      });
+      assert.deepEqual(visible, { text: 'Network', clipped: false }, 'on a phone the breadcrumb shows only the page label, not clipped');
+    }
     assert.equal(await page.locator('#status-bar [aria-current="page"]').count(), 1);
     assert.equal(await page.locator('nav[aria-label="Breadcrumb"] ol').count(), 1);
     await page.goto(base + 'settings/');

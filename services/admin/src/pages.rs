@@ -247,6 +247,9 @@ mod tests {
                 "{}: the budget, once (tooltip and text)",
                 p.slug
             );
+            // The budget reads "Budget not set": the space is a no-break one, since the greyed item is a flex box,
+            // which drops a plain space at its end.
+            assert_eq!(html.matches("Budget&nbsp;<b>not set</b>").count(), 1, "{}: the budget text keeps its space", p.slug);
             assert_eq!(html.matches(r#"id="sb-kill""#).count(), 1, "{}", p.slug);
             // The seal toggle (step 3.3) sits in the facts: a status word and one named button, and the unseal box exists once.
             let facts = &html[html.find(r#"id="status-facts""#).unwrap()..];
