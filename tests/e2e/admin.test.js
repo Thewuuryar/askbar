@@ -1612,7 +1612,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     assert.match(await page.innerText('#n-info'), /admin site is at https:\/\/askbar\.orraitu\.com\/admin/);
     assert.match(await page.innerText('#n-info'), /pairing keys point at https:\/\/askbar\.orraitu\.com\./);
     assert.equal(await page.inputValue('#n-token'), '');
-    assert.match(await page.getAttribute('#n-token', 'placeholder'), /unchanged/);
+    assert.match(await page.innerText('#n-token-hint'), /unchanged/, 'the stored token is said to be held, never shown');
     assert.equal((await page.content()).includes(CF), false);
     await page.reload();
     await openPage('network');
@@ -1629,10 +1629,10 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
   await step('network: HTTP-01 is chosen beside DNS, shows its warning, needs no token and refuses a private name (D19)', async () => {
     await openPage('network');
     await page.waitForFunction(() => /pairing keys point at/.test(document.getElementById('n-info').textContent));
-    assert.equal(await page.inputValue('#n-challenge'), 'dns', 'the DNS challenge is the default');
+    assert.equal(await page.$eval('input[name=n-challenge]:checked', (i) => i.value), 'dns', 'the DNS challenge is the default');
     assert.equal(await page.isVisible('#n-dns-box'), true);
     assert.equal(await page.isHidden('#n-http-note'), true);
-    await page.selectOption('#n-challenge', 'http');
+    await page.check('#n-challenge-http');
     assert.equal(await page.isHidden('#n-dns-box'), true, 'no token to enter');
     assert.match(await page.innerText('#n-http-note'), /port 80/);
     assert.match(await page.innerText('#n-http-note'), /cannot work for a name that only resolves inside your network/);
@@ -1650,17 +1650,17 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.reload();
     await openPage('network');
     await page.waitForFunction(() => document.getElementById('n-host').value === 'askbar.orraitu.com');
-    assert.equal(await page.inputValue('#n-challenge'), 'http');
+    assert.equal(await page.$eval('input[name=n-challenge]:checked', (i) => i.value), 'http');
     assert.equal(await page.isHidden('#n-dns-box'), true);
     // Back to DNS: the token box is back, and the token stored earlier is still held.
-    await page.selectOption('#n-challenge', 'dns');
+    await page.check('#n-challenge-dns');
     assert.equal(await page.isVisible('#n-dns-box'), true);
-    assert.match(await page.getAttribute('#n-token', 'placeholder'), /unchanged/);
+    assert.match(await page.innerText('#n-token-hint'), /unchanged/, 'the stored token is said to be held, never shown');
     // Leave things as the next steps expect: plain HTTP, the DNS challenge.
     await page.uncheck('#n-tls');
     await page.click('#network-form button[type=submit]');
     await page.waitForFunction(() => /point at http:\/\/localhost/.test(document.getElementById('n-info').textContent));
-    assert.equal(await page.inputValue('#n-challenge'), 'dns');
+    assert.equal(await page.$eval('input[name=n-challenge]:checked', (i) => i.value), 'dns');
   });
   await step('backup downloads an encrypted bundle: a manifest, the protected key and the admin\'s and the server\'s exports, none of it readable (ADR 0013)', async () => {
     await openPage('backup');

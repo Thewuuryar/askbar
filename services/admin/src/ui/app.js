@@ -843,7 +843,7 @@
     ['s-newest-first', 'Show conversations newest first', 'general', 'settings', (r) => onOff(r.display.newest_first)],
     ['n-tls', 'Serve over HTTPS', 'network', 'network', (r) => onOff(r.tls_enabled)],
     ['n-host', 'Hostname', 'network', 'network', (r) => r.hostname || 'not set'],
-    ['n-challenge', 'How to prove the hostname to Let\'s Encrypt', 'network', 'network', (r) => (r.acme_challenge === 'http' ? 'HTTP-01' : 'DNS-01')],
+    ['n-challenge-dns', 'How to prove the hostname to Let\'s Encrypt', 'network', 'network', (r) => (r.acme_challenge === 'http' ? 'HTTP-01' : 'DNS-01')],
     ['n-allow', 'Only let these addresses open the admin site', 'network', 'network', (r) => onOff(r.allowlist_enabled)],
     ['n-cidr', 'Allowed addresses and networks', 'network', 'network', (r) => r.admin_cidr || 'none'],
     ['n-staging', 'Use the Let\'s Encrypt staging CA', 'network', 'network', (r) => onOff(r.acme_staging)],
@@ -1880,25 +1880,39 @@
     $('n-cidr').value = n.admin_cidr;
     $('n-allow').checked = !!n.allowlist_enabled;
     $('n-staging').checked = n.acme_staging;
-    $('n-challenge').value = n.acme_challenge || 'dns';
+    setChallenge(n.acme_challenge || 'dns');
     showChallenge();
     $('n-token').value = '';
-    $('n-token').placeholder = n.has_token ? 'unchanged (write-only)' : 'write-only';
+    // The token is write-only: the hint says whether one is stored, never what it is (rule 10: no placeholder hints).
+    $('n-token-hint').textContent = (n.has_token ? 'Stored and unchanged; type a new one to replace it. ' : '')
+      + 'Needs Zone:DNS:Edit and Zone:Zone:Read. Write-only.';
     $('n-clear').checked = false;
     show($('n-clear-row'), n.has_token);
+    $('n-https').className = 'status ' + (n.tls_enabled ? 'status-ok' : 'status-off');
+    $('n-https-word').textContent = n.tls_enabled ? 'HTTPS on' : 'HTTPS off';
     $('n-info').textContent = (n.tls_enabled && n.hostname ? 'The admin site is at https://' + n.hostname + '/admin. ' : '')
       + 'New pairing keys point at ' + n.public_url + '.';
     showProxy(n.proxy);
     show($('network-error'), false);
   }
 
+  // The challenge is a pair of radios (name n-challenge): 'dns' or 'http'.
+  function challenge() {
+    return $('n-challenge-http').checked ? 'http' : 'dns';
+  }
+  function setChallenge(value) {
+    $('n-challenge-http').checked = value === 'http';
+    $('n-challenge-dns').checked = value !== 'http';
+  }
+
   // With HTTP-01 there is no token to enter, and the warning about port 80 shows.
   function showChallenge() {
-    const http = $('n-challenge').value === 'http';
+    const http = challenge() === 'http';
     show($('n-http-note'), http);
     show($('n-dns-box'), !http);
   }
-  on('n-challenge', 'change', showChallenge);
+  on('n-challenge-dns', 'change', showChallenge);
+  on('n-challenge-http', 'change', showChallenge);
 
   function showProxy(p) {
     const el = $('n-proxy');
@@ -1921,7 +1935,7 @@
         admin_cidr: $('n-cidr').value.trim(),
         allowlist_enabled: $('n-allow').checked,
         acme_staging: $('n-staging').checked,
-        acme_challenge: $('n-challenge').value,
+        acme_challenge: challenge(),
         cloudflare_token: $('n-token').value,
         clear_token: $('n-clear').checked,
       });
