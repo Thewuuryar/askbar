@@ -1544,6 +1544,99 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       await page.unroute('**/api/admin/v1/status');
     }
   });
+  await step('global search: combobox and listbox, groups in rule 4 order with Reference last, "/" focuses it but not inside a field, a setting shows its value, Enter opens it, Esc closes then clears', async () => {
+    const ORDER = ['Pages', 'Settings', 'People', 'Clients', 'Providers', 'Models', 'Audit', 'Reference'];
+    const state = await page.evaluate(async () => {
+      const s = await (await fetch('/api/admin/v1/settings', { headers: { 'X-Askbar-Admin': '1' } })).json();
+      return { timeout: s.generation_timeout_secs, theme: s.display.theme };
+    });
+    await page.goto(base + 'network/');
+    await page.waitForSelector('#app:not([hidden])');
+    const input = page.locator('#gs-input');
+    // Roles and name: one combobox named "Search the admin", closed, controlling a listbox.
+    assert.equal(await input.getAttribute('role'), 'combobox');
+    assert.equal(await input.getAttribute('aria-expanded'), 'false');
+    assert.equal(await input.getAttribute('aria-autocomplete'), 'list');
+    assert.equal(await page.getAttribute('#gs-list', 'role'), 'listbox');
+    assert.equal(await input.getAttribute('aria-controls'), 'gs-list');
+    // "/" from the page focuses it (on a phone it opens the menu that holds it).
+    await page.locator('body').press('/');
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'gs-input');
+    assert.equal(await input.inputValue(), '', 'the slash itself is not typed');
+    assert.equal(await page.getByRole('combobox', { name: 'Search the admin' }).count(), 1);
+    const box = await input.boundingBox();
+    assert.ok(box.height >= (isPhone ? 44 : 24) - 0.5, 'target ' + box.height);
+    if (isPhone) assert.equal(await page.evaluate(() => document.getElementById('gs').parentElement.id), 'side-menu', 'the phone menu holds it');
+    else assert.ok(await page.evaluate(() => document.getElementById('gs').parentElement.classList.contains('gs-left')), 'the status bar holds it');
+    // Groups come in rule 4 order, Reference never drawn while empty; the highlight is a <mark>.
+    await input.fill('e');
+    await page.waitForSelector('#gs-list [role="option"]');
+    const heads = await page.$$eval('#gs-list [role="group"]', (g) => g.map((x) => document.getElementById(x.getAttribute('aria-labelledby')).textContent));
+    assert.deepEqual(heads, ORDER.filter((h) => heads.includes(h)), 'rule 4 order');
+    for (const h of ['Pages', 'Settings', 'Audit']) assert.ok(heads.includes(h), h + ' is searched');
+    assert.ok(!heads.includes('Reference'), 'Reference stays out while it is empty');
+    assert.equal(await input.getAttribute('aria-expanded'), 'true');
+    assert.ok(await page.locator('#gs-list .gs-title mark').count() > 0, 'matched text is marked');
+    // aria-activedescendant follows the arrows and names the selected option.
+    const active = () => page.evaluate(() => {
+      const id = document.getElementById('gs-input').getAttribute('aria-activedescendant');
+      const o = document.getElementById(id);
+      return { id, selected: o.getAttribute('aria-selected'), role: o.getAttribute('role'), only: document.querySelectorAll('#gs-list [aria-selected="true"]').length };
+    });
+    const first = await active();
+    assert.deepEqual([first.selected, first.role, first.only], ['true', 'option', 1]);
+    await input.press('ArrowDown');
+    const second = await active();
+    assert.notEqual(second.id, first.id);
+    assert.equal(second.only, 1);
+    await input.press('ArrowUp');
+    assert.equal((await active()).id, first.id);
+    // A setting shows its current value, read from the same GET the page uses.
+    await input.fill('reply time limit');
+    const row = page.locator('#gs-list [role="option"]', { hasText: 'Reply time limit' });
+    await row.waitFor();
+    assert.match(await row.innerText(), new RegExp((state.timeout === null ? 'default' : state.timeout + ' s') + '\\s*$'));
+    await input.fill('theme');
+    await page.locator('#gs-list [role="option"]', { hasText: 'Theme' }).waitFor();
+    assert.match(await page.locator('#gs-list [role="option"]', { hasText: 'Theme' }).first().innerText(), new RegExp(state.theme + '\\s*$'));
+    // Audit filters open the requests view; the row says the filter is chosen there.
+    await input.fill('status: error');
+    const audit = page.locator('#gs-list [role="option"]', { hasText: 'Status: error' });
+    await audit.waitFor();
+    assert.match(await audit.getAttribute('href'), /\/admin\/audit\/calls\/\?view=requests$/);
+    assert.match(await audit.innerText(), /pick the filter there/);
+    // Esc closes the list and keeps the text; a second Esc clears it.
+    await input.press('Escape');
+    assert.equal(await input.getAttribute('aria-expanded'), 'false');
+    assert.equal(await page.isHidden('#gs-pop'), true);
+    assert.equal(await input.inputValue(), 'status: error');
+    await input.press('Escape');
+    assert.equal(await input.inputValue(), '');
+    // axe with the list open (a copy of the page in a context that lets axe in).
+    const axeCtx = await browser.newContext({ viewport, bypassCSP: true, storageState: await ctx.storageState() });
+    try {
+      const ap = await axeCtx.newPage();
+      await ap.goto(base + 'network/');
+      await ap.waitForSelector('#app:not([hidden])');
+      await ap.locator('body').press('/');
+      await ap.fill('#gs-input', 'e');
+      await ap.waitForSelector('#gs-list [role="option"]');
+      await ap.addScriptTag({ content: fs.readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8') });
+      const found = await ap.evaluate(async () => (await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'] } })).violations.map((v) => v.id + ': ' + v.nodes.map((n) => n.target.join(' ')).join(', ')));
+      assert.deepEqual(found, [], 'axe with the list open');
+    } finally { await axeCtx.close(); }
+    // Enter opens the page at the field, which takes focus.
+    await input.fill('reply time limit');
+    await page.locator('#gs-list [role="option"]', { hasText: 'Reply time limit' }).waitFor();
+    await input.press('Enter');
+    await page.waitForURL('**/admin/settings/#s-gen-timeout');
+    await page.waitForSelector('#app:not([hidden])');
+    await page.waitForFunction(() => document.activeElement && document.activeElement.id === 's-gen-timeout');
+    // "/" typed inside a field is a character, not the shortcut.
+    await page.keyboard.type('/');
+    assert.equal(await page.evaluate(() => document.activeElement.id), 's-gen-timeout');
+    await page.evaluate(() => { document.getElementById('s-gen-timeout').value = ''; });
+  });
   await step('audit overview: a canned stats payload fills the tiles, the day bars and the provider bars', async () => {
     const canned = {
       since: 0, requests: 40, by_status: { done: 36, error: 3, cancelled: 1 }, error_rate: 0.075,

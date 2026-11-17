@@ -121,7 +121,17 @@
     </aside>
     <div class="content">
     <div class="status-bar" id="status-bar">
+      <div class="gs-left">
       <nav class="crumb" aria-label="Breadcrumb"><ol>{% if group != "" %}<li>{{ group }}</li>{% endif %}<li aria-current="page">{{ label }}</li></ol></nav>
+      <div class="gs" id="gs" role="search">
+        <div class="gs-field">{% call c::icon("search") %}{% endcall %}<label class="gs-sr" for="gs-input">Search the admin</label><input id="gs-input" type="text" role="combobox" aria-expanded="false" aria-controls="gs-list" aria-autocomplete="list" autocomplete="off" spellcheck="false" placeholder="Search pages, settings, people…"><kbd class="gs-kbd" aria-hidden="true">/</kbd></div>
+        <div class="gs-pop" id="gs-pop" hidden>
+          <div id="gs-list" role="listbox" aria-label="Search results"></div>
+          <p class="gs-none" id="gs-none" hidden>No matches</p>
+          <div class="gs-foot" aria-hidden="true"><span><kbd>↑</kbd><kbd>↓</kbd> move</span><span><kbd>↵</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+        </div>
+      </div>
+      </div>
       <div class="facts" id="status-facts">
         {% call c::na("the server has no family budget setting") %}Budget <b>not set</b>{% endcall %}
         <span id="sb-kill" class="status status-pending"><span class="status-sym" aria-hidden="true"></span><span class="status-word">Kill switch: checking</span></span>
@@ -131,6 +141,7 @@
     </div>
     {% call c::banner_region() %}{% endcall %}
     <div id="alert-pops" class="alert-pops"></div>
+    <template id="search-icons"><span data-icon="settings">{% call c::icon("sliders") %}{% endcall %}</span><span data-icon="people">{% call c::icon("people") %}{% endcall %}</span><span data-icon="providers">{% call c::icon("cube") %}{% endcall %}</span><span data-icon="audit">{% call c::icon("audit") %}{% endcall %}</span><span data-icon="reference">{% call c::icon("reference") %}{% endcall %}</span><span data-icon="page">{% call c::icon("search") %}{% endcall %}</span></template>
     <template id="alert-icons"><span data-icon="critical">{% call c::icon("critical") %}{% endcall %}</span><span data-icon="warning">{% call c::icon("warning") %}{% endcall %}</span><span data-icon="info">{% call c::icon("info") %}{% endcall %}</span><span data-icon="close">{% call c::icon("close") %}{% endcall %}</span></template>
     <main id="main" tabindex="-1">
       <p id="page-error" class="error" role="alert" hidden></p>

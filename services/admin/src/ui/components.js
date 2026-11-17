@@ -581,6 +581,122 @@
     if (pop) pop.remove();
   };
 
+  // ------------------------------------------------------------- combobox (plan step 3.5, rule 4)
+
+  // ui.highlight(text, query) returns a fragment of `text` with every query word wrapped in <mark>, built as nodes.
+  ui.highlight = (text, query) => {
+    const frag = document.createDocumentFragment();
+    const lower = text.toLowerCase();
+    const ranges = [];
+    for (const word of query.toLowerCase().split(/\s+/).filter(Boolean)) {
+      const at = lower.indexOf(word);
+      if (at >= 0) ranges.push([at, at + word.length]);
+    }
+    ranges.sort((a, b) => a[0] - b[0]);
+    const merged = [];
+    for (const r of ranges) {
+      const last = merged[merged.length - 1];
+      if (last && r[0] <= last[1]) last[1] = Math.max(last[1], r[1]);
+      else merged.push([r[0], r[1]]);
+    }
+    let at = 0;
+    for (const [from, to] of merged) {
+      if (from > at) frag.append(text.slice(at, from));
+      frag.append(el('mark', { text: text.slice(from, to) }));
+      at = to;
+    }
+    if (at < text.length) frag.append(text.slice(at));
+    return frag;
+  };
+
+  // ui.combobox({ input, list, pop, none, groups(query), icon(item), choose(item, event) }) is the ARIA 1.2 combobox
+  // with a listbox: the input keeps focus and names the highlighted option in aria-activedescendant. groups(query)
+  // returns [{ key, label, items: [{ title, where, value, href, ... }] }]; a group with no items is not drawn.
+  // Arrows move, Enter chooses (the first row when none is highlighted), Esc closes and a second Esc clears.
+  // Returns { render, close }. The caller shows `pop` (the popup holding `list` and `none`) through it.
+  ui.combobox = (o) => {
+    const { input, list, pop, none } = o;
+    let rows = [];
+    let active = -1;
+    let open = false;
+    const setOpen = (v) => {
+      open = v;
+      pop.hidden = !v;
+      input.setAttribute('aria-expanded', String(v));
+      if (!v) input.removeAttribute('aria-activedescendant');
+    };
+    const select = (i) => {
+      if (active >= 0 && rows[active]) rows[active].node.setAttribute('aria-selected', 'false');
+      active = i;
+      if (i < 0 || !rows[i]) { input.removeAttribute('aria-activedescendant'); return; }
+      rows[i].node.setAttribute('aria-selected', 'true');
+      input.setAttribute('aria-activedescendant', rows[i].node.id);
+      rows[i].node.scrollIntoView({ block: 'nearest' });
+    };
+    const render = () => {
+      const query = input.value.trim();
+      list.textContent = '';
+      rows = [];
+      active = -1;
+      none.hidden = true;
+      if (!query) { setOpen(false); return; }
+      for (const g of o.groups(query)) {
+        if (!g.items.length) continue;
+        const heading = el('div', { class: 'gs-group', id: list.id + '-h-' + g.key, text: g.label });
+        const group = el('div', { role: 'group', 'aria-labelledby': heading.id }, heading);
+        for (const item of g.items) {
+          const node = el('a', { class: 'gs-row', role: 'option', id: list.id + '-o-' + rows.length, href: item.href, tabindex: '-1', 'aria-selected': 'false' },
+            o.icon ? o.icon(item) : null,
+            el('span', { class: 'gs-main' },
+              el('span', { class: 'gs-title' }, ui.highlight(item.title, query)),
+              item.where ? el('span', { class: 'gs-where', text: item.where }) : null),
+            item.value ? el('span', { class: 'gs-val', text: item.value }) : null);
+          rows.push({ node, item });
+          group.append(node);
+        }
+        list.append(group);
+      }
+      none.hidden = rows.length > 0;
+      setOpen(true);
+      if (rows.length) select(0);
+      ui.announce(rows.length ? rows.length + (rows.length === 1 ? ' result' : ' results') : 'No matches');
+    };
+    const choose = (item, e) => { setOpen(false); o.choose(item, e); };
+    input.addEventListener('input', render);
+    input.addEventListener('focus', () => { if (input.value.trim() && !open) render(); });
+    input.addEventListener('blur', () => setOpen(false));
+    input.addEventListener('keydown', (e) => {
+      const n = rows.length;
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        if (!open) { render(); return; }
+        if (n) select((active + (e.key === 'ArrowDown' ? 1 : n - 1)) % n);
+      } else if (e.key === 'Enter') {
+        if (!open || !n) return;
+        e.preventDefault();
+        choose(rows[active >= 0 ? active : 0].item, e);
+      } else if (e.key === 'Escape') {
+        if (open) { e.preventDefault(); e.stopPropagation(); setOpen(false); }
+        else if (input.value) { e.preventDefault(); e.stopPropagation(); input.value = ''; render(); }
+      } else if (e.key === 'Tab') {
+        setOpen(false);
+      }
+    });
+    // A press on the popup must not take focus from the input (it would close the popup before the click lands).
+    pop.addEventListener('mousedown', (e) => e.preventDefault());
+    pop.addEventListener('mouseover', (e) => {
+      const at = rows.findIndex((r) => r.node === e.target.closest('.gs-row'));
+      if (at >= 0 && at !== active) select(at);
+    });
+    pop.addEventListener('click', (e) => {
+      const hit = rows.find((r) => r.node === e.target.closest('.gs-row'));
+      if (!hit || e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey) return; // let "open in a new tab" work
+      e.preventDefault();
+      choose(hit.item, e);
+    });
+    return { render, close: () => setOpen(false) };
+  };
+
   // ------------------------------------------------------------- lists
 
   // ui.rows(tbody, items, render, { key, empty }) replaces the rows: render(item) returns a <tr>, key(item) its
@@ -747,6 +863,9 @@
   // While it is open the page behind is inert and Tab stays in the menu and its button; Esc or Close shuts it
   // and focus goes back to the button. The button is only shown on a phone, so "is it shown" is the check.
   const phoneOpen = () => document.documentElement.classList.contains('menu-open');
+  // The menu's tab stops: its links and buttons, and the search field the phone menu holds. A search result is a link
+  // too, but the input keeps focus while it is chosen, so results are not stops (tabindex -1).
+  const MENU_LINKS = 'a[href]:not([tabindex="-1"]), button';
   function setPhoneMenu(open) {
     const button = $('menu-open');
     const main = document.querySelector('#main');
@@ -755,7 +874,7 @@
     button.setAttribute('aria-expanded', String(open));
     if (main) main.inert = open;
     if (open) {
-      const first = [...$('side-menu').querySelectorAll('a[href], button')].find((n) => n.getClientRects().length > 0);
+      const first = [...$('side-menu').querySelectorAll(MENU_LINKS)].find((n) => n.getClientRects().length > 0);
       if (first) first.focus();
     } else {
       button.focus();
@@ -770,7 +889,7 @@
     if (!phoneOpen()) return;
     if (e.key === 'Escape') { e.preventDefault(); setPhoneMenu(false); return; }
     if (e.key !== 'Tab') return;
-    const stops = [$('menu-open'), ...$('side-menu').querySelectorAll('a[href], button')].filter((n) => n.getClientRects().length > 0);
+    const stops = [$('menu-open'), ...$('side-menu').querySelectorAll(MENU_LINKS + ', #gs-input')].filter((n) => n.getClientRects().length > 0);
     const at = stops.indexOf(document.activeElement);
     const next = e.shiftKey ? (at <= 0 ? stops.length - 1 : at - 1) : (at === stops.length - 1 ? 0 : at + 1);
     e.preventDefault();

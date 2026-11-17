@@ -260,6 +260,17 @@ mod tests {
                 p.slug
             );
             assert_eq!(html.matches(r#"id="alert-pops""#).count(), 1, "{}: one pop-up region", p.slug);
+            // Global search (step 3.5): one combobox with its listbox, after the breadcrumb and before the facts, with a name.
+            let bar = &html[html.find(r#"id="status-bar""#).unwrap()..html.find(r#"id="status-facts""#).unwrap()];
+            assert!(bar.find("Breadcrumb").unwrap() < bar.find(r#"id="gs-input""#).unwrap(), "{}: search follows the breadcrumb", p.slug);
+            assert_eq!(html.matches(r#"id="gs-input""#).count(), 1, "{}: one search field", p.slug);
+            assert!(
+                bar.contains(r#"role="combobox" aria-expanded="false" aria-controls="gs-list" aria-autocomplete="list""#)
+                    && bar.contains(r#"<label class="gs-sr" for="gs-input">Search the admin</label>"#)
+                    && bar.contains(r#"id="gs-list" role="listbox""#),
+                "{}: combobox, name and listbox",
+                p.slug
+            );
             assert_eq!(html.matches(r#"id="unseal-box""#).count(), 1, "{}", p.slug);
             assert_eq!(html.matches(r#"id="unseal-pass-error""#).count(), 1, "{}", p.slug);
             let current = format!(r#"href="/admin/{}/" data-tab="{}" data-tip="{}" aria-current="page">"#, p.slug, p.slug, p.label);

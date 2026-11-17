@@ -451,6 +451,8 @@
     show($('app'), true);
     appShown = true;
     loadPage();
+    focusHash();
+    initSearch();
     checkServer();
     checkHealth();
     if (!statusTimer) statusTimer = setInterval(() => { if (!$('app').hidden) checkServer(); }, K.STATUS_EVERY_SECS * MS);
@@ -474,6 +476,181 @@
     try { await api('DELETE', '/api/admin/v1/session'); } catch (_) { /* already signed out */ }
     route();
   });
+
+  // ---------------------------------------------------------- global search
+
+  // The status bar's search (plan step 3.5, rule 4). It finds, in this order: pages, settings (with the value now),
+  // people, clients, providers, models, Audit filters, and last Reference (empty until step 7.4 fills `reference`).
+  // Pages come from the menu itself; everything else is read with GETs on the first focus of the field (and again when
+  // the last read is older than LIVE_EVERY_SECS), never on page load. No API is added.
+  const SEARCH_READS = {
+    settings: '/api/admin/v1/settings',
+    network: '/api/admin/v1/network',
+    keys: '/api/admin/v1/keys',
+    schedule: '/api/admin/v1/backup/schedule',
+    backupKey: '/api/admin/v1/backup/key',
+    users: '/api/admin/v1/users',
+    clients: '/api/admin/v1/clients',
+    providers: '/api/admin/v1/providers',
+    catalog: '/api/admin/v1/catalog',
+  };
+  const withUnit = (v, unit) => (v === null || v === undefined ? 'default' : v + ' ' + unit);
+  const onOff = (v) => (v ? 'on' : 'off');
+  // One row per setting that exists today: [id of its field on the page, its label, the page's slug, which read above
+  // holds it, how to turn that response into the value shown (null: no value to show)]. Enter opens the page at #id.
+  // When a page is split in a later phase (step 5.x), change the slug here; nothing else needs to know.
+  const SETTING_FIELDS = [
+    ['s-prompt', 'System prompt', 'settings', 'settings', (r) => (r.system_prompt ? [...r.system_prompt].length + ' characters' : 'empty')],
+    ['s-gen-timeout', 'Reply time limit', 'settings', 'settings', (r) => withUnit(r.generation_timeout_secs, 's')],
+    ['s-history-turns', 'Earlier questions sent with each question', 'settings', 'settings', (r) => r.history_turns || 'all'],
+    ['s-kill-switch', 'Kill switch', 'settings', 'settings', (r) => onOff(r.kill_switch)],
+    ['s-kill-aborts', 'Stop running replies when the kill switch goes on', 'settings', 'settings', (r) => onOff(r.kill_switch_aborts_running !== false)],
+    ['s-retention', 'Keep audit records for', 'settings', 'settings', (r) => withUnit(r.audit_retention_days, 'days')],
+    ['s-unseal-idle', 'Seal after idle minutes', 'settings', 'settings', (r) => withUnit(r.unseal_idle_minutes, 'min')],
+    ['s-unseal-total', 'Seal after minutes in all', 'settings', 'settings', (r) => withUnit(r.unseal_total_minutes, 'min')],
+    ['s-notice-on', 'Privacy notice', 'settings', 'settings', (r) => (r.privacy_notice_enabled !== false ? 'shown' : 'hidden')],
+    ['s-warning-on', 'AI warning above the input box', 'settings', 'settings', (r) => (r.ai_warning_enabled !== false ? 'shown' : 'hidden')],
+    ['s-theme', 'Theme', 'settings', 'settings', (r) => r.display.theme],
+    ['s-width', 'Window width', 'settings', 'settings', (r) => r.display.width + ' px'],
+    ['s-max-height', 'Window max height', 'settings', 'settings', (r) => r.display.max_height + ' px'],
+    ['s-history-width', 'History panel width', 'settings', 'settings', (r) => r.display.history_width + ' px'],
+    ['s-top', 'Top position', 'settings', 'settings', (r) => r.display.top_percent],
+    ['s-hide-on-blur', 'Hide the window when it loses focus', 'settings', 'settings', (r) => onOff(r.display.hide_on_blur)],
+    ['s-newest-first', 'Show conversations newest first', 'settings', 'settings', (r) => onOff(r.display.newest_first)],
+    ['n-tls', 'Serve over HTTPS', 'network', 'network', (r) => onOff(r.tls_enabled)],
+    ['n-host', 'Hostname', 'network', 'network', (r) => r.hostname || 'not set'],
+    ['n-challenge', 'How to prove the hostname to Let\'s Encrypt', 'network', 'network', (r) => (r.acme_challenge === 'http' ? 'HTTP-01' : 'DNS-01')],
+    ['n-allow', 'Only let these addresses open the admin site', 'network', 'network', (r) => onOff(r.allowlist_enabled)],
+    ['n-cidr', 'Allowed addresses and networks', 'network', 'network', (r) => r.admin_cidr || 'none'],
+    ['n-staging', 'Use the Let\'s Encrypt staging CA', 'network', 'network', (r) => onOff(r.acme_staging)],
+    ['pw-current', 'Change admin password', 'security', null, null],
+    ['key-name', 'Admin API key', 'security', 'keys', (r) => (r.length ? r[0].name : 'none')],
+    ['sched-keep-files', 'Keep at most this many backups', 'backup', 'schedule', (r) => r.keep_files],
+    ['sched-keep-days', 'Delete backups older than this many days', 'backup', 'schedule', (r) => r.keep_days],
+    ['bk-pass', 'Backup key', 'backup', 'backupKey', (r) => (r.set ? 'fingerprint ' + r.fingerprint : 'not set')],
+  ];
+  // Audit has no filter in its address yet (audit.js reads only `view` and `id`), so these open the requests view and
+  // the row says so; the filter is then chosen there. Statuses are the Status filter's own words.
+  const AUDIT_STATUSES = ['done', 'error', 'cancelled', 'timed out', 'interrupted'];
+  const AUDIT_NOTE = 'Audit / Model calls · opens the requests view, pick the filter there';
+  const AUDIT_REQUESTS = '/admin/audit/calls/?view=requests';
+
+  const search = { data: {}, at: 0, loading: null, combo: null, pages: [] };
+
+  function searchPages() {
+    return [...document.querySelectorAll('#nav a[data-tab]')].map((a) => {
+      const sub = a.closest('.sm-subs');
+      const group = sub && sub.previousElementSibling ? sub.previousElementSibling.textContent.trim() : '';
+      const title = a.textContent.trim();
+      return { title, group, where: group && group !== title ? group : 'Page', href: a.getAttribute('href'), slug: a.dataset.tab, nav: a.querySelector('svg') };
+    });
+  }
+
+  // The rows of each group for the data read so far. A read that failed leaves its rows out.
+  const SEARCH_GROUPS = [
+    ['pages', 'Pages', () => search.pages.map((p) => ({ ...p, icon: 'nav' }))],
+    ['settings', 'Settings', () => {
+      const where = (slug) => { const p = search.pages.find((x) => x.slug === slug); return p ? (p.group && p.group !== p.title ? p.group + ' / ' + p.title : p.title) : slug; };
+      return SETTING_FIELDS.map(([id, title, slug, source, read]) => {
+        let value = '';
+        const r = source && search.data[source];
+        if (r && read) { try { value = String(read(r)); } catch (_) { value = ''; } }
+        return { title, where: where(slug), value, href: '/admin/' + slug + '/#' + id, icon: 'settings' };
+      });
+    }],
+    ['people', 'People', () => (search.data.users || []).map((u) => ({ title: u.name, where: 'Settings / Clients · users', value: u.paused ? 'paused' : '', href: '/admin/clients/#users', icon: 'people' }))],
+    ['clients', 'Clients', () => (search.data.clients || []).map((c) => {
+      const user = (search.data.users || []).find((u) => u.id === c.user_id);
+      return { title: c.name, where: 'Settings / Clients' + (user ? ' · ' + user.name : ''), value: c.revoked ? 'revoked' : 'active', href: '/admin/clients/#clients', icon: 'people' };
+    })],
+    ['providers', 'Providers', () => (search.data.providers || []).map((p) => ({ title: p.name, where: 'Settings / Providers · ' + p.kind, value: '', href: '/admin/providers/#providers', icon: 'providers' }))],
+    ['models', 'Models', () => {
+      const c = search.data.catalog || { models: [] };
+      const name = (id) => { const p = (search.data.providers || []).find((x) => x.id === id); return p ? p.name : 'a provider that is gone'; };
+      return c.models.map((m) => ({ title: m.model, where: 'Settings / Providers · ' + name(m.provider_id), value: c.default === m.provider_id + '/' + m.model ? 'default' : '', href: '/admin/providers/#catalog-approved', icon: 'providers' }));
+    }],
+    ['audit', 'Audit', () => [
+      ...AUDIT_STATUSES.map((w) => ({ title: 'Status: ' + w, where: AUDIT_NOTE, value: '', href: AUDIT_REQUESTS, icon: 'audit' })),
+      ...(search.data.providers || []).map((p) => ({ title: 'Provider: ' + p.name, where: AUDIT_NOTE, value: '', href: AUDIT_REQUESTS, icon: 'audit' })),
+    ]],
+    // Step 7.4 fills this from the reference articles; until then the group has no rows and is not drawn.
+    ['reference', 'Reference', () => []],
+  ];
+
+  function searchGroups(query) {
+    const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+    return SEARCH_GROUPS.map(([key, label, items]) => ({
+      key,
+      label,
+      items: items().filter((i) => { const hay = (i.title + ' ' + i.where).toLowerCase(); return words.every((w) => hay.includes(w)); }).slice(0, K.SEARCH_RESULTS_PER_GROUP),
+    }));
+  }
+
+  function searchIcon(item) {
+    if (item.icon === 'nav') return item.nav ? item.nav.cloneNode(true) : null;
+    const holder = $('search-icons');
+    const src = holder && holder.content.querySelector('[data-icon="' + item.icon + '"]');
+    return src && src.firstElementChild ? src.firstElementChild.cloneNode(true) : null;
+  }
+
+  // Read the sources the first time the field is focused, and again when the last read is older than LIVE_EVERY_SECS.
+  function loadSearchData() {
+    if (search.loading || (search.at && Date.now() - search.at < K.LIVE_EVERY_SECS * MS)) return;
+    search.loading = Promise.allSettled(Object.entries(SEARCH_READS).map(async ([key, path]) => { search.data[key] = await api('GET', path); }))
+      .then(() => { search.at = Date.now(); search.loading = null; if (search.combo && document.activeElement === $('gs-input')) search.combo.render(); });
+  }
+
+  // On a phone the field lives at the top of the full-screen menu; elsewhere it follows the breadcrumb. "Is the Menu
+  // button shown" is the phone check (the same one the menu uses), so the breakpoint stays in the CSS.
+  const onPhone = () => { const b = $('menu-open'); return !!b && b.getClientRects().length > 0; };
+  function placeSearch() {
+    const gs = $('gs');
+    if (!gs) return;
+    if (onPhone()) { if (gs.parentElement.id !== 'side-menu') $('menu-health').before(gs); }
+    else if (!gs.parentElement.classList.contains('gs-left')) document.querySelector('.gs-left').append(gs);
+  }
+
+  // Scroll to and focus what the address names (#s-retention): a search result, or a link from the bell.
+  function focusHash() {
+    const id = decodeURIComponent(location.hash.slice(1));
+    const target = id && $(id);
+    if (!target || target.closest('[hidden]')) return;
+    target.scrollIntoView({ block: 'center' });
+    if (target.matches('input, select, textarea, button, a[href]')) target.focus({ preventScroll: true });
+  }
+  window.addEventListener('hashchange', focusHash);
+
+  function openResult(item) {
+    const url = new URL(item.href, location.href);
+    $('gs-input').value = '';
+    search.combo.render();
+    if (url.pathname === location.pathname && url.search === location.search) {
+      if (url.hash === location.hash) focusHash(); else location.hash = url.hash;
+      if (onPhone() && document.documentElement.classList.contains('menu-open')) $('menu-open').click();
+    } else {
+      location.assign(url);
+    }
+  }
+
+  function initSearch() {
+    const input = $('gs-input');
+    if (!input || search.combo) return;
+    search.pages = searchPages();
+    search.combo = ui.combobox({ input, list: $('gs-list'), pop: $('gs-pop'), none: $('gs-none'), groups: searchGroups, icon: searchIcon, choose: openResult });
+    input.addEventListener('focus', loadSearchData);
+    placeSearch();
+    window.addEventListener('resize', placeSearch);
+    // "/" focuses the search unless a field has the keys (or a box is open). On a phone it opens the menu first.
+    document.addEventListener('keydown', (e) => {
+      if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey || e.defaultPrevented || $('app').hidden) return;
+      const t = e.target;
+      if (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || document.querySelector('dialog[open]')) return;
+      e.preventDefault();
+      if (onPhone() && !document.documentElement.classList.contains('menu-open')) $('menu-open').click();
+      input.focus();
+      input.select();
+    });
+  }
 
   // -------------------------------------------------------- services
 

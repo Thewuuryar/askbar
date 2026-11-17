@@ -101,6 +101,8 @@ pub const BACKOFF_SECS: [u32; 4] = [10, 20, 40, 60];
 pub const HIGHLIGHT_SECS: u32 = 3;
 /// How long a toast stays.
 pub const TOAST_SECS: u32 = 5;
+/// How many rows each group of the global search shows; typing more narrows it.
+pub const SEARCH_RESULTS_PER_GROUP: usize = 5;
 
 #[derive(Serialize)]
 struct Range<T> {
@@ -152,6 +154,7 @@ struct Constants {
     backoff_secs: [u32; 4],
     highlight_secs: u32,
     toast_secs: u32,
+    search_results_per_group: usize,
     page_slugs: [&'static str; 13],
     landing_page: &'static str,
 }
@@ -195,6 +198,7 @@ fn current() -> Constants {
         backoff_secs: BACKOFF_SECS,
         highlight_secs: HIGHLIGHT_SECS,
         toast_secs: TOAST_SECS,
+        search_results_per_group: SEARCH_RESULTS_PER_GROUP,
         page_slugs: PAGE_SLUGS,
         landing_page: LANDING_PAGE,
     }
@@ -246,6 +250,7 @@ mod tests {
             "PAGE_SLUGS",
             "PAIR_CODE_TTL_SECS",
             "REFERENCE_ROOT",
+            "SEARCH_RESULTS_PER_GROUP",
             "SERVICES",
             "SESSION_TTL_SECS",
             "SOURCE_URL",
