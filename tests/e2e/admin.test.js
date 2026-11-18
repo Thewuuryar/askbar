@@ -2937,6 +2937,55 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       await page.evaluate(() => { try { localStorage.removeItem('askbar-admin.dismissed-alerts'); } catch (_) { /* none */ } });
     }
   });
+
+  await step('side panel: with the help panel open, every alert and needs-attention row keeps at least 200 px of text, and nothing scrolls sideways', async () => {
+    const clean = { server_online: true, token_rejected: false, audit_chain: { state: 'ok' }, alerts: 'ok', sealed_content: { open: false, alerts: [] } };
+    const now = Math.floor(Date.now() / 1000);
+    const K = await page.evaluate(() => window.ui.ready);
+    const wait = K.STATUS_EVERY_SECS * 2 * 1000 + 3000;
+    let fake = clean;
+    await page.route('**/api/admin/v1/status', async (route) => {
+      const real = await (await route.fetch()).json();
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ...real, ...fake }) });
+    });
+    // The text of every row, and whether the page scrolls sideways: the panel takes 440 px and must not squeeze the text.
+    const textRoom = (sel) => page.$$eval(sel, (rows) => rows.map((x) => {
+      const t = x.querySelector('.alerts-text, .arow-text');
+      return { w: Math.round(t.getBoundingClientRect().width), lines: Math.round(t.getBoundingClientRect().height / parseFloat(getComputedStyle(t).lineHeight)) };
+    }));
+    const noSideways = () => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
+    try {
+      // Three alerts or more: a critical one, a warning, and an info one.
+      fake = { ...clean, alerts: 'not_set_up', audit_chain: { state: 'edited', detail: 'An audit record was edited.' },
+        sealed_content: { open: true, idle_left_secs: 600, total_left_secs: 900, alerts: [{ kind: 'retention_changed', at: now, text: 'Retention was changed.' }] } };
+      await page.goto(base + 'alerts/?panel=help:alerts');
+      await page.waitForSelector('#app:not([hidden])');
+      await page.waitForSelector('body.panel-open');
+      await page.waitForFunction(() => document.querySelectorAll('#alerts-body .alerts-row').length >= 3, null, { timeout: wait });
+      const alertRows = await textRoom('#alerts-body .alerts-row');
+      assert.ok(alertRows.every((r) => r.w >= 200), 'the text column of every alert row is 200 px or more: ' + JSON.stringify(alertRows));
+      assert.equal(await noSideways(), true, 'no sideways scroll on Alerts beside the panel');
+
+      // Home's needs-attention list, with its own help panel open. At 1100 wide (the panel leaves the least room) too.
+      await page.goto(base);
+      await page.waitForSelector('#app:not([hidden])');
+      await page.click('#attention .help');
+      await page.waitForSelector('body.panel-open');
+      await page.waitForFunction(() => document.querySelectorAll('#attention-list .arow').length >= 3, null, { timeout: wait });
+      for (const width of isPhone ? [viewport.width] : [viewport.width, 1100]) {
+        await page.setViewportSize({ width, height: viewport.height });
+        const attnRows = await textRoom('#attention-list .arow');
+        assert.ok(attnRows.every((r) => r.w >= 200), 'at ' + width + ' the text column of every needs-attention row is 200 px or more: ' + JSON.stringify(attnRows));
+        assert.equal(await noSideways(), true, 'no sideways scroll on Home at ' + width + ' beside the panel');
+      }
+      await page.setViewportSize(viewport);
+    } finally {
+      await page.unroute('**/api/admin/v1/status');
+      await page.evaluate(() => { try { localStorage.removeItem('askbar-admin.dismissed-alerts'); } catch (_) { /* none */ } });
+      await page.setViewportSize(viewport);
+    }
+  });
+
   await step('home: quick actions (one filled primary), Needs attention from the bell items plus setup gaps, each linking to its fix, and the empty state', async () => {
     const K = await page.evaluate(() => window.ui.ready);
     const wait = K.LIVE_EVERY_SECS * 2 * 1000 + 3000;

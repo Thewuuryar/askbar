@@ -502,12 +502,19 @@ body[data-page="reference"] .content > main > section { max-width: none; }
 .home-sec { margin-top: var(--space-4); }
 .home-sec-head { display: flex; justify-content: space-between; align-items: baseline; padding-bottom: var(--space-2); border-bottom: 1px solid var(--line); }
 .home-sec-head h3 { margin: 0; }
-.attn .arow { display: grid; grid-template-columns: 112px 1fr auto; align-items: center; gap: var(--space-3); min-height: 36px; padding: var(--space-1) 0; border-bottom: 1px solid var(--line); }
+.attn .arow { display: grid; grid-template-columns: 112px minmax(0, 1fr) auto; align-items: center; gap: var(--space-3); min-height: 36px; padding: var(--space-1) 0; border-bottom: 1px solid var(--line); }
 .arow-text { min-width: 0; overflow-wrap: anywhere; }
 .arow-critical .arow-text { color: var(--danger); }
 @media (max-width: 560px) {
   .attn .arow { grid-template-columns: 1fr; gap: var(--space-1); padding: var(--space-3) 0; }
   .attn .arow .btn { justify-self: start; margin-top: var(--space-2); }
+}
+/* Rows beside a docked side panel (both lists: .alerts-row here and on Alerts, .arow on Home). The panel takes 440 px, so
+   the text column keeps the room that is left and the small parts (time, link, action) drop to a line under the text.
+   Without this the text column collapses to a few pixels and wraps one letter per line. */
+@media (min-width: 761px) {
+  body.panel-open .alerts-row, body.panel-open .arow { grid-template-columns: 112px minmax(0, 1fr); }
+  body.panel-open .alerts-row > :nth-child(n+3), body.panel-open .arow > :nth-child(n+3) { grid-column: 2; justify-self: start; }
 }
 
 /* Home numbers, usage chart and summaries (plan step 4.3; rules 36, 40, 46). Hairlines, not boxes. Bars use --accent, which
