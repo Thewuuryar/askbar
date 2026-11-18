@@ -4,7 +4,7 @@
 {% block scripts %}<script src="/admin/audit.js" defer></script>{% endblock %}
 {% block content %}
     {% call b::error_line("audit-error") %}{% endcall %}
-    <h3>Session</h3>
+    {% call c::section_title("sealed-session-title", "Session", "audit/sealed-access#session") %}{% endcall %}
     <div id="audit-session">
       <form id="audit-unseal-form">
         {% call b::hint("Enter the audit passphrase to open sealed content for a while: it stays open without more prompts, then seals itself after the idle or total time in Settings, on Seal, or when you sign out. You must have signed in within the last " ~ (crate::constants::FRESH_SIGNIN_SECS / 60) ~ " minutes. Opening and each item you view are recorded.") %}{% endcall %}
@@ -17,7 +17,7 @@
         <div class="row"><button type="button" id="audit-seal" class="btn btn-secondary">Seal</button></div>
       </div>
     </div>
-    <h3>Who opened sealed content</h3>
+    {% call c::section_title("sealed-access-title", "Who opened sealed content", "audit/sealed-access#who-opened-sealed-content") %}{% endcall %}
     {% call b::hint("Newest first. Each opening and each wrong passphrase is listed; the content itself is never shown here.") %}{% endcall %}
     <p class="hint empty" id="audit-access-empty">Nothing has been opened yet.</p>
     <div class="table-wrap" tabindex="0" role="region" aria-label="Who opened sealed content">

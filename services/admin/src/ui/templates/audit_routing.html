@@ -4,7 +4,7 @@
 {% block scripts %}<script src="/admin/audit.js" defer></script>{% endblock %}
 {% block content %}
     {% call b::error_line("audit-error") %}{% endcall %}
-    <h3>This request</h3>
+    {% call c::section_title("routing-request-title", "This request", "audit/routing#this-request") %}{% endcall %}
     <p class="hint empty" id="audit-routing-empty">Pick a request on Model calls to see how it was routed.</p>
     <div class="table-wrap" tabindex="0" role="region" aria-label="Tries for this request">
       <table id="audit-attempts" hidden>
@@ -13,7 +13,7 @@
       </table>
     </div>
     <div class="row">
-      <h3>Providers, in the chosen range</h3>
+      {% call c::section_title("routing-providers-title", "Providers, in the chosen range", "audit/routing#providers-in-the-chosen-range") %}{% endcall %}
       <span class="spacer"></span>
       <label>Range <select id="routing-window">
         <option value="1">Last 24 hours</option>

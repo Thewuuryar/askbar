@@ -7,7 +7,7 @@
 //! here from the constants, so the one place that knows the repository's address stays `constants.rs`.
 
 use crate::constants::{HELP_TOPICS, REFERENCE_ROOT, SOURCE_BRANCH, SOURCE_URL};
-use crate::pages::{menu, section_id, MenuGroup, Page, PAGES};
+use crate::pages::{menu, section_id, Group, MenuGroup, Page, PAGES};
 use askama::Template;
 use serde::Deserialize;
 use std::sync::OnceLock;
@@ -63,6 +63,24 @@ pub const SETTING_ANCHORS: &[(&str, &str)] = &[
     ("settings/general#display-defaults", "display-title"),
 ];
 
+/// The reference page of each admin page that is not under Settings (a settings page's is `settings/<slug>`): the page whose
+/// bare topic is the ? button after the page's title, and whose headings are the topics of its sections. The Reference
+/// page's own help is the reference home, `index`.
+pub const PAGE_REFERENCE: &[(&str, &str)] = &[
+    ("home", "home"),
+    ("alerts", "alerts"),
+    ("audit/calls", "audit/model-calls"),
+    ("audit/admin", "audit/admin-actions"),
+    ("audit/sealed", "audit/sealed-access"),
+    ("audit/routing", "audit/routing"),
+    ("reference", "index"),
+];
+
+/// The id of the reference page that holds an admin page's help topics.
+fn reference_id(slug: &str) -> String {
+    PAGE_REFERENCE.iter().find(|(s, _)| *s == slug).map_or_else(|| format!("settings/{slug}"), |(_, id)| (*id).to_string())
+}
+
 /// The admin page a settings article documents, as its link-back button shows it.
 pub struct OpenLink {
     pub href: String,
@@ -89,7 +107,12 @@ fn open_links(page: &RefPage) -> Vec<OpenLink> {
     page.settings
         .iter()
         .filter_map(|slug| admin_page(slug))
-        .map(|p| OpenLink { href: format!("/admin/{}/", p.slug), label: format!("{} settings", p.label), icon: p.icon })
+        .map(|p| OpenLink {
+            href: format!("/admin/{}/", p.slug),
+            // "Open Network settings" for a settings page, "Open Home" for the others.
+            label: if p.group == Group::Settings { format!("{} settings", p.label) } else { p.label.to_string() },
+            icon: p.icon,
+        })
         .collect()
 }
 
@@ -239,16 +262,16 @@ pub fn help_topic(topic: &str) -> Option<&'static HelpTopic> {
     help_topics().iter().find(|t| t.topic == topic)
 }
 
-/// The topics a page carries in its HTML: those of `settings/<slug>` (the people page's reference page is
-/// `settings/people`, and so on). A page with none has no ? buttons and no help panel.
+/// The topics a page carries in its HTML: those of its reference page (`settings/<slug>` for a settings page, and
+/// `PAGE_REFERENCE` for the others). A page with none has no ? buttons and no help panel.
 pub fn topics_for(slug: &str) -> Vec<&'static HelpTopic> {
-    let id = format!("settings/{slug}");
+    let id = reference_id(slug);
     help_topics().iter().filter(|t| t.topic == id || t.topic.strip_prefix(&id).is_some_and(|r| r.starts_with('#'))).collect()
 }
 
 /// The topic of the ? button after a page's title: the page's own, or "" when it has none.
 pub fn page_topic(slug: &str) -> &'static str {
-    let id = format!("settings/{slug}");
+    let id = reference_id(slug);
     help_topics().iter().find(|t| t.topic == id).map_or("", |t| t.topic)
 }
 
@@ -532,6 +555,14 @@ mod tests {
         assert!(s["b"].contains("b text") && !s["b"].contains("a text"));
     }
 
+    /// The topic of a `section_title("id", "text", "topic")` call, given the template text after `section_title("`: the last
+    /// string before the call ends (the text may itself be an expression with strings in it).
+    fn section_title_topic(after_open: &str) -> &str {
+        let call = after_open.split("%}").next().unwrap();
+        let strings: Vec<&str> = call.split('"').collect();
+        strings[strings.len() - 2]
+    }
+
     /// Every `help(...)` call in the templates, and every ? button on a rendered page, names a topic in the list, and
     /// the page carries that topic's text, so a missing topic fails here and not on a user's click.
     #[test]
@@ -544,14 +575,17 @@ mod tests {
             if path.file_name().unwrap() == "components.html" {
                 continue; // the macros' own documentation uses example topics
             }
-            // A topic is written as a string literal that starts with `settings/` (a help call's or a macro argument's).
-            for part in text.split("\"settings/").skip(1) {
-                let topic = format!("settings/{}", part.split('"').next().unwrap());
+            // A topic is the argument of a `help("...")` call, or the third argument of a `section_title("id", "text", "...")`.
+            let mut topics: Vec<String> = text.split("help(\"").skip(1).map(|p| p.split('"').next().unwrap().to_string()).collect();
+            for part in text.split("section_title(\"").skip(1) {
+                topics.push(section_title_topic(part).to_string());
+            }
+            for topic in topics.into_iter().filter(|t| !t.is_empty()) {
                 assert!(HELP_TOPICS.contains(&topic.as_str()), "{}: help topic '{topic}' is not in HELP_TOPICS", path.display());
                 calls += 1;
             }
         }
-        assert!(calls >= 30, "{calls}");
+        assert!(calls >= 48, "{calls}");
         let mut buttons = 0;
         for html in crate::pages::rendered() {
             for part in html.split("data-help=\"").skip(1) {
@@ -562,7 +596,7 @@ mod tests {
                 buttons += 1;
             }
         }
-        assert!(buttons >= 39, "{buttons}");
+        assert!(buttons >= 61, "{buttons}");
     }
 
     // ---------------------------------------------------------------- live examples (plan step 7.5)
@@ -714,10 +748,10 @@ mod tests {
             }
             let text = std::fs::read_to_string(&path).unwrap();
             for part in text.split("section_title(\"").skip(1) {
-                let args: Vec<&str> = part.split('"').collect();
-                // id, `, `, text, `, `, topic
-                if args.len() > 4 && args[4].contains('#') {
-                    found.push((file.clone(), args[0].to_string(), args[4].to_string()));
+                let topic = section_title_topic(part);
+                // Only the settings pages have a link back (`SETTING_ANCHORS`); the other pages' sections have a topic and no link.
+                if topic.starts_with("settings/") && topic.contains('#') {
+                    found.push((file.clone(), part.split('"').next().unwrap().to_string(), topic.to_string()));
                 }
             }
         }
@@ -741,10 +775,11 @@ mod tests {
         for (file, id, topic) in &titles {
             assert!(SETTING_ANCHORS.contains(&(topic.as_str(), id.as_str())), "{file}: {topic} -> #{id} is not in SETTING_ANCHORS");
         }
-        for topic in HELP_TOPICS.iter().filter(|t| t.contains('#')) {
+        let settings_headings = || HELP_TOPICS.iter().filter(|t| t.starts_with("settings/") && t.contains('#'));
+        for topic in settings_headings() {
             assert!(SETTING_ANCHORS.iter().any(|(t, _)| t == topic), "{topic} has no link back in SETTING_ANCHORS");
         }
-        assert_eq!(SETTING_ANCHORS.len(), HELP_TOPICS.iter().filter(|t| t.contains('#')).count());
+        assert_eq!(SETTING_ANCHORS.len(), settings_headings().count());
         // The macro writes the id on the heading, so `/admin/<slug>/#<id>` has something to land on.
         let macros =
             std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/ui/templates/components.html")).unwrap();
@@ -767,7 +802,9 @@ mod tests {
             for slug in &p.settings {
                 let admin = admin_page(slug).unwrap_or_else(|| panic!("{}: `settings:` names {slug}, which is no admin page", p.id));
                 assert!(html.contains(&format!("href=\"/admin/{slug}/\">")), "{}", p.id);
-                assert!(html.contains(&format!("Open {} settings</a>", admin.label.replace('&', "&#38;"))), "{}: {}", p.id, admin.label);
+                // "Open Network settings" for a settings page, "Open Home" for any other.
+                let word = if admin.group == Group::Settings { format!("{} settings", admin.label) } else { admin.label.to_string() };
+                assert!(html.contains(&format!("Open {}</a>", word.replace('&', "&#38;"))), "{}: {}", p.id, admin.label);
             }
             let want = p.headings.iter().filter(|h| SETTING_ANCHORS.iter().any(|(t, _)| *t == format!("{}#{}", p.id, h.id))).count();
             assert_eq!(links, want, "{}: a link for each heading that is a help topic", p.id);

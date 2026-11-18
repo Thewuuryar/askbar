@@ -11,13 +11,13 @@
     <p id="home-error" class="error" role="alert" hidden></p>
 
     <section id="attention" class="home-sec" aria-labelledby="attention-title">
-      <div class="home-sec-head"><h3 id="attention-title">Needs attention</h3><span id="attention-count" class="hint"></span></div>
+      <div class="home-sec-head">{% call c::section_title("attention-title", "Needs attention", "home#needs-attention") %}{% endcall %}<span id="attention-count" class="hint"></span></div>
       <div id="attention-list" class="attn"></div>
       <div id="attention-empty" hidden></div>
     </section>
 
     <section id="numbers" class="home-sec" aria-labelledby="numbers-title">
-      <div class="home-sec-head"><h3 id="numbers-title">Last {{ crate::constants::HOME_STATS_WINDOW_DAYS }} days</h3>{% call c::na("stats are grouped by provider, so there is no latency for each one.") %}<span class="hint">Latency by provider</span>{% endcall %}</div>
+      <div class="home-sec-head">{% call c::section_title("numbers-title", "Last " ~ crate::constants::HOME_STATS_WINDOW_DAYS ~ " days", "home#request-numbers") %}{% endcall %}{% call c::na("stats are grouped by provider, so there is no latency for each one.") %}<span class="hint">Latency by provider</span>{% endcall %}</div>
       <div id="home-kpis" class="kpis">
         <div class="kpi"><div class="k">Requests</div><div class="v" id="kpi-requests">–</div></div>
         <div class="kpi"><div class="k">Error rate</div><div class="v" id="kpi-errors">–</div></div>
@@ -29,7 +29,7 @@
 
     <div class="cols">
       <section id="usage" class="home-sec" aria-labelledby="usage-title">
-        <div class="home-sec-head"><h3 id="usage-title">Requests per day, last {{ crate::constants::HOME_STATS_WINDOW_DAYS }} days</h3></div>
+        <div class="home-sec-head">{% call c::section_title("usage-title", "Requests per day, last " ~ crate::constants::HOME_STATS_WINDOW_DAYS ~ " days", "home#requests-per-day") %}{% endcall %}</div>
         <p id="chart-summary" class="chart-summary">Reading the numbers…</p>
         <div id="home-chart" class="chart" role="img" aria-label="" hidden></div>
         <div class="visually-hidden" id="chart-table-wrap" hidden>
@@ -37,18 +37,18 @@
         </div>
       </section>
       <section class="home-sec na-sec" aria-labelledby="spend-title">
-        <div class="home-sec-head"><h3 id="spend-title">Spend by person</h3>{% call c::na_tag("the server does not track usage or caps for each person.") %}{% endcall %}</div>
+        <div class="home-sec-head">{% call c::section_title("spend-title", "Spend by person", "home#spend-by-person") %}{% endcall %}{% call c::na_tag("the server does not track usage or caps for each person.") %}{% endcall %}</div>
         <p class="hint">What each person has used against their cap.</p>
       </section>
     </div>
 
     <div class="cols">
       <section class="home-sec na-sec" aria-labelledby="models-title">
-        <div class="home-sec-head"><h3 id="models-title">Models used</h3>{% call c::na_tag("audit stats are grouped by provider, not by model.") %}{% endcall %}</div>
+        <div class="home-sec-head">{% call c::section_title("models-title", "Models used", "home#models-used") %}{% endcall %}{% call c::na_tag("audit stats are grouped by provider, not by model.") %}{% endcall %}</div>
         <p class="hint">Requests for each model.</p>
       </section>
       <section id="home-services" class="home-sec" aria-labelledby="services-title">
-        <div class="home-sec-head"><h3 id="services-title">Services</h3>{% call c::na("the server does not report how long each service has run.") %}<span class="hint">Uptime</span>{% endcall %}</div>
+        <div class="home-sec-head">{% call c::section_title("services-title", "Services", "home#services") %}{% endcall %}{% call c::na("the server does not report how long each service has run.") %}<span class="hint">Uptime</span>{% endcall %}</div>
         <div id="home-services-list"></div>
         <a class="home-link" href="/admin/services/">Manage services</a>
       </section>
@@ -56,12 +56,12 @@
 
     <div class="cols even">
       <section id="home-backup-sum" class="home-sec" aria-labelledby="backup-title">
-        <div class="home-sec-head"><h3 id="backup-title">Backup</h3></div>
+        <div class="home-sec-head">{% call c::section_title("backup-title", "Backup", "home#backup") %}{% endcall %}</div>
         <dl class="facts-list" id="backup-facts"></dl>
         <a class="home-link" href="/admin/backup/">Open Backup</a>
       </section>
       <section id="home-clients-sum" class="home-sec" aria-labelledby="people-title">
-        <div class="home-sec-head"><h3 id="people-title">Clients</h3></div>
+        <div class="home-sec-head">{% call c::section_title("people-title", "Clients", "home#clients") %}{% endcall %}</div>
         <dl class="facts-list" id="clients-facts"></dl>
         <a class="home-link" href="/admin/people/">Open People &amp; clients</a>
       </section>

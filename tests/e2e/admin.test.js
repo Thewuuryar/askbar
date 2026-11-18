@@ -2868,7 +2868,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
           { kind: 'unsealed', at: now - 120, text: 'Sealed content was opened.' }, { kind: 'retention_changed', at: now - 60, text: 'Retention was changed.' }] } };
       await page.waitForSelector('#alerts-info .alerts-row', { timeout: wait });
       assert.equal(await page.isHidden('#alerts-empty'), true);
-      assert.deepEqual(await page.$$eval('#alerts-body .alerts-group:not([hidden]) > h3', (h) => h.map((x) => x.textContent.replace(/\s+/g, ' ').trim())), ['Critical · 1', 'Warning · 2', 'Info · 2'], 'groups in order, with counts');
+      assert.deepEqual(await page.$$eval('#alerts-body .alerts-group:not([hidden]) h3', (h) => h.map((x) => x.textContent.replace(/\s+/g, ' ').trim())), ['Critical · 1', 'Warning · 2', 'Info · 2'], 'groups in order, with counts');
       assert.equal(await page.innerText('#alerts-sum'), '1 critical, 2 warnings, 2 info');
       // The counts are the bell's, by construction: the badge is critical plus warning, the menu has the same rows.
       const rows = await page.$$eval('#alerts-body .alerts-row', (r) => r.map((x) => ({
@@ -2913,7 +2913,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       assert.match(first, /Retention was changed\./, 'newest first');
       await page.click('#alerts-info .alerts-row >> nth=0 >> button');
       assert.equal(await page.locator('#alerts-info .alerts-row').count(), 1, 'removed at once');
-      assert.equal((await page.textContent('#alerts-info > h3')).replace(/\s+/g, ' ').trim(), 'Info · 1');
+      assert.equal((await page.textContent('#alerts-info h3')).replace(/\s+/g, ' ').trim(), 'Info · 1');
       assert.equal(await page.getAttribute('#bell-button', 'aria-label'), 'Alerts: 1 critical, 2 warning, 1 info', 'the bell counts it too');
       assert.equal(await page.evaluate(() => !!document.activeElement.closest('#alerts-info')), true, 'focus moves to the next Info row');
       assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('askbar-admin.dismissed-alerts')).length), 1);
@@ -4160,7 +4160,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
           const b = (e) => e.getBoundingClientRect();
           return { open: d.open, summaryShown: getComputedStyle(d.querySelector('summary')).display !== 'none', navBottom: b(d).bottom, headTop: b(document.querySelector('.ref-head')).top, bodyTop: b(document.querySelector('.ref-body')).top, navRight: b(d).right, bodyLeft: b(document.querySelector('.ref-body')).left, cur: d.querySelector('a[aria-current]')?.textContent, groups: [...d.querySelectorAll('.ref-group')].map((g) => g.textContent) };
         });
-        assert.deepEqual(nav.groups.slice(0, 3), ['Admin settings', 'Admin UI', 'Audit and alerts'], 'the outline groups the pages by area');
+        assert.deepEqual(nav.groups.slice(0, 4), ['Overview', 'Admin settings', 'Admin UI', 'Audit and alerts'], 'the outline groups the pages by area');
         if (isPhone) {
           assert.equal(nav.summaryShown && !nav.open, true, 'on a phone the outline is a closed box');
           assert.ok(nav.headTop < nav.navBottom && nav.navBottom <= nav.bodyTop + 1, 'the title, then the outline, then the article');
@@ -4234,7 +4234,9 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
         continue;
       }
       assert.deepEqual(opens.map((o) => o.href), p.settings.map((s) => '/admin/' + s + '/'), p.id + ': one button for each admin page it documents');
-      for (const o of opens) assert.match(o.text, /^Open .+ settings$/, p.id);
+      // A settings page reads "Open Network settings"; Home, Alerts and the Audit pages read "Open Home".
+      const settingsSlugs = ['general', 'providers', 'people', 'services', 'network', 'security', 'backup', 'notifications'];
+      for (const o of opens) assert.match(o.text, settingsSlugs.includes(o.href.split('/')[2]) ? /^Open .+ settings$/ : /^Open (?!.* settings$).+$/, p.id);
       // Each target is on the admin page: visit it and look for the element.
       const bySlug = {};
       for (const l of links) { const [path, id] = l.href.split('#'); (bySlug[path] ||= []).push([id, l.text]); }
@@ -4388,12 +4390,13 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       }
       assert.deepEqual(info.templates.slice().sort(), K.HELP_TOPICS.filter((t) => t === 'settings/' + slug || t.startsWith('settings/' + slug + '#')).sort(), slug + ': the page carries exactly its topics');
     }
-    // A page with no topic has no ? button and no help panel; it still has its one page header.
+    // Home and Alerts have a ? for the title too (R8): one page header, and the page carries its topics.
     for (const slug of ['home', 'alerts']) {
       await page.goto(base + slug + '/');
       await page.waitForSelector('#app:not([hidden])');
       assert.equal(await page.locator('section[data-tab] .page-header').count(), 1, slug);
-      assert.equal(await page.locator('section[data-tab] [data-help], #help-panel').count(), 0, slug + ': no help');
+      assert.equal(await page.locator('.page-header .page-title-row > button.help').getAttribute('data-help'), slug, slug + ': the title has its help');
+      assert.equal(await page.locator('#help-panel').count(), 1, slug + ': the help panel');
     }
     // The tooltip shows on keyboard focus, not only on hover.
     await page.goto(base + 'network/');
@@ -4482,6 +4485,79 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await Promise.all([page.waitForURL('**/admin/reference/settings/network/#host-name'), page.locator('#help-full').click()]);
     await page.waitForSelector('#app:not([hidden])');
     await page.waitForFunction(() => { const r = document.getElementById('host-name').getBoundingClientRect(); return r.top >= 0 && r.bottom <= window.innerHeight; });
+    await page.goto(base);
+    await page.waitForSelector('#app:not([hidden])');
+  });
+  // R8: every page title and every section heading has a ? button after it.
+  await step('help: every page title and section heading has a ? button; new ones open the panel with text and no request, axe clean', async () => {
+    const K = await page.evaluate(() => window.ui.ready);
+    const axeSource = fs.readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8');
+    // Headings that are not given a ? (the documented exceptions): the three area headings of the Reference home are labels
+    // for lists of links that the page's own ? already covers, and a reference article is the help itself (its title has none).
+    const EXCEPTIONS = [{ slug: 'reference', heading: '.rf-grp h3' }];
+    for (const slug of K.PAGE_SLUGS) {
+      await page.goto(base + slug + '/');
+      await page.waitForSelector('#app:not([hidden])');
+      await page.waitForLoadState('networkidle');
+      const missing = await page.evaluate((skip) => {
+        const out = [];
+        for (const h of document.querySelectorAll('main h2.page-title, main h3')) {
+          if (h.closest('.side-panel, dialog, [role=dialog], [hidden]') || h.offsetParent === null) continue;
+          if (skip.some((s) => h.matches(s))) continue;
+          const row = h.parentElement;
+          const btn = row.querySelector(':scope > [data-help]') || row.parentElement.querySelector(':scope > [data-help]');
+          // The button comes after the heading, in the same row.
+          const after = btn && (h.compareDocumentPosition(btn) & Node.DOCUMENT_POSITION_FOLLOWING);
+          if (!after) out.push(h.tagName.toLowerCase() + ' "' + h.textContent.trim().slice(0, 40) + '"');
+        }
+        return out;
+      }, EXCEPTIONS.filter((e) => e.slug === slug).map((e) => e.heading));
+      assert.deepEqual(missing, [], slug + ': headings with no ? button');
+    }
+    // A reference article is the help: its own title has no ?.
+    await page.goto(base + 'reference/settings/network/');
+    await page.waitForSelector('#app:not([hidden])');
+    assert.equal(await page.locator('.ref-head [data-help]').count(), 0, 'an article has no ? on its title');
+    // Three pages: each new button opens the panel with its text, fetches nothing, and axe is clean with the panel open.
+    const min = isPhone ? 44 : 24;
+    for (const slug of ['home', 'audit/sealed', 'alerts']) {
+      await page.goto(base + slug + '/');
+      await page.waitForSelector('#app:not([hidden])');
+      await page.waitForLoadState('networkidle');
+      const topics = await page.$$eval('section[data-tab] [data-help]', (bs) => bs.filter((b) => b.getClientRects().length > 0).map((b) => b.dataset.help));
+      assert.ok(topics.length >= 2, slug + ': ' + topics.length + ' visible ? buttons');
+      const requests = [];
+      // The page's own polls go to the admin API; opening help must fetch no document, script or reference page.
+      const onRequest = (r) => { if (!/\/api\/admin\/v1\//.test(r.url())) requests.push(r.url()); };
+      for (const topic of topics) {
+        const btn = page.locator('button[data-help="' + topic + '"]');
+        const box = await btn.boundingBox();
+        assert.ok(box.width >= min && box.height >= min, slug + ' ' + topic + ': target ' + box.width + 'x' + box.height);
+        page.on('request', onRequest);
+        await btn.click();
+        await page.waitForSelector('#help-panel:not([hidden])');
+        page.off('request', onRequest);
+        const text = (await page.locator('#help-article').innerText()).trim();
+        assert.ok(text.length > 20 && !/placeholder/i.test(text), slug + ' ' + topic + ': ' + text);
+        assert.equal(await btn.getAttribute('aria-expanded'), 'true');
+        assert.equal(await btn.getAttribute('aria-label'), await btn.getAttribute('data-tip'), 'name and tooltip agree');
+        assert.match(await btn.getAttribute('aria-label'), /^Help: \S/);
+        await page.keyboard.press('Escape');
+        await page.waitForSelector('#help-panel', { state: 'hidden' });
+        assert.equal(await page.evaluate(() => document.activeElement && document.activeElement.dataset.help), topic, 'focus returns to the ? button');
+      }
+      assert.deepEqual(requests, [], slug + ': opening help fetched nothing');
+      // Axe, with the panel open on the page's last topic (a fresh page at the topic's address, which also checks that it opens from it).
+      const axeCtx = await browser.newContext({ viewport, bypassCSP: true, storageState: await ctx.storageState() });
+      try {
+        const ap = await axeCtx.newPage();
+        await ap.goto(base + slug + '/?panel=' + encodeURIComponent('help:' + topics[topics.length - 1]));
+        await ap.waitForSelector('#help-panel:not([hidden])');
+        await ap.addScriptTag({ content: axeSource });
+        const found = await ap.evaluate(async () => (await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'] } })).violations.map((v) => v.id + ': ' + v.nodes.map((n) => n.target.join(' ')).join(', ')));
+        assert.deepEqual(found, [], slug + ': axe with the help panel open');
+      } finally { await axeCtx.close(); }
+    }
     await page.goto(base);
     await page.waitForSelector('#app:not([hidden])');
   });

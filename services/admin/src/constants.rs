@@ -110,7 +110,7 @@ pub const PAGE_SLUGS: [&str; 15] = [
 ];
 /// The page `/admin` opens.
 pub const LANDING_PAGE: &str = "home";
-// Help topics (plan steps 7.1a and 7.3): each is `<reference page id>#<heading>`, the heading the ? button opens, or a
+// Help topics (plan steps 7.1a and 7.3, and R8: every page title and section heading has one): each is `<reference page id>#<heading>`, the heading the ? button opens, or a
 // bare `<reference page id>`, the page's own ? button (it shows the text before the page's first heading). The reference
 // pages under docs/reference hold them, and `scripts/check-reference.sh` fails on a topic with no such page or heading.
 pub const HELP_TOPICS: &[&str] = &[
@@ -153,6 +153,28 @@ pub const HELP_TOPICS: &[&str] = &[
     "settings/general#history-sent-with-each-question",
     "settings/general#what-people-are-told",
     "settings/general#display-defaults",
+    "home",
+    "home#needs-attention",
+    "home#request-numbers",
+    "home#requests-per-day",
+    "home#spend-by-person",
+    "home#models-used",
+    "home#services",
+    "home#backup",
+    "home#clients",
+    "alerts",
+    "alerts#critical",
+    "alerts#warning",
+    "alerts#info",
+    "audit/model-calls",
+    "audit/admin-actions",
+    "audit/sealed-access",
+    "audit/sealed-access#session",
+    "audit/sealed-access#who-opened-sealed-content",
+    "audit/routing",
+    "audit/routing#this-request",
+    "audit/routing#providers-in-the-chosen-range",
+    "index",
 ];
 
 // UI timing.
