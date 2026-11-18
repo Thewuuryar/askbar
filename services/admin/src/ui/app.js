@@ -78,7 +78,7 @@
     tabs.push(tab);
     if (appShown && tab.id === page) loadPage();
   }
-  window.askbarAdmin = { api, pageError, registerTab, show, $, openSession, closeSession };
+  window.askbarAdmin = { api, registerTab, show, $, openSession, closeSession };
 
   function loadPage() {
     pageError('');
@@ -1709,11 +1709,6 @@
 
   let keyId = null;
   let revokeArmed = null;
-
-  function ago(t) {
-    if (!t) return 'never used';
-    return 'last used ' + new Date(t * 1000).toLocaleString();
-  }
 
   async function loadKeys() {
     const list = await api('GET', '/api/admin/v1/keys');
