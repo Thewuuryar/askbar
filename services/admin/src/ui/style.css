@@ -26,6 +26,9 @@ button, a.button, .btn, .btn-primary {
 }
 button.secondary, .btn-secondary { color: var(--fg); background: transparent; border: 1px solid var(--line); }
 button.danger, .btn-danger { color: var(--danger); background: transparent; border: 1px solid var(--danger); }
+/* While a save bar shows, its Save is the one filled button on screen: every other page-level primary is drawn as a
+   secondary (the markup keeps btn-primary). Boxes, docked panels and the bar itself are views of their own and keep theirs. */
+html.save-bar-on .btn-primary:not(.save-bar .btn-primary):not(.box .btn-primary):not(.side-panel .btn-primary) { color: var(--fg); background: transparent; border: 1px solid var(--line); }
 .btn-s { height: var(--btn-h-s); padding: 0 var(--space-3); }
 .btn-l { height: var(--btn-h-l); padding: 0 var(--space-5); }
 .btn-icon { position: relative; width: var(--btn-h); padding: 0; flex: none; }

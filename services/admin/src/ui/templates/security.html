@@ -11,7 +11,7 @@
         {% call c::field("Current password", "pw-current", "", "slot", false) %}<input id="pw-current" name="pw-current" type="password" autocomplete="current-password" aria-describedby="pw-current-error">{% endcall %}
         {% call c::new_secret("New password", "pw-new", crate::constants::MIN_PASSWORD_CHARS) %}{% endcall %}
         {% call b::error_line("pw-error") %}{% endcall %}
-        <div class="sec-actions">{% call c::button("Change password", "submit", "", "") %}{% endcall %}</div>
+        <div class="sec-actions"><button type="submit" class="btn btn-secondary">Change password</button></div>
       </form>
     </section>
 
@@ -89,7 +89,7 @@
         {% call c::field("Current passphrase", "r-current", "", "slot", false) %}<input id="r-current" name="r-current" type="password" autocomplete="off" aria-describedby="r-current-error">{% endcall %}
         {% call c::new_secret("New passphrase", "r-new", crate::constants::MIN_PASSPHRASE_CHARS) %}{% endcall %}
         {% call b::error_line("rotate-error") %}{% endcall %}
-        <div class="sec-actions">{% call c::button("Rotate key", "submit", "", "") %}{% endcall %}</div>
+        <div class="sec-actions"><button type="submit" class="btn btn-danger">Rotate key</button></div>
       </form>
     </section>
 
@@ -104,7 +104,7 @@
         <label class="check"><input id="bk-stored" type="checkbox" required> I stored this passphrase; it cannot be recovered</label>
         <p class="hint">Backups made before the rotation still open with the passphrase they were made under. Keep that one until the new backups cover the retention window.</p>
         {% call b::error_line("bk-error") %}{% endcall %}
-        <div class="sec-actions"><button type="submit" class="btn btn-secondary">Rotate the backup key</button></div>
+        <div class="sec-actions"><button type="submit" class="btn btn-danger">Rotate the backup key</button></div>
       </form>
     </section>
 

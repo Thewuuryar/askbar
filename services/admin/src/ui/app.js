@@ -1102,7 +1102,7 @@
     const word = svc.state.charAt(0).toUpperCase() + svc.state.slice(1);
     const detail = [svc.health, svc.status].filter(Boolean).join(' · ');
     const restart = ui.el('button', {
-      type: 'button', class: 'btn btn-secondary btn-s', 'data-action': 'restart', text: 'Restart',
+      type: 'button', class: 'btn btn-danger btn-s', 'data-action': 'restart', text: 'Restart',
       'aria-label': 'Restart ' + info.title, disabled: servicesBusy,
     });
     const row = ui.el('tr', { 'data-name': svc.name },
@@ -1185,7 +1185,7 @@
         ui.el('span', { text: (a.provider === 'anthropic' ? 'Claude' : 'ChatGPT') + ' · ' + a.label }),
         ui.el('span', { class: 'spacer' }),
         ui.el('button', {
-          type: 'button', class: 'btn btn-secondary btn-s', 'data-action': 'disconnect', text: 'Disconnect', 'aria-label': 'Disconnect ' + a.label,
+          type: 'button', class: 'btn btn-danger btn-s', 'data-action': 'disconnect', text: 'Disconnect', 'aria-label': 'Disconnect ' + a.label,
           onclick: async () => {
             const sure = await ui.confirm({ title: 'Disconnect ' + a.label + '?', body: 'Replies through the CPA provider stop working until you connect again.', action: 'Disconnect' });
             if (!sure) return;
@@ -1475,7 +1475,7 @@
       return ui.el('div', { class: 'picker-row' + (isDef ? ' is-default' : ''), 'data-model': id },
         ui.el('span', { class: 'who' }, ui.el('code', { text: m.model }), ui.el('small', { class: 'hint', text: providerName(m.provider_id) + (isNew ? ' · Added' : '') })),
         ui.el('label', { class: 'check picker-def' }, radio, ui.el('span', { text: word })),
-        ui.el('button', { type: 'button', class: 'btn btn-quiet btn-s', text: 'Remove', 'aria-label': 'Remove ' + m.model, 'data-focus': 'rm:' + id, onclick: () => setApproved(m, false) }));
+        ui.el('button', { type: 'button', class: 'btn btn-danger btn-s', text: 'Remove', 'aria-label': 'Remove ' + m.model, 'data-focus': 'rm:' + id, onclick: () => setApproved(m, false) }));
     }));
   }
 

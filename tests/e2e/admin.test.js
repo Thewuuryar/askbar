@@ -5196,6 +5196,78 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.evaluate(() => window.ui.banner('probe', 'error', null));
     assert.equal(await page.locator('#banners [data-banner="probe"]').count(), 0, 'cleared by the condition ending');
   });
+  // One primary action per view (ui-ux.md): at rest a page has at most one visible page-level btn-primary and it is the only
+  // button filled with the accent; while a save bar shows, its Save is the only one (the others are drawn as secondary).
+  await step('one primary action per view: every page at rest and with its save bar showing, and the destructive buttons carry the danger style', async () => {
+    const K = await page.evaluate(() => window.ui.ready);
+    // The expected count of page-level primaries at rest, by page. A page with no natural primary action has none.
+    const EXPECT = { home: 1, alerts: 1, 'audit/calls': 0, 'audit/admin': 0, 'audit/sealed': 1, 'audit/routing': 0, general: 0, providers: 1, people: 1, services: 0, network: 0, security: 0, backup: 1, notifications: 1, reference: 1, 'reference/settings/network': 1 };
+    assert.deepEqual(Object.keys(EXPECT).filter((k) => k !== 'reference/settings/network').sort(), [...K.PAGE_SLUGS].sort(), 'the map covers every page');
+    const measure = () => page.evaluate(() => {
+      const probe = document.createElement('div');
+      probe.style.backgroundColor = 'var(--accent)';
+      document.body.append(probe);
+      const accent = getComputedStyle(probe).backgroundColor;
+      probe.remove();
+      const visible = (e) => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0 && getComputedStyle(e).visibility !== 'hidden' && !e.closest('[hidden]'); };
+      const inView = (e) => !e.closest('dialog, .box, .side-panel, .save-bar, #save-dock');
+      const all = [...document.querySelectorAll('#app button, #app a.btn')].filter(visible).filter(inView);
+      return {
+        primaries: all.filter((e) => e.classList.contains('btn-primary')).map((e) => e.textContent.trim()),
+        filled: all.filter((e) => getComputedStyle(e).backgroundColor === accent).map((e) => e.textContent.trim()),
+        saves: [...document.querySelectorAll('#save-dock [data-save-submit]')].filter(visible).map((e) => ({ text: e.textContent.trim(), filled: getComputedStyle(e).backgroundColor === accent })),
+      };
+    });
+    const table = [];
+    for (const [slug, want] of Object.entries(EXPECT)) {
+      await page.goto(base + slug + '/');
+      await page.waitForSelector('#app:not([hidden])');
+      await page.waitForLoadState('networkidle');
+      const m = await measure();
+      table.push(slug + ': ' + JSON.stringify(m.primaries));
+      assert.equal(m.primaries.length, want, slug + ' at rest: visible page-level btn-primary ' + JSON.stringify(m.primaries));
+      assert.equal(m.filled.length, want, slug + ' at rest: accent-filled buttons ' + JSON.stringify(m.filled));
+      assert.equal(m.saves.length, 0, slug + ' at rest shows no save bar');
+    }
+    // A save bar showing: its Save is the one filled button, the page's own primaries are drawn as secondary.
+    const DIRTY = { general: '#s-gen-timeout', network: '#n-host', notifications: '#a-server', security: '#s-retention' };
+    for (const [slug, field] of Object.entries(DIRTY)) {
+      await page.goto(base + slug + '/');
+      await page.waitForSelector('#app:not([hidden])');
+      await page.waitForLoadState('networkidle');
+      const before = await page.inputValue(field);
+      await page.fill(field, before === '' ? 'x' : String(Number(before) + 1 || before + 'x'));
+      await page.waitForSelector('html.save-bar-on');
+      const m = await measure();
+      assert.deepEqual(m.filled, [], slug + ' with a save bar: no page button is filled ' + JSON.stringify(m.filled));
+      assert.equal(m.saves.filter((x) => x.filled).length, 1, slug + ' with a save bar: exactly the Save is accent-filled ' + JSON.stringify(m.saves));
+      if (slug === 'notifications') assert.deepEqual(m.primaries, ['Send a test alert'], 'the test button keeps btn-primary in the markup but is drawn as a secondary');
+    }
+    // Alerts: its header button is the primary and the only one.
+    await page.goto(base + 'alerts/');
+    await page.waitForSelector('#app:not([hidden])');
+    assert.deepEqual(await page.$$eval('#app .page-header a.btn-primary', (a) => a.map((x) => x.getAttribute('href'))), ['/admin/notifications/#alerts-form']);
+    // Destructive buttons carry btn-danger and the danger colours of a reference .btn-danger.
+    const dangerOf = (sel) => page.evaluate((q) => {
+      const pick = (e) => { const c = getComputedStyle(e); return { color: c.color, border: c.borderTopColor, background: c.backgroundColor, cls: e.classList.contains('btn-danger') }; };
+      const ref = document.createElement('button');
+      ref.className = 'btn btn-danger';
+      document.body.append(ref);
+      const want = pick(ref);
+      ref.remove();
+      const got = [...document.querySelectorAll(q)].map(pick);
+      return { want, got };
+    }, sel);
+    for (const [slug, sel] of [['notifications', '#a-remove, #m-remove'], ['security', '#rotate-form button[type="submit"], #backup-key-form button[type="submit"]'], ['services', '#services-table [data-action="restart"]']]) {
+      await page.goto(base + slug + '/');
+      await page.waitForSelector('#app:not([hidden])');
+      if (slug === 'services') await page.waitForSelector('#services-table [data-action="restart"]');
+      const d = await dangerOf(sel);
+      assert.ok(d.got.length >= 1, slug + ': ' + sel + ' exist');
+      for (const g of d.got) assert.deepEqual(g, d.want, slug + ': ' + sel + ' is drawn as btn-danger');
+    }
+    console.log('primary-action audit (at rest, visible page-level btn-primary):\n  ' + table.join('\n  '));
+  });
   await step('no JavaScript errors', async () => { assert.deepEqual(errors, []); });
 
   } finally {

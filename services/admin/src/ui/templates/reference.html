@@ -12,7 +12,7 @@
 {% block content %}
 {%- if page.is_index() %}
     <div class="rf-home">
-      {% call c::page_header(label, lede, crate::reference::page_topic(current), "") %}<a class="btn btn-secondary rf-open" href="{{ folder_url }}" rel="noopener noreferrer">{% call c::icon("code") %}{% endcall %}View on GitHub</a>{% endcall %}
+      {% call c::page_header(label, lede, crate::reference::page_topic(current), "") %}<a class="btn btn-primary rf-open" href="{{ folder_url }}" rel="noopener noreferrer">{% call c::icon("code") %}{% endcall %}View on GitHub</a>{% endcall %}
       <div class="rf-grid">
         {%- for g in outline %}
         <section class="rf-grp" aria-labelledby="rf-area-{{ loop.index }}">
@@ -51,7 +51,7 @@
         {%- if !opens.is_empty() %}
         <div class="rf-act">
           {%- for o in opens %}
-          <a class="btn btn-secondary rf-open" href="{{ o.href }}">{% call c::icon(o.icon) %}{% endcall %}Open {{ o.label }}</a>
+          <a class="btn {% if loop.first %}btn-primary{% else %}btn-secondary{% endif %} rf-open" href="{{ o.href }}">{% call c::icon(o.icon) %}{% endcall %}Open {{ o.label }}</a>
           {%- endfor %}
         </div>
         {%- endif %}

@@ -790,7 +790,7 @@ mod tests {
     fn a_settings_article_opens_its_admin_page_and_links_each_section_back_and_other_pages_have_no_link() {
         for p in pages() {
             let html = served(&p.id);
-            let opens = html.matches("class=\"btn btn-secondary rf-open\"").count();
+            let opens = html.matches(" rf-open\" href=").count();
             let links = html.matches("class=\"rf-set\"").count();
             if p.settings.is_empty() {
                 // The index's one rf-open is "View on GitHub"; neither it nor the admin-ui pages link to a setting.
