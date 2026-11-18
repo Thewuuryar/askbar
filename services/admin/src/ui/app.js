@@ -860,9 +860,10 @@
   // ---------------------------------------------------------- global search
 
   // The status bar's search (plan step 3.5, rule 4). It finds, in this order: pages, settings (with the value now),
-  // people, clients, providers, models, Audit filters, and last Reference (empty until step 7.4 fills `reference`).
+  // people, clients, providers, models, Audit filters, and last Reference (the reference index, step 7.4).
   // Pages come from the menu itself; everything else is read with GETs on the first focus of the field (and again when
-  // the last read is older than LIVE_EVERY_SECS), never on page load. No API is added.
+  // the last read is older than LIVE_EVERY_SECS), never on page load. The reference index is one GET per page load,
+  // on the first focus or the first typed character. No API is added.
   const SEARCH_READS = {
     settings: '/api/admin/v1/settings',
     network: '/api/admin/v1/network',
@@ -953,16 +954,43 @@
       ...AUDIT_STATUSES.map(([code, word]) => ({ title: 'Status: ' + word, where: AUDIT_NOTE, value: '', href: AUDIT_CALLS + '?status=' + code, icon: 'audit' })),
       ...(search.data.providers || []).map((p) => ({ title: 'Provider: ' + p.name, where: AUDIT_NOTE, value: '', href: AUDIT_CALLS + '?provider=' + encodeURIComponent(p.id), icon: 'audit' })),
     ]],
-    // Step 7.4 fills this from the reference articles; until then the group has no rows and is not drawn.
-    ['reference', 'Reference', () => []],
+    // Always last (rule 4). Empty until the reference index has been read; a failed read leaves it empty.
+    ['reference', 'Reference', () => referenceRows()],
   ];
+
+  // The reference index (`/admin/reference.json`, step 7.2) is read once per page load, on the first focus of the field or
+  // its first typed character, and kept for the page's life. A failed read is not retried: its rows stay out.
+  const refIndex = { pages: [], asked: false };
+  function loadReference() {
+    if (refIndex.asked) return;
+    refIndex.asked = true;
+    fetch('/admin/reference.json', { credentials: 'same-origin' })
+      .then((r) => { if (!r.ok) throw new Error('reference ' + r.status); return r.json(); })
+      .then((pages) => { refIndex.pages = pages; }, () => { refIndex.pages = []; })
+      .then(() => { if (search.combo && document.activeElement === $('gs-input')) search.combo.render(); });
+  }
+
+  // One row per page (its title, matched by its summary and keywords too) and one per heading (a topic). A topic's id is
+  // `<page>#<heading>`, the same as a help topic; the page's own row is `<page>`. The index page is not a result.
+  function referenceRows() {
+    const rows = [];
+    for (const p of refIndex.pages) {
+      if (p.id === 'index') continue;
+      const area = 'Reference / ' + p.group;
+      rows.push({ title: p.title, where: area, match: [p.summary, ...p.keywords, ...p.settings].join(' '), href: '/admin/reference/' + p.id + '/', topic: p.id, icon: 'reference' });
+      for (const h of p.headings) {
+        rows.push({ title: h.text, where: area + ' / ' + p.title, match: '', href: '/admin/reference/' + p.id + '/#' + h.id, topic: p.id + '#' + h.id, icon: 'reference' });
+      }
+    }
+    return rows;
+  }
 
   function searchGroups(query) {
     const words = query.toLowerCase().split(/\s+/).filter(Boolean);
     return SEARCH_GROUPS.map(([key, label, items]) => ({
       key,
       label,
-      items: items().filter((i) => { const hay = (i.title + ' ' + i.where).toLowerCase(); return words.every((w) => hay.includes(w)); }).slice(0, K.SEARCH_RESULTS_PER_GROUP),
+      items: items().filter((i) => { const hay = (i.title + ' ' + i.where + ' ' + (i.match || '')).toLowerCase(); return words.every((w) => hay.includes(w)); }).slice(0, K.SEARCH_RESULTS_PER_GROUP),
     }));
   }
 
@@ -1000,10 +1028,20 @@
   }
   window.addEventListener('hashchange', focusHash);
 
+  // A topic that the current page carries its help text for opens the side panel (step 7.3); any other opens its address.
+  function pageHasTopic(topic) {
+    return [...document.querySelectorAll('template[data-help-topic]')].some((t) => t.dataset.helpTopic === topic);
+  }
+
   function openResult(item) {
     const url = new URL(item.href, location.href);
     $('gs-input').value = '';
     search.combo.render();
+    if (item.topic && pageHasTopic(item.topic)) {
+      if (onPhone() && document.documentElement.classList.contains('menu-open')) $('menu-open').click();
+      ui.help(item.topic);
+      return;
+    }
     if (url.pathname === location.pathname && url.search === location.search) {
       if (url.hash === location.hash) focusHash(); else location.hash = url.hash;
       if (onPhone() && document.documentElement.classList.contains('menu-open')) $('menu-open').click();
@@ -1017,7 +1055,8 @@
     if (!input || search.combo) return;
     search.pages = searchPages();
     search.combo = ui.combobox({ input, list: $('gs-list'), pop: $('gs-pop'), none: $('gs-none'), groups: searchGroups, icon: searchIcon, choose: openResult });
-    input.addEventListener('focus', loadSearchData);
+    input.addEventListener('focus', () => { loadSearchData(); loadReference(); });
+    input.addEventListener('input', loadReference);
     placeSearch();
     window.addEventListener('resize', placeSearch);
     // "/" focuses the search unless a field has the keys (or a box is open). On a phone it opens the menu first.

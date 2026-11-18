@@ -3075,13 +3075,15 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     assert.ok(box.height >= (isPhone ? 44 : 24) - 0.5, 'target ' + box.height);
     if (isPhone) assert.equal(await page.evaluate(() => document.getElementById('gs').parentElement.id), 'side-menu', 'the phone menu holds it');
     else assert.ok(await page.evaluate(() => document.getElementById('gs').parentElement.classList.contains('gs-left')), 'the status bar holds it');
-    // Groups come in rule 4 order, Reference never drawn while empty; the highlight is a <mark>.
+    // Groups come in rule 4 order, Reference last; the highlight is a <mark>. The reference index is read on the first
+    // typed character, so its group is drawn when it has arrived (step 7.4).
     await input.fill('e');
     await page.waitForSelector('#gs-list [role="option"]');
+    await page.waitForFunction(() => document.querySelector('#gs-list [aria-labelledby="gs-list-h-reference"]') !== null);
     const heads = await page.$$eval('#gs-list [role="group"]', (g) => g.map((x) => document.getElementById(x.getAttribute('aria-labelledby')).textContent));
     assert.deepEqual(heads, ORDER.filter((h) => heads.includes(h)), 'rule 4 order');
-    for (const h of ['Pages', 'Settings', 'Audit']) assert.ok(heads.includes(h), h + ' is searched');
-    assert.ok(!heads.includes('Reference'), 'Reference stays out while it is empty');
+    for (const h of ['Pages', 'Settings', 'Audit', 'Reference']) assert.ok(heads.includes(h), h + ' is searched');
+    assert.equal(heads[heads.length - 1], 'Reference', 'Reference is always last');
     assert.equal(await input.getAttribute('aria-expanded'), 'true');
     assert.ok(await page.locator('#gs-list .gs-title mark').count() > 0, 'matched text is marked');
     // aria-activedescendant follows the arrows and names the selected option.
@@ -3100,12 +3102,12 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     assert.equal((await active()).id, first.id);
     // A setting shows its current value, read from the same GET the page uses.
     await input.fill('reply time limit');
-    const row = page.locator('#gs-list [role="option"]', { hasText: 'Reply time limit' });
+    const row = page.locator('#gs-list [role="group"][aria-labelledby="gs-list-h-settings"] [role="option"]', { hasText: 'Reply time limit' });
     await row.waitFor();
     assert.match(await row.innerText(), new RegExp((state.timeout === null ? 'default' : state.timeout + ' s') + '\\s*$'));
     await input.fill('theme');
-    await page.locator('#gs-list [role="option"]', { hasText: 'Theme' }).waitFor();
-    assert.match(await page.locator('#gs-list [role="option"]', { hasText: 'Theme' }).first().innerText(), new RegExp(state.theme + '\\s*$'));
+    await page.locator('#gs-list [role="group"][aria-labelledby="gs-list-h-settings"] [role="option"]', { hasText: 'Theme' }).waitFor();
+    assert.match(await page.locator('#gs-list [role="group"][aria-labelledby="gs-list-h-settings"] [role="option"]', { hasText: 'Theme' }).first().innerText(), new RegExp(state.theme + '\\s*$'));
     // Audit filters open Model calls already filtered: the address holds the filter (plan step 6.1).
     await input.fill('status: timed out');
     const timedOut = page.locator('#gs-list [role="option"]', { hasText: 'Status: timed out' });
@@ -3140,9 +3142,9 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       const found = await ap.evaluate(async () => (await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'] } })).violations.map((v) => v.id + ': ' + v.nodes.map((n) => n.target.join(' ')).join(', ')));
       assert.deepEqual(found, [], 'axe with the list open');
     } finally { await axeCtx.close(); }
-    // Enter opens the page at the field, which takes focus.
+    // Enter opens the page at the field, which takes focus. (The Settings row: the Reference group has a row of the same name.)
     await input.fill('reply time limit');
-    await page.locator('#gs-list [role="option"]', { hasText: 'Reply time limit' }).waitFor();
+    await page.locator('#gs-list [role="group"][aria-labelledby="gs-list-h-settings"] [role="option"]', { hasText: 'Reply time limit' }).waitFor();
     await input.press('Enter');
     await page.waitForURL('**/admin/general/#s-gen-timeout');
     await page.waitForSelector('#app:not([hidden])');
@@ -3151,6 +3153,81 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.keyboard.type('/');
     assert.equal(await page.evaluate(() => document.activeElement.id), 's-gen-timeout');
     await page.evaluate(() => { document.getElementById('s-gen-timeout').value = ''; });
+  });
+  await step('global search: the reference is last, its index is read once per page load, an on-page topic opens help, another opens its article, the group is capped', async () => {
+    const cap = await page.evaluate(async () => (await window.ui.ready).SEARCH_RESULTS_PER_GROUP);
+    const refGroup = '#gs-list [role="group"][aria-labelledby="gs-list-h-reference"]';
+    const refRows = refGroup + ' [role="option"]';
+    const topicRow = () => page.locator(refRows, { hasText: 'Host name' });
+    let indexRequests = 0;
+    const onRequest = (r) => { if (new URL(r.url()).pathname === '/admin/reference.json') indexRequests++; };
+    page.on('request', onRequest);
+    try {
+      // Nothing is read until the search box is used; the first focus reads the index once.
+      await page.goto(base + 'home/');
+      await page.waitForSelector('#app:not([hidden])');
+      assert.equal(indexRequests, 0, 'no index read before the search box is used');
+      await openMenu();
+      await page.locator('#gs-input').fill('host name');
+      await topicRow().waitFor();
+      assert.equal(indexRequests, 1, 'the index is read on the first typed character');
+      assert.equal(await topicRow().getAttribute('href'), '/admin/reference/settings/network/#host-name');
+      assert.match(await topicRow().locator('.gs-where').innerText(), /^Reference \//, 'the area is the secondary text');
+      assert.ok(await page.locator(refGroup + ' mark').count() > 0, 'matched text is marked');
+      const heads = await page.$$eval('#gs-list [role="group"]', (g) => g.map((x) => document.getElementById(x.getAttribute('aria-labelledby')).textContent));
+      assert.ok(heads.length > 1 && heads[heads.length - 1] === 'Reference', 'Reference is last, below the other groups: ' + heads.join(', '));
+      await page.locator('#gs-input').fill('host name network');
+      await topicRow().waitFor();
+      assert.equal(indexRequests, 1, 'typing more does not read the index again');
+      // A topic of another page opens its article at the heading, which comes into view.
+      await page.locator('#gs-input').fill('host name');
+      await topicRow().waitFor();
+      await topicRow().hover();
+      await page.locator('#gs-input').press('Enter');
+      await page.waitForURL((u) => u.pathname === '/admin/reference/settings/network/' && u.hash === '#host-name');
+      await page.waitForFunction(() => { const h = document.getElementById('host-name'); if (!h) return false; const r = h.getBoundingClientRect(); return r.top >= 0 && r.top < window.innerHeight; });
+      assert.equal(await page.evaluate(() => new URL(location.href).searchParams.has('panel')), false, 'no help panel for a topic of another page');
+    } finally { page.off('request', onRequest); }
+    // On the page that carries the topic, Enter opens the help panel at its address, and the page stays.
+    await page.goto(base + 'network/');
+    await page.waitForSelector('#app:not([hidden])');
+    await openMenu();
+    await page.locator('#gs-input').fill('host name');
+    await topicRow().waitFor();
+    await topicRow().hover();
+    await page.locator('#gs-input').press('Enter');
+    await page.waitForSelector('#help-panel:not([hidden])');
+    await page.waitForFunction(() => document.getElementById('help-panel-title').textContent === 'Host name');
+    assert.equal(await page.evaluate(() => new URL(location.href).searchParams.get('panel')), 'help:settings/network#host-name');
+    assert.equal(await page.evaluate(() => location.pathname), '/admin/network/', 'the page stays');
+    assert.equal(await page.locator('#gs-input').inputValue(), '', 'the search is cleared');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('#help-panel', { state: 'hidden' });
+    // The group respects the cap. Every reference row contains "e" (in its "Reference" area), so the count is the cap.
+    await openMenu();
+    await page.locator('#gs-input').fill('e');
+    await page.locator(refRows).first().waitFor();
+    const total = await page.evaluate(async () => (await (await fetch('/admin/reference.json')).json()).filter((p) => p.id !== 'index').reduce((n, p) => n + 1 + p.headings.length, 0));
+    assert.equal(await page.locator(refRows).count(), Math.min(cap, total), 'the Reference group holds at most SEARCH_RESULTS_PER_GROUP rows');
+    // Phones: the targets are 44 px, and nothing scrolls sideways with the results open.
+    const heights = await page.$$eval('#gs-list [role="option"]', (els) => els.map((e) => e.getBoundingClientRect().height));
+    for (const h of heights) assert.ok(h >= (isPhone ? 44 : 24) - 0.5, 'result row ' + h);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'no sideways scroll with results open');
+    // Axe with the reference rows drawn (a copy of the page in a context that lets axe in).
+    const axeCtx = await browser.newContext({ viewport, bypassCSP: true, storageState: await ctx.storageState() });
+    try {
+      const ap = await axeCtx.newPage();
+      await ap.goto(base + 'network/');
+      await ap.waitForSelector('#app:not([hidden])');
+      await ap.locator('body').press('/');
+      await ap.fill('#gs-input', 'e');
+      await ap.waitForSelector(refGroup);
+      await ap.addScriptTag({ content: fs.readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8') });
+      const found = await ap.evaluate(async () => (await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'] } })).violations.map((v) => v.id + ': ' + v.nodes.map((n) => n.target.join(' ')).join(', ')));
+      assert.deepEqual(found, [], 'axe with the reference rows open');
+    } finally { await axeCtx.close(); }
+    await page.goto(base + 'home/');
+    await page.waitForSelector('#app:not([hidden])');
   });
   await step('audit trace: the waterfall layout is right for fixed numbers, shows the tree, and copes with a running span', async () => {
     await openPage('audit/calls');
