@@ -15,7 +15,7 @@
 # and here every one holds a path (AGENTS.md: an environment variable holds a path or an address,
 # never a secret).
 # Every image is pinned by digest, and the Caddy plugin by version (ADR 0017); the tag beside each
-# digest says which line it follows. To update one, take the tag's current digest and test the stack.
+# digest says which release it is (Caddy by its exact version, not the floating `2`). To update one, take the tag's current digest and test the stack.
 
 FROM rust:1-bookworm@sha256:e6f2cff35d0f309acf8433b4f05878ed77092602c5065cc81801177da0bb3a9c AS build
 WORKDIR /src
@@ -78,13 +78,13 @@ ENTRYPOINT ["askbar-admin"]
 
 # ------------------------------------------------------------------ caddy
 # Caddy with the Cloudflare DNS plugin, used to get certificates without opening port 80/443.
-# The builder's digest fixes the Caddy version it builds (v2.11.9); the plugin is pinned to a release.
+# The builder and the runtime image are the same Caddy version, v2.11.9, each pinned by tag and digest; the plugin is pinned to a release.
 # golang.org/x/net is raised to 0.62.0, which fixes CVE-2026-78661 (a denial of service in its HTML parser) that Trivy found in the
-# 0.60.0 this Caddy release builds with (the image scan in ci.yml). Drop the --replace once a Caddy release at the pinned digest has it.
-FROM caddy:2-builder@sha256:3db11aead97f1fdff9c563d0dd8e7fba2e4c7031bef40f3e44fd1982f3e8366b AS caddy-build
+# 0.60.0 this Caddy release builds with (its go.mod, checked for v2.11.9, the latest release). Drop the --replace once a Caddy release has x/net 0.62.0 or later.
+FROM caddy:2.11.9-builder@sha256:f9beaa5ddbe7df6f26ebbcf9cbf44e05a1917b9bba464f0c3229038d7e2e6e13 AS caddy-build
 RUN xcaddy build --with github.com/caddy-dns/cloudflare@v0.2.4 --replace golang.org/x/net=golang.org/x/net@v0.62.0
 
-FROM caddy:2@sha256:ce773ec7a742ce15ee6bf2bb5f65882b9e2a4487b10733e6f1484f86e6b5d8bc AS caddy
+FROM caddy:2.11.9@sha256:4851e54a46b206517c574821bb5cc67f170d2156041e9fbc4c9193b45e84a75b AS caddy
 COPY --from=caddy-build /usr/bin/caddy /usr/bin/caddy
 COPY deploy/caddy/bootstrap.Caddyfile /etc/caddy/bootstrap.Caddyfile
 # The admin service pushes the real configuration through the admin socket; `--resume` brings back
