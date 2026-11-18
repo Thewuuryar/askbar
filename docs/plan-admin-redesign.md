@@ -823,7 +823,7 @@ Every commit leaves `cargo test -p askbar-admin` and `npm run test:services` gre
   - Automatic: an axe-core scan of every page at both widths (step 1.11).
   - Manual, once per phase: keyboard only, one screen-reader pass (VoiceOver or NVDA), 200 % text zoom at 1280 px, reduced motion on.
 - **CSP.** No inline script or style. New static files (`components.js`, `constants.json`) get routes in `lib.rs`. The Trusted Types and hostile-text steps stay as they are.
-- **Visual check.** `tests/e2e/audit-shots.js` screenshots every page at both widths (step 8.4) for each phase review against page 3. It is not a pass/fail gate.
+- **Visual check.** `tests/e2e/page-shots.js` (`npm run shots`) screenshots every page at both widths (step 8.5) for each phase review against page 3. It fails on a page that does not load, scrolls sideways or has text under 11px, but it compares no images.
 
 
 **Open questions:**
