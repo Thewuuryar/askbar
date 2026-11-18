@@ -1822,15 +1822,19 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       // On: the box says what happens to the running replies, the switch saves, and the status bar follows within one poll.
       await page.click('#s-kill-switch');
       await box.waitFor();
-      assert.match(await box.innerText(), /The replies running now are stopped\./);
+      assert.match(await box.innerText(), /Running replies will be stopped\./);
       await box.locator('[data-confirm-action]').click();
       await box.waitFor({ state: 'detached' });
       await page.waitForFunction(() => document.getElementById('s-kill-state').textContent === 'on');
       assert.equal(await page.innerText('#s-kill-switch'), 'Turn off kill switch');
       assert.equal(puts, 1);
       await page.waitForFunction(() => document.querySelector('#sb-kill .status-word').textContent === 'Kill: on', null, { timeout: K.STATUS_EVERY_SECS * 3000 });
-      // The box "also stop the running replies" goes with the switch.
+      // The option "also stop the running replies" is a setting of its own: saved by its Save bar, never by the switch.
       await page.uncheck('#s-kill-aborts');
+      await page.waitForSelector('#kill-form-save-bar:not([hidden])');
+      await page.click('#kill-form-save-bar [data-save-submit]');
+      await page.waitForSelector('#kill-form-save-bar', { state: 'hidden' });
+      assert.equal(puts, 2, 'the option is saved by its own PUT');
       await page.click('#s-kill-switch');
       await box.waitFor();
       assert.match(await box.innerText(), /Replies start again for everyone\./);
@@ -1839,7 +1843,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       await page.waitForFunction(() => document.getElementById('s-kill-state').textContent === 'off');
       await page.waitForFunction(() => document.querySelector('#sb-kill .status-word').textContent === 'Kill: off', null, { timeout: K.STATUS_EVERY_SECS * 3000 });
       assert.equal(await page.isChecked('#s-kill-aborts'), false, 'the choice stays');
-      assert.equal(puts, 2);
+      assert.equal(puts, 3);
     } finally {
       page.off('request', count);
       // Whatever failed above, the switch is left off for the later steps.
@@ -1849,23 +1853,105 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
         if (s.kill_switch) await fetch('/api/admin/v1/settings', { method: 'PUT', headers: h, body: JSON.stringify({ system_prompt: s.system_prompt, display: s.display, kill_switch: false }) });
       });
     }
-    // The choice went with the switch: reload and it is kept, the switch is still off.
+    // The choice was saved by its own Save: reload and it is kept, the switch is still off.
     await openPage('providers');
     await openPage('security');
     await page.waitForFunction(() => document.getElementById('s-kill-aborts').checked === false);
     assert.equal(await page.innerText('#s-kill-state'), 'off');
-    // Back to the default: aborts on (it goes with the next switching; stored now by one on/off round).
+    // Back to the default: aborts on, saved by its own Save.
     await page.check('#s-kill-aborts');
-    await page.click('#s-kill-switch');
-    await box.waitFor();
-    await box.locator('[data-confirm-action]').click();
-    await box.waitFor({ state: 'detached' });
-    await page.waitForFunction(() => document.getElementById('s-kill-state').textContent === 'on');
-    await page.click('#s-kill-switch');
-    await box.waitFor();
-    await box.locator('[data-confirm-action]').click();
-    await box.waitFor({ state: 'detached' });
-    await page.waitForFunction(() => document.getElementById('s-kill-state').textContent === 'off');
+    await page.click('#kill-form-save-bar [data-save-submit]');
+    await page.waitForSelector('#kill-form-save-bar', { state: 'hidden' });
+  });
+  await step('the "also stop the replies that are running" option is a setting saved by the Save bar: its own bar and label, one PUT with only that field changed, Discard restores, and the kill switch never uses an unsaved tick', async () => {
+    const stored = () => page.evaluate(async () => (await fetch('/api/admin/v1/settings', { headers: { 'x-askbar-admin': '1' } })).json());
+    const bodies = [];
+    const grab = (r) => { if (r.method() === 'PUT' && r.url().endsWith('/api/admin/v1/settings')) bodies.push(JSON.parse(r.postData())); };
+    await openPage('security');
+    await page.waitForFunction(() => document.getElementById('s-retention').value !== '');
+    const was = await stored();
+    assert.equal(was.kill_switch_aborts_running, true, 'the default is on');
+    const bar = '#kill-form-save-bar';
+    assert.equal(await page.isVisible(bar), false, 'no bar at rest');
+    // Tick (here: untick) and the bar appears with the right label.
+    await page.uncheck('#s-kill-aborts');
+    await page.waitForSelector(bar + ':not([hidden])');
+    assert.equal((await page.innerText(bar + ' [data-save-text]')).trim(), '1 unsaved change: Also stop the replies that are running');
+    assert.equal(await page.isVisible('#seal-form-save-bar'), false, 'the other form has no bar');
+    // Discard restores it.
+    await page.click(bar + ' [data-save-discard]');
+    assert.equal(await page.isChecked('#s-kill-aborts'), true);
+    await page.waitForSelector(bar, { state: 'hidden' });
+    // Save: one PUT, the stored fields as they are with only this one changed.
+    page.on('request', grab);
+    try {
+      await page.uncheck('#s-kill-aborts');
+      await page.waitForSelector(bar + ':not([hidden])');
+      await page.click(bar + ' [data-save-submit]');
+      await page.waitForSelector(bar, { state: 'hidden' });
+    } finally { page.off('request', grab); }
+    assert.equal(bodies.length, 1);
+    assert.deepEqual(bodies[0], { system_prompt: was.system_prompt, display: was.display, kill_switch_aborts_running: false });
+    const after = await stored();
+    for (const f of Object.keys(was)) if (f !== 'kill_switch_aborts_running') assert.deepEqual(after[f], was[f], f + ' is unchanged');
+    assert.equal(after.kill_switch_aborts_running, false);
+    await page.waitForSelector(bar, { state: 'hidden' });
+    await openPage('providers');
+    await openPage('security');
+    await page.waitForFunction(() => document.getElementById('s-kill-aborts').checked === false);
+    // The kill switch uses the SAVED value (off) and says so; an unsaved tick is not sent and the confirmation mentions it.
+    await page.check('#s-kill-aborts');
+    await page.waitForSelector(bar + ':not([hidden])');
+    // The exactly-one-accent-button rule holds with this bar showing: the Save is the only filled button.
+    const filled = await page.evaluate(() => {
+      const p = document.createElement('div');
+      p.style.backgroundColor = 'var(--accent)';
+      document.body.append(p);
+      const accent = getComputedStyle(p).backgroundColor;
+      p.remove();
+      const vis = (e) => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0 && !e.closest('[hidden]'); };
+      return [...document.querySelectorAll('button, a.btn')].filter(vis).filter((e) => getComputedStyle(e).backgroundColor === accent).map((e) => e.textContent.trim());
+    });
+    assert.deepEqual(filled, ['Save'], 'only the Save bar button is accent-filled');
+    const box = page.locator('dialog.box[open]');
+    const kills = [];
+    const grabKill = (r) => { if (r.method() === 'PUT' && r.url().endsWith('/api/admin/v1/settings')) kills.push(JSON.parse(r.postData())); };
+    page.on('request', grabKill);
+    try {
+      await page.click('#s-kill-switch');
+      await box.waitFor();
+      const text = await box.innerText();
+      assert.match(text, /Running replies will finish\./);
+      assert.match(text, /unsaved change to "Also stop the replies that are running" is not used until it is saved/);
+      await box.locator('[data-confirm-action]').click();
+      await box.waitFor({ state: 'detached' });
+      await page.waitForFunction(() => document.getElementById('s-kill-state').textContent === 'on');
+      assert.equal(kills.length, 1);
+      assert.equal(kills[0].kill_switch, true);
+      assert.equal(kills[0].kill_switch_aborts_running, false, 'the stored value, not the unsaved tick');
+      assert.equal(await page.isChecked('#s-kill-aborts'), true, 'the unsaved tick is still there');
+      assert.equal(await page.isVisible(bar), true, 'and still unsaved');
+      assert.equal((await stored()).kill_switch_aborts_running, false);
+      // Turning it off again asks plainly and does not carry the tick either.
+      await page.click('#s-kill-switch');
+      await box.waitFor();
+      await box.locator('[data-confirm-action]').click();
+      await box.waitFor({ state: 'detached' });
+      await page.waitForFunction(() => document.getElementById('s-kill-state').textContent === 'off');
+      assert.equal(kills[1].kill_switch, false);
+      assert.equal(kills[1].kill_switch_aborts_running, false);
+    } finally {
+      page.off('request', grabKill);
+      await page.evaluate(async () => {
+        const h = { 'X-Askbar-Admin': '1', 'Content-Type': 'application/json' };
+        const s = await (await fetch('/api/admin/v1/settings', { headers: h })).json();
+        await fetch('/api/admin/v1/settings', { method: 'PUT', headers: h, body: JSON.stringify({ system_prompt: s.system_prompt, display: s.display, kill_switch: false, kill_switch_aborts_running: true }) });
+      });
+    }
+    await page.click(bar + ' [data-save-discard]');
+    await openPage('providers');
+    await openPage('security');
+    await page.waitForFunction(() => document.getElementById('s-kill-aborts').checked === true);
   });
   await step('notifications: not set up shows a banner; ntfy settings are saved, tested and removed, and never shown again (ADR 0055)', async () => {
     const TOPIC = 'e2e-topic-' + 'q7x9k2';

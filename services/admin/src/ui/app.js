@@ -1737,6 +1737,7 @@
   // the kill switch, and the live length count and mismatch line under the three new-secret pairs.
   let securityWired = false;
   let sealTrack = null;
+  let killTrack = null;
   async function loadSecurity() {
     if (!securityWired) {
       securityWired = true;
@@ -1753,8 +1754,10 @@
     $('s-kill-aborts').checked = s.kill_switch_aborts_running !== false;
     show($('seal-error'), false);
     show($('kill-error'), false);
-    // The first load starts the save bar from these values; later loads (after a save) make them the new base.
+    show($('kill-form-error'), false);
+    // The first load starts the save bars from these values; later loads (after a save) make them the new base.
     if (sealTrack) sealTrack.saved(); else sealTrack = ui.trackChanges($('seal-form'));
+    if (killTrack) killTrack.saved(); else killTrack = ui.trackChanges($('kill-form'));
   }
 
   on('key-form', 'submit', async (e) => {
@@ -2564,21 +2567,45 @@
     }
   });
 
+  // The option "Also stop the replies that are running" (Security page, danger zone) is an ordinary setting with its own save bar.
+  // Its save reads the stored settings fresh and sends them back as stored with only this field changed, so unsaved edits in the
+  // General page or the sealed-content form are never sent from here.
+  on('kill-form', 'submit', async (e) => {
+    e.preventDefault();
+    const err = $('kill-form-error');
+    show(err, false);
+    try {
+      const now = await api('GET', '/api/admin/v1/settings');
+      await api('PUT', '/api/admin/v1/settings', {
+        system_prompt: now.system_prompt,
+        display: now.display,
+        kill_switch_aborts_running: $('s-kill-aborts').checked,
+      });
+      if (killTrack) killTrack.saved();
+      ui.toast('Saved.');
+    } catch (ex) {
+      err.textContent = ex.message;
+      show(err, true);
+    }
+  });
+
   // The kill switch (Security page, danger zone): asks first (Cancel changes nothing), then saves only itself. The PUT carries
-  // the two fields the server always needs from the stored copy, so unsaved edits in the General page are not sent. The box
-  // "Also stop the replies that are running" is the choice for this switching on, and goes with it.
+  // the two fields the server always needs plus the SAVED value of the stop-running-replies option from a fresh read; the box
+  // is never read here, so an unsaved tick is not used (the confirmation says so). It is an emergency stop: never blocked.
   on('s-kill-switch', 'click', async () => {
     const err = $('kill-error');
     show(err, false);
     try {
       const now = await api('GET', '/api/admin/v1/settings');
       const turningOn = !now.kill_switch;
-      const aborts = $('s-kill-aborts').checked;
+      const aborts = now.kill_switch_aborts_running !== false;
+      const unsaved = !!killTrack && killTrack.dirty();
       const ok = await ui.confirm(turningOn
         ? {
           title: 'Turn on the kill switch?',
           body: 'No new replies start for anyone, and the messages waiting in queues are cleared. '
-            + (aborts ? 'The replies running now are stopped.' : 'The replies running now finish.'),
+            + (aborts ? 'Running replies will be stopped.' : 'Running replies will finish.')
+            + (unsaved ? ' The unsaved change to "Also stop the replies that are running" is not used until it is saved.' : ''),
           action: 'Turn on kill switch',
           kind: 'danger',
         }

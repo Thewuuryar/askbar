@@ -40,4 +40,4 @@ Only the backup passphrase opens a backup. It is not the audit passphrase. Rotat
 
 ## Danger zone
 
-The kill switch. Switched on, the server starts no new replies and clears the messages waiting in queues. Clients see a clear message. The box under it chooses whether the replies already running are stopped too; the choice goes with the switch.
+The kill switch. Switched on, the server starts no new replies and clears the messages waiting in queues. Clients see a clear message. The box above the switch, **Also stop the replies that are running**, is a setting of its own: tick it and the Save bar appears, and Save stores it without touching the switch. The switch uses the stored choice when it goes on, and its confirmation says what will happen to the running replies; a tick that is not saved yet is not used.

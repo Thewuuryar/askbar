@@ -114,9 +114,14 @@
         <p class="hint">Switched on, the server starts no new replies and clears the messages waiting in queues. Clients see a clear message.</p>
       </div>
       <div class="sec-fields">
+        <form id="kill-form" class="sec-fields" novalidate>
+          <label class="check" for="s-kill-aborts"><input type="checkbox" id="s-kill-aborts" name="s-kill-aborts"> Also stop the replies that are running</label>
+          <p class="hint">A setting, saved with Save. It applies when the kill switch is turned on: ticked, the replies running then are stopped; otherwise they finish.</p>
+          {% call b::error_line("kill-form-error") %}{% endcall %}
+          {% call c::save_bar("kill-form") %}{% endcall %}
+        </form>
         <p class="sec-line">Kill switch: <strong id="s-kill-state">off</strong>. It stops every reply for everyone until it is turned off.</p>
         <div class="sec-actions"><button type="button" id="s-kill-switch" class="btn btn-danger" aria-describedby="s-kill-state">Turn on kill switch</button></div>
-        <label class="check" for="s-kill-aborts"><input type="checkbox" id="s-kill-aborts" name="s-kill-aborts"> Also stop the replies that are running when it goes on (otherwise they finish)</label>
         {% call b::error_line("kill-error") %}{% endcall %}
       </div>
     </section>
