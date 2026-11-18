@@ -3473,6 +3473,77 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.unroute('**/api/admin/v1/audit/traces/TRACE2');
     await page.unroute('**/api/admin/v1/audit/traces/TRACE1');
   });
+  await step('audit calls: the figures strip shares one left edge per figure, the error figure is red only when there are errors, and the trace waterfall is drawn to scale', async () => {
+    const stats = (errors) => ({ requests: 40, by_status: { done: 40 - errors, error: errors }, error_rate: 0, latency_ms: { p50: 1200, p95: 5400 }, ttft_ms: {}, tokens: { in: 1000, out: 234, cached: 0 }, cost: 0, cost_unknown_requests: 0, by_provider: [], by_day: [] });
+    let errors = 2;
+    await page.route('**/api/admin/v1/audit/stats*', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify(stats(errors)) }));
+    const hostile = '<img src=x onerror="window.__wfx=1">';
+    const spans = [
+      { id: 'w-turn', parent_id: null, kind: 'turn', name: 'chat', status: 'done', started_at: 1000, ended_at: 1002, attrs: { started_ms: 1000000, ended_ms: 1002000 } },
+      { id: 'w-a1', parent_id: 'w-turn', kind: 'attempt', name: 'prov', status: 'error', started_at: 1000, ended_at: 1000, provider_id: 'p1', error_code: 'http_429', attrs: { started_ms: 1000200, ended_ms: 1000700, retry_index: 0 } },
+      { id: 'w-a2', parent_id: 'w-turn', kind: 'attempt', name: 'prov', status: 'done', started_at: 1001, ended_at: 1002, provider_id: 'p2', attrs: { started_ms: 1001000, ended_ms: 1001900, retry_index: 1 } },
+      { id: 'w-gate', parent_id: null, kind: 'gate', name: 'kill_switch', status: 'done', started_at: 1000, ended_at: 1000, attrs: { started_ms: 999990, ended_ms: 1000000 } },
+      { id: 'w-host', parent_id: 'w-turn', kind: 'tool', name: hostile, status: 'done', started_at: 1001, ended_at: 1001, attrs: { started_ms: 1001000, ended_ms: 1001500 } },
+    ];
+    await page.route('**/api/admin/v1/audit/traces/WF1', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ trace_id: 'WF1', cost: null, spans }) }));
+    try {
+      await openPage('audit/calls');
+      await page.waitForFunction(() => document.getElementById('kpi-replies').textContent === '40');
+      // Each figure starts where its label starts, and the figures share one baseline.
+      const edges = await page.$$eval('#calls-kpis .kpi', (ks) => ks.map((k) => [k.querySelector('.k').getBoundingClientRect().left, k.querySelector('.v').getBoundingClientRect().left]));
+      for (const [label, figure] of edges) assert.ok(Math.abs(label - figure) <= 1, 'label and figure share a left edge ' + label + ' vs ' + figure);
+      // The red is the danger colour only with errors.
+      const colours = () => page.evaluate(() => {
+        const probe = document.createElement('span'); probe.style.color = 'var(--danger)'; document.body.append(probe);
+        const danger = getComputedStyle(probe).color; probe.remove();
+        return { danger, errors: getComputedStyle(document.getElementById('kpi-errors')).color, replies: getComputedStyle(document.getElementById('kpi-replies')).color };
+      });
+      let c = await colours();
+      assert.equal(c.errors, c.danger, 'the error figure is red with errors');
+      assert.notEqual(c.replies, c.danger);
+      errors = 0;
+      await page.reload();
+      await page.waitForFunction(() => document.getElementById('kpi-errors').textContent === '0');
+      c = await colours();
+      assert.notEqual(c.errors, c.danger, 'and not red with none');
+      errors = 2;
+
+      // The waterfall: a bar per span, placed and sized by its start and length within the whole call.
+      await page.reload();
+      await page.waitForSelector('#calls-rows tr[data-trace]');
+      await page.evaluate(() => window.askbarAudit.openTrace('WF1'));
+      await page.waitForSelector('#trace-waterfall .span-bar');
+      assert.equal(await page.locator('#trace-waterfall .span-bar').count(), spans.length);
+      const lay = await page.evaluate((s) => window.askbarAudit.layout(s, 0), spans);
+      const geo = await page.$$eval('#trace-waterfall .span-row', (rows) => rows.map((r) => {
+        const t = r.querySelector('.track').getBoundingClientRect(); const b = r.querySelector('.span-bar').getBoundingClientRect();
+        return { id: r.querySelector('.span-bar').dataset.span, left: b.left - t.left, width: b.width, track: t.width, name: r.querySelector('.span-bar').getAttribute('aria-label'), dur: r.querySelector('.dur').textContent };
+      }));
+      assert.equal(geo.length, lay.rows.length);
+      for (const row of lay.rows) {
+        const g = geo.find((x) => x.id === row.span.id);
+        assert.ok(Math.abs(g.left - (g.track * row.left) / 100) <= 3, row.span.id + ' starts at its time: ' + g.left + ' of ' + g.track);
+        if (g.track * row.width / 100 >= 4) assert.ok(Math.abs(g.width - (g.track * row.width) / 100) <= 3, row.span.id + ' is as long as its span');
+        else assert.ok(g.width >= 3.5, row.span.id + ' keeps a visible minimum');
+        assert.match(g.name, /, (done|error), \d/, 'every bar has a name with its state and length');
+        assert.ok(g.dur.length > 0, 'and its length is printed');
+      }
+      assert.deepEqual(await page.$$eval('#trace-axis .tick', (t) => t.map((x) => x.textContent)), ['0 ms', '1 s', '2 s'], 'the scale runs from 0 to the whole call');
+      // The failed attempt says so in words and in red; the later one at another provider is marked as a fallback.
+      const failed = page.locator('#trace-waterfall .span-row:has([data-span="w-a1"])');
+      assert.match(await failed.innerText(), /error/);
+      assert.equal(await failed.locator('.span-bar.status-error').count(), 1);
+      assert.match(await page.getAttribute('[data-span="w-a2"]', 'aria-label'), /fallback/);
+      // A hostile span name is text.
+      assert.equal(await page.locator('#trace-panel img').count(), 0);
+      assert.equal(await page.evaluate(() => window.__wfx), undefined);
+      assert.ok((await page.innerText('#trace-waterfall')).includes(hostile));
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'no sideways scroll with the trace open');
+    } finally {
+      await page.unroute('**/api/admin/v1/audit/stats*');
+      await page.unroute('**/api/admin/v1/audit/traces/WF1');
+    }
+  });
   await step('audit routing: a three-try request shows its tries, why each failed, and the providers overall', async () => {
     const attempt = (id, started, provider, retry, status, code) => ({ id, parent_id: 'turn', kind: 'attempt', name: 'x', status, started_at: 1000, ended_at: 1001, provider_id: provider, error_code: code, attrs: { started_ms: started, ended_ms: started + 300, latency_ms: 300, retry_index: retry } });
     const spans = [

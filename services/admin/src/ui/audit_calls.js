@@ -170,6 +170,7 @@
         state.names = Object.fromEntries(data.providers.map((p) => [p.id, p.name]));
         state.namesRead = true;
         fillProviders();
+        if (state.trace) renderMeta(state.trace); // a call opened from the address may have drawn before the names arrived
       }
       banner('');
       renderKpis(data.stats);
@@ -282,27 +283,71 @@
     return lines.join('\n');
   }
 
+  // How a span's bar is coloured: by kind (the gate is grey, the turn green, each provider attempt blue). A failed span is red
+  // whatever its kind, and its row says so in words (rule 37).
+  const KINDS = ['gate', 'turn', 'attempt'];
+  const FAILED = ['error', 'timed_out', 'blocked'];
+
+  // An attempt after the first is a retry when it went to the same provider as the one before, a fallback when it did not.
+  function attemptNotes(rows) {
+    const notes = new Map();
+    let prev = null;
+    for (const r of rows.filter((x) => x.span.kind === 'attempt')) {
+      if (prev) notes.set(r.span.id, prev.span.provider_id === r.span.provider_id ? 'retry' : 'fallback');
+      prev = r;
+    }
+    return notes;
+  }
+
+  // The time scale under the bars: the start, the middle and the end of the call, in the same units as the durations.
+  function renderAxis(total) {
+    const axis = $('trace-axis');
+    axis.replaceChildren();
+    if (total == null) return;
+    axis.append(ui.el('span'), ui.el('span', { class: 'axis-track' },
+      ui.el('span', { class: 'tick tick-start', 'data-tick': 'start', text: duration(0) }),
+      ui.el('span', { class: 'tick tick-mid', 'data-tick': 'mid', text: duration(total / 2) }),
+      ui.el('span', { class: 'tick tick-end', 'data-tick': 'end', text: duration(total) })), ui.el('span'));
+  }
+
   function renderWaterfall(trace) {
     const box = $('trace-waterfall');
     const details = $('trace-span-details');
     box.replaceChildren();
     const lay = layout(trace.spans || [], Date.now());
+    const notes = attemptNotes(lay.rows);
+    const legend = new Set();
     for (const row of lay.rows) {
-      const label = ui.el('span', { class: 'label' }, ui.el('span', { class: 'kind', text: row.span.kind + ' ' }), row.span.name + ' · ' + row.span.status);
+      const s = row.span;
+      const label = ui.el('span', { class: 'label' }, ui.el('span', { class: 'kind', text: s.kind + ' ' }), s.name);
+      if (notes.has(s.id)) label.append(' ', ui.el('span', { class: 'kind', text: '(' + notes.get(s.id) + ')' }));
+      if (s.status !== 'done') label.append(' ', statusNode(s.status));
       label.style.paddingLeft = row.depth * 14 + 'px';
+      const kind = KINDS.includes(s.kind) ? ' kind-' + s.kind : '';
       const bar = ui.el('span', {
-        class: 'span-bar status-' + row.span.status + (row.running ? ' running' : ''), 'data-span': row.span.id, tabindex: '0', role: 'img',
-        'aria-label': row.span.kind + ' ' + row.span.name + ', ' + row.span.status + ', ' + duration(row.durationMs),
+        class: 'span-bar' + kind + ' status-' + s.status + (row.running ? ' running' : ''), 'data-span': s.id, tabindex: '0', role: 'img',
+        'aria-label': s.kind + ' ' + s.name + ', ' + s.status + ', ' + duration(row.durationMs) + (notes.has(s.id) ? ', ' + notes.get(s.id) : ''),
       });
       bar.style.left = row.left + '%';
       bar.style.width = row.width + '%';
       const showDetails = () => { details.textContent = spanDetails(row); show(details, true); };
       bar.addEventListener('mouseenter', showDetails);
       bar.addEventListener('focus', showDetails);
-      box.append(ui.el('div', { class: 'span-row', role: 'listitem' }, label, ui.el('span', { class: 'track' }, bar)));
+      box.append(ui.el('div', { class: 'span-row', role: 'listitem' }, label, ui.el('span', { class: 'track' }, bar), ui.el('span', { class: 'dur num', text: duration(row.durationMs) })));
+      legend.add(FAILED.includes(s.status) ? 'failed' : KINDS.includes(s.kind) ? s.kind : 'other');
     }
+    renderAxis(lay.rows.length ? lay.total : null);
+    renderLegend(legend);
     show(details, false);
-    $('trace-total').textContent = '· ' + duration(lay.total) + ' in all';
+    $('trace-total').textContent = '· ' + duration(lay.total) + ' total';
+  }
+
+  // What each colour means, for the kinds drawn. The words are in the rows too, so this is a key, not the only carrier.
+  const LEGEND = { gate: 'gate', turn: 'turn', attempt: 'provider attempt', failed: 'failed', other: 'other' };
+  function renderLegend(used) {
+    const box = $('trace-legend');
+    box.replaceChildren(...Object.keys(LEGEND).filter((k) => used.has(k)).map((k) => ui.el('li', null, ui.el('span', { class: 'swatch swatch-' + k, 'aria-hidden': 'true' }), LEGEND[k])));
+    show(box, used.size > 0);
   }
 
   // The facts of one call, read from its spans: the turn (who, when, how many tokens) and the last try (which provider and

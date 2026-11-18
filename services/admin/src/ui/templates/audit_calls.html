@@ -54,10 +54,12 @@
       {% call b::error_line("trace-error") %}{% endcall %}
       <div id="trace-loading" hidden>{% call c::skeleton(3) %}{% endcall %}</div>
       <div id="trace-content" hidden>
-        <p class="trace-head"><span id="trace-state"></span> <code id="trace-id"></code></p>
+        <p class="trace-head"><code id="trace-id"></code><span id="trace-state"></span></p>
         <section class="trace-sec" aria-labelledby="trace-timing-title">
           <h3 id="trace-timing-title">Timing <span id="trace-total" class="hint"></span></h3>
-          <div id="trace-waterfall" class="waterfall" role="list"></div>
+          <div id="trace-waterfall" class="waterfall" role="list" aria-label="Spans of this call on one time scale"></div>
+          <div id="trace-axis" class="wf-axis" aria-hidden="true"></div>
+          <ul id="trace-legend" class="wf-legend" aria-label="Bar colours" hidden></ul>
           <pre id="trace-span-details" class="span-details" aria-live="polite" hidden></pre>
         </section>
         <section class="trace-sec" aria-labelledby="trace-meta-title">
