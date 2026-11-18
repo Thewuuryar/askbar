@@ -92,12 +92,50 @@
     for (const id of ['app', 'login', 'setup']) show($(id), false);
   }
 
+  // The progress list above the setup screens (plan step 6.4): the steps come from its markup, so the count is not typed here.
+  // `step` is the position of the screen's step; a step before it is done, that one is current (or done on its "ready" screen).
+  // The state is a symbol plus a word, and the current step carries aria-current="step".
+  function setStep(step, finished) {
+    [...$('setup-steps').children].forEach((li, i) => {
+      const state = i < step - 1 || (finished && i === step - 1) ? 'done' : i === step - 1 ? 'current' : 'next';
+      li.className = 'setup-step setup-step-' + state;
+      if (state === 'current') li.setAttribute('aria-current', 'step'); else li.removeAttribute('aria-current');
+      li.querySelector('.setup-step-sym').textContent = state === 'done' ? '\u2713' : state === 'current' ? '\u25cf' : '\u25cb';
+      li.querySelector('.setup-step-word').textContent = state === 'done' ? 'Done' : state === 'current' ? 'Current step' : 'Next';
+    });
+  }
+
+  // Empties password fields and their live counts once the values are sent.
+  function clearSecrets(ids) {
+    for (const id of ids) {
+      const f = $(id);
+      f.value = '';
+      f.dispatchEvent(new Event('input'));
+    }
+  }
+
+  // The checks the form can make before it sends anything (rule 26): each is a field error, the first one focused.
+  function setupProblems(form, problems) {
+    ui.formErrors(form, problems, { title: problems.length === 1 ? 'Fix this to go on:' : 'Fix these ' + problems.length + ' things to go on:' });
+    return problems.length > 0;
+  }
+
+  // The new password or passphrase pair: long enough, and the repeat equal (the mismatch is on the repeat field).
+  function pairProblems(id, min, noun) {
+    const problems = [];
+    const value = $(id).value;
+    if ([...value].length < min) problems.push({ id, text: 'The ' + (noun === 'password' ? 'new password' : 'passphrase') + ' must be at least ' + min + ' characters.' });
+    if (value !== $(id + '2').value) problems.push({ id: id + '2', text: 'The two ' + noun + 's do not match.' });
+    return problems;
+  }
+
   // First run (ADR 0007): signed in with the published password, change it before anything else.
   function showPasswordChange() {
     hideAll();
     show($('setup'), true);
     for (const id of ['setup-audit-form', 'setup-audit-done', 'setup-backup-form', 'setup-backup-done']) show($(id), false);
     show($('setup-password-form'), true);
+    setStep(1);
     $('setup-current').focus();
   }
 
@@ -125,6 +163,7 @@
     show($('setup'), true);
     for (const id of ['setup-password-form', 'setup-audit-done', 'setup-backup-form', 'setup-backup-done']) show($(id), false);
     show($('setup-audit-form'), true);
+    setStep(2);
     $('setup-audit').focus();
   }
 
@@ -134,6 +173,7 @@
     for (const id of ['setup-password-form', 'setup-audit-form', 'setup-audit-done', 'setup-backup-done']) show($(id), false);
     show($('setup-backup-signout'), false);
     show($('setup-backup-form'), true);
+    setStep(3);
     $('setup-backup').focus();
   }
 
@@ -141,21 +181,21 @@
   // slow first run is told to sign in again. The passphrase fields are emptied the moment it is sent.
   on('setup-backup-form', 'submit', async (e) => {
     e.preventDefault();
-    const err = $('setup-backup-error');
+    const form = e.target;
+    const err = $('setup-backup-form-error');
     show(err, false);
+    const problems = pairProblems('setup-backup', K.MIN_PASSPHRASE_CHARS, 'passphrase');
+    if (!$('setup-backup-stored').checked) problems.push({ id: 'setup-backup-stored', text: 'Confirm that you stored the passphrase: it cannot be recovered.' });
+    if (setupProblems(form, problems)) return;
     const fail = (m) => { err.textContent = m; show(err, true); };
-    const pass = $('setup-backup').value;
-    if (pass !== $('setup-backup2').value) return fail('The two passphrases do not match.');
-    if ([...pass].length < K.MIN_PASSPHRASE_CHARS) return fail('The passphrase must be at least ' + K.MIN_PASSPHRASE_CHARS + ' characters.');
-    if (!$('setup-backup-stored').checked) return fail('Confirm that you stored the passphrase: it cannot be recovered.');
     try {
-      const r = await api('PUT', '/api/admin/v1/setup/backup-key', { passphrase: pass, confirm: $('setup-backup2').value });
-      $('setup-backup').value = '';
-      $('setup-backup2').value = '';
+      const r = await api('PUT', '/api/admin/v1/setup/backup-key', { passphrase: $('setup-backup').value, confirm: $('setup-backup2').value });
+      clearSecrets(['setup-backup', 'setup-backup2']);
       $('setup-backup-stored').checked = false;
       $('setup-backup-fingerprint').textContent = r.fingerprint;
       show($('setup-backup-form'), false);
       show($('setup-backup-done'), true);
+      setStep(3, true);
     } catch (ex) {
       fail(ex.message);
       // A sign-in that is too old needs signing in again; the setup screen has no other way to sign out.
@@ -170,39 +210,36 @@
 
   on('setup-audit-form', 'submit', async (e) => {
     e.preventDefault();
-    const err = $('setup-audit-error');
+    const form = e.target;
+    const err = $('setup-audit-form-error');
     show(err, false);
-    const fail = (m) => { err.textContent = m; show(err, true); };
-    const pass = $('setup-audit').value;
-    if (pass !== $('setup-audit2').value) return fail('The two passphrases do not match.');
-    if ([...pass].length < K.MIN_PASSPHRASE_CHARS) return fail('The passphrase must be at least ' + K.MIN_PASSPHRASE_CHARS + ' characters.');
-    if (!$('setup-audit-stored').checked) return fail('Confirm that you stored the passphrase: it cannot be recovered.');
+    const problems = pairProblems('setup-audit', K.MIN_PASSPHRASE_CHARS, 'passphrase');
+    if (!$('setup-audit-stored').checked) problems.push({ id: 'setup-audit-stored', text: 'Confirm that you stored the passphrase: it cannot be recovered.' });
+    if (setupProblems(form, problems)) return;
     try {
-      const r = await api('PUT', '/api/admin/v1/setup/audit-key', { passphrase: pass, confirm: $('setup-audit2').value });
-      $('setup-audit').value = '';
-      $('setup-audit2').value = '';
+      const r = await api('PUT', '/api/admin/v1/setup/audit-key', { passphrase: $('setup-audit').value, confirm: $('setup-audit2').value });
+      clearSecrets(['setup-audit', 'setup-audit2']);
       $('setup-audit-stored').checked = false;
       $('setup-audit-keyid').textContent = r.key_id;
       show($('setup-audit-form'), false);
       show($('setup-audit-done'), true);
+      setStep(2, true);
     } catch (ex) {
-      fail(ex.message);
+      err.textContent = ex.message;
+      show(err, true);
     }
   });
   on('setup-audit-continue', 'click', () => route());
 
   on('setup-password-form', 'submit', async (e) => {
     e.preventDefault();
-    const err = $('setup-password-error');
+    const err = $('setup-password-form-error');
     show(err, false);
-    if ($('setup-password').value !== $('setup-password2').value) {
-      err.textContent = 'The two passwords do not match.';
-      show(err, true);
-      return;
-    }
+    if (setupProblems(e.target, pairProblems('setup-password', K.MIN_PASSWORD_CHARS, 'password'))) return;
     try {
       await api('PUT', '/api/admin/v1/password', { current: $('setup-current').value, new: $('setup-password').value });
-      for (const id of ['setup-current', 'setup-password', 'setup-password2']) $(id).value = '';
+      $('setup-current').value = '';
+      clearSecrets(['setup-password', 'setup-password2']);
       route();
     } catch (ex) {
       err.textContent = ex.message;
@@ -2513,6 +2550,9 @@
       pageError('The admin could not load its settings. Reload the page.');
       return;
     }
+    ui.lengthHint($('setup-password'), K.MIN_PASSWORD_CHARS);
+    ui.lengthHint($('setup-audit'), K.MIN_PASSPHRASE_CHARS);
+    ui.lengthHint($('setup-backup'), K.MIN_PASSPHRASE_CHARS);
     route();
   })();
 })();

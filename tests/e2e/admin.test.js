@@ -245,22 +245,94 @@ async function runViewport(viewport) {
     await page.waitForSelector('#setup-password-form:not([hidden])');
     assert.equal(await page.isHidden('#app'), true, 'nothing else opens before the password is changed');
   });
+  // First-run setup card (plan step 6.4): the three-step list, in the words and symbols the screens show.
+  const setupSteps = () => page.evaluate(() => [...document.querySelectorAll('#setup-steps > li')].map((li) => ({ current: li.getAttribute('aria-current'), text: li.innerText.replace(/\s+/g, ' ').trim() })));
+  const SETUP_NAMES = ['1. Change the password', '2. Audit passphrase', '3. Backup passphrase'];
+  const stepWords = { done: '\u2713 Done', current: '\u25cf Current step', next: '\u25cb Next' };
+  async function assertSetupSteps(states, label) {
+    const got = await setupSteps();
+    assert.deepEqual(got.map((x) => x.text), states.map((st, i) => stepWords[st] + ' ' + SETUP_NAMES[i]), label + ': the three steps, each a symbol, a word and its name');
+    assert.deepEqual(got.map((x) => x.current), states.map((st) => (st === 'current' ? 'step' : null)), label + ': only the current step is aria-current');
+  }
+  // One setup screen: Skip to content is still the first Tab stop, the buttons and fields are 40 px (44 on a phone), nothing scrolls
+  // sideways, and axe is clean on it (a second context with the same sign-in opens the same screen).
+  async function checkSetupScreen(form, label) {
+    const firstStop = await page.evaluate(() => {
+      const f = [...document.querySelectorAll('a[href], button, input, select, textarea, [tabindex]')].find((e) => e.tabIndex >= 0 && e.getClientRects().length > 0);
+      return { cls: f.className, text: f.textContent };
+    });
+    assert.deepEqual(firstStop, { cls: 'skip-link', text: 'Skip to content' }, label + ': Skip to content is the first Tab stop');
+    const sizes = await page.evaluate((sel) => {
+      const f = document.querySelector(sel);
+      return {
+        buttons: [...f.querySelectorAll('button:not([hidden])')].map((b) => b.getBoundingClientRect().height),
+        inputs: [...f.querySelectorAll('input:not([type=checkbox])')].map((i) => i.getBoundingClientRect().height),
+        checks: [...f.querySelectorAll('label.check')].map((l) => l.getBoundingClientRect().height),
+        scrolls: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+      };
+    }, form);
+    const want = isPhone ? 44 : 40;
+    for (const h of sizes.buttons) assert.ok(h >= want - 0.5, label + ': a button is ' + h + ' px high');
+    for (const h of sizes.inputs) assert.ok(h >= want - 0.5, label + ': a field is ' + h + ' px high');
+    if (isPhone) for (const h of sizes.checks) assert.ok(h >= 44 - 0.5, label + ': the check box row is ' + h + ' px high');
+    assert.equal(sizes.scrolls, false, label + ': no sideways scroll');
+    const axeCtx = await browser.newContext({ viewport, bypassCSP: true, storageState: await ctx.storageState() });
+    try {
+      const ap = await axeCtx.newPage();
+      await ap.goto(base);
+      await ap.waitForSelector(form + ':not([hidden])');
+      await ap.addScriptTag({ content: fs.readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8') });
+      const found = await ap.evaluate(async () => (await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'] } })).violations.map((v) => v.id + ': ' + v.nodes.map((n) => n.target.join(' ')).join(', ')));
+      assert.deepEqual(found, [], 'axe on ' + label);
+    } finally { await axeCtx.close(); }
+  }
   const AUDIT_PASS = 'correct horse battery staple 42';
 const BACKUP_PASS = 'e2e backup passphrase, its own 1';
 const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
+  await step('setup card: step 1 of 3 shows, the password has focus, counts are live, a mismatched pair blocks Next with a focused inline error and sends nothing, paste is allowed, sizes and axe', async () => {
+    await assertSetupSteps(['current', 'next', 'next'], 'password screen');
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'setup-current', 'the first field has focus on open');
+    const { min } = await page.evaluate(async () => ({ min: (await window.ui.ready).MIN_PASSWORD_CHARS }));
+    assert.equal(await page.innerText('#setup-password-hint'), 'At least ' + min + ' characters');
+    await page.fill('#setup-password', 'abc');
+    assert.equal(await page.innerText('#setup-password-hint'), '3 of at least ' + min + ' characters');
+    await page.fill('#setup-password', 'x'.repeat(min));
+    assert.equal(await page.innerText('#setup-password-hint'), min + ' characters');
+    for (const id of ['setup-current', 'setup-password', 'setup-password2']) {
+      assert.equal(await page.evaluate((i) => document.getElementById(i).dispatchEvent(new ClipboardEvent('paste', { cancelable: true, bubbles: true })), id), true, id + ' accepts a paste');
+    }
+    await checkSetupScreen('#setup-password-form', 'password screen');
+    const sent = [];
+    const watch = (r) => { if (r.method() !== 'GET') sent.push(r.method() + ' ' + r.url()); };
+    page.on('request', watch);
+    try {
+      await page.fill('#setup-current', 'admin');
+      await page.fill('#setup-password', PASSWORD);
+      await page.fill('#setup-password2', PASSWORD + 'x');
+      await page.click('#setup-password-form button[type=submit]');
+      await page.waitForSelector('#setup-password2-error:not([hidden])');
+      assert.match(await page.innerText('#setup-password2-error'), /do not match/);
+      assert.equal(await page.getAttribute('#setup-password2', 'aria-invalid'), 'true');
+      assert.equal(await page.evaluate(() => document.activeElement.id), 'setup-password2', 'focus moves to the repeat field');
+      assert.match(await page.innerText('#setup-password-form .error-summary'), /Fix this to go on/);
+      await page.waitForTimeout(300);
+      assert.deepEqual(sent, [], 'no request was sent');
+    } finally { page.off('request', watch); }
+  });
   await step('setup: the published password must be changed, to something else, then the audit passphrase step opens', async () => {
     await page.fill('#setup-current', 'admin');
     await page.fill('#setup-password', PASSWORD);
     await page.fill('#setup-password2', PASSWORD + 'x');
     await page.click('#setup-password-form button[type=submit]');
-    await page.waitForSelector('#setup-password-error:not([hidden])');
-    assert.match(await page.innerText('#setup-password-error'), /do not match/);
+    await page.waitForSelector('#setup-password2-error:not([hidden])');
+    assert.match(await page.innerText('#setup-password2-error'), /do not match/);
     // The published password (`admin`) as the new one is refused (by the server too, not only the form).
     await page.evaluate(() => { document.getElementById('setup-password-form').noValidate = true; });
     await page.fill('#setup-password', 'admin');
     await page.fill('#setup-password2', 'admin');
     await page.click('#setup-password-form button[type=submit]');
     await page.waitForFunction(() => /at least 10/.test(document.getElementById('setup-password-error').textContent));
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'setup-password', 'focus goes to the short password');
     await page.fill('#setup-password', PASSWORD);
     await page.fill('#setup-password2', PASSWORD);
     await page.click('#setup-password-form button[type=submit]');
@@ -278,13 +350,24 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.goto(base);
     await page.waitForSelector('#setup-audit-form:not([hidden])');
   });
+  await step('setup card: step 2 of 3 shows on the audit screen, the counts are live, sizes and axe', async () => {
+    await assertSetupSteps(['done', 'current', 'next'], 'audit screen');
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'setup-audit', 'the passphrase has focus on open');
+    const { min } = await page.evaluate(async () => ({ min: (await window.ui.ready).MIN_PASSPHRASE_CHARS }));
+    assert.equal(await page.innerText('#setup-audit-hint'), 'At least ' + min + ' characters');
+    await page.fill('#setup-audit', 'abc');
+    assert.equal(await page.innerText('#setup-audit-hint'), '3 of at least ' + min + ' characters');
+    await page.fill('#setup-audit', '');
+    await checkSetupScreen('#setup-audit-form', 'audit screen');
+  });
   await step('setup: the audit passphrase must match, be 20+ characters and be confirmed as stored', async () => {
     await page.evaluate(() => document.getElementById('setup-audit-form').noValidate = true);
     await page.fill('#setup-audit', AUDIT_PASS);
     await page.fill('#setup-audit2', AUDIT_PASS + 'x');
     await page.check('#setup-audit-stored');
     await page.click('#setup-audit-form button[type=submit]');
-    assert.match(await page.innerText('#setup-audit-error'), /do not match/);
+    assert.match(await page.innerText('#setup-audit2-error'), /do not match/);
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'setup-audit2', 'the mismatch is on the repeat field, focused');
     await page.fill('#setup-audit', 'too short');
     await page.fill('#setup-audit2', 'too short');
     await page.click('#setup-audit-form button[type=submit]');
@@ -294,7 +377,8 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.fill('#setup-audit2', AUDIT_PASS);
     await page.uncheck('#setup-audit-stored');
     await page.click('#setup-audit-form button[type=submit]');
-    assert.match(await page.innerText('#setup-audit-error'), /stored the passphrase/);
+    assert.match(await page.innerText('#setup-audit-stored-error'), /stored the passphrase/);
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'setup-audit-stored', 'the unchecked box is focused');
     assert.equal(await page.isHidden('#app'), true);
     const st = await (await fetch(`http://127.0.0.1:${adminPort}/api/admin/v1/setup`, { headers: { 'x-askbar-admin': '1' } })).json();
     assert.equal(st.audit_key_set, false, 'no key yet');
@@ -303,15 +387,25 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.check('#setup-audit-stored');
     await page.click('#setup-audit-form button[type=submit]');
     await page.waitForSelector('#setup-audit-done:not([hidden])');
+    await assertSetupSteps(['done', 'done', 'next'], 'audit key ready');
     const keyId = await page.innerText('#setup-audit-keyid');
     assert.match(keyId, /^[0-9a-f]{16}$/);
     assert.equal(await page.inputValue('#setup-audit').catch(() => ''), '', 'the passphrase field is cleared');
     assert.equal((await page.content()).includes(AUDIT_PASS), false, 'the passphrase is not left in the page');
     await page.click('#setup-audit-continue');
     await page.waitForSelector('#setup-backup-form:not([hidden])');
+    await assertSetupSteps(['done', 'done', 'current'], 'backup screen');
     assert.equal(await page.isHidden('#app'), true, 'setup does not finish at the audit key');
     assert.equal(await page.getAttribute('#setup-backup', 'type'), 'password');
     assert.match(await page.innerText('#setup-backup-form'), /cannot be recovered/);
+  });
+  await step('setup card: step 3 of 3 shows on the backup screen, the counts are live, sizes and axe', async () => {
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'setup-backup', 'the passphrase has focus on open');
+    const { min } = await page.evaluate(async () => ({ min: (await window.ui.ready).MIN_PASSPHRASE_CHARS }));
+    await page.fill('#setup-backup', 'abc');
+    assert.equal(await page.innerText('#setup-backup-hint'), '3 of at least ' + min + ' characters');
+    await page.fill('#setup-backup', '');
+    await checkSetupScreen('#setup-backup-form', 'backup screen');
   });
   await step('setup: the backup passphrase must match, be 20+ characters, differ from the audit passphrase and be confirmed as stored (ADR 0013)', async () => {
     await page.evaluate(() => document.getElementById('setup-backup-form').noValidate = true);
@@ -319,7 +413,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.fill('#setup-backup2', BACKUP_PASS + 'x');
     await page.check('#setup-backup-stored');
     await page.click('#setup-backup-form button[type=submit]');
-    assert.match(await page.innerText('#setup-backup-error'), /do not match/);
+    assert.match(await page.innerText('#setup-backup2-error'), /do not match/);
     await page.fill('#setup-backup', 'too short');
     await page.fill('#setup-backup2', 'too short');
     await page.click('#setup-backup-form button[type=submit]');
@@ -328,13 +422,13 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.fill('#setup-backup', AUDIT_PASS);
     await page.fill('#setup-backup2', AUDIT_PASS);
     await page.click('#setup-backup-form button[type=submit]');
-    await page.waitForFunction(() => /different from the audit passphrase/.test(document.getElementById('setup-backup-error').textContent));
+    await page.waitForFunction(() => /different from the audit passphrase/.test(document.getElementById('setup-backup-form-error').textContent));
     // Without the confirmation nothing is created, even with a good passphrase.
     await page.fill('#setup-backup', BACKUP_PASS);
     await page.fill('#setup-backup2', BACKUP_PASS);
     await page.uncheck('#setup-backup-stored');
     await page.click('#setup-backup-form button[type=submit]');
-    assert.match(await page.innerText('#setup-backup-error'), /stored the passphrase/);
+    assert.match(await page.innerText('#setup-backup-stored-error'), /stored the passphrase/);
     assert.equal(await page.isHidden('#app'), true);
     const st = await (await fetch(`http://127.0.0.1:${adminPort}/api/admin/v1/setup`, { headers: { 'x-askbar-admin': '1' } })).json();
     assert.equal(st.backup_key_set, false, 'no backup key yet');
@@ -343,6 +437,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.check('#setup-backup-stored');
     await page.click('#setup-backup-form button[type=submit]');
     await page.waitForSelector('#setup-backup-done:not([hidden])');
+    await assertSetupSteps(['done', 'done', 'done'], 'backup key ready');
     assert.match(await page.innerText('#setup-backup-fingerprint'), /^[0-9a-f]{4}(-[0-9a-f]{4}){3}$/);
     assert.equal(await page.inputValue('#setup-backup').catch(() => ''), '', 'the passphrase field is cleared');
     assert.equal(await page.inputValue('#setup-backup2').catch(() => ''), '');

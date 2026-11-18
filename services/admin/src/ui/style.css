@@ -663,7 +663,7 @@ dl.meta dd { margin: 0; overflow-wrap: anywhere; }
 .signin-logo { display: inline-flex; align-items: center; justify-content: center; flex: none; width: var(--btn-h); height: var(--btn-h); border-radius: var(--radius-control); background: var(--accent); color: var(--accent-fg); }
 .signin-card { display: flex; flex-direction: column; gap: var(--space-4); padding: var(--space-5); background: var(--card); border: 1px solid var(--line); border-radius: var(--radius-card); box-shadow: var(--shadow); }
 .signin-card label { margin: 0; }
-.signin-card input { height: var(--btn-h-l); margin-top: var(--space-1); }
+.signin-card input:not([type="checkbox"]) { height: var(--btn-h-l); margin-top: var(--space-1); }
 .signin-card .hint { margin: 0; }
 .signin-actions { display: flex; align-items: center; gap: var(--space-2); }
 .signin-actions > .btn-primary { flex: 1; }
@@ -674,3 +674,20 @@ dl.meta dd { margin: 0; overflow-wrap: anywhere; }
   .signin-actions { flex-direction: column; align-items: stretch; }
   .signin-actions > .btn-primary, .signin-actions .na, .signin-actions .na > .btn { width: 100%; }
 }
+
+/* First-run setup (plan step 6.4; board P3-Setup): the sign-in card, wider, with a three-step progress list on top. */
+#setup { max-width: 560px; }
+.setup-card { gap: var(--space-5); }
+.setup-form { display: flex; flex-direction: column; gap: var(--space-4); }
+.setup-form h2, .setup-form p { margin: 0; }
+.setup-form .field, .setup-form .new-secret { margin: 0; }
+.setup-form .new-secret { display: flex; flex-direction: column; gap: var(--space-4); }
+.setup-form .field > label.check { font-size: var(--text-s); font-weight: var(--weight-regular); }
+.setup-form .error { margin: 0; }
+.setup-steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-3); }
+.setup-step { display: flex; flex-direction: column; gap: var(--space-1); padding-top: var(--space-2); border-top: 2px solid var(--line); font-size: var(--text-xs); color: var(--muted); overflow-wrap: anywhere; }
+.setup-step-name { font-size: var(--text-s); font-weight: var(--weight-bold); color: var(--fg); }
+.setup-step-done { border-top-color: var(--good); }
+.setup-step-done .setup-step-state { color: var(--good); font-weight: var(--weight-bold); }
+.setup-step-current { border-top-color: var(--accent); }
+.setup-step-current .setup-step-state { color: var(--accent); font-weight: var(--weight-bold); }
