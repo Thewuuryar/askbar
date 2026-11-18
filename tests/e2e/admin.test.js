@@ -2971,7 +2971,11 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       assert.equal(await page.locator('.btn-primary:visible, button.primary:visible').count(), 1, 'one filled primary');
       assert.equal(await page.locator('#quick-actions .btn-primary').count(), 1);
       assert.deepEqual(await page.$$eval('#quick-actions a', (a) => a.map((x) => [x.textContent.trim(), x.getAttribute('href')])),
-        [['Pair a client', '/admin/people/#pair-open'], ['Add provider', '/admin/providers/#add-provider'], ['Open audit', '/admin/audit/calls/']]);
+        [['Pair a new client', '/admin/people/#pair-open'], ['Add user', '/admin/people/#add-user'], ['Add provider', '/admin/providers/#add-provider']]);
+      assert.equal(await page.locator('main').getByText('Open audit', { exact: false }).count(), 0, 'Home has no Open audit button (the owner asked for its removal)');
+      // Every quick action has a decorative icon and its label as text (the icons are the board's: link, person, cube, download).
+      assert.deepEqual(await page.$$eval('#quick-actions .btn', (a) => a.map((x) => [x.textContent.trim(), !!x.querySelector('svg.icon[aria-hidden="true"]')])),
+        [['Pair a new client', true], ['Add user', true], ['Add provider', true], ['Back up now', true]]);
       for (const sel of ['#quick-actions .btn']) {
         for (const box of await page.$$eval(sel, (a) => a.map((x) => { const r = x.getBoundingClientRect(); return [r.width, r.height]; }))) {
           assert.ok(box[0] >= (isPhone ? 44 : 24) - 0.5 && box[1] >= (isPhone ? 44 : 24) - 0.5, 'quick action target ' + box);
@@ -3106,10 +3110,42 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       assert.equal(Math.abs(now - sinceSeen - K.HOME_STATS_WINDOW_SECS) < 120, true, 'the stats window is HOME_STATS_WINDOW_SECS');
       assert.equal(K.HOME_STATS_WINDOW_DAYS * 86400, K.HOME_STATS_WINDOW_SECS);
 
-      // The numbers: units, right-aligned.
+      // The range selector at the top right of the header: its options are the constants, the default is HOME_STATS_WINDOW_DAYS.
+      assert.deepEqual(await page.$$eval('#home-range option', (o) => o.map((x) => Number(x.value))), K.HOME_STATS_RANGE_DAYS);
+      assert.equal(await page.inputValue('#home-range'), String(K.HOME_STATS_WINDOW_DAYS));
+      if (!isPhone) {
+        const r = await page.evaluate(() => { const s = document.getElementById('home-range').getBoundingClientRect(); const h = document.querySelector('.page-title').getBoundingClientRect(); const m = document.querySelector('.page-header').getBoundingClientRect(); return { selRight: s.right, mainRight: m.right, selTop: s.top, titleTop: h.top, selLeft: s.left, titleLeft: h.left }; });
+        assert.ok(r.selLeft > r.titleLeft + 200 && r.mainRight - r.selRight < 4, 'the range select sits at the right of the header');
+      }
+      const lastRange = K.HOME_STATS_RANGE_DAYS[K.HOME_STATS_RANGE_DAYS.length - 1];
+      await page.selectOption('#home-range', String(lastRange));
+      await page.waitForFunction((want) => new URL(location.href).searchParams.get('range') === want, String(lastRange));
+      await page.waitForFunction((t) => document.getElementById('numbers-title').textContent === t, 'Last ' + lastRange + ' days', { timeout: wait });
+      assert.equal(Math.abs(now - sinceSeen - lastRange * 86400) < 120, true, 'the stats read asks for the chosen range');
+      assert.equal(await page.innerText('#usage-title'), 'Requests per day, last ' + lastRange + ' days');
+      await page.reload();
+      await page.waitForSelector('#kpi-requests .num', { timeout: wait });
+      assert.equal(await page.inputValue('#home-range'), String(lastRange), 'reload keeps the range');
+      assert.equal(Math.abs(now - sinceSeen - lastRange * 86400) < 120, true, 'the read after a reload uses the range from the address');
+      await page.selectOption('#home-range', String(K.HOME_STATS_WINDOW_DAYS));
+      await page.waitForFunction((t) => document.getElementById('numbers-title').textContent === t, 'Last ' + K.HOME_STATS_WINDOW_DAYS + ' days', { timeout: wait });
+      assert.equal(Math.abs(now - sinceSeen - K.HOME_STATS_WINDOW_SECS) < 120, true, 'back on the default range');
+
+      // The numbers: units, left-aligned like their labels.
       const kpis = await page.$$eval('#home-kpis .kpi', (list) => list.map((k) => ({ label: k.querySelector('.k').textContent, value: k.querySelector('.v').textContent, align: getComputedStyle(k).textAlign, num: !!k.querySelector('.v .num') })));
       assert.deepEqual(kpis.map((k) => [k.label, k.value]), [['Requests', '345'], ['Error rate', '2.1 %'], ['Tokens', '1,280,000 tokens'], ['Cost', '7.6'], ['Latency, 95th percentile', '6.4 s']]);
-      assert.equal(kpis.every((k) => k.align === 'right' && k.num), true, 'every number is a right-aligned ui.num');
+      assert.equal(kpis.every((k) => k.align === 'left' && k.num), true, 'every number is a left-aligned ui.num');
+      // Labels and figures share one left edge in each item; the five items share a row at 1280 and form a 2-column grid on a phone.
+      const boxes = await page.$$eval('#home-kpis .kpi', (list) => list.map((k) => { const a = k.querySelector('.k').getBoundingClientRect(); const v = k.querySelector('.v .num, .v').getBoundingClientRect(); const b = k.getBoundingClientRect(); return { kx: a.left, vx: v.left, top: b.top, left: b.left, width: b.width, vRight: v.right, right: b.right }; }));
+      for (const b of boxes) { assert.ok(Math.abs(b.kx - b.vx) < 1, 'label and figure start at the same x'); assert.ok(b.vRight <= b.right + 0.5, 'a figure stays inside its item'); }
+      if (isPhone) {
+        assert.ok(Math.abs(boxes[0].top - boxes[1].top) < 1 && Math.abs(boxes[2].top - boxes[3].top) < 1 && boxes[4].top > boxes[3].top, 'two columns, the last item on its own row');
+        assert.ok(Math.abs(boxes[0].left - boxes[2].left) < 1 && boxes[1].left > boxes[0].left + 50, 'a grid of two columns');
+        assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), 'no sideways scroll');
+      } else {
+        assert.ok(boxes.every((b) => Math.abs(b.top - boxes[0].top) < 1), 'the five items share one row');
+        assert.ok(boxes.every((b, i) => i === 0 || b.left > boxes[i - 1].left), 'in order, left to right');
+      }
 
       // The chart: role img, its label is the visible one-line summary, and the hidden table holds the same values.
       const chart = await page.evaluate(() => {

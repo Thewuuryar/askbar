@@ -127,7 +127,7 @@ page!(Notifications, notifications, "notifications", "notifications.html", "Noti
 /// Every admin page, in menu order (rule 1). Its slugs equal `constants::PAGE_SLUGS`, which a test checks.
 /// `/admin` and `/admin/` go to `constants::LANDING_PAGE`.
 pub static PAGES: &[Page] = &[
-    Page { slug: "home", label: "Home", group: Group::Top, icon: "home", lede: "What needs you now, and how Askbar is doing.", render: home },
+    Page { slug: "home", label: "Home", group: Group::Top, icon: "home", lede: "How Askbar is doing, and what needs you.", render: home },
     Page { slug: "alerts", label: "Alerts", group: Group::Top, icon: "bell", lede: "Everything that needs your attention, most serious first.", render: alerts },
     Page { slug: "audit/calls", label: "Model calls", group: Group::Audit, icon: "calls", lede: "What the server recorded about each reply: when, for whom, through which provider, how long it took and how it ended. Message content is sealed; opening it asks for the audit passphrase and is logged.", render: audit_calls },
     Page { slug: "audit/admin", label: "Admin actions", group: Group::Audit, icon: "clipboard", lede: "What was changed in this admin, and when.", render: audit_admin },
@@ -463,11 +463,14 @@ mod tests {
         "archive",
         "send",
         "sliders",
+        "link",
+        "user",
+        "download",
     ];
 
     #[derive(Template)]
     #[template(
-        source = r#"{% import "icons.html" as i %}{% call i::home() %}{% endcall %}{% call i::bell() %}{% endcall %}{% call i::audit() %}{% endcall %}{% call i::settings() %}{% endcall %}{% call i::reference() %}{% endcall %}{% call i::collapse() %}{% endcall %}{% call i::close() %}{% endcall %}{% call i::copy() %}{% endcall %}{% call i::help() %}{% endcall %}{% call i::sign_out() %}{% endcall %}{% call i::search() %}{% endcall %}{% call i::menu() %}{% endcall %}{% call i::check() %}{% endcall %}{% call i::warning() %}{% endcall %}{% call i::critical() %}{% endcall %}{% call i::info() %}{% endcall %}{% call i::code() %}{% endcall %}{% call i::more() %}{% endcall %}{% call i::logo() %}{% endcall %}{% call i::calls() %}{% endcall %}{% call i::clipboard() %}{% endcall %}{% call i::lock() %}{% endcall %}{% call i::route() %}{% endcall %}{% call i::cube() %}{% endcall %}{% call i::people() %}{% endcall %}{% call i::server() %}{% endcall %}{% call i::globe() %}{% endcall %}{% call i::shield() %}{% endcall %}{% call i::archive() %}{% endcall %}{% call i::send() %}{% endcall %}{% call i::sliders() %}{% endcall %}"#,
+        source = r#"{% import "icons.html" as i %}{% call i::home() %}{% endcall %}{% call i::bell() %}{% endcall %}{% call i::audit() %}{% endcall %}{% call i::settings() %}{% endcall %}{% call i::reference() %}{% endcall %}{% call i::collapse() %}{% endcall %}{% call i::close() %}{% endcall %}{% call i::copy() %}{% endcall %}{% call i::help() %}{% endcall %}{% call i::sign_out() %}{% endcall %}{% call i::search() %}{% endcall %}{% call i::menu() %}{% endcall %}{% call i::check() %}{% endcall %}{% call i::warning() %}{% endcall %}{% call i::critical() %}{% endcall %}{% call i::info() %}{% endcall %}{% call i::code() %}{% endcall %}{% call i::more() %}{% endcall %}{% call i::logo() %}{% endcall %}{% call i::calls() %}{% endcall %}{% call i::clipboard() %}{% endcall %}{% call i::lock() %}{% endcall %}{% call i::route() %}{% endcall %}{% call i::cube() %}{% endcall %}{% call i::people() %}{% endcall %}{% call i::server() %}{% endcall %}{% call i::globe() %}{% endcall %}{% call i::shield() %}{% endcall %}{% call i::archive() %}{% endcall %}{% call i::send() %}{% endcall %}{% call i::sliders() %}{% endcall %}{% call i::link() %}{% endcall %}{% call i::user() %}{% endcall %}{% call i::download() %}{% endcall %}"#,
         ext = "html"
     )]
     struct AllIcons;

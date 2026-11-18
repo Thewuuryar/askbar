@@ -510,9 +510,15 @@
     schedule: '/api/admin/v1/backup/schedule', network: '/api/admin/v1/network',
   };
   // Home reads the same answers for its summaries, plus the stats of the window and the services (the menu's health data).
+  // The range of the figures and the chart, in days: one of HOME_STATS_RANGE_DAYS, from the address (?range=) or the default.
+  const DAY_SECS = 24 * 3600; // time-unit maths, not a limit
+  const rangeParam = () => Number(new URLSearchParams(location.search).get('range'));
+  let rangeDays = null; // set on first use, once the constants are here
+  const range = () => { if (rangeDays === null) rangeDays = K.HOME_STATS_RANGE_DAYS.includes(rangeParam()) ? rangeParam() : K.HOME_STATS_WINDOW_DAYS; return rangeDays; };
+  const rangeWords = (days) => (days === 1 ? 'last ' + days * 24 + ' hours' : 'last ' + days + ' days');
   const homeReads = () => ({
     ...GAP_READS,
-    stats: '/api/admin/v1/audit/stats?since=' + (Math.floor(Date.now() / MS) - K.HOME_STATS_WINDOW_SECS),
+    stats: '/api/admin/v1/audit/stats?since=' + (Math.floor(Date.now() / MS) - range() * DAY_SECS),
     services: '/api/admin/v1/services',
   });
   async function readSetup() {
@@ -565,11 +571,13 @@
     return ms >= MS ? ui.num(Math.round(ms / 100) / 10, 's') : ui.num(Math.round(ms), 'ms');
   }
 
+  // A figure with its unit in smaller muted type after it, so "1,280,000 tokens" stays on one line.
+  const figure = (n, unit) => ui.el('span', { class: 'num' }, Number(n).toLocaleString(), unit ? ui.el('span', { class: 'unit', text: ' ' + unit }) : null);
   function renderKpis(f) {
     const put = (id, node) => $(id).replaceChildren(node);
     put('kpi-requests', f.requests == null ? dash() : ui.num(f.requests));
-    put('kpi-errors', f.errorRate == null ? dash() : ui.num(f.errorRate, '%'));
-    put('kpi-tokens', f.tokens == null ? dash() : ui.num(f.tokens, 'tokens'));
+    put('kpi-errors', f.errorRate == null ? dash() : figure(f.errorRate, '%'));
+    put('kpi-tokens', f.tokens == null ? dash() : figure(f.tokens, 'tokens'));
     put('kpi-cost', f.cost != null ? ui.num(f.cost) : ui.el('span', { class: 'num', text: f.costUnknown ? 'unknown' : '–' }));
     put('kpi-latency', latencyNum(f.p95));
   }
@@ -580,11 +588,10 @@
     const summary = $('chart-summary');
     const chart = $('home-chart');
     const wrap = $('chart-table-wrap');
-    const span = K.HOME_STATS_WINDOW_DAYS;
     chart.replaceChildren();
     $('chart-table').tBodies[0].replaceChildren();
     if (!days.length) {
-      summary.textContent = 'No requests in the last ' + span + ' days.';
+      summary.textContent = 'No requests in the ' + rangeWords(range()) + '.';
       chart.hidden = true; wrap.hidden = true;
       chart.setAttribute('aria-label', '');
       return;
@@ -600,15 +607,16 @@
     chart.setAttribute('aria-label', text);
     const max = peak.requests || 1;
     const plot = ui.el('div', { class: 'chart-plot' });
+    const today = new Date().toISOString().slice(0, 10);
     for (const d of days) {
-      const bar = ui.el('div', { class: 'chart-bar', 'data-day': d.day, 'data-requests': d.requests }, ui.el('span', { class: 'chart-val', text: fmt(d.requests) }));
+      const bar = ui.el('div', { class: 'chart-bar' + (d.day === today ? ' is-today' : ''), 'data-day': d.day, 'data-requests': d.requests }, ui.el('span', { class: 'chart-val', text: fmt(d.requests) }));
       bar.style.height = (d.requests / max * 100) + '%';
       plot.append(ui.el('div', { class: 'chart-col' }, bar));
     }
     const y = ui.el('div', { class: 'chart-y' }, ui.el('span', { text: fmt(max) }), ui.el('span', { text: '0' }));
     y.children[0].style.bottom = '100%';
     y.children[1].style.bottom = '0';
-    chart.append(y, plot, ui.el('div', { class: 'chart-x' }, ui.el('span', { text: dayLabel(days[0].day) }), days.length > 1 ? ui.el('span', { text: dayLabel(days[days.length - 1].day) }) : null));
+    chart.append(y, plot, ui.el('div', { class: 'chart-x' }, ui.el('span', { text: dayLabel(days[0].day) }), days.length > 1 ? ui.el('span', { text: days[days.length - 1].day === today ? 'Today' : dayLabel(days[days.length - 1].day) }) : null));
     chart.hidden = false;
     $('chart-table').tBodies[0].append(...days.map((d) => ui.el('tr', {}, ui.el('td', { text: dayLabel(d.day) }), ui.el('td', { text: fmt(d.requests) }))));
     wrap.hidden = false;
@@ -642,7 +650,14 @@
     fact(dl, 'Clients', d.clients ? ui.num(d.clients.length) : dash());
   }
 
+  // The range's words in the two headings and the select (also called on a change, since an answer equal to the last one is not drawn again).
+  function drawRange() {
+    $('home-range').value = String(range());
+    $('numbers-title').textContent = rangeWords(range()).replace(/^l/, 'L');
+    $('usage-title').textContent = 'Requests per day, ' + rangeWords(range());
+  }
   function renderHome(d) {
+    drawRange();
     const f = statsFigures(d.stats);
     renderKpis(f);
     if (d.stats) renderChart(f.days); else $('chart-summary').textContent = 'The numbers could not be read.';
@@ -661,6 +676,21 @@
       });
     }
     return liveAttention.start();
+  }
+
+  // The range selector: the choice goes into the address (?range=, so reload keeps it), the figures and the chart are read
+  // again for it, and the change is announced. The select shows the address's range on every draw.
+  const rangeSelect = $('home-range');
+  if (rangeSelect) {
+    rangeSelect.addEventListener('change', () => {
+      rangeDays = Number(rangeSelect.value);
+      const u = new URL(location.href);
+      u.searchParams.set('range', String(rangeDays));
+      history.replaceState(history.state, '', u.pathname + u.search + u.hash);
+      drawRange();
+      ui.announce('Showing the ' + rangeWords(range()));
+      if (liveAttention) liveAttention.refresh({ force: true });
+    });
   }
 
   // Quick actions: links to the page that does the work, and Back up now, which is the Backup page's own call.

@@ -24,7 +24,7 @@
       icon_button(icon, label)       button.btn.btn-quiet.btn-icon[aria-label=label][data-tip=label] holding icon(icon).
       icon(name)                     one icon from icons.html by name (home bell audit settings reference collapse close copy
                                      help sign_out search menu check warning critical info code more logo calls clipboard lock
-                                     route cube people server globe shield archive send sliders).
+                                     route cube people server globe shield archive send sliders link user download).
       tabs(items, current, label)    a tab bar of links: nav.tabs[aria-label=label] with a.tab per page in items (Page values,
                                      from pages::tab_pages); the one whose slug is current gets aria-current="page". Labels
                                      and paths come from PAGES, so the bar matches the menu.
@@ -99,6 +99,9 @@
 {%- else if name == "archive" %}{% call i::archive() %}{% endcall %}
 {%- else if name == "send" %}{% call i::send() %}{% endcall %}
 {%- else if name == "sliders" %}{% call i::sliders() %}{% endcall %}
+{%- else if name == "link" %}{% call i::link() %}{% endcall %}
+{%- else if name == "user" %}{% call i::user() %}{% endcall %}
+{%- else if name == "download" %}{% call i::download() %}{% endcall %}
 {%- endif %}
 {%- endmacro %}
 

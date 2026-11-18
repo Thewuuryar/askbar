@@ -1,11 +1,12 @@
 {% extends "base.html" %}
 {%- import "components.html" as c %}
+{% block header %}{% call c::page_header(label, lede, crate::reference::page_topic(current), "") %}<select id="home-range" aria-label="Range">{% for d in crate::constants::HOME_STATS_RANGE_DAYS %}<option value="{{ d }}"{% if d == crate::constants::HOME_STATS_WINDOW_DAYS %} selected{% endif %}>{% if d == 1 %}Last 24 hours{% else %}Last {{ d }} days{% endif %}</option>{% endfor %}</select>{% endcall %}{% endblock %}
 {% block content %}
     <div class="quick-actions" id="quick-actions">
-      <a class="btn btn-primary" href="/admin/people/#pair-open">{% call c::icon("send") %}{% endcall %}Pair a client</a>
+      <a class="btn btn-primary" href="/admin/people/#pair-open">{% call c::icon("link") %}{% endcall %}Pair a new client</a>
+      <a class="btn btn-secondary" href="/admin/people/#add-user">{% call c::icon("user") %}{% endcall %}Add user</a>
       <a class="btn btn-secondary" href="/admin/providers/#add-provider">{% call c::icon("cube") %}{% endcall %}Add provider</a>
-      <button type="button" class="btn btn-secondary" id="home-backup">{% call c::icon("archive") %}{% endcall %}Back up now</button>
-      <a class="btn btn-secondary" href="/admin/audit/calls/">{% call c::icon("audit") %}{% endcall %}Open audit</a>
+      <button type="button" class="btn btn-secondary" id="home-backup">{% call c::icon("download") %}{% endcall %}Back up now</button>
     </div>
     <p id="home-error" class="error" role="alert" hidden></p>
 

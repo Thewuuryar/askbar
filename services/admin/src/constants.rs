@@ -172,6 +172,8 @@ pub const TOAST_SECS: u32 = 5;
 pub const HOME_STATS_WINDOW_DAYS: u32 = 7;
 /// The same window in seconds (the `since` of the stats read).
 pub const HOME_STATS_WINDOW_SECS: i64 = HOME_STATS_WINDOW_DAYS as i64 * 24 * 3600;
+/// The ranges Home's range selector offers, in days (the default is `HOME_STATS_WINDOW_DAYS`; the stats read takes any `since`).
+pub const HOME_STATS_RANGE_DAYS: [u32; 3] = [1, 7, 30];
 /// How many model calls the Audit list loads at a time (and each time Load more is chosen); the auditor's own cap is higher.
 pub const AUDIT_PAGE_SIZE: u32 = 25;
 /// How many rows each group of the global search shows; typing more narrows it.
@@ -248,6 +250,7 @@ struct Constants {
     cpa_login_poll_secs: u32,
     home_stats_window_days: u32,
     home_stats_window_secs: i64,
+    home_stats_range_days: [u32; 3],
     page_slugs: [&'static str; 15],
     landing_page: &'static str,
     help_topics: &'static [&'static str],
@@ -309,6 +312,7 @@ fn current() -> Constants {
         cpa_login_poll_secs: CPA_LOGIN_POLL_SECS,
         home_stats_window_days: HOME_STATS_WINDOW_DAYS,
         home_stats_window_secs: HOME_STATS_WINDOW_SECS,
+        home_stats_range_days: HOME_STATS_RANGE_DAYS,
         page_slugs: PAGE_SLUGS,
         landing_page: LANDING_PAGE,
         help_topics: HELP_TOPICS,
@@ -354,6 +358,7 @@ mod tests {
             "HIGHLIGHT_SECS",
             "HOME_STATS_WINDOW_DAYS",
             "HOME_STATS_WINDOW_SECS",
+            "HOME_STATS_RANGE_DAYS",
             "LANDING_PAGE",
             "LICENSE",
             "LICENSE_URL",
