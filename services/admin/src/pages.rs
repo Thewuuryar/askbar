@@ -114,7 +114,6 @@ page!(Security, security, "security", "security.html", "Security");
 page!(Backup, backup, "backup", "backup.html", "Backup");
 page!(Notifications, notifications, "notifications", "notifications.html", "Notifications");
 page!(General, general, "general", "general.html", "General");
-page!(Reference, reference, "reference", "reference.html", "Reference");
 
 /// Every admin page, in menu order (rule 1). Its slugs equal `constants::PAGE_SLUGS`, which a test checks.
 /// `/admin` and `/admin/` go to `constants::LANDING_PAGE`.
@@ -134,7 +133,7 @@ pub static PAGES: &[Page] = &[
     Page { slug: "backup", label: "Backup", group: Group::Settings, icon: "archive", render: backup },
     Page { slug: "notifications", label: "Notifications", group: Group::Settings, icon: "send", render: notifications },
     Page { slug: "general", label: "General", group: Group::Settings, icon: "sliders", render: general },
-    Page { slug: "reference", label: "Reference", group: Group::Reference, icon: "reference", render: reference },
+    Page { slug: "reference", label: "Reference", group: Group::Reference, icon: "reference", render: crate::reference::index_html },
 ];
 
 /// A page is its group's overview when its slug is the group's name in lower case (`settings` in Settings).

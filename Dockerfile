@@ -39,6 +39,7 @@ RUN for d in crates/* services/*; do mkdir -p "$d/src" && touch "$d/src/lib.rs" 
 # copied files' timestamps.
 COPY crates crates
 COPY services services
+COPY docs/reference docs/reference
 # The desktop client is its own workspace (clients/desktop) and is not part of any image.
 RUN cargo build --release --locked -p askbar-server -p askbar-admin -p askbar-cpa-supervisor -p askbar-bootstrap -p askbar-auditor -p askbar-model-gateway -p askbar-alerter
 

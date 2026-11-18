@@ -1,6 +1,40 @@
 {% extends "base.html" %}
 {%- import "components.html" as c %}
-{% block hint %}How Askbar works, and what each setting does.{% endblock %}
+{#- The reference (plan step 7.2): a left outline of the pages by area, the article (Markdown rendered at build time by
+    build.rs; its HTML is trusted, it holds no raw HTML from the source), and "On this page" at the right. On a phone the
+    outline is a closed box above the article and the right list is left out. -#}
+{% block hint %}{{ summary }}{% endblock %}
 {% block content %}
-    {% call c::notice("info", "Not available yet: the reference is not in the admin yet.", "") %}{% endcall %}
+    <div class="ref">
+      <details class="ref-nav" open>
+        <summary class="ref-nav-toggle">Reference pages</summary>
+        <nav aria-label="Reference pages">
+          <ul class="ref-list">
+            <li><a href="/admin/reference/"{% if page.is_index() %} aria-current="true"{% endif %}>Overview</a></li>
+          </ul>
+          {%- for g in outline %}
+          <p class="ref-group">{{ g.label }}</p>
+          <ul class="ref-list">
+            {%- for p in g.pages %}
+            <li><a href="{{ p.path() }}"{% if p.id == page.id %} aria-current="true"{% endif %}>{{ p.title }}</a></li>
+            {%- endfor %}
+          </ul>
+          {%- endfor %}
+        </nav>
+      </details>
+      <article class="ref-body" id="reference-article">
+{{ html|safe }}
+        <p class="ref-src"><span>Source: <code>{{ page.source }}</code></span> <a class="ref-edit" href="{{ edit_url }}" rel="noopener noreferrer">{% call c::icon("code") %}{% endcall %}Edit on GitHub</a></p>
+      </article>
+      {%- if !page.headings.is_empty() %}
+      <nav class="ref-toc" aria-label="On this page">
+        <p class="ref-group">On this page</p>
+        <ul class="ref-list">
+          {%- for h in page.headings %}
+          <li><a href="#{{ h.id }}">{{ h.text }}</a></li>
+          {%- endfor %}
+        </ul>
+      </nav>
+      {%- endif %}
+    </div>
 {% endblock %}

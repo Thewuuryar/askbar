@@ -75,7 +75,9 @@ fn every_admin_page_has_a_route_and_a_nav_link() {
     const REDIRECTS: [&str; 4] = ["/admin/", "/admin/audit/", "/admin/restore/", "/admin/clients/"];
     let pages =
         table.iter().filter(|r| r.path.starts_with("/admin/") && r.path.ends_with('/') && !REDIRECTS.contains(&r.path.as_str())).count();
-    assert_eq!(pages, askbar_admin::pages::PAGES.len(), "every page route comes from PAGES");
+    // The reference's pages (plan step 7.2) are routes of their own; its index is the `reference` entry of PAGES.
+    let reference = askbar_admin::reference::pages().len() - 1;
+    assert_eq!(pages, askbar_admin::pages::PAGES.len() + reference, "every page route comes from PAGES or the reference");
 }
 
 #[tokio::test]

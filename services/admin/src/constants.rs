@@ -19,6 +19,8 @@ pub const SOURCE_URL: &str = "https://github.com/Thewuuryar/askbar";
 pub const LICENSE: &str = "AGPL-3.0-or-later";
 /// The licence text, in the source repository.
 pub const LICENSE_URL: &str = "https://github.com/Thewuuryar/askbar/blob/main/LICENSE";
+/// The branch the source links point at (the repository's default branch).
+pub const SOURCE_BRANCH: &str = "main";
 /// Where the reference articles live, relative to the repository root.
 pub const REFERENCE_ROOT: &str = "docs/reference";
 
@@ -193,6 +195,7 @@ struct Constants {
     admin_username: &'static str,
     api_key_prefix: &'static str,
     source_url: &'static str,
+    source_branch: &'static str,
     license: &'static str,
     license_url: &'static str,
     reference_root: &'static str,
@@ -248,6 +251,7 @@ fn current() -> Constants {
         admin_username: ADMIN_USERNAME,
         api_key_prefix: API_KEY_PREFIX,
         source_url: SOURCE_URL,
+        source_branch: SOURCE_BRANCH,
         license: LICENSE,
         license_url: LICENSE_URL,
         reference_root: REFERENCE_ROOT,
@@ -368,6 +372,7 @@ mod tests {
             "SEARCH_RESULTS_PER_GROUP",
             "SERVICES",
             "SESSION_TTL_SECS",
+            "SOURCE_BRANCH",
             "SOURCE_URL",
             "STATUS_EVERY_SECS",
             "TOAST_SECS",

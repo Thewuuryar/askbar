@@ -3699,6 +3699,71 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     assert.equal(missing.status(), 404, 'an unknown admin page is a 404');
     await page.goto(base);
   });
+  // Plan step 7.2: the reference, rendered from docs/reference when the admin is built.
+  await step('reference: the index and an article show the outline, the article and its source link; targets, scrolling and axe are clean', async () => {
+    const K = await page.evaluate(() => window.ui.ready);
+    const min = isPhone ? 44 : 24;
+    const axeSource = fs.readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8');
+    const index = await page.evaluate(async () => (await fetch('/admin/reference.json')).json());
+    assert.ok(index.length >= 10 && index.some((p) => p.id === 'settings/network'), 'the index lists the pages');
+    for (const [url, article] of [['reference/', 'Reference'], ['reference/settings/network/', 'Network']]) {
+      await page.goto(base + url);
+      await page.waitForSelector('#app:not([hidden])');
+      assert.equal(await page.locator('#nav a[aria-current="page"]').getAttribute('data-tab'), 'reference', url + ': the menu marks Reference');
+      assert.equal(await page.locator('section[data-tab="reference"] > .row > h2').innerText(), article);
+      assert.equal(await page.locator('.ref-body h1').count(), 0, 'the page title is the one h2');
+      // Every heading has an id, and each in-page link lands on one.
+      const heads = await page.$$eval('.ref-body h3, .ref-body h4', (hs) => hs.map((h) => h.id));
+      assert.ok(heads.every(Boolean), url + ': a heading has no id');
+      const nav = await page.evaluate(() => {
+        const d = document.querySelector('.ref-nav');
+        const b = (e) => e.getBoundingClientRect();
+        return { open: d.open, summaryShown: getComputedStyle(d.querySelector('summary')).display !== 'none', navBottom: b(d).bottom, bodyTop: b(document.querySelector('.ref-body')).top, navRight: b(d).right, bodyLeft: b(document.querySelector('.ref-body')).left, cur: d.querySelector('a[aria-current]')?.textContent, groups: [...d.querySelectorAll('.ref-group')].map((g) => g.textContent) };
+      });
+      assert.deepEqual(nav.groups.slice(0, 3), ['Settings', 'Admin site', 'Audit'], 'the outline groups the pages by area');
+      if (isPhone) {
+        assert.equal(nav.summaryShown && !nav.open, true, 'on a phone the outline is a closed box');
+        assert.ok(nav.navBottom <= nav.bodyTop + 1, 'above the article');
+      } else {
+        assert.equal(nav.open && !nav.summaryShown, true, 'on a desktop the outline is always open');
+        assert.ok(nav.navRight <= nav.bodyLeft, 'at the left of the article');
+      }
+      assert.equal(nav.cur, url === 'reference/' ? 'Overview' : 'Network');
+      const edit = await page.getAttribute('.ref-edit', 'href');
+      assert.equal(edit, `${K.SOURCE_URL}/edit/${K.SOURCE_BRANCH}/docs/reference/${url === 'reference/' ? 'index' : 'settings/network'}.md`);
+      assert.equal(await page.getAttribute('.ref-edit', 'rel'), 'noopener noreferrer');
+      // Targets: the outline's links, the edit link; the phone's toggle.
+      const small = await page.$$eval('.ref-list a, .ref-edit, .ref-nav-toggle', (as, m) => as.map((a) => a.getBoundingClientRect()).filter((r) => r.height > 0 && (r.height < m - 0.5 || r.width < m - 0.5)).length, min);
+      assert.equal(small, 0, url + ': every outline and edit target is at least ' + min + ' px');
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, url + ': no sideways scroll');
+      // The links: pages are admin links, other docs go to the source, nothing is a script or style.
+      const hrefs = await page.$$eval('.ref-body a', (as) => as.map((a) => a.getAttribute('href')));
+      assert.ok(hrefs.every((h) => h.startsWith('/admin/reference/') || h.startsWith('#') || h.startsWith(K.SOURCE_URL + '/blob/' + K.SOURCE_BRANCH + '/') || h.startsWith('https://')), url + ': ' + hrefs);
+      assert.equal(await page.locator('.ref-body [style], .ref-body script, .ref-body img').count(), 0);
+      const axeCtx = await browser.newContext({ viewport, bypassCSP: true, storageState: await ctx.storageState() });
+      try {
+        const ap = await axeCtx.newPage();
+        await ap.goto(base + url);
+        await ap.waitForSelector('#app:not([hidden])');
+        await ap.addScriptTag({ content: axeSource });
+        const found = await ap.evaluate(async () => (await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'] } })).violations.map((v) => v.id + ': ' + v.nodes.map((n) => n.target.join(' ')).join(', ')));
+        assert.deepEqual(found, [], 'axe on ' + url);
+      } finally { await axeCtx.close(); }
+    }
+    // A help topic's address lands on its heading.
+    await page.goto(base + 'reference/settings/network/#host-name');
+    await page.waitForSelector('#app:not([hidden])');
+    await page.waitForFunction(() => { const r = document.getElementById('host-name').getBoundingClientRect(); return r.top >= 0 && r.bottom <= window.innerHeight; });
+    // A table and a code block scroll inside their own block, never the page.
+    await page.goto(base + 'reference/audit/alert-kinds/');
+    await page.waitForSelector('#app:not([hidden])');
+    assert.equal(await page.locator('.ref-body table').count() > 0, true, 'the alert kinds table renders');
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'a wide table does not scroll the page');
+    // An unknown reference address is the admin's 404.
+    assert.equal((await page.goto(base + 'reference/settings/nope/')).status(), 404);
+    await page.goto(base);
+    await page.waitForSelector('#app:not([hidden])');
+  });
   // Plan step 5.4: the Settings overview. One row per section, each a link with one line of state from its own read.
   const OVERVIEW_SHAPES = {
     providers: /^\d+ providers?$/,

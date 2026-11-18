@@ -828,6 +828,9 @@
     show($('app'), true);
     appShown = true;
     loadPage();
+    // On a phone the reference's outline starts closed (CSS shows its toggle only there).
+    const refNav = document.querySelector('.ref-nav');
+    if (refNav && getComputedStyle(refNav.querySelector('summary')).display !== 'none') refNav.open = false;
     focusHash();
     initSearch();
     liveStatus.start();

@@ -27,6 +27,7 @@ pub mod gateway_link;
 pub mod network;
 pub mod notify;
 pub mod pages;
+pub mod reference;
 pub mod restore;
 pub mod routes;
 pub mod sealed;
@@ -265,6 +266,11 @@ pub fn routes(state: &Arc<AdminState>) -> Routes {
     for (i, page) in pages::PAGES.iter().enumerate() {
         site = site.get(&pages::path(page), move || async move { pages::page_response(i) });
     }
+    // The reference's pages (plan step 7.2); the index is the `reference` page above.
+    reference::rendered();
+    for (i, p) in reference::pages().iter().enumerate().filter(|(_, p)| !p.is_index()) {
+        site = site.get(&p.path(), move || async move { reference::response(i) });
+    }
     site.get("/admin", || async { Redirect::to(&pages::path(pages::landing())) })
         .get("/admin/", || async { Redirect::to(&pages::path(pages::landing())) })
         // The Audit page became four (plan step 2.1); an old address opens Model calls, query and all,
@@ -278,6 +284,7 @@ pub fn routes(state: &Arc<AdminState>) -> Routes {
         .get("/admin/components.js", |h: HeaderMap| async move { pages::static_file(&h, JS, include_str!("ui/components.js")) })
         .get("/admin/audit.js", |h: HeaderMap| async move { pages::static_file(&h, JS, include_str!("ui/audit.js")) })
         .get("/admin/audit_calls.js", |h: HeaderMap| async move { pages::static_file(&h, JS, include_str!("ui/audit_calls.js")) })
+        .get("/admin/reference.json", |h: HeaderMap| async move { pages::static_file(&h, JSON, reference::index_json()) })
         .get("/admin/constants.json", |h: HeaderMap| async move { pages::static_file(&h, JSON, constants::json()) })
         .get("/admin/tokens.css", |h: HeaderMap| async move { pages::static_file(&h, CSS, include_str!("ui/tokens.css")) })
         .get("/admin/style.css", |h: HeaderMap| async move { pages::static_file(&h, CSS, include_str!("ui/style.css")) })
