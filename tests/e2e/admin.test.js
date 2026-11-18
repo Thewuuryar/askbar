@@ -965,6 +965,33 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.reload();
     await page.waitForSelector('tr[data-name="mock"]');
   });
+  await step('CLIProxyAPI sign-in: a very long address wraps inside the page, with no sideways scroll, at both widths', async () => {
+    const longUrl = 'https://login.example.test/authorize?code_challenge=' + 'Qx9'.repeat(80) + '&state=st1';
+    const json = (route, body) => route.fulfill({ contentType: 'application/json', body: JSON.stringify(body) });
+    await page.route('**/api/admin/v1/cpa', (route) => json(route, { configured: true, reachable: true, accounts: [] }));
+    await page.route('**/api/admin/v1/cpa/logins', (route) => json(route, { url: longUrl, state: 'st1', expires_in: 600 }));
+    await page.route('**/api/admin/v1/cpa/logins/st1', (route) => json(route, { status: 'pending' }));
+    await page.reload();
+    await page.waitForSelector('#cpa-panel:not([hidden])');
+    await page.click('#cpa-connect-anthropic');
+    await page.waitForSelector('#cpa-login:not([hidden])');
+    await page.waitForFunction((u) => document.getElementById('cpa-login-link').href === u, longUrl);
+    const layout = await page.evaluate(() => {
+      const W = document.documentElement.clientWidth;
+      const over = [...document.querySelectorAll('#cpa-panel, #cpa-panel *')]
+        .filter((n) => n.getClientRects().length > 0 && n.getBoundingClientRect().right > W + 0.5)
+        .map((n) => n.id || n.tagName.toLowerCase());
+      return { over, sideways: document.documentElement.scrollWidth - document.documentElement.clientWidth };
+    });
+    assert.deepEqual(layout.over, [], 'nothing in the accounts panel runs past the right edge of the page');
+    assert.ok(layout.sideways <= 0, 'the page does not scroll sideways (' + layout.sideways + ' px)');
+    await page.click('#cpa-cancel');
+    await page.unroute('**/api/admin/v1/cpa');
+    await page.unroute('**/api/admin/v1/cpa/logins');
+    await page.unroute('**/api/admin/v1/cpa/logins/st1');
+    await page.reload();
+    await page.waitForSelector('tr[data-name="mock"]');
+  });
   await step('delete asks first, then removes the provider', async () => {
     await page.click('tr[data-name="dead"] [data-action="edit"]');
     await page.waitForSelector('#provider-panel:not([hidden])');
@@ -1133,6 +1160,20 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     assert.match(await page.innerText('#clients [data-client]'), /Test laptop[\s\S]*Ann/);
     assert.doesNotMatch(await page.textContent('#clients [data-client] .col-seen'), /never/, 'it has been seen');
     assert.match(await page.innerText('#users [data-user]'), /Ann\s+1\s+Active/, 'the user row counts its client');
+    // Revoke is a destructive row action: it has the danger style (btn-danger), the same colour as a reference .btn-danger.
+    const colours = await page.evaluate(() => {
+      const pick = (el) => { const s = getComputedStyle(el); return { color: s.color, border: s.borderTopColor, background: s.backgroundColor }; };
+      const ref = document.createElement('button');
+      ref.className = 'btn btn-danger';
+      ref.textContent = 'reference';
+      document.body.append(ref);
+      const out = { revoke: pick(document.querySelector('#clients [data-action="revoke"]')), reference: pick(ref), cls: document.querySelector('#clients [data-action="revoke"]').className };
+      ref.remove();
+      return out;
+    });
+    assert.match(colours.cls, /\bbtn-danger\b/, 'Revoke has the btn-danger class');
+    assert.deepEqual(colours.revoke, colours.reference, 'Revoke is drawn in the danger colour, like the other destructive buttons');
+    assert.notDeepEqual(colours.revoke.color, await page.evaluate(() => getComputedStyle(document.body).color), 'the danger colour is not the body text colour');
     await page.click('#clients [data-action="revoke"]');
     await page.waitForSelector('dialog[open] [data-confirm-action]');
     await page.click('dialog[open] [data-confirm-action]');
@@ -1949,6 +1990,13 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     const menu = await page.$$eval('#nav a[data-tab]', (as) => as.map((a) => [a.dataset.tab, a.textContent.trim()]));
     const at = menu.findIndex(([slug]) => slug === 'backup');
     assert.deepEqual(menu.slice(at, at + 2).map(([slug, label]) => [slug, label]), [['backup', 'Backup'], ['notifications', 'Notifications']]);
+  });
+  await step('settings: the first section of a settings page has no top rule (the page header has the line)', async () => {
+    for (const slug of ['general', 'network', 'security', 'backup', 'notifications']) {
+      await openPage(slug);
+      const top = await page.evaluate(() => { const n = document.querySelector('#main .sec-sec, #main .net-sec'); return n ? getComputedStyle(n).borderTopWidth : 'no section'; });
+      assert.equal(top, '0px', slug + ': the first section has no top border');
+    }
   });
   await step('notifications: page-wide banners are greyed: critical ones checked and aria-disabled (not disabled), inert on click, Space and Enter', async () => {
     await openPage('notifications');
@@ -4497,6 +4545,60 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     page.off('request', count);
     assert.ok(polls >= 2 && polls <= 3, 'status polled every STATUS_EVERY_SECS: ' + polls);
     await openPage('providers');
+  });
+  await step('banners: the pinned banners have an opaque background, so the page does not show through them while it scrolls', async () => {
+    await openPage('general');
+    await page.evaluate(() => {
+      window.ui.banner('opaque-test', 'error', 'An error banner for the opacity test.');
+      window.ui.banner('opaque-warn', 'warning', 'A warning banner for the opacity test.');
+      const tall = document.createElement('div');
+      tall.id = 'opaque-tall';
+      tall.style.height = '3000px';
+      tall.textContent = 'Page content that scrolls under the banners.';
+      document.querySelector('#main').append(tall);
+      window.scrollTo(0, 800);
+    });
+    await page.waitForFunction(() => window.scrollY >= 700);
+    const bgs = await page.evaluate(() => [...document.querySelectorAll('#banners [data-banner], #status-bar')].map((n) => {
+      const s = getComputedStyle(n);
+      return { name: n.dataset.banner || 'status bar', color: s.backgroundColor, image: s.backgroundImage };
+    }));
+    // An opaque colour is rgb(...) or rgba(..., 1); a tint is laid over an opaque colour, so the gradient needs one under it.
+    const alpha = (c) => { const m = c.match(/^rgba?\((.*)\)$/); if (!m) return 0; const parts = m[1].split(/[\s,/]+/).filter(Boolean); return parts.length === 4 ? parseFloat(parts[3]) : 1; };
+    const names = bgs.map((b) => b.name);
+    assert.ok(names.includes('opaque-test') && names.includes('opaque-warn') && names.includes('status bar'), 'the banners and the status bar are up: ' + names.join(', '));
+    for (const b of bgs) assert.equal(alpha(b.color), 1, b.name + ' has an opaque background colour (' + b.color + ')');
+    assert.match(bgs.find((b) => b.name === 'opaque-test').image, /linear-gradient/, 'the error tint is laid over the opaque colour');
+    await page.evaluate(() => {
+      window.ui.banner('opaque-test', 'error', null);
+      window.ui.banner('opaque-warn', 'warning', null);
+      document.getElementById('opaque-tall').remove();
+    });
+  });
+  await step('status bar: the search placeholder fits its field at 1280, 1000 and on a phone', async () => {
+    await openPage('general');
+    await openMenu(); // on a phone the search is in the menu, which closes after a page change
+    const fit = () => page.evaluate(() => {
+      const i = document.getElementById('gs-input');
+      if (i.getClientRects().length === 0) return null;
+      const cs = getComputedStyle(i);
+      const ctx = document.createElement('canvas').getContext('2d');
+      ctx.font = cs.fontWeight + ' ' + cs.fontSize + ' ' + cs.fontFamily;
+      const room = i.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+      return { need: Math.ceil(ctx.measureText(i.placeholder).width), room: Math.floor(room), placeholder: i.placeholder };
+    });
+    assert.equal(await page.getAttribute('#gs-input', 'placeholder'), 'Search admin');
+    const seen = [await fit()];
+    if (viewport.width > 1000) {
+      await page.setViewportSize({ width: 1000, height: viewport.height });
+      await page.waitForFunction(() => document.documentElement.clientWidth === 1000);
+      seen.push(await fit());
+      await page.setViewportSize(viewport);
+      await page.waitForFunction((w) => document.documentElement.clientWidth === w, viewport.width);
+    }
+    const measured = seen.filter(Boolean);
+    assert.ok(measured.length > 0, 'the search field is shown at this width');
+    for (const f of measured) assert.ok(f.need <= f.room, 'the placeholder "' + f.placeholder + '" fits (' + f.need + ' px in ' + f.room + ' px)');
   });
   await step('frame: the side menu and the banners stay put while a long page scrolls, and a banner starts below the bar', async () => {
     await page.goto(base + 'general/');

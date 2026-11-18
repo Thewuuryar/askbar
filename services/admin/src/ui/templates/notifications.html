@@ -66,13 +66,15 @@
         <p class="hint">A banner across every page for these conditions. Critical ones are always shown.</p>
       </div>
       <div class="sec-fields">
-        {% call c::na("no admin setting stores this") %}<span class="banner-choices">
-          <label class="check"><input type="checkbox" id="bn-offline" data-na-check aria-disabled="true" tabindex="-1" checked> The server is offline <span class="hint">Critical, always shown</span></label>
-          <label class="check"><input type="checkbox" id="bn-rejected" data-na-check aria-disabled="true" tabindex="-1" checked> The server rejected this admin's token <span class="hint">Critical, always shown</span></label>
-          <label class="check"><input type="checkbox" id="bn-chain" data-na-check aria-disabled="true" tabindex="-1" checked> The audit records no longer match <span class="hint">Critical, always shown</span></label>
-          <label class="check"><input type="checkbox" id="bn-alerts" data-na-check aria-disabled="true" tabindex="-1" checked> Alert delivery is not set up or not working <span class="hint">Warning</span></label>
-          <label class="check"><input type="checkbox" id="bn-unsealed" data-na-check aria-disabled="true" tabindex="-1" checked> Sealed content is open <span class="hint">Warning</span></label>
-        </span>{% endcall %}
+        {% call c::na("no admin setting stores this") %}<div class="bn-list">
+          <div class="bn-head"><span>Show as a banner</span><span>Level</span><span></span></div>
+          <label class="check bn-row"><input type="checkbox" id="bn-offline" data-na-check aria-disabled="true" tabindex="-1" checked><span class="bn-name">The server is offline</span><span class="bn-lvl c">Critical</span><span class="bn-note">{% call c::icon("lock") %}{% endcall %}Always shown</span></label>
+          <label class="check bn-row"><input type="checkbox" id="bn-rejected" data-na-check aria-disabled="true" tabindex="-1" checked><span class="bn-name">The server rejected this admin's token</span><span class="bn-lvl c">Critical</span><span class="bn-note">{% call c::icon("lock") %}{% endcall %}Always shown</span></label>
+          <label class="check bn-row"><input type="checkbox" id="bn-chain" data-na-check aria-disabled="true" tabindex="-1" checked><span class="bn-name">The audit records no longer match</span><span class="bn-lvl c">Critical</span><span class="bn-note">{% call c::icon("lock") %}{% endcall %}Always shown</span></label>
+          <label class="check bn-row"><input type="checkbox" id="bn-alerts" data-na-check aria-disabled="true" tabindex="-1" checked><span class="bn-name">Alert delivery is not set up or not working</span><span class="bn-lvl">Warning</span><span class="bn-note"></span></label>
+          <label class="check bn-row"><input type="checkbox" id="bn-unsealed" data-na-check aria-disabled="true" tabindex="-1" checked><span class="bn-name">Sealed content is open</span><span class="bn-lvl">Warning</span><span class="bn-note"></span></label>
+          <p class="bn-na-note hint">Not available yet: no admin setting stores this.</p>
+        </div>{% endcall %}
       </div>
     </section>
 {% endblock %}

@@ -2206,7 +2206,7 @@
 
   function clientRow(d) {
     const revoke = ui.el('button', {
-      type: 'button', class: 'btn btn-secondary btn-s', 'data-action': 'revoke', text: 'Revoke', 'aria-label': 'Revoke ' + d.name,
+      type: 'button', class: 'btn btn-danger btn-s', 'data-action': 'revoke', text: 'Revoke', 'aria-label': 'Revoke ' + d.name,
       onclick: () => askToRevoke(d),
     });
     return ui.el('tr', { 'data-client': d.id },
