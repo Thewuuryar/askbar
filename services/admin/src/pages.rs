@@ -354,12 +354,12 @@ mod tests {
             assert_eq!(html.matches(r#"id="save-dock""#).count(), 1, "{}: one dock for the floating save bars", p.slug);
             // The licence and source link come from the constants; the icon buttons have names and tooltips.
             assert!(html.contains(&format!(
-                r#"href="{}" rel="noreferrer">{}</a>"#,
+                r#"href="{}" target="_blank" rel="noopener noreferrer">{}<span class="visually-hidden"> (opens in a new tab)</span></a>"#,
                 crate::constants::LICENSE_URL,
                 crate::constants::LICENSE
             )));
             assert!(html.contains(&format!(
-                r#"href="{}" rel="noreferrer" aria-label="Source code" data-tip="Source code""#,
+                r#"href="{}" target="_blank" rel="noopener noreferrer" data-tip="Source code""#,
                 crate::constants::SOURCE_URL
             )));
             for name in ["Collapse menu", "Sign out"] {

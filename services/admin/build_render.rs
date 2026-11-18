@@ -65,6 +65,18 @@ pub fn has_scheme(dest: &str) -> bool {
 
 // ------------------------------------------------------------------ rendering
 
+/// What a link written to the output needs at its end.
+enum LinkKind {
+    Same,
+    NewTab,
+    Dropped,
+}
+
+/// Every link that leaves the admin (a repository file, GitHub, any other site) opens in a new tab, and says so to
+/// assistive technology with visually hidden text after the link's own words.
+const NEW_TAB: &str = "target=\"_blank\" rel=\"noopener noreferrer\"";
+const NEW_TAB_HINT: &str = "<span class=\"visually-hidden\"> (opens in a new tab)</span>";
+
 enum Link {
     Admin(String),
     Source(String),
@@ -138,7 +150,7 @@ pub fn render(file: &str, body: &str, ids: &HashMap<String, usize>) -> Result<(S
     let mut seen: BTreeMap<String, usize> = BTreeMap::new();
     let mut first_h1_done = false;
     let mut skipping_h1 = false;
-    let mut links: Vec<bool> = Vec::new();
+    let mut links: Vec<LinkKind> = Vec::new();
     let mut i = 0;
     while i < events.len() {
         let ev = events[i].clone();
@@ -189,22 +201,25 @@ pub fn render(file: &str, body: &str, ids: &HashMap<String, usize>) -> Result<(S
                     None
                 } else {
                     match classify(file, &dest_url, ids)? {
-                        Link::Admin(h) => Some(format!("<a href=\"{}\">", attr(&h))),
-                        Link::Source(p) => Some(format!("<a href=\"{SOURCE_MARK}/{}\" rel=\"noopener noreferrer\">", attr(&p))),
-                        Link::External(u) => Some(format!("<a href=\"{}\" rel=\"noopener noreferrer\">", attr(&u))),
+                        Link::Admin(h) => Some((format!("<a href=\"{}\">", attr(&h)), LinkKind::Same)),
+                        Link::Source(p) => Some((format!("<a href=\"{SOURCE_MARK}/{}\" {NEW_TAB}>", attr(&p)), LinkKind::NewTab)),
+                        Link::External(u) => Some((format!("<a href=\"{}\" {NEW_TAB}>", attr(&u)), LinkKind::NewTab)),
                         Link::None => None,
                     }
                 };
-                links.push(open.is_some());
-                if let Some(tag) = open {
-                    out.push(Event::Html(CowStr::from(tag)));
+                match open {
+                    Some((tag, kind)) => {
+                        links.push(kind);
+                        out.push(Event::Html(CowStr::from(tag)));
+                    }
+                    None => links.push(LinkKind::Dropped),
                 }
             }
-            Event::End(TagEnd::Link) => {
-                if links.pop().unwrap_or(false) {
-                    out.push(Event::Html(CowStr::from("</a>")));
-                }
-            }
+            Event::End(TagEnd::Link) => match links.pop().unwrap_or(LinkKind::Dropped) {
+                LinkKind::Same => out.push(Event::Html(CowStr::from("</a>"))),
+                LinkKind::NewTab => out.push(Event::Html(CowStr::from(format!("{NEW_TAB_HINT}</a>")))),
+                LinkKind::Dropped => {}
+            },
             // Images are dropped; their alt text stays as plain text.
             Event::Start(Tag::Image { .. }) | Event::End(TagEnd::Image) => {}
             // A line `<!-- live: name -->` marks where the admin shows a live example (plan step 7.5): GitHub hides it, and

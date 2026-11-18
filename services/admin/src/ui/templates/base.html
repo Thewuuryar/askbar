@@ -121,8 +121,8 @@
           <button type="button" id="logout" class="btn btn-quiet btn-icon" aria-label="Sign out" data-tip="Sign out">{% call c::icon("sign_out") %}{% endcall %}</button>
         </div>
         <div class="sm-lic">
-          <a class="sm-text sm-lic-link" href="{{ crate::constants::LICENSE_URL }}" rel="noreferrer">{{ crate::constants::LICENSE }}</a>
-          <a class="btn btn-quiet btn-icon" href="{{ crate::constants::SOURCE_URL }}" rel="noreferrer" aria-label="Source code" data-tip="Source code">{% call c::icon("code") %}{% endcall %}</a>
+          <a class="sm-text sm-lic-link" href="{{ crate::constants::LICENSE_URL }}" target="_blank" rel="noopener noreferrer">{{ crate::constants::LICENSE }}<span class="visually-hidden"> (opens in a new tab)</span></a>
+          <a class="btn btn-quiet btn-icon" href="{{ crate::constants::SOURCE_URL }}" target="_blank" rel="noopener noreferrer" data-tip="Source code">{% call c::icon("code") %}{% endcall %}<span class="visually-hidden">Source code (opens in a new tab)</span></a>
         </div>
       </div>
     </aside>
@@ -186,7 +186,7 @@
   {% call c::toast_region() %}{% endcall %}
   {% call c::announcer() %}{% endcall %}
 
-  <footer class="footer">Askbar is free software under the {{ crate::constants::LICENSE }}. <a href="{{ crate::constants::SOURCE_URL }}" rel="noreferrer">Source code</a></footer>
+  <footer class="footer">Askbar is free software under the {{ crate::constants::LICENSE }}. <a href="{{ crate::constants::SOURCE_URL }}" target="_blank" rel="noopener noreferrer">Source code<span class="visually-hidden"> (opens in a new tab)</span></a></footer>
 
 </body>
 </html>

@@ -29,7 +29,14 @@ async fn every_reference_page_is_served_in_the_frame() {
         let nav = &nav[..nav.find("</nav>").unwrap()];
         assert_eq!(nav.matches(r#"aria-current="page""#).count(), 1, "{}", p.path());
         assert!(nav.contains(r#"data-tab="reference" data-tip="Reference" aria-current="page""#), "{}: {nav}", p.path());
-        assert!(html.contains(&format!(r#"<a class="ref-edit" href="{SOURCE_URL}/edit/{SOURCE_BRANCH}/{}""#, p.source)), "{}", p.path());
+        assert!(
+            html.contains(&format!(
+                r#"<a class="ref-edit" href="{SOURCE_URL}/edit/{SOURCE_BRANCH}/{}" target="_blank" rel="noopener noreferrer""#,
+                p.source
+            )),
+            "{}",
+            p.path()
+        );
         assert!(!html.contains(" style=") && !html.contains("<script>"), "{}: no inline style or script", p.path());
         assert!(html.contains(&format!("<title>{} ", p.title.replace('&', "&#38;"))) || p.is_index(), "{}", p.path());
     }

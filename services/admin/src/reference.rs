@@ -489,8 +489,8 @@ mod tests {
             assert!(!html.contains(&format!("{text}/a>")), "{text} is still a link: {html}");
         }
         assert!(html.contains("href=\"/admin/reference/x/other/#h\""), "{html}");
-        assert!(html.contains("href=\"@SOURCE@/docs/adr/0001-x.md#why\" rel=\"noopener noreferrer\""), "{html}");
-        assert!(html.contains("href=\"https://example.com/a?b=1&amp;c=2\" rel=\"noopener noreferrer\""), "{html}");
+        assert!(html.contains("href=\"@SOURCE@/docs/adr/0001-x.md#why\" target=\"_blank\" rel=\"noopener noreferrer\""), "{html}");
+        assert!(html.contains("href=\"https://example.com/a?b=1&amp;c=2\" target=\"_blank\" rel=\"noopener noreferrer\""), "{html}");
         assert!(html.contains("<table>") && html.contains("<pre><code>"), "{html}");
         assert!(!html.contains("<h2 id=\"t\">"), "the first # is the page title, left out");
         // Every heading has an id; repeated headings get distinct ones.
@@ -630,6 +630,60 @@ mod tests {
         }
         // Only the admin-ui pages may show live examples.
         assert!(build_render::render("settings/x.md", "# T\n\n<!-- live: button -->\n", &HashMap::new()).is_err());
+    }
+
+    #[test]
+    fn links_that_leave_the_admin_open_in_a_new_tab_and_say_so_and_in_site_links_do_not() {
+        let ids: HashMap<String, usize> = [("x/other.md".to_string(), 1)].into_iter().collect();
+        let md = "# T\n\n[doc](../../adr/0001-x.md#why) [gh](https://github.com/o/r/issues/1) [ext](https://example.com/a) \
+                  [page](other.md#h) [anchor](#h)\n\n## H\n";
+        let (html, _) = build_render::render("x/y.md", md, &ids).unwrap();
+        let hint = "<span class=\"visually-hidden\"> (opens in a new tab)</span></a>";
+        let tab = "target=\"_blank\" rel=\"noopener noreferrer\"";
+        for (href, text) in
+            [("@SOURCE@/docs/adr/0001-x.md#why", "doc"), ("https://github.com/o/r/issues/1", "gh"), ("https://example.com/a", "ext")]
+        {
+            assert!(html.contains(&format!("<a href=\"{href}\" {tab}>{text}{hint}")), "{href}: {html}");
+        }
+        assert_eq!(html.matches("target=").count(), 3, "{html}");
+        assert_eq!(html.matches(hint).count(), 3, "{html}");
+        assert!(html.contains("<a href=\"/admin/reference/x/other/#h\">page</a>"), "{html}");
+        assert!(html.contains("<a href=\"#h\">anchor</a>"), "{html}");
+        // The runtime fills in the repository address and keeps the attributes and the hint.
+        let page = pages().iter().find(|p| p.html.contains("/blob/")).expect("a page links to a repository file");
+        assert!(page.html.contains(&format!("href=\"{SOURCE_URL}/blob/{SOURCE_BRANCH}/")) && !page.html.contains("@SOURCE@"));
+        for part in page.html.split("<a href=\"https://github.com/").skip(1) {
+            let tag = part.split('>').next().unwrap();
+            assert!(tag.contains("target=\"_blank\""), "{tag}");
+        }
+    }
+
+    #[test]
+    fn the_live_examples_hold_no_link_that_leaves_the_page_and_no_form() {
+        for id in ["admin-ui/components", "admin-ui/page-layouts"] {
+            let html = served(id);
+            // The examples as the page shows them: each is the very text `live_example` writes into its box.
+            let mut live = String::new();
+            for name in markers(&markdown(id)) {
+                let example = live_example(&name).unwrap();
+                assert!(html.contains(&example), "{id}: the page shows the example {name} as written");
+                live.push_str(&example);
+                live.push('\n');
+            }
+            let mut links = 0;
+            for part in live.split("href=\"").skip(1) {
+                let href = part.split('"').next().unwrap();
+                assert!(href.starts_with('#'), "{id}: a live example links to {href}");
+                links += 1;
+            }
+            assert!(!live.contains("<form") && !live.contains(" action=\""), "{id}: a live example holds a form");
+            if id.ends_with("components") {
+                assert!(links >= 3, "the Tabs example has its links: {links}");
+                assert!(live.contains("href=\"#tabs\" aria-current=\"page\""), "the current tab keeps aria-current");
+            }
+        }
+        // The anchor is a real heading of the page, so the link stays where it is.
+        assert!(served("admin-ui/components").contains("<h5 id=\"tabs\">"));
     }
 
     #[test]

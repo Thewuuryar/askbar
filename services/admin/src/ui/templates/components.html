@@ -128,8 +128,8 @@
 
 {% macro icon_button(icon, label) %}<button type="button" class="btn btn-quiet btn-icon" aria-label="{{ label }}" data-tip="{{ label }}">{% call icon(icon) %}{% endcall %}</button>{% endmacro %}
 
-{#- Tabs. -#}
-{% macro tabs(items, current, label) %}<nav class="tabs" aria-label="{{ label }}">{% for p in items %}<a class="tab" href="/admin/{{ p.slug }}/"{% if p.slug == current %} aria-current="page"{% endif %}>{{ p.label }}</a>{% endfor %}</nav>{% endmacro %}
+{#- Tabs. `anchor` is for the live examples of the reference only: every tab then links to that id on the same page. -#}
+{% macro tabs(items, current, label, anchor="") %}<nav class="tabs" aria-label="{{ label }}">{% for p in items %}<a class="tab" href="{% if anchor != "" %}#{{ anchor }}{% else %}/admin/{{ p.slug }}/{% endif %}"{% if p.slug == current %} aria-current="page"{% endif %}>{{ p.label }}</a>{% endfor %}</nav>{% endmacro %}
 
 {#- Menus. -#}
 {% macro menu(id) %}<div id="{{ id }}" class="menu" role="menu" hidden>{{ caller() }}</div>{% endmacro %}

@@ -12,7 +12,7 @@
 {% block content %}
 {%- if page.is_index() %}
     <div class="rf-home">
-      {% call c::page_header(label, lede, crate::reference::page_topic(current), "") %}<a class="btn btn-primary rf-open" href="{{ folder_url }}" rel="noopener noreferrer">{% call c::icon("code") %}{% endcall %}View on GitHub</a>{% endcall %}
+      {% call c::page_header(label, lede, crate::reference::page_topic(current), "") %}<a class="btn btn-primary rf-open" href="{{ folder_url }}" target="_blank" rel="noopener noreferrer">{% call c::icon("code") %}{% endcall %}View on GitHub<span class="visually-hidden"> (opens in a new tab)</span></a>{% endcall %}
       <div class="rf-grid">
         {%- for g in outline %}
         <section class="rf-grp" aria-labelledby="rf-area-{{ loop.index }}">
@@ -25,7 +25,7 @@
         </section>
         {%- endfor %}
       </div>
-      <p class="ref-src"><span>Source: <code>{{ page.source }}</code></span> <a class="ref-edit" href="{{ edit_url }}" rel="noopener noreferrer">{% call c::icon("code") %}{% endcall %}Edit on GitHub</a></p>
+      <p class="ref-src"><span>Source: <code>{{ page.source }}</code></span> <a class="ref-edit" href="{{ edit_url }}" target="_blank" rel="noopener noreferrer">{% call c::icon("code") %}{% endcall %}Edit on GitHub<span class="visually-hidden"> (opens in a new tab)</span></a></p>
     </div>
 {%- else %}
     <div class="ref">
@@ -62,7 +62,7 @@
 {%- if let Some(s) = part.setting %}<a class="rf-set" href="{{ s.href }}">{{ s.text }}<span aria-hidden="true">→</span></a>{% endif %}
 {%- if !part.live.is_empty() %}<div class="live-example" role="group" aria-label="Live example: {{ part.live }}" data-live-example="{{ part.live }}">{{ part.example|safe }}</div>{% endif %}
 {%- endfor %}
-        <p class="ref-src"><span>Source: <code>{{ page.source }}</code></span> <a class="ref-edit" href="{{ edit_url }}" rel="noopener noreferrer">{% call c::icon("code") %}{% endcall %}Edit on GitHub</a></p>
+        <p class="ref-src"><span>Source: <code>{{ page.source }}</code></span> <a class="ref-edit" href="{{ edit_url }}" target="_blank" rel="noopener noreferrer">{% call c::icon("code") %}{% endcall %}Edit on GitHub<span class="visually-hidden"> (opens in a new tab)</span></a></p>
       </article>
       {%- if !page.headings.is_empty() %}
       <nav class="ref-toc" aria-label="On this page">

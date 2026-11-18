@@ -221,6 +221,7 @@ async function runViewport(viewport) {
     const centres = await page.evaluate(() => {
       const range = document.createRange();
       range.selectNodeContents(document.querySelector('.footer'));
+      range.setEndAfter(document.querySelector('.footer a').firstChild); // the link's visually hidden hint is not drawn text
       const t = range.getBoundingClientRect();
       const c = document.querySelector('#login .signin-card').getBoundingClientRect();
       return { text: (t.left + t.right) / 2, card: (c.left + c.right) / 2 };
@@ -4484,6 +4485,68 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.goto(base);
     await page.waitForSelector('#app:not([hidden])');
   });
+  // The live examples never leave the page: every link in them stays on it, and clicking changes at most the hash.
+  await step('reference: clicking the Tabs example and every other link in the live examples stays on the page', async () => {
+    for (const url of ['reference/admin-ui/components/', 'reference/admin-ui/page-layouts/']) {
+      await page.goto(base + url);
+      await page.waitForSelector('#app:not([hidden])');
+      const before = new URL(page.url()).pathname;
+      const hrefs = await page.$$eval('.live-example a', (els) => els.map((a) => a.getAttribute('href')));
+      assert.ok(hrefs.every((h) => h.startsWith('#')), url + ': every link in an example is a same-page anchor: ' + hrefs);
+      if (url.includes('components')) {
+        const tabs = page.locator('.live-example[data-live-example="tabs"] a.tab');
+        assert.ok(await tabs.count() >= 3, 'the Tabs example has its links');
+        assert.equal(await page.locator('.live-example[data-live-example="tabs"] a.tab[aria-current="page"]').count(), 1, 'one tab is current');
+        const href = await tabs.first().getAttribute('href');
+        assert.equal(href, '#tabs');
+        assert.equal(await page.locator('#tabs').count(), 1, 'the anchor is a heading of the page');
+      }
+      let navigated = false;
+      const onNav = (f) => { if (f === page.mainFrame() && new URL(f.url()).pathname !== before) navigated = true; };
+      page.on('framenavigated', onNav);
+      const links = page.locator('.live-example a');
+      for (let i = 0; i < await links.count(); i++) {
+        await links.nth(i).click();
+        assert.equal(new URL(page.url()).pathname, before, url + ': a link in an example left the page');
+        assert.equal(await page.locator('.live-example').first().isVisible(), true);
+      }
+      page.off('framenavigated', onNav);
+      assert.equal(navigated, false, url + ': nothing navigated');
+      assert.equal(await page.locator('#app:not([hidden])').count(), 1);
+    }
+  });
+  // Every GitHub link (and every external link in an article) opens in a new tab and says so.
+  await step('github links: open in a new tab with noopener and a hidden hint; a click opens a page and leaves this one where it was', async () => {
+    const hint = '(opens in a new tab)';
+    await ctx.route('https://github.com/**', (route) => route.fulfill({ status: 200, contentType: 'text/html', body: '<title>x</title>' }));
+    const check = async (url, what) => {
+      await page.goto(base + url);
+      await page.waitForSelector('#app:not([hidden])');
+      const bad = await page.$$eval('a[href^="https://github.com"], .ref-article a[href^="http"]', (els, h) => els.filter((a) => {
+        const hidden = a.querySelector('.visually-hidden');
+        return a.target !== '_blank' || !/(^| )noopener( |$)/.test(a.rel) || !hidden || !hidden.textContent.includes(h);
+      }).map((a) => a.href), hint);
+      assert.deepEqual(bad, [], what + ': every GitHub or external link opens in a new tab with the hint');
+      return page.locator('a[href^="https://github.com"]').count();
+    };
+    assert.ok(await check('reference/', 'reference home') >= 2, 'View on GitHub and the source links');
+    const index = await page.evaluate(async () => (await fetch('/admin/reference.json')).json());
+    const article = index.find((p) => p.id === 'settings/network') || index.find((p) => p.id !== 'index');
+    assert.ok(await check('reference/' + article.id + '/', 'an article') >= 1, 'Edit on GitHub');
+    assert.ok(await check('reference/admin-ui/components/', 'the Components page') >= 1);
+    assert.ok(await check('security/', 'the Security page') >= 1, 'the source and licence links of the menu');
+    // The hint is visually hidden: it takes no room.
+    await page.goto(base + 'reference/');
+    await page.waitForSelector('#app:not([hidden])');
+    const box = await page.locator('a.rf-open .visually-hidden').first().boundingBox();
+    assert.ok(box.width <= 1.5 && box.height <= 1.5, 'the hint is not drawn');
+    // A click opens a new page; this one stays.
+    const where = page.url();
+    const [popup] = await Promise.all([ctx.waitForEvent('page'), page.locator('a.rf-open').first().click()]);
+    await popup.close();
+    assert.equal(page.url(), where, 'the current page stays where it was');
+    await ctx.unroute('https://github.com/**');
+  });
   // Plan step 7.3: ? buttons and help in the docked side panel, with the text pre-rendered in the page.
   await step('help: every ? button has a name and tooltip, the panel shows its topic with no request, Back and Esc close it, Open full page lands on the heading', async () => {
     const K = await page.evaluate(() => window.ui.ready);
@@ -4731,8 +4794,8 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
         parentBold: weight(parent),
         others: [...document.querySelectorAll('#nav > a.sm-item:not(.sm-parent)')].map((a) => weight(a)),
         width: document.getElementById('side-menu').getBoundingClientRect().width,
-        licence: [document.querySelector('.sm-lic-link').textContent, document.querySelector('.sm-lic-link').href],
-        source: document.querySelector('.sm-lic a[aria-label="Source code"]').href,
+        licence: [document.querySelector('.sm-lic-link').firstChild.textContent, document.querySelector('.sm-lic-link').href],
+        source: document.querySelector('.sm-lic a.btn').href,
         footer: getComputedStyle(document.querySelector('.footer')).display,
       };
     });
