@@ -1882,7 +1882,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
   });
   // ------------------------------------------------------------------ the Audit tab
   // Against the real server: a provider whose name and model are markup, one real chat through it,
-  // then the Audit tab (#tab-audit-calls, #audit-nav, the Requests rows, the waterfall, the Content view).
+  // then the Audit pages (#tab-audit-calls and its trace panel, #tab-audit-sealed, #tab-audit-routing).
   const XSS = '<img src=x onerror="window.__pwned=1">';
   // One real chat through the server, so there is something to look at; returns once the reply is done.
   async function auditChat(text, providerName) {
@@ -2040,7 +2040,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     const status = await page.evaluate(async () => (await fetch('/api/admin/v1/backup/key', { headers: { 'x-askbar-admin': '1' } })).text());
     assert.ok(!status.includes('AGE-SECRET-KEY') && !status.includes('protected'), 'the protected key is not returned');
   });
-  await step('audit: the tab loads, has its five views and counts a real request', async () => {
+  await step('audit tabs: the four Audit pages show the menu\'s Audit links as tabs, in order, each marking its own, and the Admin actions head is greyed', async () => {
     await page.evaluate(async ({ xss, mockUrl }) => {
       const H = { 'x-askbar-admin': '1', 'content-type': 'application/json' };
       const made = await (await fetch('/api/admin/v1/providers', { method: 'POST', headers: H, body: JSON.stringify({ name: xss, type: 'openai', base_url: mockUrl, model: xss, api_key: 'sk-audit' }) })).json();
@@ -2051,51 +2051,71 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       if (!saved.ok) throw new Error('the catalog was refused: ' + saved.status);
     }, { xss: XSS, mockUrl: `http://127.0.0.1:${mockPort}/v1` });
     await auditChat('audit question', XSS);
-    await openPage('audit/sealed');
-    await page.waitForSelector('#tab-audit-sealed:not([hidden])');
-    const subs = await page.$$eval('#audit-nav button', (b) => b.map((x) => x.dataset.sub));
-    assert.deepEqual(subs, ['overview', 'requests', 'trace', 'routing', 'content']);
-    await page.waitForFunction(() => Number(document.querySelector('#audit-overview [data-stat="requests"]')?.textContent) >= 1);
-    assert.match(await page.innerText('#audit-by-provider'), /<img src=x/, 'the provider name is shown as text in the overview too');
+    const slugs = ['audit/calls', 'audit/admin', 'audit/sealed', 'audit/routing'];
+    const menu = await page.$$eval('#nav a.sm-sub[href^="/admin/audit/"]', (a) => a.map((x) => [x.textContent.trim(), x.getAttribute('href')]));
+    assert.deepEqual(menu.map(([, h]) => h), slugs.map((s) => '/admin/' + s + '/'), 'the menu lists the four Audit pages in order');
+    for (const slug of slugs) {
+      await openPage(slug);
+      await page.waitForSelector('#tab-' + slug.replace('/', '-') + ' nav.tabs');
+      const tabs = await page.$$eval('#tab-' + slug.replace('/', '-') + ' nav.tabs a.tab', (a) => a.map((x) => [x.textContent.trim(), x.getAttribute('href'), x.getAttribute('aria-current')]));
+      assert.deepEqual(tabs.map(([t, h]) => [t, h]), menu, slug + ': the tabs are the menu links, in order');
+      assert.deepEqual(tabs.map(([, , c]) => c), slugs.map((s) => (s === slug ? 'page' : null)), slug + ': only its own tab is current');
+      assert.equal(await page.locator('#tab-' + slug.replace('/', '-') + ' nav.tabs [disabled]').count(), 0, 'no disabled attribute on the tabs');
+      const tab = await page.locator('#tab-' + slug.replace('/', '-') + ' nav.tabs a.tab').first().boundingBox();
+      assert.ok(tab.height >= (isPhone ? 44 : 24) - 0.5, slug + ': tab target ' + tab.height);
+      // No sideways scroll at either width. A tooltip (::after) that runs past the edge counts, and is named on failure.
+      const past = await page.evaluate(() => {
+        const out = [];
+        for (const e of document.querySelectorAll('body *')) {
+          const r = e.getBoundingClientRect();
+          if (r.right > window.innerWidth + 1) out.push(e.tagName + '.' + e.className + ' right ' + Math.round(r.right));
+          const cs = getComputedStyle(e, '::after');
+          if (cs.content !== 'none' && cs.position === 'absolute') {
+            const edge = r.left + parseFloat(cs.left) + parseFloat(cs.width);
+            if (edge > window.innerWidth + 1) out.push(e.tagName + '.' + e.className + ' ::after edge ' + Math.round(edge));
+          }
+        }
+        return { scrollWidth: document.documentElement.scrollWidth, innerWidth: window.innerWidth, past: out.slice(0, 6) };
+      });
+      assert.equal(past.scrollWidth <= past.innerWidth, true, slug + ': no horizontal scroll ' + JSON.stringify(past));
+      assert.equal(await page.locator('#tab-' + slug.replace('/', '-') + ' .sm-sub, #tab-' + slug.replace('/', '-') + ' .subnav').count(), 0, 'no in-page sub-nav');
+    }
+    // Admin actions: the note, and the table head greyed with aria-disabled, with no rows and no digits.
+    await openPage('audit/admin');
+    assert.match(await page.innerText('#tab-audit-admin .notice'), /Not available yet/);
+    const heads = await page.$$eval('#admin-actions-table thead th', (h) => h.map((x) => x.querySelector('[aria-disabled="true"]')?.firstChild?.textContent || null));
+    assert.deepEqual(heads, ['Time', 'Action', 'Where', 'Result'], 'every head is greyed');
+    assert.equal(await page.locator('#admin-actions-table tbody tr').count(), 0, 'no sample rows');
+    assert.doesNotMatch(await page.innerText('#admin-actions-table thead'), /\d/, 'no digits in greyed text');
+    assert.equal(await page.locator('#tab-audit-admin [disabled]').count(), 0, 'aria-disabled, never disabled');
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'no horizontal scroll');
   });
-  await step('audit: server strings are shown as text, never as HTML, in every table', async () => {
+  await step('audit: server strings are shown as text, never as HTML, on Routing and Sealed access', async () => {
     const nothingRan = async (where) => {
-      assert.equal(await page.locator('#tab-audit-sealed img').count(), 0, where + ': no element was made from a name');
+      assert.equal(await page.locator('#main img').count(), 0, where + ': no element was made from a name');
       assert.equal(await page.evaluate(() => window.__pwned), undefined, where + ': nothing ran');
     };
-    await nothingRan('overview');
-    await page.click('#audit-nav [data-sub="requests"]');
-    await page.waitForSelector('#audit-requests tr[data-trace]');
-    assert.match(await page.innerText('#audit-requests'), /<img src=x/, 'the provider and model names are visible as text');
-    await nothingRan('requests');
-    await page.click('#audit-requests tr[data-trace]');
-    await page.waitForSelector('#audit-waterfall .span-bar');
-    assert.match(await page.innerText('#audit-waterfall'), /<img src=x/, 'the attempt is named after the provider');
-    await page.focus('#audit-waterfall .span-bar[data-span] >> nth=-1');
-    assert.match(await page.innerText('#audit-span-details'), /<img src=x/, 'the details show the model as text');
-    await nothingRan('trace');
-    await page.click('#audit-nav [data-sub="routing"]');
+    await openPage('audit/routing');
+    await page.waitForSelector('#audit-routing-rows tr');
+    assert.match(await page.innerText('#audit-routing-table'), /<img src=x/, 'the provider name is shown as text');
+    await nothingRan('routing');
+    const traceId = await page.evaluate(async () => (await (await fetch('/api/admin/v1/audit/traces?limit=1', { headers: { 'x-askbar-admin': '1' } })).json()).traces[0].trace_id);
+    await page.goto(base + 'audit/routing/?id=' + encodeURIComponent(traceId));
+    await page.waitForSelector('#app:not([hidden])');
     await page.waitForSelector('#audit-attempt-rows tr');
     assert.match(await page.innerText('#audit-attempts'), /<img src=x/);
-    await page.waitForSelector('#audit-routing-rows tr');
-    assert.match(await page.innerText('#audit-routing-table'), /<img src=x/);
-    await nothingRan('routing');
-    await page.click('#audit-nav [data-sub="content"]');
-    await page.waitForSelector('#audit-sealed .sealed-row');
-    await nothingRan('content');
+    await nothingRan('routing with a request');
+    await openPage('audit/sealed');
+    await page.waitForSelector('#audit-unseal-form:not([hidden])');
+    await nothingRan('sealed access');
   });
-  await step('audit: content stays sealed until the passphrase opens a session, and Seal closes it again', async () => {
+  await step('audit sealed access: nothing is fetched until the passphrase opens a session, a wrong one is refused inline, and Seal closes it again', async () => {
     const asked = [];
     page.on('request', (r) => { if (/audit\/payloads/.test(r.url())) asked.push(r.url()); });
-    await page.click('#audit-nav [data-sub="content"]');
-    assert.match(await page.innerText('#audit-content'), /Sealed/);
+    await openPage('audit/sealed');
+    await page.waitForSelector('#audit-unseal-form:not([hidden])');
     assert.equal(await page.getAttribute('#audit-pass', 'type'), 'password');
     assert.equal(asked.length, 0, 'nothing is fetched until a session is open');
-    // View while sealed sends you to the passphrase: nothing is fetched.
-    await page.click('#audit-content .view-btn');
-    await page.waitForSelector('#audit-pass-error:not([hidden])');
-    assert.match(await page.innerText('#audit-pass-error'), /Sealed/);
-    assert.equal(asked.length, 0);
     // A wrong passphrase opens nothing; the field is emptied.
     await page.fill('#audit-pass', 'not the passphrase at all!!');
     await page.click('#audit-unseal');
@@ -2107,30 +2127,28 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.click('#audit-unseal');
     await page.waitForSelector('#audit-open:not([hidden])');
     assert.match(await page.innerText('#audit-open-state'), /Unsealed\. It seals itself in about/);
+    assert.equal(await page.isVisible('#audit-unseal-form'), false);
     assert.equal(await page.inputValue('#audit-pass'), '', 'the passphrase field is cleared after use');
     await page.waitForSelector('#banners [data-banner="unsealed"]', { timeout: 15000 });
     assert.match(await page.innerText('#banners [data-banner="unsealed"]'), /Sealed content is open/);
     assert.equal(await page.locator('#banners [data-banner="unsealed"] button').count(), 0, 'sealing lives in the status bar toggle, not the banner');
     assert.match(await page.innerText('#sb-seal-status'), /Unsealed/);
     assert.equal(await page.innerText('#seal-button'), 'Seal');
-    await page.click('#audit-content .view-btn');
-    await page.waitForFunction(() => /Anything else\?/.test(document.getElementById('audit-viewed')?.textContent || ''));
-    assert.equal(await page.evaluate(() => JSON.stringify([...Object.entries(localStorage), ...Object.entries(sessionStorage)]).includes('passphrase')), false);
     // The unseal is an alert in the bell's Info group, not a banner (rule 39: banners are for the whole admin).
     await page.click('#bell-button');
     await page.waitForFunction(() => /Sealed audit content was unsealed/.test(document.querySelector('#bell-menu [role="group"][aria-label="Info alerts"]')?.textContent || ''), null, { timeout: 15000 });
     assert.equal(await page.locator('#banners [data-banner^="sealed-"]').count(), 0, 'no banner for a history alert');
     await page.keyboard.press('Escape');
-    // The access history: the view, the unseal, and the wrong guess, as text.
+    // The access history: the opening and the wrong guess, as text, newest first.
     await page.waitForSelector('#audit-access-rows tr');
-    const results = await page.$$eval('#audit-access-rows tr td:last-child', (c) => c.map((x) => x.textContent));
-    assert.deepEqual(results, ['opened', 'opened', 'wrong passphrase'], 'newest first');
-    // Seal: the text is gone from the page, the form is back, the banner goes.
+    const results = await page.$$eval('#audit-access-rows tr td:nth-child(4)', (c) => c.map((x) => x.textContent));
+    assert.deepEqual(results, ['opened', 'wrong passphrase'], 'newest first');
+    assert.equal(await page.locator('#audit-access-rows td.na-cell').count(), 2 * results.length, 'Ended and How it ended are greyed');
+    // Seal: the form is back, the banner goes.
     await page.click('#audit-seal');
     await page.waitForSelector('#audit-unseal-form:not([hidden])');
-    assert.equal((await page.content()).includes('Anything else?'), false, 'the opened text is gone from the page once sealed');
     await page.waitForSelector('#banners [data-banner="unsealed"]', { state: 'detached', timeout: 15000 }).catch(async () => { await page.reload(); });
-    assert.equal(await page.locator('#tab-audit-sealed img').count(), 0);
+    assert.equal(await page.locator('#main img').count(), 0);
     assert.equal(await page.evaluate(() => window.__pwned), undefined);
   });
   await step('audit calls: figures and table come from the real trail as text, greyed filters are inert, a row opens its trace in the docked panel, Esc and Back close it, and ?id= opens it on load', async () => {
@@ -2980,114 +2998,8 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     assert.equal(await page.evaluate(() => document.activeElement.id), 's-gen-timeout');
     await page.evaluate(() => { document.getElementById('s-gen-timeout').value = ''; });
   });
-  await step('audit overview: a canned stats payload fills the tiles, the day bars and the provider bars', async () => {
-    const canned = {
-      since: 0, requests: 40, by_status: { done: 36, error: 3, cancelled: 1 }, error_rate: 0.075,
-      latency_ms: { p50: 1200, p95: 5400 }, ttft_ms: { p50: 300, p95: 900 },
-      tokens: { in: 12345, out: 6789, cached: 2000 }, cost: 1.2345, cost_unknown_requests: 0,
-      by_provider: [{ provider_id: 'p-unknown', requests: 30, tokens: { in: 9000, out: 4000, cached: 0 }, cost: 0.9 }, { provider_id: 'p2', requests: 10, tokens: { in: 3345, out: 2789, cached: 2000 }, cost: null }],
-      by_day: [{ day: '2026-11-01', requests: 10, tokens: { in: 100, out: 50, cached: 0 }, cost: 0.1 }, { day: '2026-11-02', requests: 30, tokens: { in: 12245, out: 6739, cached: 2000 }, cost: 1.1345 }],
-    };
-    const asked = [];
-    await page.route('**/api/admin/v1/audit/stats*', (route) => { asked.push(route.request().url()); route.fulfill({ contentType: 'application/json', body: JSON.stringify(canned) }); });
-    await openPage('providers');
-    await openPage('audit/sealed');
-    await page.click('#audit-nav [data-sub="overview"]'); // the tab remembers the view it was last on
-    await page.waitForSelector('#audit-overview [data-stat="requests"]');
-    const stat = (k) => page.innerText(`#audit-overview [data-stat="${k}"]`);
-    assert.deepEqual(
-      [await stat('requests'), await stat('error-rate'), await stat('latency-p50'), await stat('latency-p95'), await stat('ttft-p50'), await stat('ttft-p95')],
-      ['40', '7.5%', '1.2 s', '5.4 s', '300 ms', '900 ms'],
-    );
-    assert.deepEqual([await stat('tokens-in'), await stat('tokens-out'), await stat('tokens-cached'), await stat('cost')], ['12,345', '6,789', '2,000', '1.2345']);
-    const days = await page.$$eval('#audit-days .bar-row', (rows) => rows.map((r) => [r.querySelector('.name').textContent, r.querySelector('.fill').style.width, r.querySelector('.figs').textContent]));
-    assert.deepEqual(days.map((d) => d[0]), ['2026-11-01', '2026-11-02']);
-    assert.deepEqual(days.map((d) => d[1]), ['33%', '100%'], 'bars are sized by requests, the busiest day full width');
-    assert.match(days[1][2], /30 req · 18,984 tok · 1.1345/);
-    const provs = await page.$$eval('#audit-by-provider .bar-row .figs', (n) => n.map((x) => x.textContent));
-    assert.match(provs[1], /unknown/, 'a missing price shows as unknown, not as 0');
-    // The window decides what is asked for.
-    const since = (u) => Number(new URL(u).searchParams.get('since'));
-    const now = Math.floor(Date.now() / 1000);
-    assert.ok(Math.abs(now - since(asked.at(-1)) - 86400) < 120, 'the first look is the last 24 hours');
-    await page.selectOption('#audit-window', '604800');
-    await page.waitForTimeout(200);
-    assert.ok(Math.abs(now - since(asked.at(-1)) - 7 * 86400) < 120, 'then the last 7 days');
-    await page.selectOption('#audit-window', '2592000');
-    await page.waitForTimeout(200);
-    assert.ok(Math.abs(now - since(asked.at(-1)) - 30 * 86400) < 120, 'then the last 30 days');
-    // An empty window says so instead of showing zeros.
-    await page.unroute('**/api/admin/v1/audit/stats*');
-    await page.route('**/api/admin/v1/audit/stats*', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ requests: 0, by_status: {}, error_rate: 0, latency_ms: { p50: null, p95: null }, tokens: { in: 0, out: 0, cached: 0 }, cost: 0, cost_unknown_requests: 0, by_provider: [], by_day: [] }) }));
-    await page.selectOption('#audit-window', '86400');
-    await page.waitForSelector('#audit-overview-empty:not([hidden])');
-    assert.equal(await page.isHidden('#audit-tiles'), true);
-    await page.unroute('**/api/admin/v1/audit/stats*');
-    await page.selectOption('#audit-window', '86400');
-  });
-  await step('audit requests: a canned list fills the table, filters and load-more ask for the right pages', async () => {
-    const row = (n, extra = {}) => ({ trace_id: 'T' + String(n).padStart(3, '0'), span_id: 's' + n, status: 'done', started_at: 1793631845 - n, ended_at: 1793631846 - n, user_id: 'user-1', client_id: 'd', tokens_in: 100, tokens_out: 50, tokens_cached: 0, error_code: null, provider_id: 'pA', model: 'model-' + n, ttft_ms: 200, latency_ms: 1500, cost: 0.0007, ...extra });
-    const first = Array.from({ length: 25 }, (_, i) => row(100 - i));
-    const second = Array.from({ length: 15 }, (_, i) => row(75 - i));
-    const asked = [];
-    await page.route('**/api/admin/v1/audit/traces?*', (route) => {
-      const q = new URL(route.request().url()).searchParams;
-      asked.push(Object.fromEntries(q));
-      let traces = first;
-      if (q.get('before') === 'T076') traces = second;
-      if (q.get('status') === 'error') traces = [row(5, { status: 'error', error_code: 'http_401', tokens_in: null, tokens_out: null, cost: null })];
-      if (q.get('provider') === 'pNone') traces = [];
-      route.fulfill({ contentType: 'application/json', body: JSON.stringify({ traces }) });
-    });
-    await openPage('providers');
-    await openPage('audit/sealed');
-    await page.click('#audit-nav [data-sub="requests"]');
-    await page.waitForSelector('#audit-rows tr[data-trace]');
-    assert.deepEqual(asked[asked.length - 1], { limit: '25' }, 'no filters, no cursor');
-    assert.equal(await page.locator('#audit-rows tr').count(), 25);
-    const heads = await page.$$eval('#audit-table th', (h) => h.map((x) => x.textContent));
-    assert.deepEqual(heads, ['Time', 'User', 'Provider', 'Model', 'Status', 'Latency', 'Tokens (in → out)', 'Cost']);
-    const cells = await page.$$eval('#audit-rows tr:first-child td', (c) => c.map((x) => x.textContent));
-    assert.deepEqual(cells.slice(1), ['user-1', 'pA', 'model-100', 'done', '1.5 s', '100 → 50', '0.0007']);
-
-    // Load more asks for the page after the last row shown, and appends; a short page ends it.
-    await page.click('#audit-more');
-    await page.waitForFunction(() => document.querySelectorAll('#audit-rows tr').length === 40);
-    assert.equal(asked[asked.length - 1].before, 'T076');
-    assert.equal(await page.isHidden('#audit-more'), true, 'fewer than a full page means no more');
-    assert.equal(await page.locator('#audit-rows tr:last-child td:nth-child(4)').innerText(), 'model-61');
-
-    // The status filter starts again from the top with the status in the query; a failed request has no cost.
-    await page.selectOption('#audit-f-status', 'error');
-    await page.waitForFunction(() => document.querySelectorAll('#audit-rows tr').length === 1);
-    assert.equal(asked[asked.length - 1].status, 'error');
-    assert.equal(asked[asked.length - 1].before, undefined);
-    const failed = await page.$$eval('#audit-rows tr:first-child td', (c) => c.map((x) => x.textContent));
-    assert.deepEqual(failed.slice(4), ['error', '1.5 s', '–', '–']);
-    // A filter with no matches says so.
-    await page.selectOption('#audit-f-status', '');
-    await page.waitForFunction(() => document.querySelectorAll('#audit-rows tr').length === 25);
-    await page.evaluate(() => { const o = document.createElement('option'); o.value = 'pNone'; o.textContent = 'ghost'; document.getElementById('audit-f-provider').appendChild(o); });
-    await page.selectOption('#audit-f-provider', 'pNone');
-    await page.waitForSelector('#audit-requests-empty:not([hidden])');
-    assert.match(await page.innerText('#audit-requests-empty'), /match these filters/);
-    assert.equal(asked[asked.length - 1].provider, 'pNone');
-    await page.selectOption('#audit-f-provider', '');
-    await page.waitForFunction(() => document.querySelectorAll('#audit-rows tr').length === 25);
-
-    // A row opens its trace (by click or keyboard).
-    await page.route('**/api/admin/v1/audit/traces/*', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ trace_id: route.request().url().split('/').pop(), cost: null, spans: [] }) }));
-    await page.click('#audit-rows tr[data-trace="T099"]');
-    assert.equal(await page.getAttribute('#audit-nav [data-sub="trace"]', 'aria-selected'), 'true');
-    await page.waitForFunction(() => /T099/.test(document.getElementById('audit-trace-head').textContent));
-    await page.click('#audit-nav [data-sub="requests"]');
-    await page.focus('#audit-rows tr[data-trace="T098"]');
-    await page.keyboard.press('Enter');
-    await page.waitForFunction(() => /T098/.test(document.getElementById('audit-trace-head').textContent));
-    await page.unroute('**/api/admin/v1/audit/traces/*');
-    await page.unroute('**/api/admin/v1/audit/traces?*');
-  });
   await step('audit trace: the waterfall layout is right for fixed numbers, shows the tree, and copes with a running span', async () => {
+    await openPage('audit/calls');
     const spans = [
       { id: 'a-turn', parent_id: null, kind: 'turn', name: 'chat', status: 'done', started_at: 1000, ended_at: 1002, attrs: { started_ms: 1000000, ended_ms: 1002000 } },
       { id: 'b-attempt', parent_id: 'a-turn', kind: 'attempt', name: 'prov', status: 'error', started_at: 1000, ended_at: 1000, provider_id: 'p1', model: 'm', error_code: 'http_429', attrs: { started_ms: 1000200, ended_ms: 1000700, retry_index: 0 } },
@@ -3118,26 +3030,31 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     const finished = spans.filter((x) => x.status !== 'running');
     await page.route('**/api/admin/v1/audit/traces/TRACE1', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ trace_id: 'TRACE1', cost: 0.0007, spans: finished }) }));
     await openPage('providers');
-    await openPage('audit/sealed');
+    await openPage('audit/calls');
     await page.evaluate(() => window.askbarAudit.openTrace('TRACE1'));
-    await page.waitForSelector('#audit-waterfall .span-bar');
-    assert.equal(await page.locator('#audit-waterfall .span-bar').count(), 4);
-    assert.equal(await page.locator('#audit-waterfall .span-bar.status-error').count(), 1);
-    assert.match(await page.innerText('#audit-trace-head'), /TRACE1 · done · .* · cost 0\.0007/);
+    await page.waitForSelector('#trace-waterfall .span-bar');
+    assert.equal(await page.locator('#trace-waterfall .span-bar').count(), 4);
+    assert.equal(await page.locator('#trace-waterfall .span-bar.status-error').count(), 1);
+    assert.equal(await page.innerText('#trace-id'), 'TRACE1');
+    assert.match(await page.innerText('#trace-state'), /done/);
+    assert.match(await page.innerText('#trace-meta'), /0\.0007/);
     // total = 1002000 - 999990 = 2010 ms; c-attempt starts 1010 ms in and runs 900 ms.
     assert.equal(await page.$eval('[data-span="c-attempt"]', (b) => b.style.width), '44.78%');
     assert.equal(await page.$eval('[data-span="c-attempt"]', (b) => b.style.left), '50.25%');
     assert.equal(await page.$eval('[data-span="b-attempt"]', (b) => b.closest('.span-row').querySelector('.label').style.paddingLeft), '14px');
     await page.focus('[data-span="b-attempt"]');
-    const details = await page.innerText('#audit-span-details');
+    const details = await page.innerText('#trace-span-details');
     assert.match(details, /attempt · prov · error/);
     assert.match(details, /starts at \+210 ms, takes 500 ms/);
     assert.match(details, /error http_429/);
     assert.match(details, /"retry_index":0/);
     // A running span is drawn in its own style, up to now.
-    await page.evaluate((s) => window.askbarAudit.renderTrace({ trace_id: 'TRACE2', cost: null, spans: s }), spans);
-    assert.equal(await page.locator('#audit-waterfall .span-bar.running').count(), 1);
-    assert.equal(await page.locator('#audit-waterfall .span-bar').count(), 5);
+    await page.route('**/api/admin/v1/audit/traces/TRACE2', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ trace_id: 'TRACE2', cost: null, spans }) }));
+    await page.evaluate(() => window.askbarAudit.openTrace('TRACE2'));
+    await page.waitForSelector('#trace-waterfall .span-bar.running');
+    assert.equal(await page.locator('#trace-waterfall .span-bar.running').count(), 1);
+    assert.equal(await page.locator('#trace-waterfall .span-bar').count(), 5);
+    await page.unroute('**/api/admin/v1/audit/traces/TRACE2');
     await page.unroute('**/api/admin/v1/audit/traces/TRACE1');
   });
   await step('audit routing: a three-try request shows its tries, why each failed, and the providers overall', async () => {
@@ -3156,10 +3073,8 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.route('**/api/admin/v1/audit/stats*', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify(stats) }));
     await page.route('**/api/admin/v1/audit/provider-health', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ providers: [{ provider_id: 'p1', status: 'auth_failed', since: 1793631845, error_code: 'http_401' }] }) }));
     await openPage('providers');
-    await openPage('audit/sealed');
-    await page.evaluate(() => window.askbarAudit.openTrace('ROUTE1'));
-    await page.waitForSelector('#audit-waterfall .span-bar');
-    await page.click('#audit-nav [data-sub="routing"]');
+    await page.goto(base + 'audit/routing/?id=ROUTE1');
+    await page.waitForSelector('#app:not([hidden])');
     await page.waitForSelector('#audit-attempt-rows tr');
     const rows = await page.$$eval('#audit-attempt-rows tr', (r) => r.map((tr) => [...tr.children].map((td) => td.textContent)));
     assert.deepEqual(rows, [
@@ -3181,7 +3096,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.unroute('**/api/admin/v1/audit/stats*');
     await page.unroute('**/api/admin/v1/audit/provider-health');
   });
-  await step('audit content (canned): sealed until the passphrase, then View shows text as text, and a session that ends wipes the page', async () => {
+  await step('audit calls (canned): sealed content stays sealed in the trace panel until the passphrase opens a session, View shows text as text, and a session that ends wipes it', async () => {
     const spans = [
       { id: 'sp-turn', parent_id: null, kind: 'turn', name: 'chat', status: 'done', started_at: 1000, ended_at: 1001, sealed: 1, attrs: {} },
       { id: 'sp-attempt', parent_id: 'sp-turn', kind: 'attempt', name: 'prov', status: 'done', started_at: 1000, ended_at: 1001, sealed: 2, attrs: {} },
@@ -3209,63 +3124,47 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       if (!open) return route.fulfill({ status: 403, contentType: 'application/json', body: JSON.stringify({ error: 'forbidden', detail: 'Sealed content is sealed.' }) });
       route.fulfill({ contentType: 'application/json', body: JSON.stringify({ span_id: 'sp-attempt', payloads: [{ role: 'request', key_id: 'k1', text: 'the <b>question</b> that was asked' }, { role: 'error', key_id: 'k0', text: null, key_created_at: 500, key_retired_at: 900 }] }) });
     });
-    await openPage('providers');
-    await openPage('audit/sealed');
+    await openPage('audit/calls');
     await page.evaluate(() => window.askbarAudit.openTrace('SEAL1'));
-    await page.waitForSelector('#audit-waterfall .span-bar');
-    await page.click('#audit-nav [data-sub="content"]');
+    await page.waitForSelector('#trace-sealed .sealed-row');
     // Sealed, with a View button only for spans that have something; nothing fetched yet.
-    assert.equal(await page.locator('#audit-sealed .sealed-row').count(), 2);
-    assert.match(await page.innerText('#audit-sealed'), /Sealed \(1 item\)/);
-    assert.match(await page.innerText('#audit-sealed'), /Sealed \(2 items\)/);
+    assert.equal(await page.locator('#trace-sealed .sealed-row').count(), 2);
+    assert.match(await page.innerText('#trace-sealed'), /Sealed \(1 item\)/);
+    assert.match(await page.innerText('#trace-sealed'), /Sealed \(2 items\)/);
     assert.equal(viewed.length, 0, 'nothing is fetched before a session is open');
-    assert.equal(await page.isVisible('#audit-unseal-form'), true);
-
-    // View while sealed: the way to the passphrase, and still nothing fetched.
-    await page.click('#audit-sealed [data-span="sp-attempt"] .view-btn');
-    assert.match(await page.innerText('#audit-pass-error'), /Enter the audit passphrase/);
+    // View while sealed: the way to the passphrase (the status bar's Unseal box), and still nothing fetched.
+    await page.click('#trace-sealed [data-span="sp-attempt"] .view-btn');
+    await page.waitForSelector('#unseal-box[open]');
+    assert.match(await page.innerText('#trace-sealed-error'), /Enter the audit passphrase/);
     assert.equal(viewed.length, 0);
-
     // Wrong: the server's sentence, nothing opened, the field emptied.
-    await page.fill('#audit-pass', 'a wrong passphrase of length');
-    await page.click('#audit-unseal');
-    await page.waitForFunction(() => /does not open any audit key/.test(document.getElementById('audit-pass-error').textContent));
-    assert.equal(await page.inputValue('#audit-pass'), '', 'the passphrase field is cleared after use');
-    assert.equal(await page.isVisible('#audit-open'), false);
-
-    // Right: the session opens, with the keys it holds; no prompt for each item from here.
-    await page.fill('#audit-pass', 'the right passphrase here');
-    await page.click('#audit-unseal');
-    await page.waitForSelector('#audit-open:not([hidden])');
-    assert.match(await page.innerText('#audit-open-state'), /Keys open: k1\./);
-    assert.equal(await page.isVisible('#audit-unseal-form'), false);
-    await page.click('#audit-sealed [data-span="sp-attempt"] .view-btn');
-    await page.waitForFunction(() => /that was asked/.test(document.getElementById('audit-viewed').textContent));
-    const plain = await page.innerText('#audit-viewed');
+    await page.fill('#unseal-pass', 'a wrong passphrase of length');
+    await page.click('#unseal-go');
+    await page.waitForFunction(() => /does not open any audit key/.test(document.getElementById('unseal-pass-error').textContent));
+    assert.equal(await page.inputValue('#unseal-pass'), '', 'the field is emptied');
+    // Right: the session opens, the box closes, and the item asked for opens with it; no prompt for each item.
+    await page.fill('#unseal-pass', 'the right passphrase here');
+    await page.click('#unseal-go');
+    await page.waitForSelector('#unseal-box', { state: 'hidden' });
+    await page.waitForFunction(() => /that was asked/.test(document.getElementById('trace-viewed').textContent));
+    const plain = await page.innerText('#trace-viewed');
     assert.match(plain, /request \(key k1\)/);
     assert.match(plain, /the <b>question<\/b> that was asked/, 'markup is shown as typed');
-    assert.equal(await page.locator('#audit-viewed b').count(), 0);
+    assert.equal(await page.locator('#trace-viewed b').count(), 0);
     assert.match(plain, /not opened: this session has no key for it; key k0 was made .* and retired/);
     assert.ok(viewed.every((u) => /sp-attempt$/.test(u)));
     assert.deepEqual(sent, ['a wrong passphrase of length', 'the right passphrase here']);
-
-    // The session ends on its own (a timeout, sign-out elsewhere): the page is wiped and asks again.
+    // The session ends on its own (a timeout, sign-out elsewhere): the panel is wiped and asks again.
     open = false;
     await page.evaluate(() => window.askbarAudit.sessionFromStatus({ open: false }));
-    assert.equal(await page.isVisible('#audit-unseal-form'), true);
+    await page.waitForFunction(() => document.getElementById('trace-viewed').children.length === 0);
     assert.equal((await page.content()).includes('that was asked'), false, 'wiped when the session ended');
-    // A view that finds it sealed says so and shows the passphrase field again.
+    // A view that finds it sealed says so, in the panel.
     await page.evaluate(() => { window.askbarAudit.session.open = true; });
-    await page.click('#audit-sealed [data-span="sp-attempt"] .view-btn');
-    await page.waitForFunction(() => /sealed/i.test(document.getElementById('audit-pass-error').textContent));
-    // Seal from the page.
-    await page.fill('#audit-pass', 'the right passphrase here');
-    await page.click('#audit-unseal');
-    await page.waitForSelector('#audit-open:not([hidden])');
-    await page.click('#audit-seal');
-    await page.waitForSelector('#audit-unseal-form:not([hidden])');
-    assert.equal(open, false, 'Seal reached the server');
-    assert.equal(await page.evaluate(() => JSON.stringify([...Object.entries(localStorage), ...Object.entries(sessionStorage)]).includes('passphrase')), false, 'never stored');
+    await page.click('#trace-sealed [data-span="sp-attempt"] .view-btn');
+    await page.waitForFunction(() => /sealed/i.test(document.getElementById('trace-sealed-error').textContent));
+    assert.equal(await page.locator('#tab-audit-calls img').count(), 0);
+    assert.equal(await page.evaluate(() => window.__pwned), undefined);
     await page.unroute('**/api/admin/v1/audit/traces/SEAL1');
     await page.unroute('**/api/admin/v1/audit/session');
     await page.unroute('**/api/admin/v1/audit/payloads/*');
@@ -3276,17 +3175,15 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       { id: 1, span_id: 'span-1', key_id: '0011223344556677', opened_at: 1793631800, ok: true },
     ];
     await page.route('**/api/admin/v1/audit/access*', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ access: rows }) }));
-    await openPage('providers');
     await openPage('audit/sealed');
-    await page.click('#audit-nav [data-sub="content"]');
     await page.waitForSelector('#audit-access-rows tr');
-    const cells = await page.$$eval('#audit-access-rows tr', (r) => r.map((tr) => [...tr.children].map((td) => td.textContent).slice(1)));
+    const cells = await page.$$eval('#audit-access-rows tr', (r) => r.map((tr) => [...tr.children].map((td) => td.textContent).slice(1, 4)));
     assert.deepEqual(cells, [['span-<b>x</b>', '0011223344556677', 'wrong passphrase'], ['span-1', '0011223344556677', 'opened']]);
     assert.equal(await page.locator('#audit-access b').count(), 0, 'shown as text');
     assert.equal(await page.isHidden('#audit-access-empty'), true);
     rows = [];
-    await page.click('#audit-nav [data-sub="requests"]');
-    await page.click('#audit-nav [data-sub="content"]');
+    await page.reload();
+    await page.waitForSelector('#app:not([hidden])');
     await page.waitForSelector('#audit-access-empty:not([hidden])');
     assert.equal(await page.isHidden('#audit-access'), true);
     await page.unroute('**/api/admin/v1/audit/access*');
@@ -3991,22 +3888,18 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.waitForSelector('#app:not([hidden])');
     await page.waitForSelector('#banners [data-banner="offline"]');
   });
-  await step('audit: with the server away the trail still reads from the auditor, and the views are there', async () => {
+  await step('audit: with the server away the trail still reads from the auditor, and each Audit page is there', async () => {
     await openPage('audit/calls');
     await page.waitForSelector('#calls-rows tr[data-trace]');
     assert.equal(await page.isHidden('#calls-error'), true, 'the auditor is up, so there is nothing to explain');
     assert.ok(Number((await page.innerText('#kpi-replies')).replace(/,/g, '')) >= 1, 'the figures read from the auditor');
-    await openPage('audit/sealed'); // the old views stay on Sealed access until step 6.2
-    await page.waitForSelector('#audit-content'); // Sealed access opens on the Content view
+    await openPage('audit/sealed');
+    await page.waitForSelector('#audit-unseal-form:not([hidden])');
     assert.equal(await page.isHidden('#audit-error'), true, 'the auditor is up, so there is nothing to explain');
-    for (const sub of ['overview', 'requests', 'trace', 'routing', 'content']) {
-      await page.click(`#audit-nav [data-sub="${sub}"]`);
-      assert.equal(await page.isVisible(`#audit-${sub}`), true, sub);
-      assert.equal(await page.getAttribute(`#audit-nav [data-sub="${sub}"]`, 'aria-selected'), 'true');
-      assert.equal(await page.locator('#audit-nav [aria-selected="true"]').count(), 1);
-      assert.match(await page.innerText(`#audit-${sub}`), /\S/, `${sub} says something even when empty`);
-    }
-    await page.click('#audit-nav [data-sub="overview"]');
+    assert.match(await page.innerText('#tab-audit-sealed'), /Who opened sealed content/);
+    await openPage('audit/routing');
+    await page.waitForSelector('#audit-routing-overall-empty:not([hidden]), #audit-routing-table:not([hidden])');
+    assert.equal(await page.isHidden('#audit-error'), true, 'the auditor is up, so there is nothing to explain');
   });
   await step('a change while the server is away is refused with a clear message and saves nothing', async () => {
     await openPage('providers');

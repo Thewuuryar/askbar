@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{%- import "blocks.html" as b %}
+{%- import "components.html" as c %}
+{% block hint %}The tries each request took, why a try failed, and the providers the router is refusing. Pick a request on Model calls to see its tries.{% endblock %}
+{% block scripts %}<script src="/admin/audit.js" defer></script>{% endblock %}
+{% block content %}
+    {% call b::error_line("audit-error") %}{% endcall %}
+    <h3>This request</h3>
+    <p class="hint empty" id="audit-routing-empty">Pick a request on Model calls to see how it was routed.</p>
+    <div class="table-wrap" tabindex="0" role="region" aria-label="Tries for this request">
+      <table id="audit-attempts" hidden>
+        <thead><tr><th>Provider</th><th>Try</th><th>Status</th><th>Kind of failure</th><th>Reason</th><th>Latency</th></tr></thead>
+        <tbody id="audit-attempt-rows"></tbody>
+      </table>
+    </div>
+    <div class="row">
+      <h3>Providers, in the chosen range</h3>
+      <span class="spacer"></span>
+      <label>Range <select id="routing-window">
+        <option value="1">Last 24 hours</option>
+        <option value="7">Last 7 days</option>
+        <option value="30">Last 30 days</option>
+      </select></label>
+    </div>
+    <p class="hint empty" id="audit-routing-overall-empty">No tries recorded in this range yet.</p>
+    <div class="table-wrap" tabindex="0" role="region" aria-label="Providers in the chosen range">
+      <table id="audit-routing-table" hidden>
+        <thead><tr><th>Provider</th><th>Tries</th><th>Retries</th><th>Failed tries</th><th>Credentials</th></tr></thead>
+        <tbody id="audit-routing-rows"></tbody>
+      </table>
+    </div>
+{% endblock %}

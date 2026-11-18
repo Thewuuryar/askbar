@@ -59,9 +59,19 @@ macro_rules! page {
             section: String,
             /// The side menu (rule 1), built from `PAGES`.
             menu: &'static [MenuGroup],
+            /// The tab bar's pages (plan step 6.2): the page's group when it has one, else none.
+            tabs: Vec<&'static Page>,
         }
         fn $render() -> askama::Result<String> {
-            $ty { current: $slug, label: $label, group: crumb_group($slug), section: section_id($slug), menu: menu() }.render()
+            $ty {
+                current: $slug,
+                label: $label,
+                group: crumb_group($slug),
+                section: section_id($slug),
+                menu: menu(),
+                tabs: tab_pages($slug),
+            }
+            .render()
         }
     };
 }
@@ -75,6 +85,15 @@ pub fn crumb_group(slug: &str) -> &'static str {
     }
 }
 
+/// The tab bar of a page (plan step 6.2): every page of its group, in menu order, when the group has a tab bar
+/// (Audit). Labels and paths come from `PAGES`, so the tabs can only match the menu.
+pub fn tab_pages(slug: &str) -> Vec<&'static Page> {
+    match PAGES.iter().find(|p| p.slug == slug) {
+        Some(p) if p.group == Group::Audit => PAGES.iter().filter(|q| q.group == Group::Audit).collect(),
+        _ => Vec::new(),
+    }
+}
+
 /// The id of a page's `<section>`: `tab-` and the slug, with `/` as `-`.
 pub fn section_id(slug: &str) -> String {
     format!("tab-{}", slug.replace('/', "-"))
@@ -84,8 +103,8 @@ page!(Home, home, "home", "home.html", "Home");
 page!(Alerts, alerts, "alerts", "alerts.html", "Alerts");
 page!(AuditCalls, audit_calls, "audit/calls", "audit_calls.html", "Model calls");
 page!(AuditAdmin, audit_admin, "audit/admin", "audit_admin.html", "Admin actions");
-page!(AuditSealed, audit_sealed, "audit/sealed", "audit.html", "Sealed access");
-page!(AuditRouting, audit_routing, "audit/routing", "audit.html", "Routing");
+page!(AuditSealed, audit_sealed, "audit/sealed", "audit_sealed.html", "Sealed access");
+page!(AuditRouting, audit_routing, "audit/routing", "audit_routing.html", "Routing");
 page!(Settings, settings, "settings", "settings.html", "Settings");
 page!(Providers, providers, "providers", "providers.html", "Providers");
 page!(People, people, "people", "people.html", "People & clients");
@@ -262,8 +281,15 @@ mod tests {
             let nav = &html[html.find(r#"<nav id="nav""#).expect("nav")..];
             let nav = &nav[..nav.find("</nav>").unwrap()];
             assert_eq!(nav.matches(r#"aria-current="page""#).count(), 1, "{}: one current page", p.slug);
-            // The breadcrumb (plan step 3.1) holds the one other `aria-current="page"`: the page's own label.
-            assert_eq!(html.matches(r#"aria-current="page""#).count(), 2, "{}: the menu's link and the breadcrumb, nothing else", p.slug);
+            // The breadcrumb (plan step 3.1) holds the one other `aria-current="page"`: the page's own label. An Audit
+            // page's tab bar (plan step 6.2) holds one more, its own tab.
+            let tab_bar = usize::from(!tab_pages(p.slug).is_empty());
+            assert_eq!(
+                html.matches(r#"aria-current="page""#).count(),
+                2 + tab_bar,
+                "{}: the menu's link, the breadcrumb and its tab, nothing else",
+                p.slug
+            );
             let crumb = &html[html.find(r#"<nav class="crumb" aria-label="Breadcrumb">"#).expect("breadcrumb")..];
             let crumb = &crumb[..crumb.find("</nav>").unwrap()];
             // Labels are HTML-escaped in the page ("People & clients" is written `People &#38; clients`).
@@ -388,13 +414,14 @@ mod tests {
             assert!(constants < app, "{}: components.js before app.js", p.slug);
             assert_eq!(html.matches(r#"id="announcer""#).count(), 1, "{}: one announcer", p.slug);
             assert_eq!(html.matches(r#"id="toasts""#).count(), 1, "{}: one toast region", p.slug);
-            // Model calls has its own script (plan step 6.1); Sealed access and Routing keep audit.js until step 6.2.
+            // Model calls has its own script (plan step 6.1); Sealed access and Routing share audit.js (plan step 6.2).
             assert_eq!(
                 html.contains("/admin/audit.js"),
                 ["audit/sealed", "audit/routing"].contains(&p.slug),
-                "{}: audit.js only on the Audit pages that still use the old views",
+                "{}: audit.js only on Sealed access and Routing",
                 p.slug
             );
+            assert!(!html.contains("subnav") && !html.contains("audit-nav"), "{}: no in-page sub-nav (plan step 6.2)", p.slug);
             assert_eq!(html.contains("/admin/audit_calls.js"), p.slug == "audit/calls", "{}: audit_calls.js only on Model calls", p.slug);
             assert!(!html.contains("{%") && !html.contains("{{"), "{}: no template syntax left", p.slug);
         }
@@ -528,7 +555,7 @@ mod tests {
 
     #[derive(Template)]
     #[template(
-        source = r#"{% import "components.html" as c %}<!--skip_link-->{% call c::skip_link() %}{% endcall %}<!--announcer-->{% call c::announcer() %}{% endcall %}<!--toast_region-->{% call c::toast_region() %}{% endcall %}<!--banner_region-->{% call c::banner_region() %}{% endcall %}<!--help-->{% call c::help("audit") %}{% endcall %}<!--page_header-->{% call c::page_header("Clients", "Phones and computers.", "clients", "") %}<a class="btn btn-primary">Pair</a>{% endcall %}<!--button-->{% call c::button("Save", "submit", "", "") %}{% endcall %}{% call c::button("Edit", "secondary", "s", "copy") %}{% endcall %}<!--icon_button-->{% call c::icon_button("close", "Close it") %}{% endcall %}<!--icon-->{% call c::icon("bell") %}{% endcall %}<!--tabs-->{% call c::tabs(["calls:Model calls", "admin:Admin actions"]) %}{% endcall %}<!--menu-->{% call c::menu("bell-menu") %}<button class="menu-item" role="menuitem">One</button>{% endcall %}<!--row_menu-->{% call c::row_menu(["edit:Edit", "!delete:Delete"]) %}{% endcall %}<!--field-->{% call c::field("Host name", "host", "Such as askbar.example.com.", "text", true) %}{% endcall %}{% call c::field("Pick", "pick", "", "slot", false) %}<select id="pick"></select>{% endcall %}{% call c::field("Note", "note", "", "textarea", false) %}{% endcall %}<!--new_secret-->{% call c::new_secret("New password", "pw", 10) %}{% endcall %}<!--save_bar-->{% call c::save_bar("general-form") %}{% endcall %}<!--notice-->{% call c::notice("error", "No route.", "Check the address.") %}{% endcall %}<!--status-->{% call c::status("ok") %}Running{% endcall %}{% call c::status("paused") %}Paused{% endcall %}<!--side_panel-->{% call c::side_panel("add-panel", "Add provider", "providers") %}<p>Body</p>{% endcall %}<!--dialog_box-->{% call c::dialog_box("revoke-box", "Revoke?") %}<p>Sure?</p>{% endcall %}<!--row_confirm-->{% call c::row_confirm("restart-confirm", "Restart the server?", "Restart") %}{% endcall %}<!--secret-->{% call c::secret("pair-key") %}{% endcall %}<!--table_head-->{% call c::table_head(["Name", ">Cost", ""]) %}{% endcall %}<!--empty-->{% call c::empty("Nothing yet.", "Add one") %}{% endcall %}<!--skeleton-->{% call c::skeleton(3) %}{% endcall %}<!--na-->{% call c::na("the server cannot do it") %}<span class="btn btn-secondary">Export</span>{% endcall %}<!--na_tag-->{% call c::na_tag("later") %}{% endcall %}"#,
+        source = r#"{% import "components.html" as c %}<!--skip_link-->{% call c::skip_link() %}{% endcall %}<!--announcer-->{% call c::announcer() %}{% endcall %}<!--toast_region-->{% call c::toast_region() %}{% endcall %}<!--banner_region-->{% call c::banner_region() %}{% endcall %}<!--help-->{% call c::help("audit") %}{% endcall %}<!--page_header-->{% call c::page_header("Clients", "Phones and computers.", "clients", "") %}<a class="btn btn-primary">Pair</a>{% endcall %}<!--button-->{% call c::button("Save", "submit", "", "") %}{% endcall %}{% call c::button("Edit", "secondary", "s", "copy") %}{% endcall %}<!--icon_button-->{% call c::icon_button("close", "Close it") %}{% endcall %}<!--icon-->{% call c::icon("bell") %}{% endcall %}<!--tabs-->{% call c::tabs(&crate::pages::tab_pages("audit/calls"), "audit/calls", "Audit") %}{% endcall %}<!--menu-->{% call c::menu("bell-menu") %}<button class="menu-item" role="menuitem">One</button>{% endcall %}<!--row_menu-->{% call c::row_menu(["edit:Edit", "!delete:Delete"]) %}{% endcall %}<!--field-->{% call c::field("Host name", "host", "Such as askbar.example.com.", "text", true) %}{% endcall %}{% call c::field("Pick", "pick", "", "slot", false) %}<select id="pick"></select>{% endcall %}{% call c::field("Note", "note", "", "textarea", false) %}{% endcall %}<!--new_secret-->{% call c::new_secret("New password", "pw", 10) %}{% endcall %}<!--save_bar-->{% call c::save_bar("general-form") %}{% endcall %}<!--notice-->{% call c::notice("error", "No route.", "Check the address.") %}{% endcall %}<!--status-->{% call c::status("ok") %}Running{% endcall %}{% call c::status("paused") %}Paused{% endcall %}<!--side_panel-->{% call c::side_panel("add-panel", "Add provider", "providers") %}<p>Body</p>{% endcall %}<!--dialog_box-->{% call c::dialog_box("revoke-box", "Revoke?") %}<p>Sure?</p>{% endcall %}<!--row_confirm-->{% call c::row_confirm("restart-confirm", "Restart the server?", "Restart") %}{% endcall %}<!--secret-->{% call c::secret("pair-key") %}{% endcall %}<!--table_head-->{% call c::table_head(["Name", ">Cost", ""]) %}{% endcall %}<!--empty-->{% call c::empty("Nothing yet.", "Add one") %}{% endcall %}<!--skeleton-->{% call c::skeleton(3) %}{% endcall %}<!--na-->{% call c::na("the server cannot do it") %}<span class="btn btn-secondary">Export</span>{% endcall %}<!--na_tag-->{% call c::na_tag("later") %}{% endcall %}"#,
         ext = "html"
     )]
     struct AllComponents;
@@ -590,10 +617,10 @@ mod tests {
         assert!(icon_button.contains(r#"aria-label="Close it""#) && icon_button.contains(r#"data-tip="Close it""#));
 
         let tabs = part(&html, "tabs");
-        assert!(
-            tabs.contains(r#"role="tablist""#) && tabs.contains(r#"id="tab-calls""#) && tabs.contains(r#"aria-controls="panel-admin""#)
-        );
-        assert_eq!(tabs.matches(r#"aria-selected="true""#).count(), 1, "one selected tab");
+        assert!(tabs.starts_with(r#"<nav class="tabs" aria-label="Audit">"#), "a named nav of links: {tabs}");
+        assert!(tabs.contains(r#"<a class="tab" href="/admin/audit/calls/" aria-current="page">Model calls</a>"#));
+        assert!(tabs.contains(r#"<a class="tab" href="/admin/audit/admin/">Admin actions</a>"#));
+        assert_eq!(tabs.matches(r#"aria-current="page""#).count(), 1, "one current tab");
 
         let menu = part(&html, "menu");
         assert!(menu.contains(r#"id="bell-menu" class="menu" role="menu" hidden"#) && menu.contains("One"));
@@ -676,5 +703,29 @@ mod tests {
         h.insert(header::IF_NONE_MATCH, etag.clone());
         assert_eq!(static_file(&h, "text/css", "body {}").status(), StatusCode::NOT_MODIFIED);
         assert_eq!(static_file(&h, "text/css", "body { color: red }").status(), StatusCode::OK, "a changed file is sent again");
+    }
+
+    /// Plan step 6.2: every Audit page shows the same four tabs as the menu's Audit links, in the same order, and
+    /// marks only its own tab as the current one. The tab markup is built from `PAGES`, so this checks the frame.
+    #[test]
+    fn audit_pages_show_the_menu_links_as_tabs() {
+        let audit: Vec<&Page> = PAGES.iter().filter(|p| p.group == Group::Audit).collect();
+        assert_eq!(audit.len(), 4);
+        for p in &audit {
+            let html = (p.render)().expect("page renders");
+            let mut expected = String::from(r#"<nav class="tabs" aria-label="Audit">"#);
+            for q in &audit {
+                let current = if q.slug == p.slug { r#" aria-current="page""# } else { "" };
+                expected.push_str(&format!(r#"<a class="tab" href="/admin/{}/"{current}>{}</a>"#, q.slug, q.label));
+            }
+            expected.push_str("</nav>");
+            assert!(html.contains(&expected), "{}: the tab bar is the four menu links, in order, with its own current", p.slug);
+            // Each tab is the same page as its menu link: the side menu links the same path and label.
+            for q in &audit {
+                let link = format!(r#"href="/admin/{}/" data-tab="{}" data-tip="{}""#, q.slug, q.slug, q.label);
+                assert!(html.contains(&link), "{}: the menu links {}", p.slug, q.slug);
+            }
+            assert!(!html.contains(r#"role="tablist""#), "{}: links, not a tablist", p.slug);
+        }
     }
 }

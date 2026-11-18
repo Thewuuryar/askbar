@@ -153,6 +153,7 @@
           {% block actions %}{% endblock %}
         </div>
         <p class="hint">{% block hint %}{% endblock %}</p>
+        {% if !tabs.is_empty() %}{% call c::tabs(&tabs, current, group) %}{% endcall %}{% endif %}
 {% block content %}{% endblock %}
       </section>
     </main>

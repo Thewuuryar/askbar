@@ -3,4 +3,14 @@
 {% block hint %}What was changed in this admin, and when.{% endblock %}
 {% block content %}
     {% call c::notice("info", "Not available yet: the admin records its actions in the audit trail but cannot read them back yet.", "") %}{% endcall %}
+    <div class="table-wrap" role="region" aria-label="Admin actions">
+      <table class="table" id="admin-actions-table">
+        <thead><tr>
+          <th scope="col">{% call c::na("the admin cannot read its actions back yet.") %}Time{% endcall %}</th>
+          <th scope="col">{% call c::na("the admin cannot read its actions back yet.") %}Action{% endcall %}</th>
+          <th scope="col">{% call c::na("the admin cannot read its actions back yet.") %}Where{% endcall %}</th>
+          <th scope="col">{% call c::na("the admin cannot read its actions back yet.") %}Result{% endcall %}</th>
+        </tr></thead>
+      </table>
+    </div>
 {% endblock %}

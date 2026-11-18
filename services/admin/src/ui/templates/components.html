@@ -20,8 +20,9 @@
       icon(name)                     one icon from icons.html by name (home bell audit settings reference collapse close copy
                                      help sign_out search menu check warning critical info code more logo calls clipboard lock
                                      route cube people server globe shield archive send sliders).
-      tabs(items)                    items = ["id:Label", ...]: div.tabs[role=tablist] with button.tab[role=tab]#tab-<id>
-                                     [aria-controls=panel-<id>]; the first is selected. Panels are the page's, id panel-<id>.
+      tabs(items, current, label)    a tab bar of links: nav.tabs[aria-label=label] with a.tab per page in items (Page values,
+                                     from pages::tab_pages); the one whose slug is current gets aria-current="page". Labels
+                                     and paths come from PAGES, so the bar matches the menu.
       menu(id)                       popup menu: div.menu#<id>[role=menu][hidden]; the call body holds button.menu-item[role=menuitem].
       row_menu(items)                the row's ... button (button.btn-icon.row-menu-button[aria-haspopup=menu][aria-expanded=false])
                                      and its div.menu. items = ["action:Label", ...]; a leading ! on the action makes the item red
@@ -117,7 +118,7 @@
 {% macro icon_button(icon, label) %}<button type="button" class="btn btn-quiet btn-icon" aria-label="{{ label }}" data-tip="{{ label }}">{% call icon(icon) %}{% endcall %}</button>{% endmacro %}
 
 {#- Tabs. -#}
-{% macro tabs(items) %}<div class="tabs" role="tablist">{% for item in items %}{% if let Some((id, label)) = item.split_once(":") %}<button type="button" class="tab" role="tab" id="tab-{{ id }}" aria-controls="panel-{{ id }}" aria-selected="{% if loop.first %}true{% else %}false{% endif %}"{% if !loop.first %} tabindex="-1"{% endif %}>{{ label }}</button>{% endif %}{% endfor %}</div>{% endmacro %}
+{% macro tabs(items, current, label) %}<nav class="tabs" aria-label="{{ label }}">{% for p in items %}<a class="tab" href="/admin/{{ p.slug }}/"{% if p.slug == current %} aria-current="page"{% endif %}>{{ p.label }}</a>{% endfor %}</nav>{% endmacro %}
 
 {#- Menus. -#}
 {% macro menu(id) %}<div id="{{ id }}" class="menu" role="menu" hidden>{{ caller() }}</div>{% endmacro %}
