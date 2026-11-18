@@ -37,6 +37,8 @@
   --space-4: 16px;
   --space-5: 24px;
   --space-6: 32px;
+  --space-7: 40px;
+  --space-8: 48px;
 
   /* radii: two */
   --radius-control: 8px;
@@ -69,6 +71,10 @@
   --content-bottom-room: 64px;
   --facts-w: 360px;
   --facts-w-s: 260px;
+  --ref-nav-w: 200px;
+  --ref-toc-w: 180px;
+  --ref-body-w: 680px;
+  --ref-link-w: 144px;
 
   color-scheme: light;
 }

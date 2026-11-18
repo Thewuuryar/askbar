@@ -4144,33 +4144,40 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       assert.equal(await page.locator('section[data-tab="reference"] .page-header .page-title').innerText(), article);
       assert.equal(await page.locator('.ref-body h1').count(), 0, 'the page title is the one h2');
       // Every heading has an id, and each in-page link lands on one.
+      const home = url === 'reference/';
       const heads = await page.$$eval('.ref-body h3, .ref-body h4', (hs) => hs.map((h) => h.id));
       assert.ok(heads.every(Boolean), url + ': a heading has no id');
-      const nav = await page.evaluate(() => {
-        const d = document.querySelector('.ref-nav');
-        const b = (e) => e.getBoundingClientRect();
-        return { open: d.open, summaryShown: getComputedStyle(d.querySelector('summary')).display !== 'none', navBottom: b(d).bottom, bodyTop: b(document.querySelector('.ref-body')).top, navRight: b(d).right, bodyLeft: b(document.querySelector('.ref-body')).left, cur: d.querySelector('a[aria-current]')?.textContent, groups: [...d.querySelectorAll('.ref-group')].map((g) => g.textContent) };
-      });
-      assert.deepEqual(nav.groups.slice(0, 3), ['Settings', 'Admin site', 'Audit'], 'the outline groups the pages by area');
-      if (isPhone) {
-        assert.equal(nav.summaryShown && !nav.open, true, 'on a phone the outline is a closed box');
-        assert.ok(nav.navBottom <= nav.bodyTop + 1, 'above the article');
-      } else {
-        assert.equal(nav.open && !nav.summaryShown, true, 'on a desktop the outline is always open');
-        assert.ok(nav.navRight <= nav.bodyLeft, 'at the left of the article');
-      }
-      assert.equal(nav.cur, url === 'reference/' ? 'Overview' : 'Network');
       const edit = await page.getAttribute('.ref-edit', 'href');
-      assert.equal(edit, `${K.SOURCE_URL}/edit/${K.SOURCE_BRANCH}/docs/reference/${url === 'reference/' ? 'index' : 'settings/network'}.md`);
+      assert.equal(edit, `${K.SOURCE_URL}/edit/${K.SOURCE_BRANCH}/docs/reference/${home ? 'index' : 'settings/network'}.md`);
       assert.equal(await page.getAttribute('.ref-edit', 'rel'), 'noopener noreferrer');
-      // Targets: the outline's links, the edit link; the phone's toggle.
-      const small = await page.$$eval('.ref-list a, .ref-edit, .ref-nav-toggle', (as, m) => as.map((a) => a.getBoundingClientRect()).filter((r) => r.height > 0 && (r.height < m - 0.5 || r.width < m - 0.5)).length, min);
-      assert.equal(small, 0, url + ': every outline and edit target is at least ' + min + ' px');
+      if (home) {
+        // The home is the list of pages by area, with no outline, and a link to the folder on GitHub.
+        assert.equal(await page.locator('.ref-nav, .ref-toc').count(), 0, 'the home has no outline');
+        assert.equal(await page.getAttribute('.rf-open', 'href'), `${K.SOURCE_URL}/tree/${K.SOURCE_BRANCH}/${K.REFERENCE_ROOT}`);
+      } else {
+        const nav = await page.evaluate(() => {
+          const d = document.querySelector('.ref-nav');
+          const b = (e) => e.getBoundingClientRect();
+          return { open: d.open, summaryShown: getComputedStyle(d.querySelector('summary')).display !== 'none', navBottom: b(d).bottom, headTop: b(document.querySelector('.ref-head')).top, bodyTop: b(document.querySelector('.ref-body')).top, navRight: b(d).right, bodyLeft: b(document.querySelector('.ref-body')).left, cur: d.querySelector('a[aria-current]')?.textContent, groups: [...d.querySelectorAll('.ref-group')].map((g) => g.textContent) };
+        });
+        assert.deepEqual(nav.groups.slice(0, 3), ['Admin settings', 'Admin UI', 'Audit and alerts'], 'the outline groups the pages by area');
+        if (isPhone) {
+          assert.equal(nav.summaryShown && !nav.open, true, 'on a phone the outline is a closed box');
+          assert.ok(nav.headTop < nav.navBottom && nav.navBottom <= nav.bodyTop + 1, 'the title, then the outline, then the article');
+        } else {
+          assert.equal(nav.open && !nav.summaryShown, true, 'on a desktop the outline is always open');
+          assert.ok(nav.navRight <= nav.bodyLeft, 'at the left of the article');
+        }
+        assert.equal(nav.cur, 'Network');
+        // The links: pages are admin links, other docs go to the source, nothing is a script or style.
+        const hrefs = await page.$$eval('.ref-body a', (as) => as.map((a) => a.getAttribute('href')));
+        assert.ok(hrefs.every((h) => h.startsWith('/admin/') || h.startsWith('#') || h.startsWith(K.SOURCE_URL + '/blob/' + K.SOURCE_BRANCH + '/') || h.startsWith('https://')), url + ': ' + hrefs);
+        assert.equal(await page.locator('.ref-body [style], .ref-body script, .ref-body img').count(), 0);
+      }
+      // Targets: the outline's links, the edit link, the buttons and links to the settings; the phone's toggle.
+      const small = await page.$$eval('.ref-list a, .ref-edit, .ref-nav-toggle, .rf-grp a, .rf-open, .rf-set', (as, m) => as.map((a) => a.getBoundingClientRect()).filter((r) => r.height > 0 && (r.height < m - 0.5 || r.width < m - 0.5)).length, min);
+      assert.equal(small, 0, url + ': every outline, list and edit target is at least ' + min + ' px');
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, url + ': no sideways scroll');
-      // The links: pages are admin links, other docs go to the source, nothing is a script or style.
-      const hrefs = await page.$$eval('.ref-body a', (as) => as.map((a) => a.getAttribute('href')));
-      assert.ok(hrefs.every((h) => h.startsWith('/admin/reference/') || h.startsWith('#') || h.startsWith(K.SOURCE_URL + '/blob/' + K.SOURCE_BRANCH + '/') || h.startsWith('https://')), url + ': ' + hrefs);
-      assert.equal(await page.locator('.ref-body [style], .ref-body script, .ref-body img').count(), 0);
       const axeCtx = await browser.newContext({ viewport, bypassCSP: true, storageState: await ctx.storageState() });
       try {
         const ap = await axeCtx.newPage();
@@ -4194,6 +4201,103 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     assert.equal((await page.goto(base + 'reference/settings/nope/')).status(), 404);
     await page.goto(base);
     await page.waitForSelector('#app:not([hidden])');
+  });
+  // Round 2, R7: the home is generated from the reference index; an article links to the admin page it documents.
+  await step('reference home: every area and every page is listed from the index, as a link with its title and summary', async () => {
+    const index = await page.evaluate(async () => (await fetch('/admin/reference.json')).json());
+    await page.goto(base + 'reference/');
+    await page.waitForSelector('#app:not([hidden])');
+    const shown = await page.$$eval('.rf-grp', (gs) => gs.map((g) => ({ area: g.querySelector('h3').textContent, rows: [...g.querySelectorAll('li')].map((li) => ({ href: li.querySelector('a').getAttribute('href'), title: li.querySelector('a').textContent, summary: li.querySelector('.rf-sum').textContent })) })));
+    const pages = index.filter((p) => p.id !== 'index').sort((a, b) => a.order - b.order);
+    assert.deepEqual([...new Set(pages.map((p) => p.group))], shown.map((g) => g.area), 'every area, in the index order');
+    for (const p of pages) {
+      const row = shown.find((g) => g.area === p.group).rows.find((r) => r.href === '/admin/reference/' + p.id + '/');
+      assert.ok(row, p.id + ' is listed under ' + p.group);
+      assert.equal(row.title, p.title);
+      assert.equal(row.summary, p.summary);
+    }
+    assert.equal(shown.reduce((n, g) => n + g.rows.length, 0), pages.length, 'nothing else is listed');
+    // A row opens its page.
+    await Promise.all([page.waitForURL('**/admin/reference/settings/network/'), page.locator('.rf-grp a', { hasText: /^Network$/ }).click()]);
+    assert.equal(await page.locator('.page-title').innerText(), 'Network');
+  });
+  await step('reference article: "Open <page> settings" goes to the real admin page, each section link lands on a real element, and a page with no settings has neither', async () => {
+    const index = await page.evaluate(async () => (await fetch('/admin/reference.json')).json());
+    let checked = 0;
+    for (const p of index) {
+      await page.goto(base + 'reference/' + (p.id === 'index' ? '' : p.id + '/'));
+      await page.waitForSelector('#app:not([hidden])');
+      const opens = await page.$$eval('.ref-head .rf-open', (as) => as.map((a) => ({ href: a.getAttribute('href'), text: a.textContent.trim() })));
+      const links = await page.$$eval('.ref-body .rf-set', (as) => as.map((a) => ({ href: a.getAttribute('href'), text: a.textContent.replace(/\s*→$/, '') })));
+      if (p.settings.length === 0) {
+        assert.deepEqual([opens, links], [[], []], p.id + ': no settings, no link back');
+        continue;
+      }
+      assert.deepEqual(opens.map((o) => o.href), p.settings.map((s) => '/admin/' + s + '/'), p.id + ': one button for each admin page it documents');
+      for (const o of opens) assert.match(o.text, /^Open .+ settings$/, p.id);
+      // Each target is on the admin page: visit it and look for the element.
+      const bySlug = {};
+      for (const l of links) { const [path, id] = l.href.split('#'); (bySlug[path] ||= []).push([id, l.text]); }
+      for (const [path, ids] of Object.entries(bySlug)) {
+        assert.ok(opens.some((o) => o.href === path), p.id + ': the section links go to a page the buttons open');
+        await page.goto(base + path.replace('/admin/', ''));
+        await page.waitForSelector('#app:not([hidden])');
+        for (const [id, text] of ids) {
+          assert.equal(await page.locator('#' + id).count(), 1, p.id + ': ' + path + ' has #' + id);
+          assert.equal((await page.locator('#' + id).innerText()).trim(), text.split(' / ').pop(), p.id + ': #' + id + ' is the section the link names');
+          checked++;
+        }
+      }
+      for (const o of opens) {
+        const res = await page.goto(base + o.href.replace('/admin/', ''));
+        assert.equal(res.status(), 200, o.href);
+      }
+    }
+    assert.ok(checked >= 30, 'the section links were checked: ' + checked);
+    // A click goes there and lands on the section.
+    await page.goto(base + 'reference/settings/network/');
+    await page.waitForSelector('#app:not([hidden])');
+    await Promise.all([page.waitForURL('**/admin/network/#n-cert-title'), page.locator('.rf-set', { hasText: 'Certificate' }).click()]);
+    await page.waitForFunction(() => { const r = document.getElementById('n-cert-title').getBoundingClientRect(); return r.top >= 0 && r.bottom <= window.innerHeight; });
+  });
+  await step('reference: the outline and "On this page" are in the same place on every article and stay pinned while it scrolls', async () => {
+    if (isPhone) return; // the phone's outline is a closed box in the flow, under the title
+    const where = () => page.evaluate(() => {
+      const b = (s) => { const r = document.querySelector(s).getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width }; };
+      return { nav: b('.ref-nav'), toc: b('.ref-toc'), head: b('.ref-head'), body: b('.ref-body'), scroll: window.scrollY };
+    });
+    const first = {};
+    for (const id of ['settings/network', 'settings/security', 'audit/alert-kinds', 'admin-ui/components']) {
+      await page.goto(base + 'reference/' + id + '/');
+      await page.waitForSelector('#app:not([hidden])');
+      const w = await where();
+      first[id] = w;
+      assert.ok(w.nav.y === w.toc.y && w.nav.y === w.head.y, id + ': the outline, the title and "On this page" start on one line');
+    }
+    const ids = Object.keys(first);
+    for (const id of ids.slice(1)) {
+      for (const k of ['nav', 'toc', 'head']) {
+        assert.ok(Math.abs(first[id][k].y - first[ids[0]][k].y) <= 1, `${id}: ${k} y ${first[id][k].y} vs ${first[ids[0]][k].y}`);
+        assert.ok(Math.abs(first[id][k].x - first[ids[0]][k].x) <= 1 && Math.abs(first[id][k].w - first[ids[0]][k].w) <= 1, `${id}: ${k} x and width`);
+      }
+    }
+    // The outline and the list stay pinned, at one place, when a long article scrolls 600 px; both are the same distance from the top.
+    await page.goto(base + 'reference/audit/alert-kinds/');
+    await page.waitForSelector('#app:not([hidden])');
+    await page.evaluate(() => window.scrollTo(0, 600));
+    await page.waitForFunction(() => window.scrollY >= 590);
+    const a = await where();
+    await page.evaluate(() => window.scrollTo(0, 900));
+    await page.waitForFunction(() => window.scrollY >= 890);
+    const b = await where();
+    assert.ok(a.scroll >= 590, 'the article scrolled');
+    assert.ok(Math.abs(a.nav.y - b.nav.y) <= 1 && Math.abs(a.toc.y - b.toc.y) <= 1 && Math.abs(a.nav.y - a.toc.y) <= 1, `pinned: nav ${a.nav.y} then ${b.nav.y}, toc ${a.toc.y} then ${b.toc.y}`);
+    const bar = await page.evaluate(() => document.querySelector('.status-bar').getBoundingClientRect().bottom + (document.querySelector('#banners')?.getBoundingClientRect().height || 0));
+    assert.ok(a.nav.y >= bar - 1 && a.nav.y <= bar + 24, 'pinned just under the status bar and banners: ' + a.nav.y + ' vs ' + bar);
+    assert.equal(a.nav.x, first['audit/alert-kinds'].nav.x, 'and at the same left edge');
+    // The current page is marked, and "On this page" marks the section being read.
+    assert.equal(await page.locator('.ref-nav a[aria-current="true"]').innerText(), 'Alert kinds');
+    assert.equal(await page.locator('.ref-toc a[aria-current]').count(), 1);
   });
   // Plan step 7.5: the admin-ui reference pages show the real components, and only those pages do.
   await step('reference: the components and layouts pages show every component live; nothing else does; ids, targets, scrolling and axe are clean', async () => {

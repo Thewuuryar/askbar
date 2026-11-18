@@ -38,7 +38,9 @@ A settings page is one `section` per settings section, each with its name and a 
 
 ## Article
 
-A page of reference text, read rather than used: a list of the pages by area at the left, the article, and the page's headings at the right. On a phone the list is a closed box above the article and the headings are left out. The reference pages use it, and `reference.html` is its template.
+A page of reference text, read rather than used. The list of the pages by area is at the left and the page's headings ("On this page", with the section being read marked) at the right; both start level with the title and stay pinned under the status bar while the text scrolls, so they are in the same place on every page. In the middle: the area, the title and one line, a button to the admin page the article documents ("Open Network settings"), the text, and under each section that has a control on that page a link to it ("Settings / Network / Host name"). The source file and "Edit on GitHub" close the page. On a phone the title comes first, then the list as a closed box, then the text, and the headings are left out. The reference pages use it, and `reference.html` is its template.
+
+The reference's own first page, `/admin/reference/`, is a list, not an article: every page by area with its title and what it is for, built from the same index that feeds the search, so a new page shows up in it by itself.
 
 ![The article layout, the Network reference page: the pages by area at the left, the text in the middle and its headings at the right](img/reference-network.jpg)
 

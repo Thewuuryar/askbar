@@ -10,7 +10,7 @@ settings: []
 
 This is the reference for the admin site: one page for each settings page, and pages for the admin's building blocks and the alert kinds. The admin shows these pages in its Reference section; this copy is the same text on GitHub.
 
-## Settings
+## Admin settings
 
 - [Providers & models](settings/providers.md)
 - [People & clients](settings/people.md)
@@ -21,12 +21,12 @@ This is the reference for the admin site: one page for each settings page, and p
 - [Notifications](settings/notifications.md)
 - [General](settings/general.md)
 
-## Admin site
+## Admin UI
 
 - [Components](admin-ui/components.md): the shared building blocks the pages are made from.
 - [Page layouts](admin-ui/page-layouts.md): the layouts the pages use.
 
-## Audit
+## Audit and alerts
 
 - [Alert kinds](audit/alert-kinds.md): every kind of alert, its severity and who sends it.
 

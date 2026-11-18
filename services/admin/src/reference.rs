@@ -7,7 +7,7 @@
 //! here from the constants, so the one place that knows the repository's address stays `constants.rs`.
 
 use crate::constants::{HELP_TOPICS, REFERENCE_ROOT, SOURCE_BRANCH, SOURCE_URL};
-use crate::pages::{menu, section_id, MenuGroup, Page};
+use crate::pages::{menu, section_id, MenuGroup, Page, PAGES};
 use askama::Template;
 use serde::Deserialize;
 use std::sync::OnceLock;
@@ -23,6 +23,92 @@ mod build_render;
 /// How the renderer writes a hole for a live example, `<div data-live="name"></div>` (a test checks it matches
 /// `build_render::LIVE_HOLE`, which only the build and the tests can use).
 const LIVE_HOLE: &str = "data-live=";
+
+/// Where each help topic's section sits on its admin page: the id of the section's `<h3>` (the `section_title` macro in the
+/// page's template). The reference article links each such heading back to `/admin/<slug>/#<id>`, so a reader of "Host name"
+/// can go straight to the control. The table is the one place that lists the pairs; the tests check it both ways against
+/// the templates (every pair is a real `section_title` call with that id and topic, and every anchored topic in
+/// `HELP_TOPICS` has a pair), so a renamed id or a new topic fails a test instead of leaving a dead link.
+pub const SETTING_ANCHORS: &[(&str, &str)] = &[
+    ("settings/providers#providers", "providers-title"),
+    ("settings/providers#claude-and-chatgpt-accounts", "cpa-title"),
+    ("settings/providers#models-people-can-use", "catalog-title"),
+    ("settings/people#users", "users-title"),
+    ("settings/people#paired-clients", "clients-title"),
+    ("settings/services#running-services", "services-title"),
+    ("settings/network#host-name", "n-host-title"),
+    ("settings/network#certificate", "n-cert-title"),
+    ("settings/network#allowed-addresses-and-networks", "n-allow-title"),
+    ("settings/security#change-admin-password", "pw-title"),
+    ("settings/security#passkey", "passkey-title"),
+    ("settings/security#recovery-codes", "recovery-title"),
+    ("settings/security#admin-api-key", "key-title"),
+    ("settings/security#sealed-content-and-audit-records", "seal-title"),
+    ("settings/security#rotate-the-audit-key", "rotate-title"),
+    ("settings/security#backup-key", "bk-title"),
+    ("settings/security#danger-zone", "danger-title"),
+    ("settings/backup#back-up-now", "now-title"),
+    ("settings/backup#scheduled-backups", "sched-title"),
+    ("settings/backup#how-long-backups-are-kept", "keep-title"),
+    ("settings/backup#download-a-backup", "dl-title"),
+    ("settings/backup#restore-from-a-backup", "restore-title"),
+    ("settings/notifications#ntfy", "ntfy-title"),
+    ("settings/notifications#email", "email-title"),
+    ("settings/notifications#test-alert", "test-title"),
+    ("settings/notifications#page-wide-banners", "banners-title"),
+    ("settings/general#system-prompt", "prompt-title"),
+    ("settings/general#reply-time-limit", "time-title"),
+    ("settings/general#history-sent-with-each-question", "history-title"),
+    ("settings/general#what-people-are-told", "told-title"),
+    ("settings/general#display-defaults", "display-title"),
+];
+
+/// The admin page a settings article documents, as its link-back button shows it.
+pub struct OpenLink {
+    pub href: String,
+    /// "Network settings".
+    pub label: String,
+    pub icon: &'static str,
+}
+
+/// The link under a section's text to the control on the admin page.
+pub struct SettingLink {
+    pub href: String,
+    /// "Settings / Network / Host name".
+    pub text: String,
+}
+
+/// The admin page (its `PAGES` entry) for a slug named in a page's `settings:` front matter.
+fn admin_page(slug: &str) -> Option<&'static Page> {
+    PAGES.iter().find(|p| p.slug == slug)
+}
+
+/// The buttons at the top of an article: one for each admin page its front matter names. None for a page with no
+/// `settings:` (the index, the admin-ui pages), which has nothing to open.
+fn open_links(page: &RefPage) -> Vec<OpenLink> {
+    page.settings
+        .iter()
+        .filter_map(|slug| admin_page(slug))
+        .map(|p| OpenLink { href: format!("/admin/{}/", p.slug), label: format!("{} settings", p.label), icon: p.icon })
+        .collect()
+}
+
+/// The link back for the section `anchor` of `page`: only when the page documents that admin page and `SETTING_ANCHORS`
+/// knows the element, so a heading with no control to go to gets no link.
+fn setting_link(page: &RefPage, anchor: &str) -> Option<SettingLink> {
+    let topic = format!("{}#{anchor}", page.id);
+    let (_, element) = SETTING_ANCHORS.iter().find(|(t, _)| *t == topic)?;
+    let slug = page.id.strip_prefix("settings/")?;
+    if !page.settings.iter().any(|s| s == slug) {
+        return None;
+    }
+    let admin = admin_page(slug)?;
+    let heading = page.headings.iter().find(|h| h.id == anchor)?;
+    Some(SettingLink {
+        href: format!("/admin/{slug}/#{element}"),
+        text: format!("{} / {} / {}", admin.group.label(), admin.label, heading.text),
+    })
+}
 
 /// The slug of the menu item the reference pages belong to.
 const MENU_SLUG: &str = "reference";
@@ -214,15 +300,39 @@ fn live_example(name: &str) -> Result<String, String> {
     Ok(shown)
 }
 
-/// A piece of a page: its HTML, then the live example (`name` of `live.html`) that follows it, `""` for none.
+/// A piece of a page: its HTML, then the link back to the control when the piece ends a section that has one, then the
+/// live example (`name` of `live.html`) that follows it, `""` for none.
 struct Part {
     html: &'static str,
+    setting: Option<SettingLink>,
     live: &'static str,
     example: String,
 }
 
+/// `html` cut before each `<h3` (a page's sections: the Markdown's `##` is written one level down, the title being the h2) into the page's sections, each with the link back to its control if it has one. The renderer
+/// writes every heading as `<hN id="...">`, so a section's id is read from its first tag.
+fn sections(page: &'static RefPage, html: &'static str) -> Vec<Part> {
+    let mut cuts: Vec<usize> = html.match_indices("<h3 ").map(|(i, _)| i).collect();
+    cuts.insert(0, 0);
+    cuts.dedup();
+    cuts.push(html.len());
+    cuts.windows(2)
+        .map(|w| {
+            let piece = &html[w[0]..w[1]];
+            let anchor = piece.strip_prefix("<h3 id=\"").and_then(|r| r.split('"').next()).unwrap_or("");
+            Part {
+                html: piece,
+                setting: if anchor.is_empty() { None } else { setting_link(page, anchor) },
+                live: "",
+                example: String::new(),
+            }
+        })
+        .collect()
+}
+
 /// The page's HTML cut at its holes (`<div data-live="name"></div>`, written by the renderer at each marker), each hole
-/// paired with the real component. Done on the server, so the browser never builds markup from text.
+/// paired with the real component, and at each section's end (for the link back). Done on the server, so the browser never
+/// builds markup from text.
 fn parts(page: &'static RefPage) -> Result<Vec<Part>, String> {
     let hole = format!("<div {}\"", LIVE_HOLE);
     let mut out = Vec::new();
@@ -231,10 +341,15 @@ fn parts(page: &'static RefPage) -> Result<Vec<Part>, String> {
         let after = &rest[at + hole.len()..];
         let end = after.find("\"></div>\n").ok_or_else(|| format!("{}: a live example hole is not closed", page.id))?;
         let name = &after[..end];
-        out.push(Part { html: &rest[..at], live: name, example: live_example(name)? });
+        let mut ps = sections(page, &rest[..at]);
+        if let Some(last) = ps.last_mut() {
+            last.live = name;
+            last.example = live_example(name)?;
+        }
+        out.extend(ps);
         rest = &after[end + "\"></div>\n".len()..];
     }
-    out.push(Part { html: rest, live: "", example: String::new() });
+    out.extend(sections(page, rest));
     Ok(out)
 }
 
@@ -243,7 +358,7 @@ fn parts(page: &'static RefPage) -> Result<Vec<Part>, String> {
 struct ReferenceView {
     current: &'static str,
     label: &'static str,
-    group: &'static str,
+    group: String,
     section: String,
     menu: &'static [MenuGroup],
     tabs: Vec<&'static Page>,
@@ -252,6 +367,12 @@ struct ReferenceView {
     page: &'static RefPage,
     outline: Vec<OutlineGroup>,
     edit_url: String,
+    /// The area the page is listed under (the eyebrow above its title), empty for the index.
+    area: &'static str,
+    /// The admin pages the article documents, as buttons under its title.
+    opens: Vec<OpenLink>,
+    /// The reference folder in the repository ("View on GitHub" on the home page).
+    folder_url: String,
 }
 
 /// The page's HTML in the admin's frame.
@@ -259,7 +380,7 @@ pub fn render(page: &'static RefPage) -> askama::Result<String> {
     ReferenceView {
         current: MENU_SLUG,
         label: if page.is_index() { "Reference" } else { page.title.as_str() },
-        group: if page.is_index() { "" } else { "Reference" },
+        group: if page.is_index() { String::new() } else { format!("Reference / {}", page.group) },
         section: section_id(MENU_SLUG),
         menu: menu(),
         tabs: Vec::new(),
@@ -268,6 +389,9 @@ pub fn render(page: &'static RefPage) -> askama::Result<String> {
         page,
         outline: outline(),
         edit_url: page.edit_url(),
+        area: page.group.as_str(),
+        opens: open_links(page),
+        folder_url: format!("{SOURCE_URL}/tree/{SOURCE_BRANCH}/{REFERENCE_ROOT}"),
     }
     .render()
 }
@@ -574,5 +698,118 @@ mod tests {
             let tag = c.split(&format!(" id=\"{id}\"")).nth(1).unwrap().split('>').next().unwrap();
             assert!(!tag.contains("hidden"), "{id} is shown: {tag}");
         }
+    }
+
+    // ---------------------------------------------------------------- the home and the links back to the settings (R7)
+
+    /// Every `section_title("<id>", "<text>", "<topic>")` call in the page templates whose topic names a heading.
+    fn section_titles() -> Vec<(String, String, String)> {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/ui/templates");
+        let mut found = Vec::new();
+        for e in std::fs::read_dir(dir).unwrap() {
+            let path = e.unwrap().path();
+            let file = path.file_name().unwrap().to_string_lossy().to_string();
+            if file == "components.html" || file == "live.html" {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap();
+            for part in text.split("section_title(\"").skip(1) {
+                let args: Vec<&str> = part.split('"').collect();
+                // id, `, `, text, `, `, topic
+                if args.len() > 4 && args[4].contains('#') {
+                    found.push((file.clone(), args[0].to_string(), args[4].to_string()));
+                }
+            }
+        }
+        found
+    }
+
+    #[test]
+    fn every_link_back_target_is_a_real_element_of_the_admin_page_and_every_topic_has_one() {
+        let titles = section_titles();
+        assert!(titles.len() >= 30, "{}", titles.len());
+        // Every pair in the table is a section title of that page's template, with that id and that topic.
+        for (topic, element) in SETTING_ANCHORS {
+            let slug = topic.strip_prefix("settings/").unwrap().split('#').next().unwrap();
+            assert!(
+                titles.iter().any(|(file, id, t)| file == &format!("{slug}.html") && id == element && t == topic),
+                "{topic} -> #{element}: no such section_title in {slug}.html"
+            );
+            assert!(admin_page(slug).is_some(), "{topic}: no admin page {slug}");
+        }
+        // Every section title with a topic has its pair, and every topic with a heading is in the table.
+        for (file, id, topic) in &titles {
+            assert!(SETTING_ANCHORS.contains(&(topic.as_str(), id.as_str())), "{file}: {topic} -> #{id} is not in SETTING_ANCHORS");
+        }
+        for topic in HELP_TOPICS.iter().filter(|t| t.contains('#')) {
+            assert!(SETTING_ANCHORS.iter().any(|(t, _)| t == topic), "{topic} has no link back in SETTING_ANCHORS");
+        }
+        assert_eq!(SETTING_ANCHORS.len(), HELP_TOPICS.iter().filter(|t| t.contains('#')).count());
+        // The macro writes the id on the heading, so `/admin/<slug>/#<id>` has something to land on.
+        let macros =
+            std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/ui/templates/components.html")).unwrap();
+        assert!(macros.contains("<h3 id=\"{{ id }}\">"), "section_title no longer writes its id on the heading");
+    }
+
+    #[test]
+    fn a_settings_article_opens_its_admin_page_and_links_each_section_back_and_other_pages_have_no_link() {
+        for p in pages() {
+            let html = served(&p.id);
+            let opens = html.matches("class=\"btn btn-secondary rf-open\"").count();
+            let links = html.matches("class=\"rf-set\"").count();
+            if p.settings.is_empty() {
+                // The index's one rf-open is "View on GitHub"; neither it nor the admin-ui pages link to a setting.
+                assert_eq!(opens, usize::from(p.is_index()), "{}: a link to a setting with no `settings:`", p.id);
+                assert_eq!(links, 0, "{}: a section link with no `settings:`", p.id);
+                continue;
+            }
+            assert_eq!(opens, p.settings.len(), "{}: one button for each admin page", p.id);
+            for slug in &p.settings {
+                let admin = admin_page(slug).unwrap_or_else(|| panic!("{}: `settings:` names {slug}, which is no admin page", p.id));
+                assert!(html.contains(&format!("href=\"/admin/{slug}/\">")), "{}", p.id);
+                assert!(html.contains(&format!("Open {} settings</a>", admin.label.replace('&', "&#38;"))), "{}: {}", p.id, admin.label);
+            }
+            let want = p.headings.iter().filter(|h| SETTING_ANCHORS.iter().any(|(t, _)| *t == format!("{}#{}", p.id, h.id))).count();
+            assert_eq!(links, want, "{}: a link for each heading that is a help topic", p.id);
+            for (topic, element) in SETTING_ANCHORS.iter().filter(|(t, _)| t.starts_with(&format!("{}#", p.id))) {
+                let slug = p.id.strip_prefix("settings/").unwrap();
+                assert!(html.contains(&format!("class=\"rf-set\" href=\"/admin/{slug}/#{element}\">")), "{}: {topic}", p.id);
+            }
+        }
+        assert!(served("settings/network").contains("Settings / Network / Host name<"));
+        assert!(!served("admin-ui/components").contains("rf-set") && !served("admin-ui/page-layouts").contains("rf-open"));
+    }
+
+    #[test]
+    fn the_home_lists_every_page_by_area_with_its_title_and_summary_from_the_index() {
+        let html = served("index");
+        assert!(!html.contains("class=\"ref-nav\""), "the home has no outline: it is the list");
+        let areas: Vec<&str> = html.split("<section class=\"rf-grp\"").skip(1).map(|s| s.split("</section>").next().unwrap()).collect();
+        assert!(areas.len() >= 3, "{}", areas.len());
+        let mut shown = 0;
+        for p in pages().iter().filter(|p| !p.is_index()) {
+            let area = areas
+                .iter()
+                .find(|a| a.contains(&format!(">{}</h3>", p.group.replace('&', "&#38;"))))
+                .unwrap_or_else(|| panic!("{}: no area {}", p.id, p.group));
+            let row = format!(
+                "<li><a href=\"{}\">{}</a><span class=\"rf-sum\">{}</span></li>",
+                p.path(),
+                p.title.replace('&', "&#38;"),
+                p.summary.replace('&', "&#38;").replace('\'', "&#39;")
+            );
+            assert!(area.contains(&row), "{}: its row is not under {}: {row}", p.id, p.group);
+            shown += 1;
+        }
+        assert_eq!(html.matches("<li><a href=\"/admin/reference/").count(), shown);
+        assert!(html.contains("View on GitHub"));
+    }
+
+    #[test]
+    fn the_breadcrumb_of_an_article_names_its_area() {
+        let net = served("settings/network");
+        let crumb = &net[net.find("aria-label=\"Breadcrumb\"").unwrap()..];
+        let crumb = &crumb[..crumb.find("</nav>").unwrap()];
+        assert!(crumb.contains("<li>Reference</li><li>Admin settings</li><li aria-current=\"page\">Network</li>"), "{crumb}");
     }
 }

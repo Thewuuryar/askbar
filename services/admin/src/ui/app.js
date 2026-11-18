@@ -805,6 +805,35 @@
     // Signed out, or the admin itself is away: say it is not checked.
     onError: () => showHealth('pending', 'Services not checked'),
   });
+  // The reference article's two side lists. The outline keeps its own scroll from one article to the next (kept for the tab,
+  // so a long outline is not back at the top after each click) and always shows the current page, without moving the page.
+  // "On this page" marks the section being read.
+  function referencePage(nav) {
+    if (!nav) return;
+    const key = 'askbar-ref-nav-scroll';
+    try { const saved = Number(sessionStorage.getItem(key)); if (saved > 0) nav.scrollTop = saved; } catch (e) { /* storage may be unavailable */ }
+    const cur = nav.querySelector('a[aria-current]');
+    if (cur && nav.scrollHeight > nav.clientHeight) {
+      const top = cur.offsetTop - nav.offsetTop;
+      if (top < nav.scrollTop || top + cur.offsetHeight > nav.scrollTop + nav.clientHeight) nav.scrollTop = Math.max(0, top - nav.clientHeight / 2);
+    }
+    nav.addEventListener('scroll', () => { try { sessionStorage.setItem(key, String(nav.scrollTop)); } catch (e) { /* ignore */ } }, { passive: true });
+    const links = [...document.querySelectorAll('.ref-toc a[href^="#"]')];
+    if (!links.length) return;
+    const heads = links.map((a) => document.getElementById(decodeURIComponent(a.getAttribute('href').slice(1)))).filter(Boolean);
+    let queued = false;
+    const mark = () => {
+      queued = false;
+      const line = parseFloat(getComputedStyle(document.documentElement).scrollPaddingTop) || 0;
+      let at = heads[0];
+      for (const h of heads) if (h.getBoundingClientRect().top <= line + 1) at = h;
+      for (const a of links) {
+        if (a.getAttribute('href') === '#' + at.id) a.setAttribute('aria-current', 'location'); else a.removeAttribute('aria-current');
+      }
+    };
+    window.addEventListener('scroll', () => { if (!queued) { queued = true; requestAnimationFrame(mark); } }, { passive: true });
+    mark();
+  }
   function showApp() {
     hideAll();
     show($('app'), true);
@@ -813,6 +842,7 @@
     // On a phone the reference's outline starts closed (CSS shows its toggle only there).
     const refNav = document.querySelector('.ref-nav');
     if (refNav && getComputedStyle(refNav.querySelector('summary')).display !== 'none') refNav.open = false;
+    referencePage(refNav);
     focusHash();
     ui.helpFromAddress();
     initSearch();
