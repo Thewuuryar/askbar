@@ -17,7 +17,7 @@ bad() { echo "FAIL  $1 ${2:-}"; failn=$((failn+1)); }
 
 mkdir -p "$WORK/cfg" "$WORK/auth"
 # The file the admin writes (services/admin/src/cpa.rs `config_yaml`), with throwaway values.
-printf 'config-version: 8\nserver:\n  host: ""\n  port: 8317\noauth:\n  auth-dir: "/root/.cli-proxy-api"\naccess:\n  api-keys:\n    - "check-api-key"\nmanagement:\n  allow-remote: true\n  secret-key: "check-control-secret"\n' > "$WORK/cfg/config.yaml"
+printf 'config-version: 8\nserver:\n  host: ""\n  port: 8317\n  kv-store:\n    disabled: true\noauth:\n  auth-dir: "/root/.cli-proxy-api"\naccess:\n  api-keys:\n    - "check-api-key"\nmanagement:\n  allow-remote: true\n  secret-key: "check-control-secret"\n' > "$WORK/cfg/config.yaml"
 docker run -d --name "$NAME" -p "127.0.0.1:$PORT:8317" -v "$WORK/cfg:/CLIProxyAPI/config-dir" -v "$WORK/auth:/root/.cli-proxy-api" \
   "$IMAGE" ./CLIProxyAPI -config /CLIProxyAPI/config-dir/config.yaml >/dev/null || { echo "could not start $IMAGE" >&2; exit 2; }
 B="http://127.0.0.1:$PORT/v0/management"; H="Authorization: Bearer check-control-secret"
@@ -44,5 +44,8 @@ for pair in "anthropic-auth-url http://localhost:54545/callback" "codex-auth-url
     && ok "a callback with a state that is not a login's is refused (404)" || bad "a callback with a wrong state was not refused"
 done
 [ "$(curl -s -H "$H" "$B/get-auth-status?state=nope" | field status)" = error ] && ok "an unknown state reads as status error" || bad "an unknown state does not read as status error"
+
+# v8.0.77 writes <auth-dir>/kv.db (replies, thinking) unless server.kv-store.disabled is true; the admin's config turns it off.
+[ -z "$(find "$WORK/auth" -name 'kv.db*')" ] && [ ! -e "$WORK/auth/kv.db" ] && ok "the on-disk KV store is off: no kv.db is written" || bad "a kv.db was written to the auth directory" "$(find "$WORK/auth" -name 'kv.db*')"
 
 echo; echo "$pass passed, $failn failed"; [ "$failn" = 0 ]
