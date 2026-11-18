@@ -948,9 +948,9 @@ ports=$(docker inspect -f '{{range $p, $b := .NetworkSettings.Ports}}{{if $b}}{{
 [ "$ports" = "443/tcp 80/tcp " ] && pass "Caddy publishes 443 and 80 only" || fail "Caddy publishes: $ports"
 cfg=$(caddy_config)
 printf '%s' "$cfg" | grep -q '"abort":true' && printf '%s' "$cfg" | grep -q '192.168.0.0/16' && pass "the admin site is limited to private addresses" || fail "the admin site has no private-address rule"
-# /admin/ goes to the first admin page (plan step 1.16), through Caddy.
+# /admin/ goes to the admin's landing page, Home (LANDING_PAGE in services/admin/src/constants.rs), through Caddy.
 code=$(curl -skL -o /dev/null -w '%{http_code} %{url_effective}' --max-time 5 https://localhost/admin/ 2>/dev/null || true)
-[ "$code" = "200 https://localhost/admin/providers/" ] && pass "https://localhost/admin/ opens the admin's first page" || fail "https://localhost/admin/ answered '$code'"
+[ "$code" = "200 https://localhost/admin/home/" ] && pass "https://localhost/admin/ opens the admin's landing page (Home)" || fail "https://localhost/admin/ answered '$code'"
 code=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 https://localhost/api/admin/v1/health 2>/dev/null || true)
 [ "$code" = 200 ] && pass "the admin API answers at /api/admin/v1 over HTTPS" || fail "https://localhost/api/admin/v1/health answered '$code'"
 code=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 https://localhost/admin/api/v1/health 2>/dev/null || true)
