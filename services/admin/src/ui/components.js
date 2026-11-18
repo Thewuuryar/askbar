@@ -135,6 +135,13 @@
     return banner;
   };
 
+  // The banners stay pinned under the status bar (CSS); their height is published as --banners-h so that a focus or an address
+  // target is scrolled clear of them too (scroll-padding-top in style.css).
+  const bannerRegion = $('banners');
+  if (bannerRegion && window.ResizeObserver) {
+    new ResizeObserver(() => document.documentElement.style.setProperty('--banners-h', bannerRegion.offsetHeight + 'px')).observe(bannerRegion);
+  }
+
   // ------------------------------------------------------------- forms
 
   // ui.fieldError('host', 'Not a host name.') marks the field and shows the line under it; '' clears it.

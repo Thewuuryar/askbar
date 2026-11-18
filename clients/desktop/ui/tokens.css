@@ -64,6 +64,11 @@
   --search-pop-w: 520px;
   --tip-w: 280px;
   --skeleton-h: 12px;
+  --content-w: 1100px;
+  --page-w: 860px;
+  --content-bottom-room: 64px;
+  --facts-w: 360px;
+  --facts-w-s: 260px;
 
   color-scheme: light;
 }

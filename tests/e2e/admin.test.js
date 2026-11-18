@@ -4370,7 +4370,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     // A 320 px phone (a one-off resize, not a third suite width): nothing scrolls sideways, the facts stay in the bar, the kill word stays visible.
     await page.setViewportSize({ width: 320, height: viewport.height });
     await page.waitForFunction(() => document.documentElement.clientWidth === 320);
-    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth), false, 'no sideways scroll at 320 px');
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth), false, 'no sideways scroll at 320 px: ' + await page.evaluate(() => JSON.stringify({ sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth, ml: getComputedStyle(document.querySelector('.content')).marginLeft, bar: document.getElementById('status-bar').getBoundingClientRect().width, app: document.getElementById('app').getBoundingClientRect().width, htmlClass: document.documentElement.className, wide: [...document.querySelectorAll('body *')].filter((e) => e.getClientRects().length && e.getBoundingClientRect().right > document.documentElement.offsetWidth + 1 && getComputedStyle(e).position !== 'fixed').slice(0, 6).map((e) => e.tagName + '#' + e.id + '.' + e.className + ' ' + Math.round(e.getBoundingClientRect().right)) })));
     assert.deepEqual(barCheck(await barItems()), [], 'status bar items at 320 px');
     assert.ok((await page.evaluate(() => document.querySelector('#sb-kill .status-word').getBoundingClientRect().width)) > 20, 'the kill switch word is visible at 320 px');
     await page.setViewportSize(viewport);
@@ -4382,6 +4382,94 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.waitForTimeout(K.STATUS_EVERY_SECS * 2 * 1000 + 1500);
     page.off('request', count);
     assert.ok(polls >= 2 && polls <= 3, 'status polled every STATUS_EVERY_SECS: ' + polls);
+    await openPage('providers');
+  });
+  await step('frame: the side menu and the banners stay put while a long page scrolls, and a banner starts below the bar', async () => {
+    await page.goto(base + 'general/');
+    await page.waitForSelector('#app:not([hidden])');
+    await page.evaluate(() => {
+      window.ui.banner('frame-test', 'error', 'A whole-admin banner for the frame test.');
+      const tall = document.createElement('div');
+      tall.id = 't-tall';
+      tall.style.height = '3000px';
+      document.querySelector('#main').append(tall);
+      const target = document.createElement('p');
+      target.id = 't-anchor';
+      target.tabIndex = -1;
+      target.textContent = 'Anchor target';
+      tall.append(target);
+      target.style.marginTop = '1500px';
+    });
+    const geometry = () => page.evaluate(() => {
+      const box = (sel) => { const e = document.querySelector(sel); if (!e || e.getClientRects().length === 0) return null; const r = e.getBoundingClientRect(); return { x: r.x, y: r.y, h: r.height }; };
+      const root = getComputedStyle(document.documentElement);
+      return { side: box('#side-menu'), phone: box('.phone-bar'), bar: box('#status-bar'), banner: box('#banners'), mine: box('[data-banner="frame-test"]'), scrollY: window.scrollY, phoneH: parseFloat(root.getPropertyValue('--phone-bar-h')), statusH: parseFloat(root.getPropertyValue('--status-h')) };
+    });
+    const top = await geometry();
+    assert.ok(top.mine, 'the test banner shows');
+    const belowBar = isPhone ? top.phoneH + top.statusH : top.statusH;
+    assert.ok(Math.abs(top.banner.y - belowBar) < 0.5, 'the banners start directly under the status bar (' + top.banner.y + ' vs ' + belowBar + ')');
+    const title = await page.evaluate(() => document.querySelector('.page-title').getBoundingClientRect().top);
+    assert.ok(title >= top.banner.y + top.banner.h - 0.5, 'the page content starts below the banners');
+    for (const y of [120, 700, 2500]) {
+      await page.evaluate((to) => window.scrollTo(0, to), y);
+      await page.waitForFunction((to) => Math.abs(window.scrollY - to) < 2 || window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 2, y);
+      const now = await geometry();
+      assert.ok(now.scrollY > 0, 'the page scrolled');
+      assert.deepEqual(now.banner, top.banner, 'the banners do not move while the page scrolls (scrolled ' + now.scrollY + ')');
+      assert.deepEqual(now.bar, top.bar, 'the status bar does not move');
+      assert.deepEqual(now.side, top.side, 'the side menu does not move');
+      assert.deepEqual(now.phone, top.phone, 'the phone bar does not move');
+    }
+    // An address target and a focused control are scrolled clear of the bar and the banners, not under them.
+    await page.evaluate(() => { window.scrollTo(0, 0); location.hash = '#t-anchor'; });
+    await page.waitForFunction(() => window.scrollY > 500);
+    await page.waitForTimeout(300);
+    const clear = await page.evaluate(() => { const b = document.getElementById('banners').getBoundingClientRect(); return { anchor: document.getElementById('t-anchor').getBoundingClientRect().top, below: b.bottom }; });
+    assert.ok(clear.anchor >= clear.below - 0.5, 'an address target is not hidden under the banners: ' + JSON.stringify(clear));
+    // A banner clearing does not shift the page sideways.
+    const x0 = await page.evaluate(() => document.querySelector('.page-title').getBoundingClientRect().x);
+    await page.evaluate(() => { window.ui.banner('frame-test', 'error', null); document.getElementById('t-tall').remove(); });
+    await page.waitForFunction(() => !document.querySelector('[data-banner="frame-test"]'));
+    assert.equal(await page.evaluate(() => document.querySelector('.page-title').getBoundingClientRect().x), x0, 'the title keeps its left edge when a banner clears');
+    await page.evaluate(() => { history.replaceState(null, '', location.pathname); window.scrollTo(0, 0); });
+    if (!isPhone) {
+      // The collapsed menu is fixed too.
+      await page.evaluate(() => { document.documentElement.classList.add('menu-collapsed'); });
+      const col = await page.evaluate(() => { const r = document.getElementById('side-menu').getBoundingClientRect(); return { x: r.x, y: r.y }; });
+      assert.deepEqual(col, { x: 0, y: 0 }, 'the collapsed menu sits at the window corner');
+      await page.evaluate(() => { document.documentElement.classList.remove('menu-collapsed'); });
+    }
+  });
+  await step('frame: every page has the same column: the title and the first block keep their left edge, and no table box shows a bar', async () => {
+    const slugs = await page.evaluate(async () => (await window.ui.ready).PAGE_SLUGS);
+    assert.ok(slugs.length >= 14, 'the page list is read from the constants');
+    const edges = [];
+    for (const slug of slugs) {
+      await page.goto(base + slug + '/');
+      await page.waitForSelector('#app:not([hidden])');
+      await page.waitForSelector('#main .page-title');
+      await page.waitForTimeout(250);
+      const r = await page.evaluate(() => {
+        const section = document.querySelector('#main > section');
+        const first = [...section.children].find((c) => !c.classList.contains('page-header') && c.tagName !== 'TEMPLATE' && !c.hidden && c.getBoundingClientRect().height > 0 && getComputedStyle(c).position !== 'fixed');
+        const bars = [];
+        for (const w of document.querySelectorAll('.table-wrap')) {
+          if (w.getClientRects().length === 0) continue;
+          const cs = getComputedStyle(w);
+          if (w.scrollWidth > w.clientWidth + 0.5) bars.push((w.querySelector('table')?.id || 'a table') + ' scrolls inside its box by ' + (w.scrollWidth - w.clientWidth));
+          if (w.offsetHeight > w.clientHeight + 1 + parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth)) bars.push((w.querySelector('table')?.id || 'a table') + ' shows a bar under it');
+        }
+        return { title: document.querySelector('.page-title').getBoundingClientRect().x, first: first ? first.getBoundingClientRect().x : null, sideways: document.documentElement.scrollWidth > document.documentElement.clientWidth, bars };
+      });
+      assert.equal(r.sideways, false, slug + ' scrolls sideways');
+      // The two Audit tables whose cells keep one line (Model calls, Routing) scroll inside their box when a long name needs it.
+      if (!isPhone && !['audit/calls', 'audit/routing'].includes(slug)) assert.deepEqual(r.bars, [], slug + ': table boxes show no scroll bar');
+      edges.push({ slug, ...r });
+    }
+    const plain = edges.filter((e) => !e.slug.startsWith('reference'));
+    for (const e of edges) assert.equal(e.title, edges[0].title, e.slug + ': the title is at the same x as on ' + edges[0].slug);
+    for (const e of plain) assert.equal(e.first, plain[0].first, e.slug + ': the first block is at the same x as on ' + plain[0].slug);
     await openPage('providers');
   });
   await step('pages: an audit request opens directly from its address, in the docked panel, and the address follows it', async () => {
