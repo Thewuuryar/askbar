@@ -3844,6 +3844,54 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.goto(base);
     await page.waitForSelector('#app:not([hidden])');
   });
+  // Plan step 7.5: the admin-ui reference pages show the real components, and only those pages do.
+  await step('reference: the components and layouts pages show every component live; nothing else does; ids, targets, scrolling and axe are clean', async () => {
+    const min = isPhone ? 44 : 24;
+    const axeSource = fs.readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8');
+    const macros = [...fs.readFileSync(path.join(__dirname, '../../services/admin/src/ui/templates/components.html'), 'utf8').matchAll(/\{% macro (\w+)\(/g)].map((m) => m[1]);
+    const frame = { skip_link: 'a.skip-link', announcer: '#announcer', toast_region: '#toasts', banner_region: '#banners' };
+    assert.ok(macros.length >= 25, 'components.html has its macros');
+    for (const [url, want] of [['reference/admin-ui/components/', macros.filter((m) => !(m in frame))], ['reference/admin-ui/page-layouts/', ['layout_index', 'layout_list', 'layout_settings', 'layout_article']]]) {
+      await page.goto(base + url);
+      await page.waitForSelector('#app:not([hidden])');
+      const shown = await page.$$eval('.ref-body [data-live-example]', (els) => els.map((e) => [e.dataset.liveExample, e.children.length, e.getBoundingClientRect().height]));
+      assert.deepEqual(shown.map((x) => x[0]).sort(), want.slice().sort(), url + ': one live example for each component');
+      for (const [name, kids, h] of shown) assert.ok(kids > 0 && h > 0, url + ': the example ' + name + ' is drawn');
+      assert.equal(await page.locator('.ref-body div[data-live]').count(), 0, 'no hole is left unfilled');
+      assert.equal(await page.evaluate(() => document.body.innerHTML.includes('live:')), false, 'no marker text on the page');
+      if (url.includes('components')) {
+        for (const sel of Object.values(frame)) assert.equal(await page.locator(sel).count(), 1, 'the frame has ' + sel);
+        assert.equal(await page.locator('.live-example dialog[open]').count(), 1, 'the dialog example is shown open');
+        assert.equal(await page.locator('.live-example .na[aria-disabled="true"]').count(), 1, 'the not-available example is aria-disabled');
+      }
+      // The examples are harmless and never meet the page's own ids.
+      assert.equal(await page.locator('.live-example [disabled], .live-example script, .live-example [style]').count(), 0, url + ': no disabled, script or style in an example');
+      const ids = await page.evaluate(() => { const all = [...document.querySelectorAll('[id]')].map((e) => e.id); return { dup: all.filter((v, i) => all.indexOf(v) !== i), bad: [...document.querySelectorAll('.live-example [id]')].map((e) => e.id).filter((v) => !v.startsWith('ex-')) }; });
+      assert.deepEqual(ids.dup, [], url + ': no duplicate ids');
+      assert.deepEqual(ids.bad, [], url + ': an example id without the ex- prefix');
+      const wide = await page.evaluate(() => [...document.querySelectorAll('.ref-body *')].filter((e) => e.getBoundingClientRect().right > window.innerWidth + 0.5).map((e) => e.tagName.toLowerCase() + '.' + e.className + '#' + e.id).slice(0, 8));
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, url + ': no sideways scroll; wider than the window: ' + wide.join(' '));
+      const small = await page.$$eval('.live-example button, .live-example a.tab, .live-example .btn, .live-example .na, .live-example .na-tag', (els, m) => els.map((e) => [e.className, e.getBoundingClientRect()]).filter(([, r]) => r.height > 0 && (r.height < m - 0.5 || r.width < m - 0.5)).map(([c]) => c), min);
+      assert.deepEqual(small, [], url + ': every example target is at least ' + min + ' px');
+      const axeCtx = await browser.newContext({ viewport, bypassCSP: true, storageState: await ctx.storageState() });
+      try {
+        const ap = await axeCtx.newPage();
+        await ap.goto(base + url);
+        await ap.waitForSelector('#app:not([hidden])');
+        await ap.addScriptTag({ content: axeSource });
+        const found = await ap.evaluate(async () => (await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'] } })).violations.map((v) => v.id + ': ' + v.nodes.map((n) => n.target.join(' ')).join(', ')));
+        assert.deepEqual(found, [], 'axe on ' + url);
+      } finally { await axeCtx.close(); }
+    }
+    // Every other reference page is text only.
+    for (const url of ['reference/', 'reference/settings/network/']) {
+      await page.goto(base + url);
+      await page.waitForSelector('#app:not([hidden])');
+      assert.equal(await page.locator('.ref-body [data-live-example], .ref-body [data-live]').count(), 0, url + ': no live example');
+    }
+    await page.goto(base);
+    await page.waitForSelector('#app:not([hidden])');
+  });
   // Plan step 7.3: ? buttons and help in the docked side panel, with the text pre-rendered in the page.
   await step('help: every ? button has a name and tooltip, the panel shows its topic with no request, Back and Esc close it, Open full page lands on the heading', async () => {
     const K = await page.evaluate(() => window.ui.ready);

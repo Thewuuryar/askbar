@@ -744,3 +744,20 @@ body[data-page="reference"] main { max-width: 1100px; }
 .help-kicker { margin: 0 0 var(--space-3); font-size: var(--text-xs); color: var(--muted); }
 .help-article { max-width: none; }
 .help-foot { margin: var(--space-5) 0 0; padding-top: var(--space-3); border-top: 1px solid var(--line); }
+
+/* Live examples in the admin-ui reference pages (plan step 7.5): the real components, shown in place. */
+.live-example { display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-4); border: 1px solid var(--line); border-radius: var(--radius-card); background: var(--card); min-width: 0; }
+.live-example .page-header, .live-example .field, .live-example .save-bar { margin: 0; }
+.live-example .menu, .live-example .side-panel { position: static; width: auto; min-width: 0; max-width: 100%; }
+.live-example dialog.box { position: static; margin: 0; width: auto; max-width: 100%; }
+.live-example .row-confirm { border-top: 0; }
+.live-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); }
+.live-icons { gap: var(--space-3) var(--space-4); }
+.live-icon { display: inline-flex; flex-direction: column; align-items: center; gap: var(--space-1); min-width: var(--target-min); }
+.live-icon-art { display: inline-flex; width: var(--btn-h); height: var(--btn-h); align-items: center; justify-content: center; }
+.live-diagram { display: flex; flex-direction: column; gap: var(--space-2); }
+.ld-block { padding: var(--space-2) var(--space-3); border: 1px dashed var(--line); border-radius: var(--radius-control); background: var(--surface-2); color: var(--fg); font-size: var(--text-s); }
+.ld-row { display: flex; flex-wrap: wrap; justify-content: space-between; gap: var(--space-1) var(--space-3); }
+.ld-grow { padding-top: var(--space-5); padding-bottom: var(--space-5); }
+.ld-cols { display: grid; grid-template-columns: 1fr 2fr 1fr; gap: var(--space-2); }
+@media (max-width: 560px) { .ld-cols { grid-template-columns: 1fr; } }

@@ -20,6 +20,10 @@ static INDEX_JSON: &str = include_str!(concat!(env!("OUT_DIR"), "/reference.json
 #[path = "../build_render.rs"]
 mod build_render;
 
+/// How the renderer writes a hole for a live example, `<div data-live="name"></div>` (a test checks it matches
+/// `build_render::LIVE_HOLE`, which only the build and the tests can use).
+const LIVE_HOLE: &str = "data-live=";
+
 /// The slug of the menu item the reference pages belong to.
 const MENU_SLUG: &str = "reference";
 
@@ -184,6 +188,56 @@ fn outline() -> Vec<OutlineGroup> {
     out
 }
 
+/// One live example of the admin-ui pages (plan step 7.5): the real component macro, rendered by `ui/templates/live.html`.
+#[derive(Template)]
+#[template(path = "live.html")]
+struct LiveExample {
+    name: String,
+}
+
+/// The HTML of the example `name`, or an error when `live.html` has no branch for it. The macros write a few parts
+/// hidden or closed (a menu, a side panel, a save bar, a row confirmation, a dialog) because on a real page they open
+/// when used. Here they are shown in place, so their `hidden` is taken out and the dialog is opened, and the secret's
+/// value, which a script fills on a real page, gets a plain placeholder.
+fn live_example(name: &str) -> Result<String, String> {
+    let html = LiveExample { name: name.to_string() }.render().map_err(|e| format!("live example {name}: {e}"))?;
+    let html = html.trim();
+    if html.is_empty() {
+        return Err(format!("live example {name}: live.html has no example by that name"));
+    }
+    let shown = match name {
+        "menu" | "side_panel" | "row_confirm" | "save_bar" => html.replacen(" hidden>", ">", 1),
+        "dialog_box" => html.replacen("<dialog ", "<dialog open ", 1),
+        "secret" => html.replacen("></code>", ">Example value</code>", 1),
+        _ => html.to_string(),
+    };
+    Ok(shown)
+}
+
+/// A piece of a page: its HTML, then the live example (`name` of `live.html`) that follows it, `""` for none.
+struct Part {
+    html: &'static str,
+    live: &'static str,
+    example: String,
+}
+
+/// The page's HTML cut at its holes (`<div data-live="name"></div>`, written by the renderer at each marker), each hole
+/// paired with the real component. Done on the server, so the browser never builds markup from text.
+fn parts(page: &'static RefPage) -> Result<Vec<Part>, String> {
+    let hole = format!("<div {}\"", LIVE_HOLE);
+    let mut out = Vec::new();
+    let mut rest = page.html.as_str();
+    while let Some(at) = rest.find(&hole) {
+        let after = &rest[at + hole.len()..];
+        let end = after.find("\"></div>\n").ok_or_else(|| format!("{}: a live example hole is not closed", page.id))?;
+        let name = &after[..end];
+        out.push(Part { html: &rest[..at], live: name, example: live_example(name)? });
+        rest = &after[end + "\"></div>\n".len()..];
+    }
+    out.push(Part { html: rest, live: "", example: String::new() });
+    Ok(out)
+}
+
 #[derive(Template)]
 #[template(path = "reference.html")]
 struct ReferenceView {
@@ -194,7 +248,7 @@ struct ReferenceView {
     menu: &'static [MenuGroup],
     tabs: Vec<&'static Page>,
     lede: &'static str,
-    html: &'static str,
+    parts: Vec<Part>,
     page: &'static RefPage,
     outline: Vec<OutlineGroup>,
     edit_url: String,
@@ -210,7 +264,7 @@ pub fn render(page: &'static RefPage) -> askama::Result<String> {
         menu: menu(),
         tabs: Vec::new(),
         lede: page.summary.as_str(),
-        html: page.html.as_str(),
+        parts: parts(page).map_err(|e| askama::Error::Custom(e.into()))?,
         page,
         outline: outline(),
         edit_url: page.edit_url(),
@@ -385,5 +439,140 @@ mod tests {
             }
         }
         assert!(buttons >= 40, "{buttons}");
+    }
+
+    // ---------------------------------------------------------------- live examples (plan step 7.5)
+
+    fn markdown(id: &str) -> String {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/reference").join(format!("{id}.md"));
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+    }
+
+    /// The names of the `<!-- live: name -->` lines of a Markdown page.
+    fn markers(md: &str) -> Vec<String> {
+        md.lines().filter_map(build_render::live_marker).collect()
+    }
+
+    fn served(id: &str) -> &'static str {
+        &rendered()[pages().iter().position(|p| p.id == id).unwrap()]
+    }
+
+    /// The macros the page frame writes once. They are named on the Components page without an example of their own.
+    const FRAME_MACROS: &[&str] = &["skip_link", "announcer", "toast_region", "banner_region"];
+
+    #[test]
+    fn the_hole_the_renderer_writes_is_the_one_the_server_looks_for() {
+        assert_eq!(LIVE_HOLE, build_render::LIVE_HOLE);
+        let (html, _) = build_render::render("admin-ui/x.md", "# T\n\ntext\n\n<!-- live: button -->\n\nmore\n", &HashMap::new()).unwrap();
+        assert!(html.contains("<div data-live=\"button\"></div>\n"), "{html}");
+        // Any other comment or HTML is still shown as text; a marker with a bad name is not a marker.
+        for md in ["<!-- note -->", "<!-- live: Bad Name -->", "<!-- live: -->", "<div data-live=\"x\"></div>"] {
+            let (html, _) = build_render::render("admin-ui/x.md", &format!("# T\n\n{md}\n"), &HashMap::new()).unwrap();
+            assert!(!html.contains("<div data-live"), "{md}: {html}");
+        }
+        // Only the admin-ui pages may show live examples.
+        assert!(build_render::render("settings/x.md", "# T\n\n<!-- live: button -->\n", &HashMap::new()).is_err());
+    }
+
+    #[test]
+    fn every_marker_has_a_renderer_and_none_is_left_in_the_served_html() {
+        let mut total = 0;
+        for id in ["admin-ui/components", "admin-ui/page-layouts"] {
+            let names = markers(&markdown(id));
+            assert!(!names.is_empty(), "{id}: no live examples");
+            let html = served(id);
+            assert!(!html.contains("data-live=\""), "{id}: a hole is left in the served HTML");
+            assert!(!html.contains("<!-- live") && !html.contains("{{live"), "{id}: a marker is left in the served HTML");
+            let shown: Vec<&str> = html.split("data-live-example=\"").skip(1).map(|r| r.split('"').next().unwrap()).collect();
+            assert_eq!(shown, names, "{id}: the examples shown are the markers, in order");
+            for name in &names {
+                live_example(name).unwrap_or_else(|e| panic!("{id}: {e}"));
+            }
+            let mut sorted = names.clone();
+            sorted.sort();
+            sorted.dedup();
+            assert_eq!(sorted.len(), names.len(), "{id}: a marker is used twice");
+            total += names.len();
+        }
+        assert!(total >= 25, "{total}");
+        assert!(live_example("no_such_example").is_err(), "a name with no branch in live.html is an error");
+    }
+
+    #[test]
+    fn the_components_page_names_every_macro_and_shows_all_but_the_frame_ones() {
+        let templates = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/ui/templates/components.html");
+        let source = std::fs::read_to_string(templates).unwrap();
+        let macros: Vec<&str> = source.split("{% macro ").skip(1).map(|r| r.split('(').next().unwrap()).collect();
+        assert!(macros.len() >= 25, "{macros:?}");
+        let md = markdown("admin-ui/components");
+        let shown = markers(&md);
+        for m in &macros {
+            assert!(md.contains(&format!("#### `{m}`")), "components.md does not name the macro {m}");
+            assert_eq!(shown.iter().any(|s| s == m), !FRAME_MACROS.contains(m), "{m}: a live example iff it is not a frame macro");
+        }
+        for s in &shown {
+            assert!(macros.contains(&s.as_str()), "{s} is a marker but not a macro");
+        }
+    }
+
+    #[test]
+    fn the_admin_ui_markdown_holds_no_html_and_only_these_pages_show_examples() {
+        for id in ["admin-ui/components", "admin-ui/page-layouts"] {
+            let md = markdown(id);
+            let body: String = md.lines().filter(|l| build_render::live_marker(l).is_none()).collect::<Vec<_>>().join("\n");
+            // Code is allowed to hold anything; what is left must not open a tag.
+            let mut plain = String::new();
+            let mut in_fence = false;
+            for line in body.lines() {
+                if line.trim_start().starts_with("```") {
+                    in_fence = !in_fence;
+                } else if !in_fence {
+                    plain.push_str(&line.split('`').step_by(2).collect::<String>());
+                    plain.push('\n');
+                }
+            }
+            for (i, _) in plain.match_indices('<') {
+                let next = plain[i + 1..].chars().next().unwrap_or(' ');
+                assert!(
+                    !(next.is_ascii_alphabetic() || next == '/' || next == '!'),
+                    "{id}: HTML in the Markdown near {:?}",
+                    &plain[i..plain.len().min(i + 30)]
+                );
+            }
+        }
+        for p in pages() {
+            if !p.id.starts_with("admin-ui/") {
+                assert!(!served(&p.id).contains("data-live-example"), "{}: shows a live example", p.id);
+                assert!(!p.html.contains("data-live="), "{}: has a hole", p.id);
+            }
+        }
+    }
+
+    #[test]
+    fn the_live_examples_have_no_duplicate_ids_and_use_the_ex_prefix_for_their_own() {
+        for id in ["admin-ui/components", "admin-ui/page-layouts"] {
+            let html = served(id);
+            let mut seen = std::collections::HashSet::new();
+            for part in html.split(" id=\"").skip(1) {
+                let value = part.split('"').next().unwrap();
+                assert!(seen.insert(value), "{id}: the id {value} is used twice");
+            }
+            let live: String =
+                html.split("data-live-example=\"").skip(1).map(|r| r.split("</div></article>").next().unwrap_or(r)).collect();
+            assert!(
+                !live.contains("<script") && !live.contains(" style=") && !live.contains(" disabled"),
+                "{id}: unsafe or disabled markup in an example"
+            );
+        }
+        let c = served("admin-ui/components");
+        for id in ["ex-menu", "ex-panel", "ex-box", "ex-row-confirm", "ex-form-save-bar", "ex-field", "ex-password", "ex-secret-value"] {
+            assert!(c.contains(&format!(" id=\"{id}\"")), "the example {id} is missing");
+        }
+        // The parts the macros write hidden or closed are shown.
+        assert!(c.contains("<dialog open "), "the dialog example is open");
+        for id in ["ex-menu", "ex-panel", "ex-row-confirm", "ex-form-save-bar"] {
+            let tag = c.split(&format!(" id=\"{id}\"")).nth(1).unwrap().split('>').next().unwrap();
+            assert!(!tag.contains("hidden"), "{id} is shown: {tag}");
+        }
     }
 }

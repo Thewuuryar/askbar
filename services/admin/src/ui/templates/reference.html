@@ -22,7 +22,10 @@
         </nav>
       </details>
       <article class="ref-body" id="reference-article">
-{{ html|safe }}
+{%- for part in parts %}
+{{ part.html|safe }}
+{%- if !part.live.is_empty() %}<div class="live-example" role="group" aria-label="Live example: {{ part.live }}" data-live-example="{{ part.live }}">{{ part.example|safe }}</div>{% endif %}
+{%- endfor %}
         <p class="ref-src"><span>Source: <code>{{ page.source }}</code></span> <a class="ref-edit" href="{{ edit_url }}" rel="noopener noreferrer">{% call c::icon("code") %}{% endcall %}Edit on GitHub</a></p>
       </article>
       {%- if !page.headings.is_empty() %}

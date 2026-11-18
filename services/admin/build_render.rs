@@ -9,6 +9,18 @@ use std::collections::{BTreeMap, HashMap};
 /// The marker the runtime replaces with `{SOURCE_URL}/blob/{SOURCE_BRANCH}` at the start of an `href`.
 pub const SOURCE_MARK: &str = "@SOURCE@";
 
+/// The pages under this folder of docs/reference may show live examples.
+pub const LIVE_DIR: &str = "admin-ui/";
+/// How a hole for a live example starts in the rendered HTML: `<div data-live="button"></div>`.
+pub const LIVE_HOLE: &str = "data-live=";
+
+/// The example name of a line `<!-- live: name -->` (lower case letters, digits and `_`), or None for any other HTML.
+pub fn live_marker(html: &str) -> Option<String> {
+    let name = html.trim().strip_prefix("<!--")?.strip_suffix("-->")?.trim().strip_prefix("live:")?.trim();
+    let ok = !name.is_empty() && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+    ok.then(|| name.to_string())
+}
+
 pub struct Heading {
     pub level: u8,
     pub id: String,
@@ -195,7 +207,16 @@ pub fn render(file: &str, body: &str, ids: &HashMap<String, usize>) -> Result<(S
             }
             // Images are dropped; their alt text stays as plain text.
             Event::Start(Tag::Image { .. }) | Event::End(TagEnd::Image) => {}
-            // Raw HTML is shown as text, never passed on.
+            // A line `<!-- live: name -->` marks where the admin shows a live example (plan step 7.5): GitHub hides it, and
+            // here it becomes an empty hole the server fills with the real component. Only the admin-ui pages may use it.
+            Event::Html(t) if live_marker(&t).is_some() => {
+                let name = live_marker(&t).unwrap_or_default();
+                if !file.starts_with(LIVE_DIR) {
+                    return Err(format!("{file}: a live example marker ('{name}') is only allowed under {LIVE_DIR}"));
+                }
+                out.push(Event::Html(CowStr::from(format!("<div {LIVE_HOLE}\"{name}\"></div>\n"))));
+            }
+            // Other raw HTML is shown as text, never passed on.
             Event::Html(t) | Event::InlineHtml(t) => out.push(Event::Text(t)),
             other => out.push(other),
         }
