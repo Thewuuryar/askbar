@@ -138,7 +138,7 @@ pub static PAGES: &[Page] = &[
     Page { slug: "people", label: "People & clients", group: Group::Settings, icon: "people", lede: "Who can use Askbar, and the phones and computers paired to them.", render: people },
     Page { slug: "services", label: "Services", group: Group::Settings, icon: "server", lede: "Restart a part of Askbar.", render: services },
     Page { slug: "network", label: "Network", group: Group::Settings, icon: "globe", lede: "The host name, its certificate, and which addresses may open this site.", render: network },
-    Page { slug: "security", label: "Security", group: Group::Settings, icon: "shield", lede: "How you sign in to this admin, keys for scripts, and how long sealed content stays open.", render: security },
+    Page { slug: "security", label: "Security", group: Group::Settings, icon: "shield", lede: "How you sign in to this admin, its keys, how long audit records are kept and sealed content stays open, and the kill switch.", render: security },
     Page { slug: "backup", label: "Backup", group: Group::Settings, icon: "archive", lede: "Encrypted backups of the server's data and this admin's settings.", render: backup },
     Page { slug: "notifications", label: "Notifications", group: Group::Settings, icon: "send", lede: "Where Askbar sends an alert when something needs attention, and how to test it.", render: notifications },
     Page { slug: "reference", label: "Reference", group: Group::Reference, icon: "reference", lede: "What each admin setting does, how the admin site is built, and what the audit alerts mean. Start here.", render: crate::reference::index_html },

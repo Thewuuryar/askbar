@@ -170,6 +170,33 @@
     update();
   };
 
+  // A new password or passphrase and its repeat (the new_secret macro: #id and #id2). noun is 'password' or 'passphrase'.
+  // ui.pairProblems(id, min, noun) is the list of problems for ui.formErrors: too short (on the first field) and not equal (on the
+  // repeat). ui.pair(id, min, noun) wires the pair: the live length count, and the mismatch line under the repeat box as soon as it
+  // has text that differs from the first (cleared when they match again or the repeat is emptied). One helper for every pair.
+  ui.pairProblems = (id, min, noun) => {
+    const problems = [];
+    const value = $(id).value;
+    if (charCount(value) < min) problems.push({ id, text: 'The ' + (noun === 'password' ? 'new password' : 'passphrase') + ' must be at least ' + min + ' characters.' });
+    if (value !== $(id + '2').value) problems.push({ id: id + '2', text: 'The two ' + noun + 's do not match.' });
+    return problems;
+  };
+  ui.pair = (id, min, noun) => {
+    ui.lengthHint($(id), min);
+    const [first, repeat] = [$(id), $(id + '2')];
+    const check = () => {
+      if (repeat.value !== '' && repeat.value !== first.value) {
+        const text = 'The two ' + noun + 's do not match.';
+        // Said once when it appears (the page's one announcer), not at every key.
+        if (repeat.getAttribute('aria-invalid') !== 'true') ui.announce(text);
+        ui.fieldError(id + '2', text);
+      }
+      else if (repeat.getAttribute('aria-invalid') === 'true') ui.fieldError(id + '2', '');
+    };
+    first.addEventListener('input', check);
+    repeat.addEventListener('input', check);
+  };
+
   // A failed save (rule 26): each field gets its error line, a summary at the top of the form lists them as
   // links, and focus moves to the first field with a problem. ui.formErrors(form, []) clears them all.
   // errors = [{ id, text }]. A field without an error line (the field macro writes one) gets one.

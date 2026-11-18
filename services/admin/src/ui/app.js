@@ -119,15 +119,6 @@
     return problems.length > 0;
   }
 
-  // The new password or passphrase pair: long enough, and the repeat equal (the mismatch is on the repeat field).
-  function pairProblems(id, min, noun) {
-    const problems = [];
-    const value = $(id).value;
-    if ([...value].length < min) problems.push({ id, text: 'The ' + (noun === 'password' ? 'new password' : 'passphrase') + ' must be at least ' + min + ' characters.' });
-    if (value !== $(id + '2').value) problems.push({ id: id + '2', text: 'The two ' + noun + 's do not match.' });
-    return problems;
-  }
-
   // First run (ADR 0007): signed in with the published password, change it before anything else.
   function showPasswordChange() {
     hideAll();
@@ -183,7 +174,7 @@
     const form = e.target;
     const err = $('setup-backup-form-error');
     show(err, false);
-    const problems = pairProblems('setup-backup', K.MIN_PASSPHRASE_CHARS, 'passphrase');
+    const problems = ui.pairProblems('setup-backup', K.MIN_PASSPHRASE_CHARS, 'passphrase');
     if (!$('setup-backup-stored').checked) problems.push({ id: 'setup-backup-stored', text: 'Confirm that you stored the passphrase: it cannot be recovered.' });
     if (setupProblems(form, problems)) return;
     const fail = (m) => { err.textContent = m; show(err, true); };
@@ -212,7 +203,7 @@
     const form = e.target;
     const err = $('setup-audit-form-error');
     show(err, false);
-    const problems = pairProblems('setup-audit', K.MIN_PASSPHRASE_CHARS, 'passphrase');
+    const problems = ui.pairProblems('setup-audit', K.MIN_PASSPHRASE_CHARS, 'passphrase');
     if (!$('setup-audit-stored').checked) problems.push({ id: 'setup-audit-stored', text: 'Confirm that you stored the passphrase: it cannot be recovered.' });
     if (setupProblems(form, problems)) return;
     try {
@@ -234,7 +225,7 @@
     e.preventDefault();
     const err = $('setup-password-form-error');
     show(err, false);
-    if (setupProblems(e.target, pairProblems('setup-password', K.MIN_PASSWORD_CHARS, 'password'))) return;
+    if (setupProblems(e.target, ui.pairProblems('setup-password', K.MIN_PASSWORD_CHARS, 'password'))) return;
     try {
       await api('PUT', '/api/admin/v1/password', { current: $('setup-current').value, new: $('setup-password').value });
       $('setup-current').value = '';
@@ -504,7 +495,7 @@
     { key: 'no-default-model', test: (d) => d.catalog && d.catalog.models.length > 0 && !d.catalog.default, text: 'No default model is chosen.', fix: 'Choose default', href: '/admin/providers/#catalog-section' },
     { key: 'no-user', test: (d) => d.users && d.users.length === 0, text: 'No user exists yet, so there is nobody to pair an app for.', fix: 'Add user', href: '/admin/people/#add-user' },
     { key: 'no-client', test: (d) => d.users && d.users.length > 0 && d.clients && d.clients.length === 0, text: 'No client is paired yet.', fix: 'Pair a client', href: '/admin/people/#pair-open' },
-    { key: 'no-backup-key', test: (d) => d.schedule && !d.schedule.enabled, text: 'No backup key is set, so nothing is backed up.', fix: 'Open Backup', href: '/admin/backup/' },
+    { key: 'no-backup-key', test: (d) => d.schedule && !d.schedule.enabled, text: 'No backup key is set, so nothing is backed up.', fix: 'Open Security', href: '/admin/security/#bk-pass' },
     { key: 'backup-destination', test: (d) => d.schedule && d.schedule.enabled && (!d.schedule.destination.writable || !!d.schedule.destination.problem), text: 'The backup destination cannot be written to.', fix: 'Open Backup', href: '/admin/backup/' },
     { key: 'no-backup-yet', test: (d) => d.schedule && d.schedule.enabled && !d.schedule.last_success_at, text: 'No backup has been made yet.', fix: 'Open Backup', href: '/admin/backup/' },
     { key: 'drill-due', test: (d) => d.schedule && d.schedule.enabled && d.schedule.drill_due, text: 'A restore drill is due: restore a backup into a throwaway install to be sure it works.', fix: 'Open Backup', href: '/admin/backup/' },
@@ -845,11 +836,11 @@
     ['s-prompt', 'System prompt', 'general', 'settings', (r) => (r.system_prompt ? [...r.system_prompt].length + ' characters' : 'empty')],
     ['s-gen-timeout', 'Reply time limit', 'general', 'settings', (r) => withUnit(r.generation_timeout_secs, 's')],
     ['s-history-turns', 'Earlier questions sent with each question', 'general', 'settings', (r) => r.history_turns || 'all'],
-    ['s-kill-switch', 'Kill switch', 'general', 'settings', (r) => onOff(r.kill_switch)],
-    ['s-kill-aborts', 'Stop running replies when the kill switch goes on', 'general', 'settings', (r) => onOff(r.kill_switch_aborts_running !== false)],
-    ['s-retention', 'Keep audit records for', 'general', 'settings', (r) => withUnit(r.audit_retention_days, 'days')],
-    ['s-unseal-idle', 'Seal after idle minutes', 'general', 'settings', (r) => withUnit(r.unseal_idle_minutes, 'min')],
-    ['s-unseal-total', 'Seal after minutes in all', 'general', 'settings', (r) => withUnit(r.unseal_total_minutes, 'min')],
+    ['s-kill-switch', 'Kill switch', 'security', 'settings', (r) => onOff(r.kill_switch)],
+    ['s-kill-aborts', 'Stop running replies when the kill switch goes on', 'security', 'settings', (r) => onOff(r.kill_switch_aborts_running !== false)],
+    ['s-retention', 'Keep audit records for', 'security', 'settings', (r) => withUnit(r.audit_retention_days, 'days')],
+    ['s-unseal-idle', 'Seal after idle minutes', 'security', 'settings', (r) => withUnit(r.unseal_idle_minutes, 'min')],
+    ['s-unseal-total', 'Seal after minutes in all', 'security', 'settings', (r) => withUnit(r.unseal_total_minutes, 'min')],
     ['s-notice-on', 'Privacy notice', 'general', 'settings', (r) => (r.privacy_notice_enabled !== false ? 'shown' : 'hidden')],
     ['s-warning-on', 'AI warning above the input box', 'general', 'settings', (r) => (r.ai_warning_enabled !== false ? 'shown' : 'hidden')],
     ['s-theme', 'Theme', 'general', 'settings', (r) => r.display.theme],
@@ -869,7 +860,7 @@
     ['key-name', 'Admin API key', 'security', 'keys', (r) => (r.length ? r[0].name : 'none')],
     ['sched-keep-files', 'Keep at most this many backups', 'backup', 'schedule', (r) => r.keep_files],
     ['sched-keep-days', 'Delete backups older than this many days', 'backup', 'schedule', (r) => r.keep_days],
-    ['bk-pass', 'Backup key', 'backup', 'backupKey', (r) => (r.set ? 'fingerprint ' + r.fingerprint : 'not set')],
+    ['bk-pass', 'Backup key', 'security', 'backupKey', (r) => (r.set ? 'fingerprint ' + r.fingerprint : 'not set')],
   ];
   // Model calls keeps its filters in the address (?status=, ?provider=, plan step 6.1), so a row here opens the list already
   // filtered. A status is the auditor's own code (`timed_out`); the row shows its word.
@@ -1652,9 +1643,7 @@
     const err = $('pw-error');
     show(err, false);
     ui.formErrors(e.target, []);
-    const problems = [];
-    if ([...$('pw-new').value].length < K.MIN_PASSWORD_CHARS) problems.push({ id: 'pw-new', text: 'The new password must be at least ' + K.MIN_PASSWORD_CHARS + ' characters.' });
-    if ($('pw-new').value !== $('pw-new2').value) problems.push({ id: 'pw-new2', text: 'The two new passwords do not match.' });
+    const problems = ui.pairProblems('pw-new', K.MIN_PASSWORD_CHARS, 'password');
     if (problems.length) return ui.formErrors(e.target, problems);
     try {
       await api('PUT', '/api/admin/v1/password', { current: $('pw-current').value, new: $('pw-new').value });
@@ -1684,20 +1673,28 @@
     show($('key-error'), false);
   }
 
-  // The Security page: the keys, the sealed-content times and the current audit key (read-only here; the times are
-  // changed in General), and the live length counts under the two new-secret fields.
+  // The Security page: the keys, the sealed-content and audit settings (own form and save bar), the audit key id, the backup key,
+  // the kill switch, and the live length count and mismatch line under the three new-secret pairs.
   let securityWired = false;
+  let sealTrack = null;
   async function loadSecurity() {
     if (!securityWired) {
       securityWired = true;
-      ui.lengthHint($('pw-new'), K.MIN_PASSWORD_CHARS);
-      ui.lengthHint($('r-new'), K.MIN_PASSPHRASE_CHARS);
+      ui.pair('pw-new', K.MIN_PASSWORD_CHARS, 'password');
+      ui.pair('r-new', K.MIN_PASSPHRASE_CHARS, 'passphrase');
+      ui.pair('bk-pass', K.MIN_PASSPHRASE_CHARS, 'passphrase');
     }
-    const [, s] = await Promise.all([loadKeys(), api('GET', '/api/admin/v1/settings')]);
-    const mins = (n) => (n == null ? 'not set' : n + (n === 1 ? ' minute' : ' minutes'));
-    $('sec-seal-idle').textContent = mins(s.unseal_idle_minutes);
-    $('sec-seal-total').textContent = mins(s.unseal_total_minutes);
+    const [, s] = await Promise.all([loadKeys(), api('GET', '/api/admin/v1/settings'), loadBackupKey()]);
+    $('s-retention').value = s.audit_retention_days;
+    $('s-unseal-idle').value = s.unseal_idle_minutes;
+    $('s-unseal-total').value = s.unseal_total_minutes;
     $('s-key-id').textContent = s.audit_key_id || 'none';
+    showKill(!!s.kill_switch);
+    $('s-kill-aborts').checked = s.kill_switch_aborts_running !== false;
+    show($('seal-error'), false);
+    show($('kill-error'), false);
+    // The first load starts the save bar from these values; later loads (after a save) make them the new base.
+    if (sealTrack) sealTrack.saved(); else sealTrack = ui.trackChanges($('seal-form'));
   }
 
   on('key-form', 'submit', async (e) => {
@@ -1742,20 +1739,13 @@
     }
   });
 
-  // ------------------------------------------------------- backup key (ADR 0013)
+  // ------------------------------------------------------- backup key (ADR 0013; its form is on the Security page)
 
-  // The Backup page: the key, and the scheduled backups (ADR 0013, D27 to D29). Text goes in by textContent.
+  // The Backup page: the backups, the schedule and Restore (the backup key is on the Security page) (ADR 0013, D27 to D29). Text goes in by textContent.
   // A clock time from seconds after midnight (the run time comes from constants), written as HH:MM.
   const utcClock = (secs) => [Math.floor(secs / 3600), Math.floor((secs % 3600) / 60)].map((n) => String(n).padStart(2, '0')).join(':');
-  // The live count under the new passphrase is wired once, as the Security page does for its fields.
-  let backupWired = false;
   async function loadBackup() {
-    if (!backupWired) {
-      backupWired = true;
-      ui.lengthHint($('bk-pass'), K.MIN_PASSPHRASE_CHARS);
-    }
     loadRestore();
-    await loadBackupKey();
     await loadSchedule();
   }
 
@@ -1841,9 +1831,7 @@
     // The pair and the stored box are checked here, and each problem sits under its own field (rule 26).
     ui.formErrors(e.target, []);
     const pass = $('bk-pass').value;
-    const problems = [];
-    if ([...pass].length < K.MIN_PASSPHRASE_CHARS) problems.push({ id: 'bk-pass', text: 'The passphrase must be at least ' + K.MIN_PASSPHRASE_CHARS + ' characters.' });
-    if (pass !== $('bk-pass2').value) problems.push({ id: 'bk-pass2', text: 'The two passphrases do not match.' });
+    const problems = ui.pairProblems('bk-pass', K.MIN_PASSPHRASE_CHARS, 'passphrase');
     if (!$('bk-stored').checked) problems.push({ id: 'bk-stored', text: 'Confirm that you stored the passphrase: it cannot be recovered.' });
     if (problems.length) return ui.formErrors(e.target, problems);
     if (!confirm('Rotate the backup key? Backups made from now on need the new passphrase; older ones keep the old one.')) return;
@@ -2337,8 +2325,7 @@
   }
   on('s-gen-timeout', 'input', showTimeoutMinutes);
 
-  // The kill switch is not a field of the form: its own button changes it, after ui.confirm, and saves that alone.
-  // The other settings are left as they are (see the handler below).
+  // The General page's form (its save bar). The kill switch and the audit settings are on the Security page.
   let settingsTrack = null;
   function showKill(on) {
     $('s-kill-state').textContent = on ? 'on' : 'off';
@@ -2349,12 +2336,6 @@
   // The server always sends these when it is read, so the form takes them as they are.
   async function loadSettings() {
     const s = await api('GET', '/api/admin/v1/settings');
-    $('s-retention').value = s.audit_retention_days;
-    $('s-unseal-idle').value = s.unseal_idle_minutes;
-    $('s-unseal-total').value = s.unseal_total_minutes;
-    $('s-key-id').textContent = s.audit_key_id || 'none';
-    showKill(!!s.kill_switch);
-    $('s-kill-aborts').checked = s.kill_switch_aborts_running !== false;
     $('s-gen-timeout').value = s.generation_timeout_secs;
     showTimeoutMinutes();
     $('s-history-turns').value = s.history_turns;
@@ -2477,10 +2458,6 @@
         system_prompt: $('s-prompt').value,
         generation_timeout_secs: parseInt($('s-gen-timeout').value, 10),
         history_turns: parseInt($('s-history-turns').value, 10),
-        audit_retention_days: parseInt($('s-retention').value, 10),
-        unseal_idle_minutes: parseInt($('s-unseal-idle').value, 10),
-        unseal_total_minutes: parseInt($('s-unseal-total').value, 10),
-        kill_switch_aborts_running: $('s-kill-aborts').checked,
         privacy_notice_enabled: $('s-notice-on').checked,
         privacy_notice_text: $('s-notice-text').value,
         ai_warning_enabled: $('s-warning-on').checked,
@@ -2503,25 +2480,51 @@
     }
   });
 
-  // The kill switch: asks first (Cancel changes nothing), then saves only itself. The PUT carries the two fields the
-  // server always needs from the stored copy, so unsaved edits in the form are not sent.
+  // The audit and sealed-content settings (Security page): their own save, from a fresh read of the stored settings. Only the
+  // three fields change; the prompt and display go back as stored (the server always needs them), so unsaved edits on the General
+  // page are never sent from here, and a save of General never sends these three.
+  on('seal-form', 'submit', async (e) => {
+    e.preventDefault();
+    const err = $('seal-error');
+    show(err, false);
+    try {
+      const now = await api('GET', '/api/admin/v1/settings');
+      await api('PUT', '/api/admin/v1/settings', {
+        system_prompt: now.system_prompt,
+        display: now.display,
+        audit_retention_days: parseInt($('s-retention').value, 10),
+        unseal_idle_minutes: parseInt($('s-unseal-idle').value, 10),
+        unseal_total_minutes: parseInt($('s-unseal-total').value, 10),
+      });
+      if (sealTrack) sealTrack.saved();
+      ui.toast('Saved.');
+    } catch (ex) {
+      err.textContent = ex.message;
+      show(err, true);
+    }
+  });
+
+  // The kill switch (Security page, danger zone): asks first (Cancel changes nothing), then saves only itself. The PUT carries
+  // the two fields the server always needs from the stored copy, so unsaved edits in the General page are not sent. The box
+  // "Also stop the replies that are running" is the choice for this switching on, and goes with it.
   on('s-kill-switch', 'click', async () => {
-    const err = $('settings-error');
+    const err = $('kill-error');
     show(err, false);
     try {
       const now = await api('GET', '/api/admin/v1/settings');
       const turningOn = !now.kill_switch;
+      const aborts = $('s-kill-aborts').checked;
       const ok = await ui.confirm(turningOn
         ? {
           title: 'Turn on the kill switch?',
           body: 'No new replies start for anyone, and the messages waiting in queues are cleared. '
-            + (now.kill_switch_aborts_running !== false ? 'The replies running now are stopped.' : 'The replies running now finish.'),
+            + (aborts ? 'The replies running now are stopped.' : 'The replies running now finish.'),
           action: 'Turn on kill switch',
           kind: 'danger',
         }
         : { title: 'Turn off the kill switch?', body: 'Replies start again for everyone.', action: 'Turn off kill switch', kind: 'primary' });
       if (!ok) return;
-      await api('PUT', '/api/admin/v1/settings', { system_prompt: now.system_prompt, display: now.display, kill_switch: turningOn });
+      await api('PUT', '/api/admin/v1/settings', { system_prompt: now.system_prompt, display: now.display, kill_switch: turningOn, kill_switch_aborts_running: aborts });
       showKill(turningOn);
       checkKill();
       ui.toast(turningOn ? 'The kill switch is on. No new replies start.' : 'The kill switch is off. Replies start again.');
@@ -2540,9 +2543,7 @@
     const cur = $('r-current').value;
     const next = $('r-new').value;
     ui.formErrors(e.target, []);
-    const problems = [];
-    if ([...next].length < K.MIN_PASSPHRASE_CHARS) problems.push({ id: 'r-new', text: 'The new passphrase must be at least ' + K.MIN_PASSPHRASE_CHARS + ' characters.' });
-    if (next !== $('r-new2').value) problems.push({ id: 'r-new2', text: 'The two new passphrases do not match.' });
+    const problems = ui.pairProblems('r-new', K.MIN_PASSPHRASE_CHARS, 'passphrase');
     if (problems.length) return ui.formErrors(e.target, problems);
     try {
       const r = await api('POST', '/api/admin/v1/audit/rotate-key', { current: cur, new: next, confirm: $('r-new2').value });
@@ -2564,9 +2565,9 @@
       pageError('The admin could not load its settings. Reload the page.');
       return;
     }
-    ui.lengthHint($('setup-password'), K.MIN_PASSWORD_CHARS);
-    ui.lengthHint($('setup-audit'), K.MIN_PASSPHRASE_CHARS);
-    ui.lengthHint($('setup-backup'), K.MIN_PASSPHRASE_CHARS);
+    ui.pair('setup-password', K.MIN_PASSWORD_CHARS, 'password');
+    ui.pair('setup-audit', K.MIN_PASSPHRASE_CHARS, 'passphrase');
+    ui.pair('setup-backup', K.MIN_PASSPHRASE_CHARS, 'passphrase');
     route();
   })();
 })();

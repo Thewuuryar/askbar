@@ -67,13 +67,16 @@
 
     <section class="sec-sec" aria-labelledby="seal-title">
       <div class="sec-lab">
-        {% call c::section_title("seal-title", "Sealed content", "settings/security#sealed-content") %}{% endcall %}
-        <p class="hint">How long sealed content stays open once the passphrase has unsealed it.</p>
+        {% call c::section_title("seal-title", "Sealed content and audit records", "settings/security#sealed-content-and-audit-records") %}{% endcall %}
+        <p class="hint">How long the audit records are kept before they are deleted ({{ crate::constants::MIN_AUDIT_RETENTION_DAYS }} days at least, always; the audit database itself refuses to delete anything younger), and how long sealed content stays open once the passphrase has unsealed it: it seals itself after this many minutes without use, or this many in all, whichever comes first. Changing either is an alert. Lowering the retention needs a sign-in from the last {{ crate::constants::FRESH_SIGNIN_SECS / 60 }} minutes.</p>
       </div>
-      <div class="sec-fields">
-        <p class="sec-line">Seals after <strong id="sec-seal-idle"></strong> idle, or <strong id="sec-seal-total"></strong> in all, whichever comes first.</p>
-        <p class="hint"><a href="/admin/general/">Change this in General</a></p>
-      </div>
+      <form id="seal-form" class="sec-fields" novalidate>
+        {% call c::field("Keep audit records for (days)", "s-retention", "", "slot", false) %}<input id="s-retention" name="s-retention" type="number" inputmode="numeric" min="{{ crate::constants::MIN_AUDIT_RETENTION_DAYS }}" max="{{ crate::constants::MAX_AUDIT_RETENTION_DAYS }}" step="1" aria-describedby="s-retention-hint s-retention-error"><p class="hint" id="s-retention-hint">{{ crate::constants::MIN_AUDIT_RETENTION_DAYS }} to {{ crate::constants::MAX_AUDIT_RETENTION_DAYS }} days</p>{% endcall %}
+        {% call c::field("Seal after this many idle minutes", "s-unseal-idle", "", "slot", false) %}<input id="s-unseal-idle" name="s-unseal-idle" type="number" inputmode="numeric" min="{{ crate::constants::MIN_UNSEAL_MINUTES }}" max="{{ crate::constants::MAX_UNSEAL_MINUTES }}" step="1" aria-describedby="s-unseal-idle-hint s-unseal-idle-error"><p class="hint" id="s-unseal-idle-hint">{{ crate::constants::MIN_UNSEAL_MINUTES }} to {{ crate::constants::MAX_UNSEAL_MINUTES }} minutes</p>{% endcall %}
+        {% call c::field("Seal after this many minutes in all", "s-unseal-total", "", "slot", false) %}<input id="s-unseal-total" name="s-unseal-total" type="number" inputmode="numeric" min="{{ crate::constants::MIN_UNSEAL_MINUTES }}" max="{{ crate::constants::MAX_UNSEAL_MINUTES }}" step="1" aria-describedby="s-unseal-total-hint s-unseal-total-error"><p class="hint" id="s-unseal-total-hint">{{ crate::constants::MIN_UNSEAL_MINUTES }} to {{ crate::constants::MAX_UNSEAL_MINUTES }} minutes</p>{% endcall %}
+        {% call b::error_line("seal-error") %}{% endcall %}
+        {% call c::save_bar("seal-form") %}{% endcall %}
+      </form>
     </section>
 
     <section class="sec-sec" aria-labelledby="rotate-title">
@@ -88,6 +91,34 @@
         {% call b::error_line("rotate-error") %}{% endcall %}
         <div class="sec-actions">{% call c::button("Rotate key", "submit", "", "") %}{% endcall %}</div>
       </form>
+    </section>
+
+    <section class="sec-sec" aria-labelledby="bk-title">
+      <div class="sec-lab">
+        {% call c::section_title("bk-title", "Backup key", "settings/security#backup-key") %}{% endcall %}
+        <p class="hint">Only the backup passphrase opens a backup. It is not the audit passphrase. Rotating needs a sign-in from the last {{ crate::constants::FRESH_SIGNIN_SECS / 60 }} minutes.</p>
+      </div>
+      <form id="backup-key-form" class="sec-fields" novalidate>
+        <p class="sec-line">Fingerprint: <code id="bk-fingerprint">none yet</code> <span class="hint" id="bk-count"></span></p>
+        {% call c::new_secret("New backup passphrase", "bk-pass", crate::constants::MIN_PASSPHRASE_CHARS) %}{% endcall %}
+        <label class="check"><input id="bk-stored" type="checkbox" required> I stored this passphrase; it cannot be recovered</label>
+        <p class="hint">Backups made before the rotation still open with the passphrase they were made under. Keep that one until the new backups cover the retention window.</p>
+        {% call b::error_line("bk-error") %}{% endcall %}
+        <div class="sec-actions"><button type="submit" class="btn btn-secondary">Rotate the backup key</button></div>
+      </form>
+    </section>
+
+    <section class="sec-sec danger-zone" aria-labelledby="danger-title">
+      <div class="sec-lab">
+        {% call c::section_title("danger-title", "Danger zone", "settings/security#danger-zone") %}{% endcall %}
+        <p class="hint">Switched on, the server starts no new replies and clears the messages waiting in queues. Clients see a clear message.</p>
+      </div>
+      <div class="sec-fields">
+        <p class="sec-line">Kill switch: <strong id="s-kill-state">off</strong>. It stops every reply for everyone until it is turned off.</p>
+        <div class="sec-actions"><button type="button" id="s-kill-switch" class="btn btn-danger" aria-describedby="s-kill-state">Turn on kill switch</button></div>
+        <label class="check" for="s-kill-aborts"><input type="checkbox" id="s-kill-aborts" name="s-kill-aborts"> Also stop the replies that are running when it goes on (otherwise they finish)</label>
+        {% call b::error_line("kill-error") %}{% endcall %}
+      </div>
     </section>
 
     {% call c::dialog_box("key-dialog", "Your new API key") %}

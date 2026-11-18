@@ -51,21 +51,6 @@
       </form>
     </section>
 
-    <section class="sec-sec" aria-labelledby="bk-title">
-      <div class="sec-lab">
-        {% call c::section_title("bk-title", "Backup key", "settings/backup#backup-key") %}{% endcall %}
-        <p class="hint">Only the backup passphrase opens a backup. It is not the audit passphrase. Rotating needs a sign-in from the last {{ crate::constants::FRESH_SIGNIN_SECS / 60 }} minutes.</p>
-      </div>
-      <form id="backup-key-form" class="sec-fields" novalidate>
-        <p class="sec-line">Fingerprint: <code id="bk-fingerprint">none yet</code> <span class="hint" id="bk-count"></span></p>
-        {% call c::new_secret("New backup passphrase", "bk-pass", crate::constants::MIN_PASSPHRASE_CHARS) %}{% endcall %}
-        <label class="check"><input id="bk-stored" type="checkbox" required> I stored this passphrase; it cannot be recovered</label>
-        <p class="hint">Backups made before the rotation still open with the passphrase they were made under. Keep that one until the new backups cover the retention window.</p>
-        {% call b::error_line("bk-error") %}{% endcall %}
-        <div class="sec-actions"><button type="submit" class="btn btn-secondary">Rotate the backup key</button></div>
-      </form>
-    </section>
-
     <section class="sec-sec" aria-labelledby="dl-title">
       <div class="sec-lab">
         {% call c::section_title("dl-title", "Download a backup", "settings/backup#download-a-backup") %}{% endcall %}

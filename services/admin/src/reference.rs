@@ -438,7 +438,7 @@ mod tests {
                 buttons += 1;
             }
         }
-        assert!(buttons >= 40, "{buttons}");
+        assert!(buttons >= 39, "{buttons}");
     }
 
     // ---------------------------------------------------------------- live examples (plan step 7.5)

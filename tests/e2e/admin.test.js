@@ -1760,10 +1760,10 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     assert.equal(await page.inputValue('#n-host'), host);
     assert.equal((await barGeometry(id)).hidden, true, 'Discard hides it');
   });
-  await step('kill switch: off by default; it asks first and Cancel changes nothing; on and off save alone and the status bar follows', async () => {
+  await step('kill switch (Security page): off by default; it asks first and Cancel changes nothing; on and off save alone and the status bar follows', async () => {
     const K = await page.evaluate(() => window.ui.ready);
-    await openSettings();
-    await page.waitForFunction(() => document.getElementById('s-gen-timeout').value === '120');
+    await openPage('security');
+    await page.waitForFunction(() => document.getElementById('s-kill-state').textContent === 'off' && document.getElementById('s-retention').value !== '');
     assert.equal(await page.innerText('#s-kill-state'), 'off');
     assert.equal(await page.isChecked('#s-kill-aborts'), true);
     let puts = 0;
@@ -1788,9 +1788,8 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       assert.equal(await page.innerText('#s-kill-switch'), 'Turn off kill switch');
       assert.equal(puts, 1);
       await page.waitForFunction(() => document.querySelector('#sb-kill .status-word').textContent === 'Kill: on', null, { timeout: K.STATUS_EVERY_SECS * 3000 });
-      // Unsaved edits in the form are not sent by the switch.
+      // The box "also stop the running replies" goes with the switch.
       await page.uncheck('#s-kill-aborts');
-      await page.waitForSelector('#settings-form-save-bar:not([hidden])');
       await page.click('#s-kill-switch');
       await box.waitFor();
       assert.match(await box.innerText(), /Replies start again for everyone\./);
@@ -1798,8 +1797,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       await box.waitFor({ state: 'detached' });
       await page.waitForFunction(() => document.getElementById('s-kill-state').textContent === 'off');
       await page.waitForFunction(() => document.querySelector('#sb-kill .status-word').textContent === 'Kill: off', null, { timeout: K.STATUS_EVERY_SECS * 3000 });
-      assert.equal(await page.isChecked('#s-kill-aborts'), false, 'the unsaved choice stays in the form');
-      assert.equal(await page.isVisible('#settings-form-save-bar'), true);
+      assert.equal(await page.isChecked('#s-kill-aborts'), false, 'the choice stays');
       assert.equal(puts, 2);
     } finally {
       page.off('request', count);
@@ -1810,16 +1808,23 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
         if (s.kill_switch) await fetch('/api/admin/v1/settings', { method: 'PUT', headers: h, body: JSON.stringify({ system_prompt: s.system_prompt, display: s.display, kill_switch: false }) });
       });
     }
-    // Save the choice (aborts off), then reload: it is kept, and the switch is still off.
-    await page.click('#settings-form-save-bar button[type=submit]');
-    await page.waitForSelector('#toasts .toast');
-    await openSettings();
+    // The choice went with the switch: reload and it is kept, the switch is still off.
+    await openPage('providers');
+    await openPage('security');
     await page.waitForFunction(() => document.getElementById('s-kill-aborts').checked === false);
     assert.equal(await page.innerText('#s-kill-state'), 'off');
-    // Back to the default: aborts on, saved.
+    // Back to the default: aborts on (it goes with the next switching; stored now by one on/off round).
     await page.check('#s-kill-aborts');
-    await page.click('#settings-form-save-bar button[type=submit]');
-    await page.waitForSelector('#toasts .toast');
+    await page.click('#s-kill-switch');
+    await box.waitFor();
+    await box.locator('[data-confirm-action]').click();
+    await box.waitFor({ state: 'detached' });
+    await page.waitForFunction(() => document.getElementById('s-kill-state').textContent === 'on');
+    await page.click('#s-kill-switch');
+    await box.waitFor();
+    await box.locator('[data-confirm-action]').click();
+    await box.waitFor({ state: 'detached' });
+    await page.waitForFunction(() => document.getElementById('s-kill-state').textContent === 'off');
   });
   await step('notifications: not set up shows a banner; ntfy settings are saved, tested and removed, and never shown again (ADR 0055)', async () => {
     const TOPIC = 'e2e-topic-' + 'q7x9k2';
@@ -2224,8 +2229,8 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     assert.deepEqual(external, [], 'a request left the admin site');
     await openPage('providers');
   });
-  await step('backup: the new passphrase counts live, a mismatched pair blocks submit with an inline error, and nothing is sent (ADR 0013)', async () => {
-    await openPage('backup');
+  await step('security: the backup key pair counts live, shows the mismatch under the repeat box as you type, a mismatched submit sends nothing (ADR 0013)', async () => {
+    await openPage('security');
     const min = await page.evaluate(async () => (await window.ui.ready).MIN_PASSPHRASE_CHARS);
     assert.equal(await page.innerText('#bk-pass-hint'), 'At least ' + min + ' characters');
     await page.fill('#bk-pass', 'short');
@@ -2255,15 +2260,15 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     assert.deepEqual(sent, [], 'a refused pair sends nothing');
     // The page keeps to the frame: no sideways scroll, every target at least 44 px on a phone (24 px otherwise).
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'no horizontal scroll');
-    const small = await page.evaluate((min) => [...document.querySelectorAll('#tab-backup button, #tab-backup a.btn, #tab-backup input:not([type=checkbox]), #tab-backup label.check')]
+    const small = await page.evaluate((min) => [...document.querySelectorAll('#tab-security button, #tab-security a.btn, #tab-security input:not([type=checkbox]), #tab-security label.check')]
       .map((t) => t.getBoundingClientRect()).filter((r) => r.height > 0 && (r.height < min || r.width < min)).length, isPhone ? 44 : 24);
     assert.equal(small, 0, 'every target on this page is big enough');
     // Clear the pair again so the next step starts from empty fields.
     for (const id of ['bk-pass', 'bk-pass2']) await page.fill('#' + id, '');
     await page.uncheck('#bk-stored');
   });
-  await step('backup: the key is shown by its fingerprint, and rotating asks twice, confirms, retires the old key and never shows a passphrase (ADR 0013)', async () => {
-    await openPage('backup');
+  await step('security: the backup key is shown by its fingerprint, and rotating asks twice, confirms, retires the old key and never shows a passphrase (ADR 0013)', async () => {
+    await openPage('security');
     await page.waitForFunction(() => /^[0-9a-f]{4}(-[0-9a-f]{4}){3}$/.test(document.getElementById('bk-fingerprint').textContent));
     const before = await page.innerText('#bk-fingerprint');
     assert.equal(await page.innerText('#bk-count'), '', 'no earlier keys');
@@ -2963,7 +2968,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       assert.equal(rows.every((r) => r.sym), true, 'a symbol with every word (rule 37)');
       assert.deepEqual(rows.slice(0, 3).map((r) => r.source), ['alert', 'alert', 'alert'], 'the alert rows come before the setup gaps');
       assert.deepEqual(rows.slice(3).map((r) => r.source), ['setup', 'setup', 'setup']);
-      assert.deepEqual(rows.map((r) => r.href), ['/admin/audit/calls/', '/admin/notifications/#alerts-form', '/admin/audit/sealed/', '/admin/providers/#add-provider', '/admin/backup/', '/admin/network/#n-host']);
+      assert.deepEqual(rows.map((r) => r.href), ['/admin/audit/calls/', '/admin/notifications/#alerts-form', '/admin/audit/sealed/', '/admin/providers/#add-provider', '/admin/security/#bk-pass', '/admin/network/#n-host']);
       assert.equal(rows[0].text, 'An audit record was edited.');
       // The alert rows are the bell's: their count is the badge (info is in neither).
       await page.waitForFunction(() => document.getElementById('bell-badge').textContent === '3');
@@ -3515,28 +3520,59 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     assert.equal(await page.isHidden('#audit-access'), true);
     await page.unroute('**/api/admin/v1/audit/access*');
   });
-  await step('audit settings: the key id and retention show, bad values give their messages, and rotating works from the page', async () => {
-    await openSettings();
+  await step('audit settings (Security page): the key id and retention show, bad values give their messages, saving leaves General alone, and rotating works from the page', async () => {
+    await openPage('security');
     await page.waitForFunction(() => /^[0-9a-f]{16}$/.test(document.getElementById('s-key-id').textContent));
     const oldKey = await page.innerText('#s-key-id');
     assert.equal(await page.inputValue('#s-retention'), '30');
     assert.equal(await page.getAttribute('#s-retention', 'min'), '7');
 
     // Retention: the server's message for a value that is too small.
-    await page.evaluate(() => document.getElementById('settings-form').noValidate = true);
+    await page.evaluate(() => document.getElementById('seal-form').noValidate = true);
     await page.fill('#s-retention', '5');
-    await page.click('#settings-form-save-bar [data-save-submit]');
-    await page.waitForSelector('#settings-error:not([hidden])');
-    assert.match(await page.innerText('#settings-error'), /at least 7 days/);
+    await page.click('#seal-form-save-bar [data-save-submit]');
+    await page.waitForSelector('#seal-error:not([hidden])');
+    assert.match(await page.innerText('#seal-error'), /at least 7 days/);
+    // General keeps its own values: the sealed-content save sends only these three fields (prompt and display as stored).
+    const stored = () => page.evaluate(async () => (await fetch('/api/admin/v1/settings', { headers: { 'x-askbar-admin': '1' } })).json());
+    const before = await stored();
+    const bodies = [];
+    const grab = (r) => { if (r.method() === 'PUT' && r.url().endsWith('/api/admin/v1/settings')) bodies.push(JSON.parse(r.postData())); };
+    page.on('request', grab);
     await page.fill('#s-retention', '45');
+    await page.click('#seal-form-save-bar [data-save-submit]');
+    await page.waitForSelector('#toasts .toast');
+    page.off('request', grab);
+    assert.equal(bodies.length, 1);
+    assert.deepEqual(Object.keys(bodies[0]).sort(), ['audit_retention_days', 'display', 'system_prompt', 'unseal_idle_minutes', 'unseal_total_minutes']);
+    const after = await stored();
+    assert.equal(after.audit_retention_days, 45);
+    for (const f of ['system_prompt', 'display', 'generation_timeout_secs', 'history_turns', 'kill_switch_aborts_running', 'privacy_notice_text', 'ai_warning_text', 'unseal_idle_minutes', 'unseal_total_minutes']) assert.deepEqual(after[f], before[f], f + ' is unchanged');
+    await page.fill('#s-retention', '999'); // unsaved, so the reload shows what was stored
+    await openPage('providers');
+    await openPage('security');
+    await page.waitForFunction(() => document.getElementById('s-retention').value === '45');
+    // And the other way: saving General sends none of these three and leaves them as they are.
+    await openSettings();
+    assert.equal(await page.locator('#s-retention, #s-unseal-idle, #s-unseal-total, #s-kill-switch, #s-key-id').count(), 0, 'General no longer holds them');
+    await page.fill('#s-prompt', (await page.inputValue('#s-prompt')) + ' ');
+    const sent = [];
+    const grab2 = (r) => { if (r.method() === 'PUT' && r.url().endsWith('/api/admin/v1/settings')) sent.push(JSON.parse(r.postData())); };
+    page.on('request', grab2);
     await page.click('#settings-form-save-bar [data-save-submit]');
     await page.waitForSelector('#toasts .toast');
-    await page.fill('#s-retention', '999'); // unsaved, so the reload shows what was stored
-    await openSettings();
+    page.off('request', grab2);
+    assert.equal(sent.length, 1);
+    for (const f of ['audit_retention_days', 'unseal_idle_minutes', 'unseal_total_minutes', 'kill_switch_aborts_running', 'kill_switch']) assert.equal(f in sent[0], false, 'General does not send ' + f);
+    const again = await stored();
+    assert.equal(again.audit_retention_days, 45);
+    assert.equal(again.unseal_idle_minutes, before.unseal_idle_minutes);
+    assert.equal(again.unseal_total_minutes, before.unseal_total_minutes);
+    assert.equal(again.kill_switch_aborts_running, before.kill_switch_aborts_running);
+    await openPage('security');
     await page.waitForFunction(() => document.getElementById('s-retention').value === '45');
 
     // Rotation (on the Security page): each refusal in turn, then success.
-    await openPage('security');
     await page.waitForFunction((k) => document.getElementById('s-key-id').textContent === k, oldKey);
     const NEW_PASS = 'a different long passphrase 77';
     const rotate = async (cur, next, next2) => {
@@ -3563,9 +3599,8 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     for (const id of ['r-current', 'r-new', 'r-new2']) assert.equal(await page.inputValue('#' + id), '', id);
     assert.equal((await page.content()).includes(NEW_PASS), false);
     // Put the retention back so later steps see an ordinary server.
-    await openSettings();
     await page.fill('#s-retention', '30');
-    await page.click('#settings-form-save-bar [data-save-submit]');
+    await page.click('#seal-form-save-bar [data-save-submit]');
     await page.waitForSelector('#toasts .toast');
   });
   await step('security: changing the password needs the current one', async () => {
@@ -3686,24 +3721,71 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.click('#key-revoke');
     await page.waitForSelector('#key-form:not([hidden])');
   });
-  await step('security: the sealed-content times are read from the settings and the audit key id shows', async () => {
+  await step('security: the sealed-content times are read from the settings into their form, and the audit key id shows', async () => {
     await openPage('security');
     const s = await page.evaluate(async () => (await fetch('/api/admin/v1/settings')).json());
-    await page.waitForFunction(() => document.getElementById('sec-seal-idle').textContent !== '');
-    const idle = await page.innerText('#sec-seal-idle');
-    const total = await page.innerText('#sec-seal-total');
-    assert.equal(parseInt(idle, 10), s.unseal_idle_minutes);
-    assert.equal(parseInt(total, 10), s.unseal_total_minutes);
+    await page.waitForFunction(() => document.getElementById('s-unseal-idle').value !== '');
+    assert.equal(parseInt(await page.inputValue('#s-unseal-idle'), 10), s.unseal_idle_minutes);
+    assert.equal(parseInt(await page.inputValue('#s-unseal-total'), 10), s.unseal_total_minutes);
+    assert.equal(await page.isHidden('#seal-form-save-bar'), true, 'no change, no save bar');
+    await page.fill('#s-unseal-idle', String(s.unseal_idle_minutes + 1));
+    assert.equal(await page.isVisible('#seal-form-save-bar'), true);
+    await page.click('#seal-form-save-bar [data-save-discard]');
+    assert.equal(parseInt(await page.inputValue('#s-unseal-idle'), 10), s.unseal_idle_minutes);
     assert.match(await page.innerText('#s-key-id'), /^[0-9a-f]{16}$/);
     assert.equal(await page.locator('#rotate-form #r-new + .hint[data-length-hint]').count(), 1);
     assert.equal(await page.getAttribute('#r-new', 'minlength'), String(await page.evaluate(async () => (await window.ui.ready).MIN_PASSPHRASE_CHARS)));
+  });
+  // The mismatch of a new password or passphrase shows under the repeat box as it is typed, on every pair of the Security page.
+  await step('security: each new-secret pair shows "do not match" under the repeat box as you type, clears when equal, and a mismatched submit sends nothing', async () => {
+    await openPage('security');
+    await page.waitForSelector('#bk-pass');
+    const sent = [];
+    const seen = (r) => { if (r.method() !== 'GET') sent.push(r.url()); };
+    page.on('request', seen);
+    for (const [id, form, noun] of [['pw-new', 'password-form', 'passwords'], ['r-new', 'rotate-form', 'passphrases'], ['bk-pass', 'backup-key-form', 'passphrases']]) {
+      const again = id + '2';
+      await page.fill('#' + id, 'a long enough pass phrase one');
+      await page.fill('#' + again, 'a long enough pass phrase');
+      await page.waitForSelector('#' + again + '-error:not([hidden])');
+      assert.equal(await page.innerText('#' + again + '-error'), 'The two ' + noun + ' do not match.', id);
+      assert.equal(await page.getAttribute('#' + again, 'aria-invalid'), 'true');
+      assert.match(await page.getAttribute('#' + again, 'aria-describedby'), new RegExp(again + '-error'));
+      const g = await page.evaluate(({ again, form }) => {
+        const i = document.getElementById(again).getBoundingClientRect();
+        const e = document.getElementById(again + '-error').getBoundingClientRect();
+        const next = [...document.getElementById(form).querySelectorAll('button, input:not([type=hidden])')].map((x) => x.getBoundingClientRect()).filter((r) => r.top > i.bottom && r.height > 0 && r.top !== e.top).map((r) => r.top);
+        return { gap: e.top - i.bottom, bottom: e.bottom, nextTop: Math.min(...next, Infinity) };
+      }, { again, form });
+      assert.ok(g.gap >= 0 && g.gap <= 12, id + ': the error is just under the repeat box (gap ' + g.gap + ')');
+      assert.ok(g.bottom <= g.nextTop + 1, id + ': and above the next control');
+      // Submitting with the mismatch: the same message, focus on the repeat box, nothing sent.
+      if (id === 'bk-pass') await page.check('#bk-stored');
+      await page.fill(id === 'pw-new' ? '#pw-current' : id === 'r-new' ? '#r-current' : '#bk-pass', id === 'bk-pass' ? 'a long enough pass phrase one' : 'x');
+      await page.click('#' + form + ' button[type=submit]');
+      assert.equal(await page.evaluate(() => document.activeElement.id), again, id + ': focus goes to the repeat box');
+      assert.equal(await page.innerText('#' + again + '-error'), 'The two ' + noun + ' do not match.');
+      // Equal again: the line goes; emptied: it goes too.
+      await page.fill('#' + again, 'a long enough pass phrase one');
+      assert.equal(await page.isHidden('#' + again + '-error'), true, id + ': cleared when they match');
+      await page.fill('#' + again, 'zzz');
+      await page.waitForSelector('#' + again + '-error:not([hidden])');
+      await page.fill('#' + again, '');
+      assert.equal(await page.isHidden('#' + again + '-error'), true, id + ': cleared when the repeat is emptied');
+      await page.fill('#' + id, '');
+      await page.locator('#' + form + ' .error-summary').count() && await page.evaluate((f) => document.querySelector('#' + f + ' .error-summary').remove(), form);
+    }
+    page.off('request', seen);
+    assert.deepEqual(sent, [], 'a mismatched pair sends nothing');
+    await page.uncheck('#bk-stored');
+    for (const id of ['pw-current', 'r-current']) await page.fill('#' + id, '');
   });
   await step('security: nothing scrolls sideways and every target is 44 px tall on a phone', async () => {
     await openPage('security');
     await page.waitForSelector('#pw-title');
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'no sideways scroll');
     if (isPhone) {
-      const small = await page.evaluate(() => [...document.querySelectorAll('#main button, #main input, #main a, #main .na')]
+      const small = await page.evaluate(() => [...document.querySelectorAll('#main button, #main input:not([type=checkbox]), #main label.check, #main a, #main .na')]
         .filter((e) => e.offsetParent && !e.closest('[hidden]'))
         .map((e) => [e.id || e.textContent.trim().slice(0, 20), e.getBoundingClientRect().height])
         .filter(([, h]) => h > 0 && h < 44));
@@ -4338,7 +4420,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       kill: document.querySelectorAll('#sb-kill').length,
       killFields: document.querySelectorAll('#s-kill-switch').length,
     }));
-    assert.deepEqual(facts, { na: 1, budgetDisabledAttr: 0, budgetTip: 'Not available yet: the server has no family budget setting', kill: 1, killFields: 1 });
+    assert.deepEqual(facts, { na: 1, budgetDisabledAttr: 0, budgetTip: 'Not available yet: the server has no family budget setting', kill: 1, killFields: 0 });
     await page.waitForFunction(() => /^Kill: (on|off)$/.test(document.querySelector('#sb-kill .status-word').textContent));
     assert.match(await page.getAttribute('#sb-kill', 'class'), /status-(ok|error)/);
     assert.equal(await page.evaluate(() => document.querySelector('#sb-kill .status-sym').getAttribute('aria-hidden')), 'true');

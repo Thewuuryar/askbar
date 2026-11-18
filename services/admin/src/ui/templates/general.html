@@ -33,23 +33,10 @@
         </div>
       </section>
 
-      <section class="sec-sec" aria-labelledby="audit-title">
-        <div class="sec-lab">
-          {% call c::section_title("audit-title", "Audit", "settings/general#audit") %}{% endcall %}
-          <p class="hint">How long the audit records are kept before they are deleted ({{ crate::constants::MIN_AUDIT_RETENTION_DAYS }} days at least, always; the audit database itself refuses to delete anything younger). How long sealed content stays open once the passphrase has unsealed it: it seals itself after this many minutes without use, or this many in all, whichever comes first. Changing either is an alert.</p>
-        </div>
-        <div class="sec-fields">
-          {% call c::field("Keep audit records for (days)", "s-retention", "", "slot", false) %}<input id="s-retention" name="s-retention" type="number" inputmode="numeric" min="{{ crate::constants::MIN_AUDIT_RETENTION_DAYS }}" max="{{ crate::constants::MAX_AUDIT_RETENTION_DAYS }}" step="1" aria-describedby="s-retention-hint s-retention-error"><p class="hint" id="s-retention-hint">{{ crate::constants::MIN_AUDIT_RETENTION_DAYS }} to {{ crate::constants::MAX_AUDIT_RETENTION_DAYS }} days</p>{% endcall %}
-          {% call c::field("Seal after this many idle minutes", "s-unseal-idle", "", "slot", false) %}<input id="s-unseal-idle" name="s-unseal-idle" type="number" inputmode="numeric" min="{{ crate::constants::MIN_UNSEAL_MINUTES }}" max="{{ crate::constants::MAX_UNSEAL_MINUTES }}" step="1" aria-describedby="s-unseal-idle-hint s-unseal-idle-error"><p class="hint" id="s-unseal-idle-hint">{{ crate::constants::MIN_UNSEAL_MINUTES }} to {{ crate::constants::MAX_UNSEAL_MINUTES }} minutes</p>{% endcall %}
-          {% call c::field("Seal after this many minutes in all", "s-unseal-total", "", "slot", false) %}<input id="s-unseal-total" name="s-unseal-total" type="number" inputmode="numeric" min="{{ crate::constants::MIN_UNSEAL_MINUTES }}" max="{{ crate::constants::MAX_UNSEAL_MINUTES }}" step="1" aria-describedby="s-unseal-total-hint s-unseal-total-error"><p class="hint" id="s-unseal-total-hint">{{ crate::constants::MIN_UNSEAL_MINUTES }} to {{ crate::constants::MAX_UNSEAL_MINUTES }} minutes</p>{% endcall %}
-          <p class="sec-line">Sealing key: <code id="s-key-id">none</code></p>
-        </div>
-      </section>
-
       <section class="sec-sec" aria-labelledby="told-title">
         <div class="sec-lab">
           {% call c::section_title("told-title", "What people are told", "settings/general#what-people-are-told") %}{% endcall %}
-          <p class="hint">The privacy notice is shown in the app after pairing and again whenever its wording or the audit retention above changes, with the number of days records are kept. The AI warning is shown above the input box. Both are on by default, with the wording below. Provisioning a person here assumes their consent, so the app records no acknowledgment. You are responsible for consent, notice and the law where you are (for minors, employees and other countries).</p>
+          <p class="hint">The privacy notice is shown in the app after pairing and again whenever its wording or the audit retention (set on the Security page) changes, with the number of days records are kept. The AI warning is shown above the input box. Both are on by default, with the wording below. Provisioning a person here assumes their consent, so the app records no acknowledgment. You are responsible for consent, notice and the law where you are (for minors, employees and other countries).</p>
         </div>
         <div class="sec-fields">
           <label class="check" for="s-notice-on"><input type="checkbox" id="s-notice-on" name="s-notice-on"> Show the privacy notice</label>
@@ -78,16 +65,5 @@
       {% call b::error_line("settings-error") %}{% endcall %}
       {% call c::save_bar("settings-form") %}{% endcall %}
 
-      <section class="sec-sec danger-zone" aria-labelledby="danger-title">
-        <div class="sec-lab">
-          {% call c::section_title("danger-title", "Danger zone", "settings/general#danger-zone") %}{% endcall %}
-          <p class="hint">Switched on, the server starts no new replies and clears the messages waiting in queues. Clients see a clear message.</p>
-        </div>
-        <div class="sec-fields">
-          <p class="sec-line">Kill switch: <strong id="s-kill-state">off</strong>. It stops every reply for everyone until it is turned off.</p>
-          <div class="sec-actions"><button type="button" id="s-kill-switch" class="btn btn-danger" aria-describedby="s-kill-state">Turn on kill switch</button></div>
-          <label class="check" for="s-kill-aborts"><input type="checkbox" id="s-kill-aborts" name="s-kill-aborts"> Also stop the replies that are running when it goes on (otherwise they finish)</label>
-        </div>
-      </section>
     </form>
 {% endblock %}

@@ -135,12 +135,13 @@ pub const HELP_TOPICS: &[&str] = &[
     "settings/security#passkey",
     "settings/security#recovery-codes",
     "settings/security#admin-api-key",
-    "settings/security#sealed-content",
+    "settings/security#sealed-content-and-audit-records",
     "settings/security#rotate-the-audit-key",
+    "settings/security#backup-key",
+    "settings/security#danger-zone",
     "settings/backup#back-up-now",
     "settings/backup#scheduled-backups",
     "settings/backup#how-long-backups-are-kept",
-    "settings/backup#backup-key",
     "settings/backup#download-a-backup",
     "settings/backup#restore-from-a-backup",
     "settings/notifications#ntfy",
@@ -150,10 +151,8 @@ pub const HELP_TOPICS: &[&str] = &[
     "settings/general#system-prompt",
     "settings/general#reply-time-limit",
     "settings/general#history-sent-with-each-question",
-    "settings/general#audit",
     "settings/general#what-people-are-told",
     "settings/general#display-defaults",
-    "settings/general#danger-zone",
 ];
 
 // UI timing.
