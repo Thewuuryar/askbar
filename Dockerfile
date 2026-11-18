@@ -95,7 +95,7 @@ CMD ["caddy", "run", "--config", "/etc/caddy/bootstrap.Caddyfile", "--adapter", 
 # CLIProxyAPI, pinned by digest, with our supervisor as the entry point (ADR 0037). The supervisor runs it as a
 # child and restarts it when /cpa-config/config.yaml changes, when the admin writes a new value to
 # /cpa-config/restart-request, or after a crash; it opens no port. CLIProxyAPI itself is unchanged.
-FROM eceasy/cli-proxy-api:v8.0.51@sha256:15d13889e1a39a688be306dfbf2f6cf9003e99cd913b5070fa463f8ab2aa0031 AS cpa
+FROM eceasy/cli-proxy-api:v8.0.77@sha256:2acf44fbadf9933a04e971048b4c2ddd184ce6e3ea08fc2dc25354f3a365f5ab AS cpa
 COPY --from=build /src/target/release/askbar-cpa-supervisor /usr/local/bin/askbar-cpa-supervisor
 WORKDIR /CLIProxyAPI
 ENV ASKBAR_CPA_CONFIG_DIR=/cpa-config

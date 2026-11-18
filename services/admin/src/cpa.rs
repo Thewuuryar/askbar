@@ -1,7 +1,7 @@
 //! CLIProxyAPI (CPA): the admin makes its configuration and API key, connects Claude and ChatGPT accounts
 //! through CPA's own control API (no terminal), and keeps one "managed" provider pointing at it.
 //!
-//! The control API paths and shapes below are checked against the pinned image (`eceasy/cli-proxy-api:v8.0.51`, the
+//! The control API paths and shapes below are checked against the pinned image (`eceasy/cli-proxy-api:v8.0.77`, the
 //! base of the `askbar-cpa` image) by `scripts/check-cpa-image.sh`; run it after changing the pinned digest. They are all
 //! in this file, and `tests/mock_cpa` in `askbar-admin/tests/cpa.rs` states what is assumed.
 //!
@@ -588,7 +588,7 @@ mod tests {
 
     #[test]
     fn the_address_has_to_be_the_one_the_login_sends_the_browser_back_to() {
-        // As the pinned image gives them (CLIProxyAPI v8.0.51), one per provider.
+        // As the pinned image gives them (CLIProxyAPI v8.0.51, the first one checked), one per provider.
         let claude = "https://claude.ai/oauth/authorize?client_id=x&redirect_uri=http%3A%2F%2Flocalhost%3A54545%2Fcallback&state=S1";
         let codex = "https://auth.openai.com/oauth/authorize?redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback&state=S1";
         assert_eq!(redirect_of(claude).as_deref(), Some("http://localhost:54545/callback"));
