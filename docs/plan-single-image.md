@@ -179,7 +179,7 @@ The owner must approve these. The files are not edited in this pull request. Eac
 - **`hidepid` availability** on the target runtimes ([step 2.5](#phase-2-mode-b-all-in-one)).
 - **How the supervisor installs `nftables` rules:** the `nft` program in the image (one more Debian package in every container, to the same licence rule) or a netlink library (a new dependency).
 - **Users for Caddy and `cpa` in Mode B.** They run as root with group 10001 in Mode A. Mode B needs their own uids; CLIProxyAPI writes under `$HOME` and has not been tried as another user.
-- **The routing plan's model files.** [plan-tiered-routing.md](plan-tiered-routing.md) adds a classifier to `model-gateway`; in one image it would load into every container.
+- **The routing plan's new services.** [plan-tiered-routing.md](plan-tiered-routing.md) no longer adds a classifier to `model-gateway` (the decider is a hosted or self-hosted service), but it adds an MCP gateway (a third-party agentgateway binary behind a Rust front) and `searxng`; Mode B would have to hold or exclude them.
 
 ## Not planned
 
