@@ -170,7 +170,7 @@ async function runViewport(viewport) {
   page.on('pageerror', (e) => errors.push(e.message));
   page.on('console', (m) => { if (m.type() === 'error' && !/status of (4\d\d|502)/.test(m.text())) errors.push(m.text()); });
 
-  // Opens the Settings tab and waits until its values have been read from the server. Waiting for a field to hold a
+  // Opens the General page and waits until its values have been read from the server. Waiting for a field to hold a
   // value is not enough when the test typed that same value: a read that lands later overwrites what the test types next.
   async function openSettings() {
     await openPage('providers');
@@ -1529,7 +1529,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.goto(base + 'providers/');
     await page.waitForSelector('#app:not([hidden])');
   });
-  await step('settings page saves the system prompt and display defaults', async () => {
+  await step('general page saves the system prompt and display defaults', async () => {
     await openPage('general');
     await page.waitForSelector('#settings-form');
     await page.waitForFunction(() => /quick-question popup/.test(document.getElementById('s-prompt').value));
@@ -1544,7 +1544,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     assert.equal(await page.inputValue('#s-prompt'), 'You are a pirate.');
     assert.equal(await page.inputValue('#s-theme'), 'dark');
   });
-  await step('settings: the privacy notice and the AI warning are on with their default words, and the changes are kept', async () => {
+  await step('general: the privacy notice and the AI warning are on with their default words, and the changes are kept', async () => {
     await openSettings();
     await page.waitForFunction(() => /AI can make mistakes/.test(document.getElementById('s-warning-text').value));
     assert.equal(await page.isChecked('#s-notice-on'), true);
@@ -1568,7 +1568,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await openSettings();
     await page.waitForFunction(() => /sealed copy of each goes to the audit record/.test(document.getElementById('s-notice-text').value));
   });
-  await step('an invalid setting shows the server message', async () => {
+  await step('general: an invalid setting shows the server message', async () => {
     await page.fill('#s-top', '0.5');
     await page.fill('#s-width', '100');
     await page.evaluate(() => document.getElementById('settings-form').noValidate = true);
@@ -1734,7 +1734,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.click('#settings-form-save-bar button[type=submit]');
     await page.waitForSelector('#toasts .toast');
   });
-  await step('alerts: not set up shows a banner; ntfy settings are saved, tested and removed, and never shown again (ADR 0055)', async () => {
+  await step('notifications: not set up shows a banner; ntfy settings are saved, tested and removed, and never shown again (ADR 0055)', async () => {
     const TOPIC = 'e2e-topic-' + 'q7x9k2';
     const TOKEN = 'e2e-token-' + 'm4p8z1';
     const sink = (p, method = 'GET') => new Promise((resolve, reject) => {
@@ -1782,7 +1782,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.waitForSelector('#banners [data-banner="alerts"]');
     assert.match(await page.innerText('#banners [data-banner="alerts"]'), /Alerts are not set up/);
   });
-  await step('alerts: email is saved, tested, kept when ntfy changes, and the password is never shown again (ADR 0055)', async () => {
+  await step('notifications: email is saved, tested, kept when ntfy changes, and the password is never shown again (ADR 0055)', async () => {
     const PASSWORD = 'e2e-mail-pass-' + 'v5c2n8';
     const USER = 'e2e-mail-user-' + 'h3t6w0';
     const mail = (p, method = 'GET') => new Promise((resolve, reject) => {
@@ -1995,7 +1995,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       assert.equal(bytes.includes(secret), false, 'the bundle holds ' + secret);
     }
   });
-  await step('restore: this install is not empty, so the backup it just made is refused with a sentence and nothing changes (ADR 0013)', async () => {
+  await step('backup restore: this install is not empty, so the backup it just made is refused with a sentence and nothing changes (ADR 0013)', async () => {
     // A restore is for a new install: the bundle from the step above is checked, and the used install refuses it.
     // Restore is a section of Backup now (plan step 5.3); the old address redirects there, query and all.
     const old = await page.request.get(`http://127.0.0.1:${adminPort}/admin/restore/?from=old`, { maxRedirects: 0 });
@@ -3789,6 +3789,24 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.goto(base);
   });
   // Plan step 7.2: the reference, rendered from docs/reference when the admin is built.
+  await step('greyed items: no "Not available yet" item shows a digit, on any page', async () => {
+    // Plan step 8.3: a greyed item is a label only. A figure in one would read as data the admin does not have.
+    // A greyed item that legitimately has a digit is exempt here by its label, with the reason.
+    const EXEMPT = [['Cloud storage (S3-compatible)', 'S3 is the name of a storage protocol, not a figure']];
+    const slugs = await page.$$eval('#nav a[data-tab]', (as) => as.map((a) => a.dataset.tab));
+    let greyed = 0;
+    for (const slug of slugs) {
+      await page.goto(`http://127.0.0.1:${adminPort}/admin/${slug}/`);
+      await page.waitForSelector('#app:not([hidden])');
+      const items = await page.$$eval('.na, [aria-disabled="true"]', (els) => els
+        .filter((el) => el.matches('.na') || (el.dataset.tip || '').startsWith('Not available yet'))
+        .map((el) => ({ text: el.innerText || '' })));
+      greyed += items.length;
+      const digits = items.filter((it) => /\d/.test(it.text) && !EXEMPT.some(([label]) => it.text.includes(label)));
+      assert.deepEqual(digits.map((it) => it.text), [], slug + ': a greyed item shows a digit');
+    }
+    assert.ok(greyed > 0, 'the pages have greyed items to check');
+  });
   await step('reference: the index and an article show the outline, the article and its source link; targets, scrolling and axe are clean', async () => {
     const K = await page.evaluate(() => window.ui.ready);
     const min = isPhone ? 44 : 24;

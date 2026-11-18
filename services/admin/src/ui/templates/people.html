@@ -42,7 +42,7 @@
         {% call b::error_line("user-add-error") %}{% endcall %}
         <div class="actions">
           <button type="button" id="user-cancel" class="btn btn-secondary">Cancel</button>
-          <button type="submit" class="btn btn-primary">Add user</button>
+          {% call c::button("Add user", "submit", "", "") %}{% endcall %}
         </div>
       </form>
     {% endcall %}
@@ -54,7 +54,7 @@
         {% call b::error_line("pair-error") %}{% endcall %}
         <div class="actions">
           <button type="button" id="pair-cancel" class="btn btn-secondary">Cancel</button>
-          <button type="submit" class="btn btn-primary">Generate pairing key</button>
+          {% call c::button("Generate pairing key", "submit", "", "") %}{% endcall %}
         </div>
       </form>
       <div id="pairing-out" hidden>

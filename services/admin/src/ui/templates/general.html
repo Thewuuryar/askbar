@@ -36,7 +36,7 @@
       <section class="sec-sec" aria-labelledby="audit-title">
         <div class="sec-lab">
           {% call c::section_title("audit-title", "Audit", "settings/general#audit") %}{% endcall %}
-          <p class="hint">How long the audit records are kept before they are deleted (7 days at least, always; the audit database itself refuses to delete anything younger). How long sealed content stays open once the passphrase has unsealed it: it seals itself after this many minutes without use, or this many in all, whichever comes first. Changing either is an alert.</p>
+          <p class="hint">How long the audit records are kept before they are deleted ({{ crate::constants::MIN_AUDIT_RETENTION_DAYS }} days at least, always; the audit database itself refuses to delete anything younger). How long sealed content stays open once the passphrase has unsealed it: it seals itself after this many minutes without use, or this many in all, whichever comes first. Changing either is an alert.</p>
         </div>
         <div class="sec-fields">
           {% call c::field("Keep audit records for (days)", "s-retention", "", "slot", false) %}<input id="s-retention" name="s-retention" type="number" inputmode="numeric" min="{{ crate::constants::MIN_AUDIT_RETENTION_DAYS }}" max="{{ crate::constants::MAX_AUDIT_RETENTION_DAYS }}" step="1" aria-describedby="s-retention-hint s-retention-error"><p class="hint" id="s-retention-hint">{{ crate::constants::MIN_AUDIT_RETENTION_DAYS }} to {{ crate::constants::MAX_AUDIT_RETENTION_DAYS }} days</p>{% endcall %}

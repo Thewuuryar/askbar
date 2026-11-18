@@ -737,6 +737,55 @@ mod tests {
         assert_eq!(static_file(&h, "text/css", "body { color: red }").status(), StatusCode::OK, "a changed file is sent again");
     }
 
+    /// Plan step 8.3: the side menu is PAGES grouped in order: Top pages on their own, then the Audit and Settings
+    /// groups under their headings, then Reference. The expected groups are worked out from PAGES, not typed here.
+    #[test]
+    fn the_menu_groups_the_pages_in_order() {
+        let mut want: Vec<(String, Vec<&str>)> = Vec::new();
+        for p in PAGES {
+            match p.group {
+                Group::Top | Group::Reference => want.push((p.label.to_string(), vec![p.slug])),
+                g => match want.last_mut() {
+                    Some((label, slugs)) if label == g.label() => slugs.push(p.slug),
+                    _ => want.push((g.label().to_string(), vec![p.slug])),
+                },
+            }
+        }
+        let got: Vec<(String, Vec<&str>)> =
+            menu().iter().map(|g| (g.label.to_string(), g.pages.iter().map(|p| p.slug).collect())).collect();
+        assert_eq!(got, want, "the menu's groups in order, each with its pages in order");
+
+        let html = &rendered()[PAGES.iter().position(|p| p.slug == "home").expect("home")];
+        let nav = &html[html.find(r#"<nav id="nav""#).expect("nav")..];
+        let nav = &nav[..nav.find("</nav>").expect("nav end")];
+        for g in menu().iter().filter(|g| g.nested) {
+            // A group heading links to its first page; the Settings heading is its overview, so it links there and is marked
+            // with the overview's data-tab. The other headings have no overview.
+            let tab = if g.overview { format!(r#" data-tab="{}""#, g.pages[0].slug) } else { String::new() };
+            assert_eq!(g.overview, g.label == "Settings", "{}: only Settings has an overview", g.label);
+            assert!(
+                nav.contains(&format!(r#"href="{}"{tab} data-tip="{}""#, g.href(), g.label)),
+                "{}: the heading links to {}",
+                g.label,
+                g.href()
+            );
+            assert_eq!(g.href(), path(g.pages[0]), "{}: a heading links to its first page", g.label);
+            // The sub-items follow the heading in menu order; an overview is not repeated among them.
+            let mut at = nav.find(&format!(r#"data-tip="{}""#, g.label)).expect("heading");
+            for sub in g.subs() {
+                // The label is escaped in the page ("People & clients" is `People &#38; clients`).
+                let link = format!(r#"href="{}" data-tab="{}" data-tip="{}""#, path(sub), sub.slug, sub.label.replace('&', "&#38;"));
+                let found =
+                    nav[at..].find(&link).unwrap_or_else(|| panic!("{}: {} is listed under the heading, in order", g.label, sub.slug));
+                at += found + link.len();
+            }
+        }
+        let settings = menu().iter().find(|g| g.label == "Settings").expect("the Settings group");
+        assert_eq!((settings.overview_slug(), settings.href().as_str()), ("settings", "/admin/settings/"));
+        let audit = menu().iter().find(|g| g.label == "Audit").expect("the Audit group");
+        assert_eq!((audit.overview_slug(), audit.href().as_str()), ("", "/admin/audit/calls/"));
+    }
+
     /// Plan step 6.2: every Audit page shows the same four tabs as the menu's Audit links, in the same order, and
     /// marks only its own tab as the current one. The tab markup is built from `PAGES`, so this checks the frame.
     #[test]
