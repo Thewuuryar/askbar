@@ -109,6 +109,42 @@ pub const PAGE_SLUGS: [&str; 16] = [
 ];
 /// The page `/admin` opens.
 pub const LANDING_PAGE: &str = "home";
+// Help topics (plan step 7.1a): each is `<reference page id>#<heading>`, the heading the ? button opens. The reference
+// pages under docs/reference hold them, and `scripts/check-reference.sh` fails on a topic with no such heading.
+pub const HELP_TOPICS: [&str; 32] = [
+    "settings/providers#providers",
+    "settings/providers#claude-and-chatgpt-accounts",
+    "settings/providers#models-people-can-use",
+    "settings/people#users",
+    "settings/people#paired-clients",
+    "settings/services#running-services",
+    "settings/network#host-name",
+    "settings/network#certificate",
+    "settings/network#allowed-addresses-and-networks",
+    "settings/security#change-admin-password",
+    "settings/security#passkey",
+    "settings/security#recovery-codes",
+    "settings/security#admin-api-key",
+    "settings/security#sealed-content",
+    "settings/security#rotate-the-audit-key",
+    "settings/backup#back-up-now",
+    "settings/backup#scheduled-backups",
+    "settings/backup#how-long-backups-are-kept",
+    "settings/backup#backup-key",
+    "settings/backup#download-a-backup",
+    "settings/backup#restore-from-a-backup",
+    "settings/notifications#ntfy",
+    "settings/notifications#email",
+    "settings/notifications#test-alert",
+    "settings/notifications#page-wide-banners",
+    "settings/general#system-prompt",
+    "settings/general#reply-time-limit",
+    "settings/general#history-sent-with-each-question",
+    "settings/general#audit",
+    "settings/general#what-people-are-told",
+    "settings/general#display-defaults",
+    "settings/general#danger-zone",
+];
 
 // UI timing.
 /// How often the status bar refreshes while the tab is visible.
@@ -204,6 +240,7 @@ struct Constants {
     home_stats_window_secs: i64,
     page_slugs: [&'static str; 16],
     landing_page: &'static str,
+    help_topics: [&'static str; 32],
 }
 
 fn current() -> Constants {
@@ -263,6 +300,7 @@ fn current() -> Constants {
         home_stats_window_secs: HOME_STATS_WINDOW_SECS,
         page_slugs: PAGE_SLUGS,
         landing_page: LANDING_PAGE,
+        help_topics: HELP_TOPICS,
     }
 }
 
@@ -301,6 +339,7 @@ mod tests {
             "FRESH_SIGNIN_SECS",
             "GENERATION_TIMEOUT_SECS",
             "HIDDEN_EVERY_SECS",
+            "HELP_TOPICS",
             "HIGHLIGHT_SECS",
             "HOME_STATS_WINDOW_DAYS",
             "HOME_STATS_WINDOW_SECS",
