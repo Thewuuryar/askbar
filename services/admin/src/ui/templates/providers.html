@@ -1,11 +1,10 @@
 {% extends "base.html" %}
 {%- import "blocks.html" as b %}
 {%- import "components.html" as c %}
-{% block hint %}Where answers come from, and which models people can pick.{% endblock %}
 {% block content %}
     <section id="providers-section" aria-labelledby="providers-title">
       <div class="sect-head">
-        <h3 id="providers-title">Providers</h3>
+        {% call c::section_title("providers-title", "Providers", "settings/providers#providers") %}{% endcall %}
         <span class="spacer"></span>
         <button type="button" id="add-provider" class="btn btn-secondary">Add provider</button>
       </div>
@@ -20,7 +19,7 @@
 
     <section id="cpa-panel" aria-labelledby="cpa-title" hidden>
       <div class="sect-head">
-        <h3 id="cpa-title">Claude and ChatGPT accounts</h3>
+        {% call c::section_title("cpa-title", "Claude and ChatGPT accounts", "settings/providers#claude-and-chatgpt-accounts") %}{% endcall %}
       </div>
       <p class="hint">Use a Claude or ChatGPT subscription as a provider. The CPA provider answers once an account is connected.</p>
       <div id="cpa-accounts"></div>
@@ -47,7 +46,7 @@
 
     <section id="catalog-section" aria-labelledby="catalog-title">
       <div class="sect-head">
-        <h3 id="catalog-title">Models people can use</h3>
+        {% call c::section_title("catalog-title", "Models people can use", "settings/providers#models-people-can-use") %}{% endcall %}
       </div>
       <p class="hint">Applies to every user and client. A message that names no model uses the default.</p>
       <form id="catalog-form" novalidate>

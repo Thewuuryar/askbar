@@ -12,24 +12,24 @@ Encrypted backups of the server's data and this admin's settings. What to back u
 
 ## Back up now
 
-Placeholder: help text not written yet.
+Backs up now, then applies the keep limits.
 
 ## Scheduled backups
 
-Placeholder: help text not written yet.
+Backups run on a schedule. A failed backup is retried after a short wait and raises an alert.
 
 ## How long backups are kept
 
-Placeholder: help text not written yet.
+The newest backup is always kept. Lowering the limits needs a recent sign-in.
 
 ## Backup key
 
-Placeholder: help text not written yet.
+Only the backup passphrase opens a backup. It is not the audit passphrase. Rotating needs a recent sign-in, and backups made before still open with the passphrase they were made under.
 
 ## Download a backup
 
-Placeholder: help text not written yet.
+An encrypted .tar file, opened with the backup passphrase.
 
 ## Restore from a backup
 
-Placeholder: help text not written yet.
+Only for a new, empty install. A restore replaces all of this server's data and this admin's own, and needs a recent sign-in. The admin restarts when it is done; sign in again with the password the backup's install had.

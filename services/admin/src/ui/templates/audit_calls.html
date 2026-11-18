@@ -1,7 +1,6 @@
 {% extends "base.html" %}
 {%- import "blocks.html" as b %}
 {%- import "components.html" as c %}
-{% block hint %}What the server recorded about each reply: when, for whom, through which provider, how long it took and how it ended. Message content is sealed; opening it asks for the audit passphrase and is logged.{% endblock %}
 {% block scripts %}<script src="/admin/audit_calls.js" defer></script>{% endblock %}
 {% block content %}
     {% call b::error_line("calls-error") %}{% endcall %}

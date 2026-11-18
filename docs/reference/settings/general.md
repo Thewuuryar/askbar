@@ -12,28 +12,28 @@ What every reply starts from: the system prompt, defaults and limits. The kill s
 
 ## System prompt
 
-Placeholder: help text not written yet.
+Sent with every message. It is never shown to clients.
 
 ## Reply time limit
 
-Placeholder: help text not written yet.
+A reply still running after this long is stopped and the text so far is kept. A message that waits in the queue is timed from when it starts.
 
 ## History sent with each question
 
-Placeholder: help text not written yet.
+A new question goes to the model with this many earlier questions and their replies. 0 sends the whole conversation (the default). A shorter history uses fewer tokens; the model does not see what is left out. A question that got no reply is never sent again.
 
 ## Audit
 
-Placeholder: help text not written yet.
+How long audit records are kept before they are deleted (7 days at least, always), and how long sealed content stays open once the passphrase has unsealed it.
 
 ## What people are told
 
-Placeholder: help text not written yet.
+The privacy notice is shown in the app after pairing and again whenever its wording or the audit retention changes. The AI warning is shown above the input box. Both are on by default.
 
 ## Display defaults
 
-Placeholder: help text not written yet.
+Clients use these unless their own client.yaml overrides them.
 
 ## Danger zone
 
-Placeholder: help text not written yet.
+The kill switch. Switched on, the server starts no new replies and clears the messages waiting in queues. Clients see a clear message.

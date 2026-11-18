@@ -379,13 +379,20 @@
   ui.openPanel = async (id, opts = {}) => {
     const panel = $(id);
     if (!panel) return null;
-    if (openState && openState.panel === panel) return panel;
-    if (openState && !(await ui.closePanel())) return null;
     const param = opts.param || 'panel';
     const value = opts.value || id;
+    if (openState && openState.panel === panel) {
+      // opts.reopen: the same panel shows something else (help for another topic): new address, same history entry.
+      if (opts.reopen) {
+        if (opts.opener) openState.opener = opts.opener;
+        history.replaceState(history.state, '', panelUrl(param, value));
+      }
+      return panel;
+    }
+    if (openState && !(await ui.closePanel())) return null;
     openState = {
       panel, param,
-      opener: document.activeElement,
+      opener: opts.opener || document.activeElement,
       before: fieldValues(panel),
       onClose: opts.onClose || null,
       pushed: !opts.fromUrl,
@@ -434,6 +441,50 @@
   document.addEventListener('click', (e) => {
     const close = e.target.closest('[data-panel-close]');
     if (close && openState && openState.panel.contains(close)) ui.closePanel();
+  });
+
+  // ------------------------------------------------------------- help
+
+  // The ? buttons (help macro) open the docked help panel (plan step 7.3). Each page carries the text of its own topics,
+  // already rendered, in <template data-help-topic>; opening clones that DOM into the panel (no fetch, no innerHTML).
+  // Its address is ?panel=help:<topic>, so Back closes it and a reload opens it again.
+  const HELP_PANEL = 'help-panel';
+  let helpTopic = null;
+  const helpButtons = () => [...document.querySelectorAll('[data-help]')];
+  const markHelpButtons = () => helpButtons().forEach((b) => b.setAttribute('aria-expanded', String(b.dataset.help === helpTopic)));
+
+  ui.help = async (topic, opts = {}) => {
+    const panel = $(HELP_PANEL);
+    const tpl = [...document.querySelectorAll('template[data-help-topic]')].find((t) => t.dataset.helpTopic === topic);
+    if (!panel || !tpl) return null;
+    panel.querySelector('.side-panel-title').textContent = tpl.dataset.title;
+    $('help-kicker').textContent = 'Help \u00b7 ' + tpl.dataset.kicker;
+    $('help-article').replaceChildren(tpl.content.cloneNode(true));
+    $('help-full').href = tpl.dataset.href;
+    $('help-article').scrollTop = 0;
+    panel.querySelector('.side-panel-body').scrollTop = 0;
+    const opener = opts.opener || helpButtons().find((b) => b.dataset.help === topic) || null;
+    const opened = await ui.openPanel(HELP_PANEL, {
+      param: 'panel', value: 'help:' + topic, fromUrl: !!opts.fromUrl, opener, reopen: true,
+      onClose: () => { helpTopic = null; markHelpButtons(); },
+    });
+    if (!opened) return null;
+    helpTopic = topic;
+    markHelpButtons();
+    return opened;
+  };
+
+  // A reload (or a shared link) with ?panel=help:<topic> opens the panel once the page is shown.
+  ui.helpFromAddress = () => {
+    const p = new URL(location.href).searchParams.get('panel') || '';
+    if (p.startsWith('help:') && !ui.panelOpen()) ui.help(p.slice('help:'.length), { fromUrl: true });
+  };
+
+  document.addEventListener('click', (e) => {
+    const b = e.target.closest ? e.target.closest('[data-help]') : null;
+    if (!b) return;
+    if (ui.panelOpen() === HELP_PANEL && helpTopic === b.dataset.help) ui.closePanel();
+    else ui.help(b.dataset.help, { opener: b });
   });
 
   // ------------------------------------------------------------- menus

@@ -1,11 +1,10 @@
 {% extends "base.html" %}
 {%- import "blocks.html" as b %}
 {%- import "components.html" as c %}
-{% block hint %}Who can use Askbar, and the phones and computers paired to them.{% endblock %}
 {% block content %}
     <section id="users-section" aria-labelledby="users-title">
       <div class="sect-head">
-        <h3 id="users-title">Users</h3>
+        {% call c::section_title("users-title", "Users", "settings/people#users") %}{% endcall %}
         <span class="spacer"></span>
         <button type="button" id="add-user" class="btn btn-secondary">Add user</button>
         <button type="button" id="pair-open" class="btn btn-primary">Pair a new client</button>
@@ -23,7 +22,7 @@
 
     <section id="clients-section" aria-labelledby="clients-title">
       <div class="sect-head">
-        <h3 id="clients-title">Paired clients</h3>
+        {% call c::section_title("clients-title", "Paired clients", "settings/people#paired-clients") %}{% endcall %}
       </div>
       {% call b::error_line("client-error") %}{% endcall %}
       <div class="table-wrap">

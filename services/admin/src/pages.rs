@@ -43,6 +43,8 @@ pub struct Page {
     pub label: &'static str,
     pub group: Group,
     pub icon: &'static str,
+    /// The one line under the page's title (the page header's lede).
+    pub lede: &'static str,
     render: fn() -> askama::Result<String>,
 }
 
@@ -53,6 +55,8 @@ macro_rules! page {
         struct $ty {
             current: &'static str,
             label: &'static str,
+            /// The one line under the title (plan step 7.3: the page header).
+            lede: &'static str,
             /// The group's name for the breadcrumb; empty for a page that is its own group.
             group: &'static str,
             /// The page's section id: the slug with `/` as `-` (`tab-audit-calls`).
@@ -66,6 +70,7 @@ macro_rules! page {
             $ty {
                 current: $slug,
                 label: $label,
+                lede: lede($slug),
                 group: crumb_group($slug),
                 section: section_id($slug),
                 menu: menu(),
@@ -74,6 +79,11 @@ macro_rules! page {
             .render()
         }
     };
+}
+
+/// The page's lede: the line under its title.
+pub fn lede(slug: &str) -> &'static str {
+    PAGES.iter().find(|p| p.slug == slug).map_or("", |p| p.lede)
 }
 
 /// The breadcrumb's first item (rule 3): the page's group label, or empty when the page is top-level or
@@ -118,22 +128,22 @@ page!(General, general, "general", "general.html", "General");
 /// Every admin page, in menu order (rule 1). Its slugs equal `constants::PAGE_SLUGS`, which a test checks.
 /// `/admin` and `/admin/` go to `constants::LANDING_PAGE`.
 pub static PAGES: &[Page] = &[
-    Page { slug: "home", label: "Home", group: Group::Top, icon: "home", render: home },
-    Page { slug: "alerts", label: "Alerts", group: Group::Top, icon: "bell", render: alerts },
-    Page { slug: "audit/calls", label: "Model calls", group: Group::Audit, icon: "calls", render: audit_calls },
-    Page { slug: "audit/admin", label: "Admin actions", group: Group::Audit, icon: "clipboard", render: audit_admin },
-    Page { slug: "audit/sealed", label: "Sealed access", group: Group::Audit, icon: "lock", render: audit_sealed },
-    Page { slug: "audit/routing", label: "Routing", group: Group::Audit, icon: "route", render: audit_routing },
-    Page { slug: "settings", label: "Settings", group: Group::Settings, icon: "settings", render: settings },
-    Page { slug: "providers", label: "Providers", group: Group::Settings, icon: "cube", render: providers },
-    Page { slug: "people", label: "People & clients", group: Group::Settings, icon: "people", render: people },
-    Page { slug: "services", label: "Services", group: Group::Settings, icon: "server", render: services },
-    Page { slug: "network", label: "Network", group: Group::Settings, icon: "globe", render: network },
-    Page { slug: "security", label: "Security", group: Group::Settings, icon: "shield", render: security },
-    Page { slug: "backup", label: "Backup", group: Group::Settings, icon: "archive", render: backup },
-    Page { slug: "notifications", label: "Notifications", group: Group::Settings, icon: "send", render: notifications },
-    Page { slug: "general", label: "General", group: Group::Settings, icon: "sliders", render: general },
-    Page { slug: "reference", label: "Reference", group: Group::Reference, icon: "reference", render: crate::reference::index_html },
+    Page { slug: "home", label: "Home", group: Group::Top, icon: "home", lede: "What needs you now, and how Askbar is doing.", render: home },
+    Page { slug: "alerts", label: "Alerts", group: Group::Top, icon: "bell", lede: "Everything that needs your attention, most serious first.", render: alerts },
+    Page { slug: "audit/calls", label: "Model calls", group: Group::Audit, icon: "calls", lede: "What the server recorded about each reply: when, for whom, through which provider, how long it took and how it ended. Message content is sealed; opening it asks for the audit passphrase and is logged.", render: audit_calls },
+    Page { slug: "audit/admin", label: "Admin actions", group: Group::Audit, icon: "clipboard", lede: "What was changed in this admin, and when.", render: audit_admin },
+    Page { slug: "audit/sealed", label: "Sealed access", group: Group::Audit, icon: "lock", lede: "Sealed prompts and replies stay closed until the audit passphrase opens them. Every opening is recorded.", render: audit_sealed },
+    Page { slug: "audit/routing", label: "Routing", group: Group::Audit, icon: "route", lede: "The tries each request took, why a try failed, and the providers the router is refusing. Pick a request on Model calls to see its tries.", render: audit_routing },
+    Page { slug: "settings", label: "Settings", group: Group::Settings, icon: "settings", lede: "Every setting, by section. Each line shows what is set now.", render: settings },
+    Page { slug: "providers", label: "Providers", group: Group::Settings, icon: "cube", lede: "Where answers come from, and which models people can pick.", render: providers },
+    Page { slug: "people", label: "People & clients", group: Group::Settings, icon: "people", lede: "Who can use Askbar, and the phones and computers paired to them.", render: people },
+    Page { slug: "services", label: "Services", group: Group::Settings, icon: "server", lede: "Restart a part of Askbar.", render: services },
+    Page { slug: "network", label: "Network", group: Group::Settings, icon: "globe", lede: "The host name, its certificate, and which addresses may open this site.", render: network },
+    Page { slug: "security", label: "Security", group: Group::Settings, icon: "shield", lede: "How you sign in to this admin, keys for scripts, and how long sealed content stays open.", render: security },
+    Page { slug: "backup", label: "Backup", group: Group::Settings, icon: "archive", lede: "Encrypted backups of the server's data and this admin's settings.", render: backup },
+    Page { slug: "notifications", label: "Notifications", group: Group::Settings, icon: "send", lede: "Where Askbar sends an alert when something needs attention, and how to test it.", render: notifications },
+    Page { slug: "general", label: "General", group: Group::Settings, icon: "sliders", lede: "What every reply starts from: the system prompt, defaults and limits.", render: general },
+    Page { slug: "reference", label: "Reference", group: Group::Reference, icon: "reference", lede: "What each admin setting does, how the admin site is built, and what the audit alerts mean. Start here.", render: crate::reference::index_html },
 ];
 
 /// A page is its group's overview when its slug is the group's name in lower case (`settings` in Settings).
@@ -289,6 +299,19 @@ mod tests {
                 "{}: the menu's link, the breadcrumb and its tab, nothing else",
                 p.slug
             );
+            // The page header (plan step 7.3): exactly one, holding the page's one h2 and its lede; a page with a reference
+            // page has a help button after the title, and carries that topic's text for the side panel.
+            assert_eq!(html.matches(r#"<header class="page-header">"#).count(), 1, "{}: one page header", p.slug);
+            assert_eq!(html.matches(r#"<h2 class="page-title">"#).count(), 1, "{}: one page title", p.slug);
+            assert!(html.contains(r#"<p class="page-lede">"#) == !p.lede.is_empty(), "{}: the lede", p.slug);
+            let topic = crate::reference::page_topic(p.slug);
+            let header = &html[html.find(r#"<header class="page-header">"#).unwrap()..];
+            let header = &header[..header.find("</header>").unwrap()];
+            assert_eq!(header.contains("data-help="), !topic.is_empty(), "{}: the title's help button", p.slug);
+            assert_eq!(html.contains(r#"id="help-panel""#), !crate::reference::topics_for(p.slug).is_empty(), "{}: the help panel", p.slug);
+            if p.group == Group::Settings && p.slug != "settings" {
+                assert!(!topic.is_empty(), "{}: a settings page has a help topic", p.slug);
+            }
             let crumb = &html[html.find(r#"<nav class="crumb" aria-label="Breadcrumb">"#).expect("breadcrumb")..];
             let crumb = &crumb[..crumb.find("</nav>").unwrap()];
             // Labels are HTML-escaped in the page ("People & clients" is written `People &#38; clients`).
@@ -530,6 +553,7 @@ mod tests {
         "toast_region",
         "banner_region",
         "help",
+        "section_title",
         "page_header",
         "button",
         "icon_button",
@@ -554,7 +578,7 @@ mod tests {
 
     #[derive(Template)]
     #[template(
-        source = r#"{% import "components.html" as c %}<!--skip_link-->{% call c::skip_link() %}{% endcall %}<!--announcer-->{% call c::announcer() %}{% endcall %}<!--toast_region-->{% call c::toast_region() %}{% endcall %}<!--banner_region-->{% call c::banner_region() %}{% endcall %}<!--help-->{% call c::help("audit") %}{% endcall %}<!--page_header-->{% call c::page_header("Clients", "Phones and computers.", "clients", "") %}<a class="btn btn-primary">Pair</a>{% endcall %}<!--button-->{% call c::button("Save", "submit", "", "") %}{% endcall %}{% call c::button("Edit", "secondary", "s", "copy") %}{% endcall %}<!--icon_button-->{% call c::icon_button("close", "Close it") %}{% endcall %}<!--icon-->{% call c::icon("bell") %}{% endcall %}<!--tabs-->{% call c::tabs(&crate::pages::tab_pages("audit/calls"), "audit/calls", "Audit") %}{% endcall %}<!--menu-->{% call c::menu("bell-menu") %}<button class="menu-item" role="menuitem">One</button>{% endcall %}<!--row_menu-->{% call c::row_menu(["edit:Edit", "!delete:Delete"]) %}{% endcall %}<!--field-->{% call c::field("Host name", "host", "Such as askbar.example.com.", "text", true) %}{% endcall %}{% call c::field("Pick", "pick", "", "slot", false) %}<select id="pick"></select>{% endcall %}{% call c::field("Note", "note", "", "textarea", false) %}{% endcall %}<!--new_secret-->{% call c::new_secret("New password", "pw", 10) %}{% endcall %}<!--save_bar-->{% call c::save_bar("general-form") %}{% endcall %}<!--notice-->{% call c::notice("error", "No route.", "Check the address.") %}{% endcall %}<!--status-->{% call c::status("ok") %}Running{% endcall %}{% call c::status("paused") %}Paused{% endcall %}<!--side_panel-->{% call c::side_panel("add-panel", "Add provider", "providers") %}<p>Body</p>{% endcall %}<!--dialog_box-->{% call c::dialog_box("revoke-box", "Revoke?") %}<p>Sure?</p>{% endcall %}<!--row_confirm-->{% call c::row_confirm("restart-confirm", "Restart the server?", "Restart") %}{% endcall %}<!--secret-->{% call c::secret("pair-key") %}{% endcall %}<!--table_head-->{% call c::table_head(["Name", ">Cost", ""]) %}{% endcall %}<!--empty-->{% call c::empty("Nothing yet.", "Add one") %}{% endcall %}<!--skeleton-->{% call c::skeleton(3) %}{% endcall %}<!--na-->{% call c::na("the server cannot do it") %}<span class="btn btn-secondary">Export</span>{% endcall %}<!--na_tag-->{% call c::na_tag("later") %}{% endcall %}"#,
+        source = r#"{% import "components.html" as c %}<!--skip_link-->{% call c::skip_link() %}{% endcall %}<!--announcer-->{% call c::announcer() %}{% endcall %}<!--toast_region-->{% call c::toast_region() %}{% endcall %}<!--banner_region-->{% call c::banner_region() %}{% endcall %}<!--help-->{% call c::help("settings/network#certificate") %}{% endcall %}<!--section_title-->{% call c::section_title("n-cert-title", "Certificate", "settings/network#certificate") %}{% endcall %}{% call c::section_title("plain-title", "Plain", "") %}{% endcall %}<!--page_header-->{% call c::page_header("Clients", "Phones and computers.", "settings/people", "") %}<a class="btn btn-primary">Pair</a>{% endcall %}<!--button-->{% call c::button("Save", "submit", "", "") %}{% endcall %}{% call c::button("Edit", "secondary", "s", "copy") %}{% endcall %}<!--icon_button-->{% call c::icon_button("close", "Close it") %}{% endcall %}<!--icon-->{% call c::icon("bell") %}{% endcall %}<!--tabs-->{% call c::tabs(&crate::pages::tab_pages("audit/calls"), "audit/calls", "Audit") %}{% endcall %}<!--menu-->{% call c::menu("bell-menu") %}<button class="menu-item" role="menuitem">One</button>{% endcall %}<!--row_menu-->{% call c::row_menu(["edit:Edit", "!delete:Delete"]) %}{% endcall %}<!--field-->{% call c::field("Host name", "host", "Such as askbar.example.com.", "text", true) %}{% endcall %}{% call c::field("Pick", "pick", "", "slot", false) %}<select id="pick"></select>{% endcall %}{% call c::field("Note", "note", "", "textarea", false) %}{% endcall %}<!--new_secret-->{% call c::new_secret("New password", "pw", 10) %}{% endcall %}<!--save_bar-->{% call c::save_bar("general-form") %}{% endcall %}<!--notice-->{% call c::notice("error", "No route.", "Check the address.") %}{% endcall %}<!--status-->{% call c::status("ok") %}Running{% endcall %}{% call c::status("paused") %}Paused{% endcall %}<!--side_panel-->{% call c::side_panel("add-panel", "Add provider", "settings/providers#providers") %}<p>Body</p>{% endcall %}<!--dialog_box-->{% call c::dialog_box("revoke-box", "Revoke?") %}<p>Sure?</p>{% endcall %}<!--row_confirm-->{% call c::row_confirm("restart-confirm", "Restart the server?", "Restart") %}{% endcall %}<!--secret-->{% call c::secret("pair-key") %}{% endcall %}<!--table_head-->{% call c::table_head(["Name", ">Cost", ""]) %}{% endcall %}<!--empty-->{% call c::empty("Nothing yet.", "Add one") %}{% endcall %}<!--skeleton-->{% call c::skeleton(3) %}{% endcall %}<!--na-->{% call c::na("the server cannot do it") %}<span class="btn btn-secondary">Export</span>{% endcall %}<!--na_tag-->{% call c::na_tag("later") %}{% endcall %}"#,
         ext = "html"
     )]
     struct AllComponents;
@@ -600,12 +624,21 @@ mod tests {
         assert!(part(&html, "banner_region").contains(r#"id="banners""#));
 
         let help = part(&html, "help");
-        assert!(help.contains(r#"class="btn btn-quiet btn-icon help""#) && help.contains(r#"data-help="audit""#));
-        assert!(help.contains(r#"aria-label="Help""#) && help.contains(r#"data-tip="Help""#) && help.contains("<svg"));
+        assert!(help.contains(r#"class="btn btn-quiet btn-icon help""#) && help.contains(r#"data-help="settings/network#certificate""#));
+        assert!(
+            help.contains(r#"aria-label="Help: Certificate""#) && help.contains(r#"data-tip="Help: Certificate""#) && help.contains("<svg")
+        );
+        assert!(help.contains(r#"aria-controls="help-panel""#) && help.contains(r#"aria-expanded="false""#));
+        let title = part(&html, "section_title");
+        assert!(
+            title.contains(r#"<h3 id="n-cert-title">Certificate</h3>"#) && title.contains(r#"aria-label="Help: Certificate""#),
+            "{title}"
+        );
+        assert_eq!(title.matches("data-help=").count(), 1, "no help button when the topic is empty");
 
         let header = part(&html, "page_header");
-        assert!(header.contains(r#"<h1 class="page-title">Clients</h1>"#), "title");
-        assert!(header.contains(r#"data-help="clients""#), "help button");
+        assert!(header.contains(r#"<h2 class="page-title">Clients</h2>"#), "title");
+        assert!(header.contains(r#"data-help="settings/people""#), "help button");
         assert!(header.contains(r#"<p class="page-lede">Phones and computers.</p>"#), "lede");
         assert!(header.contains(r#"<div class="page-actions"><a class="btn btn-primary">Pair</a></div>"#), "actions slot");
 
@@ -659,7 +692,7 @@ mod tests {
 
         let panel = part(&html, "side_panel");
         assert!(panel.starts_with("<aside") && panel.contains(r#"id="add-panel" class="side-panel""#) && panel.contains(" hidden>"));
-        assert!(panel.contains("Add provider") && panel.contains(r#"data-help="providers""#));
+        assert!(panel.contains("Add provider") && panel.contains(r#"data-help="settings/providers#providers""#));
         assert!(panel.contains(r#"aria-label="Close""#) && panel.contains("data-panel-close") && panel.contains("<p>Body</p>"));
         let boxed = part(&html, "dialog_box");
         assert!(boxed.starts_with("<dialog") && boxed.contains("Revoke?") && boxed.contains("<p>Sure?</p>"));

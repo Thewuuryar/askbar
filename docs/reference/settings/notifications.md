@@ -12,16 +12,16 @@ Where Askbar sends an alert when something needs attention, and how to test it. 
 
 ## ntfy
 
-Placeholder: help text not written yet.
+Alerts go to ntfy.sh or your own ntfy server. Every value is secret: it is kept encrypted, never shown again, and leaves the admin only for the alerter.
 
 ## Email
 
-Placeholder: help text not written yet.
+Mail goes from the alerter to your mail server. A server on the internet needs STARTTLS or TLS, because a password is not sent without TLS.
 
 ## Test alert
 
-Placeholder: help text not written yet.
+Sends a test alert to every channel that is set up.
 
 ## Page-wide banners
 
-Placeholder: help text not written yet.
+A banner across every page for these conditions. Critical ones are always shown.

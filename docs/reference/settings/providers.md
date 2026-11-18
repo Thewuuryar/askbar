@@ -12,12 +12,12 @@ Where answers come from, and which models people can pick. A provider is an upst
 
 ## Providers
 
-Placeholder: help text not written yet.
+The services Askbar gets answers from. Add a provider, check that it works, and set what it costs per million tokens. Leave the cost empty if you do not know it: cost then shows as unknown, not as zero.
 
 ## Claude and ChatGPT accounts
 
-Placeholder: help text not written yet.
+Use a Claude or ChatGPT subscription as a provider. The CPA provider answers once an account is connected.
 
 ## Models people can use
 
-Placeholder: help text not written yet.
+The list of models people can pick. It applies to every user and client, and a message that names no model uses the default.

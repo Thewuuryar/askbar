@@ -6,7 +6,7 @@
 //! CSP is the same as for every other page. Links to the repository (outside docs/reference) carry a marker that is filled
 //! here from the constants, so the one place that knows the repository's address stays `constants.rs`.
 
-use crate::constants::{REFERENCE_ROOT, SOURCE_BRANCH, SOURCE_URL};
+use crate::constants::{HELP_TOPICS, REFERENCE_ROOT, SOURCE_BRANCH, SOURCE_URL};
 use crate::pages::{menu, section_id, MenuGroup, Page};
 use askama::Template;
 use serde::Deserialize;
@@ -94,6 +94,79 @@ pub fn index_json() -> &'static str {
     INDEX_JSON
 }
 
+/// One help topic (plan step 7.3): what the ? button shows in the side panel. Its text is the rendered section of the
+/// reference page, ready when the admin starts, so opening help fetches nothing.
+pub struct HelpTopic {
+    /// The topic as `constants::HELP_TOPICS` lists it: `settings/network#host-name`, or a page id alone.
+    pub topic: &'static str,
+    /// The heading's text, or the page's title for a page topic. The ? button's name is "Help: <title>".
+    pub title: String,
+    /// The page's title, shown above the heading in the panel.
+    pub kicker: String,
+    /// "Open full page": the article, at the heading.
+    pub href: String,
+    /// The section's HTML, without its heading.
+    pub html: String,
+}
+
+/// Every help topic, in `HELP_TOPICS` order. Panics (so the admin does not start) on a topic that names no page or
+/// heading, or whose section is empty: the topic list, the reference and the buttons cannot drift apart unnoticed.
+pub fn help_topics() -> &'static [HelpTopic] {
+    static TOPICS: OnceLock<Vec<HelpTopic>> = OnceLock::new();
+    TOPICS.get_or_init(|| {
+        let marker = "href=\"@SOURCE@/";
+        let source = format!("href=\"{SOURCE_URL}/blob/{SOURCE_BRANCH}/");
+        HELP_TOPICS
+            .iter()
+            .map(|&topic| {
+                let (id, anchor) = topic.split_once('#').unwrap_or((topic, ""));
+                let page = find(id).unwrap_or_else(|| panic!("help topic {topic}: no reference page {id}"));
+                let html = SECTION_HTML
+                    .iter()
+                    .find(|(k, _)| *k == topic)
+                    .map(|(_, h)| h.replace(marker, &source))
+                    .unwrap_or_else(|| panic!("help topic {topic}: the page has no such section"));
+                assert!(!html.trim().is_empty(), "help topic {topic}: its section is empty");
+                let title = if anchor.is_empty() {
+                    page.title.clone()
+                } else {
+                    page.headings
+                        .iter()
+                        .find(|h| h.id == anchor)
+                        .unwrap_or_else(|| panic!("help topic {topic}: no heading {anchor}"))
+                        .text
+                        .clone()
+                };
+                let href = if anchor.is_empty() { page.path() } else { format!("{}#{anchor}", page.path()) };
+                HelpTopic { topic, title, kicker: page.title.clone(), href, html }
+            })
+            .collect()
+    })
+}
+
+/// The topic's record.
+pub fn help_topic(topic: &str) -> Option<&'static HelpTopic> {
+    help_topics().iter().find(|t| t.topic == topic)
+}
+
+/// The topics a page carries in its HTML: those of `settings/<slug>` (the people page's reference page is
+/// `settings/people`, and so on). A page with none has no ? buttons and no help panel.
+pub fn topics_for(slug: &str) -> Vec<&'static HelpTopic> {
+    let id = format!("settings/{slug}");
+    help_topics().iter().filter(|t| t.topic == id || t.topic.strip_prefix(&id).is_some_and(|r| r.starts_with('#'))).collect()
+}
+
+/// The topic of the ? button after a page's title: the page's own, or "" when it has none.
+pub fn page_topic(slug: &str) -> &'static str {
+    let id = format!("settings/{slug}");
+    help_topics().iter().find(|t| t.topic == id).map_or("", |t| t.topic)
+}
+
+/// The ? button's accessible name and tooltip.
+pub fn help_label(topic: &str) -> String {
+    format!("Help: {}", help_topic(topic).map_or("this page", |t| t.title.as_str()))
+}
+
 struct OutlineGroup {
     label: &'static str,
     pages: Vec<&'static RefPage>,
@@ -120,7 +193,7 @@ struct ReferenceView {
     section: String,
     menu: &'static [MenuGroup],
     tabs: Vec<&'static Page>,
-    summary: &'static str,
+    lede: &'static str,
     html: &'static str,
     page: &'static RefPage,
     outline: Vec<OutlineGroup>,
@@ -136,7 +209,7 @@ pub fn render(page: &'static RefPage) -> askama::Result<String> {
         section: section_id(MENU_SLUG),
         menu: menu(),
         tabs: Vec::new(),
-        summary: page.summary.as_str(),
+        lede: page.summary.as_str(),
         html: page.html.as_str(),
         page,
         outline: outline(),
@@ -254,11 +327,63 @@ mod tests {
     }
 
     #[test]
-    fn every_help_topic_names_a_heading_of_a_page() {
+    fn every_help_topic_names_a_page_or_heading_and_resolves_to_a_rendered_section() {
         for topic in crate::constants::HELP_TOPICS {
-            let (page, anchor) = topic.split_once('#').expect("page#heading");
+            let (page, anchor) = topic.split_once('#').unwrap_or((topic, ""));
             let p = find(page).unwrap_or_else(|| panic!("{topic}: no page {page}"));
-            assert!(p.headings.iter().any(|h| h.id == anchor), "{topic}: no heading {anchor}");
+            assert!(anchor.is_empty() || p.headings.iter().any(|h| h.id == anchor), "{topic}: no heading {anchor}");
+            // The section is in the compiled-in HTML, not empty, and still safe (it is shown with no escaping).
+            let t = help_topic(topic).unwrap_or_else(|| panic!("{topic}: not in the help index"));
+            assert!(!t.html.trim().is_empty(), "{topic}: empty section");
+            assert!(!t.html.contains("@SOURCE@"), "{topic}: a source link was not filled in");
+            assert!(!t.html.contains("Placeholder"), "{topic}: the text is not written yet");
+            no_active_content(&t.html, topic);
+            assert!(t.href.starts_with(&p.path()) && t.href.ends_with(&format!("#{anchor}")) == !anchor.is_empty(), "{}", t.href);
         }
+        assert_eq!(help_topics().len(), crate::constants::HELP_TOPICS.len());
+    }
+
+    #[test]
+    fn a_section_stops_at_the_next_heading_of_the_same_or_a_higher_level() {
+        let md = "# T\n\nintro\n\n## A\n\na text\n\n### A1\n\ndeep\n\n## B\n\nb text\n";
+        let (html, _) = build_render::render("x/y.md", md, &HashMap::new()).unwrap();
+        let s: HashMap<String, String> = build_render::sections(&html).into_iter().collect();
+        assert!(s[""].contains("intro") && !s[""].contains("a text"));
+        assert!(s["a"].contains("a text") && s["a"].contains("deep") && !s["a"].contains("b text") && !s["a"].contains("<h2"));
+        assert!(s["a1"].contains("deep") && !s["a1"].contains("b text"));
+        assert!(s["b"].contains("b text") && !s["b"].contains("a text"));
+    }
+
+    /// Every `help(...)` call in the templates, and every ? button on a rendered page, names a topic in the list, and
+    /// the page carries that topic's text, so a missing topic fails here and not on a user's click.
+    #[test]
+    fn every_help_button_names_a_topic_and_its_page_carries_the_text() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/ui/templates");
+        let mut calls = 0;
+        for e in std::fs::read_dir(dir).unwrap() {
+            let path = e.unwrap().path();
+            let text = std::fs::read_to_string(&path).unwrap();
+            if path.file_name().unwrap() == "components.html" {
+                continue; // the macros' own documentation uses example topics
+            }
+            // A topic is written as a string literal that starts with `settings/` (a help call's or a macro argument's).
+            for part in text.split("\"settings/").skip(1) {
+                let topic = format!("settings/{}", part.split('"').next().unwrap());
+                assert!(HELP_TOPICS.contains(&topic.as_str()), "{}: help topic '{topic}' is not in HELP_TOPICS", path.display());
+                calls += 1;
+            }
+        }
+        assert!(calls >= 30, "{calls}");
+        let mut buttons = 0;
+        for html in crate::pages::rendered() {
+            for part in html.split("data-help=\"").skip(1) {
+                let topic = part.split('"').next().unwrap();
+                assert!(HELP_TOPICS.contains(&topic), "a rendered page has a help button for '{topic}'");
+                let want = format!("data-help-topic=\"{topic}\"");
+                assert!(html.contains(&want), "the page with a help button for '{topic}' does not carry its text");
+                buttons += 1;
+            }
+        }
+        assert!(buttons >= 40, "{buttons}");
     }
 }

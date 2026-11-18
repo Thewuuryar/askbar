@@ -1,7 +1,6 @@
 {% extends "base.html" %}
 {%- import "blocks.html" as b %}
 {%- import "components.html" as c %}
-{% block hint %}Sealed prompts and replies stay closed until the audit passphrase opens them. Every opening is recorded.{% endblock %}
 {% block scripts %}<script src="/admin/audit.js" defer></script>{% endblock %}
 {% block content %}
     {% call b::error_line("audit-error") %}{% endcall %}

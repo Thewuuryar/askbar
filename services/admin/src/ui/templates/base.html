@@ -154,14 +154,20 @@
       <p id="page-error" class="error" role="alert" hidden></p>
 
       <section id="{{ section }}" data-tab="{{ current }}">
-        <div class="row">
-          <h2>{{ label }}</h2>
-          <span class="spacer"></span>
-          {% block actions %}{% endblock %}
-        </div>
-        <p class="hint">{% block hint %}{% endblock %}</p>
+        {% block header %}{% call c::page_header(label, lede, crate::reference::page_topic(current), "") %}{% endcall %}{% endblock %}
         {% if !tabs.is_empty() %}{% call c::tabs(&tabs, current, group) %}{% endcall %}{% endif %}
 {% block content %}{% endblock %}
+        {%- let topics = crate::reference::topics_for(current) %}
+        {%- if !topics.is_empty() %}
+        {%- for t in topics %}
+        <template data-help-topic="{{ t.topic }}" data-title="{{ t.title }}" data-kicker="{{ t.kicker }}" data-href="{{ t.href }}">{{ t.html|safe }}</template>
+        {%- endfor %}
+        {% call c::side_panel("help-panel", "Help", "") %}
+          <p class="help-kicker" id="help-kicker"></p>
+          <div class="ref-body help-article" id="help-article"></div>
+          <p class="help-foot"><a class="btn btn-secondary" id="help-full" href="/admin/reference/">Open full page</a></p>
+        {% endcall %}
+        {%- endif %}
       </section>
     </main>
     </div>

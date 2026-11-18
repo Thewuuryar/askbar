@@ -4,8 +4,8 @@
 #      not empty, keywords not empty; settings may be []);
 #   2. every id is unique, and is the page's path under docs/reference without .md (index.md is `index`);
 #   3. every relative link resolves to an existing file, and a #anchor to a heading in that file;
-#   4. every help topic in HELP_TOPICS (services/admin/src/constants.rs) is `<page id>#<heading>`, and that page has a
-#      heading with that anchor (the anchor is the heading's text in the same form as check-docs.sh makes it).
+#   4. every help topic in HELP_TOPICS (services/admin/src/constants.rs) is `<page id>` or `<page id>#<heading>`, and that page exists and
+#      has a heading with that anchor (the anchor is the heading's text in the same form as check-docs.sh makes it).
 # Usage: scripts/check-reference.sh   (also run by scripts/check-docs.sh)
 cd "$(dirname "$0")/.." || exit 2
 python3 - <<'PY'
@@ -109,7 +109,7 @@ try:
     code = open(CONSTANTS, encoding="utf-8").read()
 except OSError:
     code = ""
-m = re.search(r"pub const HELP_TOPICS\b[^=]*=\s*\[(.*?)\];", code, re.S)
+m = re.search(r"pub const HELP_TOPICS\b[^=]*=\s*&?\[(.*?)\];", code, re.S)
 if not m:
     problem(f"{CONSTANTS}: no HELP_TOPICS array")
 else:
@@ -118,13 +118,13 @@ else:
         problem(f"{CONSTANTS}: HELP_TOPICS is empty")
     for topic in topics:
         page, hash_, anchor = topic.partition("#")
-        if not hash_ or not anchor:
-            problem(f"{CONSTANTS}: help topic '{topic}' is not 'page#heading'")
+        if hash_ and not anchor:
+            problem(f"{CONSTANTS}: help topic '{topic}' is not 'page' or 'page#heading'")
             continue
         path = ids.get(page)
         if path is None:
             problem(f"{CONSTANTS}: help topic '{topic}' names no reference page with id '{page}'")
-        elif anchor not in anchors[path]:
+        elif hash_ and anchor not in anchors[path]:
             problem(f"{CONSTANTS}: help topic '{topic}' has no heading '#{anchor}' in {path}")
 
 print("reference ok" if not bad else f"{bad} problem(s)")

@@ -1,11 +1,10 @@
 {% extends "base.html" %}
 {%- import "blocks.html" as b %}
 {%- import "components.html" as c %}
-{% block hint %}How you sign in to this admin, keys for scripts, and how long sealed content stays open.{% endblock %}
 {% block content %}
     <section class="sec-sec" aria-labelledby="pw-title">
       <div class="sec-lab">
-        <h3 id="pw-title">Change admin password</h3>
+        {% call c::section_title("pw-title", "Change admin password", "settings/security#change-admin-password") %}{% endcall %}
         <p class="hint">Other signed-in browsers are signed out.</p>
       </div>
       <form id="password-form" class="sec-fields" novalidate>
@@ -18,7 +17,7 @@
 
     <section class="sec-sec" aria-labelledby="passkey-title">
       <div class="sec-lab">
-        <h3 id="passkey-title">Passkey</h3>
+        {% call c::section_title("passkey-title", "Passkey", "settings/security#passkey") %}{% endcall %}
         <p class="hint">Sign in with a fingerprint, face or security key.</p>
       </div>
       <div class="sec-fields">
@@ -28,7 +27,7 @@
 
     <section class="sec-sec" aria-labelledby="recovery-title">
       <div class="sec-lab">
-        <h3 id="recovery-title">Recovery codes</h3>
+        {% call c::section_title("recovery-title", "Recovery codes", "settings/security#recovery-codes") %}{% endcall %}
         <p class="hint">For when you lose your password or passkey.</p>
       </div>
       <div class="sec-fields">
@@ -38,7 +37,7 @@
 
     <section id="key-panel" class="sec-sec" aria-labelledby="key-title">
       <div class="sec-lab">
-        <h3 id="key-title">Admin API key</h3>
+        {% call c::section_title("key-title", "Admin API key", "settings/security#admin-api-key") %}{% endcall %}
         <p class="hint">For scripts: send it as <code>Authorization: Bearer &lt;key&gt;</code> to <code>/api/admin/v1</code>. It can do what this site can, except manage keys, change the password or sign in.</p>
       </div>
       <div class="sec-fields">
@@ -68,7 +67,7 @@
 
     <section class="sec-sec" aria-labelledby="seal-title">
       <div class="sec-lab">
-        <h3 id="seal-title">Sealed content</h3>
+        {% call c::section_title("seal-title", "Sealed content", "settings/security#sealed-content") %}{% endcall %}
         <p class="hint">How long sealed content stays open once the passphrase has unsealed it.</p>
       </div>
       <div class="sec-fields">
@@ -79,7 +78,7 @@
 
     <section class="sec-sec" aria-labelledby="rotate-title">
       <div class="sec-lab">
-        <h3 id="rotate-title">Rotate the audit key</h3>
+        {% call c::section_title("rotate-title", "Rotate the audit key", "settings/security#rotate-the-audit-key") %}{% endcall %}
         <p class="hint">Content sealed before stays sealed with the old key and still needs the old passphrase. Neither passphrase can be recovered.</p>
       </div>
       <form id="rotate-form" class="sec-fields" novalidate>

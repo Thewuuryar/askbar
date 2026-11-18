@@ -1,7 +1,6 @@
 {% extends "base.html" %}
 {%- import "blocks.html" as b %}
 {%- import "components.html" as c %}
-{% block hint %}The host name, its certificate, and which addresses may open this site.{% endblock %}
 {% block content %}
     <section class="net-status" aria-label="Current state">
       <span class="status status-off" id="n-https"><span class="status-sym" aria-hidden="true"></span><span class="status-word" id="n-https-word">HTTPS off</span></span>
@@ -12,7 +11,7 @@
     <form id="network-form" class="net-form" novalidate>
       <section class="net-sec" aria-labelledby="n-host-title">
         <div class="net-lab">
-          <h3 id="n-host-title">Host name</h3>
+          {% call c::section_title("n-host-title", "Host name", "settings/network#host-name") %}{% endcall %}
           <p class="hint">Where the apps and this site are reached.</p>
         </div>
         <div class="net-fields">
@@ -23,7 +22,7 @@
 
       <section class="net-sec" aria-labelledby="n-cert-title">
         <div class="net-lab">
-          <h3 id="n-cert-title">Certificate</h3>
+          {% call c::section_title("n-cert-title", "Certificate", "settings/network#certificate") %}{% endcall %}
           <p class="hint">Browsers warn until Let's Encrypt issues one.</p>
         </div>
         <div class="net-fields">
@@ -44,7 +43,7 @@
 
       <section class="net-sec" aria-labelledby="n-allow-title">
         <div class="net-lab">
-          <h3 id="n-allow-title">Allowed addresses and networks</h3>
+          {% call c::section_title("n-allow-title", "Allowed addresses and networks", "settings/network#allowed-addresses-and-networks") %}{% endcall %}
           <p class="hint">Limit who can open the admin site.</p>
         </div>
         <div class="net-fields">

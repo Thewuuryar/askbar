@@ -12,4 +12,4 @@ Restart a part of Askbar. This page shows whether the server, `model-gateway`, t
 
 ## Running services
 
-Placeholder: help text not written yet.
+Restart a part of Askbar. The list shows each service and whether it is running.

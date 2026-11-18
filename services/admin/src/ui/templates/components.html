@@ -11,9 +11,14 @@
       toast_region()                 <div id="toasts" class="toasts">; ui.toast fills it with .toast.
       banner_region()                <div id="banners" class="banners">; ui.banner fills it with .banner.
     Page parts:
-      page_header(title, lede, help, actions)  <header class="page-header">: h1.page-title + help button (topic `help`, none
-                                     when ""), p.page-lede, div.page-actions holding the call body (the one primary action).
-      help(topic)                    button.btn-icon.help[data-help=topic][aria-label=Help][data-tip=Help]. No behaviour yet.
+      page_header(title, lede, help, actions)  <header class="page-header">: h2.page-title (the page's one h2) + help button
+                                     (topic `help`, none when ""), p.page-lede, div.page-actions holding the call body (the one
+                                     primary action). The page frame (base.html) is the one caller; pages fill the `actions` block.
+      help(topic)                    button.btn-icon.help[data-help=topic][aria-label="Help: <topic title>"][data-tip=same]
+                                     [aria-controls=help-panel][aria-expanded]. topic is one of constants::HELP_TOPICS (a test
+                                     fails otherwise). components.js opens the docked #help-panel with the topic's text, which
+                                     the page carries pre-rendered in a <template data-help-topic> (nothing is fetched).
+      section_title(id, text, help)  h3#id and, when help is not "", the help button, side by side (a settings section's title).
       button(label, kind, size, icon)  kind primary|secondary|danger|submit (submit = primary + type=submit; others type=button),
                                      size ""|"s"|"l", icon a name from icon() or "". Classes: btn btn-<kind> [btn-s|btn-l].
       icon_button(icon, label)       button.btn.btn-quiet.btn-icon[aria-label=label][data-tip=label] holding icon(icon).
@@ -106,11 +111,14 @@
 
 {% macro banner_region() %}<div id="banners" class="banners"></div>{% endmacro %}
 
-{#- Help button: opens the side panel at its topic (behaviour in step 7.3). -#}
-{% macro help(topic) %}<button type="button" class="btn btn-quiet btn-icon help" data-help="{{ topic }}" aria-label="Help" data-tip="Help">{% call icon("help") %}{% endcall %}</button>{% endmacro %}
+{#- Help button: opens the side panel at its topic (plan step 7.3). The name and tooltip come from the topic's heading. -#}
+{% macro help(topic) %}<button type="button" class="btn btn-quiet btn-icon help" data-help="{{ topic }}" aria-label="{{ crate::reference::help_label(topic) }}" data-tip="{{ crate::reference::help_label(topic) }}" aria-controls="help-panel" aria-expanded="false">{% call icon("help") %}{% endcall %}</button>{% endmacro %}
+
+{#- A settings section's title with its help button. -#}
+{% macro section_title(id, text, help) %}<span class="title-row"><h3 id="{{ id }}">{{ text }}</h3>{% if help != "" %}{% call help(help) %}{% endcall %}{% endif %}</span>{% endmacro %}
 
 {#- Title, help button, one line, and the actions (call body) on the right. -#}
-{% macro page_header(title, lede, help, actions) %}<header class="page-header"><div class="page-header-text"><div class="page-title-row"><h1 class="page-title">{{ title }}</h1>{% if help != "" %}{% call help(help) %}{% endcall %}{% endif %}</div><p class="page-lede">{{ lede }}</p></div><div class="page-actions">{{ caller() }}</div></header>{% endmacro %}
+{% macro page_header(title, lede, help, actions) %}<header class="page-header"><div class="page-header-text"><div class="page-title-row"><h2 class="page-title">{{ title }}</h2>{% if help != "" %}{% call help(help) %}{% endcall %}{% endif %}</div>{% if lede != "" %}<p class="page-lede">{{ lede }}</p>{% endif %}</div><div class="page-actions">{{ caller() }}</div></header>{% endmacro %}
 
 {#- Buttons. -#}
 {% macro button(label, kind, size, icon) %}<button type="{% if kind == "submit" %}submit{% else %}button{% endif %}" class="btn btn-{% if kind == "submit" %}primary{% else %}{{ kind }}{% endif %}{% if size == "s" %} btn-s{% elif size == "l" %} btn-l{% endif %}">{% if icon != "" %}{% call icon(icon) %}{% endcall %}{% endif %}{{ label }}</button>{% endmacro %}

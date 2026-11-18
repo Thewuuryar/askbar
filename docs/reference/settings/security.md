@@ -12,24 +12,24 @@ How you sign in to this admin, keys for scripts, and how long sealed content sta
 
 ## Change admin password
 
-Placeholder: help text not written yet.
+Choose a new password for this admin. Other signed-in browsers are signed out.
 
 ## Passkey
 
-Placeholder: help text not written yet.
+Sign in with a fingerprint, face or security key.
 
 ## Recovery codes
 
-Placeholder: help text not written yet.
+For when you lose your password or passkey.
 
 ## Admin API key
 
-Placeholder: help text not written yet.
+For scripts: send it as `Authorization: Bearer <key>` to `/api/admin/v1`. It can do what this site can, except manage keys, change the password or sign in.
 
 ## Sealed content
 
-Placeholder: help text not written yet.
+How long sealed content stays open once the audit passphrase has unsealed it. The limits are set in General.
 
 ## Rotate the audit key
 
-Placeholder: help text not written yet.
+Make a new audit key with a new passphrase. Content sealed before stays sealed with the old key and still needs the old passphrase. Neither passphrase can be recovered.

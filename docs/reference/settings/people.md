@@ -12,8 +12,8 @@ Who can use Askbar, and the phones and computers paired to them. A user is a per
 
 ## Users
 
-Placeholder: help text not written yet.
+Who can use Askbar. Pause a person to stop their replies until you resume them.
 
 ## Paired clients
 
-Placeholder: help text not written yet.
+The phones and computers paired to a person. Generate a pairing key for a person, then paste it into the Askbar app (Pair with server) to pair it.

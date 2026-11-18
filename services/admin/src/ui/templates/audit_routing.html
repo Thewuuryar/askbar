@@ -1,7 +1,6 @@
 {% extends "base.html" %}
 {%- import "blocks.html" as b %}
 {%- import "components.html" as c %}
-{% block hint %}The tries each request took, why a try failed, and the providers the router is refusing. Pick a request on Model calls to see its tries.{% endblock %}
 {% block scripts %}<script src="/admin/audit.js" defer></script>{% endblock %}
 {% block content %}
     {% call b::error_line("audit-error") %}{% endcall %}

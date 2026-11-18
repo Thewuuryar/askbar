@@ -1,6 +1,5 @@
 {% extends "base.html" %}
 {%- import "components.html" as c %}
-{% block hint %}Every setting, by section. Each line shows what is set now.{% endblock %}
 {% block content %}
     <ul class="ov-list" id="settings-overview">
       {%- for p in crate::pages::settings_sections() %}

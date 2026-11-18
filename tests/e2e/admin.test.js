@@ -519,14 +519,15 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       assert.deepEqual(heights, { existing: '32px', plain: '32px', small: '28px', large: '40px' }, JSON.stringify(heights));
     }
   });
-  // Type scale (rules 14, 15, 23): the title is 1.3rem/600, a field label 0.875rem/600, help 0.75rem/400, body 0.875rem/400.
+  // Type scale (rules 14, 15, 23): the title is 1.3rem/600, a field label 0.875rem/600, help 0.75rem/400, the page lede 0.875rem/400, body 0.875rem/400.
   await step('type scale: title 20.8px/600, label 14px/600, help 12px/400, body 14px/400', async () => {
     const type = await page.evaluate(() => {
       const read = (el) => { const s = getComputedStyle(el); return { size: parseFloat(s.fontSize), weight: s.fontWeight }; };
       return {
-        title: read(document.querySelector('section[data-tab] > .row > h2')),
+        title: read(document.querySelector('section[data-tab] .page-header > .page-header-text .page-title')),
+        lede: read(document.querySelector('section[data-tab] .page-lede')),
         label: read(document.querySelector('#provider-form label:not(.check)')),
-        help: read(document.querySelector('section[data-tab] > p.hint')),
+        help: read(document.querySelector('section[data-tab] .hint')),
         body: read(document.body),
       };
     });
@@ -534,6 +535,8 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     assert.ok(near(type.title.size, 20.8) && type.title.weight === '600', JSON.stringify(type));
     assert.ok(near(type.label.size, 14) && type.label.weight === '600', JSON.stringify(type));
     assert.ok(near(type.help.size, 12) && type.help.weight === '400', JSON.stringify(type));
+    // The page header's one line (plan step 7.3, board P3-Layouts) is 0.875rem/400, a step above the hints under fields.
+    assert.ok(near(type.lede.size, 14) && type.lede.weight === '400', JSON.stringify(type));
     assert.ok(near(type.body.size, 14) && type.body.weight === '400', JSON.stringify(type));
   });
   // The component builders (plan step 1.9). No page uses them yet, so each step builds the server-rendered half of a
@@ -3710,7 +3713,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       await page.goto(base + url);
       await page.waitForSelector('#app:not([hidden])');
       assert.equal(await page.locator('#nav a[aria-current="page"]').getAttribute('data-tab'), 'reference', url + ': the menu marks Reference');
-      assert.equal(await page.locator('section[data-tab="reference"] > .row > h2').innerText(), article);
+      assert.equal(await page.locator('section[data-tab="reference"] .page-header .page-title').innerText(), article);
       assert.equal(await page.locator('.ref-body h1').count(), 0, 'the page title is the one h2');
       // Every heading has an id, and each in-page link lands on one.
       const heads = await page.$$eval('.ref-body h3, .ref-body h4', (hs) => hs.map((h) => h.id));
@@ -3761,6 +3764,144 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'a wide table does not scroll the page');
     // An unknown reference address is the admin's 404.
     assert.equal((await page.goto(base + 'reference/settings/nope/')).status(), 404);
+    await page.goto(base);
+    await page.waitForSelector('#app:not([hidden])');
+  });
+  // Plan step 7.3: ? buttons and help in the docked side panel, with the text pre-rendered in the page.
+  await step('help: every ? button has a name and tooltip, the panel shows its topic with no request, Back and Esc close it, Open full page lands on the heading', async () => {
+    const K = await page.evaluate(() => window.ui.ready);
+    const min = isPhone ? 44 : 24;
+    const axeSource = fs.readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8');
+    const index = await page.evaluate(async () => (await fetch('/admin/reference.json')).json());
+    const titleOf = (topic) => {
+      const [id, anchor] = topic.split('#');
+      const ref = index.find((x) => x.id === id);
+      return anchor ? ref.headings.find((h) => h.id === anchor).text : ref.title;
+    };
+    // Every settings page: its title has a ? and each topic of the page has one, named "Help: <title>", with the same tooltip,
+    // a target big enough, and the topic's text on the page already (a <template>, so nothing has to be fetched).
+    for (const slug of ['providers', 'people', 'services', 'network', 'security', 'backup', 'notifications', 'general']) {
+      await page.goto(base + slug + '/');
+      await page.waitForSelector('#app:not([hidden])');
+      const info = await page.evaluate(() => ({
+        header: document.querySelectorAll('section[data-tab] .page-header').length,
+        h2: document.querySelectorAll('section[data-tab] h2.page-title').length,
+        headerHelp: document.querySelector('.page-header .page-title-row > button.help')?.dataset.help || null,
+        buttons: [...document.querySelectorAll('section[data-tab] [data-help]')].map((b) => {
+          const r = b.getBoundingClientRect();
+          return { topic: b.dataset.help, name: b.getAttribute('aria-label'), tip: b.getAttribute('data-tip'), w: r.width, h: r.height, shown: b.getClientRects().length > 0 };
+        }),
+        templates: [...document.querySelectorAll('template[data-help-topic]')].map((t) => t.dataset.helpTopic),
+        inBox: document.querySelectorAll('dialog [data-help], .row-confirm [data-help]').length,
+      }));
+      assert.equal(info.header, 1, slug + ': one page header');
+      assert.equal(info.h2, 1, slug + ': one page title');
+      assert.equal(info.headerHelp, 'settings/' + slug, slug + ': the page title has its help button');
+      assert.ok(info.buttons.length >= 2, slug + ': a ? for the page and its sections');
+      assert.equal(info.inBox, 0, 'no ? in a box');
+      for (const b of info.buttons) {
+        assert.equal(b.name, 'Help: ' + titleOf(b.topic), slug + ' ' + b.topic + ': name');
+        assert.equal(b.tip, b.name, slug + ' ' + b.topic + ': tooltip');
+        assert.ok(info.templates.includes(b.topic), slug + ' ' + b.topic + ': the page carries the text');
+        // A section the page keeps hidden for now (the accounts section, until it applies) has its button hidden with it.
+        if (b.shown) assert.ok(b.w >= min && b.h >= min, slug + ' ' + b.topic + ': target ' + b.w + 'x' + b.h);
+      }
+      assert.deepEqual(info.templates.slice().sort(), K.HELP_TOPICS.filter((t) => t === 'settings/' + slug || t.startsWith('settings/' + slug + '#')).sort(), slug + ': the page carries exactly its topics');
+    }
+    // A page with no topic has no ? button and no help panel; it still has its one page header.
+    for (const slug of ['home', 'alerts', 'settings']) {
+      await page.goto(base + slug + '/');
+      await page.waitForSelector('#app:not([hidden])');
+      assert.equal(await page.locator('section[data-tab] .page-header').count(), 1, slug);
+      assert.equal(await page.locator('section[data-tab] [data-help], #help-panel').count(), 0, slug + ': no help');
+    }
+    // The tooltip shows on keyboard focus, not only on hover.
+    await page.goto(base + 'network/');
+    await page.waitForSelector('#app:not([hidden])');
+    // Only the admin's own polls (status, services, alerts) may run while it is open; opening help adds no request.
+    await page.waitForLoadState('networkidle');
+    const requests = [];
+    const onRequest = (r) => { if (!/\/api\/admin\/v1\/(status|services|alerts)(\?|$)/.test(r.url())) requests.push(r.url()); };
+    const host = page.locator('button[data-help="settings/network#host-name"]');
+    if (!isPhone) {
+      await host.focus();
+      await page.keyboard.press('Tab');
+      await page.keyboard.press('Shift+Tab');
+      await host.evaluate((b) => new Promise((done) => {
+        const t = Date.now();
+        const look = () => (getComputedStyle(b, '::after').opacity === '1' || Date.now() - t > 3000 ? done() : requestAnimationFrame(look));
+        look();
+      }));
+      assert.equal(await host.evaluate((b) => getComputedStyle(b, '::after').opacity), '1', 'the tooltip shows on keyboard focus');
+    }
+    // Opening: the panel shows the topic's text and a link to the article's heading, and nothing is fetched.
+    page.on('request', onRequest);
+    await host.click();
+    await page.waitForSelector('#help-panel:not([hidden])');
+    await page.waitForFunction(() => document.activeElement && document.activeElement.id === 'help-panel-title');
+    page.off('request', onRequest);
+    assert.deepEqual(requests, [], 'opening help fetches nothing');
+    assert.equal(await page.locator('#help-panel-title').innerText(), 'Host name');
+    assert.match(await page.locator('#help-kicker').innerText(), /Network/);
+    const body = await page.locator('#help-article').innerText();
+    assert.ok(body.length > 20 && !/Placeholder/.test(body), body);
+    assert.equal(await host.getAttribute('aria-expanded'), 'true');
+    assert.equal(await page.locator('#help-full').getAttribute('href'), '/admin/reference/settings/network/#host-name');
+    assert.equal(await page.evaluate(() => new URL(location.href).searchParams.get('panel')), 'help:settings/network#host-name');
+    assert.equal(await page.locator('#help-panel [style], #help-panel script').count(), 0);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'no sideways scroll with the panel open');
+    const sizes = await page.$$eval('#help-panel button, #help-panel a.btn', (els) => els.map((e) => { const r = e.getBoundingClientRect(); return { n: e.textContent.trim() || e.getAttribute('aria-label'), w: r.width, h: r.height }; }));
+    for (const t of sizes) assert.ok(t.w >= min && t.h >= min, 'help panel target ' + JSON.stringify(t));
+    // Another topic swaps the text in place; the address follows and Back still leaves the page's own history.
+    // (On a phone the panel covers the page, so the swap is asked for through ui.help, which the buttons call.)
+    if (isPhone) await page.evaluate(() => window.ui.help('settings/network#certificate'));
+    else await page.locator('button[data-help="settings/network#certificate"]').click();
+    await page.waitForFunction(() => document.getElementById('help-panel-title').textContent === 'Certificate');
+    assert.equal(await page.evaluate(() => new URL(location.href).searchParams.get('panel')), 'help:settings/network#certificate');
+    assert.equal(await page.locator('#help-full').getAttribute('href'), '/admin/reference/settings/network/#certificate');
+    // Axe is clean with the panel open (a fresh page at the topic's address, which also checks that it opens from it).
+    const axeCtx = await browser.newContext({ viewport, bypassCSP: true, storageState: await ctx.storageState() });
+    try {
+      const ap = await axeCtx.newPage();
+      await ap.goto(base + 'network/?panel=help%3Asettings%2Fnetwork%23certificate');
+      await ap.waitForSelector('#help-panel:not([hidden])');
+      assert.equal(await ap.locator('#help-panel-title').innerText(), 'Certificate', 'the address opens the topic');
+      await ap.addScriptTag({ content: axeSource });
+      const found = await ap.evaluate(async () => (await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'] } })).violations.map((v) => v.id + ': ' + v.nodes.map((n) => n.target.join(' ')).join(', ')));
+      assert.deepEqual(found, [], 'axe with the help panel open');
+    } finally { await axeCtx.close(); }
+    // Back closes it, and focus returns to the button that opened it.
+    await page.goBack();
+    await page.waitForSelector('#help-panel', { state: 'hidden' });
+    await page.waitForFunction(() => !location.search.includes('panel='));
+    // Esc closes it, and focus returns to the button.
+    const cert = page.locator('button[data-help="settings/network#certificate"]');
+    await cert.click();
+    await page.waitForSelector('#help-panel:not([hidden])');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('#help-panel', { state: 'hidden' });
+    await page.waitForFunction(() => !location.search.includes('panel='));
+    assert.equal(await page.evaluate(() => document.activeElement && document.activeElement.dataset.help), 'settings/network#certificate', 'focus returns to the ? button');
+    // A reload with the address opens it again; the page's own ? button for the page title opens the page topic.
+    await host.click();
+    await page.waitForSelector('#help-panel:not([hidden])');
+    await page.reload();
+    await page.waitForSelector('#app:not([hidden])');
+    await page.waitForSelector('#help-panel:not([hidden])');
+    assert.equal(await page.locator('#help-panel-title').innerText(), 'Host name');
+    await page.locator('#help-panel [data-panel-close]').click();
+    await page.waitForSelector('#help-panel', { state: 'hidden' });
+    await page.locator('.page-header button.help').click();
+    await page.waitForSelector('#help-panel:not([hidden])');
+    assert.equal(await page.locator('#help-panel-title').innerText(), 'Network');
+    assert.equal(await page.locator('#help-full').getAttribute('href'), '/admin/reference/settings/network/');
+    // Open full page: the article, scrolled to the heading.
+    await page.locator('#help-panel [data-panel-close]').click();
+    await host.click();
+    await page.waitForSelector('#help-panel:not([hidden])');
+    await Promise.all([page.waitForURL('**/admin/reference/settings/network/#host-name'), page.locator('#help-full').click()]);
+    await page.waitForSelector('#app:not([hidden])');
+    await page.waitForFunction(() => { const r = document.getElementById('host-name').getBoundingClientRect(); return r.top >= 0 && r.bottom <= window.innerHeight; });
     await page.goto(base);
     await page.waitForSelector('#app:not([hidden])');
   });

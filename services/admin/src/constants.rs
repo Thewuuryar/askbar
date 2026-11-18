@@ -111,9 +111,18 @@ pub const PAGE_SLUGS: [&str; 16] = [
 ];
 /// The page `/admin` opens.
 pub const LANDING_PAGE: &str = "home";
-// Help topics (plan step 7.1a): each is `<reference page id>#<heading>`, the heading the ? button opens. The reference
-// pages under docs/reference hold them, and `scripts/check-reference.sh` fails on a topic with no such heading.
-pub const HELP_TOPICS: [&str; 32] = [
+// Help topics (plan steps 7.1a and 7.3): each is `<reference page id>#<heading>`, the heading the ? button opens, or a
+// bare `<reference page id>`, the page's own ? button (it shows the text before the page's first heading). The reference
+// pages under docs/reference hold them, and `scripts/check-reference.sh` fails on a topic with no such page or heading.
+pub const HELP_TOPICS: &[&str] = &[
+    "settings/providers",
+    "settings/people",
+    "settings/services",
+    "settings/network",
+    "settings/security",
+    "settings/backup",
+    "settings/notifications",
+    "settings/general",
     "settings/providers#providers",
     "settings/providers#claude-and-chatgpt-accounts",
     "settings/providers#models-people-can-use",
@@ -243,7 +252,7 @@ struct Constants {
     home_stats_window_secs: i64,
     page_slugs: [&'static str; 16],
     landing_page: &'static str,
-    help_topics: [&'static str; 32],
+    help_topics: &'static [&'static str],
 }
 
 fn current() -> Constants {

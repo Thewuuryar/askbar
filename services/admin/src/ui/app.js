@@ -832,6 +832,7 @@
     const refNav = document.querySelector('.ref-nav');
     if (refNav && getComputedStyle(refNav.querySelector('summary')).display !== 'none') refNav.open = false;
     focusHash();
+    ui.helpFromAddress();
     initSearch();
     liveStatus.start();
     liveHealth.start();

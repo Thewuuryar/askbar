@@ -1,11 +1,10 @@
 {% extends "base.html" %}
 {%- import "blocks.html" as b %}
 {%- import "components.html" as c %}
-{% block hint %}Where Askbar sends an alert when something needs attention, and how to test it.{% endblock %}
 {% block content %}
     <section class="sec-sec" aria-labelledby="ntfy-title">
       <div class="sec-lab">
-        <h3 id="ntfy-title">ntfy</h3>
+        {% call c::section_title("ntfy-title", "ntfy", "settings/notifications#ntfy") %}{% endcall %}
         <p class="hint">Alerts go to ntfy.sh or your own ntfy server. Every value is secret: it is kept encrypted, never shown again, and leaves the admin only for the alerter.</p>
       </div>
       <form id="alerts-form" class="sec-fields">
@@ -24,7 +23,7 @@
 
     <section class="sec-sec" aria-labelledby="email-title">
       <div class="sec-lab">
-        <h3 id="email-title">Email</h3>
+        {% call c::section_title("email-title", "Email", "settings/notifications#email") %}{% endcall %}
         <p class="hint">Mail goes from the alerter to your mail server. A server on the internet needs STARTTLS or TLS, because a password is not sent without TLS.</p>
       </div>
       <form id="email-form" class="sec-fields">
@@ -51,7 +50,7 @@
 
     <section class="sec-sec" aria-labelledby="test-title">
       <div class="sec-lab">
-        <h3 id="test-title">Test alert</h3>
+        {% call c::section_title("test-title", "Test alert", "settings/notifications#test-alert") %}{% endcall %}
         <p class="hint">Sends a test alert to every channel that is set up.</p>
       </div>
       <form id="alerts-test-form" class="sec-fields">
@@ -63,7 +62,7 @@
 
     <section class="sec-sec" aria-labelledby="banners-title">
       <div class="sec-lab">
-        <h3 id="banners-title">Page-wide banners</h3>
+        {% call c::section_title("banners-title", "Page-wide banners", "settings/notifications#page-wide-banners") %}{% endcall %}
         <p class="hint">A banner across every page for these conditions. Critical ones are always shown.</p>
       </div>
       <div class="sec-fields">

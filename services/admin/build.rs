@@ -2,7 +2,9 @@
 //! same Markdown GitHub shows and reads no file at run time. Writes into OUT_DIR:
 //! - `reference/<id with / as __>.html`: each page's article HTML;
 //! - `reference.json`: the index (id, title, summary, keywords, settings, source, group, order, headings with ids);
-//! - `reference_pages.rs`: `PAGE_HTML`, the (id, html) pairs `src/reference.rs` includes.
+//! - `reference_pages.rs`: `PAGE_HTML`, the (id, html) pairs `src/reference.rs` includes, and `SECTION_HTML`, the rendered
+//!   HTML of each section as (`page id#heading id`, html) (`page id` alone for the text before the first heading), which
+//!   the help panel shows (plan step 7.3).
 //!
 //! What the renderer allows (the admin's CSP is strict and the Markdown is not trusted blindly):
 //! - raw HTML in the Markdown is shown as text, never passed on;
@@ -69,11 +71,16 @@ fn run() -> Result<(), String> {
     fs::create_dir_all(out.join("reference")).map_err(|e| e.to_string())?;
     let mut json = String::from("[");
     let mut pages_rs = String::from("pub static PAGE_HTML: &[(&str, &str)] = &[\n");
+    let mut sections_rs = String::from("pub static SECTION_HTML: &[(&str, &str)] = &[\n");
     for (i, s) in sources.iter().enumerate() {
         let (html, headings) = render(&s.file, &s.body, &ids)?;
         let name = format!("reference/{}.html", s.id.replace('/', "__"));
         fs::write(out.join(&name), &html).map_err(|e| e.to_string())?;
         let _ = writeln!(pages_rs, "    ({:?}, include_str!(concat!(env!(\"OUT_DIR\"), \"/{name}\"))),", s.id);
+        for (anchor, part) in build_render::sections(&html) {
+            let key = if anchor.is_empty() { s.id.clone() } else { format!("{}#{anchor}", s.id) };
+            let _ = writeln!(sections_rs, "    ({key:?}, {part:?}),");
+        }
         if i > 0 {
             json.push(',');
         }
@@ -95,6 +102,8 @@ fn run() -> Result<(), String> {
         );
     }
     json.push(']');
+    pages_rs.push_str("];\n");
+    pages_rs.push_str(&sections_rs);
     pages_rs.push_str("];\n");
     fs::write(out.join("reference.json"), json).map_err(|e| e.to_string())?;
     fs::write(out.join("reference_pages.rs"), pages_rs).map_err(|e| e.to_string())?;

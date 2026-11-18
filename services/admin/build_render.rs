@@ -204,3 +204,31 @@ pub fn render(file: &str, body: &str, ids: &HashMap<String, usize>) -> Result<(S
     html::push_html(&mut html, out.into_iter());
     Ok((html, headings))
 }
+
+/// The HTML of each section of a rendered page: `("", intro)` for what comes before the first heading, then
+/// `(heading id, html)` for each heading, from after its closing tag up to the next heading of the same or a higher
+/// level (deeper headings stay inside). The heading itself is left out: the help panel has its own title.
+/// Headings are found by the `<hN id="...">` the renderer writes; raw HTML never reaches the output as markup, so
+/// nothing else can look like one.
+pub fn sections(html: &str) -> Vec<(String, String)> {
+    // (start of the open tag, end of the close tag, level, id)
+    let mut heads: Vec<(usize, usize, u8, String)> = Vec::new();
+    let mut at = 0;
+    while let Some(p) = html[at..].find("<h") {
+        let start = at + p;
+        at = start + 2;
+        let rest = &html[start + 2..];
+        let Some(level) = rest.bytes().next().filter(|b| (b'1'..=b'6').contains(b)).map(|b| b - b'0') else { continue };
+        let Some(id_rest) = rest[1..].strip_prefix(" id=\"") else { continue };
+        let Some(id_end) = id_rest.find('"') else { continue };
+        let close = format!("</h{level}>\n");
+        let Some(c) = html[start..].find(&close) else { continue };
+        heads.push((start, start + c + close.len(), level, id_rest[..id_end].to_string()));
+    }
+    let mut out = vec![(String::new(), html[..heads.first().map_or(html.len(), |h| h.0)].to_string())];
+    for (i, (_, body_start, level, id)) in heads.iter().enumerate() {
+        let end = heads[i + 1..].iter().find(|h| h.2 <= *level).map_or(html.len(), |h| h.0);
+        out.push((id.clone(), html[*body_start..end].to_string()));
+    }
+    out
+}
