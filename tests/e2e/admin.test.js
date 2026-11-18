@@ -3103,6 +3103,29 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await openPage('people');
     await page.waitForSelector('#users-table tbody tr:not(.empty-row) > td');
     await check('table row', '#users-table tbody tr:not(.empty-row) > td', '#users-table tbody tr:not(.empty-row) > td', 'auto');
+    // The sweep: every admin page and every reference page, each kind of item on it (every table, a few rows each; widgets, list
+    // rows, menu and tab items, buttons, fields, check boxes and radios) must change under the pointer.
+    const { hoverSweep } = require('./hover-sweep');
+    const slugs = await page.evaluate(async () => (await window.ui.ready).PAGE_SLUGS);
+    const pages = slugs.map((x) => x + '/');
+    await page.goto(base + 'reference/');
+    await page.waitForSelector('#app:not([hidden])');
+    await page.waitForSelector('main a[href^="/admin/reference/"]', { state: 'attached' });
+    pages.push(...(await page.$$eval('main a[href^="/admin/reference/"]', (a) => [...new Set(a.map((x) => x.getAttribute('href')))].filter((h) => h && !h.startsWith('#')).map((h) => h.replace(/^\/admin\//, '')))));
+    const misses = []; let checked = 0, tableRows = 0;
+    for (const p of [...new Set(pages)]) {
+      await page.goto(base + p);
+      await page.waitForSelector('#app:not([hidden])');
+      await page.waitForLoadState('networkidle').catch(() => {});
+      await page.waitForTimeout(300);
+      const r = await hoverSweep(page);
+      checked += r.checked;
+      for (const m of r.misses) misses.push(p + ': ' + m);
+      tableRows += await page.evaluate(() => document.querySelectorAll('tbody tr:not(.empty-row)').length);
+    }
+    assert.ok(pages.length > slugs.length, 'the reference pages were found');
+    assert.ok(checked > 200 && tableRows > 20, 'the sweep reached the pages: ' + checked + ' items, ' + tableRows + ' table rows');
+    assert.deepEqual(misses, [], 'items with no hover change');
     const css = await page.evaluate(async () => (await (await fetch('/admin/style.css')).text()));
     assert.match(css, /--hover-bg/, 'the stylesheet uses the token');
     assert.doesNotMatch(css, /:hover[^{}]*\{[^}]*background:\s*var\(--(surface-2|accent-soft)\)/, 'no rule tints a hover with another colour');

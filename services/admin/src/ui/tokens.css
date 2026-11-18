@@ -7,8 +7,10 @@
   --bg: #eceef2;
   --card: #f6f7f9;
   --surface-2: #eff1f5;
-  /* the one hover tint (docs/style/ui-ux.md, "Hover"): --surface-2 with a little --fg, so it also differs from a surface that rests on --surface-2 */
-  --hover-bg: color-mix(in srgb, var(--surface-2), var(--fg) 3%);
+  /* hover (docs/style/ui-ux.md, "Hover"): --surface-2 for an item at rest on the page or a card, one step on for one resting on --surface-2, and the share of --fg mixed into a filled or tinted item */
+  --hover-bg: var(--surface-2);
+  --hover-bg-2: color-mix(in srgb, var(--surface-2), var(--fg) 3%);
+  --hover-shift: 8%;
   --fg: #181b22;
   --muted: #5d6779;
   --line: rgba(24, 32, 56, 0.12);

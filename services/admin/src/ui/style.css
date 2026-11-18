@@ -890,16 +890,27 @@ dl.meta dd { margin: 0; overflow-wrap: anywhere; }
 .ld-cols { display: grid; grid-template-columns: 1fr 2fr 1fr; gap: var(--space-2); }
 @media (max-width: 560px) { .ld-cols { grid-template-columns: 1fr; } }
 
-/* Hover (docs/style/ui-ux.md, "Hover"): every item, widget, list row and table row tints to --hover-bg; its base colour,
-   size and cursor stay as they are. Buttons with a fill, header rows and chart bars are left out. Rows with no padding of
-   their own (a Home widget, a list row) grow the tint sideways with a box-shadow, so nothing moves. Items that rest on a
-   tint of their own (the current page, a failed call, a critical alert) mix it with --hover-bg so hover still shows. */
-.home-sec:hover, .alerts-row:hover, .span-row:hover { background: var(--hover-bg); border-radius: var(--radius-control); box-shadow: calc(-1 * var(--space-3)) 0 0 var(--hover-bg), var(--space-3) 0 0 var(--hover-bg); }
-.table tbody :where(tr:not(.empty-row, .row-confirm-row, :has(+ .row-confirm-row))):hover > td, .ref-body tbody tr:hover { background: var(--hover-bg); }
-.tab:not([aria-current="page"]):hover { background: var(--hover-bg); border-radius: var(--radius-control) var(--radius-control) 0 0; }
-.sm-item[aria-current="page"]:hover { background: color-mix(in srgb, var(--accent-soft), var(--hover-bg) 55%); }
-.ref-list a[aria-current]:hover { background: color-mix(in srgb, var(--accent-soft), var(--hover-bg) 55%); }
+/* Hover (docs/style/ui-ux.md, "Hover"): one idea everywhere. An item that rests on the page, a card or nothing tints to --hover-bg
+   (the --surface-2 of the first quiet-button hover); one that rests on --surface-2 goes one step on (--hover-bg-2); a filled or
+   tinted item keeps its hue and mixes --hover-shift of --fg into it. The base colour, size and cursor are otherwise unchanged and
+   nothing moves. Inert items (disabled, aria-disabled), header rows and chart bars are left out. Rows with no padding of their own
+   (a Home widget, a list row, a check box row) grow the tint sideways with a box-shadow. */
+.home-sec:hover, .alerts-row:hover, .span-row:hover, .sealed-row:not(.row-new):hover,
+label:has(input[type="checkbox"], input[type="radio"]):not(:has(:disabled)):not(.bn-row):hover { background: var(--hover-bg); border-radius: var(--radius-control); box-shadow: calc(-1 * var(--space-2)) 0 0 var(--hover-bg), var(--space-2) 0 0 var(--hover-bg); }
+.home-sec:hover { box-shadow: calc(-1 * var(--space-3)) 0 0 var(--hover-bg), var(--space-3) 0 0 var(--hover-bg); }
+tbody :where(tr:not(.empty-row, .row-confirm-row, :has(+ .row-confirm-row))):hover > td, .ref-body tbody tr:hover { background: var(--hover-bg); }
+.ref-body tbody tr:nth-child(even):hover { background: var(--hover-bg-2); }
+.tab:hover { background: var(--hover-bg); border-radius: var(--radius-control) var(--radius-control) 0 0; }
+/* fields: the same tint, and the red invalid border, focus ring and read-only or disabled look stay as they are */
+input:not([type="checkbox"], [type="radio"], [type="hidden"], [type="file"]):not(:disabled, [readonly]):hover, select:not(:disabled):hover, textarea:not(:disabled, [readonly]):hover { background: var(--hover-bg); }
+/* buttons: filled keeps its hue, outline and quiet tint, danger stays red */
+:where(button, a.button, .btn, .btn-primary):where(:not([aria-disabled="true"], :disabled)):hover { background: color-mix(in srgb, var(--accent), var(--fg) var(--hover-shift)); }
+html.save-bar-on .btn-primary:not(.save-bar .btn-primary):not(.box .btn-primary):not(.side-panel .btn-primary):hover,
+button.secondary:where(:not([aria-disabled="true"], :disabled)):hover, .btn-secondary:where(:not([aria-disabled="true"], :disabled)):hover,
+.btn-quiet:where(:not([aria-disabled="true"], :disabled)):hover, button.link:where(:not([aria-disabled="true"], :disabled)):hover,
+.seg button:where(:not([aria-disabled="true"], :disabled)):hover { background: var(--hover-bg); }
+button.danger:where(:not([aria-disabled="true"], :disabled)):hover, .btn-danger:where(:not([aria-disabled="true"], :disabled)):hover { background: var(--danger-soft); }
+.seg button[aria-pressed="true"]:hover, .sm-item[aria-current="page"]:hover, .ref-list a[aria-current]:hover { background: color-mix(in srgb, var(--accent-soft), var(--fg) var(--hover-shift)); }
 .ref-toc .ref-list a[aria-current]:hover { background: var(--hover-bg); }
-.bell-item.bell-critical:hover, .alerts-row-critical:hover { background: color-mix(in srgb, var(--danger-soft), var(--hover-bg) 55%); }
+.bell-item.bell-critical:hover, .alerts-row-critical:hover, .calls-table tr.call-err:hover > td { background: color-mix(in srgb, var(--danger-soft), var(--fg) var(--hover-shift)); }
 .alerts-row-critical:hover { box-shadow: none; }
-.calls-table tr.call-err:hover > td { background: color-mix(in srgb, var(--danger-soft), var(--hover-bg) 55%); }
