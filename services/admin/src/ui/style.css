@@ -145,7 +145,7 @@ section[data-tab^="audit/"] .row .title-row { margin: 0; }
 
 /* Quiet buttons: icon buttons sit on the page with no fill or outline. */
 .btn-quiet { color: var(--fg); background: transparent; border: 0; }
-.btn-quiet:hover { background: var(--surface-2); }
+.btn-quiet:hover { background: var(--hover-bg); }
 .btn-icon.help { color: var(--muted); }
 .title-row { display: inline-flex; align-items: center; gap: var(--space-1); }
 .title-row h3 { margin: 0; }
@@ -236,7 +236,7 @@ dialog.box::backdrop { background: rgba(0, 0, 0, .4); }
 .tab[aria-current="page"] { color: var(--fg); border-bottom-color: var(--fg); font-weight: var(--weight-bold); }
 .menu { position: absolute; z-index: 20; min-width: var(--menu-w); display: flex; flex-direction: column; padding: var(--space-1); background: var(--card); border: 1px solid var(--line); border-radius: var(--radius-control); box-shadow: var(--shadow); }
 .menu-item { justify-content: flex-start; height: var(--btn-h); width: 100%; color: var(--fg); background: transparent; border-radius: var(--radius-control); }
-.menu-item:hover, .menu-item:focus-visible { background: var(--surface-2); }
+.menu-item:hover, .menu-item:focus-visible { background: var(--hover-bg); }
 .menu-item-danger { color: var(--danger); }
 .row-menu { position: relative; display: inline-block; }
 .row-menu .menu { top: 100%; right: 0; }
@@ -313,7 +313,7 @@ input, select { min-height: var(--target-min); }
 .sm-item { position: relative; display: flex; align-items: center; gap: var(--space-3); min-height: var(--btn-h); padding: 0 var(--space-2); border-radius: var(--radius-control); color: var(--fg); font-size: var(--text-m); text-decoration: none; }
 .sm-item .icon { color: var(--muted); }
 .sm-item.sm-sub { gap: var(--space-2); font-size: var(--text-s); color: var(--muted); white-space: nowrap; }
-.sm-item:hover { background: var(--accent-soft); }
+.sm-item:hover { background: var(--hover-bg); }
 /* The current page: accent tint and icon, its name in --fg (accent text on the tint is under 4.5:1). */
 .sm-item[aria-current="page"] { background: var(--accent-soft); color: var(--fg); font-weight: var(--weight-bold); }
 .sm-item[aria-current="page"] .icon { color: var(--accent); }
@@ -451,7 +451,7 @@ body[data-page="reference"] .content > main > section { max-width: none; }
 .bell-group-label { padding: var(--space-3) var(--space-4) var(--space-1); font-size: var(--text-xs); font-weight: var(--weight-bold); color: var(--muted); }
 .bell-group-label.bell-critical { color: var(--danger); }
 .bell-item, .bell-empty, .bell-all { display: flex; align-items: flex-start; gap: var(--space-3); padding: var(--space-2) var(--space-4); color: var(--fg); text-decoration: none; }
-.bell-item:hover, .bell-item:focus-visible, .bell-all:focus-visible, .bell-empty:focus-visible { background: var(--surface-2); outline: none; box-shadow: inset 2px 0 0 var(--accent); }
+.bell-item:hover, .bell-item:focus-visible, .bell-all:focus-visible, .bell-empty:focus-visible { background: var(--hover-bg); outline: none; box-shadow: inset 2px 0 0 var(--accent); }
 .bell-item.bell-critical { background: var(--danger-soft); }
 .bell-icon { display: inline-flex; margin-top: 2px; color: var(--muted); }
 .bell-critical .bell-icon { color: var(--danger); }
@@ -459,7 +459,7 @@ body[data-page="reference"] .content > main > section { max-width: none; }
 .bell-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
 .bell-text small, .bell-all small { font-size: var(--text-xs); color: var(--muted); }
 .bell-all { flex-direction: column; gap: 2px; margin-top: var(--space-1); border-top: 1px solid var(--line); }
-.bell-all:hover { background: var(--surface-2); }
+.bell-all:hover { background: var(--hover-bg); }
 .bell-empty { color: var(--muted); }
 .alert-pops { position: fixed; top: calc(var(--status-h) + var(--space-3)); right: var(--space-5); z-index: 35; display: flex; flex-direction: column; gap: var(--space-2); width: calc(var(--menu-w) * 2 - var(--space-5)); max-width: calc(100vw - 2 * var(--space-4)); pointer-events: none; }
 .alert-pop { display: flex; align-items: flex-start; gap: var(--space-3); padding: var(--space-4); background: var(--card); border: 1px solid var(--line); border-radius: var(--radius-card); box-shadow: var(--shadow); font-size: var(--text-s); pointer-events: auto; }
@@ -807,7 +807,7 @@ dl.meta dd { margin: 0; overflow-wrap: anywhere; }
 .ref-nav nav > .ref-list:first-child, .ref-nav nav > .ref-list:first-child + .ref-group { margin-top: 0; }
 .ref-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
 .ref-list a { display: block; padding: var(--space-1) var(--space-2); border-radius: var(--radius-control); color: var(--fg); text-decoration: none; overflow-wrap: anywhere; }
-.ref-list a:hover { background: var(--accent-soft); }
+.ref-list a:hover { background: var(--hover-bg); }
 .ref-list a[aria-current] { background: var(--accent-soft); color: var(--fg); font-weight: var(--weight-bold); }
 .ref-toc { font-size: var(--text-xs); }
 .ref-toc .ref-group { margin-top: 0; }
@@ -889,3 +889,17 @@ dl.meta dd { margin: 0; overflow-wrap: anywhere; }
 .ld-grow { padding-top: var(--space-5); padding-bottom: var(--space-5); }
 .ld-cols { display: grid; grid-template-columns: 1fr 2fr 1fr; gap: var(--space-2); }
 @media (max-width: 560px) { .ld-cols { grid-template-columns: 1fr; } }
+
+/* Hover (docs/style/ui-ux.md, "Hover"): every item, widget, list row and table row tints to --hover-bg; its base colour,
+   size and cursor stay as they are. Buttons with a fill, header rows and chart bars are left out. Rows with no padding of
+   their own (a Home widget, a list row) grow the tint sideways with a box-shadow, so nothing moves. Items that rest on a
+   tint of their own (the current page, a failed call, a critical alert) mix it with --hover-bg so hover still shows. */
+.home-sec:hover, .alerts-row:hover, .span-row:hover { background: var(--hover-bg); border-radius: var(--radius-control); box-shadow: calc(-1 * var(--space-3)) 0 0 var(--hover-bg), var(--space-3) 0 0 var(--hover-bg); }
+.table tbody :where(tr:not(.empty-row, .row-confirm-row, :has(+ .row-confirm-row))):hover > td, .ref-body tbody tr:hover { background: var(--hover-bg); }
+.tab:not([aria-current="page"]):hover { background: var(--hover-bg); border-radius: var(--radius-control) var(--radius-control) 0 0; }
+.sm-item[aria-current="page"]:hover { background: color-mix(in srgb, var(--accent-soft), var(--hover-bg) 55%); }
+.ref-list a[aria-current]:hover { background: color-mix(in srgb, var(--accent-soft), var(--hover-bg) 55%); }
+.ref-toc .ref-list a[aria-current]:hover { background: var(--hover-bg); }
+.bell-item.bell-critical:hover, .alerts-row-critical:hover { background: color-mix(in srgb, var(--danger-soft), var(--hover-bg) 55%); }
+.alerts-row-critical:hover { box-shadow: none; }
+.calls-table tr.call-err:hover > td { background: color-mix(in srgb, var(--danger-soft), var(--hover-bg) 55%); }

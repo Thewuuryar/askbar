@@ -3073,6 +3073,40 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     }
   });
 
+  // One hover tint everywhere (docs/style/ui-ux.md, "Hover"): a Home widget, a model-calls row and a table row each change
+  // background to --hover-bg on hover, their base colour is untouched at rest, the cursor does not change on a row that is not a link
+  // (the calls row is the one that opens a trace), and nothing moves.
+  await step('hover: a Home widget, a model-calls row and a table row all tint to the shared --hover-bg and back, with no layout shift', async () => {
+    const bgOf = (sel) => page.evaluate((s) => { const e = document.querySelector(s); return { bg: getComputedStyle(e).backgroundColor, cursor: getComputedStyle(e).cursor, h: e.getBoundingClientRect().height, y: e.getBoundingClientRect().top + scrollY }; }, sel);
+    const shared = () => page.evaluate(() => { const d = document.createElement('div'); d.style.backgroundColor = 'var(--hover-bg)'; document.body.append(d); const c = getComputedStyle(d).backgroundColor; d.remove(); return c; });
+    const check = async (label, rowSel, aim, cursor) => {
+      await page.mouse.move(0, 0);
+      const rest = await bgOf(rowSel);
+      await page.hover(aim);
+      const want = await shared();
+      await page.waitForFunction(([s, w]) => getComputedStyle(document.querySelector(s)).backgroundColor === w, [rowSel, want], { timeout: 3000 }).catch(() => {});
+      const hov = await bgOf(rowSel);
+      assert.notEqual(hov.bg, rest.bg, label + ': hover changes the background');
+      assert.equal(hov.bg, want, label + ': hover is the shared --hover-bg');
+      assert.equal(hov.cursor, cursor, label + ': the cursor');
+      assert.deepEqual([hov.h, hov.y], [rest.h, rest.y], label + ': nothing moves');
+      await page.mouse.move(0, 0);
+      assert.equal((await bgOf(rowSel)).bg, rest.bg, label + ': the base colour comes back');
+    };
+    await page.goto(base + 'home/');
+    await page.waitForSelector('#app:not([hidden])');
+    await check('home widget', '#numbers', '#numbers .kpi .k', 'auto');
+    await openPage('audit/calls');
+    await page.waitForSelector('#calls-rows tr[data-trace]:not(.call-err) > td');
+    const tr = '#calls-rows tr[data-trace]:not(.call-err):not(.call-sel)';
+    await check('model calls row', tr + ' > td:last-child', tr + ' > td:last-child', 'pointer');
+    await openPage('people');
+    await page.waitForSelector('#users-table tbody tr:not(.empty-row) > td');
+    await check('table row', '#users-table tbody tr:not(.empty-row) > td', '#users-table tbody tr:not(.empty-row) > td', 'auto');
+    const css = await page.evaluate(async () => (await (await fetch('/admin/style.css')).text()));
+    assert.match(css, /--hover-bg/, 'the stylesheet uses the token');
+    assert.doesNotMatch(css, /:hover[^{}]*\{[^}]*background:\s*var\(--(surface-2|accent-soft)\)/, 'no rule tints a hover with another colour');
+  });
   await step('home: quick actions (one filled primary), Needs attention from the bell items plus setup gaps, each linking to its fix, and the empty state', async () => {
     const K = await page.evaluate(() => window.ui.ready);
     const wait = K.LIVE_EVERY_SECS * 2 * 1000 + 3000;
