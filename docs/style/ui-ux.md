@@ -28,7 +28,7 @@ How the popup and the admin site look and behave. Items marked **(proposed)** ar
 
 ### Motion
 
-None, or one transition of 150 ms or less (opacity or colour). Under `prefers-reduced-motion: reduce` there is none.
+None, or one transition of 150 ms or less (opacity or colour). The one exception is the admin's docked side panel, which slides in and out over `--motion-panel` with `--ease-panel` while the page narrows and widens in step. Under `prefers-reduced-motion: reduce` there is none.
 
 ### Patterns for states
 
@@ -77,7 +77,7 @@ The admin is server-rendered pages with three plain scripts and no build step. I
 - **Save and apply.** A save button says "Save". "Save and apply" is used only where the save takes effect at once (Network). A change shows a save bar, "1 unsaved change: …", with Discard and Save. A failed save shows a summary at the top of the form and moves focus to the first error.
 - **Forms.** The label is above the field. A field's hint is one line under it (format, range, limit): never placeholder text, and never in brackets in the label. Mark "(optional)" only when most fields are required. A new password or passphrase is two fields stacked full width, with the length rule under the first as a live count, and "The two passwords do not match." (or passphrases) under the second as soon as it has text that differs from the first. Paste is always allowed.
 - **Help and text.** Every page title and every section heading has a `?` button after it (the exceptions: the reference's own pages, which are the help, headings that only label a list of links, headings inside a side panel or box, and the sign-in and setup cards), and a section has at most one line of help. Explanations live in the reference. Text stays on screen only when it prevents a mistake or is needed to finish a task: lock-out warnings, "cannot be recovered", required steps.
-- **Side panel.** One panel at a time, docked on the right, the full window height from the top on a desktop (under the phone bar on a phone), and 440 px wide (`--panel-w`), used for adding and editing, for help, and for the selected Audit row. The page narrows and stays usable; nothing is dimmed. Esc and × close it, unsaved changes ask first, and it has its own address so Back closes it.
+- **Side panel.** One panel at a time, docked on the right, the full window height from the top on a desktop (under the phone bar on a phone), and 440 px wide (`--panel-w`), used for adding and editing, for help, and for the selected Audit row. It slides in from the right and out again (instant under reduced motion), and the page narrows and widens in step. The page narrows and stays usable; nothing is dimmed. Esc and × close it, unsaved changes ask first, and it has its own address so Back closes it.
 - **Boxes are modal** and used only for confirmations and one-off secrets (a pairing key, a new API key).
 - **Risky actions.** A risky action on one row (restarting a service) opens that row to confirm: Cancel and the action at its bottom right, and the row's own button hides until it closes. Deleting asks for no confirmation when Save or Undo covers it, asks in a box when it cannot be undone, and asks the person to type the name when it destroys data or affects everyone. Anything that interrupts something says what it will interrupt before it asks (the Services page does this).
 - **Toasts** are for success and Undo only. Errors are inline, next to the fix.

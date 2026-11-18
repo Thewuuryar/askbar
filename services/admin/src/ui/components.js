@@ -423,6 +423,29 @@
   // asks first. ui.openPanel(id, { param, value, onClose }) resolves to the panel, or null if the open one stayed.
   let openState = null; // { panel, opener, before, onClose, pushed }
   let ignorePop = false;
+  // The panel slides (--motion-panel, --ease-panel) and the page makes room in step. A panel on its way out is `closing`: it is
+  // inert and off to the right until the slide ends (transitionend, or a timer from the computed duration if that never comes).
+  let closing = null; // { panel, opener, timer, onEnd }
+  const slideMs = (panel) => {
+    const first = (v) => v.split(',')[0].trim();
+    const t = (v) => (/ms$/.test(first(v)) ? parseFloat(first(v)) : parseFloat(first(v)) * ui.MS) || 0;
+    const cs = getComputedStyle(panel);
+    return t(cs.transitionDuration) + t(cs.transitionDelay);
+  };
+  // Ends a slide-out now: hide the panel and, unless asked not to or the person has gone elsewhere, give the focus back.
+  function finishClosing(returnFocus) {
+    if (!closing) return;
+    const c = closing;
+    closing = null;
+    clearTimeout(c.timer);
+    c.panel.removeEventListener('transitionend', c.onEnd);
+    c.panel.hidden = true;
+    c.panel.inert = false;
+    c.panel.classList.remove('panel-closing');
+    const active = document.activeElement;
+    const nowhere = !active || active === document.body || c.panel.contains(active);
+    if (returnFocus && nowhere && c.opener && c.opener.isConnected && typeof c.opener.focus === 'function') c.opener.focus();
+  }
 
   function panelUrl(param, value) {
     const u = new URL(location.href);
@@ -448,7 +471,17 @@
       }
       return panel;
     }
-    if (openState && !(await ui.closePanel())) return null;
+    // Another panel is open: it goes at once (no slide out and in), and the new one slides in over its place.
+    if (openState && !(await ui.closePanel({ instant: true }))) return null;
+    // The same panel was sliding out: it turns round from where it is. Another one: it is done at once.
+    const reversing = !!closing && closing.panel === panel;
+    if (reversing) {
+      clearTimeout(closing.timer);
+      panel.removeEventListener('transitionend', closing.onEnd);
+      closing = null;
+      panel.inert = false;
+      panel.classList.remove('panel-closing');
+    } else finishClosing(false);
     openState = {
       panel, param,
       opener: opts.opener || document.activeElement,
@@ -457,8 +490,14 @@
       pushed: !opts.fromUrl,
     };
     if (openState.pushed) history.pushState({ panel: id }, '', panelUrl(param, value));
+    const wasHidden = panel.hidden;
+    const sliding = wasHidden && !reversing && slideMs(panel) > 0; // read while hidden, so no style is computed for it yet
     panel.hidden = false;
+    // Start off to the right, make that the computed style, then let go: the transition runs to the docked place. Under reduced
+    // motion the duration is 0 and none of this is needed.
+    if (sliding) { panel.classList.add('panel-enter'); void panel.offsetWidth; }
     document.body.classList.add('panel-open');
+    if (sliding) panel.classList.remove('panel-enter');
     const title = panel.querySelector('.side-panel-title');
     if (title) { title.tabIndex = -1; title.focus(); }
     return panel;
@@ -480,14 +519,27 @@
       }
     }
     openState = null;
-    state.panel.hidden = true;
-    document.body.classList.remove('panel-open');
+    const slide = !opts.instant && !state.panel.hidden && slideMs(state.panel) > 0;
+    if (slide) {
+      // Slide out: the panel stays (inert, off to the right) until the transition ends; the page widens in step.
+      const panel = state.panel;
+      const c = { panel, opener: state.opener, timer: 0, onEnd: null };
+      c.onEnd = (e) => { if (e.target === panel && e.propertyName === 'transform') finishClosing(true); };
+      panel.addEventListener('transitionend', c.onEnd);
+      const ms = slideMs(panel);
+      c.timer = setTimeout(() => finishClosing(true), ms + ms); // the duration, plus as much again if transitionend never comes
+      closing = c;
+      panel.inert = true;
+      panel.classList.add('panel-closing');
+    } else state.panel.hidden = true;
+    // A switch to another panel (instant) keeps the page's room, so it does not narrow and widen again.
+    if (!opts.instant) document.body.classList.remove('panel-open');
     if (!opts.fromHistory) {
       if (state.pushed && history.state && history.state.panel === state.panel.id) { ignorePop = true; history.back(); }
       else history.replaceState(null, '', urlWithout(state.param));
     }
     if (state.onClose) state.onClose();
-    if (state.opener && state.opener.isConnected && typeof state.opener.focus === 'function') state.opener.focus();
+    if (!slide && state.opener && state.opener.isConnected && typeof state.opener.focus === 'function') state.opener.focus();
     return true;
   };
   ui.panelOpen = () => (openState ? openState.panel.id : null);

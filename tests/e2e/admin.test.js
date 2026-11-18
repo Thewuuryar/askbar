@@ -146,7 +146,7 @@ async function runViewport(viewport) {
 
   const base = `http://127.0.0.1:${adminPort}/admin/`;
   browser = await chromium.launch();
-  const ctx = await browser.newContext({ viewport, permissions: ['clipboard-read', 'clipboard-write'] });
+  const ctx = await browser.newContext({ reducedMotion: 'reduce', viewport, permissions: ['clipboard-read', 'clipboard-write'] });
   const page = await ctx.newPage();
   const errors = [];
   // Each admin section is its own page (plan step 1.16): a nav link loads it, and its scripts run before
@@ -227,7 +227,7 @@ async function runViewport(viewport) {
       return { text: (t.left + t.right) / 2, card: (c.left + c.right) / 2 };
     });
     assert.ok(Math.abs(centres.text - centres.card) <= 4, 'the footer line is centred under the card: ' + JSON.stringify(centres));
-    const axeCtx = await browser.newContext({ viewport, bypassCSP: true });
+    const axeCtx = await browser.newContext({ reducedMotion: 'reduce', viewport, bypassCSP: true });
     try {
       const ap = await axeCtx.newPage();
       await ap.goto(base);
@@ -286,7 +286,7 @@ async function runViewport(viewport) {
     for (const h of sizes.inputs) assert.ok(h >= want - 0.5, label + ': a field is ' + h + ' px high');
     if (isPhone) for (const h of sizes.checks) assert.ok(h >= 44 - 0.5, label + ': the check box row is ' + h + ' px high');
     assert.equal(sizes.scrolls, false, label + ': no sideways scroll');
-    const axeCtx = await browser.newContext({ viewport, bypassCSP: true, storageState: await ctx.storageState() });
+    const axeCtx = await browser.newContext({ reducedMotion: 'reduce', viewport, bypassCSP: true, storageState: await ctx.storageState() });
     try {
       const ap = await axeCtx.newPage();
       await ap.goto(base);
@@ -2620,7 +2620,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       .map((t) => t.getBoundingClientRect()).filter((r) => r.height > 0 && (r.height < min || r.width < min)).length, isPhone ? 44 : 24);
     assert.equal(small, 0, 'every target on this page is big enough');
     // axe, with the panel open (a copy of the page in a context that lets axe in).
-    const axeCtx = await browser.newContext({ viewport, bypassCSP: true, storageState: await ctx.storageState() });
+    const axeCtx = await browser.newContext({ reducedMotion: 'reduce', viewport, bypassCSP: true, storageState: await ctx.storageState() });
     try {
       const ap = await axeCtx.newPage();
       await ap.goto(base + 'audit/calls/?id=' + encodeURIComponent(id));
@@ -2878,7 +2878,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       const fit = await page.evaluate(() => { const r = document.getElementById('bell-menu').getBoundingClientRect(); return r.left >= 0 && r.right <= window.innerWidth; });
       assert.equal(fit, true, 'the menu fits the screen');
       // axe, with the menu and the pop-up showing (a copy of this page in a context that lets axe in).
-      const axeCtx = await browser.newContext({ viewport, bypassCSP: true, storageState: await ctx.storageState() });
+      const axeCtx = await browser.newContext({ reducedMotion: 'reduce', viewport, bypassCSP: true, storageState: await ctx.storageState() });
       try {
         const ap = await axeCtx.newPage();
         await ap.route('**/api/admin/v1/status', async (route) => {
@@ -2984,7 +2984,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
         assert.ok(w >= min - 0.5 && h >= min - 0.5, 'target ' + w + 'x' + h);
       }
       // axe with all three groups showing.
-      const axeCtx = await browser.newContext({ viewport, bypassCSP: true, storageState: await ctx.storageState() });
+      const axeCtx = await browser.newContext({ reducedMotion: 'reduce', viewport, bypassCSP: true, storageState: await ctx.storageState() });
       try {
         const ap = await axeCtx.newPage();
         await fakeStatus(ap);
@@ -3187,7 +3187,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       fake = { ...clean, alerts: 'not_set_up' };
       setup = { ...healthy, providers: [] };
       await page.waitForFunction(() => document.querySelectorAll('#attention-list .arow').length === 2, null, { timeout: wait });
-      const axeCtx = await browser.newContext({ viewport, bypassCSP: true, storageState: await ctx.storageState() });
+      const axeCtx = await browser.newContext({ reducedMotion: 'reduce', viewport, bypassCSP: true, storageState: await ctx.storageState() });
       try {
         const ap = await axeCtx.newPage();
         await ap.route('**/api/admin/v1/status', async (route) => {
@@ -3356,7 +3356,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       stats = { ...stats, requests: 345, by_day: days.map(([day, requests]) => ({ day, requests, tokens: { in: 0, out: 0, cached: 0 }, cost: null })) };
 
       // axe on a copy of the page that lets axe in.
-      const axeCtx = await browser.newContext({ viewport, bypassCSP: true, storageState: await ctx.storageState() });
+      const axeCtx = await browser.newContext({ reducedMotion: 'reduce', viewport, bypassCSP: true, storageState: await ctx.storageState() });
       try {
         const ap = await axeCtx.newPage();
         await install(ap);
@@ -3451,7 +3451,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await input.press('Escape');
     assert.equal(await input.inputValue(), '');
     // axe with the list open (a copy of the page in a context that lets axe in).
-    const axeCtx = await browser.newContext({ viewport, bypassCSP: true, storageState: await ctx.storageState() });
+    const axeCtx = await browser.newContext({ reducedMotion: 'reduce', viewport, bypassCSP: true, storageState: await ctx.storageState() });
     try {
       const ap = await axeCtx.newPage();
       await ap.goto(base + 'network/');
@@ -3535,7 +3535,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     for (const h of heights) assert.ok(h >= (isPhone ? 44 : 24) - 0.5, 'result row ' + h);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'no sideways scroll with results open');
     // Axe with the reference rows drawn (a copy of the page in a context that lets axe in).
-    const axeCtx = await browser.newContext({ viewport, bypassCSP: true, storageState: await ctx.storageState() });
+    const axeCtx = await browser.newContext({ reducedMotion: 'reduce', viewport, bypassCSP: true, storageState: await ctx.storageState() });
     try {
       const ap = await axeCtx.newPage();
       await ap.goto(base + 'network/');
@@ -3826,6 +3826,80 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       await page.unroute('**/api/admin/v1/audit/session');
       await page.unroute('**/api/admin/v1/audit/payloads/*');
     }
+  });
+  await step('side panel: slides in and out with the page making room, a quick open-close-open ends open, switching topics does not slide, and reduced motion is instant', async () => {
+    const run = async (reducedMotion) => {
+      const c = await browser.newContext({ viewport, reducedMotion, storageState: await ctx.storageState() });
+      const p = await c.newPage();
+      await p.goto(base + 'home/');
+      await p.waitForSelector('#app:not([hidden])');
+      return { c, p };
+    };
+    // Samples once per animation frame where the panel is and how wide the page column is, until `done(samples)` says so.
+    const sample = (p, done, click) => p.evaluate(async ([doneSrc, clickSrc]) => {
+      const stop = (0, eval)(doneSrc);
+      const panel = document.getElementById('help-panel');
+      const out = [];
+      (0, eval)(clickSrc)();
+      for (let i = 0; i < 180; i++) {
+        await new Promise((r) => requestAnimationFrame(r));
+        const r = panel.getBoundingClientRect();
+        out.push({ left: r.left, hidden: panel.hidden, col: document.getElementById('app').getBoundingClientRect().width, inert: panel.inert });
+        if (stop(out)) break;
+      }
+      return out;
+    }, [done, click]);
+    const { c, p } = await run('no-preference');
+    try {
+      assert.ok((await p.$$('[data-help]')).length >= 2, 'the page has two help buttons');
+      const finalLeft = await p.evaluate(() => window.innerWidth - Math.min(parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--panel-w')), window.innerWidth));
+      assert.ok(await p.evaluate(() => parseFloat(getComputedStyle(document.getElementById('help-panel')).transitionDuration) > 0), 'the panel has a transition duration');
+      // Open: starts off to the right, ends docked; on a desktop the column narrows through values in between.
+      const o = await sample(p, `(s) => s.length > 2 && Math.abs(s[s.length - 1].left - ${finalLeft}) < 0.5 && Math.abs(s[s.length - 2].left - ${finalLeft}) < 0.5`, "() => document.querySelector('[data-help]').click()");
+      assert.ok(o[0].left > finalLeft + 1, 'on the first frame the panel is still to the right of its place: ' + o[0].left);
+      assert.ok(Math.abs(o[o.length - 1].left - finalLeft) < 0.5, 'it ends in its place');
+      assert.ok(o.some((x) => x.left > finalLeft + 1 && x.left < o[0].left), 'it was seen part of the way');
+      if (!isPhone) assert.ok(new Set(o.map((x) => Math.round(x.col))).size >= 3, 'the page column narrowed through in-between widths');
+      assert.equal(await p.evaluate(() => document.activeElement.id), 'help-panel-title', 'focus moved into the panel');
+      // Close: stays visible while it slides, then is hidden, the page widens back and focus returns to the opener.
+      const cl = await sample(p, '(s) => s[s.length - 1].hidden', "() => document.querySelector('#help-panel [data-panel-close]').click()");
+      assert.equal(cl[0].hidden, false, 'still shown on the first frame of closing');
+      assert.ok(cl.some((x) => !x.hidden && x.left > finalLeft + 1), 'it was seen sliding out');
+      assert.ok(cl[0].inert, 'inert while it slides out');
+      assert.equal(cl[cl.length - 1].hidden, true, 'hidden once the slide ends');
+      if (!isPhone) assert.ok(cl[cl.length - 1].col > cl[0].col, 'the page widened');
+      assert.ok(await p.evaluate(() => document.activeElement === document.querySelector('[data-help]')), 'focus returned to the opener after the slide');
+      assert.equal(await p.evaluate(() => document.body.classList.contains('panel-open')), false);
+      // Open, close, open in quick succession ends open and consistent.
+      await p.evaluate(async () => {
+        const b = document.querySelector('[data-help]');
+        const frame = () => new Promise((r) => requestAnimationFrame(r));
+        b.click(); await frame();
+        document.querySelector('#help-panel [data-panel-close]').click(); await frame();
+        b.click();
+      });
+      await p.waitForFunction((l) => Math.abs(document.getElementById('help-panel').getBoundingClientRect().left - l) < 0.5, finalLeft);
+      assert.deepEqual(await p.evaluate(() => { const e = document.getElementById('help-panel'); return [e.hidden, e.inert, e.classList.contains('panel-closing'), e.classList.contains('panel-enter'), document.body.classList.contains('panel-open')]; }), [false, false, false, false, true]);
+      // Switching to another topic swaps the content in place: never hidden, never moved.
+      const st = await sample(p, '(s) => s.length >= 20', "() => document.querySelectorAll('[data-help]')[1].click()");
+      assert.ok(st.every((x) => !x.hidden && Math.abs(x.left - finalLeft) < 0.5), 'the panel stays where it is while the topic changes');
+      await p.evaluate(() => document.querySelector('#help-panel [data-panel-close]').click());
+      await p.waitForSelector('#help-panel', { state: 'hidden' });
+    } finally { await c.close(); }
+    // Reduced motion: no transition, and closing hides at once (the next frame, not after a slide).
+    const r = await run('reduce');
+    try {
+      assert.equal(await r.p.evaluate(() => getComputedStyle(document.getElementById('help-panel')).transitionDuration), '0s');
+      await r.p.evaluate(() => document.querySelector('[data-help]').click());
+      await r.p.waitForSelector('#help-panel', { state: 'visible' });
+      assert.ok(await r.p.evaluate(() => { const b = document.getElementById('help-panel').getBoundingClientRect(); return Math.abs(b.left - (window.innerWidth - b.width)) < 0.5; }), 'docked at once');
+      const hiddenNextFrame = await r.p.evaluate(async () => {
+        document.querySelector('#help-panel [data-panel-close]').click();
+        await new Promise((res) => requestAnimationFrame(res));
+        return document.getElementById('help-panel').hidden;
+      });
+      assert.equal(hiddenNextFrame, true, 'hidden at once under reduced motion');
+    } finally { await r.c.close(); }
   });
   await step('audit access history: rows are listed newest first as text, and a new open adds one', async () => {
     let rows = [
@@ -4236,8 +4310,8 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       });
       return found;
     };
-    const signedIn = await browser.newContext({ viewport, bypassCSP: true, storageState: await ctx.storageState() });
-    const signedOut = await browser.newContext({ viewport, bypassCSP: true });
+    const signedIn = await browser.newContext({ reducedMotion: 'reduce', viewport, bypassCSP: true, storageState: await ctx.storageState() });
+    const signedOut = await browser.newContext({ reducedMotion: 'reduce', viewport, bypassCSP: true });
     const slugs = await page.$$eval('#nav a[data-tab]', (as) => as.map((a) => a.dataset.tab));
     const extra = [];
     try {
@@ -4349,7 +4423,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       const small = await page.$$eval('.ref-list a, .ref-edit, .ref-nav-toggle, .rf-grp a, .rf-open, .rf-set', (as, m) => as.map((a) => a.getBoundingClientRect()).filter((r) => r.height > 0 && (r.height < m - 0.5 || r.width < m - 0.5)).length, min);
       assert.equal(small, 0, url + ': every outline, list and edit target is at least ' + min + ' px');
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, url + ': no sideways scroll');
-      const axeCtx = await browser.newContext({ viewport, bypassCSP: true, storageState: await ctx.storageState() });
+      const axeCtx = await browser.newContext({ reducedMotion: 'reduce', viewport, bypassCSP: true, storageState: await ctx.storageState() });
       try {
         const ap = await axeCtx.newPage();
         await ap.goto(base + url);
@@ -4501,7 +4575,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, url + ': no sideways scroll; wider than the window: ' + wide.join(' '));
       const small = await page.$$eval('.live-example button, .live-example a.tab, .live-example .btn, .live-example .na, .live-example .na-tag', (els, m) => els.map((e) => [e.className, e.getBoundingClientRect()]).filter(([, r]) => r.height > 0 && (r.height < m - 0.5 || r.width < m - 0.5)).map(([c]) => c), min);
       assert.deepEqual(small, [], url + ': every example target is at least ' + min + ' px');
-      const axeCtx = await browser.newContext({ viewport, bypassCSP: true, storageState: await ctx.storageState() });
+      const axeCtx = await browser.newContext({ reducedMotion: 'reduce', viewport, bypassCSP: true, storageState: await ctx.storageState() });
       try {
         const ap = await axeCtx.newPage();
         await ap.goto(base + url);
@@ -4676,7 +4750,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     assert.equal(await page.evaluate(() => new URL(location.href).searchParams.get('panel')), 'help:settings/network#certificate');
     assert.equal(await page.locator('#help-full').getAttribute('href'), '/admin/reference/settings/network/#certificate');
     // Axe is clean with the panel open (a fresh page at the topic's address, which also checks that it opens from it).
-    const axeCtx = await browser.newContext({ viewport, bypassCSP: true, storageState: await ctx.storageState() });
+    const axeCtx = await browser.newContext({ reducedMotion: 'reduce', viewport, bypassCSP: true, storageState: await ctx.storageState() });
     try {
       const ap = await axeCtx.newPage();
       await ap.goto(base + 'network/?panel=help%3Asettings%2Fnetwork%23certificate');
@@ -4781,7 +4855,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       }
       assert.deepEqual(requests, [], slug + ': opening help fetched nothing');
       // Axe, with the panel open on the page's last topic (a fresh page at the topic's address, which also checks that it opens from it).
-      const axeCtx = await browser.newContext({ viewport, bypassCSP: true, storageState: await ctx.storageState() });
+      const axeCtx = await browser.newContext({ reducedMotion: 'reduce', viewport, bypassCSP: true, storageState: await ctx.storageState() });
       try {
         const ap = await axeCtx.newPage();
         await ap.goto(base + slug + '/?panel=' + encodeURIComponent('help:' + topics[topics.length - 1]));
@@ -4895,7 +4969,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     assert.equal(await page.getAttribute('#menu-collapse', 'aria-expanded'), 'true');
     await page.waitForFunction((w) => document.getElementById('side-menu').getBoundingClientRect().width === w, full);
     // A browser that refuses localStorage still gets a working, expanded menu.
-    const blocked = await browser.newContext({ viewport, storageState: await ctx.storageState() });
+    const blocked = await browser.newContext({ reducedMotion: 'reduce', viewport, storageState: await ctx.storageState() });
     await blocked.addInitScript(() => {
       const no = () => { throw new Error('storage blocked'); };
       Storage.prototype.getItem = no;
@@ -5277,7 +5351,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       assert.equal(Math.round(g.right), g.iw, 'and its status bar reaches the right edge');
     }
     for (const scheme of ['light', 'dark']) {
-      const c2 = await browser.newContext({ viewport, colorScheme: scheme, storageState: await ctx.storageState() });
+      const c2 = await browser.newContext({ reducedMotion: 'reduce', viewport, colorScheme: scheme, storageState: await ctx.storageState() });
       try {
         const p2 = await c2.newPage();
         await p2.goto(base + 'services/');

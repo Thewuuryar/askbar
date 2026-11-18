@@ -176,7 +176,7 @@ section[data-tab^="audit/"] .row .title-row { margin: 0; }
    bars in it stack, and the page keeps --save-room under its last content (components.js) so nothing is hidden behind them. */
 .save-dock { position: fixed; z-index: 15; left: var(--rail-w); right: 0; bottom: 0; display: flex; flex-direction: column; align-items: center; gap: var(--space-2); padding: 0 var(--space-4) calc(var(--space-4) + env(safe-area-inset-bottom, 0px)); pointer-events: none; }
 .menu-collapsed .save-dock { left: var(--rail-w-collapsed); }
-@media (min-width: 761px) { body.panel-open .save-dock { right: var(--panel-w); } }
+@media (min-width: 761px) { .save-dock { transition: right var(--motion-panel) var(--ease-panel); } body.panel-open .save-dock { right: var(--panel-w); } }
 .save-dock .save-bar { pointer-events: auto; width: 100%; max-width: var(--page-w); box-sizing: border-box; margin: 0; padding: var(--space-3) var(--space-4); border: 1px solid var(--line); border-radius: var(--radius-card); background: var(--card); box-shadow: var(--shadow); }
 .save-dock .save-bar[hidden] { display: none; }
 .save-dock .save-bar-text { flex: 1 1 12rem; min-width: 0; overflow-wrap: anywhere; }
@@ -209,6 +209,9 @@ section[data-tab^="audit/"] .row .title-row { margin: 0; }
    height: the status bar and banners are narrowed to the column beside it, so nothing is left above it. Under 761 px it
    covers the page and starts under the status bar. */
 .side-panel { position: fixed; top: calc(var(--status-h) + var(--banners-h)); right: 0; bottom: 0; z-index: 10; width: var(--panel-w); max-width: 100vw; display: flex; flex-direction: column; background: var(--card); color: var(--fg); border-left: 1px solid var(--line); }
+.side-panel { transition: transform var(--motion-panel) var(--ease-panel); }
+/* Off to the right: just before it slides in (panel-enter) and while it slides out (panel-closing; components.js). */
+.side-panel.panel-enter, .side-panel.panel-closing { transform: translateX(100%); }
 .side-panel-head { display: flex; align-items: center; gap: var(--space-1); padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--line); }
 .side-panel-title { font-size: var(--text-m); }
 .side-panel-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: var(--space-4); }
@@ -255,7 +258,7 @@ dialog.box::backdrop { background: rgba(0, 0, 0, .4); }
 
 /* Component behaviour (plan step 1.9; scripts in components.js) */
 /* The docked panel narrows the page instead of covering it (rule 27); on a phone it takes the width. */
-@media (min-width: 761px) { body.panel-open #app, body.panel-open .footer { margin-right: var(--panel-w); } .side-panel { top: 0; } }
+@media (min-width: 761px) { #app, .footer { transition: margin-right var(--motion-panel) var(--ease-panel); } body.panel-open #app, body.panel-open .footer { margin-right: var(--panel-w); } .side-panel { top: 0; } }
 .menu-anchor { position: relative; }
 .menu-anchor > .menu { top: 100%; right: 0; }
 .hint.length-ok { color: var(--good); }

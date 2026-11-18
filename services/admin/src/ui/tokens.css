@@ -46,6 +46,9 @@
 
   /* motion: one duration, none under prefers-reduced-motion */
   --motion: 150ms;
+  /* the docked side panel slides: one duration and easing for the panel and everything that makes room for it */
+  --motion-panel: 200ms;
+  --ease-panel: cubic-bezier(0.2, 0, 0, 1);
 
   /* layout: the same in both themes */
   --status-h: 48px;
@@ -119,5 +122,5 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  :root { --motion: 0ms; }
+  :root { --motion: 0ms; --motion-panel: 0ms; }
 }
