@@ -330,7 +330,7 @@ services:
     # cpa mounts nothing else group 10001 could open.
     user: "0:10001"
     restart: unless-stopped
-    # No exception needed (tested with v8.0.51): logins go to cpa-auth, and the admin writes the config. CPA
+    # No exception needed (tested with v8.0.51; not yet with v8.0.77, CI's cpa-image job checks the login API): logins go to cpa-auth, and the admin writes the config. CPA
     # logs a warning that it cannot make /cpa-config/static, its own web panel, which Askbar does not use.
     <<: *hardening
     mem_limit: 512m
