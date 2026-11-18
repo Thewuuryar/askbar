@@ -4633,6 +4633,33 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       assert.ok(withPanel.items.length >= 3, 'the crumb, search and facts are in the bar with the panel open');
       assert.deepEqual(barCheck(withPanel), [], 'no two status-bar items overlap with the docked panel open at 1280 wide');
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth), false, 'no sideways scroll with the panel open');
+      // With a docked panel open the search keeps a usable width (plan R6b). At 1280 the breadcrumb is left out and the search
+      // takes the room the facts leave, so it is at least 160 px and centred in that room. At 1440 the centred grid still fits,
+      // so the search is centred in the bar's content area. Both: no overlap, no sideways scroll.
+      const searchBox = () => page.evaluate(() => {
+        const bar = document.getElementById('status-bar');
+        const b = bar.getBoundingClientRect(), cs = getComputedStyle(bar);
+        const gs = document.getElementById('gs').getBoundingClientRect();
+        return { width: gs.width, l: gs.left, r: gs.right, innerL: b.left + parseFloat(cs.paddingLeft), innerR: b.right - parseFloat(cs.paddingRight), factsL: document.getElementById('status-facts').getBoundingClientRect().left, gap: parseFloat(cs.columnGap) || 0 };
+      });
+      const s1280 = await searchBox();
+      assert.ok(s1280.width >= 160, 'the search is at least 160 px wide beside the docked panel at 1280: ' + JSON.stringify(s1280));
+      assert.ok(Math.abs((s1280.l + s1280.r) / 2 - (s1280.innerL + s1280.factsL - s1280.gap) / 2) <= 4, 'the search is centred in the room the facts leave, within 4 px, at 1280: ' + JSON.stringify(s1280));
+      assert.deepEqual(barCheck(await barItems()), [], 'no status-bar item overlaps at 1280 with the panel open (search width ' + Math.round(s1280.width) + ' px)');
+      // A one-off resize to 1100 and 1440 (back to 1280 after). At 1100 the room is too short for a 160 px search beside the
+      // kill switch, seal and bell: only the overlap and sideways checks are made there (see the commit body).
+      await page.setViewportSize({ width: 1100, height: viewport.height });
+      await page.waitForFunction(() => document.documentElement.clientWidth === 1100);
+      assert.deepEqual(barCheck(await barItems()), [], 'no status-bar item overlaps at 1100 with the panel open');
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth), false, 'no sideways scroll at 1100 with the panel open');
+      await page.setViewportSize({ width: 1440, height: viewport.height });
+      await page.waitForFunction(() => document.documentElement.clientWidth === 1440);
+      const s1440 = await searchBox();
+      assert.ok(s1440.width >= 160, 'the search is at least 160 px wide beside the docked panel at 1440: ' + JSON.stringify(s1440));
+      assert.ok(Math.abs((s1440.l + s1440.r) / 2 - (s1440.innerL + s1440.innerR) / 2) <= 4, 'the search is centred in the bar within 4 px at 1440: ' + JSON.stringify(s1440));
+      assert.deepEqual(barCheck(await barItems()), [], 'no status-bar item overlaps at 1440 with the panel open');
+      await page.setViewportSize(viewport);
+      await page.waitForFunction((w) => document.documentElement.clientWidth === w, viewport.width);
       await page.goto(base + 'general/');
       await page.waitForSelector('#app:not([hidden])');
     }

@@ -381,9 +381,18 @@ body[data-page="reference"] .content > main > section { max-width: none; }
    not fit is clipped inside its own box, never painted over the facts. */
 .gs-left .crumb { flex: 0 0 auto; max-width: 50%; overflow: hidden; }
 .gs-field { overflow: hidden; }
-/* With the docked panel open on a laptop-width page the greyed budget, the least important fact, is left out (the phone drops it too). */
-@media (min-width: 761px) and (max-width: 1439px) { body.panel-open .facts .na { display: none; } body.panel-open .status-bar { --facts-floor: var(--facts-w-s); } }
+/* With the docked panel open the page is narrow, so the greyed budget, the least important fact, is left out (the phone drops it
+   too) up to 1757 px: at that width the centred box and both outer columns fit the budget again. */
+@media (min-width: 761px) and (max-width: 1757px) { body.panel-open .facts .na { display: none; } body.panel-open .status-bar { --facts-floor: var(--facts-w-s); } }
 .gs { position: relative; flex: 0 1 var(--search-w); min-width: 0; }
+/* With the docked panel open and less room than the centred layout needs (1000-1397 px), the breadcrumb label is left out (the page
+   title sits just below the bar) and the search is centred in the room that is left between the bar's start and the facts. It takes
+   the room it can (up to --search-w) and never paints over a fact. From 1398 px the centred grid above still fits. */
+@media (min-width: 1000px) and (max-width: 1397px) {
+  body.panel-open .status-bar { display: flex; }
+  body.panel-open .gs-left { display: flex; flex: 1 1 auto; justify-content: center; min-width: 0; }
+  body.panel-open .gs-left .crumb { display: none; }
+}
 /* The search box sits at the centre of the bar, not in the space the breadcrumb leaves: three columns, the two outer ones equal (each
    at least as wide as the facts, --facts-floor), the middle one the search width or whatever is left. Its centre never moves with
    the breadcrumb. The budget, the least important fact, is left out below 1280 px (as the docked panel already did), so the floor is
