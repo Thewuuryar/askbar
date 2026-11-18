@@ -280,6 +280,8 @@ pub fn routes(state: &Arc<AdminState>) -> Routes {
         .get("/admin/restore/", |RawQuery(q): RawQuery| async move { moved_to("/admin/backup/", q) })
         // Clients became People & clients (plan step 5.6).
         .get("/admin/clients/", |RawQuery(q): RawQuery| async move { moved_to("/admin/people/", q) })
+        // The Settings overview page was removed: Settings opens General.
+        .get("/admin/settings/", |RawQuery(q): RawQuery| async move { moved_to("/admin/general/", q) })
         .get("/admin/app.js", |h: HeaderMap| async move { pages::static_file(&h, JS, include_str!("ui/app.js")) })
         .get("/admin/components.js", |h: HeaderMap| async move { pages::static_file(&h, JS, include_str!("ui/components.js")) })
         .get("/admin/audit.js", |h: HeaderMap| async move { pages::static_file(&h, JS, include_str!("ui/audit.js")) })

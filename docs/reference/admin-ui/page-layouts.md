@@ -16,7 +16,7 @@ The screenshots on this page come from `tests/e2e/page-shots.js` (`npm run shots
 
 ## Index
 
-The overview of a group of pages: one line for each item, with what it is set to now. The Settings page is the index of the settings pages (`settings.html`).
+The overview of a group of pages: one line for each item, with what it is set to now. No page uses it today: the Settings heading opens General, the first of the settings pages.
 
 <!-- live: layout_index -->
 
@@ -30,7 +30,7 @@ A table or list of records, with a heading and a hint under the title. The audit
 
 ## Sectioned settings pages
 
-A settings page is one `section` per settings section, each with its name and a few lines of controls, and a save bar when a value changes. Providers, People, Services, Network, Security, Backup, Notifications and General use it (`providers.html`, `people.html`, `services.html`, `network.html`, `security.html`, `backup.html`, `notifications.html`, `general.html`). Each section's name is a help topic: see [the reference's index](../index.md#how-these-pages-are-written).
+A settings page is one `section` per settings section, each with its name and a few lines of controls, and a save bar when a value changes. General, Providers, People, Services, Network, Security, Backup and Notifications use it (`general.html`, `providers.html`, `people.html`, `services.html`, `network.html`, `security.html`, `backup.html`, `notifications.html`). Each section's name is a help topic: see [the reference's index](../index.md#how-these-pages-are-written).
 
 ![A sectioned settings page, General: one section per group of settings, each with its name at the left and its controls at the right](img/general.png)
 

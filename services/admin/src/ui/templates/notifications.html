@@ -14,10 +14,10 @@
         {% call c::field("Access token", "a-token", "Leave empty to keep the stored token.", "slot", true) %}<input id="a-token" name="a-token" type="password" autocomplete="off" aria-describedby="a-token-hint a-token-error">{% endcall %}
         <label class="check"><input id="a-token-clear" type="checkbox"> Remove the stored token</label>
         <div class="sec-actions">
-          <button type="submit" class="btn btn-secondary">Save ntfy settings</button>
           <button type="button" id="a-remove" class="btn btn-secondary">Remove ntfy</button>
         </div>
         {% call b::error_line("a-error") %}{% endcall %}
+        {% call c::save_bar("alerts-form", "Save ntfy settings") %}{% endcall %}
       </form>
     </section>
 
@@ -41,10 +41,10 @@
         {% call c::field("From address", "m-from", "The address the alert is sent from.", "slot", false) %}<input id="m-from" name="m-from" type="email" autocomplete="off" aria-describedby="m-from-hint m-from-error">{% endcall %}
         {% call c::field("To address", "m-to", "The address that receives the alert.", "slot", false) %}<input id="m-to" name="m-to" type="email" autocomplete="off" aria-describedby="m-to-hint m-to-error">{% endcall %}
         <div class="sec-actions">
-          <button type="submit" class="btn btn-secondary">Save email settings</button>
           <button type="button" id="m-remove" class="btn btn-secondary">Remove email</button>
         </div>
         {% call b::error_line("m-error") %}{% endcall %}
+        {% call c::save_bar("email-form", "Save email settings") %}{% endcall %}
       </form>
     </section>
 

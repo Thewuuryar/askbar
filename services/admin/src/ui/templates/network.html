@@ -55,7 +55,7 @@
       {% call b::error_line("network-error") %}{% endcall %}
       <div class="net-actions">
         <button type="button" id="n-apply" class="btn btn-secondary">Apply the saved settings again</button>
-        {% call c::button("Save and apply", "submit", "", "") %}{% endcall %}
       </div>
+      {% call c::save_bar("network-form", "Save and apply") %}{% endcall %}
     </form>
 {% endblock %}

@@ -115,7 +115,7 @@ page!(AuditCalls, audit_calls, "audit/calls", "audit_calls.html", "Model calls")
 page!(AuditAdmin, audit_admin, "audit/admin", "audit_admin.html", "Admin actions");
 page!(AuditSealed, audit_sealed, "audit/sealed", "audit_sealed.html", "Sealed access");
 page!(AuditRouting, audit_routing, "audit/routing", "audit_routing.html", "Routing");
-page!(Settings, settings, "settings", "settings.html", "Settings");
+page!(General, general, "general", "general.html", "General");
 page!(Providers, providers, "providers", "providers.html", "Providers");
 page!(People, people, "people", "people.html", "People & clients");
 page!(Services, services, "services", "services.html", "Services");
@@ -123,7 +123,6 @@ page!(Network, network, "network", "network.html", "Network");
 page!(Security, security, "security", "security.html", "Security");
 page!(Backup, backup, "backup", "backup.html", "Backup");
 page!(Notifications, notifications, "notifications", "notifications.html", "Notifications");
-page!(General, general, "general", "general.html", "General");
 
 /// Every admin page, in menu order (rule 1). Its slugs equal `constants::PAGE_SLUGS`, which a test checks.
 /// `/admin` and `/admin/` go to `constants::LANDING_PAGE`.
@@ -134,7 +133,7 @@ pub static PAGES: &[Page] = &[
     Page { slug: "audit/admin", label: "Admin actions", group: Group::Audit, icon: "clipboard", lede: "What was changed in this admin, and when.", render: audit_admin },
     Page { slug: "audit/sealed", label: "Sealed access", group: Group::Audit, icon: "lock", lede: "Sealed prompts and replies stay closed until the audit passphrase opens them. Every opening is recorded.", render: audit_sealed },
     Page { slug: "audit/routing", label: "Routing", group: Group::Audit, icon: "route", lede: "The tries each request took, why a try failed, and the providers the router is refusing. Pick a request on Model calls to see its tries.", render: audit_routing },
-    Page { slug: "settings", label: "Settings", group: Group::Settings, icon: "settings", lede: "Every setting, by section. Each line shows what is set now.", render: settings },
+    Page { slug: "general", label: "General", group: Group::Settings, icon: "sliders", lede: "What every reply starts from: the system prompt, defaults and limits.", render: general },
     Page { slug: "providers", label: "Providers", group: Group::Settings, icon: "cube", lede: "Where answers come from, and which models people can pick.", render: providers },
     Page { slug: "people", label: "People & clients", group: Group::Settings, icon: "people", lede: "Who can use Askbar, and the phones and computers paired to them.", render: people },
     Page { slug: "services", label: "Services", group: Group::Settings, icon: "server", lede: "Restart a part of Askbar.", render: services },
@@ -142,26 +141,16 @@ pub static PAGES: &[Page] = &[
     Page { slug: "security", label: "Security", group: Group::Settings, icon: "shield", lede: "How you sign in to this admin, keys for scripts, and how long sealed content stays open.", render: security },
     Page { slug: "backup", label: "Backup", group: Group::Settings, icon: "archive", lede: "Encrypted backups of the server's data and this admin's settings.", render: backup },
     Page { slug: "notifications", label: "Notifications", group: Group::Settings, icon: "send", lede: "Where Askbar sends an alert when something needs attention, and how to test it.", render: notifications },
-    Page { slug: "general", label: "General", group: Group::Settings, icon: "sliders", lede: "What every reply starts from: the system prompt, defaults and limits.", render: general },
     Page { slug: "reference", label: "Reference", group: Group::Reference, icon: "reference", lede: "What each admin setting does, how the admin site is built, and what the audit alerts mean. Start here.", render: crate::reference::index_html },
 ];
 
-/// A page is its group's overview when its slug is the group's name in lower case (`settings` in Settings).
-/// Its heading links to it and it is the heading itself in the menu, not a sub-item (plan step 5.4).
-pub fn is_overview(p: &Page) -> bool {
-    p.slug == p.group.label().to_lowercase()
-}
-
 /// One entry of the side menu: a top-level page (Home, Alerts, Reference), or a group heading (Audit,
-/// Settings) with its pages under it. A group's heading links to its first page; when that is the group's
-/// overview, the heading is the overview's link and the other pages are its sub-items.
+/// Settings) with its pages under it. A group's heading links to its first page.
 pub struct MenuGroup {
     pub label: &'static str,
     pub icon: &'static str,
     /// True for Audit and Settings, whose pages are listed under the heading.
     pub nested: bool,
-    /// True when the first page is the group's overview (see `is_overview`).
-    pub overview: bool,
     pub pages: Vec<&'static Page>,
 }
 
@@ -170,32 +159,10 @@ impl MenuGroup {
     pub fn href(&self) -> String {
         path(self.pages[0])
     }
-    /// The overview's slug, or empty when the group has none. The heading carries it as its `data-tab`.
-    pub fn overview_slug(&self) -> &'static str {
-        if self.overview {
-            self.pages[0].slug
-        } else {
-            ""
-        }
-    }
-    /// The pages listed under the heading: all of them, except an overview, which the heading already is.
-    pub fn subs(&self) -> &[&'static Page] {
-        if self.overview {
-            &self.pages[1..]
-        } else {
-            &self.pages
-        }
-    }
     /// Whether `slug` is one of this group's pages (its heading is then bold, rule 1).
     pub fn holds(&self, slug: &str) -> bool {
         self.pages.iter().any(|p| p.slug == slug)
     }
-}
-
-/// The pages of the Settings group that are sections (not its overview), in menu order: one row each on the
-/// Settings overview.
-pub fn settings_sections() -> Vec<&'static Page> {
-    PAGES.iter().filter(|p| p.group == Group::Settings && !is_overview(p)).collect()
 }
 
 /// The side menu, built once from `PAGES`: each Top or Reference page on its own, and each Audit or
@@ -215,10 +182,9 @@ pub fn menu() -> &'static [MenuGroup] {
                         _ => "settings",
                     },
                     nested,
-                    overview: is_overview(p),
                     pages: vec![p],
                 }),
-                _ => out.push(MenuGroup { label: p.label, icon: p.icon, nested, overview: false, pages: vec![p] }),
+                _ => out.push(MenuGroup { label: p.label, icon: p.icon, nested, pages: vec![p] }),
             }
         }
         out
@@ -309,7 +275,7 @@ mod tests {
             let header = &header[..header.find("</header>").unwrap()];
             assert_eq!(header.contains("data-help="), !topic.is_empty(), "{}: the title's help button", p.slug);
             assert_eq!(html.contains(r#"id="help-panel""#), !crate::reference::topics_for(p.slug).is_empty(), "{}: the help panel", p.slug);
-            if p.group == Group::Settings && p.slug != "settings" {
+            if p.group == Group::Settings {
                 assert!(!topic.is_empty(), "{}: a settings page has a help topic", p.slug);
             }
             let crumb = &html[html.find(r#"<nav class="crumb" aria-label="Breadcrumb">"#).expect("breadcrumb")..];
@@ -376,38 +342,16 @@ mod tests {
                     let heading = &nav[nav.find("sm-item sm-parent").unwrap()..];
                     let heading = &heading[..heading.find("</a>").unwrap()];
                     assert!(heading.contains(&format!(">{}</span>", p.group.label())), "{}: the heading is {}", p.slug, p.group.label());
-                    // Plan step 5.4: a group whose first page is its overview (Settings) links its heading to that page,
-                    // which is then the current item, and no sub-item lists it again. Other groups' headings are never current.
-                    assert_eq!(
-                        heading.contains(r#"aria-current="page""#),
-                        is_overview(p),
-                        "{}: the heading is current only on the overview",
-                        p.slug
-                    );
-                    if is_overview(p) {
-                        assert!(
-                            heading.contains(&format!(
-                                r#"href="/admin/{}/" data-tab="{}" data-tip="Settings" aria-current="page">"#,
-                                p.slug, p.slug
-                            )),
-                            "{}: the overview's heading is its link, current",
-                            p.slug
-                        );
-                        // Every nested page that is not an overview is a sub-item: the Audit pages and the Settings sections.
-                        let subs = PAGES.iter().filter(|q| matches!(q.group, Group::Audit | Group::Settings) && !is_overview(q)).count();
-                        assert_eq!(nav.matches("sm-item sm-sub").count(), subs, "{}: every page but the overview is a sub-item", p.slug);
-                        assert_eq!(
-                            nav.matches(&format!(r#"href="/admin/{}/" data-tab="{}" data-tip="Settings""#, p.slug, p.slug)).count(),
-                            1,
-                            "{}: listed once",
-                            p.slug
-                        );
-                        assert!(!nav.contains(&format!(r#"sm-sub" href="/admin/{}/""#, p.slug)), "{}: not a sub-item too", p.slug);
-                    }
+                    // A group's heading is a plain link to its first page: never current, and the first page is its own sub-item.
+                    assert!(!heading.contains("aria-current"), "{}: the heading is never current", p.slug);
+                    assert!(!heading.contains("data-tab"), "{}: the heading carries no data-tab", p.slug);
+                    let subs = PAGES.iter().filter(|q| matches!(q.group, Group::Audit | Group::Settings)).count();
+                    assert_eq!(nav.matches("sm-item sm-sub").count(), subs, "{}: every group page is a sub-item", p.slug);
                 }
                 _ => assert_eq!(parents, 0, "{}: no heading is bold", p.slug),
             }
             assert!(!html.contains(r#"class="top""#), "{}: the old top nav is gone", p.slug);
+            assert_eq!(html.matches(r#"id="save-dock""#).count(), 1, "{}: one dock for the floating save bars", p.slug);
             // The licence and source link come from the constants; the icon buttons have names and tooltips.
             assert!(html.contains(&format!(
                 r#"href="{}" rel="noreferrer">{}</a>"#,
@@ -578,7 +522,7 @@ mod tests {
 
     #[derive(Template)]
     #[template(
-        source = r#"{% import "components.html" as c %}<!--skip_link-->{% call c::skip_link() %}{% endcall %}<!--announcer-->{% call c::announcer() %}{% endcall %}<!--toast_region-->{% call c::toast_region() %}{% endcall %}<!--banner_region-->{% call c::banner_region() %}{% endcall %}<!--help-->{% call c::help("settings/network#certificate") %}{% endcall %}<!--section_title-->{% call c::section_title("n-cert-title", "Certificate", "settings/network#certificate") %}{% endcall %}{% call c::section_title("plain-title", "Plain", "") %}{% endcall %}<!--page_header-->{% call c::page_header("Clients", "Phones and computers.", "settings/people", "") %}<a class="btn btn-primary">Pair</a>{% endcall %}<!--button-->{% call c::button("Save", "submit", "", "") %}{% endcall %}{% call c::button("Edit", "secondary", "s", "copy") %}{% endcall %}<!--icon_button-->{% call c::icon_button("close", "Close it") %}{% endcall %}<!--icon-->{% call c::icon("bell") %}{% endcall %}<!--tabs-->{% call c::tabs(&crate::pages::tab_pages("audit/calls"), "audit/calls", "Audit") %}{% endcall %}<!--menu-->{% call c::menu("bell-menu") %}<button class="menu-item" role="menuitem">One</button>{% endcall %}<!--row_menu-->{% call c::row_menu(["edit:Edit", "!delete:Delete"]) %}{% endcall %}<!--field-->{% call c::field("Host name", "host", "Such as askbar.example.com.", "text", true) %}{% endcall %}{% call c::field("Pick", "pick", "", "slot", false) %}<select id="pick"></select>{% endcall %}{% call c::field("Note", "note", "", "textarea", false) %}{% endcall %}<!--new_secret-->{% call c::new_secret("New password", "pw", 10) %}{% endcall %}<!--save_bar-->{% call c::save_bar("general-form") %}{% endcall %}<!--notice-->{% call c::notice("error", "No route.", "Check the address.") %}{% endcall %}<!--status-->{% call c::status("ok") %}Running{% endcall %}{% call c::status("paused") %}Paused{% endcall %}<!--side_panel-->{% call c::side_panel("add-panel", "Add provider", "settings/providers#providers") %}<p>Body</p>{% endcall %}<!--dialog_box-->{% call c::dialog_box("revoke-box", "Revoke?") %}<p>Sure?</p>{% endcall %}<!--row_confirm-->{% call c::row_confirm("restart-confirm", "Restart the server?", "Restart") %}{% endcall %}<!--secret-->{% call c::secret("pair-key") %}{% endcall %}<!--table_head-->{% call c::table_head(["Name", ">Cost", ""]) %}{% endcall %}<!--empty-->{% call c::empty("Nothing yet.", "Add one") %}{% endcall %}<!--skeleton-->{% call c::skeleton(3) %}{% endcall %}<!--na-->{% call c::na("the server cannot do it") %}<span class="btn btn-secondary">Export</span>{% endcall %}<!--na_tag-->{% call c::na_tag("later") %}{% endcall %}"#,
+        source = r#"{% import "components.html" as c %}<!--skip_link-->{% call c::skip_link() %}{% endcall %}<!--announcer-->{% call c::announcer() %}{% endcall %}<!--toast_region-->{% call c::toast_region() %}{% endcall %}<!--banner_region-->{% call c::banner_region() %}{% endcall %}<!--help-->{% call c::help("settings/network#certificate") %}{% endcall %}<!--section_title-->{% call c::section_title("n-cert-title", "Certificate", "settings/network#certificate") %}{% endcall %}{% call c::section_title("plain-title", "Plain", "") %}{% endcall %}<!--page_header-->{% call c::page_header("Clients", "Phones and computers.", "settings/people", "") %}<a class="btn btn-primary">Pair</a>{% endcall %}<!--button-->{% call c::button("Save", "submit", "", "") %}{% endcall %}{% call c::button("Edit", "secondary", "s", "copy") %}{% endcall %}<!--icon_button-->{% call c::icon_button("close", "Close it") %}{% endcall %}<!--icon-->{% call c::icon("bell") %}{% endcall %}<!--tabs-->{% call c::tabs(&crate::pages::tab_pages("audit/calls"), "audit/calls", "Audit") %}{% endcall %}<!--menu-->{% call c::menu("bell-menu") %}<button class="menu-item" role="menuitem">One</button>{% endcall %}<!--row_menu-->{% call c::row_menu(["edit:Edit", "!delete:Delete"]) %}{% endcall %}<!--field-->{% call c::field("Host name", "host", "Such as askbar.example.com.", "text", true) %}{% endcall %}{% call c::field("Pick", "pick", "", "slot", false) %}<select id="pick"></select>{% endcall %}{% call c::field("Note", "note", "", "textarea", false) %}{% endcall %}<!--new_secret-->{% call c::new_secret("New password", "pw", 10) %}{% endcall %}<!--save_bar-->{% call c::save_bar("general-form") %}{% endcall %}{% call c::save_bar("net-form", "Save and apply") %}{% endcall %}<!--notice-->{% call c::notice("error", "No route.", "Check the address.") %}{% endcall %}<!--status-->{% call c::status("ok") %}Running{% endcall %}{% call c::status("paused") %}Paused{% endcall %}<!--side_panel-->{% call c::side_panel("add-panel", "Add provider", "settings/providers#providers") %}<p>Body</p>{% endcall %}<!--dialog_box-->{% call c::dialog_box("revoke-box", "Revoke?") %}<p>Sure?</p>{% endcall %}<!--row_confirm-->{% call c::row_confirm("restart-confirm", "Restart the server?", "Restart") %}{% endcall %}<!--secret-->{% call c::secret("pair-key") %}{% endcall %}<!--table_head-->{% call c::table_head(["Name", ">Cost", ""]) %}{% endcall %}<!--empty-->{% call c::empty("Nothing yet.", "Add one") %}{% endcall %}<!--skeleton-->{% call c::skeleton(3) %}{% endcall %}<!--na-->{% call c::na("the server cannot do it") %}<span class="btn btn-secondary">Export</span>{% endcall %}<!--na_tag-->{% call c::na_tag("later") %}{% endcall %}"#,
         ext = "html"
     )]
     struct AllComponents;
@@ -681,6 +625,7 @@ mod tests {
         let bar = part(&html, "save_bar");
         assert!(bar.contains(r#"id="general-form-save-bar""#) && bar.contains("hidden") && bar.contains("Discard"));
         assert!(bar.contains(r#"type="submit" class="btn btn-primary" form="general-form""#) && bar.contains(">Save</button>"));
+        assert!(bar.contains(r#"form="net-form" data-save-submit>Save and apply</button>"#), "the Save button's label is a parameter");
 
         let notice = part(&html, "notice");
         assert!(notice.contains(r#"notice-error" role="alert""#) && notice.contains("No route.") && notice.contains("Check the address."));
@@ -759,20 +704,16 @@ mod tests {
         let nav = &html[html.find(r#"<nav id="nav""#).expect("nav")..];
         let nav = &nav[..nav.find("</nav>").expect("nav end")];
         for g in menu().iter().filter(|g| g.nested) {
-            // A group heading links to its first page; the Settings heading is its overview, so it links there and is marked
-            // with the overview's data-tab. The other headings have no overview.
-            let tab = if g.overview { format!(r#" data-tab="{}""#, g.pages[0].slug) } else { String::new() };
-            assert_eq!(g.overview, g.label == "Settings", "{}: only Settings has an overview", g.label);
             assert!(
-                nav.contains(&format!(r#"href="{}"{tab} data-tip="{}""#, g.href(), g.label)),
+                nav.contains(&format!(r#"href="{}" data-tip="{}""#, g.href(), g.label)),
                 "{}: the heading links to {}",
                 g.label,
                 g.href()
             );
             assert_eq!(g.href(), path(g.pages[0]), "{}: a heading links to its first page", g.label);
-            // The sub-items follow the heading in menu order; an overview is not repeated among them.
+            // The sub-items follow the heading in menu order.
             let mut at = nav.find(&format!(r#"data-tip="{}""#, g.label)).expect("heading");
-            for sub in g.subs() {
+            for sub in &g.pages {
                 // The label is escaped in the page ("People & clients" is `People &#38; clients`).
                 let link = format!(r#"href="{}" data-tab="{}" data-tip="{}""#, path(sub), sub.slug, sub.label.replace('&', "&#38;"));
                 let found =
@@ -781,9 +722,10 @@ mod tests {
             }
         }
         let settings = menu().iter().find(|g| g.label == "Settings").expect("the Settings group");
-        assert_eq!((settings.overview_slug(), settings.href().as_str()), ("settings", "/admin/settings/"));
+        assert_eq!(settings.href(), "/admin/general/", "Settings opens General");
+        assert_eq!(settings.pages[0].slug, "general", "General is the first Settings page");
         let audit = menu().iter().find(|g| g.label == "Audit").expect("the Audit group");
-        assert_eq!((audit.overview_slug(), audit.href().as_str()), ("", "/admin/audit/calls/"));
+        assert_eq!(audit.href(), "/admin/audit/calls/");
     }
 
     /// Plan step 6.2: every Audit page shows the same four tabs as the menu's Audit links, in the same order, and

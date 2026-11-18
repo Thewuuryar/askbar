@@ -1536,7 +1536,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.fill('#s-prompt', 'You are a pirate.');
     await page.selectOption('#s-theme', 'dark');
     await page.fill('#s-width', '900');
-    await page.click('#settings-form button[type=submit]');
+    await page.click('#settings-form-save-bar [data-save-submit]');
     await page.waitForSelector('#toasts .toast');
     assert.match(await page.locator('#toasts .toast').last().innerText(), /Settings saved/);
     await openSettings();
@@ -1552,7 +1552,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     assert.match(await page.inputValue('#s-notice-text'), /sealed copy of each goes to the audit record/);
     await page.fill('#s-notice-text', 'We keep <b>everything</b> for the number of days below.');
     await page.uncheck('#s-warning-on');
-    await page.click('#settings-form button[type=submit]');
+    await page.click('#settings-form-save-bar [data-save-submit]');
     await page.waitForSelector('#toasts .toast');
     assert.match(await page.locator('#toasts .toast').last().innerText(), /Settings saved/);
     await openSettings();
@@ -1563,7 +1563,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     // Put it back: the default words, and both on.
     await page.fill('#s-notice-text', '');
     await page.check('#s-warning-on');
-    await page.click('#settings-form button[type=submit]');
+    await page.click('#settings-form-save-bar [data-save-submit]');
     await page.waitForSelector('#toasts .toast');
     await openSettings();
     await page.waitForFunction(() => /sealed copy of each goes to the audit record/.test(document.getElementById('s-notice-text').value));
@@ -1572,7 +1572,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.fill('#s-top', '0.5');
     await page.fill('#s-width', '100');
     await page.evaluate(() => document.getElementById('settings-form').noValidate = true);
-    await page.click('#settings-form button[type=submit]');
+    await page.click('#settings-form-save-bar [data-save-submit]');
     await page.waitForSelector('#settings-error:not([hidden])');
     assert.match(await page.innerText('#settings-error'), /Width must be/);
   });
@@ -1585,7 +1585,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.fill('#s-width', '900'); // the previous step left an invalid width in the form
     await page.fill('#s-gen-timeout', '120');
     assert.equal(await page.innerText('#s-gen-timeout-min'), '120 seconds = 2 minutes');
-    await page.click('#settings-form button[type=submit]');
+    await page.click('#settings-form-save-bar [data-save-submit]');
     await page.waitForSelector('#toasts .toast');
     assert.match(await page.locator('#toasts .toast').last().innerText(), /Settings saved/);
     await page.fill('#s-gen-timeout', '777'); // unsaved: only a reload from the server brings back 120
@@ -1597,7 +1597,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
 
     await page.fill('#s-gen-timeout', '29');
     await page.evaluate(() => document.getElementById('settings-form').noValidate = true);
-    await page.click('#settings-form button[type=submit]');
+    await page.click('#settings-form-save-bar [data-save-submit]');
     await page.waitForSelector('#settings-error:not([hidden])');
     assert.match(await page.innerText('#settings-error'), /between 30 and 3600/);
     await page.fill('#s-gen-timeout', '555'); // so the wait below can only be satisfied by a reload
@@ -1611,7 +1611,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     assert.equal(await page.getAttribute('#s-history-turns', 'min'), '0');
     assert.equal(await page.getAttribute('#s-history-turns', 'max'), '1000');
     await page.fill('#s-history-turns', '4');
-    await page.click('#settings-form button[type=submit]');
+    await page.click('#settings-form-save-bar [data-save-submit]');
     await page.waitForSelector('#toasts .toast');
     await page.fill('#s-history-turns', '9'); // unsaved: only a reload from the server brings back 4
     await openSettings();
@@ -1621,7 +1621,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await openSettings();
     assert.equal(await page.isChecked('#s-newest-first'), false);
     await page.check('#s-newest-first');
-    await page.click('#settings-form button[type=submit]');
+    await page.click('#settings-form-save-bar [data-save-submit]');
     await page.waitForSelector('#toasts .toast');
     await page.uncheck('#s-newest-first'); // unsaved: only a reload from the server brings it back
     await openSettings();
@@ -1672,6 +1672,93 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.fill('#s-prompt', prompt);
     await page.click('#settings-form-save-bar button[type=submit]');
     await page.waitForSelector('#toasts .toast');
+  });
+  // Round 2: the save bar floats. It is in the page's fixed dock at the bottom of the window, comes up by itself on the first
+  // change, stays while the page scrolls, and the page keeps room under its last content so that content can scroll above it.
+  const barGeometry = (id) => page.evaluate((barId) => {
+    const bar = document.getElementById(barId);
+    const dock = bar.parentElement;
+    // The last block of the page's content: the last visible child of the last visible section.
+    const blocks = [...document.querySelectorAll('main > section[data-tab] *')].filter((e) => e.getBoundingClientRect().height > 0 && getComputedStyle(e).visibility !== 'hidden');
+    const bottoms = blocks.map((e) => e.getBoundingClientRect().bottom + scrollY);
+    const r = bar.getBoundingClientRect();
+    return {
+      hidden: bar.hidden || r.height === 0, dockPosition: getComputedStyle(dock).position, dockId: dock.id, top: r.top, bottom: r.bottom, left: r.left, right: r.right,
+      innerHeight, innerWidth, scrollY, maxScroll: document.documentElement.scrollHeight - innerHeight, lastContentBottom: Math.max(...bottoms) - scrollY,
+      menuRight: document.getElementById('side-menu').getBoundingClientRect().right, menuShown: getComputedStyle(document.getElementById('side-menu')).display !== 'none',
+    };
+  }, id);
+  await step('general: the floating save bar is hidden on load, comes up on a change, stays at the bottom while the page scrolls, and never covers the last content', async () => {
+    await openSettings();
+    await page.waitForFunction(() => document.getElementById('s-gen-timeout').value !== '');
+    const id = 'settings-form-save-bar';
+    assert.equal((await barGeometry(id)).hidden, true, 'hidden on load');
+    assert.equal(await page.evaluate(() => document.documentElement.classList.contains('save-bar-on')), false, 'no bar room reserved while it is hidden');
+    const timeout = await page.inputValue('#s-gen-timeout');
+    await page.fill('#s-gen-timeout', timeout === '130' ? '140' : '130');
+    await page.waitForSelector('#' + id + ':not([hidden])');
+    let g = await barGeometry(id);
+    assert.equal(g.dockId, 'save-dock', 'the bar lives in the floating dock');
+    assert.equal(g.dockPosition, 'fixed', 'the dock is fixed to the window');
+    assert.ok(Math.abs(g.innerHeight - g.bottom) <= 24, 'the bar sits at the bottom of the window: bottom ' + g.bottom + ' of ' + g.innerHeight);
+    if (!isPhone) {
+      assert.ok(g.left >= g.menuRight, 'the bar does not cover the side menu');
+      assert.ok(Math.abs((g.left + g.right) / 2 - (g.menuRight + g.innerWidth) / 2) <= 40, 'the bar is centred over the content column');
+    } else {
+      assert.ok(g.left <= 1 && g.right >= g.innerWidth - 1, 'on a phone the bar is the full width');
+    }
+    const top0 = g.top;
+    assert.ok(g.maxScroll > 200, 'the page scrolls');
+    await page.evaluate(() => scrollTo(0, Math.round((document.documentElement.scrollHeight - innerHeight) / 2)));
+    g = await barGeometry(id);
+    assert.ok(g.scrollY > 0 && Math.abs(g.top - top0) <= 1, 'the bar stays put while the page scrolls');
+    await page.evaluate(() => scrollTo(0, document.documentElement.scrollHeight));
+    g = await barGeometry(id);
+    assert.ok(Math.abs(g.scrollY - g.maxScroll) <= 1, 'scrolled to the very bottom');
+    assert.ok(g.lastContentBottom <= g.top, 'the last content block ends above the bar: ' + g.lastContentBottom + ' vs ' + g.top);
+    // The buttons: 44 px on a phone, and the bar is after the form's fields in the Tab order.
+    const sizes = await page.$$eval('#' + id + ' button', (bs) => bs.map((b) => b.getBoundingClientRect().height));
+    assert.ok(sizes.every((h) => h >= (isPhone ? 44 : 24)), 'the buttons are large enough: ' + sizes.join(','));
+    assert.equal(await page.evaluate(() => { const f = document.getElementById('s-newest-first'); const b = document.querySelector('#settings-form-save-bar [data-save-discard]'); return !!(f.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING); }), true, 'the bar follows the fields in the Tab order');
+    // Esc does not discard; the announcement is made in the polite region.
+    await page.keyboard.press('Escape');
+    assert.equal(await page.inputValue('#s-gen-timeout'), timeout === '130' ? '140' : '130', 'Esc does not discard');
+    await page.waitForFunction(() => /unsaved change/.test(document.getElementById('announcer').textContent));
+    assert.equal(await page.getAttribute('#announcer', 'aria-live'), 'polite');
+    // Discard restores the value and hides the bar and its room.
+    await page.click('#' + id + ' [data-save-discard]');
+    assert.equal(await page.inputValue('#s-gen-timeout'), timeout);
+    assert.equal((await barGeometry(id)).hidden, true, 'Discard hides it');
+    assert.equal(await page.evaluate(() => document.documentElement.classList.contains('save-bar-on')), false);
+    // Save saves and hides it (the toast is the confirmation).
+    await page.fill('#s-gen-timeout', timeout === '130' ? '140' : '130');
+    await page.click('#' + id + ' [data-save-submit]');
+    await page.waitForSelector('#toasts .toast');
+    assert.equal((await barGeometry(id)).hidden, true, 'Save hides it');
+    await page.fill('#s-gen-timeout', timeout);
+    await page.click('#' + id + ' [data-save-submit]');
+    await page.waitForFunction(() => document.getElementById('settings-form-save-bar').hidden);
+  });
+  await step('network: the floating bar carries Save and apply; the page keeps its own Apply the saved settings again button', async () => {
+    await openPage('network');
+    await page.waitForFunction(() => document.getElementById('n-host').value !== '' || document.getElementById('n-https-word').textContent !== '');
+    const id = 'network-form-save-bar';
+    assert.equal((await barGeometry(id)).hidden, true, 'hidden on load');
+    assert.equal(await page.locator('#network-form #n-apply').count(), 1, 'Apply the saved settings again stays in the page');
+    assert.equal(await page.locator('#network-form-save-bar #n-apply').count(), 0, 'and is not in the bar');
+    const host = await page.inputValue('#n-host');
+    await page.fill('#n-host', host + 'x');
+    await page.waitForSelector('#' + id + ':not([hidden])');
+    assert.equal((await page.innerText('#' + id + ' [data-save-submit]')).trim(), 'Save and apply');
+    let g = await barGeometry(id);
+    assert.equal(g.dockPosition, 'fixed');
+    assert.ok(Math.abs(g.innerHeight - g.bottom) <= 24, 'at the bottom of the window');
+    await page.evaluate(() => scrollTo(0, document.documentElement.scrollHeight));
+    g = await barGeometry(id);
+    assert.ok(g.lastContentBottom <= g.top, 'the last content block ends above the bar: ' + g.lastContentBottom + ' vs ' + g.top);
+    await page.click('#' + id + ' [data-save-discard]');
+    assert.equal(await page.inputValue('#n-host'), host);
+    assert.equal((await barGeometry(id)).hidden, true, 'Discard hides it');
   });
   await step('kill switch: off by default; it asks first and Cancel changes nothing; on and off save alone and the status bar follows', async () => {
     const K = await page.evaluate(() => window.ui.ready);
@@ -1753,7 +1840,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.fill('#a-server', 'http://127.0.0.1:' + ntfyPort);
     await page.fill('#a-topic', TOPIC);
     await page.fill('#a-token', TOKEN);
-    await page.click('#alerts-form button[type=submit]');
+    await page.click('#alerts-form-save-bar [data-save-submit]');
     await page.waitForFunction(() => document.getElementById('a-held-topic').textContent === 'yes');
     assert.equal(await page.innerText('#a-held-token'), 'yes');
     assert.equal(await page.inputValue('#a-topic'), '');
@@ -1795,7 +1882,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     // ntfy is set up again first, so a test goes through both channels.
     await page.fill('#a-server', 'http://127.0.0.1:' + ntfyPort);
     await page.fill('#a-topic', 'e2e-topic-q7x9k2');
-    await page.click('#alerts-form button[type=submit]');
+    await page.click('#alerts-form-save-bar [data-save-submit]');
     await page.waitForFunction(() => document.getElementById('a-held-topic').textContent === 'yes');
     // A password without TLS is refused, and the sentence names no value.
     await page.fill('#m-host', '127.0.0.1');
@@ -1805,7 +1892,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.fill('#m-password', PASSWORD);
     await page.fill('#m-from', 'askbar@example.com');
     await page.fill('#m-to', 'owner@example.com');
-    await page.click('#email-form button[type=submit]');
+    await page.click('#email-form-save-bar [data-save-submit]');
     await page.waitForFunction(() => !document.getElementById('m-error').hidden);
     const refusal = await page.innerText('#m-error');
     assert.ok(!refusal.includes(PASSWORD) && !refusal.includes(USER), 'the refusal repeats a value');
@@ -1813,7 +1900,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     // Without the login it is saved; the fields empty and the page shows a yes or a no.
     await page.fill('#m-user', '');
     await page.fill('#m-password', '');
-    await page.click('#email-form button[type=submit]');
+    await page.click('#email-form-save-bar [data-save-submit]');
     await page.waitForFunction(() => document.getElementById('m-held-host').textContent === 'yes');
     assert.equal(await page.innerText('#m-held-login'), 'no');
     assert.equal(await page.inputValue('#m-host'), '');
@@ -1834,7 +1921,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     // Saving ntfy again does not touch email.
     await page.fill('#a-server', 'http://127.0.0.1:' + ntfyPort);
     await page.fill('#a-topic', 'e2e-topic-q7x9k2');
-    await page.click('#alerts-form button[type=submit]');
+    await page.click('#alerts-form-save-bar [data-save-submit]');
     await page.waitForFunction(() => document.getElementById('a-held-topic').textContent === 'yes');
     assert.equal(await page.innerText('#m-held-host'), 'yes');
     // Nothing on the page holds the password or the user name.
@@ -1900,12 +1987,12 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.fill('#n-token', CF);
     await page.fill('#n-cidr', '192.168.1.0/24');
     assert.equal(await page.isChecked('#n-allow'), false, 'the allowlist starts off');
-    await page.click('#network-form button[type=submit]');
+    await page.click('#network-form-save-bar [data-save-submit]');
     await page.waitForSelector('#network-error:not([hidden])');
     assert.match(await page.innerText('#network-error'), /plain DNS name/);
     await page.fill('#n-host', 'askbar.orraitu.com');
     await page.check('#n-staging');
-    await page.click('#network-form button[type=submit]');
+    await page.click('#network-form-save-bar [data-save-submit]');
     await page.waitForSelector('#toasts .toast');
     assert.match(await page.locator('#toasts .toast').last().innerText(), /Network settings saved/);
     assert.match(await page.innerText('#n-info'), /admin site is at https:\/\/askbar\.orraitu\.com\/admin/);
@@ -1922,7 +2009,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     assert.equal((await page.content()).includes(CF), false);
     // Back to plain HTTP so the rest of the run keeps working the same way.
     await page.uncheck('#n-tls');
-    await page.click('#network-form button[type=submit]');
+    await page.click('#network-form-save-bar [data-save-submit]');
     await page.waitForFunction(() => /point at http:\/\/localhost/.test(document.getElementById('n-info').textContent));
   });
   await step('network: HTTP-01 is chosen beside DNS, shows its warning, needs no token and refuses a private name (D19)', async () => {
@@ -1938,12 +2025,12 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     // A name that only resolves inside the network is refused, with the way out.
     await page.check('#n-tls');
     await page.fill('#n-host', 'nas.local');
-    await page.click('#network-form button[type=submit]');
+    await page.click('#network-form-save-bar [data-save-submit]');
     await page.waitForSelector('#network-error:not([hidden])');
     assert.match(await page.innerText('#network-error'), /looks private.*DNS challenge/);
     // A public name is saved with no token entered, and the choice survives a reload.
     await page.fill('#n-host', 'askbar.orraitu.com');
-    await page.click('#network-form button[type=submit]');
+    await page.click('#network-form-save-bar [data-save-submit]');
     await page.waitForSelector('#toasts .toast');
     assert.match(await page.innerText('#n-info'), /admin site is at https:\/\/askbar\.orraitu\.com\/admin/);
     await page.reload();
@@ -1957,7 +2044,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     assert.match(await page.innerText('#n-token-hint'), /unchanged/, 'the stored token is said to be held, never shown');
     // Leave things as the next steps expect: plain HTTP, the DNS challenge.
     await page.uncheck('#n-tls');
-    await page.click('#network-form button[type=submit]');
+    await page.click('#network-form-save-bar [data-save-submit]');
     await page.waitForFunction(() => /point at http:\/\/localhost/.test(document.getElementById('n-info').textContent));
     assert.equal(await page.$eval('input[name=n-challenge]:checked', (i) => i.value), 'dns');
   });
@@ -2029,12 +2116,12 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     // The limits: a value out of range is refused with a sentence; a good one is saved and read back.
     await page.evaluate(() => { document.getElementById('schedule-form').noValidate = true; });
     await page.fill('#sched-keep-files', '0');
-    await page.click('#schedule-form button[type=submit]');
+    await page.click('#schedule-form-save-bar [data-save-submit]');
     await page.waitForSelector('#sched-limits-error:not([hidden])');
     assert.match(await page.innerText('#sched-limits-error'), /between 1 and 365/);
     await page.fill('#sched-keep-files', '3');
     await page.fill('#sched-keep-days', '14');
-    await page.click('#schedule-form button[type=submit]');
+    await page.click('#schedule-form-save-bar [data-save-submit]');
     await page.waitForFunction(() => [...document.querySelectorAll('#toasts .toast')].some((t) => t.textContent === 'Saved.'));
     await openPage('providers');
     await openPage('backup');
@@ -3438,11 +3525,11 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     // Retention: the server's message for a value that is too small.
     await page.evaluate(() => document.getElementById('settings-form').noValidate = true);
     await page.fill('#s-retention', '5');
-    await page.click('#settings-form button[type=submit]');
+    await page.click('#settings-form-save-bar [data-save-submit]');
     await page.waitForSelector('#settings-error:not([hidden])');
     assert.match(await page.innerText('#settings-error'), /at least 7 days/);
     await page.fill('#s-retention', '45');
-    await page.click('#settings-form button[type=submit]');
+    await page.click('#settings-form-save-bar [data-save-submit]');
     await page.waitForSelector('#toasts .toast');
     await page.fill('#s-retention', '999'); // unsaved, so the reload shows what was stored
     await openSettings();
@@ -3478,7 +3565,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     // Put the retention back so later steps see an ordinary server.
     await openSettings();
     await page.fill('#s-retention', '30');
-    await page.click('#settings-form button[type=submit]');
+    await page.click('#settings-form-save-bar [data-save-submit]');
     await page.waitForSelector('#toasts .toast');
   });
   await step('security: changing the password needs the current one', async () => {
@@ -3762,7 +3849,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
   await step('pages: each section has its own URL, the nav marks it, Back works and the frame is the same', async () => {
     // Plan step 1.16: a page and a URL for every admin section, from one template.
     const slugs = await page.$$eval('#nav a[data-tab]', (as) => as.map((a) => a.dataset.tab));
-    assert.deepEqual(slugs, ['home', 'alerts', 'audit/calls', 'audit/admin', 'audit/sealed', 'audit/routing', 'settings', 'providers', 'people', 'services', 'network', 'security', 'backup', 'notifications', 'general', 'reference']);
+    assert.deepEqual(slugs, ['home', 'alerts', 'audit/calls', 'audit/admin', 'audit/sealed', 'audit/routing', 'general', 'providers', 'people', 'services', 'network', 'security', 'backup', 'notifications', 'reference']);
     for (const slug of slugs) {
       await page.goto(`http://127.0.0.1:${adminPort}/admin/${slug}/`);
       await page.waitForSelector('#app:not([hidden])');
@@ -3961,7 +4048,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       assert.deepEqual(info.templates.slice().sort(), K.HELP_TOPICS.filter((t) => t === 'settings/' + slug || t.startsWith('settings/' + slug + '#')).sort(), slug + ': the page carries exactly its topics');
     }
     // A page with no topic has no ? button and no help panel; it still has its one page header.
-    for (const slug of ['home', 'alerts', 'settings']) {
+    for (const slug of ['home', 'alerts']) {
       await page.goto(base + slug + '/');
       await page.waitForSelector('#app:not([hidden])');
       assert.equal(await page.locator('section[data-tab] .page-header').count(), 1, slug);
@@ -4057,79 +4144,24 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.goto(base);
     await page.waitForSelector('#app:not([hidden])');
   });
-  // Plan step 5.4: the Settings overview. One row per section, each a link with one line of state from its own read.
-  const OVERVIEW_SHAPES = {
-    providers: /^\d+ providers?$/,
-    people: /^\d+ (person|people), \d+ (client|clients)$/,
-    services: /^(All \d+ services running|\d+ of \d+ services not running)$/,
-    network: /^(No host name|\S.*)$/,
-    security: /^(API key: \S.*|No API key)$/,
-    backup: /^(Never|Last backup .+)$/,
-    notifications: /^ntfy (on|off), email (on|off)$/,
-    general: /^Kill switch (on|off)$/,
-  };
-  const overviewFilled = (slug) => page.waitForFunction((id) => {
-    const t = document.getElementById(id).textContent.trim();
-    return t !== '' && t !== 'Loading…';
-  }, 'ov-' + slug);
-  await step('settings overview: eight section rows in menu order, each a link with its state line filled', async () => {
-    await openPage('settings');
-    const rows = await page.$$eval('#settings-overview a.ov-row', (as) => as.map((a) => [a.getAttribute('href'), a.querySelector('.ov-name').textContent.trim()]));
-    assert.deepEqual(rows, [
-      ['/admin/providers/', 'Providers'], ['/admin/people/', 'People & clients'], ['/admin/services/', 'Services'], ['/admin/network/', 'Network'],
-      ['/admin/security/', 'Security'], ['/admin/backup/', 'Backup'], ['/admin/notifications/', 'Notifications'], ['/admin/general/', 'General'],
-    ]);
-    for (const slug of Object.keys(OVERVIEW_SHAPES)) {
-      await overviewFilled(slug);
-      const text = (await page.textContent('#ov-' + slug)).trim();
-      assert.match(text, OVERVIEW_SHAPES[slug], slug + ' shows its state: ' + text);
-    }
-    const sizes = await page.$$eval('#settings-overview a.ov-row', (as) => as.map((a) => a.getBoundingClientRect().height));
-    assert.ok(sizes.every((h) => h >= (isPhone ? 44 : 24)), 'every row is a large target: ' + sizes.join(','));
-    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), true, 'no sideways scroll');
-    for (const [href] of rows) {
-      await page.goto(base + 'settings/');
-      await page.waitForSelector('#app:not([hidden])');
-      await page.click(`#settings-overview a[href="${href}"]`);
-      await page.waitForURL('**' + href + '**');
-      await page.waitForSelector('#app:not([hidden])');
-      assert.equal(await page.getAttribute(`#nav a[data-tab="${href.split('/')[2]}"]`, 'aria-current'), 'page', href + ' opens its page');
-    }
-  });
-  await step('settings overview: a failed read shows Unavailable on its row only, and the row fills again when the read works', async () => {
-    await page.goto(base + 'settings/');
-    await page.waitForSelector('#app:not([hidden])');
-    const seen = errors.length;
-    await page.route('**/api/admin/v1/network', (route) => route.fulfill({ status: 500, contentType: 'application/json', body: '{"error":"internal","detail":"faked by the test"}' }));
-    try {
-      await page.reload();
-      await page.waitForSelector('#app:not([hidden])');
-      await page.waitForFunction(() => document.getElementById('ov-network').textContent === 'Unavailable');
-      for (const slug of Object.keys(OVERVIEW_SHAPES).filter((s) => s !== 'network')) {
-        await overviewFilled(slug);
-        assert.match((await page.textContent('#ov-' + slug)).trim(), OVERVIEW_SHAPES[slug], slug + ' still fills');
-      }
-    } finally {
-      await page.unroute('**/api/admin/v1/network');
-    }
-    // The 500 is the fault this step made: its console line is not a page error.
-    for (let i = errors.length - 1; i >= seen; i--) if (/status of 500/.test(errors[i])) errors.splice(i, 1);
-    await page.reload();
-    await page.waitForSelector('#app:not([hidden])');
-    await page.waitForFunction(() => { const t = document.getElementById('ov-network').textContent.trim(); return t !== '' && t !== 'Loading…' && t !== 'Unavailable'; });
-    assert.match((await page.textContent('#ov-network')).trim(), OVERVIEW_SHAPES.network, 'the network row fills again');
-  });
-  await step('settings overview: the menu heading opens it and marks it current there; no sub-item repeats it', async () => {
+  // The Settings overview page was removed (owner's request, round 2): the Settings heading opens General, the group's first page.
+  await step('settings: the menu heading opens General, General is the first sub-item, and /admin/settings/ redirects there', async () => {
     await openPage('providers');
-    assert.equal(await page.locator('#nav .sm-subs a[data-tab="settings"]').count(), 0, 'the overview is not a sub-item');
-    assert.equal(await page.getAttribute('#nav a[data-tab="settings"]', 'aria-current'), null, 'the heading is not current on another Settings page');
-    assert.match(await page.getAttribute('#nav a[data-tab="settings"]', 'class'), /sm-parent/, 'the Settings heading is bold under Settings');
-    await openPage('settings');
-    assert.equal(await page.getAttribute('#nav a[data-tab="settings"]', 'aria-current'), 'page', 'the heading is current on the overview');
+    assert.equal(await page.getAttribute('#nav a[data-tab="general"]', 'aria-current'), null, 'General is not current on another page');
+    const heading = page.locator('#nav a.sm-parent');
+    assert.equal(await heading.count(), 1, 'the Settings heading is bold under Settings');
+    assert.equal(await heading.getAttribute('href'), '/admin/general/', 'the heading links to General');
+    assert.equal(await heading.getAttribute('aria-current'), null, 'the heading is never current');
+    const subs = await page.evaluate(() => [...document.querySelector('#nav a.sm-parent').nextElementSibling.querySelectorAll('a')].map((a) => a.dataset.tab));
+    assert.deepEqual(subs, ['general', 'providers', 'people', 'services', 'network', 'security', 'backup', 'notifications']);
+    await openMenu();
+    await Promise.all([page.waitForURL('**/admin/general/'), page.locator('#nav a.sm-parent').click()]);
+    await page.waitForSelector('#app:not([hidden])');
+    assert.equal(await page.getAttribute('#nav a[data-tab="general"]', 'aria-current'), 'page', 'General is current');
     assert.equal(await page.locator('#nav a[aria-current="page"]').count(), 1, 'one current item');
-    const subs = await page.evaluate(() => [...document.querySelector('#nav a[data-tab="settings"]').nextElementSibling.querySelectorAll('a')].map((a) => a.dataset.tab));
-    assert.deepEqual(subs, ['providers', 'people', 'services', 'network', 'security', 'backup', 'notifications', 'general']);
-    assert.equal(await page.locator('#settings-overview').count(), 1, 'the overview is on the page');
+    await page.goto(base + 'settings/?x=1');
+    await page.waitForURL('**/admin/general/?x=1');
+    await page.waitForSelector('#app:not([hidden])');
   });
 
   await step('side menu: every page once, the current page and its group marked, the health line, licence and source from the constants', async () => {

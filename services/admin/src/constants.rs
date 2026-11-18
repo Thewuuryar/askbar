@@ -91,14 +91,14 @@ pub const MAX_BACKUP_KEEP_DAYS: u32 = 3650;
 
 // Pages.
 /// Every admin page's slug (`/admin/<slug>/`), in menu order. `pages::PAGES` lists the same, which a test checks.
-pub const PAGE_SLUGS: [&str; 16] = [
+pub const PAGE_SLUGS: [&str; 15] = [
     "home",
     "alerts",
     "audit/calls",
     "audit/admin",
     "audit/sealed",
     "audit/routing",
-    "settings",
+    "general",
     "providers",
     "people",
     "services",
@@ -106,7 +106,6 @@ pub const PAGE_SLUGS: [&str; 16] = [
     "security",
     "backup",
     "notifications",
-    "general",
     "reference",
 ];
 /// The page `/admin` opens.
@@ -250,7 +249,7 @@ struct Constants {
     cpa_login_poll_secs: u32,
     home_stats_window_days: u32,
     home_stats_window_secs: i64,
-    page_slugs: [&'static str; 16],
+    page_slugs: [&'static str; 15],
     landing_page: &'static str,
     help_topics: &'static [&'static str],
 }

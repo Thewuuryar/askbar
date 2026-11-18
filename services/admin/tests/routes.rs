@@ -71,8 +71,8 @@ fn every_admin_page_has_a_route_and_a_nav_link() {
         assert!(table.iter().any(|r| r.method == "GET" && r.path == path), "no route for {path}");
     }
     // The redirects are not pages: /admin/ (to the landing page), /admin/audit/ (to Model calls, plan step 2.1) and
-    // /admin/restore/ (to Backup, plan step 5.3) and /admin/clients/ (to People & clients, plan step 5.6).
-    const REDIRECTS: [&str; 4] = ["/admin/", "/admin/audit/", "/admin/restore/", "/admin/clients/"];
+    // /admin/restore/ (to Backup, plan step 5.3) and /admin/clients/ (to People & clients, plan step 5.6) and /admin/settings/ (to General).
+    const REDIRECTS: [&str; 5] = ["/admin/", "/admin/audit/", "/admin/restore/", "/admin/clients/", "/admin/settings/"];
     let pages =
         table.iter().filter(|r| r.path.starts_with("/admin/") && r.path.ends_with('/') && !REDIRECTS.contains(&r.path.as_str())).count();
     // The reference's pages (plan step 7.2) are routes of their own; its index is the `reference` entry of PAGES.
@@ -98,6 +98,8 @@ async fn the_old_addresses_redirect_and_keep_their_query() {
         ("/admin/restore/?from=setup", "/admin/backup/?from=setup"),
         ("/admin/clients/", "/admin/people/"),
         ("/admin/clients/?panel=user-panel", "/admin/people/?panel=user-panel"),
+        ("/admin/settings/", "/admin/general/"),
+        ("/admin/settings/?from=setup", "/admin/general/?from=setup"),
     ] {
         let res = http.get(format!("{url}{from}")).send().await.unwrap();
         assert!(res.status().is_redirection(), "{from}: {}", res.status());

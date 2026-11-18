@@ -46,8 +46,8 @@
       <form id="schedule-form" class="sec-fields">
         {% call c::field("Keep at most this many backups", "sched-keep-files", "", "slot", false) %}<input id="sched-keep-files" name="sched-keep-files" type="number" inputmode="numeric" min="{{ crate::constants::MIN_BACKUP_KEEP_FILES }}" max="{{ crate::constants::MAX_BACKUP_KEEP_FILES }}" required aria-describedby="sched-keep-files-hint sched-keep-files-error"><p class="hint" id="sched-keep-files-hint">{{ crate::constants::MIN_BACKUP_KEEP_FILES }} to {{ crate::constants::MAX_BACKUP_KEEP_FILES }} backups</p>{% endcall %}
         {% call c::field("Delete backups older than this many days", "sched-keep-days", "", "slot", false) %}<input id="sched-keep-days" name="sched-keep-days" type="number" inputmode="numeric" min="{{ crate::constants::MIN_BACKUP_KEEP_DAYS }}" max="{{ crate::constants::MAX_BACKUP_KEEP_DAYS }}" required aria-describedby="sched-keep-days-hint sched-keep-days-error"><p class="hint" id="sched-keep-days-hint">{{ crate::constants::MIN_BACKUP_KEEP_DAYS }} to {{ crate::constants::MAX_BACKUP_KEEP_DAYS }} days</p>{% endcall %}
-        <div class="sec-actions"><button type="submit" class="btn btn-secondary">Save</button></div>
         {% call b::error_line("sched-limits-error") %}{% endcall %}
+        {% call c::save_bar("schedule-form") %}{% endcall %}
       </form>
     </section>
 

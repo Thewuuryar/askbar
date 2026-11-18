@@ -39,8 +39,8 @@
       new_secret(label, id, min)     (the plan's new_secret(label, min) plus the field id) div.new-secret with two stacked fields: #<id> and #<id>2 (type=password,
                                      autocomplete=new-password), and under the first p.hint[data-length-hint][data-min=min]
                                      "At least <min> characters". min comes from the page's constants.
-      save_bar(form)                 div.save-bar#<form>-save-bar[hidden]: span[data-save-text], button[data-save-discard] "Discard"
-                                     and button[type=submit][form=form][data-save-submit] "Save".
+      save_bar(form, label)          div.save-bar#<form>-save-bar[hidden]: span[data-save-text], button[data-save-discard] "Discard"
+                                     and button[type=submit][form=form][data-save-submit] (label, "Save").
       notice(kind, text, fix)        div.notice.notice-<kind> (error|warning|info) with an icon, a hidden kind word, p.notice-text
                                      and p.notice-fix when fix is not "". role=alert for error, role=status otherwise.
     Panels and boxes:
@@ -139,8 +139,9 @@
 {#- A new password or passphrase: the field, its length rule, then the repeat. min is the page's constant. -#}
 {% macro new_secret(label, id, min) %}<div class="new-secret"><div class="field"><label for="{{ id }}">{{ label }}</label><input type="password" id="{{ id }}" autocomplete="new-password" minlength="{{ min }}" aria-describedby="{{ id }}-hint"><p class="hint" id="{{ id }}-hint" data-length-hint data-min="{{ min }}">At least {{ min }} characters</p></div><div class="field"><label for="{{ id }}2">Repeat {{ label|lower }}</label><input type="password" id="{{ id }}2" autocomplete="new-password" minlength="{{ min }}"></div></div>{% endmacro %}
 
-{#- The bar under a form with unsaved changes. -#}
-{% macro save_bar(form) %}<div class="save-bar" id="{{ form }}-save-bar" role="region" aria-label="Unsaved changes" hidden><span class="save-bar-text" data-save-text></span><span class="spacer"></span><button type="button" class="btn btn-secondary" data-save-discard>Discard</button><button type="submit" class="btn btn-primary" form="{{ form }}" data-save-submit>Save</button></div>{% endmacro %}
+{#- The save bar of a form with tracked fields. It is hidden until a field changes; `ui.trackChanges` moves it into the
+    floating `#save-dock` (base.html), where it stays at the bottom of the window. `label` is the Save button's text. -#}
+{% macro save_bar(form, label="Save") %}<div class="save-bar" id="{{ form }}-save-bar" role="region" aria-label="Unsaved changes" hidden><span class="save-bar-text" data-save-text></span><span class="spacer"></span><button type="button" class="btn btn-secondary" data-save-discard>Discard</button><button type="submit" class="btn btn-primary" form="{{ form }}" data-save-submit>{{ label }}</button></div>{% endmacro %}
 
 {#- Notices and statuses. -#}
 {% macro notice(kind, text, fix) %}<div class="notice notice-{{ kind }}" role="{% if kind == "error" %}alert{% else %}status{% endif %}">{% if kind == "error" %}{% call icon("critical") %}{% endcall %}{% elif kind == "warning" %}{% call icon("warning") %}{% endcall %}{% else %}{% call icon("info") %}{% endcall %}{% endif %}<div class="notice-body"><p class="notice-text"><span class="visually-hidden">{% if kind == "error" %}Error{% elif kind == "warning" %}Warning{% else %}Note{% endif %}: </span>{{ text }}</p>{% if fix != "" %}<p class="notice-fix">{{ fix }}</p>{% endif %}</div></div>{% endmacro %}

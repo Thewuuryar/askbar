@@ -63,7 +63,6 @@
   const page = document.body.dataset.page;
   const tabs = [
     { id: 'home', load: loadHome },
-    { id: 'settings', load: loadOverview },
     { id: 'providers', load: loadProviders },
     { id: 'services', load: loadServices },
     { id: 'people', load: loadClients },
@@ -771,7 +770,7 @@
     box.querySelector('.status-word').textContent = text;
     $('menu-health').dataset.tip = text;
   }
-  // The health line's state and words, from the service list. The Services row of the Settings overview shows the same words.
+  // The health line's state and words, from the service list.
   function healthOf(services) {
     const down = services.filter((s) => s.state !== 'running').length;
     return { state: down ? 'warning' : 'ok', text: down ? down + ' of ' + services.length + ' services not running' : 'All ' + services.length + ' services running' };
@@ -785,44 +784,6 @@
     // Signed out, or the admin itself is away: say it is not checked.
     onError: () => showHealth('pending', 'Services not checked'),
   });
-  // ---- the Settings overview (plan step 5.4): one row per section, in menu order (the rows come from PAGES). Each row has
-  // its own live read of the endpoint named here, so a failed read shows "Unavailable" on that row only. Lines are text.
-  const plural = (n, one, many) => n + ' ' + (n === 1 ? one : many);
-  const yesNoWord = (v) => (v ? 'on' : 'off');
-  const OVERVIEW = {
-    providers: { read: () => api('GET', '/api/admin/v1/providers', undefined, { etag: true }), line: (list) => plural(list.length, 'provider', 'providers') },
-    people: {
-      read: () => Promise.all([api('GET', '/api/admin/v1/users', undefined, { etag: true }), api('GET', '/api/admin/v1/clients', undefined, { etag: true })]),
-      line: ([users, clients]) => plural(users.length, 'person', 'people') + ', ' + plural(clients.length, 'client', 'clients'),
-    },
-    services: { read: () => api('GET', '/api/admin/v1/services', undefined, { etag: true }), line: ({ services }) => healthOf(services).text },
-    network: { read: () => api('GET', '/api/admin/v1/network'), line: (n) => n.hostname || 'No host name' },
-    security: { read: () => api('GET', '/api/admin/v1/keys'), line: (list) => (list.length ? 'API key: ' + list[0].name : 'No API key') },
-    backup: {
-      read: () => api('GET', '/api/admin/v1/backup/schedule'),
-      line: (v) => (v.last_success_at ? ['Last backup ', ui.time(v.last_success_at)] : 'Never'),
-    },
-    notifications: {
-      read: () => api('GET', '/api/admin/v1/alerts'),
-      line: (a) => 'ntfy ' + yesNoWord(a.ntfy.server && a.ntfy.topic) + ', email ' + yesNoWord(a.email.host && a.email.from && a.email.to),
-    },
-    general: { read: () => api('GET', '/api/admin/v1/settings'), line: (s) => 'Kill switch ' + yesNoWord(s.kill_switch) },
-  };
-  let overviewLives = null;
-  function loadOverview() {
-    if (!overviewLives) {
-      overviewLives = Object.entries(OVERVIEW).map(([slug, row]) => {
-        const box = $('ov-' + slug);
-        return ui.live(row.read, {
-          when: appShownNow,
-          render(data) { box.replaceChildren(...[].concat(row.line(data))); },
-          onError(ex) { if (ex.message !== 'Signed out') box.textContent = 'Unavailable'; },
-        });
-      });
-    }
-    return Promise.all(overviewLives.map((live) => live.start()));
-  }
-
   function showApp() {
     hideAll();
     show($('app'), true);
@@ -1828,7 +1789,10 @@
     show($('sched-reminder'), v.drill_due);
     $('sched-reminder-text').textContent = 'Restore drill due: restore a backup into a throwaway install to be sure it works (every ' + v.drill_every_days + ' days). The guide says how.';
     show($('sched-error'), false);
+    // The first load starts the save bar from these values; later loads (after a save) make them the new base.
+    if (scheduleTrack) scheduleTrack.saved(); else scheduleTrack = ui.trackChanges($('schedule-form'));
   }
+  let scheduleTrack = null;
 
   on('sched-run', 'click', async () => {
     const err = $('sched-error');
@@ -1975,6 +1939,7 @@
 
   // ----------------------------------------------------------- network
 
+  let networkTrack = null;
   async function loadNetwork() {
     const n = await api('GET', '/api/admin/v1/network');
     $('n-tls').checked = n.tls_enabled;
@@ -1996,6 +1961,12 @@
       + 'New pairing keys point at ' + n.public_url + '.';
     showProxy(n.proxy);
     show($('network-error'), false);
+    // The first load starts the save bar from these values; later loads (after a save) make them the new base.
+    if (networkTrack) networkTrack.saved(); else {
+      networkTrack = ui.trackChanges($('network-form'));
+      // Discard puts the radios back; the challenge's own part of the form follows them.
+      $('network-form-save-bar').querySelector('[data-save-discard]').addEventListener('click', showChallenge);
+    }
   }
 
   // The challenge is a pair of radios (name n-challenge): 'dns' or 'http'.
@@ -2421,7 +2392,10 @@
     $('m-login-clear').checked = false;
     for (const id of ['a-error', 'm-error', 'a-test-error']) show($(id), false);
     showAlertsBanner(a.banner);
+    // The first load starts each form's save bar from its values; a save makes the new values the base (below).
+    if (!alertsTrack) alertsTrack = { ntfy: ui.trackChanges($('alerts-form')), email: ui.trackChanges($('email-form')) };
   }
+  let alertsTrack = null;
   // The page-wide banner choices are shown but cannot be stored yet (Not available yet): a click does not change them.
   for (const box of document.querySelectorAll('input[data-na-check]')) box.addEventListener('click', (e) => e.preventDefault());
   function alertsError(ex, id = 'a-error') {
@@ -2439,6 +2413,7 @@
       await api('PUT', '/api/admin/v1/alerts', { ntfy });
       for (const id of ['a-server', 'a-topic', 'a-token']) $(id).value = '';
       await loadAlerts();
+      alertsTrack.ntfy.saved();
       ui.toast('Alert settings saved. Send a test alert to check that it arrives.');
     } catch (ex) { alertsError(ex); }
   });
@@ -2458,6 +2433,7 @@
       await api('PUT', '/api/admin/v1/alerts', { email });
       for (const id of ['m-host', 'm-user', 'm-password', 'm-from', 'm-to']) $(id).value = '';
       await loadAlerts();
+      alertsTrack.email.saved();
       ui.toast('Email settings saved. Send a test alert to check that it arrives.');
     } catch (ex) { alertsError(ex, 'm-error'); }
   });

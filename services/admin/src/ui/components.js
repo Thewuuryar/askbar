@@ -222,12 +222,34 @@
     return copy.textContent.trim();
   }
 
-  // The save bar (rule 25): shows once something changes, "1 unsaved change: Host name", with Discard and Save.
+  // The save bar (rule 25): appears by itself once a tracked field changes ("1 unsaved change: Host name", Discard, Save) and
+  // goes when nothing is changed any more (reverted by hand, discarded or saved). It floats at the bottom of the window, in the
+  // page's #save-dock, so it stays in view while the page scrolls. While any bar shows, the page keeps room under its last
+  // content (--save-room, the dock's height) so that content can always scroll above the bar. Two forms on one page each
+  // have their own bar; they stack. The change is announced politely when its text changes. Esc does nothing here, and the bar
+  // takes no focus: it follows the page's fields in the Tab order.
   // Returns { dirty(), saved() }; call saved() after a successful save so the current values become the base.
+  let dockWatch = null;
+  function keepRoom(dock) {
+    const root = document.documentElement;
+    const set = () => {
+      const shown = [...dock.children].some((c) => !c.hidden);
+      root.classList.toggle('save-bar-on', shown);
+      root.style.setProperty('--save-room', shown ? dock.offsetHeight + 'px' : '0px');
+    };
+    if (!dockWatch && window.ResizeObserver) {
+      dockWatch = new ResizeObserver(set);
+      dockWatch.observe(dock);
+    }
+    set();
+  }
   ui.trackChanges = (form) => {
     const bar = $(form.id + '-save-bar');
+    const dock = $('save-dock');
+    if (bar && dock && bar.parentElement !== dock) dock.append(bar);
     let base = fieldValues(form);
     const text = bar && bar.querySelector('[data-save-text]');
+    let said = '';
     const update = () => {
       const changed = changedFields(form, base);
       if (!bar) return;
@@ -237,6 +259,9 @@
           ? '1 unsaved change: ' + labelFor(form, changed[0])
           : changed.length + ' unsaved changes';
       }
+      if (dock) keepRoom(dock);
+      const now = changed.length && text ? text.textContent : '';
+      if (now !== said) { said = now; if (now) ui.announce(now); }
     };
     form.addEventListener('input', update);
     form.addEventListener('change', update);
