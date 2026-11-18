@@ -8,7 +8,8 @@
 //! What it finds is shown as a banner, logged once when it begins (never what a record held) and sent to the alerter as
 //! `chain_mismatch`, once for each finding: a finding that goes on, or changes from a rollback to an edit, is not sent again. A finding is worked out again at every check, so it goes away when the auditor's chain
 //! is the one the admin stored again, and stays while it is not. The stored head moves forward only after a check that
-//! found the chain as it was.
+//! found the chain as it was. An empty chain stores nothing: its head (seq 0) has no entry, so the stored head moves
+//! forward only once there is a first entry.
 
 use crate::auditor_link::AuditorLink;
 use crate::AdminState;
@@ -111,6 +112,8 @@ impl ChainWatch {
         // 2. Against the one stored.
         let found = match &stored {
             None => State::Ok,
+            // Seq 0 is "nothing yet" (no entry 0 exists), so there is nothing to compare with.
+            Some((s_seq, _)) if *s_seq <= 0 => State::Ok,
             Some((s_seq, _)) if seq < *s_seq => State::Rollback { stored: *s_seq, current: seq },
             Some((s_seq, s_hash)) => match link.get(&format!("/chain/entries/{s_seq}")).await {
                 Some((200, e)) if e["hash"].as_str() == Some(s_hash.as_str()) => State::Ok,
@@ -140,8 +143,8 @@ impl ChainWatch {
             }
         }
 
-        // 4. Forward only when the chain was as it was.
-        if found == State::Ok {
+        // 4. Forward only when the chain was as it was, and only to an entry that exists (an empty chain has none).
+        if found == State::Ok && seq > 0 {
             let db = state.db.lock().await;
             store_head(db.conn(), seq, &hash);
         }
