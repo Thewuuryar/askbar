@@ -179,6 +179,55 @@ async function runViewport(viewport) {
     await reread;
   }
 
+  // The sign-in card (plan step 6.3): the first-run hint shows on the published login, the card has no attempts text,
+  // Skip to content is the first Tab stop, the passkey row is greyed and inert, buttons are 40 px (44 on a phone),
+  // nothing scrolls sideways, and axe is clean.
+  await step('sign-in card: the first-run hint shows on the published login, no attempts text, Skip to content first, passkey greyed and inert, sizes and axe', async () => {
+    const setupResponse = page.waitForResponse((r) => r.url().endsWith('/api/admin/v1/setup') && r.request().method() === 'GET');
+    await page.goto(base);
+    await page.waitForSelector('#login:not([hidden])');
+    assert.equal((await setupResponse).status(), 200, 'the sign-in page reads the public setup status once');
+    await page.waitForSelector('#login-hint:not([hidden])');
+    assert.match(await page.innerText('#login-hint'), /published/);
+    assert.equal(await page.evaluate(() => /attempt/i.test(document.getElementById('login').innerText)), false, 'no attempts text on the card');
+    // The password field has focus on open (autofocus is expected here), so the Tab order is read from the document: the first
+    // focusable element that is shown and in the tab sequence must be Skip to content.
+    const firstStop = await page.evaluate(() => {
+      const f = [...document.querySelectorAll('a[href], button, input, select, textarea, [tabindex]')].find((e) => e.tabIndex >= 0 && e.getClientRects().length > 0);
+      return { cls: f.className, text: f.textContent };
+    });
+    assert.deepEqual(firstStop, { cls: 'skip-link', text: 'Skip to content' }, 'Skip to content is the first Tab stop');
+    const passkey = await page.evaluate(() => {
+      const row = document.querySelector('#login .na');
+      return { ariaDisabled: row.getAttribute('aria-disabled'), tabindex: row.getAttribute('tabindex'), disabled: !!row.querySelector('[disabled]') || row.hasAttribute('disabled'), text: row.textContent.trim() };
+    });
+    assert.equal(passkey.ariaDisabled, 'true');
+    assert.equal(passkey.tabindex, '0', 'reachable by Tab');
+    assert.equal(passkey.disabled, false, 'no disabled attribute');
+    assert.match(passkey.text, /^Use a passkey Not available yet: /);
+    assert.equal(/\d/.test(passkey.text), false, 'no digits in the label');
+    await page.focus('#login .na');
+    await page.keyboard.press('Enter');
+    assert.equal(await page.isHidden('#login'), false, 'Enter on the greyed passkey does nothing');
+    const sizes = await page.evaluate(() => ({
+      submit: document.querySelector('#login-form button[type=submit]').getBoundingClientRect().height,
+      passkey: document.querySelector('#login .na .btn').getBoundingClientRect().height,
+      scrolls: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+    }));
+    assert.ok(sizes.submit >= (isPhone ? 44 : 40) - 0.5 && sizes.submit <= (isPhone ? 44 : 40) + 0.5, 'Sign in is ' + sizes.submit + ' px high');
+    assert.ok(sizes.passkey >= (isPhone ? 44 : 40) - 0.5, 'the passkey row is ' + sizes.passkey + ' px high');
+    assert.equal(sizes.scrolls, false, 'no sideways scroll on the sign-in card');
+    const axeCtx = await browser.newContext({ viewport, bypassCSP: true });
+    try {
+      const ap = await axeCtx.newPage();
+      await ap.goto(base);
+      await ap.waitForSelector('#login:not([hidden])');
+      await ap.addScriptTag({ content: fs.readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8') });
+      const found = await ap.evaluate(async () => (await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'] } })).violations.map((v) => v.id + ': ' + v.nodes.map((n) => n.target.join(' ')).join(', ')));
+      assert.deepEqual(found, [], 'axe on the sign-in card');
+    } finally { await axeCtx.close(); }
+  });
+
   await step('first run: sign in with the published login (ADR 0007)', async () => {
     await page.goto(base);
     await page.waitForSelector('#login:not([hidden])');
@@ -186,8 +235,10 @@ async function runViewport(viewport) {
     await page.fill('#username', 'root');
     await page.fill('#password', 'admin');
     await page.click('#login-form button');
-    await page.waitForSelector('#login-error:not([hidden])');
-    assert.match(await page.innerText('#login-error'), /Wrong username or password/, 'a wrong name gets the same answer as a wrong password');
+    await page.waitForSelector('#password-error:not([hidden])');
+    assert.match(await page.innerText('#password-error'), /Wrong username or password/, 'a wrong name gets the same answer as a wrong password');
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'password', 'the failed sign-in moves focus to the password field');
+    assert.equal(await page.getAttribute('#password', 'aria-invalid'), 'true');
     await page.fill('#username', 'admin');
     await page.fill('#password', 'admin');
     await page.click('#login-form button');
@@ -313,12 +364,17 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
   });
   await step('sign out, then a wrong password is refused and the right one signs in', async () => {
     await openMenu();
+    const setupRead = page.waitForResponse((r) => r.url().endsWith('/api/admin/v1/setup') && r.request().method() === 'GET');
     await page.click('#logout');
     await page.waitForSelector('#login:not([hidden])');
+    await setupRead;
+    await page.waitForTimeout(300); // the response is read a moment after it arrives
+    assert.equal(await page.isHidden('#login-hint'), true, 'the published password is changed: no first-run hint');
     await page.fill('#password', 'nope');
     await page.click('#login-form button');
-    await page.waitForSelector('#login-error:not([hidden])');
-    assert.match(await page.innerText('#login-error'), /Wrong username or password/);
+    await page.waitForSelector('#password-error:not([hidden])');
+    assert.match(await page.innerText('#password-error'), /Wrong username or password/);
+    assert.match(await page.innerText('#login-form .error-summary'), /Sign-in did not work/);
     await page.fill('#password', PASSWORD);
     await page.click('#login-form button');
     await page.waitForSelector('#app:not([hidden])');
@@ -3867,7 +3923,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.waitForSelector('#login:not([hidden])');
     await page.fill('#password', PASSWORD);
     await page.click('#login-form button');
-    await page.waitForSelector('#login-error:not([hidden])');
+    await page.waitForSelector('#password-error:not([hidden])');
     await page.fill('#password', 'brand new password 1');
     await page.click('#login-form button');
     await page.waitForSelector('#app:not([hidden])');

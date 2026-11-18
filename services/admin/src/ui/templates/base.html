@@ -69,14 +69,17 @@
     </div>
   </main>
 
-  <main id="login" class="narrow" hidden>
-    <h1>Askbar admin</h1>
-    <form id="login-form">
-      <label>Username <input id="username" type="text" autocomplete="username" value="admin" required></label>
-      <label>Password <input id="password" type="password" autocomplete="current-password" required></label>
-      {% call b::hint("On a new install the login is the published one; see the README's first-run steps.") %}{% endcall %}
-      <button type="submit">Sign in</button>
-      {% call b::error_line("login-error") %}{% endcall %}
+  <main id="login" hidden>
+    <div class="signin-brand"><span class="signin-logo" aria-hidden="true">{% call c::icon("logo") %}{% endcall %}</span><h1>Sign in to Askbar</h1></div>
+    <form id="login-form" class="signin-card">
+      {% call c::field("Username", "username", "", "slot", false) %}<input id="username" name="username" type="text" autocomplete="username" value="admin" required>{% endcall %}
+      {% call c::field("Password", "password", "", "slot", false) %}<input id="password" name="password" type="password" autocomplete="current-password" required aria-describedby="login-hint password-error">{% endcall %}
+      <p class="hint signin-hint" id="login-hint" hidden>On a new install the login is the published one; see the README's first-run steps.</p>
+      <div class="signin-actions">
+        {% call c::button("Sign in", "submit", "l", "") %}{% endcall %}
+        <span class="signin-or" aria-hidden="true">or</span>
+        {% call c::na("passkey sign-in is not built yet; sign in with the password.") %}<span class="btn btn-secondary btn-l">Use a passkey</span>{% endcall %}
+      </div>
     </form>
   </main>
 

@@ -656,3 +656,21 @@ dl.meta dd { margin: 0; overflow-wrap: anywhere; }
   .col-user, .col-provider, .col-tokens, .col-duration { display: none; }
   .row-link { min-height: var(--btn-h-touch); }
 }
+
+/* Sign-in card (plan step 6.3; board P3-Signin): a 400 px column, the logo beside the title, the form as a card. */
+#login { max-width: 400px; padding-top: 12vh; }
+.signin-brand { display: flex; align-items: center; justify-content: center; gap: var(--space-3); margin-bottom: var(--space-5); }
+.signin-logo { display: inline-flex; align-items: center; justify-content: center; flex: none; width: var(--btn-h); height: var(--btn-h); border-radius: var(--radius-control); background: var(--accent); color: var(--accent-fg); }
+.signin-card { display: flex; flex-direction: column; gap: var(--space-4); padding: var(--space-5); background: var(--card); border: 1px solid var(--line); border-radius: var(--radius-card); box-shadow: var(--shadow); }
+.signin-card label { margin: 0; }
+.signin-card input { height: var(--btn-h-l); margin-top: var(--space-1); }
+.signin-card .hint { margin: 0; }
+.signin-actions { display: flex; align-items: center; gap: var(--space-2); }
+.signin-actions > .btn-primary { flex: 1; }
+.signin-actions .na { display: inline-flex; }
+.signin-or { display: flex; align-items: center; gap: var(--space-3); font-size: var(--text-xs); color: var(--muted); }
+.signin-or::before, .signin-or::after { content: ""; flex: 1; border-top: 1px solid var(--line); }
+@media (max-width: 560px) {
+  .signin-actions { flex-direction: column; align-items: stretch; }
+  .signin-actions > .btn-primary, .signin-actions .na, .signin-actions .na > .btn { width: 100%; }
+}

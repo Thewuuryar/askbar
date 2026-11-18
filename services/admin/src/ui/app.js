@@ -210,10 +210,24 @@
     }
   });
 
+  // The first-run hint (plan step 6.3) says the published password is still in use. The signed-out page reads it from the
+  // public setup status, once per sign-in screen; a request already in flight is not repeated (api() also shows this
+  // screen on a 401, right before route() does). A failed read leaves the hint off.
+  let hintRequest = null;
+  function loadLoginHint() {
+    if (hintRequest) return;
+    hintRequest = api('GET', '/api/admin/v1/setup')
+      .then((s) => show($('login-hint'), !!s.password_change_required))
+      .catch(() => show($('login-hint'), false))
+      .finally(() => { hintRequest = null; });
+  }
+
   function showLogin() {
     hideAll();
     show($('login'), true);
+    show($('login-hint'), false);
     $('password').value = '';
+    loadLoginHint();
     $('password').focus();
   }
 
@@ -785,14 +799,15 @@
 
   on('login-form', 'submit', async (e) => {
     e.preventDefault();
-    const err = $('login-error');
-    show(err, false);
+    const form = $('login-form');
+    ui.formErrors(form, []);
     try {
       await api('POST', '/api/admin/v1/session', { username: $('username').value, password: $('password').value });
       route();
     } catch (ex) {
-      err.textContent = ex.status === 429 ? 'Too many attempts. Try again later.' : 'Wrong username or password.';
-      show(err, true);
+      // Inline on the password field, and focus moves there (rule 26). A lock-out is said as a pause, not as a count.
+      const text = ex.status === 429 ? 'Sign-in is paused. Try again later.' : 'Wrong username or password.';
+      ui.formErrors(form, [{ id: 'password', text }], { title: 'Sign-in did not work:' });
     }
   });
 

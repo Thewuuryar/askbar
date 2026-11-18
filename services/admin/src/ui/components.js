@@ -166,7 +166,8 @@
   // A failed save (rule 26): each field gets its error line, a summary at the top of the form lists them as
   // links, and focus moves to the first field with a problem. ui.formErrors(form, []) clears them all.
   // errors = [{ id, text }]. A field without an error line (the field macro writes one) gets one.
-  ui.formErrors = (form, errors) => {
+  // opts.title replaces the summary's heading (sign-in says what failed, not "to save").
+  ui.formErrors = (form, errors, opts = {}) => {
     const old = form.querySelector('.error-summary');
     if (old) old.remove();
     for (const f of form.querySelectorAll('[aria-invalid="true"]')) ui.fieldError(f.id, '');
@@ -184,7 +185,7 @@
       list.append(el('li', {}, el('a', { href: '#' + e.id, text: e.text, onclick: (ev) => { ev.preventDefault(); input.focus(); } })));
     }
     const summary = el('div', { class: 'error-summary', role: 'alert' },
-      el('p', { class: 'error-summary-title', text: errors.length === 1 ? 'Fix this to save:' : 'Fix these ' + errors.length + ' things to save:' }),
+      el('p', { class: 'error-summary-title', text: opts.title || (errors.length === 1 ? 'Fix this to save:' : 'Fix these ' + errors.length + ' things to save:') }),
       list);
     const heading = form.firstElementChild && /^H[1-6]$/.test(form.firstElementChild.tagName) ? form.firstElementChild : null;
     if (heading) heading.after(summary); else form.prepend(summary);
