@@ -58,7 +58,7 @@ fn rand(n: usize) -> String {
 fn config_yaml(api_key: &str, secret: &str) -> String {
     // The same file cpa/init.sh used to write.
     format!(
-        "config-version: 8\nserver:\n  host: \"\"\n  port: 8317\noauth:\n  auth-dir: \"/root/.cli-proxy-api\"\naccess:\n  api-keys:\n    - \"{api_key}\"\nmanagement: # names-ok: CLIProxyAPI's own config key\n  # Reachable only on the compose networks: the API port is not published to the host.\n  allow-remote: true\n  secret-key: \"{secret}\"\n"
+        "config-version: 8\nserver:\n  host: \"\"\n  port: 8317\n  # CLIProxyAPI v8.0.77 keeps replies and thinking in a local file (kv.db) unless told not to: that is an unencrypted copy of replies, and it would be in backups.\n  kv-store:\n    disabled: true\noauth:\n  auth-dir: \"/root/.cli-proxy-api\"\naccess:\n  api-keys:\n    - \"{api_key}\"\nmanagement: # names-ok: CLIProxyAPI's own config key\n  # Reachable only on the compose networks: the API port is not published to the host.\n  allow-remote: true\n  secret-key: \"{secret}\"\n"
     )
 }
 
@@ -621,6 +621,9 @@ mod tests {
         assert!(!changed && k.api_key.starts_with("sk-cpa-") && k.control_secret.len() == 40);
         let yaml = std::fs::read_to_string(cfg.join("config.yaml")).unwrap();
         assert!(yaml.contains(&k.api_key) && yaml.contains(&k.control_secret));
+        assert!(yaml.contains("config-version: 8\n"));
+        assert!(yaml.contains("server:\n  host: \"\"\n  port: 8317\n"), "server block");
+        assert!(yaml.contains("\n  kv-store:\n    disabled: true\noauth:\n"), "the on-disk KV store is off, under server");
         // Again: nothing changes.
         let (k2, changed) = ensure_config(&cfg, &sec).unwrap();
         assert!(!changed && k2.api_key == k.api_key && k2.control_secret == k.control_secret);
@@ -634,6 +637,7 @@ mod tests {
         assert_eq!(k3.api_key, "sk-cpa-OLDKEY");
         let yaml = std::fs::read_to_string(cfg2.join("config.yaml")).unwrap();
         assert!(yaml.contains("sk-cpa-OLDKEY") && yaml.contains(&k3.control_secret) && !yaml.contains("hashedbycpa"));
+        assert!(yaml.contains("\n  kv-store:\n    disabled: true\noauth:\n"), "a rewritten config keeps the KV store off");
         let _ = std::fs::remove_dir_all(d);
     }
 }
