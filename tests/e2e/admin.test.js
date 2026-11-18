@@ -3792,6 +3792,41 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.unroute('**/api/admin/v1/audit/session');
     await page.unroute('**/api/admin/v1/audit/payloads/*');
   });
+  await step('audit calls (canned): long sealed content leaves one scroll bar in the trace panel: the sealed box does not scroll, the header stays put, and the page behind does not move', async () => {
+    const spans = [{ id: 'sp-attempt', parent_id: null, kind: 'attempt', name: 'prov', status: 'done', started_at: 1000, ended_at: 1001, sealed: 2, attrs: {} }];
+    const long = Array.from({ length: 150 }, (_, i) => 'line ' + i + ' ' + 'word '.repeat(12)).join('\n') + '\n' + 'x'.repeat(600);
+    await page.route('**/api/admin/v1/audit/traces/LONG1', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ trace_id: 'LONG1', cost: null, spans }) }));
+    await page.route('**/api/admin/v1/audit/session', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ open: true, idle_left_secs: 900, total_left_secs: 3600, idle_limit_secs: 900, total_limit_secs: 3600, keys: [{ key_id: 'k1', created_at: 1000, retired_at: null, open: true }] }) }));
+    await page.route('**/api/admin/v1/audit/payloads/*', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ span_id: 'sp-attempt', payloads: [{ role: 'request', key_id: 'k1', text: long }, { role: 'reply', key_id: 'k1', text: long }] }) }));
+    try {
+      await openPage('audit/calls');
+      await page.evaluate(() => window.askbarAudit.openTrace('LONG1'));
+      await page.waitForSelector('#trace-sealed .view-btn');
+      await page.evaluate(() => { window.askbarAudit.session.open = true; });
+      await page.click('#trace-sealed .view-btn');
+      await page.waitForFunction(() => document.getElementById('trace-viewed').textContent.includes('line 149'));
+      const scrollers = () => page.evaluate(() => [...document.querySelectorAll('#trace-panel *, #trace-panel')].filter((e) => e.clientHeight > 0 && e.scrollHeight > e.clientHeight + 1 && /(auto|scroll)/.test(getComputedStyle(e).overflowY)).map((e) => e.className));
+      assert.deepEqual(await scrollers(), ['side-panel-body'], 'the panel body is the only scrolling element in the panel');
+      const own = await page.evaluate(() => { const b = document.querySelector('#trace-viewed pre.plain'); return { over: getComputedStyle(b).overflowY, max: getComputedStyle(b).maxHeight, sh: b.scrollHeight, ch: b.clientHeight, sideways: b.scrollWidth - b.clientWidth }; });
+      assert.ok(own.sh <= own.ch, 'the sealed box has no scroll bar of its own');
+      assert.equal(own.max, 'none');
+      assert.ok(own.sideways <= 0, 'long lines wrap');
+      const headY = () => page.evaluate(() => document.querySelector('#trace-panel .side-panel-head').getBoundingClientRect().top);
+      const y0 = await headY();
+      const scrollY0 = await page.evaluate(() => window.scrollY);
+      await page.evaluate(() => { const b = document.querySelector('#trace-panel .side-panel-body'); b.scrollTop = b.scrollHeight; });
+      assert.ok(await page.evaluate(() => { const b = document.querySelector('#trace-panel .side-panel-body'); return b.scrollTop > 0; }), 'the body scrolled');
+      assert.equal(await headY(), y0, 'the header stays at the top while the body scrolls');
+      await page.mouse.move(await page.evaluate(() => { const r = document.querySelector('#trace-panel .side-panel-body').getBoundingClientRect(); return r.left + r.width / 2; }), await page.evaluate(() => { const r = document.querySelector('#trace-panel .side-panel-body').getBoundingClientRect(); return r.top + r.height / 2; }));
+      await page.mouse.wheel(0, 600);
+      assert.equal(await page.evaluate(() => window.scrollY), scrollY0, 'scrolling past the end of the panel does not scroll the page behind');
+      assert.equal(await page.evaluate(() => getComputedStyle(document.querySelector('#trace-panel .side-panel-body')).overscrollBehaviorY), 'contain');
+    } finally {
+      await page.unroute('**/api/admin/v1/audit/traces/LONG1');
+      await page.unroute('**/api/admin/v1/audit/session');
+      await page.unroute('**/api/admin/v1/audit/payloads/*');
+    }
+  });
   await step('audit access history: rows are listed newest first as text, and a new open adds one', async () => {
     let rows = [
       { id: 2, span_id: 'span-<b>x</b>', key_id: '0011223344556677', opened_at: 1793631845, ok: false },
