@@ -3316,6 +3316,9 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       assert.match(await page.innerText('#backup-facts'), /On schedule[\s\S]*2 hours ago[\s\S]*in 2 hours/);
       assert.deepEqual(await page.$$eval('#clients-facts dd', (d) => d.map((x) => x.textContent)), ['2', '3']);
       assert.deepEqual(await page.$$eval('.home-link', (a) => a.map((x) => x.getAttribute('href'))), ['/admin/services/', '/admin/backup/', '/admin/people/']);
+      // The three links are small secondary buttons (still links: they navigate), each with a decorative icon and its label.
+      assert.deepEqual(await page.$$eval('.home-link', (a) => a.map((x) => [x.tagName, x.classList.contains('btn') && x.classList.contains('btn-secondary') && x.classList.contains('btn-s') && !x.classList.contains('btn-primary'), !!x.querySelector('svg.icon[aria-hidden="true"]'), x.textContent.trim()])),
+        [['A', true, true, 'Manage services'], ['A', true, true, 'Open Backup'], ['A', true, true, 'Open People & clients']]);
 
       // Greyed items: five of them, each reachable by Tab, silent on Enter, with the note on focus.
       const naSel = '.kpi .na, #numbers .na, .na-sec .na-tag, #home-services .na';

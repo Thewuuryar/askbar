@@ -558,7 +558,7 @@ body[data-page="reference"] .content > main > section { max-width: none; }
 .facts-list { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--space-2) var(--space-4); margin: var(--space-3) 0 0; }
 .facts-list dt { color: var(--muted); }
 .facts-list dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
-.home-link { display: inline-flex; align-items: center; min-height: var(--target-min); margin-top: var(--space-2); }
+.home-link { margin-top: var(--space-3); } /* a small secondary button under its list, as a link because it navigates */
 .na-sec .hint { margin: var(--space-3) 0 0; }
 .home-sec-head .na, .home-sec-head .na-tag { min-height: var(--target-min); }
 .home-sec-head .na[data-tip]::after, .home-sec-head .na-tag[data-tip]::after { left: auto; right: 0; }
@@ -569,7 +569,7 @@ body[data-page="reference"] .content > main > section { max-width: none; }
   .kpi:last-child { grid-column: 1 / -1; border-left: 0; padding-left: 0; }
   .quick-actions { display: grid; grid-template-columns: 1fr 1fr; }
   .cols, .cols.even { grid-template-columns: minmax(0, 1fr); }
-  .home-link, .home-sec-head .na, .home-sec-head .na-tag, .kpi .sub .na { min-height: var(--btn-h-touch); }
+  .home-sec-head .na, .home-sec-head .na-tag, .kpi .sub .na { min-height: var(--btn-h-touch); }
   .srow { min-height: var(--btn-h-touch); }
 }
 
