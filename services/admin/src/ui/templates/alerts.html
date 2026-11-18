@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {%- import "components.html" as c %}
-{% block header %}{% call c::page_header(label, lede, crate::reference::page_topic(current), "") %}<a class="btn btn-secondary" href="/admin/notifications/#alerts-form">{% call c::icon("send") %}{% endcall %}Notification settings</a>{% endcall %}{% endblock %}
+{% block header %}{% call c::page_header(label, lede, crate::reference::page_topic(current), "") %}<a class="btn btn-primary" href="/admin/notifications/#alerts-form">{% call c::icon("send") %}{% endcall %}Notification settings</a>{% endcall %}{% endblock %}
 {% block content %}
     <p id="alerts-sum" class="alerts-sum" tabindex="-1"></p>
     <div id="alerts-body" class="alerts">
