@@ -64,7 +64,7 @@ label.check { display: flex; gap: 8px; align-items: center; color: var(--fg); fo
 label.check input { width: auto; margin: 0; }
 textarea { resize: vertical; font-family: var(--mono); }
 div.panel { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin: 14px 0; }
-.footer { max-width: 860px; margin: 0 auto; padding: 8px 16px 24px; font-size: var(--text-xs); color: var(--muted); }
+.footer { max-width: 860px; margin: 0 auto; padding: 8px 16px 24px; font-size: var(--text-xs); color: var(--muted); text-align: center; }
 .footer a { color: var(--accent); }
 
 /* Audit tab */
@@ -348,8 +348,13 @@ input, select { min-height: var(--target-min); }
 /* Global search (plan step 3.5, rule 4): after the breadcrumb, a combobox with a listbox popup under it. On a phone the
    same element sits at the top of the full-screen menu (app.js moves it) and the popup is part of the menu, not floating. */
 .gs-left { display: flex; flex: 1 1 auto; align-items: center; gap: var(--space-4); min-width: 0; }
-.gs-left .crumb { flex: 0 1 auto; }
-.gs { position: relative; flex: 0 1 var(--search-w); min-width: var(--menu-w); }
+/* The crumb keeps its label; the search takes the rest of the bar and shrinks before anything overlaps. Whatever still does
+   not fit is clipped inside its own box, never painted over the facts. */
+.gs-left .crumb { flex: 0 0 auto; max-width: 50%; overflow: hidden; }
+.gs-field { overflow: hidden; }
+/* With the docked panel open on a laptop-width page the greyed budget, the least important fact, is left out (the phone drops it too). */
+@media (min-width: 761px) and (max-width: 1439px) { body.panel-open .facts .na { display: none; } }
+.gs { position: relative; flex: 0 1 var(--search-w); min-width: 0; }
 .gs-sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
 .gs-field { display: flex; align-items: center; gap: var(--space-2); height: var(--btn-h); padding: 0 var(--space-2); border-radius: var(--radius-control); background: var(--bg); box-shadow: inset 0 0 0 1px var(--field-border); color: var(--muted); }
 .gs-field:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; }
@@ -399,8 +404,9 @@ input, select { min-height: var(--target-min); }
 .alert-pop-text { margin: 0; overflow-wrap: anywhere; }
 @media (max-width: 560px) {
   .banner { padding: var(--space-2) var(--space-4); }
-  /* Under the phone bar, same 48 px: the budget is dropped, the kill switch stays. */
-  .status-bar { top: var(--phone-bar-h); padding: 0 var(--space-4); }
+  /* Under the phone bar, same 48 px: the budget is dropped, the kill switch stays. The facts keep their width at 320 px and
+     the breadcrumb takes what is left, cut short with an ellipsis if it must. */
+  .status-bar { top: var(--phone-bar-h); gap: var(--space-2); padding: 0 var(--space-3); }
   .facts .na { display: none; }
   /* The breadcrumb on a phone is the page's own label only: the group is left out, so the label is not cut short. */
   .crumb li:not([aria-current="page"]) { display: none; }
@@ -412,12 +418,12 @@ input, select { min-height: var(--target-min); }
   .gs-pop { position: static; width: auto; max-width: none; margin-top: var(--space-2); box-shadow: none; }
   #gs-list { max-height: none; }
   .gs-row { min-height: var(--btn-h-touch); }
-  .facts { gap: var(--space-2); min-width: 0; flex: 0 1 auto; }
-  /* The breadcrumb's label keeps its own width: the facts fill in after the page loads (budget, kill switch, seal) and
-     must not squeeze it into a clip. The kill switch word is read by screen readers only on a phone, its symbol stays. */
-  .gs-left { flex: none; }
-  .gs-left .crumb { flex: none; }
-  #sb-kill .status-word { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+  .facts { gap: var(--space-1); flex: none; }
+  /* The facts fill in after the page loads (kill switch, seal) and keep their width; the breadcrumb gives way to them. */
+  .gs-left { flex: 1 1 0; }
+  .gs-left .crumb { flex: 0 1 auto; max-width: none; }
+  /* At 320 px the breadcrumb label is dropped: the page's own title sits just below the bar. */
+  @media (max-width: 359px) { .gs-left .crumb { display: none; } }
   .seal-toggle { gap: var(--space-1); }
   /* The bell stays in the status bar on a phone (44 px target); its menu and pop-ups span the screen under it. */
   .bell .menu { position: fixed; top: calc(var(--phone-bar-h) + var(--status-h)); left: var(--space-4); right: var(--space-4); width: auto; max-height: calc(100vh - var(--phone-bar-h) - var(--status-h) - var(--space-4)); }

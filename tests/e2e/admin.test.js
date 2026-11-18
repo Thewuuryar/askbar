@@ -217,6 +217,15 @@ async function runViewport(viewport) {
     assert.ok(sizes.submit >= (isPhone ? 44 : 40) - 0.5 && sizes.submit <= (isPhone ? 44 : 40) + 0.5, 'Sign in is ' + sizes.submit + ' px high');
     assert.ok(sizes.passkey >= (isPhone ? 44 : 40) - 0.5, 'the passkey row is ' + sizes.passkey + ' px high');
     assert.equal(sizes.scrolls, false, 'no sideways scroll on the sign-in card');
+    // The signed-out footer line is centred under the card: its text, not its box, sits on the card's centre line.
+    const centres = await page.evaluate(() => {
+      const range = document.createRange();
+      range.selectNodeContents(document.querySelector('.footer'));
+      const t = range.getBoundingClientRect();
+      const c = document.querySelector('#login .signin-card').getBoundingClientRect();
+      return { text: (t.left + t.right) / 2, card: (c.left + c.right) / 2 };
+    });
+    assert.ok(Math.abs(centres.text - centres.card) <= 4, 'the footer line is centred under the card: ' + JSON.stringify(centres));
     const axeCtx = await browser.newContext({ viewport, bypassCSP: true });
     try {
       const ap = await axeCtx.newPage();
@@ -1691,7 +1700,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       await page.waitForFunction(() => document.getElementById('s-kill-state').textContent === 'on');
       assert.equal(await page.innerText('#s-kill-switch'), 'Turn off kill switch');
       assert.equal(puts, 1);
-      await page.waitForFunction(() => document.querySelector('#sb-kill .status-word').textContent === 'Kill switch: on', null, { timeout: K.STATUS_EVERY_SECS * 3000 });
+      await page.waitForFunction(() => document.querySelector('#sb-kill .status-word').textContent === 'Kill: on', null, { timeout: K.STATUS_EVERY_SECS * 3000 });
       // Unsaved edits in the form are not sent by the switch.
       await page.uncheck('#s-kill-aborts');
       await page.waitForSelector('#settings-form-save-bar:not([hidden])');
@@ -1701,7 +1710,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       await box.locator('[data-confirm-action]').click();
       await box.waitFor({ state: 'detached' });
       await page.waitForFunction(() => document.getElementById('s-kill-state').textContent === 'off');
-      await page.waitForFunction(() => document.querySelector('#sb-kill .status-word').textContent === 'Kill switch: off', null, { timeout: K.STATUS_EVERY_SECS * 3000 });
+      await page.waitForFunction(() => document.querySelector('#sb-kill .status-word').textContent === 'Kill: off', null, { timeout: K.STATUS_EVERY_SECS * 3000 });
       assert.equal(await page.isChecked('#s-kill-aborts'), false, 'the unsaved choice stays in the form');
       assert.equal(await page.isVisible('#settings-form-save-bar'), true);
       assert.equal(puts, 2);
@@ -4280,7 +4289,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       killFields: document.querySelectorAll('#s-kill-switch').length,
     }));
     assert.deepEqual(facts, { na: 1, budgetDisabledAttr: 0, budgetTip: 'Not available yet: the server has no family budget setting', kill: 1, killFields: 1 });
-    await page.waitForFunction(() => /^Kill switch: (on|off)$/.test(document.querySelector('#sb-kill .status-word').textContent));
+    await page.waitForFunction(() => /^Kill: (on|off)$/.test(document.querySelector('#sb-kill .status-word').textContent));
     assert.match(await page.getAttribute('#sb-kill', 'class'), /status-(ok|error)/);
     assert.equal(await page.evaluate(() => document.querySelector('#sb-kill .status-sym').getAttribute('aria-hidden')), 'true');
     // Height is --status-h and the bar stays put while the page scrolls.
@@ -4305,6 +4314,49 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     });
     assert.ok(input.top >= input.bottom, 'the focused field starts below the bar: ' + JSON.stringify(input));
     await page.evaluate(() => document.getElementById('t-tall').remove());
+    // The kill switch word is shown at every width, phones included (rule 37): a word with its symbol, never clipped away.
+    const killWord = await page.evaluate(() => { const w = document.querySelector('#sb-kill .status-word'); return { width: w.getBoundingClientRect().width, clip: getComputedStyle(w).clipPath }; });
+    assert.ok(killWord.width > 20 && killWord.clip === 'none', 'the kill switch word is visible on ' + vpLabel + ' px: ' + JSON.stringify(killWord));
+    // The bar's items (the breadcrumb label, the search and each fact) never overlap and stay inside the bar. Zero-width
+    // items are not drawn, so they are skipped; #gs is outside the bar on a phone (it sits in the menu) and is skipped too.
+    const barItems = () => page.evaluate(() => {
+      const bar = document.getElementById('status-bar').getBoundingClientRect();
+      const els = [['crumb', document.querySelector('#status-bar .crumb li[aria-current="page"]')], ['search', document.getElementById('gs')], ...[...document.querySelectorAll('#status-facts > *')].map((e) => [e.id || e.className, e])];
+      return { bar: { l: bar.left, r: bar.right }, items: els.filter(([, e]) => e && e.getClientRects().length > 0 && e.getBoundingClientRect().width >= 1).map(([name, e]) => { const r = e.getBoundingClientRect(); return { name, l: r.left, r: r.right, t: r.top, b: r.bottom }; }) };
+    });
+    const barCheck = (bi) => {
+      const out = [];
+      for (let i = 0; i < bi.items.length; i++) {
+        const a = bi.items[i];
+        if (a.l < bi.bar.l - 0.5 || a.r > bi.bar.r + 0.5) out.push(a.name + ' leaves the bar');
+        for (let j = i + 1; j < bi.items.length; j++) {
+          const b = bi.items[j];
+          if (a.l < b.r - 0.5 && b.l < a.r - 0.5) out.push(a.name + ' overlaps ' + b.name);
+        }
+      }
+      return out;
+    };
+    assert.deepEqual(barCheck(await barItems()), [], 'status bar items at ' + vpLabel + ' px');
+    if (!isPhone) {
+      // The docked help panel narrows the page at 1280 wide: the search shrinks and nothing is painted over another item.
+      await page.goto(base + 'network/?panel=help:settings/network');
+      await page.waitForSelector('#app:not([hidden])');
+      await page.waitForFunction(() => document.body.classList.contains('panel-open'));
+      const withPanel = await barItems();
+      assert.ok(withPanel.items.length >= 3, 'the crumb, search and facts are in the bar with the panel open');
+      assert.deepEqual(barCheck(withPanel), [], 'no two status-bar items overlap with the docked panel open at 1280 wide');
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth), false, 'no sideways scroll with the panel open');
+      await page.goto(base + 'general/');
+      await page.waitForSelector('#app:not([hidden])');
+    }
+    // A 320 px phone (a one-off resize, not a third suite width): nothing scrolls sideways, the facts stay in the bar, the kill word stays visible.
+    await page.setViewportSize({ width: 320, height: viewport.height });
+    await page.waitForFunction(() => document.documentElement.clientWidth === 320);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth), false, 'no sideways scroll at 320 px');
+    assert.deepEqual(barCheck(await barItems()), [], 'status bar items at 320 px');
+    assert.ok((await page.evaluate(() => document.querySelector('#sb-kill .status-word').getBoundingClientRect().width)) > 20, 'the kill switch word is visible at 320 px');
+    await page.setViewportSize(viewport);
+    await page.waitForFunction((w) => document.documentElement.clientWidth === w, viewport.width);
     // The status poll still runs every STATUS_EVERY_SECS.
     let polls = 0;
     const count = (r) => { if (r.url().endsWith('/api/admin/v1/status')) polls++; };

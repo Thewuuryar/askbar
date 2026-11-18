@@ -752,11 +752,11 @@
     const box = $('sb-kill');
     if (!box) return;
     let state = 'pending';
-    let text = 'Kill switch: unknown';
+    let text = 'Kill: unknown';
     try {
       const s = await api('GET', '/api/admin/v1/settings');
       state = s.kill_switch ? 'error' : 'ok';
-      text = s.kill_switch ? 'Kill switch: on' : 'Kill switch: off';
+      text = s.kill_switch ? 'Kill: on' : 'Kill: off';
     } catch (_) { /* signed out, or the admin itself is away */ }
     box.className = 'status status-' + state;
     box.querySelector('.status-word').textContent = text;
