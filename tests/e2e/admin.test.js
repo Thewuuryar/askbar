@@ -5137,6 +5137,61 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     for (const e of plain) assert.equal(e.first, plain[0].first, e.slug + ': the first block is at the same x as on ' + plain[0].slug);
     await openPage('providers');
   });
+  await step('frame: no stray box beside the page or above the docked panel', async () => {
+    // A docked panel runs the full window height on a desktop, so nothing uncovered shows above it; on a phone it starts under the bars.
+    await page.goto(base + 'network/?panel=help:settings/network');
+    await page.waitForSelector('#app:not([hidden])');
+    await page.waitForSelector('body.panel-open .side-panel:not([hidden])');
+    await page.waitForTimeout(300);
+    const r = await page.evaluate(() => {
+      const panel = document.querySelector('.side-panel');
+      const pr = panel.getBoundingClientRect();
+      const bar = document.getElementById('status-bar').getBoundingClientRect();
+      const owner = (x, y) => { const e = document.elementFromPoint(x, y); return e ? { ok: panel.contains(e) || document.getElementById('status-bar').contains(e) || document.getElementById('banners').contains(e), tag: e.tagName + '#' + e.id + '.' + e.className } : null; };
+      const root = getComputedStyle(document.documentElement);
+      return { top: pr.top, bottom: pr.bottom, left: pr.left, right: pr.right, height: pr.height, barRight: bar.right, barBottom: bar.bottom, win: window.innerWidth, winH: window.innerHeight,
+        phoneH: parseFloat(root.getPropertyValue('--phone-bar-h')), statusH: parseFloat(root.getPropertyValue('--status-h')),
+        samples: [5, bar.height - 5, bar.height + 5].map((y) => ({ y, ...owner(pr.left + 10, y) })) };
+    });
+    if (isPhone) {
+      assert.ok(r.top >= r.phoneH + r.statusH - 0.5, 'on a phone the panel starts under the phone bar and the status bar: ' + r.top);
+      assert.equal(r.left, 0);
+    } else {
+      assert.equal(r.top, 0, 'the docked panel starts at the top of the window');
+      assert.equal(Math.round(r.bottom), r.winH, 'and runs to the bottom');
+      assert.ok(r.barRight <= r.left + 0.5, 'the status bar ends where the panel starts: ' + r.barRight + ' vs ' + r.left);
+      for (const smp of r.samples) assert.ok(smp.ok, 'the point above/beside the panel at y=' + smp.y + ' belongs to the panel or the bars, not the page canvas: ' + JSON.stringify(smp));
+      assert.equal(await page.evaluate(() => document.elementFromPoint(window.innerWidth - 20, 5).closest('.side-panel') !== null), true, 'the top right corner of the window is the panel');
+      assert.equal(await page.evaluate(() => { const b = document.querySelector('.side-panel [data-panel-close]').getBoundingClientRect(); return b.top >= 0 && b.bottom <= document.querySelector('.side-panel-head').getBoundingClientRect().bottom; }), true, 'the close button is on screen in the panel header');
+    }
+    await page.goto(base + 'network/');
+    await page.waitForSelector('#app:not([hidden])');
+  });
+  await step('frame: no reserved scroll bar strip: the status bar reaches the right edge, and the root canvas has the page colour in both themes', async () => {
+    await page.goto(base + 'services/');
+    await page.waitForSelector('#app:not([hidden])');
+    await page.waitForSelector('#main .page-title');
+    await page.waitForTimeout(250);
+    const g = await page.evaluate(() => ({ cw: document.documentElement.clientWidth, iw: window.innerWidth, right: document.getElementById('status-bar').getBoundingClientRect().right, gutter: getComputedStyle(document.documentElement).scrollbarGutter }));
+    assert.equal(g.gutter, 'auto', 'no scroll bar room is reserved');
+    if (!(await page.evaluate(() => document.documentElement.scrollHeight > window.innerHeight))) {
+      assert.equal(g.cw, g.iw, 'a page that does not scroll uses the whole window width');
+      assert.equal(Math.round(g.right), g.iw, 'and its status bar reaches the right edge');
+    }
+    for (const scheme of ['light', 'dark']) {
+      const c2 = await browser.newContext({ viewport, colorScheme: scheme, storageState: await ctx.storageState() });
+      try {
+        const p2 = await c2.newPage();
+        await p2.goto(base + 'services/');
+        await p2.waitForSelector('#app:not([hidden])');
+        const c = await p2.evaluate(() => ({ html: getComputedStyle(document.documentElement).backgroundColor, body: getComputedStyle(document.body).backgroundColor, token: getComputedStyle(document.documentElement).getPropertyValue('--bg').trim(), scheme: getComputedStyle(document.documentElement).colorScheme }));
+        assert.equal(c.html, c.body, scheme + ': the root canvas has the page background');
+        assert.notEqual(c.html, 'rgba(0, 0, 0, 0)', scheme + ': the root canvas is painted');
+        assert.notEqual(c.html, 'rgb(0, 0, 0)', scheme + ': the root canvas is not black');
+        assert.equal(c.scheme, scheme, 'the colour scheme follows the theme');
+      } finally { await c2.close(); }
+    }
+  });
   await step('pages: an audit request opens directly from its address, in the docked panel, and the address follows it', async () => {
     const list = await page.evaluate(async () => (await fetch('/api/admin/v1/audit/traces', { credentials: 'same-origin' })).json());
     const id = list.traces[0].trace_id;

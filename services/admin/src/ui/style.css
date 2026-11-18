@@ -204,7 +204,9 @@ section[data-tab^="audit/"] .row .title-row { margin: 0; }
 .status-paused .status-sym::before { border-left: 3px solid currentColor; border-right: 3px solid currentColor; }
 .status-pending .status-sym::before { border: 2px dashed currentColor; border-radius: 50%; }
 
-/* Side panel, docked right under the status bar (rules 27-28); box, modal (rule 29) */
+/* Side panel (rules 27-28); box, modal (rule 29). Where it docks beside the page (761 px and wider) it runs the full window
+   height: the status bar and banners are narrowed to the column beside it, so nothing is left above it. Under 761 px it
+   covers the page and starts under the status bar. */
 .side-panel { position: fixed; top: calc(var(--status-h) + var(--banners-h)); right: 0; bottom: 0; z-index: 10; width: var(--panel-w); max-width: 100vw; display: flex; flex-direction: column; background: var(--card); color: var(--fg); border-left: 1px solid var(--line); }
 .side-panel-head { display: flex; align-items: center; gap: var(--space-1); padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--line); }
 .side-panel-title { font-size: var(--text-m); }
@@ -250,7 +252,7 @@ dialog.box::backdrop { background: rgba(0, 0, 0, .4); }
 
 /* Component behaviour (plan step 1.9; scripts in components.js) */
 /* The docked panel narrows the page instead of covering it (rule 27); on a phone it takes the width. */
-@media (min-width: 761px) { body.panel-open #app, body.panel-open .footer { margin-right: var(--panel-w); } }
+@media (min-width: 761px) { body.panel-open #app, body.panel-open .footer { margin-right: var(--panel-w); } .side-panel { top: 0; } }
 .menu-anchor { position: relative; }
 .menu-anchor > .menu { top: 100%; right: 0; }
 .hint.length-ok { color: var(--good); }
@@ -268,8 +270,8 @@ dialog.box::backdrop { background: rgba(0, 0, 0, .4); }
 
 /* Shared accessibility behaviour (plan step 1.10; rules 26, 41-46) */
 /* A focused control is never hidden under the sticky status bar (step 3.1). */
-html { --banners-h: 0px; scroll-padding-top: calc(var(--status-h) + var(--banners-h) + var(--space-2)); scrollbar-gutter: stable; }
-@media (max-width: 560px) { html { scrollbar-gutter: auto; } } /* a phone's scroll bar floats over the page */
+/* The root canvas takes the page colour itself, so nothing uncovered (a scroll bar's track, rubber-banding) can show another colour. */
+html { --banners-h: 0px; scroll-padding-top: calc(var(--status-h) + var(--banners-h) + var(--space-2)); background: var(--bg); color: var(--fg); }
 main[tabindex="-1"]:focus { outline: none; }
 .error-summary { padding: var(--space-2) 0 var(--space-2) var(--space-3); border-left: 2px solid var(--danger); margin: var(--space-3) 0; color: var(--danger); }
 .error-summary-title { margin: 0 0 var(--space-1); font-weight: var(--weight-bold); }
@@ -363,7 +365,7 @@ input, select { min-height: var(--target-min); }
 .status-bar { position: sticky; top: 0; z-index: 30; display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); height: var(--status-h); padding: 0 var(--space-5); background: var(--card); border-bottom: 1px solid var(--line); font-size: var(--text-xs); }
 .content > main { max-width: var(--content-w); margin: 0 auto; padding: var(--space-5) var(--space-6) calc(var(--content-bottom-room) + var(--save-room, 0px)); }
 /* One column on every page: the same left edge for the title and the first block, whatever the page holds. Pages take the page
-   width; the Reference may use the whole column. The scrollbar room is always kept (html), so a long page does not shift. */
+   width; the Reference may use the whole column. The column is anchored at the left, so a scroll bar appearing does not move its left edge. */
 .content > main > section { max-width: var(--page-w); }
 body[data-page="reference"] .content > main > section { max-width: none; }
 .crumb { flex: 1 1 auto; min-width: 0; }
