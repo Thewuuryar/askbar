@@ -244,7 +244,7 @@ What the shipped binaries (the services, the `cpa` supervisor and the desktop ap
 | keyboard-types | 0.8.3 | MIT OR Apache-2.0 |
 | keyring | 3.6.3 | MIT OR Apache-2.0 |
 | lazy_static | 1.5.1 | MIT OR Apache-2.0 |
-| lettre | 0.11.23 | MIT |
+| lettre | 0.11.24 | MIT |
 | libappindicator | 0.9.0 | Apache-2.0 OR MIT |
 | libappindicator-sys | 0.9.0 | Apache-2.0 OR MIT |
 | libc | 0.2.191 | MIT OR Apache-2.0 |
@@ -607,7 +607,7 @@ Written by hand; the base images are the ones pinned by digest in the `Dockerfil
 
 ### CLIProxyAPI
 
-Copied unchanged from the LICENSE file of the upstream tag `v8.0.51` (the version the Dockerfile pins), which is the license of the code in the `askbar-cpa` image.
+Copied unchanged from the LICENSE file of the upstream tag `v8.0.77` (the version the Dockerfile pins), which is the license of the code in the `askbar-cpa` image.
 
 ```text
 MIT License
