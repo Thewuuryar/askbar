@@ -100,6 +100,41 @@ async fn the_first_check_stores_the_head_and_a_chain_that_only_grows_stays_ok() 
 }
 
 #[tokio::test]
+async fn an_empty_chain_stores_nothing_and_its_first_entries_are_not_a_rewrite() {
+    let (url, s) = stub().await;
+    let a = admin(&url).await;
+    let link = a.auditor.get().unwrap().clone();
+    // The chain has no entries: its head is seq 0, which has no entry to compare with.
+    a.chain.check(&a, &link, false).await;
+    a.chain.check(&a, &link, false).await;
+    assert_eq!((a.chain.state(), stored(&a)), (State::Ok, None), "an empty chain is ok and stores no head");
+
+    s.grow_to(3);
+    a.chain.check(&a, &link, false).await;
+    assert_eq!((a.chain.state(), stored(&a)), (State::Ok, Some((3, "h3".into()))));
+    a.chain.check(&a, &link, false).await;
+    assert_eq!(a.chain.state(), State::Ok, "the stored head is found again, not reported as rewritten");
+    let alerts = a.notifier.notes().iter().filter(|n| n.kind == "chain_mismatch").count();
+    assert_eq!(alerts, 0, "a chain that starts empty and grows is not an alert");
+}
+
+#[tokio::test]
+async fn a_stored_head_of_zero_is_nothing_yet_and_moves_to_the_first_entries() {
+    let (url, s) = stub().await;
+    let a = admin(&url).await;
+    let link = a.auditor.get().unwrap().clone();
+    // A head stored as seq 0 (what earlier versions stored at the first check of an empty chain).
+    {
+        let db = a.db.lock().await;
+        askbar_admin::chain_check::anchor_head(db.conn(), 0, &"0".repeat(64));
+    }
+    s.grow_to(4);
+    a.chain.check(&a, &link, false).await;
+    assert_eq!((a.chain.state(), stored(&a)), (State::Ok, Some((4, "h4".into()))), "seq 0 is not compared with an entry");
+    assert_eq!(a.notifier.notes().iter().filter(|n| n.kind == "chain_mismatch").count(), 0);
+}
+
+#[tokio::test]
 async fn a_shorter_chain_is_a_rollback_and_the_stored_head_stays_where_it_was() {
     let (url, s) = stub().await;
     let a = admin(&url).await;
@@ -120,6 +155,23 @@ async fn a_shorter_chain_is_a_rollback_and_the_stored_head_stays_where_it_was() 
     s.grow_to(12);
     a.chain.check(&a, &link, false).await;
     assert_eq!((a.chain.state(), stored(&a)), (State::Ok, Some((12, "h12".into()))));
+}
+
+#[tokio::test]
+async fn a_chain_emptied_after_entries_were_stored_is_still_a_rollback() {
+    let (url, s) = stub().await;
+    let a = admin(&url).await;
+    let link = a.auditor.get().unwrap().clone();
+    s.grow_to(5);
+    a.chain.check(&a, &link, false).await;
+    // A fresh, empty audit.db was put in place: the head is the virtual seq 0 again.
+    s.entries.lock().unwrap().clear();
+    *s.head.lock().unwrap() = (0, "0".repeat(64));
+    a.chain.check(&a, &link, false).await;
+    assert_eq!(a.chain.state(), State::Rollback { stored: 5, current: 0 });
+    assert_eq!(stored(&a), Some((5, "h5".into())), "the evidence is kept");
+    let alerts = a.notifier.notes().iter().filter(|n| n.kind == "chain_mismatch").count();
+    assert_eq!(alerts, 1, "emptying a chain that had entries is an alert");
 }
 
 #[tokio::test]
