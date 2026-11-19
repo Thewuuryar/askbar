@@ -8,10 +8,8 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub const SESSION_TTL_SECS: i64 = 12 * 60 * 60;
-pub const MAX_FAILURES: usize = 5;
+pub use crate::constants::{LOCKOUT_SECS, MAX_FAILURES, SESSION_TTL_SECS};
 pub const FAILURE_WINDOW_SECS: i64 = 15 * 60;
-pub const LOCKOUT_SECS: i64 = 15 * 60;
 
 pub fn now() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)

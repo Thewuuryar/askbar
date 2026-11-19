@@ -229,6 +229,25 @@ async fn logout_ends_the_session() {
     assert_eq!(t.admin_get("/api/admin/v1/session", Some(&cookie), None).await, 401);
 }
 
+/// Plan step 3.6: the lists poll the admin all day, so a read must not keep the sign-in alive. The expiry is fixed when
+/// the session starts; no request moves it (auth.rs), so the browser needs no "this is automatic" header.
+#[tokio::test]
+async fn reads_do_not_extend_the_sign_in() {
+    let t = start(PASSWORD).await;
+    let cookie = t.session().await;
+    let token = cookie.split_once('=').unwrap().1;
+    t.state.auth.backdate_session(token, 300);
+    let before = t.state.auth.session_age_secs(token).unwrap();
+    assert!(before >= 300);
+    for path in
+        ["/api/admin/v1/status", "/api/admin/v1/users", "/api/admin/v1/clients", "/api/admin/v1/providers", "/api/admin/v1/services"]
+    {
+        t.admin_get(path, Some(&cookie), None).await;
+    }
+    let after = t.state.auth.session_age_secs(token).unwrap();
+    assert!(after >= before, "the session got younger after reads: {before} then {after}");
+}
+
 #[tokio::test]
 async fn every_response_carries_the_locked_down_headers() {
     let t = start(PASSWORD).await;

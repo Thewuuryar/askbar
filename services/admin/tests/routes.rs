@@ -70,8 +70,44 @@ fn every_admin_page_has_a_route_and_a_nav_link() {
         let path = askbar_admin::pages::path(p);
         assert!(table.iter().any(|r| r.method == "GET" && r.path == path), "no route for {path}");
     }
-    let pages = table.iter().filter(|r| r.path.starts_with("/admin/") && r.path.ends_with('/') && r.path != "/admin/").count();
-    assert_eq!(pages, askbar_admin::pages::PAGES.len(), "every page route comes from PAGES");
+    // The redirects are not pages: /admin/ (to the landing page), /admin/audit/ (to Model calls, plan step 2.1) and
+    // /admin/restore/ (to Backup, plan step 5.3) and /admin/clients/ (to People & clients, plan step 5.6) and /admin/settings/ (to General).
+    const REDIRECTS: [&str; 5] = ["/admin/", "/admin/audit/", "/admin/restore/", "/admin/clients/", "/admin/settings/"];
+    let pages =
+        table.iter().filter(|r| r.path.starts_with("/admin/") && r.path.ends_with('/') && !REDIRECTS.contains(&r.path.as_str())).count();
+    // The reference's pages (plan step 7.2) are routes of their own; its index is the `reference` entry of PAGES.
+    let reference = askbar_admin::reference::pages().len() - 1;
+    assert_eq!(pages, askbar_admin::pages::PAGES.len() + reference, "every page route comes from PAGES or the reference");
+}
+
+#[tokio::test]
+async fn the_old_addresses_redirect_and_keep_their_query() {
+    let url = start().await;
+    let http = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().unwrap();
+    // The landing page (plan step 4.1): /admin and /admin/ open Home.
+    for (from, to) in [("/admin", "/admin/home/"), ("/admin/", "/admin/home/")] {
+        let res = http.get(format!("{url}{from}")).send().await.unwrap();
+        assert!(res.status().is_redirection(), "{from}: {}", res.status());
+        assert_eq!(res.headers()["location"], to, "{from}");
+    }
+    // Restore is a section of Backup now (plan step 5.3).
+    for (from, to) in [
+        ("/admin/audit/", "/admin/audit/calls/"),
+        ("/admin/audit/?view=trace&id=abc", "/admin/audit/calls/?view=trace&id=abc"),
+        ("/admin/restore/", "/admin/backup/"),
+        ("/admin/restore/?from=setup", "/admin/backup/?from=setup"),
+        ("/admin/clients/", "/admin/people/"),
+        ("/admin/clients/?panel=user-panel", "/admin/people/?panel=user-panel"),
+        ("/admin/settings/", "/admin/general/"),
+        ("/admin/settings/?from=setup", "/admin/general/?from=setup"),
+    ] {
+        let res = http.get(format!("{url}{from}")).send().await.unwrap();
+        assert!(res.status().is_redirection(), "{from}: {}", res.status());
+        assert_eq!(res.headers()["location"], to, "{from}");
+    }
+    for slug in ["home", "alerts", "audit/calls", "audit/admin", "audit/sealed", "audit/routing", "backup", "notifications", "reference"] {
+        assert_eq!(http.get(format!("{url}/admin/{slug}/")).send().await.unwrap().status(), 200, "{slug}");
+    }
 }
 
 #[tokio::test]
@@ -100,4 +136,18 @@ async fn every_registered_route_answers_and_a_method_that_is_not_registered_is_a
     }
     let res = http.get(format!("{url}/api/admin/v1/no-such-thing")).send().await.unwrap();
     assert_eq!(res.status(), 404);
+}
+
+#[tokio::test]
+async fn constants_json_is_public_and_cached_by_etag() {
+    let url = start().await;
+    let http = reqwest::Client::new();
+    let res = http.get(format!("{url}/admin/constants.json")).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    assert!(res.headers()["content-type"].to_str().unwrap().starts_with("application/json"));
+    let etag = res.headers()["etag"].to_str().unwrap().to_string();
+    let v: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(v["MIN_PASSPHRASE_CHARS"], 20);
+    let again = http.get(format!("{url}/admin/constants.json")).header("if-none-match", &etag).send().await.unwrap();
+    assert_eq!(again.status(), 304);
 }

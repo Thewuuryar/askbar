@@ -8,7 +8,7 @@ How the popup and the admin site look and behave. Items marked **(proposed)** ar
 
 ### Tokens and scales
 
-- **One token set for both UIs.** Colours, sizes, spacing, radii and weights are CSS variables defined once, in `clients/desktop/ui/tokens.css`. The admin site uses a byte-identical copy (`services/admin/src/ui/tokens.css`). `scripts/check-ui-tokens.sh` fails if they differ or if a text colour is under 4.5:1 in either theme (one place per fact). Names: `--bg`, `--card`, `--fg`, `--muted`, `--line`, `--accent`, `--danger`, `--good`. The admin's `--bad` becomes `--danger`, and no rule uses a fallback colour. Neutrals are the popup's. The accent is the popup's blue, darkened slightly (`#3a5bd0`) so it passes 4.5:1 as text on both backgrounds; muted text and the success colour were darkened for the same reason.
+- **One token set for both UIs.** Colours, sizes, spacing, radii and weights are CSS variables defined once, in `clients/desktop/ui/tokens.css`. The admin site uses a byte-identical copy (`services/admin/src/ui/tokens.css`). `scripts/check-ui-tokens.sh` fails if they differ or if a text colour is under 4.5:1 in either theme (one place per fact). Names: `--bg`, `--card`, `--fg`, `--muted`, `--line`, `--accent`, `--danger`, `--good`. No rule uses a fallback colour. Neutrals are the popup's. The accent is the popup's blue, darkened slightly (`#3a5bd0`) so it passes 4.5:1 as text on both backgrounds; muted text and the success colour were darkened for the same reason.
 - **Text: four sizes.** `0.75rem` (hints, meta), `0.875rem` (secondary), `0.9375rem` (body), `1.3rem` (input bar, headings). Two weights: 400 and 600.
 - **Spacing: 4, 8, 12, 16, 24, 32 px.** No other value.
 - **Radii: two.** 8 px for controls and 16 px for the popup card. No pill shapes and no 4, 6 or 12.
@@ -28,7 +28,7 @@ How the popup and the admin site look and behave. Items marked **(proposed)** ar
 
 ### Motion
 
-None, or one transition of 150 ms or less (opacity or colour). Under `prefers-reduced-motion: reduce` there is none.
+None, or one transition of 150 ms or less (opacity or colour). The one exception is the admin's docked side panel, which slides in and out over `--motion-panel` with `--ease-panel` while the page narrows and widens in step. Under `prefers-reduced-motion: reduce` there is none.
 
 ### Patterns for states
 
@@ -63,28 +63,90 @@ None, or one transition of 150 ms or less (opacity or colour). Under `prefers-re
 
 ## The admin site (`services/admin/src/ui/`)
 
-- Text goes in through `textContent`, never `innerHTML`. The CSP forbids inline script and style; do not loosen it.
-- **One primary action per view.** Buttons are secondary by default (outline, no fill). The one primary action is marked explicitly and is the only one filled with `--accent`. A destructive action uses `--danger`, never the primary style.
-- **Desktop and mobile layouts.** The site works at phone width and desktop width: one column and a full-width navigation menu at small widths, and a side navigation with a content column at large ones. Tap targets are at least 44 px high on small widths. Tables scroll inside their own box; the page never scrolls sideways. Browser tests run at both widths.
-- **Audit page:** a table with a few numbers above it (replies, errors, tokens, p50 and p95 time). No charts by default; add one only if a table cannot answer the question. Use `--danger` only for errors.
-- Anything that interrupts something says what it will interrupt before it asks (the Services page does this).
-- Show a secret once, at creation (API key, pairing key, token), and say so.
-- A change made while the server is down is refused with a sentence, not half applied. The admin does not queue it ([ADR 0028](../adr/0028-service-boundaries-and-config-delivery.md)); it pushes the saved state when the server returns.
-- Sealed content ([ADR 0011](../adr/0011-sealed-content-access.md)): the session shows its remaining time and a **Seal** button that ends it at once. Opening and timeout changes raise an alert; the screen says so before it asks for the passphrase.
-- Tests: `tests/e2e/admin.test.js`, in a real browser against the real server and admin.
+The admin is server-rendered pages with three plain scripts and no build step. Its components and page layouts are documented in the reference, with a live example of each in the admin: [Components](../reference/admin-ui/components.md) and [Page layouts](../reference/admin-ui/page-layouts.md). This section holds the rules; it does not repeat the markup.
+
+### Look and behaviour
+
+- **One primary action per view.** Buttons are secondary by default (outline, no fill). The one primary action is marked explicitly and is the only one filled with `--accent`. A destructive action uses `--danger`, never the primary style. A view is a page at rest or an open box, dialog or docked panel, and each has at most one primary (a page with nothing natural to mark has none). While a floating save bar shows, its Save is the page's one filled button: every other page-level `btn-primary` is drawn as a secondary until the bar closes. Remove, Disconnect, Delete, Revoke, Restart and Rotate key buttons, and the button that confirms them, are `btn-danger`.
+- **Navigation.** The side menu links every page, grouped under Audit and Settings. A group's heading links to its first page (Settings opens General); the current page has `aria-current="page"`, and its group heading is bold. The menu collapses to icons (`--rail-w-collapsed`); the choice is remembered per browser, and names show on hover and on keyboard focus. On a phone the same menu opens full screen from a Menu button in a top bar.
+- **Hover.** Everything the pointer can land on tints subtly, and it is the same idea everywhere: buttons (every variant), tabs, segmented buttons, link-buttons, text fields, text areas, drop-downs, the row of a check box or radio, side-menu, menu and bell items, Home widgets, Alerts and span rows, and every row of every table (`tbody`, on every page, the reference's too). An item at rest on the page or a card tints to `--hover-bg` (`--surface-2`, the quiet button's first hover); one that rests on `--surface-2` goes to `--hover-bg-2`; a filled or already tinted item (primary, the current page, a failed call) keeps its hue and mixes `--hover-shift` of `--fg` into it; an outline danger button tints with `--danger-soft`, so it stays red. A rule that tints a hover uses these tokens, never another colour. The item's size, border and place do not change (no layout shift; a row with no padding grows its tint sideways with a `box-shadow`), the cursor changes only on a clickable item, and focus rings, the red invalid border and the greyed (`aria-disabled`, `disabled`, read-only) look are left as they are. Header rows and chart bars do not tint, and the open list of a native drop-down is the browser's own. No transition is added. `tests/e2e/hover-sweep.js` hovers a sample of each kind on every admin and reference page and fails on any that does not change; the admin browser test runs it.
+- **Status bar.** Every page has one status bar: the breadcrumb, global search (`/` focuses it), the budget, the kill switch, the seal toggle and the alerts bell. Search covers the pages and settings, and the reference comes last under Reference. The side menu is fixed to the window and the status bar and the banners stay pinned at the top while the page scrolls; the search box sits at the centre of the bar, whatever the breadcrumb says (below 1000 px wide it shares the left side instead).
+- **Page header.** Every page has a title, a `?` help button, one line of description and its actions on the right. The title sits below the status bar.
+- **Sections are separated by hairlines, not boxes.** A card is used only on sign-in and first-run setup. No card inside a card, and no border on a border.
+- **Desktop and phone.** The site works at phone width and desktop width: one column and a full-width menu at small widths, a side navigation with a content column at large ones. Every page has the same content column (the same left edge for the title and the first block), anchored at the left so a scroll bar appearing does not move it (no room is reserved for one: a page that does not scroll uses the whole width), the root canvas painted with the page background in both themes, and `--content-bottom-room` left under the last block. A table fits its column, so its box shows no scroll bar; one that cannot fit (the nowrap Audit tables, any table on a narrow window) scrolls inside its own box; the page never scrolls sideways. Browser tests run at both widths.
+- **Tap targets** are at least 24 px on desktop and 44 px on a phone, and buttons are 28, 32 or 40 px high (`--btn-h-s`, `--btn-h`, `--btn-h-l`), 44 px on a phone.
+- **Save and apply.** A save button says "Save". "Save and apply" is used only where the save takes effect at once (Network). A change shows a save bar, "1 unsaved change: …", with Discard and Save. A failed save shows a summary at the top of the form and moves focus to the first error.
+- **Forms.** The label is above the field. A field's hint is one line under it (format, range, limit): never placeholder text, and never in brackets in the label. Mark "(optional)" only when most fields are required. A new password or passphrase is two fields stacked full width, with the length rule under the first as a live count, and "The two passwords do not match." (or passphrases) under the second as soon as it has text that differs from the first. Paste is always allowed.
+- **Help and text.** Every page title and every section heading has a `?` button after it (the exceptions: the reference's own pages, which are the help, headings that only label a list of links, headings inside a side panel or box, and the sign-in and setup cards), and a section has at most one line of help. Explanations live in the reference. Text stays on screen only when it prevents a mistake or is needed to finish a task: lock-out warnings, "cannot be recovered", required steps.
+- **Side panel.** One panel at a time, docked on the right, the full window height from the top on a desktop (under the phone bar on a phone), and 440 px wide (`--panel-w`), used for adding and editing, for help, and for the selected Audit row. It slides in from the right and out again (instant under reduced motion), and the page narrows and widens in step. The page narrows and stays usable; nothing is dimmed. Esc and × close it, unsaved changes ask first, and it has its own address so Back closes it.
+- **Boxes are modal** and used only for confirmations and one-off secrets (a pairing key, a new API key).
+- **Risky actions.** A risky action on one row (restarting a service) opens that row to confirm: Cancel and the action at its bottom right, and the row's own button hides until it closes. Deleting asks for no confirmation when Save or Undo covers it, asks in a box when it cannot be undone, and asks the person to type the name when it destroys data or affects everyone. Anything that interrupts something says what it will interrupt before it asks (the Services page does this).
+- **Toasts** are for success and Undo only. Errors are inline, next to the fix.
+- **Lists.** One visible row action and a ⋯ menu; Delete is last, in red. A list refreshes every `LIVE_EVERY_SECS` while the tab is visible: new rows are highlighted and announced, scroll, focus and typing are kept, and the admin's own changes show at once. While the tab is hidden the bell and the tab title refresh every `HIDDEN_EVERY_SECS`. A failed check backs off and shows "Reconnecting…".
+- **Numbers and times.** Relative times, with the full date on hover. Numbers are right-aligned with their units.
+- **Statuses** use a fixed set of words, always with a symbol: never colour alone.
+- **Audit pages** show a table with a few numbers above it (replies, errors, tokens, p50 and p95 time). Use `--danger` only for errors. A chart needs a one-line text summary, and nothing animates under reduced motion.
+- **Greyed-out features.** A feature the server cannot support yet is drawn with `na()`: `aria-disabled="true"`, never `disabled`. Tab reaches it, Enter does nothing, and a "Not available yet: …" note shows on hover and on focus. A greyed item has no digit in its text.
+- **Secrets.** A secret (API key, pairing key, token) is shown once, at creation, and the screen says so.
+- **Server down.** A change made while the server is down is refused with a sentence and is not half applied. The admin does not queue it ([ADR 0028](../adr/0028-service-boundaries-and-config-delivery.md)); it pushes the saved state when the server returns.
+- **Sealed content** ([ADR 0011](../adr/0011-sealed-content-access.md)). While the session is open the status bar shows the time left and a **Seal** button that ends it at once. Opening and timeout changes raise an alert, and the screen says so before it asks for the passphrase.
+
+### Security (admin)
+
+- **Text in, never HTML.** Text from the server goes in through `textContent`, never `innerHTML`. The CSP forbids inline script and style, and it requires Trusted Types with no policy (`trusted-types 'none'`). Do not loosen it.
+- **Help and reference text** is rendered when the admin is built, never fetched or injected at run time (see [Help](#help)).
+
+### Alerts and history
+
+- **The bell** badge counts critical plus warning. Its menu groups Critical, Warning and Info, and a new critical alert also pops up.
+- **Banners are for the whole admin only.** A banner is shown for a condition that affects the whole admin. It cannot be dismissed, it clears itself when the condition ends, and it shows the current state only. Which alerts get a banner is set in Notifications; critical ones are always shown.
+- **History goes in the bell and on the Alerts page, never in a banner.** A banner that carries history would read as a current problem after it has passed.
+
+### Accessibility (admin)
+
+- **Keyboard.** Everything works by keyboard. The focus ring is never hidden behind a sticky bar, and "Skip to content" is the first Tab stop.
+- **Names.** Every control has a name, and every tooltip also shows on keyboard focus.
+- **Announcements.** One announcer (`ui.announce`): updates are read out without moving focus. Polite, except critical alerts and banners, which are urgent.
+- **Contrast.** Text is at least 4.5:1 and icons and field borders at least 3:1, in both themes. `scripts/check-ui-tokens.sh` checks the token pairs.
+
+### Why some colours and tooltips are the way they are
+
+- **The current page's name is `--fg`, not the accent.** In the side menu the current item has an accent tint (`--accent-soft`) and an accent icon. The accent text on that tint is 4.48:1 in the light theme, under the 4.5:1 a name needs; `--fg` on it is about 13:1. The icon is not text, so the accent is kept there (3:1 is enough). The side menu's background is `--bg`.
+- **The menu tooltip is one fixed element, `#menu-tip`.** The collapsed side menu and the menu items show their names in it. It sits outside the menu, because the menu scrolls and a tooltip inside it would be clipped. It is placed beside the item, repeats the item's accessible name (so it is `aria-hidden`), and Esc hides it. See the menu code in `services/admin/src/ui/components.js`.
+
+### Help
+
+Each help button (`help()`) opens the docked `#help-panel` with the text of its topic. The text was rendered when the admin was built, from `docs/reference` (`services/admin/build.rs` and `services/admin/src/reference.rs`), and each page carries it in a `<template data-help-topic>`, so nothing is fetched and no HTML is injected at run time. The topics are the `HELP_TOPICS` list in `constants.rs`: a page's topic is its reference page's id (the text before its first heading) and each section's is `<page id>#<heading>`. A new page or section gets its text in `docs/reference` first, then its topic, then the `help()` call; a test fails for a page with a title or section heading and no button. "Open full page" goes to `/admin/reference/`, which renders the same reference; see [the reference index](../reference/index.md). To change what a help topic says, edit its page in `docs/reference`.
 
 ### Admin pages
 
-Each section is its own page at `/admin/<slug>/`, pre-rendered HTML with no client-side routing (plan step 1.16).
+Each page is its own URL, `/admin/<slug>/`, pre-rendered HTML with no client-side routing (plan step 1.16). The pages, their groups and their icons are the one list `PAGES` in [`pages.rs`](../../services/admin/src/pages.rs). The side menu, the routes and the route-table test all come from it, and `PAGE_SLUGS` in `constants.rs` lists the same slugs. The menu has Home and Alerts at the top, then the Audit group (Model calls, Admin actions, Sealed access, Routing), the Settings group (General, Providers, People & clients, Services, Network, Security, Backup, Notifications) and Reference.
 
-- **One list:** `PAGES` in `services/admin/src/pages.rs`. The routes, the nav and the route-table test all come from it.
-- **One frame:** `services/admin/src/ui/templates/base.html` (Askama) holds the head, the header with sign-out, the nav (`aria-current="page"` on the current page), the page heading and its one-line hint, the sign-in, first-run and offline screens, and the footer. Every page has the same frame.
-- **A new page** is one `PAGES` entry, one `page!` line, and one `ui/templates/<slug>.html` that extends `base.html` and fills `hint` and `content` (and `actions` for a button beside the heading, `scripts` for a page-only script). If it needs loading, add its loader to the `tabs` table in `app.js`.
-- **Building blocks** (`ui/templates/blocks.html`): `error_line(id)` for a form's or view's error line, and `hint(text)` for a plain-text hint. Use them rather than writing the markup again; add a block when the same markup is needed a third time.
-- Templates hold static text and the page list only; Askama escapes them. Everything that comes from the API goes in through `textContent` in the scripts, as before.
-- State a person may want to link to goes in the query string and is kept current with `history.replaceState` (the Audit page's `?view=trace&id=...`).
-- `app.js` wires each element only if it is on the page (`on(id, event, fn)`), and runs only the current page's loader.
-- Static files are sent with an `ETag` and `no-cache`, so a page change costs one page plus 304s; pages and the API are `no-store`.
+- **One frame:** `services/admin/src/ui/templates/base.html`. It holds the head, the side menu, the status bar, the banners and the page header. The header takes its one-line description from `PAGES`. A page's template fills the `content` block, and may fill `scripts` for a page-only script. The sign-in and first-run screens are the card layout, with no menu.
+- **A new page** is one `PAGES` entry, one `page!` line in `pages.rs`, and one `ui/templates/<slug>.html` that extends `base.html`. If the page loads data, add its loader to the `tabs` table in `app.js`. Add its slug to `PAGE_SLUGS` in `constants.rs`.
+- **Templates hold static text, the page list and constants only.** Askama escapes them. Everything that comes from the API goes in through `textContent` in the scripts.
+- **Components.** Pages are built from the macros in `ui/templates/components.html`, and icons from `icons.html`. The macros' header comment is the list of them. `blocks.html` holds the two building blocks `error_line(id)` and `hint(text)`. Script builders are in `ui/components.js`, which exposes them as `window.ui`. A page never writes its own copy of a component's markup.
+- **Scripts.** `components.js` (the builders and the frame's behaviour), `app.js` (the API, the bell, the status bar and the loaders), `audit.js` (Sealed access and Routing) and `audit_calls.js` (Model calls). A script wires each element only if it is on the page (`on(id, event, fn)`), and runs only the current page's loader.
+- **Addresses.** State a person may want to link to goes in the query string and is kept current with `history.replaceState`: the selected trace on Model calls, and the open panel (`?panel=`). The old `?view=trace&id=` address still opens the trace.
+- **Caching.** Static files are sent with an `ETag` and `no-cache`, so a page change costs one page plus 304s. Pages and the API are `no-store`.
+
+### Single source of truth
+
+- **Behaviour values and limits** live in `services/admin/src/constants.rs`: limits, intervals, the page list, the help topics, the links. They are served as `/admin/constants.json` and read in the scripts as `K` (`app.js`) or `ui.constants` (elsewhere), and in templates as `{{ crate::constants::NAME }}`. No number, limit or URL is typed into a script or a template.
+- **Visual values** live in `tokens.css`: colours, sizes, spacing, radii, the panel width, the status bar and menu widths. The admin copy (`services/admin/src/ui/tokens.css`) is byte-identical to the popup's, and only gains variables.
+
+### Drift checks
+
+These fail the build when the rules above are broken.
+
+- **Components are not hand-written.** `services/admin/tests/drift.rs` (`no_template_hand_writes_markup_a_component_covers`) fails when a template writes out markup that a component covers. The check is a list of the markup each component owns (`COVERED`). To allow one case, add a row to `MARKUP_EXEMPT` with the file, the marker, the context and a reason. An exemption that matches nothing fails too.
+- **No literal for a constant.** `no_script_or_template_types_in_a_number_the_constants_define` fails when a script or template types a number that `constants.json` defines. Time-unit maths (`60`, `1000`, `3600`, `24`) and everyday digits are allowed. To allow another, add a row to `LITERAL_EXEMPT` with the file, the number, the context and a reason; read the value from `K` or `ui.constants` instead wherever you can.
+- **No stale page address.** `every_page_address_in_the_scripts_and_templates_names_a_page` fails on an `/admin/<slug>/` for a slug that is not in `PAGE_SLUGS`. The reference (`/admin/reference/...`) and the admin API (`/api/admin/v1/...`) are not checked. There is no exemption list: add the page, or fix the address.
+- **Greyed items have no digit.** The end-to-end step "greyed items: no "Not available yet" item shows a digit, on any page" in `tests/e2e/admin.test.js` visits every page and fails on a greyed item with a digit. To allow one, add its label and a reason to the step's `EXEMPT` list.
+
+### Tests
+
+The browser suite, `tests/e2e/admin.test.js`, runs in a real browser against the real server and admin, at 1280 and 390 pixels. Every page is checked with axe, target sizes, the CSP and Trusted Types, and the script errors.
 
 ## Other clients
 

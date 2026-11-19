@@ -1,57 +1,108 @@
 {% extends "base.html" %}
 {%- import "blocks.html" as b %}
-{% block hint %}API keys are write-only: they are stored encrypted and never shown again. Leave the key empty when editing to keep the current one.{% endblock %}
-{% block actions %}<button type="button" id="add-provider">Add provider</button>{% endblock %}
+{%- import "components.html" as c %}
 {% block content %}
-    <div id="providers"></div>
+    <section id="providers-section" aria-labelledby="providers-title">
+      <div class="sect-head">
+        {% call c::section_title("providers-title", "Providers", "settings/providers#providers") %}{% endcall %}
+        <span class="spacer"></span>
+        <button type="button" id="add-provider" class="btn btn-primary">Add provider</button>
+      </div>
+      <div class="table-wrap">
+        <table class="table" id="providers-table">
+          <caption class="visually-hidden">Providers</caption>
+          <thead><tr><th scope="col">Name</th><th scope="col" class="col-type">Type</th><th scope="col">Last test</th><th scope="col" class="col-models num">Models</th><th scope="col" class="actions"><span class="visually-hidden">Actions</span></th></tr></thead>
+          <tbody id="providers"></tbody>
+        </table>
+      </div>
+    </section>
 
-    <form id="provider-form" hidden>
-      <h3 id="provider-form-title">Add provider</h3>
-      <p id="p-hint" class="hint" hidden></p>
-      <label>Name <input id="p-name" required></label>
-      <label>Type
-        <select id="p-type"><option value="openai">openai (OpenAI-compatible)</option><option value="anthropic">anthropic</option></select>
-      </label>
-      <label>Base URL <input id="p-base-url" placeholder="https://api.openai.com/v1"></label>
-      {% call b::hint("The model the Test button asks. Which models people may use is chosen under Approved models, below.") %}{% endcall %}
-      <label>Test model
-        <input id="p-model" required>
-        <select id="p-model-list" hidden aria-label="Model"></select>
-      </label>
-      <div class="row">
-        <button type="button" id="p-model-refresh" class="secondary">Load models</button>
-        <span id="p-model-status" class="hint" role="status"></span>
+    <section id="cpa-panel" aria-labelledby="cpa-title" hidden>
+      <div class="sect-head">
+        {% call c::section_title("cpa-title", "Claude and ChatGPT accounts", "settings/providers#claude-and-chatgpt-accounts") %}{% endcall %}
       </div>
-      <label>API key <input id="p-key" type="password" autocomplete="off" placeholder="write-only"></label>
-      <label>Max tokens <input id="p-max-tokens" type="number" min="1"></label>
-      <label>Temperature <input id="p-temperature" type="number" step="0.1" min="0" max="2"></label>
-      <label>Billing
-        <select id="p-billing"><option value="metered">metered (paid per token)</option><option value="subscription">subscription (flat plan)</option></select>
-      </label>
-      {% call b::hint("Prices per million tokens, in your own currency. Leave empty if you do not know: cost then shows as unknown, not as zero.") %}{% endcall %}
-      <label>Input price <input id="p-price-in" type="number" step="any" min="0"></label>
-      <label>Output price <input id="p-price-out" type="number" step="any" min="0"></label>
-      <label>Cached input price <input id="p-price-cached" type="number" step="any" min="0"></label>
+      <p class="hint">Use a Claude or ChatGPT subscription as a provider. The CPA provider answers once an account is connected.</p>
+      <div id="cpa-accounts"></div>
       <div class="row">
-        <button type="submit">Save</button>
-        <button type="button" id="provider-cancel" class="secondary">Cancel</button>
+        <button type="button" id="cpa-connect-anthropic" class="btn btn-secondary">Connect Claude</button>
+        <button type="button" id="cpa-connect-openai" class="btn btn-secondary">Connect ChatGPT</button>
       </div>
-      {% call b::error_line("provider-error") %}{% endcall %}
-    </form>
-    <section id="catalog-section">
-      <h3>Approved models</h3>
-      {% call b::hint("People can only use the models approved here, and a message that names none uses the default. A new install has none approved, so nothing answers until you approve some: pick a provider, load its models, tick the ones to approve, choose the default and save.") %}{% endcall %}
-      <div id="catalog-approved"></div>
-      <div class="row">
-        <label>Provider <select id="catalog-provider"></select></label>
-        <button type="button" id="catalog-load" class="secondary">Load models</button>
-        <span id="catalog-status" class="hint" role="status"></span>
+      <div id="cpa-login" hidden>
+        <p>1. Open this address and approve: <a id="cpa-login-link" target="_blank" rel="noopener noreferrer"></a></p>
+        <div id="cpa-paste" hidden>
+          <p>2. The browser lands on an address starting <code>http://localhost</code> that probably does not load. Copy that whole address from the address bar and paste it here:</p>
+          <div class="field">
+            <label for="cpa-redirect">Address</label>
+            <input id="cpa-redirect" autocomplete="off">
+          </div>
+          <div class="row">
+            <button type="button" id="cpa-finish" class="btn btn-primary">Finish</button>
+          </div>
+        </div>
+        <div class="row"><button type="button" id="cpa-cancel" class="btn btn-secondary">Cancel</button></div>
       </div>
-      <div id="catalog-offered"></div>
-      <div class="row">
-        <button type="button" id="catalog-save">Save approved models</button>
-        <button type="button" id="catalog-discard" class="secondary">Discard changes</button>
+      <p id="cpa-message" class="hint" role="status"></p>
+    </section>
+
+    <section id="catalog-section" aria-labelledby="catalog-title">
+      <div class="sect-head">
+        {% call c::section_title("catalog-title", "Models people can use", "settings/providers#models-people-can-use") %}{% endcall %}
+      </div>
+      <p class="hint">Applies to every user and client. A message that names no model uses the default.</p>
+      <form id="catalog-form" novalidate>
+        <input type="hidden" id="catalog-state">
+        <label for="catalog-state" class="visually-hidden">Approved models</label>
+      </form>
+      <div class="picker">
+        <div class="picker-col" role="group" aria-labelledby="catalog-offered-title">
+          <div class="picker-colh"><h4 id="catalog-offered-title">Offered by your providers</h4><span class="hint">Tick to let people use it</span></div>
+          <div class="picker-tools">
+            <div id="catalog-seg" class="seg" role="group" aria-label="Provider"></div>
+            <input type="search" id="catalog-filter" aria-label="Filter models" placeholder="Filter models" autocomplete="off">
+            <button type="button" id="catalog-load" class="btn btn-secondary btn-s">Reload</button>
+          </div>
+          <div id="catalog-offered"></div>
+        </div>
+        <div class="picker-col" role="group" aria-labelledby="catalog-approved-title">
+          <div class="picker-colh"><h4 id="catalog-approved-title">Approved for everyone</h4><span class="hint">Everyone sees this list</span></div>
+          <div id="catalog-approved" role="radiogroup" aria-labelledby="catalog-approved-title"></div>
+        </div>
       </div>
       {% call b::error_line("catalog-error") %}{% endcall %}
+      {% call c::save_bar("catalog-form") %}{% endcall %}
     </section>
+
+    {% call c::side_panel("provider-panel", "Add provider", "") %}
+      <form id="provider-form" class="panel-form">
+        <h3>Connection</h3>
+        {% call c::field("Name", "p-name", "", "text", false) %}{% endcall %}
+        {% call c::field("Type", "p-type", "", "slot", false) %}<select id="p-type" name="p-type" aria-describedby="p-type-error"><option value="openai">OpenAI-compatible</option><option value="anthropic">Anthropic</option></select>{% endcall %}
+        {% call c::field("Base URL", "p-base-url", "", "text", true) %}{% endcall %}
+        {% call c::field("API key", "p-key", "Write-only.", "password", true) %}{% endcall %}
+        <h3>Check it works</h3>
+        {% call c::field("Test model", "p-model", "Tested with a short reply when you add it.", "text", false) %}{% endcall %}
+        <div class="row"><button type="button" id="p-model-refresh" class="btn btn-secondary btn-s">Load models</button></div>
+        <datalist id="p-model-options"></datalist>
+        <h3>Cost</h3>
+        {% call c::field("Billing", "p-billing", "", "slot", false) %}<select id="p-billing" name="p-billing" aria-describedby="p-billing-error"><option value="metered">Metered (paid per token)</option><option value="subscription">Subscription (flat plan)</option></select>{% endcall %}
+        <div class="field-row3">
+          {% call c::field("Input price", "p-price-in", "", "number", false) %}{% endcall %}
+          {% call c::field("Output price", "p-price-out", "", "number", false) %}{% endcall %}
+          {% call c::field("Cached input", "p-price-cached", "", "number", false) %}{% endcall %}
+        </div>
+        <p class="hint">Per million tokens. Leave empty if unknown: cost then shows as unknown, not as zero.</p>
+        <details id="p-advanced" class="advanced">
+          <summary>Advanced: max tokens, temperature</summary>
+          {% call c::field("Max tokens", "p-max-tokens", "", "number", true) %}{% endcall %}
+          {% call c::field("Temperature", "p-temperature", "", "number", true) %}{% endcall %}
+        </details>
+        {% call b::error_line("provider-error") %}{% endcall %}
+        <div class="panel-foot">
+          <button type="button" id="provider-delete" class="btn btn-danger" hidden>Delete</button>
+          <span class="spacer"></span>
+          <button type="button" id="provider-cancel" class="btn btn-secondary" data-panel-close>Cancel</button>
+          <button type="submit" id="provider-submit" class="btn btn-primary">Add and test</button>
+        </div>
+      </form>
+    {% endcall %}
 {% endblock %}

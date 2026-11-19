@@ -157,6 +157,11 @@ pub const IMPORT_REQUEST: &str = "import-request";
 pub const IMPORT_DONE: &str = "import-done";
 pub const IMPORT_FILE: &str = "import.tar";
 
+/// One export or import at a time. The request files are single slots, and the supervisor answers whatever the slot holds when it
+/// looks (every two seconds): a second request written meanwhile replaces the first, whose id is then never answered, so its
+/// caller waits out its whole time limit. A manual backup and a scheduled one (or a restore) can overlap, so they take turns.
+static TRANSFER: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// Make the files the supervisor writes in place: mode 0660 in the admin's group, as for `restart-done` (it cannot create a file here).
 pub fn prepare_transfer_files(config_dir: &FsPath) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
@@ -173,6 +178,7 @@ pub fn prepare_transfer_files(config_dir: &FsPath) -> std::io::Result<()> {
 /// Ask the supervisor for the account login files, encrypted to `recipient`, and wait for `export.age`. Returns its bytes; the
 /// copy on the shared volume is emptied. An `Err` means nothing usable was made (no answer in `wait`, or the supervisor said no).
 pub async fn export_logins(config_dir: &FsPath, recipient: &str, wait: Duration) -> Result<Vec<u8>, &'static str> {
+    let _turn = TRANSFER.lock().await;
     prepare_transfer_files(config_dir).map_err(|_| "The account logins could not be asked for.")?;
     let id = rand(24);
     let request = json!({ "id": id, "recipient": recipient }).to_string();
@@ -196,6 +202,7 @@ pub async fn export_logins(config_dir: &FsPath, recipient: &str, wait: Duration)
 /// Give the supervisor the account login files, opened, to put back in `cpa-auth` (a restore, ADR 0013): the plain tar goes in
 /// `import.tar` (a file the admin made, 0660, that the supervisor empties again) and a request names it. Waits for the answer.
 pub async fn import_logins(config_dir: &FsPath, tar: &[u8], wait: Duration) -> Result<(), &'static str> {
+    let _turn = TRANSFER.lock().await;
     prepare_transfer_files(config_dir).map_err(|_| "The account logins could not be handed over.")?;
     std::fs::write(config_dir.join(IMPORT_FILE), tar).map_err(|_| "The account logins could not be handed over.")?;
     let id = rand(24);
@@ -573,6 +580,39 @@ mod tests {
         prepare_restart_done(&dir).unwrap();
         assert_eq!(std::fs::read_to_string(&done).unwrap(), "x", "an existing file is kept, only its mode is set");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The supervisor answers whatever the one request slot holds at each look, so two overlapping exports (a manual backup and the
+    /// scheduled one, which is due at once when a backup key is first set) must take turns: the one written second would otherwise
+    /// replace the first, which then waits out its whole limit for an answer that never comes.
+    #[tokio::test]
+    async fn two_exports_at_once_both_get_an_answer() {
+        let dir = std::env::temp_dir().join(format!("askbar-cpa-exp-{}", ulid::Ulid::new()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (d, st) = (dir.clone(), stop.clone());
+        let supervisor = std::thread::spawn(move || {
+            while !st.load(std::sync::atomic::Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(100));
+                let Ok(req) = std::fs::read(d.join(EXPORT_REQUEST)) else { continue };
+                let Some(id) = serde_json::from_slice::<Value>(&req).ok().and_then(|v| v["id"].as_str().map(String::from)) else {
+                    continue;
+                };
+                let done = std::fs::read(d.join(EXPORT_DONE)).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok());
+                if done.is_some_and(|v| v["id"] == id.as_str()) {
+                    continue;
+                }
+                std::fs::write(d.join(EXPORT_FILE), b"logins").unwrap();
+                std::fs::write(d.join(EXPORT_DONE), json!({ "id": id, "ok": true, "bytes": 6 }).to_string()).unwrap();
+            }
+        });
+        let wait = Duration::from_secs(5);
+        let (a, b) = tokio::join!(export_logins(&dir, "age1x", wait), export_logins(&dir, "age1x", wait));
+        stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        supervisor.join().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(a, Ok(b"logins".to_vec()));
+        assert_eq!(b, Ok(b"logins".to_vec()));
     }
 
     #[test]

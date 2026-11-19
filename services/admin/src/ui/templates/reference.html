@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{%- import "components.html" as c %}
+{#- The reference (plan steps 7.2 and R7). Two layouts from one template:
+    - the home (`/admin/reference/`): the page header, then every page by area, generated from the reference index, so a new
+      page shows up by itself;
+    - an article: the outline of the pages at the left and "On this page" at the right, both pinned and both starting at the top of the
+      grid, and in the middle the area, the title, the lede, a button to the admin page the article documents, and the text
+      (Markdown rendered at build time by build.rs; its HTML is trusted, it holds no raw HTML from the source). Under each
+      section that has a control on the admin page, a link to it. On a phone the title comes first, then the outline as a
+      closed box, then the article, and the right list is left out. -#}
+{% block header %}{% endblock %}
+{% block content %}
+{%- if page.is_index() %}
+    <div class="rf-home">
+      {% call c::page_header(label, lede, crate::reference::page_topic(current), "") %}<a class="btn btn-primary rf-open" href="{{ folder_url }}" target="_blank" rel="noopener noreferrer">{% call c::icon("code") %}{% endcall %}View on GitHub<span class="visually-hidden"> (opens in a new tab)</span></a>{% endcall %}
+      <div class="rf-grid">
+        {%- for g in outline %}
+        <section class="rf-grp" aria-labelledby="rf-area-{{ loop.index }}">
+          <h3 id="rf-area-{{ loop.index }}">{{ g.label }}</h3>
+          <ul>
+            {%- for p in g.pages %}
+            <li><a href="{{ p.path() }}">{{ p.title }}</a><span class="rf-sum">{{ p.summary }}</span></li>
+            {%- endfor %}
+          </ul>
+        </section>
+        {%- endfor %}
+      </div>
+      <p class="ref-src"><span>Source: <code>{{ page.source }}</code></span> <a class="ref-edit" href="{{ edit_url }}" target="_blank" rel="noopener noreferrer">{% call c::icon("code") %}{% endcall %}Edit on GitHub<span class="visually-hidden"> (opens in a new tab)</span></a></p>
+    </div>
+{%- else %}
+    <div class="ref">
+      <details class="ref-nav" open>
+        <summary class="ref-nav-toggle">Reference pages</summary>
+        <nav aria-label="Reference pages">
+          <ul class="ref-list">
+            <li><a href="/admin/reference/">Overview</a></li>
+          </ul>
+          {%- for g in outline %}
+          <p class="ref-group">{{ g.label }}</p>
+          <ul class="ref-list">
+            {%- for p in g.pages %}
+            <li><a href="{{ p.path() }}"{% if p.id == page.id %} aria-current="true"{% endif %}>{{ p.title }}</a></li>
+            {%- endfor %}
+          </ul>
+          {%- endfor %}
+        </nav>
+      </details>
+      <header class="ref-head">
+        <span class="rf-eyebrow">{{ area }}</span>
+        {% call c::page_header(label, lede, "", "") %}{% endcall %}
+        {%- if !opens.is_empty() %}
+        <div class="rf-act">
+          {%- for o in opens %}
+          <a class="btn {% if loop.first %}btn-primary{% else %}btn-secondary{% endif %} rf-open" href="{{ o.href }}">{% call c::icon(o.icon) %}{% endcall %}Open {{ o.label }}</a>
+          {%- endfor %}
+        </div>
+        {%- endif %}
+      </header>
+      <article class="ref-body" id="reference-article">
+{%- for part in parts %}
+{{ part.html|safe }}
+{%- if let Some(s) = part.setting %}<a class="rf-set" href="{{ s.href }}">{{ s.text }}<span aria-hidden="true">→</span></a>{% endif %}
+{%- if !part.live.is_empty() %}<div class="live-example" role="group" aria-label="Live example: {{ part.live }}" data-live-example="{{ part.live }}">{{ part.example|safe }}</div>{% endif %}
+{%- endfor %}
+        <p class="ref-src"><span>Source: <code>{{ page.source }}</code></span> <a class="ref-edit" href="{{ edit_url }}" target="_blank" rel="noopener noreferrer">{% call c::icon("code") %}{% endcall %}Edit on GitHub<span class="visually-hidden"> (opens in a new tab)</span></a></p>
+      </article>
+      {%- if !page.headings.is_empty() %}
+      <nav class="ref-toc" aria-label="On this page">
+        <p class="ref-group">On this page</p>
+        <ul class="ref-list">
+          {%- for h in page.headings %}
+          <li><a href="#{{ h.id }}">{{ h.text }}</a></li>
+          {%- endfor %}
+        </ul>
+      </nav>
+      {%- endif %}
+    </div>
+{%- endif %}
+{% endblock %}

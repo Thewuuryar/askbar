@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{%- import "components.html" as c %}
+{% block header %}{% call c::page_header(label, lede, crate::reference::page_topic(current), "") %}<a class="btn btn-primary" href="/admin/notifications/#alerts-form">{% call c::icon("send") %}{% endcall %}Notification settings</a>{% endcall %}{% endblock %}
+{% block content %}
+    <p id="alerts-sum" class="alerts-sum" tabindex="-1"></p>
+    <div id="alerts-body" class="alerts">
+      <section id="alerts-critical" class="alerts-group" aria-labelledby="alerts-critical-title" hidden>
+        <div class="alerts-headrow"><h3 id="alerts-critical-title" class="alerts-head alerts-head-critical">Critical <span class="alerts-n"></span></h3>{% call c::help("alerts#critical") %}{% endcall %}</div>
+        <div class="alerts-list"></div>
+      </section>
+      <section id="alerts-warning" class="alerts-group" aria-labelledby="alerts-warning-title" hidden>
+        <div class="alerts-headrow"><h3 id="alerts-warning-title" class="alerts-head">Warning <span class="alerts-n"></span></h3>{% call c::help("alerts#warning") %}{% endcall %}</div>
+        <div class="alerts-list"></div>
+      </section>
+      <section id="alerts-info" class="alerts-group" aria-labelledby="alerts-info-title" hidden>
+        <div class="alerts-headrow"><h3 id="alerts-info-title" class="alerts-head">Info <span class="alerts-n"></span></h3>{% call c::help("alerts#info") %}{% endcall %}</div>
+        <div class="alerts-list"></div>
+      </section>
+      <div id="alerts-empty" hidden></div>
+    </div>
+{% endblock %}

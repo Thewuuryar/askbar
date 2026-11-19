@@ -1,0 +1,63 @@
+{#- The live examples the admin-ui reference pages show (plan step 7.5). `reference.rs` renders this template once for each
+    `<!-- live: name -->` marker in the Markdown and writes the result at the marker, so the page shows the real macros from
+    components.html and cannot drift from what the admin uses. A name with no branch here renders nothing, and a test fails.
+    The labels are plain placeholders ("Example"), never data. Ids start with `ex-` so they never meet a page's own ids.
+    Parts the macros write hidden (a menu, a side panel, a save bar, a row confirmation) or closed (a dialog) are shown
+    in place by `reference.rs`, which takes out their `hidden` attribute or adds `open`; a static copy of their markup
+    is never written. The layout diagrams are made of existing classes (`live-diagram` and its parts in style.css). -#}
+{%- import "components.html" as c -%}
+{%- if name == "page_header" -%}
+{% call c::page_header("Example title", "Example line under the title.", "", "") %}{% call c::button("Example action", "primary", "", "") %}{% endcall %}{% endcall %}
+{%- else if name == "help" -%}
+{% call c::help("settings/network") %}{% endcall %}
+{%- else if name == "section_title" -%}
+{% call c::section_title("ex-section-title", "Example section", "settings/network") %}{% endcall %}
+{%- else if name == "button" -%}
+<div class="live-row">{% call c::button("Primary", "primary", "", "") %}{% endcall %}{% call c::button("Secondary", "secondary", "", "") %}{% endcall %}{% call c::button("Danger", "danger", "", "") %}{% endcall %}{% call c::button("Small", "secondary", "s", "") %}{% endcall %}{% call c::button("Large", "secondary", "l", "") %}{% endcall %}{% call c::button("With icon", "secondary", "", "copy") %}{% endcall %}</div>
+{%- else if name == "icon_button" -%}
+<div class="live-row">{% call c::icon_button("copy", "Example icon button") %}{% endcall %}{% call c::icon_button("search", "Example search") %}{% endcall %}</div>
+{%- else if name == "icon" -%}
+<div class="live-row live-icons"><span class="live-icon"><span class="live-icon-art">{% call c::icon("home") %}{% endcall %}</span><code>home</code></span><span class="live-icon"><span class="live-icon-art">{% call c::icon("bell") %}{% endcall %}</span><code>bell</code></span><span class="live-icon"><span class="live-icon-art">{% call c::icon("check") %}{% endcall %}</span><code>check</code></span><span class="live-icon"><span class="live-icon-art">{% call c::icon("warning") %}{% endcall %}</span><code>warning</code></span><span class="live-icon"><span class="live-icon-art">{% call c::icon("critical") %}{% endcall %}</span><code>critical</code></span><span class="live-icon"><span class="live-icon-art">{% call c::icon("info") %}{% endcall %}</span><code>info</code></span><span class="live-icon"><span class="live-icon-art">{% call c::icon("help") %}{% endcall %}</span><code>help</code></span><span class="live-icon"><span class="live-icon-art">{% call c::icon("copy") %}{% endcall %}</span><code>copy</code></span><span class="live-icon"><span class="live-icon-art">{% call c::icon("search") %}{% endcall %}</span><code>search</code></span><span class="live-icon"><span class="live-icon-art">{% call c::icon("more") %}{% endcall %}</span><code>more</code></span></div>
+{%- else if name == "tabs" -%}
+{% call c::tabs(crate::pages::tab_pages("audit/calls"), "audit/calls", "Example tabs", "tabs") %}{% endcall %}
+{%- else if name == "menu" -%}
+{% call c::menu("ex-menu") %}<button type="button" class="menu-item" role="menuitem">Example action</button><button type="button" class="menu-item menu-item-danger" role="menuitem">Example danger action</button>{% endcall %}
+{%- else if name == "row_menu" -%}
+<div class="live-row">{% call c::row_menu(["edit:Example action", "!delete:Example danger action"]) %}{% endcall %}</div>
+{%- else if name == "field" -%}
+{% call c::field("Example field", "ex-field", "Example hint under the field.", "text", false) %}{% endcall %}{% call c::field("Example optional field", "ex-field-optional", "", "text", true) %}{% endcall %}
+{%- else if name == "new_secret" -%}
+{% call c::new_secret("Example password", "ex-password", crate::constants::MIN_PASSWORD_CHARS) %}{% endcall %}
+{%- else if name == "save_bar" -%}
+{% call c::save_bar("ex-form") %}{% endcall %}
+{%- else if name == "notice" -%}
+{% call c::notice("error", "Example error.", "Example way to fix it.") %}{% endcall %}{% call c::notice("warning", "Example warning.", "") %}{% endcall %}{% call c::notice("info", "Example note.", "") %}{% endcall %}
+{%- else if name == "side_panel" -%}
+{% call c::side_panel("ex-panel", "Example panel", "") %}<p>Example panel text.</p>{% endcall %}
+{%- else if name == "dialog_box" -%}
+{% call c::dialog_box("ex-box", "Example dialog") %}<p>Example dialog text.</p><div class="btns">{% call c::button("Cancel", "secondary", "", "") %}{% endcall %}{% call c::button("Example action", "primary", "", "") %}{% endcall %}</div>{% endcall %}
+{%- else if name == "row_confirm" -%}
+{% call c::row_confirm("ex-row-confirm", "Example question?", "Example action") %}{% endcall %}
+{%- else if name == "secret" -%}
+{% call c::secret("ex-secret-value") %}{% endcall %}
+{%- else if name == "table_head" -%}
+<div class="table-wrap"><table class="table"><caption class="visually-hidden">Example table</caption>{% call c::table_head(["Example name", ">Example number", ""]) %}{% endcall %}<tbody><tr><td>Example</td><td class="num">Example</td><td class="actions">{% call c::row_menu(["edit:Example action"]) %}{% endcall %}</td></tr></tbody></table></div>
+{%- else if name == "status" -%}
+<div class="live-row">{% call c::status("ok") %}Ok{% endcall %}{% call c::status("warning") %}Warning{% endcall %}{% call c::status("error") %}Error{% endcall %}{% call c::status("off") %}Off{% endcall %}{% call c::status("paused") %}Paused{% endcall %}{% call c::status("pending") %}Pending{% endcall %}</div>
+{%- else if name == "empty" -%}
+{% call c::empty("Example: nothing here yet.", "Example action") %}{% endcall %}
+{%- else if name == "skeleton" -%}
+{% call c::skeleton(3) %}{% endcall %}
+{%- else if name == "na" -%}
+<div class="live-row">{% call c::na("example reason") %}<span class="btn btn-secondary">Example action</span>{% endcall %}</div>
+{%- else if name == "na_tag" -%}
+<div class="live-row">{% call c::na_tag("example reason") %}{% endcall %}</div>
+{%- else if name == "layout_index" -%}
+<div class="live-diagram"><div class="ld-block">Page header: title, help, one line</div><div class="ld-block ld-row"><span>Item name</span><span>What it is set to now</span></div><div class="ld-block ld-row"><span>Item name</span><span>What it is set to now</span></div></div>
+{%- else if name == "layout_list" -%}
+<div class="live-diagram"><div class="ld-block">Page header: title, help, one line</div><div class="ld-block">Hint under the title</div><div class="ld-block ld-grow">Table or list: one row for each record, an actions menu at the end of each row</div></div>
+{%- else if name == "layout_settings" -%}
+<div class="live-diagram"><div class="ld-block">Page header: title, help, one line</div><div class="ld-block ld-grow">Section: name with help, then its controls</div><div class="ld-block ld-grow">Section: name with help, then its controls</div><div class="ld-block">Save bar, shown when a value changes</div></div>
+{%- else if name == "layout_article" -%}
+<div class="live-diagram"><div class="ld-cols"><div class="ld-block ld-grow">Pages by area, pinned</div><div class="live-diagram"><div class="ld-block">Area, title and one line</div><div class="ld-block">Open the setting's page</div><div class="ld-block ld-grow">Article, with a link to the setting under each section</div><div class="ld-block">Source file and Edit on GitHub</div></div><div class="ld-block ld-grow">On this page, pinned</div></div></div>
+{%- endif -%}

@@ -31,6 +31,8 @@ ulid = "1"
 rcgen = { version = "0.14.10", default-features = false, features = ["ring", "pem"] }
 
 [dev-dependencies]
+# The tests render hostile Markdown through the same renderer build.rs uses (build_render.rs).
+pulldown-cmark = { version = "0.13.6", default-features = false, features = ["html"] }
 # YAML in safe Rust, to read our own OpenAPI files (it replaced serde_yaml_ng, built on the unmaintained unsafe-libyaml).
 serde-saphyr = { version = "2.1", default-features = false, features = ["deserialize"] }
 futures-util = "0.3"
@@ -42,3 +44,6 @@ askbar-auditor = { path = "../auditor" }
 
 [lints]
 workspace = true
+
+[build-dependencies]
+pulldown-cmark = { version = "0.13.6", default-features = false, features = ["html"] }

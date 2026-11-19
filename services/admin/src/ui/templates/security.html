@@ -1,33 +1,134 @@
 {% extends "base.html" %}
 {%- import "blocks.html" as b %}
-{% block hint %}The admin password, and API keys for scripts.{% endblock %}
+{%- import "components.html" as c %}
 {% block content %}
-    <form id="password-form" class="panel">
-      <h3>Change admin password</h3>
-      <label>Current password <input id="pw-current" type="password" autocomplete="current-password" required></label>
-      <label>New password <input id="pw-new" type="password" autocomplete="new-password" minlength="10" required></label>
-      <label>Repeat new password <input id="pw-new2" type="password" autocomplete="new-password" minlength="10" required></label>
-      <div class="row"><button type="submit">Change password</button></div>
-      {% call b::hint("Other signed-in browsers are signed out.") %}{% endcall %}
-      {% call b::error_line("pw-error") %}{% endcall %}
-    </form>
-    <div id="key-panel" class="panel">
-      <h3>Admin API key</h3>
-      <p class="hint">For scripts. Send it as <code>Authorization: Bearer &lt;key&gt;</code> to <code>/api/admin/v1</code>. It can do what this site can, except manage keys, change the password or sign in. One key at a time. It is shown once, when you make it.</p>
-      <form id="key-form">
-        <label>Name <input id="key-name" maxlength="60" placeholder="build server" autocomplete="off" required></label>
-        <div class="row"><button type="submit" id="key-create">Create key</button></div>
-      </form>
-      <div id="key-row" class="sealed-row" hidden>
-        <span class="what"><strong id="key-row-name"></strong> <span id="key-row-times" class="hint"></span></span>
-        <button type="button" id="key-revoke" class="danger">Revoke</button>
+    <section class="sec-sec" aria-labelledby="pw-title">
+      <div class="sec-lab">
+        {% call c::section_title("pw-title", "Change admin password", "settings/security#change-admin-password") %}{% endcall %}
+        <p class="hint">Other signed-in browsers are signed out.</p>
       </div>
-      {% call b::error_line("key-error") %}{% endcall %}
-      <dialog id="key-dialog" aria-labelledby="key-dialog-title">
-        <h3 id="key-dialog-title">Your new API key</h3>
-        <p class="hint"><strong>This is the only time the key is shown.</strong> Copy it now and keep it somewhere safe. If you lose it, revoke it and make another.</p>
-        <pre id="key-value" class="plain"></pre>
-        <div class="row"><button type="button" id="key-copy">Copy</button><button type="button" id="key-close" class="secondary">I have copied it</button></div>
-      </dialog>
-    </div>
+      <form id="password-form" class="sec-fields" novalidate>
+        {% call c::field("Current password", "pw-current", "", "slot", false) %}<input id="pw-current" name="pw-current" type="password" autocomplete="current-password" aria-describedby="pw-current-error">{% endcall %}
+        {% call c::new_secret("New password", "pw-new", crate::constants::MIN_PASSWORD_CHARS) %}{% endcall %}
+        {% call b::error_line("pw-error") %}{% endcall %}
+        <div class="sec-actions"><button type="submit" class="btn btn-secondary">Change password</button></div>
+      </form>
+    </section>
+
+    <section class="sec-sec" aria-labelledby="passkey-title">
+      <div class="sec-lab">
+        {% call c::section_title("passkey-title", "Passkey", "settings/security#passkey") %}{% endcall %}
+        <p class="hint">Sign in with a fingerprint, face or security key.</p>
+      </div>
+      <div class="sec-fields">
+        <div class="sec-actions">{% call c::na("the admin has no passkey sign-in") %}<span class="btn btn-secondary">Add a passkey</span>{% endcall %}</div>
+      </div>
+    </section>
+
+    <section class="sec-sec" aria-labelledby="recovery-title">
+      <div class="sec-lab">
+        {% call c::section_title("recovery-title", "Recovery codes", "settings/security#recovery-codes") %}{% endcall %}
+        <p class="hint">For when you lose your password or passkey.</p>
+      </div>
+      <div class="sec-fields">
+        <div class="sec-actions">{% call c::na("the admin has no recovery codes") %}<span class="btn btn-secondary">Make new codes</span>{% endcall %}</div>
+      </div>
+    </section>
+
+    <section id="key-panel" class="sec-sec" aria-labelledby="key-title">
+      <div class="sec-lab">
+        {% call c::section_title("key-title", "Admin API key", "settings/security#admin-api-key") %}{% endcall %}
+        <p class="hint">For scripts: send it as <code>Authorization: Bearer &lt;key&gt;</code> to <code>/api/admin/v1</code>. It can do what this site can, except manage keys, change the password or sign in.</p>
+      </div>
+      <div class="sec-fields">
+        <div id="key-row" hidden>
+          <div class="table-wrap">
+            <table class="table" id="key-table">
+              <caption class="visually-hidden">Admin API key</caption>
+              {% call c::table_head(["Name", "Created", "Last used", ""]) %}{% endcall %}
+              <tbody>
+                <tr>
+                  <td><strong id="key-row-name"></strong></td>
+                  <td id="key-row-made"></td>
+                  <td id="key-row-used"></td>
+                  <td class="actions"><button type="button" id="key-revoke" class="btn btn-danger btn-s">Revoke</button></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <form id="key-form" class="sec-fields" novalidate>
+          {% call c::field("Name", "key-name", "One key at a time. Its secret is shown once.", "slot", false) %}<input id="key-name" name="key-name" maxlength="{{ crate::constants::API_KEY_MAX_NAME_CHARS }}" autocomplete="off" aria-describedby="key-name-hint key-name-error">{% endcall %}
+          <div class="sec-actions"><button type="submit" id="key-create" class="btn btn-secondary">Create key</button></div>
+        </form>
+        {% call b::error_line("key-error") %}{% endcall %}
+      </div>
+    </section>
+
+    <section class="sec-sec" aria-labelledby="seal-title">
+      <div class="sec-lab">
+        {% call c::section_title("seal-title", "Sealed content and audit records", "settings/security#sealed-content-and-audit-records") %}{% endcall %}
+        <p class="hint">How long the audit records are kept before they are deleted ({{ crate::constants::MIN_AUDIT_RETENTION_DAYS }} days at least, always; the audit database itself refuses to delete anything younger), and how long sealed content stays open once the passphrase has unsealed it: it seals itself after this many minutes without use, or this many in all, whichever comes first. Changing either is an alert. Lowering the retention needs a sign-in from the last {{ crate::constants::FRESH_SIGNIN_SECS / 60 }} minutes.</p>
+      </div>
+      <form id="seal-form" class="sec-fields" novalidate>
+        {% call c::field("Keep audit records for (days)", "s-retention", "", "slot", false) %}<input id="s-retention" name="s-retention" type="number" inputmode="numeric" min="{{ crate::constants::MIN_AUDIT_RETENTION_DAYS }}" max="{{ crate::constants::MAX_AUDIT_RETENTION_DAYS }}" step="1" aria-describedby="s-retention-hint s-retention-error"><p class="hint" id="s-retention-hint">{{ crate::constants::MIN_AUDIT_RETENTION_DAYS }} to {{ crate::constants::MAX_AUDIT_RETENTION_DAYS }} days</p>{% endcall %}
+        {% call c::field("Seal after this many idle minutes", "s-unseal-idle", "", "slot", false) %}<input id="s-unseal-idle" name="s-unseal-idle" type="number" inputmode="numeric" min="{{ crate::constants::MIN_UNSEAL_MINUTES }}" max="{{ crate::constants::MAX_UNSEAL_MINUTES }}" step="1" aria-describedby="s-unseal-idle-hint s-unseal-idle-error"><p class="hint" id="s-unseal-idle-hint">{{ crate::constants::MIN_UNSEAL_MINUTES }} to {{ crate::constants::MAX_UNSEAL_MINUTES }} minutes</p>{% endcall %}
+        {% call c::field("Seal after this many minutes in all", "s-unseal-total", "", "slot", false) %}<input id="s-unseal-total" name="s-unseal-total" type="number" inputmode="numeric" min="{{ crate::constants::MIN_UNSEAL_MINUTES }}" max="{{ crate::constants::MAX_UNSEAL_MINUTES }}" step="1" aria-describedby="s-unseal-total-hint s-unseal-total-error"><p class="hint" id="s-unseal-total-hint">{{ crate::constants::MIN_UNSEAL_MINUTES }} to {{ crate::constants::MAX_UNSEAL_MINUTES }} minutes</p>{% endcall %}
+        {% call b::error_line("seal-error") %}{% endcall %}
+        {% call c::save_bar("seal-form") %}{% endcall %}
+      </form>
+    </section>
+
+    <section class="sec-sec" aria-labelledby="rotate-title">
+      <div class="sec-lab">
+        {% call c::section_title("rotate-title", "Rotate the audit key", "settings/security#rotate-the-audit-key") %}{% endcall %}
+        <p class="hint">Content sealed before stays sealed with the old key and still needs the old passphrase. Neither passphrase can be recovered.</p>
+      </div>
+      <form id="rotate-form" class="sec-fields" novalidate>
+        <p class="sec-line">Current key: <code id="s-key-id">none</code></p>
+        {% call c::field("Current passphrase", "r-current", "", "slot", false) %}<input id="r-current" name="r-current" type="password" autocomplete="off" aria-describedby="r-current-error">{% endcall %}
+        {% call c::new_secret("New passphrase", "r-new", crate::constants::MIN_PASSPHRASE_CHARS) %}{% endcall %}
+        {% call b::error_line("rotate-error") %}{% endcall %}
+        <div class="sec-actions"><button type="submit" class="btn btn-danger">Rotate key</button></div>
+      </form>
+    </section>
+
+    <section class="sec-sec" aria-labelledby="bk-title">
+      <div class="sec-lab">
+        {% call c::section_title("bk-title", "Backup key", "settings/security#backup-key") %}{% endcall %}
+        <p class="hint">Only the backup passphrase opens a backup. It is not the audit passphrase. Rotating needs a sign-in from the last {{ crate::constants::FRESH_SIGNIN_SECS / 60 }} minutes.</p>
+      </div>
+      <form id="backup-key-form" class="sec-fields" novalidate>
+        <p class="sec-line">Fingerprint: <code id="bk-fingerprint">none yet</code> <span class="hint" id="bk-count"></span></p>
+        {% call c::new_secret("New backup passphrase", "bk-pass", crate::constants::MIN_PASSPHRASE_CHARS) %}{% endcall %}
+        <label class="check"><input id="bk-stored" type="checkbox" required> I stored this passphrase; it cannot be recovered</label>
+        <p class="hint">Backups made before the rotation still open with the passphrase they were made under. Keep that one until the new backups cover the retention window.</p>
+        {% call b::error_line("bk-error") %}{% endcall %}
+        <div class="sec-actions"><button type="submit" class="btn btn-danger">Rotate the backup key</button></div>
+      </form>
+    </section>
+
+    <section class="sec-sec danger-zone" aria-labelledby="danger-title">
+      <div class="sec-lab">
+        {% call c::section_title("danger-title", "Danger zone", "settings/security#danger-zone") %}{% endcall %}
+        <p class="hint">Switched on, the server starts no new replies and clears the messages waiting in queues. Clients see a clear message.</p>
+      </div>
+      <div class="sec-fields">
+        <form id="kill-form" class="sec-fields" novalidate>
+          <label class="check" for="s-kill-aborts"><input type="checkbox" id="s-kill-aborts" name="s-kill-aborts"> Also stop the replies that are running</label>
+          <p class="hint">A setting, saved with Save. It applies when the kill switch is turned on: ticked, the replies running then are stopped; otherwise they finish.</p>
+          {% call b::error_line("kill-form-error") %}{% endcall %}
+          {% call c::save_bar("kill-form") %}{% endcall %}
+        </form>
+        <p class="sec-line">Kill switch: <strong id="s-kill-state">off</strong>. It stops every reply for everyone until it is turned off.</p>
+        <div class="sec-actions"><button type="button" id="s-kill-switch" class="btn btn-danger" aria-describedby="s-kill-state">Turn on kill switch</button></div>
+        {% call b::error_line("kill-error") %}{% endcall %}
+      </div>
+    </section>
+
+    {% call c::dialog_box("key-dialog", "Your new API key") %}
+      <p><strong>This is the only time the key is shown.</strong> Copy it now and keep it somewhere safe. If you lose it, revoke it and make another.</p>
+      {% call c::secret("key-value") %}{% endcall %}
+      <div class="actions"><button type="button" id="key-close" class="btn btn-primary">I have copied it</button></div>
+    {% endcall %}
 {% endblock %}

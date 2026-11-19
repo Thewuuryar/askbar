@@ -6,9 +6,12 @@
 #      Deferred ADR says when and why; a "Merged into NNNN" stub has a Merged: line and names an ADR that exists,
 #      is not a stub and lists it in its Amendments; no ADR has an "Amends:" line or an "amended by" status.
 #   4. ADR 0016: every Defend row has a row in the test table, and every test named there exists, and every row names at least one.
+#   5. the reference under docs/reference (scripts/check-reference.sh, run first): ids, front matter and help topics.
 # Covers every tracked *.md file (all *.md files outside node_modules and target when git is not available).
 # Usage: scripts/check-docs.sh
 cd "$(dirname "$0")/.." || exit 2
+# The reference pages under docs/reference: ids, front matter, links and help topics (plan step 7.1a).
+scripts/check-reference.sh || exit 1
 python3 - <<'PY'
 import os, re, subprocess, sys
 

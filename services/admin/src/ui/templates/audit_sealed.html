@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{%- import "blocks.html" as b %}
+{%- import "components.html" as c %}
+{% block scripts %}<script src="/admin/audit.js" defer></script>{% endblock %}
+{% block content %}
+    {% call b::error_line("audit-error") %}{% endcall %}
+    {% call c::section_title("sealed-session-title", "Session", "audit/sealed-access#session") %}{% endcall %}
+    <div id="audit-session">
+      <form id="audit-unseal-form">
+        {% call b::hint("Enter the audit passphrase to open sealed content for a while: it stays open without more prompts, then seals itself after the idle or total time in Settings, on Seal, or when you sign out. You must have signed in within the last " ~ (crate::constants::FRESH_SIGNIN_SECS / 60) ~ " minutes. Opening and each item you view are recorded.") %}{% endcall %}
+        <label>Audit passphrase <input id="audit-pass" type="password" autocomplete="off" spellcheck="false"></label>
+        {% call b::error_line("audit-pass-error") %}{% endcall %}
+        <div class="row"><button type="submit" id="audit-unseal" class="btn btn-primary">Unseal</button></div>
+      </form>
+      <div id="audit-open" hidden>
+        <p id="audit-open-state"></p>
+        <div class="row"><button type="button" id="audit-seal" class="btn btn-secondary">Seal</button></div>
+      </div>
+    </div>
+    {% call c::section_title("sealed-access-title", "Who opened sealed content", "audit/sealed-access#who-opened-sealed-content") %}{% endcall %}
+    {% call b::hint("Newest first. Each opening and each wrong passphrase is listed; the content itself is never shown here.") %}{% endcall %}
+    <p class="hint empty" id="audit-access-empty">Nothing has been opened yet.</p>
+    <div class="table-wrap" tabindex="0" role="region" aria-label="Who opened sealed content">
+      <table id="audit-access" hidden>
+        <thead><tr>
+          <th scope="col">Opened</th>
+          <th scope="col">Span</th>
+          <th scope="col">Key</th>
+          <th scope="col">Result</th>
+          <th scope="col">{% call c::na("the access history records each attempt, not when a session ended.") %}Ended{% endcall %}</th>
+          <th scope="col">{% call c::na("the access history does not record how a session ended.") %}How it ended{% endcall %}</th>
+        </tr></thead>
+        <tbody id="audit-access-rows"></tbody>
+      </table>
+    </div>
+{% endblock %}

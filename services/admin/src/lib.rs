@@ -19,6 +19,7 @@ pub mod budget_watch;
 pub mod caddy;
 pub mod catalog;
 pub mod chain_check;
+pub mod constants;
 pub mod cost;
 pub mod cpa;
 pub mod db;
@@ -26,6 +27,7 @@ pub mod gateway_link;
 pub mod network;
 pub mod notify;
 pub mod pages;
+pub mod reference;
 pub mod restore;
 pub mod routes;
 pub mod sealed;
@@ -36,6 +38,7 @@ pub mod services;
 pub mod web;
 
 use axum::{
+    extract::RawQuery,
     http::{HeaderMap, StatusCode},
     middleware,
     response::Redirect,
@@ -172,6 +175,7 @@ pub fn db_path() -> PathBuf {
 }
 
 const JS: &str = "text/javascript; charset=utf-8";
+const JSON: &str = "application/json";
 const CSS: &str = "text/css; charset=utf-8";
 
 /// All of the admin's routes, with the list of what was registered (see `routes`).
@@ -262,10 +266,28 @@ pub fn routes(state: &Arc<AdminState>) -> Routes {
     for (i, page) in pages::PAGES.iter().enumerate() {
         site = site.get(&pages::path(page), move || async move { pages::page_response(i) });
     }
-    site.get("/admin", || async { Redirect::to(&pages::path(&pages::PAGES[0])) })
-        .get("/admin/", || async { Redirect::to(&pages::path(&pages::PAGES[0])) })
+    // The reference's pages (plan step 7.2); the index is the `reference` page above.
+    reference::rendered();
+    for (i, p) in reference::pages().iter().enumerate().filter(|(_, p)| !p.is_index()) {
+        site = site.get(&p.path(), move || async move { reference::response(i) });
+    }
+    site.get("/admin", || async { Redirect::to(&pages::path(pages::landing())) })
+        .get("/admin/", || async { Redirect::to(&pages::path(pages::landing())) })
+        // The Audit page became four (plan step 2.1); an old address opens Model calls, query and all,
+        // so a bookmarked /admin/audit/?view=trace&id=... still opens that request.
+        .get("/admin/audit/", |RawQuery(q): RawQuery| async move { moved_to("/admin/audit/calls/", q) })
+        // Restore moved into Backup (plan step 5.3); the query goes with it, as above.
+        .get("/admin/restore/", |RawQuery(q): RawQuery| async move { moved_to("/admin/backup/", q) })
+        // Clients became People & clients (plan step 5.6).
+        .get("/admin/clients/", |RawQuery(q): RawQuery| async move { moved_to("/admin/people/", q) })
+        // The Settings overview page was removed: Settings opens General.
+        .get("/admin/settings/", |RawQuery(q): RawQuery| async move { moved_to("/admin/general/", q) })
         .get("/admin/app.js", |h: HeaderMap| async move { pages::static_file(&h, JS, include_str!("ui/app.js")) })
+        .get("/admin/components.js", |h: HeaderMap| async move { pages::static_file(&h, JS, include_str!("ui/components.js")) })
         .get("/admin/audit.js", |h: HeaderMap| async move { pages::static_file(&h, JS, include_str!("ui/audit.js")) })
+        .get("/admin/audit_calls.js", |h: HeaderMap| async move { pages::static_file(&h, JS, include_str!("ui/audit_calls.js")) })
+        .get("/admin/reference.json", |h: HeaderMap| async move { pages::static_file(&h, JSON, reference::index_json()) })
+        .get("/admin/constants.json", |h: HeaderMap| async move { pages::static_file(&h, JSON, constants::json()) })
         .get("/admin/tokens.css", |h: HeaderMap| async move { pages::static_file(&h, CSS, include_str!("ui/tokens.css")) })
         .get("/admin/style.css", |h: HeaderMap| async move { pages::static_file(&h, CSS, include_str!("ui/style.css")) })
         .get(&v1("/health"), || async { (StatusCode::OK, "ok") })
@@ -273,6 +295,14 @@ pub fn routes(state: &Arc<AdminState>) -> Routes {
         .merge(open)
         .merge(session_only)
         .merge(api)
+}
+
+/// An old admin address that moved: a redirect to `to`, keeping the old address's query (a bookmark's `?view=...` still works).
+fn moved_to(to: &str, query: Option<String>) -> Redirect {
+    Redirect::to(&match query {
+        Some(q) if !q.is_empty() => format!("{to}?{q}"),
+        _ => to.to_owned(),
+    })
 }
 
 pub fn router(state: Arc<AdminState>) -> Router {

@@ -31,10 +31,10 @@ use std::time::{Duration, Instant};
 type St = State<Arc<AdminState>>;
 type Failure = ApiError;
 
-/// The services the Services tab shows and may restart.
-pub const SERVICES: [&str; 6] = ["server", "model-gateway", "alerter", "admin", "caddy", "cpa"];
 /// At most this many actions in `WINDOW_SECS`.
-const MAX_ACTIONS: usize = 6;
+use crate::constants::MAX_RESTARTS_PER_MINUTE as MAX_ACTIONS;
+/// The services the Services tab shows and may restart.
+pub use crate::constants::SERVICES;
 const WINDOW_SECS: i64 = 60;
 /// How long a server restart may take before the admin gives up waiting (ADR 0002: under a minute).
 const SERVER_BACK_WITHIN: Duration = Duration::from_secs(60);

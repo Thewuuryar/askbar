@@ -1,27 +1,19 @@
 {% extends "base.html" %}
 {%- import "blocks.html" as b %}
-{% block hint %}Restart a part of Askbar from here. Starting or stopping one is done from the host (<code>docker compose</code>).{% endblock %}
+{%- import "components.html" as c %}
 {% block content %}
-    <div id="services"></div>
-    <div id="cpa-panel" class="card" hidden>
-      <div class="row"><strong>Claude and ChatGPT accounts</strong></div>
-      {% call b::hint("CLIProxyAPI lets a Claude or ChatGPT subscription act as a provider. Its key is made and used automatically. Connect an account, then pick a model on the CPA provider.") %}{% endcall %}
-      <div id="cpa-accounts"></div>
-      <div class="row">
-        <button type="button" id="cpa-connect-anthropic" class="secondary">Connect Claude</button>
-        <button type="button" id="cpa-connect-openai" class="secondary">Connect ChatGPT</button>
+    <section id="services-section" aria-labelledby="services-title">
+      <div class="sect-head">
+        {% call c::section_title("services-title", "Running services", "settings/services#running-services") %}{% endcall %}
+        <span class="spacer"></span>
+        <span id="services-summary" class="hint" role="status"></span>
       </div>
-      <div id="cpa-login" hidden>
-        <p class="hint">1. Open this address and approve: <a id="cpa-login-link" target="_blank" rel="noopener noreferrer"></a></p>
-        <p class="hint">2. The browser then lands on an address starting <code>http://localhost</code> that probably does not load. Copy that whole address from the address bar and paste it here:</p>
-        <label>Address <input id="cpa-redirect" autocomplete="off" placeholder="http://localhost:..."></label>
-        <div class="row">
-          <button type="button" id="cpa-finish">Finish</button>
-          <button type="button" id="cpa-cancel" class="secondary">Cancel</button>
-        </div>
+      <div class="table-wrap">
+        <table class="table" id="services-table">
+          <caption class="visually-hidden">Services</caption>
+          <thead><tr><th scope="col">Service</th><th scope="col" class="col-does">What it does</th><th scope="col">Status</th><th scope="col" class="actions"><span class="visually-hidden">Actions</span></th></tr></thead>
+          <tbody id="services"></tbody>
+        </table>
       </div>
-      <p id="cpa-message" class="hint" role="status"></p>
-    </div>
-    <h3>Recent actions</h3>
-    <div id="services-recent" class="hint"></div>
+    </section>
 {% endblock %}

@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{%- import "blocks.html" as b %}
+{%- import "components.html" as c %}
+{% block content %}
+    <section id="users-section" aria-labelledby="users-title">
+      <div class="sect-head">
+        {% call c::section_title("users-title", "Users", "settings/people#users") %}{% endcall %}
+        <span class="spacer"></span>
+        <button type="button" id="add-user" class="btn btn-secondary">Add user</button>
+        <button type="button" id="pair-open" class="btn btn-primary">Pair a new client</button>
+      </div>
+      {% call b::hint("Each person who uses Askbar is a user. A user's apps share their conversations; another user never sees them. Pause is the emergency stop for one person: no new reply starts for them and the ones running are stopped, until you resume.") %}{% endcall %}
+      {% call b::error_line("user-error") %}{% endcall %}
+      <div class="table-wrap">
+        <table class="table" id="users-table">
+          <caption class="visually-hidden">Users</caption>
+          <thead><tr><th scope="col">Name</th><th scope="col" class="num">Clients</th><th scope="col">Status</th><th scope="col" class="actions"><span class="visually-hidden">Actions</span></th></tr></thead>
+          <tbody id="users"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="clients-section" aria-labelledby="clients-title">
+      <div class="sect-head">
+        {% call c::section_title("clients-title", "Paired clients", "settings/people#paired-clients") %}{% endcall %}
+      </div>
+      {% call b::error_line("client-error") %}{% endcall %}
+      <div class="table-wrap">
+        <table class="table" id="clients-table">
+          <caption class="visually-hidden">Paired clients</caption>
+          <thead><tr><th scope="col">Client</th><th scope="col">User</th><th scope="col" class="col-seen">Last seen</th><th scope="col" class="actions"><span class="visually-hidden">Actions</span></th></tr></thead>
+          <tbody id="clients"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <template id="row-menu-template">{% call c::row_menu(["edit:Edit", "!delete:Delete"]) %}{% endcall %}</template>
+
+    {% call c::dialog_box("user-box", "Add user") %}
+      <form id="user-form" novalidate>
+        {% call c::field("Name", "u-name", "", "text", false) %}{% endcall %}
+        {% call b::error_line("user-add-error") %}{% endcall %}
+        <div class="actions">
+          <button type="button" id="user-cancel" class="btn btn-secondary">Cancel</button>
+          {% call c::button("Add user", "submit", "", "") %}{% endcall %}
+        </div>
+      </form>
+    {% endcall %}
+
+    {% call c::dialog_box("pair-box", "Pair a new client") %}
+      <form id="pair-form" novalidate>
+        {% call c::field("For user", "d-user", "", "slot", false) %}<select id="d-user" name="d-user" aria-describedby="d-user-error"></select>{% endcall %}
+        {% call c::field("Client name", "d-name", "", "text", true) %}{% endcall %}
+        {% call b::error_line("pair-error") %}{% endcall %}
+        <div class="actions">
+          <button type="button" id="pair-cancel" class="btn btn-secondary">Cancel</button>
+          {% call c::button("Generate pairing key", "submit", "", "") %}{% endcall %}
+        </div>
+      </form>
+      <div id="pairing-out" hidden>
+        <p id="pairing-sum" class="hint"></p>
+        <div id="pairing-key">
+          <p class="field-label">Pairing key</p>
+          {% call c::secret("pairing-string") %}{% endcall %}
+          <p id="pairing-meta" class="hint"></p>
+          <ol class="hint">
+            <li>In the app you are pairing, open Askbar from the tray icon.</li>
+            <li>Choose Pair with server and paste the key.</li>
+            <li>That user's other apps can then be paired from this one (Pair another app).</li>
+          </ol>
+        </div>
+        <p id="pairing-status" role="status"></p>
+        <div class="actions">
+          <button type="button" id="pairing-again" class="btn btn-secondary">Make another key</button>
+          <button type="button" id="pairing-done" class="btn btn-primary" data-box-close>Done</button>
+        </div>
+      </div>
+    {% endcall %}
+
+    {% call c::side_panel("user-panel", "Edit person", "") %}
+      <form id="edit-form" class="panel-form" novalidate>
+        <h3>Name</h3>
+        {% call c::na("users cannot be renamed yet.") %}Rename this person{% endcall %}
+        <h3>Usage limits</h3>
+        {% call c::na("the server does not track usage or caps per person.") %}Monthly token cap{% endcall %}
+        {% call c::na("the server does not track usage or caps per person.") %}Daily token cap{% endcall %}
+        {% call c::na("the server does not track usage or caps per person.") %}Alert me when someone nears a cap{% endcall %}
+        <h3>Replies</h3>
+        <label class="check"><input type="checkbox" id="e-paused"> Pause replies</label>
+        <p class="hint">Stops this person's replies until you resume.</p>
+        {% call b::error_line("edit-error") %}{% endcall %}
+        <div class="panel-foot">
+          <button type="button" id="edit-delete" class="btn btn-danger">Delete</button>
+          <span class="spacer"></span>
+          <button type="button" class="btn btn-secondary" data-panel-close>Cancel</button>
+          <button type="submit" id="edit-save" class="btn btn-primary">Save</button>
+        </div>
+      </form>
+    {% endcall %}
+{% endblock %}

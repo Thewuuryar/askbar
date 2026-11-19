@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{%- import "components.html" as c %}
+{% block header %}{% call c::page_header(label, lede, crate::reference::page_topic(current), "") %}<select id="home-range" aria-label="Range">{% for d in crate::constants::HOME_STATS_RANGE_DAYS %}<option value="{{ d }}"{% if d == crate::constants::HOME_STATS_WINDOW_DAYS %} selected{% endif %}>{% if d == 1 %}Last 24 hours{% else %}Last {{ d }} days{% endif %}</option>{% endfor %}</select>{% endcall %}{% endblock %}
+{% block content %}
+    <div class="quick-actions" id="quick-actions">
+      <a class="btn btn-primary" href="/admin/people/#pair-open">{% call c::icon("link") %}{% endcall %}Pair a new client</a>
+      <a class="btn btn-secondary" href="/admin/people/#add-user">{% call c::icon("user") %}{% endcall %}Add user</a>
+      <a class="btn btn-secondary" href="/admin/providers/#add-provider">{% call c::icon("cube") %}{% endcall %}Add provider</a>
+      <button type="button" class="btn btn-secondary" id="home-backup">{% call c::icon("download") %}{% endcall %}Back up now</button>
+    </div>
+    <p id="home-error" class="error" role="alert" hidden></p>
+
+    <section id="attention" class="home-sec" aria-labelledby="attention-title">
+      <div class="home-sec-head">{% call c::section_title("attention-title", "Needs attention", "home#needs-attention") %}{% endcall %}<span id="attention-count" class="hint"></span></div>
+      <div id="attention-list" class="attn"></div>
+      <div id="attention-empty" hidden></div>
+    </section>
+
+    <section id="numbers" class="home-sec" aria-labelledby="numbers-title">
+      <div class="home-sec-head">{% call c::section_title("numbers-title", "Last " ~ crate::constants::HOME_STATS_WINDOW_DAYS ~ " days", "home#request-numbers") %}{% endcall %}{% call c::na("stats are grouped by provider, so there is no latency for each one.") %}<span class="hint">Latency by provider</span>{% endcall %}</div>
+      <div id="home-kpis" class="kpis">
+        <div class="kpi"><div class="k">Requests</div><div class="v" id="kpi-requests">–</div></div>
+        <div class="kpi"><div class="k">Error rate</div><div class="v" id="kpi-errors">–</div></div>
+        <div class="kpi"><div class="k">Tokens</div><div class="v" id="kpi-tokens">–</div></div>
+        <div class="kpi"><div class="k">Cost</div><div class="v" id="kpi-cost">–</div><div class="sub">{% call c::na("the server has no way to set a family budget.") %}Family budget <b>not set</b>{% endcall %}</div></div>
+        <div class="kpi"><div class="k">Latency, 95th percentile</div><div class="v" id="kpi-latency">–</div></div>
+      </div>
+    </section>
+
+    <div class="cols">
+      <section id="usage" class="home-sec" aria-labelledby="usage-title">
+        <div class="home-sec-head">{% call c::section_title("usage-title", "Requests per day, last " ~ crate::constants::HOME_STATS_WINDOW_DAYS ~ " days", "home#requests-per-day") %}{% endcall %}</div>
+        <p id="chart-summary" class="chart-summary">Reading the numbers…</p>
+        <div id="home-chart" class="chart" role="img" aria-label="" hidden></div>
+        <div class="visually-hidden" id="chart-table-wrap" hidden>
+          <table id="chart-table"><caption>Requests per day</caption><thead><tr><th scope="col">Day</th><th scope="col">Requests</th></tr></thead><tbody></tbody></table>
+        </div>
+      </section>
+      <section class="home-sec na-sec" aria-labelledby="spend-title">
+        <div class="home-sec-head">{% call c::section_title("spend-title", "Spend by person", "home#spend-by-person") %}{% endcall %}{% call c::na_tag("the server does not track usage or caps for each person.") %}{% endcall %}</div>
+        <p class="hint">What each person has used against their cap.</p>
+      </section>
+    </div>
+
+    <div class="cols">
+      <section class="home-sec na-sec" aria-labelledby="models-title">
+        <div class="home-sec-head">{% call c::section_title("models-title", "Models used", "home#models-used") %}{% endcall %}{% call c::na_tag("audit stats are grouped by provider, not by model.") %}{% endcall %}</div>
+        <p class="hint">Requests for each model.</p>
+      </section>
+      <section id="home-services" class="home-sec" aria-labelledby="services-title">
+        <div class="home-sec-head">{% call c::section_title("services-title", "Services", "home#services") %}{% endcall %}{% call c::na("the server does not report how long each service has run.") %}<span class="hint">Uptime</span>{% endcall %}</div>
+        <div id="home-services-list"></div>
+        <a class="btn btn-secondary btn-s home-link" href="/admin/services/">{% call c::icon("server") %}{% endcall %}Manage services</a>
+      </section>
+    </div>
+
+    <div class="cols even">
+      <section id="home-backup-sum" class="home-sec" aria-labelledby="backup-title">
+        <div class="home-sec-head">{% call c::section_title("backup-title", "Backup", "home#backup") %}{% endcall %}</div>
+        <dl class="facts-list" id="backup-facts"></dl>
+        <a class="btn btn-secondary btn-s home-link" href="/admin/backup/">{% call c::icon("archive") %}{% endcall %}Open Backup</a>
+      </section>
+      <section id="home-clients-sum" class="home-sec" aria-labelledby="people-title">
+        <div class="home-sec-head">{% call c::section_title("people-title", "Clients", "home#clients") %}{% endcall %}</div>
+        <dl class="facts-list" id="clients-facts"></dl>
+        <a class="btn btn-secondary btn-s home-link" href="/admin/people/">{% call c::icon("people") %}{% endcall %}Open People &amp; clients</a>
+      </section>
+    </div>
+{% endblock %}

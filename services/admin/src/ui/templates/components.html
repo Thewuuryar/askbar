@@ -1,0 +1,175 @@
+{#- Reusable components for admin pages (plan step 1.8). Every page is built from these; nobody hand-writes
+    their markup. Use: {% import "components.html" as c %}, then {% call c::help("topic") %}{% endcall %}.
+    A macro with a slot (body or actions) is called with a body: {% call c::dialog_box("id", "Title") %}...{% endcall %}
+    and the macro writes it with caller(). Text arguments are escaped. No inline style, script or handlers:
+    scripts find the parts by id, data-* attribute or class. Strings below are arguments unless said otherwise;
+    `""` means none. Styles are in style.css, from tokens only.
+
+    Chrome, once in the page frame:
+      skip_link()                    <a class="skip-link" href="#main">; the first Tab stop; main must have id="main".
+      announcer()                    two .visually-hidden live regions: #announcer (polite), #announcer-urgent (assertive).
+      toast_region()                 <div id="toasts" class="toasts">; ui.toast fills it with .toast.
+      banner_region()                <div id="banners" class="banners">; ui.banner fills it with .banner.
+    Page parts:
+      page_header(title, lede, help, actions)  <header class="page-header">: h2.page-title (the page's one h2) + help button
+                                     (topic `help`, none when ""), p.page-lede, div.page-actions holding the call body (the one
+                                     primary action). The page frame (base.html) is the one caller; pages fill the `actions` block.
+      help(topic)                    button.btn-icon.help[data-help=topic][aria-label="Help: <topic title>"][data-tip=same]
+                                     [aria-controls=help-panel][aria-expanded]. topic is one of constants::HELP_TOPICS (a test
+                                     fails otherwise). components.js opens the docked #help-panel with the topic's text, which
+                                     the page carries pre-rendered in a <template data-help-topic> (nothing is fetched).
+      section_title(id, text, help)  h3#id and, when help is not "", the help button, side by side (a settings section's title).
+      button(label, kind, size, icon)  kind primary|secondary|danger|submit (submit = primary + type=submit; others type=button),
+                                     size ""|"s"|"l", icon a name from icon() or "". Classes: btn btn-<kind> [btn-s|btn-l].
+      icon_button(icon, label)       button.btn.btn-quiet.btn-icon[aria-label=label][data-tip=label] holding icon(icon).
+      icon(name)                     one icon from icons.html by name (home bell audit settings reference collapse close copy
+                                     help sign_out search menu check warning critical info code more logo calls clipboard lock
+                                     route cube people server globe shield archive send sliders link user download).
+      tabs(items, current, label)    a tab bar of links: nav.tabs[aria-label=label] with a.tab per page in items (Page values,
+                                     from pages::tab_pages); the one whose slug is current gets aria-current="page". Labels
+                                     and paths come from PAGES, so the bar matches the menu.
+      menu(id)                       popup menu: div.menu#<id>[role=menu][hidden]; the call body holds button.menu-item[role=menuitem].
+      row_menu(items)                the row's ... button (button.btn-icon.row-menu-button[aria-haspopup=menu][aria-expanded=false])
+                                     and its div.menu. items = ["action:Label", ...]; a leading ! on the action makes the item red
+                                     (!delete:Delete); the button carries data-action=<action>. Delete goes last.
+    Forms:
+      field(label, id, hint, type, optional)  div.field: label[for=id] (+ span.optional "(optional)" when optional is true),
+                                     the control #id, p.hint#<id>-hint when hint is not "", p.field-error#<id>-error[hidden].
+                                     type is an input type; "textarea" makes a textarea; "slot" writes the call body as the control.
+      new_secret(label, id, min)     (the plan's new_secret(label, min) plus the field id) div.new-secret with two stacked fields: #<id> and #<id>2 (type=password,
+                                     autocomplete=new-password), and under the first p.hint[data-length-hint][data-min=min]
+                                     "At least <min> characters". min comes from the page's constants.
+      save_bar(form, label)          div.save-bar#<form>-save-bar[hidden]: span[data-save-text], button[data-save-discard] "Discard"
+                                     and button[type=submit][form=form][data-save-submit] (label, "Save").
+      notice(kind, text, fix)        div.notice.notice-<kind> (error|warning|info) with an icon, a hidden kind word, p.notice-text
+                                     and p.notice-fix when fix is not "". role=alert for error, role=status otherwise.
+    Panels and boxes:
+      side_panel(id, title, help)    aside.side-panel#<id>[hidden]: header (h2.side-panel-title#<id>-title, help button when help is
+                                     not "", button[data-panel-close][aria-label=Close]) and div.side-panel-body = call body.
+      dialog_box(id, title)          dialog.box#<id>: h2.box-title#<id>-title and div.box-body = call body (modal; no help).
+      row_confirm(id, text, action)  div.row-confirm#<id>[hidden]: p text, button[data-row-cancel] "Cancel" and
+                                     button.btn-danger[data-row-action] with the label `action`.
+      secret(id)                     div.secret: code.secret-value#<id> (filled by the script) and a copy icon button
+                                     [data-copy=<id>]. For a show-once key; the warning around it is the page's.
+    Lists:
+      table_head(cols)               <thead> for a table the caller opens: cols = ["Name", ">Cost", ""]; a leading > right-aligns a
+                                     numeric column (th.num); "" is the actions column (hidden label "Actions").
+      status(state)                  span.status.status-<state> (ok|warning|error|off|paused|pending): a symbol
+                                     (span.status-sym, aria-hidden) and span.status-word = the call body (the word).
+      empty(text, action)            div.empty-state: p text and, when action is not "", button.btn-secondary[data-empty-action].
+      skeleton(rows)                 div.skeleton[role=status] with `rows` span.skeleton-row bars and a hidden "Loading".
+    Not available yet:
+      na(reason)                     span.na[role=group][aria-disabled=true][tabindex=0][data-tip] around the call body, which must not
+                                     be focusable itself (text, or a span.btn). Shows "Not available yet: <reason>" on hover and
+                                     focus (CSS) and for a screen reader (span.visually-hidden). Never the disabled attribute.
+      na_tag(reason)                 span.na-tag[tabindex=0][data-tip]: a small "Not available yet" tag, same note.
+-#}
+{%- import "icons.html" as i %}
+
+{#- One icon by name. -#}
+{% macro icon(name) -%}
+{%- if name == "home" %}{% call i::home() %}{% endcall %}
+{%- else if name == "bell" %}{% call i::bell() %}{% endcall %}
+{%- else if name == "audit" %}{% call i::audit() %}{% endcall %}
+{%- else if name == "settings" %}{% call i::settings() %}{% endcall %}
+{%- else if name == "reference" %}{% call i::reference() %}{% endcall %}
+{%- else if name == "collapse" %}{% call i::collapse() %}{% endcall %}
+{%- else if name == "close" %}{% call i::close() %}{% endcall %}
+{%- else if name == "copy" %}{% call i::copy() %}{% endcall %}
+{%- else if name == "help" %}{% call i::help() %}{% endcall %}
+{%- else if name == "sign_out" %}{% call i::sign_out() %}{% endcall %}
+{%- else if name == "search" %}{% call i::search() %}{% endcall %}
+{%- else if name == "menu" %}{% call i::menu() %}{% endcall %}
+{%- else if name == "check" %}{% call i::check() %}{% endcall %}
+{%- else if name == "warning" %}{% call i::warning() %}{% endcall %}
+{%- else if name == "critical" %}{% call i::critical() %}{% endcall %}
+{%- else if name == "info" %}{% call i::info() %}{% endcall %}
+{%- else if name == "code" %}{% call i::code() %}{% endcall %}
+{%- else if name == "more" %}{% call i::more() %}{% endcall %}
+{%- else if name == "logo" %}{% call i::logo() %}{% endcall %}
+{%- else if name == "calls" %}{% call i::calls() %}{% endcall %}
+{%- else if name == "clipboard" %}{% call i::clipboard() %}{% endcall %}
+{%- else if name == "lock" %}{% call i::lock() %}{% endcall %}
+{%- else if name == "route" %}{% call i::route() %}{% endcall %}
+{%- else if name == "cube" %}{% call i::cube() %}{% endcall %}
+{%- else if name == "people" %}{% call i::people() %}{% endcall %}
+{%- else if name == "server" %}{% call i::server() %}{% endcall %}
+{%- else if name == "globe" %}{% call i::globe() %}{% endcall %}
+{%- else if name == "shield" %}{% call i::shield() %}{% endcall %}
+{%- else if name == "archive" %}{% call i::archive() %}{% endcall %}
+{%- else if name == "send" %}{% call i::send() %}{% endcall %}
+{%- else if name == "sliders" %}{% call i::sliders() %}{% endcall %}
+{%- else if name == "link" %}{% call i::link() %}{% endcall %}
+{%- else if name == "user" %}{% call i::user() %}{% endcall %}
+{%- else if name == "download" %}{% call i::download() %}{% endcall %}
+{%- endif %}
+{%- endmacro %}
+
+{#- Page frame parts. -#}
+{% macro skip_link() %}<a class="skip-link" href="#main">Skip to content</a>{% endmacro %}
+
+{% macro announcer() %}<div id="announcer" class="visually-hidden" aria-live="polite" aria-atomic="true"></div><div id="announcer-urgent" class="visually-hidden" aria-live="assertive" aria-atomic="true"></div>{% endmacro %}
+
+{% macro toast_region() %}<div id="toasts" class="toasts"></div>{% endmacro %}
+
+{% macro banner_region() %}<div id="banners" class="banners"></div>{% endmacro %}
+
+{#- Help button: opens the side panel at its topic (plan step 7.3). The name and tooltip come from the topic's heading. -#}
+{% macro help(topic) %}<button type="button" class="btn btn-quiet btn-icon help" data-help="{{ topic }}" aria-label="{{ crate::reference::help_label(topic) }}" data-tip="{{ crate::reference::help_label(topic) }}" aria-controls="help-panel" aria-expanded="false">{% call icon("help") %}{% endcall %}</button>{% endmacro %}
+
+{#- A settings section's title with its help button. -#}
+{% macro section_title(id, text, help) %}<span class="title-row"><h3 id="{{ id }}">{{ text }}</h3>{% if help != "" %}{% call help(help) %}{% endcall %}{% endif %}</span>{% endmacro %}
+
+{#- Title, help button, one line, and the actions (call body) on the right. -#}
+{% macro page_header(title, lede, help, actions) %}<header class="page-header"><div class="page-header-text"><div class="page-title-row"><h2 class="page-title">{{ title }}</h2>{% if help != "" %}{% call help(help) %}{% endcall %}{% endif %}</div>{% if lede != "" %}<p class="page-lede">{{ lede }}</p>{% endif %}</div><div class="page-actions">{{ caller() }}</div></header>{% endmacro %}
+
+{#- Buttons. -#}
+{% macro button(label, kind, size, icon) %}<button type="{% if kind == "submit" %}submit{% else %}button{% endif %}" class="btn btn-{% if kind == "submit" %}primary{% else %}{{ kind }}{% endif %}{% if size == "s" %} btn-s{% elif size == "l" %} btn-l{% endif %}">{% if icon != "" %}{% call icon(icon) %}{% endcall %}{% endif %}{{ label }}</button>{% endmacro %}
+
+{% macro icon_button(icon, label) %}<button type="button" class="btn btn-quiet btn-icon" aria-label="{{ label }}" data-tip="{{ label }}">{% call icon(icon) %}{% endcall %}</button>{% endmacro %}
+
+{#- Tabs. `anchor` is for the live examples of the reference only: every tab then links to that id on the same page. -#}
+{% macro tabs(items, current, label, anchor="") %}<nav class="tabs" aria-label="{{ label }}">{% for p in items %}<a class="tab" href="{% if anchor != "" %}#{{ anchor }}{% else %}/admin/{{ p.slug }}/{% endif %}"{% if p.slug == current %} aria-current="page"{% endif %}>{{ p.label }}</a>{% endfor %}</nav>{% endmacro %}
+
+{#- Menus. -#}
+{% macro menu(id) %}<div id="{{ id }}" class="menu" role="menu" hidden>{{ caller() }}</div>{% endmacro %}
+
+{% macro row_menu(items) %}<div class="row-menu"><button type="button" class="btn btn-quiet btn-icon row-menu-button" aria-label="More actions" data-tip="More actions" aria-haspopup="menu" aria-expanded="false">{% call icon("more") %}{% endcall %}</button><div class="menu" role="menu" hidden>{% for item in items %}{% if let Some((action, label)) = item.split_once(":") %}<button type="button" class="menu-item{% if action.starts_with("!") %} menu-item-danger{% endif %}" role="menuitem" data-action="{{ action.trim_start_matches("!") }}">{{ label }}</button>{% endif %}{% endfor %}</div></div>{% endmacro %}
+
+{#- Form field. type: an input type, "textarea", or "slot" (the call body is the control). -#}
+{% macro field(label, id, hint, type, optional) %}<div class="field"><label for="{{ id }}">{{ label }}{% if optional %} <span class="optional">(optional)</span>{% endif %}</label>{% if type == "slot" %}{{ caller() }}{% elif type == "textarea" %}<textarea id="{{ id }}" name="{{ id }}" rows="3" aria-describedby="{% if hint != "" %}{{ id }}-hint {% endif %}{{ id }}-error"></textarea>{% else %}<input type="{{ type }}" id="{{ id }}" name="{{ id }}" aria-describedby="{% if hint != "" %}{{ id }}-hint {% endif %}{{ id }}-error">{% endif %}{% if hint != "" %}<p class="hint" id="{{ id }}-hint">{{ hint }}</p>{% endif %}<p class="field-error error" id="{{ id }}-error" hidden></p></div>{% endmacro %}
+
+{#- A new password or passphrase: the field, its length rule, then the repeat. min is the page's constant. -#}
+{% macro new_secret(label, id, min) %}<div class="new-secret"><div class="field"><label for="{{ id }}">{{ label }}</label><input type="password" id="{{ id }}" autocomplete="new-password" minlength="{{ min }}" aria-describedby="{{ id }}-hint"><p class="hint" id="{{ id }}-hint" data-length-hint data-min="{{ min }}">At least {{ min }} characters</p></div><div class="field"><label for="{{ id }}2">Repeat {{ label|lower }}</label><input type="password" id="{{ id }}2" autocomplete="new-password" minlength="{{ min }}" aria-describedby="{{ id }}2-error"><p class="field-error error" id="{{ id }}2-error" hidden></p></div></div>{% endmacro %}
+
+{#- The save bar of a form with tracked fields. It is hidden until a field changes; `ui.trackChanges` moves it into the
+    floating `#save-dock` (base.html), where it stays at the bottom of the window. `label` is the Save button's text. -#}
+{% macro save_bar(form, label="Save") %}<div class="save-bar" id="{{ form }}-save-bar" role="region" aria-label="Unsaved changes" hidden><span class="save-bar-text" data-save-text></span><span class="spacer"></span><button type="button" class="btn btn-secondary" data-save-discard>Discard</button><button type="submit" class="btn btn-primary" form="{{ form }}" data-save-submit>{{ label }}</button></div>{% endmacro %}
+
+{#- Notices and statuses. -#}
+{% macro notice(kind, text, fix) %}<div class="notice notice-{{ kind }}" role="{% if kind == "error" %}alert{% else %}status{% endif %}">{% if kind == "error" %}{% call icon("critical") %}{% endcall %}{% elif kind == "warning" %}{% call icon("warning") %}{% endcall %}{% else %}{% call icon("info") %}{% endcall %}{% endif %}<div class="notice-body"><p class="notice-text"><span class="visually-hidden">{% if kind == "error" %}Error{% elif kind == "warning" %}Warning{% else %}Note{% endif %}: </span>{{ text }}</p>{% if fix != "" %}<p class="notice-fix">{{ fix }}</p>{% endif %}</div></div>{% endmacro %}
+
+{% macro status(state) %}<span class="status status-{{ state }}"><span class="status-sym" aria-hidden="true">{% if state == "ok" %}{% call icon("check") %}{% endcall %}{% elif state == "warning" %}{% call icon("warning") %}{% endcall %}{% elif state == "error" %}{% call icon("critical") %}{% endcall %}{% endif %}</span><span class="status-word">{{ caller() }}</span></span>{% endmacro %}
+
+{#- Side panel, docked on the right under the status bar; box, a modal dialog. -#}
+{% macro side_panel(id, title, help) %}<aside id="{{ id }}" class="side-panel" aria-labelledby="{{ id }}-title" hidden><header class="side-panel-head"><h2 class="side-panel-title" id="{{ id }}-title">{{ title }}</h2>{% if help != "" %}{% call help(help) %}{% endcall %}{% endif %}<span class="spacer"></span><button type="button" class="btn btn-quiet btn-icon" aria-label="Close" data-tip="Close" data-panel-close>{% call icon("close") %}{% endcall %}</button></header><div class="side-panel-body">{{ caller() }}</div></aside>{% endmacro %}
+
+{% macro dialog_box(id, title) %}<dialog id="{{ id }}" class="box" aria-labelledby="{{ id }}-title"><h2 class="box-title" id="{{ id }}-title">{{ title }}</h2><div class="box-body">{{ caller() }}</div></dialog>{% endmacro %}
+
+{#- Inline confirmation that opens inside a row. -#}
+{% macro row_confirm(id, text, action) %}<div class="row-confirm" id="{{ id }}" role="group" aria-label="{{ text }}" hidden><p class="row-confirm-text">{{ text }}</p><div class="row-confirm-actions"><button type="button" class="btn btn-secondary btn-s" data-row-cancel>Cancel</button><button type="button" class="btn btn-danger btn-s" data-row-action>{{ action }}</button></div></div>{% endmacro %}
+
+{#- A show-once secret with its copy button. -#}
+{% macro secret(id) %}<div class="secret"><code class="secret-value" id="{{ id }}"></code><button type="button" class="btn btn-quiet btn-icon" aria-label="Copy" data-tip="Copy" data-copy="{{ id }}">{% call icon("copy") %}{% endcall %}</button></div>{% endmacro %}
+
+{#- Lists. -#}
+{% macro table_head(cols) %}<thead><tr>{% for col in cols %}{% if col.is_empty() %}<th scope="col" class="actions"><span class="visually-hidden">Actions</span></th>{% elif let Some(rest) = col.strip_prefix(">") %}<th scope="col" class="num">{{ rest }}</th>{% else %}<th scope="col">{{ col }}</th>{% endif %}{% endfor %}</tr></thead>{% endmacro %}
+
+{% macro empty(text, action) %}<div class="empty-state"><p>{{ text }}</p>{% if action != "" %}<button type="button" class="btn btn-secondary btn-s" data-empty-action>{{ action }}</button>{% endif %}</div>{% endmacro %}
+
+{% macro skeleton(rows) %}<div class="skeleton" role="status"><span class="visually-hidden">Loading</span>{% for _ in 0..rows %}<span class="skeleton-row" aria-hidden="true"></span>{% endfor %}</div>{% endmacro %}
+
+{#- Not available yet. -#}
+{% macro na(reason) %}<span class="na" role="group" aria-disabled="true" tabindex="0" data-tip="Not available yet: {{ reason }}">{{ caller() }}<span class="visually-hidden"> Not available yet: {{ reason }}</span></span>{% endmacro %}
+
+{% macro na_tag(reason) %}<span class="na-tag" tabindex="0" data-tip="Not available yet: {{ reason }}">Not available yet<span class="visually-hidden">: {{ reason }}</span></span>{% endmacro %}

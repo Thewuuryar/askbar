@@ -6,9 +6,15 @@
   /* colour */
   --bg: #eceef2;
   --card: #f6f7f9;
+  --surface-2: #eff1f5;
+  /* hover (docs/style/ui-ux.md, "Hover"): --surface-2 for an item at rest on the page or a card, one step on for one resting on --surface-2, and the share of --fg mixed into a filled or tinted item */
+  --hover-bg: var(--surface-2);
+  --hover-bg-2: color-mix(in srgb, var(--surface-2), var(--fg) 3%);
+  --hover-shift: 8%;
   --fg: #181b22;
   --muted: #5d6779;
   --line: rgba(24, 32, 56, 0.12);
+  --field-border: #7a8294;
   --accent: #3a5bd0;
   --accent-fg: #ffffff;
   --accent-soft: rgba(58, 91, 208, 0.09);
@@ -35,6 +41,8 @@
   --space-4: 16px;
   --space-5: 24px;
   --space-6: 32px;
+  --space-7: 40px;
+  --space-8: 48px;
 
   /* radii: two */
   --radius-control: 8px;
@@ -42,6 +50,38 @@
 
   /* motion: one duration, none under prefers-reduced-motion */
   --motion: 150ms;
+  /* the docked side panel slides: one duration and easing for the panel and everything that makes room for it */
+  --motion-panel: 200ms;
+  --ease-panel: cubic-bezier(0.2, 0, 0, 1);
+
+  /* layout: the same in both themes */
+  --status-h: 48px;
+  --phone-bar-h: 56px;
+  --rail-w: 216px;
+  --rail-w-collapsed: 64px;
+  --panel-w: 440px;
+  --icon: 16px;
+  --btn-h-s: 28px;
+  --btn-h: 32px;
+  --btn-h-l: 40px;
+  --btn-h-touch: 44px;
+  --target-min: 24px;
+  --chart-h: 112px;
+  --box-w: 480px;
+  --menu-w: 200px;
+  --search-w: 320px;
+  --search-pop-w: 520px;
+  --tip-w: 280px;
+  --skeleton-h: 12px;
+  --content-w: 1100px;
+  --page-w: 860px;
+  --content-bottom-room: 64px;
+  --facts-w: 360px;
+  --facts-w-s: 260px;
+  --ref-nav-w: 200px;
+  --ref-toc-w: 180px;
+  --ref-body-w: 680px;
+  --ref-link-w: 144px;
 
   color-scheme: light;
 }
@@ -50,9 +90,11 @@
   :root:not([data-theme="light"]) {
     --bg: #16181d;
     --card: #1b1d23;
+    --surface-2: #22252d;
     --fg: #e8eaef;
     --muted: #8c93a4;
     --line: rgba(255, 255, 255, 0.1);
+    --field-border: #6b7280;
     --accent: #8ba3f0;
     --accent-fg: #0d1020;
     --accent-soft: rgba(139, 163, 240, 0.12);
@@ -67,9 +109,11 @@
 :root[data-theme="dark"] {
   --bg: #16181d;
   --card: #1b1d23;
+  --surface-2: #22252d;
   --fg: #e8eaef;
   --muted: #8c93a4;
   --line: rgba(255, 255, 255, 0.1);
+  --field-border: #6b7280;
   --accent: #8ba3f0;
   --accent-fg: #0d1020;
   --accent-soft: rgba(139, 163, 240, 0.12);
@@ -82,5 +126,5 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  :root { --motion: 0ms; }
+  :root { --motion: 0ms; --motion-panel: 0ms; }
 }

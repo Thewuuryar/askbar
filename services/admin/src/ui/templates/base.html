@@ -1,5 +1,6 @@
 <!doctype html>
 {%- import "blocks.html" as b %}
+{%- import "components.html" as c %}
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -7,111 +8,185 @@
   <title>{{ label }} · Askbar admin</title>
   <link rel="stylesheet" href="/admin/tokens.css">
   <link rel="stylesheet" href="/admin/style.css">
+  <script src="/admin/components.js" defer></script>
   <script src="/admin/app.js" defer></script>
   {% block scripts %}{% endblock %}
 </head>
 <body data-page="{{ current }}">
+  {% call c::skip_link() %}{% endcall %}
   <main id="setup" class="narrow" hidden>
-    <h1>Set up Askbar</h1>
-    <form id="setup-password-form" hidden>
-      <h2>Change the published password</h2>
-      {% call b::hint("You signed in with the password everyone can read in the documentation. Choose your own before anything else: at least 10 characters, not the published one and not the username.") %}{% endcall %}
-      <label>Current password <input id="setup-current" type="password" autocomplete="current-password" required></label>
-      <label>New password <input id="setup-password" type="password" autocomplete="new-password" minlength="10" required></label>
-      <label>Repeat new password <input id="setup-password2" type="password" autocomplete="new-password" minlength="10" required></label>
-      <button type="submit">Change password</button>
-      {% call b::error_line("setup-password-error") %}{% endcall %}
-    </form>
-    <form id="setup-audit-form" hidden>
-      <h2>Choose the audit passphrase</h2>
-      {% call b::hint("Prompts, replies and provider errors are recorded for the Audit tab, sealed so that the server cannot read them. Only this passphrase opens them. At least 20 characters.") %}{% endcall %}
-      <p class="hint"><strong>It is never stored and cannot be recovered.</strong> If it is lost, the recorded content stays unreadable for good; the metadata (times, providers, tokens, errors) stays available.</p>
-      <label>Passphrase <input id="setup-audit" type="password" autocomplete="new-password" minlength="20" required></label>
-      <label>Repeat passphrase <input id="setup-audit2" type="password" autocomplete="new-password" minlength="20" required></label>
-      <label class="check"><input id="setup-audit-stored" type="checkbox" required> I stored this passphrase; it cannot be recovered</label>
-      <button type="submit">Create the key</button>
-      {% call b::error_line("setup-audit-error") %}{% endcall %}
-      <p class="hint">Setting up a new install from a backup? <a href="/admin/restore/" id="setup-restore-link">Restore it instead</a>, before anything else is set up.</p>
-    </form>
-    <div id="setup-audit-done" hidden>
-      <h2>The audit key is ready</h2>
-      <p>Key ID: <code id="setup-audit-keyid"></code></p>
-      {% call b::hint("The key ID names the key; it is safe to write down next to the passphrase. Changing the passphrase later means rotating the key (Settings).") %}{% endcall %}
-      <button id="setup-audit-continue" type="button">Continue</button>
-    </div>
-    <form id="setup-backup-form" hidden>
-      <h2>Choose the backup passphrase</h2>
-      {% call b::hint("Backups are encrypted so that this admin cannot read them. Only this passphrase opens a backup. At least 20 characters, and different from the audit passphrase.") %}{% endcall %}
-      <p class="hint"><strong>It is never stored and cannot be recovered.</strong> If it is lost, every backup is unreadable for good. Without it a restore is impossible, so keep it somewhere safe that is not this server.</p>
-      <label>Passphrase <input id="setup-backup" type="password" autocomplete="new-password" minlength="20" required></label>
-      <label>Repeat passphrase <input id="setup-backup2" type="password" autocomplete="new-password" minlength="20" required></label>
-      <label class="check"><input id="setup-backup-stored" type="checkbox" required> I stored this passphrase; it cannot be recovered</label>
-      <div class="row">
-        <button type="submit">Create the backup key</button>
-        <button type="button" id="setup-backup-signout" class="secondary" hidden>Sign out</button>
-      </div>
-      {% call b::error_line("setup-backup-error") %}{% endcall %}
-    </form>
-    <div id="setup-backup-done" hidden>
-      <h2>The backup key is ready</h2>
-      <p>Fingerprint: <code id="setup-backup-fingerprint"></code></p>
-      {% call b::hint("The fingerprint names the key; it is safe to write down next to the passphrase. Changing the passphrase later means rotating the key (Backup).") %}{% endcall %}
-      <h2>Next steps</h2>
-      <ol id="setup-next" class="hint">
-        <li><a href="/admin/network/" data-tab="network">Network</a> (optional): a host name and a real certificate.</li>
-        <li><a href="/admin/providers/" data-tab="providers">Providers</a>: add at least one model provider.</li>
-        <li><a href="/admin/clients/" data-tab="clients">Clients</a>: create a user, then a pairing key for them, and pair the Askbar app.</li>
+    <div class="signin-brand"><span class="signin-logo" aria-hidden="true">{% call c::icon("logo") %}{% endcall %}</span><h1>Set up Askbar</h1></div>
+    <div class="signin-card setup-card">
+      <ol id="setup-steps" class="setup-steps" aria-label="Setup progress">
+        <li class="setup-step"><span class="setup-step-state"><span class="setup-step-sym" aria-hidden="true"></span> <span class="setup-step-word">Next</span></span><span class="setup-step-name">1. Change the password</span></li>
+        <li class="setup-step"><span class="setup-step-state"><span class="setup-step-sym" aria-hidden="true"></span> <span class="setup-step-word">Next</span></span><span class="setup-step-name">2. Audit passphrase</span></li>
+        <li class="setup-step"><span class="setup-step-state"><span class="setup-step-sym" aria-hidden="true"></span> <span class="setup-step-word">Next</span></span><span class="setup-step-name">3. Backup passphrase</span></li>
       </ol>
-      <button id="setup-backup-continue" type="button">Continue</button>
+      <form id="setup-password-form" class="setup-form" novalidate hidden>
+        <h2>Change the published password</h2>
+        {% call b::hint("You signed in with the password everyone can read in the documentation. Choose your own before anything else: not the published one and not the username.") %}{% endcall %}
+        {% call c::field("Current password", "setup-current", "", "slot", false) %}<input id="setup-current" type="password" autocomplete="current-password" required aria-describedby="setup-current-error">{% endcall %}
+        {% call c::new_secret("New password", "setup-password", crate::constants::MIN_PASSWORD_CHARS) %}{% endcall %}
+        <div class="signin-actions">{% call c::button("Change password", "submit", "l", "") %}{% endcall %}</div>
+        {% call b::error_line("setup-password-form-error") %}{% endcall %}
+      </form>
+      <form id="setup-audit-form" class="setup-form" novalidate hidden>
+        <h2>Choose the audit passphrase</h2>
+        {% call b::hint("Prompts, replies and provider errors are recorded for the Audit tab, sealed so that the server cannot read them. Only this passphrase opens them.") %}{% endcall %}
+        {% call c::notice("warning", "It is never stored and cannot be recovered.", "If it is lost, the recorded content stays unreadable for good; the metadata (times, providers, tokens, errors) stays available.") %}{% endcall %}
+        {% call c::new_secret("Passphrase", "setup-audit", crate::constants::MIN_PASSPHRASE_CHARS) %}{% endcall %}
+        <div class="field"><label class="check"><input id="setup-audit-stored" type="checkbox" aria-describedby="setup-audit-stored-error"> I stored this passphrase; it cannot be recovered</label><p class="field-error error" id="setup-audit-stored-error" hidden></p></div>
+        <div class="signin-actions">{% call c::button("Create the key", "submit", "l", "") %}{% endcall %}</div>
+        {% call b::error_line("setup-audit-form-error") %}{% endcall %}
+        <p class="hint">Setting up a new install from a backup? <a href="/admin/backup/#restore-section" id="setup-restore-link">Restore it instead</a>, before anything else is set up.</p>
+      </form>
+      <div id="setup-audit-done" class="setup-form" hidden>
+        <h2>The audit key is ready</h2>
+        <p>Key ID: <code id="setup-audit-keyid"></code></p>
+        {% call b::hint("The key ID names the key; it is safe to write down next to the passphrase. Changing the passphrase later means rotating the key (Settings).") %}{% endcall %}
+        <div class="signin-actions"><button id="setup-audit-continue" type="button" class="btn btn-primary btn-l">Continue</button></div>
+      </div>
+      <form id="setup-backup-form" class="setup-form" novalidate hidden>
+        <h2>Choose the backup passphrase</h2>
+        {% call b::hint("Backups are encrypted so that this admin cannot read them. Only this passphrase opens a backup. It must differ from the audit passphrase.") %}{% endcall %}
+        {% call c::notice("warning", "It is never stored and cannot be recovered.", "If it is lost, every backup is unreadable for good. Without it a restore is impossible, so keep it somewhere safe that is not this server.") %}{% endcall %}
+        {% call c::new_secret("Passphrase", "setup-backup", crate::constants::MIN_PASSPHRASE_CHARS) %}{% endcall %}
+        <div class="field"><label class="check"><input id="setup-backup-stored" type="checkbox" aria-describedby="setup-backup-stored-error"> I stored this passphrase; it cannot be recovered</label><p class="field-error error" id="setup-backup-stored-error" hidden></p></div>
+        <div class="signin-actions">
+          {% call c::button("Create the backup key", "submit", "l", "") %}{% endcall %}
+          <button type="button" id="setup-backup-signout" class="btn btn-secondary btn-l" hidden>Sign out</button>
+        </div>
+        {% call b::error_line("setup-backup-form-error") %}{% endcall %}
+      </form>
+      <div id="setup-backup-done" class="setup-form" hidden>
+        <h2>The backup key is ready</h2>
+        <p>Fingerprint: <code id="setup-backup-fingerprint"></code></p>
+        {% call b::hint("The fingerprint names the key; it is safe to write down next to the passphrase. Changing the passphrase later means rotating the key (Backup).") %}{% endcall %}
+        <h2>Next steps</h2>
+        <ol id="setup-next" class="hint">
+          <li><a href="/admin/network/" data-tab="network">Network</a> (optional): a host name and a real certificate.</li>
+          <li><a href="/admin/providers/" data-tab="providers">Providers</a>: add at least one model provider.</li>
+          <li><a href="/admin/people/" data-tab="people">People &amp; clients</a>: create a user, then a pairing key for them, and pair the Askbar app.</li>
+        </ol>
+        <div class="signin-actions"><button id="setup-backup-continue" type="button" class="btn btn-primary btn-l">Continue</button></div>
+      </div>
     </div>
   </main>
 
-  <main id="login" class="narrow" hidden>
-    <h1>Askbar admin</h1>
-    <form id="login-form">
-      <label>Username <input id="username" type="text" autocomplete="username" value="admin" required></label>
-      <label>Password <input id="password" type="password" autocomplete="current-password" required></label>
-      {% call b::hint("On a new install the login is the published one; see the README's first-run steps.") %}{% endcall %}
-      <button type="submit">Sign in</button>
-      {% call b::error_line("login-error") %}{% endcall %}
+  <main id="login" hidden>
+    <div class="signin-brand"><span class="signin-logo" aria-hidden="true">{% call c::icon("logo") %}{% endcall %}</span><h1>Sign in to Askbar</h1></div>
+    <form id="login-form" class="signin-card">
+      {% call c::field("Username", "username", "", "slot", false) %}<input id="username" name="username" type="text" autocomplete="username" value="admin" required>{% endcall %}
+      {% call c::field("Password", "password", "", "slot", false) %}<input id="password" name="password" type="password" autocomplete="current-password" required aria-describedby="login-hint password-error">{% endcall %}
+      <p class="hint signin-hint" id="login-hint" hidden>On a new install the login is the published one; see the README's first-run steps.</p>
+      <div class="signin-actions">
+        {% call c::button("Sign in", "submit", "l", "") %}{% endcall %}
+        <span class="signin-or" aria-hidden="true">or</span>
+        {% call c::na("passkey sign-in is not built yet; sign in with the password.") %}<span class="btn btn-secondary btn-l">Use a passkey</span>{% endcall %}
+      </div>
     </form>
   </main>
 
-  <div id="app" hidden>
-    <header class="top">
-      <h1>Askbar admin</h1>
-      <nav id="nav" aria-label="Admin pages">
-        {%- for p in pages %}
-        <a href="/admin/{{ p.slug }}/" data-tab="{{ p.slug }}"{% if p.slug == current %} aria-current="page"{% endif %}>{{ p.label }}</a>
+  <div id="app" class="app" hidden>
+    <div class="phone-bar">
+      <a class="sm-brand" href="/admin/{{ crate::constants::LANDING_PAGE }}/"><span class="sm-logo">{% call c::icon("logo") %}{% endcall %}</span><span>Askbar</span></a>
+      <button type="button" id="menu-open" class="btn btn-secondary phone-menu-button" aria-controls="side-menu" aria-expanded="false"><span class="phone-menu-open">{% call c::icon("menu") %}{% endcall %}Menu</span><span class="phone-menu-close">{% call c::icon("close") %}{% endcall %}Close</span></button>
+    </div>
+    <aside id="side-menu" class="side-menu" aria-label="Admin menu">
+      <div class="sm-top">
+        <a class="sm-brand" href="/admin/{{ crate::constants::LANDING_PAGE }}/" data-tip="Askbar"><span class="sm-logo">{% call c::icon("logo") %}{% endcall %}</span><span class="sm-text">Askbar</span></a>
+        <button type="button" id="menu-collapse" class="btn btn-quiet btn-icon sm-toggle" aria-controls="side-menu" aria-expanded="true" aria-label="Collapse menu" data-tip="Collapse menu">{% call c::icon("collapse") %}{% endcall %}</button>
+      </div>
+      <a class="sm-health" id="menu-health" href="/admin/services/" data-tip="Checking services"><span class="status status-pending" id="menu-health-status"><span class="status-sym" aria-hidden="true"></span><span class="status-word sm-text">Checking services</span></span></a>
+      <nav id="nav" class="sm-nav" aria-label="Admin pages">
+        {%- for g in menu %}
+        {%- if g.nested %}
+        <a class="sm-item{% if g.holds(current) %} sm-parent{% endif %}" href="{{ g.href() }}" data-tip="{{ g.label }}">{% call c::icon(g.icon) %}{% endcall %}<span class="sm-text">{{ g.label }}</span></a>
+        <div class="sm-subs">
+          {%- for p in g.pages %}
+          <a class="sm-item sm-sub" href="/admin/{{ p.slug }}/" data-tab="{{ p.slug }}" data-tip="{{ p.label }}"{% if p.slug == current %} aria-current="page"{% endif %}>{% call c::icon(p.icon) %}{% endcall %}<span class="sm-text">{{ p.label }}</span></a>
+          {%- endfor %}
+        </div>
+        {%- else %}
+        {%- for p in g.pages %}
+        <a class="sm-item" href="/admin/{{ p.slug }}/" data-tab="{{ p.slug }}" data-tip="{{ p.label }}"{% if p.slug == current %} aria-current="page"{% endif %}>{% call c::icon(p.icon) %}{% endcall %}<span class="sm-text">{{ p.label }}</span></a>
+        {%- endfor %}
+        {%- endif %}
         {%- endfor %}
       </nav>
-      <button type="button" id="logout" class="link">Sign out</button>
-    </header>
-    <main>
-      <p id="offline" class="flash error" role="alert" hidden>Server offline. The admin can't reach the Askbar server, so changes, tests, clients and backups won't work until it is back. Nothing you change now is lost or half-saved.</p>
-      <p id="rejected" class="flash error" role="alert" hidden>The server rejected this admin's token. Rotate it on the Docker host with <code>docker compose run --rm bootstrap rotate admin-server</code>, then restart both: <code>docker compose restart server admin</code>. Until then the admin can't change anything on the server. The banner goes away when the server accepts the token again.</p>
-      <p id="chain-alert" class="flash error" role="alert" hidden></p>
-      <p id="alerts-banner" class="flash error" role="alert" hidden></p>
-      <div id="unsealed-banner" class="flash" role="status" hidden>
-        <span id="unsealed-text"></span>
-        <button type="button" id="unsealed-seal" class="secondary">Seal</button>
-      </div>
-      <div id="sealed-alerts" role="alert"></div>
-      <p id="flash" class="flash" role="status" hidden></p>
-
-      <section id="tab-{{ current }}" data-tab="{{ current }}">
-        <div class="row">
-          <h2>{{ label }}</h2>
-          <span class="spacer"></span>
-          {% block actions %}{% endblock %}
+      <div class="sm-bottom">
+        <div class="sm-foot">
+          <span class="sm-avatar" aria-hidden="true">{{ crate::pages::initial(crate::constants::ADMIN_USERNAME) }}</span>
+          <span class="sm-text sm-who">{{ crate::constants::ADMIN_USERNAME }}</span>
+          <button type="button" id="logout" class="btn btn-quiet btn-icon" aria-label="Sign out" data-tip="Sign out">{% call c::icon("sign_out") %}{% endcall %}</button>
         </div>
-        <p class="hint">{% block hint %}{% endblock %}</p>
+        <div class="sm-lic">
+          <a class="sm-text sm-lic-link" href="{{ crate::constants::LICENSE_URL }}" target="_blank" rel="noopener noreferrer">{{ crate::constants::LICENSE }}<span class="visually-hidden"> (opens in a new tab)</span></a>
+          <a class="btn btn-quiet btn-icon" href="{{ crate::constants::SOURCE_URL }}" target="_blank" rel="noopener noreferrer" data-tip="Source code">{% call c::icon("code") %}{% endcall %}<span class="visually-hidden">Source code (opens in a new tab)</span></a>
+        </div>
+      </div>
+    </aside>
+    <div class="content">
+    <div class="status-bar" id="status-bar">
+      <div class="gs-left">
+      <nav class="crumb" aria-label="Breadcrumb"><ol>{% if group != "" %}{% for part in group.split(" / ") %}<li>{{ part }}</li>{% endfor %}{% endif %}<li aria-current="page">{{ label }}</li></ol></nav>
+      <div class="gs" id="gs" role="search">
+        <div class="gs-field">{% call c::icon("search") %}{% endcall %}<label class="gs-sr" for="gs-input">Search the admin</label><input id="gs-input" type="text" role="combobox" aria-expanded="false" aria-controls="gs-list" aria-autocomplete="list" autocomplete="off" spellcheck="false" placeholder="Search admin"><kbd class="gs-kbd" aria-hidden="true">/</kbd></div>
+        <div class="gs-pop" id="gs-pop" hidden>
+          <div id="gs-list" role="listbox" aria-label="Search results"></div>
+          <p class="gs-none" id="gs-none" hidden>No matches</p>
+          <div class="gs-foot" aria-hidden="true"><span><kbd>↑</kbd><kbd>↓</kbd> move</span><span><kbd>↵</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+        </div>
+      </div>
+      </div>
+      <div class="facts" id="status-facts">
+        {% call c::na("the server has no family budget setting") %}Budget&nbsp;<b>not set</b>{% endcall %}
+        <span id="sb-kill" class="status status-pending"><span class="status-sym" aria-hidden="true"></span><span class="status-word">Kill: checking</span></span>
+        <span id="sb-seal" class="seal-toggle"><span id="sb-seal-status" class="status status-pending"><span class="status-sym" aria-hidden="true"></span><span class="status-word">Sealed: checking</span></span><button type="button" id="seal-button" class="btn btn-secondary btn-s" aria-haspopup="dialog" hidden>Unseal</button></span>
+        <span class="bell"><button type="button" id="bell-button" class="btn btn-quiet btn-icon bell-button" aria-label="Alerts: none" data-tip="Alerts: none">{% call c::icon("bell") %}{% endcall %}<span id="bell-badge" class="bell-badge" aria-hidden="true" hidden>0</span></button><div id="bell-menu" class="menu bell-menu" role="menu" aria-label="Alerts" hidden></div></span>
+      </div>
+    </div>
+    {% call c::banner_region() %}{% endcall %}
+    <div id="alert-pops" class="alert-pops"></div>
+    <template id="search-icons"><span data-icon="settings">{% call c::icon("sliders") %}{% endcall %}</span><span data-icon="people">{% call c::icon("people") %}{% endcall %}</span><span data-icon="providers">{% call c::icon("cube") %}{% endcall %}</span><span data-icon="audit">{% call c::icon("audit") %}{% endcall %}</span><span data-icon="reference">{% call c::icon("reference") %}{% endcall %}</span><span data-icon="page">{% call c::icon("search") %}{% endcall %}</span></template>
+    <template id="alert-icons"><span data-icon="critical">{% call c::icon("critical") %}{% endcall %}</span><span data-icon="warning">{% call c::icon("warning") %}{% endcall %}</span><span data-icon="info">{% call c::icon("info") %}{% endcall %}</span><span data-icon="close">{% call c::icon("close") %}{% endcall %}</span></template>
+    <main id="main" tabindex="-1">
+      <p id="page-error" class="error" role="alert" hidden></p>
+
+      <section id="{{ section }}" data-tab="{{ current }}">
+        {% block header %}{% call c::page_header(label, lede, crate::reference::page_topic(current), "") %}{% endcall %}{% endblock %}
+        {% if !tabs.is_empty() %}{% call c::tabs(&tabs, current, group) %}{% endcall %}{% endif %}
 {% block content %}{% endblock %}
+        {%- let topics = crate::reference::topics_for(current) %}
+        {%- if !topics.is_empty() %}
+        {%- for t in topics %}
+        <template data-help-topic="{{ t.topic }}" data-title="{{ t.title }}" data-kicker="{{ t.kicker }}" data-href="{{ t.href }}">{{ t.html|safe }}</template>
+        {%- endfor %}
+        {% call c::side_panel("help-panel", "Help", "") %}
+          <p class="help-kicker" id="help-kicker"></p>
+          <div class="ref-body help-article" id="help-article"></div>
+          <p class="help-foot"><a class="btn btn-secondary" id="help-full" href="/admin/reference/">Open full page</a></p>
+        {% endcall %}
+        {%- endif %}
       </section>
     </main>
+    <div id="save-dock" class="save-dock"></div>
+    </div>
   </div>
 
-  <footer class="footer">Askbar is free software under the AGPL-3.0-or-later. <a href="https://github.com/Thewuuryar/askbar" rel="noreferrer">Source code</a></footer>
+  {% call c::dialog_box("unseal-box", "Unseal content") %}
+    <form id="unseal-form" novalidate>
+      <p>Prompts and replies become readable in Audit, on every page, until you seal again.</p>
+      <p class="hint" id="unseal-limits"></p>
+      {% call c::field("Audit passphrase", "unseal-pass", "", "password", false) %}{% endcall %}
+      <p class="hint" id="unseal-fresh"></p>
+      <div class="actions"><button type="button" id="unseal-cancel" class="btn btn-secondary">Cancel</button><button type="submit" id="unseal-go" class="btn btn-primary">Unseal</button></div>
+    </form>
+  {% endcall %}
+  {% call c::toast_region() %}{% endcall %}
+  {% call c::announcer() %}{% endcall %}
+
+  <footer class="footer">Askbar is free software under the {{ crate::constants::LICENSE }}. <a href="{{ crate::constants::SOURCE_URL }}" target="_blank" rel="noopener noreferrer">Source code<span class="visually-hidden"> (opens in a new tab)</span></a></footer>
 
 </body>
 </html>

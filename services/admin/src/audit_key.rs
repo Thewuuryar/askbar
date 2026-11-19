@@ -12,7 +12,7 @@ use crypto_box::{PublicKey, SecretKey};
 use sha2::{Digest, Sha256};
 
 /// A passphrase for the audit key must be at least this long, counted in characters.
-pub const MIN_PASSPHRASE_CHARS: usize = 20;
+pub use crate::constants::MIN_PASSPHRASE_CHARS;
 
 /// Argon2id cost in the form it is stored: memory in KiB, passes, lanes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -14,10 +14,19 @@ const ROOT = path.resolve(__dirname, '../..');
 const PASSWORD = 'correct horse battery';
 const SECRET_KEY = 'sk-do-not-show-me-123';
 
+// Every step runs once per viewport (plan step 1.7): the whole sequence, on a fresh stack and data directory, at 1280 wide
+// and again at 390 wide. The names carry the viewport, so a failure says where it happened. The width is this test's own
+// parameter, not a constants.json value.
+const VIEWPORTS = [{ width: 1280, height: 800 }, { width: 390, height: 844 }];
+const PHONE_MAX_WIDTH = 600;
+let vpLabel = '';
+let isPhone = false;
 let failures = 0;
+const counts = {};
 async function step(name, fn) {
-  try { await fn(); console.log('ok   ' + name); }
-  catch (e) { failures++; console.error('FAIL ' + name + '\n     ' + String(e.message).split('\n').join('\n     ')); }
+  const full = '[' + vpLabel + '] ' + name;
+  try { await fn(); counts[vpLabel].ok++; console.log('ok   ' + full); }
+  catch (e) { failures++; counts[vpLabel].fail++; console.error('FAIL ' + full + '\n     ' + String(e.message).split('\n').join('\n     ')); }
 }
 
 // Waits until something listens on the port: a process started a moment ago may not be yet.
@@ -41,7 +50,10 @@ async function waitForPort(port) {
   throw new Error('port ' + port + ' never opened');
 }
 
-(async () => {
+async function runViewport(viewport) {
+  vpLabel = String(viewport.width);
+  isPhone = viewport.width <= PHONE_MAX_WIDTH;
+  counts[vpLabel] = { ok: 0, fail: 0 };
   const [api, adminPort, serverApiPort, mockPort] = [await freePort(), await freePort(), await freePort(), await freePort()];
   const data = fs.mkdtempSync(path.join(os.tmpdir(), 'askbar-admin-'));
   const dirs = {
@@ -78,6 +90,8 @@ async function waitForPort(port) {
   let forwarder = null;
   // bootstrap's directories are read-only, as they are in the stack: open them up before removing.
   const cleanup = () => { for (const c of children) c.kill(); if (forwarder) forwarder.close(); spawnSync('chmod', ['-R', 'u+rwx', data]); fs.rmSync(data, { recursive: true, force: true }); };
+  let browser = null;
+  try {
 
   const startServer = () => run(path.join(ROOT, 'target/debug/askbar-server'), [], {
     ASKBAR_CLIENT_API_ADDR: '127.0.0.1:' + api,
@@ -131,29 +145,98 @@ async function waitForPort(port) {
   await waitForPort(mockPort);
 
   const base = `http://127.0.0.1:${adminPort}/admin/`;
-  const browser = await chromium.launch();
-  const ctx = await browser.newContext({ viewport: { width: 900, height: 800 }, permissions: ['clipboard-read', 'clipboard-write'] });
+  browser = await chromium.launch();
+  const ctx = await browser.newContext({ reducedMotion: 'reduce', viewport, permissions: ['clipboard-read', 'clipboard-write'] });
   const page = await ctx.newPage();
   const errors = [];
   // Each admin section is its own page (plan step 1.16): a nav link loads it, and its scripts run before
   // `load`, so wait for that before using the page.
+  // On a phone the menu is behind the Menu button (plan step 2.4): open it before using what is in it.
+  const openMenu = async () => {
+    if (isPhone && (await page.getAttribute('#menu-open', 'aria-expanded')) !== 'true') await page.click('#menu-open');
+  };
   const openPage = async (slug) => {
+    await openMenu();
     await page.click('#nav [data-tab="' + slug + '"]');
     await page.waitForURL('**/admin/' + slug + '/**');
     await page.waitForLoadState('load');
     await page.waitForSelector('#app:not([hidden])');
   };
+  // A closed side panel has also left its address (Back runs a moment after the panel hides).
+  const panelClosed = async () => {
+    await page.waitForSelector('#provider-panel', { state: 'hidden' });
+    await page.waitForFunction(() => !location.search.includes('panel='));
+  };
   page.on('pageerror', (e) => errors.push(e.message));
   page.on('console', (m) => { if (m.type() === 'error' && !/status of (4\d\d|502)/.test(m.text())) errors.push(m.text()); });
 
-  // Opens the Settings tab and waits until its values have been read from the server. Waiting for a field to hold a
+  // Opens the General page and waits until its values have been read from the server. Waiting for a field to hold a
   // value is not enough when the test typed that same value: a read that lands later overwrites what the test types next.
   async function openSettings() {
     await openPage('providers');
     const reread = page.waitForResponse((r) => r.url().endsWith('/api/admin/v1/settings') && r.request().method() === 'GET');
-    await openPage('settings');
+    await openPage('general');
     await reread;
   }
+
+  // The sign-in card (plan step 6.3): the first-run hint shows on the published login, the card has no attempts text,
+  // Skip to content is the first Tab stop, the passkey row is greyed and inert, buttons are 40 px (44 on a phone),
+  // nothing scrolls sideways, and axe is clean.
+  await step('sign-in card: the first-run hint shows on the published login, no attempts text, Skip to content first, passkey greyed and inert, sizes and axe', async () => {
+    const setupResponse = page.waitForResponse((r) => r.url().endsWith('/api/admin/v1/setup') && r.request().method() === 'GET');
+    await page.goto(base);
+    await page.waitForSelector('#login:not([hidden])');
+    assert.equal((await setupResponse).status(), 200, 'the sign-in page reads the public setup status once');
+    await page.waitForSelector('#login-hint:not([hidden])');
+    assert.match(await page.innerText('#login-hint'), /published/);
+    assert.equal(await page.evaluate(() => /attempt/i.test(document.getElementById('login').innerText)), false, 'no attempts text on the card');
+    // The password field has focus on open (autofocus is expected here), so the Tab order is read from the document: the first
+    // focusable element that is shown and in the tab sequence must be Skip to content.
+    const firstStop = await page.evaluate(() => {
+      const f = [...document.querySelectorAll('a[href], button, input, select, textarea, [tabindex]')].find((e) => e.tabIndex >= 0 && e.getClientRects().length > 0);
+      return { cls: f.className, text: f.textContent };
+    });
+    assert.deepEqual(firstStop, { cls: 'skip-link', text: 'Skip to content' }, 'Skip to content is the first Tab stop');
+    const passkey = await page.evaluate(() => {
+      const row = document.querySelector('#login .na');
+      return { ariaDisabled: row.getAttribute('aria-disabled'), tabindex: row.getAttribute('tabindex'), disabled: !!row.querySelector('[disabled]') || row.hasAttribute('disabled'), text: row.textContent.trim() };
+    });
+    assert.equal(passkey.ariaDisabled, 'true');
+    assert.equal(passkey.tabindex, '0', 'reachable by Tab');
+    assert.equal(passkey.disabled, false, 'no disabled attribute');
+    assert.match(passkey.text, /^Use a passkey Not available yet: /);
+    assert.equal(/\d/.test(passkey.text), false, 'no digits in the label');
+    await page.focus('#login .na');
+    await page.keyboard.press('Enter');
+    assert.equal(await page.isHidden('#login'), false, 'Enter on the greyed passkey does nothing');
+    const sizes = await page.evaluate(() => ({
+      submit: document.querySelector('#login-form button[type=submit]').getBoundingClientRect().height,
+      passkey: document.querySelector('#login .na .btn').getBoundingClientRect().height,
+      scrolls: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+    }));
+    assert.ok(sizes.submit >= (isPhone ? 44 : 40) - 0.5 && sizes.submit <= (isPhone ? 44 : 40) + 0.5, 'Sign in is ' + sizes.submit + ' px high');
+    assert.ok(sizes.passkey >= (isPhone ? 44 : 40) - 0.5, 'the passkey row is ' + sizes.passkey + ' px high');
+    assert.equal(sizes.scrolls, false, 'no sideways scroll on the sign-in card');
+    // The signed-out footer line is centred under the card: its text, not its box, sits on the card's centre line.
+    const centres = await page.evaluate(() => {
+      const range = document.createRange();
+      range.selectNodeContents(document.querySelector('.footer'));
+      range.setEndAfter(document.querySelector('.footer a').firstChild); // the link's visually hidden hint is not drawn text
+      const t = range.getBoundingClientRect();
+      const c = document.querySelector('#login .signin-card').getBoundingClientRect();
+      return { text: (t.left + t.right) / 2, card: (c.left + c.right) / 2 };
+    });
+    assert.ok(Math.abs(centres.text - centres.card) <= 4, 'the footer line is centred under the card: ' + JSON.stringify(centres));
+    const axeCtx = await browser.newContext({ reducedMotion: 'reduce', viewport, bypassCSP: true });
+    try {
+      const ap = await axeCtx.newPage();
+      await ap.goto(base);
+      await ap.waitForSelector('#login:not([hidden])');
+      await ap.addScriptTag({ content: fs.readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8') });
+      const found = await ap.evaluate(async () => (await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'] } })).violations.map((v) => v.id + ': ' + v.nodes.map((n) => n.target.join(' ')).join(', ')));
+      assert.deepEqual(found, [], 'axe on the sign-in card');
+    } finally { await axeCtx.close(); }
+  });
 
   await step('first run: sign in with the published login (ADR 0007)', async () => {
     await page.goto(base);
@@ -162,30 +245,104 @@ async function waitForPort(port) {
     await page.fill('#username', 'root');
     await page.fill('#password', 'admin');
     await page.click('#login-form button');
-    await page.waitForSelector('#login-error:not([hidden])');
-    assert.match(await page.innerText('#login-error'), /Wrong username or password/, 'a wrong name gets the same answer as a wrong password');
+    await page.waitForSelector('#password-error:not([hidden])');
+    assert.match(await page.innerText('#password-error'), /Wrong username or password/, 'a wrong name gets the same answer as a wrong password');
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'password', 'the failed sign-in moves focus to the password field');
+    assert.equal(await page.getAttribute('#password', 'aria-invalid'), 'true');
     await page.fill('#username', 'admin');
     await page.fill('#password', 'admin');
     await page.click('#login-form button');
     await page.waitForSelector('#setup-password-form:not([hidden])');
     assert.equal(await page.isHidden('#app'), true, 'nothing else opens before the password is changed');
   });
+  // First-run setup card (plan step 6.4): the three-step list, in the words and symbols the screens show.
+  const setupSteps = () => page.evaluate(() => [...document.querySelectorAll('#setup-steps > li')].map((li) => ({ current: li.getAttribute('aria-current'), text: li.innerText.replace(/\s+/g, ' ').trim() })));
+  const SETUP_NAMES = ['1. Change the password', '2. Audit passphrase', '3. Backup passphrase'];
+  const stepWords = { done: '\u2713 Done', current: '\u25cf Current step', next: '\u25cb Next' };
+  async function assertSetupSteps(states, label) {
+    const got = await setupSteps();
+    assert.deepEqual(got.map((x) => x.text), states.map((st, i) => stepWords[st] + ' ' + SETUP_NAMES[i]), label + ': the three steps, each a symbol, a word and its name');
+    assert.deepEqual(got.map((x) => x.current), states.map((st) => (st === 'current' ? 'step' : null)), label + ': only the current step is aria-current');
+  }
+  // One setup screen: Skip to content is still the first Tab stop, the buttons and fields are 40 px (44 on a phone), nothing scrolls
+  // sideways, and axe is clean on it (a second context with the same sign-in opens the same screen).
+  async function checkSetupScreen(form, label) {
+    const firstStop = await page.evaluate(() => {
+      const f = [...document.querySelectorAll('a[href], button, input, select, textarea, [tabindex]')].find((e) => e.tabIndex >= 0 && e.getClientRects().length > 0);
+      return { cls: f.className, text: f.textContent };
+    });
+    assert.deepEqual(firstStop, { cls: 'skip-link', text: 'Skip to content' }, label + ': Skip to content is the first Tab stop');
+    const sizes = await page.evaluate((sel) => {
+      const f = document.querySelector(sel);
+      return {
+        buttons: [...f.querySelectorAll('button:not([hidden])')].map((b) => b.getBoundingClientRect().height),
+        inputs: [...f.querySelectorAll('input:not([type=checkbox])')].map((i) => i.getBoundingClientRect().height),
+        checks: [...f.querySelectorAll('label.check')].map((l) => l.getBoundingClientRect().height),
+        scrolls: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+      };
+    }, form);
+    const want = isPhone ? 44 : 40;
+    for (const h of sizes.buttons) assert.ok(h >= want - 0.5, label + ': a button is ' + h + ' px high');
+    for (const h of sizes.inputs) assert.ok(h >= want - 0.5, label + ': a field is ' + h + ' px high');
+    if (isPhone) for (const h of sizes.checks) assert.ok(h >= 44 - 0.5, label + ': the check box row is ' + h + ' px high');
+    assert.equal(sizes.scrolls, false, label + ': no sideways scroll');
+    const axeCtx = await browser.newContext({ reducedMotion: 'reduce', viewport, bypassCSP: true, storageState: await ctx.storageState() });
+    try {
+      const ap = await axeCtx.newPage();
+      await ap.goto(base);
+      await ap.waitForSelector(form + ':not([hidden])');
+      await ap.addScriptTag({ content: fs.readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8') });
+      const found = await ap.evaluate(async () => (await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'] } })).violations.map((v) => v.id + ': ' + v.nodes.map((n) => n.target.join(' ')).join(', ')));
+      assert.deepEqual(found, [], 'axe on ' + label);
+    } finally { await axeCtx.close(); }
+  }
   const AUDIT_PASS = 'correct horse battery staple 42';
 const BACKUP_PASS = 'e2e backup passphrase, its own 1';
 const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
+  await step('setup card: step 1 of 3 shows, the password has focus, counts are live, a mismatched pair blocks Next with a focused inline error and sends nothing, paste is allowed, sizes and axe', async () => {
+    await assertSetupSteps(['current', 'next', 'next'], 'password screen');
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'setup-current', 'the first field has focus on open');
+    const { min } = await page.evaluate(async () => ({ min: (await window.ui.ready).MIN_PASSWORD_CHARS }));
+    assert.equal(await page.innerText('#setup-password-hint'), 'At least ' + min + ' characters');
+    await page.fill('#setup-password', 'abc');
+    assert.equal(await page.innerText('#setup-password-hint'), '3 of at least ' + min + ' characters');
+    await page.fill('#setup-password', 'x'.repeat(min));
+    assert.equal(await page.innerText('#setup-password-hint'), min + ' characters');
+    for (const id of ['setup-current', 'setup-password', 'setup-password2']) {
+      assert.equal(await page.evaluate((i) => document.getElementById(i).dispatchEvent(new ClipboardEvent('paste', { cancelable: true, bubbles: true })), id), true, id + ' accepts a paste');
+    }
+    await checkSetupScreen('#setup-password-form', 'password screen');
+    const sent = [];
+    const watch = (r) => { if (r.method() !== 'GET') sent.push(r.method() + ' ' + r.url()); };
+    page.on('request', watch);
+    try {
+      await page.fill('#setup-current', 'admin');
+      await page.fill('#setup-password', PASSWORD);
+      await page.fill('#setup-password2', PASSWORD + 'x');
+      await page.click('#setup-password-form button[type=submit]');
+      await page.waitForSelector('#setup-password2-error:not([hidden])');
+      assert.match(await page.innerText('#setup-password2-error'), /do not match/);
+      assert.equal(await page.getAttribute('#setup-password2', 'aria-invalid'), 'true');
+      assert.equal(await page.evaluate(() => document.activeElement.id), 'setup-password2', 'focus moves to the repeat field');
+      assert.match(await page.innerText('#setup-password-form .error-summary'), /Fix this to go on/);
+      await page.waitForTimeout(300);
+      assert.deepEqual(sent, [], 'no request was sent');
+    } finally { page.off('request', watch); }
+  });
   await step('setup: the published password must be changed, to something else, then the audit passphrase step opens', async () => {
     await page.fill('#setup-current', 'admin');
     await page.fill('#setup-password', PASSWORD);
     await page.fill('#setup-password2', PASSWORD + 'x');
     await page.click('#setup-password-form button[type=submit]');
-    await page.waitForSelector('#setup-password-error:not([hidden])');
-    assert.match(await page.innerText('#setup-password-error'), /do not match/);
+    await page.waitForSelector('#setup-password2-error:not([hidden])');
+    assert.match(await page.innerText('#setup-password2-error'), /do not match/);
     // The published password (`admin`) as the new one is refused (by the server too, not only the form).
     await page.evaluate(() => { document.getElementById('setup-password-form').noValidate = true; });
     await page.fill('#setup-password', 'admin');
     await page.fill('#setup-password2', 'admin');
     await page.click('#setup-password-form button[type=submit]');
     await page.waitForFunction(() => /at least 10/.test(document.getElementById('setup-password-error').textContent));
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'setup-password', 'focus goes to the short password');
     await page.fill('#setup-password', PASSWORD);
     await page.fill('#setup-password2', PASSWORD);
     await page.click('#setup-password-form button[type=submit]');
@@ -194,14 +351,24 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     assert.equal(await page.isHidden('#setup-password-form'), true);
     assert.equal(await page.getAttribute('#setup-audit', 'type'), 'password');
     assert.match(await page.innerText('#setup-audit-form'), /cannot be recovered/);
-    // A new install can be set up from a backup instead: the link opens the Restore page without finishing the setup screens.
+    // A new install can be set up from a backup instead: the link opens the Restore section of Backup without finishing the setup screens.
     await page.click('#setup-restore-link');
-    await page.waitForURL('**/admin/restore/**');
+    await page.waitForURL('**/admin/backup/#restore-section');
     await page.waitForSelector('#app:not([hidden])');
     await page.waitForSelector('#restore-upload-form:not([hidden])');
     assert.equal(await page.isHidden('#setup'), true);
     await page.goto(base);
     await page.waitForSelector('#setup-audit-form:not([hidden])');
+  });
+  await step('setup card: step 2 of 3 shows on the audit screen, the counts are live, sizes and axe', async () => {
+    await assertSetupSteps(['done', 'current', 'next'], 'audit screen');
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'setup-audit', 'the passphrase has focus on open');
+    const { min } = await page.evaluate(async () => ({ min: (await window.ui.ready).MIN_PASSPHRASE_CHARS }));
+    assert.equal(await page.innerText('#setup-audit-hint'), 'At least ' + min + ' characters');
+    await page.fill('#setup-audit', 'abc');
+    assert.equal(await page.innerText('#setup-audit-hint'), '3 of at least ' + min + ' characters');
+    await page.fill('#setup-audit', '');
+    await checkSetupScreen('#setup-audit-form', 'audit screen');
   });
   await step('setup: the audit passphrase must match, be 20+ characters and be confirmed as stored', async () => {
     await page.evaluate(() => document.getElementById('setup-audit-form').noValidate = true);
@@ -209,7 +376,8 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.fill('#setup-audit2', AUDIT_PASS + 'x');
     await page.check('#setup-audit-stored');
     await page.click('#setup-audit-form button[type=submit]');
-    assert.match(await page.innerText('#setup-audit-error'), /do not match/);
+    assert.match(await page.innerText('#setup-audit2-error'), /do not match/);
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'setup-audit2', 'the mismatch is on the repeat field, focused');
     await page.fill('#setup-audit', 'too short');
     await page.fill('#setup-audit2', 'too short');
     await page.click('#setup-audit-form button[type=submit]');
@@ -219,7 +387,8 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.fill('#setup-audit2', AUDIT_PASS);
     await page.uncheck('#setup-audit-stored');
     await page.click('#setup-audit-form button[type=submit]');
-    assert.match(await page.innerText('#setup-audit-error'), /stored the passphrase/);
+    assert.match(await page.innerText('#setup-audit-stored-error'), /stored the passphrase/);
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'setup-audit-stored', 'the unchecked box is focused');
     assert.equal(await page.isHidden('#app'), true);
     const st = await (await fetch(`http://127.0.0.1:${adminPort}/api/admin/v1/setup`, { headers: { 'x-askbar-admin': '1' } })).json();
     assert.equal(st.audit_key_set, false, 'no key yet');
@@ -228,15 +397,25 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.check('#setup-audit-stored');
     await page.click('#setup-audit-form button[type=submit]');
     await page.waitForSelector('#setup-audit-done:not([hidden])');
+    await assertSetupSteps(['done', 'done', 'next'], 'audit key ready');
     const keyId = await page.innerText('#setup-audit-keyid');
     assert.match(keyId, /^[0-9a-f]{16}$/);
     assert.equal(await page.inputValue('#setup-audit').catch(() => ''), '', 'the passphrase field is cleared');
     assert.equal((await page.content()).includes(AUDIT_PASS), false, 'the passphrase is not left in the page');
     await page.click('#setup-audit-continue');
     await page.waitForSelector('#setup-backup-form:not([hidden])');
+    await assertSetupSteps(['done', 'done', 'current'], 'backup screen');
     assert.equal(await page.isHidden('#app'), true, 'setup does not finish at the audit key');
     assert.equal(await page.getAttribute('#setup-backup', 'type'), 'password');
     assert.match(await page.innerText('#setup-backup-form'), /cannot be recovered/);
+  });
+  await step('setup card: step 3 of 3 shows on the backup screen, the counts are live, sizes and axe', async () => {
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'setup-backup', 'the passphrase has focus on open');
+    const { min } = await page.evaluate(async () => ({ min: (await window.ui.ready).MIN_PASSPHRASE_CHARS }));
+    await page.fill('#setup-backup', 'abc');
+    assert.equal(await page.innerText('#setup-backup-hint'), '3 of at least ' + min + ' characters');
+    await page.fill('#setup-backup', '');
+    await checkSetupScreen('#setup-backup-form', 'backup screen');
   });
   await step('setup: the backup passphrase must match, be 20+ characters, differ from the audit passphrase and be confirmed as stored (ADR 0013)', async () => {
     await page.evaluate(() => document.getElementById('setup-backup-form').noValidate = true);
@@ -244,7 +423,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.fill('#setup-backup2', BACKUP_PASS + 'x');
     await page.check('#setup-backup-stored');
     await page.click('#setup-backup-form button[type=submit]');
-    assert.match(await page.innerText('#setup-backup-error'), /do not match/);
+    assert.match(await page.innerText('#setup-backup2-error'), /do not match/);
     await page.fill('#setup-backup', 'too short');
     await page.fill('#setup-backup2', 'too short');
     await page.click('#setup-backup-form button[type=submit]');
@@ -253,13 +432,13 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.fill('#setup-backup', AUDIT_PASS);
     await page.fill('#setup-backup2', AUDIT_PASS);
     await page.click('#setup-backup-form button[type=submit]');
-    await page.waitForFunction(() => /different from the audit passphrase/.test(document.getElementById('setup-backup-error').textContent));
+    await page.waitForFunction(() => /different from the audit passphrase/.test(document.getElementById('setup-backup-form-error').textContent));
     // Without the confirmation nothing is created, even with a good passphrase.
     await page.fill('#setup-backup', BACKUP_PASS);
     await page.fill('#setup-backup2', BACKUP_PASS);
     await page.uncheck('#setup-backup-stored');
     await page.click('#setup-backup-form button[type=submit]');
-    assert.match(await page.innerText('#setup-backup-error'), /stored the passphrase/);
+    assert.match(await page.innerText('#setup-backup-stored-error'), /stored the passphrase/);
     assert.equal(await page.isHidden('#app'), true);
     const st = await (await fetch(`http://127.0.0.1:${adminPort}/api/admin/v1/setup`, { headers: { 'x-askbar-admin': '1' } })).json();
     assert.equal(st.backup_key_set, false, 'no backup key yet');
@@ -268,14 +447,17 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.check('#setup-backup-stored');
     await page.click('#setup-backup-form button[type=submit]');
     await page.waitForSelector('#setup-backup-done:not([hidden])');
+    await assertSetupSteps(['done', 'done', 'done'], 'backup key ready');
     assert.match(await page.innerText('#setup-backup-fingerprint'), /^[0-9a-f]{4}(-[0-9a-f]{4}){3}$/);
     assert.equal(await page.inputValue('#setup-backup').catch(() => ''), '', 'the passphrase field is cleared');
     assert.equal(await page.inputValue('#setup-backup2').catch(() => ''), '');
     assert.equal((await page.content()).includes(BACKUP_PASS), false, 'the passphrase is not left in the page');
-    assert.match(await page.innerText('#setup-next'), /Network[\s\S]*Providers[\s\S]*Clients/, 'the next steps, in order');
+    assert.match(await page.innerText('#setup-next'), /Network[\s\S]*Providers[\s\S]*People & clients/, 'the next steps, in order');
     await page.click('#setup-backup-continue');
     await page.waitForSelector('#app:not([hidden])');
     assert.equal(await page.isHidden('#setup'), true);
+    // The app opens on Home (the landing page, plan step 4.1); the providers are one click away.
+    await openPage('providers');
     assert.match(await page.innerText('#providers'), /No providers yet/);
     assert.equal(await page.locator('#setup-key, #setup-saved').count(), 0, 'the master key screens are gone');
   });
@@ -286,60 +468,316 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     assert.equal(await page.isHidden('#setup'), true);
   });
   await step('sign out, then a wrong password is refused and the right one signs in', async () => {
+    await openMenu();
+    const setupRead = page.waitForResponse((r) => r.url().endsWith('/api/admin/v1/setup') && r.request().method() === 'GET');
     await page.click('#logout');
     await page.waitForSelector('#login:not([hidden])');
+    await setupRead;
+    await page.waitForTimeout(300); // the response is read a moment after it arrives
+    assert.equal(await page.isHidden('#login-hint'), true, 'the published password is changed: no first-run hint');
     await page.fill('#password', 'nope');
     await page.click('#login-form button');
-    await page.waitForSelector('#login-error:not([hidden])');
-    assert.match(await page.innerText('#login-error'), /Wrong username or password/);
+    await page.waitForSelector('#password-error:not([hidden])');
+    assert.match(await page.innerText('#password-error'), /Wrong username or password/);
+    assert.match(await page.innerText('#login-form .error-summary'), /Sign-in did not work/);
     await page.fill('#password', PASSWORD);
     await page.click('#login-form button');
     await page.waitForSelector('#app:not([hidden])');
   });
 
-  await step('add the mock provider through the page', async () => {
+  await step('add the mock provider through the page: the panel saves it, then tests it', async () => {
     await page.click('#add-provider');
+    await page.waitForSelector('#provider-panel:not([hidden])');
+    assert.equal(await page.innerText('#provider-submit'), 'Add and test');
+    assert.match(page.url(), /[?&]panel=provider-panel/, 'the panel has its own address');
     await page.fill('#p-name', 'mock');
     await page.fill('#p-base-url', `http://127.0.0.1:${mockPort}/v1`);
     await page.fill('#p-model', 'mock-model');
     await page.fill('#p-key', SECRET_KEY);
     await page.click('#provider-form button[type=submit]');
-    await page.waitForSelector('.card[data-name="mock"]');
-    assert.match(await page.innerText('.card[data-name="mock"]'), /key set/);
-    assert.equal(await page.isHidden('#provider-form'), true);
+    await page.waitForSelector('tr[data-name="mock"]');
+    assert.match(await page.innerText('tr[data-name="mock"]'), /key set/);
+    await panelClosed();
+    // The test runs after the save, with no click on Test.
+    await page.waitForFunction(() => /OK/.test(document.querySelector('tr[data-name="mock"] .test-result').textContent), null, { timeout: 15000 });
+    assert.match(await page.innerText('tr[data-name="mock"] .test-result'), /Streaming works/);
   });
-  await step('approved models: none at first; pick two from the provider\'s list, choose the default, save, and it persists', async () => {
+  // Buttons (rules 18-20): the default is 32 px, .btn-s 28 px and .btn-l 40 px. The probes are built with createElement.
+  // On a phone (390 wide) every button is at least --btn-h-touch (44 px) high.
+  await step(isPhone ? 'buttons: a default, .btn-s and .btn-l button are each 44 px high on a phone' : 'buttons: a default button is 32 px high, .btn-s 28 px and .btn-l 40 px', async () => {
+    const heights = await page.evaluate(() => {
+      const probe = (cls) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = cls;
+        b.textContent = 'Probe';
+        document.body.appendChild(b);
+        const h = getComputedStyle(b).height;
+        b.remove();
+        return h;
+      };
+      return {
+        existing: getComputedStyle(document.querySelector('#add-provider')).height,
+        plain: probe('btn'),
+        small: probe('btn btn-s'),
+        large: probe('btn btn-l'),
+      };
+    });
+    if (isPhone) {
+      for (const [k, h] of Object.entries(heights)) assert.ok(parseFloat(h) >= 44, k + ' ' + JSON.stringify(heights));
+    } else {
+      assert.deepEqual(heights, { existing: '32px', plain: '32px', small: '28px', large: '40px' }, JSON.stringify(heights));
+    }
+  });
+  // Type scale (rules 14, 15, 23): the title is 1.3rem/600, a field label 0.875rem/600, help 0.75rem/400, the page lede 0.875rem/400, body 0.875rem/400.
+  await step('type scale: title 20.8px/600, label 14px/600, help 12px/400, body 14px/400', async () => {
+    const type = await page.evaluate(() => {
+      const read = (el) => { const s = getComputedStyle(el); return { size: parseFloat(s.fontSize), weight: s.fontWeight }; };
+      return {
+        title: read(document.querySelector('section[data-tab] .page-header > .page-header-text .page-title')),
+        lede: read(document.querySelector('section[data-tab] .page-lede')),
+        label: read(document.querySelector('#provider-form label:not(.check)')),
+        help: read(document.querySelector('section[data-tab] .hint')),
+        body: read(document.body),
+      };
+    });
+    const near = (a, b) => Math.abs(a - b) <= 0.1;
+    assert.ok(near(type.title.size, 20.8) && type.title.weight === '600', JSON.stringify(type));
+    assert.ok(near(type.label.size, 14) && type.label.weight === '600', JSON.stringify(type));
+    assert.ok(near(type.help.size, 12) && type.help.weight === '400', JSON.stringify(type));
+    // The page header's one line (plan step 7.3, board P3-Layouts) is 0.875rem/400, a step above the hints under fields.
+    assert.ok(near(type.lede.size, 14) && type.lede.weight === '400', JSON.stringify(type));
+    assert.ok(near(type.body.size, 14) && type.body.weight === '400', JSON.stringify(type));
+  });
+  // The component builders (plan step 1.9). No page uses them yet, so each step builds the server-rendered half of a
+  // component with createElement (the classes and data-* attributes the macros in components.html write) and drives
+  // it through window.ui, then removes it.
+  await step('components: a side panel docks with its own address; Esc asks before dropping typed input; Back and × close it', async () => {
+    await page.evaluate(() => {
+      const { el } = window.ui;
+      const opener = el('button', { type: 'button', id: 't-opener', class: 'btn', text: 'Open', onclick: () => window.ui.openPanel('t-panel') });
+      const panel = el('aside', { id: 't-panel', class: 'side-panel', hidden: true },
+        el('header', { class: 'side-panel-head' }, el('h2', { class: 'side-panel-title', text: 'Test panel' }),
+          el('button', { type: 'button', class: 'btn btn-quiet btn-icon', 'aria-label': 'Close', 'data-panel-close': true })),
+        el('div', { class: 'side-panel-body' }, el('label', { for: 't-in', text: 'Name' }), el('input', { id: 't-in', type: 'text' })));
+      document.querySelector('#app main').append(opener, panel);
+    });
+    const start = page.url();
+    await page.click('#t-opener');
+    await page.waitForSelector('#t-panel:not([hidden])');
+    assert.match(page.url(), /[?&]panel=t-panel/, 'the panel has its own address');
+    assert.equal(await page.evaluate(() => document.body.classList.contains('panel-open')), true);
+    if (!isPhone) assert.equal(await page.evaluate(() => getComputedStyle(document.getElementById('app')).marginRight), '440px', 'the page narrows, nothing covers it');
+    await page.fill('#t-in', 'typed');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('dialog[open] >> text=Discard your changes?');
+    await page.click('dialog[open] [data-confirm-cancel]');
+    assert.equal(await page.isVisible('#t-panel'), true, 'Keep editing keeps the panel');
+    assert.equal(await page.inputValue('#t-in'), 'typed');
+    await page.focus('#t-in');
+    await page.keyboard.press('Escape');
+    await page.click('dialog[open] [data-confirm-action]');
+    await page.waitForSelector('#t-panel', { state: 'hidden' });
+    assert.equal(page.url(), start, 'closing leaves the panel\'s address');
+    assert.equal(await page.evaluate(() => document.activeElement.id), 't-opener', 'focus returns to the opener');
+
+    await page.click('#t-opener');
+    await page.waitForSelector('#t-panel:not([hidden])');
+    await page.goBack();
+    await page.waitForSelector('#t-panel', { state: 'hidden' });
+    assert.equal(page.url(), start, 'Back closes the panel and stays on the page');
+    await page.click('#t-opener');
+    await page.waitForSelector('#t-panel:not([hidden])');
+    await page.click('#t-panel [data-panel-close]');
+    await page.waitForSelector('#t-panel', { state: 'hidden' });
+    assert.equal(page.url(), start);
+    assert.equal(await page.evaluate(() => document.body.classList.contains('panel-open')), false);
+    await page.evaluate(() => { document.getElementById('t-opener').remove(); document.getElementById('t-panel').remove(); });
+  });
+  await step('components: a menu opens on its first item, moves with the arrow keys, Home and End, and Esc returns to its button', async () => {
+    await page.evaluate(() => {
+      const { el } = window.ui;
+      window.tPicked = [];
+      const button = el('button', { type: 'button', id: 't-menu', class: 'btn', text: 'More' });
+      document.querySelector('#app main').append(el('div', { id: 't-menu-wrap' }, button));
+      window.ui.menu(button, [
+        { label: 'Edit', action: () => window.tPicked.push('edit') },
+        { label: 'Delete', danger: true, action: () => window.tPicked.push('delete') },
+      ]);
+    });
+    const focused = () => page.evaluate(() => document.activeElement.textContent);
+    await page.focus('#t-menu');
+    await page.keyboard.press('Enter');
+    assert.equal(await page.getAttribute('#t-menu', 'aria-expanded'), 'true');
+    assert.equal(await focused(), 'Edit');
+    await page.keyboard.press('ArrowDown');
+    assert.equal(await focused(), 'Delete');
+    await page.keyboard.press('ArrowDown');
+    assert.equal(await focused(), 'Edit', 'the arrows wrap');
+    await page.keyboard.press('End');
+    assert.equal(await focused(), 'Delete');
+    await page.keyboard.press('Home');
+    assert.equal(await focused(), 'Edit');
+    await page.keyboard.press('Escape');
+    assert.equal(await page.getAttribute('#t-menu', 'aria-expanded'), 'false');
+    assert.equal(await page.evaluate(() => document.activeElement.id), 't-menu', 'Esc returns focus to the button');
+    await page.keyboard.press('ArrowUp');
+    assert.equal(await focused(), 'Delete', 'ArrowUp opens on the last item');
+    await page.keyboard.press('Enter');
+    assert.deepEqual(await page.evaluate(() => window.tPicked), ['delete']);
+    assert.equal(await page.isHidden('#t-menu-wrap .menu'), true, 'choosing closes the menu');
+    await page.evaluate(() => document.getElementById('t-menu-wrap').remove());
+  });
+  await step('components: the length hint counts as you type, a typed-name confirm waits for the name, and a toast leaves after TOAST_SECS', async () => {
+    const min = await page.evaluate(async () => (await window.ui.ready).MIN_PASSPHRASE_CHARS);
+    await page.evaluate((m) => {
+      const { el } = window.ui;
+      const input = el('input', { id: 't-pass', type: 'password' });
+      document.querySelector('#app main').append(el('div', { id: 't-len', class: 'field' }, input,
+        el('p', { class: 'hint', id: 't-pass-hint', 'data-length-hint': true, text: 'At least ' + m + ' characters' })));
+      window.ui.lengthHint(input, m);
+    }, min);
+    await page.fill('#t-pass', 'abc');
+    assert.equal(await page.innerText('#t-pass-hint'), '3 of at least ' + min + ' characters');
+    await page.fill('#t-pass', 'x'.repeat(min));
+    assert.equal(await page.innerText('#t-pass-hint'), min + ' characters');
+    await page.evaluate(() => document.getElementById('t-len').remove());
+
+    await page.evaluate(() => { window.tConfirm = window.ui.confirm({ title: 'Delete mock?', body: 'It cannot be undone.', action: 'Delete', typeName: 'mock' }); });
+    await page.waitForSelector('dialog[open] >> text=Delete mock?');
+    assert.equal(await page.isDisabled('dialog[open] [data-confirm-action]'), true, 'the action waits for the name');
+    await page.fill('dialog[open] input', 'moc');
+    assert.equal(await page.isDisabled('dialog[open] [data-confirm-action]'), true);
+    await page.fill('dialog[open] input', 'mock');
+    await page.click('dialog[open] [data-confirm-action]');
+    assert.equal(await page.evaluate(() => window.tConfirm), true);
+    assert.equal(await page.locator('dialog:not(#unseal-box)').count(), 0, 'the box is removed once answered');
+
+    const toastMs = await page.evaluate(async () => (await window.ui.ready).TOAST_SECS * window.ui.MS);
+    await page.evaluate(() => window.ui.toast('Saved the test'));
+    assert.equal(await page.innerText('#toasts'), 'Saved the test');
+    await page.waitForFunction(() => document.getElementById('announcer').textContent === 'Saved the test');
+    await page.waitForTimeout(toastMs - 1000);
+    assert.equal(await page.locator('#toasts .toast').count(), 1, 'still there before TOAST_SECS');
+    await page.waitForSelector('#toasts .toast', { state: 'detached', timeout: 3000 });
+  });
+  await step('components: field errors, row confirmation, time, numbers and copy', async () => {
+    const r = await page.evaluate(async () => {
+      const { el } = window.ui;
+      const out = {};
+      document.querySelector('#app main').append(el('div', { id: 't-misc' },
+        el('input', { id: 't-f', type: 'text' }), el('p', { id: 't-f-error', hidden: true }),
+        el('div', { id: 't-row' }, el('button', { type: 'button', id: 't-restart', text: 'Restart' })),
+        el('code', { id: 't-secret', text: 'askbar-admin-xyz' }), el('button', { type: 'button', id: 't-copy', class: 'btn btn-icon', 'aria-label': 'Copy', 'data-copy': 't-secret' })));
+      window.ui.fieldError('t-f', 'Not a host name.');
+      out.invalid = document.getElementById('t-f').getAttribute('aria-invalid');
+      out.error = document.getElementById('t-f-error').hidden ? null : document.getElementById('t-f-error').textContent;
+      window.ui.fieldError('t-f', '');
+      out.cleared = document.getElementById('t-f').hasAttribute('aria-invalid') || !document.getElementById('t-f-error').hidden;
+      const t = window.ui.time(Date.now() / 1000 - 3 * 3600);
+      out.time = [t.tagName, t.textContent, !!t.title, t.getAttribute('datetime').endsWith('Z')];
+      out.num = window.ui.num(12345, 'tokens').textContent;
+      out.status = window.ui.status('ok', 'Running').textContent;
+      return out;
+    });
+    assert.equal(r.invalid, 'true');
+    assert.equal(r.error, 'Not a host name.');
+    assert.equal(r.cleared, false);
+    assert.deepEqual(r.time, ['TIME', '3 hours ago', true, true]);
+    assert.equal(r.num, '12,345 tokens');
+    assert.equal(r.status, 'Running');
+
+    await page.evaluate(() => {
+      window.tRestarted = 0;
+      const b = document.getElementById('t-restart');
+      b.addEventListener('click', () => window.ui.rowConfirm(document.getElementById('t-row'), {
+        text: 'Restart the server?', action: 'Restart', trigger: b, onConfirm: async () => { window.tRestarted++; },
+      }));
+    });
+    await page.click('#t-restart');
+    assert.equal(await page.isHidden('#t-restart'), true, 'the row\'s own button hides while it asks');
+    assert.equal(await page.innerText('#t-row .row-confirm-text'), 'Restart the server?');
+    await page.click('#t-row [data-row-cancel]');
+    assert.equal(await page.isVisible('#t-restart'), true, 'Cancel brings the button back');
+    assert.equal(await page.locator('#t-row .row-confirm').count(), 0);
+    await page.click('#t-restart');
+    await page.click('#t-row [data-row-action]');
+    await page.waitForFunction(() => window.tRestarted === 1);
+    assert.equal(await page.isVisible('#t-restart'), true);
+
+    // ui.rows holds a row with an open confirmation, and keeps its confirmation row right after it, on a refresh, a
+    // forced refresh and a reorder; both go when the row goes.
+    const r2 = await page.evaluate(() => {
+      const { el, rows, rowConfirm } = window.ui;
+      const tbody = el('tbody', { id: 't-body' });
+      document.getElementById('t-misc').append(el('table', null, tbody));
+      const draw = (names, opts = {}) => rows(tbody, names.map((n) => ({ id: n })), (i) => el('tr', null, el('td', null, el('button', { type: 'button', text: i.id }))), opts);
+      draw(['a', 'b', 'c']);
+      const b = tbody.querySelector('[data-key="b"]');
+      const trig = b.querySelector('button');
+      rowConfirm(b, { text: 'Restart b?', action: 'Restart', trigger: trig, onConfirm: async () => {} });
+      const order = () => [...tbody.children].map((x) => x.dataset.key || (x.classList.contains('row-confirm-row') ? '?' : '-')).join('');
+      const out = { before: order() };
+      draw(['a', 'b', 'c']);
+      out.refresh = order();
+      draw(['a', 'b', 'c'], { force: true });
+      out.force = order();
+      out.sameNode = tbody.querySelector('[data-key="b"]') === b;
+      draw(['c', 'b', 'a']);
+      out.reorder = order();
+      out.hidden = trig.hidden;
+      draw(['a', 'c']);
+      out.gone = order();
+      return out;
+    });
+    assert.deepEqual(r2, { before: 'ab?c', refresh: 'ab?c', force: 'ab?c', sameNode: true, reorder: 'cb?a', hidden: true, gone: 'ac' });
+    await page.click('#t-copy');
+    await page.waitForFunction(() => document.getElementById('t-copy').getAttribute('aria-label') === 'Copied');
+    assert.equal(await page.evaluate(() => navigator.clipboard.readText()), 'askbar-admin-xyz');
+    await page.evaluate(() => document.getElementById('t-misc').remove());
+  });
+  await step('approved models: none at first; tick two in the picker, choose the default, the save bar appears labelled Save, and it persists', async () => {
     assert.match(await page.innerText('#catalog-approved'), /No model is approved yet/);
-    await page.selectOption('#catalog-provider', { label: 'mock' });
+    assert.equal(await page.isHidden('#catalog-form-save-bar'), true, 'nothing changed, so no save bar');
+    assert.match(await page.innerText('#catalog-offered'), /Not loaded/, 'nothing is asked of a provider until Reload');
     await page.click('#catalog-load');
     await page.waitForSelector('#catalog-offered input[type=checkbox]');
-    assert.deepEqual((await page.$$eval('#catalog-offered span', (s) => s.map((x) => x.textContent.trim()))), ['mock-model', 'mock-model-2']);
-    await page.check('#catalog-offered label:nth-child(1) input');
-    assert.match(await page.innerText('#catalog-approved'), /mock \/ mock-model \(default\)/, 'the first one approved becomes the default');
-    await page.check('#catalog-offered label:nth-child(2) input');
-    await page.check('#catalog-approved [data-model$="/mock-model-2"] input[type=radio]');
-    assert.match(await page.innerText('#catalog-approved'), /mock \/ mock-model-2 \(default\)/);
-    await page.click('#catalog-save');
-    await page.waitForFunction(() => document.getElementById('catalog-status').textContent === 'Saved.');
+    assert.deepEqual(await page.$$eval('#catalog-offered code', (c) => c.map((x) => x.textContent.trim())), ['mock-model', 'mock-model-2']);
+    await page.click('#catalog-offered input[type=checkbox] >> nth=0');
+    await page.waitForSelector('#catalog-form-save-bar:not([hidden])');
+    assert.equal(await page.innerText('#catalog-form-save-bar [data-save-submit]'), 'Save');
+    assert.match(await page.innerText('#catalog-form-save-bar [data-save-text]'), /Unsaved changes: 1 added/);
+    const defaultModel = () => page.$eval('#catalog-approved .is-default', (r) => r.dataset.model);
+    assert.match(await defaultModel(), /\/mock-model$/, 'the first one approved becomes the default');
+    await page.click('#catalog-offered input[type=checkbox] >> nth=1');
+    await page.click('#catalog-approved [data-model$="/mock-model-2"] input[type=radio]');
+    assert.match(await defaultModel(), /\/mock-model-2$/);
+    assert.match(await page.innerText('#catalog-approved-title'), /· 2$/);
+    await page.click('#catalog-form-save-bar [data-save-submit]');
+    await page.waitForFunction(() => document.getElementById('catalog-form-save-bar').hidden);
     await page.reload();
     await page.waitForSelector('#catalog-approved [data-model]');
     assert.equal(await page.locator('#catalog-approved [data-model]').count(), 2);
-    assert.match(await page.innerText('#catalog-approved'), /mock \/ mock-model-2 \(default\)/, 'the default persisted');
+    assert.match(await defaultModel(), /\/mock-model-2$/, 'the default persisted');
+    assert.equal(await page.isHidden('#catalog-form-save-bar'), true);
     // Removing the default leaves the next one as the default, never none.
     await page.click('#catalog-approved [data-model$="/mock-model-2"] button');
-    assert.match(await page.innerText('#catalog-approved'), /mock \/ mock-model \(default\)/);
-    await page.click('#catalog-discard');
+    assert.match(await defaultModel(), /\/mock-model$/);
+    await page.waitForSelector('#catalog-form-save-bar:not([hidden])');
+    await page.click('#catalog-form-save-bar [data-save-discard]');
     await page.waitForFunction(() => document.querySelectorAll('#catalog-approved [data-model]').length === 2);
-    assert.equal(await page.locator('#catalog-approved [data-model]').count(), 2, 'discarding goes back to what is saved');
+    assert.match(await defaultModel(), /\/mock-model-2$/, 'discarding goes back to what is saved');
+    assert.equal(await page.isHidden('#catalog-form-save-bar'), true);
   });
   await step('Test sends a message through the provider and shows success', async () => {
-    await page.click('.card[data-name="mock"] [data-action="test"]');
-    await page.waitForFunction(() => /Success|Failed/.test(document.querySelector('.card[data-name="mock"] .test-result').textContent));
-    assert.match(await page.innerText('.card[data-name="mock"] .test-result'), /^Success: Streaming works\. The first text came after \d+ ms\./);
+    await page.click('tr[data-name="mock"] [data-action="test"]');
+    await page.waitForFunction(() => /OK|Failed/.test(document.querySelector('tr[data-name="mock"] .test-result').textContent));
+    assert.match(await page.innerText('tr[data-name="mock"] .test-result'), /^OK\s+Streaming works\. The first text came after \d+ ms\./);
+    assert.equal(await page.locator('tr[data-name="mock"] .test-result .status-ok').count(), 1, 'a word and a symbol, not colour alone');
     // The details are folded away until asked for, and are text: the request, the status and the timings, nothing else.
-    assert.equal(await page.isVisible('.card[data-name="mock"] .test-details dl'), false);
-    await page.click('.card[data-name="mock"] .test-details summary');
-    const details = await page.innerText('.card[data-name="mock"] .test-details dl');
+    assert.equal(await page.isVisible('tr[data-name="mock"] .test-details dl'), false);
+    await page.click('tr[data-name="mock"] .test-details summary');
+    const details = await page.innerText('tr[data-name="mock"] .test-details dl');
     assert.match(details, /Request\s+POST \/v1\/chat\/completions/);
     assert.match(details, /Status\s+200/);
     assert.match(details, /Time to first text\s+\d+ ms/);
@@ -347,40 +785,48 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
   });
   await step('after a reload the key is not displayed anywhere', async () => {
     await page.reload();
-    await page.waitForSelector('.card[data-name="mock"]');
+    await page.waitForSelector('tr[data-name="mock"]');
     assert.equal((await page.content()).includes(SECRET_KEY), false);
-    await page.click('.card[data-name="mock"] [data-action="edit"]');
+    await page.click('tr[data-name="mock"] [data-action="edit"]');
+    await page.waitForSelector('#provider-panel:not([hidden])');
     assert.equal(await page.inputValue('#p-key'), '');
-    assert.match(await page.getAttribute('#p-key', 'placeholder'), /unchanged/);
+    assert.match(await page.innerText('#p-key-hint'), /Empty keeps the current key/);
     assert.equal(await page.getAttribute('#p-key', 'type'), 'password');
+    assert.equal(await page.innerText('#provider-submit'), 'Save');
     const values = await page.$$eval('#provider-form input, #provider-form select', (els) => els.map((e) => e.value).join('|'));
     assert.equal(values.includes(SECRET_KEY), false);
   });
-  await step('editing a provider with a saved key turns the model into a dropdown of what it offers', async () => {
-    await page.waitForSelector('#p-model-list:not([hidden])');
-    assert.equal(await page.isHidden('#p-model'), true);
-    assert.deepEqual(await page.$$eval('#p-model-list option', (o) => o.map((x) => x.value)), ['mock-model', 'mock-model-2', '__manual__']);
-    assert.equal(await page.inputValue('#p-model-list'), 'mock-model', 'the saved model is selected');
+  await step('editing a provider with a saved key offers the models it lists under the test model field', async () => {
+    assert.equal(await page.locator('#p-model-options option').count(), 0, 'nothing is listed until Load models is pressed');
+    await page.click('#p-model-refresh');
+    await page.waitForFunction(() => document.querySelectorAll('#p-model-options option').length === 2);
+    assert.deepEqual(await page.$$eval('#p-model-options option', (o) => o.map((x) => x.value)), ['mock-model', 'mock-model-2']);
+    assert.equal(await page.inputValue('#p-model'), 'mock-model', 'the saved model is filled in');
+    assert.match(await page.innerText('#p-model-hint'), /2 models available/);
     assert.equal(await page.isHidden('#p-key'), false);
     assert.equal(await page.inputValue('#p-key'), '', 'the saved key was used by the server; the page never held it');
   });
-  await step('"Enter a name myself" brings back the text box', async () => {
-    await page.selectOption('#p-model-list', '__manual__');
-    assert.equal(await page.isVisible('#p-model'), true);
-    assert.equal(await page.isHidden('#p-model-list'), true);
-    await page.click('#p-model-refresh');
-    await page.waitForSelector('#p-model-list:not([hidden])');
+  await step('a model name can be typed even when the provider lists some', async () => {
+    await page.fill('#p-model', 'a-name-i-typed');
+    assert.equal(await page.inputValue('#p-model'), 'a-name-i-typed');
+    assert.equal(await page.locator('#p-model-options option').count(), 2, 'the list is only a help');
   });
   await step('editing without a new key keeps the old one working', async () => {
-    await page.selectOption('#p-model-list', 'mock-model-2');
+    await page.fill('#p-model', 'mock-model-2');
     await page.click('#provider-form button[type=submit]');
-    await page.waitForFunction(() => /mock-model-2/.test(document.querySelector('.card[data-name="mock"]')?.textContent || ''));
-    await page.click('.card[data-name="mock"] [data-action="test"]');
-    await page.waitForFunction(() => /Success|Failed/.test(document.querySelector('.card[data-name="mock"] .test-result').textContent));
-    assert.match(await page.innerText('.card[data-name="mock"] .test-result'), /^Success:/);
+    await panelClosed();
+    await page.click('tr[data-name="mock"] [data-action="edit"]');
+    await page.waitForSelector('#provider-panel:not([hidden])');
+    assert.equal(await page.inputValue('#p-model'), 'mock-model-2', 'the change was saved');
+    await page.click('#provider-cancel');
+    await panelClosed();
+    await page.click('tr[data-name="mock"] [data-action="test"]');
+    await page.waitForFunction(() => /OK|Failed/.test(document.querySelector('tr[data-name="mock"] .test-result').textContent));
+    assert.match(await page.innerText('tr[data-name="mock"] .test-result'), /^OK/);
   });
-  await step('provider billing: set a subscription with prices, see it on the card, refuse a negative price', async () => {
-    await page.click('.card[data-name="mock"] [data-action="edit"]');
+  await step('provider billing: set a subscription with prices, see it kept, refuse a negative price', async () => {
+    await page.click('tr[data-name="mock"] [data-action="edit"]');
+    await page.waitForSelector('#provider-panel:not([hidden])');
     assert.equal(await page.inputValue('#p-billing'), 'metered', 'the default');
     assert.equal(await page.locator('#p-fallback').count(), 0, 'there is no provider fallback (ADR 0014)');
     await page.selectOption('#p-billing', 'subscription');
@@ -388,48 +834,71 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.fill('#p-price-out', '10');
     await page.fill('#p-price-cached', '0.25');
     await page.click('#provider-form button[type=submit]');
-    await page.waitForFunction(() => /subscription/.test(document.querySelector('.card[data-name="mock"]')?.textContent || ''));
-    const card = await page.innerText('.card[data-name="mock"]');
-    assert.doesNotMatch(card, /fallback/);
-    assert.match(card, /in 2\.5, out 10, cached in 0\.25/);
+    await panelClosed();
     // It is kept: edit again, the values are back.
-    await page.click('.card[data-name="mock"] [data-action="edit"]');
+    await page.click('tr[data-name="mock"] [data-action="edit"]');
+    await page.waitForSelector('#provider-panel:not([hidden])');
     assert.equal(await page.inputValue('#p-billing'), 'subscription');
+    assert.equal(await page.inputValue('#p-price-in'), '2.5');
     assert.equal(await page.inputValue('#p-price-out'), '10');
+    assert.equal(await page.inputValue('#p-price-cached'), '0.25');
     // A negative price is refused with the server's rule, and nothing changes.
     await page.evaluate(() => document.getElementById('provider-form').noValidate = true);
     await page.fill('#p-price-in', '-1');
     await page.click('#provider-form button[type=submit]');
     await page.waitForSelector('#provider-error:not([hidden])');
     assert.match(await page.innerText('#provider-error'), /zero or more/);
+    assert.equal(await page.isVisible('#provider-panel'), true, 'the panel stays open with what was typed');
     // Put it back to an ordinary metered provider for the rest of the run.
     await page.fill('#p-price-in', '');
     await page.fill('#p-price-out', '');
     await page.fill('#p-price-cached', '');
     await page.selectOption('#p-billing', 'metered');
     await page.click('#provider-form button[type=submit]');
-    await page.waitForFunction(() => !/subscription/.test(document.querySelector('.card[data-name="mock"]')?.textContent || ''));
+    await panelClosed();
+    await page.click('tr[data-name="mock"] [data-action="edit"]');
+    await page.waitForSelector('#provider-panel:not([hidden])');
+    assert.equal(await page.inputValue('#p-billing'), 'metered');
+    assert.equal(await page.inputValue('#p-price-in'), '');
+    await page.click('#provider-cancel');
+    await panelClosed();
   });
-  await step('a provider that cannot be reached shows its error', async () => {
+  await step('a provider that cannot be reached shows its error, from the test that follows the add', async () => {
     const dead = await freePort();
     await page.click('#add-provider');
+    await page.waitForSelector('#provider-panel:not([hidden])');
     await page.fill('#p-name', 'dead');
     await page.fill('#p-base-url', `http://127.0.0.1:${dead}/v1`);
     await page.fill('#p-model', 'm');
     await page.click('#provider-form button[type=submit]');
-    await page.waitForSelector('.card[data-name="dead"]');
-    await page.click('.card[data-name="dead"] [data-action="test"]');
-    await page.waitForFunction(() => /Failed/.test(document.querySelector('.card[data-name="dead"] .test-result').textContent));
-    assert.match(await page.innerText('.card[data-name="dead"] .test-result'), /Could not reach the provider.s address/);
+    await page.waitForSelector('tr[data-name="dead"]');
+    await panelClosed();
+    await page.waitForFunction(() => /Failed/.test(document.querySelector('tr[data-name="dead"] .test-result').textContent), null, { timeout: 15000 });
+    assert.match(await page.innerText('tr[data-name="dead"] .test-result'), /Could not reach the provider.s address/);
+    assert.equal(await page.locator('tr[data-name="dead"] .test-result .status-error').count(), 1);
+    // Its models cannot be listed either: after Reload the picker says so next to a way to try again.
+    await page.click('#catalog-load');
+    await page.waitForSelector('#catalog-offered .picker-fail');
+    assert.match(await page.innerText('#catalog-offered .picker-fail'), /Could not load models/);
+    assert.equal(await page.locator('#catalog-offered .picker-fail button').count(), 1);
   });
-  await step('a duplicate name is explained', async () => {
+  await step('a duplicate name is explained, and Esc or Cancel with typed input asks before dropping it', async () => {
     await page.click('#add-provider');
+    await page.waitForSelector('#provider-panel:not([hidden])');
     await page.fill('#p-name', 'dead');
     await page.fill('#p-model', 'm');
     await page.click('#provider-form button[type=submit]');
     await page.waitForSelector('#provider-error:not([hidden])');
     assert.match(await page.innerText('#provider-error'), /already exists/);
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('dialog[open] >> text=Discard your changes?');
+    await page.click('dialog[open] [data-confirm-cancel]');
+    assert.equal(await page.isVisible('#provider-panel'), true, 'Keep editing keeps the panel and what was typed');
+    assert.equal(await page.inputValue('#p-name'), 'dead');
     await page.click('#provider-cancel');
+    await page.waitForSelector('dialog[open] >> text=Discard your changes?');
+    await page.click('dialog[open] [data-confirm-action]');
+    await panelClosed();
   });
   await step('a refusal reaches the page as a problem: a stable code and a sentence', async () => {
     const r = await page.evaluate(async () => {
@@ -441,77 +910,240 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     assert.equal(r.body.error, 'not_found');
     assert.ok(r.body.detail && r.body.title && r.body.type === 'urn:askbar:problem:not_found', JSON.stringify(r.body));
   });
-  await step('CLIProxyAPI: the accounts panel is on the Services tab, and says so when CLIProxyAPI is not answering', async () => {
-    await openPage('services');
+  await step('CLIProxyAPI: the accounts panel is on the Providers page, and says so when CLIProxyAPI is not answering', async () => {
+    await openPage('providers');
     await page.waitForSelector('#cpa-panel:not([hidden])');
     await page.waitForFunction(() => /not answering/.test(document.getElementById('cpa-message').textContent));
     await page.click('#cpa-connect-anthropic');
     await page.waitForFunction(() => /CLIProxyAPI did not answer/.test(document.getElementById('cpa-message').textContent));
     assert.equal(await page.isHidden('#cpa-login'), true, 'no login opens when CLIProxyAPI cannot start one');
     assert.equal(await page.locator('#add-cpa').count(), 0, 'the old preset button is gone');
-    await openPage('providers');
+  });
+  // The paste step is the address the browser lands on (http://localhost...). With no domain it is always needed; with a
+  // domain the admin waits for CLIProxyAPI to confirm, and the step shows only if the login did not finish.
+  await step('CLIProxyAPI sign-in: the localhost paste step shows with no domain, and with a domain only when the login did not finish', async () => {
+    const pollSecs = await page.evaluate(async () => (await window.ui.ready).CPA_LOGIN_POLL_SECS);
+    let hostname = '';
+    let loginStatus = { status: 'pending' };
+    const json = (route, body) => route.fulfill({ contentType: 'application/json', body: JSON.stringify(body) });
+    await page.route('**/api/admin/v1/network', (route) => (route.request().method() === 'GET' ? json(route, { hostname }) : route.continue()));
+    await page.route('**/api/admin/v1/cpa', (route) => json(route, { configured: true, reachable: true, accounts: [] }));
+    await page.route('**/api/admin/v1/cpa/logins', (route) => json(route, { url: 'https://login.example.test/authorize', state: 'st1', expires_in: 600 }));
+    await page.route('**/api/admin/v1/cpa/logins/st1', (route) => json(route, loginStatus));
+    await page.reload();
+    await page.waitForSelector('#cpa-panel:not([hidden])');
+    assert.equal(await page.isHidden('#cpa-paste'), true, 'no login, nothing to paste into');
+    assert.match(await page.innerText('#cpa-accounts'), /No account connected/);
+    // No domain: the login comes back to http://localhost, so the paste box is there from the start.
+    await page.click('#cpa-connect-openai');
+    await page.waitForSelector('#cpa-login:not([hidden])');
+    assert.equal(await page.isVisible('#cpa-paste'), true, 'no domain: the paste step shows');
+    assert.equal(await page.getAttribute('#cpa-login-link', 'href'), 'https://login.example.test/authorize');
+    await page.click('#cpa-cancel');
+    assert.equal(await page.isHidden('#cpa-login'), true);
+    assert.equal(await page.isHidden('#cpa-paste'), true);
+    // A domain, the login still going: the paste step stays away.
+    hostname = 'askbar.example.com';
+    await page.click('#cpa-connect-anthropic');
+    await page.waitForSelector('#cpa-login:not([hidden])');
+    assert.equal(await page.isHidden('#cpa-paste'), true, 'a domain is set and the login is not over: no paste step');
+    // The login does not finish: the step comes back as the way to finish by hand.
+    loginStatus = { status: 'error', message: 'timed out' };
+    await page.waitForSelector('#cpa-paste:not([hidden])', { timeout: (pollSecs + 5) * 1000 });
+    assert.match(await page.innerText('#cpa-message'), /did not finish: timed out/);
+    await page.click('#cpa-cancel');
+    // A domain and a login that finishes by itself: the box closes and the step never shows.
+    loginStatus = { status: 'ok', provider_id: null };
+    await page.click('#cpa-connect-anthropic');
+    await page.waitForSelector('#cpa-login:not([hidden])');
+    assert.equal(await page.isHidden('#cpa-paste'), true);
+    await page.waitForSelector('#cpa-login', { state: 'hidden', timeout: (pollSecs + 5) * 1000 });
+    assert.equal(await page.isHidden('#cpa-paste'), true, 'a domain and no login pending: hidden');
+    await page.unroute('**/api/admin/v1/network');
+    await page.unroute('**/api/admin/v1/cpa');
+    await page.unroute('**/api/admin/v1/cpa/logins');
+    await page.unroute('**/api/admin/v1/cpa/logins/st1');
+    await page.reload();
+    await page.waitForSelector('tr[data-name="mock"]');
+  });
+  await step('CLIProxyAPI sign-in: a very long address wraps inside the page, with no sideways scroll, at both widths', async () => {
+    const longUrl = 'https://login.example.test/authorize?code_challenge=' + 'Qx9'.repeat(80) + '&state=st1';
+    const json = (route, body) => route.fulfill({ contentType: 'application/json', body: JSON.stringify(body) });
+    await page.route('**/api/admin/v1/cpa', (route) => json(route, { configured: true, reachable: true, accounts: [] }));
+    await page.route('**/api/admin/v1/cpa/logins', (route) => json(route, { url: longUrl, state: 'st1', expires_in: 600 }));
+    await page.route('**/api/admin/v1/cpa/logins/st1', (route) => json(route, { status: 'pending' }));
+    await page.reload();
+    await page.waitForSelector('#cpa-panel:not([hidden])');
+    await page.click('#cpa-connect-anthropic');
+    await page.waitForSelector('#cpa-login:not([hidden])');
+    await page.waitForFunction((u) => document.getElementById('cpa-login-link').href === u, longUrl);
+    const layout = await page.evaluate(() => {
+      const W = document.documentElement.clientWidth;
+      const over = [...document.querySelectorAll('#cpa-panel, #cpa-panel *')]
+        .filter((n) => n.getClientRects().length > 0 && n.getBoundingClientRect().right > W + 0.5)
+        .map((n) => n.id || n.tagName.toLowerCase());
+      return { over, sideways: document.documentElement.scrollWidth - document.documentElement.clientWidth };
+    });
+    assert.deepEqual(layout.over, [], 'nothing in the accounts panel runs past the right edge of the page');
+    assert.ok(layout.sideways <= 0, 'the page does not scroll sideways (' + layout.sideways + ' px)');
+    await page.click('#cpa-cancel');
+    await page.unroute('**/api/admin/v1/cpa');
+    await page.unroute('**/api/admin/v1/cpa/logins');
+    await page.unroute('**/api/admin/v1/cpa/logins/st1');
+    await page.reload();
+    await page.waitForSelector('tr[data-name="mock"]');
   });
   await step('delete asks first, then removes the provider', async () => {
-    page.once('dialog', (d) => d.dismiss());
-    await page.click('.card[data-name="dead"] [data-action="delete"]');
-    assert.equal(await page.locator('.card[data-name="dead"]').count(), 1);
-    page.once('dialog', (d) => d.accept());
-    await page.click('.card[data-name="dead"] [data-action="delete"]');
-    await page.waitForFunction(() => !document.querySelector('.card[data-name="dead"]'));
+    await page.click('tr[data-name="dead"] [data-action="edit"]');
+    await page.waitForSelector('#provider-panel:not([hidden])');
+    assert.match(await page.innerText('#provider-panel-title'), /Edit dead/);
+    await page.click('#provider-delete');
+    await page.waitForSelector('dialog[open] >> text=Delete dead?');
+    await page.click('dialog[open] [data-confirm-cancel]');
+    assert.equal(await page.locator('tr[data-name="dead"]').count(), 1);
+    await page.click('#provider-delete');
+    await page.waitForSelector('dialog[open] >> text=Delete dead?');
+    await page.click('dialog[open] [data-confirm-action]');
+    await page.waitForFunction(() => !document.querySelector('tr[data-name="dead"]'));
+    await panelClosed();
+  });
+  await step('opening the Providers page asks no provider for its models', async () => {
+    const asked = [];
+    const onReq = (r) => { if (r.method() === 'POST' && /\/api\/admin\/v1\/providers\/models/.test(r.url())) asked.push(r.url()); };
+    page.on('request', onReq);
+    await page.goto(base + 'providers/');
+    await page.waitForSelector('tr[data-name="mock"]');
+    await page.waitForLoadState('networkidle');
+    page.off('request', onReq);
+    assert.deepEqual(asked, []);
+    assert.match(await page.innerText('#catalog-offered'), /Not loaded/);
+  });
+  await step('#add-provider in the address opens the Add panel, and leaves the address clean', async () => {
+    await page.goto(base + 'providers/#add-provider');
+    await page.waitForSelector('#provider-panel:not([hidden])');
+    assert.equal(await page.innerText('#provider-panel-title'), 'Add provider');
+    assert.equal(await page.innerText('#provider-submit'), 'Add and test');
+    assert.equal(new URL(page.url()).hash, '', 'the address no longer asks for it, so a reload does not reopen it');
+    await page.click('#provider-cancel');
+    await panelClosed();
+    // From the same page (a search result, a link) the same address opens it again.
+    await page.evaluate(() => { location.hash = '#add-provider'; });
+    await page.waitForSelector('#provider-panel:not([hidden])');
+    await page.click('#provider-cancel');
+    await panelClosed();
   });
   await step('Services: the six services show whether they answer, and Restart asks first and then acts', async () => {
     // No controller (ADR 0005): each state comes from the service. Here the server, the gateway and the admin run;
     // Caddy and CLIProxyAPI do not.
     await openPage('services');
-    await page.waitForSelector('#services .card[data-name="cpa"]');
-    assert.deepEqual(await page.$$eval('#services .card', (c) => c.map((x) => x.dataset.name)), ['server', 'model-gateway', 'alerter', 'admin', 'caddy', 'cpa']);
+    await page.waitForSelector('#services tr[data-name="cpa"]');
+    assert.equal(await page.locator('#cpa-panel, #cpa-accounts, #cpa-connect-anthropic').count(), 0, 'the Claude and ChatGPT accounts moved to Providers');
+    assert.deepEqual(await page.$$eval('#services tr[data-name]', (c) => c.map((x) => x.dataset.name)), ['server', 'model-gateway', 'alerter', 'admin', 'caddy', 'cpa']);
+    assert.equal(await page.locator('#services-recent').count(), 0, 'there is no list of recent restarts');
+    // Every visible cell has a visible header over it, and a service name never breaks mid-word.
+    const misaligned = await page.evaluate(() => {
+      const shown = (e) => e.getClientRects().length > 0;
+      const heads = [...document.querySelectorAll('#services-table thead th')].filter(shown);
+      const out = [];
+      for (const tr of document.querySelectorAll('#services tr[data-name]')) {
+        const cells = [...tr.children].filter(shown);
+        if (cells.length !== heads.length) { out.push(tr.dataset.name + ': ' + cells.length + ' cells, ' + heads.length + ' headers'); continue; }
+        cells.forEach((c, i) => { const a = c.getBoundingClientRect(); const h = heads[i].getBoundingClientRect(); if (Math.abs(a.left - h.left) > 1) out.push(tr.dataset.name + ' column ' + i); });
+        const n = tr.querySelector('.name');
+        const cell = n.closest('td');
+        if (getComputedStyle(n).overflowWrap !== 'normal' || getComputedStyle(n).wordBreak !== 'normal') out.push(tr.dataset.name + ' name may break mid-word');
+        if (cell.scrollWidth > cell.clientWidth + 1) out.push(tr.dataset.name + ' name does not fit');
+      }
+      return out;
+    });
+    assert.deepEqual(misaligned, []);
     // The alerter runs here too (ADR 0055), so it joins the list between the gateway and the admin.
-    assert.match(await page.innerText('#services .card[data-name="alerter"]'), /running/);
-    // Its daily release check asked the stand-in GitHub, with a fixed User-Agent and nothing else about the install, and the card says so (ADR 0055).
-    await page.waitForFunction(() => /Askbar is up to date \(/.test(document.querySelector('#services .card[data-name="alerter"]').innerText), null, { timeout: 15000 });
+    assert.match(await page.innerText('#services tr[data-name="alerter"]'), /running/i);
+    // Its daily release check asked the stand-in GitHub, with a fixed User-Agent and nothing else about the install, and the row says so (ADR 0055).
+    await page.waitForFunction(() => /Askbar is up to date \(/.test(document.querySelector('#services tr[data-name="alerter"]').innerText), null, { timeout: 15000 });
     const releaseRequests = JSON.parse(await new Promise((resolve, reject) => { http.get({ host: '127.0.0.1', port: releasesPort, path: '/_seen' }, (res) => { let b = ''; res.on('data', (c) => (b += c)); res.on('end', () => resolve(b)); }).on('error', reject); }));
     assert.ok(releaseRequests.length >= 1 && releaseRequests.every((r) => r.user_agent === 'askbar-release-check' && r.headers.every((h) => ['host', 'user-agent', 'accept'].includes(h))), JSON.stringify(releaseRequests));
-    assert.deepEqual(await page.$$eval('#services .card[data-name="alerter"] button', (b) => b.map((x) => x.dataset.action)), ['restart']);
-    assert.match(await page.innerText('#services .card[data-name="server"]'), /running/);
+    assert.deepEqual(await page.$$eval('#services tr[data-name="alerter"] button', (b) => b.map((x) => x.dataset.action)), ['restart']);
+    assert.match(await page.innerText('#services tr[data-name="server"]'), /running/i);
     // The gateway runs here too, and it has a Restart button like the rest.
-    assert.match(await page.innerText('#services .card[data-name="model-gateway"]'), /running/);
-    assert.deepEqual(await page.$$eval('#services .card[data-name="model-gateway"] button', (b) => b.map((x) => x.dataset.action)), ['restart']);
-    assert.match(await page.innerText('#services .card[data-name="caddy"]'), /unreachable/);
-    assert.deepEqual(await page.$$eval('#services .card[data-name="server"] button', (b) => b.map((x) => x.dataset.action)), ['restart'], 'only Restart: there is no start or stop');
-    let asked = '';
-    page.once('dialog', (d) => { asked = d.message(); d.dismiss(); });
-    await page.click('#services .card[data-name="server"] [data-action="restart"]');
-    assert.match(asked, /Replies being written end as interrupted/);
-    await page.waitForFunction(() => /None yet/.test(document.getElementById('services-recent').textContent));
+    assert.match(await page.innerText('#services tr[data-name="model-gateway"]'), /running/i);
+    assert.deepEqual(await page.$$eval('#services tr[data-name="model-gateway"] button', (b) => b.map((x) => x.dataset.action)), ['restart']);
+    assert.match(await page.innerText('#services tr[data-name="caddy"]'), /unreachable/i);
+    assert.deepEqual(await page.$$eval('#services tr[data-name="server"] button', (b) => b.map((x) => x.dataset.action)), ['restart'], 'only Restart: there is no start or stop');
+    // Restart asks first, in the row: the question opens under it, and the row's own button hides until it closes.
+    const restartBtn = '#services tr[data-name="server"] [data-action="restart"]';
+    const ask = '#services .row-confirm-row';
+    await page.click(restartBtn);
+    await page.waitForSelector(ask);
+    assert.match(await page.innerText(ask + ' .row-confirm-text'), /^Restart Server\? .*Replies being written end as interrupted/);
+    assert.equal(await page.isHidden(restartBtn), true, 'the row\'s own button hides while it asks');
+    assert.deepEqual(await page.$$eval(ask + ' button', (b) => b.map((x) => x.textContent)), ['Cancel', 'Restart']);
+    // A refresh, even a forced one, with a service changing state meanwhile, leaves the question open.
+    let gatewayDown = false;
+    await page.route('**/api/admin/v1/services', async (route) => {
+      const res = await route.fetch({ headers: { ...route.request().headers(), 'if-none-match': '' } });
+      const body = await res.json();
+      if (gatewayDown) for (const s of body.services) if (s.name === 'model-gateway') s.state = 'exited';
+      await route.fulfill({ response: res, json: body, headers: { ...res.headers(), etag: '"x' + Date.now() + '"' } });
+    });
+    gatewayDown = true;
+    const every = await page.evaluate(async () => (await window.ui.ready).STATUS_EVERY_SECS);
+    await page.waitForFunction(() => /exited/i.test(document.querySelector('#services tr[data-name="model-gateway"]').innerText), null, { timeout: (every + 10) * 1000 });
+    assert.equal(await page.locator(ask).count(), 1, 'a refresh does not close the question');
+    assert.equal(await page.isHidden(restartBtn), true);
+    assert.equal(await page.locator('#services tr[data-name="server"] + .row-confirm-row').count(), 1, 'it stays right under its row');
+    await page.unroute('**/api/admin/v1/services');
+    // Cancel closes it, brings the button back and focuses it; so does Esc.
+    await page.click(ask + ' [data-row-cancel]');
+    assert.equal(await page.locator(ask).count(), 0);
+    assert.equal(await page.isVisible(restartBtn), true);
+    assert.equal(await page.evaluate(() => document.activeElement && document.activeElement.dataset.action), 'restart', 'Cancel focuses the button again');
+    await page.click(restartBtn);
+    await page.waitForSelector(ask);
+    await page.keyboard.press('Escape');
+    assert.equal(await page.locator(ask).count(), 0, 'Esc closes it');
+    assert.equal(await page.isVisible(restartBtn), true);
     // CLIProxyAPI is restarted through its supervisor (ADR 0037), so it has a Restart button too. (Not
     // clicked here: there is no supervisor in this test, and the admin would wait a minute for it.)
-    assert.deepEqual(await page.$$eval('#services .card[data-name="cpa"] button', (b) => b.map((x) => x.dataset.action)), ['restart']);
-    // Accepted: the attempt is made and recorded; Caddy is not running here, so it fails and says so.
-    page.once('dialog', (d) => d.accept());
-    await page.click('#services .card[data-name="caddy"] [data-action="restart"]');
-    await page.waitForFunction(() => /restart caddy · failed/.test(document.getElementById('services-recent').textContent));
+    assert.deepEqual(await page.$$eval('#services tr[data-name="cpa"] button', (b) => b.map((x) => x.dataset.action)), ['restart']);
+    // Confirmed: the attempt is made; Caddy is not running here, so it fails and the page error line says so.
+    await page.click('#services tr[data-name="caddy"] [data-action="restart"]');
+    await page.waitForSelector(ask);
+    await page.click(ask + ' [data-row-action]');
+    await page.waitForFunction(() => { const e = document.getElementById('page-error'); return !e.hidden && e.textContent.trim().length > 0; });
+    await page.waitForFunction(() => !document.querySelector('#services .row-confirm-row'));
+    assert.equal(await page.isVisible('#services tr[data-name="caddy"] [data-action="restart"]'), true);
   });
   await step('clients see the approved models only with a token', async () => {
     // The API is the other listener; without a token it must refuse.
     const r = await fetch(`http://127.0.0.1:${api}/api/client/v1/models`, { headers: { 'x-askbar-client-version': '0.6.0' } });
     assert.equal(r.status, 401);
   });
-  await step('clients: add a user, generate a pairing key for them, pair with it, then revoke the client', async () => {
-    await openPage('clients');
-    await page.waitForSelector('#pair-form');
+  await step('people: add a user, generate a pairing key for them, pair with it, then revoke the client', async () => {
+    await openPage('people');
+    await page.waitForSelector('#users');
     await page.waitForFunction(() => /No clients are paired yet/.test(document.getElementById('clients').textContent));
-    // A fresh install has no users, so nothing can be paired yet (ADR 0008).
+    // A fresh install has no users, so nothing can be paired yet (ADR 0008): the box says so and cannot make a key.
     await page.waitForFunction(() => /No users yet/.test(document.getElementById('users').textContent));
+    await page.click('#pair-open');
     assert.equal(await page.isDisabled('#pair-form button[type=submit]'), true);
+    assert.match(await page.innerText('#pair-error'), /Add a user first/);
+    await page.click('#pair-cancel');
+    await page.click('#add-user');
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'u-name', 'the name field has focus');
+    assert.equal(await page.getAttribute('#u-name', 'maxlength'), String(await page.evaluate(async () => (await window.ui.ready).NAME_MAX_CHARS)), 'the name limit comes from constants');
+    await page.click('#user-form button[type=submit]');
+    assert.match(await page.innerText('#u-name-error'), /Enter a name/, 'an empty name is refused where it is typed');
     await page.fill('#u-name', 'Ann');
     await page.click('#user-form button[type=submit]');
     await page.waitForFunction(() => /Ann/.test(document.getElementById('users').textContent));
+    await page.click('#pair-open');
     assert.equal(await page.inputValue('#d-user').then((v) => v.length > 0), true, 'the new user is picked');
     assert.equal(await page.isDisabled('#pair-form button[type=submit]'), false);
     await page.fill('#d-name', 'Test laptop');
     await page.click('#pair-form button[type=submit]');
     await page.waitForSelector('#pairing-out:not([hidden])');
-    const pairing = await page.inputValue('#pairing-string');
+    const pairing = (await page.innerText('#pairing-string')).trim();
     assert.match(pairing, /^askbar-pair:/);
     const { url, code } = JSON.parse(Buffer.from(pairing.slice('askbar-pair:'.length), 'base64url').toString());
     assert.equal(url, 'http://localhost:' + api);
@@ -521,56 +1153,139 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     const { token } = await paired.json();
     const whoami = () => fetch(`http://127.0.0.1:${api}/api/client/v1/me`, { headers: { ...headers, authorization: 'Bearer ' + token } }).then((r) => r.status);
     assert.equal(await whoami(), 204);
+    await page.click('#pairing-done');
 
     await openPage('providers');
-    await openPage('clients');
-    await page.waitForSelector('#clients .card');
-    assert.match(await page.innerText('#clients .card'), /Test laptop[\s\S]*active[\s\S]*Ann · paired[\s\S]*last seen (?!never)/);
-    page.once('dialog', (d) => d.accept());
+    await openPage('people');
+    await page.waitForSelector('#clients [data-client]');
+    assert.match(await page.innerText('#clients [data-client]'), /Test laptop[\s\S]*Ann/);
+    assert.doesNotMatch(await page.textContent('#clients [data-client] .col-seen'), /never/, 'it has been seen');
+    assert.match(await page.innerText('#users [data-user]'), /Ann\s+1\s+Active/, 'the user row counts its client');
+    // Revoke is a destructive row action: it has the danger style (btn-danger), the same colour as a reference .btn-danger.
+    const colours = await page.evaluate(() => {
+      const pick = (el) => { const s = getComputedStyle(el); return { color: s.color, border: s.borderTopColor, background: s.backgroundColor }; };
+      const ref = document.createElement('button');
+      ref.className = 'btn btn-danger';
+      ref.textContent = 'reference';
+      document.body.append(ref);
+      const out = { revoke: pick(document.querySelector('#clients [data-action="revoke"]')), reference: pick(ref), cls: document.querySelector('#clients [data-action="revoke"]').className };
+      ref.remove();
+      return out;
+    });
+    assert.match(colours.cls, /\bbtn-danger\b/, 'Revoke has the btn-danger class');
+    assert.deepEqual(colours.revoke, colours.reference, 'Revoke is drawn in the danger colour, like the other destructive buttons');
+    assert.notDeepEqual(colours.revoke.color, await page.evaluate(() => getComputedStyle(document.body).color), 'the danger colour is not the body text colour');
     await page.click('#clients [data-action="revoke"]');
-    await page.waitForFunction(() => /revoked/.test(document.querySelector('#clients .card').textContent));
+    await page.waitForSelector('dialog[open] [data-confirm-action]');
+    await page.click('dialog[open] [data-confirm-action]');
+    await page.waitForFunction(() => /Revoked/.test(document.querySelector('#clients [data-client]').textContent));
     assert.equal(await page.locator('#clients [data-action="revoke"]').count(), 0);
     assert.equal(await whoami(), 401);
   });
-  await step('users: Pause replies is the emergency stop for one person, shown as text, and Resume undoes it', async () => {
-    await openPage('clients');
+  await step('users: Pause is the emergency stop for one person, shown as a word and a symbol, and Resume undoes it', async () => {
+    await openPage('people');
     await page.waitForSelector('#users [data-user]');
     const row = '#users [data-user]';
-    assert.equal(await page.innerText(row + ' .what'), 'Ann');
-    assert.equal(await page.innerText(row + ' button'), 'Pause replies');
-    await page.click(row + ' button');
-    await page.waitForFunction(() => /replies paused/.test(document.querySelector('#users [data-user] .what').textContent));
-    assert.equal(await page.innerText(row + ' button'), 'Resume replies');
+    assert.equal(await page.innerText(row + ' .name'), 'Ann');
+    assert.equal(await page.innerText(row + ' [data-action="pause"]'), 'Pause');
+    assert.equal(await page.getAttribute(row + ' [data-action="pause"]', 'aria-label'), 'Pause replies for Ann');
+    await page.click(row + ' [data-action="pause"]');
+    await page.waitForFunction(() => /Replies paused/.test(document.querySelector('#users [data-user]').textContent));
+    assert.equal(await page.innerText(row + ' [data-action="resume"]'), 'Resume');
+    assert.equal(await page.locator(row + ' .status-paused').count(), 1, 'a word and a symbol');
     // It is on the server's side too: the admin API says so, and a reload shows it.
     await openPage('providers');
-    await openPage('clients');
-    await page.waitForFunction(() => /replies paused/.test(document.querySelector('#users [data-user] .what').textContent));
-    await page.click(row + ' button');
-    await page.waitForFunction(() => document.querySelector('#users [data-user] .what').textContent === 'Ann');
-    assert.equal(await page.innerText(row + ' button'), 'Pause replies');
+    await openPage('people');
+    await page.waitForFunction(() => /Replies paused/.test(document.querySelector('#users [data-user]').textContent));
+    await page.click(row + ' [data-action="resume"]');
+    await page.waitForFunction(() => /Active/.test(document.querySelector('#users [data-user]').textContent));
+    assert.equal(await page.innerText(row + ' [data-action="pause"]'), 'Pause');
     assert.equal(await page.locator('#users b').count(), 0, 'names are text');
   });
-  await step('users: deleting a person needs their name typed, then removes them and nothing else', async () => {
-    await openPage('clients');
+  await step('users: the row menu has Edit and Delete; Edit opens the side panel with the usage limits greyed, reachable by Tab and inert on Enter', async () => {
+    await openPage('people');
     await page.waitForSelector('#users [data-user]');
+    const more = '#users [data-user] .row-menu-button';
+    assert.equal(await page.getAttribute(more, 'aria-label'), 'More actions for Ann');
+    await page.click(more);
+    assert.deepEqual(await page.$$eval('#users [data-user] .menu [role="menuitem"]', (b) => b.map((x) => x.textContent.trim())), ['Edit', 'Delete']);
+    await page.click('#users [data-user] .menu [data-action="edit"]');
+    await page.waitForSelector('#user-panel:not([hidden])');
+    assert.equal(await page.innerText('#user-panel-title'), 'Edit Ann');
+    // The name and the usage limits are labels only: no number, no field, aria-disabled, never the disabled attribute.
+    const limits = await page.$$eval('#edit-form .na', (n) => n.map((x) => ({ text: x.textContent.replace(/\s+/g, ' ').trim(), aria: x.getAttribute('aria-disabled'), tab: x.tabIndex, tip: x.dataset.tip, controls: x.querySelectorAll('input, select, textarea, button').length })));
+    assert.equal(limits.length, 4, 'the name and the three limits');
+    for (const l of limits) {
+      assert.equal(l.aria, 'true');
+      assert.equal(l.tab, 0);
+      assert.match(l.tip, /^Not available yet: /);
+      assert.equal(l.controls, 0, 'no field behind it');
+      assert.doesNotMatch(l.text.replace(/Not available yet:.*$/, ''), /\d/, 'no number on a greyed item: ' + l.text);
+    }
+    assert.match(limits[1].text, /Monthly token cap/);
+    assert.equal(await page.locator('#edit-form [disabled]').count(), 0, 'aria-disabled, not disabled');
+    // Reachable by Tab, and Enter does nothing.
+    const snapshot = () => page.evaluate(() => ({ url: location.href, hidden: document.getElementById('user-panel').hidden, paused: document.getElementById('e-paused').checked, boxes: document.querySelectorAll('dialog[open]').length }));
+    await page.focus('#edit-form .na >> nth=1');
+    assert.match(await page.evaluate(() => document.activeElement.dataset.tip), /^Not available yet: the server does not track usage or caps per person\.$/);
+    const before = await snapshot();
+    await page.keyboard.press('Enter');
+    await page.keyboard.press('Space');
+    assert.deepEqual(await snapshot(), before, 'nothing happened');
+    let reached = 0;
+    await page.focus('#edit-form .na >> nth=0');
+    for (let i = 0; i < 6; i++) { await page.keyboard.press('Tab'); if (await page.evaluate(() => !!document.activeElement.closest('.na'))) reached++; }
+    assert.equal(reached, 3, 'Tab reaches the three other greyed items');
+    // Pause from the panel, then resume from it.
+    await page.check('#e-paused');
+    await page.click('#edit-save');
+    await page.waitForSelector('#user-panel', { state: 'hidden' });
+    await page.waitForFunction(() => /Replies paused/.test(document.querySelector('#users [data-user]').textContent));
+    await page.waitForFunction(() => !location.search.includes('panel='));
+    await page.click(more);
+    await page.click('#users [data-user] .menu [data-action="edit"]');
+    await page.waitForSelector('#user-panel:not([hidden])');
+    assert.equal(await page.isChecked('#e-paused'), true);
+    await page.uncheck('#e-paused');
+    await page.click('#edit-save');
+    await page.waitForSelector('#user-panel', { state: 'hidden' });
+    await page.waitForFunction(() => /Active/.test(document.querySelector('#users [data-user]').textContent));
+    await page.waitForFunction(() => !location.search.includes('panel='));
+  });
+  await step('users: Delete asks for the name and stays disabled until it matches; Pause instead pauses; then it removes the person and nothing else', async () => {
+    await openPage('people');
+    await page.waitForSelector('#users [data-user]');
+    await page.click('#add-user');
     await page.fill('#u-name', 'Zed');
     await page.click('#user-form button[type=submit]');
     await page.waitForFunction(() => /Zed/.test(document.getElementById('users').textContent));
-    const zed = '#users [data-user]:has(.what:text-is("Zed"))';
-    await page.click(zed + ' [data-action="delete"]');
-    const confirm = zed + ' [data-confirm]';
-    await page.waitForSelector(confirm);
-    assert.match(await page.innerText(confirm), /cannot be undone/);
-    const go = confirm + ' button.danger';
+    const zed = '#users [data-user]:has(.name:text-is("Zed"))';
+    const openDelete = async () => {
+      await page.click(zed + ' .row-menu-button');
+      await page.click(zed + ' .menu [data-action="delete"]');
+      await page.waitForSelector('dialog[open] [data-confirm-action]');
+    };
+    await openDelete();
+    const box = 'dialog[open]';
+    assert.match(await page.innerText(box), /cannot be undone/);
+    assert.match(await page.innerText(box + ' .box-title'), /Delete Zed\?/);
+    const go = box + ' [data-confirm-action]';
     assert.equal(await page.isDisabled(go), true, 'nothing to confirm yet');
-    await page.fill(confirm + ' input', 'zed');
+    await page.fill(box + ' input', 'zed');
     assert.equal(await page.isDisabled(go), true, 'the name must match exactly');
     // Cancel closes it and deletes nothing.
-    await page.click(confirm + ' button.secondary');
-    assert.equal(await page.locator(confirm).count(), 0);
+    await page.click(box + ' [data-confirm-cancel]');
+    assert.equal(await page.locator('dialog[open]').count(), 0);
     assert.equal(await page.locator(zed).count(), 1);
-    await page.click(zed + ' [data-action="delete"]');
-    await page.fill(confirm + ' input', 'Zed');
+    // Pause instead: the box closes, nothing is deleted, the person is paused.
+    await openDelete();
+    await page.click(box + ' [data-confirm-alt]');
+    await page.waitForFunction(() => [...document.querySelectorAll('#users [data-user]')].some((r) => /Zed/.test(r.textContent) && /Replies paused/.test(r.textContent)));
+    assert.equal(await page.locator('dialog[open]').count(), 0);
+    // A paused person has no "Pause instead" to offer.
+    await openDelete();
+    assert.equal(await page.locator(box + ' [data-confirm-alt]').count(), 0);
+    await page.fill(box + ' input', 'Zed');
     assert.equal(await page.isDisabled(go), false);
     await page.click(go);
     await page.waitForFunction(() => !/Zed/.test(document.getElementById('users').textContent));
@@ -578,22 +1293,300 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     const left = await page.evaluate(async () => (await (await fetch('/api/admin/v1/users')).json()).map((u) => u.name));
     assert.ok(left.includes('Ann') && !left.includes('Zed'), JSON.stringify(left));
   });
-  await step('settings page saves the system prompt and display defaults', async () => {
-    await openPage('settings');
+  await step('users: Delete in the Edit panel asks the same way', async () => {
+    await openPage('people');
+    await page.waitForSelector('#users [data-user]');
+    await page.click('#users [data-user] .row-menu-button');
+    await page.click('#users [data-user] .menu [data-action="edit"]');
+    await page.waitForSelector('#user-panel:not([hidden])');
+    await page.click('#edit-delete');
+    await page.waitForSelector('dialog[open] [data-confirm-action]');
+    assert.equal(await page.isDisabled('dialog[open] [data-confirm-action]'), true);
+    await page.click('dialog[open] [data-confirm-cancel]');
+    assert.equal(await page.locator('#users [data-user]').count(), 1, 'nothing was deleted');
+    await page.click('#user-panel [data-panel-close]');
+    await page.waitForSelector('#user-panel', { state: 'hidden' });
+  });
+  await step('people: #add-user and #pair-open in the address open their box and leave the address clean', async () => {
+    for (const [hash, box] of [['#add-user', 'user-box'], ['#pair-open', 'pair-box']]) {
+      await page.goto(base + 'people/' + hash);
+      await page.waitForSelector('#' + box + '[open]');
+      await page.waitForFunction(() => location.hash === '');
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('#' + box, { state: 'hidden' });
+    }
+  });
+  await step('live lists: new rows are highlighted and announced, then calm; scroll, focus and typing survive; an unchanged answer changes nothing', async () => {
+    const K = await page.evaluate(() => window.ui.ready);
+    await openPage('people');
+    await page.waitForSelector('#users [data-user]');
+    // The admin's users, plus whatever the test adds to the answer (no server state is made).
+    let extra = [];
+    let seen = 0;
+    await page.route('**/api/admin/v1/users', async (route) => {
+      if (route.request().method() !== 'GET') { await route.continue(); return; }
+      seen++;
+      const real = await (await route.fetch()).json();
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify([...real, ...extra]) });
+    });
+    // A hidden tab holds the lists; a visible one asks at once. (Emulated: the page reports hidden, then visible.)
+    const visibility = (hidden) => page.evaluate((h) => {
+      Object.defineProperty(document, 'hidden', { configurable: true, get: () => h });
+      Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => (h ? 'hidden' : 'visible') });
+      document.dispatchEvent(new Event('visibilitychange'));
+    }, hidden);
+    const refresh = async () => {
+      const before = seen;
+      await visibility(true);
+      await page.waitForTimeout(100);
+      assert.equal(seen, before, 'a hidden tab does not ask for the list');
+      await visibility(false);
+      for (let i = 0; i < 50 && seen === before; i++) await page.waitForTimeout(100);
+      assert.ok(seen > before, 'a tab that is visible again asks at once');
+      await page.waitForTimeout(300); // the answer is drawn
+    };
+    try {
+      const fake = (n) => ({ id: 'live-' + n, name: 'Live ' + n + ' <b>x</b>', paused: false });
+      // Room to scroll, and a control in the first row to focus.
+      await page.evaluate(() => { const d = document.createElement('div'); d.id = 't-tall'; d.style.height = '3000px'; document.getElementById('main').append(d); });
+      extra = [fake(1)];
+      await refresh();
+      assert.equal(await page.locator('#users [data-user="live-1"]').count(), 1, 'the new row is there');
+      assert.equal(await page.locator('#users [data-user="live-1"]').evaluate((n) => n.classList.contains('row-new')), true, 'and highlighted');
+      assert.equal(await page.locator('#users b').count(), 0, 'names are text');
+      assert.equal(await page.innerText('#announcer'), '1 new user');
+      await page.waitForTimeout(K.HIGHLIGHT_SECS * 1000 + 500);
+      assert.equal(await page.locator('#users .row-new').count(), 0, 'calm after HIGHLIGHT_SECS');
+      // Focus a button in a row and scroll; a refresh with another new row keeps both, on the same node.
+      await page.focus('#users [data-user="live-1"] button');
+      await page.evaluate(() => { document.activeElement.dataset.mark = 'same'; window.scrollTo(0, 400); });
+      // (A row added above the view makes the browser move scrollY to keep what is on screen still, so what stays is the
+      // place on screen of what is in view, here the block that gives the page room to scroll.)
+      const place = () => page.evaluate(() => Math.round(document.getElementById('t-tall').getBoundingClientRect().top));
+      const y = await place();
+      const scrolled = await page.evaluate(() => window.scrollY);
+      extra = [fake(1), fake(2)];
+      await refresh();
+      assert.equal(await page.locator('#users [data-user="live-2"].row-new').count(), 1);
+      assert.equal(await page.evaluate(() => document.activeElement.dataset.mark), 'same', 'the focused control is the same node');
+      // Either the scroll position is the same, or the browser kept what is on screen still: the view does not jump.
+      assert.ok((await page.evaluate(() => window.scrollY)) === scrolled || (await place()) === y, 'the view does not jump');
+      // A delete confirmation that is open keeps its typing while the list changes under it.
+      await page.click('#users [data-user="live-1"] .row-menu-button');
+      await page.click('#users [data-user="live-1"] .menu [data-action="delete"]');
+      await page.fill('dialog[open] input', 'Liv');
+      extra = [fake(1), fake(2), fake(3)];
+      await refresh();
+      assert.equal(await page.inputValue('dialog[open] input'), 'Liv', 'typing is kept');
+      assert.equal(await page.evaluate(() => document.activeElement.tagName), 'INPUT', 'and so is focus');
+      await page.click('dialog[open] [data-confirm-cancel]');
+      // The same answer again: nothing in the page changes.
+      await page.evaluate(() => {
+        window.__muts = 0;
+        const o = new MutationObserver((m) => { window.__muts += m.length; });
+        o.observe(document.getElementById('users'), { subtree: true, childList: true, attributes: true, characterData: true });
+        o.observe(document.getElementById('clients'), { subtree: true, childList: true, attributes: true, characterData: true });
+      });
+      await refresh();
+      await refresh();
+      assert.equal(await page.evaluate(() => window.__muts), 0, 'an unchanged answer changes nothing');
+    } finally {
+      await page.unroute('**/api/admin/v1/users');
+      await page.evaluate(() => { delete document.hidden; delete document.visibilityState; const d = document.getElementById('t-tall'); if (d) d.remove(); });
+    }
+    await openPage('providers');
+  });
+  await step('live lists: a 304 changes nothing, and the ETag is sent back', async () => {
+    await openPage('people');
+    await page.waitForSelector('#users [data-user]');
+    const sent = [];
+    await page.route('**/api/admin/v1/clients', async (route) => {
+      const inm = route.request().headers()['if-none-match'];
+      sent.push(inm || null);
+      if (inm === '"v1"') { await route.fulfill({ status: 304, headers: { etag: '"v1"' } }); return; }
+      const real = await route.fetch();
+      await route.fulfill({ response: real, headers: { ...real.headers(), etag: '"v1"' } });
+    });
+    try {
+      await page.reload();
+      await page.waitForSelector('#app:not([hidden])');
+      await page.waitForFunction(() => document.querySelector('#clients [data-client], #clients .empty-row'));
+      await page.evaluate(() => {
+        window.__muts = 0;
+        new MutationObserver((m) => { window.__muts += m.length; }).observe(document.getElementById('clients'), { subtree: true, childList: true, attributes: true, characterData: true });
+        Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+        document.dispatchEvent(new Event('visibilitychange'));
+        Object.defineProperty(document, 'hidden', { configurable: true, get: () => false });
+        document.dispatchEvent(new Event('visibilitychange'));
+      });
+      for (let i = 0; i < 50 && sent.length < 2; i++) await page.waitForTimeout(100);
+      await page.waitForTimeout(300);
+      assert.deepEqual(sent.slice(0, 2), [null, '"v1"'], 'the second ask carries the ETag of the first answer');
+      assert.equal(await page.evaluate(() => window.__muts), 0, 'a 304 changes nothing');
+    } finally {
+      await page.unroute('**/api/admin/v1/clients');
+      await page.evaluate(() => { delete document.hidden; });
+    }
+    await openPage('providers');
+  });
+  await step('live lists: the interval follows the tab, a lost connection backs off along BACKOFF_SECS and says Reconnecting…, and the first answer clears it', async () => {
+    const out = await page.evaluate(async () => {
+      const K = await window.ui.ready;
+      const calls = [];
+      const timer = { set: (fn, ms) => { calls.push(ms); return calls.length; }, clear: () => {} };
+      let down = true;
+      const slot = document.getElementById('page-error');
+      const live = window.ui.live(async () => { if (down) throw new TypeError('Failed to fetch'); return { n: 1 }; }, { render: () => {}, notice: slot, timer });
+      const result = { K, delays: [], noteWhileDown: null, noteAfter: null };
+      await live.start();
+      result.delays.push(calls[calls.length - 1]);
+      result.noteWhileDown = document.querySelector('.live-note') && document.querySelector('.live-note').textContent;
+      result.polite = document.querySelector('.live-note').getAttribute('role');
+      for (let i = 0; i < 5; i++) { await live.refresh(); result.delays.push(calls[calls.length - 1]); }
+      down = false;
+      await live.refresh();
+      result.afterOk = calls[calls.length - 1];
+      result.noteAfter = document.querySelector('.live-note');
+      // A refusal is an answer, not a lost connection: no backoff, no notice.
+      down = false;
+      const refused = window.ui.live(async () => { const e = new Error('no'); e.status = 500; throw e; }, { render: () => {}, notice: slot, timer, onError: () => {} });
+      await refused.start();
+      result.refusedDelay = calls[calls.length - 1];
+      result.refusedNote = !!document.querySelector('.live-note');
+      // The tab hides: a list pauses (no timer), the status kind goes on at HIDDEN_EVERY_SECS.
+      const hide = (h) => { Object.defineProperty(document, 'hidden', { configurable: true, get: () => h }); document.dispatchEvent(new Event('visibilitychange')); };
+      const pause = window.ui.live(async () => ({ n: 1 }), { render: () => {}, timer });
+      const slow = window.ui.live(async () => ({ n: 1 }), { render: () => {}, timer, hidden: 'slow' });
+      await pause.start(); await slow.start();
+      hide(true);
+      result.hiddenPause = pause.state.delay;
+      result.hiddenSlow = slow.state.delay;
+      result.visibleSlowEvery = null;
+      const named = window.ui.live(async () => ({ n: 1 }), { render: () => {}, timer, every: 'STATUS_EVERY_SECS' });
+      hide(false);
+      await named.start();
+      result.visible = pause.state.delay;
+      result.named = named.state.delay;
+      for (const l of [live, refused, pause, slow, named]) l.stop();
+      delete document.hidden;
+      return result;
+    });
+    const K = out.K;
+    assert.deepEqual(K.BACKOFF_SECS, [10, 20, 40, 60]);
+    assert.deepEqual(out.delays, [10000, 20000, 40000, 60000, 60000, 60000], 'the schedule is BACKOFF_SECS, the last step repeating');
+    assert.match(out.noteWhileDown, /Reconnecting…/);
+    assert.equal(out.polite, 'status', 'announced politely, not as an alert');
+    assert.equal(out.afterOk, K.LIVE_EVERY_SECS * 1000, 'back to the normal interval after the first answer');
+    assert.equal(out.noteAfter, null, 'the notice clears');
+    assert.equal(out.refusedDelay, K.LIVE_EVERY_SECS * 1000, 'an answer, even a refusal, does not back off');
+    assert.equal(out.refusedNote, false);
+    assert.equal(out.hiddenPause, null, 'a hidden tab holds the list');
+    assert.equal(out.hiddenSlow, K.HIDDEN_EVERY_SECS * 1000, 'the bell and title go on at HIDDEN_EVERY_SECS');
+    assert.equal(out.visible, K.LIVE_EVERY_SECS * 1000);
+    assert.equal(out.named, K.STATUS_EVERY_SECS * 1000);
+  });
+  await step('live lists: a failed check shows Reconnecting… next to the list and clears when the answer comes back', async () => {
+    const K = await page.evaluate(() => window.ui.ready);
+    await openPage('people');
+    await page.waitForSelector('#users [data-user]');
+    let down = true;
+    await page.route('**/api/admin/v1/clients', async (route) => { if (down) await route.abort(); else await route.continue(); });
+    try {
+      await page.evaluate(() => {
+        Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+        document.dispatchEvent(new Event('visibilitychange'));
+        Object.defineProperty(document, 'hidden', { configurable: true, get: () => false });
+        document.dispatchEvent(new Event('visibilitychange'));
+      });
+      await page.waitForSelector('.live-note');
+      assert.match(await page.innerText('.live-note'), /Reconnecting…/);
+      assert.equal(await page.locator('#banners [data-banner="reconnecting"]').count(), 0, 'not a banner');
+      assert.equal(await page.locator('#users [data-user]').count() > 0, true, 'the list stays as it was');
+      down = false;
+      // The next check is BACKOFF_SECS[0] away; a tab that comes back asks at once.
+      await page.evaluate(() => {
+        Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+        document.dispatchEvent(new Event('visibilitychange'));
+        Object.defineProperty(document, 'hidden', { configurable: true, get: () => false });
+        document.dispatchEvent(new Event('visibilitychange'));
+      });
+      await page.waitForSelector('.live-note', { state: 'detached', timeout: K.BACKOFF_SECS[0] * 1000 });
+    } finally {
+      // The aborted request is the point of the step: the browser logs it, so it is not a page error.
+      for (let i = errors.length - 1; i >= 0; i--) if (errors[i] === 'Failed to load resource: net::ERR_FAILED') errors.splice(i, 1);
+      await page.unroute('**/api/admin/v1/clients');
+      await page.evaluate(() => { delete document.hidden; });
+    }
+    await openPage('providers');
+  });
+  await step('live lists: a client that pairs turns the pairing box to Connected; the tab title carries the alert count; polling is not an action and does not extend the sign-in', async () => {
+    const K = await page.evaluate(() => window.ui.ready);
+    await openPage('people');
+    await page.waitForSelector('#users [data-user]');
+    await page.click('#pair-open');
+    await page.selectOption('#d-user', { label: 'Ann' });
+    await page.fill('#d-name', 'Live laptop');
+    await page.click('#pair-form button[type=submit]');
+    await page.waitForSelector('#pairing-out:not([hidden])');
+    assert.match(await page.innerText('#pairing-status'), /Waiting for the app to pair/);
+    assert.match(await page.innerText('#pairing-meta'), new RegExp('expires in ' + K.PAIR_CODE_TTL_SECS / 60 + ' minutes'), 'the time limit is the constant');
+    const pairing = (await page.innerText('#pairing-string')).trim();
+    const { code } = JSON.parse(Buffer.from(pairing.slice('askbar-pair:'.length), 'base64url').toString());
+    const headers = { 'content-type': 'application/json', 'x-askbar-client-version': '0.6.0' };
+    const paired = await fetch(`http://127.0.0.1:${api}/api/client/v1/pairings`, { method: 'POST', headers, body: JSON.stringify({ code }) });
+    assert.equal(paired.status, 200);
+    // The next check (or the admin's own change) shows it; nothing is clicked.
+    await page.waitForFunction(() => /Connected/.test(document.getElementById('pairing-status').textContent), null, { timeout: 30000 });
+    assert.match(await page.innerText('#pairing-status'), /Connected[\s\S]*Live laptop is paired/);
+    assert.equal(await page.isVisible('#pairing-key'), false, 'the key is gone: it no longer works');
+    assert.equal(await page.innerText('#pairing-again'), 'Pair another client');
+    assert.equal(await page.locator('#clients [data-client]:has-text("Live laptop")').count(), 1, 'and the list has it');
+    assert.equal(await page.$eval('#pairing-status .status', (n) => n.classList.contains('status-ok')), true, 'a word and a symbol');
+    await page.click('#pairing-done');
+    // (That a read is not an admin action and does not extend the sign-in is pinned in Rust: tests/actions.rs, tests/admin_auth.rs.)
+    await page.click('#clients [data-client]:has-text("Live laptop") [data-action="revoke"]');
+    await page.waitForSelector('dialog[open] [data-confirm-action]');
+    await page.click('dialog[open] [data-confirm-action]');
+    await page.waitForSelector('#clients [data-client]:has-text("Live laptop"):has-text("Revoked")');
+  });
+  await step('the tab title carries the alert count', async () => {
+    const K = await page.evaluate(() => window.ui.ready);
+    const clean = { server_online: true, token_rejected: false, audit_chain: { state: 'ok' }, alerts: 'ok', sealed_content: { open: false, alerts: [] } };
+    let fake = { ...clean, server_online: false };
+    await page.route('**/api/admin/v1/status', async (route) => {
+      const real = await (await route.fetch()).json();
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ...real, ...fake }) });
+    });
+    try {
+      await page.goto(base + 'network/');
+      await page.waitForSelector('#app:not([hidden])');
+      await page.waitForFunction(() => /^\(1\) Network/.test(document.title), null, { timeout: K.STATUS_EVERY_SECS * 3000 });
+      assert.match(await page.title(), /^\(1\) Network · Askbar admin$/);
+      // The condition ends: the count leaves the title. (The hidden-tab interval for the status is checked above, with ui.live.)
+      fake = clean;
+      await page.waitForFunction(() => document.title === 'Network · Askbar admin', null, { timeout: K.STATUS_EVERY_SECS * 3000 });
+    } finally {
+      await page.unroute('**/api/admin/v1/status');
+    }
+    await page.goto(base + 'providers/');
+    await page.waitForSelector('#app:not([hidden])');
+  });
+  await step('general page saves the system prompt and display defaults', async () => {
+    await openPage('general');
     await page.waitForSelector('#settings-form');
     await page.waitForFunction(() => /quick-question popup/.test(document.getElementById('s-prompt').value));
     await page.fill('#s-prompt', 'You are a pirate.');
     await page.selectOption('#s-theme', 'dark');
     await page.fill('#s-width', '900');
-    await page.click('#settings-form button[type=submit]');
-    await page.waitForSelector('#flash:not([hidden])');
-    assert.match(await page.innerText('#flash'), /Settings saved/);
+    await page.click('#settings-form-save-bar [data-save-submit]');
+    await page.waitForSelector('#toasts .toast');
+    assert.match(await page.locator('#toasts .toast').last().innerText(), /Settings saved/);
     await openSettings();
     await page.waitForFunction(() => document.getElementById('s-width').value === '900');
     assert.equal(await page.inputValue('#s-prompt'), 'You are a pirate.');
     assert.equal(await page.inputValue('#s-theme'), 'dark');
   });
-  await step('settings: the privacy notice and the AI warning are on with their default words, and the changes are kept', async () => {
+  await step('general: the privacy notice and the AI warning are on with their default words, and the changes are kept', async () => {
     await openSettings();
     await page.waitForFunction(() => /AI can make mistakes/.test(document.getElementById('s-warning-text').value));
     assert.equal(await page.isChecked('#s-notice-on'), true);
@@ -601,9 +1594,9 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     assert.match(await page.inputValue('#s-notice-text'), /sealed copy of each goes to the audit record/);
     await page.fill('#s-notice-text', 'We keep <b>everything</b> for the number of days below.');
     await page.uncheck('#s-warning-on');
-    await page.click('#settings-form button[type=submit]');
-    await page.waitForSelector('#flash:not([hidden])');
-    assert.match(await page.innerText('#flash'), /Settings saved/);
+    await page.click('#settings-form-save-bar [data-save-submit]');
+    await page.waitForSelector('#toasts .toast');
+    assert.match(await page.locator('#toasts .toast').last().innerText(), /Settings saved/);
     await openSettings();
     await page.waitForFunction(() => /everything/.test(document.getElementById('s-notice-text').value));
     assert.equal(await page.inputValue('#s-notice-text'), 'We keep <b>everything</b> for the number of days below.', 'text, never markup');
@@ -612,16 +1605,16 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     // Put it back: the default words, and both on.
     await page.fill('#s-notice-text', '');
     await page.check('#s-warning-on');
-    await page.click('#settings-form button[type=submit]');
-    await page.waitForSelector('#flash:not([hidden])');
+    await page.click('#settings-form-save-bar [data-save-submit]');
+    await page.waitForSelector('#toasts .toast');
     await openSettings();
     await page.waitForFunction(() => /sealed copy of each goes to the audit record/.test(document.getElementById('s-notice-text').value));
   });
-  await step('an invalid setting shows the server message', async () => {
+  await step('general: an invalid setting shows the server message', async () => {
     await page.fill('#s-top', '0.5');
     await page.fill('#s-width', '100');
     await page.evaluate(() => document.getElementById('settings-form').noValidate = true);
-    await page.click('#settings-form button[type=submit]');
+    await page.click('#settings-form-save-bar [data-save-submit]');
     await page.waitForSelector('#settings-error:not([hidden])');
     assert.match(await page.innerText('#settings-error'), /Width must be/);
   });
@@ -630,13 +1623,13 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.waitForFunction(() => document.getElementById('s-gen-timeout').value === '300');
     assert.equal(await page.getAttribute('#s-gen-timeout', 'min'), '30');
     assert.equal(await page.getAttribute('#s-gen-timeout', 'max'), '3600');
-    assert.equal(await page.innerText('#s-gen-timeout-min'), '300 seconds = 5 minutes');
+    assert.equal(await page.innerText('#s-gen-timeout-min'), '', 'the default is already in the hint, so nothing repeats it');
     await page.fill('#s-width', '900'); // the previous step left an invalid width in the form
     await page.fill('#s-gen-timeout', '120');
     assert.equal(await page.innerText('#s-gen-timeout-min'), '120 seconds = 2 minutes');
-    await page.click('#settings-form button[type=submit]');
-    await page.waitForSelector('#flash:not([hidden])');
-    assert.match(await page.innerText('#flash'), /Settings saved/);
+    await page.click('#settings-form-save-bar [data-save-submit]');
+    await page.waitForSelector('#toasts .toast');
+    assert.match(await page.locator('#toasts .toast').last().innerText(), /Settings saved/);
     await page.fill('#s-gen-timeout', '777'); // unsaved: only a reload from the server brings back 120
     await openSettings();
     await page.waitForFunction(() => document.getElementById('s-gen-timeout').value === '120');
@@ -646,7 +1639,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
 
     await page.fill('#s-gen-timeout', '29');
     await page.evaluate(() => document.getElementById('settings-form').noValidate = true);
-    await page.click('#settings-form button[type=submit]');
+    await page.click('#settings-form-save-bar [data-save-submit]');
     await page.waitForSelector('#settings-error:not([hidden])');
     assert.match(await page.innerText('#settings-error'), /between 30 and 3600/);
     await page.fill('#s-gen-timeout', '555'); // so the wait below can only be satisfied by a reload
@@ -660,8 +1653,8 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     assert.equal(await page.getAttribute('#s-history-turns', 'min'), '0');
     assert.equal(await page.getAttribute('#s-history-turns', 'max'), '1000');
     await page.fill('#s-history-turns', '4');
-    await page.click('#settings-form button[type=submit]');
-    await page.waitForSelector('#flash:not([hidden])');
+    await page.click('#settings-form-save-bar [data-save-submit]');
+    await page.waitForSelector('#toasts .toast');
     await page.fill('#s-history-turns', '9'); // unsaved: only a reload from the server brings back 4
     await openSettings();
     await page.waitForFunction(() => document.getElementById('s-history-turns').value === '4');
@@ -670,44 +1663,308 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await openSettings();
     assert.equal(await page.isChecked('#s-newest-first'), false);
     await page.check('#s-newest-first');
-    await page.click('#settings-form button[type=submit]');
-    await page.waitForSelector('#flash:not([hidden])');
+    await page.click('#settings-form-save-bar [data-save-submit]');
+    await page.waitForSelector('#toasts .toast');
     await page.uncheck('#s-newest-first'); // unsaved: only a reload from the server brings it back
     await openSettings();
     assert.equal(await page.isChecked('#s-newest-first'), true);
   });
-  await step('kill switch: off by default, aborts running replies by default; both save and reload', async () => {
+  await step('general: the save bar counts the changed fields, Discard restores them, and Save sends one PUT', async () => {
     await openSettings();
-    await page.waitForFunction(() => document.getElementById('s-gen-timeout').value === '120');
-    assert.equal(await page.isChecked('#s-kill-switch'), false);
-    assert.equal(await page.isChecked('#s-kill-aborts'), true);
-    await page.check('#s-kill-switch');
-    await page.uncheck('#s-kill-aborts');
-    await page.click('#settings-form button[type=submit]');
-    await page.waitForSelector('#flash:not([hidden])');
-    await page.uncheck('#s-kill-switch'); // unsaved changes, undone by the reload below
-    await page.check('#s-kill-aborts');
-    await openSettings();
-    await page.waitForFunction(() => document.getElementById('s-kill-switch').checked === true);
-    assert.equal(await page.isChecked('#s-kill-switch'), true);
-    assert.equal(await page.isChecked('#s-kill-aborts'), false);
-    // And back, so later steps see an ordinary server.
-    await page.uncheck('#s-kill-switch');
-    await page.check('#s-kill-aborts');
-    await page.click('#settings-form button[type=submit]');
-    await page.waitForSelector('#flash:not([hidden])');
+    await page.waitForFunction(() => document.getElementById('s-gen-timeout').value !== '');
+    const bar = '#settings-form-save-bar';
+    const text = async () => page.innerText('#settings-form-save-bar [data-save-text]');
+    assert.equal(await page.isVisible(bar), false, 'no bar with nothing changed');
+    const prompt = await page.inputValue('#s-prompt');
+    const timeout = await page.inputValue('#s-gen-timeout');
+    const other = timeout === '130' ? '140' : '130';
+    await page.fill('#s-gen-timeout', other);
+    await page.waitForSelector(bar + ':not([hidden])');
+    assert.equal(await text(), '1 unsaved change: Generation timeout (seconds)');
+    await page.fill('#s-prompt', prompt + ' x');
+    assert.equal(await text(), '2 unsaved changes');
+    await page.fill('#s-prompt', prompt); // reverted by hand
+    assert.equal(await text(), '1 unsaved change: Generation timeout (seconds)');
+    await page.fill('#s-gen-timeout', timeout); // reverted by hand: back to none
+    assert.equal(await page.isVisible(bar), false, 'the bar goes when nothing differs');
+    // Discard puts every field back.
+    await page.fill('#s-gen-timeout', other);
+    await page.fill('#s-prompt', prompt + ' y');
+    await page.click(bar + ' [data-save-discard]');
+    assert.equal(await page.inputValue('#s-gen-timeout'), timeout);
+    assert.equal(await page.inputValue('#s-prompt'), prompt);
+    assert.equal(await page.isVisible(bar), false);
+    // Save sends one PUT, and the bar clears once the server has the values.
+    let puts = 0;
+    const count = (r) => { if (r.method() === 'PUT' && r.url().endsWith('/api/admin/v1/settings')) puts += 1; };
+    page.on('request', count);
+    try {
+      await page.fill('#s-gen-timeout', other);
+      await page.fill('#s-prompt', prompt + ' z');
+      await page.click('#settings-form-save-bar button[type=submit]');
+      await page.waitForSelector('#toasts .toast');
+      assert.equal(puts, 1, 'one PUT for the whole form');
+      assert.equal(await page.isVisible(bar), false, 'saved values are the new base');
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), true, 'no sideways scroll');
+    } finally {
+      page.off('request', count);
+    }
+    // Put the values back as they were.
+    await page.fill('#s-gen-timeout', timeout);
+    await page.fill('#s-prompt', prompt);
+    await page.click('#settings-form-save-bar button[type=submit]');
+    await page.waitForSelector('#toasts .toast');
   });
-  await step('alerts: not set up shows a banner; ntfy settings are saved, tested and removed, and never shown again (ADR 0055)', async () => {
+  // Round 2: the save bar floats. It is in the page's fixed dock at the bottom of the window, comes up by itself on the first
+  // change, stays while the page scrolls, and the page keeps room under its last content so that content can scroll above it.
+  const barGeometry = (id) => page.evaluate((barId) => {
+    const bar = document.getElementById(barId);
+    const dock = bar.parentElement;
+    // The last block of the page's content: the last visible child of the last visible section.
+    const blocks = [...document.querySelectorAll('main > section[data-tab] *')].filter((e) => e.getBoundingClientRect().height > 0 && getComputedStyle(e).visibility !== 'hidden');
+    const bottoms = blocks.map((e) => e.getBoundingClientRect().bottom + scrollY);
+    const r = bar.getBoundingClientRect();
+    return {
+      hidden: bar.hidden || r.height === 0, dockPosition: getComputedStyle(dock).position, dockId: dock.id, top: r.top, bottom: r.bottom, left: r.left, right: r.right,
+      innerHeight, innerWidth, scrollY, maxScroll: document.documentElement.scrollHeight - innerHeight, lastContentBottom: Math.max(...bottoms) - scrollY,
+      menuRight: document.getElementById('side-menu').getBoundingClientRect().right, menuShown: getComputedStyle(document.getElementById('side-menu')).display !== 'none',
+    };
+  }, id);
+  await step('general: the floating save bar is hidden on load, comes up on a change, stays at the bottom while the page scrolls, and never covers the last content', async () => {
+    await openSettings();
+    await page.waitForFunction(() => document.getElementById('s-gen-timeout').value !== '');
+    const id = 'settings-form-save-bar';
+    assert.equal((await barGeometry(id)).hidden, true, 'hidden on load');
+    assert.equal(await page.evaluate(() => document.documentElement.classList.contains('save-bar-on')), false, 'no bar room reserved while it is hidden');
+    const timeout = await page.inputValue('#s-gen-timeout');
+    await page.fill('#s-gen-timeout', timeout === '130' ? '140' : '130');
+    await page.waitForSelector('#' + id + ':not([hidden])');
+    let g = await barGeometry(id);
+    assert.equal(g.dockId, 'save-dock', 'the bar lives in the floating dock');
+    assert.equal(g.dockPosition, 'fixed', 'the dock is fixed to the window');
+    assert.ok(Math.abs(g.innerHeight - g.bottom) <= 24, 'the bar sits at the bottom of the window: bottom ' + g.bottom + ' of ' + g.innerHeight);
+    if (!isPhone) {
+      assert.ok(g.left >= g.menuRight, 'the bar does not cover the side menu');
+      assert.ok(Math.abs((g.left + g.right) / 2 - (g.menuRight + g.innerWidth) / 2) <= 40, 'the bar is centred over the content column');
+    } else {
+      assert.ok(g.left <= 1 && g.right >= g.innerWidth - 1, 'on a phone the bar is the full width');
+    }
+    const top0 = g.top;
+    assert.ok(g.maxScroll > 200, 'the page scrolls');
+    await page.evaluate(() => scrollTo(0, Math.round((document.documentElement.scrollHeight - innerHeight) / 2)));
+    g = await barGeometry(id);
+    assert.ok(g.scrollY > 0 && Math.abs(g.top - top0) <= 1, 'the bar stays put while the page scrolls');
+    await page.evaluate(() => scrollTo(0, document.documentElement.scrollHeight));
+    g = await barGeometry(id);
+    assert.ok(Math.abs(g.scrollY - g.maxScroll) <= 1, 'scrolled to the very bottom');
+    assert.ok(g.lastContentBottom <= g.top, 'the last content block ends above the bar: ' + g.lastContentBottom + ' vs ' + g.top);
+    // The buttons: 44 px on a phone, and the bar is after the form's fields in the Tab order.
+    const sizes = await page.$$eval('#' + id + ' button', (bs) => bs.map((b) => b.getBoundingClientRect().height));
+    assert.ok(sizes.every((h) => h >= (isPhone ? 44 : 24)), 'the buttons are large enough: ' + sizes.join(','));
+    assert.equal(await page.evaluate(() => { const f = document.getElementById('s-newest-first'); const b = document.querySelector('#settings-form-save-bar [data-save-discard]'); return !!(f.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING); }), true, 'the bar follows the fields in the Tab order');
+    // Esc does not discard; the announcement is made in the polite region.
+    await page.keyboard.press('Escape');
+    assert.equal(await page.inputValue('#s-gen-timeout'), timeout === '130' ? '140' : '130', 'Esc does not discard');
+    await page.waitForFunction(() => /unsaved change/.test(document.getElementById('announcer').textContent));
+    assert.equal(await page.getAttribute('#announcer', 'aria-live'), 'polite');
+    // Discard restores the value and hides the bar and its room.
+    await page.click('#' + id + ' [data-save-discard]');
+    assert.equal(await page.inputValue('#s-gen-timeout'), timeout);
+    assert.equal((await barGeometry(id)).hidden, true, 'Discard hides it');
+    assert.equal(await page.evaluate(() => document.documentElement.classList.contains('save-bar-on')), false);
+    // Save saves and hides it (the toast is the confirmation).
+    await page.fill('#s-gen-timeout', timeout === '130' ? '140' : '130');
+    await page.click('#' + id + ' [data-save-submit]');
+    await page.waitForSelector('#toasts .toast');
+    assert.equal((await barGeometry(id)).hidden, true, 'Save hides it');
+    await page.fill('#s-gen-timeout', timeout);
+    await page.click('#' + id + ' [data-save-submit]');
+    await page.waitForFunction(() => document.getElementById('settings-form-save-bar').hidden);
+  });
+  await step('network: the floating bar carries Save and apply; the page keeps its own Apply the saved settings again button', async () => {
+    await openPage('network');
+    await page.waitForFunction(() => document.getElementById('n-host').value !== '' || document.getElementById('n-https-word').textContent !== '');
+    const id = 'network-form-save-bar';
+    assert.equal((await barGeometry(id)).hidden, true, 'hidden on load');
+    assert.equal(await page.locator('#network-form #n-apply').count(), 1, 'Apply the saved settings again stays in the page');
+    assert.equal(await page.locator('#network-form-save-bar #n-apply').count(), 0, 'and is not in the bar');
+    const host = await page.inputValue('#n-host');
+    await page.fill('#n-host', host + 'x');
+    await page.waitForSelector('#' + id + ':not([hidden])');
+    assert.equal((await page.innerText('#' + id + ' [data-save-submit]')).trim(), 'Save and apply');
+    let g = await barGeometry(id);
+    assert.equal(g.dockPosition, 'fixed');
+    assert.ok(Math.abs(g.innerHeight - g.bottom) <= 24, 'at the bottom of the window');
+    await page.evaluate(() => scrollTo(0, document.documentElement.scrollHeight));
+    g = await barGeometry(id);
+    assert.ok(g.lastContentBottom <= g.top, 'the last content block ends above the bar: ' + g.lastContentBottom + ' vs ' + g.top);
+    await page.click('#' + id + ' [data-save-discard]');
+    assert.equal(await page.inputValue('#n-host'), host);
+    assert.equal((await barGeometry(id)).hidden, true, 'Discard hides it');
+  });
+  await step('kill switch (Security page): off by default; it asks first and Cancel changes nothing; on and off save alone and the status bar follows', async () => {
+    const K = await page.evaluate(() => window.ui.ready);
+    await openPage('security');
+    await page.waitForFunction(() => document.getElementById('s-kill-state').textContent === 'off' && document.getElementById('s-retention').value !== '');
+    assert.equal(await page.innerText('#s-kill-state'), 'off');
+    assert.equal(await page.isChecked('#s-kill-aborts'), true);
+    let puts = 0;
+    const count = (r) => { if (r.method() === 'PUT' && r.url().endsWith('/api/admin/v1/settings')) puts += 1; };
+    page.on('request', count);
+    const box = page.locator('dialog.box[open]');
+    try {
+      await page.click('#s-kill-switch');
+      await box.waitFor();
+      assert.match(await box.innerText(), /Turn on the kill switch\?/);
+      await box.locator('[data-confirm-cancel]').click();
+      await box.waitFor({ state: 'detached' });
+      assert.equal(await page.innerText('#s-kill-state'), 'off');
+      assert.equal(puts, 0, 'Cancel sends nothing');
+      // On: the box says what happens to the running replies, the switch saves, and the status bar follows within one poll.
+      await page.click('#s-kill-switch');
+      await box.waitFor();
+      assert.match(await box.innerText(), /Running replies will be stopped\./);
+      await box.locator('[data-confirm-action]').click();
+      await box.waitFor({ state: 'detached' });
+      await page.waitForFunction(() => document.getElementById('s-kill-state').textContent === 'on');
+      assert.equal(await page.innerText('#s-kill-switch'), 'Turn off kill switch');
+      assert.equal(puts, 1);
+      await page.waitForFunction(() => document.querySelector('#sb-kill .status-word').textContent === 'Kill: on', null, { timeout: K.STATUS_EVERY_SECS * 3000 });
+      // The option "also stop the running replies" is a setting of its own: saved by its Save bar, never by the switch.
+      await page.uncheck('#s-kill-aborts');
+      await page.waitForSelector('#kill-form-save-bar:not([hidden])');
+      await page.click('#kill-form-save-bar [data-save-submit]');
+      await page.waitForSelector('#kill-form-save-bar', { state: 'hidden' });
+      assert.equal(puts, 2, 'the option is saved by its own PUT');
+      await page.click('#s-kill-switch');
+      await box.waitFor();
+      assert.match(await box.innerText(), /Replies start again for everyone\./);
+      await box.locator('[data-confirm-action]').click();
+      await box.waitFor({ state: 'detached' });
+      await page.waitForFunction(() => document.getElementById('s-kill-state').textContent === 'off');
+      await page.waitForFunction(() => document.querySelector('#sb-kill .status-word').textContent === 'Kill: off', null, { timeout: K.STATUS_EVERY_SECS * 3000 });
+      assert.equal(await page.isChecked('#s-kill-aborts'), false, 'the choice stays');
+      assert.equal(puts, 3);
+    } finally {
+      page.off('request', count);
+      // Whatever failed above, the switch is left off for the later steps.
+      await page.evaluate(async () => {
+        const h = { 'X-Askbar-Admin': '1', 'Content-Type': 'application/json' };
+        const s = await (await fetch('/api/admin/v1/settings', { headers: h })).json();
+        if (s.kill_switch) await fetch('/api/admin/v1/settings', { method: 'PUT', headers: h, body: JSON.stringify({ system_prompt: s.system_prompt, display: s.display, kill_switch: false }) });
+      });
+    }
+    // The choice was saved by its own Save: reload and it is kept, the switch is still off.
+    await openPage('providers');
+    await openPage('security');
+    await page.waitForFunction(() => document.getElementById('s-kill-aborts').checked === false);
+    assert.equal(await page.innerText('#s-kill-state'), 'off');
+    // Back to the default: aborts on, saved by its own Save.
+    await page.check('#s-kill-aborts');
+    await page.click('#kill-form-save-bar [data-save-submit]');
+    await page.waitForSelector('#kill-form-save-bar', { state: 'hidden' });
+  });
+  await step('the "also stop the replies that are running" option is a setting saved by the Save bar: its own bar and label, one PUT with only that field changed, Discard restores, and the kill switch never uses an unsaved tick', async () => {
+    const stored = () => page.evaluate(async () => (await fetch('/api/admin/v1/settings', { headers: { 'x-askbar-admin': '1' } })).json());
+    const bodies = [];
+    const grab = (r) => { if (r.method() === 'PUT' && r.url().endsWith('/api/admin/v1/settings')) bodies.push(JSON.parse(r.postData())); };
+    await openPage('security');
+    await page.waitForFunction(() => document.getElementById('s-retention').value !== '');
+    const was = await stored();
+    assert.equal(was.kill_switch_aborts_running, true, 'the default is on');
+    const bar = '#kill-form-save-bar';
+    assert.equal(await page.isVisible(bar), false, 'no bar at rest');
+    // Tick (here: untick) and the bar appears with the right label.
+    await page.uncheck('#s-kill-aborts');
+    await page.waitForSelector(bar + ':not([hidden])');
+    assert.equal((await page.innerText(bar + ' [data-save-text]')).trim(), '1 unsaved change: Also stop the replies that are running');
+    assert.equal(await page.isVisible('#seal-form-save-bar'), false, 'the other form has no bar');
+    // Discard restores it.
+    await page.click(bar + ' [data-save-discard]');
+    assert.equal(await page.isChecked('#s-kill-aborts'), true);
+    await page.waitForSelector(bar, { state: 'hidden' });
+    // Save: one PUT, the stored fields as they are with only this one changed.
+    page.on('request', grab);
+    try {
+      await page.uncheck('#s-kill-aborts');
+      await page.waitForSelector(bar + ':not([hidden])');
+      await page.click(bar + ' [data-save-submit]');
+      await page.waitForSelector(bar, { state: 'hidden' });
+    } finally { page.off('request', grab); }
+    assert.equal(bodies.length, 1);
+    assert.deepEqual(bodies[0], { system_prompt: was.system_prompt, display: was.display, kill_switch_aborts_running: false });
+    const after = await stored();
+    for (const f of Object.keys(was)) if (f !== 'kill_switch_aborts_running') assert.deepEqual(after[f], was[f], f + ' is unchanged');
+    assert.equal(after.kill_switch_aborts_running, false);
+    await page.waitForSelector(bar, { state: 'hidden' });
+    await openPage('providers');
+    await openPage('security');
+    await page.waitForFunction(() => document.getElementById('s-kill-aborts').checked === false);
+    // The kill switch uses the SAVED value (off) and says so; an unsaved tick is not sent and the confirmation mentions it.
+    await page.check('#s-kill-aborts');
+    await page.waitForSelector(bar + ':not([hidden])');
+    // The exactly-one-accent-button rule holds with this bar showing: the Save is the only filled button.
+    const filled = await page.evaluate(() => {
+      const p = document.createElement('div');
+      p.style.backgroundColor = 'var(--accent)';
+      document.body.append(p);
+      const accent = getComputedStyle(p).backgroundColor;
+      p.remove();
+      const vis = (e) => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0 && !e.closest('[hidden]'); };
+      return [...document.querySelectorAll('button, a.btn')].filter(vis).filter((e) => getComputedStyle(e).backgroundColor === accent).map((e) => e.textContent.trim());
+    });
+    assert.deepEqual(filled, ['Save'], 'only the Save bar button is accent-filled');
+    const box = page.locator('dialog.box[open]');
+    const kills = [];
+    const grabKill = (r) => { if (r.method() === 'PUT' && r.url().endsWith('/api/admin/v1/settings')) kills.push(JSON.parse(r.postData())); };
+    page.on('request', grabKill);
+    try {
+      await page.click('#s-kill-switch');
+      await box.waitFor();
+      const text = await box.innerText();
+      assert.match(text, /Running replies will finish\./);
+      assert.match(text, /unsaved change to "Also stop the replies that are running" is not used until it is saved/);
+      await box.locator('[data-confirm-action]').click();
+      await box.waitFor({ state: 'detached' });
+      await page.waitForFunction(() => document.getElementById('s-kill-state').textContent === 'on');
+      assert.equal(kills.length, 1);
+      assert.equal(kills[0].kill_switch, true);
+      assert.equal(kills[0].kill_switch_aborts_running, false, 'the stored value, not the unsaved tick');
+      assert.equal(await page.isChecked('#s-kill-aborts'), true, 'the unsaved tick is still there');
+      assert.equal(await page.isVisible(bar), true, 'and still unsaved');
+      assert.equal((await stored()).kill_switch_aborts_running, false);
+      // Turning it off again asks plainly and does not carry the tick either.
+      await page.click('#s-kill-switch');
+      await box.waitFor();
+      await box.locator('[data-confirm-action]').click();
+      await box.waitFor({ state: 'detached' });
+      await page.waitForFunction(() => document.getElementById('s-kill-state').textContent === 'off');
+      assert.equal(kills[1].kill_switch, false);
+      assert.equal(kills[1].kill_switch_aborts_running, false);
+    } finally {
+      page.off('request', grabKill);
+      await page.evaluate(async () => {
+        const h = { 'X-Askbar-Admin': '1', 'Content-Type': 'application/json' };
+        const s = await (await fetch('/api/admin/v1/settings', { headers: h })).json();
+        await fetch('/api/admin/v1/settings', { method: 'PUT', headers: h, body: JSON.stringify({ system_prompt: s.system_prompt, display: s.display, kill_switch: false, kill_switch_aborts_running: true }) });
+      });
+    }
+    await page.click(bar + ' [data-save-discard]');
+    await openPage('providers');
+    await openPage('security');
+    await page.waitForFunction(() => document.getElementById('s-kill-aborts').checked === true);
+  });
+  await step('notifications: not set up shows a banner; ntfy settings are saved, tested and removed, and never shown again (ADR 0055)', async () => {
     const TOPIC = 'e2e-topic-' + 'q7x9k2';
     const TOKEN = 'e2e-token-' + 'm4p8z1';
     const sink = (p, method = 'GET') => new Promise((resolve, reject) => {
       const req = http.request({ host: '127.0.0.1', port: ntfyPort, path: p, method }, (res) => { let b = ''; res.on('data', (c) => (b += c)); res.on('end', () => resolve(b)); });
       req.on('error', reject); req.end();
     });
-    await openSettings();
+    await openPage('notifications');
     await page.waitForSelector('#alerts-form');
-    await page.waitForFunction(() => !document.getElementById('alerts-banner').hidden);
-    assert.match(await page.innerText('#alerts-banner'), /Alerts are not set up/);
+    await page.waitForSelector('#banners [data-banner="alerts"]');
+    assert.match(await page.innerText('#banners [data-banner="alerts"]'), /Alerts are not set up/);
     assert.equal(await page.innerText('#a-held-topic'), 'no');
     // A test with nothing set up says so, and sends nothing.
     await page.click('#a-test');
@@ -716,12 +1973,12 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.fill('#a-server', 'http://127.0.0.1:' + ntfyPort);
     await page.fill('#a-topic', TOPIC);
     await page.fill('#a-token', TOKEN);
-    await page.click('#alerts-form button[type=submit]');
+    await page.click('#alerts-form-save-bar [data-save-submit]');
     await page.waitForFunction(() => document.getElementById('a-held-topic').textContent === 'yes');
     assert.equal(await page.innerText('#a-held-token'), 'yes');
     assert.equal(await page.inputValue('#a-topic'), '');
     assert.equal(await page.inputValue('#a-token'), '');
-    await page.waitForFunction(() => document.getElementById('alerts-banner').hidden);
+    await page.waitForSelector('#banners [data-banner="alerts"]', { state: 'detached' });
     // A test alert is delivered to the sink, on the topic, with the token, and the page says so.
     await page.click('#a-test');
     await page.waitForFunction(() => /ntfy: delivered/.test(document.getElementById('a-result').textContent));
@@ -742,23 +1999,23 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     page.once('dialog', (d) => d.accept());
     await page.click('#a-remove');
     await page.waitForFunction(() => document.getElementById('a-held-topic').textContent === 'no');
-    await page.waitForFunction(() => !document.getElementById('alerts-banner').hidden);
-    assert.match(await page.innerText('#alerts-banner'), /Alerts are not set up/);
+    await page.waitForSelector('#banners [data-banner="alerts"]');
+    assert.match(await page.innerText('#banners [data-banner="alerts"]'), /Alerts are not set up/);
   });
-  await step('alerts: email is saved, tested, kept when ntfy changes, and the password is never shown again (ADR 0055)', async () => {
+  await step('notifications: email is saved, tested, kept when ntfy changes, and the password is never shown again (ADR 0055)', async () => {
     const PASSWORD = 'e2e-mail-pass-' + 'v5c2n8';
     const USER = 'e2e-mail-user-' + 'h3t6w0';
     const mail = (p, method = 'GET') => new Promise((resolve, reject) => {
       const req = http.request({ host: '127.0.0.1', port: smtpSeenPort, path: p, method }, (res) => { let b = ''; res.on('data', (c) => (b += c)); res.on('end', () => resolve(b)); });
       req.on('error', reject); req.end();
     });
-    await openSettings();
+    await openPage('notifications');
     await page.waitForSelector('#email-form');
     assert.equal(await page.innerText('#m-held-host'), 'no');
     // ntfy is set up again first, so a test goes through both channels.
     await page.fill('#a-server', 'http://127.0.0.1:' + ntfyPort);
     await page.fill('#a-topic', 'e2e-topic-q7x9k2');
-    await page.click('#alerts-form button[type=submit]');
+    await page.click('#alerts-form-save-bar [data-save-submit]');
     await page.waitForFunction(() => document.getElementById('a-held-topic').textContent === 'yes');
     // A password without TLS is refused, and the sentence names no value.
     await page.fill('#m-host', '127.0.0.1');
@@ -768,7 +2025,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.fill('#m-password', PASSWORD);
     await page.fill('#m-from', 'askbar@example.com');
     await page.fill('#m-to', 'owner@example.com');
-    await page.click('#email-form button[type=submit]');
+    await page.click('#email-form-save-bar [data-save-submit]');
     await page.waitForFunction(() => !document.getElementById('m-error').hidden);
     const refusal = await page.innerText('#m-error');
     assert.ok(!refusal.includes(PASSWORD) && !refusal.includes(USER), 'the refusal repeats a value');
@@ -776,7 +2033,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     // Without the login it is saved; the fields empty and the page shows a yes or a no.
     await page.fill('#m-user', '');
     await page.fill('#m-password', '');
-    await page.click('#email-form button[type=submit]');
+    await page.click('#email-form-save-bar [data-save-submit]');
     await page.waitForFunction(() => document.getElementById('m-held-host').textContent === 'yes');
     assert.equal(await page.innerText('#m-held-login'), 'no');
     assert.equal(await page.inputValue('#m-host'), '');
@@ -797,7 +2054,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     // Saving ntfy again does not touch email.
     await page.fill('#a-server', 'http://127.0.0.1:' + ntfyPort);
     await page.fill('#a-topic', 'e2e-topic-q7x9k2');
-    await page.click('#alerts-form button[type=submit]');
+    await page.click('#alerts-form-save-bar [data-save-submit]');
     await page.waitForFunction(() => document.getElementById('a-held-topic').textContent === 'yes');
     assert.equal(await page.innerText('#m-held-host'), 'yes');
     // Nothing on the page holds the password or the user name.
@@ -813,6 +2070,54 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.click('#a-remove');
     await page.waitForFunction(() => document.getElementById('a-held-topic').textContent === 'no');
   });
+  await step('notifications: General holds no delivery fields, and the menu lists Notifications after Backup', async () => {
+    await openPage('general');
+    await page.waitForSelector('#settings-form');
+    assert.equal(await page.locator('#alerts-form, #email-form, #alerts-test-form, #a-server, #m-host').count(), 0, 'General has no delivery fields');
+    const menu = await page.$$eval('#nav a[data-tab]', (as) => as.map((a) => [a.dataset.tab, a.textContent.trim()]));
+    const at = menu.findIndex(([slug]) => slug === 'backup');
+    assert.deepEqual(menu.slice(at, at + 2).map(([slug, label]) => [slug, label]), [['backup', 'Backup'], ['notifications', 'Notifications']]);
+  });
+  await step('settings: the first section of a settings page has no top rule (the page header has the line)', async () => {
+    for (const slug of ['general', 'network', 'security', 'backup', 'notifications']) {
+      await openPage(slug);
+      const top = await page.evaluate(() => { const n = document.querySelector('#main .sec-sec, #main .net-sec'); return n ? getComputedStyle(n).borderTopWidth : 'no section'; });
+      assert.equal(top, '0px', slug + ': the first section has no top border');
+    }
+  });
+  await step('notifications: page-wide banners are greyed: critical ones checked and aria-disabled (not disabled), inert on click, Space and Enter', async () => {
+    await openPage('notifications');
+    await page.waitForSelector('#bn-offline');
+    const boxes = ['bn-offline', 'bn-rejected', 'bn-chain', 'bn-alerts', 'bn-unsealed'];
+    const read = () => page.evaluate((ids) => ids.map((id) => { const i = document.getElementById(id); return [id, i.checked, i.getAttribute('aria-disabled'), i.disabled]; }), boxes);
+    const critical = ['bn-offline', 'bn-rejected', 'bn-chain'];
+    const before = await read();
+    for (const [id, checked, aria, disabled] of before) {
+      assert.equal(aria, 'true', id + ' is aria-disabled');
+      assert.equal(disabled, false, id + ' is not disabled, so keyboard focus can stay on the group');
+      if (critical.includes(id)) assert.equal(checked, true, id + ' is checked (critical, always shown)');
+    }
+    const group = page.locator('section[aria-labelledby="banners-title"] .na');
+    assert.equal(await group.getAttribute('tabindex'), '0', 'the greyed section is a Tab stop');
+    assert.equal(await group.getAttribute('aria-disabled'), 'true');
+    await group.focus();
+    assert.equal(await page.evaluate(() => document.activeElement.classList.contains('na')), true, 'the greyed section takes focus');
+    await page.keyboard.press('Enter');
+    await page.keyboard.press(' ');
+    await page.click('#bn-offline', { force: true });
+    await page.click('label:has(#bn-alerts)', { force: true });
+    assert.deepEqual(await read(), before, 'nothing changes on Enter, Space or click');
+    await page.keyboard.press('Tab');
+    assert.equal(await page.evaluate(() => document.activeElement.matches('section[aria-labelledby="banners-title"] input')), false, 'Tab leaves the greyed section without stopping on its checkboxes');
+    const greyed = await page.$eval('section[aria-labelledby="banners-title"] .na', (n) => n.innerText);
+    assert.doesNotMatch(greyed, /\d/, 'no digits in greyed text');
+    const main = await page.$eval('#main', (m) => m.innerText);
+    assert.doesNotMatch(main, /audit_disk|backup_missed|restore_performed|component_silent|caddy_silent|restart_loop|chain_mismatch|rejected_token/, 'no alert-kind list on the page');
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), true, 'no sideways scroll');
+    const small = await page.evaluate((min) => [...document.querySelectorAll('#main button, #main a.btn, #main input:not([type=checkbox]), #main select, #main label.check')]
+      .map((t) => t.getBoundingClientRect()).filter((r) => r.height > 0 && (r.height < min || r.width < min)).length, isPhone ? 44 : 24);
+    assert.equal(small, 0, 'every target on the notifications page is big enough');
+  });
   await step('network: hostname, token and networks are saved; the token is write-only', async () => {
     const CF = 'cf_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     await openPage('network');
@@ -822,18 +2127,18 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.fill('#n-token', CF);
     await page.fill('#n-cidr', '192.168.1.0/24');
     assert.equal(await page.isChecked('#n-allow'), false, 'the allowlist starts off');
-    await page.click('#network-form button[type=submit]');
+    await page.click('#network-form-save-bar [data-save-submit]');
     await page.waitForSelector('#network-error:not([hidden])');
     assert.match(await page.innerText('#network-error'), /plain DNS name/);
     await page.fill('#n-host', 'askbar.orraitu.com');
     await page.check('#n-staging');
-    await page.click('#network-form button[type=submit]');
-    await page.waitForSelector('#flash:not([hidden])');
-    assert.match(await page.innerText('#flash'), /Network settings saved/);
+    await page.click('#network-form-save-bar [data-save-submit]');
+    await page.waitForSelector('#toasts .toast');
+    assert.match(await page.locator('#toasts .toast').last().innerText(), /Network settings saved/);
     assert.match(await page.innerText('#n-info'), /admin site is at https:\/\/askbar\.orraitu\.com\/admin/);
     assert.match(await page.innerText('#n-info'), /pairing keys point at https:\/\/askbar\.orraitu\.com\./);
     assert.equal(await page.inputValue('#n-token'), '');
-    assert.match(await page.getAttribute('#n-token', 'placeholder'), /unchanged/);
+    assert.match(await page.innerText('#n-token-hint'), /unchanged/, 'the stored token is said to be held, never shown');
     assert.equal((await page.content()).includes(CF), false);
     await page.reload();
     await openPage('network');
@@ -844,44 +2149,44 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     assert.equal((await page.content()).includes(CF), false);
     // Back to plain HTTP so the rest of the run keeps working the same way.
     await page.uncheck('#n-tls');
-    await page.click('#network-form button[type=submit]');
+    await page.click('#network-form-save-bar [data-save-submit]');
     await page.waitForFunction(() => /point at http:\/\/localhost/.test(document.getElementById('n-info').textContent));
   });
   await step('network: HTTP-01 is chosen beside DNS, shows its warning, needs no token and refuses a private name (D19)', async () => {
     await openPage('network');
     await page.waitForFunction(() => /pairing keys point at/.test(document.getElementById('n-info').textContent));
-    assert.equal(await page.inputValue('#n-challenge'), 'dns', 'the DNS challenge is the default');
+    assert.equal(await page.$eval('input[name=n-challenge]:checked', (i) => i.value), 'dns', 'the DNS challenge is the default');
     assert.equal(await page.isVisible('#n-dns-box'), true);
     assert.equal(await page.isHidden('#n-http-note'), true);
-    await page.selectOption('#n-challenge', 'http');
+    await page.check('#n-challenge-http');
     assert.equal(await page.isHidden('#n-dns-box'), true, 'no token to enter');
     assert.match(await page.innerText('#n-http-note'), /port 80/);
     assert.match(await page.innerText('#n-http-note'), /cannot work for a name that only resolves inside your network/);
     // A name that only resolves inside the network is refused, with the way out.
     await page.check('#n-tls');
     await page.fill('#n-host', 'nas.local');
-    await page.click('#network-form button[type=submit]');
+    await page.click('#network-form-save-bar [data-save-submit]');
     await page.waitForSelector('#network-error:not([hidden])');
     assert.match(await page.innerText('#network-error'), /looks private.*DNS challenge/);
     // A public name is saved with no token entered, and the choice survives a reload.
     await page.fill('#n-host', 'askbar.orraitu.com');
-    await page.click('#network-form button[type=submit]');
-    await page.waitForSelector('#flash:not([hidden])');
+    await page.click('#network-form-save-bar [data-save-submit]');
+    await page.waitForSelector('#toasts .toast');
     assert.match(await page.innerText('#n-info'), /admin site is at https:\/\/askbar\.orraitu\.com\/admin/);
     await page.reload();
     await openPage('network');
     await page.waitForFunction(() => document.getElementById('n-host').value === 'askbar.orraitu.com');
-    assert.equal(await page.inputValue('#n-challenge'), 'http');
+    assert.equal(await page.$eval('input[name=n-challenge]:checked', (i) => i.value), 'http');
     assert.equal(await page.isHidden('#n-dns-box'), true);
     // Back to DNS: the token box is back, and the token stored earlier is still held.
-    await page.selectOption('#n-challenge', 'dns');
+    await page.check('#n-challenge-dns');
     assert.equal(await page.isVisible('#n-dns-box'), true);
-    assert.match(await page.getAttribute('#n-token', 'placeholder'), /unchanged/);
+    assert.match(await page.innerText('#n-token-hint'), /unchanged/, 'the stored token is said to be held, never shown');
     // Leave things as the next steps expect: plain HTTP, the DNS challenge.
     await page.uncheck('#n-tls');
-    await page.click('#network-form button[type=submit]');
+    await page.click('#network-form-save-bar [data-save-submit]');
     await page.waitForFunction(() => /point at http:\/\/localhost/.test(document.getElementById('n-info').textContent));
-    assert.equal(await page.inputValue('#n-challenge'), 'dns');
+    assert.equal(await page.$eval('input[name=n-challenge]:checked', (i) => i.value), 'dns');
   });
   await step('backup downloads an encrypted bundle: a manifest, the protected key and the admin\'s and the server\'s exports, none of it readable (ADR 0013)', async () => {
     await openPage('backup');
@@ -917,18 +2222,22 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       assert.equal(bytes.includes(secret), false, 'the bundle holds ' + secret);
     }
   });
-  await step('restore: this install is not empty, so the backup it just made is refused with a sentence and nothing changes (ADR 0013)', async () => {
+  await step('backup restore: this install is not empty, so the backup it just made is refused with a sentence and nothing changes (ADR 0013)', async () => {
     // A restore is for a new install: the bundle from the step above is checked, and the used install refuses it.
-    await openPage('restore');
+    // Restore is a section of Backup now (plan step 5.3); the old address redirects there, query and all.
+    const old = await page.request.get(`http://127.0.0.1:${adminPort}/admin/restore/?from=old`, { maxRedirects: 0 });
+    assert.equal(old.status(), 303);
+    assert.equal(old.headers()['location'], '/admin/backup/?from=old');
+    await openPage('backup');
     assert.equal(await page.isHidden('#restore-form'), true, 'the passphrase is not asked for before the backup is checked');
     await page.setInputFiles('#restore-file', path.join(data, 'downloaded.tar'));
     await page.click('#restore-upload-form button[type=submit]');
     await page.waitForSelector('#restore-error:not([hidden])');
     assert.match(await page.innerText('#restore-error'), /only be restored into an empty install/);
     assert.equal(await page.isHidden('#restore-form'), true);
-    // The Backup page points here, and the first-run screen has the same link (the audit step shows it).
-    await openPage('backup');
-    assert.equal(await page.locator('#tab-backup a[href="/admin/restore/"]').count(), 1);
+    // The menu has no Restore item, and the Backup page's link opens the section (the first-run screen has the same link).
+    assert.equal(await page.locator('#nav a[data-tab="restore"]').count(), 0, 'no Restore item in the menu');
+    assert.equal(await page.locator('#tab-backup a[href="#restore-section"]').count(), 1);
   });
   await step('backup: the destination, "Back up now", the limits and the drill reminder work and show only text (ADR 0013, D27 to D29)', async () => {
     await openPage('backup');
@@ -937,7 +2246,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     // The test directory is on the same disk as the admin's data, and the page says so.
     assert.match(await page.innerText('#sched-warn'), /same disk as Askbar/);
     await page.click('#sched-run');
-    await page.waitForFunction(() => /^Backup made: askbar-backup-\d+\.tar$/.test(document.getElementById('flash').textContent));
+    await page.waitForFunction(() => [...document.querySelectorAll('#toasts .toast')].some((t) => /^Backup made: askbar-backup-\d+\.tar$/.test(t.textContent)));
     await page.waitForFunction(() => document.querySelectorAll('#sched-files li').length >= 1);
     assert.match(await page.innerText('#sched-last'), /Last backup: .*askbar-backup-\d+\.tar/);
     assert.match(await page.innerText('#sched-next'), /03:30 UTC/);
@@ -947,13 +2256,13 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     // The limits: a value out of range is refused with a sentence; a good one is saved and read back.
     await page.evaluate(() => { document.getElementById('schedule-form').noValidate = true; });
     await page.fill('#sched-keep-files', '0');
-    await page.click('#schedule-form button[type=submit]');
+    await page.click('#schedule-form-save-bar [data-save-submit]');
     await page.waitForSelector('#sched-limits-error:not([hidden])');
     assert.match(await page.innerText('#sched-limits-error'), /between 1 and 365/);
     await page.fill('#sched-keep-files', '3');
     await page.fill('#sched-keep-days', '14');
-    await page.click('#schedule-form button[type=submit]');
-    await page.waitForFunction(() => document.getElementById('flash').textContent === 'Saved.');
+    await page.click('#schedule-form-save-bar [data-save-submit]');
+    await page.waitForFunction(() => [...document.querySelectorAll('#toasts .toast')].some((t) => t.textContent === 'Saved.'));
     await openPage('providers');
     await openPage('backup');
     await page.waitForFunction(() => document.getElementById('sched-keep-files').value === '3');
@@ -963,7 +2272,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
   });
   // ------------------------------------------------------------------ the Audit tab
   // Against the real server: a provider whose name and model are markup, one real chat through it,
-  // then the Audit tab (#tab-audit, #audit-nav, the Requests rows, the waterfall, the Content view).
+  // then the Audit pages (#tab-audit-calls and its trace panel, #tab-audit-sealed, #tab-audit-routing).
   const XSS = '<img src=x onerror="window.__pwned=1">';
   // One real chat through the server, so there is something to look at; returns once the reply is done.
   async function auditChat(text, providerName) {
@@ -1032,7 +2341,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       const real = await (await route.fetch()).json();
       return route.fulfill({ json: hostile.map((name, i) => ({ ...real[0], id: 'p' + i, name, model: name })) });
     });
-    const NASTY = '#PANEL img, #PANEL iframe, #PANEL object, #PANEL embed, #PANEL svg, #PANEL style, #PANEL base, #PANEL meta, #PANEL form, #PANEL script, #PANEL a[href^="javascript"]';
+    const NASTY = '#PANEL img, #PANEL iframe, #PANEL object, #PANEL embed, #PANEL svg:not(.row-menu-button svg), #PANEL style, #PANEL base, #PANEL meta, #PANEL form, #PANEL script, #PANEL a[href^="javascript"]';
     const inert = async (panel, what) => {
       const r = await page.evaluate((nasty) => ({ nasty: document.querySelectorAll(nasty).length, pwned: window.__pwned }), NASTY.replaceAll('#PANEL', panel));
       assert.deepEqual(r, { nasty: 0, pwned: undefined }, what);
@@ -1040,13 +2349,13 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       assert.ok(shown.includes('<img src=x onerror=window.__pwned=1>'), what + ': the name is visible, as text');
       assert.ok(shown.includes('<script>window.__pwned=1</script> hello'), what + ': so is the script tag');
     };
-    await openPage('clients');
+    await openPage('people');
     await page.waitForSelector('#users [data-user="h0"]');
     await page.waitForSelector('#clients [data-client="c0"]');
     await inert('#users', 'users');
     await inert('#clients', 'clients');
     await openPage('providers');
-    await page.waitForSelector('#providers .card[data-name]');
+    await page.waitForSelector('#providers tr[data-name]');
     await inert('#providers', 'providers');
     await page.unroute('**/api/admin/v1/users');
     await page.unroute('**/api/admin/v1/clients');
@@ -1055,8 +2364,46 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     assert.deepEqual(external, [], 'a request left the admin site');
     await openPage('providers');
   });
-  await step('backup: the key is shown by its fingerprint, and rotating asks twice, confirms, retires the old key and never shows a passphrase (ADR 0013)', async () => {
-    await openPage('backup');
+  await step('security: the backup key pair counts live, shows the mismatch under the repeat box as you type, a mismatched submit sends nothing (ADR 0013)', async () => {
+    await openPage('security');
+    const min = await page.evaluate(async () => (await window.ui.ready).MIN_PASSPHRASE_CHARS);
+    assert.equal(await page.innerText('#bk-pass-hint'), 'At least ' + min + ' characters');
+    await page.fill('#bk-pass', 'short');
+    assert.equal(await page.innerText('#bk-pass-hint'), '5 of at least ' + min + ' characters');
+    assert.equal(await page.getAttribute('#bk-pass-hint', 'class'), 'hint', 'not yet long enough');
+    await page.fill('#bk-pass', BACKUP_PASS_2);
+    assert.equal(await page.innerText('#bk-pass-hint'), BACKUP_PASS_2.length + ' characters');
+    assert.match(await page.getAttribute('#bk-pass-hint', 'class'), /length-ok/);
+    // A mismatch: the error sits under the second field and the summary at the top of the form; no rotate request leaves the page.
+    const sent = [];
+    const seen = (req) => { if (req.url().includes('/api/admin/v1/backup/rotate-key')) sent.push(req.url()); };
+    page.on('request', seen);
+    await page.fill('#bk-pass2', BACKUP_PASS_2 + 'x');
+    await page.check('#bk-stored');
+    await page.click('#backup-key-form button[type=submit]');
+    await page.waitForSelector('#bk-pass2-error:not([hidden])');
+    assert.match(await page.innerText('#bk-pass2-error'), /do not match/);
+    assert.equal(await page.getAttribute('#bk-pass2', 'aria-invalid'), 'true');
+    assert.equal(await page.locator('#backup-key-form .error-summary').count(), 1, 'a summary at the top of the form');
+    // The stored box is part of the same check.
+    await page.fill('#bk-pass2', BACKUP_PASS_2);
+    await page.uncheck('#bk-stored');
+    await page.click('#backup-key-form button[type=submit]');
+    await page.waitForSelector('#bk-stored-error:not([hidden])');
+    assert.match(await page.innerText('#bk-stored-error'), /stored the passphrase/);
+    page.off('request', seen);
+    assert.deepEqual(sent, [], 'a refused pair sends nothing');
+    // The page keeps to the frame: no sideways scroll, every target at least 44 px on a phone (24 px otherwise).
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'no horizontal scroll');
+    const small = await page.evaluate((min) => [...document.querySelectorAll('#tab-security button, #tab-security a.btn, #tab-security input:not([type=checkbox]), #tab-security label.check')]
+      .map((t) => t.getBoundingClientRect()).filter((r) => r.height > 0 && (r.height < min || r.width < min)).length, isPhone ? 44 : 24);
+    assert.equal(small, 0, 'every target on this page is big enough');
+    // Clear the pair again so the next step starts from empty fields.
+    for (const id of ['bk-pass', 'bk-pass2']) await page.fill('#' + id, '');
+    await page.uncheck('#bk-stored');
+  });
+  await step('security: the backup key is shown by its fingerprint, and rotating asks twice, confirms, retires the old key and never shows a passphrase (ADR 0013)', async () => {
+    await openPage('security');
     await page.waitForFunction(() => /^[0-9a-f]{4}(-[0-9a-f]{4}){3}$/.test(document.getElementById('bk-fingerprint').textContent));
     const before = await page.innerText('#bk-fingerprint');
     assert.equal(await page.innerText('#bk-count'), '', 'no earlier keys');
@@ -1065,7 +2412,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.fill('#bk-pass2', BACKUP_PASS_2 + 'x');
     await page.check('#bk-stored');
     await page.click('#backup-key-form button[type=submit]');
-    assert.match(await page.innerText('#bk-error'), /do not match/);
+    assert.match(await page.innerText('#bk-pass2-error'), /do not match/);
     await page.fill('#bk-pass2', BACKUP_PASS_2);
     await page.fill('#bk-pass', AUDIT_PASS);
     await page.fill('#bk-pass2', AUDIT_PASS);
@@ -1083,7 +2430,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     const status = await page.evaluate(async () => (await fetch('/api/admin/v1/backup/key', { headers: { 'x-askbar-admin': '1' } })).text());
     assert.ok(!status.includes('AGE-SECRET-KEY') && !status.includes('protected'), 'the protected key is not returned');
   });
-  await step('audit: the tab loads, has its five views and counts a real request', async () => {
+  await step('audit tabs: the four Audit pages show the menu\'s Audit links as tabs, in order, each marking its own, and the Admin actions head is greyed', async () => {
     await page.evaluate(async ({ xss, mockUrl }) => {
       const H = { 'x-askbar-admin': '1', 'content-type': 'application/json' };
       const made = await (await fetch('/api/admin/v1/providers', { method: 'POST', headers: H, body: JSON.stringify({ name: xss, type: 'openai', base_url: mockUrl, model: xss, api_key: 'sk-audit' }) })).json();
@@ -1094,190 +2441,1177 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       if (!saved.ok) throw new Error('the catalog was refused: ' + saved.status);
     }, { xss: XSS, mockUrl: `http://127.0.0.1:${mockPort}/v1` });
     await auditChat('audit question', XSS);
-    await openPage('audit');
-    await page.waitForSelector('#tab-audit:not([hidden])');
-    const subs = await page.$$eval('#audit-nav button', (b) => b.map((x) => x.dataset.sub));
-    assert.deepEqual(subs, ['overview', 'requests', 'trace', 'routing', 'content']);
-    await page.waitForFunction(() => Number(document.querySelector('#audit-overview [data-stat="requests"]')?.textContent) >= 1);
-    assert.match(await page.innerText('#audit-by-provider'), /<img src=x/, 'the provider name is shown as text in the overview too');
+    const slugs = ['audit/calls', 'audit/admin', 'audit/sealed', 'audit/routing'];
+    const menu = await page.$$eval('#nav a.sm-sub[href^="/admin/audit/"]', (a) => a.map((x) => [x.textContent.trim(), x.getAttribute('href')]));
+    assert.deepEqual(menu.map(([, h]) => h), slugs.map((s) => '/admin/' + s + '/'), 'the menu lists the four Audit pages in order');
+    for (const slug of slugs) {
+      await openPage(slug);
+      await page.waitForSelector('#tab-' + slug.replace('/', '-') + ' nav.tabs');
+      const tabs = await page.$$eval('#tab-' + slug.replace('/', '-') + ' nav.tabs a.tab', (a) => a.map((x) => [x.textContent.trim(), x.getAttribute('href'), x.getAttribute('aria-current')]));
+      assert.deepEqual(tabs.map(([t, h]) => [t, h]), menu, slug + ': the tabs are the menu links, in order');
+      assert.deepEqual(tabs.map(([, , c]) => c), slugs.map((s) => (s === slug ? 'page' : null)), slug + ': only its own tab is current');
+      assert.equal(await page.locator('#tab-' + slug.replace('/', '-') + ' nav.tabs [disabled]').count(), 0, 'no disabled attribute on the tabs');
+      const tab = await page.locator('#tab-' + slug.replace('/', '-') + ' nav.tabs a.tab').first().boundingBox();
+      assert.ok(tab.height >= (isPhone ? 44 : 24) - 0.5, slug + ': tab target ' + tab.height);
+      // No sideways scroll at either width. A tooltip (::after) that runs past the edge counts, and is named on failure.
+      const past = await page.evaluate(() => {
+        const out = [];
+        for (const e of document.querySelectorAll('body *')) {
+          const r = e.getBoundingClientRect();
+          if (r.right > window.innerWidth + 1) out.push(e.tagName + '.' + e.className + ' right ' + Math.round(r.right));
+          const cs = getComputedStyle(e, '::after');
+          if (cs.content !== 'none' && cs.position === 'absolute') {
+            const edge = r.left + parseFloat(cs.left) + parseFloat(cs.width);
+            if (edge > window.innerWidth + 1) out.push(e.tagName + '.' + e.className + ' ::after edge ' + Math.round(edge));
+          }
+        }
+        return { scrollWidth: document.documentElement.scrollWidth, innerWidth: window.innerWidth, past: out.slice(0, 6) };
+      });
+      assert.equal(past.scrollWidth <= past.innerWidth, true, slug + ': no horizontal scroll ' + JSON.stringify(past));
+      assert.equal(await page.locator('#tab-' + slug.replace('/', '-') + ' .sm-sub, #tab-' + slug.replace('/', '-') + ' .subnav').count(), 0, 'no in-page sub-nav');
+    }
+    // Admin actions: the note, and the table head greyed with aria-disabled, with no rows and no digits.
+    await openPage('audit/admin');
+    assert.match(await page.innerText('#tab-audit-admin .notice'), /Not available yet/);
+    const heads = await page.$$eval('#admin-actions-table thead th', (h) => h.map((x) => x.querySelector('[aria-disabled="true"]')?.firstChild?.textContent || null));
+    assert.deepEqual(heads, ['Time', 'Action', 'Where', 'Result'], 'every head is greyed');
+    assert.equal(await page.locator('#admin-actions-table tbody tr').count(), 0, 'no sample rows');
+    assert.doesNotMatch(await page.innerText('#admin-actions-table thead'), /\d/, 'no digits in greyed text');
+    assert.equal(await page.locator('#tab-audit-admin [disabled]').count(), 0, 'aria-disabled, never disabled');
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'no horizontal scroll');
   });
-  await step('audit: server strings are shown as text, never as HTML, in every table', async () => {
+  await step('audit: server strings are shown as text, never as HTML, on Routing and Sealed access', async () => {
     const nothingRan = async (where) => {
-      assert.equal(await page.locator('#tab-audit img').count(), 0, where + ': no element was made from a name');
+      assert.equal(await page.locator('#main img').count(), 0, where + ': no element was made from a name');
       assert.equal(await page.evaluate(() => window.__pwned), undefined, where + ': nothing ran');
     };
-    await nothingRan('overview');
-    await page.click('#audit-nav [data-sub="requests"]');
-    await page.waitForSelector('#audit-requests tr[data-trace]');
-    assert.match(await page.innerText('#audit-requests'), /<img src=x/, 'the provider and model names are visible as text');
-    await nothingRan('requests');
-    await page.click('#audit-requests tr[data-trace]');
-    await page.waitForSelector('#audit-waterfall .span-bar');
-    assert.match(await page.innerText('#audit-waterfall'), /<img src=x/, 'the attempt is named after the provider');
-    await page.focus('#audit-waterfall .span-bar[data-span] >> nth=-1');
-    assert.match(await page.innerText('#audit-span-details'), /<img src=x/, 'the details show the model as text');
-    await nothingRan('trace');
-    await page.click('#audit-nav [data-sub="routing"]');
+    await openPage('audit/routing');
+    await page.waitForSelector('#audit-routing-rows tr');
+    assert.match(await page.innerText('#audit-routing-table'), /<img src=x/, 'the provider name is shown as text');
+    await nothingRan('routing');
+    const traceId = await page.evaluate(async () => (await (await fetch('/api/admin/v1/audit/traces?limit=1', { headers: { 'x-askbar-admin': '1' } })).json()).traces[0].trace_id);
+    await page.goto(base + 'audit/routing/?id=' + encodeURIComponent(traceId));
+    await page.waitForSelector('#app:not([hidden])');
     await page.waitForSelector('#audit-attempt-rows tr');
     assert.match(await page.innerText('#audit-attempts'), /<img src=x/);
-    await page.waitForSelector('#audit-routing-rows tr');
-    assert.match(await page.innerText('#audit-routing-table'), /<img src=x/);
-    await nothingRan('routing');
-    await page.click('#audit-nav [data-sub="content"]');
-    await page.waitForSelector('#audit-sealed .sealed-row');
-    await nothingRan('content');
+    await nothingRan('routing with a request');
+    await openPage('audit/sealed');
+    await page.waitForSelector('#audit-unseal-form:not([hidden])');
+    await nothingRan('sealed access');
   });
-  await step('audit: content stays sealed until the passphrase opens a session, and Seal closes it again', async () => {
+  await step('audit sealed access: nothing is fetched until the passphrase opens a session, a wrong one is refused inline, and Seal closes it again', async () => {
     const asked = [];
     page.on('request', (r) => { if (/audit\/payloads/.test(r.url())) asked.push(r.url()); });
-    await page.click('#audit-nav [data-sub="content"]');
-    assert.match(await page.innerText('#audit-content'), /Sealed/);
+    await openPage('audit/sealed');
+    await page.waitForSelector('#audit-unseal-form:not([hidden])');
     assert.equal(await page.getAttribute('#audit-pass', 'type'), 'password');
     assert.equal(asked.length, 0, 'nothing is fetched until a session is open');
-    // View while sealed sends you to the passphrase: nothing is fetched.
-    await page.click('#audit-content .view-btn');
-    await page.waitForSelector('#audit-pass-error:not([hidden])');
-    assert.match(await page.innerText('#audit-pass-error'), /Sealed/);
-    assert.equal(asked.length, 0);
     // A wrong passphrase opens nothing; the field is emptied.
     await page.fill('#audit-pass', 'not the passphrase at all!!');
     await page.click('#audit-unseal');
     await page.waitForFunction(() => /does not open any audit key/.test(document.getElementById('audit-pass-error').textContent));
     assert.equal(await page.inputValue('#audit-pass'), '');
-    assert.equal(await page.isHidden('#unsealed-banner'), true);
-    // The right one opens a session: a banner with the time left and a Seal button, and no more prompts.
+    assert.equal(await page.locator('#banners [data-banner="unsealed"]').count(), 0);
+    // The right one opens a session: a banner with the time left, the toggle says Unsealed, and no more prompts.
     await page.fill('#audit-pass', AUDIT_PASS);
     await page.click('#audit-unseal');
     await page.waitForSelector('#audit-open:not([hidden])');
     assert.match(await page.innerText('#audit-open-state'), /Unsealed\. It seals itself in about/);
+    assert.equal(await page.isVisible('#audit-unseal-form'), false);
     assert.equal(await page.inputValue('#audit-pass'), '', 'the passphrase field is cleared after use');
-    await page.waitForSelector('#unsealed-banner:not([hidden])', { timeout: 15000 });
-    assert.match(await page.innerText('#unsealed-text'), /Sealed content is open/);
-    await page.click('#audit-content .view-btn');
-    await page.waitForFunction(() => /Anything else\?/.test(document.getElementById('audit-viewed')?.textContent || ''));
-    assert.equal(await page.evaluate(() => JSON.stringify([...Object.entries(localStorage), ...Object.entries(sessionStorage)]).includes('passphrase')), false);
-    // The unseal is an alert in the banner area.
-    await page.waitForFunction(() => /Sealed audit content was unsealed/.test(document.getElementById('sealed-alerts').textContent), null, { timeout: 15000 });
-    // The access history: the view, the unseal, and the wrong guess, as text.
+    await page.waitForSelector('#banners [data-banner="unsealed"]', { timeout: 15000 });
+    assert.match(await page.innerText('#banners [data-banner="unsealed"]'), /Sealed content is open/);
+    assert.equal(await page.locator('#banners [data-banner="unsealed"] button').count(), 0, 'sealing lives in the status bar toggle, not the banner');
+    assert.match(await page.innerText('#sb-seal-status'), /Unsealed/);
+    assert.equal(await page.innerText('#seal-button'), 'Seal');
+    // The unseal is an alert in the bell's Info group, not a banner (rule 39: banners are for the whole admin).
+    await page.click('#bell-button');
+    await page.waitForFunction(() => /Sealed audit content was unsealed/.test(document.querySelector('#bell-menu [role="group"][aria-label="Info alerts"]')?.textContent || ''), null, { timeout: 15000 });
+    assert.equal(await page.locator('#banners [data-banner^="sealed-"]').count(), 0, 'no banner for a history alert');
+    await page.keyboard.press('Escape');
+    // The access history: the opening and the wrong guess, as text, newest first.
     await page.waitForSelector('#audit-access-rows tr');
-    const results = await page.$$eval('#audit-access-rows tr td:last-child', (c) => c.map((x) => x.textContent));
-    assert.deepEqual(results, ['opened', 'opened', 'wrong passphrase'], 'newest first');
-    // Seal: the text is gone from the page, the form is back, the banner goes.
+    const results = await page.$$eval('#audit-access-rows tr td:nth-child(4)', (c) => c.map((x) => x.textContent));
+    assert.deepEqual(results, ['opened', 'wrong passphrase'], 'newest first');
+    assert.equal(await page.locator('#audit-access-rows td.na-cell').count(), 2 * results.length, 'Ended and How it ended are greyed');
+    // Seal: the form is back, the banner goes.
     await page.click('#audit-seal');
     await page.waitForSelector('#audit-unseal-form:not([hidden])');
-    assert.equal((await page.content()).includes('Anything else?'), false, 'the opened text is gone from the page once sealed');
-    await page.waitForSelector('#unsealed-banner', { state: 'hidden', timeout: 15000 }).catch(async () => { await page.reload(); });
-    assert.equal(await page.locator('#tab-audit img').count(), 0);
+    await page.waitForSelector('#banners [data-banner="unsealed"]', { state: 'detached', timeout: 15000 }).catch(async () => { await page.reload(); });
+    assert.equal(await page.locator('#main img').count(), 0);
     assert.equal(await page.evaluate(() => window.__pwned), undefined);
   });
-  await step('audit overview: a canned stats payload fills the tiles, the day bars and the provider bars', async () => {
-    const canned = {
-      since: 0, requests: 40, by_status: { done: 36, error: 3, cancelled: 1 }, error_rate: 0.075,
-      latency_ms: { p50: 1200, p95: 5400 }, ttft_ms: { p50: 300, p95: 900 },
-      tokens: { in: 12345, out: 6789, cached: 2000 }, cost: 1.2345, cost_unknown_requests: 0,
-      by_provider: [{ provider_id: 'p-unknown', requests: 30, tokens: { in: 9000, out: 4000, cached: 0 }, cost: 0.9 }, { provider_id: 'p2', requests: 10, tokens: { in: 3345, out: 2789, cached: 2000 }, cost: null }],
-      by_day: [{ day: '2026-11-01', requests: 10, tokens: { in: 100, out: 50, cached: 0 }, cost: 0.1 }, { day: '2026-11-02', requests: 30, tokens: { in: 12245, out: 6739, cached: 2000 }, cost: 1.1345 }],
-    };
-    const asked = [];
-    await page.route('**/api/admin/v1/audit/stats*', (route) => { asked.push(route.request().url()); route.fulfill({ contentType: 'application/json', body: JSON.stringify(canned) }); });
-    await openPage('providers');
-    await openPage('audit');
-    await page.click('#audit-nav [data-sub="overview"]'); // the tab remembers the view it was last on
-    await page.waitForSelector('#audit-overview [data-stat="requests"]');
-    const stat = (k) => page.innerText(`#audit-overview [data-stat="${k}"]`);
-    assert.deepEqual(
-      [await stat('requests'), await stat('error-rate'), await stat('latency-p50'), await stat('latency-p95'), await stat('ttft-p50'), await stat('ttft-p95')],
-      ['40', '7.5%', '1.2 s', '5.4 s', '300 ms', '900 ms'],
-    );
-    assert.deepEqual([await stat('tokens-in'), await stat('tokens-out'), await stat('tokens-cached'), await stat('cost')], ['12,345', '6,789', '2,000', '1.2345']);
-    const days = await page.$$eval('#audit-days .bar-row', (rows) => rows.map((r) => [r.querySelector('.name').textContent, r.querySelector('.fill').style.width, r.querySelector('.figs').textContent]));
-    assert.deepEqual(days.map((d) => d[0]), ['2026-11-01', '2026-11-02']);
-    assert.deepEqual(days.map((d) => d[1]), ['33%', '100%'], 'bars are sized by requests, the busiest day full width');
-    assert.match(days[1][2], /30 req · 18,984 tok · 1.1345/);
-    const provs = await page.$$eval('#audit-by-provider .bar-row .figs', (n) => n.map((x) => x.textContent));
-    assert.match(provs[1], /unknown/, 'a missing price shows as unknown, not as 0');
-    // The window decides what is asked for.
-    const since = (u) => Number(new URL(u).searchParams.get('since'));
-    const now = Math.floor(Date.now() / 1000);
-    assert.ok(Math.abs(now - since(asked.at(-1)) - 86400) < 120, 'the first look is the last 24 hours');
-    await page.selectOption('#audit-window', '604800');
-    await page.waitForTimeout(200);
-    assert.ok(Math.abs(now - since(asked.at(-1)) - 7 * 86400) < 120, 'then the last 7 days');
-    await page.selectOption('#audit-window', '2592000');
-    await page.waitForTimeout(200);
-    assert.ok(Math.abs(now - since(asked.at(-1)) - 30 * 86400) < 120, 'then the last 30 days');
-    // An empty window says so instead of showing zeros.
-    await page.unroute('**/api/admin/v1/audit/stats*');
-    await page.route('**/api/admin/v1/audit/stats*', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ requests: 0, by_status: {}, error_rate: 0, latency_ms: { p50: null, p95: null }, tokens: { in: 0, out: 0, cached: 0 }, cost: 0, cost_unknown_requests: 0, by_provider: [], by_day: [] }) }));
-    await page.selectOption('#audit-window', '86400');
-    await page.waitForSelector('#audit-overview-empty:not([hidden])');
-    assert.equal(await page.isHidden('#audit-tiles'), true);
-    await page.unroute('**/api/admin/v1/audit/stats*');
-    await page.selectOption('#audit-window', '86400');
+  await step('audit calls: figures and table come from the real trail as text, greyed filters are inert, a row opens its trace in the docked panel, Esc and Back close it, and ?id= opens it on load', async () => {
+    await openPage('audit/calls');
+    await page.waitForSelector('#calls-rows tr[data-trace]');
+    await page.waitForFunction(() => Number(document.getElementById('kpi-replies').textContent.replace(/,/g, '')) >= 1);
+    assert.deepEqual(await page.$$eval('#calls-kpis .kpi .k', (k) => k.map((x) => x.textContent)), ['Replies', 'Errors', 'Tokens', 'Latency, median', 'Latency, 95th percentile']);
+    assert.deepEqual(await page.$$eval('#calls-table th', (h) => h.map((x) => x.textContent)), ['Time', 'User', 'Provider', 'Model', 'Tokens in / out', 'Duration', 'Status']);
+    assert.match(await page.innerText('#calls-table'), /<img src=x/, 'the provider and model names are visible as text');
+    assert.equal(await page.locator('#tab-audit-calls img').count(), 0, 'no element was made from a name');
+    assert.equal(await page.evaluate(() => window.__pwned), undefined);
+    assert.equal(await page.isHidden('#trace-panel'), true, 'the panel is closed until a call is chosen');
+    // Every row is one line, and a status is a word with a symbol, never colour alone.
+    const tall = await page.$$eval('#calls-rows tr', (r) => r.filter((tr) => tr.getBoundingClientRect().height > tr.querySelector('.row-link').getBoundingClientRect().height + 24).length);
+    assert.equal(tall, 0, 'one-line cells');
+    assert.equal(await page.locator('#calls-rows tr:first-child .status .status-word').count(), 1);
+
+    // Filters the trail cannot apply are greyed: aria-disabled, never disabled; Tab reaches them; Enter does nothing.
+    const greyed = page.locator('#tab-audit-calls .calls-filters .na, #tab-audit-calls .calls-toolbar .na');
+    assert.equal(await greyed.count(), 4);
+    assert.deepEqual(await greyed.evaluateAll((n) => n.map((x) => [x.getAttribute('aria-disabled'), x.tabIndex, x.hasAttribute('disabled'), x.dataset.tip.startsWith('Not available yet: ')])), Array(4).fill(['true', 0, false, true]));
+    assert.equal(await page.locator('#tab-audit-calls [disabled]').count(), 0, 'no disabled attribute on the page');
+    const before = page.url();
+    await greyed.first().focus();
+    await page.keyboard.press('Enter');
+    await page.keyboard.press(' ');
+    assert.equal(page.url(), before, 'Enter on a greyed filter changes nothing');
+    assert.equal(await page.isHidden('#trace-panel'), true);
+    assert.match(await greyed.first().innerText(), /Not available yet/, 'the reason is there for a screen reader');
+
+    // A row opens the trace in the docked panel; the address holds the call.
+    const id = await page.getAttribute('#calls-rows tr[data-trace]', 'data-trace');
+    await page.click(`#calls-rows tr[data-trace="${id}"] .row-link`);
+    await page.waitForSelector('#trace-content:not([hidden])');
+    assert.equal(await page.isVisible('#trace-panel'), true);
+    assert.equal(new URL(page.url()).searchParams.get('id'), id);
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'trace-panel-title', 'focus moves to the panel');
+    assert.equal(await page.getAttribute(`#calls-rows tr[data-trace="${id}"] .row-link`, 'aria-current'), 'true');
+    assert.equal(await page.locator('#calls-rows tr.call-sel').count(), 1, 'one selected row');
+    assert.equal(await page.innerText('#trace-id'), id);
+    assert.ok(await page.locator('#trace-waterfall .span-bar').count() >= 2, 'the spans are drawn');
+    await page.focus('#trace-waterfall .span-bar[data-span] >> nth=-1');
+    assert.match(await page.innerText('#trace-span-details'), /<img src=x/, 'the details show the model as text');
+    assert.match(await page.innerText('#trace-meta'), /<img src=x/);
+    assert.equal(await page.locator('#trace-panel img').count(), 0);
+    assert.equal(await page.evaluate(() => window.__pwned), undefined);
+    assert.deepEqual(await page.evaluate(() => (document.documentElement.scrollWidth <= window.innerWidth ? [] : [...document.querySelectorAll('body *')].filter((e) => e.getBoundingClientRect().right > window.innerWidth + 1).slice(0, 5).map((e) => e.tagName + '#' + e.id + '.' + e.className))), [], 'no sideways scroll with the panel open');
+    // The old detail pane is gone from the page.
+    assert.equal(await page.locator('#audit-nav, #audit-trace, #audit-waterfall').count(), 0);
+
+    // Esc closes it, and the address forgets it.
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('#trace-panel', { state: 'hidden' });
+    await page.waitForFunction(() => !location.search.includes('id='));
+    assert.equal(await page.locator('#calls-rows tr.call-sel').count(), 0, 'nothing selected any more');
+    // Back closes it too.
+    await page.click(`#calls-rows tr[data-trace="${id}"] .row-link`);
+    await page.waitForSelector('#trace-content:not([hidden])');
+    await page.goBack();
+    await page.waitForSelector('#trace-panel', { state: 'hidden' });
+    assert.match(page.url(), /\/admin\/audit\/calls\/$/, 'Back stays on the page');
+    // The address alone opens it, and Esc closes it again.
+    await page.goto(base + 'audit/calls/?id=' + encodeURIComponent(id));
+    await page.waitForSelector('#app:not([hidden])');
+    await page.waitForSelector('#trace-content:not([hidden])');
+    assert.equal(await page.innerText('#trace-id'), id);
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('#trace-panel', { state: 'hidden' });
+    await page.waitForFunction(() => !location.search.includes('id='));
+    // A call that is not in the trail says so inside the panel.
+    await page.goto(base + 'audit/calls/?id=no-such-call');
+    await page.waitForSelector('#trace-error:not([hidden])');
+    assert.match(await page.innerText('#trace-error'), /not in the audit trail/);
+    await page.keyboard.press('Escape');
+    // The page keeps to the frame: targets are big enough (44 px on a phone).
+    await page.goto(base + 'audit/calls/?id=' + encodeURIComponent(id));
+    await page.waitForSelector('#trace-content:not([hidden])');
+    const small = await page.evaluate((min) => [...document.querySelectorAll('#tab-audit-calls button, #tab-audit-calls select, #tab-audit-calls .na, #trace-panel button')]
+      .map((t) => t.getBoundingClientRect()).filter((r) => r.height > 0 && (r.height < min || r.width < min)).length, isPhone ? 44 : 24);
+    assert.equal(small, 0, 'every target on this page is big enough');
+    // axe, with the panel open (a copy of the page in a context that lets axe in).
+    const axeCtx = await browser.newContext({ reducedMotion: 'reduce', viewport, bypassCSP: true, storageState: await ctx.storageState() });
+    try {
+      const ap = await axeCtx.newPage();
+      await ap.goto(base + 'audit/calls/?id=' + encodeURIComponent(id));
+      await ap.waitForSelector('#trace-content:not([hidden])');
+      await ap.waitForSelector('#calls-rows tr[data-trace]');
+      await ap.addScriptTag({ content: fs.readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8') });
+      const found = await ap.evaluate(async () => (await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'] } })).violations.map((v) => v.id + ': ' + v.nodes.map((n) => n.target.join(' ')).join(', ')));
+      assert.deepEqual(found, [], 'axe on Model calls with the trace open');
+    } finally { await axeCtx.close(); }
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('#trace-panel', { state: 'hidden' });
   });
-  await step('audit requests: a canned list fills the table, filters and load-more ask for the right pages', async () => {
-    const row = (n, extra = {}) => ({ trace_id: 'T' + String(n).padStart(3, '0'), span_id: 's' + n, status: 'done', started_at: 1793631845 - n, ended_at: 1793631846 - n, user_id: 'user-1', client_id: 'd', tokens_in: 100, tokens_out: 50, tokens_cached: 0, error_code: null, provider_id: 'pA', model: 'model-' + n, ttft_ms: 200, latency_ms: 1500, cost: 0.0007, ...extra });
-    const first = Array.from({ length: 25 }, (_, i) => row(100 - i));
-    const second = Array.from({ length: 15 }, (_, i) => row(75 - i));
-    const asked = [];
+  await step('audit calls (canned): the figures, filters in the address, load more, and a live refresh that keeps the open panel and its row', async () => {
+    const K = await page.evaluate(() => window.ui.ready);
+    const now = Math.floor(Date.now() / 1000);
+    const row = (n, extra = {}) => ({ trace_id: 'T' + String(n).padStart(3, '0'), span_id: 's' + n, status: 'done', started_at: now - 60 - (200 - n), ended_at: now - 59 - (200 - n), user_id: 'user-1', client_id: 'd', tokens_in: 100, tokens_out: 50, tokens_cached: 0, error_code: null, provider_id: 'pA', model: 'model-' + n, ttft_ms: 200, latency_ms: 1500, cost: 0.0007, ...extra });
+    const size = K.AUDIT_PAGE_SIZE;
+    const first = Array.from({ length: size }, (_, i) => row(100 - i));
+    const second = Array.from({ length: 15 }, (_, i) => row(100 - size - i));
+    let head = [];
+    const askedList = [];
+    const askedStats = [];
+    const canned = { requests: 40, by_status: { done: 36, error: 2, timed_out: 1, cancelled: 1 }, error_rate: 0.075, latency_ms: { p50: 1200, p95: 5400 }, ttft_ms: { p50: 300, p95: 900 }, tokens: { in: 12345, out: 6789, cached: 2000 }, cost: 1.2345, cost_unknown_requests: 0, by_provider: [], by_day: [] };
+    await page.route('**/api/admin/v1/audit/stats*', (route) => { askedStats.push(route.request().url()); route.fulfill({ contentType: 'application/json', body: JSON.stringify(canned) }); });
     await page.route('**/api/admin/v1/audit/traces?*', (route) => {
       const q = new URL(route.request().url()).searchParams;
-      asked.push(Object.fromEntries(q));
-      let traces = first;
-      if (q.get('before') === 'T076') traces = second;
+      askedList.push(Object.fromEntries(q));
+      let traces = [...head, ...first];
+      if (q.get('before') === first[first.length - 1].trace_id) traces = second;
       if (q.get('status') === 'error') traces = [row(5, { status: 'error', error_code: 'http_401', tokens_in: null, tokens_out: null, cost: null })];
-      if (q.get('provider') === 'pNone') traces = [];
       route.fulfill({ contentType: 'application/json', body: JSON.stringify({ traces }) });
     });
-    await openPage('providers');
-    await openPage('audit');
-    await page.click('#audit-nav [data-sub="requests"]');
-    await page.waitForSelector('#audit-rows tr[data-trace]');
-    assert.deepEqual(asked[asked.length - 1], { limit: '25' }, 'no filters, no cursor');
-    assert.equal(await page.locator('#audit-rows tr').count(), 25);
-    const heads = await page.$$eval('#audit-table th', (h) => h.map((x) => x.textContent));
-    assert.deepEqual(heads, ['Time', 'User', 'Provider', 'Model', 'Status', 'Latency', 'Tokens (in → out)', 'Cost']);
-    const cells = await page.$$eval('#audit-rows tr:first-child td', (c) => c.map((x) => x.textContent));
-    assert.deepEqual(cells.slice(1), ['user-1', 'pA', 'model-100', 'done', '1.5 s', '100 → 50', '0.0007']);
+    await page.route('**/api/admin/v1/audit/traces/*', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ trace_id: route.request().url().split('/').pop(), cost: null, spans: [{ id: 'x-turn', parent_id: null, kind: 'turn', name: 'chat', status: 'done', started_at: now - 10, ended_at: now - 9, user_id: 'user-1', tokens_in: 100, tokens_out: 50, attrs: {} }] }) }));
+    try {
+      // The filters in the address apply on load.
+      await page.goto(base + 'audit/calls/?status=error&provider=pA');
+      await page.waitForSelector('#app:not([hidden])');
+      await page.waitForSelector('#calls-rows tr[data-trace]');
+      assert.equal(await page.inputValue('#calls-status'), 'error');
+      assert.equal(await page.inputValue('#calls-provider'), 'pA', 'a provider named in the address filters even when it is not in the list');
+      assert.deepEqual(askedList[askedList.length - 1], { status: 'error', provider: 'pA', limit: String(size) });
+      assert.equal(await page.locator('#calls-rows tr').count(), 1);
+      const cells = await page.$$eval('#calls-rows tr:first-child td', (c) => c.map((x) => x.textContent.trim()));
+      assert.deepEqual([cells[1], cells[3], cells[4], cells[5], cells[6]], ['user-1', 'model-5', '–', '1.5 s', 'error']);
+      assert.equal(await page.locator('#calls-rows tr.call-err').count(), 1, 'a failed call is tinted');
+      assert.equal(await page.isHidden('#calls-more'), true, 'a short page means nothing more');
+      // The figures come from the stats read for the range.
+      assert.deepEqual(await page.$$eval('#calls-kpis .kpi .v', (v) => v.map((x) => x.textContent)), ['40', '3', '19,134', '1.2 s', '5.4 s']);
+      assert.equal(await page.locator('#kpi-errors.bad').count(), 1);
+      const since = (u) => Number(new URL(u).searchParams.get('since'));
+      assert.ok(Math.abs(Math.floor(Date.now() / 1000) - since(askedStats.at(-1)) - 86400) < 120, 'the first range is the last 24 hours');
 
-    // Load more asks for the page after the last row shown, and appends; a short page ends it.
-    await page.click('#audit-more');
-    await page.waitForFunction(() => document.querySelectorAll('#audit-rows tr').length === 40);
-    assert.equal(asked[asked.length - 1].before, 'T076');
-    assert.equal(await page.isHidden('#audit-more'), true, 'fewer than a full page means no more');
-    assert.equal(await page.locator('#audit-rows tr:last-child td:nth-child(4)').innerText(), 'model-61');
+      // A filter changed on the page changes the address, and starts again from the newest call.
+      await page.selectOption('#calls-status', '');
+      await page.waitForFunction((n) => document.querySelectorAll('#calls-rows tr').length === n, size);
+      assert.equal(new URL(page.url()).searchParams.has('status'), false);
+      assert.equal(new URL(page.url()).searchParams.get('provider'), 'pA', 'the other filter stays');
+      assert.deepEqual(askedList[askedList.length - 1], { provider: 'pA', limit: String(size) });
+      assert.equal(await page.innerText('#calls-count'), 'Showing ' + size + ' calls');
+      await page.selectOption('#calls-status', 'timed_out');
+      assert.equal(new URL(page.url()).searchParams.get('status'), 'timed_out', 'the address holds the auditor\'s code');
+      await page.selectOption('#calls-status', '');
+      await page.waitForFunction((n) => document.querySelectorAll('#calls-rows tr').length === n, size);
 
-    // The status filter starts again from the top with the status in the query; a failed request has no cost.
-    await page.selectOption('#audit-f-status', 'error');
-    await page.waitForFunction(() => document.querySelectorAll('#audit-rows tr').length === 1);
-    assert.equal(asked[asked.length - 1].status, 'error');
-    assert.equal(asked[asked.length - 1].before, undefined);
-    const failed = await page.$$eval('#audit-rows tr:first-child td', (c) => c.map((x) => x.textContent));
-    assert.deepEqual(failed.slice(4), ['error', '1.5 s', '–', '–']);
-    // A filter with no matches says so.
-    await page.selectOption('#audit-f-status', '');
-    await page.waitForFunction(() => document.querySelectorAll('#audit-rows tr').length === 25);
-    await page.evaluate(() => { const o = document.createElement('option'); o.value = 'pNone'; o.textContent = 'ghost'; document.getElementById('audit-f-provider').appendChild(o); });
-    await page.selectOption('#audit-f-provider', 'pNone');
-    await page.waitForSelector('#audit-requests-empty:not([hidden])');
-    assert.match(await page.innerText('#audit-requests-empty'), /match these filters/);
-    assert.equal(asked[asked.length - 1].provider, 'pNone');
-    await page.selectOption('#audit-f-provider', '');
-    await page.waitForFunction(() => document.querySelectorAll('#audit-rows tr').length === 25);
+      // Load more asks for the page after the last row shown and appends; a short page ends it.
+      await page.click('#calls-more');
+      await page.waitForFunction((n) => document.querySelectorAll('#calls-rows tr').length === n, size + 15);
+      assert.equal(askedList[askedList.length - 1].before, first[first.length - 1].trace_id);
+      assert.equal(await page.isHidden('#calls-more'), true);
+      assert.equal(await page.innerText('#calls-count'), 'Showing ' + (size + 15) + ' calls');
 
-    // A row opens its trace (by click or keyboard).
-    await page.route('**/api/admin/v1/audit/traces/*', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ trace_id: route.request().url().split('/').pop(), cost: null, spans: [] }) }));
-    await page.click('#audit-rows tr[data-trace="T099"]');
-    assert.equal(await page.getAttribute('#audit-nav [data-sub="trace"]', 'aria-selected'), 'true');
-    await page.waitForFunction(() => /T099/.test(document.getElementById('audit-trace-head').textContent));
-    await page.click('#audit-nav [data-sub="requests"]');
-    await page.focus('#audit-rows tr[data-trace="T098"]');
-    await page.keyboard.press('Enter');
-    await page.waitForFunction(() => /T098/.test(document.getElementById('audit-trace-head').textContent));
-    await page.unroute('**/api/admin/v1/audit/traces/*');
-    await page.unroute('**/api/admin/v1/audit/traces?*');
+      // A live refresh keeps the open panel, its address and its row, and adds the new call.
+      await page.click('#calls-rows tr[data-trace="T099"] .row-link');
+      await page.waitForSelector('#trace-content:not([hidden])');
+      await page.evaluate(() => { window.__keptRow = document.querySelector('#calls-rows tr[data-trace="T099"]'); });
+      head = [row(150)];
+      await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+      await page.waitForSelector('#calls-rows tr[data-trace="T150"]');
+      assert.equal(await page.locator('#calls-rows tr').count(), size + 16, 'the loaded pages are kept under the new call');
+      assert.equal(await page.locator('#calls-rows tr.row-new').count(), 1, 'the new call is marked');
+      assert.equal(await page.isVisible('#trace-panel'), true, 'the panel stays open');
+      assert.equal(new URL(page.url()).searchParams.get('id'), 'T099');
+      assert.equal(await page.locator('#calls-rows tr.call-sel').getAttribute('data-trace'), 'T099', 'the selected row stays selected');
+      assert.equal(await page.evaluate(() => window.__keptRow === document.querySelector('#calls-rows tr[data-trace="T099"]')), true, 'and is the same row, not a rebuilt one');
+      // Another row while the panel is open replaces the address rather than adding to it.
+      // (On a phone the panel covers the list, so another row is chosen only after closing it.)
+      if (!isPhone) {
+        const length = await page.evaluate(() => history.length);
+        await page.click('#calls-rows tr[data-trace="T098"] .row-link');
+        await page.waitForFunction(() => new URL(location.href).searchParams.get('id') === 'T098');
+        assert.equal(await page.evaluate(() => history.length), length);
+        await page.waitForFunction(() => document.getElementById('trace-id').textContent === 'T098');
+        assert.equal(await page.locator('#calls-rows tr.call-sel').count(), 1);
+        assert.equal(new URL(page.url()).searchParams.get('provider'), 'pA', 'the filter stays in the address with the trace');
+      }
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('#trace-panel', { state: 'hidden' });
+      assert.equal(new URL(page.url()).searchParams.get('provider'), 'pA');
+      assert.equal(new URL(page.url()).searchParams.has('id'), false);
+
+      // The range asks for its own window.
+      head = [];
+      await page.selectOption('#calls-window', '7');
+      await page.waitForFunction(() => document.querySelectorAll('#calls-rows tr').length > 0);
+      assert.ok(Math.abs(Math.floor(Date.now() / 1000) - since(askedStats.at(-1)) - 7 * 86400) < 120, 'then the last 7 days');
+      // An empty answer says so instead of showing an empty table.
+      await page.unroute('**/api/admin/v1/audit/traces?*');
+      await page.route('**/api/admin/v1/audit/traces?*', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ traces: [] }) }));
+      await page.selectOption('#calls-window', '30');
+      await page.waitForSelector('#calls-empty:not([hidden])');
+      assert.match(await page.innerText('#calls-empty'), /No model calls match these filters/);
+      assert.equal(await page.isHidden('#calls-table'), true);
+    } finally {
+      await page.unroute('**/api/admin/v1/audit/stats*');
+      await page.unroute('**/api/admin/v1/audit/traces?*');
+      await page.unroute('**/api/admin/v1/audit/traces/*');
+    }
+  });
+  await step('audit calls: sealed content stays sealed in the trace panel until the status bar unseals it, then View shows it as text, and sealing wipes it', async () => {
+    const asked = [];
+    page.on('request', (r) => { if (/audit\/payloads/.test(r.url())) asked.push(r.url()); });
+    await openPage('audit/calls');
+    await page.waitForSelector('#calls-rows tr[data-trace]');
+    await page.click('#calls-rows tr[data-trace] .row-link');
+    await page.waitForSelector('#trace-sealed .sealed-row');
+    assert.match(await page.innerText('#trace-sealed-note'), /Sealed\. Opening needs the audit passphrase/);
+    assert.equal(await page.locator('#trace-panel input[type="password"]').count(), 0, 'the passphrase is asked for in the status bar box, not here');
+    assert.equal(asked.length, 0, 'nothing is fetched until a session is open');
+    // View while sealed sends you to the Unseal box: still nothing fetched.
+    await page.click('#trace-sealed .view-btn >> nth=0');
+    await page.waitForSelector('#unseal-box[open]');
+    assert.match(await page.innerText('#trace-sealed-error'), /Enter the audit passphrase/);
+    assert.equal(asked.length, 0);
+    // The right passphrase opens the session, and the item the person asked for opens with it.
+    await page.fill('#unseal-pass', AUDIT_PASS);
+    await page.click('#unseal-go');
+    await page.waitForSelector('#unseal-box', { state: 'hidden' });
+    await page.waitForFunction(() => /Anything else\?/.test(document.getElementById('trace-viewed').textContent));
+    assert.equal(await page.isHidden('#trace-sealed-error'), true);
+    assert.match(await page.innerText('#trace-sealed-note'), /Unsealed\. Each item you view is recorded/);
+    assert.ok(asked.length >= 1);
+    assert.equal(await page.locator('#trace-viewed b, #trace-viewed img').count(), 0, 'shown as text');
+    assert.equal(await page.evaluate(() => JSON.stringify([...Object.entries(localStorage), ...Object.entries(sessionStorage)]).includes('passphrase')), false);
+    // Closing the panel wipes what was opened; opening again asks nothing more while the session lasts.
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('#trace-panel', { state: 'hidden' });
+    assert.equal(await page.locator('#trace-viewed *').count(), 0, 'closing the panel wipes it');
+    await page.click('#calls-rows tr[data-trace] .row-link');
+    await page.waitForSelector('#trace-sealed .sealed-row');
+    await page.click('#trace-sealed .view-btn >> nth=0');
+    await page.waitForFunction(() => /Anything else\?/.test(document.getElementById('trace-viewed').textContent));
+    // Seal from the status bar: the text is gone from the page.
+    await page.click('#seal-button');
+    await page.waitForFunction(() => /^Sealed$/.test(document.getElementById('sb-seal-status').textContent));
+    await page.waitForFunction(() => document.getElementById('trace-viewed').children.length === 0);
+    assert.equal((await page.content()).includes('Anything else?'), false, 'the opened text is gone from the page once sealed');
+    assert.match(await page.innerText('#trace-sealed-note'), /^Sealed\./);
+    assert.equal(await page.locator('#tab-audit-calls img').count(), 0);
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('#banners [data-banner="unsealed"]', { state: 'detached', timeout: 15000 }).catch(async () => { await page.reload(); });
+  });
+  await step('seal toggle: unseal from another page, a wrong passphrase is an inline error, the countdown is the server\'s, Seal closes it', async () => {
+    await openPage('network');
+    await page.waitForSelector('#seal-button:not([hidden])');
+    assert.match(await page.innerText('#sb-seal-status'), /^Sealed$/, 'the state is a word');
+    assert.equal(await page.locator('#sb-seal-status .status-sym').count(), 1, 'and a symbol');
+    assert.equal(await page.innerText('#seal-button'), 'Unseal');
+    assert.equal(await page.getAttribute('#seal-button', 'aria-label'), 'Unseal content', 'the toggle has a name');
+    const size = await page.locator('#seal-button').boundingBox();
+    assert.ok(size.height >= (isPhone ? 44 : 24) - 0.5, 'target size ' + size.height);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'no horizontal scroll');
+    await page.click('#seal-button');
+    await page.waitForSelector('#unseal-box[open]');
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'unseal-pass', 'focus starts in the passphrase field');
+    // A wrong passphrase: the error is inline in the box, and no toast.
+    await page.fill('#unseal-pass', 'not the passphrase at all!!');
+    await page.click('#unseal-go');
+    await page.waitForFunction(() => /does not open any audit key/.test(document.getElementById('unseal-pass-error').textContent));
+    assert.equal(await page.isVisible('#unseal-pass-error'), true);
+    assert.equal(await page.inputValue('#unseal-pass'), '', 'the field is emptied');
+    assert.equal(await page.locator('#toasts .toast').count(), 0, 'not a toast');
+    assert.equal(await page.evaluate(() => document.getElementById('unseal-box').open), true, 'the box stays open');
+    // The right one: the box closes and the toggle shows the state and the server's time left.
+    await page.fill('#unseal-pass', AUDIT_PASS);
+    await page.click('#unseal-go');
+    await page.waitForSelector('#unseal-box', { state: 'hidden' });
+    await page.waitForFunction(() => /^Unsealed/.test(document.getElementById('sb-seal-status').textContent));
+    const status = await page.evaluate(async () => (await (await fetch('/api/admin/v1/status', { headers: { 'X-Askbar-Admin': '1' } })).json()).sealed_content);
+    const serverMins = Math.max(1, Math.ceil(Math.min(status.idle_left_secs, status.total_left_secs) / 60));
+    assert.match(await page.innerText('#sb-seal-status'), new RegExp('^Unsealed \u00b7 ' + serverMins + ' min left$'));
+    assert.equal(await page.innerText('#seal-button'), 'Seal');
+    assert.equal(await page.getAttribute('#seal-button', 'aria-label'), 'Seal content now');
+    // The Audit content view sees the session the toggle opened, without asking for the passphrase again.
+    await page.goto(base + 'audit/sealed/');
+    await page.waitForSelector('#app:not([hidden])');
+    await page.waitForSelector('#audit-open:not([hidden])');
+    assert.equal(await page.isVisible('#audit-unseal-form'), false);
+    // Seal from the toggle closes the session everywhere.
+    await page.click('#seal-button');
+    await page.waitForFunction(() => /^Sealed$/.test(document.getElementById('sb-seal-status').textContent));
+    await page.waitForSelector('#audit-unseal-form:not([hidden])');
+    assert.equal(await page.innerText('#seal-button'), 'Unseal');
+    await page.waitForSelector('#banners [data-banner="unsealed"]', { state: 'detached', timeout: 15000 });
+  });
+  await step('alerts bell: the badge counts critical plus warning, the menu groups them with links, a new critical alert pops up once, arrows and Esc work', async () => {
+    const K = await page.evaluate(() => window.ui.ready);
+    const wait = K.STATUS_EVERY_SECS * 2 * 1000 + 3000;
+    const clean = { server_online: true, token_rejected: false, audit_chain: { state: 'ok' }, alerts: 'ok', sealed_content: { open: false, alerts: [] } };
+    let fake = clean;
+    await page.route('**/api/admin/v1/status', async (route) => {
+      const real = await (await route.fetch()).json();
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ...real, ...fake }) });
+    });
+    try {
+      await page.goto(base + 'network/');
+      await page.evaluate(() => { try { sessionStorage.removeItem('askbar-admin.alert-pops'); } catch (_) { /* none */ } });
+      await page.reload();
+      await page.waitForSelector('#app:not([hidden])');
+      const label = () => page.getAttribute('#bell-button', 'aria-label');
+      await page.waitForFunction(() => document.getElementById('bell-button').getAttribute('aria-label') === 'Alerts: none', null, { timeout: wait });
+      assert.equal(await page.isHidden('#bell-badge'), true, 'no badge at 0');
+      assert.equal(await page.locator('#alert-pops .alert-pop').count(), 0);
+      const box = await page.locator('#bell-button').boundingBox();
+      assert.ok(box.width >= (isPhone ? 44 : 24) - 0.5 && box.height >= (isPhone ? 44 : 24) - 0.5, 'bell target ' + box.width + 'x' + box.height);
+      await page.click('#bell-button');
+      assert.equal(await page.getAttribute('#bell-button', 'aria-expanded'), 'true');
+      assert.deepEqual(await page.$$eval('#bell-menu [role="menuitem"]', (a) => a.map((x) => [x.textContent.replace(/\s+/g, ' ').trim(), x.getAttribute('aria-disabled')])),
+        [['No alerts', 'true'], ['See all alerts', null]], 'empty state, and a live link to the Alerts page (step 4.4: it was greyed until then)');
+      await page.keyboard.press('Escape');
+
+      // One critical (chain), two warnings (delivery not set up, sealed open), two infos.
+      const now = Math.floor(Date.now() / 1000);
+      fake = { ...clean, alerts: 'not_set_up', audit_chain: { state: 'edited', detail: 'An audit record was edited.' },
+        sealed_content: { open: true, idle_left_secs: 600, total_left_secs: 900, alerts: [
+          { kind: 'unsealed', at: now - 120, text: 'Sealed content was opened.' }, { kind: 'retention_changed', at: now - 60, text: 'Retention was changed.' },
+          { kind: 'chain_mismatch', at: now - 30, text: 'Not counted twice.' }] } };
+      await page.waitForFunction(() => document.getElementById('bell-button').getAttribute('aria-label') === 'Alerts: 1 critical, 2 warning, 2 info', null, { timeout: wait });
+      assert.equal(await page.innerText('#bell-badge'), '3', 'critical plus warning, not info');
+      assert.match(await page.getAttribute('#bell-badge', 'class'), /bell-badge-critical/);
+      assert.equal(await page.getAttribute('#bell-button', 'data-tip'), await label(), 'the tooltip says the same');
+      // The pop-up: once, with the text, a link and a close button; focus stays where it was and it was announced assertively.
+      await page.waitForSelector('#alert-pops .alert-pop');
+      assert.equal(await page.locator('#alert-pops .alert-pop').count(), 1);
+      assert.match(await page.innerText('#alert-pops .alert-pop'), /An audit record was edited\./);
+      assert.equal(await page.getAttribute('#alert-pops .alert-pop a', 'href'), '/admin/audit/calls/');
+      assert.equal(await page.evaluate(() => !!document.activeElement.closest('#alert-pops')), false, 'the pop-up does not take focus');
+      assert.match(await page.textContent('#announcer-urgent'), /Critical alert: An audit record was edited\./);
+      assert.equal(await page.locator('#toasts .toast').count(), 0, 'not a toast');
+      // The menu: groups in order, each item a link to where it is fixed.
+      await page.click('#bell-button');
+      assert.deepEqual(await page.$$eval('#bell-menu [role="group"]', (g) => g.map((x) => x.getAttribute('aria-label'))), ['Critical alerts', 'Warning alerts', 'Info alerts']);
+      assert.deepEqual(await page.$$eval('#bell-menu a[role="menuitem"]', (a) => a.map((x) => x.getAttribute('href'))),
+        ['/admin/audit/calls/', '/admin/notifications/#alerts-form', '/admin/audit/sealed/', '/admin/audit/admin/', '/admin/audit/sealed/', '/admin/alerts/']);
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'no horizontal scroll');
+      const fit = await page.evaluate(() => { const r = document.getElementById('bell-menu').getBoundingClientRect(); return r.left >= 0 && r.right <= window.innerWidth; });
+      assert.equal(fit, true, 'the menu fits the screen');
+      // axe, with the menu and the pop-up showing (a copy of this page in a context that lets axe in).
+      const axeCtx = await browser.newContext({ reducedMotion: 'reduce', viewport, bypassCSP: true, storageState: await ctx.storageState() });
+      try {
+        const ap = await axeCtx.newPage();
+        await ap.route('**/api/admin/v1/status', async (route) => {
+          const real = await (await route.fetch()).json();
+          await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ...real, ...fake }) });
+        });
+        await ap.goto(base + 'network/');
+        await ap.waitForSelector('#alert-pops .alert-pop', { timeout: wait });
+        await ap.click('#bell-button');
+        await ap.addScriptTag({ content: fs.readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8') });
+        const found = await ap.evaluate(async () => (await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'] } })).violations.map((v) => v.id + ': ' + v.nodes.map((n) => n.target.join(' ')).join(', ')));
+        assert.deepEqual(found, [], 'axe on the open menu and pop-up');
+      } finally { await axeCtx.close(); }
+      await page.keyboard.press('Escape');
+      // Keyboard: ArrowDown on the button opens on the first item, arrows move, End reaches the last, Esc returns to the button.
+      await page.focus('#bell-button');
+      await page.keyboard.press('ArrowDown');
+      assert.equal(await page.evaluate(() => document.activeElement.getAttribute('href')), '/admin/audit/calls/');
+      await page.keyboard.press('ArrowDown');
+      assert.equal(await page.evaluate(() => document.activeElement.getAttribute('href')), '/admin/notifications/#alerts-form');
+      await page.keyboard.press('End');
+      assert.equal(await page.evaluate(() => document.activeElement.textContent.startsWith('See all alerts')), true);
+      assert.equal(await page.evaluate(() => document.activeElement.getAttribute('href')), '/admin/alerts/', 'the last item is a link to the Alerts page');
+      assert.equal(await page.evaluate(() => document.activeElement.hasAttribute('aria-disabled')), false, 'and it is no longer greyed');
+      await page.keyboard.press('Escape');
+      assert.equal(await page.evaluate(() => document.activeElement.id), 'bell-button');
+      assert.equal(await page.getAttribute('#bell-button', 'aria-expanded'), 'false');
+      // Once only: closed, it does not come back on the next poll, nor after a reload in the same tab.
+      await page.click('#alert-pops .alert-pop button');
+      assert.equal(await page.locator('#alert-pops .alert-pop').count(), 0);
+      await page.waitForTimeout(K.STATUS_EVERY_SECS * 1000 + 1500);
+      assert.equal(await page.locator('#alert-pops .alert-pop').count(), 0, 'not again');
+      await page.reload();
+      await page.waitForFunction(() => document.getElementById('bell-button').getAttribute('aria-label') === 'Alerts: 1 critical, 2 warning, 2 info', null, { timeout: wait });
+      assert.equal(await page.locator('#alert-pops .alert-pop').count(), 0, 'not after a reload either');
+      // The condition ends: the count goes, and a later critical alert pops up again.
+      fake = clean;
+      await page.waitForFunction(() => document.getElementById('bell-button').getAttribute('aria-label') === 'Alerts: none', null, { timeout: wait });
+      assert.equal(await page.isHidden('#bell-badge'), true);
+      fake = { ...clean, token_rejected: true };
+      await page.waitForSelector('#alert-pops .alert-pop', { timeout: wait });
+      assert.equal(await label(), 'Alerts: 1 critical');
+      fake = clean;
+      await page.waitForSelector('#alert-pops .alert-pop', { state: 'detached', timeout: wait });
+    } finally {
+      await page.unroute('**/api/admin/v1/status');
+    }
+  });
+  await step('alerts: Critical, Warning and Info in order with the bell\'s counts, columns that line up, Info dismissed at once and kept on reload, none for the others, "ongoing" without a time, the empty state', async () => {
+    const K = await page.evaluate(() => window.ui.ready);
+    const wait = K.STATUS_EVERY_SECS * 2 * 1000 + 3000;
+    const clean = { server_online: true, token_rejected: false, audit_chain: { state: 'ok' }, alerts: 'ok', sealed_content: { open: false, alerts: [] } };
+    const now = Math.floor(Date.now() / 1000);
+    let fake = clean;
+    const fakeStatus = async (p) => p.route('**/api/admin/v1/status', async (route) => {
+      const real = await (await route.fetch()).json();
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ...real, ...fake }) });
+    });
+    await fakeStatus(page);
+    try {
+      await page.goto(base + 'alerts/');
+      await page.evaluate(() => { try { localStorage.removeItem('askbar-admin.dismissed-alerts'); } catch (_) { /* none */ } });
+      await page.reload();
+      await page.waitForSelector('#app:not([hidden])');
+      assert.equal(await page.getAttribute('#nav a[data-tab="alerts"]', 'aria-current'), 'page');
+      assert.equal(await page.locator('#app .footer, #tab-alerts .ap-foot').count(), 0, 'no footer text');
+      await page.waitForSelector('#alerts-empty .empty-state', { timeout: wait });
+      assert.equal(await page.innerText('#alerts-empty'), 'No alerts');
+      assert.equal(await page.locator('#alerts-body .alerts-group:not([hidden])').count(), 0, 'no group when there is nothing');
+
+      // One critical (chain), two warnings (delivery not set up, sealed open), two infos.
+      fake = { ...clean, alerts: 'not_set_up', audit_chain: { state: 'edited', detail: 'An audit record was edited.' },
+        sealed_content: { open: true, idle_left_secs: 600, total_left_secs: 900, alerts: [
+          { kind: 'unsealed', at: now - 120, text: 'Sealed content was opened.' }, { kind: 'retention_changed', at: now - 60, text: 'Retention was changed.' }] } };
+      await page.waitForSelector('#alerts-info .alerts-row', { timeout: wait });
+      assert.equal(await page.isHidden('#alerts-empty'), true);
+      assert.deepEqual(await page.$$eval('#alerts-body .alerts-group:not([hidden]) h3', (h) => h.map((x) => x.textContent.replace(/\s+/g, ' ').trim())), ['Critical · 1', 'Warning · 2', 'Info · 2'], 'groups in order, with counts');
+      assert.equal(await page.innerText('#alerts-sum'), '1 critical, 2 warnings, 2 info');
+      // The counts are the bell's, by construction: the badge is critical plus warning, the menu has the same rows.
+      const rows = await page.$$eval('#alerts-body .alerts-row', (r) => r.map((x) => ({
+        cls: x.className.replace('alerts-row ', ''), word: x.querySelector('.status-word').textContent, sym: !!x.querySelector('.status-sym'),
+        time: x.querySelector('.alerts-time').textContent, fix: x.querySelector('a.alerts-fix').getAttribute('href'), dismiss: x.querySelectorAll('button').length,
+      })));
+      assert.deepEqual(rows.map((r) => r.word), ['Critical', 'Warning', 'Warning', 'Info', 'Info']);
+      assert.equal(rows.every((r) => r.sym), true, 'a symbol with every word (rule 37)');
+      assert.deepEqual(rows.map((r) => r.dismiss), [0, 0, 0, 1, 1], 'only Info can be dismissed');
+      assert.deepEqual(rows.map((r) => r.time === 'ongoing'), [true, true, true, false, false], 'a condition says ongoing; an entry has its time');
+      assert.equal(await page.locator('#alerts-info time[title]').count(), 2, 'the full date is on hover');
+      await page.waitForFunction(() => document.getElementById('bell-badge').textContent === '3');
+      assert.equal(await page.locator('#alerts-critical .alerts-row, #alerts-warning .alerts-row').count(), Number(await page.innerText('#bell-badge')), 'critical plus warning match the badge');
+      assert.equal(await page.getAttribute('#bell-button', 'aria-label'), 'Alerts: 1 critical, 2 warning, 2 info');
+      // Columns line up across groups: the same x for the text, time, link and action cells.
+      const xs = await page.$$eval('#alerts-body .alerts-row', (r) => r.map((x) => [...x.children].map((c) => Math.round(c.getBoundingClientRect().left))));
+      if (!isPhone) {
+        assert.equal(new Set(xs.map((r) => r.join())).size, 1, 'every row has its cells at the same x, in every group: ' + JSON.stringify(xs));
+      } else {
+        const stacked = await page.$$eval('#alerts-body .alerts-row', (r) => r.map((x) => new Set([...x.children].map((c) => Math.round(c.getBoundingClientRect().left))).size));
+        assert.deepEqual(stacked, stacked.map(() => 1), 'at phone width every cell stacks at the same left edge');
+      }
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'no horizontal scroll');
+      const min = isPhone ? 44 : 24;
+      for (const [w, h] of await page.$$eval('#alerts-body a, #alerts-body button', (a) => a.map((x) => { const r = x.getBoundingClientRect(); return [r.width, r.height]; }))) {
+        assert.ok(w >= min - 0.5 && h >= min - 0.5, 'target ' + w + 'x' + h);
+      }
+      // axe with all three groups showing.
+      const axeCtx = await browser.newContext({ reducedMotion: 'reduce', viewport, bypassCSP: true, storageState: await ctx.storageState() });
+      try {
+        const ap = await axeCtx.newPage();
+        await fakeStatus(ap);
+        await ap.goto(base + 'alerts/');
+        await ap.waitForSelector('#alerts-info .alerts-row', { timeout: wait });
+        await ap.addScriptTag({ content: fs.readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8') });
+        const found = await ap.evaluate(async () => (await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'] } })).violations.map((v) => v.id + ': ' + v.nodes.map((n) => n.target.join(' ')).join(', ')));
+        assert.deepEqual(found, [], 'axe on the Alerts page');
+      } finally { await axeCtx.close(); }
+
+      // Dismiss the first Info row (the newest): it goes at once, from the bell too, and does not come back on a reload.
+      const first = await page.locator('#alerts-info .alerts-row >> nth=0').innerText();
+      assert.match(first, /Retention was changed\./, 'newest first');
+      await page.click('#alerts-info .alerts-row >> nth=0 >> button');
+      assert.equal(await page.locator('#alerts-info .alerts-row').count(), 1, 'removed at once');
+      assert.equal((await page.textContent('#alerts-info h3')).replace(/\s+/g, ' ').trim(), 'Info · 1');
+      assert.equal(await page.getAttribute('#bell-button', 'aria-label'), 'Alerts: 1 critical, 2 warning, 1 info', 'the bell counts it too');
+      assert.equal(await page.evaluate(() => !!document.activeElement.closest('#alerts-info')), true, 'focus moves to the next Info row');
+      assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('askbar-admin.dismissed-alerts')).length), 1);
+      await page.reload();
+      await page.waitForSelector('#alerts-info .alerts-row', { timeout: wait });
+      assert.equal(await page.locator('#alerts-info .alerts-row').count(), 1, 'it does not return on a reload');
+      assert.doesNotMatch(await page.innerText('#alerts-info'), /Retention was changed/);
+      await page.click('#bell-button');
+      assert.doesNotMatch(await page.innerText('#bell-menu [aria-label="Info alerts"]'), /Retention was changed/, 'and it is gone from the bell');
+      await page.keyboard.press('Escape');
+      // New alerts arrive by themselves (ui.live), highlighted and announced; the conditions end and the rows go.
+      fake = { ...fake, sealed_content: { ...fake.sealed_content, alerts: [...fake.sealed_content.alerts, { kind: 'backup_failed', at: now, text: 'The backup failed.' }] } };
+      await page.waitForFunction(() => document.querySelectorAll('#alerts-info .alerts-row').length === 2, null, { timeout: wait });
+      assert.equal(await page.getAttribute('#alerts-info .alerts-row >> nth=0', 'data-key'), 'alert-backup_failed-' + now);
+      assert.equal(await page.locator('#alerts-info .alerts-row[data-key="alert-backup_failed-' + now + '"] a').getAttribute('href'), '/admin/backup/');
+      fake = clean;
+      await page.waitForSelector('#alerts-empty .empty-state', { timeout: wait });
+      assert.equal(await page.locator('#alerts-body .alerts-group:not([hidden])').count(), 0);
+    } finally {
+      await page.unroute('**/api/admin/v1/status');
+      await page.evaluate(() => { try { localStorage.removeItem('askbar-admin.dismissed-alerts'); } catch (_) { /* none */ } });
+    }
+  });
+
+  await step('side panel: with the help panel open, every alert and needs-attention row keeps at least 200 px of text, and nothing scrolls sideways', async () => {
+    const clean = { server_online: true, token_rejected: false, audit_chain: { state: 'ok' }, alerts: 'ok', sealed_content: { open: false, alerts: [] } };
+    const now = Math.floor(Date.now() / 1000);
+    const K = await page.evaluate(() => window.ui.ready);
+    const wait = K.STATUS_EVERY_SECS * 2 * 1000 + 3000;
+    let fake = clean;
+    await page.route('**/api/admin/v1/status', async (route) => {
+      const real = await (await route.fetch()).json();
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ...real, ...fake }) });
+    });
+    // The text of every row, and whether the page scrolls sideways: the panel takes 440 px and must not squeeze the text.
+    const textRoom = (sel) => page.$$eval(sel, (rows) => rows.map((x) => {
+      const t = x.querySelector('.alerts-text, .arow-text');
+      return { w: Math.round(t.getBoundingClientRect().width), lines: Math.round(t.getBoundingClientRect().height / parseFloat(getComputedStyle(t).lineHeight)) };
+    }));
+    const noSideways = () => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
+    try {
+      // Three alerts or more: a critical one, a warning, and an info one.
+      fake = { ...clean, alerts: 'not_set_up', audit_chain: { state: 'edited', detail: 'An audit record was edited.' },
+        sealed_content: { open: true, idle_left_secs: 600, total_left_secs: 900, alerts: [{ kind: 'retention_changed', at: now, text: 'Retention was changed.' }] } };
+      await page.goto(base + 'alerts/?panel=help:alerts');
+      await page.waitForSelector('#app:not([hidden])');
+      await page.waitForSelector('body.panel-open');
+      await page.waitForFunction(() => document.querySelectorAll('#alerts-body .alerts-row').length >= 3, null, { timeout: wait });
+      const alertRows = await textRoom('#alerts-body .alerts-row');
+      assert.ok(alertRows.every((r) => r.w >= 200), 'the text column of every alert row is 200 px or more: ' + JSON.stringify(alertRows));
+      assert.equal(await noSideways(), true, 'no sideways scroll on Alerts beside the panel');
+
+      // Home's needs-attention list, with its own help panel open. At 1100 wide (the panel leaves the least room) too.
+      await page.goto(base);
+      await page.waitForSelector('#app:not([hidden])');
+      await page.click('#attention .help');
+      await page.waitForSelector('body.panel-open');
+      await page.waitForFunction(() => document.querySelectorAll('#attention-list .arow').length >= 3, null, { timeout: wait });
+      for (const width of isPhone ? [viewport.width] : [viewport.width, 1100]) {
+        await page.setViewportSize({ width, height: viewport.height });
+        const attnRows = await textRoom('#attention-list .arow');
+        assert.ok(attnRows.every((r) => r.w >= 200), 'at ' + width + ' the text column of every needs-attention row is 200 px or more: ' + JSON.stringify(attnRows));
+        assert.equal(await noSideways(), true, 'no sideways scroll on Home at ' + width + ' beside the panel');
+      }
+      await page.setViewportSize(viewport);
+    } finally {
+      await page.unroute('**/api/admin/v1/status');
+      await page.evaluate(() => { try { localStorage.removeItem('askbar-admin.dismissed-alerts'); } catch (_) { /* none */ } });
+      await page.setViewportSize(viewport);
+    }
+  });
+
+  // One hover tint everywhere (docs/style/ui-ux.md, "Hover"): a Home widget, a model-calls row and a table row each change
+  // background to --hover-bg on hover, their base colour is untouched at rest, the cursor does not change on a row that is not a link
+  // (the calls row is the one that opens a trace), and nothing moves.
+  await step('hover: a Home widget, a model-calls row and a table row all tint to the shared --hover-bg and back, with no layout shift', async () => {
+    const bgOf = (sel) => page.evaluate((s) => { const e = document.querySelector(s); return { bg: getComputedStyle(e).backgroundColor, cursor: getComputedStyle(e).cursor, h: e.getBoundingClientRect().height, y: e.getBoundingClientRect().top + scrollY }; }, sel);
+    const shared = () => page.evaluate(() => { const d = document.createElement('div'); d.style.backgroundColor = 'var(--hover-bg)'; document.body.append(d); const c = getComputedStyle(d).backgroundColor; d.remove(); return c; });
+    const check = async (label, rowSel, aim, cursor) => {
+      await page.mouse.move(0, 0);
+      const rest = await bgOf(rowSel);
+      await page.hover(aim);
+      const want = await shared();
+      await page.waitForFunction(([s, w]) => getComputedStyle(document.querySelector(s)).backgroundColor === w, [rowSel, want], { timeout: 3000 }).catch(() => {});
+      const hov = await bgOf(rowSel);
+      assert.notEqual(hov.bg, rest.bg, label + ': hover changes the background');
+      assert.equal(hov.bg, want, label + ': hover is the shared --hover-bg');
+      assert.equal(hov.cursor, cursor, label + ': the cursor');
+      assert.deepEqual([hov.h, hov.y], [rest.h, rest.y], label + ': nothing moves');
+      await page.mouse.move(0, 0);
+      assert.equal((await bgOf(rowSel)).bg, rest.bg, label + ': the base colour comes back');
+    };
+    await page.goto(base + 'home/');
+    await page.waitForSelector('#app:not([hidden])');
+    await check('home widget', '#numbers', '#numbers .kpi .k', 'auto');
+    await openPage('audit/calls');
+    await page.waitForSelector('#calls-rows tr[data-trace]:not(.call-err) > td');
+    const tr = '#calls-rows tr[data-trace]:not(.call-err):not(.call-sel)';
+    await check('model calls row', tr + ' > td:last-child', tr + ' > td:last-child', 'pointer');
+    await openPage('people');
+    await page.waitForSelector('#users-table tbody tr:not(.empty-row) > td');
+    await check('table row', '#users-table tbody tr:not(.empty-row) > td', '#users-table tbody tr:not(.empty-row) > td', 'auto');
+    // The sweep: every admin page and every reference page, each kind of item on it (every table, a few rows each; widgets, list
+    // rows, menu and tab items, buttons, fields, check boxes and radios) must change under the pointer.
+    const { hoverSweep } = require('./hover-sweep');
+    const slugs = await page.evaluate(async () => (await window.ui.ready).PAGE_SLUGS);
+    const pages = slugs.map((x) => x + '/');
+    await page.goto(base + 'reference/');
+    await page.waitForSelector('#app:not([hidden])');
+    await page.waitForSelector('main a[href^="/admin/reference/"]', { state: 'attached' });
+    pages.push(...(await page.$$eval('main a[href^="/admin/reference/"]', (a) => [...new Set(a.map((x) => x.getAttribute('href')))].filter((h) => h && !h.startsWith('#')).map((h) => h.replace(/^\/admin\//, '')))));
+    const misses = []; let checked = 0, tableRows = 0;
+    for (const p of [...new Set(pages)]) {
+      await page.goto(base + p);
+      await page.waitForSelector('#app:not([hidden])');
+      await page.waitForLoadState('networkidle').catch(() => {});
+      await page.waitForTimeout(300);
+      const r = await hoverSweep(page);
+      checked += r.checked;
+      for (const m of r.misses) misses.push(p + ': ' + m);
+      tableRows += await page.evaluate(() => document.querySelectorAll('tbody tr:not(.empty-row)').length);
+    }
+    assert.ok(pages.length > slugs.length, 'the reference pages were found');
+    assert.ok(checked > 200 && tableRows > 20, 'the sweep reached the pages: ' + checked + ' items, ' + tableRows + ' table rows');
+    assert.deepEqual(misses, [], 'items with no hover change');
+    const css = await page.evaluate(async () => (await (await fetch('/admin/style.css')).text()));
+    assert.match(css, /--hover-bg/, 'the stylesheet uses the token');
+    assert.doesNotMatch(css, /:hover[^{}]*\{[^}]*background:\s*var\(--(surface-2|accent-soft)\)/, 'no rule tints a hover with another colour');
+  });
+  await step('home: quick actions (one filled primary), Needs attention from the bell items plus setup gaps, each linking to its fix, and the empty state', async () => {
+    const K = await page.evaluate(() => window.ui.ready);
+    const wait = K.LIVE_EVERY_SECS * 2 * 1000 + 3000;
+    const clean = { server_online: true, token_rejected: false, audit_chain: { state: 'ok' }, alerts: 'ok', sealed_content: { open: false, alerts: [] } };
+    const healthy = {
+      providers: [{ id: 'p1', name: 'Main' }], catalog: { models: [{ provider_id: 'p1', model: 'm' }], default: 'p1/m' }, users: [{ id: 'u1', name: 'Ann' }],
+      clients: [{ id: 'c1' }], 'backup/schedule': { enabled: true, destination: { path: '/b', writable: true, problem: null, same_disk: false, files: [] }, last_success_at: 100, drill_due: false },
+      network: { tls_enabled: false, hostname: '' }, // plain HTTP with no host name is fine: no row
+    };
+    let fake = clean;
+    let setup = healthy;
+    await page.route('**/api/admin/v1/status', async (route) => {
+      const real = await (await route.fetch()).json();
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ...real, ...fake }) });
+    });
+    await page.route(/\/api\/admin\/v1\/(providers|catalog|users|clients|backup\/schedule|network)$/, async (route) => {
+      if (route.request().method() !== 'GET') { await route.continue(); return; }
+      const key = new URL(route.request().url()).pathname.replace('/api/admin/v1/', '');
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify(setup[key]) });
+    });
+    try {
+      await page.goto(base + 'home/');
+      await page.evaluate(() => { try { sessionStorage.removeItem('askbar-admin.alert-pops'); } catch (_) { /* none */ } });
+      await page.reload();
+      await page.waitForSelector('#app:not([hidden])');
+      // Nothing wrong: the empty state, and no rows.
+      await page.waitForSelector('#attention-empty:not([hidden]) .empty-state', { timeout: wait });
+      assert.equal((await page.innerText('#attention-empty')).trim(), 'Nothing needs attention');
+      assert.equal(await page.locator('#attention-list .arow').count(), 0);
+      assert.equal(await page.innerText('#attention-count'), '0 items');
+      // Quick actions: exactly one filled primary on the page; the rest are secondary; links go where they say.
+      assert.equal(await page.locator('.btn-primary:visible, button.primary:visible').count(), 1, 'one filled primary');
+      assert.equal(await page.locator('#quick-actions .btn-primary').count(), 1);
+      assert.deepEqual(await page.$$eval('#quick-actions a', (a) => a.map((x) => [x.textContent.trim(), x.getAttribute('href')])),
+        [['Pair a new client', '/admin/people/#pair-open'], ['Add user', '/admin/people/#add-user'], ['Add provider', '/admin/providers/#add-provider']]);
+      assert.equal(await page.locator('main').getByText('Open audit', { exact: false }).count(), 0, 'Home has no Open audit button (the owner asked for its removal)');
+      // Every quick action has a decorative icon and its label as text (the icons are the board's: link, person, cube, download).
+      assert.deepEqual(await page.$$eval('#quick-actions .btn', (a) => a.map((x) => [x.textContent.trim(), !!x.querySelector('svg.icon[aria-hidden="true"]')])),
+        [['Pair a new client', true], ['Add user', true], ['Add provider', true], ['Back up now', true]]);
+      for (const sel of ['#quick-actions .btn']) {
+        for (const box of await page.$$eval(sel, (a) => a.map((x) => { const r = x.getBoundingClientRect(); return [r.width, r.height]; }))) {
+          assert.ok(box[0] >= (isPhone ? 44 : 24) - 0.5 && box[1] >= (isPhone ? 44 : 24) - 0.5, 'quick action target ' + box);
+        }
+      }
+      // Hairlines, not boxes (rule 7).
+      const look = await page.evaluate(() => {
+        const cs = (s) => getComputedStyle(document.querySelector(s));
+        const sec = cs('#attention');
+        return { box: ['Top', 'Right', 'Bottom', 'Left'].some((d) => parseFloat(sec['border' + d + 'Width']) > 0) || sec.boxShadow !== 'none' || sec.backgroundColor !== 'rgba(0, 0, 0, 0)', rule: parseFloat(cs('.home-sec-head').borderBottomWidth) };
+      });
+      assert.equal(look.box, false, 'the section is not a box');
+      assert.equal(look.rule, 1, 'a hairline under the heading');
+
+      // Back up now: success is a toast, a refusal is an inline line, and the button is busy meanwhile.
+      await page.route('**/api/admin/v1/backup/run', (route) => route.fulfill({ status: 409, contentType: 'application/problem+json', body: JSON.stringify({ error: 'backup_failed', detail: 'The destination is full.' }) }));
+      await page.click('#home-backup');
+      await page.waitForSelector('#home-error:not([hidden])');
+      assert.equal(await page.innerText('#home-error'), 'The destination is full.');
+      assert.equal(await page.locator('#toasts .toast').count(), 0, 'an error is not a toast');
+      await page.unroute('**/api/admin/v1/backup/run');
+      await page.route('**/api/admin/v1/backup/run', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ file: 'askbar-1.tar' }) }));
+      await page.click('#home-backup');
+      await page.waitForSelector('#toasts .toast');
+      assert.match(await page.innerText('#toasts .toast'), /Backup made: askbar-1\.tar/);
+      assert.equal(await page.isHidden('#home-error'), true, 'the error line clears');
+      assert.equal(await page.innerText('#home-backup'), 'Back up now', 'the button is back');
+      await page.unroute('**/api/admin/v1/backup/run');
+
+      // One critical (chain), two alert warnings (delivery not set up, sealed open), plus setup gaps: no provider, no backup key, and HTTPS on with no host name (HTTPS off with no host name, as in the healthy set, gives no row).
+      fake = { ...clean, alerts: 'not_set_up', audit_chain: { state: 'edited', detail: 'An audit record was edited.' },
+        sealed_content: { open: true, idle_left_secs: 600, total_left_secs: 900, alerts: [{ kind: 'retention_changed', at: Math.floor(Date.now() / 1000), text: 'Retention was changed.' }] } };
+      setup = { ...healthy, providers: [], 'backup/schedule': { ...healthy['backup/schedule'], enabled: false }, network: { tls_enabled: true, hostname: '' } };
+      await page.waitForFunction(() => document.querySelectorAll('#attention-list .arow').length === 6, null, { timeout: wait });
+      assert.equal(await page.isHidden('#attention-empty'), true);
+      assert.equal(await page.innerText('#attention-count'), '6 items');
+      const rows = await page.$$eval('#attention-list .arow', (r) => r.map((x) => ({
+        source: x.dataset.source, word: x.querySelector('.status-word').textContent, sym: !!x.querySelector('.status-sym'),
+        text: x.querySelector('.arow-text').textContent, href: x.querySelector('a').getAttribute('href'),
+      })));
+      assert.deepEqual(rows.map((r) => r.word), ['Critical', 'Warning', 'Warning', 'Warning', 'Warning', 'Warning'], 'critical first, then warnings');
+      assert.equal(rows.every((r) => r.sym), true, 'a symbol with every word (rule 37)');
+      assert.deepEqual(rows.slice(0, 3).map((r) => r.source), ['alert', 'alert', 'alert'], 'the alert rows come before the setup gaps');
+      assert.deepEqual(rows.slice(3).map((r) => r.source), ['setup', 'setup', 'setup']);
+      assert.deepEqual(rows.map((r) => r.href), ['/admin/audit/calls/', '/admin/notifications/#alerts-form', '/admin/audit/sealed/', '/admin/providers/#add-provider', '/admin/security/#bk-pass', '/admin/network/#n-host']);
+      assert.equal(rows[0].text, 'An audit record was edited.');
+      // The alert rows are the bell's: their count is the badge (info is in neither).
+      await page.waitForFunction(() => document.getElementById('bell-badge').textContent === '3');
+      assert.equal(await page.locator('#attention-list .arow[data-source="alert"]').count(), Number(await page.innerText('#bell-badge')), 'the alert rows match the bell badge');
+      assert.equal(await page.locator('.btn-primary:visible, button.primary:visible').count(), 1, 'still one filled primary');
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'no horizontal scroll');
+      for (const box of await page.$$eval('#attention-list .arow a', (a) => a.map((x) => { const r = x.getBoundingClientRect(); return [r.width, r.height]; }))) {
+        assert.ok(box[0] >= (isPhone ? 44 : 24) - 0.5 && box[1] >= (isPhone ? 44 : 24) - 0.5, 'row link target ' + box);
+      }
+      // Each link opens the page that fixes it.
+      await page.click('#attention-list .arow[data-source="setup"] a >> nth=0');
+      await page.waitForURL('**/admin/providers/**');
+
+      // The rest of the rule table, one read at a time: a gap goes when it is fixed, and a failed read invents none.
+      await page.goto(base + 'home/');
+      await page.waitForSelector('#app:not([hidden])');
+      setup = { ...healthy, catalog: { models: [], default: null }, users: [], clients: [], 'backup/schedule': { ...healthy['backup/schedule'], last_success_at: null, drill_due: true } };
+      fake = clean;
+      await page.waitForFunction(() => document.querySelectorAll('#attention-list .arow').length === 4, null, { timeout: wait });
+      assert.deepEqual(await page.$$eval('#attention-list .arow a', (a) => a.map((x) => x.getAttribute('href'))),
+        ['/admin/providers/#catalog-section', '/admin/people/#add-user', '/admin/backup/', '/admin/backup/'], 'no approved model, no user (so no client rule), no backup yet, drill due');
+      assert.equal(await page.locator('#attention-list .arow[data-source="alert"]').count(), 0);
+      setup = healthy;
+      await page.waitForFunction(() => document.querySelectorAll('#attention-list .arow').length === 0, null, { timeout: wait });
+      assert.equal(await page.isVisible('#attention-empty .empty-state'), true, 'the empty state returns');
+
+      // axe with rows showing (a copy of the page in a context that lets axe in).
+      fake = { ...clean, alerts: 'not_set_up' };
+      setup = { ...healthy, providers: [] };
+      await page.waitForFunction(() => document.querySelectorAll('#attention-list .arow').length === 2, null, { timeout: wait });
+      const axeCtx = await browser.newContext({ reducedMotion: 'reduce', viewport, bypassCSP: true, storageState: await ctx.storageState() });
+      try {
+        const ap = await axeCtx.newPage();
+        await ap.route('**/api/admin/v1/status', async (route) => {
+          const real = await (await route.fetch()).json();
+          await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ...real, ...fake }) });
+        });
+        await ap.route(/\/api\/admin\/v1\/(providers|catalog|users|clients|backup\/schedule|network)$/, async (route) => {
+          const key = new URL(route.request().url()).pathname.replace('/api/admin/v1/', '');
+          await route.fulfill({ contentType: 'application/json', body: JSON.stringify(setup[key]) });
+        });
+        await ap.goto(base + 'home/');
+        await ap.waitForFunction(() => document.querySelectorAll('#attention-list .arow').length === 2, null, { timeout: wait });
+        await ap.addScriptTag({ content: fs.readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8') });
+        const found = await ap.evaluate(async () => (await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'] } })).violations.map((v) => v.id + ': ' + v.nodes.map((n) => n.target.join(' ')).join(', ')));
+        assert.deepEqual(found, [], 'axe on Home with attention rows');
+      } finally { await axeCtx.close(); }
+    } finally {
+      await page.unroute('**/api/admin/v1/status');
+      await page.unroute(/\/api\/admin\/v1\/(providers|catalog|users|clients|backup\/schedule|network)$/);
+    }
+  });
+  await step('home: numbers with units right-aligned, the usage chart with a one-line summary and a hidden table of the same values, summaries that link, and greyed items that Tab reaches', async () => {
+    const K = await page.evaluate(() => window.ui.ready);
+    const wait = K.LIVE_EVERY_SECS * 2 * 1000 + 3000;
+    const now = Math.floor(Date.now() / 1000);
+    const days = [['2026-11-10', 98], ['2026-11-11', 160], ['2026-11-12', 87]];
+    let stats = {
+      requests: 345, error_rate: 0.021, cost: 7.6, cost_unknown_requests: 0, tokens: { in: 1000000, out: 280000, cached: 0 },
+      latency_ms: { p50: 900, p95: 6400 }, ttft_ms: { p50: 100, p95: 300 }, by_provider: [],
+      by_day: days.map(([day, requests]) => ({ day, requests, tokens: { in: 0, out: 0, cached: 0 }, cost: null })),
+    };
+    let sinceSeen = null;
+    const setup = {
+      providers: [{ id: 'p1', name: 'Main' }], catalog: { models: [{ provider_id: 'p1', model: 'm' }], default: 'p1/m' }, users: [{ id: 'u1' }, { id: 'u2' }],
+      clients: [{ id: 'c1' }, { id: 'c2' }, { id: 'c3' }],
+      'backup/schedule': { enabled: true, destination: { path: '/b', writable: true, problem: null, same_disk: false, files: [] }, last_success_at: now - 7200, next_run_at: now + 7200, drill_due: false, missed: false },
+      network: { tls_enabled: false, hostname: '' },
+    };
+    const services = { services: [{ name: 'server', state: 'running' }, { name: 'auditor', state: 'exited' }] };
+    const setupRe = /\/api\/admin\/v1\/(providers|catalog|users|clients|backup\/schedule|network)$/;
+    const install = async (target) => {
+      await target.route(setupRe, async (route) => {
+        if (route.request().method() !== 'GET') { await route.continue(); return; }
+        await route.fulfill({ contentType: 'application/json', body: JSON.stringify(setup[new URL(route.request().url()).pathname.replace('/api/admin/v1/', '')]) });
+      });
+      await target.route(/\/api\/admin\/v1\/audit\/stats\?/, async (route) => {
+        sinceSeen = Number(new URL(route.request().url()).searchParams.get('since'));
+        await route.fulfill({ contentType: 'application/json', body: JSON.stringify(stats) });
+      });
+      await target.route(/\/api\/admin\/v1\/services$/, (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify(services) }));
+    };
+    await install(page);
+    try {
+      await page.goto(base + 'home/');
+      await page.waitForSelector('#kpi-requests .num', { timeout: wait });
+      assert.equal(Math.abs(now - sinceSeen - K.HOME_STATS_WINDOW_SECS) < 120, true, 'the stats window is HOME_STATS_WINDOW_SECS');
+      assert.equal(K.HOME_STATS_WINDOW_DAYS * 86400, K.HOME_STATS_WINDOW_SECS);
+
+      // The range selector at the top right of the header: its options are the constants, the default is HOME_STATS_WINDOW_DAYS.
+      assert.deepEqual(await page.$$eval('#home-range option', (o) => o.map((x) => Number(x.value))), K.HOME_STATS_RANGE_DAYS);
+      assert.equal(await page.inputValue('#home-range'), String(K.HOME_STATS_WINDOW_DAYS));
+      if (!isPhone) {
+        const r = await page.evaluate(() => { const s = document.getElementById('home-range').getBoundingClientRect(); const h = document.querySelector('.page-title').getBoundingClientRect(); const m = document.querySelector('.page-header').getBoundingClientRect(); return { selRight: s.right, mainRight: m.right, selTop: s.top, titleTop: h.top, selLeft: s.left, titleLeft: h.left }; });
+        assert.ok(r.selLeft > r.titleLeft + 200 && r.mainRight - r.selRight < 4, 'the range select sits at the right of the header');
+      }
+      const lastRange = K.HOME_STATS_RANGE_DAYS[K.HOME_STATS_RANGE_DAYS.length - 1];
+      await page.selectOption('#home-range', String(lastRange));
+      await page.waitForFunction((want) => new URL(location.href).searchParams.get('range') === want, String(lastRange));
+      await page.waitForFunction((t) => document.getElementById('numbers-title').textContent === t, 'Last ' + lastRange + ' days', { timeout: wait });
+      assert.equal(Math.abs(now - sinceSeen - lastRange * 86400) < 120, true, 'the stats read asks for the chosen range');
+      assert.equal(await page.innerText('#usage-title'), 'Requests per day, last ' + lastRange + ' days');
+      await page.reload();
+      await page.waitForSelector('#kpi-requests .num', { timeout: wait });
+      assert.equal(await page.inputValue('#home-range'), String(lastRange), 'reload keeps the range');
+      assert.equal(Math.abs(now - sinceSeen - lastRange * 86400) < 120, true, 'the read after a reload uses the range from the address');
+      await page.selectOption('#home-range', String(K.HOME_STATS_WINDOW_DAYS));
+      await page.waitForFunction((t) => document.getElementById('numbers-title').textContent === t, 'Last ' + K.HOME_STATS_WINDOW_DAYS + ' days', { timeout: wait });
+      assert.equal(Math.abs(now - sinceSeen - K.HOME_STATS_WINDOW_SECS) < 120, true, 'back on the default range');
+
+      // The numbers: units, left-aligned like their labels.
+      const kpis = await page.$$eval('#home-kpis .kpi', (list) => list.map((k) => ({ label: k.querySelector('.k').textContent, value: k.querySelector('.v').textContent, align: getComputedStyle(k).textAlign, num: !!k.querySelector('.v .num') })));
+      assert.deepEqual(kpis.map((k) => [k.label, k.value]), [['Requests', '345'], ['Error rate', '2.1 %'], ['Tokens', '1,280,000 tokens'], ['Cost', '7.6'], ['Latency, 95th percentile', '6.4 s']]);
+      assert.equal(kpis.every((k) => k.align === 'left' && k.num), true, 'every number is a left-aligned ui.num');
+      // Labels and figures share one left edge in each item; the five items share a row at 1280 and form a 2-column grid on a phone.
+      const boxes = await page.$$eval('#home-kpis .kpi', (list) => list.map((k) => { const a = k.querySelector('.k').getBoundingClientRect(); const v = k.querySelector('.v .num, .v').getBoundingClientRect(); const b = k.getBoundingClientRect(); return { kx: a.left, vx: v.left, top: b.top, left: b.left, width: b.width, vRight: v.right, right: b.right }; }));
+      for (const b of boxes) { assert.ok(Math.abs(b.kx - b.vx) < 1, 'label and figure start at the same x'); assert.ok(b.vRight <= b.right + 0.5, 'a figure stays inside its item'); }
+      if (isPhone) {
+        assert.ok(Math.abs(boxes[0].top - boxes[1].top) < 1 && Math.abs(boxes[2].top - boxes[3].top) < 1 && boxes[4].top > boxes[3].top, 'two columns, the last item on its own row');
+        assert.ok(Math.abs(boxes[0].left - boxes[2].left) < 1 && boxes[1].left > boxes[0].left + 50, 'a grid of two columns');
+        assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), 'no sideways scroll');
+      } else {
+        assert.ok(boxes.every((b) => Math.abs(b.top - boxes[0].top) < 1), 'the five items share one row');
+        assert.ok(boxes.every((b, i) => i === 0 || b.left > boxes[i - 1].left), 'in order, left to right');
+      }
+
+      // The chart: role img, its label is the visible one-line summary, and the hidden table holds the same values.
+      const chart = await page.evaluate(() => {
+        const c = document.getElementById('home-chart');
+        const sum = document.getElementById('chart-summary').textContent;
+        const t = document.getElementById('chart-table-wrap');
+        const cs = getComputedStyle(document.querySelector('.chart-bar'));
+        return {
+          role: c.getAttribute('role'), label: c.getAttribute('aria-label'), sum, hidden: c.hidden,
+          tableRows: [...document.querySelectorAll('#chart-table tbody tr')].map((r) => [...r.children].map((x) => x.textContent)),
+          bars: [...document.querySelectorAll('.chart-bar')].map((b) => [b.dataset.day, Number(b.dataset.requests), b.style.height, b.querySelector('.chart-val').textContent]),
+          tableBox: t.getBoundingClientRect().width, tableClass: t.className,
+          anim: [cs.transitionDuration, cs.animationName],
+        };
+      });
+      assert.equal(chart.role, 'img');
+      assert.equal(chart.label, chart.sum, 'the aria-label is the summary line');
+      assert.equal(chart.sum, '345 requests over 3 days, from 87 to 160 a day, busiest on Nov 11.');
+      assert.deepEqual(chart.tableRows, [['Nov 10', '98'], ['Nov 11', '160'], ['Nov 12', '87']]);
+      assert.deepEqual(chart.bars.map((b) => [b[1], b[3]]), [[98, '98'], [160, '160'], [87, '87']], 'the bars hold the table values');
+      assert.deepEqual(chart.bars.map((b) => b[2]), ['61.25%', '100%', '54.375%'], 'heights are the share of the busiest day');
+      assert.equal(chart.tableClass, 'visually-hidden');
+      assert.equal(chart.anim[0], '0s', 'no transition on the bars');
+      assert.equal(chart.anim[1], 'none', 'no animation on the bars');
+      await page.emulateMedia({ reducedMotion: 'reduce' });
+      assert.equal(await page.evaluate(() => { const cs = getComputedStyle(document.querySelector('.chart-bar')); return cs.transitionDuration + '/' + cs.animationName; }), '0s/none', 'nothing moves under reduced motion');
+      await page.emulateMedia({ reducedMotion: null });
+
+      // Summaries: services (health data), backup, clients; each links to its page.
+      assert.deepEqual(await page.$$eval('#home-services-list .srow', (r) => r.map((x) => [x.firstChild.textContent, x.querySelector('.status-word').textContent, !!x.querySelector('.status-sym')])), [['Server', 'Running', true], ['auditor', 'Exited', true]]);
+      assert.deepEqual(await page.$$eval('#backup-facts dt', (d) => d.map((x) => x.textContent)), ['Status', 'Last backup', 'Next backup']);
+      assert.match(await page.innerText('#backup-facts'), /On schedule[\s\S]*2 hours ago[\s\S]*in 2 hours/);
+      assert.deepEqual(await page.$$eval('#clients-facts dd', (d) => d.map((x) => x.textContent)), ['2', '3']);
+      assert.deepEqual(await page.$$eval('.home-link', (a) => a.map((x) => x.getAttribute('href'))), ['/admin/services/', '/admin/backup/', '/admin/people/']);
+      // The three links are small secondary buttons (still links: they navigate), each with a decorative icon and its label.
+      assert.deepEqual(await page.$$eval('.home-link', (a) => a.map((x) => [x.tagName, x.classList.contains('btn') && x.classList.contains('btn-secondary') && x.classList.contains('btn-s') && !x.classList.contains('btn-primary'), !!x.querySelector('svg.icon[aria-hidden="true"]'), x.textContent.trim()])),
+        [['A', true, true, 'Manage services'], ['A', true, true, 'Open Backup'], ['A', true, true, 'Open People & clients']]);
+
+      // Greyed items: five of them, each reachable by Tab, silent on Enter, with the note on focus.
+      const naSel = '.kpi .na, #numbers .na, .na-sec .na-tag, #home-services .na';
+      const notes = await page.$$eval(naSel, (n) => n.map((x) => [x.getAttribute('tabindex'), x.dataset.tip]));
+      assert.equal(notes.length, 5, 'latency by provider, budget, spend by person, models used, uptime');
+      assert.match(await page.innerText('.kpi .sub .na'), /^Family budget\s+not set/, 'the budget is a label and "not set", no invented figure');
+      assert.deepEqual(await page.$$eval('.na-sec, #home-services .home-sec-head .na, #numbers .home-sec-head .na', (n) => n.map((x) => /\d/.test(x.textContent))), [false, false, false, false], 'no figures in the greyed items');
+      assert.equal(notes.every(([t, tip]) => t === '0' && /^Not available yet: /.test(tip)), true);
+      await page.evaluate(() => document.getElementById('home-error').focus());
+      const reached = new Set();
+      const urlBefore = page.url();
+      for (let i = 0; i < 80 && reached.size < 5; i++) {
+        await page.keyboard.press('Tab');
+        const tip = await page.evaluate(() => (document.activeElement && document.activeElement.matches('[data-tip]:not(.side-menu *)') && /Not available yet/.test(document.activeElement.dataset.tip)) ? document.activeElement.dataset.tip : null);
+        if (tip && !reached.has(tip)) {
+          reached.add(tip);
+          await page.waitForFunction(() => getComputedStyle(document.activeElement, '::after').opacity === '1', null, { timeout: 2000 }).catch(() => { throw new Error('the note does not show on focus: ' + tip); });
+          await page.keyboard.press('Enter');
+          assert.equal(page.url(), urlBefore, 'Enter does nothing');
+          assert.equal(await page.locator('#toasts .toast').count(), 0);
+        }
+      }
+      assert.equal(reached.size, 5, 'Tab reaches every greyed item');
+
+      // Layout: no sideways scroll; targets.
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'no horizontal scroll');
+      for (const box of await page.$$eval('.home-link, #numbers .na, #home-services .na, .na-sec .na-tag', (a) => a.map((x) => { const r = x.getBoundingClientRect(); return [r.width, r.height]; }))) {
+        assert.ok(box[1] >= (isPhone ? 44 : 24) - 0.5 && box[0] >= 24 - 0.5, 'target ' + box);
+      }
+
+      // A quiet window: the summary says so, and there is no chart and no table.
+      stats = { ...stats, requests: 0, error_rate: null, cost: null, tokens: { in: 0, out: 0, cached: 0 }, latency_ms: null, by_day: [] };
+      await page.waitForFunction(() => document.getElementById('chart-summary').textContent === 'No requests in the last 7 days.', null, { timeout: wait });
+      assert.equal(await page.isHidden('#home-chart'), true);
+      assert.equal(await page.isHidden('#chart-table-wrap'), true);
+      assert.equal(await page.innerText('#kpi-requests'), '0');
+      assert.equal(await page.innerText('#kpi-latency'), '–', 'no latency is a dash, not 0');
+      stats = { ...stats, requests: 345, by_day: days.map(([day, requests]) => ({ day, requests, tokens: { in: 0, out: 0, cached: 0 }, cost: null })) };
+
+      // axe on a copy of the page that lets axe in.
+      const axeCtx = await browser.newContext({ reducedMotion: 'reduce', viewport, bypassCSP: true, storageState: await ctx.storageState() });
+      try {
+        const ap = await axeCtx.newPage();
+        await install(ap);
+        await ap.goto(base + 'home/');
+        await ap.waitForSelector('#home-chart:not([hidden])', { timeout: wait });
+        await ap.addScriptTag({ content: fs.readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8') });
+        const found = await ap.evaluate(async () => (await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'] } })).violations.map((v) => v.id + ': ' + v.nodes.map((n) => n.target.join(' ')).join(', ')));
+        assert.deepEqual(found, [], 'axe on Home with numbers and chart');
+      } finally { await axeCtx.close(); }
+    } finally {
+      await page.unroute(setupRe);
+      await page.unroute(/\/api\/admin\/v1\/audit\/stats\?/);
+      await page.unroute(/\/api\/admin\/v1\/services$/);
+    }
+  });
+  await step('global search: combobox and listbox, groups in rule 4 order with Reference last, "/" focuses it but not inside a field, a setting shows its value, Enter opens it, Esc closes then clears', async () => {
+    const ORDER = ['Pages', 'Settings', 'People', 'Clients', 'Providers', 'Models', 'Audit', 'Reference'];
+    const state = await page.evaluate(async () => {
+      const s = await (await fetch('/api/admin/v1/settings', { headers: { 'X-Askbar-Admin': '1' } })).json();
+      return { timeout: s.generation_timeout_secs, theme: s.display.theme };
+    });
+    await page.goto(base + 'network/');
+    await page.waitForSelector('#app:not([hidden])');
+    const input = page.locator('#gs-input');
+    // Roles and name: one combobox named "Search the admin", closed, controlling a listbox.
+    assert.equal(await input.getAttribute('role'), 'combobox');
+    assert.equal(await input.getAttribute('aria-expanded'), 'false');
+    assert.equal(await input.getAttribute('aria-autocomplete'), 'list');
+    assert.equal(await page.getAttribute('#gs-list', 'role'), 'listbox');
+    assert.equal(await input.getAttribute('aria-controls'), 'gs-list');
+    // "/" from the page focuses it (on a phone it opens the menu that holds it).
+    await page.locator('body').press('/');
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'gs-input');
+    assert.equal(await input.inputValue(), '', 'the slash itself is not typed');
+    assert.equal(await page.getByRole('combobox', { name: 'Search the admin' }).count(), 1);
+    const box = await input.boundingBox();
+    assert.ok(box.height >= (isPhone ? 44 : 24) - 0.5, 'target ' + box.height);
+    if (isPhone) assert.equal(await page.evaluate(() => document.getElementById('gs').parentElement.id), 'side-menu', 'the phone menu holds it');
+    else assert.ok(await page.evaluate(() => document.getElementById('gs').parentElement.classList.contains('gs-left')), 'the status bar holds it');
+    // Groups come in rule 4 order, Reference last; the highlight is a <mark>. The reference index is read on the first
+    // typed character, so its group is drawn when it has arrived (step 7.4).
+    await input.fill('e');
+    await page.waitForSelector('#gs-list [role="option"]');
+    await page.waitForFunction(() => document.querySelector('#gs-list [aria-labelledby="gs-list-h-reference"]') !== null);
+    const heads = await page.$$eval('#gs-list [role="group"]', (g) => g.map((x) => document.getElementById(x.getAttribute('aria-labelledby')).textContent));
+    assert.deepEqual(heads, ORDER.filter((h) => heads.includes(h)), 'rule 4 order');
+    for (const h of ['Pages', 'Settings', 'Audit', 'Reference']) assert.ok(heads.includes(h), h + ' is searched');
+    assert.equal(heads[heads.length - 1], 'Reference', 'Reference is always last');
+    assert.equal(await input.getAttribute('aria-expanded'), 'true');
+    assert.ok(await page.locator('#gs-list .gs-title mark').count() > 0, 'matched text is marked');
+    // aria-activedescendant follows the arrows and names the selected option.
+    const active = () => page.evaluate(() => {
+      const id = document.getElementById('gs-input').getAttribute('aria-activedescendant');
+      const o = document.getElementById(id);
+      return { id, selected: o.getAttribute('aria-selected'), role: o.getAttribute('role'), only: document.querySelectorAll('#gs-list [aria-selected="true"]').length };
+    });
+    const first = await active();
+    assert.deepEqual([first.selected, first.role, first.only], ['true', 'option', 1]);
+    await input.press('ArrowDown');
+    const second = await active();
+    assert.notEqual(second.id, first.id);
+    assert.equal(second.only, 1);
+    await input.press('ArrowUp');
+    assert.equal((await active()).id, first.id);
+    // A setting shows its current value, read from the same GET the page uses.
+    await input.fill('reply time limit');
+    const row = page.locator('#gs-list [role="group"][aria-labelledby="gs-list-h-settings"] [role="option"]', { hasText: 'Reply time limit' });
+    await row.waitFor();
+    assert.match(await row.innerText(), new RegExp((state.timeout === null ? 'default' : state.timeout + ' s') + '\\s*$'));
+    await input.fill('theme');
+    await page.locator('#gs-list [role="group"][aria-labelledby="gs-list-h-settings"] [role="option"]', { hasText: 'Theme' }).waitFor();
+    assert.match(await page.locator('#gs-list [role="group"][aria-labelledby="gs-list-h-settings"] [role="option"]', { hasText: 'Theme' }).first().innerText(), new RegExp(state.theme + '\\s*$'));
+    // Audit filters open Model calls already filtered: the address holds the filter (plan step 6.1).
+    await input.fill('status: timed out');
+    const timedOut = page.locator('#gs-list [role="option"]', { hasText: 'Status: timed out' });
+    await timedOut.waitFor();
+    assert.match(await timedOut.getAttribute('href'), /\/admin\/audit\/calls\/\?status=timed_out$/, 'the address holds the auditor\'s code, not the word');
+    await input.fill('provider: ');
+    const prov = page.locator('#gs-list [role="option"]', { hasText: 'Provider: ' }).first();
+    await prov.waitFor();
+    assert.match(await prov.getAttribute('href'), /\/admin\/audit\/calls\/\?provider=[^&]+$/);
+    await input.fill('status: error');
+    const audit = page.locator('#gs-list [role="option"]', { hasText: 'Status: error' });
+    await audit.waitFor();
+    assert.match(await audit.getAttribute('href'), /\/admin\/audit\/calls\/\?status=error$/);
+    assert.match(await audit.innerText(), /filters the list/);
+    // Esc closes the list and keeps the text; a second Esc clears it.
+    await input.press('Escape');
+    assert.equal(await input.getAttribute('aria-expanded'), 'false');
+    assert.equal(await page.isHidden('#gs-pop'), true);
+    assert.equal(await input.inputValue(), 'status: error');
+    await input.press('Escape');
+    assert.equal(await input.inputValue(), '');
+    // axe with the list open (a copy of the page in a context that lets axe in).
+    const axeCtx = await browser.newContext({ reducedMotion: 'reduce', viewport, bypassCSP: true, storageState: await ctx.storageState() });
+    try {
+      const ap = await axeCtx.newPage();
+      await ap.goto(base + 'network/');
+      await ap.waitForSelector('#app:not([hidden])');
+      await ap.locator('body').press('/');
+      await ap.fill('#gs-input', 'e');
+      await ap.waitForSelector('#gs-list [role="option"]');
+      await ap.addScriptTag({ content: fs.readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8') });
+      const found = await ap.evaluate(async () => (await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'] } })).violations.map((v) => v.id + ': ' + v.nodes.map((n) => n.target.join(' ')).join(', ')));
+      assert.deepEqual(found, [], 'axe with the list open');
+    } finally { await axeCtx.close(); }
+    // Enter opens the page at the field, which takes focus. (The Settings row: the Reference group has a row of the same name.)
+    await input.fill('reply time limit');
+    await page.locator('#gs-list [role="group"][aria-labelledby="gs-list-h-settings"] [role="option"]', { hasText: 'Reply time limit' }).waitFor();
+    await input.press('Enter');
+    await page.waitForURL('**/admin/general/#s-gen-timeout');
+    await page.waitForSelector('#app:not([hidden])');
+    await page.waitForFunction(() => document.activeElement && document.activeElement.id === 's-gen-timeout');
+    // "/" typed inside a field is a character, not the shortcut.
+    await page.keyboard.type('/');
+    assert.equal(await page.evaluate(() => document.activeElement.id), 's-gen-timeout');
+    await page.evaluate(() => { document.getElementById('s-gen-timeout').value = ''; });
+  });
+  await step('global search: the reference is last, its index is read once per page load, an on-page topic opens help, another opens its article, the group is capped', async () => {
+    const cap = await page.evaluate(async () => (await window.ui.ready).SEARCH_RESULTS_PER_GROUP);
+    const refGroup = '#gs-list [role="group"][aria-labelledby="gs-list-h-reference"]';
+    const refRows = refGroup + ' [role="option"]';
+    const topicRow = () => page.locator(refRows, { hasText: 'Host name' });
+    let indexRequests = 0;
+    const onRequest = (r) => { if (new URL(r.url()).pathname === '/admin/reference.json') indexRequests++; };
+    page.on('request', onRequest);
+    try {
+      // Nothing is read until the search box is used; the first focus reads the index once.
+      await page.goto(base + 'home/');
+      await page.waitForSelector('#app:not([hidden])');
+      assert.equal(indexRequests, 0, 'no index read before the search box is used');
+      await openMenu();
+      await page.locator('#gs-input').fill('host name');
+      await topicRow().waitFor();
+      assert.equal(indexRequests, 1, 'the index is read on the first typed character');
+      assert.equal(await topicRow().getAttribute('href'), '/admin/reference/settings/network/#host-name');
+      assert.match(await topicRow().locator('.gs-where').innerText(), /^Reference \//, 'the area is the secondary text');
+      assert.ok(await page.locator(refGroup + ' mark').count() > 0, 'matched text is marked');
+      const heads = await page.$$eval('#gs-list [role="group"]', (g) => g.map((x) => document.getElementById(x.getAttribute('aria-labelledby')).textContent));
+      assert.ok(heads.length > 1 && heads[heads.length - 1] === 'Reference', 'Reference is last, below the other groups: ' + heads.join(', '));
+      await page.locator('#gs-input').fill('host name network');
+      await topicRow().waitFor();
+      assert.equal(indexRequests, 1, 'typing more does not read the index again');
+      // A topic of another page opens its article at the heading, which comes into view.
+      await page.locator('#gs-input').fill('host name');
+      await topicRow().waitFor();
+      await topicRow().hover();
+      await page.locator('#gs-input').press('Enter');
+      await page.waitForURL((u) => u.pathname === '/admin/reference/settings/network/' && u.hash === '#host-name');
+      await page.waitForFunction(() => { const h = document.getElementById('host-name'); if (!h) return false; const r = h.getBoundingClientRect(); return r.top >= 0 && r.top < window.innerHeight; });
+      assert.equal(await page.evaluate(() => new URL(location.href).searchParams.has('panel')), false, 'no help panel for a topic of another page');
+    } finally { page.off('request', onRequest); }
+    // On the page that carries the topic, Enter opens the help panel at its address, and the page stays.
+    await page.goto(base + 'network/');
+    await page.waitForSelector('#app:not([hidden])');
+    await openMenu();
+    await page.locator('#gs-input').fill('host name');
+    await topicRow().waitFor();
+    await topicRow().hover();
+    await page.locator('#gs-input').press('Enter');
+    await page.waitForSelector('#help-panel:not([hidden])');
+    await page.waitForFunction(() => document.getElementById('help-panel-title').textContent === 'Host name');
+    assert.equal(await page.evaluate(() => new URL(location.href).searchParams.get('panel')), 'help:settings/network#host-name');
+    assert.equal(await page.evaluate(() => location.pathname), '/admin/network/', 'the page stays');
+    assert.equal(await page.locator('#gs-input').inputValue(), '', 'the search is cleared');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('#help-panel', { state: 'hidden' });
+    // The group respects the cap. Every reference row contains "e" (in its "Reference" area), so the count is the cap.
+    await openMenu();
+    await page.locator('#gs-input').fill('e');
+    await page.locator(refRows).first().waitFor();
+    const total = await page.evaluate(async () => (await (await fetch('/admin/reference.json')).json()).filter((p) => p.id !== 'index').reduce((n, p) => n + 1 + p.headings.length, 0));
+    assert.equal(await page.locator(refRows).count(), Math.min(cap, total), 'the Reference group holds at most SEARCH_RESULTS_PER_GROUP rows');
+    // Phones: the targets are 44 px, and nothing scrolls sideways with the results open.
+    const heights = await page.$$eval('#gs-list [role="option"]', (els) => els.map((e) => e.getBoundingClientRect().height));
+    for (const h of heights) assert.ok(h >= (isPhone ? 44 : 24) - 0.5, 'result row ' + h);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'no sideways scroll with results open');
+    // Axe with the reference rows drawn (a copy of the page in a context that lets axe in).
+    const axeCtx = await browser.newContext({ reducedMotion: 'reduce', viewport, bypassCSP: true, storageState: await ctx.storageState() });
+    try {
+      const ap = await axeCtx.newPage();
+      await ap.goto(base + 'network/');
+      await ap.waitForSelector('#app:not([hidden])');
+      await ap.locator('body').press('/');
+      await ap.fill('#gs-input', 'e');
+      await ap.waitForSelector(refGroup);
+      await ap.addScriptTag({ content: fs.readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8') });
+      const found = await ap.evaluate(async () => (await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'] } })).violations.map((v) => v.id + ': ' + v.nodes.map((n) => n.target.join(' ')).join(', ')));
+      assert.deepEqual(found, [], 'axe with the reference rows open');
+    } finally { await axeCtx.close(); }
+    await page.goto(base + 'home/');
+    await page.waitForSelector('#app:not([hidden])');
   });
   await step('audit trace: the waterfall layout is right for fixed numbers, shows the tree, and copes with a running span', async () => {
+    await openPage('audit/calls');
     const spans = [
       { id: 'a-turn', parent_id: null, kind: 'turn', name: 'chat', status: 'done', started_at: 1000, ended_at: 1002, attrs: { started_ms: 1000000, ended_ms: 1002000 } },
       { id: 'b-attempt', parent_id: 'a-turn', kind: 'attempt', name: 'prov', status: 'error', started_at: 1000, ended_at: 1000, provider_id: 'p1', model: 'm', error_code: 'http_429', attrs: { started_ms: 1000200, ended_ms: 1000700, retry_index: 0 } },
@@ -1308,27 +3642,103 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     const finished = spans.filter((x) => x.status !== 'running');
     await page.route('**/api/admin/v1/audit/traces/TRACE1', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ trace_id: 'TRACE1', cost: 0.0007, spans: finished }) }));
     await openPage('providers');
-    await openPage('audit');
+    await openPage('audit/calls');
     await page.evaluate(() => window.askbarAudit.openTrace('TRACE1'));
-    await page.waitForSelector('#audit-waterfall .span-bar');
-    assert.equal(await page.locator('#audit-waterfall .span-bar').count(), 4);
-    assert.equal(await page.locator('#audit-waterfall .span-bar.status-error').count(), 1);
-    assert.match(await page.innerText('#audit-trace-head'), /TRACE1 · done · .* · cost 0\.0007/);
+    await page.waitForSelector('#trace-waterfall .span-bar');
+    assert.equal(await page.locator('#trace-waterfall .span-bar').count(), 4);
+    assert.equal(await page.locator('#trace-waterfall .span-bar.status-error').count(), 1);
+    assert.equal(await page.innerText('#trace-id'), 'TRACE1');
+    assert.match(await page.innerText('#trace-state'), /done/);
+    assert.match(await page.innerText('#trace-meta'), /0\.0007/);
     // total = 1002000 - 999990 = 2010 ms; c-attempt starts 1010 ms in and runs 900 ms.
     assert.equal(await page.$eval('[data-span="c-attempt"]', (b) => b.style.width), '44.78%');
     assert.equal(await page.$eval('[data-span="c-attempt"]', (b) => b.style.left), '50.25%');
     assert.equal(await page.$eval('[data-span="b-attempt"]', (b) => b.closest('.span-row').querySelector('.label').style.paddingLeft), '14px');
     await page.focus('[data-span="b-attempt"]');
-    const details = await page.innerText('#audit-span-details');
+    const details = await page.innerText('#trace-span-details');
     assert.match(details, /attempt · prov · error/);
     assert.match(details, /starts at \+210 ms, takes 500 ms/);
     assert.match(details, /error http_429/);
     assert.match(details, /"retry_index":0/);
     // A running span is drawn in its own style, up to now.
-    await page.evaluate((s) => window.askbarAudit.renderTrace({ trace_id: 'TRACE2', cost: null, spans: s }), spans);
-    assert.equal(await page.locator('#audit-waterfall .span-bar.running').count(), 1);
-    assert.equal(await page.locator('#audit-waterfall .span-bar').count(), 5);
+    await page.route('**/api/admin/v1/audit/traces/TRACE2', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ trace_id: 'TRACE2', cost: null, spans }) }));
+    await page.evaluate(() => window.askbarAudit.openTrace('TRACE2'));
+    await page.waitForSelector('#trace-waterfall .span-bar.running');
+    assert.equal(await page.locator('#trace-waterfall .span-bar.running').count(), 1);
+    assert.equal(await page.locator('#trace-waterfall .span-bar').count(), 5);
+    await page.unroute('**/api/admin/v1/audit/traces/TRACE2');
     await page.unroute('**/api/admin/v1/audit/traces/TRACE1');
+  });
+  await step('audit calls: the figures strip shares one left edge per figure, the error figure is red only when there are errors, and the trace waterfall is drawn to scale', async () => {
+    const stats = (errors) => ({ requests: 40, by_status: { done: 40 - errors, error: errors }, error_rate: 0, latency_ms: { p50: 1200, p95: 5400 }, ttft_ms: {}, tokens: { in: 1000, out: 234, cached: 0 }, cost: 0, cost_unknown_requests: 0, by_provider: [], by_day: [] });
+    let errors = 2;
+    await page.route('**/api/admin/v1/audit/stats*', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify(stats(errors)) }));
+    const hostile = '<img src=x onerror="window.__wfx=1">';
+    const spans = [
+      { id: 'w-turn', parent_id: null, kind: 'turn', name: 'chat', status: 'done', started_at: 1000, ended_at: 1002, attrs: { started_ms: 1000000, ended_ms: 1002000 } },
+      { id: 'w-a1', parent_id: 'w-turn', kind: 'attempt', name: 'prov', status: 'error', started_at: 1000, ended_at: 1000, provider_id: 'p1', error_code: 'http_429', attrs: { started_ms: 1000200, ended_ms: 1000700, retry_index: 0 } },
+      { id: 'w-a2', parent_id: 'w-turn', kind: 'attempt', name: 'prov', status: 'done', started_at: 1001, ended_at: 1002, provider_id: 'p2', attrs: { started_ms: 1001000, ended_ms: 1001900, retry_index: 1 } },
+      { id: 'w-gate', parent_id: null, kind: 'gate', name: 'kill_switch', status: 'done', started_at: 1000, ended_at: 1000, attrs: { started_ms: 999990, ended_ms: 1000000 } },
+      { id: 'w-host', parent_id: 'w-turn', kind: 'tool', name: hostile, status: 'done', started_at: 1001, ended_at: 1001, attrs: { started_ms: 1001000, ended_ms: 1001500 } },
+    ];
+    await page.route('**/api/admin/v1/audit/traces/WF1', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ trace_id: 'WF1', cost: null, spans }) }));
+    try {
+      await openPage('audit/calls');
+      await page.waitForFunction(() => document.getElementById('kpi-replies').textContent === '40');
+      // Each figure starts where its label starts, and the figures share one baseline.
+      const edges = await page.$$eval('#calls-kpis .kpi', (ks) => ks.map((k) => [k.querySelector('.k').getBoundingClientRect().left, k.querySelector('.v').getBoundingClientRect().left]));
+      for (const [label, figure] of edges) assert.ok(Math.abs(label - figure) <= 1, 'label and figure share a left edge ' + label + ' vs ' + figure);
+      // The red is the danger colour only with errors.
+      const colours = () => page.evaluate(() => {
+        const probe = document.createElement('span'); probe.style.color = 'var(--danger)'; document.body.append(probe);
+        const danger = getComputedStyle(probe).color; probe.remove();
+        return { danger, errors: getComputedStyle(document.getElementById('kpi-errors')).color, replies: getComputedStyle(document.getElementById('kpi-replies')).color };
+      });
+      let c = await colours();
+      assert.equal(c.errors, c.danger, 'the error figure is red with errors');
+      assert.notEqual(c.replies, c.danger);
+      errors = 0;
+      await page.reload();
+      await page.waitForFunction(() => document.getElementById('kpi-errors').textContent === '0');
+      c = await colours();
+      assert.notEqual(c.errors, c.danger, 'and not red with none');
+      errors = 2;
+
+      // The waterfall: a bar per span, placed and sized by its start and length within the whole call.
+      await page.reload();
+      await page.waitForSelector('#calls-rows tr[data-trace]');
+      await page.evaluate(() => window.askbarAudit.openTrace('WF1'));
+      await page.waitForSelector('#trace-waterfall .span-bar');
+      assert.equal(await page.locator('#trace-waterfall .span-bar').count(), spans.length);
+      const lay = await page.evaluate((s) => window.askbarAudit.layout(s, 0), spans);
+      const geo = await page.$$eval('#trace-waterfall .span-row', (rows) => rows.map((r) => {
+        const t = r.querySelector('.track').getBoundingClientRect(); const b = r.querySelector('.span-bar').getBoundingClientRect();
+        return { id: r.querySelector('.span-bar').dataset.span, left: b.left - t.left, width: b.width, track: t.width, name: r.querySelector('.span-bar').getAttribute('aria-label'), dur: r.querySelector('.dur').textContent };
+      }));
+      assert.equal(geo.length, lay.rows.length);
+      for (const row of lay.rows) {
+        const g = geo.find((x) => x.id === row.span.id);
+        assert.ok(Math.abs(g.left - (g.track * row.left) / 100) <= 3, row.span.id + ' starts at its time: ' + g.left + ' of ' + g.track);
+        if (g.track * row.width / 100 >= 4) assert.ok(Math.abs(g.width - (g.track * row.width) / 100) <= 3, row.span.id + ' is as long as its span');
+        else assert.ok(g.width >= 3.5, row.span.id + ' keeps a visible minimum');
+        assert.match(g.name, /, (done|error), \d/, 'every bar has a name with its state and length');
+        assert.ok(g.dur.length > 0, 'and its length is printed');
+      }
+      assert.deepEqual(await page.$$eval('#trace-axis .tick', (t) => t.map((x) => x.textContent)), ['0 ms', '1 s', '2 s'], 'the scale runs from 0 to the whole call');
+      // The failed attempt says so in words and in red; the later one at another provider is marked as a fallback.
+      const failed = page.locator('#trace-waterfall .span-row:has([data-span="w-a1"])');
+      assert.match(await failed.innerText(), /error/);
+      assert.equal(await failed.locator('.span-bar.status-error').count(), 1);
+      assert.match(await page.getAttribute('[data-span="w-a2"]', 'aria-label'), /fallback/);
+      // A hostile span name is text.
+      assert.equal(await page.locator('#trace-panel img').count(), 0);
+      assert.equal(await page.evaluate(() => window.__wfx), undefined);
+      assert.ok((await page.innerText('#trace-waterfall')).includes(hostile));
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'no sideways scroll with the trace open');
+    } finally {
+      await page.unroute('**/api/admin/v1/audit/stats*');
+      await page.unroute('**/api/admin/v1/audit/traces/WF1');
+    }
   });
   await step('audit routing: a three-try request shows its tries, why each failed, and the providers overall', async () => {
     const attempt = (id, started, provider, retry, status, code) => ({ id, parent_id: 'turn', kind: 'attempt', name: 'x', status, started_at: 1000, ended_at: 1001, provider_id: provider, error_code: code, attrs: { started_ms: started, ended_ms: started + 300, latency_ms: 300, retry_index: retry } });
@@ -1346,10 +3756,8 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.route('**/api/admin/v1/audit/stats*', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify(stats) }));
     await page.route('**/api/admin/v1/audit/provider-health', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ providers: [{ provider_id: 'p1', status: 'auth_failed', since: 1793631845, error_code: 'http_401' }] }) }));
     await openPage('providers');
-    await openPage('audit');
-    await page.evaluate(() => window.askbarAudit.openTrace('ROUTE1'));
-    await page.waitForSelector('#audit-waterfall .span-bar');
-    await page.click('#audit-nav [data-sub="routing"]');
+    await page.goto(base + 'audit/routing/?id=ROUTE1');
+    await page.waitForSelector('#app:not([hidden])');
     await page.waitForSelector('#audit-attempt-rows tr');
     const rows = await page.$$eval('#audit-attempt-rows tr', (r) => r.map((tr) => [...tr.children].map((td) => td.textContent)));
     assert.deepEqual(rows, [
@@ -1371,7 +3779,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.unroute('**/api/admin/v1/audit/stats*');
     await page.unroute('**/api/admin/v1/audit/provider-health');
   });
-  await step('audit content (canned): sealed until the passphrase, then View shows text as text, and a session that ends wipes the page', async () => {
+  await step('audit calls (canned): sealed content stays sealed in the trace panel until the passphrase opens a session, View shows text as text, and a session that ends wipes it', async () => {
     const spans = [
       { id: 'sp-turn', parent_id: null, kind: 'turn', name: 'chat', status: 'done', started_at: 1000, ended_at: 1001, sealed: 1, attrs: {} },
       { id: 'sp-attempt', parent_id: 'sp-turn', kind: 'attempt', name: 'prov', status: 'done', started_at: 1000, ended_at: 1001, sealed: 2, attrs: {} },
@@ -1399,66 +3807,159 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       if (!open) return route.fulfill({ status: 403, contentType: 'application/json', body: JSON.stringify({ error: 'forbidden', detail: 'Sealed content is sealed.' }) });
       route.fulfill({ contentType: 'application/json', body: JSON.stringify({ span_id: 'sp-attempt', payloads: [{ role: 'request', key_id: 'k1', text: 'the <b>question</b> that was asked' }, { role: 'error', key_id: 'k0', text: null, key_created_at: 500, key_retired_at: 900 }] }) });
     });
-    await openPage('providers');
-    await openPage('audit');
+    await openPage('audit/calls');
     await page.evaluate(() => window.askbarAudit.openTrace('SEAL1'));
-    await page.waitForSelector('#audit-waterfall .span-bar');
-    await page.click('#audit-nav [data-sub="content"]');
+    await page.waitForSelector('#trace-sealed .sealed-row');
     // Sealed, with a View button only for spans that have something; nothing fetched yet.
-    assert.equal(await page.locator('#audit-sealed .sealed-row').count(), 2);
-    assert.match(await page.innerText('#audit-sealed'), /Sealed \(1 item\)/);
-    assert.match(await page.innerText('#audit-sealed'), /Sealed \(2 items\)/);
+    assert.equal(await page.locator('#trace-sealed .sealed-row').count(), 2);
+    assert.match(await page.innerText('#trace-sealed'), /Sealed \(1 item\)/);
+    assert.match(await page.innerText('#trace-sealed'), /Sealed \(2 items\)/);
     assert.equal(viewed.length, 0, 'nothing is fetched before a session is open');
-    assert.equal(await page.isVisible('#audit-unseal-form'), true);
-
-    // View while sealed: the way to the passphrase, and still nothing fetched.
-    await page.click('#audit-sealed [data-span="sp-attempt"] .view-btn');
-    assert.match(await page.innerText('#audit-pass-error'), /Enter the audit passphrase/);
+    // View while sealed: the way to the passphrase (the status bar's Unseal box), and still nothing fetched.
+    await page.click('#trace-sealed [data-span="sp-attempt"] .view-btn');
+    await page.waitForSelector('#unseal-box[open]');
+    assert.match(await page.innerText('#trace-sealed-error'), /Enter the audit passphrase/);
     assert.equal(viewed.length, 0);
-
     // Wrong: the server's sentence, nothing opened, the field emptied.
-    await page.fill('#audit-pass', 'a wrong passphrase of length');
-    await page.click('#audit-unseal');
-    await page.waitForFunction(() => /does not open any audit key/.test(document.getElementById('audit-pass-error').textContent));
-    assert.equal(await page.inputValue('#audit-pass'), '', 'the passphrase field is cleared after use');
-    assert.equal(await page.isVisible('#audit-open'), false);
-
-    // Right: the session opens, with the keys it holds; no prompt for each item from here.
-    await page.fill('#audit-pass', 'the right passphrase here');
-    await page.click('#audit-unseal');
-    await page.waitForSelector('#audit-open:not([hidden])');
-    assert.match(await page.innerText('#audit-open-state'), /Keys open: k1\./);
-    assert.equal(await page.isVisible('#audit-unseal-form'), false);
-    await page.click('#audit-sealed [data-span="sp-attempt"] .view-btn');
-    await page.waitForFunction(() => /that was asked/.test(document.getElementById('audit-viewed').textContent));
-    const plain = await page.innerText('#audit-viewed');
+    await page.fill('#unseal-pass', 'a wrong passphrase of length');
+    await page.click('#unseal-go');
+    await page.waitForFunction(() => /does not open any audit key/.test(document.getElementById('unseal-pass-error').textContent));
+    assert.equal(await page.inputValue('#unseal-pass'), '', 'the field is emptied');
+    // Right: the session opens, the box closes, and the item asked for opens with it; no prompt for each item.
+    await page.fill('#unseal-pass', 'the right passphrase here');
+    await page.click('#unseal-go');
+    await page.waitForSelector('#unseal-box', { state: 'hidden' });
+    await page.waitForFunction(() => /that was asked/.test(document.getElementById('trace-viewed').textContent));
+    const plain = await page.innerText('#trace-viewed');
     assert.match(plain, /request \(key k1\)/);
     assert.match(plain, /the <b>question<\/b> that was asked/, 'markup is shown as typed');
-    assert.equal(await page.locator('#audit-viewed b').count(), 0);
+    assert.equal(await page.locator('#trace-viewed b').count(), 0);
     assert.match(plain, /not opened: this session has no key for it; key k0 was made .* and retired/);
     assert.ok(viewed.every((u) => /sp-attempt$/.test(u)));
     assert.deepEqual(sent, ['a wrong passphrase of length', 'the right passphrase here']);
-
-    // The session ends on its own (a timeout, sign-out elsewhere): the page is wiped and asks again.
+    // The session ends on its own (a timeout, sign-out elsewhere): the panel is wiped and asks again.
     open = false;
     await page.evaluate(() => window.askbarAudit.sessionFromStatus({ open: false }));
-    assert.equal(await page.isVisible('#audit-unseal-form'), true);
+    await page.waitForFunction(() => document.getElementById('trace-viewed').children.length === 0);
     assert.equal((await page.content()).includes('that was asked'), false, 'wiped when the session ended');
-    // A view that finds it sealed says so and shows the passphrase field again.
+    // A view that finds it sealed says so, in the panel.
     await page.evaluate(() => { window.askbarAudit.session.open = true; });
-    await page.click('#audit-sealed [data-span="sp-attempt"] .view-btn');
-    await page.waitForFunction(() => /sealed/i.test(document.getElementById('audit-pass-error').textContent));
-    // Seal from the page.
-    await page.fill('#audit-pass', 'the right passphrase here');
-    await page.click('#audit-unseal');
-    await page.waitForSelector('#audit-open:not([hidden])');
-    await page.click('#audit-seal');
-    await page.waitForSelector('#audit-unseal-form:not([hidden])');
-    assert.equal(open, false, 'Seal reached the server');
-    assert.equal(await page.evaluate(() => JSON.stringify([...Object.entries(localStorage), ...Object.entries(sessionStorage)]).includes('passphrase')), false, 'never stored');
+    await page.click('#trace-sealed [data-span="sp-attempt"] .view-btn');
+    await page.waitForFunction(() => /sealed/i.test(document.getElementById('trace-sealed-error').textContent));
+    assert.equal(await page.locator('#tab-audit-calls img').count(), 0);
+    assert.equal(await page.evaluate(() => window.__pwned), undefined);
     await page.unroute('**/api/admin/v1/audit/traces/SEAL1');
     await page.unroute('**/api/admin/v1/audit/session');
     await page.unroute('**/api/admin/v1/audit/payloads/*');
+  });
+  await step('audit calls (canned): long sealed content leaves one scroll bar in the trace panel: the sealed box does not scroll, the header stays put, and the page behind does not move', async () => {
+    const spans = [{ id: 'sp-attempt', parent_id: null, kind: 'attempt', name: 'prov', status: 'done', started_at: 1000, ended_at: 1001, sealed: 2, attrs: {} }];
+    const long = Array.from({ length: 150 }, (_, i) => 'line ' + i + ' ' + 'word '.repeat(12)).join('\n') + '\n' + 'x'.repeat(600);
+    await page.route('**/api/admin/v1/audit/traces/LONG1', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ trace_id: 'LONG1', cost: null, spans }) }));
+    await page.route('**/api/admin/v1/audit/session', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ open: true, idle_left_secs: 900, total_left_secs: 3600, idle_limit_secs: 900, total_limit_secs: 3600, keys: [{ key_id: 'k1', created_at: 1000, retired_at: null, open: true }] }) }));
+    await page.route('**/api/admin/v1/audit/payloads/*', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ span_id: 'sp-attempt', payloads: [{ role: 'request', key_id: 'k1', text: long }, { role: 'reply', key_id: 'k1', text: long }] }) }));
+    try {
+      await openPage('audit/calls');
+      await page.evaluate(() => window.askbarAudit.openTrace('LONG1'));
+      await page.waitForSelector('#trace-sealed .view-btn');
+      await page.evaluate(() => { window.askbarAudit.session.open = true; });
+      await page.click('#trace-sealed .view-btn');
+      await page.waitForFunction(() => document.getElementById('trace-viewed').textContent.includes('line 149'));
+      const scrollers = () => page.evaluate(() => [...document.querySelectorAll('#trace-panel *, #trace-panel')].filter((e) => e.clientHeight > 0 && e.scrollHeight > e.clientHeight + 1 && /(auto|scroll)/.test(getComputedStyle(e).overflowY)).map((e) => e.className));
+      assert.deepEqual(await scrollers(), ['side-panel-body'], 'the panel body is the only scrolling element in the panel');
+      const own = await page.evaluate(() => { const b = document.querySelector('#trace-viewed pre.plain'); return { over: getComputedStyle(b).overflowY, max: getComputedStyle(b).maxHeight, sh: b.scrollHeight, ch: b.clientHeight, sideways: b.scrollWidth - b.clientWidth }; });
+      assert.ok(own.sh <= own.ch, 'the sealed box has no scroll bar of its own');
+      assert.equal(own.max, 'none');
+      assert.ok(own.sideways <= 0, 'long lines wrap');
+      const headY = () => page.evaluate(() => document.querySelector('#trace-panel .side-panel-head').getBoundingClientRect().top);
+      const y0 = await headY();
+      const scrollY0 = await page.evaluate(() => window.scrollY);
+      await page.evaluate(() => { const b = document.querySelector('#trace-panel .side-panel-body'); b.scrollTop = b.scrollHeight; });
+      assert.ok(await page.evaluate(() => { const b = document.querySelector('#trace-panel .side-panel-body'); return b.scrollTop > 0; }), 'the body scrolled');
+      assert.equal(await headY(), y0, 'the header stays at the top while the body scrolls');
+      await page.mouse.move(await page.evaluate(() => { const r = document.querySelector('#trace-panel .side-panel-body').getBoundingClientRect(); return r.left + r.width / 2; }), await page.evaluate(() => { const r = document.querySelector('#trace-panel .side-panel-body').getBoundingClientRect(); return r.top + r.height / 2; }));
+      await page.mouse.wheel(0, 600);
+      assert.equal(await page.evaluate(() => window.scrollY), scrollY0, 'scrolling past the end of the panel does not scroll the page behind');
+      assert.equal(await page.evaluate(() => getComputedStyle(document.querySelector('#trace-panel .side-panel-body')).overscrollBehaviorY), 'contain');
+    } finally {
+      await page.unroute('**/api/admin/v1/audit/traces/LONG1');
+      await page.unroute('**/api/admin/v1/audit/session');
+      await page.unroute('**/api/admin/v1/audit/payloads/*');
+    }
+  });
+  await step('side panel: slides in and out with the page making room, a quick open-close-open ends open, switching topics does not slide, and reduced motion is instant', async () => {
+    const run = async (reducedMotion) => {
+      const c = await browser.newContext({ viewport, reducedMotion, storageState: await ctx.storageState() });
+      const p = await c.newPage();
+      await p.goto(base + 'home/');
+      await p.waitForSelector('#app:not([hidden])');
+      return { c, p };
+    };
+    // Samples once per animation frame where the panel is and how wide the page column is, until `done(samples)` says so.
+    const sample = (p, done, click) => p.evaluate(async ([doneSrc, clickSrc]) => {
+      const stop = (0, eval)(doneSrc);
+      const panel = document.getElementById('help-panel');
+      const out = [];
+      (0, eval)(clickSrc)();
+      for (let i = 0; i < 180; i++) {
+        await new Promise((r) => requestAnimationFrame(r));
+        const r = panel.getBoundingClientRect();
+        out.push({ left: r.left, hidden: panel.hidden, col: document.getElementById('app').getBoundingClientRect().width, inert: panel.inert });
+        if (stop(out)) break;
+      }
+      return out;
+    }, [done, click]);
+    const { c, p } = await run('no-preference');
+    try {
+      assert.ok((await p.$$('[data-help]')).length >= 2, 'the page has two help buttons');
+      const finalLeft = await p.evaluate(() => window.innerWidth - Math.min(parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--panel-w')), window.innerWidth));
+      assert.ok(await p.evaluate(() => parseFloat(getComputedStyle(document.getElementById('help-panel')).transitionDuration) > 0), 'the panel has a transition duration');
+      // Open: starts off to the right, ends docked; on a desktop the column narrows through values in between.
+      const o = await sample(p, `(s) => s.length > 2 && Math.abs(s[s.length - 1].left - ${finalLeft}) < 0.5 && Math.abs(s[s.length - 2].left - ${finalLeft}) < 0.5`, "() => document.querySelector('[data-help]').click()");
+      assert.ok(o[0].left > finalLeft + 1, 'on the first frame the panel is still to the right of its place: ' + o[0].left);
+      assert.ok(Math.abs(o[o.length - 1].left - finalLeft) < 0.5, 'it ends in its place');
+      assert.ok(o.some((x) => x.left > finalLeft + 1 && x.left < o[0].left), 'it was seen part of the way');
+      if (!isPhone) assert.ok(new Set(o.map((x) => Math.round(x.col))).size >= 3, 'the page column narrowed through in-between widths');
+      assert.equal(await p.evaluate(() => document.activeElement.id), 'help-panel-title', 'focus moved into the panel');
+      // Close: stays visible while it slides, then is hidden, the page widens back and focus returns to the opener.
+      const cl = await sample(p, '(s) => s[s.length - 1].hidden', "() => document.querySelector('#help-panel [data-panel-close]').click()");
+      assert.equal(cl[0].hidden, false, 'still shown on the first frame of closing');
+      assert.ok(cl.some((x) => !x.hidden && x.left > finalLeft + 1), 'it was seen sliding out');
+      assert.ok(cl[0].inert, 'inert while it slides out');
+      assert.equal(cl[cl.length - 1].hidden, true, 'hidden once the slide ends');
+      if (!isPhone) assert.ok(cl[cl.length - 1].col > cl[0].col, 'the page widened');
+      assert.ok(await p.evaluate(() => document.activeElement === document.querySelector('[data-help]')), 'focus returned to the opener after the slide');
+      assert.equal(await p.evaluate(() => document.body.classList.contains('panel-open')), false);
+      // Open, close, open in quick succession ends open and consistent.
+      await p.evaluate(async () => {
+        const b = document.querySelector('[data-help]');
+        const frame = () => new Promise((r) => requestAnimationFrame(r));
+        b.click(); await frame();
+        document.querySelector('#help-panel [data-panel-close]').click(); await frame();
+        b.click();
+      });
+      await p.waitForFunction((l) => Math.abs(document.getElementById('help-panel').getBoundingClientRect().left - l) < 0.5, finalLeft);
+      assert.deepEqual(await p.evaluate(() => { const e = document.getElementById('help-panel'); return [e.hidden, e.inert, e.classList.contains('panel-closing'), e.classList.contains('panel-enter'), document.body.classList.contains('panel-open')]; }), [false, false, false, false, true]);
+      // Switching to another topic swaps the content in place: never hidden, never moved.
+      const st = await sample(p, '(s) => s.length >= 20', "() => document.querySelectorAll('[data-help]')[1].click()");
+      assert.ok(st.every((x) => !x.hidden && Math.abs(x.left - finalLeft) < 0.5), 'the panel stays where it is while the topic changes');
+      await p.evaluate(() => document.querySelector('#help-panel [data-panel-close]').click());
+      await p.waitForSelector('#help-panel', { state: 'hidden' });
+    } finally { await c.close(); }
+    // Reduced motion: no transition, and closing hides at once (the next frame, not after a slide).
+    const r = await run('reduce');
+    try {
+      assert.equal(await r.p.evaluate(() => getComputedStyle(document.getElementById('help-panel')).transitionDuration), '0s');
+      await r.p.evaluate(() => document.querySelector('[data-help]').click());
+      await r.p.waitForSelector('#help-panel', { state: 'visible' });
+      assert.ok(await r.p.evaluate(() => { const b = document.getElementById('help-panel').getBoundingClientRect(); return Math.abs(b.left - (window.innerWidth - b.width)) < 0.5; }), 'docked at once');
+      const hiddenNextFrame = await r.p.evaluate(async () => {
+        document.querySelector('#help-panel [data-panel-close]').click();
+        await new Promise((res) => requestAnimationFrame(res));
+        return document.getElementById('help-panel').hidden;
+      });
+      assert.equal(hiddenNextFrame, true, 'hidden at once under reduced motion');
+    } finally { await r.c.close(); }
   });
   await step('audit access history: rows are listed newest first as text, and a new open adds one', async () => {
     let rows = [
@@ -1466,43 +3967,73 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       { id: 1, span_id: 'span-1', key_id: '0011223344556677', opened_at: 1793631800, ok: true },
     ];
     await page.route('**/api/admin/v1/audit/access*', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ access: rows }) }));
-    await openPage('providers');
-    await openPage('audit');
-    await page.click('#audit-nav [data-sub="content"]');
+    await openPage('audit/sealed');
     await page.waitForSelector('#audit-access-rows tr');
-    const cells = await page.$$eval('#audit-access-rows tr', (r) => r.map((tr) => [...tr.children].map((td) => td.textContent).slice(1)));
+    const cells = await page.$$eval('#audit-access-rows tr', (r) => r.map((tr) => [...tr.children].map((td) => td.textContent).slice(1, 4)));
     assert.deepEqual(cells, [['span-<b>x</b>', '0011223344556677', 'wrong passphrase'], ['span-1', '0011223344556677', 'opened']]);
     assert.equal(await page.locator('#audit-access b').count(), 0, 'shown as text');
     assert.equal(await page.isHidden('#audit-access-empty'), true);
     rows = [];
-    await page.click('#audit-nav [data-sub="requests"]');
-    await page.click('#audit-nav [data-sub="content"]');
+    await page.reload();
+    await page.waitForSelector('#app:not([hidden])');
     await page.waitForSelector('#audit-access-empty:not([hidden])');
     assert.equal(await page.isHidden('#audit-access'), true);
     await page.unroute('**/api/admin/v1/audit/access*');
   });
-  await step('audit settings: the key id and retention show, bad values give their messages, and rotating works from the page', async () => {
-    await openSettings();
+  await step('audit settings (Security page): the key id and retention show, bad values give their messages, saving leaves General alone, and rotating works from the page', async () => {
+    await openPage('security');
     await page.waitForFunction(() => /^[0-9a-f]{16}$/.test(document.getElementById('s-key-id').textContent));
     const oldKey = await page.innerText('#s-key-id');
     assert.equal(await page.inputValue('#s-retention'), '30');
     assert.equal(await page.getAttribute('#s-retention', 'min'), '7');
 
     // Retention: the server's message for a value that is too small.
-    await page.evaluate(() => document.getElementById('settings-form').noValidate = true);
+    await page.evaluate(() => document.getElementById('seal-form').noValidate = true);
     await page.fill('#s-retention', '5');
-    await page.click('#settings-form button[type=submit]');
-    await page.waitForSelector('#settings-error:not([hidden])');
-    assert.match(await page.innerText('#settings-error'), /at least 7 days/);
+    await page.click('#seal-form-save-bar [data-save-submit]');
+    await page.waitForSelector('#seal-error:not([hidden])');
+    assert.match(await page.innerText('#seal-error'), /at least 7 days/);
+    // General keeps its own values: the sealed-content save sends only these three fields (prompt and display as stored).
+    const stored = () => page.evaluate(async () => (await fetch('/api/admin/v1/settings', { headers: { 'x-askbar-admin': '1' } })).json());
+    const before = await stored();
+    const bodies = [];
+    const grab = (r) => { if (r.method() === 'PUT' && r.url().endsWith('/api/admin/v1/settings')) bodies.push(JSON.parse(r.postData())); };
+    page.on('request', grab);
     await page.fill('#s-retention', '45');
-    await page.click('#settings-form button[type=submit]');
-    await page.waitForSelector('#flash:not([hidden])');
+    await page.click('#seal-form-save-bar [data-save-submit]');
+    await page.waitForSelector('#toasts .toast');
+    page.off('request', grab);
+    assert.equal(bodies.length, 1);
+    assert.deepEqual(Object.keys(bodies[0]).sort(), ['audit_retention_days', 'display', 'system_prompt', 'unseal_idle_minutes', 'unseal_total_minutes']);
+    const after = await stored();
+    assert.equal(after.audit_retention_days, 45);
+    for (const f of ['system_prompt', 'display', 'generation_timeout_secs', 'history_turns', 'kill_switch_aborts_running', 'privacy_notice_text', 'ai_warning_text', 'unseal_idle_minutes', 'unseal_total_minutes']) assert.deepEqual(after[f], before[f], f + ' is unchanged');
     await page.fill('#s-retention', '999'); // unsaved, so the reload shows what was stored
+    await openPage('providers');
+    await openPage('security');
+    await page.waitForFunction(() => document.getElementById('s-retention').value === '45');
+    // And the other way: saving General sends none of these three and leaves them as they are.
     await openSettings();
+    assert.equal(await page.locator('#s-retention, #s-unseal-idle, #s-unseal-total, #s-kill-switch, #s-key-id').count(), 0, 'General no longer holds them');
+    await page.fill('#s-prompt', (await page.inputValue('#s-prompt')) + ' ');
+    const sent = [];
+    const grab2 = (r) => { if (r.method() === 'PUT' && r.url().endsWith('/api/admin/v1/settings')) sent.push(JSON.parse(r.postData())); };
+    page.on('request', grab2);
+    await page.click('#settings-form-save-bar [data-save-submit]');
+    await page.waitForSelector('#toasts .toast');
+    page.off('request', grab2);
+    assert.equal(sent.length, 1);
+    for (const f of ['audit_retention_days', 'unseal_idle_minutes', 'unseal_total_minutes', 'kill_switch_aborts_running', 'kill_switch']) assert.equal(f in sent[0], false, 'General does not send ' + f);
+    const again = await stored();
+    assert.equal(again.audit_retention_days, 45);
+    assert.equal(again.unseal_idle_minutes, before.unseal_idle_minutes);
+    assert.equal(again.unseal_total_minutes, before.unseal_total_minutes);
+    assert.equal(again.kill_switch_aborts_running, before.kill_switch_aborts_running);
+    await openPage('security');
     await page.waitForFunction(() => document.getElementById('s-retention').value === '45');
 
-    // Rotation: each refusal in turn, then success.
-    await page.evaluate(() => document.getElementById('rotate-form').noValidate = true);
+    // Rotation (on the Security page): each refusal in turn, then success.
+    await page.waitForFunction((k) => document.getElementById('s-key-id').textContent === k, oldKey);
     const NEW_PASS = 'a different long passphrase 77';
     const rotate = async (cur, next, next2) => {
       await page.fill('#r-current', cur);
@@ -1511,16 +4042,17 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       await page.click('#rotate-form button[type=submit]');
     };
     await rotate(AUDIT_PASS, NEW_PASS, NEW_PASS + 'x');
-    assert.match(await page.innerText('#rotate-error'), /do not match/);
+    assert.match(await page.innerText('#rotate-form .error-summary'), /do not match/);
+    assert.match(await page.innerText('#r-new2-error'), /do not match/);
     await rotate(AUDIT_PASS, 'too short', 'too short');
-    assert.match(await page.innerText('#rotate-error'), /at least 20/);
+    assert.match(await page.innerText('#rotate-form .error-summary'), /at least 20/);
     await rotate('not the current passphrase!!', NEW_PASS, NEW_PASS);
     await page.waitForFunction(() => /current passphrase is wrong/.test(document.getElementById('rotate-error').textContent));
     assert.equal(await page.inputValue('#r-current'), '', 'the current passphrase is cleared after a try');
     assert.equal(await page.innerText('#s-key-id'), oldKey, 'nothing changed');
     await rotate(AUDIT_PASS, NEW_PASS, NEW_PASS);
-    await page.waitForSelector('#flash:not([hidden])');
-    assert.match(await page.innerText('#flash'), /audit key was rotated/);
+    await page.waitForSelector('#toasts .toast');
+    assert.match(await page.locator('#toasts .toast').last().innerText(), /audit key was rotated/);
     const newKey = await page.innerText('#s-key-id');
     assert.match(newKey, /^[0-9a-f]{16}$/);
     assert.notEqual(newKey, oldKey);
@@ -1528,8 +4060,8 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     assert.equal((await page.content()).includes(NEW_PASS), false);
     // Put the retention back so later steps see an ordinary server.
     await page.fill('#s-retention', '30');
-    await page.click('#settings-form button[type=submit]');
-    await page.waitForSelector('#flash:not([hidden])');
+    await page.click('#seal-form-save-bar [data-save-submit]');
+    await page.waitForSelector('#toasts .toast');
   });
   await step('security: changing the password needs the current one', async () => {
     await openPage('security');
@@ -1542,8 +4074,8 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     assert.equal(await page.isVisible('#app'), true, 'a wrong current password does not sign you out');
     await page.fill('#pw-current', PASSWORD);
     await page.click('#password-form button[type=submit]');
-    await page.waitForSelector('#flash:not([hidden])');
-    assert.match(await page.innerText('#flash'), /Password changed/);
+    await page.waitForSelector('#toasts .toast');
+    assert.match(await page.locator('#toasts .toast').last().innerText(), /Password changed/);
   });
   await step('admin API key: shown once, then only its name; a script can use it until it is revoked', async () => {
     await openPage('security');
@@ -1575,10 +4107,291 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.waitForSelector('#key-form:not([hidden])');
     assert.equal((await call(key)).status, 401, 'revoked');
   });
+  await step('security: the password pair shows a live count from constants and a mismatch blocks the request', async () => {
+    await openPage('security');
+    const min = await page.evaluate(async () => (await window.ui.ready).MIN_PASSWORD_CHARS);
+    assert.equal(await page.getAttribute('#pw-new', 'minlength'), String(min));
+    assert.equal((await page.innerText('#pw-new-hint')).trim(), 'At least ' + min + ' characters');
+    await page.fill('#pw-new', 'abc');
+    assert.equal((await page.innerText('#pw-new-hint')).trim(), '3 of at least ' + min + ' characters');
+    await page.fill('#pw-new', 'x'.repeat(min));
+    assert.equal((await page.innerText('#pw-new-hint')).trim(), min + ' characters');
+    assert.equal(await page.evaluate(() => document.getElementById('pw-new-hint').classList.contains('length-ok')), true);
+    const stacked = await page.evaluate(() => {
+      const a = document.getElementById('pw-new').getBoundingClientRect();
+      const b = document.getElementById('pw-new2').getBoundingClientRect();
+      return b.top > a.bottom && Math.abs(a.left - b.left) < 1 && Math.abs(a.width - b.width) < 1;
+    });
+    assert.equal(stacked, true, 'new and repeat are stacked at the same width');
+    let sent = 0;
+    const watch = (r) => { if (r.url().endsWith('/api/admin/v1/password')) sent++; };
+    page.on('request', watch);
+    await page.fill('#pw-current', 'anything');
+    await page.fill('#pw-new2', 'y'.repeat(min));
+    await page.click('#password-form button[type=submit]');
+    await page.waitForSelector('#pw-new2-error:not([hidden])');
+    assert.match(await page.innerText('#pw-new2-error'), /do not match/);
+    assert.equal(sent, 0, 'a mismatch sends nothing');
+    page.off('request', watch);
+    for (const id of ['#pw-current', '#pw-new', '#pw-new2']) await page.fill(id, '');
+  });
+  await step('security: the passkey and recovery codes are greyed with aria-disabled, reachable by Tab, inert on Enter and show no numbers', async () => {
+    await openPage('security');
+    const na = page.locator('#main .na');
+    assert.equal(await na.count(), 2);
+    assert.equal(await page.locator('#main .na[disabled], #main .na [disabled]').count(), 0, 'never the disabled attribute');
+    for (const [i, what] of [[0, /passkey/], [1, /recovery codes/]]) {
+      const one = na.nth(i);
+      assert.equal(await one.getAttribute('aria-disabled'), 'true');
+      assert.equal(await one.getAttribute('tabindex'), '0');
+      assert.match(await one.getAttribute('data-tip'), /^Not available yet: .*/);
+      assert.match(await one.getAttribute('data-tip'), what);
+      await one.focus();
+      assert.equal(await one.evaluate((e) => e === document.activeElement), true);
+      const url = page.url();
+      await page.keyboard.press('Enter');
+      assert.equal(page.url(), url);
+      assert.equal(await page.locator('dialog[open]').count(), 0, 'Enter does nothing');
+    }
+    for (const id of ['passkey-title', 'recovery-title']) {
+      const text = await page.evaluate((i) => document.getElementById(i).closest('section').innerText, id);
+      assert.ok(!/\d/.test(text), 'no invented numbers: ' + text);
+    }
+  });
+  await step('security: a new API key is shown once in a box and is gone from the page once the box closes (also by Escape)', async () => {
+    await openPage('security');
+    await page.waitForSelector('#key-form:not([hidden])');
+    const max = await page.evaluate(async () => (await window.ui.ready).API_KEY_MAX_NAME_CHARS);
+    assert.equal(await page.getAttribute('#key-name', 'maxlength'), String(max));
+    await page.fill('#key-name', 'second server');
+    await page.click('#key-create');
+    await page.waitForSelector('#key-dialog[open]');
+    const key = (await page.innerText('#key-value')).trim();
+    assert.match(key, /^askbar-admin-/);
+    assert.equal(await page.locator('#key-dialog [data-copy="key-value"]').count(), 1, 'a copy button sits beside the key');
+    assert.equal(await page.locator('#main code#key-value').count(), 1);
+    await page.keyboard.press('Escape');
+    assert.equal(await page.locator('#key-dialog[open]').count(), 0);
+    assert.equal(await page.evaluate(() => document.getElementById('key-value').textContent), '');
+    assert.ok(!(await page.content()).includes(key), 'the key is not in the page after the box closes');
+    await page.waitForSelector('#key-row:not([hidden])');
+    assert.match(await page.innerText('#key-table'), /second server/);
+    assert.equal(await page.locator('#key-table tbody tr').count(), 1, 'one key');
+    await page.click('#key-revoke');
+    await page.click('#key-revoke');
+    await page.waitForSelector('#key-form:not([hidden])');
+  });
+  await step('security: the sealed-content times are read from the settings into their form, and the audit key id shows', async () => {
+    await openPage('security');
+    const s = await page.evaluate(async () => (await fetch('/api/admin/v1/settings')).json());
+    await page.waitForFunction(() => document.getElementById('s-unseal-idle').value !== '');
+    assert.equal(parseInt(await page.inputValue('#s-unseal-idle'), 10), s.unseal_idle_minutes);
+    assert.equal(parseInt(await page.inputValue('#s-unseal-total'), 10), s.unseal_total_minutes);
+    assert.equal(await page.isHidden('#seal-form-save-bar'), true, 'no change, no save bar');
+    await page.fill('#s-unseal-idle', String(s.unseal_idle_minutes + 1));
+    assert.equal(await page.isVisible('#seal-form-save-bar'), true);
+    await page.click('#seal-form-save-bar [data-save-discard]');
+    assert.equal(parseInt(await page.inputValue('#s-unseal-idle'), 10), s.unseal_idle_minutes);
+    assert.match(await page.innerText('#s-key-id'), /^[0-9a-f]{16}$/);
+    assert.equal(await page.locator('#rotate-form #r-new + .hint[data-length-hint]').count(), 1);
+    assert.equal(await page.getAttribute('#r-new', 'minlength'), String(await page.evaluate(async () => (await window.ui.ready).MIN_PASSPHRASE_CHARS)));
+  });
+  // The mismatch of a new password or passphrase shows under the repeat box as it is typed, on every pair of the Security page.
+  await step('security: each new-secret pair shows "do not match" under the repeat box as you type, clears when equal, and a mismatched submit sends nothing', async () => {
+    await openPage('security');
+    await page.waitForSelector('#bk-pass');
+    const sent = [];
+    const seen = (r) => { if (r.method() !== 'GET') sent.push(r.url()); };
+    page.on('request', seen);
+    for (const [id, form, noun] of [['pw-new', 'password-form', 'passwords'], ['r-new', 'rotate-form', 'passphrases'], ['bk-pass', 'backup-key-form', 'passphrases']]) {
+      const again = id + '2';
+      await page.fill('#' + id, 'a long enough pass phrase one');
+      await page.fill('#' + again, 'a long enough pass phrase');
+      await page.waitForSelector('#' + again + '-error:not([hidden])');
+      assert.equal(await page.innerText('#' + again + '-error'), 'The two ' + noun + ' do not match.', id);
+      assert.equal(await page.getAttribute('#' + again, 'aria-invalid'), 'true');
+      assert.match(await page.getAttribute('#' + again, 'aria-describedby'), new RegExp(again + '-error'));
+      const g = await page.evaluate(({ again, form }) => {
+        const i = document.getElementById(again).getBoundingClientRect();
+        const e = document.getElementById(again + '-error').getBoundingClientRect();
+        const next = [...document.getElementById(form).querySelectorAll('button, input:not([type=hidden])')].map((x) => x.getBoundingClientRect()).filter((r) => r.top > i.bottom && r.height > 0 && r.top !== e.top).map((r) => r.top);
+        return { gap: e.top - i.bottom, bottom: e.bottom, nextTop: Math.min(...next, Infinity) };
+      }, { again, form });
+      assert.ok(g.gap >= 0 && g.gap <= 12, id + ': the error is just under the repeat box (gap ' + g.gap + ')');
+      assert.ok(g.bottom <= g.nextTop + 1, id + ': and above the next control');
+      // Submitting with the mismatch: the same message, focus on the repeat box, nothing sent.
+      if (id === 'bk-pass') await page.check('#bk-stored');
+      await page.fill(id === 'pw-new' ? '#pw-current' : id === 'r-new' ? '#r-current' : '#bk-pass', id === 'bk-pass' ? 'a long enough pass phrase one' : 'x');
+      await page.click('#' + form + ' button[type=submit]');
+      assert.equal(await page.evaluate(() => document.activeElement.id), again, id + ': focus goes to the repeat box');
+      assert.equal(await page.innerText('#' + again + '-error'), 'The two ' + noun + ' do not match.');
+      // Equal again: the line goes; emptied: it goes too.
+      await page.fill('#' + again, 'a long enough pass phrase one');
+      assert.equal(await page.isHidden('#' + again + '-error'), true, id + ': cleared when they match');
+      await page.fill('#' + again, 'zzz');
+      await page.waitForSelector('#' + again + '-error:not([hidden])');
+      await page.fill('#' + again, '');
+      assert.equal(await page.isHidden('#' + again + '-error'), true, id + ': cleared when the repeat is emptied');
+      await page.fill('#' + id, '');
+      await page.locator('#' + form + ' .error-summary').count() && await page.evaluate((f) => document.querySelector('#' + f + ' .error-summary').remove(), form);
+    }
+    page.off('request', seen);
+    assert.deepEqual(sent, [], 'a mismatched pair sends nothing');
+    await page.uncheck('#bk-stored');
+    for (const id of ['pw-current', 'r-current']) await page.fill('#' + id, '');
+  });
+  await step('security: nothing scrolls sideways and every target is 44 px tall on a phone', async () => {
+    await openPage('security');
+    await page.waitForSelector('#pw-title');
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'no sideways scroll');
+    if (isPhone) {
+      const small = await page.evaluate(() => [...document.querySelectorAll('#main button, #main input:not([type=checkbox]), #main label.check, #main a, #main .na')]
+        .filter((e) => e.offsetParent && !e.closest('[hidden]'))
+        .map((e) => [e.id || e.textContent.trim().slice(0, 20), e.getBoundingClientRect().height])
+        .filter(([, h]) => h > 0 && h < 44));
+      assert.deepEqual(small, []);
+    }
+  });
+  // Shared accessibility behaviour (plan step 1.10; rules 26, 41-46).
+  await step('accessibility: Skip to content is the first Tab stop, and Enter moves focus to the page', async () => {
+    await page.goto(base + 'security/');
+    await page.waitForSelector('#app:not([hidden])');
+    await page.keyboard.press('Tab');
+    const first = await page.evaluate(() => {
+      const a = document.activeElement;
+      const r = a.getBoundingClientRect();
+      return { cls: a.className, text: a.textContent, onScreen: r.top >= 0 && r.bottom <= innerHeight && r.width > 0 };
+    });
+    assert.deepEqual(first, { cls: 'skip-link', text: 'Skip to content', onScreen: true });
+    await page.keyboard.press('Enter');
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'main');
+  });
+  await step('accessibility: a failed save shows a summary at the top and moves focus to the first field with a problem', async () => {
+    await page.fill('#pw-current', 'anything');
+    await page.fill('#pw-new', 'one new password');
+    await page.fill('#pw-new2', 'another password');
+    await page.click('#password-form button[type=submit]');
+    await page.waitForSelector('#password-form .error-summary[role=alert]');
+    assert.match(await page.innerText('#password-form .error-summary'), /do not match/);
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'pw-new2', 'focus is on the field to fix');
+    assert.equal(await page.getAttribute('#pw-new2', 'aria-invalid'), 'true');
+    assert.match(await page.innerText('#pw-new2-error'), /do not match/);
+    assert.ok((await page.getAttribute('#pw-new2', 'aria-describedby')).includes('pw-new2-error'), 'the error describes the field');
+    await page.fill('#pw-new2', 'one new password');
+    await page.fill('#pw-current', 'wrong');
+    await page.click('#password-form button[type=submit]');
+    await page.waitForSelector('#pw-error:not([hidden])');
+    assert.equal(await page.locator('#password-form .error-summary').count(), 0, 'the summary goes on the next try');
+    assert.equal(await page.getAttribute('#pw-new2', 'aria-invalid'), null);
+    for (const id of ['#pw-current', '#pw-new', '#pw-new2']) await page.fill(id, '');
+  });
+  await step('accessibility: one announcer reads updates without moving focus, assertive only when urgent', async () => {
+    const r = await page.evaluate(async () => {
+      const b = document.querySelector('#password-form button[type=submit]');
+      b.focus();
+      window.ui.announce('Polite news');
+      window.ui.announce('Urgent news', { urgent: true });
+      await new Promise((ok) => requestAnimationFrame(() => requestAnimationFrame(ok)));
+      return {
+        focus: document.activeElement === b,
+        polite: [document.getElementById('announcer').textContent, document.getElementById('announcer').getAttribute('aria-live')],
+        urgent: [document.getElementById('announcer-urgent').textContent, document.getElementById('announcer-urgent').getAttribute('aria-live')],
+        regions: document.querySelectorAll('[aria-live]').length,
+      };
+    });
+    assert.deepEqual(r, { focus: true, polite: ['Polite news', 'polite'], urgent: ['Urgent news', 'assertive'], regions: 2 });
+  });
+  await step('accessibility: focus scrolls clear of the status bar, and nothing moves under reduced motion', async () => {
+    const pad = await page.evaluate(() => getComputedStyle(document.documentElement).scrollPaddingTop);
+    const statusH = await page.evaluate(() => parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--status-h')));
+    assert.ok(parseFloat(pad) >= statusH, 'scroll-padding-top ' + pad + ' covers the ' + statusH + ' px status bar');
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    const still = await page.evaluate(() => {
+      const { el } = window.ui;
+      const probe = el('div', { id: 't-motion' }, el('span', { class: 'skeleton-row' }), el('button', { type: 'button', class: 'btn btn-icon', 'data-tip': 'Probe', 'aria-label': 'Probe' }));
+      document.querySelector('#app main').append(probe);
+      const out = {
+        animations: document.getAnimations().length,
+        skeleton: getComputedStyle(probe.querySelector('.skeleton-row')).animationName,
+        tip: getComputedStyle(probe.querySelector('.btn-icon'), '::after').transitionDuration,
+      };
+      probe.remove();
+      return out;
+    });
+    await page.emulateMedia({ reducedMotion: null });
+    assert.deepEqual(still, { animations: 0, skeleton: 'none', tip: '0s' });
+  });
+  await step(isPhone ? 'accessibility: every target on every page is at least 44 px on a phone' : 'accessibility: every target on every page is at least 24 px', async () => {
+    const min = isPhone ? 44 : 24;
+    const slugs = await page.$$eval('#nav a[data-tab]', (as) => as.map((a) => a.dataset.tab));
+    const small = [];
+    for (const slug of slugs) {
+      await page.goto(base + slug + '/');
+      await page.waitForSelector('#app:not([hidden])');
+      await page.waitForLoadState('networkidle');
+      small.push(...await page.evaluate((m) => {
+        // Controls a person aims at. A link inside running text is exempt (WCAG 2.5.8, inline); a checkbox is aimed at
+        // through its label, so the label is measured instead.
+        const sel = 'button, input:not([type=checkbox]):not([type=radio]):not([type=hidden]), select, textarea, label.check, nav a, a.button, a.btn, .skip-link, [tabindex="0"]';
+        return [...document.querySelectorAll(sel)].filter((n) => {
+          const r = n.getBoundingClientRect();
+          if (r.width === 0 && r.height === 0) return false;
+          if (n.matches('.skip-link')) return false;
+          return r.height < m - 0.5 || r.width < 24 - 0.5;
+        }).map((n) => location.pathname + ' ' + n.tagName.toLowerCase() + (n.id ? '#' + n.id : '') + '.' + n.className + ' ' + Math.round(n.getBoundingClientRect().width) + 'x' + Math.round(n.getBoundingClientRect().height));
+      }, min));
+    }
+    assert.deepEqual(small, []);
+    await page.goto(base);
+    await page.waitForSelector('#app:not([hidden])');
+  });
+  // axe-core (plan step 1.11): every page, signed in and signed out, at both widths. A violation whose rule is not in
+  // tests/e2e/axe-baseline.json for that page fails; the baseline only shrinks. AXE_BASELINE=write records what is found
+  // now (the union over both widths) instead of failing. axe is injected in a second context that bypasses the CSP, so
+  // the main page keeps its CSP and Trusted Types for every other step.
+  await step('accessibility: axe finds no violation beyond the baseline on any page', async () => {
+    const baselineFile = path.join(__dirname, 'axe-baseline.json');
+    const write = process.env.AXE_BASELINE === 'write';
+    const baseline = fs.existsSync(baselineFile) ? JSON.parse(fs.readFileSync(baselineFile, 'utf8')) : {};
+    const axeSource = fs.readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8');
+    const scan = async (context, url, key) => {
+      const p = await context.newPage();
+      try { return await scanPage(p, url, key); } finally { await p.close(); }
+    };
+    const scanPage = async (p, url, key) => {
+      await p.goto(url);
+      await p.waitForSelector(key === 'login' ? '#login:not([hidden])' : '#app:not([hidden])');
+      // A page that polls (Services) is never idle for long; give the loaders a moment and scan what is there.
+      await p.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
+      await p.addScriptTag({ content: axeSource });
+      const found = await p.evaluate(async () => {
+        const r = await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'] } });
+        return r.violations.map((v) => ({ id: v.id, nodes: v.nodes.map((n) => n.target.join(' ')).slice(0, 5) }));
+      });
+      return found;
+    };
+    const signedIn = await browser.newContext({ reducedMotion: 'reduce', viewport, bypassCSP: true, storageState: await ctx.storageState() });
+    const signedOut = await browser.newContext({ reducedMotion: 'reduce', viewport, bypassCSP: true });
+    const slugs = await page.$$eval('#nav a[data-tab]', (as) => as.map((a) => a.dataset.tab));
+    const extra = [];
+    try {
+      for (const key of [...slugs, 'login']) {
+        const found = key === 'login' ? await scan(signedOut, base, key) : await scan(signedIn, base + key + '/', key);
+        const known = new Set(baseline[key] || []);
+        if (write) baseline[key] = [...new Set([...known, ...found.map((v) => v.id)])].sort();
+        else for (const v of found) if (!known.has(v.id)) extra.push(key + ': ' + v.id + ' at ' + v.nodes.join(', '));
+      }
+    } finally {
+      await signedIn.close();
+      await signedOut.close();
+    }
+    if (write) fs.writeFileSync(baselineFile, JSON.stringify(baseline, null, 2) + '\n');
+    assert.deepEqual(extra, [], 'new axe violations (fix them; the baseline only shrinks)');
+  });
   await step('pages: each section has its own URL, the nav marks it, Back works and the frame is the same', async () => {
     // Plan step 1.16: a page and a URL for every admin section, from one template.
-    const slugs = await page.$$eval('#nav a', (as) => as.map((a) => a.dataset.tab));
-    assert.deepEqual(slugs, ['providers', 'services', 'clients', 'audit', 'backup', 'restore', 'network', 'security', 'settings']);
+    const slugs = await page.$$eval('#nav a[data-tab]', (as) => as.map((a) => a.dataset.tab));
+    assert.deepEqual(slugs, ['home', 'alerts', 'audit/calls', 'audit/admin', 'audit/sealed', 'audit/routing', 'general', 'providers', 'people', 'services', 'network', 'security', 'backup', 'notifications', 'reference']);
     for (const slug of slugs) {
       await page.goto(`http://127.0.0.1:${adminPort}/admin/${slug}/`);
       await page.waitForSelector('#app:not([hidden])');
@@ -1586,31 +4399,1043 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       assert.equal(await page.locator('#nav a[aria-current="page"]').count(), 1, slug + ': one current page');
       assert.equal(await page.locator(`section[data-tab="${slug}"]`).count(), 1, slug + ': its own section');
       assert.equal(await page.locator('section[data-tab]').count(), 1, slug + ': and no other');
-      for (const id of ['#logout', '#offline', '#flash', '#login', '#setup']) assert.equal(await page.locator(id).count(), 1, slug + ' ' + id);
+      for (const id of ['#logout', '#banners', '#page-error', '#login', '#setup']) assert.equal(await page.locator(id).count(), 1, slug + ' ' + id);
+      assert.equal(await page.locator('#flash, #offline, #rejected, #chain-alert, #alerts-banner, #unsealed-banner, #sealed-alerts').count(), 0, slug + ': the old flash banners are gone');
       assert.match(await page.title(), / · Askbar admin$/);
     }
     await openPage('providers');
-    await openPage('clients');
+    await openPage('people');
     await page.goBack();
     await page.waitForURL('**/admin/providers/');
     await page.waitForSelector('#app:not([hidden])');
     assert.equal(await page.getAttribute('#nav a[data-tab="providers"]', 'aria-current'), 'page', 'Back returns to the page before');
     await page.goto(`http://127.0.0.1:${adminPort}/admin`);
-    assert.match(page.url(), /\/admin\/providers\/$/, '/admin goes to the first page');
+    assert.match(page.url(), /\/admin\/home\/$/, '/admin goes to Home, the landing page');
+    assert.equal(await page.getAttribute('#nav a[data-tab]', 'data-tab'), 'home', 'Home is the first menu item');
+    assert.equal(await page.locator('#nav a[data-tab="home"] svg').count(), 1, 'Home has its icon');
     const missing = await page.goto(`http://127.0.0.1:${adminPort}/admin/nothing-here/`);
     assert.equal(missing.status(), 404, 'an unknown admin page is a 404');
     await page.goto(base);
   });
-  await step('pages: an audit request opens directly from its address, and the address follows the view', async () => {
+  // Plan step 7.2: the reference, rendered from docs/reference when the admin is built.
+  await step('greyed items: no "Not available yet" item shows a digit, on any page', async () => {
+    // Plan step 8.3: a greyed item is a label only. A figure in one would read as data the admin does not have.
+    // A greyed item that legitimately has a digit is exempt here by its label, with the reason.
+    const EXEMPT = [['Cloud storage (S3-compatible)', 'S3 is the name of a storage protocol, not a figure']];
+    const slugs = await page.$$eval('#nav a[data-tab]', (as) => as.map((a) => a.dataset.tab));
+    let greyed = 0;
+    for (const slug of slugs) {
+      await page.goto(`http://127.0.0.1:${adminPort}/admin/${slug}/`);
+      await page.waitForSelector('#app:not([hidden])');
+      const items = await page.$$eval('.na, [aria-disabled="true"]', (els) => els
+        .filter((el) => el.matches('.na') || (el.dataset.tip || '').startsWith('Not available yet'))
+        .map((el) => ({ text: el.innerText || '' })));
+      greyed += items.length;
+      const digits = items.filter((it) => /\d/.test(it.text) && !EXEMPT.some(([label]) => it.text.includes(label)));
+      assert.deepEqual(digits.map((it) => it.text), [], slug + ': a greyed item shows a digit');
+    }
+    assert.ok(greyed > 0, 'the pages have greyed items to check');
+  });
+  await step('reference: the index and an article show the outline, the article and its source link; targets, scrolling and axe are clean', async () => {
+    const K = await page.evaluate(() => window.ui.ready);
+    const min = isPhone ? 44 : 24;
+    const axeSource = fs.readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8');
+    const index = await page.evaluate(async () => (await fetch('/admin/reference.json')).json());
+    assert.ok(index.length >= 10 && index.some((p) => p.id === 'settings/network'), 'the index lists the pages');
+    for (const [url, article] of [['reference/', 'Reference'], ['reference/settings/network/', 'Network']]) {
+      await page.goto(base + url);
+      await page.waitForSelector('#app:not([hidden])');
+      assert.equal(await page.locator('#nav a[aria-current="page"]').getAttribute('data-tab'), 'reference', url + ': the menu marks Reference');
+      assert.equal(await page.locator('section[data-tab="reference"] .page-header .page-title').innerText(), article);
+      assert.equal(await page.locator('.ref-body h1').count(), 0, 'the page title is the one h2');
+      // Every heading has an id, and each in-page link lands on one.
+      const home = url === 'reference/';
+      const heads = await page.$$eval('.ref-body h3, .ref-body h4', (hs) => hs.map((h) => h.id));
+      assert.ok(heads.every(Boolean), url + ': a heading has no id');
+      const edit = await page.getAttribute('.ref-edit', 'href');
+      assert.equal(edit, `${K.SOURCE_URL}/edit/${K.SOURCE_BRANCH}/docs/reference/${home ? 'index' : 'settings/network'}.md`);
+      assert.equal(await page.getAttribute('.ref-edit', 'rel'), 'noopener noreferrer');
+      if (home) {
+        // The home is the list of pages by area, with no outline, and a link to the folder on GitHub.
+        assert.equal(await page.locator('.ref-nav, .ref-toc').count(), 0, 'the home has no outline');
+        assert.equal(await page.getAttribute('.rf-open', 'href'), `${K.SOURCE_URL}/tree/${K.SOURCE_BRANCH}/${K.REFERENCE_ROOT}`);
+      } else {
+        const nav = await page.evaluate(() => {
+          const d = document.querySelector('.ref-nav');
+          const b = (e) => e.getBoundingClientRect();
+          return { open: d.open, summaryShown: getComputedStyle(d.querySelector('summary')).display !== 'none', navBottom: b(d).bottom, headTop: b(document.querySelector('.ref-head')).top, bodyTop: b(document.querySelector('.ref-body')).top, navRight: b(d).right, bodyLeft: b(document.querySelector('.ref-body')).left, cur: d.querySelector('a[aria-current]')?.textContent, groups: [...d.querySelectorAll('.ref-group')].map((g) => g.textContent) };
+        });
+        assert.deepEqual(nav.groups.slice(0, 4), ['Overview', 'Admin settings', 'Admin UI', 'Audit and alerts'], 'the outline groups the pages by area');
+        if (isPhone) {
+          assert.equal(nav.summaryShown && !nav.open, true, 'on a phone the outline is a closed box');
+          assert.ok(nav.headTop < nav.navBottom && nav.navBottom <= nav.bodyTop + 1, 'the title, then the outline, then the article');
+        } else {
+          assert.equal(nav.open && !nav.summaryShown, true, 'on a desktop the outline is always open');
+          assert.ok(nav.navRight <= nav.bodyLeft, 'at the left of the article');
+        }
+        assert.equal(nav.cur, 'Network');
+        // The links: pages are admin links, other docs go to the source, nothing is a script or style.
+        const hrefs = await page.$$eval('.ref-body a', (as) => as.map((a) => a.getAttribute('href')));
+        assert.ok(hrefs.every((h) => h.startsWith('/admin/') || h.startsWith('#') || h.startsWith(K.SOURCE_URL + '/blob/' + K.SOURCE_BRANCH + '/') || h.startsWith('https://')), url + ': ' + hrefs);
+        assert.equal(await page.locator('.ref-body [style], .ref-body script, .ref-body img').count(), 0);
+      }
+      // Targets: the outline's links, the edit link, the buttons and links to the settings; the phone's toggle.
+      const small = await page.$$eval('.ref-list a, .ref-edit, .ref-nav-toggle, .rf-grp a, .rf-open, .rf-set', (as, m) => as.map((a) => a.getBoundingClientRect()).filter((r) => r.height > 0 && (r.height < m - 0.5 || r.width < m - 0.5)).length, min);
+      assert.equal(small, 0, url + ': every outline, list and edit target is at least ' + min + ' px');
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, url + ': no sideways scroll');
+      const axeCtx = await browser.newContext({ reducedMotion: 'reduce', viewport, bypassCSP: true, storageState: await ctx.storageState() });
+      try {
+        const ap = await axeCtx.newPage();
+        await ap.goto(base + url);
+        await ap.waitForSelector('#app:not([hidden])');
+        await ap.addScriptTag({ content: axeSource });
+        const found = await ap.evaluate(async () => (await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'] } })).violations.map((v) => v.id + ': ' + v.nodes.map((n) => n.target.join(' ')).join(', ')));
+        assert.deepEqual(found, [], 'axe on ' + url);
+      } finally { await axeCtx.close(); }
+    }
+    // A help topic's address lands on its heading.
+    await page.goto(base + 'reference/settings/network/#host-name');
+    await page.waitForSelector('#app:not([hidden])');
+    await page.waitForFunction(() => { const r = document.getElementById('host-name').getBoundingClientRect(); return r.top >= 0 && r.bottom <= window.innerHeight; });
+    // A table and a code block scroll inside their own block, never the page.
+    await page.goto(base + 'reference/audit/alert-kinds/');
+    await page.waitForSelector('#app:not([hidden])');
+    assert.equal(await page.locator('.ref-body table').count() > 0, true, 'the alert kinds table renders');
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'a wide table does not scroll the page');
+    // An unknown reference address is the admin's 404.
+    assert.equal((await page.goto(base + 'reference/settings/nope/')).status(), 404);
+    await page.goto(base);
+    await page.waitForSelector('#app:not([hidden])');
+  });
+  // Round 2, R7: the home is generated from the reference index; an article links to the admin page it documents.
+  await step('reference home: every area and every page is listed from the index, as a link with its title and summary', async () => {
+    const index = await page.evaluate(async () => (await fetch('/admin/reference.json')).json());
+    await page.goto(base + 'reference/');
+    await page.waitForSelector('#app:not([hidden])');
+    const shown = await page.$$eval('.rf-grp', (gs) => gs.map((g) => ({ area: g.querySelector('h3').textContent, rows: [...g.querySelectorAll('li')].map((li) => ({ href: li.querySelector('a').getAttribute('href'), title: li.querySelector('a').textContent, summary: li.querySelector('.rf-sum').textContent })) })));
+    const pages = index.filter((p) => p.id !== 'index').sort((a, b) => a.order - b.order);
+    assert.deepEqual([...new Set(pages.map((p) => p.group))], shown.map((g) => g.area), 'every area, in the index order');
+    for (const p of pages) {
+      const row = shown.find((g) => g.area === p.group).rows.find((r) => r.href === '/admin/reference/' + p.id + '/');
+      assert.ok(row, p.id + ' is listed under ' + p.group);
+      assert.equal(row.title, p.title);
+      assert.equal(row.summary, p.summary);
+    }
+    assert.equal(shown.reduce((n, g) => n + g.rows.length, 0), pages.length, 'nothing else is listed');
+    // A row opens its page.
+    await Promise.all([page.waitForURL('**/admin/reference/settings/network/'), page.locator('.rf-grp a', { hasText: /^Network$/ }).click()]);
+    assert.equal(await page.locator('.page-title').innerText(), 'Network');
+  });
+  await step('reference article: "Open <page> settings" goes to the real admin page, each section link lands on a real element, and a page with no settings has neither', async () => {
+    const index = await page.evaluate(async () => (await fetch('/admin/reference.json')).json());
+    let checked = 0;
+    for (const p of index) {
+      await page.goto(base + 'reference/' + (p.id === 'index' ? '' : p.id + '/'));
+      await page.waitForSelector('#app:not([hidden])');
+      const opens = await page.$$eval('.ref-head .rf-open', (as) => as.map((a) => ({ href: a.getAttribute('href'), text: a.textContent.trim() })));
+      const links = await page.$$eval('.ref-body .rf-set', (as) => as.map((a) => ({ href: a.getAttribute('href'), text: a.textContent.replace(/\s*→$/, '') })));
+      if (p.settings.length === 0) {
+        assert.deepEqual([opens, links], [[], []], p.id + ': no settings, no link back');
+        continue;
+      }
+      assert.deepEqual(opens.map((o) => o.href), p.settings.map((s) => '/admin/' + s + '/'), p.id + ': one button for each admin page it documents');
+      // A settings page reads "Open Network settings"; Home, Alerts and the Audit pages read "Open Home".
+      const settingsSlugs = ['general', 'providers', 'people', 'services', 'network', 'security', 'backup', 'notifications'];
+      for (const o of opens) assert.match(o.text, settingsSlugs.includes(o.href.split('/')[2]) ? /^Open .+ settings$/ : /^Open (?!.* settings$).+$/, p.id);
+      // Each target is on the admin page: visit it and look for the element.
+      const bySlug = {};
+      for (const l of links) { const [path, id] = l.href.split('#'); (bySlug[path] ||= []).push([id, l.text]); }
+      for (const [path, ids] of Object.entries(bySlug)) {
+        assert.ok(opens.some((o) => o.href === path), p.id + ': the section links go to a page the buttons open');
+        await page.goto(base + path.replace('/admin/', ''));
+        await page.waitForSelector('#app:not([hidden])');
+        for (const [id, text] of ids) {
+          assert.equal(await page.locator('#' + id).count(), 1, p.id + ': ' + path + ' has #' + id);
+          assert.equal((await page.locator('#' + id).innerText()).trim(), text.split(' / ').pop(), p.id + ': #' + id + ' is the section the link names');
+          checked++;
+        }
+      }
+      for (const o of opens) {
+        const res = await page.goto(base + o.href.replace('/admin/', ''));
+        assert.equal(res.status(), 200, o.href);
+      }
+    }
+    assert.ok(checked >= 30, 'the section links were checked: ' + checked);
+    // A click goes there and lands on the section.
+    await page.goto(base + 'reference/settings/network/');
+    await page.waitForSelector('#app:not([hidden])');
+    await Promise.all([page.waitForURL('**/admin/network/#n-cert-title'), page.locator('.rf-set', { hasText: 'Certificate' }).click()]);
+    await page.waitForFunction(() => { const r = document.getElementById('n-cert-title').getBoundingClientRect(); return r.top >= 0 && r.bottom <= window.innerHeight; });
+  });
+  await step('reference: the outline and "On this page" are in the same place on every article and stay pinned while it scrolls', async () => {
+    if (isPhone) return; // the phone's outline is a closed box in the flow, under the title
+    const where = () => page.evaluate(() => {
+      const b = (s) => { const r = document.querySelector(s).getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width }; };
+      return { nav: b('.ref-nav'), toc: b('.ref-toc'), head: b('.ref-head'), body: b('.ref-body'), scroll: window.scrollY };
+    });
+    const first = {};
+    for (const id of ['settings/network', 'settings/security', 'audit/alert-kinds', 'admin-ui/components']) {
+      await page.goto(base + 'reference/' + id + '/');
+      await page.waitForSelector('#app:not([hidden])');
+      const w = await where();
+      first[id] = w;
+      assert.ok(w.nav.y === w.toc.y && w.nav.y === w.head.y, id + ': the outline, the title and "On this page" start on one line');
+    }
+    const ids = Object.keys(first);
+    for (const id of ids.slice(1)) {
+      for (const k of ['nav', 'toc', 'head']) {
+        assert.ok(Math.abs(first[id][k].y - first[ids[0]][k].y) <= 1, `${id}: ${k} y ${first[id][k].y} vs ${first[ids[0]][k].y}`);
+        assert.ok(Math.abs(first[id][k].x - first[ids[0]][k].x) <= 1 && Math.abs(first[id][k].w - first[ids[0]][k].w) <= 1, `${id}: ${k} x and width`);
+      }
+    }
+    // The outline and the list stay pinned, at one place, when a long article scrolls 600 px; both are the same distance from the top.
+    await page.goto(base + 'reference/audit/alert-kinds/');
+    await page.waitForSelector('#app:not([hidden])');
+    await page.evaluate(() => window.scrollTo(0, 600));
+    await page.waitForFunction(() => window.scrollY >= 590);
+    const a = await where();
+    await page.evaluate(() => window.scrollTo(0, 900));
+    await page.waitForFunction(() => window.scrollY >= 890);
+    const b = await where();
+    assert.ok(a.scroll >= 590, 'the article scrolled');
+    assert.ok(Math.abs(a.nav.y - b.nav.y) <= 1 && Math.abs(a.toc.y - b.toc.y) <= 1 && Math.abs(a.nav.y - a.toc.y) <= 1, `pinned: nav ${a.nav.y} then ${b.nav.y}, toc ${a.toc.y} then ${b.toc.y}`);
+    const bar = await page.evaluate(() => document.querySelector('.status-bar').getBoundingClientRect().bottom + (document.querySelector('#banners')?.getBoundingClientRect().height || 0));
+    assert.ok(a.nav.y >= bar - 1 && a.nav.y <= bar + 24, 'pinned just under the status bar and banners: ' + a.nav.y + ' vs ' + bar);
+    assert.equal(a.nav.x, first['audit/alert-kinds'].nav.x, 'and at the same left edge');
+    // The current page is marked, and "On this page" marks the section being read.
+    assert.equal(await page.locator('.ref-nav a[aria-current="true"]').innerText(), 'Alert kinds');
+    assert.equal(await page.locator('.ref-toc a[aria-current]').count(), 1);
+  });
+  // Plan step 7.5: the admin-ui reference pages show the real components, and only those pages do.
+  await step('reference: the components and layouts pages show every component live; nothing else does; ids, targets, scrolling and axe are clean', async () => {
+    const min = isPhone ? 44 : 24;
+    const axeSource = fs.readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8');
+    const macros = [...fs.readFileSync(path.join(__dirname, '../../services/admin/src/ui/templates/components.html'), 'utf8').matchAll(/\{% macro (\w+)\(/g)].map((m) => m[1]);
+    const frame = { skip_link: 'a.skip-link', announcer: '#announcer', toast_region: '#toasts', banner_region: '#banners' };
+    assert.ok(macros.length >= 25, 'components.html has its macros');
+    for (const [url, want] of [['reference/admin-ui/components/', macros.filter((m) => !(m in frame))], ['reference/admin-ui/page-layouts/', ['layout_index', 'layout_list', 'layout_settings', 'layout_article']]]) {
+      await page.goto(base + url);
+      await page.waitForSelector('#app:not([hidden])');
+      const shown = await page.$$eval('.ref-body [data-live-example]', (els) => els.map((e) => [e.dataset.liveExample, e.children.length, e.getBoundingClientRect().height]));
+      assert.deepEqual(shown.map((x) => x[0]).sort(), want.slice().sort(), url + ': one live example for each component');
+      for (const [name, kids, h] of shown) assert.ok(kids > 0 && h > 0, url + ': the example ' + name + ' is drawn');
+      assert.equal(await page.locator('.ref-body div[data-live]').count(), 0, 'no hole is left unfilled');
+      assert.equal(await page.evaluate(() => document.body.innerHTML.includes('live:')), false, 'no marker text on the page');
+      if (url.includes('components')) {
+        for (const sel of Object.values(frame)) assert.equal(await page.locator(sel).count(), 1, 'the frame has ' + sel);
+        assert.equal(await page.locator('.live-example dialog[open]').count(), 1, 'the dialog example is shown open');
+        assert.equal(await page.locator('.live-example .na[aria-disabled="true"]').count(), 1, 'the not-available example is aria-disabled');
+      }
+      // The examples are harmless and never meet the page's own ids.
+      assert.equal(await page.locator('.live-example [disabled], .live-example script, .live-example [style]').count(), 0, url + ': no disabled, script or style in an example');
+      const ids = await page.evaluate(() => { const all = [...document.querySelectorAll('[id]')].map((e) => e.id); return { dup: all.filter((v, i) => all.indexOf(v) !== i), bad: [...document.querySelectorAll('.live-example [id]')].map((e) => e.id).filter((v) => !v.startsWith('ex-')) }; });
+      assert.deepEqual(ids.dup, [], url + ': no duplicate ids');
+      assert.deepEqual(ids.bad, [], url + ': an example id without the ex- prefix');
+      const wide = await page.evaluate(() => [...document.querySelectorAll('.ref-body *')].filter((e) => e.getBoundingClientRect().right > window.innerWidth + 0.5).map((e) => e.tagName.toLowerCase() + '.' + e.className + '#' + e.id).slice(0, 8));
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, url + ': no sideways scroll; wider than the window: ' + wide.join(' '));
+      const small = await page.$$eval('.live-example button, .live-example a.tab, .live-example .btn, .live-example .na, .live-example .na-tag', (els, m) => els.map((e) => [e.className, e.getBoundingClientRect()]).filter(([, r]) => r.height > 0 && (r.height < m - 0.5 || r.width < m - 0.5)).map(([c]) => c), min);
+      assert.deepEqual(small, [], url + ': every example target is at least ' + min + ' px');
+      const axeCtx = await browser.newContext({ reducedMotion: 'reduce', viewport, bypassCSP: true, storageState: await ctx.storageState() });
+      try {
+        const ap = await axeCtx.newPage();
+        await ap.goto(base + url);
+        await ap.waitForSelector('#app:not([hidden])');
+        await ap.addScriptTag({ content: axeSource });
+        const found = await ap.evaluate(async () => (await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'] } })).violations.map((v) => v.id + ': ' + v.nodes.map((n) => n.target.join(' ')).join(', ')));
+        assert.deepEqual(found, [], 'axe on ' + url);
+      } finally { await axeCtx.close(); }
+    }
+    // Every other reference page is text only.
+    for (const url of ['reference/', 'reference/settings/network/']) {
+      await page.goto(base + url);
+      await page.waitForSelector('#app:not([hidden])');
+      assert.equal(await page.locator('.ref-body [data-live-example], .ref-body [data-live]').count(), 0, url + ': no live example');
+    }
+    await page.goto(base);
+    await page.waitForSelector('#app:not([hidden])');
+  });
+  // The live examples never leave the page: every link in them stays on it, and clicking changes at most the hash.
+  await step('reference: clicking the Tabs example and every other link in the live examples stays on the page', async () => {
+    for (const url of ['reference/admin-ui/components/', 'reference/admin-ui/page-layouts/']) {
+      await page.goto(base + url);
+      await page.waitForSelector('#app:not([hidden])');
+      const before = new URL(page.url()).pathname;
+      const hrefs = await page.$$eval('.live-example a', (els) => els.map((a) => a.getAttribute('href')));
+      assert.ok(hrefs.every((h) => h.startsWith('#')), url + ': every link in an example is a same-page anchor: ' + hrefs);
+      if (url.includes('components')) {
+        const tabs = page.locator('.live-example[data-live-example="tabs"] a.tab');
+        assert.ok(await tabs.count() >= 3, 'the Tabs example has its links');
+        assert.equal(await page.locator('.live-example[data-live-example="tabs"] a.tab[aria-current="page"]').count(), 1, 'one tab is current');
+        const href = await tabs.first().getAttribute('href');
+        assert.equal(href, '#tabs');
+        assert.equal(await page.locator('#tabs').count(), 1, 'the anchor is a heading of the page');
+      }
+      let navigated = false;
+      const onNav = (f) => { if (f === page.mainFrame() && new URL(f.url()).pathname !== before) navigated = true; };
+      page.on('framenavigated', onNav);
+      const links = page.locator('.live-example a');
+      for (let i = 0; i < await links.count(); i++) {
+        await links.nth(i).click();
+        assert.equal(new URL(page.url()).pathname, before, url + ': a link in an example left the page');
+        assert.equal(await page.locator('.live-example').first().isVisible(), true);
+      }
+      page.off('framenavigated', onNav);
+      assert.equal(navigated, false, url + ': nothing navigated');
+      assert.equal(await page.locator('#app:not([hidden])').count(), 1);
+    }
+  });
+  // Every GitHub link (and every external link in an article) opens in a new tab and says so.
+  await step('github links: open in a new tab with noopener and a hidden hint; a click opens a page and leaves this one where it was', async () => {
+    const hint = '(opens in a new tab)';
+    await ctx.route('https://github.com/**', (route) => route.fulfill({ status: 200, contentType: 'text/html', body: '<title>x</title>' }));
+    const check = async (url, what) => {
+      await page.goto(base + url);
+      await page.waitForSelector('#app:not([hidden])');
+      const bad = await page.$$eval('a[href^="https://github.com"], .ref-article a[href^="http"]', (els, h) => els.filter((a) => {
+        const hidden = a.querySelector('.visually-hidden');
+        return a.target !== '_blank' || !/(^| )noopener( |$)/.test(a.rel) || !hidden || !hidden.textContent.includes(h);
+      }).map((a) => a.href), hint);
+      assert.deepEqual(bad, [], what + ': every GitHub or external link opens in a new tab with the hint');
+      return page.locator('a[href^="https://github.com"]').count();
+    };
+    assert.ok(await check('reference/', 'reference home') >= 2, 'View on GitHub and the source links');
+    const index = await page.evaluate(async () => (await fetch('/admin/reference.json')).json());
+    const article = index.find((p) => p.id === 'settings/network') || index.find((p) => p.id !== 'index');
+    assert.ok(await check('reference/' + article.id + '/', 'an article') >= 1, 'Edit on GitHub');
+    assert.ok(await check('reference/admin-ui/components/', 'the Components page') >= 1);
+    assert.ok(await check('security/', 'the Security page') >= 1, 'the source and licence links of the menu');
+    // The hint is visually hidden: it takes no room.
+    await page.goto(base + 'reference/');
+    await page.waitForSelector('#app:not([hidden])');
+    const box = await page.locator('a.rf-open .visually-hidden').first().boundingBox();
+    assert.ok(box.width <= 1.5 && box.height <= 1.5, 'the hint is not drawn');
+    // A click opens a new page; this one stays.
+    const where = page.url();
+    const [popup] = await Promise.all([ctx.waitForEvent('page'), page.locator('a.rf-open').first().click()]);
+    await popup.close();
+    assert.equal(page.url(), where, 'the current page stays where it was');
+    await ctx.unroute('https://github.com/**');
+  });
+  // Plan step 7.3: ? buttons and help in the docked side panel, with the text pre-rendered in the page.
+  await step('help: every ? button has a name and tooltip, the panel shows its topic with no request, Back and Esc close it, Open full page lands on the heading', async () => {
+    const K = await page.evaluate(() => window.ui.ready);
+    const min = isPhone ? 44 : 24;
+    const axeSource = fs.readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8');
+    const index = await page.evaluate(async () => (await fetch('/admin/reference.json')).json());
+    const titleOf = (topic) => {
+      const [id, anchor] = topic.split('#');
+      const ref = index.find((x) => x.id === id);
+      return anchor ? ref.headings.find((h) => h.id === anchor).text : ref.title;
+    };
+    // Every settings page: its title has a ? and each topic of the page has one, named "Help: <title>", with the same tooltip,
+    // a target big enough, and the topic's text on the page already (a <template>, so nothing has to be fetched).
+    for (const slug of ['providers', 'people', 'services', 'network', 'security', 'backup', 'notifications', 'general']) {
+      await page.goto(base + slug + '/');
+      await page.waitForSelector('#app:not([hidden])');
+      const info = await page.evaluate(() => ({
+        header: document.querySelectorAll('section[data-tab] .page-header').length,
+        h2: document.querySelectorAll('section[data-tab] h2.page-title').length,
+        headerHelp: document.querySelector('.page-header .page-title-row > button.help')?.dataset.help || null,
+        buttons: [...document.querySelectorAll('section[data-tab] [data-help]')].map((b) => {
+          const r = b.getBoundingClientRect();
+          return { topic: b.dataset.help, name: b.getAttribute('aria-label'), tip: b.getAttribute('data-tip'), w: r.width, h: r.height, shown: b.getClientRects().length > 0 };
+        }),
+        templates: [...document.querySelectorAll('template[data-help-topic]')].map((t) => t.dataset.helpTopic),
+        inBox: document.querySelectorAll('dialog [data-help], .row-confirm [data-help]').length,
+      }));
+      assert.equal(info.header, 1, slug + ': one page header');
+      assert.equal(info.h2, 1, slug + ': one page title');
+      assert.equal(info.headerHelp, 'settings/' + slug, slug + ': the page title has its help button');
+      assert.ok(info.buttons.length >= 2, slug + ': a ? for the page and its sections');
+      assert.equal(info.inBox, 0, 'no ? in a box');
+      for (const b of info.buttons) {
+        assert.equal(b.name, 'Help: ' + titleOf(b.topic), slug + ' ' + b.topic + ': name');
+        assert.equal(b.tip, b.name, slug + ' ' + b.topic + ': tooltip');
+        assert.ok(info.templates.includes(b.topic), slug + ' ' + b.topic + ': the page carries the text');
+        // A section the page keeps hidden for now (the accounts section, until it applies) has its button hidden with it.
+        if (b.shown) assert.ok(b.w >= min && b.h >= min, slug + ' ' + b.topic + ': target ' + b.w + 'x' + b.h);
+      }
+      assert.deepEqual(info.templates.slice().sort(), K.HELP_TOPICS.filter((t) => t === 'settings/' + slug || t.startsWith('settings/' + slug + '#')).sort(), slug + ': the page carries exactly its topics');
+    }
+    // Home and Alerts have a ? for the title too (R8): one page header, and the page carries its topics.
+    for (const slug of ['home', 'alerts']) {
+      await page.goto(base + slug + '/');
+      await page.waitForSelector('#app:not([hidden])');
+      assert.equal(await page.locator('section[data-tab] .page-header').count(), 1, slug);
+      assert.equal(await page.locator('.page-header .page-title-row > button.help').getAttribute('data-help'), slug, slug + ': the title has its help');
+      assert.equal(await page.locator('#help-panel').count(), 1, slug + ': the help panel');
+    }
+    // The tooltip shows on keyboard focus, not only on hover.
+    await page.goto(base + 'network/');
+    await page.waitForSelector('#app:not([hidden])');
+    // Only the admin's own polls (status, services, alerts) may run while it is open; opening help adds no request.
+    await page.waitForLoadState('networkidle');
+    const requests = [];
+    const onRequest = (r) => { if (!/\/api\/admin\/v1\/(status|services|alerts)(\?|$)/.test(r.url())) requests.push(r.url()); };
+    const host = page.locator('button[data-help="settings/network#host-name"]');
+    if (!isPhone) {
+      await host.focus();
+      await page.keyboard.press('Tab');
+      await page.keyboard.press('Shift+Tab');
+      await host.evaluate((b) => new Promise((done) => {
+        const t = Date.now();
+        const look = () => (getComputedStyle(b, '::after').opacity === '1' || Date.now() - t > 3000 ? done() : requestAnimationFrame(look));
+        look();
+      }));
+      assert.equal(await host.evaluate((b) => getComputedStyle(b, '::after').opacity), '1', 'the tooltip shows on keyboard focus');
+    }
+    // Opening: the panel shows the topic's text and a link to the article's heading, and nothing is fetched.
+    page.on('request', onRequest);
+    await host.click();
+    await page.waitForSelector('#help-panel:not([hidden])');
+    await page.waitForFunction(() => document.activeElement && document.activeElement.id === 'help-panel-title');
+    page.off('request', onRequest);
+    assert.deepEqual(requests, [], 'opening help fetches nothing');
+    assert.equal(await page.locator('#help-panel-title').innerText(), 'Host name');
+    assert.match(await page.locator('#help-kicker').innerText(), /Network/);
+    const body = await page.locator('#help-article').innerText();
+    assert.ok(body.length > 20 && !/Placeholder/.test(body), body);
+    assert.equal(await host.getAttribute('aria-expanded'), 'true');
+    assert.equal(await page.locator('#help-full').getAttribute('href'), '/admin/reference/settings/network/#host-name');
+    assert.equal(await page.evaluate(() => new URL(location.href).searchParams.get('panel')), 'help:settings/network#host-name');
+    assert.equal(await page.locator('#help-panel [style], #help-panel script').count(), 0);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'no sideways scroll with the panel open');
+    const sizes = await page.$$eval('#help-panel button, #help-panel a.btn', (els) => els.map((e) => { const r = e.getBoundingClientRect(); return { n: e.textContent.trim() || e.getAttribute('aria-label'), w: r.width, h: r.height }; }));
+    for (const t of sizes) assert.ok(t.w >= min && t.h >= min, 'help panel target ' + JSON.stringify(t));
+    // Another topic swaps the text in place; the address follows and Back still leaves the page's own history.
+    // (On a phone the panel covers the page, so the swap is asked for through ui.help, which the buttons call.)
+    if (isPhone) await page.evaluate(() => window.ui.help('settings/network#certificate'));
+    else await page.locator('button[data-help="settings/network#certificate"]').click();
+    await page.waitForFunction(() => document.getElementById('help-panel-title').textContent === 'Certificate');
+    assert.equal(await page.evaluate(() => new URL(location.href).searchParams.get('panel')), 'help:settings/network#certificate');
+    assert.equal(await page.locator('#help-full').getAttribute('href'), '/admin/reference/settings/network/#certificate');
+    // Axe is clean with the panel open (a fresh page at the topic's address, which also checks that it opens from it).
+    const axeCtx = await browser.newContext({ reducedMotion: 'reduce', viewport, bypassCSP: true, storageState: await ctx.storageState() });
+    try {
+      const ap = await axeCtx.newPage();
+      await ap.goto(base + 'network/?panel=help%3Asettings%2Fnetwork%23certificate');
+      await ap.waitForSelector('#help-panel:not([hidden])');
+      assert.equal(await ap.locator('#help-panel-title').innerText(), 'Certificate', 'the address opens the topic');
+      await ap.addScriptTag({ content: axeSource });
+      const found = await ap.evaluate(async () => (await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'] } })).violations.map((v) => v.id + ': ' + v.nodes.map((n) => n.target.join(' ')).join(', ')));
+      assert.deepEqual(found, [], 'axe with the help panel open');
+    } finally { await axeCtx.close(); }
+    // Back closes it, and focus returns to the button that opened it.
+    await page.goBack();
+    await page.waitForSelector('#help-panel', { state: 'hidden' });
+    await page.waitForFunction(() => !location.search.includes('panel='));
+    // Esc closes it, and focus returns to the button.
+    const cert = page.locator('button[data-help="settings/network#certificate"]');
+    await cert.click();
+    await page.waitForSelector('#help-panel:not([hidden])');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('#help-panel', { state: 'hidden' });
+    await page.waitForFunction(() => !location.search.includes('panel='));
+    assert.equal(await page.evaluate(() => document.activeElement && document.activeElement.dataset.help), 'settings/network#certificate', 'focus returns to the ? button');
+    // A reload with the address opens it again; the page's own ? button for the page title opens the page topic.
+    await host.click();
+    await page.waitForSelector('#help-panel:not([hidden])');
+    await page.reload();
+    await page.waitForSelector('#app:not([hidden])');
+    await page.waitForSelector('#help-panel:not([hidden])');
+    assert.equal(await page.locator('#help-panel-title').innerText(), 'Host name');
+    await page.locator('#help-panel [data-panel-close]').click();
+    await page.waitForSelector('#help-panel', { state: 'hidden' });
+    await page.locator('.page-header button.help').click();
+    await page.waitForSelector('#help-panel:not([hidden])');
+    assert.equal(await page.locator('#help-panel-title').innerText(), 'Network');
+    assert.equal(await page.locator('#help-full').getAttribute('href'), '/admin/reference/settings/network/');
+    // Open full page: the article, scrolled to the heading.
+    await page.locator('#help-panel [data-panel-close]').click();
+    await host.click();
+    await page.waitForSelector('#help-panel:not([hidden])');
+    await Promise.all([page.waitForURL('**/admin/reference/settings/network/#host-name'), page.locator('#help-full').click()]);
+    await page.waitForSelector('#app:not([hidden])');
+    await page.waitForFunction(() => { const r = document.getElementById('host-name').getBoundingClientRect(); return r.top >= 0 && r.bottom <= window.innerHeight; });
+    await page.goto(base);
+    await page.waitForSelector('#app:not([hidden])');
+  });
+  // R8: every page title and every section heading has a ? button after it.
+  await step('help: every page title and section heading has a ? button; new ones open the panel with text and no request, axe clean', async () => {
+    const K = await page.evaluate(() => window.ui.ready);
+    const axeSource = fs.readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8');
+    // Headings that are not given a ? (the documented exceptions): the three area headings of the Reference home are labels
+    // for lists of links that the page's own ? already covers, and a reference article is the help itself (its title has none).
+    const EXCEPTIONS = [{ slug: 'reference', heading: '.rf-grp h3' }];
+    for (const slug of K.PAGE_SLUGS) {
+      await page.goto(base + slug + '/');
+      await page.waitForSelector('#app:not([hidden])');
+      await page.waitForLoadState('networkidle');
+      const missing = await page.evaluate((skip) => {
+        const out = [];
+        for (const h of document.querySelectorAll('main h2.page-title, main h3')) {
+          if (h.closest('.side-panel, dialog, [role=dialog], [hidden]') || h.offsetParent === null) continue;
+          if (skip.some((s) => h.matches(s))) continue;
+          const row = h.parentElement;
+          const btn = row.querySelector(':scope > [data-help]') || row.parentElement.querySelector(':scope > [data-help]');
+          // The button comes after the heading, in the same row.
+          const after = btn && (h.compareDocumentPosition(btn) & Node.DOCUMENT_POSITION_FOLLOWING);
+          if (!after) out.push(h.tagName.toLowerCase() + ' "' + h.textContent.trim().slice(0, 40) + '"');
+        }
+        return out;
+      }, EXCEPTIONS.filter((e) => e.slug === slug).map((e) => e.heading));
+      assert.deepEqual(missing, [], slug + ': headings with no ? button');
+    }
+    // A reference article is the help: its own title has no ?.
+    await page.goto(base + 'reference/settings/network/');
+    await page.waitForSelector('#app:not([hidden])');
+    assert.equal(await page.locator('.ref-head [data-help]').count(), 0, 'an article has no ? on its title');
+    // Three pages: each new button opens the panel with its text, fetches nothing, and axe is clean with the panel open.
+    const min = isPhone ? 44 : 24;
+    for (const slug of ['home', 'audit/sealed', 'alerts']) {
+      await page.goto(base + slug + '/');
+      await page.waitForSelector('#app:not([hidden])');
+      await page.waitForLoadState('networkidle');
+      const topics = await page.$$eval('section[data-tab] [data-help]', (bs) => bs.filter((b) => b.getClientRects().length > 0).map((b) => b.dataset.help));
+      assert.ok(topics.length >= 2, slug + ': ' + topics.length + ' visible ? buttons');
+      const requests = [];
+      // The page's own polls go to the admin API; opening help must fetch no document, script or reference page.
+      const onRequest = (r) => { if (!/\/api\/admin\/v1\//.test(r.url())) requests.push(r.url()); };
+      for (const topic of topics) {
+        const btn = page.locator('button[data-help="' + topic + '"]');
+        const box = await btn.boundingBox();
+        assert.ok(box.width >= min && box.height >= min, slug + ' ' + topic + ': target ' + box.width + 'x' + box.height);
+        page.on('request', onRequest);
+        await btn.click();
+        await page.waitForSelector('#help-panel:not([hidden])');
+        page.off('request', onRequest);
+        const text = (await page.locator('#help-article').innerText()).trim();
+        assert.ok(text.length > 20 && !/placeholder/i.test(text), slug + ' ' + topic + ': ' + text);
+        assert.equal(await btn.getAttribute('aria-expanded'), 'true');
+        assert.equal(await btn.getAttribute('aria-label'), await btn.getAttribute('data-tip'), 'name and tooltip agree');
+        assert.match(await btn.getAttribute('aria-label'), /^Help: \S/);
+        await page.keyboard.press('Escape');
+        await page.waitForSelector('#help-panel', { state: 'hidden' });
+        assert.equal(await page.evaluate(() => document.activeElement && document.activeElement.dataset.help), topic, 'focus returns to the ? button');
+      }
+      assert.deepEqual(requests, [], slug + ': opening help fetched nothing');
+      // Axe, with the panel open on the page's last topic (a fresh page at the topic's address, which also checks that it opens from it).
+      const axeCtx = await browser.newContext({ reducedMotion: 'reduce', viewport, bypassCSP: true, storageState: await ctx.storageState() });
+      try {
+        const ap = await axeCtx.newPage();
+        await ap.goto(base + slug + '/?panel=' + encodeURIComponent('help:' + topics[topics.length - 1]));
+        await ap.waitForSelector('#help-panel:not([hidden])');
+        await ap.addScriptTag({ content: axeSource });
+        const found = await ap.evaluate(async () => (await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'] } })).violations.map((v) => v.id + ': ' + v.nodes.map((n) => n.target.join(' ')).join(', ')));
+        assert.deepEqual(found, [], slug + ': axe with the help panel open');
+      } finally { await axeCtx.close(); }
+    }
+    await page.goto(base);
+    await page.waitForSelector('#app:not([hidden])');
+  });
+  // The Settings overview page was removed (owner's request, round 2): the Settings heading opens General, the group's first page.
+  await step('settings: the menu heading opens General, General is the first sub-item, and /admin/settings/ redirects there', async () => {
+    await openPage('providers');
+    assert.equal(await page.getAttribute('#nav a[data-tab="general"]', 'aria-current'), null, 'General is not current on another page');
+    const heading = page.locator('#nav a.sm-parent');
+    assert.equal(await heading.count(), 1, 'the Settings heading is bold under Settings');
+    assert.equal(await heading.getAttribute('href'), '/admin/general/', 'the heading links to General');
+    assert.equal(await heading.getAttribute('aria-current'), null, 'the heading is never current');
+    const subs = await page.evaluate(() => [...document.querySelector('#nav a.sm-parent').nextElementSibling.querySelectorAll('a')].map((a) => a.dataset.tab));
+    assert.deepEqual(subs, ['general', 'providers', 'people', 'services', 'network', 'security', 'backup', 'notifications']);
+    await openMenu();
+    await Promise.all([page.waitForURL('**/admin/general/'), page.locator('#nav a.sm-parent').click()]);
+    await page.waitForSelector('#app:not([hidden])');
+    assert.equal(await page.getAttribute('#nav a[data-tab="general"]', 'aria-current'), 'page', 'General is current');
+    assert.equal(await page.locator('#nav a[aria-current="page"]').count(), 1, 'one current item');
+    await page.goto(base + 'settings/?x=1');
+    await page.waitForURL('**/admin/general/?x=1');
+    await page.waitForSelector('#app:not([hidden])');
+  });
+
+  await step('side menu: every page once, the current page and its group marked, the health line, licence and source from the constants', async () => {
+    const K = await page.evaluate(() => window.ui.ready);
+    await page.goto(base + 'audit/sealed/');
+    await page.waitForSelector('#app:not([hidden])');
+    const menu = await page.evaluate(() => {
+      const weight = (el) => getComputedStyle(el).fontWeight;
+      const current = document.querySelector('#nav a[aria-current="page"]');
+      const parent = document.querySelector('#nav .sm-parent');
+      return {
+        current: current.dataset.tab,
+        currentBold: weight(current),
+        parent: parent.textContent.trim(),
+        parentBold: weight(parent),
+        others: [...document.querySelectorAll('#nav > a.sm-item:not(.sm-parent)')].map((a) => weight(a)),
+        width: document.getElementById('side-menu').getBoundingClientRect().width,
+        licence: [document.querySelector('.sm-lic-link').firstChild.textContent, document.querySelector('.sm-lic-link').href],
+        source: document.querySelector('.sm-lic a.btn').href,
+        footer: getComputedStyle(document.querySelector('.footer')).display,
+      };
+    });
+    assert.equal(menu.current, 'audit/sealed');
+    assert.equal(menu.currentBold, '600');
+    assert.deepEqual([menu.parent, menu.parentBold], ['Audit', '600'], 'the Audit heading is bold on its pages');
+    assert.ok(menu.others.every((w) => w === '400'), 'no other heading is bold: ' + menu.others);
+    if (!isPhone) assert.equal(menu.width, 216, 'the menu is --rail-w wide');
+    assert.deepEqual(menu.licence, [K.LICENSE, K.LICENSE_URL]);
+    assert.equal(menu.source, K.SOURCE_URL);
+    assert.equal(menu.footer, 'none', 'signed in, the menu carries the licence and the footer is hidden');
+    await page.waitForFunction(() => /services (running|not running)$/.test(document.querySelector('#menu-health-status .status-word').textContent));
+    assert.match(await page.getAttribute('#menu-health-status', 'class'), /status-(ok|warning)/);
+    assert.equal(await page.getAttribute('#menu-health', 'href'), '/admin/services/');
+    // The icon buttons show their names on keyboard focus, not only on hover (rule 42).
+    await openMenu();
+    await page.focus('#nav a[data-tab="reference"]');
+    await page.keyboard.press('Tab');
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'logout', 'Sign out follows the menu in the Tab order');
+    await page.waitForSelector('#menu-tip:not([hidden])');
+    assert.equal(await page.innerText('#menu-tip'), 'Sign out');
+    await page.keyboard.press('Escape');
+    assert.equal(await page.isHidden('#menu-tip'), true, 'Esc hides the tooltip');
+    if (isPhone) await page.keyboard.press('Escape'); // and a second Esc closes the phone menu
+    await page.goto(base);
+    await page.waitForSelector('#app:not([hidden])');
+  });
+  await step(isPhone ? 'side menu: a phone has no collapse button, and a collapsed choice does not shrink its menu' : 'side menu: collapse shrinks it to icons, the choice survives a reload, names show on focus, and a blocked store leaves it working', async () => {
+    if (isPhone) {
+      await openMenu();
+      assert.equal(await page.isHidden('#menu-collapse'), true, 'no collapse button on a phone');
+      const before = await page.evaluate(() => document.getElementById('side-menu').getBoundingClientRect().width);
+      await page.evaluate(() => document.documentElement.classList.add('menu-collapsed'));
+      assert.equal(await page.evaluate(() => document.getElementById('side-menu').getBoundingClientRect().width), before);
+      await page.evaluate(() => document.documentElement.classList.remove('menu-collapsed'));
+      await page.keyboard.press('Escape');
+      return;
+    }
+    const menuWidth = () => page.evaluate(() => document.getElementById('side-menu').getBoundingClientRect().width);
+    const full = await menuWidth();
+    const mainLeft = () => page.evaluate(() => document.querySelector('#main').getBoundingClientRect().left);
+    const leftBefore = await mainLeft();
+    await page.click('#menu-collapse');
+    assert.equal(await page.getAttribute('#menu-collapse', 'aria-expanded'), 'false');
+    assert.equal(await page.getAttribute('#menu-collapse', 'aria-label'), 'Expand menu');
+    const collapsedW = await page.evaluate(() => parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--rail-w-collapsed')));
+    await page.waitForFunction((w) => document.getElementById('side-menu').getBoundingClientRect().width === w, collapsedW);
+    assert.ok(await mainLeft() < leftBefore, 'the page gains the width');
+    assert.equal(await page.evaluate(() => document.querySelector('#nav a[data-tab="providers"]').textContent.trim()), 'Providers', 'the name stays for screen readers');
+    await page.reload();
+    await page.waitForSelector('#app:not([hidden])');
+    assert.equal(await page.getAttribute('#menu-collapse', 'aria-expanded'), 'false', 'still collapsed after a reload');
+    assert.equal(await menuWidth(), collapsedW);
+    // Keyboard focus on a link shows its name beside it.
+    await page.focus('#nav a[data-tab="providers"]');
+    await page.keyboard.press('Tab');
+    await page.keyboard.press('Shift+Tab');
+    await page.waitForSelector('#menu-tip:not([hidden])');
+    assert.equal(await page.innerText('#menu-tip'), 'Providers');
+    assert.ok(await page.evaluate(() => document.getElementById('menu-tip').getBoundingClientRect().left >= document.getElementById('side-menu').getBoundingClientRect().right), 'beside the menu, not clipped by it');
+    await page.click('#menu-collapse');
+    assert.equal(await page.getAttribute('#menu-collapse', 'aria-expanded'), 'true');
+    await page.waitForFunction((w) => document.getElementById('side-menu').getBoundingClientRect().width === w, full);
+    // A browser that refuses localStorage still gets a working, expanded menu.
+    const blocked = await browser.newContext({ reducedMotion: 'reduce', viewport, storageState: await ctx.storageState() });
+    await blocked.addInitScript(() => {
+      const no = () => { throw new Error('storage blocked'); };
+      Storage.prototype.getItem = no;
+      Storage.prototype.setItem = no;
+    });
+    const p = await blocked.newPage();
+    const errs = [];
+    p.on('pageerror', (e) => errs.push(e.message));
+    try {
+      await p.goto(base + 'providers/');
+      await p.waitForSelector('#app:not([hidden])');
+      assert.equal(await p.getAttribute('#menu-collapse', 'aria-expanded'), 'true');
+      await p.click('#menu-collapse');
+      assert.equal(await p.getAttribute('#menu-collapse', 'aria-expanded'), 'false', 'it still collapses, for this page');
+      assert.deepEqual(errs, []);
+    } finally {
+      await blocked.close();
+    }
+  });
+  await step(isPhone ? 'phone menu: the Menu button opens every page full screen, Tab stays inside, Esc closes it and returns focus' : 'phone menu: no Menu button or phone bar on a desktop', async () => {
+    if (!isPhone) {
+      assert.equal(await page.isHidden('#menu-open'), true);
+      assert.equal(await page.isVisible('#side-menu'), true);
+      return;
+    }
+    await page.goto(base + 'network/');
+    await page.waitForSelector('#app:not([hidden])');
+    assert.equal(await page.isHidden('#side-menu'), true, 'the menu is closed at first');
+    const box = await page.locator('#menu-open').boundingBox();
+    assert.ok(box.height >= 44 && box.width >= 44, 'the Menu button is a 44 px target: ' + JSON.stringify(box));
+    await page.click('#menu-open');
+    assert.equal(await page.getAttribute('#menu-open', 'aria-expanded'), 'true');
+    assert.equal(await page.innerText('#menu-open'), 'Close');
+    const r = await page.evaluate(() => {
+      const m = document.getElementById('side-menu').getBoundingClientRect();
+      return {
+        full: m.left === 0 && Math.round(m.right) === document.documentElement.clientWidth && Math.round(m.bottom) === innerHeight,
+        visible: [...document.querySelectorAll('#nav a[data-tab]')].filter((a) => a.getClientRects().length > 0).map((a) => a.dataset.tab),
+        inert: document.querySelector('#main').inert,
+        inside: document.getElementById('side-menu').contains(document.activeElement),
+      };
+    });
+    const slugs = await page.$$eval('#nav a[data-tab]', (as) => as.map((a) => a.dataset.tab));
+    assert.deepEqual(r, { full: true, visible: slugs, inert: true, inside: true });
+    // Tab goes round the menu and its Close button, never into the page behind.
+    for (let i = 0; i < slugs.length + 12; i++) {
+      await page.keyboard.press('Tab');
+      assert.ok(await page.evaluate(() => document.getElementById('side-menu').contains(document.activeElement) || document.activeElement.id === 'menu-open'), 'Tab ' + i + ' stays in the menu');
+    }
+    await page.keyboard.press('Escape');
+    assert.equal(await page.isHidden('#side-menu'), true);
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'menu-open', 'focus goes back to the Menu button');
+    assert.equal(await page.evaluate(() => document.querySelector('#main').inert), false);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), true, 'no sideways scroll');
+    // A page from the menu.
+    await openPage('security');
+    assert.equal(await page.isHidden('#side-menu'), true, 'the new page opens with the menu closed');
+    await page.goto(base);
+    await page.waitForSelector('#app:not([hidden])');
+  });
+  await step('status bar: 48 px and sticky, the breadcrumb names the page, the budget is greyed, the kill switch is a word, a focused field stays clear of it', async () => {
+    const K = await page.evaluate(() => window.ui.ready);
+    await page.goto(base + 'audit/sealed/');
+    await page.waitForSelector('#app:not([hidden])');
+    const crumb = () => page.evaluate(() => [...document.querySelectorAll('#status-bar .crumb li')].map((li) => [li.textContent, li.getAttribute('aria-current')]));
+    assert.deepEqual(await crumb(), [['Audit', null], ['Sealed access', 'page']], 'a grouped page shows group > page');
+    await page.goto(base + 'reference/');
+    await page.waitForSelector('#app:not([hidden])');
+    assert.deepEqual(await crumb(), [['Reference', 'page']], 'a top-level page shows just its label');
+    if (isPhone) {
+      // On a phone the group is left out, so the label is whole: the visible text is exactly the page name, not clipped.
+      await page.goto(base + 'network/');
+      await page.waitForSelector('#app:not([hidden])');
+      const visible = await page.evaluate(() => {
+        const items = [...document.querySelectorAll('#status-bar .crumb li')].filter((li) => getComputedStyle(li).display !== 'none');
+        const cur = document.querySelector('#status-bar .crumb li[aria-current="page"]');
+        return { text: items.map((li) => li.textContent.trim()).join(' '), clipped: cur.scrollWidth > cur.clientWidth };
+      });
+      assert.deepEqual(visible, { text: 'Network', clipped: false }, 'on a phone the breadcrumb shows only the page label, not clipped');
+    }
+    assert.equal(await page.locator('#status-bar [aria-current="page"]').count(), 1);
+    assert.equal(await page.locator('nav[aria-label="Breadcrumb"] ol').count(), 1);
+    await page.goto(base + 'general/');
+    await page.waitForSelector('#app:not([hidden])');
+    // Budget: one greyed item that is aria-disabled, never `disabled`; kill switch: a word with a symbol, once.
+    const facts = await page.evaluate(() => ({
+      na: document.querySelectorAll('#status-bar .na[aria-disabled="true"]').length,
+      budgetDisabledAttr: document.querySelectorAll('#status-bar [disabled]').length,
+      budgetTip: document.querySelector('#status-bar .na').dataset.tip,
+      kill: document.querySelectorAll('#sb-kill').length,
+      killFields: document.querySelectorAll('#s-kill-switch').length,
+    }));
+    assert.deepEqual(facts, { na: 1, budgetDisabledAttr: 0, budgetTip: 'Not available yet: the server has no family budget setting', kill: 1, killFields: 0 });
+    await page.waitForFunction(() => /^Kill: (on|off)$/.test(document.querySelector('#sb-kill .status-word').textContent));
+    assert.match(await page.getAttribute('#sb-kill', 'class'), /status-(ok|error)/);
+    assert.equal(await page.evaluate(() => document.querySelector('#sb-kill .status-sym').getAttribute('aria-hidden')), 'true');
+    // Height is --status-h and the bar stays put while the page scrolls.
+    const bar = () => page.evaluate(() => {
+      const r = document.getElementById('status-bar').getBoundingClientRect();
+      return { top: Math.round(r.top), height: r.height, statusH: parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--status-h')), bottom: r.bottom, wide: document.documentElement.scrollWidth > document.documentElement.clientWidth };
+    });
+    const before = await bar();
+    assert.equal(before.height, before.statusH, 'the bar is --status-h high');
+    assert.equal(before.wide, false, 'no sideways scroll');
+    await page.evaluate(() => { document.querySelector('#main').append(Object.assign(document.createElement('div'), { id: 't-tall', textContent: 'x' })); document.getElementById('t-tall').style.height = '3000px'; });
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    const after = await bar();
+    assert.equal(after.top, before.top, 'the bar does not move while scrolling');
+    assert.equal(after.height, before.statusH);
+    // A field focused from far down scrolls into view below the bar, not under it.
+    const input = await page.evaluate(() => {
+      const i = document.querySelector('#main input:not([type=hidden]):not([type=checkbox]):not([type=radio])');
+      i.focus();
+      const bottom = document.getElementById('status-bar').getBoundingClientRect().bottom;
+      return { top: i.getBoundingClientRect().top, bottom, scrolled: window.scrollY };
+    });
+    assert.ok(input.top >= input.bottom, 'the focused field starts below the bar: ' + JSON.stringify(input));
+    await page.evaluate(() => document.getElementById('t-tall').remove());
+    // The kill switch word is shown at every width, phones included (rule 37): a word with its symbol, never clipped away.
+    const killWord = await page.evaluate(() => { const w = document.querySelector('#sb-kill .status-word'); return { width: w.getBoundingClientRect().width, clip: getComputedStyle(w).clipPath }; });
+    assert.ok(killWord.width > 20 && killWord.clip === 'none', 'the kill switch word is visible on ' + vpLabel + ' px: ' + JSON.stringify(killWord));
+    // The bar's items (the breadcrumb label, the search and each fact) never overlap and stay inside the bar. Zero-width
+    // items are not drawn, so they are skipped; #gs is outside the bar on a phone (it sits in the menu) and is skipped too.
+    const barItems = () => page.evaluate(() => {
+      const bar = document.getElementById('status-bar').getBoundingClientRect();
+      const els = [['crumb', document.querySelector('#status-bar .crumb li[aria-current="page"]')], ['search', document.getElementById('gs')], ...[...document.querySelectorAll('#status-facts > *')].map((e) => [e.id || e.className, e])];
+      return { bar: { l: bar.left, r: bar.right }, items: els.filter(([, e]) => e && e.getClientRects().length > 0 && e.getBoundingClientRect().width >= 1).map(([name, e]) => { const r = e.getBoundingClientRect(); return { name, l: r.left, r: r.right, t: r.top, b: r.bottom }; }) };
+    });
+    const barCheck = (bi) => {
+      const out = [];
+      for (let i = 0; i < bi.items.length; i++) {
+        const a = bi.items[i];
+        if (a.l < bi.bar.l - 0.5 || a.r > bi.bar.r + 0.5) out.push(a.name + ' leaves the bar');
+        for (let j = i + 1; j < bi.items.length; j++) {
+          const b = bi.items[j];
+          if (a.l < b.r - 0.5 && b.l < a.r - 0.5) out.push(a.name + ' overlaps ' + b.name);
+        }
+      }
+      return out;
+    };
+    assert.deepEqual(barCheck(await barItems()), [], 'status bar items at ' + vpLabel + ' px');
+    if (!isPhone) {
+      // The docked help panel narrows the page at 1280 wide: the search shrinks and nothing is painted over another item.
+      await page.goto(base + 'network/?panel=help:settings/network');
+      await page.waitForSelector('#app:not([hidden])');
+      await page.waitForFunction(() => document.body.classList.contains('panel-open'));
+      const withPanel = await barItems();
+      assert.ok(withPanel.items.length >= 3, 'the crumb, search and facts are in the bar with the panel open');
+      assert.deepEqual(barCheck(withPanel), [], 'no two status-bar items overlap with the docked panel open at 1280 wide');
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth), false, 'no sideways scroll with the panel open');
+      // With a docked panel open the search keeps a usable width (plan R6b). At 1280 the breadcrumb is left out and the search
+      // takes the room the facts leave, so it is at least 160 px and centred in that room. At 1440 the centred grid still fits,
+      // so the search is centred in the bar's content area. Both: no overlap, no sideways scroll.
+      const searchBox = () => page.evaluate(() => {
+        const bar = document.getElementById('status-bar');
+        const b = bar.getBoundingClientRect(), cs = getComputedStyle(bar);
+        const gs = document.getElementById('gs').getBoundingClientRect();
+        return { width: gs.width, l: gs.left, r: gs.right, innerL: b.left + parseFloat(cs.paddingLeft), innerR: b.right - parseFloat(cs.paddingRight), factsL: document.getElementById('status-facts').getBoundingClientRect().left, gap: parseFloat(cs.columnGap) || 0 };
+      });
+      const s1280 = await searchBox();
+      assert.ok(s1280.width >= 160, 'the search is at least 160 px wide beside the docked panel at 1280: ' + JSON.stringify(s1280));
+      assert.ok(Math.abs((s1280.l + s1280.r) / 2 - (s1280.innerL + s1280.factsL - s1280.gap) / 2) <= 4, 'the search is centred in the room the facts leave, within 4 px, at 1280: ' + JSON.stringify(s1280));
+      assert.deepEqual(barCheck(await barItems()), [], 'no status-bar item overlaps at 1280 with the panel open (search width ' + Math.round(s1280.width) + ' px)');
+      // A one-off resize to 1100 and 1440 (back to 1280 after). At 1100 the room is too short for a 160 px search beside the
+      // kill switch, seal and bell: only the overlap and sideways checks are made there (see the commit body).
+      await page.setViewportSize({ width: 1100, height: viewport.height });
+      await page.waitForFunction(() => document.documentElement.clientWidth === 1100);
+      assert.deepEqual(barCheck(await barItems()), [], 'no status-bar item overlaps at 1100 with the panel open');
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth), false, 'no sideways scroll at 1100 with the panel open');
+      await page.setViewportSize({ width: 1440, height: viewport.height });
+      await page.waitForFunction(() => document.documentElement.clientWidth === 1440);
+      const s1440 = await searchBox();
+      assert.ok(s1440.width >= 160, 'the search is at least 160 px wide beside the docked panel at 1440: ' + JSON.stringify(s1440));
+      assert.ok(Math.abs((s1440.l + s1440.r) / 2 - (s1440.innerL + s1440.innerR) / 2) <= 4, 'the search is centred in the bar within 4 px at 1440: ' + JSON.stringify(s1440));
+      assert.deepEqual(barCheck(await barItems()), [], 'no status-bar item overlaps at 1440 with the panel open');
+      await page.setViewportSize(viewport);
+      await page.waitForFunction((w) => document.documentElement.clientWidth === w, viewport.width);
+      await page.goto(base + 'general/');
+      await page.waitForSelector('#app:not([hidden])');
+    }
+    // A 320 px phone (a one-off resize, not a third suite width): nothing scrolls sideways, the facts stay in the bar, the kill word stays visible.
+    await page.setViewportSize({ width: 320, height: viewport.height });
+    await page.waitForFunction(() => document.documentElement.clientWidth === 320);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth), false, 'no sideways scroll at 320 px: ' + await page.evaluate(() => JSON.stringify({ sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth, ml: getComputedStyle(document.querySelector('.content')).marginLeft, bar: document.getElementById('status-bar').getBoundingClientRect().width, app: document.getElementById('app').getBoundingClientRect().width, htmlClass: document.documentElement.className, wide: [...document.querySelectorAll('body *')].filter((e) => e.getClientRects().length && e.getBoundingClientRect().right > document.documentElement.offsetWidth + 1 && getComputedStyle(e).position !== 'fixed').slice(0, 6).map((e) => e.tagName + '#' + e.id + '.' + e.className + ' ' + Math.round(e.getBoundingClientRect().right)) })));
+    assert.deepEqual(barCheck(await barItems()), [], 'status bar items at 320 px');
+    assert.ok((await page.evaluate(() => document.querySelector('#sb-kill .status-word').getBoundingClientRect().width)) > 20, 'the kill switch word is visible at 320 px');
+    await page.setViewportSize(viewport);
+    await page.waitForFunction((w) => document.documentElement.clientWidth === w, viewport.width);
+    // The status poll still runs every STATUS_EVERY_SECS.
+    let polls = 0;
+    const count = (r) => { if (r.url().endsWith('/api/admin/v1/status')) polls++; };
+    page.on('request', count);
+    await page.waitForTimeout(K.STATUS_EVERY_SECS * 2 * 1000 + 1500);
+    page.off('request', count);
+    assert.ok(polls >= 2 && polls <= 3, 'status polled every STATUS_EVERY_SECS: ' + polls);
+    await openPage('providers');
+  });
+  await step('banners: the pinned banners have an opaque background, so the page does not show through them while it scrolls', async () => {
+    await openPage('general');
+    await page.evaluate(() => {
+      window.ui.banner('opaque-test', 'error', 'An error banner for the opacity test.');
+      window.ui.banner('opaque-warn', 'warning', 'A warning banner for the opacity test.');
+      const tall = document.createElement('div');
+      tall.id = 'opaque-tall';
+      tall.style.height = '3000px';
+      tall.textContent = 'Page content that scrolls under the banners.';
+      document.querySelector('#main').append(tall);
+      window.scrollTo(0, 800);
+    });
+    await page.waitForFunction(() => window.scrollY >= 700);
+    const bgs = await page.evaluate(() => [...document.querySelectorAll('#banners [data-banner], #status-bar')].map((n) => {
+      const s = getComputedStyle(n);
+      return { name: n.dataset.banner || 'status bar', color: s.backgroundColor, image: s.backgroundImage };
+    }));
+    // An opaque colour is rgb(...) or rgba(..., 1); a tint is laid over an opaque colour, so the gradient needs one under it.
+    const alpha = (c) => { const m = c.match(/^rgba?\((.*)\)$/); if (!m) return 0; const parts = m[1].split(/[\s,/]+/).filter(Boolean); return parts.length === 4 ? parseFloat(parts[3]) : 1; };
+    const names = bgs.map((b) => b.name);
+    assert.ok(names.includes('opaque-test') && names.includes('opaque-warn') && names.includes('status bar'), 'the banners and the status bar are up: ' + names.join(', '));
+    for (const b of bgs) assert.equal(alpha(b.color), 1, b.name + ' has an opaque background colour (' + b.color + ')');
+    assert.match(bgs.find((b) => b.name === 'opaque-test').image, /linear-gradient/, 'the error tint is laid over the opaque colour');
+    await page.evaluate(() => {
+      window.ui.banner('opaque-test', 'error', null);
+      window.ui.banner('opaque-warn', 'warning', null);
+      document.getElementById('opaque-tall').remove();
+    });
+  });
+  await step('status bar: the search placeholder fits its field at 1280, 1000 and on a phone', async () => {
+    await openPage('general');
+    await openMenu(); // on a phone the search is in the menu, which closes after a page change
+    const fit = () => page.evaluate(() => {
+      const i = document.getElementById('gs-input');
+      if (i.getClientRects().length === 0) return null;
+      const cs = getComputedStyle(i);
+      const ctx = document.createElement('canvas').getContext('2d');
+      ctx.font = cs.fontWeight + ' ' + cs.fontSize + ' ' + cs.fontFamily;
+      const room = i.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+      return { need: Math.ceil(ctx.measureText(i.placeholder).width), room: Math.floor(room), placeholder: i.placeholder };
+    });
+    assert.equal(await page.getAttribute('#gs-input', 'placeholder'), 'Search admin');
+    const seen = [await fit()];
+    if (viewport.width > 1000) {
+      await page.setViewportSize({ width: 1000, height: viewport.height });
+      await page.waitForFunction(() => document.documentElement.clientWidth === 1000);
+      seen.push(await fit());
+      await page.setViewportSize(viewport);
+      await page.waitForFunction((w) => document.documentElement.clientWidth === w, viewport.width);
+    }
+    const measured = seen.filter(Boolean);
+    assert.ok(measured.length > 0, 'the search field is shown at this width');
+    for (const f of measured) assert.ok(f.need <= f.room, 'the placeholder "' + f.placeholder + '" fits (' + f.need + ' px in ' + f.room + ' px)');
+  });
+  await step('frame: the side menu and the banners stay put while a long page scrolls, and a banner starts below the bar', async () => {
+    await page.goto(base + 'general/');
+    await page.waitForSelector('#app:not([hidden])');
+    await page.evaluate(() => {
+      window.ui.banner('frame-test', 'error', 'A whole-admin banner for the frame test.');
+      const tall = document.createElement('div');
+      tall.id = 't-tall';
+      tall.style.height = '3000px';
+      document.querySelector('#main').append(tall);
+      const target = document.createElement('p');
+      target.id = 't-anchor';
+      target.tabIndex = -1;
+      target.textContent = 'Anchor target';
+      tall.append(target);
+      target.style.marginTop = '1500px';
+    });
+    const geometry = () => page.evaluate(() => {
+      const box = (sel) => { const e = document.querySelector(sel); if (!e || e.getClientRects().length === 0) return null; const r = e.getBoundingClientRect(); return { x: r.x, y: r.y, h: r.height }; };
+      const root = getComputedStyle(document.documentElement);
+      return { side: box('#side-menu'), phone: box('.phone-bar'), bar: box('#status-bar'), banner: box('#banners'), mine: box('[data-banner="frame-test"]'), scrollY: window.scrollY, phoneH: parseFloat(root.getPropertyValue('--phone-bar-h')), statusH: parseFloat(root.getPropertyValue('--status-h')) };
+    });
+    const top = await geometry();
+    assert.ok(top.mine, 'the test banner shows');
+    const belowBar = isPhone ? top.phoneH + top.statusH : top.statusH;
+    assert.ok(Math.abs(top.banner.y - belowBar) < 0.5, 'the banners start directly under the status bar (' + top.banner.y + ' vs ' + belowBar + ')');
+    const title = await page.evaluate(() => document.querySelector('.page-title').getBoundingClientRect().top);
+    assert.ok(title >= top.banner.y + top.banner.h - 0.5, 'the page content starts below the banners');
+    for (const y of [120, 700, 2500]) {
+      await page.evaluate((to) => window.scrollTo(0, to), y);
+      await page.waitForFunction((to) => Math.abs(window.scrollY - to) < 2 || window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 2, y);
+      const now = await geometry();
+      assert.ok(now.scrollY > 0, 'the page scrolled');
+      assert.deepEqual(now.banner, top.banner, 'the banners do not move while the page scrolls (scrolled ' + now.scrollY + ')');
+      assert.deepEqual(now.bar, top.bar, 'the status bar does not move');
+      assert.deepEqual(now.side, top.side, 'the side menu does not move');
+      assert.deepEqual(now.phone, top.phone, 'the phone bar does not move');
+    }
+    // An address target and a focused control are scrolled clear of the bar and the banners, not under them.
+    await page.evaluate(() => { window.scrollTo(0, 0); location.hash = '#t-anchor'; });
+    await page.waitForFunction(() => window.scrollY > 500);
+    await page.waitForTimeout(300);
+    const clear = await page.evaluate(() => { const b = document.getElementById('banners').getBoundingClientRect(); return { anchor: document.getElementById('t-anchor').getBoundingClientRect().top, below: b.bottom }; });
+    assert.ok(clear.anchor >= clear.below - 0.5, 'an address target is not hidden under the banners: ' + JSON.stringify(clear));
+    // A banner clearing does not shift the page sideways.
+    const x0 = await page.evaluate(() => document.querySelector('.page-title').getBoundingClientRect().x);
+    await page.evaluate(() => { window.ui.banner('frame-test', 'error', null); document.getElementById('t-tall').remove(); });
+    await page.waitForFunction(() => !document.querySelector('[data-banner="frame-test"]'));
+    assert.equal(await page.evaluate(() => document.querySelector('.page-title').getBoundingClientRect().x), x0, 'the title keeps its left edge when a banner clears');
+    await page.evaluate(() => { history.replaceState(null, '', location.pathname); window.scrollTo(0, 0); });
+    if (!isPhone) {
+      // The collapsed menu is fixed too.
+      await page.evaluate(() => { document.documentElement.classList.add('menu-collapsed'); });
+      const col = await page.evaluate(() => { const r = document.getElementById('side-menu').getBoundingClientRect(); return { x: r.x, y: r.y }; });
+      assert.deepEqual(col, { x: 0, y: 0 }, 'the collapsed menu sits at the window corner');
+      await page.evaluate(() => { document.documentElement.classList.remove('menu-collapsed'); });
+    }
+  });
+  await step('frame: every page has the same column: the title and the first block keep their left edge, and no table box shows a bar', async () => {
+    const slugs = await page.evaluate(async () => (await window.ui.ready).PAGE_SLUGS);
+    assert.ok(slugs.length >= 14, 'the page list is read from the constants');
+    const edges = [];
+    for (const slug of slugs) {
+      await page.goto(base + slug + '/');
+      await page.waitForSelector('#app:not([hidden])');
+      await page.waitForSelector('#main .page-title');
+      await page.waitForTimeout(250);
+      const r = await page.evaluate(() => {
+        const section = document.querySelector('#main > section');
+        const first = [...section.children].find((c) => !c.classList.contains('page-header') && c.tagName !== 'TEMPLATE' && !c.hidden && c.getBoundingClientRect().height > 0 && getComputedStyle(c).position !== 'fixed');
+        const bars = [];
+        for (const w of document.querySelectorAll('.table-wrap')) {
+          if (w.getClientRects().length === 0) continue;
+          const cs = getComputedStyle(w);
+          if (w.scrollWidth > w.clientWidth + 0.5) bars.push((w.querySelector('table')?.id || 'a table') + ' scrolls inside its box by ' + (w.scrollWidth - w.clientWidth));
+          if (w.offsetHeight > w.clientHeight + 1 + parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth)) bars.push((w.querySelector('table')?.id || 'a table') + ' shows a bar under it');
+        }
+        return { title: document.querySelector('.page-title').getBoundingClientRect().x, first: first ? first.getBoundingClientRect().x : null, sideways: document.documentElement.scrollWidth > document.documentElement.clientWidth, bars };
+      });
+      assert.equal(r.sideways, false, slug + ' scrolls sideways');
+      // The two Audit tables whose cells keep one line (Model calls, Routing) scroll inside their box when a long name needs it.
+      if (!isPhone && !['audit/calls', 'audit/routing'].includes(slug)) assert.deepEqual(r.bars, [], slug + ': table boxes show no scroll bar');
+      edges.push({ slug, ...r });
+    }
+    const plain = edges.filter((e) => !e.slug.startsWith('reference'));
+    for (const e of edges) assert.equal(e.title, edges[0].title, e.slug + ': the title is at the same x as on ' + edges[0].slug);
+    for (const e of plain) assert.equal(e.first, plain[0].first, e.slug + ': the first block is at the same x as on ' + plain[0].slug);
+    await openPage('providers');
+  });
+  await step('frame: no stray box beside the page or above the docked panel', async () => {
+    // A docked panel runs the full window height on a desktop, so nothing uncovered shows above it; on a phone it starts under the bars.
+    await page.goto(base + 'network/?panel=help:settings/network');
+    await page.waitForSelector('#app:not([hidden])');
+    await page.waitForSelector('body.panel-open .side-panel:not([hidden])');
+    await page.waitForTimeout(300);
+    const r = await page.evaluate(() => {
+      const panel = document.querySelector('.side-panel');
+      const pr = panel.getBoundingClientRect();
+      const bar = document.getElementById('status-bar').getBoundingClientRect();
+      const owner = (x, y) => { const e = document.elementFromPoint(x, y); return e ? { ok: panel.contains(e) || document.getElementById('status-bar').contains(e) || document.getElementById('banners').contains(e), tag: e.tagName + '#' + e.id + '.' + e.className } : null; };
+      const root = getComputedStyle(document.documentElement);
+      return { top: pr.top, bottom: pr.bottom, left: pr.left, right: pr.right, height: pr.height, barRight: bar.right, barBottom: bar.bottom, win: window.innerWidth, winH: window.innerHeight,
+        phoneH: parseFloat(root.getPropertyValue('--phone-bar-h')), statusH: parseFloat(root.getPropertyValue('--status-h')),
+        samples: [5, bar.height - 5, bar.height + 5].map((y) => ({ y, ...owner(pr.left + 10, y) })) };
+    });
+    if (isPhone) {
+      assert.ok(r.top >= r.phoneH + r.statusH - 0.5, 'on a phone the panel starts under the phone bar and the status bar: ' + r.top);
+      assert.equal(r.left, 0);
+    } else {
+      assert.equal(r.top, 0, 'the docked panel starts at the top of the window');
+      assert.equal(Math.round(r.bottom), r.winH, 'and runs to the bottom');
+      assert.ok(r.barRight <= r.left + 0.5, 'the status bar ends where the panel starts: ' + r.barRight + ' vs ' + r.left);
+      for (const smp of r.samples) assert.ok(smp.ok, 'the point above/beside the panel at y=' + smp.y + ' belongs to the panel or the bars, not the page canvas: ' + JSON.stringify(smp));
+      assert.equal(await page.evaluate(() => document.elementFromPoint(window.innerWidth - 20, 5).closest('.side-panel') !== null), true, 'the top right corner of the window is the panel');
+      assert.equal(await page.evaluate(() => { const b = document.querySelector('.side-panel [data-panel-close]').getBoundingClientRect(); return b.top >= 0 && b.bottom <= document.querySelector('.side-panel-head').getBoundingClientRect().bottom; }), true, 'the close button is on screen in the panel header');
+    }
+    await page.goto(base + 'network/');
+    await page.waitForSelector('#app:not([hidden])');
+  });
+  await step('frame: no reserved scroll bar strip: the status bar reaches the right edge, and the root canvas has the page colour in both themes', async () => {
+    await page.goto(base + 'services/');
+    await page.waitForSelector('#app:not([hidden])');
+    await page.waitForSelector('#main .page-title');
+    await page.waitForTimeout(250);
+    const g = await page.evaluate(() => ({ cw: document.documentElement.clientWidth, iw: window.innerWidth, right: document.getElementById('status-bar').getBoundingClientRect().right, gutter: getComputedStyle(document.documentElement).scrollbarGutter }));
+    assert.equal(g.gutter, 'auto', 'no scroll bar room is reserved');
+    if (!(await page.evaluate(() => document.documentElement.scrollHeight > window.innerHeight))) {
+      assert.equal(g.cw, g.iw, 'a page that does not scroll uses the whole window width');
+      assert.equal(Math.round(g.right), g.iw, 'and its status bar reaches the right edge');
+    }
+    for (const scheme of ['light', 'dark']) {
+      const c2 = await browser.newContext({ reducedMotion: 'reduce', viewport, colorScheme: scheme, storageState: await ctx.storageState() });
+      try {
+        const p2 = await c2.newPage();
+        await p2.goto(base + 'services/');
+        await p2.waitForSelector('#app:not([hidden])');
+        const c = await p2.evaluate(() => ({ html: getComputedStyle(document.documentElement).backgroundColor, body: getComputedStyle(document.body).backgroundColor, token: getComputedStyle(document.documentElement).getPropertyValue('--bg').trim(), scheme: getComputedStyle(document.documentElement).colorScheme }));
+        assert.equal(c.html, c.body, scheme + ': the root canvas has the page background');
+        assert.notEqual(c.html, 'rgba(0, 0, 0, 0)', scheme + ': the root canvas is painted');
+        assert.notEqual(c.html, 'rgb(0, 0, 0)', scheme + ': the root canvas is not black');
+        assert.equal(c.scheme, scheme, 'the colour scheme follows the theme');
+      } finally { await c2.close(); }
+    }
+  });
+  await step('pages: an audit request opens directly from its address, in the docked panel, and the address follows it', async () => {
     const list = await page.evaluate(async () => (await fetch('/api/admin/v1/audit/traces', { credentials: 'same-origin' })).json());
     const id = list.traces[0].trace_id;
     await page.goto(`http://127.0.0.1:${adminPort}/admin/audit/?view=trace&id=${encodeURIComponent(id)}`);
-    await page.waitForSelector('#audit-trace:not([hidden])');
-    assert.equal(await page.getAttribute('#audit-nav [data-sub="trace"]', 'aria-selected'), 'true');
-    await page.waitForFunction((t) => window.askbarAudit.state.traceId === t && !!window.askbarAudit.state.trace, id);
-    assert.match(page.url(), new RegExp('[?]view=trace&id=' + encodeURIComponent(id) + '$'), 'the address keeps the request');
-    await page.click('#audit-nav [data-sub="requests"]');
-    assert.match(page.url(), /\/admin\/audit\/\?view=requests$/);
+    // The old address opens Model calls, and its id opens the trace in the docked panel (the views are gone, plan step 6.1).
+    await page.waitForSelector('#trace-content:not([hidden])');
+    assert.match(page.url(), /\/admin\/audit\/calls\/\?/, 'the old address opened Model calls');
+    assert.equal(await page.innerText('#trace-id'), id);
+    assert.equal(new URL(page.url()).searchParams.get('id'), id, 'the address keeps the request');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('#trace-panel', { state: 'hidden' });
+    await page.waitForFunction(() => !location.search.includes('id='));
     await openPage('providers');
   });
   await step('pages: a static file is kept and answers 304 when unchanged; pages are never stored', async () => {
@@ -1627,13 +5452,14 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     assert.equal(pageCache, 'no-store');
   });
   await step('sign out returns to the login form', async () => {
+    await openMenu();
     await page.click('#logout');
     await page.waitForSelector('#login:not([hidden])');
     await page.reload();
     await page.waitForSelector('#login:not([hidden])');
     await page.fill('#password', PASSWORD);
     await page.click('#login-form button');
-    await page.waitForSelector('#login-error:not([hidden])');
+    await page.waitForSelector('#password-error:not([hidden])');
     await page.fill('#password', 'brand new password 1');
     await page.click('#login-form button');
     await page.waitForSelector('#app:not([hidden])');
@@ -1643,51 +5469,57 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await new Promise((r) => serverProc.once('exit', r));
     await page.reload();
     await page.waitForSelector('#app:not([hidden])');
-    await page.waitForSelector('#offline:not([hidden])', { timeout: 15000 });
-    assert.match(await page.innerText('#offline'), /Server offline/);
+    await page.waitForSelector('#banners [data-banner="offline"]', { timeout: 15000 });
+    assert.match(await page.innerText('#banners [data-banner="offline"]'), /Server offline/);
     // Sign out and in again with the server away: the admin has its own login.
+    await openMenu();
     await page.click('#logout');
     await page.waitForSelector('#login:not([hidden])');
     await page.fill('#password', 'brand new password 1');
     await page.click('#login-form button');
     await page.waitForSelector('#app:not([hidden])');
-    await page.waitForSelector('#offline:not([hidden])');
+    await page.waitForSelector('#banners [data-banner="offline"]');
   });
-  await step('audit: with the server away the trail still reads from the auditor, and the views are there', async () => {
-    await openPage('audit');
-    await page.waitForSelector('#audit-overview');
+  await step('audit: with the server away the trail still reads from the auditor, and each Audit page is there', async () => {
+    await openPage('audit/calls');
+    await page.waitForSelector('#calls-rows tr[data-trace]');
+    assert.equal(await page.isHidden('#calls-error'), true, 'the auditor is up, so there is nothing to explain');
+    assert.ok(Number((await page.innerText('#kpi-replies')).replace(/,/g, '')) >= 1, 'the figures read from the auditor');
+    await openPage('audit/sealed');
+    await page.waitForSelector('#audit-unseal-form:not([hidden])');
     assert.equal(await page.isHidden('#audit-error'), true, 'the auditor is up, so there is nothing to explain');
-    for (const sub of ['overview', 'requests', 'trace', 'routing', 'content']) {
-      await page.click(`#audit-nav [data-sub="${sub}"]`);
-      assert.equal(await page.isVisible(`#audit-${sub}`), true, sub);
-      assert.equal(await page.getAttribute(`#audit-nav [data-sub="${sub}"]`, 'aria-selected'), 'true');
-      assert.equal(await page.locator('#audit-nav [aria-selected="true"]').count(), 1);
-      assert.match(await page.innerText(`#audit-${sub}`), /\S/, `${sub} says something even when empty`);
-    }
-    await page.click('#audit-nav [data-sub="overview"]');
+    assert.match(await page.innerText('#tab-audit-sealed'), /Who opened sealed content/);
+    await openPage('audit/routing');
+    await page.waitForSelector('#audit-routing-overall-empty:not([hidden]), #audit-routing-table:not([hidden])');
+    assert.equal(await page.isHidden('#audit-error'), true, 'the auditor is up, so there is nothing to explain');
   });
   await step('a change while the server is away is refused with a clear message and saves nothing', async () => {
     await openPage('providers');
     await page.click('#add-provider');
+    await page.waitForSelector('#provider-panel:not([hidden])');
     await page.fill('#p-name', 'while-away');
     await page.fill('#p-model', 'm');
     await page.click('#provider-form button[type=submit]');
     await page.waitForSelector('#provider-error:not([hidden])');
     assert.match(await page.innerText('#provider-error'), /offline/i);
     await page.click('#provider-cancel');
-    assert.equal(await page.locator('.card[data-name="while-away"]').count(), 0);
+    await page.click('dialog[open] [data-confirm-action]');
+    await panelClosed();
+    assert.equal(await page.locator('tr[data-name="while-away"]').count(), 0);
     // What the admin owns can still be read.
-    assert.equal(await page.locator('.card[data-name="mock"]').count(), 1);
+    assert.equal(await page.locator('tr[data-name="mock"]').count(), 1);
   });
   await step('when the server is back the banner goes away and changes work again', async () => {
     serverProc = startServer();
     await waitForPort(api);
-    await page.waitForSelector('#offline', { state: 'hidden', timeout: 30000 });
+    await page.waitForSelector('#banners [data-banner="offline"]', { state: 'detached', timeout: 30000 });
     await page.click('#add-provider');
+    await page.waitForSelector('#provider-panel:not([hidden])');
     await page.fill('#p-name', 'after-return');
     await page.fill('#p-model', 'm');
     await page.click('#provider-form button[type=submit]');
-    await page.waitForSelector('.card[data-name="after-return"]');
+    await page.waitForSelector('tr[data-name="after-return"]');
+    await panelClosed();
   });
   await step('a token the server stops accepting gets its own banner with the command, and it clears when the server accepts it again', async () => {
     const good = fs.readFileSync(hashFile, 'utf8');
@@ -1695,18 +5527,20 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     fs.chmodSync(path.dirname(hashFile), 0o700);
     fs.rmSync(hashFile);
     fs.writeFileSync(hashFile, 'f'.repeat(64) + '\n');
-    await page.waitForSelector('#rejected:not([hidden])', { timeout: 20000 });
-    const banner = await page.innerText('#rejected');
+    await page.waitForSelector('#banners [data-banner="rejected"]', { timeout: 20000 });
+    const banner = await page.innerText('#banners [data-banner="rejected"]');
     assert.match(banner, /rejected this admin's token/);
     assert.match(banner, /bootstrap rotate admin-server/);
     assert.match(banner, /docker compose restart server admin/);
-    assert.equal(await page.isVisible('#offline'), false, 'one message, the useful one');
+    assert.deepEqual(await page.$$eval('#banners [data-banner="rejected"] code', (c) => c.map((x) => x.textContent)), ['docker compose run --rm bootstrap rotate admin-server', 'docker compose restart server admin'], 'the commands are code, built as text');
+    assert.equal(await page.locator('#banners [data-banner="rejected"] button').count(), 0, 'a banner has no close button');
+    assert.equal(await page.isVisible('#banners [data-banner="offline"]'), false, 'one message, the useful one');
     fs.writeFileSync(hashFile, good);
-    await page.waitForSelector('#rejected', { state: 'hidden', timeout: 20000 });
+    await page.waitForSelector('#banners [data-banner="rejected"]', { state: 'detached', timeout: 20000 });
   });
   await step('audit chain: a rollback, a rewrite and an edit each get a banner with its sentence, and it clears', async () => {
     const real = await page.evaluate(async () => (await fetch('/api/admin/v1/status')).json());
-    assert.equal(real.audit_chain.state === 'ok' || real.audit_chain.state === 'unknown', true, 'nothing is wrong with the real chain');
+    assert.equal(real.audit_chain.state === 'ok' || real.audit_chain.state === 'unknown', true, 'nothing is wrong with the real chain: ' + JSON.stringify(real.audit_chain));
     const withChain = async (audit_chain) => {
       await page.unroute('**/api/admin/v1/status');
       await page.route('**/api/admin/v1/status', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ...real, audit_chain }) }));
@@ -1714,22 +5548,116 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       await page.waitForSelector('#app:not([hidden])');
     };
     await withChain({ state: 'rollback', detail: 'The audit trail is shorter than it was: <b>x</b>' });
-    await page.waitForSelector('#chain-alert:not([hidden])');
-    assert.equal(await page.innerText('#chain-alert'), 'The audit trail is shorter than it was: <b>x</b>', 'the sentence is shown as text');
-    assert.equal(await page.locator('#chain-alert b').count(), 0);
+    await page.waitForSelector('#banners [data-banner="chain"]');
+    assert.equal(await page.innerText('#banners [data-banner="chain"]'), 'The audit trail is shorter than it was: <b>x</b>', 'the sentence is shown as text');
+    assert.equal(await page.locator('#banners [data-banner="chain"] b').count(), 0);
     await withChain({ state: 'rewritten', detail: 'The audit trail was rewritten.' });
-    await page.waitForSelector('#chain-alert:not([hidden])');
-    assert.match(await page.innerText('#chain-alert'), /rewritten/);
+    await page.waitForSelector('#banners [data-banner="chain"]');
+    assert.match(await page.innerText('#banners [data-banner="chain"]'), /rewritten/);
     await withChain({ state: 'edited', detail: 'Records in the audit trail do not match their entries.' });
-    await page.waitForSelector('#chain-alert:not([hidden])');
+    await page.waitForSelector('#banners [data-banner="chain"]');
     await withChain({ state: 'ok', detail: '' });
-    await page.waitForSelector('#chain-alert', { state: 'hidden' });
+    await page.waitForSelector('#banners [data-banner="chain"]', { state: 'detached' });
     await page.unroute('**/api/admin/v1/status');
+  });
+  await step('a banner is announced assertively, has no close button, and is text only', async () => {
+    await page.evaluate(() => window.ui.banner('probe', 'error', 'Probe <i>banner</i>', { action: { label: 'Fix it', onclick: () => {} } }));
+    await page.waitForFunction(() => document.getElementById('announcer-urgent').textContent === 'Probe <i>banner</i>');
+    assert.equal(await page.getAttribute('#announcer-urgent', 'aria-live'), 'assertive');
+    assert.equal(await page.locator('#banners [data-banner="probe"] i').count(), 0);
+    assert.deepEqual(await page.$$eval('#banners [data-banner="probe"] button', (b) => b.map((x) => x.textContent)), ['Fix it'], 'one fix action and no close button');
+    await page.evaluate(() => window.ui.banner('probe', 'error', null));
+    assert.equal(await page.locator('#banners [data-banner="probe"]').count(), 0, 'cleared by the condition ending');
+  });
+  // One primary action per view (ui-ux.md): at rest a page has at most one visible page-level btn-primary and it is the only
+  // button filled with the accent; while a save bar shows, its Save is the only one (the others are drawn as secondary).
+  await step('one primary action per view: every page at rest and with its save bar showing, and the destructive buttons carry the danger style', async () => {
+    const K = await page.evaluate(() => window.ui.ready);
+    // The expected count of page-level primaries at rest, by page. A page with no natural primary action has none.
+    const EXPECT = { home: 1, alerts: 1, 'audit/calls': 0, 'audit/admin': 0, 'audit/sealed': 1, 'audit/routing': 0, general: 0, providers: 1, people: 1, services: 0, network: 0, security: 0, backup: 1, notifications: 1, reference: 1, 'reference/settings/network': 1 };
+    assert.deepEqual(Object.keys(EXPECT).filter((k) => k !== 'reference/settings/network').sort(), [...K.PAGE_SLUGS].sort(), 'the map covers every page');
+    const measure = () => page.evaluate(() => {
+      const probe = document.createElement('div');
+      probe.style.backgroundColor = 'var(--accent)';
+      document.body.append(probe);
+      const accent = getComputedStyle(probe).backgroundColor;
+      probe.remove();
+      const visible = (e) => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0 && getComputedStyle(e).visibility !== 'hidden' && !e.closest('[hidden]'); };
+      const inView = (e) => !e.closest('dialog, .box, .side-panel, .save-bar, #save-dock');
+      const all = [...document.querySelectorAll('#app button, #app a.btn')].filter(visible).filter(inView);
+      return {
+        primaries: all.filter((e) => e.classList.contains('btn-primary')).map((e) => e.textContent.trim()),
+        filled: all.filter((e) => getComputedStyle(e).backgroundColor === accent).map((e) => e.textContent.trim()),
+        saves: [...document.querySelectorAll('#save-dock [data-save-submit]')].filter(visible).map((e) => ({ text: e.textContent.trim(), filled: getComputedStyle(e).backgroundColor === accent })),
+      };
+    });
+    const table = [];
+    for (const [slug, want] of Object.entries(EXPECT)) {
+      await page.goto(base + slug + '/');
+      await page.waitForSelector('#app:not([hidden])');
+      await page.waitForLoadState('networkidle');
+      const m = await measure();
+      table.push(slug + ': ' + JSON.stringify(m.primaries));
+      assert.equal(m.primaries.length, want, slug + ' at rest: visible page-level btn-primary ' + JSON.stringify(m.primaries));
+      assert.equal(m.filled.length, want, slug + ' at rest: accent-filled buttons ' + JSON.stringify(m.filled));
+      assert.equal(m.saves.length, 0, slug + ' at rest shows no save bar');
+    }
+    // A save bar showing: its Save is the one filled button, the page's own primaries are drawn as secondary.
+    const DIRTY = { general: '#s-gen-timeout', network: '#n-host', notifications: '#a-server', security: '#s-retention' };
+    for (const [slug, field] of Object.entries(DIRTY)) {
+      await page.goto(base + slug + '/');
+      await page.waitForSelector('#app:not([hidden])');
+      await page.waitForLoadState('networkidle');
+      const before = await page.inputValue(field);
+      await page.fill(field, before === '' ? 'x' : String(Number(before) + 1 || before + 'x'));
+      await page.waitForSelector('html.save-bar-on');
+      const m = await measure();
+      assert.deepEqual(m.filled, [], slug + ' with a save bar: no page button is filled ' + JSON.stringify(m.filled));
+      assert.equal(m.saves.filter((x) => x.filled).length, 1, slug + ' with a save bar: exactly the Save is accent-filled ' + JSON.stringify(m.saves));
+      if (slug === 'notifications') assert.deepEqual(m.primaries, ['Send a test alert'], 'the test button keeps btn-primary in the markup but is drawn as a secondary');
+    }
+    // Alerts: its header button is the primary and the only one.
+    await page.goto(base + 'alerts/');
+    await page.waitForSelector('#app:not([hidden])');
+    assert.deepEqual(await page.$$eval('#app .page-header a.btn-primary', (a) => a.map((x) => x.getAttribute('href'))), ['/admin/notifications/#alerts-form']);
+    // Destructive buttons carry btn-danger and the danger colours of a reference .btn-danger.
+    const dangerOf = (sel) => page.evaluate((q) => {
+      const pick = (e) => { const c = getComputedStyle(e); return { color: c.color, border: c.borderTopColor, background: c.backgroundColor, cls: e.classList.contains('btn-danger') }; };
+      const ref = document.createElement('button');
+      ref.className = 'btn btn-danger';
+      document.body.append(ref);
+      const want = pick(ref);
+      ref.remove();
+      const got = [...document.querySelectorAll(q)].map(pick);
+      return { want, got };
+    }, sel);
+    for (const [slug, sel] of [['notifications', '#a-remove, #m-remove'], ['security', '#rotate-form button[type="submit"], #backup-key-form button[type="submit"]'], ['services', '#services-table [data-action="restart"]']]) {
+      await page.goto(base + slug + '/');
+      await page.waitForSelector('#app:not([hidden])');
+      if (slug === 'services') await page.waitForSelector('#services-table [data-action="restart"]');
+      const d = await dangerOf(sel);
+      assert.ok(d.got.length >= 1, slug + ': ' + sel + ' exist');
+      for (const g of d.got) assert.deepEqual(g, d.want, slug + ': ' + sel + ' is drawn as btn-danger');
+    }
+    console.log('primary-action audit (at rest, visible page-level btn-primary):\n  ' + table.join('\n  '));
   });
   await step('no JavaScript errors', async () => { assert.deepEqual(errors, []); });
 
-  await browser.close();
-  cleanup();
+  } finally {
+    if (browser) await browser.close().catch(() => {});
+    cleanup();
+  }
+}
+
+// The viewports run one after the other, each on its own stack. A crash still cleans up (the finally above) and fails the run.
+(async () => {
+  const started = Date.now();
+  for (const vp of VIEWPORTS) {
+    try { await runViewport(vp); }
+    catch (e) { failures++; console.error('FAIL [' + vpLabel + '] the run stopped: ' + (e && e.stack || e)); }
+  }
+  for (const [w, c] of Object.entries(counts)) console.log(`[${w}] ${c.ok} ok, ${c.fail} failed`);
+  console.log(`${Math.round((Date.now() - started) / 1000)} s`);
   console.log(failures ? `\n${failures} step(s) failed` : '\nall admin steps passed');
   process.exit(failures ? 1 : 0);
-})().catch((e) => { console.error(e); process.exit(1); });
+})();
