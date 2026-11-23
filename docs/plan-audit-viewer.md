@@ -1,6 +1,6 @@
 # Plan: conversation view for sealed audit records
 
-Status: proposed, after 1.0. Nothing here is decided until the owner accepts the ADR amendments in Phase 0. Rules for agents: [AGENTS.md](../AGENTS.md).
+Status: proposed, after 1.0. Track 5, the last, in [plan-priorities.md](plan-priorities.md). Nothing here is decided until the owner accepts the ADR amendments in Phase 0. Rules for agents: [AGENTS.md](../AGENTS.md).
 
 Related plans: [context checks and canaries](plan-canaries.md) and [PII detection and redaction](plan-pii-redaction.md) add the gateway steps this view shows; [tiered routing](plan-tiered-routing.md) adds the routing decision record.
 
@@ -92,6 +92,7 @@ Header: **user name** · space · client · first and last time · turns · toke
 
 Expanding a row shows:
 - the gate checks;
+- web searches and fetches (tool spans: query, full URL, status, size), and research or judge steps with their role and model;
 - each attempt with its HTTP status and retry reason;
 - each step in order with its attributes;
 - `prompt` next to `provider_request`, with redacted spans highlighted;
@@ -181,6 +182,7 @@ Refused turns appear in place with their gate and reason. Records written before
 ## Risks
 
 - **Bigger single disclosure:** opening a conversation decrypts more at once than one item. Mitigated by the reason field, the single record and alert, and no caching.
+- **Earlier tracks:** web search, PII and canaries record on tool spans and attempt attributes before the `step` kind exists; AV2.4 must show both shapes.
 - **Migration:** records from before Phase 2 have the whole history in `request`; the view shows them without steps and without the new-message split.
 - **Hash chain:** a new span kind and payload roles change what is stored, not how the chain is computed; old records must keep verifying (AV2.1 test).
 

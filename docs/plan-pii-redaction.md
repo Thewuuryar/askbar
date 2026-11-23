@@ -1,8 +1,8 @@
 # Plan: PII detection and redaction in model-gateway
 
-Status: proposed, after 1.0. Nothing here is decided until the owner accepts the ADR work in Phase 0. Rules for agents: [AGENTS.md](../AGENTS.md).
+Status: proposed, after 1.0. Track 2 in [plan-priorities.md](plan-priorities.md): it starts after web search. Nothing here is decided until the owner accepts the ADR work in Phase 0. Rules for agents: [AGENTS.md](../AGENTS.md).
 
-Related plans: [context checks and canaries](plan-canaries.md), which shares the reply stream filter, and [audit record viewing](plan-audit-viewer.md), which shows what this plan records.
+Related plans: [context checks and canaries](plan-canaries.md), which adds to the reply stream filter this plan builds, and [audit record viewing](plan-audit-viewer.md), which shows what this plan records.
 
 ## Summary
 
@@ -24,7 +24,7 @@ Detection is a filter, not a guarantee. On hard real-world text the best small m
 | Consistency | The same value gets the same placeholder in every turn of a conversation, so the model sees one consistent person and the cached prompt prefix stays identical. Different conversations get different placeholders |
 | Gateway secret | Random at gateway start, in memory only. A restart changes placeholders and costs one cache miss: every request re-redacts the whole history |
 | Reverse map | Built for each request from what that request contained. Nothing is stored |
-| Restore | A reply stream filter (shared with [canaries](plan-canaries.md)) holds back text from `⟦` until `⟧` or 24 characters, then substitutes or passes it through. It also accepts the placeholder without brackets |
+| Restore | A reply stream filter, built here and extended by [canaries](plan-canaries.md), holds back text from `⟦` until `⟧` or 24 characters, then substitutes or passes it through. It also accepts the placeholder without brackets |
 | Actions | `allow`, `pseudonymize` (restored in the reply), `mask` (not restored), `block` (turn refused at a gate), `detect_only` |
 | Default actions | `block`: secrets, private keys, card numbers. `pseudonymize`: email, phone, IBAN, national ID, address, person. `detect_only`: date, URL, IP. `allow`: organisation |
 | Code blocks | Inside fenced code, secrets only by default: identifiers, hashes and UUIDs are the main false positives |
@@ -73,7 +73,7 @@ New `Kind` values: `PiiBlocked` (info, at most one per user per hour), `PiiDetec
 - **Phase 0:** accept the ADR work.
   - Tier 1 and the placeholder scheme amend [ADR 0054](adr/0054-model-gateway.md) and [ADR 0014](adr/0014-model-gateway-and-providers.md).
   - The new `provider_request` payload amends [ADR 0011](adr/0011-sealed-content-access.md) and [ADR 0051](adr/0051-auditor.md).
-  - Tier 2 is a new container, so it needs a new component ADR, its name checked under [ADR 0038](adr/0038-names-and-new-components-without-a-name-check.md) (proposed: `pii-detector`), and the hardening in [ADR 0032](adr/0032-container-hardening.md). It takes the next free number; 0056 is reserved for [tiered routing](plan-tiered-routing.md).
+  - Tier 2 is a new container, so it needs a new component ADR, its name checked under [ADR 0038](adr/0038-names-and-new-components-without-a-name-check.md) (proposed: `pii-detector`), and the hardening in [ADR 0032](adr/0032-container-hardening.md). It is ADR 0058: 0056 is reserved for [tiered routing](plan-tiered-routing.md) and 0057 for the MCP gateway.
   - The `ort` dependency and model weights need the licence check in [ADR 0026](adr/0026-dependency-license-check.md).
 - **Before Phase 2:** two weeks in `detect_only`, then the owner reviews false positives with Try it.
 - **Before Phase 4:** the owner annotates 300–500 spans from real use and the detector is benchmarked on the actual host.
@@ -117,8 +117,9 @@ New `Kind` values: `PiiBlocked` (info, at most one per user per hour), `PiiDetec
 - [ ] **PII-P2.1** `feat(model-gateway): replace PII with placeholders` · sonnet
   Do: build placeholders as in Decisions; apply each type's action; add one short line to the system message saying placeholders stand for private values and should be reused as written.
   Accept: the same value gives the same placeholder across two turns of one conversation and a different one in another conversation.
-- [ ] **PII-P2.2** `feat(model-gateway): restore placeholders in the reply` · sonnet · after PII-P2.1 and canaries C3.2
-  Do: a `StreamFilter` using the per-request reverse map; record `restored` in attributes.
+- [ ] **PII-P2.2** `feat(model-gateway): add the reply stream filter and restore placeholders` · sonnet · after PII-P2.1
+  Files: `services/model-gateway/src/{lib,filter,pii}.rs`, tests.
+  Do: wrap the delta callback in `run_attempts` with a `StreamFilter` chain (`push(&str) -> String`, `finish() -> String`) that holds back text that could start a marker; the canary plan adds its filters to this chain (C3.2). Add the PII restore filter using the per-request reverse map; record `restored` in attributes.
   Accept: property tests split placeholders at every byte; unknown placeholders pass through unchanged.
 - [ ] **PII-P2.3** `feat(model-gateway): refuse a turn with blocked PII` · haiku · after PII-P2.1
   Do: a gate refusal with error code `pii_blocked`, naming the type only; the server returns it as `application/problem+json` ([ADR 0023](adr/0023-api-error-format.md)).
@@ -126,6 +127,10 @@ New `Kind` values: `PiiBlocked` (info, at most one per user per hour), `PiiDetec
 - [ ] **PII-P2.4** `feat(model-gateway): seal what the provider received` · haiku · after PII-P2.1
   Do: seal `provider_request` on the attempt span when redaction changed anything.
   Accept: the payload decrypts in the sealed view to the redacted text.
+- [ ] **PII-P2.6** `feat(mcp-gateway): check search queries and fetch URLs for PII` · sonnet · after PII-P1.2
+  Files: the MCP gateway front's search and fetch handlers, tests.
+  Do: run the `askbar-pii` tier 1 detector on each search query and fetch URL before the audit span. Secrets refuse the call; other PII is removed from the query, the call goes ahead, and the reply says a term was left out. Record counts on the tool span, never values. Placeholders are no use to a search engine, so queries are never pseudonymized.
+  Accept: a query containing an email address reaches the fixture search engine without it; a query with a provider key is refused.
 - [ ] **PII-P2.5** `feat(auditor): PII alerts` · haiku · after PII-P2.3
   Files: `crates/askbar-proto/src/alerter.rs`, `services/auditor/src/rules.rs`.
 

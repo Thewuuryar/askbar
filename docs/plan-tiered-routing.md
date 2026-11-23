@@ -1,6 +1,6 @@
 # Plan: tiered model routing
 
-Status: proposed, after 1.0. Nothing here is decided until [ADR](adr/README.md) 0056 and the amendments in Phase 0 are accepted. This file and one file per phase in [plan-tiered-routing/](plan-tiered-routing/) replace the older local-only classification plan of the same name; the boxes in the phase files track progress.
+Status: proposed, after 1.0. **Order:** [plan-priorities.md](plan-priorities.md) runs Phases 4, 5A and 5B (except P5.7 and P5.8) and P8.6a first, as the web search track, with research and judge roles pinned to models; the rest of this plan is track 4, after PII redaction and canaries. Do not start Phase 1 until tracks 1 to 3 have their PRs open. Nothing here is decided until [ADR](adr/README.md) 0056 and the amendments in Phase 0 are accepted. This file and one file per phase in [plan-tiered-routing/](plan-tiered-routing/) replace the older local-only classification plan of the same name; the boxes in the phase files track progress.
 
 Design: [design-tiered-routing.md](design-tiered-routing.md) (committed in P0.1 from the design file the owner gives the first session). The design wins on behaviour; this plan wins on order. The new ADR is 0056 (0055 is the alerter).
 
@@ -18,9 +18,9 @@ The orchestrator reads this file and the current phase's file only. It sets a ph
 | 1 Records only | [phase-1-records.md](plan-tiered-routing/phase-1-records.md) | not started |
 | 2 Shadow | [phase-2-shadow.md](plan-tiered-routing/phase-2-shadow.md) | not started |
 | 3 Auto | [phase-3-auto.md](plan-tiered-routing/phase-3-auto.md) | not started |
-| 4 Egress proxy | [phase-4-egress-proxy.md](plan-tiered-routing/phase-4-egress-proxy.md) | not started |
-| 5A MCP gateway | [phase-5a-mcp-gateway.md](plan-tiered-routing/phase-5a-mcp-gateway.md) | not started |
-| 5B Research reports and the judge | [phase-5b-research-judge.md](plan-tiered-routing/phase-5b-research-judge.md) | not started |
+| 4 Egress proxy | [phase-4-egress-proxy.md](plan-tiered-routing/phase-4-egress-proxy.md) | not started; runs first, as stage W1 of [plan-priorities.md](plan-priorities.md) |
+| 5A MCP gateway | [phase-5a-mcp-gateway.md](plan-tiered-routing/phase-5a-mcp-gateway.md) | not started; runs first, as stage W2 of [plan-priorities.md](plan-priorities.md) |
+| 5B Research reports and the judge | [phase-5b-research-judge.md](plan-tiered-routing/phase-5b-research-judge.md) | not started; runs first as stage W5 of [plan-priorities.md](plan-priorities.md), except P5.7 and P5.8 |
 | 6 Agents with MCP tools | [phase-6-agents.md](plan-tiered-routing/phase-6-agents.md) | not started |
 | 7 | none: the script library moved to Phase 10 | not used |
 | 8 Admin web UI (deferred) | [phase-8-admin-ui.md](plan-tiered-routing/phase-8-admin-ui.md) | not started |

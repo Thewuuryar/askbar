@@ -1,8 +1,8 @@
 # Plan: context checks and canaries in model-gateway
 
-Status: proposed, after 1.0. Nothing here is decided until the owner accepts the ADR work in Phase 0. Rules for agents: [AGENTS.md](../AGENTS.md).
+Status: proposed, after 1.0. Track 3 in [plan-priorities.md](plan-priorities.md): it starts after web search and PII redaction. Nothing here is decided until the owner accepts the ADR work in Phase 0. Rules for agents: [AGENTS.md](../AGENTS.md).
 
-Related plans: [PII detection and redaction](plan-pii-redaction.md), which shares the reply stream filter, and [audit record viewing](plan-audit-viewer.md), which shows what this plan records.
+Related plans: [PII detection and redaction](plan-pii-redaction.md), which builds the reply stream filter this plan extends, and [audit record viewing](plan-audit-viewer.md), which shows what this plan records.
 
 ## Summary
 
@@ -79,7 +79,8 @@ New `Kind` values in `crates/askbar-proto/src/alerter.rs`: `ContextTruncated`, `
 | 3 | Echo canary and the shared stream filter | not started |
 | 4 | Leak tripwire, decoy credentials, audit canary | not started |
 | 5 | Drift probes | not started |
-| Later | Cross-space honeytokens (with memory), injection markers (with web research) | not started |
+| 6 | Injection markers in fetched pages (web search ships first) | not started |
+| Later | Cross-space honeytokens (with memory) | not started |
 
 ### Phase 0: records
 
@@ -129,9 +130,9 @@ New `Kind` values in `crates/askbar-proto/src/alerter.rs`: `ContextTruncated`, `
 - [ ] **C3.1** `feat(proto): add canary settings` · haiku
   Files: `crates/askbar-proto/src/gateway.rs`.
   Accept: `CanaryConfig` with the defaults above; old config parses.
-- [ ] **C3.2** `feat(model-gateway): add a reply stream filter chain` · sonnet · after C3.1
-  Files: `services/model-gateway/src/{lib,filter}.rs` (new), tests.
-  Do: wrap the delta callback in `run_attempts` with a `StreamFilter` trait: `push(&str) -> String` and `finish() -> String`, holding back text that could start a marker. PII restore ([plan-pii-redaction.md](plan-pii-redaction.md)) uses the same chain.
+- [ ] **C3.2** `feat(model-gateway): add the canary marker filter` · sonnet · after C3.1 and PII-P2.2
+  Files: `services/model-gateway/src/{filter,canary}.rs`, tests.
+  Do: add a marker filter to the `StreamFilter` chain built in [plan-pii-redaction.md](plan-pii-redaction.md) (PII-P2.2), after PII restore.
   Accept: property tests split markers at every byte boundary and the client never receives a partial marker.
 - [ ] **C3.3** `feat(model-gateway): plant and check the context canary` · sonnet · after C3.2
   Files: `services/model-gateway/src/{lib,canary}.rs`, tests.
@@ -162,10 +163,17 @@ New `Kind` values in `crates/askbar-proto/src/alerter.rs`: `ContextTruncated`, `
   Do: every `drift_probe_hours`, send a fixed small probe set to each approved metered model. Where the provider returns log-probabilities, compare against a stored baseline with a permutation test (Log Probability Tracking, 2025); otherwise compare answer fingerprints. Record a `probe` attempt under a dedicated turn; tokens count toward a separate small budget.
   Accept: a mock provider that switches models mid-run raises `ModelDrift`; cost per probe is under 100 tokens.
 
+### Phase 6: injection markers in fetched pages
+
+Web search (track 1) already datamarks fetched text as untrusted. This phase adds a tripwire on top.
+
+- [ ] **C6.1** `feat(server): plant canaries in fetched text` · sonnet · after C3.3
+  Do: put a per-page nonce inside each fetched page's untrusted block; if a reply, a proposed query or a proposed fetch URL contains it, the page steered the model: drop the action, record `injection_suspected` on the tool span, and alert. Don't rely on a detector model that is asked to repeat a secret: the DataFlip attack (2025) defeats it.
+  Accept: a fixture page that tells the model to repeat the hidden text or fetch a URL is flagged; ordinary pages are not.
+
 ### Later
 
 - **Cross-space honeytokens** (with memory): one decoy entry per space; its appearance in another space's request or reply is a space isolation breach.
-- **Injection markers** (with web research, [design-tiered-routing.md](design-tiered-routing.md)): datamark fetched content and plant canaries in it. Don't rely on a detector model that is asked to repeat a secret: the DataFlip attack (2025) defeats it.
 
 ## Risks
 
