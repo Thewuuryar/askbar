@@ -120,7 +120,7 @@ Branch `refactor/check-isolation`. PR title `refactor(compose): shorten the isol
   Files: `scripts/check-isolation.sh`.
   Do: one `svc_profile` function and a table with one row per service replace the per-service blocks for the auditor, `model-gateway`, the alerter, the server and `cpa`. The function checks health, uid, CapEff 0, no CapAdd, networks, internal flags, members, mounts, foreign volumes, and file owners and modes. Keep each service's real values in its row.
   Accept: a new service needs one row, not a block.
-- [ ] **R2.5** `refactor(compose): check declared networks and mounts from compose config` · sonnet · after R2.4
+- [x] **R2.5** `refactor(compose): check declared networks and mounts from compose config` · sonnet · after R2.4
   Files: `scripts/check-isolation.sh`.
   Do: read `docker compose config --format json` once, with the script's existing `py` helper (no new tool). From it, assert:
   - each service's networks, and each network's `internal` flag and members
