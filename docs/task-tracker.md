@@ -105,7 +105,7 @@ A step is `[x]` only when its box is ticked on `main`. A step whose branch or pu
 
 ## In progress (1)
 
-P4.3a is committed on branch `feat/egress-proxy-wiring`, draft PR #144, waiting for CI `isolation`.
+P4.3a is committed on branch `feat/egress-proxy-wiring` (draft PR #144). CI is green on `f8cc0db`, including `isolation`. It is ticked here when the PR merges to `main`.
 
 ### Tiered routing Phase 4: egress proxy (track 1)
 
