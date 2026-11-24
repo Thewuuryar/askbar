@@ -551,30 +551,6 @@ fn percentile(sorted: &[i64], p: f64) -> Option<i64> {
     Some(sorted[rank.min(sorted.len()) - 1])
 }
 
-/// Works out the cost of a set of tokens: `(provider_id, input, output, cached)` to a cost, or
-/// `None` when it cannot be known. The audit store holds only token counts; the caller owns prices.
-pub type CostFn<'a> = &'a dyn Fn(Option<&str>, Option<i64>, Option<i64>, Option<i64>) -> Option<f64>;
-
-/// A sum of costs that is unknown if any part of it is.
-#[derive(Default)]
-struct CostSum {
-    known: f64,
-    unknown: usize,
-}
-
-impl CostSum {
-    fn add(&mut self, cost: Option<f64>, has_tokens: bool) {
-        match cost {
-            Some(c) => self.known += c,
-            None if has_tokens => self.unknown += 1,
-            None => {}
-        }
-    }
-    fn total(&self) -> Option<f64> {
-        (self.unknown == 0).then_some(self.known)
-    }
-}
-
 /// `YYYY-MM-DD` (UTC) of a unix time.
 fn utc_day(t: i64) -> String {
     let z = t.div_euclid(86_400) + 719_468;
@@ -590,9 +566,9 @@ fn utc_day(t: i64) -> String {
 }
 
 /// Counts, error rate, latency percentiles, token totals and cost for generations that began at or
-/// after `since` (unix seconds), with a breakdown by provider and by day. Cost is computed here
-/// from the prices `cost_of` applies now: it is null when a needed price is missing.
-pub fn stats(conn: &Connection, since: i64, cost_of: CostFn) -> rusqlite::Result<serde_json::Value> {
+/// after `since` (unix seconds), with a breakdown by provider and by day. The store holds no prices, so every
+/// `cost` is null and `cost_unknown_requests` counts the requests with tokens; whoever shows cost prices them.
+pub fn stats(conn: &Connection, since: i64) -> rusqlite::Result<serde_json::Value> {
     let mut by_status = serde_json::Map::new();
     let mut requests = 0i64;
     {
@@ -618,19 +594,18 @@ pub fn stats(conn: &Connection, since: i64, cost_of: CostFn) -> rusqlite::Result
     };
     let latency = series("SELECT json_extract(attrs_json, '$.latency_ms') FROM spans WHERE kind = 'attempt' AND started_at >= ?1 AND json_extract(attrs_json, '$.latency_ms') IS NOT NULL")?;
     let ttft = series("SELECT ttft_ms FROM spans WHERE kind = 'attempt' AND started_at >= ?1 AND ttft_ms IS NOT NULL")?;
-    // Cost, per provider and per day, from each generation's tokens and the provider that served it.
+    // Tokens, per provider and per day, from each generation and the provider that served it.
     struct Group {
         requests: i64,
         /// How many of them have token counts (the rest cost nothing to price, and nothing to know).
         with_tokens: i64,
         tokens: (i64, i64, i64),
-        cost: CostSum,
     }
     let mut by_provider: std::collections::BTreeMap<String, Group> = Default::default();
     let mut by_day: std::collections::BTreeMap<String, Group> = Default::default();
     // Per day and provider, with the tokens and no cost, so whoever holds the prices can price each day exactly.
     let mut by_day_provider: std::collections::BTreeMap<(String, String), Group> = Default::default();
-    let mut total = CostSum::default();
+    let mut total_with_tokens = 0;
     {
         let mut stmt = conn.prepare(
             "SELECT t.started_at, t.tokens_in, t.tokens_out, t.tokens_cached,
@@ -649,21 +624,17 @@ pub fn stats(conn: &Connection, since: i64, cost_of: CostFn) -> rusqlite::Result
         for row in rows {
             let (started, tin, tout, tcached, provider) = row?;
             let has_tokens = tin.is_some() || tout.is_some();
-            let cost = cost_of(provider.as_deref(), tin, tout, tcached);
-            total.add(cost, has_tokens);
+            total_with_tokens += i64::from(has_tokens);
             for (map, key) in [(&mut by_provider, provider.clone().unwrap_or_default()), (&mut by_day, utc_day(started))] {
-                let g =
-                    map.entry(key).or_insert_with(|| Group { requests: 0, with_tokens: 0, tokens: (0, 0, 0), cost: CostSum::default() });
+                let g = map.entry(key).or_insert_with(|| Group { requests: 0, with_tokens: 0, tokens: (0, 0, 0) });
                 g.requests += 1;
                 g.with_tokens += i64::from(has_tokens);
                 g.tokens = (g.tokens.0 + tin.unwrap_or(0), g.tokens.1 + tout.unwrap_or(0), g.tokens.2 + tcached.unwrap_or(0));
-                g.cost.add(cost, has_tokens);
             }
             let g = by_day_provider.entry((utc_day(started), provider.clone().unwrap_or_default())).or_insert_with(|| Group {
                 requests: 0,
                 with_tokens: 0,
                 tokens: (0, 0, 0),
-                cost: CostSum::default(),
             });
             g.requests += 1;
             g.with_tokens += i64::from(has_tokens);
@@ -689,7 +660,7 @@ pub fn stats(conn: &Connection, since: i64, cost_of: CostFn) -> rusqlite::Result
     }
     // A provider that only ever failed (no request ended on it) still has a row, so its failures show.
     for k in routing.keys() {
-        by_provider.entry(k.clone()).or_insert_with(|| Group { requests: 0, with_tokens: 0, tokens: (0, 0, 0), cost: CostSum::default() });
+        by_provider.entry(k.clone()).or_insert_with(|| Group { requests: 0, with_tokens: 0, tokens: (0, 0, 0) });
     }
     let group_json = |key_name: &str, map: std::collections::BTreeMap<String, Group>| -> Vec<serde_json::Value> {
         map.into_iter()
@@ -699,8 +670,8 @@ pub fn stats(conn: &Connection, since: i64, cost_of: CostFn) -> rusqlite::Result
                     "requests": g.requests,
                     "requests_with_tokens": g.with_tokens,
                     "tokens": { "in": g.tokens.0, "out": g.tokens.1, "cached": g.tokens.2 },
-                    "cost": g.cost.total(),
-                    "cost_unknown_requests": g.cost.unknown,
+                    "cost": serde_json::Value::Null,
+                    "cost_unknown_requests": g.with_tokens,
                 });
                 if key_name == "provider_id" {
                     let (attempts, retries, failed) = routing.get(&key).copied().unwrap_or_default();
@@ -727,8 +698,8 @@ pub fn stats(conn: &Connection, since: i64, cost_of: CostFn) -> rusqlite::Result
     Ok(serde_json::json!({
         "since": since,
         "requests": requests,
-        "cost": total.total(),
-        "cost_unknown_requests": total.unknown,
+        "cost": serde_json::Value::Null,
+        "cost_unknown_requests": total_with_tokens,
         "by_provider": group_json("provider_id", by_provider),
         "by_day": group_json("day", by_day),
         "by_day_provider": by_day_provider,

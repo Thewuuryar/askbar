@@ -703,7 +703,7 @@ fn since_or_day(q: Option<i64>) -> i64 {
 /// Counts and timings, with no cost: the auditor holds no prices, so every cost is null.
 async fn stats(State(a): St, Query(q): Query<SinceQuery>) -> Result<Json<serde_json::Value>, Failure> {
     let since = since_or_day(q.since);
-    Ok(Json(read(&a, move |conn| askbar_audit::stats(conn, since, &|_, _, _, _| None)).await?))
+    Ok(Json(read(&a, move |conn| askbar_audit::stats(conn, since)).await?))
 }
 
 async fn token_counts(State(a): St, Query(q): Query<SinceQuery>) -> Result<Json<serde_json::Value>, Failure> {

@@ -56,7 +56,7 @@ Branch `refactor/audit-and-generation`. PR title `refactor(auditor): simplify th
   Files: `crates/askbar-audit/tests/chain.rs`.
   Do: build a fixed set of records with fixed ids and times, and assert their entry hashes equal hex literals taken from the current code.
   Accept: the test passes on the current code. It guards AV2.1's "old records verify unchanged".
-- [ ] **R1.3** `refactor(auditor): drop the cost hook from audit stats` · sonnet
+- [x] **R1.3** `refactor(auditor): drop the cost hook from audit stats` · sonnet
   Files: `crates/askbar-audit/src/lib.rs` (`stats`, `CostFn`, `CostSum`), `services/auditor/src/lib.rs` (the `stats` handler), `services/admin/src/audit_read.rs` (read only).
   Do: remove the cost argument and `CostSum`. The auditor always passes `|_,_,_,_| None`, and the admin sets `cost` and `cost_unknown_requests` itself (`audit_read.rs:17-47`). First add a test that pins the admin's stats JSON for a fixed store, in this same commit.
   Accept: the admin's stats JSON is unchanged; `docs/openapi/audit.v1.yaml` still matches the auditor's response.

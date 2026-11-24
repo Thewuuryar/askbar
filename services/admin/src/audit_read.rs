@@ -155,4 +155,59 @@ mod tests {
         add_cost(&mut none, &lookup);
         assert!(none["cost"].is_null(), "no counts: no cost");
     }
+
+    /// Pins the page's figures for a fixed store, so the auditor's stats can change underneath without the admin's JSON moving.
+    #[test]
+    fn the_admin_stats_for_a_fixed_store_are_pinned() {
+        let db = askbar_audit::AuditDb::open_in_memory().unwrap();
+        let span = |id: &str,
+                    trace: &str,
+                    kind: &str,
+                    status: &str,
+                    at: i64,
+                    prov: Option<&str>,
+                    tok: Option<(i64, i64)>,
+                    ttft: Option<i64>,
+                    attrs: Option<&str>| {
+            let t = |f: fn((i64, i64)) -> i64| tok.map(f);
+            db.conn()
+                .execute(
+                    "INSERT INTO spans (id, trace_id, kind, name, status, started_at, provider_id, tokens_in, tokens_out, tokens_cached, ttft_ms, attrs_json)
+                     VALUES (?1, ?2, ?3, 'n', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                    rusqlite::params![id, trace, kind, status, at, prov, t(|x| x.0), t(|x| x.1), t(|_| 0), ttft, attrs],
+                )
+                .unwrap();
+        };
+        let (d1, d2) = (1_700_000_000, 1_700_100_000);
+        // Two done turns on p1 (day 1, day 2), one on p2, one that failed with no tokens, and a retry that failed on p3.
+        span("t1", "x1", "turn", "done", d1, None, Some((1_000_000, 250_000)), None, None);
+        span("a1", "x1", "attempt", "done", d1, Some("p1"), None, Some(120), Some(r#"{"latency_ms":900,"retry_index":0}"#));
+        span("t2", "x2", "turn", "done", d2, None, Some((400_000, 100_000)), None, None);
+        span("a2", "x2", "attempt", "done", d2, Some("p1"), None, Some(80), Some(r#"{"latency_ms":500,"retry_index":0}"#));
+        span("t3", "x3", "turn", "done", d2, None, Some((100, 100)), None, None);
+        span("a3", "x3", "attempt", "done", d2, Some("p2"), None, None, Some(r#"{"latency_ms":300,"retry_index":1}"#));
+        span("t4", "x4", "turn", "error", d2, None, None, None, None);
+        span("a4", "x4", "attempt", "error", d2, Some("p3"), None, None, None);
+        let raw = askbar_audit::stats(db.conn(), 0).unwrap();
+        let providers = vec![provider("p1", Some(2.0), Some(4.0)), provider("p2", None, None), provider("p3", Some(1.0), Some(1.0))];
+        let priced = price_stats(raw, &price_lookup(providers));
+        assert_eq!(
+            priced,
+            json!({
+                "since": 0, "requests": 4, "cost": null, "cost_unknown_requests": 1,
+                "by_status": { "done": 3, "error": 1 }, "error_rate": 0.25,
+                "latency_ms": { "p50": 500, "p95": 900 }, "ttft_ms": { "p50": 80, "p95": 120 },
+                "tokens": { "in": 1_400_100, "out": 350_100, "cached": 0 },
+                "by_provider": [
+                    { "provider_id": "p1", "requests": 2, "tokens": { "in": 1_400_000, "out": 350_000, "cached": 0 }, "cost": 4.199999999999999, "cost_unknown_requests": 0, "attempts": 2, "retries": 0, "failed_attempts": 0 },
+                    { "provider_id": "p2", "requests": 1, "tokens": { "in": 100, "out": 100, "cached": 0 }, "cost": null, "cost_unknown_requests": 1, "attempts": 1, "retries": 1, "failed_attempts": 0 },
+                    { "provider_id": "p3", "requests": 1, "tokens": { "in": 0, "out": 0, "cached": 0 }, "cost": 0.0, "cost_unknown_requests": 0, "attempts": 1, "retries": 0, "failed_attempts": 1 }
+                ],
+                "by_day": [
+                    { "day": "2023-11-14", "requests": 1, "tokens": { "in": 1_000_000, "out": 250_000, "cached": 0 }, "cost": 3.0, "cost_unknown_requests": 0 },
+                    { "day": "2023-11-16", "requests": 3, "tokens": { "in": 400_100, "out": 100_100, "cached": 0 }, "cost": null, "cost_unknown_requests": 1 }
+                ]
+            })
+        );
+    }
 }
