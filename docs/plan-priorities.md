@@ -1,6 +1,6 @@
 # Plan: order of work after 1.0
 
-Status: proposed, 2026-11-23; owner decisions added 2026-11-24. The order below is the owner's. It takes effect when the owner accepts the amendment to [ADR 0019](adr/0019-post-v1-order-and-tools.md) in step O0.1. Rules for agents: [AGENTS.md](../AGENTS.md). How every plan runs: [orchestration.md](orchestration.md).
+Status: proposed, 2026-11-23; owner decisions added 2026-11-24. The order below is the owner's. The owner accepted the amendment to [ADR 0019](adr/0019-post-v1-order-and-tools.md) in step O0.1 on 2026-11-24, so the order is in effect. Rules for agents: [AGENTS.md](../AGENTS.md). How every plan runs: [orchestration.md](orchestration.md).
 
 This file decides **order** and the few things the order changes. Each track's own plan decides behaviour and holds the steps. Where a track reuses steps from another plan, this file names them by ID instead of copying them.
 
@@ -106,7 +106,7 @@ Until then, roles use admin-pinned models, usage counts against token budgets pe
 
 #### W0: records
 
-- [ ] **O0.1** `docs(adr): amend 0019: order of work after 1.0` · haiku
+- [x] **O0.1** `docs(adr): amend 0019: order of work after 1.0` · haiku
   Files: `docs/adr/0019-post-v1-order-and-tools.md`.
   Do: add the new order:
   0. the refactor in [plan-refactor.md](plan-refactor.md), each stage landing before the track 1 stage that needs it (no behaviour change);
@@ -128,10 +128,10 @@ Until then, roles use admin-pinned models, usage counts against token budgets pe
   - the judge ships with research reports, the first feature with a tool loop.
 
   Accept: `scripts/check-docs.sh` passes; the Amendments section names this file.
-- [ ] **O0.2** `docs(docs): point the tiered routing plan at the new order` · haiku · after O0.1
+- [x] **O0.2** `docs(docs): point the tiered routing plan at the new order` · haiku · after O0.1
   Files: `docs/plan-tiered-routing.md`, `docs/plan-tiered-routing/phase-0-docs.md`, `docs/plan-tiered-routing/phase-5a-mcp-gateway.md`.
   Do: confirm the order text in P0.10 and P0.16 matches O0.1 (O0.1 is the only place that sets ADR 0019's order; P5A.24 no longer carries it), and that the Phases table marks Phases 4, 5A and 5B as run under track 1. The commit that added this file already made those edits; this step checks them after O0.1 is accepted.
-- [ ] **O0.3** `docs(docs): reorder the post-v1 plan` · haiku · after O0.1
+- [x] **O0.3** `docs(docs): reorder the post-v1 plan` · haiku · after O0.1
   Files: `docs/plan-post-v1.md`. Replaces tiered routing P0.16.
 
 #### W4: roles without tiers
