@@ -238,7 +238,7 @@ P4.3a is committed on branch `feat/egress-proxy-wiring` (draft PR #144). CI is g
 
 ### Tiered routing Phase 4: egress proxy (track 1)
 
-- [ ] **[P4.3b](plan-tiered-routing/phase-4-egress-proxy.md)** send cpa traffic through the proxy · W2
+- [x] **[P4.3b](plan-tiered-routing/phase-4-egress-proxy.md)** send cpa traffic through the proxy · W2
 - [ ] **[P4.3c](plan-tiered-routing/phase-4-egress-proxy.md)** send alerter traffic through the proxy · W2
 - [ ] **[P4.3](plan-tiered-routing/phase-4-egress-proxy.md)** send gateway, cpa, alerter and searxng traffic through the proxy · W2
 - [ ] **[P4.5](plan-tiered-routing/phase-4-egress-proxy.md)** prove default deny and private-address blocking · W2
