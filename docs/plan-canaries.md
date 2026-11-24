@@ -30,7 +30,7 @@ A canary is a tripwire, not a guarantee. Long-context studies (RULER, NoLiMa, Ch
 | Outcomes | `ok`, `front_lost`, `absent` (inconclusive: the model ignored the instruction), `skipped` (output limit cut the marker) |
 | Modes | `off`, `near_limit` (default: only above `trigger_pct` of `effective_context`, default 70%), `always` |
 | Actions | `record`, `alert` (default), `alert_and_mark` (adds a notice that earlier messages may have been dropped). A canary never fails a finished reply |
-| Audit | Attempt span `attrs.context` and `attrs.canary`: booleans and counts, never the nonces. `canary.planted` and the instruction version record that the model saw extra text, because the server's sealed request does not contain it |
+| Audit | A `canary` step span ([audit viewer](plan-audit-viewer.md) AV2.1, which lands in track 1) with `attrs.context` and `attrs.canary`: booleans and counts, never the nonces. `canary.planted` and the instruction version record that the model saw extra text, because the server's sealed request does not contain it |
 | Naming | "Canary" or "marker", never "canary token": in Askbar a token is a bearer secret ([glossary](architecture.md#glossary)) |
 
 ## Config
@@ -100,7 +100,7 @@ New `Kind` values in `crates/askbar-proto/src/alerter.rs`: `ContextTruncated`, `
   Accept: unit tests for `stop`, `length`, `end_turn`, `max_tokens`, `model_context_window_exceeded` and a missing reason; the attempt span's `finish_reason` is no longer null in `tests/streaming.rs`.
 - [ ] **C1.2** `feat(model-gateway): compare reported input tokens with the estimate` · sonnet · after C1.1
   Files: `services/model-gateway/src/{lib,llm}.rs`, tests.
-  Do: estimate input tokens from the exact request body before sending (reuse `estimate_tokens`); after the reply set `attrs.context = {estimated_in, reported_in, truncated, at_limit, stop}`. `truncated` uses `truncation_ratio`; `at_limit` uses `context_window` when known. Skip when usage is itself estimated.
+  Do: estimate input tokens from the exact request body before sending (reuse `estimate_tokens`); after the reply set, on the attempt's `provider` step, `attrs.context = {estimated_in, reported_in, truncated, at_limit, stop}`. `truncated` uses `truncation_ratio`; `at_limit` uses `context_window` when known. Skip when usage is itself estimated.
   Accept: a mock-LLM test that reports a low `prompt_tokens` gives `truncated: true`; a normal reply gives `false`; nothing changes in routing or the reply.
 - [ ] **C1.3** `test(mock-llm): truncate the front of the context on request` · haiku · after C1.2
   Files: `tests/e2e/mock_llm.py`, `tests/e2e/mock_llm_test.py`.
@@ -136,7 +136,7 @@ New `Kind` values in `crates/askbar-proto/src/alerter.rs`: `ContextTruncated`, `
   Accept: property tests split markers at every byte boundary and the client never receives a partial marker.
 - [ ] **C3.3** `feat(model-gateway): plant and check the context canary` · sonnet · after C3.2
   Files: `services/model-gateway/src/{lib,canary}.rs`, tests.
-  Do: in `near_limit` or `always` mode, plant A and B and the instruction; strip the echo with the filter; set `attrs.canary = {planted, outcome, instruction_version}`; apply `context_action`.
+  Do: in `near_limit` or `always` mode, plant A and B and the instruction; strip the echo with the filter; set `attrs.canary = {planted, outcome, instruction_version}` on a `canary` step; apply `context_action`.
   Accept: mock-LLM tests for each outcome; nonces appear in no log or attribute (a test greps for them).
 - [ ] **C3.4** `feat(auditor): alert on truncated context` · haiku · after C3.3
   Files: `crates/askbar-proto/src/alerter.rs`, `services/auditor/src/rules.rs`, tests.

@@ -31,7 +31,7 @@ Detection is a filter, not a guarantee. On hard real-world text the best small m
 | Reply scanning | Separate from restore. Default `detect_only`; `redact_lines` holds back until each newline |
 | Tier 2 down | `refuse` (default, fail closed) or `regex_only`; recorded either way |
 | Tier 2 model | `knowledgator/gliner-pii-base-v1.0`, UINT8 ONNX (Apache-2.0, about 200 MB). Not Piiranha: its licence (CC-BY-NC-ND) forbids modification |
-| Audit | The server still seals the request as typed. The gateway also seals `provider_request`, what the provider actually received, on the attempt span (the auditor already lets the gateway append payloads). Unsealed `attrs.pii` holds counts by type and actions, never values |
+| Audit | The server still seals the request as typed. The gateway also seals `provider_request`, what the provider actually received, on the attempt's `provider` step (the auditor already lets the gateway append payloads). A `redact` step span ([audit viewer](plan-audit-viewer.md) AV2.1, which lands in track 1) holds unsealed `attrs.pii`: counts by type and actions, never values |
 | Terms lists | Always-redact and never-redact terms are themselves personal data: stored in `admin.db`, never in alerts or audit attributes |
 
 ## Config
@@ -109,8 +109,8 @@ New `Kind` values: `PiiBlocked` (info, at most one per user per hour), `PiiDetec
   Accept: table tests per type, including false-positive cases (UUIDs, git hashes, version numbers, the names Will, Rose and Mark); a benchmark shows under 1 ms for 8 KB.
 - [ ] **PII-P1.3** `feat(model-gateway): detect PII and record counts` · sonnet · after PII-P1.2
   Files: `services/model-gateway/src/{lib,pii}.rs`, tests.
-  Do: run detection on the system prompt and messages after `gates()`; cache results by message hash in a small in-memory LRU so each turn scans only new text; set `attrs.pii = {version, counts, actions, detector}`; send nothing different to the provider yet.
-  Accept: counts appear on the attempt span; a test greps logs and attributes for a planted email and finds nothing.
+  Do: run detection on the system prompt and messages after `gates()`; cache results by message hash in a small in-memory LRU so each turn scans only new text; open a `redact` step with `attrs.pii = {version, counts, actions, detector}`; send nothing different to the provider yet.
+  Accept: counts appear on the `redact` step; a test greps logs and attributes for a planted email and finds nothing.
 
 ### Phase 2: pseudonymize and restore
 
@@ -124,8 +124,8 @@ New `Kind` values: `PiiBlocked` (info, at most one per user per hour), `PiiDetec
 - [ ] **PII-P2.3** `feat(model-gateway): refuse a turn with blocked PII` · haiku · after PII-P2.1
   Do: a gate refusal with error code `pii_blocked`, naming the type only; the server returns it as `application/problem+json` ([ADR 0023](adr/0023-api-error-format.md)).
   Accept: a pasted `sk-ant-` key is refused, and the refusal and the alert carry no part of it.
-- [ ] **PII-P2.4** `feat(model-gateway): seal what the provider received` · haiku · after PII-P2.1
-  Do: seal `provider_request` on the attempt span when redaction changed anything.
+- [ ] **PII-P2.4** `feat(model-gateway): record redaction and restore steps` · haiku · after PII-P2.1, PII-P2.2
+  Do: AV2.3 already seals `provider_request` on the `provider` step; check it holds the redacted text and add a `restore` step with the restored count.
   Accept: the payload decrypts in the sealed view to the redacted text.
 - [ ] **PII-P2.6** `feat(mcp-gateway): check search queries and fetch URLs for PII` · sonnet · after PII-P1.2
   Files: the MCP gateway front's search and fetch handlers, tests.

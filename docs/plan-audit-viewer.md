@@ -1,6 +1,6 @@
 # Plan: conversation view for sealed audit records
 
-Status: proposed, after 1.0. Track 5, the last, in [plan-priorities.md](plan-priorities.md). Nothing here is decided until the owner accepts the ADR amendments in Phase 0. Rules for agents: [AGENTS.md](../AGENTS.md).
+Status: proposed, after 1.0. Track 5, the last, in [plan-priorities.md](plan-priorities.md). By owner decision (2026-11-24), the step records (AV0.2 and AV2.1 to AV2.3) run first, as stage W1 of track 1, so every later track records in this shape; the rest of this plan stays in track 5. Nothing here is decided until the owner accepts the ADR amendments in Phase 0. Rules for agents: [AGENTS.md](../AGENTS.md).
 
 Related plans: [context checks and canaries](plan-canaries.md) and [PII detection and redaction](plan-pii-redaction.md) add the gateway steps this view shows; [tiered routing](plan-tiered-routing.md) adds the routing decision record.
 
@@ -43,7 +43,7 @@ Sealing stays as it is ([ADR 0011](adr/0011-sealed-content-access.md)). The owne
 
 ### B. Record the gateway's steps
 
-A new span kind `step`, child of an attempt, one per stage, in order: `redact`, `canary`, `route`, `provider`, `restore`. Each step's unsealed attributes hold the decision and counts, never values. Examples:
+A new span kind `step`, one per stage, in order. Gateway steps are children of an attempt: `route`, `redact`, `canary`, `provider`, `restore`. Server steps are children of the turn, for flows the server runs: quick search (`search_plan`, `search`, `fetch`, `answer`) and, later, research reports. Each step's unsealed attributes hold the decision and counts, never values. Examples:
 - `redact`: `{counts: {EMAIL: 1, PERSON: 2}, actions: {...}}`;
 - `canary`: `{outcome: "front_lost"}`;
 - `route`: the decision record from tiered routing, `{decision_id, tier_final, requested, model, reasons}`.
@@ -116,7 +116,7 @@ Refused turns appear in place with their gate and reason. Records written before
 | --- | --- | --- |
 | 0 | ADR amendments | not started |
 | 1 | Conversations list and conversation-scoped opening | not started |
-| 2 | Step spans and payload roles | not started |
+| 2 | Step spans and payload roles (AV2.1 to AV2.3 run in track 1, stage W1) | not started |
 | 3 | Per-user audit keys | not started |
 | 4 | Search inside a session (optional) | not started |
 | 5 | Browser decryption with passkey (optional) | not started |
@@ -125,7 +125,7 @@ Refused turns appear in place with their gate and reason. Records written before
 
 - [ ] **AV0.1** `docs(adr): amend 0011: open a conversation as one action` · sonnet
   Accept: the rule names the one-conversation exception to "no bulk export", the reason field, the single access record and alert.
-- [ ] **AV0.2** `docs(adr): amend 0010, 0051 and 0052: step spans and payload roles` · sonnet · after AV0.1
+- [ ] **AV0.2** `docs(adr): amend 0010, 0051 and 0052: step spans and payload roles` · sonnet · runs in track 1 (W0), before AV0.1; no longer after it
   Accept: `step` is a span kind; the five payload roles are listed with their writers; `docs/reference/audit/model-calls.md` matches.
 - [ ] **AV0.3** `docs(adr): amend 0011: per-user audit keys` · sonnet · after AV0.1
 
@@ -147,12 +147,13 @@ Refused turns appear in place with their gate and reason. Records written before
 ### Phase 2: steps and payload roles
 
 - [ ] **AV2.1** `feat(audit): add the step span kind` · sonnet
-  Files: `crates/askbar-proto/src/audit.rs`, `crates/askbar-audit/src/lib.rs` (append a migration for the kind check), `services/auditor/src/lib.rs` (`may_start`: only `model-gateway` opens steps).
+  Files: `crates/askbar-proto/src/audit.rs`, `crates/askbar-audit/src/lib.rs` (append a migration for the kind check), `services/auditor/src/lib.rs` (`may_start`: `model-gateway` opens steps under its attempts, and the server opens steps under its own turns).
+  Runs in track 1, stage W1.
   Accept: old records verify unchanged; a step under an attempt is stored and chained.
-- [ ] **AV2.2** `feat(server): seal the new message as the prompt payload` · haiku · after AV2.1
+- [ ] **AV2.2** `feat(server): seal the new message as the prompt payload` · haiku · after AV2.1 · runs in track 1, stage W1
   Files: `services/server/src/generation.rs`.
   Do: seal `prompt` with the new message and a SHA-256 of the history sent, instead of `request`.
-- [ ] **AV2.3** `feat(model-gateway): record gateway steps and provider payloads` · sonnet · after AV2.1
+- [ ] **AV2.3** `feat(model-gateway): record gateway steps and provider payloads` · sonnet · after AV2.1 · runs in track 1, stage W1
   Do: open a `step` span for each stage that ran; seal `provider_request` and, when it differs, `provider_reply`. Stages from the canary and PII plans and the routing decision plug in here as they ship.
   Accept: a turn with redaction shows `redact`, `provider` and `restore` steps in order; no values in attributes (a test greps for a planted value).
 - [ ] **AV2.4** `feat(ui): show steps and side-by-side payloads` · sonnet · after AV2.3 and AV1.3
@@ -182,7 +183,7 @@ Refused turns appear in place with their gate and reason. Records written before
 ## Risks
 
 - **Bigger single disclosure:** opening a conversation decrypts more at once than one item. Mitigated by the reason field, the single record and alert, and no caching.
-- **Earlier tracks:** web search, PII and canaries record on tool spans and attempt attributes before the `step` kind exists; AV2.4 must show both shapes.
+- **Earlier tracks:** step records arrive in track 1, so tracks 1 to 4 already write `step` spans; only records from before track 1 lack them.
 - **Migration:** records from before Phase 2 have the whole history in `request`; the view shows them without steps and without the new-message split.
 - **Hash chain:** a new span kind and payload roles change what is stored, not how the chain is computed; old records must keep verifying (AV2.1 test).
 
