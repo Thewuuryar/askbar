@@ -43,6 +43,72 @@ members() { docker network inspect -f '{{range .Containers}}{{.Name}} {{end}}' "
 nets_of() { docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$1" | tr ' ' '\n' | grep . | sort | tr '\n' ' '; }
 mounts_of() { docker inspect -f '{{range .Mounts}}{{.Name}}={{.RW}} {{end}}' "$1" | tr ' ' '\n' | grep . | sort | tr '\n' ' '; }
 wait_healthy() { local i; for i in $(seq 1 30); do [ "$(docker inspect -f '{{.State.Health.Status}}' "$1")" = healthy ] && break; sleep 2; done; }
+# Owners and modes: a token is its caller's and 0400, a hash its receiver's and 0444, directories 0500.
+owned() { # container path want("uid mode") description
+  local got; got=$(docker exec "$1" stat -c '%u %a' "$2" 2>/dev/null)
+  [ "$got" = "$3" ] && pass "$4 is '$3'" || fail "$4 is '${got:-missing}', expected '$3'"
+}
+pfx() { local i; for i in $1; do printf '%s_%s ' "$PROJECT" "$i"; done; } # short names -> "askbar_a askbar_b "
+
+# One service's structural properties, read from its profile on stdin: svc_profile CONTAINER NAME <<EOF ... EOF
+# One "key value" line per property; a key left out is a check the service does not have. Messages use NAME.
+#   health yes                       wait for healthy, then check it
+#   uid N                            runs as uid N
+#   caps yes                         CapEff is 0 and no CapAdd
+#   mem MB                           read-only root and a memory limit of MB
+#   nets a b c|PASS                  exactly these networks (short names, sorted); PASS is the pass message
+#   internal a b|SUFFIX              these networks are internal ('*' = every network it is on); SUFFIX ends the pass message
+#   member NET|MEMBERS|PASS          NET has exactly these members (container names, sorted)
+#   mounts a=true b=false|PASS       exactly these volumes, with these RW flags (short names, sorted)
+#   foreign CTRS|VOLS|FAIL|PASS      none of these containers mounts any of these volumes
+#   owner CTR|PATH|UID MODE|TEXT     file owner and mode;  dirs CTR|UID MODE|TEXT|PATHS: the same for each directory
+svc_profile() {
+  local c="$1" n="$2" k v health="" uid="" caps="" mem="" nets="" internal="" mounts="" foreign="" mrows=() orows=() a b d e x i have="" got
+  while read -r k v; do
+    case "$k" in
+      health|uid|caps|mem|nets|internal|mounts|foreign) printf -v "$k" %s "$v";;
+      member) mrows+=("$v");;
+      owner) orows+=("$v");;
+      dirs) IFS='|' read -r a b d e <<<"$v"; for i in $e; do orows+=("$a|$i|$b|$d $i"); done;;
+    esac
+  done
+  if [ -n "$health" ]; then
+    wait_healthy "$c"
+    [ "$(docker inspect -f '{{.State.Health.Status}}' "$c")" = healthy ] && pass "$n is healthy" || fail "$n is not healthy"
+  fi
+  [ -z "$uid" ] || { [ "$(docker exec "$c" id -u)" = "$uid" ] && pass "$n runs as uid $uid" || fail "$n does not run as uid $uid"; }
+  if [ -n "$caps" ]; then
+    got=$(docker exec "$c" sh -c 'grep CapEff /proc/1/status' 2>/dev/null | awk '{print $2}')
+    [ "$got" = 0000000000000000 ] && pass "$n's CapEff is 0" || fail "$n's CapEff is '${got:-unknown}', expected 0"
+    [ -z "$(docker inspect -f '{{join .HostConfig.CapAdd ","}}' "$c")" ] && pass "$n adds no capability" || fail "$n adds a capability"
+  fi
+  [ -z "$mem" ] || { [ "$(docker inspect -f '{{.HostConfig.ReadonlyRootfs}} {{.HostConfig.Memory}}' "$c")" = "true $((mem * 1048576))" ] && pass "$n has a read-only root and $mem MB" || fail "$n's root or memory limit is not as set"; }
+  if [ -n "$nets" ]; then
+    IFS='|' read -r a b <<<"$nets"; have=$(nets_of "$c")
+    [ "$have" = "$(pfx "$a")" ] && pass "$b" || fail "$n's networks are: $have"
+  fi
+  if [ -n "$internal" ]; then
+    IFS='|' read -r a b <<<"$internal"; [ "$a" = '*' ] && a=$have || a=$(pfx "$a")
+    for i in $a; do [ "$(docker network inspect -f '{{.Internal}}' "$i" 2>/dev/null)" = true ] && pass "$i is internal$b" || fail "$i is not internal"; done
+  fi
+  for x in ${mrows[@]+"${mrows[@]}"}; do
+    IFS='|' read -r a b d <<<"$x"; got=$(members "${PROJECT}_$a")
+    [ "$got" = "$b " ] && pass "$d" || fail "$a members: $got"
+  done
+  if [ -n "$mounts" ]; then
+    IFS='|' read -r a b <<<"$mounts"; got=$(mounts_of "$c")
+    [ "$got" = "$(pfx "$a")" ] && pass "$b" || fail "$n mounts: $got"
+  fi
+  if [ -n "$foreign" ]; then
+    IFS='|' read -r a b d e <<<"$foreign"
+    for x in $a; do
+      got=$(docker inspect -f '{{range .Mounts}}{{.Name}} {{end}}' "$x"); have=""
+      for i in $b; do case " $got" in *" ${PROJECT}_$i "*) have=1;; esac; done
+      [ -n "$have" ] && fail "$x mounts $d" || pass "$x mounts no $e"
+    done
+  fi
+  for x in ${orows[@]+"${orows[@]}"}; do IFS='|' read -r a b d e <<<"$x"; owned "$a" "$b" "$d" "$e"; done
+}
 
 command -v docker >/dev/null || { echo "docker is required"; exit 2; }
 export DOCKER_CLI_HINTS=false
@@ -263,8 +329,9 @@ CPA=$(docker compose -p "$PROJECT" ps -q cpa 2>/dev/null | head -1)
 if [ -z "$CPA" ]; then
   echo "SKIP  cpa is not running"
 else
-  cpa_nets=$(nets_of "$CPA")
-  [ "$cpa_nets" = "${PROJECT}_cpa-admin ${PROJECT}_cpa-gateway ${PROJECT}_outbound " ] && pass "cpa is on cpa-admin, cpa-gateway and outbound only (never edge)" || fail "cpa's networks are: $cpa_nets"
+  svc_profile "$CPA" cpa <<EOF
+nets cpa-admin cpa-gateway outbound|cpa is on cpa-admin, cpa-gateway and outbound only (never edge)
+EOF
   case "$(docker network inspect -f '{{range .Containers}}{{.Name}} {{end}}' "$EDGE")" in *askbar-cpa*) fail "cpa is on edge, with Caddy";; *) pass "cpa shares no network with Caddy";; esac
   [ -z "$(docker inspect -f '{{range $p, $b := .NetworkSettings.Ports}}{{if $b}}{{$p}} {{end}}{{end}}' "$CPA")" ] && pass "cpa publishes no port" || fail "cpa publishes a port"
 fi
@@ -315,11 +382,6 @@ done
 refused "the admin has no server-token" docker exec "$ADMIN" test -e /server-token
 refused "the server has no admin-token" docker exec "$SERVER" test -e /admin-token
 refused "the admin keeps no server.token in admin-secrets" docker exec "$ADMIN" test -e /admin-secrets/server.token
-# Owners and modes: a token is its caller's and 0400, a hash its receiver's and 0444, directories 0500.
-owned() { # container path want("uid mode") description
-  local got; got=$(docker exec "$1" stat -c '%u %a' "$2" 2>/dev/null)
-  [ "$got" = "$3" ] && pass "$4 is '$3'" || fail "$4 is '${got:-missing}', expected '$3'"
-}
 owned "$ADMIN" /admin-token/call/admin-server.token "10001 400" "the admin's token file (owner, mode)"
 owned "$SERVER" /server-token/accept/admin-server.sha256 "10002 444" "the server's hash file (owner, mode)"
 for d in /admin-token /admin-token/call /admin-token/accept; do owned "$ADMIN" "$d" "10001 500" "the admin's $d"; done
@@ -354,42 +416,26 @@ HASH=$(docker exec "$SERVER" cat /server-token/accept/admin-server.sha256 2>/dev
 echo "== 3d4. The auditor (ADR 0051)"
 AUDITOR=askbar-auditor
 if [ "$(docker inspect -f '{{.State.Running}}' "$AUDITOR" 2>/dev/null)" != true ]; then fail "the auditor is not running"; else
-  wait_healthy "$AUDITOR"
-  [ "$(docker inspect -f '{{.State.Health.Status}}' "$AUDITOR")" = healthy ] && pass "the auditor is healthy" || fail "the auditor is not healthy"
-  [ "$(docker exec "$AUDITOR" id -u)" = 10003 ] && pass "the auditor runs as uid 10003" || fail "the auditor does not run as uid 10003"
-  # No capability at all, and no exception to the shared hardening.
-  capeff=$(docker exec "$AUDITOR" sh -c 'grep CapEff /proc/1/status' 2>/dev/null | awk '{print $2}')
-  [ "$capeff" = 0000000000000000 ] && pass "the auditor's CapEff is 0" || fail "the auditor's CapEff is '${capeff:-unknown}', expected 0"
-  [ -z "$(docker inspect -f '{{join .HostConfig.CapAdd ","}}' "$AUDITOR")" ] && pass "the auditor adds no capability" || fail "the auditor adds a capability"
-  # Its networks are exactly the audit-* ones, and each is internal: no route out.
-  anets=$(nets_of "$AUDITOR")
-  [ "$anets" = "${PROJECT}_audit-admin ${PROJECT}_audit-alerter ${PROJECT}_audit-caddy ${PROJECT}_audit-model-gateway ${PROJECT}_audit-server " ] && pass "the auditor is on the audit-* networks only (audit-admin, audit-alerter, audit-caddy, audit-model-gateway, audit-server)" || fail "the auditor's networks are: $anets"
-  case "$anets" in *edge*|*server-api*|*cpa-admin*) fail "the auditor shares a network that is not an audit-* one";; esac
-  for n in $anets; do
-    [ "$(docker network inspect -f '{{.Internal}}' "$n" 2>/dev/null)" = true ] && pass "$n is internal" || fail "$n is not internal"
-  done
+  svc_profile "$AUDITOR" "the auditor" <<EOF
+health yes
+uid 10003
+caps yes
+nets audit-admin audit-alerter audit-caddy audit-model-gateway audit-server|the auditor is on the audit-* networks only (audit-admin, audit-alerter, audit-caddy, audit-model-gateway, audit-server)
+internal *|
+member audit-admin|$ADMIN $AUDITOR|audit-admin joins the admin and the auditor only
+member audit-caddy|$AUDITOR $CADDY|audit-caddy joins the auditor and Caddy only
+mounts auditor-data=true auditor-token=false|the auditor mounts auditor-data and auditor-token (read-only) only
+foreign $SERVER $ADMIN $CADDY|auditor-data auditor-token|an auditor volume|auditor volume
+owner $AUDITOR|/auditor-token/accept/admin-auditor-append.sha256|10003 444|the auditor's append hash file (owner, mode)
+owner $AUDITOR|/auditor-token/accept/admin-auditor-read.sha256|10003 444|the auditor's read hash file (owner, mode)
+owner $AUDITOR|/auditor-token/accept/model-gateway-auditor-read.sha256|10003 444|the auditor's gateway read hash file (owner, mode)
+owner $AUDITOR|/auditor-token/accept/admin-auditor-restore.sha256|10003 444|the auditor's restore hash file (owner, mode)
+dirs $AUDITOR|10003 500|the auditor's|/auditor-token /auditor-token/accept
+EOF
   docker exec "$AUDITOR" bash -c 'timeout 4 bash -c "echo > /dev/tcp/1.1.1.1/443"' >/dev/null 2>&1 \
     && fail "the auditor reached the internet" || pass "the auditor has no route out"
   docker exec "$AUDITOR" bash -c 'timeout 4 getent hosts example.com' >/dev/null 2>&1 \
     && fail "the auditor resolved an outside name" || pass "the auditor cannot resolve an outside name"
-  # Who is on audit-admin: the admin and the auditor, nothing else.
-  members=$(members "${PROJECT}_audit-admin")
-  [ "$members" = "$ADMIN $AUDITOR " ] && pass "audit-admin joins the admin and the auditor only" || fail "audit-admin members: $members"
-  members=$(members "${PROJECT}_audit-caddy")
-  [ "$members" = "$AUDITOR $CADDY " ] && pass "audit-caddy joins the auditor and Caddy only" || fail "audit-caddy members: $members"
-  # Mounts: its own data (read-write) and its credential volume (read-only), and nothing else; nobody else has them.
-  amounts=$(mounts_of "$AUDITOR")
-  [ "$amounts" = "${PROJECT}_auditor-data=true ${PROJECT}_auditor-token=false " ] && pass "the auditor mounts auditor-data and auditor-token (read-only) only" || fail "the auditor mounts: $amounts"
-  for c in $SERVER $ADMIN $CADDY; do
-    case " $(docker inspect -f '{{range .Mounts}}{{.Name}} {{end}}' "$c")" in
-      *" ${PROJECT}_auditor-data "*|*" ${PROJECT}_auditor-token "*) fail "$c mounts an auditor volume";; *) pass "$c mounts no auditor volume";;
-    esac
-  done
-  owned "$AUDITOR" /auditor-token/accept/admin-auditor-append.sha256 "10003 444" "the auditor's append hash file (owner, mode)"
-  owned "$AUDITOR" /auditor-token/accept/admin-auditor-read.sha256 "10003 444" "the auditor's read hash file (owner, mode)"
-  owned "$AUDITOR" /auditor-token/accept/model-gateway-auditor-read.sha256 "10003 444" "the auditor's gateway read hash file (owner, mode)"
-  owned "$AUDITOR" /auditor-token/accept/admin-auditor-restore.sha256 "10003 444" "the auditor's restore hash file (owner, mode)"
-  for d in /auditor-token /auditor-token/accept; do owned "$AUDITOR" "$d" "10003 500" "the auditor's $d"; done
   # The API, from a throwaway container on audit-admin with the admin's own tokens: only the right token reaches each route.
   AUD_APPEND=$(docker exec "$ADMIN" cat /admin-token/call/admin-auditor-append.token 2>/dev/null)
   AUD_READ=$(docker exec "$ADMIN" cat /admin-token/call/admin-auditor-read.token 2>/dev/null)
@@ -495,46 +541,34 @@ echo "== 3d5. model-gateway (ADR 0054)"
 GW=askbar-model-gateway
 GW_NET="${PROJECT}_gateway-admin"; GW_SRV_NET="${PROJECT}_gateway-server"; GW_OUT="${PROJECT}_outbound"; GW_AUD="${PROJECT}_audit-model-gateway"
 if [ "$(docker inspect -f '{{.State.Running}}' "$GW" 2>/dev/null)" != true ]; then fail "model-gateway is not running"; else
-  wait_healthy "$GW"
-  [ "$(docker inspect -f '{{.State.Health.Status}}' "$GW")" = healthy ] && pass "model-gateway is healthy" || fail "model-gateway is not healthy"
-  [ "$(docker exec "$GW" id -u)" = 10004 ] && pass "model-gateway runs as uid 10004" || fail "model-gateway does not run as uid 10004"
-  capeff=$(docker exec "$GW" sh -c 'grep CapEff /proc/1/status' 2>/dev/null | awk '{print $2}')
-  [ "$capeff" = 0000000000000000 ] && pass "model-gateway's CapEff is 0" || fail "model-gateway's CapEff is '${capeff:-unknown}', expected 0"
-  [ -z "$(docker inspect -f '{{join .HostConfig.CapAdd ","}}' "$GW")" ] && pass "model-gateway adds no capability" || fail "model-gateway adds a capability"
-  [ "$(docker inspect -f '{{.HostConfig.ReadonlyRootfs}} {{.HostConfig.Memory}}' "$GW")" = "true 268435456" ] && pass "model-gateway has a read-only root and 256 MB" || fail "model-gateway's root or memory limit is not as set"
-  # Its networks are exactly these four, and only `outbound` has a route out.
-  gnets=$(nets_of "$GW")
-  [ "$gnets" = "$GW_AUD ${PROJECT}_cpa-gateway $GW_NET $GW_SRV_NET $GW_OUT " ] && pass "model-gateway is on audit-model-gateway, cpa-gateway, gateway-admin, gateway-server and outbound only" || fail "model-gateway's networks are: $gnets"
-  for n in $GW_AUD ${PROJECT}_cpa-gateway $GW_NET $GW_SRV_NET; do
-    [ "$(docker network inspect -f '{{.Internal}}' "$n" 2>/dev/null)" = true ] && pass "$n is internal" || fail "$n is not internal"
-  done
+  svc_profile "$GW" model-gateway <<EOF
+health yes
+uid 10004
+caps yes
+mem 256
+nets audit-model-gateway cpa-gateway gateway-admin gateway-server outbound|model-gateway is on audit-model-gateway, cpa-gateway, gateway-admin, gateway-server and outbound only
+internal audit-model-gateway cpa-gateway gateway-admin gateway-server|
+member gateway-admin|$ADMIN $GW|gateway-admin joins the admin and the gateway only
+member cpa-gateway|askbar-cpa $GW|cpa-gateway joins CLIProxyAPI and the gateway only
+member audit-model-gateway|$AUDITOR $GW|audit-model-gateway joins the auditor and the gateway only
+member gateway-server|$GW $SERVER|gateway-server joins the gateway and the server only
+mounts model-gateway-token=false|model-gateway mounts model-gateway-token (read-only) and nothing else
+foreign $SERVER $ADMIN $CADDY $AUDITOR|model-gateway-token|model-gateway-token|model-gateway volume
+owner $GW|/model-gateway-token/accept/server-model-gateway.sha256|10004 444|the gateway's server hash file (owner, mode)
+owner $GW|/model-gateway-token/accept/admin-model-gateway.sha256|10004 444|the gateway's admin hash file (owner, mode)
+owner $GW|/model-gateway-token/call/model-gateway-auditor.token|10004 400|the gateway's auditor token file (owner, mode)
+owner $GW|/model-gateway-token/call/model-gateway-auditor-read.token|10004 400|the gateway's auditor read token file (owner, mode)
+dirs $GW|10004 500|the gateway's|/model-gateway-token /model-gateway-token/call /model-gateway-token/accept
+owner $AUDITOR|/auditor-token/accept/model-gateway-auditor.sha256|10003 444|the auditor's gateway hash file (owner, mode)
+owner $SERVER|/server-token/call/server-model-gateway.token|10002 400|the server's gateway token file (owner, mode)
+owner $ADMIN|/admin-token/call/admin-model-gateway.token|10001 400|the admin's gateway token file (owner, mode)
+EOF
   [ "$(docker network inspect -f '{{.Internal}}' "$GW_OUT" 2>/dev/null)" = false ] && pass "outbound is the one network with a route out" || fail "outbound is internal: no provider could be reached"
-  # Who shares each network: no caller of another link, and only the gateway and cpa (and in dev the mock LLM) on outbound.
-  [ "$(members "$GW_NET")" = "$ADMIN $GW " ] && pass "gateway-admin joins the admin and the gateway only" || fail "gateway-admin members: $(members "$GW_NET")"
-  [ "$(members "${PROJECT}_cpa-gateway")" = "askbar-cpa $GW " ] && pass "cpa-gateway joins CLIProxyAPI and the gateway only" || fail "cpa-gateway members: $(members "${PROJECT}_cpa-gateway")"
-  [ "$(members "$GW_AUD")" = "$AUDITOR $GW " ] && pass "audit-model-gateway joins the auditor and the gateway only" || fail "audit-model-gateway members: $(members "$GW_AUD")"
-  [ "$(members "$GW_SRV_NET")" = "$GW $SERVER " ] && pass "gateway-server joins the gateway and the server only" || fail "gateway-server members: $(members "$GW_SRV_NET")"
   case "$(members "$GW_OUT")" in "askbar-cpa $GW "|"askbar-cpa askbar-mock-llm-1 $GW ") pass "outbound joins the gateway and CLIProxyAPI (and the mock LLM in dev) only";; *) fail "outbound members: $(members "$GW_OUT")";; esac
   # The gateway reaches the auditor and nothing of ours but that.
   docker exec "$GW" bash -c 'exec 3<>/dev/tcp/auditor/8083' >/dev/null 2>&1 && pass "model-gateway reaches the auditor" || fail "model-gateway cannot reach the auditor"
   # (The admin, the server and cpa share a network with it, so their names do resolve there.)
   docker exec "$GW" bash -c "getent hosts caddy" >/dev/null 2>&1 && fail "model-gateway resolves caddy" || pass "model-gateway cannot resolve caddy"
-  # Mounts: its credential volume, read-only, and nothing else; nobody else has it.
-  gmounts=$(mounts_of "$GW")
-  [ "$gmounts" = "${PROJECT}_model-gateway-token=false " ] && pass "model-gateway mounts model-gateway-token (read-only) and nothing else" || fail "model-gateway mounts: $gmounts"
-  for c in $SERVER $ADMIN $CADDY $AUDITOR; do
-    case " $(docker inspect -f '{{range .Mounts}}{{.Name}} {{end}}' "$c")" in
-      *" ${PROJECT}_model-gateway-token "*) fail "$c mounts model-gateway-token";; *) pass "$c mounts no model-gateway volume";;
-    esac
-  done
-  owned "$GW" /model-gateway-token/accept/server-model-gateway.sha256 "10004 444" "the gateway's server hash file (owner, mode)"
-  owned "$GW" /model-gateway-token/accept/admin-model-gateway.sha256 "10004 444" "the gateway's admin hash file (owner, mode)"
-  owned "$GW" /model-gateway-token/call/model-gateway-auditor.token "10004 400" "the gateway's auditor token file (owner, mode)"
-  owned "$GW" /model-gateway-token/call/model-gateway-auditor-read.token "10004 400" "the gateway's auditor read token file (owner, mode)"
-  for d in /model-gateway-token /model-gateway-token/call /model-gateway-token/accept; do owned "$GW" "$d" "10004 500" "the gateway's $d"; done
-  owned "$AUDITOR" /auditor-token/accept/model-gateway-auditor.sha256 "10003 444" "the auditor's gateway hash file (owner, mode)"
-  owned "$SERVER" /server-token/call/server-model-gateway.token "10002 400" "the server's gateway token file (owner, mode)"
-  owned "$ADMIN" /admin-token/call/admin-model-gateway.token "10001 400" "the admin's gateway token file (owner, mode)"
   # Each listener is on its own network's address, and only its own link's token opens it.
   GW_ADMIN_IP=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$GW_NET\").IPAddress}}" "$GW")
   GW_SRV_IP=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$GW_SRV_NET\").IPAddress}}" "$GW")
@@ -600,14 +634,12 @@ fi
 
 echo "== 3d6. The server has no route out and no key (ADR 0054)"
 if [ "$(docker inspect -f '{{.State.Running}}' "$SERVER" 2>/dev/null)" != true ]; then fail "the server is not running"; else
-  snets=$(nets_of "$SERVER")
-  [ "$snets" = "${PROJECT}_audit-server ${PROJECT}_client-api ${PROJECT}_gateway-server ${PROJECT}_server-api " ] \
-    && pass "the server is on audit-server, client-api, gateway-server and server-api only" || fail "the server's networks are: $snets"
-  for n in $snets; do
-    [ "$(docker network inspect -f '{{.Internal}}' "$n" 2>/dev/null)" = true ] && pass "$n is internal: no route out" || fail "$n is not internal"
-  done
-  [ "$(members "$CLIENT_NET")" = "$CADDY $SERVER " ] && pass "client-api joins Caddy and the server only" || fail "client-api members: $(members "$CLIENT_NET")"
-  [ "$(members "${PROJECT}_audit-server")" = "$AUDITOR $SERVER " ] && pass "audit-server joins the auditor and the server only" || fail "audit-server members: $(members "${PROJECT}_audit-server")"
+  svc_profile "$SERVER" "the server" <<EOF
+nets audit-server client-api gateway-server server-api|the server is on audit-server, client-api, gateway-server and server-api only
+internal *|: no route out
+member client-api|$CADDY $SERVER|client-api joins Caddy and the server only
+member audit-server|$AUDITOR $SERVER|audit-server joins the auditor and the server only
+EOF
   docker exec "$SERVER" bash -c 'timeout 4 bash -c "echo > /dev/tcp/1.1.1.1/443"' >/dev/null 2>&1 && fail "the server reached the internet" || pass "the server has no route out"
   docker exec "$SERVER" bash -c 'timeout 4 getent hosts example.com' >/dev/null 2>&1 && fail "the server resolved an outside name" || pass "the server cannot resolve an outside name"
   for h in cpa mock-llm; do
@@ -627,28 +659,31 @@ echo "== 3d7. The alerter (ADR 0055)"
 ALERTER=askbar-alerter
 AL_ADMIN="${PROJECT}_alerter-admin"; AL_AUD="${PROJECT}_audit-alerter"; AL_OUT="${PROJECT}_alerter-outbound"
 if [ "$(docker inspect -f '{{.State.Running}}' "$ALERTER" 2>/dev/null)" != true ]; then fail "the alerter is not running"; else
-  wait_healthy "$ALERTER"
-  [ "$(docker inspect -f '{{.State.Health.Status}}' "$ALERTER")" = healthy ] && pass "the alerter is healthy" || fail "the alerter is not healthy"
-  [ "$(docker exec "$ALERTER" id -u)" = 10005 ] && pass "the alerter runs as uid 10005" || fail "the alerter does not run as uid 10005"
-  capeff=$(docker exec "$ALERTER" sh -c 'grep CapEff /proc/1/status' 2>/dev/null | awk '{print $2}')
-  [ "$capeff" = 0000000000000000 ] && pass "the alerter's CapEff is 0" || fail "the alerter's CapEff is '${capeff:-unknown}', expected 0"
-  [ -z "$(docker inspect -f '{{join .HostConfig.CapAdd ","}}' "$ALERTER")" ] && pass "the alerter adds no capability" || fail "the alerter adds a capability"
-  [ "$(docker inspect -f '{{.HostConfig.ReadonlyRootfs}} {{.HostConfig.Memory}}' "$ALERTER")" = "true 134217728" ] && pass "the alerter has a read-only root and 128 MB" || fail "the alerter's root or memory limit is not as set"
-  # Its networks are exactly these three, and only alerter-outbound has a route out.
-  alnets=$(nets_of "$ALERTER")
-  [ "$alnets" = "$AL_ADMIN $AL_OUT $AL_AUD " ] && pass "the alerter is on alerter-admin, alerter-outbound and audit-alerter only" || fail "the alerter's networks are: $alnets"
-  for n in $AL_ADMIN $AL_AUD; do
-    [ "$(docker network inspect -f '{{.Internal}}' "$n" 2>/dev/null)" = true ] && pass "$n is internal" || fail "$n is not internal"
-  done
+  svc_profile "$ALERTER" "the alerter" <<EOF
+health yes
+uid 10005
+caps yes
+mem 128
+nets alerter-admin alerter-outbound audit-alerter|the alerter is on alerter-admin, alerter-outbound and audit-alerter only
+internal alerter-admin audit-alerter|
+member alerter-admin|$ADMIN $ALERTER|alerter-admin joins the admin and the alerter only
+member audit-alerter|$ALERTER $AUDITOR|audit-alerter joins the alerter and the auditor only
+member alerter-outbound|$ALERTER|alerter-outbound joins the alerter alone
+mounts alerter-data=true alerter-token=false|the alerter mounts alerter-data and alerter-token (read-only) only
+foreign $SERVER $ADMIN $CADDY $AUDITOR $GW askbar-cpa|alerter-token alerter-data|an alerter volume|alerter volume
+owner $ALERTER|/alerter-token/accept/auditor-alerter.sha256|10005 444|the alerter's auditor hash file (owner, mode)
+owner $ALERTER|/alerter-token/accept/admin-alerter.sha256|10005 444|the alerter's admin hash file (owner, mode)
+owner $ALERTER|/alerter-token/call/alerter-auditor.token|10005 400|the alerter's auditor token file (owner, mode)
+dirs $ALERTER|10005 500|the alerter's|/alerter-token /alerter-token/call /alerter-token/accept
+owner $AUDITOR|/auditor-token/accept/alerter-auditor.sha256|10003 444|the auditor's alerter hash file (owner, mode)
+owner $AUDITOR|/auditor-token/call/auditor-alerter.token|10003 400|the auditor's alerter token file (owner, mode)
+owner $ADMIN|/admin-token/call/admin-alerter.token|10001 400|the admin's alerter token file (owner, mode)
+EOF
   [ "$(docker network inspect -f '{{.Internal}}' "$AL_OUT" 2>/dev/null)" = false ] && pass "alerter-outbound is the alerter's one network with a route out" || fail "alerter-outbound is internal: no alert could be delivered"
-  # Who is on each network: the alerter shares none with a service that has a route out, and `outbound` does not include it.
-  [ "$(members "$AL_ADMIN")" = "$ADMIN $ALERTER " ] && pass "alerter-admin joins the admin and the alerter only" || fail "alerter-admin members: $(members "$AL_ADMIN")"
-  [ "$(members "$AL_AUD")" = "$ALERTER $AUDITOR " ] && pass "audit-alerter joins the alerter and the auditor only" || fail "audit-alerter members: $(members "$AL_AUD")"
-  [ "$(members "$AL_OUT")" = "$ALERTER " ] && pass "alerter-outbound joins the alerter alone" || fail "alerter-outbound members: $(members "$AL_OUT")"
   case "$(members "${PROJECT}_outbound")" in *"$ALERTER"*) fail "the alerter is on outbound, with the gateway";; *) pass "outbound does not include the alerter";; esac
   for c in $SERVER $GW $CADDY askbar-cpa; do
     shared=""
-    for n in $alnets; do case " $(members "$n")" in *" $c "*) shared="$shared $n";; esac; done
+    for n in $(nets_of "$ALERTER"); do case " $(members "$n")" in *" $c "*) shared="$shared $n";; esac; done
     [ -z "$shared" ] && pass "$c shares no network with the alerter" || fail "$c shares a network with the alerter:$shared"
   done
   # The server and the auditor still have no route out (3d4, 3d6); the gateway's is `outbound`, which the alerter is not on.
@@ -657,22 +692,6 @@ if [ "$(docker inspect -f '{{.State.Running}}' "$ALERTER" 2>/dev/null)" != true 
   for h in caddy server askbar-model-gateway cpa; do
     docker exec "$ALERTER" bash -c "getent hosts $h" >/dev/null 2>&1 && fail "the alerter resolves $h" || pass "the alerter cannot resolve $h"
   done
-  # Mounts: its data (read-write) and its credential volume (read-only), and nothing else; nobody else has them.
-  almounts=$(mounts_of "$ALERTER")
-  [ "$almounts" = "${PROJECT}_alerter-data=true ${PROJECT}_alerter-token=false " ] && pass "the alerter mounts alerter-data and alerter-token (read-only) only" || fail "the alerter mounts: $almounts"
-  for c in $SERVER $ADMIN $CADDY $AUDITOR $GW askbar-cpa; do
-    case " $(docker inspect -f '{{range .Mounts}}{{.Name}} {{end}}' "$c")" in
-      *" ${PROJECT}_alerter-token "*|*" ${PROJECT}_alerter-data "*) fail "$c mounts an alerter volume";; *) pass "$c mounts no alerter volume";;
-    esac
-  done
-  # Token files: owners, modes and prefixes.
-  owned "$ALERTER" /alerter-token/accept/auditor-alerter.sha256 "10005 444" "the alerter's auditor hash file (owner, mode)"
-  owned "$ALERTER" /alerter-token/accept/admin-alerter.sha256 "10005 444" "the alerter's admin hash file (owner, mode)"
-  owned "$ALERTER" /alerter-token/call/alerter-auditor.token "10005 400" "the alerter's auditor token file (owner, mode)"
-  for d in /alerter-token /alerter-token/call /alerter-token/accept; do owned "$ALERTER" "$d" "10005 500" "the alerter's $d"; done
-  owned "$AUDITOR" /auditor-token/accept/alerter-auditor.sha256 "10003 444" "the auditor's alerter hash file (owner, mode)"
-  owned "$AUDITOR" /auditor-token/call/auditor-alerter.token "10003 400" "the auditor's alerter token file (owner, mode)"
-  owned "$ADMIN" /admin-token/call/admin-alerter.token "10001 400" "the admin's alerter token file (owner, mode)"
   AL_ADM_TOK=$(docker exec "$ADMIN" cat /admin-token/call/admin-alerter.token 2>/dev/null)
   AL_AUD_TOK=$(docker exec "$AUDITOR" cat /auditor-token/call/auditor-alerter.token 2>/dev/null)
   AL_OWN_TOK=$(docker exec "$ALERTER" cat /alerter-token/call/alerter-auditor.token 2>/dev/null)

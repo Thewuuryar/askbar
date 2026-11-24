@@ -116,7 +116,7 @@ Branch `refactor/check-isolation`. PR title `refactor(compose): shorten the isol
 - [x] **R2.3** `refactor(compose): admin setup and cleanup helpers in check-isolation` · haiku · after R2.2
   Files: `scripts/check-isolation.sh`.
   Do: the provider, user and pairing setup Python is pasted 4 times; make it `admin_setup_provider`. The catalog cleanup is pasted twice; make it `admin_cleanup_provider`.
-- [ ] **R2.4** `refactor(compose): check each service from one profile table` · sonnet · after R2.3
+- [x] **R2.4** `refactor(compose): check each service from one profile table` · sonnet · after R2.3
   Files: `scripts/check-isolation.sh`.
   Do: one `svc_profile` function and a table with one row per service replace the per-service blocks for the auditor, `model-gateway`, the alerter, the server and `cpa`. The function checks health, uid, CapEff 0, no CapAdd, networks, internal flags, members, mounts, foreign volumes, and file owners and modes. Keep each service's real values in its row.
   Accept: a new service needs one row, not a block.
