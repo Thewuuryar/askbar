@@ -244,7 +244,7 @@ Branch `refactor/tests-and-client`. PR title `refactor(client): share test setup
 
 Branch `refactor/before-canaries`. PR title `refactor(proto): share message trimming and event decoding`.
 
-- [ ] **RL.1** `refactor(proto): share normalize and last_turns` · haiku
+- [x] **RL.1** `refactor(proto): share normalize and last_turns` · haiku
   Files: `crates/askbar-proto/src/lib.rs`, `services/server/src/llm.rs`, `services/model-gateway/src/llm.rs`.
   Do: move the two functions and one copy of their tests to `askbar-proto`. Both services call it.
 - [ ] **RL.2** `refactor(model-gateway): decode stream events in one place` · sonnet
