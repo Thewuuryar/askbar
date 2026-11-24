@@ -54,7 +54,11 @@ Needs Phase 4, G0, G9. Several agentgateway facts are unverified (stdio servers 
   Files: `services/mcp-gateway/src/{approval,call}.rs`, tests.
   Do: `POST` call route takes the tool, exact arguments and the approval; recompute the action hash, run the P5.5 verify with the pushed public key and an in-memory one-time ID store (window from `constants.rs`); any failure refuses with `problem+json` (ADR 0023) and a distinct code, before anything reaches agentgateway.
   Accept: unsigned, replayed, swapped, expired and wrong-key approvals are each refused; a valid one passes to the next check.
-- [ ] **P5A.9** `feat(mcp-gateway): write the audit span before each call` · sonnet · after P5A.8
+- [ ] **P5A.9a** `feat(auditor): add the mcp-gateway audit link` · sonnet · after P5A.6
+  Files: `services/auditor/src/lib.rs` (`LINKS`, `may_start`), `compose.yaml`, `services/bootstrap/src/{links,write}.rs`, `scripts/check-isolation.sh`, tests.
+  Do: add an `mcp-gateway-auditor` entry to `LINKS` with its bootstrap token; add an audit network entry for the front in compose; add a `may_start` arm for `mcp-gateway` that allows `tool` spans only. Amend ADR 0010 and ADR 0051 in separate docs commits (the link and the arm).
+  Accept: the front can open a tool span and nothing else (a `turn` or `gate` start is refused); `scripts/check-isolation.sh` passes.
+- [ ] **P5A.9** `feat(mcp-gateway): write the audit span before each call` · sonnet · after P5A.8, P5A.9a
   Files: `services/mcp-gateway/src/{audit,call}.rs`, `docs/style/logging-and-audit.md`.
   Do: through the Rust `AuditClient` open the span (user, task, tool, approval ID, argument hash, no argument text) and call only after the auditor acknowledges; the full fetch URL is recorded in its own span before a fetch (P5A.15); if the auditor does not acknowledge, refuse the call (fail closed); close the span with the outcome.
   Accept: a test with an unreachable auditor refuses the call and agentgateway sees nothing; a log grep for a marker argument finds nothing.
@@ -114,7 +118,7 @@ Needs Phase 4, G0, G9. Several agentgateway facts are unverified (stdio servers 
   Files: `scripts/smoke.sh`, `tests/e2e/` fixtures.
   Do: smoke step with a mock searxng and a mock page: sign an approval, search, fetch a result, check the audit spans and that an unsigned call and a direct request to the agentgateway port are refused.
   Accept: `scripts/smoke.sh` passes.
-- [ ] **P5A.24** `docs(adr): amend 0019: the MCP gateway is agentgateway behind a front` · haiku · after P5A.15. Files: `0019-post-v1-order-and-tools.md`. Order: egress proxy; MCP gateway, searxng, web research and the judge (roles pinned to models); PII detection and redaction; context checks and canaries; tiered routing; agents with MCP tools; audit viewing; executor (deferrable), library (deferrable), as in [plan-priorities.md](../plan-priorities.md); the fetch rules are enforced in the front. Decision.
+- [ ] **P5A.24** `docs(adr): amend 0019: the MCP gateway is agentgateway behind a front` · haiku · after P5A.15. Files: `0019-post-v1-order-and-tools.md`. The fetch rules are enforced in the front. Decision.
 - [ ] **P5A.25** `docs(adr): amend 0028: MCP gateway config and the approval public key` · haiku · after P5A.18. Files: `0028-service-boundaries-and-config-delivery.md`. The front takes config pushes with constants, permissions and the approval public key; tool credentials are pushed and held in memory. Decision.
 - [ ] **P5A.26** `docs(adr): amend 0032: MCP gateway and searxng container limits` · haiku · after P5A.13. Files: `0032-container-hardening.md`.
 - [ ] **P5A.27** `docs(adr): amend 0017: a third-party image and its licence` · haiku · after P5A.3. Files: `0017-dependencies-and-patches.md`. Third-party images pinned by digest with licence notices; agentgateway Apache-2.0.

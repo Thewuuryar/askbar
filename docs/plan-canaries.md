@@ -1,86 +1,85 @@
 # Plan: context checks and canaries in model-gateway
 
-Status: proposed, after 1.0. Track 3 in [plan-priorities.md](plan-priorities.md): it starts after web search and PII redaction. Nothing here is decided until the owner accepts the ADR work in Phase 0. Rules for agents: [AGENTS.md](../AGENTS.md).
+Status: proposed, after 1.0. Track 3 in [plan-priorities.md](plan-priorities.md): it starts after web search and PII redaction. Nothing here is decided until the owner accepts the ADR work in Phase 0. This is the smallest version that gives the owner a canary in model calls that detects context overflow, set in the admin UI. Rules for agents: [AGENTS.md](../AGENTS.md).
 
 Related plans: [PII detection and redaction](plan-pii-redaction.md), which builds the reply stream filter this plan extends, and [audit record viewing](plan-audit-viewer.md), which shows what this plan records.
 
 ## Summary
 
-Askbar cannot tell today when a provider drops part of the context. `model-gateway` parses usage but never fills `StreamReport.finish_reason` (`services/model-gateway/src/llm.rs`), so a reply cut at the output limit, or refused for an over-long context, looks like a normal reply. The server limits history by turns (`history_turns`), not by model tokens. OpenAI-compatible local servers such as Ollama drop the oldest messages to fit their context and still answer with HTTP 200.
+Askbar cannot tell today when a provider drops part of the context. `model-gateway` parses usage but never fills `StreamReport.finish_reason` (`services/model-gateway/src/llm.rs`, set to `None` near line 435 and never read in `decode_event`), so a reply cut at the output limit, or refused for an over-long context, looks like a normal reply. The server limits history by turns (`history_turns`), not by tokens. OpenAI-compatible local servers such as Ollama drop the oldest messages to fit their context and still answer with HTTP 200. The server and gateway know only the provider kind (`openai` or `anthropic`), so Ollama can't be found by kind. A limit set on the provider is the fix.
 
-This plan adds three layers, cheapest first:
+This plan adds three small layers, cheapest first:
 
-1. **Deterministic checks (no extra model tokens):** record the stop reason; compare the input tokens the provider reports with the gateway's estimate of what it sent; trim history on the server to a per-model context limit, so Askbar drops context on purpose rather than the provider by accident.
-2. **An echo canary:** the gateway plants two random markers, one in the system message and one in the oldest message, and asks the model to repeat them at the end of its reply. The gateway strips them from the stream. If the first survives and the second doesn't, the front of the context was dropped.
-3. **Other canaries:** a system prompt leak tripwire, decoy credentials, an end-to-end audit canary, and model drift probes. Cross-space honeytokens and injection markers wait for memory and web research.
+1. **Deterministic checks (no extra model tokens):** record the provider's raw stop reason; compare the input tokens the provider reports with the gateway's estimate of what it sent.
+2. **One context limit per provider,** set in the admin UI. The server trims the oldest turns to fit, so Askbar drops context on purpose rather than the provider by accident.
+3. **An echo canary:** the gateway plants two random markers, one in the system message and one in the oldest message, and asks the model to repeat them at the end of its reply. The gateway strips them from the stream. If the first survives and the second doesn't, the front of the context was dropped. It runs only when the request is near the provider's limit.
 
-A canary is a tripwire, not a guarantee. Long-context studies (RULER, NoLiMa, Chroma's Context Rot) show models lose the use of context well before the advertised window is full, so a marker that survives doesn't prove the model used what was around it. That is why each model also gets an **effective context** limit, below its advertised window.
+A canary is a tripwire, not a guarantee. Long-context studies (RULER, NoLiMa, Chroma's Context Rot) show models lose the use of context well before the advertised window is full. That is why the help text for the limit says the effective limit is usually lower than the advertised one.
+
+Everything else is under [Later](#later).
 
 ## Decisions
 
 | Area | Decision |
 | --- | --- |
 | Where | `model-gateway` plants, checks and strips canaries. The server, clients and history never see them |
-| Stop reason | Normalised to `complete`, `output_limit`, `context_exceeded`, `filtered`, `other`, recorded on every attempt span |
-| Truncation check | Reported input tokens below `truncation_ratio` × the gateway's estimate (default 0.6) means `context.truncated` |
-| Context limits | Each approved model gains `context_window` and `effective_context`; the server trims oldest turns to `effective_context − max_tokens` |
+| Stop reason | `finish_reason` stays the provider's raw string (`Option<String>`), recorded on the attempt span. No enum. Values that matter: `length`, `max_tokens`, `model_context_window_exceeded` |
+| Truncation check | Reported input tokens below `TRUNCATION_RATIO` (0.6) × the estimate from `sent_chars` means `context.truncated`. The constant lives in askbar-proto with its bounds; it is not a setting. Skipped when usage is estimated |
+| Context limit | One nullable `context_tokens` per provider row ("Context limit" in the UI), next to `max_tokens` and with the same plumbing. Not per catalog model: `CatalogEntry` is only `{provider_id, model}` and a provider already carries one `model` |
+| Trimming | The server drops the oldest turns after `last_turns` until the estimate fits `context_tokens − max_tokens`; no limit set means today's behaviour |
+| Canary setting | One `canary_enabled: bool` (default true) in `GatewayConfig` |
+| Canary trigger | Only when the request estimate is at or above `CANARY_TRIGGER_PCT` (70%, a named constant) of the provider's `context_tokens`. Never when no limit is set |
 | Canary markers | Two nonces of 8 hex characters from the OS random source, new for each attempt; never stored, never logged |
 | Placement | Marker A in the system message, marker B at the start of the oldest message sent. Ollama keeps system messages and drops old ones, so A alone would miss it |
-| Echo position | At the end of the reply, so time to first token is unchanged. The gateway holds back text that might be a marker and strips it |
-| Outcomes | `ok`, `front_lost`, `absent` (inconclusive: the model ignored the instruction), `skipped` (output limit cut the marker) |
-| Modes | `off`, `near_limit` (default: only above `trigger_pct` of `effective_context`, default 70%), `always` |
-| Actions | `record`, `alert` (default), `alert_and_mark` (adds a notice that earlier messages may have been dropped). A canary never fails a finished reply |
-| Audit | A `canary` step span ([audit viewer](plan-audit-viewer.md) AV2.1, which lands in track 1) with `attrs.context` and `attrs.canary`: booleans and counts, never the nonces. `canary.planted` and the instruction version record that the model saw extra text, because the server's sealed request does not contain it |
+| Echo position | At the end of the reply, so time to first token is unchanged. The reply filter holds back text that might be a marker and strips it. The filter extends the PII filter struct (PII-P2.2 in [plan-pii-redaction.md](plan-pii-redaction.md)), which ships first in track 2; no trait or chain |
+| Outcomes | `ok`, `front_lost`, `absent` (inconclusive: the model ignored the instruction), `skipped` (output limit cut the marker). Always recorded. A canary never fails a finished reply |
+| Audit | A `step` span named `canary`, written by `model-gateway` under the attempt ([audit viewer](plan-audit-viewer.md) AV2.1, which lands in track 1). `attrs.canary = {planted, outcome, instruction_version}`: booleans and counts, never the nonces. The record shows that the model saw extra text, because the server's sealed request does not contain it |
+| Alerts | Only `ContextTruncated`, on `front_lost` or `truncated`. `absent` never alerts |
 | Naming | "Canary" or "marker", never "canary token": in Askbar a token is a bearer secret ([glossary](architecture.md#glossary)) |
 
 ## Config
 
-Added to `GatewayConfig` in `crates/askbar-proto/src/gateway.rs` as `#[serde(default)]` fields, pushed through the existing `PUT /config`. The config version hash covers them.
+In `crates/askbar-proto/src/gateway.rs`, a `#[serde(default)]` field pushed through the existing `PUT /config`. The config version hash covers it.
 
 ```rust
-pub struct CanaryConfig {
-    pub context_mode: CanaryMode,       // off | near_limit | always (default near_limit)
-    pub context_trigger_pct: u8,        // default 70, range 10..=100
-    pub context_action: CanaryAction,   // record | alert | alert_and_mark (default alert)
-    pub truncation_ratio: f32,          // default 0.6, range 0.1..=0.95
-    pub leak_enabled: bool,             // default true
-    pub leak_action: LeakAction,        // record | alert | redact (default redact)
-    pub drift_probe_hours: Option<u16>, // None = off
-}
-// CatalogEntry gains: context_window: Option<u32>, effective_context: Option<u32>
+pub canary_enabled: bool,      // default true
 ```
 
-The server receives `context_window`, `effective_context` and the provider's `max_tokens` in its snapshot so it can trim.
+In `crates/askbar-proto/src/lib.rs`, named constants with their bounds:
+
+```rust
+pub const TRUNCATION_RATIO: f32 = 0.6;
+pub const CANARY_TRIGGER_PCT: u8 = 70;
+```
+
+`context_tokens: Option<u32>` is added to `SnapshotProvider` and the gateway's provider config, the same way as `max_tokens`. The server gets it in its snapshot so it can trim.
 
 ## Admin UI
 
-- **Approved models:** "Context window" and "Effective context" number fields on each row, with help text explaining that the effective limit is usually much lower than the advertised one.
-- **Settings, new "Canaries" section:** context check mode, trigger %, action, truncation ratio, leak tripwire on or off and its action, drift probe interval, and a **Send test canary** button that runs one canary turn against a chosen model and shows the outcome.
-- **Model calls list:** a context column (`ok`, `truncated`, `front lost`, `at limit`) taken from span attributes.
+- **Providers:** a "Context limit" number field on each provider, with help text that the effective limit is usually much lower than the advertised one.
+- **Settings page (existing):** one checkbox, "Context canary".
+- **Model calls list:** a context column (`ok`, `truncated`, `front lost`) from span attributes.
 
 Every change is an admin action record, as today.
 
 ## Alerts
 
-New `Kind` values in `crates/askbar-proto/src/alerter.rs`: `ContextTruncated`, `CanaryLeak`, `ModelDrift`, `DecoyCredentialUsed`. The auditor's rules read attempt-finish attributes (`fed_of` in `services/auditor/src/rules.rs`) and send at most one alert per model per hour for each kind.
+One new `Kind` in `crates/askbar-proto/src/alerter.rs`: `ContextTruncated`. `fed_of` in `services/auditor/src/rules.rs` maps only `AdminAction`, `Hello` and turn `Start`, so alerting on finish attributes needs a new `Fed` path for span finish and step records. For rate limits, check `services/alerter/src/limits.rs` first: it already allows one delivery per derived key per hour and 20 an hour in all, and the key is built from typed fields, so see whether a model or provider field fits before adding anything custom.
 
 ## Owner gates
 
-- **Phase 0:** accept the ADR work. Canaries are a `model-gateway` behaviour, so they amend [ADR 0054](adr/0054-model-gateway.md) and [ADR 0014](adr/0014-model-gateway-and-providers.md) in place rather than taking a new number ([ADR 0001](adr/0001-decision-records-and-change-rules.md)). The audit attributes amend [ADR 0051](adr/0051-auditor.md); the new alert kinds amend [ADR 0055](adr/0055-alerter.md).
-- **Before Phase 3 alerts are switched on:** two weeks of `record` mode, then the owner reviews the `absent` rate for each model.
+- **Phase 0:** accept the ADR work. Canaries are a `model-gateway` behaviour, so they amend [ADR 0054](adr/0054-model-gateway.md) and [ADR 0014](adr/0014-model-gateway-and-providers.md) in place rather than taking a new number ([ADR 0001](adr/0001-decision-records-and-change-rules.md)). The audit attributes and the new alert kind amend [ADR 0051](adr/0051-auditor.md) and [ADR 0055](adr/0055-alerter.md) (C0.2, only when Phase 3 starts).
+- Alerts fire only on `front_lost` or truncated, so there is no record-only period. Watch the `absent` rate for each model in the model calls list.
 
 ## Phases
 
 | Phase | Content | Status |
 | --- | --- | --- |
-| 0 | ADR amendments, reference docs | not started |
-| 1 | Stop reason and input-count check, record only | not started |
-| 2 | Per-model context limits and server trimming | not started |
-| 3 | Echo canary and the shared stream filter | not started |
-| 4 | Leak tripwire, decoy credentials, audit canary | not started |
-| 5 | Drift probes | not started |
-| 6 | Injection markers in fetched pages (web search ships first) | not started |
-| Later | Cross-space honeytokens (with memory) | not started |
+| 0 | ADR amendments (0054 and 0014; 0051 and 0055 for `ContextTruncated`) | not started |
+| 1 | Raw stop reason and input-count check, record only | not started |
+| 2 | Provider context limit and server trimming | not started |
+| 3 | Echo canary, `ContextTruncated` alert and the settings checkbox | not started |
+| Later | See below | not started |
 
 ### Phase 0: records
 
@@ -88,98 +87,60 @@ New `Kind` values in `crates/askbar-proto/src/alerter.rs`: `ContextTruncated`, `
   Files: `docs/adr/0054-model-gateway.md`, `docs/adr/0014-model-gateway-and-providers.md`.
   Do: add the Decisions table above as rules; list what a canary is not (proof of context use, an injection defence).
   Accept: `scripts/check-docs.sh` passes; each ADR's Amendments section names this plan.
-- [ ] **C0.2** `docs(adr): amend 0051 and 0055: canary attributes and alert kinds` · haiku · after C0.1
+- [ ] **C0.2** `docs(adr): amend 0051 and 0055: canary attributes and ContextTruncated` · haiku · after C0.1
   Files: `docs/adr/0051-auditor.md`, `docs/adr/0055-alerter.md`, `docs/reference/audit/model-calls.md`, `docs/reference/audit/alert-kinds.md`.
-  Accept: the reference pages list each new attribute and alert kind; `scripts/check-reference.sh` passes.
+  Accept: the reference pages list each new attribute and the alert kind; `scripts/check-reference.sh` passes.
 
 ### Phase 1: stop reason and input count (record only)
 
-- [ ] **C1.1** `fix(model-gateway): record the provider's stop reason` · haiku
+- [ ] **C1.1** `fix(model-gateway): record the provider's finish reason` · haiku
   Files: `services/model-gateway/src/llm.rs`, its tests.
-  Do: set `finish_reason` in `decode_event` from OpenAI `choices[].finish_reason` and Anthropic `message_delta.delta.stop_reason`; add `StopKind` with the five normalised values.
+  Do: set `finish_reason` in `decode_event` from OpenAI `choices[].finish_reason` and Anthropic `message_delta.delta.stop_reason`, as the raw string. No enum.
   Accept: unit tests for `stop`, `length`, `end_turn`, `max_tokens`, `model_context_window_exceeded` and a missing reason; the attempt span's `finish_reason` is no longer null in `tests/streaming.rs`.
 - [ ] **C1.2** `feat(model-gateway): compare reported input tokens with the estimate` · sonnet · after C1.1
-  Files: `services/model-gateway/src/{lib,llm}.rs`, tests.
-  Do: estimate input tokens from the exact request body before sending (reuse `estimate_tokens`); after the reply set, on the attempt's `provider` step, `attrs.context = {estimated_in, reported_in, truncated, at_limit, stop}`. `truncated` uses `truncation_ratio`; `at_limit` uses `context_window` when known. Skip when usage is itself estimated.
-  Accept: a mock-LLM test that reports a low `prompt_tokens` gives `truncated: true`; a normal reply gives `false`; nothing changes in routing or the reply.
-- [ ] **C1.3** `test(mock-llm): truncate the front of the context on request` · haiku · after C1.2
-  Files: `tests/e2e/mock_llm.py`, `tests/e2e/mock_llm_test.py`.
-  Do: a mock mode that drops the oldest messages to a size and reports the smaller input count, like Ollama ([ADR 0043](adr/0043-mock-llm.md)).
-  Accept: the gateway test from C1.2 uses it end to end.
+  Files: `services/model-gateway/src/{lib,llm}.rs`, `crates/askbar-proto/src/lib.rs`, `tests/e2e/mock_llm.py`, `tests/e2e/mock_llm_test.py`, tests.
+  Do: estimate input tokens from `sent_chars` (already computed in `stream_chat`); after the reply set, on the attempt span, `attrs.context = {estimated_in, reported_in, truncated, stop}`. `truncated` uses `TRUNCATION_RATIO`. Skip when usage is itself estimated. Add a mock-LLM mode that drops the oldest messages to a size and reports the smaller input count, like Ollama ([ADR 0043](adr/0043-mock-llm.md)).
+  Accept: a mock-LLM test in truncation mode gives `truncated: true`; a normal reply gives `false`; nothing changes in routing or the reply.
 
-### Phase 2: context limits and trimming
+### Phase 2: provider context limit and trimming
 
-- [ ] **C2.1** `feat(proto): add context limits to approved models` · haiku
-  Files: `crates/askbar-proto/src/{lib,gateway}.rs`, tests.
-  Do: `context_window` and `effective_context` on `CatalogEntry`, optional; bounds and defaults next to the field.
-  Accept: old config JSON parses unchanged; the new fields round-trip.
-- [ ] **C2.2** `feat(admin): store and push model context limits` · sonnet · after C2.1
-  Files: `services/admin/src/{db,catalog,gateway_link,server_link,admin_api}.rs`, `docs/openapi/admin.v1.yaml`.
-  Do: append a migration adding the two columns to `catalog_models`; validate `effective_context ≤ context_window`; include both in the gateway config and the server snapshot.
-  Accept: the OpenAPI test passes; a push carries the values; an invalid pair is refused with an `ErrorCode`.
-- [ ] **C2.3** `feat(server): trim history to the model's effective context` · sonnet · after C2.2
+- [ ] **C2.1** `feat(admin): add a context limit to providers` · sonnet · after C1.1
+  Files: `crates/askbar-proto/src/lib.rs`, `services/admin/src/{db,admin_api,gateway_link,server_link}.rs`, `services/admin/src/ui/templates/providers.html`, `services/admin/src/ui/app.js`, `docs/openapi/admin.v1.yaml`, admin browser test.
+  Do: `context_tokens: Option<u32>` on `SnapshotProvider`, the gateway provider config and the provider row, with the same plumbing as `max_tokens`: an admin db migration adding a nullable column, the snapshot and the gateway config. A "Context limit" field in the providers form, with the help text that the effective limit is usually lower than advertised. Bounds next to the field.
+  Accept: old config JSON parses unchanged; the OpenAPI test passes; a push carries the value; the field saves and reloads in the browser test.
+- [ ] **C2.2** `feat(server): trim history to the provider's context limit` · sonnet · after C2.1
   Files: `services/server/src/{llm,generation}.rs`, tests.
-  Do: after `last_turns`, drop the oldest turns until the estimate fits `effective_context − max_tokens`; always keep the system prompt and the newest message; record `trimmed_turns` on the turn span.
+  Do: after `last_turns` in `generation.rs`, drop the oldest turns until the estimate fits `context_tokens − max_tokens`; always keep the system prompt and the newest message; record `trimmed_turns` on the turn span.
   Accept: a test with a small limit sends fewer turns and records the count; no limit set means today's behaviour.
-- [ ] **C2.4** `feat(ui): context limit fields on approved models` · haiku · after C2.2
-  Files: `services/admin/src/ui/templates/providers.html`, `services/admin/src/ui/app.js`, admin browser test.
-  Accept: the fields save and reload; the browser test covers them.
 
 ### Phase 3: echo canary
 
-- [ ] **C3.1** `feat(proto): add canary settings` · haiku
-  Files: `crates/askbar-proto/src/gateway.rs`.
-  Accept: `CanaryConfig` with the defaults above; old config parses.
-- [ ] **C3.2** `feat(model-gateway): add the canary marker filter` · sonnet · after C3.1 and PII-P2.2
-  Files: `services/model-gateway/src/{filter,canary}.rs`, tests.
-  Do: add a marker filter to the `StreamFilter` chain built in [plan-pii-redaction.md](plan-pii-redaction.md) (PII-P2.2), after PII restore.
-  Accept: property tests split markers at every byte boundary and the client never receives a partial marker.
-- [ ] **C3.3** `feat(model-gateway): plant and check the context canary` · sonnet · after C3.2
-  Files: `services/model-gateway/src/{lib,canary}.rs`, tests.
-  Do: in `near_limit` or `always` mode, plant A and B and the instruction; strip the echo with the filter; set `attrs.canary = {planted, outcome, instruction_version}` on a `canary` step; apply `context_action`.
-  Accept: mock-LLM tests for each outcome; nonces appear in no log or attribute (a test greps for them).
-- [ ] **C3.4** `feat(auditor): alert on truncated context` · haiku · after C3.3
-  Files: `crates/askbar-proto/src/alerter.rs`, `services/auditor/src/rules.rs`, tests.
-  Accept: `front_lost` or `truncated` raises `ContextTruncated` once per model per hour; `absent` does not alert.
-- [ ] **C3.5** `feat(ui): canary settings and test button` · sonnet · after C3.3
-  Files: admin settings template, `app.js`, `admin_api.rs`, a gateway admin route `POST /canary/test`, both OpenAPI files.
-  Accept: settings save, push and show in the gateway's status; the test button shows the outcome.
-
-### Phase 4: leak tripwire, decoys, audit canary
-
-- [ ] **C4.1** `feat(model-gateway): system prompt leak tripwire` · sonnet
-  Do: a separate nonce in the system message marked confidential; the filter redacts or records it if it appears in a reply; `CanaryLeak` alert.
-  Accept: a mock reply that echoes the system prompt is caught; normal replies are unaffected.
-- [ ] **C4.2** `feat(admin): decoy admin API key and pairing key` · sonnet
-  Do: create one decoy of each at first run; they never authorise anything; any use records an admin action and raises `DecoyCredentialUsed` (same path as `RejectedToken`, [ADR 0024](adr/0024-rejected-token-alert.md)).
-  Accept: a request with the decoy gets the normal refusal and an alert.
-- [ ] **C4.3** `feat(admin): scheduled audit canary` · sonnet
-  Do: daily, a synthetic turn through the mock provider checks that the span opens, the payload is sealed, the chain grows and the alert path answers. Never counts toward a budget. Off when no mock provider is configured.
-  Accept: breaking any of those steps in a test raises an alert.
-
-### Phase 5: drift probes
-
-- [ ] **C5.1** `feat(model-gateway): scheduled drift probes` · sonnet
-  Do: every `drift_probe_hours`, send a fixed small probe set to each approved metered model. Where the provider returns log-probabilities, compare against a stored baseline with a permutation test (Log Probability Tracking, 2025); otherwise compare answer fingerprints. Record a `probe` attempt under a dedicated turn; tokens count toward a separate small budget.
-  Accept: a mock provider that switches models mid-run raises `ModelDrift`; cost per probe is under 100 tokens.
-
-### Phase 6: injection markers in fetched pages
-
-Web search (track 1) already datamarks fetched text as untrusted. This phase adds a tripwire on top.
-
-- [ ] **C6.1** `feat(server): plant canaries in fetched text` · sonnet · after C3.3
-  Do: put a per-page nonce inside each fetched page's untrusted block; if a reply, a proposed query or a proposed fetch URL contains it, the page steered the model: drop the action, record `injection_suspected` on the tool span, and alert. Don't rely on a detector model that is asked to repeat a secret: the DataFlip attack (2025) defeats it.
-  Accept: a fixture page that tells the model to repeat the hidden text or fetch a URL is flagged; ordinary pages are not.
+- [ ] **C3.1** `feat(model-gateway): plant and check the context canary` · sonnet · after C2.1 and PII-P2.2
+  Files: `crates/askbar-proto/src/gateway.rs`, `services/model-gateway/src/{lib,filter,canary}.rs`, tests.
+  Do: add `canary_enabled` and `CANARY_TRIGGER_PCT`. When enabled, a limit is set and the estimate is at or above the trigger, plant A and B and the instruction. Extend the PII filter struct to hold back and strip marker text. Write `attrs.canary = {planted, outcome, instruction_version}` on a `canary` step span under the attempt (AV2.1).
+  Accept: property tests split markers at every byte boundary and the client never receives a partial marker; mock-LLM tests for each outcome; no canary when no limit is set or below 70%; nonces appear in no log or attribute (a test greps for them).
+- [ ] **C3.2** `feat(auditor): alert on truncated context` · sonnet · after C3.1 and AV2.1
+  Files: `crates/askbar-proto/src/alerter.rs`, `services/auditor/src/{rules,lib}.rs`, tests.
+  Do: add a new `Fed` path for span finish and step records, since `fed_of` maps only `AdminAction`, `Hello` and turn `Start`; raise `ContextTruncated` on `front_lost` or `context.truncated`. Check `services/alerter/src/limits.rs` first and reuse its limits if they fit.
+  Accept: `front_lost` or `truncated` raises one alert within the limits; `absent` does not alert.
+- [ ] **C3.3** `feat(ui): context canary checkbox` · haiku · after C3.1
+  Files: admin settings template, `app.js`, `admin_api.rs`, `docs/openapi/admin.v1.yaml`, admin browser test.
+  Accept: the checkbox saves, pushes and shows in the gateway's status.
 
 ### Later
 
+- **Leak tripwire, decoy credentials, scheduled audit canary, drift probes:** a system prompt leak tripwire; decoy admin credentials (note: `RejectedToken` is raised by the admin's notifier, `services/admin/src/notify.rs`, not the auditor, so decoys belong there); a scheduled audit canary (`ChainMismatch` and `ComponentSilent` already cover most of it); drift probes if a model is ever swapped silently.
+- **Injection markers in fetched pages** (web search ships first; needs the echo canary): a per-page nonce in each fetched page's untrusted block; if a reply or proposed fetch contains it, drop the action and alert. Don't rely on a detector model asked to repeat a secret: the DataFlip attack (2025) defeats it.
 - **Cross-space honeytokens** (with memory): one decoy entry per space; its appearance in another space's request or reply is a space isolation breach.
+- **Canary modes, actions and a test button:** `off`/`always` modes, `alert_and_mark`, a `trigger_pct` setting, a Canaries settings section and `POST /canary/test`, if the single checkbox proves too coarse.
+- **Per-model limits and an effective-context pair:** `context_window` and `effective_context` on each approved model, if one provider ever serves several models.
 
 ## Risks
 
-- **False alarms:** models ignore the echo instruction some of the time. `absent` never alerts, and Phase 3 starts in `record` mode.
-- **Reply quality:** the instruction costs about 40 input tokens and one line of output. `near_limit` mode limits it to long contexts.
+- **False alarms:** models ignore the echo instruction some of the time. `absent` never alerts; watch its rate in the model calls list.
+- **Reply quality:** the instruction costs about 40 input tokens and one line of output. The 70% trigger limits it to long contexts.
 - **Prompt caching:** markers change every attempt. Plant marker B after the cached prefix, or skip the canary on providers where cache hits matter more; measure in Phase 3.
+- **Wrong limit:** a limit set too high means no trim and no canary trigger. The help text says to set it below the advertised window.
 
 ## Sources
 

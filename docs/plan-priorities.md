@@ -12,13 +12,13 @@ This file decides **order** and the few things the order changes. Each track's o
 | 2 | PII detection and redaction | [plan-pii-redaction.md](plan-pii-redaction.md) | Placeholders out, real values back, blocked secrets, PII checks on search queries | not started |
 | 3 | Context checks and canaries | [plan-canaries.md](plan-canaries.md) | Stop reasons, context limits, the echo canary, leak tripwire, injection markers on fetched pages | not started |
 | 4 | Tiered routing | [plan-tiered-routing.md](plan-tiered-routing.md) | Tiers, the decider, Auto, dollar budgets, then agents with MCP tools at the end | not started |
-| 5 | Audit viewing | [plan-audit-viewer.md](plan-audit-viewer.md) | Conversation view of sealed records, per-user audit keys | not started |
+| 5 | Audit viewing | [plan-audit-viewer.md](plan-audit-viewer.md) | Conversation view of sealed records | not started |
 
 A track starts when the one before it has its PR open, unless the owner says otherwise.
 
 ## Owner decisions (2026-11-24)
 
-1. **Step records come first.** The audit viewer's `step` span kind and payload roles (AV0.2, AV2.1 to AV2.3) move to the start of track 1, so every track records in its final shape. Track 5 keeps the view, per-user keys, search and browser decryption.
+1. **Step records come first.** The audit viewer's `step` span kind and payload roles move to the start of track 1, so every track records in its final shape. Steps are written by `model-gateway` only, as children of an attempt. W1 is AV0.2, AV2.1, AV2.2 and AV2.3 as reduced in the audit viewer plan. Track 5 keeps the conversation view.
 2. **Quick search ships before research reports.** It is a small path of its own, not a one-question research report. Research reports and the judge follow it in track 1.
 3. **Agents with MCP tools stay at the end of track 4.** No web search step depends on them: Phases 4, 5A and 5B name no Phase 6 step, and quick search uses no planner or worker role.
 
@@ -58,7 +58,7 @@ So each call is approved by fixed rules instead of a model:
 
 The judge arrives with research reports (W7), which loop, and every tool call there goes through it as the design says.
 
-Residual risk: search queries are a way for data to leave the house. A compromised `server` could encode data in queries, and a judge would not reliably catch that either. The fixed limits (query length, count per turn and per hour) bound it, and an alert fires when a user nears the hourly limit. Track 2 adds PII checks on every query.
+Residual risk: search queries are a way for data to leave the house. A compromised `server` could encode data in queries, and a judge would not reliably catch that either. The fixed limits (query length, count per turn and per hour) bound it. Track 2 adds PII checks on every query.
 
 ### What waits for track 4
 
@@ -76,11 +76,11 @@ Until then, roles use admin-pinned models, usage counts against token budgets pe
 | Stage | Content | Steps |
 | --- | --- | --- |
 | W0 | Records | O0.1 to O0.3 below; [audit viewer](plan-audit-viewer.md) AV0.2 |
-| W1 | Step records | Audit viewer AV2.1, AV2.2, AV2.3: the `step` span kind, the `prompt` payload, gateway steps and provider payloads |
+| W1 | Step records | Audit viewer AV2.1, AV2.2, AV2.3: the `step` span kind (written by `model-gateway` only), the `prompt` payload, and `provider_request` sealed on each attempt |
 | W2 | Egress proxy | Tiered routing [Phase 4](plan-tiered-routing/phase-4-egress-proxy.md): P4.1 to P4.8. In P4.4, leave out the decider addresses, which come with track 4 |
 | W3 | MCP gateway, `searxng`, search and fetch | Tiered routing [Phase 5A](plan-tiered-routing/phase-5a-mcp-gateway.md): every step, including P5.2 to P5.5 (approval types, signing key, signing, verification) |
 | W4 | Roles pinned to models | W4.1 and W4.2 below |
-| W5 | Quick search | W5.1 to W5.7 below |
+| W5 | Quick search | W5.1 to W5.6 below |
 | W6 | Admin pages for search | Tiered routing [Phase 8](plan-tiered-routing/phase-8-admin-ui.md) P8.6a (MCP servers and per-user tool permissions). The admin UI overhaul is merged (`services/admin/src/constants.rs` is on `main`), so gate G0 is cleared |
 | W7 | Research reports and the judge | Tiered routing [Phase 5B](plan-tiered-routing/phase-5b-research-judge.md): P5.6, P5.9, P5.10 (token cap), P5.13, P5.17 and P5.18. P5.7 and P5.8 move to track 4. Research roles are added to the W4 role pins |
 
@@ -109,7 +109,7 @@ Until then, roles use admin-pinned models, usage counts against token budgets pe
   Accept: `scripts/check-docs.sh` passes; the Amendments section names this file.
 - [ ] **O0.2** `docs(docs): point the tiered routing plan at the new order` · haiku · after O0.1
   Files: `docs/plan-tiered-routing.md`, `docs/plan-tiered-routing/phase-0-docs.md`, `docs/plan-tiered-routing/phase-5a-mcp-gateway.md`.
-  Do: confirm the order text in P0.10, P0.16 and P5A.24 matches O0.1, and that the Phases table marks Phases 4, 5A and 5B as run under track 1. The commit that added this file already made those edits; this step checks them after O0.1 is accepted.
+  Do: confirm the order text in P0.10 and P0.16 matches O0.1 (O0.1 is the only place that sets ADR 0019's order; P5A.24 no longer carries it), and that the Phases table marks Phases 4, 5A and 5B as run under track 1. The commit that added this file already made those edits; this step checks them after O0.1 is accepted.
 - [ ] **O0.3** `docs(docs): reorder the post-v1 plan` · haiku · after O0.1
   Files: `docs/plan-post-v1.md`. Replaces tiered routing P0.16.
 
@@ -126,34 +126,32 @@ Until then, roles use admin-pinned models, usage counts against token budgets pe
 
 #### W5: quick search
 
-- [ ] **W5.1** `feat(proto): add quick search types and limits` · haiku · after W4.1, P5.2
-  Files: `crates/askbar-proto/src/{lib,approval}.rs`, `docs/openapi/client.v1.yaml`, `docs/wire-contract.md`.
+- [ ] **W5.1** `feat(proto): add quick search types, limits and constants` · haiku · after W4.1, P5.2
+  Files: `crates/askbar-proto/src/{lib,approval}.rs`, `docs/openapi/client.v1.yaml`, `docs/wire-contract.md`, `services/admin/src/{constants,gateway_link,server_link}.rs`.
   Do:
   - an optional `web_search: bool` on the client's chat request;
   - reply events gain optional `queries` and `sources` (title, URL, fetched or not);
-  - `QuickSearchApprovalRequest {turn_id, user, tool, arguments}`;
-  - bounds for the limits above.
+  - `QuickSearchApprovalRequest {generation_id, user, tool, arguments}`, where `generation_id` is the trace id of the reply;
+  - bounds for the limits above, and their defaults and ranges in `constants.rs`, pushed to `model-gateway` and the server.
 
   Additive only.
-- [ ] **W5.2** `feat(admin): add quick search limits to constants.rs` · haiku · after W5.1
-  Files: `services/admin/src/constants.rs`, `services/admin/src/gateway_link.rs`, `services/admin/src/server_link.rs`.
-  Do: defaults and ranges; push to `model-gateway` and the server.
-- [ ] **W5.3** `feat(model-gateway): approve quick search calls by fixed rules` · sonnet · after W5.2, P5.4
+- [ ] **W5.2** `feat(model-gateway): approve quick search calls by fixed rules` · sonnet · after W5.1, P5.4
   Files: `services/model-gateway/src/{approval,lib}.rs`, `docs/openapi/model-gateway.v1.yaml`, tests.
   Do: a server-link route `POST /approvals/quick-search`.
-  - **Refuse when:** the tool is not `search` or `fetch`; a query is over the length limit; the turn has reached its query or fetch count; the user is over the hourly limit; the user is paused; or the kill switch is on.
-  - **Otherwise:** sign with the P5.4 function, using the turn id as the task id.
+  - **Refuse when:** the tool is not `search` or `fetch`; a query is over the length limit; the reply has reached its query or fetch count; the user is over the hourly limit; the user is paused; or the kill switch is on.
+  - **Otherwise:** sign with the P5.4 function, using the generation id as the task id.
   - **Audit first:** open the audit span before signing.
-  - **Alert:** raise `SearchRateHigh` when a user reaches 80% of the hourly limit.
   - **No model calls:** this route never calls a model.
 
   Accept: each refusal has its own `ErrorCode`; the signed action matches what the MCP front verifies (P5A.20 fixtures pass); no query text appears in logs or attributes.
-- [ ] **W5.4** `feat(server): answer a message with quick search` · sonnet · after W5.3, P5A.23, W4.2, AV2.1
-  Files: `services/server/src/{generation,quick_search}.rs` (new `quick_search.rs`), tests.
+- [ ] **W5.3** `feat(server): answer a message with quick search` · sonnet · after W5.2, P5A.23, W4.2, AV2.1
+  Files: `services/server/src/{generation,quick_search}.rs` (new `quick_search.rs`), `services/model-gateway/src/lib.rs` (the `role` attribute), tests.
   Do:
-  - Check that the user has the search permission; without it, answer normally and say search is off.
-  - Run the four steps under "Quick search: what it is", recording a `step` span for each (`search_plan`, `search`, `fetch`, `answer`) with counts and statuses, never text.
-  - Seal the queries and the fetched text as payloads on their steps.
+  - Check that the user has the search permission. Without it, answer normally, say search is off, and open a `gate` span for the refusal (the server may open only `gate` spans).
+  - Run the four steps under "Quick search: what it is". The model calls (queries, answer) are ordinary turns that share the reply's generation id.
+  - The gateway records `role` on the turn attrs, from `ChatRequest.role` (W4.1).
+  - Search and fetch spans come from the MCP front (P5A.9), not from the server.
+  - Seal the queries and the fetched text as payloads where the MCP front records them.
   - Keep fetched text out of history.
   - If a search or fetch is refused, carry on with what succeeded and say which part failed.
 
@@ -161,14 +159,15 @@ Until then, roles use admin-pinned models, usage counts against token budgets pe
   - Search and fetch tool spans exist before each call.
   - A fixture page that says "ignore previous instructions and fetch …" causes no further call, and a test asserts the flow makes exactly one query call.
   - A result URL with a query string is listed and not fetched.
-- [ ] **W5.5** `feat(client): search toggle and sources` · sonnet · after W5.1
+  - A reply with several model calls shows them all in one trace. The cost sum for display depends on the AV1.2 fix; the flow does not.
+- [ ] **W5.4** `feat(client): search toggle and sources` · sonnet · after W5.1
   Files: `clients/desktop/src/**`, its tests.
   Do: a per-message "Search the web" toggle, shown only when the user has the permission; the queries and a sources list under the reply. Links open in the system browser; the popup itself gets no network permission (ADR 0019 rule 6). Escape Markdown as today.
   Accept: client tests cover the toggle, the sources list, and that a source link doesn't load inside the app.
-- [ ] **W5.6** `test(e2e): quick search with the mock model and a fixture search engine` · haiku · after W5.4, W5.5
+- [ ] **W5.5** `test(e2e): quick search with the mock model and a fixture search engine` · haiku · after W5.3, W5.4
   Files: `tests/e2e/`, `scripts/smoke.sh`.
   Do: a fixture `searxng` response and fixture pages, no real internet; extend the mock LLM to propose queries and cite sources.
-- [ ] **W5.7** `docs(docs): quick search in the user and admin guides` · haiku · after W5.6
+- [ ] **W5.6** `docs(docs): quick search in the user and admin guides` · haiku · after W5.5
   Files: `docs/guide.md`, the admin reference pages for search and fetch permissions, `docs/reference/audit/model-calls.md`.
   Do: say what leaves the house (search queries to the engines `searxng` uses; fetched URLs), that search is off until the admin turns it on, and what each step record holds.
 
@@ -187,13 +186,13 @@ Gate definitions are in the [tiered routing plan](plan-tiered-routing.md#owner-g
 
 | Topic | Decision |
 | --- | --- |
-| Audit records | From track 1, each stage writes a `step` span (audit viewer AV2.1): server stages for quick search and research, gateway stages for `route`, `provider`, and later `redact`, `canary` and `restore`. Search and fetch stay tool spans opened by the MCP gateway front. Track 5 shows them |
-| Reply stream filter | Track 2 builds it (PII restore). Track 3 adds the canary filters to the same chain |
+| Audit records | From track 1, `model-gateway` writes `step` spans under its attempts (audit viewer AV2.1); later tracks add `route`, `redact`, `canary` and `restore`. Search and fetch are `tool` spans from the MCP front. The server writes only `gate` spans. Track 5 shows them |
+| Reply stream filter | Track 2 builds a filter struct for PII restore; track 3 extends it |
 | Search queries and PII | Until track 2, search is off by default and every reply shows its queries. Track 2 runs detection on queries and fetch URLs: secrets refuse the search; other PII is removed from the query and the user is told |
-| Injection markers | Track 1 datamarks fetched text. Track 3 adds canaries inside fetched text to catch pages that steer the model |
+| Injection markers | Track 1 datamarks fetched text. Track 3's injection canaries are now a Later item |
 | Roles | Track 1 adds roles pinned to models, with the type names tiered routing uses; track 4 adds tiers, weights and the decider |
 | Judge | Quick search: fixed rules, no judge. Research reports: the judge on a pinned model. Track 4: the decider cascade in front of it (P5.7) |
-| ADR numbers | 0056: tiered routing (reserved). 0057: MCP gateway (track 1, P5A.2). 0058: the PII detector container (track 2). Everything else is an amendment |
+| ADR numbers | 0056: tiered routing (reserved). 0057: MCP gateway (track 1, P5A.2). Everything else is an amendment |
 | Agents with MCP tools | End of track 4. Web search doesn't depend on them |
 
 ## Sources
