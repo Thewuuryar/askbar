@@ -1,5 +1,7 @@
 # Plan: after v1
 
+Previous: [Canaries](plan-canaries.md) · Next: [Container hardening](plan-container-hardening.md) · Tracker: [task-tracker.md](task-tracker.md)
+
 Status: tracker for work after 1.0. The tool rules are decided in [ADR 0019](adr/0019-post-v1-order-and-tools.md); the order of work is in its proposed amendment and in step O0.1 of [plan-priorities.md](plan-priorities.md), and takes effect when the owner accepts it. Executor pairing is in [ADR 0020](adr/0020-remote-executor-and-ca-triggers.md) (executor pairing, tunnel, CA triggers). This file keeps the v2 picture and the repo decisions that are not yet an ADR. Container hardening proposals are in [plan-container-hardening.md](plan-container-hardening.md).
 
 ## V2 sketch

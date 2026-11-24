@@ -1,5 +1,7 @@
 # Plan: harden the containers
 
+Previous: [After v1](plan-post-v1.md) · Next: [One image](plan-single-image.md) · Tracker: [task-tracker.md](task-tracker.md)
+
 Status: tracker for hardening work not yet decided or built. The v1 container settings are decided in [ADR 0032](adr/0032-container-hardening.md). The egress proxy ships first after v1 ([ADR 0006](adr/0006-v1-outbound-access-and-alerts.md), [ADR 0019](adr/0019-post-v1-order-and-tools.md)).
 
 ## Why

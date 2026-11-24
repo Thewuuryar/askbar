@@ -1,5 +1,7 @@
 # Phase 2: shadow (branch `feat/routing-shadow`)
 
+Previous: [Phase 1](phase-1-records.md) · Next: [Phase 3](phase-3-auto.md) · Tracker: [task-tracker.md](../task-tracker.md)
+
 Part of [the tiered routing plan](../plan-tiered-routing.md). Its How to run, Owner gates and Assumptions sections apply to every step here.
 
 The decider records its pick while users' chosen models route.

@@ -1,5 +1,7 @@
 # Phase 6: agents with MCP tools (branch `feat/agents`)
 
+Previous: [Phase 5B](phase-5b-research-judge.md) · Next: [Phase 8](phase-8-admin-ui.md) · Tracker: [task-tracker.md](../task-tracker.md)
+
 Part of [the tiered routing plan](../plan-tiered-routing.md). Its How to run, Owner gates and Assumptions sections apply to every step here.
 
 Agents use MCP tools only; there is no executor and no G10 (the executor is Phase 9). Needs Phase 5A, Phase 5B and G0. It reuses Phase 5B's task tables (P5.9), tool-call limit and cost cap (P5.10), `/decide` (P5.6, P5.8) and role table (P5.14); do not rebuild them. Every tool call goes `server` to `/decide` (use `judge`) to a signed approval to the MCP gateway front; tool output is untrusted data and never reaches the judge. New behaviour values (maximum steps per plan, the fixer round limit) go in `constants.rs` with bounds in `askbar-proto`.

@@ -1,5 +1,7 @@
 # Plan: tiered model routing
 
+Previous: [Audit viewer](plan-audit-viewer.md) · Next: [Phase 0](plan-tiered-routing/phase-0-docs.md) · Tracker: [task-tracker.md](task-tracker.md)
+
 Status: proposed, after 1.0. **Order:** [plan-priorities.md](plan-priorities.md) runs Phases 4, 5A and 5B (except P5.7 and P5.8) and P8.6a first, as the web search track, with research and judge roles pinned to models; the rest of this plan is track 4, after PII redaction and canaries. Do not start Phase 1 until tracks 1 to 3 have their PRs open. Nothing here is decided until [ADR](adr/README.md) for tiered routing (number assigned when written) and the amendments in Phase 0 are accepted. This file and one file per phase in [plan-tiered-routing/](plan-tiered-routing/) replace the older local-only classification plan of the same name; the boxes in the phase files track progress.
 
 Design: [design-tiered-routing.md](design-tiered-routing.md) (committed in P0.1 from the design file the owner gives the first session). The design wins on behaviour; this plan wins on order. The new ADR has no number until it is written; it takes the next free one (0056 is the egress proxy ADR, 0055 the alerter).

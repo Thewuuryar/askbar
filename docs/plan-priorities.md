@@ -1,5 +1,7 @@
 # Plan: order of work after 1.0
 
+Previous: [Refactor](plan-refactor.md) · Next: [Audit viewer](plan-audit-viewer.md) · Tracker: [task-tracker.md](task-tracker.md)
+
 Status: proposed, 2026-11-23; owner decisions added 2026-11-24. The order below is the owner's. The owner accepted the amendment to [ADR 0019](adr/0019-post-v1-order-and-tools.md) in step O0.1 on 2026-11-24, so the order is in effect. Rules for agents: [AGENTS.md](../AGENTS.md). How every plan runs: [orchestration.md](orchestration.md).
 
 This file decides **order** and the few things the order changes. Each track's own plan decides behaviour and holds the steps. Where a track reuses steps from another plan, this file names them by ID instead of copying them.
@@ -8,8 +10,8 @@ This file decides **order** and the few things the order changes. Each track's o
 
 | # | Track | Plan | Delivers | Status |
 | --- | --- | --- | --- | --- |
-| 0 | Refactor | [plan-refactor.md](plan-refactor.md) | Less duplicated code, before track 1 adds three services, new links and new checks on top of it. No behaviour change | not started |
-| 1 | Web search | this file, then the [tiered routing](plan-tiered-routing.md) and [audit viewer](plan-audit-viewer.md) steps it names | Step records, search and fetch through the MCP gateway, quick search in chat, then research reports and the judge | not started |
+| 0 | Refactor | [plan-refactor.md](plan-refactor.md) | Less duplicated code, before track 1 adds three services, new links and new checks on top of it. No behaviour change | done |
+| 1 | Web search | this file, then the [tiered routing](plan-tiered-routing.md) and [audit viewer](plan-audit-viewer.md) steps it names | Step records, search and fetch through the MCP gateway, quick search in chat, then research reports and the judge | in progress |
 | 2 | PII detection and redaction | [plan-pii-redaction.md](plan-pii-redaction.md) | Placeholders out, real values back, blocked secrets, PII checks on search queries | not started |
 | 3 | Context checks and canaries | [plan-canaries.md](plan-canaries.md) | Stop reasons, context limits, the echo canary, leak tripwire, injection markers on fetched pages | not started |
 | 4 | Tiered routing | [plan-tiered-routing.md](plan-tiered-routing.md) | Tiers, the decider, Auto, dollar budgets, then agents with MCP tools at the end | not started |
@@ -27,6 +29,38 @@ A track starts when the one before it has its PR open, unless the owner says oth
 | RL | Track 3 |
 
 W0 is docs only and runs alongside R1.
+
+## Plan index
+
+Every plan in reading order. Each carries a `Previous / Next / Tracker` line at the top; [task-tracker.md](task-tracker.md) lists every step. A plan used by several tracks sits where its first step runs, and the tiered routing phases keep their phase order, so Phases 4, 5A, 5B and 8 (track 1) come after Phases 0 to 3 (track 4).
+
+| # | Plan | Used by | Status |
+| --- | --- | --- | --- |
+| 1 | [plan-refactor.md](plan-refactor.md) | track 0 | done |
+| 2 | [plan-priorities.md](plan-priorities.md) (this file: O0, W4, W5) | track 1 | in progress |
+| 3 | [plan-audit-viewer.md](plan-audit-viewer.md) | W1, then track 5 | in progress |
+| 4 | [plan-tiered-routing.md](plan-tiered-routing.md) (overview, gates) | tracks 1 and 4 | in progress |
+| 5 | [Phase 0: records and docs](plan-tiered-routing/phase-0-docs.md) | track 4 | in progress |
+| 6 | [Phase 1: records](plan-tiered-routing/phase-1-records.md) | track 4 | not started |
+| 7 | [Phase 2: shadow](plan-tiered-routing/phase-2-shadow.md) | track 4 | not started |
+| 8 | [Phase 3: Auto](plan-tiered-routing/phase-3-auto.md) | track 4 | not started |
+| 9 | [Phase 4: egress proxy](plan-tiered-routing/phase-4-egress-proxy.md) | W2 | in progress |
+| 10 | [Phase 5A: MCP gateway](plan-tiered-routing/phase-5a-mcp-gateway.md) | W3 | in progress |
+| 11 | [Phase 5B: research and judge](plan-tiered-routing/phase-5b-research-judge.md) | W7, then track 4 | not started |
+| 12 | [Phase 6: agents](plan-tiered-routing/phase-6-agents.md) | end of track 4 | not started |
+| 13 | [Phase 8: admin UI](plan-tiered-routing/phase-8-admin-ui.md) | W6, then track 4 | not started |
+| 14 | [Phase 9: executor](plan-tiered-routing/phase-9-executor.md) | deferrable | not started |
+| 15 | [Phase 10: script library](plan-tiered-routing/phase-10-script-library.md) | deferrable | not started |
+| 16 | [Risks and open questions](plan-tiered-routing/risks.md) | owner reading, no steps | not started |
+| 17 | [plan-pii-redaction.md](plan-pii-redaction.md) | track 2 | not started |
+| 18 | [plan-canaries.md](plan-canaries.md) | track 3 | not started |
+| 19 | [plan-post-v1.md](plan-post-v1.md) | V2 sketch, no steps | not started |
+| 20 | [plan-container-hardening.md](plan-container-hardening.md) | proposals, no steps | not started |
+| 21 | [plan-single-image.md](plan-single-image.md) | proposed, no steps (G-R2) | not started |
+| 22 | [plan-release-branches.md](plan-release-branches.md) | proposed, no steps | not started |
+| 23 | [plan-admin-redesign.md](plan-admin-redesign.md) | finished, kept as the redesign record | done |
+
+Not plans, so outside the order: [orchestration.md](orchestration.md) (how every plan runs) and [design-tiered-routing.md](design-tiered-routing.md) (the design the tiered routing plan cites; it stays in `docs/` beside it).
 
 ## How to run
 

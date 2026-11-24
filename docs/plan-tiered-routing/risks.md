@@ -1,5 +1,7 @@
 # Risks and open questions for the owner
 
+Previous: [Phase 10](phase-10-script-library.md) · Next: [PII redaction](../plan-pii-redaction.md) · Tracker: [task-tracker.md](../task-tracker.md)
+
 Part of [the tiered routing plan](../plan-tiered-routing.md). For the owner; the orchestrator does not need this file.
 
 - **Decider outage or latency.** Every Auto chat depends on it; failures go to `default_tier`; measure p95 per provider in shadow.

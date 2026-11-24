@@ -1,5 +1,7 @@
 # Plan: conversation view for sealed audit records
 
+Previous: [Order of work](plan-priorities.md) · Next: [Tiered routing](plan-tiered-routing.md) · Tracker: [task-tracker.md](task-tracker.md)
+
 Status: proposed, after 1.0. Track 5, the last, in [plan-priorities.md](plan-priorities.md). By owner decision (2026-11-24), the step records (AV0.2 and AV2.1 to AV2.3) run first, as stage W1 of track 1, so every later track records in this shape; the rest of this plan stays in track 5. Nothing here is decided until the owner accepts the ADR amendments in Phase 0. Rules for agents: [AGENTS.md](../AGENTS.md).
 
 Related plans: [context checks and canaries](plan-canaries.md) and [PII detection and redaction](plan-pii-redaction.md) add the gateway steps this view shows; [tiered routing](plan-tiered-routing.md) adds the routing decision record.

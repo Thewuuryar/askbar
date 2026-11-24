@@ -1,5 +1,7 @@
 # Plan: PII detection and redaction in model-gateway
 
+Previous: [Tiered routing risks](plan-tiered-routing/risks.md) · Next: [Canaries](plan-canaries.md) · Tracker: [task-tracker.md](task-tracker.md)
+
 Status: proposed, after 1.0. Track 2 in [plan-priorities.md](plan-priorities.md): it starts after web search. Nothing here is decided until the owner accepts the ADR work in Phase 0. Rules for agents: [AGENTS.md](../AGENTS.md).
 
 Related plans: [context checks and canaries](plan-canaries.md), which adds to the reply stream filter this plan builds, and [audit record viewing](plan-audit-viewer.md), which shows what this plan records.

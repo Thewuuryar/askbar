@@ -1,5 +1,7 @@
 # Phase 3: Auto (branch `feat/routing-auto`)
 
+Previous: [Phase 2](phase-2-shadow.md) · Next: [Phase 4](phase-4-egress-proxy.md) · Tracker: [task-tracker.md](../task-tracker.md)
+
 Part of [the tiered routing plan](../plan-tiered-routing.md). Its How to run, Owner gates and Assumptions sections apply to every step here.
 
 Routed calls, Auto in chat, the client controls. Auto stays hidden until G7.
