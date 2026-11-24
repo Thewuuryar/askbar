@@ -29,4 +29,4 @@ A compromised `model-gateway`, `cpa` or `alerter` reaches only the hosts its pro
 ## Amendments
 
 - 2026-11-10: two alternatives with the same reason are one line. No decision changed.
-- 2026-11-24 (proposed, needs the owner's approval in this pull request): the egress proxy shipped ([0056](0056-egress-proxy.md)). Direct outbound ended for `model-gateway`, `cpa` and `alerter`; Caddy keeps its route for certificates. The alerter's mail goes through the proxy's SMTP relay, with no exception to this ADR. `cpa` reaches only Anthropic and OpenAI hosts, and the proxy denies by default. Reason: the proxy is now the one route out for those services, so the body describes that state.
+- 2026-11-24 (accepted by the owner): the egress proxy shipped ([0056](0056-egress-proxy.md)). Direct outbound ended for `model-gateway`, `cpa` and `alerter`; Caddy keeps its route for certificates. The alerter's mail goes through the proxy's SMTP relay, with no exception to this ADR. `cpa` reaches only Anthropic and OpenAI hosts, and the proxy denies by default. Reason: the proxy is now the one route out for those services, so the body describes that state.
