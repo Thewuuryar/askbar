@@ -1081,6 +1081,12 @@ fn seal_request(state: &AppState, fin: &mut Finisher, system: &str, history: &[C
     if let Ok(sealed) = crate::seal::seal(key, kept.as_bytes()) {
         state.audit.payload(&fin.turn_span, "request", sealed);
     }
+    // The new message alone: `request` is cut from its end, so with a long history it can lose the newest message.
+    if let Some(new) = history.iter().rev().find(|m| m.role == "user") {
+        if let Ok(sealed) = crate::seal::seal(key, cut(&new.content, MAX_PAYLOAD_BYTES).as_bytes()) {
+            state.audit.payload(&fin.turn_span, "prompt", sealed);
+        }
+    }
 }
 
 /// Starts the oldest message waiting in `conversation_id`, if any: its question is stored now, so
