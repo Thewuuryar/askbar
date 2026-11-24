@@ -1,5 +1,7 @@
 # Phase 0: records and docs (branch `docs/tiered-routing-adr`)
 
+Previous: [Tiered routing](../plan-tiered-routing.md) · Next: [Phase 1](phase-1-records.md) · Tracker: [task-tracker.md](../task-tracker.md)
+
 Part of [the tiered routing plan](../plan-tiered-routing.md). Its How to run, Owner gates and Assumptions sections apply to every step here.
 
 Docs only. Ends with G1.

@@ -1,5 +1,7 @@
 # Phase 1: records only (branch `feat/routing-records`)
 
+Previous: [Phase 0](phase-0-docs.md) · Next: [Phase 2](phase-2-shadow.md) · Tracker: [task-tracker.md](../task-tracker.md)
+
 Part of [the tiered routing plan](../plan-tiered-routing.md). Its How to run, Owner gates and Assumptions sections apply to every step here.
 
 Models, tiers, prices, decision records, dollar budgets and subscription reads. No routing change: every call goes where it goes today. Needs G0 and G1. Every behaviour value a step adds goes in `constants.rs`, bounds in `askbar-proto` when a service checks it.

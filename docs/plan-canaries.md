@@ -1,5 +1,7 @@
 # Plan: context checks and canaries in model-gateway
 
+Previous: [PII redaction](plan-pii-redaction.md) · Next: [After v1](plan-post-v1.md) · Tracker: [task-tracker.md](task-tracker.md)
+
 Status: proposed, after 1.0. Track 3 in [plan-priorities.md](plan-priorities.md): it starts after web search and PII redaction. Nothing here is decided until the owner accepts the ADR work in Phase 0. This is the smallest version that gives the owner a canary in model calls that detects context overflow, set in the admin UI. Rules for agents: [AGENTS.md](../AGENTS.md).
 
 Related plans: [PII detection and redaction](plan-pii-redaction.md), which builds the reply stream filter this plan extends, and [audit record viewing](plan-audit-viewer.md), which shows what this plan records.

@@ -1,6 +1,8 @@
 # Plan: simplify the code before track 1
 
-Status: proposed, 2026-11-24. Track 0 in [plan-priorities.md](plan-priorities.md). Runs as [orchestration.md](orchestration.md) says. No behaviour changes: every API, payload, record, check and UI stays as it is.
+Next: [Order of work](plan-priorities.md) · Tracker: [task-tracker.md](task-tracker.md)
+
+Status: done (every step ticked on `main`, 2026-11-24). Track 0 in [plan-priorities.md](plan-priorities.md). Runs as [orchestration.md](orchestration.md) says. No behaviour changes: every API, payload, record, check and UI stays as it is.
 
 ## Why
 

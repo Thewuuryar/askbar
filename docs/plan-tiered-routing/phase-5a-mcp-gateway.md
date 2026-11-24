@@ -1,5 +1,7 @@
 # Phase 5A: MCP gateway (branch `feat/mcp-gateway`)
 
+Previous: [Phase 4](phase-4-egress-proxy.md) · Next: [Phase 5B](phase-5b-research-judge.md) · Tracker: [task-tracker.md](../task-tracker.md)
+
 Part of [the tiered routing plan](../plan-tiered-routing.md). Its How to run, Owner gates and Assumptions sections apply to every step here.
 
 The MCP gateway is a purpose-built Rust service in this repo, the same call the owner made for the egress proxy (G13, decided 2026-11-24: no third-party gateway): component and compose service `mcp-gateway`, crate `services/mcp-gateway` (package `askbar-mcp-gateway`), API `/api/mcp-gateway/v1` ([ADR 0022](../adr/0022-api-path-conventions.md) pattern), uid 10007, the MCP gateway ADR (P5A.2). `search` and `fetch` are native in-process tools. Its API is REST with problem+json, so W3 has no MCP wire code. `rmcp` (the Rust MCP client) and a third-party MCP server come only at G16, as one more tool kind in the front's registry; agentgateway is the runner-up, to be added then as one upstream behind the same front.

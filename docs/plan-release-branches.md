@@ -1,5 +1,7 @@
 # Plan: release branches, and patches beside the next minor
 
+Previous: [One image](plan-single-image.md) · Next: [Admin redesign](plan-admin-redesign.md) · Tracker: [task-tracker.md](task-tracker.md)
+
 Status: proposed. Not built, and not decided: it changes the release rule in [ADR 0018](adr/0018-releases-and-migrations.md), so the owner decides first.
 
 ## Goal

@@ -1,6 +1,8 @@
 # Plan: finish the admin redesign (phases 5–8)
 
-Status: tracker for the admin redesign after phases 1–4 (built on `claude/trusting-thompson-3vv2sw`, last commit `f919500`). It rewrites phases 5–8 of the owner's "Askbar admin redesign: implementation plan" (Nov 15, 2026) for a Sonnet 5.5 orchestrator that hands most steps to Haiku. Design source: the canvas [Askbar admin redesign options](https://claude.ai/artifact/EwuJTn1gRAGMqUu32qyea8), page "3 · Components and pages". Rules for agents: [AGENTS.md](../AGENTS.md).
+Previous: [Release branches](plan-release-branches.md) · Tracker: [task-tracker.md](task-tracker.md)
+
+Status: done, merged in #117; kept as the record of the redesign rules (Appendices A and B). Was: tracker for the admin redesign after phases 1–4 (built on `claude/trusting-thompson-3vv2sw`, last commit `f919500`). It rewrites phases 5–8 of the owner's "Askbar admin redesign: implementation plan" (Nov 15, 2026) for a Sonnet 5.5 orchestrator that hands most steps to Haiku. Design source: the canvas [Askbar admin redesign options](https://claude.ai/artifact/EwuJTn1gRAGMqUu32qyea8), page "3 · Components and pages". Rules for agents: [AGENTS.md](../AGENTS.md).
 
 ## Start here
 

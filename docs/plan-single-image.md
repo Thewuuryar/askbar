@@ -1,5 +1,7 @@
 # Plan: one image, two run modes
 
+Previous: [Container hardening](plan-container-hardening.md) · Next: [Release branches](plan-release-branches.md) · Tracker: [task-tracker.md](task-tracker.md)
+
 Status: proposed. The decision it needs is written out as an ADR in [Proposed ADR](#proposed-adr), not yet filed. Nothing here is decided until the owner accepts it and approves the rule changes below ([AGENTS.md](../AGENTS.md), "Stop and ask first"). This is not v1 scope ([ADR 0002](adr/0002-v1-scope-limits-and-ship-criteria.md)).
 
 ## Why

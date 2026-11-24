@@ -1,5 +1,7 @@
 # Phase 8: admin web UI (branch `feat/admin-routing-ui`, deferred)
 
+Previous: [Phase 6](phase-6-agents.md) · Next: [Phase 9](phase-9-executor.md) · Tracker: [task-tracker.md](../task-tracker.md)
+
 Part of [the tiered routing plan](../plan-tiered-routing.md). Its How to run, Owner gates and Assumptions sections apply to every step here.
 
 May start any time after G0 (G12 is the same gate); numbered after Phase 6, with Phases 9 and 10 (deferrable) behind it. Expand at phase start; follow the admin redesign plan's rules and its test suite (`tests/e2e/admin.test.js`).
