@@ -68,7 +68,7 @@ Branch `refactor/audit-and-generation`. PR title `refactor(auditor): simplify th
   Files: `crates/askbar-audit/src/lib.rs`, new `crates/askbar-audit/src/tests.rs`.
   Do: move the `mod tests` block as it is to `src/tests.rs` and declare it with `#[cfg(test)] mod tests;`.
   Accept: the same test count passes.
-- [ ] **R1.6** `refactor(server): one sqlite open and migrate helper` · sonnet
+- [x] **R1.6** `refactor(server): one sqlite open and migrate helper` · sonnet
   Files: `services/server/src/{db,space}.rs`.
   Do: one `open_migrated(conn, migrations, app_id, upto)` replaces the copied `open`, `open_in_memory`, `init` (the pragmas) and `migrate` (the `user_version` and `application_id` checks and the migration loop). `upto` keeps the test hook `Db::migrate(upto)` needs. Use `auth::now` for the copied `now()`.
   Leave the admin and `askbar-audit` copies alone: sharing them would need `rusqlite` in `askbar-service`.

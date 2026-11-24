@@ -6,10 +6,10 @@
 //! records how many have been applied. A database that this build did not
 //! create, or that is newer than it, is refused rather than touched.
 
+use crate::auth::now;
 use crate::ids::new_id;
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Stamped into `PRAGMA application_id` by the first migration ("ASKB"), so a
 /// database from an older Askbar version is never mistaken for this schema.
@@ -253,8 +253,28 @@ pub struct Db {
     conn: Connection,
 }
 
-fn now() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
+/// Sets the pragmas, then applies the migrations after the file's version, up to `upto` (all of them,
+/// except in tests that check an upgrade to an earlier version). A file with another `app_id` or a
+/// version this build does not know is refused.
+pub(crate) fn open_migrated(mut conn: Connection, migrations: &[&str], app_id: i64, upto: usize) -> Result<Connection, DbError> {
+    conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;")?;
+    let current: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    if current != 0 {
+        let app: i64 = conn.query_row("PRAGMA application_id", [], |r| r.get(0))?;
+        if current < 0 || current as usize > migrations.len() || app != app_id {
+            return Err(DbError::UnexpectedVersion { found: current, expected: migrations.len() });
+        }
+    }
+    for (i, sql) in migrations.iter().enumerate().take(upto).skip(current as usize) {
+        let tx = conn.transaction()?;
+        tx.execute_batch(sql)?;
+        if i == 0 {
+            tx.execute_batch(&format!("PRAGMA application_id = {app_id}"))?;
+        }
+        tx.execute_batch(&format!("PRAGMA user_version = {}", i + 1))?;
+        tx.commit()?;
+    }
+    Ok(conn)
 }
 
 /// A space as the control database lists it.
@@ -283,42 +303,11 @@ impl Db {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| DbError::Io { path: dir.display().to_string(), source: e })?;
         }
-        Db::init(Connection::open(path)?)
+        Ok(Db { conn: open_migrated(Connection::open(path)?, MIGRATIONS, APPLICATION_ID, MIGRATIONS.len())? })
     }
 
     pub fn open_in_memory() -> Result<Db, DbError> {
-        Db::init(Connection::open_in_memory()?)
-    }
-
-    fn init(conn: Connection) -> Result<Db, DbError> {
-        conn.execute_batch(
-            "PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;",
-        )?;
-        let mut db = Db { conn };
-        db.migrate(MIGRATIONS.len())?;
-        Ok(db)
-    }
-
-    /// Applies the migrations after the file's version, up to `upto` (all of them, except in tests
-    /// that check an upgrade to an earlier version).
-    fn migrate(&mut self, upto: usize) -> Result<(), DbError> {
-        let current: i64 = self.conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if current != 0 {
-            let app: i64 = self.conn.query_row("PRAGMA application_id", [], |r| r.get(0))?;
-            if current < 0 || current as usize > MIGRATIONS.len() || app != APPLICATION_ID {
-                return Err(DbError::UnexpectedVersion { found: current, expected: MIGRATIONS.len() });
-            }
-        }
-        for (i, sql) in MIGRATIONS.iter().enumerate().take(upto).skip(current as usize) {
-            let tx = self.conn.transaction()?;
-            tx.execute_batch(sql)?;
-            if i == 0 {
-                tx.execute_batch(&format!("PRAGMA application_id = {APPLICATION_ID}"))?;
-            }
-            tx.execute_batch(&format!("PRAGMA user_version = {}", i + 1))?;
-            tx.commit()?;
-        }
-        Ok(())
+        Ok(Db { conn: open_migrated(Connection::open_in_memory()?, MIGRATIONS, APPLICATION_ID, MIGRATIONS.len())? })
     }
 
     /// Makes this database's content `from`'s, in place and in one step (SQLite's backup API), so the open connection, and everything
@@ -450,10 +439,7 @@ mod tests {
 
     /// A database that has the first `upto` migrations only, for tests of an upgrade to that version.
     fn init_to(conn: Connection, upto: usize) -> Db {
-        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
-        let mut db = Db { conn };
-        db.migrate(upto).unwrap();
-        db
+        Db { conn: open_migrated(conn, MIGRATIONS, APPLICATION_ID, upto).unwrap() }
     }
 
     #[test]
@@ -644,8 +630,7 @@ mod tests {
                      VALUES ('t1','u1','c1','p1',3,4,0);",
             )
             .unwrap();
-        let mut db = db;
-        db.migrate(MIGRATIONS.len()).unwrap();
+        let db = Db { conn: open_migrated(db.conn, MIGRATIONS, APPLICATION_ID, MIGRATIONS.len()).unwrap() };
         let t = tables(&db);
         assert!(["conversations", "messages", "generations", "projects", "memory"].iter().all(|x| !t.iter().any(|y| y == x)), "{t:?}");
         let n = |sql: &str| -> i64 { db.conn.query_row(sql, [], |r| r.get(0)).unwrap() };

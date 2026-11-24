@@ -6,14 +6,14 @@
 //! Schema changes go in `SPACE_MIGRATIONS` (append only) and run on every space file when it is
 //! opened. A file this build did not create, or that is newer than it, is refused.
 
-use crate::db::DbError;
+use crate::auth::now;
+use crate::db::{open_migrated, DbError};
 use crate::ids::new_id;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Stamped into `PRAGMA application_id` of every space file ("ASKS"), so the control database and
 /// a space file can never be opened as each other.
@@ -214,10 +214,6 @@ fn read_generation(r: &rusqlite::Row<'_>) -> rusqlite::Result<Generation> {
     })
 }
 
-fn now() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
-}
-
 /// One space's file.
 pub struct SpaceStore {
     conn: Connection,
@@ -228,40 +224,13 @@ impl SpaceStore {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| DbError::Io { path: dir.display().to_string(), source: e })?;
         }
-        SpaceStore::init(Connection::open(path)?)
+        Ok(SpaceStore { conn: open_migrated(Connection::open(path)?, SPACE_MIGRATIONS, SPACE_APPLICATION_ID, SPACE_MIGRATIONS.len())? })
     }
 
     pub fn open_in_memory() -> Result<SpaceStore, DbError> {
-        SpaceStore::init(Connection::open_in_memory()?)
-    }
-
-    fn init(conn: Connection) -> Result<SpaceStore, DbError> {
-        conn.execute_batch(
-            "PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;",
-        )?;
-        let mut store = SpaceStore { conn };
-        store.migrate()?;
-        Ok(store)
-    }
-
-    fn migrate(&mut self) -> Result<(), DbError> {
-        let current: i64 = self.conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if current != 0 {
-            let app: i64 = self.conn.query_row("PRAGMA application_id", [], |r| r.get(0))?;
-            if current < 0 || current as usize > SPACE_MIGRATIONS.len() || app != SPACE_APPLICATION_ID {
-                return Err(DbError::UnexpectedVersion { found: current, expected: SPACE_MIGRATIONS.len() });
-            }
-        }
-        for (i, sql) in SPACE_MIGRATIONS.iter().enumerate().skip(current as usize) {
-            let tx = self.conn.transaction()?;
-            tx.execute_batch(sql)?;
-            if i == 0 {
-                tx.execute_batch(&format!("PRAGMA application_id = {SPACE_APPLICATION_ID}"))?;
-            }
-            tx.execute_batch(&format!("PRAGMA user_version = {}", i + 1))?;
-            tx.commit()?;
-        }
-        Ok(())
+        Ok(SpaceStore {
+            conn: open_migrated(Connection::open_in_memory()?, SPACE_MIGRATIONS, SPACE_APPLICATION_ID, SPACE_MIGRATIONS.len())?,
+        })
     }
 
     /// Raw connection, for the server's own queries on this space's file.
