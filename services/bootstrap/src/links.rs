@@ -1,6 +1,8 @@
 //! The links `bootstrap` makes tokens for (ADR 0049). The Links table in `docs/architecture.md` is the
 //! source of truth; a unit test checks every row here against it.
 
+use askbar_proto::links::*;
+
 /// One authenticated path from a caller to a receiver. Its token is sent by the caller and its hash
 /// is checked by the receiver.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -17,24 +19,24 @@ pub struct Link {
 /// three `model-gateway` links (3.1, ADR 0054), the server's link to the auditor (3.1, second half), and the
 /// alerter's three links (4.1, ADR 0055) and the auditor's restore link (6.3, ADR 0013).
 pub const LINKS: &[Link] = &[
-    Link { name: "admin-server", caller: "admin", receiver: "server", prefix: "mgt_" }, // names-ok: the token prefix already issued
-    Link { name: "admin-auditor-append", caller: "admin", receiver: "auditor", prefix: "audapp_" },
-    Link { name: "admin-auditor-read", caller: "admin", receiver: "auditor", prefix: "audrd_" },
-    Link { name: "server-model-gateway", caller: "server", receiver: "model-gateway", prefix: "srvgw_" },
-    Link { name: "admin-model-gateway", caller: "admin", receiver: "model-gateway", prefix: "admgw_" },
-    Link { name: "model-gateway-auditor", caller: "model-gateway", receiver: "auditor", prefix: "gwaud_" },
-    Link { name: "server-auditor", caller: "server", receiver: "auditor", prefix: "srvaud_" },
+    Link { name: ADMIN_SERVER, caller: "admin", receiver: "server", prefix: "mgt_" }, // names-ok: the token prefix already issued
+    Link { name: ADMIN_AUDITOR_APPEND, caller: "admin", receiver: "auditor", prefix: "audapp_" },
+    Link { name: ADMIN_AUDITOR_READ, caller: "admin", receiver: "auditor", prefix: "audrd_" },
+    Link { name: SERVER_MODEL_GATEWAY, caller: "server", receiver: "model-gateway", prefix: "srvgw_" },
+    Link { name: ADMIN_MODEL_GATEWAY, caller: "admin", receiver: "model-gateway", prefix: "admgw_" },
+    Link { name: MODEL_GATEWAY_AUDITOR, caller: "model-gateway", receiver: "auditor", prefix: "gwaud_" },
+    Link { name: SERVER_AUDITOR, caller: "server", receiver: "auditor", prefix: "srvaud_" },
     // The gateway reads the day's and month's token counts to hold the budget (plan step 3.2, ADR 0014): `GET /token-counts`
     // and nothing else.
-    Link { name: "model-gateway-auditor-read", caller: "model-gateway", receiver: "auditor", prefix: "gwrd_" },
+    Link { name: MODEL_GATEWAY_AUDITOR_READ, caller: "model-gateway", receiver: "auditor", prefix: "gwrd_" },
     // The alerter (plan step 4.1, ADR 0055): the auditor sends it events, the admin configures it and sends its own events,
     // and it appends the outcome of each alert to the auditor.
-    Link { name: "auditor-alerter", caller: "auditor", receiver: "alerter", prefix: "audalr_" },
-    Link { name: "admin-alerter", caller: "admin", receiver: "alerter", prefix: "admalr_" },
-    Link { name: "alerter-auditor", caller: "alerter", receiver: "auditor", prefix: "alraud_" },
+    Link { name: AUDITOR_ALERTER, caller: "auditor", receiver: "alerter", prefix: "audalr_" },
+    Link { name: ADMIN_ALERTER, caller: "admin", receiver: "alerter", prefix: "admalr_" },
+    Link { name: ALERTER_AUDITOR, caller: "alerter", receiver: "auditor", prefix: "alraud_" },
     // The one way records reach the auditor other than an append (plan step 6.3, ADR 0013, ADR 0010): `POST /restore` and nothing else,
     // into an empty store. The admin holds this token and uses it only for a restore.
-    Link { name: "admin-auditor-restore", caller: "admin", receiver: "auditor", prefix: "audrs_" },
+    Link { name: ADMIN_AUDITOR_RESTORE, caller: "admin", receiver: "auditor", prefix: "audrs_" },
 ];
 
 /// A service with a credential volume `<name>-token`, and the uid that reads it (ADR 0003).

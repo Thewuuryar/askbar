@@ -1,4 +1,4 @@
-// Run: node tests/e2e/admin.test.js   (needs `cargo build -p askbar-server -p askbar-admin -p askbar-bootstrap` and `playwright` with Chromium)
+// Run: node tests/e2e/admin.test.js   (E2E_VIEWPORT=390 runs one width only; needs `cargo build -p askbar-server -p askbar-admin -p askbar-bootstrap` and `playwright` with Chromium)
 // Starts the real server, the real admin service and tests/e2e/mock_llm.py, then drives the admin site in a browser.
 // The admin listens on a unix socket only, so the test puts a small TCP forwarder in front of it for the browser.
 const { chromium } = require('playwright');
@@ -19,6 +19,10 @@ const SECRET_KEY = 'sk-do-not-show-me-123';
 // and again at 390 wide. The names carry the viewport, so a failure says where it happened. The width is this test's own
 // parameter, not a constants.json value.
 const VIEWPORTS = [{ width: 1280, height: 800 }, { width: 390, height: 844 }];
+// E2E_VIEWPORT=<width> runs only that width (CI runs one job per width); an unknown width is an error, never an empty pass.
+const only = process.env.E2E_VIEWPORT;
+const selected = only ? VIEWPORTS.filter((v) => String(v.width) === only) : VIEWPORTS;
+if (!selected.length) { console.error(`E2E_VIEWPORT=${only} matches no viewport; use one of ${VIEWPORTS.map((v) => v.width).join(', ')}`); process.exit(2); }
 const PHONE_MAX_WIDTH = 600;
 let vpLabel = '';
 let isPhone = false;
@@ -5634,7 +5638,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
 // The viewports run one after the other, each on its own stack. A crash still cleans up (the finally above) and fails the run.
 (async () => {
   const started = Date.now();
-  for (const vp of VIEWPORTS) {
+  for (const vp of selected) {
     try { await runViewport(vp); }
     catch (e) { failures++; console.error('FAIL [' + vpLabel + '] the run stopped: ' + (e && e.stack || e)); }
   }
