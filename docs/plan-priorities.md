@@ -131,7 +131,7 @@ Until then, roles use admin-pinned models, usage counts against token budgets pe
 - [x] **O0.2** `docs(docs): point the tiered routing plan at the new order` · haiku · after O0.1
   Files: `docs/plan-tiered-routing.md`, `docs/plan-tiered-routing/phase-0-docs.md`, `docs/plan-tiered-routing/phase-5a-mcp-gateway.md`.
   Do: confirm the order text in P0.10 and P0.16 matches O0.1 (O0.1 is the only place that sets ADR 0019's order; P5A.24 no longer carries it), and that the Phases table marks Phases 4, 5A and 5B as run under track 1. The commit that added this file already made those edits; this step checks them after O0.1 is accepted.
-- [ ] **O0.3** `docs(docs): reorder the post-v1 plan` · haiku · after O0.1
+- [x] **O0.3** `docs(docs): reorder the post-v1 plan` · haiku · after O0.1
   Files: `docs/plan-post-v1.md`. Replaces tiered routing P0.16.
 
 #### W4: roles without tiers
