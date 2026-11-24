@@ -797,6 +797,34 @@ print(call('PUT', '/api/admin/v1/alerts', {'ntfy': None})[0])" >/dev/null 2>&1
   fi
 fi
 
+echo "== 3d8. The egress proxy (ADR 0056)"
+EGP=askbar-egress-proxy
+EGP_OUT="${PROJECT}_egress-outbound"
+if [ "$(docker inspect -f '{{.State.Running}}' "$EGP" 2>/dev/null)" != true ]; then fail "the egress proxy is not running"; else
+  svc_profile "$EGP" "the egress proxy" <<EOF
+health yes
+uid 10006
+caps yes
+nets egress-admin egress-alerter egress-cpa egress-model-gateway egress-outbound|the egress proxy is on egress-admin, egress-alerter, egress-cpa, egress-model-gateway and egress-outbound only
+owner $EGP|/egress-proxy-token/accept/admin-egress-proxy.sha256|10006 444|the egress proxy's admin hash file (owner, mode)
+dirs $EGP|10006 500|the egress proxy's|/egress-proxy-token /egress-proxy-token/call /egress-proxy-token/accept
+owner $ADMIN|/admin-token/call/admin-egress-proxy.token|10001 400|the admin's egress proxy token file (owner, mode)
+EOF
+  # Its listeners are on the internal networks' aliases, never a wildcard: on egress-outbound, the one route out, nothing answers.
+  EGP_OUT_IP=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$EGP_OUT\").IPAddress}}" "$EGP")
+  for p in 8086 3128 2525; do
+    [ "$(http "$EGP_OUT" "http://$EGP_OUT_IP:$p/" GET)" = 0 ] && pass "nothing answers on egress-outbound, port $p" || fail "the egress proxy answers on egress-outbound, port $p"
+  done
+  # It resolves itself and no name of ours, and reaches none of the services that hold data.
+  docker exec "$EGP" bash -c 'getent hosts egress-admin-host' >/dev/null 2>&1 && pass "the egress proxy resolves its own alias" || fail "the egress proxy cannot resolve its own alias"
+  for h in caddy server admin auditor askbar-model-gateway askbar-alerter cpa mock-llm; do
+    docker exec "$EGP" bash -c "getent hosts $h" >/dev/null 2>&1 && fail "the egress proxy resolves $h" || pass "the egress proxy cannot resolve $h"
+  done
+  for t in auditor/8083 server/8080 admin/8084; do
+    docker exec "$EGP" bash -c "exec 3<>/dev/tcp/$t" >/dev/null 2>&1 && fail "the egress proxy reaches ${t%/*}" || pass "the egress proxy cannot reach ${t%/*}"
+  done
+fi
+
 echo "== 3e. No Docker socket"
 # There is no controller (ADR 0005): no container of the project mounts the Docker socket, and none is left
 # of the controller or its network.
