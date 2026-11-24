@@ -1,5 +1,7 @@
 # Phase 5B: research reports and the judge (branch `feat/research-judge`, coarse)
 
+Previous: [Phase 5A](phase-5a-mcp-gateway.md) · Next: [Phase 6](phase-6-agents.md) · Tracker: [task-tracker.md](../task-tracker.md)
+
 Part of [the tiered routing plan](../plan-tiered-routing.md). Its How to run, Owner gates and Assumptions sections apply to every step here.
 
 Expand into detailed steps at phase start. Needs Phase 5A. Values introduced here (task tool-call default 8 and range 1 to 32, research waits 8 s and 90 s, summary size 800 tokens, decider and judge thresholds) go in `constants.rs`, with bounds in `askbar-proto` where a service checks them (approval expiry is already in Phase 5A); the MCP gateway gets its values through the config push built in P5A.18.

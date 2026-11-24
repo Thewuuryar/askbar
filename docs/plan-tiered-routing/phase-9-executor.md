@@ -1,5 +1,7 @@
 # Phase 9: executor (branch `feat/executor`, deferrable, coarse)
 
+Previous: [Phase 8](phase-8-admin-ui.md) · Next: [Phase 10](phase-10-script-library.md) · Tracker: [task-tracker.md](../task-tracker.md)
+
 Part of [the tiered routing plan](../plan-tiered-routing.md). Its How to run, Owner gates and Assumptions sections apply to every step here.
 
 Deferrable: starts only when the owner asks, after Phase 8. Expand at phase start. Needs Phase 6, G10. The executor runs untrusted code; search and fetch stay on the MCP gateway. It verifies approvals with P5.5's code, has no `model-gateway` link and no secrets.

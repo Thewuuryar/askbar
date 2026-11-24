@@ -1,5 +1,7 @@
 # Phase 4: egress proxy (branch `feat/egress-proxy`)
 
+Previous: [Phase 3](phase-3-auto.md) · Next: [Phase 5A](phase-5a-mcp-gateway.md) · Tracker: [task-tracker.md](../task-tracker.md)
+
 Part of [the tiered routing plan](../plan-tiered-routing.md). Its How to run, Owner gates and Assumptions sections apply to every step here.
 
 The egress proxy is a purpose-built Rust service in this repo (G8, decided by the owner): component and compose service `egress-proxy`, crate `services/egress-proxy` (package `askbar-egress-proxy`), API `/api/egress-proxy/v1` ([ADR 0022](../adr/0022-api-path-conventions.md) pattern), uid 10006, new ADR 0056. It is the only service with a route out, except Caddy (certificates). It never sees content: HTTPS passes as a `CONNECT` tunnel, with no TLS interception.

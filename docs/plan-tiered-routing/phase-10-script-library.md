@@ -1,5 +1,7 @@
 # Phase 10: script library (branch `feat/script-library`, deferrable, coarse)
 
+Previous: [Phase 9](phase-9-executor.md) · Next: [Tiered routing risks](risks.md) · Tracker: [task-tracker.md](../task-tracker.md)
+
 Part of [the tiered routing plan](../plan-tiered-routing.md). Its How to run, Owner gates and Assumptions sections apply to every step here.
 
 Deferrable: starts only when the owner asks. Expand at phase start. Needs Phase 9, G11. Library thresholds (`match_min`, `fit_min`, `candidates`, `demote_below`, `retire_after_failures`) go in `constants.rs`, bounds in `askbar-proto`.
