@@ -201,3 +201,65 @@ async fn a_proxy_that_is_down_or_refuses_is_reported_and_does_not_block_saving_a
     assert_eq!(wrong.sync(&t.admin).await, Sync::Unreachable);
     assert!(wrong.last_error().unwrap().contains("token"));
 }
+
+#[tokio::test]
+async fn an_approval_is_an_allow_private_entry_for_its_source_only_and_is_audited_and_removable() {
+    let (t, fake, link) = rig().await;
+    let a = "/api/admin/v1/egress/approvals";
+    let (st, body) =
+        t.call(M::PUT, a, json!({ "source": "model-gateway", "host": "Mock-LLM.", "port": 8765, "plain_http": true, "note": "dev" })).await;
+    assert_eq!(st, 200, "{body}");
+    assert_eq!(body["host"], "mock-llm");
+    // A derived entry of the same destination keeps its other flags and becomes private; another source is untouched.
+    add_provider(&t, "http://lan-llm:9000/v1").await;
+    t.call(M::PUT, a, json!({ "source": "model-gateway", "host": "lan-llm", "port": 9000 })).await;
+    assert!(matches!(link.sync(&t.admin).await, Sync::Pushed(_)));
+    let push = fake.pushes.lock().unwrap().last().cloned().unwrap();
+    let private = |src: &str| -> Vec<String> {
+        push["sources"][src]["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|e| e["allow_private"] == true)
+            .map(|e| format!("{}:{}:{}", e["host"].as_str().unwrap(), e["port"], e["plain_http"]))
+            .collect()
+    };
+    assert_eq!(private("model-gateway"), ["lan-llm:9000:true", "mock-llm:8765:true"]);
+    assert!(private("alerter").is_empty() && private("cpa").is_empty());
+    let (st, list) = t.call(M::GET, a, json!(null)).await;
+    assert_eq!((st, list.as_array().unwrap().len()), (200, 2));
+
+    // Audited, with the destination (not a secret).
+    let rows = t.rig.rows("SELECT outcome, detail_json FROM admin_actions WHERE category = 'egress' ORDER BY at, rowid");
+    assert!(rows.len() >= 4 && rows[0][0] == "requested" && rows[1][0] == "done");
+    assert!(rows[1][1].as_str().unwrap().contains("mock-llm"));
+
+    // Delete removes it, and the proxy is given the change.
+    let (st, _) = t.call(M::DELETE, &format!("{a}?source=model-gateway&host=mock-llm&port=8765"), json!(null)).await;
+    assert_eq!(st, 204);
+    let (st, _) = t.call(M::DELETE, &format!("{a}?source=model-gateway&host=mock-llm&port=8765"), json!(null)).await;
+    assert_eq!(st, 404);
+    link.sync(&t.admin).await;
+    let push = fake.pushes.lock().unwrap().last().cloned().unwrap();
+    assert!(!push.to_string().contains("mock-llm"));
+}
+
+#[tokio::test]
+async fn an_approval_with_a_bad_source_host_or_port_is_refused() {
+    let t = common::start(true).await;
+    let a = "/api/admin/v1/egress/approvals";
+    for bad in [
+        json!({ "source": "nobody", "host": "ok.lan" }),
+        json!({ "source": "alerter", "host": "ünï.lan" }),
+        json!({ "source": "alerter", "host": "a.lan:25" }),
+        json!({ "source": "alerter", "host": "*.lan" }),
+        json!({ "source": "alerter", "host": "0x7f.1" }),
+        json!({ "source": "alerter", "host": "ok.lan", "port": 0 }),
+        json!({ "source": "alerter", "host": "ok.lan", "note": "x".repeat(201) }),
+    ] {
+        let (st, body) = t.call(M::PUT, a, bad.clone()).await;
+        assert_eq!(st, 400, "{bad} {body}");
+    }
+    let (_, list) = t.call(M::GET, a, json!(null)).await;
+    assert!(list.as_array().unwrap().is_empty());
+}

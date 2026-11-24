@@ -222,6 +222,16 @@ const MIGRATIONS: &[&str] = &[
          drill_done_at       INTEGER
      );
      INSERT INTO backup_schedule (id) VALUES (1);",
+    // Private destinations the administrator approved for one outbound source (plan step P4.4a, ADR 0056): the egress proxy allows a
+    // non-public address only for an entry built from one of these. A destination, never a secret.
+    "CREATE TABLE egress_approvals (
+         source     TEXT NOT NULL,
+         host       TEXT NOT NULL,
+         port       INTEGER NOT NULL CHECK (port BETWEEN 1 AND 65535),
+         plain_http INTEGER NOT NULL DEFAULT 0 CHECK (plain_http IN (0, 1)),
+         note       TEXT NOT NULL DEFAULT '',
+         PRIMARY KEY (source, host, port)
+     );",
 ];
 
 /// The schema steps, in order (for the upgrade tests).

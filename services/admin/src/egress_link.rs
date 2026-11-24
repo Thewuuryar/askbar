@@ -4,7 +4,8 @@
 //! allowlists (never typed): `model-gateway` gets its providers' base URLs, `alerter` its ntfy server, its mail server (the
 //! `relay` entry) and GitHub, `cpa` the fixed [`CPA_EGRESS_HOSTS`]. Every 12 seconds it reads the proxy's `GET /status` and
 //! pushes with `PUT /config` when the proxy is unconfigured or runs another version (a hash of the config, so a restarted
-//! proxy is seen at once). No entry is `allow_private`. Each push is recorded in the auditor first (source, count, version:
+//! proxy is seen at once). No entry is `allow_private` unless the administrator approved that destination for that source
+//! (`egress_approvals`, P4.4a): an approval is the only way a private address is allowed, and its change is an audited action. Each push is recorded in the auditor first (source, count, version:
 //! no host) and is not made if that fails. A proxy that does not answer is a log line and a sentence for the Services page; it
 //! never blocks saving settings, since the push retries. `ASKBAR_EGRESS_PROXY_URL` unset means no link is made (`main`).
 //!
@@ -12,9 +13,14 @@
 
 use crate::alerter_link::{read_email, read_ntfy};
 use crate::link_client::LinkClient;
+use crate::web::{err, Failure};
 use crate::AdminState;
+use askbar_proto::egress::{normalize_host, Host};
 use askbar_proto::egress::{EgressConfig, EgressStatus, Entry, SourceRules};
-use rusqlite::Connection;
+use axum::{extract::Query, extract::State, http::StatusCode, Json};
+use rusqlite::{params, Connection};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -68,6 +74,47 @@ fn rules(mut entries: Vec<Entry>) -> SourceRules {
     SourceRules { entries }
 }
 
+/// The sources the proxy has a listener for.
+const SOURCES: [&str; 3] = ["model-gateway", "alerter", "cpa"];
+const MAX_NOTE_CHARS: usize = 200;
+
+/// One approved private destination, as stored and as the routes show it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Approval {
+    pub source: String,
+    pub host: String,
+    #[serde(default = "https_port")]
+    pub port: u16,
+    #[serde(default)]
+    pub plain_http: bool,
+    #[serde(default)]
+    pub note: String,
+}
+
+fn https_port() -> u16 {
+    443
+}
+
+pub fn read_approvals(conn: &Connection) -> rusqlite::Result<Vec<Approval>> {
+    let mut st = conn.prepare("SELECT source, host, port, plain_http, note FROM egress_approvals ORDER BY source, host, port")?;
+    let rows =
+        st.query_map([], |r| Ok(Approval { source: r.get(0)?, host: r.get(1)?, port: r.get(2)?, plain_http: r.get(3)?, note: r.get(4)? }))?;
+    rows.collect()
+}
+
+/// An approval's destination becomes `allow_private` on the source's entry for that host and port (the derived one, so a LAN mail
+/// relay keeps `relay`), or is a new entry.
+fn approve(entries: &mut Vec<Entry>, a: &Approval) {
+    let mut found = false;
+    for e in entries.iter_mut().filter(|e| e.host == a.host && e.port == a.port) {
+        (e.allow_private, e.plain_http, found) = (true, e.plain_http || a.plain_http, true);
+    }
+    if !found {
+        entries.push(Entry { host: a.host.clone(), port: a.port, plain_http: a.plain_http, allow_private: true, ..plain_entry() });
+    }
+}
+
 /// What the proxy should run, from `admin.db`.
 pub fn build_config(conn: &Connection, secrets: &crate::secrets::AdminSecrets) -> EgressConfig {
     let gateway = crate::server_link::build_snapshot(conn)
@@ -79,13 +126,106 @@ pub fn build_config(conn: &Connection, secrets: &crate::secrets::AdminSecrets) -
     }
     alerter.push(Entry { host: "api.github.com".into(), ..plain_entry() });
     let cpa = crate::constants::CPA_EGRESS_HOSTS.iter().map(|h| Entry { host: (*h).into(), ..plain_entry() }).collect();
+    let approvals = read_approvals(conn).unwrap_or_default();
     EgressConfig {
         sources: [("model-gateway", gateway), ("alerter", alerter), ("cpa", cpa)]
             .into_iter()
-            .map(|(name, entries)| (name.to_string(), rules(entries)))
+            .map(|(name, mut entries)| {
+                approvals.iter().filter(|a| a.source == name).for_each(|a| approve(&mut entries, a));
+                (name.to_string(), rules(entries))
+            })
             .collect(),
         limits: crate::constants::EGRESS_LIMITS,
     }
+}
+
+type St = State<Arc<AdminState>>;
+
+/// `GET /api/admin/v1/egress/approvals`.
+pub async fn list_approvals(State(state): St) -> Result<Json<Vec<Approval>>, Failure> {
+    let db = state.db.lock().await;
+    read_approvals(db.conn()).map(Json).map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "The admin could not read the approvals."))
+}
+
+/// A source and host the proxy would take, the host as it normalizes it (an IPv6 literal bracketed).
+fn checked(source: &str, host: &str, port: u16) -> Result<String, Failure> {
+    if !SOURCES.contains(&source) {
+        return Err(err(StatusCode::BAD_REQUEST, "There is no such source."));
+    }
+    if port == 0 {
+        return Err(err(StatusCode::BAD_REQUEST, "The port is not valid."));
+    }
+    match normalize_host(host) {
+        Ok(Host::Name(n)) => Ok(n),
+        Ok(Host::Ip(std::net::IpAddr::V4(a))) => Ok(a.to_string()),
+        Ok(Host::Ip(std::net::IpAddr::V6(a))) => Ok(format!("[{a}]")),
+        Err(_) => Err(err(StatusCode::BAD_REQUEST, "The host is not valid: a plain ASCII name or an IP address, with no port.")),
+    }
+}
+
+/// `PUT /api/admin/v1/egress/approvals`: approve a private destination for one source (replacing the same one). The record of the
+/// change is made by the audit layer first; the proxy gets the new allowlists at once.
+pub async fn put_approval(
+    State(state): St,
+    notes: Option<axum::Extension<crate::actions::ActionNotes>>,
+    askbar_proto::http::ApiJson(mut a): askbar_proto::http::ApiJson<Approval>,
+) -> Result<Json<Approval>, Failure> {
+    a.host = checked(&a.source, &a.host, a.port)?;
+    if a.note.chars().count() > MAX_NOTE_CHARS {
+        return Err(err(StatusCode::BAD_REQUEST, "The note is too long."));
+    }
+    if let Some(axum::Extension(n)) = &notes {
+        n.add("source", a.source.clone().into());
+        n.add("host", a.host.clone().into());
+        n.add("port", a.port.into());
+    }
+    state
+        .db
+        .lock()
+        .await
+        .conn()
+        .execute(
+            "INSERT OR REPLACE INTO egress_approvals (source, host, port, plain_http, note) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![a.source, a.host, a.port, a.plain_http, a.note],
+        )
+        .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "The admin could not store the approval."))?;
+    if let Some(e) = state.egress.get() {
+        e.mark_dirty();
+    }
+    Ok(Json(a))
+}
+
+/// `DELETE /api/admin/v1/egress/approvals?source=&host=&port=`: withdraw one (port defaults to 443).
+pub async fn delete_approval(
+    State(state): St,
+    notes: Option<axum::Extension<crate::actions::ActionNotes>>,
+    Query(q): Query<HashMap<String, String>>,
+) -> Result<StatusCode, Failure> {
+    let port = match q.get("port") {
+        None => 443,
+        Some(p) => p.parse().map_err(|_| err(StatusCode::BAD_REQUEST, "The port is not valid."))?,
+    };
+    let host = checked(q.get("source").map_or("", String::as_str), q.get("host").map_or("", String::as_str), port)?;
+    let source = &q["source"];
+    if let Some(axum::Extension(n)) = &notes {
+        n.add("source", source.clone().into());
+        n.add("host", host.clone().into());
+        n.add("port", port.into());
+    }
+    let gone = state
+        .db
+        .lock()
+        .await
+        .conn()
+        .execute("DELETE FROM egress_approvals WHERE source = ?1 AND host = ?2 AND port = ?3", params![source, host, port])
+        .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "The admin could not remove the approval."))?;
+    if gone == 0 {
+        return Err(err(StatusCode::NOT_FOUND, "There is no such approval."));
+    }
+    if let Some(e) = state.egress.get() {
+        e.mark_dirty();
+    }
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// How a check went.

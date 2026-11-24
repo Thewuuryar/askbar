@@ -1449,6 +1449,81 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '502':
           $ref: '#/components/responses/ServerUnavailable'
+  /api/admin/v1/egress/approvals:
+    get:
+      operationId: listEgressApprovals
+      summary: The private destinations approved for each outbound source.
+      security:
+        - adminSession: []
+        - adminApiKey: []
+      responses:
+        '200':
+          description: The approvals.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/EgressApproval'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    put:
+      operationId: putEgressApproval
+      summary: Approve a private destination for one source (the same one again replaces it).
+      description: "The egress proxy (ADR 0056) reaches a loopback, LAN or other non-public address only for an approval. The approval is pushed to the proxy as an `allow_private` entry for that source alone, and the change is recorded in the auditor (refused with 503 if it cannot be)."
+      security:
+        - adminSession: []
+        - adminApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EgressApproval'
+      responses:
+        '200':
+          description: The approval as stored (the host normalized).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EgressApproval'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    delete:
+      operationId: deleteEgressApproval
+      summary: Withdraw one approval.
+      security:
+        - adminSession: []
+        - adminApiKey: []
+      parameters:
+        - name: source
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [model-gateway, alerter, cpa]
+        - name: host
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: port
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 443
+      responses:
+        '204':
+          description: Withdrawn.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
   /api/admin/v1/network:
     get:
       operationId: getNetwork
@@ -2056,6 +2131,29 @@ components:
         new:
           type: string
           minLength: 10
+    EgressApproval:
+      type: object
+      additionalProperties: false
+      required: [source, host]
+      properties:
+        source:
+          type: string
+          enum: [model-gateway, alerter, cpa]
+        host:
+          type: string
+          description: A whole host name (ASCII; an IDN as `xn--`), a dotted IPv4 or a bracketed IPv6. No port, no wildcard.
+        port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+          default: 443
+        plain_http:
+          type: boolean
+          default: false
+        note:
+          type: string
+          maxLength: 200
+          default: ''
     NewKey:
       type: object
       required: [name]
