@@ -137,4 +137,4 @@ Steps marked **[draft PR]** change `compose.yaml`, a Dockerfile, a network or a 
 - **CLIProxyAPI (owner decision, 2026-11-24):** bump the pinned image by digest to a release with a proxy setting; no ADR 0006 exception; if none exists, drop subscription providers until one does and tell the owner (P4.3b).
 - **Limits** are pushed defaults in `askbar-proto`, constants in `constants.rs`; the owner confirmed the numbers above on 2026-11-24, with tunnel idle at 300 s.
 - **Step order differs from numbers** (P4.4 and P4.4a before P4.3a): the proxy denies until pushed.
-- **New crates: none.** ADR 0056 is new, and proposed; per `orchestration.md` the orchestrator never accepts it. `plan-refactor.md` and `plan-priorities.md` said P4.4 adds the link: it is P4.1c, and both are updated. R2 (P4.2) and P5A.19 (P4.4) stay true.
+- **New crates: none.** ADR 0056 is new and was accepted by the owner on 2026-11-24. `plan-refactor.md` and `plan-priorities.md` said P4.4 adds the link: it is P4.1c, and both are updated. R2 (P4.2) and P5A.19 (P4.4) stay true.
