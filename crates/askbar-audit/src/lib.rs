@@ -551,20 +551,6 @@ fn percentile(sorted: &[i64], p: f64) -> Option<i64> {
     Some(sorted[rank.min(sorted.len()) - 1])
 }
 
-/// `YYYY-MM-DD` (UTC) of a unix time.
-fn utc_day(t: i64) -> String {
-    let z = t.div_euclid(86_400) + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = yoe + era * 400 + i64::from(month <= 2);
-    format!("{year:04}-{month:02}-{day:02}")
-}
-
 /// Counts, error rate, latency percentiles, token totals and cost for generations that began at or
 /// after `since` (unix seconds), with a breakdown by provider and by day. The store holds no prices, so every
 /// `cost` is null and `cost_unknown_requests` counts the requests with tokens; whoever shows cost prices them.
@@ -594,53 +580,37 @@ pub fn stats(conn: &Connection, since: i64) -> rusqlite::Result<serde_json::Valu
     };
     let latency = series("SELECT json_extract(attrs_json, '$.latency_ms') FROM spans WHERE kind = 'attempt' AND started_at >= ?1 AND json_extract(attrs_json, '$.latency_ms') IS NOT NULL")?;
     let ttft = series("SELECT ttft_ms FROM spans WHERE kind = 'attempt' AND started_at >= ?1 AND ttft_ms IS NOT NULL")?;
-    // Tokens, per provider and per day, from each generation and the provider that served it.
+    // Tokens, per provider and per day, from each generation and the provider that served it (the last attempt).
     struct Group {
         requests: i64,
         /// How many of them have token counts (the rest cost nothing to price, and nothing to know).
         with_tokens: i64,
         tokens: (i64, i64, i64),
     }
-    let mut by_provider: std::collections::BTreeMap<String, Group> = Default::default();
-    let mut by_day: std::collections::BTreeMap<String, Group> = Default::default();
-    // Per day and provider, with the tokens and no cost, so whoever holds the prices can price each day exactly.
-    let mut by_day_provider: std::collections::BTreeMap<(String, String), Group> = Default::default();
-    let mut total_with_tokens = 0;
-    {
-        let mut stmt = conn.prepare(
-            "SELECT t.started_at, t.tokens_in, t.tokens_out, t.tokens_cached,
-                    (SELECT provider_id FROM spans WHERE trace_id = t.trace_id AND kind = 'attempt' ORDER BY id DESC LIMIT 1)
-             FROM spans t WHERE t.kind = 'turn' AND t.started_at >= ?1",
-        )?;
+    // `keys` names the two key columns to select (the second may be a literal '') and `by` is the GROUP BY and ORDER BY.
+    // A null provider is the empty string, as before.
+    let grouped = |keys: &str, by: &str| -> rusqlite::Result<Vec<(String, String, Group)>> {
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {keys}, COUNT(*), COALESCE(SUM(tokens_in IS NOT NULL OR tokens_out IS NOT NULL), 0),
+                    COALESCE(SUM(tokens_in),0), COALESCE(SUM(tokens_out),0), COALESCE(SUM(tokens_cached),0)
+             FROM (SELECT strftime('%Y-%m-%d', t.started_at, 'unixepoch') AS day,
+                          COALESCE((SELECT provider_id FROM spans WHERE trace_id = t.trace_id AND kind = 'attempt' ORDER BY id DESC LIMIT 1), '') AS provider,
+                          t.tokens_in, t.tokens_out, t.tokens_cached
+                   FROM spans t WHERE t.kind = 'turn' AND t.started_at >= ?1)
+             GROUP BY {by} ORDER BY {by}"
+        ))?;
         let rows = stmt.query_map([since], |r| {
-            Ok((
-                r.get::<_, i64>(0)?,
-                r.get::<_, Option<i64>>(1)?,
-                r.get::<_, Option<i64>>(2)?,
-                r.get::<_, Option<i64>>(3)?,
-                r.get::<_, Option<String>>(4)?,
-            ))
+            let g = Group { requests: r.get(2)?, with_tokens: r.get(3)?, tokens: (r.get(4)?, r.get(5)?, r.get(6)?) };
+            Ok((r.get(0)?, r.get(1)?, g))
         })?;
-        for row in rows {
-            let (started, tin, tout, tcached, provider) = row?;
-            let has_tokens = tin.is_some() || tout.is_some();
-            total_with_tokens += i64::from(has_tokens);
-            for (map, key) in [(&mut by_provider, provider.clone().unwrap_or_default()), (&mut by_day, utc_day(started))] {
-                let g = map.entry(key).or_insert_with(|| Group { requests: 0, with_tokens: 0, tokens: (0, 0, 0) });
-                g.requests += 1;
-                g.with_tokens += i64::from(has_tokens);
-                g.tokens = (g.tokens.0 + tin.unwrap_or(0), g.tokens.1 + tout.unwrap_or(0), g.tokens.2 + tcached.unwrap_or(0));
-            }
-            let g = by_day_provider.entry((utc_day(started), provider.clone().unwrap_or_default())).or_insert_with(|| Group {
-                requests: 0,
-                with_tokens: 0,
-                tokens: (0, 0, 0),
-            });
-            g.requests += 1;
-            g.with_tokens += i64::from(has_tokens);
-            g.tokens = (g.tokens.0 + tin.unwrap_or(0), g.tokens.1 + tout.unwrap_or(0), g.tokens.2 + tcached.unwrap_or(0));
-        }
-    }
+        rows.collect()
+    };
+    let mut by_provider: std::collections::BTreeMap<String, Group> =
+        grouped("provider, ''", "provider")?.into_iter().map(|(k, _, g)| (k, g)).collect();
+    let by_day: std::collections::BTreeMap<String, Group> = grouped("day, ''", "day")?.into_iter().map(|(k, _, g)| (k, g)).collect();
+    // Per day and provider, with the tokens and no cost, so whoever holds the prices can price each day exactly.
+    let by_day_provider = grouped("day, provider", "day, provider")?;
+    let total_with_tokens: i64 = by_day.values().map(|g| g.with_tokens).sum();
     // How the router treated each provider: every try (attempt span) it served or failed, the retries
     // among them (retry_index above 0), and the failures.
     let mut routing: std::collections::BTreeMap<String, (i64, i64, i64)> = Default::default();
@@ -685,7 +655,7 @@ pub fn stats(conn: &Connection, since: i64) -> rusqlite::Result<serde_json::Valu
     };
     let by_day_provider: Vec<serde_json::Value> = by_day_provider
         .into_iter()
-        .map(|((day, provider), g)| {
+        .map(|(day, provider, g)| {
             serde_json::json!({
                 "day": day,
                 "provider_id": if provider.is_empty() { serde_json::Value::Null } else { provider.into() },

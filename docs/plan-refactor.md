@@ -60,7 +60,7 @@ Branch `refactor/audit-and-generation`. PR title `refactor(auditor): simplify th
   Files: `crates/askbar-audit/src/lib.rs` (`stats`, `CostFn`, `CostSum`), `services/auditor/src/lib.rs` (the `stats` handler), `services/admin/src/audit_read.rs` (read only).
   Do: remove the cost argument and `CostSum`. The auditor always passes `|_,_,_,_| None`, and the admin sets `cost` and `cost_unknown_requests` itself (`audit_read.rs:17-47`). First add a test that pins the admin's stats JSON for a fixed store, in this same commit.
   Accept: the admin's stats JSON is unchanged; `docs/openapi/audit.v1.yaml` still matches the auditor's response.
-- [ ] **R1.4** `refactor(auditor): group audit stats in SQL` · sonnet · after R1.3
+- [x] **R1.4** `refactor(auditor): group audit stats in SQL` · sonnet · after R1.3
   Files: `crates/askbar-audit/src/lib.rs` (`stats`, `utc_day`).
   Do: replace the three per-group accumulators (by provider, by day, by day and provider) with `GROUP BY` queries. Replace `utc_day` with `strftime('%Y-%m-%d', started_at, 'unixepoch')`.
   Accept: R1.3's test and the existing stats tests pass unchanged.
