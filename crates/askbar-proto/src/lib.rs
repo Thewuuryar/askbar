@@ -10,6 +10,7 @@ pub use sse::{SseEvent, SseParser};
 
 pub mod alerter;
 pub mod audit;
+pub mod egress;
 pub mod gateway;
 pub mod links;
 pub mod paths;

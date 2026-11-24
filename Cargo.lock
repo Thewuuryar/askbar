@@ -261,6 +261,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "askbar-egress-proxy"
+version = "1.0.0"
+dependencies = [
+ "askbar-proto",
+ "askbar-service",
+ "axum",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "askbar-model-gateway"
 version = "1.0.0"
 dependencies = [
