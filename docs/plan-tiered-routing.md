@@ -56,14 +56,14 @@ This plan adds to the shared rules:
 | G6 | none | removed: local classifier dropped |
 | G7 | Phase 3 go-live | Shadow results meet the bar (under 5% frontier-to-fast misses, cheaper than always-`standard`); owner flips `chat_auto.mode` to live and approves Auto as default |
 | G8 | Phase 4 | Egress proxy software and licence; new container; compose and network changes |
-| G9 | Phase 5A (P5.3 on) | Ed25519 signing crate; MCP gateway software: agentgateway (Apache-2.0 image behind a Rust front) or, as fallback, IBM ContextForge, as chosen at G13; new containers `mcp-gateway`, `searxng`; accept the MCP gateway ADR; where approval verification code lives (ADR 0045 allows, or a new crate) |
+| G9 | Phase 5A (P5.3 on) | **Decided 2026-11-24** (the ADR is still open): Ed25519 with `ring` (already in `Cargo.lock`, no new crate; fallback `ed25519-dalek` 3.0 is a new crate, so the owner's call); `Approval` and `ToolAction` stay in `askbar-proto` with no crypto, sign and verify live in `askbar-service` behind a new optional `approval` feature (ADR 0036 amendment; a separate crate only if the Phase 9 executor needs it); new containers `mcp-gateway` and `searxng`, `searxng` being the unmodified upstream image (AGPL-3.0 as a separate unmodified container, the author's reading, not legal advice). Open: the owner accepts the MCP gateway ADR |
 | G10 | Phase 9 (deferrable) | Executor host and hardware; new image |
 | G11 | Phase 10 (deferrable) | Owner promotes each script; go-live bar met |
 | G12 | Phase 8 | same as G0; Phase 8 may start any time after it |
-| G13 | P5A.2 | Owner reads the spike result (P5A.1) and picks agentgateway or ContextForge (the unverified items decide) |
-| G14 | P5A.14 | Search MCP server and its destinations: searxng and the upstream search engines it reaches through the egress proxy |
-| G15 | P5A.15 | Fetch MCP server and its egress rule (any public URL that passes the ADR 0019 fetch rules) |
-| G16 | each later MCP server (P5A.16 on) | Owner approves every further MCP server, its credentials and its egress destination, one gate per destination |
+| G13 | P5A.2 | **Decided 2026-11-24:** no third-party gateway; own Rust front with native `search` and `fetch`; `rmcp` (the Rust MCP client) only at G16, agentgateway the runner-up as a later upstream behind the same front. The P5A.1 spike is not needed |
+| G14 | P5A.14 | **Decided 2026-11-24:** engines duckduckgo, brave, mojeek and wikipedia, no Google or Bing; the egress hosts are derived by running the pinned image against the egress proxy in log-only mode, not guessed. Open: the frozen host list (from that trial) |
+| G15 | P5A.15 | **Decided 2026-11-24:** the egress proxy is authoritative for private-range blocking; the MCP front enforces provenance, the query-data rule, content types and per-hop audit; `fetch` has its own egress source. Open: robots.txt is the owner's call |
+| G16 | each later MCP server (P5A.16 on) | **Decided 2026-11-24:** the 10-point approval checklist (in [phase-5a-mcp-gateway.md](plan-tiered-routing/phase-5a-mcp-gateway.md)) is the policy for approving each further MCP server, its credentials and its egress destination, one gate per destination |
 
 ## Assumptions to confirm (the design is silent)
 
