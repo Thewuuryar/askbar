@@ -459,6 +459,18 @@ where
         }
         on_delta(s);
     };
+    // True once the provider signals the end of the stream.
+    let mut handle = |events: Vec<SseEvent>, report: &mut StreamReport| -> Result<bool, ChatError> {
+        for ev in events {
+            match decode_event(provider.kind, &ev)? {
+                Step::Delta(s) => deliver(&s, report),
+                Step::Usage(u) => note_usage(u, report),
+                Step::Done => return Ok(true),
+                Step::Skip => {}
+            }
+        }
+        Ok(false)
+    };
     let mut stream = Box::pin(resp.bytes_stream());
     let mut parser = SseParser::default();
     loop {
@@ -471,23 +483,11 @@ where
             Some(Err(e)) => return Err(ChatError::Stream(e.to_string())),
             Some(Ok(bytes)) => parser.feed(&bytes),
         };
-        for ev in events {
-            match decode_event(provider.kind, &ev)? {
-                Step::Delta(s) => deliver(&s, report),
-                Step::Usage(u) => note_usage(u, report),
-                Step::Done => return Ok(StreamOutcome::Completed),
-                Step::Skip => {}
-            }
+        if handle(events, report)? {
+            return Ok(StreamOutcome::Completed);
         }
     }
-    for ev in parser.finish() {
-        match decode_event(provider.kind, &ev)? {
-            Step::Delta(s) => deliver(&s, report),
-            Step::Usage(u) => note_usage(u, report),
-            Step::Done => break,
-            Step::Skip => {}
-        }
-    }
+    handle(parser.finish(), report)?;
     Ok(StreamOutcome::Completed)
 }
 

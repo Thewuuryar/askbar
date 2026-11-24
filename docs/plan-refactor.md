@@ -247,7 +247,7 @@ Branch `refactor/before-canaries`. PR title `refactor(proto): share message trim
 - [x] **RL.1** `refactor(proto): share normalize and last_turns` · haiku
   Files: `crates/askbar-proto/src/lib.rs`, `services/server/src/llm.rs`, `services/model-gateway/src/llm.rs`.
   Do: move the two functions and one copy of their tests to `askbar-proto`. Both services call it.
-- [ ] **RL.2** `refactor(model-gateway): decode stream events in one place` · sonnet
+- [x] **RL.2** `refactor(model-gateway): decode stream events in one place` · sonnet
   Files: `services/model-gateway/src/llm.rs` (`run_request`).
   Do: the two `match decode_event(...)` blocks become one helper, so C1.1 sets `finish_reason` once.
 
