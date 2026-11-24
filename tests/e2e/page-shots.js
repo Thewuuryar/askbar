@@ -24,6 +24,7 @@ const fs = require('node:fs');
 const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
+const { freePort } = require('./ports');
 
 const ROOT = path.resolve(__dirname, '../..');
 const args = process.argv.slice(2);
@@ -45,7 +46,6 @@ const PASSWORD = 'correct horse battery';
 const AUDIT_PASS = 'correct horse battery staple 42';
 const BACKUP_PASS = 'shots backup passphrase, its own 1';
 
-const freePort = () => new Promise((resolve) => { const s = net.createServer().listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => resolve(p)); }); });
 async function waitForPort(port) {
   for (let i = 0; i < 100; i++) {
     const ok = await new Promise((r) => { const c = net.connect(port, '127.0.0.1', () => { c.end(); r(true); }); c.on('error', () => r(false)); });
@@ -108,7 +108,7 @@ async function bootStack() {
     ASKBAR_CPA_CONFIG_DIR: path.join(data, 'cpa-config'), ASKBAR_CPA_URL: 'http://127.0.0.1:' + cpaPort,
   });
   for (let i = 0; i < 100 && !fs.existsSync(sock); i++) await new Promise((r) => setTimeout(r, 50));
-  forwarder = net.createServer((c) => { const u = net.connect(sock); c.pipe(u); u.pipe(c); c.on('error', () => u.destroy()); u.on('error', () => c.destroy()); }).listen(adminPort, '127.0.0.1');
+  forwarder = net.createServer((c) => { const u = net.connect(sock); c.pipe(u); u.pipe(c); c.on('error', () => u.destroy()); u.on('error', () => c.destroy()); }).on('error', (e) => { console.error('forwarder cannot listen on ' + adminPort + ': ' + e.message); process.exit(1); }).listen(adminPort, '127.0.0.1');
   run(path.join(ROOT, 'target/debug/askbar-server'), [], {
     ASKBAR_CLIENT_API_ADDR: '127.0.0.1:' + api, ASKBAR_SERVER_API_ADDR: '127.0.0.1:' + serverApiPort,
     ASKBAR_SERVER_TOKEN_HASH_FILE: path.join(d.creds, 'server-token', 'accept', 'admin-server.sha256'),
