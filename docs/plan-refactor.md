@@ -229,7 +229,7 @@ Branch `refactor/tests-and-client`. PR title `refactor(client): share test setup
   - One function starts a turn (user row, streaming assistant row, `streamInto`) at its 3 call sites.
   - `addError`, `addUnsent` and `addWaiting` use `actionButton`.
   - `el.foot` loses the `hidden` attribute that is only ever set to `false`. Check the first paint.
-- [ ] **R5.5** `refactor(client): match 404 by status and share the cancel slot` · sonnet
+- [x] **R5.5** `refactor(client): match 404 by status and share the cancel slot` · sonnet
   Files: `clients/desktop/src-tauri/src/{main,remote}.rs`.
   Do:
   - One helper holds the cancel-slot pattern of `ask`, `resend` and `attach`.
