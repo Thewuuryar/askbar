@@ -1,16 +1,15 @@
 //! The auditor's alert rules against a real in-process auditor (plan step 4.2, ADR 0051, ADR 0055): what it sends the alerter
 //! because of the records it takes, the requests on its links and the time. The alerter is a collector; the clock is a number.
 
-use askbar_audit::{AuditDb, Recorder};
-use askbar_auditor::rules::Alerts;
-use askbar_auditor::{disk::FreeSpace, Auditor, Limits};
+mod common;
+
+use askbar_auditor::Limits;
 use askbar_proto::alerter::{Event, Fields, Kind, Sender, Severity};
+use common::{token, T};
 use reqwest::Method as M;
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::Ordering;
 
 const ADMIN_APPEND: &str = "admin-auditor-append";
 const ADMIN_READ: &str = "admin-auditor-read";
@@ -18,61 +17,9 @@ const SERVER: &str = "server-auditor";
 const GATEWAY: &str = "model-gateway-auditor";
 const ALERTER: &str = "alerter-auditor";
 
-/// What the rules sent, in order.
-#[derive(Default)]
-struct Collector(Mutex<Vec<Event>>);
-
-impl Alerts for Collector {
-    fn send(&self, kind: Kind, severity: Severity, fields: Fields) {
-        self.0.lock().unwrap().push(Event { kind, severity, at: 0, fields });
-    }
-}
-
-struct T {
-    url: String,
-    dir: PathBuf,
-    auditor: Arc<Auditor>,
-    http: reqwest::Client,
-    sent: Arc<Collector>,
-    /// What the volume has free, by the byte.
-    free: Arc<AtomicU64>,
-}
-
-impl Drop for T {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.dir);
-    }
-}
-
-fn token(link: &str) -> String {
-    format!("tok_{link}_secret")
-}
-
-fn hex(s: &str) -> String {
-    Sha256::digest(s.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
-}
-
-const GIB: u64 = 1024 * 1024 * 1024;
-
 /// An auditor with rules over a collector, on `dir` (a data directory already holding records, or a new one).
 async fn start_on(dir: PathBuf) -> T {
-    let accept = dir.join("tokens/accept");
-    std::fs::create_dir_all(&accept).unwrap();
-    for link in [ADMIN_APPEND, ADMIN_READ, SERVER, GATEWAY, ALERTER] {
-        std::fs::write(accept.join(format!("{link}.sha256")), format!("{}\n", hex(&token(link)))).unwrap();
-    }
-    let limits = Limits::default();
-    let recorder = Recorder::spawn(AuditDb::open(&dir.join("data/audit.db")).unwrap(), limits.max_queued);
-    let free = Arc::new(AtomicU64::new(100 * GIB));
-    let f = free.clone();
-    let free_space: FreeSpace = Arc::new(move || Some(f.load(Ordering::Relaxed)));
-    let sent = Arc::new(Collector::default());
-    let auditor = Auditor::new(recorder, limits, free_space).with_alerts(sent.clone());
-    let app = askbar_auditor::router(auditor.clone(), askbar_auditor::links(&dir.join("tokens")));
-    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("http://{}", l.local_addr().unwrap());
-    tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
-    T { url, dir, auditor, http: reqwest::Client::new(), sent, free }
+    common::start_on(dir, Limits::default(), &[ADMIN_APPEND, ADMIN_READ, SERVER, GATEWAY, ALERTER], true).await
 }
 
 async fn start() -> T {

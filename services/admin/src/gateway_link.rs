@@ -8,6 +8,7 @@
 //! A configuration's version is a hash of its content (the keys included), so the admin needs no counter and two
 //! admins would agree. It is only compared, never shown. No key is logged, returned or put in an error here.
 
+use crate::link_client::LinkClient;
 use crate::secrets::AdminSecrets;
 use crate::server_link::build_snapshot;
 use crate::AdminState;
@@ -17,10 +18,9 @@ use askbar_proto::ErrorCode;
 use rusqlite::{params, Connection, OptionalExtension};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::Notify;
 
 /// The link's name, as `bootstrap` names it.
 pub const LINK: &str = "admin-model-gateway";
@@ -30,7 +30,7 @@ const CHECK_EVERY: Duration = Duration::from_secs(12);
 /// The gateway's address: `ASKBAR_GATEWAY_URL`, default `http://gateway-admin-host:8084` (the alias exists on the
 /// `gateway-admin` network only).
 pub fn gateway_url() -> String {
-    std::env::var("ASKBAR_GATEWAY_URL").ok().filter(|p| !p.trim().is_empty()).unwrap_or_else(|| "http://gateway-admin-host:8084".into())
+    crate::env_or("ASKBAR_GATEWAY_URL", "http://gateway-admin-host:8084")
 }
 
 /// The token this admin sends the gateway, made by `bootstrap` (ADR 0049).
@@ -40,19 +40,7 @@ pub fn token_file(token_dir: &Path) -> PathBuf {
 
 /// Read it. A missing or empty file means `bootstrap` has not run, and the error says what to do.
 pub fn read_token(token_dir: &Path) -> std::io::Result<String> {
-    let path = token_file(token_dir);
-    let missing = |why: &str| {
-        std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            format!("{} {why}; run `docker compose up -d`, which runs bootstrap first", path.display()),
-        )
-    };
-    match std::fs::read_to_string(&path) {
-        Ok(t) if !t.trim().is_empty() => Ok(t.trim().to_string()),
-        Ok(_) => Err(missing("is empty")),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(missing("is missing")),
-        Err(e) => Err(e),
-    }
+    crate::read_link_token(token_dir, LINK)
 }
 
 // ------------------------------------------------------------------ the keys
@@ -153,69 +141,38 @@ pub enum Sync {
 }
 
 pub struct GatewayLink {
-    http: reqwest::Client,
-    base: String,
-    token: String,
-    online: AtomicBool,
-    last_error: Mutex<Option<String>>,
-    dirty: Notify,
-    token_watch: crate::notify::TokenWatch,
-    restarts: crate::notify::RestartWatch,
+    link: LinkClient,
 }
 
 impl GatewayLink {
     pub fn new(base: &str, token: String) -> Arc<GatewayLink> {
         Arc::new(GatewayLink {
-            http: reqwest::Client::builder()
-                .connect_timeout(Duration::from_secs(2))
-                .timeout(Duration::from_secs(10))
-                .build()
-                .expect("reqwest client"),
-            base: base.trim_end_matches('/').to_string(),
-            token,
-            online: AtomicBool::new(false),
-            last_error: Mutex::new(None),
-            dirty: Notify::new(),
-            token_watch: crate::notify::TokenWatch::new(LINK),
-            restarts: crate::notify::RestartWatch::new("model-gateway"),
+            link: LinkClient::new(base, token, LINK, "model-gateway", askbar_proto::paths::MODEL_GATEWAY_V1, Duration::from_secs(10)),
         })
     }
 
-    /// Where an alert about this link's token goes (set once by `main`).
     pub fn set_notifier(&self, n: Arc<crate::notify::Notifier>) {
-        self.token_watch.set_notifier(n.clone());
-        self.restarts.set_notifier(n);
+        self.link.set_notifier(n);
     }
 
     pub fn online(&self) -> bool {
-        self.online.load(Ordering::Relaxed)
+        self.link.online()
     }
 
-    /// A sentence about the last problem, for the Services page; never anything the gateway said.
     pub fn last_error(&self) -> Option<String> {
-        self.last_error.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.link.last_error()
     }
 
     fn set_error(&self, what: Option<String>) {
-        *self.last_error.lock().unwrap_or_else(|e| e.into_inner()) = what;
+        self.link.set_error(what);
     }
 
-    /// Check the gateway now instead of at the next round: something it runs has changed.
     pub fn mark_dirty(&self) {
-        self.dirty.notify_one();
+        self.link.mark_dirty();
     }
 
     async fn request(&self, method: reqwest::Method, path: &str, body: Option<&serde_json::Value>) -> Result<(u16, Vec<u8>), ()> {
-        let url = format!("{}{}{path}", self.base, askbar_proto::paths::MODEL_GATEWAY_V1);
-        let mut req = self.http.request(method, url).bearer_auth(&self.token);
-        if let Some(b) = body {
-            req = req.json(b);
-        }
-        let resp = req.send().await.map_err(|_| ())?;
-        let status = resp.status().as_u16();
-        self.token_watch.saw(status);
-        let bytes = resp.bytes().await.map_err(|_| ())?;
-        Ok((status, bytes.to_vec()))
+        self.link.request(method, path, body).await
     }
 
     /// A call on the gateway for the admin API: what it answered, after giving it the configuration if it has none (a
@@ -248,9 +205,9 @@ impl GatewayLink {
                 .map(|v| (v["config_version"].as_u64(), v["boot_id"].as_str().unwrap_or_default().to_string())),
             _ => None,
         };
-        self.online.store(ok.is_some(), Ordering::Relaxed);
+        self.link.online.store(ok.is_some(), Ordering::Relaxed);
         if let Some((_, boot)) = &ok {
-            self.restarts.saw(boot);
+            self.link.restarts.saw(boot);
         }
         if ok.is_none() {
             self.set_error(Some(match result {
@@ -336,7 +293,7 @@ impl GatewayLink {
                 Sync::Refused(why)
             }
             Err(()) => {
-                self.online.store(false, Ordering::Relaxed);
+                self.link.online.store(false, Ordering::Relaxed);
                 self.set_error(Some("The gateway did not answer the configuration.".into()));
                 Sync::Unreachable
             }
@@ -359,7 +316,7 @@ impl GatewayLink {
             }
             tokio::select! {
                 _ = tokio::time::sleep(CHECK_EVERY) => {}
-                _ = self.dirty.notified() => {}
+                _ = self.link.dirty.notified() => {}
             }
         }
     }

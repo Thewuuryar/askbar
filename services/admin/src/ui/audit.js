@@ -5,24 +5,14 @@
 (() => {
   'use strict';
   const { api, registerTab, show, $, openSession, closeSession } = window.askbarAdmin;
+  const { ui } = window;
 
   const PAGE = document.body.dataset.page;
   const SEALED = 'audit/sealed';
-  const DAY = 24 * 3600; // time-unit maths, not a limit
 
   // One banner for anything that stops the tab reading: the auditor away (503), or the server away (502), which
   // only provider names need. The views keep their "nothing yet" text underneath.
-  function banner(message) {
-    const el = $('audit-error');
-    el.textContent = message || '';
-    show(el, !!message);
-  }
-
-  function explain(e) {
-    if (e.status === 502) return 'The server is offline, so provider names cannot be read right now.';
-    if (e.status === 503) return 'The auditor cannot be reached, so the audit trail cannot be read right now. Nothing is lost: records wait and are sent when it is back.';
-    return e.message;
-  }
+  const banner = (message) => ui.inlineError('audit-error', message);
 
   // Runs a read and shows its failure in the banner; returns undefined on failure.
   async function read(path) {
@@ -31,7 +21,7 @@
       banner('');
       return data;
     } catch (e) {
-      if (e.message !== 'Signed out') banner(explain(e));
+      if (e.message !== 'Signed out') banner(ui.explain(e));
       return undefined;
     }
   }
@@ -41,12 +31,6 @@
     if (cls) n.className = cls;
     if (text !== undefined) n.textContent = text;
     return n;
-  }
-
-  const number = (n) => Number(n).toLocaleString('en-US');
-  function duration(ms) {
-    if (ms == null) return '–';
-    return ms >= 1000 ? (Math.round(ms / 100) / 10) + ' s' : Math.round(ms) + ' ms';
   }
 
   // ------------------------------------------------------------ sealed access
@@ -91,11 +75,9 @@
   async function loadAccess() {
     const r = await read('/api/admin/v1/audit/access');
     if (!r) return;
-    const body = $('audit-access-rows');
-    body.textContent = '';
     show($('audit-access'), r.access.length > 0);
     show($('audit-access-empty'), r.access.length === 0);
-    for (const a of r.access) {
+    ui.rows($('audit-access-rows'), r.access, (a) => {
       const tr = el('tr');
       tr.dataset.access = String(a.id);
       for (const [text, cls] of [
@@ -106,8 +88,8 @@
       ]) tr.appendChild(el('td', cls, text));
       // Ended and How it ended are not available yet (rule 40): the cells stay empty and greyed.
       tr.append(el('td', 'na-cell'), el('td', 'na-cell'));
-      body.appendChild(tr);
-    }
+      return tr;
+    }, { key: (a) => a.id });
   }
 
   function startSealed() {
@@ -174,19 +156,17 @@
       providerNames = Object.fromEntries(list.map((p) => [p.id, p.name]));
     } catch (_) { /* names are a nicety; ids are shown without them */ }
   }
-  const providerLabel = (id) => (id ? providerNames[id] || id : '–');
+  const providerLabel = (id) => ui.providerLabel(providerNames, id);
 
   // The tries of the request in the address, in order: which provider, which try, how it ended. `missing` says why
   // there is no request to show (not in the trail), instead of the default prompt.
   function renderAttempts(trace, missing) {
     const attempts = ((trace && trace.spans) || []).filter((s) => s.kind === 'attempt').sort((a, b) => ((a.attrs && a.attrs.started_ms) || a.started_at * 1000) - ((b.attrs && b.attrs.started_ms) || b.started_at * 1000) || (a.id < b.id ? -1 : 1));
-    const body = $('audit-attempt-rows');
-    body.textContent = '';
     show($('audit-attempts'), attempts.length > 0);
     const empty = $('audit-routing-empty');
     show(empty, attempts.length === 0);
     empty.textContent = missing || (trace ? 'This request has no tries recorded.' : 'Pick a request on Model calls to see how it was routed.');
-    for (const a of attempts) {
+    ui.rows($('audit-attempt-rows'), attempts, (a) => {
       const at = a.attrs || {};
       const tr = el('tr');
       tr.dataset.attempt = a.id;
@@ -196,41 +176,39 @@
         [a.status, 'status-' + a.status],
         [failureClass(a.error_code) || '–'],
         [a.error_code || '–', 'wrap'],
-        [at.latency_ms != null ? duration(at.latency_ms) : '–'],
+        [at.latency_ms != null ? ui.duration(at.latency_ms) : '–'],
       ];
       for (const [text, cls] of cells) tr.appendChild(el('td', cls, text));
-      body.appendChild(tr);
-    }
+      return tr;
+    }, { key: (a) => a.id, sig: (a) => JSON.stringify([a, providerLabel(a.provider_id)]) });
   }
 
   // The request in the address (?id=, from Model calls), then the providers in the chosen range: tries, retries,
   // failures, and whether each provider's credentials are currently refused.
   async function loadRouting() {
-    const since = Math.floor(Date.now() / 1000) - Number($('routing-window').value) * DAY;
+    const since = Math.floor(Date.now() / 1000) - Number($('routing-window').value) * ui.DAY;
     const id = new URLSearchParams(location.search).get('id');
     const [, stats, health] = await Promise.all([loadNames(), read('/api/admin/v1/audit/stats?since=' + since), read('/api/admin/v1/audit/provider-health')]);
     const flagged = new Map(((health && health.providers) || []).map((p) => [p.provider_id, p]));
     const rows = ((stats && stats.by_provider) || []).filter((p) => p.provider_id);
     // A provider that is flagged but had no tries in the range still deserves a row.
     for (const pid of flagged.keys()) if (!rows.some((r) => r.provider_id === pid)) rows.push({ provider_id: pid, attempts: 0, retries: 0, failed_attempts: 0 });
-    const body = $('audit-routing-rows');
-    body.textContent = '';
     show($('audit-routing-table'), rows.length > 0);
     show($('audit-routing-overall-empty'), rows.length === 0);
-    for (const r of rows) {
+    ui.rows($('audit-routing-rows'), rows, (r) => {
       const tr = el('tr');
       tr.dataset.provider = r.provider_id;
       const f = flagged.get(r.provider_id);
       const cells = [
         [providerLabel(r.provider_id), 'wrap'],
-        [number(r.attempts || 0)],
-        [number(r.retries || 0)],
-        [number(r.failed_attempts || 0)],
+        [ui.number(r.attempts || 0)],
+        [ui.number(r.retries || 0)],
+        [ui.number(r.failed_attempts || 0)],
         [f ? 'refused since ' + new Date(f.since * 1000).toLocaleString() + (f.error_code ? ' (' + f.error_code + ')' : '') : 'ok', f ? 'status-error wrap' : ''],
       ];
       for (const [text, cls] of cells) tr.appendChild(el('td', cls, text));
-      body.appendChild(tr);
-    }
+      return tr;
+    }, { key: (r) => r.provider_id, sig: (r) => JSON.stringify([r, flagged.get(r.provider_id), providerLabel(r.provider_id)]) });
     // The request last, so its own message is the one left on screen.
     let trace;
     let missing = '';
@@ -239,7 +217,7 @@
         trace = await api('GET', '/api/admin/v1/audit/traces/' + encodeURIComponent(id));
       } catch (e) {
         if (e.status === 404) missing = 'This request is not in the audit trail.';
-        else if (e.message !== 'Signed out') banner(explain(e));
+        else if (e.message !== 'Signed out') banner(ui.explain(e));
       }
     }
     renderAttempts(trace, missing);

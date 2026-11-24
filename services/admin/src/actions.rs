@@ -32,19 +32,7 @@ pub fn token_file(token_dir: &Path) -> PathBuf {
 
 /// The append token `bootstrap` made. A missing or empty file means `bootstrap` has not run.
 pub fn append_token(token_dir: &Path) -> std::io::Result<String> {
-    let path = token_file(token_dir);
-    let missing = |why: &str| {
-        std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            format!("{} {why}; run `docker compose up -d`, which runs bootstrap first", path.display()),
-        )
-    };
-    match std::fs::read_to_string(&path) {
-        Ok(t) if !t.trim().is_empty() => Ok(t.trim().to_string()),
-        Ok(_) => Err(missing("is empty")),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(missing("is missing")),
-        Err(e) => Err(e),
-    }
+    crate::read_link_token(token_dir, APPEND_LINK)
 }
 
 /// Why a record could not be appended.

@@ -1,15 +1,16 @@
 //! The auditor's API against a real in-process auditor: tokens and their scopes, acknowledged appends, boot IDs,
 //! retention, and the limits that make it refuse (ADR 0051, ADR 0010).
 
-use askbar_audit::{AuditDb, Recorder};
-use askbar_auditor::{disk::FreeSpace, Auditor, Limits};
+mod common;
+
+use askbar_audit::AuditDb;
+use askbar_auditor::Limits;
 use askbar_proto::audit as wire;
+use common::hex;
+use common::{token, T};
 use reqwest::Method as M;
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 const SERVER: &str = "server-auditor";
@@ -20,50 +21,15 @@ const GATEWAY_READ: &str = "model-gateway-auditor-read";
 const ALERTER: &str = "alerter-auditor";
 const RESTORE: &str = "admin-auditor-restore";
 
-struct T {
-    url: String,
-    dir: PathBuf,
-    auditor: Arc<Auditor>,
-    http: reqwest::Client,
-    free: Arc<AtomicU64>,
-}
-
-impl Drop for T {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.dir);
-    }
-}
-
-fn token(link: &str) -> String {
-    format!("tok_{link}_secret")
-}
-
-fn hex(s: &str) -> String {
-    Sha256::digest(s.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
-}
-
 async fn start() -> T {
     start_with(Limits::default()).await
 }
 
+/// No alert rules: the API rig has never run them.
 async fn start_with(limits: Limits) -> T {
     let dir = std::env::temp_dir().join(format!("askbar-auditor-{}", ulid::Ulid::new()));
-    let accept = dir.join("tokens/accept");
-    std::fs::create_dir_all(&accept).unwrap();
-    for link in [SERVER, GATEWAY, ADMIN_APPEND, ADMIN_READ, GATEWAY_READ, ALERTER, RESTORE] {
-        std::fs::write(accept.join(format!("{link}.sha256")), format!("{}\n", hex(&token(link)))).unwrap();
-    }
-    let recorder = Recorder::spawn(AuditDb::open(&dir.join("data/audit.db")).unwrap(), limits.max_queued);
-    // Plenty of room, unless a test says otherwise.
-    let free = Arc::new(AtomicU64::new(100 * 1024 * 1024 * 1024));
-    let f = free.clone();
-    let free_space: FreeSpace = Arc::new(move || Some(f.load(Ordering::Relaxed)));
-    let auditor = Auditor::new(recorder, limits, free_space);
-    let app = askbar_auditor::router(auditor.clone(), askbar_auditor::links(&dir.join("tokens")));
-    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("http://{}", l.local_addr().unwrap());
-    tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
-    T { url, dir, auditor, http: reqwest::Client::new(), free }
+    let links = [SERVER, GATEWAY, ADMIN_APPEND, ADMIN_READ, GATEWAY_READ, ALERTER, RESTORE];
+    common::start_on(dir, limits, &links, false).await
 }
 
 struct Reply {

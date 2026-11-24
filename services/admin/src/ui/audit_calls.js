@@ -7,7 +7,6 @@
   const { api, registerTab, show, $ } = window.askbarAdmin;
   const { ui } = window;
 
-  const DAY = 24 * 3600; // time-unit maths, not a limit
   const PANEL = 'trace-panel';
   const size = () => ui.constants.AUDIT_PAGE_SIZE;
 
@@ -21,19 +20,14 @@
 
   // ------------------------------------------------------------ formatting
 
-  const number = (n) => Number(n).toLocaleString();
-  function duration(ms) {
-    if (ms == null) return '–';
-    return ms >= ui.MS ? (Math.round(ms / 100) / 10) + ' s' : Math.round(ms) + ' ms';
-  }
   // A cost is a number or null; null is shown as "unknown", never as 0.
   function money(c) {
     if (c == null) return 'unknown';
     return c === 0 ? '0' : String(Math.round(c * 1e6) / 1e6);
   }
   const whenText = (secs) => (secs ? new Date(secs * ui.MS).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '–');
-  const providerLabel = (id) => (id ? state.names[id] || id : '–');
-  const since = () => Math.floor(Date.now() / ui.MS) - state.days * DAY;
+  const providerLabel = (id) => ui.providerLabel(state.names, id);
+  const since = () => Math.floor(Date.now() / ui.MS) - state.days * ui.DAY;
 
   // The state and the word for a status, so it is never colour alone (rule 37).
   const STATUS = {
@@ -55,23 +49,14 @@
 
   // ------------------------------------------------------------ errors
 
-  function explain(e) {
-    if (e.status === 502) return 'The server is offline, so provider names cannot be read right now.';
-    if (e.status === 503) return 'The auditor cannot be reached, so the audit trail cannot be read right now. Nothing is lost: records wait and are sent when it is back.';
-    return e.message;
-  }
-  function banner(message) {
-    const line = $('calls-error');
-    line.textContent = message || '';
-    show(line, !!message);
-  }
+  const banner = (message) => ui.inlineError('calls-error', message);
 
   // ------------------------------------------------------------ the figures
 
   function renderKpis(s) {
     const put = (id, node) => $(id).replaceChildren(node);
     const dash = () => ui.el('span', { class: 'num', text: '–' });
-    const ms = (v) => (v == null ? dash() : ui.el('span', { class: 'num', text: duration(v) }));
+    const ms = (v) => (v == null ? dash() : ui.el('span', { class: 'num', text: ui.duration(v) }));
     if (!s) { for (const id of ['kpi-replies', 'kpi-errors', 'kpi-tokens', 'kpi-p50', 'kpi-p95']) put(id, dash()); return; }
     // Errors are what the auditor counts in its error rate: `error` and `timed_out`.
     const by = s.by_status;
@@ -92,7 +77,7 @@
       type: 'button', class: 'btn btn-quiet row-link', 'data-open': t.trace_id, text: when,
       'aria-label': 'Open the trace of the call at ' + when + (t.user_id ? ' for ' + t.user_id : ''),
     });
-    const tokens = t.tokens_in == null && t.tokens_out == null ? '–' : number(t.tokens_in || 0) + ' / ' + number(t.tokens_out || 0);
+    const tokens = t.tokens_in == null && t.tokens_out == null ? '–' : ui.number(t.tokens_in || 0) + ' / ' + ui.number(t.tokens_out || 0);
     const clip = (cls, text) => ui.el('td', { class: 'clip ' + cls, title: text === '–' ? null : text, text });
     const model = t.model || '–';
     const tr = ui.el('tr', { 'data-trace': t.trace_id, class: t.status === 'error' || t.status === 'timed_out' ? 'call-err' : null },
@@ -101,7 +86,7 @@
       clip('col-provider', providerLabel(t.provider_id)),
       clip('', model),
       ui.el('td', { class: 'num col-tokens', text: tokens }),
-      ui.el('td', { class: 'num col-duration', text: duration(t.latency_ms) }),
+      ui.el('td', { class: 'num col-duration', text: ui.duration(t.latency_ms) }),
       ui.el('td', null, statusNode(t.status)));
     if (t.trace_id === state.selected) mark(tr, true);
     return tr;
@@ -140,7 +125,7 @@
     const empty = $('calls-empty');
     show(empty, rows.length === 0);
     if (rows.length === 0) empty.replaceChildren(ui.empty(state.status || state.provider ? 'No model calls match these filters.' : 'No model calls recorded in this range.'));
-    $('calls-count').textContent = rows.length === 0 ? '' : 'Showing ' + number(rows.length) + (rows.length === 1 ? ' call' : ' calls');
+    $('calls-count').textContent = rows.length === 0 ? '' : 'Showing ' + ui.number(rows.length) + (rows.length === 1 ? ' call' : ' calls');
     show($('calls-more'), rows.length > 0 && !state.lastPageDone);
   }
 
@@ -179,7 +164,7 @@
       draw(ctx.first || ctx.force || quietNext);
       quietNext = false;
     },
-    onError(e) { if (e.message !== 'Signed out') banner(explain(e)); },
+    onError(e) { if (e.message !== 'Signed out') banner(ui.explain(e)); },
   });
 
   // A change of filter or range starts again from the newest call.
@@ -219,7 +204,7 @@
       banner('');
       draw(true); // older calls, not new ones: no highlight
     } catch (e) {
-      if (e.message !== 'Signed out') banner(explain(e));
+      if (e.message !== 'Signed out') banner(ui.explain(e));
     } finally {
       done();
     }
@@ -274,7 +259,7 @@
       'starts at +' + row.offsetMs + ' ms, takes ' + row.durationMs + ' ms',
     ];
     if (s.provider_id) lines.push('provider ' + providerLabel(s.provider_id) + (s.model ? ' · ' + s.model : ''));
-    if (s.tokens_in != null || s.tokens_out != null) lines.push('tokens ' + number(s.tokens_in || 0) + ' in, ' + number(s.tokens_out || 0) + ' out' + (s.tokens_cached ? ', ' + number(s.tokens_cached) + ' cached' : ''));
+    if (s.tokens_in != null || s.tokens_out != null) lines.push('tokens ' + ui.number(s.tokens_in || 0) + ' in, ' + ui.number(s.tokens_out || 0) + ' out' + (s.tokens_cached ? ', ' + ui.number(s.tokens_cached) + ' cached' : ''));
     if (s.ttft_ms != null) lines.push('first token after ' + s.ttft_ms + ' ms');
     if (s.cost != null) lines.push('cost ' + money(s.cost));
     if (s.error_code) lines.push('error ' + s.error_code);
@@ -305,9 +290,9 @@
     axis.replaceChildren();
     if (total == null) return;
     axis.append(ui.el('span'), ui.el('span', { class: 'axis-track' },
-      ui.el('span', { class: 'tick tick-start', 'data-tick': 'start', text: duration(0) }),
-      ui.el('span', { class: 'tick tick-mid', 'data-tick': 'mid', text: duration(total / 2) }),
-      ui.el('span', { class: 'tick tick-end', 'data-tick': 'end', text: duration(total) })), ui.el('span'));
+      ui.el('span', { class: 'tick tick-start', 'data-tick': 'start', text: ui.duration(0) }),
+      ui.el('span', { class: 'tick tick-mid', 'data-tick': 'mid', text: ui.duration(total / 2) }),
+      ui.el('span', { class: 'tick tick-end', 'data-tick': 'end', text: ui.duration(total) })), ui.el('span'));
   }
 
   function renderWaterfall(trace) {
@@ -326,20 +311,20 @@
       const kind = KINDS.includes(s.kind) ? ' kind-' + s.kind : '';
       const bar = ui.el('span', {
         class: 'span-bar' + kind + ' status-' + s.status + (row.running ? ' running' : ''), 'data-span': s.id, tabindex: '0', role: 'img',
-        'aria-label': s.kind + ' ' + s.name + ', ' + s.status + ', ' + duration(row.durationMs) + (notes.has(s.id) ? ', ' + notes.get(s.id) : ''),
+        'aria-label': s.kind + ' ' + s.name + ', ' + s.status + ', ' + ui.duration(row.durationMs) + (notes.has(s.id) ? ', ' + notes.get(s.id) : ''),
       });
       bar.style.left = row.left + '%';
       bar.style.width = row.width + '%';
       const showDetails = () => { details.textContent = spanDetails(row); show(details, true); };
       bar.addEventListener('mouseenter', showDetails);
       bar.addEventListener('focus', showDetails);
-      box.append(ui.el('div', { class: 'span-row', role: 'listitem' }, label, ui.el('span', { class: 'track' }, bar), ui.el('span', { class: 'dur num', text: duration(row.durationMs) })));
+      box.append(ui.el('div', { class: 'span-row', role: 'listitem' }, label, ui.el('span', { class: 'track' }, bar), ui.el('span', { class: 'dur num', text: ui.duration(row.durationMs) })));
       legend.add(FAILED.includes(s.status) ? 'failed' : KINDS.includes(s.kind) ? s.kind : 'other');
     }
     renderAxis(lay.rows.length ? lay.total : null);
     renderLegend(legend);
     show(details, false);
-    $('trace-total').textContent = '· ' + duration(lay.total) + ' total';
+    $('trace-total').textContent = '· ' + ui.duration(lay.total) + ' total';
   }
 
   // What each colour means, for the kinds drawn. The words are in the rows too, so this is a key, not the only carrier.
@@ -358,7 +343,7 @@
     const tries = spans.filter((s) => s.kind === 'attempt').sort((a, b) => ((a.attrs && a.attrs.started_ms) || a.started_at * 1000) - ((b.attrs && b.attrs.started_ms) || b.started_at * 1000));
     const last = tries[tries.length - 1] || null;
     const tokens = turn && (turn.tokens_in != null || turn.tokens_out != null)
-      ? number(turn.tokens_in || 0) + ' in / ' + number(turn.tokens_out || 0) + ' out' + (turn.tokens_cached ? ' / ' + number(turn.tokens_cached) + ' cached' : '')
+      ? ui.number(turn.tokens_in || 0) + ' in / ' + ui.number(turn.tokens_out || 0) + ' out' + (turn.tokens_cached ? ' / ' + ui.number(turn.tokens_cached) + ' cached' : '')
       : '–';
     const ttft = (last && last.ttft_ms != null ? last.ttft_ms : turn && turn.ttft_ms != null ? turn.ttft_ms : null);
     const facts = [
@@ -367,7 +352,7 @@
       ['Provider', providerLabel(last && last.provider_id)],
       ['Model', (last && last.model) || (turn && turn.model) || '–'],
       ['Tokens', tokens],
-      ['First token', ttft == null ? '–' : duration(ttft)],
+      ['First token', ttft == null ? '–' : ui.duration(ttft)],
       ['Tries', tries.length ? String(tries.length) : '–'],
       ['Cost', money(trace.cost)],
     ];
@@ -501,7 +486,7 @@
     } catch (e) {
       if (seq !== state.seq || e.message === 'Signed out') return;
       show($('trace-loading'), false);
-      $('trace-error').textContent = e.status === 404 ? 'This call is not in the audit trail. It may be older than the time records are kept.' : explain(e);
+      $('trace-error').textContent = e.status === 404 ? 'This call is not in the audit trail. It may be older than the time records are kept.' : ui.explain(e);
       show($('trace-error'), true);
       return;
     }

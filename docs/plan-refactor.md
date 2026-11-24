@@ -166,23 +166,23 @@ Branch `refactor/service-boot`. PR title `refactor(model-gateway): share service
 
 Branch `refactor/admin-links-and-ui`. PR title `refactor(admin): share link code and settings markup`. UI steps run `cargo test -p askbar-admin` and `npm test`. Keep the exports `tests/e2e/admin.test.js` calls (`window.ui.rowConfirm`, `menu`, `lengthHint`, `confirm`, `window.askbarAudit.*`). Update the macro lists in `services/admin/src/pages.rs` and `docs/reference/admin-ui/components.md` when macros change.
 
-- [ ] **R4.1** `refactor(admin): one token reader and env default for the links` · haiku
+- [x] **R4.1** `refactor(admin): one token reader and env default for the links` · haiku
   Files: `services/admin/src/{server_link,alerter_link,gateway_link,auditor_link,actions,lib}.rs`, plus the other files that repeat the env-default chain (`cpa.rs`, `backup_schedule.rs`, `admin_api.rs`, `caddy.rs`).
   Do:
   - One `read_link_token(token_dir, link)` replaces the 6 copies of `read_token`, `read_restore_token` and `append_token`. Keep `server_link::read_token`, which `tests/actions.rs` calls.
   - One `env_or(key, default)` replaces the 13 copies of `env::var(..).ok().filter(..)`.
-- [ ] **R4.2** `refactor(admin): one link client for the alerter and gateway links` · sonnet · after R4.1
+- [x] **R4.2** `refactor(admin): one link client for the alerter and gateway links` · sonnet · after R4.1
   Files: `services/admin/src/{alerter_link,gateway_link}.rs`, new `services/admin/src/link_client.rs`.
   Do: one struct holds the HTTP client, base URL, token, online state, last error, dirty flag, token watch, restarts and API prefix, with `new`, `set_notifier`, `online`, `last_error`, `set_error`, `mark_dirty` and `request`. Both links embed it and keep their own `sync` and `run`.
   Accept: `tests/alerts.rs` and `tests/gateway.rs` pass unchanged.
-- [ ] **R4.3** `refactor(admin): split admin_api.rs into modules` · haiku
+- [x] **R4.3** `refactor(admin): split admin_api.rs into modules` · haiku
   Files: `services/admin/src/admin_api.rs`, new `services/admin/src/admin_api/{settings,sealed}.rs`.
   Do: move the settings section and the sealed-content section without changes.
   Accept: the route table and the OpenAPI test are unchanged.
 - [ ] **R4.4** `test(admin): share fake link servers` · haiku
   Files: `services/admin/tests/{common/mod.rs,alerts.rs,gateway.rs,backup_bundle.rs,restore.rs}`.
   Do: move `fake_status`, `fake_restart`, `fake_config`, `Fake` and `fake_alerter` into `tests/common`. Merge two copies only where their response bodies match.
-- [ ] **R4.5** `refactor(ui): settings section and number field macros` · haiku
+- [x] **R4.5** `refactor(ui): settings section and number field macros` · haiku
   Files: `services/admin/src/ui/templates/{components,backup,general,notifications,security,network}.html`, `services/admin/src/pages.rs`, `docs/reference/admin-ui/components.md`.
   Do:
   - A `settings_section` call-body macro replaces the about 25 copies of the `sec-sec`/`sec-lab`/`sec-fields` scaffold.
@@ -190,13 +190,13 @@ Branch `refactor/admin-links-and-ui`. PR title `refactor(admin): share link code
   - In `security.html` the body is a `<form class="sec-fields">`; keep it as one.
 
   Accept: the rendered pages are unchanged apart from whitespace; the browser tests pass.
-- [ ] **R4.6** `refactor(ui): share audit page helpers and inline errors` · haiku
+- [x] **R4.6** `refactor(ui): share audit page helpers and inline errors` · haiku
   Files: `services/admin/src/ui/{audit,audit_calls,app,components}.js`.
   Do:
   - Put `explain`, `banner`, `DAY`, `duration`, `number` and `providerLabel` on `ui` once.
   - `audit.js` uses `ui.rows` for its three hand-built tables.
   - The 22 hand-written error displays use `inlineError`, and the four `onError` lambdas become one.
-- [ ] **R4.7** `refactor(ui): remove the unused button helper and ETag cache` · haiku
+- [x] **R4.7** `refactor(ui): remove the unused button helper and ETag cache` · haiku
   Files: `services/admin/src/ui/{components,app}.js`.
   Do:
   - Delete `ui.button`, which has no callers.
@@ -207,35 +207,35 @@ Branch `refactor/admin-links-and-ui`. PR title `refactor(admin): share link code
 
 Branch `refactor/tests-and-client`. PR title `refactor(client): share test setup and popup helpers`.
 
-- [ ] **R5.1** `test(server): one mock model launcher and serve helper` · haiku
+- [x] **R5.1** `test(server): one mock model launcher and serve helper` · haiku
   Files: `services/server/src/testing.rs` (or `tests/common/mod.rs`), `services/server/tests/{chat,audit,load,failures,router,server_api,read_api,auth,snapshot_auth}.rs`.
   Do:
   - `MockLlm::start()` (with the port and request log) replaces 6 launchers.
   - `serve(router)` replaces 11 bind-and-spawn pairs.
   - The local `provider()` builders wrap `testing::provider`.
   - `hex` and `client` are defined once.
-- [ ] **R5.2** `test(auditor): share test setup` · haiku
+- [x] **R5.2** `test(auditor): share test setup` · haiku
   Files: `services/auditor/tests/{common/mod.rs,api.rs,alerts.rs,latency.rs,ingest.rs}`.
   Do: move `token`, `hex`, `T` (with its `Drop`) and `start` to `tests/common`.
-- [ ] **R5.3** `refactor(client): one invoke wrapper and one refresh in the popup` · haiku
+- [x] **R5.3** `refactor(client): one invoke wrapper and one refresh in the popup` · haiku
   Files: `clients/desktop/ui/main.js`, `clients/desktop/tests/`.
   Do:
   - `call(cmd, args, {quiet})` replaces the 9 `try { await invoke } catch { showNotice }` blocks and the `.catch(() => {})` calls.
   - `refreshAll()` replaces the repeated refresh sequences.
   - Delete `state.ui`, `state.provider` and `msg.provider`, which are written but never read.
-- [ ] **R5.4** `refactor(client): one turn starter and shared action buttons` · haiku · after R5.3
+- [x] **R5.4** `refactor(client): one turn starter and shared action buttons` · haiku · after R5.3
   Files: `clients/desktop/ui/main.js`.
   Do:
   - One function starts a turn (user row, streaming assistant row, `streamInto`) at its 3 call sites.
   - `addError`, `addUnsent` and `addWaiting` use `actionButton`.
   - `el.foot` loses the `hidden` attribute that is only ever set to `false`. Check the first paint.
-- [ ] **R5.5** `refactor(client): match 404 by status and share the cancel slot` · sonnet
+- [x] **R5.5** `refactor(client): match 404 by status and share the cancel slot` · sonnet
   Files: `clients/desktop/src-tauri/src/{main,remote}.rs`.
   Do:
   - One helper holds the cancel-slot pattern of `ask`, `resend` and `attach`.
   - `cancel_generation` and `delete_conversation` check the HTTP status, not the text `"404 Not Found."`.
   - The `lock` helper is defined once.
-- [ ] **R5.6** `test(e2e): one HTTP stub helper for the Python fixtures` · haiku
+- [x] **R5.6** `test(e2e): one HTTP stub helper for the Python fixtures` · haiku
   Files: `tests/e2e/{releases_mock,ntfy_sink,smtp_sink}.py`, new `tests/e2e/stub.py`.
   Do: one shared `BaseHTTPRequestHandler` setup. W5.5's fixture `searxng` and pages use it.
   Accept: `npm test` and `scripts/smoke.sh` pass.
