@@ -48,8 +48,9 @@ jobs:
   # ruleset's required checks, so this fails open: if it cannot tell, or itself fails, every job runs.
   #   stack    the images and the isolation check: anything but documentation and the desktop client (which no image contains);
   #   desktop  the desktop client's tests: anything but documentation (it depends on crates/ and services/server);
-  #   services the cargo tests, the admin browser test and the smoke test: anything but Markdown outside docs/openapi/ and
-  #   docs/wire-contract.md (the OpenAPI tests read those).
+  #   services the cargo tests, the admin browser test and the smoke test: anything but the desktop client, and Markdown outside
+  #   docs/openapi/ and docs/wire-contract.md (the OpenAPI tests read those). The one check that reads clients/desktop
+  #   (check-ui-tokens.sh) is in `lint`, which always runs.
   # `lint` (which holds the docs and UI-token checks), `dependencies` and `secrets` always run. A push, a manual run and the weekly run run everything.
   changes:
     runs-on: ubuntu-24.04
@@ -86,8 +87,9 @@ jobs:
               if [[ "$f" =~ $contract ]] || ! [[ "$f" =~ $prose ]]; then services=true; fi
               continue
             fi
-            services=true; desktop=true
-            [[ "$f" =~ ^clients/desktop/ ]] || stack=true
+            desktop=true
+            # The service tests never read clients/desktop (the token check that does is in lint, which always runs).
+            [[ "$f" =~ ^clients/desktop/ ]] || { services=true; stack=true; }
           done <<< "$files"
           printf '%s\n' "stack=$stack" "desktop=$desktop" "services=$services" >> "$GITHUB_OUTPUT"
           echo "stack=$stack desktop=$desktop services=$services"
