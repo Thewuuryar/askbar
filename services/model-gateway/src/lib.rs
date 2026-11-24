@@ -21,6 +21,7 @@ pub mod usage;
 use askbar_proto::audit::{SpanFinish, SpanKind, SpanStart};
 use askbar_proto::gateway::{ChatEvent, ChatRequest, FailureClass, GatewayConfig};
 use askbar_proto::http::ApiError;
+use askbar_proto::links::{ADMIN_MODEL_GATEWAY, SERVER_MODEL_GATEWAY};
 use askbar_proto::paths::MODEL_GATEWAY_V1;
 use askbar_proto::ErrorCode;
 use askbar_service::audit_client::{AuditClient, Refused};
@@ -216,7 +217,7 @@ const ADMIN_ROUTES: Routes =
     &[("GET", "/status"), ("PUT", "/config"), ("POST", "/restart"), ("POST", "/models"), ("POST", "/providers/*/test")];
 
 /// The two links: name as `bootstrap` names it (the file `accept/<name>.sha256`), the caller, and the routes.
-pub const LINKS: &[LinkDef] = &[("server-model-gateway", "server", SERVER_ROUTES), ("admin-model-gateway", "admin", ADMIN_ROUTES)];
+pub const LINKS: &[LinkDef] = &[(SERVER_MODEL_GATEWAY, "server", SERVER_ROUTES), (ADMIN_MODEL_GATEWAY, "admin", ADMIN_ROUTES)];
 
 fn full(rest: &str) -> String {
     links::full(MODEL_GATEWAY_V1, rest)

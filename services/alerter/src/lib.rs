@@ -20,6 +20,7 @@ use askbar_proto::alerter::{
     Severity, SmtpConfig, TestResult,
 };
 use askbar_proto::http::ApiError;
+use askbar_proto::links::{ADMIN_ALERTER, AUDITOR_ALERTER};
 use askbar_proto::paths::ALERTER_V1;
 use askbar_proto::ErrorCode;
 use askbar_service::audit_client::{now_parts, AuditClient};
@@ -412,7 +413,7 @@ const ADMIN_ROUTES: Routes = &[
 ];
 
 /// The two links: name as `bootstrap` names it (the file `accept/<name>.sha256`), the caller, and the routes.
-pub const LINKS: &[LinkDef] = &[("auditor-alerter", "auditor", AUDITOR_ROUTES), ("admin-alerter", "admin", ADMIN_ROUTES)];
+pub const LINKS: &[LinkDef] = &[(AUDITOR_ALERTER, "auditor", AUDITOR_ROUTES), (ADMIN_ALERTER, "admin", ADMIN_ROUTES)];
 
 fn full(rest: &str) -> String {
     links::full(ALERTER_V1, rest)

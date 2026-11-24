@@ -143,7 +143,7 @@ Branch `refactor/service-boot`. PR title `refactor(model-gateway): share service
   Files: `crates/askbar-service/src/links.rs`, `services/model-gateway/src/lib.rs`, `services/alerter/src/lib.rs`.
   Do: move `full`, `links_for`, `token_dir`, `shell` and `routes` into `askbar-service::links`. Use `Links::named()` for single-link tables. `server_links`, `admin_links` and `auditor_links` stay as one-line wrappers.
   Accept: the hash file paths and link names are unchanged; the link tests of both services pass.
-- [ ] **R3.3** `refactor(proto): one table of link names` · haiku · after R3.2
+- [x] **R3.3** `refactor(proto): one table of link names` · haiku · after R3.2
   Files: `crates/askbar-proto/src/lib.rs` (or a new `links.rs`), `services/bootstrap/src/links.rs`, `services/{model-gateway,alerter,auditor}/src/lib.rs`.
   Do: the link names as constants in `askbar-proto`. Bootstrap and the services use them, so P5A.9a adds a new link name in one place.
   Accept: bootstrap's test that every link is a row of the `architecture.md` table still passes.
