@@ -29,6 +29,8 @@ services:
     container_name: askbar-staging-model-gateway
   alerter:
     container_name: askbar-staging-alerter
+  egress-proxy:
+    container_name: askbar-staging-egress-proxy
   caddy:
     container_name: askbar-staging-caddy
     ports: !override

@@ -40,7 +40,7 @@ env:
   REGISTRY: ghcr.io/thewuuryar/
   # The built services, space-separated for the scripts below. The two bake steps list them one to a line (bake-action's `targets`
   # is a list: one space-separated string is taken as a single target name); keep the three in step.
-  SERVICES: bootstrap server admin auditor model-gateway alerter caddy cpa
+  SERVICES: bootstrap server admin auditor model-gateway alerter egress-proxy caddy cpa
 
 jobs:
   # Decides the channel, the commit, the tags and the environment. No checkout and no token.
@@ -159,6 +159,7 @@ jobs:
             auditor
             model-gateway
             alerter
+            egress-proxy
             caddy
             cpa
           push: true
@@ -190,6 +191,7 @@ jobs:
             auditor
             model-gateway
             alerter
+            egress-proxy
             caddy
             cpa
           set: |

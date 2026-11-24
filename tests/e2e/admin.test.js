@@ -79,6 +79,10 @@ async function runViewport(viewport) {
   // The alerter delivers alerts (ADR 0055), here to a stand-in ntfy server and a stand-in mail server.
   const alerterBin = path.join(ROOT, 'target/debug/askbar-alerter');
   if (!fs.existsSync(alerterBin)) execFileSync('cargo', ['build', '-q', '-p', 'askbar-alerter'], { cwd: ROOT, stdio: 'inherit' });
+  // The egress proxy (ADR 0056): the Services page lists what it refuses.
+  const egressBin = path.join(ROOT, 'target/debug/askbar-egress-proxy');
+  if (!fs.existsSync(egressBin)) execFileSync('cargo', ['build', '-q', '-p', 'askbar-egress-proxy'], { cwd: ROOT, stdio: 'inherit' });
+  const [egressAdminPort, egressSourcePort] = [await freePort(), await freePort()];
   const [alerterAuditorPort, alerterAdminPort, ntfyPort, smtpPort, smtpSeenPort, releasesPort] = [await freePort(), await freePort(), await freePort(), await freePort(), await freePort(), await freePort()];
   const auditorBin = path.join(ROOT, 'target/debug/askbar-auditor');
   if (!fs.existsSync(auditorBin)) execFileSync('cargo', ['build', '-q', '-p', 'askbar-auditor'], { cwd: ROOT, stdio: 'inherit' });
@@ -118,6 +122,10 @@ async function runViewport(viewport) {
     ASKBAR_ALERTER_RELEASES_URL: 'http://127.0.0.1:' + releasesPort + '/repos/Thewuuryar/askbar/releases/latest',
     ASKBAR_AUDIT_API_URL: 'http://127.0.0.1:' + auditPort,
   });
+  run(egressBin, [], {
+    ASKBAR_EGRESS_PROXY_TOKEN_DIR: path.join(dirs.creds, 'egress-proxy-token'), ASKBAR_EGRESS_PROXY_ADMIN_ADDR: '127.0.0.1:' + egressAdminPort,
+    ASKBAR_EGRESS_PROXY_SOURCES: 'model-gateway=127.0.0.1:' + egressSourcePort, ASKBAR_EGRESS_PROXY_RELAYS: '',
+  });
   run(gatewayBin, [], {
     ASKBAR_GATEWAY_SERVER_ADDR: '127.0.0.1:' + gatewayServerPort, ASKBAR_GATEWAY_ADMIN_ADDR: '127.0.0.1:' + gatewayAdminPort,
     ASKBAR_GATEWAY_TOKEN_DIR: path.join(dirs.creds, 'model-gateway-token'), ASKBAR_AUDIT_API_URL: 'http://127.0.0.1:' + auditPort,
@@ -126,7 +134,7 @@ async function runViewport(viewport) {
     ASKBAR_ADMIN_SOCKET: sock, ASKBAR_ADMIN_DATA_DIR: dirs.adminData, ASKBAR_ADMIN_SECRETS_DIR: dirs.adminSecrets,
     ASKBAR_ADMIN_TOKEN_DIR: path.join(dirs.creds, 'admin-token'), ASKBAR_SERVER_API_URL: 'http://127.0.0.1:' + serverApiPort,
     ASKBAR_GATEWAY_URL: 'http://127.0.0.1:' + gatewayAdminPort, ASKBAR_AUDIT_API_URL: 'http://127.0.0.1:' + auditPort,
-    ASKBAR_ALERTER_URL: 'http://127.0.0.1:' + alerterAdminPort,
+    ASKBAR_ALERTER_URL: 'http://127.0.0.1:' + alerterAdminPort, ASKBAR_EGRESS_PROXY_URL: 'http://127.0.0.1:' + egressAdminPort,
     ASKBAR_PUBLIC_URL: 'http://localhost:' + api,
     ASKBAR_BACKUP_DIR: path.join(data, 'backup'),
     ASKBAR_CPA_CONFIG_DIR: path.join(data, 'cpa-config'), ASKBAR_CPA_URL: 'http://127.0.0.1:' + await freePort(),
@@ -1033,6 +1041,30 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.waitForSelector('#provider-panel:not([hidden])');
     await page.click('#provider-cancel');
     await panelClosed();
+  });
+  await step('Services: a refused outbound request is listed as text, and a proxy that does not answer is not an empty list', async () => {
+    await openPage('services');
+    await page.waitForSelector('#denied .empty-row');
+    // A request from a source for a host that is not on its list (a CONNECT, as a client sends it).
+    await new Promise((resolve) => {
+      const c = net.connect(egressSourcePort, '127.0.0.1', () => c.write('CONNECT blocked-e2e.example:443 HTTP/1.1\r\nHost: blocked-e2e.example:443\r\n\r\n'));
+      c.on('data', () => c.destroy()); c.on('close', resolve); c.on('error', resolve);
+    });
+    await page.waitForFunction(() => /blocked-e2e\.example/.test(document.querySelector('#denied').innerText), null, { timeout: 40000 });
+    const row = await page.$eval('#denied tr:not(.empty-row)', (r) => [...r.children].map((c) => c.textContent));
+    assert.deepEqual(row.slice(1), ['model-gateway', 'blocked-e2e.example', '443', 'Not on the allowlist']);
+    // A host with markup is text: no element is made from it (the proxy sends `invalid`, so the answer is stubbed).
+    await page.route('**/api/admin/v1/egress/denied', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ online: true, error: null,
+      denied: [{ source: 'alerter', host: '<img id="e2e-x" src=x>', port: 443, reason: 'not_listed', at: Math.floor(Date.now() / 1000) }] }) }));
+    await page.reload();
+    await page.waitForFunction(() => /<img id="e2e-x"/.test(document.querySelector('#denied').textContent));
+    assert.equal(await page.locator('#denied img, #e2e-x').count(), 0, 'a host is never markup');
+    await page.unroute('**/api/admin/v1/egress/denied');
+    await page.route('**/api/admin/v1/egress/denied', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ online: false, error: 'The egress proxy does not answer.', denied: [] }) }));
+    await page.reload();
+    await page.waitForFunction(() => /does not answer/.test(document.querySelector('#denied-note').textContent));
+    assert.equal(await page.isVisible('#denied-table'), false, 'no empty list in place of the warning');
+    await page.unroute('**/api/admin/v1/egress/denied');
   });
   await step('Services: the six services show whether they answer, and Restart asks first and then acts', async () => {
     // No controller (ADR 0005): each state comes from the service. Here the server, the gateway and the admin run;

@@ -194,20 +194,21 @@ def out(ok, msg): print(("ok|" if ok else "bad|") + msg)
 def sp(s): return s.split()
 # service: networks | named volumes (name:ro = read-only) | published ports
 SPEC = {
-  "bootstrap": ("", "server-token admin-token auditor-token model-gateway-token alerter-token", ""),
+  "bootstrap": ("", "server-token admin-token auditor-token model-gateway-token alerter-token egress-proxy-token", ""),
   "server": ("audit-server client-api gateway-server server-api", "server-token:ro", ""),
-  "admin": ("alerter-admin audit-admin cpa-admin gateway-admin server-api", "cpa-config admin-data admin-secrets backup admin-token:ro admin-run caddy-run caddy-secrets", ""),
+  "admin": ("alerter-admin audit-admin cpa-admin egress-admin gateway-admin server-api", "cpa-config admin-data admin-secrets backup admin-token:ro admin-run caddy-run caddy-secrets", ""),
   "auditor": ("audit-admin audit-alerter audit-caddy audit-model-gateway audit-server", "auditor-data auditor-token:ro", ""),
   "model-gateway": ("audit-model-gateway cpa-gateway gateway-admin gateway-server outbound", "model-gateway-token:ro", ""),
   "alerter": ("alerter-admin alerter-outbound audit-alerter", "alerter-data alerter-token:ro", ""),
+  "egress-proxy": ("egress-admin egress-alerter egress-cpa egress-model-gateway egress-outbound", "egress-proxy-token:ro", ""),
   "mock-llm": ("edge outbound", "", ""),
   "caddy": ("audit-caddy client-api edge", "caddy-data caddy-config caddy-run admin-run caddy-secrets:ro", "443/tcp 80/tcp"),
   "cpa": ("cpa-admin cpa-gateway outbound", "cpa-config cpa-auth", ""),
 }
-OPEN = {"edge", "outbound", "alerter-outbound"}  # the networks with a route out
+OPEN = {"edge", "outbound", "alerter-outbound", "egress-outbound"}  # the networks with a route out
 ADD = {"bootstrap": "CHOWN", "caddy": "NET_BIND_SERVICE"}
-SEPARATE = [("cpa", "caddy"), ("alerter", "server"), ("alerter", "model-gateway"), ("alerter", "caddy"), ("alerter", "cpa")]
-out(set(S) == set(SPEC), "the stack declares exactly the services bootstrap, server, admin, auditor, model-gateway, alerter, mock-llm, caddy and cpa")
+SEPARATE = [("cpa", "caddy"), ("alerter", "server"), ("alerter", "model-gateway"), ("alerter", "caddy"), ("alerter", "cpa"), ("egress-proxy", "server"), ("egress-proxy", "auditor"), ("egress-proxy", "caddy")]
+out(set(S) == set(SPEC), "the stack declares exactly the services bootstrap, server, admin, auditor, model-gateway, alerter, egress-proxy, mock-llm, caddy and cpa")
 nets = {s: set(S[s].get("networks") or {}) for s in S}
 for s, (n, v, p) in SPEC.items():
     d = S.get(s)
@@ -295,7 +296,7 @@ CLIENT_IP=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$CLIENT_NET\
 [ "$(http "$CLIENT_NET" "http://$CLIENT_IP:8082/api/server/v1/health")" = 0 ] && pass "nothing on the client-api network answers on 8082" || fail "the server port answers on the client-api network"
 [ "$(http "$EDGE" "http://$SERVER_API/api/server/v1/health")" = 0 ] && pass "a container on edge cannot reach the server API address" || fail "the server API address is reachable from edge"
 admin_nets=$(nets_of "$ADMIN")
-[ "$admin_nets" = "${PROJECT}_alerter-admin ${PROJECT}_audit-admin ${PROJECT}_cpa-admin ${PROJECT}_gateway-admin ${PROJECT}_server-api " ] && pass "the admin is on server-api, cpa-admin, audit-admin, gateway-admin and alerter-admin only (all internal: no route out, never edge)" || fail "the admin's networks are: $admin_nets"
+[ "$admin_nets" = "${PROJECT}_alerter-admin ${PROJECT}_audit-admin ${PROJECT}_cpa-admin ${PROJECT}_egress-admin ${PROJECT}_gateway-admin ${PROJECT}_server-api " ] && pass "the admin is on server-api, cpa-admin, audit-admin, gateway-admin, alerter-admin and egress-admin only (all internal: no route out, never edge)" || fail "the admin's networks are: $admin_nets"
 
 echo "== 3. What the server can see"
 refused "the server cannot list /admin-secrets" docker exec "$SERVER" ls /admin-secrets
@@ -387,7 +388,7 @@ case "$admin_token" in mgt_*) pass "the admin's token has the admin-server prefi
 # file it has already given away. After a rotation the admin and the server read the new files on restart.
 before=$(docker exec "$ADMIN" sh -c 'cat /admin-token/call/admin-server.token' 2>/dev/null)
 out=$(docker compose -p "$PROJECT" run --rm --no-deps bootstrap 2>/dev/null)
-[ "$out" = "$(printf 'kept admin-server\nkept admin-auditor-append\nkept admin-auditor-read\nkept server-model-gateway\nkept admin-model-gateway\nkept model-gateway-auditor\nkept server-auditor\nkept model-gateway-auditor-read\nkept auditor-alerter\nkept admin-alerter\nkept alerter-auditor\nkept admin-auditor-restore')" ] && [ "$(docker exec "$ADMIN" cat /admin-token/call/admin-server.token 2>/dev/null)" = "$before" ] \
+[ "$out" = "$(printf 'kept admin-server\nkept admin-auditor-append\nkept admin-auditor-read\nkept server-model-gateway\nkept admin-model-gateway\nkept model-gateway-auditor\nkept server-auditor\nkept model-gateway-auditor-read\nkept auditor-alerter\nkept admin-alerter\nkept alerter-auditor\nkept admin-auditor-restore\nkept admin-egress-proxy')" ] && [ "$(docker exec "$ADMIN" cat /admin-token/call/admin-server.token 2>/dev/null)" = "$before" ] \
   && pass "a second bootstrap run keeps the token" || fail "a second bootstrap run: $out"
 out=$(docker compose -p "$PROJECT" run --rm --no-deps bootstrap rotate admin-server 2>/dev/null)
 printf '%s' "$out" | grep -q '^rotated admin-server$' && printf '%s' "$out" | grep -q '^Restart from the admin: admin, server$' \
@@ -794,6 +795,36 @@ print(call('PUT', '/api/admin/v1/alerts', {'ntfy': None})[0])" >/dev/null 2>&1
   else
     fail "could not start the stand-in ntfy server on alerter-outbound"
   fi
+fi
+
+echo "== 3d8. The egress proxy (ADR 0056)"
+EGP=askbar-egress-proxy
+EGP_OUT="${PROJECT}_egress-outbound"
+if [ "$(docker inspect -f '{{.State.Running}}' "$EGP" 2>/dev/null)" != true ]; then fail "the egress proxy is not running"; else
+  svc_profile "$EGP" "the egress proxy" <<EOF
+health yes
+uid 10006
+caps yes
+nets egress-admin egress-alerter egress-cpa egress-model-gateway egress-outbound|the egress proxy is on egress-admin, egress-alerter, egress-cpa, egress-model-gateway and egress-outbound only
+owner $EGP|/egress-proxy-token/accept/admin-egress-proxy.sha256|10006 444|the egress proxy's admin hash file (owner, mode)
+dirs $EGP|10006 500|the egress proxy's|/egress-proxy-token /egress-proxy-token/call /egress-proxy-token/accept
+owner $ADMIN|/admin-token/call/admin-egress-proxy.token|10001 400|the admin's egress proxy token file (owner, mode)
+EOF
+  # Its listeners are on the internal networks' aliases, never a wildcard: on egress-outbound, the one route out, nothing answers.
+  EGP_OUT_IP=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$EGP_OUT\").IPAddress}}" "$EGP")
+  for p in 8086 3128 2525; do
+    [ "$(http "$EGP_OUT" "http://$EGP_OUT_IP:$p/" GET)" = 0 ] && pass "nothing answers on egress-outbound, port $p" || fail "the egress proxy answers on egress-outbound, port $p"
+  done
+  # It resolves itself and no name of ours, and reaches none of the services that hold data.
+  docker exec "$EGP" bash -c 'getent hosts egress-admin-host' >/dev/null 2>&1 && pass "the egress proxy resolves its own alias" || fail "the egress proxy cannot resolve its own alias"
+  # The admin is on egress-admin with the proxy (P4.4), so it resolves it; the rest of our names it does not.
+  docker exec "$EGP" bash -c 'getent hosts admin' >/dev/null 2>&1 && pass "the egress proxy resolves the admin (they share egress-admin)" || fail "the egress proxy cannot resolve the admin on egress-admin"
+  for h in caddy server auditor askbar-model-gateway askbar-alerter cpa mock-llm; do
+    docker exec "$EGP" bash -c "getent hosts $h" >/dev/null 2>&1 && fail "the egress proxy resolves $h" || pass "the egress proxy cannot resolve $h"
+  done
+  for t in auditor/8083 server/8080 admin/8084; do
+    docker exec "$EGP" bash -c "exec 3<>/dev/tcp/$t" >/dev/null 2>&1 && fail "the egress proxy reaches ${t%/*}" || pass "the egress proxy cannot reach ${t%/*}"
+  done
 fi
 
 echo "== 3e. No Docker socket"

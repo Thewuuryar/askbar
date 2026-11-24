@@ -155,6 +155,15 @@ async fn main() {
     // Which process this is, so the auditor can tell when the admin keeps restarting (ADR 0051).
     tokio::spawn(actions.clone().hello_until_done(boot_id));
     let _ = state.actions.set(actions);
+    // Outbound traffic leaves through the egress proxy (ADR 0056), which denies all until it is given the allowlists. Unset means
+    // none (a native run). Started after the action log is set, so every push is recorded first.
+    if let Some(url) = askbar_admin::egress_link::proxy_url() {
+        let token = askbar_admin::egress_link::read_token(&askbar_admin::server_link::token_dir()).unwrap_or_else(|e| die(e, 1));
+        let egress = askbar_admin::egress_link::EgressLink::new(&url, token);
+        egress.set_notifier(state.notifier.clone());
+        let _ = state.egress.set(egress.clone());
+        tokio::spawn(egress.run(state.clone()));
+    }
     if let Err(e) = askbar_admin::serve_unix(&askbar_admin::socket_path(), askbar_admin::router(state)).await {
         die(e, 1);
     }

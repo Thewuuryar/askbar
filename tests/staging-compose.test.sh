@@ -23,7 +23,7 @@ base_named = {n for n, s in base.items() if "container_name" in s}
 if set(named) != base_named: problems.append(f"container_name differs: {sorted(set(named) ^ base_named)}")
 for n, c in named.items():
     if c != f"askbar-staging-{n}": problems.append(f"{n} is named {c}")
-if len(named) != 8: problems.append(f"{len(named)} fixed container names, not 8")
+if len(named) != 9: problems.append(f"{len(named)} fixed container names, not 9")
 ports = sorted((p["published"], p["target"]) for p in st["caddy"].get("ports", []))
 if ports != [("8080", 80), ("8443", 443)]: problems.append(f"caddy ports are {ports}")
 for n, s in st.items():
@@ -44,7 +44,7 @@ expect "the staging override changes only names, Caddy's ports and the server's 
 # With the release file (from a fake metadata file), as the guide runs it.
 python3 - "$T/meta.json" <<'PY'
 import json, sys
-json.dump({n: {"containerimage.digest": "sha256:" + format(i + 1, "x") * 64} for i, n in enumerate("bootstrap server admin auditor model-gateway alerter caddy cpa".split())}, open(sys.argv[1], "w"))
+json.dump({n: {"containerimage.digest": "sha256:" + format(i + 1, "x") * 64} for i, n in enumerate("bootstrap server admin auditor model-gateway alerter egress-proxy caddy cpa".split())}, open(sys.argv[1], "w"))
 PY
 scripts/release-compose.sh "$T/meta.json" "$T/compose.release.yaml" > /dev/null 2>&1
 expect "the release file and the staging override merge" docker compose -p askbar-staging --project-directory . -f "$T/compose.release.yaml" -f compose.staging.yaml --profile dev config -q

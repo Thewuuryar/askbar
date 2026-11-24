@@ -23,6 +23,7 @@ pub mod constants;
 pub mod cost;
 pub mod cpa;
 pub mod db;
+pub mod egress_link;
 pub mod gateway_link;
 pub mod link_client;
 pub mod network;
@@ -81,6 +82,8 @@ pub struct AdminState {
     pub gateway: std::sync::OnceLock<Arc<gateway_link::GatewayLink>>,
     /// The link to the alerter (ADR 0055); set once by `main`. Tests that have none leave it unset.
     pub alerter: std::sync::OnceLock<Arc<alerter_link::AlerterLink>>,
+    /// The link to the egress proxy (ADR 0056); set once by `main`. Tests that have none leave it unset.
+    pub egress: std::sync::OnceLock<Arc<egress_link::EgressLink>>,
     /// The link to the auditor (ADR 0051); set once by `main`. Tests that have none leave it unset.
     pub auditor: std::sync::OnceLock<Arc<auditor_link::AuditorLink>>,
     /// Where the admin's action records go (ADR 0010); set once by `main`. Tests that have none record nothing.
@@ -130,6 +133,7 @@ impl AdminState {
             restarter: Default::default(),
             gateway: Default::default(),
             alerter: Default::default(),
+            egress: Default::default(),
             auditor: Default::default(),
             actions: Default::default(),
             sealed: Default::default(),
@@ -235,6 +239,9 @@ pub fn routes(state: &Arc<AdminState>) -> Routes {
         .get(&v1("/backup/schedule"), backup_schedule::get_schedule)
         .post(&v1("/backup/run"), backup_schedule::run_now)
         .post(&v1("/backup/drill"), backup_schedule::drill_done)
+        .get(&v1("/egress/approvals"), egress_link::list_approvals)
+        .put(&v1("/egress/approvals"), egress_link::put_approval)
+        .delete(&v1("/egress/approvals"), egress_link::delete_approval)
         .get(&v1("/network"), network::get_network)
         .put(&v1("/network"), network::put_network)
         .post(&v1("/network/apply"), network::apply_network)
@@ -266,6 +273,7 @@ pub fn routes(state: &Arc<AdminState>) -> Routes {
         .post(&v1("/cpa/logins/{state}/callback"), cpa::finish_login)
         .delete(&v1("/cpa/accounts/{name}"), cpa::remove_account)
         .get(&v1("/services"), services::list)
+        .get(&v1("/egress/denied"), egress_link::list_denied)
         .post(&v1("/services/{name}/restart"), services::restart)
         // Sealed content is the person's alone: no admin API key can start a session or look into one (ADR 0011).
         .get(&v1("/audit/session"), admin_api::get_unseal_session)

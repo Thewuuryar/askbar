@@ -71,6 +71,19 @@ pub const NAME_MAX_CHARS: usize = 60;
 pub const PAIR_CODE_TTL_SECS: i64 = 10 * 60;
 /// The services the Services page shows and may restart.
 pub const SERVICES: [&str; 6] = ["server", "model-gateway", "alerter", "admin", "caddy", "cpa"];
+/// What `cpa` may reach through the egress proxy (ADR 0056): the hosts behind the two subscription logins, nothing else.
+pub const CPA_EGRESS_HOSTS: [&str; 6] =
+    ["api.anthropic.com", "console.anthropic.com", "claude.ai", "api.openai.com", "auth.openai.com", "chatgpt.com"];
+/// The limits the admin pushes to the egress proxy; `askbar-proto` bounds them.
+pub const EGRESS_LIMITS: askbar_proto::egress::Limits = askbar_proto::egress::Limits {
+    head_bytes: 8 * 1024,
+    header_lines: 64,
+    connect_secs: 10,
+    head_read_secs: 10,
+    idle_secs: 300,
+    max_tunnels: 256,
+    max_tunnels_per_source: 128,
+};
 /// At most this many service actions in a minute.
 pub const MAX_RESTARTS_PER_MINUTE: usize = 6;
 
@@ -128,6 +141,7 @@ pub const HELP_TOPICS: &[&str] = &[
     "settings/people#users",
     "settings/people#paired-clients",
     "settings/services#running-services",
+    "settings/services#blocked-outbound-requests",
     "settings/network#host-name",
     "settings/network#certificate",
     "settings/network#allowed-addresses-and-networks",

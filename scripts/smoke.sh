@@ -73,9 +73,12 @@ if [ -z "$URL" ]; then
   if [ ! -x "$GBIN" ]; then cargo build -q -p askbar-model-gateway || { fail "build the gateway"; exit 1; }; fi
   ALBIN="${ASKBAR_ALERTER_BIN:-target/debug/askbar-alerter}"
   if [ ! -x "$ALBIN" ]; then cargo build -q -p askbar-alerter || { fail "build the alerter"; exit 1; }; fi
+  EBIN="${ASKBAR_EGRESS_PROXY_BIN:-target/debug/askbar-egress-proxy}"
+  if [ ! -x "$EBIN" ]; then cargo build -q -p askbar-egress-proxy || { fail "build the egress proxy"; exit 1; }; fi
   API_PORT=$(free_port); SERVER_API_PORT=$(free_port); MOCK_PORT=$(free_port)
   AUDIT_PORT=$(free_port); GW_SERVER_PORT=$(free_port); GW_ADMIN_PORT=$(free_port)
   AL_AUDITOR_PORT=$(free_port); AL_ADMIN_PORT=$(free_port); NTFY_PORT=$(free_port)
+  EG_ADMIN_PORT=$(free_port); EG_GW_PORT=$(free_port); EG_CPA_PORT=$(free_port); EG_AL_PORT=$(free_port)
   URL="http://127.0.0.1:$API_PORT"
   SOCK="$WORK/admin-run/admin.sock"
   mkdir -p "$WORK/data" "$WORK/admin-run" "$WORK/audit" "$WORK/alerter-data"
@@ -94,10 +97,14 @@ if [ -z "$URL" ]; then
   ASKBAR_ALERTER_RELEASES_URL=off ASKBAR_ALERTER_AUDITOR_ADDR="127.0.0.1:$AL_AUDITOR_PORT" ASKBAR_ALERTER_ADMIN_ADDR="127.0.0.1:$AL_ADMIN_PORT" \
     ASKBAR_ALERTER_TOKEN_DIR="$WORK/credentials/alerter-token" ASKBAR_ALERTER_DATA_DIR="$WORK/alerter-data" ASKBAR_AUDIT_API_URL="http://127.0.0.1:$AUDIT_PORT" \
     "$ALBIN" >"$WORK/alerter.log" 2>&1 & PIDS+=($!)
+  # The egress proxy (ADR 0056): it denies everything until the admin pushes the allowlists.
+  ASKBAR_EGRESS_PROXY_TOKEN_DIR="$WORK/credentials/egress-proxy-token" ASKBAR_EGRESS_PROXY_ADMIN_ADDR="127.0.0.1:$EG_ADMIN_PORT" \
+    ASKBAR_EGRESS_PROXY_SOURCES="model-gateway=127.0.0.1:$EG_GW_PORT,cpa=127.0.0.1:$EG_CPA_PORT,alerter=127.0.0.1:$EG_AL_PORT" \
+    ASKBAR_EGRESS_PROXY_RELAYS="" "$EBIN" >"$WORK/egress-proxy.log" 2>&1 & PIDS+=($!)
   # The admin service: its own database and secrets, a unix socket and no TCP port.
   ASKBAR_ADMIN_SOCKET="$SOCK" ASKBAR_ADMIN_DATA_DIR="$WORK/admin-data" ASKBAR_ADMIN_SECRETS_DIR="$WORK/admin-secrets" \
     ASKBAR_ADMIN_TOKEN_DIR="$WORK/credentials/admin-token" ASKBAR_SERVER_API_URL="http://127.0.0.1:$SERVER_API_PORT" ASKBAR_PUBLIC_URL="$URL" \
-    ASKBAR_GATEWAY_URL="http://127.0.0.1:$GW_ADMIN_PORT" ASKBAR_ALERTER_URL="http://127.0.0.1:$AL_ADMIN_PORT" ASKBAR_AUDIT_API_URL="http://127.0.0.1:$AUDIT_PORT" "$ABIN" >"$WORK/admin.log" 2>&1 & PIDS+=($!)
+    ASKBAR_GATEWAY_URL="http://127.0.0.1:$GW_ADMIN_PORT" ASKBAR_ALERTER_URL="http://127.0.0.1:$AL_ADMIN_PORT" ASKBAR_EGRESS_PROXY_URL="http://127.0.0.1:$EG_ADMIN_PORT" ASKBAR_AUDIT_API_URL="http://127.0.0.1:$AUDIT_PORT" "$ABIN" >"$WORK/admin.log" 2>&1 & PIDS+=($!)
   for _ in $(seq 100); do [ -S "$SOCK" ] && break; sleep 0.1; done
   # The server: the API, and a server listener that only the admin's token opens.
   ASKBAR_CLIENT_API_ADDR="127.0.0.1:$API_PORT" \
@@ -323,6 +330,17 @@ if [ $LOCAL = 1 ]; then
   done
   admin GET /api/admin/v1/status 2>/dev/null | grep -q -e 'smoke-topic-77' -e 'smoke-token-77' && LEAK="$LEAK status"
   if [ -z "$LEAK" ]; then pass "the alert topic and token are in no admin answer and no log"; else fail "the alert topic and token are in no admin answer and no log" "found in:$LEAK"; fi
+fi
+
+# 10d. The egress proxy (local, ADR 0056): the admin pushed the allowlists, so the proxy reports a config. The token is the admin's own.
+if [ $LOCAL = 1 ]; then
+  EG_TOKEN=$(cat "$WORK/credentials/admin-token/call/admin-egress-proxy.token" 2>/dev/null)
+  for _ in $(seq 100); do
+    curl -fsS -H "Authorization: Bearer $EG_TOKEN" "http://127.0.0.1:$EG_ADMIN_PORT/api/egress-proxy/v1/status" >"$WORK/egress-status.json" 2>/dev/null \
+      && [ "$(json "$WORK/egress-status.json" "d['configured']")" = "True" ] && break
+    sleep 0.2
+  done
+  if [ "$(json "$WORK/egress-status.json" "d['configured']")" = "True" ]; then pass "the admin pushed the allowlists and the egress proxy is configured"; else fail "the egress proxy is configured" "$(cat "$WORK/egress-status.json" 2>/dev/null)"; fi
 fi
 
 # 11. What only a person can check.

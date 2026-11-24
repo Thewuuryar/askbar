@@ -302,7 +302,8 @@ mod tests {
                 "auditor-alerter",
                 "admin-alerter",
                 "alerter-auditor",
-                "admin-auditor-restore"
+                "admin-auditor-restore",
+                "admin-egress-proxy"
             ]
         );
         let before = all(&root);
@@ -323,7 +324,8 @@ mod tests {
                     "auditor-alerter",
                     "admin-alerter",
                     "alerter-auditor",
-                    "admin-auditor-restore"
+                    "admin-auditor-restore",
+                    "admin-egress-proxy"
                 ]
             }
         );

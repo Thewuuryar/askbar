@@ -212,6 +212,8 @@ pub fn classify(method: &Method, template: &str) -> Option<(&'static str, &'stat
         ("POST", "/cpa/logins/{state}/callback") => ("providers", "cpa_login_finish"),
         ("DELETE", "/cpa/accounts/{name}") => ("providers", "cpa_account_remove"),
         ("POST", "/services/{name}/restart") => ("restart", "restart"),
+        ("PUT", "/egress/approvals") => ("egress", "approval_add"),
+        ("DELETE", "/egress/approvals") => ("egress", "approval_remove"),
         ("POST", "/keys") => ("secret", "api_key_create"),
         ("DELETE", "/keys/{id}") => ("secret", "api_key_revoke"),
         ("GET", "/backup") => ("backup", "download"),

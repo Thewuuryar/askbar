@@ -14,3 +14,4 @@ pub const AUDITOR_ALERTER: &str = "auditor-alerter";
 pub const ADMIN_ALERTER: &str = "admin-alerter";
 pub const ALERTER_AUDITOR: &str = "alerter-auditor";
 pub const ADMIN_AUDITOR_RESTORE: &str = "admin-auditor-restore";
+pub const ADMIN_EGRESS_PROXY: &str = "admin-egress-proxy";

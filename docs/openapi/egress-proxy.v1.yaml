@@ -1,0 +1,282 @@
+openapi: 3.1.0
+info:
+  title: Askbar egress proxy API
+  version: 1.0.0
+  summary: What the admin calls on the `egress-proxy`. Internal.
+  description: |
+    The API under `/api/egress-proxy/v1`, served by the `egress-proxy` on one listener, on the network it shares with the
+    admin (`egress-admin`). **It is never public**: Caddy has no route to it (ADR 0056, ADR 0006).
+
+    Every request except `GET /health` carries `Authorization: Bearer <token>`: the one token of the link
+    `admin-egress-proxy`. The proxy holds only its SHA-256, in `egress-proxy-token/accept/admin-egress-proxy.sha256`,
+    read on every request.
+
+    **The config** (`PUT /config`) is the allowlist of each source and the limits. It is held in memory only. Until the
+    first push the proxy has an empty config and answers every proxy request `403`. A restart is how the config leaves
+    memory; the admin pushes again when `GET /status` shows no version or another one.
+
+    This API is not the proxy. The proxy's own listeners (one per source, on that source's network) take `CONNECT host:port`
+    and absolute-form `http://` requests, and answer a refusal with `403` and the header `X-Askbar-Egress-Reason`
+    (`not_listed`, `bad_host`, `ip_literal`, `port`, `private_address` or `plain_http`), no body.
+
+    Every error is a problem (`application/problem+json`), and none echoes what it was sent.
+servers:
+  - url: http://egress-admin-host:8086
+    description: The proxy on the network it shares with the admin.
+security:
+  - linkToken: []
+paths:
+  /api/egress-proxy/v1/health:
+    get:
+      operationId: getHealth
+      summary: The proxy is up. Needs no token and carries nothing.
+      security: []
+      responses:
+        '200':
+          description: OK.
+  /api/egress-proxy/v1/status:
+    get:
+      operationId: getStatus
+      summary: Which config this process runs, which process it is, and what the listeners have done.
+      description: >-
+        `version` is null until the admin has pushed; it is a hash of the config, so the admin pushes again when it is not
+        the hash of the config it would push. `boot_id` is new on every start. `sources` counts, for each source with a
+        listener, the connections allowed and the refusals by reason code. `recent_denied` holds the 50 most recent
+        refusals, newest first, in memory only: the source, the host as validated (or `invalid`), the port, the reason and
+        the time. No path, header or content is kept.
+      responses:
+        '200':
+          description: Status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Status'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/egress-proxy/v1/config:
+    put:
+      operationId: putConfig
+      summary: Replace the config.
+      description: >-
+        The whole of the earlier config is replaced. It is checked first and nothing changes if it is refused: a source the
+        proxy has no listener for, an entry host the proxy cannot match, or a limit out of its bounds. Every field is
+        optional and an unknown one is refused. The answer is the config's version.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Config'
+      responses:
+        '200':
+          description: Applied.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [version]
+                properties:
+                  version:
+                    type: integer
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/egress-proxy/v1/restart:
+    post:
+      operationId: restart
+      summary: Restart this process.
+      description: >-
+        Answers, finishes what it must within a time limit and exits; Docker's restart policy starts it again with a new
+        boot ID (ADR 0005). Refused with `429` for a short time after start-up.
+      responses:
+        '202':
+          description: Restarting.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          description: Too soon after the last start (`too_many_attempts`).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+components:
+  securitySchemes:
+    linkToken:
+      type: http
+      scheme: bearer
+      description: The token of the `admin-egress-proxy` link. Only its SHA-256 is on the proxy.
+  responses:
+    BadRequest:
+      description: The body could not be used (`bad_request`). The answer does not repeat it.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Unauthorized:
+      description: Missing or unknown token (`unauthorized`).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Forbidden:
+      description: A known token on a route its link may not call (`forbidden`).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+  schemas:
+    Problem:
+      type: object
+      description: >-
+        An error, as RFC 9457 problem details (application/problem+json). Branch on `error`, never on
+        `detail`.
+      required: [type, title, status, detail, error]
+      additionalProperties: true
+      properties:
+        type:
+          type: string
+          description: A URN, `urn:askbar:problem:<error>`; nothing is hosted at it.
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+          description: A sentence for a person.
+        error:
+          type: string
+          description: The stable code.
+          enum:
+          - queue_full
+          - budget_exceeded
+          - kill_switch
+          - user_paused
+          - model_not_approved
+          - audit_key_missing
+          - backup_key_missing
+          - backup_newer_release
+          - not_empty
+          - audit_backlog
+          - client_too_old
+          - client_version_missing
+          - unauthorized
+          - forbidden
+          - not_found
+          - method_not_allowed
+          - bad_request
+          - payload_too_large
+          - too_many_attempts
+          - api_key_exists
+          - setup_required
+          - not_configured
+          - password_change_required
+          - server_unavailable
+          - conflict
+          - internal
+    Config:
+      type: object
+      additionalProperties: false
+      properties:
+        sources:
+          type: object
+          description: The allowlist of each source, by source name. A source with no entry may reach nothing.
+          additionalProperties:
+            type: object
+            additionalProperties: false
+            properties:
+              entries:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Entry'
+        limits:
+          $ref: '#/components/schemas/Limits'
+    Entry:
+      type: object
+      additionalProperties: false
+      description: One destination, a whole host name (no wildcard, no suffix) or the exact IP literal, and one port.
+      properties:
+        host:
+          type: string
+          description: Lower-case ASCII (an IDN as `xn--` punycode), a canonical dotted IPv4 or a bracketed IPv6. Ignored with `any_public`.
+        port:
+          type: integer
+          default: 443
+        plain_http:
+          type: boolean
+          default: false
+          description: Also allow absolute-form `http://` requests, not only `CONNECT`.
+        allow_private:
+          type: boolean
+          default: false
+          description: Also reach loopback, private and other non-public addresses.
+        relay:
+          type: boolean
+          default: false
+          description: The source's relay port tunnels to this entry.
+        any_public:
+          type: boolean
+          default: false
+          description: Any name that passes the host check and resolves only to public addresses, on this port.
+    Limits:
+      type: object
+      additionalProperties: false
+      description: Each field has bounds; a push outside them is refused. A missing field takes its default.
+      properties:
+        head_bytes: {type: integer, minimum: 1024, maximum: 65536, default: 8192}
+        header_lines: {type: integer, minimum: 8, maximum: 256, default: 64}
+        connect_secs: {type: integer, minimum: 1, maximum: 60, default: 10}
+        head_read_secs: {type: integer, minimum: 1, maximum: 60, default: 10}
+        idle_secs: {type: integer, minimum: 10, maximum: 3600, default: 300}
+        max_tunnels: {type: integer, minimum: 1, maximum: 4096, default: 256}
+        max_tunnels_per_source: {type: integer, minimum: 1, maximum: 4096, default: 128, description: At most `max_tunnels`.}
+    Status:
+      type: object
+      required: [configured, version, boot_id, open_tunnels, sources, recent_denied]
+      properties:
+        configured:
+          type: boolean
+        version:
+          type: [integer, 'null']
+        boot_id:
+          type: string
+        open_tunnels:
+          type: integer
+        sources:
+          type: object
+          additionalProperties:
+            type: object
+            required: [allowed, denied]
+            properties:
+              allowed:
+                type: integer
+              denied:
+                type: object
+                description: Refusals by reason code.
+                additionalProperties:
+                  type: integer
+        recent_denied:
+          type: array
+          maxItems: 50
+          items:
+            type: object
+            required: [source, host, port, reason, at]
+            properties:
+              source:
+                type: string
+              host:
+                type: string
+                description: As validated, or `invalid`.
+              port:
+                type: [integer, 'null']
+              reason:
+                type: string
+              at:
+                type: integer
+                description: Unix seconds.
