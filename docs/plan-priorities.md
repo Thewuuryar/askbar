@@ -22,7 +22,7 @@ A track starts when the one before it has its PR open, unless the owner says oth
 | R1 | W1 |
 | R2 | W2 |
 | R3 | W3 |
-| R4 | W4.2 (and W2, if P4.4 adds a link first) |
+| R4 | W4.2 (and W2, if P4.1c adds a link first) |
 | R5 | W5 |
 | RL | Track 3 |
 

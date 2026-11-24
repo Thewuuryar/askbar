@@ -13,7 +13,7 @@ Each stage lands before the first track 1 stage that edits the same code:
 | R1 | W1 (AV2.1–AV2.3) | AV2.1 adds a span kind and a migration in `crates/askbar-audit/src/lib.rs`, and AV2.2 and W5.3 edit `generation.rs` |
 | R2 | W2 (P4.2) | P4.2 is the first new container, and four later steps edit `scripts/check-isolation.sh` |
 | R3 | W3 (P5A.6) | `services/mcp-gateway` is "built on `askbar-service`" and would be the fourth copy of the boot code |
-| R4 | W4.2 | W4.2 and W5.1 edit the admin links, and P4.4 and P5A.18/19 add new ones. Run R4 before W2 if P4.4 lands first |
+| R4 | W4.2 | W4.2 and W5.1 edit the admin links, and P4.1c (the proxy link, in the shared link tables) and P5A.18/19 add new ones. Run R4 before W2 if P4.1c lands first |
 | R5 | W5 | W5.3, W5.4 and W5.5 add server tests, the client toggle and e2e fixtures |
 | RL | Track 3 C1.1 and C2.2 | Both edit code that is duplicated today |
 
