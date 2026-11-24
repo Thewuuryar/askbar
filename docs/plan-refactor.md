@@ -52,7 +52,7 @@ Branch `refactor/audit-and-generation`. PR title `refactor(auditor): simplify th
 
   Tests that used the builders build struct literals instead. Drop the `askbar-service` dependency, which only `ids::new_id` used. Keep the writer thread, `append`, batching, `prune`, `restore` and `access_log`.
   Accept: no caller outside the crate's own tests used the removed items (check with `graphify_callers` or grep); `cargo test -p askbar-audit -p askbar-auditor -p askbar-model-gateway` passes.
-- [ ] **R1.2** `test(auditor): pin the audit chain hash` · haiku
+- [x] **R1.2** `test(auditor): pin the audit chain hash` · haiku
   Files: `crates/askbar-audit/tests/chain.rs`.
   Do: build a fixed set of records with fixed ids and times, and assert their entry hashes equal hex literals taken from the current code.
   Accept: the test passes on the current code. It guards AV2.1's "old records verify unchanged".
