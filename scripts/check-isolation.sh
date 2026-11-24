@@ -59,16 +59,20 @@ py() {
   docker run --rm "${args[@]}" "$PYIMG" python -I -c "$code"
 }
 
-# HTTP status of a request to host:port from a throwaway container on a network; 0 = no connection.
-http_status() { # network host:port [bearer]
-  py --network "$1" -- "
-import sys, urllib.request, urllib.error
-req = urllib.request.Request('http://$2/api/server/v1/health')
-if '${3:-}': req.add_header('authorization', 'Bearer ${3:-}')
+# HTTP status from a throwaway container on NET: http NET URL [METHOD] [TOKEN] [JSON]; 0 = no connection.
+# The token and body reach the Python through its environment, never its source.
+http() {
+  py --network "$1" -e "HTTP_URL=$2" -e "HTTP_METHOD=${3:-GET}" -e "HTTP_TOKEN=${4:-}" -e "HTTP_JSON=${5:-}" -- '
+import os, urllib.request, urllib.error
+h = {}
+if os.environ["HTTP_TOKEN"]: h["authorization"] = "Bearer " + os.environ["HTTP_TOKEN"]
+body = os.environ["HTTP_JSON"].encode() or None
+if body: h["content-type"] = "application/json"
+req = urllib.request.Request(os.environ["HTTP_URL"], method=os.environ["HTTP_METHOD"], data=body, headers=h)
 try: print(urllib.request.urlopen(req, timeout=4).status)
 except urllib.error.HTTPError as e: print(e.code)
 except Exception: print(0)
-"
+'
 }
 
 # Admin API through the admin's unix socket. admin METHOD PATH [JSON] -> prints 'status body'
@@ -132,14 +136,14 @@ echo "== 2. The server port"
 SERVER_API_IP=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$SERVER_API_NET\").IPAddress}}" "$SERVER")
 SERVER_API="$SERVER_API_IP:8082"
 [ -n "$SERVER_API_IP" ] && pass "the server has an address on server-api ($SERVER_API_IP)" || fail "the server has no address on server-api"
-[ "$(http_status "$SERVER_API_NET" server-api-host:8082)" = 401 ] && pass "the admin's address for it, server-api-host, reaches the server API" || fail "server-api-host:8082 does not reach the server API"
+[ "$(http "$SERVER_API_NET" "http://server-api-host:8082/api/server/v1/health")" = 401 ] && pass "the admin's address for it, server-api-host, reaches the server API" || fail "server-api-host:8082 does not reach the server API"
 refused "compose.yaml pins no subnet or address (docs/guide.md, Docker networks)" grep -En '^[[:space:]]*(ipv[46]_address|subnet|ip_range):' "$(dirname "$0")/../compose.yaml"
 # The hash is the server's (the admin mounts no server-token any more): bootstrap made it (ADR 0049).
 HASH=$(docker exec "$SERVER" cat /server-token/accept/admin-server.sha256 2>/dev/null | tr -d '[:space:]')
 [ -n "$HASH" ] || fail "could not read the token hash from the server's /server-token/accept"
-[ "$(http_status "$SERVER_API_NET" "$SERVER_API")" = 401 ] && pass "401 without a token" || fail "no token should give 401"
-[ "$(http_status "$SERVER_API_NET" "$SERVER_API" "$HASH")" = 401 ] && pass "401 with the token's hash instead of the token" || fail "the hash must not work as the token"
-[ "$(http_status "$SERVER_API_NET" "$SERVER_API" wrong)" = 401 ] && pass "401 with a wrong token" || fail "a wrong token should give 401"
+[ "$(http "$SERVER_API_NET" "http://$SERVER_API/api/server/v1/health")" = 401 ] && pass "401 without a token" || fail "no token should give 401"
+[ "$(http "$SERVER_API_NET" "http://$SERVER_API/api/server/v1/health" GET "$HASH")" = 401 ] && pass "401 with the token's hash instead of the token" || fail "the hash must not work as the token"
+[ "$(http "$SERVER_API_NET" "http://$SERVER_API/api/server/v1/health" GET wrong)" = 401 ] && pass "401 with a wrong token" || fail "a wrong token should give 401"
 
 # A second server on its own scratch volumes, with no hash file at all: nothing may be accepted.
 docker rm -f askbar-check-nohash >/dev/null 2>&1
@@ -152,7 +156,7 @@ sleep 3
 if [ "$(docker inspect -f '{{.State.Running}}' askbar-check-nohash)" = false ] && [ "$(docker inspect -f '{{.State.ExitCode}}' askbar-check-nohash)" != 0 ]; then
   docker logs askbar-check-nohash 2>&1 | grep -q 'docker compose up' && pass "refuses to start with no hash file, and says what to run" || fail "no hash file: the server stopped without saying what to run"
 else
-  code=$(http_status "$SERVER_API_NET" askbar-check-nohash-host:8082 "$HASH")
+  code=$(http "$SERVER_API_NET" "http://askbar-check-nohash-host:8082/api/server/v1/health" GET "$HASH")
   case "$code" in 401|403|503) pass "fails closed with no hash file ($code)";; *) fail "no hash file: got $code, expected a refusal";; esac
 fi
 docker rm -f askbar-check-nohash >/dev/null 2>&1
@@ -160,8 +164,8 @@ docker rm -f askbar-check-nohash >/dev/null 2>&1
 docker exec "$CADDY" sh -c "wget -q -T3 -O /dev/null http://$SERVER_API/api/server/v1/health" >/dev/null 2>&1 \
   && fail "Caddy reached the server port" || pass "Caddy cannot reach the server port"
 CLIENT_IP=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$CLIENT_NET\").IPAddress}}" "$SERVER")
-[ "$(http_status "$CLIENT_NET" "$CLIENT_IP:8082")" = 0 ] && pass "nothing on the client-api network answers on 8082" || fail "the server port answers on the client-api network"
-[ "$(http_status "$EDGE" "$SERVER_API")" = 0 ] && pass "a container on edge cannot reach the server API address" || fail "the server API address is reachable from edge"
+[ "$(http "$CLIENT_NET" "http://$CLIENT_IP:8082/api/server/v1/health")" = 0 ] && pass "nothing on the client-api network answers on 8082" || fail "the server port answers on the client-api network"
+[ "$(http "$EDGE" "http://$SERVER_API/api/server/v1/health")" = 0 ] && pass "a container on edge cannot reach the server API address" || fail "the server API address is reachable from edge"
 admin_nets=$(nets_of "$ADMIN")
 [ "$admin_nets" = "${PROJECT}_alerter-admin ${PROJECT}_audit-admin ${PROJECT}_cpa-admin ${PROJECT}_gateway-admin ${PROJECT}_server-api " ] && pass "the admin is on server-api, cpa-admin, audit-admin, gateway-admin and alerter-admin only (all internal: no route out, never edge)" || fail "the admin's networks are: $admin_nets"
 for n in server-api cpa-admin audit-admin gateway-admin alerter-admin; do
@@ -199,16 +203,8 @@ refused "no audit.db anywhere in the admin container" docker exec "$ADMIN" sh -c
 refused "the admin container has no server data (/data)" docker exec "$ADMIN" test -e /data
 refused "no control.db or space file anywhere in the admin container" docker exec "$ADMIN" sh -c 'find / -xdev \( -name "control.db*" -o -path "*/spaces/*.db" \) 2>/dev/null | grep -q .'
 # The client API (port 8080, reachable from the edge network) has no audit and no server routes.
-http_get() { # network host:port path -> status; 0 = no connection
-  py --network "$1" -- "
-import urllib.request, urllib.error
-try: print(urllib.request.urlopen('http://$2$3', timeout=4).status)
-except urllib.error.HTTPError as e: print(e.code)
-except Exception: print(0)
-"
-}
 for path in /audit /api/client/v1/audit /api/client/v1/audit/traces /api/client/v1/audit/stats /api/server/v1/health /api/server/v1/audit/traces /api/server/v1/audit/stats; do
-  [ "$(http_get "$CLIENT_NET" "$CLIENT_IP:8080" "$path")" = 404 ] && pass "the client API has no $path (404)" || fail "the client API answers $path"
+  [ "$(http "$CLIENT_NET" "http://$CLIENT_IP:8080$path")" = 404 ] && pass "the client API has no $path (404)" || fail "the client API answers $path"
 done
 
 echo "== 3c. The server holds no secret for the audit key"
@@ -518,29 +514,18 @@ if [ "$(docker inspect -f '{{.State.Running}}' "$GW" 2>/dev/null)" != true ]; th
   GW_ADM_TOK=$(docker exec "$ADMIN" cat /admin-token/call/admin-model-gateway.token 2>/dev/null)
   GW_SRV_TOK=$(docker exec "$SERVER" cat /server-token/call/server-model-gateway.token 2>/dev/null)
   [ -n "$GW_ADM_TOK" ] && [ -n "$GW_SRV_TOK" ] || fail "the admin or the server holds no gateway token"
-  gw_call() { # network ip method path [token] [json] -> status, 0 = no connection
-    py --network "$1" -- "
-import urllib.request, urllib.error
-req = urllib.request.Request('http://$2:8084/api/model-gateway/v1$4', method='$3', data=(b'${6:-}' if '${6:-}' else None))
-if '${5:-}': req.add_header('authorization', 'Bearer ${5:-}')
-if '${6:-}': req.add_header('content-type', 'application/json')
-try: print(urllib.request.urlopen(req, timeout=4).status)
-except urllib.error.HTTPError as e: print(e.code)
-except Exception: print(0)
-"
-  }
-  [ "$(gw_call "$GW_NET" "$GW_ADMIN_IP" GET /health)" = 200 ] && pass "the admin's listener answers on gateway-admin" || fail "the admin's listener does not answer on gateway-admin"
-  [ "$(gw_call "$GW_SRV_NET" "$GW_SRV_IP" GET /health)" = 200 ] && pass "the server's listener answers on gateway-server" || fail "the server's listener does not answer on gateway-server"
-  [ "$(gw_call "$GW_OUT" "$GW_OUT_IP" GET /health)" = 0 ] && pass "nothing answers on outbound" || fail "the gateway answers on outbound"
-  [ "$(gw_call "$GW_AUD" "$GW_AUD_IP" GET /health)" = 0 ] && pass "nothing answers on audit-model-gateway" || fail "the gateway answers on audit-model-gateway"
-  [ "$(gw_call "$GW_NET" "$GW_ADMIN_IP" GET /status)" = 401 ] && pass "no token: 401 on the admin's listener" || fail "the admin's listener answers without a token"
-  [ "$(gw_call "$GW_NET" "$GW_ADMIN_IP" GET /status "$GW_SRV_TOK")" = 401 ] && pass "the server's token does not open the admin's listener" || fail "the server's token opened the admin's listener"
-  [ "$(gw_call "$GW_NET" "$GW_ADMIN_IP" GET /status "$GW_ADM_TOK")" = 200 ] && pass "the admin's token opens GET /status" || fail "the admin's token does not open GET /status"
-  [ "$(gw_call "$GW_NET" "$GW_ADMIN_IP" POST /chat "$GW_ADM_TOK" '{}')" = 404 ] && pass "the admin's listener has no chat route" || fail "the admin's listener serves /chat"
-  [ "$(gw_call "$GW_SRV_NET" "$GW_SRV_IP" POST /chat)" = 401 ] && pass "no token: 401 on the server's listener" || fail "the server's listener answers without a token"
-  [ "$(gw_call "$GW_SRV_NET" "$GW_SRV_IP" POST /chat "$GW_ADM_TOK" '{}')" = 401 ] && pass "the admin's token does not open the server's listener" || fail "the admin's token opened the server's listener"
-  [ "$(gw_call "$GW_SRV_NET" "$GW_SRV_IP" PUT /config "$GW_SRV_TOK" '{}')" = 404 ] && pass "the server's listener has no config route" || fail "the server's listener serves /config"
-  [ "$(gw_call "$EDGE" "$GW_SRV_IP" GET /health)" = 0 ] && pass "a container on edge cannot reach the gateway" || fail "the gateway is reachable from edge"
+  [ "$(http "$GW_NET" "http://$GW_ADMIN_IP:8084/api/model-gateway/v1/health" GET)" = 200 ] && pass "the admin's listener answers on gateway-admin" || fail "the admin's listener does not answer on gateway-admin"
+  [ "$(http "$GW_SRV_NET" "http://$GW_SRV_IP:8084/api/model-gateway/v1/health" GET)" = 200 ] && pass "the server's listener answers on gateway-server" || fail "the server's listener does not answer on gateway-server"
+  [ "$(http "$GW_OUT" "http://$GW_OUT_IP:8084/api/model-gateway/v1/health" GET)" = 0 ] && pass "nothing answers on outbound" || fail "the gateway answers on outbound"
+  [ "$(http "$GW_AUD" "http://$GW_AUD_IP:8084/api/model-gateway/v1/health" GET)" = 0 ] && pass "nothing answers on audit-model-gateway" || fail "the gateway answers on audit-model-gateway"
+  [ "$(http "$GW_NET" "http://$GW_ADMIN_IP:8084/api/model-gateway/v1/status" GET)" = 401 ] && pass "no token: 401 on the admin's listener" || fail "the admin's listener answers without a token"
+  [ "$(http "$GW_NET" "http://$GW_ADMIN_IP:8084/api/model-gateway/v1/status" GET "$GW_SRV_TOK")" = 401 ] && pass "the server's token does not open the admin's listener" || fail "the server's token opened the admin's listener"
+  [ "$(http "$GW_NET" "http://$GW_ADMIN_IP:8084/api/model-gateway/v1/status" GET "$GW_ADM_TOK")" = 200 ] && pass "the admin's token opens GET /status" || fail "the admin's token does not open GET /status"
+  [ "$(http "$GW_NET" "http://$GW_ADMIN_IP:8084/api/model-gateway/v1/chat" POST "$GW_ADM_TOK" '{}')" = 404 ] && pass "the admin's listener has no chat route" || fail "the admin's listener serves /chat"
+  [ "$(http "$GW_SRV_NET" "http://$GW_SRV_IP:8084/api/model-gateway/v1/chat" POST)" = 401 ] && pass "no token: 401 on the server's listener" || fail "the server's listener answers without a token"
+  [ "$(http "$GW_SRV_NET" "http://$GW_SRV_IP:8084/api/model-gateway/v1/chat" POST "$GW_ADM_TOK" '{}')" = 401 ] && pass "the admin's token does not open the server's listener" || fail "the admin's token opened the server's listener"
+  [ "$(http "$GW_SRV_NET" "http://$GW_SRV_IP:8084/api/model-gateway/v1/config" PUT "$GW_SRV_TOK" '{}')" = 404 ] && pass "the server's listener has no config route" || fail "the server's listener serves /config"
+  [ "$(http "$EDGE" "http://$GW_SRV_IP:8084/api/model-gateway/v1/health" GET)" = 0 ] && pass "a container on edge cannot reach the gateway" || fail "the gateway is reachable from edge"
   # A marker key entered in the admin reaches the gateway, survives its restart (the admin pushes it again), and
   # appears nowhere it must not: not in a response, a log, the gateway's files, the admin's database in the clear,
   # or the auditor's store.
@@ -553,7 +538,7 @@ call('PUT', '/api/admin/v1/setup/audit-key', {'passphrase': 'isolation check pas
 s, body = call('POST', '/api/admin/v1/providers', {'name': 'Isolation marker', 'type': 'openai', 'base_url': 'http://mock-llm:8765/v1', 'model': 'm', 'api_key': '$MARK'})
 print(json.loads(body).get('id', '') if s == 201 else 'failed')" 2>&1 | tail -1)
   case "$pid" in failed|"") fail "could not add the marker provider: $pid";; *) pass "a provider with a marker key was added through the admin";; esac
-  gw_version() { gw_call "$GW_NET" "$GW_ADMIN_IP" GET /status "$GW_ADM_TOK" >/dev/null; py --network "$GW_NET" -- "
+  gw_version() { http "$GW_NET" "http://$GW_ADMIN_IP:8084/api/model-gateway/v1/status" GET "$GW_ADM_TOK" >/dev/null; py --network "$GW_NET" -- "
 import urllib.request, json
 req = urllib.request.Request('http://$GW_ADMIN_IP:8084/api/model-gateway/v1/status', headers={'authorization': 'Bearer $GW_ADM_TOK'})
 print(json.load(urllib.request.urlopen(req, timeout=4))['config_version'])"; }
@@ -579,7 +564,7 @@ print(call('POST', '/api/admin/v1/services/model-gateway/restart')[0])" 2>&1 | t
 for p in ('/api/admin/v1/providers', '/api/admin/v1/services', '/api/admin/v1/status'):
     print(call('GET', p)[1])" 2>&1)
   printf '%s' "$resp" | grep -q -- "$MARK" && fail "an admin response returned the marker key" || pass "no admin response returns the marker key"
-  [ "$(gw_call "$GW_NET" "$GW_ADMIN_IP" GET /config "$GW_ADM_TOK")" != 200 ] && pass "the gateway has no route that returns its configuration" || fail "GET /config answers"
+  [ "$(http "$GW_NET" "http://$GW_ADMIN_IP:8084/api/model-gateway/v1/config" GET "$GW_ADM_TOK")" != 200 ] && pass "the gateway has no route that returns its configuration" || fail "GET /config answers"
   admin_script "$(admin_login)
 print(call('DELETE', '/api/admin/v1/providers/$pid')[0])" >/dev/null 2>&1
 fi
@@ -669,36 +654,25 @@ if [ "$(docker inspect -f '{{.State.Running}}' "$ALERTER" 2>/dev/null)" != true 
   AL_ADMIN_IP=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$AL_ADMIN\").IPAddress}}" "$ALERTER")
   AL_AUD_IP=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$AL_AUD\").IPAddress}}" "$ALERTER")
   AL_OUT_IP=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$AL_OUT\").IPAddress}}" "$ALERTER")
-  al_call() { # network ip method path [token] [json] -> status, 0 = no connection
-    py --network "$1" -- "
-import urllib.request, urllib.error
-req = urllib.request.Request('http://$2:8085/api/alerter/v1$4', method='$3', data=(b'${6:-}' if '${6:-}' else None))
-if '${5:-}': req.add_header('authorization', 'Bearer ${5:-}')
-if '${6:-}': req.add_header('content-type', 'application/json')
-try: print(urllib.request.urlopen(req, timeout=4).status)
-except urllib.error.HTTPError as e: print(e.code)
-except Exception: print(0)
-"
-  }
-  [ "$(al_call "$AL_ADMIN" "$AL_ADMIN_IP" GET /health)" = 200 ] && pass "the admin's listener answers on alerter-admin" || fail "the admin's listener does not answer on alerter-admin"
-  [ "$(al_call "$AL_AUD" "$AL_AUD_IP" GET /health)" = 200 ] && pass "the auditor's listener answers on audit-alerter" || fail "the auditor's listener does not answer on audit-alerter"
-  [ "$(al_call "$AL_OUT" "$AL_OUT_IP" GET /health)" = 0 ] && pass "nothing answers on alerter-outbound" || fail "the alerter answers on alerter-outbound"
-  [ "$(al_call "$AL_ADMIN" "$AL_ADMIN_IP" GET /status)" = 401 ] && pass "no token: 401 on the admin's listener" || fail "the admin's listener answers without a token"
-  [ "$(al_call "$AL_ADMIN" "$AL_ADMIN_IP" GET /status "wrong-token")" = 401 ] && pass "a wrong token: 401 on the admin's listener" || fail "a wrong token opened the admin's listener"
-  [ "$(al_call "$AL_ADMIN" "$AL_ADMIN_IP" GET /status "$AL_AUD_TOK")" = 401 ] && pass "the auditor's token does not open the admin's listener" || fail "the auditor's token opened the admin's listener"
-  [ "$(al_call "$AL_ADMIN" "$AL_ADMIN_IP" GET /status "$AL_ADM_TOK")" = 200 ] && pass "the admin's token opens GET /status" || fail "the admin's token does not open GET /status"
-  [ "$(al_call "$AL_AUD" "$AL_AUD_IP" POST /events "" '{}')" = 401 ] && pass "no token: 401 on the auditor's listener" || fail "the auditor's listener answers without a token"
-  [ "$(al_call "$AL_AUD" "$AL_AUD_IP" POST /events "$AL_ADM_TOK" '{}')" = 401 ] && pass "the admin's token does not open the auditor's listener" || fail "the admin's token opened the auditor's listener"
-  [ "$(al_call "$AL_AUD" "$AL_AUD_IP" GET /status "$AL_AUD_TOK")" = 404 ] && pass "the auditor's listener has no status route" || fail "the auditor's listener serves /status"
-  [ "$(al_call "$AL_AUD" "$AL_AUD_IP" PUT /config "$AL_AUD_TOK" '{}')" = 404 ] && pass "the auditor's listener has no config route" || fail "the auditor's listener serves /config"
+  [ "$(http "$AL_ADMIN" "http://$AL_ADMIN_IP:8085/api/alerter/v1/health" GET)" = 200 ] && pass "the admin's listener answers on alerter-admin" || fail "the admin's listener does not answer on alerter-admin"
+  [ "$(http "$AL_AUD" "http://$AL_AUD_IP:8085/api/alerter/v1/health" GET)" = 200 ] && pass "the auditor's listener answers on audit-alerter" || fail "the auditor's listener does not answer on audit-alerter"
+  [ "$(http "$AL_OUT" "http://$AL_OUT_IP:8085/api/alerter/v1/health" GET)" = 0 ] && pass "nothing answers on alerter-outbound" || fail "the alerter answers on alerter-outbound"
+  [ "$(http "$AL_ADMIN" "http://$AL_ADMIN_IP:8085/api/alerter/v1/status" GET)" = 401 ] && pass "no token: 401 on the admin's listener" || fail "the admin's listener answers without a token"
+  [ "$(http "$AL_ADMIN" "http://$AL_ADMIN_IP:8085/api/alerter/v1/status" GET "wrong-token")" = 401 ] && pass "a wrong token: 401 on the admin's listener" || fail "a wrong token opened the admin's listener"
+  [ "$(http "$AL_ADMIN" "http://$AL_ADMIN_IP:8085/api/alerter/v1/status" GET "$AL_AUD_TOK")" = 401 ] && pass "the auditor's token does not open the admin's listener" || fail "the auditor's token opened the admin's listener"
+  [ "$(http "$AL_ADMIN" "http://$AL_ADMIN_IP:8085/api/alerter/v1/status" GET "$AL_ADM_TOK")" = 200 ] && pass "the admin's token opens GET /status" || fail "the admin's token does not open GET /status"
+  [ "$(http "$AL_AUD" "http://$AL_AUD_IP:8085/api/alerter/v1/events" POST "" '{}')" = 401 ] && pass "no token: 401 on the auditor's listener" || fail "the auditor's listener answers without a token"
+  [ "$(http "$AL_AUD" "http://$AL_AUD_IP:8085/api/alerter/v1/events" POST "$AL_ADM_TOK" '{}')" = 401 ] && pass "the admin's token does not open the auditor's listener" || fail "the admin's token opened the auditor's listener"
+  [ "$(http "$AL_AUD" "http://$AL_AUD_IP:8085/api/alerter/v1/status" GET "$AL_AUD_TOK")" = 404 ] && pass "the auditor's listener has no status route" || fail "the auditor's listener serves /status"
+  [ "$(http "$AL_AUD" "http://$AL_AUD_IP:8085/api/alerter/v1/config" PUT "$AL_AUD_TOK" '{}')" = 404 ] && pass "the auditor's listener has no config route" || fail "the auditor's listener serves /config"
   # A backup's export and a restore's import are the admin's link alone (ADR 0013): no token and the auditor's token are refused on the
   # admin's listener, and the auditor's listener has neither route.
   for route in /exports /imports; do
-    [ "$(al_call "$AL_ADMIN" "$AL_ADMIN_IP" POST "$route")" = 401 ] && pass "no token: 401 on POST $route" || fail "POST $route answers without a token"
-    [ "$(al_call "$AL_ADMIN" "$AL_ADMIN_IP" POST "$route" "$AL_AUD_TOK")" = 401 ] && pass "the auditor's token does not open POST $route" || fail "the auditor's token opened POST $route"
-    [ "$(al_call "$AL_AUD" "$AL_AUD_IP" POST "$route" "$AL_AUD_TOK")" = 404 ] && pass "the auditor's listener has no $route route" || fail "the auditor's listener serves $route"
+    [ "$(http "$AL_ADMIN" "http://$AL_ADMIN_IP:8085/api/alerter/v1$route" POST)" = 401 ] && pass "no token: 401 on POST $route" || fail "POST $route answers without a token"
+    [ "$(http "$AL_ADMIN" "http://$AL_ADMIN_IP:8085/api/alerter/v1$route" POST "$AL_AUD_TOK")" = 401 ] && pass "the auditor's token does not open POST $route" || fail "the auditor's token opened POST $route"
+    [ "$(http "$AL_AUD" "http://$AL_AUD_IP:8085/api/alerter/v1$route" POST "$AL_AUD_TOK")" = 404 ] && pass "the auditor's listener has no $route route" || fail "the auditor's listener serves $route"
   done
-  [ "$(al_call "$EDGE" "$AL_AUD_IP" GET /health)" = 0 ] && pass "a container on edge cannot reach the alerter" || fail "the alerter is reachable from edge"
+  [ "$(http "$EDGE" "http://$AL_AUD_IP:8085/api/alerter/v1/health" GET)" = 0 ] && pass "a container on edge cannot reach the alerter" || fail "the alerter is reachable from edge"
   # The admin gives it its settings with no command (an alerter with no channel is given an empty set, so that it answers): after a
   # few seconds the status shows a configuration, and a test alert says that nothing is set up.
   have=null
@@ -710,7 +684,7 @@ print(json.load(urllib.request.urlopen(req, timeout=4))['config_version'])" 2>/d
     [ -n "$have" ] && [ "$have" != None ] && break; sleep 2
   done
   [ -n "$have" ] && [ "$have" != None ] && pass "the admin gave the alerter its settings, with no command" || fail "the alerter has no configuration: '$have'"
-  [ "$(al_call "$AL_ADMIN" "$AL_ADMIN_IP" POST /test "$AL_ADM_TOK")" = 200 ] && pass "configured, POST /test answers" || fail "a configured alerter did not answer POST /test"
+  [ "$(http "$AL_ADMIN" "http://$AL_ADMIN_IP:8085/api/alerter/v1/test" POST "$AL_ADM_TOK")" = 200 ] && pass "configured, POST /test answers" || fail "a configured alerter did not answer POST /test"
   # Its own link to the auditor works end to end: its token is accepted there, and the auditor notes its request.
   ar=$(py --network "$AL_AUD" -- "
 import urllib.request, json
