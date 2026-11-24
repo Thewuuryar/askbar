@@ -3,64 +3,44 @@
 {%- import "components.html" as c %}
 {% block content %}
     <form id="settings-form">
-      <section class="sec-sec" aria-labelledby="prompt-title">
-        <div class="sec-lab">
-          {% call c::section_title("prompt-title", "System prompt", "settings/general#system-prompt") %}{% endcall %}
-          <p class="hint">Sent with every message. It is never shown to clients.</p>
-        </div>
+      {% call c::settings_section("prompt-title", "System prompt", "settings/general#system-prompt", "Sent with every message. It is never shown to clients.") %}
         <div class="sec-fields">
           {% call c::field("Prompt", "s-prompt", "", "slot", false) %}<textarea id="s-prompt" name="s-prompt" rows="8" aria-describedby="s-prompt-error"></textarea>{% endcall %}
         </div>
-      </section>
+      {% endcall %}
 
-      <section class="sec-sec" aria-labelledby="time-title">
-        <div class="sec-lab">
-          {% call c::section_title("time-title", "Reply time limit", "settings/general#reply-time-limit") %}{% endcall %}
-          <p class="hint">A reply still running after this long is stopped and the text so far is kept. A message that waits in the queue is timed from when it starts.</p>
-        </div>
+      {% call c::settings_section("time-title", "Reply time limit", "settings/general#reply-time-limit", "A reply still running after this long is stopped and the text so far is kept. A message that waits in the queue is timed from when it starts.") %}
         <div class="sec-fields">
           {% call c::field("Generation timeout (seconds)", "s-gen-timeout", "", "slot", false) %}<input id="s-gen-timeout" name="s-gen-timeout" type="number" inputmode="numeric" min="{{ crate::constants::MIN_GENERATION_TIMEOUT_SECS }}" max="{{ crate::constants::MAX_GENERATION_TIMEOUT_SECS }}" step="1" aria-describedby="s-gen-timeout-hint s-gen-timeout-min s-gen-timeout-error"><p class="hint" id="s-gen-timeout-hint">Allowed {{ crate::constants::MIN_GENERATION_TIMEOUT_SECS }} to {{ crate::constants::MAX_GENERATION_TIMEOUT_SECS }} seconds. The default is {{ crate::constants::DEFAULT_GENERATION_TIMEOUT_SECS / 60 }} minutes.</p><p class="hint" id="s-gen-timeout-min"></p>{% endcall %}
         </div>
-      </section>
+      {% endcall %}
 
-      <section class="sec-sec" aria-labelledby="history-title">
-        <div class="sec-lab">
-          {% call c::section_title("history-title", "History sent with each question", "settings/general#history-sent-with-each-question") %}{% endcall %}
-          <p class="hint">A new question goes to the model with this many earlier questions and their replies. 0 sends the whole conversation (the default). A shorter history uses fewer tokens; the model does not see what is left out. A question that got no reply is never sent again.</p>
-        </div>
+      {% call c::settings_section("history-title", "History sent with each question", "settings/general#history-sent-with-each-question", "A new question goes to the model with this many earlier questions and their replies. 0 sends the whole conversation (the default). A shorter history uses fewer tokens; the model does not see what is left out. A question that got no reply is never sent again.") %}
         <div class="sec-fields">
           {% call c::field("Earlier questions sent (0 = all)", "s-history-turns", "", "slot", false) %}<input id="s-history-turns" name="s-history-turns" type="number" inputmode="numeric" min="{{ crate::constants::MIN_HISTORY_TURNS }}" max="{{ crate::constants::MAX_HISTORY_TURNS }}" step="1" aria-describedby="s-history-turns-error">{% endcall %}
         </div>
-      </section>
+      {% endcall %}
 
-      <section class="sec-sec" aria-labelledby="told-title">
-        <div class="sec-lab">
-          {% call c::section_title("told-title", "What people are told", "settings/general#what-people-are-told") %}{% endcall %}
-          <p class="hint">The privacy notice is shown in the app after pairing and again whenever its wording or the audit retention (set on the Security page) changes, with the number of days records are kept. The AI warning is shown above the input box. Both are on by default, with the wording below. Provisioning a person here assumes their consent, so the app records no acknowledgment. You are responsible for consent, notice and the law where you are (for minors, employees and other countries).</p>
-        </div>
+      {% call c::settings_section("told-title", "What people are told", "settings/general#what-people-are-told", "The privacy notice is shown in the app after pairing and again whenever its wording or the audit retention (set on the Security page) changes, with the number of days records are kept. The AI warning is shown above the input box. Both are on by default, with the wording below. Provisioning a person here assumes their consent, so the app records no acknowledgment. You are responsible for consent, notice and the law where you are (for minors, employees and other countries).") %}
         <div class="sec-fields">
           <label class="check" for="s-notice-on"><input type="checkbox" id="s-notice-on" name="s-notice-on"> Show the privacy notice</label>
           {% call c::field("Privacy notice", "s-notice-text", "", "slot", false) %}<textarea id="s-notice-text" name="s-notice-text" rows="5" maxlength="{{ crate::constants::MAX_NOTICE_CHARS }}" aria-describedby="s-notice-text-hint s-notice-text-error"></textarea><p class="hint" id="s-notice-text-hint">Up to {{ crate::constants::MAX_NOTICE_CHARS }} characters.</p>{% endcall %}
           <label class="check" for="s-warning-on"><input type="checkbox" id="s-warning-on" name="s-warning-on"> Show the AI warning above the input box</label>
           {% call c::field("AI warning", "s-warning-text", "", "slot", false) %}<input id="s-warning-text" name="s-warning-text" type="text" maxlength="{{ crate::constants::MAX_WARNING_CHARS }}" aria-describedby="s-warning-text-hint s-warning-text-error"><p class="hint" id="s-warning-text-hint">Up to {{ crate::constants::MAX_WARNING_CHARS }} characters.</p>{% endcall %}
         </div>
-      </section>
+      {% endcall %}
 
-      <section class="sec-sec" aria-labelledby="display-title">
-        <div class="sec-lab">
-          {% call c::section_title("display-title", "Display defaults", "settings/general#display-defaults") %}{% endcall %}
-          <p class="hint">Clients use these unless their own client.yaml overrides them.</p>
-        </div>
+      {% call c::settings_section("display-title", "Display defaults", "settings/general#display-defaults", "Clients use these unless their own client.yaml overrides them.") %}
         <div class="sec-fields">
           {% call c::field("Theme", "s-theme", "", "slot", false) %}<select id="s-theme" name="s-theme" aria-describedby="s-theme-error"><option value="auto">auto</option><option value="light">light</option><option value="dark">dark</option></select>{% endcall %}
-          {% call c::field("Width (px)", "s-width", "", "slot", false) %}<input id="s-width" name="s-width" type="number" inputmode="numeric" min="{{ crate::constants::MIN_DISPLAY_WIDTH_PX }}" max="{{ crate::constants::MAX_DISPLAY_WIDTH_PX }}" step="1" aria-describedby="s-width-hint s-width-error"><p class="hint" id="s-width-hint">{{ crate::constants::MIN_DISPLAY_WIDTH_PX }} to {{ crate::constants::MAX_DISPLAY_WIDTH_PX }} pixels</p>{% endcall %}
-          {% call c::field("Max height (px)", "s-max-height", "", "slot", false) %}<input id="s-max-height" name="s-max-height" type="number" inputmode="numeric" min="{{ crate::constants::MIN_DISPLAY_MAX_HEIGHT_PX }}" max="{{ crate::constants::MAX_DISPLAY_MAX_HEIGHT_PX }}" step="1" aria-describedby="s-max-height-hint s-max-height-error"><p class="hint" id="s-max-height-hint">{{ crate::constants::MIN_DISPLAY_MAX_HEIGHT_PX }} to {{ crate::constants::MAX_DISPLAY_MAX_HEIGHT_PX }} pixels</p>{% endcall %}
-          {% call c::field("History panel width (px)", "s-history-width", "", "slot", false) %}<input id="s-history-width" name="s-history-width" type="number" inputmode="numeric" min="{{ crate::constants::MIN_DISPLAY_HISTORY_WIDTH_PX }}" max="{{ crate::constants::MAX_DISPLAY_HISTORY_WIDTH_PX }}" step="1" aria-describedby="s-history-width-hint s-history-width-error"><p class="hint" id="s-history-width-hint">{{ crate::constants::MIN_DISPLAY_HISTORY_WIDTH_PX }} to {{ crate::constants::MAX_DISPLAY_HISTORY_WIDTH_PX }} pixels</p>{% endcall %}
-          {% call c::field("Top position", "s-top", "", "slot", false) %}<input id="s-top" name="s-top" type="number" inputmode="decimal" min="{{ crate::constants::MIN_DISPLAY_TOP_PERCENT }}" max="{{ crate::constants::MAX_DISPLAY_TOP_PERCENT }}" step="0.01" aria-describedby="s-top-hint s-top-error"><p class="hint" id="s-top-hint">{{ crate::constants::MIN_DISPLAY_TOP_PERCENT }} to {{ crate::constants::MAX_DISPLAY_TOP_PERCENT }} of the screen height</p>{% endcall %}
+          {% call c::number_field("Width (px)", "s-width", crate::constants::MIN_DISPLAY_WIDTH_PX, crate::constants::MAX_DISPLAY_WIDTH_PX, "pixels", "1", "numeric") %}{% endcall %}
+          {% call c::number_field("Max height (px)", "s-max-height", crate::constants::MIN_DISPLAY_MAX_HEIGHT_PX, crate::constants::MAX_DISPLAY_MAX_HEIGHT_PX, "pixels", "1", "numeric") %}{% endcall %}
+          {% call c::number_field("History panel width (px)", "s-history-width", crate::constants::MIN_DISPLAY_HISTORY_WIDTH_PX, crate::constants::MAX_DISPLAY_HISTORY_WIDTH_PX, "pixels", "1", "numeric") %}{% endcall %}
+          {% call c::number_field("Top position", "s-top", crate::constants::MIN_DISPLAY_TOP_PERCENT, crate::constants::MAX_DISPLAY_TOP_PERCENT, "of the screen height", "0.01", "decimal") %}{% endcall %}
           <label class="check" for="s-hide-on-blur"><input type="checkbox" id="s-hide-on-blur" name="s-hide-on-blur"> Hide the window when it loses focus</label>
           <label class="check" for="s-newest-first"><input type="checkbox" id="s-newest-first" name="s-newest-first"> Show conversations newest first, just under the input bar (otherwise oldest first)</label>
         </div>
-      </section>
+      {% endcall %}
 
       {% call b::error_line("settings-error") %}{% endcall %}
       {% call c::save_bar("settings-form") %}{% endcall %}

@@ -182,7 +182,7 @@ Branch `refactor/admin-links-and-ui`. PR title `refactor(admin): share link code
 - [ ] **R4.4** `test(admin): share fake link servers` · haiku
   Files: `services/admin/tests/{common/mod.rs,alerts.rs,gateway.rs,backup_bundle.rs,restore.rs}`.
   Do: move `fake_status`, `fake_restart`, `fake_config`, `Fake` and `fake_alerter` into `tests/common`. Merge two copies only where their response bodies match.
-- [ ] **R4.5** `refactor(ui): settings section and number field macros` · haiku
+- [x] **R4.5** `refactor(ui): settings section and number field macros` · haiku
   Files: `services/admin/src/ui/templates/{components,backup,general,notifications,security,network}.html`, `services/admin/src/pages.rs`, `docs/reference/admin-ui/components.md`.
   Do:
   - A `settings_section` call-body macro replaces the about 25 copies of the `sec-sec`/`sec-lab`/`sec-fields` scaffold.

@@ -2,11 +2,7 @@
 {%- import "blocks.html" as b %}
 {%- import "components.html" as c %}
 {% block content %}
-    <section class="sec-sec" aria-labelledby="ntfy-title">
-      <div class="sec-lab">
-        {% call c::section_title("ntfy-title", "ntfy", "settings/notifications#ntfy") %}{% endcall %}
-        <p class="hint">Alerts go to ntfy.sh or your own ntfy server. Every value is secret: it is kept encrypted, never shown again, and leaves the admin only for the alerter.</p>
-      </div>
+    {% call c::settings_section("ntfy-title", "ntfy", "settings/notifications#ntfy", "Alerts go to ntfy.sh or your own ntfy server. Every value is secret: it is kept encrypted, never shown again, and leaves the admin only for the alerter.") %}
       <form id="alerts-form" class="sec-fields">
         <p class="sec-line">Held now: server <strong id="a-held-server">no</strong>, topic <strong id="a-held-topic">no</strong>, token <strong id="a-held-token">no</strong></p>
         {% call c::field("ntfy server", "a-server", "The address of the ntfy server, starting with https://.", "slot", false) %}<input id="a-server" name="a-server" type="url" autocomplete="off" aria-describedby="a-server-hint a-server-error">{% endcall %}
@@ -19,13 +15,9 @@
         {% call b::error_line("a-error") %}{% endcall %}
         {% call c::save_bar("alerts-form", "Save ntfy settings") %}{% endcall %}
       </form>
-    </section>
+    {% endcall %}
 
-    <section class="sec-sec" aria-labelledby="email-title">
-      <div class="sec-lab">
-        {% call c::section_title("email-title", "Email", "settings/notifications#email") %}{% endcall %}
-        <p class="hint">Mail goes from the alerter to your mail server. A server on the internet needs STARTTLS or TLS, because a password is not sent without TLS.</p>
-      </div>
+    {% call c::settings_section("email-title", "Email", "settings/notifications#email", "Mail goes from the alerter to your mail server. A server on the internet needs STARTTLS or TLS, because a password is not sent without TLS.") %}
       <form id="email-form" class="sec-fields">
         <p class="sec-line">Held now: server <strong id="m-held-host">no</strong>, login <strong id="m-held-login">no</strong>, addresses <strong id="m-held-addr">no</strong></p>
         {% call c::field("Mail server", "m-host", "The host name of your outgoing mail server.", "slot", false) %}<input id="m-host" name="m-host" type="text" autocomplete="off" aria-describedby="m-host-hint m-host-error">{% endcall %}
@@ -46,25 +38,17 @@
         {% call b::error_line("m-error") %}{% endcall %}
         {% call c::save_bar("email-form", "Save email settings") %}{% endcall %}
       </form>
-    </section>
+    {% endcall %}
 
-    <section class="sec-sec" aria-labelledby="test-title">
-      <div class="sec-lab">
-        {% call c::section_title("test-title", "Test alert", "settings/notifications#test-alert") %}{% endcall %}
-        <p class="hint">Sends a test alert to every channel that is set up.</p>
-      </div>
+    {% call c::settings_section("test-title", "Test alert", "settings/notifications#test-alert", "Sends a test alert to every channel that is set up.") %}
       <form id="alerts-test-form" class="sec-fields">
         <div class="sec-actions"><button type="button" id="a-test" class="btn btn-primary">Send a test alert</button></div>
         <p id="a-result" class="hint" role="status"></p>
         {% call b::error_line("a-test-error") %}{% endcall %}
       </form>
-    </section>
+    {% endcall %}
 
-    <section class="sec-sec" aria-labelledby="banners-title">
-      <div class="sec-lab">
-        {% call c::section_title("banners-title", "Page-wide banners", "settings/notifications#page-wide-banners") %}{% endcall %}
-        <p class="hint">A banner across every page for these conditions. Critical ones are always shown.</p>
-      </div>
+    {% call c::settings_section("banners-title", "Page-wide banners", "settings/notifications#page-wide-banners", "A banner across every page for these conditions. Critical ones are always shown.") %}
       <div class="sec-fields">
         {% call c::na("no admin setting stores this") %}<div class="bn-list">
           <div class="bn-head"><span>Show as a banner</span><span>Level</span><span></span></div>
@@ -76,5 +60,5 @@
           <p class="bn-na-note hint">Not available yet: no admin setting stores this.</p>
         </div>{% endcall %}
       </div>
-    </section>
+    {% endcall %}
 {% endblock %}
