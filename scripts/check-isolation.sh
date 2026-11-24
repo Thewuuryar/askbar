@@ -820,7 +820,9 @@ EOF
   docker exec "$EGP" bash -c 'getent hosts egress-admin-host' >/dev/null 2>&1 && pass "the egress proxy resolves its own alias" || fail "the egress proxy cannot resolve its own alias"
   # The admin is on egress-admin with the proxy (P4.4), so it resolves it; the rest of our names it does not.
   docker exec "$EGP" bash -c 'getent hosts admin' >/dev/null 2>&1 && pass "the egress proxy resolves the admin (they share egress-admin)" || fail "the egress proxy cannot resolve the admin on egress-admin"
-  for h in caddy server auditor askbar-model-gateway askbar-alerter cpa mock-llm; do
+  # The gateway is on egress-model-gateway with the proxy (P4.3a), so it resolves it too.
+  docker exec "$EGP" bash -c 'getent hosts askbar-model-gateway' >/dev/null 2>&1 && pass "the egress proxy resolves the gateway (they share egress-model-gateway)" || fail "the egress proxy cannot resolve the gateway on egress-model-gateway"
+  for h in caddy server auditor askbar-alerter cpa mock-llm; do
     docker exec "$EGP" bash -c "getent hosts $h" >/dev/null 2>&1 && fail "the egress proxy resolves $h" || pass "the egress proxy cannot resolve $h"
   done
   for t in auditor/8083 server/8080 admin/8084; do
