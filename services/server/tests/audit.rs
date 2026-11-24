@@ -5,6 +5,8 @@
 //! makes each pass. The helpers at the top are filled in by step 4.5, which adds the audit
 //! recorder to `AppState`.
 
+mod common;
+use common::MockLlm;
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 
@@ -48,33 +50,10 @@ fn read(dir: &Path) -> Connection {
     Connection::open(dir.join("audit.db")).expect("audit.db exists")
 }
 
-/// Kills the mock when dropped, so a failing test cannot leave it running.
-struct Mock(std::process::Child);
-impl Drop for Mock {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
-}
-
-fn start_mock() -> (Mock, u16) {
-    use std::io::{BufRead, BufReader};
-    use std::process::{Command, Stdio};
-    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-    let script = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/e2e/mock_llm.py");
-    let mut child =
-        Command::new("python3").args(["-u", script, &port.to_string()]).stdout(Stdio::piped()).spawn().expect("python3 is needed");
-    let mut out = BufReader::new(child.stdout.take().unwrap());
-    let mut line = String::new();
-    out.read_line(&mut line).unwrap();
-    // Keep reading: the mock logs every request, and a closed pipe would break it.
-    std::thread::spawn(move || for _ in out.lines() {});
-    (Mock(child), port)
-}
-
 #[tokio::test]
 async fn a_finished_generation_leaves_one_turn_span_with_its_final_status() {
-    let (_mock, port) = start_mock();
+    let mock = MockLlm::start();
+    let port = mock.port;
     let (state, dir) = audit_state(port).await;
     let trace = run_chat(&state, "hello").await;
     state.audit.flush().await;
@@ -97,7 +76,8 @@ async fn a_finished_generation_leaves_one_turn_span_with_its_final_status() {
 /// ADR 0009 mechanism 5: the audit record for each reply says which space it ran in.
 #[tokio::test]
 async fn the_turn_span_names_the_space_and_the_conversation() {
-    let (_mock, port) = start_mock();
+    let mock = MockLlm::start();
+    let port = mock.port;
     let (state, dir) = audit_state(port).await;
     let trace = run_chat(&state, "hello").await;
     state.audit.flush().await;
@@ -113,7 +93,8 @@ async fn the_turn_span_names_the_space_and_the_conversation() {
 
 #[tokio::test]
 async fn a_failed_generation_ends_its_turn_span_with_an_error_code() {
-    let (_mock, port) = start_mock();
+    let mock = MockLlm::start();
+    let port = mock.port;
     let (state, dir) = audit_state(port).await;
     let trace = run_chat(&state, "please fail").await;
     state.audit.flush().await;
@@ -125,7 +106,8 @@ async fn a_failed_generation_ends_its_turn_span_with_an_error_code() {
 
 #[tokio::test]
 async fn a_finished_generation_leaves_one_attempt_span_under_its_turn() {
-    let (_mock, port) = start_mock();
+    let mock = MockLlm::start();
+    let port = mock.port;
     let (state, dir) = audit_state(port).await;
     let trace = run_chat(&state, "hello").await;
     state.audit.flush().await;
@@ -159,7 +141,8 @@ async fn a_finished_generation_leaves_one_attempt_span_under_its_turn() {
 
 #[tokio::test]
 async fn a_failed_attempt_records_its_error_code_and_status() {
-    let (_mock, port) = start_mock();
+    let mock = MockLlm::start();
+    let port = mock.port;
     let (state, dir) = audit_state(port).await;
     let trace = run_chat(&state, "please fail").await;
     state.audit.flush().await;
@@ -174,7 +157,8 @@ async fn a_failed_attempt_records_its_error_code_and_status() {
 
 #[tokio::test]
 async fn audit_db_contains_none_of_the_prompt_or_reply_text() {
-    let (_mock, port) = start_mock();
+    let mock = MockLlm::start();
+    let port = mock.port;
     let (state, dir) = audit_state(port).await;
     run_chat(&state, "SECRET-PROMPT-MARKER-7731 please").await;
     state.audit.flush().await;
@@ -191,7 +175,8 @@ async fn audit_db_contains_none_of_the_prompt_or_reply_text() {
 #[tokio::test]
 async fn a_queued_message_records_a_gate_span_named_queue_from_enqueue_to_start() {
     use futures_util::StreamExt;
-    let (_mock, port) = start_mock();
+    let mock = MockLlm::start();
+    let port = mock.port;
     let (state, dir) = audit_state(port).await;
     let (user, client) = {
         let db = state.db.lock().unwrap();
@@ -271,7 +256,8 @@ fn install_audit_key(state: &std::sync::Arc<askbar_server::AppState>) -> [u8; 32
 
 #[tokio::test]
 async fn sealed_content_is_stored_but_a_marker_never_appears_in_the_bytes_of_audit_db_or_its_wal() {
-    let (_mock, port) = start_mock();
+    let mock = MockLlm::start();
+    let port = mock.port;
     let (state, dir) = audit_state(port).await;
     let _secret = install_audit_key(&state);
     let trace = run_chat(&state, "SECRET-PROMPT-MARKER-5512 tell me something").await;
@@ -291,7 +277,8 @@ async fn sealed_content_is_stored_but_a_marker_never_appears_in_the_bytes_of_aud
 #[tokio::test]
 async fn a_generation_with_no_audit_key_is_refused_with_503_audit_key_missing() {
     use axum::response::IntoResponse;
-    let (_mock, port) = start_mock();
+    let mock = MockLlm::start();
+    let port = mock.port;
     let (state, _dir) = audit_state(port).await;
     askbar_server::testing::update_snapshot(&state.db.lock().unwrap(), |s| s.audit_public_key = None); // the admin has not made a key
     let (user, client) = {
@@ -360,7 +347,8 @@ fn open_payloads(dir: &Path, trace: &str, secret: [u8; 32]) -> Vec<(String, Stri
 
 #[tokio::test]
 async fn the_request_and_the_reply_are_stored_sealed_on_their_spans_and_open_with_the_key() {
-    let (_mock, port) = start_mock();
+    let mock = MockLlm::start();
+    let port = mock.port;
     let (state, dir) = audit_state(port).await;
     let secret = install_audit_key(&state);
     let trace = run_chat(&state, "What is the capital of Atlantis?").await;
@@ -382,7 +370,8 @@ async fn the_request_and_the_reply_are_stored_sealed_on_their_spans_and_open_wit
 
 #[tokio::test]
 async fn a_provider_failure_seals_its_error_text_on_the_attempt() {
-    let (_mock, port) = start_mock();
+    let mock = MockLlm::start();
+    let port = mock.port;
     let (state, dir) = audit_state(port).await;
     let secret = install_audit_key(&state);
     let trace = run_chat(&state, "please fail").await;
@@ -398,7 +387,8 @@ async fn a_provider_failure_seals_its_error_text_on_the_attempt() {
 
 #[tokio::test]
 async fn an_oversized_prompt_is_cut_at_256_kb_and_the_turn_is_marked_request_truncated() {
-    let (_mock, port) = start_mock();
+    let mock = MockLlm::start();
+    let port = mock.port;
     let (state, dir) = audit_state(port).await;
     let secret = install_audit_key(&state);
     let prompt = format!("{}{}", "word ".repeat(70_000), "END-OF-PROMPT"); // 350 KB
@@ -428,7 +418,8 @@ async fn an_oversized_prompt_is_cut_at_256_kb_and_the_turn_is_marked_request_tru
 
 #[tokio::test]
 async fn each_try_is_an_attempt_span_with_its_retry_index() {
-    let (_mock, port) = start_mock();
+    let mock = MockLlm::start();
+    let port = mock.port;
     let (state, dir) = audit_state(port).await;
     let trace = run_chat(&state, "hello 429once audit-retry").await;
     state.audit.flush().await;

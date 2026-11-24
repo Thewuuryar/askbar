@@ -3,58 +3,20 @@
 //! that enables it. Failures are driven by the mock LLM's modes, chosen here by model name
 //! ("m-429", "m-fail", "m-reset"), so two providers on one mock can behave differently.
 
+mod common;
 use askbar_server::generation::{submit, GenEvent, Submit, SubmitError};
 use axum::response::IntoResponse;
+use common::{serve, MockLlm};
 use futures_util::StreamExt;
-use std::io::{BufRead, BufReader};
-use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
-
-struct Mock {
-    child: Child,
-    port: u16,
-    log: Arc<Mutex<Vec<String>>>,
-}
-impl Drop for Mock {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
-impl Mock {
-    fn start() -> Mock {
-        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-        let script = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/e2e/mock_llm.py");
-        let mut child =
-            Command::new("python3").args(["-u", script, &port.to_string()]).stdout(Stdio::piped()).spawn().expect("python3 is needed");
-        let log = Arc::new(Mutex::new(Vec::new()));
-        let out = BufReader::new(child.stdout.take().unwrap());
-        let l = log.clone();
-        std::thread::spawn(move || {
-            for line in out.lines().map_while(Result::ok) {
-                l.lock().unwrap().push(line);
-            }
-        });
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while std::net::TcpStream::connect(("127.0.0.1", port)).is_err() {
-            assert!(Instant::now() < deadline, "mock did not start");
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        Mock { child, port, log }
-    }
-    /// How many chat requests this mock has seen.
-    fn requests(&self) -> usize {
-        self.log.lock().unwrap().iter().filter(|l| l.starts_with("POST")).count()
-    }
-}
 
 /// Two providers on two mocks: `p1` (the one requests ask for) and `p2`, another provider that
 /// must never be used in its place. `model1` and `model2` pick each one's mock mode.
 struct Stack {
     state: Arc<askbar_server::AppState>,
-    m1: Mock,
-    m2: Mock,
+    m1: MockLlm,
+    m2: MockLlm,
     user: String,
     /// The model each provider approves (the catalog has just that one): p1's, then p2's.
     models: [String; 2],
@@ -65,15 +27,13 @@ struct Stack {
 }
 
 fn provider(id: &str, port: u16, model: &str, extra: serde_json::Value) -> askbar_proto::SnapshotProvider {
-    let mut v = serde_json::json!({
-        "id": id, "name": id, "type": "openai", "base_url": format!("http://127.0.0.1:{port}/v1"), "model": model, "headers": {}
-    });
+    let mut v = serde_json::to_value(askbar_server::testing::provider(id, id, &format!("http://127.0.0.1:{port}/v1"), model)).unwrap();
     v.as_object_mut().unwrap().extend(extra.as_object().cloned().unwrap_or_default());
     serde_json::from_value(v).unwrap()
 }
 
 async fn stack(model1: &str, model2: &str, p2_extra: serde_json::Value) -> Stack {
-    let (m1, m2) = (Mock::start(), Mock::start());
+    let (m1, m2) = (MockLlm::start(), MockLlm::start());
     let (state, dir, rig) = askbar_server::testing::state_with_audit(&format!("http://127.0.0.1:{}/v1", m1.port)).await;
     let user = {
         let db = state.db.lock().unwrap();
@@ -294,10 +254,7 @@ async fn the_flag_clears_on_the_next_success_and_the_endpoint_lists_it() {
     use sha2::Digest;
     let hex: String = sha2::Sha256::digest(token.as_bytes()).iter().map(|b| format!("{b:02x}")).collect();
     std::fs::write(&hash, hex).unwrap();
-    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("http://{}", l.local_addr().unwrap());
-    let app = server_api::router(s.state.clone(), hash);
-    tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
+    let url = format!("http://{}", serve(server_api::router(s.state.clone(), hash)).await);
     let http = reqwest::Client::new();
     let get = || async {
         http.get(format!("{url}/api/server/v1/providers/health"))
@@ -410,10 +367,7 @@ async fn server_api(s: &Stack) -> (String, String) {
     let token = "mgt_router-test-token".to_string();
     let hash = s._dir.join("token.sha256");
     std::fs::write(&hash, sha2::Sha256::digest(token.as_bytes()).iter().map(|b| format!("{b:02x}")).collect::<String>()).unwrap();
-    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("http://{}", l.local_addr().unwrap());
-    let app = askbar_server::server_api::router(s.state.clone(), hash);
-    tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
+    let url = format!("http://{}", serve(askbar_server::server_api::router(s.state.clone(), hash)).await);
     (url, token)
 }
 

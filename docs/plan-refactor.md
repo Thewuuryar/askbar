@@ -207,7 +207,7 @@ Branch `refactor/admin-links-and-ui`. PR title `refactor(admin): share link code
 
 Branch `refactor/tests-and-client`. PR title `refactor(client): share test setup and popup helpers`.
 
-- [ ] **R5.1** `test(server): one mock model launcher and serve helper` · haiku
+- [x] **R5.1** `test(server): one mock model launcher and serve helper` · haiku
   Files: `services/server/src/testing.rs` (or `tests/common/mod.rs`), `services/server/tests/{chat,audit,load,failures,router,server_api,read_api,auth,snapshot_auth}.rs`.
   Do:
   - `MockLlm::start()` (with the port and request log) replaces 6 launchers.

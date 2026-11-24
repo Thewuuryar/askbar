@@ -1,5 +1,7 @@
 use askbar_server::AppState;
+mod common;
 use axum::Router;
+use common::{client, serve};
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -23,9 +25,7 @@ async fn start_with(configured: bool) -> Server {
     }
     let state = AppState::new(db, askbar_server::MIN_CLIENT);
     let app: Router = askbar_server::client_router(state.clone());
-    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = l.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
+    let addr = serve(app).await;
     Server { addr, state, user, http: client() }
 }
 
@@ -115,12 +115,6 @@ async fn tokens_are_stored_hashed() {
 async fn health_stays_public() {
     let s = start().await;
     assert_eq!(s.http.get(s.url("/api/client/v1/health")).send().await.unwrap().status(), 200);
-}
-
-fn client() -> reqwest::Client {
-    let mut h = reqwest::header::HeaderMap::new();
-    h.insert(askbar_proto::CLIENT_VERSION_HEADER, "0.6.0".parse().unwrap());
-    reqwest::Client::builder().default_headers(h).build().unwrap()
 }
 
 #[tokio::test]

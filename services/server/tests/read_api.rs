@@ -1,5 +1,7 @@
 use askbar_proto::{Conversation, ConversationDetail, ModelChoice, ModelList, Prefs, SearchHit, Settings};
+mod common;
 use askbar_server::{auth, AppState};
+use common::{client, serve};
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -38,9 +40,7 @@ async fn start() -> T {
     rig.sync(&state);
     let token = auth::redeem_pair_code(&state.db.lock().unwrap(), &code).unwrap().unwrap();
     let app = askbar_server::client_router(state.clone());
-    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = l.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
+    let addr = serve(app).await;
     let space = askbar_server::testing::personal_space(&state, &user).id.clone();
     T { addr, state, user, token, http: client(), space, _rig: rig }
 }
@@ -180,12 +180,6 @@ async fn read_endpoints_require_a_token() {
         let r = t.http.get(format!("http://{}{p}", t.addr)).send().await.unwrap();
         assert_eq!(r.status(), 401, "{p}");
     }
-}
-
-fn client() -> reqwest::Client {
-    let mut h = reqwest::header::HeaderMap::new();
-    h.insert(askbar_proto::CLIENT_VERSION_HEADER, "0.6.0".parse().unwrap());
-    reqwest::Client::builder().default_headers(h).build().unwrap()
 }
 
 #[tokio::test]
