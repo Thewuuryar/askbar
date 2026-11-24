@@ -139,7 +139,7 @@ Branch `refactor/service-boot`. PR title `refactor(model-gateway): share service
   Files: `crates/askbar-service/{Cargo.toml,src/lib.rs}`, new `crates/askbar-service/src/boot.rs`, `services/{model-gateway,alerter,auditor}/src/main.rs`.
   Do: one copy each of `die`, `listen_addr`, `healthy` (taking the health path) and `stop_signal`, used by all three services. Leave the admin and server alone unless they use the same code without changes.
   Accept: each service starts and stops as before (its tests and `scripts/smoke.sh` pass).
-- [ ] **R3.2** `refactor(model-gateway): share link routing with the alerter` · sonnet · after R3.1
+- [x] **R3.2** `refactor(model-gateway): share link routing with the alerter` · sonnet · after R3.1
   Files: `crates/askbar-service/src/links.rs`, `services/model-gateway/src/lib.rs`, `services/alerter/src/lib.rs`.
   Do: move `full`, `links_for`, `token_dir`, `shell` and `routes` into `askbar-service::links`. Use `Links::named()` for single-link tables. `server_links`, `admin_links` and `auditor_links` stay as one-line wrappers.
   Accept: the hash file paths and link names are unchanged; the link tests of both services pass.

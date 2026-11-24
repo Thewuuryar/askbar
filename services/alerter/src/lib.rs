@@ -20,16 +20,16 @@ use askbar_proto::alerter::{
     Severity, SmtpConfig, TestResult,
 };
 use askbar_proto::http::ApiError;
-use askbar_proto::paths::{self, ALERTER_V1};
+use askbar_proto::paths::ALERTER_V1;
 use askbar_proto::ErrorCode;
 use askbar_service::audit_client::{now_parts, AuditClient};
 use askbar_service::configured::Gate;
-use askbar_service::links::{Allow, Caller, Link, Links};
+pub use askbar_service::links::RouteEntry;
+use askbar_service::links::{self, Caller, LinkDef, Links, Routes};
 use askbar_service::restart::Restarter;
 use askbar_service::status::BootId;
 use axum::body::Bytes;
-use axum::extract::{DefaultBodyLimit, State};
-use axum::http::Method;
+use axum::extract::State;
 use axum::routing::{get, post, put};
 use axum::{Extension, Json, Router};
 use deliver::Problem;
@@ -399,9 +399,6 @@ impl Alerter {
 
 // ------------------------------------------------------------------ the links
 
-/// What one link may call: methods and paths after `/api/alerter/v1`.
-type Routes = &'static [(&'static str, &'static str)];
-
 const AUDITOR_ROUTES: Routes = &[("POST", "/events")];
 const ADMIN_ROUTES: Routes = &[
     ("GET", "/status"),
@@ -415,20 +412,14 @@ const ADMIN_ROUTES: Routes = &[
 ];
 
 /// The two links: name as `bootstrap` names it (the file `accept/<name>.sha256`), the caller, and the routes.
-pub const LINKS: &[(&str, &str, Routes)] = &[("auditor-alerter", "auditor", AUDITOR_ROUTES), ("admin-alerter", "admin", ADMIN_ROUTES)];
+pub const LINKS: &[LinkDef] = &[("auditor-alerter", "auditor", AUDITOR_ROUTES), ("admin-alerter", "admin", ADMIN_ROUTES)];
 
 fn full(rest: &str) -> String {
-    paths::join(ALERTER_V1, rest)
+    links::full(ALERTER_V1, rest)
 }
 
-fn links_for(token_dir: &FsPath, link: &'static (&'static str, &'static str, Routes)) -> Links {
-    let (name, caller, routes) = link;
-    Links::new(vec![Link {
-        caller,
-        hash_file: token_dir.join("accept").join(format!("{name}.sha256")),
-        allow: routes.iter().map(|(m, p)| Allow::method(Method::from_bytes(m.as_bytes()).expect("a method"), &full(p))).collect(),
-    }])
-    .named("alerter")
+fn links_for(token_dir: &FsPath, link: &'static LinkDef) -> Links {
+    links::links_for("alerter", ALERTER_V1, token_dir, link)
 }
 
 /// The check on the auditor's listener: only the auditor's token, only `POST /events`.
@@ -449,7 +440,7 @@ fn release_url() -> String {
 
 /// The credential volume, read-only: `ASKBAR_ALERTER_TOKEN_DIR`, default `/alerter-token`.
 pub fn token_dir() -> PathBuf {
-    std::env::var("ASKBAR_ALERTER_TOKEN_DIR").ok().filter(|p| !p.trim().is_empty()).map_or_else(|| "/alerter-token".into(), PathBuf::from)
+    links::token_dir("ASKBAR_ALERTER_TOKEN_DIR", "/alerter-token")
 }
 
 /// The data volume: `ASKBAR_ALERTER_DATA_DIR`, default `/alerter-data`.
@@ -459,24 +450,9 @@ pub fn data_dir() -> PathBuf {
 
 // ------------------------------------------------------------------ the routes
 
-/// One route, for the table the OpenAPI test reads.
-pub struct RouteEntry {
-    pub method: &'static str,
-    pub path: String,
-}
-
 /// Every route, method and full path, across both listeners. The OpenAPI file describes exactly these.
 pub fn routes() -> Vec<RouteEntry> {
-    let mut out = vec![RouteEntry { method: "GET", path: full("/health") }];
-    let mut seen = std::collections::BTreeSet::new();
-    for (_, _, rs) in LINKS {
-        for (m, p) in rs.iter() {
-            if seen.insert((*m, *p)) {
-                out.push(RouteEntry { method: m, path: full(p) });
-            }
-        }
-    }
-    out
+    links::routes(ALERTER_V1, LINKS)
 }
 
 /// The routes that answer before the alerter has been configured.
@@ -518,12 +494,7 @@ fn gate(a: &Arc<Alerter>) -> Gate {
 }
 
 fn shell(a: Arc<Alerter>, protected: Router<Arc<Alerter>>) -> Router {
-    Router::new()
-        .route(&full("/health"), get(|| async { "ok" }))
-        .merge(protected)
-        .fallback(|| async { ApiError::code(ErrorCode::NotFound) })
-        .layer(DefaultBodyLimit::max(MAX_BODY))
-        .with_state(a)
+    links::shell(ALERTER_V1, MAX_BODY, a, protected)
 }
 
 type Failure = ApiError;
