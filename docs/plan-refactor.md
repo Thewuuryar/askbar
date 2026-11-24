@@ -107,20 +107,20 @@ Branch `refactor/check-isolation`. PR title `refactor(compose): shorten the isol
 - the CapEff checks
 - the failure drills
 
-- [ ] **R2.1** `refactor(compose): define docker helpers once in check-isolation` · haiku
+- [x] **R2.1** `refactor(compose): define docker helpers once in check-isolation` · haiku
   Files: `scripts/check-isolation.sh`.
   Do: define `members`, `nets_of` and `mounts_of` once near the top. `members` is defined at three places today, and the inspect pipeline appears about 15 times. Use `drill_wait_healthy` for the 30×2s wait loops. Inline `check` (used once), and drop the single-element loops (`for h in caddy`, and the loop near line 881).
-- [ ] **R2.2** `refactor(compose): one http helper in check-isolation` · haiku · after R2.1
+- [x] **R2.2** `refactor(compose): one http helper in check-isolation` · haiku · after R2.1
   Files: `scripts/check-isolation.sh`.
   Do: one `http NET URL [METHOD] [TOKEN] [JSON]` replaces `http_status`, `http_get`, `gw_call` and `al_call`. Pass tokens with `-e`, never inside the Python source.
-- [ ] **R2.3** `refactor(compose): admin setup and cleanup helpers in check-isolation` · haiku · after R2.2
+- [x] **R2.3** `refactor(compose): admin setup and cleanup helpers in check-isolation` · haiku · after R2.2
   Files: `scripts/check-isolation.sh`.
   Do: the provider, user and pairing setup Python is pasted 4 times; make it `admin_setup_provider`. The catalog cleanup is pasted twice; make it `admin_cleanup_provider`.
-- [ ] **R2.4** `refactor(compose): check each service from one profile table` · sonnet · after R2.3
+- [x] **R2.4** `refactor(compose): check each service from one profile table` · sonnet · after R2.3
   Files: `scripts/check-isolation.sh`.
   Do: one `svc_profile` function and a table with one row per service replace the per-service blocks for the auditor, `model-gateway`, the alerter, the server and `cpa`. The function checks health, uid, CapEff 0, no CapAdd, networks, internal flags, members, mounts, foreign volumes, and file owners and modes. Keep each service's real values in its row.
   Accept: a new service needs one row, not a block.
-- [ ] **R2.5** `refactor(compose): check declared networks and mounts from compose config` · sonnet · after R2.4
+- [x] **R2.5** `refactor(compose): check declared networks and mounts from compose config` · sonnet · after R2.4
   Files: `scripts/check-isolation.sh`.
   Do: read `docker compose config --format json` once, with the script's existing `py` helper (no new tool). From it, assert:
   - each service's networks, and each network's `internal` flag and members
@@ -179,7 +179,7 @@ Branch `refactor/admin-links-and-ui`. PR title `refactor(admin): share link code
   Files: `services/admin/src/admin_api.rs`, new `services/admin/src/admin_api/{settings,sealed}.rs`.
   Do: move the settings section and the sealed-content section without changes.
   Accept: the route table and the OpenAPI test are unchanged.
-- [ ] **R4.4** `test(admin): share fake link servers` · haiku
+- [x] **R4.4** `test(admin): share fake link servers` · haiku · dropped: the copies of `fake_status` and `fake_config` differ per service, and `fake_restart` shares five lines that each file would still wrap with its own token check, so sharing it adds code and saves none
   Files: `services/admin/tests/{common/mod.rs,alerts.rs,gateway.rs,backup_bundle.rs,restore.rs}`.
   Do: move `fake_status`, `fake_restart`, `fake_config`, `Fake` and `fake_alerter` into `tests/common`. Merge two copies only where their response bodies match.
 - [x] **R4.5** `refactor(ui): settings section and number field macros` · haiku
