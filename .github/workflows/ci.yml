@@ -9,8 +9,9 @@
 #
 # Speed: the desktop client's system libraries, Playwright's Chromium and the image layers are cached,
 # so a run downloads little when nothing changed and a slow Ubuntu mirror cannot stall it for long.
-# `npm test` runs as two parallel jobs, test-services and test-desktop (package.json test:services
-# and test:desktop); only the desktop half needs the WebKit libraries.
+# `npm test` runs as parallel jobs: services-core (test:services:core), admin-e2e (test:admin, one job per
+# viewport width) and test-desktop (test:desktop); only the desktop job needs the WebKit libraries. The
+# `test-services` job only aggregates the first two, because the `main` ruleset requires that name.
 name: ci
 
 on:
@@ -75,7 +76,7 @@ jobs:
           echo "$files"
           docs='^(docs/|[^/]+\.md$|LICENSE$|\.github/pull_request_template\.md$)'
           # Markdown that no test reads. The OpenAPI files and the wire contract are the contract the service tests check, so a change
-          # to them (or to any file that is not Markdown) runs test-services; the docs check itself runs in lint on every pull request.
+          # to them (or to any file that is not Markdown) runs the service tests; the docs check itself runs in lint on every pull request.
           prose='^(docs/[^ ]*\.md|[^/]+\.md|LICENSE|\.github/pull_request_template\.md)$'
           contract='^docs/(openapi/|wire-contract\.md$)'
           stack=false; desktop=false; services=false
@@ -97,8 +98,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # Quick and needing nothing installed, so they come first and fail fast. They also run in `npm run test:services`, for people who run
-      # it by hand; test-services is skipped for a Markdown-only pull request, so this is where they run for every pull request.
+      # Quick and needing nothing installed, so they come first and fail fast. They also run in `npm run test:services:core`, for people who run
+      # it by hand; the service jobs are skipped for a Markdown-only pull request, so this is where they run for every pull request.
       - name: Docs and UI token checks
         run: |
           scripts/check-docs.sh
@@ -139,13 +140,45 @@ jobs:
           cargo clippy --workspace --all-targets --locked -- -D warnings
           (cd clients/desktop && cargo clippy --workspace --all-targets --locked -- -D warnings)
 
-  # The services, crates, admin browser test, mock LLM and smoke test (and the docs checks again, as part of `npm run test:services`).
-  # Skipped for a pull request that changes only Markdown outside the contract files. No system libraries.
-  test-services:
+  # The services, crates, mock LLM and smoke test (and the docs checks again, as part of `npm run test:services:core`).
+  # Skipped for a pull request that changes only Markdown outside the contract files. No system libraries, no browser.
+  services-core:
     needs: changes
     if: ${{ !cancelled() && github.event_name != 'schedule' && needs.changes.outputs.services != 'false' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: JS dependencies
+        run: npm ci
+      # The real `age` tool: the backup tests open a whole bundle with it (tests/e2e/age_interop.py), and skip when it is missing.
+      - name: age
+        run: |
+          sudo apt-get $APT_OPTS update
+          sudo apt-get $APT_OPTS install -y --no-install-recommends age
+      - name: npm run test:services:core (docs checks, shell tests, cargo tests, mock LLM)
+        run: npm run test:services:core
+      - name: Smoke test
+        run: scripts/smoke.sh
+
+  # The admin browser test, one job per viewport width (E2E_VIEWPORT; the two widths are independent and took 6 minutes each, one after
+  # the other). It builds the debug binaries it starts first, so the test does not pay the compile.
+  admin-e2e:
+    needs: changes
+    if: ${{ !cancelled() && github.event_name != 'schedule' && needs.changes.outputs.services != 'false' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        width: [1280, 390]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch
@@ -168,10 +201,27 @@ jobs:
         run: |
           sudo apt-get $APT_OPTS update
           sudo apt-get $APT_OPTS install -y --no-install-recommends age
-      - name: npm run test:services (docs checks, cargo tests, admin browser test, mock LLM)
-        run: npm run test:services
-      - name: Smoke test
-        run: scripts/smoke.sh
+      - name: Build the binaries the test starts
+        run: cargo build -p askbar-server -p askbar-admin -p askbar-bootstrap -p askbar-model-gateway -p askbar-alerter -p askbar-auditor -p askbar-cpa-supervisor
+      - name: npm run test:admin (${{ matrix.width }} px)
+        env:
+          E2E_VIEWPORT: ${{ matrix.width }}
+        run: npm run test:admin
+
+  # The required check of the `main` ruleset, under its old name: it passes when services-core and every admin-e2e job passed or were
+  # skipped (the `changes` job found nothing for them to test), and fails if any failed or was cancelled.
+  test-services:
+    needs: [changes, services-core, admin-e2e]
+    if: ${{ always() && github.event_name != 'schedule' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Every service test job passed or was skipped
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "$RESULTS"
+          if [ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" = true ]; then exit 1; fi
 
   # The desktop client: its cargo tests, the Markdown renderer and the popup browser test.
   test-desktop:
