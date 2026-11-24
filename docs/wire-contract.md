@@ -335,9 +335,9 @@ with the passphrase. An auditor that cannot be reached is `503`.
 
 - The auditor's `GET /api/audit/v1/spans/{span_id}/payloads` (the admin calls it when a passphrase opens a span): `[{"role", "key_id", "ciphertext_b64"}]`, the sealed
   content of one span exactly as stored (`404` for a span that does not exist, `[]` for one with
-  nothing sealed). `role` is `request` (on an attempt: the system prompt and history as JSON),
+  nothing sealed). `role` is `prompt` (on a turn: the new message as typed), `request` (on an attempt: the system prompt and history as JSON),
   `reply` (on a turn) or `error` (on an attempt: the provider's error text, cut at 4 KB). Request
-  and reply are cut at 256 KB and the span then has `attrs.truncated = true`.
+  and reply are cut at 256 KB and the span then has `attrs.truncated = true`. A prompt is cut at 256 KB too, without the mark.
 
 ### The audit key
 

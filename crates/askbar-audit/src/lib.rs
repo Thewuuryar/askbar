@@ -770,7 +770,7 @@ fn now_secs() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
 
-/// A sealed payload (see `seal`) for a span: `role` is `request`, `reply` or `error`.
+/// A sealed payload (see `seal`) for a span: `role` is `prompt`, `request`, `reply` or `error`.
 #[derive(Debug, Clone)]
 pub struct PayloadWrite {
     pub span_id: String,

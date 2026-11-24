@@ -135,7 +135,7 @@ Refused turns appear in place with their gate and reason. Records written before
   Files: `crates/askbar-proto/src/audit.rs`, `crates/askbar-audit/src/lib.rs` (rebuild the spans table with the new kind check, as the v5 migration did, because the CHECK can't be altered in place), `services/auditor/src/lib.rs` (`may_start`: `model-gateway` may open steps under its attempts; the server still opens only `gate` spans).
   Runs in track 1, stage W1.
   Accept: old records verify unchanged; a step under an attempt is stored and chained.
-- [ ] **AV2.2** `feat(server): seal the new message as the prompt payload` · haiku · after AV2.1 · runs in track 1, stage W1
+- [x] **AV2.2** `feat(server): seal the new message as the prompt payload` · haiku · after AV2.1 · runs in track 1, stage W1
   Files: `services/server/src/generation.rs`.
   Do: seal a `prompt` payload with just the new message, next to `request`, which stays as it is (it holds the pre-redaction text). `prompt` is needed because the 256 KiB front cut on `request` can drop the newest message.
   Accept: a test with a history over 256 KiB still has the new message in `prompt`.
