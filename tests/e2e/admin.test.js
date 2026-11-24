@@ -1396,39 +1396,6 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     }
     await openPage('providers');
   });
-  await step('live lists: a 304 changes nothing, and the ETag is sent back', async () => {
-    await openPage('people');
-    await page.waitForSelector('#users [data-user]');
-    const sent = [];
-    await page.route('**/api/admin/v1/clients', async (route) => {
-      const inm = route.request().headers()['if-none-match'];
-      sent.push(inm || null);
-      if (inm === '"v1"') { await route.fulfill({ status: 304, headers: { etag: '"v1"' } }); return; }
-      const real = await route.fetch();
-      await route.fulfill({ response: real, headers: { ...real.headers(), etag: '"v1"' } });
-    });
-    try {
-      await page.reload();
-      await page.waitForSelector('#app:not([hidden])');
-      await page.waitForFunction(() => document.querySelector('#clients [data-client], #clients .empty-row'));
-      await page.evaluate(() => {
-        window.__muts = 0;
-        new MutationObserver((m) => { window.__muts += m.length; }).observe(document.getElementById('clients'), { subtree: true, childList: true, attributes: true, characterData: true });
-        Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
-        document.dispatchEvent(new Event('visibilitychange'));
-        Object.defineProperty(document, 'hidden', { configurable: true, get: () => false });
-        document.dispatchEvent(new Event('visibilitychange'));
-      });
-      for (let i = 0; i < 50 && sent.length < 2; i++) await page.waitForTimeout(100);
-      await page.waitForTimeout(300);
-      assert.deepEqual(sent.slice(0, 2), [null, '"v1"'], 'the second ask carries the ETag of the first answer');
-      assert.equal(await page.evaluate(() => window.__muts), 0, 'a 304 changes nothing');
-    } finally {
-      await page.unroute('**/api/admin/v1/clients');
-      await page.evaluate(() => { delete document.hidden; });
-    }
-    await openPage('providers');
-  });
   await step('live lists: the interval follows the tab, a lost connection backs off along BACKOFF_SECS and says Reconnecting…, and the first answer clears it', async () => {
     const out = await page.evaluate(async () => {
       const K = await window.ui.ready;

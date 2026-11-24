@@ -11,26 +11,20 @@
   const MS = ui.MS;
   let K = null;
 
-  // A live list reads with `{ etag: true }`: the answer's ETag is kept, sent back as If-None-Match, and a 304 hands back
-  // the data kept with it. (The admin API sends no ETag on its lists today, so every answer is a full 200 and ui.live
-  // compares the bodies instead; this is ready for the day it does.) A read is never counted as the person's activity:
-  // the session has a fixed expiry that no request moves (auth.rs), and only changes are recorded (actions.rs).
-  const etags = new Map();
+  // A read is never counted as the person's activity: the session has a fixed expiry that no request moves (auth.rs),
+  // and only changes are recorded (actions.rs). `opts.raw` sends `body` as is, with that content type (an upload).
   async function api(method, path, body, opts = {}) {
-    const known = opts.etag ? etags.get(path) : null;
     const res = await fetch(path, {
       method,
       credentials: 'same-origin',
-      headers: { 'X-Askbar-Admin': '1', ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}), ...(known ? { 'If-None-Match': known.tag } : {}) },
-      body: body !== undefined ? JSON.stringify(body) : undefined,
+      headers: { 'X-Askbar-Admin': '1', ...(body !== undefined ? { 'Content-Type': opts.raw || 'application/json' } : {}) },
+      body: body === undefined ? undefined : opts.raw ? body : JSON.stringify(body),
     });
-    if (res.status === 304 && known) return known.data;
     if (res.status === 401 && !(method === 'POST' && path === '/api/admin/v1/session')) { showLogin(); throw new Error('Signed out'); }
     let data = null;
     const text = await res.text();
     if (text) { try { data = JSON.parse(text); } catch (_) { data = null; } }
     if (res.status === 502) ui.banner('offline', 'error', OFFLINE_TEXT);
-    if (opts.etag && res.ok && res.headers.get('ETag')) etags.set(path, { tag: res.headers.get('ETag'), data });
     if (!res.ok) {
       // A problem+json body: `detail` is the sentence for a person, `error` the stable code.
       const err = new Error((data && (data.detail || data.error)) || ('Request failed (' + res.status + ')'));
@@ -735,7 +729,7 @@
   // A page with no live list shows "Reconnecting…" at the top of the page; a list shows its own next to the list.
   const appShownNow = () => !$('app').hidden;
   const listPage = ['services', 'providers', 'people'].includes(page);
-  const liveStatus = ui.live(() => api('GET', '/api/admin/v1/status', undefined, { etag: true }), {
+  const liveStatus = ui.live(() => api('GET', '/api/admin/v1/status'), {
     every: 'STATUS_EVERY_SECS',
     hidden: 'slow',
     always: true,
@@ -788,7 +782,7 @@
     const down = services.filter((s) => s.state !== 'running').length;
     return { state: down ? 'warning' : 'ok', text: down ? down + ' of ' + services.length + ' services not running' : 'All ' + services.length + ' services running' };
   }
-  const liveHealth = ui.live(() => api('GET', '/api/admin/v1/services', undefined, { etag: true }), {
+  const liveHealth = ui.live(() => api('GET', '/api/admin/v1/services'), {
     when: appShownNow,
     render: ({ services }) => {
       const health = healthOf(services);
@@ -1133,7 +1127,7 @@
 
   // The service rows, kept current every STATUS_EVERY_SECS while the tab is visible, and paused while a restart runs.
   // A row with its question open is held as it is (ui.rows), so a refresh never closes it.
-  const liveServices = ui.live(() => api('GET', '/api/admin/v1/services', undefined, { etag: true }), {
+  const liveServices = ui.live(() => api('GET', '/api/admin/v1/services'), {
     every: 'STATUS_EVERY_SECS',
     when: appShownNow,
     skip: () => servicesBusy,
@@ -1342,7 +1336,7 @@
 
   // The provider rows are current every LIVE_EVERY_SECS while the tab is visible. The approved-models draft below is not
   // touched by a check: it is read when the page opens and after the admin's own change.
-  const liveProviders = ui.live(() => api('GET', '/api/admin/v1/providers', undefined, { etag: true }), {
+  const liveProviders = ui.live(() => api('GET', '/api/admin/v1/providers'), {
     when: appShownNow,
     notice: $('providers-table') ? $('providers-table').parentElement : null,
     render(list, ctx) {
@@ -1904,25 +1898,7 @@
     for (const id of ['restore-error', 'restore-pass-error']) show($(id), false);
   }
 
-  async function uploadBundle(file) {
-    const res = await fetch('/api/admin/v1/restore/inspect', {
-      method: 'POST',
-      credentials: 'same-origin',
-      headers: { 'X-Askbar-Admin': '1', 'Content-Type': 'application/x-tar' },
-      body: file,
-    });
-    if (res.status === 401) { showLogin(); throw new Error('Signed out'); }
-    const text = await res.text();
-    let data = null;
-    try { data = JSON.parse(text); } catch (_) { data = null; }
-    if (!res.ok) {
-      const err = new Error((data && (data.detail || data.error)) || ('Request failed (' + res.status + ')'));
-      err.status = res.status;
-      err.code = (data && data.error) || null;
-      throw err;
-    }
-    return data;
-  }
+  const uploadBundle = (file) => api('POST', '/api/admin/v1/restore/inspect', file, { raw: 'application/x-tar' });
 
   on('restore-upload-form', 'submit', async (e) => {
     e.preventDefault();
@@ -2068,8 +2044,8 @@
   let editingUser = null;
   let pairing = null; // { user, known: Set of client ids before the key was made, done }
   const liveClients = ui.live(() => Promise.all([
-    api('GET', '/api/admin/v1/users', undefined, { etag: true }),
-    api('GET', '/api/admin/v1/clients', undefined, { etag: true }),
+    api('GET', '/api/admin/v1/users'),
+    api('GET', '/api/admin/v1/clients'),
   ]), {
     when: appShownNow,
     notice: $('users-section'),

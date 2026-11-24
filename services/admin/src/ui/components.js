@@ -41,14 +41,6 @@
   }
   ui.el = el;
 
-  // button(label, { kind: 'primary'|'secondary'|'danger', size: 's'|'l', type, onClick })
-  ui.button = (label, opts = {}) => el('button', {
-    type: opts.type || 'button',
-    class: 'btn btn-' + (opts.kind || 'secondary') + (opts.size ? ' btn-' + opts.size : ''),
-    text: label,
-    onclick: opts.onClick,
-  });
-
   // The same markup as the status(state) macro: a symbol and a word, never colour alone (rule 37).
   // The symbol is drawn in CSS for the script-built copy (.status-sym::before), so no icon markup is copied here.
   ui.status = (state, word) => el('span', { class: 'status status-' + state },
@@ -936,8 +928,7 @@
     return rows;
   };
 
-  // ui.live(load, opts) keeps a list current (rules 34 and 35). load() fetches and returns the data (the caller's fetch
-  // may send If-None-Match and hand back the data it kept on a 304); opts.render(data, { first, force }) draws it.
+  // ui.live(load, opts) keeps a list current (rules 34 and 35). load() fetches and returns the data; opts.render(data, { first, force }) draws it.
   // The body is compared as JSON, so an unchanged answer changes nothing in the page (opts.always renders every time).
   //   every     name of the interval constant while the tab is visible (default LIVE_EVERY_SECS)
   //   hidden    'pause' (default: lists wait until the tab is visible again) or 'slow' (HIDDEN_EVERY_SECS: the bell,

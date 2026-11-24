@@ -196,7 +196,7 @@ Branch `refactor/admin-links-and-ui`. PR title `refactor(admin): share link code
   - Put `explain`, `banner`, `DAY`, `duration`, `number` and `providerLabel` on `ui` once.
   - `audit.js` uses `ui.rows` for its three hand-built tables.
   - The 22 hand-written error displays use `inlineError`, and the four `onError` lambdas become one.
-- [ ] **R4.7** `refactor(ui): remove the unused button helper and ETag cache` · haiku
+- [x] **R4.7** `refactor(ui): remove the unused button helper and ETag cache` · haiku
   Files: `services/admin/src/ui/{components,app}.js`.
   Do:
   - Delete `ui.button`, which has no callers.
