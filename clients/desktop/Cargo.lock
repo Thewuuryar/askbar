@@ -136,7 +136,6 @@ checksum = "7d902e3d592a523def97af8f317b08ce16b7ab854c1985a0c671e6f15cebc236"
 name = "askbar-audit"
 version = "1.0.0"
 dependencies = [
- "askbar-service",
  "base64 0.22.1",
  "rusqlite",
  "serde",
