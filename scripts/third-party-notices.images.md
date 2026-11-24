@@ -4,7 +4,7 @@ Written by hand; the base images are the ones pinned by digest in the `Dockerfil
 
 | Image | Contains | License |
 | --- | --- | --- |
-| `askbar-bootstrap`, `-server`, `-admin`, `-auditor`, `-model-gateway`, `-alerter` | Debian 12 (`debian:bookworm-slim`) and one Askbar binary. | Debian's packages are each under their own license; the license text of every installed package is under `/usr/share/doc/<package>/copyright` in the image. The Askbar binary is AGPL-3.0-or-later, with the Rust crates above. |
+| `askbar-bootstrap`, `-server`, `-admin`, `-auditor`, `-model-gateway`, `-alerter`, `-egress-proxy` | Debian 12 (`debian:bookworm-slim`) and one Askbar binary. | Debian's packages are each under their own license; the license text of every installed package is under `/usr/share/doc/<package>/copyright` in the image. The Askbar binary is AGPL-3.0-or-later, with the Rust crates above. |
 | `askbar-caddy` | [Caddy](https://caddyserver.com) 2 (the official image, with the Caddy binary rebuilt to add the Cloudflare DNS plugin) and [`caddy-dns/cloudflare`](https://github.com/caddy-dns/cloudflare). | Caddy: Apache-2.0. The plugin: MIT. The Go modules in the binary have their own licenses (`caddy build-info` lists them). |
 | `askbar-cpa` | [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) (`eceasy/cli-proxy-api`, unchanged) and Askbar's supervisor (AGPL-3.0-or-later, with the Rust crates above). | CLIProxyAPI: MIT; its notice is below. |
 | `python:3.12-slim` (the `dev` profile only) | Python, to run the mock model in `tests/e2e/mock_llm.py`. It is not part of a release or a normal start. | Python Software Foundation License. |

@@ -256,6 +256,42 @@ services:
       # The hashes of the tokens it accepts and the token it sends the auditor, made by bootstrap. Read-only.
       - alerter-token:/alerter-token:ro
 
+  # The egress proxy (ADR 0056): /api/egress-proxy/v1 for the admin on egress-admin, and one listener per source on the
+  # network that source arrives on (the network is the source, so no secret is in a URL or variable), each bound to the
+  # address its alias gives and never a wildcard, because it also sits on egress-outbound, the one route out. The alerter's
+  # relay port is on egress-alerter. Runs as uid 10006 from the image, with no exception to the hardening above, and 128 MB.
+  # It denies everything until the admin pushes its allowlists, which are in memory only. Nothing joins the four internal
+  # networks yet.
+  egress-proxy:
+    build:
+      context: .
+      target: egress-proxy
+    image: ${ASKBAR_IMAGE_REGISTRY:-}askbar-egress-proxy:${ASKBAR_IMAGE_TAG:-latest}
+    container_name: askbar-egress-proxy
+    restart: unless-stopped
+    <<: *hardening
+    mem_limit: 128m
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+    environment:
+      ASKBAR_EGRESS_PROXY_ADMIN_ADDR: egress-admin-host:8086
+      ASKBAR_EGRESS_PROXY_SOURCES: model-gateway=egress-model-gateway-host:3128,cpa=egress-cpa-host:3128,alerter=egress-alerter-host:3128
+      ASKBAR_EGRESS_PROXY_RELAYS: alerter=egress-alerter-host:2525
+    networks:
+      egress-admin:
+        aliases: [egress-admin-host]
+      egress-model-gateway:
+        aliases: [egress-model-gateway-host]
+      egress-cpa:
+        aliases: [egress-cpa-host]
+      egress-alerter:
+        aliases: [egress-alerter-host]
+      egress-outbound: {}
+    volumes:
+      # The hash of the admin's token, made by bootstrap. Read-only.
+      - egress-proxy-token:/egress-proxy-token:ro
+
   mock-llm:
     profiles: ["dev"]
     image: python:3.12-slim@sha256:4840d514c583a4d3d8cad3940e68dee6f0f6f3635c12fcd0a3d74c21a5b93a54
@@ -389,6 +425,19 @@ networks:
   # alone joins it, so nothing shares a network with it that has a route out, and its listeners are bound to the addresses
   # of its two internal networks, so it answers nothing here.
   alerter-outbound:
+  # The egress proxy's listener for the admin. The admin and the proxy, nothing else. No route out.
+  egress-admin:
+    internal: true
+  # One network for each source of outbound traffic, with the proxy on it. The source and the proxy, nothing else. No route out.
+  egress-model-gateway:
+    internal: true
+  egress-cpa:
+    internal: true
+  egress-alerter:
+    internal: true
+  # The proxy's route out (ADR 0056). Not internal. The proxy alone joins it (and in the dev profile the mock LLM), and its
+  # listeners are bound to the addresses of its internal networks, so it answers nothing here.
+  egress-outbound:
   # The providers. Not internal: the one network, besides `edge`, with a route out. Only model-gateway and CLIProxyAPI
   # (and in the dev profile the mock LLM) join it. Their listeners are bound to the addresses of their own internal
   # networks, so neither answers on this one.

@@ -43,7 +43,7 @@ Steps marked **[draft PR]** change `compose.yaml`, a Dockerfile, a network or a 
   Do: add the link everywhere the alerter's links appear (`grep -rn 'admin-alerter' crates services scripts docs`, skipping the admin's own code, which comes in P4.4). The admin's start condition in bootstrap `lib.rs` includes the new token.
   Accept: bootstrap tests list the new link and token; the Links table test passes; `cargo test -p askbar-bootstrap -p askbar-proto`; `scripts/check-isolation.sh` (CI) passes.
 
-- [ ] **P4.2** `feat(compose): add the egress proxy service` · sonnet · after P4.1c **[draft PR: new container, networks]**
+- [x] **P4.2** `feat(compose): add the egress proxy service` · sonnet · after P4.1c **[draft PR: new container, networks]**
   Files: `compose.yaml`, `scripts/check-isolation.sh` (section 0 table only), `scripts/third-party-notices.images.md` (its Debian row), `tests/release-compose.test.sh` and `scripts/release-compose.sh` only if they list services (grep).
   Dockerfile stage done in P4.1c.
   Do: service `egress-proxy` from `*hardening` (no exception), `mem_limit: 128m`, `depends_on: bootstrap`, volume `egress-proxy-token:ro`, networks `egress-admin`, `egress-model-gateway`, `egress-cpa`, `egress-alerter` (all `internal`, each with the alias `egress-<name>-host`) and `egress-outbound` (not internal; the proxy alone, plus the dev mock LLM from P4.3a), the environment variables of "How the proxy works" (addresses only, no secret). Nothing joins the four internal networks yet. In section 0: the `egress-proxy` row, `egress-outbound` added to `OPEN`, the new service name in the "declares exactly" message, and `SEPARATE` pairs for `egress-proxy` with `server`, `auditor` and `caddy`. List the `.github` lines for the owner.

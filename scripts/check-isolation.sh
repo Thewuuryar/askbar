@@ -200,14 +200,15 @@ SPEC = {
   "auditor": ("audit-admin audit-alerter audit-caddy audit-model-gateway audit-server", "auditor-data auditor-token:ro", ""),
   "model-gateway": ("audit-model-gateway cpa-gateway gateway-admin gateway-server outbound", "model-gateway-token:ro", ""),
   "alerter": ("alerter-admin alerter-outbound audit-alerter", "alerter-data alerter-token:ro", ""),
+  "egress-proxy": ("egress-admin egress-alerter egress-cpa egress-model-gateway egress-outbound", "egress-proxy-token:ro", ""),
   "mock-llm": ("edge outbound", "", ""),
   "caddy": ("audit-caddy client-api edge", "caddy-data caddy-config caddy-run admin-run caddy-secrets:ro", "443/tcp 80/tcp"),
   "cpa": ("cpa-admin cpa-gateway outbound", "cpa-config cpa-auth", ""),
 }
-OPEN = {"edge", "outbound", "alerter-outbound"}  # the networks with a route out
+OPEN = {"edge", "outbound", "alerter-outbound", "egress-outbound"}  # the networks with a route out
 ADD = {"bootstrap": "CHOWN", "caddy": "NET_BIND_SERVICE"}
-SEPARATE = [("cpa", "caddy"), ("alerter", "server"), ("alerter", "model-gateway"), ("alerter", "caddy"), ("alerter", "cpa")]
-out(set(S) == set(SPEC), "the stack declares exactly the services bootstrap, server, admin, auditor, model-gateway, alerter, mock-llm, caddy and cpa")
+SEPARATE = [("cpa", "caddy"), ("alerter", "server"), ("alerter", "model-gateway"), ("alerter", "caddy"), ("alerter", "cpa"), ("egress-proxy", "server"), ("egress-proxy", "auditor"), ("egress-proxy", "caddy")]
+out(set(S) == set(SPEC), "the stack declares exactly the services bootstrap, server, admin, auditor, model-gateway, alerter, egress-proxy, mock-llm, caddy and cpa")
 nets = {s: set(S[s].get("networks") or {}) for s in S}
 for s, (n, v, p) in SPEC.items():
     d = S.get(s)
