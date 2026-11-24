@@ -113,7 +113,7 @@ Branch `refactor/check-isolation`. PR title `refactor(compose): shorten the isol
 - [x] **R2.2** `refactor(compose): one http helper in check-isolation` · haiku · after R2.1
   Files: `scripts/check-isolation.sh`.
   Do: one `http NET URL [METHOD] [TOKEN] [JSON]` replaces `http_status`, `http_get`, `gw_call` and `al_call`. Pass tokens with `-e`, never inside the Python source.
-- [ ] **R2.3** `refactor(compose): admin setup and cleanup helpers in check-isolation` · haiku · after R2.2
+- [x] **R2.3** `refactor(compose): admin setup and cleanup helpers in check-isolation` · haiku · after R2.2
   Files: `scripts/check-isolation.sh`.
   Do: the provider, user and pairing setup Python is pasted 4 times; make it `admin_setup_provider`. The catalog cleanup is pasted twice; make it `admin_cleanup_provider`.
 - [ ] **R2.4** `refactor(compose): check each service from one profile table` · sonnet · after R2.3

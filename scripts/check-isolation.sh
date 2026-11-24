@@ -94,6 +94,35 @@ admin_script() { # python lines using call(); the result is printed by the lines
   py --network "$EDGE" -v "${PROJECT}_admin-run:/run/admin" -- "$ADMIN_PY
 $1"
 }
+# A provider the mock model answers for, an approved model, a person and a pairing key for them. Prints "TAG id pairing".
+# The person and the client are named "<name> user" and "<name> client". A refused step stops the block (assert).
+admin_setup_provider() { # TAG name api_key
+  admin_script "$(admin_login)
+import json, uuid
+s, body = call('POST', '/api/admin/v1/providers', {'name': '$2-' + uuid.uuid4().hex[:6], 'type': 'openai', 'base_url': 'http://mock-llm:8765/v1', 'model': 'm', 'api_key': '$3'})
+assert s == 201, (s, body)
+pid = json.loads(body)['id']
+s, cat = call('GET', '/api/admin/v1/catalog'); cat = json.loads(cat)
+cat['models'].append({'provider_id': pid, 'model': 'm'}); cat['default'] = pid + '/m'
+s, body = call('PUT', '/api/admin/v1/catalog', cat); assert s == 200, (s, body)
+s, users = call('GET', '/api/admin/v1/users'); users = json.loads(users)
+if not users:
+    s, made = call('POST', '/api/admin/v1/users', {'name': '$2 user'}); users = [json.loads(made)]
+s, body = call('POST', '/api/admin/v1/users/' + users[0]['id'] + '/pairing-keys', {'name': '$2 client'})
+assert s == 200, (s, body)
+print('$1', pid, json.loads(body)['pairing'])" 
+}
+# Puts the catalog back without the given provider, then removes the provider.
+admin_cleanup_provider() { # provider_id
+  admin_script "$(admin_login)
+import json
+s, cat = call('GET', '/api/admin/v1/catalog'); cat = json.loads(cat)
+cat['models'] = [m for m in cat['models'] if m['provider_id'] != '$1']
+if (cat.get('default') or '').startswith('$1/'):
+    cat['default'] = (cat['models'][0]['provider_id'] + '/' + cat['models'][0]['model']) if cat['models'] else None
+call('PUT', '/api/admin/v1/catalog', cat)
+call('DELETE', '/api/admin/v1/providers/$1')"
+}
 # Before anything else: an admin whose published first-run password was already changed needs
 # ASKBAR_ADMIN_PASSWORD. Without it every step would sign in wrongly, fail, and (five wrong tries) lock sign-in
 # out for 15 minutes.
@@ -999,20 +1028,7 @@ if ! command -v python3 >/dev/null 2>&1; then
 elif [ "$(docker inspect -f '{{.State.Running}}' "$LOAD_MOCK" 2>/dev/null)" != true ]; then
   note "latency through Caddy: $LOAD_MOCK is not running (it is in the dev profile)"
 else
-  load_set=$(admin_script "$(admin_login)
-import json, uuid
-s, body = call('POST', '/api/admin/v1/providers', {'name': 'load-' + uuid.uuid4().hex[:6], 'type': 'openai', 'base_url': 'http://mock-llm:8765/v1', 'model': 'm', 'api_key': 'sk-load-check'})
-assert s == 201, (s, body)
-pid = json.loads(body)['id']
-s, cat = call('GET', '/api/admin/v1/catalog'); cat = json.loads(cat)
-cat['models'].append({'provider_id': pid, 'model': 'm'}); cat['default'] = pid + '/m'
-s, body = call('PUT', '/api/admin/v1/catalog', cat); assert s == 200, (s, body)
-s, users = call('GET', '/api/admin/v1/users'); users = json.loads(users)
-if not users:
-    s, made = call('POST', '/api/admin/v1/users', {'name': 'load user'}); users = [json.loads(made)]
-s, body = call('POST', '/api/admin/v1/users/' + users[0]['id'] + '/pairing-keys', {'name': 'load client'})
-assert s == 200, (s, body)
-print('LOAD', pid, json.loads(body)['pairing'])" 2>&1 | grep '^LOAD ' | tail -1)
+  load_set=$(admin_setup_provider LOAD load sk-load-check 2>&1 | grep '^LOAD ' | tail -1)
   if [ -z "$load_set" ]; then
     note "latency through Caddy: could not set up a provider, an approved model and a client"
   else
@@ -1023,14 +1039,7 @@ print('LOAD', pid, json.loads(body)['pairing'])" 2>&1 | grep '^LOAD ' | tail -1)
     out=$(docker exec -i "$LOAD_MOCK" python3 - mock http://127.0.0.1:8765/v1 --rounds 10 < tests/e2e/load_scenario.py 2>&1) \
       && note "$out" || note "the mock model's own latency did not run: $out"
     # Put the catalog back as it was and take the provider away again.
-    admin_script "$(admin_login)
-import json
-s, cat = call('GET', '/api/admin/v1/catalog'); cat = json.loads(cat)
-cat['models'] = [m for m in cat['models'] if m['provider_id'] != '$load_pid']
-if (cat.get('default') or '').startswith('$load_pid/'):
-    cat['default'] = (cat['models'][0]['provider_id'] + '/' + cat['models'][0]['model']) if cat['models'] else None
-call('PUT', '/api/admin/v1/catalog', cat)
-call('DELETE', '/api/admin/v1/providers/$load_pid')" >/dev/null 2>&1 || note "latency through Caddy: the provider it made could not be removed"
+    admin_cleanup_provider "$load_pid" >/dev/null 2>&1 || note "latency through Caddy: the provider it made could not be removed"
   fi
 fi
 
@@ -1089,20 +1098,7 @@ if ! command -v python3 >/dev/null 2>&1; then
 else
   # A provider the mock model answers for, an approved model, a person and a client, as the latency block makes.
   drill_compose up -d --no-build mock-llm >/dev/null 2>&1
-  drill_set=$(admin_script "$(admin_login)
-import json, uuid
-s, body = call('POST', '/api/admin/v1/providers', {'name': 'drill-' + uuid.uuid4().hex[:6], 'type': 'openai', 'base_url': 'http://mock-llm:8765/v1', 'model': 'm', 'api_key': 'sk-drill-check'})
-assert s == 201, (s, body)
-pid = json.loads(body)['id']
-s, cat = call('GET', '/api/admin/v1/catalog'); cat = json.loads(cat)
-cat['models'].append({'provider_id': pid, 'model': 'm'}); cat['default'] = pid + '/m'
-s, body = call('PUT', '/api/admin/v1/catalog', cat); assert s == 200, (s, body)
-s, users = call('GET', '/api/admin/v1/users'); users = json.loads(users)
-if not users:
-    s, made = call('POST', '/api/admin/v1/users', {'name': 'drill user'}); users = [json.loads(made)]
-s, body = call('POST', '/api/admin/v1/users/' + users[0]['id'] + '/pairing-keys', {'name': 'drill client'})
-assert s == 200, (s, body)
-print('DRILL', pid, json.loads(body)['pairing'])" 2>&1 | grep '^DRILL ' | tail -1)
+  drill_set=$(admin_setup_provider DRILL drill sk-drill-check 2>&1 | grep '^DRILL ' | tail -1)
   if [ -n "$drill_set" ]; then
     drill_pid=$(printf '%s' "$drill_set" | cut -d' ' -f2)
     drill_token=$(drill_probe pair https://localhost "$(printf '%s' "$drill_set" | cut -d' ' -f3)")
@@ -1239,14 +1235,7 @@ print('BANNER', state)" 2>&1 | grep '^BANNER ' | tail -1)
   for c in $DRILL_SERVICES; do drill_healthy "$c" || fail "$c is not healthy at the end of the drills"; done
   [ "$FAILS" -eq 0 ] && pass "every service is healthy at the end of the drills" || true
   # The provider the drills made goes, and the catalog is put back as it was.
-  admin_script "$(admin_login)
-import json
-s, cat = call('GET', '/api/admin/v1/catalog'); cat = json.loads(cat)
-cat['models'] = [m for m in cat['models'] if m['provider_id'] != '$drill_pid']
-if (cat.get('default') or '').startswith('$drill_pid/'):
-    cat['default'] = (cat['models'][0]['provider_id'] + '/' + cat['models'][0]['model']) if cat['models'] else None
-call('PUT', '/api/admin/v1/catalog', cat)
-call('DELETE', '/api/admin/v1/providers/$drill_pid')" >/dev/null 2>&1 || note "the failure drills' provider could not be removed"
+  admin_cleanup_provider "$drill_pid" >/dev/null 2>&1 || note "the failure drills' provider could not be removed"
 fi
 
 echo
