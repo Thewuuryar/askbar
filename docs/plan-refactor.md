@@ -107,7 +107,7 @@ Branch `refactor/check-isolation`. PR title `refactor(compose): shorten the isol
 - the CapEff checks
 - the failure drills
 
-- [ ] **R2.1** `refactor(compose): define docker helpers once in check-isolation` · haiku
+- [x] **R2.1** `refactor(compose): define docker helpers once in check-isolation` · haiku
   Files: `scripts/check-isolation.sh`.
   Do: define `members`, `nets_of` and `mounts_of` once near the top. `members` is defined at three places today, and the inspect pipeline appears about 15 times. Use `drill_wait_healthy` for the 30×2s wait loops. Inline `check` (used once), and drop the single-element loops (`for h in caddy`, and the loop near line 881).
 - [ ] **R2.2** `refactor(compose): one http helper in check-isolation` · haiku · after R2.1
