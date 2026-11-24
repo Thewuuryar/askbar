@@ -169,11 +169,13 @@
   // The backend reports problems with the server (offline, token rejected,
   // update needed, provider gone). `null` means all is well.
 
-  function actionButton(label, onClick, name) {
+  // A text button. `action` is the status buttons' hook, `cls` the rows' hook, `aria` the accessible name.
+  function actionButton(label, onClick, { action, cls, aria } = {}) {
     const b = document.createElement('button');
     b.type = 'button';
-    b.className = 'text-btn';
-    b.dataset.action = name;
+    b.className = 'text-btn' + (cls ? ' ' + cls : '');
+    if (action) b.dataset.action = action;
+    if (aria) b.setAttribute('aria-label', aria);
     b.textContent = label;
     b.addEventListener('click', onClick);
     return b;
@@ -192,14 +194,14 @@
         await call('set_active_model', { id: m.id });
         state.model = null;
         await refreshAll();
-      }, 'model'));
+      }, { action: 'model' }));
     }
     if (st.kind === 'rejected' || st.kind === 'not_paired') {
-      el.statusActions.appendChild(actionButton('Pair this app', () => openPairing(), 'pair'));
+      el.statusActions.appendChild(actionButton('Pair this app', () => openPairing(), { action: 'pair' }));
     }
     el.statusActions.appendChild(actionButton('Retry', async () => {
       await refreshAll();
-    }, 'retry'));
+    }, { action: 'retry' }));
     el.status.hidden = false;
     layout();
   }
@@ -432,33 +434,21 @@
     body.textContent = message;
     node.appendChild(body);
     if (question !== undefined) {
-      const mk = (cls, label, aria, fn) => {
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'text-btn ' + cls;
-        btn.textContent = label;
-        btn.setAttribute('aria-label', aria);
-        btn.addEventListener('click', fn);
-        node.appendChild(btn);
-      };
-      mk('retry-reply', 'Try again', 'Ask this question again', () => { if (!state.streaming) askText(question); });
-      mk('edit-question', 'Edit', 'Edit this question in the box', () => {
-        el.input.value = question;
-        autosize();
-        el.input.focus();
-      });
+      node.append(
+        actionButton('Try again', () => { if (!state.streaming) askText(question); },
+          { cls: 'retry-reply', aria: 'Ask this question again' }),
+        actionButton('Edit', () => {
+          el.input.value = question;
+          autosize();
+          el.input.focus();
+        }, { cls: 'edit-question', aria: 'Edit this question in the box' }));
     }
     if (/config\.yaml|API key/i.test(message)) {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'text-btn open-config';
-      btn.textContent = 'Open config file';
-      node.appendChild(btn);
+      node.appendChild(actionButton('Open config file', () => {}, { cls: 'open-config' }));
     }
     el.thread.appendChild(node);
     if (state.pinned) followNewest();
     el.thread.hidden = false;
-    el.foot.hidden = false;
     el.card.dataset.thread = 'open';
     layout();
     return node;
@@ -560,6 +550,14 @@
     syncPending(); // messages that were waiting behind this reply may be running now
   }
 
+  // Starts a turn: the question's row (none when `question` is null: a queued message whose row is
+  // already shown), a streaming reply row, then the stream.
+  function startTurn(question, start) {
+    const userMsg = question == null ? null : addMessage('user', question);
+    const reply = addMessage('assistant', '', { streaming: true });
+    return streamInto(reply, start, userMsg);
+  }
+
   async function send() {
     const text = el.input.value.trim();
     if (!text || state.streaming) return;
@@ -572,9 +570,7 @@
   async function askText(text) {
     hideNotice();
     state.pinned = true;
-    const userMsg = addMessage('user', text);
-    const reply = addMessage('assistant', '', { streaming: true });
-    await streamInto(reply, (channel) => invoke('ask', { conversationId: state.convId, text, model: state.model, onEvent: channel }), userMsg);
+    await startTurn(text, (channel) => invoke('ask', { conversationId: state.convId, text, model: state.model, onEvent: channel }));
   }
 
   // ------------------------------------------------------- messages not sent
@@ -596,39 +592,26 @@
     const note = document.createElement('div');
     note.className = 'wait-note';
     note.textContent = 'Not sent';
-    const mk = (cls, label, aria) => {
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.className = 'text-btn ' + cls;
-      b.textContent = label;
-      b.setAttribute('aria-label', aria);
-      return b;
-    };
-    const send = mk('unsent-send', 'Send', 'Send this message');
-    const edit = mk('unsent-edit', 'Edit', 'Edit this message before sending');
-    const discard = mk('unsent-discard', 'Discard', 'Discard this message');
     const gone = () => { node.remove(); unsentRows = unsentRows.filter((r) => r !== node); };
-    send.addEventListener('click', async () => {
+    const send = actionButton('Send', async () => {
       if (state.streaming) return;
       gone();
       hideNotice();
       state.pinned = true;
-      const userMsg = addMessage('user', u.text);
-      const reply = addMessage('assistant', '', { streaming: true });
-      await streamInto(reply, (channel) => invoke('resend', { clientRequestId: u.clientRequestId, onEvent: channel }), userMsg);
-    });
-    edit.addEventListener('click', async () => {
+      await startTurn(u.text, (channel) => invoke('resend', { clientRequestId: u.clientRequestId, onEvent: channel }));
+    }, { cls: 'unsent-send', aria: 'Send this message' });
+    const edit = actionButton('Edit', async () => {
       if (await call('discard_unsent', { clientRequestId: u.clientRequestId }) === FAILED) return;
       gone();
       el.input.value = u.text;
       autosize();
       el.input.focus();
-    });
-    discard.addEventListener('click', async () => {
+    }, { cls: 'unsent-edit', aria: 'Edit this message before sending' });
+    const discard = actionButton('Discard', async () => {
       if (await call('discard_unsent', { clientRequestId: u.clientRequestId }) === FAILED) return;
       gone();
       layout();
-    });
+    }, { cls: 'unsent-discard', aria: 'Discard this message' });
     node.append(body, note, send, edit, discard);
     el.thread.appendChild(node);
     unsentRows.push(node);
@@ -644,7 +627,6 @@
     for (const u of mine) addUnsent(u);
     if (mine.length) {
       el.thread.hidden = false;
-      el.foot.hidden = false;
       el.card.dataset.thread = 'open';
       if (state.pinned) followNewest();
     }
@@ -674,18 +656,13 @@
     const note = document.createElement('div');
     note.className = 'wait-note';
     note.textContent = 'Waiting for the reply above to finish';
-    const del = document.createElement('button');
-    del.type = 'button';
-    del.className = 'text-btn del-queued';
-    del.textContent = 'Remove';
-    del.setAttribute('aria-label', 'Remove this waiting message');
-    del.addEventListener('click', async () => {
+    const del = actionButton('Remove', async () => {
       del.disabled = true;
       await call('cancel_generation', { id: p.generationId });
       node.remove();
       waiting = waiting.filter((w) => w !== node);
       syncPending();
-    });
+    }, { cls: 'del-queued', aria: 'Remove this waiting message' });
     node.append(body, note, del);
     el.thread.appendChild(node);
     waiting.push(node);
@@ -706,11 +683,11 @@
       // A message that waited has just started: its question is stored now, but not shown yet.
       const last = state.messages[state.messages.length - 1];
       if (!last || last.role !== 'user') addMessage('user', running.prompt);
-      const reply = addMessage('assistant', '', { streaming: true });
+      // The reply row must come before the waiting rows, so it is added before them.
+      startTurn(null, (channel) => invoke('attach', { generationId: running.generationId, onEvent: channel }));
       for (const p of pending) if (p.status === 'queued') addWaiting(p);
       el.thread.hidden = false;
       layout();
-      streamInto(reply, (channel) => invoke('attach', { generationId: running.generationId, onEvent: channel }));
       return;
     }
     const queued = pending.filter((p) => p.status === 'queued');

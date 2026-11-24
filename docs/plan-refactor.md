@@ -223,7 +223,7 @@ Branch `refactor/tests-and-client`. PR title `refactor(client): share test setup
   - `call(cmd, args, {quiet})` replaces the 9 `try { await invoke } catch { showNotice }` blocks and the `.catch(() => {})` calls.
   - `refreshAll()` replaces the repeated refresh sequences.
   - Delete `state.ui`, `state.provider` and `msg.provider`, which are written but never read.
-- [ ] **R5.4** `refactor(client): one turn starter and shared action buttons` · haiku · after R5.3
+- [x] **R5.4** `refactor(client): one turn starter and shared action buttons` · haiku · after R5.3
   Files: `clients/desktop/ui/main.js`.
   Do:
   - One function starts a turn (user row, streaming assistant row, `streamInto`) at its 3 call sites.
