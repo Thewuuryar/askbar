@@ -25,7 +25,7 @@ Docs only. Ends with G1.
 - [ ] **P0.7** `docs(adr): amend 0011: shared questions and hosted decider` · haiku · after P0.3. Files: `0011-sealed-content-access.md`. Two exceptions, each with notice and a record per use. Decision.
 - [ ] **P0.8** `docs(adr): amend 0012: notices for sharing and the decider` · haiku · after P0.3. Files: `0012-consent-notices-and-deletion.md`. Decision.
 - [ ] **P0.9** `docs(adr): amend 0016: routing and library risks` · haiku · after P0.3. Files: `0016-risk-register.md`. Defend and Accept lists from the design row. Register.
-- [ ] **P0.10** `docs(adr): amend 0019: order, judge role, writer and pins` · haiku · after P0.3. Files: `0019-post-v1-order-and-tools.md`. Order: routing, egress proxy, MCP gateway, research and judge, agents with MCP tools, admin UI, executor (deferrable), library (deferrable); hosted Jev on the allowlist if approved. Decision.
+- [ ] **P0.10** `docs(adr): amend 0019: order, judge role, writer and pins` · haiku · after P0.3. Files: `0019-post-v1-order-and-tools.md`. Order: egress proxy; MCP gateway, searxng, web research and the judge (roles pinned to models); PII detection and redaction; context checks and canaries; tiered routing; agents with MCP tools; audit viewing; executor (deferrable), library (deferrable), as in [plan-priorities.md](../plan-priorities.md); hosted Jev on the allowlist if approved. Decision.
 - [ ] **P0.11** `docs(adr): amend 0020: approvals, library scripts and the executor deferred` · haiku · after P0.3. Files: `0020-remote-executor-and-ca-triggers.md`. The executor comes after agents with MCP tools and is deferrable. Decision.
 - [ ] **P0.12** `docs(adr): amend 0009: task state in the space file` · haiku · after P0.3. Files: `0009-spaces-and-storage.md`. Decision.
 - [ ] **P0.13** `docs(adr): amend 0022: the judge is a role, not a caller` · haiku · after P0.3
@@ -40,7 +40,7 @@ Docs only. Ends with G1.
   Files: `docs/architecture.md`.
   Do: "Model choice" (~line 234) gains Auto, tier, effort; budgets in dollars; Links table gains `/decide`. Mark each as post-1.0.
   Accept: docs check.
-- [ ] **P0.16** `docs(docs): reorder post-v1 plan for tiered routing` · haiku · after P0.3
+- [ ] **P0.16** replaced by O0.3 in [plan-priorities.md](../plan-priorities.md) (`docs(docs): reorder the post-v1 plan`); kept for its Files and Do notes · haiku · after P0.3
   Files: `docs/plan-post-v1.md` (status line 3, V2 sketch lines 5 to 7, mermaid lines 9 to 59).
   Do: new order; the design's V2 sentence; replace the diagram with the design's.
   Accept: mermaid parses (docs check).
