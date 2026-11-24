@@ -38,6 +38,49 @@ refused() { # description command...  (passes when the command fails)
   if "$@" >/dev/null 2>&1; then fail "$d"; else pass "$d"; fi
 }
 
+# Shared helpers: the network pipeline the checks below use, and the 30 x 2s health wait.
+nets_of() { docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$1" | tr ' ' '\n' | grep . | sort | tr '\n' ' '; }
+wait_healthy() { local i; for i in $(seq 1 30); do [ "$(docker inspect -f '{{.State.Health.Status}}' "$1")" = healthy ] && break; sleep 2; done; }
+# Owners and modes: a token is its caller's and 0400, a hash its receiver's and 0444, directories 0500.
+owned() { # container path want("uid mode") description
+  local got; got=$(docker exec "$1" stat -c '%u %a' "$2" 2>/dev/null)
+  [ "$got" = "$3" ] && pass "$4 is '$3'" || fail "$4 is '${got:-missing}', expected '$3'"
+}
+pfx() { local i; for i in $1; do printf '%s_%s ' "$PROJECT" "$i"; done; } # short names -> "askbar_a askbar_b "
+
+# One service's structural properties, read from its profile on stdin: svc_profile CONTAINER NAME <<EOF ... EOF
+# One "key value" line per property; a key left out is a check the service does not have. Messages use NAME.
+# Only what runs is checked here (the networks it really joined, CapEff, owners); what compose.yaml declares is section 0.
+#   health yes                       wait for healthy, then check it
+#   uid N                            runs as uid N
+#   caps yes                         CapEff is 0
+#   nets a b c|PASS                  exactly these networks (short names, sorted); PASS is the pass message
+#   owner CTR|PATH|UID MODE|TEXT     file owner and mode;  dirs CTR|UID MODE|TEXT|PATHS: the same for each directory
+svc_profile() {
+  local c="$1" n="$2" k v health="" uid="" caps="" nets="" orows=() a b d e x i got have
+  while read -r k v; do
+    case "$k" in
+      health|uid|caps|nets) printf -v "$k" %s "$v";;
+      owner) orows+=("$v");;
+      dirs) IFS='|' read -r a b d e <<<"$v"; for i in $e; do orows+=("$a|$i|$b|$d $i"); done;;
+    esac
+  done
+  if [ -n "$health" ]; then
+    wait_healthy "$c"
+    [ "$(docker inspect -f '{{.State.Health.Status}}' "$c")" = healthy ] && pass "$n is healthy" || fail "$n is not healthy"
+  fi
+  [ -z "$uid" ] || { [ "$(docker exec "$c" id -u)" = "$uid" ] && pass "$n runs as uid $uid" || fail "$n does not run as uid $uid"; }
+  if [ -n "$caps" ]; then
+    got=$(docker exec "$c" sh -c 'grep CapEff /proc/1/status' 2>/dev/null | awk '{print $2}')
+    [ "$got" = 0000000000000000 ] && pass "$n's CapEff is 0" || fail "$n's CapEff is '${got:-unknown}', expected 0"
+  fi
+  if [ -n "$nets" ]; then
+    IFS='|' read -r a b <<<"$nets"; have=$(nets_of "$c")
+    [ "$have" = "$(pfx "$a")" ] && pass "$b" || fail "$n's networks are: $have"
+  fi
+  for x in ${orows[@]+"${orows[@]}"}; do IFS='|' read -r a b d e <<<"$x"; owned "$a" "$b" "$d" "$e"; done
+}
+
 command -v docker >/dev/null || { echo "docker is required"; exit 2; }
 export DOCKER_CLI_HINTS=false
 # Pull the helper image up front so its progress output never lands in a check's captured output.
@@ -53,16 +96,20 @@ py() {
   docker run --rm "${args[@]}" "$PYIMG" python -I -c "$code"
 }
 
-# HTTP status of a request to host:port from a throwaway container on a network; 0 = no connection.
-http_status() { # network host:port [bearer]
-  py --network "$1" -- "
-import sys, urllib.request, urllib.error
-req = urllib.request.Request('http://$2/api/server/v1/health')
-if '${3:-}': req.add_header('authorization', 'Bearer ${3:-}')
+# HTTP status from a throwaway container on NET: http NET URL [METHOD] [TOKEN] [JSON]; 0 = no connection.
+# The token and body reach the Python through its environment, never its source.
+http() {
+  py --network "$1" -e "HTTP_URL=$2" -e "HTTP_METHOD=${3:-GET}" -e "HTTP_TOKEN=${4:-}" -e "HTTP_JSON=${5:-}" -- '
+import os, urllib.request, urllib.error
+h = {}
+if os.environ["HTTP_TOKEN"]: h["authorization"] = "Bearer " + os.environ["HTTP_TOKEN"]
+body = os.environ["HTTP_JSON"].encode() or None
+if body: h["content-type"] = "application/json"
+req = urllib.request.Request(os.environ["HTTP_URL"], method=os.environ["HTTP_METHOD"], data=body, headers=h)
 try: print(urllib.request.urlopen(req, timeout=4).status)
 except urllib.error.HTTPError as e: print(e.code)
 except Exception: print(0)
-"
+'
 }
 
 # Admin API through the admin's unix socket. admin METHOD PATH [JSON] -> prints 'status body'
@@ -83,6 +130,35 @@ def call(m, p, b=None):
 admin_script() { # python lines using call(); the result is printed by the lines themselves
   py --network "$EDGE" -v "${PROJECT}_admin-run:/run/admin" -- "$ADMIN_PY
 $1"
+}
+# A provider the mock model answers for, an approved model, a person and a pairing key for them. Prints "TAG id pairing".
+# The person and the client are named "<name> user" and "<name> client". A refused step stops the block (assert).
+admin_setup_provider() { # TAG name api_key
+  admin_script "$(admin_login)
+import json, uuid
+s, body = call('POST', '/api/admin/v1/providers', {'name': '$2-' + uuid.uuid4().hex[:6], 'type': 'openai', 'base_url': 'http://mock-llm:8765/v1', 'model': 'm', 'api_key': '$3'})
+assert s == 201, (s, body)
+pid = json.loads(body)['id']
+s, cat = call('GET', '/api/admin/v1/catalog'); cat = json.loads(cat)
+cat['models'].append({'provider_id': pid, 'model': 'm'}); cat['default'] = pid + '/m'
+s, body = call('PUT', '/api/admin/v1/catalog', cat); assert s == 200, (s, body)
+s, users = call('GET', '/api/admin/v1/users'); users = json.loads(users)
+if not users:
+    s, made = call('POST', '/api/admin/v1/users', {'name': '$2 user'}); users = [json.loads(made)]
+s, body = call('POST', '/api/admin/v1/users/' + users[0]['id'] + '/pairing-keys', {'name': '$2 client'})
+assert s == 200, (s, body)
+print('$1', pid, json.loads(body)['pairing'])" 
+}
+# Puts the catalog back without the given provider, then removes the provider.
+admin_cleanup_provider() { # provider_id
+  admin_script "$(admin_login)
+import json
+s, cat = call('GET', '/api/admin/v1/catalog'); cat = json.loads(cat)
+cat['models'] = [m for m in cat['models'] if m['provider_id'] != '$1']
+if (cat.get('default') or '').startswith('$1/'):
+    cat['default'] = (cat['models'][0]['provider_id'] + '/' + cat['models'][0]['model']) if cat['models'] else None
+call('PUT', '/api/admin/v1/catalog', cat)
+call('DELETE', '/api/admin/v1/providers/$1')"
 }
 # Before anything else: an admin whose published first-run password was already changed needs
 # ASKBAR_ADMIN_PASSWORD. Without it every step would sign in wrongly, fail, and (five wrong tries) lock sign-in
@@ -107,6 +183,69 @@ assert s == 204 or s == 200, "cannot sign in to the admin: set ASKBAR_ADMIN_PASS
 EOF
 }
 
+echo "== 0. What compose.yaml declares: networks, mounts, ports and hardening (ADR 0032)"
+# One read of `docker compose config`, checked against a table here. It is what was declared, not what runs: the sections
+# below keep a live spot check for each service (the networks it joined, CapEff, the Docker socket, a write to its root).
+DECLARED_PY=$(cat <<'PY'
+import json, sys
+c = json.load(sys.stdin)
+S, N = c["services"], c["networks"]
+def out(ok, msg): print(("ok|" if ok else "bad|") + msg)
+def sp(s): return s.split()
+# service: networks | named volumes (name:ro = read-only) | published ports
+SPEC = {
+  "bootstrap": ("", "server-token admin-token auditor-token model-gateway-token alerter-token", ""),
+  "server": ("audit-server client-api gateway-server server-api", "server-token:ro", ""),
+  "admin": ("alerter-admin audit-admin cpa-admin gateway-admin server-api", "cpa-config admin-data admin-secrets backup admin-token:ro admin-run caddy-run caddy-secrets", ""),
+  "auditor": ("audit-admin audit-alerter audit-caddy audit-model-gateway audit-server", "auditor-data auditor-token:ro", ""),
+  "model-gateway": ("audit-model-gateway cpa-gateway gateway-admin gateway-server outbound", "model-gateway-token:ro", ""),
+  "alerter": ("alerter-admin alerter-outbound audit-alerter", "alerter-data alerter-token:ro", ""),
+  "mock-llm": ("edge outbound", "", ""),
+  "caddy": ("audit-caddy client-api edge", "caddy-data caddy-config caddy-run admin-run caddy-secrets:ro", "443/tcp 80/tcp"),
+  "cpa": ("cpa-admin cpa-gateway outbound", "cpa-config cpa-auth", ""),
+}
+OPEN = {"edge", "outbound", "alerter-outbound"}  # the networks with a route out
+ADD = {"bootstrap": "CHOWN", "caddy": "NET_BIND_SERVICE"}
+SEPARATE = [("cpa", "caddy"), ("alerter", "server"), ("alerter", "model-gateway"), ("alerter", "caddy"), ("alerter", "cpa")]
+out(set(S) == set(SPEC), "the stack declares exactly the services bootstrap, server, admin, auditor, model-gateway, alerter, mock-llm, caddy and cpa")
+nets = {s: set(S[s].get("networks") or {}) for s in S}
+for s, (n, v, p) in SPEC.items():
+    d = S.get(s)
+    if d is None: continue
+    out(nets[s] == set(sp(n)), f"{s} is declared on {n or 'no network'} only")
+    if s == "bootstrap": out(d.get("network_mode") == "none", "bootstrap has network_mode none")
+    out(not any((e or {}).get(k) for e in (d.get("networks") or {}).values() for k in ("ipv4_address", "ipv6_address")), f"{s} pins no address")
+    want = {x.split(":")[0]: x.endswith(":ro") for x in sp(v)}
+    have = {m["source"]: bool(m.get("read_only")) for m in d.get("volumes") or [] if m.get("type") == "volume"}
+    out(have == want, f"{s} mounts the volumes {v or 'none'} only, read-only where marked")
+    out(not any("docker.sock" in str(m.get("source", "")) for m in d.get("volumes") or []), f"{s} does not mount the Docker socket")
+    ports = {f'{q["published"]}/{q.get("protocol", "tcp")}' for q in d.get("ports") or []}
+    out(ports == set(sp(p)), f"{s} publishes {p or 'no port'}")
+    bad = []
+    if d.get("read_only") is not True: bad.append("read_only")
+    if d.get("cap_drop") != ["ALL"]: bad.append("cap_drop")
+    if [x.removeprefix("CAP_") for x in d.get("cap_add") or []] != sp(ADD.get(s, "")): bad.append("cap_add")
+    if not any(o in ("no-new-privileges", "no-new-privileges:true") for o in d.get("security_opt") or []): bad.append("security_opt")
+    if int(d.get("pids_limit") or 0) <= 0: bad.append("pids_limit")
+    if int(d.get("mem_limit") or 0) <= 0: bad.append("mem_limit")
+    if d.get("tmpfs") != ["/tmp"]: bad.append("tmpfs")
+    if "host-gateway" in str(d.get("extra_hosts")) or "host.docker.internal" in str(d.get("extra_hosts")): bad.append("extra_hosts")
+    if d.get("privileged"): bad.append("privileged")
+    out(not bad, f"{s} is hardened" if not bad else f"{s} is not hardened: {' '.join(bad)}")
+for n in sorted(set().union(*nets.values()) | set(N)):
+    out(n in N, f"network {n} is declared")
+    if n in N:
+        out(bool(N[n].get("internal")) == (n not in OPEN), f"network {n} is {'not ' if n in OPEN else ''}internal")
+        out(not (N[n].get("ipam") or {}).get("config"), f"network {n} pins no subnet or range")
+for a, b in SEPARATE:
+    out(not nets[a] & nets[b], f"{a} shares no network with {b}")
+PY
+)
+CFG=$(docker compose -p "$PROJECT" --profile dev config --format json 2>/dev/null)
+res=$(printf '%s' "$CFG" | py -i -- "$DECLARED_PY" 2>&1) || res="bad|docker compose config could not be read or checked: $res"
+[ -n "$res" ] || res="bad|the declared-config check printed nothing"
+while IFS='|' read -r r m; do [ "$r" = ok ] && pass "$m" || fail "${m:-$r}"; done <<<"$res"
+
 echo "== 1. The admin works with the server stopped"
 docker stop "$SERVER" >/dev/null
 out=$(admin_script "$(admin_login)
@@ -117,7 +256,7 @@ print(s)" 2>&1)
 if printf '%s' "$out" | head -1 | grep -q '^200 offline'; then pass "admin signs in and reports the server offline"; else fail "admin with the server stopped: $out"; fi
 printf '%s' "$out" | tail -1 | grep -q '^200$' && pass "admin page loads" || fail "admin page loads"
 docker start "$SERVER" >/dev/null
-for i in $(seq 1 30); do [ "$(docker inspect -f '{{.State.Health.Status}}' "$SERVER")" = healthy ] && break; sleep 2; done
+wait_healthy "$SERVER"
 [ "$(docker inspect -f '{{.State.Health.Status}}' "$SERVER")" = healthy ] && pass "server healthy again" || fail "server did not come back"
 
 echo "== 2. The server port"
@@ -126,14 +265,13 @@ echo "== 2. The server port"
 SERVER_API_IP=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$SERVER_API_NET\").IPAddress}}" "$SERVER")
 SERVER_API="$SERVER_API_IP:8082"
 [ -n "$SERVER_API_IP" ] && pass "the server has an address on server-api ($SERVER_API_IP)" || fail "the server has no address on server-api"
-[ "$(http_status "$SERVER_API_NET" server-api-host:8082)" = 401 ] && pass "the admin's address for it, server-api-host, reaches the server API" || fail "server-api-host:8082 does not reach the server API"
-refused "compose.yaml pins no subnet or address (docs/guide.md, Docker networks)" grep -En '^[[:space:]]*(ipv[46]_address|subnet|ip_range):' "$(dirname "$0")/../compose.yaml"
+[ "$(http "$SERVER_API_NET" "http://server-api-host:8082/api/server/v1/health")" = 401 ] && pass "the admin's address for it, server-api-host, reaches the server API" || fail "server-api-host:8082 does not reach the server API"
 # The hash is the server's (the admin mounts no server-token any more): bootstrap made it (ADR 0049).
 HASH=$(docker exec "$SERVER" cat /server-token/accept/admin-server.sha256 2>/dev/null | tr -d '[:space:]')
 [ -n "$HASH" ] || fail "could not read the token hash from the server's /server-token/accept"
-[ "$(http_status "$SERVER_API_NET" "$SERVER_API")" = 401 ] && pass "401 without a token" || fail "no token should give 401"
-[ "$(http_status "$SERVER_API_NET" "$SERVER_API" "$HASH")" = 401 ] && pass "401 with the token's hash instead of the token" || fail "the hash must not work as the token"
-[ "$(http_status "$SERVER_API_NET" "$SERVER_API" wrong)" = 401 ] && pass "401 with a wrong token" || fail "a wrong token should give 401"
+[ "$(http "$SERVER_API_NET" "http://$SERVER_API/api/server/v1/health")" = 401 ] && pass "401 without a token" || fail "no token should give 401"
+[ "$(http "$SERVER_API_NET" "http://$SERVER_API/api/server/v1/health" GET "$HASH")" = 401 ] && pass "401 with the token's hash instead of the token" || fail "the hash must not work as the token"
+[ "$(http "$SERVER_API_NET" "http://$SERVER_API/api/server/v1/health" GET wrong)" = 401 ] && pass "401 with a wrong token" || fail "a wrong token should give 401"
 
 # A second server on its own scratch volumes, with no hash file at all: nothing may be accepted.
 docker rm -f askbar-check-nohash >/dev/null 2>&1
@@ -146,7 +284,7 @@ sleep 3
 if [ "$(docker inspect -f '{{.State.Running}}' askbar-check-nohash)" = false ] && [ "$(docker inspect -f '{{.State.ExitCode}}' askbar-check-nohash)" != 0 ]; then
   docker logs askbar-check-nohash 2>&1 | grep -q 'docker compose up' && pass "refuses to start with no hash file, and says what to run" || fail "no hash file: the server stopped without saying what to run"
 else
-  code=$(http_status "$SERVER_API_NET" askbar-check-nohash-host:8082 "$HASH")
+  code=$(http "$SERVER_API_NET" "http://askbar-check-nohash-host:8082/api/server/v1/health" GET "$HASH")
   case "$code" in 401|403|503) pass "fails closed with no hash file ($code)";; *) fail "no hash file: got $code, expected a refusal";; esac
 fi
 docker rm -f askbar-check-nohash >/dev/null 2>&1
@@ -154,23 +292,15 @@ docker rm -f askbar-check-nohash >/dev/null 2>&1
 docker exec "$CADDY" sh -c "wget -q -T3 -O /dev/null http://$SERVER_API/api/server/v1/health" >/dev/null 2>&1 \
   && fail "Caddy reached the server port" || pass "Caddy cannot reach the server port"
 CLIENT_IP=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$CLIENT_NET\").IPAddress}}" "$SERVER")
-[ "$(http_status "$CLIENT_NET" "$CLIENT_IP:8082")" = 0 ] && pass "nothing on the client-api network answers on 8082" || fail "the server port answers on the client-api network"
-[ "$(http_status "$EDGE" "$SERVER_API")" = 0 ] && pass "a container on edge cannot reach the server API address" || fail "the server API address is reachable from edge"
-admin_nets=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$ADMIN" | tr ' ' '\n' | grep . | sort | tr '\n' ' ')
+[ "$(http "$CLIENT_NET" "http://$CLIENT_IP:8082/api/server/v1/health")" = 0 ] && pass "nothing on the client-api network answers on 8082" || fail "the server port answers on the client-api network"
+[ "$(http "$EDGE" "http://$SERVER_API/api/server/v1/health")" = 0 ] && pass "a container on edge cannot reach the server API address" || fail "the server API address is reachable from edge"
+admin_nets=$(nets_of "$ADMIN")
 [ "$admin_nets" = "${PROJECT}_alerter-admin ${PROJECT}_audit-admin ${PROJECT}_cpa-admin ${PROJECT}_gateway-admin ${PROJECT}_server-api " ] && pass "the admin is on server-api, cpa-admin, audit-admin, gateway-admin and alerter-admin only (all internal: no route out, never edge)" || fail "the admin's networks are: $admin_nets"
-for n in server-api cpa-admin audit-admin gateway-admin alerter-admin; do
-  [ "$(docker network inspect -f '{{.Internal}}' "${PROJECT}_$n" 2>/dev/null)" = true ] && pass "the $n network is internal" || fail "the $n network is not internal"
-done
 
 echo "== 3. What the server can see"
-VOLS=$(docker inspect -f '{{range .Mounts}}{{.Name}} {{end}}' "$SERVER")
-for v in admin-secrets admin-data admin-run backup caddy-run caddy-secrets cpa-config; do
-  case " $VOLS" in *" ${PROJECT}_$v "*) fail "the server mounts $v";; *) pass "the server does not mount $v";; esac
-done
 refused "the server cannot list /admin-secrets" docker exec "$SERVER" ls /admin-secrets
 refused "the server cannot reach an admin socket" docker exec "$SERVER" test -e /run/admin/admin.sock
 refused "the server cannot write to /server-token (read-only)" docker exec "$SERVER" sh -c 'touch /server-token/x'
-[ "$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/server-token"}}{{.RW}}{{end}}{{end}}' "$SERVER")" = false ] && pass "/server-token is mounted read-only in the server" || fail "/server-token is writable in the server"
 [ "$(docker exec "$SERVER" id -u)" != "$(docker exec "$ADMIN" id -u)" ] && pass "the server and the admin run as different users" || fail "the server and the admin share a user"
 # Even as the admin's own uid, the server container has nothing of the admin's to open.
 refused "the admin's database is not in the server" docker exec -u "$(docker exec "$ADMIN" id -u)" "$SERVER" sh -c 'ls /admin-data/admin.db'
@@ -193,16 +323,8 @@ refused "no audit.db anywhere in the admin container" docker exec "$ADMIN" sh -c
 refused "the admin container has no server data (/data)" docker exec "$ADMIN" test -e /data
 refused "no control.db or space file anywhere in the admin container" docker exec "$ADMIN" sh -c 'find / -xdev \( -name "control.db*" -o -path "*/spaces/*.db" \) 2>/dev/null | grep -q .'
 # The client API (port 8080, reachable from the edge network) has no audit and no server routes.
-http_get() { # network host:port path -> status; 0 = no connection
-  py --network "$1" -- "
-import urllib.request, urllib.error
-try: print(urllib.request.urlopen('http://$2$3', timeout=4).status)
-except urllib.error.HTTPError as e: print(e.code)
-except Exception: print(0)
-"
-}
 for path in /audit /api/client/v1/audit /api/client/v1/audit/traces /api/client/v1/audit/stats /api/server/v1/health /api/server/v1/audit/traces /api/server/v1/audit/stats; do
-  [ "$(http_get "$CLIENT_NET" "$CLIENT_IP:8080" "$path")" = 404 ] && pass "the client API has no $path (404)" || fail "the client API answers $path"
+  [ "$(http "$CLIENT_NET" "http://$CLIENT_IP:8080$path")" = 404 ] && pass "the client API has no $path (404)" || fail "the client API answers $path"
 done
 
 echo "== 3c. The server holds no secret for the audit key"
@@ -232,36 +354,13 @@ CPA=$(docker compose -p "$PROJECT" ps -q cpa 2>/dev/null | head -1)
 if [ -z "$CPA" ]; then
   echo "SKIP  cpa is not running"
 else
-  cpa_nets=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$CPA" | tr ' ' '\n' | grep . | sort | tr '\n' ' ')
-  [ "$cpa_nets" = "${PROJECT}_cpa-admin ${PROJECT}_cpa-gateway ${PROJECT}_outbound " ] && pass "cpa is on cpa-admin, cpa-gateway and outbound only (never edge)" || fail "cpa's networks are: $cpa_nets"
-  case "$(docker network inspect -f '{{range .Containers}}{{.Name}} {{end}}' "$EDGE")" in *askbar-cpa*) fail "cpa is on edge, with Caddy";; *) pass "cpa shares no network with Caddy";; esac
-  [ -z "$(docker inspect -f '{{range $p, $b := .NetworkSettings.Ports}}{{if $b}}{{$p}} {{end}}{{end}}' "$CPA")" ] && pass "cpa publishes no port" || fail "cpa publishes a port"
+  svc_profile "$CPA" cpa <<EOF
+nets cpa-admin cpa-gateway outbound|cpa is on cpa-admin, cpa-gateway and outbound only (never edge)
+EOF
 fi
 
 echo "== 3d2. Container hardening (ADR 0032)"
-# Every service: read-only root, no capabilities but Caddy's NET_BIND_SERVICE and bootstrap's CHOWN (ADR 0032
-# rule 6), no privilege gain, process and memory limits, a private /tmp, and no host-gateway alias. Bootstrap has
-# exited by now, so it is looked up with -a.
-for svc in bootstrap server admin caddy cpa auditor model-gateway alerter mock-llm; do
-  c=$(docker compose -p "$PROJECT" ps -aq "$svc" 2>/dev/null | head -1)
-  [ -n "$c" ] || { echo "SKIP  $svc is not running"; continue; }
-  want_add=""; [ "$svc" = caddy ] && want_add="NET_BIND_SERVICE"; [ "$svc" = bootstrap ] && want_add="CHOWN"
-  got=$(docker inspect -f '{{.HostConfig.ReadonlyRootfs}}|{{join .HostConfig.CapDrop ","}}|{{join .HostConfig.CapAdd ","}}|{{join .HostConfig.SecurityOpt ","}}|{{if .HostConfig.PidsLimit}}{{.HostConfig.PidsLimit}}{{end}}|{{.HostConfig.Memory}}|{{range $k, $v := .HostConfig.Tmpfs}}{{$k}}{{end}}|{{join .HostConfig.ExtraHosts ","}}' "$c")
-  IFS='|' read -r ro drop add sec pids mem tmp hosts <<EOF_H
-$got
-EOF_H
-  bad=""
-  [ "$ro" = true ] || bad="$bad read_only=$ro"
-  [ "$drop" = ALL ] || bad="$bad cap_drop=$drop"
-  [ "${add#CAP_}" = "$want_add" ] || bad="$bad cap_add=$add"
-  case ",$sec," in *",no-new-privileges:true,"*|*",no-new-privileges,"*) ;; *) bad="$bad security_opt=$sec";; esac
-  [ -n "$pids" ] && [ "$pids" -gt 0 ] || bad="$bad pids_limit=${pids:-none}"
-  [ "${mem:-0}" -gt 0 ] || bad="$bad mem_limit=none"
-  [ "$tmp" = /tmp ] || bad="$bad tmpfs=$tmp"
-  case "$hosts" in *host-gateway*|*host.docker.internal*) bad="$bad extra_hosts=$hosts";; esac
-  [ -z "$bad" ] && pass "$svc is hardened" || fail "$svc is not hardened:$bad"
-done
-# Each hardened service is writing only to its volumes: its root filesystem refuses a write.
+# The declared hardening is section 0 (CapEff 0 is in svc_profile). Live: each hardened service's root filesystem refuses a write.
 for c in $SERVER $ADMIN $CADDY askbar-auditor askbar-model-gateway askbar-alerter; do
   refused "$c cannot write its root filesystem" docker exec "$c" sh -c 'echo x > /hardening-probe'
 done
@@ -269,26 +368,12 @@ done
 echo "== 3d3. Bootstrap and the credential volumes (ADR 0049)"
 BOOT=$(docker compose -p "$PROJECT" ps -aq bootstrap 2>/dev/null | head -1)
 if [ -z "$BOOT" ]; then fail "there is no bootstrap container"; else
-  [ "$(docker inspect -f '{{.HostConfig.NetworkMode}}' "$BOOT")" = none ] && pass "bootstrap has no network" || fail "bootstrap has a network"
   [ "$(docker inspect -f '{{.State.Status}} {{.State.ExitCode}}' "$BOOT")" = "exited 0" ] && pass "bootstrap ran once and exited 0" || fail "bootstrap is $(docker inspect -f '{{.State.Status}} {{.State.ExitCode}}' "$BOOT")"
   [ "$(docker inspect -f '{{.Config.User}}' "$BOOT")" = 0 ] && pass "bootstrap runs as root, with CHOWN only (checked above)" || fail "bootstrap does not run as root"
-  bmounts=$(docker inspect -f '{{range .Mounts}}{{.Name}}={{.RW}} {{end}}' "$BOOT" | tr ' ' '\n' | grep . | sort | tr '\n' ' ')
-  [ "$bmounts" = "${PROJECT}_admin-token=true ${PROJECT}_alerter-token=true ${PROJECT}_auditor-token=true ${PROJECT}_model-gateway-token=true ${PROJECT}_server-token=true " ] && pass "bootstrap mounts the credential volumes only" || fail "bootstrap mounts: $bmounts"
 fi
-# Each service mounts its own credential volume, read-only, and no other service's.
-for pair in "$SERVER:server-token" "$ADMIN:admin-token"; do
-  c=${pair%%:*}; own=${pair#*:}
-  mounts=$(docker inspect -f '{{range .Mounts}}{{.Name}}={{.RW}} {{end}}' "$c" | tr ' ' '\n' | grep -- '-token=' | sort | tr '\n' ' ')
-  [ "$mounts" = "${PROJECT}_$own=false " ] && pass "$c mounts $own read-only and no other credential volume" || fail "$c credential mounts: $mounts"
-done
 refused "the admin has no server-token" docker exec "$ADMIN" test -e /server-token
 refused "the server has no admin-token" docker exec "$SERVER" test -e /admin-token
 refused "the admin keeps no server.token in admin-secrets" docker exec "$ADMIN" test -e /admin-secrets/server.token
-# Owners and modes: a token is its caller's and 0400, a hash its receiver's and 0444, directories 0500.
-owned() { # container path want("uid mode") description
-  local got; got=$(docker exec "$1" stat -c '%u %a' "$2" 2>/dev/null)
-  [ "$got" = "$3" ] && pass "$4 is '$3'" || fail "$4 is '${got:-missing}', expected '$3'"
-}
 owned "$ADMIN" /admin-token/call/admin-server.token "10001 400" "the admin's token file (owner, mode)"
 owned "$SERVER" /server-token/accept/admin-server.sha256 "10002 444" "the server's hash file (owner, mode)"
 for d in /admin-token /admin-token/call /admin-token/accept; do owned "$ADMIN" "$d" "10001 500" "the admin's $d"; done
@@ -315,7 +400,7 @@ owned "$ADMIN" /admin-token/call/admin-server.token "10001 400" "the admin's tok
 owned "$SERVER" /server-token/accept/admin-server.sha256 "10002 444" "the server's hash file after a rotation (owner, mode)"
 docker restart "$SERVER" "$ADMIN" >/dev/null
 for c in "$SERVER" "$ADMIN"; do
-  for i in $(seq 1 30); do [ "$(docker inspect -f '{{.State.Health.Status}}' "$c")" = healthy ] && break; sleep 2; done
+  wait_healthy "$c"
   [ "$(docker inspect -f '{{.State.Health.Status}}' "$c")" = healthy ] && pass "$c is healthy after the restart" || fail "$c is not healthy after the rotation"
 done
 HASH=$(docker exec "$SERVER" cat /server-token/accept/admin-server.sha256 2>/dev/null | tr -d '[:space:]')
@@ -323,42 +408,21 @@ HASH=$(docker exec "$SERVER" cat /server-token/accept/admin-server.sha256 2>/dev
 echo "== 3d4. The auditor (ADR 0051)"
 AUDITOR=askbar-auditor
 if [ "$(docker inspect -f '{{.State.Running}}' "$AUDITOR" 2>/dev/null)" != true ]; then fail "the auditor is not running"; else
-  for i in $(seq 1 30); do [ "$(docker inspect -f '{{.State.Health.Status}}' "$AUDITOR")" = healthy ] && break; sleep 2; done
-  [ "$(docker inspect -f '{{.State.Health.Status}}' "$AUDITOR")" = healthy ] && pass "the auditor is healthy" || fail "the auditor is not healthy"
-  [ "$(docker exec "$AUDITOR" id -u)" = 10003 ] && pass "the auditor runs as uid 10003" || fail "the auditor does not run as uid 10003"
-  # No capability at all, and no exception to the shared hardening.
-  capeff=$(docker exec "$AUDITOR" sh -c 'grep CapEff /proc/1/status' 2>/dev/null | awk '{print $2}')
-  [ "$capeff" = 0000000000000000 ] && pass "the auditor's CapEff is 0" || fail "the auditor's CapEff is '${capeff:-unknown}', expected 0"
-  [ -z "$(docker inspect -f '{{join .HostConfig.CapAdd ","}}' "$AUDITOR")" ] && pass "the auditor adds no capability" || fail "the auditor adds a capability"
-  # Its networks are exactly the audit-* ones, and each is internal: no route out.
-  anets=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$AUDITOR" | tr ' ' '\n' | grep . | sort | tr '\n' ' ')
-  [ "$anets" = "${PROJECT}_audit-admin ${PROJECT}_audit-alerter ${PROJECT}_audit-caddy ${PROJECT}_audit-model-gateway ${PROJECT}_audit-server " ] && pass "the auditor is on the audit-* networks only (audit-admin, audit-alerter, audit-caddy, audit-model-gateway, audit-server)" || fail "the auditor's networks are: $anets"
-  case "$anets" in *edge*|*server-api*|*cpa-admin*) fail "the auditor shares a network that is not an audit-* one";; esac
-  for n in $anets; do
-    [ "$(docker network inspect -f '{{.Internal}}' "$n" 2>/dev/null)" = true ] && pass "$n is internal" || fail "$n is not internal"
-  done
+  svc_profile "$AUDITOR" "the auditor" <<EOF
+health yes
+uid 10003
+caps yes
+nets audit-admin audit-alerter audit-caddy audit-model-gateway audit-server|the auditor is on the audit-* networks only (audit-admin, audit-alerter, audit-caddy, audit-model-gateway, audit-server)
+owner $AUDITOR|/auditor-token/accept/admin-auditor-append.sha256|10003 444|the auditor's append hash file (owner, mode)
+owner $AUDITOR|/auditor-token/accept/admin-auditor-read.sha256|10003 444|the auditor's read hash file (owner, mode)
+owner $AUDITOR|/auditor-token/accept/model-gateway-auditor-read.sha256|10003 444|the auditor's gateway read hash file (owner, mode)
+owner $AUDITOR|/auditor-token/accept/admin-auditor-restore.sha256|10003 444|the auditor's restore hash file (owner, mode)
+dirs $AUDITOR|10003 500|the auditor's|/auditor-token /auditor-token/accept
+EOF
   docker exec "$AUDITOR" bash -c 'timeout 4 bash -c "echo > /dev/tcp/1.1.1.1/443"' >/dev/null 2>&1 \
     && fail "the auditor reached the internet" || pass "the auditor has no route out"
   docker exec "$AUDITOR" bash -c 'timeout 4 getent hosts example.com' >/dev/null 2>&1 \
     && fail "the auditor resolved an outside name" || pass "the auditor cannot resolve an outside name"
-  # Who is on audit-admin: the admin and the auditor, nothing else.
-  members=$(docker network inspect -f '{{range .Containers}}{{.Name}} {{end}}' "${PROJECT}_audit-admin" | tr ' ' '\n' | grep . | sort | tr '\n' ' ')
-  [ "$members" = "$ADMIN $AUDITOR " ] && pass "audit-admin joins the admin and the auditor only" || fail "audit-admin members: $members"
-  members=$(docker network inspect -f '{{range .Containers}}{{.Name}} {{end}}' "${PROJECT}_audit-caddy" | tr ' ' '\n' | grep . | sort | tr '\n' ' ')
-  [ "$members" = "$AUDITOR $CADDY " ] && pass "audit-caddy joins the auditor and Caddy only" || fail "audit-caddy members: $members"
-  # Mounts: its own data (read-write) and its credential volume (read-only), and nothing else; nobody else has them.
-  amounts=$(docker inspect -f '{{range .Mounts}}{{.Name}}={{.RW}} {{end}}' "$AUDITOR" | tr ' ' '\n' | grep . | sort | tr '\n' ' ')
-  [ "$amounts" = "${PROJECT}_auditor-data=true ${PROJECT}_auditor-token=false " ] && pass "the auditor mounts auditor-data and auditor-token (read-only) only" || fail "the auditor mounts: $amounts"
-  for c in $SERVER $ADMIN $CADDY; do
-    case " $(docker inspect -f '{{range .Mounts}}{{.Name}} {{end}}' "$c")" in
-      *" ${PROJECT}_auditor-data "*|*" ${PROJECT}_auditor-token "*) fail "$c mounts an auditor volume";; *) pass "$c mounts no auditor volume";;
-    esac
-  done
-  owned "$AUDITOR" /auditor-token/accept/admin-auditor-append.sha256 "10003 444" "the auditor's append hash file (owner, mode)"
-  owned "$AUDITOR" /auditor-token/accept/admin-auditor-read.sha256 "10003 444" "the auditor's read hash file (owner, mode)"
-  owned "$AUDITOR" /auditor-token/accept/model-gateway-auditor-read.sha256 "10003 444" "the auditor's gateway read hash file (owner, mode)"
-  owned "$AUDITOR" /auditor-token/accept/admin-auditor-restore.sha256 "10003 444" "the auditor's restore hash file (owner, mode)"
-  for d in /auditor-token /auditor-token/accept; do owned "$AUDITOR" "$d" "10003 500" "the auditor's $d"; done
   # The API, from a throwaway container on audit-admin with the admin's own tokens: only the right token reaches each route.
   AUD_APPEND=$(docker exec "$ADMIN" cat /admin-token/call/admin-auditor-append.token 2>/dev/null)
   AUD_READ=$(docker exec "$ADMIN" cat /admin-token/call/admin-auditor-read.token 2>/dev/null)
@@ -464,49 +528,24 @@ echo "== 3d5. model-gateway (ADR 0054)"
 GW=askbar-model-gateway
 GW_NET="${PROJECT}_gateway-admin"; GW_SRV_NET="${PROJECT}_gateway-server"; GW_OUT="${PROJECT}_outbound"; GW_AUD="${PROJECT}_audit-model-gateway"
 if [ "$(docker inspect -f '{{.State.Running}}' "$GW" 2>/dev/null)" != true ]; then fail "model-gateway is not running"; else
-  for i in $(seq 1 30); do [ "$(docker inspect -f '{{.State.Health.Status}}' "$GW")" = healthy ] && break; sleep 2; done
-  [ "$(docker inspect -f '{{.State.Health.Status}}' "$GW")" = healthy ] && pass "model-gateway is healthy" || fail "model-gateway is not healthy"
-  [ "$(docker exec "$GW" id -u)" = 10004 ] && pass "model-gateway runs as uid 10004" || fail "model-gateway does not run as uid 10004"
-  capeff=$(docker exec "$GW" sh -c 'grep CapEff /proc/1/status' 2>/dev/null | awk '{print $2}')
-  [ "$capeff" = 0000000000000000 ] && pass "model-gateway's CapEff is 0" || fail "model-gateway's CapEff is '${capeff:-unknown}', expected 0"
-  [ -z "$(docker inspect -f '{{join .HostConfig.CapAdd ","}}' "$GW")" ] && pass "model-gateway adds no capability" || fail "model-gateway adds a capability"
-  [ "$(docker inspect -f '{{.HostConfig.ReadonlyRootfs}} {{.HostConfig.Memory}}' "$GW")" = "true 268435456" ] && pass "model-gateway has a read-only root and 256 MB" || fail "model-gateway's root or memory limit is not as set"
-  # Its networks are exactly these four, and only `outbound` has a route out.
-  gnets=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$GW" | tr ' ' '\n' | grep . | sort | tr '\n' ' ')
-  [ "$gnets" = "$GW_AUD ${PROJECT}_cpa-gateway $GW_NET $GW_SRV_NET $GW_OUT " ] && pass "model-gateway is on audit-model-gateway, cpa-gateway, gateway-admin, gateway-server and outbound only" || fail "model-gateway's networks are: $gnets"
-  for n in $GW_AUD ${PROJECT}_cpa-gateway $GW_NET $GW_SRV_NET; do
-    [ "$(docker network inspect -f '{{.Internal}}' "$n" 2>/dev/null)" = true ] && pass "$n is internal" || fail "$n is not internal"
-  done
-  [ "$(docker network inspect -f '{{.Internal}}' "$GW_OUT" 2>/dev/null)" = false ] && pass "outbound is the one network with a route out" || fail "outbound is internal: no provider could be reached"
-  # Who shares each network: no caller of another link, and only the gateway and cpa (and in dev the mock LLM) on outbound.
-  members() { docker network inspect -f '{{range .Containers}}{{.Name}} {{end}}' "$1" | tr ' ' '\n' | grep . | sort | tr '\n' ' '; }
-  [ "$(members "$GW_NET")" = "$ADMIN $GW " ] && pass "gateway-admin joins the admin and the gateway only" || fail "gateway-admin members: $(members "$GW_NET")"
-  [ "$(members "${PROJECT}_cpa-gateway")" = "askbar-cpa $GW " ] && pass "cpa-gateway joins CLIProxyAPI and the gateway only" || fail "cpa-gateway members: $(members "${PROJECT}_cpa-gateway")"
-  [ "$(members "$GW_AUD")" = "$AUDITOR $GW " ] && pass "audit-model-gateway joins the auditor and the gateway only" || fail "audit-model-gateway members: $(members "$GW_AUD")"
-  [ "$(members "$GW_SRV_NET")" = "$GW $SERVER " ] && pass "gateway-server joins the gateway and the server only" || fail "gateway-server members: $(members "$GW_SRV_NET")"
-  case "$(members "$GW_OUT")" in "askbar-cpa $GW "|"askbar-cpa askbar-mock-llm-1 $GW ") pass "outbound joins the gateway and CLIProxyAPI (and the mock LLM in dev) only";; *) fail "outbound members: $(members "$GW_OUT")";; esac
+  svc_profile "$GW" model-gateway <<EOF
+health yes
+uid 10004
+caps yes
+nets audit-model-gateway cpa-gateway gateway-admin gateway-server outbound|model-gateway is on audit-model-gateway, cpa-gateway, gateway-admin, gateway-server and outbound only
+owner $GW|/model-gateway-token/accept/server-model-gateway.sha256|10004 444|the gateway's server hash file (owner, mode)
+owner $GW|/model-gateway-token/accept/admin-model-gateway.sha256|10004 444|the gateway's admin hash file (owner, mode)
+owner $GW|/model-gateway-token/call/model-gateway-auditor.token|10004 400|the gateway's auditor token file (owner, mode)
+owner $GW|/model-gateway-token/call/model-gateway-auditor-read.token|10004 400|the gateway's auditor read token file (owner, mode)
+dirs $GW|10004 500|the gateway's|/model-gateway-token /model-gateway-token/call /model-gateway-token/accept
+owner $AUDITOR|/auditor-token/accept/model-gateway-auditor.sha256|10003 444|the auditor's gateway hash file (owner, mode)
+owner $SERVER|/server-token/call/server-model-gateway.token|10002 400|the server's gateway token file (owner, mode)
+owner $ADMIN|/admin-token/call/admin-model-gateway.token|10001 400|the admin's gateway token file (owner, mode)
+EOF
   # The gateway reaches the auditor and nothing of ours but that.
   docker exec "$GW" bash -c 'exec 3<>/dev/tcp/auditor/8083' >/dev/null 2>&1 && pass "model-gateway reaches the auditor" || fail "model-gateway cannot reach the auditor"
   # (The admin, the server and cpa share a network with it, so their names do resolve there.)
-  for h in caddy; do
-    docker exec "$GW" bash -c "getent hosts $h" >/dev/null 2>&1 && fail "model-gateway resolves $h" || pass "model-gateway cannot resolve $h"
-  done
-  # Mounts: its credential volume, read-only, and nothing else; nobody else has it.
-  gmounts=$(docker inspect -f '{{range .Mounts}}{{.Name}}={{.RW}} {{end}}' "$GW" | tr ' ' '\n' | grep . | sort | tr '\n' ' ')
-  [ "$gmounts" = "${PROJECT}_model-gateway-token=false " ] && pass "model-gateway mounts model-gateway-token (read-only) and nothing else" || fail "model-gateway mounts: $gmounts"
-  for c in $SERVER $ADMIN $CADDY $AUDITOR; do
-    case " $(docker inspect -f '{{range .Mounts}}{{.Name}} {{end}}' "$c")" in
-      *" ${PROJECT}_model-gateway-token "*) fail "$c mounts model-gateway-token";; *) pass "$c mounts no model-gateway volume";;
-    esac
-  done
-  owned "$GW" /model-gateway-token/accept/server-model-gateway.sha256 "10004 444" "the gateway's server hash file (owner, mode)"
-  owned "$GW" /model-gateway-token/accept/admin-model-gateway.sha256 "10004 444" "the gateway's admin hash file (owner, mode)"
-  owned "$GW" /model-gateway-token/call/model-gateway-auditor.token "10004 400" "the gateway's auditor token file (owner, mode)"
-  owned "$GW" /model-gateway-token/call/model-gateway-auditor-read.token "10004 400" "the gateway's auditor read token file (owner, mode)"
-  for d in /model-gateway-token /model-gateway-token/call /model-gateway-token/accept; do owned "$GW" "$d" "10004 500" "the gateway's $d"; done
-  owned "$AUDITOR" /auditor-token/accept/model-gateway-auditor.sha256 "10003 444" "the auditor's gateway hash file (owner, mode)"
-  owned "$SERVER" /server-token/call/server-model-gateway.token "10002 400" "the server's gateway token file (owner, mode)"
-  owned "$ADMIN" /admin-token/call/admin-model-gateway.token "10001 400" "the admin's gateway token file (owner, mode)"
+  docker exec "$GW" bash -c "getent hosts caddy" >/dev/null 2>&1 && fail "model-gateway resolves caddy" || pass "model-gateway cannot resolve caddy"
   # Each listener is on its own network's address, and only its own link's token opens it.
   GW_ADMIN_IP=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$GW_NET\").IPAddress}}" "$GW")
   GW_SRV_IP=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$GW_SRV_NET\").IPAddress}}" "$GW")
@@ -515,29 +554,18 @@ if [ "$(docker inspect -f '{{.State.Running}}' "$GW" 2>/dev/null)" != true ]; th
   GW_ADM_TOK=$(docker exec "$ADMIN" cat /admin-token/call/admin-model-gateway.token 2>/dev/null)
   GW_SRV_TOK=$(docker exec "$SERVER" cat /server-token/call/server-model-gateway.token 2>/dev/null)
   [ -n "$GW_ADM_TOK" ] && [ -n "$GW_SRV_TOK" ] || fail "the admin or the server holds no gateway token"
-  gw_call() { # network ip method path [token] [json] -> status, 0 = no connection
-    py --network "$1" -- "
-import urllib.request, urllib.error
-req = urllib.request.Request('http://$2:8084/api/model-gateway/v1$4', method='$3', data=(b'${6:-}' if '${6:-}' else None))
-if '${5:-}': req.add_header('authorization', 'Bearer ${5:-}')
-if '${6:-}': req.add_header('content-type', 'application/json')
-try: print(urllib.request.urlopen(req, timeout=4).status)
-except urllib.error.HTTPError as e: print(e.code)
-except Exception: print(0)
-"
-  }
-  [ "$(gw_call "$GW_NET" "$GW_ADMIN_IP" GET /health)" = 200 ] && pass "the admin's listener answers on gateway-admin" || fail "the admin's listener does not answer on gateway-admin"
-  [ "$(gw_call "$GW_SRV_NET" "$GW_SRV_IP" GET /health)" = 200 ] && pass "the server's listener answers on gateway-server" || fail "the server's listener does not answer on gateway-server"
-  [ "$(gw_call "$GW_OUT" "$GW_OUT_IP" GET /health)" = 0 ] && pass "nothing answers on outbound" || fail "the gateway answers on outbound"
-  [ "$(gw_call "$GW_AUD" "$GW_AUD_IP" GET /health)" = 0 ] && pass "nothing answers on audit-model-gateway" || fail "the gateway answers on audit-model-gateway"
-  [ "$(gw_call "$GW_NET" "$GW_ADMIN_IP" GET /status)" = 401 ] && pass "no token: 401 on the admin's listener" || fail "the admin's listener answers without a token"
-  [ "$(gw_call "$GW_NET" "$GW_ADMIN_IP" GET /status "$GW_SRV_TOK")" = 401 ] && pass "the server's token does not open the admin's listener" || fail "the server's token opened the admin's listener"
-  [ "$(gw_call "$GW_NET" "$GW_ADMIN_IP" GET /status "$GW_ADM_TOK")" = 200 ] && pass "the admin's token opens GET /status" || fail "the admin's token does not open GET /status"
-  [ "$(gw_call "$GW_NET" "$GW_ADMIN_IP" POST /chat "$GW_ADM_TOK" '{}')" = 404 ] && pass "the admin's listener has no chat route" || fail "the admin's listener serves /chat"
-  [ "$(gw_call "$GW_SRV_NET" "$GW_SRV_IP" POST /chat)" = 401 ] && pass "no token: 401 on the server's listener" || fail "the server's listener answers without a token"
-  [ "$(gw_call "$GW_SRV_NET" "$GW_SRV_IP" POST /chat "$GW_ADM_TOK" '{}')" = 401 ] && pass "the admin's token does not open the server's listener" || fail "the admin's token opened the server's listener"
-  [ "$(gw_call "$GW_SRV_NET" "$GW_SRV_IP" PUT /config "$GW_SRV_TOK" '{}')" = 404 ] && pass "the server's listener has no config route" || fail "the server's listener serves /config"
-  [ "$(gw_call "$EDGE" "$GW_SRV_IP" GET /health)" = 0 ] && pass "a container on edge cannot reach the gateway" || fail "the gateway is reachable from edge"
+  [ "$(http "$GW_NET" "http://$GW_ADMIN_IP:8084/api/model-gateway/v1/health" GET)" = 200 ] && pass "the admin's listener answers on gateway-admin" || fail "the admin's listener does not answer on gateway-admin"
+  [ "$(http "$GW_SRV_NET" "http://$GW_SRV_IP:8084/api/model-gateway/v1/health" GET)" = 200 ] && pass "the server's listener answers on gateway-server" || fail "the server's listener does not answer on gateway-server"
+  [ "$(http "$GW_OUT" "http://$GW_OUT_IP:8084/api/model-gateway/v1/health" GET)" = 0 ] && pass "nothing answers on outbound" || fail "the gateway answers on outbound"
+  [ "$(http "$GW_AUD" "http://$GW_AUD_IP:8084/api/model-gateway/v1/health" GET)" = 0 ] && pass "nothing answers on audit-model-gateway" || fail "the gateway answers on audit-model-gateway"
+  [ "$(http "$GW_NET" "http://$GW_ADMIN_IP:8084/api/model-gateway/v1/status" GET)" = 401 ] && pass "no token: 401 on the admin's listener" || fail "the admin's listener answers without a token"
+  [ "$(http "$GW_NET" "http://$GW_ADMIN_IP:8084/api/model-gateway/v1/status" GET "$GW_SRV_TOK")" = 401 ] && pass "the server's token does not open the admin's listener" || fail "the server's token opened the admin's listener"
+  [ "$(http "$GW_NET" "http://$GW_ADMIN_IP:8084/api/model-gateway/v1/status" GET "$GW_ADM_TOK")" = 200 ] && pass "the admin's token opens GET /status" || fail "the admin's token does not open GET /status"
+  [ "$(http "$GW_NET" "http://$GW_ADMIN_IP:8084/api/model-gateway/v1/chat" POST "$GW_ADM_TOK" '{}')" = 404 ] && pass "the admin's listener has no chat route" || fail "the admin's listener serves /chat"
+  [ "$(http "$GW_SRV_NET" "http://$GW_SRV_IP:8084/api/model-gateway/v1/chat" POST)" = 401 ] && pass "no token: 401 on the server's listener" || fail "the server's listener answers without a token"
+  [ "$(http "$GW_SRV_NET" "http://$GW_SRV_IP:8084/api/model-gateway/v1/chat" POST "$GW_ADM_TOK" '{}')" = 401 ] && pass "the admin's token does not open the server's listener" || fail "the admin's token opened the server's listener"
+  [ "$(http "$GW_SRV_NET" "http://$GW_SRV_IP:8084/api/model-gateway/v1/config" PUT "$GW_SRV_TOK" '{}')" = 404 ] && pass "the server's listener has no config route" || fail "the server's listener serves /config"
+  [ "$(http "$EDGE" "http://$GW_SRV_IP:8084/api/model-gateway/v1/health" GET)" = 0 ] && pass "a container on edge cannot reach the gateway" || fail "the gateway is reachable from edge"
   # A marker key entered in the admin reaches the gateway, survives its restart (the admin pushes it again), and
   # appears nowhere it must not: not in a response, a log, the gateway's files, the admin's database in the clear,
   # or the auditor's store.
@@ -550,7 +578,7 @@ call('PUT', '/api/admin/v1/setup/audit-key', {'passphrase': 'isolation check pas
 s, body = call('POST', '/api/admin/v1/providers', {'name': 'Isolation marker', 'type': 'openai', 'base_url': 'http://mock-llm:8765/v1', 'model': 'm', 'api_key': '$MARK'})
 print(json.loads(body).get('id', '') if s == 201 else 'failed')" 2>&1 | tail -1)
   case "$pid" in failed|"") fail "could not add the marker provider: $pid";; *) pass "a provider with a marker key was added through the admin";; esac
-  gw_version() { gw_call "$GW_NET" "$GW_ADMIN_IP" GET /status "$GW_ADM_TOK" >/dev/null; py --network "$GW_NET" -- "
+  gw_version() { http "$GW_NET" "http://$GW_ADMIN_IP:8084/api/model-gateway/v1/status" GET "$GW_ADM_TOK" >/dev/null; py --network "$GW_NET" -- "
 import urllib.request, json
 req = urllib.request.Request('http://$GW_ADMIN_IP:8084/api/model-gateway/v1/status', headers={'authorization': 'Bearer $GW_ADM_TOK'})
 print(json.load(urllib.request.urlopen(req, timeout=4))['config_version'])"; }
@@ -576,22 +604,16 @@ print(call('POST', '/api/admin/v1/services/model-gateway/restart')[0])" 2>&1 | t
 for p in ('/api/admin/v1/providers', '/api/admin/v1/services', '/api/admin/v1/status'):
     print(call('GET', p)[1])" 2>&1)
   printf '%s' "$resp" | grep -q -- "$MARK" && fail "an admin response returned the marker key" || pass "no admin response returns the marker key"
-  [ "$(gw_call "$GW_NET" "$GW_ADMIN_IP" GET /config "$GW_ADM_TOK")" != 200 ] && pass "the gateway has no route that returns its configuration" || fail "GET /config answers"
+  [ "$(http "$GW_NET" "http://$GW_ADMIN_IP:8084/api/model-gateway/v1/config" GET "$GW_ADM_TOK")" != 200 ] && pass "the gateway has no route that returns its configuration" || fail "GET /config answers"
   admin_script "$(admin_login)
 print(call('DELETE', '/api/admin/v1/providers/$pid')[0])" >/dev/null 2>&1
 fi
 
 echo "== 3d6. The server has no route out and no key (ADR 0054)"
 if [ "$(docker inspect -f '{{.State.Running}}' "$SERVER" 2>/dev/null)" != true ]; then fail "the server is not running"; else
-  snets=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$SERVER" | tr ' ' '\n' | grep . | sort | tr '\n' ' ')
-  [ "$snets" = "${PROJECT}_audit-server ${PROJECT}_client-api ${PROJECT}_gateway-server ${PROJECT}_server-api " ] \
-    && pass "the server is on audit-server, client-api, gateway-server and server-api only" || fail "the server's networks are: $snets"
-  for n in $snets; do
-    [ "$(docker network inspect -f '{{.Internal}}' "$n" 2>/dev/null)" = true ] && pass "$n is internal: no route out" || fail "$n is not internal"
-  done
-  members() { docker network inspect -f '{{range .Containers}}{{.Name}} {{end}}' "$1" | tr ' ' '\n' | grep . | sort | tr '\n' ' '; }
-  [ "$(members "$CLIENT_NET")" = "$CADDY $SERVER " ] && pass "client-api joins Caddy and the server only" || fail "client-api members: $(members "$CLIENT_NET")"
-  [ "$(members "${PROJECT}_audit-server")" = "$AUDITOR $SERVER " ] && pass "audit-server joins the auditor and the server only" || fail "audit-server members: $(members "${PROJECT}_audit-server")"
+  svc_profile "$SERVER" "the server" <<EOF
+nets audit-server client-api gateway-server server-api|the server is on audit-server, client-api, gateway-server and server-api only
+EOF
   docker exec "$SERVER" bash -c 'timeout 4 bash -c "echo > /dev/tcp/1.1.1.1/443"' >/dev/null 2>&1 && fail "the server reached the internet" || pass "the server has no route out"
   docker exec "$SERVER" bash -c 'timeout 4 getent hosts example.com' >/dev/null 2>&1 && fail "the server resolved an outside name" || pass "the server cannot resolve an outside name"
   for h in cpa mock-llm; do
@@ -611,53 +633,25 @@ echo "== 3d7. The alerter (ADR 0055)"
 ALERTER=askbar-alerter
 AL_ADMIN="${PROJECT}_alerter-admin"; AL_AUD="${PROJECT}_audit-alerter"; AL_OUT="${PROJECT}_alerter-outbound"
 if [ "$(docker inspect -f '{{.State.Running}}' "$ALERTER" 2>/dev/null)" != true ]; then fail "the alerter is not running"; else
-  for i in $(seq 1 30); do [ "$(docker inspect -f '{{.State.Health.Status}}' "$ALERTER")" = healthy ] && break; sleep 2; done
-  [ "$(docker inspect -f '{{.State.Health.Status}}' "$ALERTER")" = healthy ] && pass "the alerter is healthy" || fail "the alerter is not healthy"
-  [ "$(docker exec "$ALERTER" id -u)" = 10005 ] && pass "the alerter runs as uid 10005" || fail "the alerter does not run as uid 10005"
-  capeff=$(docker exec "$ALERTER" sh -c 'grep CapEff /proc/1/status' 2>/dev/null | awk '{print $2}')
-  [ "$capeff" = 0000000000000000 ] && pass "the alerter's CapEff is 0" || fail "the alerter's CapEff is '${capeff:-unknown}', expected 0"
-  [ -z "$(docker inspect -f '{{join .HostConfig.CapAdd ","}}' "$ALERTER")" ] && pass "the alerter adds no capability" || fail "the alerter adds a capability"
-  [ "$(docker inspect -f '{{.HostConfig.ReadonlyRootfs}} {{.HostConfig.Memory}}' "$ALERTER")" = "true 134217728" ] && pass "the alerter has a read-only root and 128 MB" || fail "the alerter's root or memory limit is not as set"
-  # Its networks are exactly these three, and only alerter-outbound has a route out.
-  alnets=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$ALERTER" | tr ' ' '\n' | grep . | sort | tr '\n' ' ')
-  [ "$alnets" = "$AL_ADMIN $AL_OUT $AL_AUD " ] && pass "the alerter is on alerter-admin, alerter-outbound and audit-alerter only" || fail "the alerter's networks are: $alnets"
-  for n in $AL_ADMIN $AL_AUD; do
-    [ "$(docker network inspect -f '{{.Internal}}' "$n" 2>/dev/null)" = true ] && pass "$n is internal" || fail "$n is not internal"
-  done
-  [ "$(docker network inspect -f '{{.Internal}}' "$AL_OUT" 2>/dev/null)" = false ] && pass "alerter-outbound is the alerter's one network with a route out" || fail "alerter-outbound is internal: no alert could be delivered"
-  # Who is on each network: the alerter shares none with a service that has a route out, and `outbound` does not include it.
-  members() { docker network inspect -f '{{range .Containers}}{{.Name}} {{end}}' "$1" | tr ' ' '\n' | grep . | sort | tr '\n' ' '; }
-  [ "$(members "$AL_ADMIN")" = "$ADMIN $ALERTER " ] && pass "alerter-admin joins the admin and the alerter only" || fail "alerter-admin members: $(members "$AL_ADMIN")"
-  [ "$(members "$AL_AUD")" = "$ALERTER $AUDITOR " ] && pass "audit-alerter joins the alerter and the auditor only" || fail "audit-alerter members: $(members "$AL_AUD")"
-  [ "$(members "$AL_OUT")" = "$ALERTER " ] && pass "alerter-outbound joins the alerter alone" || fail "alerter-outbound members: $(members "$AL_OUT")"
-  case "$(members "${PROJECT}_outbound")" in *"$ALERTER"*) fail "the alerter is on outbound, with the gateway";; *) pass "outbound does not include the alerter";; esac
-  for c in $SERVER $GW $CADDY askbar-cpa; do
-    shared=""
-    for n in $alnets; do case " $(members "$n")" in *" $c "*) shared="$shared $n";; esac; done
-    [ -z "$shared" ] && pass "$c shares no network with the alerter" || fail "$c shares a network with the alerter:$shared"
-  done
+  svc_profile "$ALERTER" "the alerter" <<EOF
+health yes
+uid 10005
+caps yes
+nets alerter-admin alerter-outbound audit-alerter|the alerter is on alerter-admin, alerter-outbound and audit-alerter only
+owner $ALERTER|/alerter-token/accept/auditor-alerter.sha256|10005 444|the alerter's auditor hash file (owner, mode)
+owner $ALERTER|/alerter-token/accept/admin-alerter.sha256|10005 444|the alerter's admin hash file (owner, mode)
+owner $ALERTER|/alerter-token/call/alerter-auditor.token|10005 400|the alerter's auditor token file (owner, mode)
+dirs $ALERTER|10005 500|the alerter's|/alerter-token /alerter-token/call /alerter-token/accept
+owner $AUDITOR|/auditor-token/accept/alerter-auditor.sha256|10003 444|the auditor's alerter hash file (owner, mode)
+owner $AUDITOR|/auditor-token/call/auditor-alerter.token|10003 400|the auditor's alerter token file (owner, mode)
+owner $ADMIN|/admin-token/call/admin-alerter.token|10001 400|the admin's alerter token file (owner, mode)
+EOF
   # The server and the auditor still have no route out (3d4, 3d6); the gateway's is `outbound`, which the alerter is not on.
   # It reaches the auditor on audit-alerter, and nothing else of ours.
   docker exec "$ALERTER" bash -c 'exec 3<>/dev/tcp/auditor/8083' >/dev/null 2>&1 && pass "the alerter reaches the auditor" || fail "the alerter cannot reach the auditor"
   for h in caddy server askbar-model-gateway cpa; do
     docker exec "$ALERTER" bash -c "getent hosts $h" >/dev/null 2>&1 && fail "the alerter resolves $h" || pass "the alerter cannot resolve $h"
   done
-  # Mounts: its data (read-write) and its credential volume (read-only), and nothing else; nobody else has them.
-  almounts=$(docker inspect -f '{{range .Mounts}}{{.Name}}={{.RW}} {{end}}' "$ALERTER" | tr ' ' '\n' | grep . | sort | tr '\n' ' ')
-  [ "$almounts" = "${PROJECT}_alerter-data=true ${PROJECT}_alerter-token=false " ] && pass "the alerter mounts alerter-data and alerter-token (read-only) only" || fail "the alerter mounts: $almounts"
-  for c in $SERVER $ADMIN $CADDY $AUDITOR $GW askbar-cpa; do
-    case " $(docker inspect -f '{{range .Mounts}}{{.Name}} {{end}}' "$c")" in
-      *" ${PROJECT}_alerter-token "*|*" ${PROJECT}_alerter-data "*) fail "$c mounts an alerter volume";; *) pass "$c mounts no alerter volume";;
-    esac
-  done
-  # Token files: owners, modes and prefixes.
-  owned "$ALERTER" /alerter-token/accept/auditor-alerter.sha256 "10005 444" "the alerter's auditor hash file (owner, mode)"
-  owned "$ALERTER" /alerter-token/accept/admin-alerter.sha256 "10005 444" "the alerter's admin hash file (owner, mode)"
-  owned "$ALERTER" /alerter-token/call/alerter-auditor.token "10005 400" "the alerter's auditor token file (owner, mode)"
-  for d in /alerter-token /alerter-token/call /alerter-token/accept; do owned "$ALERTER" "$d" "10005 500" "the alerter's $d"; done
-  owned "$AUDITOR" /auditor-token/accept/alerter-auditor.sha256 "10003 444" "the auditor's alerter hash file (owner, mode)"
-  owned "$AUDITOR" /auditor-token/call/auditor-alerter.token "10003 400" "the auditor's alerter token file (owner, mode)"
-  owned "$ADMIN" /admin-token/call/admin-alerter.token "10001 400" "the admin's alerter token file (owner, mode)"
   AL_ADM_TOK=$(docker exec "$ADMIN" cat /admin-token/call/admin-alerter.token 2>/dev/null)
   AL_AUD_TOK=$(docker exec "$AUDITOR" cat /auditor-token/call/auditor-alerter.token 2>/dev/null)
   AL_OWN_TOK=$(docker exec "$ALERTER" cat /alerter-token/call/alerter-auditor.token 2>/dev/null)
@@ -668,36 +662,25 @@ if [ "$(docker inspect -f '{{.State.Running}}' "$ALERTER" 2>/dev/null)" != true 
   AL_ADMIN_IP=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$AL_ADMIN\").IPAddress}}" "$ALERTER")
   AL_AUD_IP=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$AL_AUD\").IPAddress}}" "$ALERTER")
   AL_OUT_IP=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$AL_OUT\").IPAddress}}" "$ALERTER")
-  al_call() { # network ip method path [token] [json] -> status, 0 = no connection
-    py --network "$1" -- "
-import urllib.request, urllib.error
-req = urllib.request.Request('http://$2:8085/api/alerter/v1$4', method='$3', data=(b'${6:-}' if '${6:-}' else None))
-if '${5:-}': req.add_header('authorization', 'Bearer ${5:-}')
-if '${6:-}': req.add_header('content-type', 'application/json')
-try: print(urllib.request.urlopen(req, timeout=4).status)
-except urllib.error.HTTPError as e: print(e.code)
-except Exception: print(0)
-"
-  }
-  [ "$(al_call "$AL_ADMIN" "$AL_ADMIN_IP" GET /health)" = 200 ] && pass "the admin's listener answers on alerter-admin" || fail "the admin's listener does not answer on alerter-admin"
-  [ "$(al_call "$AL_AUD" "$AL_AUD_IP" GET /health)" = 200 ] && pass "the auditor's listener answers on audit-alerter" || fail "the auditor's listener does not answer on audit-alerter"
-  [ "$(al_call "$AL_OUT" "$AL_OUT_IP" GET /health)" = 0 ] && pass "nothing answers on alerter-outbound" || fail "the alerter answers on alerter-outbound"
-  [ "$(al_call "$AL_ADMIN" "$AL_ADMIN_IP" GET /status)" = 401 ] && pass "no token: 401 on the admin's listener" || fail "the admin's listener answers without a token"
-  [ "$(al_call "$AL_ADMIN" "$AL_ADMIN_IP" GET /status "wrong-token")" = 401 ] && pass "a wrong token: 401 on the admin's listener" || fail "a wrong token opened the admin's listener"
-  [ "$(al_call "$AL_ADMIN" "$AL_ADMIN_IP" GET /status "$AL_AUD_TOK")" = 401 ] && pass "the auditor's token does not open the admin's listener" || fail "the auditor's token opened the admin's listener"
-  [ "$(al_call "$AL_ADMIN" "$AL_ADMIN_IP" GET /status "$AL_ADM_TOK")" = 200 ] && pass "the admin's token opens GET /status" || fail "the admin's token does not open GET /status"
-  [ "$(al_call "$AL_AUD" "$AL_AUD_IP" POST /events "" '{}')" = 401 ] && pass "no token: 401 on the auditor's listener" || fail "the auditor's listener answers without a token"
-  [ "$(al_call "$AL_AUD" "$AL_AUD_IP" POST /events "$AL_ADM_TOK" '{}')" = 401 ] && pass "the admin's token does not open the auditor's listener" || fail "the admin's token opened the auditor's listener"
-  [ "$(al_call "$AL_AUD" "$AL_AUD_IP" GET /status "$AL_AUD_TOK")" = 404 ] && pass "the auditor's listener has no status route" || fail "the auditor's listener serves /status"
-  [ "$(al_call "$AL_AUD" "$AL_AUD_IP" PUT /config "$AL_AUD_TOK" '{}')" = 404 ] && pass "the auditor's listener has no config route" || fail "the auditor's listener serves /config"
+  [ "$(http "$AL_ADMIN" "http://$AL_ADMIN_IP:8085/api/alerter/v1/health" GET)" = 200 ] && pass "the admin's listener answers on alerter-admin" || fail "the admin's listener does not answer on alerter-admin"
+  [ "$(http "$AL_AUD" "http://$AL_AUD_IP:8085/api/alerter/v1/health" GET)" = 200 ] && pass "the auditor's listener answers on audit-alerter" || fail "the auditor's listener does not answer on audit-alerter"
+  [ "$(http "$AL_OUT" "http://$AL_OUT_IP:8085/api/alerter/v1/health" GET)" = 0 ] && pass "nothing answers on alerter-outbound" || fail "the alerter answers on alerter-outbound"
+  [ "$(http "$AL_ADMIN" "http://$AL_ADMIN_IP:8085/api/alerter/v1/status" GET)" = 401 ] && pass "no token: 401 on the admin's listener" || fail "the admin's listener answers without a token"
+  [ "$(http "$AL_ADMIN" "http://$AL_ADMIN_IP:8085/api/alerter/v1/status" GET "wrong-token")" = 401 ] && pass "a wrong token: 401 on the admin's listener" || fail "a wrong token opened the admin's listener"
+  [ "$(http "$AL_ADMIN" "http://$AL_ADMIN_IP:8085/api/alerter/v1/status" GET "$AL_AUD_TOK")" = 401 ] && pass "the auditor's token does not open the admin's listener" || fail "the auditor's token opened the admin's listener"
+  [ "$(http "$AL_ADMIN" "http://$AL_ADMIN_IP:8085/api/alerter/v1/status" GET "$AL_ADM_TOK")" = 200 ] && pass "the admin's token opens GET /status" || fail "the admin's token does not open GET /status"
+  [ "$(http "$AL_AUD" "http://$AL_AUD_IP:8085/api/alerter/v1/events" POST "" '{}')" = 401 ] && pass "no token: 401 on the auditor's listener" || fail "the auditor's listener answers without a token"
+  [ "$(http "$AL_AUD" "http://$AL_AUD_IP:8085/api/alerter/v1/events" POST "$AL_ADM_TOK" '{}')" = 401 ] && pass "the admin's token does not open the auditor's listener" || fail "the admin's token opened the auditor's listener"
+  [ "$(http "$AL_AUD" "http://$AL_AUD_IP:8085/api/alerter/v1/status" GET "$AL_AUD_TOK")" = 404 ] && pass "the auditor's listener has no status route" || fail "the auditor's listener serves /status"
+  [ "$(http "$AL_AUD" "http://$AL_AUD_IP:8085/api/alerter/v1/config" PUT "$AL_AUD_TOK" '{}')" = 404 ] && pass "the auditor's listener has no config route" || fail "the auditor's listener serves /config"
   # A backup's export and a restore's import are the admin's link alone (ADR 0013): no token and the auditor's token are refused on the
   # admin's listener, and the auditor's listener has neither route.
   for route in /exports /imports; do
-    [ "$(al_call "$AL_ADMIN" "$AL_ADMIN_IP" POST "$route")" = 401 ] && pass "no token: 401 on POST $route" || fail "POST $route answers without a token"
-    [ "$(al_call "$AL_ADMIN" "$AL_ADMIN_IP" POST "$route" "$AL_AUD_TOK")" = 401 ] && pass "the auditor's token does not open POST $route" || fail "the auditor's token opened POST $route"
-    [ "$(al_call "$AL_AUD" "$AL_AUD_IP" POST "$route" "$AL_AUD_TOK")" = 404 ] && pass "the auditor's listener has no $route route" || fail "the auditor's listener serves $route"
+    [ "$(http "$AL_ADMIN" "http://$AL_ADMIN_IP:8085/api/alerter/v1$route" POST)" = 401 ] && pass "no token: 401 on POST $route" || fail "POST $route answers without a token"
+    [ "$(http "$AL_ADMIN" "http://$AL_ADMIN_IP:8085/api/alerter/v1$route" POST "$AL_AUD_TOK")" = 401 ] && pass "the auditor's token does not open POST $route" || fail "the auditor's token opened POST $route"
+    [ "$(http "$AL_AUD" "http://$AL_AUD_IP:8085/api/alerter/v1$route" POST "$AL_AUD_TOK")" = 404 ] && pass "the auditor's listener has no $route route" || fail "the auditor's listener serves $route"
   done
-  [ "$(al_call "$EDGE" "$AL_AUD_IP" GET /health)" = 0 ] && pass "a container on edge cannot reach the alerter" || fail "the alerter is reachable from edge"
+  [ "$(http "$EDGE" "http://$AL_AUD_IP:8085/api/alerter/v1/health" GET)" = 0 ] && pass "a container on edge cannot reach the alerter" || fail "the alerter is reachable from edge"
   # The admin gives it its settings with no command (an alerter with no channel is given an empty set, so that it answers): after a
   # few seconds the status shows a configuration, and a test alert says that nothing is set up.
   have=null
@@ -709,7 +692,7 @@ print(json.load(urllib.request.urlopen(req, timeout=4))['config_version'])" 2>/d
     [ -n "$have" ] && [ "$have" != None ] && break; sleep 2
   done
   [ -n "$have" ] && [ "$have" != None ] && pass "the admin gave the alerter its settings, with no command" || fail "the alerter has no configuration: '$have'"
-  [ "$(al_call "$AL_ADMIN" "$AL_ADMIN_IP" POST /test "$AL_ADM_TOK")" = 200 ] && pass "configured, POST /test answers" || fail "a configured alerter did not answer POST /test"
+  [ "$(http "$AL_ADMIN" "http://$AL_ADMIN_IP:8085/api/alerter/v1/test" POST "$AL_ADM_TOK")" = 200 ] && pass "configured, POST /test answers" || fail "a configured alerter did not answer POST /test"
   # Its own link to the auditor works end to end: its token is accepted there, and the auditor notes its request.
   ar=$(py --network "$AL_AUD" -- "
 import urllib.request, json
@@ -799,7 +782,7 @@ call('DELETE', '/api/admin/v1/audit/session')" 2>&1 | tail -1)
       done
       [ -n "$got" ] && pass "a gateway stopped for more than five minutes raised component_silent, naming its link" || fail "no component_silent reached the sink within ten minutes of stopping the gateway"
       docker start "$GW" >/dev/null 2>&1
-      for i in $(seq 1 30); do [ "$(docker inspect -f '{{.State.Health.Status}}' "$GW")" = healthy ] && break; sleep 2; done
+      wait_healthy "$GW"
       [ "$(docker inspect -f '{{.State.Health.Status}}' "$GW")" = healthy ] && pass "the gateway is healthy again" || fail "the gateway did not come back"
     else
       echo "SKIP  a stopped gateway raising component_silent (about 5 minutes: set ASKBAR_SLOW_CHECKS=1 to run it)"
@@ -878,10 +861,8 @@ docker run --rm --entrypoint sh "$SERVER_IMG" -c 'test -e /usr/local/bin/askbar-
   && fail "the server image holds the admin binary" || pass "the server image holds no admin binary"
 refused "the admin has no /secrets" docker exec "$ADMIN" test -e /secrets
 modes_ok=1
-for f in "$ADMIN:/admin-secrets/admin.key"; do
-  m=$(docker exec "${f%%:*}" stat -c %a "${f#*:}" 2>/dev/null)
-  [ "$m" = 600 ] || { fail "${f#*:} has mode ${m:-missing}, expected 600"; modes_ok=0; }
-done
+m=$(docker exec "$ADMIN" stat -c %a /admin-secrets/admin.key 2>/dev/null)
+[ "$m" = 600 ] || { fail "/admin-secrets/admin.key has mode ${m:-missing}, expected 600"; modes_ok=0; }
 # Caddy reads these two through group 10001 (no CAP_DAC_OVERRIDE, ADR 0032), so they are 0640, not 0600.
 for f in self.key cf_token; do
   docker exec "$ADMIN" test -e "/caddy-secrets/$f" || continue
@@ -916,17 +897,8 @@ for label, needle in (('plaintext database', 'SQLite format 3'), ('provider key'
     print(label, 'FOUND' if needle.encode() in raw else 'absent')
 call('DELETE', '/api/admin/v1/providers/' + provider_id)" 2>&1)
 printf '%s\n' "$out" | grep -q '^names manifest.json,backup-key.age,admin.age,server.age,alerter.age,cpa.age,audit.age$' && pass "the backup is a bundle of a manifest, the protected key and the admin's, the server's, the alerter's, cpa's and the auditor's encrypted exports" || fail "backup contents: $out"
-# Only the admin mounts the backup volume (ADR 0013, D27): it is where backups are kept, and where the host may mount a NAS share.
-BACKUP_HOLDERS=""
-ADMIN_ID=$(docker inspect -f '{{.Id}}' "$ADMIN")
-for c in $(docker compose -p "$PROJECT" ps -aq 2>/dev/null); do
-  case " $(docker inspect -f '{{range .Mounts}}{{.Name}} {{end}}' "$c") " in
-    *" ${PROJECT}_backup "*) BACKUP_HOLDERS="$BACKUP_HOLDERS $(docker inspect -f '{{.Id}}' "$c")";;
-  esac
-done
-[ "$BACKUP_HOLDERS" = " $ADMIN_ID" ] && pass "only the admin mounts the backup volume" || fail "the backup volume is mounted by:$BACKUP_HOLDERS (the admin is $ADMIN_ID)"
+# Only the admin mounts the backup volume, read-write (ADR 0013, D27): section 0.
 check "the admin can write to /backup" docker exec "$ADMIN" sh -c 'touch /backup/.isolation-check && rm /backup/.isolation-check'
-[ "$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/backup"}}{{.RW}}{{end}}{{end}}' "$ADMIN")" = true ] && pass "/backup is mounted read-write in the admin" || fail "/backup is not writable in the admin"
 check "the server keeps control.db and a file per space under /data" docker exec "$SERVER" sh -c 'test -f /data/control.db && ls /data/spaces/*.db'
 refused "the server makes no askbar.db (the layout before spaces)" docker exec "$SERVER" test -e /data/askbar.db
 # The contract changed (plan step 6.2): the backup used to be a plain tar with the secrets taken out; it is now encrypted and
@@ -1026,20 +998,7 @@ if ! command -v python3 >/dev/null 2>&1; then
 elif [ "$(docker inspect -f '{{.State.Running}}' "$LOAD_MOCK" 2>/dev/null)" != true ]; then
   note "latency through Caddy: $LOAD_MOCK is not running (it is in the dev profile)"
 else
-  load_set=$(admin_script "$(admin_login)
-import json, uuid
-s, body = call('POST', '/api/admin/v1/providers', {'name': 'load-' + uuid.uuid4().hex[:6], 'type': 'openai', 'base_url': 'http://mock-llm:8765/v1', 'model': 'm', 'api_key': 'sk-load-check'})
-assert s == 201, (s, body)
-pid = json.loads(body)['id']
-s, cat = call('GET', '/api/admin/v1/catalog'); cat = json.loads(cat)
-cat['models'].append({'provider_id': pid, 'model': 'm'}); cat['default'] = pid + '/m'
-s, body = call('PUT', '/api/admin/v1/catalog', cat); assert s == 200, (s, body)
-s, users = call('GET', '/api/admin/v1/users'); users = json.loads(users)
-if not users:
-    s, made = call('POST', '/api/admin/v1/users', {'name': 'load user'}); users = [json.loads(made)]
-s, body = call('POST', '/api/admin/v1/users/' + users[0]['id'] + '/pairing-keys', {'name': 'load client'})
-assert s == 200, (s, body)
-print('LOAD', pid, json.loads(body)['pairing'])" 2>&1 | grep '^LOAD ' | tail -1)
+  load_set=$(admin_setup_provider LOAD load sk-load-check 2>&1 | grep '^LOAD ' | tail -1)
   if [ -z "$load_set" ]; then
     note "latency through Caddy: could not set up a provider, an approved model and a client"
   else
@@ -1050,14 +1009,7 @@ print('LOAD', pid, json.loads(body)['pairing'])" 2>&1 | grep '^LOAD ' | tail -1)
     out=$(docker exec -i "$LOAD_MOCK" python3 - mock http://127.0.0.1:8765/v1 --rounds 10 < tests/e2e/load_scenario.py 2>&1) \
       && note "$out" || note "the mock model's own latency did not run: $out"
     # Put the catalog back as it was and take the provider away again.
-    admin_script "$(admin_login)
-import json
-s, cat = call('GET', '/api/admin/v1/catalog'); cat = json.loads(cat)
-cat['models'] = [m for m in cat['models'] if m['provider_id'] != '$load_pid']
-if (cat.get('default') or '').startswith('$load_pid/'):
-    cat['default'] = (cat['models'][0]['provider_id'] + '/' + cat['models'][0]['model']) if cat['models'] else None
-call('PUT', '/api/admin/v1/catalog', cat)
-call('DELETE', '/api/admin/v1/providers/$load_pid')" >/dev/null 2>&1 || note "latency through Caddy: the provider it made could not be removed"
+    admin_cleanup_provider "$load_pid" >/dev/null 2>&1 || note "latency through Caddy: the provider it made could not be removed"
   fi
 fi
 
@@ -1116,20 +1068,7 @@ if ! command -v python3 >/dev/null 2>&1; then
 else
   # A provider the mock model answers for, an approved model, a person and a client, as the latency block makes.
   drill_compose up -d --no-build mock-llm >/dev/null 2>&1
-  drill_set=$(admin_script "$(admin_login)
-import json, uuid
-s, body = call('POST', '/api/admin/v1/providers', {'name': 'drill-' + uuid.uuid4().hex[:6], 'type': 'openai', 'base_url': 'http://mock-llm:8765/v1', 'model': 'm', 'api_key': 'sk-drill-check'})
-assert s == 201, (s, body)
-pid = json.loads(body)['id']
-s, cat = call('GET', '/api/admin/v1/catalog'); cat = json.loads(cat)
-cat['models'].append({'provider_id': pid, 'model': 'm'}); cat['default'] = pid + '/m'
-s, body = call('PUT', '/api/admin/v1/catalog', cat); assert s == 200, (s, body)
-s, users = call('GET', '/api/admin/v1/users'); users = json.loads(users)
-if not users:
-    s, made = call('POST', '/api/admin/v1/users', {'name': 'drill user'}); users = [json.loads(made)]
-s, body = call('POST', '/api/admin/v1/users/' + users[0]['id'] + '/pairing-keys', {'name': 'drill client'})
-assert s == 200, (s, body)
-print('DRILL', pid, json.loads(body)['pairing'])" 2>&1 | grep '^DRILL ' | tail -1)
+  drill_set=$(admin_setup_provider DRILL drill sk-drill-check 2>&1 | grep '^DRILL ' | tail -1)
   if [ -n "$drill_set" ]; then
     drill_pid=$(printf '%s' "$drill_set" | cut -d' ' -f2)
     drill_token=$(drill_probe pair https://localhost "$(printf '%s' "$drill_set" | cut -d' ' -f3)")
@@ -1266,14 +1205,7 @@ print('BANNER', state)" 2>&1 | grep '^BANNER ' | tail -1)
   for c in $DRILL_SERVICES; do drill_healthy "$c" || fail "$c is not healthy at the end of the drills"; done
   [ "$FAILS" -eq 0 ] && pass "every service is healthy at the end of the drills" || true
   # The provider the drills made goes, and the catalog is put back as it was.
-  admin_script "$(admin_login)
-import json
-s, cat = call('GET', '/api/admin/v1/catalog'); cat = json.loads(cat)
-cat['models'] = [m for m in cat['models'] if m['provider_id'] != '$drill_pid']
-if (cat.get('default') or '').startswith('$drill_pid/'):
-    cat['default'] = (cat['models'][0]['provider_id'] + '/' + cat['models'][0]['model']) if cat['models'] else None
-call('PUT', '/api/admin/v1/catalog', cat)
-call('DELETE', '/api/admin/v1/providers/$drill_pid')" >/dev/null 2>&1 || note "the failure drills' provider could not be removed"
+  admin_cleanup_provider "$drill_pid" >/dev/null 2>&1 || note "the failure drills' provider could not be removed"
 fi
 
 echo
