@@ -179,7 +179,7 @@ Branch `refactor/admin-links-and-ui`. PR title `refactor(admin): share link code
   Files: `services/admin/src/admin_api.rs`, new `services/admin/src/admin_api/{settings,sealed}.rs`.
   Do: move the settings section and the sealed-content section without changes.
   Accept: the route table and the OpenAPI test are unchanged.
-- [ ] **R4.4** `test(admin): share fake link servers` · haiku
+- [x] **R4.4** `test(admin): share fake link servers` · haiku · dropped: the copies of `fake_status` and `fake_config` differ per service, and `fake_restart` shares five lines that each file would still wrap with its own token check, so sharing it adds code and saves none
   Files: `services/admin/tests/{common/mod.rs,alerts.rs,gateway.rs,backup_bundle.rs,restore.rs}`.
   Do: move `fake_status`, `fake_restart`, `fake_config`, `Fake` and `fake_alerter` into `tests/common`. Merge two copies only where their response bodies match.
 - [ ] **R4.5** `refactor(ui): settings section and number field macros` · haiku
