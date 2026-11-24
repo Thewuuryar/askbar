@@ -4,7 +4,7 @@ Part of [the tiered routing plan](../plan-tiered-routing.md). Its How to run, Ow
 
 Expand into detailed steps at phase start. Needs Phase 5A. Values introduced here (task tool-call default 8 and range 1 to 32, research waits 8 s and 90 s, summary size 800 tokens, decider and judge thresholds) go in `constants.rs`, with bounds in `askbar-proto` where a service checks them (approval expiry is already in Phase 5A); the MCP gateway gets its values through the config push built in P5A.18.
 
-- **P5.1 to P5.5, P5.11, P5.12, P5.16** moved to 5A: P5.1 became P5A.2 (ADR 0057); P5.2 to P5.5 keep their IDs there; P5.11 is P5A.6 to P5A.12; P5.12 is P5A.13; P5.16 is P5A.20.
+- **P5.1 to P5.5, P5.11, P5.12, P5.16** moved to 5A: P5.1 became P5A.2 (the MCP gateway ADR); P5.2 to P5.5 keep their IDs there; P5.11 is P5A.6 to P5A.12; P5.12 is P5A.13; P5.16 is P5A.20.
 - [ ] **P5.6** `feat(model-gateway): add POST /decide for the judge role` · sonnet · fixed input, fixed output format, anything else refuses; pinned model and backup.
 - [ ] **P5.7** `feat(model-gateway): run the decider cascade for the judge in shadow` · sonnet · thresholds from labeled tool actions.
 - [ ] **P5.8** `feat(model-gateway): add step_check and research decisions to /decide` · sonnet

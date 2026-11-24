@@ -197,7 +197,7 @@ Until then, roles use admin-pinned models, usage counts against token budgets pe
 - 1.0 released.
 - G8: egress proxy software and licence, new container.
 - G13: agentgateway or ContextForge, after the P5A.1 spike.
-- G9: signing crate, the `mcp-gateway` and `searxng` containers, and accepting ADR 0057.
+- G9: signing crate, the `mcp-gateway` and `searxng` containers, and accepting the MCP gateway ADR.
 - G14: search destinations.
 - G15: fetch egress rule.
 
@@ -213,7 +213,7 @@ Gate definitions are in the [tiered routing plan](plan-tiered-routing.md#owner-g
 | Injection markers | Track 1 datamarks fetched text. Track 3's injection canaries are now a Later item |
 | Roles | Track 1 adds roles pinned to models, with the type names tiered routing uses; track 4 adds tiers, weights and the decider |
 | Judge | Quick search: fixed rules, no judge. Research reports: the judge on a pinned model. Track 4: the decider cascade in front of it (P5.7) |
-| ADR numbers | 0056: tiered routing (reserved). 0057: MCP gateway (track 1, P5A.2). Everything else is an amendment |
+| ADR numbers | 0056: egress proxy (phase 4). Tiered routing and the MCP gateway take the next free numbers when written (the gateway at P5A.2). Everything else is an amendment |
 | Agents with MCP tools | End of track 4. Web search doesn't depend on them |
 
 ## Sources
