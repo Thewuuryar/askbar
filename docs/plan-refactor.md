@@ -157,7 +157,7 @@ Branch `refactor/service-boot`. PR title `refactor(model-gateway): share service
 - [x] **R3.5** `refactor(auditor): remove a re-export, a single-use trait and an unused parameter` · haiku
   Files: `services/auditor/src/{lib,rules}.rs`.
   Do: drop the `rusqlite_conn` module, make `ClassName` a function, and remove `_now` from `Rules::seen` and its caller.
-- [ ] **R3.6** `refactor(compose): one runtime base stage in the Dockerfile` · sonnet · gate G-R2
+- [x] **R3.6** `refactor(compose): one runtime base stage in the Dockerfile` · sonnet · gate G-R2 · dropped: the four stages share no instruction that has no per-service value (user, directories, `ENV`, `HEALTHCHECK`, `ENTRYPOINT`), and a Dockerfile cannot pass an `ARG` to a parent stage, so a base stage removes no lines. Only the base image pin repeats; Dependabot tracks it.
   Files: `Dockerfile`.
   Do: the auditor, `model-gateway`, alerter and server runtime stages share one base stage with `ARG`s for the binary name and uid. Keep each stage's uid, owned directories and volumes explicit.
   Accept: `scripts/check-isolation.sh` passes, including the uid and owner checks.
