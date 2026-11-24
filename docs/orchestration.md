@@ -28,6 +28,7 @@ Start a new session for each stage or phase, or when the context is long (`/cont
    - Read `git show --stat HEAD`, then the diff file by file (`git show HEAD -- <path>`), against the step's Accept line and the [review list](#review-list). Skip lockfiles and generated fixtures.
    - Send fixes back to the same agent (`SendMessage`), which amends its commit.
 5. The agent commits with the step's exact subject. Check the body: why, deviations, any test changed and why, and the attribution lines your session was given. Tick the step's box in the same commit.
+   - Tick the step's line in [task-tracker.md](task-tracker.md) in the same commit.
 6. Push the branch after each step with `git push -u origin <branch>`. Never force-push, never push to `main`, never merge.
 7. At stage end:
    - Run the full checks.
