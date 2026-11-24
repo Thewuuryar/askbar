@@ -3,7 +3,7 @@
 
 use askbar_audit::chain::{self, GENESIS};
 use askbar_audit::rusqlite::Connection;
-use askbar_audit::{AdminActionWrite, AuditDb, Kind, PayloadWrite, Record, Recorder, SpanFinish, SpanStart};
+use askbar_audit::{AdminActionWrite, AuditDb, PayloadWrite, Record, Recorder, SpanFinish, SpanStart};
 use std::path::PathBuf;
 
 fn dir() -> PathBuf {
@@ -15,12 +15,22 @@ fn now() -> i64 {
 }
 
 fn start(id: &str, at: i64) -> SpanStart {
-    let mut s = SpanStart::new("t1", Kind::Turn, "reply").who("u1", Some("c1"));
-    s.id = id.into();
-    s.started_at = at;
-    s.service = Some("model-gateway".into());
-    s.boot_id = Some("boot-1".into());
-    s
+    SpanStart {
+        id: id.into(),
+        trace_id: "t1".into(),
+        kind: "turn".into(),
+        name: "reply".into(),
+        started_at: at,
+        user_id: Some("u1".into()),
+        client_id: Some("c1".into()),
+        service: Some("model-gateway".into()),
+        boot_id: Some("boot-1".into()),
+        ..Default::default()
+    }
+}
+
+fn finish(id: &str) -> SpanFinish {
+    SpanFinish { id: id.into(), status: "done".into(), ended_at: now(), ..Default::default() }
 }
 
 fn payload(span: &str, at: i64) -> PayloadWrite {
@@ -47,7 +57,7 @@ async fn filled() -> (Recorder, PathBuf) {
     let t = now();
     rec.append(Record::Start(start("s1", t))).await.unwrap();
     rec.append(Record::Payload(payload("s1", t))).await.unwrap();
-    rec.append(Record::Finish(SpanFinish::new("s1", "done"))).await.unwrap();
+    rec.append(Record::Finish(finish("s1"))).await.unwrap();
     rec.append(Record::Start(start("s2", t))).await.unwrap();
     rec.append(Record::AdminAction(action("a1"))).await.unwrap();
     (rec, path)
@@ -90,7 +100,7 @@ async fn every_record_is_chained_in_order_and_a_retry_adds_nothing() {
     let t = now();
     rec.append(Record::Start(start("s1", t))).await.unwrap();
     rec.append(Record::AdminAction(action("a1"))).await.unwrap();
-    rec.append(Record::Finish(SpanFinish::new("s1", "done"))).await.unwrap();
+    rec.append(Record::Finish(finish("s1"))).await.unwrap();
     let n: i64 = c.query_row("SELECT COUNT(*) FROM chain", [], |r| r.get(0)).unwrap();
     assert_eq!(n, 5);
 
@@ -184,7 +194,7 @@ async fn a_prune_is_chained_and_explains_what_it_removed_and_nothing_else() {
     let old = now() - 40 * 86400;
     rec.append(Record::Start(start("old", old))).await.unwrap();
     rec.append(Record::Payload(payload("old", old))).await.unwrap();
-    rec.append(Record::Finish(SpanFinish::new("old", "done"))).await.unwrap();
+    rec.append(Record::Finish(finish("old"))).await.unwrap();
     rec.append(Record::Start(start("new", now()))).await.unwrap();
     rec.append(Record::AdminAction(action("a1"))).await.unwrap();
     let before = chain::head(&reader(&path)).unwrap().seq;

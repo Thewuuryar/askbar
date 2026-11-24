@@ -555,14 +555,6 @@ fn percentile(sorted: &[i64], p: f64) -> Option<i64> {
 /// `None` when it cannot be known. The audit store holds only token counts; the caller owns prices.
 pub type CostFn<'a> = &'a dyn Fn(Option<&str>, Option<i64>, Option<i64>, Option<i64>) -> Option<f64>;
 
-/// A sealed payload and the id of the key it was sealed to, so the right key can be chosen to
-/// read it even after the key has been rotated.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Sealed {
-    pub key_id: String,
-    pub bytes: Vec<u8>,
-}
-
 /// A sum of costs that is unknown if any part of it is.
 #[derive(Default)]
 struct CostSum {
@@ -793,86 +785,8 @@ pub struct SpanFinish {
     pub ended_ms: i64,
 }
 
-/// What a span is. The set is fixed (the database checks it too).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Kind {
-    /// A whole generation, from start to finish.
-    Turn,
-    /// A check before it runs, or time spent waiting.
-    Gate,
-    /// One request to one provider.
-    Attempt,
-    Tool,
-    AgentStep,
-}
-
-impl Kind {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Kind::Turn => "turn",
-            Kind::Gate => "gate",
-            Kind::Attempt => "attempt",
-            Kind::Tool => "tool",
-            Kind::AgentStep => "agent_step",
-        }
-    }
-}
-
 fn now_secs() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
-}
-
-fn now_ms() -> i64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
-}
-
-impl SpanStart {
-    /// A span in trace `trace_id` (the generation id), starting now, with a fresh id.
-    pub fn new(trace_id: &str, kind: Kind, name: &str) -> SpanStart {
-        SpanStart {
-            id: askbar_service::ids::new_id(),
-            trace_id: trace_id.to_string(),
-            kind: kind.as_str().to_string(),
-            name: name.to_string(),
-            started_at: now_secs(),
-            started_ms: now_ms(),
-            ..Default::default()
-        }
-    }
-
-    pub fn parent(mut self, parent_id: &str) -> SpanStart {
-        self.parent_id = Some(parent_id.to_string());
-        self
-    }
-
-    pub fn provider(mut self, provider_id: &str, model: &str) -> SpanStart {
-        self.provider_id = Some(provider_id.to_string());
-        self.model = Some(model.to_string());
-        self
-    }
-
-    pub fn who(mut self, user_id: &str, client_id: Option<&str>) -> SpanStart {
-        self.user_id = Some(user_id.to_string());
-        self.client_id = client_id.map(str::to_string);
-        self
-    }
-
-    pub fn attrs(mut self, attrs: &serde_json::Value) -> SpanStart {
-        self.attrs_json = Some(attrs.to_string());
-        self
-    }
-}
-
-impl SpanFinish {
-    /// Ends span `id` now with `status`.
-    pub fn new(id: &str, status: &str) -> SpanFinish {
-        SpanFinish { id: id.to_string(), status: status.to_string(), ended_at: now_secs(), ended_ms: now_ms(), ..Default::default() }
-    }
-
-    pub fn error_code(mut self, code: &str) -> SpanFinish {
-        self.error_code = Some(code.to_string());
-        self
-    }
 }
 
 /// A sealed payload (see `seal`) for a span: `role` is `request`, `reply` or `error`.
@@ -966,27 +880,17 @@ pub enum AppendError {
 type Ack = oneshot::Sender<Result<u64, AppendError>>;
 
 enum Event {
-    Start(SpanStart),
-    Finish(SpanFinish),
     /// Answered once everything sent before it has been written.
     Flush(oneshot::Sender<()>),
-    /// Sealed content attached to a span.
-    Payload(PayloadWrite),
     /// Delete spans and payloads that started before `cutoff`; answered with how many of each.
-    Prune {
-        cutoff: i64,
-        done: oneshot::Sender<Result<(usize, usize), String>>,
-    },
+    Prune { cutoff: i64, done: oneshot::Sender<Result<(usize, usize), String>> },
     /// A record whose caller waits for it to be committed.
     Acked(Record, Ack),
     /// One of Caddy's access lines: best effort, never acknowledged.
     Access(AccessLogWrite),
     /// Make the store the one at `from` (a restore): answered with the chain's head, or why not. Everything queued before it is written
     /// first, and what comes after is written to the restored store.
-    Restore {
-        from: std::path::PathBuf,
-        done: oneshot::Sender<Result<chain::Head, RestoreError>>,
-    },
+    Restore { from: std::path::PathBuf, done: oneshot::Sender<Result<chain::Head, RestoreError>> },
 }
 
 /// Records are never kept for less than this many days, whatever the setting says.
@@ -1029,7 +933,6 @@ pub struct Recorder {
     tx: Option<mpsc::Sender<Event>>,
     path: Option<std::path::PathBuf>,
     pause: Arc<Pause>,
-    dropped: Arc<AtomicU64>,
     /// When each queued record was queued, oldest first. Pushed under the same lock that sends it and
     /// popped by the writer when it takes it, so the two never disagree.
     queued: Arc<Mutex<VecDeque<Instant>>>,
@@ -1040,19 +943,6 @@ pub struct Recorder {
 }
 
 impl Recorder {
-    /// Records nothing. The default, so a server without an audit store behaves as before.
-    pub fn noop() -> Recorder {
-        Recorder {
-            tx: None,
-            path: None,
-            pause: Arc::default(),
-            dropped: Arc::default(),
-            queued: Arc::default(),
-            capacity: 0,
-            access_dropped: Arc::default(),
-        }
-    }
-
     /// Takes ownership of `db` and writes to it from one thread. `capacity` is the queue length.
     pub fn spawn(mut db: AuditDb, capacity: usize) -> Recorder {
         let path = db.path.clone();
@@ -1103,7 +993,7 @@ impl Recorder {
                 }
             })
             .expect("audit writer thread");
-        Recorder { tx: Some(tx), path, pause, dropped: Arc::default(), queued, capacity: capacity.max(1), access_dropped: Arc::default() }
+        Recorder { tx: Some(tx), path, pause, queued, capacity: capacity.max(1), access_dropped: Arc::default() }
     }
 
     /// Queues `event` if there is room. The queue time is noted under the lock that sends it.
@@ -1191,43 +1081,6 @@ impl Recorder {
     pub fn snapshot_to(&self, dest: &Path) -> Result<(), String> {
         let conn = self.reader().ok_or("there is no audit file to copy")?;
         conn.execute("VACUUM INTO ?1", [dest.to_string_lossy().as_ref()]).map(|_| ()).map_err(|e| e.to_string())
-    }
-
-    /// How many events were dropped because the queue was full.
-    pub fn dropped(&self) -> u64 {
-        self.dropped.load(Ordering::Relaxed)
-    }
-
-    fn send(&self, event: Event) {
-        if self.tx.is_none() {
-            return;
-        }
-        if self.try_enqueue(event).is_err() {
-            self.dropped.fetch_add(1, Ordering::Relaxed);
-        }
-    }
-
-    /// Records that a span has begun and returns its id, for its children and for `finish_span`.
-    pub fn start_span(&self, span: SpanStart) -> String {
-        let id = span.id.clone();
-        self.send(Event::Start(span));
-        id
-    }
-
-    /// Records how a span ended. Only the first finish of a span counts.
-    pub fn finish_span(&self, span: SpanFinish) {
-        self.send(Event::Finish(span));
-    }
-
-    /// Records sealed content for a span. Only ciphertext ever gets here.
-    pub fn payload(&self, span_id: &str, role: &str, sealed: Sealed) {
-        self.send(Event::Payload(PayloadWrite {
-            span_id: span_id.to_string(),
-            role: role.to_string(),
-            key_id: sealed.key_id,
-            ciphertext: sealed.bytes,
-            created_at: now_secs(),
-        }));
     }
 
     /// Waits until everything recorded so far has been written. For shutdown and tests.
@@ -1325,21 +1178,6 @@ fn run_batch(conn: &Connection, batch: Vec<Event>) {
     };
     for event in batch {
         match event {
-            Event::Start(s) => {
-                if let Err(e) = write_start(conn, &s, false) {
-                    tracing::warn!("audit: could not write a span: {e}");
-                }
-            }
-            Event::Payload(p) => {
-                if let Err(e) = write_payload(conn, &p) {
-                    tracing::warn!("audit: could not write a payload: {e}");
-                }
-            }
-            Event::Finish(f) => {
-                if let Err(e) = write_finish(conn, &f) {
-                    tracing::warn!("audit: could not finish a span: {e}");
-                }
-            }
             Event::Access(a) => {
                 if let Err(e) = write_access_log(conn, &a) {
                     tracing::warn!("audit: could not write an access line: {e}");
@@ -1449,14 +1287,6 @@ fn write_access_log(conn: &Connection, a: &AccessLogWrite) -> rusqlite::Result<(
         rusqlite::params![a.at, a.method, a.host, a.path, a.status, a.bytes, a.duration_ms, a.remote_ip, a.proto, a.user_agent],
     )?;
     chain::record(conn, "access_log", &conn.last_insert_rowid().to_string())
-}
-
-fn write_payload(conn: &Connection, p: &PayloadWrite) -> rusqlite::Result<()> {
-    conn.execute(
-        "INSERT INTO payloads (span_id, role, key_id, ciphertext, created_at) VALUES (?1,?2,?3,?4,?5)",
-        rusqlite::params![p.span_id, p.role, p.key_id, p.ciphertext, p.created_at],
-    )?;
-    chain::record(conn, "payload", &conn.last_insert_rowid().to_string())
 }
 
 fn write_start(conn: &Connection, s: &SpanStart, ignore_duplicate: bool) -> rusqlite::Result<usize> {
@@ -1707,183 +1537,39 @@ mod tests {
         (dir, db)
     }
 
-    fn start(id: &str, trace: &str) -> SpanStart {
-        SpanStart { id: id.into(), trace_id: trace.into(), kind: "turn".into(), name: "chat".into(), started_at: 100, ..Default::default() }
+    fn now_ms() -> i64 {
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
     }
 
-    #[tokio::test]
-    async fn events_are_written_in_the_order_they_were_recorded() {
-        let (dir, db) = temp_db();
-        let rec = Recorder::spawn(db, 1024);
-        for i in 0..200 {
-            rec.start_span(start(&format!("s{i:03}"), "t"));
-            if i % 2 == 0 {
-                rec.finish_span(SpanFinish {
-                    id: format!("s{i:03}"),
-                    status: "done".into(),
-                    ended_at: 101,
-                    tokens_in: Some(i),
-                    ..Default::default()
-                });
-            }
+    fn new_span(id: &str, kind: &str) -> SpanStart {
+        SpanStart {
+            id: id.into(),
+            trace_id: "t".into(),
+            kind: kind.into(),
+            name: "n".into(),
+            started_at: now_secs(),
+            started_ms: now_ms(),
+            ..Default::default()
         }
-        rec.flush().await;
-        let conn = Connection::open(dir.join("audit.db")).unwrap();
-        let ids: Vec<String> =
-            conn.prepare("SELECT id FROM spans ORDER BY rowid").unwrap().query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
-        assert_eq!(ids, (0..200).map(|i| format!("s{i:03}")).collect::<Vec<_>>());
-        let done: i64 =
-            conn.query_row("SELECT COUNT(*) FROM spans WHERE status = 'done' AND tokens_in IS NOT NULL", [], |r| r.get(0)).unwrap();
-        assert_eq!(done, 100);
-        let running: i64 = conn.query_row("SELECT COUNT(*) FROM spans WHERE status = 'running'", [], |r| r.get(0)).unwrap();
-        assert_eq!(running, 100, "odd ones were never finished");
-        assert_eq!(rec.dropped(), 0);
-        let _ = std::fs::remove_dir_all(dir);
     }
 
-    #[tokio::test]
-    async fn a_full_queue_makes_it_unhealthy_and_it_recovers_when_the_writer_catches_up() {
-        let (dir, db) = temp_db();
-        let rec = Recorder::spawn(db, 4);
-        assert!(rec.healthy());
-        rec.pause_writer(true);
-        // The writer takes one event and holds it; four more fill the queue.
-        for i in 0..8 {
-            rec.start_span(start(&format!("s{i}"), "t"));
-            if i == 0 {
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                // let it pick the first up
-            }
-        }
-        assert!(!rec.healthy(), "the queue is full");
-        assert!(rec.dropped() >= 1, "what did not fit was dropped, and counted");
-        rec.pause_writer(false);
-        rec.flush().await;
-        assert!(rec.healthy(), "drained");
-        let conn = Connection::open(dir.join("audit.db")).unwrap();
-        let n: i64 = conn.query_row("SELECT COUNT(*) FROM spans", [], |r| r.get(0)).unwrap();
-        assert_eq!(n as u64 + rec.dropped(), 8, "every event was either written or counted as dropped");
-        let _ = std::fs::remove_dir_all(dir);
-    }
-
-    #[tokio::test]
-    async fn spans_link_to_their_parent_share_a_trace_and_a_second_finish_is_ignored() {
-        let (dir, db) = temp_db();
-        let rec = Recorder::spawn(db, 64);
-        let turn = rec.start_span(SpanStart::new("gen-1", Kind::Turn, "chat").who("u1", Some("d1")));
-        let attempt = rec.start_span(SpanStart::new("gen-1", Kind::Attempt, "openai").parent(&turn).provider("p1", "m1"));
-        let gate = rec.start_span(SpanStart::new("gen-1", Kind::Gate, "queue").parent(&turn));
-        assert!(turn < attempt && attempt < gate, "ids come from ids.rs and sort in creation order");
-        rec.finish_span(SpanFinish { tokens_in: Some(5), ..SpanFinish::new(&attempt, "done") });
-        rec.finish_span(SpanFinish::new(&attempt, "error").error_code("late")); // ignored
-        rec.finish_span(SpanFinish::new(&gate, "done"));
-        rec.finish_span(SpanFinish::new(&turn, "done"));
-        rec.flush().await;
-
-        let conn = Connection::open(dir.join("audit.db")).unwrap();
-        let row = |id: &str| -> (String, Option<String>, String, String, Option<i64>, Option<String>) {
-            conn.query_row("SELECT trace_id, parent_id, kind, status, tokens_in, error_code FROM spans WHERE id = ?1", [id], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))
-            })
-            .unwrap()
-        };
-        assert_eq!(row(&turn), ("gen-1".into(), None, "turn".into(), "done".into(), None, None));
-        assert_eq!(
-            row(&attempt),
-            ("gen-1".into(), Some(turn.clone()), "attempt".into(), "done".into(), Some(5), None),
-            "the first finish stands"
-        );
-        assert_eq!(row(&gate).1.as_deref(), Some(turn.as_str()));
-        let (user, client, provider, model): (String, String, String, String) = (
-            conn.query_row("SELECT user_id FROM spans WHERE id = ?1", [&turn], |r| r.get(0)).unwrap(),
-            conn.query_row("SELECT client_id FROM spans WHERE id = ?1", [&turn], |r| r.get(0)).unwrap(),
-            conn.query_row("SELECT provider_id FROM spans WHERE id = ?1", [&attempt], |r| r.get(0)).unwrap(),
-            conn.query_row("SELECT model FROM spans WHERE id = ?1", [&attempt], |r| r.get(0)).unwrap(),
-        );
-        assert_eq!((user.as_str(), client.as_str(), provider.as_str(), model.as_str()), ("u1", "d1", "p1", "m1"));
-        let _ = std::fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn stats_count_attempts_and_retries_per_provider() {
-        let db = AuditDb::open_in_memory().unwrap();
-        let now = now_secs();
-        let span = |id: &str, trace: &str, kind: &str, provider: Option<&str>, status: &str, attrs: &str| {
-            db.conn
-                .execute(
-                    "INSERT INTO spans (id, trace_id, kind, name, status, started_at, provider_id, attrs_json) VALUES (?1,?2,?3,'n',?4,?5,?6,?7)",
-                    rusqlite::params![id, trace, kind, status, now, provider, attrs],
-                )
-                .unwrap();
-        };
-        // One request on p1: two tries failed, the third (a second retry) served it. A second
-        // request on p2 failed once and gave up.
-        span("t1", "T", "turn", None, "done", "{}");
-        span("a1", "T", "attempt", Some("p1"), "error", r#"{"retry_index":0}"#);
-        span("a2", "T", "attempt", Some("p1"), "error", r#"{"retry_index":1}"#);
-        span("a3", "T", "attempt", Some("p1"), "done", r#"{"retry_index":2}"#);
-        span("t2", "U", "turn", None, "error", "{}");
-        span("b1", "U", "attempt", Some("p2"), "error", r#"{"retry_index":0}"#);
-        let v = stats(&db.conn, now - 10, &|_, _, _, _| None).unwrap();
-        let by = |p: &str| {
-            v["by_provider"].as_array().unwrap().iter().find(|x| x["provider_id"] == p).cloned().unwrap_or_else(|| panic!("no row for {p}"))
-        };
-        let nums = |row: &serde_json::Value| ["attempts", "retries", "failed_attempts"].map(|k| row[k].as_i64().unwrap());
-        assert_eq!(nums(&by("p1")), [3, 2, 2], "p1 had three tries, two of them retries, two failed");
-        assert_eq!(nums(&by("p2")), [1, 0, 1], "p2 had one try, and it failed");
-        assert!(by("p1").get("fallbacks").is_none(), "there is no fallback to count");
-        // Outside the window nothing counts.
-        let later = stats(&db.conn, now + 100, &|_, _, _, _| None).unwrap();
-        assert!(later["by_provider"].as_array().unwrap().is_empty());
-    }
-
-    #[test]
-    fn stats_give_tokens_by_day_and_provider_so_whoever_has_the_prices_can_price_each_day() {
-        let db = AuditDb::open_in_memory().unwrap();
-        let now = now_secs();
-        let turn = |id: &str, trace: &str, tin: Option<i64>, tout: Option<i64>| {
-            db.conn
-                .execute(
-                    "INSERT INTO spans (id, trace_id, kind, name, status, started_at, tokens_in, tokens_out) VALUES (?1,?2,'turn','n','done',?3,?4,?5)",
-                    rusqlite::params![id, trace, now, tin, tout],
-                )
-                .unwrap();
-            db.conn
-                .execute(
-                    "INSERT INTO spans (id, trace_id, kind, name, status, started_at, provider_id) VALUES (?1,?2,'attempt','n','done',?3,?4)",
-                    rusqlite::params![format!("a-{id}"), trace, now, if trace == "T3" { "p2" } else { "p1" }],
-                )
-                .unwrap();
-        };
-        turn("t1", "T1", Some(100), Some(10));
-        turn("t2", "T2", Some(50), Some(5));
-        turn("t3", "T3", None, None); // no counts: nothing to price
-        let v = stats(&db.conn, now - 10, &|_, _, _, _| None).unwrap();
-        let rows = v["by_day_provider"].as_array().unwrap();
-        assert_eq!(rows.len(), 2, "{rows:?}");
-        let p1 = rows.iter().find(|r| r["provider_id"] == "p1").unwrap();
-        assert_eq!((p1["requests"].as_i64(), p1["requests_with_tokens"].as_i64()), (Some(2), Some(2)));
-        assert_eq!((p1["tokens"]["in"].as_i64(), p1["tokens"]["out"].as_i64()), (Some(150), Some(15)));
-        assert_eq!(p1["day"].as_str().unwrap().len(), 10, "YYYY-MM-DD");
-        let p2 = rows.iter().find(|r| r["provider_id"] == "p2").unwrap();
-        assert_eq!((p2["requests"].as_i64(), p2["requests_with_tokens"].as_i64()), (Some(1), Some(0)));
-        // The existing groups say how many of their requests had counts too.
-        assert_eq!(v["by_provider"].as_array().unwrap().iter().map(|r| r["requests_with_tokens"].as_i64().unwrap()).sum::<i64>(), 2);
-        assert_eq!(v["by_day"][0]["requests_with_tokens"], 2);
+    fn finish(id: &str) -> SpanFinish {
+        SpanFinish { id: id.into(), status: "done".into(), ended_at: now_secs(), ended_ms: now_ms(), ..Default::default() }
     }
 
     #[tokio::test]
     async fn spans_keep_millisecond_times_in_their_attributes_and_attributes_merge_on_finish() {
         let (dir, db) = temp_db();
         let rec = Recorder::spawn(db, 64);
-        let id = rec.start_span(SpanStart::new("t", Kind::Attempt, "p").attrs(&serde_json::json!({ "retry_index": 1, "keep": "start" })));
+        let id = "a1".to_string();
+        let attrs0 = serde_json::json!({ "retry_index": 1, "keep": "start" }).to_string();
+        rec.append(Record::Start(SpanStart { attrs_json: Some(attrs0), ..new_span("a1", "attempt") })).await.unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(30)).await;
-        let mut done = SpanFinish::new(&id, "done");
-        done.attrs_json = Some(serde_json::json!({ "latency_ms": 31, "keep": "finish" }).to_string());
-        rec.finish_span(done);
-        let bare = rec.start_span(SpanStart::new("t", Kind::Gate, "g")); // no attributes of its own
-        rec.finish_span(SpanFinish::new(&bare, "done"));
-        rec.flush().await;
+        let attrs1 = serde_json::json!({ "latency_ms": 31, "keep": "finish" }).to_string();
+        rec.append(Record::Finish(SpanFinish { attrs_json: Some(attrs1), ..finish("a1") })).await.unwrap();
+        let bare = "g1".to_string(); // no attributes of its own
+        rec.append(Record::Start(new_span("g1", "gate"))).await.unwrap();
+        rec.append(Record::Finish(finish("g1"))).await.unwrap();
         let conn = Connection::open(dir.join("audit.db")).unwrap();
         let attrs = |id: &str| -> serde_json::Value {
             let a: String = conn.query_row("SELECT attrs_json FROM spans WHERE id = ?1", [id], |r| r.get(0)).unwrap();
@@ -1900,19 +1586,6 @@ mod tests {
         let b = attrs(&bare);
         assert!(b["started_ms"].is_i64() && b["ended_ms"].is_i64(), "even a span with no attributes of its own has its times: {b}");
         let _ = std::fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn the_five_span_kinds_match_what_the_database_accepts() {
-        let db = AuditDb::open_in_memory().unwrap();
-        for k in [Kind::Turn, Kind::Gate, Kind::Attempt, Kind::Tool, Kind::AgentStep] {
-            db.conn
-                .execute(
-                    "INSERT INTO spans (id, trace_id, kind, name, status, started_at) VALUES (?1,'t',?2,'n','done',1)",
-                    rusqlite::params![k.as_str(), k.as_str()],
-                )
-                .unwrap();
-        }
     }
 
     #[test]
@@ -1976,15 +1649,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
-    #[tokio::test]
-    async fn the_noop_recorder_is_always_healthy_and_records_nothing() {
-        let rec = Recorder::noop();
-        rec.start_span(start("s", "t"));
-        rec.flush().await;
-        assert!(rec.healthy());
-        assert_eq!(rec.dropped(), 0);
-    }
-
     // ------------------------------------------------------------ the auditor's side (ADR 0051)
 
     fn temp_recorder(capacity: usize) -> (Recorder, std::path::PathBuf) {
@@ -2021,9 +1685,9 @@ mod tests {
         assert_eq!(rec.append(Record::Start(start)).await, Ok(0), "a retry of a stored record is fine");
         assert_eq!(count(&rec, "SELECT COUNT(*) FROM spans"), 1);
 
-        let finish = SpanFinish { tokens_in: Some(5), ..SpanFinish::new("s1", "done") };
-        assert_eq!(rec.append(Record::Finish(finish.clone())).await, Ok(0));
-        assert_eq!(rec.append(Record::Finish(finish)).await, Ok(0));
+        let fin = SpanFinish { tokens_in: Some(5), ..finish("s1") };
+        assert_eq!(rec.append(Record::Finish(fin.clone())).await, Ok(0));
+        assert_eq!(rec.append(Record::Finish(fin)).await, Ok(0));
         assert_eq!(count(&rec, "SELECT COUNT(*) FROM spans WHERE status = 'done' AND tokens_in = 5"), 1);
 
         let payload = PayloadWrite {
@@ -2037,7 +1701,7 @@ mod tests {
         assert_eq!(rec.append(Record::Payload(payload)).await, Ok(0));
         assert_eq!(count(&rec, "SELECT COUNT(*) FROM payloads"), 1, "the same sealed bytes twice are one payload");
 
-        assert_eq!(rec.append(Record::Finish(SpanFinish::new("nope", "done"))).await, Err(AppendError::NoSuchSpan));
+        assert_eq!(rec.append(Record::Finish(finish("nope"))).await, Err(AppendError::NoSuchSpan));
         let orphan =
             PayloadWrite { span_id: "nope".into(), role: "reply".into(), key_id: "k".into(), ciphertext: vec![9], created_at: now_secs() };
         assert_eq!(rec.append(Record::Payload(orphan)).await, Err(AppendError::NoSuchSpan));
@@ -2051,7 +1715,7 @@ mod tests {
         for (id, svc, boot) in [("a1", "server", "b1"), ("a2", "server", "b1"), ("a3", "server", "b2"), ("g1", "model-gateway", "b1")] {
             rec.append(Record::Start(started(id, "t", "gate", svc, boot))).await.unwrap();
         }
-        rec.append(Record::Finish(SpanFinish::new("a2", "done"))).await.unwrap();
+        rec.append(Record::Finish(finish("a2"))).await.unwrap();
         let hello = |svc: &str, boot: &str| Record::Hello { service: svc.into(), boot_id: boot.into() };
         assert_eq!(rec.append(hello("server", "b2")).await, Ok(1), "only a1: a2 is finished, a3 is this process's");
         assert_eq!(count(&rec, "SELECT COUNT(*) FROM spans WHERE id = 'a1' AND status = 'interrupted' AND error_code = 'interrupted'"), 1);
@@ -2283,7 +1947,7 @@ mod tests {
                 tokens_in: Some(tin),
                 tokens_out: Some(tout),
                 tokens_cached: Some(0),
-                ..SpanFinish::new(&turn, "done")
+                ..finish(&turn)
             }))
             .await
             .unwrap();

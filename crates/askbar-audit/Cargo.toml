@@ -7,7 +7,6 @@ edition = "2021"
 description = "The audit store: spans and sealed payloads in their own SQLite file (ADR 0052)"
 
 [dependencies]
-askbar-service = { path = "../askbar-service" }
 base64 = "0.22"
 rusqlite = { version = "0.41", features = ["bundled", "backup"] }
 serde = { version = "1", features = ["derive"] }

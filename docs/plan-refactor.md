@@ -41,7 +41,7 @@ Each stage lands before the first track 1 stage that edits the same code:
 
 Branch `refactor/audit-and-generation`. PR title `refactor(auditor): simplify the audit crate and generation code`.
 
-- [ ] **R1.1** `refactor(auditor): remove the unused span recorder from askbar-audit` · sonnet
+- [x] **R1.1** `refactor(auditor): remove the unused span recorder from askbar-audit` · sonnet
   Files: `crates/askbar-audit/{src/lib.rs,Cargo.toml,tests/chain.rs,tests/access_logs.rs}`, `services/model-gateway/tests/api.rs`.
   Do: delete the unused code:
   - `Recorder::start_span`, `finish_span`, `payload`, `dropped`, `noop` and `send`
