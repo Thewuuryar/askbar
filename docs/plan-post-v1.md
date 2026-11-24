@@ -1,10 +1,10 @@
 # Plan: after v1
 
-Status: tracker for work after 1.0. The order and rules are decided in [ADR 0019](adr/0019-post-v1-order-and-tools.md) (egress proxy, then web research with the judge, then the executor) and [ADR 0020](adr/0020-remote-executor-and-ca-triggers.md) (executor pairing, tunnel, CA triggers). This file keeps the v2 picture and the repo decisions that are not yet an ADR. Container hardening proposals are in [plan-container-hardening.md](plan-container-hardening.md).
+Status: tracker for work after 1.0. The tool rules are decided in [ADR 0019](adr/0019-post-v1-order-and-tools.md); the order of work is in its proposed amendment and in step O0.1 of [plan-priorities.md](plan-priorities.md), and takes effect when the owner accepts it. Executor pairing is in [ADR 0020](adr/0020-remote-executor-and-ca-triggers.md) (executor pairing, tunnel, CA triggers). This file keeps the v2 picture and the repo decisions that are not yet an ADR. Container hardening proposals are in [plan-container-hardening.md](plan-container-hardening.md).
 
 ## V2 sketch
 
-V2 adds an egress proxy, web research with a judge, and then an executor, all under the v1 trust model. The server still runs the agent loop, so each tool action passes through a single audited point. The admin still pushes configuration, services still append to the auditor, the controller stays dropped, and the admin stays on one host name unless a later decision changes that.
+V2 adds the tools in the order set in step O0.1 of [plan-priorities.md](plan-priorities.md), all under the v1 trust model. The server still runs the agent loop, so each tool action passes through a single audited point. The admin still pushes configuration, services still append to the auditor, the controller stays dropped, and the admin stays on one host name unless a later decision changes that.
 
 ```mermaid
 ---
