@@ -4,6 +4,7 @@
 //! model can never be handed a way to touch the machine. The server keeps its copy until it calls the
 //! gateway instead (plan step 3.1, second half).
 
+use askbar_proto::gateway::normalize;
 use askbar_proto::{SseEvent, SseParser};
 use futures_util::StreamExt;
 use serde_json::{json, Value};
@@ -56,17 +57,7 @@ impl Provider {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ChatMessage {
-    pub role: String,
-    pub content: String,
-}
-
-impl ChatMessage {
-    pub fn new(role: &str, content: &str) -> Self {
-        Self { role: role.into(), content: content.into() }
-    }
-}
+pub use askbar_proto::gateway::ChatMessage;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StreamOutcome {
@@ -149,43 +140,6 @@ pub fn http_client() -> HttpClient {
         .user_agent(concat!("askbar/", env!("CARGO_PKG_VERSION")))
         .build()
         .expect("reqwest client")
-}
-
-/// Drop empty messages and leading assistant turns, and never send two messages with the same role
-/// in a row (some APIs reject that).
-///
-/// Two user messages in a row mean the earlier one got no reply: its turn failed, or was stopped,
-/// timed out or interrupted before any text. Only the last of them is kept. Sending the unanswered
-/// ones again would repeat whatever made them fail (a question the provider refuses would stick the
-/// conversation for good) and mix old questions into the new one; the person retries a question on
-/// purpose instead. Consecutive assistant messages are joined.
-pub fn normalize(messages: &[ChatMessage]) -> Vec<ChatMessage> {
-    let mut out: Vec<ChatMessage> = Vec::new();
-    for m in messages {
-        if m.content.trim().is_empty() {
-            continue;
-        }
-        match out.last_mut() {
-            Some(last) if last.role == m.role && m.role == "user" => *last = m.clone(),
-            Some(last) if last.role == m.role => {
-                last.content.push_str("\n\n");
-                last.content.push_str(&m.content);
-            }
-            None if m.role != "user" => continue,
-            _ => out.push(m.clone()),
-        }
-    }
-    out
-}
-
-/// Of a `normalize`d history (question, reply, ..., the new question), the new question and the
-/// `turns` question-and-reply pairs before it. 0 keeps everything.
-pub fn last_turns(messages: Vec<ChatMessage>, turns: u32) -> Vec<ChatMessage> {
-    let keep = (turns as usize).saturating_mul(2).saturating_add(1);
-    if turns == 0 || messages.len() <= keep {
-        return messages;
-    }
-    messages[messages.len() - keep..].to_vec()
 }
 
 // ---------------------------------------------------------------- requests
@@ -505,6 +459,18 @@ where
         }
         on_delta(s);
     };
+    // True once the provider signals the end of the stream.
+    let mut handle = |events: Vec<SseEvent>, report: &mut StreamReport| -> Result<bool, ChatError> {
+        for ev in events {
+            match decode_event(provider.kind, &ev)? {
+                Step::Delta(s) => deliver(&s, report),
+                Step::Usage(u) => note_usage(u, report),
+                Step::Done => return Ok(true),
+                Step::Skip => {}
+            }
+        }
+        Ok(false)
+    };
     let mut stream = Box::pin(resp.bytes_stream());
     let mut parser = SseParser::default();
     loop {
@@ -517,23 +483,11 @@ where
             Some(Err(e)) => return Err(ChatError::Stream(e.to_string())),
             Some(Ok(bytes)) => parser.feed(&bytes),
         };
-        for ev in events {
-            match decode_event(provider.kind, &ev)? {
-                Step::Delta(s) => deliver(&s, report),
-                Step::Usage(u) => note_usage(u, report),
-                Step::Done => return Ok(StreamOutcome::Completed),
-                Step::Skip => {}
-            }
+        if handle(events, report)? {
+            return Ok(StreamOutcome::Completed);
         }
     }
-    for ev in parser.finish() {
-        match decode_event(provider.kind, &ev)? {
-            Step::Delta(s) => deliver(&s, report),
-            Step::Usage(u) => note_usage(u, report),
-            Step::Done => break,
-            Step::Skip => {}
-        }
-    }
+    handle(parser.finish(), report)?;
     Ok(StreamOutcome::Completed)
 }
 
@@ -578,45 +532,6 @@ mod tests {
     fn base_url_defaults_per_kind() {
         assert_eq!(provider(ProviderKind::OpenAi).effective_base_url(), "https://api.openai.com/v1");
         assert_eq!(provider(ProviderKind::Anthropic).effective_base_url(), "https://api.anthropic.com");
-    }
-
-    #[test]
-    fn last_turns_keeps_the_new_question_and_the_pairs_before_it() {
-        let conv = || vec![m("user", "q1"), m("assistant", "a1"), m("user", "q2"), m("assistant", "a2"), m("user", "q3")];
-        assert_eq!(last_turns(conv(), 0), conv(), "0 sends everything");
-        assert_eq!(last_turns(conv(), 1), vec![m("user", "q2"), m("assistant", "a2"), m("user", "q3")]);
-        assert_eq!(last_turns(conv(), 2), conv());
-        assert_eq!(last_turns(conv(), 1000), conv(), "more than there is sends all");
-        assert_eq!(last_turns(vec![m("user", "only")], 1), vec![m("user", "only")], "the new question is always sent");
-        // After normalize, a failed question takes no place in the count.
-        let h = normalize(&[
-            m("user", "q1"),
-            m("assistant", "a1"),
-            m("user", "failed"),
-            m("user", "q2"),
-            m("assistant", "a2"),
-            m("user", "q3"),
-        ]);
-        assert_eq!(last_turns(h, 1), vec![m("user", "q2"), m("assistant", "a2"), m("user", "q3")]);
-    }
-
-    #[test]
-    fn normalize_keeps_the_last_unanswered_question_and_trims() {
-        let out = normalize(&[
-            m("assistant", "stray"),
-            m("user", "a"),
-            m("user", "b"),
-            m("assistant", "  "),
-            m("assistant", "c"),
-            m("user", "d"),
-        ]);
-        assert_eq!(out, vec![m("user", "b"), m("assistant", "c"), m("user", "d")], "a got no reply, so only b is sent");
-        assert!(normalize(&[m("assistant", "only")]).is_empty());
-        // A failed question is not carried into the next turn.
-        let out = normalize(&[m("user", "hello"), m("assistant", "hi"), m("user", "fail"), m("user", "429"), m("user", "hello again")]);
-        assert_eq!(out, vec![m("user", "hello"), m("assistant", "hi"), m("user", "hello again")]);
-        // Two assistant messages in a row are still joined.
-        assert_eq!(normalize(&[m("user", "q"), m("assistant", "x"), m("assistant", "y")]), vec![m("user", "q"), m("assistant", "x\n\ny")]);
     }
 
     #[test]
