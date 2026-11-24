@@ -1,6 +1,6 @@
 # Plan: order of work after 1.0
 
-Status: proposed, 2026-11-23; owner decisions added 2026-11-24. The order below is the owner's. It takes effect when the owner accepts the amendment to [ADR 0019](adr/0019-post-v1-order-and-tools.md) in step O0.1. Rules for agents: [AGENTS.md](../AGENTS.md).
+Status: proposed, 2026-11-23; owner decisions added 2026-11-24. The order below is the owner's. It takes effect when the owner accepts the amendment to [ADR 0019](adr/0019-post-v1-order-and-tools.md) in step O0.1. Rules for agents: [AGENTS.md](../AGENTS.md). How every plan runs: [orchestration.md](orchestration.md).
 
 This file decides **order** and the few things the order changes. Each track's own plan decides behaviour and holds the steps. Where a track reuses steps from another plan, this file names them by ID instead of copying them.
 
@@ -8,13 +8,33 @@ This file decides **order** and the few things the order changes. Each track's o
 
 | # | Track | Plan | Delivers | Status |
 | --- | --- | --- | --- | --- |
+| 0 | Refactor | [plan-refactor.md](plan-refactor.md) | Less duplicated code, before track 1 adds three services, new links and new checks on top of it. No behaviour change | not started |
 | 1 | Web search | this file, then the [tiered routing](plan-tiered-routing.md) and [audit viewer](plan-audit-viewer.md) steps it names | Step records, search and fetch through the MCP gateway, quick search in chat, then research reports and the judge | not started |
 | 2 | PII detection and redaction | [plan-pii-redaction.md](plan-pii-redaction.md) | Placeholders out, real values back, blocked secrets, PII checks on search queries | not started |
 | 3 | Context checks and canaries | [plan-canaries.md](plan-canaries.md) | Stop reasons, context limits, the echo canary, leak tripwire, injection markers on fetched pages | not started |
 | 4 | Tiered routing | [plan-tiered-routing.md](plan-tiered-routing.md) | Tiers, the decider, Auto, dollar budgets, then agents with MCP tools at the end | not started |
 | 5 | Audit viewing | [plan-audit-viewer.md](plan-audit-viewer.md) | Conversation view of sealed records | not started |
 
-A track starts when the one before it has its PR open, unless the owner says otherwise.
+A track starts when the one before it has its PR open, unless the owner says otherwise. Tracks 0 and 1 interleave: each track 1 stage starts when the refactor stage that clears its code has its PR open:
+
+| Refactor stage | Track 1 stage that waits for it |
+| --- | --- |
+| R1 | W1 |
+| R2 | W2 |
+| R3 | W3 |
+| R4 | W4.2 (and W2, if P4.4 adds a link first) |
+| R5 | W5 |
+| RL | Track 3 |
+
+W0 is docs only and runs alongside R1.
+
+## How to run
+
+Run every track as [orchestration.md](orchestration.md) says. Start one orchestrator session per track, on Sonnet:
+
+> You are the orchestrator for track N of `docs/plan-priorities.md`. Read `docs/orchestration.md` and the track's plan file, then follow it from the first unchecked step.
+
+Track 1's steps live in several plans. For a step named by ID (for example AV2.1 or P4.2), find it with `grep -n '\*\*AV2.1\*\*' docs/*.md docs/plan-tiered-routing/*.md` and read only that step's block, plus the plan's How to run section if it has one. Tick the box where the step lives.
 
 ## Owner decisions (2026-11-24)
 
@@ -89,6 +109,7 @@ Until then, roles use admin-pinned models, usage counts against token budgets pe
 - [ ] **O0.1** `docs(adr): amend 0019: order of work after 1.0` · haiku
   Files: `docs/adr/0019-post-v1-order-and-tools.md`.
   Do: add the new order:
+  0. the refactor in [plan-refactor.md](plan-refactor.md), each stage landing before the track 1 stage that needs it (no behaviour change);
   1. step records;
   2. the egress proxy;
   3. the MCP gateway and `searxng`;
@@ -161,7 +182,7 @@ Until then, roles use admin-pinned models, usage counts against token budgets pe
   - A result URL with a query string is listed and not fetched.
   - A reply with several model calls shows them all in one trace. The cost sum for display depends on the AV1.2 fix; the flow does not.
 - [ ] **W5.4** `feat(client): search toggle and sources` · sonnet · after W5.1
-  Files: `clients/desktop/src/**`, its tests.
+  Files: `clients/desktop/ui/main.js`, `clients/desktop/src-tauri/src/{main,remote}.rs`, `clients/desktop/tests/`.
   Do: a per-message "Search the web" toggle, shown only when the user has the permission; the queries and a sources list under the reply. Links open in the system browser; the popup itself gets no network permission (ADR 0019 rule 6). Escape Markdown as today.
   Accept: client tests cover the toggle, the sources list, and that a source link doesn't load inside the app.
 - [ ] **W5.5** `test(e2e): quick search with the mock model and a fixture search engine` · haiku · after W5.3, W5.4
