@@ -89,7 +89,7 @@ Branch `refactor/audit-and-generation`. PR title `refactor(auditor): simplify th
   - Put `Live::delta_count` and `Generations::len`/`is_empty` behind `#[cfg(test)]`.
 
   Accept: no callers remain (grep); `cargo test -p askbar-server` passes.
-- [ ] **R1.10** `refactor(model-gateway): remove stream_chat` · haiku
+- [x] **R1.10** `refactor(model-gateway): remove stream_chat` · haiku
   Files: `services/model-gateway/src/llm.rs`, `services/model-gateway/tests/streaming.rs`, `docs/plan-canaries.md` (C1.2: `sent_chars` is in `stream_chat_report`).
   Do: the two test calls use `stream_chat_report(...).map(|r| r.outcome).map_err(|e| e.error)`.
   Accept: `cargo test -p askbar-model-gateway` passes; `scripts/check-docs.sh` passes.

@@ -393,26 +393,11 @@ pub fn estimate_tokens(chars: usize) -> u64 {
     chars.div_ceil(4) as u64
 }
 
-/// Stream one assistant reply, calling `on_delta` for each piece of text.
+/// Stream one assistant reply, calling `on_delta` for each piece of text, and say how it went:
+/// timings, the HTTP status, `Retry-After`. On failure the error carries the report up to that point.
 ///
 /// Resolving `cancel` (by sending on, or dropping, its sender) stops the
 /// request and returns `Cancelled`. Text already delivered stays delivered.
-pub async fn stream_chat<F>(
-    client: &reqwest::Client,
-    provider: &Provider,
-    system: &str,
-    messages: &[ChatMessage],
-    cancel: oneshot::Receiver<()>,
-    on_delta: F,
-) -> Result<StreamOutcome, ChatError>
-where
-    F: FnMut(&str),
-{
-    stream_chat_report(client, provider, system, messages, cancel, on_delta).await.map(|r| r.outcome).map_err(|e| e.error)
-}
-
-/// Like `stream_chat`, and also says how it went: timings, the HTTP status, `Retry-After`. On
-/// failure the error carries the report up to that point.
 pub async fn stream_chat_report<F>(
     client: &reqwest::Client,
     provider: &Provider,

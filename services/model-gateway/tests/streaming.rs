@@ -1,7 +1,7 @@
 //! End-to-end streaming tests against a local mock server speaking just enough
 //! HTTP + SSE to stand in for OpenAI-compatible and Anthropic endpoints.
 
-use askbar_model_gateway::llm::{http_client, stream_chat, ChatError, ChatMessage, Provider, ProviderKind, StreamOutcome};
+use askbar_model_gateway::llm::{http_client, stream_chat_report, ChatError, ChatMessage, Provider, ProviderKind, StreamOutcome};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -96,7 +96,7 @@ fn msgs() -> Vec<ChatMessage> {
 async fn collect(p: &Provider, system: &str) -> (Result<StreamOutcome, ChatError>, String) {
     let (_tx, rx) = oneshot::channel();
     let mut text = String::new();
-    let r = stream_chat(&http_client(), p, system, &msgs(), rx, |d| text.push_str(d)).await;
+    let r = stream_chat_report(&http_client(), p, system, &msgs(), rx, |d| text.push_str(d)).await.map(|r| r.outcome).map_err(|e| e.error);
     (r, text)
 }
 
@@ -234,7 +234,7 @@ async fn cancel_stops_a_hanging_stream_and_keeps_partial_text() {
         let _ = tx.send(());
     });
     let started = std::time::Instant::now();
-    let r = stream_chat(&client, &p, "", &m, rx, |d| text.push_str(d)).await;
+    let r = stream_chat_report(&client, &p, "", &m, rx, |d| text.push_str(d)).await.map(|r| r.outcome).map_err(|e| e.error);
     canceller.await.unwrap();
 
     assert_eq!(r.unwrap(), StreamOutcome::Cancelled);
