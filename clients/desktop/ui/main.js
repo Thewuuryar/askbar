@@ -52,7 +52,6 @@
   };
 
   const state = {
-    ui: null,
     convId: null,
     models: [],          // the approved models, { id, label }
     model: null,         // the model this chat picked (`provider/model`); null means the one chosen for new chats
@@ -66,6 +65,13 @@
   };
 
   // ------------------------------------------------------------ helpers
+
+  // Every backend call goes through here. A failure is shown as a notice (or dropped with `quiet`)
+  // and resolves to FAILED, so a caller that must stop checks for it.
+  const FAILED = Symbol('failed');
+  async function call(cmd, args, { quiet } = {}) {
+    try { return await invoke(cmd, args); } catch (e) { if (!quiet) showNotice(String(e)); return FAILED; }
+  }
 
   function copyViaTextarea(text) {
     const ta = document.createElement('textarea');
@@ -120,7 +126,7 @@
     const h = Math.ceil(el.card.offsetHeight) + PAD * 2;
     if (w !== lastSize.w || h !== lastSize.h) {
       lastSize = { w, h };
-      invoke('resize_window', { width: w, height: h }).catch(() => {});
+      call('resize_window', { width: w, height: h }, { quiet: true });
     }
   }
 
@@ -183,28 +189,33 @@
     el.statusText.textContent = st.message;
     for (const m of st.models || []) {
       el.statusActions.appendChild(actionButton('Use ' + m.label, async () => {
-        try { await invoke('set_active_model', { id: m.id }); } catch (e) { showNotice(String(e)); }
+        await call('set_active_model', { id: m.id });
         state.model = null;
-        await refreshBootstrap().catch(() => {});
-        await checkStatus();
+        await refreshAll();
       }, 'model'));
     }
     if (st.kind === 'rejected' || st.kind === 'not_paired') {
       el.statusActions.appendChild(actionButton('Pair this app', () => openPairing(), 'pair'));
     }
     el.statusActions.appendChild(actionButton('Retry', async () => {
-      await refreshBootstrap().catch(() => {});
-      await checkStatus();
+      await refreshAll();
     }, 'retry'));
     el.status.hidden = false;
     layout();
   }
 
   async function checkStatus() {
-    let st = null;
-    try { st = await invoke('server_status'); } catch (_) { /* local mode has nothing to report */ }
+    // Local mode has nothing to report, so a failure means no status.
+    const r = await call('server_status', {}, { quiet: true });
+    const st = r === FAILED ? null : r;
     showStatus(st);
     return st;
+  }
+
+  // Reloads the settings and the server status. Quiet: the previous settings stay on failure.
+  async function refreshAll() {
+    await refreshBootstrap({ quiet: true });
+    await checkStatus();
   }
 
   // ------------------------------------------------------------- pairing
@@ -248,7 +259,7 @@
   function openPendingLink() {
     const url = pendingLink;
     closeLinkConfirm();
-    if (url) invoke('open_url', { url }).catch(() => {});
+    if (url) call('open_url', { url }, { quiet: true });
   }
 
   function closePairing() {
@@ -316,8 +327,7 @@
     newChat();
     // A new pairing is the moment the notice is for: show it even if this app showed the same words to another account.
     forgetVersion();
-    await refreshBootstrap().catch(() => {});
-    await checkStatus();
+    await refreshAll();
     await refreshHistory();
   }
 
@@ -366,7 +376,6 @@
   // Text goes in through setAttribute only; replies stored before servers recorded it get none.
   function setProvider(msg, provider) {
     if (!provider || !provider.name) return;
-    msg.provider = provider;
     let chip = msg.node.querySelector('.by');
     if (!chip) {
       chip = document.createElement('span');
@@ -609,14 +618,14 @@
       await streamInto(reply, (channel) => invoke('resend', { clientRequestId: u.clientRequestId, onEvent: channel }), userMsg);
     });
     edit.addEventListener('click', async () => {
-      try { await invoke('discard_unsent', { clientRequestId: u.clientRequestId }); } catch (e) { showNotice(String(e)); return; }
+      if (await call('discard_unsent', { clientRequestId: u.clientRequestId }) === FAILED) return;
       gone();
       el.input.value = u.text;
       autosize();
       el.input.focus();
     });
     discard.addEventListener('click', async () => {
-      try { await invoke('discard_unsent', { clientRequestId: u.clientRequestId }); } catch (e) { showNotice(String(e)); return; }
+      if (await call('discard_unsent', { clientRequestId: u.clientRequestId }) === FAILED) return;
       gone();
       layout();
     });
@@ -628,8 +637,8 @@
   // Lists the open conversation's messages that never reached the server. Nothing is sent by
   // itself: each one waits for Send, Edit or Discard.
   async function syncUnsent() {
-    let list;
-    try { list = await invoke('unsent_messages'); } catch (_) { return; }
+    const list = await call('unsent_messages', {}, { quiet: true });
+    if (list === FAILED) return;
     clearUnsent();
     const mine = list.filter((u) => (u.conversationId || null) === state.convId);
     for (const u of mine) addUnsent(u);
@@ -672,7 +681,7 @@
     del.setAttribute('aria-label', 'Remove this waiting message');
     del.addEventListener('click', async () => {
       del.disabled = true;
-      try { await invoke('cancel_generation', { id: p.generationId }); } catch (e) { showNotice(String(e)); }
+      await call('cancel_generation', { id: p.generationId });
       node.remove();
       waiting = waiting.filter((w) => w !== node);
       syncPending();
@@ -687,8 +696,8 @@
   async function syncPending() {
     const id = state.convId;
     if (!id || state.streaming) return;
-    let pending;
-    try { pending = await invoke('load_pending', { id }); } catch (_) { return; }
+    const pending = await call('load_pending', { id }, { quiet: true });
+    if (pending === FAILED) return;
     if (id !== state.convId || state.streaming) return;
     clearWaiting();
     const running = pending.find((p) => p.status === 'running');
@@ -711,7 +720,7 @@
   }
 
   function cancel() {
-    if (state.streaming) invoke('cancel_ask').catch(() => {});
+    if (state.streaming) call('cancel_ask', {}, { quiet: true });
   }
 
   // ------------------------------------------------------------- history
@@ -787,23 +796,15 @@
   }
 
   async function copyConversation(id, button) {
-    let rows;
-    try {
-      rows = await invoke('load_conversation', { id });
-    } catch (e) {
-      showNotice(String(e));
-      return;
-    }
+    const rows = await call('load_conversation', { id });
+    if (rows === FAILED) return;
     const c = state.conversations.find((x) => String(x.id) === id);
     await copyText(conversationMarkdown(c ? c.title : 'Conversation', rows), button);
   }
 
   async function refreshHistory() {
-    try {
-      state.conversations = await invoke('list_conversations');
-    } catch (e) {
-      state.conversations = [];
-    }
+    const list = await call('list_conversations', {}, { quiet: true });
+    state.conversations = list === FAILED ? [] : list;
     renderHistory();
   }
 
@@ -819,24 +820,15 @@
       return;
     }
     disarm();
-    try {
-      await invoke('delete_conversation', { id });
-    } catch (e) {
-      showNotice(String(e));
-    }
+    await call('delete_conversation', { id });
     if (id === state.convId) newChat();
     await refreshHistory();
   }
 
   async function openConversation(id) {
     if (state.streaming) return;
-    let rows;
-    try {
-      rows = await invoke('load_conversation', { id });
-    } catch (e) {
-      showNotice(String(e));
-      return;
-    }
+    const rows = await call('load_conversation', { id });
+    if (rows === FAILED) return;
     hideNotice();
     clearThread();
     state.convId = id;
@@ -927,7 +919,7 @@
       copyText(code.textContent, copyCode);
       return;
     }
-    if (t.closest('.open-config')) { invoke('open_config').catch((err) => showNotice(String(err))); return; }
+    if (t.closest('.open-config')) { call('open_config'); return; }
 
     const link = t.closest('a[href]');
     if (link) {
@@ -968,7 +960,7 @@
   el.share.addEventListener('submit', submitShare);
   el.shareCancel.addEventListener('click', closeShare);
   el.shareCopy.addEventListener('click', () => copyText(el.shareKey.value, el.shareCopy));
-  el.noticeConfig.addEventListener('click', () => invoke('open_config').catch(() => {}));
+  el.noticeConfig.addEventListener('click', () => call('open_config', {}, { quiet: true }));
 
   new ResizeObserver(layout).observe(el.card);
 
@@ -977,8 +969,8 @@
   // The model picker (ADR 0014): shown when there is a choice, with the model this chat uses selected. A chat that
   // picked none uses the one chosen for new chats, which the server remembers for all of the person's apps.
   async function refreshModels() {
-    let picker;
-    try { picker = await invoke('list_models'); } catch (_) { return; }
+    const picker = await call('list_models', {}, { quiet: true });
+    if (picker === FAILED) return;
     state.models = picker.models || [];
     state.activeModel = picker.active || null;
     if (state.model && !state.models.some((m) => m.id === state.model)) state.model = null;
@@ -1003,7 +995,8 @@
   el.modelPicker.addEventListener('change', async () => {
     state.model = el.modelPicker.value;
     // Also what new chats use from now on, on every app of this person.
-    try { await invoke('set_active_model', { id: state.model }); state.activeModel = state.model; } catch (e) { showNotice(String(e)); }
+    const saved = await call('set_active_model', { id: state.model });
+    if (saved !== FAILED) state.activeModel = state.model;
   });
 
   // ------------------------------------------------- privacy notice, AI warning
@@ -1046,19 +1039,18 @@
     el.input.focus();
   });
 
-  async function refreshBootstrap() {
-    const b = await invoke('bootstrap');
-    state.ui = b.ui;
+  async function refreshBootstrap({ quiet } = {}) {
+    const b = await call('bootstrap', {}, { quiet });
+    if (b === FAILED) return;
     applyUi(b.ui);
     applyPolicy(b.policy);
-    state.provider = b.provider;
     el.modelLabel.textContent = b.model ? b.model + ' via ' + b.provider : '';
     if (b.notice) showNotice(b.notice);
     await refreshModels();
   }
 
   async function onShown() {
-    try { await refreshBootstrap(); } catch (_) { /* keep the previous settings */ }
+    await refreshBootstrap({ quiet: true }); // on failure the previous settings stay
     checkStatus();
     if (state.historyOpen) refreshHistory();
     syncUnsent();
@@ -1073,7 +1065,7 @@
   listen('askbar:pair-another', () => openShare());
 
   (async () => {
-    try { await refreshBootstrap(); } catch (e) { showNotice(String(e)); }
+    await refreshBootstrap();
     checkStatus();
     await refreshHistory();
     syncChrome();

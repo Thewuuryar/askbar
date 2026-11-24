@@ -217,7 +217,7 @@ Branch `refactor/tests-and-client`. PR title `refactor(client): share test setup
 - [x] **R5.2** `test(auditor): share test setup` · haiku
   Files: `services/auditor/tests/{common/mod.rs,api.rs,alerts.rs,latency.rs,ingest.rs}`.
   Do: move `token`, `hex`, `T` (with its `Drop`) and `start` to `tests/common`.
-- [ ] **R5.3** `refactor(client): one invoke wrapper and one refresh in the popup` · haiku
+- [x] **R5.3** `refactor(client): one invoke wrapper and one refresh in the popup` · haiku
   Files: `clients/desktop/ui/main.js`, `clients/desktop/tests/`.
   Do:
   - `call(cmd, args, {quiet})` replaces the 9 `try { await invoke } catch { showNotice }` blocks and the `.catch(() => {})` calls.
