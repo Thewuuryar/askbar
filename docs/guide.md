@@ -507,7 +507,7 @@ The layout's rules are in [ADR 0033](adr/0033-repository-layout.md).
 npm test                         # everything below except smoke and isolation, plus the names and link checks
 cargo test --workspace           # proto, server and admin (needs python3 for the mock LLM)
 npm --prefix clients/desktop test   # the app: its cargo tests, markdown, and the UI against a mocked backend
-cargo build --workspace && node tests/e2e/admin.test.js   # the admin site in a real browser against the real server and admin
+cargo build --workspace && node tests/e2e/admin.test.js   # the admin site in a real browser against the real server and admin (E2E_VIEWPORT=390 for one width)
 scripts/smoke.sh                 # server + admin + mock LLM: setup, pairing, chat, search
 docker compose up -d && scripts/check-isolation.sh    # against a throwaway stack (ASKBAR_SLOW_CHECKS=1 adds a five-minute check)
 python3 tests/e2e/mock_llm.py 8765   # fake OpenAI-compatible server to try the app without a key
