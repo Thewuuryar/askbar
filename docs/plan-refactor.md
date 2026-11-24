@@ -143,7 +143,7 @@ Branch `refactor/service-boot`. PR title `refactor(model-gateway): share service
   Files: `crates/askbar-service/src/links.rs`, `services/model-gateway/src/lib.rs`, `services/alerter/src/lib.rs`.
   Do: move `full`, `links_for`, `token_dir`, `shell` and `routes` into `askbar-service::links`. Use `Links::named()` for single-link tables. `server_links`, `admin_links` and `auditor_links` stay as one-line wrappers.
   Accept: the hash file paths and link names are unchanged; the link tests of both services pass.
-- [ ] **R3.3** `refactor(proto): one table of link names` · haiku · after R3.2
+- [x] **R3.3** `refactor(proto): one table of link names` · haiku · after R3.2
   Files: `crates/askbar-proto/src/lib.rs` (or a new `links.rs`), `services/bootstrap/src/links.rs`, `services/{model-gateway,alerter,auditor}/src/lib.rs`.
   Do: the link names as constants in `askbar-proto`. Bootstrap and the services use them, so P5A.9a adds a new link name in one place.
   Accept: bootstrap's test that every link is a row of the `architecture.md` table still passes.
@@ -157,7 +157,7 @@ Branch `refactor/service-boot`. PR title `refactor(model-gateway): share service
 - [x] **R3.5** `refactor(auditor): remove a re-export, a single-use trait and an unused parameter` · haiku
   Files: `services/auditor/src/{lib,rules}.rs`.
   Do: drop the `rusqlite_conn` module, make `ClassName` a function, and remove `_now` from `Rules::seen` and its caller.
-- [ ] **R3.6** `refactor(compose): one runtime base stage in the Dockerfile` · sonnet · gate G-R2
+- [x] **R3.6** `refactor(compose): one runtime base stage in the Dockerfile` · sonnet · gate G-R2 · dropped: the four stages share no instruction that has no per-service value (user, directories, `ENV`, `HEALTHCHECK`, `ENTRYPOINT`), and a Dockerfile cannot pass an `ARG` to a parent stage, so a base stage removes no lines. Only the base image pin repeats; Dependabot tracks it.
   Files: `Dockerfile`.
   Do: the auditor, `model-gateway`, alerter and server runtime stages share one base stage with `ARG`s for the binary name and uid. Keep each stage's uid, owned directories and volumes explicit.
   Accept: `scripts/check-isolation.sh` passes, including the uid and owner checks.

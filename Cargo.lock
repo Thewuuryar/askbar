@@ -246,6 +246,7 @@ dependencies = [
 name = "askbar-bootstrap"
 version = "1.0.0"
 dependencies = [
+ "askbar-proto",
  "base64 0.22.1",
  "sha2 0.10.9",
 ]
