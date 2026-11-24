@@ -1139,7 +1139,28 @@
     },
     onError: pageFailed,
   });
-  function loadServices() { return liveServices.start(); }
+  // The egress proxy's recent denied attempts (the admin's last read of its status). A host is attacker-influenced: text only.
+  const DENIED_REASONS = {
+    not_listed: 'Not on the allowlist', bad_host: 'Not a valid host name', ip_literal: 'An IP address, not a name',
+    port: 'Port not allowed', private_address: 'Private address', plain_http: 'Plain HTTP not allowed',
+  };
+  const liveDenied = ui.live(() => api('GET', '/api/admin/v1/egress/denied'), {
+    every: 'STATUS_EVERY_SECS',
+    when: appShownNow,
+    render(data, ctx) {
+      // A proxy that does not answer is said so; an empty list would claim nothing was blocked.
+      const note = $('denied-note');
+      note.textContent = data.online ? '' : (data.error || 'The egress proxy does not answer.') + ' Nothing leaves the stack until it does.';
+      note.hidden = data.online;
+      $('denied-table').hidden = !data.online;
+      ui.rows($('denied'), data.online ? data.denied : [], (d) => ui.el('tr', null,
+        ui.el('td', null, ui.time(d.at)), ui.el('td', { text: d.source }), ui.el('td', { text: d.host }),
+        ui.el('td', { text: d.port == null ? '' : String(d.port) }), ui.el('td', { text: DENIED_REASONS[d.reason] || d.reason })),
+        { key: (d) => d.source + '|' + d.host + '|' + d.port + '|' + d.reason + '|' + d.at, force: ctx.force, empty: 'Nothing has been blocked.' });
+    },
+    onError: pageFailed,
+  });
+  function loadServices() { liveDenied.start(); return liveServices.start(); }
   // -------------------------------------------------------- providers and models (plan step 5.5)
 
   // ---- Claude and ChatGPT accounts (CLIProxyAPI): connect an account without a terminal. The paste step (the

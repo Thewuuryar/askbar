@@ -1449,6 +1449,47 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '502':
           $ref: '#/components/responses/ServerUnavailable'
+  /api/admin/v1/egress/denied:
+    get:
+      operationId: listEgressDenied
+      summary: The outbound requests the egress proxy refused lately.
+      description: "The 50 most recent, newest first, from the last status the admin read (every 12 seconds). Held in memory by the proxy: a proxy restart empties it. A proxy that does not answer gives `online: false` and the reason, never an empty list in its place."
+      security:
+        - adminSession: []
+      responses:
+        '200':
+          description: The attempts.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [online, error, denied]
+                properties:
+                  online:
+                    type: boolean
+                  error:
+                    type: [string, 'null']
+                  denied:
+                    type: array
+                    items:
+                      type: object
+                      required: [source, host, port, reason, at]
+                      properties:
+                        source:
+                          type: string
+                        host:
+                          type: string
+                          description: The host as the proxy validated it, or `invalid`.
+                        port:
+                          type: [integer, 'null']
+                        reason:
+                          type: string
+                          enum: [not_listed, bad_host, ip_literal, port, private_address, plain_http]
+                        at:
+                          type: integer
+                          description: Unix seconds.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
   /api/admin/v1/egress/approvals:
     get:
       operationId: listEgressApprovals

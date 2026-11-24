@@ -16,7 +16,7 @@ use crate::link_client::LinkClient;
 use crate::web::{err, Failure};
 use crate::AdminState;
 use askbar_proto::egress::{normalize_host, Host};
-use askbar_proto::egress::{EgressConfig, EgressStatus, Entry, SourceRules};
+use askbar_proto::egress::{Denied, EgressConfig, EgressStatus, Entry, SourceRules};
 use axum::{extract::Query, extract::State, http::StatusCode, Json};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
@@ -228,6 +228,15 @@ pub async fn delete_approval(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// `GET /api/admin/v1/egress/denied`: the proxy's recent denied attempts from the last status the admin read, newest first. A
+/// proxy that does not answer gives `online: false` and the reason, not an empty list.
+pub async fn list_denied(State(state): St) -> Json<serde_json::Value> {
+    Json(match state.egress.get() {
+        None => serde_json::json!({ "online": false, "error": "No link to the egress proxy is set up.", "denied": [] }),
+        Some(l) => serde_json::json!({ "online": l.online(), "error": l.last_error(), "denied": l.denied() }),
+    })
+}
+
 /// How a check went.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Sync {
@@ -245,11 +254,14 @@ pub enum Sync {
 
 pub struct EgressLink {
     link: LinkClient,
+    /// `recent_denied` of the last status the proxy answered (kept in memory only, like the proxy's own).
+    denied: std::sync::Mutex<Vec<Denied>>,
 }
 
 impl EgressLink {
     pub fn new(base: &str, token: String) -> Arc<EgressLink> {
         Arc::new(EgressLink {
+            denied: Default::default(),
             link: LinkClient::new(base, token, LINK, "egress-proxy", askbar_proto::paths::EGRESS_PROXY_V1, Duration::from_secs(15)),
         })
     }
@@ -270,6 +282,10 @@ impl EgressLink {
         self.link.mark_dirty();
     }
 
+    pub fn denied(&self) -> Vec<Denied> {
+        self.denied.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
     /// `GET /status`: `None` if the proxy did not answer or did not take the token.
     pub async fn status_now(&self) -> Option<EgressStatus> {
         let result = self.link.request(reqwest::Method::GET, askbar_service::routes::STATUS, None).await;
@@ -279,6 +295,7 @@ impl EgressLink {
         };
         self.link.online.store(ok.is_some(), Ordering::Relaxed);
         if let Some(st) = &ok {
+            *self.denied.lock().unwrap_or_else(|e| e.into_inner()) = st.recent_denied.clone();
             self.link.restarts.saw(&st.boot_id);
         } else {
             self.link.set_error(Some(match result {

@@ -23,6 +23,7 @@ const KEY: &str = "sk-marker-key-77";
 struct FakeProxy {
     running: Mutex<Option<u64>>,
     pushes: Mutex<Vec<Value>>,
+    denied: Mutex<Vec<Value>>,
 }
 type Fake = Arc<FakeProxy>;
 
@@ -35,7 +36,9 @@ async fn status(State(f): State<Fake>, h: HeaderMap) -> Result<Json<Value>, Stat
         return Err(StatusCode::UNAUTHORIZED);
     }
     let v = *f.running.lock().unwrap();
-    Ok(Json(json!({ "configured": v.is_some(), "version": v, "boot_id": "b", "open_tunnels": 0, "sources": {}, "recent_denied": [] })))
+    Ok(Json(
+        json!({ "configured": v.is_some(), "version": v, "boot_id": "b", "open_tunnels": 0, "sources": {}, "recent_denied": *f.denied.lock().unwrap() }),
+    ))
 }
 
 async fn config(State(f): State<Fake>, h: HeaderMap, Json(body): Json<Value>) -> Result<Json<Value>, StatusCode> {
@@ -262,4 +265,24 @@ async fn an_approval_with_a_bad_source_host_or_port_is_refused() {
     }
     let (_, list) = t.call(M::GET, a, json!(null)).await;
     assert!(list.as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn the_denied_attempts_are_the_last_status_and_a_proxy_that_is_down_is_not_an_empty_list() {
+    let (t, fake, link) = rig().await;
+    let path = "/api/admin/v1/egress/denied";
+    let (st, body) = t.call(M::GET, path, json!(null)).await;
+    assert_eq!((st, body["denied"].as_array().unwrap().len()), (200, 0));
+    let one = json!({ "source": "alerter", "host": "<img src=x>.example", "port": 443, "reason": "not_listed", "at": 1700000000 });
+    *fake.denied.lock().unwrap() = vec![one.clone()];
+    link.sync(&t.admin).await;
+    let (_, body) = t.call(M::GET, path, json!(null)).await;
+    assert_eq!((body["online"].clone(), body["denied"].clone()), (json!(true), json!([one])));
+
+    let down = EgressLink::new("http://127.0.0.1:1", TOKEN.into());
+    let t2 = common::start(true).await;
+    t2.admin.egress.set(down.clone()).ok().unwrap();
+    down.sync(&t2.admin).await;
+    let (_, body) = t2.call(M::GET, path, json!(null)).await;
+    assert_eq!((body["online"].clone(), body["error"].clone()), (json!(false), json!("The egress proxy does not answer.")));
 }

@@ -141,6 +141,7 @@ pub const HELP_TOPICS: &[&str] = &[
     "settings/people#users",
     "settings/people#paired-clients",
     "settings/services#running-services",
+    "settings/services#blocked-outbound-requests",
     "settings/network#host-name",
     "settings/network#certificate",
     "settings/network#allowed-addresses-and-networks",

@@ -36,6 +36,7 @@ pub const SETTING_ANCHORS: &[(&str, &str)] = &[
     ("settings/people#users", "users-title"),
     ("settings/people#paired-clients", "clients-title"),
     ("settings/services#running-services", "services-title"),
+    ("settings/services#blocked-outbound-requests", "denied-title"),
     ("settings/network#host-name", "n-host-title"),
     ("settings/network#certificate", "n-cert-title"),
     ("settings/network#allowed-addresses-and-networks", "n-allow-title"),
