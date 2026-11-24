@@ -5,6 +5,7 @@
 use askbar_audit::{AuditDb, Recorder};
 use askbar_auditor::{disk::FreeSpace, Auditor, Limits};
 use askbar_model_gateway::{admin_links, admin_router, server_links, server_router, Gateway};
+use askbar_proto::audit::{SpanKind, SpanStart};
 use askbar_proto::gateway::{ChatEvent, ChatMessage, ChatRequest, FailureClass, GatewayConfig, GatewayProvider};
 use askbar_proto::{model_id, AuditKey, CatalogEntry, ModelList, SseParser};
 use askbar_service::audit_client::AuditClient;
@@ -490,13 +491,17 @@ async fn a_provider_error_reaches_the_server_as_a_code_and_the_auditor_as_sealed
 
     // The auditor has them, sealed to the audit key: only the private key opens them.
     let rows = rig
-        .wait_rows("SELECT p.role, p.key_id, p.ciphertext FROM payloads p JOIN spans s ON s.id = p.span_id WHERE s.trace_id = 'gen-401'")
+        .wait_rows("SELECT p.role, p.key_id, p.ciphertext FROM payloads p JOIN spans s ON s.id = p.span_id WHERE s.trace_id = 'gen-401' AND p.role = 'error'")
         .await;
     assert_eq!(rows[0][0], "error");
     assert_eq!(rows[0][1], json!(audit_key().key_id));
     let conn = rig.auditor.recorder.reader().unwrap();
     let blob: Vec<u8> = conn
-        .query_row("SELECT p.ciphertext FROM payloads p JOIN spans s ON s.id = p.span_id WHERE s.trace_id = 'gen-401'", [], |r| r.get(0))
+        .query_row(
+            "SELECT p.ciphertext FROM payloads p JOIN spans s ON s.id = p.span_id WHERE s.trace_id = 'gen-401' AND p.role = 'error'",
+            [],
+            |r| r.get(0),
+        )
         .unwrap();
     let opened = String::from_utf8(crypto_box::SecretKey::from(AUDIT_SECRET).unseal(&blob).unwrap()).unwrap();
     assert!(opened.contains("401"), "the provider's own words, sealed: {opened}");
@@ -504,6 +509,51 @@ async fn a_provider_error_reaches_the_server_as_a_code_and_the_auditor_as_sealed
     let attempt =
         rig.wait_rows("SELECT status, error_code FROM spans WHERE trace_id = 'gen-401' AND kind = 'attempt' AND status != 'running'").await;
     assert_eq!(attempt[0], vec![json!("error"), json!("http_401")]);
+}
+
+#[tokio::test]
+async fn the_provider_request_is_sealed_on_the_attempt_and_a_step_under_it_is_stored_and_chained() {
+    const PLANTED: &str = "planted-secret-words";
+    let rig = rig().await;
+    rig.push(&config(&rig, 1, &[("p", "m")])).await;
+    rig.chat(&rig.request("p", "gen-pr", PLANTED)).await;
+    let attempt = rig.wait_rows("SELECT id FROM spans WHERE trace_id = 'gen-pr' AND kind = 'attempt' AND status = 'done'").await;
+    let attempt_id = attempt[0][0].as_str().unwrap().to_string();
+
+    // The body is sealed to the audit key, exactly as built, and the private key opens it.
+    let sql = format!("SELECT ciphertext FROM payloads WHERE span_id = '{attempt_id}' AND role = 'provider_request'");
+    rig.wait_rows(&sql).await;
+    let blob: Vec<u8> = rig.auditor.recorder.reader().unwrap().query_row(&sql, [], |r| r.get(0)).unwrap();
+    let body: Value = serde_json::from_slice(&crypto_box::SecretKey::from(AUDIT_SECRET).unseal(&blob).unwrap()).unwrap();
+    assert_eq!((body["model"].as_str(), body["stream"].as_bool()), (Some("m"), Some(true)), "{body}");
+    assert!(body.to_string().contains(PLANTED) && body.to_string().contains("be brief"), "{body}");
+
+    // The gateway can write a step under the attempt; it is stored and the chain still checks.
+    let (at, ms) = (1_700_000_000, 0);
+    let step = SpanStart {
+        id: "step-1".into(),
+        trace_id: "gen-pr".into(),
+        parent_id: Some(attempt_id),
+        kind: SpanKind::Step,
+        name: "route".into(),
+        started_at: at,
+        started_ms: ms,
+        provider_id: None,
+        model: None,
+        user_id: None,
+        client_id: None,
+        attrs: Some(json!({ "step": "route" })),
+    };
+    rig.gw.audit().open(&step).await.unwrap();
+    let rows = rig.rows("SELECT kind, parent_id IS NOT NULL FROM spans WHERE id = 'step-1'");
+    assert_eq!(rows, vec![vec![json!("step"), json!(1)]]);
+    assert!(askbar_audit::chain::verify(&rig.auditor.recorder.reader().unwrap()).unwrap().ok);
+
+    // No span's attributes, the step's included, carry the request's words; nor does the status.
+    let attrs = rig.rows("SELECT attrs_json FROM spans WHERE trace_id = 'gen-pr'");
+    assert!(!format!("{attrs:?}").contains(PLANTED), "{attrs:?}");
+    let status = rig.http.get(format!("{}/api/model-gateway/v1/status", rig.admin)).bearer_auth(ADM).send().await.unwrap();
+    assert!(!status.text().await.unwrap().contains(PLANTED));
 }
 
 #[tokio::test]
