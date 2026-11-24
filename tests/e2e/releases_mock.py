@@ -8,23 +8,15 @@ The request's `User-Agent` and header names are kept: `GET /_seen` returns them 
 """
 import json
 import sys
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import HTTPServer
+
+from stub import Stub
 
 tag = [sys.argv[2] if len(sys.argv) > 2 else "v0.0.1"]
 seen = []
 
 
-class Handler(BaseHTTPRequestHandler):
-    def log_message(self, *args):
-        pass
-
-    def _send(self, code, body=b""):
-        self.send_response(code)
-        self.send_header("content-type", "application/json")
-        self.send_header("content-length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
+class Handler(Stub):
     def do_GET(self):
         if self.path == "/repos/Thewuuryar/askbar/releases/latest":
             seen.append({"user_agent": self.headers.get("user-agent"), "headers": sorted(k.lower() for k in self.headers.keys())})

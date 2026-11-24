@@ -155,7 +155,7 @@ impl ReplyReader {
     }
 }
 
-fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+pub(crate) fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
@@ -259,6 +259,16 @@ impl Inner {
             return Ok(resp);
         }
         let status = resp.status();
+        Err(explain(status, &resp.bytes().await.unwrap_or_default()))
+    }
+
+    /// Like `send` for a request whose target may already be gone: a 404 is success.
+    async fn send_gone_ok(&self, req: RequestBuilder) -> Result<(), String> {
+        let resp = req.send().await.map_err(|e| format!("Could not reach the server at {}: {e}", self.base))?;
+        let status = resp.status();
+        if status.is_success() || status == StatusCode::NOT_FOUND {
+            return Ok(());
+        }
         Err(explain(status, &resp.bytes().await.unwrap_or_default()))
     }
 
@@ -692,11 +702,7 @@ impl Remote {
     pub async fn cancel_generation(&self, id: String) -> Result<(), String> {
         let i = self.inner()?;
         let req = i.request(Method::POST, &i.space_path(&format!("/generations/{id}/cancel")).await?)?.timeout(REQUEST_TIMEOUT);
-        match i.send(req).await {
-            Ok(_) => Ok(()),
-            Err(e) if e.ends_with("404 Not Found.") => Ok(()),
-            Err(e) => Err(e),
-        }
+        i.send_gone_ok(req).await
     }
 
     /// Joins a reply that is already running on the server (started here earlier, or elsewhere):
@@ -714,11 +720,7 @@ impl Remote {
     pub async fn delete_conversation(&self, id: String) -> Result<(), String> {
         let i = self.inner()?;
         let resp = i.request(Method::DELETE, &i.space_path(&format!("/conversations/{id}")).await?)?.timeout(REQUEST_TIMEOUT);
-        match i.send(resp).await {
-            Ok(_) => Ok(()),
-            Err(e) if e.ends_with("404 Not Found.") => Ok(()),
-            Err(e) => Err(e),
-        }
+        i.send_gone_ok(resp).await
     }
 
     /// Sends a new message. It goes into the outbox first and leaves it when the server's `meta`
@@ -988,7 +990,7 @@ mod tests {
         use axum::{
             extract::{Path as P, Query, State},
             http::{header, StatusCode as S},
-            routing::{get, post},
+            routing::{delete, get, post},
             Router,
         };
         let seen = Arc::new(Seen { plan: Mutex::new(resume), running: Mutex::new("[]".into()), ..Default::default() });
@@ -1059,11 +1061,28 @@ mod tests {
                     S::NO_CONTENT
                 }),
             )
+            .route(
+                "/api/client/v1/spaces/{space_id}/conversations/{id}",
+                delete(|| async {
+                    (
+                        S::NOT_FOUND,
+                        [(header::CONTENT_TYPE, "application/json")],
+                        r#"{"error":"not_found","detail":"That conversation was not found."}"#,
+                    )
+                }),
+            )
             .with_state(seen.clone());
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", l.local_addr().unwrap());
         tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
         Fake { url, seen }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_404_with_an_explaining_body_still_counts_as_already_gone() {
+        let fake = fake_server(vec![(200, String::new())]).await;
+        let remote = remote_for(&fake.url, Some("t"), PathBuf::new());
+        remote.delete_conversation("c1".into()).await.unwrap();
     }
 
     async fn ask_fake(fake: &Fake) -> Vec<StreamEvent> {

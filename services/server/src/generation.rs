@@ -869,7 +869,7 @@ fn spawn_run(
             // so the audit record of what was sent is what was sent.
             let history: Option<Vec<ChatMessage>> = fin.space.lock().get_messages(&fin.conversation_id).ok().map(|ms| {
                 let all: Vec<ChatMessage> = ms.iter().map(|m| ChatMessage::new(&m.role, &m.content)).collect();
-                crate::llm::last_turns(crate::llm::normalize(&all), turns)
+                askbar_proto::gateway::last_turns(askbar_proto::gateway::normalize(&all), turns)
             });
             provider.zip(system).zip(history)
         };

@@ -100,6 +100,18 @@ A label, a control, a hint and a place for an error. An optional field says so i
 
 <!-- live: field -->
 
+#### `number_field`
+
+A `field` for a number, with the allowed range and its unit as the hint ("1 to 100 items"). The limits come from `constants.rs`.
+
+<!-- live: number_field -->
+
+#### `settings_section`
+
+One section of a settings page: its title and hint at the left, its fields at the right. The body is the fields, in one `sec-fields` element (a `div`, or the page's `form`). The hint is template text, written as is.
+
+<!-- live: settings_section -->
+
 #### `new_secret`
 
 A new password or passphrase, typed twice, with a hint about the shortest length. The length comes from the limits in `constants.rs`.
