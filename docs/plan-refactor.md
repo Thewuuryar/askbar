@@ -214,7 +214,7 @@ Branch `refactor/tests-and-client`. PR title `refactor(client): share test setup
   - `serve(router)` replaces 11 bind-and-spawn pairs.
   - The local `provider()` builders wrap `testing::provider`.
   - `hex` and `client` are defined once.
-- [ ] **R5.2** `test(auditor): share test setup` · haiku
+- [x] **R5.2** `test(auditor): share test setup` · haiku
   Files: `services/auditor/tests/{common/mod.rs,api.rs,alerts.rs,latency.rs,ingest.rs}`.
   Do: move `token`, `hex`, `T` (with its `Drop`) and `start` to `tests/common`.
 - [ ] **R5.3** `refactor(client): one invoke wrapper and one refresh in the popup` · haiku
