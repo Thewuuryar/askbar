@@ -41,7 +41,7 @@ Each stage lands before the first track 1 stage that edits the same code:
 
 Branch `refactor/audit-and-generation`. PR title `refactor(auditor): simplify the audit crate and generation code`.
 
-- [ ] **R1.1** `refactor(auditor): remove the unused span recorder from askbar-audit` · sonnet
+- [x] **R1.1** `refactor(auditor): remove the unused span recorder from askbar-audit` · sonnet
   Files: `crates/askbar-audit/{src/lib.rs,Cargo.toml,tests/chain.rs,tests/access_logs.rs}`, `services/model-gateway/tests/api.rs`.
   Do: delete the unused code:
   - `Recorder::start_span`, `finish_span`, `payload`, `dropped`, `noop` and `send`
@@ -52,36 +52,36 @@ Branch `refactor/audit-and-generation`. PR title `refactor(auditor): simplify th
 
   Tests that used the builders build struct literals instead. Drop the `askbar-service` dependency, which only `ids::new_id` used. Keep the writer thread, `append`, batching, `prune`, `restore` and `access_log`.
   Accept: no caller outside the crate's own tests used the removed items (check with `graphify_callers` or grep); `cargo test -p askbar-audit -p askbar-auditor -p askbar-model-gateway` passes.
-- [ ] **R1.2** `test(auditor): pin the audit chain hash` · haiku
+- [x] **R1.2** `test(auditor): pin the audit chain hash` · haiku
   Files: `crates/askbar-audit/tests/chain.rs`.
   Do: build a fixed set of records with fixed ids and times, and assert their entry hashes equal hex literals taken from the current code.
   Accept: the test passes on the current code. It guards AV2.1's "old records verify unchanged".
-- [ ] **R1.3** `refactor(auditor): drop the cost hook from audit stats` · sonnet
+- [x] **R1.3** `refactor(auditor): drop the cost hook from audit stats` · sonnet
   Files: `crates/askbar-audit/src/lib.rs` (`stats`, `CostFn`, `CostSum`), `services/auditor/src/lib.rs` (the `stats` handler), `services/admin/src/audit_read.rs` (read only).
   Do: remove the cost argument and `CostSum`. The auditor always passes `|_,_,_,_| None`, and the admin sets `cost` and `cost_unknown_requests` itself (`audit_read.rs:17-47`). First add a test that pins the admin's stats JSON for a fixed store, in this same commit.
   Accept: the admin's stats JSON is unchanged; `docs/openapi/audit.v1.yaml` still matches the auditor's response.
-- [ ] **R1.4** `refactor(auditor): group audit stats in SQL` · sonnet · after R1.3
+- [x] **R1.4** `refactor(auditor): group audit stats in SQL` · sonnet · after R1.3
   Files: `crates/askbar-audit/src/lib.rs` (`stats`, `utc_day`).
   Do: replace the three per-group accumulators (by provider, by day, by day and provider) with `GROUP BY` queries. Replace `utc_day` with `strftime('%Y-%m-%d', started_at, 'unixepoch')`.
   Accept: R1.3's test and the existing stats tests pass unchanged.
-- [ ] **R1.5** `refactor(auditor): move askbar-audit unit tests to their own file` · haiku
+- [x] **R1.5** `refactor(auditor): move askbar-audit unit tests to their own file` · haiku
   Files: `crates/askbar-audit/src/lib.rs`, new `crates/askbar-audit/src/tests.rs`.
   Do: move the `mod tests` block as it is to `src/tests.rs` and declare it with `#[cfg(test)] mod tests;`.
   Accept: the same test count passes.
-- [ ] **R1.6** `refactor(server): one sqlite open and migrate helper` · sonnet
+- [x] **R1.6** `refactor(server): one sqlite open and migrate helper` · sonnet
   Files: `services/server/src/{db,space}.rs`.
   Do: one `open_migrated(conn, migrations, app_id, upto)` replaces the copied `open`, `open_in_memory`, `init` (the pragmas) and `migrate` (the `user_version` and `application_id` checks and the migration loop). `upto` keeps the test hook `Db::migrate(upto)` needs. Use `auth::now` for the copied `now()`.
   Leave the admin and `askbar-audit` copies alone: sharing them would need `rusqlite` in `askbar-service`.
   Accept: the migration tests pass; no migration SQL changes.
-- [ ] **R1.7** `refactor(server): one function interrupts a generation` · sonnet
+- [x] **R1.7** `refactor(server): one function interrupts a generation` · sonnet
   Files: `services/server/src/generation.rs` (`sweep_on_start`, `shutdown`), `services/server/src/space.rs` (`get_generation`, read only).
   Do: `sweep_on_start` and `shutdown` both save partial text, finalize as interrupted and mark the question failed. One `interrupt_row` does it for both. `shutdown` reads its row with `get_generation` instead of its own SQL. Keep each caller's way of finding the provider.
   Accept: the server's restart and shutdown tests pass unchanged.
-- [ ] **R1.8** `refactor(server): map a generation outcome in one place` · sonnet · after R1.7
+- [x] **R1.8** `refactor(server): map a generation outcome in one place` · sonnet · after R1.7
   Files: `services/server/src/generation.rs` (`Outcome`, `Finisher::finish`).
   Do: give `Outcome` one method returning the stored status, the error, the failed flag and the `Terminal` event, so each variant is spelled out once. Fold in `terminal_of` only if it maps the same way.
   Accept: the chat tests pass unchanged.
-- [ ] **R1.9** `refactor(server): remove unused cancel and catalog code` · haiku
+- [x] **R1.9** `refactor(server): remove unused cancel and catalog code` · haiku
   Files: `services/server/src/{generation,gateway}.rs`.
   Do:
   - Delete `Live::set_cancel`, the `cancel` field, its `take()` in `cancel()` and the `oneshot` import.
@@ -89,11 +89,11 @@ Branch `refactor/audit-and-generation`. PR title `refactor(auditor): simplify th
   - Put `Live::delta_count` and `Generations::len`/`is_empty` behind `#[cfg(test)]`.
 
   Accept: no callers remain (grep); `cargo test -p askbar-server` passes.
-- [ ] **R1.10** `refactor(model-gateway): remove stream_chat` · haiku
+- [x] **R1.10** `refactor(model-gateway): remove stream_chat` · haiku
   Files: `services/model-gateway/src/llm.rs`, `services/model-gateway/tests/streaming.rs`, `docs/plan-canaries.md` (C1.2: `sent_chars` is in `stream_chat_report`).
   Do: the two test calls use `stream_chat_report(...).map(|r| r.outcome).map_err(|e| e.error)`.
   Accept: `cargo test -p askbar-model-gateway` passes; `scripts/check-docs.sh` passes.
-- [ ] **R1.11** `refactor(proto): remove unused split_model_id` · haiku
+- [x] **R1.11** `refactor(proto): remove unused split_model_id` · haiku
   Files: `crates/askbar-proto/src/lib.rs` (the function and its test assertions).
   Accept: no callers remain (grep across `crates`, `services` and `clients`); `cargo test -p askbar-proto` passes.
 

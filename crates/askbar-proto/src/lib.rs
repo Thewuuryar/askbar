@@ -62,11 +62,6 @@ pub fn model_id(provider_id: &str, model: &str) -> String {
     format!("{provider_id}/{model}")
 }
 
-/// Splits a provider-qualified id at its first slash: a provider id has none, a model name may.
-pub fn split_model_id(id: &str) -> Option<(&str, &str)> {
-    id.split_once('/').filter(|(p, m)| !p.is_empty() && !m.is_empty())
-}
-
 /// A space the caller is a member of (`GET /api/client/v1/spaces`, ADR 0009). Each user has one
 /// `personal` space, listed first; `shared` spaces come later (plan step 1.12).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -666,14 +661,10 @@ mod tests {
     }
 
     #[test]
-    fn a_model_id_is_the_provider_a_slash_and_the_model_and_splits_at_the_first_slash() {
+    fn a_model_id_is_the_provider_a_slash_and_the_model() {
         let e = CatalogEntry { provider_id: "p1".into(), model: "meta/llama-3".into() };
         assert_eq!(e.id(), "p1/meta/llama-3");
-        assert_eq!(split_model_id(&e.id()), Some(("p1", "meta/llama-3")));
         assert_eq!(model_id("p", "m"), "p/m");
-        for bad in ["", "p", "/m", "p/"] {
-            assert_eq!(split_model_id(bad), None, "{bad:?}");
-        }
     }
 
     #[test]

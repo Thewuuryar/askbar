@@ -89,11 +89,6 @@ impl GatewayClient {
         Ok(list)
     }
 
-    /// Forget the catalog held, so the next question asks the gateway (it said a model is not approved).
-    pub fn forget_catalog(&self) {
-        *self.catalog.lock().unwrap_or_else(|e| e.into_inner()) = None;
-    }
-
     fn token(&self) -> Option<String> {
         let t = std::fs::read_to_string(self.token_dir.join("call").join(format!("{LINK}.token"))).ok()?;
         Some(t.trim().to_string()).filter(|t| !t.is_empty())

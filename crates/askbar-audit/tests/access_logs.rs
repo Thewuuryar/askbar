@@ -95,9 +95,14 @@ async fn access_lines_never_take_more_than_half_the_queue_so_they_cannot_crowd_o
     assert!((4..=6).contains(&queued), "{queued}");
     assert_eq!(rec.access_dropped() as usize, 50 - queued);
     // A record that fails closed still gets in.
-    let mut s = SpanStart::new("t", askbar_audit::Kind::Gate, "kill_switch");
-    s.id = "g1".into();
-    s.started_at = now();
+    let s = SpanStart {
+        id: "g1".into(),
+        trace_id: "t".into(),
+        kind: "gate".into(),
+        name: "kill_switch".into(),
+        started_at: now(),
+        ..Default::default()
+    };
     let pending = tokio::spawn({
         let rec = rec.clone();
         async move { rec.append(Record::Start(s)).await }

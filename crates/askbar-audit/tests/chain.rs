@@ -3,7 +3,7 @@
 
 use askbar_audit::chain::{self, GENESIS};
 use askbar_audit::rusqlite::Connection;
-use askbar_audit::{AdminActionWrite, AuditDb, Kind, PayloadWrite, Record, Recorder, SpanFinish, SpanStart};
+use askbar_audit::{AdminActionWrite, AuditDb, PayloadWrite, Record, Recorder, SpanFinish, SpanStart};
 use std::path::PathBuf;
 
 fn dir() -> PathBuf {
@@ -15,12 +15,22 @@ fn now() -> i64 {
 }
 
 fn start(id: &str, at: i64) -> SpanStart {
-    let mut s = SpanStart::new("t1", Kind::Turn, "reply").who("u1", Some("c1"));
-    s.id = id.into();
-    s.started_at = at;
-    s.service = Some("model-gateway".into());
-    s.boot_id = Some("boot-1".into());
-    s
+    SpanStart {
+        id: id.into(),
+        trace_id: "t1".into(),
+        kind: "turn".into(),
+        name: "reply".into(),
+        started_at: at,
+        user_id: Some("u1".into()),
+        client_id: Some("c1".into()),
+        service: Some("model-gateway".into()),
+        boot_id: Some("boot-1".into()),
+        ..Default::default()
+    }
+}
+
+fn finish(id: &str) -> SpanFinish {
+    SpanFinish { id: id.into(), status: "done".into(), ended_at: now(), ..Default::default() }
 }
 
 fn payload(span: &str, at: i64) -> PayloadWrite {
@@ -47,7 +57,7 @@ async fn filled() -> (Recorder, PathBuf) {
     let t = now();
     rec.append(Record::Start(start("s1", t))).await.unwrap();
     rec.append(Record::Payload(payload("s1", t))).await.unwrap();
-    rec.append(Record::Finish(SpanFinish::new("s1", "done"))).await.unwrap();
+    rec.append(Record::Finish(finish("s1"))).await.unwrap();
     rec.append(Record::Start(start("s2", t))).await.unwrap();
     rec.append(Record::AdminAction(action("a1"))).await.unwrap();
     (rec, path)
@@ -90,7 +100,7 @@ async fn every_record_is_chained_in_order_and_a_retry_adds_nothing() {
     let t = now();
     rec.append(Record::Start(start("s1", t))).await.unwrap();
     rec.append(Record::AdminAction(action("a1"))).await.unwrap();
-    rec.append(Record::Finish(SpanFinish::new("s1", "done"))).await.unwrap();
+    rec.append(Record::Finish(finish("s1"))).await.unwrap();
     let n: i64 = c.query_row("SELECT COUNT(*) FROM chain", [], |r| r.get(0)).unwrap();
     assert_eq!(n, 5);
 
@@ -184,7 +194,7 @@ async fn a_prune_is_chained_and_explains_what_it_removed_and_nothing_else() {
     let old = now() - 40 * 86400;
     rec.append(Record::Start(start("old", old))).await.unwrap();
     rec.append(Record::Payload(payload("old", old))).await.unwrap();
-    rec.append(Record::Finish(SpanFinish::new("old", "done"))).await.unwrap();
+    rec.append(Record::Finish(finish("old"))).await.unwrap();
     rec.append(Record::Start(start("new", now()))).await.unwrap();
     rec.append(Record::AdminAction(action("a1"))).await.unwrap();
     let before = chain::head(&reader(&path)).unwrap().seq;
@@ -272,6 +282,40 @@ fn a_file_from_before_the_chain_is_chained_when_it_is_opened() {
     // Opening it again does not chain it a second time.
     let db = AuditDb::open(&path).unwrap();
     assert_eq!(db.chain_head().unwrap().seq, 4);
+}
+
+/// Fixed ids and times, so the entry hashes are the same on every run. A change to them breaks old entries.
+#[tokio::test]
+async fn the_entry_hashes_of_fixed_records_are_pinned() {
+    let t = 1_700_000_000;
+    let path = dir().join("audit.db");
+    let rec = Recorder::spawn(AuditDb::open(&path).unwrap(), 100);
+    rec.append(Record::Start(start("s1", t))).await.unwrap();
+    rec.append(Record::Payload(payload("s1", t))).await.unwrap();
+    rec.append(Record::Finish(SpanFinish { id: "s1".into(), status: "done".into(), ended_at: t + 5, ..Default::default() })).await.unwrap();
+    rec.append(Record::AdminAction(AdminActionWrite {
+        id: "a1".into(),
+        at: t,
+        service: "admin".into(),
+        category: "settings".into(),
+        action: "update".into(),
+        outcome: "done".into(),
+        detail_json: Some("{\"changed\":[\"history_turns\"]}".into()),
+    }))
+    .await
+    .unwrap();
+    let c = reader(&path);
+    let got: Vec<String> = (1..=4).map(|seq| chain::entry_hash(&c, seq).unwrap().unwrap()).collect();
+    assert_eq!(
+        got,
+        [
+            "305bb3ea377aafff961c46093416ae2cd58dda091cc5ca2830466814efcc96ee",
+            "6aa72b6b48f1790be56a9efd52da4685d08a06d72cb0ce8990cc6415dd5dd877",
+            "04e719865b9dfab5ec1e3cfe9e4da5f0d1476f8f08549ed679c422d0997d6eee",
+            "9df01ef7275670a5d58c32750c824ab301ec44f86dd0e85a59ab0396359e583c",
+        ]
+    );
+    assert!(chain::verify(&c).unwrap().ok);
 }
 
 #[test]

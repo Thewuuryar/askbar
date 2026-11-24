@@ -738,13 +738,23 @@ async fn a_restart_cannot_reset_a_budget_because_the_auditor_remembers_what_was_
     let rig = rig().await;
     // The auditor already holds a turn that used 100 tokens today (what an earlier run of the gateway served).
     let now = askbar_service::audit_client::now_parts().0;
-    let mut start = SpanStart::new("earlier", askbar_audit::Kind::Turn, "chat");
-    start.id = "earlier-turn".into();
-    start.started_at = now;
+    let start = SpanStart {
+        id: "earlier-turn".into(),
+        trace_id: "earlier".into(),
+        kind: "turn".into(),
+        name: "chat".into(),
+        started_at: now,
+        ..Default::default()
+    };
     rig.auditor.recorder.append(Record::Start(start)).await.unwrap();
-    let mut end = SpanFinish::new("earlier-turn", "done");
-    end.tokens_in = Some(90);
-    end.tokens_out = Some(10);
+    let end = SpanFinish {
+        id: "earlier-turn".into(),
+        status: "done".into(),
+        ended_at: now,
+        tokens_in: Some(90),
+        tokens_out: Some(10),
+        ..Default::default()
+    };
     rig.auditor.recorder.append(Record::Finish(end)).await.unwrap();
 
     let mut cfg = config(&rig, 1, &[("p", "m")]);

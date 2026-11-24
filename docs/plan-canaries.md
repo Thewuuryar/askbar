@@ -99,7 +99,7 @@ One new `Kind` in `crates/askbar-proto/src/alerter.rs`: `ContextTruncated`. `fed
   Accept: unit tests for `stop`, `length`, `end_turn`, `max_tokens`, `model_context_window_exceeded` and a missing reason; the attempt span's `finish_reason` is no longer null in `tests/streaming.rs`.
 - [ ] **C1.2** `feat(model-gateway): compare reported input tokens with the estimate` · sonnet · after C1.1
   Files: `services/model-gateway/src/{lib,llm}.rs`, `crates/askbar-proto/src/lib.rs`, `tests/e2e/mock_llm.py`, `tests/e2e/mock_llm_test.py`, tests.
-  Do: estimate input tokens from `sent_chars` (already computed in `stream_chat`); after the reply set, on the attempt span, `attrs.context = {estimated_in, reported_in, truncated, stop}`. `truncated` uses `TRUNCATION_RATIO`. Skip when usage is itself estimated. Add a mock-LLM mode that drops the oldest messages to a size and reports the smaller input count, like Ollama ([ADR 0043](adr/0043-mock-llm.md)).
+  Do: estimate input tokens from `sent_chars` (already computed in `stream_chat_report`); after the reply set, on the attempt span, `attrs.context = {estimated_in, reported_in, truncated, stop}`. `truncated` uses `TRUNCATION_RATIO`. Skip when usage is itself estimated. Add a mock-LLM mode that drops the oldest messages to a size and reports the smaller input count, like Ollama ([ADR 0043](adr/0043-mock-llm.md)).
   Accept: a mock-LLM test in truncation mode gives `truncated: true`; a normal reply gives `false`; nothing changes in routing or the reply.
 
 ### Phase 2: provider context limit and trimming
