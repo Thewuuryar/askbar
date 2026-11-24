@@ -1134,6 +1134,15 @@ const STOPPED: &str = "The reply stopped unexpectedly.";
 const INTERRUPTED: &str = "The server restarted before the reply finished.";
 const NOT_RUN: &str = "Not run: the server restarted before this message started.";
 
+/// Saves a running reply's partial text as the assistant message, ends it `interrupted` and fails
+/// its question. `who` is the (user id, conversation id) it belongs to.
+fn interrupt_row(db: &SpaceStore, id: &str, who: (&str, &str), text: &str, by: Option<&crate::ReplyBy>) -> Result<(), crate::DbError> {
+    let message_id = if text.trim().is_empty() { None } else { db.add_reply(who.0, who.1, text, by).ok() };
+    // Both steps always run (shutdown's best effort); the first error is returned.
+    let finalized = db.finalize_generation(id, "interrupted", text, Some(INTERRUPTED), message_id.as_deref());
+    finalized.and(db.mark_question_failed(id, "interrupted", INTERRUPTED))
+}
+
 /// At start-up, for each space: no task from a previous run exists, so any `running` row was cut
 /// off. Its partial text becomes the assistant message; a `queued` row never ran and gets no
 /// message. Returns how many of each it fixed.
@@ -1152,9 +1161,7 @@ pub fn sweep_on_start(db: &SpaceStore) -> Result<(usize, usize), crate::DbError>
             queued += 1;
         } else {
             let by = db.generation_provider(&id)?;
-            let message_id = if text.trim().is_empty() { None } else { db.add_reply(&user_id, &conversation_id, &text, by.as_ref()).ok() };
-            db.finalize_generation(&id, "interrupted", &text, Some(INTERRUPTED), message_id.as_deref())?;
-            db.mark_question_failed(&id, "interrupted", INTERRUPTED)?;
+            interrupt_row(db, &id, (&user_id, &conversation_id), &text, by.as_ref())?;
             running += 1;
         }
     }
@@ -1169,22 +1176,9 @@ pub fn shutdown(state: &Arc<AppState>) {
         let text = live.text();
         {
             let db = space.lock();
-            use rusqlite::OptionalExtension;
-            let row: Option<(String, String, String)> = db
-                .conn()
-                .query_row("SELECT user_id, conversation_id, status FROM generations WHERE id = ?1", [&id], |r| {
-                    Ok((r.get(0)?, r.get(1)?, r.get(2)?))
-                })
-                .optional()
-                .ok()
-                .flatten();
-            if let Some((user_id, conversation_id, status)) = row {
-                if status == "running" {
-                    let by = live.provider();
-                    let message_id =
-                        if text.trim().is_empty() { None } else { db.add_reply(&user_id, &conversation_id, &text, by.as_ref()).ok() };
-                    let _ = db.finalize_generation(&id, "interrupted", &text, Some(INTERRUPTED), message_id.as_deref());
-                    let _ = db.mark_question_failed(&id, "interrupted", INTERRUPTED);
+            if let Some(g) = db.get_generation(&id).ok().flatten() {
+                if g.status == "running" {
+                    let _ = interrupt_row(&db, &id, (&g.user_id, &g.conversation_id), &text, live.provider().as_ref());
                 } else {
                     let _ = db.finalize_generation(&id, "interrupted", "", Some(NOT_RUN), None);
                 }

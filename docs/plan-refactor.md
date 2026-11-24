@@ -73,7 +73,7 @@ Branch `refactor/audit-and-generation`. PR title `refactor(auditor): simplify th
   Do: one `open_migrated(conn, migrations, app_id, upto)` replaces the copied `open`, `open_in_memory`, `init` (the pragmas) and `migrate` (the `user_version` and `application_id` checks and the migration loop). `upto` keeps the test hook `Db::migrate(upto)` needs. Use `auth::now` for the copied `now()`.
   Leave the admin and `askbar-audit` copies alone: sharing them would need `rusqlite` in `askbar-service`.
   Accept: the migration tests pass; no migration SQL changes.
-- [ ] **R1.7** `refactor(server): one function interrupts a generation` · sonnet
+- [x] **R1.7** `refactor(server): one function interrupts a generation` · sonnet
   Files: `services/server/src/generation.rs` (`sweep_on_start`, `shutdown`), `services/server/src/space.rs` (`get_generation`, read only).
   Do: `sweep_on_start` and `shutdown` both save partial text, finalize as interrupted and mark the question failed. One `interrupt_row` does it for both. `shutdown` reads its row with `get_generation` instead of its own SQL. Keep each caller's way of finding the provider.
   Accept: the server's restart and shutdown tests pass unchanged.
