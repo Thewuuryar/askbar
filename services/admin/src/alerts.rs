@@ -234,6 +234,9 @@ pub async fn put_alerts(State(state): St, ApiJson(input): ApiJson<Input>) -> Res
             .map_err(|_| ApiError::new(ErrorCode::Internal, "The admin could not store the settings."))?;
     }
     link.mark_dirty();
+    if let Some(e) = state.egress.get() {
+        e.mark_dirty();
+    }
     Ok(Json(view(&state).await))
 }
 

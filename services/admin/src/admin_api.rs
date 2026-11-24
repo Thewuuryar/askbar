@@ -126,6 +126,9 @@ pub(crate) async fn mutate<T>(
     if let Some(g) = state.gateway.get() {
         g.mark_dirty();
     }
+    if let Some(e) = state.egress.get() {
+        e.mark_dirty();
+    }
     Ok(out)
 }
 

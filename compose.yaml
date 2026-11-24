@@ -119,6 +119,8 @@ services:
       # model-gateway's listener for the admin, on gateway-admin (ADR 0054): the admin gives it the provider keys.
       ASKBAR_GATEWAY_URL: http://gateway-admin-host:8084
       ASKBAR_ALERTER_URL: http://alerter-admin-host:8085
+      # The egress proxy's listener for the admin, on egress-admin (ADR 0056): the admin gives it the allowlists.
+      ASKBAR_EGRESS_PROXY_URL: http://egress-admin-host:8086
       # The auditor, on audit-admin (ADR 0051): the Audit pages read it with the admin's read token.
       ASKBAR_AUDIT_API_URL: http://auditor:8083
       ASKBAR_PUBLIC_URL: ${ASKBAR_PUBLIC_URL:-}
@@ -132,6 +134,8 @@ services:
       gateway-admin: {}
       # The alerter's API (delivery settings, test, status, restart, its own events), the same way (ADR 0055).
       alerter-admin: {}
+      # The egress proxy's API (status, allowlists), the same way (ADR 0056).
+      egress-admin: {}
     volumes:
       # CLIProxyAPI's config: the admin makes it (API key and control secret) before CPA starts.
       - cpa-config:/cpa-config

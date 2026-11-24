@@ -196,7 +196,7 @@ def sp(s): return s.split()
 SPEC = {
   "bootstrap": ("", "server-token admin-token auditor-token model-gateway-token alerter-token egress-proxy-token", ""),
   "server": ("audit-server client-api gateway-server server-api", "server-token:ro", ""),
-  "admin": ("alerter-admin audit-admin cpa-admin gateway-admin server-api", "cpa-config admin-data admin-secrets backup admin-token:ro admin-run caddy-run caddy-secrets", ""),
+  "admin": ("alerter-admin audit-admin cpa-admin egress-admin gateway-admin server-api", "cpa-config admin-data admin-secrets backup admin-token:ro admin-run caddy-run caddy-secrets", ""),
   "auditor": ("audit-admin audit-alerter audit-caddy audit-model-gateway audit-server", "auditor-data auditor-token:ro", ""),
   "model-gateway": ("audit-model-gateway cpa-gateway gateway-admin gateway-server outbound", "model-gateway-token:ro", ""),
   "alerter": ("alerter-admin alerter-outbound audit-alerter", "alerter-data alerter-token:ro", ""),
@@ -296,7 +296,7 @@ CLIENT_IP=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$CLIENT_NET\
 [ "$(http "$CLIENT_NET" "http://$CLIENT_IP:8082/api/server/v1/health")" = 0 ] && pass "nothing on the client-api network answers on 8082" || fail "the server port answers on the client-api network"
 [ "$(http "$EDGE" "http://$SERVER_API/api/server/v1/health")" = 0 ] && pass "a container on edge cannot reach the server API address" || fail "the server API address is reachable from edge"
 admin_nets=$(nets_of "$ADMIN")
-[ "$admin_nets" = "${PROJECT}_alerter-admin ${PROJECT}_audit-admin ${PROJECT}_cpa-admin ${PROJECT}_gateway-admin ${PROJECT}_server-api " ] && pass "the admin is on server-api, cpa-admin, audit-admin, gateway-admin and alerter-admin only (all internal: no route out, never edge)" || fail "the admin's networks are: $admin_nets"
+[ "$admin_nets" = "${PROJECT}_alerter-admin ${PROJECT}_audit-admin ${PROJECT}_cpa-admin ${PROJECT}_egress-admin ${PROJECT}_gateway-admin ${PROJECT}_server-api " ] && pass "the admin is on server-api, cpa-admin, audit-admin, gateway-admin, alerter-admin and egress-admin only (all internal: no route out, never edge)" || fail "the admin's networks are: $admin_nets"
 
 echo "== 3. What the server can see"
 refused "the server cannot list /admin-secrets" docker exec "$SERVER" ls /admin-secrets

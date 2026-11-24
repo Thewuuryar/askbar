@@ -129,6 +129,15 @@ async fn main() {
         state.notifier.notify(askbar_proto::alerter::Kind::RestorePerformed, askbar_proto::alerter::Severity::Warning, Default::default());
     }
     tokio::spawn(alerter.run(state.clone()));
+    // Outbound traffic leaves through the egress proxy (ADR 0056), which denies all until it is given the allowlists. Unset means
+    // none (a native run).
+    if let Some(url) = askbar_admin::egress_link::proxy_url() {
+        let token = askbar_admin::egress_link::read_token(&askbar_admin::server_link::token_dir()).unwrap_or_else(|e| die(e, 1));
+        let egress = askbar_admin::egress_link::EgressLink::new(&url, token);
+        egress.set_notifier(state.notifier.clone());
+        let _ = state.egress.set(egress.clone());
+        tokio::spawn(egress.run(state.clone()));
+    }
     // The Audit pages read the auditor, and the retention setting goes to it (ADR 0051).
     let auditor_token = askbar_admin::auditor_link::read_token(&askbar_admin::server_link::token_dir()).unwrap_or_else(|e| die(e, 1));
     let auditor = askbar_admin::auditor_link::AuditorLink::new(&askbar_admin::auditor_link::auditor_url(), auditor_token);
