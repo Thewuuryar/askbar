@@ -17,6 +17,10 @@ pub mod rules;
 use askbar_audit::{AdminActionWrite, AlertDeliveryWrite, AppendError, PayloadWrite, Record, Recorder};
 use askbar_proto::audit as wire;
 use askbar_proto::http::ApiError;
+use askbar_proto::links::{
+    ADMIN_AUDITOR_APPEND, ADMIN_AUDITOR_READ, ADMIN_AUDITOR_RESTORE, ALERTER_AUDITOR, MODEL_GATEWAY_AUDITOR, MODEL_GATEWAY_AUDITOR_READ,
+    SERVER_AUDITOR,
+};
 use askbar_proto::paths::{self, AUDIT_V1};
 use askbar_proto::ErrorCode;
 use askbar_service::links::{Allow, Caller, Link, Links};
@@ -253,13 +257,13 @@ const GATEWAY_READ: Routes = &[("GET", "/status"), ("GET", "/token-counts")];
 /// caller it stands for, and what it may call. A link whose hash file is not there accepts nothing, so a link
 /// is live from the day `bootstrap` makes its file.
 pub const LINKS: &[(&str, &str, Routes)] = &[
-    ("server-auditor", "server", SERVICE_APPEND),
-    ("model-gateway-auditor", "model-gateway", SERVICE_APPEND),
-    ("admin-auditor-append", "admin", ADMIN_APPEND),
-    ("admin-auditor-read", "admin-read", ADMIN_READ),
-    ("model-gateway-auditor-read", "model-gateway-read", GATEWAY_READ),
-    ("alerter-auditor", "alerter", ALERTER_APPEND),
-    ("admin-auditor-restore", "admin-restore", ADMIN_RESTORE),
+    (SERVER_AUDITOR, "server", SERVICE_APPEND),
+    (MODEL_GATEWAY_AUDITOR, "model-gateway", SERVICE_APPEND),
+    (ADMIN_AUDITOR_APPEND, "admin", ADMIN_APPEND),
+    (ADMIN_AUDITOR_READ, "admin-read", ADMIN_READ),
+    (MODEL_GATEWAY_AUDITOR_READ, "model-gateway-read", GATEWAY_READ),
+    (ALERTER_AUDITOR, "alerter", ALERTER_APPEND),
+    (ADMIN_AUDITOR_RESTORE, "admin-restore", ADMIN_RESTORE),
 ];
 
 fn method(m: &str) -> Method {
