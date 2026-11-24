@@ -107,6 +107,55 @@ impl Limits {
     }
 }
 
+impl EgressConfig {
+    /// A hash of the config (FNV-1a over its JSON, whose keys are sorted), so the admin tells whether a proxy runs the config
+    /// it would push without a counter, and a restarted proxy (version null) is seen at once.
+    pub fn version(&self) -> u64 {
+        let json = serde_json::to_vec(self).unwrap_or_default();
+        json.iter().fold(0xcbf2_9ce4_8422_2325, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3))
+    }
+}
+
+/// The most `PUT /config` body the proxy reads.
+pub const MAX_CONFIG_BYTES: usize = 256 * 1024;
+/// How many denied attempts `GET /status` keeps, newest first.
+pub const RECENT_DENIED: usize = 50;
+/// How long the proxy reads and drops what a client still sends after a refusal, so the answer is not lost to a reset.
+pub const DRAIN_MILLIS: u64 = 500;
+/// The header that carries a denial's [`Reason::code`] on a `403`.
+pub const REASON_HEADER: &str = "X-Askbar-Egress-Reason";
+
+/// `GET /status`. No path, header or content of any request is in it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EgressStatus {
+    pub configured: bool,
+    /// [`EgressConfig::version`] of the config in force; null until the first push.
+    pub version: Option<u64>,
+    pub boot_id: String,
+    pub open_tunnels: u32,
+    pub sources: BTreeMap<String, SourceStats>,
+    pub recent_denied: Vec<Denied>,
+}
+
+/// What one source's listener has done since the process started.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceStats {
+    pub allowed: u64,
+    /// Denied attempts by reason code.
+    pub denied: BTreeMap<String, u64>,
+}
+
+/// One denied attempt: the host as validated (or `invalid`), never a URL or a path.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Denied {
+    pub source: String,
+    pub host: String,
+    pub port: Option<u16>,
+    pub reason: String,
+    /// Unix seconds.
+    pub at: i64,
+}
+
 /// A host that passed [`normalize_host`]: a lower-case ASCII name, or an IP literal in its one accepted form.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Host {

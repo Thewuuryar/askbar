@@ -268,10 +268,13 @@ dependencies = [
  "askbar-service",
  "axum",
  "serde",
+ "serde-saphyr",
  "serde_json",
+ "sha2 0.10.9",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "ulid",
 ]
 
 [[package]]

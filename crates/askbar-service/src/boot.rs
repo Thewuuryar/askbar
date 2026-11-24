@@ -15,6 +15,11 @@ pub fn die(e: impl std::fmt::Display, code: i32) -> ! {
 /// also sits on an outbound network (ADR 0054, ADR 0055).
 pub fn listen_addr(var: &str, example: &str) -> SocketAddr {
     let raw = std::env::var(var).unwrap_or_else(|_| die(format!("{var} is not set (example: {example})"), 2));
+    parse_listen_addr(&raw, var, example)
+}
+
+/// The rules of [`listen_addr`] for a value already read (`var` only names it in the error): one resolvable, non-wildcard address.
+pub fn parse_listen_addr(raw: &str, var: &str, example: &str) -> SocketAddr {
     let mut addrs: Vec<SocketAddr> = match raw.trim().parse::<SocketAddr>() {
         Ok(a) => vec![a],
         Err(_) => raw
