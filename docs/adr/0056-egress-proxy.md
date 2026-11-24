@@ -1,6 +1,6 @@
 # 0056. The `egress-proxy` component
 
-Status: Proposed
+Status: Accepted
 Date: 2026-11-24
 Source: plan phase 4 ([plan-tiered-routing](../plan-tiered-routing/phase-4-egress-proxy.md)); owner decision G8
 
@@ -42,10 +42,10 @@ Invariants, checked by tests and `scripts/check-isolation.sh` once built (see Co
 - **The owner must edit `.github/workflows/ci.yml` and `images.yml`** to build and publish `egress-proxy`. Agents do not change `.github/`.
 - Until the admin pushes config, the model gateway, `cpa` and the alerter cannot reach their providers. The push order is part of the design (plan phase 4).
 - **Verification** (not run yet, the component is not built): the policy unit tests of P4.1a; the proxy integration tests of P4.1b (listeners, rebinding, limits, API); the isolation proof of P4.5 (default deny, private-address blocking, per-source isolation).
-- **Owner decides** (open, from the plan):
-  - whether the list of denied attempts must survive a proxy restart (it would need a link to the auditor; not built now).
+- **Deferred by the owner on 2026-11-24, to decide later:** whether the list of denied attempts must survive a proxy restart (it would need a link to the auditor; not built now).
 
 ## Amendments
 
 - 2026-11-24: decided in review of the pull request (#137), no alert for blocked egress (logged, and shown in the admin from `/status`), `cpa` limited to Anthropic and OpenAI hosts for now, and the alerter's mail through the relay with no 0006 exception.
+- 2026-11-24: accepted by the owner on 2026-11-24 (PR #137); whether the denied list survives a restart is deferred, and the owner decides it later.
 - 2026-11-24: owner's decisions on the open items: tunnel idle 300 s (the other limits as proposed), and `cpa` through the proxy by bumping the pinned CLIProxyAPI, with no 0006 exception and subscription providers dropped if no release supports a proxy.
