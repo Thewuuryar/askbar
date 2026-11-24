@@ -16,7 +16,7 @@ info:
 
     - Service links (`server-auditor`, `model-gateway-auditor`): `hello`, spans, finish and payload records, and the
       configuration version a service applied.
-      Only `model-gateway-auditor` opens model-call spans (`turn`, `attempt`, `tool`, `agent_step`); the
+      Only `model-gateway-auditor` opens model-call spans (`turn`, `attempt`, `tool`, `agent_step`, `step`); the
       server's link opens `gate` spans only.
     - `model-gateway-auditor-read`: `GET /token-counts` and `GET /status`, so the gateway can hold the budget against what
       was used. It appends nothing and reads no trace, content or admin record.
@@ -792,7 +792,7 @@ components:
           - internal
     SpanKind:
       type: string
-      enum: [turn, gate, attempt, tool, agent_step]
+      enum: [turn, gate, attempt, tool, agent_step, step]
     Hello:
       type: object
       required: [boot_id]

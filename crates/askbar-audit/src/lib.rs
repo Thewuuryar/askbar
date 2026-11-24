@@ -194,6 +194,46 @@ const MIGRATIONS: &[&str] = &[
      BEGIN SELECT RAISE(ABORT, 'chain entries cannot be changed'); END;
      CREATE TRIGGER chain_is_never_deleted BEFORE DELETE ON chain
      BEGIN SELECT RAISE(ABORT, 'chain entries cannot be deleted'); END;",
+    // v7: the span kind `step` (plan-audit-viewer AV2.1, ADR 0010): one stage inside an attempt, written by `model-gateway`
+    // only. The CHECK on `kind` cannot be altered in place, so the table is made again with the same columns, indexes and
+    // triggers (as v5 did for `chain`). Triggers do not fire on DROP TABLE, so old spans are kept as they are; the chain
+    // holds digests of the records, which do not change.
+    "CREATE TABLE spans_next (
+         id            TEXT PRIMARY KEY,
+         trace_id      TEXT    NOT NULL,
+         parent_id     TEXT,
+         kind          TEXT    NOT NULL CHECK (kind IN ('turn','gate','attempt','tool','agent_step','step')),
+         name          TEXT    NOT NULL,
+         status        TEXT    NOT NULL,
+         started_at    INTEGER NOT NULL,
+         ended_at      INTEGER,
+         provider_id   TEXT,
+         model         TEXT,
+         tokens_in     INTEGER,
+         tokens_out    INTEGER,
+         tokens_cached INTEGER,
+         ttft_ms       INTEGER,
+         error_code    TEXT,
+         user_id       TEXT,
+         client_id     TEXT,
+         attrs_json    TEXT,
+         service       TEXT,
+         boot_id       TEXT
+     );
+     INSERT INTO spans_next SELECT id, trace_id, parent_id, kind, name, status, started_at, ended_at, provider_id, model,
+         tokens_in, tokens_out, tokens_cached, ttft_ms, error_code, user_id, client_id, attrs_json, service, boot_id
+         FROM spans ORDER BY rowid;
+     DROP TABLE spans;
+     ALTER TABLE spans_next RENAME TO spans;
+     CREATE INDEX idx_spans_trace   ON spans(trace_id, started_at, id);
+     CREATE INDEX idx_spans_started ON spans(started_at DESC, id DESC);
+     CREATE INDEX idx_spans_service_status ON spans(service, status);
+     CREATE TRIGGER spans_keep_a_week BEFORE DELETE ON spans
+     WHEN old.started_at > CAST(strftime('%s','now') AS INTEGER) - 7 * 86400
+     BEGIN SELECT RAISE(ABORT, 'spans younger than 7 days cannot be deleted'); END;
+     CREATE TRIGGER spans_change_only_while_running BEFORE UPDATE ON spans
+     WHEN old.status <> 'running'
+     BEGIN SELECT RAISE(ABORT, 'a span that is no longer running cannot be changed'); END;",
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -689,7 +729,7 @@ pub struct SpanStart {
     pub id: String,
     pub trace_id: String,
     pub parent_id: Option<String>,
-    /// turn, gate, attempt, tool or agent_step.
+    /// turn, gate, attempt, tool, agent_step or step.
     pub kind: String,
     pub name: String,
     pub started_at: i64,

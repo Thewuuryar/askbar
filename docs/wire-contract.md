@@ -382,8 +382,8 @@ setup), with its own migrations and `PRAGMA user_version`, written only by the s
 - `spans(id, trace_id, parent_id, kind, name, status, started_at, ended_at, provider_id, model,
   tokens_in, tokens_out, tokens_cached, ttft_ms, error_code, user_id, client_id, attrs_json)`.
   `kind` is `turn` (a whole generation), `gate` (a check or a wait, e.g. `queue`), `attempt` (one
-  request to a provider), `tool` or `agent_step`. `trace_id` is the generation id; an attempt's
-  parent is its turn. Times are unix seconds; an attempt's `attrs` carry `latency_ms`,
+  request to a provider), `tool`, `agent_step` or `step` (one stage inside an attempt, opened by
+  `model-gateway` only). `trace_id` is the generation id; an attempt's parent is its turn. Times are unix seconds; an attempt's `attrs` carry `latency_ms`,
   `http_status`, `usage_estimated` and `finish_reason`. A span starts `running` and ends `done`,
   `error`, `cancelled`, `timed_out` or `interrupted` (the last for spans a restart cut off).
 - `payloads(span_id, role, key_id, ciphertext, created_at)`: sealed content only (see *The audit key*).

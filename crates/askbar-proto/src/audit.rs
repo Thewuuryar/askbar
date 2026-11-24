@@ -24,6 +24,8 @@ pub enum SpanKind {
     Attempt,
     Tool,
     AgentStep,
+    /// One stage inside an attempt. Written by `model-gateway` only (ADR 0010).
+    Step,
 }
 
 impl SpanKind {
@@ -34,6 +36,7 @@ impl SpanKind {
             SpanKind::Attempt => "attempt",
             SpanKind::Tool => "tool",
             SpanKind::AgentStep => "agent_step",
+            SpanKind::Step => "step",
         }
     }
 }
@@ -372,8 +375,8 @@ mod tests {
         .unwrap();
         assert_eq!(summary.ended_at, None);
         let bad = json!({ "id": "x", "trace_id": "t", "kind": "admin_action", "name": "n", "started_at": 1, "started_ms": 1 });
-        assert!(serde_json::from_value::<SpanStart>(bad).is_err(), "a span is one of the five kinds");
-        for k in [SpanKind::Turn, SpanKind::Gate, SpanKind::Attempt, SpanKind::Tool, SpanKind::AgentStep] {
+        assert!(serde_json::from_value::<SpanStart>(bad).is_err(), "a span is one of the six kinds");
+        for k in [SpanKind::Turn, SpanKind::Gate, SpanKind::Attempt, SpanKind::Tool, SpanKind::AgentStep, SpanKind::Step] {
             assert_eq!(serde_json::to_value(k).unwrap(), k.as_str());
         }
     }

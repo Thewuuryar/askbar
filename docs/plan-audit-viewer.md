@@ -131,7 +131,7 @@ Refused turns appear in place with their gate and reason. Records written before
 
 ### Phase 2: steps and payload roles
 
-- [ ] **AV2.1** `feat(audit): add the step span kind` · sonnet
+- [x] **AV2.1** `feat(audit): add the step span kind` · sonnet
   Files: `crates/askbar-proto/src/audit.rs`, `crates/askbar-audit/src/lib.rs` (rebuild the spans table with the new kind check, as the v5 migration did, because the CHECK can't be altered in place), `services/auditor/src/lib.rs` (`may_start`: `model-gateway` may open steps under its attempts; the server still opens only `gate` spans).
   Runs in track 1, stage W1.
   Accept: old records verify unchanged; a step under an attempt is stored and chained.
