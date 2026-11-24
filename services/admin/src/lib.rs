@@ -44,7 +44,7 @@ use axum::{
     response::Redirect,
     Router,
 };
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -159,19 +159,37 @@ impl AdminState {
     }
 }
 
+/// The value of `key` when it is set and not blank, else `default`.
+pub fn env_or(key: &str, default: &str) -> String {
+    std::env::var(key).ok().filter(|v| !v.trim().is_empty()).unwrap_or_else(|| default.into())
+}
+
+/// The token `bootstrap` made for `link` (ADR 0049). A missing or empty file means `bootstrap` has not run,
+/// and the error says what to do.
+pub fn read_link_token(token_dir: &Path, link: &str) -> std::io::Result<String> {
+    let path = token_dir.join("call").join(format!("{link}.token"));
+    let missing = |why: &str| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("{} {why}; run `docker compose up -d`, which runs bootstrap first", path.display()),
+        )
+    };
+    match std::fs::read_to_string(&path) {
+        Ok(t) if !t.trim().is_empty() => Ok(t.trim().to_string()),
+        Ok(_) => Err(missing("is empty")),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(missing("is missing")),
+        Err(e) => Err(e),
+    }
+}
+
 /// Where the admin socket is: `ASKBAR_ADMIN_SOCKET`, default `/run/admin/admin.sock`.
 pub fn socket_path() -> PathBuf {
-    std::env::var("ASKBAR_ADMIN_SOCKET")
-        .ok()
-        .filter(|p| !p.trim().is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/run/admin/admin.sock"))
+    PathBuf::from(env_or("ASKBAR_ADMIN_SOCKET", "/run/admin/admin.sock"))
 }
 
 /// Where `admin.db` is: `ASKBAR_ADMIN_DATA_DIR/admin.db`, default `/admin-data`.
 pub fn db_path() -> PathBuf {
-    let dir = std::env::var("ASKBAR_ADMIN_DATA_DIR").ok().filter(|p| !p.trim().is_empty()).unwrap_or_else(|| "/admin-data".into());
-    PathBuf::from(dir).join("admin.db")
+    PathBuf::from(env_or("ASKBAR_ADMIN_DATA_DIR", "/admin-data")).join("admin.db")
 }
 
 const JS: &str = "text/javascript; charset=utf-8";

@@ -30,7 +30,7 @@ const CHECK_EVERY: Duration = Duration::from_secs(12);
 /// The gateway's address: `ASKBAR_GATEWAY_URL`, default `http://gateway-admin-host:8084` (the alias exists on the
 /// `gateway-admin` network only).
 pub fn gateway_url() -> String {
-    std::env::var("ASKBAR_GATEWAY_URL").ok().filter(|p| !p.trim().is_empty()).unwrap_or_else(|| "http://gateway-admin-host:8084".into())
+    crate::env_or("ASKBAR_GATEWAY_URL", "http://gateway-admin-host:8084")
 }
 
 /// The token this admin sends the gateway, made by `bootstrap` (ADR 0049).
@@ -40,19 +40,7 @@ pub fn token_file(token_dir: &Path) -> PathBuf {
 
 /// Read it. A missing or empty file means `bootstrap` has not run, and the error says what to do.
 pub fn read_token(token_dir: &Path) -> std::io::Result<String> {
-    let path = token_file(token_dir);
-    let missing = |why: &str| {
-        std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            format!("{} {why}; run `docker compose up -d`, which runs bootstrap first", path.display()),
-        )
-    };
-    match std::fs::read_to_string(&path) {
-        Ok(t) if !t.trim().is_empty() => Ok(t.trim().to_string()),
-        Ok(_) => Err(missing("is empty")),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(missing("is missing")),
-        Err(e) => Err(e),
-    }
+    crate::read_link_token(token_dir, LINK)
 }
 
 // ------------------------------------------------------------------ the keys

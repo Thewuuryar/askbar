@@ -21,20 +21,12 @@ pub const LINK: &str = "admin-server";
 
 /// Where the secrets of the admin's own are kept: `ASKBAR_ADMIN_SECRETS_DIR`, default `/admin-secrets`.
 pub fn secrets_dir() -> PathBuf {
-    std::env::var("ASKBAR_ADMIN_SECRETS_DIR")
-        .ok()
-        .filter(|p| !p.trim().is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| "/admin-secrets".into())
+    PathBuf::from(crate::env_or("ASKBAR_ADMIN_SECRETS_DIR", "/admin-secrets"))
 }
 
 /// The admin's credential volume, read-only: `ASKBAR_ADMIN_TOKEN_DIR`, default `/admin-token`.
 pub fn token_dir() -> PathBuf {
-    std::env::var("ASKBAR_ADMIN_TOKEN_DIR")
-        .ok()
-        .filter(|p| !p.trim().is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| "/admin-token".into())
+    PathBuf::from(crate::env_or("ASKBAR_ADMIN_TOKEN_DIR", "/admin-token"))
 }
 
 /// The token this admin sends to the server, made by `bootstrap`.
@@ -44,7 +36,7 @@ pub fn token_file(token_dir: &Path) -> PathBuf {
 
 /// The server's server API: `ASKBAR_SERVER_API_URL`, default `http://server:8082`.
 pub fn server_url() -> String {
-    std::env::var("ASKBAR_SERVER_API_URL").ok().filter(|p| !p.trim().is_empty()).unwrap_or_else(|| "http://server:8082".into())
+    crate::env_or("ASKBAR_SERVER_API_URL", "http://server:8082")
 }
 
 pub fn sha256_hex(s: &str) -> String {
@@ -77,19 +69,14 @@ pub(crate) fn write_atomic(path: &Path, contents: &str, mode: u32) -> std::io::R
 /// The token `bootstrap` made for this link. The admin never makes one: a missing or empty file means
 /// `bootstrap` has not run, and the error says what to do (ADR 0049).
 pub fn read_token(token_dir: &Path) -> std::io::Result<String> {
-    let path = token_file(token_dir);
-    let missing = |why: &str| {
-        std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            format!("{} {why}; run `docker compose up -d`, which runs bootstrap first", path.display()),
-        )
-    };
-    match std::fs::read_to_string(&path) {
-        Ok(t) if !t.trim().is_empty() => Ok(t.trim().to_string()),
-        Ok(_) => Err(missing("is empty")),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(missing("is missing")),
-        Err(e) => Err(io_err(&path, e)),
-    }
+    // Unlike the other links, a read error here names the file.
+    crate::read_link_token(token_dir, LINK).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            e
+        } else {
+            io_err(&token_file(token_dir), e)
+        }
+    })
 }
 
 /// The file the admin kept the server token in before `bootstrap` (ADR 0049): removed on start, so no

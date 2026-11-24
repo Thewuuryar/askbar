@@ -166,7 +166,7 @@ Branch `refactor/service-boot`. PR title `refactor(model-gateway): share service
 
 Branch `refactor/admin-links-and-ui`. PR title `refactor(admin): share link code and settings markup`. UI steps run `cargo test -p askbar-admin` and `npm test`. Keep the exports `tests/e2e/admin.test.js` calls (`window.ui.rowConfirm`, `menu`, `lengthHint`, `confirm`, `window.askbarAudit.*`). Update the macro lists in `services/admin/src/pages.rs` and `docs/reference/admin-ui/components.md` when macros change.
 
-- [ ] **R4.1** `refactor(admin): one token reader and env default for the links` · haiku
+- [x] **R4.1** `refactor(admin): one token reader and env default for the links` · haiku
   Files: `services/admin/src/{server_link,alerter_link,gateway_link,auditor_link,actions,lib}.rs`, plus the other files that repeat the env-default chain (`cpa.rs`, `backup_schedule.rs`, `admin_api.rs`, `caddy.rs`).
   Do:
   - One `read_link_token(token_dir, link)` replaces the 6 copies of `read_token`, `read_restore_token` and `append_token`. Keep `server_link::read_token`, which `tests/actions.rs` calls.

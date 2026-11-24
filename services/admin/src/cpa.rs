@@ -35,12 +35,12 @@ const LOGIN_TTL_SECS: i64 = 10 * 60;
 const MAX_PENDING: usize = 8;
 
 pub fn config_dir() -> PathBuf {
-    std::env::var("ASKBAR_CPA_CONFIG_DIR").ok().filter(|p| !p.trim().is_empty()).map(PathBuf::from).unwrap_or_else(|| "/cpa-config".into())
+    PathBuf::from(crate::env_or("ASKBAR_CPA_CONFIG_DIR", "/cpa-config"))
 }
 
 /// Where this service reaches CPA's API: `ASKBAR_CPA_URL`, default `http://cpa:8317`.
 pub fn cpa_url() -> String {
-    std::env::var("ASKBAR_CPA_URL").ok().filter(|p| !p.trim().is_empty()).unwrap_or_else(|| "http://cpa:8317".into())
+    crate::env_or("ASKBAR_CPA_URL", "http://cpa:8317")
 }
 
 #[derive(Clone)]
