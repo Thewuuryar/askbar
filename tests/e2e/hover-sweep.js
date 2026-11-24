@@ -28,8 +28,9 @@ async function hoverSweep(page, { perKind = 6 } = {}) {
       for (const g of groups) {
         const step = Math.max(1, Math.floor(g.length / perKind)); let took = 0;
         for (let i = 0; i < g.length && took < perKind; i += step, took++) {
+          // One item can match two kinds (a menu item that is a button), so its tags add up instead of the later one replacing the earlier.
           const e = g[i]; const id = 'hs' + (n++);
-          e.setAttribute('data-hs', id); out.push({ name, id, target, text: (e.textContent || e.id || e.name || '').trim().slice(0, 30), tag: e.tagName.toLowerCase() + (e.id ? '#' + e.id : '') });
+          e.setAttribute('data-hs', ((e.getAttribute('data-hs') || '') + ' ' + id).trim()); out.push({ name, id, target, text: (e.textContent || e.id || e.name || '').trim().slice(0, 30), tag: e.tagName.toLowerCase() + (e.id ? '#' + e.id : '') });
         }
       }
     }
@@ -37,7 +38,7 @@ async function hoverSweep(page, { perKind = 6 } = {}) {
   }, { kinds: KINDS, perKind });
 
   const snap = (id, target) => page.evaluate(([id, target]) => {
-    const e = document.querySelector('[data-hs="' + id + '"]');
+    const e = document.querySelector('[data-hs~="' + id + '"]');
     const pick = (x) => { const c = getComputedStyle(x); return [c.backgroundColor, c.backgroundImage, c.borderTopColor, c.boxShadow, c.outlineStyle].join('|'); };
     const parts = [pick(e)];
     window.__bg = getComputedStyle(e).backgroundColor;
@@ -49,7 +50,7 @@ async function hoverSweep(page, { perKind = 6 } = {}) {
 
   const misses = []; const moves = []; let checked = 0;
   for (const f of found) {
-    const loc = page.locator('[data-hs="' + f.id + '"]');
+    const loc = page.locator('[data-hs~="' + f.id + '"]');
     await loc.scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => {});
     await page.mouse.move(0, 0);
     const rest = await snap(f.id, f.target); const restBg = await bgNow();
@@ -57,7 +58,7 @@ async function hoverSweep(page, { perKind = 6 } = {}) {
     const box = await loc.boundingBox();
     if (!box) continue;
     const point = { x: box.x + Math.min(box.width / 2, 40), y: box.y + box.height / 2 };
-    const hit = await page.evaluate(([id, x, y]) => { const t = document.elementFromPoint(x, y); const e = document.querySelector('[data-hs="' + id + '"]'); return !!t && (e.contains(t) || t.closest('label') === e.closest('label') && !!e.closest('label')); }, [f.id, point.x, point.y]);
+    const hit = await page.evaluate(([id, x, y]) => { const t = document.elementFromPoint(x, y); const e = document.querySelector('[data-hs~="' + id + '"]'); return !!t && (e.contains(t) || t.closest('label') === e.closest('label') && !!e.closest('label')); }, [f.id, point.x, point.y]);
     if (!hit) continue;
     await page.mouse.move(point.x, point.y);
     let hov = await snap(f.id, f.target);
