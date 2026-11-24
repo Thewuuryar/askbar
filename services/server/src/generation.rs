@@ -24,7 +24,7 @@ use std::collections::HashMap;
 use std::convert::Infallible;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tokio::sync::{oneshot, Notify};
+use tokio::sync::Notify;
 
 /// What a subscriber sees. `seq` counts deltas from 1, and is what SSE `id:` carries.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,8 +66,6 @@ struct Inner {
 pub struct Live {
     inner: Mutex<Inner>,
     notify: Notify,
-    /// Fires the running request's cancel channel; taken on first use.
-    cancel: Mutex<Option<oneshot::Sender<()>>>,
     /// The audit span that times a queued message's wait, until it starts (or is removed).
     queue_span: Mutex<Option<String>>,
     /// Set once Stop (or a delete, or a shutdown) has been asked for, so a generation between two
@@ -144,10 +142,6 @@ impl Live {
         }
     }
 
-    pub fn set_cancel(&self, tx: oneshot::Sender<()>) {
-        *self.cancel.lock().unwrap_or_else(|e| e.into_inner()) = Some(tx);
-    }
-
     /// Asks the generation to stop. True if it was still running and has been told.
     pub fn cancel(&self) -> bool {
         if self.is_finished() {
@@ -155,9 +149,6 @@ impl Live {
         }
         self.cancel_asked.store(true, std::sync::atomic::Ordering::SeqCst);
         self.cancel_notify.notify_waiters();
-        if let Some(tx) = self.cancel.lock().unwrap_or_else(|e| e.into_inner()).take() {
-            let _ = tx.send(());
-        }
         true
     }
 
@@ -193,6 +184,7 @@ impl Live {
         self.lock().deltas.concat()
     }
 
+    #[cfg(test)]
     pub fn delta_count(&self) -> u64 {
         self.lock().deltas.len() as u64
     }
@@ -292,10 +284,12 @@ impl Generations {
         self.map().remove(id);
     }
 
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.map().len()
     }
 
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }

@@ -81,7 +81,7 @@ Branch `refactor/audit-and-generation`. PR title `refactor(auditor): simplify th
   Files: `services/server/src/generation.rs` (`Outcome`, `Finisher::finish`).
   Do: give `Outcome` one method returning the stored status, the error, the failed flag and the `Terminal` event, so each variant is spelled out once. Fold in `terminal_of` only if it maps the same way.
   Accept: the chat tests pass unchanged.
-- [ ] **R1.9** `refactor(server): remove unused cancel and catalog code` · haiku
+- [x] **R1.9** `refactor(server): remove unused cancel and catalog code` · haiku
   Files: `services/server/src/{generation,gateway}.rs`.
   Do:
   - Delete `Live::set_cancel`, the `cancel` field, its `take()` in `cancel()` and the `oneshot` import.
