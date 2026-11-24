@@ -1,11 +1,8 @@
 use askbar_server::{server_api, AppState};
-use sha2::{Digest, Sha256};
+mod common;
+use common::{hex, serve, MockLlm};
 
 const TOKEN: &str = "mgt_this-is-the-raw-server-token";
-
-fn hex(s: &str) -> String {
-    Sha256::digest(s.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
-}
 
 struct T {
     url: String,
@@ -30,10 +27,7 @@ async fn start(write_hash: bool) -> T {
     let db = askbar_server::Db::open_in_memory().unwrap();
     db.seed_server().unwrap();
     let state = AppState::new(db, askbar_server::MIN_CLIENT);
-    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("http://{}", l.local_addr().unwrap());
-    let app = server_api::router(state, hash_file.clone());
-    tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
+    let url = format!("http://{}", serve(server_api::router(state, hash_file.clone())).await);
     T { url, hash_file, dir, http: reqwest::Client::new() }
 }
 
@@ -121,20 +115,7 @@ use askbar_proto::{Budget, DisplaySettings, Snapshot, SnapshotPairCode, Snapshot
 use serde_json::json;
 
 fn provider(id: &str) -> SnapshotProvider {
-    SnapshotProvider {
-        id: id.into(),
-        name: format!("name-{id}"),
-        kind: "openai".into(),
-        base_url: "http://x/v1".into(),
-        model: "m".into(),
-        max_tokens: Some(100),
-        temperature: None,
-        headers: Default::default(),
-        billing: Default::default(),
-        price_in: None,
-        price_out: None,
-        price_cached_in: None,
-    }
+    SnapshotProvider { max_tokens: Some(100), ..askbar_server::testing::provider(id, &format!("name-{id}"), "http://x/v1", "m") }
 }
 
 fn snapshot() -> Snapshot {
@@ -188,10 +169,7 @@ async fn start_state(with_rig: bool) -> S {
     let rig = askbar_server::testing::Rig::start().await;
     let state = AppState::new(db, askbar_server::MIN_CLIENT);
     let state = if with_rig { rig.attach(state).await } else { state };
-    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("http://{}", l.local_addr().unwrap());
-    let app = server_api::router(state.clone(), hash_file.clone());
-    tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
+    let url = format!("http://{}", serve(server_api::router(state.clone(), hash_file.clone())).await);
     S { t: T { url, hash_file, dir, http: reqwest::Client::new() }, state, rig }
 }
 
@@ -606,15 +584,8 @@ async fn users_are_listed_and_the_server_holds_no_provider_key_nor_a_route_to_se
 #[tokio::test]
 async fn a_generation_with_the_mocks_usage_adds_to_the_overview_totals() {
     use reqwest::Method as M;
-    use std::io::{BufRead, BufReader};
-    use std::process::{Command, Stdio};
-    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-    let script = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/e2e/mock_llm.py");
-    let mut child =
-        Command::new("python3").args(["-u", script, &port.to_string()]).stdout(Stdio::piped()).spawn().expect("python3 is needed");
-    let mut out = BufReader::new(child.stdout.take().unwrap());
-    let mut first = String::new();
-    out.read_line(&mut first).unwrap(); // "mock LLM on ..."
+    let mock = MockLlm::start();
+    let port = mock.port;
 
     let s = start_with_state().await;
     let (user, client) = {
@@ -658,8 +629,6 @@ async fn a_generation_with_the_mocks_usage_adds_to_the_overview_totals() {
     let u: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(st, 200);
     assert_eq!((&u["tokens_in"], &u["tokens_out"]), (&json!(100), &json!(50)), "the totals are the mock's usage chunk");
-    let _ = child.kill();
-    let _ = child.wait();
 }
 
 #[tokio::test]
@@ -761,14 +730,8 @@ async fn deleting_a_user_removes_their_space_file_clients_and_row_and_leaves_eve
     let file = |id: &str| dir.join("spaces").join(format!("{id}.db"));
     assert!(file(&gone_space).exists() && file(&kept_space).exists());
 
-    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("http://{}", l.local_addr().unwrap());
-    let app = server_api::router(state.clone(), hash_file.clone());
-    tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
-    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let client_url = format!("http://{}", l.local_addr().unwrap());
-    let app = askbar_server::client_router(state.clone());
-    tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
+    let url = format!("http://{}", serve(server_api::router(state.clone(), hash_file.clone())).await);
+    let client_url = format!("http://{}", serve(askbar_server::client_router(state.clone())).await);
     let http = reqwest::Client::new();
     let list = |token: String, space: String| {
         let (http, client_url) = (http.clone(), client_url.clone());

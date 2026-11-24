@@ -1,56 +1,19 @@
 //! Chat streaming against the real tests/mock_llm.py.
 
+mod common;
 use askbar_proto::{ChatEvent, ChatRequest};
 use askbar_server::{auth, AppState};
+use common::{client, client_builder, serve, MockLlm};
 use futures_util::StreamExt;
-use std::io::{BufRead, BufReader};
 use std::net::SocketAddr;
-use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
-
-struct Mock {
-    child: Child,
-    port: u16,
-    log: Arc<Mutex<Vec<String>>>,
-}
-
-impl Drop for Mock {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
-
-fn start_mock() -> Mock {
-    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-    let script = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/e2e/mock_llm.py");
-    let mut child = Command::new("python3")
-        .args(["-u", script, &port.to_string()])
-        .stdout(Stdio::piped())
-        .spawn()
-        .expect("python3 is needed for these tests");
-    let log = Arc::new(Mutex::new(Vec::new()));
-    let out = BufReader::new(child.stdout.take().unwrap());
-    let l = log.clone();
-    std::thread::spawn(move || {
-        for line in out.lines().map_while(Result::ok) {
-            l.lock().unwrap().push(line);
-        }
-    });
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while std::net::TcpStream::connect(("127.0.0.1", port)).is_err() {
-        assert!(Instant::now() < deadline, "mock did not start");
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    Mock { child, port, log }
-}
 
 struct T {
     addr: SocketAddr,
     state: Arc<AppState>,
     token: String,
-    mock: Mock,
+    mock: MockLlm,
     /// The user's personal space, where these tests chat.
     space: Arc<askbar_server::Space>,
     /// The in-process gateway and auditor the replies go through (ADR 0054).
@@ -58,7 +21,7 @@ struct T {
 }
 
 async fn start() -> T {
-    let mock = start_mock();
+    let mock = MockLlm::start();
     let db = askbar_server::Db::open_in_memory().unwrap();
     let user = db.seed_server().unwrap();
     askbar_server::testing::add_provider(
@@ -72,10 +35,7 @@ async fn start() -> T {
     rig.sync(&state);
     let token = auth::redeem_pair_code(&state.db.lock().unwrap(), &code).unwrap().unwrap();
     let space = askbar_server::testing::personal_space(&state, &user);
-    let app = askbar_server::client_router(state.clone());
-    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = l.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
+    let addr = serve(askbar_server::client_router(state.clone())).await;
     T { addr, state, token, mock, space, _rig: rig }
 }
 
@@ -371,16 +331,6 @@ async fn bad_requests_are_plain_http_errors() {
         .await
         .unwrap();
     assert_eq!(r.status(), 401);
-}
-
-fn client_builder() -> reqwest::ClientBuilder {
-    let mut h = reqwest::header::HeaderMap::new();
-    h.insert(askbar_proto::CLIENT_VERSION_HEADER, "0.6.0".parse().unwrap());
-    reqwest::Client::builder().default_headers(h)
-}
-
-fn client() -> reqwest::Client {
-    client_builder().build().unwrap()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

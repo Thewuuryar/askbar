@@ -10,6 +10,8 @@
 //! It fails only if the 95th percentile of the added time is over 200 ms in two runs in a row: one slow run on a busy machine is
 //! noise, two are not. Run it with `cargo test -p askbar-server --test load -- --nocapture` to see the figures.
 
+mod common;
+use common::MockLlm;
 use futures_util::StreamExt;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -19,29 +21,6 @@ const WARM_UP_ROUNDS: usize = 3;
 const ROUNDS: usize = 20;
 const LIMIT: Duration = Duration::from_millis(200);
 const RUNS: usize = 2;
-
-struct Mock(std::process::Child);
-impl Drop for Mock {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
-}
-
-fn start_mock() -> (Mock, u16) {
-    use std::io::{BufRead, BufReader};
-    use std::process::{Command, Stdio};
-    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-    let script = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/e2e/mock_llm.py");
-    let mut child =
-        Command::new("python3").args(["-u", script, &port.to_string()]).stdout(Stdio::piped()).spawn().expect("python3 is needed");
-    let mut out = BufReader::new(child.stdout.take().unwrap());
-    let mut line = String::new();
-    out.read_line(&mut line).unwrap();
-    // Keep reading: the mock logs every request, and a closed pipe would break it.
-    std::thread::spawn(move || for _ in out.lines() {});
-    (Mock(child), port)
-}
 
 /// The mock model's own time to its first piece of text, asked directly the way the gateway asks it.
 async fn mock_time_to_first_text(http: &reqwest::Client, port: u16) -> Duration {
@@ -134,7 +113,8 @@ async fn one_run(state: &Arc<askbar_server::AppState>, user: &str, client: &str,
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn three_replies_at_once_add_under_200_ms_at_the_95th_percentile_before_the_first_token() {
-    let (_mock, port) = start_mock();
+    let mock = MockLlm::start();
+    let port = mock.port;
     let (state, _dir, _rig) = askbar_server::testing::state_with_audit(&format!("http://127.0.0.1:{port}/v1")).await;
     let (user, client) = {
         let db = state.db.lock().unwrap();

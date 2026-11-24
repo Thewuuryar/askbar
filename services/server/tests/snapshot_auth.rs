@@ -1,18 +1,15 @@
 //! Pairing and revocation follow the snapshot: codes are checked by hash and recorded as
 //! redeemed; clients the snapshot lists as revoked are refused.
 
+mod common;
 use askbar_proto::{Budget, DisplaySettings, Snapshot, SnapshotPairCode};
 use askbar_server::{server_api, AppState};
+use common::{hex, serve};
 use serde_json::json;
-use sha2::{Digest, Sha256};
 use std::sync::Arc;
 
 const SERVER_TOKEN: &str = "mgt_test-token";
 const CODE: &str = "pairing-code-one";
-
-fn hex(s: &str) -> String {
-    Sha256::digest(s.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
-}
 
 struct T {
     api: String,
@@ -29,13 +26,6 @@ impl Drop for T {
     }
 }
 
-async fn serve(app: axum::Router) -> String {
-    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = format!("http://{}", l.local_addr().unwrap());
-    tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
-    addr
-}
-
 async fn start() -> T {
     let dir = std::env::temp_dir().join(format!("askbar-snapauth-{}", ulid::Ulid::new()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -44,8 +34,8 @@ async fn start() -> T {
     let user = db.seed_server().unwrap();
     let state = AppState::new(db, askbar_server::MIN_CLIENT);
     T {
-        api: serve(askbar_server::client_router(state.clone())).await,
-        server_api: serve(server_api::router(state.clone(), dir.join("token.sha256"))).await,
+        api: format!("http://{}", serve(askbar_server::client_router(state.clone())).await),
+        server_api: format!("http://{}", serve(server_api::router(state.clone(), dir.join("token.sha256"))).await),
         user,
         state,
         http: reqwest::Client::new(),

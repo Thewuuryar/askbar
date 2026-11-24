@@ -2,68 +2,27 @@
 //! trail is never skipped, so model work stops with `503 audit_backlog` instead, and a reply already running finishes.
 //! Each test runs the server, the gateway and the auditor (in-process, the rig) and the real mock LLM.
 
+mod common;
 use askbar_server::generation::{submit, Submit, SubmitError};
 use askbar_server::testing::Rig;
 use askbar_server::AppState;
 use axum::response::IntoResponse;
+use common::MockLlm;
 use futures_util::StreamExt;
-use std::io::{BufRead, BufReader};
-use std::process::{Child, Command, Stdio};
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
-
-/// The mock LLM, with the lines it logs (one per request).
-struct Mock {
-    child: Child,
-    port: u16,
-    log: Arc<Mutex<Vec<String>>>,
-}
-
-impl Drop for Mock {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
-
-fn start_mock() -> Mock {
-    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-    let script = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/e2e/mock_llm.py");
-    let mut child =
-        Command::new("python3").args(["-u", script, &port.to_string()]).stdout(Stdio::piped()).spawn().expect("python3 is needed");
-    let log = Arc::new(Mutex::new(Vec::new()));
-    let out = BufReader::new(child.stdout.take().unwrap());
-    let l = log.clone();
-    std::thread::spawn(move || {
-        for line in out.lines().map_while(Result::ok) {
-            l.lock().unwrap().push(line);
-        }
-    });
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while std::net::TcpStream::connect(("127.0.0.1", port)).is_err() {
-        assert!(Instant::now() < deadline, "mock did not start");
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    Mock { child, port, log }
-}
-
-impl Mock {
-    fn provider_calls(&self) -> usize {
-        self.log.lock().unwrap().iter().filter(|l| l.contains("POST")).count()
-    }
-}
 
 struct Stack {
     state: Arc<AppState>,
     rig: &'static Rig,
-    mock: Mock,
+    mock: Arc<MockLlm>,
     user: String,
     client: String,
 }
 
 async fn stack() -> Stack {
-    let mock = start_mock();
+    let mock = Arc::new(MockLlm::start());
     let (state, _dir, rig) = askbar_server::testing::state_with_audit(&format!("http://127.0.0.1:{}/v1", mock.port)).await;
     let (user, client) = {
         let db = state.db.lock().unwrap();
@@ -124,7 +83,7 @@ async fn a_full_audit_disk_stops_new_replies_before_any_provider_is_called_and_t
     let events = s.run("hello").await;
     let Some(GenEvent::Error { message, .. }) = events.last() else { panic!("the reply fails: {events:?}") };
     assert!(message.contains("nothing was sent to the provider"), "{message}");
-    assert_eq!(s.mock.provider_calls(), 0, "no provider was called");
+    assert_eq!(s.mock.requests(), 0, "no provider was called");
 
     // The server's own gate spans were refused too, so it stops taking new ones: 503 audit_backlog with Retry-After.
     until("the server notices the auditor refuses", || !s.state.audit.healthy()).await;
@@ -132,14 +91,14 @@ async fn a_full_audit_disk_stops_new_replies_before_any_provider_is_called_and_t
     let response = refused.into_response();
     assert_eq!(response.status(), 503);
     assert!(response.headers().contains_key("retry-after"));
-    assert_eq!(s.mock.provider_calls(), 0);
+    assert_eq!(s.mock.requests(), 0);
 
     // Room again: replies run, and the refusal the gateway kept is recorded.
     s.set_free(PLENTY);
     until("the server records again", || s.state.audit.healthy()).await;
     let events = s.run("hello again").await;
     assert!(matches!(events.last(), Some(GenEvent::Done)), "{events:?}");
-    assert_eq!(s.mock.provider_calls(), 1);
+    assert_eq!(s.mock.requests(), 1);
     let refused = s.rig.wait_rows("SELECT status, error_code FROM spans WHERE kind = 'turn' AND status = 'refused'").await;
     assert_eq!(refused[0][1], "audit_backlog");
 }
@@ -173,7 +132,7 @@ async fn a_reply_already_running_finishes_when_the_auditor_runs_out_of_room() {
 
 #[tokio::test]
 async fn an_auditor_that_cannot_be_reached_stops_replies_at_the_server_and_nothing_is_called() {
-    let mock = start_mock();
+    let mock = MockLlm::start();
     let db = askbar_server::Db::open_in_memory().unwrap();
     let user = db.seed_server().unwrap();
     askbar_server::testing::add_provider(
@@ -204,7 +163,7 @@ async fn an_auditor_that_cannot_be_reached_stops_replies_at_the_server_and_nothi
     .err()
     .expect("refused");
     assert_eq!(refused.into_response().status(), 503);
-    assert_eq!(mock.provider_calls(), 0);
+    assert_eq!(mock.requests(), 0);
 }
 
 #[tokio::test]
@@ -217,7 +176,7 @@ async fn a_gateway_with_no_configuration_fails_the_reply_with_a_sentence() {
     let Some(GenEvent::Error { message, code }) = events.last() else { panic!("{events:?}") };
     assert_eq!(*code, "provider_error");
     assert!(message.contains("starting up"), "{message}");
-    assert_eq!(s.mock.provider_calls(), 0);
+    assert_eq!(s.mock.requests(), 0);
 }
 
 /// A second state on the same rig whose gateway link points at a gateway nothing has configured.
@@ -235,6 +194,5 @@ async fn askbar_model_gateway_unconfigured(s: &Stack) -> Stack {
     let state = other.attach(AppState::new(db, askbar_server::MIN_CLIENT)).await; // no `sync`: no configuration
     let rig: &'static Rig = Box::leak(Box::new(other));
     // The mock is the first stack's; it is only counted, never started again.
-    let mock = Mock { child: Command::new("true").spawn().unwrap(), port: s.mock.port, log: s.mock.log.clone() };
-    Stack { state, rig, mock, user, client }
+    Stack { state, rig, mock: s.mock.clone(), user, client }
 }

@@ -207,35 +207,35 @@ Branch `refactor/admin-links-and-ui`. PR title `refactor(admin): share link code
 
 Branch `refactor/tests-and-client`. PR title `refactor(client): share test setup and popup helpers`.
 
-- [ ] **R5.1** `test(server): one mock model launcher and serve helper` · haiku
+- [x] **R5.1** `test(server): one mock model launcher and serve helper` · haiku
   Files: `services/server/src/testing.rs` (or `tests/common/mod.rs`), `services/server/tests/{chat,audit,load,failures,router,server_api,read_api,auth,snapshot_auth}.rs`.
   Do:
   - `MockLlm::start()` (with the port and request log) replaces 6 launchers.
   - `serve(router)` replaces 11 bind-and-spawn pairs.
   - The local `provider()` builders wrap `testing::provider`.
   - `hex` and `client` are defined once.
-- [ ] **R5.2** `test(auditor): share test setup` · haiku
+- [x] **R5.2** `test(auditor): share test setup` · haiku
   Files: `services/auditor/tests/{common/mod.rs,api.rs,alerts.rs,latency.rs,ingest.rs}`.
   Do: move `token`, `hex`, `T` (with its `Drop`) and `start` to `tests/common`.
-- [ ] **R5.3** `refactor(client): one invoke wrapper and one refresh in the popup` · haiku
+- [x] **R5.3** `refactor(client): one invoke wrapper and one refresh in the popup` · haiku
   Files: `clients/desktop/ui/main.js`, `clients/desktop/tests/`.
   Do:
   - `call(cmd, args, {quiet})` replaces the 9 `try { await invoke } catch { showNotice }` blocks and the `.catch(() => {})` calls.
   - `refreshAll()` replaces the repeated refresh sequences.
   - Delete `state.ui`, `state.provider` and `msg.provider`, which are written but never read.
-- [ ] **R5.4** `refactor(client): one turn starter and shared action buttons` · haiku · after R5.3
+- [x] **R5.4** `refactor(client): one turn starter and shared action buttons` · haiku · after R5.3
   Files: `clients/desktop/ui/main.js`.
   Do:
   - One function starts a turn (user row, streaming assistant row, `streamInto`) at its 3 call sites.
   - `addError`, `addUnsent` and `addWaiting` use `actionButton`.
   - `el.foot` loses the `hidden` attribute that is only ever set to `false`. Check the first paint.
-- [ ] **R5.5** `refactor(client): match 404 by status and share the cancel slot` · sonnet
+- [x] **R5.5** `refactor(client): match 404 by status and share the cancel slot` · sonnet
   Files: `clients/desktop/src-tauri/src/{main,remote}.rs`.
   Do:
   - One helper holds the cancel-slot pattern of `ask`, `resend` and `attach`.
   - `cancel_generation` and `delete_conversation` check the HTTP status, not the text `"404 Not Found."`.
   - The `lock` helper is defined once.
-- [ ] **R5.6** `test(e2e): one HTTP stub helper for the Python fixtures` · haiku
+- [x] **R5.6** `test(e2e): one HTTP stub helper for the Python fixtures` · haiku
   Files: `tests/e2e/{releases_mock,ntfy_sink,smtp_sink}.py`, new `tests/e2e/stub.py`.
   Do: one shared `BaseHTTPRequestHandler` setup. W5.5's fixture `searxng` and pages use it.
   Accept: `npm test` and `scripts/smoke.sh` pass.

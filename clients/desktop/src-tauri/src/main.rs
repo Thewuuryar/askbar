@@ -10,10 +10,10 @@ mod types;
 
 use askbar_proto::{Conversation, Message};
 use client_config::Ui;
-use remote::Remote;
+use remote::{lock, Remote};
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -59,8 +59,12 @@ impl AppState {
     }
 }
 
-fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|e| e.into_inner())
+/// Runs a reply-streaming call with the cancel slot armed, so `cancel_ask` can stop it.
+async fn with_cancel<F: std::future::Future<Output = ()>>(state: &AppState, run: impl FnOnce(oneshot::Receiver<()>) -> F) {
+    let (tx, rx) = oneshot::channel();
+    *lock(&state.cancel) = Some(tx);
+    run(rx).await;
+    lock(&state.cancel).take();
 }
 
 // ------------------------------------------------------------- window
@@ -272,15 +276,15 @@ async fn ask(
     if text.is_empty() {
         return Ok(());
     }
-    let (tx, rx) = oneshot::channel();
-    *lock(&state.cancel) = Some(tx);
-    state
-        .backend()
-        .ask_with(model, conversation_id, text, rx, &|e| {
-            let _ = on_event.send(e);
-        })
-        .await;
-    lock(&state.cancel).take();
+    let backend = state.backend();
+    with_cancel(&state, |rx| async move {
+        backend
+            .ask_with(model, conversation_id, text, rx, &|e| {
+                let _ = on_event.send(e);
+            })
+            .await
+    })
+    .await;
     Ok(())
 }
 
@@ -293,15 +297,15 @@ async fn unsent_messages(state: State<'_, AppState>) -> Result<Vec<types::Unsent
 /// Sends an unsent message again (same request id, so the server never doubles it).
 #[tauri::command]
 async fn resend(state: State<'_, AppState>, client_request_id: String, on_event: Channel<StreamEvent>) -> Result<(), String> {
-    let (tx, rx) = oneshot::channel();
-    *lock(&state.cancel) = Some(tx);
-    state
-        .backend()
-        .resend(client_request_id, rx, &|e| {
-            let _ = on_event.send(e);
-        })
-        .await;
-    lock(&state.cancel).take();
+    let backend = state.backend();
+    with_cancel(&state, |rx| async move {
+        backend
+            .resend(client_request_id, rx, &|e| {
+                let _ = on_event.send(e);
+            })
+            .await
+    })
+    .await;
     Ok(())
 }
 
@@ -326,15 +330,15 @@ async fn cancel_generation(state: State<'_, AppState>, id: String) -> Result<(),
 /// Joins a reply that is already running on the server. Stop (`cancel_ask`) works on it as on `ask`.
 #[tauri::command]
 async fn attach(state: State<'_, AppState>, generation_id: String, on_event: Channel<StreamEvent>) -> Result<(), String> {
-    let (tx, rx) = oneshot::channel();
-    *lock(&state.cancel) = Some(tx);
-    state
-        .backend()
-        .attach(generation_id, rx, &|e| {
-            let _ = on_event.send(e);
-        })
-        .await;
-    lock(&state.cancel).take();
+    let backend = state.backend();
+    with_cancel(&state, |rx| async move {
+        backend
+            .attach(generation_id, rx, &|e| {
+                let _ = on_event.send(e);
+            })
+            .await
+    })
+    .await;
     Ok(())
 }
 
