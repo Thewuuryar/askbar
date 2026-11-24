@@ -15,8 +15,7 @@
 #               auditor gets a network like it, shared with the auditor alone (ADR 0051).
 #   gateway-admin  the admin and model-gateway, nothing else. `internal`. gateway-server (the server and the gateway) and
 #               audit-server (the server and the auditor) are the same; audit-model-gateway is the gateway's and the auditor's.
-#   outbound  model-gateway, and in the dev profile the mock LLM. The one network besides `edge` with a route out
-#               (ADR 0006, ADR 0054); nothing else joins it.
+#   outbound  CLIProxyAPI alone, until it moves behind the egress proxy (plan step P4.3b). A route out (ADR 0006).
 #   cpa-gateway  model-gateway and CLIProxyAPI, nothing else. `internal`.
 #   audit-alerter  the auditor and the alerter, nothing else. `internal`. The auditor sends its alert events on it, and the
 #               alerter appends the outcome of each alert (ADR 0055); alerter-admin (the admin and the alerter) is the same.
@@ -196,7 +195,7 @@ services:
   # Provider calls and provider keys (ADR 0054): /api/model-gateway/v1 on two listeners, one on gateway-server for the
   # server and one on gateway-admin for the admin, each on the address its alias gives and never a wildcard. The
   # keys are pushed by the admin and held in memory only, so there is no data volume: its one volume is its credential
-  # volume, read-only. It reaches the auditor on audit-model-gateway and the providers on `outbound`. No exception to
+  # volume, read-only. It reaches the auditor on audit-model-gateway and the providers through the egress proxy on egress-model-gateway. No exception to
   # the hardening above. The server calls it for every reply (plan step 3.1).
   model-gateway:
     build:
@@ -214,6 +213,8 @@ services:
       ASKBAR_GATEWAY_SERVER_ADDR: gateway-server-host:8084
       ASKBAR_GATEWAY_ADMIN_ADDR: gateway-admin-host:8084
       ASKBAR_AUDIT_API_URL: http://auditor:8083
+      # Provider calls leave through the egress proxy (ADR 0056); cpa is reached directly on cpa-gateway.
+      ASKBAR_EGRESS_PROXY_URL: http://egress-model-gateway-host:3128
     networks:
       gateway-server:
         aliases: [gateway-server-host]
@@ -222,7 +223,8 @@ services:
       audit-model-gateway: {}
       # CLIProxyAPI's, for a subscription provider; a network of the two of them with no route out.
       cpa-gateway: {}
-      outbound: {}
+      # Its only way to a provider: the proxy's listener for it, on a network of the two of them.
+      egress-model-gateway: {}
     volumes:
       # The hashes of the tokens it accepts and the token it sends the auditor, made by bootstrap. Read-only.
       - model-gateway-token:/model-gateway-token:ro
@@ -307,8 +309,8 @@ services:
     command: ["python", "/app/mock_llm.py", "8765"]
     networks:
       - edge
-      # The gateway reaches it here: it is the "provider" in the dev profile.
-      - outbound
+      # The proxy reaches it here, once the admin approves mock-llm:8765 for model-gateway: it is the "provider" in the dev profile.
+      - egress-outbound
     volumes:
       - ./tests/e2e/mock_llm.py:/app/mock_llm.py:ro
 
@@ -439,12 +441,11 @@ networks:
     internal: true
   egress-alerter:
     internal: true
-  # The proxy's route out (ADR 0056). Not internal. The proxy alone joins it (and in the dev profile the mock LLM), and its
+  # The proxy's route out (ADR 0056). Not internal. The proxy and, in the dev profile, the mock LLM join it, and its
   # listeners are bound to the addresses of its internal networks, so it answers nothing here.
   egress-outbound:
-  # The providers. Not internal: the one network, besides `edge`, with a route out. Only model-gateway and CLIProxyAPI
-  # (and in the dev profile the mock LLM) join it. Their listeners are bound to the addresses of their own internal
-  # networks, so neither answers on this one.
+  # The subscription providers. Not internal. Only CLIProxyAPI joins it, until P4.3b; its listener is bound to the
+  # addresses of its own internal networks, so it answers nothing here.
   outbound:
 
 # The volumes of earlier versions `askbar-secrets`, `audit-data` and `control-token` are no longer declared (1.0). An install that has them

@@ -139,6 +139,7 @@ import json, uuid
 s, body = call('POST', '/api/admin/v1/providers', {'name': '$2-' + uuid.uuid4().hex[:6], 'type': 'openai', 'base_url': 'http://mock-llm:8765/v1', 'model': 'm', 'api_key': '$3'})
 assert s == 201, (s, body)
 pid = json.loads(body)['id']
+s, body = call('PUT', '/api/admin/v1/egress/approvals', {'source': 'model-gateway', 'host': 'mock-llm', 'port': 8765, 'plain_http': True, 'note': 'isolation check'}); assert s == 200, (s, body)
 s, cat = call('GET', '/api/admin/v1/catalog'); cat = json.loads(cat)
 cat['models'].append({'provider_id': pid, 'model': 'm'}); cat['default'] = pid + '/m'
 s, body = call('PUT', '/api/admin/v1/catalog', cat); assert s == 200, (s, body)
@@ -198,10 +199,10 @@ SPEC = {
   "server": ("audit-server client-api gateway-server server-api", "server-token:ro", ""),
   "admin": ("alerter-admin audit-admin cpa-admin egress-admin gateway-admin server-api", "cpa-config admin-data admin-secrets backup admin-token:ro admin-run caddy-run caddy-secrets", ""),
   "auditor": ("audit-admin audit-alerter audit-caddy audit-model-gateway audit-server", "auditor-data auditor-token:ro", ""),
-  "model-gateway": ("audit-model-gateway cpa-gateway gateway-admin gateway-server outbound", "model-gateway-token:ro", ""),
+  "model-gateway": ("audit-model-gateway cpa-gateway egress-model-gateway gateway-admin gateway-server", "model-gateway-token:ro", ""),
   "alerter": ("alerter-admin alerter-outbound audit-alerter", "alerter-data alerter-token:ro", ""),
   "egress-proxy": ("egress-admin egress-alerter egress-cpa egress-model-gateway egress-outbound", "egress-proxy-token:ro", ""),
-  "mock-llm": ("edge outbound", "", ""),
+  "mock-llm": ("edge egress-outbound", "", ""),
   "caddy": ("audit-caddy client-api edge", "caddy-data caddy-config caddy-run admin-run caddy-secrets:ro", "443/tcp 80/tcp"),
   "cpa": ("cpa-admin cpa-gateway outbound", "cpa-config cpa-auth", ""),
 }
@@ -527,13 +528,13 @@ fi
 
 echo "== 3d5. model-gateway (ADR 0054)"
 GW=askbar-model-gateway
-GW_NET="${PROJECT}_gateway-admin"; GW_SRV_NET="${PROJECT}_gateway-server"; GW_OUT="${PROJECT}_outbound"; GW_AUD="${PROJECT}_audit-model-gateway"
+GW_NET="${PROJECT}_gateway-admin"; GW_SRV_NET="${PROJECT}_gateway-server"; GW_OUT="${PROJECT}_egress-model-gateway"; GW_AUD="${PROJECT}_audit-model-gateway"
 if [ "$(docker inspect -f '{{.State.Running}}' "$GW" 2>/dev/null)" != true ]; then fail "model-gateway is not running"; else
   svc_profile "$GW" model-gateway <<EOF
 health yes
 uid 10004
 caps yes
-nets audit-model-gateway cpa-gateway gateway-admin gateway-server outbound|model-gateway is on audit-model-gateway, cpa-gateway, gateway-admin, gateway-server and outbound only
+nets audit-model-gateway cpa-gateway egress-model-gateway gateway-admin gateway-server|model-gateway is on audit-model-gateway, cpa-gateway, egress-model-gateway, gateway-admin and gateway-server only
 owner $GW|/model-gateway-token/accept/server-model-gateway.sha256|10004 444|the gateway's server hash file (owner, mode)
 owner $GW|/model-gateway-token/accept/admin-model-gateway.sha256|10004 444|the gateway's admin hash file (owner, mode)
 owner $GW|/model-gateway-token/call/model-gateway-auditor.token|10004 400|the gateway's auditor token file (owner, mode)
@@ -557,7 +558,7 @@ EOF
   [ -n "$GW_ADM_TOK" ] && [ -n "$GW_SRV_TOK" ] || fail "the admin or the server holds no gateway token"
   [ "$(http "$GW_NET" "http://$GW_ADMIN_IP:8084/api/model-gateway/v1/health" GET)" = 200 ] && pass "the admin's listener answers on gateway-admin" || fail "the admin's listener does not answer on gateway-admin"
   [ "$(http "$GW_SRV_NET" "http://$GW_SRV_IP:8084/api/model-gateway/v1/health" GET)" = 200 ] && pass "the server's listener answers on gateway-server" || fail "the server's listener does not answer on gateway-server"
-  [ "$(http "$GW_OUT" "http://$GW_OUT_IP:8084/api/model-gateway/v1/health" GET)" = 0 ] && pass "nothing answers on outbound" || fail "the gateway answers on outbound"
+  [ "$(http "$GW_OUT" "http://$GW_OUT_IP:8084/api/model-gateway/v1/health" GET)" = 0 ] && pass "nothing answers on egress-model-gateway" || fail "the gateway answers on egress-model-gateway"
   [ "$(http "$GW_AUD" "http://$GW_AUD_IP:8084/api/model-gateway/v1/health" GET)" = 0 ] && pass "nothing answers on audit-model-gateway" || fail "the gateway answers on audit-model-gateway"
   [ "$(http "$GW_NET" "http://$GW_ADMIN_IP:8084/api/model-gateway/v1/status" GET)" = 401 ] && pass "no token: 401 on the admin's listener" || fail "the admin's listener answers without a token"
   [ "$(http "$GW_NET" "http://$GW_ADMIN_IP:8084/api/model-gateway/v1/status" GET "$GW_SRV_TOK")" = 401 ] && pass "the server's token does not open the admin's listener" || fail "the server's token opened the admin's listener"
@@ -647,7 +648,7 @@ owner $AUDITOR|/auditor-token/accept/alerter-auditor.sha256|10003 444|the audito
 owner $AUDITOR|/auditor-token/call/auditor-alerter.token|10003 400|the auditor's alerter token file (owner, mode)
 owner $ADMIN|/admin-token/call/admin-alerter.token|10001 400|the admin's alerter token file (owner, mode)
 EOF
-  # The server and the auditor still have no route out (3d4, 3d6); the gateway's is `outbound`, which the alerter is not on.
+  # The server and the auditor still have no route out (3d4, 3d6); the gateway reaches providers only through the egress proxy, which the alerter is not on.
   # It reaches the auditor on audit-alerter, and nothing else of ours.
   docker exec "$ALERTER" bash -c 'exec 3<>/dev/tcp/auditor/8083' >/dev/null 2>&1 && pass "the alerter reaches the auditor" || fail "the alerter cannot reach the auditor"
   for h in caddy server askbar-model-gateway cpa; do

@@ -134,12 +134,22 @@ pub struct ReportedError {
 
 pub type HttpClient = reqwest::Client;
 
+/// Provider calls go through the egress proxy when `ASKBAR_EGRESS_PROXY_URL` names one (an address, never a secret; ADR 0056).
+/// Unset means direct, as in the native smoke run.
 pub fn http_client() -> HttpClient {
-    reqwest::Client::builder()
+    client(std::env::var("ASKBAR_EGRESS_PROXY_URL").ok().as_deref().map(str::trim).filter(|u| !u.is_empty()))
+}
+
+/// `cpa` is reached directly on `cpa-gateway`. `.no_proxy()` keeps reqwest from also reading HTTP(S)_PROXY from the environment.
+pub fn client(proxy: Option<&str>) -> HttpClient {
+    let mut b = reqwest::Client::builder()
+        .no_proxy()
         .connect_timeout(Duration::from_secs(15))
-        .user_agent(concat!("askbar/", env!("CARGO_PKG_VERSION")))
-        .build()
-        .expect("reqwest client")
+        .user_agent(concat!("askbar/", env!("CARGO_PKG_VERSION")));
+    if let Some(url) = proxy {
+        b = b.proxy(reqwest::Proxy::all(url).expect("ASKBAR_EGRESS_PROXY_URL").no_proxy(reqwest::NoProxy::from_string("cpa")));
+    }
+    b.build().expect("reqwest client")
 }
 
 // ---------------------------------------------------------------- requests
