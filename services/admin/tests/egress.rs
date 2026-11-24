@@ -102,8 +102,10 @@ async fn the_allowlists_come_from_providers_ntfy_and_smtp_and_a_change_or_a_rest
     assert_eq!(hosts(&first, "alerter"), [("api.github.com".to_string(), 443, false, false)]);
     let cpa = hosts(&first, "cpa");
     assert!(
-        cpa.len() == 6
-            && cpa.iter().all(|h| h.0.contains("anthropic") || h.0.contains("openai") || h.0 == "claude.ai" || h.0 == "chatgpt.com")
+        cpa.len() == 5
+            && cpa
+                .iter()
+                .all(|h| h.0.contains("anthropic") || h.0.contains("openai") || h.0 == "platform.claude.com" || h.0 == "chatgpt.com")
     );
     assert_eq!(link.sync(&t.admin).await, Sync::Current);
 
@@ -167,7 +169,7 @@ async fn each_push_is_recorded_without_a_host_and_is_not_made_when_it_cannot_be_
     let outcomes: Vec<&str> = rows.iter().map(|r| r[0].as_str().unwrap()).collect();
     assert_eq!(outcomes, ["requested", "done"]);
     let detail: Value = serde_json::from_str(rows[0][1].as_str().unwrap()).unwrap();
-    assert_eq!(detail["sources"], json!({ "alerter": 1, "cpa": 6, "model-gateway": 1 }));
+    assert_eq!(detail["sources"], json!({ "alerter": 1, "cpa": 5, "model-gateway": 1 }));
     assert!(detail["version"].as_u64().is_some());
     assert!(!format!("{rows:?}").contains("marker-host"), "a host is in the record");
 

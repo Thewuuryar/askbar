@@ -72,8 +72,7 @@ pub const PAIR_CODE_TTL_SECS: i64 = 10 * 60;
 /// The services the Services page shows and may restart.
 pub const SERVICES: [&str; 6] = ["server", "model-gateway", "alerter", "admin", "caddy", "cpa"];
 /// What `cpa` may reach through the egress proxy (ADR 0056): the hosts behind the two subscription logins, nothing else.
-pub const CPA_EGRESS_HOSTS: [&str; 6] =
-    ["api.anthropic.com", "console.anthropic.com", "claude.ai", "api.openai.com", "auth.openai.com", "chatgpt.com"];
+pub const CPA_EGRESS_HOSTS: [&str; 5] = ["api.anthropic.com", "platform.claude.com", "auth.openai.com", "chatgpt.com", "api.openai.com"];
 /// The limits the admin pushes to the egress proxy; `askbar-proto` bounds them.
 pub const EGRESS_LIMITS: askbar_proto::egress::Limits = askbar_proto::egress::Limits {
     head_bytes: 8 * 1024,
