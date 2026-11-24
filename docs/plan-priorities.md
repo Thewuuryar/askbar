@@ -106,7 +106,7 @@ Until then, roles use admin-pinned models, usage counts against token budgets pe
 
 #### W0: records
 
-- [ ] **O0.1** `docs(adr): amend 0019: order of work after 1.0` · haiku
+- [x] **O0.1** `docs(adr): amend 0019: order of work after 1.0` · haiku
   Files: `docs/adr/0019-post-v1-order-and-tools.md`.
   Do: add the new order:
   0. the refactor in [plan-refactor.md](plan-refactor.md), each stage landing before the track 1 stage that needs it (no behaviour change);
