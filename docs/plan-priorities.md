@@ -98,7 +98,7 @@ Until then, roles use admin-pinned models, usage counts against token budgets pe
 | W0 | Records | O0.1 to O0.3 below; [audit viewer](plan-audit-viewer.md) AV0.2 |
 | W1 | Step records | Audit viewer AV2.1, AV2.2, AV2.3: the `step` span kind (written by `model-gateway` only), the `prompt` payload, and `provider_request` sealed on each attempt |
 | W2 | Egress proxy | Tiered routing [Phase 4](plan-tiered-routing/phase-4-egress-proxy.md): P4.1 to P4.8. In P4.4, leave out the decider addresses, which come with track 4 |
-| W3 | MCP gateway, `searxng`, search and fetch | Tiered routing [Phase 5A](plan-tiered-routing/phase-5a-mcp-gateway.md): every step except those it marks dropped, including P5.2 to P5.5 (approval types, signing key, signing, verification) |
+| W3 | MCP gateway, `searxng`, search and fetch | Tiered routing [Phase 5A](plan-tiered-routing/phase-5a-mcp-gateway.md): every step except those it marks dropped or deferred, including P5.2 to P5.5 (approval types, signing key, signing, verification) |
 | W4 | Roles pinned to models | W4.1 and W4.2 below |
 | W5 | Quick search | W5.1 to W5.6 below |
 | W6 | Admin pages for search | Tiered routing [Phase 8](plan-tiered-routing/phase-8-admin-ui.md) P8.6a (MCP servers and per-user tool permissions). The admin UI overhaul is merged (`services/admin/src/constants.rs` is on `main`), so gate G0 is cleared |
