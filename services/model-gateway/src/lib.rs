@@ -587,7 +587,7 @@ async fn chat(
     // The model asked for; `gates` below refuses it unless the catalog approves it for this provider.
     provider.model = req.model.clone();
     let messages: Vec<ChatMessage> = req.messages.iter().map(|m| ChatMessage::new(&m.role, &m.content)).collect();
-    if llm::normalize(&messages).is_empty() {
+    if askbar_proto::gateway::normalize(&messages).is_empty() {
         return Err(bad("There is nothing to send."));
     }
     // The stops and the budget, from this gateway's own copy: the authoritative one (ADR 0014). Each refusal is a gate span
