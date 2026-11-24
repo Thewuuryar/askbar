@@ -6,14 +6,14 @@ Docs only. Ends with G1.
 
 - [x] **P0.1** `docs(docs): add the tiered routing design` · haiku · after none
   Files: `docs/design-tiered-routing.md`.
-  Do: copy the design file the owner attached (stop and ask if it is missing); make ADR and repo links relative. (The design already uses ADR 0056 and ADR 0001 rules 1 and 2.)
-  Accept: the new ADR is cited as 0056 throughout; `scripts/check-docs.sh` passes.
+  Do: copy the design file the owner attached (stop and ask if it is missing); make ADR and repo links relative. (The design already uses the tiered routing ADR (number assigned when written) and ADR 0001 rules 1 and 2.)
+  Accept: the new ADR is cited by its assigned number throughout; `scripts/check-docs.sh` passes.
 - [x] **P0.2** `docs(docs): replace the tiered routing plan` · haiku · after P0.1
   Files: `docs/plan-tiered-routing.md`, any file linking to it (`grep -rn plan-tiered-routing`).
   Do: overwrite with the attached plan; fix links.
   Accept: docs check passes. From here on tick boxes in the repo copy.
-- [ ] **P0.3** `docs(adr): propose 0056 tiered model routing` · sonnet · after P0.1
-  Files: `docs/adr/0056-tiered-model-routing.md` (from `0000-template.md`), `docs/adr/README.md` index row.
+- [ ] **P0.3** `docs(adr): propose the tiered routing ADR` · sonnet · after P0.1
+  Files: `docs/adr/NNNN-tiered-model-routing.md` (from `0000-template.md`), `docs/adr/README.md` index row.
   Do: Status Proposed. Decision, reasons and consequences from the design (tiers, roles, Jev as a decision provider, signed approvals, script library, rollout, budgets in dollars). Link the amendments below. Do not write "Accepted".
   Accept: ADR format check passes; README row added. Gate: owner accepts (G1).
 - [ ] **P0.4** `docs(adr): amend 0014: tiers, deciders, dollar budgets, fallback` · haiku · after P0.3

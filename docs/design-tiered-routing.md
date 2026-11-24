@@ -6,7 +6,7 @@ Nov 10, 2026 · @Jake · revised Nov 18, 2026
 
 `model-gateway` sends each model call to the cheapest model that can handle it. Models sit in three cost tiers; a decider picks the tier for chat, and roles pick it for agents, research and the judge. The decider is a decision model (Jev, Clef, OpenJev or another System One model) that answers typed questions with calibrated probabilities and can also pre-check tool actions, check agent steps and filter research sources. The judge is the model role `judge.review`, not a component (see Judge and tool approvals). Agents use MCP tools; once the executor ships (deferrable), repeat requests can run an approved script instead of a fresh agent run.
 
-Proposed as ADR 0056, it ships first after 1.0, before the egress proxy. Keys, budgets, the kill switch, the approved model list and audit-before-call stay in the gateway. Prompts reach an outside decision service only if the admin approves a hosted decider, under a zero-retention agreement and the privacy notice; a self-hosted decider (OpenJev, Clef) on a private host keeps them home.
+Proposed as the tiered routing ADR (number assigned when written; 0056 is the egress proxy ADR), it ships first after 1.0, before the egress proxy. Keys, budgets, the kill switch, the approved model list and audit-before-call stay in the gateway. Prompts reach an outside decision service only if the admin approves a hosted decider, under a zero-retention agreement and the privacy notice; a self-hosted decider (OpenJev, Clef) on a private host keeps them home.
 
 ## Decisions
 
@@ -31,7 +31,7 @@ Proposed as ADR 0056, it ships first after 1.0, before the egress proxy. Keys, b
 | Outside decider | A hosted decider needs a recorded zero-retention agreement |
 | Thresholds | From labeled sets; fail closed |
 | **Agents, research and library** |  |
-| MCP gateway | agentgateway behind a Rust front (approval check, audit, permissions, fetch rules); IBM ContextForge as fallback; decided after an evaluation (ADR 0057) |
+| MCP gateway | agentgateway behind a Rust front (approval check, audit, permissions, fetch rules); IBM ContextForge as fallback; decided after an evaluation (the MCP gateway ADR) |
 | Executor | Deferrable, after agents with MCP tools |
 | Step checks | Schema, decider, planner (exit code and tests once the executor ships) |
 | Failed step | Retry on `standard`, then frontier fixer |
@@ -53,7 +53,7 @@ Proposed as ADR 0056, it ships first after 1.0, before the egress proxy. Keys, b
 | `server` | Agent and research loops; judge calls; script catalog. Adds task tables; sends role, task, effort, share flag |
 | `admin` | Owns `constants.rs` (every routing behaviour value) and pushes each service the values it uses, with configuration and keys; creates the signing key, pushes it and the decider keys; promotes and retires scripts. Adds a routing page for the settings in Configuration, decider thresholds and zero-retention record, decider comparison, `cpa` limits, spend views |
 | Executor (deferrable) | Runs scripts and tests; no secrets; verifies approvals; no `model-gateway` link |
-| MCP gateway | agentgateway (Linux Foundation AAIF, Rust, Apache-2.0) behind a Rust front, following the `cpa` pattern (ADR 0037); ContextForge (Python, Apache-2.0, needs PostgreSQL and Redis) is the fallback, chosen after an evaluation. agentgateway does MCP federation, transports, tool servers and their credentials, per-user per-tool rules; it listens only inside the private network. The front verifies the signed approval, writes the audit span before the call (fail closed), checks per-user tool permissions, enforces ADR 0019's fetch rules, serves `GET /status` and takes config pushes. Holds only tool credentials, no route to the server or admin APIs. Name, path prefix and networks in ADR 0057 |
+| MCP gateway | agentgateway (Linux Foundation AAIF, Rust, Apache-2.0) behind a Rust front, following the `cpa` pattern (ADR 0037); ContextForge (Python, Apache-2.0, needs PostgreSQL and Redis) is the fallback, chosen after an evaluation. agentgateway does MCP federation, transports, tool servers and their credentials, per-user per-tool rules; it listens only inside the private network. The front verifies the signed approval, writes the audit span before the call (fail closed), checks per-user tool permissions, enforces ADR 0019's fetch rules, serves `GET /status` and takes config pushes. Holds only tool credentials, no route to the server or admin APIs. Name, path prefix and networks in the MCP gateway ADR |
 | Private decider host | Serves a self-hosted decider (OpenJev or Clef; MLX, llama.cpp or vLLM); local network or Tailscale only |
 | Desktop client | Auto in the picker; tier and effort controls; re-ask; shared marker; Resume |
 
@@ -394,12 +394,12 @@ Neither is a documented API. A failed read shows "unknown", alerts once and neve
 
 ## ADR updates
 
-Two new ADRs and sixteen amendments, checked against ADRs 0001 to 0056. Decision amendments need the owner's approval in the pull request (ADR 0001 rules 1 and 2); description amendments go in with the code.
+Two new ADRs and sixteen amendments, checked against the ADRs in the index at the time. Decision amendments need the owner's approval in the pull request (ADR 0001 rules 1 and 2); description amendments go in with the code.
 
 | ADR | Type | Change |
 | --- | --- | --- |
-| **0056** (new) | Decision | Tiered model routing, decision models as providers, signed tool approvals and the script library: this design |
-| **0057** (new) | Decision | The MCP gateway: agentgateway behind a Rust front (name, API path prefix and OpenAPI file, networks, hardening, approval check, audit before the call, per-user permissions, fetch rules), ContextForge as fallback, chosen after an evaluation; needed because ADR 0001 rule 3 requires an ADR for a new image or service |
+| **next free** (new) | Decision | Tiered model routing, decision models as providers, signed tool approvals and the script library: this design |
+| **next free** (new) | Decision | The MCP gateway: agentgateway behind a Rust front (name, API path prefix and OpenAPI file, networks, hardening, approval check, audit before the call, per-user permissions, fetch rules), ContextForge as fallback, chosen after an evaluation; needed because ADR 0001 rule 3 requires an ADR for a new image or service |
 | [0002](adr/0002-v1-scope-limits-and-ship-criteria.md) Scope | Decision | Routing ships after 1.0, outside the 100-hour estimate. The decider's budget is `timeout_ms` (800 ms); an Auto chat adds up to it to the 200 ms latency target |
 | [0009](adr/0009-spaces-and-storage.md) Spaces | Decision | A space file also holds the task state of its conversations |
 | [0010](adr/0010-auditor.md) Auditor | Decision | Span starts carry the decision record; each agent step is its own span, linked by `task_id`; judge verdicts, approvals, refusals and training shares are recorded |
@@ -414,7 +414,7 @@ Two new ADRs and sixteen amendments, checked against ADRs 0001 to 0056. Decision
 | [0054](adr/0054-model-gateway.md) Gateway | Description | When built: routes, signing key, prices, fallback, the decider client and `/decide`, the share queue, and a test that a marker prompt in the queue never reaches logs |
 | [0039](adr/0039-server.md), [0040](adr/0040-admin.md), [0044](adr/0044-desktop-client.md) | Description | When built: the changes in the Components table; 0040 also records that the admin owns `constants.rs` and pushes values |
 
-**0017 note** (Description; one commit with ADR 0057's code): the agentgateway image is third party, pinned by digest with a licence notice (Apache-2.0), and the Trivy `images` job may not scan pulled third-party images, a gap to close; new libraries and weights need a license reason in the pull request; OpenJev's weights are CC BY-NC 4.0, so commercial use needs a commercial licence first; check the Clef and Clef-flash weights licence too.
+**0017 note** (Description; one commit with the MCP gateway ADR's code): the agentgateway image is third party, pinned by digest with a licence notice (Apache-2.0), and the Trivy `images` job may not scan pulled third-party images, a gap to close; new libraries and weights need a license reason in the pull request; OpenJev's weights are CC BY-NC 4.0, so commercial use needs a commercial licence first; check the Clef and Clef-flash weights licence too.
 
 **Checked, no change:** 0006, 0022, 0023, 0032 (the MCP gateway and searxng follow its limits).
 
@@ -425,7 +425,7 @@ Each change goes in its ADR's pull request.
 ### docs/architecture.md
 
 - **Components, `model-gateway` row:** add "picks each call's model by role, tier and weight, asks the decider for the chat tier, routes the judge role's calls (running the decider cascade first when set), answers typed decisions for the server, and signs tool approvals".
-- **Post-v1 names:** drop **judge** and add "The judge is a model role the server calls, not a component (ADR 0056)."
+- **Post-v1 names:** drop **judge** and add "The judge is a model role the server calls, not a component (the tiered routing ADR)."
 - **Other terms:** add or change:
 
 | Name | Means |

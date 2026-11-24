@@ -1,8 +1,8 @@
 # Plan: tiered model routing
 
-Status: proposed, after 1.0. **Order:** [plan-priorities.md](plan-priorities.md) runs Phases 4, 5A and 5B (except P5.7 and P5.8) and P8.6a first, as the web search track, with research and judge roles pinned to models; the rest of this plan is track 4, after PII redaction and canaries. Do not start Phase 1 until tracks 1 to 3 have their PRs open. Nothing here is decided until [ADR](adr/README.md) 0056 and the amendments in Phase 0 are accepted. This file and one file per phase in [plan-tiered-routing/](plan-tiered-routing/) replace the older local-only classification plan of the same name; the boxes in the phase files track progress.
+Status: proposed, after 1.0. **Order:** [plan-priorities.md](plan-priorities.md) runs Phases 4, 5A and 5B (except P5.7 and P5.8) and P8.6a first, as the web search track, with research and judge roles pinned to models; the rest of this plan is track 4, after PII redaction and canaries. Do not start Phase 1 until tracks 1 to 3 have their PRs open. Nothing here is decided until [ADR](adr/README.md) for tiered routing (number assigned when written) and the amendments in Phase 0 are accepted. This file and one file per phase in [plan-tiered-routing/](plan-tiered-routing/) replace the older local-only classification plan of the same name; the boxes in the phase files track progress.
 
-Design: [design-tiered-routing.md](design-tiered-routing.md) (committed in P0.1 from the design file the owner gives the first session). The design wins on behaviour; this plan wins on order. The new ADR is 0056 (0055 is the alerter).
+Design: [design-tiered-routing.md](design-tiered-routing.md) (committed in P0.1 from the design file the owner gives the first session). The design wins on behaviour; this plan wins on order. The new ADR has no number until it is written; it takes the next free one (0056 is the egress proxy ADR, 0055 the alerter).
 
 Deferred: every admin web UI task (routing page, decider settings page, dry-run panel, decider comparison, shared-question review, spend views, MCP server and tool permission pages, agent task views) waits for Phase 8, which may start any time after G0 (`claude/trusting-thompson-3vv2sw`, the admin UI overhaul, merged into `main`). Admin backend work from Phase 1 on also waits for G0: new values go straight into `services/admin/src/constants.rs`, which exists only on that branch. Phase 0 (docs) can run before G0. Admin backend API work goes in new modules, without touching `pages.rs`, `web.rs`, `ui/**` or the route table beyond one line per route in `lib.rs`.
 
@@ -18,8 +18,8 @@ The orchestrator reads this file and the current phase's file only. It sets a ph
 | 1 Records only | [phase-1-records.md](plan-tiered-routing/phase-1-records.md) | not started |
 | 2 Shadow | [phase-2-shadow.md](plan-tiered-routing/phase-2-shadow.md) | not started |
 | 3 Auto | [phase-3-auto.md](plan-tiered-routing/phase-3-auto.md) | not started |
-| 4 Egress proxy | [phase-4-egress-proxy.md](plan-tiered-routing/phase-4-egress-proxy.md) | not started; runs first, as stage W2 of [plan-priorities.md](plan-priorities.md) |
-| 5A MCP gateway | [phase-5a-mcp-gateway.md](plan-tiered-routing/phase-5a-mcp-gateway.md) | not started; runs first, as stage W3 of [plan-priorities.md](plan-priorities.md) |
+| 4 Egress proxy | [phase-4-egress-proxy.md](plan-tiered-routing/phase-4-egress-proxy.md) | in progress; runs first, as stage W2 of [plan-priorities.md](plan-priorities.md) |
+| 5A MCP gateway | [phase-5a-mcp-gateway.md](plan-tiered-routing/phase-5a-mcp-gateway.md) | in progress; runs first, as stage W3 of [plan-priorities.md](plan-priorities.md) |
 | 5B Research reports and the judge | [phase-5b-research-judge.md](plan-tiered-routing/phase-5b-research-judge.md) | not started; runs in track 1 as stage W7 of [plan-priorities.md](plan-priorities.md), except P5.7 and P5.8 |
 | 6 Agents with MCP tools | [phase-6-agents.md](plan-tiered-routing/phase-6-agents.md) | not started |
 | 7 | none: the script library moved to Phase 10 | not used |
@@ -48,7 +48,7 @@ This plan adds to the shared rules:
 | Gate | Needed before | What |
 | --- | --- | --- |
 | G0 | P1.1a and every admin backend step from Phase 1 on (Phase 0 can run before it) | `claude/trusting-thompson-3vv2sw` (admin UI overhaul, holds `services/admin/src/constants.rs`) merged into `main` |
-| G1 | Phase 1 | Accept ADR 0056 (Proposed to Accepted); approve the decision-amendment PR (Phase 0) |
+| G1 | Phase 1 | Accept the tiered routing ADR (Proposed to Accepted); approve the decision-amendment PR (Phase 0) |
 | G2 | P2.3 | TypeSafe or Cloudflare (or OpenRouter) access and keys for tests; choose the first decider provider |
 | G3 | none | removed: local classifier dropped |
 | G4 | hosted decider on | Recorded zero-retention agreement with the hosted decider's provider; privacy notice wording |
@@ -56,7 +56,7 @@ This plan adds to the shared rules:
 | G6 | none | removed: local classifier dropped |
 | G7 | Phase 3 go-live | Shadow results meet the bar (under 5% frontier-to-fast misses, cheaper than always-`standard`); owner flips `chat_auto.mode` to live and approves Auto as default |
 | G8 | Phase 4 | Egress proxy software and licence; new container; compose and network changes |
-| G9 | Phase 5A (P5.3 on) | Ed25519 signing crate; MCP gateway software: agentgateway (Apache-2.0 image behind a Rust front) or, as fallback, IBM ContextForge, as chosen at G13; new containers `mcp-gateway`, `searxng`; accept ADR 0057; where approval verification code lives (ADR 0045 allows, or a new crate) |
+| G9 | Phase 5A (P5.3 on) | Ed25519 signing crate; MCP gateway software: agentgateway (Apache-2.0 image behind a Rust front) or, as fallback, IBM ContextForge, as chosen at G13; new containers `mcp-gateway`, `searxng`; accept the MCP gateway ADR; where approval verification code lives (ADR 0045 allows, or a new crate) |
 | G10 | Phase 9 (deferrable) | Executor host and hardware; new image |
 | G11 | Phase 10 (deferrable) | Owner promotes each script; go-live bar met |
 | G12 | Phase 8 | same as G0; Phase 8 may start any time after it |
@@ -78,5 +78,5 @@ This plan adds to the shared rules:
 - **A9** Budget alerts become 75% and 90%; the 100% "budget reached" alert stays.
 - **A10** Each provider's System One request and response shapes come from its reference, captured as fixtures in P2.3 and P2.3b.
 - **A11** The design and this plan live in `docs/` as `design-tiered-routing.md` and `plan-tiered-routing.md`, with one file per phase in `docs/plan-tiered-routing/`.
-- **A12** The MCP gateway's component name is `mcp-gateway` unless ADR 0057 picks a less confusable one (ADR 0021 rule 4); its API prefix is chosen in ADR 0057 and every step uses the ADR's names.
+- **A12** The MCP gateway's component name is `mcp-gateway` unless the MCP gateway ADR picks a less confusable one (ADR 0021 rule 4); its API prefix is chosen in the MCP gateway ADR and every step uses the ADR's names.
 - **A13** An invalid plan is sent back to the planner once with the validation error codes (never tool output); a second invalid plan stops the task with a plain message. A `schema` check applies to the step's final JSON output.
