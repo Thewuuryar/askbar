@@ -200,7 +200,7 @@ impl Rules {
     }
 
     /// A request passed the token check on the link of `caller`: it is not silent any more.
-    pub fn seen(&self, caller: &str, _now: i64) {
+    pub fn seen(&self, caller: &str) {
         self.state.lock().unwrap_or_else(|e| e.into_inner()).silent.retain(|c| *c != caller);
     }
 
@@ -497,7 +497,7 @@ pub(crate) mod tests {
         r.tick(700, None, &calls(&[("server", 690), ("model-gateway", 100), ("alerter", 690), ("admin-read", 690)]));
         assert_eq!(c.kinds().len(), 1, "silence that goes on is said once");
         // It speaks, and goes quiet again: a new alert.
-        r.seen("model-gateway", 800);
+        r.seen("model-gateway");
         r.tick(805, None, &calls(&[("server", 800), ("model-gateway", 800), ("alerter", 800), ("admin-read", 800)]));
         r.tick(1200, None, &calls(&[("server", 1190), ("model-gateway", 800), ("alerter", 1190), ("admin-read", 1190)]));
         assert_eq!(c.kinds(), [Kind::ComponentSilent, Kind::ComponentSilent]);

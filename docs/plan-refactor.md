@@ -154,7 +154,7 @@ Branch `refactor/service-boot`. PR title `refactor(model-gateway): share service
   - One `is_empty_of_content` on a `Connection` replaces the auditor's inline copy. Restore still checks it.
 
   Accept: the auditor API tests pass unchanged; `gate()` still runs before every append.
-- [ ] **R3.5** `refactor(auditor): remove a re-export, a single-use trait and an unused parameter` · haiku
+- [x] **R3.5** `refactor(auditor): remove a re-export, a single-use trait and an unused parameter` · haiku
   Files: `services/auditor/src/{lib,rules}.rs`.
   Do: drop the `rusqlite_conn` module, make `ClassName` a function, and remove `_now` from `Rules::seen` and its caller.
 - [ ] **R3.6** `refactor(compose): one runtime base stage in the Dockerfile` · sonnet · gate G-R2

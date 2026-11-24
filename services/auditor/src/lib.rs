@@ -119,7 +119,7 @@ impl Auditor {
     pub fn note_request(&self, caller: &'static str, at: i64) {
         self.last_request.lock().unwrap_or_else(|e| e.into_inner()).insert(caller, at);
         if let Some(r) = self.rules() {
-            r.seen(caller, at);
+            r.seen(caller);
         }
     }
 
@@ -367,22 +367,16 @@ fn internal<E>(_: E) -> Failure {
 }
 
 fn parse<T: DeserializeOwned>(body: &Bytes) -> Result<T, Failure> {
-    serde_json::from_slice(body).map_err(|e| bad(format!("The body is not what this route takes ({}).", e.classify_name())))
+    serde_json::from_slice(body).map_err(|e| bad(format!("The body is not what this route takes ({}).", classify_name(&e))))
 }
 
 /// `serde_json::Error` names its class without quoting the input.
-trait ClassName {
-    fn classify_name(&self) -> &'static str;
-}
-
-impl ClassName for serde_json::Error {
-    fn classify_name(&self) -> &'static str {
-        match self.classify() {
-            serde_json::error::Category::Io => "unreadable",
-            serde_json::error::Category::Syntax => "not JSON",
-            serde_json::error::Category::Data => "wrong fields or types",
-            serde_json::error::Category::Eof => "cut short",
-        }
+fn classify_name(e: &serde_json::Error) -> &'static str {
+    match e.classify() {
+        serde_json::error::Category::Io => "unreadable",
+        serde_json::error::Category::Syntax => "not JSON",
+        serde_json::error::Category::Data => "wrong fields or types",
+        serde_json::error::Category::Eof => "cut short",
     }
 }
 
@@ -644,7 +638,7 @@ async fn add_alert_delivery(
 /// Runs `f` on a read-only connection, off the async threads.
 async fn read<T: Send + 'static>(
     a: &Auditor,
-    f: impl FnOnce(&rusqlite_conn::Connection) -> rusqlite_conn::Result<T> + Send + 'static,
+    f: impl FnOnce(&askbar_audit::rusqlite::Connection) -> askbar_audit::rusqlite::Result<T> + Send + 'static,
 ) -> Result<T, Failure> {
     let recorder = a.recorder.clone();
     tokio::task::spawn_blocking(move || {
@@ -654,11 +648,6 @@ async fn read<T: Send + 'static>(
     .await
     .map_err(internal)?
     .map_err(internal)
-}
-
-/// The database types the reads use, re-exported by the audit crate's `Connection` type alias.
-mod rusqlite_conn {
-    pub use askbar_audit::rusqlite::{Connection, Result};
 }
 
 #[derive(serde::Deserialize)]
