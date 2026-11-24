@@ -24,6 +24,7 @@ pub mod cost;
 pub mod cpa;
 pub mod db;
 pub mod gateway_link;
+pub mod link_client;
 pub mod network;
 pub mod notify;
 pub mod pages;

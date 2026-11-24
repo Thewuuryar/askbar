@@ -171,7 +171,7 @@ Branch `refactor/admin-links-and-ui`. PR title `refactor(admin): share link code
   Do:
   - One `read_link_token(token_dir, link)` replaces the 6 copies of `read_token`, `read_restore_token` and `append_token`. Keep `server_link::read_token`, which `tests/actions.rs` calls.
   - One `env_or(key, default)` replaces the 13 copies of `env::var(..).ok().filter(..)`.
-- [ ] **R4.2** `refactor(admin): one link client for the alerter and gateway links` · sonnet · after R4.1
+- [x] **R4.2** `refactor(admin): one link client for the alerter and gateway links` · sonnet · after R4.1
   Files: `services/admin/src/{alerter_link,gateway_link}.rs`, new `services/admin/src/link_client.rs`.
   Do: one struct holds the HTTP client, base URL, token, online state, last error, dirty flag, token watch, restarts and API prefix, with `new`, `set_notifier`, `online`, `last_error`, `set_error`, `mark_dirty` and `request`. Both links embed it and keep their own `sync` and `run`.
   Accept: `tests/alerts.rs` and `tests/gateway.rs` pass unchanged.

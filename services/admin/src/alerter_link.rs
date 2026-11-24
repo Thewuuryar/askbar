@@ -9,6 +9,7 @@
 //! A configuration's version is a hash of its content, so the admin needs no counter. No topic, token or server address is
 //! logged, returned or put in an error here.
 
+use crate::link_client::LinkClient;
 use crate::secrets::AdminSecrets;
 use crate::AdminState;
 use askbar_proto::alerter::{AlerterConfig, AlerterStatus, NtfyConfig, ReleaseStatus, SmtpConfig, SmtpTls, TestResult};
@@ -17,10 +18,9 @@ use askbar_proto::ErrorCode;
 use rusqlite::{params, Connection, OptionalExtension};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::sync::Notify;
 
 /// The link's name, as `bootstrap` names it.
 pub const LINK: &str = "admin-alerter";
@@ -227,71 +227,40 @@ struct Watch {
 }
 
 pub struct AlerterLink {
-    http: reqwest::Client,
-    base: String,
-    token: String,
-    online: AtomicBool,
-    last_error: Mutex<Option<String>>,
+    link: LinkClient,
     watch: Mutex<Watch>,
-    dirty: Notify,
-    token_watch: crate::notify::TokenWatch,
-    restarts: crate::notify::RestartWatch,
 }
 
 impl AlerterLink {
     pub fn new(base: &str, token: String) -> Arc<AlerterLink> {
         Arc::new(AlerterLink {
-            http: reqwest::Client::builder()
-                .connect_timeout(Duration::from_secs(2))
-                .timeout(Duration::from_secs(15))
-                .build()
-                .expect("reqwest client"),
-            base: base.trim_end_matches('/').to_string(),
-            token,
-            online: AtomicBool::new(false),
-            last_error: Mutex::new(None),
+            link: LinkClient::new(base, token, LINK, "alerter", askbar_proto::paths::ALERTER_V1, Duration::from_secs(15)),
             watch: Mutex::new(Watch::default()),
-            dirty: Notify::new(),
-            token_watch: crate::notify::TokenWatch::new(LINK),
-            restarts: crate::notify::RestartWatch::new("alerter"),
         })
     }
 
-    /// Where an alert about this link's token goes (set once by `main`).
     pub fn set_notifier(&self, n: Arc<crate::notify::Notifier>) {
-        self.token_watch.set_notifier(n.clone());
-        self.restarts.set_notifier(n);
+        self.link.set_notifier(n);
     }
 
     pub fn online(&self) -> bool {
-        self.online.load(Ordering::Relaxed)
+        self.link.online()
     }
 
-    /// A sentence about the last problem, for the Services page; never anything the alerter said.
     pub fn last_error(&self) -> Option<String> {
-        self.last_error.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.link.last_error()
     }
 
     fn set_error(&self, what: Option<String>) {
-        *self.last_error.lock().unwrap_or_else(|e| e.into_inner()) = what;
+        self.link.set_error(what);
     }
 
-    /// Check the alerter now instead of at the next round: something it runs has changed.
     pub fn mark_dirty(&self) {
-        self.dirty.notify_one();
+        self.link.mark_dirty();
     }
 
     async fn request(&self, method: reqwest::Method, path: &str, body: Option<&serde_json::Value>) -> Result<(u16, Vec<u8>), ()> {
-        let url = format!("{}{}{path}", self.base, askbar_proto::paths::ALERTER_V1);
-        let mut req = self.http.request(method, url).bearer_auth(&self.token);
-        if let Some(b) = body {
-            req = req.json(b);
-        }
-        let resp = req.send().await.map_err(|_| ())?;
-        let status = resp.status().as_u16();
-        self.token_watch.saw(status);
-        let bytes = resp.bytes().await.map_err(|_| ())?;
-        Ok((status, bytes.to_vec()))
+        self.link.request(method, path, body).await
     }
 
     /// `GET /status`: what the alerter reports. `None` if it did not answer or did not take the token.
@@ -301,9 +270,9 @@ impl AlerterLink {
             Ok((200, body)) => serde_json::from_slice::<AlerterStatus>(body).ok(),
             _ => None,
         };
-        self.online.store(ok.is_some(), Ordering::Relaxed);
+        self.link.online.store(ok.is_some(), Ordering::Relaxed);
         if let Some(st) = &ok {
-            self.restarts.saw(&st.boot_id);
+            self.link.restarts.saw(&st.boot_id);
         }
         let now = crate::auth::now();
         {
@@ -400,8 +369,8 @@ impl AlerterLink {
     /// `POST /imports`: give the alerter what its export held, opened (a restore, ADR 0013). `409 not_empty` is its answer to one
     /// that has kept something already.
     pub async fn import(&self, tar: Vec<u8>) -> Result<(), ApiError> {
-        let url = format!("{}{}/imports", self.base, askbar_proto::paths::ALERTER_V1);
-        let sent = self.http.post(url).bearer_auth(&self.token).body(tar).send().await;
+        let url = format!("{}{}/imports", self.link.base, askbar_proto::paths::ALERTER_V1);
+        let sent = self.link.http.post(url).bearer_auth(&self.link.token).body(tar).send().await;
         match sent {
             Ok(r) if r.status().is_success() => Ok(()),
             Ok(r) if r.status().as_u16() == 409 => {
@@ -433,7 +402,7 @@ impl AlerterLink {
             Ok(Ok((200, _))) => Ok(()),
             Ok(Ok((status, _))) => Err(PushError::Refused(status)),
             Ok(Err(())) => {
-                self.online.store(false, Ordering::Relaxed);
+                self.link.online.store(false, Ordering::Relaxed);
                 Err(PushError::Unreachable)
             }
         }
@@ -509,7 +478,7 @@ impl AlerterLink {
             }
             tokio::select! {
                 _ = tokio::time::sleep(CHECK_EVERY) => {}
-                _ = self.dirty.notified() => {}
+                _ = self.link.dirty.notified() => {}
             }
         }
     }
