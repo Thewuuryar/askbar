@@ -18,8 +18,9 @@ Source: plan phase 4 ([plan-tiered-routing](../plan-tiered-routing/phase-4-egres
 - **Allowlist per source,** pushed by the admin only. Entries are whole ASCII host names with port, `plain_http` and `relay` flags. Private addresses are allowed only by an audited approval (`allow_private`).
 - **CONNECT only for HTTPS.** No TLS interception: the proxy sees host and port, never content. Plain HTTP works only for an entry with `plain_http`.
 - **Host and address checks:** IP literals in any form are refused unless an entry names them exactly. Every address a name resolves to is checked; one non-public address refuses the connection. The proxy connects to the validated address and never resolves the name again (rebinding defence).
-- **SMTP** goes through a per-source relay port that tunnels to one entry's host and port. `lettre` cannot use a proxy, so the TLS name stays the real host.
-- **Limits and logs:** limits are defaults in `askbar-proto`, pushable within bounds. Logs carry source, host, verdict and reason only. `GET /status` counts allowed and denied requests per source and lists the last ten denied host names.
+- **SMTP** goes through a per-source relay port that tunnels to one entry's host and port. `lettre` cannot use a proxy, so the TLS name stays the real host. The alerter sends all its traffic this way (ntfy by `CONNECT`, mail by the relay port): it keeps no open network for mail, so [0006](0006-v1-outbound-access-and-alerts.md) gets no exception for mail.
+- **`cpa` is limited to Anthropic and OpenAI hosts for now,** the providers behind the two subscription logins. The admin's `CPA_EGRESS_HOSTS` holds only the host names of those two vendors that a trial run shows login and chat need; a host that belongs to neither is refused, and no other provider is allowed for `cpa`.
+- **Limits and logs:** limits are defaults in `askbar-proto`, pushable within bounds. Logs carry source, host, verdict and reason only, never a path or content. `GET /status` counts allowed and denied requests per source and keeps a bounded in-memory list of the 50 most recent denied attempts (source, host, port, reason, time). **Blocked attempts raise no alert:** they are logged and the admin shows them in its UI from its existing poll of `/status`. The proxy has no link to the alerter or the auditor.
 - **No persistent state** and **no new crates** beyond the workspace's own (`tokio`, `axum`, `serde`, `tracing`, `askbar-proto`, `askbar-service`).
 
 Invariants, checked by tests and `scripts/check-isolation.sh` once built (see Consequences): the proxy is the only service with a route out besides Caddy; a request from one source is refused on another source's listener; a private address is refused without an approval; no content or secret appears in logs.
@@ -42,12 +43,10 @@ Invariants, checked by tests and `scripts/check-isolation.sh` once built (see Co
 - Until the admin pushes config, the model gateway, `cpa` and the alerter cannot reach their providers. The push order is part of the design (plan phase 4).
 - **Verification** (not run yet, the component is not built): the policy unit tests of P4.1a; the proxy integration tests of P4.1b (listeners, rebinding, limits, API); the isolation proof of P4.5 (default deny, private-address blocking, per-source isolation).
 - **Owner decides** (open, from the plan):
-  - the `cpa` host list, from P4.3b's trial run;
   - what happens if CLIProxyAPI honours neither a `proxy-url` key nor `HTTPS_PROXY` (P4.3b options);
-  - a relay for mail, or an open network for the alerter's mail only (a second route out and an ADR 0006 exception);
-  - whether a blocked-egress alert is wanted (it needs a poll and a new alert kind);
-  - the limit numbers in the PR.
+  - the limit numbers in the PR;
+  - whether the list of denied attempts must survive a proxy restart (it would need a link to the auditor; not built now).
 
 ## Amendments
 
-None yet.
+- 2026-11-24: decided in review of the pull request (#137), no alert for blocked egress (logged, and shown in the admin from `/status`), `cpa` limited to Anthropic and OpenAI hosts for now, and the alerter's mail through the relay with no 0006 exception.
