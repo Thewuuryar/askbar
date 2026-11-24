@@ -107,7 +107,7 @@ Refused turns appear in place with their gate and reason. Records written before
 
 - [ ] **AV0.1** `docs(adr): amend 0011: open a conversation as one action` · sonnet
   Accept: the rule names the one-conversation exception to "no bulk export".
-- [ ] **AV0.2** `docs(adr): amend 0010, 0051 and 0052: step spans and payload roles` · sonnet · runs in track 1 (W0), before AV0.1; no longer after it
+- [x] **AV0.2** `docs(adr): amend 0010, 0051 and 0052: step spans and payload roles` · sonnet · runs in track 1 (W0), before AV0.1; no longer after it
   Accept: `step` is a span kind written by `model-gateway` only; the payload roles are listed with their writers; `docs/reference/audit/model-calls.md` matches.
 
 ### Phase 1: conversation view
