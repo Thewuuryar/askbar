@@ -21,14 +21,14 @@ pub mod usage;
 use askbar_proto::audit::{SpanFinish, SpanKind, SpanStart};
 use askbar_proto::gateway::{ChatEvent, ChatRequest, FailureClass, GatewayConfig};
 use askbar_proto::http::ApiError;
-use askbar_proto::paths::{self, MODEL_GATEWAY_V1};
+use askbar_proto::paths::MODEL_GATEWAY_V1;
 use askbar_proto::ErrorCode;
 use askbar_service::audit_client::{AuditClient, Refused};
-use askbar_service::links::{Allow, Caller, Link, Links};
+pub use askbar_service::links::RouteEntry;
+use askbar_service::links::{self, Caller, LinkDef, Links, Routes};
 use askbar_service::restart::Restarter;
 use askbar_service::status::BootId;
-use axum::extract::{DefaultBodyLimit, State};
-use axum::http::Method;
+use axum::extract::State;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::routing::{get, post, put};
 use axum::{Extension, Json, Router};
@@ -211,29 +211,19 @@ fn finish(status: &str) -> SpanFinish {
 
 // ------------------------------------------------------------------ the links
 
-/// What one link may call: methods and paths after `/api/model-gateway/v1`.
-type Routes = &'static [(&'static str, &'static str)];
-
 const SERVER_ROUTES: Routes = &[("POST", "/chat"), ("GET", "/catalog")];
 const ADMIN_ROUTES: Routes =
     &[("GET", "/status"), ("PUT", "/config"), ("POST", "/restart"), ("POST", "/models"), ("POST", "/providers/*/test")];
 
 /// The two links: name as `bootstrap` names it (the file `accept/<name>.sha256`), the caller, and the routes.
-pub const LINKS: &[(&str, &str, Routes)] =
-    &[("server-model-gateway", "server", SERVER_ROUTES), ("admin-model-gateway", "admin", ADMIN_ROUTES)];
+pub const LINKS: &[LinkDef] = &[("server-model-gateway", "server", SERVER_ROUTES), ("admin-model-gateway", "admin", ADMIN_ROUTES)];
 
 fn full(rest: &str) -> String {
-    paths::join(MODEL_GATEWAY_V1, rest)
+    links::full(MODEL_GATEWAY_V1, rest)
 }
 
-fn links_for(token_dir: &FsPath, link: &'static (&'static str, &'static str, Routes)) -> Links {
-    let (name, caller, routes) = link;
-    Links::new(vec![Link {
-        caller,
-        hash_file: token_dir.join("accept").join(format!("{name}.sha256")),
-        allow: routes.iter().map(|(m, p)| Allow::method(Method::from_bytes(m.as_bytes()).expect("a method"), &full(p))).collect(),
-    }])
-    .named("model-gateway")
+fn links_for(token_dir: &FsPath, link: &'static LinkDef) -> Links {
+    links::links_for("model-gateway", MODEL_GATEWAY_V1, token_dir, link)
 }
 
 /// The check on the server's listener: only the server's token, only `/chat`.
@@ -248,27 +238,14 @@ pub fn admin_links(token_dir: &FsPath) -> Links {
 
 /// The credential volume, read-only: `ASKBAR_GATEWAY_TOKEN_DIR`, default `/model-gateway-token`.
 pub fn token_dir() -> PathBuf {
-    std::env::var("ASKBAR_GATEWAY_TOKEN_DIR")
-        .ok()
-        .filter(|p| !p.trim().is_empty())
-        .map_or_else(|| "/model-gateway-token".into(), PathBuf::from)
+    links::token_dir("ASKBAR_GATEWAY_TOKEN_DIR", "/model-gateway-token")
 }
 
 // ------------------------------------------------------------------ the routes
 
-/// One route, for the table the OpenAPI test reads.
-pub struct RouteEntry {
-    pub method: &'static str,
-    pub path: String,
-}
-
 /// Every route, method and full path, across both listeners. The OpenAPI file describes exactly these.
 pub fn routes() -> Vec<RouteEntry> {
-    let mut out = vec![RouteEntry { method: "GET", path: full("/health") }];
-    for (_, _, rs) in LINKS {
-        out.extend(rs.iter().map(|(m, p)| RouteEntry { method: m, path: full(p) }));
-    }
-    out
+    links::routes(MODEL_GATEWAY_V1, LINKS)
 }
 
 /// The server's listener.
@@ -294,12 +271,7 @@ pub fn admin_router(gw: Arc<Gateway>, links: Links) -> Router {
 }
 
 fn shell(gw: Arc<Gateway>, protected: Router<Arc<Gateway>>) -> Router {
-    Router::new()
-        .route(&full("/health"), get(|| async { "ok" }))
-        .merge(protected)
-        .fallback(|| async { ApiError::code(ErrorCode::NotFound) })
-        .layer(DefaultBodyLimit::max(MAX_BODY))
-        .with_state(gw)
+    links::shell(MODEL_GATEWAY_V1, MAX_BODY, gw, protected)
 }
 
 type Failure = ApiError;

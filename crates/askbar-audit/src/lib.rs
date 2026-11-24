@@ -281,19 +281,11 @@ impl AuditDb {
         Ok(n)
     }
 
-    /// Whether the store holds nothing a restore would lose: no span and no payload, that is, no model call has been audited. What
-    /// every start leaves (the services' hellos, the admin's own action records, Caddy's access lines, alert deliveries) does not
-    /// count: it is the install setting itself up, and a restore replaces it (ADR 0013, ADR 0010).
-    pub fn is_empty_of_content(&self) -> rusqlite::Result<bool> {
-        let n: i64 = self.conn.query_row("SELECT (SELECT COUNT(*) FROM spans) + (SELECT COUNT(*) FROM payloads)", [], |r| r.get(0))?;
-        Ok(n == 0)
-    }
-
     /// Makes this store the one at `from` (a store of this release, already opened and checked by the caller), in one step with
     /// SQLite's backup API: every table, trigger and the chain come over as they are. Refused unless the store is empty of content.
     /// Gives the chain's head afterwards.
     pub fn restore_from(&mut self, from: &Path) -> Result<chain::Head, RestoreError> {
-        if !self.is_empty_of_content().map_err(|e| RestoreError::Db(e.to_string()))? {
+        if !is_empty_of_content(&self.conn).map_err(|e| RestoreError::Db(e.to_string()))? {
             return Err(RestoreError::NotEmpty);
         }
         let src =
@@ -308,6 +300,14 @@ impl AuditDb {
     pub fn chain_head(&self) -> Result<chain::Head, AuditError> {
         Ok(chain::head(&self.conn)?)
     }
+}
+
+/// Whether the store holds nothing a restore would lose: no span and no payload, that is, no model call has been audited. What
+/// every start leaves (the services' hellos, the admin's own action records, Caddy's access lines, alert deliveries) does not
+/// count: it is the install setting itself up, and a restore replaces it (ADR 0013, ADR 0010).
+pub fn is_empty_of_content(conn: &Connection) -> rusqlite::Result<bool> {
+    let n: i64 = conn.query_row("SELECT (SELECT COUNT(*) FROM spans) + (SELECT COUNT(*) FROM payloads)", [], |r| r.get(0))?;
+    Ok(n == 0)
 }
 
 /// Marks the spans still `running` that match `condition` (SQL starting with ` AND `, or empty) as interrupted, and

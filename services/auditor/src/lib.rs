@@ -119,7 +119,7 @@ impl Auditor {
     pub fn note_request(&self, caller: &'static str, at: i64) {
         self.last_request.lock().unwrap_or_else(|e| e.into_inner()).insert(caller, at);
         if let Some(r) = self.rules() {
-            r.seen(caller, at);
+            r.seen(caller);
         }
     }
 
@@ -367,22 +367,16 @@ fn internal<E>(_: E) -> Failure {
 }
 
 fn parse<T: DeserializeOwned>(body: &Bytes) -> Result<T, Failure> {
-    serde_json::from_slice(body).map_err(|e| bad(format!("The body is not what this route takes ({}).", e.classify_name())))
+    serde_json::from_slice(body).map_err(|e| bad(format!("The body is not what this route takes ({}).", classify_name(&e))))
 }
 
 /// `serde_json::Error` names its class without quoting the input.
-trait ClassName {
-    fn classify_name(&self) -> &'static str;
-}
-
-impl ClassName for serde_json::Error {
-    fn classify_name(&self) -> &'static str {
-        match self.classify() {
-            serde_json::error::Category::Io => "unreadable",
-            serde_json::error::Category::Syntax => "not JSON",
-            serde_json::error::Category::Data => "wrong fields or types",
-            serde_json::error::Category::Eof => "cut short",
-        }
+fn classify_name(e: &serde_json::Error) -> &'static str {
+    match e.classify() {
+        serde_json::error::Category::Io => "unreadable",
+        serde_json::error::Category::Syntax => "not JSON",
+        serde_json::error::Category::Data => "wrong fields or types",
+        serde_json::error::Category::Eof => "cut short",
     }
 }
 
@@ -438,8 +432,11 @@ async fn append(a: &Auditor, record: Record) -> Result<u64, Failure> {
     Ok(appended)
 }
 
-fn created(id: String) -> (StatusCode, Json<wire::Appended>) {
-    (StatusCode::CREATED, Json(wire::Appended { id }))
+/// Gates, appends and answers `201` with the id: the end of every handler that records one thing. Only a span start is a new span.
+async fn append_created(a: &Auditor, id: String, record: Record) -> Result<(StatusCode, Json<wire::Appended>), Failure> {
+    gate(a, matches!(record, Record::Start(_)))?;
+    append(a, record).await?;
+    Ok((StatusCode::CREATED, Json(wire::Appended { id })))
 }
 
 // ------------------------------------------------------------------ appends
@@ -469,11 +466,11 @@ async fn start_span(
     }
     short(&s.name, "The name", 200)?;
     let attrs = attrs_json(&s.attrs)?;
-    gate(&a, true)?;
     let boot_id = a.boots.lock().unwrap_or_else(|e| e.into_inner()).get(caller).cloned();
     let id = s.id.clone();
-    append(
+    append_created(
         &a,
+        id,
         Record::Start(askbar_audit::SpanStart {
             id: s.id,
             trace_id: s.trace_id,
@@ -492,8 +489,7 @@ async fn start_span(
             boot_id,
         }),
     )
-    .await?;
-    Ok(created(id))
+    .await
 }
 
 async fn finish_span(State(a): St, Path(id): Path<String>, body: Bytes) -> Result<(StatusCode, Json<wire::Appended>), Failure> {
@@ -504,9 +500,9 @@ async fn finish_span(State(a): St, Path(id): Path<String>, body: Bytes) -> Resul
         return Err(bad("A span is finished with a status other than running."));
     }
     let attrs = attrs_json(&f.attrs)?;
-    gate(&a, false)?;
-    append(
+    append_created(
         &a,
+        id.clone(),
         Record::Finish(askbar_audit::SpanFinish {
             id: id.clone(),
             status: f.status,
@@ -522,8 +518,7 @@ async fn finish_span(State(a): St, Path(id): Path<String>, body: Bytes) -> Resul
             ended_ms: f.ended_ms,
         }),
     )
-    .await?;
-    Ok(created(id))
+    .await
 }
 
 async fn add_payload(State(a): St, Path(id): Path<String>, body: Bytes) -> Result<(StatusCode, Json<wire::Appended>), Failure> {
@@ -535,10 +530,12 @@ async fn add_payload(State(a): St, Path(id): Path<String>, body: Bytes) -> Resul
     if ciphertext.is_empty() {
         return Err(bad("A sealed payload is not empty."));
     }
-    gate(&a, false)?;
-    append(&a, Record::Payload(PayloadWrite { span_id: id.clone(), role: p.role, key_id: p.key_id, ciphertext, created_at: now() }))
-        .await?;
-    Ok(created(id))
+    append_created(
+        &a,
+        id.clone(),
+        Record::Payload(PayloadWrite { span_id: id, role: p.role, key_id: p.key_id, ciphertext, created_at: now() }),
+    )
+    .await
 }
 
 async fn add_admin_action(
@@ -554,10 +551,10 @@ async fn add_admin_action(
         return Err(bad("The outcome is requested, done, refused or failed."));
     }
     let detail = attrs_json(&r.detail)?;
-    gate(&a, false)?;
     let id = r.id.clone();
-    append(
+    append_created(
         &a,
+        id,
         Record::AdminAction(AdminActionWrite {
             id: r.id,
             at: r.at,
@@ -568,8 +565,7 @@ async fn add_admin_action(
             detail_json: detail,
         }),
     )
-    .await?;
-    Ok(created(id))
+    .await
 }
 
 /// A service says which configuration version it now runs. It is stored as an admin action record whose service is the
@@ -581,10 +577,10 @@ async fn add_config_applied(
 ) -> Result<(StatusCode, Json<wire::Appended>), Failure> {
     let r: wire::ConfigApplied = parse(&body)?;
     ident(&r.id, "The record id")?;
-    gate(&a, false)?;
     let id = r.id.clone();
-    append(
+    append_created(
         &a,
+        id,
         Record::AdminAction(AdminActionWrite {
             id: r.id,
             at: r.at,
@@ -595,8 +591,7 @@ async fn add_config_applied(
             detail_json: Some(serde_json::json!({ "version": r.version }).to_string()),
         }),
     )
-    .await?;
-    Ok(created(id))
+    .await
 }
 
 /// The alerter says how an alert ended. Stored with the caller from the token, chained with the record. Only the
@@ -621,10 +616,10 @@ async fn add_alert_delivery(
     if r.attempts > 1000 {
         return Err(bad("The attempts are at most 1,000."));
     }
-    gate(&a, false)?;
     let id = r.id.clone();
-    append(
+    append_created(
         &a,
+        id,
         Record::AlertDelivery(AlertDeliveryWrite {
             id: r.id,
             at: r.at,
@@ -635,8 +630,7 @@ async fn add_alert_delivery(
             attempts: i64::from(r.attempts),
         }),
     )
-    .await?;
-    Ok(created(id))
+    .await
 }
 
 // ------------------------------------------------------------------ reads
@@ -644,7 +638,7 @@ async fn add_alert_delivery(
 /// Runs `f` on a read-only connection, off the async threads.
 async fn read<T: Send + 'static>(
     a: &Auditor,
-    f: impl FnOnce(&rusqlite_conn::Connection) -> rusqlite_conn::Result<T> + Send + 'static,
+    f: impl FnOnce(&askbar_audit::rusqlite::Connection) -> askbar_audit::rusqlite::Result<T> + Send + 'static,
 ) -> Result<T, Failure> {
     let recorder = a.recorder.clone();
     tokio::task::spawn_blocking(move || {
@@ -654,11 +648,6 @@ async fn read<T: Send + 'static>(
     .await
     .map_err(internal)?
     .map_err(internal)
-}
-
-/// The database types the reads use, re-exported by the audit crate's `Connection` type alias.
-mod rusqlite_conn {
-    pub use askbar_audit::rusqlite::{Connection, Result};
 }
 
 #[derive(serde::Deserialize)]
@@ -899,13 +888,8 @@ async fn restore(State(a): St, body: axum::body::Body) -> Result<Json<askbar_aud
     use tokio::io::AsyncWriteExt;
     let bad_body = |what: &str| bad(what.to_string());
     gate(&a, false)?;
-    let empty = |a: &Auditor| {
-        a.recorder
-            .reader()
-            .map(|c| c.query_row("SELECT (SELECT COUNT(*) FROM spans) + (SELECT COUNT(*) FROM payloads)", [], |r| r.get::<_, i64>(0)))
-            .transpose()
-    };
-    if empty(&a).map_err(internal)?.unwrap_or(1) != 0 {
+    let empty = |a: &Auditor| a.recorder.reader().map(|c| askbar_audit::is_empty_of_content(&c)).transpose();
+    if !empty(&a).map_err(internal)?.unwrap_or(false) {
         return Err(ApiError::code(ErrorCode::NotEmpty));
     }
     let file = a.recorder.path().map(FsPath::to_path_buf).ok_or_else(|| internal(()))?;

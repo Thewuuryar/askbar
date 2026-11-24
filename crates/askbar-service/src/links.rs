@@ -13,14 +13,16 @@
 use askbar_proto::http::ApiError;
 use askbar_proto::problem::ErrorCode;
 use axum::{
-    extract::{Request, State},
+    extract::{DefaultBodyLimit, Request, State},
     http::{header, Method},
     middleware::Next,
     response::Response,
+    routing::get,
+    Router,
 };
 use sha2::{Digest, Sha256};
 use std::collections::VecDeque;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use subtle::ConstantTimeEq;
@@ -197,6 +199,63 @@ fn bearer(req: &Request) -> Option<String> {
         .and_then(|v| v.split_once(' '))
         .filter(|(scheme, t)| scheme.eq_ignore_ascii_case("bearer") && !t.trim().is_empty())
         .map(|(_, t)| t.trim().to_string())
+}
+
+/// What one link may call: methods and paths after the service's `/api/<service>/v1`.
+pub type Routes = &'static [(&'static str, &'static str)];
+
+/// One link as a table row: name as `bootstrap` names it (the file `accept/<name>.sha256`), the caller, and the routes.
+pub type LinkDef = (&'static str, &'static str, Routes);
+
+/// `rest` under the service's `v1` prefix.
+pub fn full(v1: &str, rest: &str) -> String {
+    askbar_proto::paths::join(v1, rest)
+}
+
+/// The one link `link`, for `service`, with its hash read from `<token_dir>/accept/<name>.sha256`.
+pub fn links_for(service: &'static str, v1: &str, token_dir: &Path, link: &'static LinkDef) -> Links {
+    let (name, caller, routes) = link;
+    Links::new(vec![Link {
+        caller,
+        hash_file: token_dir.join("accept").join(format!("{name}.sha256")),
+        allow: routes.iter().map(|(m, p)| Allow::method(Method::from_bytes(m.as_bytes()).expect("a method"), &full(v1, p))).collect(),
+    }])
+    .named(service)
+}
+
+/// The credential volume, read-only: the directory in `var`, else `default`.
+pub fn token_dir(var: &str, default: &str) -> PathBuf {
+    std::env::var(var).ok().filter(|p| !p.trim().is_empty()).map_or_else(|| default.into(), PathBuf::from)
+}
+
+/// One route, for the table the OpenAPI test reads.
+pub struct RouteEntry {
+    pub method: &'static str,
+    pub path: String,
+}
+
+/// Every route, method and full path, across all links, once each, with `GET /health`.
+pub fn routes(v1: &str, links: &[LinkDef]) -> Vec<RouteEntry> {
+    let mut out = vec![RouteEntry { method: "GET", path: full(v1, "/health") }];
+    let mut seen = std::collections::BTreeSet::new();
+    for (_, _, rs) in links {
+        for (m, p) in rs.iter() {
+            if seen.insert((*m, *p)) {
+                out.push(RouteEntry { method: m, path: full(v1, p) });
+            }
+        }
+    }
+    out
+}
+
+/// A listener: `GET /health`, the protected routes, a `not_found` fallback and the body limit.
+pub fn shell<S: Clone + Send + Sync + 'static>(v1: &str, max_body: usize, state: S, protected: Router<S>) -> Router {
+    Router::new()
+        .route(&full(v1, "/health"), get(|| async { "ok" }))
+        .merge(protected)
+        .fallback(|| async { ApiError::code(ErrorCode::NotFound) })
+        .layer(DefaultBodyLimit::max(max_body))
+        .with_state(state)
 }
 
 /// The middleware: `axum::middleware::from_fn_with_state(links, links::require)`.

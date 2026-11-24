@@ -6,6 +6,7 @@
 //! - [`configured`]: `503 not_configured` until the admin has pushed configuration.
 //! - [`restart`]: `POST /restart` (exit cleanly; Docker's restart policy starts the service again)
 //!   and the watchdog that exits a service whose own health check keeps failing (ADR 0005).
+//! - [`boot`]: what every service's `main` shares: `die`, `listen_addr`, `healthy`, `stop_signal`.
 //! - [`ids`]: server-generated ULIDs.
 //! - [`audit_client`]: the link to the auditor, with its queue of records to send (ADR 0010, ADR 0054).
 //! - [`tar`]: the archive a backup export is written in.
@@ -18,6 +19,7 @@ pub mod alert_client;
 pub mod audit_client;
 #[cfg(feature = "backup")]
 pub mod backup;
+pub mod boot;
 pub mod configured;
 pub mod ids;
 pub mod links;
