@@ -64,7 +64,7 @@ Branch `refactor/audit-and-generation`. PR title `refactor(auditor): simplify th
   Files: `crates/askbar-audit/src/lib.rs` (`stats`, `utc_day`).
   Do: replace the three per-group accumulators (by provider, by day, by day and provider) with `GROUP BY` queries. Replace `utc_day` with `strftime('%Y-%m-%d', started_at, 'unixepoch')`.
   Accept: R1.3's test and the existing stats tests pass unchanged.
-- [ ] **R1.5** `refactor(auditor): move askbar-audit unit tests to their own file` · haiku
+- [x] **R1.5** `refactor(auditor): move askbar-audit unit tests to their own file` · haiku
   Files: `crates/askbar-audit/src/lib.rs`, new `crates/askbar-audit/src/tests.rs`.
   Do: move the `mod tests` block as it is to `src/tests.rs` and declare it with `#[cfg(test)] mod tests;`.
   Accept: the same test count passes.
