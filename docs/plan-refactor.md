@@ -175,7 +175,7 @@ Branch `refactor/admin-links-and-ui`. PR title `refactor(admin): share link code
   Files: `services/admin/src/{alerter_link,gateway_link}.rs`, new `services/admin/src/link_client.rs`.
   Do: one struct holds the HTTP client, base URL, token, online state, last error, dirty flag, token watch, restarts and API prefix, with `new`, `set_notifier`, `online`, `last_error`, `set_error`, `mark_dirty` and `request`. Both links embed it and keep their own `sync` and `run`.
   Accept: `tests/alerts.rs` and `tests/gateway.rs` pass unchanged.
-- [ ] **R4.3** `refactor(admin): split admin_api.rs into modules` · haiku
+- [x] **R4.3** `refactor(admin): split admin_api.rs into modules` · haiku
   Files: `services/admin/src/admin_api.rs`, new `services/admin/src/admin_api/{settings,sealed}.rs`.
   Do: move the settings section and the sealed-content section without changes.
   Accept: the route table and the OpenAPI test are unchanged.
