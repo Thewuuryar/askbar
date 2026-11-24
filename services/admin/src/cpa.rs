@@ -55,10 +55,11 @@ fn rand(n: usize) -> String {
     URL_SAFE_NO_PAD.encode(&raw).chars().filter(|c| c.is_ascii_alphanumeric()).take(n).collect()
 }
 
-fn config_yaml(api_key: &str, secret: &str) -> String {
+fn config_yaml(api_key: &str, secret: &str, proxy: Option<&str>) -> String {
     // The same file cpa/init.sh used to write.
+    let requests = proxy.map(|u| format!("requests:\n  proxy-url: \"{u}\"\n")).unwrap_or_default();
     format!(
-        "config-version: 8\nserver:\n  host: \"\"\n  port: 8317\n  # CLIProxyAPI v8.0.77 keeps replies and thinking in a local file (kv.db) unless told not to: that is an unencrypted copy of replies, and it would be in backups.\n  kv-store:\n    disabled: true\noauth:\n  auth-dir: \"/root/.cli-proxy-api\"\naccess:\n  api-keys:\n    - \"{api_key}\"\nmanagement: # names-ok: CLIProxyAPI's own config key\n  # Reachable only on the compose networks: the API port is not published to the host.\n  allow-remote: true\n  secret-key: \"{secret}\"\n"
+        "config-version: 8\nserver:\n  host: \"\"\n  port: 8317\n  # CLIProxyAPI v8.0.77 keeps replies and thinking in a local file (kv.db) unless told not to: that is an unencrypted copy of replies, and it would be in backups.\n  kv-store:\n    disabled: true\noauth:\n  auth-dir: \"/root/.cli-proxy-api\"\naccess:\n  api-keys:\n    - \"{api_key}\"\nmanagement: # names-ok: CLIProxyAPI's own config key\n  # Reachable only on the compose networks: the API port is not published to the host.\n  allow-remote: true\n  secret-key: \"{secret}\"\n{requests}"
     )
 }
 
@@ -74,6 +75,27 @@ fn write_secret(p: &FsPath, v: &str) -> std::io::Result<()> {
 /// its API key is kept so the provider and any logins carry on). Returns the keys, and whether CPA's control
 /// secret had to be replaced in an existing config (CPA then needs a restart to read it).
 pub fn ensure_config(config_dir: &FsPath, secrets_dir: &FsPath) -> std::io::Result<(Keys, bool)> {
+    // An address, never a secret. CLIProxyAPI's Claude and Codex dialers ignore HTTPS_PROXY, so the config key is the way.
+    let proxy = std::env::var("ASKBAR_CPA_PROXY_URL").ok().filter(|u| !u.is_empty());
+    ensure_config_with(config_dir, secrets_dir, proxy.as_deref())
+}
+
+/// `requests.proxy-url` set to `url` in an existing config text; `None` when it already is.
+fn with_proxy_url(text: &str, url: &str) -> Option<String> {
+    let want = format!("proxy-url: \"{url}\"");
+    if text.lines().any(|l| l.trim() == want) {
+        return None;
+    }
+    let mut lines: Vec<&str> = text.lines().filter(|l| !l.trim_start().starts_with("proxy-url:")).collect();
+    let line = format!("  {want}");
+    match lines.iter().position(|l| l.trim_end() == "requests:") {
+        Some(i) => lines.insert(i + 1, &line),
+        None => lines.extend(["requests:", &line]),
+    }
+    Some(lines.join("\n") + "\n")
+}
+
+fn ensure_config_with(config_dir: &FsPath, secrets_dir: &FsPath, proxy: Option<&str>) -> std::io::Result<(Keys, bool)> {
     std::fs::create_dir_all(secrets_dir)?;
     let (api_path, secret_path) = (secrets_dir.join(API_KEY_FILE), secrets_dir.join(SECRET_FILE));
     let config = config_dir.join("config.yaml");
@@ -83,12 +105,21 @@ pub fn ensure_config(config_dir: &FsPath, secrets_dir: &FsPath) -> std::io::Resu
             api_key: read_trim(&api_path).unwrap_or_else(|| format!("sk-cpa-{}", rand(40))),
             control_secret: read_trim(&secret_path).unwrap_or_else(|| rand(40)),
         };
-        write_atomic(&config, &config_yaml(&keys.api_key, &keys.control_secret), 0o644)?;
+        write_atomic(&config, &config_yaml(&keys.api_key, &keys.control_secret, proxy), 0o644)?;
         write_secret(&api_path, &keys.api_key)?;
         write_secret(&secret_path, &keys.control_secret)?;
         return Ok((keys, false));
     }
-    let text = std::fs::read_to_string(&config)?;
+    let mut text = std::fs::read_to_string(&config)?;
+    // An adopted config gets the key too; a change restarts CPA like a replaced secret does.
+    let proxied = match proxy.and_then(|u| with_proxy_url(&text, u)) {
+        Some(t) => {
+            text = t;
+            write_atomic(&config, &text, 0o644)?;
+            true
+        }
+        None => false,
+    };
     let api_key = read_trim(&api_path)
         .or_else(|| read_trim(&config_dir.join("askbar-api-key")))
         .or_else(|| {
@@ -99,7 +130,7 @@ pub fn ensure_config(config_dir: &FsPath, secrets_dir: &FsPath) -> std::io::Resu
         .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "CLIProxyAPI's config has no API key to adopt"))?;
     write_secret(&api_path, &api_key)?;
     if let Some(secret) = read_trim(&secret_path) {
-        return Ok((Keys { api_key, control_secret: secret }, false));
+        return Ok((Keys { api_key, control_secret: secret }, proxied));
     }
     // An existing config whose control secret we never saw (CPA may have hashed it): put a new one in.
     let secret = rand(40);
@@ -670,7 +701,7 @@ mod tests {
         // An install from before: a config written by cpa/init.sh, and the key in askbar-api-key.
         let (cfg2, sec2) = (d.join("cfg2"), d.join("sec2"));
         std::fs::create_dir_all(&cfg2).unwrap();
-        std::fs::write(cfg2.join("config.yaml"), config_yaml("sk-cpa-OLDKEY", "$2a$10$hashedbycpa")).unwrap();
+        std::fs::write(cfg2.join("config.yaml"), config_yaml("sk-cpa-OLDKEY", "$2a$10$hashedbycpa", None)).unwrap();
         std::fs::write(cfg2.join("askbar-api-key"), "sk-cpa-OLDKEY").unwrap();
         let (k3, changed) = ensure_config(&cfg2, &sec2).unwrap();
         assert!(changed, "its control secret was replaced, so CPA needs a restart");
@@ -678,6 +709,34 @@ mod tests {
         let yaml = std::fs::read_to_string(cfg2.join("config.yaml")).unwrap();
         assert!(yaml.contains("sk-cpa-OLDKEY") && yaml.contains(&k3.control_secret) && !yaml.contains("hashedbycpa"));
         assert!(yaml.contains("\n  kv-store:\n    disabled: true\noauth:\n"), "a rewritten config keeps the KV store off");
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn the_proxy_key_is_in_the_config_only_when_set_and_an_adopted_config_gets_it_once() {
+        let d = std::env::temp_dir().join(format!("cpa-{}", ulid::Ulid::new()));
+        let url = "http://egress-cpa-host:3128";
+        let (c1, s1) = (d.join("c1"), d.join("s1"));
+        ensure_config_with(&c1, &s1, None).unwrap();
+        assert!(!std::fs::read_to_string(c1.join("config.yaml")).unwrap().contains("proxy-url"));
+        let (c2, s2) = (d.join("c2"), d.join("s2"));
+        ensure_config_with(&c2, &s2, Some(url)).unwrap();
+        assert!(std::fs::read_to_string(c2.join("config.yaml")).unwrap().contains(&format!("requests:\n  proxy-url: \"{url}\"\n")));
+        // Adopted (secret already known): the key is added, CPA restarts, and the second run changes nothing.
+        let (_, changed) = ensure_config_with(&c1, &s1, Some(url)).unwrap();
+        assert!(changed);
+        let once = std::fs::read_to_string(c1.join("config.yaml")).unwrap();
+        assert_eq!(once.matches("proxy-url").count(), 1);
+        let (_, changed) = ensure_config_with(&c1, &s1, Some(url)).unwrap();
+        assert!(!changed && std::fs::read_to_string(c1.join("config.yaml")).unwrap() == once);
+        // A different address replaces the old one inside an existing requests block.
+        ensure_config_with(&c1, &s1, Some("http://other:3128")).unwrap();
+        let moved = std::fs::read_to_string(c1.join("config.yaml")).unwrap();
+        assert!(
+            moved.contains("proxy-url: \"http://other:3128\"")
+                && moved.matches("proxy-url").count() == 1
+                && moved.matches("requests:").count() == 1
+        );
         let _ = std::fs::remove_dir_all(d);
     }
 }

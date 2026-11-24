@@ -204,7 +204,7 @@ SPEC = {
   "egress-proxy": ("egress-admin egress-alerter egress-cpa egress-model-gateway egress-outbound", "egress-proxy-token:ro", ""),
   "mock-llm": ("edge egress-outbound", "", ""),
   "caddy": ("audit-caddy client-api edge", "caddy-data caddy-config caddy-run admin-run caddy-secrets:ro", "443/tcp 80/tcp"),
-  "cpa": ("cpa-admin cpa-gateway outbound", "cpa-config cpa-auth", ""),
+  "cpa": ("cpa-admin cpa-gateway egress-cpa", "cpa-config cpa-auth", ""),
 }
 OPEN = {"edge", "outbound", "alerter-outbound", "egress-outbound"}  # the networks with a route out
 ADD = {"bootstrap": "CHOWN", "caddy": "NET_BIND_SERVICE"}
@@ -357,8 +357,13 @@ if [ -z "$CPA" ]; then
   echo "SKIP  cpa is not running"
 else
   svc_profile "$CPA" cpa <<EOF
-nets cpa-admin cpa-gateway outbound|cpa is on cpa-admin, cpa-gateway and outbound only (never edge)
+nets cpa-admin cpa-gateway egress-cpa|cpa is on cpa-admin, cpa-gateway and egress-cpa only (never edge)
 EOF
+  # Its only way out is the proxy's listener for it (ADR 0056): a direct connection fails, and a CONNECT to a host nobody listed
+  # is answered by the proxy itself, with a 403, so the request got there.
+  docker exec "$CPA" sh -c 'timeout 4 nc -w 3 1.1.1.1 443 </dev/null' >/dev/null 2>&1 && fail "cpa reached the internet directly" || pass "cpa has no direct route out"
+  got=$(docker exec "$CPA" sh -c 'printf "CONNECT unlisted.invalid:443 HTTP/1.1\r\nHost: unlisted.invalid:443\r\n\r\n" | timeout 6 nc -w 4 egress-cpa-host 3128' 2>/dev/null | head -1)
+  case "$got" in "HTTP/1.1 403"*) pass "a CONNECT from cpa reaches the proxy on egress-cpa, which refuses a host nobody listed";; *) fail "a CONNECT from cpa to the proxy: '$got'";; esac
 fi
 
 echo "== 3d2. Container hardening (ADR 0032)"
@@ -822,7 +827,9 @@ EOF
   docker exec "$EGP" bash -c 'getent hosts admin' >/dev/null 2>&1 && pass "the egress proxy resolves the admin (they share egress-admin)" || fail "the egress proxy cannot resolve the admin on egress-admin"
   # The gateway is on egress-model-gateway with the proxy (P4.3a), so it resolves it too.
   docker exec "$EGP" bash -c 'getent hosts askbar-model-gateway' >/dev/null 2>&1 && pass "the egress proxy resolves the gateway (they share egress-model-gateway)" || fail "the egress proxy cannot resolve the gateway on egress-model-gateway"
-  for h in caddy server auditor askbar-alerter cpa mock-llm; do
+  # cpa is on egress-cpa with the proxy (P4.3b), so it resolves it too.
+  docker exec "$EGP" bash -c 'getent hosts cpa' >/dev/null 2>&1 && pass "the egress proxy resolves cpa (they share egress-cpa)" || fail "the egress proxy cannot resolve cpa on egress-cpa"
+  for h in caddy server auditor askbar-alerter mock-llm; do
     docker exec "$EGP" bash -c "getent hosts $h" >/dev/null 2>&1 && fail "the egress proxy resolves $h" || pass "the egress proxy cannot resolve $h"
   done
   for t in auditor/8083 server/8080 admin/8084; do

@@ -15,12 +15,11 @@
 #               auditor gets a network like it, shared with the auditor alone (ADR 0051).
 #   gateway-admin  the admin and model-gateway, nothing else. `internal`. gateway-server (the server and the gateway) and
 #               audit-server (the server and the auditor) are the same; audit-model-gateway is the gateway's and the auditor's.
-#   outbound  CLIProxyAPI alone, until it moves behind the egress proxy (plan step P4.3b). A route out (ADR 0006).
 #   cpa-gateway  model-gateway and CLIProxyAPI, nothing else. `internal`.
 #   audit-alerter  the auditor and the alerter, nothing else. `internal`. The auditor sends its alert events on it, and the
 #               alerter appends the outcome of each alert (ADR 0055); alerter-admin (the admin and the alerter) is the same.
 #   alerter-outbound  the alerter alone. Not `internal`: its route out is for delivering alerts (ntfy and email) and
-#               checking for releases. It is not `outbound`, where model-gateway sits, so nothing else is on it (ADR 0055).
+#               checking for releases. Nothing else is on it (ADR 0055).
 # No network pins a subnet or an address; Docker assigns them (docs/guide.md, "Docker networks").
 # The admin joins no network but server-api. Caddy reaches it only through its unix socket (volume admin-run),
 # for /admin. One host serves the admin (/admin), the client API (/api/client) and a 404 for the rest: over HTTPS
@@ -123,6 +122,8 @@ services:
       # The auditor, on audit-admin (ADR 0051): the Audit pages read it with the admin's read token.
       ASKBAR_AUDIT_API_URL: http://auditor:8083
       ASKBAR_PUBLIC_URL: ${ASKBAR_PUBLIC_URL:-}
+      # An address: the admin writes it into cpa's config as requests.proxy-url (cpa's dialers ignore HTTPS_PROXY).
+      ASKBAR_CPA_PROXY_URL: http://egress-cpa-host:3128
     networks:
       server-api: {}
       # CLIProxyAPI's own API (accounts and logins), on a network of the two of them with no route out.
@@ -359,7 +360,7 @@ services:
   # Starts with the stack and idles until an account is connected on the admin site's Services tab. The admin
   # makes its config and API key (it must be healthy first) and runs the logins; there is no terminal step.
   # Its API port is NOT published; only containers on its internal networks can reach it: the gateway (cpa-gateway) and
-  # the admin (cpa-admin). It reaches the providers on `outbound`.
+  # the admin (cpa-admin). It reaches the providers through the egress proxy on egress-cpa.
   cpa:
     # CLIProxyAPI (pinned by digest in the Dockerfile's `cpa` target) under a small supervisor of ours, which
     # restarts it when its config changes or the admin asks: it reads its config only at start (ADR 0037).
@@ -384,8 +385,8 @@ services:
       - cpa-admin
       # The gateway reaches it here, on a network of the two of them (ADR 0054, plan step 3.5).
       - cpa-gateway
-      # Its route out, to the subscription providers. It is not on `edge`, so it shares no network with Caddy.
-      - outbound
+      # Its only way to a subscription provider: the proxy's listener for it, on a network of the two of them.
+      - egress-cpa
     volumes:
       - cpa-config:/cpa-config
       - cpa-auth:/root/.cli-proxy-api
@@ -444,9 +445,6 @@ networks:
   # The proxy's route out (ADR 0056). Not internal. The proxy and, in the dev profile, the mock LLM join it, and its
   # listeners are bound to the addresses of its internal networks, so it answers nothing here.
   egress-outbound:
-  # The subscription providers. Not internal. Only CLIProxyAPI joins it, until P4.3b; its listener is bound to the
-  # addresses of its own internal networks, so it answers nothing here.
-  outbound:
 
 # The volumes of earlier versions `askbar-secrets`, `audit-data` and `control-token` are no longer declared (1.0). An install that has them
 # keeps them on disk, mounted by nothing; the guide ("Deleting the retired volumes") says how to remove them.
