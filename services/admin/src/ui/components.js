@@ -1048,6 +1048,28 @@
   // A number with its unit, right-aligned in a .num cell (rule 36).
   ui.num = (n, unit) => el('span', { class: 'num', text: Number(n).toLocaleString() + (unit ? ' ' + unit : '') });
 
+  // Shared by the admin pages and the Audit pages. DAY is time-unit maths, not a limit.
+  ui.DAY = 24 * 3600;
+  ui.number = (n) => Number(n).toLocaleString();
+  ui.duration = (ms) => {
+    if (ms == null) return '–';
+    return ms >= MS ? (Math.round(ms / 100) / 10) + ' s' : Math.round(ms) + ' ms';
+  };
+  ui.providerLabel = (names, id) => (id ? names[id] || id : '–');
+  // Words for a failed read: 502 and 503 mean the other side is away, and nothing is lost.
+  ui.explain = (e) => {
+    if (e.status === 502) return 'The server is offline, so provider names cannot be read right now.';
+    if (e.status === 503) return 'The auditor cannot be reached, so the audit trail cannot be read right now. Nothing is lost: records wait and are sent when it is back.';
+    return e.message;
+  };
+  // An error line under a form or a panel: target is its element or id, and it shows only while there is text.
+  ui.inlineError = (target, text) => {
+    const line = typeof target === 'string' ? $(target) : target;
+    if (!line) return;
+    line.textContent = text || '';
+    line.hidden = !text;
+  };
+
   // Copies value (or the text of the element the button's data-copy names) and says so for TOAST_SECS.
   ui.copy = async (button, value) => {
     const source = button.dataset.copy ? $(button.dataset.copy) : null;

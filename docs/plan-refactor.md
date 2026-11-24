@@ -190,7 +190,7 @@ Branch `refactor/admin-links-and-ui`. PR title `refactor(admin): share link code
   - In `security.html` the body is a `<form class="sec-fields">`; keep it as one.
 
   Accept: the rendered pages are unchanged apart from whitespace; the browser tests pass.
-- [ ] **R4.6** `refactor(ui): share audit page helpers and inline errors` · haiku
+- [x] **R4.6** `refactor(ui): share audit page helpers and inline errors` · haiku
   Files: `services/admin/src/ui/{audit,audit_calls,app,components}.js`.
   Do:
   - Put `explain`, `banner`, `DAY`, `duration`, `number` and `providerLabel` on `ui` once.
