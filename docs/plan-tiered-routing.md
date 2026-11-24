@@ -29,53 +29,19 @@ The orchestrator reads this file and the current phase's file only. It sets a ph
 
 Risks and open questions for the owner: [risks.md](plan-tiered-routing/risks.md).
 
-## Starting a session (owner)
+## How to run
 
-In the repository root, start Claude Code on Sonnet (`claude --model sonnet`, or `/model sonnet` in a running session) and send:
+Run this plan as [orchestration.md](orchestration.md) says. The orchestrator reads this file and the current phase's file only: the first phase in the Phases table that is not `done` or `PR open`. Start a session with:
 
-> You are the orchestrator for `docs/plan-tiered-routing.md`. Read it and the current phase file it names, then follow its How to run section from the first unchecked step.
+> You are the orchestrator for `docs/plan-tiered-routing.md`. Read `docs/orchestration.md`, this file and the current phase file it names, then follow them from the first unchecked step.
 
-Start a new session at each phase, or when the context is long (`/context` shows it); the ticked boxes and the Phases table carry the state.
+This plan adds to the shared rules:
 
-## How to run (orchestrator)
-
-You are a Sonnet orchestrator. You do not write step code; subagents do. You read, brief, check, review, commit and tick.
-
-**Loop**
-
-1. At session start, read this file once, then the current phase's file (the first phase in the Phases table not `done` or `PR open`). Pick the first unchecked step whose `after` steps are all ticked and whose gate (if any) is cleared. If the gate is open, stop and ask the owner; do not skip ahead past a gate.
-   - An `after` step in another phase: check it with `grep -rn '\*\*P1.13\*\*' docs/plan-tiered-routing/` (ticked starts `- [x]`). "After Phase N" means its status is `PR open` or `done`.
-   - Do not read other phase files, `risks.md` or the design yourself. Do not re-read a whole file after ticking a box; you made the edit.
-2. Branch: one branch per phase, `<type>/<kebab>` as named in the phase heading. Create it from `main` (or from the previous phase's branch if that PR is still open; say so in the PR). Never push to `main`, never merge, never edit `.github/workflows/`.
-3. Spawn the subagent named in the step (`model: "haiku"` or `"sonnet"`, foreground) with the brief below. One subagent per step, with one exception: a run of consecutive docs-only Haiku steps in the same phase (ADR amendments, docs edits) may go to one Haiku agent, which still makes one commit per step and runs the docs check after each; you review each commit. Do not commit or push while it runs.
-4. When it hands back: run the checks for the step type, read `git show --stat HEAD`, then the diff file by file (`git show HEAD -- <path>`) against the step's "Accept" line and the review list; skip lockfiles and generated fixtures unless the step is about them. Send fixes to the same agent (it amends; nothing is pushed yet).
-5. Commit with the exact subject (the agent commits; you verify). Body: why, deviations, any test changed and why. End with the attribution lines your session was given. Tick the step's box in its phase file in the same commit.
-6. Push the phase branch after each step (`git push -u origin <branch>`; never force). At phase end run the full checks, open one PR titled with the phase's commit-style subject, fill the PR template, say what ran and what did not, say "rebase-merge, each commit stands alone", and stop for the owner.
-
-**Subagent brief** (keep it small): the step block verbatim; "read AGENTS.md (hard rules, stop-and-ask) and the CONTRIBUTING section named in the step"; the file list from the step and nothing else to read unless needed; "one commit with this exact subject, tests and docs in the same commit, do not push, do not add dependencies, do not touch `.github/`, stop and report if the step needs a decision this file does not make"; the check commands, run as shown under Checks per step; "if the step cites the design, read only that part: find it with `grep -n '^##' docs/design-tiered-routing.md` and read that range (for an ADR amendment, the ADR's row in the design's ADR updates table)"; "final report: commit hash, files, check results, deviations".
-
-**Checks per step**
-
-Run each command as `<command> > /tmp/check.log 2>&1; echo "exit $?"; tail -n 30 /tmp/check.log`, and read more of the log only when it fails, so full test output stays out of the context.
-
-| Touches | Run |
-| --- | --- |
-| Rust crate or service | `cargo fmt --all --check`, `cargo clippy -p <crate> --all-targets --locked -- -D warnings`, `cargo test -p <crate>` (OpenAPI tests run with it) |
-| `clients/desktop` | the same three inside `clients/desktop`, then `npm test` |
-| Docs or ADR only | `scripts/check-docs.sh` |
-| Dependency added | `cargo deny check`; `node scripts/check-npm-licenses.js package-lock.json clients/desktop/package-lock.json` |
-| `compose.yaml`, Dockerfile, network, volume | `scripts/check-isolation.sh` (needs Docker) |
-| Phase end | `cargo fmt --all --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo test --workspace`, the same three in `clients/desktop` if touched, `npm test`, `scripts/smoke.sh`, plus the rows above |
-
-**Review list**: no prompt text, reply text, provider key or signing key in logs, errors, `/status` or audit attributes (only sealed payloads carry text); every model or decider call has its audit span acknowledged before the call; new fields are additive with `#[serde(default)]` and old payloads still parse; no literal behaviour values (limits, intervals, thresholds, defaults) in service code; no earlier migration edited; no test loosened without a stated contract change; one concern per commit; OpenAPI and docs updated with the code.
-
-**Haiku or Sonnet.** Haiku: docs, ADR amendment text, OpenAPI and proto boilerplate, test fixtures and mock extensions, grep or explore tasks, mechanical renames, pure functions with a given formula. Sonnet: gateway, server and admin logic, anything concurrent, security, crypto or audit-path code, anything with a migration. Owner: everything under "Owner gates". If a step marked haiku turns out to need judgment, move it to Sonnet; do not ask Haiku twice.
-
-**Retries.** A check fails: the same agent gets one fix attempt. Still failing: Haiku steps go to a fresh Sonnet agent with the diff and the failing output; Sonnet steps stop. Then stop and ask the owner. An unexplained failing test stops the step at once.
-
-**Stop and ask.** A new dependency outside the licence allowlist (and any new dependency named in a phase file); a new container, port, network or volume; any hard-rule change; a missing or unaccepted ADR; a decision this file marks "assumed" that the work contradicts; an unexplained failing test. Never accept an ADR, merge, or batch ADR amendments: one amendment, one commit, `docs(adr): amend NNNN: <what>`, edited in place with an Amendments line. Decision amendments need the owner's approval in the PR.
-
-**Compatibility rules for every step.** Proto and API changes are additive (`#[serde(default)]`, optional fields, no renames); an old server with a new gateway, and the reverse, keep working; a test parses the old payload shape. Token budgets keep working until dollar budgets are switched on. Never rename a volume; append migrations. No literal behaviour values in service code: every new limit, interval, threshold or default lives in `services/admin/src/constants.rs`, with its bounds and default in `askbar-proto` when a service also checks it (the admin re-exports them). Pushed constants are additive and defaulted; a service before its first push uses the `askbar-proto` defaults.
+- **Design citations.** When a step cites the design, the brief says: "read only that part. Find it with `grep -n '^##' docs/design-tiered-routing.md` and read that range (for an ADR amendment, the ADR's row in the design's ADR updates table)."
+- **Phase state.** One branch per phase, named in the phase heading. "After Phase N" means its status is `PR open` or `done`.
+- **ADR amendments.** Each amendment is edited in place with an Amendments line. Decision amendments need the owner's approval in the PR.
+- **Budgets.** Token budgets keep working until dollar budgets are switched on.
+- **Decider calls.** In the review list, "every model call" includes decider calls.
 
 ## Owner gates
 
