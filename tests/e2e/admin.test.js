@@ -3746,6 +3746,23 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.unroute('**/api/admin/v1/audit/stats*');
     await page.unroute('**/api/admin/v1/audit/provider-health');
   });
+  await step('audit routing: a provider that is refused after the page loaded shows it on the next refresh, with the same counts', async () => {
+    let refused = false;
+    const stats = { requests: 1, by_provider: [{ provider_id: 'p1', requests: 1, attempts: 1, retries: 0, failed_attempts: 0, tokens: { in: 1, out: 1, cached: 0 }, cost: 0 }], by_day: [], tokens: { in: 1, out: 1, cached: 0 }, latency_ms: {}, ttft_ms: {} };
+    await page.route('**/api/admin/v1/audit/stats*', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify(stats) }));
+    await page.route('**/api/admin/v1/audit/provider-health', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ providers: refused ? [{ provider_id: 'p1', status: 'auth_failed', since: 1793631845, error_code: 'http_401' }] : [] }) }));
+    await openPage('providers');
+    await page.goto(base + 'audit/routing/');
+    await page.waitForSelector('#audit-routing-rows tr[data-provider="p1"]');
+    const status = () => page.$eval('#audit-routing-rows tr[data-provider="p1"] td:last-child', (td) => td.textContent);
+    assert.equal(await status(), 'ok');
+    refused = true;
+    await page.evaluate(() => document.getElementById('routing-window').dispatchEvent(new Event('change')));
+    await page.waitForFunction(() => /refused since/.test(document.querySelector('#audit-routing-rows tr[data-provider="p1"] td:last-child').textContent));
+    assert.match(await status(), /^refused since .* \(http_401\)$/);
+    await page.unroute('**/api/admin/v1/audit/stats*');
+    await page.unroute('**/api/admin/v1/audit/provider-health');
+  });
   await step('audit calls (canned): sealed content stays sealed in the trace panel until the passphrase opens a session, View shows text as text, and a session that ends wipes it', async () => {
     const spans = [
       { id: 'sp-turn', parent_id: null, kind: 'turn', name: 'chat', status: 'done', started_at: 1000, ended_at: 1001, sealed: 1, attrs: {} },

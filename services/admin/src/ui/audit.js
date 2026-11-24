@@ -180,7 +180,7 @@
       ];
       for (const [text, cls] of cells) tr.appendChild(el('td', cls, text));
       return tr;
-    }, { key: (a) => a.id });
+    }, { key: (a) => a.id, sig: (a) => JSON.stringify([a, providerLabel(a.provider_id)]) });
   }
 
   // The request in the address (?id=, from Model calls), then the providers in the chosen range: tries, retries,
@@ -208,7 +208,7 @@
       ];
       for (const [text, cls] of cells) tr.appendChild(el('td', cls, text));
       return tr;
-    }, { key: (r) => r.provider_id });
+    }, { key: (r) => r.provider_id, sig: (r) => JSON.stringify([r, flagged.get(r.provider_id), providerLabel(r.provider_id)]) });
     // The request last, so its own message is the one left on screen.
     let trace;
     let missing = '';
