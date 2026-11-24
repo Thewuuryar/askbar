@@ -147,7 +147,7 @@ Branch `refactor/service-boot`. PR title `refactor(model-gateway): share service
   Files: `crates/askbar-proto/src/lib.rs` (or a new `links.rs`), `services/bootstrap/src/links.rs`, `services/{model-gateway,alerter,auditor}/src/lib.rs`.
   Do: the link names as constants in `askbar-proto`. Bootstrap and the services use them, so P5A.9a adds a new link name in one place.
   Accept: bootstrap's test that every link is a row of the `architecture.md` table still passes.
-- [ ] **R3.4** `refactor(auditor): share the append step of the append handlers` · sonnet
+- [x] **R3.4** `refactor(auditor): share the append step of the append handlers` · sonnet
   Files: `services/auditor/src/lib.rs`, `crates/askbar-audit/src/lib.rs` (`is_empty_of_content`).
   Do:
   - One `append_created(&a, id, record)` for the six handlers that gate, append and reply `201` (`start_span` to `add_alert_delivery`).
