@@ -4,6 +4,7 @@
 use crate::Proxy;
 use askbar_proto::egress::{EgressConfig, EgressStatus, MAX_CONFIG_BYTES};
 use askbar_proto::http::ApiError;
+use askbar_proto::links::ADMIN_EGRESS_PROXY;
 use askbar_proto::paths::EGRESS_PROXY_V1;
 use askbar_proto::ErrorCode;
 pub use askbar_service::links::RouteEntry;
@@ -18,7 +19,7 @@ use std::sync::Arc;
 const ADMIN_ROUTES: Routes = &[("GET", "/status"), ("PUT", "/config"), ("POST", "/restart")];
 
 /// The one link: name as `bootstrap` names it (the file `accept/<name>.sha256`), the caller, and the routes.
-pub const LINKS: &[LinkDef] = &[("admin-egress-proxy", "admin", ADMIN_ROUTES)];
+pub const LINKS: &[LinkDef] = &[(ADMIN_EGRESS_PROXY, "admin", ADMIN_ROUTES)];
 
 fn full(rest: &str) -> String {
     links::full(EGRESS_PROXY_V1, rest)

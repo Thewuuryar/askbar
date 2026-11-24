@@ -17,7 +17,7 @@ pub struct Link {
 
 /// Only links whose receiver exists: `admin-server` (step 2.1), the auditor's two admin links (2.4), and the
 /// three `model-gateway` links (3.1, ADR 0054), the server's link to the auditor (3.1, second half), and the
-/// alerter's three links (4.1, ADR 0055) and the auditor's restore link (6.3, ADR 0013).
+/// alerter's three links (4.1, ADR 0055) the auditor's restore link (6.3, ADR 0013) and the egress proxy's link (4.1c, ADR 0056).
 pub const LINKS: &[Link] = &[
     Link { name: ADMIN_SERVER, caller: "admin", receiver: "server", prefix: "mgt_" }, // names-ok: the token prefix already issued
     Link { name: ADMIN_AUDITOR_APPEND, caller: "admin", receiver: "auditor", prefix: "audapp_" },
@@ -37,11 +37,13 @@ pub const LINKS: &[Link] = &[
     // The one way records reach the auditor other than an append (plan step 6.3, ADR 0013, ADR 0010): `POST /restore` and nothing else,
     // into an empty store. The admin holds this token and uses it only for a restore.
     Link { name: ADMIN_AUDITOR_RESTORE, caller: "admin", receiver: "auditor", prefix: "audrs_" },
+    // The egress proxy (plan step 4.1c, ADR 0056): the admin pushes its allowlists and reads its status.
+    Link { name: ADMIN_EGRESS_PROXY, caller: "admin", receiver: "egress-proxy", prefix: "admegr_" },
 ];
 
 /// A service with a credential volume `<name>-token`, and the uid that reads it (ADR 0003).
 pub const SERVICES: &[(&str, u32)] =
-    &[("admin", 10001), ("server", 10002), ("auditor", 10003), ("model-gateway", 10004), ("alerter", 10005)];
+    &[("admin", 10001), ("server", 10002), ("auditor", 10003), ("model-gateway", 10004), ("alerter", 10005), ("egress-proxy", 10006)];
 
 pub fn link(name: &str) -> Option<&'static Link> {
     LINKS.iter().find(|l| l.name == name)

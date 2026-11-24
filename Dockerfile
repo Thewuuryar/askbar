@@ -7,6 +7,7 @@
 #   docker build --target auditor    -t askbar-auditor .
 #   docker build --target model-gateway -t askbar-model-gateway .
 #   docker build --target alerter    -t askbar-alerter .
+#   docker build --target egress-proxy -t askbar-egress-proxy .
 #   docker build --target admin      -t askbar-admin  .
 #   docker build --target caddy      -t askbar-caddy  .
 #   docker build --target cpa        -t askbar-cpa    .
@@ -34,7 +35,7 @@ COPY services/model-gateway/Cargo.toml services/model-gateway/
 COPY services/alerter/Cargo.toml services/alerter/
 COPY services/egress-proxy/Cargo.toml services/egress-proxy/
 RUN for d in crates/* services/*; do mkdir -p "$d/src" && touch "$d/src/lib.rs" && echo 'fn main() {}' > "$d/src/main.rs"; done \
- && cargo build --release --locked -p askbar-server -p askbar-admin -p askbar-cpa-supervisor -p askbar-bootstrap -p askbar-auditor -p askbar-model-gateway -p askbar-alerter \
+ && cargo build --release --locked -p askbar-server -p askbar-admin -p askbar-cpa-supervisor -p askbar-bootstrap -p askbar-auditor -p askbar-model-gateway -p askbar-alerter -p askbar-egress-proxy \
  && rm -rf crates/*/src services/*/src target/release/.fingerprint/askbar-*
 # The real sources. Removing the members' fingerprints above makes cargo rebuild them, whatever the
 # copied files' timestamps.
@@ -42,14 +43,14 @@ COPY crates crates
 COPY services services
 COPY docs/reference docs/reference
 # The desktop client is its own workspace (clients/desktop) and is not part of any image.
-RUN cargo build --release --locked -p askbar-server -p askbar-admin -p askbar-cpa-supervisor -p askbar-bootstrap -p askbar-auditor -p askbar-model-gateway -p askbar-alerter
+RUN cargo build --release --locked -p askbar-server -p askbar-admin -p askbar-cpa-supervisor -p askbar-bootstrap -p askbar-auditor -p askbar-model-gateway -p askbar-alerter -p askbar-egress-proxy
 
 # --------------------------------------------------------------- bootstrap
 # Creates the per-link tokens and exits (ADR 0049). Runs as root with CHOWN as its only capability, no
 # network, and mounts the credential volumes only. No user is made: it must own a directory it writes
 # to, then give it to the service that reads it.
 FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc AS bootstrap
-RUN mkdir /server-token /admin-token /auditor-token /model-gateway-token /alerter-token
+RUN mkdir /server-token /admin-token /auditor-token /model-gateway-token /alerter-token /egress-proxy-token
 COPY --from=build /src/target/release/askbar-bootstrap /usr/local/bin/askbar-bootstrap
 ENTRYPOINT ["askbar-bootstrap"]
 
@@ -152,6 +153,19 @@ ENV ASKBAR_ALERTER_TOKEN_DIR=/alerter-token ASKBAR_ALERTER_DATA_DIR=/alerter-dat
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD ["askbar-alerter", "healthcheck"]
 ENTRYPOINT ["askbar-alerter"]
+
+# ----------------------------------------------------------------- egress-proxy
+# The egress proxy (ADR 0056): the one way out of the stack. Runs as uid 10006 with no capabilities and no data volume; its
+# only volume is the credential volume `egress-proxy-token`, mounted read-only (the hash of the admin's token).
+FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc AS egress-proxy
+RUN groupadd --system --gid 10006 askbar-egress-proxy && useradd --system --uid 10006 --gid 10006 --home-dir /nonexistent --shell /usr/sbin/nologin askbar-egress-proxy \
+ && mkdir /egress-proxy-token && chown askbar-egress-proxy:askbar-egress-proxy /egress-proxy-token
+COPY --from=build /src/target/release/askbar-egress-proxy /usr/local/bin/askbar-egress-proxy
+USER askbar-egress-proxy
+ENV ASKBAR_EGRESS_PROXY_TOKEN_DIR=/egress-proxy-token
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD ["askbar-egress-proxy", "healthcheck"]
+ENTRYPOINT ["askbar-egress-proxy"]
 
 # ----------------------------------------------------------------- server
 # The server: the client API on 8080 and the server API on its own address. Runs as uid 10002,

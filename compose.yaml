@@ -66,6 +66,7 @@ services:
       - auditor-token:/auditor-token
       - model-gateway-token:/model-gateway-token
       - alerter-token:/alerter-token
+      - egress-proxy-token:/egress-proxy-token
 
   server:
     build:
@@ -411,6 +412,8 @@ volumes:
   # The alerter's credential volume (ADR 0049, 0055): the hashes of the tokens it accepts, and the token it sends the auditor.
   # Only bootstrap writes it.
   alerter-token:
+  # The egress proxy's credential volume (ADR 0049, 0056): the hash of the admin's token. Only bootstrap writes it.
+  egress-proxy-token:
   admin-data:
   admin-secrets:
   # The admin's backups (ADR 0013, D27). A new volume, empty, owned by uid 10001 as the image's /backup is. Never renamed or dropped:
