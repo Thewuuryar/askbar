@@ -2,22 +2,14 @@
 {%- import "blocks.html" as b %}
 {%- import "components.html" as c %}
 {% block content %}
-    <section class="sec-sec" aria-labelledby="now-title">
-      <div class="sec-lab">
-        {% call c::section_title("now-title", "Back up now", "settings/backup#back-up-now") %}{% endcall %}
-        <p class="hint">Backs up now, then applies the keep limits.</p>
-      </div>
+    {% call c::settings_section("now-title", "Back up now", "settings/backup#back-up-now", "Backs up now, then applies the keep limits.") %}
       <div class="sec-fields">
         <div class="sec-actions"><button type="button" id="sched-run" class="btn btn-primary">Back up now</button></div>
         {% call b::error_line("sched-error") %}{% endcall %}
       </div>
-    </section>
+    {% endcall %}
 
-    <section id="schedule-panel" class="sec-sec" aria-labelledby="sched-title">
-      <div class="sec-lab">
-        {% call c::section_title("sched-title", "Scheduled backups", "settings/backup#scheduled-backups") %}{% endcall %}
-        <p class="hint">Failed backups are retried after {{ crate::constants::BACKUP_RETRY_AFTER_SECS / 60 }} minutes and raise an alert.</p>
-      </div>
+    {% call c::settings_section("sched-title", "Scheduled backups", "settings/backup#scheduled-backups", "Failed backups are retried after " ~ (crate::constants::BACKUP_RETRY_AFTER_SECS / 60) ~ " minutes and raise an alert.", "schedule-panel") %}
       <div class="sec-fields">
         <div id="sched-reminder" class="notice notice-warning" role="status" hidden>
           {% call c::icon("warning") %}{% endcall %}
@@ -36,36 +28,24 @@
           {% call c::na("the admin writes only to the backup volume") %}<span class="btn btn-secondary">Cloud storage (S3-compatible)</span>{% endcall %}
         </div>
       </div>
-    </section>
+    {% endcall %}
 
-    <section class="sec-sec" aria-labelledby="keep-title">
-      <div class="sec-lab">
-        {% call c::section_title("keep-title", "How long backups are kept", "settings/backup#how-long-backups-are-kept") %}{% endcall %}
-        <p class="hint">The newest backup is always kept. Lowering these needs a sign-in from the last {{ crate::constants::FRESH_SIGNIN_SECS / 60 }} minutes.</p>
-      </div>
+    {% call c::settings_section("keep-title", "How long backups are kept", "settings/backup#how-long-backups-are-kept", "The newest backup is always kept. Lowering these needs a sign-in from the last " ~ (crate::constants::FRESH_SIGNIN_SECS / 60) ~ " minutes.") %}
       <form id="schedule-form" class="sec-fields">
-        {% call c::field("Keep at most this many backups", "sched-keep-files", "", "slot", false) %}<input id="sched-keep-files" name="sched-keep-files" type="number" inputmode="numeric" min="{{ crate::constants::MIN_BACKUP_KEEP_FILES }}" max="{{ crate::constants::MAX_BACKUP_KEEP_FILES }}" required aria-describedby="sched-keep-files-hint sched-keep-files-error"><p class="hint" id="sched-keep-files-hint">{{ crate::constants::MIN_BACKUP_KEEP_FILES }} to {{ crate::constants::MAX_BACKUP_KEEP_FILES }} backups</p>{% endcall %}
-        {% call c::field("Delete backups older than this many days", "sched-keep-days", "", "slot", false) %}<input id="sched-keep-days" name="sched-keep-days" type="number" inputmode="numeric" min="{{ crate::constants::MIN_BACKUP_KEEP_DAYS }}" max="{{ crate::constants::MAX_BACKUP_KEEP_DAYS }}" required aria-describedby="sched-keep-days-hint sched-keep-days-error"><p class="hint" id="sched-keep-days-hint">{{ crate::constants::MIN_BACKUP_KEEP_DAYS }} to {{ crate::constants::MAX_BACKUP_KEEP_DAYS }} days</p>{% endcall %}
+        {% call c::number_field("Keep at most this many backups", "sched-keep-files", crate::constants::MIN_BACKUP_KEEP_FILES, crate::constants::MAX_BACKUP_KEEP_FILES, "backups", "", "numeric", true) %}{% endcall %}
+        {% call c::number_field("Delete backups older than this many days", "sched-keep-days", crate::constants::MIN_BACKUP_KEEP_DAYS, crate::constants::MAX_BACKUP_KEEP_DAYS, "days", "", "numeric", true) %}{% endcall %}
         {% call b::error_line("sched-limits-error") %}{% endcall %}
         {% call c::save_bar("schedule-form") %}{% endcall %}
       </form>
-    </section>
+    {% endcall %}
 
-    <section class="sec-sec" aria-labelledby="dl-title">
-      <div class="sec-lab">
-        {% call c::section_title("dl-title", "Download a backup", "settings/backup#download-a-backup") %}{% endcall %}
-        <p class="hint">An encrypted .tar file, opened with the backup passphrase. To put a backup back, see <a href="#restore-section">Restore from a backup</a> below.</p>
-      </div>
+    {% call c::settings_section("dl-title", "Download a backup", "settings/backup#download-a-backup", "An encrypted .tar file, opened with the backup passphrase. To put a backup back, see <a href=\"#restore-section\">Restore from a backup</a> below.") %}
       <div class="sec-fields">
         <div class="sec-actions"><a class="btn btn-secondary" id="backup-link" href="/api/admin/v1/backup" download>Download backup</a></div>
       </div>
-    </section>
+    {% endcall %}
 
-    <section id="restore-section" class="sec-sec" aria-labelledby="restore-title">
-      <div class="sec-lab">
-        {% call c::section_title("restore-title", "Restore from a backup", "settings/backup#restore-from-a-backup") %}{% endcall %}
-        <p class="hint">Only for a new, empty install. A restore replaces all of this server's data and this admin's own, and needs a sign-in from the last {{ crate::constants::FRESH_SIGNIN_SECS / 60 }} minutes.</p>
-      </div>
+    {% call c::settings_section("restore-title", "Restore from a backup", "settings/backup#restore-from-a-backup", "Only for a new, empty install. A restore replaces all of this server's data and this admin's own, and needs a sign-in from the last " ~ (crate::constants::FRESH_SIGNIN_SECS / 60) ~ " minutes.", "restore-section") %}
       <div class="sec-fields">
         <form id="restore-upload-form" class="sec-fields">
           {% call c::field("Backup file", "restore-file", "Choose the .tar file you downloaded from this page. It is checked before the passphrase is asked for.", "slot", false) %}<input id="restore-file" type="file" accept=".tar,application/x-tar" required aria-describedby="restore-file-hint restore-file-error">{% endcall %}
@@ -84,5 +64,5 @@
           <p class="hint" id="restore-note"></p>
         </div>
       </div>
-    </section>
+    {% endcall %}
 {% endblock %}

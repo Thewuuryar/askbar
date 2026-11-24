@@ -1396,39 +1396,6 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     }
     await openPage('providers');
   });
-  await step('live lists: a 304 changes nothing, and the ETag is sent back', async () => {
-    await openPage('people');
-    await page.waitForSelector('#users [data-user]');
-    const sent = [];
-    await page.route('**/api/admin/v1/clients', async (route) => {
-      const inm = route.request().headers()['if-none-match'];
-      sent.push(inm || null);
-      if (inm === '"v1"') { await route.fulfill({ status: 304, headers: { etag: '"v1"' } }); return; }
-      const real = await route.fetch();
-      await route.fulfill({ response: real, headers: { ...real.headers(), etag: '"v1"' } });
-    });
-    try {
-      await page.reload();
-      await page.waitForSelector('#app:not([hidden])');
-      await page.waitForFunction(() => document.querySelector('#clients [data-client], #clients .empty-row'));
-      await page.evaluate(() => {
-        window.__muts = 0;
-        new MutationObserver((m) => { window.__muts += m.length; }).observe(document.getElementById('clients'), { subtree: true, childList: true, attributes: true, characterData: true });
-        Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
-        document.dispatchEvent(new Event('visibilitychange'));
-        Object.defineProperty(document, 'hidden', { configurable: true, get: () => false });
-        document.dispatchEvent(new Event('visibilitychange'));
-      });
-      for (let i = 0; i < 50 && sent.length < 2; i++) await page.waitForTimeout(100);
-      await page.waitForTimeout(300);
-      assert.deepEqual(sent.slice(0, 2), [null, '"v1"'], 'the second ask carries the ETag of the first answer');
-      assert.equal(await page.evaluate(() => window.__muts), 0, 'a 304 changes nothing');
-    } finally {
-      await page.unroute('**/api/admin/v1/clients');
-      await page.evaluate(() => { delete document.hidden; });
-    }
-    await openPage('providers');
-  });
   await step('live lists: the interval follows the tab, a lost connection backs off along BACKOFF_SECS and says Reconnecting…, and the first answer clears it', async () => {
     const out = await page.evaluate(async () => {
       const K = await window.ui.ready;
@@ -3776,6 +3743,23 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     const classes = await page.evaluate(() => ['http_401', 'http_403', 'config', 'http_429', 'http_503', 'connect', 'stream', 'http_400', 'http_404', 'timeout', 'kill_switch', null].map((c) => window.askbarAudit.failureClass(c)));
     assert.deepEqual(classes, ['bad credentials', 'bad credentials', 'bad credentials', 'worth retrying', 'worth retrying', 'worth retrying', 'worth retrying', 'refused outright', 'refused outright', 'ran out of time', 'switched off', '']);
     await page.unroute('**/api/admin/v1/audit/traces/ROUTE1');
+    await page.unroute('**/api/admin/v1/audit/stats*');
+    await page.unroute('**/api/admin/v1/audit/provider-health');
+  });
+  await step('audit routing: a provider that is refused after the page loaded shows it on the next refresh, with the same counts', async () => {
+    let refused = false;
+    const stats = { requests: 1, by_provider: [{ provider_id: 'p1', requests: 1, attempts: 1, retries: 0, failed_attempts: 0, tokens: { in: 1, out: 1, cached: 0 }, cost: 0 }], by_day: [], tokens: { in: 1, out: 1, cached: 0 }, latency_ms: {}, ttft_ms: {} };
+    await page.route('**/api/admin/v1/audit/stats*', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify(stats) }));
+    await page.route('**/api/admin/v1/audit/provider-health', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ providers: refused ? [{ provider_id: 'p1', status: 'auth_failed', since: 1793631845, error_code: 'http_401' }] : [] }) }));
+    await openPage('providers');
+    await page.goto(base + 'audit/routing/');
+    await page.waitForSelector('#audit-routing-rows tr[data-provider="p1"]');
+    const status = () => page.$eval('#audit-routing-rows tr[data-provider="p1"] td:last-child', (td) => td.textContent);
+    assert.equal(await status(), 'ok');
+    refused = true;
+    await page.evaluate(() => document.getElementById('routing-window').dispatchEvent(new Event('change')));
+    await page.waitForFunction(() => /refused since/.test(document.querySelector('#audit-routing-rows tr[data-provider="p1"] td:last-child').textContent));
+    assert.match(await status(), /^refused since .* \(http_401\)$/);
     await page.unroute('**/api/admin/v1/audit/stats*');
     await page.unroute('**/api/admin/v1/audit/provider-health');
   });

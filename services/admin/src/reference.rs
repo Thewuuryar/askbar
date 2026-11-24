@@ -563,6 +563,11 @@ mod tests {
         strings[strings.len() - 2]
     }
 
+    /// The topic of a `settings_section("id", "text", "topic", ...)` call, given the template text after `settings_section("`.
+    fn settings_section_topic(after_open: &str) -> &str {
+        after_open.split('"').nth(4).unwrap()
+    }
+
     /// Every `help(...)` call in the templates, and every ? button on a rendered page, names a topic in the list, and
     /// the page carries that topic's text, so a missing topic fails here and not on a user's click.
     #[test]
@@ -579,6 +584,9 @@ mod tests {
             let mut topics: Vec<String> = text.split("help(\"").skip(1).map(|p| p.split('"').next().unwrap().to_string()).collect();
             for part in text.split("section_title(\"").skip(1) {
                 topics.push(section_title_topic(part).to_string());
+            }
+            for part in text.split("settings_section(\"").skip(1) {
+                topics.push(settings_section_topic(part).to_string());
             }
             for topic in topics.into_iter().filter(|t| !t.is_empty()) {
                 assert!(HELP_TOPICS.contains(&topic.as_str()), "{}: help topic '{topic}' is not in HELP_TOPICS", path.display());
@@ -790,7 +798,7 @@ mod tests {
 
     // ---------------------------------------------------------------- the home and the links back to the settings (R7)
 
-    /// Every `section_title("<id>", "<text>", "<topic>")` call in the page templates whose topic names a heading.
+    /// Every `section_title("<id>", "<text>", "<topic>")` (or `settings_section`) call in the page templates whose topic names a heading.
     fn section_titles() -> Vec<(String, String, String)> {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/ui/templates");
         let mut found = Vec::new();
@@ -801,8 +809,12 @@ mod tests {
                 continue;
             }
             let text = std::fs::read_to_string(&path).unwrap();
-            for part in text.split("section_title(\"").skip(1) {
-                let topic = section_title_topic(part);
+            let parts = text
+                .split("section_title(\"")
+                .skip(1)
+                .map(|p| (p, section_title_topic(p)))
+                .chain(text.split("settings_section(\"").skip(1).map(|p| (p, settings_section_topic(p))));
+            for (part, topic) in parts {
                 // Only the settings pages have a link back (`SETTING_ANCHORS`); the other pages' sections have a topic and no link.
                 if topic.starts_with("settings/") && topic.contains('#') {
                     found.push((file.clone(), part.split('"').next().unwrap().to_string(), topic.to_string()));

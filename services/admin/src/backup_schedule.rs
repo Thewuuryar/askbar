@@ -72,9 +72,8 @@ pub struct Backups {
 
 impl Default for Backups {
     fn default() -> Backups {
-        let dir = std::env::var("ASKBAR_BACKUP_DIR").ok().filter(|d| !d.trim().is_empty()).unwrap_or_else(|| "/backup".into());
         Backups {
-            dir: Mutex::new(PathBuf::from(dir)),
+            dir: Mutex::new(PathBuf::from(crate::env_or("ASKBAR_BACKUP_DIR", "/backup"))),
             timing: Mutex::new(Timing::default()),
             stuck: Arc::default(),
             running: AtomicBool::new(false),

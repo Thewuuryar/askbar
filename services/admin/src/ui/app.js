@@ -11,26 +11,20 @@
   const MS = ui.MS;
   let K = null;
 
-  // A live list reads with `{ etag: true }`: the answer's ETag is kept, sent back as If-None-Match, and a 304 hands back
-  // the data kept with it. (The admin API sends no ETag on its lists today, so every answer is a full 200 and ui.live
-  // compares the bodies instead; this is ready for the day it does.) A read is never counted as the person's activity:
-  // the session has a fixed expiry that no request moves (auth.rs), and only changes are recorded (actions.rs).
-  const etags = new Map();
+  // A read is never counted as the person's activity: the session has a fixed expiry that no request moves (auth.rs),
+  // and only changes are recorded (actions.rs). `opts.raw` sends `body` as is, with that content type (an upload).
   async function api(method, path, body, opts = {}) {
-    const known = opts.etag ? etags.get(path) : null;
     const res = await fetch(path, {
       method,
       credentials: 'same-origin',
-      headers: { 'X-Askbar-Admin': '1', ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}), ...(known ? { 'If-None-Match': known.tag } : {}) },
-      body: body !== undefined ? JSON.stringify(body) : undefined,
+      headers: { 'X-Askbar-Admin': '1', ...(body !== undefined ? { 'Content-Type': opts.raw || 'application/json' } : {}) },
+      body: body === undefined ? undefined : opts.raw ? body : JSON.stringify(body),
     });
-    if (res.status === 304 && known) return known.data;
     if (res.status === 401 && !(method === 'POST' && path === '/api/admin/v1/session')) { showLogin(); throw new Error('Signed out'); }
     let data = null;
     const text = await res.text();
     if (text) { try { data = JSON.parse(text); } catch (_) { data = null; } }
     if (res.status === 502) ui.banner('offline', 'error', OFFLINE_TEXT);
-    if (opts.etag && res.ok && res.headers.get('ETag')) etags.set(path, { tag: res.headers.get('ETag'), data });
     if (!res.ok) {
       // A problem+json body: `detail` is the sentence for a person, `error` the stable code.
       const err = new Error((data && (data.detail || data.error)) || ('Request failed (' + res.status + ')'));
@@ -41,20 +35,15 @@
     return data;
   }
 
-  // Success goes to a toast; an error stays on the page (rule 32): inline next to the action when the page has a
-  // line for it, else the one page-level line under the status bar. '' clears it.
+  // Success goes to a toast; an error stays on the page (rule 32): inline next to the action (ui.inlineError), or the one
+  // page-level line under the status bar (pageError). '' clears it.
   const OFFLINE_TEXT = "Server offline. The admin can't reach the Askbar server, so changes, tests, clients and backups won't work until it is back. Nothing you change now is lost or half-saved.";
   function pageError(text) {
     const line = $('page-error');
     line.textContent = text;
     show(line, !!text);
   }
-  function inlineError(id, text) {
-    const line = $(id);
-    if (!line) return pageError(text);
-    line.textContent = text;
-    show(line, !!text);
-  }
+  const pageFailed = (ex) => { if (ex.message !== 'Signed out') pageError(ex.message); };
 
   // ------------------------------------------------------------- pages
 
@@ -215,8 +204,7 @@
       show($('setup-audit-done'), true);
       setStep(2, true);
     } catch (ex) {
-      err.textContent = ex.message;
-      show(err, true);
+      ui.inlineError(err, ex.message);
     }
   });
   on('setup-audit-continue', 'click', () => route());
@@ -232,8 +220,7 @@
       clearSecrets(['setup-password', 'setup-password2']);
       route();
     } catch (ex) {
-      err.textContent = ex.message;
-      show(err, true);
+      ui.inlineError(err, ex.message);
     }
   });
 
@@ -511,14 +498,13 @@
   };
   // Home reads the same answers for its summaries, plus the stats of the window and the services (the menu's health data).
   // The range of the figures and the chart, in days: one of HOME_STATS_RANGE_DAYS, from the address (?range=) or the default.
-  const DAY_SECS = 24 * 3600; // time-unit maths, not a limit
   const rangeParam = () => Number(new URLSearchParams(location.search).get('range'));
   let rangeDays = null; // set on first use, once the constants are here
   const range = () => { if (rangeDays === null) rangeDays = K.HOME_STATS_RANGE_DAYS.includes(rangeParam()) ? rangeParam() : K.HOME_STATS_WINDOW_DAYS; return rangeDays; };
   const rangeWords = (days) => (days === 1 ? 'last ' + days * 24 + ' hours' : 'last ' + days + ' days');
   const homeReads = () => ({
     ...GAP_READS,
-    stats: '/api/admin/v1/audit/stats?since=' + (Math.floor(Date.now() / MS) - range() * DAY_SECS),
+    stats: '/api/admin/v1/audit/stats?since=' + (Math.floor(Date.now() / MS) - range() * ui.DAY),
     services: '/api/admin/v1/services',
   });
   async function readSetup() {
@@ -672,7 +658,7 @@
         when: appShownNow,
         notice: $('attention'),
         render(data) { gapsNow = setupGapItems(data); renderAttention(); renderHome(data); },
-        onError(ex) { if (ex.message !== 'Signed out') pageError(ex.message); },
+        onError: pageFailed,
       });
     }
     return liveAttention.start();
@@ -697,13 +683,13 @@
   on('home-backup', 'click', async (e) => {
     const button = e.currentTarget;
     const done = ui.busy(button, 'Backing up…');
-    inlineError('home-error', '');
+    ui.inlineError('home-error', '');
     try {
       const r = await api('POST', '/api/admin/v1/backup/run');
       ui.toast('Backup made: ' + r.file);
       if (liveAttention) liveAttention.refresh();
     } catch (ex) {
-      inlineError('home-error', ex.message);
+      ui.inlineError('home-error', ex.message);
     } finally { done(); }
   });
 
@@ -743,7 +729,7 @@
   // A page with no live list shows "Reconnecting…" at the top of the page; a list shows its own next to the list.
   const appShownNow = () => !$('app').hidden;
   const listPage = ['services', 'providers', 'people'].includes(page);
-  const liveStatus = ui.live(() => api('GET', '/api/admin/v1/status', undefined, { etag: true }), {
+  const liveStatus = ui.live(() => api('GET', '/api/admin/v1/status'), {
     every: 'STATUS_EVERY_SECS',
     hidden: 'slow',
     always: true,
@@ -796,7 +782,7 @@
     const down = services.filter((s) => s.state !== 'running').length;
     return { state: down ? 'warning' : 'ok', text: down ? down + ' of ' + services.length + ' services not running' : 'All ' + services.length + ' services running' };
   }
-  const liveHealth = ui.live(() => api('GET', '/api/admin/v1/services', undefined, { etag: true }), {
+  const liveHealth = ui.live(() => api('GET', '/api/admin/v1/services'), {
     when: appShownNow,
     render: ({ services }) => {
       const health = healthOf(services);
@@ -1141,7 +1127,7 @@
 
   // The service rows, kept current every STATUS_EVERY_SECS while the tab is visible, and paused while a restart runs.
   // A row with its question open is held as it is (ui.rows), so a refresh never closes it.
-  const liveServices = ui.live(() => api('GET', '/api/admin/v1/services', undefined, { etag: true }), {
+  const liveServices = ui.live(() => api('GET', '/api/admin/v1/services'), {
     every: 'STATUS_EVERY_SECS',
     when: appShownNow,
     skip: () => servicesBusy,
@@ -1151,7 +1137,7 @@
       const down = data.services.filter((s) => s.state !== 'running').length;
       $('services-summary').textContent = down ? down + ' of ' + data.services.length + ' not running' : 'All running';
     },
-    onError(ex) { if (ex.message !== 'Signed out') pageError(ex.message); },
+    onError: pageFailed,
   });
   function loadServices() { return liveServices.start(); }
   // -------------------------------------------------------- providers and models (plan step 5.5)
@@ -1350,7 +1336,7 @@
 
   // The provider rows are current every LIVE_EVERY_SECS while the tab is visible. The approved-models draft below is not
   // touched by a check: it is read when the page opens and after the admin's own change.
-  const liveProviders = ui.live(() => api('GET', '/api/admin/v1/providers', undefined, { etag: true }), {
+  const liveProviders = ui.live(() => api('GET', '/api/admin/v1/providers'), {
     when: appShownNow,
     notice: $('providers-table') ? $('providers-table').parentElement : null,
     render(list, ctx) {
@@ -1360,7 +1346,7 @@
       renderProviders({ fresh: !ctx.first, force: ctx.force });
       syncPicker();
     },
-    onError(ex) { if (ex.message !== 'Signed out') pageError(ex.message); },
+    onError: pageFailed,
   });
 
   let providersReady = false;
@@ -1537,8 +1523,7 @@
       await loadCatalog();
       ui.toast('Approved models saved.');
     } catch (ex) {
-      err.textContent = ex.message;
-      show(err, true);
+      ui.inlineError(err, ex.message);
     } finally { done(); }
   });
 
@@ -1675,8 +1660,7 @@
         else ui.toast('Provider saved.');
       }
     } catch (ex) {
-      err.textContent = ex.message;
-      show(err, true);
+      ui.inlineError(err, ex.message);
     } finally { done(); }
   });
 
@@ -1710,8 +1694,7 @@
       for (const id of ['pw-current', 'pw-new', 'pw-new2']) $(id).value = '';
       ui.toast('Password changed. Other browsers have been signed out.');
     } catch (ex) {
-      err.textContent = ex.message;
-      show(err, true);
+      ui.inlineError(err, ex.message);
     }
   });
 
@@ -1771,8 +1754,7 @@
       ui.openBox('key-dialog');
       await loadKeys();
     } catch (ex) {
-      err.textContent = ex.message;
-      show(err, true);
+      ui.inlineError(err, ex.message);
     }
   });
 
@@ -1797,8 +1779,7 @@
       ui.toast('The API key was revoked.');
       await loadKeys();
     } catch (ex) {
-      $('key-error').textContent = ex.message;
-      show($('key-error'), true);
+      ui.inlineError($('key-error'), ex.message);
     }
   });
 
@@ -1854,14 +1835,13 @@
       const r = await api('POST', '/api/admin/v1/backup/run');
       ui.toast('Backup made: ' + r.file);
     } catch (ex) {
-      err.textContent = ex.message;
-      show(err, true);
+      ui.inlineError(err, ex.message);
     }
-    loadSchedule().catch((e) => inlineError('sched-error', e.message));
+    loadSchedule().catch((e) => ui.inlineError('sched-error', e.message));
   });
 
   on('sched-drill', 'click', async () => {
-    try { await api('POST', '/api/admin/v1/backup/drill'); await loadSchedule(); } catch (ex) { inlineError('sched-error', ex.message); }
+    try { await api('POST', '/api/admin/v1/backup/drill'); await loadSchedule(); } catch (ex) { ui.inlineError('sched-error', ex.message); }
   });
 
   on('schedule-form', 'submit', async (e) => {
@@ -1873,8 +1853,7 @@
       ui.toast('Saved.');
       await loadSchedule();
     } catch (ex) {
-      err.textContent = ex.message;
-      show(err, true);
+      ui.inlineError(err, ex.message);
     }
   });
 
@@ -1919,25 +1898,7 @@
     for (const id of ['restore-error', 'restore-pass-error']) show($(id), false);
   }
 
-  async function uploadBundle(file) {
-    const res = await fetch('/api/admin/v1/restore/inspect', {
-      method: 'POST',
-      credentials: 'same-origin',
-      headers: { 'X-Askbar-Admin': '1', 'Content-Type': 'application/x-tar' },
-      body: file,
-    });
-    if (res.status === 401) { showLogin(); throw new Error('Signed out'); }
-    const text = await res.text();
-    let data = null;
-    try { data = JSON.parse(text); } catch (_) { data = null; }
-    if (!res.ok) {
-      const err = new Error((data && (data.detail || data.error)) || ('Request failed (' + res.status + ')'));
-      err.status = res.status;
-      err.code = (data && data.error) || null;
-      throw err;
-    }
-    return data;
-  }
+  const uploadBundle = (file) => api('POST', '/api/admin/v1/restore/inspect', file, { raw: 'application/x-tar' });
 
   on('restore-upload-form', 'submit', async (e) => {
     e.preventDefault();
@@ -1957,8 +1918,7 @@
     } catch (ex) {
       restoreId = null;
       show($('restore-form'), false);
-      err.textContent = ex.message;
-      show(err, true);
+      ui.inlineError(err, ex.message);
     }
   });
 
@@ -1983,8 +1943,7 @@
       show($('restore-done'), true);
     } catch (ex) {
       $('restore-pass').value = '';
-      err.textContent = ex.message;
-      show(err, true);
+      ui.inlineError(err, ex.message);
     }
   });
 
@@ -2045,7 +2004,7 @@
   }
 
   on('n-apply', 'click', async () => {
-    try { showProxy(await api('POST', '/api/admin/v1/network/apply')); } catch (ex) { inlineError('network-error', ex.message); }
+    try { showProxy(await api('POST', '/api/admin/v1/network/apply')); } catch (ex) { ui.inlineError('network-error', ex.message); }
   });
 
   on('network-form', 'submit', async (e) => {
@@ -2066,8 +2025,7 @@
       await loadNetwork();
       ui.toast('Network settings saved.');
     } catch (ex) {
-      err.textContent = ex.message;
-      show(err, true);
+      ui.inlineError(err, ex.message);
     }
   });
 
@@ -2086,8 +2044,8 @@
   let editingUser = null;
   let pairing = null; // { user, known: Set of client ids before the key was made, done }
   const liveClients = ui.live(() => Promise.all([
-    api('GET', '/api/admin/v1/users', undefined, { etag: true }),
-    api('GET', '/api/admin/v1/clients', undefined, { etag: true }),
+    api('GET', '/api/admin/v1/users'),
+    api('GET', '/api/admin/v1/clients'),
   ]), {
     when: appShownNow,
     notice: $('users-section'),
@@ -2097,7 +2055,7 @@
       renderClients(clients, ctx);
       if (ctx.first) openPeopleFromAddress();
     },
-    onError(ex) { if (ex.message !== 'Signed out') pageError(ex.message); },
+    onError: pageFailed,
   });
   const loadUsers = () => liveClients.refresh();
   function loadClients() { return liveClients.start(); }
@@ -2154,8 +2112,7 @@
       await loadUsers();
       ui.announce(u.name + (paused ? ': replies paused' : ': replies resumed'));
     } catch (ex) {
-      $('user-error').textContent = ex.message;
-      show($('user-error'), true);
+      ui.inlineError($('user-error'), ex.message);
     }
   }
 
@@ -2188,8 +2145,7 @@
       await loadUsers();
       ui.toast(u.name + ($('e-paused').checked ? ': replies paused.' : ': replies resumed.'));
     } catch (ex) {
-      $('edit-error').textContent = ex.message;
-      show($('edit-error'), true);
+      ui.inlineError($('edit-error'), ex.message);
     } finally {
       done();
     }
@@ -2244,8 +2200,7 @@
       $('d-user').value = r.id;
       ui.toast('Added ' + name + '.');
     } catch (ex) {
-      err.textContent = ex.message;
-      show(err, true);
+      ui.inlineError(err, ex.message);
     }
   });
 
@@ -2288,8 +2243,7 @@
       await loadClients();
       ui.toast('Revoked ' + d.name + '.');
     } catch (ex) {
-      $('client-error').textContent = ex.message;
-      show($('client-error'), true);
+      ui.inlineError($('client-error'), ex.message);
     }
   }
 
@@ -2357,8 +2311,7 @@
       show($('pairing-out'), true);
       $('pairing-done').focus();
     } catch (ex) {
-      err.textContent = ex.message;
-      show(err, true);
+      ui.inlineError(err, ex.message);
     }
   });
 
@@ -2443,8 +2396,7 @@
   // The page-wide banner choices are shown but cannot be stored yet (Not available yet): a click does not change them.
   for (const box of document.querySelectorAll('input[data-na-check]')) box.addEventListener('click', (e) => e.preventDefault());
   function alertsError(ex, id = 'a-error') {
-    $(id).textContent = ex.message;
-    show($(id), true);
+    ui.inlineError($(id), ex.message);
   }
   on('alerts-form', 'submit', async (e) => {
     e.preventDefault();
@@ -2538,8 +2490,7 @@
       if (settingsTrack) settingsTrack.saved();
       ui.toast('Settings saved. Clients pick them up on their next message or when their window opens.');
     } catch (ex) {
-      err.textContent = ex.message;
-      show(err, true);
+      ui.inlineError(err, ex.message);
     }
   });
 
@@ -2562,8 +2513,7 @@
       if (sealTrack) sealTrack.saved();
       ui.toast('Saved.');
     } catch (ex) {
-      err.textContent = ex.message;
-      show(err, true);
+      ui.inlineError(err, ex.message);
     }
   });
 
@@ -2584,8 +2534,7 @@
       if (killTrack) killTrack.saved();
       ui.toast('Saved.');
     } catch (ex) {
-      err.textContent = ex.message;
-      show(err, true);
+      ui.inlineError(err, ex.message);
     }
   });
 
@@ -2616,8 +2565,7 @@
       checkKill();
       ui.toast(turningOn ? 'The kill switch is on. No new replies start.' : 'The kill switch is off. Replies start again.');
     } catch (ex) {
-      err.textContent = ex.message;
-      show(err, true);
+      ui.inlineError(err, ex.message);
     }
   });
 

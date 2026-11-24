@@ -26,6 +26,10 @@
 <div class="live-row">{% call c::row_menu(["edit:Example action", "!delete:Example danger action"]) %}{% endcall %}</div>
 {%- else if name == "field" -%}
 {% call c::field("Example field", "ex-field", "Example hint under the field.", "text", false) %}{% endcall %}{% call c::field("Example optional field", "ex-field-optional", "", "text", true) %}{% endcall %}
+{%- else if name == "number_field" -%}
+{% call c::number_field("Example number", "ex-number", 1, 100, "items", "1") %}{% endcall %}
+{%- else if name == "settings_section" -%}
+{% call c::settings_section("ex-settings-title", "Example section", "", "Example hint beside the fields.") %}<div class="sec-fields">{% call c::field("Example field", "ex-sec-field", "", "text", false) %}{% endcall %}</div>{% endcall %}
 {%- else if name == "new_secret" -%}
 {% call c::new_secret("Example password", "ex-password", crate::constants::MIN_PASSWORD_CHARS) %}{% endcall %}
 {%- else if name == "save_bar" -%}
