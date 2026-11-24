@@ -48,6 +48,8 @@ const MAX_KEY_CHARS: usize = 4096;
 const MAX_MODEL_CHARS: usize = 200;
 const MAX_RETRIES: u32 = 2;
 const RETRY_BACKOFF: [Duration; 2] = [Duration::from_millis(250), Duration::from_secs(1)];
+/// A sealed request body is cut here, as the server cuts its own (wire contract).
+pub const MAX_PAYLOAD_BYTES: usize = 256 * 1024;
 /// Provider error text kept with an attempt is cut here (ADR 0011).
 pub const MAX_ERROR_PAYLOAD_BYTES: usize = 4096;
 /// A turn the server has not finished this long after the generation time limit is finished as interrupted.
@@ -659,7 +661,13 @@ async fn run_attempts(
         start.model = Some(provider.model.clone());
         start.user_id = Some(req.user_id.clone());
         start.client_id = req.client_id.clone();
-        start.attrs = Some(serde_json::json!({ "retry_index": retry_index }));
+        // The body the provider is sent, as this gateway holds it. Sealed once the auditor has acknowledged the span.
+        let provider_request = llm::build_body(&provider, &system, &messages).to_string();
+        let mut attrs = serde_json::json!({ "retry_index": retry_index });
+        if provider_request.len() > MAX_PAYLOAD_BYTES {
+            attrs["truncated"] = true.into();
+        }
+        start.attrs = Some(attrs);
         // Every try is on record before it is made.
         if gw.audit.open(&start).await.is_err() {
             let _ = tx.send(ChatEvent::Error {
@@ -669,6 +677,9 @@ async fn run_attempts(
                 attempts: retry_index,
             });
             return;
+        }
+        if let Ok(sealed) = seal::seal(&cfg.audit_key, cut(&provider_request, MAX_PAYLOAD_BYTES).as_bytes()) {
+            gw.audit.payload(&attempt_id, "provider_request", &sealed.key_id, &sealed.bytes);
         }
 
         // The caller going away cancels the request: a watcher holds the cancel sender until then.

@@ -139,7 +139,7 @@ Refused turns appear in place with their gate and reason. Records written before
   Files: `services/server/src/generation.rs`.
   Do: seal a `prompt` payload with just the new message, next to `request`, which stays as it is (it holds the pre-redaction text). `prompt` is needed because the 256 KiB front cut on `request` can drop the newest message.
   Accept: a test with a history over 256 KiB still has the new message in `prompt`.
-- [ ] **AV2.3** `feat(model-gateway): seal provider_request on the attempt` · sonnet · after AV2.1 · runs in track 1, stage W1
+- [x] **AV2.3** `feat(model-gateway): seal provider_request on the attempt` · sonnet · after AV2.1 · runs in track 1, stage W1
   Files: `services/model-gateway/src/lib.rs`.
   Do: seal `provider_request` on the attempt span, where the gateway already seals payloads. Later tracks add their own `step` spans (`route`, `redact`, `canary`, `restore`) when they ship.
   Accept: a step span under an attempt is stored and chained; `provider_request` decrypts in the sealed view; a test greps step attributes for a planted value and finds nothing.
