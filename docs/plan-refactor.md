@@ -93,7 +93,7 @@ Branch `refactor/audit-and-generation`. PR title `refactor(auditor): simplify th
   Files: `services/model-gateway/src/llm.rs`, `services/model-gateway/tests/streaming.rs`, `docs/plan-canaries.md` (C1.2: `sent_chars` is in `stream_chat_report`).
   Do: the two test calls use `stream_chat_report(...).map(|r| r.outcome).map_err(|e| e.error)`.
   Accept: `cargo test -p askbar-model-gateway` passes; `scripts/check-docs.sh` passes.
-- [ ] **R1.11** `refactor(proto): remove unused split_model_id` · haiku
+- [x] **R1.11** `refactor(proto): remove unused split_model_id` · haiku
   Files: `crates/askbar-proto/src/lib.rs` (the function and its test assertions).
   Accept: no callers remain (grep across `crates`, `services` and `clients`); `cargo test -p askbar-proto` passes.
 
