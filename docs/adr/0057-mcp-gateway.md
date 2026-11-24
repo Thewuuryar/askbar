@@ -1,6 +1,6 @@
 # 0057. The `mcp-gateway` component
 
-Status: Proposed
+Status: Accepted
 Date: 2026-11-24
 Kind: component
 Source: plan phase 5A ([phase-5a-mcp-gateway](../plan-tiered-routing/phase-5a-mcp-gateway.md)); owner decisions G13 and G16
