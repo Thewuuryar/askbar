@@ -1,6 +1,6 @@
 # Plan: order of work after 1.0
 
-Status: proposed, 2026-11-23; owner decisions added 2026-11-24. The order below is the owner's. It takes effect when the owner accepts the amendment to [ADR 0019](adr/0019-post-v1-order-and-tools.md) in step O0.1. Rules for agents: [AGENTS.md](../AGENTS.md). How every plan runs: [orchestration.md](orchestration.md).
+Status: proposed, 2026-11-23; owner decisions added 2026-11-24. The order below is the owner's. The owner accepted the amendment to [ADR 0019](adr/0019-post-v1-order-and-tools.md) in step O0.1 on 2026-11-24, so the order is in effect. Rules for agents: [AGENTS.md](../AGENTS.md). How every plan runs: [orchestration.md](orchestration.md).
 
 This file decides **order** and the few things the order changes. Each track's own plan decides behaviour and holds the steps. Where a track reuses steps from another plan, this file names them by ID instead of copying them.
 
