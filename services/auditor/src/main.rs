@@ -1,12 +1,8 @@
 use askbar_auditor::{disk, Auditor, Limits, DEFAULT_PORT};
+use askbar_service::boot::{self, die};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::Duration;
-
-fn die(e: impl std::fmt::Display, code: i32) -> ! {
-    eprintln!("error: {e}");
-    std::process::exit(code)
-}
 
 /// Resolves `raw` (`host:port`, a name or an address) to exactly one socket address.
 fn resolve_one(var: &str, raw: &str) -> SocketAddr {
@@ -49,20 +45,10 @@ fn audit_dir() -> PathBuf {
 
 /// `askbar-auditor healthcheck`: GET the health route locally; exit 0 on a 200.
 fn healthy() -> bool {
-    use std::io::{Read, Write};
     let first = api_addrs()[0];
     // A wildcard address is reached on the loopback; an address of one network is reached on itself.
     let target = if first.ip().is_unspecified() { SocketAddr::from(([127, 0, 0, 1], first.port())) } else { first };
-    let timeout = Duration::from_secs(2);
-    (|| -> std::io::Result<bool> {
-        let mut s = std::net::TcpStream::connect_timeout(&target, timeout)?;
-        s.set_read_timeout(Some(timeout))?;
-        s.write_all(b"GET /api/audit/v1/health HTTP/1.0\r\nHost: localhost\r\n\r\n")?;
-        let mut head = [0u8; 12];
-        s.read_exact(&mut head)?;
-        Ok(&head == b"HTTP/1.1 200" || &head == b"HTTP/1.0 200")
-    })()
-    .unwrap_or(false)
+    boot::healthy(target, "/api/audit/v1/health")
 }
 
 #[tokio::main]
@@ -111,20 +97,11 @@ async fn main() {
         let listener = tokio::net::TcpListener::bind(addr).await.unwrap_or_else(|e| die(format!("cannot listen on {addr}: {e}"), 1));
         tracing::info!(%addr, "the auditor is listening");
         let app = app.clone();
-        servers.spawn(async move { axum::serve(listener, app).with_graceful_shutdown(stop_signal()).await });
+        servers.spawn(async move { axum::serve(listener, app).with_graceful_shutdown(boot::stop_signal()).await });
     }
     while let Some(done) = servers.join_next().await {
         if let Err(e) = done.map_err(|e| e.to_string()).and_then(|r| r.map_err(|e| e.to_string())) {
             die(e, 1);
         }
-    }
-}
-
-async fn stop_signal() {
-    use tokio::signal::unix::{signal, SignalKind};
-    let Ok(mut term) = signal(SignalKind::terminate()) else { return };
-    tokio::select! {
-        _ = term.recv() => {}
-        _ = tokio::signal::ctrl_c() => {}
     }
 }

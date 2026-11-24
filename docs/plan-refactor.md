@@ -135,7 +135,7 @@ Branch `refactor/check-isolation`. PR title `refactor(compose): shorten the isol
 
 Branch `refactor/service-boot`. PR title `refactor(model-gateway): share service boot and link code`.
 
-- [ ] **R3.1** `refactor(model-gateway): move service boot helpers into askbar-service` · sonnet · gate G-R1
+- [x] **R3.1** `refactor(model-gateway): move service boot helpers into askbar-service` · sonnet · gate G-R1
   Files: `crates/askbar-service/{Cargo.toml,src/lib.rs}`, new `crates/askbar-service/src/boot.rs`, `services/{model-gateway,alerter,auditor}/src/main.rs`.
   Do: one copy each of `die`, `listen_addr`, `healthy` (taking the health path) and `stop_signal`, used by all three services. Leave the admin and server alone unless they use the same code without changes.
   Accept: each service starts and stops as before (its tests and `scripts/smoke.sh` pass).
