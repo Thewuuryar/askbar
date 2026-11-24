@@ -13,7 +13,9 @@ import json
 import socket
 import sys
 import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import HTTPServer
+
+from stub import Stub
 
 seen = []
 reject = [0]
@@ -70,17 +72,7 @@ def serve_smtp(conn):
         conn.close()
 
 
-class Http(BaseHTTPRequestHandler):
-    def log_message(self, *args):
-        pass
-
-    def _send(self, code, body=b""):
-        self.send_response(code)
-        self.send_header("content-type", "application/json")
-        self.send_header("content-length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
+class Http(Stub):
     def do_GET(self):
         if self.path == "/_seen":
             with lock:

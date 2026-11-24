@@ -235,7 +235,7 @@ Branch `refactor/tests-and-client`. PR title `refactor(client): share test setup
   - One helper holds the cancel-slot pattern of `ask`, `resend` and `attach`.
   - `cancel_generation` and `delete_conversation` check the HTTP status, not the text `"404 Not Found."`.
   - The `lock` helper is defined once.
-- [ ] **R5.6** `test(e2e): one HTTP stub helper for the Python fixtures` · haiku
+- [x] **R5.6** `test(e2e): one HTTP stub helper for the Python fixtures` · haiku
   Files: `tests/e2e/{releases_mock,ntfy_sink,smtp_sink}.py`, new `tests/e2e/stub.py`.
   Do: one shared `BaseHTTPRequestHandler` setup. W5.5's fixture `searxng` and pages use it.
   Accept: `npm test` and `scripts/smoke.sh` pass.
