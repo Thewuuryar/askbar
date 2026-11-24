@@ -2,13 +2,13 @@
 
 Part of [the tiered routing plan](../plan-tiered-routing.md). Its How to run, Owner gates and Assumptions sections apply to every step here.
 
-The egress proxy is a purpose-built Rust service in this repo (G8, decided by the owner): component and compose service `egress-proxy`, crate `services/egress-proxy` (package `askbar-egress-proxy`), API `/api/egress-proxy/v1` ([ADR 0022](../adr/0022-api-path-conventions.md) pattern), uid 10006, new ADR 0058. It is the only service with a route out, except Caddy (certificates). It never sees content: HTTPS passes as a `CONNECT` tunnel, with no TLS interception.
+The egress proxy is a purpose-built Rust service in this repo (G8, decided by the owner): component and compose service `egress-proxy`, crate `services/egress-proxy` (package `askbar-egress-proxy`), API `/api/egress-proxy/v1` ([ADR 0022](../adr/0022-api-path-conventions.md) pattern), uid 10006, new ADR 0056. It is the only service with a route out, except Caddy (certificates). It never sees content: HTTPS passes as a `CONNECT` tunnel, with no TLS interception.
 
-Needs G8, G0 (cleared: `constants.rs` is on `main`) and, from P4.1a, the owner's acceptance of ADR 0058. The steps are in run order, which is not numeric order: P4.4 and P4.4a run before P4.3a, because the proxy denies everything until the admin pushes, so a caller moved before the push would lose its route. Each step's commit passes the checks on its own.
+Needs G8, G0 (cleared: `constants.rs` is on `main`) and, from P4.1a, the owner's acceptance of ADR 0056. The steps are in run order, which is not numeric order: P4.4 and P4.4a run before P4.3a, because the proxy denies everything until the admin pushes, so a caller moved before the push would lose its route. Each step's commit passes the checks on its own.
 
 Steps marked **[draft PR]** change `compose.yaml`, a Dockerfile, a network or a volume. The orchestrator opens the PR as a draft and waits for the CI `isolation` job (there is no Docker locally) before the owner marks it ready. `.github/workflows/` is the owner's: P4.2 lists the exact lines to add `egress-proxy` to (`ci.yml` build and image loops, `images.yml` `SERVICES` and its two image lists) in the PR body.
 
-## How the proxy works (the plan's decisions; ADR 0058 records them in P4.1)
+## How the proxy works (the plan's decisions; ADR 0056 records them in P4.1)
 
 - **Source = the network it arrives on.** One internal network per source (`egress-model-gateway`, `egress-cpa`, `egress-alerter`), the proxy attached to each, a listener per source bound to the proxy's address on that network (never a wildcard) from `ASKBAR_EGRESS_PROXY_SOURCES=model-gateway=egress-model-gateway-host:3128,...`. Why: no secret in a URL or variable (AGENTS.md), nothing to steal or forge, and a compromised source cannot claim another's allowlist because it is on no other source's network. Better than source-IP matching (Docker assigns addresses). A new source (searxng, `mcp-gateway`) is one network, one alias and one entry in that variable.
 - **Default deny.** Before the first push the proxy has an empty config and answers every request `403`. A `PUT /config` replaces the whole config in memory; nothing is on disk.
@@ -22,10 +22,10 @@ Steps marked **[draft PR]** change `compose.yaml`, a Dockerfile, a network or a 
 - **Config link.** `admin-egress-proxy` (token prefix `admegr_`), network `egress-admin`, admin to proxy only. The proxy calls nobody: no link to the auditor or the alerter.
 - **Zero new crates.** `tokio`, `axum` 0.8 (API only), `serde`, `tracing`, `askbar-proto` and `askbar-service`. The request head is parsed by hand.
 
-- [ ] **P4.1** `docs(adr): confirm ADR coverage for the egress proxy` · haiku
-  Files: `docs/adr/0058-egress-proxy.md` (from `0000-template.md`), `docs/adr/README.md` index row, `docs/plan-tiered-routing.md` (Phase 4 status to `in progress`).
-  Do: ADR 0019 names the proxy only in its order and tool rule 2 (egress denied by default, allowed per destination), 0006 says it ships after v1, and 0038 names no component, so no ADR decides this component: write ADR 0058, Status Proposed, with the choices in "How the proxy works" above (name `egress-proxy`, API prefix, audience `admin`, link `admin-egress-proxy`, networks and the one route out, per-source listeners, CONNECT only for HTTPS with no interception, the host and address checks and the rebinding defence, plain HTTP and the relay, limits, logs, no persistent state, zero new crates, uid 10006), the alternatives (third-party proxy image: rejected by the owner at G8; a proxy credential in a URL: rejected, AGENTS.md; TLS interception: rejected), and a verification list naming the tests of P4.1a, P4.1b and P4.5. It lists the amendments P4.6 to P4.7e will propose. Haiku transcribes this phase's decisions and invents none.
-  Accept: ADR format check and `scripts/check-docs.sh` pass; README row added. Gate: owner accepts 0058 (with G8) before P4.1a.
+- [x] **P4.1** `docs(adr): confirm ADR coverage for the egress proxy` · haiku
+  Files: `docs/adr/0056-egress-proxy.md` (from `0000-template.md`), `docs/adr/README.md` index row, `docs/plan-tiered-routing.md` (Phase 4 status to `in progress`).
+  Do: ADR 0019 names the proxy only in its order and tool rule 2 (egress denied by default, allowed per destination), 0006 says it ships after v1, and 0038 names no component, so no ADR decides this component: write ADR 0056, Status Proposed, with the choices in "How the proxy works" above (name `egress-proxy`, API prefix, audience `admin`, link `admin-egress-proxy`, networks and the one route out, per-source listeners, CONNECT only for HTTPS with no interception, the host and address checks and the rebinding defence, plain HTTP and the relay, limits, logs, no persistent state, zero new crates, uid 10006), the alternatives (third-party proxy image: rejected by the owner at G8; a proxy credential in a URL: rejected, AGENTS.md; TLS interception: rejected), and a verification list naming the tests of P4.1a, P4.1b and P4.5. It lists the amendments P4.6 to P4.7e will propose. Haiku transcribes this phase's decisions and invents none.
+  Accept: ADR format check and `scripts/check-docs.sh` pass; README row added. Gate: owner accepts 0056 (with G8) before P4.1a.
 
 - [ ] **P4.1a** `feat(egress-proxy): add the host and address policy` · sonnet · after P4.1 **[draft PR: Dockerfile COPY line only]**
   Files: `services/egress-proxy/{Cargo.toml,src/lib.rs,src/policy.rs}` (new; template `services/alerter/Cargo.toml`), `crates/askbar-proto/src/egress.rs` (new: `EgressConfig`, `SourceRules`, `Entry`, `Limits` with defaults and bounds, `#[serde(default)]`) and its `lib.rs` line, root `Cargo.toml` members, `Dockerfile` (the `COPY services/egress-proxy/Cargo.toml` line only, no target yet), `scripts/third-party-notices.sh` (crate list), `Cargo.lock`.
@@ -88,7 +88,7 @@ Steps marked **[draft PR]** change `compose.yaml`, a Dockerfile, a network or a 
   Accept: CI `isolation` job green; each case prints a pass line naming what it proves.
 
 - [ ] **P4.6** `docs(adr): amend 0006: egress through the proxy` · haiku · after P4.5
-  Files: `docs/adr/0006-v1-outbound-access-and-alerts.md`. Do: the Amendments line: the proxy shipped (ADR 0058); direct outbound ended for `model-gateway`, `cpa` and `alerter`; Caddy keeps its route for certificates. A decision amendment: the PR needs the owner's approval. Accept: `scripts/check-docs.sh` passes.
+  Files: `docs/adr/0006-v1-outbound-access-and-alerts.md`. Do: the Amendments line: the proxy shipped (ADR 0056); direct outbound ended for `model-gateway`, `cpa` and `alerter`; Caddy keeps its route for certificates. A decision amendment: the PR needs the owner's approval. Accept: `scripts/check-docs.sh` passes.
 
 - [ ] **P4.7** `docs(adr): amend 0032: proxy container limits` · haiku · after P4.6
   Files: `docs/adr/0032-container-hardening.md`. Do: the proxy uses the shared hardening block with no exception, uid 10006, 128 MB, 256 pids from the block, a credential volume and no data volume; check-isolation checks them (P4.2a). Accept: `scripts/check-docs.sh` passes.
@@ -129,4 +129,4 @@ Steps marked **[draft PR]** change `compose.yaml`, a Dockerfile, a network or a 
 - **Owner decides:** the `cpa` host list (from P4.3b's trial) and what happens if CLIProxyAPI cannot use a proxy (P4.3b options).
 - **Limits** are pushed defaults in `askbar-proto`, constants in `constants.rs`; the numbers above are proposals for the owner to confirm in the PR.
 - **Step order differs from numbers** (P4.4 and P4.4a before P4.3a): the proxy denies until pushed.
-- **New crates: none.** ADR 0058 is new, and proposed; per `orchestration.md` the orchestrator never accepts it. `plan-refactor.md` and `plan-priorities.md` said P4.4 adds the link: it is P4.1c, and both are updated. R2 (P4.2) and P5A.19 (P4.4) stay true.
+- **New crates: none.** ADR 0056 is new, and proposed; per `orchestration.md` the orchestrator never accepts it. `plan-refactor.md` and `plan-priorities.md` said P4.4 adds the link: it is P4.1c, and both are updated. R2 (P4.2) and P5A.19 (P4.4) stay true.
