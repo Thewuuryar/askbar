@@ -151,7 +151,7 @@ fn the_sweep_interrupts_only_running_spans_and_only_once() {
 #[test]
 fn a_span_kind_outside_the_fixed_set_is_refused() {
     let db = AuditDb::open_in_memory().unwrap();
-    for kind in ["turn", "gate", "attempt", "tool", "agent_step"] {
+    for kind in ["turn", "gate", "attempt", "tool", "agent_step", "step"] {
         db.conn
             .execute("INSERT INTO spans (id, trace_id, kind, name, status, started_at) VALUES (?1,'t',?1,'n','done',1)", [kind])
             .unwrap();
@@ -540,6 +540,66 @@ fn migration_6_adds_alert_deliveries_and_keeps_the_chain_a_file_from_migration_5
     assert_eq!(db.conn().query_row("SELECT COUNT(*) FROM alert_deliveries", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
     assert_eq!(db.conn().query_row("SELECT COUNT(*) FROM chain WHERE kind = 'admin_action'", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
     assert!(chain::verify(db.conn()).unwrap().ok, "the old entry still verifies");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn migration_7_adds_the_step_kind_and_old_records_verify_unchanged() {
+    let dir = std::env::temp_dir().join(format!("askbar-audit-m7-{}", ulid::Ulid::new()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("audit.db");
+    {
+        // A file as version 6 left it, holding a finished span with its chain entries.
+        let conn = Connection::open(&path).unwrap();
+        for (i, sql) in MIGRATIONS.iter().take(6).enumerate() {
+            conn.execute_batch(sql).unwrap();
+            if i == 3 {
+                chain::backfill(&conn).unwrap();
+            }
+            if i == 0 {
+                conn.execute_batch(&format!("PRAGMA application_id = {APPLICATION_ID}")).unwrap();
+            }
+        }
+        conn.execute_batch("PRAGMA user_version = 6").unwrap();
+        conn.execute(
+            "INSERT INTO spans (id, trace_id, kind, name, status, started_at, ended_at, service, boot_id)
+             VALUES ('old','t','attempt','n','done',1,2,'model-gateway','b')",
+            [],
+        )
+        .unwrap();
+        chain::record(&conn, "span_start", "old").unwrap();
+        chain::record(&conn, "span_finish", "old").unwrap();
+    }
+    let db = AuditDb::open(&path).unwrap();
+    assert!(MIGRATIONS.len() >= 7);
+    let c = db.conn();
+    assert_eq!(
+        c.query_row("SELECT COUNT(*) FROM spans WHERE id = 'old' AND service = 'model-gateway' AND boot_id = 'b'", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert!(chain::verify(c).unwrap().ok, "records from before the step kind verify unchanged");
+    c.execute(
+        "INSERT INTO spans (id, trace_id, parent_id, kind, name, status, started_at) VALUES ('s','t','old','step','n','running',1)",
+        [],
+    )
+    .unwrap();
+    assert!(c.execute("UPDATE spans SET name = 'x' WHERE id = 'old'", []).is_err(), "the triggers were made again");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn a_step_under_an_attempt_is_stored_and_chained() {
+    let (rec, dir) = temp_recorder(64);
+    rec.append(Record::Start(started("a1", "t", "attempt", "model-gateway", "b"))).await.unwrap();
+    let step = SpanStart { parent_id: Some("a1".into()), ..started("st1", "t", "step", "model-gateway", "b") };
+    rec.append(Record::Start(step)).await.unwrap();
+    rec.append(Record::Finish(finish("st1"))).await.unwrap();
+    assert_eq!(count(&rec, "SELECT COUNT(*) FROM spans WHERE id = 'st1' AND kind = 'step' AND parent_id = 'a1'"), 1);
+    assert_eq!(count(&rec, "SELECT COUNT(*) FROM chain WHERE ref = 'st1' AND kind IN ('span_start','span_finish')"), 2);
+    let conn = Connection::open(dir.join("audit.db")).unwrap();
+    assert!(chain::verify(&conn).unwrap().ok);
     let _ = std::fs::remove_dir_all(dir);
 }
 

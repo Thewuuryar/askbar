@@ -109,7 +109,7 @@ async fn each_link_may_call_only_its_own_routes_and_anything_else_is_403() {
     // The server's link: hello, its own gate spans, finish and payloads. It opens no model-call span and reads nothing.
     ok(t.as_(SERVER, M::POST, "/hello", Some(json!({ "boot_id": "b1" }))).await, 200, "server hello");
     ok(t.as_(SERVER, M::POST, "/spans", Some(span("g1", "t1", "gate"))).await, 201, "server opens a gate");
-    for kind in ["turn", "attempt", "tool", "agent_step"] {
+    for kind in ["turn", "attempt", "tool", "agent_step", "step"] {
         let r = t.as_(SERVER, M::POST, "/spans", Some(span("x1", "t1", kind))).await;
         assert_eq!((r.status, r.code()), (403, "forbidden".into()), "the server may not open a {kind} span");
     }
@@ -128,7 +128,7 @@ async fn each_link_may_call_only_its_own_routes_and_anything_else_is_403() {
     assert_eq!(r.status, 403, "only the admin's append token records admin actions");
 
     // The gateway's link: every kind of span.
-    for (i, kind) in ["turn", "attempt", "tool", "agent_step", "gate"].iter().enumerate() {
+    for (i, kind) in ["turn", "attempt", "tool", "agent_step", "step", "gate"].iter().enumerate() {
         ok(t.as_(GATEWAY, M::POST, "/spans", Some(span(&format!("m{i}"), "t2", kind))).await, 201, kind);
     }
     assert_eq!(t.as_(GATEWAY, M::GET, "/traces", None).await.status, 403);

@@ -149,7 +149,7 @@ fn a_version_4_file_with_its_chain_upgrades_and_the_chain_stays_whole() {
     let db = AuditDb::open(&path).unwrap();
     let c = db.conn();
     let v: i64 = c.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-    assert_eq!(v, 6, "migrations 5 and 6 both ran");
+    assert_eq!(v, 7, "migrations 5, 6 and 7 all ran");
     assert_eq!(chain::head(c).unwrap(), before, "every entry was copied as it was");
     assert!(chain::verify(c).unwrap().ok);
     // The new kind is accepted, and the chain still refuses to be changed.

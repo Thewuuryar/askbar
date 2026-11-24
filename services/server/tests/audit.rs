@@ -19,6 +19,11 @@ async fn audit_state(mock_port: u16) -> (std::sync::Arc<askbar_server::AppState>
 
 /// Runs one chat to the end through the generation code and returns its generation id.
 async fn run_chat(state: &std::sync::Arc<askbar_server::AppState>, prompt: &str) -> String {
+    run_in(state, None, prompt).await.0
+}
+
+/// Runs one message to the end in `conversation` (a new one when `None`): (generation id, conversation id).
+async fn run_in(state: &std::sync::Arc<askbar_server::AppState>, conversation: Option<String>, prompt: &str) -> (String, String) {
     use futures_util::StreamExt;
     let (user, client) = {
         let db = state.db.lock().unwrap();
@@ -34,7 +39,7 @@ async fn run_chat(state: &std::sync::Arc<askbar_server::AppState>, prompt: &str)
             space: askbar_server::testing::personal_space(state, &user),
             user_id: user,
             client_id: client,
-            conversation_id: None,
+            conversation_id: conversation,
             provider_id: "p1".into(),
             model: "m".into(),
             prompt: prompt.into(),
@@ -43,7 +48,7 @@ async fn run_chat(state: &std::sync::Arc<askbar_server::AppState>, prompt: &str)
     )
     .expect("the generation starts");
     let _: Vec<_> = sub.live.subscribe(0).collect().await; // to the end
-    sub.generation_id
+    (sub.generation_id, sub.conversation_id)
 }
 
 fn read(dir: &Path) -> Connection {
@@ -414,6 +419,24 @@ async fn an_oversized_prompt_is_cut_at_256_kb_and_the_turn_is_marked_request_tru
     let a: Option<String> =
         read(&dir).query_row("SELECT attrs_json FROM spans WHERE trace_id = ?1 AND kind = 'turn'", [&small], |r| r.get(0)).unwrap();
     assert!(!a.unwrap().contains("truncated"));
+}
+
+#[tokio::test]
+async fn the_new_message_is_sealed_as_the_prompt_when_the_history_is_cut() {
+    let mock = MockLlm::start();
+    let port = mock.port;
+    let (state, dir) = audit_state(port).await;
+    let secret = install_audit_key(&state);
+    let (_, conversation) = run_in(&state, None, &"word ".repeat(60_000)).await; // 300 KB, the older history
+    let trace = run_in(&state, Some(conversation), "NEW-QUESTION").await.0;
+    state.audit.flush().await;
+
+    let opened = open_payloads(&dir, &trace, secret);
+    let request = opened.iter().find(|p| p.1 == "request").unwrap();
+    assert!(!request.3.contains("NEW-QUESTION"), "the history over the cap cuts the newest message from request");
+    let prompt = opened.iter().find(|p| p.1 == "prompt").expect("a prompt payload");
+    assert_eq!(prompt.0, "turn");
+    assert_eq!(prompt.3, "NEW-QUESTION", "only the new message");
 }
 
 #[tokio::test]
