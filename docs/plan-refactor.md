@@ -77,7 +77,7 @@ Branch `refactor/audit-and-generation`. PR title `refactor(auditor): simplify th
   Files: `services/server/src/generation.rs` (`sweep_on_start`, `shutdown`), `services/server/src/space.rs` (`get_generation`, read only).
   Do: `sweep_on_start` and `shutdown` both save partial text, finalize as interrupted and mark the question failed. One `interrupt_row` does it for both. `shutdown` reads its row with `get_generation` instead of its own SQL. Keep each caller's way of finding the provider.
   Accept: the server's restart and shutdown tests pass unchanged.
-- [ ] **R1.8** `refactor(server): map a generation outcome in one place` · sonnet · after R1.7
+- [x] **R1.8** `refactor(server): map a generation outcome in one place` · sonnet · after R1.7
   Files: `services/server/src/generation.rs` (`Outcome`, `Finisher::finish`).
   Do: give `Outcome` one method returning the stored status, the error, the failed flag and the `Terminal` event, so each variant is spelled out once. Fold in `terminal_of` only if it maps the same way.
   Accept: the chat tests pass unchanged.

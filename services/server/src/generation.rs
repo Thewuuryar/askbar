@@ -397,6 +397,33 @@ enum Outcome {
     Error(String),
 }
 
+impl Outcome {
+    /// The stored status, the stored error, the failure recorded on the question (code, message) and the stream's end.
+    #[allow(clippy::type_complexity)]
+    fn parts(self) -> (&'static str, Option<String>, Option<(&'static str, String)>, Terminal) {
+        match self {
+            Outcome::Done => ("done", None, None, Terminal::Done),
+            Outcome::Cancelled => ("cancelled", None, None, Terminal::Done),
+            Outcome::Killed => (
+                "cancelled",
+                Some(KILLED.into()),
+                Some(("kill_switch", KILLED.into())),
+                Terminal::Error { message: KILLED.into(), code: "kill_switch" },
+            ),
+            Outcome::TimedOut(m) => {
+                ("timed_out", Some(m.clone()), Some(("timed_out", m.clone())), Terminal::Error { message: m, code: "timed_out" })
+            }
+            // The question keeps our sentence, not the provider's words (those are sealed in the audit).
+            Outcome::Error(m) => (
+                "error",
+                Some(m.clone()),
+                Some(("provider_error", PROVIDER_FAILED.into())),
+                Terminal::Error { message: m, code: "provider_error" },
+            ),
+        }
+    }
+}
+
 /// The public bytes of the key content is sealed to now, from the current snapshot.
 fn current_audit_key(state: &AppState) -> Option<Vec<u8>> {
     let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
@@ -562,20 +589,9 @@ impl Finisher {
 
     /// Saves the reply, then tells subscribers, so a client that has seen the end can read the message.
     fn finish(&mut self, outcome: Outcome) {
-        match &outcome {
-            Outcome::Done => self.save("done", None, None),
-            Outcome::Cancelled => self.save("cancelled", None, None),
-            Outcome::Killed => self.save("cancelled", Some(KILLED), Some(("kill_switch", KILLED))),
-            Outcome::TimedOut(m) => self.save("timed_out", Some(m), Some(("timed_out", m))),
-            // The question keeps our sentence, not the provider's words (those are sealed in the audit).
-            Outcome::Error(m) => self.save("error", Some(m), Some(("provider_error", PROVIDER_FAILED))),
-        }
-        self.live.finish(match outcome {
-            Outcome::Done | Outcome::Cancelled => Terminal::Done,
-            Outcome::Killed => Terminal::Error { message: KILLED.into(), code: "kill_switch" },
-            Outcome::TimedOut(message) => Terminal::Error { message, code: "timed_out" },
-            Outcome::Error(message) => Terminal::Error { message, code: "provider_error" },
-        });
+        let (status, error, failed, terminal) = outcome.parts();
+        self.save(status, error.as_deref(), failed.as_ref().map(|(code, message)| (*code, message.as_str())));
+        self.live.finish(terminal);
     }
 }
 
