@@ -9,6 +9,7 @@ const net = require('node:net');
 const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
+const { freePort } = require('./ports');
 
 const ROOT = path.resolve(__dirname, '../..');
 const PASSWORD = 'correct horse battery';
@@ -41,9 +42,6 @@ const listening = async (port) => {
   }
   throw new Error('nothing listens on port ' + port);
 };
-const freePort = () => new Promise((resolve) => {
-  const s = net.createServer().listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => resolve(p)); });
-});
 
 async function waitForPort(port) {
   for (let i = 0; i < 100; i++) {
@@ -142,7 +140,7 @@ async function runViewport(viewport) {
     const u = net.connect(sock);
     c.pipe(u); u.pipe(c);
     c.on('error', () => u.destroy()); u.on('error', () => c.destroy());
-  }).listen(adminPort, '127.0.0.1');
+  }).on('error', (e) => { console.error('forwarder cannot listen on ' + adminPort + ': ' + e.message); process.exit(1); }).listen(adminPort, '127.0.0.1');
   let serverProc = startServer();
   await waitForPort(adminPort);
   await waitForPort(api);
