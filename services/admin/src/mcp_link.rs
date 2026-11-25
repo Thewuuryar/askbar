@@ -9,7 +9,6 @@
 //!
 //! No private key, token or user is logged, returned or put in an error here.
 
-use crate::constants::*;
 use crate::link_client::LinkClient;
 use crate::mcp::UserTools;
 use crate::AdminState;
@@ -65,14 +64,14 @@ impl McpConfig {
 pub fn build_config(conn: &Connection) -> McpConfig {
     let key = crate::approval_key::public_key(conn);
     McpConfig {
-        fetch_max_bytes: MCP_FETCH_MAX_BYTES,
-        fetch_timeout_secs: MCP_FETCH_TIMEOUT_SECS,
-        fetch_redirects: MCP_FETCH_REDIRECTS,
-        tool_call_timeout_secs: MCP_TOOL_CALL_TIMEOUT_SECS,
-        one_time_id_window_secs: MCP_ONE_TIME_ID_WINDOW_SECS,
-        search_results: MCP_SEARCH_RESULTS,
-        remembered_urls: MCP_REMEMBERED_URLS,
-        tool_result_max_bytes: MCP_TOOL_RESULT_MAX_BYTES,
+        fetch_max_bytes: crate::limits::get(conn, "fetch_max_bytes"),
+        fetch_timeout_secs: crate::limits::get(conn, "fetch_timeout_secs") as u32,
+        fetch_redirects: crate::limits::get(conn, "fetch_redirects") as u32,
+        tool_call_timeout_secs: crate::limits::get(conn, "tool_call_timeout_secs") as u32,
+        one_time_id_window_secs: crate::limits::get(conn, "one_time_id_window_secs") as u32,
+        search_results: crate::limits::get(conn, "search_results") as u32,
+        remembered_urls: crate::limits::get(conn, "remembered_urls") as u32,
+        tool_result_max_bytes: crate::limits::get(conn, "tool_result_max_bytes"),
         approval_public_key: key.as_ref().map(|(_, k)| k.iter().map(|b| format!("{b:02x}")).collect()),
         approval_key_version: key.map_or(0, |(v, _)| v),
         permissions: crate::mcp::permissions_config(conn).unwrap_or_default(),

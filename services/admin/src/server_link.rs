@@ -184,7 +184,7 @@ pub fn build_snapshot(conn: &rusqlite::Connection) -> rusqlite::Result<Snapshot>
     );
     Ok(Snapshot {
         policy: Some(policy),
-        quick_search: crate::constants::QUICK_SEARCH_LIMITS,
+        quick_search: crate::limits::quick_search(conn),
         backup_public_key: crate::db::active_backup_key(conn)?.map(|k| k.recipient),
         version: 0,
         providers,
