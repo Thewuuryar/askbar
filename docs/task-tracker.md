@@ -246,7 +246,7 @@ P4.3a is committed on branch `feat/egress-proxy-wiring` (draft PR #144). CI is g
 - [x] **[P4.7](plan-tiered-routing/phase-4-egress-proxy.md)** amend 0032: proxy container limits · W2
 - [x] **[P4.7a](plan-tiered-routing/phase-4-egress-proxy.md)** amend 0022: the egress proxy API prefix · W2
 - [x] **[P4.7b](plan-tiered-routing/phase-4-egress-proxy.md)** amend 0049: the admin-egress-proxy link · W2
-- [ ] **[P4.7c](plan-tiered-routing/phase-4-egress-proxy.md)** amend 0054: the gateway reaches providers through the proxy · W2
+- [x] **[P4.7c](plan-tiered-routing/phase-4-egress-proxy.md)** amend 0054: the gateway reaches providers through the proxy · W2
 - [ ] **[P4.7d](plan-tiered-routing/phase-4-egress-proxy.md)** amend 0055: the alerter delivers through the proxy · W2
 - [ ] **[P4.7e](plan-tiered-routing/phase-4-egress-proxy.md)** amend 0042: cpa reaches providers through the proxy · W2
 - [ ] **[P4.7f](plan-tiered-routing/phase-4-egress-proxy.md)** amend 0040: the admin pushes the egress allowlists · W2
