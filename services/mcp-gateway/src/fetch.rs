@@ -3,7 +3,7 @@
 //! Every URL rule is decided before the first network call ([`crate::fetch_rules`]); redirects are followed here, one
 //! hop at a time, each hop re-checked and given its own `tool` span (with the full URL) that the auditor has acknowledged
 //! before the request is sent. The response is read (a `gzip` body is decoded; the size cap counts decoded bytes), within the size and time limits, and only for
-//! the fixed content types; HTML becomes plain text by a small hand-written pass. Nothing about a URL, a page or a
+//! the fixed content types; HTML becomes plain text with the `html2text` crate. Nothing about a URL, a page or a
 //! query is logged or counted: the front's status holds outcome counts only.
 
 use crate::fetch_rules::{check, resolve, Target};
@@ -15,6 +15,7 @@ use askbar_proto::mcp::{DATAMARK, FETCH_CONTENT_TYPES};
 use askbar_proto::ErrorCode;
 use askbar_service::audit_client::now_parts;
 use askbar_service::ids::new_id;
+use html2text::{config, render::TrivialDecorator};
 use reqwest::header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_TYPE, LOCATION};
 use serde_json::{json, Value};
 use std::io::Write;
@@ -178,8 +179,22 @@ async fn read(mut resp: reqwest::Response, url: &str, c: &ToolCall) -> Result<Va
         None => plain.buf,
     };
     // shortcut: the body is read as UTF-8 whatever its charset says; upgrade if a charset-heavy site matters.
-    let text = String::from_utf8_lossy(&body);
-    let text = if ct.ends_with("html+xml") || ct == "text/html" { tidy(&html_to_text(&text)) } else { text.into_owned() };
+    let text = if ct.ends_with("html+xml") || ct == "text/html" {
+        // A blocking thread, so a CPU-heavy page cannot stall the runtime; the tool-call time limit bounds the wait.
+        let mut t = tokio::task::spawn_blocking(move || html_to_text(&body).map(|t| tidy(&t)))
+            .await
+            .map_err(|_| ErrorCode::ToolUpstreamFailed)?
+            .map_err(|_| ErrorCode::ToolUpstreamFailed)?;
+        // The output is capped like the input (table layout can add text).
+        let mut end = t.len().min(max as usize);
+        while !t.is_char_boundary(end) {
+            end -= 1;
+        }
+        t.truncate(end);
+        t
+    } else {
+        String::from_utf8_lossy(&body).into_owned()
+    };
     let text: String = text.chars().filter(|&ch| ch != DATAMARK && (ch == '\n' || ch == '\t' || !ch.is_control())).collect();
     // `truncated` is false for now: a body over the cap is an error, not a cut page.
     Ok(json!({ "url": url, "status": status, "content_type": ct, "text": text, "truncated": false }))
@@ -204,120 +219,50 @@ impl std::io::Write for Capped {
     }
 }
 
-/// Tags that end a line of text.
-const BLOCKS: [&str; 20] = [
-    "p",
-    "br",
-    "div",
-    "li",
-    "tr",
-    "td",
-    "th",
-    "h1",
-    "h2",
-    "h3",
-    "h4",
-    "h5",
-    "h6",
-    "ul",
-    "ol",
-    "table",
-    "hr",
-    "pre",
-    "blockquote",
-    "section",
-];
+/// How deep the tags may nest before the page is cut off there: `html2text` takes time quadratic in the depth (100000
+/// nested divs took a minute) and its stack use grows with it.
+const MAX_DEPTH: usize = 1000;
 
-/// Text of an HTML page: no tags, no `script`, `style`, `noscript` or `template` content, no comments, a few entities decoded.
-/// shortcut: a `>` inside an unquoted attribute value ends the tag early; upgrade to a parser crate if extraction is poor.
-fn html_to_text(html: &str) -> String {
-    let html = &html.replace(['\r', '\n'], " "); // a line break in the source is a space
-    let lower = html.to_ascii_lowercase(); // same byte offsets as `html`
-    let (mut out, mut i) = (String::new(), 0);
-    while i < html.len() {
-        let Some(lt) = html[i..].find('<') else { break };
-        push_text(&mut out, &html[i..i + lt]);
+/// Text of an HTML page by `html2text` (html5ever): no tags, link URLs or table borders, and no `script`, `style`, `noscript` or
+/// `template` content. shortcut: the depth is counted by a rough scan (no quoting rules; void and implied-end tags skipped); a
+/// page nested deeper than `MAX_DEPTH` is read only up to there.
+fn html_to_text(html: &[u8]) -> Result<String, html2text::Error> {
+    const NO_NEST: [&str; 15] = ["br", "hr", "img", "input", "meta", "link", "p", "li", "dt", "dd", "tr", "td", "th", "option", "wbr"];
+    let (mut depth, mut i, mut end) = (0usize, 0, html.len());
+    while let Some(lt) = html[i..].iter().position(|&b| b == b'<') {
         i += lt;
-        if html[i..].starts_with("<!--") {
-            i = html[i + 4..].find("-->").map_or(html.len(), |e| i + 4 + e + 3);
-            continue;
+        let closing = html.get(i + 1) == Some(&b'/');
+        let name: Vec<u8> =
+            html[i + 1 + usize::from(closing)..].iter().take_while(|b| b.is_ascii_alphanumeric()).map(u8::to_ascii_lowercase).collect();
+        if !name.is_empty() && name[0].is_ascii_alphabetic() && !NO_NEST.iter().any(|v| v.as_bytes() == name) {
+            let gt = html[i..].iter().position(|&b| b == b'>').map_or(html.len(), |g| i + g);
+            if closing {
+                depth = depth.saturating_sub(1);
+            } else if !html[i..gt].ends_with(b"/") {
+                depth += 1;
+                if depth > MAX_DEPTH {
+                    end = i;
+                    break;
+                }
+            }
         }
-        let next = html.as_bytes().get(i + 1).copied().unwrap_or(0);
-        if !(next.is_ascii_alphabetic() || next == b'/' || next == b'!') {
-            out.push('<'); // "a < b" is text
-            i += 1;
-            continue;
-        }
-        let Some(gt) = tag_end(&html[i..]) else { return out };
-        let inner = &lower[i + 1..i + gt];
-        let name = inner.trim_start_matches('/').split(|c: char| !c.is_ascii_alphanumeric()).next().unwrap_or("");
-        let skip = !inner.starts_with('/') && !inner.ends_with('/') && matches!(name, "script" | "style" | "noscript" | "template");
-        i += gt + 1;
-        if skip {
-            let close = lower[i..].find(&format!("</{name}")).map(|e| i + e);
-            i = close.and_then(|e| lower[e..].find('>').map(|g| e + g + 1)).unwrap_or(html.len());
-        } else if BLOCKS.contains(&name) {
-            out.push('\n');
-        }
+        i += 1;
     }
-    if i < html.len() {
-        push_text(&mut out, &html[i..]);
+    config::with_decorator(TrivialDecorator::new()).no_table_borders().string_from_read(&no_noscript(&html[..end])[..], 1 << 16)
+}
+
+/// `html2text` renders `noscript` (it parses with scripting off); the page is read as a script-less client would not.
+/// shortcut: a plain case-insensitive search for the tags, no nesting rules; upgrade if a page hides text in a malformed one.
+fn no_noscript(html: &[u8]) -> Vec<u8> {
+    let lower = html.to_ascii_lowercase();
+    let find = |from: usize, pat: &[u8]| lower[from..].windows(pat.len()).position(|w| w == pat).map(|p| from + p);
+    let (mut out, mut i) = (Vec::with_capacity(html.len()), 0);
+    while let Some(open) = find(i, b"<noscript") {
+        out.extend_from_slice(&html[i..open]);
+        i = find(open, b"</noscript").and_then(|c| find(c, b">")).map_or(html.len(), |g| g + 1);
     }
+    out.extend_from_slice(&html[i.min(html.len())..]);
     out
-}
-
-/// The index of the `>` that ends the tag starting at `s[0]`, quotes honoured.
-fn tag_end(s: &str) -> Option<usize> {
-    let mut quote = None;
-    for (i, b) in s.bytes().enumerate().skip(1) {
-        match (quote, b) {
-            (None, b'>') => return Some(i),
-            (None, b'"' | b'\'') => quote = Some(b),
-            (Some(q), _) if q == b => quote = None,
-            _ => {}
-        }
-    }
-    None
-}
-
-/// Appends `t` with its entities decoded (`&amp; &lt; &gt; &quot; &apos; &nbsp;` and numeric ones); an unknown one stays as written.
-fn push_text(out: &mut String, t: &str) {
-    let mut rest = t;
-    while let Some(a) = rest.find('&') {
-        out.push_str(&rest[..a]);
-        rest = &rest[a..];
-        let named = rest[1..].find(';').filter(|&e| e <= 8).and_then(|e| entity(&rest[1..1 + e]).map(|ch| (ch, e + 2)));
-        match named {
-            Some((ch, len)) => {
-                out.push(ch);
-                rest = &rest[len..];
-            }
-            None => {
-                out.push('&');
-                rest = &rest[1..];
-            }
-        }
-    }
-    out.push_str(rest);
-}
-
-fn entity(name: &str) -> Option<char> {
-    match name {
-        "amp" => Some('&'),
-        "lt" => Some('<'),
-        "gt" => Some('>'),
-        "quot" => Some('"'),
-        "apos" => Some('\''),
-        "nbsp" => Some(' '),
-        _ => {
-            let n = name.strip_prefix('#')?;
-            let code = match n.strip_prefix(['x', 'X']) {
-                Some(h) => u32::from_str_radix(h, 16).ok()?,
-                None => n.parse().ok()?,
-            };
-            char::from_u32(code)
-        }
-    }
 }
 
 /// Whitespace runs to one space, blank lines dropped.
@@ -631,12 +576,49 @@ mod tests {
         assert_eq!(rig.hits.load(Ordering::SeqCst), 0);
     }
 
+    fn text_of(page: &str) -> String {
+        tidy(&html_to_text(page.as_bytes()).unwrap())
+    }
+
     #[test]
     fn html_becomes_text() {
         let page = "<!doctype html><html><head><title>T</title><style>p{color:red}</style><script>var a = '<b>x</b>';</script></head>\
             <body><!-- note --><h1>Hi &amp; bye</h1><p>one <b>two</b>\n\n   three</p><noscript>no js</noscript><template><i>t</i></template>\
-            <SCRIPT type=x>evil()</SCRIPT><a href=\"x>y\">link</a> a &lt; b &#65;&#x42; &bogus; 1 < 2</body></html>";
-        assert_eq!(tidy(&html_to_text(page)), "T\nHi & bye\none two three\nlink a < b AB &bogus; 1 < 2");
+            <SCRIPT type=x>evil()</SCRIPT><a href=\"http://u.example/?x>y\">link</a> a &lt; b &#65;&#x42; &copy; &bogus; 1 < 2</body></html>";
+        let t = text_of(page);
+        for gone in ["color", "var a", "evil", "no js", "note", "u.example", "<b>", "["] {
+            assert!(!t.contains(gone), "{gone} in {t:?}");
+        }
+        for kept in ["Hi & bye", "one two three", "link", "a < b AB \u{a9} &bogus; 1 < 2"] {
+            assert!(t.contains(kept), "{kept} not in {t:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn hostile_html_is_bounded_and_never_panics() {
+        // Through `spawn_blocking`, as `read` runs it: its default 2 MiB stack is the one that must be enough.
+        let t0 = std::time::Instant::now();
+        let nested = format!("{}deep{}", "<div>".repeat(200_000), "</div>".repeat(200_000)); // 1.2 MiB
+        let table = format!("<table>{}x{}", "<tr><td><table>".repeat(50_000), "</table></td></tr>".repeat(50_000));
+        let evasive = "<div></p>".repeat(100_000);
+        let cells = format!("<table><tr>{}</tr></table>", "<td>c</td>".repeat(100_000));
+        for page in [nested, table, evasive, cells] {
+            tokio::task::spawn_blocking(move || text_of(&page)).await.unwrap();
+        }
+        assert!(t0.elapsed().as_secs() < 10, "{:?}", t0.elapsed());
+        assert!(text_of(&format!("{}ok", "<div>".repeat(999))).contains("ok"));
+        let attr = format!("<a href=\"{}\">t</a><p class='{}", "A".repeat(1 << 20), "b".repeat(1000));
+        assert!(text_of(&attr).contains('t'));
+        assert!(text_of("<p>one<b>two<i>three<div>four<span").contains("four"));
+        assert!(text_of("<svg><script>alert(1)</script><text>vector</text></svg><p>after").contains("after"));
+        assert!(!text_of("<svg><script>alert(1)</script></svg>").contains("alert"));
+        assert_eq!(
+            text_of("&amp;&amp;lt; &#0; &#xD800; &#x110000; &#99999999999; &xnotanentity &lt"),
+            "&&lt; \u{fffd} \u{fffd} \u{fffd} \u{fffd} &xnotanentity <"
+        );
+        let garbage: Vec<u8> = (0..100_000u32).map(|i| (i.wrapping_mul(2654435761) >> 13) as u8).collect();
+        let _ = html_to_text(&garbage);
+        let _ = html_to_text(&[0xff, 0xfe, b'<', 0, b'>', 0xc0]);
     }
 
     #[tokio::test]
