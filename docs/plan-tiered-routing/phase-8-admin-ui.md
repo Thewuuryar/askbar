@@ -33,7 +33,7 @@ Track 1 runs P8.6a, P8.6c to P8.6f, P8.8a and P8.9a as stage W6 of [plan-priorit
   - **Blocked requests:** move the P4.4b section here and link to it from the Services page.
   - **Restart:** add an `egress-proxy` row to `services.rs` that calls the proxy's `POST /restart`, as the alerter row does.
   Accept: tests for each section against a fake proxy; restart is audited; the e2e approval test adds and removes an approval from the page.
-- [ ] **P8.6d** `feat(admin): make the quick search and MCP limits editable` · sonnet · after W5.1, P5A.18
+- [x] **P8.6d** `feat(admin): make the quick search and MCP limits editable` · sonnet · after W5.1, P5A.18
   Files: `services/admin/src/{admin_api/settings,constants,gateway_link,server_link,mcp_link}.rs`, a new migration (appended), `docs/openapi/admin.v1.yaml`, `services/admin/tests/{api,gateway,server_link,mcp_link,openapi}.rs`.
   Do:
   - **Which limits:**

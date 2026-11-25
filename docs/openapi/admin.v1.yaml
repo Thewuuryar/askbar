@@ -1760,6 +1760,51 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
+  /api/admin/v1/limits:
+    get:
+      operationId: getLimits
+      summary: The quick search and MCP front limits, each with its value, default and range.
+      security:
+        - adminSession: []
+        - adminApiKey: []
+      responses:
+        '200':
+          description: The limits, grouped.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LimitsView'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    put:
+      operationId: putLimits
+      summary: Change some limits.
+      description: "A map of limit name to number; `null` puts that limit back to its default. A value outside its range, an unknown name or a set the quick search bounds refuse is a 400 (`bad_request`) and nothing is saved or pushed. The change is recorded in the auditor (names with old and new numbers; refused with 503 if it cannot be), the server has it before the answer, and the gateway and the MCP front within a moment."
+      security:
+        - adminSession: []
+        - adminApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties:
+                type: [integer, 'null']
+                minimum: 0
+      responses:
+        '200':
+          description: The limits as they are now.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LimitsView'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '502':
+          description: The server is offline or refused the change; nothing was changed.
   /api/admin/v1/roles:
     get:
       operationId: listRoles
@@ -2488,6 +2533,32 @@ components:
           items:
             type: string
             enum: [search, fetch]
+    LimitRow:
+      type: object
+      required: [name, value, default, min, max]
+      properties:
+        name:
+          type: string
+        value:
+          type: integer
+        default:
+          type: integer
+        min:
+          type: integer
+        max:
+          type: integer
+    LimitsView:
+      type: object
+      required: [quick_search, mcp]
+      properties:
+        quick_search:
+          type: array
+          items:
+            $ref: '#/components/schemas/LimitRow'
+        mcp:
+          type: array
+          items:
+            $ref: '#/components/schemas/LimitRow'
     RolePin:
       type: object
       additionalProperties: false

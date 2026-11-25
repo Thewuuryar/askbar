@@ -26,6 +26,7 @@ pub mod cpa;
 pub mod db;
 pub mod egress_link;
 pub mod gateway_link;
+pub mod limits;
 pub mod link_client;
 pub mod mcp;
 pub mod mcp_link;
@@ -252,6 +253,8 @@ pub fn routes(state: &Arc<AdminState>) -> Routes {
         .get(&v1("/mcp/permissions"), mcp::list)
         .put(&v1("/mcp/permissions/{user}"), mcp::put)
         .delete(&v1("/mcp/permissions/{user}"), mcp::delete)
+        .get(&v1("/limits"), limits::list)
+        .put(&v1("/limits"), limits::put)
         .get(&v1("/roles"), roles::list)
         .put(&v1("/roles/{role}"), roles::put)
         .delete(&v1("/roles/{role}"), roles::delete)
