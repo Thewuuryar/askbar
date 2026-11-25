@@ -102,6 +102,11 @@ button { font: inherit; color: inherit; }
   font-size: 13px;
 }
 .text-btn:hover { background: var(--accent-soft); }
+.search-toggle[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); }
+
+.sources { margin: 6px 0 0; font-size: 0.85em; color: var(--muted); overflow-wrap: anywhere; }
+.sources ol { margin: 4px 0 0; padding-left: 1.6em; }
+.sources .not-read { margin-left: 6px; font-style: italic; }
 
 /* The AI warning above the input box, and the privacy notice shown after pairing (ADR 0012). Both are text. */
 .ai-warning {

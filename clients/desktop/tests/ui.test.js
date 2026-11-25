@@ -1069,6 +1069,91 @@ async function waitIdle(page) {
     await ctx.close();
   });
 
+  // ------------------------------------------------------------ quick search (plan W5.4)
+
+  const SEARCH = {
+    queries: ['rust news', 'rust release'],
+    sources: [
+      { title: 'Rust blog', url: 'https://blog.rust-lang.org/post', fetched: true },
+      { title: 'Search page', url: 'https://q.example/?id=1', fetched: false },
+      { title: '<img src=x onerror="window.__pwned=1">', url: 'https://evil.example/a', fetched: true },
+      { title: 'Script link', url: 'javascript:alert(1)', fetched: true },
+      { title: 'Local file', url: 'file:///etc/passwd', fetched: false },
+    ],
+  };
+
+  await step('the search toggle is hidden without the permission and shown with it', async () => {
+    const p = await open(browser);
+    assert.equal(await p.isHidden('#search-toggle'), true);
+    await p.close();
+    const q = await open(browser, { webSearch: true });
+    assert.equal(await q.isVisible('#search-toggle'), true);
+    assert.equal(await q.getAttribute('#search-toggle', 'aria-pressed'), 'false', 'off by default');
+    await q.close();
+  });
+
+  await step('a message carries webSearch only when toggled, and the toggle resets after sending', async () => {
+    const p = await open(browser, { webSearch: true });
+    await ask(p, 'plain one');
+    await waitIdle(p);
+    await p.click('#search-toggle');
+    assert.equal(await p.getAttribute('#search-toggle', 'aria-pressed'), 'true');
+    await ask(p, 'searched one');
+    await waitIdle(p);
+    assert.equal(await p.getAttribute('#search-toggle', 'aria-pressed'), 'false', 'reset after sending');
+    await ask(p, 'plain two');
+    await waitIdle(p);
+    assert.deepEqual((await calls(p, 'ask')).map((c) => [c.text, c.webSearch]), [['plain one', false], ['searched one', true], ['plain two', false]]);
+    await p.close();
+  });
+
+  await step('the sources list shows queries, title, host and "not read"; unsafe URLs are plain text; markup stays text', async () => {
+    const p = await open(browser, { webSearch: true, search: SEARCH });
+    await p.click('#search-toggle');
+    await ask(p, 'search me');
+    await waitIdle(p);
+    const info = await p.evaluate(() => {
+      const box = document.querySelector('.msg.assistant .sources');
+      const items = [...box.querySelectorAll('li')];
+      return {
+        queries: box.querySelector('.search-queries').textContent,
+        items: items.map((li) => ({ text: li.textContent, link: li.querySelector('a') ? li.querySelector('a').getAttribute('href') : null })),
+        imgs: box.querySelectorAll('img').length,
+        pwned: window.__pwned,
+      };
+    });
+    assert.equal(info.queries, 'Searched: rust news · rust release');
+    assert.deepEqual(info.items[0], { text: 'Rust blog (blog.rust-lang.org)', link: 'https://blog.rust-lang.org/post' });
+    assert.deepEqual(info.items[1], { text: 'Search page (q.example)not read', link: 'https://q.example/?id=1' });
+    assert.equal(info.items[2].text, '<img src=x onerror="window.__pwned=1"> (evil.example)');
+    assert.equal(info.imgs, 0, 'a title is text, never an element');
+    assert.equal(info.pwned, undefined);
+    assert.deepEqual([info.items[3], info.items[4]], [{ text: 'Script link', link: null }, { text: 'Local filenot read', link: null }]);
+    await p.close();
+  });
+
+  await step('a source link is intercepted, asks first, and opens only through the system browser', async () => {
+    const p = await open(browser, { webSearch: true, search: SEARCH });
+    await p.click('#search-toggle');
+    await ask(p, 'search me');
+    await waitIdle(p);
+    const before = p.url();
+    const prevented = await p.evaluate(() => {
+      const a = document.querySelector('.sources a');
+      const ev = new MouseEvent('click', { bubbles: true, cancelable: true });
+      a.dispatchEvent(ev);
+      return ev.defaultPrevented;
+    });
+    assert.equal(prevented, true, 'preventDefault: the popup does not navigate');
+    assert.equal(p.url(), before);
+    assert.equal(await p.innerText('#link-confirm-url'), 'https://blog.rust-lang.org/post');
+    assert.equal((await calls(p, 'open_url')).length, 0, 'nothing opened yet');
+    await p.click('#link-open');
+    assert.deepEqual(await calls(p, 'open_url'), [{ url: 'https://blog.rust-lang.org/post' }]);
+    assert.equal(p.url(), before, 'still the same page');
+    await p.close();
+  });
+
   await browser.close();
   console.log(failures ? `\n${failures} step(s) failed` : '\nall UI steps passed');
   process.exit(failures ? 1 : 0);

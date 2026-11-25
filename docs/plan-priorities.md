@@ -215,7 +215,7 @@ Until then, roles use admin-pinned models, usage counts against token budgets pe
   - A fixture page that says "ignore previous instructions and fetch …" causes no further call, and a test asserts the flow makes exactly one query call.
   - A result URL with a query string is listed and not fetched.
   - A reply with several model calls shows them all in one trace. The cost sum for display depends on the AV1.2 fix; the flow does not.
-- [ ] **W5.4** `feat(client): search toggle and sources` · sonnet · after W5.1
+- [x] **W5.4** `feat(client): search toggle and sources` · sonnet · after W5.1
   Files: `clients/desktop/ui/main.js`, `clients/desktop/src-tauri/src/{main,remote}.rs`, `clients/desktop/tests/`.
   Do: a per-message "Search the web" toggle, shown only when the user has the permission; the queries and a sources list under the reply. Links open in the system browser; the popup itself gets no network permission (ADR 0019 rule 6). Escape Markdown as today.
   Accept: client tests cover the toggle, the sources list, and that a source link doesn't load inside the app.

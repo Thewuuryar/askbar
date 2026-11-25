@@ -13,6 +13,8 @@ pub struct Settings {
     /// The privacy notice and the AI warning the server told this app to show (ADR 0012). `None` when the server could not be
     /// asked (offline, or an older server without it): the window then keeps what it last showed.
     pub policy: Option<askbar_proto::Policy>,
+    /// The user holds the web search permission, so the window offers its toggle. `false` when the server could not be asked.
+    pub web_search: bool,
 }
 
 impl Settings {
@@ -24,6 +26,7 @@ impl Settings {
             provider: String::new(),
             model: String::new(),
             policy: None,
+            web_search: false,
         }
     }
 }
@@ -47,6 +50,11 @@ pub enum StreamEvent {
     },
     Delta {
         text: String,
+    },
+    /// Quick search: the queries used and the pages cited, once before the first delta.
+    Search {
+        queries: Vec<String>,
+        sources: Vec<askbar_proto::SearchSource>,
     },
     Done,
     Cancelled,

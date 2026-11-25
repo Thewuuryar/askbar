@@ -66,7 +66,7 @@ impl McpClient {
     }
 
     /// The names of the tools `user` holds, or `None` when the front could not say.
-    async fn tools(&self, user: &str) -> Option<Vec<String>> {
+    pub async fn tools(&self, user: &str) -> Option<Vec<String>> {
         let url = format!("{}{}/tools", self.base, askbar_proto::paths::MCP_GATEWAY_V1);
         let resp = self.http.get(url).query(&[("user", user)]).bearer_auth(self.token()?).send().await.ok()?;
         let body: Value = resp.error_for_status().ok()?.json().await.ok()?;

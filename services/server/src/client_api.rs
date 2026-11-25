@@ -258,7 +258,12 @@ pub fn served_policy(db: &crate::Db) -> rusqlite::Result<Policy> {
     })
 }
 
-pub async fn settings(State(state): St) -> Res<Settings> {
+/// `web_search` is per user: whether the MCP front says the caller holds the `search` tool (asked on every call, no cache).
+pub async fn settings(State(state): St, Extension(auth): Extension<ClientAuth>) -> Res<Settings> {
+    let web_search = match &state.mcp {
+        Some(mcp) => mcp.tools(&auth.user_id).await.is_some_and(|t| t.iter().any(|n| n == "search")),
+        None => false,
+    };
     let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
-    Ok(Json(Settings { display: served_display(&db, None).map_err(internal)?, policy: served_policy(&db).map_err(internal)? }))
+    Ok(Json(Settings { display: served_display(&db, None).map_err(internal)?, policy: served_policy(&db).map_err(internal)?, web_search }))
 }
