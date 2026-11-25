@@ -277,7 +277,7 @@ P4.3a is committed on branch `feat/egress-proxy-wiring` (draft PR #144). CI is g
 - [x] **[P5A.17](plan-tiered-routing/phase-5a-mcp-gateway.md)** set per-user MCP tool permissions · W3
 - [x] **[P5A.18](plan-tiered-routing/phase-5a-mcp-gateway.md)** push MCP config to the front · W3
 - [x] **[P5A.19](plan-tiered-routing/phase-5a-mcp-gateway.md)** push the searxng and fetch egress entries · W3
-- [ ] **[P5A.20](plan-tiered-routing/phase-5a-mcp-gateway.md)** refuse unsigned, replayed, swapped and expired approvals · W3
+- [x] **[P5A.20](plan-tiered-routing/phase-5a-mcp-gateway.md)** refuse unsigned, replayed, swapped and expired approvals · W3
 - [ ] **[P5A.21](plan-tiered-routing/phase-5a-mcp-gateway.md)** refuse the call when the audit write fails or the permission is off · W3
 - [ ] **[P5A.22](plan-tiered-routing/phase-5a-mcp-gateway.md)** the fetch SSRF matrix at the front · W3
 - [ ] **[P5A.23](plan-tiered-routing/phase-5a-mcp-gateway.md)** search and fetch end to end · W3

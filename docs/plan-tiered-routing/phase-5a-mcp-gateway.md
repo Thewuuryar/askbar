@@ -133,7 +133,7 @@ This is the policy text for approving each further MCP server (G16, decided 2026
   Files: `services/admin/src/{egress_link,constants}.rs`, tests.
   Do: through the mechanism P4.4 built, the source `searxng` gets one entry per host of `SEARXNG_EGRESS_HOSTS` (port 443) and the source `fetch` gets one `any_public` entry for ports 80 and 443; nothing else is allowed. The proxy refuses an unknown source, so the push includes these sources only when the proxy reports them in `GET /status`. Each future MCP destination is a G16 entry with its own source.
   Accept: tests against a fake proxy: both sources' entries appear; a proxy without the new sources gets none; a removed host disappears; no private address is allowed.
-- [ ] **P5A.20** `test(mcp-gateway): refuse unsigned, replayed, swapped and expired approvals` · sonnet · after P5A.8
+- [x] **P5A.20** `test(mcp-gateway): refuse unsigned, replayed, swapped and expired approvals` · sonnet · after P5A.8
   Files: `services/mcp-gateway/tests/approvals.rs`.
   Do: ADR 0016 "Defend": a signed approval from the real signer path (P5.4) is replayed (sequentially and concurrently), its arguments swapped, its expiry passed, its signature stripped, signed with another key, issued for another user or task, and for another tool.
   Accept: each is refused before the tool runs, and each is recorded; the one-time ID is consumed only by a call that passed every check.
