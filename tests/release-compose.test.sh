@@ -12,7 +12,7 @@ expect() { local what=$1; shift; if "$@"; then echo "ok   $what"; else echo "FAI
 refuse() { local what=$1; shift; if "$@"; then echo "FAIL $what"; FAILS=$((FAILS + 1)); else echo "ok   $what"; fi; }
 count_is() { [ "$(grep -c "$2" "$3")" = "$1" ]; }
 
-SERVICES=(bootstrap server admin auditor model-gateway alerter mcp-gateway egress-proxy caddy cpa)
+SERVICES=(bootstrap server admin auditor model-gateway alerter mcp-gateway searxng egress-proxy caddy cpa)
 python3 - "$T/meta.json" "${SERVICES[@]}" <<'PY'
 import json, sys
 out, names = sys.argv[1], sys.argv[2:]
@@ -27,7 +27,7 @@ refuse "no build block is left" grep -q '^    build:' "$T/out.yaml"
 for s in "${SERVICES[@]}"; do
   expect "$s is set to an image by digest" grep -Eq "^    image: ghcr\.io/thewuuryar/askbar-$s@sha256:[0-9a-f]{64}$" "$T/out.yaml"
 done
-expect "exactly ten Askbar images are set by digest" count_is 10 '^    image: ghcr.io/thewuuryar/askbar-.*@sha256:' "$T/out.yaml"
+expect "exactly eleven Askbar images are set by digest" count_is 11 '^    image: ghcr.io/thewuuryar/askbar-.*@sha256:' "$T/out.yaml"
 refuse "the file has no comment lines" grep -Eq '^[[:space:]]*#' "$T/out.yaml"
 refuse "and no two blank lines in a row" awk 'BEGIN{b=0} /^[ ]*$/{if(b)f=1;b=1;next}{b=0} END{exit !f}' "$T/out.yaml"
 refuse "no image line has a variable left" grep -q '^    image: .*ASKBAR_IMAGE_' "$T/out.yaml"

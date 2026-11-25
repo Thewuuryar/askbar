@@ -201,16 +201,19 @@ SPEC = {
   "auditor": ("audit-admin audit-alerter audit-caddy audit-mcp-gateway audit-model-gateway audit-server", "auditor-data auditor-token:ro", ""),
   "model-gateway": ("audit-model-gateway cpa-gateway egress-model-gateway gateway-admin gateway-server", "model-gateway-token:ro", ""),
   "alerter": ("alerter-admin audit-alerter egress-alerter", "alerter-data alerter-token:ro", ""),
-  "egress-proxy": ("egress-admin egress-alerter egress-cpa egress-fetch egress-model-gateway egress-outbound", "egress-proxy-token:ro", ""),
+  "egress-proxy": ("egress-admin egress-alerter egress-cpa egress-fetch egress-model-gateway egress-outbound egress-searxng", "egress-proxy-token:ro", ""),
   "mcp-gateway": ("audit-mcp-gateway egress-fetch mcp-admin mcp-searxng mcp-server", "mcp-gateway-token:ro", ""),
+  "searxng": ("egress-searxng mcp-searxng", "", ""),
   "mock-llm": ("edge egress-outbound", "", ""),
   "caddy": ("audit-caddy client-api edge", "caddy-data caddy-config caddy-run admin-run caddy-secrets:ro", "443/tcp 80/tcp"),
   "cpa": ("cpa-admin cpa-gateway egress-cpa", "cpa-config cpa-auth", ""),
 }
 OPEN = {"edge", "egress-outbound"}  # the networks with a route out
 ADD = {"bootstrap": "CHOWN", "caddy": "NET_BIND_SERVICE"}
-SEPARATE = [("cpa", "caddy"), ("alerter", "server"), ("alerter", "model-gateway"), ("alerter", "caddy"), ("alerter", "cpa"), ("egress-proxy", "server"), ("egress-proxy", "auditor"), ("egress-proxy", "caddy"), ("mcp-gateway", "model-gateway"), ("mcp-gateway", "alerter"), ("mcp-gateway", "caddy"), ("mcp-gateway", "cpa")]
-out(set(S) == set(SPEC), "the stack declares exactly the services bootstrap, server, admin, auditor, model-gateway, alerter, mcp-gateway, egress-proxy, mock-llm, caddy and cpa")
+# searxng's entrypoint writes /etc/searxng (the settings the start script makes) and /var/cache/searxng: tmpfs owned by uid 977, in memory only (P5A.13)
+TMPFS = {"searxng": ["/tmp", "/etc/searxng:uid=977,gid=977,mode=0700", "/var/cache/searxng:uid=977,gid=977,mode=0700"]}
+SEPARATE = [("cpa", "caddy"), ("alerter", "server"), ("alerter", "model-gateway"), ("alerter", "caddy"), ("alerter", "cpa"), ("egress-proxy", "server"), ("egress-proxy", "auditor"), ("egress-proxy", "caddy"), ("mcp-gateway", "model-gateway"), ("mcp-gateway", "alerter"), ("mcp-gateway", "caddy"), ("mcp-gateway", "cpa"), ("searxng", "server"), ("searxng", "admin"), ("searxng", "auditor"), ("searxng", "model-gateway"), ("searxng", "alerter"), ("searxng", "caddy"), ("searxng", "cpa")]
+out(set(S) == set(SPEC), "the stack declares exactly the services bootstrap, server, admin, auditor, model-gateway, alerter, mcp-gateway, searxng, egress-proxy, mock-llm, caddy and cpa")
 nets = {s: set(S[s].get("networks") or {}) for s in S}
 for s, (n, v, p) in SPEC.items():
     d = S.get(s)
@@ -231,7 +234,7 @@ for s, (n, v, p) in SPEC.items():
     if not any(o in ("no-new-privileges", "no-new-privileges:true") for o in d.get("security_opt") or []): bad.append("security_opt")
     if int(d.get("pids_limit") or 0) <= 0: bad.append("pids_limit")
     if int(d.get("mem_limit") or 0) <= 0: bad.append("mem_limit")
-    if d.get("tmpfs") != ["/tmp"]: bad.append("tmpfs")
+    if d.get("tmpfs") != TMPFS.get(s, ["/tmp"]): bad.append(f"tmpfs {d.get('tmpfs')}")
     if "host-gateway" in str(d.get("extra_hosts")) or "host.docker.internal" in str(d.get("extra_hosts")): bad.append("extra_hosts")
     if d.get("privileged"): bad.append("privileged")
     out(not bad, f"{s} is hardened" if not bad else f"{s} is not hardened: {' '.join(bad)}")
@@ -244,8 +247,8 @@ routed = {s for s in S if nets[s] & OPEN} - {"mock-llm"}  # the dev mock LLM sit
 out(routed == {"caddy", "egress-proxy"}, f"only caddy and egress-proxy are on a network with a route out (found: {' '.join(sorted(routed))})")
 for a, b in SEPARATE:
     out(not nets[a] & nets[b], f"{a} shares no network with {b}")
-# P5A.12: each of the front's networks has the front and one peer (searxng joins mcp-searxng in P5A.13)
-for n, who in (("audit-mcp-gateway", {"auditor", "mcp-gateway"}), ("mcp-server", {"server", "mcp-gateway"}), ("mcp-admin", {"admin", "mcp-gateway"}), ("egress-fetch", {"egress-proxy", "mcp-gateway"}), ("mcp-searxng", {"mcp-gateway"})):
+# P5A.12, P5A.13: each of the front's networks, and searxng's egress network, has two members
+for n, who in (("audit-mcp-gateway", {"auditor", "mcp-gateway"}), ("mcp-server", {"server", "mcp-gateway"}), ("mcp-admin", {"admin", "mcp-gateway"}), ("egress-fetch", {"egress-proxy", "mcp-gateway"}), ("mcp-searxng", {"mcp-gateway", "searxng"}), ("egress-searxng", {"egress-proxy", "searxng"})):
     out({s for s in S if n in nets[s]} == who, f"only {' and '.join(sorted(who))} {'is' if len(who) == 1 else 'are'} on {n}")
 PY
 )
@@ -854,6 +857,61 @@ print("proxy", up("egress-fetch-host", 3128), "front", up(os.environ["X_IP"], 80
   docker exec "$MCPG" bash -c 'exec 3<>/dev/tcp/1.1.1.1/443' >/dev/null 2>&1 && fail "the front reached the internet directly" || pass "the front has no direct route out"
 fi
 
+echo "== 3d7b. searxng, the search backend (ADR 0057)"
+# Every expectation about the pinned image's own behaviour is its own line, so a failure names the assumption: the user (977),
+# the paths it writes (tmpfs), the start script's secret, the health path, the JSON-only format and the proxy setting.
+SEARX=askbar-searxng
+SX_MCP="${PROJECT}_mcp-searxng"; SX_EGR="${PROJECT}_egress-searxng"
+if [ "$(docker inspect -f '{{.State.Running}}' "$SEARX" 2>/dev/null)" != true ]; then fail "searxng is not running"; else
+  svc_profile "$SEARX" "searxng" <<EOF
+health yes
+uid 977
+caps yes
+nets egress-searxng mcp-searxng|searxng is on egress-searxng and mcp-searxng only
+EOF
+  SX_MCP_IP=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$SX_MCP\").IPAddress}}" "$SEARX")
+  SX_EGR_IP=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$SX_EGR\").IPAddress}}" "$SEARX")
+  SXPY=/usr/local/searxng/.venv/bin/python
+  # The start script's file: a random key in place of the placeholder and of upstream's default, and the baked settings.
+  [ "$(docker exec "$SEARX" sh -c 'grep -c "@SECRET@\|ultrasecretkey" /etc/searxng/settings.yml; true')" = 0 ] && pass "searxng's settings hold neither the placeholder nor upstream's default secret_key" || fail "searxng's settings still hold @SECRET@ or ultrasecretkey"
+  [ "$(docker exec "$SEARX" sh -c 'grep -c "secret_key: \"[A-Za-z0-9]\{32,\}\"" /etc/searxng/settings.yml')" = 1 ] && pass "searxng's secret_key is a random string of 32 or more characters" || fail "searxng's secret_key is not a random string"
+  [ "$(docker exec "$SEARX" sh -c 'grep -c "favicon_resolver: \"\"\|image_proxy: false\|limiter: false" /etc/searxng/settings.yml')" = 3 ] && pass "searxng's favicon resolver, image proxy and limiter are off" || fail "searxng's favicon resolver, image proxy or limiter is not off"
+  docker exec "$SEARX" sh -c 'env' 2>/dev/null | grep -qi 'secret' && fail "searxng has a secret in its environment" || pass "searxng has no secret in its environment"
+  # The root is read-only; the settings and cache paths are tmpfs and writable by uid 977.
+  refused "searxng cannot write to its root (read-only)" docker exec "$SEARX" sh -c 'touch /usr/local/searxng/x'
+  docker exec "$SEARX" sh -c 'touch /etc/searxng/x /var/cache/searxng/x /tmp/x' >/dev/null 2>&1 && pass "searxng writes /etc/searxng, /var/cache/searxng and /tmp (tmpfs)" || fail "searxng cannot write one of /etc/searxng, /var/cache/searxng, /tmp"
+  [ "$(docker exec "$SEARX" sh -c 'grep -c " /etc/searxng tmpfs\| /var/cache/searxng tmpfs" /proc/mounts')" = 2 ] && pass "/etc/searxng and /var/cache/searxng are tmpfs" || fail "/etc/searxng or /var/cache/searxng is not tmpfs"
+  # It answers on mcp-searxng, JSON over POST works, other formats are refused, and nothing else reaches it.
+  [ "$(http "$SX_MCP" "http://searxng-host:8080/healthz" GET)" = 200 ] && pass "searxng answers /healthz on mcp-searxng" || fail "searxng does not answer /healthz on mcp-searxng"
+  got=$(py --network "$SX_MCP" -- '
+import urllib.request, urllib.error, json
+def post(fmt):
+    try:
+        r = urllib.request.urlopen(urllib.request.Request("http://searxng-host:8080/search", data=("q=askbar&format=" + fmt).encode()), timeout=20)
+        return r.status, r.read()
+    except urllib.error.HTTPError as e: return e.code, b""
+    except Exception: return 0, b""
+s, b = post("json")
+try: ok = isinstance(json.loads(b)["results"], list)
+except Exception: ok = False
+print("json", s, ok, "html", post("html")[0])' 2>/dev/null | tail -1)
+  [ "$got" = "json 200 True html 403" ] && pass "POST /search with format=json answers JSON, and format=html is refused (403)" || fail "searxng's formats: '$got', expected 'json 200 True html 403'"
+  [ "$(http "$EDGE" "http://$SX_MCP_IP:8080/healthz" GET)" = 0 ] && pass "a container on edge cannot reach searxng" || fail "searxng is reachable from edge"
+  got=$(py --network "$SX_EGR" -e "X_IP=$SX_EGR_IP" -- '
+import os, socket
+def up(h, p):
+    try: socket.create_connection((h, p), timeout=4).close(); return 1
+    except Exception: return 0
+print("proxy", up("egress-searxng-host", 3128), "searxng", up(os.environ["X_IP"], 8080))' 2>/dev/null | tail -1)
+  [ "$got" = "proxy 1 searxng 0" ] && pass "on egress-searxng the proxy answers and searxng does not" || fail "on egress-searxng: '$got'"
+  # No direct route out; the proxy is the one thing it reaches there; it holds no route to the other services.
+  docker exec "$SEARX" "$SXPY" -c 'import socket; socket.create_connection(("1.1.1.1", 443), timeout=4)' >/dev/null 2>&1 && fail "searxng reached the internet directly" || pass "searxng has no direct route out"
+  docker exec "$SEARX" "$SXPY" -c 'import socket; socket.create_connection(("egress-searxng-host", 3128), timeout=4)' >/dev/null 2>&1 && pass "searxng reaches the egress proxy on egress-searxng" || fail "searxng cannot reach the egress proxy"
+  for t in server-api-host/8082 mcp-gateway-server-host/8087 auditor-mcp-gateway-host/8083; do
+    docker exec "$SEARX" "$SXPY" -c "import socket; socket.create_connection(('${t%/*}', ${t#*/}), timeout=4)" >/dev/null 2>&1 && fail "searxng reaches ${t%/*}" || pass "searxng cannot reach ${t%/*}"
+  done
+fi
+
 echo "== 3d8. The egress proxy (ADR 0056)"
 EGP=askbar-egress-proxy
 EGP_OUT="${PROJECT}_egress-outbound"
@@ -862,7 +920,7 @@ if [ "$(docker inspect -f '{{.State.Running}}' "$EGP" 2>/dev/null)" != true ]; t
 health yes
 uid 10006
 caps yes
-nets egress-admin egress-alerter egress-cpa egress-fetch egress-model-gateway egress-outbound|the egress proxy is on egress-admin, egress-alerter, egress-cpa, egress-fetch, egress-model-gateway and egress-outbound only
+nets egress-admin egress-alerter egress-cpa egress-fetch egress-model-gateway egress-outbound egress-searxng|the egress proxy is on egress-admin, egress-alerter, egress-cpa, egress-fetch, egress-model-gateway, egress-outbound and egress-searxng only
 owner $EGP|/egress-proxy-token/accept/admin-egress-proxy.sha256|10006 444|the egress proxy's admin hash file (owner, mode)
 dirs $EGP|10006 500|the egress proxy's|/egress-proxy-token /egress-proxy-token/call /egress-proxy-token/accept
 owner $ADMIN|/admin-token/call/admin-egress-proxy.token|10001 400|the admin's egress proxy token file (owner, mode)
@@ -894,7 +952,7 @@ echo "== 3d9. The egress proxy denies by default and blocks private addresses (A
 # Throwaway containers on each source's network talk to the proxy's listener for that source. The stand-in upstream sits on
 # egress-outbound (the proxy's one route out) and answers "askbar-standin-ok" on 8080 and 8081.
 P45_SRC=askbar-egress-standin; P45_FRESH=askbar-egress-fresh; P45_NET="${PROJECT}_p45-fresh"
-P45_MG="${PROJECT}_egress-model-gateway"; P45_CPA="${PROJECT}_egress-cpa"; P45_AL="${PROJECT}_egress-alerter"; P45_FE="${PROJECT}_egress-fetch"
+P45_MG="${PROJECT}_egress-model-gateway"; P45_CPA="${PROJECT}_egress-cpa"; P45_AL="${PROJECT}_egress-alerter"; P45_FE="${PROJECT}_egress-fetch"; P45_SE="${PROJECT}_egress-searxng"
 P45_STAND_PY='
 import http.server as h, threading
 class H(h.BaseHTTPRequestHandler):
@@ -956,7 +1014,7 @@ for h, p in (('$P45_SRC', 8080), ('$P45_SRC', 8081)):
 P45_PIDS=""; p45_clean
 if [ "$(docker inspect -f '{{.State.Running}}' "$EGP" 2>/dev/null)" != true ]; then fail "the egress proxy is not running"; else
   # (2) No route out of a source's network, with a positive control in the same container: the proxy's listener answers there.
-  for pair in "model-gateway $P45_MG egress-model-gateway-host" "cpa $P45_CPA egress-cpa-host" "alerter $P45_AL egress-alerter-host" "fetch $P45_FE egress-fetch-host"; do
+  for pair in "model-gateway $P45_MG egress-model-gateway-host" "cpa $P45_CPA egress-cpa-host" "alerter $P45_AL egress-alerter-host" "fetch $P45_FE egress-fetch-host" "searxng $P45_SE egress-searxng-host"; do
     set -- $pair
     got=$(py --network "$2" -e "X_PROXY=$3:3128" -- '
 import os, socket
