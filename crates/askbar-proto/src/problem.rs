@@ -39,6 +39,8 @@ pub enum ErrorCode {
     ResearchBusy,
     /// The administrator turned research off for everyone. 503.
     ResearchDisabled,
+    /// `POST /decide` was asked for a decision the gateway does not take yet. 400.
+    DecisionUnsupported,
     AuditKeyMissing,
     /// No backup key is set (ADR 0013): an export cannot be encrypted, so none is made. 503.
     BackupKeyMissing,
@@ -78,7 +80,7 @@ pub enum ErrorCode {
 }
 
 impl ErrorCode {
-    pub const ALL: [ErrorCode; 49] = [
+    pub const ALL: [ErrorCode; 50] = [
         ErrorCode::QueueFull,
         ErrorCode::BudgetExceeded,
         ErrorCode::KillSwitch,
@@ -95,6 +97,7 @@ impl ErrorCode {
         ErrorCode::TaskToolCalls,
         ErrorCode::ResearchBusy,
         ErrorCode::ResearchDisabled,
+        ErrorCode::DecisionUnsupported,
         ErrorCode::AuditKeyMissing,
         ErrorCode::BackupKeyMissing,
         ErrorCode::BackupNewerRelease,
@@ -149,6 +152,7 @@ impl ErrorCode {
             ErrorCode::TaskToolCalls => "task_tool_calls",
             ErrorCode::ResearchBusy => "research_busy",
             ErrorCode::ResearchDisabled => "research_disabled",
+            ErrorCode::DecisionUnsupported => "decision_unsupported",
             ErrorCode::AuditKeyMissing => "audit_key_missing",
             ErrorCode::BackupKeyMissing => "backup_key_missing",
             ErrorCode::BackupNewerRelease => "backup_newer_release",
@@ -214,6 +218,7 @@ impl ErrorCode {
             | ErrorCode::BadRequest
             | ErrorCode::ModelNotApproved
             | ErrorCode::RoleNotPinned
+            | ErrorCode::DecisionUnsupported
             | ErrorCode::QuickSearchTool
             | ErrorCode::QuickSearchArguments => 400,
             ErrorCode::Unauthorized => 401,
@@ -257,6 +262,7 @@ impl ErrorCode {
             ErrorCode::TaskToolCalls => "This task has used all its tool calls",
             ErrorCode::ResearchBusy => "A research task is already running",
             ErrorCode::ResearchDisabled => "Research is turned off",
+            ErrorCode::DecisionUnsupported => "That decision is not supported",
             ErrorCode::AuditKeyMissing => "The audit key has not been set up",
             ErrorCode::BackupKeyMissing => "The backup key has not been set up",
             ErrorCode::BackupNewerRelease => "The backup is from a newer release",
@@ -434,6 +440,7 @@ mod tests {
                 | ErrorCode::TaskToolCalls
                 | ErrorCode::ResearchBusy
                 | ErrorCode::ResearchDisabled
+                | ErrorCode::DecisionUnsupported
                 | ErrorCode::AuditKeyMissing
                 | ErrorCode::BackupKeyMissing
                 | ErrorCode::BackupNewerRelease
@@ -469,6 +476,6 @@ mod tests {
                 | ErrorCode::Internal => {}
             }
         }
-        assert_eq!(ErrorCode::ALL.len(), 49);
+        assert_eq!(ErrorCode::ALL.len(), 50);
     }
 }

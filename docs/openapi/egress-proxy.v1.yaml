@@ -170,6 +170,7 @@ components:
           - task_tool_calls
           - research_busy
           - research_disabled
+          - decision_unsupported
           - audit_key_missing
           - backup_key_missing
           - backup_newer_release

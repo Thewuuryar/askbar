@@ -14,7 +14,7 @@ info:
     `model-gateway-token/accept/<link>.sha256`, read on every request. Each listener takes only its own link's
     token and serves only its own routes:
 
-    - the server's listener: `POST /chat`, `GET /catalog` and `POST /approvals/quick-search`;
+    - the server's listener: `POST /chat`, `GET /catalog`, `POST /approvals/quick-search` and `POST /decide`;
     - the admin's listener: `GET /status`, `PUT /config`, `POST /restart`, `POST /models` and
       `POST /providers/{id}/test` (they moved here from the server, which has no keys and no route out).
 
@@ -368,6 +368,100 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/Problem'
+  /api/model-gateway/v1/decide:
+    post:
+      operationId: decide
+      summary: The judge reviews a research draft. The server's listener.
+      description: >-
+        Only `decision: judge` is taken (`step_check` and `research` are `400 decision_unsupported` until P5.8). `input` is
+        the `JudgeInput` (`task_id`, `user_id`, `question`, `summaries`, `draft`; unknown fields refused; at most 200 KiB
+        of text; `task_id` and `user_id` equal `generation_id` and `user_id`). One model call runs through the same turn path
+        as `/chat` with the role `judge.review`, so the pin, the kill switch, the pause, the budget and the task cap apply.
+        The `turn` span carries the role, the verdict and the reason code, never text; the prompt and the reply are sealed
+        payloads on it. The answer is the verdict: a reply that is not exactly `{"verdict":"approve"}` or
+        `{"verdict":"refuse","reason":"<code>"}` is `refuse` with `bad_format`, still `200`. Any other failure is a problem,
+        never a verdict, and the caller must treat every non-200 as a refusal.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision, input, generation_id, user_id]
+              properties:
+                decision:
+                  type: string
+                  enum: [judge, step_check, research]
+                input:
+                  type: object
+                generation_id:
+                  type: string
+                user_id:
+                  type: string
+      responses:
+        '200':
+          description: The verdict.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [decision, output]
+                properties:
+                  decision:
+                    type: string
+                    enum: [judge]
+                  output:
+                    type: object
+                    required: [verdict]
+                    properties:
+                      verdict:
+                        type: string
+                        enum: [approve, refuse]
+                      reason:
+                        type: string
+                        enum: [unsupported_claim, contradicts_source, off_topic, unsafe, bad_citation, bad_format]
+        '400':
+          description: The body or input could not be used or is too long (`bad_request`), the decision is not taken yet (`decision_unsupported`), or no model is pinned to `judge.review` (`role_not_pinned`). Nothing was called.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '402':
+          description: The task has used its token cap (`task_token_cap`). Nothing was called.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '403':
+          description: The user is paused (`user_paused`).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '429':
+          description: The usage budget is reached (`budget_exceeded`).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '500':
+          description: The model call did not complete (`internal`).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '503':
+          description: No configuration yet (`not_configured`), the kill switch is on (`kill_switch`), or the span was not acknowledged (`audit_backlog`). Nothing was called.
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
 components:
   securitySchemes:
     linkToken:
@@ -432,6 +526,7 @@ components:
           - task_tool_calls
           - research_busy
           - research_disabled
+          - decision_unsupported
           - audit_key_missing
           - backup_key_missing
           - backup_newer_release
