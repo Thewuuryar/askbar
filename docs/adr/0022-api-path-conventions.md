@@ -90,4 +90,4 @@ Caddy routes only `/admin`, `/api/admin`, and `/api/client`, and answers 404 for
 - 2026-11-08: the space route list gains the four routes plan step 1.11 moved under `/spaces/{space_id}`: delete a conversation, list generations, stream one, cancel one ([0047](0047-generation-routes-under-spaces.md)).
 - 2026-11-08: `POST /spaces/{space_id}/conversations` dropped, by the owner; the list is the nine routes the code registers ([0048](0048-drop-post-space-conversations.md)).
 - 2026-11-10: merged in 0047 and 0048; the list above is how it stands.
-- 2026-11-25 (proposed, not yet accepted by the owner): the egress proxy has its own API, `/api/egress-proxy/v1`, served by `egress-proxy`, called by `admin` and internal ([0056](0056-egress-proxy.md)); its row is in the table above.
+- 2026-11-25 (accepted by the owner): the egress proxy has its own API, `/api/egress-proxy/v1`, served by `egress-proxy`, called by `admin` and internal ([0056](0056-egress-proxy.md)); its row is in the table above.
